@@ -956,6 +956,14 @@ export interface CourseSummary {
    * Absent keys are auto-placed.
    */
   labelOffsets: Record<string, { dx: number; dy: number }>;
+  /**
+   * Authored leg gaps of the stored structure, keyed `"<fromId>><toId>"`
+   * (public control ids), fractions of the leg; the layer's leg input
+   * (docs/course-layer.md §6.4). Absent keys are cut automatically.
+   */
+  legGaps?: Record<string, { from: number; to: number }[]>;
+  /** Public ids of the controls whose number every visit hides (`numberHidden`). */
+  hiddenNumbers?: number[];
   /** Concurrency token (decimal HLC), sent back as `baseVersion` (docs/course-layer.md §7). */
   version: string;
 }

@@ -55,7 +55,7 @@ function isPositioned(c: GeometrySeqControl): boolean {
  * only through the cut features' symbol radii.
  */
 let artifactContext: course.CourseDocumentContext | undefined;
-function legacySizeContext(): course.CourseDocumentContext {
+export function legacySizeContext(): course.CourseDocumentContext {
   artifactContext ??= {
     colours: symbolLibrary.paletteStack("iof2024", "ISOM2017-2").map((c) => ({ ...c, paletteIds: [c.id.slice(c.id.indexOf(":") + 1)] })),
     libraryId: "ISOM2017-2",

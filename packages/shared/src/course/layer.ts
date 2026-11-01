@@ -18,7 +18,7 @@ import { courseColourStack, withObjectColours } from "./colour-stack.js";
 import { deriveCourse } from "./derive.js";
 import { filterRegionOf, layoutObjects, objectColours, isCourseObject } from "./objects.js";
 import { courseSymbols } from "./symbols.js";
-import type { CourseExtra, CourseFilterRegion, CourseLayer, CourseLayerInput, CourseRenderObject } from "./types.js";
+import type { CourseFilterRegion, CourseLayer, CourseLayerInput, CourseRenderObject } from "./types.js";
 import type { MapPoint } from "../course-maps/schema.js";
 
 const um = (mm: number) => Math.round(mm * 1000);
@@ -48,16 +48,9 @@ export function courseLayer(input: CourseLayerInput): CourseLayer {
     }
   }
 
-  const extraSymbol: Record<CourseExtra["kind"], number> = {
-    marked_route: idx.markedRoute, restricted_line: idx.restrictedLine, forbidden_route: idx.forbiddenRoute, oob_area: idx.oobArea,
-  };
   for (const c of derivation.courses) {
     c.legs.forEach((leg, i) => {
       for (const piece of leg.pieces) if (piece.length >= 2) objects.push({ symbolIdx: idx.leg, path: line(piece), ref: { kind: "leg", id: `${c.id}:${i}` } });
-    });
-    c.extras.forEach((x, i) => {
-      if (x.points.length < 2) return;
-      objects.push({ symbolIdx: extraSymbol[x.kind], path: line(x.points, x.kind === "oob_area"), ref: { kind: "extra", id: `${c.id}:${i}` } });
     });
   }
 

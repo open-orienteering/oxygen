@@ -1663,11 +1663,11 @@ for one ordered course with the sheet or the editor and `code` otherwise,
 []` (no layout objects reach the viewer) and `appearance: {}` — the
 library's sizes × the document factor (`course-layer.md` "Decisions":
 ISOM at 1:7 500 draws 5 mm-radius circles where the SVG drew 2.5 mm).
-`course.courseGeometries` is still read, but only for what an imported
-`ocd` course authored (`course-layer.md` §2): its `preclipped` legs as
-pieces, their course's control `cuts` as circle gaps, bent legs' paths
-and the 707 / 708 / 711 / 709 features. Automatic gaps and cuts of the
-stored GeoJSON are not read: the worker cuts from the document's own
+`course.courseGeometries` is no longer an input (D1): authored leg gaps,
+hidden numbers and circle cuts come from the stored structure and the
+controls (`course.list` `legGaps` / `hiddenNumbers`, `controlCoordinates`
+`circleGaps`; `course-layer.md` §5, §6.4), and 707 / 708 / 709 / 711 are
+course objects. The worker cuts the rest from the document's own
 features (`cutFeaturesOfDocument`, extracted once per load). `MapPanel`
 passes what it passed before; every 09 §1 call site — kiosk,
 `CardReadout`, `CardMapPreview`, dashboard, `TracksPage`, the editor —

@@ -76,39 +76,27 @@ describe("courseLayerRequest (docs/course-layer.md §5)", () => {
     expect(r.viewOptions.allControls).toBeUndefined();
   });
 
-  it("an imported course: preclipped legs → pieces, its cuts → circle gaps, extras; legacy automatic gaps ignored", () => {
-    const leg = (pts: number[][], props: Record<string, unknown> = {}) => ({ geometry: { type: "LineString", coordinates: pts }, properties: { symbolType: "leg", courseName: "A", ...props } });
-    const features = [
-      leg([[12, 10], [37, 10]], { preclipped: true }),
-      leg([[42, 12], [58, 38]], { preclipped: true }),
-      leg([[58, 40], [30, 45], [12, 40]], { preclipped: true }),
-      { geometry: { type: "Point", coordinates: [40, 10] }, properties: { symbolType: "control", code: "c1", courseName: "A", cuts: [{ start: 10, end: 40 }] } },
-      { geometry: { type: "LineString", coordinates: [[0, 0], [5, 5]] }, properties: { symbolType: "marked_route", courseName: "A" } },
-      { geometry: { type: "Polygon", coordinates: [[[1, 1], [3, 1], [3, 3], [1, 1]]] }, properties: { symbolType: "restricted_area", courseName: "A" } },
-      // Course B is not highlighted; an automatic-gap leg of a generated course is not read.
-      leg([[10, 10], [30, 50]], { courseName: "B", gaps: [{ from: 0.4, to: 0.5 }] }),
-    ];
-    const r = courseLayerRequest(base({ courseGeometry: { features } }));
+  it("the structure's authored leg gaps and hidden numbers, the controls' circle cuts; nothing else is read", () => {
+    const cuts = [{ start: 10, end: 40 }];
+    const gaps = [{ from: 0.4, to: 0.6 }];
+    const r = courseLayerRequest(base({
+      controls: CONTROLS.map((c) => (c.id === "1" ? { ...c, circleGaps: cuts } : c)),
+      courses: [{ name: "A", controls: ["S", "1", "2", "F"], highlight: true, legGaps: { "1>2": gaps, "9>2": [{ from: 0.1, to: 0.2 }] }, hiddenNumbers: [2] }],
+    }));
+    expect(r.sites.find((s) => s.id === "1")!.circleGaps).toEqual(cuts);
+    expect(r.sites.find((s) => s.id === "2")!.circleGaps).toBeUndefined();
     const a = structures(r)[0];
-    expect(a.items[1].leg).toEqual({ pieces: [[{ x: 12, y: 10 }, { x: 37, y: 10 }]] });
-    expect(a.items[3].leg?.pieces?.[0]).toHaveLength(3);
-    expect(a.items[1].circleGaps).toEqual([{ start: 10, end: 40 }]);
-    expect(a.extras).toEqual([
-      { kind: "marked_route", points: [{ x: 0, y: 0 }, { x: 5, y: 5 }] },
-      { kind: "oob_area", points: [{ x: 1, y: 1 }, { x: 3, y: 1 }, { x: 3, y: 3 }, { x: 1, y: 1 }] },
-    ]);
+    expect(a.items.map((i) => i.leg)).toEqual([undefined, undefined, { gaps }, undefined]);
+    expect(a.items.map((i) => i.numberHidden)).toEqual([undefined, undefined, true, undefined]);
   });
 
-  it("generated legs: a bent leg keeps its path, gaps and cuts are not taken; a count mismatch is ignored", () => {
-    const leg = (pts: number[][], props: Record<string, unknown> = {}) => ({ geometry: { type: "LineString", coordinates: pts }, properties: { symbolType: "leg", courseName: "A", gaps: [{ from: 0.2, to: 0.3 }], ...props } });
-    const cut = { geometry: { type: "Point", coordinates: [40, 10] }, properties: { symbolType: "control", code: "c1", courseName: "A", cuts: [{ start: 10, end: 40 }] } };
-    const r = courseLayerRequest(base({ courseGeometry: { features: [leg([[10, 10], [40, 10]]), leg([[40, 10], [50, 30], [60, 40]]), leg([[60, 40], [10, 40]]), cut] } }));
-    const a = structures(r)[0];
-    expect(a.items[1].leg).toBeUndefined();
-    expect(a.items[2].leg).toEqual({ path: [{ x: 40, y: 10 }, { x: 50, y: 30 }, { x: 60, y: 40 }] });
-    expect(a.items[1].circleGaps).toBeUndefined();
-    const short = courseLayerRequest(base({ courseGeometry: { features: [leg([[10, 10], [25, 30], [40, 10]], { preclipped: true })] } }));
-    expect(structures(short)[0].items.every((i) => !i.leg)).toBe(true);
+  it("an empty gap list stays out of the request (the layer cuts automatically)", () => {
+    const r = courseLayerRequest(base({
+      controls: CONTROLS.map((c) => (c.id === "1" ? { ...c, circleGaps: [] } : c)),
+      courses: [{ name: "A", controls: ["S", "1", "2", "F"], highlight: true, legGaps: { "1>2": [] } }],
+    }));
+    expect(r.sites.find((s) => s.id === "1")!.circleGaps).toBeUndefined();
+    expect(structures(r)[0].items.every((i) => i.leg === undefined)).toBe(true);
   });
 });
 

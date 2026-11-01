@@ -3,8 +3,7 @@
  * (docs/course-layer.md §4) — the compatibility artifact C5 writes for
  * consumers not yet ported: `Point` features `{ symbolType, code, id }`
  * (+ `cuts` on controls), `LineString` legs `{ symbolType: "leg", from,
- * to }` centre to centre (+ `gaps`; authored pieces as `preclipped`),
- * course-level lines and areas under their imported names. Paper mm.
+ * to }` centre to centre (+ `gaps`). Course-level lines and areas are course objects (§8), not in this artifact. Paper mm.
  */
 
 import type { CourseLayer } from "./types.js";
@@ -19,8 +18,6 @@ export interface CourseGeoJson {
   type: "FeatureCollection";
   features: CourseGeoJsonFeature[];
 }
-
-const EXTRA_TYPE = { marked_route: "marked_route", restricted_line: "restricted_line", forbidden_route: "forbidden_route", oob_area: "restricted_area" } as const;
 
 /** One course of the layer (by id; default the first) as a FeatureCollection. */
 export function courseLayerGeoJson(layer: Pick<CourseLayer, "derivation">, courseId?: string): CourseGeoJson {
@@ -39,21 +36,9 @@ export function courseLayerGeoJson(layer: Pick<CourseLayer, "derivation">, cours
   }
   for (const leg of course.legs) {
     const from = site.get(leg.from)!.code, to = site.get(leg.to)!.code;
-    if (leg.preclipped) {
-      for (const piece of leg.pieces) {
-        features.push({ type: "Feature", geometry: { type: "LineString", coordinates: piece.map(xy) }, properties: { symbolType: "leg", from, to, preclipped: true } });
-      }
-      continue;
-    }
     const properties: Record<string, unknown> = { symbolType: "leg", from, to };
     if (leg.gaps.length > 0) properties.gaps = leg.gaps.map((g) => ({ from: g.from, to: g.to }));
     features.push({ type: "Feature", geometry: { type: "LineString", coordinates: leg.points.map(xy) }, properties });
-  }
-  for (const x of course.extras) {
-    const geometry: CourseGeoJsonFeature["geometry"] = x.kind === "oob_area"
-      ? { type: "Polygon", coordinates: [[...x.points.map(xy), xy(x.points[0])]] }
-      : { type: "LineString", coordinates: x.points.map(xy) };
-    features.push({ type: "Feature", geometry, properties: { symbolType: EXTRA_TYPE[x.kind] } });
   }
   return { type: "FeatureCollection", features };
 }

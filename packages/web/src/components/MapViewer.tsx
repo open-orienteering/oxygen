@@ -113,6 +113,8 @@ export interface ControlOverlay {
    * falls back to legacy geometry-embedded descriptions when absent.
    */
   description?: ControlDescription | null;
+  /** `controls.circle_gaps`: authored circle cuts for the course layer (course-layer.md §6.4). */
+  circleGaps?: { start: number; end: number }[];
 }
 
 /** A manual or automatic slit in a control circle. */
@@ -144,6 +146,10 @@ export interface CourseOverlay {
    * (punch codes) alike.
    */
   labelOffsets?: Record<string, { dx: number; dy: number }>;
+  /** Authored leg gaps of the stored structure, keyed `"<fromId>><toId>"` (course-layer.md §6.4). */
+  legGaps?: Record<string, { from: number; to: number }[]>;
+  /** Ids of the controls whose number every visit hides. */
+  hiddenNumbers?: number[];
 }
 
 /**
@@ -889,7 +895,6 @@ export function MapViewer({
       positions,
       courses,
       highlightCourseName,
-      courseGeometry,
       courseObjects: drawnObjects,
       sequenceLabels,
       // Manual offsets apply with the sheet or the editor only, as on the SVG overlay.
@@ -900,7 +905,7 @@ export function MapViewer({
     });
     return editorDraftFast ? { ...request, fastFilter: true } : request;
   }, [glCourse, controls, controlMm, editorOn, editorFade, editorCourseIds, editorDraftFast, pendingMoves, editorDragPos, showDescriptions,
-      courses, highlightCourseName, courseGeometry, drawnObjects, editorLabelDragPos, pendingLabelMoves]);
+      courses, highlightCourseName, drawnObjects, editorLabelDragPos, pendingLabelMoves]);
 
   // ─── Editor hit-test on the shared stage (docs/course-editor.md §5) ──
   const sharedHit = !!editor?.sharedHitTest && glCourse;
