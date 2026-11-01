@@ -79,16 +79,24 @@ async function boxes(page: Page, ids: string[]): Promise<{ x: number; y: number;
   return out;
 }
 
+/** The drawn description sheets: their svg spans the viewer (pointer-events none), so the content's box, in page px. */
+async function sheetBoxes(page: Page): Promise<{ x: number; y: number; width: number; height: number }[]> {
+  return page.getByTestId("description-sheet").evaluateAll((els) => els.map((el) => {
+    const svg = el as SVGSVGElement, at = svg.getBoundingClientRect(), b = svg.getBBox();
+    return { x: at.x + b.x, y: at.y + b.y, width: b.width, height: b.height };
+  }));
+}
+
 /**
  * A page point inside the viewer at least `clearPx` from every site and
- * every drawn leg, outside the editor's floating chrome and the viewer's
- * corner buttons. Scans a grid from the viewer's right half inwards.
+ * every drawn leg, outside the editor's floating chrome, the description
+ * sheet and the viewer's corner buttons. Scans a grid from the viewer's right half inwards.
  */
 export async function emptyPoint(page: Page, clearPx = 40, avoid: Pt[] = []): Promise<Pt> {
   const viewer = (await page.getByTestId("map-viewer").boundingBox())!;
   const pts = [...(await Promise.all((await sites(page)).map((s) => toPage(page, s.mm)))), ...avoid];
   const legs = await Promise.all((await legPieces(page)).map(async (l) => Promise.all(l.points.map((p) => toPage(page, p)))));
-  const chrome = await boxes(page, ["editor-inspector", "editor-tool-rail", "editor-status", "editor-conflict", "editor-action-bar"]);
+  const chrome = [...(await boxes(page, CHROME)), ...(await sheetBoxes(page))];
   const segDist = (p: Pt, a: Pt, b: Pt) => {
     const dx = b.x - a.x, dy = b.y - a.y, l2 = dx * dx + dy * dy;
     const t = l2 === 0 ? 0 : Math.max(0, Math.min(1, ((p.x - a.x) * dx + (p.y - a.y) * dy) / l2));
@@ -105,6 +113,46 @@ export async function emptyPoint(page: Page, clearPx = 40, avoid: Pt[] = []): Pr
     }
   }
   throw new Error("no empty map point found");
+}
+
+const CHROME = ["editor-inspector", "editor-tool-rail", "editor-status", "editor-conflict", "editor-action-bar"];
+
+/**
+ * Click a page point on the map, failing fast when the editor's floating
+ * chrome (the action bar of the current selection, the inspector…) covers
+ * it — the click would land there, not on the canvas.
+ */
+export async function clickMap(page: Page, p: Pt): Promise<void> {
+  const cover = await page.evaluate(({ pt, chrome }) => {
+    const el = document.elementFromPoint(pt.x, pt.y);
+    const over = el?.closest(chrome.map((id) => `[data-testid="${id}"]`).join(","));
+    if (over) return over.getAttribute("data-testid");
+    return el?.closest('[data-testid="map-viewer"]') ? null : (el?.tagName ?? "nothing");
+  }, { pt: p, chrome: CHROME });
+  if (cover) throw new Error(`map point (${Math.round(p.x)}, ${Math.round(p.y)}) is covered by ${cover}`);
+  await page.mouse.click(p.x, p.y);
+}
+
+/**
+ * A paper point halfway along the drawn leg from site `from` to site `to`
+ * of a course: the leg's pieces (auto slits cut it where it crosses other
+ * circles) grouped by leg index, then the middle of its longest piece.
+ */
+export async function legMidpoint(page: Page, course: string, from: Pt, to: Pt): Promise<Pt> {
+  const pieces = await legPieces(page, course);
+  const near = (q: Pt, s: Pt) => Math.hypot(q.x - s.x, q.y - s.y) < 8;
+  const legs = [...new Set(pieces.map((l) => l.leg))].map((leg) => pieces.filter((l) => l.leg === leg));
+  const leg = legs.find((ps) => near(ps[0].points[0], from) && near(ps[ps.length - 1].points.at(-1)!, to));
+  if (!leg) throw new Error("no drawn leg between the two sites");
+  const length = (pts: Pt[]) => pts.reduce((sum, q, i) => (i === 0 ? 0 : sum + Math.hypot(q.x - pts[i - 1].x, q.y - pts[i - 1].y)), 0);
+  const piece = leg.map((l) => l.points).sort((x, y) => length(y) - length(x))[0];
+  let rest = length(piece) / 2;
+  for (let i = 1; i < piece.length; i++) {
+    const a = piece[i - 1], b = piece[i], d = Math.hypot(b.x - a.x, b.y - a.y);
+    if (rest <= d) return { x: a.x + ((b.x - a.x) * rest) / d, y: a.y + ((b.y - a.y) * rest) / d };
+    rest -= d;
+  }
+  return piece[piece.length - 1];
 }
 
 /** Drag from one page point to another with intermediate moves (past the 3 px click threshold). */

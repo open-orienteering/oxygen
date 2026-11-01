@@ -7,7 +7,7 @@
 import { test, expect, type Page } from "@playwright/test";
 import { reseed } from "./helpers/reseed";
 import { setEditorVector, setMapPipeline } from "./helpers/map-pipeline";
-import { drag, editorReady, emptyPoint, legPieces, site, sitePoint, sites, toPage } from "./helpers/editor";
+import { clickMap, drag, editorReady, emptyPoint, legMidpoint, legPieces, site, sitePoint, sites, toPage } from "./helpers/editor";
 import { waitForTrpc } from "./helpers/trpc";
 
 test.beforeAll(async () => {
@@ -157,8 +157,7 @@ test.describe("Course editor (new, GL canvas)", () => {
     // Persist: reload, select it by clicking its circle on the canvas.
     await page.reload();
     await editorReady(page);
-    const p = await sitePoint(page, code);
-    await page.mouse.click(p.x, p.y);
+    await clickMap(page, await sitePoint(page, code));
     await expect(selectedCode(page)).toContainText(code, { timeout: 10000 });
     await expect(selectedPosition(page)).toHaveText(moved);
 
@@ -177,21 +176,22 @@ test.describe("Course editor (new, GL canvas)", () => {
     await expect(page.getByTestId("editor-course-picker").locator("option:checked")).toHaveText(name, { timeout: 10000 });
     await expect(page.getByTestId("editor-sequence")).toBeVisible();
 
-    // Append two existing controls through the action bar.
+    // Append two existing controls through the action bar. Escape drops the
+    // selection after each, so its action bar cannot cover the next control.
     const [a, b] = await regularCodes(page, 2);
     for (const code of [a, b]) {
-      const p = await sitePoint(page, code);
-      await page.mouse.click(p.x, p.y);
+      await clickMap(page, await sitePoint(page, code));
       await expect(selectedCode(page)).toContainText(code, { timeout: 10000 });
       const saved = waitForTrpc(page, "course.setStructure");
       await page.getByTestId("editor-action-bar").getByTestId("editor-action-append").click();
       await saved;
+      await page.keyboard.press("Escape");
+      await expect(page.getByTestId("editor-action-bar")).toHaveCount(0);
     }
     await expect(controlRows(page)).toHaveCount(2, { timeout: 15000 });
     await expect(controlRows(page).nth(0)).toHaveAttribute("data-control-id", a);
 
     // Create-and-append on empty map: one undo entry.
-    await page.keyboard.press("Escape");
     const spot = await emptyPoint(page);
     await page.mouse.click(spot.x, spot.y);
     const saved = waitForTrpc(page, "course.setStructure");
@@ -209,17 +209,8 @@ test.describe("Course editor (new, GL canvas)", () => {
     // Insert on a leg: click the middle of the leg a → b on the canvas.
     await page.keyboard.press("Escape");
     await expect.poll(async () => (await legPieces(page, name)).length, { timeout: 15000 }).toBeGreaterThan(1);
-    const pa = (await site(page, a)).mm, pb = (await site(page, b)).mm;
-    const legAB = (await legPieces(page, name)).find((l) => {
-      const first = l.points[0], last = l.points[l.points.length - 1];
-      const near = (q: { x: number; y: number }, s: { x: number; y: number }) => Math.hypot(q.x - s.x, q.y - s.y) < 8;
-      return near(first, pa) && near(last, pb);
-    });
-    expect(legAB).toBeDefined();
-    const mid = legAB!.points[Math.floor(legAB!.points.length / 2) - 1];
-    const next = legAB!.points[Math.floor(legAB!.points.length / 2)];
-    const at = await toPage(page, { x: (mid.x + next.x) / 2, y: (mid.y + next.y) / 2 });
-    await page.mouse.click(at.x, at.y);
+    const mid = await legMidpoint(page, name, (await site(page, a)).mm, (await site(page, b)).mm);
+    await clickMap(page, await toPage(page, mid));
     const inserted = waitForTrpc(page, "course.setStructure");
     await page.getByTestId("editor-action-bar").getByTestId("editor-action-insert").click();
     await inserted;
