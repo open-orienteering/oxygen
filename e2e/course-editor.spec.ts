@@ -4,7 +4,11 @@
 // under the `map-vector` project — until then the spec sets the event
 // pipeline and the flag itself. The legacy page's spec is
 // `course-editor-legacy.spec.ts`.
+import { inflateSync } from "node:zlib";
+import { createRequire } from "node:module";
+import { resolve } from "node:path";
 import { test, expect, type Page } from "@playwright/test";
+import { API_BASE as API } from "./helpers/api-base";
 import { reseed } from "./helpers/reseed";
 import { setEditorVector, setMapPipeline } from "./helpers/map-pipeline";
 import { clickMap, drag, editorReady, emptyPoint, inkIn, legMidpoint, legPieces, site, sitePoint, sites, toolShapes, toPage } from "./helpers/editor";
@@ -22,6 +26,31 @@ test.afterAll(async () => {
 });
 
 test.setTimeout(120_000);
+
+// pdf-lib is the API's dependency; load it from there (as course-maps.spec.ts does).
+const { PDFDocument } = createRequire(resolve(process.cwd(), "packages/api/package.json"))("pdf-lib") as {
+  PDFDocument: { load(bytes: Uint8Array): Promise<{ getPageCount(): number }> };
+};
+
+/** The event's all-controls sheet as printed (`maps.pdf`): its page count and the inflated size of its streams. */
+async function printedAllControls(page: Page, nameId: string): Promise<{ pages: number; content: number }> {
+  const res = await page.request.get(`/api/maps/${nameId}/maps.pdf?allControls=1`);
+  expect(res.ok(), await res.text().catch(() => "")).toBe(true);
+  const bytes = await res.body();
+  const pages = (await PDFDocument.load(bytes)).getPageCount();
+  // Every Flate stream, inflated: the page's drawing grows by the object's passes (fonts and images are the same both times).
+  const text = bytes.toString("latin1");
+  let content = 0;
+  for (let at = text.indexOf("stream"); at >= 0; at = text.indexOf("stream", at + 6)) {
+    if (text.slice(at - 3, at) === "end") continue;
+    const start = at + 6 + (text[at + 6] === "\r" ? 2 : 1);
+    const end = text.indexOf("endstream", start);
+    if (end < 0) break;
+    try { content += inflateSync(bytes.subarray(start, end)).length; } catch { /* not Flate */ }
+    at = end;
+  }
+  return { pages, content };
+}
 
 async function selectCompetition(page: Page) {
   await page.goto("/");
@@ -377,6 +406,44 @@ test.describe("Course editor (new, GL canvas)", () => {
       await expect(page.getByTestId("editor-tool-V")).toHaveAttribute("aria-pressed", "true");
       const id = await page.getByTestId("editor-object").getAttribute("data-object-id");
       await expect(page.locator(`[data-testid="editor-object-row"][data-object-id="${id}"]`)).toHaveCount(1);
+
+      // Printed: the all-controls sheet (an `all`-scoped object) carries the 709 hatch — one page, more drawing than without it.
+      const nameId = new URL(page.url()).pathname.split("/")[1];
+      const headers = { "content-type": "application/json", "x-event-id": nameId };
+      const seqOf = async (res: Awaited<ReturnType<Page["request"]["post"]>>) => {
+        expect(res.ok(), await res.text()).toBe(true);
+        return ((await res.json()) as { result: { data: { seq: number } } }).result.data.seq;
+      };
+      const templateId = await seqOf(await page.request.post(`${API}/trpc/mapTemplate.create`, {
+        headers,
+        data: {
+          name: `D5 print ${Date.now() % 100000}`, paper: "A4", orientation: "portrait", printScale: 10000, objects: [],
+          settings: {
+            printMarginMm: 3, mapFrame: { x: 8, y: 8, width: 194, height: 281 }, description: { visible: false, x: 150, y: 12, cellSizeMm: 6 },
+            appearance: { purple: "#a626ff", circleRadiusMm: 2.5, lineWidthMm: 0.35, numberHeightMm: 4 },
+          },
+        },
+      }));
+      const sheetId = await seqOf(await page.request.post(`${API}/trpc/courseMap.create`, { headers, data: { kind: "all_controls", templateId } }));
+      try {
+        const withArea = await printedAllControls(page, nameId);
+        expect(withArea.pages).toBe(1);
+        const hidden = await page.request.post(`${API}/trpc/courseObject.update`, { headers, data: { id: Number(id), scope: { courses: [], classes: [] } } });
+        expect(hidden.ok(), await hidden.text()).toBe(true);
+        const without = await printedAllControls(page, nameId);
+        expect(without.pages).toBe(1);
+        expect(withArea.content, "the area's passes in the page").toBeGreaterThan(without.content);
+        await page.request.post(`${API}/trpc/courseObject.update`, { headers, data: { id: Number(id), scope: { all: true } } });
+      } finally {
+        await page.request.post(`${API}/trpc/courseMap.delete`, { headers, data: { id: sheetId } });
+        await page.request.post(`${API}/trpc/mapTemplate.delete`, { headers, data: { id: templateId } });
+      }
+      await page.reload();
+      await editorReady(page);
+      await page.getByTestId("editor-object-row").first().waitFor({ state: "attached" });
+      // Select it again on the canvas (a click inside the area).
+      await clickMap(page, { x: a.x + 30, y: a.y + 15 });
+      await expect(page.getByTestId("editor-object")).toHaveAttribute("data-object-id", id!, { timeout: 15000 });
       // Its border from the inspector, then delete it (Delete key) and undo.
       const updated = waitForTrpc(page, "courseObject.update");
       await page.getByTestId("editor-prop-border").selectOption("dashed");
