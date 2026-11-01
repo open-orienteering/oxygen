@@ -64,6 +64,7 @@ type CourseObject = course.CourseObject;
 
 /** The toner saver's margin around the course, paper mm (§7). */
 const TONER_MARGIN_MM = 10;
+const NO_DRAFTS: CourseObject[] = [];
 /** New map text: size on paper (§7). */
 const TEXT_SIZE_MM = 4;
 
@@ -792,18 +793,21 @@ export function EditorPage() {
   })();
 
   // Drafts: dragged objects, and the polygon being drawn when it is a filter region (live, 08 §5.3).
+  // Only a region being drawn follows the hover: anything else would re-derive the layer on every pointer move.
+  const regionHover = tool.kind === "area" && tool.poly.kind === "filter_region" ? hover : null;
   const draftObjects = useMemo(() => {
+    if (drafts.size === 0 && !regionHover && !(tool.kind === "area" && tool.poly.kind === "filter_region")) return NO_DRAFTS;
     const out: CourseObject[] = [];
     for (const [id, geometry] of drafts) {
       const o = objects.find((x) => x.id === id);
       if (o) out.push({ ...o, geometry } as CourseObject);
     }
     if (tool.kind === "area" && tool.poly.kind === "filter_region") {
-      const v = hover ? [...tool.poly.vertices, hover.pt] : tool.poly.vertices;
+      const v = regionHover ? [...tool.poly.vertices, regionHover.pt] : tool.poly.vertices;
       if (v.length >= 3) out.push({ id: -1, kind: "filter_region", geometry: v, props: { mode: "hide", symbols: "all" }, scope: { all: true }, z: 0, version: "0", inCourses: null });
     }
     return out;
-  }, [drafts, objects, tool, hover]);
+  }, [drafts, objects, tool, regionHover]);
   const draftFast = (tool.kind === "area" && tool.poly.kind === "filter_region")
     || [...drafts.keys()].some((id) => objects.find((o) => o.id === id)?.kind === "filter_region");
 

@@ -861,6 +861,11 @@ export function MapViewer({
     for (const d of drafts) if (!out.includes(d)) out.push(d);
     return out;
   }, [courseObjects, editor?.draftObjects]);
+  // The request reads these of the editor only: the editor object itself changes with every tool hover.
+  const editorOn = !!editor;
+  const editorFade = editor?.fadeNonCourse ?? false;
+  const editorCourseIds = editor?.courseControlIds;
+  const editorDraftFast = editor?.draftFast ?? false;
   const courseRequest = useMemo(() => {
     if (!glCourse) return null;
     const positions = new Map<string, Pt>();
@@ -869,14 +874,14 @@ export function MapViewer({
       if (mm) positions.set(c.id, mm);
     }
     // The editor's local positions, as the SVG overlay draws them (pending moves while the data is stale).
-    if (editor) {
+    if (editorOn) {
       for (const [id, m] of pendingMoves) {
         const c = controls.find((k) => k.id === id);
         if (c && Math.abs(c.x - m.from.x) <= 1e-9 && Math.abs(c.y - m.from.y) <= 1e-9) positions.set(id, m.to);
       }
       if (editorDragPos) positions.set(editorDragPos.id, { x: editorDragPos.x, y: editorDragPos.y });
     }
-    const sequenceLabels = showDescriptions || !!editor;
+    const sequenceLabels = showDescriptions || editorOn;
     const highlighted = courses.filter((c) => c.highlight || c.name === highlightCourseName);
     const single = sequenceLabels && highlighted.length === 1 ? highlighted[0] : null;
     const request = courseLayerRequest({
@@ -889,13 +894,13 @@ export function MapViewer({
       sequenceLabels,
       // Manual offsets apply with the sheet or the editor only, as on the SVG overlay.
       labelOffset: (id) => (single ? labelOffsetOf(id, controls, single.labelOffsets, editorLabelDragPos, pendingLabelMoves) : undefined),
-      exclude: editor?.fadeNonCourse
-        ? new Set(controls.filter((c) => c.type === "Control" && !editor.courseControlIds?.has(c.id)).map((c) => c.id))
+      exclude: editorFade
+        ? new Set(controls.filter((c) => c.type === "Control" && !editorCourseIds?.has(c.id)).map((c) => c.id))
         : undefined,
     });
-    return editor?.draftFast ? { ...request, fastFilter: true } : request;
-  }, [glCourse, controls, controlMm, editor, pendingMoves, editorDragPos, showDescriptions, courses, highlightCourseName,
-      courseGeometry, drawnObjects, editorLabelDragPos, pendingLabelMoves]);
+    return editorDraftFast ? { ...request, fastFilter: true } : request;
+  }, [glCourse, controls, controlMm, editorOn, editorFade, editorCourseIds, editorDraftFast, pendingMoves, editorDragPos, showDescriptions,
+      courses, highlightCourseName, courseGeometry, drawnObjects, editorLabelDragPos, pendingLabelMoves]);
 
   // ─── Editor hit-test on the shared stage (docs/course-editor.md §5) ──
   const sharedHit = !!editor?.sharedHitTest && glCourse;
