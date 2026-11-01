@@ -85,6 +85,7 @@ import {
 import { useMediaQuery } from "../hooks/useMediaQuery";
 import { courseLayerRequest } from "../lib/course-layer-request";
 import type { CourseInfo } from "../map-gl/engine";
+import { editorHitAt, HIT_TOLERANCE_PX, type EditorTarget } from "../lib/editor/hit";
 
 /** Persisted compass state: "1"/absent = rotation locked (north up). */
 const ROTATION_LOCK_STORAGE_KEY = "oxygen.map.rotationLock";
@@ -253,6 +254,14 @@ export interface MapViewerEditorProps {
   onLegClick?: (courseName: string, legIndex: number, pt: { x: number; y: number }) => void;
   /** Touch-friendly dismiss (mirrors Escape cascade on the owning page). */
   onDismiss?: () => void;
+  /**
+   * Hit-test on the course layer's symbolised shapes instead of SVG hit
+   * targets (docs/course-editor.md §5): with the GL course layer drawn,
+   * pointer-down resolves through `editorHitAt` over the layer's hit
+   * index and no `editor-*-hit` elements are rendered. The new editor
+   * sets it; the legacy page keeps its SVG targets.
+   */
+  sharedHitTest?: boolean;
 }
 
 interface Props {
@@ -796,6 +805,58 @@ export function MapViewer({
   }, [glCourse, controls, controlMm, editor, pendingMoves, editorDragPos, showDescriptions, courses, highlightCourseName,
       courseGeometry, editorLabelDragPos, pendingLabelMoves]);
 
+  // ─── Editor hit-test on the shared stage (docs/course-editor.md §5) ──
+  const sharedHit = !!editor?.sharedHitTest && glCourse;
+  /** The editor target under a client point, `null` for empty map; `undefined` when SVG targets are in use. */
+  const resolveEditorTarget = (clientX: number, clientY: number): EditorTarget | null | undefined => {
+    if (!sharedHit || !editor) return undefined;
+    const pt = screenToMapMm(clientX, clientY);
+    const edge = screenToMapMm(clientX + HIT_TOLERANCE_PX, clientY);
+    if (!pt || !edge) return null;
+    const tol = Math.hypot(edge.x - pt.x, edge.y - pt.y);
+    // The faded off-course controls are drawn by the UI layer, not the layer: plain circles.
+    const radiusMm = courseInfo?.metrics?.circleRadiusMm ?? 3;
+    const uiSites = editor.fadeNonCourse
+      ? controls.filter((c) => c.type === "Control" && !editor.courseControlIds?.has(c.id) && (c.x !== 0 || c.y !== 0))
+        .map((c) => ({ id: c.id, x: c.x, y: c.y, radiusMm }))
+      : [];
+    return editorHitAt(courseInfo?.hit ?? null, pt, tol, uiSites);
+  };
+  const resolveEditorTargetRef = useRef(resolveEditorTarget);
+  resolveEditorTargetRef.current = resolveEditorTarget;
+  const sharedHitRef = useRef(sharedHit);
+  sharedHitRef.current = sharedHit;
+
+  /**
+   * Pointer-down on the map in shared hit-test mode: arm a control drag, a
+   * number drag or a leg click for the target under the pointer, exactly as
+   * the SVG targets' own handlers do. True when the pointer is on a target
+   * (the map does not pan); false for empty map or SVG mode.
+   */
+  const armEditorTargetImpl = (clientX: number, clientY: number, touch: boolean): boolean => {
+    const target = resolveEditorTargetRef.current(clientX, clientY);
+    if (!target) return false;
+    if (touch && Date.now() < suppressEditorSelectionUntilRef.current) return true;
+    if (target.kind === "leg") {
+      legDownRef.current = { course: target.courseId, index: target.index, x: clientX, y: clientY };
+      return true;
+    }
+    const ctrl = controls.find((k) => k.id === target.id);
+    if (!ctrl) return false;
+    if (target.kind === "site") {
+      editorDragRef.current = { id: ctrl.id, startX: clientX, startY: clientY, moved: false, origX: ctrl.x, origY: ctrl.y, touch };
+      setEditorDragTouch(touch);
+      return true;
+    }
+    const single = courses.filter((c) => c.highlight || c.name === highlightCourseName);
+    const from = single.length === 1 ? labelOffsetOf(ctrl.id, controls, single[0].labelOffsets, null, pendingLabelMoves) ?? null : null;
+    editorLabelDragRef.current = { id: ctrl.id, startX: clientX, startY: clientY, moved: false, ctrlX: ctrl.x, ctrlY: ctrl.y, from, touch };
+    return true;
+  };
+  const armEditorTargetRef = useRef(armEditorTargetImpl);
+  armEditorTargetRef.current = armEditorTargetImpl;
+  const armEditorTarget = useCallback((clientX: number, clientY: number, touch: boolean) => armEditorTargetRef.current(clientX, clientY, touch), []);
+
   /** Fits the whole map: the document's extent (paper) or the tile bounds (mercator). */
   const fitWholeMap = useCallback(() => {
     if (containerSize.w === 0 || containerSize.h === 0) return;
@@ -1121,10 +1182,11 @@ export function MapViewer({
 
   const handleMouseDown = useCallback((e: React.MouseEvent) => {
     if (e.button !== 0) return;
+    if (!measuring && armEditorTarget(e.clientX, e.clientY, false)) return;
     if (!measuring) isPanningRef.current = true;
     lastPosRef.current = { x: e.clientX, y: e.clientY };
     mouseDownPosRef.current = { x: e.clientX, y: e.clientY };
-  }, [measuring]);
+  }, [measuring, armEditorTarget]);
 
   const handleMouseMove = useCallback((e: React.MouseEvent) => {
     // Editor drag-to-move: once armed (mouse-down on a control), any
@@ -1192,6 +1254,19 @@ export function MapViewer({
         return;
       }
       finishEditorLabelDrag(e.clientX, e.clientY, false);
+      return;
+    }
+    const leg = legDownRef.current;
+    if (editor && leg && sharedHitRef.current) {
+      // The leg click of shared hit-testing (the SVG hit-line's mouse-up, §5).
+      legDownRef.current = null;
+      isPanningRef.current = false;
+      mouseDownPosRef.current = null;
+      if (e.type !== "mouseleave" && Date.now() >= suppressEditorSelectionUntilRef.current &&
+          Math.abs(e.clientX - leg.x) + Math.abs(e.clientY - leg.y) < 5) {
+        const pt = screenToMapMm(e.clientX, e.clientY);
+        if (pt) editor.onLegClick?.(leg.course, leg.index, pt);
+      }
       return;
     }
     isPanningRef.current = false;
@@ -1328,6 +1403,11 @@ export function MapViewer({
       lastTouchRef.current = { x: t.clientX, y: t.clientY };
       touchStartPosRef.current = { x: t.clientX, y: t.clientY };
       touchOnEditorTargetRef.current = false;
+      if (!measuring && armEditorTargetRef.current(t.clientX, t.clientY, true)) {
+        touchOnEditorTargetRef.current = true;
+        e.preventDefault();
+        return;
+      }
       touchStartViewportRef.current = viewportRef.current;
       if (allowOneFingerMapPan && !measuring) isPanningRef.current = true;
       if (measuring || allowOneFingerMapPan) e.preventDefault();
@@ -1498,6 +1578,15 @@ export function MapViewer({
         return;
       }
 
+      const leg = legDownRef.current;
+      if (leg && sharedHitRef.current && e.changedTouches.length > 0 && e.touches.length === 0) {
+        legDownRef.current = null;
+        const t = e.changedTouches[0];
+        if (!hadMultiTouchRef.current && Date.now() >= suppressEditorSelectionUntilRef.current && Math.abs(t.clientX - leg.x) + Math.abs(t.clientY - leg.y) < 10) {
+          const pt = screenToMapMm(t.clientX, t.clientY);
+          if (pt) editor?.onLegClick?.(leg.course, leg.index, pt);
+        }
+      }
       if (e.touches.length === 0) {
         if (hadMultiTouchRef.current) {
           suppressEditorSelectionUntilRef.current = Date.now() + 400;
@@ -2947,6 +3036,7 @@ export function MapViewer({
       data-testid="map-viewer"
       data-map-pipeline={pipeline}
       data-course-layer={glCourse ? "gl" : "svg"}
+      data-editor-hit={editor ? (sharedHit ? "shared" : "svg") : undefined}
       data-center-lat={viewport.kind === "mercator" ? viewport.centerLat : centreGeo?.lat}
       data-center-lng={viewport.kind === "mercator" ? viewport.centerLng : centreGeo?.lng}
       data-zoom={mercatorEquivalentZoom(viewport, mapScale, centreGeo?.lat ?? null) ?? undefined}
@@ -3082,7 +3172,7 @@ export function MapViewer({
             {/* Editor hit targets — topmost, so grabbing a control or a
                 leg always wins over decorative overlay shapes. Handlers
                 live here (not in the memo) because they write refs. */}
-            {editor && overlayContent && overlayContent.legHits.map((h) => (
+            {editor && !sharedHit && overlayContent && overlayContent.legHits.map((h) => (
               <path key={h.key} d={h.d} stroke="transparent" strokeWidth={12} fill="none"
                 style={{ pointerEvents: "stroke", cursor: "copy" }}
                 data-testid="editor-leg-hit"
@@ -3093,7 +3183,7 @@ export function MapViewer({
                 onTouchStart={(e) => legHitTouchStart(h.course, h.index, e)}
                 onTouchEnd={(e) => legHitTouchEnd(h.course, h.index, e)} />
             ))}
-            {editor && overlayContent && overlayContent.controlHits.map((h) => (
+            {editor && !sharedHit && overlayContent && overlayContent.controlHits.map((h) => (
               <circle key={`edit-hit-${h.id}`} cx={h.px} cy={h.py} r={h.r}
                 fill="transparent" stroke="none"
                 style={{ pointerEvents: "all", cursor: editorDragPos ? "crosshair" : "move", touchAction: "none" }}
@@ -3105,7 +3195,7 @@ export function MapViewer({
                 onTouchMove={handleControlTouchMove}
                 onTouchEnd={handleControlTouchEnd} />
             ))}
-            {editor && overlayContent && overlayContent.labelHits.map((h) => (
+            {editor && !sharedHit && overlayContent && overlayContent.labelHits.map((h) => (
               <rect key={`edit-label-${h.id}`}
                 x={h.px - h.w / 2} y={h.py - h.h / 2} width={h.w} height={h.h}
                 fill="transparent" stroke="none"
