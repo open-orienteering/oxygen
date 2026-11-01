@@ -16,18 +16,20 @@
  * - Autosave: there is no save button; the status bar says saved /
  *   saving / not saved / changed elsewhere.
  *
- * Course mode only (Layout D7, Field D9); the creation tools, gaps,
- * snapping and multi-select are D5's.
+ * Course mode only (Layout D7, Field D9). The tools (§6: the armed
+ * `S` / `K` / `M`, `A` areas, `T` text, `G` gaps, snapping, Shift-click /
+ * lasso multi-select) and course objects (§7) are D5's: each tool is a
+ * viewer binding (`tools/bindings.ts`) built here from the state.
  */
 
 import { useCallback, useEffect, useMemo, useReducer, useRef, useState } from "react";
-import { useSearchParams } from "react-router-dom";
+import { useParams, useSearchParams } from "react-router-dom";
 import { useTranslation } from "react-i18next";
 import type { ControlDescription, course } from "@oxygen/shared";
 import { trpc } from "../../lib/trpc";
 import { MapPanel } from "../../components/MapPanel";
 import { ControlDescriptionEditor } from "../../components/ControlDescriptionEditor";
-import type { EditorDescriptionSuggestion, MapViewerEditorProps } from "../../components/MapViewer";
+import type { EditorDescriptionSuggestion, EditorToolBinding, MapViewerEditorProps, ToolPointer } from "../../components/MapViewer";
 import { useMediaQuery } from "../../hooks/useMediaQuery";
 import { IOF_SYMBOLS } from "../../iof-symbols";
 import { iofSymbolName } from "../../iof-symbol-meta";
@@ -37,19 +39,39 @@ import {
   nextFreeSrrCode, nextSeriesControlCode, sequenceLegMeters,
 } from "../../lib/course-editor";
 import { UndoStack } from "../../lib/undo-stack";
+import { useMapDocument } from "../../lib/map-document-cache";
+import { courseObjectsForView } from "../../lib/course-layer-request";
+import { snapIndexForDocument } from "../../lib/editor/snap";
 import { EditorConflict, EditorWrites, type EditorClient } from "../../lib/editor/write-client";
-import { editorReducer, escapeHasWork, initialEditorState } from "../../lib/editor/state";
-import { appendSite, insertSite, moveVisit, removeSite, removeVisit, setRole } from "../../lib/editor/structure-edit";
+import { areaTool, editorReducer, escapeHasWork, initialEditorState, type EditorTool } from "../../lib/editor/state";
+import { appendSite, insertSite, moveVisit, removeSite, removeVisit, setLegGaps, setNumberHidden, setRole, type KindOf } from "../../lib/editor/structure-edit";
 import { displaySequence, effectiveEnds, explicitStructure, insertIndexForLeg, kindOfSites, type SiteRow } from "../../lib/editor/sequence";
 import { courseActions } from "./ActionBar";
 import { TopBar } from "./TopBar";
-import { ToolRail } from "./ToolRail";
+import { ToolRail, type AreaChoice } from "./ToolRail";
+import { afterPlaced, afterUndo, armPlacement, ghostInfo, switchTool, type PlacementState, type PlacementTool } from "./tools/placement";
+import { tonerSaverHull, type AreaKind } from "./tools/polygon";
+import { mergeCircleGaps, mergeLegGaps, type AngularGap, type FractionGap } from "./tools/gaps";
+import { areaBinding, gapBinding, placeBinding, selectBinding, textBinding, type GapTarget, type Gesture } from "./tools/bindings";
+import { ObjectSection } from "./modes/ObjectSection";
 import { ChecksSection, Inspector, InspectorSection, InventorySection } from "./Inspector";
 import { StatusBar, type SaveState } from "./StatusBar";
-import { CourseSection, SelectionSection } from "./modes/CourseMode";
+import { CourseSection, MultiSection, SelectionSection } from "./modes/CourseMode";
 
 type Pt = { x: number; y: number };
 type Structure = course.WireCourseStructure;
+type CourseObject = course.CourseObject;
+
+/** The toner saver's margin around the course, paper mm (§7). */
+const TONER_MARGIN_MM = 10;
+const NO_DRAFTS: CourseObject[] = [];
+/** New map text: size on paper (§7). */
+const TEXT_SIZE_MM = 4;
+
+/** Props a new object of each drawn kind starts with (§7). */
+function defaultProps(kind: AreaKind): CourseObject["props"] {
+  return kind === "filter_region" ? { mode: "hide", symbols: [] } : {};
+}
 
 /** A conflict the user sees (docs/course-editor.md §3). */
 type Notice =
@@ -62,6 +84,7 @@ export function EditorPage() {
   const isMobile = useMediaQuery("(max-width: 639px)");
   const utils = trpc.useUtils();
   const [searchParams] = useSearchParams();
+  const { nameId } = useParams<{ nameId: string }>();
   const [state, dispatch] = useReducer(editorReducer, initialEditorState);
 
   const [undoStack] = useState(() => new UndoStack(50));
@@ -95,6 +118,14 @@ export function EditorPage() {
     { enabled: state.selectedCourseId !== null },
   );
 
+  const objectList = trpc.courseObject.list.useQuery(undefined, { staleTime: Number.POSITIVE_INFINITY });
+  const documentHash = mapMetadata.data?.documentHash ?? null;
+  const { state: docState } = useMapDocument(documentHash, nameId ?? null);
+  const mapDoc = docState.status === "ready" ? docState.doc : null;
+  /** The layer's derivation and symbol sizes (the viewer reports them): ghost size, effective gaps. */
+  const [courseInfo, setCourseInfo] = useState<Parameters<NonNullable<MapViewerEditorProps["onCourseInfo"]>>[0]>(null);
+
+  useEffect(() => { if (objectList.data) writes.versions.seedAll("object", objectList.data); }, [objectList.data, writes]);
   useEffect(() => { if (courses.data) writes.versions.seedAll("course", courses.data); }, [courses.data, writes]);
   useEffect(() => { if (controlList.data) writes.versions.seedAll("control", controlList.data); }, [controlList.data, writes]);
   useEffect(() => { if (detail.data) writes.versions.seed("course", detail.data.id, detail.data.version); }, [detail.data, writes]);
@@ -110,8 +141,18 @@ export function EditorPage() {
     () => (state.selectedCourseId !== null ? courses.data?.find((c) => c.id === state.selectedCourseId) ?? null : null),
     [state.selectedCourseId, courses.data],
   );
+  /**
+   * The structure this client last wrote, until the course's detail catches up with it: placements
+   * follow each other faster than the refetch (§6.1), so each one builds on its predecessor's result.
+   */
+  const localStructure = useRef<{ courseId: number; structure: Structure; version: string } | null>(null);
+  const [, setLocalEpoch] = useState(0);
   /** The selected course's structure as stored (or read from its columns), while its detail is current. */
-  const structure: Structure | null = detail.data && detail.data.id === state.selectedCourseId ? (detail.data.structure as Structure) : null;
+  const detailStructure: Structure | null = detail.data && detail.data.id === state.selectedCourseId ? (detail.data.structure as Structure) : null;
+  const local = localStructure.current;
+  const structure: Structure | null = local && local.courseId === state.selectedCourseId && detailStructure && BigInt(detail.data!.version) < BigInt(local.version)
+    ? local.structure
+    : detailStructure;
   const rows = useMemo(() => (structure ? displaySequence(structure, sites) : []), [structure, sites]);
   const sequenceIds = useMemo(() => rows.filter((r) => r.kind === "control").map((r) => r.id), [rows]);
   const legMeters = useMemo(() => sequenceLegMeters(rows.map((r) => r.pt), mapScale), [rows, mapScale]);
@@ -130,6 +171,8 @@ export function EditorPage() {
     void utils.course.courseGeometries.invalidate();
     void utils.course.list.invalidate();
     void utils.course.detail.invalidate();
+    // Course objects are cached until reload in MapPanel: every write invalidates them (course-layer.md §8.3).
+    void utils.courseObject.list.invalidate();
   }, [utils]);
 
   /** One write (or an undo / redo): pending count, the conflict notice or the error, then a reload. */
@@ -156,64 +199,116 @@ export function EditorPage() {
 
   /** Push an undo entry for a write that succeeded. */
   const record = useCallback((undo: () => Promise<unknown>, redo: () => Promise<unknown>) => {
-    undoStack.push({ undo, redo });
+    const entry = { undo, redo };
+    undoStack.push(entry);
     bumpHistory();
+    return entry;
   }, [undoStack, bumpHistory]);
 
+  // Sites this client created since the last refetch: their kind, position and code, for the writes and the
+  // ghost that follow before `controlCoordinates` / `control.list` have them (§6.1).
+  const created = useRef(new Map<number, { kind: "control" | "start" | "finish"; pt: Pt; code: number | null }>());
+  useEffect(() => {
+    if (pendingOps === 0) created.current.clear();
+  }, [controlCoords.data, controlList.data]); // eslint-disable-line react-hooks/exhaustive-deps
+  const kindOfLatest: KindOf = useCallback((id: number) => created.current.get(id)?.kind ?? kindOf(id), [kindOf]);
+
+  // The latest values for writes queued behind each other (a chain of placements runs one at a time).
+  const latest = useRef({ detailStructure, detailVersion: detail.data?.version ?? null, selectedCourse, sites, kindOf: kindOfLatest });
+  latest.current = { detailStructure, detailVersion: detail.data?.version ?? null, selectedCourse, sites, kindOf: kindOfLatest };
+
+  /**
+   * The structure as of now, read from refs: the one this client wrote last unless the course's detail
+   * already holds a newer one. A queued placement can run before React re-renders after its predecessor.
+   */
+  const currentStructure = useCallback((): Structure | null => {
+    const { detailStructure: d, detailVersion, selectedCourse: course } = latest.current;
+    const mine = localStructure.current;
+    if (mine && course && mine.courseId === course.id && d && detailVersion !== null && BigInt(detailVersion) < BigInt(mine.version)) return mine.structure;
+    return d;
+  }, []);
+
   /** The structure edits start from: the current one with its start and finish explicit. */
-  const baseStructure = useCallback((): Structure | null => (structure ? explicitStructure(structure, sites) : null), [structure, sites]);
+  const baseStructure = useCallback((): Structure | null => {
+    const s = currentStructure();
+    return s ? explicitStructure(s, latest.current.sites) : null;
+  }, [currentStructure]);
+
+  /** `setStructure`, remembering the result as the local structure (every structure write and its undo / redo). */
+  const writeStructure = useCallback(async (courseId: number, next: Structure) => {
+    const res = await writes.setStructure(courseId, next);
+    localStructure.current = { courseId, structure: next, version: res.version };
+    setLocalEpoch((v) => v + 1);
+    return res;
+  }, [writes]);
 
   /** One sequence edit: `setStructure(next)`, undo writes back the structure it replaced. */
   const applyStructure = useCallback(async (edit: (s: Structure) => Structure): Promise<boolean> => {
-    const course = selectedCourse;
-    const prev = structure;
+    const course = latest.current.selectedCourse;
+    const prev = currentStructure();
     const base = baseStructure();
     if (!course || !prev || !base) return false;
     const next = edit(base);
-    const redo = () => writes.setStructure(course.id, next);
+    const redo = () => writeStructure(course.id, next);
     if ((await run(redo)) === undefined) return false;
-    record(() => writes.setStructure(course.id, prev), redo);
+    record(() => writeStructure(course.id, prev), redo);
     return true;
-  }, [selectedCourse, structure, baseStructure, writes, run, record]);
+  }, [currentStructure, baseStructure, writeStructure, run, record]);
+
+  /**
+   * Create a site at `pt` — a control (code from the club allocation; SRR codes get radio) or a code-less
+   * start / finish — and, with a course, write `edit(base, id)` into its structure: one undo entry (§4, §6.1).
+   */
+  const createSite = useCallback(async (pt: Pt, kind: "control" | "start" | "finish", edit: ((s: Structure, id: number) => Structure) | null): Promise<number | null> => {
+    let code: number | null = null;
+    let srr = false;
+    if (kind === "control") {
+      if (!controlList.data) return null;
+      const allocation = seriesAllocation.data ?? [];
+      const used = [...controlList.data.map((c) => c.codes), ...[...created.current.values()].flatMap((c) => (c.code !== null ? [String(c.code)] : []))];
+      const next = nextSeriesControlCode(allocation, used, activeSeriesId);
+      if (!next.entry && allocation.length > 0 && !exhaustedShown.current) {
+        exhaustedShown.current = true;
+        setShowExhausted(true);
+      }
+      code = next.code;
+      srr = next.entry?.type === "srr";
+    }
+    const made = await run(() => (kind === "control"
+      ? client.control.create.mutate({ codes: String(code), status: 0, xpos: pt.x, ypos: pt.y, autoDescribe: true })
+      : client.control.create.mutate({ status: kind === "start" ? 4 : 5, xpos: pt.x, ypos: pt.y })));
+    if (!made) return null;
+    const id = made.id;
+    created.current.set(id, { kind, pt, code });
+    if (srr) await run(() => client.control.upsertConfig.mutate({ controlIds: [id], radioType: "internal_radio" }));
+    const course = latest.current.selectedCourse;
+    const prev = currentStructure();
+    const base = baseStructure();
+    if (edit && course && base && prev) {
+      const next = edit(base, id);
+      if ((await run(() => writeStructure(course.id, next))) !== undefined) {
+        record(
+          async () => { await writeStructure(course.id, prev); await writes.deleteControl(id); },
+          async () => { await client.control.restore.mutate({ id }); await writeStructure(course.id, next); },
+        );
+        return id;
+      }
+    }
+    record(() => writes.deleteControl(id), () => client.control.restore.mutate({ id }));
+    return id;
+  }, [controlList.data, seriesAllocation.data, activeSeriesId, run, client, currentStructure, baseStructure, writeStructure, writes, record]);
 
   /** Create a control at `pt`; with `insertAt` also into the selected course at that position (one undo entry). */
   const createControl = useCallback(async (pt: Pt, insertAt: number | null) => {
-    if (!controlList.data) return;
-    const allocation = seriesAllocation.data ?? [];
-    const { code, entry } = nextSeriesControlCode(allocation, controlList.data.map((c) => c.codes), activeSeriesId);
-    if (!entry && allocation.length > 0 && !exhaustedShown.current) {
-      exhaustedShown.current = true;
-      setShowExhausted(true);
-    }
-    const created = await run(() => client.control.create.mutate({ codes: String(code), status: 0, xpos: pt.x, ypos: pt.y, autoDescribe: true }));
-    if (!created) return;
-    const id = created.id;
-    if (entry?.type === "srr") await run(() => client.control.upsertConfig.mutate({ controlIds: [id], radioType: "internal_radio" }));
-    const course = selectedCourse;
-    const base = baseStructure();
-    if (insertAt !== null && course && base && structure) {
-      const prev = structure;
-      const next = insertSite(base, insertAt, id, kindOf);
-      if ((await run(() => writes.setStructure(course.id, next))) !== undefined) {
-        record(
-          async () => { await writes.setStructure(course.id, prev); await writes.deleteControl(id); },
-          async () => { await client.control.restore.mutate({ id }); await writes.setStructure(course.id, next); },
-        );
-      }
-    } else {
-      record(() => writes.deleteControl(id), () => client.control.restore.mutate({ id }));
-    }
-    dispatch({ type: "placed", id });
-  }, [controlList.data, seriesAllocation.data, activeSeriesId, run, client, selectedCourse, baseStructure, structure, kindOf, writes, record]);
+    const id = await createSite(pt, "control", insertAt !== null ? (s, newId) => insertSite(s, insertAt, newId, kindOfLatest) : null);
+    if (id !== null) dispatch({ type: "placed", id });
+  }, [createSite, kindOfLatest]);
 
   /** A code-less start / finish (named "Start N" / "Mål N" by the server). */
   const createRoleControl = useCallback(async (pt: Pt, role: "start" | "finish") => {
-    const created = await run(() => client.control.create.mutate({ status: role === "start" ? 4 : 5, xpos: pt.x, ypos: pt.y }));
-    if (!created) return;
-    const id = created.id;
-    record(() => writes.deleteControl(id), () => client.control.restore.mutate({ id }));
-    dispatch({ type: "placed", id });
-  }, [run, client, writes, record]);
+    const id = await createSite(pt, role, null);
+    if (id !== null) dispatch({ type: "placed", id });
+  }, [createSite]);
 
   // ─── Gestures (stable: they flow through MapPanel's memo) ─
   const handleMapClick = useCallback((pt: Pt) => {
@@ -278,25 +373,31 @@ export function EditorPage() {
     })();
   }, [selectedCourse, state.selectedControlId, writes, run, record]);
 
-  const handleDelete = useCallback(() => {
-    const sel = state.selectedControlId;
-    if (sel === null || pendingOps > 0) return;
-    const code = coordsById.get(sel)?.code ?? String(sel);
-    if (!window.confirm(tc("editor.deleteConfirm", { code }))) return;
+  /** Delete controls (one, or a multi-selection's): confirm, the server cascades; one undo entry restores all. */
+  const deleteControls = useCallback((ids: number[]) => {
+    if (ids.length === 0 || pendingOps > 0) return;
+    const message = ids.length === 1
+      ? tc("editor.deleteConfirm", { code: coordsById.get(ids[0])?.code ?? String(ids[0]) })
+      : t("bulkDeleteConfirm", { count: ids.length });
+    if (!window.confirm(message)) return;
     // The server cascades the delete out of every structure; undo puts the structures back.
-    const affected = (courses.data ?? []).filter((c) => c.controls.split(";").filter(Boolean).map(Number).includes(sel)
-      || c.startControlId === sel || c.finishControlId === sel);
+    const affected = (courses.data ?? []).filter((c) => ids.some((sel) => c.controls.split(";").filter(Boolean).map(Number).includes(sel)
+      || c.startControlId === sel || c.finishControlId === sel));
     void (async () => {
       const before = await Promise.all(affected.map((c) => utils.course.detail.fetch({ id: c.id }).then((d) => ({ id: c.id, structure: d.structure as Structure }))));
-      const redo = () => writes.deleteControl(sel);
+      const redo = async () => { for (const id of ids) await writes.deleteControl(id); return true; };
       if ((await run(redo)) === undefined) return;
       record(async () => {
-        await client.control.restore.mutate({ id: sel });
-        for (const c of before) await writes.setStructure(c.id, c.structure);
+        for (const id of ids) await client.control.restore.mutate({ id });
+        for (const c of before) await writeStructure(c.id, c.structure);
       }, redo);
-      dispatch({ type: "deleted", id: sel });
+      for (const id of ids) dispatch({ type: "deleted", id });
+      dispatch({ type: "set-multi", ids: [] });
     })();
-  }, [state.selectedControlId, pendingOps, coordsById, tc, courses.data, utils, writes, run, record, client]);
+  }, [pendingOps, coordsById, tc, t, courses.data, utils, writes, run, record, client, writeStructure]);
+  const handleDelete = useCallback(() => {
+    if (state.selectedControlId !== null) deleteControls([state.selectedControlId]);
+  }, [state.selectedControlId, deleteControls]);
 
   const setRadioType = useCallback(async (controlId: number, radioType: "normal" | "internal_radio") => {
     await run(() => client.control.upsertConfig.mutate({ controlIds: [controlId], radioType }));
@@ -393,9 +494,340 @@ export function EditorPage() {
     }];
   }, [suggestFor, suggestQuery.data, i18n.language, tc, writes, run, record]);
 
+  // ─── Site fields (§6.6): kind, notes, hidden number ─────
+  const updateField = useCallback((id: number, patch: { kind?: "control" | "start" | "finish"; notes?: string }, prev: typeof patch) => {
+    void (async () => {
+      const redo = () => writes.updateControl({ id, ...patch });
+      if ((await run(redo)) === undefined) return;
+      record(() => writes.updateControl({ id, ...prev }), redo);
+    })();
+  }, [writes, run, record]);
+
+  // ─── Course objects (§7) ─────────────────────────────────
+  const objects = useMemo(() => objectList.data ?? [], [objectList.data]);
+  const highlighted = useMemo(() => new Set(state.view === "course" && selectedCourse ? [selectedCourse.name] : []), [state.view, selectedCourse]);
+  const objectsInView = useMemo(() => courseObjectsForView(objects, highlighted, courses.data ?? []), [objects, highlighted, courses.data]);
+  const selectedObject = state.selectedObjectId !== null ? objects.find((o) => o.id === state.selectedObjectId) ?? null : null;
+  /** Geometry being dragged (vertex or body) or drawn, drawn instead of the stored one until the list catches up. */
+  const [drafts, setDrafts] = useState<Map<number, CourseObject["geometry"]>>(new Map());
+  useEffect(() => { setDrafts((d) => (d.size ? new Map() : d)); }, [objectList.data]);
+  const setDraft = useCallback((id: number, geometry: CourseObject["geometry"] | null) => {
+    setDrafts((prev) => {
+      const next = new Map(prev);
+      if (geometry) next.set(id, geometry); else next.delete(id);
+      return next;
+    });
+  }, []);
+
+  /** Create an object: one undo entry (undo deletes it; redo creates it again, under a new id). */
+  const createObject = useCallback(async (body: Pick<CourseObject, "kind" | "geometry" | "props" | "scope">): Promise<number | null> => {
+    const made = await run(() => writes.createObject(body));
+    if (!made) return null;
+    const box = { id: made.id };
+    record(
+      () => writes.deleteObject(box.id),
+      async () => { box.id = (await writes.createObject(body)).id; },
+    );
+    return made.id;
+  }, [run, writes, record]);
+
+  const updateObject = useCallback((o: CourseObject, patch: { geometry?: CourseObject["geometry"]; props?: CourseObject["props"]; scope?: CourseObject["scope"] }) => {
+    const prev = { geometry: o.geometry, props: o.props, scope: o.scope };
+    const before = Object.fromEntries(Object.keys(patch).map((k) => [k, prev[k as keyof typeof prev]]));
+    void (async () => {
+      const redo = () => writes.updateObject({ id: o.id, ...patch });
+      if ((await run(redo)) === undefined) return;
+      record(() => writes.updateObject({ id: o.id, ...before }), redo);
+    })();
+  }, [writes, run, record]);
+
+  const deleteObject = useCallback((o: CourseObject) => {
+    const body = { kind: o.kind, geometry: o.geometry, props: o.props, scope: o.scope } as Pick<CourseObject, "kind" | "geometry" | "props" | "scope">;
+    const box = { id: o.id };
+    void (async () => {
+      const redo = async () => { await writes.deleteObject(box.id); return true; };
+      if ((await run(redo)) === undefined) return;
+      record(async () => { box.id = (await writes.createObject(body)).id; }, redo);
+      dispatch({ type: "select-object", id: null });
+    })();
+  }, [writes, run, record]);
+
+  // ─── Snapping (§6.2) ──────────────────────────────────────
+  const snapIndex = useMemo(
+    () => (state.snapping && mapDoc ? snapIndexForDocument(mapDoc.hash, mapDoc.bytes) : null),
+    [state.snapping, mapDoc],
+  );
+  const snap = useCallback((pt: Pt): Pt => snapIndex?.nearest(pt) ?? pt, [snapIndex]);
+
+  // ─── Tools (§6) ──────────────────────────────────────────
+  const gesture = useRef<Gesture>(null);
+  const [, setRedraw] = useState(0);
+  const redraw = useCallback(() => setRedraw((v) => v + 1), []);
+  /** The armed chain, kept in a ref as well: queued placements read the newest. */
+  const chainRef = useRef<PlacementState | null>(null);
+  const placeQueue = useRef<Promise<unknown>>(Promise.resolve());
+  /** The undo entries of placements (`Ctrl+Z` steps the chain back only for one of them). */
+  const placementEntries = useRef(new WeakSet<object>());
+  const [hover, setHover] = useState<{ pt: Pt; target: ToolPointer["target"] } | null>(null);
+  const onHover = useCallback((p: ToolPointer | null) => {
+    setHover((prev) => {
+      if (!p) return prev === null ? prev : null;
+      const pt = snap(p.pt);
+      const same = prev && Math.abs(prev.pt.x - pt.x) < 1e-6 && Math.abs(prev.pt.y - pt.y) < 1e-6 && prev.target?.kind === p.target?.kind
+        && (prev.target as { id?: unknown } | null)?.id === (p.target as { id?: unknown } | null)?.id;
+      return same ? prev : { pt, target: p.target };
+    });
+  }, [snap]);
+
+  const armContext = useCallback(() => ({
+    rows, course: !!(selectedCourse && structure), selectedControlId: state.selectedControlId, legInsertAt: state.phantom?.insertAt ?? null,
+  }), [rows, selectedCourse, structure, state.selectedControlId, state.phantom]);
+
+  const setTool = useCallback((tool: EditorTool) => {
+    gesture.current = null;
+    chainRef.current = tool.kind === "place" ? tool.chain : null;
+    setHover(null);
+    dispatch({ type: "tool", tool });
+  }, []);
+
+  const armPlace = useCallback((tool: PlacementTool) => {
+    const current = chainRef.current;
+    const chain = current ? switchTool(current, tool, armContext()) : armPlacement(tool, armContext());
+    setTool({ kind: "place", chain });
+  }, [armContext, setTool]);
+
+  const exitTool = useCallback(() => setTool({ kind: "select" }), [setTool]);
+
+  const setChain = useCallback((chain: PlacementState) => {
+    chainRef.current = chain;
+    dispatch({ type: "chain", chain });
+  }, []);
+
+  /** One click of an armed tool (08 §5.3): a new site, or an existing one reused; one write chain, one undo entry. */
+  const place = useCallback((p: ToolPointer) => {
+    const pt = snap(p.pt);
+    const targetId = p.target?.kind === "site" ? Number(p.target.id) : null;
+    placeQueue.current = placeQueue.current.then(async () => {
+      const chain = chainRef.current;
+      if (!chain) return;
+      const kindOfL = latest.current.kindOf;
+      const targetKind = targetId !== null ? kindOfL(targetId) : null;
+      let id: number | null;
+      if (chain.tool === "control") {
+        if (targetId !== null) {
+          if (targetKind !== "control") return;
+          // Reuse the site: into the course at the insertion point, no new site.
+          if (chain.insertAt === null) { dispatch({ type: "select", id: targetId }); return; }
+          const at = chain.insertAt;
+          if (!(await applyStructure((s) => insertSite(s, at, targetId, kindOfL)))) return;
+          id = targetId;
+        } else {
+          const at = chain.insertAt;
+          id = await createSite(pt, "control", at !== null ? (s, newId) => insertSite(s, at, newId, kindOfL) : null);
+        }
+      } else {
+        const role = chain.tool;
+        const edit = chain.insertAt !== null ? (s: Structure, siteId: number) => setRole(s, role, siteId, kindOfL) : null;
+        if (targetId !== null) {
+          if (targetKind !== role) return;
+          if (edit && !(await applyStructure((s) => edit(s, targetId)))) return;
+          id = targetId;
+        } else {
+          id = await createSite(pt, role, edit);
+        }
+      }
+      if (id === null || chainRef.current !== chain) return;
+      if (undoStack.top) placementEntries.current.add(undoStack.top);
+      dispatch({ type: "placed", id });
+      const next = afterPlaced(chain, id);
+      if (chain.tool === "finish") exitTool(); // a finish ends the chain
+      else setChain(next);
+    }).catch(() => {});
+  }, [snap, applyStructure, createSite, setChain, exitTool, undoStack]);
+
+  /** `A` → a kind: the polygon flow, or the toner saver's hull from the course straight away. */
+  const startArea = useCallback((kind: AreaChoice) => {
+    if (kind !== "toner_saver") return setTool(areaTool(kind));
+    const pts = rows.flatMap((r) => (r.pt ? [r.pt] : []));
+    const hull = tonerSaverHull(pts, TONER_MARGIN_MM);
+    if (!hull || !selectedCourse) return;
+    void (async () => {
+      const id = await createObject({ kind: "toner_saver", geometry: hull, props: { marginMm: TONER_MARGIN_MM }, scope: { courses: [selectedCourse.id], classes: [] } });
+      setTool({ kind: "select" });
+      if (id !== null) dispatch({ type: "select-object", id });
+    })();
+  }, [rows, selectedCourse, createObject, setTool]);
+
+  const finishArea = useCallback((kind: AreaKind, vertices: Pt[]) => {
+    setTool({ kind: "select" });
+    void (async () => {
+      const id = await createObject({ kind, geometry: vertices, props: defaultProps(kind), scope: { all: true } } as Pick<CourseObject, "kind" | "geometry" | "props" | "scope">);
+      if (id !== null) dispatch({ type: "select-object", id });
+    })();
+  }, [createObject, setTool]);
+
+  const placeText = useCallback((pt: Pt) => {
+    setTool({ kind: "select" });
+    void (async () => {
+      const id = await createObject({ kind: "text", geometry: [pt], props: { text: t("newText"), fontSizeMm: TEXT_SIZE_MM }, scope: { all: true } });
+      if (id !== null) dispatch({ type: "select-object", id });
+    })();
+  }, [createObject, setTool, t]);
+
+  /** `G`'s target: the selected control's circle, or the clicked leg (§6.3). */
+  const gapTarget = useMemo((): GapTarget | null => {
+    const radiusMm = courseInfo?.metrics?.circleRadiusMm ?? 2.5;
+    const sel = state.selectedControlId;
+    if (sel !== null) {
+      const c = coordsById.get(sel);
+      if (!c || kindOf(sel) !== "control" || (c.mapX === 0 && c.mapY === 0)) return null;
+      const stored = controlRowsById.get(sel)?.circleGaps ?? [];
+      const effective = courseInfo?.derivation?.sites.find((d) => d.id === String(sel))?.cuts ?? [];
+      return { kind: "circle", siteId: sel, centre: { x: c.mapX, y: c.mapY }, radiusMm, gaps: stored.length ? stored : effective, stored: stored.length > 0 };
+    }
+    const insertAt = state.tool.kind === "gap" ? state.tool.legInsertAt : state.phantom?.insertAt;
+    if (insertAt == null || !structure) return null;
+    const itemIndex = rows.findIndex((r) => (r.kind === "control" ? r.seqIndex === insertAt : r.kind === "finish" && insertAt >= sequenceIds.length));
+    const to = rows[itemIndex], from = rows.slice(0, itemIndex).reverse().find((r) => r.pt);
+    if (!to?.pt || !from?.pt) return null;
+    const explicit = explicitStructure(structure, sites);
+    const item = explicit.items[itemIndex];
+    const stored = item && item.kind !== "variation" ? item.leg?.gaps ?? [] : [];
+    const effective = courseInfo?.derivation?.courses[0]?.legs.find((l) => l.from === String(from.id) && l.to === String(to.id))?.gaps ?? [];
+    return { kind: "leg", itemIndex, a: from.pt, b: to.pt, gaps: stored.length ? stored : effective, stored: stored.length > 0 };
+  }, [courseInfo, state.selectedControlId, state.phantom, state.tool, coordsById, kindOf, controlRowsById, structure, rows, sequenceIds, sites]);
+
+  const writeGaps = useCallback((target: GapTarget, gaps: AngularGap[] | FractionGap[]) => {
+    if (target.kind === "circle") {
+      const id = target.siteId;
+      const prev = controlRowsById.get(id)?.circleGaps ?? [];
+      void (async () => {
+        const redo = () => writes.updateControl({ id, circleGaps: gaps } as Parameters<typeof writes.updateControl>[0]);
+        if ((await run(redo)) === undefined) return;
+        record(() => writes.updateControl({ id, circleGaps: prev } as Parameters<typeof writes.updateControl>[0]), redo);
+      })();
+    } else {
+      void applyStructure((s) => setLegGaps(s, target.itemIndex, gaps as FractionGap[]));
+    }
+  }, [controlRowsById, writes, run, record, applyStructure]);
+
+  // The ghost's description: the top autodetect candidate under the cursor (08 §5.3), asked once the pointer rests.
+  const [ghostAsk, setGhostAsk] = useState<Pt | null>(null);
+  const placing = state.tool.kind === "place" ? state.tool.chain : null;
+  useEffect(() => {
+    if (!placing || placing.tool !== "control" || !hover || hover.target) { setGhostAsk(null); return; }
+    const h = setTimeout(() => setGhostAsk({ x: Math.round(hover.pt.x * 10) / 10, y: Math.round(hover.pt.y * 10) / 10 }), 150);
+    return () => clearTimeout(h);
+  }, [placing, hover]);
+  const ghostSuggest = trpc.control.suggestDescription.useQuery(
+    { x: ghostAsk?.x ?? 0, y: ghostAsk?.y ?? 0 },
+    { enabled: !!ghostAsk && !!mapInfo.data, staleTime: Number.POSITIVE_INFINITY },
+  );
+  const ghostDescription = useMemo(() => {
+    const top = ghostAsk ? ghostSuggest.data?.candidates?.[0] : undefined;
+    if (!top) return null;
+    const parts = (["c", "d", "e", "g"] as const).flatMap((col) => {
+      const v = top[col];
+      const iof = v ? ocadToIof(col, v) : null;
+      return iof ? [iofSymbolName(iof, i18n.language)] : [];
+    });
+    return parts.length ? parts.join(" · ") : null;
+  }, [ghostAsk, ghostSuggest.data, i18n.language]);
+
+  const nextCode = useMemo(() => {
+    if (!controlList.data) return null;
+    const used = [...controlList.data.map((c) => c.codes), ...[...created.current.values()].flatMap((c) => (c.code !== null ? [String(c.code)] : []))];
+    return nextSeriesControlCode(seriesAllocation.data ?? [], used, activeSeriesId).code;
+  }, [controlList.data, seriesAllocation.data, activeSeriesId, pendingOps]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  const ptOf = useCallback((id: number): Pt | null => {
+    const c = coordsById.get(id);
+    if (c && (c.mapX !== 0 || c.mapY !== 0)) return { x: c.mapX, y: c.mapY };
+    return created.current.get(id)?.pt ?? null;
+  }, [coordsById]);
+
+  const ghost = useMemo(() => {
+    if (!placing || !hover) return null;
+    const reuseId = hover.target?.kind === "site" ? Number(hover.target.id) : null;
+    const reuse = reuseId !== null && kindOfLatest(reuseId) === (placing.tool === "control" ? "control" : placing.tool) ? reuseId : null;
+    const at = reuse !== null ? ptOf(reuse) ?? hover.pt : hover.pt;
+    const info = ghostInfo(placing, rows, at, ptOf);
+    const radiusMm = placing.tool === "finish" ? courseInfo?.metrics?.finishRadiusMm ?? 3 : placing.tool === "start" ? courseInfo?.metrics?.startRadiusMm ?? 3.5 : courseInfo?.metrics?.circleRadiusMm ?? 2.5;
+    const code = reuse !== null ? coordsById.get(reuse)?.code ?? String(reuse) : null;
+    const label = reuse !== null
+      ? t("ghostReuse", { code })
+      : placing.tool === "control"
+        ? [info.number !== null ? String(info.number) : null, nextCode !== null ? String(nextCode) : null].filter(Boolean).join(" · ")
+        : t(placing.tool === "start" ? "kindStart" : "kindFinish");
+    return { at, radiusMm, role: placing.tool, label, description: reuse === null ? ghostDescription : null, legs: info.legs, legMm: info.legMm };
+  }, [placing, hover, kindOfLatest, ptOf, rows, courseInfo, coordsById, t, nextCode, ghostDescription]);
+
+  const sitesForTools = useMemo(() => sites.filter((x) => x.mapX !== 0 || x.mapY !== 0)
+    .map((x) => ({ id: x.id, x: x.mapX, y: x.mapY, kind: kindOf(x.id) })), [sites, kindOf]);
+
+  const insertOnLeg = useCallback((target: { courseId: string; index: number }, pt: Pt) => {
+    if (!selectedCourse || target.courseId !== selectedCourse.name) return;
+    void createControl(snap(pt), insertIndexForLeg(rows, target.index));
+  }, [selectedCourse, rows, createControl, snap]);
+
+  const tool = state.tool;
+  const toolBinding: EditorToolBinding | null = (() => {
+    switch (tool.kind) {
+      case "place":
+        return placeBinding({ ghost, onHover, onPlace: place, onExit: exitTool, touch: { placeLabel: t("touchPlace"), doneLabel: t("touchDone") } });
+      case "area":
+        return areaBinding({
+          gesture, poly: tool.poly, hover: hover?.pt ?? null, onHover, snap,
+          onPoly: (poly) => dispatch({ type: "polygon", poly }),
+          onDone: (vertices) => finishArea(tool.poly.kind, vertices),
+          onCancel: exitTool,
+        });
+      case "text":
+        return textBinding({ onPlace: placeText, onExit: exitTool, snap });
+      case "gap":
+        return gapTarget ? gapBinding({
+          gesture, target: gapTarget, redraw,
+          onAdd: (gap) => writeGaps(gapTarget, gapTarget.kind === "circle" ? mergeCircleGaps([...gapTarget.gaps, gap as AngularGap]) : mergeLegGaps([...gapTarget.gaps, gap as FractionGap])),
+          onRemove: (i) => writeGaps(gapTarget, (gapTarget.gaps as (AngularGap | FractionGap)[]).filter((_, k) => k !== i) as AngularGap[] | FractionGap[]),
+          onExit: exitTool,
+        }) : null;
+      case "select":
+        return selectBinding({
+          gesture, redraw, selected: selectedObject, objects: objectsInView.map((o) => (drafts.has(o.id) ? { ...o, geometry: drafts.get(o.id)! } : o)),
+          sites: sitesForTools, multi: state.multi, ringMm: courseInfo?.metrics?.circleRadiusMm ?? 2.5,
+          onToggleMulti: (id) => dispatch({ type: "toggle-multi", id }),
+          onLasso: (ids) => dispatch({ type: "set-multi", ids }),
+          onSelectObject: (id) => dispatch({ type: "select-object", id }),
+          onObjectDraft: setDraft,
+          onObjectMoved: (id, geometry) => {
+            const o = objects.find((x) => x.id === id);
+            setDraft(id, geometry);
+            if (o) updateObject(o, { geometry });
+          },
+          onLegDoubleClick: insertOnLeg,
+        });
+    }
+  })();
+
+  // Drafts: objects being dragged (a region's drag is live, 08 §5.3). A region being drawn picks nothing yet (§6.4).
+  const draftObjects = useMemo(() => {
+    if (drafts.size === 0) return NO_DRAFTS;
+    const out: CourseObject[] = [];
+    for (const [id, geometry] of drafts) {
+      const o = objects.find((x) => x.id === id);
+      if (o) out.push({ ...o, geometry } as CourseObject);
+    }
+    return out;
+  }, [drafts, objects]);
+  const draftFast = [...drafts.keys()].some((id) => objects.find((o) => o.id === id)?.kind === "filter_region");
+
+  const [viewRequest, setViewRequest] = useState<MapViewerEditorProps["viewRequest"]>(null);
+
   // ─── The action bar ──────────────────────────────────────
   const ends = useMemo(() => (structure ? effectiveEnds(structure, sites) : { start: null, finish: null }), [structure, sites]);
   const contextActions = useMemo(() => {
+    // An armed tool opens no action bar (08 §5.3: it would cover the map on every placement).
+    if (state.tool.kind !== "select") return [];
     const sel = state.selectedControlId;
     const coord = sel !== null ? coordsById.get(sel) : undefined;
     const role = coord ? kindOf(coord.id) : "control";
@@ -433,7 +865,7 @@ export function EditorPage() {
       },
       (key, opts) => tc(key as "editor.actionAdd", opts),
     );
-  }, [state.selectedControlId, state.phantom, coordsById, kindOf, sequenceIds, ends, selectedCourse, structure, controlRowsById,
+  }, [state.tool.kind, state.selectedControlId, state.phantom, coordsById, kindOf, sequenceIds, ends, selectedCourse, structure, controlRowsById,
     radioSwapOffer, controlList.data, pendingOps, createControl, createRoleControl, applyStructure, resetLabel, handleRadio,
     confirmSwap, declineSwap, handleDelete, tc]);
 
@@ -464,14 +896,16 @@ export function EditorPage() {
 
   const courseView = state.view === "course";
   const courseControlIds = useMemo(() => new Set(sequenceIds.map(String)), [sequenceIds]);
+  const toolActive = state.tool.kind !== "select";
   const editor: MapViewerEditorProps = useMemo(() => ({
     selectedControlId: state.selectedControlId !== null ? String(state.selectedControlId) : null,
     phantom: state.phantom ? { x: state.phantom.x, y: state.phantom.y } : null,
     contextActions,
-    contextInfo,
-    contextBadge: srrBadge,
-    contextRadioBadge: radioOn ? { label: tc("editor.radioBadge") } : null,
-    suggestions,
+    // An active tool opens no action bar (§6): nothing in it, not even the info line and badges.
+    contextInfo: toolActive ? null : contextInfo,
+    contextBadge: toolActive ? null : srrBadge,
+    contextRadioBadge: radioOn && !toolActive ? { label: tc("editor.radioBadge") } : null,
+    suggestions: toolActive ? [] : suggestions,
     suggestionsHeading: tc("editor.suggestedHeading"),
     courseControlIds,
     fadeNonCourse: courseView && !!selectedCourse,
@@ -485,9 +919,15 @@ export function EditorPage() {
     sharedHitTest: true,
     actionLayout: "bar",
     ...(selectedCourse && courseView ? { onLegClick: handleLegClick } : {}),
-  }), [state.selectedControlId, state.phantom, contextActions, contextInfo, srrBadge, radioOn, suggestions, tc, courseControlIds,
+    tool: toolBinding,
+    snap: snapIndex ? snap : null,
+    draftObjects,
+    draftFast,
+    viewRequest,
+    onCourseInfo: setCourseInfo,
+  }), [state.selectedControlId, state.phantom, contextActions, contextInfo, srrBadge, radioOn, suggestions, tc, courseControlIds, toolActive,
     courseView, selectedCourse, moveWarnings, moveEpoch, handleMapClick, handleMoveEnd, handleLabelMoveEnd, handleSelect,
-    handleDismiss, handleLegClick]);
+    handleDismiss, handleLegClick, toolBinding, snapIndex, snap, draftObjects, draftFast, viewRequest]);
 
   // ─── Undo / redo, keyboard, deep links ───────────────────
   const runUndo = useCallback(() => {
@@ -499,32 +939,95 @@ export function EditorPage() {
     void run(async () => { await undoStack.redo(); bumpHistory(); });
   }, [run, undoStack, bumpHistory]);
 
+  /** Tab / Shift+Tab: the next / previous control of the course, centred (§6.5). */
+  const stepSelection = useCallback((dir: 1 | -1) => {
+    const controls = rows.filter((r) => r.kind === "control");
+    if (controls.length === 0) return;
+    const at = controls.findIndex((r) => r.id === state.selectedControlId);
+    const next = controls[at < 0 ? (dir > 0 ? 0 : controls.length - 1) : (at + dir + controls.length) % controls.length];
+    dispatch({ type: "select", id: next.id });
+    if (next.pt) setViewRequest((v) => ({ key: (v?.key ?? 0) + 1, centre: next.pt! }));
+  }, [rows, state.selectedControlId]);
+
+  /** F: fit the selected course, else every positioned control. */
+  const fitView = useCallback(() => {
+    const ids = rows.length > 0 ? rows.filter((r) => r.pt).map((r) => String(r.id)) : sitesForTools.map((x) => String(x.id));
+    setViewRequest((v) => ({ key: (v?.key ?? 0) + 1, fit: ids }));
+  }, [rows, sitesForTools]);
+
+  const [areaOpen, setAreaOpen] = useState(false);
+  const canGap = state.selectedControlId !== null ? kindOf(state.selectedControlId) === "control" : (state.phantom?.insertAt ?? null) !== null;
+
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       if (descControlId !== null) return;
       const target = e.target as HTMLElement;
       if (target.tagName === "INPUT" || target.tagName === "TEXTAREA" || target.tagName === "SELECT" || target.isContentEditable) return;
       const mod = e.ctrlKey || e.metaKey;
+      const plain = !mod && !e.altKey;
+      const key = e.key.length === 1 ? e.key.toUpperCase() : e.key;
       if (mod && (e.key === "z" || e.key === "Z")) {
         e.preventDefault();
-        if (e.shiftKey) runRedo(); else runUndo();
+        if (e.shiftKey) runRedo();
+        else {
+          // Ctrl+Z while armed: the anchor goes back with the last placement (08 §5.3) — only when the entry
+          // about to be undone is that placement: an inspector edit made meanwhile leaves the chain alone.
+          const chain = chainRef.current;
+          const top = undoStack.top;
+          const stepsChain = state.tool.kind === "place" && !!chain && chain.placed.length > 0 && !!top && placementEntries.current.has(top);
+          runUndo();
+          if (stepsChain && chain) setChain(afterUndo(chain));
+        }
       } else if (mod && (e.key === "y" || e.key === "Y")) {
         e.preventDefault();
         runRedo();
       } else if (e.key === "Escape") {
+        setAreaOpen(false);
         // The cascade first; with nothing left, Esc leaves fullscreen (MapPanel holds the Keyboard Lock).
         if (!escapeHasWork(state) && document.fullscreenElement) void document.exitFullscreen().catch(() => {});
-        else { setRadioSwapOffer(null); dispatch({ type: "escape" }); }
-      } else if ((e.key === "h" || e.key === "H") && !mod && !e.altKey) {
+        else {
+          setRadioSwapOffer(null);
+          if (state.tool.kind !== "select") exitTool();
+          else dispatch({ type: "escape" });
+        }
+      } else if (e.key === "Enter" && plain) {
+        if (state.tool.kind === "area") {
+          e.preventDefault();
+          if (state.tool.poly.vertices.length >= (state.tool.poly.kind === "oob_line" || state.tool.poly.kind === "marked_route" ? 2 : 3)) {
+            finishArea(state.tool.poly.kind, state.tool.poly.vertices);
+          }
+        } else if (state.tool.kind !== "select") {
+          e.preventDefault();
+          exitTool();
+        }
+      } else if (e.key === "Tab" && !mod) {
+        e.preventDefault();
+        stepSelection(e.shiftKey ? -1 : 1);
+      } else if (plain && key === "H") {
         dispatch({ type: "toggle-hide-others" });
+      } else if (plain && key === "V") {
+        exitTool();
+      } else if (plain && (key === "S" || key === "K" || key === "M")) {
+        armPlace(key === "S" ? "start" : key === "M" ? "finish" : "control");
+      } else if (plain && key === "A") {
+        setAreaOpen((v) => !v);
+      } else if (plain && key === "T") {
+        setTool({ kind: "text" });
+      } else if (plain && key === "G") {
+        if (canGap) setTool({ kind: "gap", legInsertAt: state.selectedControlId === null ? state.phantom?.insertAt ?? null : null });
+      } else if (plain && key === "F") {
+        fitView();
       } else if (e.key === "Delete" || e.key === "Backspace") {
         e.preventDefault();
-        handleDelete();
+        if (state.multi.length > 0) deleteControls(state.multi);
+        else if (selectedObject) deleteObject(selectedObject);
+        else handleDelete();
       }
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [descControlId, runUndo, runRedo, state, handleDelete]);
+  }, [descControlId, runUndo, runRedo, undoStack, state, handleDelete, deleteControls, deleteObject, selectedObject, setChain, exitTool, finishArea,
+    stepSelection, armPlace, setTool, canGap, fitView]);
 
   const deepLinkDone = useRef(false);
   useEffect(() => {
@@ -630,11 +1133,48 @@ export function EditorPage() {
       ...(srrBadge ? [{ label: srrBadge.label, title: srrBadge.title, testId: "editor-toolbar-srr" }] : []),
       ...(radioOn ? [{ label: tc("editor.radioBadge"), testId: "editor-selection-radio" }] : []),
     ],
+    notes: controlRowsById.get(selectedCoord.id)?.notes ?? "",
+    numberHidden: structure && sequenceIds.includes(selectedCoord.id)
+      ? structure.items.some((i) => i.kind !== "variation" && i.siteId === selectedCoord.id && !!i.numberHidden)
+      : null,
   } : null;
+
+  const bulkAddToCourse = useCallback(() => {
+    const ids = state.multi;
+    void applyStructure((s) => ids.reduce((acc, id) => (kindOf(id) === "control" ? appendSite(acc, id, kindOf) : acc), s));
+  }, [state.multi, applyStructure, kindOf]);
+  const bulkRadio = useCallback(() => {
+    const ids = state.multi.filter((id) => kindOf(id) === "control");
+    if (ids.length) void run(() => client.control.upsertConfig.mutate({ controlIds: ids, radioType: "internal_radio" }));
+  }, [state.multi, kindOf, run, client]);
+
+  const pendingLegM = ghost?.legMm != null && mapScale ? (ghost.legMm * mapScale) / 1000 : null;
 
   const overlay = (
     <div className="flex gap-2 h-full min-h-0 items-stretch">
-      <ToolRail />
+      {/* The course objects as DOM, for tests: what the editor holds (§7). */}
+      <ul data-testid="editor-objects" hidden>
+        {objects.map((o) => (
+          <li key={o.id} data-testid="editor-object-row" data-object-id={o.id} data-object-kind={o.kind}
+            data-geometry={o.geometry.map((v) => `${v.x},${v.y}`).join(" ")} data-props={JSON.stringify(o.props)} data-scope={JSON.stringify(o.scope)} />
+        ))}
+      </ul>
+      <ToolRail
+        tool={state.tool}
+        onTool={(key) => {
+          if (key === "V") exitTool();
+          else if (key === "S" || key === "K" || key === "M") armPlace(key === "S" ? "start" : key === "M" ? "finish" : "control");
+          else if (key === "T") setTool({ kind: "text" });
+          else if (key === "G") setTool({ kind: "gap", legInsertAt: state.selectedControlId === null ? state.phantom?.insertAt ?? null : null });
+        }}
+        onArea={startArea}
+        areaOpen={areaOpen}
+        onAreaOpen={setAreaOpen}
+        canGap={canGap}
+        canTonerSaver={!!selectedCourse && rows.some((r) => r.pt)}
+        snapping={state.snapping}
+        onSnapping={() => dispatch({ type: "toggle-snapping" })}
+      />
       <div className="flex flex-col gap-2 min-h-0 h-full">
         {notice && (
           <div data-testid="editor-conflict" data-kind={notice.kind} className="pointer-events-auto w-64 rounded-lg border border-amber-300 bg-amber-50 text-amber-900 text-xs p-2 shadow-sm">
@@ -680,15 +1220,48 @@ export function EditorPage() {
             />
           </InspectorSection>
           <InspectorSection title={t("selection")} testId="editor-inspector-selection">
-            <SelectionSection selected={selectedInfo} />
+            {state.multi.length > 1 ? (
+              <MultiSection count={state.multi.length} course={selectedCourse && structure ? selectedCourse.name : null} busy={pendingOps > 0}
+                onDelete={() => deleteControls(state.multi)} onAddToCourse={bulkAddToCourse} onRadio={bulkRadio} />
+            ) : selectedObject ? (
+              <ObjectSection
+                object={drafts.has(selectedObject.id) ? { ...selectedObject, geometry: drafts.get(selectedObject.id)! } as CourseObject : selectedObject}
+                document={mapDoc?.header ?? null}
+                courses={courseOptions}
+                classes={(classes.data ?? []).map((c) => ({ id: c.id, name: c.name }))}
+                onProps={(props) => updateObject(selectedObject, { props })}
+                onScope={(scope) => updateObject(selectedObject, { scope })}
+                onRegenerate={selectedObject.kind === "toner_saver" ? () => {
+                  const margin = (selectedObject.props as { marginMm?: number }).marginMm ?? TONER_MARGIN_MM;
+                  const hull = tonerSaverHull(rows.flatMap((r) => (r.pt ? [r.pt] : [])), margin);
+                  if (hull) updateObject(selectedObject, { geometry: hull });
+                } : undefined}
+                onDelete={() => deleteObject(selectedObject)}
+              />
+            ) : (
+              <SelectionSection
+                selected={selectedInfo}
+                onKind={(kind) => { if (selectedCoord) updateField(selectedCoord.id, { kind }, { kind: kindOf(selectedCoord.id) }); }}
+                onNotes={(notes) => { if (selectedCoord) updateField(selectedCoord.id, { notes }, { notes: controlRowsById.get(selectedCoord.id)?.notes ?? "" }); }}
+                onNumberHidden={(hidden) => { if (selectedCoord) { const id = selectedCoord.id; void applyStructure((s) => setNumberHidden(s, id, hidden)); } }}
+              />
+            )}
           </InspectorSection>
           <InventorySection inventory={inventory} activeSeriesId={activeSeriesId} onSeries={setAllocSeriesId} />
           <ChecksSection />
         </Inspector>
         <div className="mt-auto flex flex-col gap-1">
+          {state.tool.kind === "gap" && gapTarget?.stored && (
+            // Stored gaps replace the automatic ones (§6.3): an empty list is automatic again.
+            <button type="button" data-testid="editor-gap-reset" onClick={() => writeGaps(gapTarget, [])}
+              className="pointer-events-auto w-fit px-2 py-1 rounded-md bg-white/95 border border-purple-200 text-purple-700 text-[11px] shadow-sm hover:bg-purple-50 cursor-pointer">
+              {t("resetGaps")}
+            </button>
+          )}
           {showExhausted && <span data-testid="series-exhausted" className="pointer-events-auto w-fit text-[11px] text-amber-700 bg-white/95 rounded px-1.5">{tc("seriesExhausted")}</span>}
           {errorMsg && <span data-testid="editor-error" className="pointer-events-auto w-64 text-[11px] text-red-600 bg-white/95 rounded px-1.5">{errorMsg}</span>}
-          <StatusBar controls={selectedCourse ? sequenceIds.length : null} lengthM={selectedCourse ? totalMeters : null} scale={mapScale} save={save} />
+          <StatusBar controls={selectedCourse ? sequenceIds.length : null} lengthM={selectedCourse ? totalMeters : null} scale={mapScale} save={save}
+            pendingLegM={pendingLegM} snapping={state.snapping} />
         </div>
       </div>
     </div>

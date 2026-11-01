@@ -107,3 +107,32 @@ export function setRole(s: Structure, role: "start" | "finish", siteId: number, 
   else items.push({ siteId });
   return edit(s, items);
 }
+
+/** Hide (or show) the number of every visit of `siteId` (`numberHidden`, 08 §4.2; docs/course-editor.md §6.6). */
+export function setNumberHidden(s: Structure, siteId: number, hidden: boolean): Structure {
+  return {
+    ...s,
+    items: s.items.map((i) => {
+      if (i.kind === "variation" || i.siteId !== siteId) return i;
+      if (hidden) return { ...i, numberHidden: true };
+      const { numberHidden: _h, ...rest } = i;
+      return rest;
+    }),
+  };
+}
+
+/**
+ * The gaps of the leg into item `index` (an index into `items`; the legs of
+ * docs/course-layer.md §2, fractions of the centre-to-centre leg). An empty
+ * list drops them (the automatic gaps again), and a `leg` left empty goes.
+ */
+export function setLegGaps(s: Structure, index: number, gaps: { from: number; to: number }[]): Structure {
+  const item = s.items[index];
+  if (!item || item.kind === "variation" || index === 0) return s;
+  const { gaps: _g, ...legRest } = item.leg ?? {};
+  const leg = gaps.length > 0 ? { ...legRest, gaps } : legRest;
+  const { leg: _l, ...itemRest } = item;
+  const items = [...s.items];
+  items[index] = Object.keys(leg).length > 0 ? { ...itemRest, leg } : itemRest;
+  return { ...s, items };
+}

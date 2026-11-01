@@ -139,6 +139,10 @@ Paper mm at the base map's scale, y-up (the frame of `controls.xpos/ypos`
 and of course GeoJSON). Gaps: compass degrees for circles (0° = +y,
 clockwise, the gap sweeping clockwise from `start` to `end`), fractions
 0..1 for legs — the OCD importer's and `overprint-cuts.ts`'s conventions.
+Stored gaps — a site's `circle_gaps`, a structure's `LegProps.gaps` — are
+the **full effective set** for that circle or leg and replace the
+automatic cuts; an empty list means automatic (decision log 2026-11-01,
+"Stored gaps replace the automatic cuts"; `course-editor.md` §6.3).
 
 | Input | v1 shape | Built today from |
 |---|---|---|
@@ -155,9 +159,7 @@ clockwise, the gap sweeping clockwise from `start` to `end`), fractions
 Free order is the structure's `orderMode` (a property of the course, not
 of the view). A site at the origin (0, 0) is unpositioned and skipped,
 legs connecting the remaining items (the editor's rule, `editorCourseGeometry`).
-A non-empty `circleGaps` / `leg.gaps` list is the full effective set and an
-empty or absent one means the automatic cuts (gap semantics: the D5
-decision-log row). Variations, map exchanges, crossing points, map-issue
+Gaps follow the rule above. Variations, map exchanges, crossing points, map-issue
 points and `LegProps` beyond `gaps` are not in v1 (Pending).
 
 ## 3. Geometry rules
@@ -864,9 +866,9 @@ input, so a stored region acts exactly like D3's (never on the course).
   `MapPanel` with the runner's course highlighted, so it draws the
   `all`-scoped objects and that course's. A `toner_saver` is not drawn
   on screen (no frame).
-- **Not yet.** Hit-testing and selecting objects on the canvas, and the
-  tools that draw them, are the editor's (D4 / D5); importers writing
-  their 707 / 708 / 711 lines and 709 polygons as objects is D1.
+- **Editor.** Hit-testing, selecting, drawing and editing objects are
+  the editor's (`course-editor.md` §7, D5); importers writing their 707 /
+  708 / 711 lines and 709 polygons as objects is D1.
 
 ### 8.4 API and tokens
 
@@ -996,8 +998,8 @@ venue's kiosk map draws them (08 §4.8; 07 §9.2).
   import is `null` (the base lives inside a `reference.imported`
   entry); presence and "moved by X at T" (D11). The new editor's client rules landed in D4
   (`course-editor.md` §3).
-- **Course objects, beyond D2** (§8): drawing and selecting them on the
-  canvas (D4 / D5 hit-testing and tools), a toner saver on screen, holes in a stored
+- **Course objects, beyond D2** (§8): a toner saver on screen (the
+  editor outlines it, `course-editor.md` §7), holes in a stored
   filter region, `inset_frame` (micro insets, slice F), moving sheets'
   map-anchored layout objects into `course_objects` (F).
 - **Upper white at import**: insert the row in stage-7 alignment

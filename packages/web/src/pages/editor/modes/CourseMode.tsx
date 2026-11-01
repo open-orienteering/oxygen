@@ -204,13 +204,25 @@ export interface SelectionSectionProps {
     description: string | null;
     alsoIn: string[];
     badges: { label: string; testId: string; title?: string }[];
+    notes: string;
+    /** On the selected course: whether its number is hidden there (`numberHidden`); null when not on it. */
+    numberHidden: boolean | null;
   } | null;
+  /** Site kind (08 §4.2); the slice-F kinds are listed disabled. */
+  onKind?: (kind: "control" | "start" | "finish") => void;
+  onNotes?: (notes: string) => void;
+  onNumberHidden?: (hidden: boolean) => void;
 }
 
-export function SelectionSection({ selected }: SelectionSectionProps) {
+const SLICE_F_KINDS = ["map_exchange", "crossing_point", "map_issue"] as const;
+
+export function SelectionSection({ selected, onKind, onNotes, onNumberHidden }: SelectionSectionProps) {
   const { t } = useTranslation("editor");
+  // Optimistic: the box flips at once; the stored value takes over when it changes.
+  const [pendingHidden, setPendingHidden] = useState<{ key: string; value: boolean } | null>(null);
   if (!selected) return <p className="px-2.5 py-2 text-slate-400">{t("nothingSelected")}</p>;
-  const kind = { start: t("kindStart"), finish: t("kindFinish"), control: t("kindControl") }[selected.role];
+  const hiddenKey = `${selected.code}:${selected.numberHidden}`;
+  const numberHidden = pendingHidden?.key === hiddenKey ? pendingHidden.value : selected.numberHidden;
   return (
     <dl className="px-2.5 py-1.5 grid grid-cols-[auto_1fr] gap-x-2 gap-y-0.5" data-testid="editor-selection">
       <dt className="text-slate-400">{t("codes")}</dt>
@@ -221,7 +233,16 @@ export function SelectionSection({ selected }: SelectionSectionProps) {
         ))}
       </dd>
       <dt className="text-slate-400">{t("kind")}</dt>
-      <dd>{kind}</dd>
+      <dd>
+        <select data-testid="editor-selected-kind" value={selected.role} disabled={!onKind}
+          onChange={(e) => onKind?.(e.target.value as "control" | "start" | "finish")}
+          className="w-full px-1 py-0.5 border border-slate-200 rounded bg-white text-xs">
+          <option value="control">{t("kindControl")}</option>
+          <option value="start">{t("kindStart")}</option>
+          <option value="finish">{t("kindFinish")}</option>
+          {SLICE_F_KINDS.map((k) => <option key={k} value={k} disabled>{t(`kind_${k}`)} — {t("sliceF")}</option>)}
+        </select>
+      </dd>
       <dt className="text-slate-400 sr-only">x / y</dt>
       <dd className="col-span-2 text-slate-500" data-testid="editor-selected-position">{t("position", { x: selected.x.toFixed(1), y: selected.y.toFixed(1) })}</dd>
       <dt className="text-slate-400">{t("description")}</dt>
@@ -232,6 +253,45 @@ export function SelectionSection({ selected }: SelectionSectionProps) {
           <dd className="text-slate-600" data-testid="editor-selected-also-in">{selected.alsoIn.join(", ")}</dd>
         </>
       )}
+      {selected.numberHidden !== null && selected.role === "control" && (
+        <dd className="col-span-2">
+          <label className="flex items-center gap-1.5 text-slate-600">
+            <input type="checkbox" data-testid="editor-number-hidden" checked={!!numberHidden} disabled={!onNumberHidden}
+              onChange={(e) => { setPendingHidden({ key: hiddenKey, value: e.target.checked }); onNumberHidden?.(e.target.checked); }} />
+            {t("numberHidden")}
+          </label>
+        </dd>
+      )}
+      <dt className="text-slate-400">{t("notes")}</dt>
+      <dd>
+        <textarea data-testid="editor-selected-notes" key={`${selected.code}:${selected.notes}`} defaultValue={selected.notes} rows={2} disabled={!onNotes}
+          onBlur={(e) => { if (e.target.value !== selected.notes) onNotes?.(e.target.value); }}
+          className="w-full px-1 py-0.5 border border-slate-200 rounded bg-white text-xs resize-y" />
+      </dd>
     </dl>
+  );
+}
+
+/** Several controls selected (Shift-click, lasso; §6.5): the bulk actions. */
+export function MultiSection({ count, course, onDelete, onAddToCourse, onRadio, busy }: {
+  count: number; course: string | null; onDelete: () => void; onAddToCourse: () => void; onRadio: () => void; busy: boolean;
+}) {
+  const { t } = useTranslation("editor");
+  const btn = "w-full px-2 py-1 rounded-md border text-xs cursor-pointer disabled:opacity-40";
+  return (
+    <div data-testid="editor-multi" data-count={count} className="px-2.5 py-1.5 space-y-1">
+      <p className="text-slate-600">{t("multiSelected", { count })}</p>
+      {course && (
+        <button type="button" data-testid="editor-bulk-add-to-course" disabled={busy} onClick={onAddToCourse} className={`${btn} border-purple-200 text-purple-700 hover:bg-purple-50`}>
+          {t("bulkAddToCourse", { count, name: course })}
+        </button>
+      )}
+      <button type="button" data-testid="editor-bulk-radio" disabled={busy} onClick={onRadio} className={`${btn} border-slate-200 text-slate-700 hover:bg-slate-50`}>
+        {t("bulkRadio", { count })}
+      </button>
+      <button type="button" data-testid="editor-bulk-delete" disabled={busy} onClick={onDelete} className={`${btn} border-red-200 text-red-600 hover:bg-red-50`}>
+        {t("bulkDelete", { count })}
+      </button>
+    </div>
   );
 }

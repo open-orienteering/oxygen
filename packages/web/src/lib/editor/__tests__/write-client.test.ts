@@ -16,6 +16,11 @@ function fakeClient() {
   const client = {
     course: { setStructure: { mutate: vi.fn(respond("setStructure")) }, setControlLabelOffset: { mutate: vi.fn(respond("setLabelOffset")) } },
     control: { update: { mutate: vi.fn(respond("update")) }, delete: { mutate: vi.fn(respond("delete")) } },
+    courseObject: {
+      create: { mutate: vi.fn(respond("objCreate")) },
+      update: { mutate: vi.fn(respond("objUpdate")) },
+      delete: { mutate: vi.fn(respond("objDelete")) },
+    },
   } as unknown as EditorClient;
   return { client, calls, fail: (e: unknown) => queue.push(() => { throw e; }), ok: (v: unknown) => queue.push(() => v) };
 }
@@ -82,5 +87,20 @@ describe("EditorWrites (docs/course-editor.md §3)", () => {
     f.ok({ courses: [{ id: 1, version: "8" }] });
     await w.deleteControl(45);
     expect(w.versions.get("course", 1)).toBe("8");
+  });
+
+  it("course objects: create seeds the token, update sends it, a stale one is a refresh (§7)", async () => {
+    const f = fakeClient();
+    const w = new EditorWrites(f.client);
+    f.ok({ id: 9, version: "40" });
+    await w.createObject({ kind: "whiteout", geometry: [], props: {}, scope: { all: true } });
+    f.ok({ id: 9, version: "41" });
+    await w.updateObject({ id: 9, props: {} });
+    expect(f.calls[1]).toMatchObject({ proc: "objUpdate", input: { id: 9, baseVersion: "40" } });
+    expect(w.versions.get("object", 9)).toBe("41");
+    f.fail(conflictError({ kind: "object", id: 9, version: "50", current: {}, differing: null }));
+    await expect(w.deleteObject(9)).rejects.toBeInstanceOf(EditorConflict);
+    expect(f.calls[2]).toMatchObject({ proc: "objDelete", input: { id: 9, baseVersion: "41" } });
+    expect(w.versions.get("object", 9)).toBe("50");
   });
 });
