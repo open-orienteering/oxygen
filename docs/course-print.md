@@ -311,16 +311,17 @@ with `sheet` = `PageInput` minus `map` and `geo`.
   all-controls sheets), one per id.
 - **Course sheets**: a v1 structure with one item per layout control in
   order, `role` = its type; `labelOffsets` = stored label position −
-  site; `extras` = the geometry's `marked_route`, `forbidden_route` and
-  `restricted_line` lines. Free order is carried as `orderMode`.
+  site. The course-level lines and areas are course objects (`course-layer.md`
+  §8), no longer read from the geometry. Free order is carried as `orderMode`.
 - **All-controls sheets**: `structure: null`, every site drawn with
   codes (`viewOptions.allControls`).
-- **Authored geometry** only when `courses.geometry_source = "ocd"`
-  (`docs/course-layer.md` §2): circle gaps from the geometry's `cuts`,
-  and — when the geometry has exactly one leg into each item after the
-  first — each leg's path with its gaps, or its pre-clipped polyline as
-  the drawn piece. Every other course (`editor`, `xml`, none) gets legs
-  and automatic cuts from the course layer, with cut features from the
+- **Authored geometry** comes from the stored structure and the controls,
+  whatever `courses.geometry_source` is (D1 retired deviation (e), which
+  read the `ocd` GeoJSON): circle gaps from `controls.circle_gaps`, leg
+  gaps from the structure's `LegProps.gaps` (`courses.structure`; aligned
+  to the layout's controls past the geometry's start and finish), an
+  empty one meaning the automatic cuts. Every course gets legs and
+  automatic cuts from the course layer, with cut features from the
   pinned document (`cutFeaturesOfDocument`, §3.4 there).
 
 `pdf-page.ts` adds the map part: `sheetForMapRow(row, { event,
