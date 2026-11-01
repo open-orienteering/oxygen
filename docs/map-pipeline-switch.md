@@ -14,17 +14,21 @@ the event reads through; writes never fork.**
 
 ## 1. Instance flags
 
-Two keys in `oxygen.settings` (`getSetting` / `setSetting`, `db.ts`):
+Three keys in `oxygen.settings` (`getSetting` / `setSetting`, `db.ts`):
 
 | Key | Values | Absent / unknown | Meaning |
 |-----|--------|------------------|---------|
 | `map.pipeline.default` | `legacy` \| `vector` | `legacy` | The pipeline a newly created event gets |
 | `map.pipeline.allowLegacy` | `true` \| `false` | `true` | Whether an event may be switched (back) to `legacy`, and whether tiles are a fallback (§3.3) |
+| `map.editor.vector` | `true` \| `false` | `false` | Whether `/:nameId/course-editor` mounts the new editor for a `vector` event with a pinned document (§3.6). **Temporary**: slice D's gate while the editor is unproven (user decision 2026-10-31); removed in slice E |
 
 - Parsing (`packages/api/src/map-pipeline.ts`): the default is `vector`
   only for the string `vector` (trimmed, any case); `allowLegacy` is false
-  only for the string `false` (trimmed, any case).
-- Both are read together through a per-process memo of **30 s**
+  only for the string `false` (trimmed, any case); `map.editor.vector` is
+  true only for the string `true` (trimmed, any case).
+- `event.mapPipeline` (§2) carries the third flag as `editorVector` beside
+  `pipeline` and `allowLegacy`; the client needs no other read.
+- All three are read together through a per-process memo of **30 s**
   (`getMapPipelineFlags()`), so a flip reaches every instance within half
   a minute without a restart. `MAP_PIPELINE_FLAGS_TTL_MS` overrides the
   lifetime (a non-negative number; `0` reads on every call — the E2E
@@ -52,7 +56,7 @@ Two keys in `oxygen.settings` (`getSetting` / `setSetting`, `db.ts`):
   and the lease's settings refresh copies later flips
   (`docs/map-storage.md` §7, "Coexistence"): the column is cloud-owned.
 - **Read:** `event.mapPipeline` (kiosk or `event.view`) →
-  `{ pipeline, allowLegacy }`. Kiosk-readable because the kiosk map
+  `{ pipeline, allowLegacy, editorVector }`. Kiosk-readable because the kiosk map
   follows the switch.
 - **Write:** `event.setMapPipeline({ pipeline })` (`courses.edit`, the
   capability of the event map and its upload). A switch to `vector` is
