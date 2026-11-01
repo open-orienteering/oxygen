@@ -1,4 +1,4 @@
-import { useState, useRef, useEffect, useCallback, useMemo } from "react";
+import { useState, useRef, useEffect, useCallback, useMemo, type ReactNode } from "react";
 import { useTranslation } from "react-i18next";
 import { useParams } from "react-router-dom";
 import {
@@ -268,6 +268,72 @@ export interface MapViewerEditorProps {
    * of the popover menu beside it; same entries and `editor-action-<id>`s.
    */
   actionLayout?: "menu" | "bar";
+  /**
+   * The active editor tool (docs/course-editor.md §6): it sees the pointer
+   * before the viewer's own gestures and draws UI-layer shapes. Shared
+   * hit-testing only.
+   */
+  tool?: EditorToolBinding | null;
+  /** Snap a dragged control's centre (§6.2); returns the point unchanged when nothing is near. */
+  snap?: ((pt: { x: number; y: number }) => { x: number; y: number }) | null;
+  /**
+   * Course objects the page is editing, drawn instead of the stored ones
+   * with the same id (and added when new) — a vertex drag, a region being
+   * drawn (§7). `draftFast`: a filter region is being dragged, so the
+   * layer uses the fast predicate (map-rendering.md §4.11).
+   */
+  draftObjects?: readonly import("@oxygen/shared").course.CourseObject[] | null;
+  draftFast?: boolean;
+  /** A view request: fit these controls, or centre on a point (paper mm); acted on when `key` changes. */
+  viewRequest?: { key: number; fit?: readonly string[]; centre?: { x: number; y: number } } | null;
+}
+
+/** What a tool gets for a pointer event. */
+export interface ToolPointer {
+  /** Paper mm. */
+  pt: { x: number; y: number };
+  /** The shared hit-test's target under the pointer (`editorHitAt`), null for empty map. */
+  target: EditorTarget | null;
+  shift: boolean;
+  /** Paper mm per CSS px at the current zoom: for handle tolerances. */
+  mmPerPx: number;
+}
+
+/** A UI-layer shape a tool draws, paper mm (the viewer projects it). */
+export type ToolShape =
+  | { kind: "circle"; x: number; y: number; rMm: number; dashed?: boolean; color?: string; fill?: string; testId?: string; data?: Record<string, string> }
+  | { kind: "line"; points: readonly { x: number; y: number }[]; closed?: boolean; dashed?: boolean; color?: string; fill?: string; widthPx?: number; testId?: string; data?: Record<string, string> }
+  /** A screen-size square handle. */
+  | { kind: "handle"; x: number; y: number; active?: boolean; testId?: string; data?: Record<string, string> }
+  | { kind: "text"; x: number; y: number; text: string; dxPx?: number; dyPx?: number; color?: string; testId?: string };
+
+/**
+ * An editor tool's hooks into the viewer (docs/course-editor.md §6). The
+ * viewer offers every pointer-down to `onPointerDown` first: `true` takes
+ * the gesture (`onPointerDrag` … `onPointerUp`, null when cancelled), so
+ * the map neither pans nor arms its own targets. An `exclusive` tool also
+ * keeps the viewer's targets off — a drag pans, a click goes to `onClick`
+ * — which is the armed creation tools' "drag pans, click places".
+ */
+export interface EditorToolBinding {
+  exclusive?: boolean;
+  cursor?: string;
+  shapes?: readonly ToolShape[];
+  onPointerDown?: (p: ToolPointer) => boolean;
+  onPointerDrag?: (pt: { x: number; y: number }) => void;
+  onPointerUp?: (pt: { x: number; y: number } | null) => void;
+  /** A click without movement (exclusive tools; a tap on touch). */
+  onClick?: (p: ToolPointer) => void;
+  onDoubleClick?: (p: ToolPointer) => void;
+  /** Hover without a button (mouse); null when the pointer leaves the map. */
+  onHover?: (p: ToolPointer | null) => void;
+  onContextMenu?: (p: ToolPointer) => void;
+  /**
+   * Touch (coarse pointer): the pin-drop flow of 08 §5.3 — a fixed centre
+   * crosshair (hover follows the view centre) and Place / Done buttons;
+   * taps on the map do not place.
+   */
+  touch?: { placeLabel: string; doneLabel: string; onPlace: (p: ToolPointer) => void; onDone: () => void } | null;
 }
 
 interface Props {
@@ -643,6 +709,10 @@ export function MapViewer({
   >(new Map());
   // Mouse-down bookkeeping for the leg-insert hit lines.
   const legDownRef = useRef<{ course: string; index: number; x: number; y: number } | null>(null);
+  // A gesture the active tool took on pointer-down (docs/course-editor.md §6).
+  const toolDragRef = useRef<{ startX: number; startY: number } | null>(null);
+  const editorToolRef = useRef<EditorToolBinding | null>(null);
+  editorToolRef.current = editor?.tool ?? null;
 
   // Expire move bridges once the refetched data reports the drop
   // position (or the control disappeared). Without this, undoing a move
@@ -780,6 +850,15 @@ export function MapViewer({
   const [courseSupport, setCourseSupport] = useState<boolean | null>(null);
   const [courseInfo, setCourseInfo] = useState<CourseInfo | null>(null);
   const glCourse = paperMode && courseSupport !== false;
+  /** The objects drawn: the stored ones in view with the editor's drafts over them (§7). */
+  const drawnObjects = useMemo(() => {
+    const drafts = editor?.draftObjects ?? [];
+    if (drafts.length === 0) return courseObjects ?? [];
+    const byId = new Map(drafts.map((o) => [o.id, o] as const));
+    const out = (courseObjects ?? []).map((o) => byId.get(o.id) ?? o);
+    for (const d of drafts) if (!out.includes(d)) out.push(d);
+    return out;
+  }, [courseObjects, editor?.draftObjects]);
   const courseRequest = useMemo(() => {
     if (!glCourse) return null;
     const positions = new Map<string, Pt>();
@@ -798,13 +877,13 @@ export function MapViewer({
     const sequenceLabels = showDescriptions || !!editor;
     const highlighted = courses.filter((c) => c.highlight || c.name === highlightCourseName);
     const single = sequenceLabels && highlighted.length === 1 ? highlighted[0] : null;
-    return courseLayerRequest({
+    const request = courseLayerRequest({
       controls,
       positions,
       courses,
       highlightCourseName,
       courseGeometry,
-      courseObjects,
+      courseObjects: drawnObjects,
       sequenceLabels,
       // Manual offsets apply with the sheet or the editor only, as on the SVG overlay.
       labelOffset: (id) => (single ? labelOffsetOf(id, controls, single.labelOffsets, editorLabelDragPos, pendingLabelMoves) : undefined),
@@ -812,11 +891,17 @@ export function MapViewer({
         ? new Set(controls.filter((c) => c.type === "Control" && !editor.courseControlIds?.has(c.id)).map((c) => c.id))
         : undefined,
     });
+    return editor?.draftFast ? { ...request, fastFilter: true } : request;
   }, [glCourse, controls, controlMm, editor, pendingMoves, editorDragPos, showDescriptions, courses, highlightCourseName,
-      courseGeometry, courseObjects, editorLabelDragPos, pendingLabelMoves]);
+      courseGeometry, drawnObjects, editorLabelDragPos, pendingLabelMoves]);
 
   // ─── Editor hit-test on the shared stage (docs/course-editor.md §5) ──
   const sharedHit = !!editor?.sharedHitTest && glCourse;
+  // Course objects the layer does not draw on screen: hit by their outline (§7).
+  const uiAreas = useMemo(
+    () => (editor ? drawnObjects.filter((o) => o.kind === "filter_region" || o.kind === "toner_saver").map((o) => ({ id: o.id, ring: o.geometry })) : []),
+    [editor, drawnObjects],
+  );
   /** The editor target under a client point, `null` for empty map; `undefined` when SVG targets are in use. */
   const resolveEditorTarget = (clientX: number, clientY: number): EditorTarget | null | undefined => {
     if (!sharedHit || !editor) return undefined;
@@ -830,10 +915,22 @@ export function MapViewer({
       ? controls.filter((c) => c.type === "Control" && !editor.courseControlIds?.has(c.id) && (c.x !== 0 || c.y !== 0))
         .map((c) => ({ id: c.id, x: c.x, y: c.y, radiusMm }))
       : [];
-    return editorHitAt(courseInfo?.hit ?? null, pt, tol, uiSites);
+    return editorHitAt(courseInfo?.hit ?? null, pt, tol, uiSites, uiAreas);
   };
   const resolveEditorTargetRef = useRef(resolveEditorTarget);
   resolveEditorTargetRef.current = resolveEditorTarget;
+  const editorSnapRef = useRef(editor?.snap ?? null);
+  editorSnapRef.current = editor?.snap ?? null;
+
+  /** The pointer as a tool sees it (§6): paper mm, the target under it, the zoom's mm per px. */
+  const toolPointer = (clientX: number, clientY: number, shift: boolean): ToolPointer | null => {
+    const pt = screenToMapMm(clientX, clientY);
+    const edge = screenToMapMm(clientX + 1, clientY);
+    if (!pt || !edge) return null;
+    return { pt, target: resolveEditorTarget(clientX, clientY) ?? null, shift, mmPerPx: Math.hypot(edge.x - pt.x, edge.y - pt.y) };
+  };
+  const toolPointerRef = useRef(toolPointer);
+  toolPointerRef.current = toolPointer;
   const sharedHitRef = useRef(sharedHit);
   sharedHitRef.current = sharedHit;
 
@@ -965,6 +1062,30 @@ export function MapViewer({
     fitToControlBounds(visibleControls, hideControls ? 0.02 : 0.05);
     hasInitialFitRef.current = true;
   }, [viewport, controls, initialFitControls, hideControls, fitToControlBounds]);
+
+  // ─── Editor view requests (docs/course-editor.md §6.5: F, Tab) ──
+  const viewRequestKeyRef = useRef<number | null>(null);
+  useEffect(() => {
+    const req = editor?.viewRequest;
+    if (!req || !viewport || req.key === viewRequestKeyRef.current) return;
+    viewRequestKeyRef.current = req.key;
+    if (req.fit && req.fit.length > 0) {
+      const ids = new Set(req.fit);
+      fitToControlBounds(controls.filter((c) => ids.has(c.id)), 0.08);
+    } else if (req.centre && viewport.kind === "paper") {
+      const c = req.centre;
+      setViewport((prev) => (prev?.kind === "paper" ? { ...prev, centreX: c.x * 1000, centreY: c.y * 1000 } : prev));
+    }
+  }, [editor?.viewRequest, viewport, controls, fitToControlBounds]);
+
+  // Touch pin-drop: the ghost follows the view centre (08 §5.3 "Touch").
+  useEffect(() => {
+    const tool = editor?.tool;
+    if (!tool?.touch || !isCoarsePointer || !tool.onHover || !viewport) return;
+    const rect = containerRef.current?.getBoundingClientRect();
+    const p = rect ? toolPointerRef.current(rect.left + rect.width / 2, rect.top + rect.height / 2, false) : null;
+    if (p) tool.onHover(p);
+  }, [editor?.tool, isCoarsePointer, viewport]);
 
   // ─── Focus on selection change ────────────────────────────
 
@@ -1142,7 +1263,8 @@ export function MapViewer({
       return;
     }
     if (drag.moved) {
-      const pt = screenToMapMm(clientX, clientY);
+      const raw = screenToMapMm(clientX, clientY);
+      const pt = raw && editor.snap ? editor.snap(raw) : raw;
       setEditorDragPos(null);
       if (pt) {
         setPendingMoves((prev) => {
@@ -1192,7 +1314,15 @@ export function MapViewer({
 
   const handleMouseDown = useCallback((e: React.MouseEvent) => {
     if (e.button !== 0) return;
-    if (!measuring && armEditorTarget(e.clientX, e.clientY, false)) return;
+    const tool = editorToolRef.current;
+    if (!measuring && tool) {
+      const p = toolPointerRef.current(e.clientX, e.clientY, e.shiftKey);
+      if (p && tool.onPointerDown?.(p)) {
+        toolDragRef.current = { startX: e.clientX, startY: e.clientY };
+        return;
+      }
+    }
+    if (!measuring && !tool?.exclusive && armEditorTarget(e.clientX, e.clientY, false)) return;
     if (!measuring) isPanningRef.current = true;
     lastPosRef.current = { x: e.clientX, y: e.clientY };
     mouseDownPosRef.current = { x: e.clientX, y: e.clientY };
@@ -1209,10 +1339,20 @@ export function MapViewer({
       const dy = Math.abs(e.clientY - drag.startY);
       if (drag.moved || dx + dy > 3) {
         drag.moved = true;
-        const pt = screenToMapMm(e.clientX, e.clientY);
+        const raw = screenToMapMm(e.clientX, e.clientY);
+        const pt = raw && editor.snap ? editor.snap(raw) : raw;
         if (pt) setEditorDragPos({ id: drag.id, x: pt.x, y: pt.y });
       }
       return;
+    }
+    if (editor && toolDragRef.current) {
+      const pt = screenToMapMm(e.clientX, e.clientY);
+      if (pt) editorToolRef.current?.onPointerDrag?.(pt);
+      return;
+    }
+    if (editor?.tool?.onHover && !isPanningRef.current && e.buttons === 0) {
+      const p = toolPointerRef.current(e.clientX, e.clientY, e.shiftKey);
+      if (p) editor.tool.onHover(p);
     }
     const labelDrag = editorLabelDragRef.current;
     if (editor && labelDrag) {
@@ -1248,6 +1388,14 @@ export function MapViewer({
   }, [measuring, viewport, renderW, renderH, rotRad, screenToMapMm, editor, breakLocateFollow]);
 
   const handleMouseUp = useCallback((e: React.MouseEvent) => {
+    if (editor && toolDragRef.current) {
+      toolDragRef.current = null;
+      isPanningRef.current = false;
+      mouseDownPosRef.current = null;
+      editorToolRef.current?.onPointerUp?.(e.type === "mouseleave" ? null : screenToMapMm(e.clientX, e.clientY));
+      return;
+    }
+    if (e.type === "mouseleave") editorToolRef.current?.onHover?.(null);
     const drag = editorDragRef.current;
     if (editor && drag) {
       if (e.type === "mouseleave") {
@@ -1316,8 +1464,14 @@ export function MapViewer({
       const dy = Math.abs(e.clientY - mouseDownPosRef.current.y);
       const onButton = (e.target as HTMLElement).closest?.("button");
       if (dx + dy < 5 && !onButton) {
-        const pt = screenToMapMm(e.clientX, e.clientY);
-        if (pt) editor.onMapClick?.(pt);
+        const tool = editorToolRef.current;
+        if (tool?.exclusive) {
+          const p = toolPointerRef.current(e.clientX, e.clientY, e.shiftKey);
+          if (p) tool.onClick?.(p);
+        } else {
+          const pt = screenToMapMm(e.clientX, e.clientY);
+          if (pt) editor.onMapClick?.(pt);
+        }
       }
     }
     mouseDownPosRef.current = null;
@@ -1413,7 +1567,7 @@ export function MapViewer({
       lastTouchRef.current = { x: t.clientX, y: t.clientY };
       touchStartPosRef.current = { x: t.clientX, y: t.clientY };
       touchOnEditorTargetRef.current = false;
-      if (!measuring && armEditorTargetRef.current(t.clientX, t.clientY, true)) {
+      if (!measuring && !editorToolRef.current?.exclusive && armEditorTargetRef.current(t.clientX, t.clientY, true)) {
         touchOnEditorTargetRef.current = true;
         e.preventDefault();
         return;
@@ -1432,7 +1586,9 @@ export function MapViewer({
         const dy = Math.abs(t.clientY - drag.startY);
         if (drag.moved || dx + dy > 3) {
           drag.moved = true;
-          const pt = screenToMapMm(t.clientX, t.clientY);
+          const raw = screenToMapMm(t.clientX, t.clientY);
+          const snap = editorSnapRef.current;
+          const pt = raw && snap ? snap(raw) : raw;
           if (pt) setEditorDragPos({ id: drag.id, x: pt.x, y: pt.y });
         }
         return;
@@ -1635,8 +1791,15 @@ export function MapViewer({
           const target = e.target as HTMLElement;
           const onButton = target.closest?.("button");
           if (dx + dy < 10 && !onButton) {
-            const pt = screenToMapMm(t.clientX, t.clientY);
-            if (pt) editor.onMapClick?.(pt);
+            const tool = editorToolRef.current;
+            if (tool?.exclusive) {
+              // Pin-drop: the Place button places, a tap does not (08 §5.3 "Touch").
+              const p = tool.touch ? null : toolPointerRef.current(t.clientX, t.clientY, false);
+              if (p) tool.onClick?.(p);
+            } else {
+              const pt = screenToMapMm(t.clientX, t.clientY);
+              if (pt) editor.onMapClick?.(pt);
+            }
           }
         }
         lastTouchRef.current = null;
@@ -3070,6 +3233,7 @@ export function MapViewer({
       className={`relative overflow-hidden select-none bg-white ${hideControls ? "" : "rounded-lg border border-slate-200"} ${className}`}
       style={{
         cursor: hideControls ? "default"
+          : editor?.tool?.cursor && !editorDragPos ? editor.tool.cursor
           : measuring || (editor && !editorDragPos) ? "crosshair"
           : editorDragPos ? "crosshair"
           : isPanningRef.current ? "grabbing" : "grab",
@@ -3080,6 +3244,19 @@ export function MapViewer({
       onMouseMove={handleMouseMove}
       onMouseUp={handleMouseUp}
       onMouseLeave={handleMouseUp}
+      onDoubleClick={(e) => {
+        const tool = editorToolRef.current;
+        if (!tool?.onDoubleClick || (e.target as HTMLElement).closest?.("button")) return;
+        const p = toolPointer(e.clientX, e.clientY, e.shiftKey);
+        if (p) tool.onDoubleClick(p);
+      }}
+      onContextMenu={(e) => {
+        const tool = editorToolRef.current;
+        if (!tool?.onContextMenu) return;
+        e.preventDefault();
+        const p = toolPointer(e.clientX, e.clientY, e.shiftKey);
+        if (p) tool.onContextMenu(p);
+      }}
     >
       {showTwoFingerHint && (
         <div
@@ -3237,9 +3414,39 @@ export function MapViewer({
                 opacity={0.9} style={{ pointerEvents: "none" }}
                 data-testid="editor-phantom" />
             )}
+            {editor?.tool?.shapes && viewport && (
+              <g data-testid="editor-tool-layer" style={{ pointerEvents: "none" }}>
+                {editor.tool.shapes.map((sh, i) => toolShapeNode(sh, i, mapMmToScreen, symbolScale))}
+              </g>
+            )}
           </g>
         </svg>
       </div>
+      {/* Touch pin-drop (08 §5.3): the fixed centre crosshair and Place / Done. */}
+      {editor?.tool?.touch && isCoarsePointer && (
+        <>
+          <div aria-hidden data-testid="editor-touch-crosshair" className="pointer-events-none absolute left-1/2 top-1/2 z-20 -translate-x-1/2 -translate-y-1/2">
+            <div className="w-8 h-px bg-purple-700" />
+            <div className="absolute left-1/2 top-1/2 h-8 w-px -translate-x-1/2 -translate-y-1/2 bg-purple-700" />
+          </div>
+          <div data-testid="editor-touch-bar" className="absolute inset-x-0 bottom-3 z-30 flex justify-center gap-2 px-4">
+            <button type="button" data-testid="editor-touch-place"
+              className="min-h-11 px-5 rounded-full bg-purple-600 text-white text-sm font-medium shadow-lg"
+              onClick={() => {
+                const rect = containerRef.current?.getBoundingClientRect();
+                const p = rect ? toolPointer(rect.left + rect.width / 2, rect.top + rect.height / 2, false) : null;
+                if (p) editor.tool?.touch?.onPlace(p);
+              }}>
+              {editor.tool.touch.placeLabel}
+            </button>
+            <button type="button" data-testid="editor-touch-done"
+              className="min-h-11 px-5 rounded-full bg-white text-slate-700 text-sm font-medium border border-slate-300 shadow-lg"
+              onClick={() => editor.tool?.touch?.onDone()}>
+              {editor.tool.touch.doneLabel}
+            </button>
+          </div>
+        </>
+      )}
       {/* The GL course layer's numbers and legs as DOM, for tests: what the canvas draws. */}
       {glCourse && courseInfo?.derivation && (
         <ul data-testid="course-layer" hidden>
@@ -3964,5 +4171,44 @@ function renderDescriptionRows(
         );
       }
     });
+  }
+}
+
+/** One tool shape (docs/course-editor.md §6) in the rotated overlay's inner px; `pxPerMm` sizes true-size circles. */
+function toolShapeNode(
+  sh: ToolShape,
+  key: number,
+  project: (x: number, y: number) => { x: number; y: number } | null,
+  pxPerMm: number,
+): ReactNode {
+  const color = ("color" in sh && sh.color) || "#7c3aed";
+  const data = "data" in sh && sh.data ? Object.fromEntries(Object.entries(sh.data).map(([k, v]) => [`data-${k}`, v])) : {};
+  switch (sh.kind) {
+    case "circle": {
+      const p = project(sh.x, sh.y);
+      if (!p) return null;
+      return <circle key={key} cx={p.x} cy={p.y} r={Math.max(2, sh.rMm * pxPerMm)} fill={sh.fill ?? "none"} stroke={color}
+        strokeWidth={1.5} strokeDasharray={sh.dashed ? "4 3" : undefined} data-testid={sh.testId} data-x={sh.x} data-y={sh.y} {...data} />;
+    }
+    case "line": {
+      const pts = sh.points.map((q) => project(q.x, q.y)).filter((q): q is { x: number; y: number } => q !== null);
+      if (pts.length < 2) return null;
+      const d = pts.map((q, i) => `${i ? "L" : "M"}${q.x.toFixed(1)},${q.y.toFixed(1)}`).join("") + (sh.closed ? "Z" : "");
+      return <path key={key} d={d} fill={sh.fill ?? "none"} stroke={color} strokeWidth={sh.widthPx ?? 1.5}
+        strokeDasharray={sh.dashed ? "5 4" : undefined} strokeLinejoin="round" data-testid={sh.testId}
+        data-points={sh.points.map((q) => `${q.x},${q.y}`).join(" ")} {...data} />;
+    }
+    case "handle": {
+      const p = project(sh.x, sh.y);
+      if (!p) return null;
+      return <rect key={key} x={p.x - 4} y={p.y - 4} width={8} height={8} fill={sh.active ? "#7c3aed" : "#ffffff"} stroke="#7c3aed"
+        strokeWidth={1.5} data-testid={sh.testId} data-x={sh.x} data-y={sh.y} {...data} />;
+    }
+    case "text": {
+      const p = project(sh.x, sh.y);
+      if (!p) return null;
+      return <text key={key} x={p.x + (sh.dxPx ?? 0)} y={p.y + (sh.dyPx ?? 0)} fill={color} fontSize={12} fontWeight={600}
+        paintOrder="stroke" stroke="#ffffff" strokeWidth={3} data-testid={sh.testId}>{sh.text}</text>;
+    }
   }
 }
