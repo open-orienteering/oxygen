@@ -1040,8 +1040,11 @@ counted in the reply. The reply's `colours` is `layer.colours` — the
 completed stack plus a row per hex-coloured layout object on top
 (`course-layer.md` §3.6) — and it brings `derivation` (sites, labels,
 legs) and `metrics` (circle, start and finish radii, line width, digit
-height in paper mm) for the UI layer. `input: null` clears; a load
-without course support answers `part: null` and `COURSE_UNAVAILABLE`.
+height in paper mm) for the UI layer, and `hit` — the layer's hit index:
+the symbolised stream with layer-local object ids (before the offset)
+and each object's `ref`, which the editor hit-tests on the main thread
+(§5.5). `input: null` clears; a load
+without course support answers `part: null`, `hit: null` and `COURSE_UNAVAILABLE`.
 The worker answers a request at once, between prepare slices.
 
 **Engine.** `MapGlEngine.setCourse(input | null)` posts the request with
@@ -1723,6 +1726,58 @@ changes for B4.
 | `lib/__tests__/course-layer-request.test.ts` | sites from visible positioned controls with kinds; highlighted courses as items (by flag or name, one or several, none → `null`); all-controls when a drawn site is on no course; sequence numbers only for one ordered course with the sheet or editor; single-course label offsets, pending ones winning; positions as given; faded controls left out; an imported course's preclipped legs → pieces, its cuts → circle gaps, extras; generated legs: bent path kept, automatic gaps and cuts not read, a leg count that does not match ignored |
 | `e2e/map-control-circles.spec.ts`, `e2e/map-multicourse.spec.ts` | under `map-legacy` and `map-vector`: code labels of the selected course (SVG text, or the GL layer's `course-label` mirror), sequence numbers for one course with descriptions, codes for several; pills and the sheet SVG text under both; `data-course-layer` |
 | `e2e/map-viewer-gestures.spec.ts`, `mobile-layout.spec.ts`, `course-editor.spec.ts`, `map-control-circles.spec.ts`, `map-multicourse.spec.ts`, `wide-screen-map-pane.spec.ts`, `webserial.spec.ts`, `kiosk*.spec.ts` | under the default `legacy` the mercator model reproduces the pre-B4 viewer; `webserial`, `mobile-layout`, `map-viewer-gestures` also run under `vector` (`docs/map-pipeline-switch.md` §5) |
+
+### 5.5 Editor
+
+What the course editor (`docs/course-editor.md`) adds to the viewer.
+Research: 04 §7 ("Editing and overlay hooks").
+
+**Hit-testing on the shared stage.** `render.hitTest(stream, x, y,
+{ toleranceUm, objects?, closedStrokeInterior? })`
+(`packages/shared/src/render/hit-test.ts`) answers which objects of a
+pass stream are under a paper point (µm), topmost first — backends draw
+front to back (§3.6), so a later pass is on top — one hit per object
+with its distance to the drawn shape (0 on or inside):
+
+| Pass | Hit when |
+|---|---|
+| fill, hatch | inside, even-odd (§3.1), or within the tolerance of its outline |
+| stroke | the flattened centre line (10 µm) within half the width + tolerance; a closed path's interior too with `closedStrokeInterior` |
+| glyph | within the mesh radius × instance scale of an instance (a pattern-clipped glyph pass: its clip area) |
+| text | within a glyph box: 0.65 em wide (the course layer's estimate, `course-layer.md` §3.5), 0.2 em below to 0.8 em above the baseline |
+
+Bounding boxes reject first. No GPU readback: the same function serves
+the editor and the tests (pixel-exact GPU picking stays 04 §7's fallback).
+
+**Editor targets.** The course reply's `hit` index (§5.2) reaches the
+viewer with `CourseInfo`; with `MapViewerEditorProps.sharedHitTest` and
+the GL course layer drawn, pointer-down resolves through `editorHitAt`
+(`packages/web/src/lib/editor/hit.ts`): tolerance 6 CSS px converted to
+paper at the current zoom, circles by their interior, the nearest target
+(topmost of equally near) mapped by `ref` — `site` → the control drag,
+`number` / `leader` → the label drag, `leg` (`<courseId>:<index>`) → the
+leg click; extras and layout objects are D5's. Controls the editor fades
+are drawn by the UI layer, not the layer, and hit as plain circles below
+it. In that mode the viewer renders no SVG hit targets and mirrors every
+editor site as a hidden `editor-site` (paper mm) for tests. The legacy
+editor leaves the prop off. The hit index is the course part only; a
+worker request over the document stream (snapping, Map mode) is D5's.
+
+**Drag.** Unchanged from §5.4 "Overlay": a per-move layer request; the
+dragged object is not symbolised on the main thread.
+
+**Action bar.** `actionLayout: "bar"` lays the contextual entries out
+horizontally under the selection (`editor-action-bar`) instead of the
+popover beside it; same entries and ids.
+
+#### Tests
+
+| Test | Covers |
+|---|---|
+| `packages/shared/src/render/__tests__/hit-test.test.ts` | the table above: order, reach, even-odd, interior on request, glyph discs, text boxes, object filter, distance |
+| `map-gl/__tests__/worker-course.test.ts`, `engine.test.ts` | the reply's hit index and its way to the host |
+| `lib/editor/__tests__/hit.test.ts` | editor targets over the real worker's index |
+| `e2e/course-editor.spec.ts` | selecting, dragging and leg clicks on the canvas with no SVG targets |
 
 ### 5.3 PDF (shared/print)
 
@@ -2432,11 +2487,11 @@ The shared module is exported as a namespace: `import { render } from
   nothing produces `ReplayData`; B11 closed as moot (user decision
   2026-10-22). A GPS replay feature gets its own row, with a producer and
   this section's paper view and `mapGeo`.
-- **§5.2 dynamic bucket: hit-testing, hide and highlight.** The layer's
-  object ids are in the range table (`courseObjectOffset`), but the
-  editor still hit-tests its SVG targets and highlights with SVG rings;
-  04 §7's shared-stage hit test and highlight-through-the-dynamic-bucket
-  are slice D's, with the editor on the document.
+- **§5.5 highlight through the dynamic bucket.** Hit-testing landed in
+  D4 (§5.5); the selection is still marked by the SVG ring. 04 §7's
+  highlight — the selected object's passes redrawn in a highlight colour
+  in the dynamic bucket — and hiding an edited document object come with
+  D5 (multi-select) and Map mode.
 - **§5.2 dynamic bucket: main-thread symbolisation.** A drag re-derives
   the layer in the worker (one round trip per pointer move). If D's
   editor needs lower latency, the dragged object is symbolised on the

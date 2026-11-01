@@ -251,6 +251,8 @@ describe("MapGlEngine dynamic bucket (docs/map-rendering.md §5.2 Dynamic bucket
     expect(courseParts(renderer.visibleSets.at(-1)!, lower).length).toBe(1);
     expect(renderer.atlases).toHaveLength(1);
     expect(engine.colours).toBe((infos[0] as { colours: unknown }).colours);
+    // The editor's hit index reaches the host with the derivation (§5.5).
+    expect((infos[0] as { hit: { refs: unknown[] } | null }).hit?.refs.length).toBeGreaterThan(0);
   });
 
   it("drops a reply a newer request overtook; null releases the part", async () => {

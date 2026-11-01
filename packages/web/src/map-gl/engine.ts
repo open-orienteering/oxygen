@@ -59,7 +59,7 @@ export type EngineLoadRequest = Omit<LoadRequest, "type" | "gate" | "prefetchMar
 };
 
 /** What a course reply tells the host (the UI layer's geometry, the stack, warnings). */
-export type CourseInfo = Pick<CourseReply, "colours" | "derivation" | "metrics" | "warnings">;
+export type CourseInfo = Pick<CourseReply, "colours" | "derivation" | "metrics" | "warnings" | "hit">;
 
 export interface EngineOptions {
   /** Resident GPU budget, bytes. Default 150 MB (club); B4 passes 30 MB for event maps. */
@@ -214,7 +214,7 @@ export class MapGlEngine {
     this.dirty = true;
     this.arrivalOnly = false;
     this.evict();
-    this.onCourse?.({ colours: m.colours, derivation: m.derivation, metrics: m.metrics, warnings: m.warnings });
+    this.onCourse?.({ colours: m.colours, derivation: m.derivation, metrics: m.metrics, warnings: m.warnings, hit: m.hit });
     this.onChange?.();
   }
 

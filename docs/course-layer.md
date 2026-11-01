@@ -224,7 +224,7 @@ appearing in several roles takes its first.
 
 ### 3.4 Automatic cuts
 
-`circleCuts` / `legGaps` in `cuts.ts` (`docs/course-editor.md`
+`circleCuts` / `legGaps` in `cuts.ts` (`docs/course-editor-legacy.md`
 "Automatic overprint cuts"; size-aware since C5, user decision
 2026-10-24). Each feature carries the radius `r` of its drawn symbol; the
 line it may touch is drawn `w` wide. Its **clearance** is
@@ -879,7 +879,8 @@ venue's kiosk map draws them (08 §4.8; 07 §9.2).
   D7's (Layout mode).
 - **Structure, beyond D0** (§6): the layer does not read
   `numberHidden`, the site's `circle_gaps` or `LegProps` beyond `gaps`
-  yet (the editor, D4 / D5); importers write the structure and the
+  yet (the editor writes the structure since D4, `course-editor.md` §4;
+  reading these is D5's); importers write the structure and the
   backfill fills `NULL` rows, retiring C0's interim leg input (D1);
   variations and their materialisation, map exchanges, crossing and
   map-issue points, corridors (slice F).
@@ -887,7 +888,8 @@ venue's kiosk map draws them (08 §4.8; 07 §9.2).
   `reference.imported` and does not advance the tokens of the rows it
   rewrites, so an editor open during an import is not told (D1, with the
   importers writing the structure); presence and "moved by X at T"
-  (D11); the new editor's client rules (D4).
+  (D11). The new editor's client rules landed in D4
+  (`course-editor.md` §3).
 - **Course objects, beyond D2** (§8): drawing and selecting them on the
   canvas (D4 / D5 hit-testing and tools), importers writing their lines
   and areas as objects (D1), a toner saver on screen, holes in a stored

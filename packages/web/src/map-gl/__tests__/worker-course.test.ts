@@ -4,6 +4,7 @@ import { describe, it, expect } from "vitest";
 import { COURSE_BUCKET, createMapGlWorker, type CourseLayerRequest, type CourseReply, type LoadedReply, type LoadRequest, type WorkerReply } from "../worker";
 import { buildVisibleSet, type PreparedPart, type ResidentPart } from "../buckets";
 import { INSTANCE_FLOATS } from "../mesh-atlas";
+import { render } from "@oxygen/shared";
 
 import { documentBytes, fontBytes, indexOf, isomStack, latin, request } from "./course-fixture";
 
@@ -107,6 +108,21 @@ describe("course request → the dynamic bucket", () => {
     expect(r.metrics!.circleRadiusMm).toBeGreaterThan(2);
     // Everything transferable.
     expect(h.sent[h.sent.length - 1].transfer).toContain(atlas.data.buffer);
+  });
+
+  it("carries the layer's hit index: the symbolised stream (local object ids) and each object's ref (§5.5)", () => {
+    const h = harness();
+    loaded(h);
+    const r = ask(h, request());
+    const hit = r.hit!;
+    expect(hit.stream.passes.length).toBeGreaterThan(0);
+    expect(Math.max(...hit.stream.objectIdx)).toBeLessThan(hit.refs.length);
+    const kinds = new Set(hit.refs.map((ref) => ref.kind));
+    expect(kinds).toEqual(new Set(["site", "leg", "number"]));
+    // Control 31 sits at (40, 10) mm: its circle is the topmost site hit there (interior counts).
+    const hits = render.hitTest(hit.stream, 40_000, 10_000, { toleranceUm: 0, closedStrokeInterior: true });
+    expect(hits.map((x) => hit.refs[x.objectIdx]).find((ref) => ref.kind === "site")).toEqual({ kind: "site", id: "31" });
+    expect(ask(h, null).hit).toBeNull();
   });
 
   it("the same layer again adds no mesh: no atlas in the reply", () => {
