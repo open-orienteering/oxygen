@@ -1,6 +1,6 @@
 import { describe, it, expect } from "vitest";
 import type { course } from "@oxygen/shared";
-import { appendSite, controlSequence, insertSite, moveVisit, removeSite, setRole } from "../structure-edit";
+import { appendSite, controlSequence, insertSite, moveVisit, removeSite, removeVisit, setRole } from "../structure-edit";
 
 type S = course.WireCourseStructure;
 const KIND: Record<number, "start" | "finish" | "control"> = { 1: "start", 2: "start", 9: "finish", 8: "finish" };
@@ -26,6 +26,11 @@ describe("structure edits (docs/course-editor.md §4)", () => {
   it("remove takes out every visit of a control, never the structure's start / finish slot by accident", () => {
     expect(ids(removeSite(st(1, 31, 32, 31, 9), 31))).toEqual([1, 32, 9]);
     expect(ids(removeSite(st(1, 31, 9), 77))).toEqual([1, 31, 9]);
+  });
+
+  it("removeVisit drops one visit by position", () => {
+    expect(ids(removeVisit(st(1, 31, 32, 31, 9), 2, kindOf))).toEqual([1, 31, 32, 9]);
+    expect(ids(removeVisit(st(1, 31, 9), 5, kindOf))).toEqual([1, 31, 9]);
   });
 
   it("move reorders within the control sequence", () => {

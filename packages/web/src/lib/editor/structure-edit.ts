@@ -76,6 +76,15 @@ export function removeSite(s: Structure, siteId: number): Structure {
   return edit(s, s.items.filter((i) => siteOf(i) !== siteId));
 }
 
+/** Remove the one visit at control-sequence position `at` (the inspector's ✕). */
+export function removeVisit(s: Structure, at: number, kindOf: KindOf): Structure {
+  const [first, end] = bounds(s.items, kindOf);
+  if (at < 0 || at >= end - first) return s;
+  const items = [...s.items];
+  items.splice(first + at, 1);
+  return edit(s, items);
+}
+
 /** Move the visit at control-sequence position `from` to position `to` (clamped). */
 export function moveVisit(s: Structure, from: number, to: number, kindOf: KindOf): Structure {
   const [first, end] = bounds(s.items, kindOf);
