@@ -44,6 +44,8 @@ export interface LayoutControlSource {
   description?: unknown;
   /** Manual number offset from the control centre, map millimetres. */
   labelOffset?: { dx: number; dy: number };
+  /** `controls.circle_gaps` JSONB: authored circle cuts (course-layer.md §6.4). */
+  circleGaps?: unknown;
 }
 
 /** Map template row — `settings` / `objects` are raw JSONB. */

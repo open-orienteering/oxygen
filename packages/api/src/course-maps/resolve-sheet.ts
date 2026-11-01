@@ -11,7 +11,7 @@
  * by the caller (`pdf-page.ts`), which loads the pinned document.
  */
 
-import { course, getPaperDimensions, type CourseOverlayLeg } from "@oxygen/shared";
+import { course, getPaperDimensions } from "@oxygen/shared";
 import type { PageInput } from "@oxygen/shared/print";
 import { type ResolveMapLayoutInput, type ResolvedMapLayout, resolveMapLayout } from "./resolve-layout.js";
 
@@ -19,12 +19,11 @@ export type SheetInput = Omit<PageInput, "map" | "geo">;
 
 export interface ResolveSheetInput extends ResolveMapLayoutInput {
   /**
-   * `courses.geometry_source`. `ocd`: the stored geometry's leg bends,
-   * leg gaps, pre-clipped pieces and circle gaps are file-authored and
-   * kept (docs/course-layer.md §2); anything else: the course layer
-   * derives legs and automatic cuts itself.
+   * `courses.structure` (course-layer.md §6): the leg gaps the file or
+   * the editor authored come from it, whatever `geometry_source` is.
+   * Absent or invalid = the automatic gaps.
    */
-  geometrySource?: string | null;
+  structure?: unknown;
   /** The event's course objects in scope of this sheet (course-layer.md §8.3), in draw order. */
   courseObjects?: readonly course.CourseLayerObject[];
   /** Stable id carried into the structure (the course's uuid or seq); default `course`. */
@@ -36,43 +35,61 @@ export interface ResolvedSheet {
   sheet: SheetInput;
 }
 
-const EXTRA_KINDS = new Set<CourseOverlayLeg["kind"]>(["marked_route", "forbidden_route", "restricted_line"]);
+/**
+ * The authored leg gaps of the stored structure, by index into the layout's
+ * controls. The layout's start and finish come from the geometry (ids
+ * `S1` / `F1`), the middle controls are the structure's own sites, so the
+ * two sequences are aligned on the first site they share.
+ */
+function legGapsByIndex(layout: ResolvedMapLayout, stored: course.StoredCourseStructure | null): Map<number, course.FractionGap[]> {
+  const out = new Map<number, course.FractionGap[]>();
+  if (!stored) return out;
+  const items = course.structureControlItems(stored);
+  const ids = layout.controls.map((c) => c.id);
+  const anchor = items.findIndex((item) => ids.includes(item.siteId));
+  if (anchor < 0) return out;
+  const offset = ids.indexOf(items[anchor].siteId) - anchor;
+  items.forEach((item, j) => {
+    const i = j + offset;
+    if (j > 0 && i > 0 && i < ids.length && item.leg?.gaps?.length) out.set(i, item.leg.gaps);
+  });
+  return out;
+}
 
 /** The course layer's structure, sites and label offsets from a resolved layout (docs/course-print.md §5.2). */
 export function courseInputOfLayout(
   layout: ResolvedMapLayout,
-  opts: { kind: string; orderMode?: "ordered" | "free_order"; authored: boolean; courseId?: string },
+  opts: {
+    kind: string;
+    orderMode?: "ordered" | "free_order";
+    structure?: unknown;
+    /** `controls.circle_gaps` by control id. */
+    circleGaps?: ReadonlyMap<string, course.AngularGap[]>;
+    courseId?: string;
+  },
 ): Pick<PageInput["course"], "structure" | "sites"> {
   const sites: course.CourseSite[] = [];
   const seen = new Set<string>();
   for (const c of layout.controls) {
     if (seen.has(c.id)) continue;
     seen.add(c.id);
-    sites.push({ id: c.id, code: c.code, kind: c.type, x: c.x, y: c.y });
+    const gaps = opts.circleGaps?.get(c.id);
+    sites.push({ id: c.id, code: c.code, kind: c.type, x: c.x, y: c.y, ...(gaps?.length ? { circleGaps: gaps } : {}) });
   }
   if (opts.kind !== "course") return { structure: null, sites };
 
-  const legs = layout.legs.filter((l) => (l.kind ?? "leg") === "leg");
-  // Authored legs map onto items when the geometry has one leg into each item after the first.
-  const legsFit = opts.authored && legs.length === layout.controls.length - 1;
+  const parsed = opts.structure ? course.courseStructureSchema.safeParse(opts.structure) : null;
+  const gaps = legGapsByIndex(layout, parsed?.success ? parsed.data : null);
   const items: course.CourseItem[] = layout.controls.map((c, i) => {
     const item: course.CourseItem = { siteId: c.id, role: c.type };
-    if (opts.authored && c.cuts?.length) item.circleGaps = c.cuts;
-    const leg = legsFit && i > 0 ? legs[i - 1] : undefined;
-    if (leg) {
-      item.leg = leg.preclipped
-        ? { pieces: [leg.points] }
-        : { path: leg.points, ...(leg.gaps?.length ? { gaps: leg.gaps } : {}) };
-    }
+    const legGaps = gaps.get(i);
+    if (legGaps) item.leg = { gaps: legGaps };
     return item;
   });
   const labelOffsets: Record<string, { dx: number; dy: number }> = {};
   for (const c of layout.controls) {
     if (c.labelPosition) labelOffsets[c.id] = { dx: c.labelPosition.x - c.x, dy: c.labelPosition.y - c.y };
   }
-  const extras: course.CourseExtra[] = layout.legs
-    .filter((l) => l.kind && EXTRA_KINDS.has(l.kind))
-    .map((l) => ({ kind: l.kind as course.CourseExtra["kind"], points: l.points }));
   return {
     sites,
     structure: {
@@ -81,9 +98,14 @@ export function courseInputOfLayout(
       orderMode: opts.orderMode ?? "ordered",
       items,
       ...(Object.keys(labelOffsets).length ? { labelOffsets } : {}),
-      ...(extras.length ? { extras } : {}),
     },
   };
+}
+
+function circleGapsOf(controls: readonly { id: string; circleGaps?: unknown }[]): Map<string, course.AngularGap[]> {
+  const out = new Map<string, course.AngularGap[]>();
+  for (const c of controls) if (Array.isArray(c.circleGaps) && c.circleGaps.length > 0) out.set(c.id, c.circleGaps as course.AngularGap[]);
+  return out;
 }
 
 /**
@@ -102,7 +124,8 @@ export function resolveSheet(input: ResolveSheetInput): ResolvedSheet {
   const { structure, sites } = courseInputOfLayout(layout, {
     kind: input.kind,
     orderMode: input.course?.orderMode,
-    authored: input.geometrySource === "ocd",
+    structure: input.structure,
+    circleGaps: circleGapsOf([...(input.course?.controls ?? []), ...(input.allControls ?? [])]),
     courseId: input.courseId,
   });
   const title = input.course?.name ?? input.mapName ?? "";

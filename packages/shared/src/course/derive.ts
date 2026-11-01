@@ -69,12 +69,10 @@ export function deriveCourse(input: CourseLayerInput, m: CourseMetrics): CourseD
   const R = m.circleRadiusMm;
 
   // ---- drawn sites: the courses' in first-visit order, then (all-controls) every other positioned site.
-  const drawn = new Map<string, { site: CourseSite; role: CourseSite["kind"]; gaps?: CourseItem["circleGaps"] }>();
+  const drawn = new Map<string, { site: CourseSite; role: CourseSite["kind"]; }>();
   for (const seq of sequences) {
     for (const e of seq) {
-      const d = drawn.get(e.site.id);
-      if (!d) drawn.set(e.site.id, { site: e.site, role: e.role, gaps: e.item.circleGaps });
-      else if (!d.gaps && e.item.circleGaps) d.gaps = e.item.circleGaps;
+      if (!drawn.has(e.site.id)) drawn.set(e.site.id, { site: e.site, role: e.role });
     }
   }
   if (input.viewOptions.allControls) {
@@ -84,13 +82,13 @@ export function deriveCourse(input: CourseLayerInput, m: CourseMetrics): CourseD
   const extentOf = (role: CourseSite["kind"]) => (role === "start" ? m.startRadiusMm : role === "finish" ? m.finishRadiusMm : R);
   const obstacles = [...drawn.values()].map(({ site, role }) => ({ x: site.x, y: site.y, clearance: extentOf(role) + CLEARANCE_EXTRA * R }));
 
-  const sites: DerivedSite[] = [...drawn.values()].map(({ site, role, gaps }) => ({
+  const sites: DerivedSite[] = [...drawn.values()].map(({ site, role }) => ({
     id: site.id,
     code: site.code,
     role,
     x: site.x,
     y: site.y,
-    cuts: role !== "control" ? [] : gaps ? [...gaps] : features ? circleCuts(features, site.x, site.y, R, m.lineWidthMm) : [],
+    cuts: role !== "control" ? [] : site.circleGaps && site.circleGaps.length > 0 ? [...site.circleGaps] : features ? circleCuts(features, site.x, site.y, R, m.lineWidthMm) : [],
   }));
   const derivedById = new Map(sites.map((s) => [s.id, s]));
 
@@ -102,22 +100,18 @@ export function deriveCourse(input: CourseLayerInput, m: CourseMetrics): CourseD
       for (let i = 1; i < seq.length; i++) {
         const a = seq[i - 1].site, b = seq[i].site;
         const leg = seq[i].item.leg;
-        const points = leg?.path && leg.path.length >= 2 ? leg.path.map((p) => ({ x: p.x, y: p.y })) : [{ x: a.x, y: a.y }, { x: b.x, y: b.y }];
-        if (leg?.pieces && leg.pieces.length > 0) {
-          legs.push({ from: a.id, to: b.id, points, gaps: leg.gaps ?? [], pieces: leg.pieces.map((p) => p.map((q) => ({ x: q.x, y: q.y }))), preclipped: true });
-          continue;
-        }
-        const gaps = leg?.gaps ?? (features && points.length === 2 ? legGaps(points[0], points[1], features, R, m.lineWidthMm) : []);
+        const points = [{ x: a.x, y: a.y }, { x: b.x, y: b.y }];
+        const gaps = leg?.gaps && leg.gaps.length > 0 ? leg.gaps : (features ? legGaps(points[0], points[1], features, R, m.lineWidthMm) : []);
         const pieces: MapPoint[][] = [];
         for (const piece of gaps.length ? subtractLegGaps(points, gaps) : [points]) {
           const segs: OverlaySegment[] = [];
           for (let j = 1; j < piece.length; j++) segs.push(...clipLine(piece[j - 1], piece[j], obstacles, CLEARANCE_EXTRA * R + R));
           pieces.push(...joinSegments(segs));
         }
-        legs.push({ from: a.id, to: b.id, points, gaps, pieces, preclipped: false });
+        legs.push({ from: a.id, to: b.id, points, gaps, pieces });
       }
     }
-    return { id: structure.id, orderMode: structure.orderMode, sequence: seq.map((e) => ({ siteId: e.site.id, role: e.role })), legs, extras: [...(structure.extras ?? [])] };
+    return { id: structure.id, orderMode: structure.orderMode, sequence: seq.map((e) => ({ siteId: e.site.id, role: e.role })), legs };
   });
 
   // ---- start rotation: apex towards the next site of the first ordered course that starts there.
@@ -139,13 +133,25 @@ export function deriveCourse(input: CourseLayerInput, m: CourseMetrics): CourseD
   const numbers = new Map<string, number[]>();
   if (labelMode === "sequence" && courses[0]) {
     let n = 0;
-    for (const e of courses[0].sequence) if (e.role === "control") numbers.set(e.siteId, [...(numbers.get(e.siteId) ?? []), ++n]);
+    for (const e of sequences[0]) {
+      if (e.role !== "control") continue;
+      n++;
+      // A hidden visit still takes its number in the sequence; it is only not drawn.
+      if (!e.item.numberHidden) numbers.set(e.site.id, [...(numbers.get(e.site.id) ?? []), n]);
+    }
+  }
+  // Code labels: hidden when every visit of the site is (a site no hidden-visit item names is shown).
+  const hiddenNumber = new Set<string>();
+  if (single) {
+    const visits = new Map<string, boolean>();
+    for (const e of sequences[0]) if (e.role === "control") visits.set(e.site.id, (visits.get(e.site.id) ?? true) && !!e.item.numberHidden);
+    for (const [id, hidden] of visits) if (hidden) hiddenNumber.add(id);
   }
   const offsets = single?.labelOffsets ?? {};
   // The placer's direction preferences are screen conventions: place in y-down, then flip back.
   const circles: PlacementCircle[] = sites.map((s) => {
     const c: PlacementCircle = { id: s.id, x: s.x, y: -s.y, radius: extentOf(s.role) };
-    if (s.role === "control") {
+    if (s.role === "control" && !hiddenNumber.has(s.id)) {
       c.label = numbers.get(s.id)?.join("/") ?? s.code;
       const off = offsets[s.id];
       if (off) c.fixedLabel = { x: s.x + off.dx, y: -(s.y + off.dy) };
@@ -155,7 +161,6 @@ export function deriveCourse(input: CourseLayerInput, m: CourseMetrics): CourseD
   const lines: PlacementSeg[] = [];
   for (const c of courses) {
     for (const leg of c.legs) for (const piece of leg.pieces) lines.push(...segmentsOf(piece));
-    for (const x of c.extras) if (x.kind !== "oob_area") lines.push(...segmentsOf(x.points));
   }
   const placed = placeControlLabels(circles, lines.map((l) => ({ x1: l.x1, y1: -l.y1, x2: l.x2, y2: -l.y2 })), { radius: R, labelSize: m.numberEmMm });
   for (const c of circles) {
