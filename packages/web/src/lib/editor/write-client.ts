@@ -13,7 +13,7 @@
  */
 
 import type { course } from "@oxygen/shared";
-import { VersionBook, publicIdAfterCodes, versionConflictOfError } from "../version-book";
+import { VersionBook, publicIdAfterCodes, versionConflictOfError, type VersionedKind } from "../version-book";
 import { conflictDecision, MOVE_FIELDS, type ConflictDecision } from "./conflict";
 
 type Pt = { x: number; y: number };
@@ -45,10 +45,10 @@ export interface EditorClient {
 /** A conflict the user has to see: both moved the control, or the row must be refreshed and the edit redone. */
 export class EditorConflict extends Error {
   readonly decision: Exclude<ConflictDecision, { kind: "rebase" }>;
-  readonly kind: "course" | "control";
+  readonly kind: VersionedKind;
   readonly id: number;
 
-  constructor(decision: Exclude<ConflictDecision, { kind: "rebase" }>, kind: "course" | "control", id: number) {
+  constructor(decision: Exclude<ConflictDecision, { kind: "rebase" }>, kind: VersionedKind, id: number) {
     super(decision.kind === "moved" ? "moved elsewhere" : "changed elsewhere");
     this.decision = decision;
     this.kind = kind;
