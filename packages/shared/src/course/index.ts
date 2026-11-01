@@ -33,3 +33,17 @@ export {
   type StructureSiteIssue,
   type WireCourseStructure,
 } from "./structure.js";
+export {
+  COURSE_OBJECT_KINDS,
+  courseObjectBodySchema,
+  courseObjectScopeSchemaOf,
+  courseObjectInScope,
+  courseObjectRefId,
+  filterRegionOf,
+  isCourseObject,
+  type CourseLayerObject,
+  type CourseObject,
+  type CourseObjectBody,
+  type CourseObjectKind,
+  type CourseObjectScope,
+} from "./objects.js";

@@ -16,6 +16,7 @@ import type { RenderSymbol } from "../render/symbol.js";
 import type { FilterRegion } from "../render/filter-region.js";
 import type { RenderObject } from "../render/symbolise.js";
 import type { SymbolLibraryId } from "../symbol-library/index.js";
+import type { CourseLayerObject } from "./objects.js";
 
 export type { AngularGap, FractionGap };
 
@@ -118,8 +119,11 @@ export interface CourseLayerInput {
   /** One course, several highlighted courses, or none (all-controls view). */
   structure: CourseStructure | readonly CourseStructure[] | null;
   sites: readonly CourseSite[];
-  /** Layout objects; only `anchor: "map"` ones are drawn. */
-  objects: readonly CourseMapObject[];
+  /**
+   * A sheet's layout objects (only `anchor: "map"` ones are drawn) and the
+   * course objects in scope (§8): `filter_region` objects join `regions`.
+   */
+  objects: readonly (CourseMapObject | CourseLayerObject)[];
   appearance: CourseAppearance;
   viewOptions: CourseViewOptions;
   document: CourseDocumentContext;
