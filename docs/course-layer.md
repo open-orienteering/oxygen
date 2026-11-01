@@ -223,7 +223,7 @@ appearing in several roles takes its first.
 
 ### 3.4 Automatic cuts
 
-`circleCuts` / `legGaps` in `cuts.ts` (`docs/course-editor.md`
+`circleCuts` / `legGaps` in `cuts.ts` (`docs/course-editor-legacy.md`
 "Automatic overprint cuts"; size-aware since C5, user decision
 2026-10-24). Each feature carries the radius `r` of its drawn symbol; the
 line it may touch is drawn `w` wide. Its **clearance** is
@@ -732,7 +732,8 @@ journal in any order.
   appearance on the map are slice D's.
 - **Structure, beyond D0** (§6): the layer does not read
   `numberHidden`, the site's `circle_gaps` or `LegProps` beyond `gaps`
-  yet (the editor, D4 / D5); importers write the structure and the
+  yet (the editor writes the structure since D4, `course-editor.md` §4;
+  reading these is D5's); importers write the structure and the
   backfill fills `NULL` rows, retiring C0's interim leg input (D1); the
   08 §4.5 `course_objects` table with scopes and stored filter regions
   feeding `regions` (D2; the rule and the backends are D3's,
@@ -743,7 +744,8 @@ journal in any order.
   `reference.imported` and does not advance the tokens of the rows it
   rewrites, so an editor open during an import is not told (D1, with the
   importers writing the structure); presence and "moved by X at T"
-  (D11); the new editor's client rules (D4).
+  (D11). The new editor's client rules landed in D4
+  (`course-editor.md` §3).
 - **Upper white at import**: insert the row in stage-7 alignment
   (`colour-align.ts`) at the next importer bump, so `courseColourStack`
   never has to remap.

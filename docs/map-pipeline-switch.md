@@ -165,17 +165,35 @@ print = event == "vector" ∧ latest map_files row pins a document ? "vector" : 
 
 ### 3.5 Not gated yet
 
-09 §3 lists two more reads. Neither has a second path to switch to yet,
-so the rule is recorded and nothing is routed:
+09 §3 lists one more read with no second path to switch to yet, so the
+rule is recorded and nothing is routed:
 
-- **Editor**: the course editor (`CourseEditorPage` over `MapPanel` with
-  `editor`) mounts for both values until slice D adds the new editor;
-  under `vector` it edits over the vector base layer.
 - **Replay** (`ReplayViewer` / `ReplayMapLayer`): mounted nowhere, so
   there is nothing to route (B11 closed as moot, user decision
   2026-10-22; `docs/map-rendering.md` §8). `TracksPage`'s GPS routes go
   through `MapPanel` and follow the switch like every other map. A future
   replay feature reads the same rule.
+
+### 3.6 Editor
+
+`/:nameId/course-editor` (`CourseEditorRoute`) mounts the new course
+editor (`docs/course-editor.md`) or the legacy `CourseEditorPage`:
+
+```
+editor = map.editor.vector ∧ draw == "vector" ? new : legacy
+```
+
+(`courseEditorMount`, `packages/web/src/lib/map-pipeline.ts`.) `draw` is
+§3.1's: a `vector` event with a pinned document, and a browser that can
+draw WebGL2 unless `allowLegacy` is false — so a browser that falls back
+to tiles gets the legacy editor, which edits over tiles.
+`map.editor.vector` (§1) is temporary: the editor's gate while slice D
+proves it (user decision 2026-10-31), so a club event can stay `vector`
+for the viewer and print meanwhile. It goes in slice E, when the rule
+becomes `draw == "vector"`. The route waits for `course.mapFileInfo`,
+`course.mapMetadata` and `event.mapPipeline` before mounting either page.
+The legacy page under `vector` keeps editing over the vector base layer
+with its SVG hit targets, unchanged.
 
 ## 4. The toggle
 
@@ -226,7 +244,13 @@ value (09 §3, §10). `playwright.config.ts`:
 - A spec that is about one value sets it itself with
   `setMapPipeline(value, nameId?)` / `setAllowLegacy(...)` from the same
   helper (`map-vector-layer.spec.ts`, `map-pipeline-switch.spec.ts`).
-  `reseed()` deletes the `map.pipeline.*` settings.
+  `reseed()` deletes the `map.pipeline.*` and `map.editor.*` settings.
+- `course-editor.spec.ts` (the new editor) runs in `chromium` and sets
+  `vector` and `map.editor.vector` itself (`setEditorVector`) until D10
+  moves it under `map-vector`; `course-editor-legacy.spec.ts` is the
+  frozen legacy spec (`chromium`, `legacy`, deleted in F). Two specs, not
+  one dual-run spec: the editors share no selectors (SLICES "Decided in
+  this split").
 - A dual-run spec that asserts on tiles branches on the `mapPipeline`
   fixture (`mobile-layout.spec.ts` "switching events resets viewport and
   tile state": tiles of the current event under `legacy`, the vector
@@ -240,11 +264,13 @@ value (09 §3, §10). `playwright.config.ts`:
 
 | Test | Covers |
 |------|--------|
-| `packages/api/src/__tests__/map-pipeline.test.ts` | setting keys; default and `allowLegacy` parsing; both read through one reader; `canSwitchTo`; TTL override |
+| `packages/api/src/__tests__/map-pipeline.test.ts` | setting keys; default, `allowLegacy` and `map.editor.vector` parsing; all read through one reader; `canSwitchTo`; TTL override |
 | `packages/api/src/__tests__/integration/map-pipeline.test.ts` | a row written without the field is `legacy`; new events take the default, existing ones keep theirs; `setMapPipeline` both ways; `PRECONDITION_FAILED` for `legacy` without `allowLegacy`, `vector` still allowed; Zod rejects other values |
 | `packages/api/src/__tests__/integration/lease.test.ts` "refreshes cloud-owned settings…" | a flip on the cloud reaches the leased venue copy (the column is not in `EXCLUDED_FIELDS`) |
 | `packages/api/src/__tests__/integration/map-tiles.test.ts` "skips the pre-cache for a vector event" | the poll answers `{0,0,false}` and renders nothing; a requested tile is served; no background crawl to other zooms |
-| `packages/web/src/lib/__tests__/map-pipeline.test.ts` | `resolveMapPipeline`: vector needs a document, unknown = legacy, WebGL2 fallback only while `allowLegacy` |
+| `packages/web/src/lib/__tests__/map-pipeline.test.ts` | `resolveMapPipeline`: vector needs a document, unknown = legacy, WebGL2 fallback only while `allowLegacy`; `courseEditorMount` (§3.6): the flag, the pin, the event value, the fallback |
+| `packages/api/src/__tests__/integration/map-pipeline.test.ts` "reports map.editor.vector" | `event.mapPipeline` and `setMapPipeline` carry `editorVector` |
+| `e2e/course-editor.spec.ts` "mounts behind map.editor.vector" | flag off → `CourseEditorPage` on a `vector` event; on → the new editor |
 | `packages/api/src/__tests__/integration/course-maps.test.ts` "window.png under a pinned document" | the editor preview reads the document only for `vector` + pin; unpinned stays legacy |
 | `packages/api/src/__tests__/integration/course-maps.test.ts` "maps.pdf route switch" | `vector` + pin prints through the composer (`X-Print-Pipeline: vector`, no rsvg); `legacy`, unpinned and flipped-back events through rsvg; `CourseStackError` falls back |
 | `e2e/course-maps.spec.ts` | under `map-legacy` and `map-vector`: the maps page's PDF downloads (page count, A4 size) and `X-Print-Pipeline` equal to the project's value |
@@ -255,10 +281,11 @@ value (09 §3, §10). `playwright.config.ts`:
 
 ## 7. Pending in this chapter
 
-- **Editor** gate (§3.5): slice D.
+- **`map.editor.vector`** (§1, §3.6) is removed in slice E.
 - **Admin UI for the instance flags**: none until slice E needs one.
 - **Dual-run list** grows with the slices that touch maps: candidates
-  `wide-screen-map-pane`, `kiosk-readout`, `course-editor` (D).
+  `wide-screen-map-pane`, `kiosk-readout`; `course-editor.spec.ts`
+  joins `map-vector` (not the dual list, §5) in D10.
   `scripts/e2e-sharded.mjs` weights do not yet count the second run of a
   dual spec.
 - **Lost context recovery**: the panel falls back (or shows the message)
