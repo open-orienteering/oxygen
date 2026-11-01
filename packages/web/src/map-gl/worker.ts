@@ -175,6 +175,17 @@ export interface ErrorReply {
   message: string;
 }
 
+/**
+ * The course layer as the editor hit-tests it (docs/map-rendering.md §5.5):
+ * the symbolised stream with layer-local object ids, and each object's
+ * `ref` (site, leg, number, …) by that id. Small (hundreds of passes);
+ * the main thread runs `render.hitTest` on it synchronously.
+ */
+export interface CourseHitIndex {
+  stream: render.PassStream;
+  refs: course.CourseRef[];
+}
+
 export interface CourseReply {
   type: "course";
   generation: number;
@@ -190,6 +201,8 @@ export interface CourseReply {
   atlas?: MeshAtlas;
   /** The input's filter regions over the document's objects; null without regions (clears the filter). */
   filter: FilterReply | null;
+  /** What the editor hit-tests; null when cleared or unsupported. */
+  hit: CourseHitIndex | null;
 }
 
 export type WorkerReply = LoadedReply | PartReply | ErrorReply | CourseReply;
@@ -473,7 +486,7 @@ function load(msg: LoadRequest): { reply: LoadedReply; transfer: ArrayBuffer[]; 
  */
 function courseReply(state: State | undefined, msg: CourseRequest): { reply: CourseReply; transfer: ArrayBuffer[] } {
   const empty = (colours: render.ColourStack, warnings: Record<string, number> = {}): { reply: CourseReply; transfer: ArrayBuffer[] } => ({
-    reply: { type: "course", generation: msg.generation, part: null, colours, derivation: null, metrics: null, warnings, filter: null },
+    reply: { type: "course", generation: msg.generation, part: null, colours, derivation: null, metrics: null, warnings, filter: null, hit: null },
     transfer: [],
   });
   const cs = state?.course;
@@ -514,6 +527,7 @@ function courseReply(state: State | undefined, msg: CourseRequest): { reply: Cou
   const um = (v: number) => v / 1000;
   const reply: CourseReply = {
     type: "course", generation: msg.generation, part, colours: layer.colours, derivation: layer.derivation, warnings, filter,
+    hit: { stream: sym.stream, refs: layer.objects.map((o) => o.ref) },
     metrics: {
       circleRadiusMm: um(set.circleRadiusUm), finishRadiusMm: um(set.finishRadiusUm), startRadiusMm: um(set.startRadiusUm),
       lineWidthMm: um(set.lineWidthUm), digitHeightMm: um(set.digitHeightUm),
