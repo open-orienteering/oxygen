@@ -11,8 +11,9 @@ viewer's dynamic bucket (C4, §5), the page composer (C2,
 `course-print.md`) and the `courses.geometry` compatibility artifact
 (C5). This chapter covers how the layer is derived (§1), its v1 input
 (§2), the geometry rules (§3), the GeoJSON projection (§4), the viewer
-(§5), the stored course structure (§6, slice D row D0) and the
-concurrency rules for editing it (§7, gate G1). Editing the structure on
+(§5), the stored course structure (§6, slice D row D0), the
+concurrency rules for editing it (§7, gate G1) and the stored, scoped
+course objects (§8, row D2). Editing the structure on
 the new canvas is `course-editor.md`'s.
 
 ## Decisions taken before the code (user, 2026-10-24)
@@ -147,11 +148,11 @@ clockwise, the gap sweeping clockwise from `start` to `end`), fractions
 | `circleGaps` | `{ start, end }[]` | imported `ocd` `cuts` |
 | `extras` | `{ kind: "marked_route" \| "restricted_line" \| "forbidden_route" \| "oob_area", points }[]` | imported geometry's course-level 707 / 708 / 711 lines and 709 polygons |
 | `sites` | `{ id, code, kind: "control" \| "start" \| "finish", x, y }[]` | `controls` rows; `code` the display code (first punch code, else name / seq) |
-| `objects` | `CourseMapObject[]`; only `anchor: "map"` ones are drawn | the sheet's layout objects (`course-maps` schema) |
+| `objects` | `(CourseMapObject \| CourseLayerObject)[]`: a sheet's layout objects (only `anchor: "map"` ones are drawn) and course objects (§8; told apart by `geometry`) | the sheet's layout objects (`course-maps` schema); the event's course objects in scope (§8.3) |
 | `appearance` | `{ circle?, line?, number?, numberStyle? }`, multipliers (1 = the spec) | `appearanceFromTemplate(template.appearance)`; the template's `purple` is not read (the purple is the stack's row) |
 | `viewOptions` | `{ allControls?, labelMode?, overprintScale?, window?, textValues? }` | the view: all-controls, label mode, print enlargement, the frame polygon for white-out-outside, `{course}` placeholder values |
 | `cutFeatures` | `{ x, y, r? }[]` (`r` the drawn symbol's radius) | `cutFeaturesOfDocument(doc)` (vector events), the legacy OCAD parse (C5, §4.2) |
-| `regions` | `{ rings: MapPoint[][], mode: "clip" \| "hide", symbols: "all" \| number[] \| { colours }, invert? }[]` — filter regions over the map, `rings` outer first; symbol indices are the document's, colours its own stack's | nothing yet: D2's `course_objects` (`filter_region`); the layer returns them as `CourseLayer.regions` (µm paths, colours on the completed stack) and `courseRenderInput` passes them to `symbolise` with the document's object count as `regionObjectLimit` — the rule is `map-rendering.md` §4.11 |
+| `regions` | `{ rings: MapPoint[][], mode: "clip" \| "hide", symbols: "all" \| number[] \| { colours }, invert? }[]` — filter regions over the map, `rings` outer first; symbol indices are the document's, colours its own stack's | explicit regions, then every `filter_region` course object in `objects` (§8.3); the layer returns them as `CourseLayer.regions` (µm paths, colours on the completed stack) and `courseRenderInput` passes them to `symbolise` with the document's object count as `regionObjectLimit` — the rule is `map-rendering.md` §4.11 |
 
 Free order is the structure's `orderMode` (a property of the course, not
 of the view). A site at the origin (0, 0) is unpositioned and skipped,
@@ -435,7 +436,8 @@ buckets. The React SVG keeps the UI layer only (`map-rendering.md` §5.4
 | `labelOffsets` | the single highlighted course's, with a drag or a pending label move winning — only with the description sheet or the editor (the SVG overlay's rule) |
 | `leg`, `circleGaps`, `extras` | for a course whose stored GeoJSON has `preclipped` legs (an imported `ocd` course, §2): each leg feature becomes the next item's `leg.pieces` when the counts match, the course's control `cuts` become `circleGaps`; a bent generated leg keeps its `path`; 707 / 708 / 711 lines and `restricted_area` polygons become `extras`. Automatic `gaps` / `cuts` in the GeoJSON are not read |
 | `viewOptions` | `labelMode: "sequence"` for one ordered course with the sheet or the editor, else `"code"`; `allControls` when a drawn site is on no highlighted course |
-| `objects`, `appearance` | `[]` (no sheet reaches the viewer) and `{}` — the spec sizes × the document factor (decision "Sizes") |
+| `objects` | the event's course objects in scope of the highlighted courses (`courseObjectsForView`, §8.2; `all`-scoped only when none is highlighted), without scope, `z` or token — `MapPanel` fetches `courseObject.list` and hands them to the viewer; no sheet's layout objects reach the viewer |
+| `appearance` | `{}` — the spec sizes × the document factor (decision "Sizes") |
 | `cutFeatures` | added by the worker: `cutFeaturesOfDocument(doc)` once per document load |
 
 **Reply.** The derivation (sites with number positions and leaders, legs
@@ -628,7 +630,7 @@ whose HLC is `baseVersion` *is* the row as the client saw it. When that
 entry is not on this node (token `0`, or pruned) `differing` is `null`.
 `baseVersion` stays optional for one release so clients that predate it
 keep last-write-wins; importers and the backfill send none (they replace
-by design). Course objects (D2) will carry the same token per object.
+by design). Course objects carry the same token per object (§8.4).
 
 **Client rules** (the new editor, D4 / D11). A **field move** on a stale
 control is re-sent with the fresh token automatically when the other
@@ -666,6 +668,141 @@ commutative: each op is keyed by `(object id, op id)` and sets a state
 applying twice equals once and two devices' patches merge through the
 journal in any order.
 
+## 8. Course objects
+
+Row D2 (research 08 §4.5, §4.8). Purple / white objects stored per event
+with a **scope**, drawn by the layer with the course on screen and in
+print: out-of-bounds areas and lines, white-outs, a toner saver, free
+marked routes, map text and logos, and filter regions. They are the
+stored, scoped kind of a sheet's map-anchored layout objects (§3.6);
+those stay in the sheets (moving them is slice F's).
+
+### 8.1 Table and kinds
+
+`oxygen.course_objects` (migration `20261101120000_course_objects`):
+
+| Column | Type | Meaning |
+|---|---|---|
+| `id` | `UUID` `uuidv7()` | row id |
+| `event_id` | `BIGINT` → `events` `ON DELETE CASCADE` | |
+| `seq` | `INT`, `allocate_event_seq` | public id on the wire; unique per event |
+| `kind` | `TEXT`, CHECK over the nine kinds below | |
+| `geometry` | `JSONB` | `PathVertex[]`: paper mm, y-up, the layout path's vertex / Bézier shape (`{ x, y, hIn?, hOut? }`) |
+| `props` | `JSONB` default `{}` | per kind, below; stored as on the wire |
+| `scope` | `JSONB` | `{ "all": true }` or `{ "courses": [uuid], "classes": [uuid] }` (§8.2); no foreign key |
+| `z` | `INT` default 0 | draw order among the event's objects (`z`, then `seq`) |
+| `version` | `BIGINT` default 0 | the §7 token (§8.4) |
+| `created_at`, `updated_at` | `TIMESTAMPTZ` | `set_updated_at` |
+
+`courseObjectBodySchema` (`packages/shared/src/course/objects.ts`)
+validates `{ kind, geometry, props }`; props are strict (an unknown key is
+refused, not dropped); a geometry of the wrong length is refused with an
+issue message starting `OBJECT_GEOMETRY`.
+
+| Kind | Geometry | Props | Drawn as |
+|---|---|---|---|
+| `oob_area` | ≥ 3 vertices, closed | `border?: "none" \| "solid" \| "dashed"` (default none) | 709; 709.b with a solid boundary, 709.c dashed |
+| `oob_line` | ≥ 2 | `symbol?: "708" \| "711"` (default 708) | 708 out-of-bounds boundary or 711 out-of-bounds route |
+| `whiteout` | ≥ 3, closed | — | `course:whiteout` at upper white (§3.6) |
+| `toner_saver` | ≥ 3: the hull | `marginMm?`, `holeRadiusMm?` (how D5 generated it; the drawn shape is the stored hull) | white-out *outside* the hull: the `viewOptions.window` ring with the hull as an even-odd hole; without a window (the viewer) not drawn, warning `WINDOW_MISSING` |
+| `marked_route` | ≥ 2 | — | 707 |
+| `text` | 1: the anchor | `text`, `fontSizeMm`, `fontFamily?`, `color?` (hex), `align?` | a text symbol: upper purple, or an own colour row for `color` (§1); `{placeholders}` expanded with `viewOptions.textValues` |
+| `image` | 2: opposite corners | `graphicId`, `crop?` | `layer.images` (a graphic of the event), drawn by the page backends |
+| `filter_region` | ≥ 3 points, **no** Bézier handles (a polygon; one outer ring) | `{ mode: "clip" \| "hide", symbols: "all" \| idx[] \| { colours }, invert? }` — D3's region exactly | not an object: a `regions` entry (`map-rendering.md` §4.11) |
+| `inset_frame` | ≥ 2 | — | reserved for micro insets: typed, refused on write (`PRECONDITION_FAILED`), never drawn |
+
+Sizes are **paper mm at the map's scale**, like the 7xx symbols: the
+geometry and a text's `fontSizeMm` are not divided by
+`viewOptions.overprintScale` (a sheet's layout objects are page mm and
+are; §3.6). The 7xx kinds take the library's dimensions × the document
+factor × appearance (decision "Sizes"): 08 §4.5's per-object width,
+cross spacing, dash and white-out opacity are not stored (decision log,
+D2).
+
+### 8.2 Scope
+
+An object is drawn with a course when its scope is `{ all: true }`, or
+names the course, or names a class that runs it — the class's own
+course or a course of its forking pool (`classes.course_id`,
+`class_course_pools`). A view with no course (all controls) draws the
+`all`-scoped objects only. Both lists empty is a parked object, drawn
+nowhere. `courseObjectInScope(scope, drawn | null)` is the rule
+(`drawn` = the drawn courses and the classes running them); the API
+resolves classes from the tables (`classesByCourse`). The viewer does not
+resolve classes itself (`class.list` names a class's own course, not its
+pool): every wire object carries `inCourses`, the public ids of the
+courses its scope resolves to by the same rule (`null` for `all`), and
+`courseObjectsForView` keeps those with a highlighted course among them.
+
+On the wire the scope names courses and classes by public id (`seq`);
+the row holds UUIDs. A write naming an unknown course or class is
+`BAD_REQUEST` naming it; a course or class removed later simply matches
+nothing and drops out of the wire scope.
+
+### 8.3 Drawing
+
+`courseLayer` takes course objects in `objects` beside a sheet's layout
+objects (`isCourseObject`: a course object has `geometry`) and draws them
+after the course in input order — the caller passes them in draw order —
+with `ref = { kind: "object", id: "course-object:<id>" }`. Every
+`filter_region` object becomes a region after the explicit `regions`
+input, so a stored region acts exactly like D3's (never on the course).
+
+- **Print.** `maps.pdf` (vector path) loads the event's objects once per
+  request; each sheet takes those in scope of its course, or the
+  `all`-scoped ones for an all-controls sheet (`sheetForMapRow` →
+  `SheetInput.course.objects`), and `composePage` hands them to the layer
+  with the sheet's objects. Filter regions therefore reach the PDF as
+  D3's clip paths by construction (`course-print.md` §5.1).
+- **Viewer.** `MapPanel` fetches `courseObject.list` (kiosk-readable;
+  cached until reload like `course.list` — a writer, D5, invalidates it),
+  keeps the objects in scope of the highlighted courses
+  (`courseObjectsForView` over `inCourses`) and hands them to `MapViewer`
+  (`courseObjects` prop), whose request carries them (§5); the worker's
+  layer lifts the regions. The kiosk map is
+  `MapPanel` with the runner's course highlighted, so it draws the
+  `all`-scoped objects and that course's. A `toner_saver` is not drawn
+  on screen (no frame).
+- **Not yet.** Hit-testing and selecting objects on the canvas, and the
+  tools that draw them, are the editor's (D4 / D5); importers writing
+  their 707 / 708 / 711 lines and 709 polygons as objects is D1.
+
+### 8.4 API and tokens
+
+`courseObject.*` (`packages/api/src/routers/courseObject.ts`), the wire
+type `course.CourseObject = { id: seq, kind, geometry, props, scope, z, version, inCourses }`
+(`inCourses`: §8.2, read-only):
+
+| Procedure | Access | |
+|---|---|---|
+| `list` | `courses.view` or the event's kiosk key | the event's objects ordered `z`, `seq` |
+| `create { kind, geometry, props, scope, z? }` | `courses.edit` | returns the object with its token |
+| `update { id, baseVersion?, geometry?, props?, scope?, z? }` | `courses.edit` | the kind is fixed; an absent field keeps the stored one, a sent one (`null` included) is validated with the rest |
+| `delete { id, baseVersion? }` | `courses.edit` | |
+| `reorder { ids }` | `courses.edit` | `z` = the position in `ids`; takes and advances no token |
+
+Writes are not lease-guarded: objects are cloud-owned non-critical data
+(08 §4.8), like the sheets; a venue holding a checkout keeps its
+snapshot's copy until the next checkout.
+
+**Token** (§7). Objects are not journaled, so their token is not a
+journal entry's HLC: every `create` / `update` mints one from the node's
+clock (`encodeHlc(nextServerHlc())`) and stamps `version` in the same
+write. `update` / `delete` with a `baseVersion` lock the row (`FOR
+UPDATE`) and compare; a stale one is tRPC `CONFLICT` with
+`data: { kind: "object", id, version, current, differing: null }` —
+`current` the object now, `differing` always null (there is no base to
+diff against). No `baseVersion` is last-write-wins. The client rule is
+the structure rule: refresh and redo.
+
+### 8.5 Snapshot and dump
+
+`course_objects` rows travel in the checkout snapshot
+(`SNAPSHOT_TABLES`, rows verbatim with their UUIDs, `seq`, scope UUIDs
+and token; `map-storage.md` §7.2) and in the per-event dump after
+`class_course_pools` (`BACKUP_TABLES`; `map-storage.md` §7.3) — the
+venue's kiosk map draws them (08 §4.8; 07 §9.2).
+
 ## Tests
 
 | Layer | Where | What |
@@ -690,7 +827,14 @@ journal in any order.
 | E2E | `e2e/courses.spec.ts` "an edit from a stale copy…" | §7 over HTTP: another client renames the course while this page's poll is held; this page's edit is refused, the notice shows, the page reloads the other write |
 | unit | `packages/api/src/__tests__/courseGeometryStale.test.ts` | unchanged and green: OCD-vs-XML staleness of imported geometry |
 | golden | `e2e/__golden__/map-gl/course-*.png`, `packages/api/src/render/__tests__/golden-files.test.ts`, `e2e/map-gl-golden.spec.ts` | reference raster = committed golden; WebGL2 ≤ 0.5 % (`map-rendering.md` §6.2). The PDF tier joins in C3 |
-| unit (web) | `packages/web/src/lib/__tests__/course-layer-request.test.ts` | the §5 request rules (offsets only with the sheet or the editor) |
+| unit (web) | `packages/web/src/lib/__tests__/course-layer-request.test.ts` | the §5 request rules (offsets only with the sheet or the editor); §8.2 scope by highlighted course over `inCourses`, all-controls = `all` only, parked nowhere; objects without scope / `z` / token / `inCourses` |
+| unit | `packages/shared/src/course/__tests__/objects.test.ts` | §8.1 each kind accepted, short geometry / unknown props / bad filter props / Bézier region refused; §8.2 the scope truth table; §8.3 each kind onto its symbol (709 / 709.b / 709.c, 708 / 711, 707, white-out), Bézier handles kept, text upper purple or own row and not divided by the enlargement, image corners, toner saver with and without a window, `inset_frame` and `filter_region` draw nothing |
+| unit | `layer.test.ts` "a stored filter_region course object" | §8.3: the same region as the explicit one, after it; hides the document's 516 |
+| unit | `packages/api/src/__tests__/version-conflict.test.ts` | §8.4: the object `CONFLICT` payload |
+| integration | `packages/api/src/__tests__/integration/course-objects.test.ts` | §8.4: every kind created and listed in draw order with public ids; `inset_frame`, unknown course / class, bad body refused; update advances the token; stale token → `CONFLICT` with the object now and nothing written, none = LWW, stale delete; reorder keeps tokens; kiosk-key read, viewer cannot write; §8.2 class scope through `course_id` and the pool, the same resolution on the wire (`inCourses`); §8.5 snapshot round trip verbatim |
+| integration | `course-print.test.ts` "course objects on the page" | §8.3 print: a sheet takes the objects in scope (all-controls: `all` only), they add passes over the map, a stored filter region hides map objects |
+| integration | `backup.test.ts` | §8.5: the dump's `course_objects` section |
+| E2E | `e2e/map-vector-layer.spec.ts` "a stored white-out course object paints the map white" | §8.3 viewer: an `all`-scoped white-out created through the API turns open yellow ground white on the GL canvas, yellow beside it unchanged |
 | unit (web) | `packages/web/src/map-gl/__tests__/worker-course.test.ts`, `engine.test.ts` | the dynamic bucket (`map-rendering.md` §5.2) |
 | E2E | `e2e/map-vector-layer.spec.ts`, `map-control-circles.spec.ts`, `map-multicourse.spec.ts` | lower purple under black at a crossing; labels under both pipelines (`map-rendering.md` §5.4) |
 
@@ -718,7 +862,9 @@ journal in any order.
 | `packages/api/src/course-structure.ts` | §6.2: `splitStructure`, `structureFromColumns`, `persistStructure`, `rewriteStructureFromColumns`, wire mapping, `assertCourseVersion` |
 | `packages/api/src/version-conflict.ts`, `referenceJournal.ts`, `trpc.ts` (`withVersionConflict`) | §7: lock and compare, the base from the journal, the emits that stamp the token, the error shape |
 | `packages/web/src/lib/version-book.ts` | §7 legacy editor tokens |
-| `packages/web/src/lib/course-layer-request.ts` | the viewer's request (§5) |
+| `packages/web/src/lib/course-layer-request.ts` | the viewer's request (§5), `courseObjectsForView` (§8.2) |
+| `packages/shared/src/course/objects.ts` | §8: `courseObjectBodySchema`, `courseObjectScopeSchemaOf`, `courseObjectInScope`, `isCourseObject`, `filterRegionOf`, the kinds' drawing |
+| `packages/api/src/course-objects.ts`, `routers/courseObject.ts` | §8.4: wire ↔ row, scope ids, `writeCourseObject` (shared with D1's importers), `loadCourseObjects`, `classesByCourse`, `objectsInScope`; the router |
 | `packages/web/src/map-gl/worker.ts` (`courseReply`), `engine.ts` (`setCourse`) | the dynamic bucket that draws it |
 
 ## Pending in this chapter
@@ -727,16 +873,14 @@ journal in any order.
   last consumer draws from the layer (C4 viewer, C2 / C3 print, then
   kiosk / exports in E / F); spec-size cuts reach the screen and the page
   through the layer, not through the artifact.
-- **Viewer layout objects and appearance**: the viewer passes no layout
-  objects and the spec appearance; a sheet's objects and template
-  appearance on the map are slice D's.
+- **Viewer sheet objects and appearance**: the viewer draws the course
+  objects in scope (§8.3) but no sheet's layout objects and the spec
+  appearance; a sheet's objects and template appearance on the map are
+  D7's (Layout mode).
 - **Structure, beyond D0** (§6): the layer does not read
   `numberHidden`, the site's `circle_gaps` or `LegProps` beyond `gaps`
   yet (the editor, D4 / D5); importers write the structure and the
-  backfill fills `NULL` rows, retiring C0's interim leg input (D1); the
-  08 §4.5 `course_objects` table with scopes and stored filter regions
-  feeding `regions` (D2; the rule and the backends are D3's,
-  `map-rendering.md` §4.11);
+  backfill fills `NULL` rows, retiring C0's interim leg input (D1);
   variations and their materialisation, map exchanges, crossing and
   map-issue points, corridors (slice F).
 - **Tokens, beyond D0** (§7): `course.importCourses` journals
@@ -744,6 +888,11 @@ journal in any order.
   rewrites, so an editor open during an import is not told (D1, with the
   importers writing the structure); presence and "moved by X at T"
   (D11); the new editor's client rules (D4).
+- **Course objects, beyond D2** (§8): drawing and selecting them on the
+  canvas (D4 / D5 hit-testing and tools), importers writing their lines
+  and areas as objects (D1), a toner saver on screen, holes in a stored
+  filter region, `inset_frame` (micro insets, slice F), moving sheets'
+  map-anchored layout objects into `course_objects` (F).
 - **Upper white at import**: insert the row in stage-7 alignment
   (`colour-align.ts`) at the next importer bump, so `courseColourStack`
   never has to remap.

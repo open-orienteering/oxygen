@@ -13,7 +13,8 @@
 
 import { versionConflictOf, type VersionConflictData } from "@oxygen/shared";
 
-export type VersionedKind = "course" | "control";
+/** Every row kind that carries a token (course objects since D2). */
+export type VersionedKind = VersionConflictData["kind"];
 
 export class VersionBook {
   private readonly tokens = new Map<string, bigint>();

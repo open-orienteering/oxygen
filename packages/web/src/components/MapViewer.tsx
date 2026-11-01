@@ -283,6 +283,8 @@ interface Props {
   }> | null;
   controls?: ControlOverlay[];
   courses?: CourseOverlay[];
+  /** Course objects in scope of the highlighted courses, drawn by the GL course layer (docs/course-layer.md §8.3). */
+  courseObjects?: import("@oxygen/shared").course.CourseObject[];
   highlightControlId?: string;
   highlightCourseName?: string;
   onControlClick?: (controlId: string) => void;
@@ -389,6 +391,7 @@ export function MapViewer({
   calibration,
   controls = [],
   courses = [],
+  courseObjects,
   highlightControlId,
   highlightCourseName,
   onControlClick,
@@ -786,6 +789,7 @@ export function MapViewer({
       courses,
       highlightCourseName,
       courseGeometry,
+      courseObjects,
       sequenceLabels,
       // Manual offsets apply with the sheet or the editor only, as on the SVG overlay.
       labelOffset: (id) => (single ? labelOffsetOf(id, controls, single.labelOffsets, editorLabelDragPos, pendingLabelMoves) : undefined),
@@ -794,7 +798,7 @@ export function MapViewer({
         : undefined,
     });
   }, [glCourse, controls, controlMm, editor, pendingMoves, editorDragPos, showDescriptions, courses, highlightCourseName,
-      courseGeometry, editorLabelDragPos, pendingLabelMoves]);
+      courseGeometry, courseObjects, editorLabelDragPos, pendingLabelMoves]);
 
   /** Fits the whole map: the document's extent (paper) or the tile bounds (mercator). */
   const fitWholeMap = useCallback(() => {

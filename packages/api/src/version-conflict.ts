@@ -1,6 +1,6 @@
 /**
- * Optimistic concurrency for course and control writes (docs/course-layer.md
- * §7, gate G1).
+ * Optimistic concurrency for course, control and course-object writes
+ * (docs/course-layer.md §7, §8.4; gate G1).
  *
  * A client edits from a row's `version` (the HLC of the journal entry that
  * last wrote it) and sends it back as `baseVersion`. Inside the write
@@ -51,6 +51,13 @@ export async function lockControlVersion(db: Db, controlUuid: string): Promise<b
   const rows = await db.$queryRaw<{ version: bigint }[]>`
     SELECT "version" FROM "oxygen"."controls" WHERE "id" = ${controlUuid}::uuid FOR UPDATE`;
   return rows[0]?.version ?? 0n;
+}
+
+/** Lock a course object row (§8.4) and return its token; null when the row is gone. */
+export async function lockCourseObjectVersion(db: Db, objectUuid: string): Promise<bigint | null> {
+  const rows = await db.$queryRaw<{ version: bigint }[]>`
+    SELECT "version" FROM "oxygen"."course_objects" WHERE "id" = ${objectUuid}::uuid FOR UPDATE`;
+  return rows[0]?.version ?? null;
 }
 
 /** The row as the client saw it: the payload of the `*.upserted` entry at `baseVersion`, if this node has it. */

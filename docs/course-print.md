@@ -195,8 +195,11 @@ y-down convention.
 `window` (`mapWindowForFrame`, rotation clockwise on the page), `map`
 (`objects` near the window, the document's `symbols`, its
 `CourseDocumentContext`, its `cutFeatures`), `course` (structure, sites,
-appearance, view options, filter regions — the course layer's input
-without the document, `docs/course-layer.md` §2), `objects` (layout objects of both
+appearance, view options, filter regions, and the event's course objects
+in scope of the sheet — `objects`, `docs/course-layer.md` §8.3 — the
+course layer's input without the document, `docs/course-layer.md` §2;
+stored `filter_region` objects reach the page's clip paths through them),
+`objects` (layout objects of both
 anchors), `textValues`, `description` (§6.2, or null), `label`, `geo`
 (§7.3, or null). `resolveSheet` (§5) builds everything but `map` and
 `geo`; `pdf-page.ts` adds them from the pinned document.
@@ -1059,9 +1062,6 @@ symbols on the window, unexplained ÷ ink and their codes:
   PDF/X-4 and output intents, `colourOverrides`, `minLineWidthMm`, bleed
   and crop marks (the marks layer), CMYK images, the test sheet — a later
   row (decision (2), 2026-10-23).
-- **Filter regions from the print route**: the composer and the
-  operators draw them (D3, `map-rendering.md` §4.11, §5.3); the print
-  route passes none until D2 stores them (`course_objects`).
 - **One window shared by several pages** (05 §5.10): two sheets on the
   same window (a course and its all-controls sheet, forked variants)
   re-symbolise and re-emit the map content per page; a shared form

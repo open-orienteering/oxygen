@@ -16,6 +16,13 @@ describe("withVersionConflict (errorFormatter)", () => {
     expect(versionConflictOf(out.data)).toMatchObject({ kind: "course", version: "123" });
   });
 
+  it("carries a course object's conflict the same way (§8.4: differing null)", () => {
+    const err = versionConflict({ kind: "object", id: 7, version: "456", current: { kind: "whiteout" }, differing: null });
+    const out = withVersionConflict(shape, err);
+    expect(versionConflictOf(out.data)).toMatchObject({ kind: "object", id: 7, version: "456", current: { kind: "whiteout" }, differing: null });
+    expect(versionConflictOf({ ...out.data, kind: "map" })).toBeNull();
+  });
+
   it("leaves other errors — the duplicate-code CONFLICT among them — as they were", () => {
     const err = new TRPCError({ code: "CONFLICT", message: "Control with code 31 already exists" });
     expect(withVersionConflict(shape, err)).toBe(shape);

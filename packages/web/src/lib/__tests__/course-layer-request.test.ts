@@ -1,6 +1,6 @@
 import { describe, it, expect } from "vitest";
 import type { course } from "@oxygen/shared";
-import { courseLayerRequest, type CourseRequestInput, type RequestControl } from "../course-layer-request";
+import { courseLayerRequest, courseObjectsForView, type CourseRequestInput, type RequestControl } from "../course-layer-request";
 
 const ctl = (id: string, type: RequestControl["type"] = "Control", visible?: boolean): RequestControl => ({ id, code: `c${id}`, type, ...(visible === undefined ? {} : { visible }) });
 const CONTROLS = [ctl("S", "Start"), ctl("1"), ctl("2"), ctl("3"), ctl("F", "Finish")];
@@ -109,5 +109,31 @@ describe("courseLayerRequest (docs/course-layer.md §5)", () => {
     expect(a.items[1].circleGaps).toBeUndefined();
     const short = courseLayerRequest(base({ courseGeometry: { features: [leg([[10, 10], [25, 30], [40, 10]], { preclipped: true })] } }));
     expect(structures(short)[0].items.every((i) => !i.leg)).toBe(true);
+  });
+});
+
+describe("course objects (docs/course-layer.md §8.2, §8.3)", () => {
+  const SQUARE = [{ x: 0, y: 0 }, { x: 5, y: 0 }, { x: 5, y: 5 }];
+  const obj = (id: number, inCourses: number[] | null): course.CourseObject =>
+    ({ id, kind: "oob_area", geometry: SQUARE, props: {}, scope: inCourses === null ? { all: true } : { courses: inCourses, classes: [] }, z: 0, version: "1", inCourses }) as course.CourseObject;
+  // 3: scoped to a class running A and B through its pool (resolved by the server).
+  const OBJECTS = [obj(1, null), obj(2, [10]), obj(3, [10, 11]), obj(4, [11]), obj(6, [])];
+  const COURSES = [{ id: 10, name: "A" }, { id: 11, name: "B" }];
+  const ids = (list: course.CourseObject[]) => list.map((o) => o.id);
+
+  it("drawn with a highlighted course among the resolved ones; nothing highlighted = all only; parked = nowhere", () => {
+    expect(ids(courseObjectsForView(OBJECTS, new Set(["A"]), COURSES))).toEqual([1, 2, 3]);
+    expect(ids(courseObjectsForView(OBJECTS, new Set(["B"]), COURSES))).toEqual([1, 3, 4]);
+    expect(ids(courseObjectsForView(OBJECTS, new Set(), COURSES))).toEqual([1]);
+    expect(ids(courseObjectsForView(OBJECTS, new Set(["A", "B"]), COURSES))).toEqual([1, 2, 3, 4]);
+  });
+
+  it("the request carries the objects' bodies and ids, without scope, z, token or resolved courses", () => {
+    expect(courseLayerRequest(base()).objects).toEqual([]);
+    const r = courseLayerRequest(base({ courseObjects: [OBJECTS[0], { ...obj(5, null), kind: "filter_region", props: { mode: "hide", symbols: "all" } } as course.CourseObject] }));
+    expect(r.objects).toEqual([
+      { id: 1, kind: "oob_area", geometry: SQUARE, props: {} },
+      { id: 5, kind: "filter_region", geometry: SQUARE, props: { mode: "hide", symbols: "all" } },
+    ]);
   });
 });

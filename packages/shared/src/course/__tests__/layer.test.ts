@@ -10,6 +10,7 @@ import { makePath } from "../../render/pass-stream.js";
 import { liberation } from "../../render/__tests__/fonts.js";
 import type { RenderObject } from "../../render/symbolise.js";
 import type { CourseMapObject } from "../../course-maps/schema.js";
+import type { CourseLayerObject } from "../objects.js";
 
 /** A tiny ISOM "document": a 516 power line (black) across the first leg, resolved on the palette stack. */
 function isomDocument(): { objects: RenderObject[]; symbols: ReturnType<typeof materialiseLibrary>["symbols"] } {
@@ -96,6 +97,17 @@ describe("filter regions (map-rendering §4.11)", () => {
     expect(hidden).toEqual([0]);
     expect(stream.objectIdx.includes(0)).toBe(false);
     expect(stream.passes.length).toBe(plain.stream.passes.filter((_, k) => plain.stream.objectIdx[k] !== 0).length);
+  });
+  it("a stored filter_region course object (§8.3) acts exactly like the explicit region, after the explicit ones", () => {
+    const stored: CourseLayerObject = { id: 4, kind: "filter_region", geometry: square, props: { mode: "hide", symbols: "all" } };
+    const layer = courseLayer(layerInput({ objects: [stored] }));
+    const explicit = courseLayer(layerInput({ regions: [{ rings: [square], mode: "hide", symbols: "all" }] }));
+    expect(layer.regions).toEqual(explicit.regions);
+    expect(layer.objects.filter((o) => o.ref.kind === "object")).toEqual([]);
+    const { hidden } = symbolise({ ...courseRenderInput(isomDocument(), layer), fonts: fonts() });
+    expect(hidden).toEqual([0]);
+    const both = courseLayer(layerInput({ objects: [stored], regions: [{ rings: [square, hole], mode: "clip", symbols: "all" }] }));
+    expect(both.regions.map((r) => r.mode)).toEqual(["clip", "hide"]);
   });
 });
 

@@ -885,14 +885,16 @@ export type ControlKind = "control" | "start" | "finish" | "map_exchange" | "cro
 
 /**
  * `data` of the tRPC `CONFLICT` a stale `baseVersion` gets from
- * `course.setStructure` / `course.update` / `control.update`
- * (docs/course-layer.md §7). `version` and `current` are the server's row
- * now; `differing` the structure item ids (course) or field names (control)
- * that differ between the client's base and that row.
+ * `course.setStructure` / `course.update` / `control.update` /
+ * `courseObject.update` / `courseObject.delete` (docs/course-layer.md §7,
+ * §8.4). `version` and `current` are the server's row now; `differing` the
+ * structure item ids (course) or field names (control) that differ between
+ * the client's base and that row — always null for a course object (not
+ * journaled, so the base is never on the node).
  */
 export interface VersionConflictData {
-  kind: "course" | "control";
-  /** Public id (course seq / control id). */
+  kind: "course" | "control" | "object";
+  /** Public id (course seq / control id / course object seq). */
   id: number;
   version: string;
   current: unknown;
@@ -904,7 +906,7 @@ export interface VersionConflictData {
 export function versionConflictOf(data: unknown): VersionConflictData | null {
   if (typeof data !== "object" || data === null) return null;
   const d = data as Partial<VersionConflictData>;
-  return (d.kind === "course" || d.kind === "control") &&
+  return (d.kind === "course" || d.kind === "control" || d.kind === "object") &&
     typeof d.version === "string" &&
     (d.differing === null || Array.isArray(d.differing))
     ? (d as VersionConflictData)

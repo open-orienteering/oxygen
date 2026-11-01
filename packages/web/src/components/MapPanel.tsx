@@ -7,6 +7,7 @@ import { shouldUseChunkedUpload, uploadMapFileChunked } from "../lib/map-upload"
 import { useCurrentUser } from "../context/CurrentUserContext";
 import { MapViewer, type ControlOverlay, type CourseOverlay, type MapViewerEditorProps } from "./MapViewer";
 import { useIsWideViewport } from "./map-pane-shared";
+import { courseObjectsForView } from "../lib/course-layer-request";
 import {
   IconDescriptions,
   IconEye,
@@ -225,6 +226,16 @@ function MapPanelImpl({
   const classList = trpc.class.list.useQuery(undefined, {
     staleTime: Number.POSITIVE_INFINITY,
   });
+  // Course objects (docs/course-layer.md §8): those in scope of the
+  // highlighted courses, or the `all`-scoped ones when none is (the kiosk
+  // shows the runner's course, so it gets both).
+  const courseObjectList = trpc.courseObject.list.useQuery(undefined, {
+    staleTime: Number.POSITIVE_INFINITY,
+  });
+  const courseObjectsInView = useMemo(() => {
+    if (!courseObjectList.data?.length) return undefined;
+    return courseObjectsForView(courseObjectList.data, effectiveCourseNames, courses.data ?? []);
+  }, [courseObjectList.data, effectiveCourseNames, courses.data]);
   const classNamesByCourse = useMemo(() => {
     const byCourse = new Map<string, string[]>();
     if (!classList.data) return byCourse;
@@ -890,6 +901,7 @@ function MapPanelImpl({
           controls={controlOverlays}
           courses={courseOverlays}
           courseGeometry={courseGeometry}
+          courseObjects={courseObjectsInView}
           coursesWithGeometry={coursesWithGeometry}
           highlightControlId={highlightControlId ? String(highlightControlId) : undefined}
           highlightCourseName={highlightCourseName}

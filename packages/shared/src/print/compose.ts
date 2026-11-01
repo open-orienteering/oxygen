@@ -48,7 +48,7 @@ export function composePage(input: PageInput, fonts: FontMetrics[]): ComposedPag
   const layer = courseLayer({
     structure: input.course.structure,
     sites: input.course.sites,
-    objects: input.objects,
+    objects: [...input.objects, ...(input.course.objects ?? [])],
     appearance: input.course.appearance,
     viewOptions: { ...input.course.viewOptions, window: frameInMap(transform, grow(frameUm, RING_BLEED_UM)), textValues: input.textValues },
     document: input.map.context,
@@ -65,9 +65,10 @@ export function composePage(input: PageInput, fonts: FontMetrics[]): ComposedPag
   const ink = input.description?.colour ?? "#000000";
   const palette = withObjectColours(layer.colours, [...(input.description ? ["#ffffff", ink] : []), ...objectColours(pageObjects)]);
   // White-out and 709 on the page in the map's own entries, at the size they print on the map.
+  const stackIndex = courseColourStack(layer.colours).index;
   const set = courseSymbols(
     { libraryId: input.map.context.libraryId, documentFactor: input.map.context.documentFactor * transform.scaleRatio },
-    courseColourStack(layer.colours).index,
+    stackIndex,
     {},
   );
   const pageSymbols: RenderSymbol[] = [...set.symbols];
@@ -79,7 +80,7 @@ export function composePage(input: PageInput, fonts: FontMetrics[]): ComposedPag
     { x: (fr.x + fr.width) / 1000, y: (fr.y + fr.height) / 1000 },
     { x: fr.x / 1000, y: (fr.y + fr.height) / 1000 },
   ];
-  const built = layoutObjects(pageObjects, set, pageSymbols, palette.indexOf, { overprintScale: 1, window: frameRing, textValues: input.textValues });
+  const built = layoutObjects(pageObjects, set, pageSymbols, palette.indexOf, { overprintScale: 1, window: frameRing, textValues: input.textValues }, stackIndex.get("purple-upper")!);
   for (const w of built.warnings) warnings.push({ code: w.code, message: w.message });
   const pageRender = built.objects.map(({ ref: _ref, ...o }) => o);
   if (input.description) {

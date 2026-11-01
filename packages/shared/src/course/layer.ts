@@ -16,7 +16,7 @@ import { remapRenderColours } from "../render/transform.js";
 import { circleWithGaps } from "./arcs.js";
 import { courseColourStack, withObjectColours } from "./colour-stack.js";
 import { deriveCourse } from "./derive.js";
-import { layoutObjects, objectColours } from "./objects.js";
+import { filterRegionOf, layoutObjects, objectColours, isCourseObject } from "./objects.js";
 import { courseSymbols } from "./symbols.js";
 import type { CourseExtra, CourseFilterRegion, CourseLayer, CourseLayerInput, CourseRenderObject } from "./types.js";
 import type { MapPoint } from "../course-maps/schema.js";
@@ -72,10 +72,12 @@ export function courseLayer(input: CourseLayerInput): CourseLayer {
 
   const symbols: RenderSymbol[] = [...set.symbols];
   const palette = withObjectColours(stack.colours, objectColours(input.objects));
-  const built = layoutObjects(input.objects, set, symbols, palette.indexOf, input.viewOptions);
+  const built = layoutObjects(input.objects, set, symbols, palette.indexOf, input.viewOptions, stack.index.get("purple-upper")!);
   objects.push(...built.objects);
 
-  const regions = (input.regions ?? []).map((r) => filterRegion(r, stack.remap));
+  // Stored filter regions (§8.3) follow the explicit ones.
+  const stored = input.objects.flatMap((o) => (isCourseObject(o) && o.kind === "filter_region" ? [filterRegionOf(o)] : []));
+  const regions = [...(input.regions ?? []), ...stored].map((r) => filterRegion(r, stack.remap));
   return { colours: palette.colours, remap: stack.remap, symbols, objects, images: built.images, derivation, warnings: built.warnings, regions };
 }
 

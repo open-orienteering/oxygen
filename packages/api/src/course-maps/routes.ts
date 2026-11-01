@@ -31,6 +31,7 @@ import {
   sheetForMapRow,
 } from "./pdf-page.js";
 import { printGate, renderCoursePagesInWorker, resetPrintWorkers } from "./print-worker-host.js";
+import { classesByCourse, loadCourseObjects } from "../course-objects.js";
 
 type Db = ReturnType<typeof prisma>;
 
@@ -323,11 +324,14 @@ export function registerCourseMapRoutes(
       const pinned = await pinnedPrintSource(db, event.id);
       if (pinned) {
         try {
+          const [courseObjects, byCourse] = await Promise.all([loadCourseObjects(db, event.id), classesByCourse(db, event.id)]);
           const sheets = rows.map((row) =>
             sheetForMapRow(row, {
               event: { name: event.name, date: event.date },
               allControls,
               mapInfo: pinned.info,
+              courseObjects,
+              classesByCourse: byCourse,
             }),
           );
           // A worker slot, then a permit like every render, but no queue

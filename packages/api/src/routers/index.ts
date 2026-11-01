@@ -27,6 +27,7 @@ import { controlSeriesRouter } from "./controlSeries.js";
 import { classPresetRouter } from "./classPreset.js";
 import { mapTemplateRouter } from "./mapTemplate.js";
 import { courseMapRouter } from "./courseMap.js";
+import { courseObjectRouter } from "./courseObject.js";
 import { graphicsRouter } from "./graphics.js";
 
 export const appRouter = router({
@@ -64,6 +65,7 @@ export const appRouter = router({
   classPreset: classPresetRouter,
   mapTemplate: mapTemplateRouter,
   courseMap: courseMapRouter,
+  courseObject: courseObjectRouter,
   graphics: graphicsRouter,
 });
 

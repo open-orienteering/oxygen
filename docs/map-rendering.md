@@ -713,7 +713,10 @@ colour indices; `courseLayer()` converts them to µm paths (hole flags on
 the later rings) and re-indexes colours onto the completed stack
 (`CourseLayer.regions`); `courseRenderInput()` returns them with
 `regionObjectLimit`; the page composer passes them to `symbolise`
-(`PageInput.course.regions`).
+(`PageInput.course.regions`). Stored regions are `filter_region` course
+objects (`docs/course-layer.md` §8): the layer appends each one in
+`objects` to the explicit `regions`, so the viewer's request and the
+print route carry them as objects.
 
 ## 5. Backends
 

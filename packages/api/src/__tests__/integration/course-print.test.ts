@@ -16,7 +16,10 @@ import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { defaultMapAppearance } from "@oxygen/shared";
 import { applyEventMap } from "../../event-map.js";
 import { clearCourseMapSourceCache } from "../../course-maps/map-source.js";
-import { loadPinnedPrintDocument, pinnedPrintSource, renderCoursePages, sheetForMapRow, type PrintMapRow } from "../../course-maps/pdf-page.js";
+import { loadPinnedPrintDocument, pageInputFor, pinnedPrintSource, renderCoursePages, sheetForMapRow, type PrintMapRow } from "../../course-maps/pdf-page.js";
+import { classesByCourse, loadCourseObjects, writeCourseObject } from "../../course-objects.js";
+import { loadBundledFonts } from "../../render/fonts.js";
+import { composePage } from "@oxygen/shared/print";
 import { renderCoursePagesInWorker, resetPrintWorkers } from "../../course-maps/print-worker-host.js";
 import { hasTool, qpdfCheck } from "../../render/pdf-golden.js";
 import { createTestEvent, disconnect, type TestEventContext } from "../helpers/test-db.js";
@@ -110,6 +113,49 @@ async function build(mode: "cmyk" | "rgb" = "cmyk", opts: { worker?: boolean; on
 }
 
 const lookup = <T>(doc: PDFDocument, o: unknown): T => (o instanceof PDFRef ? doc.context.lookup(o) : o) as T;
+
+describe("course objects on the page (course-layer.md §8.3)", () => {
+  it("a sheet takes the event's objects in scope; they draw over the map, a stored filter region hides map objects", async () => {
+    const db = vec.db;
+    const blue = rows.find((r) => r.kind === "course")!.course!.id as string;
+    const other = await db.course.create({ data: { eventId: vec.eventId, name: "Röd" } });
+    const square = [{ x: -90, y: -20 }, { x: -50, y: -20 }, { x: -50, y: 30 }, { x: -90, y: 30 }];
+    try {
+      const oob = await writeCourseObject(db, vec.eventId, { body: { kind: "oob_area", geometry: square, props: { border: "solid" } }, scope: { all: true } });
+      const onBlue = await writeCourseObject(db, vec.eventId, { body: { kind: "marked_route", geometry: square.slice(0, 2), props: {} }, scope: { courses: [blue], classes: [] } });
+      const onRed = await writeCourseObject(db, vec.eventId, { body: { kind: "whiteout", geometry: square, props: {} }, scope: { courses: [other.id], classes: [] } });
+      const pinned = (await loadPinnedPrintDocument(db, vec.eventId))!;
+      const event = await db.event.findUniqueOrThrow({ where: { id: vec.eventId } });
+      const allControls = await db.control.findMany({ where: { eventId: vec.eventId, removed: false } });
+      const base = { event: { name: event.name, date: event.date }, allControls, mapInfo: pinned.info };
+      const objects = await loadCourseObjects(db, vec.eventId);
+      const byCourse = await classesByCourse(db, vec.eventId);
+      const sheets = rows.map((row) => sheetForMapRow(row, { ...base, courseObjects: objects, classesByCourse: byCourse }));
+      const ids = (i: number) => (sheets[i].course.objects ?? []).map((o) => o.id);
+      const courseIdx = rows.findIndex((r) => r.kind === "course");
+      const allIdx = rows.findIndex((r) => r.kind === "all_controls");
+      expect(ids(courseIdx)).toEqual([oob.seq, onBlue.seq]);
+      expect(ids(allIdx)).toEqual([oob.seq]);
+      expect(ids(courseIdx)).not.toContain(onRed.seq);
+
+      const fonts = await loadBundledFonts();
+      const passes = (sheet: (typeof sheets)[number]) => composePage(pageInputFor(pinned.document, sheet, null), fonts).mapLayer.stream.passes.length;
+      const plain = sheetForMapRow(rows[courseIdx], base);
+      expect(plain.course.objects ?? []).toEqual([]);
+      expect(passes(sheets[courseIdx])).toBeGreaterThan(passes(plain));
+
+      // A stored filter region over the window hides the map's objects inside it (D3's rule, by construction).
+      const region = await writeCourseObject(db, vec.eventId, { body: { kind: "filter_region", geometry: square, props: { mode: "hide", symbols: "all" } }, scope: { all: true } });
+      const withRegion = sheetForMapRow(rows[courseIdx], { ...base, courseObjects: await loadCourseObjects(db, vec.eventId), classesByCourse: byCourse });
+      const hidden = composePage(pageInputFor(pinned.document, withRegion, null), fonts);
+      expect(hidden.mapLayer.stream.passes.length).toBeLessThan(passes(sheets[courseIdx]));
+      await db.courseObject.delete({ where: { id: region.id } });
+    } finally {
+      await db.courseObject.deleteMany({ where: { eventId: vec.eventId } });
+      await db.course.delete({ where: { id: other.id } });
+    }
+  }, 60_000);
+});
 
 describe("course pages from the pinned document", () => {
   it("only a vector event with a pin has a print document", async () => {

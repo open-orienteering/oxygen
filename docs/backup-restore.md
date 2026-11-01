@@ -4,7 +4,7 @@ Oxygen ships with a one-click backup of the currently selected event, exposed on
 
 ## What gets backed up
 
-A single event — its rows in these tables of the `oxygen` schema, in this order: `events`, `controls`, `courses`, `course_controls`, `classes`, `class_course_pools`, `runners`, `teams`, `cards`, `card_readouts`, `punches`, `control_units`, `event_log`, `map_sources`, `map_documents`, `club_symbol_decisions`, `map_files`, `rendered_maps`, `tracks`, `routes`, `event_seqs`.
+A single event — its rows in these tables of the `oxygen` schema, in this order: `events`, `controls`, `courses`, `course_controls`, `classes`, `class_course_pools`, `course_objects`, `runners`, `teams`, `cards`, `card_readouts`, `punches`, `control_units`, `event_log`, `map_sources`, `map_documents`, `club_symbol_decisions`, `map_files`, `rendered_maps`, `tracks`, `routes`, `event_seqs`.
 
 Most are filtered to the event's id. `map_sources` and `map_documents` are not event-scoped: they hold the content-addressed map blobs, shared by every event and club map that pins the same bytes ([map-storage.md](map-storage.md) §1). The dump carries the rows this event's `map_files` pin, by hash — the source file and the imported document — ahead of `map_files`, so the sections restore in foreign-key order ([map-storage.md](map-storage.md) §7.3). `club_symbol_decisions` — the club's reviewed symbol outcomes, which a re-match of the restored map reads ([map-symbols.md](map-symbols.md) §8.5) — is instance-global and travels whole. `bytea` columns appear as Postgres `\x` hex in the CSV.
 

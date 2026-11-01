@@ -20,6 +20,7 @@ import { BUNDLED_FONT_FILES, bundledPdfFaces, loadBundledFonts } from "../render
 import { type BaseMapInfo, getBaseMapInfo } from "./map-source.js";
 import { type LayoutControlSource, type LayoutTemplateSource, layoutControlsFromCourseControls } from "./resolve-layout.js";
 import { type SheetInput, resolveSheet } from "./resolve-sheet.js";
+import { objectsInScope, type StoredCourseObject } from "../course-objects.js";
 
 type Db = PrismaClient | Prisma.TransactionClient;
 
@@ -189,12 +190,25 @@ export interface PrintMapRow {
   } | null;
 }
 
-/** One map row → its sheet, with the same layout input the legacy page uses (`routes.ts` `renderPage`). */
+/**
+ * One map row → its sheet, with the same layout input the legacy page uses
+ * (`routes.ts` `renderPage`). `courseObjects` are the event's
+ * (`loadCourseObjects`); the sheet takes those in scope of its course, or
+ * the `all`-scoped ones for an all-controls sheet (course-layer.md §8.3).
+ */
 export function sheetForMapRow(
   row: PrintMapRow,
-  ctx: { event: { name: string; date: Date }; allControls: LayoutControlSource[]; mapInfo: Pick<BaseMapInfo, "scale" | "meridianTiltDeg"> },
+  ctx: {
+    event: { name: string; date: Date };
+    allControls: LayoutControlSource[];
+    mapInfo: Pick<BaseMapInfo, "scale" | "meridianTiltDeg">;
+    courseObjects?: readonly StoredCourseObject[];
+    classesByCourse?: ReadonlyMap<string, string[]>;
+  },
 ): SheetInput {
   if (!row.template) throw new Error(`Map "${row.name}" has no template`);
+  const courseUuid = row.kind === "course" && row.course?.id !== undefined ? String(row.course.id) : null;
+  const inScope = ctx.courseObjects ? objectsInScope(ctx.courseObjects, courseUuid, ctx.classesByCourse ?? new Map()) : [];
   const { sheet } = resolveSheet({
     kind: row.kind,
     template: row.template,
@@ -220,6 +234,7 @@ export function sheetForMapRow(
     mapName: row.name,
     geometrySource: row.course?.geometrySource ?? null,
     ...(row.course?.id !== undefined ? { courseId: String(row.course.id) } : {}),
+    courseObjects: inScope.map(({ id: _uuid, scope: _scope, z: _z, version: _v, seq, ...body }) => ({ ...body, id: seq }) as course.CourseLayerObject),
   });
   return sheet;
 }
