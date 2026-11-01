@@ -304,7 +304,8 @@ export const eventRouter = router({
 
   /**
    * The event's map pipeline and whether `legacy` may still be chosen
-   * (docs/map-pipeline-switch.md §2). Kiosk-readable: the kiosk map
+   * (docs/map-pipeline-switch.md §2), plus `map.editor.vector`, the new
+   * course editor's temporary gate (§3.6). Kiosk-readable: the kiosk map
    * follows the event switch.
    */
   mapPipeline: kioskOrViewProcedure.query(async ({ ctx }) => {
@@ -312,7 +313,7 @@ export const eventRouter = router({
       ctx.db.event.findUniqueOrThrow({ where: { id: ctx.event.id }, select: { mapPipeline: true } }),
       getMapPipelineFlags(),
     ]);
-    return { pipeline: row.mapPipeline as MapPipeline, allowLegacy: flags.allowLegacy };
+    return { pipeline: row.mapPipeline as MapPipeline, allowLegacy: flags.allowLegacy, editorVector: flags.editorVector };
   }),
 
   /**
@@ -335,7 +336,7 @@ export const eventRouter = router({
         data: { mapPipeline: input.pipeline },
         select: { mapPipeline: true },
       });
-      return { pipeline: row.mapPipeline as MapPipeline, allowLegacy: flags.allowLegacy };
+      return { pipeline: row.mapPipeline as MapPipeline, allowLegacy: flags.allowLegacy, editorVector: flags.editorVector };
     }),
 
   /** Soft-delete an event. */

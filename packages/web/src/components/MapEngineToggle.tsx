@@ -18,7 +18,7 @@ export function MapEngineToggle({ pipeline, allowLegacy }: { pipeline: MapPipeli
   const setPipeline = trpc.event.setMapPipeline.useMutation({
     onMutate: ({ pipeline: next }) => {
       const previous = utils.event.mapPipeline.getData();
-      utils.event.mapPipeline.setData(undefined, { pipeline: next, allowLegacy });
+      utils.event.mapPipeline.setData(undefined, { pipeline: next, allowLegacy, editorVector: previous?.editorVector ?? false });
       return { previous };
     },
     onError: (_err, _input, ctx) => {

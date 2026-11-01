@@ -18,9 +18,10 @@ function slug(tag: string): string {
   return `oxygen_test_pipeline_${tag}_${Math.random().toString(36).slice(2, 8)}`;
 }
 
-async function setFlags(def: string | null, allowLegacy: string | null): Promise<void> {
+async function setFlags(def: string | null, allowLegacy: string | null, editorVector: string | null = null): Promise<void> {
   await setSetting(MAP_PIPELINE_SETTINGS.default, def);
   await setSetting(MAP_PIPELINE_SETTINGS.allowLegacy, allowLegacy);
+  await setSetting(MAP_PIPELINE_SETTINGS.editorVector, editorVector);
   clearMapPipelineFlagsCache();
 }
 
@@ -52,11 +53,11 @@ describe("events.map_pipeline", () => {
 
   it("new events take map.pipeline.default (legacy when unset)", async () => {
     const unset = await createEvent("unset");
-    expect(await makeCaller(unset).event.mapPipeline()).toEqual({ pipeline: "legacy", allowLegacy: true });
+    expect(await makeCaller(unset).event.mapPipeline()).toEqual({ pipeline: "legacy", allowLegacy: true, editorVector: false });
 
     await setFlags("vector", null);
     const vector = await createEvent("vector");
-    expect(await makeCaller(vector).event.mapPipeline()).toEqual({ pipeline: "vector", allowLegacy: true });
+    expect(await makeCaller(vector).event.mapPipeline()).toEqual({ pipeline: "vector", allowLegacy: true, editorVector: false });
     // An existing event keeps its value when the default changes.
     expect((await makeCaller(unset).event.mapPipeline()).pipeline).toBe("legacy");
   });
@@ -77,7 +78,7 @@ describe("events.map_pipeline", () => {
     const ev = await createEvent("nolegacy");
     const caller = makeCaller(ev);
     await setFlags(null, "false");
-    expect(await caller.event.mapPipeline()).toEqual({ pipeline: "legacy", allowLegacy: false });
+    expect(await caller.event.mapPipeline()).toEqual({ pipeline: "legacy", allowLegacy: false, editorVector: false });
     await expect(caller.event.setMapPipeline({ pipeline: "vector" })).resolves.toMatchObject({
       pipeline: "vector",
     });
@@ -85,6 +86,15 @@ describe("events.map_pipeline", () => {
     expect(err).toBeInstanceOf(TRPCError);
     expect((err as TRPCError).code).toBe("PRECONDITION_FAILED");
     expect((await caller.event.mapPipeline()).pipeline).toBe("vector");
+  });
+
+  it("reports map.editor.vector, the new editor's temporary gate (§3.6)", async () => {
+    const ev = await createEvent("editor");
+    const caller = makeCaller(ev);
+    expect((await caller.event.mapPipeline()).editorVector).toBe(false);
+    await setFlags(null, null, "true");
+    expect((await caller.event.mapPipeline()).editorVector).toBe(true);
+    expect((await caller.event.setMapPipeline({ pipeline: "vector" })).editorVector).toBe(true);
   });
 
   it("rejects an unknown value at the boundary", async () => {
