@@ -18,14 +18,14 @@ import { baseVersionSchema, lockCourseObjectVersion, versionConflict } from "../
 import {
   assertWritableKind,
   loadCourseObjects,
-  loadScopeIds,
+  loadWireContext,
   nextObjectVersion,
   storedObjectOf,
   storedScope,
   toWire,
   writeCourseObject,
-  type ScopeIds,
   type StoredCourseObject,
+  type WireContext,
 } from "../course-objects.js";
 
 const scopeWireSchema = course.courseObjectScopeSchemaOf(z.number().int());
@@ -42,28 +42,28 @@ async function findObject(db: Db, eventId: bigint, seq: number): Promise<StoredC
 }
 
 /** Lock the row; a stale `baseVersion` is a version `CONFLICT` with the object now. */
-async function assertObjectVersion(db: Db, eventId: bigint, o: StoredCourseObject, ids: ScopeIds, baseVersion: string | undefined): Promise<void> {
+async function assertObjectVersion(db: Db, eventId: bigint, o: StoredCourseObject, w: WireContext, baseVersion: string | undefined): Promise<void> {
   if (baseVersion === undefined) return;
   const version = await lockCourseObjectVersion(db, o.id);
   if (version === null || version === BigInt(baseVersion)) return;
   const now = await findObject(db, eventId, o.seq);
-  throw versionConflict({ kind: "object", id: o.seq, version: version.toString(), current: toWire(now, ids), differing: null });
+  throw versionConflict({ kind: "object", id: o.seq, version: version.toString(), current: toWire(now, w), differing: null });
 }
 
 export const courseObjectRouter = router({
   /** The event's objects in draw order (`z`, then `seq`). */
   list: kioskOrCoursesViewProcedure.query(async ({ ctx }): Promise<course.CourseObject[]> => {
-    const [objects, ids] = await Promise.all([loadCourseObjects(ctx.db, ctx.event.id), loadScopeIds(ctx.db, ctx.event.id)]);
-    return objects.map((o) => toWire(o, ids));
+    const [objects, w] = await Promise.all([loadCourseObjects(ctx.db, ctx.event.id), loadWireContext(ctx.db, ctx.event.id)]);
+    return objects.map((o) => toWire(o, w));
   }),
 
   create: coursesEditProcedure
     .input(course.courseObjectBodySchema.and(z.object({ scope: scopeWireSchema, z: zSchema.optional() })))
     .mutation(async ({ ctx, input }): Promise<course.CourseObject> => {
       const { scope, z: zIndex, ...body } = input;
-      const ids = await loadScopeIds(ctx.db, ctx.event.id);
-      const o = await writeCourseObject(ctx.db, ctx.event.id, { body: body as course.CourseObjectBody, scope: storedScope(scope, ids), z: zIndex });
-      return toWire(o, ids);
+      const w = await loadWireContext(ctx.db, ctx.event.id);
+      const o = await writeCourseObject(ctx.db, ctx.event.id, { body: body as course.CourseObjectBody, scope: storedScope(scope, w.ids), z: zIndex });
+      return toWire(o, w);
     }),
 
   /** Replace geometry, props, scope or `z`; the kind is fixed. */
@@ -79,14 +79,15 @@ export const courseObjectRouter = router({
       }),
     )
     .mutation(async ({ ctx, input }): Promise<course.CourseObject> => {
-      const ids = await loadScopeIds(ctx.db, ctx.event.id);
+      const w = await loadWireContext(ctx.db, ctx.event.id);
       return ctx.db.$transaction(async (tx) => {
         const o = await findObject(tx, ctx.event.id, input.id);
-        await assertObjectVersion(tx, ctx.event.id, o, ids, input.baseVersion);
+        await assertObjectVersion(tx, ctx.event.id, o, w, input.baseVersion);
+        // An absent field keeps the stored one; anything sent (null included) is validated.
         const parsed = course.courseObjectBodySchema.safeParse({
           kind: o.kind,
-          geometry: input.geometry ?? o.geometry,
-          props: input.props ?? o.props,
+          geometry: input.geometry !== undefined ? input.geometry : o.geometry,
+          props: input.props !== undefined ? input.props : o.props,
         });
         if (!parsed.success) {
           throw new TRPCError({ code: "BAD_REQUEST", message: parsed.error.issues.map((i) => `${i.path.join(".")}: ${i.message}`).join("; ") });
@@ -97,22 +98,22 @@ export const courseObjectRouter = router({
           data: {
             geometry: json(parsed.data.geometry),
             props: json(parsed.data.props),
-            ...(input.scope ? { scope: json(storedScope(input.scope, ids)) } : {}),
+            ...(input.scope ? { scope: json(storedScope(input.scope, w.ids)) } : {}),
             ...(input.z !== undefined ? { z: input.z } : {}),
             version: nextObjectVersion(),
           },
         });
-        return toWire(storedObjectOf(row)!, ids);
+        return toWire(storedObjectOf(row)!, w);
       });
     }),
 
   delete: coursesEditProcedure
     .input(z.object({ id: z.number().int(), baseVersion: baseVersionSchema.optional() }))
     .mutation(async ({ ctx, input }): Promise<{ id: number }> => {
-      const ids = await loadScopeIds(ctx.db, ctx.event.id);
+      const w = await loadWireContext(ctx.db, ctx.event.id);
       await ctx.db.$transaction(async (tx) => {
         const o = await findObject(tx, ctx.event.id, input.id);
-        await assertObjectVersion(tx, ctx.event.id, o, ids, input.baseVersion);
+        await assertObjectVersion(tx, ctx.event.id, o, w, input.baseVersion);
         await tx.courseObject.delete({ where: { id: o.id } });
       });
       return { id: input.id };
@@ -135,7 +136,7 @@ export const courseObjectRouter = router({
         const uuid = new Map(rows.map((r) => [r.seq, r.id]));
         for (const [z, seq] of input.ids.entries()) await tx.courseObject.update({ where: { id: uuid.get(seq)! }, data: { z } });
       });
-      const [objects, ids] = await Promise.all([loadCourseObjects(ctx.db, ctx.event.id), loadScopeIds(ctx.db, ctx.event.id)]);
-      return objects.map((o) => toWire(o, ids));
+      const [objects, w] = await Promise.all([loadCourseObjects(ctx.db, ctx.event.id), loadWireContext(ctx.db, ctx.event.id)]);
+      return objects.map((o) => toWire(o, w));
     }),
 });

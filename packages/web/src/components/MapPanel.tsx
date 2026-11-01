@@ -234,14 +234,8 @@ function MapPanelImpl({
   });
   const courseObjectsInView = useMemo(() => {
     if (!courseObjectList.data?.length) return undefined;
-    return courseObjectsForView(courseObjectList.data, effectiveCourseNames, {
-      courses: courses.data ?? [],
-      classes: (classList.data ?? []).map((c) => ({
-        id: c.id,
-        courseNames: c.courseNames.length > 0 ? c.courseNames : c.courseName ? [c.courseName] : [],
-      })),
-    });
-  }, [courseObjectList.data, effectiveCourseNames, courses.data, classList.data]);
+    return courseObjectsForView(courseObjectList.data, effectiveCourseNames, courses.data ?? []);
+  }, [courseObjectList.data, effectiveCourseNames, courses.data]);
   const classNamesByCourse = useMemo(() => {
     const byCourse = new Map<string, string[]>();
     if (!classList.data) return byCourse;

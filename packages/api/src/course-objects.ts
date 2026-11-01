@@ -86,9 +86,30 @@ export function storedScope(scope: course.CourseObjectScope<number>, ids: ScopeI
   return out;
 }
 
-export function toWire(o: StoredCourseObject, ids: ScopeIds): course.CourseObject {
+/** What the wire form needs besides the row: public ids and which classes run which course. */
+export interface WireContext {
+  ids: ScopeIds;
+  byCourse: ReadonlyMap<string, string[]>;
+}
+
+export async function loadWireContext(db: Db, eventId: bigint): Promise<WireContext> {
+  const [ids, byCourse] = await Promise.all([loadScopeIds(db, eventId), classesByCourse(db, eventId)]);
+  return { ids, byCourse };
+}
+
+/** The courses (UUIDs) a scope draws with: the named ones and every course a named class runs. */
+export function scopeCourses(scope: StoredScope, byCourse: ReadonlyMap<string, string[]>): string[] | null {
+  if ("all" in scope) return null;
+  const out = new Set(scope.courses);
+  for (const [courseId, classes] of byCourse) if (classes.some((c) => scope.classes.includes(c))) out.add(courseId);
+  return [...out];
+}
+
+export function toWire(o: StoredCourseObject, w: WireContext): course.CourseObject {
   const { id: _uuid, seq, scope, version, ...body } = o;
-  return { ...body, id: seq, scope: wireScope(scope, ids), version: version.toString() } as course.CourseObject;
+  const courses = scopeCourses(scope, w.byCourse);
+  const inCourses = courses === null ? null : courses.flatMap((id) => (w.ids.courseSeq.has(id) ? [w.ids.courseSeq.get(id)!] : [])).sort((a, b) => a - b);
+  return { ...body, id: seq, scope: wireScope(scope, w.ids), version: version.toString(), inCourses } as course.CourseObject;
 }
 
 /** `inset_frame` is typed for micro insets and refused until they exist (§8.1). */

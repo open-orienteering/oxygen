@@ -728,8 +728,11 @@ course or a course of its forking pool (`classes.course_id`,
 `all`-scoped objects only. Both lists empty is a parked object, drawn
 nowhere. `courseObjectInScope(scope, drawn | null)` is the rule
 (`drawn` = the drawn courses and the classes running them); the API
-resolves classes from the tables (`classesByCourse`), the viewer from
-`class.list`'s `courseNames` (`courseObjectsForView`).
+resolves classes from the tables (`classesByCourse`). The viewer does not
+resolve classes itself (`class.list` names a class's own course, not its
+pool): every wire object carries `inCourses`, the public ids of the
+courses its scope resolves to by the same rule (`null` for `all`), and
+`courseObjectsForView` keeps those with a highlighted course among them.
 
 On the wire the scope names courses and classes by public id (`seq`);
 the row holds UUIDs. A write naming an unknown course or class is
@@ -751,11 +754,12 @@ input, so a stored region acts exactly like D3's (never on the course).
   `SheetInput.course.objects`), and `composePage` hands them to the layer
   with the sheet's objects. Filter regions therefore reach the PDF as
   D3's clip paths by construction (`course-print.md` §5.1).
-- **Viewer.** `MapPanel` fetches `courseObject.list` (kiosk-readable),
+- **Viewer.** `MapPanel` fetches `courseObject.list` (kiosk-readable;
+  cached until reload like `course.list` — a writer, D5, invalidates it),
   keeps the objects in scope of the highlighted courses
-  (`courseObjectsForView`) and hands them to `MapViewer` (`courseObjects`
-  prop), whose request carries them (§5); the worker's layer lifts the
-  regions. The kiosk map is
+  (`courseObjectsForView` over `inCourses`) and hands them to `MapViewer`
+  (`courseObjects` prop), whose request carries them (§5); the worker's
+  layer lifts the regions. The kiosk map is
   `MapPanel` with the runner's course highlighted, so it draws the
   `all`-scoped objects and that course's. A `toner_saver` is not drawn
   on screen (no frame).
@@ -766,13 +770,14 @@ input, so a stored region acts exactly like D3's (never on the course).
 ### 8.4 API and tokens
 
 `courseObject.*` (`packages/api/src/routers/courseObject.ts`), the wire
-type `course.CourseObject = { id: seq, kind, geometry, props, scope, z, version }`:
+type `course.CourseObject = { id: seq, kind, geometry, props, scope, z, version, inCourses }`
+(`inCourses`: §8.2, read-only):
 
 | Procedure | Access | |
 |---|---|---|
 | `list` | `courses.view` or the event's kiosk key | the event's objects ordered `z`, `seq` |
 | `create { kind, geometry, props, scope, z? }` | `courses.edit` | returns the object with its token |
-| `update { id, baseVersion?, geometry?, props?, scope?, z? }` | `courses.edit` | the kind is fixed; the merged body is validated again |
+| `update { id, baseVersion?, geometry?, props?, scope?, z? }` | `courses.edit` | the kind is fixed; an absent field keeps the stored one, a sent one (`null` included) is validated with the rest |
 | `delete { id, baseVersion? }` | `courses.edit` | |
 | `reorder { ids }` | `courses.edit` | `z` = the position in `ids`; takes and advances no token |
 
@@ -822,11 +827,11 @@ venue's kiosk map draws them (08 §4.8; 07 §9.2).
 | E2E | `e2e/courses.spec.ts` "an edit from a stale copy…" | §7 over HTTP: another client renames the course while this page's poll is held; this page's edit is refused, the notice shows, the page reloads the other write |
 | unit | `packages/api/src/__tests__/courseGeometryStale.test.ts` | unchanged and green: OCD-vs-XML staleness of imported geometry |
 | golden | `e2e/__golden__/map-gl/course-*.png`, `packages/api/src/render/__tests__/golden-files.test.ts`, `e2e/map-gl-golden.spec.ts` | reference raster = committed golden; WebGL2 ≤ 0.5 % (`map-rendering.md` §6.2). The PDF tier joins in C3 |
-| unit (web) | `packages/web/src/lib/__tests__/course-layer-request.test.ts` | the §5 request rules (offsets only with the sheet or the editor); §8.2 scope by highlighted course and class, all-controls = `all` only; objects without scope / `z` / token |
+| unit (web) | `packages/web/src/lib/__tests__/course-layer-request.test.ts` | the §5 request rules (offsets only with the sheet or the editor); §8.2 scope by highlighted course over `inCourses`, all-controls = `all` only, parked nowhere; objects without scope / `z` / token / `inCourses` |
 | unit | `packages/shared/src/course/__tests__/objects.test.ts` | §8.1 each kind accepted, short geometry / unknown props / bad filter props / Bézier region refused; §8.2 the scope truth table; §8.3 each kind onto its symbol (709 / 709.b / 709.c, 708 / 711, 707, white-out), Bézier handles kept, text upper purple or own row and not divided by the enlargement, image corners, toner saver with and without a window, `inset_frame` and `filter_region` draw nothing |
 | unit | `layer.test.ts` "a stored filter_region course object" | §8.3: the same region as the explicit one, after it; hides the document's 516 |
 | unit | `packages/api/src/__tests__/version-conflict.test.ts` | §8.4: the object `CONFLICT` payload |
-| integration | `packages/api/src/__tests__/integration/course-objects.test.ts` | §8.4: every kind created and listed in draw order with public ids; `inset_frame`, unknown course / class, bad body refused; update advances the token; stale token → `CONFLICT` with the object now and nothing written, none = LWW, stale delete; reorder keeps tokens; kiosk-key read, viewer cannot write; §8.2 class scope through `course_id` and the pool; §8.5 snapshot round trip verbatim |
+| integration | `packages/api/src/__tests__/integration/course-objects.test.ts` | §8.4: every kind created and listed in draw order with public ids; `inset_frame`, unknown course / class, bad body refused; update advances the token; stale token → `CONFLICT` with the object now and nothing written, none = LWW, stale delete; reorder keeps tokens; kiosk-key read, viewer cannot write; §8.2 class scope through `course_id` and the pool, the same resolution on the wire (`inCourses`); §8.5 snapshot round trip verbatim |
 | integration | `course-print.test.ts` "course objects on the page" | §8.3 print: a sheet takes the objects in scope (all-controls: `all` only), they add passes over the map, a stored filter region hides map objects |
 | integration | `backup.test.ts` | §8.5: the dump's `course_objects` section |
 | E2E | `e2e/map-vector-layer.spec.ts` "a stored white-out course object paints the map white" | §8.3 viewer: an `all`-scoped white-out created through the API turns open yellow ground white on the GL canvas, yellow beside it unchanged |

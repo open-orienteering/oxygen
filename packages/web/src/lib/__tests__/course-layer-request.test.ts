@@ -114,22 +114,23 @@ describe("courseLayerRequest (docs/course-layer.md §5)", () => {
 
 describe("course objects (docs/course-layer.md §8.2, §8.3)", () => {
   const SQUARE = [{ x: 0, y: 0 }, { x: 5, y: 0 }, { x: 5, y: 5 }];
-  const obj = (id: number, scope: course.CourseObject["scope"]): course.CourseObject =>
-    ({ id, kind: "oob_area", geometry: SQUARE, props: {}, scope, z: 0, version: "1" }) as course.CourseObject;
-  const OBJECTS = [obj(1, { all: true }), obj(2, { courses: [10], classes: [] }), obj(3, { courses: [], classes: [7] }), obj(4, { courses: [11], classes: [] })];
-  const INDEX = { courses: [{ id: 10, name: "A" }, { id: 11, name: "B" }], classes: [{ id: 7, courseNames: ["A", "B"] }, { id: 8, courseNames: ["B"] }] };
+  const obj = (id: number, inCourses: number[] | null): course.CourseObject =>
+    ({ id, kind: "oob_area", geometry: SQUARE, props: {}, scope: inCourses === null ? { all: true } : { courses: inCourses, classes: [] }, z: 0, version: "1", inCourses }) as course.CourseObject;
+  // 3: scoped to a class running A and B through its pool (resolved by the server).
+  const OBJECTS = [obj(1, null), obj(2, [10]), obj(3, [10, 11]), obj(4, [11]), obj(6, [])];
+  const COURSES = [{ id: 10, name: "A" }, { id: 11, name: "B" }];
   const ids = (list: course.CourseObject[]) => list.map((o) => o.id);
 
-  it("scope by the highlighted course and the classes running it; nothing highlighted = all only", () => {
-    expect(ids(courseObjectsForView(OBJECTS, new Set(["A"]), INDEX))).toEqual([1, 2, 3]);
-    expect(ids(courseObjectsForView(OBJECTS, new Set(["B"]), INDEX))).toEqual([1, 3, 4]);
-    expect(ids(courseObjectsForView(OBJECTS, new Set(), INDEX))).toEqual([1]);
-    expect(ids(courseObjectsForView(OBJECTS, new Set(["A", "B"]), INDEX))).toEqual([1, 2, 3, 4]);
+  it("drawn with a highlighted course among the resolved ones; nothing highlighted = all only; parked = nowhere", () => {
+    expect(ids(courseObjectsForView(OBJECTS, new Set(["A"]), COURSES))).toEqual([1, 2, 3]);
+    expect(ids(courseObjectsForView(OBJECTS, new Set(["B"]), COURSES))).toEqual([1, 3, 4]);
+    expect(ids(courseObjectsForView(OBJECTS, new Set(), COURSES))).toEqual([1]);
+    expect(ids(courseObjectsForView(OBJECTS, new Set(["A", "B"]), COURSES))).toEqual([1, 2, 3, 4]);
   });
 
-  it("the request carries the objects' bodies and ids, without scope, z or token", () => {
+  it("the request carries the objects' bodies and ids, without scope, z, token or resolved courses", () => {
     expect(courseLayerRequest(base()).objects).toEqual([]);
-    const r = courseLayerRequest(base({ courseObjects: [OBJECTS[0], { ...obj(5, { all: true }), kind: "filter_region", props: { mode: "hide", symbols: "all" } } as course.CourseObject] }));
+    const r = courseLayerRequest(base({ courseObjects: [OBJECTS[0], { ...obj(5, null), kind: "filter_region", props: { mode: "hide", symbols: "all" } } as course.CourseObject] }));
     expect(r.objects).toEqual([
       { id: 1, kind: "oob_area", geometry: SQUARE, props: {} },
       { id: 5, kind: "filter_region", geometry: SQUARE, props: { mode: "hide", symbols: "all" } },

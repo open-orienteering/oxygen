@@ -55,28 +55,20 @@ export interface CourseRequestInput {
   courseObjects?: readonly course.CourseObject[];
 }
 
-/** What the view needs to resolve a course object's scope: the event's courses and classes by public id. */
-export interface ScopeIndex {
-  courses: readonly { id: number; name: string }[];
-  /** Every class with the names of the courses it runs (`class.list` `courseNames`, pools included). */
-  classes: readonly { id: number; courseNames: readonly string[] }[];
-}
-
 /**
  * The course objects drawn with the highlighted courses (course-layer.md
- * §8.2): `all`-scoped ones always, others when one of the drawn courses —
- * or a class running one — is in their scope. No highlighted course (all
- * controls): `all` only.
+ * §8.2): `all`-scoped ones always, others when a drawn course is among the
+ * courses the server resolved their scope to (`inCourses`: named courses
+ * and the courses of named classes, forking pools included — print's
+ * rule). No highlighted course (all controls): `all` only.
  */
 export function courseObjectsForView(
   objects: readonly course.CourseObject[],
   highlighted: ReadonlySet<string>,
-  index: ScopeIndex,
+  courses: readonly { id: number; name: string }[],
 ): course.CourseObject[] {
-  const courses = index.courses.filter((c) => highlighted.has(c.name)).map((c) => c.id);
-  const classes = index.classes.filter((k) => k.courseNames.some((n) => highlighted.has(n))).map((k) => k.id);
-  const drawn = highlighted.size > 0 ? { courses, classes } : null;
-  return objects.filter((o) => course.courseObjectInScope(o.scope, drawn));
+  const drawn = new Set(courses.filter((c) => highlighted.has(c.name)).map((c) => c.id));
+  return objects.filter((o) => o.inCourses === null || o.inCourses.some((id) => drawn.has(id)));
 }
 
 const KIND: Record<RequestControl["type"], course.CourseSite["kind"]> = { Start: "start", Control: "control", Finish: "finish" };
@@ -177,8 +169,8 @@ export function courseLayerRequest(input: CourseRequestInput): CourseLayerReques
   return {
     structure: structures.length === 0 ? null : structures,
     sites,
-    // The layer reads the body and the id; scope, z and token stay with the list.
-    objects: (input.courseObjects ?? []).map(({ scope: _s, z: _z, version: _v, ...o }) => o as course.CourseLayerObject),
+    // The layer reads the body and the id; scope, z, token and resolved courses stay with the list.
+    objects: (input.courseObjects ?? []).map(({ scope: _s, z: _z, version: _v, inCourses: _c, ...o }) => o as course.CourseLayerObject),
     appearance: {},
     viewOptions: { labelMode: sequence ? "sequence" : "code", ...(allControls ? { allControls: true } : {}) },
   };

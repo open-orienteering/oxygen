@@ -118,6 +118,12 @@ export type CourseObject = CourseObjectBody & {
   z: number;
   /** Concurrency token (decimal HLC), sent back as `baseVersion` (§7). */
   version: string;
+  /**
+   * The courses (public ids) the scope resolves to — named courses plus the
+   * courses of named classes, forking pools included — resolved by the
+   * server with print's rule; `null` for `{ all: true }`.
+   */
+  inCourses: number[] | null;
 };
 
 /** A course object, as opposed to a sheet's layout object (`CourseMapObject` has no `geometry`). */

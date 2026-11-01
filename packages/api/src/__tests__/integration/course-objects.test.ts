@@ -112,6 +112,7 @@ describe("courseObject CRUD", () => {
     expect(BigInt(moved.version)).toBeGreaterThan(BigInt(o.version));
     await expect(caller.courseObject.update({ id: o.id, props: { symbol: "711" } })).rejects.toMatchObject({ code: "BAD_REQUEST" });
     await expect(caller.courseObject.update({ id: 99999, props: {} })).rejects.toMatchObject({ code: "NOT_FOUND" });
+    await expect(caller.courseObject.update({ id: o.id, geometry: null })).rejects.toMatchObject({ code: "BAD_REQUEST" });
   });
 
   it("a stale token is a CONFLICT with the object now and nothing written; no token is last-write-wins", async () => {
@@ -178,6 +179,12 @@ describe("scope over the event's classes (§8.2)", () => {
     expect(inB).not.toContain(byClassA.id);
     expect(none.every((o) => "all" in o.scope)).toBe(true);
     expect(none.length).toBeGreaterThan(0);
+    // The wire carries the same resolution for the viewer (class.list knows no pools).
+    expect(byClassA.inCourses).toEqual([courseA]);
+    expect(byPool.inCourses).toEqual([courseA, courseB].sort((a, b) => a - b));
+    const listed = await caller.courseObject.list();
+    expect(listed.find((o) => o.id === byPool.id)?.inCourses).toEqual(byPool.inCourses);
+    expect(listed.filter((o) => "all" in o.scope).every((o) => o.inCourses === null)).toBe(true);
   });
 });
 
