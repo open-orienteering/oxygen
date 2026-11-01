@@ -262,6 +262,12 @@ export interface MapViewerEditorProps {
    * sets it; the legacy page keeps its SVG targets.
    */
   sharedHitTest?: boolean;
+  /**
+   * `bar`: the contextual actions as a horizontal action bar centred under
+   * the selection (`editor-action-bar`, docs/course-editor.md §2) instead
+   * of the popover menu beside it; same entries and `editor-action-<id>`s.
+   */
+  actionLayout?: "menu" | "bar";
 }
 
 interface Props {
@@ -2875,12 +2881,20 @@ export function MapViewer({
     }
     if (inner) {
       const pos = innerToContainer(inner.x, inner.y);
+      const bar = editor.actionLayout === "bar";
       if (pos.x > -40 && pos.x < containerSize.w + 40 && pos.y > -20 && pos.y < containerSize.h + 20) {
         editorMenu = (
           <div
-            data-testid="editor-context-menu"
+            data-testid={bar ? "editor-action-bar" : "editor-context-menu"}
             className="relative flex flex-col gap-0.5 bg-white/95 backdrop-blur-sm rounded-lg border border-slate-200 shadow-lg p-1"
-            style={{
+            style={bar ? {
+              position: "absolute",
+              left: Math.max(8, Math.min(containerSize.w - 8, pos.x)),
+              top: pos.y + anchorR + 10,
+              transform: "translateX(-50%)",
+              maxWidth: Math.max(160, containerSize.w - 16),
+              zIndex: 9,
+            } : {
               position: "absolute",
               left: pos.x + anchorR + 10,
               top: pos.y,
@@ -2974,21 +2988,23 @@ export function MapViewer({
                 ))}
               </div>
             )}
-            {editor.contextActions?.map((a) => (
-              <button
-                key={a.id}
-                data-testid={`editor-action-${a.id}`}
-                onClick={a.onClick}
-                disabled={a.disabled}
-                className={`text-xs text-left pl-2.5 pr-8 py-1.5 rounded-md whitespace-nowrap transition-colors cursor-pointer disabled:opacity-40 disabled:cursor-default ${
-                  a.variant === "danger"
-                    ? "text-red-600 hover:bg-red-50 disabled:hover:bg-transparent"
-                    : "text-slate-700 hover:bg-slate-100 disabled:hover:bg-transparent"
-                }`}
-              >
-                {a.label}
-              </button>
-            ))}
+            <div className={bar ? "flex flex-row flex-wrap gap-0.5 pr-7" : "contents"}>
+              {editor.contextActions?.map((a) => (
+                <button
+                  key={a.id}
+                  data-testid={`editor-action-${a.id}`}
+                  onClick={a.onClick}
+                  disabled={a.disabled}
+                  className={`text-xs text-left ${bar ? "px-2.5" : "pl-2.5 pr-8"} py-1.5 rounded-md whitespace-nowrap transition-colors cursor-pointer disabled:opacity-40 disabled:cursor-default ${
+                    a.variant === "danger"
+                      ? "text-red-600 hover:bg-red-50 disabled:hover:bg-transparent"
+                      : "text-slate-700 hover:bg-slate-100 disabled:hover:bg-transparent"
+                  }`}
+                >
+                  {a.label}
+                </button>
+              ))}
+            </div>
           </div>
         );
       }
