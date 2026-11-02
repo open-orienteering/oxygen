@@ -1,13 +1,14 @@
 /**
  * The inspector (docs/course-editor.md §2; 08 §5.2): collapsible sections
  * — the mode's own (Course mode: course and sequence, selection), the club
- * inventory and the Checks placeholder (D6). It floats in `MapPanel`'s
+ * inventory and the Checks (§8). It floats in `MapPanel`'s
  * in-map strip so it stays visible in fullscreen.
  */
 
 import { useState, type ReactNode } from "react";
 import { useTranslation } from "react-i18next";
 import type { buildInventoryView } from "../../lib/course-editor";
+import type { EditorCheck } from "../../lib/editor/checks";
 
 export function InspectorSection({ title, testId, defaultOpen = true, children, aside }: {
   title: string; testId: string; defaultOpen?: boolean; children: ReactNode; aside?: ReactNode;
@@ -80,11 +81,32 @@ export function InventorySection({ inventory, activeSeriesId, onSeries }: {
   );
 }
 
-export function ChecksSection() {
+/**
+ * The advisory checks (docs/course-editor.md §8): one row per finding; a
+ * click locates it (selects its first site, centres the view). Opens by
+ * itself when the first finding appears.
+ */
+export function ChecksSection({ checks, onLocate }: { checks: readonly EditorCheck[]; onLocate: (c: EditorCheck) => void }) {
   const { t } = useTranslation("editor");
+  const some = checks.length > 0;
   return (
-    <InspectorSection title={t("checks")} testId="editor-checks" defaultOpen={false}>
-      <p className="px-2.5 pb-2 text-slate-400">{t("checksLater")}</p>
+    <InspectorSection key={some ? "some" : "none"} title={t("checks")} testId="editor-checks" defaultOpen={some}
+      aside={some ? <span data-testid="editor-checks-count" className="text-amber-700 font-medium">{checks.length}</span> : undefined}>
+      {some ? (
+        <ul className="max-h-56 overflow-y-auto px-1.5 pb-1.5">
+          {checks.map((c, i) => (
+            <li key={`${c.code}-${c.siteIds.join("-")}-${c.leg?.index ?? ""}-${i}`}>
+              <button type="button" data-testid="editor-check-row" data-code={c.code} data-sites={c.siteIds.join(",")} onClick={() => onLocate(c)}
+                className="w-full flex items-start gap-1.5 text-left px-1 py-1 rounded hover:bg-amber-50 cursor-pointer text-slate-700">
+                <span className="text-amber-600 shrink-0">⚠</span>
+                <span>{t(`check_${c.code}`, (c.params ?? {}) as Record<string, string | number>)}</span>
+              </button>
+            </li>
+          ))}
+        </ul>
+      ) : (
+        <p data-testid="editor-checks-none" className="px-2.5 pb-2 text-slate-400">{t("checksNone")}</p>
+      )}
     </InspectorSection>
   );
 }

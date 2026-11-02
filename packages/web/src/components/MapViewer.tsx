@@ -294,6 +294,8 @@ export interface MapViewerEditorProps {
   onCourseInfo?: ((info: Pick<CourseInfo, "derivation" | "metrics"> | null) => void) | null;
   /** A view request: fit these controls, or centre on a point (paper mm); acted on when `key` changes. */
   viewRequest?: { key: number; fit?: readonly string[]; centre?: { x: number; y: number } } | null;
+  /** Check markers (docs/course-editor.md §8): UI-layer shapes, never hit targets. */
+  markers?: readonly ToolShape[];
 }
 
 /** What a tool gets for a pointer event. */
@@ -3436,6 +3438,11 @@ export function MapViewer({
                 strokeDasharray={`${Math.max(2, overlayContent.strokePx * 2)} ${Math.max(2, overlayContent.strokePx * 2)}`}
                 opacity={0.9} style={{ pointerEvents: "none" }}
                 data-testid="editor-phantom" />
+            )}
+            {editor?.markers && editor.markers.length > 0 && viewport && (
+              <g data-testid="editor-check-layer" className="pointer-events-none">
+                {editor.markers.map((sh, i) => toolShapeNode(sh, i, mapMmToScreen, symbolScale))}
+              </g>
             )}
             {editor?.tool?.shapes && viewport && (
               <g data-testid="editor-tool-layer" className="pointer-events-none">
