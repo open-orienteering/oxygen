@@ -659,7 +659,7 @@ test.describe("Course editor (new, GL canvas)", () => {
       const updated = waitForTrpc(page, "courseObject.update");
       await page.getByTestId("editor-prop-border").selectOption("dashed");
       await updated;
-      await expect(row).toHaveAttribute("data-props", '{"hatch":"710","border":"dashed"}', { timeout: 15000 });
+      await expect.poll(async () => JSON.parse((await row.getAttribute("data-props")) ?? "{}"), { timeout: 15000 }).toEqual({ hatch: "710", border: "dashed" });
       await page.getByTestId("editor-object-delete").click();
       await expect(page.locator(`[data-testid="editor-object-row"][data-object-id="${id}"]`)).toHaveCount(0, { timeout: 15000 });
       await page.keyboard.press("Control+z");
