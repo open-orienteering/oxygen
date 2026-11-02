@@ -483,7 +483,10 @@ test.describe("Course editor (new, GL canvas)", () => {
         await page.mouse.click(p.x, p.y);
         await saved;
       }
+      // Escape drops the tool, a second one the placed control's selection (its action bar may cover the leg).
       await page.keyboard.press("Escape");
+      await page.keyboard.press("Escape");
+      await expect(page.getByTestId("editor-action-bar")).toHaveCount(0);
       const name = (await page.getByTestId("editor-course-picker").locator("option:checked").textContent()) ?? "";
       const A = (await site(page, a)).mm, B = (await site(page, b)).mm;
 
@@ -579,7 +582,9 @@ test.describe("Course editor (new, GL canvas)", () => {
       await openEditor(page);
       await page.getByTestId("editor-tool-A").click();
       await page.getByTestId("editor-area-oob_area").click();
-      const a = await emptyPoint(page, 40);
+      // The triangle's inside (where it is clicked again later) is the clear point, not its first corner.
+      const clear = await emptyPoint(page, 40);
+      const a = { x: clear.x - 30, y: clear.y - 15 };
       const corners = [a, { x: a.x + 60, y: a.y }, { x: a.x + 60, y: a.y + 40 }];
       // A patch inside the triangle (page px → paper mm), probed for purple before and after.
       const [p0, p1] = await Promise.all([toPaper(page, { x: a.x + 35, y: a.y + 3 }), toPaper(page, { x: a.x + 55, y: a.y + 15 })]);
