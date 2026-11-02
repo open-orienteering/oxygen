@@ -10,6 +10,7 @@ import type { course } from "@oxygen/shared";
 import type { EditorToolBinding, ToolPointer, ToolShape } from "../../../components/MapViewer";
 import type { EditorTarget } from "../../../lib/editor/hit";
 import { circleGapAt, circleGapFromDrag, compassDeg, legFraction, legGapAt, legGapFromDrag, type AngularGap, type FractionGap } from "./gaps";
+import { legLengthShape } from "../../../lib/editor/leg-length";
 import { isClosedKind, pointInPolygon, step, type PolygonState } from "./polygon";
 
 type Pt = { x: number; y: number };
@@ -175,7 +176,10 @@ export interface PlaceOptions {
     /** "3 · 47" (number · code), "Add 47" over an existing control, or the code. */
     label: string;
     description: string | null;
+    /** The pending legs (the layer draws them from the provisional visit); the first one is labelled. */
     legs: [Pt, Pt][];
+    /** The first leg's length, "123 m"; null without a map scale. */
+    legLabel: string | null;
   } | null;
   onHover: (p: ToolPointer | null) => void;
   onPlace: (p: ToolPointer) => void;
@@ -187,7 +191,8 @@ export function placeBinding(o: PlaceOptions): EditorToolBinding {
   const shapes: ToolShape[] = [];
   const gh = o.ghost;
   if (gh) {
-    for (const [a, b] of gh.legs) shapes.push({ kind: "line", points: [a, b], dashed: true, color: PURPLE, widthPx: 1.5, testId: "editor-pending-leg" });
+    const leg = gh.legs[0];
+    if (leg && gh.legLabel) shapes.push(legLengthShape(leg[0], leg[1], gh.legLabel));
     shapes.push({ kind: "circle", x: gh.at.x, y: gh.at.y, rMm: gh.radiusMm, color: PURPLE, testId: "editor-ghost", data: { role: gh.role } });
     if (gh.role === "finish") shapes.push({ kind: "circle", x: gh.at.x, y: gh.at.y, rMm: gh.radiusMm * 0.7, color: PURPLE });
     shapes.push({ kind: "text", x: gh.at.x, y: gh.at.y, text: gh.label, dxPx: 14, dyPx: -10, color: PURPLE, testId: "editor-ghost-label" });

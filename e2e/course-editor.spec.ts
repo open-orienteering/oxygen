@@ -318,8 +318,11 @@ test.describe("Course editor (new, GL canvas)", () => {
       await page.mouse.move(first.x, first.y);
       await expect(page.getByTestId("editor-ghost")).toBeAttached({ timeout: 10000 });
       await expect(page.getByTestId("editor-ghost-label")).toHaveText(/^1 · \d+$/);
-      await expect(page.getByTestId("editor-pending-leg").first()).toBeAttached();
+      // The layer draws the pending leg (§6.1); the UI layer only labels it, with the status bar's metres.
+      await expect(page.getByTestId("editor-pending-leg")).toHaveCount(0);
       await expect(page.getByTestId("editor-pending-leg-length")).toHaveText(/\d+ m/);
+      const metres = (await page.getByTestId("editor-pending-leg-length").textContent())!.match(/(\d+) m/)![1];
+      await expect(page.getByTestId("editor-leg-length")).toHaveText(`${metres} m`);
 
       const spots = [first];
       for (let i = 1; i < 10; i++) spots.push(await emptyPoint(page, 30, spots));
@@ -345,6 +348,53 @@ test.describe("Course editor (new, GL canvas)", () => {
       await page.keyboard.press("Escape");
       await expect(page.getByTestId("editor-tool-V")).toHaveAttribute("aria-pressed", "true");
       await expect(page.getByTestId("editor-ghost")).toHaveCount(0);
+    });
+
+    test("the armed tool's pending legs are drawn by the layer to the cursor; a drag labels both legs", async ({ page }) => {
+      await openEditor(page);
+      const name = await newCourse(page, "D5a pending");
+      await page.keyboard.press("k");
+      const spots: { x: number; y: number }[] = [];
+      for (let i = 0; i < 3; i++) {
+        const p = await emptyPoint(page, 60, spots);
+        spots.push(p);
+        await page.mouse.move(p.x, p.y);
+        const saved = waitForTrpc(page, "course.setStructure");
+        await page.mouse.click(p.x, p.y);
+        await saved;
+      }
+      await expect(controlRows(page)).toHaveCount(3, { timeout: 15000 });
+
+      /** A drawn leg piece of the course ending within a circle's reach of the paper point. */
+      const legEndsNear = async (mm: { x: number; y: number }) => (await legPieces(page, name)).some((l) =>
+        [l.points[0], l.points.at(-1)!].some((q) => Math.hypot(q.x - mm.x, q.y - mm.y) < 4));
+      for (const pass of [0, 1]) {
+        const p = await emptyPoint(page, 60, spots);
+        spots.push(p);
+        await page.mouse.move(p.x, p.y);
+        await expect(page.getByTestId("editor-ghost")).toBeAttached({ timeout: 10000 });
+        const [ghost] = await toolShapes(page, "editor-ghost");
+        // The leg into the cursor is a `course-leg` piece of the course: the layer's, with its slits (one round trip per hover).
+        await expect.poll(() => legEndsNear(ghost), { timeout: 15000, message: `pass ${pass}` }).toBe(true);
+        await expect(page.getByTestId("editor-pending-leg")).toHaveCount(0);
+        const metres = (await page.getByTestId("editor-pending-leg-length").textContent())!.match(/(\d+) m/)![1];
+        await expect(page.getByTestId("editor-leg-length")).toHaveText(`${metres} m`);
+      }
+
+      // Back to V: no provisional visit, no label; a drag of the middle control labels its two legs.
+      await page.keyboard.press("Escape");
+      await expect(page.getByTestId("editor-ghost")).toHaveCount(0);
+      await expect(page.getByTestId("editor-leg-length")).toHaveCount(0);
+      const middle = (await controlRows(page).nth(1).getAttribute("data-control-id"))!;
+      const from = await toPage(page, (await sites(page)).find((x) => x.id === middle)!.mm);
+      const to = await emptyPoint(page, 60, spots);
+      await page.mouse.move(from.x, from.y);
+      await page.mouse.down();
+      await page.mouse.move(to.x, to.y, { steps: 8 });
+      await expect(page.getByTestId("editor-leg-length")).toHaveCount(2);
+      await expect(page.getByTestId("editor-leg-length").first()).toHaveText(/^\d+ m$/);
+      await page.mouse.up();
+      await expect(page.getByTestId("editor-leg-length")).toHaveCount(0);
     });
 
     test("an armed click on an existing control reuses the site", async ({ page }) => {

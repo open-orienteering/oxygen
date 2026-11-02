@@ -83,7 +83,8 @@ import {
   pillHalfWidth,
 } from "../lib/course-leg-labels";
 import { useMediaQuery } from "../hooks/useMediaQuery";
-import { courseLayerRequest } from "../lib/course-layer-request";
+import { courseLayerRequest, PROVISIONAL_SITE_ID, type ProvisionalVisit } from "../lib/course-layer-request";
+import { dragLegShapes } from "../lib/editor/leg-length";
 import type { CourseInfo } from "../map-gl/engine";
 import { editorHitAt, HIT_TOLERANCE_PX, type EditorTarget } from "../lib/editor/hit";
 
@@ -292,6 +293,12 @@ export interface MapViewerEditorProps {
   draftFast?: boolean;
   /** The layer's derivation and course symbol sizes, on every course reply: the ghost's true size, the gap tool's effective gaps. */
   onCourseInfo?: ((info: Pick<CourseInfo, "derivation" | "metrics"> | null) => void) | null;
+  /**
+   * The armed placement tool's visit (§6.1): spliced into the highlighted
+   * course's request so the layer draws the pending legs; the hit-test then
+   * reports only real sites.
+   */
+  provisional?: ProvisionalVisit | null;
   /** A view request: fit these controls, or centre on a point (paper mm); acted on when `key` changes. */
   viewRequest?: { key: number; fit?: readonly string[]; centre?: { x: number; y: number } } | null;
 }
@@ -872,6 +879,7 @@ export function MapViewer({
   const editorFade = editor?.fadeNonCourse ?? false;
   const editorCourseIds = editor?.courseControlIds;
   const editorDraftFast = editor?.draftFast ?? false;
+  const editorProvisional = editor?.provisional ?? null;
   const courseRequest = useMemo(() => {
     if (!glCourse) return null;
     const positions = new Map<string, Pt>();
@@ -902,10 +910,20 @@ export function MapViewer({
       exclude: editorFade
         ? new Set(controls.filter((c) => c.type === "Control" && !editorCourseIds?.has(c.id)).map((c) => c.id))
         : undefined,
+      provisional: editorProvisional,
     });
     return editorDraftFast ? { ...request, fastFilter: true } : request;
-  }, [glCourse, controls, controlMm, editorOn, editorFade, editorCourseIds, editorDraftFast, pendingMoves, editorDragPos, showDescriptions,
+  }, [glCourse, controls, controlMm, editorOn, editorFade, editorCourseIds, editorDraftFast, editorProvisional, pendingMoves, editorDragPos, showDescriptions,
       courses, highlightCourseName, drawnObjects, editorLabelDragPos, pendingLabelMoves]);
+  /** A dragged control's leg lengths (§6.1), from the positions the request draws. */
+  const dragLegLabels = useMemo(() => {
+    const st = courseRequest?.structure;
+    type Structure = import("@oxygen/shared").course.CourseStructure;
+    const structures: readonly Structure[] = !st ? [] : Array.isArray(st) ? st : [st as Structure];
+    if (!editorOn || !editorDragPos || !courseRequest || structures.length !== 1) return [];
+    const pos = new Map(courseRequest.sites.map((x) => [x.id, { x: x.x, y: x.y }] as const));
+    return dragLegShapes(structures[0].items.map((i) => i.siteId), pos, editorDragPos.id, mapScale);
+  }, [editorOn, editorDragPos, courseRequest, mapScale]);
 
   // ─── Editor hit-test on the shared stage (docs/course-editor.md §5) ──
   const sharedHit = !!editor?.sharedHitTest && glCourse;
@@ -932,7 +950,9 @@ export function MapViewer({
       ...(courseInfo?.derivation?.sites ?? []).filter((d) => d.role === "control" && d.cuts.length > 0)
         .map((d) => ({ id: d.id, x: d.x, y: d.y, radiusMm })),
     ];
-    return editorHitAt(courseInfo?.hit ?? null, pt, tol, uiSites, uiAreas);
+    // An armed placement draws its own visit: only real sites are targets (a reuse), never the cursor's circle or legs.
+    const accept = editor.provisional ? (t: EditorTarget) => t.kind === "site" && t.id !== PROVISIONAL_SITE_ID : undefined;
+    return editorHitAt(courseInfo?.hit ?? null, pt, tol, uiSites, uiAreas, accept);
   };
   const resolveEditorTargetRef = useRef(resolveEditorTarget);
   resolveEditorTargetRef.current = resolveEditorTarget;
@@ -3441,6 +3461,9 @@ export function MapViewer({
               <g data-testid="editor-tool-layer" className="pointer-events-none">
                 {editor.tool.shapes.map((sh, i) => toolShapeNode(sh, i, mapMmToScreen, symbolScale))}
               </g>
+            )}
+            {dragLegLabels.length > 0 && viewport && (
+              <g className="pointer-events-none">{dragLegLabels.map((sh, i) => toolShapeNode(sh, i, mapMmToScreen, symbolScale))}</g>
             )}
           </g>
         </svg>

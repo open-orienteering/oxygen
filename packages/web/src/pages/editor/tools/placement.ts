@@ -103,15 +103,22 @@ export function afterUndo(s: PlacementState): PlacementState {
 export interface GhostInfo {
   /** The sequence number the next control gets (1-based); null without a course or for start / finish. */
   number: number | null;
-  /** Lines of the pending leg, paper mm: anchor → cursor, and cursor → the next row when inserting. */
+  /**
+   * Lines of the pending leg, paper mm: anchor → cursor, and cursor → the next row when inserting; for a
+   * start, cursor → the item it leads into (it replaces the course's start).
+   */
   legs: [Pt, Pt][];
-  /** The pending leg's length (anchor → cursor), paper mm; null without an anchor. */
+  /** The first leg's length, paper mm; null without one. */
   legMm: number | null;
 }
 
 /** The ghost at `cursor`: its number and the pending leg (08 §5.3). */
 export function ghostInfo(s: PlacementState, rows: readonly DisplayRow[], cursor: Pt, ptOf: (id: number) => Pt | null): GhostInfo {
   if (s.insertAt === null) return { number: null, legs: [], legMm: null };
+  if (s.tool === "start") {
+    const next = rowAfter(rows, 0)?.pt;
+    return { number: null, legs: next ? [[cursor, next]] : [], legMm: next ? Math.hypot(next.x - cursor.x, next.y - cursor.y) : null };
+  }
   const anchor = s.anchorId !== null ? ptOf(s.anchorId) : null;
   const legs: [Pt, Pt][] = [];
   if (anchor) legs.push([anchor, cursor]);

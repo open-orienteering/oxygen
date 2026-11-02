@@ -61,6 +61,15 @@ describe("editorHitAt (docs/course-editor.md §5)", () => {
     expect(editorHitAt(null, { x: 80, y: 80 }, 0.5, [{ id: "77", x: 80, y: 81, radiusMm: 3 }])).toEqual({ kind: "site", id: "77" });
   });
 
+  it("`accept` passes over other targets: an armed placement sees only sites (§6.1)", () => {
+    const sitesOnly = (t: { kind: string }) => t.kind === "site";
+    expect(editorHitAt(index, { x: 50, y: 25 }, 0.5, [], [], sitesOnly)).toBeNull();
+    expect(editorHitAt(index, { x: 40, y: 10 }, 0.5, [], [], sitesOnly)).toEqual({ kind: "site", id: "31" });
+    // A rejected site lets the one below it through (the provisional circle over a reused control).
+    const not31 = (t: { kind: string; id?: unknown }) => t.kind === "site" && t.id !== "31";
+    expect(editorHitAt(index, { x: 40, y: 10 }, 0.5, [{ id: "77", x: 40, y: 10, radiusMm: 3 }], [], not31)).toEqual({ kind: "site", id: "77" });
+  });
+
   it("a course object selects the object by its public id (§7)", () => {
     const withObjects = hitIndex({
       objects: [

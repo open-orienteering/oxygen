@@ -106,14 +106,19 @@ describe("armed and area bindings", () => {
     expect(b.touch?.placeLabel).toBe("Place");
   });
 
-  it("the ghost draws a true-size circle, its label and the pending legs", () => {
+  it("the ghost draws a true-size circle, its label and the pending leg's length; the layer draws the legs", () => {
     const b = placeBinding({
-      ghost: { at: { x: 1, y: 1 }, radiusMm: 2.5, role: "control", label: "3 · 47", description: "boulder", legs: [[{ x: 0, y: 0 }, { x: 1, y: 1 }]] },
+      ghost: { at: { x: 4, y: 2 }, radiusMm: 2.5, role: "control", label: "3 · 47", description: "boulder", legs: [[{ x: 0, y: 0 }, { x: 4, y: 2 }], [{ x: 4, y: 2 }, { x: 8, y: 0 }]], legLabel: "120 m" },
       onHover: vi.fn(), onPlace: vi.fn(), onExit: vi.fn(), touch: null,
     });
     const ids = b.shapes!.map((s) => s.testId);
-    expect(ids).toEqual(expect.arrayContaining(["editor-ghost", "editor-ghost-label", "editor-ghost-description", "editor-pending-leg"]));
+    expect(ids).toEqual(expect.arrayContaining(["editor-ghost", "editor-ghost-label", "editor-ghost-description", "editor-leg-length"]));
+    expect(ids).not.toContain("editor-pending-leg");
+    expect(b.shapes!.filter((s) => s.kind === "line")).toEqual([]);
     expect(b.shapes!.find((s) => s.testId === "editor-ghost")).toMatchObject({ kind: "circle", rMm: 2.5 });
+    expect(b.shapes!.filter((s) => s.testId === "editor-leg-length")).toEqual([expect.objectContaining({ kind: "text", x: 2, y: 1, text: "120 m" })]);
+    const noScale = placeBinding({ ghost: { at: { x: 4, y: 2 }, radiusMm: 2.5, role: "control", label: "1", description: null, legs: [[{ x: 0, y: 0 }, { x: 4, y: 2 }]], legLabel: null }, onHover: vi.fn(), onPlace: vi.fn(), onExit: vi.fn(), touch: null });
+    expect(noScale.shapes!.map((s) => s.testId)).not.toContain("editor-leg-length");
   });
 
   it("the area flow: clicks add vertices, the first vertex closes, a vertex is dragged before closing", () => {

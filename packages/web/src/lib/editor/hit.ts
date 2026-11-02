@@ -70,15 +70,21 @@ function targetOf(ref: { kind: string; id: string }): EditorTarget | null {
 /**
  * The target at `pt` (paper mm), within `toleranceMm`: the nearest shape,
  * the topmost of equally near ones (a point inside a circle is distance 0).
+ * `accept` narrows the targets: the others are passed over, not reported
+ * (an armed placement sees through its own provisional visit, §6.1).
  */
 export function editorHitAt(
   index: CourseHitIndex | null, pt: Pt, toleranceMm: number, uiSites: readonly UiSite[] = [], uiAreas: readonly UiArea[] = [],
+  accept: (t: EditorTarget) => boolean = () => true,
 ): EditorTarget | null {
   if (index) {
     const hits = render.hitTest(index.stream, pt.x * 1000, pt.y * 1000, {
       toleranceUm: toleranceMm * 1000,
       closedStrokeInterior: true,
-      objects: (i) => targetOf(index.refs[i] ?? { kind: "", id: "" }) !== null,
+      objects: (i) => {
+        const t = targetOf(index.refs[i] ?? { kind: "", id: "" });
+        return t !== null && accept(t);
+      },
     });
     let best: { t: EditorTarget; d: number } | null = null;
     for (const h of hits) {
@@ -89,12 +95,14 @@ export function editorHitAt(
   }
   let near: { id: string; d: number } | null = null;
   for (const s of uiSites) {
+    if (!accept({ kind: "site", id: s.id })) continue;
     const d = Math.max(0, Math.hypot(pt.x - s.x, pt.y - s.y) - s.radiusMm);
     if (d <= toleranceMm && (!near || d < near.d)) near = { id: s.id, d };
   }
   if (near) return { kind: "site", id: near.id };
   for (let i = uiAreas.length - 1; i >= 0; i--) {
     const a = uiAreas[i];
+    if (!accept({ kind: "object", id: a.id })) continue;
     if (insideRing(pt, a.ring) || ringDistance(pt, a.ring) <= toleranceMm) return { kind: "object", id: a.id };
   }
   return null;

@@ -40,8 +40,9 @@ import {
 } from "../../lib/course-editor";
 import { UndoStack } from "../../lib/undo-stack";
 import { useMapDocument } from "../../lib/map-document-cache";
-import { courseObjectsForView } from "../../lib/course-layer-request";
+import { courseObjectsForView, type ProvisionalVisit } from "../../lib/course-layer-request";
 import { snapIndexForDocument } from "../../lib/editor/snap";
+import { legLengthLabel, legLengthM } from "../../lib/editor/leg-length";
 import { EditorConflict, EditorWrites, type EditorClient } from "../../lib/editor/write-client";
 import { areaTool, editorReducer, escapeHasWork, initialEditorState, type EditorTool } from "../../lib/editor/state";
 import { appendSite, insertSite, moveVisit, removeSite, removeVisit, setLegGaps, setNumberHidden, setRole, type KindOf } from "../../lib/editor/structure-edit";
@@ -760,8 +761,20 @@ export function EditorPage() {
       : placing.tool === "control"
         ? [info.number !== null ? String(info.number) : null, nextCode !== null ? String(nextCode) : null].filter(Boolean).join(" · ")
         : t(placing.tool === "start" ? "kindStart" : "kindFinish");
-    return { at, radiusMm, role: placing.tool, label, description: reuse === null ? ghostDescription : null, legs: info.legs, legMm: info.legMm };
-  }, [placing, hover, kindOfLatest, ptOf, rows, courseInfo, coordsById, t, nextCode, ghostDescription]);
+    const legLabel = info.legs[0] ? legLengthLabel(info.legs[0][0], info.legs[0][1], mapScale) : null;
+    return { at, radiusMm, role: placing.tool, label, description: reuse === null ? ghostDescription : null, legs: info.legs, legMm: info.legMm, legLabel, reuse };
+  }, [placing, hover, kindOfLatest, ptOf, rows, courseInfo, coordsById, t, nextCode, ghostDescription, mapScale]);
+
+  // The visit the click would write, drawn by the layer (§6.1): one course request per hover. Keyed by
+  // primitives: the ghost itself changes with every course reply (its radius), which must not re-request.
+  const ghostX = ghost?.at.x, ghostY = ghost?.at.y, ghostReuse = ghost?.reuse ?? null;
+  const provisional = useMemo((): ProvisionalVisit | null => {
+    if (!placing || placing.insertAt === null || ghostX === undefined || ghostY === undefined) return null;
+    return {
+      role: placing.tool, insertAt: placing.insertAt, pt: { x: ghostX, y: ghostY },
+      ...(ghostReuse !== null ? { reuseId: String(ghostReuse) } : { code: nextCode !== null ? String(nextCode) : "" }),
+    };
+  }, [placing, ghostX, ghostY, ghostReuse, nextCode]);
 
   const sitesForTools = useMemo(() => sites.filter((x) => x.mapX !== 0 || x.mapY !== 0)
     .map((x) => ({ id: x.id, x: x.mapX, y: x.mapY, kind: kindOf(x.id) })), [sites, kindOf]);
@@ -925,10 +938,11 @@ export function EditorPage() {
     draftObjects,
     draftFast,
     viewRequest,
+    provisional,
     onCourseInfo: setCourseInfo,
   }), [state.selectedControlId, state.phantom, contextActions, contextInfo, srrBadge, radioOn, suggestions, tc, courseControlIds, toolActive,
     courseView, selectedCourse, moveWarnings, moveEpoch, handleMapClick, handleMoveEnd, handleLabelMoveEnd, handleSelect,
-    handleDismiss, handleLegClick, toolBinding, snapIndex, snap, draftObjects, draftFast, viewRequest]);
+    handleDismiss, handleLegClick, toolBinding, snapIndex, snap, draftObjects, draftFast, viewRequest, provisional]);
 
   // ─── Undo / redo, keyboard, deep links ───────────────────
   const runUndo = useCallback(() => {
@@ -1156,7 +1170,7 @@ export function EditorPage() {
     if (ids.length) void run(() => client.control.upsertConfig.mutate({ controlIds: ids, radioType: "internal_radio" }));
   }, [state.multi, kindOf, run, client]);
 
-  const pendingLegM = ghost?.legMm != null && mapScale ? (ghost.legMm * mapScale) / 1000 : null;
+  const pendingLegM = ghost?.legMm != null && mapScale ? legLengthM(ghost.legMm, mapScale) : null;
 
   const overlay = (
     <div className="flex gap-2 h-full min-h-0 items-stretch">
