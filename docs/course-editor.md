@@ -170,14 +170,19 @@ shared stage (04 §7; `map-rendering.md` §5.5), not SVG hit targets:
   not draw on screen — a filter region (a region, not an object) and a
   toner saver (no frame on screen) — hit by the outline the UI layer draws
   for them, over their interior and along the edge, below everything else
-  (`UiArea`, `editorHitAt`'s last argument). Imported extras do not hit.
+  (`UiArea`, `editorHitAt`'s `uiAreas`). Imported extras do not hit.
+- While an armed tool's provisional visit is drawn (§6.1) only real sites
+  are targets: `editorHitAt`'s `accept` passes over everything else and
+  over the `provisional` site, so the shape below (a control to reuse)
+  is found through the cursor's own circle.
 - A drag stays a per-move layer request: the layer re-derives in the
   worker and the reply redraws (`map-rendering.md` §5.4). Main-thread
   symbolisation of the dragged object is not needed so far.
 - The selection ring, phantom, affects-chip and action bar stay UI layer
-  (screen space), and so does everything a tool draws (§6: ghost, pending
-  leg, polygon, handles, gap arcs, lasso, multi-selection rings, object
-  outlines — `editor-tool-layer`). Selection *highlight* through the
+  (screen space), and so does everything a tool draws (§6: ghost, leg
+  length, polygon, handles, gap arcs, lasso, multi-selection rings, object
+  outlines — `editor-tool-layer`) and a dragged control's leg lengths. The
+  armed tools' pending legs are the layer's (§6.1). Selection *highlight* through the
   dynamic bucket is Pending.
 - With shared hit-testing the viewer renders no `editor-control-hit` /
   `editor-leg-hit` / `editor-label-hit` elements; it mirrors every editor
@@ -228,9 +233,29 @@ returns to select from any tool; right-click exits an exclusive tool.
   (`control.suggestDescription`, asked 150 ms after the pointer rests,
   rounded to 0.1 mm). Over an existing control of the tool's kind the
   ghost sits on it and reads **Add ‹code›**.
-- **Pending leg** (`editor-pending-leg`): dashed anchor → cursor, and
-  cursor → the next item when inserting; the anchor → cursor length in
-  metres is in the status bar. No model object exists between clicks.
+- **Pending legs, drawn by the layer.** While the tool is armed with a
+  course and the pointer is over the map (on touch: the crosshair at the
+  view centre), the page hands the viewer a **provisional visit**
+  (`MapViewerEditorProps.provisional`: role, insertion point, cursor or
+  reused site, next code) and the viewer's course request splices it into
+  the course (`course-layer.md` §5): the dynamic bucket draws the legs
+  into and out of the cursor with their automatic slits, the stored gaps
+  of the other legs and the renumbered sequence — what the click will
+  write. `S` replaces the course's start (its leg runs from the cursor to
+  the first item), `M` its finish. One layer round trip per hover
+  (04 §7); the hit-test then sees only real sites (a reuse), never the
+  provisional circle or its legs (`editorHitAt`'s `accept`, §5). The
+  ghost ring, its label and description stay in the UI layer; there is
+  no dashed UI-layer leg. In a fast chain the leg from a control placed
+  a moment ago appears once the lists refetch. No model object exists
+  between clicks.
+- **Leg length** (`editor-leg-length`): the first pending leg's length
+  on the ground as a UI-layer label at its midpoint, "‹n› m" rounded to
+  the metre (paper mm × the map scale, `lib/editor/leg-length.ts`) — the
+  status bar's number (`editor-pending-leg-length`). While a control is
+  dragged (any tool) the viewer labels both legs of every visit of it in
+  the single highlighted course the same way, between the nearest drawn
+  neighbours.
 - **Click on empty map**: one `control.create` (+ `setStructure` insert)
   — one undo entry (§4's create-and-insert). **Click on an existing
   control**: the site is inserted (no new site). The placed control is
@@ -376,7 +401,7 @@ filter regions and toner savers are outlined by the UI layer.
 
   | Kind | Props |
   |---|---|
-  | out-of-bounds area | border none / solid / dashed |
+  | out-of-bounds area | hatch: 709 out-of-bounds (stripes) / 710 dangerous area (cross-hatch, `course-layer.md` §3.1); border none / solid / dashed |
   | out-of-bounds line | 708 / 711 |
   | map text | text, size (paper mm) |
   | toner saver | margin; *Regenerate from the course* |
@@ -430,12 +455,13 @@ current, differing }`; a variation group or a slice-F site kind answers
 | unit (web) | `lib/__tests__/map-pipeline.test.ts`; `packages/api/src/__tests__/map-pipeline.test.ts` | §1: `courseEditorMount`; `map.editor.vector` parsing |
 | integration | `packages/api/src/__tests__/integration/map-pipeline.test.ts` | §1: `event.mapPipeline` / `setMapPipeline` report `editorVector` |
 | E2E | `e2e/course-editor.spec.ts` | the mount gate both ways and the shell; place → move → undo / redo → reload → select on the canvas → delete; create a course, append two controls, add-to-course on the map, reorder + undo, insert on a leg, remove, reload with `?course=` (explicit start / finish rows); deep links, `H`, Escape cascade |
-| unit (web) | `pages/editor/__tests__/placement.test.ts` | §6.1: insertion point (before the finish, after the selected control, at a leg, `S` at 0, no course), chain advance, `Ctrl+Z` steps back, `S` → `K`, ghost number and pending legs |
+| unit (web) | `pages/editor/__tests__/placement.test.ts` | §6.1: insertion point (before the finish, after the selected control, at a leg, `S` at 0, no course), chain advance, `Ctrl+Z` steps back, `S` → `K`, ghost number and pending legs (a start's leg runs to the first item) |
+| unit (web) | `lib/editor/__tests__/leg-length.test.ts`, `lib/__tests__/course-layer-request.test.ts`, `lib/editor/__tests__/hit.test.ts` | §6.1: metres at the map scale, "‹n› m", the midpoint, a dragged control's labels (both legs, every visit, over undrawn items); the provisional visit in the request (`course-layer.md` §5); §5 `accept` passes over other targets and finds the site below a rejected one |
 | unit (web) | `pages/editor/__tests__/polygon.test.ts`, `gaps.test.ts` | §6.4: vertex flow, close on the first vertex / double-click, line kinds, vertex drag, hulls (toner saver margin); §6.3: compass degrees, shorter arc, minimum, merge across north, leg fractions |
-| unit (web) | `pages/editor/__tests__/bindings.test.ts` | §6, §7: V (Shift-click, lasso, object select / move / vertex, outlines, double-click leg), armed (exclusive, right-click, touch), area (vertex drag, first-vertex close), G (rim drag, click removes, leg) |
+| unit (web) | `pages/editor/__tests__/bindings.test.ts` | §6, §7: V (Shift-click, lasso, object select / move / vertex, outlines, double-click leg), armed (exclusive, right-click, touch, ghost and leg length label, no UI-layer leg), area (vertex drag, first-vertex close), G (rim drag, click removes, leg) |
 | unit (web) | `lib/__tests__/undo-stack.test.ts` | §6.1: `UndoStack.top`, which `Ctrl+Z` while armed checks before stepping the chain back |
 | unit (web) | `lib/editor/__tests__/snap.test.ts`, `hit.test.ts`, `state.test.ts`, `structure-edit.test.ts`, `write-client.test.ts` | §6.2 snap candidates and distance; §5 object targets (stream and UI-layer outline); §6 Escape order, multi-selection, object selection, tools; §6.3 / §6.6 `setLegGaps`, `setNumberHidden`; §7 object tokens |
-| E2E | `e2e/course-editor.spec.ts` "tools" | §6.1 ten controls in ten clicks with `K` (ghost, pending leg, no action bar, `Ctrl+Z`, `Esc`), reuse of a site; §6.5 Shift-click three controls → one add-to-course (one undo entry), §6.6 a site's notes written and reloaded; §6.3 a rim drag stores a circle gap, Reset gaps clears it; the layer draws what the tools store (D1's request path): a leg gap cuts the drawn leg, a circle gap is in the drawn site's cuts (`course-site` `data-cuts`), a hidden number leaves the site without its `course-label`; §6.4 / §7 an out-of-bounds area drawn, its border set, drawn on the canvas (purple inside it), printed (the all-controls `maps.pdf`: one page, the 709 hatch's clip-and-stroke operators present with the `all`-scoped area and gone when it is parked), selected again on the canvas, deleted and undone; a filter region hides the 505 path under it live (canvas ink probe) |
+| E2E | `e2e/course-editor.spec.ts` "tools" | §6.1 ten controls in ten clicks with `K` (ghost, no UI-layer pending leg, the leg length label = the status bar, no action bar, `Ctrl+Z`, `Esc`), reuse of a site; the armed `K` over the map: a `course-leg` piece of the course ends at the cursor's circle (absent before the hover, follows a second hover), no `editor-pending-leg`, the label = the status bar; a drag of the middle control shows two `editor-leg-length`, none after release; §6.5 Shift-click three controls → one add-to-course (one undo entry), §6.6 a site's notes written and reloaded; §6.3 a rim drag stores a circle gap, Reset gaps clears it; the layer draws what the tools store (D1's request path): a leg gap cuts the drawn leg, a circle gap is in the drawn site's cuts (`course-site` `data-cuts`), a hidden number leaves the site without its `course-label`; §6.4 / §7 an out-of-bounds area drawn, its hatch (710) and border set from the inspector, drawn on the canvas (purple inside it), printed (the all-controls `maps.pdf`: one page, the 709 hatch's clip-and-stroke operators present with the `all`-scoped area, one more run with `hatch: "710"`, gone when it is parked), selected again on the canvas, deleted and undone; a filter region hides the 505 path under it live (canvas ink probe) |
 | integration | `packages/api/src/__tests__/integration/course-print.test.ts` "course objects on the page" | §7 print: the row's "reference-raster pixel probe" of a printed course object is this test's page raster, not the E2E's — no HTTP route rasterises a composed page, and poppler is on the runner for the unit / integration jobs, not the E2E job (coordinator 2026-11-01) |
 | E2E | `e2e/course-editor-legacy.spec.ts` | the legacy page, unchanged (`chromium`) |
 
