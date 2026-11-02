@@ -353,29 +353,37 @@ test.describe("Course editor (new, GL canvas)", () => {
     test("the armed tool's pending legs are drawn by the layer to the cursor; a drag labels both legs", async ({ page }) => {
       await openEditor(page);
       const name = await newCourse(page, "D5a pending");
+      // Arm once the new course's structure is loaded (else the tool only creates sites).
+      await expect(page.locator('[data-testid="editor-seq-row"][data-kind="start"]')).toBeAttached({ timeout: 15000 });
       await page.keyboard.press("k");
       const spots: { x: number; y: number }[] = [];
       for (let i = 0; i < 3; i++) {
         const p = await emptyPoint(page, 60, spots);
         spots.push(p);
         await page.mouse.move(p.x, p.y);
-        const saved = waitForTrpc(page, "course.setStructure");
+        await expect(page.getByTestId("editor-ghost-label")).toHaveText(new RegExp(`^${i + 1} · `), { timeout: 10000 });
         await page.mouse.click(p.x, p.y);
-        await saved;
+        await expect(controlRows(page)).toHaveCount(i + 1, { timeout: 15000 });
       }
-      await expect(controlRows(page)).toHaveCount(3, { timeout: 15000 });
 
-      /** A drawn leg piece of the course ending within a circle's reach of the paper point. */
-      const legEndsNear = async (mm: { x: number; y: number }) => (await legPieces(page, name)).some((l) =>
-        [l.points[0], l.points.at(-1)!].some((q) => Math.hypot(q.x - mm.x, q.y - mm.y) < 4));
+      /** A drawn leg piece of the course ending at the rim of a circle around the page point (a circle is ~13 px here). */
+      const legEndsNear = async (p: { x: number; y: number }) => {
+        for (const l of await legPieces(page, name)) {
+          for (const q of [l.points[0], l.points.at(-1)!]) {
+            const at = await toPage(page, q);
+            if (Math.hypot(at.x - p.x, at.y - p.y) < 25) return true;
+          }
+        }
+        return false;
+      };
       for (const pass of [0, 1]) {
         const p = await emptyPoint(page, 60, spots);
         spots.push(p);
+        expect(await legEndsNear(p)).toBe(false);
         await page.mouse.move(p.x, p.y);
         await expect(page.getByTestId("editor-ghost")).toBeAttached({ timeout: 10000 });
-        const [ghost] = await toolShapes(page, "editor-ghost");
         // The leg into the cursor is a `course-leg` piece of the course: the layer's, with its slits (one round trip per hover).
-        await expect.poll(() => legEndsNear(ghost), { timeout: 15000, message: `pass ${pass}` }).toBe(true);
+        await expect.poll(() => legEndsNear(p), { timeout: 15000, message: `pass ${pass}` }).toBe(true);
         await expect(page.getByTestId("editor-pending-leg")).toHaveCount(0);
         const metres = (await page.getByTestId("editor-pending-leg-length").textContent())!.match(/(\d+) m/)![1];
         await expect(page.getByTestId("editor-leg-length")).toHaveText(`${metres} m`);
