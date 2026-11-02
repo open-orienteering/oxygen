@@ -621,6 +621,16 @@ test.describe("Course editor (new, GL canvas)", () => {
         const withArea = await printedAllControls(page, nameId);
         expect(withArea.pages).toBe(1);
         expect(withArea.hatches, "hatch strokes with the area").toBeGreaterThan(0);
+        // The dangerous area (hatch 710, course-layer.md §3.1): 709's stripes crossed — one more hatch pass.
+        const setHatch = async (props: Record<string, string>) => {
+          const res = await page.request.post(`${API}/trpc/courseObject.update`, { headers, data: { id: Number(id), props } });
+          expect(res.ok(), await res.text()).toBe(true);
+        };
+        await setHatch({ hatch: "710" });
+        const crossed = await printedAllControls(page, nameId);
+        expect(crossed.pages).toBe(1);
+        expect(crossed.hatches, "the 710 cross-hatch prints both diagonals").toBe(withArea.hatches + 1);
+        await setHatch({});
         const hidden = await page.request.post(`${API}/trpc/courseObject.update`, { headers, data: { id: Number(id), scope: { courses: [], classes: [] } } });
         expect(hidden.ok(), await hidden.text()).toBe(true);
         const without = await printedAllControls(page, nameId);
@@ -640,11 +650,16 @@ test.describe("Course editor (new, GL canvas)", () => {
         await clickMap(page, { x: a.x + 30, y: a.y + 15 });
         await expect(page.getByTestId("editor-object")).toHaveAttribute("data-object-id", id!, { timeout: 2000 });
       }).toPass({ timeout: 20000 });
-      // Its border from the inspector, then delete it (Delete key) and undo.
+      // Its hatch and border from the inspector, then delete it (Delete key) and undo.
+      const row = page.locator(`[data-testid="editor-object-row"][data-object-id="${id}"]`);
+      const hatched = waitForTrpc(page, "courseObject.update");
+      await page.getByTestId("editor-prop-hatch").selectOption("710");
+      await hatched;
+      await expect(row).toHaveAttribute("data-props", '{"hatch":"710"}', { timeout: 15000 });
       const updated = waitForTrpc(page, "courseObject.update");
       await page.getByTestId("editor-prop-border").selectOption("dashed");
       await updated;
-      await expect(page.locator(`[data-testid="editor-object-row"][data-object-id="${id}"]`)).toHaveAttribute("data-props", '{"border":"dashed"}', { timeout: 15000 });
+      await expect(row).toHaveAttribute("data-props", '{"hatch":"710","border":"dashed"}', { timeout: 15000 });
       await page.getByTestId("editor-object-delete").click();
       await expect(page.locator(`[data-testid="editor-object-row"][data-object-id="${id}"]`)).toHaveCount(0, { timeout: 15000 });
       await page.keyboard.press("Control+z");

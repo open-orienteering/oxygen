@@ -144,6 +144,14 @@ describe("course objects on the page (course-layer.md §8.3)", () => {
       expect(plain.course.objects ?? []).toEqual([]);
       expect(passes(sheets[courseIdx])).toBeGreaterThan(passes(plain));
 
+      // The dangerous area (hatch 710, course-layer.md §3.1): 709's stripes crossed — one more hatch pass on the page.
+      await db.courseObject.update({ where: { id: oob.id }, data: { props: { border: "solid", hatch: "710" } } });
+      const crossed = sheetForMapRow(rows[courseIdx], { ...base, courseObjects: await loadCourseObjects(db, vec.eventId), classesByCourse: byCourse });
+      const hatchPasses = (sheet: (typeof sheets)[number]) => composePage(pageInputFor(pinned.document, sheet, null), fonts).mapLayer.stream.passes
+        .filter((p) => p.kind === "hatch").length;
+      expect(hatchPasses(crossed)).toBe(hatchPasses(sheets[courseIdx]) + 1);
+      await db.courseObject.update({ where: { id: oob.id }, data: { props: { border: "solid" } } });
+
       // A stored filter region over the window hides the map's objects inside it (D3's rule, by construction).
       const region = await writeCourseObject(db, vec.eventId, { body: { kind: "filter_region", geometry: square, props: { mode: "hide", symbols: "all" } }, scope: { all: true } });
       const withRegion = sheetForMapRow(rows[courseIdx], { ...base, courseObjects: await loadCourseObjects(db, vec.eventId), classesByCourse: byCourse });
