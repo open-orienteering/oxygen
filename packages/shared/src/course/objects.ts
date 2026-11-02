@@ -49,8 +49,11 @@ export const courseObjectBodySchema = z.discriminatedUnion("kind", [
   z.object({
     kind: z.literal("oob_area"),
     geometry: vertices(3),
-    /** 709 alone, 709.b with a solid boundary, 709.c dashed. Default `none`. */
-    props: z.strictObject({ border: z.enum(["none", "solid", "dashed"]).optional() }),
+    /**
+     * `border`: 709 alone, 709.b with a solid boundary, 709.c dashed (default `none`). `hatch`: `709` the
+     * out-of-bounds stripes (default), `710` the dangerous area's cross-hatch (course-layer.md §3.1).
+     */
+    props: z.strictObject({ border: z.enum(["none", "solid", "dashed"]).optional(), hatch: z.enum(["709", "710"]).optional() }),
   }),
   z.object({
     kind: z.literal("oob_line"),
@@ -295,7 +298,9 @@ export function layoutObjects(
     switch (o.kind) {
       case "oob_area": {
         const border = o.props.border ?? "none";
-        const idx = border === "solid" ? set.idx.oobAreaBorder : border === "dashed" ? set.idx.oobAreaDashed : set.idx.oobArea;
+        const idx = o.props.hatch === "710"
+          ? border === "solid" ? set.idx.dangerousAreaBorder : border === "dashed" ? set.idx.dangerousAreaDashed : set.idx.dangerousArea
+          : border === "solid" ? set.idx.oobAreaBorder : border === "dashed" ? set.idx.oobAreaDashed : set.idx.oobArea;
         out.objects.push({ symbolIdx: idx, path: area(true).path, ref });
         return;
       }

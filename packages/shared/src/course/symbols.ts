@@ -6,7 +6,7 @@
  */
 
 import { CONTROL_NUMBER_CAP_HEIGHT_RATIO } from "../course-maps/control-label-placement.js";
-import type { Glyph, GlyphPart, LineSymbol, PointSymbol, RenderSymbol, TextSymbol } from "../render/symbol.js";
+import type { AreaSymbol, Glyph, GlyphPart, LineSymbol, PointSymbol, RenderSymbol, TextSymbol } from "../render/symbol.js";
 import { parseRenderSymbol } from "../render/symbol.js";
 import { scaleRenderSymbol } from "../render/transform.js";
 import { type SymbolLibraryId, getLibraryEntry } from "../symbol-library/index.js";
@@ -31,6 +31,10 @@ export interface CourseSymbolIdx {
   /** 709.c: dashed boundary. */
   oobAreaDashed: number;
   whiteout: number;
+  /** The dangerous area (`oob_area` with `hatch: "710"`): 709's stripes crossed; with 709.b / 709.c's boundary. */
+  dangerousArea: number;
+  dangerousAreaBorder: number;
+  dangerousAreaDashed: number;
 }
 
 export interface CourseSymbolSet {
@@ -91,6 +95,18 @@ function scaleLineWidths(sym: LineSymbol, width: number): LineSymbol {
   };
 }
 
+/**
+ * The dangerous area's cross-hatch from a resolved 709 variant: its stripes
+ * again at +90°, the same width, spacing, colour and boundary. Neither
+ * ISOM 2017-2 nor ISSprOM 2019-2 has the symbol (their 710 is the crossing
+ * point); the number is the one ISOM 2000, OCAD's course-setting set and
+ * Purple Pen give the cross-hatched area (decision log, D5a).
+ */
+function crossHatched(sym: AreaSymbol, suffix: string): AreaSymbol {
+  const hatches = sym.hatches ?? [];
+  return { ...sym, id: `course:dangerous${suffix}`, code: "710", name: "Dangerous area", hatches: [...hatches, ...hatches.map((h) => ({ ...h, angleDeg: h.angleDeg + 90 }))] };
+}
+
 function ringOf(sym: PointSymbol): GlyphPart {
   const ring = sym.glyph.parts.filter((p) => p.kind === "ring").sort((a, b) => (b.diameterUm ?? 0) - (a.diameterUm ?? 0))[0];
   if (!ring?.diameterUm || !ring.widthUm) throw new Error(`${sym.id}: no ring part`);
@@ -132,11 +148,15 @@ export function courseSymbols(doc: Pick<CourseDocumentContext, "libraryId" | "do
   const oobAreaDashed = get("709.c", "area");
   const whiteout = parseRenderSymbol({ type: "area", id: "course:whiteout", code: "whiteout", name: "White-out", fill: index.get("white-upper") });
 
-  const symbols: RenderSymbol[] = [start, circle, finish, number, leader, leg, line("707"), line("708"), line("711"), oobArea, oobAreaBorder, oobAreaDashed, whiteout];
+  const symbols: RenderSymbol[] = [
+    start, circle, finish, number, leader, leg, line("707"), line("708"), line("711"), oobArea, oobAreaBorder, oobAreaDashed, whiteout,
+    crossHatched(oobArea, ""), crossHatched(oobAreaBorder, ".b"), crossHatched(oobAreaDashed, ".c"),
+  ];
   const startPart = start.glyph.parts[0];
   return {
     symbols,
-    idx: { start: 0, circle: 1, finish: 2, number: 3, leader: 4, leg: 5, markedRoute: 6, restrictedLine: 7, forbiddenRoute: 8, oobArea: 9, oobAreaBorder: 10, oobAreaDashed: 11, whiteout: 12 },
+    idx: { start: 0, circle: 1, finish: 2, number: 3, leader: 4, leg: 5, markedRoute: 6, restrictedLine: 7, forbiddenRoute: 8, oobArea: 9, oobAreaBorder: 10, oobAreaDashed: 11, whiteout: 12,
+      dangerousArea: 13, dangerousAreaBorder: 14, dangerousAreaDashed: 15 },
     circleRadiusUm: (ring.diameterUm! - ring.widthUm!) / 2,
     finishRadiusUm: ((ringOf(finish).diameterUm ?? 0) - (ringOf(finish).widthUm ?? 0)) / 2,
     startRadiusUm: startPart.geometry ? Math.hypot(startPart.geometry.coords[0], startPart.geometry.coords[1]) : 0,

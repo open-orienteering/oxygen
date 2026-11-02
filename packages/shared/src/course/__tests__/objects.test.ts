@@ -18,6 +18,7 @@ describe("courseObjectBodySchema (§8.1)", () => {
     const ok = [
       { kind: "oob_area", geometry: SQUARE, props: { border: "dashed" } },
       { kind: "oob_area", geometry: SQUARE, props: {} },
+      { kind: "oob_area", geometry: SQUARE, props: { hatch: "710", border: "solid" } },
       { kind: "oob_line", geometry: SQUARE.slice(0, 2), props: { symbol: "711" } },
       { kind: "whiteout", geometry: SQUARE, props: {} },
       { kind: "toner_saver", geometry: SQUARE, props: { marginMm: 5, holeRadiusMm: 4 } },
@@ -37,6 +38,7 @@ describe("courseObjectBodySchema (§8.1)", () => {
     expect(issues({ kind: "text", geometry: SQUARE.slice(0, 2), props: { text: "x", fontSizeMm: 3 } }).join()).toMatch(/OBJECT_GEOMETRY/);
     expect(issues({ kind: "image", geometry: SQUARE.slice(0, 1), props: { graphicId: 1 } }).join()).toMatch(/OBJECT_GEOMETRY/);
     expect(issues({ kind: "oob_area", geometry: SQUARE, props: { crossSpacingMm: 2 } })).not.toEqual([]);
+    expect(issues({ kind: "oob_area", geometry: SQUARE, props: { hatch: "711" } })).not.toEqual([]);
     expect(issues({ kind: "oob_line", geometry: SQUARE, props: { widthMm: 0.5 } })).not.toEqual([]);
     expect(issues({ kind: "filter_region", geometry: SQUARE, props: { mode: "blur", symbols: "all" } })).not.toEqual([]);
     expect(issues({ kind: "filter_region", geometry: SQUARE, props: { mode: "hide", symbols: [-1] } })).not.toEqual([]);
@@ -81,11 +83,15 @@ describe("course objects in the layer (§8.3)", () => {
     expect(isCourseObject({ id: "a", anchor: "map", kind: "text", x: 0, y: 0, text: "t", fontSizeMm: 2, color: "#000000" })).toBe(false);
   });
 
-  it("oob_area → 709 / 709.b / 709.c by border; oob_line → 708 / 711; marked_route → 707; whiteout → upper white", () => {
+  it("oob_area → 709 / 709.b / 709.c by border, the dangerous area's cross-hatch with hatch 710; oob_line → 708 / 711; marked_route → 707; whiteout → upper white", () => {
     const cases: [CourseLayerObject, string][] = [
       [obj({ kind: "oob_area", geometry: SQUARE, props: {} }), ":709"],
       [obj({ kind: "oob_area", geometry: SQUARE, props: { border: "solid" } }), ":709.b"],
       [obj({ kind: "oob_area", geometry: SQUARE, props: { border: "dashed" } }), ":709.c"],
+      [obj({ kind: "oob_area", geometry: SQUARE, props: { hatch: "709" } }), ":709"],
+      [obj({ kind: "oob_area", geometry: SQUARE, props: { hatch: "710" } }), "course:dangerous"],
+      [obj({ kind: "oob_area", geometry: SQUARE, props: { hatch: "710", border: "solid" } }), "course:dangerous.b"],
+      [obj({ kind: "oob_area", geometry: SQUARE, props: { hatch: "710", border: "dashed" } }), "course:dangerous.c"],
       [obj({ kind: "oob_line", geometry: SQUARE.slice(0, 2), props: {} }), ":708"],
       [obj({ kind: "oob_line", geometry: SQUARE.slice(0, 2), props: { symbol: "711" } }), ":711"],
       [obj({ kind: "marked_route", geometry: SQUARE.slice(0, 3), props: {} }), ":707"],
