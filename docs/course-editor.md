@@ -401,7 +401,7 @@ filter regions and toner savers are outlined by the UI layer.
 
   | Kind | Props |
   |---|---|
-  | out-of-bounds area | hatch: 709 out-of-bounds (stripes) / 710 dangerous area (cross-hatch, `course-layer.md` §3.1); border none / solid / dashed |
+  | out-of-bounds area | hatch: *Out of bounds (709, stripes)* / *Dangerous area (710, cross-hatched)* (`course-layer.md` §3.1; the name first — in ISOM 2017-2, 710 is the crossing point); border none / solid / dashed |
   | out-of-bounds line | 708 / 711 |
   | map text | text, size (paper mm) |
   | toner saver | margin; *Regenerate from the course* |
