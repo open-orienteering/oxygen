@@ -13,7 +13,7 @@ viewer's dynamic bucket (C4, §5), the page composer (C2,
 (§2), the geometry rules (§3), the GeoJSON projection (§4), the viewer
 (§5), the stored course structure (§6, slice D row D0), the
 concurrency rules for editing it (§7, gate G1) and the stored, scoped
-course objects (§8, row D2). Editing the structure on
+course objects (§8, row D2) and the advisory checks (§9, row D6). Editing the structure on
 the new canvas is `course-editor.md`'s.
 
 ## Decisions taken before the code (user, 2026-10-24)
@@ -51,6 +51,13 @@ Decided by the user 2026-10-31 for slice D (gate G1, concurrent
 editing; README "Decision gates" and decision log): optimistic
 concurrency with a version token over the journal. D0 wrote the rules out
 as §7; the designs weighed and why (B) won are in the decision log.
+
+Decided by the coordinator 2026-11-02 for D6 (decision log): the
+`DESCRIPTION_STALE` provenance is a new `controls.description_source`
+column (§6.3) — the schema had none, and "equals autodetect at the
+current position" can never detect staleness; `NUMBER_OVERLAPS` is the
+placer's collision fallback and `NUMBER_UNPLACED` a visible control
+visit without a label (§3.5, §9.2); a check carries no message text.
 
 ## 1. Derivation
 
@@ -284,6 +291,11 @@ parse otherwise (§4, decision of the slice-C split).
   number's centre relative to the site; emitted as is, no leader.
 - **Leaders** where the placer reports a contested slot (705-derived
   line, §3.1).
+- **Collisions**: a number is never dropped; when no ring has a
+  collision-free slot the placer takes the least-bad box and marks it
+  `collides: true` (`PlacedControlLabel`, `DerivedSite.label`), which
+  §9's `NUMBER_OVERLAPS` reads. A contested slot with a leader is not a
+  collision.
 - **Anchor**: the text object's point is the baseline, half a digit
   below the placed centre, `align: "centre"` (legacy
   `controlNumberBaselineY`).
@@ -573,6 +585,7 @@ the same sequence (integration test).
 | `controls.checked_at`, `checked_by` | TIMESTAMPTZ, UUID (no FK — journaled to nodes without the users) | field check-off (`control.check`) |
 | `controls.version`, `courses.version` | BIGINT, default 0 | the §7 token |
 | `course_controls.number_hidden` | BOOLEAN, default false | hide this visit's number (08 §4.2) |
+| `controls.description_source` | TEXT NULL, CHECK `auto` \| `manual` (migration `20261102120000_control_description_source`; D6, not in 08 §4.2) | who wrote `description`: `auto` when an autodetect path filled it (`control.create` / `control.update` with `autoDescribe`), `manual` when a write carried an explicit `description` — **a manual edit that equals the autodetect result is still `manual`**; clearing the description clears it to NULL; NULL for rows written before D6 (unknown, never stale). It travels in `control.upserted` with the other portable fields (additive: phase-1 journal consumers ignore it). Read by `DESCRIPTION_STALE` (§9) |
 
 `kind` and `status` 4 / 5 are **kept in sync for one release** (08 §4.8):
 `control.create` derives `kind` from `status`; `control.update` writing
@@ -905,6 +918,85 @@ the structure rule: refresh and redo.
 and token; `map-storage.md` §7.2) and in the per-event dump after
 `class_course_pools` (`BACKUP_TABLES`; `map-storage.md` §7.3) — the
 venue's kiosk map draws them (08 §4.8; 07 §9.2).
+
+## 9. Checks
+
+Row D6 (research 08 §4.2, §5.6, §6). Advisory course-setting checks:
+the editor lists them (`course-editor.md` §8), marks them on the canvas
+and counts them in the status bar; `course.setStructure` returns them.
+**Nothing blocks a save.** Variation and exchange codes
+(`VARIATION_UNBALANCED`, `EXCHANGE_WITHOUT_SHEET`) and crossing-point
+exemptions are slice F's.
+
+### 9.1 The function
+
+`courseChecks(input)` (`packages/shared/src/course/checks.ts`) is pure
+and deterministic: paper mm, y-up, like the layer's input (§2).
+
+| Input | Type | Meaning |
+|---|---|---|
+| `structure` | `CourseStructure \| null` | the course checked (layer form, §2); null = event-wide checks only |
+| `sites` | `CheckSite[]` | every site of the event: `{ id, code, codes: number[], kind, x, y, description?: { d? } \| null }`; `x = y = 0` is unpositioned (§3.3) |
+| `document` | `{ libraryId, obstacles } \| null` | the base map's library and its obstacles (`checkObstaclesOfDocument`, §9.3); null on a legacy map |
+| `sheets` | `MapWindow[] \| null` | the windows of the course's sheets (`course-maps/schema.ts`); null or empty skips `CONTROL_OUTSIDE_SHEET` |
+| `objects` | `CourseLayerObject[]`, optional | the course objects in scope (§8.2); `oob_area` and `oob_line` (708) are obstacles |
+| `derivation` | `CourseDerivation \| null`, optional | the layer's result for this course (§1); null skips `NUMBER_*` |
+| `mapScale` | `number \| null` | map scale denominator; metres = paper mm × scale / 1000; null skips the distance checks |
+
+A check is `{ code, siteIds, leg?, at, params? }`: the sites involved
+(public ids on the wire), for a leg `{ from, to, index }` (index of the
+leg in the course's positioned sequence), `at` the point to locate and
+mark (paper mm), `params` the numbers the message shows (`distanceM`,
+`limitM`, `codes`, `feature`). There is no message text: the web formats
+it from `editor:check_<CODE>` (AGENTS.md §9). Output order: the table
+order below, then site ids.
+
+### 9.2 Codes
+
+| Code | Scope | Rule | Threshold |
+|---|---|---|---|
+| `CONTROL_TOO_CLOSE` | event | two positioned `control`-kind sites closer than the limit, one check per pair, `at` the midpoint | 30 m; **15 m at sprint scale**: the document's library is ISSprOM 2019-2, or (no document) the map scale is 1:5 000 or larger |
+| `SAME_FEATURE_TOO_CLOSE` | event | two positioned `control` sites with the same non-empty column D within the limit | 60 m |
+| `CODE_BELOW_31` | event | a `control` site with a punch code < 31 | — |
+| `CODE_DUPLICATE` | event | a punch code on more than one site | — |
+| `CODE_INVERTIBLE` | event | a code that reads as another site's code upside down (digits reversed, 6 ↔ 9, 0 / 1 / 8 unchanged, any other digit not invertible): 66 / 99, 68 / 89, 161 / 191, 86 / 98 …; a code that reads as itself (69, 88, 181) is not a finding | — |
+| `CONTROL_OUTSIDE_SHEET` | course | a positioned item of the course outside every window in `sheets` | — |
+| `NUMBER_UNPLACED` | course | a `control` visit whose number is not hidden and that has no label in `derivation` (in practice an unpositioned site) | — |
+| `NUMBER_OVERLAPS` | course | a derived site whose label has `collides` (§3.5: the placer fell back to a box that intersects a circle, a number or a line) | — |
+| `DESCRIPTION_MISSING` | course | a `control` item whose site has no description or no column D | — |
+| `DESCRIPTION_STALE` | course, server | a `control` item whose `description_source` is `auto` (§6.3) and whose stored description differs from the autodetect result at the site's position now (e.g. after a map re-upload) | — |
+| `LEG_CROSSES_OOB` | course | a leg (ordered courses; centre to centre between consecutive positioned items) that crosses or runs inside an out-of-bounds obstacle: document 709 areas and 708 lines, `oob_area` and `oob_line` (symbol 708) course objects | — |
+| `LEG_THROUGH_UNCROSSABLE` | course | a leg that crosses or runs inside an uncrossable document obstacle: `UNCROSSABLE_CODES` 201 (impassable cliff), 301 (uncrossable body of water), 307 (uncrossable marsh), 411 (impassable vegetation), 515 (impassable wall), 518 (impassable fence), 520 (area that shall not be entered), 521 (building), 529 (prominent uncrossable line feature) — the same in ISOM 2017-2 and ISSprOM 2019-2 | — |
+
+Event-scoped codes run over every site, whether or not the course visits
+it: the IOF distance and code rules are about the controls in the
+terrain. Course-scoped codes run over the course's items only.
+
+### 9.3 Document obstacles
+
+`checkObstaclesOfDocument(doc)` reads a pinned document as
+`cutFeaturesOfDocument` does (§3.4): a symbol's code is its applied
+match's canonical code, else its source code; hidden symbols are
+skipped. It keeps line and area objects of the `UNCROSSABLE_CODES`
+(kind `uncrossable`) and of 708 / 709 (kind `oob`) as polylines of their
+on-curve vertices (Bézier handles skipped; an area's outer ring only,
+holes ignored — the approximation snapping makes, `course-editor.md`
+§6.2), paper mm. A leg hits an obstacle when its segment intersects a
+polyline edge (an area's ring closed), or, for an area, when the leg's
+midpoint lies inside the ring. Point objects are not obstacles.
+
+### 9.4 Where it runs
+
+| Where | Codes | Inputs |
+|---|---|---|
+| Editor (client) | all but `DESCRIPTION_STALE` | the page's structure and sites, `checkObstaclesOfDocument` over the decoded document (memoised per document), the course's sheet windows from `courseMap.list`, the objects in scope, the viewer's derivation (`onCourseInfo`) |
+| `course.checks { courseId }` (server, `courses.view`) | all but `CONTROL_OUTSIDE_SHEET`, `NUMBER_UNPLACED`, `NUMBER_OVERLAPS` (`sheets` and `derivation` null), plus `DESCRIPTION_STALE` | the stored structure or its columns, the event's sites, the map scale, the pinned document's obstacles (vector events; memoised per document hash), the objects in scope |
+| `course.setStructure` | as `course.checks`, for the written course | — |
+
+The editor shows its own list and adds the server's `DESCRIPTION_STALE`
+checks. The layout checks need the viewer's placement at the document's
+sizes and the resolved sheet windows, which the server does not compute
+for a check (decision log, D6).
 
 ## Tests
 
