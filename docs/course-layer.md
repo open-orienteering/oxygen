@@ -946,10 +946,10 @@ and deterministic: paper mm, y-up, like the layer's input (§2).
 A check is `{ code, siteIds, leg?, at, params? }`: the sites involved
 (public ids on the wire), for a leg `{ from, to, index }` (index of the
 leg in the course's positioned sequence), `at` the point to locate and
-mark (paper mm), `params` the numbers the message shows (`distanceM`,
-`limitM`, `codes`, `feature`). There is no message text: the web formats
+mark (paper mm), `params` what the message shows (`a` / `b` codes,
+`distanceM`, `limitM`, `feature`, `code`, `from` / `to`, `symbol`). There is no message text: the web formats
 it from `editor:check_<CODE>` (AGENTS.md §9). Output order: the table
-order below, then site ids.
+order below, then the order of the input (sites, then the course's items).
 
 ### 9.2 Codes
 

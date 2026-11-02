@@ -47,3 +47,20 @@ export {
   type CourseObjectKind,
   type CourseObjectScope,
 } from "./objects.js";
+export {
+  COURSE_CHECK_CODES,
+  CONTROL_MIN_DISTANCE_M,
+  SPRINT_CONTROL_MIN_DISTANCE_M,
+  SAME_FEATURE_MIN_DISTANCE_M,
+  UNCROSSABLE_CODES,
+  OOB_CODES,
+  courseChecks,
+  checkObstaclesOfDocument,
+  invertedCode,
+  type CourseCheck,
+  type CourseCheckCode,
+  type CourseChecksInput,
+  type CheckSite,
+  type CheckObstacle,
+  type CheckDocument,
+} from "./checks.js";
