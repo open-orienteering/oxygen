@@ -116,3 +116,25 @@ describe("numbers (§3.5)", () => {
     expect(d.sites.find((s) => s.id === "31")!.label!.text).toBe("31");
   });
 });
+
+describe("number collisions (§3.5)", () => {
+  it("surface the placer's collides flag on the label, absent on a clear map", () => {
+    expect(derive().sites.every((s) => s.label?.collides === undefined)).toBe(true);
+    // 31 boxed in by a tight ring of start-sized obstacles: no ring slot is free.
+    const ring = Array.from({ length: 30 }, (_, i) => {
+      const a = (i / 30) * 2 * Math.PI;
+      return site(`o${i}`, "finish", 50 + Math.cos(a) * 9, 50 + Math.sin(a) * 9);
+    });
+    const outer = Array.from({ length: 48 }, (_, i) => {
+      const a = (i / 48) * 2 * Math.PI;
+      return site(`p${i}`, "finish", 50 + Math.cos(a) * 16, 50 + Math.sin(a) * 16);
+    });
+    const outer2 = Array.from({ length: 64 }, (_, i) => {
+      const a = (i / 64) * 2 * Math.PI;
+      return site(`q${i}`, "finish", 50 + Math.cos(a) * 23, 50 + Math.sin(a) * 23);
+    });
+    const sites = [site("31", "control", 50, 50), ...ring, ...outer, ...outer2];
+    const d = derive({ sites, structure: null, viewOptions: { allControls: true } });
+    expect(d.sites.find((s) => s.id === "31")?.label?.collides).toBe(true);
+  });
+});

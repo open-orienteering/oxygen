@@ -167,7 +167,7 @@ export function deriveCourse(input: CourseLayerInput, m: CourseMetrics): CourseD
     const p = placed.get(c.id);
     const s = derivedById.get(c.id);
     if (!p || !s || c.label === undefined) continue;
-    s.label = { text: c.label, x: p.x, y: -p.y, ...(p.leader ? { leader: { x1: p.leader.x1, y1: -p.leader.y1, x2: p.leader.x2, y2: -p.leader.y2 } } : {}) };
+    s.label = { text: c.label, x: p.x, y: -p.y, ...(p.leader ? { leader: { x1: p.leader.x1, y1: -p.leader.y1, x2: p.leader.x2, y2: -p.leader.y2 } } : {}), ...(p.collides ? { collides: true as const } : {}) };
   }
 
   return { sites, courses };

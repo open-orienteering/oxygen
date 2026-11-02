@@ -157,8 +157,8 @@ export interface DerivedSite {
   y: number;
   /** Effective circle gaps (authored or automatic), compass degrees; controls only. */
   cuts: AngularGap[];
-  /** Number centre and leader, paper mm y-up. */
-  label?: { text: string; x: number; y: number; leader?: { x1: number; y1: number; x2: number; y2: number } };
+  /** Number centre and leader, paper mm y-up; `collides` when the placer fell back to a colliding box (§3.5). */
+  label?: { text: string; x: number; y: number; leader?: { x1: number; y1: number; x2: number; y2: number }; collides?: true };
   /** 701 rotation, degrees counter-clockwise (apex towards the first control). */
   angleDeg?: number;
 }
