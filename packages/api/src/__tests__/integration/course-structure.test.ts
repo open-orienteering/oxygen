@@ -161,7 +161,8 @@ describe("course.setStructure", () => {
         labelOffsets: { "33": { dx: 2, dy: -1 } },
       },
     });
-    expect(res.checks).toEqual([]);
+    // D6: the written course's advisory checks (course-checks.test.ts covers them).
+    expect(res.checks).toEqual(await caller.course.checks({ courseId: id }));
     const row = await courseRow(id);
     const start = await ctx.db.control.findFirstOrThrow({ where: { eventId: ctx.eventId, seq: startSeq } });
     const finish = await ctx.db.control.findFirstOrThrow({ where: { eventId: ctx.eventId, seq: finishSeq } });

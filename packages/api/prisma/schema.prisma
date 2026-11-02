@@ -463,6 +463,8 @@ model Control {
   /// IOF control description ({ c?, d?, e?, g?, s?, f?, h? } — OCAD text encoding).
   /// The description belongs to the control site, not to any course.
   description  Json?
+  /// Who wrote `description`: 'auto' (autodetect), 'manual' (an explicit edit), NULL unknown / none (docs/course-layer.md §6.3).
+  descriptionSource String? @map("description_source")
   /// Site kind (docs/course-layer.md §6); `start` / `finish` mirror `status`.
   kind         ControlKind   @default(control)
   /// Manual circle gaps, compass degrees: [{ start, end }].
