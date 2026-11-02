@@ -60,6 +60,28 @@ describe("V binding (docs/course-editor.md §6.5, §7)", () => {
     expect(v.onObjectMoved).toHaveBeenCalledWith(4, [{ x: 0, y: 0 }, { x: 10, y: 0 }, { x: 12, y: 13 }, { x: 0, y: 10 }]);
   });
 
+  it("a drag applies its offset to the geometry at pointer-down, not to the draft the page already shows", () => {
+    // The page rebuilds the binding on every render with the draft applied to `objects`;
+    // a drag that re-read it would move by the whole offset again on every event.
+    const gesture: GestureRef = { current: null };
+    const drafts = new Map<number, course.CourseObject["geometry"]>();
+    const opts = () => selectOpts({
+      gesture, selected: square(4), objects: [drafts.has(4) ? { ...square(4), geometry: drafts.get(4)! } : square(4)],
+      onObjectDraft: vi.fn((id, g) => { if (g) drafts.set(id, g); else drafts.delete(id); }),
+    });
+    let o = opts();
+    selectBinding(o).onPointerDown!(ptr(5, 5, { target: { kind: "object", id: 4 } }));
+    selectBinding(o).onPointerDrag!({ x: 6, y: 5 });
+    o = opts(); // re-rendered with the draft
+    selectBinding(o).onPointerDrag!({ x: 7, y: 5 });
+    o = opts();
+    selectBinding(o).onPointerDrag!({ x: 8, y: 5 });
+    expect(drafts.get(4)![0]).toEqual({ x: 3, y: 0 });
+    o = opts();
+    selectBinding(o).onPointerUp!({ x: 8, y: 5 });
+    expect(o.onObjectMoved).toHaveBeenCalledWith(4, [{ x: 3, y: 0 }, { x: 13, y: 0 }, { x: 13, y: 10 }, { x: 3, y: 10 }]);
+  });
+
   it("outlines filter regions and toner savers always, other objects when selected", () => {
     const shapes = selectBinding(selectOpts({ objects: [square(1), square(2, "filter_region")] })).shapes!;
     expect(shapes.filter((s) => s.testId === "editor-object-outline").map((s) => (s as { data?: Record<string, string> }).data?.["object-id"])).toEqual(["2"]);

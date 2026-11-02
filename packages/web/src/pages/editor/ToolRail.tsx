@@ -6,9 +6,11 @@
  * until slice F. Every tool has its key; the page owns the keyboard.
  */
 
+import { useLayoutEffect, useRef, useState } from "react";
+import { createPortal } from "react-dom";
 import { useTranslation } from "react-i18next";
 import type { EditorTool } from "../../lib/editor/state";
-import { AREA_CHOICES, railKeyOf, type AreaChoice, type RailTool } from "./tools/rail";
+import { AREA_CHOICES, AREA_KEYS, railKeyOf, type AreaChoice, type RailTool } from "./tools/rail";
 
 export type { AreaChoice } from "./tools/rail";
 
@@ -34,9 +36,24 @@ export function ToolRail(p: ToolRailProps) {
   const { t } = useTranslation("editor");
   const { areaOpen } = p;
   const active = railKeyOf(p.tool);
+  // The `A` menu is a portal at the button's screen position: inside the rail it sat under the inspector
+  // (a later sibling of the overlay strip paints over it) and under the map panel's own stacking.
+  const areaButton = useRef<HTMLButtonElement | null>(null);
+  const [menuAt, setMenuAt] = useState<{ left: number; top: number } | null>(null);
+  useLayoutEffect(() => {
+    if (!areaOpen) { setMenuAt(null); return; }
+    const place = () => {
+      const r = areaButton.current?.getBoundingClientRect();
+      if (r) setMenuAt({ left: r.right + 6, top: r.top });
+    };
+    place();
+    window.addEventListener("resize", place);
+    return () => window.removeEventListener("resize", place);
+  }, [areaOpen]);
   const button = (key: RailTool, label: string, onClick: () => void, disabled = false, title = label) => (
     <button
       key={key}
+      ref={key === "A" ? areaButton : undefined}
       type="button"
       data-testid={`editor-tool-${key}`}
       aria-pressed={active === key}
@@ -71,17 +88,20 @@ export function ToolRail(p: ToolRailProps) {
         className={`${BTN} ${p.snapping ? "bg-purple-100 text-purple-700" : "text-slate-500 hover:bg-slate-100"} cursor-pointer`}>
         <svg viewBox="0 0 16 16" className="w-4 h-4" aria-hidden><path d="M4 2v6a4 4 0 0 0 8 0V2M4 5h3M9 5h3" fill="none" stroke="currentColor" strokeWidth="1.6" /></svg>
       </button>
-      {areaOpen && (
-        <div data-testid="editor-area-menu" role="menu" className="absolute left-full top-[13.5rem] ml-1 z-10 w-44 bg-white border border-slate-200 rounded-lg shadow-lg py-1 text-xs">
+      {areaOpen && menuAt && createPortal(
+        <div data-testid="editor-area-menu" role="menu" style={{ left: menuAt.left, top: menuAt.top }}
+          className="fixed z-50 w-48 bg-white border border-slate-200 rounded-lg shadow-lg py-1 text-xs">
           {AREA_CHOICES.map((kind) => (
             <button key={kind} type="button" role="menuitem" data-testid={`editor-area-${kind}`}
               disabled={kind === "toner_saver" && !p.canTonerSaver}
               onClick={() => { p.onAreaOpen(false); p.onArea(kind); }}
-              className="w-full text-left px-2.5 py-1.5 hover:bg-purple-50 disabled:opacity-40 disabled:cursor-not-allowed cursor-pointer">
-              {t(`kind_${kind}`)}
+              className="w-full flex items-center gap-2 text-left px-2.5 py-1.5 hover:bg-purple-50 disabled:opacity-40 disabled:cursor-not-allowed cursor-pointer">
+              <kbd className="w-4 text-center font-mono text-[10px] text-slate-400 border border-slate-200 rounded">{AREA_KEYS[kind]}</kbd>
+              <span>{t(`kind_${kind}`)}</span>
             </button>
           ))}
-        </div>
+        </div>,
+        document.body,
       )}
     </div>
   );

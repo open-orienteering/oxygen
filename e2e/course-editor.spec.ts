@@ -11,7 +11,7 @@ import { test, expect, type Page } from "@playwright/test";
 import { API_BASE as API } from "./helpers/api-base";
 import { reseed } from "./helpers/reseed";
 import { setEditorVector, setMapPipeline } from "./helpers/map-pipeline";
-import { clickMap, drag, editorReady, emptyPoint, inkIn, legMidpoint, legPieces, site, sitePoint, sites, toolShapes, toPage, toPaper } from "./helpers/editor";
+import { clickMap, coveredBy, drag, editorReady, emptyPoint, inkIn, legMidpoint, legPieces, site, sitePoint, sites, toolShapes, toPage, toPaper } from "./helpers/editor";
 import { waitForTrpc } from "./helpers/trpc";
 
 test.beforeAll(async () => {
@@ -370,15 +370,23 @@ test.describe("Course editor (new, GL canvas)", () => {
     test("Shift-click selects several controls for one add-to-course; notes are written from the inspector", async ({ page }) => {
       await openEditor(page);
       await newCourse(page, "D5 multi");
-      const [a, b, c] = await regularCodes(page, 3);
+      const [a, ...rest] = await regularCodes(page, 6);
       await clickMap(page, await sitePoint(page, a));
       await expect(selectedCode(page)).toContainText(a, { timeout: 10000 });
-      for (const code of [b, c]) {
+      // The selection's action bar sits next to the selected control and may cover a neighbour: Shift-click
+      // the first two candidates that are clear of the chrome at click time (a user would pan; the test picks).
+      const picked: string[] = [];
+      for (const code of rest) {
+        if (picked.length === 2) break;
         const p = await sitePoint(page, code);
+        if (await coveredBy(page, p)) continue;
         await page.keyboard.down("Shift");
-        await page.mouse.click(p.x, p.y);
-        await page.keyboard.up("Shift");
+        try { await clickMap(page, p); } finally { await page.keyboard.up("Shift"); }
+        picked.push(code);
+        await expect(page.getByTestId("editor-multi-ring")).toHaveCount(picked.length + 1, { timeout: 10000 });
       }
+      expect(picked, "two Shift-clickable controls clear of the action bar").toHaveLength(2);
+      const [b, c] = picked;
       await expect(page.getByTestId("editor-multi")).toHaveAttribute("data-count", "3", { timeout: 10000 });
       await expect(page.getByTestId("editor-multi-ring")).toHaveCount(3);
       const saved = waitForTrpc(page, "course.setStructure");
@@ -591,8 +599,16 @@ test.describe("Course editor (new, GL canvas)", () => {
       const band = { minX: -8, minY: -6, maxX: 8, maxY: -2 };
       const before = await inkIn(page, band);
       expect(before, "path ink before the region").toBeGreaterThan(5);
-      await page.getByTestId("editor-tool-A").click();
-      await page.getByTestId("editor-area-filter_region").click();
+      // The `A` chord (§6.4): `A` opens the menu as a portal above the inspector, `F` picks the filter region.
+      await page.keyboard.press("a");
+      const menu = page.getByTestId("editor-area-menu");
+      await expect(menu).toBeVisible();
+      const menuBox = (await menu.boundingBox())!;
+      const onTop = await page.evaluate(({ x, y }) => document.elementFromPoint(x, y)?.closest('[data-testid="editor-area-menu"]') !== null, { x: menuBox.x + 8, y: menuBox.y + 8 });
+      expect(onTop, "the area menu is not covered by the inspector").toBe(true);
+      await page.keyboard.press("f");
+      await expect(menu).toHaveCount(0);
+      await expect(page.getByTestId("editor-tool-A")).toHaveAttribute("aria-pressed", "true");
       for (const p of [{ x: -12, y: -9 }, { x: 12, y: -9 }, { x: 12, y: 1 }, { x: -12, y: 1 }]) {
         const q = await toPage(page, p);
         await page.mouse.click(q.x, q.y);

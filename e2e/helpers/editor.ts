@@ -132,14 +132,19 @@ const CHROME = ["editor-inspector", "editor-tool-rail", "editor-status", "editor
  * it — the click would land there, not on the canvas.
  */
 export async function clickMap(page: Page, p: Pt): Promise<void> {
-  const cover = await page.evaluate(({ pt, chrome }) => {
+  const cover = await coveredBy(page, p);
+  if (cover) throw new Error(`map point (${Math.round(p.x)}, ${Math.round(p.y)}) is covered by ${cover}`);
+  await page.mouse.click(p.x, p.y);
+}
+
+/** The test id of the editor chrome over a page point (or the tag of whatever else is there), null when the map canvas is on top. */
+export async function coveredBy(page: Page, p: Pt): Promise<string | null> {
+  return page.evaluate(({ pt, chrome }) => {
     const el = document.elementFromPoint(pt.x, pt.y);
     const over = el?.closest(chrome.map((id) => `[data-testid="${id}"]`).join(","));
     if (over) return over.getAttribute("data-testid");
     return el?.closest('[data-testid="map-viewer"]') ? null : (el?.tagName ?? "nothing");
   }, { pt: p, chrome: CHROME });
-  if (cover) throw new Error(`map point (${Math.round(p.x)}, ${Math.round(p.y)}) is covered by ${cover}`);
-  await page.mouse.click(p.x, p.y);
 }
 
 /**

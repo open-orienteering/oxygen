@@ -296,6 +296,15 @@ tool starts from the stored ones.
 
 ### 6.4 Area tools (`A`)
 
+`A` opens the menu of kinds next to the rail button (`editor-area-menu`,
+a portal at the button's screen position so nothing in the overlay strip
+covers it); a second key picks the kind — the **`A` chord**: `O`
+out-of-bounds area, `L` out-of-bounds line, `W` white-out, `F` filter
+region, `S` toner saver, `R` marked route (`AREA_KEYS`, shown in the
+menu). The chord key is read only while the menu is open, so `S` does
+not arm the start tool there; `Esc` or `A` closes the menu. A click on a
+menu item does the same.
+
 `pages/editor/tools/polygon.ts`: click per vertex, drag a vertex
 (`editor-polygon-vertex`) to adjust before closing, close by a
 double-click or a click on the first vertex, `Esc` cancels; `Enter`

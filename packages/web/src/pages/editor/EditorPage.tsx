@@ -49,6 +49,7 @@ import { displaySequence, effectiveEnds, explicitStructure, insertIndexForLeg, k
 import { courseActions } from "./ActionBar";
 import { TopBar } from "./TopBar";
 import { ToolRail, type AreaChoice } from "./ToolRail";
+import { areaChoiceOfKey } from "./tools/rail";
 import { afterPlaced, afterUndo, armPlacement, ghostInfo, switchTool, type PlacementState, type PlacementTool } from "./tools/placement";
 import { tonerSaverHull, type AreaKind } from "./tools/polygon";
 import { mergeCircleGaps, mergeLegGaps, type AngularGap, type FractionGap } from "./tools/gaps";
@@ -957,6 +958,7 @@ export function EditorPage() {
 
   const [areaOpen, setAreaOpen] = useState(false);
   const canGap = state.selectedControlId !== null ? kindOf(state.selectedControlId) === "control" : (state.phantom?.insertAt ?? null) !== null;
+  const canTonerSaver = !!selectedCourse && rows.some((r) => r.pt);
 
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
@@ -1003,6 +1005,12 @@ export function EditorPage() {
       } else if (e.key === "Tab" && !mod) {
         e.preventDefault();
         stepSelection(e.shiftKey ? -1 : 1);
+      } else if (areaOpen && plain && areaChoiceOfKey(key)) {
+        // The `A` chord: `A` opened the menu, this key picks the kind (§6.4).
+        e.preventDefault();
+        const kind = areaChoiceOfKey(key)!;
+        setAreaOpen(false);
+        if (kind !== "toner_saver" || canTonerSaver) startArea(kind);
       } else if (plain && key === "H") {
         dispatch({ type: "toggle-hide-others" });
       } else if (plain && key === "V") {
@@ -1027,7 +1035,7 @@ export function EditorPage() {
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
   }, [descControlId, runUndo, runRedo, undoStack, state, handleDelete, deleteControls, deleteObject, selectedObject, setChain, exitTool, finishArea,
-    stepSelection, armPlace, setTool, canGap, fitView]);
+    stepSelection, armPlace, setTool, canGap, fitView, areaOpen, canTonerSaver, startArea]);
 
   const deepLinkDone = useRef(false);
   useEffect(() => {
@@ -1171,7 +1179,7 @@ export function EditorPage() {
         areaOpen={areaOpen}
         onAreaOpen={setAreaOpen}
         canGap={canGap}
-        canTonerSaver={!!selectedCourse && rows.some((r) => r.pt)}
+        canTonerSaver={canTonerSaver}
         snapping={state.snapping}
         onSnapping={() => dispatch({ type: "toggle-snapping" })}
       />

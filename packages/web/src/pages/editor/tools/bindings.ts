@@ -20,7 +20,8 @@ export const HANDLE_PX = 7;
 export type Gesture =
   | { kind: "lasso"; points: Pt[] }
   | { kind: "shift-click"; id: number }
-  | { kind: "object"; id: number; from: Pt; to: Pt; moved: boolean; vertex: number | null }
+  /** `base` is the geometry at pointer-down: every drag event applies the whole from→to offset to it, never to a draft. */
+  | { kind: "object"; id: number; from: Pt; to: Pt; moved: boolean; vertex: number | null; base: course.CourseObject["geometry"] }
   | { kind: "poly-vertex"; index: number }
   | { kind: "gap"; from: Pt; to: Pt }
   | null;
@@ -102,7 +103,7 @@ export function selectBinding(o: SelectOptions): EditorToolBinding {
         const vertex = sel.geometry.findIndex((v) => near(v, p.pt, HANDLE_PX * p.mmPerPx));
         const onBody = p.target?.kind === "object" && p.target.id === sel.id;
         if (vertex >= 0 || onBody) {
-          g.current = { kind: "object", id: sel.id, from: p.pt, to: p.pt, moved: false, vertex: vertex >= 0 ? vertex : null };
+          g.current = { kind: "object", id: sel.id, from: p.pt, to: p.pt, moved: false, vertex: vertex >= 0 ? vertex : null, base: sel.geometry };
           return true;
         }
       }
@@ -117,7 +118,7 @@ export function selectBinding(o: SelectOptions): EditorToolBinding {
       if (p.target?.kind === "object") {
         const obj = o.objects.find((x) => x.id === (p.target as { id: number }).id);
         if (obj) {
-          g.current = { kind: "object", id: obj.id, from: p.pt, to: p.pt, moved: false, vertex: null };
+          g.current = { kind: "object", id: obj.id, from: p.pt, to: p.pt, moved: false, vertex: null, base: obj.geometry };
           o.onSelectObject(obj.id);
           return true;
         }
@@ -132,8 +133,7 @@ export function selectBinding(o: SelectOptions): EditorToolBinding {
       } else if (cur?.kind === "object") {
         cur.to = pt;
         cur.moved = cur.moved || !near(cur.from, pt, 0.05);
-        const obj = o.objects.find((x) => x.id === cur.id);
-        if (obj && cur.moved) o.onObjectDraft(obj.id, dragged(obj.geometry, cur));
+        if (cur.moved) o.onObjectDraft(cur.id, dragged(cur));
       }
     },
     onPointerUp(pt) {
@@ -147,9 +147,8 @@ export function selectBinding(o: SelectOptions): EditorToolBinding {
         if (!pt || cur.points.length < 3) return;
         o.onLasso(o.sites.filter((s) => s.kind === "control" && pointInPolygon(s, cur.points)).map((s) => s.id));
       } else if (cur.kind === "object") {
-        const obj = o.objects.find((x) => x.id === cur.id);
         if (pt) cur.to = pt;
-        if (obj && pt && cur.moved) o.onObjectMoved(obj.id, dragged(obj.geometry, cur));
+        if (pt && cur.moved) o.onObjectMoved(cur.id, dragged(cur));
         else o.onObjectDraft(cur.id, null);
       }
     },
@@ -159,10 +158,10 @@ export function selectBinding(o: SelectOptions): EditorToolBinding {
   };
 }
 
-function dragged(geometry: course.CourseObject["geometry"], g: Extract<Gesture, { kind: "object" }>): course.CourseObject["geometry"] {
+function dragged(g: Extract<Gesture, { kind: "object" }>): course.CourseObject["geometry"] {
   const dx = g.to.x - g.from.x, dy = g.to.y - g.from.y;
-  if (g.vertex === null) return translate(geometry, dx, dy);
-  return geometry.map((v, i) => (i === g.vertex ? { ...v, x: v.x + dx, y: v.y + dy } : v));
+  if (g.vertex === null) return translate(g.base, dx, dy);
+  return g.base.map((v, i) => (i === g.vertex ? { ...v, x: v.x + dx, y: v.y + dy } : v));
 }
 
 // ─── S / K / M: the armed creation tools ──────────────────
