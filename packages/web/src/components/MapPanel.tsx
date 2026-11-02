@@ -679,9 +679,14 @@ function MapPanelImpl({
   // selection → course — instead of instantly dropping out of
   // fullscreen. Holding Esc still exits (browser-enforced escape hatch),
   // and the editor exits programmatically once the cascade is empty.
-  // No-op where the API is unavailable.
+  // No-op where the API is unavailable. Keyed on *whether* there is an
+  // editor, not on the editor object: that object is rebuilt on every
+  // editor render (a hover with an armed tool, a selection), and each
+  // re-lock makes Chrome show its "press Esc to exit full screen" bubble
+  // again (docs/bugfix-fullscreen-bubble-flicker.md).
+  const hasEditor = !!editor;
   useEffect(() => {
-    if (!editor || !isFullscreen) return;
+    if (!hasEditor || !isFullscreen) return;
     const kb = (
       navigator as Navigator & {
         keyboard?: { lock?: (keys: string[]) => Promise<void>; unlock?: () => void };
@@ -692,7 +697,7 @@ function MapPanelImpl({
       /* unsupported / denied — Esc keeps its default fullscreen-exit */
     });
     return () => kb.unlock?.();
-  }, [editor, isFullscreen]);
+  }, [hasEditor, isFullscreen]);
 
   // Highlight attribute (intent, not render outcome) — also surfaced on
   // the upload-prompt / loading-state paths so E2E tests can observe the
