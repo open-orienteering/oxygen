@@ -175,7 +175,8 @@ Event-scoped tRPC routers:
 
 - `mapTemplate` — list, create, update, duplicate, delete, apply to courses,
   save/load/delete club templates
-- `courseMap` — list with validation, get, create, update, delete, reorder;
+- `courseMap` — list with validation, get, create, update, delete, reorder,
+  `saveLayout` (`templateObjects` optional: omitted, the template is not written);
   `resolveSheet` (a sheet, or a template previewed with a course, as the
   composer draws it: the read of the new editor's Layout mode,
   `course-layout.md` §1)

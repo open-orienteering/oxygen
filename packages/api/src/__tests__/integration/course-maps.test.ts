@@ -479,7 +479,15 @@ describe("map templates and course maps", () => {
     // The course's other sheets count for "outside every sheet".
     expect(r.windows.length).toBeGreaterThan(1);
     expect(r.windows[0]).toEqual(r.window);
+    // Without templateObjects the template is not written (Layout mode's sheet scope).
+    await caller.courseMap.saveLayout({ id: sheet.seq, windowCenter: { x: 6, y: -7 }, printScale: 10000, description: { visible: true, x: 140, y: 12, cellSizeMm: 6 }, objects: [] });
+    const kept = await ctx.db.mapTemplate.findFirstOrThrow({ where: { eventId: ctx.eventId, seq: template.seq } });
+    expect(kept.objects).toEqual(stored.objects);
     await caller.courseMap.delete({ id: sheet.seq });
+    // A sheet without a template has nothing to lay out.
+    const bare = await caller.courseMap.create({ name: "No template", courseId: courseSeq, templateId: null, kind: "course", overrides: {}, objects: [] });
+    await expect(caller.courseMap.resolveSheet({ seq: bare.seq })).rejects.toMatchObject({ code: "PRECONDITION_FAILED" });
+    await caller.courseMap.delete({ id: bare.seq });
   });
 
   it("resolveSheet: a template previewed with a course, and NOT_FOUND for unknown rows", async () => {

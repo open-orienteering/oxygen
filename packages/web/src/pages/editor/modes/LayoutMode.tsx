@@ -22,7 +22,7 @@ import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } fro
 import { validateCourseMap, type CourseMapDocument, type CourseMapObject } from "@oxygen/shared";
 import { trpc } from "../../../lib/trpc";
 import type { MapViewerEditorProps } from "../../../components/MapViewer";
-import { descriptionRect, pageBounds, type SheetGeometry } from "../../../lib/editor/layout";
+import { descriptionRect, gridSnap, pageBounds, type SheetGeometry } from "../../../lib/editor/layout";
 import { constrainDescription } from "../../../lib/map-layout-editor";
 import { useMediaQuery } from "../../../hooks/useMediaQuery";
 import type { EditorView } from "../../../lib/editor/state";
@@ -70,9 +70,9 @@ export function useLayoutMode(a: LayoutModeArgs): LayoutMode {
   const sheets = trpc.courseMap.list.useQuery(undefined, { enabled: a.enabled });
   const resolvedTarget = useMemo((): LayoutTarget | null => {
     const rows = sheets.data ?? [];
-    // An opened course sheet gives way when the top bar picks another course.
+    // An opened course sheet gives way when the top bar picks another course or view All.
     const opened = target && "sheet" in target ? rows.find((r) => r.seq === target.sheet) : undefined;
-    const stale = !!opened && opened.kind === "course" && a.view === "course" && !!a.course && opened.courseId !== a.course.id;
+    const stale = !!opened && opened.kind === "course" && (a.view === "all" || (!!a.course && opened.courseId !== a.course.id));
     if (target && !stale) return target;
     if (a.view === "all") {
       const all = rows.find((r) => r.kind === "all_controls" && r.templateId !== null);
@@ -124,7 +124,8 @@ export function useLayoutMode(a: LayoutModeArgs): LayoutMode {
   const save = useCallback(async (w: WriteTarget, s: LayoutSnapshot) => {
     if (w.scope === "sheet" && w.sheetSeq !== null) {
       await client.courseMap.saveLayout.mutate({
-        id: w.sheetSeq, windowCenter: s.centre, printScale: s.printScale, description: s.description, objects: s.sheetObjects, templateObjects: s.templateObjects,
+        // The template's objects are locked here and not written: a sheet gesture never touches the template.
+        id: w.sheetSeq, windowCenter: s.centre, printScale: s.printScale, description: s.description, objects: s.sheetObjects,
       });
     } else {
       await client.mapTemplate.update.mutate({
@@ -166,8 +167,9 @@ export function useLayoutMode(a: LayoutModeArgs): LayoutMode {
     [data, snap],
   );
   const purple = snap?.settings.appearance.purple ?? "#a626ff";
-  const place = useCallback((what: PlaceKind, page: Pt, graphicId?: number) => {
+  const place = useCallback((what: PlaceKind, at: Pt, graphicId?: number) => {
     if (!stored || !geometry || !data) return;
+    const page = gridSnap(at, snapping);
     setTool({ kind: "select" });
     if (what === "description") {
       const size = descriptionRect({ ...stored.description, x: page.x, y: page.y }, data.descriptionRowCount, data.descriptionHeaderRows);
@@ -179,7 +181,7 @@ export function useLayoutMode(a: LayoutModeArgs): LayoutMode {
     if (!o) return;
     change({ objects: [...scopeObjects(data, stored).editable, o] });
     setSelection({ kind: "object", id: o.id });
-  }, [stored, geometry, data, change, purple]);
+  }, [stored, geometry, data, change, purple, snapping]);
 
   const binding = useMemo(() => {
     if (!a.enabled || !geometry || !snap) return null;

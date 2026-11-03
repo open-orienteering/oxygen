@@ -25,7 +25,8 @@ paper view's rotation is `bearing − tilt`, the window's is `−tilt`);
 `lib/editor/layout.ts` is the pure maths: `toView` / `toPage`,
 `sheetWindow` (`mapWindowForFrame` with the resolved window's rotation),
 `sheetShapes`, `layoutObjectAt`, `objectHandles` / `handleAt`,
-`descriptionRect`, `alignedCentre`, `pageDelta`, `gridSnap`, `pageBounds`.
+`descriptionRect`, `alignedCentre`, `pageDelta`, `gridSnap` (placement on
+the grid; drags move in whole millimetres), `pageBounds`.
 
 ### What is drawn, and by whom
 
@@ -37,6 +38,11 @@ paper view's rotation is `bearing − tilt`, the window's is `−tilt`);
 | Map clip | the renderer scissors every map colour to the frame (`pageClip`) | the frame clip |
 | Paper edge, printable margin (dashed red), frame (purple, solid when selected), grey surround | UI layer (`editor-layout-paper` / `-printable` / `-frame`) | — |
 | Images (page and map anchored) | UI layer (`editor-layout-image`, an SVG `<image>` of `/api/maps/<event>/graphics/<id>`) | embedded PNG |
+
+The label mode is the viewer's own rule (sequence numbers for one ordered
+course, codes for the all-controls sheet), which agrees with
+`resolve-layout.ts` by construction; `resolveSheet`'s `labelMode` is not
+passed.
 
 So **the preview is the PDF**: the page objects and the block are the
 composer's own stream, symbolised in the worker (`map-rendering.md` §5.2
@@ -92,17 +98,22 @@ selections of Course mode.
 - *Sheet* (`courseMap.saveLayout`): the course's first sheet (by
   `sortOrder`, `seq`) unless one was opened; view *All controls* shows the
   all-controls sheet; a course without a sheet shows "assign a template
-  on the Maps page" (`editor-layout-no-sheet`). A course sheet draws only
+  on the Maps page" (`editor-layout-no-sheet`). An opened course sheet
+  gives way to the default when the top bar picks another course or view
+  *All controls*. A course sheet draws only
   its course (`filterMode: "course"`), as it prints. The top bar's course
   picker switches the sheet; the inspector's picker
   (`editor-layout-sheet-picker`) chooses among the course's sheets.
   Editable: the sheet's objects, the block (visible, cell size,
-  position), the print scale override and the window centre. The
+  position), the print scale override and the window centre; a sheet
+  write leaves the template's objects alone (`saveLayout` without
+  `templateObjects`, which `MapLayoutEditor` still sends). The
   template's objects are drawn **locked**, with the link
   `editor-layout-edit-template`.
 - *Template* (`mapTemplate.update`): previewed with the top bar's course.
-  Editable: paper, orientation, print scale, margin (moving the frame with
-  it, as the template table does), appearance (circle, line, number,
+  Editable: paper, orientation, print scale, margin (the frame keeps its
+  distance to the margin; the template table instead resets a frame to the
+  default for the new margin), appearance (circle, line, number,
   purple), the block's defaults and the template's objects. No align
   (a template stores no window). On a coarse pointer the inspector says
   template editing is optimised for desktop (08 §5.5); window moves on a
@@ -205,8 +216,8 @@ templates pages' tables, club templates, and the legacy editor.
 | unit (web) | `lib/__tests__/course-layer-request.test.ts` | `layout`: the page passed through, layout objects before course objects, appearance, overprint, window, text values |
 | unit (web) | `lib/editor/__tests__/layout.test.ts` | page-view maths: the window, page ↔ view round trips (rotated), y flip, sheet shapes, page bounds, hit-testing, handles, the block's rectangle, align, page offset, grid |
 | unit (web) | `pages/editor/__tests__/layout-bindings.test.ts`, `layout-model.test.ts`, `lib/editor/__tests__/state.test.ts` | the binding (exclusive, shapes, select / move / snap / resize / locked / align / block / place); the snapshot per scope, geometry, the request, placement per kind; the mode case |
-| integration | `packages/api/src/__tests__/integration/course-maps.test.ts` "resolveSheet" | a sheet (window centre, page, text values, block, template / sheet split, overprint, sibling windows) and a template with and without a course; `NOT_FOUND` |
-| E2E | `e2e/course-editor.spec.ts` "Course editor layout" | from the Maps page into Layout mode on the sheet; the sheet shapes; `H` places a header and ink appears where the page layer draws it; the frame selected and dragged → `courseMap.get`'s centre moved by the drag; undo restores it; `maps.pdf?maps=` has one A4 page; the template link opens template scope |
+| integration | `packages/api/src/__tests__/integration/course-maps.test.ts` "resolveSheet" | a sheet (window centre, page, text values, block, template / sheet split, overprint, sibling windows), `saveLayout` without `templateObjects` leaves the template, `PRECONDITION_FAILED` without a template; a template with and without a course; `NOT_FOUND` |
+| E2E | `e2e/course-editor.spec.ts` "Course editor layout" | from the Maps page into Layout mode on the sheet; the sheet shapes; `H` places a header, the inspector makes it a long 10 mm text, and ink appears where the page layer draws it; the frame selected and dragged → `courseMap.get`'s centre moved by the drag; undo restores it; the `maps.pdf?maps=` route answers one A4 page; the template link opens template scope, an orientation change writes `mapTemplate.update`; the Map templates page's *Edit template layout* opens template scope |
 
 ## Pending in this chapter
 

@@ -625,7 +625,8 @@ export const courseMapRouter = router({
         printScale: z.number().int().positive().max(100_000),
         description: mapTemplateSettingsSchema.shape.description,
         objects: objectsSchema,
-        templateObjects: objectsSchema,
+        /** The template's objects; omitted, the template is not written (Layout mode's sheet scope, docs/course-layout.md §2). */
+        templateObjects: objectsSchema.optional(),
       }),
     )
     .mutation(async ({ ctx, input }) => {
@@ -648,7 +649,7 @@ export const courseMapRouter = router({
             objects: json(input.objects),
           },
         });
-        if (map.template) {
+        if (map.template && input.templateObjects) {
           await tx.mapTemplate.update({
             where: { id: map.template.id },
             data: { objects: json(input.templateObjects) },

@@ -145,10 +145,11 @@ test.describe("Course editor (new, GL canvas)", () => {
     await page.reload();
     await editorReady(page);
     await expect(page.getByTestId("course-editor-page")).toHaveCount(0);
-    // The shell: top bar, tool rail, inspector, status bar; Layout / Field shown, not enterable.
+    // The shell: top bar, tool rail, inspector, status bar; Layout enterable (D7), Field not yet (D9).
     for (const id of ["editor-top-bar", "editor-tool-rail", "editor-inspector", "editor-status"]) await expect(page.getByTestId(id)).toBeVisible();
     await expect(page.getByTestId("editor-mode-course")).toHaveAttribute("aria-pressed", "true");
-    await expect(page.getByTestId("editor-mode-layout")).toBeDisabled();
+    await expect(page.getByTestId("editor-mode-layout")).toBeEnabled();
+    await expect(page.getByTestId("editor-mode-field")).toBeDisabled();
     // No SVG hit targets: the viewer hit-tests the layer's shapes.
     await expect(page.getByTestId("editor-control-hit")).toHaveCount(0);
     // The rail (§6): exchange and crossing wait for slice F.
@@ -825,6 +826,19 @@ test.describe("Course editor layout (docs/course-layout.md)", () => {
     await expect(page.getByTestId("editor-layout-scope")).toHaveAttribute("data-scope", "template");
     await expect(page.getByTestId("editor-layout-object-row")).toHaveCount(0);
     await expect(page.getByTestId("editor-layout-paper-size")).toHaveValue("A4");
+    // A template write: orientation through mapTemplate.update.
+    const updated = waitForTrpc(page, "mapTemplate.update");
+    await page.getByTestId("editor-layout-orientation").selectOption("landscape");
+    await updated;
+    const templates = await trpcCall<{ seq: number; orientation: string }[]>("mapTemplate.list", undefined, false);
+    expect(templates.find((t) => t.seq === template.seq)?.orientation).toBe("landscape");
+
+    // The Map templates page's Edit template layout opens the same template scope.
+    await page.goto(`/${nameId}/map-templates`);
+    await page.getByTestId(`edit-template-layout-${template.seq}`).click();
+    await expect(page).toHaveURL(new RegExp(`course-editor\\?mode=layout&template=${template.seq}`));
+    await expect(page.getByTestId("editor-layout-scope")).toHaveAttribute("data-scope", "template", { timeout: 30_000 });
+    await expect(page.getByTestId("editor-layout-scope")).toHaveAttribute("data-template", String(template.seq));
   });
 });
 

@@ -125,6 +125,8 @@ export function MapsPage() {
   const editorMount = useCourseEditorMount();
   const navigate = useNavigate();
   const editLayout = (map: { seq: number; courseId: number | null }) => {
+    // Disabled until the mount is known: a click before it would open the wrong editor.
+    if (editorMount === null) return;
     if (editorMount === "vector") navigate(layoutEditorHref(nameId, { sheet: map.seq }, map.courseId));
     else setEditingMapSeq(map.seq);
   };
@@ -400,6 +402,7 @@ export function MapsPage() {
                             type="button"
                             data-testid={`edit-course-map-${courseMaps[0].seq}`}
                             onClick={() => editLayout(courseMaps[0])}
+                            disabled={editorMount === null}
                             title={t("editLayout")}
                             className="flex items-center rounded p-1.5 text-slate-400 transition-colors hover:bg-blue-50 hover:text-blue-700"
                           >
@@ -466,6 +469,7 @@ export function MapsPage() {
                                   type="button"
                                   data-testid={`edit-course-map-${map.seq}`}
                                   onClick={() => editLayout(map)}
+                                  disabled={editorMount === null}
                                   title={t("editLayout")}
                                   className="rounded p-1.5 text-slate-400 hover:bg-blue-50 hover:text-blue-700"
                                 >
@@ -647,6 +651,7 @@ export function MapsPage() {
             <button
               type="button"
               onClick={() => editLayout(map)}
+                                  disabled={editorMount === null}
               className="rounded-lg border border-blue-200 px-3 py-1.5 text-sm text-blue-700"
             >
               {t("editLayout")}
