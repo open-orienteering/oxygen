@@ -8,7 +8,7 @@
 import { devices, type BrowserContext, type Page } from "@playwright/test";
 import { test, expect, setEditorVector, setMapPipeline } from "./helpers/map-pipeline";
 import { reseed } from "./helpers/reseed";
-import { editorReady, site, sites, toPage, toPaper } from "./helpers/editor";
+import { editorReady, purpleInCircle, site, sites, toPage, toPaper } from "./helpers/editor";
 import { touchDrag, touchEnd, touchMove, touchStart, touchTap } from "./helpers/touch";
 
 type Pt = { x: number; y: number };
@@ -205,8 +205,23 @@ test.describe("Field mode on a phone (docs/course-editor.md §9, §10)", () => {
     await page.waitForTimeout(650);
     for (let i = 1; i <= 6; i++) await touchMove(page, [{ x: again.at.x + (30 * i) / 6, y: again.at.y + (20 * i) / 6 }]);
     await expect(page.getByTestId("editor-touch-handle")).toBeVisible();
+    // The loupe (§10 "Loupe"): 120 px, above the handle, the GL canvas magnified inside it —
+    // the dragged control's purple circle at ×2.5 about the crosshair, more purple than the 1×
+    // map shows in the same circle once it is gone.
+    const loupe = page.getByTestId("editor-loupe");
+    await expect(loupe).toBeVisible();
+    const lb = (await loupe.boundingBox())!;
+    expect(Math.abs(lb.width - 120)).toBeLessThanOrEqual(1);
+    expect(Math.abs(lb.height - 120)).toBeLessThanOrEqual(1);
+    expect(lb.y + lb.height).toBeLessThanOrEqual(to.y - 48);
+    expect(Math.abs(lb.x + lb.width / 2 - to.x)).toBeLessThanOrEqual(1);
+    let magnified = 0;
+    await expect.poll(async () => (magnified = await purpleInCircle(page, lb)), { timeout: 10000 }).toBeGreaterThan(200);
     const drawnAt = await toPaper(page, { x: to.x, y: to.y - 48 });
     await touchEnd(page, [to]);
+    await expect(loupe).toHaveCount(0);
+    await expect(page.getByTestId("editor-touch-handle")).toHaveCount(0);
+    expect(await purpleInCircle(page, lb)).toBeLessThan(magnified / 2);
     await expect(page.getByTestId("editor-sheet-selection")).toContainText(again.code);
     await expect(page.getByTestId("editor-save-state")).toHaveAttribute("data-state", "saved", { timeout: 15000 });
     await page.reload();

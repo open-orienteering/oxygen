@@ -1204,7 +1204,20 @@ sorting happens here.
   default the canvas at the view's size. A framebuffer target needs a
   stencil attachment (pattern clips). `compare=1&target=fbo` on the dev
   page draws into an offscreen 4× MSAA framebuffer and the E2E compares
-  it with the per-pass path like the canvas.
+  it with the per-pass path like the canvas. The editor's **loupe**
+  (§5.5) draws into `renderer.insetTarget(size)` — the supersample
+  path's recipe, a `size`² framebuffer with 4× MSAA `RGBA8` and
+  `DEPTH24_STENCIL8`, kept until the size changes or `releaseInset()` —
+  and `compositeInset(box)` resolves it into a texture and draws that
+  into the circle inscribed in `box` (top-left, device px) of the canvas
+  with the blit program (fragments outside the circle discarded; blend,
+  stencil and scissor off); the rest of the canvas is untouched.
+  `engine.renderInset(view, opts, box)` is the pair over the visible set
+  `render` last built (no cell selection, no request, no rebuild; the
+  page clip forwarded); its view is `loupeView(main, point, scale, size)`
+  (`view.ts`): centre the point, `pxPerUm × scale`, `size`² device px,
+  the main rotation — a `ViewRect` rather than a bare `viewMatrix`
+  option, because the screen-only rules read its `pxPerUm`.
 
 * **Fills** — earcut triangles, opaque. No stencil.
 * **Strokes** — `halfWidth × offset` in the vertex shader. **Hairline
@@ -1483,7 +1496,7 @@ published on `window.__mapGlDoc` for Playwright.
 | `map-gl/__tests__/arena.test.ts` | free list: first fit, exact accounting, coalescing, growth |
 | `map-gl/__tests__/worker-protocol.test.ts` | `loaded` contents and transfer list; `prepare` queue replacement and slicing; first-view queue and the gate; base + detail + large covers every kind; load errors |
 | `map-gl/__tests__/engine.test.ts` | residency through the real worker handler and a fake renderer: drawn + prefetch requested and uploaded; drawn parts never evicted, over budget reported; the same view never re-requests what was evicted; rebuild on drawn-set change but not on zoom within the cells; below the gate only base + large, queue cancelled; hidden objects |
-| `map-gl/__tests__/view.test.ts` | view matrix: centre → clip origin, canvas edges → ±1, y-up, rotation; sub-pixel precision far from the origin in float32 arithmetic |
+| `map-gl/__tests__/view.test.ts` | view matrix: centre → clip origin, canvas edges → ±1, y-up, rotation; sub-pixel precision far from the origin in float32 arithmetic; `loupeView`: the point → clip origin, distances × scale, rotation kept |
 | `map-gl/__tests__/prepare.test.ts` | per-pass path (fans, S1 extrusion), unchanged |
 | `map-gl/__tests__/text-atlas.test.ts` | the committed pages are current (TTF hashes, 32 px / 8 px range, PNG size = recorded size, every glyph of the ranges on a page, none on two pages, Nordic / Baltic / Cyrillic letters found); plane bounds around the origin, atlas bounds inside the image, same scale both ways, 'H' plane bounds = outline bounds ± half the range; generator JSON → page (ids, y-up, empty glyphs dropped, refuses MSDF-only / bottom origin / code-point keys); glyph table layout and entry order; page selection; halo clamp |
 | `map-gl/__tests__/buckets.test.ts` (text) | one quad instance per atlas glyph (origin-relative position, cos / sin from `angles`, em size, entry, halo), missing glyphs skipped, one draw per (colour, page), hidden objects skipped, unresolved pass draws nothing |
@@ -1499,6 +1512,7 @@ published on `window.__mapGlDoc` for Playwright.
 | `map-gl/__tests__/buckets.test.ts` (filter regions) | per colour the unmasked draw then one per mask, the same indices regrouped, `layers` in draw order, hidden objects win over masks, no `filter` without entries; instance draws and clip groups split by mask |
 | `map-gl/__tests__/worker-course.test.ts` (filter regions) | a `hide` region hides the document object meeting it, exact and `fastFilter` alike, never a course object; a far region hides nothing; a clip region by document colour → `(object, colour, mask)` on the completed stack and the region's triangles origin-relative; the course part stays unmasked in the visible set; no regions / `null` → no filter |
 | `map-gl/__tests__/worker-protocol.test.ts` (filter regions) | a `stream` source with masks → `loaded.filter`, one entry per (object, colour), transferable; none without masks |
+| `map-gl/__tests__/engine.test.ts` (loupe) | `renderInset`: one more `renderDocument` with the loupe view into the inset target, the page clip forwarded, `compositeInset` at the box; no rebuild, no worker message; nothing before the load; `releaseInset` forwarded |
 | `map-gl/__tests__/engine.test.ts` (filter regions) | a clip region masks the black line's draw, a hide region removes it, the reply's hidden ids join `setHidden`'s, `null` clears mask and hidden set |
 | `map-gl/__tests__/prepare.test.ts` (filter regions) | every item of a masked pass carries one fan per region, shared by the passes of one mask |
 | `e2e/map-gl-golden.spec.ts` (filter regions) | the four `filter-*` scenes on the per-pass path at the contract budget, and through the arena path at `ARENA_FILTER_MAX_RATIO` with pixel probes on both sides of each region (§6.2) |
@@ -1612,7 +1626,11 @@ original stays with the cache), `{ unmatched: "proxy", proxyColours }`
 non-white for areas) and the current view as `firstView`. Every view
 change and every `engine.onChange` asks for one redraw on the next
 animation frame (`setView` then `render`; a canvas resize happens in the
-same frame). Colours are the document's stack, `render.cmykToHex` of
+same frame). With the `loupe` prop (`VectorLoupe`: the point in paper µm,
+the circle's centre and diameter in container CSS px, the scale) the same
+frame then calls `engine.renderInset` (§5.2 "Render target"; CSS → device
+px by the canvas's ratio), and the first frame without it releases the
+inset target (§5.5 "Loupe"). Colours are the document's stack, `render.cmykToHex` of
 each `header.colours[i].cmyk`. Unmount disposes the engine (terminating
 the worker) and the renderer.
 
@@ -1642,8 +1660,8 @@ In the paper view `MapViewer`:
   no access, not found, unreadable);
 - does not need `mapBounds` (a map without a CRS has none);
 - mounts no `TileLayer`, polls no `/api/map-tile-progress`, and shows no
-  editor loupe (`MapLoupe` magnifies tiles; the editor moves to the
-  document in slice D);
+  `MapLoupe` (it magnifies tiles); the new editor's touch loupe is drawn
+  by the layer (§5.5 "Loupe");
 - needs no ink split: the tiles draw the map in two halves so lower
   purple sits under black, brown and blue line art; the vector layer
   draws the course layer in the map's own colour order ("Overlay");
@@ -1796,6 +1814,19 @@ dragged (§4.11).
 **Drag.** Unchanged from §5.4 "Overlay": a per-move layer request; the
 dragged object is not symbolised on the main thread.
 
+**Loupe** (D9b; `course-editor.md` §10 "Loupe"). While a control is
+dragged by touch, the viewer hands `VectorMapLayer` a `loupe` (the
+dragged point, the circle `loupePlacement` puts above the handle,
+120 CSS px, ×2.5) and draws `editor-loupe` — a ring and a crosshair, no
+fill — over it; the layer draws the magnified map into that circle of
+the canvas in the same frame as the map (§5.4 "Layer", §5.2 "Render
+target"). It shows the resident visible set: what the main view drew,
+the dynamic bucket with the dragged circle included, no detail requested
+for the loupe's footprint (below the zoom gate it is the base parts).
+The UI layer's SVG is above the canvas, so its shapes under the circle
+are not magnified. Mouse drags have none; the tiles view keeps
+`MapLoupe`.
+
 **Action bar.** `actionLayout: "bar"` lays the contextual entries out
 horizontally under the selection (`editor-action-bar`) instead of the
 popover beside it; same entries and ids.
@@ -1808,6 +1839,8 @@ popover beside it; same entries and ids.
 | `map-gl/__tests__/worker-course.test.ts`, `engine.test.ts` | the reply's hit index and its way to the host |
 | `lib/editor/__tests__/hit.test.ts` | editor targets over the real worker's index |
 | `e2e/course-editor.spec.ts` | selecting, dragging and leg clicks on the canvas with no SVG targets |
+| `lib/editor/__tests__/touch.test.ts` (loupe) | `loupePlacement`: above the handle, flipped below the finger at the top, kept inside sideways |
+| `e2e/field-mode.spec.ts` (`mobile`) | the loupe during a long-press drag: 120 px above the handle, the canvas purple inside it (the magnified circle), gone on release |
 
 ### 5.3 PDF (shared/print)
 
@@ -2454,14 +2487,14 @@ what became of it:
 | `packages/web/src/map-gl/arena.ts` | vertex arenas: free list, growth by copy |
 | `packages/web/src/map-gl/worker.ts`, `worker-entry.ts` | the worker's message handler and its binding |
 | `packages/web/src/map-gl/engine.ts` | main-thread controller: worker transport, residency, visible-set rebuilds |
-| `packages/web/src/map-gl/view.ts` | the arena path's model → clip matrix, `RenderTarget` |
-| `packages/web/src/map-gl/renderer.ts` | WebGL2 backend, GPU stage (arena programs and draw loop; per-pass path, stencil, supersampling; GPU timer) |
+| `packages/web/src/map-gl/view.ts` | the arena path's model → clip matrix, `RenderTarget`, `loupeView` |
+| `packages/web/src/map-gl/renderer.ts` | WebGL2 backend, GPU stage (arena programs and draw loop; per-pass path, stencil, supersampling; the loupe's inset target and circle composite; GPU timer) |
 | `packages/web/src/pages/dev/MapGlFixturePage.tsx` | dev-only golden page `/dev/map-gl` |
 | `packages/web/src/pages/dev/MapGlDocPage.tsx` | dev-only whole-document page `/dev/map-gl-doc` (load report, bench) |
 | `e2e/__golden__/map-gl/`, `e2e/map-gl-golden.spec.ts` | committed goldens and the browser comparison |
 | `e2e/map-gl-doc.spec.ts` | whole-document pipeline on `e2e/test.ocd`: arena path, worker, eviction, arena = per-pass path |
 | `scripts/measure-gl.mjs` | corpus measurements through `/dev/map-gl-doc` (§5.2 Measurements) |
-| `packages/web/src/components/VectorMapLayer.tsx` | the vector base layer in `MapViewer` (§5.4): canvas, engine and worker lifecycle, status; the course layer request and its replies |
+| `packages/web/src/components/VectorMapLayer.tsx` | the vector base layer in `MapViewer` (§5.4): canvas, engine and worker lifecycle, status; the course layer request and its replies; the editor's loupe |
 | `packages/web/src/lib/course-layer-request.ts` | the viewer's course-layer input (§5.4 "Overlay", `course-layer.md` §5) |
 | `packages/web/src/components/MapViewer.tsx` | the host: layer choice, viewport state, gestures, SVG overlay |
 | `packages/web/src/lib/map-viewport.ts` | the viewport model, mercator and paper (§5.4 "Viewport"), `glView` |
@@ -2541,8 +2574,6 @@ The shared module is exported as a namespace: `import { render } from
   `northLinesBelow` (the tiles' per-map colour-stack fixes) are not
   applied to the document's stack; the document's own order (and, for
   matched symbols, the library's) is drawn.
-- **§5.4 editor loupe.** `MapLoupe` magnifies tiles and is not shown in
-  the paper view; the editor moves onto the document in slice D.
 - **§5.4 lost context.** A lost context (`webglcontextlost`) is not
   restored: the host falls back to tiles while `allowLegacy`, or the
   layer shows its message (`docs/map-pipeline-switch.md` §3.3).

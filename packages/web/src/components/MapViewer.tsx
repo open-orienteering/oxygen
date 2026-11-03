@@ -23,7 +23,7 @@ import {
   type DescriptionSheetRow,
 } from "@oxygen/shared";
 import { TileBlobCacheProvider, TileLayer } from "./TileLayer";
-import { MapLayerMessage, VectorMapLayer } from "./VectorMapLayer";
+import { MapLayerMessage, VectorMapLayer, type VectorLoupe } from "./VectorMapLayer";
 import { MapLoupe } from "./MapLoupe";
 import { kioskKeyFromUrl } from "../lib/kiosk-key";
 import {
@@ -87,7 +87,7 @@ import { courseLayerRequest, PROVISIONAL_SITE_ID, type LayoutRequest, type Provi
 import { dragLegShapes } from "../lib/editor/leg-length";
 import type { CourseInfo } from "../map-gl/engine";
 import { editorHitAt, HIT_TOLERANCE_PX, type EditorTarget } from "../lib/editor/hit";
-import { COARSE_HIT_TOLERANCE_PX, IDLE as SITE_TOUCH_IDLE, LONG_PRESS_MS, liftedPoint, siteTouch, type SiteTouch, type SiteTouchEvent } from "../lib/editor/touch";
+import { COARSE_HIT_TOLERANCE_PX, IDLE as SITE_TOUCH_IDLE, LONG_PRESS_MS, LOUPE_DIAMETER_PX, LOUPE_SCALE, liftedPoint, loupePlacement, siteTouch, type SiteTouch, type SiteTouchEvent } from "../lib/editor/touch";
 
 /** Persisted compass state: "1"/absent = rotation locked (north up). */
 const ROTATION_LOCK_STORAGE_KEY = "oxygen.map.rotationLock";
@@ -3359,8 +3359,11 @@ export function MapViewer({
     }
   }
 
-  // The lifted touch drag's stem (§10): from the finger to the control drawn above it.
+  // The lifted touch drag's stem (§10): from the finger to the control drawn above it; on the GL
+  // canvas the loupe above that (§10 "Loupe"): the layer draws the magnified map into the circle,
+  // `editor-loupe` is its ring and the crosshair at the drop point.
   let touchHandle: React.ReactNode = null;
+  let glLoupe: VectorLoupe | null = null;
   if (touchFinger && editorDragPos && editorDragTouch) {
     const inner = mapMmToScreen(editorDragPos.x, editorDragPos.y);
     if (inner) {
@@ -3371,6 +3374,28 @@ export function MapViewer({
           <circle cx={touchFinger.x} cy={touchFinger.y} r={12} fill="rgba(124, 58, 237, 0.18)" stroke="#7c3aed" strokeWidth={1.5} />
         </svg>
       );
+      if (viewport.kind === "paper" && glViewRect) {
+        const c = loupePlacement(touchFinger, { width: containerSize.w, height: containerSize.h });
+        const r = LOUPE_DIAMETER_PX / 2;
+        glLoupe = { xUm: editorDragPos.x * 1000, yUm: editorDragPos.y * 1000, cx: c.x, cy: c.y, diameterPx: LOUPE_DIAMETER_PX, scale: LOUPE_SCALE };
+        touchHandle = (
+          <>
+            {touchHandle}
+            <div
+              data-testid="editor-loupe"
+              data-scale={LOUPE_SCALE}
+              aria-hidden
+              className="absolute pointer-events-none rounded-full border-2 border-slate-700 shadow-lg"
+              style={{ left: c.x - r, top: c.y - r, width: 2 * r, height: 2 * r, zIndex: 9 }}
+            >
+              <svg className="absolute inset-0 w-full h-full" viewBox={`0 0 ${2 * r} ${2 * r}`}>
+                <line x1={r - 14} y1={r} x2={r + 14} y2={r} stroke="#0f172a" strokeWidth={1.5} />
+                <line x1={r} y1={r - 14} x2={r} y2={r + 14} stroke="#0f172a" strokeWidth={1.5} />
+              </svg>
+            </div>
+          </>
+        );
+      }
     }
   }
 
@@ -3478,6 +3503,7 @@ export function MapViewer({
           course={glCourse ? courseRequest : null}
           onCourse={setCourseInfo}
           onCourseSupport={setCourseSupport}
+          loupe={glLoupe}
         />
       )}
       {/* Rotated map layer (tiles + overlay) — corrects map north offset */}
