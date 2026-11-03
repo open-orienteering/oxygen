@@ -67,7 +67,19 @@ procedure actually returns `NOT_FOUND`. See
 
 ## Course editor on touch
 
-The course editor shares the map gesture model above. In addition:
+The new course editor (`vector` events, `docs/course-editor.md`) has its
+own phone layout and touch rules: **[course-editor.md §10](course-editor.md#10-phone-and-tablet)** —
+Field mode as the phone default, a full-bleed canvas where one finger
+pans, the bottom sheet with three detents and the action bar in its peek
+row, the floating `+`, and on a coarse pointer: a selected control drags
+at once, an unselected one pans on a drag and moves after a 500 ms long
+press, a dragged control rides 48 px above the finger, hit tolerance
+12 px, two fingers always pan / zoom and cancel a pending press.
+
+### Legacy course editor on touch
+
+The legacy editor (`CourseEditorPage`, `legacy` events; kept until slice
+F) shares the map gesture model above. In addition:
 
 - **Tap a control** — selects it and opens the floating context menu.
 - **Drag a control** — moves it (same local-drag + `onMoveEnd` path as mouse).

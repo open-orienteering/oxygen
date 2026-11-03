@@ -19,6 +19,16 @@ export const MAP_PIPELINE_SPECS = [
 ];
 
 /**
+ * Specs for the phone (docs/course-editor.md §10; 08 §7): project `mobile`
+ * runs them on `devices["Pixel 7"]` (touch, coarse pointer, 412 px) under
+ * `vector` — the new editor has no legacy run. D10 adds the editor's touch
+ * subset of `course-editor.spec.ts`.
+ */
+export const MOBILE_SPECS = [
+  "**/field-mode.spec.ts",
+];
+
+/**
  * The stack is parameterized so the sharded runner
  * (`scripts/e2e-sharded.mjs`) can launch N fully isolated stacks in
  * parallel — each with its own Postgres database, API server, and Vite
@@ -67,7 +77,7 @@ export default defineConfig<{ mapPipeline: MapPipeline }>({
   projects: [
     {
       name: "chromium",
-      testIgnore: MAP_PIPELINE_SPECS,
+      testIgnore: [...MAP_PIPELINE_SPECS, ...MOBILE_SPECS],
       use: { ...devices["Desktop Chrome"] },
     },
     {
@@ -79,6 +89,11 @@ export default defineConfig<{ mapPipeline: MapPipeline }>({
       name: "map-vector",
       testMatch: MAP_PIPELINE_SPECS,
       use: { ...devices["Desktop Chrome"], mapPipeline: "vector" },
+    },
+    {
+      name: "mobile",
+      testMatch: MOBILE_SPECS,
+      use: { ...devices["Pixel 7"], mapPipeline: "vector" },
     },
   ],
 

@@ -35,8 +35,9 @@ Deep links: `?course=<seq>` selects a course, `?control=<code>` a control;
 consumed once when the data loads.
 
 **Modes** (08 §5.1): Course, Layout, Field share one canvas, selection and
-undo history. D4 builds Course mode; the switch shows Layout (D7) and Field
-(D9) disabled with "Arrives with slice D7 / D9". The **view** picker
+undo history. Course mode is D4's, Field mode D9's (§9; the initial mode
+on a phone, §10); the switch shows Layout (D7) disabled with "Arrives with
+slice D7". The **view** picker
 offers *Course* (the selected course full-strength, other controls faded)
 and *All controls* (every site with its code, no legs; the inspector keeps
 the selected course). Class, variant and setter views are D8 / F.
@@ -58,10 +59,12 @@ exit bubble on every pointer move
 |---|---|---|
 | Top bar (`TopBar.tsx`) | `editor-top-bar` | course picker (`editor-course-picker`), view (`editor-view-course` / `-all`), mode (`editor-mode-course` / `-layout` / `-field`), undo / redo (`editor-undo` / `-redo`), hide other controls (`editor-hide-others`), auto cuts (`editor-toggle-cuts`), help popover; MapPanel adds descriptions, fullscreen and the viewer its zoom on the same row |
 | Tool rail (`ToolRail.tsx`) | `editor-tool-rail` | `editor-tool-<key>` for `V`, `S`, `K`, `M`, `X` / `C` (disabled, "slice F"), `A` (menu `editor-area-menu`, `editor-area-<kind>`), `T`, `G`; the snapping toggle `editor-snapping` (§6) |
-| Action bar (`ActionBar.tsx`) | `editor-action-bar` | the selection's or phantom's entries, horizontal, centred under the selection, hidden during a drag; ids `editor-action-<id>` as the legacy popover's. The viewer positions it (`actionLayout: "bar"`); D9 docks the same list as the mobile bottom bar |
+| Action bar (`ActionBar.tsx`) | `editor-action-bar` | the selection's or phantom's entries, horizontal, centred under the selection, hidden during a drag; ids `editor-action-<id>` as the legacy popover's. The viewer positions it (`actionLayout: "bar"`); on a phone the same list is the bottom sheet's peek row (`actionLayout: "host"`, §10) |
 | Inspector (`Inspector.tsx`, `modes/CourseMode.tsx`, `modes/ObjectSection.tsx`) | `editor-inspector` | collapsible sections: course (create, sequence, visit order, clone), selection (a site: code, kind, position, description summary, "also in", hidden number, notes — §6.6; several controls: `editor-multi` with the bulk actions — §6.5; a course object: `editor-object` — §7), inventory (`editor-inventory-panel`, collapsed), checks (`editor-checks`, §8) |
 | Status bar (`StatusBar.tsx`) | `editor-status` | the selected course's control count and length, the armed tool's pending leg (`editor-pending-leg-length`, §6.1), the map scale, "snapping" when on, climb and the check count (§8; the sheet key is D8's), the save state (`editor-save-state`, `data-state` = `saved` / `saving` / `error` / `conflict`) |
 | Conflict notice | `editor-conflict` | §3 |
+| Field mode (§9) | `editor-inspector-field`, `editor-field-selection`, `editor-nudge-pad`, `editor-field-offline` | the control list with distance / bearing and check-off in place of the sequence; the selection's distance, check-off and nudge pad; no tool rail |
+| Phone chrome (§10) | `editor-field-top-bar`, `editor-overflow`, `editor-sheet`, `editor-field-add` | below 640 px: the compact top bar, the bottom sheet (peek: KPIs, selection, action bar) and the floating `+` instead of the top bar, rail, inspector strip and status bar above |
 
 The map-info row under the map (file name, *Open review*, *Use new map
 engine*, *Replace map*, colour profile) is MapPanel's `showMapInfo` as in
@@ -158,7 +161,8 @@ shared stage (04 §7; `map-rendering.md` §5.5), not SVG hit targets:
   mm and calls `editorHitAt` (`lib/editor/hit.ts`) →
   `render.hitTest(stream, x, y, { toleranceUm, closedStrokeInterior: true })`:
   a control's circle hits over its interior, a leg within half its width,
-  a number over its glyph boxes; tolerance 6 CSS px. The nearest target
+  a number over its glyph boxes; tolerance 6 CSS px, 12 on a coarse
+  pointer (§10). The nearest target
   wins, the topmost of equally near ones. A site starts the drag path, a
   number the label drag, a leg the leg click; anything else is empty map.
 - Off-course controls the Course view fades are not in the layer (the UI
@@ -463,6 +467,151 @@ undo or a mode switch.
   entered on the Courses page; "manual" — there is no terrain model
   yet), shown when set.
 
+## 9. Field mode
+
+Row D9 (08 §5.5, §5.1 (6)): the course setter at a control site, phone in
+hand. The default on a phone (§10), a mode like the others on a tablet
+or desktop — the mode switch enters it everywhere, keeping the viewport,
+the selection and the undo history (`editorReducer`'s `mode`).
+
+- **Position.** Entering Field mode starts the page's GPS watch
+  (`useFieldFix` → `useGeolocationWatch`, high accuracy); leaving it stops
+  the watch. The page hands the fix to the viewer (`editor.fix`), which
+  draws it as its locate button's marker does: `my-location-marker` with
+  the accuracy ring (`data-accuracy-m`), placed through `mapGeo` like
+  every other georeferenced input (04 §7; `lib/map-viewport.ts`
+  `geoToInner`) — never a second coordinate system. The view centres on
+  the first fix once per entry into the mode; the viewer's locate button
+  still follows the fix if the user wants that. The fix's state is one
+  line (`editor-field-fix`, `data-state` = `fix` / `waiting` / `denied` /
+  `unavailable` / `off`): "GPS ±8 m", "Waiting for GPS…", why there is none.
+- **Distance and bearing** from the fix (`lib/editor/field.ts`): the fix
+  goes to paper mm once per fix (`fixToPaper`: `geoToMm` through the
+  document's frame with the event's rotation correction, as the viewer);
+  distance is paper mm × scale / 1000, rounded to the metre; bearing is
+  degrees clockwise from **paper north** — the map's north lines, what the
+  setter's compass reads against the map — 0–359.
+- **The control list** replaces the sequence section
+  (`editor-inspector-field`): the selected course's start, controls and
+  finish **in course order** (not by distance), each row
+  `editor-field-row` (`data-control-id`, `data-kind`, `data-distance-m`,
+  `data-bearing-deg`, `data-checked`; distance / bearing blank without a
+  fix or a position) — tap selects the control and centres it. No course
+  selected: "Pick a course to list its controls."
+- **The selection** adds above the site fields of §6.6 (notes there
+  unchanged): distance and bearing (`editor-field-selection-distance`),
+  the check-off toggle and the nudge pad.
+- **Check-off** (`editor-field-check` per row,
+  `editor-field-selection-check`): `control.check { controlId, checked }`
+  (`courses.review`, open decision (4)) — sets or clears `checked_at` /
+  `checked_by`; no token goes in (a check-off never conflicts), the
+  control's token comes back into the `VersionBook`. One undo entry; undo
+  is the opposite check. The toggle reads `control.list`'s `checkedAt`, so
+  it survives a reload. Disabled without `courses.review`. The peek row's
+  KPIs count "n/m checked" for the course.
+- **Nudge pad** (08 §5.5 "Precision"; `editor-nudge-pad`): arrows
+  `editor-nudge-<up|down|left|right>-<mm|m>` move the selected site by
+  0.1 mm on paper, or — the unit button `editor-nudge-unit` — by 1 m on the
+  ground (1000 / scale mm), along the paper axes (up = paper north); the
+  numeric fields `editor-nudge-x` / `-y` (paper mm) commit on blur or
+  Enter. Each press is one `control.update { xpos, ypos, autoDescribe:
+  true }` with the move rule of §3 and one undo entry (back to where that
+  press started). Presses faster than the refetch build on each other: they
+  queue, and the pad shows the newest position until `controlCoordinates`
+  has it. Positions are rounded to the µm.
+- **No tool rail** on the desktop / tablet layout in Field mode: the
+  setter in the field checks and moves, the keys still arm the tools. The
+  phone's `+` (§10) is the field's way to create.
+- **Offline** (decision log, D9): no outbox covers `control.update` /
+  `control.check` (the offline outbox carries the timing journal's event
+  types; course mutations are cloud-owned and "unavailable offline",
+  `offline-architecture.md`), so Field mode offline **views only**:
+  `editor-field-offline` says "Offline — viewing only. Moves and check-offs
+  need a connection.", the nudge pad, the check toggles and `+` are
+  disabled, a drag snaps back without a write. The map keeps drawing from
+  the cached document (B4, `map-storage.md` §7.1). A queue for these
+  writes, with the field-move rebase of §3 on replay, is a later row.
+
+## 10. Phone and tablet
+
+08 §5.5 "Chrome", "Gestures", "Breakpoints". *Mobile is a layout, not a
+port*: the same page, state and writes.
+
+**Breakpoints.** Phone < 640 px (`(max-width: 639px)`, the page's
+`isMobile`): the layout below, Field mode the initial mode. Tablet
+640–1024 and desktop: the desktop layout of §2, Course mode first. The
+**gesture rules** follow the pointer (`(pointer: coarse)`), not the width,
+so a tablet gets the touch rules below with the desktop chrome.
+
+**Phone layout** (`editor-page` `data-layout="phone"`):
+
+- **Full-bleed**: the editor covers the screen (fixed, above the app
+  shell's header); MapPanel's map-info row is not shown. One finger pans
+  the map as in fullscreen (`editor.fullBleed` — there is no page to
+  scroll), two fingers pan and zoom.
+- **Compact top bar** (`editor-field-top-bar`, in MapPanel's toolbar row
+  beside its descriptions and fullscreen buttons): back to the Courses
+  page (`editor-back`), the course picker (`editor-course-picker`), the
+  mode switch Course · Field (`editor-mode-*`; Layout stays a desktop
+  mode), the overflow `editor-overflow` → `editor-overflow-menu` with undo,
+  redo, the view picker, hide other controls and auto cuts (the desktop
+  ids). No tool rail, no inspector strip, no floating status bar.
+- **Bottom sheet** (`components/editor/BottomSheet.tsx`, `editor-sheet`,
+  `data-detent` = `peek` / `half` / `full`): *peek* (120 px) holds the
+  status bar's KPIs and save state, Field mode's "n/m checked", the
+  selection's name (`editor-sheet-selection`) and **the action bar** —
+  the same `courseActions` entries and `editor-action-<id>` ids as §2,
+  docked here as a scrolling row of ≥ 44 px buttons (`actionLayout:
+  "host"`: the viewer draws none at the selection); *half* (45 % of the
+  map box) and *full* (the box less 56 px) add, scrolling: description
+  suggestions, the selection (Field mode's part above the site fields),
+  the control list (Field) or the sequence (Course), the checks. The grab
+  handle (`editor-sheet-handle`) drags between detents (released → the
+  nearest) and a tap toggles peek ↔ half. **The sheet never covers the
+  selection**: when it settles past peek with a control selected, and when
+  a list row is tapped, the view centres the control in the band above
+  the sheet (`viewRequest.offsetPx` = half the sheet's height, turned into
+  the rotated frame by the viewer).
+- **`+`** (`editor-field-add`, 56 px, floating above the sheet's right
+  edge) opens `editor-add-menu`: control `K`, start `S`, finish `M`
+  (`editor-add-<key>`), map text `T`, and the area kinds
+  (`editor-area-<kind>`; toner saver needs a course with positioned
+  sites). A placement tool arms D5's **pin-drop flow** (§6.1 "Touch"): the
+  sheet drops to peek, the crosshair is the view centre, **Place / Done**
+  (`editor-touch-bar`) sit above the sheet (`editor.bottomInsetPx`); `+` is
+  hidden while a tool is armed.
+- Notices (conflict, offline, errors) stack at the top of the map.
+
+**Gestures** (coarse pointer, shared hit-test path; `lib/editor/touch.ts`,
+the legacy editor untouched — `mobile-layout.md` "Course editor on touch"):
+
+| Gesture | Effect |
+|---|---|
+| Tap a control | Selects it (no movement, no write) |
+| One finger on the **selected** control | Drags it at once |
+| One finger on an **unselected** control | Pending: moving > 10 px pans the map; lifting before 500 ms selects it; holding still for **500 ms** selects it and starts a move (a short vibration where supported) |
+| Dragging a control by touch | Drawn **48 px above the finger** on a dashed stem (`editor-touch-handle`) so the finger never covers it; dropped where it is drawn; leg lengths and the affects-chip as with a mouse |
+| Two fingers | Always pan / zoom the map; a second finger cancels a pending press or an armed control drag, and selections are suppressed for 400 ms after (today's rule) |
+| A control's number | Drags only when its control is selected; otherwise as an unselected control |
+
+Hit tolerance is **12 CSS px** on a coarse pointer (6 with a mouse) — the
+"large hit areas" of 08 §5.5 — on the same `editorHitAt` path (§5).
+These values (500 ms, 10 px, 48 px, 12 px, the detent heights) are 08
+§5.5's unquantified rules made concrete (decision log, D9); D-mobile
+measures them on a real phone.
+
+**On a real phone (D-mobile, manual, after D9).** Playwright mocks the fix
+(`context.setGeolocation`) and the touch events; only a phone at a control
+site proves the mode. The check, on the B0 device: open an event's editor
+over mobile data — first frame to a usable map (seconds), the GPS fix and
+its ring against the map at a known feature (metres off), the sheet in
+sunlight and with gloves (can every peek target be hit first time; is
+44 px enough), a long-press move of a control by a few metres and its
+distance / bearing afterwards against a compass, a check-off, the
+offline notice with the radio off. The numbers go here, beside the
+constants above, and any constant that fails is changed with a
+decision-log row.
+
 ## API
 
 The course and control mutations the editors write through (08 §6;
@@ -511,6 +660,10 @@ current, differing }`; a variation group or a slice-F site kind answers
 | unit (web) | `packages/web/src/lib/editor/__tests__/checks.test.ts` | §8: sites and the explicit structure as `courseChecks` takes them, two controls 20 m apart, the server's `DESCRIPTION_STALE` merged in order, markers (rings, a leg cross, unpositioned skipped), length from the leg polylines, locate |
 | E2E | `e2e/course-editor.spec.ts` "Course editor checks" | §8: two controls 20 m apart → the count beside the section title, the row (`CONTROL_TOO_CLOSE`, "20 m"), a marker on each site, the status-bar count; a click selects the first site and centres the view on the pair's midpoint |
 | E2E | `e2e/course-editor-legacy.spec.ts` | the legacy page, unchanged (`chromium`) |
+| unit (web) | `lib/editor/__tests__/field.test.ts` | §9, §10: the fix through `mapGeo` and back (a SWEREF99 TM frame), accuracy in paper mm, distance at two scales, bearing from paper north with the wrap at north, the list in course order (blank without a fix or a position), the nudge steps (0.1 mm, 1 m at 1:10 000 / 1:15 000, µm rounding), detent heights and snapping, the band offset, the initial mode |
+| unit (web) | `lib/editor/__tests__/touch.test.ts` | §10 gestures: a selected control drags at once; an unselected one: tap selects, drag past the slop pans, long press selects and moves (also when a late move fires it), a second finger cancels; the lift |
+| unit (web) | `lib/editor/__tests__/state.test.ts`, `write-client.test.ts` | §9: Field entered and left keeping the selection, Layout still not; `checkControl` sends no token and seeds the control's |
+| E2E | `e2e/field-mode.spec.ts` (`mobile` project: Pixel 7, `vector`) | §10: opens in Field mode, full-bleed, compact bar and overflow, no rail / inspector, ≥ 44 px targets; §9: `setGeolocation` → the marker with its accuracy, every row's distance and bearing = the paper geometry at one scale; detents (tap, handle drag to full) and a list row's control centred above the sheet; a quick drag on an unselected control pans without selecting, a long press selects, shows the stem and drops the control 48 px above the finger (persisted); two fingers cancel a pending press and zoom; nudge 2 × 0.1 mm, 1 m, the x field, four undos back; `+` → `K` → Place above the sheet adds a site, Done; check-off persists over a reload; offline: the notice, `+` disabled, a long-press move snaps back. "Field mode on a desktop" (desktop viewport in the same spec): the mode switch, no rail, the list's distance after a fix, check-off and `Ctrl+Z`, back to Course mode |
 
 ## Pending in this chapter
 
@@ -524,7 +677,25 @@ current, differing }`; a variation group or a slice-F site kind answers
   are edited in the legacy editor only.
 - **Course delete** stays on the Courses page.
 - **Layout mode** — D7; **export menu, class view, sheet key** — D8;
-  **Field mode, mobile chrome, loupe** — D9; the rest of the E2E rewrite
-  and the `map-vector` / `mobile` projects — D10; **presence and "moved
-  by X at T"** — D11.
+  the rest of the E2E rewrite (the editor's touch subset in the `mobile`
+  project, `course-editor.spec.ts` under `map-vector`) — D10; **presence
+  and "moved by X at T"** — D11.
+- **Loupe** (08 §5.5 "Precision"; decision log, D9): behind the nudge pad.
+  It is cheap on B2's explicit render target — one more
+  `MapGlRenderer.renderDocument(view, { viewMatrix }, target)` per frame
+  with a ×2.5 matrix about the dragged point into a ~120 px offscreen
+  `RenderTarget` (with stencil), drawn into a circle above the finger, over
+  the same resident visible set — but it touches `map-gl/renderer.ts`,
+  `engine.ts` and `VectorMapLayer.tsx`, D7's area while D7 runs; a row
+  after D7.
+- **Pinch-scale of an area object** on its handle ring (08 §5.5
+  "Gestures") — needs a two-finger hook in the tool bindings
+  (`tools/bindings.ts`, D5's file); two fingers pan / zoom meanwhile.
+- **Offline writes in Field mode** (§9 "Offline"): a queue for
+  `control.update` / `control.check` with the field-move rebase on replay.
+- **Tablet bottom action bar** (08 §5.5 "Tablet: collapsible side
+  inspector + bottom action bar"): a tablet keeps the desktop chrome and
+  the action bar under the selection, with the touch gestures (§10).
+- **Pin-drop for the area and text tools on a phone**: they arm from `+`
+  and take taps on the map (§6.4), not the crosshair flow.
 - The colour-profile and north badge are the map-info row's, unchanged.
