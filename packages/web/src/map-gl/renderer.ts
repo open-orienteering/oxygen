@@ -57,6 +57,30 @@ export interface DocumentRenderOptions {
   viewMatrix?: Float32Array;
   /** Profiling (dev page `kinds=`): draw only these kinds. */
   kinds?: ReadonlySet<"fill" | "hatch" | "stroke" | "glyph" | "clip" | "text">;
+  /**
+   * Layout mode's page (docs/course-layout.md §1): colours below `fromColour` are the map layer,
+   * drawn only inside the frame (`ringUm`, paper µm); the page layer above them is not clipped.
+   * The clip is the frame's screen bounding box (a scissor): exact while the page is upright on
+   * screen, which Layout mode keeps.
+   */
+  pageClip?: { fromColour: number; ringUm: readonly (readonly [number, number])[] };
+}
+
+/**
+ * The scissor box (device pixels, GL bottom-left origin) of a paper-µm ring under the model → clip
+ * matrix `m` (positions relative to the origin): the ring's screen bounding box, clamped to the target.
+ */
+export function scissorOfRing(m: ArrayLike<number>, ring: readonly (readonly [number, number])[], originX: number, originY: number, width: number, height: number): [number, number, number, number] {
+  let x0 = Infinity, y0 = Infinity, x1 = -Infinity, y1 = -Infinity;
+  for (const [x, y] of ring) {
+    const px = x - originX, py = y - originY;
+    const cx = m[0] * px + m[4] * py + m[12], cy = m[1] * px + m[5] * py + m[13], w = m[3] * px + m[7] * py + m[15];
+    const sx = ((cx / w + 1) / 2) * width, sy = ((cy / w + 1) / 2) * height;
+    x0 = Math.min(x0, sx); x1 = Math.max(x1, sx); y0 = Math.min(y0, sy); y1 = Math.max(y1, sy);
+  }
+  const l = Math.max(0, Math.min(width, Math.round(x0))), r = Math.max(0, Math.min(width, Math.round(x1)));
+  const b = Math.max(0, Math.min(height, Math.round(y0))), t = Math.max(0, Math.min(height, Math.round(y1)));
+  return [l, b, r - l, t - b];
 }
 
 export interface RenderOptions {
@@ -1124,8 +1148,17 @@ export class MapGlRenderer {
         }
       };
       const on = (k: "fill" | "hatch" | "stroke" | "glyph" | "clip" | "text") => !opts.kinds || opts.kinds.has(k);
+      const pc = opts.pageClip;
+      if (pc) {
+        const [x, y, w, h] = scissorOfRing(m, pc.ringUm, a.originX, a.originY, t.width, t.height);
+        gl.scissor(x, y, w, h);
+      }
       for (const l of vs.layers) {
         const rgb = opts.colour(l.colour);
+        if (pc) {
+          if (l.colour < pc.fromColour) gl.enable(gl.SCISSOR_TEST);
+          else gl.disable(gl.SCISSOR_TEST);
+        }
         const masked = l.mask >= 0 && vs.filter;
         if (masked) draws += this.markMask(a, vs.filter!.masks[l.mask], true);
         if (on("fill")) indexed("fill", l, rgb);
@@ -1143,6 +1176,7 @@ export class MapGlRenderer {
       }
       gl.bindVertexArray(null);
       gl.disable(gl.STENCIL_TEST);
+      gl.disable(gl.SCISSOR_TEST);
     }
     if (q && this.timer) {
       gl.endQuery(this.timer.ext.TIME_ELAPSED_EXT);

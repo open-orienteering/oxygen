@@ -5,7 +5,7 @@ import { render } from "@oxygen/shared";
 import { MapGlEngine, type Transport } from "../engine";
 import { createMapGlWorker, type WorkerReply, type WorkerRequest } from "../worker";
 import { CELL_UM, type PreparedPart, type ResidentPart, type VisibleSet, type ViewRect } from "../buckets";
-import type { MapGlRenderer, TextAtlasImage } from "../renderer";
+import type { DocumentRenderOptions, MapGlRenderer, TextAtlasImage } from "../renderer";
 import { parseTextAtlasPage } from "../text-atlas";
 import type { MeshAtlas } from "../mesh-atlas";
 import { documentBytes, indexOf, request } from "./course-fixture";
@@ -64,7 +64,9 @@ class FakeRenderer {
   setVisibleSet(vs: VisibleSet): void {
     this.visibleSets.push(vs);
   }
-  renderDocument() {
+  renderOpts: DocumentRenderOptions[] = [];
+  renderDocument(_view: unknown, opts: DocumentRenderOptions) {
+    this.renderOpts.push(opts);
     return { drawCalls: 1, cpuMs: 0 };
   }
   get documentBytes() {
@@ -296,6 +298,40 @@ describe("MapGlEngine dynamic bucket (docs/map-rendering.md §5.2 Dynamic bucket
     const cleared = draw();
     expect(blackDraws(cleared).map((d) => d.mask)).toEqual([undefined]);
     expect(cleared.filter).toBeUndefined();
+  });
+
+  it("a page: its part drawn after the course part, the map clipped to the frame, both released on clear (docs/course-layout.md §1)", async () => {
+    const { engine, transport, renderer } = await courseEngine();
+    engine.setView({ centreX: 30_000, centreY: 30_000, pxPerUm: 0.002, widthPx: 800, heightPx: 800 });
+    const frame = { x: 10, y: 10, width: 190, height: 277 };
+    const window = { minX: -65, minY: -128.5, width: 190, height: 277 };
+    engine.setCourse(request({
+      page: { paper: { heightMm: 297 }, frame, window, objects: [
+        { id: "t", kind: "text", anchor: "page", x: 105, y: 20, text: "Bana", fontSizeMm: 6, color: "#000000" },
+        { id: "w", kind: "rectangle", anchor: "page", x: 150, y: 250, width: 30, height: 20, fillMode: "whiteout" },
+      ],
+      description: null,
+    },
+    }));
+    transport.flush();
+    expect(renderer.parts.has("P")).toBe(true);
+    const fixed = engine.stats().residentBytes;
+    engine.render({ colour: () => [0, 0, 0] });
+    const opts = renderer.renderOpts.at(-1)!;
+    const base = opts.pageClip!.fromColour;
+    expect(base * 2).toBe(engine.colours.length);
+    expect(opts.pageClip!.ringUm).toHaveLength(4);
+    const vs = renderer.visibleSets.at(-1)!;
+    expect(vs.text.draws.some((d) => d.colour >= base)).toBe(true);
+    expect(vs.layers.at(-1)!.colour).toBeGreaterThanOrEqual(base);
+
+    engine.setCourse(request());
+    transport.flush();
+    expect(renderer.released).toContain("P");
+    expect(renderer.parts.has("P")).toBe(false);
+    expect(engine.stats().residentBytes).toBeLessThan(fixed);
+    engine.render({ colour: () => [0, 0, 0] });
+    expect(renderer.renderOpts.at(-1)!.pageClip).toBeUndefined();
   });
 
   it("a request before the load waits for it; the course counts as fixed bytes", async () => {

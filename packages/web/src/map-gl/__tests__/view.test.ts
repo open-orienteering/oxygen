@@ -1,5 +1,6 @@
 import { describe, it, expect } from "vitest";
 import { project, viewMatrix } from "../view";
+import { scissorOfRing } from "../renderer";
 
 describe("viewMatrix (arena projection, docs/map-rendering.md §5.2)", () => {
   const view = { centreX: 1_250_000, centreY: -40_000, pxPerUm: 0.01, widthPx: 1000, heightPx: 500 };
@@ -35,5 +36,19 @@ describe("viewMatrix (arena projection, docs/map-rendering.md §5.2)", () => {
     const x = f(f(f(m[0] * p) + f(m[4] * q)) + m[12]);
     const px = (x * far.widthPx) / 2;
     expect(Math.abs(px - 37.5 * 0.2)).toBeLessThan(0.05);
+  });
+});
+
+describe("scissorOfRing (Layout mode's map clip, docs/course-layout.md §1)", () => {
+  it("the frame's screen box in device pixels, bottom-left origin, clamped to the target", () => {
+    // 1 px per mm (0.001 px/µm), 400 × 300 px, centred on (0, 0) paper; origin (1000, 2000) µm.
+    const view = { centreX: 0, centreY: 0, pxPerUm: 0.001, widthPx: 400, heightPx: 300 };
+    const m = viewMatrix(view, 1000, 2000);
+    const ring: [number, number][] = [[-50_000, -20_000], [50_000, -20_000], [50_000, 40_000], [-50_000, 40_000]];
+    expect(scissorOfRing(m, ring, 1000, 2000, 400, 300)).toEqual([150, 130, 100, 60]);
+    // Twice the device pixels: twice the box.
+    expect(scissorOfRing(m, ring, 1000, 2000, 800, 600)).toEqual([300, 260, 200, 120]);
+    const big: [number, number][] = [[-1e6, -1e6], [1e6, -1e6], [1e6, 1e6], [-1e6, 1e6]];
+    expect(scissorOfRing(m, big, 1000, 2000, 400, 300)).toEqual([0, 0, 400, 300]);
   });
 });

@@ -10,12 +10,12 @@
  * web worker gets it without the PDF writer.
  */
 
-import type { CourseMapObject, MapRect, MapWindow } from "../course-maps/schema.js";
+import type { CourseMapObject, MapPoint, MapRect, MapWindow } from "../course-maps/schema.js";
 import type { MapTextValues } from "../course-maps/text.js";
 import type { DocumentColour } from "../map-document/header.js";
 import { descriptionBlock } from "../print/description.js";
 import type { DescriptionBlockInput } from "../print/description.js";
-import { type ComposedPage, type MapLayerTransform, type PageImage, type PageWarning, flipPageObject, frameRectUm, inverseMapLayerTransform, mapLayerTransform, transformPassStream } from "../print/page.js";
+import { type ComposedPage, type MapLayerTransform, type PageImage, type PageWarning, flipPageObject, frameInMap, frameRectUm, inverseMapLayerTransform, mapLayerTransform, transformPassStream } from "../print/page.js";
 import type { FontMetrics } from "../render/truetype.js";
 import type { PassStream } from "../render/pass-stream.js";
 import type { RenderSymbol } from "../render/symbol.js";
@@ -54,6 +54,8 @@ export interface PageLayer {
   transform: MapLayerTransform;
   /** The frame, page µm y-up. */
   frameUm: ComposedPage["frameUm"];
+  /** The frame's corners in paper mm (y-up): where the map layer is clipped. */
+  frameRing: MapPoint[];
   /** Page images (`layer: "page"`, page µm); never in the stream. */
   images: PageImage[];
   warnings: PageWarning[];
@@ -103,7 +105,7 @@ export function pageLayer(input: PageLayerInput, mapColours: readonly DocumentCo
   for (const w of page.warnings) warnings.push({ code: w.code, message: `page layer: ${w.message}` });
 
   const images: PageImage[] = built.images.map((i) => ({ layer: "page" as const, graphicId: i.object.graphicId, rectUm: i.rectUm, ...(i.object.crop ? { crop: i.object.crop } : {}) }));
-  return { stream: page.stream, colours: palette.colours, transform, frameUm, images, warnings };
+  return { stream: page.stream, colours: palette.colours, transform, frameUm, frameRing: frameInMap(transform, frameUm), images, warnings };
 }
 
 /**

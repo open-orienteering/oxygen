@@ -1,7 +1,7 @@
 /** The dynamic bucket through the worker (docs/map-rendering.md §5.2 "Dynamic bucket"). */
 
 import { describe, it, expect } from "vitest";
-import { COURSE_BUCKET, createMapGlWorker, type CourseLayerRequest, type CourseReply, type LoadedReply, type LoadRequest, type WorkerReply } from "../worker";
+import { COURSE_BUCKET, PAGE_BUCKET, createMapGlWorker, type CourseLayerRequest, type CourseReply, type LoadedReply, type LoadRequest, type WorkerReply } from "../worker";
 import { buildVisibleSet, type PreparedPart, type ResidentPart } from "../buckets";
 import { INSTANCE_FLOATS } from "../mesh-atlas";
 import { render } from "@oxygen/shared";
@@ -168,6 +168,86 @@ describe("course request → the dynamic bucket", () => {
     const white = indexOf(r.colours, "purple-upper") - 1;
     expect([...fill.ranges.colour]).toContain(white);
     expect(white).toBeGreaterThan(indexOf(r.colours, "black100"));
+  });
+});
+
+describe("course request with a page → the page part (docs/course-layout.md §1)", () => {
+  const ask = (h: ReturnType<typeof harness>, input: CourseLayerRequest | null): CourseReply => {
+    h.w.handle({ type: "course", generation: 1, input });
+    return h.sent[h.sent.length - 1].msg as CourseReply;
+  };
+  // A4 portrait, frame 10 mm in, the window centred on (30, 10) paper mm at the map's own scale.
+  const frame = { x: 10, y: 10, width: 190, height: 277 };
+  const window = { minX: 30 - 95, minY: 10 - 138.5, width: 190, height: 277 };
+  const page = (over: Partial<NonNullable<CourseLayerRequest["page"]>> = {}): NonNullable<CourseLayerRequest["page"]> => ({
+    paper: { heightMm: 297 },
+    frame,
+    window,
+    objects: [
+      { id: "t", kind: "text", anchor: "page", x: 105, y: 20, text: "Bana", fontSizeMm: 6, color: "#000000" },
+      { id: "w", kind: "rectangle", anchor: "page", x: 150, y: 250, width: 30, height: 20, fillMode: "whiteout" },
+    ],
+    description: null,
+    ...over,
+  });
+
+  it("no page: no page part, the stack as before", () => {
+    const h = harness();
+    loaded(h);
+    const r = ask(h, request());
+    expect(r.pagePart).toBeNull();
+    expect(r.page).toBeNull();
+  });
+
+  it("one part after every map colour: page colours start at `colourBase`, the table repeated for them", () => {
+    const h = harness();
+    loaded(h);
+    const r = ask(h, request({ page: page() }));
+    const part = r.pagePart!;
+    expect(part.bucket).toBe(PAGE_BUCKET);
+    const base = r.page!.colourBase;
+    expect(r.colours).toHaveLength(2 * base);
+    for (const c of partColours(part)) expect(c).toBeGreaterThanOrEqual(base);
+    for (const c of partColours(r.part!)) expect(c).toBeLessThan(base);
+    // The page white-out takes the stack's upper white, in the page's copy of the table.
+    const white = indexOf(r.colours, "purple-upper") - 1;
+    expect(partColours(part)).toContain(base + white);
+    expect(r.colours[base + white].cmyk).toEqual(r.colours[white].cmyk);
+    expect(r.colours[base + white].id).not.toBe(r.colours[white].id);
+  });
+
+  it("page objects land in paper µm through T_map⁻¹: the text near the paper point under its page position", () => {
+    const h = harness();
+    const m = loaded(h);
+    const r = ask(h, request({ page: page() }));
+    const text = r.pagePart!.text!;
+    expect(text.instances.length).toBeGreaterThan(0);
+    // Page (105, 20) y-down → y-up 277 → map: centre (30, 10) + (105 − 105, 277 − 148.5) = (30, 138.5) mm.
+    const x = text.instances[0] + m.summary.originX, y = text.instances[1] + m.summary.originY;
+    expect(Math.abs(x - 30000)).toBeLessThan(15000);
+    expect(Math.abs(y - 138500)).toBeLessThan(8000);
+  });
+
+  it("the frame ring in paper µm for the map clip", () => {
+    const h = harness();
+    loaded(h);
+    const r = ask(h, request({ page: page() }));
+    const ring = r.page!.frameRingUm;
+    expect(ring).toHaveLength(4);
+    const xs = ring.map((p) => p[0]), ys = ring.map((p) => p[1]);
+    expect(Math.min(...xs)).toBeCloseTo(-65000, 0);
+    expect(Math.max(...xs)).toBeCloseTo(125000, 0);
+    expect(Math.min(...ys)).toBeCloseTo(-128500, 0);
+    expect(Math.max(...ys)).toBeCloseTo(148500, 0);
+  });
+
+  it("the description block draws on the page", () => {
+    const h = harness();
+    loaded(h);
+    const rows = [{ kind: "control" as const, sequence: 1, code: "31" }];
+    const r = ask(h, request({ page: page({ objects: [], description: { x: 140, y: 14, cellSizeMm: 7, rows, title: "A" } }) }));
+    expect(r.pagePart).not.toBeNull();
+    expect(partColours(r.pagePart!).size).toBeGreaterThan(0);
   });
 });
 
