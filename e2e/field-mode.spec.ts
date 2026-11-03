@@ -8,7 +8,7 @@
 import { devices, type BrowserContext, type Page } from "@playwright/test";
 import { test, expect, setEditorVector, setMapPipeline } from "./helpers/map-pipeline";
 import { reseed } from "./helpers/reseed";
-import { editorReady, site, sites, toPage, toPaper } from "./helpers/editor";
+import { canvasInCircle, editorReady, nextFrames, site, sites, toPage, toPaper } from "./helpers/editor";
 import { touchDrag, touchEnd, touchMove, touchStart, touchTap } from "./helpers/touch";
 
 type Pt = { x: number; y: number };
@@ -205,8 +205,33 @@ test.describe("Field mode on a phone (docs/course-editor.md §9, §10)", () => {
     await page.waitForTimeout(650);
     for (let i = 1; i <= 6; i++) await touchMove(page, [{ x: again.at.x + (30 * i) / 6, y: again.at.y + (20 * i) / 6 }]);
     await expect(page.getByTestId("editor-touch-handle")).toBeVisible();
+    // The loupe (§10 "Loupe"): 120 px, above the handle. The GL canvas inside it is the map
+    // magnified — the same circle of the canvas captured again after release (the 1× map; no
+    // course, so no legs, and the control dropped below it) differs in most pixels, and the
+    // magnified view has the map's purple in it.
+    const loupe = page.getByTestId("editor-loupe");
+    await expect(loupe).toBeVisible();
+    const lb = (await loupe.boundingBox())!;
+    expect(Math.abs(lb.width - 120)).toBeLessThanOrEqual(1);
+    expect(Math.abs(lb.height - 120)).toBeLessThanOrEqual(1);
+    // Its bottom 16 px above the handle (48 px above the finger).
+    expect(Math.abs(lb.y + lb.height - (to.y - 48 - 16))).toBeLessThanOrEqual(1);
+    expect(Math.abs(lb.x + lb.width / 2 - to.x)).toBeLessThanOrEqual(1);
+    await nextFrames(page);
+    const magnified = await canvasInCircle(page, lb);
+    expect(magnified.purple).toBeGreaterThan(0);
     const drawnAt = await toPaper(page, { x: to.x, y: to.y - 48 });
     await touchEnd(page, [to]);
+    await expect(loupe).toHaveCount(0);
+    await expect(page.getByTestId("editor-touch-handle")).toHaveCount(0);
+    await nextFrames(page);
+    const plain = await canvasInCircle(page, lb);
+    expect(plain.rgb.length).toBe(magnified.rgb.length);
+    let differing = 0;
+    for (let i = 0; i < plain.rgb.length; i += 3) {
+      if (Math.abs(plain.rgb[i] - magnified.rgb[i]) + Math.abs(plain.rgb[i + 1] - magnified.rgb[i + 1]) + Math.abs(plain.rgb[i + 2] - magnified.rgb[i + 2]) > 60) differing++;
+    }
+    expect(differing / (plain.rgb.length / 3)).toBeGreaterThan(0.1);
     await expect(page.getByTestId("editor-sheet-selection")).toContainText(again.code);
     await expect(page.getByTestId("editor-save-state")).toHaveAttribute("data-state", "saved", { timeout: 15000 });
     await page.reload();

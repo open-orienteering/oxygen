@@ -237,3 +237,36 @@ export async function inkIn(page: Page, rect: { minX: number; minY: number; maxX
   }
   return n;
 }
+
+/**
+ * The GL canvas inside the circle inscribed in a page box (CSS px), less `inset` px at the rim —
+ * the editor's loupe (docs/course-editor.md §10 "Loupe"): its purple pixel count and the RGB of
+ * every pixel in scan order (two captures of the same box compare pixel by pixel). The canvas
+ * alone is captured, as in `inkIn`, so the loupe's DOM ring and crosshair do not count.
+ */
+export async function canvasInCircle(page: Page, box: { x: number; y: number; width: number; height: number }, inset = 4): Promise<{ purple: number; rgb: number[] }> {
+  const { PNG } = await import("pngjs");
+  const canvas = page.getByTestId("map-vector-layer");
+  const style = "body * { visibility: hidden !important } [data-testid='map-vector-layer'] { visibility: visible !important }";
+  const png = PNG.sync.read(await canvas.screenshot({ style }));
+  const cb = (await canvas.boundingBox())!;
+  const k = png.width / cb.width;
+  const cx = (box.x + box.width / 2 - cb.x) * k, cy = (box.y + box.height / 2 - cb.y) * k, r = (box.width / 2 - inset) * k;
+  let purple = 0;
+  const rgb: number[] = [];
+  for (let py = Math.max(0, Math.floor(cy - r)); py <= Math.min(png.height - 1, Math.ceil(cy + r)); py++) {
+    for (let px = Math.max(0, Math.floor(cx - r)); px <= Math.min(png.width - 1, Math.ceil(cx + r)); px++) {
+      if (Math.hypot(px - cx, py - cy) > r) continue;
+      const i = (py * png.width + px) * 4;
+      const red = png.data[i], g = png.data[i + 1], b = png.data[i + 2];
+      rgb.push(red, g, b);
+      if (red - g > 50 && b - g > 50) purple++;
+    }
+  }
+  return { purple, rgb };
+}
+
+/** Two frames, so a React commit's GL redraw (one animation frame later) is on the canvas. */
+export async function nextFrames(page: Page): Promise<void> {
+  await page.evaluate(() => new Promise<void>((r) => requestAnimationFrame(() => requestAnimationFrame(() => r()))));
+}

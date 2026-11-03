@@ -73,8 +73,8 @@ Field mode as the phone default, a full-bleed canvas where one finger
 pans, the bottom sheet with three detents and the action bar in its peek
 row, the floating `+`, and on a coarse pointer: a selected control drags
 at once, an unselected one pans on a drag and moves after a 500 ms long
-press, a dragged control rides 48 px above the finger, hit tolerance
-12 px, two fingers always pan / zoom and cancel a pending press.
+press, a dragged control rides 48 px above the finger with a 120 px
+×2.5 loupe above it (drawn by the GL layer), hit tolerance 12 px, two fingers always pan / zoom and cancel a pending press.
 
 ### Legacy course editor on touch
 

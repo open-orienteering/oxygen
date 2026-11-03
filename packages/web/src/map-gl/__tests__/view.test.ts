@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { project, viewMatrix } from "../view";
+import { loupeView, project, viewMatrix } from "../view";
 import { scissorOfRing } from "../renderer";
 
 describe("viewMatrix (arena projection, docs/map-rendering.md §5.2)", () => {
@@ -36,6 +36,43 @@ describe("viewMatrix (arena projection, docs/map-rendering.md §5.2)", () => {
     const x = f(f(f(m[0] * p) + f(m[4] * q)) + m[12]);
     const px = (x * far.widthPx) / 2;
     expect(Math.abs(px - 37.5 * 0.2)).toBeLessThan(0.05);
+  });
+});
+
+describe("loupeView (the editor's loupe, docs/map-rendering.md §5.5)", () => {
+  const main = { centreX: 1_250_000, centreY: -40_000, pxPerUm: 0.01, widthPx: 1000, heightPx: 2000, rotationDeg: 0 };
+  const origin = { x: 1_000_000, y: 0 };
+  const p = { x: 1_262_345, y: -37_890 };
+  const at = (m: Float32Array, px: number, py: number) => project(m, px - origin.x, py - origin.y);
+
+  it("is the main view at ×scale about the point, size² device px", () => {
+    const v = loupeView({ ...main, rotationDeg: 17 }, p, 2.5, 315);
+    expect(v).toEqual({ centreX: p.x, centreY: p.y, pxPerUm: 0.025, widthPx: 315, heightPx: 315, rotationDeg: 17 });
+  });
+
+  // Float32 matrix entries: 4 digits of clip is a hundredth of a loupe pixel.
+  it("maps the dragged point to the loupe's centre and magnifies distances by the scale", () => {
+    const m = viewMatrix(loupeView(main, p, 2.5, 315), origin.x, origin.y);
+    const [x0, y0, w] = at(m, p.x, p.y);
+    expect(x0).toBeCloseTo(0, 4);
+    expect(y0).toBeCloseTo(0, 4);
+    expect(w).toBe(1);
+    // 20 main px east of the point → 50 loupe px right of the centre (clip = px / half size).
+    const d = 20 / main.pxPerUm;
+    expect(at(m, p.x + d, p.y)[0]).toBeCloseTo((2.5 * 20) / (315 / 2), 4);
+    expect(at(m, p.x, p.y + d)[1]).toBeCloseTo((2.5 * 20) / (315 / 2), 4);
+  });
+
+  it("keeps the main view's rotation: with 90° an east point lands above the centre", () => {
+    const m = viewMatrix(loupeView({ ...main, rotationDeg: 90 }, p, 2.5, 200), origin.x, origin.y);
+    const [x, y] = at(m, p.x + 10 / main.pxPerUm, p.y);
+    expect(x).toBeCloseTo(0, 4);
+    expect(y).toBeCloseTo((2.5 * 10) / 100, 4);
+  });
+
+  it("defaults a missing rotation to 0", () => {
+    const { rotationDeg: _r, ...upright } = main;
+    expect(loupeView(upright, p, 2.5, 100).rotationDeg).toBe(0);
   });
 });
 

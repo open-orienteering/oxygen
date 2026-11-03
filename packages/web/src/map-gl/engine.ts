@@ -17,7 +17,7 @@ import {
   type PreparedPart, type ResidentPart, type ViewRect, type VisibleFilter,
 } from "./buckets.js";
 import type { render as R } from "@oxygen/shared";
-import type { DocumentRenderOptions, FrameStats, MapGlRenderer, TextAtlasImage } from "./renderer.js";
+import type { DocumentRenderOptions, FrameStats, InsetBox, MapGlRenderer, TextAtlasImage } from "./renderer.js";
 import type { RenderTarget } from "./view.js";
 import {
   createMapGlWorker, messageChannelScheduler,
@@ -411,6 +411,27 @@ export class MapGlEngine {
     const stats = this.renderer.renderDocument(view, this.pageClip ? { ...opts, pageClip: this.pageClip } : opts, target);
     stats.cpuMs = performance.now() - t0;
     return stats;
+  }
+
+  /**
+   * The editor's loupe (docs/map-rendering.md §5.5 "Loupe"), after `render` in the same frame:
+   * draws the visible set `render` last built once more with `view` (`loupeView`) into the
+   * renderer's inset target and composites it into the circle of `box` on the canvas. No cell
+   * selection, no worker request, no rebuild: the loupe shows what is resident.
+   */
+  renderInset(view: ViewRect, opts: DocumentRenderOptions, box: InsetBox): FrameStats {
+    if (!this.view || !this.summary) return { drawCalls: 0, cpuMs: 0 };
+    const t0 = performance.now();
+    const target = this.renderer.insetTarget(box.size);
+    const stats = this.renderer.renderDocument(view, this.pageClip ? { ...opts, pageClip: this.pageClip } : opts, target);
+    this.renderer.compositeInset(box);
+    stats.cpuMs = performance.now() - t0;
+    return stats;
+  }
+
+  /** Frees the loupe's target once it is gone. */
+  releaseInset(): void {
+    this.renderer.releaseInset();
   }
 
   stats(): EngineStats {
