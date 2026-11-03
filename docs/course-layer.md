@@ -585,7 +585,7 @@ the same sequence (integration test).
 | `controls.checked_at`, `checked_by` | TIMESTAMPTZ, UUID (no FK — journaled to nodes without the users) | field check-off (`control.check`) |
 | `controls.version`, `courses.version` | BIGINT, default 0 | the §7 token |
 | `course_controls.number_hidden` | BOOLEAN, default false | hide this visit's number (08 §4.2) |
-| `controls.description_source` | TEXT NULL, CHECK `auto` \| `manual` (migration `20261102120000_control_description_source`; D6, not in 08 §4.2) | who wrote `description`: `auto` when an autodetect path filled it (`control.create` / `control.update` with `autoDescribe`), `manual` when a write carried an explicit `description` — **a manual edit that equals the autodetect result is still `manual`**; clearing the description clears it to NULL; NULL for rows written before D6 (unknown, never stale). It travels in `control.upserted` with the other portable fields (additive: phase-1 journal consumers ignore it). Read by `DESCRIPTION_STALE` (§9) |
+| `controls.description_source` | TEXT NULL, CHECK `auto` \| `manual` (migration `20261102120000_control_description_source`; D6, not in 08 §4.2) | who wrote `description`: `auto` when an autodetect path filled it (`control.create` / `control.update` with `autoDescribe`), `manual` when a write carried an explicit `description` — **a manual edit that equals the autodetect result is still `manual`**; clearing the description clears it to NULL; NULL for rows written before D6 and for imported descriptions (`course.importCourses` writes none: neither autodetect nor a setter's edit) — unknown, never stale. It travels in `control.upserted` with the other portable fields (additive: phase-1 journal consumers ignore it). Read by `DESCRIPTION_STALE` (§9) |
 
 `kind` and `status` 4 / 5 are **kept in sync for one release** (08 §4.8):
 `control.create` derives `kind` from `status`; `control.update` writing
@@ -948,7 +948,8 @@ A check is `{ code, siteIds, leg?, at, params? }`: the sites involved
 leg in the course's positioned sequence), `at` the point to locate and
 mark (paper mm), `params` what the message shows (`a` / `b` codes,
 `distanceM`, `limitM`, `feature`, `code`, `from` / `to`, `symbol`;
-`DESCRIPTION_STALE` adds `suggested`, the column D the map suggests now). There is no message text: the web formats
+`DESCRIPTION_STALE` also carries `suggested`, the column-D code the map
+suggests now, which the message does not show). There is no message text: the web formats
 it from `editor:check_<CODE>` (AGENTS.md §9). Output order: the table
 order below, then the order of the input (sites, then the course's items).
 

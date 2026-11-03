@@ -426,8 +426,9 @@ undo or a mode switch.
   check's point without changing the zoom.
 - **Canvas markers** (UI layer, `editor-check-layer`): an amber ring
   around each site of a site check, an amber cross at a leg check's
-  point; `editor-check-marker` (`data-code`, `data-x`, `data-y` paper
-  mm). They are not hit targets: a click goes through to the map.
+  point; `editor-check-marker` (`data-code`; a ring `data-site` and
+  `data-x` / `data-y` = the site, a cross `data-x` / `data-y` = the check's
+  point, paper mm). They are not hit targets: a click goes through to the map.
 - **Status bar KPIs** (`editor-status-kpis`): controls, length, climb;
   beside them the check count (`editor-status-checks`, amber,
   `data-count`, shown when there is one).
