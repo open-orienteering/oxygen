@@ -18,6 +18,9 @@ import {
   type ResolvedMapLayout,
 } from "../course-maps/resolve-layout.js";
 import { getBaseMapInfoOrNull } from "../course-maps/map-source.js";
+import { afterTemplateDeleted, syncTemplateKey } from "../course-maps/auto-sheets.js";
+import { nextObjectVersion } from "../course-objects.js";
+import { baseVersionSchema, versionConflict } from "../version-conflict.js";
 import {
   coursesEditProcedure,
   coursesViewProcedure,
@@ -52,17 +55,31 @@ function templateConflict(error: unknown, name: string): never {
   throw error;
 }
 
-type ParsedMapTemplate = Omit<MapTemplate, "settings" | "objects"> & {
+type ParsedMapTemplate = Omit<MapTemplate, "settings" | "objects" | "version"> & {
   settings: MapTemplateSettings;
   objects: CourseMapObject[];
+  /** Concurrency token (docs/course-layout.md §2), a decimal HLC. */
+  version: string;
+  /** Sheets pointing at the template. */
+  sheetCount?: number;
 };
 
-function parseTemplate(row: MapTemplate): ParsedMapTemplate {
+function parseTemplate(row: MapTemplate & { _count?: { maps: number } }): ParsedMapTemplate {
+  const { _count, ...rest } = row;
   return {
-    ...row,
+    ...rest,
     settings: mapTemplateSettingsSchema.parse(row.settings),
     objects: z.array(courseMapObjectSchema).parse(row.objects),
+    version: row.version.toString(),
+    ...(_count ? { sheetCount: _count.maps } : {}),
   };
+}
+
+/** Lock a template row and return its token; null when it is gone. */
+async function lockTemplateVersion(db: Prisma.TransactionClient, id: string): Promise<bigint | null> {
+  const rows = await db.$queryRaw<{ version: bigint }[]>`
+    SELECT "version" FROM "oxygen"."map_templates" WHERE "id" = ${id}::uuid FOR UPDATE`;
+  return rows[0]?.version ?? null;
 }
 
 export const mapTemplateRouter = router({
@@ -70,6 +87,7 @@ export const mapTemplateRouter = router({
     const rows = await ctx.db.mapTemplate.findMany({
       where: { eventId: ctx.event.id },
       orderBy: [{ seq: "asc" }],
+      include: { _count: { select: { maps: true } } },
     });
     return rows.map(parseTemplate);
   }),
@@ -164,20 +182,25 @@ export const mapTemplateRouter = router({
     )
     .mutation(async ({ ctx, input }) => {
       try {
-        const row = await ctx.db.mapTemplate.create({
-          data: {
-            eventId: ctx.event.id,
-            name: input.name,
-            paper: input.paper,
-            paperWidthMm: input.paperWidthMm,
-            paperHeightMm: input.paperHeightMm,
-            orientation: input.orientation,
-            printScale: input.printScale,
-            settings: json(input.settings),
-            objects: json(input.objects),
-          },
-        });
-        return parseTemplate(row);
+        return parseTemplate(
+          await ctx.db.$transaction(async (tx) => {
+            const row = await tx.mapTemplate.create({
+              data: {
+                eventId: ctx.event.id,
+                name: input.name,
+                paper: input.paper,
+                paperWidthMm: input.paperWidthMm,
+                paperHeightMm: input.paperHeightMm,
+                orientation: input.orientation,
+                printScale: input.printScale,
+                settings: json(input.settings),
+                objects: json(input.objects),
+                version: nextObjectVersion(),
+              },
+            });
+            return syncTemplateKey(tx, row.id);
+          }),
+        );
       } catch (error) {
         templateConflict(error, input.name);
       }
@@ -186,7 +209,12 @@ export const mapTemplateRouter = router({
   update: coursesEditProcedure
     .input(
       z
-        .object({ id: z.number().int().positive(), ...templateFields })
+        .object({
+          id: z.number().int().positive(),
+          ...templateFields,
+          /** The `version` the client edits from (docs/course-layout.md §2); omitted: last writer wins. */
+          baseVersion: baseVersionSchema,
+        })
         .partial()
         .required({ id: true }),
     )
@@ -197,16 +225,25 @@ export const mapTemplateRouter = router({
       if (!existing) {
         throw new TRPCError({ code: "NOT_FOUND", message: "Map template not found" });
       }
-      const { id: _publicId, settings, objects, ...fields } = input;
+      const { id: _publicId, settings, objects, baseVersion, ...fields } = input;
       void _publicId;
       try {
-        const row = await ctx.db.mapTemplate.update({
-          where: { id: existing.id },
-          data: {
-            ...fields,
-            ...(settings === undefined ? {} : { settings: json(settings) }),
-            ...(objects === undefined ? {} : { objects: json(objects) }),
-          },
+        const row = await ctx.db.$transaction(async (tx) => {
+          const version = await lockTemplateVersion(tx, existing.id);
+          if (baseVersion !== undefined && version !== null && version !== BigInt(baseVersion)) {
+            const now = await tx.mapTemplate.findUniqueOrThrow({ where: { id: existing.id } });
+            throw versionConflict({ kind: "template", id: now.seq, version: now.version.toString(), current: parseTemplate(now), differing: null });
+          }
+          await tx.mapTemplate.update({
+            where: { id: existing.id },
+            data: {
+              ...fields,
+              ...(settings === undefined ? {} : { settings: json(settings) }),
+              ...(objects === undefined ? {} : { objects: json(objects) }),
+              version: nextObjectVersion(),
+            },
+          });
+          return syncTemplateKey(tx, existing.id);
         });
         return parseTemplate(row);
       } catch (error) {
@@ -224,19 +261,25 @@ export const mapTemplateRouter = router({
         throw new TRPCError({ code: "NOT_FOUND", message: "Map template not found" });
       }
       try {
+        // A copy shares its source's key, so it is that key's extra template
+        // (docs/course-layout.md §5 "Extra templates").
         return parseTemplate(
-          await ctx.db.mapTemplate.create({
-            data: {
-              eventId: ctx.event.id,
-              name: input.name,
-              paper: source.paper,
-              paperWidthMm: source.paperWidthMm,
-              paperHeightMm: source.paperHeightMm,
-              orientation: source.orientation,
-              printScale: source.printScale,
-              settings: json(source.settings),
-              objects: json(source.objects),
-            },
+          await ctx.db.$transaction(async (tx) => {
+            const row = await tx.mapTemplate.create({
+              data: {
+                eventId: ctx.event.id,
+                name: input.name,
+                paper: source.paper,
+                paperWidthMm: source.paperWidthMm,
+                paperHeightMm: source.paperHeightMm,
+                orientation: source.orientation,
+                printScale: source.printScale,
+                settings: json(source.settings),
+                objects: json(source.objects),
+                version: nextObjectVersion(),
+              },
+            });
+            return syncTemplateKey(tx, row.id);
           }),
         );
       } catch (error) {
@@ -247,12 +290,14 @@ export const mapTemplateRouter = router({
   delete: coursesEditProcedure
     .input(z.object({ id: z.number().int().positive() }))
     .mutation(async ({ ctx, input }) => {
-      const result = await ctx.db.mapTemplate.deleteMany({
-        where: { seq: input.id, eventId: ctx.event.id },
+      await ctx.db.$transaction(async (tx) => {
+        const row = await tx.mapTemplate.findFirst({ where: { seq: input.id, eventId: ctx.event.id } });
+        if (!row) {
+          throw new TRPCError({ code: "NOT_FOUND", message: "Map template not found" });
+        }
+        await tx.mapTemplate.delete({ where: { id: row.id } });
+        await afterTemplateDeleted(tx, ctx.event.id, row.autoKey, row.isExtra);
       });
-      if (result.count === 0) {
-        throw new TRPCError({ code: "NOT_FOUND", message: "Map template not found" });
-      }
       return { ok: true as const };
     }),
 
@@ -288,8 +333,9 @@ export const mapTemplateRouter = router({
         let created = 0;
         let updated = 0;
         for (const course of courses) {
+          // The course's own sheets; class sheets keep their class's template (docs/course-layout.md §6).
           const existing = await tx.courseMap.findMany({
-            where: { eventId: ctx.event.id, courseId: course.id },
+            where: { eventId: ctx.event.id, courseId: course.id, classId: null },
             select: { id: true },
           });
           if (existing.length === 0) {
@@ -300,13 +346,14 @@ export const mapTemplateRouter = router({
                 templateId: template.id,
                 name: course.name,
                 kind: "course",
+                version: nextObjectVersion(),
               },
             });
             created += 1;
           } else {
             await tx.courseMap.updateMany({
               where: { id: { in: existing.map((map) => map.id) } },
-              data: { templateId: template.id },
+              data: { templateId: template.id, version: nextObjectVersion() },
             });
             updated += existing.length;
           }
@@ -408,18 +455,22 @@ export const mapTemplateRouter = router({
         payload.objects.length - pageObjects.length;
       try {
         const template = parseTemplate(
-          await ctx.db.mapTemplate.create({
-            data: {
-              eventId: ctx.event.id,
-              name: input.name,
-              paper: payload.paper,
-              paperWidthMm: payload.paperWidthMm,
-              paperHeightMm: payload.paperHeightMm,
-              orientation: payload.orientation,
-              printScale: payload.printScale,
-              settings: json(payload.settings),
-              objects: json(pageObjects),
-            },
+          await ctx.db.$transaction(async (tx) => {
+            const row = await tx.mapTemplate.create({
+              data: {
+                eventId: ctx.event.id,
+                name: input.name,
+                paper: payload.paper,
+                paperWidthMm: payload.paperWidthMm,
+                paperHeightMm: payload.paperHeightMm,
+                orientation: payload.orientation,
+                printScale: payload.printScale,
+                settings: json(payload.settings),
+                objects: json(pageObjects),
+                version: nextObjectVersion(),
+              },
+            });
+            return syncTemplateKey(tx, row.id);
           }),
         );
         return { template, removedMapAnchoredCount };

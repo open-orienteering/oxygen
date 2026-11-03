@@ -21,7 +21,9 @@ import { layoutControlsFromCourseControls, resolveMapLayout } from "../course-ma
 import { getBaseMapInfoOrNull } from "../course-maps/map-source.js";
 import { type MapRowContext, sheetInputForMapRow } from "../course-maps/pdf-page.js";
 import { resolveSheet } from "../course-maps/resolve-sheet.js";
-import { classesByCourse, loadCourseObjects } from "../course-objects.js";
+import { classesByCourse, loadCourseObjects, nextObjectVersion } from "../course-objects.js";
+import { rowForClass } from "../course-maps/pdf-page.js";
+import { baseVersionSchema, versionConflict } from "../version-conflict.js";
 import {
   coursesEditProcedure,
   coursesViewProcedure,
@@ -46,6 +48,10 @@ export interface CourseMapListItem {
   overrides: CourseMapOverrides;
   objects: CourseMapObject[];
   sortOrder: number;
+  /** Concurrency token (docs/course-layout.md §2), a decimal HLC. */
+  version: string;
+  /** The class whose override the sheet prints (docs/course-layout.md §6); null for a course's own sheet. */
+  class: { seq: number; name: string } | null;
   course: {
     seq: number;
     name: string;
@@ -56,6 +62,8 @@ export interface CourseMapListItem {
   template: {
     seq: number;
     name: string;
+    autoKey: string | null;
+    isExtra: boolean;
   } | null;
   controls: Array<
     MapPoint & {
@@ -99,6 +107,9 @@ export interface EditorSheet {
     name: string;
     kind: string;
     courseSeq: number | null;
+    /** The class of a class sheet (docs/course-layout.md §6). */
+    classSeq: number | null;
+    version: string;
     windowCenter: MapPoint | null;
     overrides: CourseMapOverrides;
     objects: CourseMapObject[];
@@ -113,7 +124,15 @@ export interface EditorSheet {
     printScale: number;
     settings: MapTemplateSettings;
     objects: CourseMapObject[];
+    autoKey: string | null;
+    isExtra: boolean;
+    version: string;
   };
+  /**
+   * Class view (docs/course-layout.md §6): the class read, and whether it
+   * is the class's own sheet or its course's sheet with the override applied.
+   */
+  classView: { classSeq: number; className: string; printScale: number | null; ownSheet: boolean } | null;
   /** The previewed course in template scope, the sheet's course in sheet scope. */
   courseSeq: number | null;
   document: CourseMapDocument;
@@ -142,9 +161,11 @@ function parseMap<T extends {
   windowCenter: unknown;
   overrides: unknown;
   objects: unknown;
+  version: bigint;
 }>(row: T) {
   return {
     ...row,
+    version: row.version.toString(),
     windowCenter:
       row.windowCenter === null
         ? null
@@ -159,8 +180,9 @@ function editorSheet(
   { layout, sheet }: ReturnType<typeof resolveSheet>,
   rest: {
     sheet: EditorSheet["sheet"];
-    template: { seq: number; name: string; paper: string; orientation: string; paperWidthMm: number | null; paperHeightMm: number | null; printScale: number; settings: unknown; objects: unknown };
+    template: { seq: number; name: string; paper: string; orientation: string; paperWidthMm: number | null; paperHeightMm: number | null; printScale: number; settings: unknown; objects: unknown; autoKey: string | null; isExtra: boolean; version: bigint };
     courseSeq: number | null;
+    classView?: EditorSheet["classView"];
     windows: MapWindow[];
     mapScale: number | null;
   },
@@ -179,7 +201,11 @@ function editorSheet(
       printScale: t.printScale,
       settings: mapTemplateSettingsSchema.parse(t.settings),
       objects: objectsSchema.parse(t.objects),
+      autoKey: t.autoKey,
+      isExtra: t.isExtra,
+      version: t.version.toString(),
     },
+    classView: rest.classView ?? null,
     courseSeq: rest.courseSeq,
     document: layout.document,
     window: layout.window,
@@ -207,6 +233,7 @@ export const courseMapRouter = router({
         where: { eventId: ctx.event.id },
         include: {
           template: true,
+          class: { select: { seq: true, name: true } },
           course: {
             include: {
               classes: { select: { name: true } },
@@ -287,7 +314,8 @@ export const courseMapRouter = router({
         meridianTiltDeg: mapInfo?.meridianTiltDeg ?? null,
         mapName: row.name,
       });
-      const key = row.courseId ?? "all_controls";
+      // A class's sheets are validated among themselves (another scale).
+      const key = `${row.courseId ?? "all_controls"}:${row.classId ?? ""}`;
       const windows = windowsByCourse.get(key);
       if (windows) windows.push(layout.window);
       else windowsByCourse.set(key, [layout.window]);
@@ -310,7 +338,7 @@ export const courseMapRouter = router({
               document: row.resolved.document,
               mapScale: mapInfo?.scale ?? null,
               window: row.resolved.window,
-              windows: windowsByCourse.get(row.courseId ?? "all_controls"),
+              windows: windowsByCourse.get(`${row.courseId ?? "all_controls"}:${row.classId ?? ""}`),
               variants: [{ key: "", controls: row.controls }],
               descriptionRowCount: row.descriptionRows.length,
               descriptionHeaderRows: row.descriptionHeader ? 3 : 1,
@@ -336,6 +364,8 @@ export const courseMapRouter = router({
         overrides: row.overrides,
         objects: row.objects,
         sortOrder: row.sortOrder,
+        version: row.version,
+        class: row.class ? { seq: row.class.seq, name: row.class.name } : null,
         course: row.course
           ? {
               seq: row.course.seq,
@@ -346,7 +376,7 @@ export const courseMapRouter = router({
             }
           : null,
         template: row.template
-          ? { seq: row.template.seq, name: row.template.name }
+          ? { seq: row.template.seq, name: row.template.name, autoKey: row.template.autoKey, isExtra: row.template.isExtra }
           : null,
         controls,
         legs,
@@ -362,13 +392,16 @@ export const courseMapRouter = router({
   /**
    * Layout mode's read (docs/course-layout.md §1; research 08 §4.6
    * `resolveSheet`): `{ seq }` a sheet, `{ templateSeq, courseSeq? }` a
-   * template previewed with a course (as `mapTemplate.previewLayout`).
+   * template previewed with a course (as `mapTemplate.previewLayout`),
+   * `{ classSeq }` Class view (§6): the class's first sheet, else its
+   * course's first sheet as the class prints it (`rowForClass`).
    */
   resolveSheet: coursesViewProcedure
     .input(
       z.union([
         z.object({ seq: z.number().int().positive() }),
         z.object({ templateSeq: z.number().int().positive(), courseSeq: z.number().int().positive().optional() }),
+        z.object({ classSeq: z.number().int().positive() }),
       ]),
     )
     .query(async ({ ctx, input }): Promise<EditorSheet> => {
@@ -394,23 +427,46 @@ export const courseMapRouter = router({
         courseObjects,
         classesByCourse: byCourse,
       };
+      const sheetInclude = { template: true, class: { select: { seq: true } }, course: { include: courseInclude } } as const;
 
-      if ("seq" in input) {
-        const row = await ctx.db.courseMap.findUnique({
-          where: { eventId_seq: { eventId: ctx.event.id, seq: input.seq } },
-          include: { template: true, course: { include: courseInclude } },
-        });
+      if ("seq" in input || "classSeq" in input) {
+        let row;
+        let classView: EditorSheet["classView"] = null;
+        let print: Parameters<typeof rowForClass>[1] | null = null;
+        if ("seq" in input) {
+          row = await ctx.db.courseMap.findUnique({ where: { eventId_seq: { eventId: ctx.event.id, seq: input.seq } }, include: sheetInclude });
+        } else {
+          const cls = await ctx.db.class.findFirst({
+            where: { eventId: ctx.event.id, seq: input.classSeq, removed: false },
+            include: { sheetTemplate: true },
+          });
+          if (!cls) throw new TRPCError({ code: "NOT_FOUND", message: "Class not found" });
+          const order = [{ sortOrder: "asc" as const }, { seq: "asc" as const }];
+          const own = await ctx.db.courseMap.findFirst({ where: { eventId: ctx.event.id, classId: cls.id }, include: sheetInclude, orderBy: order });
+          row =
+            own ??
+            (cls.courseId
+              ? await ctx.db.courseMap.findFirst({
+                  where: { eventId: ctx.event.id, courseId: cls.courseId, classId: null, kind: "course" },
+                  include: sheetInclude,
+                  orderBy: order,
+                })
+              : null);
+          print = { name: cls.name, printScale: cls.printScale, sheetTemplate: cls.sheetTemplate };
+          classView = { classSeq: cls.seq, className: cls.name, printScale: cls.printScale, ownSheet: !!own };
+          if (row) row = rowForClass(row, print, !!own);
+        }
         if (!row) notFound();
         if (!row.template) throw new TRPCError({ code: "PRECONDITION_FAILED", message: "No map template is assigned" });
         const resolved = resolveSheet(sheetInputForMapRow(row, rowCtx));
-        // Windows of the course's other sheets, for the "outside every sheet" check.
+        // Windows of the same set's other sheets (the course's, or the class's), for the "outside every sheet" check.
         const siblings = await ctx.db.courseMap.findMany({
-          where: { eventId: ctx.event.id, kind: row.kind, courseId: row.courseId, seq: { not: row.seq }, templateId: { not: null } },
+          where: { eventId: ctx.event.id, kind: row.kind, courseId: row.courseId, classId: row.classId, seq: { not: row.seq }, templateId: { not: null } },
           include: { template: true },
         });
         const windows = [
           resolved.layout.window,
-          ...siblings.map((s) => resolveMapLayout(sheetInputForMapRow({ ...s, course: row.course }, rowCtx)).window),
+          ...siblings.map((s) => resolveMapLayout(sheetInputForMapRow(print && !row.classId ? rowForClass({ ...s, course: row.course }, print, false) : { ...s, course: row.course }, rowCtx)).window),
         ];
         const parsed = parseMap(row);
         return editorSheet("sheet", resolved, {
@@ -419,12 +475,15 @@ export const courseMapRouter = router({
             name: row.name,
             kind: row.kind,
             courseSeq: row.course?.seq ?? null,
+            classSeq: row.class?.seq ?? null,
+            version: parsed.version,
             windowCenter: parsed.windowCenter,
             overrides: parsed.overrides,
             objects: parsed.objects,
           },
           template: row.template,
           courseSeq: row.course?.seq ?? null,
+          classView,
           windows,
           mapScale: mapInfo?.scale ?? null,
         });
@@ -537,6 +596,7 @@ export const courseMapRouter = router({
               overrides: json(input.overrides),
               objects: json(input.objects),
               sortOrder: (last?.sortOrder ?? -1) + 1,
+              version: nextObjectVersion(),
             },
           }),
         );
@@ -612,6 +672,7 @@ export const courseMapRouter = router({
                 }),
             ...(overrides === undefined ? {} : { overrides: json(overrides) }),
             ...(objects === undefined ? {} : { objects: json(objects) }),
+            version: nextObjectVersion(),
           },
         }),
       );
@@ -627,6 +688,8 @@ export const courseMapRouter = router({
         objects: objectsSchema,
         /** The template's objects; omitted, the template is not written (Layout mode's sheet scope, docs/course-layout.md §2). */
         templateObjects: objectsSchema.optional(),
+        /** The sheet's `version` the client edits from (docs/course-layout.md §2); omitted: last writer wins. */
+        baseVersion: baseVersionSchema.optional(),
       }),
     )
     .mutation(async ({ ctx, input }) => {
@@ -636,7 +699,15 @@ export const courseMapRouter = router({
       });
       if (!map) notFound();
       const overrides = courseMapOverridesSchema.parse(map.overrides);
+      const version = nextObjectVersion();
       await ctx.db.$transaction(async (tx) => {
+        const rows = await tx.$queryRaw<{ version: bigint }[]>`
+          SELECT "version" FROM "oxygen"."course_maps" WHERE "id" = ${map.id}::uuid FOR UPDATE`;
+        const now = rows[0]?.version;
+        if (input.baseVersion !== undefined && now !== undefined && now !== BigInt(input.baseVersion)) {
+          const current = await tx.courseMap.findUniqueOrThrow({ where: { id: map.id } });
+          throw versionConflict({ kind: "sheet", id: map.seq, version: now.toString(), current: parseMap(current), differing: null });
+        }
         await tx.courseMap.update({
           where: { id: map.id },
           data: {
@@ -647,16 +718,17 @@ export const courseMapRouter = router({
               description: input.description,
             }),
             objects: json(input.objects),
+            version,
           },
         });
         if (map.template && input.templateObjects) {
           await tx.mapTemplate.update({
             where: { id: map.template.id },
-            data: { objects: json(input.templateObjects) },
+            data: { objects: json(input.templateObjects), version: nextObjectVersion() },
           });
         }
       });
-      return { ok: true as const };
+      return { ok: true as const, version: version.toString() };
     }),
 
   delete: coursesEditProcedure

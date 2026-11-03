@@ -191,6 +191,31 @@ export interface PrintMapRow {
   } | null;
 }
 
+/** A class's print override (docs/course-layout.md §6; 08 §4.4). */
+export interface ClassPrint {
+  name: string;
+  printScale: number | null;
+  /** The class's `sheet_template_id` row. */
+  sheetTemplate: LayoutTemplateSource | null;
+}
+
+/**
+ * A sheet as one class prints it (docs/course-layout.md §6): the
+ * description header names that class only. A class sheet
+ * (`course_maps.class_id`) already carries the class's template and scale;
+ * a course sheet printed for a class (the class has no sheets of its own)
+ * takes them here — the template `sheet_template_id ?? the sheet's`, the
+ * scale `print_scale ??` the template's. Both pipelines print the result.
+ */
+export function rowForClass<R extends PrintMapRow>(row: R, cls: ClassPrint, classSheet: boolean): R {
+  const course = row.course ? { ...row.course, classes: [{ name: cls.name }] } : null;
+  if (classSheet) return { ...row, course };
+  const overrides = { ...((row.overrides ?? {}) as Record<string, unknown>) };
+  if (cls.printScale !== null) overrides.printScale = cls.printScale;
+  else if (cls.sheetTemplate) delete overrides.printScale;
+  return { ...row, course, template: cls.sheetTemplate ?? row.template, overrides };
+}
+
 /** What `sheetForMapRow` and the editor's `courseMap.resolveSheet` read besides the row. */
 export interface MapRowContext {
   event: { name: string; date: Date };
