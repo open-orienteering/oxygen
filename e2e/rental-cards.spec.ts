@@ -11,6 +11,7 @@
 
 import { test, expect, type Page } from "@playwright/test";
 import { getMockWebSerialScript } from "./helpers/mock-webserial";
+import { connectMockSerialReader } from "./helpers/reader";
 import { waitForTrpc } from "./helpers/trpc";
 import { openKioskTab } from "./helpers/kiosk";
 import { API_BASE } from "./helpers/api-base";
@@ -276,8 +277,7 @@ test.describe("Rental Cards — Kiosk Readout Banner", () => {
     const kioskPage = await openKioskTab(context, nameId);
 
     // Connect SI reader in admin
-    await page.getByTestId("connect-reader").click();
-    await expect(page.getByTestId("reader-status")).toBeVisible({ timeout: 5000 });
+    await connectMockSerialReader(page, 5000);
 
     // Insert the rental card with course controls so it resolves as a readout (not pre-start)
     const readoutPromise = waitForTrpc(page, "cardReadout.readout");

@@ -9,8 +9,14 @@ SI Card Inserted
     │
     ▼
 ┌──────────────────────┐
-│  Web Serial Reader   │  packages/web/src/lib/webserial.ts
-│  (si:card-readout)   │  Browser-side SI protocol over Web Serial API
+│  Card readers (1..N) │  packages/web/src/lib/webserial.ts (USB, Web Serial)
+│  (si:card-readout)   │  each implements SIReader (lib/si-reader.ts)
+└─────────┬────────────┘
+          │
+          ▼
+┌──────────────────────┐
+│   ReaderHub          │  packages/web/src/lib/reader-hub.ts
+│                      │  Fans every reader's si:* events into one stream
 └─────────┬────────────┘
           │
           ▼
@@ -36,7 +42,10 @@ SI Card Inserted
 | Component | File | Role |
 |-----------|------|------|
 | SI protocol | `packages/web/src/lib/si-protocol.ts` | Low-level SI card protocol (read/write/parse) |
-| Web Serial | `packages/web/src/lib/webserial.ts` | SI reader connection, card read, station programming |
+| Reader contract | `packages/web/src/lib/si-reader.ts` | `SIReader` interface and status type shared by every transport |
+| Reader hub | `packages/web/src/lib/reader-hub.ts` | Holds several readers, re-dispatches their events, aggregate status |
+| Web Serial | `packages/web/src/lib/webserial.ts` | USB SI station connection, card read, station programming |
+| Reader dialog | `packages/web/src/components/ReaderConnectionDialog.tsx` | Lists readers, adds and disconnects them |
 | DeviceManager | `packages/web/src/context/DeviceManager.tsx` | Card processing pipeline, action routing |
 | Kiosk channel | `packages/web/src/lib/kiosk-channel.ts` | BroadcastChannel protocol for admin↔kiosk IPC |
 | Kiosk page | `packages/web/src/pages/KioskPage.tsx` | Self-service kiosk display (readout, pre-start, registration) |
@@ -46,9 +55,31 @@ SI Card Inserted
 
 ---
 
-## 1. SI Card Read (Web Serial)
+## 1. SI Card Read
 
-When an SI card is inserted into a connected reader, the WebSerial layer reads the card data and emits events:
+### 1a. Readers and the reader hub
+
+Oxygen can hold several card readers at once, and every one of them feeds the same pipeline. Each reader implements `SIReader` (`lib/si-reader.ts`): an id, a kind (`serial` today), a label, a status (`idle | connecting | connected | reading | error`), optional device info (serial number, firmware, model, operating mode) and `disconnect()`. A USB SI station is an `SIReaderConnection` (`lib/webserial.ts`); it learns its serial number, firmware, model and mode from the SYS_VAL block it already reads on connect.
+
+`DeviceManager` owns one `ReaderHub` (`lib/reader-hub.ts`) instead of one connection. The hub re-dispatches every reader's events:
+
+| Event | Detail from the hub |
+|-------|---------------------|
+| `si:card-readout` | the reader's `SICardReadout`, untouched |
+| `si:card-detected` | the detection plus `readerId` |
+| `si:card-removed` | `{ readerId }` |
+| `si:status` | `{ status, readerId, readerStatus }`, where `status` is the best status across all readers (reading > connected > connecting > error > idle) |
+| `hub:readers-changed` | a snapshot of every reader, for the dialog |
+
+Because `status` is the aggregate, everything that reads `readerStatus` from the context (Recent Cards, Card Readout, the kiosk) sees "live" while any reader is live. Station programming on the Controls page uses `serialStatus` instead, the aggregate over USB stations only, and `getReaderConnection()` returns the first USB station.
+
+**Connecting.** The header pill (and the kiosk's reader button in standalone mode) opens the reader connection dialog. It lists every reader with its status, serial number, firmware and the time of its last card, warns when a station is not in readout mode, and has a **USB station** button that opens the browser's serial picker. The dialog closes after a successful connect. Cancelling the picker leaves nothing behind. On page load DeviceManager reopens *every* port the origin was granted before, not only the first.
+
+**Kiosk with several readers.** Only the reader that reported the most recent card insert may clear the kiosk's "do not remove the card" screen, so lifting a card from one reader does not cancel a readout in progress on another.
+
+### 1b. Card events
+
+When an SI card is inserted into a connected reader, the reader reads the card data and emits events:
 
 1. **`si:card-detected`** — Card physically detected (before data is read). Carries the card number.
 2. **`si:card-readout`** — Full card data read. Carries an `SICardReadout` object:

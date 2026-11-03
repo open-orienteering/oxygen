@@ -2,6 +2,7 @@ import { test, expect } from "./helpers/map-pipeline";
 import { reseed } from "./helpers/reseed";
 import { uploadEventMap } from "./helpers/map-upload";
 import { getMockWebSerialScript } from "./helpers/mock-webserial";
+import { connectMockSerialReader } from "./helpers/reader";
 import { waitForTrpc } from "./helpers/trpc";
 
 // Declare the global mock interface for TypeScript
@@ -51,35 +52,53 @@ test.beforeEach(async ({ page }) => {
 test.describe("WebSerial SI Reader", () => {
   test("connects reader and shows status indicator", async ({ page }) => {
     await selectCompetition(page);
-    await expect(page.getByTestId("connect-reader")).toBeVisible();
-    await expect(page.getByTestId("connect-reader")).toHaveText(/Connect Reader/);
+    await expect(page.getByTestId("reader-menu")).toBeVisible();
+    await expect(page.getByTestId("reader-menu")).toHaveText(/Connect Reader/);
 
-    await page.getByTestId("connect-reader").click();
-
-    await expect(page.getByTestId("reader-status")).toBeVisible({ timeout: 5000 });
+    await connectMockSerialReader(page, 5000);
     await expect(page.getByTestId("reader-status")).toHaveText(/SI Reader/);
 
     const isConnected = await page.evaluate(() => window.__siMock.isConnected());
     expect(isConnected).toBe(true);
   });
 
-  test("should disconnect reader via status menu", async ({ page }) => {
+  test("reader dialog lists the connected station", async ({ page }) => {
     await selectCompetition(page);
 
-    await page.getByTestId("connect-reader").click();
-    await expect(page.getByTestId("reader-status")).toBeVisible({ timeout: 5000 });
+    await page.getByTestId("reader-menu").click();
+    const dialog = page.getByTestId("reader-dialog");
+    await expect(dialog.getByTestId("no-readers")).toBeVisible();
+    await expect(dialog.getByTestId("connect-reader")).toContainText("USB station");
+    await page.getByTestId("reader-dialog-close").click();
+    await expect(dialog).toBeHidden();
+
+    await connectMockSerialReader(page, 5000);
+    await page.getByTestId("reader-status").click();
+    const row = dialog.getByTestId("reader-row-serial");
+    await expect(row).toHaveCount(1);
+    await expect(row.getByTestId("reader-status-chip")).toHaveText("Ready");
+  });
+
+  test("should disconnect reader via the reader dialog", async ({ page }) => {
+    await selectCompetition(page);
+
+    await connectMockSerialReader(page, 5000);
 
     await page.getByTestId("reader-status").click();
     await page.getByTestId("disconnect-reader").click();
 
-    await expect(page.getByTestId("connect-reader")).toBeVisible({ timeout: 5000 });
+    await expect(page.getByTestId("reader-dialog").getByTestId("no-readers")).toBeVisible({
+      timeout: 5000,
+    });
+    await page.getByTestId("reader-dialog-close").click();
+    await expect(page.getByTestId("reader-menu")).toBeVisible();
+    expect(await page.evaluate(() => window.__siMock.isConnected())).toBe(false);
   });
 
   test("readout notification navigates to card readout", async ({ page }) => {
     await selectCompetition(page);
 
-    await page.getByTestId("connect-reader").click();
-    await expect(page.getByTestId("reader-status")).toBeVisible({ timeout: 5000 });
+    await connectMockSerialReader(page, 5000);
 
     const resolutionPromise = waitForTrpc(page, "cardReadout.readout");
 
@@ -116,10 +135,7 @@ test.describe("WebSerial SI Reader", () => {
     ).toBeVisible({ timeout: 5000 });
 
     // Connect reader
-    await page.getByTestId("connect-reader").click();
-    await expect(page.getByTestId("reader-status")).toBeVisible({
-      timeout: 5000,
-    });
+    await connectMockSerialReader(page, 5000);
 
     // Verify the "SI Reader connected" hint is shown
     await expect(page.getByText("SI Reader connected")).toBeVisible();
@@ -152,10 +168,7 @@ test.describe("WebSerial SI Reader", () => {
     await selectCompetition(page);
 
     // Connect reader
-    await page.getByTestId("connect-reader").click();
-    await expect(page.getByTestId("reader-status")).toBeVisible({
-      timeout: 5000,
-    });
+    await connectMockSerialReader(page, 5000);
 
     // Wait for the runner resolution API call to complete after inserting the card
     const resolutionPromise = waitForTrpc(page, "cardReadout.readout");
@@ -188,10 +201,7 @@ test.describe("WebSerial SI Reader", () => {
     await selectCompetition(page);
 
     // Connect reader
-    await page.getByTestId("connect-reader").click();
-    await expect(page.getByTestId("reader-status")).toBeVisible({
-      timeout: 5000,
-    });
+    await connectMockSerialReader(page, 5000);
 
     // Wait for the runner resolution API call to complete after inserting the card.
     // The DeviceManager first stores the readout, then calls cardReadout.readout
@@ -246,10 +256,7 @@ test.describe("WebSerial SI Reader", () => {
     await selectCompetition(page);
 
     // Connect reader
-    await page.getByTestId("connect-reader").click();
-    await expect(page.getByTestId("reader-status")).toBeVisible({
-      timeout: 5000,
-    });
+    await connectMockSerialReader(page, 5000);
 
     // Wait for the runner resolution API call to complete after inserting the card
     const resolutionPromise = waitForTrpc(page, "cardReadout.readout");
@@ -290,10 +297,7 @@ test.describe("WebSerial SI Reader", () => {
     await selectCompetition(page);
 
     // Connect reader
-    await page.getByTestId("connect-reader").click();
-    await expect(page.getByTestId("reader-status")).toBeVisible({
-      timeout: 5000,
-    });
+    await connectMockSerialReader(page, 5000);
 
     // Read two cards
     await page.evaluate(() =>
@@ -342,8 +346,7 @@ test.describe("post-readout map", () => {
     if (!(await viewer.isVisible())) await uploadEventMap(page);
     await expect(viewer).toBeVisible({ timeout: 60_000 });
 
-    await page.getByTestId("connect-reader").click();
-    await expect(page.getByTestId("reader-status")).toBeVisible({ timeout: 5000 });
+    await connectMockSerialReader(page, 5000);
     const resolved = waitForTrpc(page, "cardReadout.readout");
     await page.evaluate(() =>
       window.__siMock.insertCard(501438, [

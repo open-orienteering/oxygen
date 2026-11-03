@@ -368,9 +368,11 @@ Deleting an event from the start page is a soft delete: it disappears from the l
 
 The Event page exposes a one-click **Download backup** button that streams a per-event PostgreSQL dump (CSV `\copy` of every event-scoped table) to your browser. The scope is exactly one event: its courses, classes, runners, cards, punches, readouts, map, and tracks — not other events, and not the shared runner and club directories. The event map travels as the content-addressed source file and imported document it pins, by hash, and restores idempotently into a database that already holds them (`packages/api/scripts/restore-map-blobs.sql`). The dump is prefixed with a header that includes a ready-to-run (commented) `INSERT INTO oxygen.events` statement, so a restore can re-create the event row on a fresh database without manual SQL. See [backup-restore.md](backup-restore.md) for the full restore workflow.
 
-### Web Serial card reader
+### Card readers
 
 Oxygen reads SportIdent cards directly in the browser using the Web Serial API. Supported card types: SI5, SI6, SI8, SI9, SI10, SI11, SIAC, pCard, tCard. No driver install, no desktop bridge — plug the reader into any Chromium-based browser and grant permission once per origin.
+
+The **Connect Reader** pill in the header opens the reader dialog, which lists every connected reader with its status, serial number, firmware and last card, and adds USB stations. Several readers can be connected at once (for example two readout stations at a busy finish), and every one feeds the same readout pipeline. Stations the browser already has permission for reconnect by themselves when the page loads. See [registration-and-readout.md](registration-and-readout.md#1a-readers-and-the-reader-hub).
 
 ### Test Lab
 

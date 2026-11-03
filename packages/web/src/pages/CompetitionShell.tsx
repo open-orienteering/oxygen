@@ -957,20 +957,21 @@ function PrinterStatusIndicator() {
 
 function ReaderStatusIndicator() {
   const { t } = useTranslation("nav");
-  const { supported, readerStatus, connectReader, disconnectReader } =
-    useDeviceManager();
-  const [showMenu, setShowMenu] = useState(false);
+  const { supported, readerStatus, readers, openReaderDialog } = useDeviceManager();
 
   if (!supported) return null;
 
   const isActive = readerStatus === "connected" || readerStatus === "reading";
+  const liveCount = readers.filter(
+    (r) => r.status === "connected" || r.status === "reading",
+  ).length;
 
   if (!isActive) {
     return (
       <button
-        onClick={() => connectReader().catch(() => { })}
+        onClick={openReaderDialog}
         className="inline-flex items-center gap-1.5 px-2.5 py-1 text-xs font-medium text-slate-500 hover:text-slate-700 hover:bg-slate-100 rounded-full transition-colors cursor-pointer"
-        data-testid="connect-reader"
+        data-testid="reader-menu"
         title={t("connectReaderTitle")}
       >
         <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
@@ -982,39 +983,17 @@ function ReaderStatusIndicator() {
   }
 
   return (
-    <div className="relative">
-      <button
-        onClick={() => setShowMenu(!showMenu)}
-        className="inline-flex items-center gap-1.5 px-2.5 py-1 text-xs font-medium text-emerald-700 bg-emerald-50 hover:bg-emerald-100 rounded-full transition-colors cursor-pointer"
-        data-testid="reader-status"
-      >
-        <span className="w-2 h-2 bg-emerald-500 rounded-full animate-pulse" />
-        <span className="hidden sm:inline">{t("siReader")}</span>
-      </button>
-      {showMenu && (
-        <>
-          <div
-            className="fixed inset-0 z-20"
-            onClick={() => setShowMenu(false)}
-          />
-          <div className="absolute right-0 top-full mt-1 z-30 bg-white border border-slate-200 rounded-lg shadow-lg p-3 min-w-[180px]">
-            <div className="text-xs text-slate-500 mb-2">
-              {t("status", { ns: "common" })}: {readerStatus === "reading" ? t("readerStatusActive") : t("readerStatusConnected")}
-            </div>
-            <button
-              onClick={() => {
-                disconnectReader();
-                setShowMenu(false);
-              }}
-              className="w-full text-left text-sm text-red-600 hover:bg-red-50 px-2 py-1.5 rounded transition-colors cursor-pointer"
-              data-testid="disconnect-reader"
-            >
-              {t("disconnect", { ns: "common" })}
-            </button>
-          </div>
-        </>
-      )}
-    </div>
+    <button
+      onClick={openReaderDialog}
+      className="inline-flex items-center gap-1.5 px-2.5 py-1 text-xs font-medium text-emerald-700 bg-emerald-50 hover:bg-emerald-100 rounded-full transition-colors cursor-pointer"
+      data-testid="reader-status"
+      title={t("readerMenuTitle")}
+    >
+      <span className="w-2 h-2 bg-emerald-500 rounded-full animate-pulse" />
+      <span className="hidden sm:inline">
+        {liveCount > 1 ? t("readersConnected", { count: liveCount }) : t("siReader")}
+      </span>
+    </button>
   );
 }
 

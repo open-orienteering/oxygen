@@ -124,7 +124,7 @@ function KioskPageBody() {
   }, [nameId]);
 
   // Standalone mode: use DeviceManager for SI reader
-  const { currentCard, readerStatus, connectReader, supported, lastDetectedCardNo } = useDeviceManager();
+  const { currentCard, readerStatus, openReaderDialog, supported, lastDetectedCardNo } = useDeviceManager();
 
   const updateSettings = useCallback(
     (partial: Partial<KioskSettings>) => {
@@ -387,8 +387,8 @@ function KioskPageBody() {
         <div className="flex items-center gap-2">
           {settings.standalone && supported && (
             <button
-              data-testid="connect-reader"
-              onClick={() => connectReader().catch(() => { })}
+              data-testid="reader-menu"
+              onClick={openReaderDialog}
               className={`text-xs px-2 py-1 rounded ${readerStatus === "connected" || readerStatus === "reading"
                   ? "bg-emerald-600/30 text-emerald-300"
                   : "bg-slate-700 text-slate-400 hover:text-slate-200"
