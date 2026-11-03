@@ -214,7 +214,8 @@ test.describe("Field mode on a phone (docs/course-editor.md §9, §10)", () => {
     const lb = (await loupe.boundingBox())!;
     expect(Math.abs(lb.width - 120)).toBeLessThanOrEqual(1);
     expect(Math.abs(lb.height - 120)).toBeLessThanOrEqual(1);
-    expect(lb.y + lb.height).toBeLessThanOrEqual(to.y - 48);
+    // Its bottom 16 px above the handle (48 px above the finger).
+    expect(Math.abs(lb.y + lb.height - (to.y - 48 - 16))).toBeLessThanOrEqual(1);
     expect(Math.abs(lb.x + lb.width / 2 - to.x)).toBeLessThanOrEqual(1);
     await nextFrames(page);
     const magnified = await canvasInCircle(page, lb);
