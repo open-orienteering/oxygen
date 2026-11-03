@@ -10,7 +10,7 @@ import { mapToPage, mapWindowForFrame } from "../../course-maps/geometry.js";
 import type { CourseMapObject } from "../../course-maps/schema.js";
 import { hatchLines, pathBounds } from "../../render/path.js";
 import { makePath, type PassStream } from "../../render/pass-stream.js";
-import { flipPageObject, frameInMap, frameRectUm, mapLayerTransform, mapPointToPage, pagePointToMap, transformPassStream } from "../page.js";
+import { flipPageObject, frameInMap, frameRectUm, inverseMapLayerTransform, mapLayerTransform, mapPointToPage, pagePointToMap, transformPassStream } from "../page.js";
 
 const H = 297;
 const frame = { x: 10, y: 20, width: 150, height: 200 };
@@ -46,6 +46,22 @@ describe("T_map", () => {
     expect(Math.hypot(rot[0].x, rot[0].y)).toBeCloseTo(Math.hypot(ring[0].x, ring[0].y), 6);
     expect(rot[0].x).not.toBeCloseTo(ring[0].x, 1);
   });
+
+  for (const rot of [0, 25]) {
+    it(`the inverse transform takes page points back to paper (rotation ${rot}°)`, () => {
+      const t = mapLayerTransform(frame, mapWindowForFrame(frame, { x: 120, y: -40 }, 15000, 10000, rot), H);
+      const inv = inverseMapLayerTransform(t);
+      for (const [px, py] of [[10000, 77000], [85000, 150000], [200000, 290000]]) {
+        const [mx, my] = mapPointToPage(inv, px, py);
+        const [ex, ey] = pagePointToMap(t, px, py);
+        expect(mx).toBeCloseTo(ex, 3);
+        expect(my).toBeCloseTo(ey, 3);
+        const [bx, by] = mapPointToPage(t, mx, my);
+        expect(bx).toBeCloseTo(px, 3);
+        expect(by).toBeCloseTo(py, 3);
+      }
+    });
+  }
 
   it("frameRectUm flips the y-down frame to a y-up rectangle", () => {
     expect(frameRectUm(frame, H)).toEqual({ x: 10000, y: 77000, width: 150000, height: 200000 });
