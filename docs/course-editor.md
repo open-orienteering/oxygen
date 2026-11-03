@@ -48,6 +48,11 @@ subtree holds everything: the panel's toolbar row carries the top bar,
 its in-map strip (`mapOverlay`) the tool rail, inspector and status bar,
 and the description editor is its `fullscreenOverlay`. So fullscreen (the
 panel's own button and Keyboard Lock on Escape) keeps the whole editor.
+The lock is taken once per fullscreen session, keyed on the editor being
+present rather than on the editor prop object, which changes on every
+hover with an armed tool; re-locking per render made Chrome re-show its
+exit bubble on every pointer move
+(`docs/bugfix-fullscreen-bubble-flicker.md`, `e2e/editor-fullscreen.spec.ts`).
 
 | Part | `data-testid` | What it holds |
 |---|---|---|
