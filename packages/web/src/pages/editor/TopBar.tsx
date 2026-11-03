@@ -1,7 +1,7 @@
 /**
  * The editor's top bar (docs/course-editor.md §2; 08 §5.2): course picker,
- * view picker (Course · All controls), mode switch (Layout D7 and Field D9
- * shown, not yet enterable), undo / redo, hide other controls, auto cuts
+ * view picker (Course · All controls), mode switch (Course · Layout · Field),
+ * undo / redo, hide other controls, auto cuts
  * and the help popover. It sits in `MapPanel`'s toolbar row, so it stays
  * in the fullscreen subtree; zoom and fullscreen are the viewer's and the
  * panel's own buttons on the same row.
@@ -34,7 +34,7 @@ export interface TopBarProps {
 
 const MODES: { mode: EditorMode; key: "modeCourse" | "modeLayout" | "modeField"; slice?: string }[] = [
   { mode: "course", key: "modeCourse" },
-  { mode: "layout", key: "modeLayout", slice: "D7" },
+  { mode: "layout", key: "modeLayout" },
   { mode: "field", key: "modeField" },
 ];
 

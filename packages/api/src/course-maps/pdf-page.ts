@@ -19,7 +19,7 @@ import { type PreparedDocument, WINDOW_OBJECT_MARGIN_MM, objectsNear, prepareDoc
 import { BUNDLED_FONT_FILES, bundledPdfFaces, loadBundledFonts } from "../render/fonts.js";
 import { type BaseMapInfo, getBaseMapInfo } from "./map-source.js";
 import { type LayoutControlSource, type LayoutTemplateSource, layoutControlsFromCourseControls } from "./resolve-layout.js";
-import { type SheetInput, resolveSheet } from "./resolve-sheet.js";
+import { type ResolveSheetInput, type SheetInput, resolveSheet } from "./resolve-sheet.js";
 import { objectsInScope, type StoredCourseObject } from "../course-objects.js";
 
 type Db = PrismaClient | Prisma.TransactionClient;
@@ -191,26 +191,28 @@ export interface PrintMapRow {
   } | null;
 }
 
+/** What `sheetForMapRow` and the editor's `courseMap.resolveSheet` read besides the row. */
+export interface MapRowContext {
+  event: { name: string; date: Date };
+  allControls: LayoutControlSource[];
+  /** Null fields without a base map (the editor's read; `maps.pdf` always has one). */
+  mapInfo: { scale: number | null; meridianTiltDeg: number | null };
+  courseObjects?: readonly StoredCourseObject[];
+  classesByCourse?: ReadonlyMap<string, string[]>;
+}
+
 /**
- * One map row → its sheet, with the same layout input the legacy page uses
- * (`routes.ts` `renderPage`). `courseObjects` are the event's
- * (`loadCourseObjects`); the sheet takes those in scope of its course, or
- * the `all`-scoped ones for an all-controls sheet (course-layer.md §8.3).
+ * One map row → the `resolveSheet` input, with the same layout input the
+ * legacy page uses (`routes.ts` `renderPage`). `courseObjects` are the
+ * event's (`loadCourseObjects`); the sheet takes those in scope of its
+ * course, or the `all`-scoped ones for an all-controls sheet
+ * (course-layer.md §8.3).
  */
-export function sheetForMapRow(
-  row: PrintMapRow,
-  ctx: {
-    event: { name: string; date: Date };
-    allControls: LayoutControlSource[];
-    mapInfo: Pick<BaseMapInfo, "scale" | "meridianTiltDeg">;
-    courseObjects?: readonly StoredCourseObject[];
-    classesByCourse?: ReadonlyMap<string, string[]>;
-  },
-): SheetInput {
+export function sheetInputForMapRow(row: PrintMapRow, ctx: MapRowContext): ResolveSheetInput {
   if (!row.template) throw new Error(`Map "${row.name}" has no template`);
   const courseUuid = row.kind === "course" && row.course?.id !== undefined ? String(row.course.id) : null;
   const inScope = ctx.courseObjects ? objectsInScope(ctx.courseObjects, courseUuid, ctx.classesByCourse ?? new Map()) : [];
-  const { sheet } = resolveSheet({
+  return {
     kind: row.kind,
     template: row.template,
     overrides: courseMapOverridesSchema.parse(row.overrides),
@@ -236,8 +238,12 @@ export function sheetForMapRow(
     structure: row.course?.structure ?? null,
     ...(row.course?.id !== undefined ? { courseId: String(row.course.id) } : {}),
     courseObjects: inScope.map(({ id: _uuid, scope: _scope, z: _z, version: _v, seq, ...body }) => ({ ...body, id: seq }) as course.CourseLayerObject),
-  });
-  return sheet;
+  };
+}
+
+/** One map row → its sheet (`sheetInputForMapRow` through `resolveSheet`). */
+export function sheetForMapRow(row: PrintMapRow, ctx: MapRowContext): SheetInput {
+  return resolveSheet(sheetInputForMapRow(row, ctx)).sheet;
 }
 
 /** The pinned document's identity, without decoding it. */

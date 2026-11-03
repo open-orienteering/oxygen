@@ -1047,6 +1047,23 @@ and each object's `ref`, which the editor hit-tests on the main thread
 without course support answers `part: null`, `hit: null` and `COURSE_UNAVAILABLE`.
 The worker answers a request at once, between prepare slices.
 
+**Page part** (D7, `course-layout.md` §1). A request with `page` (the
+sheet's paper height, frame, window, layout objects, text values and
+description block) also answers `pagePart`: the composer's page layer
+(`course.pageLayer`, the stream `composePage` writes) through `T_map⁻¹`
+into paper µm (`pageStreamInMap`), prepared as one `all` part with bucket
+id `PAGE_BUCKET` (−3), its object ids after the course's and its glyph
+meshes in the same atlas. Every pass's colour index is offset by
+`colourBase` = the page layer's table length, and the reply's `colours`
+is that table followed by a copy of it for the page (ids `page:…`): so
+the visible set sorts every page draw after every map draw — the PDF's
+page layer after its map layer, a page white-out over upper purple — and
+`page { colourBase, frameRingUm }` tells the engine where the map stops.
+The engine uploads the page part under key `P` beside `C` (always
+resident, fixed bytes) and passes `pageClip { fromColour, ringUm }` to the
+renderer, which scissors every colour below `fromColour` to the frame's
+screen box (exact while the page is upright, which Layout mode keeps).
+
 **Engine.** `MapGlEngine.setCourse(input | null)` posts the request with
 a new generation (one made before the load waits for it and is sent
 right after the load message); a reply whose generation is not the
@@ -1771,7 +1788,8 @@ document stream is Map mode's (slice G).
 **Tools.** `MapViewerEditorProps.tool` (D5, `course-editor.md` §6): the
 viewer offers pointer-down to the active tool first, routes clicks of an
 exclusive tool to it, and draws its `ToolShape`s (paper mm → the rotated
-overlay) in `editor-tool-layer`; `draftObjects` replace stored course
+overlay) in `editor-tool-layer` — circles, lines, handles, text and (D7)
+`image`, a raster by its three corners; `draftObjects` replace stored course
 objects in the layer request, with `fastFilter` while a filter region is
 dragged (§4.11).
 
@@ -2509,10 +2527,9 @@ The shared module is exported as a namespace: `import { render } from
   the layer in the worker (one round trip per pointer move). If D's
   editor needs lower latency, the dragged object is symbolised on the
   main thread and only it is replaced.
-- **§5.4 layout objects in the viewer.** `courseLayer()` draws
-  map-anchored layout objects (white-outs, 709 hatch, text, lines), but
-  no sheet reaches `MapPanel`, so the viewer passes `objects: []`;
-  showing a sheet's objects on the map is slice D's.
+- **§5.4 layout objects in the viewer** — resolved by D7 for Layout
+  mode (`MapViewerEditorProps.layout`, `course-layout.md` §1); Course mode
+  and the read-only viewer still draw no sheet.
 - **§5.4 lower purple below an area colour — resolved in C14
   (`ocad-16` / `omap-9`).** Alignment now places an inserted lower purple
   above the area colours as a group and reports what stays on the wrong

@@ -101,6 +101,7 @@ const BASE = (id: number) => `b${id}`;
 const DETAIL = (id: number) => `d${id}`;
 const LARGE = "L";
 const COURSE = "C";
+const PAGE = "P";
 
 /** A worker filter reply as the visible set takes it. */
 function engineFilter(f: FilterReply | null): { hidden: ReadonlySet<number>; visible: VisibleFilter } | undefined {
@@ -141,6 +142,9 @@ export class MapGlEngine {
   /** The dynamic bucket: resident whatever the zoom gate and the budget (counted as fixed bytes). */
   private course: ResidentPart | undefined;
   private courseColours: R.ColourStack | undefined;
+  /** Layout mode's page part (docs/course-layout.md §1): drawn after every map colour; the map clipped to its frame. */
+  private page: ResidentPart | undefined;
+  private pageClip: DocumentRenderOptions["pageClip"];
   /** The last `setCourse` input (`undefined`: never set), re-sent after a load. */
   private courseInput: CourseLayerRequest | null | undefined;
   private courseGeneration = 0;
@@ -208,6 +212,9 @@ export class MapGlEngine {
     }
     this.renderer.releasePart(COURSE);
     this.course = m.part ? this.renderer.uploadPart(COURSE, m.part) : undefined;
+    this.renderer.releasePart(PAGE);
+    this.page = m.pagePart ? this.renderer.uploadPart(PAGE, m.pagePart) : undefined;
+    this.pageClip = m.page ? { fromColour: m.page.colourBase, ringUm: m.page.frameRingUm } : undefined;
     this.courseColours = m.colours.length ? m.colours : undefined;
     this.filter = engineFilter(m.filter);
     this.updateFixedBytes();
@@ -221,7 +228,7 @@ export class MapGlEngine {
   private updateFixedBytes(): void {
     const s = this.summary;
     if (!s) return;
-    this.fixedBytes = s.bytes.base + s.bytes.large + this.atlasBytes + this.renderer.textAtlasBytes + (this.course?.part.gpuBytes ?? 0);
+    this.fixedBytes = s.bytes.base + s.bytes.large + this.atlasBytes + this.renderer.textAtlasBytes + (this.course?.part.gpuBytes ?? 0) + (this.page?.part.gpuBytes ?? 0);
     this.lru.fixedBytes = this.fixedBytes;
   }
 
@@ -387,6 +394,8 @@ export class MapGlEngine {
       if (this.large) parts.push(this.large);
       // Last: within a colour the course draws over the map's own objects of that colour.
       if (this.course) parts.push(this.course);
+      // The page's colours sort after every map colour: the page layer draws over the map, as in the PDF.
+      if (this.page) parts.push(this.page);
       const f = this.filter;
       const hidden = f && f.hidden.size ? new Set([...this.hidden, ...f.hidden]) : this.hidden;
       const vs = buildVisibleSet(parts, hidden, f?.visible);
@@ -399,7 +408,7 @@ export class MapGlEngine {
       this.st.rebuilds++;
       this.st.lastRebuildMs = performance.now() - t0;
     }
-    const stats = this.renderer.renderDocument(view, opts, target);
+    const stats = this.renderer.renderDocument(view, this.pageClip ? { ...opts, pageClip: this.pageClip } : opts, target);
     stats.cpuMs = performance.now() - t0;
     return stats;
   }

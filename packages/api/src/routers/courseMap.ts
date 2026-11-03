@@ -1,5 +1,6 @@
 import { TRPCError } from "@trpc/server";
 import {
+  course,
   courseMapObjectSchema,
   courseMapOverridesSchema,
   mapTemplateSettingsSchema,
@@ -11,12 +12,16 @@ import {
   type DescriptionRow,
   type DescriptionSheetHeader,
   type MapPoint,
+  type MapTemplateSettings,
   type MapWindow,
 } from "@oxygen/shared";
 import { z } from "zod";
 import { Prisma } from "../generated/prisma/client.js";
 import { layoutControlsFromCourseControls, resolveMapLayout } from "../course-maps/resolve-layout.js";
 import { getBaseMapInfoOrNull } from "../course-maps/map-source.js";
+import { type MapRowContext, sheetInputForMapRow } from "../course-maps/pdf-page.js";
+import { resolveSheet } from "../course-maps/resolve-sheet.js";
+import { classesByCourse, loadCourseObjects } from "../course-objects.js";
 import {
   coursesEditProcedure,
   coursesViewProcedure,
@@ -79,6 +84,56 @@ export interface CourseMapListItem {
   };
 }
 
+/**
+ * One sheet or template as the editor's Layout mode reads it
+ * (docs/course-layout.md §1 "What the editor reads"): the resolved
+ * document and window, the page the composer would draw (`page`, as
+ * `resolveSheet` builds it), and the raw template / sheet parts the
+ * editor writes back through `saveLayout` / `mapTemplate.update`.
+ */
+export interface EditorSheet {
+  scope: "sheet" | "template";
+  /** The sheet row; null in template scope. */
+  sheet: {
+    seq: number;
+    name: string;
+    kind: string;
+    courseSeq: number | null;
+    windowCenter: MapPoint | null;
+    overrides: CourseMapOverrides;
+    objects: CourseMapObject[];
+  } | null;
+  template: {
+    seq: number;
+    name: string;
+    paper: string;
+    orientation: string;
+    paperWidthMm: number | null;
+    paperHeightMm: number | null;
+    printScale: number;
+    settings: MapTemplateSettings;
+    objects: CourseMapObject[];
+  };
+  /** The previewed course in template scope, the sheet's course in sheet scope. */
+  courseSeq: number | null;
+  document: CourseMapDocument;
+  window: MapWindow;
+  /** The page part of the composer's input: paper, frame, window, objects of both anchors, text values, the description block. */
+  page: Omit<course.PageLayerInput, "context" | "paper"> & { paper: { widthMm: number; heightMm: number } };
+  /** The description block's content whether shown or not (the editor toggles it): rows, header, title. */
+  block: Pick<NonNullable<course.PageLayerInput["description"]>, "rows" | "header" | "title">;
+  appearance: course.CourseAppearance;
+  overprintScale: number;
+  labelMode: "sequence" | "code";
+  /** Windows of every sheet of the same course (validation: a control must lie in one of them). */
+  windows: MapWindow[];
+  /** Control positions on the sheet (validation). */
+  controls: Array<MapPoint & { id: string; code: string }>;
+  descriptionRowCount: number;
+  descriptionHeaderRows: number;
+  mapScale: number | null;
+}
+
 function json(value: unknown): Prisma.InputJsonValue {
   return value as Prisma.InputJsonValue;
 }
@@ -96,6 +151,48 @@ function parseMap<T extends {
         : windowCenterSchema.parse(row.windowCenter),
     overrides: courseMapOverridesSchema.parse(row.overrides),
     objects: objectsSchema.parse(row.objects),
+  };
+}
+
+function editorSheet(
+  scope: EditorSheet["scope"],
+  { layout, sheet }: ReturnType<typeof resolveSheet>,
+  rest: {
+    sheet: EditorSheet["sheet"];
+    template: { seq: number; name: string; paper: string; orientation: string; paperWidthMm: number | null; paperHeightMm: number | null; printScale: number; settings: unknown; objects: unknown };
+    courseSeq: number | null;
+    windows: MapWindow[];
+    mapScale: number | null;
+  },
+): EditorSheet {
+  const t = rest.template;
+  return {
+    scope,
+    sheet: rest.sheet,
+    template: {
+      seq: t.seq,
+      name: t.name,
+      paper: t.paper,
+      orientation: t.orientation,
+      paperWidthMm: t.paperWidthMm,
+      paperHeightMm: t.paperHeightMm,
+      printScale: t.printScale,
+      settings: mapTemplateSettingsSchema.parse(t.settings),
+      objects: objectsSchema.parse(t.objects),
+    },
+    courseSeq: rest.courseSeq,
+    document: layout.document,
+    window: layout.window,
+    page: { paper: sheet.paper, frame: sheet.frame, window: sheet.window, objects: sheet.objects, textValues: sheet.textValues, description: sheet.description },
+    block: { rows: layout.descriptionRows, header: layout.descriptionHeader, title: sheet.label },
+    appearance: sheet.course.appearance,
+    overprintScale: layout.overprintScale,
+    labelMode: layout.labelMode,
+    windows: rest.windows,
+    controls: layout.controls.map((c) => ({ id: c.id, code: c.code, x: c.x, y: c.y })),
+    descriptionRowCount: layout.descriptionRows.length,
+    descriptionHeaderRows: layout.descriptionHeader ? 3 : 1,
+    mapScale: rest.mapScale,
   };
 }
 
@@ -261,6 +358,99 @@ export const courseMapRouter = router({
       };
     });
   }),
+
+  /**
+   * Layout mode's read (docs/course-layout.md §1; research 08 §4.6
+   * `resolveSheet`): `{ seq }` a sheet, `{ templateSeq, courseSeq? }` a
+   * template previewed with a course (as `mapTemplate.previewLayout`).
+   */
+  resolveSheet: coursesViewProcedure
+    .input(
+      z.union([
+        z.object({ seq: z.number().int().positive() }),
+        z.object({ templateSeq: z.number().int().positive(), courseSeq: z.number().int().positive().optional() }),
+      ]),
+    )
+    .query(async ({ ctx, input }): Promise<EditorSheet> => {
+      const courseInclude = {
+        classes: { select: { name: true } },
+        courseControls: { orderBy: { position: "asc" as const }, include: { control: true } },
+      };
+      const [mapInfo, eventRow, allControls, courseObjects, byCourse] = await Promise.all([
+        getBaseMapInfoOrNull(ctx.db, ctx.event.id),
+        ctx.db.event.findUnique({ where: { id: ctx.event.id }, select: { name: true, date: true } }),
+        ctx.db.control.findMany({
+          where: { eventId: ctx.event.id, removed: false },
+          select: { id: true, seq: true, codes: true, status: true, xpos: true, ypos: true, description: true },
+        }),
+        loadCourseObjects(ctx.db, ctx.event.id),
+        classesByCourse(ctx.db, ctx.event.id),
+      ]);
+      const event = eventRow ?? { name: "", date: new Date(0) };
+      const rowCtx: MapRowContext = {
+        event,
+        allControls,
+        mapInfo: { scale: mapInfo?.scale ?? null, meridianTiltDeg: mapInfo?.meridianTiltDeg ?? null },
+        courseObjects,
+        classesByCourse: byCourse,
+      };
+
+      if ("seq" in input) {
+        const row = await ctx.db.courseMap.findUnique({
+          where: { eventId_seq: { eventId: ctx.event.id, seq: input.seq } },
+          include: { template: true, course: { include: courseInclude } },
+        });
+        if (!row) notFound();
+        if (!row.template) throw new TRPCError({ code: "PRECONDITION_FAILED", message: "No map template is assigned" });
+        const resolved = resolveSheet(sheetInputForMapRow(row, rowCtx));
+        // Windows of the course's other sheets, for the "outside every sheet" check.
+        const siblings = await ctx.db.courseMap.findMany({
+          where: { eventId: ctx.event.id, kind: row.kind, courseId: row.courseId, seq: { not: row.seq }, templateId: { not: null } },
+          include: { template: true },
+        });
+        const windows = [
+          resolved.layout.window,
+          ...siblings.map((s) => resolveMapLayout(sheetInputForMapRow({ ...s, course: row.course }, rowCtx)).window),
+        ];
+        const parsed = parseMap(row);
+        return editorSheet("sheet", resolved, {
+          sheet: {
+            seq: row.seq,
+            name: row.name,
+            kind: row.kind,
+            courseSeq: row.course?.seq ?? null,
+            windowCenter: parsed.windowCenter,
+            overrides: parsed.overrides,
+            objects: parsed.objects,
+          },
+          template: row.template,
+          courseSeq: row.course?.seq ?? null,
+          windows,
+          mapScale: mapInfo?.scale ?? null,
+        });
+      }
+
+      const template = await ctx.db.mapTemplate.findFirst({ where: { eventId: ctx.event.id, seq: input.templateSeq } });
+      if (!template) throw new TRPCError({ code: "NOT_FOUND", message: "Map template not found" });
+      const previewCourse =
+        input.courseSeq === undefined
+          ? null
+          : await ctx.db.course.findFirst({ where: { eventId: ctx.event.id, seq: input.courseSeq, removed: false }, include: courseInclude });
+      if (input.courseSeq !== undefined && !previewCourse) throw new TRPCError({ code: "NOT_FOUND", message: "Course not found" });
+      const resolved = resolveSheet(
+        sheetInputForMapRow(
+          { name: template.name, kind: "course", overrides: {}, objects: [], windowCenter: null, template, course: previewCourse },
+          rowCtx,
+        ),
+      );
+      return editorSheet("template", resolved, {
+        sheet: null,
+        template,
+        courseSeq: previewCourse?.seq ?? null,
+        windows: [resolved.layout.window],
+        mapScale: mapInfo?.scale ?? null,
+      });
+    }),
 
   get: coursesViewProcedure
     .input(z.object({ seq: z.number().int().positive() }))
@@ -435,7 +625,8 @@ export const courseMapRouter = router({
         printScale: z.number().int().positive().max(100_000),
         description: mapTemplateSettingsSchema.shape.description,
         objects: objectsSchema,
-        templateObjects: objectsSchema,
+        /** The template's objects; omitted, the template is not written (Layout mode's sheet scope, docs/course-layout.md §2). */
+        templateObjects: objectsSchema.optional(),
       }),
     )
     .mutation(async ({ ctx, input }) => {
@@ -458,7 +649,7 @@ export const courseMapRouter = router({
             objects: json(input.objects),
           },
         });
-        if (map.template) {
+        if (map.template && input.templateObjects) {
           await tx.mapTemplate.update({
             where: { id: map.template.id },
             data: { objects: json(input.templateObjects) },

@@ -83,7 +83,7 @@ import {
   pillHalfWidth,
 } from "../lib/course-leg-labels";
 import { useMediaQuery } from "../hooks/useMediaQuery";
-import { courseLayerRequest, PROVISIONAL_SITE_ID, type ProvisionalVisit } from "../lib/course-layer-request";
+import { courseLayerRequest, PROVISIONAL_SITE_ID, type LayoutRequest, type ProvisionalVisit } from "../lib/course-layer-request";
 import { dragLegShapes } from "../lib/editor/leg-length";
 import type { CourseInfo } from "../map-gl/engine";
 import { editorHitAt, HIT_TOLERANCE_PX, type EditorTarget } from "../lib/editor/hit";
@@ -302,11 +302,20 @@ export interface MapViewerEditorProps {
    */
   provisional?: ProvisionalVisit | null;
   /**
-   * A view request: fit these controls, or centre on a point (paper mm); acted on when `key` changes.
+   * A view request: fit these controls, centre on a point, or fit `bounds` upright (paper mm; Layout
+   * mode's `F`, the bearing reset so the page stands upright); acted on when `key` changes.
    * `offsetPx` puts the centred point that far from the view centre on screen (Field mode's bottom
    * sheet: the selection mid-way in the band above it, docs/course-editor.md §10).
    */
-  viewRequest?: { key: number; fit?: readonly string[]; centre?: { x: number; y: number }; offsetPx?: { x: number; y: number } } | null;
+  viewRequest?: {
+    key: number;
+    fit?: readonly string[];
+    centre?: { x: number; y: number };
+    offsetPx?: { x: number; y: number };
+    bounds?: { minX: number; minY: number; maxX: number; maxY: number };
+  } | null;
+  /** Layout mode's sheet (docs/course-layout.md §1): the course layer draws as the sheet prints, the page part over it. */
+  layout?: LayoutRequest | null;
   /**
    * Field mode's GPS fix (docs/course-editor.md §9): the page owns the watch; the viewer draws it
    * with its accuracy ring as `my-location-marker`, through `mapGeo` like its own locate button.
@@ -337,7 +346,9 @@ export type ToolShape =
   | { kind: "line"; points: readonly { x: number; y: number }[]; closed?: boolean; dashed?: boolean; color?: string; fill?: string; widthPx?: number; testId?: string; data?: Record<string, string> }
   /** A screen-size square handle. */
   | { kind: "handle"; x: number; y: number; active?: boolean; testId?: string; data?: Record<string, string> }
-  | { kind: "text"; x: number; y: number; text: string; dxPx?: number; dyPx?: number; color?: string; testId?: string };
+  | { kind: "text"; x: number; y: number; text: string; dxPx?: number; dyPx?: number; color?: string; testId?: string }
+  /** A raster on the UI layer (Layout mode's page images): its top-left, top-right and bottom-left corners, paper mm. */
+  | { kind: "image"; topLeft: { x: number; y: number }; topRight: { x: number; y: number }; bottomLeft: { x: number; y: number }; href: string; testId?: string; data?: Record<string, string> };
 
 /**
  * An editor tool's hooks into the viewer (docs/course-editor.md §6). The
@@ -909,6 +920,7 @@ export function MapViewer({
   const editorCourseIds = editor?.courseControlIds;
   const editorDraftFast = editor?.draftFast ?? false;
   const editorProvisional = editor?.provisional ?? null;
+  const editorLayout = editor?.layout ?? null;
   const courseRequest = useMemo(() => {
     if (!glCourse) return null;
     const positions = new Map<string, Pt>();
@@ -940,9 +952,10 @@ export function MapViewer({
         ? new Set(controls.filter((c) => c.type === "Control" && !editorCourseIds?.has(c.id)).map((c) => c.id))
         : undefined,
       provisional: editorProvisional,
+      layout: editorLayout,
     });
     return editorDraftFast ? { ...request, fastFilter: true } : request;
-  }, [glCourse, controls, controlMm, editorOn, editorFade, editorCourseIds, editorDraftFast, editorProvisional, pendingMoves, editorDragPos, showDescriptions,
+  }, [glCourse, controls, controlMm, editorOn, editorFade, editorCourseIds, editorDraftFast, editorProvisional, editorLayout, pendingMoves, editorDragPos, showDescriptions,
       courses, highlightCourseName, drawnObjects, editorLabelDragPos, pendingLabelMoves]);
   /** A dragged control's leg lengths (§6.1), from the positions the request draws. */
   const dragLegLabels = useMemo(() => {
@@ -1177,7 +1190,10 @@ export function MapViewer({
     const req = editor?.viewRequest;
     if (!req || !viewport || req.key === viewRequestKeyRef.current) return;
     viewRequestKeyRef.current = req.key;
-    if (req.fit && req.fit.length > 0) {
+    if (req.bounds && viewport.kind === "paper") {
+      setUserBearing(0);
+      setViewport(fitMm(req.bounds, containerSize.w, containerSize.h, 0.04));
+    } else if (req.fit && req.fit.length > 0) {
       const ids = new Set(req.fit);
       fitToControlBounds(controls.filter((c) => ids.has(c.id)), 0.08);
     } else if (req.centre && viewport.kind === "paper") {
@@ -1190,7 +1206,7 @@ export function MapViewer({
         ? { ...prev, centreX: c.x * 1000 - ix / prev.pxPerUm, centreY: c.y * 1000 + iy / prev.pxPerUm }
         : prev));
     }
-  }, [editor?.viewRequest, viewport, controls, fitToControlBounds, rotRad]);
+  }, [editor?.viewRequest, viewport, controls, fitToControlBounds, rotRad, containerSize.w, containerSize.h]);
 
   // Touch pin-drop: the ghost follows the view centre (08 §5.3 "Touch").
   useEffect(() => {
@@ -4404,6 +4420,14 @@ function toolShapeNode(
       if (!p) return null;
       return <text key={key} x={p.x + (sh.dxPx ?? 0)} y={p.y + (sh.dyPx ?? 0)} fill={color} fontSize={12} fontWeight={600}
         paintOrder="stroke" stroke="#ffffff" strokeWidth={3} data-testid={sh.testId}>{sh.text}</text>;
+    }
+    case "image": {
+      // A unit image under the affine map of its three projected corners: scale, rotation and the y flip in one.
+      const o = project(sh.topLeft.x, sh.topLeft.y), u = project(sh.topRight.x, sh.topRight.y), v = project(sh.bottomLeft.x, sh.bottomLeft.y);
+      if (!o || !u || !v) return null;
+      const m = [u.x - o.x, u.y - o.y, v.x - o.x, v.y - o.y, o.x, o.y].map((n) => n.toFixed(3)).join(" ");
+      return <image key={key} href={sh.href} x={0} y={0} width={1} height={1} preserveAspectRatio="none" transform={`matrix(${m})`}
+        data-testid={sh.testId} {...data} />;
     }
   }
 }

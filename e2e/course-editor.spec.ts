@@ -145,10 +145,11 @@ test.describe("Course editor (new, GL canvas)", () => {
     await page.reload();
     await editorReady(page);
     await expect(page.getByTestId("course-editor-page")).toHaveCount(0);
-    // The shell: top bar, tool rail, inspector, status bar; Layout / Field shown, not enterable.
+    // The shell: top bar, tool rail, inspector, status bar; Layout enterable (D7), Field not yet (D9).
     for (const id of ["editor-top-bar", "editor-tool-rail", "editor-inspector", "editor-status"]) await expect(page.getByTestId(id)).toBeVisible();
     await expect(page.getByTestId("editor-mode-course")).toHaveAttribute("aria-pressed", "true");
-    await expect(page.getByTestId("editor-mode-layout")).toBeDisabled();
+    await expect(page.getByTestId("editor-mode-layout")).toBeEnabled();
+    await expect(page.getByTestId("editor-mode-field")).toBeDisabled();
     // No SVG hit targets: the viewer hit-tests the layer's shapes.
     await expect(page.getByTestId("editor-control-hit")).toHaveCount(0);
     // The rail (§6): exchange and crossing wait for slice F.
@@ -716,6 +717,131 @@ test.describe("Course editor (new, GL canvas)", () => {
 });
 
 // Checks and KPIs (docs/course-editor.md §8; course-layer.md §9).
+/** A tRPC call as the e2e admin (the event seeded by `reseed`). */
+async function trpcCall<T>(path: string, input: unknown, mutation = true): Promise<T> {
+  const headers = { "content-type": "application/json", "x-competition-id": "itest", "x-forwarded-email": "e2e-admin@oxygen.test" };
+  const res = mutation
+    ? await fetch(`${API}/trpc/${path}`, { method: "POST", headers, body: JSON.stringify(input) })
+    : await fetch(`${API}/trpc/${path}${input === undefined ? "" : `?input=${encodeURIComponent(JSON.stringify(input))}`}`, { headers });
+  const body = await res.text();
+  expect(res.ok, body).toBe(true);
+  return (JSON.parse(body) as { result: { data: T } }).result.data;
+}
+
+/** The frame's corners in paper mm (the UI layer's frame shape): page mm → paper mm by its affine map. */
+async function pageToPaperOf(page: Page, frame: { x: number; y: number; width: number; height: number }) {
+  const pts = (await page.getByTestId("editor-tool-layer").getByTestId("editor-layout-frame").getAttribute("data-points"))!
+    .split(" ").map((p) => { const [x, y] = p.split(",").map(Number); return { x, y }; });
+  const [c0, c1, , c3] = pts;
+  return (p: { x: number; y: number }) => {
+    const u = (p.x - frame.x) / frame.width, v = (p.y - frame.y) / frame.height;
+    return { x: c0.x + u * (c1.x - c0.x) + v * (c3.x - c0.x), y: c0.y + u * (c1.y - c0.y) + v * (c3.y - c0.y) };
+  };
+}
+
+test.describe("Course editor layout (docs/course-layout.md)", () => {
+  const frame = { x: 10, y: 40, width: 190, height: 247 };
+
+  test("a sheet from the Maps page: page text drawn as printed, align map saves the window centre, undo, one A4 page", async ({ page }) => {
+    await openEditor(page);
+    const nameId = new URL(page.url()).pathname.split("/")[1];
+    // A template and a sheet for the first imported course, as the Maps page would make them.
+    const courses = await trpcCall<{ id: number; name: string; controls?: unknown[] }[]>("course.list", undefined, false);
+    expect(courses.length).toBeGreaterThan(0);
+    const course = courses[0];
+    const template = await trpcCall<{ seq: number }>("mapTemplate.create", {
+      name: `Layout ${Date.now()}`, paper: "A4", orientation: "portrait", printScale: 10000, objects: [],
+      settings: { printMarginMm: 5, mapFrame: frame, description: { visible: false, x: 150, y: 12, cellSizeMm: 6 }, appearance: { purple: "#a626ff", circleRadiusMm: 2.5, lineWidthMm: 0.35, numberHeightMm: 4 } },
+    });
+    const sheet = await trpcCall<{ seq: number }>("courseMap.create", { kind: "course", courseId: course.id, templateId: template.seq, overrides: {}, objects: [] });
+
+    await page.goto(`/${nameId}/maps`);
+    await page.getByTestId(`edit-course-map-${sheet.seq}`).click();
+    await expect(page).toHaveURL(new RegExp(`course-editor\\?mode=layout&sheet=${sheet.seq}`));
+    await editorReady(page);
+    await expect(page.getByTestId("editor-mode-layout")).toHaveAttribute("aria-pressed", "true");
+    await expect(page.getByTestId("editor-layout-scope")).toHaveAttribute("data-sheet", String(sheet.seq));
+    for (const id of ["editor-layout-paper", "editor-layout-printable", "editor-layout-frame"]) {
+      await expect(page.getByTestId("editor-tool-layer").getByTestId(id)).toBeAttached();
+    }
+    // Course mode's tools are not here: Layout's rail replaces the rail.
+    await expect(page.getByTestId("editor-tool-rail")).toHaveCount(0);
+    await expect(page.getByTestId("editor-layout-rail")).toBeVisible();
+
+    // H: a header text at page (20, 20) mm, above the frame: ink where the page layer draws it.
+    const toPaperMm = await pageToPaperOf(page, frame);
+    const textRect = (() => {
+      const a = toPaperMm({ x: 22, y: 12 }), b = toPaperMm({ x: 110, y: 21 });
+      return { minX: Math.min(a.x, b.x), maxX: Math.max(a.x, b.x), minY: Math.min(a.y, b.y), maxY: Math.max(a.y, b.y) };
+    })();
+    const inkBefore = await inkIn(page, textRect);
+    await page.getByTestId("editor-layout-tool-H").click();
+    const placed = waitForTrpc(page, "courseMap.saveLayout");
+    await clickMap(page, await toPage(page, toPaperMm({ x: 20, y: 20 })));
+    await placed;
+    await expect(page.getByTestId("editor-layout-object-row")).toHaveCount(1);
+    // A long text, large: what the inspector writes, drawn by the page layer.
+    for (const [id, value] of [["editor-layout-text", "LAYOUT PAGE TEXT"], ["editor-layout-font-size", "10"]] as const) {
+      const saved = waitForTrpc(page, "courseMap.saveLayout");
+      await page.getByTestId(id).fill(value);
+      await page.getByTestId(id).press("Enter");
+      await saved;
+    }
+    await expect.poll(() => inkIn(page, textRect), { timeout: 15_000 }).toBeGreaterThan(inkBefore + 20);
+
+    // Select the frame (a click inside it on nothing), then drag it: align map.
+    const inside = await toPage(page, toPaperMm({ x: 105, y: 160 }));
+    await page.keyboard.press("Escape");
+    await clickMap(page, inside);
+    await expect(page.getByTestId("editor-layout-selected")).toHaveAttribute("data-kind", "frame");
+    const state = page.getByTestId("editor-layout-state");
+    const centre = async () => (await state.getAttribute("data-centre"))!.split(",").map(Number);
+    const [cx, cy] = await centre();
+    const to = { x: inside.x + 60, y: inside.y + 40 };
+    const [a, b] = [await toPaper(page, inside), await toPaper(page, to)];
+    const saved = waitForTrpc(page, "courseMap.saveLayout");
+    await drag(page, inside, to);
+    await saved;
+    const stored = await trpcCall<{ windowCenter: { x: number; y: number } }>("courseMap.get", { seq: sheet.seq }, false);
+    expect(stored.windowCenter.x).toBeCloseTo(cx + (b.x - a.x), 0);
+    expect(stored.windowCenter.y).toBeCloseTo(cy + (b.y - a.y), 0);
+    expect(Math.hypot(stored.windowCenter.x - cx, stored.windowCenter.y - cy)).toBeGreaterThan(2);
+
+    // Undo writes the previous centre back.
+    const undone = waitForTrpc(page, "courseMap.saveLayout");
+    await page.keyboard.press("Control+z");
+    await undone;
+    await expect.poll(async () => (await trpcCall<{ windowCenter: { x: number; y: number } }>("courseMap.get", { seq: sheet.seq }, false)).windowCenter.x).toBeCloseTo(cx, 3);
+
+    // The sheet prints as one page of the template's paper.
+    const res = await page.request.get(`/api/maps/${nameId}/maps.pdf?maps=${sheet.seq}`);
+    expect(res.ok(), await res.text().catch(() => "")).toBe(true);
+    const pdf = await PDFDocument.load(await res.body()) as unknown as { getPageCount(): number; getPages(): { getSize(): { width: number; height: number } }[] };
+    expect(pdf.getPageCount()).toBe(1);
+    const { width, height } = pdf.getPages()[0].getSize();
+    expect([Math.round((width * 25.4) / 72), Math.round((height * 25.4) / 72)]).toEqual([210, 297]);
+
+    // The template link: template scope edits the template's objects; the sheet's text is not among them.
+    await page.getByTestId("editor-layout-edit-template").click();
+    await expect(page.getByTestId("editor-layout-scope")).toHaveAttribute("data-scope", "template");
+    await expect(page.getByTestId("editor-layout-object-row")).toHaveCount(0);
+    await expect(page.getByTestId("editor-layout-paper-size")).toHaveValue("A4");
+    // A template write: orientation through mapTemplate.update.
+    const updated = waitForTrpc(page, "mapTemplate.update");
+    await page.getByTestId("editor-layout-orientation").selectOption("landscape");
+    await updated;
+    const templates = await trpcCall<{ seq: number; orientation: string }[]>("mapTemplate.list", undefined, false);
+    expect(templates.find((t) => t.seq === template.seq)?.orientation).toBe("landscape");
+
+    // The Map templates page's Edit template layout opens the same template scope.
+    await page.goto(`/${nameId}/map-templates`);
+    await page.getByTestId(`edit-template-layout-${template.seq}`).click();
+    await expect(page).toHaveURL(new RegExp(`course-editor\\?mode=layout&template=${template.seq}`));
+    await expect(page.getByTestId("editor-layout-scope")).toHaveAttribute("data-scope", "template", { timeout: 30_000 });
+    await expect(page.getByTestId("editor-layout-scope")).toHaveAttribute("data-template", String(template.seq));
+  });
+});
+
 test.describe("Course editor checks", () => {
   test("two controls 20 m apart: a marker, a row that locates them, the status-bar count", async ({ page }) => {
     await openEditor(page);

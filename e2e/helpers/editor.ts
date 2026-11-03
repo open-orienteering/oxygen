@@ -124,7 +124,7 @@ export async function emptyPoint(page: Page, clearPx = 40, avoid: Pt[] = []): Pr
   throw new Error("no empty map point found");
 }
 
-const CHROME = ["editor-inspector", "editor-tool-rail", "editor-status", "editor-conflict", "editor-action-bar"];
+const CHROME = ["editor-inspector", "editor-tool-rail", "editor-layout-rail", "editor-status", "editor-conflict", "editor-action-bar"];
 
 /**
  * Click a page point on the map, failing fast when the editor's floating

@@ -254,6 +254,11 @@ legacy page (§8.1).
 
 ### 4.4 The page layer
 
+`course.pageLayer` (`packages/shared/src/course/page-layer.ts`, beside the
+course layer so the web worker has it without the PDF writer) builds it;
+`composePage` calls it, and the editor's Layout mode draws the same
+stream (`course-layout.md` §1).
+
 Page-anchored objects are flipped to y-up page mm, re-anchored as `map`
 and drawn by the course layer's own object builder (`layoutObjects`, C0)
 with `overprintScale: 1` and the frame, grown by the same 1 mm
@@ -793,11 +798,18 @@ ETag / 304 / `X-Cache` as before.
 
 ### 10.6 Interim
 
-The preview exists because the editor composes raster layers
-(05 §5.12). Slice D replaces the editor's sandwich with the vector layer
-and retires `layer=ink`; the legacy branch stays until the legacy
-pipeline is removed. The document branch is the second production job of
-the reference raster (`map-rendering.md` §5.1).
+The preview exists because the legacy layout editor composes raster
+layers (05 §5.12). Slice D7 puts layout editing on the GL canvas for
+every event that mounts the new editor (`course-layout.md`: the page drawn
+through the composer's own page layer, no `window.png`); the Maps and
+Map templates pages open it there. The row's "§10 retired for `vector`"
+is narrowed (decision log D7): the `map.editor.vector` gate (default off)
+and the WebGL2 fallback still send `vector` events to `MapLayoutEditor`,
+which needs this route's document branch and `layer=ink`. So §10 serves
+every event whose editor does not mount the new one, and is retired with
+the gate in slice E; the legacy branch stays until the legacy pipeline is
+removed. The document branch is the second production job of the
+reference raster (`map-rendering.md` §5.1).
 
 ### Tests
 
@@ -1059,7 +1071,8 @@ symbols on the window, unexplained ÷ ink and their codes:
   The embedded-font text tier (≤ 2.5 %, §9.2) is provisional: tightened
   to the observed ratio + margin once CI's numbers are in. A drift beyond the budgets is a rasteriser change, re-measured
   and recorded here, not a reason to loosen the 0.5 %.
-- **Print profiles** (05 §5.5): `cmyk-offset`, `/Separation`, overprint,
+- **Print profiles** (05 §5.5) — and with them Layout mode's
+  print-preview toggle (`course-layout.md` Pending): `cmyk-offset`, `/Separation`, overprint,
   PDF/X-4 and output intents, `colourOverrides`, `minLineWidthMm`, bleed
   and crop marks (the marks layer), CMYK images, the test sheet — a later
   row (decision (2), 2026-10-23).
@@ -1073,4 +1086,5 @@ symbols on the window, unexplained ÷ ink and their codes:
   per-variant pages (08): one frame per page in slice C.
 - **Serif and mono faces**: no file ships (`map-rendering.md` §4.10), so
   no PDF font either.
-- §10 is retired by slice D (§10.6).
+- §10 is retired with the `map.editor.vector` gate in slice E (§10.6);
+  D7's Layout mode does not use it.

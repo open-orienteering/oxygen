@@ -32,13 +32,29 @@ describe("editorReducer (docs/course-editor.md §3)", () => {
     expect(s.hideOthers).toBe(false);
   });
 
-  it("Course and Field are entered (Layout D7) and keep the selection; a view change drops the phantom", () => {
-    expect(editorReducer(initialEditorState, { type: "mode", mode: "layout" }).mode).toBe("course");
+  it("Course and Field (D9) are entered and keep the selection", () => {
     let f = editorReducer(editorReducer(initialEditorState, { type: "select-course", id: 1 }), { type: "select", id: 31 });
     f = editorReducer(f, { type: "mode", mode: "field" });
     expect([f.mode, f.selectedCourseId, f.selectedControlId]).toEqual(["field", 1, 31]);
     f = editorReducer(f, { type: "mode", mode: "course" });
     expect([f.mode, f.selectedControlId]).toEqual(["course", 31]);
+  });
+
+  it("Layout mode is entered with the course selection kept and everything else of Course mode dropped (D7)", () => {
+    let s = editorReducer(initialEditorState, { type: "select-course", id: 3 });
+    s = editorReducer(s, { type: "map-click", x: 1, y: 1 });
+    s = editorReducer(s, { type: "tool", tool: areaTool("oob_area") });
+    s = editorReducer(s, { type: "mode", mode: "layout" });
+    expect(s.mode).toBe("layout");
+    expect(s.selectedCourseId).toBe(3);
+    expect(s.tool).toEqual({ kind: "select" });
+    expect(s.phantom).toBeNull();
+    expect(s.selectedControlId).toBeNull();
+    expect(editorReducer(s, { type: "mode", mode: "course" }).mode).toBe("course");
+    expect(editorReducer(s, { type: "mode", mode: "field" }).mode).toBe("field");
+  });
+
+  it("a view change drops the phantom", () => {
     const s = editorReducer(editorReducer(initialEditorState, { type: "map-click", x: 1, y: 1 }), { type: "view", view: "all" });
     expect(s.view).toBe("all");
     expect(s.phantom).toBeNull();

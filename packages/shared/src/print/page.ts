@@ -151,6 +151,15 @@ export function pagePointToMap(t: MapLayerTransform, xUm: number, yUm: number): 
   return [t.originUm[0] + c * dx - s * dy, t.originUm[1] + s * dx + c * dy];
 }
 
+/**
+ * `T_map⁻¹`: page µm → paper µm, as a transform of the same shape, so
+ * `mapPointToPage` / `transformPassStream` with it undo the forward one
+ * (the editor's page view draws the page layer in map space, docs/course-layout.md §1).
+ */
+export function inverseMapLayerTransform(t: MapLayerTransform): MapLayerTransform {
+  return { scaleRatio: 1 / t.scaleRatio, rotationDeg: t.rotationDeg === 0 ? 0 : -t.rotationDeg, originUm: [...t.atUm], atUm: [...t.originUm] };
+}
+
 /** The frame's corners in paper mm (y-up): the white-out-outside ring of the map layer. */
 export function frameInMap(t: MapLayerTransform, frameUm: ComposedPage["frameUm"]): MapPoint[] {
   const { x, y, width, height } = frameUm;

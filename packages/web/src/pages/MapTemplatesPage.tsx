@@ -1,6 +1,7 @@
 import { Fragment, useMemo, useState } from "react";
 import { useTranslation } from "react-i18next";
-import { useParams } from "react-router-dom";
+import { useNavigate, useParams } from "react-router-dom";
+import { layoutEditorHref, useCourseEditorMount } from "../hooks/useCourseEditorMount";
 import { MapLayoutEditor, type MapLayoutSnapshot } from "../components/MapLayoutEditor";
 import { SortHeader } from "../components/SortHeader";
 import { StructuredSearchBar } from "../components/structured-search/StructuredSearchBar";
@@ -58,6 +59,8 @@ type TemplateRow = MapTemplateView & MapTemplateSearchRow;
 export function MapTemplatesPage() {
   const { t } = useTranslation("maps");
   const { nameId = "" } = useParams<{ nameId: string }>();
+  const editorMount = useCourseEditorMount();
+  const navigate = useNavigate();
   const { has } = useCapabilities();
   const canEdit = has("courses.edit");
   const utils = trpc.useUtils();
@@ -158,6 +161,12 @@ export function MapTemplatesPage() {
 
   const openEditor = (row: MapTemplateView) => {
     const firstCourse = (courses.data ?? [])[0];
+    // The new editor's Layout mode where the event mounts it (docs/course-layout.md §4); nothing until that is known.
+    if (editorMount === null) return;
+    if (editorMount === "vector") {
+      navigate(layoutEditorHref(nameId, { template: row.seq }, firstCourse?.id));
+      return;
+    }
     setPreviewCourseId(firstCourse?.id);
     setEditingSeq(row.seq);
   };
@@ -373,6 +382,7 @@ export function MapTemplatesPage() {
                               type="button"
                               data-testid={`edit-template-layout-${row.seq}`}
                               onClick={() => openEditor(row)}
+                              disabled={editorMount === null}
                               title={t("editLayout")}
                               className="rounded p-1.5 text-slate-400 hover:bg-blue-50 hover:text-blue-700"
                             >

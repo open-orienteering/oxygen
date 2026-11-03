@@ -60,8 +60,12 @@ export const areaTool = (kind: AreaKind): EditorTool => ({ kind: "area", poly: {
 export function editorReducer(state: EditorState, action: EditorAction): EditorState {
   switch (action.type) {
     case "mode":
-      // Layout (D7) is not built yet: Course and Field (§9) are entered, the selection kept.
-      return action.mode === "course" || action.mode === "field" ? { ...state, mode: action.mode } : state;
+      // Course and Field (§9) keep the selection. Layout mode locks course edits (08 §5.4): the course stays
+      // selected, a tool, a phantom and the selections of Course mode are dropped.
+      if (action.mode === state.mode) return state;
+      return action.mode === "layout"
+        ? { ...state, mode: "layout", tool: SELECT, phantom: null, selectedControlId: null, multi: [], selectedObjectId: null }
+        : { ...state, mode: action.mode };
     case "view":
       return state.view === action.view ? state : { ...state, view: action.view, phantom: null };
     case "toggle-hide-others":
