@@ -15,7 +15,7 @@ function fakeClient() {
   };
   const client = {
     course: { setStructure: { mutate: vi.fn(respond("setStructure")) }, setControlLabelOffset: { mutate: vi.fn(respond("setLabelOffset")) } },
-    control: { update: { mutate: vi.fn(respond("update")) }, delete: { mutate: vi.fn(respond("delete")) } },
+    control: { update: { mutate: vi.fn(respond("update")) }, delete: { mutate: vi.fn(respond("delete")) }, check: { mutate: vi.fn(respond("check")) } },
     courseObject: {
       create: { mutate: vi.fn(respond("objCreate")) },
       update: { mutate: vi.fn(respond("objUpdate")) },
@@ -102,5 +102,16 @@ describe("EditorWrites (docs/course-editor.md §3)", () => {
     await expect(w.deleteObject(9)).rejects.toBeInstanceOf(EditorConflict);
     expect(f.calls[2]).toMatchObject({ proc: "objDelete", input: { id: 9, baseVersion: "41" } });
     expect(w.versions.get("object", 9)).toBe("50");
+  });
+
+  it("check-off sends no token and seeds the control's from the result (§9)", async () => {
+    const f = fakeClient();
+    const w = new EditorWrites(f.client);
+    w.versions.seed("control", 31, "5");
+    f.ok({ version: "9" });
+    await w.checkControl(31, true);
+    expect(f.calls[0]).toEqual({ proc: "check", input: { controlId: 31, checked: true } });
+    await w.updateControl({ id: 31, xpos: 1, ypos: 2 });
+    expect(f.calls[1].input.baseVersion).toBe("9");
   });
 });
