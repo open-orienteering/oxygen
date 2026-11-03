@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { HANDLE_LIFT_PX, IDLE, LONG_PRESS_MS, TOUCH_SLOP_PX, liftedPoint, siteTouch, type SiteTouch, type SiteTouchEvent } from "../touch";
+import { HANDLE_LIFT_PX, IDLE, LONG_PRESS_MS, LOUPE_DIAMETER_PX, LOUPE_GAP_PX, LOUPE_SCALE, TOUCH_SLOP_PX, liftedPoint, loupePlacement, siteTouch, type SiteTouch, type SiteTouchEvent } from "../touch";
 
 function run(events: SiteTouchEvent[]) {
   let s: SiteTouch = IDLE;
@@ -43,5 +43,27 @@ describe("one-finger touch on a site (docs/course-editor.md §10)", () => {
 
   it("the dragged control is drawn above the finger", () => {
     expect(liftedPoint(10, 200)).toEqual({ x: 10, y: 200 - HANDLE_LIFT_PX });
+  });
+});
+
+describe("the loupe's place (docs/course-editor.md §10 \"Loupe\")", () => {
+  const box = { width: 400, height: 800 };
+  const r = LOUPE_DIAMETER_PX / 2;
+
+  it("120 px at ×2.5, 16 px above the handle", () => {
+    expect([LOUPE_DIAMETER_PX, LOUPE_SCALE, LOUPE_GAP_PX]).toEqual([120, 2.5, 16]);
+    const finger = { x: 200, y: 500 };
+    expect(loupePlacement(finger, box)).toEqual({ x: 200, y: 500 - HANDLE_LIFT_PX - LOUPE_GAP_PX - r });
+  });
+
+  it("flips below the finger when it would leave the box at the top", () => {
+    const y = HANDLE_LIFT_PX + LOUPE_GAP_PX + 2 * r;
+    expect(loupePlacement({ x: 200, y }, box).y).toBe(y - HANDLE_LIFT_PX - LOUPE_GAP_PX - r);
+    expect(loupePlacement({ x: 200, y: y - 1 }, box)).toEqual({ x: 200, y: y - 1 + LOUPE_GAP_PX + r });
+  });
+
+  it("stays 4 px inside the box sideways", () => {
+    expect(loupePlacement({ x: 3, y: 500 }, box).x).toBe(r + 4);
+    expect(loupePlacement({ x: 399, y: 500 }, box).x).toBe(400 - r - 4);
   });
 });

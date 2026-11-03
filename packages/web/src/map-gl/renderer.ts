@@ -353,6 +353,15 @@ interface TimerExt {
   GPU_DISJOINT_EXT: number;
 }
 
+/** Where `compositeInset` draws: a square of the canvas, top-left corner and side in device px. */
+export interface InsetBox {
+  x: number;
+  y: number;
+  size: number;
+}
+
+type Offscreen = { w: number; h: number; msaa: WebGLFramebuffer; resolve: WebGLFramebuffer; tex: WebGLTexture; rbs: WebGLRenderbuffer[] };
+
 export interface FrameStats {
   drawCalls: number;
   /** JS time of the frame, ms. */
@@ -375,9 +384,13 @@ void main() { v_uv = a_pos * 0.5 + 0.5; gl_Position = vec4(a_pos, 0.0, 1.0); }
 const FS_BLIT = `#version 300 es
 precision highp float;
 uniform sampler2D u_tex;
+uniform float u_circle;
 in vec2 v_uv;
 out vec4 o;
-void main() { o = texture(u_tex, v_uv); }
+void main() {
+  if (u_circle > 0.5 && length(v_uv - 0.5) > 0.5) discard;
+  o = texture(u_tex, v_uv);
+}
 `;
 
 interface Program {
@@ -441,7 +454,8 @@ export class MapGlRenderer {
   /** Last resolved GPU frame time, ms (needs EXT_disjoint_timer_query_webgl2). */
   lastGpuMs: number | undefined;
   private uploaded: Uploaded[] = [];
-  private offscreen?: { w: number; h: number; msaa: WebGLFramebuffer; resolve: WebGLFramebuffer; tex: WebGLTexture; rbs: WebGLRenderbuffer[] };
+  /** Offscreen MSAA + stencil targets: the supersample path's and the loupe's (`insetTarget`). */
+  private offscreen: Partial<Record<"supersample" | "inset", Offscreen>> = {};
   private quad?: WebGLBuffer;
 
   constructor(canvas: HTMLCanvasElement | OffscreenCanvas, attrs: WebGLContextAttributes = {}) {
@@ -454,7 +468,7 @@ export class MapGlRenderer {
       cover: this.link(VS_COVER, FS_COVER, ["a_pos"], ["u_centre", "u_scale", "u_colour", "u_mode", "u_normal", "u_spacing", "u_offset", "u_halfWidth", "u_pxPerUm"]),
       stroke: this.link(VS_STROKE, FS_SOLID, ["a_pos", "a_off"], ["u_centre", "u_scale", "u_colour", "u_halfWidth", "u_minHalfPx", "u_pxPerUm"]),
       strokeInst: this.link(VS_STROKE_INST, FS_SOLID, ["a_pos", "a_off", "a_inst", "a_scale"], ["u_centre", "u_scale", "u_colour", "u_halfWidth", "u_minHalfPx", "u_pxPerUm"]),
-      blit: this.link(VS_BLIT, FS_BLIT, ["a_pos"], ["u_tex"]),
+      blit: this.link(VS_BLIT, FS_BLIT, ["a_pos"], ["u_tex", "u_circle"]),
     };
     const ext = this.gl.getExtension("EXT_disjoint_timer_query_webgl2") as TimerExt | null;
     if (ext) this.timer = { ext, pending: [] };
@@ -540,7 +554,8 @@ export class MapGlRenderer {
   dispose(): void {
     this.disposeDocument();
     this.disposeTextAtlas();
-    this.deleteOffscreen();
+    this.deleteOffscreen("supersample");
+    this.deleteOffscreen("inset");
     this.deleteBuffers();
     if (this.quad) this.gl.deleteBuffer(this.quad);
     this.quad = undefined;
@@ -561,40 +576,81 @@ export class MapGlRenderer {
     const gl = this.gl;
     const ss = opts.supersample ?? 1;
     if (ss > 1) {
-      const fb = this.offscreenFramebuffer(view.widthPx * ss, view.heightPx * ss);
+      const fb = this.offscreenFramebuffer("supersample", view.widthPx * ss, view.heightPx * ss);
       gl.bindFramebuffer(gl.FRAMEBUFFER, fb.msaa);
       this.draw({ ...view, widthPx: view.widthPx * ss, heightPx: view.heightPx * ss, pxPerUm: view.pxPerUm * ss }, opts, ss);
       // Resolve the multisample buffer into a texture (same size), then
       // draw it onto the canvas with linear filtering: at exactly 2× that
       // is a 2×2 box filter. (A scaled blit into the canvas is not an
       // option — its default framebuffer is itself multisampled.)
-      gl.bindFramebuffer(gl.READ_FRAMEBUFFER, fb.msaa);
-      gl.bindFramebuffer(gl.DRAW_FRAMEBUFFER, fb.resolve);
-      gl.blitFramebuffer(0, 0, fb.w, fb.h, 0, 0, fb.w, fb.h, gl.COLOR_BUFFER_BIT, gl.NEAREST);
-      gl.bindFramebuffer(gl.FRAMEBUFFER, null);
-      gl.viewport(0, 0, view.widthPx, view.heightPx);
-      gl.disable(gl.STENCIL_TEST);
-      gl.disable(gl.BLEND);
-      const p = this.programs.blit;
-      gl.useProgram(p.prog);
-      gl.activeTexture(gl.TEXTURE0);
-      gl.bindTexture(gl.TEXTURE_2D, fb.tex);
-      gl.uniform1i(p.uniforms.u_tex, 0);
-      this.quad ??= this.buffer(Float32Array.from([-1, -1, 1, -1, -1, 1, -1, 1, 1, -1, 1, 1]));
-      gl.bindBuffer(gl.ARRAY_BUFFER, this.quad);
-      gl.enableVertexAttribArray(p.attribs.a_pos);
-      gl.vertexAttribPointer(p.attribs.a_pos, 2, gl.FLOAT, false, 0, 0);
-      gl.drawArrays(gl.TRIANGLES, 0, 6);
+      this.resolveOffscreen(fb);
+      this.drawTexture(fb.tex, [0, 0, view.widthPx, view.heightPx], false);
       return;
     }
     gl.bindFramebuffer(gl.FRAMEBUFFER, null);
     this.draw(view, opts, 1);
   }
 
-  private offscreenFramebuffer(w: number, h: number): NonNullable<MapGlRenderer["offscreen"]> {
+  /**
+   * The loupe's target (docs/map-rendering.md §5.5 "Loupe"): a `size`² offscreen framebuffer with
+   * 4× MSAA colour and `DEPTH24_STENCIL8` (the supersample path's recipe), kept until the size
+   * changes or `releaseInset`. Pass it to `renderDocument`, then `compositeInset`.
+   */
+  insetTarget(size: number): RenderTarget {
+    const fb = this.offscreenFramebuffer("inset", size, size);
+    return { framebuffer: fb.msaa, width: size, height: size };
+  }
+
+  /**
+   * Resolves the inset target and draws it into the circle inscribed in `box` of the canvas
+   * (fragments outside it discarded); the rest of the canvas is left as it is.
+   */
+  compositeInset(box: InsetBox): void {
+    const fb = this.offscreen.inset;
+    if (!fb) return;
+    this.resolveOffscreen(fb);
+    // `box` is top-left in device px; GL's viewport origin is the bottom-left.
+    this.drawTexture(fb.tex, [box.x, this.gl.drawingBufferHeight - box.y - box.size, box.size, box.size], true);
+  }
+
+  /** Frees the inset target (the loupe went away); the next `insetTarget` makes a new one. */
+  releaseInset(): void {
+    this.deleteOffscreen("inset");
+  }
+
+  private resolveOffscreen(fb: Offscreen): void {
     const gl = this.gl;
-    if (this.offscreen && this.offscreen.w === w && this.offscreen.h === h) return this.offscreen;
-    this.deleteOffscreen();
+    gl.bindFramebuffer(gl.READ_FRAMEBUFFER, fb.msaa);
+    gl.bindFramebuffer(gl.DRAW_FRAMEBUFFER, fb.resolve);
+    gl.blitFramebuffer(0, 0, fb.w, fb.h, 0, 0, fb.w, fb.h, gl.COLOR_BUFFER_BIT, gl.NEAREST);
+  }
+
+  /** Draws `tex` over the canvas viewport `[x, y, w, h]` (GL origin), optionally as its inscribed circle. */
+  private drawTexture(tex: WebGLTexture, [x, y, w, h]: [number, number, number, number], circle: boolean): void {
+    const gl = this.gl;
+    gl.bindFramebuffer(gl.FRAMEBUFFER, null);
+    gl.viewport(x, y, w, h);
+    gl.disable(gl.STENCIL_TEST);
+    gl.disable(gl.SCISSOR_TEST);
+    gl.disable(gl.BLEND);
+    const p = this.programs.blit;
+    gl.useProgram(p.prog);
+    gl.activeTexture(gl.TEXTURE0);
+    gl.bindTexture(gl.TEXTURE_2D, tex);
+    gl.uniform1i(p.uniforms.u_tex, 0);
+    gl.uniform1f(p.uniforms.u_circle, circle ? 1 : 0);
+    this.quad ??= this.buffer(Float32Array.from([-1, -1, 1, -1, -1, 1, -1, 1, 1, -1, 1, 1]));
+    gl.bindBuffer(gl.ARRAY_BUFFER, this.quad);
+    gl.enableVertexAttribArray(p.attribs.a_pos);
+    gl.vertexAttribPointer(p.attribs.a_pos, 2, gl.FLOAT, false, 0, 0);
+    gl.drawArrays(gl.TRIANGLES, 0, 6);
+  }
+
+  private offscreenFramebuffer(slot: "supersample" | "inset", w: number, h: number): Offscreen {
+    const gl = this.gl;
+    const cur = this.offscreen[slot];
+    if (cur && cur.w === w && cur.h === h) return cur;
+    this.deleteOffscreen(slot);
     const samples = Math.min(4, gl.getParameter(gl.MAX_SAMPLES) as number);
     const rb = (format: number, multisampled: boolean) => {
       const r = gl.createRenderbuffer()!;
@@ -620,18 +676,20 @@ export class MapGlRenderer {
     gl.bindFramebuffer(gl.FRAMEBUFFER, resolve);
     gl.framebufferTexture2D(gl.FRAMEBUFFER, gl.COLOR_ATTACHMENT0, gl.TEXTURE_2D, tex, 0);
     gl.bindFramebuffer(gl.FRAMEBUFFER, null);
-    this.offscreen = { w, h, msaa, resolve, tex, rbs: [colourMs, stencilMs] };
-    return this.offscreen;
+    const fb: Offscreen = { w, h, msaa, resolve, tex, rbs: [colourMs, stencilMs] };
+    this.offscreen[slot] = fb;
+    return fb;
   }
 
-  private deleteOffscreen(): void {
-    if (!this.offscreen) return;
+  private deleteOffscreen(slot: "supersample" | "inset"): void {
+    const fb = this.offscreen[slot];
+    if (!fb) return;
     const gl = this.gl;
-    gl.deleteFramebuffer(this.offscreen.msaa);
-    gl.deleteFramebuffer(this.offscreen.resolve);
-    gl.deleteTexture(this.offscreen.tex);
-    for (const r of this.offscreen.rbs) gl.deleteRenderbuffer(r);
-    this.offscreen = undefined;
+    gl.deleteFramebuffer(fb.msaa);
+    gl.deleteFramebuffer(fb.resolve);
+    gl.deleteTexture(fb.tex);
+    for (const r of fb.rbs) gl.deleteRenderbuffer(r);
+    delete this.offscreen[slot];
   }
 
   private draw(view: View, opts: RenderOptions, ss: number): void {

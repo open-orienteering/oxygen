@@ -5,7 +5,8 @@ import { render } from "@oxygen/shared";
 import { MapGlEngine, type Transport } from "../engine";
 import { createMapGlWorker, type WorkerReply, type WorkerRequest } from "../worker";
 import { CELL_UM, type PreparedPart, type ResidentPart, type VisibleSet, type ViewRect } from "../buckets";
-import type { DocumentRenderOptions, MapGlRenderer, TextAtlasImage } from "../renderer";
+import type { DocumentRenderOptions, InsetBox, MapGlRenderer, TextAtlasImage } from "../renderer";
+import { loupeView, type RenderTarget } from "../view";
 import { parseTextAtlasPage } from "../text-atlas";
 import type { MeshAtlas } from "../mesh-atlas";
 import { documentBytes, indexOf, request } from "./course-fixture";
@@ -65,9 +66,26 @@ class FakeRenderer {
     this.visibleSets.push(vs);
   }
   renderOpts: DocumentRenderOptions[] = [];
-  renderDocument(_view: unknown, opts: DocumentRenderOptions) {
+  renderViews: ViewRect[] = [];
+  renderTargets: (RenderTarget | undefined)[] = [];
+  renderDocument(view: ViewRect, opts: DocumentRenderOptions, target?: RenderTarget) {
     this.renderOpts.push(opts);
+    this.renderViews.push(view);
+    this.renderTargets.push(target);
     return { drawCalls: 1, cpuMs: 0 };
+  }
+  readonly inset: RenderTarget = { framebuffer: {} as WebGLFramebuffer, width: 0, height: 0 };
+  composites: InsetBox[] = [];
+  insetReleases = 0;
+  insetTarget(size: number): RenderTarget {
+    this.inset.width = this.inset.height = size;
+    return this.inset;
+  }
+  compositeInset(box: InsetBox): void {
+    this.composites.push(box);
+  }
+  releaseInset(): void {
+    this.insetReleases++;
   }
   get documentBytes() {
     return { arenas: 0, arenasUsed: 0, atlas: 0, text: 0, visibleSet: 0, total: 0 };
@@ -332,6 +350,42 @@ describe("MapGlEngine dynamic bucket (docs/map-rendering.md §5.2 Dynamic bucket
     expect(engine.stats().residentBytes).toBeLessThan(fixed);
     engine.render({ colour: () => [0, 0, 0] });
     expect(renderer.renderOpts.at(-1)!.pageClip).toBeUndefined();
+  });
+
+  it("the loupe: one more draw of the visible set render built, into the inset target, composited at the box (docs/map-rendering.md §5.5)", async () => {
+    const { engine, transport, renderer } = await courseEngine();
+    const view = { centreX: 30_000, centreY: 30_000, pxPerUm: 0.002, widthPx: 800, heightPx: 800 };
+    engine.setView(view);
+    engine.setCourse(request({ page: { paper: { heightMm: 297 }, frame: { x: 10, y: 10, width: 190, height: 277 }, window: { minX: -65, minY: -128.5, width: 190, height: 277 }, objects: [], description: null } }));
+    transport.flush();
+    const opts = { colour: () => [0, 0, 0] as [number, number, number] };
+    engine.render(opts);
+    const { rebuilds } = engine.stats();
+    const posted = transport.posted.length;
+    const draws = renderer.renderViews.length;
+    const lv = loupeView(view, { x: 31_000, y: 29_500 }, 2.5, 300);
+    engine.renderInset(lv, opts, { x: 250, y: 100, size: 300 });
+    expect(renderer.renderViews.length).toBe(draws + 1);
+    expect(renderer.renderViews.at(-1)).toEqual(lv);
+    expect(renderer.renderTargets.at(-1)).toBe(renderer.inset);
+    expect(renderer.inset.width).toBe(300);
+    expect(renderer.renderOpts.at(-1)!.pageClip).toEqual(renderer.renderOpts.at(-2)!.pageClip);
+    expect(renderer.renderOpts.at(-1)!.pageClip).toBeDefined();
+    expect(renderer.composites).toEqual([{ x: 250, y: 100, size: 300 }]);
+    // Over the resident visible set: no rebuild, no request to the worker.
+    expect(engine.stats().rebuilds).toBe(rebuilds);
+    expect(transport.posted.length).toBe(posted);
+    engine.releaseInset();
+    expect(renderer.insetReleases).toBe(1);
+  });
+
+  it("the loupe before the load draws nothing", () => {
+    const renderer = new FakeRenderer();
+    const engine = new MapGlEngine(renderer as unknown as MapGlRenderer, manualTransport(), {});
+    const v = { centreX: 0, centreY: 0, pxPerUm: 0.01, widthPx: 100, heightPx: 100 };
+    expect(engine.renderInset(v, { colour: () => [0, 0, 0] }, { x: 0, y: 0, size: 100 })).toEqual({ drawCalls: 0, cpuMs: 0 });
+    expect(renderer.renderViews).toHaveLength(0);
+    expect(renderer.composites).toHaveLength(0);
   });
 
   it("a request before the load waits for it; the course counts as fixed bytes", async () => {

@@ -596,7 +596,7 @@ the legacy editor untouched — `mobile-layout.md` "Course editor on touch"):
 | Tap a control | Selects it (no movement, no write) |
 | One finger on the **selected** control | Drags it at once |
 | One finger on an **unselected** control | Pending: moving > 10 px pans the map; lifting before 500 ms selects it; holding still for **500 ms** selects it and starts a move (a short vibration where supported) |
-| Dragging a control by touch | Drawn **48 px above the finger** on a dashed stem (`editor-touch-handle`) so the finger never covers it; dropped where it is drawn; leg lengths and the affects-chip as with a mouse |
+| Dragging a control by touch | Drawn **48 px above the finger** on a dashed stem (`editor-touch-handle`) so the finger never covers it; dropped where it is drawn; leg lengths and the affects-chip as with a mouse; the **loupe** above it (below) |
 | Two fingers | Always pan / zoom the map; a second finger cancels a pending press or an armed control drag, and selections are suppressed for 400 ms after (today's rule) |
 | A control's number | Drags only when its control is selected; otherwise as an unselected control |
 | Tap a course object | Selects it (V's binding: its outline and handles); a tap elsewhere is a map tap |
@@ -604,7 +604,26 @@ the legacy editor untouched — `mobile-layout.md` "Course editor on touch"):
 
 Hit tolerance is **12 CSS px** on a coarse pointer (6 with a mouse) — the
 "large hit areas" of 08 §5.5 — on the same `editorHitAt` path (§5).
-These values (500 ms, 10 px, 48 px, 12 px, the detent heights) are 08
+**Loupe** (08 §5.5 "Precision"; D9b). While a control is dragged by
+touch on the GL canvas, a circle (`editor-loupe`, **120 CSS px**) shows
+the map at **×2.5** about the dragged point — the handle, 48 px above the
+finger — oriented as the map; it appears and goes with the stem. It sits
+**16 px above the handle**, so the 1× control stays visible; when that
+would leave the map box at the top it flips to 16 px below the finger;
+its centre is kept 4 px inside the box sideways. The picture is the GL
+layer's: one more `renderDocument` per frame over the resident visible
+set into an offscreen target, drawn into the circle of the canvas
+(`map-rendering.md` §5.5 "Loupe"); the element is the ring and a
+crosshair at the drop point over it, so the course layer's dragged
+circle (one layer round trip behind the finger) and the crosshair meet
+when the reply is in. UI-layer shapes that happen to lie under the
+circle (a check marker, a leg-length label) draw over the loupe at 1×.
+Mouse drags get no loupe (the finger is what hides the circle); the
+nudge pad stays the exact tool. In the tiles view (the legacy editor)
+`MapLoupe` is unchanged.
+
+These values (500 ms, 10 px, 48 px, 12 px, the loupe's 120 px, ×2.5 and
+16 px, the detent heights) are 08
 §5.5's unquantified rules made concrete (decision log, D9); D-mobile
 measures them on a real phone.
 
@@ -692,14 +711,8 @@ current, differing }`; a variation group or a slice-F site kind answers
   the rest of the E2E rewrite (the editor's touch subset in the `mobile`
   project, `course-editor.spec.ts` under `map-vector`) — D10; **presence
   and "moved by X at T"** — D11.
-- **Loupe** (08 §5.5 "Precision"; decision log, D9): behind the nudge pad.
-  It is cheap on B2's explicit render target — one more
-  `MapGlRenderer.renderDocument(view, { viewMatrix }, target)` per frame
-  with a ×2.5 matrix about the dragged point into a ~120 px offscreen
-  `RenderTarget` (with stencil), drawn into a circle above the finger, over
-  the same resident visible set — but it touches `map-gl/renderer.ts`,
-  `engine.ts` and `VectorMapLayer.tsx`, D7's area while D7 runs: row D9b,
-  after D7.
+- **Mouse loupe**: a desktop or tablet mouse drag shows no loupe (§10
+  "Loupe"); the same layer prop from the mouse branch would give one.
 - **One-finger drag of a course object on touch** (its body or a
   vertex): a tap selects it and two fingers scale it (§10); moving it is
   the mouse's, or a later row with the object's own nudge.
