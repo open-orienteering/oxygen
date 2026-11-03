@@ -467,8 +467,8 @@ export interface SICardOwnerData {
   country?: string;
 }
 
-/** Field order in the semicolon-separated personal data area */
-const PERSONAL_FIELDS = [
+/** Field order in the semicolon-separated personal data area (also the Reader BT owner-data order) */
+export const PERSONAL_FIELDS = [
   "firstName",
   "lastName",
   "sex",
