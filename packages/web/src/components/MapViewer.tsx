@@ -71,7 +71,7 @@ import {
   IconFullscreenExit,
   IconUndo,
 } from "./map-icons";
-import { useGeolocationWatch } from "../hooks/useGeolocationWatch";
+import { useGeolocationWatch, type GeolocationFix } from "../hooks/useGeolocationWatch";
 import {
   accuracyRadiusPx,
   nextLocateMode,
@@ -273,8 +273,9 @@ export interface MapViewerEditorProps {
    * `bar`: the contextual actions as a horizontal action bar centred under
    * the selection (`editor-action-bar`, docs/course-editor.md §2) instead
    * of the popover menu beside it; same entries and `editor-action-<id>`s.
+   * `host`: the page docks them itself (the phone's bottom sheet, §10) and the viewer draws none.
    */
-  actionLayout?: "menu" | "bar";
+  actionLayout?: "menu" | "bar" | "host";
   /**
    * The active editor tool (docs/course-editor.md §6): it sees the pointer
    * before the viewer's own gestures and draws UI-layer shapes. Shared
@@ -299,8 +300,19 @@ export interface MapViewerEditorProps {
    * reports only real sites.
    */
   provisional?: ProvisionalVisit | null;
-  /** A view request: fit these controls, or centre on a point (paper mm); acted on when `key` changes. */
-  viewRequest?: { key: number; fit?: readonly string[]; centre?: { x: number; y: number } } | null;
+  /**
+   * A view request: fit these controls, or centre on a point (paper mm); acted on when `key` changes.
+   * `offsetPx` puts the centred point that far from the view centre on screen (Field mode's bottom
+   * sheet: the selection mid-way in the band above it, docs/course-editor.md §10).
+   */
+  viewRequest?: { key: number; fit?: readonly string[]; centre?: { x: number; y: number }; offsetPx?: { x: number; y: number } } | null;
+  /**
+   * Field mode's GPS fix (docs/course-editor.md §9): the page owns the watch; the viewer draws it
+   * with its accuracy ring as `my-location-marker`, through `mapGeo` like its own locate button.
+   */
+  fix?: GeolocationFix | null;
+  /** Screen px at the bottom the page covers (the phone's bottom sheet): the touch Place / Done sit above it. */
+  bottomInsetPx?: number;
   /** Check markers (docs/course-editor.md §8): UI-layer shapes, never hit targets. */
   markers?: readonly ToolShape[];
 }
@@ -1118,9 +1130,15 @@ export function MapViewer({
       fitToControlBounds(controls.filter((c) => ids.has(c.id)), 0.08);
     } else if (req.centre && viewport.kind === "paper") {
       const c = req.centre;
-      setViewport((prev) => (prev?.kind === "paper" ? { ...prev, centreX: c.x * 1000, centreY: c.y * 1000 } : prev));
+      // The screen offset into the inner (rotated) frame, then into paper µm (y up).
+      const o = req.offsetPx ?? { x: 0, y: 0 };
+      const ix = o.x * Math.cos(rotRad) + o.y * Math.sin(rotRad);
+      const iy = -o.x * Math.sin(rotRad) + o.y * Math.cos(rotRad);
+      setViewport((prev) => (prev?.kind === "paper"
+        ? { ...prev, centreX: c.x * 1000 - ix / prev.pxPerUm, centreY: c.y * 1000 + iy / prev.pxPerUm }
+        : prev));
     }
-  }, [editor?.viewRequest, viewport, controls, fitToControlBounds]);
+  }, [editor?.viewRequest, viewport, controls, fitToControlBounds, rotRad]);
 
   // Touch pin-drop: the ghost follows the view centre (08 §5.3 "Touch").
   useEffect(() => {
@@ -3074,7 +3092,7 @@ export function MapViewer({
   const menuEntries =
     (editor?.contextActions?.length ?? 0) + (editor?.suggestions?.length ?? 0) + (editor?.onDismiss ? 1 : 0);
   // An exclusive tool (an armed creation tool, §6) opens no action bar: it would cover the map on every click.
-  if (editor && !editor.tool?.exclusive && menuEntries > 0 && overlayContent && !editorDragPos && !editorLabelDragPos) {
+  if (editor && editor.actionLayout !== "host" && !editor.tool?.exclusive && menuEntries > 0 && overlayContent && !editorDragPos && !editorLabelDragPos) {
     let inner: Pt | null = null;
     let anchorR = overlayContent.radiusPx;
     if (editor.phantom) {
@@ -3381,14 +3399,17 @@ export function MapViewer({
         >
           <g style={{ pointerEvents: "auto" }}>
             {overlayContent?.upperNodes}
-            {locateMode !== "off" && geo.position && viewport && (() => {
-              const p = geoToInner(viewport, vctx, geo.position.lat, geo.position.lng);
-              const mpp = metresPerPx(viewport, mapScale, geo.position.lat);
+            {(() => {
+              // Field mode's fix (the page's watch) wins over the locate button's own.
+              const fix = editor?.fix ?? (locateMode !== "off" ? geo.position : null);
+              if (!fix || !viewport) return null;
+              const p = geoToInner(viewport, vctx, fix.lat, fix.lng);
+              const mpp = metresPerPx(viewport, mapScale, fix.lat);
               if (!p || mpp == null) return null;
               const px = p.x, py = p.y;
-              const radius = accuracyRadiusPx(geo.position.accuracy, mpp);
+              const radius = accuracyRadiusPx(fix.accuracy, mpp);
               return (
-                <g data-testid="my-location-marker" style={{ pointerEvents: "none" }}>
+                <g data-testid="my-location-marker" data-accuracy-m={fix.accuracy} style={{ pointerEvents: "none" }}>
                   {radius > 2 && (
                     <circle
                       cx={px}
@@ -3482,7 +3503,8 @@ export function MapViewer({
             <div className="w-8 h-px bg-purple-700" />
             <div className="absolute left-1/2 top-1/2 h-8 w-px -translate-x-1/2 -translate-y-1/2 bg-purple-700" />
           </div>
-          <div data-testid="editor-touch-bar" className="absolute inset-x-0 bottom-3 z-30 flex justify-center gap-2 px-4">
+          <div data-testid="editor-touch-bar" className="absolute inset-x-0 bottom-3 z-30 flex justify-center gap-2 px-4"
+            style={editor.bottomInsetPx ? { bottom: editor.bottomInsetPx + 12 } : undefined}>
             <button type="button" data-testid="editor-touch-place"
               className="min-h-11 px-5 rounded-full bg-purple-600 text-white text-sm font-medium shadow-lg"
               onClick={() => {
