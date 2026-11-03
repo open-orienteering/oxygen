@@ -15,7 +15,6 @@ import {
   type MapTemplateSettings,
   type MapWindow,
 } from "@oxygen/shared";
-import type { SheetInput } from "../course-maps/resolve-sheet.js";
 import { z } from "zod";
 import { Prisma } from "../generated/prisma/client.js";
 import { layoutControlsFromCourseControls, resolveMapLayout } from "../course-maps/resolve-layout.js";
@@ -120,9 +119,9 @@ export interface EditorSheet {
   document: CourseMapDocument;
   window: MapWindow;
   /** The page part of the composer's input: paper, frame, window, objects of both anchors, text values, the description block. */
-  page: Pick<SheetInput, "paper" | "frame" | "window" | "objects" | "textValues" | "description">;
+  page: Omit<course.PageLayerInput, "context" | "paper"> & { paper: { widthMm: number; heightMm: number } };
   /** The description block's content whether shown or not (the editor toggles it): rows, header, title. */
-  block: Pick<NonNullable<SheetInput["description"]>, "rows" | "header" | "title">;
+  block: Pick<NonNullable<course.PageLayerInput["description"]>, "rows" | "header" | "title">;
   appearance: course.CourseAppearance;
   overprintScale: number;
   labelMode: "sequence" | "code";

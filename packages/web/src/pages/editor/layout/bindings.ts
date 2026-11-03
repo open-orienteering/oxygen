@@ -26,6 +26,14 @@ export type LayoutSelection = { kind: "object"; id: string } | { kind: "frame" }
 export type PlaceKind = "header" | "text" | "image" | "whiteout" | "whiteoutOutside" | "line" | "rectangle" | "path" | "description";
 export type LayoutTool = { kind: "select" } | { kind: "place"; what: PlaceKind; graphicId?: number };
 
+/** The rail's keys (the page owns the keyboard). */
+export const LAYOUT_KEYS: Record<string, PlaceKind | "select"> = {
+  V: "select", H: "header", T: "text", I: "image", D: "description", W: "whiteout", O: "whiteoutOutside", L: "line", R: "rectangle", P: "path",
+};
+
+/** What Layout mode shows: a sheet, or a template previewed with the selected course. */
+export type LayoutTarget = { sheet: number } | { template: number };
+
 export type LayoutGesture =
   | { kind: "move"; id: string; from: Pt; base: CourseMapObject; moved: boolean }
   | { kind: "resize"; id: string; handle: ResizeHandle; from: Pt; base: CourseMapObject; moved: boolean; proportional: boolean }

@@ -18,14 +18,16 @@ const view = (x: number, y: number) => toView({ x, y }, g);
 const box: CourseMapObject = { id: "box", kind: "rectangle", anchor: "page", x: 50, y: 50, width: 30, height: 20, fillMode: "none" };
 const logo: CourseMapObject = { id: "logo", kind: "image", anchor: "page", graphicId: 9, x: 150, y: 250, width: 30, height: 30 };
 
-function ctx(over: Partial<LayoutBindingContext> = {}) {
+function ctx(over: Partial<Omit<LayoutBindingContext, "onPreview" | "onCommit" | "onSelect" | "onPlace">> = {}) {
   const gesture: { current: LayoutGesture } = { current: null };
-  return {
+  const fns = { onPreview: vi.fn(), onCommit: vi.fn(), onSelect: vi.fn(), onPlace: vi.fn() };
+  const c: LayoutBindingContext = {
     geometry: g, editable: [box], locked: [logo], description: { visible: true, x: 140, y: 12, cellSizeMm: 6 }, block: { x: 140, y: 12, width: 48, height: 30 },
     centre: { x: 0, y: 0 }, selection: null, tool: { kind: "select" }, snapping: false, gesture, imageHref: (id: number) => `/img/${id}`,
-    onPreview: vi.fn(), onCommit: vi.fn(), onSelect: vi.fn(), onPlace: vi.fn(),
+    ...fns,
     ...over,
-  } satisfies LayoutBindingContext;
+  };
+  return { ...c, ...fns };
 }
 
 describe("Layout binding (docs/course-layout.md §2, §3; 08 §5.3 Layout column)", () => {

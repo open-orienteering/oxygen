@@ -16,7 +16,8 @@
  * - Autosave: there is no save button; the status bar says saved /
  *   saving / not saved / changed elsewhere.
  *
- * Course mode only (Layout D7, Field D9). The tools (§6: the armed
+ * Course mode and Layout mode (`modes/LayoutMode.tsx`, docs/course-layout.md:
+ * the sheet as the view, course edits locked); Field mode is D9's. The tools (§6: the armed
  * `S` / `K` / `M`, `A` areas, `T` text, `G` gaps, snapping, Shift-click /
  * lasso multi-select) and course objects (§7) are D5's: each tool is a
  * viewer binding (`tools/bindings.ts`) built here from the state.
@@ -61,6 +62,7 @@ import { StatusBar, type SaveState } from "./StatusBar";
 import { useCourseChecks } from "./useCourseChecks";
 import type { EditorCheck } from "../../lib/editor/checks";
 import { CourseSection, MultiSection, SelectionSection } from "./modes/CourseMode";
+import { useLayoutMode } from "./modes/LayoutMode";
 
 type Pt = { x: number; y: number };
 type Structure = course.WireCourseStructure;
@@ -209,6 +211,15 @@ export function EditorPage() {
     bumpHistory();
     return entry;
   }, [undoStack, bumpHistory]);
+
+  const layoutMode = useLayoutMode({
+    enabled: state.mode === "layout",
+    nameId: nameId ?? "",
+    course: selectedCourse ? { id: selectedCourse.id, name: selectedCourse.name } : null,
+    view: state.view,
+    run,
+    record,
+  });
 
   // Sites this client created since the last refetch: their kind, position and code, for the writes and the
   // ghost that follow before `controlCoordinates` / `control.list` have them (§6.1).
@@ -991,6 +1002,7 @@ export function EditorPage() {
   const canGap = state.selectedControlId !== null ? kindOf(state.selectedControlId) === "control" : (state.phantom?.insertAt ?? null) !== null;
   const canTonerSaver = !!selectedCourse && rows.some((r) => r.pt);
 
+  const layoutKey = layoutMode.onKey;
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       if (descControlId !== null) return;
@@ -999,6 +1011,13 @@ export function EditorPage() {
       const mod = e.ctrlKey || e.metaKey;
       const plain = !mod && !e.altKey;
       const key = e.key.length === 1 ? e.key.toUpperCase() : e.key;
+      if (state.mode === "layout") {
+        // Layout mode's own keys (docs/course-layout.md §2); undo / redo are the page's.
+        if (mod && (e.key === "z" || e.key === "Z")) { e.preventDefault(); if (e.shiftKey) runRedo(); else runUndo(); }
+        else if (mod && (e.key === "y" || e.key === "Y")) { e.preventDefault(); runRedo(); }
+        else if (!layoutKey(e) && e.key === "Escape" && document.fullscreenElement) void document.exitFullscreen().catch(() => {});
+        return;
+      }
       if (mod && (e.key === "z" || e.key === "Z")) {
         e.preventDefault();
         if (e.shiftKey) runRedo();
@@ -1066,7 +1085,26 @@ export function EditorPage() {
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
   }, [descControlId, runUndo, runRedo, undoStack, state, handleDelete, deleteControls, deleteObject, selectedObject, setChain, exitTool, finishArea,
-    stepSelection, armPlace, setTool, canGap, fitView, areaOpen, canTonerSaver, startArea]);
+    stepSelection, armPlace, setTool, canGap, fitView, areaOpen, canTonerSaver, startArea, layoutKey]);
+
+  // Layout deep links (docs/course-layout.md §4): `?mode=layout` with `sheet=<seq>` or `template=<seq>`.
+  const layoutLinkDone = useRef(false);
+  const openLayout = layoutMode.open;
+  useEffect(() => {
+    if (layoutLinkDone.current) return;
+    layoutLinkDone.current = true;
+    if (searchParams.get("mode") !== "layout") return;
+    const sheet = parseInt(searchParams.get("sheet") ?? "", 10), template = parseInt(searchParams.get("template") ?? "", 10);
+    if (Number.isFinite(sheet)) openLayout({ sheet });
+    else if (Number.isFinite(template)) openLayout({ template });
+    dispatch({ type: "mode", mode: "layout" });
+  }, [searchParams, openLayout]);
+
+  // A sheet opened without a course selected brings its course (it prints only that course).
+  const sheetCourse = layoutMode.sheetCourse;
+  useEffect(() => {
+    if (state.mode === "layout" && sheetCourse !== null && state.selectedCourseId === null) dispatch({ type: "select-course", id: sheetCourse });
+  }, [state.mode, sheetCourse, state.selectedCourseId]);
 
   const deepLinkDone = useRef(false);
   useEffect(() => {
@@ -1198,7 +1236,7 @@ export function EditorPage() {
             data-geometry={o.geometry.map((v) => `${v.x},${v.y}`).join(" ")} data-props={JSON.stringify(o.props)} data-scope={JSON.stringify(o.scope)} />
         ))}
       </ul>
-      <ToolRail
+      {state.mode === "layout" ? layoutMode.rail : <ToolRail
         tool={state.tool}
         onTool={(key) => {
           if (key === "V") exitTool();
@@ -1213,7 +1251,7 @@ export function EditorPage() {
         canTonerSaver={canTonerSaver}
         snapping={state.snapping}
         onSnapping={() => dispatch({ type: "toggle-snapping" })}
-      />
+      />}
       <div className="flex flex-col gap-2 min-h-0 h-full">
         {notice && (
           <div data-testid="editor-conflict" data-kind={notice.kind} className="pointer-events-auto w-64 rounded-lg border border-amber-300 bg-amber-50 text-amber-900 text-xs p-2 shadow-sm">
@@ -1240,6 +1278,7 @@ export function EditorPage() {
           </div>
         )}
         <Inspector>
+          {state.mode === "layout" ? layoutMode.inspector : <>
           <InspectorSection title={t("sequence")} testId="editor-inspector-course" aside={selectedCourse?.name}>
             <CourseSection
               course={selectedCourse && structure ? { id: selectedCourse.id, name: selectedCourse.name, orderMode: structure.orderMode } : null}
@@ -1288,6 +1327,7 @@ export function EditorPage() {
           </InspectorSection>
           <InventorySection inventory={inventory} activeSeriesId={activeSeriesId} onSeries={setAllocSeriesId} />
           <ChecksSection checks={courseChecks.checks} onLocate={locateCheck} />
+          </>}
         </Inspector>
         <div className="mt-auto flex flex-col gap-1">
           {state.tool.kind === "gap" && gapTarget?.stored && (
@@ -1314,7 +1354,7 @@ export function EditorPage() {
           fillContainer
           fitToControls
           showMapInfo
-          filterMode={state.hideOthers && selectedCourse && courseView ? "course" : "all"}
+          filterMode={(state.mode === "layout" ? layoutMode.courseOnly : state.hideOthers) && selectedCourse && courseView ? "course" : "all"}
           defaultShowDescriptions={!isMobile}
           descriptionsAllControls
           toolbar={toolbar}
@@ -1322,7 +1362,7 @@ export function EditorPage() {
           fullscreenOverlay={descControl ? (
             <ControlDescriptionEditor controlCode={descControl.code} initial={descControl.description} onSave={saveDescription} onCancel={closeDescription} />
           ) : null}
-          editor={editor}
+          editor={state.mode === "layout" ? layoutMode.editor : editor}
           highlightCourseName={courseView ? selectedCourse?.name : undefined}
         />
       </div>

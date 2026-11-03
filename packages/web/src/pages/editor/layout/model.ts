@@ -16,10 +16,15 @@ import {
 } from "@oxygen/shared";
 import type { LayoutRequest } from "../../../lib/course-layer-request";
 import { sheetWindow, windowCentre, type SheetGeometry } from "../../../lib/editor/layout";
+import { createImageObjectAt, createObjectAt, fillModePatch } from "../../../lib/map-layout-editor";
+import type { PlaceKind } from "./bindings";
 import type { inferRouterOutputs } from "@trpc/server";
 import type { AppRouter } from "@oxygen/api";
 
 type Pt = { x: number; y: number };
+
+/** The header text's size on paper (the rail's `H`). */
+export const HEADER_SIZE_MM = 6;
 
 export type EditorSheet = inferRouterOutputs<AppRouter>["courseMap"]["resolveSheet"];
 
@@ -106,4 +111,38 @@ export function layoutRequestOf(s: EditorSheet, snap: LayoutSnapshot, g: SheetGe
     appearance: course.appearanceFromTemplate(snap.settings.appearance),
     overprintScale: (s.mapScale ?? snap.printScale) / snap.printScale,
   };
+}
+
+/**
+ * A new object of a rail tool at a page point (docs/course-layout.md §3),
+ * clamped to the printable area by `lib/map-layout-editor.ts`'s creators.
+ * The block is not an object: the rail's `D` shows it (`description`).
+ */
+export function placeObject(what: Exclude<PlaceKind, "description">, at: Pt, printable: MapRect, purple: string, graphicId?: number): CourseMapObject | null {
+  switch (what) {
+    case "header": {
+      const o = createObjectAt("text", at, printable);
+      return o.kind === "text" ? { ...o, fontSizeMm: HEADER_SIZE_MM } : o;
+    }
+    case "text":
+      return createObjectAt("text", at, printable);
+    case "image":
+      return graphicId === undefined ? null : createImageObjectAt(graphicId, at, printable);
+    case "whiteout": {
+      const o = createObjectAt("rectangle", at, printable);
+      if (o.kind !== "rectangle") return o;
+      // A white-out has no border.
+      const { stroke: _stroke, strokeWidthMm: _width, ...plain } = o;
+      return { ...plain, fillMode: "whiteout" };
+    }
+    case "whiteoutOutside": {
+      const o = createObjectAt("path", at, printable);
+      // fillModePatch closes the path for an area fill.
+      return o.kind === "path" ? { ...o, ...(fillModePatch(o, "whiteoutInverted", purple) as Partial<typeof o>) } : o;
+    }
+    case "line":
+    case "rectangle":
+    case "path":
+      return createObjectAt(what, at, printable);
+  }
 }
