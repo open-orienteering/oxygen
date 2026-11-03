@@ -135,7 +135,7 @@ export async function writePage(writer: PdfWriter, page: ComposedPage, opts: Wri
     `${colourOperator(pageColour("#ffffff", opts.mode), "fill")} 0 0 ${fmtMm(W)} ${fmtMm(Hp)} re f`,
     "q",
     `${pt(f.x)} ${pt(f.y)} ${pt(f.width)} ${pt(f.height)} re W n`,
-    mapLayerOperators(page.mapLayer.stream, { colours: page.colours, mode: opts.mode, resources: wp.resources, originUm: t.originUm, matrix: tMap }),
+    mapLayerOperators(page.mapLayer.stream, { colours: page.colours, mode: opts.mode, resources: wp.resources, originUm: t.originUm, matrix: tMap, frame: { x: f.x * UM_TO_PT, y: f.y * UM_TO_PT, width: f.width * UM_TO_PT, height: f.height * UM_TO_PT } }),
     ...(mapImages.length ? ["q", cmOperator(tMap, 9), ...mapImages, "Q"] : []),
     "Q",
     mapLayerOperators(page.pageLayer.stream, { colours: page.colours, mode: opts.mode, resources: wp.resources, matrix: pageMatrix }),

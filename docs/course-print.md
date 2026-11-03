@@ -240,7 +240,9 @@ Base-map scale and meridian tilt come from `getBaseMapInfo` only (§10.1).
    hidden objects leave the stream, clipped passes carry masks that the
    operators write as `q <frame + region> W* n … Q` (`map-rendering.md`
    §5.3).
-3. Emitted as `q <frame> re W n  q <T_map> cm 4 M <passes> Q  [q <T_map>
+3. Emitted — the operators also get the frame, which they take back
+   through `T_map⁻¹` and use to leave out what cannot paint inside it
+   (C13, `map-rendering.md` §5.3 "Frame culling") — as `q <frame> re W n  q <T_map> cm 4 M <passes> Q  [q <T_map>
    cm <map images> Q]  Q`; coordinates integers in the layer unit
    (≤ 5 µm printed, a whole fraction of 10 µm; C11) relative to the
    window centre moved onto the 10 µm grid, each path under its own
@@ -452,7 +454,7 @@ lines drawn by the library; images DeviceRGB in `cmyk`.
 | `print/__tests__/description.test.ts` | every `IOF_SYMBOLS` key converts; 2.4 one fill, 1.10 one disc, 0.3 two strokes + disc, Bézier flags; block size and position, border, thick / thin rules, header sizes and weight, F text 0.34 × cell, pictograms centred at 0.8 × cell, one symbol per key |
 | `print/__tests__/compose.test.ts` | one colour-sorted map stream with lower purple < black < upper purple; block text / rules / pictograms on appended colours; no block → empty page layer; map ring outer boundary = frame (+1 mm) through `T_map⁻¹`, page ring = frame + 1 mm, page white-out at upper white; placeholders; rotated `T_map`; images in layer space; `CourseStackError` |
 | `print/__tests__/writer.test.ts` (C8) | a bold text symbol and a regular one embed two font objects, `…+LiberationSans` and `…+LiberationSans-Bold` |
-| `print/__tests__/write-page.test.ts` | operator order (sheet, frame clip, `T_map` `cm`, page `cm`), no `rg` in `cmyk` / no `k` in `rgb`, rotated `cm`, two pages sharing font, glyph forms and image XObject, page labels and outlines, `/Measure /GEO` (SWEREF99 TM corners near 58.6° N 15° E, rotated corners), deterministic bytes, missing image warning |
+| `print/__tests__/write-page.test.ts` | operator order (sheet, frame clip, `T_map` `cm`, page `cm`), no `rg` in `cmyk` / no `k` in `rgb`, rotated `cm`, two pages sharing font, glyph forms and image XObject, page labels and outlines, `/Measure /GEO` (SWEREF99 TM corners near 58.6° N 15° E, rotated corners), deterministic bytes, missing image warning, an object far outside the frame absent from the content stream (C13) |
 | `print/__tests__/isomorphic.test.ts` | no Node API, `Buffer`, sharp or resvg in the module |
 | `packages/api/src/__tests__/course-print-sheet.test.ts` | `resolveSheet`: paper / frame / window / tilt, structure and roles, unique sites, label offsets, extras, `editor` vs `ocd` authored geometry, description block / hidden, all-controls, free order |
 | `packages/api/src/__tests__/integration/course-print.test.ts` | the E2E fixture map pinned on a `vector` event: legacy event → no print document; two sheets → one PDF of two A4 pages, `TrimBox`, labels, outlines, Type0 / CIDFontType2 shared, frame clip and `T_map`, no `rg`, PNG and rasterised SVG logos shared (600 dpi), `/Measure /GEO` of the fixture's georeference, deterministic bytes |
@@ -961,7 +963,19 @@ turned glyph instances' `cm` operands —, shapes against the oracle and
 the backend-parity ratios did not move, the legacy colour ratio fell by
 0.03 pp.
 
-**The table is the run after C11** (2026-10-24: the layer unit, anchors,
+**C13 (2026-11-03, frame culling, `map-rendering.md` §5.3).** The bytes
+column has a third figure: the same pages after the composer hands the
+frame to the operators. Against C11 nothing but the bytes moved: the
+unexplained pixels are the same on every page (0 / 0 / 0 / 3 / 10–11 / 0
+/ 5), the 16- and 32-level ratios equal to the third decimal, every page
+passes; run without the legacy page and the per-symbol parity (`qpdf` and
+`rsvg-convert` were not on the machine; both are unchanged by culling —
+the legacy page is a different code path), times not re-measured. The
+gain follows how much of the window lies outside the frame: nothing on
+Crop-A (the print window is the map), −32 % on Club-full A4 at
+1:10 000 (the ≈ −33 % estimated), −34 % to −74 % on the cropped windows.
+
+**The C11 table is the run after C11** (2026-10-24: the layer unit, anchors,
 turn-class forms, `map-rendering.md` §5.3), all seven pages in both
 modes. "Before C11" is the same page at the encoding before it, on the
 same code otherwise (C8's bold face and C10's turned symbols included, so
@@ -971,15 +985,15 @@ moved: the unexplained pixels are identical on every page, the 16- and
 `qpdf --check` clean; Club-2026's legacy colour ratio reads 41.51 %
 (40.60 % in C7's run).
 
-| Page set | Map | Page (mm) | Map → print scale | Rotation | Objects | Bytes `rgb` / `cmyk` (kB): before C11 → C11 | compose / write `rgb` / `cmyk` (ms) | > 16 levels `rgb` / `cmyk` (%) | > 32 levels (%) | Unexplained (px) | qpdf | Legacy: unexplained / differing (% of ink) | Symbols compared / diverging | Gate |
+| Page set | Map | Page (mm) | Map → print scale | Rotation | Objects | Bytes `rgb` / `cmyk` (kB): before C11 → C11 → C13 | compose / write `rgb` / `cmyk` (ms) | > 16 levels `rgb` / `cmyk` (%) | > 32 levels (%) | Unexplained (px) | qpdf | Legacy: unexplained / differing (% of ink) | Symbols compared / diverging | Gate |
 |---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|
-| OCAD window | Sprint | 106 × 49 | 1:4000 → 1:4000 | 0° | 2 389 | 218 → 178 / 178 (−19 %) | 37 / 129 / 81 | 0.276 / 0.152 | 0.038 / 0.022 | 0 / 0 | ok | 1.54 / 29.32 | 58 / 4 | pass |
-| OCAD window | Crop-A | 143 × 117 | 1:15000 → 1:15000 | 0° | 4 927 | 464 → 372 / 372 (−20 %) | 98 / 252 / 176 | 1.423 / 1.250 | 0.134 / 0.100 | 0 / 0 | ok | 0.18 / 22.19 | 96 / 6 | pass |
-| OCAD window | Crop-B | 43 × 52 | 1:15000 → 1:7500 | 0° | 1 005 | 141 → 124 / 123 (−12 %) | 34 / 118 / 90 | 0.549 / 0.399 | 0.072 / 0.023 | 0 / 0 | ok | 3.66 / 21.95 | 59 / 3 | pass |
-| OCAD window | Club-2026 | 426 × 303 | 1:15000 → 1:5000 | -3.296° | 7 664 | 956 → 810 / 810 (−15 %) | 115 / 428 / 383 | 0.455 / 0.354 | 0.041 / 0.029 | 3 / 3 | ok | 8.91 / 41.51 | 101 / 6 | pass |
-| OCAD window | Club-full | 426 × 303 | 1:15000 → 1:15000 | -3.3° | 31 163 | 3 632 → 2 716 / 2 716 (−25 %) | 284 / 1562 / 1390 | 0.835 / 0.650 | 0.135 / 0.114 | 11 / 10 | ok | 0.33 / 20.12 | 142 / 9 | pass |
-| Appendix B | Sprint A3 | 420 × 297 | 1:4000 → 1:4000 | 0° | 10 441 | 889 → 683 / 683 (−23 %) | 225 / 716 / 445 | 0.155 / 0.095 | 0.015 / 0.008 | 0 / 0 | ok | 1.03 / 21.25 | 86 / 7 | pass |
-| Appendix B | Club-full A4 1:10 000 | 297 × 210 | 1:15000 → 1:10000 | -3.3° | 13 768 | 1 634 → 1 353 / 1 353 (−17 %) | 166 / 766 / 542 | 0.660 / 0.502 | 0.098 / 0.079 | 5 / 5 | ok | 0.83 / 18.32 | 117 / 8 | pass |
+| OCAD window | Sprint | 106 × 49 | 1:4000 → 1:4000 | 0° | 2 389 | 218 → 178 → 77 / 77 (−57 % vs C11) | 37 / 129 / 81 | 0.276 / 0.152 | 0.038 / 0.022 | 0 / 0 | ok | 1.54 / 29.32 | 58 / 4 | pass |
+| OCAD window | Crop-A | 143 × 117 | 1:15000 → 1:15000 | 0° | 4 927 | 464 → 372 → 372 / 372 (0) | 98 / 252 / 176 | 1.423 / 1.250 | 0.134 / 0.100 | 0 / 0 | ok | 0.18 / 22.19 | 96 / 6 | pass |
+| OCAD window | Crop-B | 43 × 52 | 1:15000 → 1:7500 | 0° | 1 005 | 141 → 124 → 32 / 32 (−74 %) | 34 / 118 / 90 | 0.549 / 0.399 | 0.072 / 0.023 | 0 / 0 | ok | 3.66 / 21.95 | 59 / 3 | pass |
+| OCAD window | Club-2026 | 426 × 303 | 1:15000 → 1:5000 | -3.296° | 7 664 | 956 → 810 → 537 / 537 (−34 %) | 115 / 428 / 383 | 0.455 / 0.354 | 0.041 / 0.029 | 3 / 3 | ok | 8.91 / 41.51 | 101 / 6 | pass |
+| OCAD window | Club-full | 426 × 303 | 1:15000 → 1:15000 | -3.3° | 31 163 | 3 632 → 2 716 → 2 406 / 2 406 (−11 %) | 284 / 1562 / 1390 | 0.835 / 0.650 | 0.135 / 0.114 | 11 / 10 | ok | 0.33 / 20.12 | 142 / 9 | pass |
+| Appendix B | Sprint A3 | 420 × 297 | 1:4000 → 1:4000 | 0° | 10 441 | 889 → 683 → 654 / 654 (−4 %) | 225 / 716 / 445 | 0.155 / 0.095 | 0.015 / 0.008 | 0 / 0 | ok | 1.03 / 21.25 | 86 / 7 | pass |
+| Appendix B | Club-full A4 1:10 000 | 297 × 210 | 1:15000 → 1:10000 | -3.3° | 13 768 | 1 634 → 1 353 → 917 / 917 (−32 %) | 166 / 766 / 542 | 0.660 / 0.502 | 0.098 / 0.079 | 5 / 5 | ok | 0.83 / 18.32 | 117 / 8 | pass |
 
 **Backend parity.** Every page draws the same shapes as the oracle —
 0–11 unexplained pixels on pages of 0.2–13 megapixels — and at most
@@ -1014,7 +1028,7 @@ symbols on the window, unexplained ÷ ink and their codes:
   regardless. The importer now turns such a symbol, as Mapper's OCD
   import does (`map-import.md` §3.3, `docs/bugfix-ocad-point-rotation.md`);
   both Club-full pages pass. It was the C-gate's only failure.
-- **Size against 05 Appendix B (rows C11, C13).** Before C11: Sprint A3
+- **Size against 05 Appendix B (rows C11, C13; C13 landed 2026-11-03: Club-full A4 917 kB, Sprint A3 654 kB, below).** Before C11: Sprint A3
   889 kB against ≈ 0.5 MB, Club-full A4 at 1:10 000 1.63 MB against
   ≈ 0.25 MB. The content stream of Club-full A4 was 4.8 MB raw, flated
   ×0.34 (as Appendix B assumed) — 84 % of it path points, 64 k Béziers
@@ -1059,11 +1073,12 @@ symbols on the window, unexplained ÷ ink and their codes:
 
 ## Pending in this chapter
 
-- **PDF size** (row C13): after C11's encoding Club-full A4 at 1:10 000
-  is 1.35 MB and Sprint A3 683 kB (§11.5); 05 Appendix B's 0.25 / 0.5 MB
-  assumed 6.7× / 1.5× fewer path points than the windows hold and is not
-  reachable by encoding. Frame culling (C13) is the next ≈ 33 %; the
-  object margin of the window (20 mm, `window-raster.ts`) is C12's area.
+- **PDF size** (rows C11, C13, done): Club-full A4 at 1:10 000 is
+  917 kB and Sprint A3 654 kB (§11.5); 05 Appendix B's 0.25 / 0.5 MB
+  assumed 6.7× / 1.5× fewer path points than the windows hold and the
+  rest is points inside the frame. The object margin of the window (20 mm,
+  `window-raster.ts`) is C12's area; text and hatch lines outside the
+  frame are still written (`map-rendering.md` §5.3 "Frame culling").
 - **Corpus gate** (§11.3): every page passes since C10. Crop-A's 7 µm
   hatch offset between PDF and oracle is unexplained (below every budget).
 - **Golden tier on CI's poppler**: the budgets were measured with poppler
