@@ -121,6 +121,8 @@ export interface EditorSheet {
   window: MapWindow;
   /** The page part of the composer's input: paper, frame, window, objects of both anchors, text values, the description block. */
   page: Pick<SheetInput, "paper" | "frame" | "window" | "objects" | "textValues" | "description">;
+  /** The description block's content whether shown or not (the editor toggles it): rows, header, title. */
+  block: Pick<NonNullable<SheetInput["description"]>, "rows" | "header" | "title">;
   appearance: course.CourseAppearance;
   overprintScale: number;
   labelMode: "sequence" | "code";
@@ -183,6 +185,7 @@ function editorSheet(
     document: layout.document,
     window: layout.window,
     page: { paper: sheet.paper, frame: sheet.frame, window: sheet.window, objects: sheet.objects, textValues: sheet.textValues, description: sheet.description },
+    block: { rows: layout.descriptionRows, header: layout.descriptionHeader, title: sheet.label },
     appearance: sheet.course.appearance,
     overprintScale: layout.overprintScale,
     labelMode: layout.labelMode,

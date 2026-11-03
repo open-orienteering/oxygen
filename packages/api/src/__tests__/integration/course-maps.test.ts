@@ -470,6 +470,7 @@ describe("map templates and course maps", () => {
     expect(r.page.description).toMatchObject({ x: 140, y: 12, cellSizeMm: 6, title: "Blue" });
     expect(r.page.description!.rows.map((row) => row.code)).toEqual(expect.arrayContaining(["31", "32"]));
     expect(r.descriptionRowCount).toBe(r.page.description!.rows.length);
+    expect(r.block).toEqual({ rows: r.page.description!.rows, header: r.page.description!.header, title: "Blue" });
     expect(r.descriptionHeaderRows).toBe(3);
     // Base map 1:7 500 printed at 1:10 000.
     expect(r.overprintScale).toBeCloseTo(0.75, 6);
