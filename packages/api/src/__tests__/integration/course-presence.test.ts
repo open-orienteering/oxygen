@@ -100,7 +100,22 @@ describe("control.lastChange", () => {
     expect(Math.abs(new Date(last!.at).getTime() - before)).toBeLessThan(10_000);
   });
 
-  it("is null for a control nobody wrote through the API as a user, or unknown", async () => {
-    expect((await caller.control.lastChange({ id: 31 }))?.name ?? "").toBe("");
+  it("has an empty name for a write without a sign-in, and is null for a control with no entry", async () => {
+    expect((await caller.control.lastChange({ id: 31 }))?.name).toBe("");
+    const row = await ctx.db.control.findFirstOrThrow({ where: { eventId: ctx.eventId, codes: "31" } });
+    await ctx.db.journalEntry.deleteMany({ where: { eventId: ctx.eventId, type: "control.upserted", payload: { path: ["id"], equals: row.id } } });
+    expect(await caller.control.lastChange({ id: 31 })).toBeNull();
+  });
+});
+
+describe("course.lastChange", () => {
+  it("names who last wrote the course itself and when", async () => {
+    const user = await ctx.db.user.create({ data: { email: "cy@d11-presence.example", displayName: "Cy" } });
+    const cy = makeCaller(ctx.event, { user: { id: user.id, email: user.email, displayName: "Cy", isAdmin: true, active: true } as AuthUser });
+    const before = Date.now();
+    await cy.course.update({ id: b, controlIds: [31, 32] });
+    const last = await caller.course.lastChange({ courseId: b });
+    expect(last?.name).toBe("Cy");
+    expect(Math.abs(new Date(last!.at).getTime() - before)).toBeLessThan(10_000);
   });
 });

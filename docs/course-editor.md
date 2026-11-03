@@ -661,7 +661,7 @@ go with the switch), deletes rows older than the **30 s TTL** and answers
 the live rows of the event's other editors. The top bar lists them as
 `name · course · mode` ("Anna · Lång · Field"; the mode label is the
 mode switch's), those on the open course first and highlighted
-(`editor-presence`, `editor-presence-entry` with `data-here`); the phone's
+(`editor-presence`, `editor-presence-entry` with `data-here`; two entries inline, the rest a "+n" chip, so the bar stays one row and the map keeps its height); the phone's
 compact bar shows the count with the entries in its tooltip. `name` is the
 signed-in user's display name, else email; an instance without sign-in
 (or a user without either) shows "Someone". Presence is informational: it
@@ -764,6 +764,16 @@ current, differing }`; a variation group or a slice-F site kind answers
   every editor as "Someone" (the station name could stand in, D11 left it);
   "moved by X at T" has no name there either. No leave message: a closed
   editor shows for up to 30 s.
+- **Who changed a course** (`course.lastChange`) reads the newest
+  `course.upserted`, which includes control-move rebuilds that do not advance
+  the course's token: after X's structure edit and Y's later control move the
+  notice names Y. A token-matched lookup would fix it.
+- **Own kind change**: `control.update` re-mirrors the dependent courses and
+  advances their tokens without returning them, so a site's kind change made
+  in the editor would show its own "changed elsewhere" line; the new editor
+  has no such path today.
+- **"Moved by X at T" has no E2E** of its own (unit and integration only); the
+  two-context conflict E2E belongs to D10.
 - **Mouse loupe**: a desktop or tablet mouse drag shows no loupe (§10
   "Loupe"); the same layer prop from the mouse branch would give one.
 - **One-finger drag of a course object on touch** (its body or a

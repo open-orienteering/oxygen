@@ -31,8 +31,12 @@ export interface PresenceEntry {
   here: boolean;
 }
 
+/** Entries the top bar shows inline; the rest are a "+n" chip (the bar must stay one row: the map under it is the editor). */
+export const PRESENCE_INLINE = 2;
+
 /**
  * "Anna · Lång · Field" per other editor, those on the open course first.
+ * Identical entries (one user's tabs in one mode) collapse into one, "× n".
  * `anonymous` names a user the server could not name (no sign-in).
  */
 export function presenceEntries(
@@ -41,11 +45,15 @@ export function presenceEntries(
   modeLabel: (mode: PresenceMode) => string,
   anonymous: string,
 ): PresenceEntry[] {
-  const entries = others.map((o, i) => ({
-    key: `${i}:${o.courseId}:${o.name}:${o.mode}`,
-    label: [o.name || anonymous, o.courseName, modeLabel(o.mode)].join(" · "),
-    here: o.courseId === selectedCourseId,
-  }));
+  const merged = new Map<string, PresenceEntry & { n: number }>();
+  for (const o of others) {
+    const label = [o.name || anonymous, o.courseName, modeLabel(o.mode)].join(" · ");
+    const key = `${o.courseId}:${label}`;
+    const prev = merged.get(key);
+    if (prev) prev.n++;
+    else merged.set(key, { key, label, here: o.courseId === selectedCourseId, n: 1 });
+  }
+  const entries = [...merged.values()].map((e) => ({ key: e.key, label: e.n > 1 ? `${e.label} × ${e.n}` : e.label, here: e.here }));
   return [...entries.filter((e) => e.here), ...entries.filter((e) => !e.here)];
 }
 

@@ -6,7 +6,7 @@
 import { devices, test, expect, type Browser, type BrowserContext, type Page } from "@playwright/test";
 import { setEditorVector, setMapPipeline } from "./helpers/map-pipeline";
 import { reseed } from "./helpers/reseed";
-import { clickMap, drag, editorReady, site, sitePoint, sites } from "./helpers/editor";
+import { clickMap, drag, editorReady, site, sitePoint, sites, toPage } from "./helpers/editor";
 import { waitForTrpc } from "./helpers/trpc";
 
 let nameId = "";
@@ -20,6 +20,21 @@ async function open(browser: Browser): Promise<{ ctx: BrowserContext; page: Page
   const { defaultBrowserType: _, ...desktop } = devices["Desktop Chrome"];
   const ctx = await browser.newContext({ ...desktop, baseURL: test.info().project.use.baseURL, extraHTTPHeaders: test.info().project.use.extraHTTPHeaders });
   return { ctx, page: await ctx.newPage() };
+}
+
+/** Regular numeric-code controls whose page points are inside the viewer, clear of the chrome (as `course-editor.spec.ts`). */
+async function clearCodes(page: Page): Promise<string[]> {
+  const viewer = (await page.getByTestId("map-viewer").boundingBox())!;
+  const inspector = await page.getByTestId("editor-inspector").boundingBox();
+  const out: string[] = [];
+  for (const s of await sites(page)) {
+    if (s.type !== "Control" || !/^\d+$/.test(s.code)) continue;
+    const p = await toPage(page, s.mm);
+    if (p.x < viewer.x + 30 || p.x > viewer.x + viewer.width - 120 || p.y < viewer.y + 30 || p.y > viewer.y + viewer.height - 80) continue;
+    if (inspector && p.x < inspector.x + inspector.width + 40) continue;
+    out.push(s.code);
+  }
+  return out;
 }
 
 /** A fresh context has no event selected: pick it, then open the editor on the course. */
@@ -92,8 +107,7 @@ test("two contexts: presence appears and expires; a move shows in the other with
     await b.page.getByTestId("editor-mode-course").click();
 
     // A move in A shows in B within the poll.
-    const regular = (await sites(a.page)).filter((s) => s.type === "Control" && /^\d+$/.test(s.code));
-    const target = regular[0];
+    const target = { code: (await clearCodes(a.page))[0] };
     const before = await site(b.page, target.code);
     const from = await sitePoint(a.page, target.code);
     await clickMap(a.page, from);
@@ -122,9 +136,9 @@ test("a course changed in another context re-renders with a one-line notice", as
     const rows = (p: Page) => p.locator('[data-testid="editor-seq-row"][data-kind="control"]');
     const count = await rows(b.page).count();
     // A appends a control at an empty spot (create-and-append).
-    const regular = (await sites(a.page)).filter((s) => s.type === "Control" && /^\d+$/.test(s.code));
-    await clickMap(a.page, await sitePoint(a.page, regular[regular.length - 1].code));
-    await expect(a.page.getByTestId("editor-selected-code")).toContainText(regular[regular.length - 1].code, { timeout: 10_000 });
+    const last = (await clearCodes(a.page)).pop()!;
+    await clickMap(a.page, await sitePoint(a.page, last));
+    await expect(a.page.getByTestId("editor-selected-code")).toContainText(last, { timeout: 10_000 });
     const saved = waitForTrpc(a.page, "course.setStructure");
     await a.page.getByTestId("editor-action-bar").getByTestId("editor-action-append").click();
     await saved;

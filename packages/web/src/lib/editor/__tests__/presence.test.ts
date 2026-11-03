@@ -13,9 +13,10 @@ describe("presenceEntries", () => {
   it("names an unnamed user", () => {
     expect(presenceEntries([o("", 1, "Lång", "layout")], null, mode, "Someone")[0].label).toBe("Someone · Lång · Layout");
   });
-  it("keeps two entries for one name (two tabs) under distinct keys", () => {
-    const keys = presenceEntries([o("Anna", 1, "L", "course"), o("Anna", 1, "L", "course")], 1, mode, "?").map((e) => e.key);
-    expect(new Set(keys).size).toBe(2);
+  it("collapses one user's tabs in one mode into one entry with a count", () => {
+    const list = presenceEntries([o("Anna", 1, "L", "course"), o("Anna", 1, "L", "course"), o("Anna", 1, "L", "field")], 1, mode, "?");
+    expect(list.map((e) => e.label)).toEqual(["Anna · L · Course × 2", "Anna · L · Field"]);
+    expect(new Set(list.map((e) => e.key)).size).toBe(2);
   });
   it("is empty with nobody else", () => expect(presenceEntries([], 1, mode, "?")).toEqual([]));
 });
