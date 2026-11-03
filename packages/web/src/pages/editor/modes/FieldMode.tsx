@@ -239,7 +239,8 @@ export function AddMenu({ bottomPx, onPick, disabled, canTonerSaver }: { bottomP
       className="min-h-11 w-full px-3 text-left text-sm text-slate-700 hover:bg-slate-50 disabled:opacity-40 cursor-pointer">{label}</button>
   );
   return (
-    <div className="pointer-events-auto absolute right-3 z-30 flex flex-col items-end gap-2" style={{ bottom: bottomPx + 12 }}>
+    // Left of the viewer's corner buttons (zoom, locate…), which stand above the sheet too.
+    <div className="pointer-events-auto absolute right-14 z-30 flex flex-col items-end gap-2" style={{ bottom: bottomPx + 12 }}>
       {open && (
         <div data-testid="editor-add-menu" className="w-60 max-h-[50vh] overflow-y-auto bg-white rounded-lg border border-slate-200 shadow-lg py-1">
           {item("editor-add-K", t("toolControl"), { kind: "place", tool: "control" })}

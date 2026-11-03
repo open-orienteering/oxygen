@@ -366,6 +366,11 @@ export interface EditorToolBinding {
    * taps on the map do not place.
    */
   touch?: { placeLabel: string; doneLabel: string; onPlace: (p: ToolPointer) => void; onDone: () => void } | null;
+  /**
+   * Two fingers (§10): `start` with both fingers — true takes the gesture (the map does not pinch);
+   * `move` with the fingers' distance over their starting distance; `end` on lift (`commit`) or cancel.
+   */
+  onPinch?: { start: (a: ToolPointer, b: ToolPointer) => boolean; move: (scale: number) => void; end: (commit: boolean) => void } | null;
 }
 
 interface Props {
@@ -725,6 +730,8 @@ export function MapViewer({
   // Coarse-pointer rules on the shared hit path (docs/course-editor.md §10, `lib/editor/touch.ts`):
   // the pending long-press on an unselected site, its timer, and the finger under a lifted drag (container px).
   const siteTouchRef = useRef<SiteTouch>(SITE_TOUCH_IDLE);
+  /** A two-finger gesture the active tool took (pinch-scale of a selected object): the fingers' starting distance. */
+  const toolPinchRef = useRef<{ dist0: number } | null>(null);
   const longPressTimerRef = useRef<number | null>(null);
   const [touchFinger, setTouchFinger] = useState<Pt | null>(null);
   // Moves already sent via onMoveEnd but not yet reflected in the
@@ -1649,6 +1656,18 @@ export function MapViewer({
         const midpointX = (e.touches[0].clientX + e.touches[1].clientX) / 2;
         const midpointY = (e.touches[0].clientY + e.touches[1].clientY) / 2;
         const distance = Math.sqrt(dx * dx + dy * dy);
+        // The tool first: two fingers on a selected object's handles scale it (§10).
+        const pinch = editorToolRef.current?.onPinch;
+        if (pinch && distance > 0) {
+          const a = toolPointerRef.current(e.touches[0].clientX, e.touches[0].clientY, false);
+          const b = toolPointerRef.current(e.touches[1].clientX, e.touches[1].clientY, false);
+          if (a && b && pinch.start(a, b)) {
+            toolPinchRef.current = { dist0: distance };
+            touchStartPosRef.current = null;
+            e.preventDefault();
+            return;
+          }
+        }
         lastTouchRef.current = {
           x: midpointX,
           y: midpointY,
@@ -1728,6 +1747,13 @@ export function MapViewer({
       const rw = renderW || 1;
       const rh = renderH || 1;
 
+      if (e.touches.length === 2 && toolPinchRef.current) {
+        e.preventDefault();
+        const dx = e.touches[0].clientX - e.touches[1].clientX;
+        const dy = e.touches[0].clientY - e.touches[1].clientY;
+        editorToolRef.current?.onPinch?.move(Math.hypot(dx, dy) / toolPinchRef.current.dist0);
+        return;
+      }
       if (e.touches.length === 2 && lastTouchRef.current?.dist) {
         e.preventDefault();
         hadMultiTouchRef.current = true;
@@ -1828,6 +1854,13 @@ export function MapViewer({
       // A pending press lifted before its long press selects the site; the lift is not a map tap.
       if (e.touches.length === 0) stepSiteTouchRef.current({ type: "up" });
       setTouchFinger(null);
+      if (toolPinchRef.current && e.touches.length < 2) {
+        toolPinchRef.current = null;
+        editorToolRef.current?.onPinch?.end(e.type !== "touchcancel");
+        suppressEditorSelectionUntilRef.current = Date.now() + 400;
+        if (e.touches.length === 0) { lastTouchRef.current = null; touchStartPosRef.current = null; hadMultiTouchRef.current = false; }
+        return;
+      }
       const drag = editorDragRef.current;
       if (drag && e.changedTouches.length > 0 && e.touches.length === 0) {
         if (
@@ -1920,8 +1953,14 @@ export function MapViewer({
               const p = tool.touch ? null : toolPointerRef.current(t.clientX, t.clientY, false);
               if (p) tool.onClick?.(p);
             } else {
-              const pt = screenToMapMm(t.clientX, t.clientY);
-              if (pt) editor.onMapClick?.(pt);
+              // A tap on a course object goes to the tool (V selects it, §10); anything else is a map tap.
+              const p = tool?.onPointerDown ? toolPointerRef.current(t.clientX, t.clientY, false) : null;
+              if (p?.target?.kind === "object" && tool!.onPointerDown!(p)) {
+                tool!.onPointerUp?.(p.pt);
+              } else {
+                const pt = screenToMapMm(t.clientX, t.clientY);
+                if (pt) editor.onMapClick?.(pt);
+              }
             }
           }
         }
@@ -3032,6 +3071,8 @@ export function MapViewer({
 
   // ─── Scale bar ─────────────────────────────────────────
 
+  // The page's bottom sheet (§10): the scale bar and the corner buttons sit above it, and hide once it is too tall.
+  const bottomInset = editor?.bottomInsetPx ?? 0;
   const scaleBar = useMemo(() => {
     if (!viewport || !mapScale || containerSize.w === 0) return null;
     const mpp = metresPerPx(viewport, mapScale);
@@ -3048,12 +3089,12 @@ export function MapViewer({
     const label = barM >= 1000 ? `${barM / 1000} km` : `${barM} m`;
 
     return (
-      <div style={{ position: "absolute", bottom: 12, left: 12, pointerEvents: "none", zIndex: 10 }}>
+      <div style={{ position: "absolute", bottom: 12 + bottomInset, left: 12, pointerEvents: "none", zIndex: 10 }}>
         <div style={{ fontSize: 11, color: "#334155", fontWeight: 600, marginBottom: 2 }}>{label}</div>
         <div style={{ width: barPx, height: 4, background: "#334155", borderRadius: 1, opacity: 0.8 }} />
       </div>
     );
-  }, [viewport, mapScale, containerSize]);
+  }, [viewport, mapScale, containerSize, bottomInset]);
 
   // ─── Measure HUD ──────────────────────────────────────
 
@@ -3682,7 +3723,8 @@ export function MapViewer({
       {/* Control buttons */}
       {!hideControls && (
         <div className="touch-manipulation" style={{
-          position: "absolute", bottom: 12, right: 12, display: "flex", flexDirection: "column", gap: 4, zIndex: 10,
+          position: "absolute", bottom: 12 + bottomInset, right: 12, flexDirection: "column", gap: 4, zIndex: 10,
+          display: bottomInset > 0 && bottomInset > containerSize.h - 280 ? "none" : "flex",
         }}>
           <button
             type="button"

@@ -23,6 +23,8 @@ export type Gesture =
   | { kind: "shift-click"; id: number }
   /** `base` is the geometry at pointer-down: every drag event applies the whole from→to offset to it, never to a draft. */
   | { kind: "object"; id: number; from: Pt; to: Pt; moved: boolean; vertex: number | null; base: course.CourseObject["geometry"] }
+  /** Two fingers on a selected object's handle ring (§10): scale `base` about its centroid. */
+  | { kind: "pinch"; id: number; base: course.CourseObject["geometry"]; centre: Pt; scale: number }
   | { kind: "poly-vertex"; index: number }
   | { kind: "gap"; from: Pt; to: Pt }
   | null;
@@ -38,6 +40,17 @@ const BLUE = "#2563eb";
 const near = (a: Pt, b: Pt, mm: number) => Math.hypot(a.x - b.x, a.y - b.y) <= mm;
 const translate = (g: readonly course.CourseObject["geometry"][number][], dx: number, dy: number) =>
   g.map((v) => ({ ...v, x: v.x + dx, y: v.y + dy }));
+
+/** `g` scaled by `k` about `c`; Bézier handles (offsets from their vertex) scale with it. */
+export function scaleAbout(g: readonly course.CourseObject["geometry"][number][], c: Pt, k: number): course.CourseObject["geometry"] {
+  return g.map((v) => ({
+    ...v,
+    x: c.x + (v.x - c.x) * k,
+    y: c.y + (v.y - c.y) * k,
+    ...(v.hIn ? { hIn: { x: v.hIn.x * k, y: v.hIn.y * k } } : {}),
+    ...(v.hOut ? { hOut: { x: v.hOut.x * k, y: v.hOut.y * k } } : {}),
+  }));
+}
 
 /** A ring of a course object as the UI layer outlines it (its vertices, Bézier handles ignored). */
 export const objectRing = (o: Pick<course.CourseObject, "geometry">): Pt[] => o.geometry.map((v) => ({ x: v.x, y: v.y }));
@@ -155,6 +168,31 @@ export function selectBinding(o: SelectOptions): EditorToolBinding {
     },
     onDoubleClick(p) {
       if (p.target?.kind === "leg") o.onLegDoubleClick(p.target, p.pt);
+    },
+    onPinch: {
+      // A finger on a handle of the selected area object (or line) starts the scale; otherwise the map pinches.
+      start(a, b) {
+        const sel = o.selected;
+        if (!sel || sel.geometry.length < 2) return false;
+        const onRing = [a, b].some((p) => sel.geometry.some((v) => near(v, p.pt, 2 * HANDLE_PX * p.mmPerPx)));
+        if (!onRing) return false;
+        const centre = { x: sel.geometry.reduce((sum, v) => sum + v.x, 0) / sel.geometry.length, y: sel.geometry.reduce((sum, v) => sum + v.y, 0) / sel.geometry.length };
+        g.current = { kind: "pinch", id: sel.id, base: sel.geometry, centre, scale: 1 };
+        return true;
+      },
+      move(scale) {
+        const cur = g.current;
+        if (cur?.kind !== "pinch") return;
+        cur.scale = scale;
+        o.onObjectDraft(cur.id, scaleAbout(cur.base, cur.centre, scale));
+      },
+      end(commit) {
+        const cur = g.current;
+        g.current = null;
+        if (cur?.kind !== "pinch") return;
+        if (commit && Math.abs(cur.scale - 1) > 0.01) o.onObjectMoved(cur.id, scaleAbout(cur.base, cur.centre, cur.scale));
+        else o.onObjectDraft(cur.id, null);
+      },
     },
   };
 }

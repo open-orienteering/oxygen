@@ -82,6 +82,9 @@ async function fixAtCentre(page: Page, context: BrowserContext, accuracy = 6): P
   const mm = { x: Number(await viewer.getAttribute("data-centre-x")) / 1000, y: Number(await viewer.getAttribute("data-centre-y")) / 1000 };
   await context.grantPermissions(["geolocation"]);
   await context.setGeolocation({ latitude: lat, longitude: lng, accuracy });
+  // The watch started before the permission and stopped on its denial: a reload starts it granted.
+  await page.reload();
+  await editorReady(page);
   return mm;
 }
 
@@ -128,8 +131,8 @@ test.describe("Field mode on a phone (docs/course-editor.md §9, §10)", () => {
 
   test("the fix and its accuracy ring; the control list with distance and bearing from it", async ({ page, context }) => {
     await openEditor(page);
-    await pickCourse(page);
     const fix = await fixAtCentre(page, context, 8);
+    await pickCourse(page);
     const marker = page.getByTestId("my-location-marker");
     await expect(marker).toBeVisible({ timeout: 15000 });
     await expect(marker).toHaveAttribute("data-accuracy-m", "8");
@@ -276,6 +279,46 @@ test.describe("Field mode on a phone (docs/course-editor.md §9, §10)", () => {
     await expect(page.getByTestId("editor-field-add")).toBeVisible();
   });
 
+  test("a tap selects an area object; two fingers on its handle ring scale it", async ({ page }) => {
+    await openEditor(page);
+    // A square of 100 px in the empty paper above the drawn map (clear of every control).
+    const viewer = page.getByTestId("map-viewer");
+    const box = (await viewer.boundingBox())!;
+    const mid = { x: box.x + box.width / 2, y: box.y + 140 };
+    const geometry = await Promise.all([[-50, -50], [50, -50], [50, 50], [-50, 50]].map(([dx, dy]) => toPaper(page, { x: mid.x + dx, y: mid.y + dy })));
+    const diag = (g: Pt[]) => Math.hypot(g[2].x - g[0].x, g[2].y - g[0].y);
+    const made = await page.request.post("/trpc/courseObject.create", {
+      headers: { "x-competition-id": nameId },
+      data: { kind: "oob_area", geometry, props: {}, scope: { all: true } },
+    });
+    expect(made.ok(), await made.text()).toBe(true);
+    const id = ((await made.json()) as { result: { data: { id: number } } }).result.data.id;
+    await page.reload();
+    await editorReady(page);
+    const row = page.locator(`[data-testid="editor-object-row"][data-object-id="${id}"]`);
+    await expect(row).toBeAttached();
+    // A tap inside it selects it (its handles drawn).
+    const zoom = Number(await viewer.getAttribute("data-px-per-um"));
+    const inside = await toPage(page, { x: (geometry[0].x + geometry[2].x) / 2, y: (geometry[0].y + geometry[2].y) / 2 });
+    await touchTap(page, inside);
+    await expect(page.getByTestId("editor-object-handle").first()).toBeAttached({ timeout: 10000 });
+    // Two fingers: one on a corner handle, one on the opposite corner; spread them.
+    const a = await toPage(page, geometry[2]), b = await toPage(page, geometry[0]);
+    const ux = (a.x - b.x) / Math.hypot(a.x - b.x, a.y - b.y), uy = (a.y - b.y) / Math.hypot(a.x - b.x, a.y - b.y);
+    const d0 = Math.hypot(a.x - b.x, a.y - b.y);
+    await touchStart(page, [a]);
+    await touchStart(page, [a, b]);
+    for (let i = 1; i <= 5; i++) await touchMove(page, [{ x: a.x + ux * 6 * i, y: a.y + uy * 6 * i }, { x: b.x - ux * 6 * i, y: b.y - uy * 6 * i }]);
+    await touchEnd(page, [{ x: a.x + ux * 30, y: a.y + uy * 30 }, { x: b.x - ux * 30, y: b.y - uy * 30 }]);
+    const k = (d0 + 60) / d0;
+    await expect.poll(async () => {
+      const pts = ((await row.getAttribute("data-geometry")) ?? "").split(" ").map((q) => ({ x: Number(q.split(",")[0]), y: Number(q.split(",")[1]) }));
+      return diag(pts) / diag(geometry);
+    }, { timeout: 15000 }).toBeCloseTo(k, 1);
+    // The map did not pinch with it.
+    expect(Number(await viewer.getAttribute("data-px-per-um"))).toBe(zoom);
+  });
+
   test("check-off is one undoable write and persists over a reload", async ({ page }) => {
     await openEditor(page);
     await pickCourse(page);
@@ -327,8 +370,9 @@ test.describe("Field mode on a desktop (docs/course-editor.md §9)", () => {
     await expect(page.getByTestId("editor-mode-field")).toHaveAttribute("aria-pressed", "true");
     await expect(page.getByTestId("editor-tool-rail")).toHaveCount(0);
     await expect(page.getByTestId("editor-inspector-field")).toBeVisible();
-    await pickCourse(page);
     await fixAtCentre(page, context);
+    await page.getByTestId("editor-mode-field").click();
+    await pickCourse(page);
     await expect(page.getByTestId("my-location-marker")).toBeVisible({ timeout: 15000 });
     const row = page.locator('[data-testid="editor-field-row"][data-kind="control"]').first();
     await expect(row).not.toHaveAttribute("data-distance-m", "", { timeout: 15000 });
