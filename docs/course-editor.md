@@ -610,7 +610,7 @@ the map at **×2.5** about the dragged point — the handle, 48 px above the
 finger — oriented as the map; it appears and goes with the stem. It sits
 **16 px above the handle**, so the 1× control stays visible; when that
 would leave the map box at the top it flips to 16 px below the finger;
-its centre is kept 4 px inside the box sideways. The picture is the GL
+its edge is kept 4 px inside the box sideways. The picture is the GL
 layer's: one more `renderDocument` per frame over the resident visible
 set into an offscreen target, drawn into the circle of the canvas
 (`map-rendering.md` §5.5 "Loupe"); the element is the ring and a
@@ -618,8 +618,10 @@ crosshair at the drop point over it, so the course layer's dragged
 circle (one layer round trip behind the finger) and the crosshair meet
 when the reply is in. UI-layer shapes that happen to lie under the
 circle (a check marker, a leg-length label) draw over the loupe at 1×.
-Mouse drags get no loupe (the finger is what hides the circle); the
-nudge pad stays the exact tool. In the tiles view (the legacy editor)
+It shows during every touch drag, whatever the zoom: 08 §5.5's "at high
+zoom" is read as the loupe's own magnified view, not a zoom gate. Mouse
+drags get no loupe (the finger is what hides the circle); the nudge pad
+stays the exact tool. In the tiles view (the legacy editor)
 `MapLoupe` is unchanged.
 
 These values (500 ms, 10 px, 48 px, 12 px, the loupe's 120 px, ×2.5 and

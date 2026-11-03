@@ -1217,7 +1217,9 @@ sorting happens here.
   page clip forwarded); its view is `loupeView(main, point, scale, size)`
   (`view.ts`): centre the point, `pxPerUm × scale`, `size`² device px,
   the main rotation — a `ViewRect` rather than a bare `viewMatrix`
-  option, because the screen-only rules read its `pxPerUm`.
+  option, because the screen-only rules read its `pxPerUm`. The GPU
+  timer counts each `renderDocument` as a frame, so during a loupe drag
+  `gpuMs` may be the loupe's draw (only the dev page reads it).
 
 * **Fills** — earcut triangles, opaque. No stencil.
 * **Strokes** — `halfWidth × offset` in the vertex shader. **Hairline
