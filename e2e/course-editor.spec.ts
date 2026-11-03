@@ -145,11 +145,11 @@ test.describe("Course editor (new, GL canvas)", () => {
     await page.reload();
     await editorReady(page);
     await expect(page.getByTestId("course-editor-page")).toHaveCount(0);
-    // The shell: top bar, tool rail, inspector, status bar; Layout enterable (D7), Field not yet (D9).
+    // The shell: top bar, tool rail, inspector, status bar; Layout (D7) and Field (D9) enterable.
     for (const id of ["editor-top-bar", "editor-tool-rail", "editor-inspector", "editor-status"]) await expect(page.getByTestId(id)).toBeVisible();
     await expect(page.getByTestId("editor-mode-course")).toHaveAttribute("aria-pressed", "true");
     await expect(page.getByTestId("editor-mode-layout")).toBeEnabled();
-    await expect(page.getByTestId("editor-mode-field")).toBeDisabled();
+    await expect(page.getByTestId("editor-mode-field")).toBeEnabled();
     // No SVG hit targets: the viewer hit-tests the layer's shapes.
     await expect(page.getByTestId("editor-control-hit")).toHaveCount(0);
     // The rail (§6): exchange and crossing wait for slice F.
