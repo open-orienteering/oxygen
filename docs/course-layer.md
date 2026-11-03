@@ -947,7 +947,8 @@ A check is `{ code, siteIds, leg?, at, params? }`: the sites involved
 (public ids on the wire), for a leg `{ from, to, index }` (index of the
 leg in the course's positioned sequence), `at` the point to locate and
 mark (paper mm), `params` what the message shows (`a` / `b` codes,
-`distanceM`, `limitM`, `feature`, `code`, `from` / `to`, `symbol`). There is no message text: the web formats
+`distanceM`, `limitM`, `feature`, `code`, `from` / `to`, `symbol`;
+`DESCRIPTION_STALE` adds `suggested`, the column D the map suggests now). There is no message text: the web formats
 it from `editor:check_<CODE>` (AGENTS.md §9). Output order: the table
 order below, then the order of the input (sites, then the course's items).
 
@@ -1037,6 +1038,9 @@ for a check (decision log, D6).
 | E2E | `e2e/map-vector-layer.spec.ts` "a stored white-out course object paints the map white" | §8.3 viewer: an `all`-scoped white-out created through the API turns open yellow ground white on the GL canvas, yellow beside it unchanged |
 | unit (web) | `packages/web/src/map-gl/__tests__/worker-course.test.ts`, `engine.test.ts` | the dynamic bucket (`map-rendering.md` §5.2) |
 | E2E | `e2e/map-vector-layer.spec.ts`, `map-control-circles.spec.ts`, `map-multicourse.spec.ts` | lower purple under black at a crossing; labels under both pipelines (`map-rendering.md` §5.4) |
+| unit | `packages/shared/src/course/__tests__/checks.test.ts` | §9: a fixture per code — both distance thresholds (library, scale fallback), event-wide distances, same feature, codes below 31 / duplicate / invertible (and the upside-down table), sheets null / empty / outside, numbers from `collides` and missing labels (hidden visits skipped), descriptions, legs through areas (crossing and inside), 708 lines, course objects (711 skipped), free order, unpositioned items; output order; `checkObstaclesOfDocument` (applied match, source code, suggested match, hidden, Bézier handles, holes, points) and the codes' library names |
+| unit | `packages/shared/src/__tests__/control-label-placement.test.ts`, `course/__tests__/derive.test.ts` "number collisions" | §3.5: `collides` on a boxed-in number, absent on a clear map and a contested cluster |
+| integration | `packages/api/src/__tests__/integration/course-checks.test.ts` | §9.4 over the pinned `e2e/test.ocd`: distance, invertible, missing description and the building leg with public ids; an `oob_area` in scope; `setStructure` returns the same list; a viewer reads it; §6.3 `description_source` writes (auto, manual even when equal, NULL on clear, auto on a re-describing move) and `DESCRIPTION_STALE` for a moved auto description only; a legacy event has no obstacle codes |
 
 ## Where things live
 
@@ -1067,6 +1071,8 @@ for a check (decision log, D6).
 | `packages/shared/src/course/objects.ts` | §8: `courseObjectBodySchema`, `courseObjectScopeSchemaOf`, `courseObjectInScope`, `isCourseObject`, `filterRegionOf`, the kinds' drawing |
 | `packages/api/src/course-objects.ts`, `routers/courseObject.ts` | §8.4: wire ↔ row, scope ids, `writeCourseObject` (shared with D1's importers), `loadCourseObjects`, `classesByCourse`, `objectsInScope`; the router |
 | `packages/web/src/map-gl/worker.ts` (`courseReply`), `engine.ts` (`setCourse`) | the dynamic bucket that draws it |
+| `packages/shared/src/course/checks.ts` | §9: `courseChecks`, `checkObstaclesOfDocument`, `UNCROSSABLE_CODES`, `OOB_CODES`, `invertedCode` |
+| `packages/api/src/course-checks.ts`, `event-map-objects.ts` (`loadEventCheckDocument`), `description-autodetect.ts` (`describeAt`, `descriptionsEqual`) | §9.4: the server's list, `DESCRIPTION_STALE`; `routers/course.ts` `checks`, `setStructure` |
 
 ## Pending in this chapter
 
@@ -1100,6 +1106,12 @@ for a check (decision log, D6).
 - **Custom purple**: a template's `appearance.purple` other than the IOF
   purple is not applied on the vector path (the purple is the stack's
   CMYK); appearance work in slice D decides whether it stays.
+- **Checks, beyond D6** (§9): `VARIATION_UNBALANCED` and
+  `EXCHANGE_WITHOUT_SHEET` (slice F); crossing-point exemptions for the
+  leg codes (F); exact Bézier and hole geometry for obstacles; the
+  server's `CONTROL_OUTSIDE_SHEET` / `NUMBER_*`; a re-describing move
+  still keys on "equals autodetect at the old position", not on
+  `description_source`.
 - **Number boxes from font metrics**: the placer estimates boxes as
   0.65 em per character (shared with the legacy overlay); measuring the
   shaped text would change placements and is left for when the legacy

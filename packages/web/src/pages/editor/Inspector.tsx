@@ -83,14 +83,15 @@ export function InventorySection({ inventory, activeSeriesId, onSeries }: {
 
 /**
  * The advisory checks (docs/course-editor.md §8): one row per finding; a
- * click locates it (selects its first site, centres the view). Opens by
- * itself when the first finding appears.
+ * click locates it (selects its first site, centres the view). Collapsed
+ * by default, like the inventory: open, it would squeeze the selection
+ * section; the count stands beside the title.
  */
 export function ChecksSection({ checks, onLocate }: { checks: readonly EditorCheck[]; onLocate: (c: EditorCheck) => void }) {
   const { t } = useTranslation("editor");
   const some = checks.length > 0;
   return (
-    <InspectorSection key={some ? "some" : "none"} title={t("checks")} testId="editor-checks" defaultOpen={some}
+    <InspectorSection title={t("checks")} testId="editor-checks" defaultOpen={false}
       aside={some ? <span data-testid="editor-checks-count" className="text-amber-700 font-medium">{checks.length}</span> : undefined}>
       {some ? (
         <ul className="max-h-56 overflow-y-auto px-1.5 pb-1.5">

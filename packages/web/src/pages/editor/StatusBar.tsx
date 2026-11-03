@@ -26,9 +26,10 @@ export function StatusBar({ controls, lengthM, climbM = null, checks = null, sca
   if (climbM) parts.push(t("statusClimb", { m: Math.round(climbM) }));
   if (scale) parts.push(t("statusScale", { scale: scale.toLocaleString("sv-SE") }));
   if (snapping) parts.push(t("statusSnapping"));
+  // No wider than the inspector above it (w-64): the items wrap rather than reach over the map.
   return (
-    <div data-testid="editor-status" className="pointer-events-auto bg-white/95 backdrop-blur-sm border border-slate-200 rounded-lg shadow-sm px-2.5 py-1 text-[11px] text-slate-600 flex items-center gap-1.5 w-fit max-w-full">
-      {parts.length > 0 && <span data-testid="editor-status-kpis" className="truncate">{parts.join(" · ")}</span>}
+    <div data-testid="editor-status" className="pointer-events-auto bg-white/95 backdrop-blur-sm border border-slate-200 rounded-lg shadow-sm px-2.5 py-1 text-[11px] text-slate-600 flex flex-wrap items-center gap-x-1.5 gap-y-0.5 w-fit max-w-64">
+      {parts.length > 0 && <span data-testid="editor-status-kpis" className="truncate max-w-full">{parts.join(" · ")}</span>}
       {checks !== null && checks > 0 && (
         <span data-testid="editor-status-checks" data-count={checks} className="text-amber-700 font-medium">⚠ {t("statusChecks", { count: checks })}</span>
       )}

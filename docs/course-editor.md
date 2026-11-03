@@ -410,8 +410,10 @@ undo or a mode switch.
   The server's `course.checks` adds `DESCRIPTION_STALE`; it refetches
   with the page's other queries after a write. With no course selected
   (all-controls view) only the event-wide codes run.
-- **Inspector**: the Checks section (`editor-checks`, open when there is
-  a finding; the count beside the title) lists one row per check
+- **Inspector**: the Checks section (`editor-checks`) is collapsed by
+  default, like the inventory (open, it would squeeze the selection
+  section in the in-map strip); the count stands beside the title
+  (`editor-checks-count`). Open, it lists one row per check
   (`editor-check-row`, `data-code`, `data-sites` = public ids), the text
   from `editor:check_<CODE>` with its `params`; none → "No findings"
   (`editor-checks-none`). **Click-to-locate**: a row selects its first
@@ -421,8 +423,9 @@ undo or a mode switch.
   around each site of a site check, an amber cross at a leg check's
   point; `editor-check-marker` (`data-code`, `data-x`, `data-y` paper
   mm). They are not hit targets: a click goes through to the map.
-- **Status bar KPIs** (`editor-status-kpis`): controls, length, climb,
-  then the check count (`editor-status-checks`, amber, `data-count`).
+- **Status bar KPIs** (`editor-status-kpis`): controls, length, climb;
+  beside them the check count (`editor-status-checks`, amber,
+  `data-count`, shown when there is one).
   Length is the sum of the layer's leg polylines (`DerivedLeg.points`)
   × the map scale, the course's stored length until the viewer has
   derived it. Climb is the course's stored climb (`courses.climb`,
@@ -473,6 +476,8 @@ current, differing }`; a variation group or a slice-F site kind answers
 | unit (web) | `lib/editor/__tests__/snap.test.ts`, `hit.test.ts`, `state.test.ts`, `structure-edit.test.ts`, `write-client.test.ts` | §6.2 snap candidates and distance; §5 object targets (stream and UI-layer outline); §6 Escape order, multi-selection, object selection, tools; §6.3 / §6.6 `setLegGaps`, `setNumberHidden`; §7 object tokens |
 | E2E | `e2e/course-editor.spec.ts` "tools" | §6.1 ten controls in ten clicks with `K` (ghost, pending leg, no action bar, `Ctrl+Z`, `Esc`), reuse of a site; §6.5 Shift-click three controls → one add-to-course (one undo entry), §6.6 a site's notes written and reloaded; §6.3 a rim drag stores a circle gap, Reset gaps clears it; the layer draws what the tools store (D1's request path): a leg gap cuts the drawn leg, a circle gap is in the drawn site's cuts (`course-site` `data-cuts`), a hidden number leaves the site without its `course-label`; §6.4 / §7 an out-of-bounds area drawn, its border set, drawn on the canvas (purple inside it), printed (the all-controls `maps.pdf`: one page, the 709 hatch's clip-and-stroke operators present with the `all`-scoped area and gone when it is parked), selected again on the canvas, deleted and undone; a filter region hides the 505 path under it live (canvas ink probe) |
 | integration | `packages/api/src/__tests__/integration/course-print.test.ts` "course objects on the page" | §7 print: the row's "reference-raster pixel probe" of a printed course object is this test's page raster, not the E2E's — no HTTP route rasterises a composed page, and poppler is on the runner for the unit / integration jobs, not the E2E job (coordinator 2026-11-01) |
+| unit (web) | `packages/web/src/lib/editor/__tests__/checks.test.ts` | §8: sites and the explicit structure as `courseChecks` takes them, two controls 20 m apart, the server's `DESCRIPTION_STALE` merged in order, markers (rings, a leg cross, unpositioned skipped), length from the leg polylines, locate |
+| E2E | `e2e/course-editor.spec.ts` "Course editor checks" | §8: two controls 20 m apart → the count beside the section title, the row (`CONTROL_TOO_CLOSE`, "20 m"), a marker on each site, the status-bar count; a click selects the first site and centres the view on the pair's midpoint |
 | E2E | `e2e/course-editor-legacy.spec.ts` | the legacy page, unchanged (`chromium`) |
 
 ## Pending in this chapter
