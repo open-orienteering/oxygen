@@ -565,7 +565,7 @@ describe("frame culling (C13)", () => {
     expect(o.join("\n")).toMatch(/ f\*/);
   });
 
-  it("a stroke is padded by mitre × half width: a 100 µm line 150 µm outside is kept (pad 200), 2 mm outside is not", () => {
+  it("a stroke is padded by mitre × half width: a 100 µm line is kept up to margin 100 + pad 200 µm outside, 2 mm outside is not", () => {
     // pad = 50 × STROKE_MITRE_LIMIT; margin CULL_MARGIN_UM on top.
     const near = 10_000 + CULL_MARGIN_UM + 50 * 4 - 1;
     expect(run([stroke([near, 0, near, 5000])], frame).join("\n")).toContain(" S");
@@ -616,6 +616,21 @@ describe("frame culling (C13)", () => {
     const mesh = passStreamFromJson(base).glyphTable[0];
     const reach = Math.max(...glyphFormBBox(mesh).map(Math.abs));
     expect(draw([10_000 + CULL_MARGIN_UM + reach * 0.5, 5000, 1, 0, 1]).some((l) => l.includes("Do"))).toBe(true);
+  });
+
+  it("frameInStream at a non-right angle gives a box containing all four frame corners", () => {
+    const m = layerMatrix({ scaleRatio: 1.5, rotationDeg: 3.3, atPt: [100, 200] });
+    const f = { x: 20, y: 30, width: 500, height: 300 };
+    const b = frameInStream(f, m, [1000, -2000]);
+    const [a, bb, c, d, tx, ty] = m;
+    for (const [px, py] of [[f.x, f.y], [f.x + f.width, f.y], [f.x + f.width, f.y + f.height], [f.x, f.y + f.height]]) {
+      // forward map of a stream point back to the corner
+      const sx = (d * (px - tx) - c * (py - ty)) / (a * d - bb * c) + 1000, sy = (-bb * (px - tx) + a * (py - ty)) / (a * d - bb * c) - 2000;
+      expect(sx).toBeGreaterThanOrEqual(b.minX - 1e-6);
+      expect(sx).toBeLessThanOrEqual(b.maxX + 1e-6);
+      expect(sy).toBeGreaterThanOrEqual(b.minY - 1e-6);
+      expect(sy).toBeLessThanOrEqual(b.maxY + 1e-6);
+    }
   });
 
   it("frameInStream takes the frame back through the matrix: translation, scale, turn", () => {

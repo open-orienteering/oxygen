@@ -1043,11 +1043,13 @@ symbols on the window, unexplained ÷ ink and their codes:
   **44 % of Club-full A4's points lie more than 5 mm outside the printed
   frame** — the window takes whole objects within 20 mm of it, and long
   contours and large areas cross it. Omitting what cannot paint inside
-  the frame (row C13) is worth a further ≈ 33 %; it does not change the
-  stream's geometry inside the frame but changes what is written, so it
-  is its own row (decision 2026-10-24). 05 Appendix B's budgets are
-  re-based on these counts: about 0.9 MB for this page once C13 lands
-  (1.35 MB × 0.67), to be measured then.
+  the frame (row C13) did not change the stream's geometry inside the
+  frame but what is written, so it was its own row (decision 2026-10-24):
+  −32 % measured, 917 kB. 05 Appendix B's budgets are re-based on these
+  counts: 0.9 MB for this page (1.35 MB × 0.67 estimated, 0.92 MB
+  measured). The golden PDF tier needs `qpdf` and skipped on the dev
+  machine; its page scenes (the only golden coverage of culling under a
+  turned frame) run on CI.
 - **Time on the event loop (row C12, fixed).** A Club-full A3 page takes
   0.28–0.81 s to compose and 1.3–3.5 s to write per mode over three runs:
   within 05's "hundreds of ms" only for the smaller pages (Sprint

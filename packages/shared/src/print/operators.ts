@@ -72,7 +72,7 @@ export interface OperatorOptions {
   /**
    * The printed frame in the stream's own coordinates (paper µm, before the
    * origin is subtracted): what cannot paint inside it is left out
-   * (`cullBounds`, map-rendering.md §5.3 "Frame culling"). Unset = nothing is.
+   * (map-rendering.md §5.3 "Frame culling"). Unset = nothing is.
    */
   cull?: Bounds;
 }
@@ -479,24 +479,18 @@ export function passStreamOperators(stream: PassStream, opts: OperatorOptions): 
         let a = anchorAt(e, pathBounds(p.path));
         let body: string;
         if (p.slices) {
-          const parts: string[] = [];
-          let kept: Bounds | undefined;
+          const keptSegs: Segment[][] = [];
           for (const sl of p.slices) {
             const segs = sliceSegments(p.path, sl);
             if (cull && (segs.length === 0 || !meets(segmentsBounds(segs), cull, pad))) continue;
-            if (cull) kept = unionBounds(kept, segmentsBounds(segs));
-            segmentsOps(segs, a, parts);
+            keptSegs.push(segs);
           }
+          if (keptSegs.length === 0) break;
+          // Dropped slices: anchor at what is left, so the numbers stay short.
+          if (cull && keptSegs.length < p.slices.length) a = anchorAt(e, segmentsBounds(keptSegs.flat()));
+          const parts: string[] = [];
+          for (const segs of keptSegs) segmentsOps(segs, a, parts);
           if (parts.length === 0) break;
-          if (cull && parts.length < p.slices.length) {
-            // Dropped slices: anchor at what is left, so the numbers stay short.
-            a = anchorAt(e, kept!);
-            parts.length = 0;
-            for (const sl of p.slices) {
-              const segs = sliceSegments(p.path, sl);
-              if (segs.length > 0 && meets(segmentsBounds(segs), cull, pad)) segmentsOps(segs, a, parts);
-            }
-          }
           body = parts.join(" ");
         } else {
           const cut = cull ? strokeRuns(p.path, cull, pad) : undefined;
