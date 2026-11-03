@@ -69,6 +69,12 @@ export interface OperatorOptions {
   originUm?: [number, number];
   /** Paper µm per written coordinate unit; default 1. `mapLayerOperators` picks it (`layerUnitUm`). */
   unitUm?: number;
+  /**
+   * The printed frame in the stream's own coordinates (paper µm, before the
+   * origin is subtracted): what cannot paint inside it is left out
+   * (map-rendering.md §5.3 "Frame culling"). Unset = nothing is.
+   */
+  cull?: Bounds;
 }
 
 /** A PDF number: fixed-point (never JS exponent notation, ISO 32000 §7.3.3), trailing zeros dropped. */
@@ -171,11 +177,88 @@ function segmentsOps(segs: Segment[], e: Coords, out: string[], fill = false): v
   }
 }
 
-function pathOps(path: RenderPath, e: Coords, forceClosed: boolean): string {
+/**
+ * Safety margin round the printed frame, stream µm: anything within it of
+ * the frame is kept, so rounding at the clip edge never decides.
+ */
+export const CULL_MARGIN_UM = 100;
+
+const segmentBounds = (s: Segment): Bounds =>
+  s.kind === "line"
+    ? { minX: Math.min(s.x0, s.x1), minY: Math.min(s.y0, s.y1), maxX: Math.max(s.x0, s.x1), maxY: Math.max(s.y0, s.y1) }
+    : {
+        minX: Math.min(s.x0, s.cx0, s.cx1, s.x1),
+        minY: Math.min(s.y0, s.cy0, s.cy1, s.y1),
+        maxX: Math.max(s.x0, s.cx0, s.cx1, s.x1),
+        maxY: Math.max(s.y0, s.cy0, s.cy1, s.y1),
+      };
+
+/** `b` grown by `pad` meets the frame `cull` (unset: always). Control-point bounds contain the curve, so a miss is a miss. */
+const meets = (b: Bounds, cull: Bounds | undefined, pad = 0): boolean =>
+  !cull || (b.maxX + pad >= cull.minX && b.minX - pad <= cull.maxX && b.maxY + pad >= cull.minY && b.minY - pad <= cull.maxY);
+
+const segmentsBounds = (segs: Segment[]): Bounds => segs.reduce<Bounds | undefined>((b, s) => unionBounds(b, segmentBounds(s)), undefined)!;
+
+/**
+ * The runs of consecutive kept segments of one ring. A closed ring's last
+ * run joins its first when both reach the start vertex, so the join there
+ * stays a join.
+ */
+function keptRuns(segs: Segment[], keep: boolean[], closed: boolean): Segment[][] {
+  const runs: Segment[][] = [];
+  let cur: Segment[] | undefined;
+  segs.forEach((s, i) => {
+    if (!keep[i]) cur = undefined;
+    else if (cur) cur.push(s);
+    else runs.push((cur = [s]));
+  });
+  if (closed && runs.length > 1 && keep[0] && keep[segs.length - 1]) {
+    const first = runs.shift()!;
+    runs[runs.length - 1].push(...first);
+  }
+  return runs;
+}
+
+/** Bounds of the rings of `path` that meet `cull` (the whole path's when all do). */
+function fillBounds(path: RenderPath, cull: Bounds): Bounds {
+  let all = true;
+  let b: Bounds | undefined;
+  for (const ring of pathRings(path)) {
+    const segs = ringSegments(path, ring, false);
+    if (segs.length === 0) continue;
+    const rb = segmentsBounds(segs);
+    if (meets(rb, cull)) b = unionBounds(b, rb);
+    else all = false;
+  }
+  return all || !b ? pathBounds(path) : b;
+}
+
+/**
+ * An open-stroke path cut to the segment runs that can paint inside `cull`
+ * (each segment grown by `pad`); `undefined` when every segment stays — the
+ * path is then written as it is. Closed rings lose their `h` once cut.
+ */
+function strokeRuns(path: RenderPath, cull: Bounds, pad: number): { runs: Segment[][]; bounds: Bounds } | undefined {
+  const runs: Segment[][] = [];
+  let dropped = false;
+  for (const ring of pathRings(path)) {
+    const segs = ringSegments(path, ring, path.closed);
+    if (segs.length === 0) continue;
+    const keep = segs.map((s) => meets(segmentBounds(s), cull, pad));
+    if (keep.some((k) => !k)) dropped = true;
+    runs.push(...keptRuns(segs, keep, path.closed));
+  }
+  if (!dropped) return undefined;
+  return { runs, bounds: runs.length ? segmentsBounds(runs.flat()) : { minX: 0, minY: 0, maxX: 0, maxY: 0 } };
+}
+
+function pathOps(path: RenderPath, e: Coords, forceClosed: boolean, cull?: Bounds): string {
   const closed = path.closed || forceClosed;
   const out: string[] = [];
   for (const ring of pathRings(path)) {
     const segs = ringSegments(path, ring, false);
+    // Even-odd: a ring that covers no point of the frame leaves the parity inside it unchanged.
+    if (cull && segs.length > 0 && !meets(segmentsBounds(segs), cull)) continue;
     if (segs.length === 0) continue;
     segmentsOps(segs, e, out, forceClosed);
     if (closed) out.push("h");
@@ -242,7 +325,7 @@ function formMatrix(c: number, s: number, unit: number): Matrix {
  * relative to the one before (`cm` concatenates; the form's own drawing is
  * bracketed by `Do`); the rest draw the plain form under a full `cm`.
  */
-function glyphInstances(inst: ArrayLike<number>, mesh: GlyphMesh, unit: number, e: Coords, res: OperatorResources, out: string[]): void {
+function glyphInstances(inst: ArrayLike<number>, mesh: GlyphMesh, unit: number, e: Coords, res: OperatorResources, out: string[], keep: (i: number) => boolean = () => true): void {
   const key = (i: number) => {
     const c = inst[i + 2] * inst[i + 4], s = inst[i + 3] * inst[i + 4];
     return `${num(c, 6)} ${num(s, 6)}`;
@@ -264,6 +347,7 @@ function glyphInstances(inst: ArrayLike<number>, mesh: GlyphMesh, unit: number, 
     chain = undefined;
   };
   for (let i = 0; i < inst.length; i += 5) {
+    if (!keep(i)) continue;
     const x = Math.round((inst[i] - e.ox) * e.k), y = Math.round((inst[i + 1] - e.oy) * e.k);
     const c = inst[i + 2] * inst[i + 4], s = inst[i + 3] * inst[i + 4];
     const k = key(i);
@@ -324,6 +408,7 @@ export function passStreamOperators(stream: PassStream, opts: OperatorOptions): 
   const unit = opts.unitUm ?? 1;
   const e = coords(opts.originUm, unit);
   const path = (p: RenderPath, forceClosed = false) => pathOps(p, e, forceClosed);
+  const cull = opts.cull && { minX: opts.cull.minX - CULL_MARGIN_UM, minY: opts.cull.minY - CULL_MARGIN_UM, maxX: opts.cull.maxX + CULL_MARGIN_UM, maxY: opts.cull.maxY + CULL_MARGIN_UM };
   const out: string[] = [];
   let gs: GState = {};
   const stack: GState[] = [];
@@ -372,8 +457,8 @@ export function passStreamOperators(stream: PassStream, opts: OperatorOptions): 
   const emit = (p: Pass) => {
     switch (p.kind) {
       case "fill": {
-        const a = anchorAt(e, pathBounds(p.path));
-        const body = pathOps(p.path, a, true);
+        const a = anchorAt(e, cull ? fillBounds(p.path, cull) : pathBounds(p.path));
+        const body = pathOps(p.path, a, true, cull);
         if (!body) break;
         fill(p.colour);
         out.push(anchored(a, `${body} f*`));
@@ -382,23 +467,43 @@ export function passStreamOperators(stream: PassStream, opts: OperatorOptions): 
       case "stroke": {
         if (p.cap === "pointed" && ((p.taper?.startUm ?? 0) > 0 || (p.taper?.endUm ?? 0) > 0)) {
           const outline = strokeOutline(p.path, { widthUm: p.widthUm, join: p.join, taper: p.taper, slices: p.slices });
-          if (outline.coords.length === 0) break;
+          if (outline.coords.length === 0 || !meets(pathBounds(outline), cull)) break;
           const a = anchorAt(e, pathBounds(outline));
           fill(p.colour);
           out.push(anchored(a, `${pathOps(outline, a, true)} f`));
           break;
         }
+        // A stroke paints up to a mitre length of half the width beyond its geometry.
+        const pad = (p.widthUm / 2) * STROKE_MITRE_LIMIT;
         // Slices lie inside the path's control hull: its corner anchors them too.
-        const a = anchorAt(e, pathBounds(p.path));
+        let a = anchorAt(e, pathBounds(p.path));
         let body: string;
         if (p.slices) {
+          const keptSegs: Segment[][] = [];
+          for (const sl of p.slices) {
+            const segs = sliceSegments(p.path, sl);
+            if (cull && (segs.length === 0 || !meets(segmentsBounds(segs), cull, pad))) continue;
+            keptSegs.push(segs);
+          }
+          if (keptSegs.length === 0) break;
+          // Dropped slices: anchor at what is left, so the numbers stay short.
+          if (cull && keptSegs.length < p.slices.length) a = anchorAt(e, segmentsBounds(keptSegs.flat()));
           const parts: string[] = [];
-          for (const sl of p.slices) segmentsOps(sliceSegments(p.path, sl), a, parts);
+          for (const segs of keptSegs) segmentsOps(segs, a, parts);
           if (parts.length === 0) break;
           body = parts.join(" ");
         } else {
-          body = pathOps(p.path, a, false);
-          if (!body) break;
+          const cut = cull ? strokeRuns(p.path, cull, pad) : undefined;
+          if (cut) {
+            if (cut.runs.length === 0) break;
+            a = anchorAt(e, cut.bounds);
+            const parts: string[] = [];
+            for (const run of cut.runs) segmentsOps(run, a, parts);
+            body = parts.join(" ");
+          } else {
+            body = pathOps(p.path, a, false);
+            if (!body) break;
+          }
         }
         strokeColour(p.colour);
         lineStyle(p.widthUm, CAP[p.cap], JOIN[p.join]);
@@ -408,6 +513,20 @@ export function passStreamOperators(stream: PassStream, opts: OperatorOptions): 
       case "glyph": {
         const mesh = meshes.get(`${p.glyphId}/${p.partIdx}`);
         if (!mesh || p.instances.length === 0) break;
+        let keep: ((i: number) => boolean) | undefined;
+        if (cull) {
+          const [x0, y0, x1, y1] = glyphFormBBox(mesh);
+          // The form's farthest corner from its origin: a turn cannot take it farther.
+          const reach = Math.hypot(Math.max(Math.abs(x0), Math.abs(x1)), Math.max(Math.abs(y0), Math.abs(y1)));
+          const inst = p.instances;
+          keep = (i) => {
+            const r = reach * inst[i + 4];
+            return meets({ minX: inst[i], minY: inst[i + 1], maxX: inst[i], maxY: inst[i + 1] }, cull, r);
+          };
+          let any = false;
+          for (let i = 0; i < inst.length && !any; i += 5) any = keep(i);
+          if (!any) break;
+        }
         // A form XObject inherits the colours: set both, whichever its content paints.
         if (mesh.fills.length) fill(p.colour);
         if (mesh.strokes.length) strokeColour(p.colour);
@@ -416,7 +535,7 @@ export function passStreamOperators(stream: PassStream, opts: OperatorOptions): 
           save();
           out.push(`${path(p.clip!, true)} W* n`);
         }
-        glyphInstances(p.instances, mesh, unit, e, opts.resources, out);
+        glyphInstances(p.instances, mesh, unit, e, opts.resources, out, keep);
         if (clipped) restore();
         break;
       }
@@ -505,14 +624,37 @@ export function clipOperators(path: RenderPath, rule: "nonzero" | "evenodd", ori
 }
 
 /**
+ * The printed frame (page points) as bounds in the stream's own coordinates:
+ * the axis-aligned box of its four corners taken back through `matrix`
+ * (stream µm relative to `originUm` → points), so a turned map is culled
+ * by a box that contains its frame.
+ */
+export function frameInStream(frame: { x: number; y: number; width: number; height: number }, matrix: Matrix, originUm: [number, number]): Bounds {
+  const [a, b, c, d, tx, ty] = matrix;
+  const det = a * d - b * c;
+  let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
+  for (const [px, py] of [[frame.x, frame.y], [frame.x + frame.width, frame.y], [frame.x + frame.width, frame.y + frame.height], [frame.x, frame.y + frame.height]]) {
+    const dx = px - tx, dy = py - ty;
+    const x = (d * dx - c * dy) / det + originUm[0], y = (-b * dx + a * dy) / det + originUm[1];
+    minX = Math.min(minX, x);
+    maxX = Math.max(maxX, x);
+    minY = Math.min(minY, y);
+    maxY = Math.max(maxY, y);
+  }
+  return { minX, minY, maxX, maxY };
+}
+
+/**
  * The map layer: `q <matrix> cm 4 M <passes> Q`. `matrix` maps paper µm
  * relative to `originUm` to page points (window, print scale, rotation
- * folded in — research 05 §5.2; the page composer computes it). The
+ * folded in — research 05 §5.2; the page composer computes it); `frame`
+ * (page points) is the clip the layer is drawn under, which culls what
+ * cannot paint inside it. The
  * passes are written in `unitUm` (default `layerUnitUm(matrix)`) relative
  * to the origin moved onto that unit's grid; the written `cm` folds both
  * in, so the page is the same.
  */
-export function mapLayerOperators(stream: PassStream, opts: OperatorOptions & { matrix: Matrix }): string {
+export function mapLayerOperators(stream: PassStream, opts: Omit<OperatorOptions, "cull"> & { matrix: Matrix; frame?: { x: number; y: number; width: number; height: number } }): string {
   const unit = opts.unitUm ?? layerUnitUm(opts.matrix);
   const [ox, oy] = opts.originUm ?? [0, 0];
   // The origin on OCAD's 10 µm grid (a whole number of units when the unit divides it), so grid coordinates stay exact.
@@ -525,7 +667,7 @@ export function mapLayerOperators(stream: PassStream, opts: OperatorOptions & { 
     "q",
     cmOperator(m, 9),
     `${STROKE_MITRE_LIMIT} M`,
-    passStreamOperators(stream, { ...opts, originUm: [sx, sy], unitUm: unit }),
+    passStreamOperators(stream, { ...opts, originUm: [sx, sy], unitUm: unit, ...(opts.frame ? { cull: frameInStream(opts.frame, opts.matrix, [ox, oy]) } : {}) }),
     "Q",
   ].join("\n");
 }

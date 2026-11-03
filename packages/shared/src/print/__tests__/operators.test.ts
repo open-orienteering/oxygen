@@ -31,6 +31,8 @@ import {
   UM_TO_PT,
   layerMatrix,
   layerUnitUm,
+  frameInStream,
+  CULL_MARGIN_UM,
 } from "../operators.js";
 
 /** The contract fixtures' stack (0 white … 7 lower purple) with distinct CMYK. */
@@ -534,3 +536,108 @@ function decode(ops: string): { op: string; at: number[] }[] {
   }
   return out;
 }
+
+describe("frame culling (C13)", () => {
+  const frame = { minX: 0, minY: 0, maxX: 10_000, maxY: 10_000 };
+  const run = (passes: object[], cull: typeof frame | null = frame, res = resources().res) =>
+    lines(passStreamOperators(passStreamFromJson({ objectIdx: passes.map(() => 0), symbolIdx: passes.map(() => 0), passes } as never), { colours: stack, mode: "cmyk", resources: res, cull: cull ?? undefined })).filter(Boolean);
+  const square = (x: number, y: number, size = 1000) => [x, y, x + size, y, x + size, y + size, x, y + size];
+  const stroke = (coords: number[], extra: object = {}) => ({ kind: "stroke", colour: 5, path: { coords }, widthUm: 100, cap: "butt", join: "miter", ...extra });
+
+  it("without a frame nothing is dropped", () => {
+    expect(run([{ kind: "fill", colour: 5, path: { coords: square(50_000, 50_000) } }], null).join("\n")).toContain("f*");
+  });
+
+  it("a fill ring outside is omitted whole; one partly inside is kept whole", () => {
+    expect(run([{ kind: "fill", colour: 5, path: { coords: square(50_000, 0) } }])).toEqual([]);
+    const o = run([{ kind: "fill", colour: 5, path: { coords: square(9_500, 9_500, 5_000) } }]);
+    expect(o.join("\n")).toContain("q 1 0 0 1 9500 9500 cm 0 0 m 5000 0 l 5000 5000 l");
+  });
+
+  it("only the rings that miss the frame are dropped from a fill with holes, and the anchor follows", () => {
+    const outer = square(-1_000_000, -1_000_000, 3_000_000);
+    const far = square(900_000, 900_000);
+    const coords = [...outer, ...far];
+    const flags = [...outer.map(() => 0).slice(0, 4), ...far.map(() => 0).slice(0, 4)];
+    flags[4] = 16;
+    const o = run([{ kind: "fill", colour: 5, path: { coords, flags } }]);
+    expect(o.join("\n")).not.toContain("900000");
+    expect(o.join("\n")).toMatch(/ f\*/);
+  });
+
+  it("a stroke is padded by mitre × half width: a 100 µm line is kept up to margin 100 + pad 200 µm outside, 2 mm outside is not", () => {
+    // pad = 50 × STROKE_MITRE_LIMIT; margin CULL_MARGIN_UM on top.
+    const near = 10_000 + CULL_MARGIN_UM + 50 * 4 - 1;
+    expect(run([stroke([near, 0, near, 5000])], frame).join("\n")).toContain(" S");
+    expect(run([stroke([near + 2000, 0, near + 2000, 5000])], frame)).toEqual([]);
+  });
+
+  it("an open stroke keeps the segment runs near the frame and starts a new subpath after a gap", () => {
+    const o = run([stroke([0, 0, 5000, 0, 50_000, 0, 50_000, 50_000, 0, 50_000, 0, 5000])]).join("\n");
+    expect(o).toContain("0 0 m 5000 0 l 50000 0 l");
+    expect(o.match(/ m /g)).toHaveLength(2);
+    expect(o).not.toContain("50000 50000");
+  });
+
+  it("a closed ring partly outside is cut to open runs, the run through the start vertex kept as one", () => {
+    const far = 5_000_000;
+    // Square 0..far: the edges along the axes touch the frame, the others do not.
+    const o = run([{ kind: "stroke", colour: 5, path: { coords: [0, 0, far, 0, far, far, 0, far], closed: true }, widthUm: 100, cap: "butt", join: "miter" }]).join("\n");
+    expect(o).not.toContain(" h");
+    expect(o.match(/ m /g)).toHaveLength(1);
+    expect(o).toContain(" 0 l");
+  });
+
+  it("a stroke whose segments all meet the frame is written as before, closed by h", () => {
+    const o = run([{ kind: "stroke", colour: 5, path: { coords: [0, 0, 5000, 0, 5000, 5000], closed: true }, widthUm: 100, cap: "butt", join: "miter" }]);
+    expect(o.at(-1)).toMatch(/h S$/);
+  });
+
+  it("dash slices outside are omitted, the slices inside kept", () => {
+    const o = run([stroke([0, 0, 2_000_000, 0], { slices: [{ seg0: 0, t0: 0, seg1: 0, t1: 0.001 }, { seg0: 0, t0: 0.5, seg1: 0, t1: 0.501 }] })]);
+    expect(o.join("\n").match(/ m /g)).toHaveLength(1);
+    const none = run([stroke([0, 0, 2_000_000, 0], { slices: [{ seg0: 0, t0: 0.5, seg1: 0, t1: 0.501 }] })]);
+    expect(none).toEqual([]);
+  });
+
+  it("a tapered outline outside is omitted", () => {
+    const t = { kind: "stroke", colour: 5, path: { coords: [50_000, 0, 60_000, 0] }, widthUm: 250, cap: "pointed", join: "round", taper: { startUm: 750, endUm: 750 } };
+    expect(run([t])).toEqual([]);
+  });
+
+  it("glyph instances outside are omitted by the form's reach × scale; the pass vanishes when none is left", () => {
+    const base = renderFixtures["glyph-instances"];
+    const glyph = (instances: number[]) => passStreamFromJson({ ...base, objectIdx: [0], symbolIdx: [418], passes: [{ kind: "glyph", colour: 2, glyphId: 1, partIdx: 0, instances }] });
+    const { res } = resources();
+    const draw = (instances: number[], cull = frame) => lines(passStreamOperators(glyph(instances), { colours: stack, mode: "cmyk", resources: res, cull })).filter(Boolean);
+    expect(draw([5000, 5000, 1, 0, 1, 900_000, 5000, 1, 0, 1]).filter((l) => l.includes("Do"))).toHaveLength(1);
+    expect(draw([900_000, 5000, 1, 0, 1])).toEqual([]);
+    // Outside the frame by less than the glyph's reach: kept.
+    const mesh = passStreamFromJson(base).glyphTable[0];
+    const reach = Math.max(...glyphFormBBox(mesh).map(Math.abs));
+    expect(draw([10_000 + CULL_MARGIN_UM + reach * 0.5, 5000, 1, 0, 1]).some((l) => l.includes("Do"))).toBe(true);
+  });
+
+  it("frameInStream at a non-right angle gives a box containing all four frame corners", () => {
+    const m = layerMatrix({ scaleRatio: 1.5, rotationDeg: 3.3, atPt: [100, 200] });
+    const f = { x: 20, y: 30, width: 500, height: 300 };
+    const b = frameInStream(f, m, [1000, -2000]);
+    const [a, bb, c, d, tx, ty] = m;
+    for (const [px, py] of [[f.x, f.y], [f.x + f.width, f.y], [f.x + f.width, f.y + f.height], [f.x, f.y + f.height]]) {
+      // forward map of a stream point back to the corner
+      const sx = (d * (px - tx) - c * (py - ty)) / (a * d - bb * c) + 1000, sy = (-bb * (px - tx) + a * (py - ty)) / (a * d - bb * c) - 2000;
+      expect(sx).toBeGreaterThanOrEqual(b.minX - 1e-6);
+      expect(sx).toBeLessThanOrEqual(b.maxX + 1e-6);
+      expect(sy).toBeGreaterThanOrEqual(b.minY - 1e-6);
+      expect(sy).toBeLessThanOrEqual(b.maxY + 1e-6);
+    }
+  });
+
+  it("frameInStream takes the frame back through the matrix: translation, scale, turn", () => {
+    expect(frameInStream({ x: 10, y: 20, width: 100, height: 50 }, [0.5, 0, 0, 0.5, 5, 5], [1000, 2000])).toEqual({ minX: 1010, minY: 2030, maxX: 1210, maxY: 2130 });
+    const b = frameInStream({ x: 0, y: 0, width: 10, height: 10 }, layerMatrix({ scaleRatio: 1, rotationDeg: 90, atPt: [0, 0] }), [0, 0]);
+    expect(b.minX).toBeCloseTo(0, 6);
+    expect(b.maxX).toBeCloseTo(10 / UM_TO_PT, 3);
+    expect(b.minY).toBeCloseTo(-10 / UM_TO_PT, 3);
+  });
+});

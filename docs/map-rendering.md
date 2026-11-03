@@ -1876,6 +1876,33 @@ instance, and the tracker restores its state at a clip's `Q` (anchors and
 instances change nothing but the CTM). Consecutive passes of one colour share one colour operator
 (05 Appendix B's size arithmetic).
 
+**Frame culling** (C13, 2026-11-03). The print window takes whole
+objects within 20 mm of the frame, so a page holds long contours and
+large areas that cross it and rings, dashes and instances far outside it
+(44 % of Club-full A4's points lie more than 5 mm outside). The page
+composer passes the printed frame (`writePage` → `mapLayerOperators`'s
+`frame`, page points); `frameInStream` takes its four corners back
+through the layer matrix into the stream's coordinates — for a turned map
+the axis-aligned box of the turned frame, which contains it — and
+`passStreamOperators` gets it as `cull` (grown by `CULL_MARGIN_UM` =
+100 µm, so rounding at the clip edge never decides). It omits, by the
+*control-point* bounds (a Bézier lies inside its hull, so a miss is a
+miss) and without moving any point that is written:
+
+| Pass | Omitted when its padded bounds miss the frame |
+|---|---|
+| `fill` | a **ring**, bounds as is. Even-odd: a ring that covers no point of the frame cannot change the parity inside it, outer or hole. The anchor follows the rings that stay |
+| `stroke` | an open stroke: a **segment**, grown by `STROKE_MITRE_LIMIT × widthUm / 2` (mitre, the farthest a join paints). The kept segments form runs, one subpath each; a closed ring cut this way loses its `h`, and its last run joins its first when both reach the start vertex, so the join there stays a join. A dropped neighbour of a kept segment lies outside by the same padding, so a join or cap cut at the shared vertex paints nothing inside. A stroke with no dropped segment is written as before |
+| `stroke` with `slices` | a **slice**, grown by the same padding |
+| `stroke`, pointed + taper | the whole **outline**, bounds as is |
+| `glyph` | an **instance**: its position grown by the form's reach (the farthest corner of `glyphFormBBox` from the origin, strokes and mitres in) × the instance's scale — a turn cannot take the form farther. Turn classes are counted over all instances, so the form choice is the unculled one's; a pass with no instance left writes nothing, not even its colour |
+
+Not culled: `text` and `hatch` (a text is one pass of few glyphs; a
+hatch is clipped to its area, whose bounds would be the test — both left
+for a measurement that asks for them), clips and filter-mask frames. A
+page is unchanged but for its bytes: the golden tier and the corpus
+pages' shapes and ratios are equal to C11's.
+
 **Clips.** `clipOperators(path, rule)` writes `<rings> W n` or `W* n` —
 the primitive for the composer's frame clip.
 
@@ -1905,7 +1932,7 @@ with angles; the outline fallback; per scene no `rg` in `cmyk` and no
 values; the layer `cm` for a 1:15 000 map at 1:10 000 and a rotation,
 never in exponent notation (a 0.01° tilt is `0.000000495`, not `4.95e-7`);
 round caps and joins on the fallback halo;
-`W n` / `W* n`. C11 adds: the anchor (`q 1 0 0 1 ax ay cm … Q`) on a
+`W n` / `W* n`. C13 adds ("Frame culling"): a ring, slice, tapered outline and glyph instance outside the frame omitted, one partly inside kept whole, the stroke padding (mitre × half width), open-stroke segment runs and the wrap-around run of a cut closed ring, a stroke with nothing to drop still closed by `h`, `frameInStream` under translation, scale and a quarter turn. C11 adds: the anchor (`q 1 0 0 1 ax ay cm … Q`) on a
 fill, a Bézier stroke, a dash pass and a pointed outline, none at `0 0`;
 a fill ring's closing line left to `h`, a closed stroke's kept; `layerUnitUm` per
 scale ratio (≤ 5 µm printed, a whole fraction of 10 µm); `w` / `Tf` /
