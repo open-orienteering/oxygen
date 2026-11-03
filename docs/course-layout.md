@@ -117,8 +117,8 @@ replaced (`course-editor.md` §3); numeric fields commit on blur / Enter;
 there is no debounce. Sheets and templates carry **no version token**:
 two setters on one sheet overwrite each other's whole snapshot, last
 writer wins, as with `MapLayoutEditor` (G1 defined tokens for courses and
-controls only; D11's presence is the mitigation; a token would come with
-a migration). The status bar's save state is the editor's.
+controls only; D11's presence is the mitigation; a token comes with a
+migration, which D8's row is asked to consider — coordinator 2026-11-03). The status bar's save state is the editor's.
 
 **Keys** (08 §5.3 Layout column): `V` select, `H` header, `T` text, `D`
 description block, `W` white-out, `O` white-out outside, `L` line, `R`
