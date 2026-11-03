@@ -522,7 +522,9 @@ the selection and the undo history (`editorReducer`'s `mode`).
 - **No tool rail** on the desktop / tablet layout in Field mode: the
   setter in the field checks and moves, the keys still arm the tools. The
   phone's `+` (§10) is the field's way to create.
-- **Offline** (decision log, D9): no outbox covers `control.update` /
+- **Offline** (decision log, D9). The row asked for "view + check-off
+  only while offline" when no queue covers the moves; that cannot hold
+  yet either, because check-off is itself a mutation: no outbox covers `control.update` /
   `control.check` (the offline outbox carries the timing journal's event
   types; course mutations are cloud-owned and "unavailable offline",
   `offline-architecture.md`), so Field mode offline **views only**:
@@ -530,7 +532,8 @@ the selection and the undo history (`editorReducer`'s `mode`).
   need a connection.", the nudge pad, the check toggles and `+` are
   disabled, a drag snaps back without a write. The map keeps drawing from
   the cached document (B4, `map-storage.md` §7.1). A queue for these
-  writes, with the field-move rebase of §3 on replay, is a later row.
+  writes, with the field-move rebase of §3 on replay, is row D9c (after
+  the offline architecture's phase 2).
 
 ## 10. Phone and tablet
 
@@ -593,6 +596,8 @@ the legacy editor untouched — `mobile-layout.md` "Course editor on touch"):
 | Dragging a control by touch | Drawn **48 px above the finger** on a dashed stem (`editor-touch-handle`) so the finger never covers it; dropped where it is drawn; leg lengths and the affects-chip as with a mouse |
 | Two fingers | Always pan / zoom the map; a second finger cancels a pending press or an armed control drag, and selections are suppressed for 400 ms after (today's rule) |
 | A control's number | Drags only when its control is selected; otherwise as an unselected control |
+| Tap a course object | Selects it (V's binding: its outline and handles); a tap elsewhere is a map tap |
+| Two fingers, one on a handle of the **selected area object** (or line) | Scale it about its centroid by the fingers' spread (`selectBinding.onPinch`, the handle reach doubled to 14 px): drawn live as a draft, one `courseObject.update` and one undo entry on lift, nothing when the spread stayed within 1 %; the map does not pinch with it |
 
 Hit tolerance is **12 CSS px** on a coarse pointer (6 with a mouse) — the
 "large hit areas" of 08 §5.5 — on the same `editorHitAt` path (§5).
@@ -663,7 +668,8 @@ current, differing }`; a variation group or a slice-F site kind answers
 | unit (web) | `lib/editor/__tests__/field.test.ts` | §9, §10: the fix through `mapGeo` and back (a SWEREF99 TM frame), accuracy in paper mm, distance at two scales, bearing from paper north with the wrap at north, the list in course order (blank without a fix or a position), the nudge steps (0.1 mm, 1 m at 1:10 000 / 1:15 000, µm rounding), detent heights and snapping, the band offset, the initial mode |
 | unit (web) | `lib/editor/__tests__/touch.test.ts` | §10 gestures: a selected control drags at once; an unselected one: tap selects, drag past the slop pans, long press selects and moves (also when a late move fires it), a second finger cancels; the lift |
 | unit (web) | `lib/editor/__tests__/state.test.ts`, `write-client.test.ts` | §9: Field entered and left keeping the selection, Layout still not; `checkControl` sends no token and seeds the control's |
-| E2E | `e2e/field-mode.spec.ts` (`mobile` project: Pixel 7, `vector`) | §10: opens in Field mode, full-bleed, compact bar and overflow, no rail / inspector, ≥ 44 px targets; §9: `setGeolocation` → the marker with its accuracy, every row's distance and bearing = the paper geometry at one scale; detents (tap, handle drag to full) and a list row's control centred above the sheet; a quick drag on an unselected control pans without selecting, a long press selects, shows the stem and drops the control 48 px above the finger (persisted); two fingers cancel a pending press and zoom; nudge 2 × 0.1 mm, 1 m, the x field, four undos back; `+` → `K` → Place above the sheet adds a site, Done; check-off persists over a reload; offline: the notice, `+` disabled, a long-press move snaps back. "Field mode on a desktop" (desktop viewport in the same spec): the mode switch, no rail, the list's distance after a fix, check-off and `Ctrl+Z`, back to Course mode |
+| unit (web) | `pages/editor/__tests__/bindings.test.ts` "pinch-scale" | §10: `scaleAbout` (handles scale with it), a finger on the ring starts it, the draft per move, one write on lift, nothing selected / cancelled / within 1 % writes nothing |
+| E2E | `e2e/field-mode.spec.ts` (`mobile` project: Pixel 7, `vector`) | §10: opens in Field mode, full-bleed, compact bar and overflow, no rail / inspector, ≥ 44 px targets; §9: `setGeolocation` → the marker with its accuracy, every row's distance and bearing = the paper geometry at one scale; detents (tap, handle drag to full) and a list row's control centred above the sheet; a quick drag on an unselected control pans without selecting, a long press selects, shows the stem and drops the control 48 px above the finger (persisted); two fingers cancel a pending press and zoom; nudge 2 × 0.1 mm, 1 m, the x field, four undos back; `+` → `K` → Place above the sheet adds a site, Done; a tap selects an `oob_area` (created through `courseObject.create`) and two fingers on its corners scale it by their spread, the map's zoom unchanged; check-off persists over a reload; offline: the notice, `+` disabled, a long-press move snaps back. "Field mode on a desktop" (desktop viewport in the same spec): the mode switch, no rail, the list's distance after a fix, check-off and `Ctrl+Z`, back to Course mode |
 
 ## Pending in this chapter
 
@@ -686,13 +692,14 @@ current, differing }`; a variation group or a slice-F site kind answers
   with a ×2.5 matrix about the dragged point into a ~120 px offscreen
   `RenderTarget` (with stencil), drawn into a circle above the finger, over
   the same resident visible set — but it touches `map-gl/renderer.ts`,
-  `engine.ts` and `VectorMapLayer.tsx`, D7's area while D7 runs; a row
+  `engine.ts` and `VectorMapLayer.tsx`, D7's area while D7 runs: row D9b,
   after D7.
-- **Pinch-scale of an area object** on its handle ring (08 §5.5
-  "Gestures") — needs a two-finger hook in the tool bindings
-  (`tools/bindings.ts`, D5's file); two fingers pan / zoom meanwhile.
+- **One-finger drag of a course object on touch** (its body or a
+  vertex): a tap selects it and two fingers scale it (§10); moving it is
+  the mouse's, or a later row with the object's own nudge.
 - **Offline writes in Field mode** (§9 "Offline"): a queue for
-  `control.update` / `control.check` with the field-move rebase on replay.
+  `control.update` / `control.check` with the field-move rebase on replay
+  (row D9c).
 - **Tablet bottom action bar** (08 §5.5 "Tablet: collapsible side
   inspector + bottom action bar"): a tablet keeps the desktop chrome and
   the action bar under the selection, with the touch gestures (§10).
