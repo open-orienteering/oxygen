@@ -54,6 +54,8 @@ export function TemplateKeySection(p: {
     const write = (seq: number) => async () => {
       await utils.client.mapTemplate.applyToCourses.mutate({ templateId: seq, courseIds: [c.seq] });
       refresh();
+      // `run` answers undefined for a failed write: a successful one answers something.
+      return true;
     };
     if ((await p.run(write(to))) !== undefined) p.record(write(from), write(to));
   };
@@ -168,6 +170,7 @@ export function ClassOverridesSection(p: {
       void utils.courseMap.list.invalidate();
       void utils.courseMap.resolveSheet.invalidate();
       void utils.mapTemplate.list.invalidate();
+      return true;
     };
     if ((await p.run(write(next))) !== undefined) p.record(write(prev), write(next));
   };
