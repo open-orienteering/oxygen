@@ -5,7 +5,7 @@
  * click-to-locate target.
  */
 
-import { useMemo } from "react";
+import { useCallback, useMemo } from "react";
 import { course, type ControlInfo } from "@oxygen/shared";
 import { trpc } from "../../lib/trpc";
 import type { ToolShape } from "../../components/MapViewer";
@@ -62,5 +62,6 @@ export function useCourseChecks(input: CourseChecksInput): CourseChecksResult {
   const checks = useMemo(() => mergeChecks(client, selected ? server.data : []), [client, server.data, selected]);
   const markers = useMemo(() => checkMarkers(checks, siteById, ringMm), [checks, siteById, ringMm]);
   const lengthM = useMemo(() => legsLengthM(ownDerivation, mapScale), [ownDerivation, mapScale]);
-  return { checks, markers, lengthM, locate: (c) => locateTarget(c, siteById) };
+  const locate = useCallback((c: EditorCheck) => locateTarget(c, siteById), [siteById]);
+  return { checks, markers, lengthM, locate };
 }

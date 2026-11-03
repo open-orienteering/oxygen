@@ -833,11 +833,12 @@ export function EditorPage() {
     structure, sites, controls: controlList.data, document: mapDoc, mapScale, objects: objectsInView,
     derivation: courseInfo?.derivation, ringMm: courseInfo?.metrics?.circleRadiusMm ?? 2.5,
   });
+  const locateSite = courseChecks.locate;
   const locateCheck = useCallback((c: EditorCheck) => {
-    const { selectId, centre } = courseChecks.locate(c);
+    const { selectId, centre } = locateSite(c);
     if (selectId !== null) dispatch({ type: "select", id: selectId });
     if (centre) setViewRequest((v) => ({ key: (v?.key ?? 0) + 1, centre }));
-  }, [courseChecks]);
+  }, [locateSite]);
 
   // ─── The action bar ──────────────────────────────────────
   const ends = useMemo(() => (structure ? effectiveEnds(structure, sites) : { start: null, finish: null }), [structure, sites]);
