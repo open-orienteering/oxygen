@@ -3,7 +3,8 @@
  * (docs/course-layer.md §5): controls with their positions (drag and
  * pending moves applied), the highlighted courses, their label offsets,
  * the stored structure's authored leg gaps and hidden numbers and the
- * controls' authored circle cuts. Pure; the worker adds the
+ * controls' authored circle cuts, and the editor's provisional visit.
+ * Pure; the worker adds the
  * document context and the cut features (docs/map-rendering.md §5.2
  * "Dynamic bucket").
  */
@@ -35,6 +36,26 @@ export interface RequestCourse {
   hiddenNumbers?: readonly number[];
 }
 
+/** The provisional visit's site id: not a control, never hit-tested (docs/course-editor.md §6.1). */
+export const PROVISIONAL_SITE_ID = "provisional";
+
+/**
+ * Where an armed `S` / `K` / `M` would place (docs/course-editor.md §6.1):
+ * spliced into the single highlighted course, so the layer draws the
+ * pending legs, their cuts and the numbers as the click would write them.
+ */
+export interface ProvisionalVisit {
+  role: course.CourseSite["kind"];
+  /** Control-sequence position a control goes to (its Control-typed entries, repeats counted); start and finish ignore it. */
+  insertAt: number;
+  /** The cursor, paper mm. */
+  pt: Pt;
+  /** An existing site reused at the visit: spliced by its id, no site added. */
+  reuseId?: string;
+  /** The new site's code (the next code of the allocation). */
+  code?: string;
+}
+
 export interface CourseRequestInput {
   controls: readonly RequestControl[];
   /** Paper mm per control id; a control without one is not positioned and is not drawn. */
@@ -52,6 +73,36 @@ export interface CourseRequestInput {
   exclude?: ReadonlySet<string>;
   /** Course objects in scope of the view (`courseObjectsForView`), in draw order (course-layer.md §8.3). */
   courseObjects?: readonly course.CourseObject[];
+  /** The armed tool's visit; drawn with exactly one highlighted course only. */
+  provisional?: ProvisionalVisit | null;
+}
+
+/**
+ * The course's control ids with the provisional visit spliced in: a control
+ * before the `insertAt`-th control visit (else before the trailing finish,
+ * else last); a start replaces the course's start (else leads); a finish
+ * replaces its finish (else ends) — the structure the click writes.
+ */
+export function spliceProvisional(ids: readonly string[], typeOf: (id: string) => RequestControl["type"] | undefined, v: ProvisionalVisit): string[] {
+  const id = v.reuseId ?? PROVISIONAL_SITE_ID;
+  const out = [...ids];
+  const lastFinish = () => out.map((x) => typeOf(x)).lastIndexOf("Finish");
+  if (v.role === "start") {
+    const i = out.findIndex((x) => typeOf(x) === "Start");
+    if (i >= 0) out[i] = id;
+    else out.unshift(id);
+  } else if (v.role === "finish") {
+    const i = lastFinish();
+    if (i >= 0) out[i] = id;
+    else out.push(id);
+  } else {
+    let seen = 0;
+    let i = out.findIndex((x) => typeOf(x) === "Control" && seen++ === v.insertAt);
+    if (i < 0) i = lastFinish();
+    if (i < 0) i = out.length;
+    out.splice(i, 0, id);
+  }
+  return out;
 }
 
 /**
@@ -82,14 +133,19 @@ export function courseLayerRequest(input: CourseRequestInput): CourseLayerReques
     if (!p || (p.x === 0 && p.y === 0)) continue;
     sites.push({ id: c.id, code: c.code, kind: KIND[c.type], x: p.x, y: p.y, ...(c.circleGaps?.length ? { circleGaps: c.circleGaps } : {}) });
   }
-  const drawn = new Set(sites.map((s) => s.id));
-
   const highlighted = input.courses.filter((c) => c.highlight || c.name === input.highlightCourseName);
+  const pv = highlighted.length === 1 ? input.provisional ?? null : null;
+  if (pv && !pv.reuseId) sites.push({ id: PROVISIONAL_SITE_ID, code: pv.code ?? "", kind: pv.role, x: pv.pt.x, y: pv.pt.y });
+  const drawn = new Set(sites.map((s) => s.id));
+  const typeOf = new Map(input.controls.map((c) => [c.id, c.type] as const));
+
   const structures: course.CourseStructure[] = highlighted.map((c) => {
     const hidden = new Set((c.hiddenNumbers ?? []).map(String));
-    const items: course.CourseItem[] = c.controls.map((siteId, i) => {
+    const ids = pv ? spliceProvisional(c.controls, (id) => typeOf.get(id), pv) : c.controls;
+    const items: course.CourseItem[] = ids.map((siteId, i) => {
       const item: course.CourseItem = { siteId };
-      const gaps = i > 0 ? c.legGaps?.[`${c.controls[i - 1]}>${siteId}`] : undefined;
+      // Keyed by the drawn neighbours: the leg a provisional visit splits is not the stored one.
+      const gaps = i > 0 ? c.legGaps?.[`${ids[i - 1]}>${siteId}`] : undefined;
       if (gaps?.length) item.leg = { gaps };
       if (hidden.has(siteId)) item.numberHidden = true;
       return item;

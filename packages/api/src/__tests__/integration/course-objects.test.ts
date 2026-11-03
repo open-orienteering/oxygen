@@ -110,6 +110,11 @@ describe("courseObject CRUD", () => {
     expect(moved).toMatchObject({ id: o.id, kind: "oob_area", props: { border: "dashed" }, scope: { courses: [courseB], classes: [] } });
     expect(moved.geometry[0]).toEqual({ x: 11, y: 10 });
     expect(BigInt(moved.version)).toBeGreaterThan(BigInt(o.version));
+    // The dangerous area (course-layer.md §8.1): `hatch` round-trips; a third hatch is refused.
+    const dangerous = await caller.courseObject.update({ id: o.id, props: { hatch: "710", border: "dashed" } });
+    expect(dangerous.props).toEqual({ hatch: "710", border: "dashed" });
+    expect((await caller.courseObject.list()).find((x) => x.id === o.id)?.props).toEqual({ hatch: "710", border: "dashed" });
+    await expect(caller.courseObject.update({ id: o.id, props: { hatch: "711" } })).rejects.toMatchObject({ code: "BAD_REQUEST" });
     await expect(caller.courseObject.update({ id: o.id, props: { symbol: "711" } })).rejects.toMatchObject({ code: "BAD_REQUEST" });
     await expect(caller.courseObject.update({ id: 99999, props: {} })).rejects.toMatchObject({ code: "NOT_FOUND" });
     await expect(caller.courseObject.update({ id: o.id, geometry: null })).rejects.toMatchObject({ code: "BAD_REQUEST" });

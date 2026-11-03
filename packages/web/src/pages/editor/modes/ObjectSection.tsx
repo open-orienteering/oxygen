@@ -61,14 +61,23 @@ function KindProps(p: ObjectSectionProps) {
   switch (o.kind) {
     case "oob_area":
       return (
-        <label className="block text-[11px] text-slate-500">{t("propBorder")}
-          <select data-testid="editor-prop-border" className={FIELD} value={o.props.border ?? "none"}
-            onChange={(e) => p.onProps({ border: e.target.value as "none" | "solid" | "dashed" })}>
-            <option value="none">{t("borderNone")}</option>
-            <option value="solid">{t("borderSolid")}</option>
-            <option value="dashed">{t("borderDashed")}</option>
-          </select>
-        </label>
+        <div className="space-y-1">
+          <label className="block text-[11px] text-slate-500">{t("propHatch")}
+            <select data-testid="editor-prop-hatch" className={FIELD} value={o.props.hatch ?? "709"}
+              onChange={(e) => p.onProps({ ...o.props, hatch: e.target.value as "709" | "710" })}>
+              <option value="709">{t("hatch709")}</option>
+              <option value="710">{t("hatch710")}</option>
+            </select>
+          </label>
+          <label className="block text-[11px] text-slate-500">{t("propBorder")}
+            <select data-testid="editor-prop-border" className={FIELD} value={o.props.border ?? "none"}
+              onChange={(e) => p.onProps({ ...o.props, border: e.target.value as "none" | "solid" | "dashed" })}>
+              <option value="none">{t("borderNone")}</option>
+              <option value="solid">{t("borderSolid")}</option>
+              <option value="dashed">{t("borderDashed")}</option>
+            </select>
+          </label>
+        </div>
       );
     case "oob_line":
       return (

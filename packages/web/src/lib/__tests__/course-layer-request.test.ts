@@ -1,6 +1,6 @@
 import { describe, it, expect } from "vitest";
 import type { course } from "@oxygen/shared";
-import { courseLayerRequest, courseObjectsForView, type CourseRequestInput, type RequestControl } from "../course-layer-request";
+import { courseLayerRequest, courseObjectsForView, PROVISIONAL_SITE_ID, type CourseRequestInput, type ProvisionalVisit, type RequestControl } from "../course-layer-request";
 
 const ctl = (id: string, type: RequestControl["type"] = "Control", visible?: boolean): RequestControl => ({ id, code: `c${id}`, type, ...(visible === undefined ? {} : { visible }) });
 const CONTROLS = [ctl("S", "Start"), ctl("1"), ctl("2"), ctl("3"), ctl("F", "Finish")];
@@ -97,6 +97,68 @@ describe("courseLayerRequest (docs/course-layer.md §5)", () => {
     }));
     expect(r.sites.find((s) => s.id === "1")!.circleGaps).toBeUndefined();
     expect(structures(r)[0].items.every((i) => i.leg === undefined)).toBe(true);
+  });
+});
+
+describe("the editor's provisional visit (docs/course-editor.md §6.1)", () => {
+  const P = PROVISIONAL_SITE_ID;
+  const at = { x: 70, y: 20 };
+  const visit = (over: Partial<ProvisionalVisit>): ProvisionalVisit => ({ role: "control", insertAt: 0, pt: at, code: "47", ...over });
+  const items = (r: ReturnType<typeof courseLayerRequest>) => structures(r)[0].items.map((i) => i.siteId);
+
+  it("a control at the insertion point: a site at the cursor and an item before the control-sequence position", () => {
+    const r = courseLayerRequest(base({ provisional: visit({ insertAt: 1 }) }));
+    expect(items(r)).toEqual(["S", "1", P, "2", "F"]);
+    expect(r.sites.find((s) => s.id === P)).toEqual({ id: P, code: "47", kind: "control", x: 70, y: 20 });
+    expect(r.viewOptions.labelMode).toBe("sequence");
+    expect(items(courseLayerRequest(base({ provisional: visit({ insertAt: 0 }) })))).toEqual(["S", P, "1", "2", "F"]);
+  });
+
+  it("past the last control: before the finish, else at the end", () => {
+    expect(items(courseLayerRequest(base({ provisional: visit({ insertAt: 2 }) })))).toEqual(["S", "1", "2", P, "F"]);
+    expect(items(courseLayerRequest(base({ provisional: visit({ insertAt: 9 }) })))).toEqual(["S", "1", "2", P, "F"]);
+    const open = courseLayerRequest(base({ courses: [{ name: "A", controls: ["S", "1"], highlight: true }], provisional: visit({ insertAt: 1 }) }));
+    expect(items(open)).toEqual(["S", "1", P]);
+  });
+
+  it("counts repeated visits of a control as positions", () => {
+    const r = courseLayerRequest(base({ courses: [{ name: "A", controls: ["S", "1", "2", "1", "F"], highlight: true }], provisional: visit({ insertAt: 2 }) }));
+    expect(items(r)).toEqual(["S", "1", "2", P, "1", "F"]);
+  });
+
+  it("a start replaces the course's start (else leads); a finish replaces its finish (else ends)", () => {
+    expect(items(courseLayerRequest(base({ provisional: visit({ role: "start" }) })))).toEqual([P, "1", "2", "F"]);
+    expect(items(courseLayerRequest(base({ provisional: visit({ role: "finish" }) })))).toEqual(["S", "1", "2", P]);
+    const bare = base({ courses: [{ name: "A", controls: ["1", "2"], highlight: true }] });
+    expect(items(courseLayerRequest({ ...bare, provisional: visit({ role: "start" }) }))).toEqual([P, "1", "2"]);
+    expect(items(courseLayerRequest({ ...bare, provisional: visit({ role: "finish" }) }))).toEqual(["1", "2", P]);
+    expect(courseLayerRequest(base({ provisional: visit({ role: "finish" }) })).sites.find((s) => s.id === P)?.kind).toBe("finish");
+  });
+
+  it("a reused site is spliced by its id and adds no site", () => {
+    const r = courseLayerRequest(base({ provisional: visit({ insertAt: 1, reuseId: "3" }) }));
+    expect(items(r)).toEqual(["S", "1", "3", "2", "F"]);
+    expect(r.sites.map((s) => s.id)).toEqual(["S", "1", "2", "3", "F"]);
+  });
+
+  it("the leg the visit splits loses its stored gaps; the others keep theirs", () => {
+    const gaps = [{ from: 0.4, to: 0.6 }];
+    const r = courseLayerRequest(base({
+      courses: [{ name: "A", controls: ["S", "1", "2", "F"], highlight: true, legGaps: { "1>2": gaps, "2>F": gaps } }],
+      provisional: visit({ insertAt: 1 }),
+    }));
+    expect(structures(r)[0].items.map((i) => i.leg)).toEqual([undefined, undefined, undefined, undefined, { gaps }]);
+  });
+
+  it("ignored without exactly one highlighted course", () => {
+    const none = courseLayerRequest(base({ courses: [{ name: "A", controls: ["S", "1", "F"] }], provisional: visit({}) }));
+    expect(none.sites.map((s) => s.id)).not.toContain(P);
+    const two = courseLayerRequest(base({
+      courses: [{ name: "A", controls: ["S", "1", "F"], highlight: true }, { name: "B", controls: ["S", "3", "F"], highlight: true }],
+      provisional: visit({}),
+    }));
+    expect(two.sites.map((s) => s.id)).not.toContain(P);
+    expect(structures(two).map((s) => s.items.map((i) => i.siteId))).toEqual([["S", "1", "F"], ["S", "3", "F"]]);
   });
 });
 

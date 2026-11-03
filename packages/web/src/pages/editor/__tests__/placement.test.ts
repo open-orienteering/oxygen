@@ -92,4 +92,10 @@ describe("ghostInfo", () => {
     const g = ghostInfo(armPlacement("finish", ctx), rows, { x: 50, y: 0 }, ptOf);
     expect(g).toMatchObject({ number: null, legs: [[{ x: 30, y: 0 }, { x: 50, y: 0 }]] });
   });
+
+  it("start: the leg the new start leads into (it replaces the course's start), and its length", () => {
+    const g = ghostInfo(armPlacement("start", ctx), rows, { x: 10, y: 8 }, ptOf);
+    expect(g).toMatchObject({ number: null, legs: [[{ x: 10, y: 8 }, { x: 10, y: 0 }]] });
+    expect(g.legMm).toBeCloseTo(8);
+  });
 });

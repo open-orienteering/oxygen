@@ -179,7 +179,14 @@ The course-setting rules are symbolisation of the layer (04 §7), in
 | leg | 705 | line |
 | marked route / restricted line / forbidden route | 707 / 708 / 711 (ISSprOM has no 711: ISOM's, same factor) | line |
 | out-of-bounds area | 709; with a stroke 709.b (solid boundary), or 709.c (dashed) when the stroke is dashed | — |
+| dangerous area | **derived** from the resolved 709 / 709.b / 709.c: the same stripes again at +90° (a cross-hatch of 709's width, spacing and colour), the same boundary; ids `course:dangerous`, `.b`, `.c`, code `710` — not a library entry (below) | — |
 | white-out | area symbol `course:whiteout`, fill = upper white | — |
+
+The dangerous area is not in ISOM 2017-2 or ISSprOM 2019-2 — their `710`
+is the crossing point (03 §2.4) — so the set derives it from 709 rather
+than reading a document or library 710; the number is the one ISOM 2000,
+OCAD's course-setting set and Purple Pen give the cross-hatched area
+(decision log, D5a). It scales with the document factor like 709.
 
 A ring's multiplier scales its centre-line diameter, the width scaling
 separately (`ringCC` geometry). Dimensions at ISOM 1:15 000, defaults:
@@ -439,6 +446,7 @@ buckets. The React SVG keeps the UI layer only (`map-rendering.md` §5.4
 | `leg`, `numberHidden`, `circleGaps` | from the stored structure (§6.4), not from the GeoJSON: each item's `leg.gaps` from `course.list`'s `legGaps` (keyed `"<from>><to>"`, public control ids), `numberHidden` from its `hiddenNumbers`, each site's `circleGaps` from `course.controlCoordinates`. A course with no stored structure has none (the automatic cuts); 707 / 708 / 709 / 711 are course objects (`objects` below) |
 | `viewOptions` | `labelMode: "sequence"` for one ordered course with the sheet or the editor, else `"code"`; `allControls` when a drawn site is on no highlighted course |
 | `objects` | the event's course objects in scope of the highlighted courses (`courseObjectsForView`, §8.2; `all`-scoped only when none is highlighted), without scope, `z` or token — `MapPanel` fetches `courseObject.list` and hands them to the viewer; no sheet's layout objects reach the viewer |
+| provisional visit | the editor's armed `S` / `K` / `M` (`course-editor.md` §6.1), with exactly one highlighted course: a site `provisional` (`PROVISIONAL_SITE_ID`, the tool's kind, the cursor, the next code) — or a reused site by its id — spliced into the course's items (`spliceProvisional`): a control before the `insertAt`-th control visit (repeats counted), else before the finish, else last; a start replaces the course's start, a finish its finish (else they lead / end). The leg the visit splits takes no stored gaps (they are keyed by the drawn neighbours) |
 | `appearance` | `{}` — the spec sizes × the document factor (decision "Sizes") |
 | `cutFeatures` | added by the worker: `cutFeaturesOfDocument(doc)` once per document load |
 
@@ -804,7 +812,7 @@ issue message starting `OBJECT_GEOMETRY`.
 
 | Kind | Geometry | Props | Drawn as |
 |---|---|---|---|
-| `oob_area` | ≥ 3 vertices, closed | `border?: "none" \| "solid" \| "dashed"` (default none) | 709; 709.b with a solid boundary, 709.c dashed |
+| `oob_area` | ≥ 3 vertices, closed | `border?: "none" \| "solid" \| "dashed"` (default none); `hatch?: "709" \| "710"` (default 709) | 709; 709.b with a solid boundary, 709.c dashed; with `hatch: "710"` the dangerous area's cross-hatch (§3.1) with the same boundaries |
 | `oob_line` | ≥ 2 | `symbol?: "708" \| "711"` (default 708) | 708 out-of-bounds boundary or 711 out-of-bounds route |
 | `whiteout` | ≥ 3, closed | — | `course:whiteout` at upper white (§3.6) |
 | `toner_saver` | ≥ 3: the hull | `marginMm?`, `holeRadiusMm?` (how D5 generated it; the drawn shape is the stored hull) | white-out *outside* the hull: the `viewOptions.window` ring with the hull as an even-odd hole; without a window (the viewer) not drawn, warning `WINDOW_MISSING` |
@@ -911,7 +919,7 @@ venue's kiosk map draws them (08 §4.8; 07 §9.2).
 | Layer | Where | What |
 |---|---|---|
 | unit | `packages/shared/src/course/__tests__/colour-stack.test.ts` | upper white inserted below upper purple with the remap; ISSprOM unchanged; source colours above upper purple; refusal without purples; `hexToCmyk` ↔ `cmykToHex`; object rows on top |
-| unit | `symbols.test.ts` | ISOM / ISSprOM dimensions, document factor, appearance multipliers, knockout, roles, 711 borrowed; arcs within 1 µm of the circle, gaps as open arcs, an arc through north one path |
+| unit | `symbols.test.ts` | ISOM / ISSprOM dimensions, document factor, appearance multipliers, knockout, roles, 711 borrowed; the dangerous area: 709's hatch in both diagonals, 709.b / 709.c's boundaries, scaled like 709 (both libraries); arcs within 1 µm of the circle, gaps as open arcs, an arc through north one path |
 | unit | `cuts.test.ts` | clearance = symbol + half line + air at both arc ends and both gap ends, on / off the rim and the line by the same sum, wider for bigger symbols and lines, default radius, north wrap, whole circle; library radii (`cutSymbolRadiusMm`), OCAD symbol radii (`ocadCutSymbolRadiiMm`), `cutContextForScale`; `cutFeaturesOfDocument` (applied match, source code, suggested match, hidden symbol, line object, own render, factor fallback) |
 | unit | `derive.test.ts` | legs and clearances, circles in the way, unpositioned sites, automatic vs authored gaps, authored pieces and bends, free order, all-controls, start rotation, sequence / repeated / code numbers, y-down placement, manual offsets, multi-course |
 | unit | `layer.test.ts` | one `symbolise` call with a document: warning-free, lower purple under black, re-indexed document colours, object offsets; turned start, arcs, legs; knockout halo order; sprint sizes; layout objects (white-out, 709.b, rows on top, text values, page-mm sizes); toner-saver ring and its warning; images; `courseDocumentContext` |
@@ -935,12 +943,12 @@ venue's kiosk map draws them (08 §4.8; 07 §9.2).
 | E2E | `e2e/maintenance-course-backfill.spec.ts` | §6.4: the Maintenance card lists the pending course, fills it, reports |
 | unit | `packages/api/src/__tests__/courseGeometryStale.test.ts` | unchanged and green: OCD-vs-XML staleness of imported geometry |
 | golden | `e2e/__golden__/map-gl/course-*.png`, `packages/api/src/render/__tests__/golden-files.test.ts`, `e2e/map-gl-golden.spec.ts` | reference raster = committed golden; WebGL2 ≤ 0.5 % (`map-rendering.md` §6.2). The PDF tier joins in C3 |
-| unit (web) | `packages/web/src/lib/__tests__/course-layer-request.test.ts` | the §5 request rules (offsets only with the sheet or the editor); §8.2 scope by highlighted course over `inCourses`, all-controls = `all` only, parked nowhere; objects without scope / `z` / token / `inCourses` |
-| unit | `packages/shared/src/course/__tests__/objects.test.ts` | §8.1 each kind accepted, short geometry / unknown props / bad filter props / Bézier region refused; §8.2 the scope truth table; §8.3 each kind onto its symbol (709 / 709.b / 709.c, 708 / 711, 707, white-out), Bézier handles kept, text upper purple or own row and not divided by the enlargement, image corners, toner saver with and without a window, `inset_frame` and `filter_region` draw nothing |
+| unit (web) | `packages/web/src/lib/__tests__/course-layer-request.test.ts` | the §5 request rules (offsets only with the sheet or the editor); the provisional visit (a control at a position, before the finish, past the end, repeats counted; start / finish replace or lead / end; a reused site adds no site; the split leg loses its stored gaps; ignored without exactly one highlighted course); §8.2 scope by highlighted course over `inCourses`, all-controls = `all` only, parked nowhere; objects without scope / `z` / token / `inCourses` |
+| unit | `packages/shared/src/course/__tests__/objects.test.ts` | §8.1 each kind accepted (`hatch` included), short geometry / unknown props / an unknown `hatch` / bad filter props / Bézier region refused; §8.2 the scope truth table; §8.3 each kind onto its symbol (709 / 709.b / 709.c, the dangerous area and its boundaries for `hatch: "710"`, 708 / 711, 707, white-out), Bézier handles kept, text upper purple or own row and not divided by the enlargement, image corners, toner saver with and without a window, `inset_frame` and `filter_region` draw nothing |
 | unit | `layer.test.ts` "a stored filter_region course object" | §8.3: the same region as the explicit one, after it; hides the document's 516 |
 | unit | `packages/api/src/__tests__/version-conflict.test.ts` | §8.4: the object `CONFLICT` payload |
-| integration | `packages/api/src/__tests__/integration/course-objects.test.ts` | §8.4: every kind created and listed in draw order with public ids; `inset_frame`, unknown course / class, bad body refused; update advances the token; stale token → `CONFLICT` with the object now and nothing written, none = LWW, stale delete; reorder keeps tokens; kiosk-key read, viewer cannot write; §8.2 class scope through `course_id` and the pool, the same resolution on the wire (`inCourses`); §8.5 snapshot round trip verbatim |
-| integration | `course-print.test.ts` "course objects on the page" | §8.3 print: a sheet takes the objects in scope (all-controls: `all` only), they add passes over the map, a stored filter region hides map objects |
+| integration | `packages/api/src/__tests__/integration/course-objects.test.ts` | §8.4: every kind created and listed in draw order with public ids; `inset_frame`, unknown course / class, bad body refused; update advances the token, `hatch: "710"` round-trips, `"711"` refused; stale token → `CONFLICT` with the object now and nothing written, none = LWW, stale delete; reorder keeps tokens; kiosk-key read, viewer cannot write; §8.2 class scope through `course_id` and the pool, the same resolution on the wire (`inCourses`); §8.5 snapshot round trip verbatim |
+| integration | `course-print.test.ts` "course objects on the page" | §8.3 print: a sheet takes the objects in scope (all-controls: `all` only), they add passes over the map, `hatch: "710"` adds one hatch pass, a stored filter region hides map objects |
 | integration | `backup.test.ts` | §8.5: the dump's `course_objects` section |
 | E2E | `e2e/map-vector-layer.spec.ts` "a stored white-out course object paints the map white" | §8.3 viewer: an `all`-scoped white-out created through the API turns open yellow ground white on the GL canvas, yellow beside it unchanged |
 | unit (web) | `packages/web/src/map-gl/__tests__/worker-course.test.ts`, `engine.test.ts` | the dynamic bucket (`map-rendering.md` §5.2) |
@@ -998,6 +1006,9 @@ venue's kiosk map draws them (08 §4.8; 07 §9.2).
   import is `null` (the base lives inside a `reference.imported`
   entry); presence and "moved by X at T" (D11). The new editor's client rules landed in D4
   (`course-editor.md` §3).
+- **Dangerous areas at import**: D1's importers write 709 polygons as
+  `oob_area {}`; an OCAD / Purple Pen cross-hatched 710 area is not read
+  as `hatch: "710"` (D5a added the prop only).
 - **Course objects, beyond D2** (§8): a toner saver on screen (the
   editor outlines it, `course-editor.md` §7), holes in a stored
   filter region, `inset_frame` (micro insets, slice F), moving sheets'
