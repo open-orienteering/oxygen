@@ -21,6 +21,9 @@ import {
   SIReaderConnection,
   type SIReaderStatus,
 } from "../lib/webserial";
+import { ReaderHub, type ReaderInfo } from "../lib/reader-hub";
+import type { SIReaderKind } from "../lib/si-reader";
+import { ReaderConnectionDialog } from "../components/ReaderConnectionDialog";
 import type { SICardReadout, SICardOwnerData } from "../lib/si-protocol";
 import { trpc } from "../lib/trpc";
 import { KioskChannel, recentCardToKioskMessage } from "../lib/kiosk-channel";
@@ -64,10 +67,28 @@ export interface RecentCard {
 }
 
 interface DeviceManagerState {
+  /** Any reader transport is available in this browser. */
   supported: boolean;
+  /** Web Serial is available (USB SI stations). */
+  serialSupported: boolean;
+  /** Best status across all readers ("reading" if any reader is live). */
   readerStatus: SIReaderStatus;
-  connectReader: () => Promise<void>;
-  disconnectReader: () => Promise<void>;
+  /** Best status across USB SI stations only (station programming needs one). */
+  serialStatus: SIReaderStatus;
+  /** Every reader the hub knows, connected or not. */
+  readers: ReaderInfo[];
+  /**
+   * Connect a reader of the given kind (default: USB SI station). Opens the
+   * browser's device picker, so call it from a user gesture.
+   */
+  connectReader: (kind?: SIReaderKind) => Promise<void>;
+  /** Disconnect one reader, or every reader when no id is given. */
+  disconnectReader: (id?: string) => Promise<void>;
+  /** Disconnect a reader and drop it from the list. */
+  removeReader: (id: string) => Promise<void>;
+  readerDialogOpen: boolean;
+  openReaderDialog: () => void;
+  closeReaderDialog: () => void;
   currentCard: RecentCard | null;
   recentCards: RecentCard[];
   clearRecentCards: () => void;
@@ -81,7 +102,11 @@ interface DeviceManagerState {
   setPendingConfirmCardNo: (cardNo: number | null, onConfirm?: () => void) => void;
   /** Last card number detected (fires before full readout completes) */
   lastDetectedCardNo: number | null;
-  /** Get the raw SIReaderConnection for station programming operations */
+  /**
+   * The USB SI station used for station programming operations. With several
+   * USB stations this is the first one; with none, an unconnected instance
+   * that `connectReader("serial")` will connect.
+   */
   getReaderConnection: () => SIReaderConnection;
 }
 
@@ -160,10 +185,14 @@ function readoutsMatch(a: SICardReadout, b: SICardReadout): boolean {
 // ─── Provider ──────────────────────────────────────────────
 
 export function DeviceManagerProvider({ children }: { children: ReactNode }) {
-  const supported = SIReaderConnection.isSupported();
-  const connectionRef = useRef<SIReaderConnection | null>(null);
+  const serialSupported = SIReaderConnection.isSupported();
+  const supported = serialSupported;
+  const hubRef = useRef<ReaderHub | null>(null);
 
   const [readerStatus, setReaderStatus] = useState<SIReaderStatus>("idle");
+  const [serialStatus, setSerialStatus] = useState<SIReaderStatus>("idle");
+  const [readers, setReaders] = useState<ReaderInfo[]>([]);
+  const [readerDialogOpen, setReaderDialogOpen] = useState(false);
   const [currentCard, setCurrentCard] = useState<RecentCard | null>(null);
   const [recentCards, setRecentCards] = useState<RecentCard[]>([]);
   const [isOnCardReadoutPage, setIsOnCardReadoutPage] = useState(false);
@@ -210,12 +239,20 @@ export function DeviceManagerProvider({ children }: { children: ReactNode }) {
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  const getConnection = useCallback((): SIReaderConnection => {
-    if (!connectionRef.current) {
-      connectionRef.current = new SIReaderConnection();
-    }
-    return connectionRef.current;
+  const getHub = useCallback((): ReaderHub => {
+    if (!hubRef.current) hubRef.current = new ReaderHub();
+    return hubRef.current;
   }, []);
+
+  /** First USB station; creates an unconnected one if there is none. */
+  const getConnection = useCallback((): SIReaderConnection => {
+    const hub = getHub();
+    const existing = hub.firstOfKind("serial");
+    if (existing) return existing as SIReaderConnection;
+    const conn = new SIReaderConnection();
+    hub.add(conn);
+    return conn;
+  }, [getHub]);
 
   // ── Process a card read ─────────────────────────────────
 
@@ -517,15 +554,39 @@ export function DeviceManagerProvider({ children }: { children: ReactNode }) {
 
   // ── Connect / disconnect ────────────────────────────────
 
-  const connectReader = useCallback(async () => {
-    const conn = getConnection();
-    await conn.connect();
-  }, [getConnection]);
+  const connectReader = useCallback(
+    async (kind: SIReaderKind = "serial") => {
+      const hub = getHub();
+      if (kind !== "serial") {
+        throw new Error(`Reader kind "${kind}" is not supported yet`);
+      }
+      // Reuse an unconnected USB station (the one ControlsPage may already
+      // hold via getReaderConnection) before adding another.
+      const idle = hub
+        .list()
+        .find((r) => r.kind === "serial" && !r.isConnected && r.status !== "connecting");
+      const conn = (idle as SIReaderConnection | undefined) ?? new SIReaderConnection();
+      hub.add(conn);
+      await conn.connect();
+    },
+    [getHub],
+  );
 
-  const disconnectReader = useCallback(async () => {
-    const conn = connectionRef.current;
-    if (conn) await conn.disconnect();
-  }, []);
+  const disconnectReader = useCallback(
+    async (id?: string) => {
+      const hub = getHub();
+      const targets = id ? hub.list().filter((r) => r.id === id) : hub.list();
+      await Promise.all(targets.map((r) => r.disconnect().catch(() => {})));
+    },
+    [getHub],
+  );
+
+  const removeReader = useCallback(
+    async (id: string) => {
+      await getHub().remove(id);
+    },
+    [getHub],
+  );
 
   const clearRecentCards = useCallback(() => {
     setRecentCards([]);
@@ -536,11 +597,16 @@ export function DeviceManagerProvider({ children }: { children: ReactNode }) {
   // ── Wire up event listeners ─────────────────────────────
 
   useEffect(() => {
-    const conn = getConnection();
+    const conn = getHub();
 
     const onStatus = (e: Event) => {
       const status = (e as CustomEvent).detail.status as SIReaderStatus;
       setReaderStatus(status);
+      setSerialStatus(conn.aggregateStatus("serial"));
+    };
+
+    const onReadersChanged = (e: Event) => {
+      setReaders((e as CustomEvent).detail as ReaderInfo[]);
     };
 
     const onCardDetected = (e: Event) => {
@@ -560,7 +626,13 @@ export function DeviceManagerProvider({ children }: { children: ReactNode }) {
       addRecentCard(readout);
     };
 
-    const onCardRemoved = () => {
+    const onCardRemoved = (e: Event) => {
+      // With several readers, only the reader that reported the last insert
+      // may clear the kiosk's "do not remove the card" screen.
+      const readerId = (e as CustomEvent).detail?.readerId as string | undefined;
+      if (readerId && conn.lastDetectionReaderId && readerId !== conn.lastDetectionReaderId) {
+        return;
+      }
       setLastDetectedCardNo(null);
       if (kioskChannelRef.current) {
         kioskChannelRef.current.send({ type: "card-removed" });
@@ -571,18 +643,42 @@ export function DeviceManagerProvider({ children }: { children: ReactNode }) {
     conn.addEventListener("si:card-detected", onCardDetected);
     conn.addEventListener("si:card-readout", onCardReadout);
     conn.addEventListener("si:card-removed", onCardRemoved);
+    conn.addEventListener("hub:readers-changed", onReadersChanged);
+    setReaders(conn.snapshot());
 
-    if (supported) {
-      conn.tryAutoReconnect().catch(() => {});
+    // Reopen every USB station this origin was granted before (no picker).
+    let cancelled = false;
+    if (serialSupported) {
+      SIReaderConnection.grantedPorts()
+        .then(async (ports) => {
+          for (const port of ports) {
+            if (cancelled) return;
+            const held = conn
+              .list()
+              .some((r) => r instanceof SIReaderConnection && r.holdsPort(port));
+            if (held) continue;
+            const idle = conn
+              .list()
+              .find((r) => r instanceof SIReaderConnection && r.status === "idle");
+            const reader = (idle as SIReaderConnection | undefined) ?? new SIReaderConnection();
+            conn.add(reader);
+            await reader.attach(port).catch(() => {
+              // Port busy (another tab) or unplugged; the row stays in error.
+            });
+          }
+        })
+        .catch(() => {});
     }
 
     return () => {
+      cancelled = true;
+      conn.removeEventListener("hub:readers-changed", onReadersChanged);
       conn.removeEventListener("si:status", onStatus);
       conn.removeEventListener("si:card-detected", onCardDetected);
       conn.removeEventListener("si:card-readout", onCardReadout);
       conn.removeEventListener("si:card-removed", onCardRemoved);
     };
-  }, [getConnection, addRecentCard, supported]);
+  }, [getHub, addRecentCard, serialSupported]);
 
   const getKioskChannel = useCallback(() => kioskChannelRef.current, []);
 
@@ -591,11 +687,21 @@ export function DeviceManagerProvider({ children }: { children: ReactNode }) {
     pendingConfirmCallbackRef.current = onConfirm ?? null;
   }, []);
 
+  const openReaderDialog = useCallback(() => setReaderDialogOpen(true), []);
+  const closeReaderDialog = useCallback(() => setReaderDialogOpen(false), []);
+
   const value: DeviceManagerState = {
     supported,
+    serialSupported,
     readerStatus,
+    serialStatus,
+    readers,
     connectReader,
     disconnectReader,
+    removeReader,
+    readerDialogOpen,
+    openReaderDialog,
+    closeReaderDialog,
     currentCard,
     recentCards,
     clearRecentCards,
@@ -611,6 +717,7 @@ export function DeviceManagerProvider({ children }: { children: ReactNode }) {
   return (
     <DeviceManagerContext.Provider value={value}>
       {children}
+      {readerDialogOpen && <ReaderConnectionDialog onClose={closeReaderDialog} />}
     </DeviceManagerContext.Provider>
   );
 }
