@@ -35,6 +35,7 @@ import { parseOCDCourseData } from "../ocd-course-parser.js";
 import { isPpenContent, parsePpenCourseData } from "../ppen-course-parser.js";
 import { resolveImportAlignment } from "../course-import-align.js";
 import { publicControlId } from "./control.js";
+import { courseChecksFor } from "../course-checks.js";
 import {
   ocadBoundsToWgs84,
   computeMapNorthOffset,
@@ -972,8 +973,19 @@ export const courseRouter = router({
         await rebuildCourseGeometry(tx, ctx.event.id, [c.id]);
         return emitCourseUpserted(tx, ctx.event.id, c.id);
       });
-      // Live checks arrive with D6 (08 §5.6).
-      return { version: version.toString(), checks: [] as { code: string; message: string }[] };
+      // The written course's advisory checks (08 §6; docs/course-layer.md §9): nothing blocks the save.
+      return { version: version.toString(), checks: await courseChecksFor(ctx.db, ctx.event.id, c.id) };
+    }),
+
+  /**
+   * The advisory checks of a course (docs/course-layer.md §9.4): every
+   * phase-1 code but the editor's layout ones, plus `DESCRIPTION_STALE`.
+   */
+  checks: coursesViewProcedure
+    .input(z.object({ courseId: z.number().int() }))
+    .query(async ({ ctx, input }) => {
+      const c = await getCourseBySeq(ctx.db, ctx.event.id, input.courseId);
+      return courseChecksFor(ctx.db, ctx.event.id, c.id);
     }),
 
   /**

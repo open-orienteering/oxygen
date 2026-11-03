@@ -59,8 +59,8 @@ exit bubble on every pointer move
 | Top bar (`TopBar.tsx`) | `editor-top-bar` | course picker (`editor-course-picker`), view (`editor-view-course` / `-all`), mode (`editor-mode-course` / `-layout` / `-field`), undo / redo (`editor-undo` / `-redo`), hide other controls (`editor-hide-others`), auto cuts (`editor-toggle-cuts`), help popover; MapPanel adds descriptions, fullscreen and the viewer its zoom on the same row |
 | Tool rail (`ToolRail.tsx`) | `editor-tool-rail` | `editor-tool-<key>` for `V`, `S`, `K`, `M`, `X` / `C` (disabled, "slice F"), `A` (menu `editor-area-menu`, `editor-area-<kind>`), `T`, `G`; the snapping toggle `editor-snapping` (§6) |
 | Action bar (`ActionBar.tsx`) | `editor-action-bar` | the selection's or phantom's entries, horizontal, centred under the selection, hidden during a drag; ids `editor-action-<id>` as the legacy popover's. The viewer positions it (`actionLayout: "bar"`); D9 docks the same list as the mobile bottom bar |
-| Inspector (`Inspector.tsx`, `modes/CourseMode.tsx`, `modes/ObjectSection.tsx`) | `editor-inspector` | collapsible sections: course (create, sequence, visit order, clone), selection (a site: code, kind, position, description summary, "also in", hidden number, notes — §6.6; several controls: `editor-multi` with the bulk actions — §6.5; a course object: `editor-object` — §7), inventory (`editor-inventory-panel`, collapsed), checks (`editor-checks`, placeholder until D6) |
-| Status bar (`StatusBar.tsx`) | `editor-status` | the selected course's control count and length, the armed tool's pending leg (`editor-pending-leg-length`, §6.1), the map scale, "snapping" when on (the sheet key is D8's, climb and checks D6's), the save state (`editor-save-state`, `data-state` = `saved` / `saving` / `error` / `conflict`) |
+| Inspector (`Inspector.tsx`, `modes/CourseMode.tsx`, `modes/ObjectSection.tsx`) | `editor-inspector` | collapsible sections: course (create, sequence, visit order, clone), selection (a site: code, kind, position, description summary, "also in", hidden number, notes — §6.6; several controls: `editor-multi` with the bulk actions — §6.5; a course object: `editor-object` — §7), inventory (`editor-inventory-panel`, collapsed), checks (`editor-checks`, §8) |
+| Status bar (`StatusBar.tsx`) | `editor-status` | the selected course's control count and length, the armed tool's pending leg (`editor-pending-leg-length`, §6.1), the map scale, "snapping" when on, climb and the check count (§8; the sheet key is D8's), the save state (`editor-save-state`, `data-state` = `saved` / `saving` / `error` / `conflict`) |
 | Conflict notice | `editor-conflict` | §3 |
 
 The map-info row under the map (file name, *Open review*, *Use new map
@@ -424,6 +424,45 @@ filter regions and toner savers are outlined by the UI layer.
 - Tests read the objects from a hidden mirror, `editor-object-row`
   (`data-object-id`, `-kind`, `-geometry`, `-props`, `-scope`).
 
+## 8. Checks and KPIs
+
+Row D6 (08 §5.2, §5.6; the codes, thresholds and inputs are
+`course-layer.md` §9). Checks are advisory: nothing blocks a save, an
+undo or a mode switch.
+
+- **Computed live** on the client by `courseChecks` over the page's data
+  (`useCourseChecks`, `pages/editor/useCourseChecks.ts`): the selected
+  course's structure, every site of the event, the document's obstacles
+  (`checkObstaclesOfDocument`, once per decoded document), the course's
+  sheet windows (`courseMap.list`, the sheets whose course is the
+  selected one; none → `CONTROL_OUTSIDE_SHEET` is not evaluated), the
+  course objects in scope and the viewer's derivation (`onCourseInfo`).
+  The server's `course.checks` adds `DESCRIPTION_STALE`; it refetches
+  with the page's other queries after a write. With no course selected
+  (all-controls view) only the event-wide codes run.
+- **Inspector**: the Checks section (`editor-checks`) is collapsed by
+  default, like the inventory (open, it would squeeze the selection
+  section in the in-map strip); the count stands beside the title
+  (`editor-checks-count`). Open, it lists one row per check
+  (`editor-check-row`, `data-code`, `data-sites` = public ids), the text
+  from `editor:check_<CODE>` with its `params`; none → "No findings"
+  (`editor-checks-none`). **Click-to-locate**: a row selects its first
+  site (a leg check: the leg's first site) and centres the view on the
+  check's point without changing the zoom.
+- **Canvas markers** (UI layer, `editor-check-layer`): an amber ring
+  around each site of a site check, an amber cross at a leg check's
+  point; `editor-check-marker` (`data-code`; a ring `data-site` and
+  `data-x` / `data-y` = the site, a cross `data-x` / `data-y` = the check's
+  point, paper mm). They are not hit targets: a click goes through to the map.
+- **Status bar KPIs** (`editor-status-kpis`): controls, length, climb;
+  beside them the check count (`editor-status-checks`, amber,
+  `data-count`, shown when there is one).
+  Length is the sum of the layer's leg polylines (`DerivedLeg.points`)
+  × the map scale, the course's stored length until the viewer has
+  derived it. Climb is the course's stored climb (`courses.climb`,
+  entered on the Courses page; "manual" — there is no terrain model
+  yet), shown when set.
+
 ## API
 
 The course and control mutations the editors write through (08 §6;
@@ -433,7 +472,8 @@ seq). Tokens are decimal strings.
 
 | Procedure | Capability | Input | Returns |
 |---|---|---|---|
-| `course.setStructure` | `courses.edit` | `{ courseId, structure /* wire form */, baseVersion? }` | `{ version, checks: [] }` (D6 fills `checks`) |
+| `course.setStructure` | `courses.edit` | `{ courseId, structure /* wire form */, baseVersion? }` | `{ version, checks }`: the written course's `course.checks` list |
+| `course.checks` | `courses.view` | `{ courseId }` | `CourseCheck[]`: `{ code, siteIds /* public ids */, leg?: { from, to, index }, at: { x, y }, params? }` (`course-layer.md` §9; no message text — the web formats `editor:check_<CODE>`) |
 | `course.update` | `courses.edit` | today's fields + `baseVersion?`; with `controlIds` the linear shortcut: writes a structure | `{ ok, version }` |
 | `control.update` | `courses.edit`; `notes` alone `courses.review` | today's fields + `kind`, `circleGaps`, `notes`, `baseVersion?` | `{ ok, version }` |
 | `control.check` | `courses.review` | `{ controlId, checked }` | `{ version }` |
@@ -468,6 +508,8 @@ current, differing }`; a variation group or a slice-F site kind answers
 | unit (web) | `lib/editor/__tests__/snap.test.ts`, `hit.test.ts`, `state.test.ts`, `structure-edit.test.ts`, `write-client.test.ts` | §6.2 snap candidates and distance; §5 object targets (stream and UI-layer outline); §6 Escape order, multi-selection, object selection, tools; §6.3 / §6.6 `setLegGaps`, `setNumberHidden`; §7 object tokens |
 | E2E | `e2e/course-editor.spec.ts` "tools" | §6.1 ten controls in ten clicks with `K` (ghost, no UI-layer pending leg, the leg length label = the status bar, no action bar, `Ctrl+Z`, `Esc`), reuse of a site; the armed `K` over the map: a `course-leg` piece of the course ends at the cursor's circle (absent before the hover, follows a second hover), no `editor-pending-leg`, the label = the status bar; a drag of the middle control shows two `editor-leg-length`, none after release; §6.5 Shift-click three controls → one add-to-course (one undo entry), §6.6 a site's notes written and reloaded; §6.3 a rim drag stores a circle gap, Reset gaps clears it; the layer draws what the tools store (D1's request path): a leg gap cuts the drawn leg, a circle gap is in the drawn site's cuts (`course-site` `data-cuts`), a hidden number leaves the site without its `course-label`; §6.4 / §7 an out-of-bounds area drawn, drawn on the canvas (709: purple inside it), its hatch (710) and border later set from the inspector (the stored props; 710 on the canvas is the shared layer path, probed in print only), printed (the all-controls `maps.pdf`: one page, the 709 hatch's clip-and-stroke operators present with the `all`-scoped area, one more run with `hatch: "710"`, gone when it is parked), selected again on the canvas, deleted and undone; a filter region hides the 505 path under it live (canvas ink probe) |
 | integration | `packages/api/src/__tests__/integration/course-print.test.ts` "course objects on the page" | §7 print: the row's "reference-raster pixel probe" of a printed course object is this test's page raster, not the E2E's — no HTTP route rasterises a composed page, and poppler is on the runner for the unit / integration jobs, not the E2E job (coordinator 2026-11-01) |
+| unit (web) | `packages/web/src/lib/editor/__tests__/checks.test.ts` | §8: sites and the explicit structure as `courseChecks` takes them, two controls 20 m apart, the server's `DESCRIPTION_STALE` merged in order, markers (rings, a leg cross, unpositioned skipped), length from the leg polylines, locate |
+| E2E | `e2e/course-editor.spec.ts` "Course editor checks" | §8: two controls 20 m apart → the count beside the section title, the row (`CONTROL_TOO_CLOSE`, "20 m"), a marker on each site, the status-bar count; a click selects the first site and centres the view on the pair's midpoint |
 | E2E | `e2e/course-editor-legacy.spec.ts` | the legacy page, unchanged (`chromium`) |
 
 ## Pending in this chapter
@@ -481,9 +523,7 @@ current, differing }`; a variation group or a slice-F site kind answers
 - **Description instructions** (finish variant, special instructions)
   are edited in the legacy editor only.
 - **Course delete** stays on the Courses page.
-- **Checks
-  and KPIs** (climb, check count, leg distances from the layer) — D6;
-  **Layout mode** — D7; **export menu, class view, sheet key** — D8;
+- **Layout mode** — D7; **export menu, class view, sheet key** — D8;
   **Field mode, mobile chrome, loupe** — D9; the rest of the E2E rewrite
   and the `map-vector` / `mobile` projects — D10; **presence and "moved
   by X at T"** — D11.

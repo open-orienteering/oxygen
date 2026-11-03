@@ -101,6 +101,13 @@ export interface PlacedControlLabel {
    * maps.
    */
   leader?: { x1: number; y1: number; x2: number; y2: number };
+  /**
+   * No ring had a collision-free slot, so this is the least-bad box and
+   * it intersects a circle, another label or a course line
+   * (docs/course-layer.md §3.5, the `NUMBER_OVERLAPS` check). Absent
+   * when the box is clear — a contested slot with a leader included.
+   */
+  collides?: true;
 }
 
 /**
@@ -516,6 +523,7 @@ export function placeControlLabels(
           y2: c.y + ((sy - c.y) / len) * ownR,
         };
       }
+      if (!best) chosen.collides = true;
       out.set(c.id, chosen);
       placedRects.push(chosen);
     }

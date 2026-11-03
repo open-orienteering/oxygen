@@ -24,7 +24,7 @@ import { emitControlUpserted, emitCourseUpserted } from "../referenceJournal.js"
 import { Prisma as PrismaNs } from "../generated/prisma/client.js";
 import { loadEventCrs } from "../event-crs.js";
 import { loadEventMapObjects } from "../event-map-objects.js";
-import { suggestDescriptions, type DescriptionCandidate } from "../description-autodetect.js";
+import { describeAt, descriptionsEqual, suggestDescriptions } from "../description-autodetect.js";
 import { mapMmToWgs84 } from "../map-projection.js";
 import { rebuildCourseGeometry } from "../course-geometry.js";
 import {
@@ -267,19 +267,6 @@ const controlDescriptionSchema = z.object({
   h: z.string().max(20).optional(),
 });
 
-/** Map an autodetect candidate onto a storable ControlDescription. */
-function candidateToDescription(
-  c: DescriptionCandidate,
-): ControlDescription {
-  return {
-    d: c.d,
-    ...(c.c ? { c: c.c } : {}),
-    ...(c.e ? { e: c.e } : {}),
-    ...(c.f ? { f: c.f } : {}),
-    ...(c.g ? { g: c.g } : {}),
-  };
-}
-
 async function autoDescribeAt(
   db: PrismaClient,
   eventId: bigint,
@@ -290,24 +277,10 @@ async function autoDescribeAt(
   try {
     const objects = await loadEventMapObjects(db, eventId);
     if (!objects || objects.length === 0) return null;
-    const [top] = suggestDescriptions(objects, x, y, { limit: 1 });
-    return top ? candidateToDescription(top) : null;
+    return describeAt(objects, x, y);
   } catch {
     return null;
   }
-}
-
-const DESCRIPTION_FIELDS = ["c", "d", "e", "s", "f", "g", "h"] as const;
-
-/** Field-wise equality of two descriptions (empty strings count as unset). */
-function descriptionsEqual(
-  a: ControlDescription | null | undefined,
-  b: ControlDescription | null | undefined,
-): boolean {
-  if (!a || !b) return !a && !b;
-  return DESCRIPTION_FIELDS.every(
-    (k) => (a[k] || undefined) === (b[k] || undefined),
-  );
 }
 
 /**
@@ -735,7 +708,11 @@ export const controlRouter = router({
               ? { xpos: input.xpos!, ypos: input.ypos!, lat: wgs!.lat, lng: wgs!.lng }
               : {}),
             ...(description
-              ? { description: description as Record<string, string> }
+              ? {
+                  description: description as Record<string, string>,
+                  // docs/course-layer.md §6.3: who wrote it.
+                  descriptionSource: input.description ? "manual" : "auto",
+                }
               : {}),
           },
           select: { id: true, seq: true, codes: true, name: true, status: true },
@@ -860,6 +837,8 @@ export const controlRouter = router({
       if (input.airPlus !== undefined) data.airPlus = input.airPlus;
       if (input.description !== undefined) {
         data.description = input.description === null ? PrismaNs.DbNull : input.description;
+        // An explicit description is the setter's, even when it equals the autodetect result (§6.3).
+        data.descriptionSource = input.description === null ? null : "manual";
       }
 
       const positionChanged =
@@ -896,8 +875,13 @@ export const controlRouter = router({
           input.xpos,
           input.ypos,
         );
-        if (suggested) data.description = suggested;
-        else if (c.description) data.description = PrismaNs.DbNull;
+        if (suggested) {
+          data.description = suggested;
+          data.descriptionSource = "auto";
+        } else if (c.description) {
+          data.description = PrismaNs.DbNull;
+          data.descriptionSource = null;
+        }
       }
 
       const version = await ctx.db.$transaction(async (tx) => {

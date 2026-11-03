@@ -58,6 +58,8 @@ import { areaBinding, gapBinding, placeBinding, selectBinding, textBinding, type
 import { ObjectSection } from "./modes/ObjectSection";
 import { ChecksSection, Inspector, InspectorSection, InventorySection } from "./Inspector";
 import { StatusBar, type SaveState } from "./StatusBar";
+import { useCourseChecks } from "./useCourseChecks";
+import type { EditorCheck } from "../../lib/editor/checks";
 import { CourseSection, MultiSection, SelectionSection } from "./modes/CourseMode";
 
 type Pt = { x: number; y: number };
@@ -175,6 +177,7 @@ export function EditorPage() {
     void utils.course.detail.invalidate();
     // Course objects are cached until reload in MapPanel: every write invalidates them (course-layer.md §8.3).
     void utils.courseObject.list.invalidate();
+    void utils.course.checks.invalidate();
   }, [utils]);
 
   /** One write (or an undo / redo): pending count, the conflict notice or the error, then a reload. */
@@ -837,6 +840,19 @@ export function EditorPage() {
 
   const [viewRequest, setViewRequest] = useState<MapViewerEditorProps["viewRequest"]>(null);
 
+  // ─── Checks and KPIs (§8) ────────────────────────────────
+  const courseChecks = useCourseChecks({
+    course: state.view === "course" && selectedCourse ? { id: selectedCourse.id, name: selectedCourse.name } : null,
+    structure, sites, controls: controlList.data, document: mapDoc, mapScale, objects: objectsInView,
+    derivation: courseInfo?.derivation, ringMm: courseInfo?.metrics?.circleRadiusMm ?? 2.5,
+  });
+  const locateSite = courseChecks.locate;
+  const locateCheck = useCallback((c: EditorCheck) => {
+    const { selectId, centre } = locateSite(c);
+    if (selectId !== null) dispatch({ type: "select", id: selectId });
+    if (centre) setViewRequest((v) => ({ key: (v?.key ?? 0) + 1, centre }));
+  }, [locateSite]);
+
   // ─── The action bar ──────────────────────────────────────
   const ends = useMemo(() => (structure ? effectiveEnds(structure, sites) : { start: null, finish: null }), [structure, sites]);
   const contextActions = useMemo(() => {
@@ -940,7 +956,8 @@ export function EditorPage() {
     viewRequest,
     provisional,
     onCourseInfo: setCourseInfo,
-  }), [state.selectedControlId, state.phantom, contextActions, contextInfo, srrBadge, radioOn, suggestions, tc, courseControlIds, toolActive,
+    markers: courseChecks.markers,
+  }), [courseChecks.markers, state.selectedControlId, state.phantom, contextActions, contextInfo, srrBadge, radioOn, suggestions, tc, courseControlIds, toolActive,
     courseView, selectedCourse, moveWarnings, moveEpoch, handleMapClick, handleMoveEnd, handleLabelMoveEnd, handleSelect,
     handleDismiss, handleLegClick, toolBinding, snapIndex, snap, draftObjects, draftFast, viewRequest, provisional]);
 
@@ -1270,7 +1287,7 @@ export function EditorPage() {
             )}
           </InspectorSection>
           <InventorySection inventory={inventory} activeSeriesId={activeSeriesId} onSeries={setAllocSeriesId} />
-          <ChecksSection />
+          <ChecksSection checks={courseChecks.checks} onLocate={locateCheck} />
         </Inspector>
         <div className="mt-auto flex flex-col gap-1">
           {state.tool.kind === "gap" && gapTarget?.stored && (
@@ -1282,7 +1299,8 @@ export function EditorPage() {
           )}
           {showExhausted && <span data-testid="series-exhausted" className="pointer-events-auto w-fit text-[11px] text-amber-700 bg-white/95 rounded px-1.5">{tc("seriesExhausted")}</span>}
           {errorMsg && <span data-testid="editor-error" className="pointer-events-auto w-64 text-[11px] text-red-600 bg-white/95 rounded px-1.5">{errorMsg}</span>}
-          <StatusBar controls={selectedCourse ? sequenceIds.length : null} lengthM={selectedCourse ? totalMeters : null} scale={mapScale} save={save}
+          <StatusBar controls={selectedCourse ? sequenceIds.length : null} lengthM={selectedCourse ? courseChecks.lengthM ?? totalMeters : null} scale={mapScale} save={save}
+            climbM={selectedCourse?.climb ?? null} checks={courseChecks.checks.length}
             pendingLegM={pendingLegM} snapping={state.snapping} />
         </div>
       </div>

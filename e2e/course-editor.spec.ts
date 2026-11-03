@@ -714,3 +714,46 @@ test.describe("Course editor (new, GL canvas)", () => {
     });
   });
 });
+
+// Checks and KPIs (docs/course-editor.md §8; course-layer.md §9).
+test.describe("Course editor checks", () => {
+  test("two controls 20 m apart: a marker, a row that locates them, the status-bar count", async ({ page }) => {
+    await openEditor(page);
+    const kpis = await page.getByTestId("editor-status-kpis").textContent();
+    const scale = Number(/1:([\d\s ]+)/.exec(kpis ?? "")?.[1].replace(/[\s ]/g, ""));
+    expect(scale).toBeGreaterThan(0);
+    const spot = await toPaper(page, await emptyPoint(page, 40));
+    const dMm = 20_000 / scale;
+    const nameId = new URL(page.url()).pathname.split("/")[1];
+    const headers = { "content-type": "application/json", "x-event-id": nameId };
+    const codes = [251, 252];
+    for (const [i, code] of codes.entries()) {
+      const res = await page.request.post(`${API}/trpc/control.create`, {
+        headers, data: { codes: String(code), xpos: spot.x + i * dMm, ypos: spot.y, description: { d: `1.00${i + 1}` } },
+      });
+      expect(res.ok(), await res.text()).toBe(true);
+    }
+    try {
+      await page.reload();
+      await editorReady(page);
+      // The section is collapsed by default; its count stands beside the title.
+      await expect(page.getByTestId("editor-checks-count")).toBeVisible({ timeout: 20000 });
+      await page.getByTestId("editor-checks-toggle").click();
+      const row = page.locator('[data-testid="editor-check-row"][data-code="CONTROL_TOO_CLOSE"][data-sites="251,252"]');
+      await expect(row).toBeVisible({ timeout: 20000 });
+      await expect(row).toContainText("20 m");
+      await expect(page.locator('[data-testid="editor-check-marker"][data-code="CONTROL_TOO_CLOSE"][data-site="251"]')).toBeAttached();
+      await expect(page.locator('[data-testid="editor-check-marker"][data-code="CONTROL_TOO_CLOSE"][data-site="252"]')).toBeAttached();
+      expect(Number(await page.getByTestId("editor-status-checks").getAttribute("data-count"))).toBeGreaterThan(0);
+
+      // Click-to-locate: selects the first site and centres the view on the pair's midpoint.
+      await row.click();
+      await expect(selectedCode(page)).toHaveText("251", { timeout: 10000 });
+      const viewer = page.getByTestId("map-viewer");
+      await expect.poll(async () => Number(await viewer.getAttribute("data-centre-x")) / 1000, { timeout: 10000 }).toBeCloseTo(spot.x + dMm / 2, 1);
+      await expect.poll(async () => Number(await viewer.getAttribute("data-centre-y")) / 1000, { timeout: 10000 }).toBeCloseTo(spot.y, 1);
+    } finally {
+      for (const code of codes) await page.request.post(`${API}/trpc/control.delete`, { headers, data: { id: code } });
+    }
+  });
+});

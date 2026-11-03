@@ -531,3 +531,32 @@ describe("placeControlLabels — ordinal-1 cluster regressions", () => {
     }
   });
 });
+
+describe("placeControlLabels — collisions (course-layer.md §3.5)", () => {
+  it("marks no label as colliding on an ordinary map or in a contested cluster", () => {
+    const placed = placeControlLabels(
+      [{ id: "a", x: 0, y: 0, label: "1" }, { id: "b", x: 30, y: 0, label: "2" }],
+      [{ x1: 0, y1: 0, x2: 30, y2: 0 }],
+      OPTS,
+    );
+    for (const l of placed.values()) expect(l.collides).toBeUndefined();
+  });
+
+  it("marks the fallback box as colliding when no ring has a free slot", () => {
+    // A control boxed in by a tight ring of circles: every candidate on every ring hits one.
+    const ring: PlacementCircle[] = Array.from({ length: 24 }, (_, i) => {
+      const a = (i / 24) * 2 * Math.PI;
+      return { id: `o${i}`, x: Math.cos(a) * 7, y: Math.sin(a) * 7 };
+    });
+    const ring2: PlacementCircle[] = Array.from({ length: 40 }, (_, i) => {
+      const a = (i / 40) * 2 * Math.PI;
+      return { id: `p${i}`, x: Math.cos(a) * 13, y: Math.sin(a) * 13 };
+    });
+    const ring3: PlacementCircle[] = Array.from({ length: 56 }, (_, i) => {
+      const a = (i / 56) * 2 * Math.PI;
+      return { id: `q${i}`, x: Math.cos(a) * 18, y: Math.sin(a) * 18 };
+    });
+    const placed = placeControlLabels([{ id: "c", x: 0, y: 0, label: "31" }, ...ring, ...ring2, ...ring3], [], OPTS);
+    expect(placed.get("c")?.collides).toBe(true);
+  });
+});
