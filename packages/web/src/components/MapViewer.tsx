@@ -85,6 +85,7 @@ import {
 import { useMediaQuery } from "../hooks/useMediaQuery";
 import { courseLayerRequest, PROVISIONAL_SITE_ID, type LayoutRequest, type ProvisionalVisit } from "../lib/course-layer-request";
 import { dragLegShapes } from "../lib/editor/leg-length";
+import { outlinePoints } from "../lib/editor/geometry-edit";
 import type { CourseInfo } from "../map-gl/engine";
 import { editorHitAt, HIT_TOLERANCE_PX, type EditorTarget } from "../lib/editor/hit";
 import { COARSE_HIT_TOLERANCE_PX, IDLE as SITE_TOUCH_IDLE, LONG_PRESS_MS, LOUPE_DIAMETER_PX, LOUPE_SCALE, liftedPoint, loupePlacement, siteTouch, type SiteTouch, type SiteTouchEvent } from "../lib/editor/touch";
@@ -336,6 +337,8 @@ export interface ToolPointer {
   /** The shared hit-test's target under the pointer (`editorHitAt`), null for empty map. */
   target: EditorTarget | null;
   shift: boolean;
+  /** Alt / Option held (mouse; touch never): the geometry gestures of §7 "Editing geometry". */
+  alt?: boolean;
   /** Paper mm per CSS px at the current zoom: for handle tolerances. */
   mmPerPx: number;
 }
@@ -346,6 +349,8 @@ export type ToolShape =
   | { kind: "line"; points: readonly { x: number; y: number }[]; closed?: boolean; dashed?: boolean; color?: string; fill?: string; widthPx?: number; testId?: string; data?: Record<string, string> }
   /** A screen-size square handle. */
   | { kind: "handle"; x: number; y: number; active?: boolean; testId?: string; data?: Record<string, string> }
+  /** A screen-size Bézier handle grip at `x`, `y` on a thin line from its vertex `from`. */
+  | { kind: "grip"; x: number; y: number; from: { x: number; y: number }; testId?: string; data?: Record<string, string> }
   | { kind: "text"; x: number; y: number; text: string; dxPx?: number; dyPx?: number; color?: string; testId?: string }
   /** A raster on the UI layer (Layout mode's page images): its top-left, top-right and bottom-left corners, paper mm. */
   | { kind: "image"; topLeft: { x: number; y: number }; topRight: { x: number; y: number }; bottomLeft: { x: number; y: number }; href: string; testId?: string; data?: Record<string, string> };
@@ -363,7 +368,8 @@ export interface EditorToolBinding {
   cursor?: string;
   shapes?: readonly ToolShape[];
   onPointerDown?: (p: ToolPointer) => boolean;
-  onPointerDrag?: (pt: { x: number; y: number }) => void;
+  /** `mods`: the keys held now (Shift constrains, Alt breaks a handle pair, §7). */
+  onPointerDrag?: (pt: { x: number; y: number }, mods?: { shift: boolean; alt: boolean }) => void;
   onPointerUp?: (pt: { x: number; y: number } | null) => void;
   /** A click without movement (exclusive tools; a tap on touch). */
   onClick?: (p: ToolPointer) => void;
@@ -971,7 +977,7 @@ export function MapViewer({
   const sharedHit = !!editor?.sharedHitTest && glCourse;
   // Course objects the layer does not draw on screen: hit by their outline (§7).
   const uiAreas = useMemo(
-    () => (editor ? drawnObjects.filter((o) => o.kind === "filter_region" || o.kind === "toner_saver").map((o) => ({ id: o.id, ring: o.geometry })) : []),
+    () => (editor ? drawnObjects.filter((o) => o.kind === "filter_region" || o.kind === "toner_saver").map((o) => ({ id: o.id, ring: outlinePoints(o.geometry, true) })) : []),
     [editor, drawnObjects],
   );
   /** The editor target under a client point, `null` for empty map; `undefined` when SVG targets are in use. */
@@ -1002,11 +1008,11 @@ export function MapViewer({
   editorSnapRef.current = editor?.snap ?? null;
 
   /** The pointer as a tool sees it (§6): paper mm, the target under it, the zoom's mm per px. */
-  const toolPointer = (clientX: number, clientY: number, shift: boolean): ToolPointer | null => {
+  const toolPointer = (clientX: number, clientY: number, shift: boolean, alt = false): ToolPointer | null => {
     const pt = screenToMapMm(clientX, clientY);
     const edge = screenToMapMm(clientX + 1, clientY);
     if (!pt || !edge) return null;
-    return { pt, target: resolveEditorTarget(clientX, clientY) ?? null, shift, mmPerPx: Math.hypot(edge.x - pt.x, edge.y - pt.y) };
+    return { pt, target: resolveEditorTarget(clientX, clientY) ?? null, shift, alt, mmPerPx: Math.hypot(edge.x - pt.x, edge.y - pt.y) };
   };
   const toolPointerRef = useRef(toolPointer);
   toolPointerRef.current = toolPointer;
@@ -1446,7 +1452,7 @@ export function MapViewer({
     if (e.button !== 0) return;
     const tool = editorToolRef.current;
     if (!measuring && tool) {
-      const p = toolPointerRef.current(e.clientX, e.clientY, e.shiftKey);
+      const p = toolPointerRef.current(e.clientX, e.clientY, e.shiftKey, e.altKey);
       if (p && tool.onPointerDown?.(p)) {
         toolDragRef.current = { startX: e.clientX, startY: e.clientY };
         return;
@@ -1477,11 +1483,11 @@ export function MapViewer({
     }
     if (editor && toolDragRef.current) {
       const pt = screenToMapMm(e.clientX, e.clientY);
-      if (pt) editorToolRef.current?.onPointerDrag?.(pt);
+      if (pt) editorToolRef.current?.onPointerDrag?.(pt, { shift: e.shiftKey, alt: e.altKey });
       return;
     }
     if (editor?.tool?.onHover && !isPanningRef.current && e.buttons === 0) {
-      const p = toolPointerRef.current(e.clientX, e.clientY, e.shiftKey);
+      const p = toolPointerRef.current(e.clientX, e.clientY, e.shiftKey, e.altKey);
       if (p) editor.tool.onHover(p);
     }
     const labelDrag = editorLabelDragRef.current;
@@ -1596,7 +1602,7 @@ export function MapViewer({
       if (dx + dy < 5 && !onButton) {
         const tool = editorToolRef.current;
         if (tool?.exclusive) {
-          const p = toolPointerRef.current(e.clientX, e.clientY, e.shiftKey);
+          const p = toolPointerRef.current(e.clientX, e.clientY, e.shiftKey, e.altKey);
           if (p) tool.onClick?.(p);
         } else {
           const pt = screenToMapMm(e.clientX, e.clientY);
@@ -3468,14 +3474,14 @@ export function MapViewer({
       onDoubleClick={(e) => {
         const tool = editorToolRef.current;
         if (!tool?.onDoubleClick || (e.target as HTMLElement).closest?.("button")) return;
-        const p = toolPointer(e.clientX, e.clientY, e.shiftKey);
+        const p = toolPointer(e.clientX, e.clientY, e.shiftKey, e.altKey);
         if (p) tool.onDoubleClick(p);
       }}
       onContextMenu={(e) => {
         const tool = editorToolRef.current;
         if (!tool?.onContextMenu) return;
         e.preventDefault();
-        const p = toolPointer(e.clientX, e.clientY, e.shiftKey);
+        const p = toolPointer(e.clientX, e.clientY, e.shiftKey, e.altKey);
         if (p) tool.onContextMenu(p);
       }}
     >
@@ -4440,6 +4446,16 @@ function toolShapeNode(
       if (!p) return null;
       return <rect key={key} x={p.x - 4} y={p.y - 4} width={8} height={8} fill={sh.active ? "#7c3aed" : "#ffffff"} stroke="#7c3aed"
         strokeWidth={1.5} data-testid={sh.testId} data-x={sh.x} data-y={sh.y} {...data} />;
+    }
+    case "grip": {
+      const p = project(sh.x, sh.y), q = project(sh.from.x, sh.from.y);
+      if (!p || !q) return null;
+      return (
+        <g key={key}>
+          <line x1={q.x} y1={q.y} x2={p.x} y2={p.y} stroke="#7c3aed" strokeWidth={1} />
+          <circle cx={p.x} cy={p.y} r={3.5} fill="#ffffff" stroke="#7c3aed" strokeWidth={1.5} data-testid={sh.testId} data-x={sh.x} data-y={sh.y} {...data} />
+        </g>
+      );
     }
     case "text": {
       const p = project(sh.x, sh.y);

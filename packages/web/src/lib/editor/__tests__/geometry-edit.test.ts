@@ -1,7 +1,8 @@
 import { describe, expect, it } from "vitest";
+import { course } from "@oxygen/shared";
 import {
   CURVE_STEPS, constrain45, deleteVertex, dragGrip, hasHandles, insertVertex, nearestEdge, outlinePoints, retractHandles,
-  sampleSegment, symmetricHandles, type Vertex,
+  sampleSegment, symmetricHandles, vertexRule, type Vertex,
 } from "../geometry-edit";
 
 const square: Vertex[] = [{ x: 0, y: 0 }, { x: 10, y: 0 }, { x: 10, y: 10 }, { x: 0, y: 10 }];
@@ -135,5 +136,25 @@ describe("handles", () => {
     expect(c.x).toBeCloseTo(Math.hypot(10, 1));
     const d = constrain45({ x: 3, y: 2.6 });
     expect(d.x).toBeCloseTo(d.y);
+  });
+});
+
+describe("vertexRule agrees with the stored schema (course-layer.md §8.1)", () => {
+  const props: Record<string, unknown> = {
+    text: { text: "x", fontSizeMm: 4 }, image: { graphicId: 1 }, filter_region: { mode: "hide", symbols: [] },
+  };
+  const parse = (kind: string, geometry: Vertex[]) => course.courseObjectBodySchema.safeParse({ kind, geometry, props: props[kind] ?? {} }).success;
+  const pts = (n: number, curved = false): Vertex[] =>
+    Array.from({ length: n }, (_, i) => ({ x: i * 3, y: (i * i) % 5, ...(curved && i === 0 ? { hOut: { x: 1, y: 1 } } : {}) }));
+
+  it.each(course.COURSE_OBJECT_KINDS.filter((k) => k !== "inset_frame"))("%s", (kind) => {
+    const r = vertexRule(kind);
+    expect(parse(kind, pts(r.min))).toBe(true);
+    if (r.min > 1) expect(parse(kind, pts(r.min - 1))).toBe(false);
+    if (Number.isFinite(r.max)) expect(parse(kind, pts(r.max + 1))).toBe(false);
+    else expect(parse(kind, pts(r.min + 3))).toBe(true);
+    // Fixed-count kinds (a text's anchor, an image's corners) are never curve-edited.
+    if (Number.isFinite(r.max)) expect(r.curves).toBe(false);
+    else expect(parse(kind, pts(r.min, true))).toBe(r.curves);
   });
 });

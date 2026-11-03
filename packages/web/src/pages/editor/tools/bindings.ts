@@ -12,6 +12,9 @@ import type { EditorTarget } from "../../../lib/editor/hit";
 import { circleGapAt, circleGapFromDrag, compassDeg, legFraction, legGapAt, legGapFromDrag, type AngularGap, type FractionGap } from "./gaps";
 import { legLengthShape } from "../../../lib/editor/leg-length";
 import { isClosedKind, pointInPolygon, step, type PolygonState } from "./polygon";
+import {
+  constrain45, dragGrip, hasHandles, insertVertex, nearestEdge, outlinePoints, retractHandles, symmetricHandles, vertexRule, type Vertex,
+} from "../../../lib/editor/geometry-edit";
 
 type Pt = { x: number; y: number };
 
@@ -21,11 +24,18 @@ export const HANDLE_PX = 7;
 export type Gesture =
   | { kind: "lasso"; points: Pt[] }
   | { kind: "shift-click"; id: number }
-  /** `base` is the geometry at pointer-down: every drag event applies the whole from→to offset to it, never to a draft. */
-  | { kind: "object"; id: number; from: Pt; to: Pt; moved: boolean; vertex: number | null; base: course.CourseObject["geometry"] }
+  /**
+   * `base` is the geometry at pointer-down: every drag event applies the whole from→to offset to it, never to a draft.
+   * `alt` on a vertex: the drag pulls symmetric handles instead of moving it (§7 "Editing geometry").
+   */
+  | { kind: "object"; id: number; from: Pt; to: Pt; moved: boolean; vertex: number | null; base: course.CourseObject["geometry"]; alt?: boolean; shift?: boolean }
+  /** A Bézier handle grip of vertex `index` dragged; `alt` (live) breaks the pair. */
+  | { kind: "grip"; id: number; index: number; which: "in" | "out"; to: Pt; moved: boolean; base: course.CourseObject["geometry"]; alt: boolean; shift: boolean }
   /** Two fingers on a selected object's handle ring (§10): scale `base` about its centroid. */
   | { kind: "pinch"; id: number; base: course.CourseObject["geometry"]; centre: Pt; scale: number }
   | { kind: "poly-vertex"; index: number }
+  /** A press while drawing placed vertex `index` at `from`; a drag past 3 px pulls its handles (§6.4). */
+  | { kind: "poly-pull"; index: number; from: Pt; mmPerPx: number; poly: PolygonState; pulled: boolean }
   | { kind: "gap"; from: Pt; to: Pt }
   | null;
 
@@ -52,13 +62,20 @@ export function scaleAbout(g: readonly course.CourseObject["geometry"][number][]
   }));
 }
 
-/** A ring of a course object as the UI layer outlines it (its vertices, Bézier handles ignored). */
-export const objectRing = (o: Pick<course.CourseObject, "geometry">): Pt[] => o.geometry.map((v) => ({ x: v.x, y: v.y }));
+/** Where a vertex's handle grips are, paper mm. */
+const gripsOf = (v: Vertex): { which: "in" | "out"; at: Pt }[] => [
+  ...(v.hIn ? [{ which: "in" as const, at: { x: v.x + v.hIn.x, y: v.y + v.hIn.y } }] : []),
+  ...(v.hOut ? [{ which: "out" as const, at: { x: v.x + v.hOut.x, y: v.y + v.hOut.y } }] : []),
+];
 
-/** Outline shapes of an object (selection, or the outline of a kind the layer does not draw on screen). */
-export function objectOutline(o: course.CourseObject, selected: boolean): ToolShape[] {
-  const ring = objectRing(o);
-  const closed = o.kind !== "oob_line" && o.kind !== "marked_route" && o.kind !== "text" && o.kind !== "image";
+/**
+ * Outline shapes of an object (selection, or the outline of a kind the layer does not draw on screen): the path
+ * with each curve sampled (§7 "Editing geometry"); when selected, a handle per vertex (`focused` drawn active) and
+ * a grip per Bézier handle.
+ */
+export function objectOutline(o: course.CourseObject, selected: boolean, focused: number | null = null): ToolShape[] {
+  const closed = vertexRule(o.kind).closed;
+  const ring = outlinePoints(o.geometry, closed);
   const out: ToolShape[] = [];
   if (o.kind === "text") {
     out.push({ kind: "circle", x: ring[0].x, y: ring[0].y, rMm: 0.6, color: selected ? BLUE : PURPLE, testId: "editor-object-outline", data: { "object-id": String(o.id) } });
@@ -68,7 +85,11 @@ export function objectOutline(o: course.CourseObject, selected: boolean): ToolSh
       testId: "editor-object-outline", data: { "object-id": String(o.id), "object-kind": o.kind },
     });
   }
-  if (selected) ring.forEach((v, i) => out.push({ kind: "handle", x: v.x, y: v.y, testId: "editor-object-handle", data: { index: String(i) } }));
+  if (!selected) return out;
+  o.geometry.forEach((v: Vertex, i) => {
+    out.push({ kind: "handle", x: v.x, y: v.y, active: i === focused, testId: "editor-object-handle", data: { index: String(i), ...(i === focused ? { focused: "true" } : {}) } });
+    for (const g of gripsOf(v)) out.push({ kind: "grip", x: g.at.x, y: g.at.y, from: v, testId: "editor-object-grip", data: { index: String(i), which: g.which } });
+  });
   return out;
 }
 
@@ -78,6 +99,9 @@ export interface SelectOptions {
   gesture: GestureRef;
   /** The selected object, if any (handles and body drag). */
   selected: course.CourseObject | null;
+  /** The selected object's focused vertex (a click on its handle): `Delete` removes it (§7 "Editing geometry"). */
+  focusedVertex?: number | null;
+  onVertexFocus?: (index: number | null) => void;
   objects: readonly course.CourseObject[];
   /** Positioned sites by id (the lasso). */
   sites: readonly { id: number; x: number; y: number; kind: "control" | "start" | "finish" }[];
@@ -100,7 +124,7 @@ export function selectBinding(o: SelectOptions): EditorToolBinding {
   for (const obj of o.objects) {
     const selected = obj.id === o.selected?.id;
     // The layer draws neither regions nor toner savers on screen: the UI layer outlines them always.
-    if (selected || obj.kind === "filter_region" || obj.kind === "toner_saver") shapes.push(...objectOutline(obj, selected));
+    if (selected || obj.kind === "filter_region" || obj.kind === "toner_saver") shapes.push(...objectOutline(obj, selected, selected ? o.focusedVertex ?? null : null));
   }
   const byId = new Map(o.sites.map((s) => [s.id, s] as const));
   for (const id of o.multi) {
@@ -112,12 +136,26 @@ export function selectBinding(o: SelectOptions): EditorToolBinding {
   return {
     shapes,
     onPointerDown(p: ToolPointer) {
-      const sel = o.selected;
+      const sel = shown(o);
       if (sel) {
-        const vertex = sel.geometry.findIndex((v) => near(v, p.pt, HANDLE_PX * p.mmPerPx));
-        const onBody = p.target?.kind === "object" && p.target.id === sel.id;
-        if (vertex >= 0 || onBody) {
-          g.current = { kind: "object", id: sel.id, from: p.pt, to: p.pt, moved: false, vertex: vertex >= 0 ? vertex : null, base: sel.geometry };
+        const reach = HANDLE_PX * p.mmPerPx;
+        const rule = vertexRule(sel.kind);
+        const vertex = sel.geometry.findIndex((v) => near(v, p.pt, reach));
+        if (vertex >= 0) {
+          g.current = { kind: "object", id: sel.id, from: p.pt, to: p.pt, moved: false, vertex, base: sel.geometry, alt: !!p.alt && rule.curves };
+          return true;
+        }
+        for (const [index, v] of (sel.geometry as Vertex[]).entries()) {
+          const grip = gripsOf(v).find((q) => near(q.at, p.pt, reach));
+          if (grip) {
+            g.current = { kind: "grip", id: sel.id, index, which: grip.which, to: p.pt, moved: false, base: sel.geometry, alt: !!p.alt, shift: p.shift };
+            return true;
+          }
+        }
+        // The body, or within reach of its edge (a double-click there inserts a vertex, so the press must not deselect).
+        const edge = sel.geometry.length > 1 ? nearestEdge(sel.geometry, rule.closed, p.pt) : null;
+        if ((p.target?.kind === "object" && p.target.id === sel.id) || (edge && edge.dist <= reach)) {
+          g.current = { kind: "object", id: sel.id, from: p.pt, to: p.pt, moved: false, vertex: null, base: sel.geometry };
           return true;
         }
       }
@@ -139,15 +177,22 @@ export function selectBinding(o: SelectOptions): EditorToolBinding {
       }
       return false;
     },
-    onPointerDrag(pt) {
+    onPointerDrag(pt, mods) {
       const cur = g.current;
       if (cur?.kind === "lasso") {
         cur.points.push(pt);
         o.redraw();
       } else if (cur?.kind === "object") {
         cur.to = pt;
+        cur.shift = mods?.shift ?? false;
         cur.moved = cur.moved || !near(cur.from, pt, 0.05);
         if (cur.moved) o.onObjectDraft(cur.id, dragged(cur));
+      } else if (cur?.kind === "grip") {
+        cur.to = pt;
+        cur.moved = true;
+        cur.alt = mods?.alt ?? cur.alt;
+        cur.shift = mods?.shift ?? cur.shift;
+        o.onObjectDraft(cur.id, gripped(cur));
       }
     },
     onPointerUp(pt) {
@@ -162,11 +207,32 @@ export function selectBinding(o: SelectOptions): EditorToolBinding {
         o.onLasso(o.sites.filter((s) => s.kind === "control" && pointInPolygon(s, cur.points)).map((s) => s.id));
       } else if (cur.kind === "object") {
         if (pt) cur.to = pt;
-        if (pt && cur.moved) o.onObjectMoved(cur.id, dragged(cur));
-        else o.onObjectDraft(cur.id, null);
+        if (pt && cur.moved) return o.onObjectMoved(cur.id, dragged(cur));
+        o.onObjectDraft(cur.id, null);
+        if (!pt) return;
+        // A click: on a vertex it focuses it, with Alt it retracts its handles; on the body it unfocuses.
+        if (cur.vertex !== null && cur.alt) {
+          if (hasHandles(cur.base[cur.vertex])) o.onObjectMoved(cur.id, retractHandles(cur.base, cur.vertex));
+        } else o.onVertexFocus?.(cur.vertex);
+      } else if (cur.kind === "grip") {
+        if (pt && cur.moved) {
+          cur.to = pt;
+          o.onObjectMoved(cur.id, gripped(cur));
+        } else o.onObjectDraft(cur.id, null);
       }
     },
     onDoubleClick(p) {
+      // On the selected object's edge, off its vertices: a vertex there (§7 "Editing geometry").
+      const sel = shown(o);
+      if (sel && vertexRule(sel.kind).max === Infinity) {
+        const reach = HANDLE_PX * p.mmPerPx;
+        const edge = sel.geometry.some((v) => near(v, p.pt, reach)) ? null : nearestEdge(sel.geometry, vertexRule(sel.kind).closed, p.pt);
+        if (edge && edge.dist <= reach) {
+          const geometry = insertVertex(sel.geometry, vertexRule(sel.kind).closed, edge.index, edge.t);
+          o.onVertexFocus?.(edge.index + 1);
+          return o.onObjectMoved(sel.id, geometry);
+        }
+      }
       if (p.target?.kind === "leg") o.onLegDoubleClick(p.target, p.pt);
     },
     onPinch: {
@@ -197,10 +263,21 @@ export function selectBinding(o: SelectOptions): EditorToolBinding {
   };
 }
 
+/** The selected object as the page shows it (a draft from the last gesture until the list catches up). */
+const shown = (o: SelectOptions): course.CourseObject | null => (o.selected ? o.objects.find((x) => x.id === o.selected!.id) ?? o.selected : null);
+
 function dragged(g: Extract<Gesture, { kind: "object" }>): course.CourseObject["geometry"] {
   const dx = g.to.x - g.from.x, dy = g.to.y - g.from.y;
   if (g.vertex === null) return translate(g.base, dx, dy);
+  // Alt-drag on a vertex: hOut follows the pointer, hIn mirrors it (Shift: 45°).
+  if (g.alt) return symmetricHandles(g.base, g.vertex, g.shift ? constrain45({ x: dx, y: dy }) : { x: dx, y: dy });
   return g.base.map((v, i) => (i === g.vertex ? { ...v, x: v.x + dx, y: v.y + dy } : v));
+}
+
+function gripped(g: Extract<Gesture, { kind: "grip" }>): course.CourseObject["geometry"] {
+  const v = g.base[g.index];
+  const vec = { x: g.to.x - v.x, y: g.to.y - v.y };
+  return dragGrip(g.base, g.index, g.which, g.shift ? constrain45(vec) : vec, g.alt);
 }
 
 // ─── S / K / M: the armed creation tools ──────────────────
@@ -255,7 +332,7 @@ export interface AreaOptions {
   hover: Pt | null;
   onHover: (p: ToolPointer | null) => void;
   onPoly: (poly: PolygonState) => void;
-  onDone: (vertices: Pt[]) => void;
+  onDone: (vertices: Vertex[]) => void;
   onCancel: () => void;
   snap: (pt: Pt) => Pt;
 }
@@ -264,9 +341,14 @@ export function areaBinding(o: AreaOptions): EditorToolBinding {
   const v = o.poly.vertices;
   const closed = isClosedKind(o.poly.kind);
   const shapes: ToolShape[] = [];
-  const preview = o.hover ? [...v, o.hover] : v;
-  if (preview.length >= 2) shapes.push({ kind: "line", points: preview, closed: closed && preview.length >= 3, dashed: true, color: PURPLE, fill: closed ? "rgba(124,58,237,0.08)" : undefined, testId: "editor-polygon" });
-  v.forEach((p, i) => shapes.push({ kind: "handle", x: p.x, y: p.y, active: i === 0 && closed, testId: "editor-polygon-vertex", data: { index: String(i) } }));
+  // No rubber-band vertex while a press is placing one (the hover is where the press began).
+  const preview = o.hover && o.gesture.current?.kind !== "poly-pull" ? [...v, o.hover] : v;
+  const ring = closed && preview.length >= 3;
+  if (preview.length >= 2) shapes.push({ kind: "line", points: outlinePoints(preview, ring), closed: ring, dashed: true, color: PURPLE, fill: closed ? "rgba(124,58,237,0.08)" : undefined, testId: "editor-polygon" });
+  v.forEach((p, i) => {
+    shapes.push({ kind: "handle", x: p.x, y: p.y, active: i === 0 && closed, testId: "editor-polygon-vertex", data: { index: String(i) } });
+    for (const g of gripsOf(p)) shapes.push({ kind: "grip", x: g.at.x, y: g.at.y, from: p, testId: "editor-polygon-grip", data: { index: String(i), which: g.which } });
+  });
   const apply = (e: Parameters<typeof step>[1]) => {
     const r = step(o.poly, e);
     if (r.done) o.onDone(r.done);
@@ -285,11 +367,23 @@ export function areaBinding(o: AreaOptions): EditorToolBinding {
         o.gesture.current = { kind: "poly-vertex", index };
         return true;
       }
-      return false;
+      if (index === 0) return false;
+      // Anywhere else the press places a corner now; a drag from it pulls its handles (click = corner, click-drag = curve).
+      const pt = o.snap(p.pt);
+      const r = step(o.poly, { type: "click", pt, onFirst: false });
+      if (r.state !== o.poly) o.onPoly(r.state);
+      o.gesture.current = { kind: "poly-pull", index: r.state.vertices.length - 1, from: pt, mmPerPx: p.mmPerPx, poly: r.state, pulled: false };
+      return true;
     },
-    onPointerDrag(pt) {
+    onPointerDrag(pt, mods) {
       const g = o.gesture.current;
       if (g?.kind === "poly-vertex") apply({ type: "move-vertex", index: g.index, pt: o.snap(pt) });
+      else if (g?.kind === "poly-pull") {
+        if (!g.pulled && near(g.from, pt, 3 * g.mmPerPx)) return;
+        g.pulled = true;
+        const r = step(g.poly, { type: "pull-handles", index: g.index, vec: { x: pt.x - g.from.x, y: pt.y - g.from.y }, shift: mods?.shift ?? false });
+        if (r.state !== g.poly) o.onPoly(r.state);
+      }
     },
     onPointerUp() {
       o.gesture.current = null;

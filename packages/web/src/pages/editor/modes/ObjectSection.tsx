@@ -8,6 +8,7 @@
 
 import { useMemo, useState } from "react";
 import { useTranslation } from "react-i18next";
+import { vertexRule } from "../../../lib/editor/geometry-edit";
 import type { course, mapDocument } from "@oxygen/shared";
 
 type Obj = course.CourseObject;
@@ -50,6 +51,7 @@ export function ObjectSection(props: ObjectSectionProps) {
         </button>
       </div>
       <KindProps {...p} />
+      {vertexRule(o.kind).curves && <p data-testid="editor-geometry-hint" className="text-[10px] text-slate-400">{t("geometryHint")}</p>}
       <ScopeEditor scope={o.scope} courses={p.courses} classes={p.classes} onScope={p.onScope} />
     </div>
   );

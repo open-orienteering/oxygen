@@ -243,5 +243,6 @@
   "layoutClassesHint": "En klass kan skriva ut banan i en annan skala eller på en annan mall.",
   "layoutClassTemplate": "Mall",
   "layoutClassTemplateAuto": "Auto",
-  "layoutOpen": "Öppna"
+  "layoutOpen": "Öppna",
+  "geometryHint": "Dubbelklicka på en kant för att lägga till en punkt; klicka på en punkt och tryck Delete för att ta bort den. Alt-dra en punkt för att runda den, Alt-klicka för att göra den till ett hörn igen; Alt på ett handtag böjer bara ena sidan."
 }

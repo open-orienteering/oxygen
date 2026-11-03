@@ -16,6 +16,21 @@ export interface Vertex { x: number; y: number; hIn?: Pt; hOut?: Pt }
 export const CURVE_STEPS = 8;
 
 const EPS = 1e-6;
+
+/**
+ * What a kind's path allows (`courseObjectBodySchema`): its vertex count
+ * and whether the editor curves it — a filter region is a polygon (the
+ * schema refuses handles), a text its anchor, an image two corners.
+ */
+export function vertexRule(kind: string): { min: number; max: number; curves: boolean; closed: boolean } {
+  switch (kind) {
+    case "oob_line": case "marked_route": case "inset_frame": return { min: 2, max: Infinity, curves: true, closed: false };
+    case "text": return { min: 1, max: 1, curves: false, closed: false };
+    case "image": return { min: 2, max: 2, curves: false, closed: false };
+    case "filter_region": return { min: 3, max: Infinity, curves: false, closed: true };
+    default: return { min: 3, max: Infinity, curves: true, closed: true };
+  }
+}
 const lerp = (a: Pt, b: Pt, t: number): Pt => ({ x: a.x + (b.x - a.x) * t, y: a.y + (b.y - a.y) * t });
 const len = (v: Pt) => Math.hypot(v.x, v.y);
 const sub = (a: Pt, b: Pt): Pt => ({ x: a.x - b.x, y: a.y - b.y });

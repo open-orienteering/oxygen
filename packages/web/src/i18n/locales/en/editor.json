@@ -243,5 +243,6 @@
   "layoutClassesHint": "A class may print the course at another scale or on another template.",
   "layoutClassTemplate": "Template",
   "layoutClassTemplateAuto": "Auto",
-  "layoutOpen": "Open"
+  "layoutOpen": "Open",
+  "geometryHint": "Double-click an edge to add a point; click a point and press Delete to remove it. Alt-drag a point to curve it, Alt-click to make it a corner again; Alt on a handle bends one side only."
 }
