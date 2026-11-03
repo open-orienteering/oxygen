@@ -31,7 +31,7 @@ import {
   type PaperSize,
   type TemplateKeyFields,
 } from "@oxygen/shared";
-import { Prisma, type MapTemplate, type PrismaClient } from "../generated/prisma/client.js";
+import type { MapTemplate, Prisma, PrismaClient } from "../generated/prisma/client.js";
 import { nextObjectVersion } from "../course-objects.js";
 import { getBaseMapInfoOrNull } from "./map-source.js";
 
@@ -119,32 +119,28 @@ export async function ensureAutoTemplate(db: Db, eventId: bigint, spec: KeySpec,
       ? seedSettings.data
       : defaultTemplateSettings(paperOf(spec), seedSettings?.success ? seedSettings.data.printMarginMm : 3, seedSettings?.success ? seedSettings.data.appearance : undefined);
   const name = await freeTemplateName(db, eventId, templateKeyName(spec));
-  try {
-    const template = await db.mapTemplate.create({
-      data: {
-        eventId,
-        name,
-        paper: spec.paper,
-        paperWidthMm: spec.paper === "custom" ? spec.paperWidthMm ?? null : null,
-        paperHeightMm: spec.paper === "custom" ? spec.paperHeightMm ?? null : null,
-        orientation: spec.orientation,
-        printScale: spec.printScale,
-        settings: json(settings),
-        objects: json(samePage && seed ? seed.objects : []),
-        autoKey: key,
-        isExtra: false,
-        version: nextObjectVersion(),
-      },
-    });
-    return { template, created: true };
-  } catch (error) {
-    // A concurrent writer created the key's auto template first.
-    if (error instanceof Prisma.PrismaClientKnownRequestError && error.code === "P2002") {
-      const raced = await db.mapTemplate.findFirst({ where: { eventId, autoKey: key, isExtra: false } });
-      if (raced) return { template: raced, created: false };
-    }
-    throw error;
-  }
+  // ON CONFLICT DO NOTHING (`skipDuplicates`): a concurrent writer that created the key's auto template
+  // first leaves this insert a no-op instead of aborting the caller's transaction (a P2002 would).
+  const inserted = await db.mapTemplate.createMany({
+    data: {
+      eventId,
+      name,
+      paper: spec.paper,
+      paperWidthMm: spec.paper === "custom" ? spec.paperWidthMm ?? null : null,
+      paperHeightMm: spec.paper === "custom" ? spec.paperHeightMm ?? null : null,
+      orientation: spec.orientation,
+      printScale: spec.printScale,
+      settings: json(settings),
+      objects: json(samePage && seed ? seed.objects : []),
+      autoKey: key,
+      isExtra: false,
+      version: nextObjectVersion(),
+    },
+    skipDuplicates: true,
+  });
+  const template = await db.mapTemplate.findFirst({ where: { eventId, autoKey: key, isExtra: false } });
+  if (!template) throw new TRPCError({ code: "CONFLICT", message: `Template "${name}" could not be created; try again` });
+  return { template, created: inserted.count === 1 };
 }
 
 /** The template most sheets use (the event's default look), or null. */

@@ -131,7 +131,7 @@ there is no debounce. The status bar's save state is the editor's.
 
 **Version tokens** (D8). `course_maps.version` and `map_templates.version`
 are the G1 token for rows that are not journaled: an HLC minted by the
-node clock on every write, as `course_objects` (`course-layer.md` §8.4).
+node clock on every write (`reorder` included), as `course_objects` (`course-layer.md` §8.4).
 `courseMap.saveLayout` and `mapTemplate.update` take an optional
 `baseVersion`; the row is locked (`FOR UPDATE`) and a stale token is tRPC
 `CONFLICT` with `VersionConflictData { kind: "sheet" | "template", id
@@ -279,7 +279,7 @@ CASCADE`) and `props` (setter maps, F). A course's **own** sheets have
 `class_id` NULL.
 
 **`layout.autoSheets { courseId? }`** (`courses.edit`; 08 §6), idempotent,
-in one transaction; without `courseId` every course of the event:
+in one transaction (60 s timeout); without `courseId` every course of the event:
 
 1. *The course's own sheets.* Without one, a first sheet is created on the
    auto template of the key that fits the course; a sheet without a
@@ -288,11 +288,14 @@ in one transaction; without `courseId` every course of the event:
    A4 portrait at the map's scale (1:10 000 without a map) when the event
    has none — with the orientation turned when only the other one holds
    the course (`fitOrientation`: the controls' extent at print scale plus
-   `COURSE_FIT_MARGIN_MM` = 6 mm on every side inside the frame; neither →
-   the closer). Paper and scale are not changed automatically (a setter
+   `COURSE_FIT_MARGIN_MM` = 6 mm on every side inside the printable area —
+   the paper less the template's margin, which is a new template's frame;
+   neither → the closer). Paper and scale are not changed automatically (a setter
    decides A3 or another scale). The window centre is NULL: centred on the
    course (`centerOfControls`), "the first sheet fits the course with a
    margin" (08 §4.6).
+   A concurrent first export of the same key does not fail: the insert
+   is `ON CONFLICT DO NOTHING` and the key's auto template is read back.
 2. *Class sheets.* Every class of the course with `print_scale` or
    `sheet_template_id` gets sheet rows keyed by `class_id`: one per course
    sheet (name `<sheet> · <class>`; window centre, objects, block and

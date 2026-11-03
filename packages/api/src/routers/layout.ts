@@ -10,6 +10,9 @@ import { z } from "zod";
 import { autoSheets, type AutoSheetsResult } from "../course-maps/auto-sheets.js";
 import { coursesEditProcedure, coursesViewProcedure, router } from "../trpc.js";
 
+/** "All courses" on a large event creates many sheets in one transaction: more than Prisma's 5 s default. */
+const AUTO_SHEETS_TX = { timeout: 60_000, maxWait: 10_000 };
+
 export interface ClassOverrideRow {
   seq: number;
   name: string;
@@ -45,7 +48,7 @@ export const layoutRouter = router({
           Object.assign(out.classSheets, r.classSheets);
         }
         return out;
-      });
+      }, AUTO_SHEETS_TX);
     }),
 
   /** A course's classes with their print overrides and sheets (the Layout inspector, Class view). */
@@ -101,6 +104,6 @@ export const layoutRouter = router({
           },
         });
         return cls.courseId ? autoSheets(tx, ctx.event.id, cls.courseId) : null;
-      });
+      }, AUTO_SHEETS_TX);
     }),
 });

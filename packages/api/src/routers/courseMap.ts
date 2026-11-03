@@ -767,7 +767,7 @@ export const courseMapRouter = router({
         input.mapIds.map((seq, sortOrder) =>
           ctx.db.courseMap.update({
             where: { id: maps.find((map) => map.seq === seq)!.id },
-            data: { sortOrder },
+            data: { sortOrder, version: nextObjectVersion() },
           }),
         ),
       );

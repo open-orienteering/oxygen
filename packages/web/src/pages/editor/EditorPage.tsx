@@ -1521,8 +1521,6 @@ export function EditorPage() {
         {objectsDom}
         <div className="absolute top-2 inset-x-2 z-30 flex flex-col gap-1.5 pointer-events-none">
           {noticeNode}
-        {classNotice}
-          {classNotice}
           {fieldReadOnly && <OfflineNotice />}
           {errorMsg && <span data-testid="editor-error" className="pointer-events-auto w-fit text-[11px] text-red-600 bg-white/95 rounded px-1.5">{errorMsg}</span>}
           {showExhausted && <span data-testid="series-exhausted" className="pointer-events-auto w-fit text-[11px] text-amber-700 bg-white/95 rounded px-1.5">{tc("seriesExhausted")}</span>}
@@ -1572,6 +1570,7 @@ export function EditorPage() {
       <div className="flex flex-col gap-2 min-h-0 h-full">
         {fieldReadOnly && <div className="w-64"><OfflineNotice /></div>}
         {noticeNode}
+        {classNotice}
         <Inspector>
           {state.mode === "layout" ? layoutMode.inspector : <>
           {fieldMode ? (
