@@ -16,7 +16,8 @@
  * - Autosave: there is no save button; the status bar says saved /
  *   saving / not saved / changed elsewhere.
  *
- * Course mode only (Layout D7, Field D9). The tools (§6: the armed
+ * Course mode and Field mode (§9; the phone default, with the bottom
+ * sheet and the compact chrome of §10); Layout is D7's. The tools (§6: the armed
  * `S` / `K` / `M`, `A` areas, `T` text, `G` gaps, snapping, Shift-click /
  * lasso multi-select) and course objects (§7) are D5's: each tool is a
  * viewer binding (`tools/bindings.ts`) built here from the state.
@@ -31,6 +32,11 @@ import { MapPanel } from "../../components/MapPanel";
 import { ControlDescriptionEditor } from "../../components/ControlDescriptionEditor";
 import type { EditorDescriptionSuggestion, EditorToolBinding, MapViewerEditorProps, ToolPointer } from "../../components/MapViewer";
 import { useMediaQuery } from "../../hooks/useMediaQuery";
+import { useOnlineStatus } from "../../hooks/useOnlineStatus";
+import { useCapabilities } from "../../context/CapabilitiesContext";
+import { paperFrameOf } from "../../lib/vector-map";
+import { bandCentreOffsetPx, fieldRows, fixToPaper, initialModeFor, type Detent } from "../../lib/editor/field";
+import { BottomSheet } from "../../components/editor/BottomSheet";
 import { IOF_SYMBOLS } from "../../iof-symbols";
 import { iofSymbolName } from "../../iof-symbol-meta";
 import { ocadToIof } from "../../lib/control-description-options";
@@ -61,6 +67,8 @@ import { StatusBar, type SaveState } from "./StatusBar";
 import { useCourseChecks } from "./useCourseChecks";
 import type { EditorCheck } from "../../lib/editor/checks";
 import { CourseSection, MultiSection, SelectionSection } from "./modes/CourseMode";
+import { AddMenu, FieldSection, FieldSelection, FieldTopBar, FixStatus, OfflineNotice, OverflowMenu, type AddChoice } from "./modes/FieldMode";
+import { useFieldFix } from "./useFieldFix";
 
 type Pt = { x: number; y: number };
 type Structure = course.WireCourseStructure;
@@ -89,7 +97,12 @@ export function EditorPage() {
   const utils = trpc.useUtils();
   const [searchParams] = useSearchParams();
   const { nameId } = useParams<{ nameId: string }>();
-  const [state, dispatch] = useReducer(editorReducer, initialEditorState);
+  // A phone opens in Field mode (§9, §10).
+  const [state, dispatch] = useReducer(editorReducer, isMobile, (phone: boolean) => ({ ...initialEditorState, mode: initialModeFor({ phone }) }));
+  const fieldMode = state.mode === "field";
+  const online = useOnlineStatus();
+  const canReview = useCapabilities().has("courses.review");
+  const geo = useFieldFix(fieldMode);
 
   const [undoStack] = useState(() => new UndoStack(50));
   const [, setHistVersion] = useState(0);
@@ -167,6 +180,14 @@ export function EditorPage() {
   );
   const activeSeriesId = allocSeriesId !== null && inventory.some((s) => s.seriesId === allocSeriesId) ? allocSeriesId : null;
   const membership = useMemo(() => courseMembership(courses.data ?? []), [courses.data]);
+
+  // ─── Field mode (§9): the fix on paper, distance / bearing, check-off ─
+  const rotationCorrection = mapMetadata.data?.rotationCorrection;
+  const paperFrame = useMemo(() => (mapDoc ? paperFrameOf(mapDoc.header, rotationCorrection) : null), [mapDoc, rotationCorrection]);
+  const fix = fieldMode ? geo.position : null;
+  const paperFix = useMemo(() => (fix ? fixToPaper(paperFrame, fix) : null), [fix, paperFrame]);
+  const checkedIds = useMemo(() => new Set((controlList.data ?? []).filter((c) => c.checkedAt).map((c) => c.id)), [controlList.data]);
+  const fieldList = useMemo(() => fieldRows(rows, paperFix, mapScale, checkedIds), [rows, paperFix, mapScale, checkedIds]);
 
   // ─── Write plumbing ──────────────────────────────────────
   const invalidate = useCallback(() => {
@@ -508,6 +529,37 @@ export function EditorPage() {
     })();
   }, [writes, run, record]);
 
+  /** Check-off (§9; `courses.review`): one write, one undo entry (undo is the opposite check). */
+  const checkControl = useCallback((id: number, checked: boolean) => {
+    void (async () => {
+      const redo = () => writes.checkControl(id, checked);
+      if ((await run(redo)) === undefined) return;
+      record(() => writes.checkControl(id, !checked), redo);
+    })();
+  }, [writes, run, record]);
+
+  /**
+   * The nudge pad (§9): each press is one move with undo, queued behind the previous so presses faster than
+   * the refetch build on each other; `nudged` holds the newest position until `controlCoordinates` has it.
+   */
+  const [nudged, setNudged] = useState<{ id: number; pt: Pt } | null>(null);
+  const nudgeQueue = useRef<Promise<unknown>>(Promise.resolve());
+  const nudgeTo = useCallback((id: number, from: Pt, to: Pt) => {
+    setNudged({ id, pt: to });
+    setLastMovedId(id);
+    const description = coordsById.get(id)?.description ?? null;
+    nudgeQueue.current = nudgeQueue.current.then(async () => {
+      const redo = () => writes.updateControl({ id, xpos: to.x, ypos: to.y, autoDescribe: true }, from);
+      if ((await run(redo, { controlId: id, mine: to })) === undefined) { setNudged(null); return; }
+      record(() => writes.updateControl({ id, xpos: from.x, ypos: from.y, description }), redo);
+    }).catch(() => {});
+  }, [writes, run, record, coordsById]);
+  useEffect(() => {
+    if (!nudged) return;
+    const c = coordsById.get(nudged.id);
+    if (state.selectedControlId !== nudged.id || (c && Math.abs(c.mapX - nudged.pt.x) < 1e-6 && Math.abs(c.mapY - nudged.pt.y) < 1e-6)) setNudged(null);
+  }, [nudged, coordsById, state.selectedControlId]);
+
   // ─── Course objects (§7) ─────────────────────────────────
   const objects = useMemo(() => objectList.data ?? [], [objectList.data]);
   const highlighted = useMemo(() => new Set(state.view === "course" && selectedCourse ? [selectedCourse.name] : []), [state.view, selectedCourse]);
@@ -840,6 +892,25 @@ export function EditorPage() {
 
   const [viewRequest, setViewRequest] = useState<MapViewerEditorProps["viewRequest"]>(null);
 
+  // ─── The phone's bottom sheet (§10) ──────────────────────
+  const [detent, setDetent] = useState<Detent>("peek");
+  const [sheetPx, setSheetPx] = useState(0);
+  const sheetPxRef = useRef(0);
+  sheetPxRef.current = isMobile ? sheetPx : 0;
+  /** Centre on `pt`, in the band above the sheet on a phone (§10: the sheet never covers the selection). */
+  const centreOn = useCallback((pt: Pt, sheet = sheetPxRef.current) => {
+    setViewRequest((v) => ({ key: (v?.key ?? 0) + 1, centre: pt, offsetPx: bandCentreOffsetPx(sheet) }));
+  }, []);
+  // Field mode centres on the first fix once (the viewer's locate button follows, if the user wants that).
+  const centredOnFix = useRef(false);
+  useEffect(() => {
+    if (!fieldMode) { centredOnFix.current = false; return; }
+    if (paperFix && !centredOnFix.current) {
+      centredOnFix.current = true;
+      centreOn(paperFix);
+    }
+  }, [fieldMode, paperFix, centreOn]);
+
   // ─── Checks and KPIs (§8) ────────────────────────────────
   const courseChecks = useCourseChecks({
     course: state.view === "course" && selectedCourse ? { id: selectedCourse.id, name: selectedCourse.name } : null,
@@ -924,6 +995,13 @@ export function EditorPage() {
   }, [selectedCoord, seriesAllocation.data, tc]);
   const radioOn = selectedCoord ? (controlRowsById.get(selectedCoord.id)?.config?.radioType ?? "normal") !== "normal" : false;
 
+  // Offline, Field mode views only (§9 "Offline"): a drag snaps back instead of writing.
+  const fieldReadOnly = fieldMode && !online;
+  const fieldMoveEnd = useCallback((id: string, pt: Pt) => {
+    if (fieldReadOnly) setMoveEpoch((v) => v + 1);
+    else handleMoveEnd(id, pt);
+  }, [fieldReadOnly, handleMoveEnd]);
+
   const courseView = state.view === "course";
   const courseControlIds = useMemo(() => new Set(sequenceIds.map(String)), [sequenceIds]);
   const toolActive = state.tool.kind !== "select";
@@ -942,12 +1020,16 @@ export function EditorPage() {
     moveWarnings,
     moveEpoch,
     onMapClick: handleMapClick,
-    onMoveEnd: handleMoveEnd,
+    onMoveEnd: fieldMoveEnd,
     onLabelMoveEnd: handleLabelMoveEnd,
     onSelect: handleSelect,
     onDismiss: handleDismiss,
     sharedHitTest: true,
-    actionLayout: "bar",
+    // A phone docks the action bar in the bottom sheet's peek row (§10).
+    actionLayout: isMobile ? "host" : "bar",
+    fix,
+    bottomInsetPx: isMobile ? sheetPx : 0,
+    fullBleed: isMobile,
     ...(selectedCourse && courseView ? { onLegClick: handleLegClick } : {}),
     tool: toolBinding,
     snap: snapIndex ? snap : null,
@@ -957,8 +1039,8 @@ export function EditorPage() {
     provisional,
     onCourseInfo: setCourseInfo,
     markers: courseChecks.markers,
-  }), [courseChecks.markers, state.selectedControlId, state.phantom, contextActions, contextInfo, srrBadge, radioOn, suggestions, tc, courseControlIds, toolActive,
-    courseView, selectedCourse, moveWarnings, moveEpoch, handleMapClick, handleMoveEnd, handleLabelMoveEnd, handleSelect,
+  }), [courseChecks.markers, isMobile, fix, sheetPx, fieldMoveEnd, state.selectedControlId, state.phantom, contextActions, contextInfo, srrBadge, radioOn, suggestions, tc, courseControlIds, toolActive,
+    courseView, selectedCourse, moveWarnings, moveEpoch, handleMapClick, handleLabelMoveEnd, handleSelect,
     handleDismiss, handleLegClick, toolBinding, snapIndex, snap, draftObjects, draftFast, viewRequest, provisional]);
 
   // ─── Undo / redo, keyboard, deep links ───────────────────
@@ -1131,7 +1213,24 @@ export function EditorPage() {
   // ─── Chrome ──────────────────────────────────────────────
   const canUndo = undoStack.canUndo, canRedo = undoStack.canRedo;
   const courseOptions = useMemo(() => (courses.data ?? []).map((c) => ({ id: c.id, name: c.name })), [courses.data]);
-  const toolbar = (
+  const toolbar = isMobile ? (
+    <FieldTopBar
+      backTo={`/${nameId ?? ""}/courses`}
+      courses={courseOptions}
+      selectedCourseId={state.selectedCourseId}
+      onSelectCourse={(id) => dispatch({ type: "select-course", id })}
+      mode={state.mode}
+      onMode={(mode) => dispatch({ type: "mode", mode })}
+      overflow={(
+        <OverflowMenu
+          view={state.view} onView={(view) => dispatch({ type: "view", view })}
+          canUndo={canUndo} canRedo={canRedo} onUndo={runUndo} onRedo={runRedo}
+          hideOthers={state.hideOthers} canHideOthers={state.selectedCourseId !== null} onToggleHideOthers={() => dispatch({ type: "toggle-hide-others" })}
+          cutsEnabled={cutsEnabled} cutsBusy={setCuts.isPending || cutsQuery.isLoading} onToggleCuts={() => setCuts.mutate({ enabled: !cutsEnabled })}
+        />
+      )}
+    />
+  ) : (
     <TopBar
       courses={courseOptions}
       selectedCourseId={state.selectedCourseId}
@@ -1189,16 +1288,199 @@ export function EditorPage() {
 
   const pendingLegM = ghost?.legMm != null && mapScale ? legLengthM(ghost.legMm, mapScale) : null;
 
-  const overlay = (
-    <div className="flex gap-2 h-full min-h-0 items-stretch">
-      {/* The course objects as DOM, for tests: what the editor holds (§7). */}
-      <ul data-testid="editor-objects" hidden>
-        {objects.map((o) => (
-          <li key={o.id} data-testid="editor-object-row" data-object-id={o.id} data-object-kind={o.kind}
-            data-geometry={o.geometry.map((v) => `${v.x},${v.y}`).join(" ")} data-props={JSON.stringify(o.props)} data-scope={JSON.stringify(o.scope)} />
+  // ─── Field mode's parts (§9) ─────────────────────────────
+  const selectedFieldPt: Pt | null = selectedCoord
+    ? (nudged?.id === selectedCoord.id ? nudged.pt : { x: selectedCoord.mapX, y: selectedCoord.mapY })
+    : null;
+  const selectedFieldRow = selectedCoord
+    ? fieldList.find((r) => r.id === selectedCoord.id)
+      ?? fieldRows([{ id: selectedCoord.id, code: selectedCoord.code, kind: kindOf(selectedCoord.id), pt: selectedFieldPt }], paperFix, mapScale, checkedIds)[0]
+    : null;
+  const fieldSelection = fieldMode && selectedCoord && selectedFieldPt ? (
+    <FieldSelection row={selectedFieldRow} pt={selectedFieldPt} mapScale={mapScale}
+      onNudge={(to) => nudgeTo(selectedCoord.id, selectedFieldPt, to)}
+      onCheck={fieldReadOnly ? null : (checked) => checkControl(selectedCoord.id, checked)}
+      canCheck={canReview} canMove={!fieldReadOnly} />
+  ) : null;
+  const selectRow = (id: number) => {
+    dispatch({ type: "select", id });
+    const pt = ptOf(id);
+    if (pt) centreOn(pt);
+  };
+  const fieldSection = (
+    <>
+      <div className="px-2.5 py-1"><FixStatus accuracyM={fix?.accuracy ?? null} error={geo.error} watching={geo.watching} /></div>
+      <FieldSection rows={fieldList} selectedControlId={state.selectedControlId} onSelectRow={selectRow}
+        onCheck={fieldReadOnly ? null : checkControl} canCheck={canReview} hasCourse={!!(selectedCourse && structure)} />
+    </>
+  );
+  const fieldKpi = fieldMode && selectedCourse
+    ? t("fieldKpiChecked", { checked: fieldList.filter((r) => r.kind === "control" && r.checked).length, count: fieldList.filter((r) => r.kind === "control").length })
+    : null;
+
+  // ─── Shared by both layouts ──────────────────────────────
+  /* The course objects as DOM, for tests: what the editor holds (§7). */
+  const objectsDom = (
+    <ul data-testid="editor-objects" hidden>
+      {objects.map((o) => (
+        <li key={o.id} data-testid="editor-object-row" data-object-id={o.id} data-object-kind={o.kind}
+          data-geometry={o.geometry.map((v) => `${v.x},${v.y}`).join(" ")} data-props={JSON.stringify(o.props)} data-scope={JSON.stringify(o.scope)} />
+      ))}
+    </ul>
+  );
+  const courseSection = (
+    <CourseSection
+      course={selectedCourse && structure ? { id: selectedCourse.id, name: selectedCourse.name, orderMode: structure.orderMode } : null}
+      rows={rows}
+      legMeters={legMeters}
+      totalMeters={totalMeters}
+      suggestions={suggestionsForNew}
+      onCreate={handleCreateCourse}
+      onClone={handleClone}
+      onOrderMode={(mode) => void applyStructure((s) => ({ ...s, orderMode: mode }))}
+      onMove={(from, to) => void applyStructure((s) => moveVisit(s, from, to, kindOf))}
+      onRemove={(seqIndex) => void applyStructure((s) => removeVisit(s, seqIndex, kindOf))}
+      onEditCode={handleEditCode}
+      onSelectRow={(id) => dispatch({ type: "select", id })}
+      selectedControlId={state.selectedControlId}
+      radioIds={radioIds}
+    />
+  );
+  const selectionSection = state.multi.length > 1 ? (
+    <MultiSection count={state.multi.length} course={selectedCourse && structure ? selectedCourse.name : null} busy={pendingOps > 0}
+      onDelete={() => deleteControls(state.multi)} onAddToCourse={bulkAddToCourse} onRadio={bulkRadio} />
+  ) : selectedObject ? (
+    <ObjectSection
+      object={drafts.has(selectedObject.id) ? { ...selectedObject, geometry: drafts.get(selectedObject.id)! } as CourseObject : selectedObject}
+      document={mapDoc?.header ?? null}
+      courses={courseOptions}
+      classes={(classes.data ?? []).map((c) => ({ id: c.id, name: c.name }))}
+      onProps={(props) => updateObject(selectedObject, { props })}
+      onScope={(scope) => updateObject(selectedObject, { scope })}
+      onRegenerate={selectedObject.kind === "toner_saver" ? () => {
+        const margin = (selectedObject.props as { marginMm?: number }).marginMm ?? TONER_MARGIN_MM;
+        const hull = tonerSaverHull(rows.flatMap((r) => (r.pt ? [r.pt] : [])), margin);
+        if (hull) updateObject(selectedObject, { geometry: hull });
+      } : undefined}
+      onDelete={() => deleteObject(selectedObject)}
+    />
+  ) : (
+    <>
+      {fieldSelection}
+      <SelectionSection
+        selected={selectedInfo}
+        onKind={(kind) => { if (selectedCoord) updateField(selectedCoord.id, { kind }, { kind: kindOf(selectedCoord.id) }); }}
+        onNotes={(notes) => { if (selectedCoord) updateField(selectedCoord.id, { notes }, { notes: controlRowsById.get(selectedCoord.id)?.notes ?? "" }); }}
+        onNumberHidden={(hidden) => { if (selectedCoord) { const id = selectedCoord.id; void applyStructure((s) => setNumberHidden(s, id, hidden)); } }}
+      />
+    </>
+  );
+  const statusBar = (
+    <StatusBar controls={selectedCourse ? sequenceIds.length : null} lengthM={selectedCourse ? courseChecks.lengthM ?? totalMeters : null} scale={mapScale} save={save}
+      climbM={selectedCourse?.climb ?? null} checks={courseChecks.checks.length}
+      pendingLegM={pendingLegM} snapping={state.snapping} />
+  );
+
+  const noticeNode = notice ? (
+    <div data-testid="editor-conflict" data-kind={notice.kind} className="pointer-events-auto w-64 rounded-lg border border-amber-300 bg-amber-50 text-amber-900 text-xs p-2 shadow-sm">
+      {notice.kind === "refresh" ? (
+        <p>{notice.items?.length ? t("conflictRefreshItems", { items: notice.items.join(", ") }) : t("conflictRefresh")}</p>
+      ) : (
+        <p>{notice.theirs ? t("conflictMoved", { x: notice.theirs.x.toFixed(1), y: notice.theirs.y.toFixed(1) }) : t("conflictRefresh")}</p>
+      )}
+      <div className="flex gap-1.5 mt-1.5">
+        {notice.kind === "moved" && (
+          <button type="button" data-testid="editor-conflict-keep-mine" className="px-2 py-0.5 rounded bg-amber-600 text-white cursor-pointer"
+            onClick={() => {
+              const n = notice;
+              void run(() => writes.updateControl({ id: n.controlId, xpos: n.mine.x, ypos: n.mine.y }));
+            }}>
+            {t("keepMine")}
+          </button>
+        )}
+        <button type="button" data-testid="editor-conflict-dismiss" className="px-2 py-0.5 rounded border border-amber-300 cursor-pointer"
+          onClick={() => { setNotice(null); setMoveEpoch((v) => v + 1); }}>
+          {notice.kind === "moved" ? t("keepTheirs") : t("dismiss")}
+        </button>
+      </div>
+    </div>
+  ) : null;
+
+  /** The `+` menu (§10): an armed tool runs the pin-drop flow; the sheet drops to peek so the map shows. */
+  const pickAdd = (c: AddChoice) => {
+    setDetent("peek");
+    if (c.kind === "place") armPlace(c.tool);
+    else if (c.kind === "area") startArea(c.area);
+    else setTool({ kind: "text" });
+  };
+  /** The sheet settled at a new height: past peek, the selected control is moved into the band above it. */
+  const onSheetHeight = (px: number) => {
+    setSheetPx(px);
+    const pt = state.selectedControlId !== null ? ptOf(state.selectedControlId) : null;
+    if (pt && detent !== "peek") centreOn(pt, px);
+  };
+
+  /** The phone (§10): full-bleed map, the bottom sheet (peek: KPIs, selection, action bar), the floating `+`. */
+  const phoneOverlay = () => {
+    const actions = (
+      <div data-testid="editor-action-bar" className="flex gap-1 overflow-x-auto -mx-1 px-1">
+        {contextActions.map((a) => (
+          <button key={a.id} type="button" data-testid={`editor-action-${a.id}`} onClick={a.onClick} disabled={a.disabled}
+            className={`shrink-0 min-h-11 px-3 rounded-lg border text-sm whitespace-nowrap cursor-pointer disabled:opacity-40 ${a.variant === "danger" ? "border-red-200 text-red-600" : "border-slate-200 text-slate-700"}`}>
+            {a.label}
+          </button>
         ))}
-      </ul>
-      <ToolRail
+      </div>
+    );
+    const selectionName = selectedCoord
+      ? `${selectedCoord.code}${selectedInfo?.description ? ` · ${selectedInfo.description}` : ""}`
+      : selectedObject ? t(`kind_${selectedObject.kind}`) : null;
+    const peek = (
+      <div className="flex flex-col gap-1.5 pb-2">
+        <div className="flex items-center gap-2 min-w-0 text-xs">
+          {statusBar}
+          {fieldKpi && <span data-testid="editor-field-kpi" className="shrink-0 text-emerald-700">{fieldKpi}</span>}
+        </div>
+        {selectionName && <div data-testid="editor-sheet-selection" className="truncate text-slate-700 font-medium">{selectionName}</div>}
+        {!toolActive && (contextActions.length > 0 || suggestions.length > 0) && actions}
+      </div>
+    );
+    return (
+      <div className="relative w-full h-full">
+        {objectsDom}
+        <div className="absolute top-2 inset-x-2 z-30 flex flex-col gap-1.5 pointer-events-none">
+          {noticeNode}
+          {fieldReadOnly && <OfflineNotice />}
+          {errorMsg && <span data-testid="editor-error" className="pointer-events-auto w-fit text-[11px] text-red-600 bg-white/95 rounded px-1.5">{errorMsg}</span>}
+          {showExhausted && <span data-testid="series-exhausted" className="pointer-events-auto w-fit text-[11px] text-amber-700 bg-white/95 rounded px-1.5">{tc("seriesExhausted")}</span>}
+        </div>
+        {!toolActive && (
+          <AddMenu bottomPx={sheetPx} disabled={fieldReadOnly} canTonerSaver={canTonerSaver} onPick={pickAdd} />
+        )}
+        <BottomSheet detent={detent} onDetent={setDetent} onHeight={onSheetHeight} peek={peek} label={t("sheet")}>
+          {suggestions.length > 0 && !toolActive && (
+            <div className="px-2.5 py-1 flex flex-col gap-1">
+              {suggestions.map((sg) => (
+                <button key={sg.id} type="button" data-testid={`editor-suggestion-${sg.id}`} onClick={sg.onApply}
+                  className="min-h-11 px-3 rounded-lg border border-purple-200 text-left text-sm text-purple-700 cursor-pointer">{sg.label}</button>
+              ))}
+            </div>
+          )}
+          <div data-testid="editor-inspector-selection">{selectionSection}</div>
+          <div className="border-t border-slate-100 mt-1 pt-1" data-testid={fieldMode ? "editor-inspector-field" : "editor-inspector-course"}>
+            {fieldMode ? fieldSection : courseSection}
+          </div>
+          <ChecksSection checks={courseChecks.checks} onLocate={locateCheck} />
+        </BottomSheet>
+      </div>
+    );
+  };
+
+  const overlay = isMobile ? phoneOverlay() : (
+    <div className="flex gap-2 h-full min-h-0 items-stretch">
+      {objectsDom}
+      {/* Field mode has no tool rail: it plans nothing new from the desk (§9); the keys still arm the tools. */}
+      {!fieldMode && <ToolRail
         tool={state.tool}
         onTool={(key) => {
           if (key === "V") exitTool();
@@ -1213,79 +1495,17 @@ export function EditorPage() {
         canTonerSaver={canTonerSaver}
         snapping={state.snapping}
         onSnapping={() => dispatch({ type: "toggle-snapping" })}
-      />
+      />}
       <div className="flex flex-col gap-2 min-h-0 h-full">
-        {notice && (
-          <div data-testid="editor-conflict" data-kind={notice.kind} className="pointer-events-auto w-64 rounded-lg border border-amber-300 bg-amber-50 text-amber-900 text-xs p-2 shadow-sm">
-            {notice.kind === "refresh" ? (
-              <p>{notice.items?.length ? t("conflictRefreshItems", { items: notice.items.join(", ") }) : t("conflictRefresh")}</p>
-            ) : (
-              <p>{notice.theirs ? t("conflictMoved", { x: notice.theirs.x.toFixed(1), y: notice.theirs.y.toFixed(1) }) : t("conflictRefresh")}</p>
-            )}
-            <div className="flex gap-1.5 mt-1.5">
-              {notice.kind === "moved" && (
-                <button type="button" data-testid="editor-conflict-keep-mine" className="px-2 py-0.5 rounded bg-amber-600 text-white cursor-pointer"
-                  onClick={() => {
-                    const n = notice;
-                    void run(() => writes.updateControl({ id: n.controlId, xpos: n.mine.x, ypos: n.mine.y }));
-                  }}>
-                  {t("keepMine")}
-                </button>
-              )}
-              <button type="button" data-testid="editor-conflict-dismiss" className="px-2 py-0.5 rounded border border-amber-300 cursor-pointer"
-                onClick={() => { setNotice(null); setMoveEpoch((v) => v + 1); }}>
-                {notice.kind === "moved" ? t("keepTheirs") : t("dismiss")}
-              </button>
-            </div>
-          </div>
-        )}
+        {fieldReadOnly && <div className="w-64"><OfflineNotice /></div>}
+        {noticeNode}
         <Inspector>
-          <InspectorSection title={t("sequence")} testId="editor-inspector-course" aside={selectedCourse?.name}>
-            <CourseSection
-              course={selectedCourse && structure ? { id: selectedCourse.id, name: selectedCourse.name, orderMode: structure.orderMode } : null}
-              rows={rows}
-              legMeters={legMeters}
-              totalMeters={totalMeters}
-              suggestions={suggestionsForNew}
-              onCreate={handleCreateCourse}
-              onClone={handleClone}
-              onOrderMode={(mode) => void applyStructure((s) => ({ ...s, orderMode: mode }))}
-              onMove={(from, to) => void applyStructure((s) => moveVisit(s, from, to, kindOf))}
-              onRemove={(seqIndex) => void applyStructure((s) => removeVisit(s, seqIndex, kindOf))}
-              onEditCode={handleEditCode}
-              onSelectRow={(id) => dispatch({ type: "select", id })}
-              selectedControlId={state.selectedControlId}
-              radioIds={radioIds}
-            />
-          </InspectorSection>
-          <InspectorSection title={t("selection")} testId="editor-inspector-selection">
-            {state.multi.length > 1 ? (
-              <MultiSection count={state.multi.length} course={selectedCourse && structure ? selectedCourse.name : null} busy={pendingOps > 0}
-                onDelete={() => deleteControls(state.multi)} onAddToCourse={bulkAddToCourse} onRadio={bulkRadio} />
-            ) : selectedObject ? (
-              <ObjectSection
-                object={drafts.has(selectedObject.id) ? { ...selectedObject, geometry: drafts.get(selectedObject.id)! } as CourseObject : selectedObject}
-                document={mapDoc?.header ?? null}
-                courses={courseOptions}
-                classes={(classes.data ?? []).map((c) => ({ id: c.id, name: c.name }))}
-                onProps={(props) => updateObject(selectedObject, { props })}
-                onScope={(scope) => updateObject(selectedObject, { scope })}
-                onRegenerate={selectedObject.kind === "toner_saver" ? () => {
-                  const margin = (selectedObject.props as { marginMm?: number }).marginMm ?? TONER_MARGIN_MM;
-                  const hull = tonerSaverHull(rows.flatMap((r) => (r.pt ? [r.pt] : [])), margin);
-                  if (hull) updateObject(selectedObject, { geometry: hull });
-                } : undefined}
-                onDelete={() => deleteObject(selectedObject)}
-              />
-            ) : (
-              <SelectionSection
-                selected={selectedInfo}
-                onKind={(kind) => { if (selectedCoord) updateField(selectedCoord.id, { kind }, { kind: kindOf(selectedCoord.id) }); }}
-                onNotes={(notes) => { if (selectedCoord) updateField(selectedCoord.id, { notes }, { notes: controlRowsById.get(selectedCoord.id)?.notes ?? "" }); }}
-                onNumberHidden={(hidden) => { if (selectedCoord) { const id = selectedCoord.id; void applyStructure((s) => setNumberHidden(s, id, hidden)); } }}
-              />
-            )}
-          </InspectorSection>
+          {fieldMode ? (
+            <InspectorSection title={t("fieldControls")} testId="editor-inspector-field" aside={selectedCourse?.name}>{fieldSection}</InspectorSection>
+          ) : (
+            <InspectorSection title={t("sequence")} testId="editor-inspector-course" aside={selectedCourse?.name}>{courseSection}</InspectorSection>
+          )}
+          <InspectorSection title={t("selection")} testId="editor-inspector-selection">{selectionSection}</InspectorSection>
           <InventorySection inventory={inventory} activeSeriesId={activeSeriesId} onSeries={setAllocSeriesId} />
           <ChecksSection checks={courseChecks.checks} onLocate={locateCheck} />
         </Inspector>
@@ -1299,26 +1519,27 @@ export function EditorPage() {
           )}
           {showExhausted && <span data-testid="series-exhausted" className="pointer-events-auto w-fit text-[11px] text-amber-700 bg-white/95 rounded px-1.5">{tc("seriesExhausted")}</span>}
           {errorMsg && <span data-testid="editor-error" className="pointer-events-auto w-64 text-[11px] text-red-600 bg-white/95 rounded px-1.5">{errorMsg}</span>}
-          <StatusBar controls={selectedCourse ? sequenceIds.length : null} lengthM={selectedCourse ? courseChecks.lengthM ?? totalMeters : null} scale={mapScale} save={save}
-            climbM={selectedCourse?.climb ?? null} checks={courseChecks.checks.length}
-            pendingLegM={pendingLegM} snapping={state.snapping} />
+          {statusBar}
         </div>
       </div>
     </div>
   );
 
   return (
-    <div data-testid="editor-page" className="h-[calc(100dvh-8rem)] sm:h-[calc(100dvh-200px)] min-h-[420px]">
-      <div className="h-full bg-white rounded-xl border border-slate-200 overflow-hidden">
+    // A phone gets the whole screen (§10: full-bleed canvas, the compact top bar's back leaves the editor).
+    <div data-testid="editor-page" data-mode={state.mode} data-layout={isMobile ? "phone" : "desktop"}
+      className={isMobile ? "fixed inset-0 z-[60] bg-white" : "h-[calc(100dvh-8rem)] sm:h-[calc(100dvh-200px)] min-h-[420px]"}>
+      <div className={isMobile ? "h-full overflow-hidden" : "h-full bg-white rounded-xl border border-slate-200 overflow-hidden"}>
         <MapPanel
           fillContainer
           fitToControls
-          showMapInfo
+          showMapInfo={!isMobile}
           filterMode={state.hideOthers && selectedCourse && courseView ? "course" : "all"}
           defaultShowDescriptions={!isMobile}
           descriptionsAllControls
           toolbar={toolbar}
           mapOverlay={overlay}
+          mapOverlayLayout={isMobile ? "fill" : "corner"}
           fullscreenOverlay={descControl ? (
             <ControlDescriptionEditor controlCode={descControl.code} initial={descControl.description} onSave={saveDescription} onCancel={closeDescription} />
           ) : null}

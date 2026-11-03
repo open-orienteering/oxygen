@@ -245,6 +245,11 @@ value (09 §3, §10). `playwright.config.ts`:
   `setMapPipeline(value, nameId?)` / `setAllowLegacy(...)` from the same
   helper (`map-vector-layer.spec.ts`, `map-pipeline-switch.spec.ts`).
   `reseed()` deletes the `map.pipeline.*` and `map.editor.*` settings.
+- `MOBILE_SPECS` — `field-mode.spec.ts` (D9): project `mobile`
+  (`devices["Pixel 7"]`, `mapPipeline: "vector"`), the new editor on a
+  phone (`course-editor.md` §9, §10); it sets `map.editor.vector` itself
+  and has no `map-legacy` run (the new editor exists for `vector` only).
+  `chromium` ignores these files too. D10 adds the editor's touch subset.
 - `course-editor.spec.ts` (the new editor) runs in `chromium` and sets
   `vector` and `map.editor.vector` itself (`setEditorVector`) until D10
   moves it under `map-vector`; `course-editor-legacy.spec.ts` is the

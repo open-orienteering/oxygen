@@ -32,8 +32,13 @@ describe("editorReducer (docs/course-editor.md §3)", () => {
     expect(s.hideOthers).toBe(false);
   });
 
-  it("only Course mode is entered (Layout D7, Field D9); a view change drops the phantom", () => {
+  it("Course and Field are entered (Layout D7) and keep the selection; a view change drops the phantom", () => {
     expect(editorReducer(initialEditorState, { type: "mode", mode: "layout" }).mode).toBe("course");
+    let f = editorReducer(editorReducer(initialEditorState, { type: "select-course", id: 1 }), { type: "select", id: 31 });
+    f = editorReducer(f, { type: "mode", mode: "field" });
+    expect([f.mode, f.selectedCourseId, f.selectedControlId]).toEqual(["field", 1, 31]);
+    f = editorReducer(f, { type: "mode", mode: "course" });
+    expect([f.mode, f.selectedControlId]).toEqual(["course", 31]);
     const s = editorReducer(editorReducer(initialEditorState, { type: "map-click", x: 1, y: 1 }), { type: "view", view: "all" });
     expect(s.view).toBe("all");
     expect(s.phantom).toBeNull();

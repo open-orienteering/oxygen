@@ -69,7 +69,8 @@ Besides `chromium`, `playwright.config.ts` has projects `map-legacy` and
 `map-vector` that run the files in `MAP_PIPELINE_SPECS` once per value of
 the per-event map pipeline switch (`docs/map-pipeline-switch.md` §5).
 A shard that gets one of those files runs it twice; the weight table does
-not count that yet.
+not count that yet. Project `mobile` runs the files in `MOBILE_SPECS`
+(`field-mode.spec.ts`) once on a Pixel 7 profile; its weight is that one run.
 
 ### File partitioning
 

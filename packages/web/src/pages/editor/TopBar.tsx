@@ -35,7 +35,7 @@ export interface TopBarProps {
 const MODES: { mode: EditorMode; key: "modeCourse" | "modeLayout" | "modeField"; slice?: string }[] = [
   { mode: "course", key: "modeCourse" },
   { mode: "layout", key: "modeLayout", slice: "D7" },
-  { mode: "field", key: "modeField", slice: "D9" },
+  { mode: "field", key: "modeField" },
 ];
 
 export function TopBar(p: TopBarProps) {

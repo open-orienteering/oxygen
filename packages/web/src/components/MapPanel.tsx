@@ -73,6 +73,8 @@ export interface MapPanelPublicProps {
    * fullscreen. Stabilize via `useMemo`.
    */
   mapOverlay?: React.ReactNode;
+  /** `fill`: the overlay spans the whole map box (the editor's phone chrome, docs/course-editor.md §10). */
+  mapOverlayLayout?: "corner" | "fill";
   /**
    * Fixed modal content that must remain inside the browser fullscreen
    * subtree. Rendered as a direct child of the MapPanel fullscreen element.
@@ -130,6 +132,7 @@ function MapPanelImpl({
   completionCourseId,
   toolbar,
   mapOverlay,
+  mapOverlayLayout = "corner",
   fullscreenOverlay,
   punchStatusByCode,
   focusControlCodes,
@@ -937,7 +940,7 @@ function MapPanelImpl({
           // course panel) can scroll internally instead of overflowing;
           // pointer events pass through everywhere the overlay isn't.
           // z-[8] keeps it under the editor's context menus (zIndex 9).
-          <div className="absolute top-3 left-3 bottom-3 z-[8] pointer-events-none flex flex-col items-start">
+          <div className={`absolute ${mapOverlayLayout === "fill" ? "inset-0" : "top-3 left-3 bottom-3 flex flex-col items-start"} z-[8] pointer-events-none`}>
             {mapOverlay}
           </div>
         )}

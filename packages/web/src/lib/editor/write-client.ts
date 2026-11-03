@@ -49,6 +49,7 @@ export interface EditorClient {
     // eslint-disable-next-line @typescript-eslint/no-explicit-any -- structural fit for the router's input type
     update: { mutate(input: any): Promise<{ version: string }> };
     delete: { mutate(input: { id: number }): Promise<{ courses: { id: number; version: string }[] }> };
+    check: { mutate(input: { controlId: number; checked: boolean }): Promise<{ version: string }> };
   };
   courseObject?: {
     // The kinds' props are a discriminated union the router validates; the editor builds them per kind.
@@ -129,6 +130,13 @@ export class EditorWrites {
   async setLabelOffset(courseId: number, controlId: number, offset: { dx: number; dy: number } | null): Promise<{ version: string }> {
     const res = await this.client.course.setControlLabelOffset.mutate({ id: courseId, controlId, offset });
     this.versions.seed("course", courseId, res.version);
+    return res;
+  }
+
+  /** `control.check` (Field mode, §9; `courses.review`): no token in — a check-off never conflicts — the control's out. */
+  async checkControl(id: number, checked: boolean): Promise<{ version: string }> {
+    const res = await this.client.control.check.mutate({ controlId: id, checked });
+    this.versions.seed("control", id, res.version);
     return res;
   }
 

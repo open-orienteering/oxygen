@@ -71,7 +71,7 @@ import {
   IconFullscreenExit,
   IconUndo,
 } from "./map-icons";
-import { useGeolocationWatch } from "../hooks/useGeolocationWatch";
+import { useGeolocationWatch, type GeolocationFix } from "../hooks/useGeolocationWatch";
 import {
   accuracyRadiusPx,
   nextLocateMode,
@@ -87,6 +87,7 @@ import { courseLayerRequest, PROVISIONAL_SITE_ID, type ProvisionalVisit } from "
 import { dragLegShapes } from "../lib/editor/leg-length";
 import type { CourseInfo } from "../map-gl/engine";
 import { editorHitAt, HIT_TOLERANCE_PX, type EditorTarget } from "../lib/editor/hit";
+import { COARSE_HIT_TOLERANCE_PX, IDLE as SITE_TOUCH_IDLE, LONG_PRESS_MS, liftedPoint, siteTouch, type SiteTouch, type SiteTouchEvent } from "../lib/editor/touch";
 
 /** Persisted compass state: "1"/absent = rotation locked (north up). */
 const ROTATION_LOCK_STORAGE_KEY = "oxygen.map.rotationLock";
@@ -273,8 +274,9 @@ export interface MapViewerEditorProps {
    * `bar`: the contextual actions as a horizontal action bar centred under
    * the selection (`editor-action-bar`, docs/course-editor.md §2) instead
    * of the popover menu beside it; same entries and `editor-action-<id>`s.
+   * `host`: the page docks them itself (the phone's bottom sheet, §10) and the viewer draws none.
    */
-  actionLayout?: "menu" | "bar";
+  actionLayout?: "menu" | "bar" | "host";
   /**
    * The active editor tool (docs/course-editor.md §6): it sees the pointer
    * before the viewer's own gestures and draws UI-layer shapes. Shared
@@ -299,8 +301,21 @@ export interface MapViewerEditorProps {
    * reports only real sites.
    */
   provisional?: ProvisionalVisit | null;
-  /** A view request: fit these controls, or centre on a point (paper mm); acted on when `key` changes. */
-  viewRequest?: { key: number; fit?: readonly string[]; centre?: { x: number; y: number } } | null;
+  /**
+   * A view request: fit these controls, or centre on a point (paper mm); acted on when `key` changes.
+   * `offsetPx` puts the centred point that far from the view centre on screen (Field mode's bottom
+   * sheet: the selection mid-way in the band above it, docs/course-editor.md §10).
+   */
+  viewRequest?: { key: number; fit?: readonly string[]; centre?: { x: number; y: number }; offsetPx?: { x: number; y: number } } | null;
+  /**
+   * Field mode's GPS fix (docs/course-editor.md §9): the page owns the watch; the viewer draws it
+   * with its accuracy ring as `my-location-marker`, through `mapGeo` like its own locate button.
+   */
+  fix?: GeolocationFix | null;
+  /** Screen px at the bottom the page covers (the phone's bottom sheet): the touch Place / Done sit above it. */
+  bottomInsetPx?: number;
+  /** The page fills the screen (the phone editor, §10): nothing to scroll, so one finger pans as in fullscreen. */
+  fullBleed?: boolean;
   /** Check markers (docs/course-editor.md §8): UI-layer shapes, never hit targets. */
   markers?: readonly ToolShape[];
 }
@@ -351,6 +366,11 @@ export interface EditorToolBinding {
    * taps on the map do not place.
    */
   touch?: { placeLabel: string; doneLabel: string; onPlace: (p: ToolPointer) => void; onDone: () => void } | null;
+  /**
+   * Two fingers (§10): `start` with both fingers — true takes the gesture (the map does not pinch);
+   * `move` with the fingers' distance over their starting distance; `end` on lift (`commit`) or cancel.
+   */
+  onPinch?: { start: (a: ToolPointer, b: ToolPointer) => boolean; move: (scale: number) => void; end: (commit: boolean) => void } | null;
 }
 
 interface Props {
@@ -517,7 +537,7 @@ export function MapViewer({
   const { nameId } = useParams<{ nameId: string }>();
   const { t } = useTranslation("dashboard");
   const isCoarsePointer = useMediaQuery("(pointer: coarse)");
-  const allowOneFingerMapPan = isFullscreen || !isCoarsePointer;
+  const allowOneFingerMapPan = isFullscreen || !isCoarsePointer || !!editor?.fullBleed;
   const [showTwoFingerHint, setShowTwoFingerHint] = useState(false);
   const tileUrlBase = nameId ? `/api/map-tile/${nameId}` : "/api/map-tile";
 
@@ -707,6 +727,13 @@ export function MapViewer({
   } | null>(null);
   const [editorDragPos, setEditorDragPos] = useState<{ id: string; x: number; y: number } | null>(null);
   const [editorDragTouch, setEditorDragTouch] = useState(false);
+  // Coarse-pointer rules on the shared hit path (docs/course-editor.md §10, `lib/editor/touch.ts`):
+  // the pending long-press on an unselected site, its timer, and the finger under a lifted drag (container px).
+  const siteTouchRef = useRef<SiteTouch>(SITE_TOUCH_IDLE);
+  /** A two-finger gesture the active tool took (pinch-scale of a selected object): the fingers' starting distance. */
+  const toolPinchRef = useRef<{ dist0: number } | null>(null);
+  const longPressTimerRef = useRef<number | null>(null);
+  const [touchFinger, setTouchFinger] = useState<Pt | null>(null);
   // Moves already sent via onMoveEnd but not yet reflected in the
   // `controls` prop (mutation + refetch in flight). Rendering `to`
   // prevents the control snapping back to its stale position. An entry
@@ -938,7 +965,7 @@ export function MapViewer({
   const resolveEditorTarget = (clientX: number, clientY: number): EditorTarget | null | undefined => {
     if (!sharedHit || !editor) return undefined;
     const pt = screenToMapMm(clientX, clientY);
-    const edge = screenToMapMm(clientX + HIT_TOLERANCE_PX, clientY);
+    const edge = screenToMapMm(clientX + (isCoarsePointer ? COARSE_HIT_TOLERANCE_PX : HIT_TOLERANCE_PX), clientY);
     if (!pt || !edge) return null;
     const tol = Math.hypot(edge.x - pt.x, edge.y - pt.y);
     // The faded off-course controls are drawn by the UI layer, not the layer: plain circles. The layer's own
@@ -989,6 +1016,18 @@ export function MapViewer({
     }
     const ctrl = controls.find((k) => k.id === target.id);
     if (!ctrl) return false;
+    // Touch (§10): only a selected control drags at once; on another one the press is pending — a pan,
+    // a tap that selects it, or a long press that selects it and starts the move. Its number likewise.
+    if (touch && sharedHitRef.current && ctrl.id !== editor?.selectedControlId) {
+      stepSiteTouchRef.current({ type: "down", id: ctrl.id, selected: false, x: clientX, y: clientY, t: performance.now() });
+      if (longPressTimerRef.current !== null) window.clearTimeout(longPressTimerRef.current);
+      longPressTimerRef.current = window.setTimeout(() => {
+        longPressTimerRef.current = null;
+        stepSiteTouchRef.current({ type: "tick", t: performance.now() });
+      }, LONG_PRESS_MS);
+      return false;
+    }
+    if (touch && sharedHitRef.current && target.kind === "site") siteTouchRef.current = { kind: "drag", id: ctrl.id };
     if (target.kind === "site") {
       editorDragRef.current = { id: ctrl.id, startX: clientX, startY: clientY, moved: false, origX: ctrl.x, origY: ctrl.y, touch };
       setEditorDragTouch(touch);
@@ -999,6 +1038,31 @@ export function MapViewer({
     editorLabelDragRef.current = { id: ctrl.id, startX: clientX, startY: clientY, moved: false, ctrlX: ctrl.x, ctrlY: ctrl.y, from, touch };
     return true;
   };
+  /** One step of the touch rules; its effect selects the site and / or starts its (lifted) drag. */
+  const stepSiteTouch = (e: SiteTouchEvent) => {
+    const { state, effect } = siteTouch(siteTouchRef.current, e);
+    siteTouchRef.current = state;
+    if (state.kind !== "pending" && longPressTimerRef.current !== null) {
+      window.clearTimeout(longPressTimerRef.current);
+      longPressTimerRef.current = null;
+    }
+    if (!effect) return;
+    // The finger is on a site: its lift is not a map tap.
+    touchOnEditorTargetRef.current = true;
+    if (effect.kind === "select" || effect.select) editor?.onSelect?.(effect.id);
+    if (effect.kind === "drag") {
+      const ctrl = controls.find((k) => k.id === effect.id);
+      const p = e.type === "move" ? { x: e.x, y: e.y } : touchStartPosRef.current;
+      if (!ctrl || !p) return;
+      isPanningRef.current = false;
+      editorDragRef.current = { id: ctrl.id, startX: p.x, startY: p.y, moved: false, origX: ctrl.x, origY: ctrl.y, touch: true };
+      setEditorDragTouch(true);
+      try { navigator.vibrate?.(15); } catch { /* not supported */ }
+    }
+  };
+  const stepSiteTouchRef = useRef(stepSiteTouch);
+  stepSiteTouchRef.current = stepSiteTouch;
+  useEffect(() => () => { if (longPressTimerRef.current !== null) window.clearTimeout(longPressTimerRef.current); }, []);
   const armEditorTargetRef = useRef(armEditorTargetImpl);
   armEditorTargetRef.current = armEditorTargetImpl;
   const armEditorTarget = useCallback((clientX: number, clientY: number, touch: boolean) => armEditorTargetRef.current(clientX, clientY, touch), []);
@@ -1118,9 +1182,15 @@ export function MapViewer({
       fitToControlBounds(controls.filter((c) => ids.has(c.id)), 0.08);
     } else if (req.centre && viewport.kind === "paper") {
       const c = req.centre;
-      setViewport((prev) => (prev?.kind === "paper" ? { ...prev, centreX: c.x * 1000, centreY: c.y * 1000 } : prev));
+      // The screen offset into the inner (rotated) frame, then into paper µm (y up).
+      const o = req.offsetPx ?? { x: 0, y: 0 };
+      const ix = o.x * Math.cos(rotRad) + o.y * Math.sin(rotRad);
+      const iy = -o.x * Math.sin(rotRad) + o.y * Math.cos(rotRad);
+      setViewport((prev) => (prev?.kind === "paper"
+        ? { ...prev, centreX: c.x * 1000 - ix / prev.pxPerUm, centreY: c.y * 1000 + iy / prev.pxPerUm }
+        : prev));
     }
-  }, [editor?.viewRequest, viewport, controls, fitToControlBounds]);
+  }, [editor?.viewRequest, viewport, controls, fitToControlBounds, rotRad]);
 
   // Touch pin-drop: the ghost follows the view centre (08 §5.3 "Touch").
   useEffect(() => {
@@ -1574,6 +1644,7 @@ export function MapViewer({
       if (e.touches.length === 2) {
         hadMultiTouchRef.current = true;
         suppressEditorSelectionUntilRef.current = Date.now() + 400;
+        stepSiteTouchRef.current({ type: "second-finger" });
         // A first finger may have landed on a control before the second
         // finger joined. That is a map gesture, not a control drag.
         editorDragRef.current = null;
@@ -1585,6 +1656,18 @@ export function MapViewer({
         const midpointX = (e.touches[0].clientX + e.touches[1].clientX) / 2;
         const midpointY = (e.touches[0].clientY + e.touches[1].clientY) / 2;
         const distance = Math.sqrt(dx * dx + dy * dy);
+        // The tool first: two fingers on a selected object's handles scale it (§10).
+        const pinch = editorToolRef.current?.onPinch;
+        if (pinch && distance > 0) {
+          const a = toolPointerRef.current(e.touches[0].clientX, e.touches[0].clientY, false);
+          const b = toolPointerRef.current(e.touches[1].clientX, e.touches[1].clientY, false);
+          if (a && b && pinch.start(a, b)) {
+            toolPinchRef.current = { dist0: distance };
+            touchStartPosRef.current = null;
+            e.preventDefault();
+            return;
+          }
+        }
         lastTouchRef.current = {
           x: midpointX,
           y: midpointY,
@@ -1622,6 +1705,9 @@ export function MapViewer({
     };
 
     const onTouchMove = (e: TouchEvent) => {
+      if (siteTouchRef.current.kind === "pending" && e.touches.length === 1) {
+        stepSiteTouchRef.current({ type: "move", x: e.touches[0].clientX, y: e.touches[0].clientY, t: performance.now() });
+      }
       const drag = editorDragRef.current;
       if (drag && e.touches.length === 1) {
         e.preventDefault();
@@ -1630,10 +1716,17 @@ export function MapViewer({
         const dy = Math.abs(t.clientY - drag.startY);
         if (drag.moved || dx + dy > 3) {
           drag.moved = true;
-          const raw = screenToMapMm(t.clientX, t.clientY);
+          // Touch on the shared path: the control rides above the finger (§10), on a stem to it.
+          const lifted = drag.touch && sharedHitRef.current;
+          const at = lifted ? liftedPoint(t.clientX, t.clientY) : { x: t.clientX, y: t.clientY };
+          const raw = screenToMapMm(at.x, at.y);
           const snap = editorSnapRef.current;
           const pt = raw && snap ? snap(raw) : raw;
           if (pt) setEditorDragPos({ id: drag.id, x: pt.x, y: pt.y });
+          if (lifted) {
+            const rect = el.getBoundingClientRect();
+            setTouchFinger({ x: t.clientX - rect.left, y: t.clientY - rect.top });
+          }
         }
         return;
       }
@@ -1654,6 +1747,13 @@ export function MapViewer({
       const rw = renderW || 1;
       const rh = renderH || 1;
 
+      if (e.touches.length === 2 && toolPinchRef.current) {
+        e.preventDefault();
+        const dx = e.touches[0].clientX - e.touches[1].clientX;
+        const dy = e.touches[0].clientY - e.touches[1].clientY;
+        editorToolRef.current?.onPinch?.move(Math.hypot(dx, dy) / toolPinchRef.current.dist0);
+        return;
+      }
       if (e.touches.length === 2 && lastTouchRef.current?.dist) {
         e.preventDefault();
         hadMultiTouchRef.current = true;
@@ -1751,6 +1851,16 @@ export function MapViewer({
     };
 
     const onTouchEnd = (e: TouchEvent) => {
+      // A pending press lifted before its long press selects the site; the lift is not a map tap.
+      if (e.touches.length === 0) stepSiteTouchRef.current({ type: "up" });
+      setTouchFinger(null);
+      if (toolPinchRef.current && e.touches.length < 2) {
+        toolPinchRef.current = null;
+        editorToolRef.current?.onPinch?.end(e.type !== "touchcancel");
+        suppressEditorSelectionUntilRef.current = Date.now() + 400;
+        if (e.touches.length === 0) { lastTouchRef.current = null; touchStartPosRef.current = null; hadMultiTouchRef.current = false; }
+        return;
+      }
       const drag = editorDragRef.current;
       if (drag && e.changedTouches.length > 0 && e.touches.length === 0) {
         if (
@@ -1766,7 +1876,9 @@ export function MapViewer({
           return;
         }
         const t = e.changedTouches[0];
-        finishEditorDrag(t.clientX, t.clientY, false);
+        // Dropped where it was drawn: above the finger (§10).
+        const at = drag.touch && sharedHitRef.current ? liftedPoint(t.clientX, t.clientY) : { x: t.clientX, y: t.clientY };
+        finishEditorDrag(at.x, at.y, false);
         return;
       }
       const labelDrag = editorLabelDragRef.current;
@@ -1841,8 +1953,14 @@ export function MapViewer({
               const p = tool.touch ? null : toolPointerRef.current(t.clientX, t.clientY, false);
               if (p) tool.onClick?.(p);
             } else {
-              const pt = screenToMapMm(t.clientX, t.clientY);
-              if (pt) editor.onMapClick?.(pt);
+              // A tap on a course object goes to the tool (V selects it, §10); anything else is a map tap.
+              const p = tool?.onPointerDown ? toolPointerRef.current(t.clientX, t.clientY, false) : null;
+              if (p?.target?.kind === "object" && tool!.onPointerDown!(p)) {
+                tool!.onPointerUp?.(p.pt);
+              } else {
+                const pt = screenToMapMm(t.clientX, t.clientY);
+                if (pt) editor.onMapClick?.(pt);
+              }
             }
           }
         }
@@ -2953,6 +3071,8 @@ export function MapViewer({
 
   // ─── Scale bar ─────────────────────────────────────────
 
+  // The page's bottom sheet (§10): the scale bar and the corner buttons sit above it, and hide once it is too tall.
+  const bottomInset = editor?.bottomInsetPx ?? 0;
   const scaleBar = useMemo(() => {
     if (!viewport || !mapScale || containerSize.w === 0) return null;
     const mpp = metresPerPx(viewport, mapScale);
@@ -2969,12 +3089,12 @@ export function MapViewer({
     const label = barM >= 1000 ? `${barM / 1000} km` : `${barM} m`;
 
     return (
-      <div style={{ position: "absolute", bottom: 12, left: 12, pointerEvents: "none", zIndex: 10 }}>
+      <div style={{ position: "absolute", bottom: 12 + bottomInset, left: 12, pointerEvents: "none", zIndex: 10 }}>
         <div style={{ fontSize: 11, color: "#334155", fontWeight: 600, marginBottom: 2 }}>{label}</div>
         <div style={{ width: barPx, height: 4, background: "#334155", borderRadius: 1, opacity: 0.8 }} />
       </div>
     );
-  }, [viewport, mapScale, containerSize]);
+  }, [viewport, mapScale, containerSize, bottomInset]);
 
   // ─── Measure HUD ──────────────────────────────────────
 
@@ -3074,7 +3194,7 @@ export function MapViewer({
   const menuEntries =
     (editor?.contextActions?.length ?? 0) + (editor?.suggestions?.length ?? 0) + (editor?.onDismiss ? 1 : 0);
   // An exclusive tool (an armed creation tool, §6) opens no action bar: it would cover the map on every click.
-  if (editor && !editor.tool?.exclusive && menuEntries > 0 && overlayContent && !editorDragPos && !editorLabelDragPos) {
+  if (editor && editor.actionLayout !== "host" && !editor.tool?.exclusive && menuEntries > 0 && overlayContent && !editorDragPos && !editorLabelDragPos) {
     let inner: Pt | null = null;
     let anchorR = overlayContent.radiusPx;
     if (editor.phantom) {
@@ -3220,6 +3340,21 @@ export function MapViewer({
           </div>
         );
       }
+    }
+  }
+
+  // The lifted touch drag's stem (§10): from the finger to the control drawn above it.
+  let touchHandle: React.ReactNode = null;
+  if (touchFinger && editorDragPos && editorDragTouch) {
+    const inner = mapMmToScreen(editorDragPos.x, editorDragPos.y);
+    if (inner) {
+      const pos = innerToContainer(inner.x, inner.y);
+      touchHandle = (
+        <svg data-testid="editor-touch-handle" aria-hidden className="absolute inset-0 w-full h-full pointer-events-none" style={{ zIndex: 9 }}>
+          <line x1={touchFinger.x} y1={touchFinger.y} x2={pos.x} y2={pos.y} stroke="#7c3aed" strokeWidth={2} strokeDasharray="4 3" />
+          <circle cx={touchFinger.x} cy={touchFinger.y} r={12} fill="rgba(124, 58, 237, 0.18)" stroke="#7c3aed" strokeWidth={1.5} />
+        </svg>
+      );
     }
   }
 
@@ -3381,14 +3516,17 @@ export function MapViewer({
         >
           <g style={{ pointerEvents: "auto" }}>
             {overlayContent?.upperNodes}
-            {locateMode !== "off" && geo.position && viewport && (() => {
-              const p = geoToInner(viewport, vctx, geo.position.lat, geo.position.lng);
-              const mpp = metresPerPx(viewport, mapScale, geo.position.lat);
+            {(() => {
+              // Field mode's fix (the page's watch) wins over the locate button's own.
+              const fix = editor?.fix ?? (locateMode !== "off" ? geo.position : null);
+              if (!fix || !viewport) return null;
+              const p = geoToInner(viewport, vctx, fix.lat, fix.lng);
+              const mpp = metresPerPx(viewport, mapScale, fix.lat);
               if (!p || mpp == null) return null;
               const px = p.x, py = p.y;
-              const radius = accuracyRadiusPx(geo.position.accuracy, mpp);
+              const radius = accuracyRadiusPx(fix.accuracy, mpp);
               return (
-                <g data-testid="my-location-marker" style={{ pointerEvents: "none" }}>
+                <g data-testid="my-location-marker" data-accuracy-m={fix.accuracy} style={{ pointerEvents: "none" }}>
                   {radius > 2 && (
                     <circle
                       cx={px}
@@ -3482,7 +3620,8 @@ export function MapViewer({
             <div className="w-8 h-px bg-purple-700" />
             <div className="absolute left-1/2 top-1/2 h-8 w-px -translate-x-1/2 -translate-y-1/2 bg-purple-700" />
           </div>
-          <div data-testid="editor-touch-bar" className="absolute inset-x-0 bottom-3 z-30 flex justify-center gap-2 px-4">
+          <div data-testid="editor-touch-bar" className="absolute inset-x-0 bottom-3 z-30 flex justify-center gap-2 px-4"
+            style={editor.bottomInsetPx ? { bottom: editor.bottomInsetPx + 12 } : undefined}>
             <button type="button" data-testid="editor-touch-place"
               className="min-h-11 px-5 rounded-full bg-purple-600 text-white text-sm font-medium shadow-lg"
               onClick={() => {
@@ -3535,6 +3674,7 @@ export function MapViewer({
           selection/phantom */}
       {editorMenu}
       {dragWarning}
+      {touchHandle}
       {editor && editorDragPos && viewport.kind === "mercator" && (() => {
         const inner = mapMmToScreen(editorDragPos.x, editorDragPos.y);
         if (!inner) return null;
@@ -3583,7 +3723,8 @@ export function MapViewer({
       {/* Control buttons */}
       {!hideControls && (
         <div className="touch-manipulation" style={{
-          position: "absolute", bottom: 12, right: 12, display: "flex", flexDirection: "column", gap: 4, zIndex: 10,
+          position: "absolute", bottom: 12 + bottomInset, right: 12, flexDirection: "column", gap: 4, zIndex: 10,
+          display: bottomInset > 0 && bottomInset > containerSize.h - 280 ? "none" : "flex",
         }}>
           <button
             type="button"

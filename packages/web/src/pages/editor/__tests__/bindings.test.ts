@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 import type { course } from "@oxygen/shared";
 import type { ToolPointer } from "../../../components/MapViewer";
-import { areaBinding, gapBinding, placeBinding, selectBinding, type GestureRef } from "../tools/bindings";
+import { areaBinding, gapBinding, placeBinding, scaleAbout, selectBinding, type GestureRef } from "../tools/bindings";
 
 const ptr = (x: number, y: number, over: Partial<ToolPointer> = {}): ToolPointer => ({ pt: { x, y }, target: null, shift: false, mmPerPx: 0.1, ...over });
 const square = (id: number, kind: course.CourseObject["kind"] = "oob_area"): course.CourseObject =>
@@ -167,5 +167,39 @@ describe("G binding (§6.3)", () => {
     expect(b.onPointerDown!(ptr(40, 0.5))).toBe(true);
     b.onPointerUp!({ x: 60, y: 0 });
     expect(onAdd).toHaveBeenCalledWith({ from: 0.4, to: 0.6 });
+  });
+});
+
+describe("pinch-scale of a selected object (docs/course-editor.md §10)", () => {
+  it("scales about a centre, Bézier handles with it", () => {
+    expect(scaleAbout([{ x: 0, y: 0, hOut: { x: 1, y: 0 } }, { x: 10, y: 0 }], { x: 5, y: 0 }, 2)).toEqual([{ x: -5, y: 0, hOut: { x: 2, y: 0 } }, { x: 15, y: 0 }]);
+  });
+
+  it("two fingers with one on the handle ring scale it about its centroid; one write on lift", () => {
+    const o = selectOpts({ selected: square(4) });
+    const b = selectBinding(o);
+    // Not on the ring (and nothing selected elsewhere): the map pinches.
+    expect(b.onPinch!.start(ptr(5, 5), ptr(6, 6))).toBe(false);
+    expect(b.onPinch!.start(ptr(10.5, 10.5), ptr(20, 20))).toBe(true);
+    b.onPinch!.move(1.5);
+    expect(o.onObjectDraft).toHaveBeenLastCalledWith(4, [{ x: -2.5, y: -2.5 }, { x: 12.5, y: -2.5 }, { x: 12.5, y: 12.5 }, { x: -2.5, y: 12.5 }]);
+    b.onPinch!.move(2);
+    b.onPinch!.end(true);
+    expect(o.onObjectMoved).toHaveBeenCalledTimes(1);
+    expect(o.onObjectMoved).toHaveBeenCalledWith(4, [{ x: -5, y: -5 }, { x: 15, y: -5 }, { x: 15, y: 15 }, { x: -5, y: 15 }]);
+  });
+
+  it("no object selected, a cancel, or no change writes nothing", () => {
+    expect(selectBinding(selectOpts()).onPinch!.start(ptr(10, 10), ptr(20, 20))).toBe(false);
+    const o = selectOpts({ selected: square(4) });
+    const b = selectBinding(o);
+    b.onPinch!.start(ptr(10, 10), ptr(20, 20));
+    b.onPinch!.move(1.3);
+    b.onPinch!.end(false);
+    b.onPinch!.start(ptr(10, 10), ptr(20, 20));
+    b.onPinch!.move(1.005);
+    b.onPinch!.end(true);
+    expect(o.onObjectMoved).not.toHaveBeenCalled();
+    expect(o.onObjectDraft).toHaveBeenLastCalledWith(4, null);
   });
 });
