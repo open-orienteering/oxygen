@@ -4,6 +4,7 @@
 // under the `map-vector` project — until then the spec sets the event
 // pipeline and the flag itself. The legacy page's spec is
 // `course-editor-legacy.spec.ts`.
+import { readFile } from "node:fs/promises";
 import { inflateSync } from "node:zlib";
 import { createRequire } from "node:module";
 import { resolve } from "node:path";
@@ -839,6 +840,74 @@ test.describe("Course editor layout (docs/course-layout.md)", () => {
     await expect(page).toHaveURL(new RegExp(`course-editor\\?mode=layout&template=${template.seq}`));
     await expect(page.getByTestId("editor-layout-scope")).toHaveAttribute("data-scope", "template", { timeout: 30_000 });
     await expect(page.getByTestId("editor-layout-scope")).toHaveAttribute("data-template", String(template.seq));
+  });
+});
+
+test.describe("Course editor auto templates (docs/course-layout.md §5–§7)", () => {
+  test("Export ▾ makes a course's first sheet; a class scale gets a class sheet and Class view; an extra template and a move back", async ({ page }) => {
+    await openEditor(page);
+    // A course with classes and no sheet yet.
+    const courses = await trpcCall<{ id: number; name: string }[]>("course.list", undefined, false);
+    const sheets = await trpcCall<{ courseId: number | null }[]>("courseMap.list", undefined, false);
+    let course: { id: number; name: string } | null = null;
+    let cls: { seq: number; name: string } | null = null;
+    for (const c of courses) {
+      if (sheets.some((s) => s.courseId === c.id)) continue;
+      const classes = await trpcCall<{ seq: number; name: string }[]>("layout.classOverrides", { courseId: c.id }, false);
+      if (classes.length) { course = c; cls = classes[0]; break; }
+    }
+    expect(course, "a course with classes and no sheet").not.toBeNull();
+    await page.getByTestId("editor-course-picker").selectOption(String(course!.id));
+
+    // Export ▾ → this course: the sheet is created first, then one page prints.
+    await page.getByTestId("editor-export").click();
+    const [download] = await Promise.all([page.waitForEvent("download"), page.getByTestId("editor-export-course").click()]);
+    const pdf = await PDFDocument.load(await readFile((await download.path())!));
+    expect(pdf.getPageCount()).toBe(1);
+    const own = (await trpcCall<{ seq: number; courseId: number | null; class: unknown }[]>("courseMap.list", undefined, false))
+      .filter((s) => s.courseId === course!.id && s.class === null);
+    expect(own).toHaveLength(1);
+
+    // Layout mode: the sheet's template is its key's auto template.
+    await page.getByTestId("editor-mode-layout").click();
+    await expect(page.getByTestId("editor-layout-scope")).toHaveAttribute("data-sheet", String(own[0].seq), { timeout: 30_000 });
+    const badge = page.getByTestId("editor-layout-template-badge");
+    await expect(badge).toHaveAttribute("data-extra", "false");
+    await expect(badge).toHaveAttribute("data-auto-key", /^A4-(portrait|landscape)-\d+$/);
+    await expect(page.getByTestId("editor-status-sheet")).toHaveAttribute("data-key", /^1:\d+ A4 /);
+
+    // A class prints at 1:15000: its class sheet appears.
+    const overridden = waitForTrpc(page, "layout.setClassOverride");
+    await page.getByTestId(`editor-layout-class-scale-${cls!.seq}`).fill("15000");
+    await page.getByTestId(`editor-layout-class-scale-${cls!.seq}`).press("Enter");
+    await overridden;
+    await expect(page.getByTestId(`editor-layout-class-${cls!.seq}`)).toHaveAttribute("data-sheets", "1");
+
+    // Class view in Course mode: the course as the class prints it.
+    await page.getByTestId("editor-mode-course").click();
+    await page.getByTestId("editor-view-class").selectOption(String(cls!.seq));
+    await expect(page.getByTestId("editor-status-sheet")).toHaveAttribute("data-key", /^1:15000 A4 /, { timeout: 15_000 });
+    await page.getByTestId("editor-export").click();
+    const [classDownload] = await Promise.all([page.waitForEvent("download"), page.getByTestId("editor-export-class").click()]);
+    expect(classDownload.suggestedFilename()).toMatch(/\.pdf$/);
+
+    // Back in Course view, Layout: an extra template takes the course; its row moves it back to the auto template.
+    await page.getByTestId("editor-view-course").click();
+    await page.getByTestId("editor-mode-layout").click();
+    await expect(page.getByTestId("editor-layout-scope")).toHaveAttribute("data-sheet", String(own[0].seq), { timeout: 30_000 });
+    const duplicated = waitForTrpc(page, "mapTemplate.applyToCourses");
+    await page.getByTestId("editor-layout-create-extra").click();
+    await duplicated;
+    await expect(badge).toHaveAttribute("data-extra", "true", { timeout: 15_000 });
+    const moved = waitForTrpc(page, "mapTemplate.applyToCourses");
+    await page.getByTestId(`editor-layout-template-move-${course!.id}`).click();
+    await moved;
+    await expect(badge).toHaveAttribute("data-extra", "false", { timeout: 15_000 });
+    // Undo moves it to the extra template again (one gesture, one entry).
+    const undone = waitForTrpc(page, "mapTemplate.applyToCourses");
+    await page.keyboard.press("Control+z");
+    await undone;
+    await expect(badge).toHaveAttribute("data-extra", "true", { timeout: 15_000 });
   });
 });
 
