@@ -338,6 +338,17 @@ export function MapTemplatesPage() {
                   >
                     <td className="px-4 py-3 font-medium text-slate-900">
                       {row.name}
+                      {/* The key as a badge: templates keep their names (docs/course-layout.md §5). */}
+                      {row.autoKey && (
+                        <span
+                          data-testid={`map-template-key-${row.seq}`}
+                          data-extra={row.isExtra ? "true" : "false"}
+                          title={row.autoKey}
+                          className={`ml-2 rounded px-1.5 py-0.5 text-[10px] font-medium ${row.isExtra ? "bg-amber-100 text-amber-800" : "bg-purple-100 text-purple-700"}`}
+                        >
+                          {row.isExtra ? t("templateExtra") : t("templateAuto")}
+                        </span>
+                      )}
                     </td>
                     <td className="px-4 py-3 text-slate-600">
                       {row.paper} ·{" "}

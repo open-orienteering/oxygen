@@ -28,6 +28,10 @@ export interface MapTemplateView {
   printScale: number;
   settings: MapTemplateSettings;
   objects: CourseMapObject[];
+  /** `<paper>-<orientation>-<scale>` (docs/course-layout.md §5). */
+  autoKey?: string | null;
+  /** Another template of the key is its auto template. */
+  isExtra?: boolean;
 }
 
 export interface CourseMapView {
@@ -44,7 +48,9 @@ export interface CourseMapView {
     climbM?: number;
     classes?: Array<{ name: string }>;
   } | null;
-  template: { seq: number; name: string } | null;
+  template: { seq: number; name: string; autoKey?: string | null; isExtra?: boolean } | null;
+  /** A class's sheet (docs/course-layout.md §6); the Maps page lists the courses' own sheets only. */
+  class?: { seq: number; name: string } | null;
   overrides: CourseMapOverrides;
   objects: CourseMapObject[];
   controls: CourseOverlayControl[];

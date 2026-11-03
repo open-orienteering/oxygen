@@ -1,8 +1,8 @@
 /**
  * The editor's top bar (docs/course-editor.md §2; 08 §5.2): course picker,
- * view picker (Course · All controls), mode switch (Course · Layout · Field),
- * undo / redo, hide other controls, auto cuts
- * and the help popover. It sits in `MapPanel`'s toolbar row, so it stays
+ * view picker (Course · All controls · Class, docs/course-layout.md §6),
+ * mode switch (Course · Layout · Field), undo / redo, hide other controls,
+ * auto cuts, Export ▾ (docs/course-layout.md §7) and the help popover. It sits in `MapPanel`'s toolbar row, so it stays
  * in the fullscreen subtree; zoom and fullscreen are the viewer's and the
  * panel's own buttons on the same row.
  */
@@ -12,6 +12,8 @@ import { EditorHelp } from "../../components/EditorHelp";
 import { ToolbarButton } from "../../components/ToolbarButton";
 import { IconEyeOff, IconRedo, IconScissors, IconUndo } from "../../components/map-icons";
 import type { EditorMode, EditorView } from "../../lib/editor/state";
+import type { ExportState } from "../../lib/editor/export-menu";
+import { ExportMenu } from "./ExportMenu";
 
 export interface TopBarProps {
   courses: { id: number; name: string }[];
@@ -19,6 +21,12 @@ export interface TopBarProps {
   onSelectCourse: (id: number | null) => void;
   view: EditorView;
   onView: (view: EditorView) => void;
+  /** The selected course's classes (Class view's picker). */
+  classes: { seq: number; name: string }[];
+  classSeq: number | null;
+  onClass: (seq: number | null) => void;
+  exportState: ExportState;
+  onExportError: (message: string) => void;
   mode: EditorMode;
   onMode: (mode: EditorMode) => void;
   canUndo: boolean;
@@ -62,6 +70,20 @@ export function TopBar(p: TopBarProps) {
       <div className="flex rounded-md border border-slate-200 overflow-hidden" role="group" aria-label={t("view")}>
         <button type="button" data-testid="editor-view-course" aria-pressed={p.view === "course"} className={segment(p.view === "course")} onClick={() => p.onView("course")}>{t("viewCourse")}</button>
         <button type="button" data-testid="editor-view-all" aria-pressed={p.view === "all"} className={segment(p.view === "all")} onClick={() => p.onView("all")}>{t("viewAll")}</button>
+        {p.classes.length > 0 && (
+          <select
+            data-testid="editor-view-class"
+            aria-label={t("viewClass")}
+            value={p.view === "class" && p.classSeq !== null ? p.classSeq : ""}
+            onChange={(e) => p.onClass(e.target.value === "" ? null : Number(e.target.value))}
+            className={`max-w-[7rem] text-xs border-0 border-l border-slate-200 px-1 py-1 cursor-pointer ${p.view === "class" ? "bg-purple-100 text-purple-700 font-medium" : "bg-white text-slate-600"}`}
+          >
+            <option value="">{t("viewClass")}</option>
+            {p.classes.map((c) => (
+              <option key={c.seq} value={c.seq}>{c.name}</option>
+            ))}
+          </select>
+        )}
       </div>
       <div className="flex rounded-md border border-slate-200 overflow-hidden" role="group" aria-label={t("mode")}>
         {MODES.map((m) => (
@@ -99,6 +121,7 @@ export function TopBar(p: TopBarProps) {
         active={p.cutsEnabled}
         onClick={p.onToggleCuts}
       />
+      <ExportMenu state={p.exportState} onError={p.onExportError} />
       <EditorHelp hint={t("help")} label={tc("editor.helpAria")} />
     </div>
   );

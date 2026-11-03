@@ -46,8 +46,9 @@ export function MapsPage() {
     () => (coursesQuery.data ?? []) as RawCourseRow[],
     [coursesQuery.data],
   );
+  // Class-override sheets are the editor's (docs/course-layout.md §6): the page stays per course.
   const maps = useMemo(
-    () => (mapsQuery.data ?? []) as CourseMapView[],
+    () => ((mapsQuery.data ?? []) as CourseMapView[]).filter((map) => !map.class),
     [mapsQuery.data],
   );
   const templates = useMemo(
@@ -162,6 +163,20 @@ export function MapsPage() {
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : t("downloadFailed"));
     }
+  };
+
+  /** One course's maps; a course without one gets its first sheet on its key's auto template first (docs/course-layout.md §6). */
+  const exportCourse = async (courseId: number, ensure: boolean) => {
+    if (ensure) {
+      try {
+        await utils.client.layout.autoSheets.mutate({ courseId });
+        await invalidate();
+      } catch (cause) {
+        setError(cause instanceof Error ? cause.message : t("downloadFailed"));
+        return;
+      }
+    }
+    await exportPdf(new URLSearchParams({ courses: String(courseId) }));
   };
 
   const saveLayout = async (snapshot: MapLayoutSnapshot) => {
@@ -373,6 +388,16 @@ export function MapsPage() {
                       ) : (
                         courseMaps[0]?.template?.name ?? "—"
                       )}
+                      {courseMaps[0]?.template?.autoKey && (
+                        <span
+                          data-testid={`course-template-badge-${course.id}`}
+                          data-extra={courseMaps[0].template.isExtra ? "true" : "false"}
+                          title={courseMaps[0].template.autoKey}
+                          className={`ml-1.5 rounded px-1.5 py-0.5 text-[10px] font-medium ${courseMaps[0].template.isExtra ? "bg-amber-100 text-amber-800" : "bg-purple-100 text-purple-700"}`}
+                        >
+                          {courseMaps[0].template.isExtra ? t("templateExtra") : t("templateAuto")}
+                        </span>
+                      )}
                     </td>
                     <td className="px-4 py-3 text-right tabular-nums text-slate-600">
                       {courseMaps.length}
@@ -411,16 +436,11 @@ export function MapsPage() {
                             </svg>
                           </button>
                         )}
-                        {courseMaps.length > 0 && (
+                        {(courseMaps.length > 0 || canEdit) && (
                           <button
                             type="button"
-                            onClick={() =>
-                              void exportPdf(
-                                new URLSearchParams({
-                                  courses: String(course.id),
-                                }),
-                              )
-                            }
+                            data-testid={`export-course-${course.id}`}
+                            onClick={() => void exportCourse(course.id, courseMaps.length === 0)}
                             title={t("exportCourse")}
                             className="flex items-center rounded p-1.5 text-slate-400 transition-colors hover:bg-blue-50 hover:text-blue-700"
                           >

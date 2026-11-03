@@ -61,6 +61,12 @@ export function snapshotOf(s: EditorSheet): LayoutSnapshot {
   };
 }
 
+/** The status bar's sheet key (docs/course-layout.md §5): `1:10000 A4 portrait`. */
+export function sheetKeyOf(snap: Pick<LayoutSnapshot, "printScale" | "paper" | "orientation" | "paperWidthMm" | "paperHeightMm">): string {
+  const paper = snap.paper === "custom" ? `${Math.round(snap.paperWidthMm ?? 0)}×${Math.round(snap.paperHeightMm ?? 0)}` : snap.paper;
+  return `1:${snap.printScale} ${paper} ${snap.orientation}`;
+}
+
 /** The frame: the sheet's override, else the template's. */
 export function frameOf(s: EditorSheet, snap: LayoutSnapshot): MapRect {
   return (s.scope === "sheet" ? s.sheet?.overrides.mapFrame : undefined) ?? snap.settings.mapFrame;

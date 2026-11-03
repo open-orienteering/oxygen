@@ -6,14 +6,15 @@
  * clipped to the frame), the paper, margin and frame on the UI layer.
  *
  * - Scope: a sheet (`?sheet=`, or the selected course's first sheet; the
+ *   class's first sheet in Class view, docs/course-layout.md §6; the
  *   all-controls sheet in view All) edits its own objects, block, print
  *   scale and window centre — the template's objects are drawn locked,
  *   with a link to the template; a template (`?template=`) edits the
  *   template, previewed with the selected course.
  * - One gesture, one write, one undo entry (docs/course-editor.md §3):
  *   `courseMap.saveLayout` in sheet scope, `mapTemplate.update` in
- *   template scope — whole snapshots, last writer wins (no version token
- *   on sheets and templates, docs/course-layout.md §2).
+ *   template scope — whole snapshots sent with the row's version token;
+ *   a stale one is the refresh notice (docs/course-layout.md §2).
  * - Course edits are locked: the binding is exclusive and the keys are
  *   Layout's own.
  */
@@ -21,6 +22,8 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { validateCourseMap, type CourseMapDocument, type CourseMapObject } from "@oxygen/shared";
 import { trpc } from "../../../lib/trpc";
+import { VersionBook, versionConflictOfError } from "../../../lib/version-book";
+import { EditorConflict } from "../../../lib/editor/write-client";
 import type { MapViewerEditorProps } from "../../../components/MapViewer";
 import { descriptionRect, gridSnap, pageBounds, type SheetGeometry } from "../../../lib/editor/layout";
 import { constrainDescription } from "../../../lib/map-layout-editor";
@@ -29,7 +32,9 @@ import type { EditorView } from "../../../lib/editor/state";
 import { LAYOUT_KEYS, layoutBinding, type LayoutChange, type LayoutGesture, type LayoutSelection, type LayoutTarget, type LayoutTool, type PlaceKind } from "../layout/bindings";
 import { LayoutInspector } from "../layout/LayoutInspector";
 import { LayoutRail } from "../layout/LayoutRail";
-import { geometryOf, layoutRequestOf, placeObject, scopeObjects, snapshotOf, withEditable, type EditorSheet, type LayoutSnapshot } from "../layout/model";
+import { ClassOverridesSection, TemplateKeySection } from "../layout/KeySections";
+import { useCapabilities } from "../../../context/CapabilitiesContext";
+import { geometryOf, layoutRequestOf, placeObject, scopeObjects, sheetKeyOf, snapshotOf, withEditable, type EditorSheet, type LayoutSnapshot } from "../layout/model";
 
 type Pt = { x: number; y: number };
 
@@ -39,6 +44,8 @@ export interface LayoutModeArgs {
   /** The top bar's course (its seq): the sheet's course, or the template's preview course. */
   course: { id: number; name: string } | null;
   view: EditorView;
+  /** Class view's class (seq): its own sheet is the default target. */
+  classSeq: number | null;
   /** One write, through the page's pending count and error line; `undefined` when it failed. */
   run: <T>(op: () => Promise<T>) => Promise<T | undefined>;
   record: (undo: () => Promise<unknown>, redo: () => Promise<unknown>) => unknown;
@@ -57,6 +64,8 @@ export interface LayoutMode {
   open: (target: LayoutTarget | null) => void;
   /** The shown sheet's course (its seq), null for the all-controls sheet and a template. */
   sheetCourse: number | null;
+  /** The status bar's sheet key. */
+  sheetKey: string | null;
 }
 
 interface WriteTarget { key: string; scope: "sheet" | "template"; sheetSeq: number | null; templateSeq: number }
@@ -65,6 +74,7 @@ export function useLayoutMode(a: LayoutModeArgs): LayoutMode {
   const utils = trpc.useUtils();
   const client = utils.client;
   const coarse = useMediaQuery("(pointer: coarse)");
+  const canEdit = useCapabilities().has("courses.edit");
   const [target, setTarget] = useState<LayoutTarget | null>(null);
 
   const sheets = trpc.courseMap.list.useQuery(undefined, { enabled: a.enabled });
@@ -79,11 +89,17 @@ export function useLayoutMode(a: LayoutModeArgs): LayoutMode {
       return all ? { sheet: all.seq } : null;
     }
     if (!a.course) return null;
+    const byOrder = (x: { sortOrder: number; seq: number }, y: { sortOrder: number; seq: number }) => x.sortOrder - y.sortOrder || x.seq - y.seq;
+    // Class view: the class's own sheet (docs/course-layout.md §6); a class without one shows its course's.
+    const classSheet = a.view === "class" && a.classSeq !== null
+      ? rows.filter((r) => r.class?.seq === a.classSeq && r.templateId !== null).sort(byOrder)[0]
+      : undefined;
+    if (classSheet) return { sheet: classSheet.seq };
     const first = rows
-      .filter((r) => r.kind === "course" && r.courseId === a.course!.id && r.templateId !== null)
-      .sort((x, y) => x.sortOrder - y.sortOrder || x.seq - y.seq)[0];
+      .filter((r) => r.kind === "course" && r.courseId === a.course!.id && r.class === null && r.templateId !== null)
+      .sort(byOrder)[0];
     return first ? { sheet: first.seq } : null;
-  }, [target, sheets.data, a.view, a.course]);
+  }, [target, sheets.data, a.view, a.course, a.classSeq]);
   const input = resolvedTarget
     ? "sheet" in resolvedTarget ? { seq: resolvedTarget.sheet } : { templateSeq: resolvedTarget.template, ...(a.course ? { courseSeq: a.course.id } : {}) }
     : null;
@@ -118,28 +134,50 @@ export function useLayoutMode(a: LayoutModeArgs): LayoutMode {
   }, [a.enabled, geometry, key, fit]);
 
   // ─── Writes ──────────────────────────────────────────────
+  // The newest token seen per sheet / template (docs/course-layout.md §2): reads and write results raise it.
+  const [versions] = useState(() => new VersionBook());
+  useEffect(() => {
+    if (!data) return;
+    if (data.sheet) versions.seed("sheet", data.sheet.seq, data.sheet.version);
+    versions.seed("template", data.template.seq, data.template.version);
+  }, [data, versions]);
   const writeTarget: WriteTarget | null = data
     ? { key, scope: data.scope, sheetSeq: data.sheet?.seq ?? null, templateSeq: data.template.seq }
     : null;
   const save = useCallback(async (w: WriteTarget, s: LayoutSnapshot) => {
-    if (w.scope === "sheet" && w.sheetSeq !== null) {
-      await client.courseMap.saveLayout.mutate({
-        // The template's objects are locked here and not written: a sheet gesture never touches the template.
-        id: w.sheetSeq, windowCenter: s.centre, printScale: s.printScale, description: s.description, objects: s.sheetObjects,
-      });
-    } else {
-      await client.mapTemplate.update.mutate({
-        id: w.templateSeq, paper: s.paper as "A4", orientation: s.orientation as "portrait",
-        ...(s.paper === "custom" ? { paperWidthMm: s.paperWidthMm, paperHeightMm: s.paperHeightMm } : {}),
-        printScale: s.printScale, settings: { ...s.settings, description: s.description }, objects: s.templateObjects,
-      });
+    const kind = w.scope === "sheet" && w.sheetSeq !== null ? "sheet" : "template";
+    const id = kind === "sheet" ? w.sheetSeq! : w.templateSeq;
+    try {
+      if (kind === "sheet") {
+        const r = await client.courseMap.saveLayout.mutate({
+          // The template's objects are locked here and not written: a sheet gesture never touches the template.
+          id, windowCenter: s.centre, printScale: s.printScale, description: s.description, objects: s.sheetObjects,
+          baseVersion: versions.get("sheet", id),
+        });
+        versions.seed("sheet", id, r.version);
+      } else {
+        const r = await client.mapTemplate.update.mutate({
+          id, paper: s.paper as "A4", orientation: s.orientation as "portrait",
+          ...(s.paper === "custom" ? { paperWidthMm: s.paperWidthMm, paperHeightMm: s.paperHeightMm } : {}),
+          printScale: s.printScale, settings: { ...s.settings, description: s.description }, objects: s.templateObjects,
+          baseVersion: versions.get("template", id),
+        });
+        versions.seed("template", id, r.version);
+      }
+    } catch (e) {
+      // Another setter wrote the sheet or template: refresh and redo (no merge of whole snapshots).
+      const conflict = versionConflictOfError(e);
+      if (!conflict) throw e;
+      versions.seed(kind, id, conflict.version);
+      void utils.courseMap.resolveSheet.invalidate();
+      throw new EditorConflict({ kind: "refresh", differing: null }, kind, id);
     }
     setLocal({ key: w.key, snap: s, at: Date.now() });
     void utils.courseMap.resolveSheet.invalidate();
     void utils.courseMap.list.invalidate();
     void utils.mapTemplate.list.invalidate();
     return true;
-  }, [client, utils]);
+  }, [client, utils, versions]);
 
   const { run, record } = a;
   /** One gesture: the whole snapshot written, one undo entry writing back the one it replaced. */
@@ -288,7 +326,7 @@ export function useLayoutMode(a: LayoutModeArgs): LayoutMode {
       snap={snap}
       geometry={geometry}
       courseName={a.course?.name ?? null}
-      sheets={(sheets.data ?? []).filter((r) => (data?.sheet ? r.courseId === data.sheet.courseSeq && r.kind === data.sheet.kind : false))}
+      sheets={(sheets.data ?? []).filter((r) => (data?.sheet ? r.courseId === data.sheet.courseSeq && r.kind === data.sheet.kind && (r.class?.seq ?? null) === data.sheet.classSeq : false))}
       selection={selection}
       selectedObject={selectedObject}
       editable={scoped.editable}
@@ -304,8 +342,15 @@ export function useLayoutMode(a: LayoutModeArgs): LayoutMode {
       onDelete={deleteSelected}
       onPlaceImage={(id) => onTool("image", id)}
     />
+    {data && (
+      <TemplateKeySection template={data.template} sheets={sheets.data ?? []} canEdit={canEdit} run={run} record={record} onOpen={open}
+        sheetCourse={data.sheet?.kind === "course" && data.sheet.classSeq === null ? data.sheet.courseSeq : null} />
+    )}
+    {data?.sheet?.kind === "course" && data.sheet.courseSeq !== null && (
+      <ClassOverridesSection courseSeq={data.sheet.courseSeq} canEdit={canEdit} run={run} record={record} onOpen={open} />
+    )}
     </div>
   );
 
-  return { editor, rail, inspector, courseOnly: data?.sheet?.kind === "course", onKey, open, sheetCourse: data?.sheet?.courseSeq ?? null };
+  return { editor, rail, inspector, courseOnly: data?.sheet?.kind === "course", onKey, open, sheetCourse: data?.sheet?.courseSeq ?? null, sheetKey: snap ? sheetKeyOf(snap) : null };
 }

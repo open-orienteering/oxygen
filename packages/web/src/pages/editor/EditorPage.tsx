@@ -71,6 +71,7 @@ import { CourseSection, MultiSection, SelectionSection } from "./modes/CourseMod
 import { AddMenu, FieldSection, FieldSelection, FieldTopBar, FixStatus, OfflineNotice, OverflowMenu, type AddChoice } from "./modes/FieldMode";
 import { useFieldFix } from "./useFieldFix";
 import { useLayoutMode } from "./modes/LayoutMode";
+import { useClassView } from "./modes/ClassView";
 
 type Pt = { x: number; y: number };
 type Structure = course.WireCourseStructure;
@@ -103,7 +104,9 @@ export function EditorPage() {
   const [state, dispatch] = useReducer(editorReducer, isMobile, (phone: boolean) => ({ ...initialEditorState, mode: initialModeFor({ phone }) }));
   const fieldMode = state.mode === "field";
   const online = useOnlineStatus();
-  const canReview = useCapabilities().has("courses.review");
+  const caps = useCapabilities();
+  const canReview = caps.has("courses.review");
+  const canEdit = caps.has("courses.edit");
   const geo = useFieldFix(fieldMode);
 
   const [undoStack] = useState(() => new UndoStack(50));
@@ -238,9 +241,15 @@ export function EditorPage() {
     nameId: nameId ?? "",
     course: selectedCourse ? { id: selectedCourse.id, name: selectedCourse.name } : null,
     view: state.view,
+    classSeq: state.classSeq,
     run,
     record,
   });
+  // The selected course's classes: Class view's picker (docs/course-layout.md §6).
+  const courseClasses = trpc.layout.classOverrides.useQuery(
+    { courseId: selectedCourse?.id ?? 1 },
+    { enabled: !!selectedCourse },
+  );
 
   // Sites this client created since the last refetch: their kind, position and code, for the writes and the
   // ghost that follow before `controlCoordinates` / `control.list` have them (§6.1).
@@ -573,7 +582,7 @@ export function EditorPage() {
 
   // ─── Course objects (§7) ─────────────────────────────────
   const objects = useMemo(() => objectList.data ?? [], [objectList.data]);
-  const highlighted = useMemo(() => new Set(state.view === "course" && selectedCourse ? [selectedCourse.name] : []), [state.view, selectedCourse]);
+  const highlighted = useMemo(() => new Set(state.view !== "all" && selectedCourse ? [selectedCourse.name] : []), [state.view, selectedCourse]);
   const objectsInView = useMemo(() => courseObjectsForView(objects, highlighted, courses.data ?? []), [objects, highlighted, courses.data]);
   const selectedObject = state.selectedObjectId !== null ? objects.find((o) => o.id === state.selectedObjectId) ?? null : null;
   /** Geometry being dragged (vertex or body) or drawn, drawn instead of the stored one until the list catches up. */
@@ -924,7 +933,7 @@ export function EditorPage() {
 
   // ─── Checks and KPIs (§8) ────────────────────────────────
   const courseChecks = useCourseChecks({
-    course: state.view === "course" && selectedCourse ? { id: selectedCourse.id, name: selectedCourse.name } : null,
+    course: state.view !== "all" && selectedCourse ? { id: selectedCourse.id, name: selectedCourse.name } : null,
     structure, sites, controls: controlList.data, document: mapDoc, mapScale, objects: objectsInView,
     derivation: courseInfo?.derivation, ringMm: courseInfo?.metrics?.circleRadiusMm ?? 2.5,
   });
@@ -1013,7 +1022,13 @@ export function EditorPage() {
     else handleMoveEnd(id, pt);
   }, [fieldReadOnly, handleMoveEnd]);
 
-  const courseView = state.view === "course";
+  // Class view is Course view drawn through the class's sheet (docs/course-layout.md §6).
+  const courseView = state.view !== "all";
+  const fitClassPage = useCallback((bounds: { minX: number; minY: number; maxX: number; maxY: number }) => {
+    setViewRequest((v) => ({ key: (v?.key ?? 0) + 1, bounds }));
+  }, []);
+  const classView = useClassView({ enabled: state.mode === "course" && state.view === "class", classSeq: state.classSeq, onFit: fitClassPage });
+  const classLayout = classView.layout;
   const courseControlIds = useMemo(() => new Set(sequenceIds.map(String)), [sequenceIds]);
   const toolActive = state.tool.kind !== "select";
   const editor: MapViewerEditorProps = useMemo(() => ({
@@ -1050,7 +1065,8 @@ export function EditorPage() {
     provisional,
     onCourseInfo: setCourseInfo,
     markers: courseChecks.markers,
-  }), [courseChecks.markers, isMobile, fix, sheetPx, fieldMoveEnd, state.selectedControlId, state.phantom, contextActions, contextInfo, srrBadge, radioOn, suggestions, tc, courseControlIds, toolActive,
+    layout: classLayout,
+  }), [classLayout, courseChecks.markers, isMobile, fix, sheetPx, fieldMoveEnd, state.selectedControlId, state.phantom, contextActions, contextInfo, srrBadge, radioOn, suggestions, tc, courseControlIds, toolActive,
     courseView, selectedCourse, moveWarnings, moveEpoch, handleMapClick, handleLabelMoveEnd, handleSelect,
     handleDismiss, handleLegClick, toolBinding, snapIndex, snap, draftObjects, draftFast, viewRequest, provisional]);
 
@@ -1275,6 +1291,16 @@ export function EditorPage() {
       onSelectCourse={(id) => dispatch({ type: "select-course", id })}
       view={state.view}
       onView={(view) => dispatch({ type: "view", view })}
+      classes={selectedCourse ? (courseClasses.data ?? []) : []}
+      classSeq={state.classSeq}
+      onClass={(seq) => dispatch({ type: "class", seq })}
+      exportState={{
+        nameId: nameId ?? "",
+        courseSeq: selectedCourse?.id ?? null,
+        classSeq: state.view === "class" ? state.classSeq : null,
+        canEdit,
+      }}
+      onExportError={setErrorMsg}
       mode={state.mode}
       onMode={(mode) => dispatch({ type: "mode", mode })}
       canUndo={canUndo}
@@ -1416,9 +1442,16 @@ export function EditorPage() {
   const statusBar = (
     <StatusBar controls={selectedCourse ? sequenceIds.length : null} lengthM={selectedCourse ? courseChecks.lengthM ?? totalMeters : null} scale={mapScale} save={save}
       climbM={selectedCourse?.climb ?? null} checks={courseChecks.checks.length}
-      pendingLegM={pendingLegM} snapping={state.snapping} />
+      pendingLegM={pendingLegM} snapping={state.snapping}
+      sheetKey={state.mode === "layout" ? layoutMode.sheetKey : state.mode === "course" && state.view === "class" ? classView.sheetKey : null} />
   );
 
+  // Class view without a sheet for the class's course (docs/course-layout.md §6): the course draws as in Course view.
+  const classNotice = state.mode === "course" && state.view === "class" && classView.missing ? (
+    <div data-testid="editor-class-no-sheet" className="pointer-events-auto w-64 rounded-lg border border-slate-200 bg-white/95 text-slate-600 text-xs p-2 shadow-sm">
+      {t("classNoSheet")}
+    </div>
+  ) : null;
   const noticeNode = notice ? (
     <div data-testid="editor-conflict" data-kind={notice.kind} className="pointer-events-auto w-64 rounded-lg border border-amber-300 bg-amber-50 text-amber-900 text-xs p-2 shadow-sm">
       {notice.kind === "refresh" ? (
@@ -1488,6 +1521,8 @@ export function EditorPage() {
         {objectsDom}
         <div className="absolute top-2 inset-x-2 z-30 flex flex-col gap-1.5 pointer-events-none">
           {noticeNode}
+        {classNotice}
+          {classNotice}
           {fieldReadOnly && <OfflineNotice />}
           {errorMsg && <span data-testid="editor-error" className="pointer-events-auto w-fit text-[11px] text-red-600 bg-white/95 rounded px-1.5">{errorMsg}</span>}
           {showExhausted && <span data-testid="series-exhausted" className="pointer-events-auto w-fit text-[11px] text-amber-700 bg-white/95 rounded px-1.5">{tc("seriesExhausted")}</span>}
@@ -1574,7 +1609,7 @@ export function EditorPage() {
           fillContainer
           fitToControls
           showMapInfo={!isMobile}
-          filterMode={(state.mode === "layout" ? layoutMode.courseOnly : state.hideOthers) && selectedCourse && courseView ? "course" : "all"}
+          filterMode={(state.mode === "layout" ? layoutMode.courseOnly : state.hideOthers || (state.view === "class" && !!classLayout)) && selectedCourse && courseView ? "course" : "all"}
           defaultShowDescriptions={!isMobile}
           descriptionsAllControls
           toolbar={toolbar}
