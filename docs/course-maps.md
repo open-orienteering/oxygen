@@ -175,7 +175,10 @@ Event-scoped tRPC routers:
 
 - `mapTemplate` — list, create, update, duplicate, delete, apply to courses,
   save/load/delete club templates
-- `courseMap` — list with validation, get, create, update, delete, reorder
+- `courseMap` — list with validation, get, create, update, delete, reorder;
+  `resolveSheet` (a sheet, or a template previewed with a course, as the
+  composer draws it: the read of the new editor's Layout mode,
+  `course-layout.md` §1)
 - `graphics` — list (event + club), upload (base64), saveToClub, delete
 
 REST:
@@ -231,7 +234,15 @@ Use **Maps / Kartor** for course assignments and per-map changes:
 4. Export one map, every map for a course, the all-controls map, or the whole
    event as PDF.
 
-In either editor, the paper is the canvas. **Align map** drags the terrain
+**Which editor opens.** For an event that mounts the new course editor
+(`course-editor.md` §1: `vector`, pinned document, `map.editor.vector`,
+WebGL2), **Edit layout** and **Edit template layout** open its Layout mode
+(`/:nameId/course-editor?mode=layout&sheet=<seq>` / `&template=<seq>`):
+the sheet drawn on the GL canvas through the composer's page layer, every
+gesture one write and one undo entry — `course-layout.md`. Every other
+event opens the legacy editor below (`MapLayoutEditor`), unchanged.
+
+In the legacy editor, the paper is the canvas. **Align map** drags the terrain
 under the map frame — the displayed raster and the course overlay move
 together, and the freshly rendered raster swaps in seamlessly afterwards.
 Mouse wheel and `−` / `+` zoom only the editor viewport. When zoomed, dragging

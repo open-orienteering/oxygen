@@ -32,11 +32,14 @@ editor. The route waits for `course.mapFileInfo`, `course.mapMetadata` and
 `event.mapPipeline` before mounting either page.
 
 Deep links: `?course=<seq>` selects a course, `?control=<code>` a control;
-consumed once when the data loads.
+consumed once when the data loads. `?mode=layout` with `sheet=<seq>` or
+`template=<seq>` opens Layout mode on that sheet or template
+(`course-layout.md` §4).
 
 **Modes** (08 §5.1): Course, Layout, Field share one canvas, selection and
-undo history. D4 builds Course mode; the switch shows Layout (D7) and Field
-(D9) disabled with "Arrives with slice D7 / D9". The **view** picker
+undo history. Course mode is this chapter; **Layout mode** — the sheet as
+the view, course edits locked — is `course-layout.md`; the switch shows
+Field (D9) disabled with "Arrives with slice D9". The **view** picker
 offers *Course* (the selected course full-strength, other controls faded)
 and *All controls* (every site with its code, no legs; the inspector keeps
 the selected course). Class, variant and setter views are D8 / F.
@@ -57,7 +60,7 @@ exit bubble on every pointer move
 | Part | `data-testid` | What it holds |
 |---|---|---|
 | Top bar (`TopBar.tsx`) | `editor-top-bar` | course picker (`editor-course-picker`), view (`editor-view-course` / `-all`), mode (`editor-mode-course` / `-layout` / `-field`), undo / redo (`editor-undo` / `-redo`), hide other controls (`editor-hide-others`), auto cuts (`editor-toggle-cuts`), help popover; MapPanel adds descriptions, fullscreen and the viewer its zoom on the same row |
-| Tool rail (`ToolRail.tsx`) | `editor-tool-rail` | `editor-tool-<key>` for `V`, `S`, `K`, `M`, `X` / `C` (disabled, "slice F"), `A` (menu `editor-area-menu`, `editor-area-<kind>`), `T`, `G`; the snapping toggle `editor-snapping` (§6) |
+| Tool rail (`ToolRail.tsx`; Layout mode: `layout/LayoutRail.tsx`, `editor-layout-rail`, `course-layout.md` §3) | `editor-tool-rail` | `editor-tool-<key>` for `V`, `S`, `K`, `M`, `X` / `C` (disabled, "slice F"), `A` (menu `editor-area-menu`, `editor-area-<kind>`), `T`, `G`; the snapping toggle `editor-snapping` (§6) |
 | Action bar (`ActionBar.tsx`) | `editor-action-bar` | the selection's or phantom's entries, horizontal, centred under the selection, hidden during a drag; ids `editor-action-<id>` as the legacy popover's. The viewer positions it (`actionLayout: "bar"`); D9 docks the same list as the mobile bottom bar |
 | Inspector (`Inspector.tsx`, `modes/CourseMode.tsx`, `modes/ObjectSection.tsx`) | `editor-inspector` | collapsible sections: course (create, sequence, visit order, clone), selection (a site: code, kind, position, description summary, "also in", hidden number, notes — §6.6; several controls: `editor-multi` with the bulk actions — §6.5; a course object: `editor-object` — §7), inventory (`editor-inventory-panel`, collapsed), checks (`editor-checks`, §8) |
 | Status bar (`StatusBar.tsx`) | `editor-status` | the selected course's control count and length, the armed tool's pending leg (`editor-pending-leg-length`, §6.1), the map scale, "snapping" when on, climb and the check count (§8; the sheet key is D8's), the save state (`editor-save-state`, `data-state` = `saved` / `saving` / `error` / `conflict`) |
@@ -511,6 +514,7 @@ current, differing }`; a variation group or a slice-F site kind answers
 | unit (web) | `packages/web/src/lib/editor/__tests__/checks.test.ts` | §8: sites and the explicit structure as `courseChecks` takes them, two controls 20 m apart, the server's `DESCRIPTION_STALE` merged in order, markers (rings, a leg cross, unpositioned skipped), length from the leg polylines, locate |
 | E2E | `e2e/course-editor.spec.ts` "Course editor checks" | §8: two controls 20 m apart → the count beside the section title, the row (`CONTROL_TOO_CLOSE`, "20 m"), a marker on each site, the status-bar count; a click selects the first site and centres the view on the pair's midpoint |
 | E2E | `e2e/course-editor-legacy.spec.ts` | the legacy page, unchanged (`chromium`) |
+| unit, integration, E2E | `course-layout.md` "Tests" | Layout mode |
 
 ## Pending in this chapter
 
@@ -523,7 +527,7 @@ current, differing }`; a variation group or a slice-F site kind answers
 - **Description instructions** (finish variant, special instructions)
   are edited in the legacy editor only.
 - **Course delete** stays on the Courses page.
-- **Layout mode** — D7; **export menu, class view, sheet key** — D8;
+- **Export menu, class view, sheet key** — D8;
   **Field mode, mobile chrome, loupe** — D9; the rest of the E2E rewrite
   and the `map-vector` / `mobile` projects — D10; **presence and "moved
   by X at T"** — D11.
