@@ -60,6 +60,18 @@ describe("editorReducer (docs/course-editor.md §3)", () => {
     expect(s.phantom).toBeNull();
   });
 
+  it("Class view (course-layout.md §6): a class enters it, Course / All leave it, another course ends it", () => {
+    let s = editorReducer(initialEditorState, { type: "select-course", id: 1 });
+    expect(editorReducer(s, { type: "view", view: "class" })).toBe(s);
+    s = editorReducer(s, { type: "class", seq: 7 });
+    expect(s).toMatchObject({ view: "class", classSeq: 7 });
+    expect(editorReducer(s, { type: "view", view: "course" })).toMatchObject({ view: "course", classSeq: null });
+    expect(editorReducer(s, { type: "view", view: "all" })).toMatchObject({ view: "all", classSeq: null });
+    expect(editorReducer(s, { type: "class", seq: null })).toMatchObject({ view: "course", classSeq: null });
+    expect(editorReducer(s, { type: "select-course", id: 2 })).toMatchObject({ view: "course", classSeq: null, selectedCourseId: 2 });
+    expect(editorReducer(s, { type: "select", id: 31 })).toMatchObject({ view: "class", classSeq: 7 });
+  });
+
   it("a tool is dropped first by Escape (back to V), then the multi-selection, then the object (§6)", () => {
     let s = editorReducer(initialEditorState, { type: "select-course", id: 1 });
     s = editorReducer(s, { type: "set-multi", ids: [31, 32] });

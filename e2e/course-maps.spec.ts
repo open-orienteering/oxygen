@@ -798,3 +798,40 @@ async function touchPointerDrag(
   );
   await target.page().waitForTimeout(50);
 }
+
+test.describe("auto templates (docs/course-layout.md §5–§7)", () => {
+  test.beforeAll(seedBaseMap);
+
+  test("export a course that has no template yet", async ({ page, mapPipeline }) => {
+    test.setTimeout(90_000);
+    page.setDefaultTimeout(10_000);
+    await selectEvent(page);
+    await openTab(page, "Maps");
+    await expect(page.getByTestId("maps-page")).toBeVisible();
+    const row = page.locator("[data-testid^='course-map-row-']").first();
+    await expect(row).toBeVisible();
+    const courseId = Number((await row.getAttribute("data-testid"))!.replace("course-map-row-", ""));
+    await expect(page.getByTestId(`course-template-badge-${courseId}`)).toHaveCount(0);
+
+    // The course has no sheet: the export creates its first one on the auto template of its key.
+    const [download] = await Promise.all([
+      page.waitForEvent("download"),
+      page.getByTestId(`export-course-${courseId}`).click(),
+    ]);
+    await expectA4Pages(download, 1);
+    const badge = page.getByTestId(`course-template-badge-${courseId}`);
+    await expect(badge).toBeVisible();
+    await expect(badge).toHaveAttribute("data-extra", "false");
+    const printed = await page.request.get(`/api/maps/itest/maps.pdf?courses=${courseId}`);
+    expect(printed.ok()).toBe(true);
+    expect(printed.headers()["x-print-pipeline"]).toBe(mapPipeline);
+
+    // The template is named after its key and shows the key as a badge.
+    await openTab(page, "Map templates");
+    const key = page.locator("[data-testid^='map-template-key-']");
+    await expect(key).toHaveCount(1);
+    await expect(key).toHaveAttribute("data-extra", "false");
+    await expect(key).toHaveAttribute("title", /^A4-(portrait|landscape)-\d+$/);
+    await expect(page.locator("[data-testid^='map-template-']").filter({ hasText: /A4 (portrait|landscape) 1:\d+/ }).first()).toBeVisible();
+  });
+});

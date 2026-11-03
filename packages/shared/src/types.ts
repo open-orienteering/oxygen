@@ -893,8 +893,9 @@ export type ControlKind = "control" | "start" | "finish" | "map_exchange" | "cro
  * journaled, so the base is never on the node).
  */
 export interface VersionConflictData {
-  kind: "course" | "control" | "object";
-  /** Public id (course seq / control id / course object seq). */
+  /** `sheet` / `template`: a `course_maps` / `map_templates` row (docs/course-layout.md §2). */
+  kind: "course" | "control" | "object" | "sheet" | "template";
+  /** Public id (course seq / control id / course object seq / sheet seq / template seq). */
   id: number;
   version: string;
   current: unknown;
@@ -906,7 +907,7 @@ export interface VersionConflictData {
 export function versionConflictOf(data: unknown): VersionConflictData | null {
   if (typeof data !== "object" || data === null) return null;
   const d = data as Partial<VersionConflictData>;
-  return (d.kind === "course" || d.kind === "control" || d.kind === "object") &&
+  return (d.kind === "course" || d.kind === "control" || d.kind === "object" || d.kind === "sheet" || d.kind === "template") &&
     typeof d.version === "string" &&
     (d.differing === null || Array.isArray(d.differing))
     ? (d as VersionConflictData)

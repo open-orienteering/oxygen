@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { defaultMapAppearance } from "@oxygen/shared";
-import { geometryOf, layoutRequestOf, placeObject, scopeObjects, snapshotOf, withEditable, type EditorSheet } from "../layout/model";
+import { geometryOf, layoutRequestOf, placeObject, scopeObjects, sheetKeyOf, snapshotOf, withEditable, type EditorSheet } from "../layout/model";
 
 const settings = { printMarginMm: 3, mapFrame: { x: 10, y: 10, width: 190, height: 277 }, description: { visible: false, x: 150, y: 12, cellSizeMm: 6 }, appearance: defaultMapAppearance };
 const sheetText = { id: "s", kind: "text" as const, anchor: "page" as const, x: 20, y: 30, text: "{course}", fontSizeMm: 4, color: "#000000" };
@@ -10,8 +10,9 @@ function sheet(scope: "sheet" | "template" = "sheet"): EditorSheet {
   const window = { minX: 30 - 142.5, minY: 10 - 207.75, width: 285, height: 415.5 };
   return {
     scope,
-    sheet: scope === "sheet" ? { seq: 4, name: "A", kind: "course", courseSeq: 2, windowCenter: { x: 30, y: 10 }, overrides: { printScale: 10000, description: { visible: true, x: 140, y: 12, cellSizeMm: 6 } }, objects: [sheetText] } : null,
-    template: { seq: 1, name: "A4", paper: "A4", orientation: "portrait", paperWidthMm: null, paperHeightMm: null, printScale: 7500, settings, objects: [templateText] },
+    sheet: scope === "sheet" ? { seq: 4, name: "A", kind: "course", courseSeq: 2, classSeq: null, version: "5", windowCenter: { x: 30, y: 10 }, overrides: { printScale: 10000, description: { visible: true, x: 140, y: 12, cellSizeMm: 6 } }, objects: [sheetText] } : null,
+    template: { seq: 1, name: "A4", paper: "A4", orientation: "portrait", paperWidthMm: null, paperHeightMm: null, printScale: 7500, settings, objects: [templateText], autoKey: "A4-portrait-7500", isExtra: false, version: "3" },
+    classView: null,
     courseSeq: 2,
     document: { description: scope === "sheet" ? { visible: true, x: 140, y: 12, cellSizeMm: 6 } : settings.description } as EditorSheet["document"],
     window,
@@ -30,6 +31,11 @@ describe("Layout model (docs/course-layout.md §2)", () => {
     expect(snap.description.visible).toBe(true);
     expect(scopeObjects(s, snap)).toEqual({ editable: [sheetText], locked: [templateText] });
     expect(withEditable(s, snap, []).sheetObjects).toEqual([]);
+  });
+
+  it("the sheet key names the print scale, paper and orientation (course-layout.md §5)", () => {
+    expect(sheetKeyOf(snapshotOf(sheet()))).toBe("1:10000 A4 portrait");
+    expect(sheetKeyOf({ printScale: 4000, paper: "custom", orientation: "landscape", paperWidthMm: 300.2, paperHeightMm: 200 })).toBe("1:4000 300×200 landscape");
   });
 
   it("template scope: the template's objects editable, nothing locked", () => {

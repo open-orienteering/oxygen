@@ -191,5 +191,7 @@
   "removeVertex": "Remove vertex",
   "curveHint": "Alt-drag a vertex to add curve handles.",
   "closePath": "Close path",
-  "dismiss": "Dismiss"
+  "dismiss": "Dismiss",
+  "templateAuto": "auto",
+  "templateExtra": "extra"
 }

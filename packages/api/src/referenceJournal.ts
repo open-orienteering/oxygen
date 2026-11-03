@@ -33,6 +33,7 @@ import { nextServerHlc } from "./serverClock.js";
 type Db = PrismaClient | Prisma.TransactionClient;
 
 const STRIP = new Set(["id", "eventId", "seq", "createdAt", "updatedAt"]);
+const CLASS_LAYOUT_FIELDS = ["printScale", "sheetTemplateId"] as const;
 
 function portableFields(
   row: Record<string, unknown>,
@@ -58,7 +59,9 @@ export async function classUpsertPayload(
   return {
     id: row.id,
     seq: row.seq,
-    fields: portableFields(row as unknown as Record<string, unknown>),
+    // Print overrides are layout data: cloud-owned, not journaled (08 §4.8;
+    // docs/course-layout.md §6) — a peer may not hold the template row.
+    fields: portableFields(row as unknown as Record<string, unknown>, CLASS_LAYOUT_FIELDS),
     coursePools: pools,
   };
 }

@@ -28,6 +28,7 @@ import {
   type PrintGraphic,
   type PrintMapRow,
   pinnedPrintSource,
+  rowForClass,
   sheetForMapRow,
 } from "./pdf-page.js";
 import { printGate, renderCoursePagesInWorker, resetPrintWorkers } from "./print-worker-host.js";
@@ -89,40 +90,46 @@ function safeFilename(value: string): string {
   return cleaned || "maps";
 }
 
+const mapRowInclude = {
+  template: true,
+  course: {
+    include: {
+      classes: { select: { name: true } },
+      courseControls: {
+        orderBy: { position: "asc" },
+        include: { control: true },
+      },
+    },
+  },
+} as const;
+
 async function findMapRows(
   db: Db,
   eventId: bigint,
-  query: { maps?: string; courses?: string; allControls?: string },
+  query: { maps?: string; courses?: string; classes?: string; allControls?: string },
 ) {
   const mapSeqs = parseSeqs(query.maps);
   const courseSeqs = parseSeqs(query.courses);
+  const classSeqs = parseSeqs(query.classes);
   const includeAllControls = query.allControls === "1";
-  if (mapSeqs && courseSeqs) {
-    throw new Error("Use either maps or courses, not both");
+  if ([mapSeqs, courseSeqs, classSeqs].filter(Boolean).length > 1) {
+    throw new Error("Use one of maps, courses or classes");
   }
+  if (classSeqs) return findClassRows(db, eventId, classSeqs);
   const rows = await db.courseMap.findMany({
     where: {
       eventId,
       ...(mapSeqs ? { seq: { in: mapSeqs } } : {}),
-      ...(courseSeqs ? { course: { seq: { in: courseSeqs } } } : {}),
+      // A course's own sheets; class sheets print through `classes` or `maps`
+      // (docs/course-layout.md §7).
+      ...(courseSeqs ? { course: { seq: { in: courseSeqs } }, classId: null } : {}),
       ...(!mapSeqs && !courseSeqs && !includeAllControls
-        ? {}
+        ? { classId: null }
         : includeAllControls && !mapSeqs && !courseSeqs
           ? { kind: "all_controls" }
           : {}),
     },
-    include: {
-      template: true,
-      course: {
-        include: {
-          classes: { select: { name: true } },
-          courseControls: {
-            orderBy: { position: "asc" },
-            include: { control: true },
-          },
-        },
-      },
-    },
+    include: mapRowInclude,
     orderBy: [
       { course: { seq: "asc" } },
       { sortOrder: "asc" },
@@ -142,6 +149,43 @@ async function findMapRows(
   const requested = mapSeqs?.length ?? courseSeqs?.length;
   if (requested && rows.length === 0) throw new Error("No requested maps found");
   return rows;
+}
+
+/**
+ * `?classes=` (docs/course-layout.md §7): per class, in the order asked,
+ * its class sheets, else its course's own sheets as the class prints them
+ * (`rowForClass`: the class's template and scale, the header naming the
+ * class).
+ */
+async function findClassRows(db: Db, eventId: bigint, classSeqs: number[]) {
+  const classes = await db.class.findMany({
+    where: { eventId, seq: { in: classSeqs }, removed: false },
+    include: { sheetTemplate: true },
+  });
+  if (classes.length !== classSeqs.length) throw new Error("One or more requested classes were not found");
+  const bySeq = new Map(classes.map((c) => [c.seq, c]));
+  const out = [];
+  for (const seq of classSeqs) {
+    const cls = bySeq.get(seq)!;
+    if (!cls.courseId) continue;
+    const own = await db.courseMap.findMany({
+      where: { eventId, classId: cls.id },
+      include: mapRowInclude,
+      orderBy: [{ sortOrder: "asc" }, { seq: "asc" }],
+    });
+    const rows = own.length
+      ? own
+      : await db.courseMap.findMany({
+          where: { eventId, courseId: cls.courseId, classId: null, kind: "course" },
+          include: mapRowInclude,
+          orderBy: [{ sortOrder: "asc" }, { seq: "asc" }],
+        });
+    const print = { name: cls.name, printScale: cls.printScale, sheetTemplate: cls.sheetTemplate };
+    out.push(...rows.map((row) => rowForClass(row, print, own.length > 0)));
+  }
+  if (out.length > 200) throw new Error("A single export is limited to 200 map pages");
+  if (out.length === 0) throw new Error("No requested maps found");
+  return out;
 }
 
 type AllControlRow = {
@@ -281,6 +325,7 @@ export function registerCourseMapRoutes(
     Querystring: {
       maps?: string;
       courses?: string;
+      classes?: string;
       allControls?: string;
     };
   }>("/api/maps/:nameId/maps.pdf", async (req, reply) => {

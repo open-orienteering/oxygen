@@ -575,11 +575,18 @@ model MapTemplate {
   printScale    Int      @map("print_scale")
   settings      Json     @default("{}")
   objects       Json     @default("[]")
+  /// `<paper>-<orientation>-<scale>` (docs/course-layout.md §5; `templateAutoKey`).
+  autoKey       String?  @map("auto_key")
+  /// Another template of the same key is the auto one (decision (3)).
+  isExtra       Boolean  @default(false) @map("is_extra")
+  /// Concurrency token (course-layout.md §2): an HLC minted on every write.
+  version       BigInt   @default(0)
   createdAt     DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
   updatedAt     DateTime @default(now()) @updatedAt @map("updated_at") @db.Timestamptz(6)
 
-  event Event       @relation(fields: [eventId], references: [id], onDelete: Cascade)
-  maps  CourseMap[]
+  event        Event       @relation(fields: [eventId], references: [id], onDelete: Cascade)
+  maps         CourseMap[]
+  classSheets  Class[]
 
   @@unique([eventId, seq])
   @@unique([eventId, name])
@@ -600,16 +607,25 @@ model CourseMap {
   overrides    Json     @default("{}")
   objects      Json     @default("[]")
   sortOrder    Int      @default(0) @map("sort_order")
+  /// Map exchange part (phase 2 writes > 0).
+  sectionIndex Int      @default(0) @map("section_index")
+  /// The class whose print override this sheet carries (docs/course-layout.md §6); null for the course's own sheets.
+  classId      String?  @map("class_id") @db.Uuid
+  props        Json     @default("{}")
+  /// Concurrency token (course-layout.md §2): an HLC minted on every write.
+  version      BigInt   @default(0)
   createdAt    DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
   updatedAt    DateTime @default(now()) @updatedAt @map("updated_at") @db.Timestamptz(6)
 
   event    Event        @relation(fields: [eventId], references: [id], onDelete: Cascade)
   course   Course?      @relation(fields: [courseId], references: [id], onDelete: Cascade)
   template MapTemplate? @relation(fields: [templateId], references: [id], onDelete: SetNull)
+  class    Class?       @relation(fields: [classId], references: [id], onDelete: Cascade)
 
   @@unique([eventId, seq])
   @@index([eventId, courseId, sortOrder])
   @@index([templateId])
+  @@index([classId])
   @@map("course_maps")
   @@schema("oxygen")
 }
@@ -686,6 +702,9 @@ model Class {
   legMethod     String  @default("") @map("leg_method")
   qualification Json?
   transferFlags Int     @default(0) @map("transfer_flags")
+  /// Print overrides (docs/course-layout.md §6; 08 §4.4): the class prints its course at this scale / on this template. Layout data, not journaled.
+  printScale      Int?    @map("print_scale")
+  sheetTemplateId String? @map("sheet_template_id") @db.Uuid
 
   removed   Boolean  @default(false)
   createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
@@ -693,6 +712,8 @@ model Class {
 
   event       Event             @relation(fields: [eventId], references: [id], onDelete: Cascade)
   course      Course?           @relation(fields: [courseId], references: [id], onDelete: SetNull)
+  sheetTemplate MapTemplate?    @relation(fields: [sheetTemplateId], references: [id], onDelete: SetNull)
+  sheets      CourseMap[]
   runners     Runner[]
   teams       Team[]
   routes      Route[]

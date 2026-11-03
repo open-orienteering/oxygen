@@ -42,7 +42,9 @@ the view, course edits locked — is `course-layout.md`; Field mode is D9's
 (§9; the initial mode on a phone, §10). The **view** picker
 offers *Course* (the selected course full-strength, other controls faded)
 and *All controls* (every site with its code, no legs; the inspector keeps
-the selected course). Class, variant and setter views are D8 / F.
+the selected course). *Class* (`editor-view-class`, a picker of the
+selected course's classes) is the course as that class prints it —
+`course-layout.md` §6 "Class view". Variant and setter views are F.
 
 ## 2. Anatomy
 
@@ -59,11 +61,11 @@ exit bubble on every pointer move
 
 | Part | `data-testid` | What it holds |
 |---|---|---|
-| Top bar (`TopBar.tsx`) | `editor-top-bar` | course picker (`editor-course-picker`), view (`editor-view-course` / `-all`), mode (`editor-mode-course` / `-layout` / `-field`), undo / redo (`editor-undo` / `-redo`), hide other controls (`editor-hide-others`), auto cuts (`editor-toggle-cuts`), help popover; MapPanel adds descriptions, fullscreen and the viewer its zoom on the same row |
+| Top bar (`TopBar.tsx`) | `editor-top-bar` | course picker (`editor-course-picker`), view (`editor-view-course` / `-all` / `-class`), mode (`editor-mode-course` / `-layout` / `-field`), undo / redo (`editor-undo` / `-redo`), hide other controls (`editor-hide-others`), auto cuts (`editor-toggle-cuts`), Export ▾ (`editor-export`, `course-layout.md` §7), help popover; MapPanel adds descriptions, fullscreen and the viewer its zoom on the same row |
 | Tool rail (`ToolRail.tsx`; Layout mode: `layout/LayoutRail.tsx`, `editor-layout-rail`, `course-layout.md` §3) | `editor-tool-rail` | `editor-tool-<key>` for `V`, `S`, `K`, `M`, `X` / `C` (disabled, "slice F"), `A` (menu `editor-area-menu`, `editor-area-<kind>`), `T`, `G`; the snapping toggle `editor-snapping` (§6) |
 | Action bar (`ActionBar.tsx`) | `editor-action-bar` | the selection's or phantom's entries, horizontal, centred under the selection, hidden during a drag; ids `editor-action-<id>` as the legacy popover's. The viewer positions it (`actionLayout: "bar"`); on a phone the same list is the bottom sheet's peek row (`actionLayout: "host"`, §10) |
 | Inspector (`Inspector.tsx`, `modes/CourseMode.tsx`, `modes/ObjectSection.tsx`) | `editor-inspector` | collapsible sections: course (create, sequence, visit order, clone), selection (a site: code, kind, position, description summary, "also in", hidden number, notes — §6.6; several controls: `editor-multi` with the bulk actions — §6.5; a course object: `editor-object` — §7), inventory (`editor-inventory-panel`, collapsed), checks (`editor-checks`, §8) |
-| Status bar (`StatusBar.tsx`) | `editor-status` | the selected course's control count and length, the armed tool's pending leg (`editor-pending-leg-length`, §6.1), the map scale, "snapping" when on, climb and the check count (§8; the sheet key is D8's), the save state (`editor-save-state`, `data-state` = `saved` / `saving` / `error` / `conflict`) |
+| Status bar (`StatusBar.tsx`) | `editor-status` | the selected course's control count and length, the armed tool's pending leg (`editor-pending-leg-length`, §6.1), the map scale — or the shown sheet's key in Layout mode and Class view (`editor-status-sheet`, `course-layout.md` §6) —, "snapping" when on, climb and the check count (§8), the save state (`editor-save-state`, `data-state` = `saved` / `saving` / `error` / `conflict`) |
 | Conflict notice | `editor-conflict` | §3 |
 | Field mode (§9) | `editor-inspector-field`, `editor-field-selection`, `editor-nudge-pad`, `editor-field-offline` | the control list with distance / bearing and check-off in place of the sequence; the selection's distance, check-off and nudge pad; no tool rail |
 | Phone chrome (§10) | `editor-field-top-bar`, `editor-overflow`, `editor-sheet`, `editor-field-add` | below 640 px: the compact top bar, the bottom sheet (peek: KPIs, selection, action bar) and the floating `+` instead of the top bar, rail, inspector strip and status bar above |
@@ -710,8 +712,7 @@ current, differing }`; a variation group or a slice-F site kind answers
 - **Description instructions** (finish variant, special instructions)
   are edited in the legacy editor only.
 - **Course delete** stays on the Courses page.
-- **Export menu, class view, sheet key** — D8;
-  the rest of the E2E rewrite (the editor's touch subset in the `mobile`
+- The rest of the E2E rewrite (the editor's touch subset in the `mobile`
   project, `course-editor.spec.ts` under `map-vector`) — D10; **presence
   and "moved by X at T"** — D11.
 - **Mouse loupe**: a desktop or tablet mouse drag shows no loupe (§10
