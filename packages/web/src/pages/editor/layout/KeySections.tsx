@@ -83,7 +83,7 @@ export function TemplateKeySection(p: {
     const target = side === "in" ? outTo : p.template.seq;
     return (
       <li key={c.seq} data-testid={`editor-layout-template-course-${c.seq}`} data-side={side}
-        draggable={p.canEdit && target !== null} onDragStart={() => setDragging(c)} onDragEnd={() => setDragging(null)}
+        draggable={p.canEdit && target !== null} onDragStart={(e) => { e.dataTransfer.setData("text/plain", c.name); setDragging(c); }} onDragEnd={() => setDragging(null)}
         className="flex items-center gap-1 px-1.5 py-0.5 rounded hover:bg-slate-50 cursor-grab">
         <span className="truncate">{c.name}</span>
         {p.canEdit && target !== null && (
