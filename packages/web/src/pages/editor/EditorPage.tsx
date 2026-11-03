@@ -1029,6 +1029,7 @@ export function EditorPage() {
     actionLayout: isMobile ? "host" : "bar",
     fix,
     bottomInsetPx: isMobile ? sheetPx : 0,
+    fullBleed: isMobile,
     ...(selectedCourse && courseView ? { onLegClick: handleLegClick } : {}),
     tool: toolBinding,
     snap: snapIndex ? snap : null,

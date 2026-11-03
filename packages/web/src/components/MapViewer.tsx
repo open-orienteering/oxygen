@@ -87,6 +87,7 @@ import { courseLayerRequest, PROVISIONAL_SITE_ID, type ProvisionalVisit } from "
 import { dragLegShapes } from "../lib/editor/leg-length";
 import type { CourseInfo } from "../map-gl/engine";
 import { editorHitAt, HIT_TOLERANCE_PX, type EditorTarget } from "../lib/editor/hit";
+import { COARSE_HIT_TOLERANCE_PX, IDLE as SITE_TOUCH_IDLE, LONG_PRESS_MS, liftedPoint, siteTouch, type SiteTouch, type SiteTouchEvent } from "../lib/editor/touch";
 
 /** Persisted compass state: "1"/absent = rotation locked (north up). */
 const ROTATION_LOCK_STORAGE_KEY = "oxygen.map.rotationLock";
@@ -313,6 +314,8 @@ export interface MapViewerEditorProps {
   fix?: GeolocationFix | null;
   /** Screen px at the bottom the page covers (the phone's bottom sheet): the touch Place / Done sit above it. */
   bottomInsetPx?: number;
+  /** The page fills the screen (the phone editor, §10): nothing to scroll, so one finger pans as in fullscreen. */
+  fullBleed?: boolean;
   /** Check markers (docs/course-editor.md §8): UI-layer shapes, never hit targets. */
   markers?: readonly ToolShape[];
 }
@@ -529,7 +532,7 @@ export function MapViewer({
   const { nameId } = useParams<{ nameId: string }>();
   const { t } = useTranslation("dashboard");
   const isCoarsePointer = useMediaQuery("(pointer: coarse)");
-  const allowOneFingerMapPan = isFullscreen || !isCoarsePointer;
+  const allowOneFingerMapPan = isFullscreen || !isCoarsePointer || !!editor?.fullBleed;
   const [showTwoFingerHint, setShowTwoFingerHint] = useState(false);
   const tileUrlBase = nameId ? `/api/map-tile/${nameId}` : "/api/map-tile";
 
@@ -719,6 +722,11 @@ export function MapViewer({
   } | null>(null);
   const [editorDragPos, setEditorDragPos] = useState<{ id: string; x: number; y: number } | null>(null);
   const [editorDragTouch, setEditorDragTouch] = useState(false);
+  // Coarse-pointer rules on the shared hit path (docs/course-editor.md §10, `lib/editor/touch.ts`):
+  // the pending long-press on an unselected site, its timer, and the finger under a lifted drag (container px).
+  const siteTouchRef = useRef<SiteTouch>(SITE_TOUCH_IDLE);
+  const longPressTimerRef = useRef<number | null>(null);
+  const [touchFinger, setTouchFinger] = useState<Pt | null>(null);
   // Moves already sent via onMoveEnd but not yet reflected in the
   // `controls` prop (mutation + refetch in flight). Rendering `to`
   // prevents the control snapping back to its stale position. An entry
@@ -950,7 +958,7 @@ export function MapViewer({
   const resolveEditorTarget = (clientX: number, clientY: number): EditorTarget | null | undefined => {
     if (!sharedHit || !editor) return undefined;
     const pt = screenToMapMm(clientX, clientY);
-    const edge = screenToMapMm(clientX + HIT_TOLERANCE_PX, clientY);
+    const edge = screenToMapMm(clientX + (isCoarsePointer ? COARSE_HIT_TOLERANCE_PX : HIT_TOLERANCE_PX), clientY);
     if (!pt || !edge) return null;
     const tol = Math.hypot(edge.x - pt.x, edge.y - pt.y);
     // The faded off-course controls are drawn by the UI layer, not the layer: plain circles. The layer's own
@@ -1001,6 +1009,18 @@ export function MapViewer({
     }
     const ctrl = controls.find((k) => k.id === target.id);
     if (!ctrl) return false;
+    // Touch (§10): only a selected control drags at once; on another one the press is pending — a pan,
+    // a tap that selects it, or a long press that selects it and starts the move. Its number likewise.
+    if (touch && sharedHitRef.current && ctrl.id !== editor?.selectedControlId) {
+      stepSiteTouchRef.current({ type: "down", id: ctrl.id, selected: false, x: clientX, y: clientY, t: performance.now() });
+      if (longPressTimerRef.current !== null) window.clearTimeout(longPressTimerRef.current);
+      longPressTimerRef.current = window.setTimeout(() => {
+        longPressTimerRef.current = null;
+        stepSiteTouchRef.current({ type: "tick", t: performance.now() });
+      }, LONG_PRESS_MS);
+      return false;
+    }
+    if (touch && sharedHitRef.current && target.kind === "site") siteTouchRef.current = { kind: "drag", id: ctrl.id };
     if (target.kind === "site") {
       editorDragRef.current = { id: ctrl.id, startX: clientX, startY: clientY, moved: false, origX: ctrl.x, origY: ctrl.y, touch };
       setEditorDragTouch(touch);
@@ -1011,6 +1031,31 @@ export function MapViewer({
     editorLabelDragRef.current = { id: ctrl.id, startX: clientX, startY: clientY, moved: false, ctrlX: ctrl.x, ctrlY: ctrl.y, from, touch };
     return true;
   };
+  /** One step of the touch rules; its effect selects the site and / or starts its (lifted) drag. */
+  const stepSiteTouch = (e: SiteTouchEvent) => {
+    const { state, effect } = siteTouch(siteTouchRef.current, e);
+    siteTouchRef.current = state;
+    if (state.kind !== "pending" && longPressTimerRef.current !== null) {
+      window.clearTimeout(longPressTimerRef.current);
+      longPressTimerRef.current = null;
+    }
+    if (!effect) return;
+    // The finger is on a site: its lift is not a map tap.
+    touchOnEditorTargetRef.current = true;
+    if (effect.kind === "select" || effect.select) editor?.onSelect?.(effect.id);
+    if (effect.kind === "drag") {
+      const ctrl = controls.find((k) => k.id === effect.id);
+      const p = e.type === "move" ? { x: e.x, y: e.y } : touchStartPosRef.current;
+      if (!ctrl || !p) return;
+      isPanningRef.current = false;
+      editorDragRef.current = { id: ctrl.id, startX: p.x, startY: p.y, moved: false, origX: ctrl.x, origY: ctrl.y, touch: true };
+      setEditorDragTouch(true);
+      try { navigator.vibrate?.(15); } catch { /* not supported */ }
+    }
+  };
+  const stepSiteTouchRef = useRef(stepSiteTouch);
+  stepSiteTouchRef.current = stepSiteTouch;
+  useEffect(() => () => { if (longPressTimerRef.current !== null) window.clearTimeout(longPressTimerRef.current); }, []);
   const armEditorTargetRef = useRef(armEditorTargetImpl);
   armEditorTargetRef.current = armEditorTargetImpl;
   const armEditorTarget = useCallback((clientX: number, clientY: number, touch: boolean) => armEditorTargetRef.current(clientX, clientY, touch), []);
@@ -1592,6 +1637,7 @@ export function MapViewer({
       if (e.touches.length === 2) {
         hadMultiTouchRef.current = true;
         suppressEditorSelectionUntilRef.current = Date.now() + 400;
+        stepSiteTouchRef.current({ type: "second-finger" });
         // A first finger may have landed on a control before the second
         // finger joined. That is a map gesture, not a control drag.
         editorDragRef.current = null;
@@ -1640,6 +1686,9 @@ export function MapViewer({
     };
 
     const onTouchMove = (e: TouchEvent) => {
+      if (siteTouchRef.current.kind === "pending" && e.touches.length === 1) {
+        stepSiteTouchRef.current({ type: "move", x: e.touches[0].clientX, y: e.touches[0].clientY, t: performance.now() });
+      }
       const drag = editorDragRef.current;
       if (drag && e.touches.length === 1) {
         e.preventDefault();
@@ -1648,10 +1697,17 @@ export function MapViewer({
         const dy = Math.abs(t.clientY - drag.startY);
         if (drag.moved || dx + dy > 3) {
           drag.moved = true;
-          const raw = screenToMapMm(t.clientX, t.clientY);
+          // Touch on the shared path: the control rides above the finger (§10), on a stem to it.
+          const lifted = drag.touch && sharedHitRef.current;
+          const at = lifted ? liftedPoint(t.clientX, t.clientY) : { x: t.clientX, y: t.clientY };
+          const raw = screenToMapMm(at.x, at.y);
           const snap = editorSnapRef.current;
           const pt = raw && snap ? snap(raw) : raw;
           if (pt) setEditorDragPos({ id: drag.id, x: pt.x, y: pt.y });
+          if (lifted) {
+            const rect = el.getBoundingClientRect();
+            setTouchFinger({ x: t.clientX - rect.left, y: t.clientY - rect.top });
+          }
         }
         return;
       }
@@ -1769,6 +1825,9 @@ export function MapViewer({
     };
 
     const onTouchEnd = (e: TouchEvent) => {
+      // A pending press lifted before its long press selects the site; the lift is not a map tap.
+      if (e.touches.length === 0) stepSiteTouchRef.current({ type: "up" });
+      setTouchFinger(null);
       const drag = editorDragRef.current;
       if (drag && e.changedTouches.length > 0 && e.touches.length === 0) {
         if (
@@ -1784,7 +1843,9 @@ export function MapViewer({
           return;
         }
         const t = e.changedTouches[0];
-        finishEditorDrag(t.clientX, t.clientY, false);
+        // Dropped where it was drawn: above the finger (§10).
+        const at = drag.touch && sharedHitRef.current ? liftedPoint(t.clientX, t.clientY) : { x: t.clientX, y: t.clientY };
+        finishEditorDrag(at.x, at.y, false);
         return;
       }
       const labelDrag = editorLabelDragRef.current;
@@ -3241,6 +3302,21 @@ export function MapViewer({
     }
   }
 
+  // The lifted touch drag's stem (§10): from the finger to the control drawn above it.
+  let touchHandle: React.ReactNode = null;
+  if (touchFinger && editorDragPos && editorDragTouch) {
+    const inner = mapMmToScreen(editorDragPos.x, editorDragPos.y);
+    if (inner) {
+      const pos = innerToContainer(inner.x, inner.y);
+      touchHandle = (
+        <svg data-testid="editor-touch-handle" aria-hidden className="absolute inset-0 w-full h-full pointer-events-none" style={{ zIndex: 9 }}>
+          <line x1={touchFinger.x} y1={touchFinger.y} x2={pos.x} y2={pos.y} stroke="#7c3aed" strokeWidth={2} strokeDasharray="4 3" />
+          <circle cx={touchFinger.x} cy={touchFinger.y} r={12} fill="rgba(124, 58, 237, 0.18)" stroke="#7c3aed" strokeWidth={1.5} />
+        </svg>
+      );
+    }
+  }
+
   // Drag warning chip — "moving this affects other courses". Follows
   // the dragged control; pre-formatted text supplied by the page.
   let dragWarning: React.ReactNode = null;
@@ -3557,6 +3633,7 @@ export function MapViewer({
           selection/phantom */}
       {editorMenu}
       {dragWarning}
+      {touchHandle}
       {editor && editorDragPos && viewport.kind === "mercator" && (() => {
         const inner = mapMmToScreen(editorDragPos.x, editorDragPos.y);
         if (!inner) return null;
