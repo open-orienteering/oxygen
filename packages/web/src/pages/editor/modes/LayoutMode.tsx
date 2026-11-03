@@ -277,7 +277,9 @@ export function useLayoutMode(a: LayoutModeArgs): LayoutMode {
 
   const rail = <LayoutRail tool={tool} onTool={(w) => onTool(w)} canImage={false} snapping={snapping} onSnapping={() => setSnapping((v) => !v)} />;
 
+  // The sections keep their height (the inspector scrolls) instead of squeezing into each other.
   const inspector = (
+    <div className="shrink-0 flex flex-col">
     <LayoutInspector
       loading={a.enabled && (sheets.isLoading || (!!input && query.isLoading))}
       data={data}
@@ -300,6 +302,7 @@ export function useLayoutMode(a: LayoutModeArgs): LayoutMode {
       onDelete={deleteSelected}
       onPlaceImage={(id) => onTool("image", id)}
     />
+    </div>
   );
 
   return { editor, rail, inspector, courseOnly: data?.sheet?.kind === "course", onKey, open, sheetCourse: data?.sheet?.courseSeq ?? null };

@@ -721,7 +721,7 @@ async function trpcCall<T>(path: string, input: unknown, mutation = true): Promi
   const headers = { "content-type": "application/json", "x-competition-id": "itest", "x-forwarded-email": "e2e-admin@oxygen.test" };
   const res = mutation
     ? await fetch(`${API}/trpc/${path}`, { method: "POST", headers, body: JSON.stringify(input) })
-    : await fetch(`${API}/trpc/${path}?input=${encodeURIComponent(JSON.stringify(input))}`, { headers });
+    : await fetch(`${API}/trpc/${path}${input === undefined ? "" : `?input=${encodeURIComponent(JSON.stringify(input))}`}`, { headers });
   const body = await res.text();
   expect(res.ok, body).toBe(true);
   return (JSON.parse(body) as { result: { data: T } }).result.data;
@@ -744,9 +744,10 @@ test.describe("Course editor layout (docs/course-layout.md)", () => {
   test("a sheet from the Maps page: page text drawn as printed, align map saves the window centre, undo, one A4 page", async ({ page }) => {
     await openEditor(page);
     const nameId = new URL(page.url()).pathname.split("/")[1];
-    // A template and a sheet for Öppen 1, as the Maps page would make them.
-    const courses = await trpcCall<{ id: number; name: string }[]>("course.list", undefined, false);
-    const course = courses.find((c) => c.name === "Öppen 1")!;
+    // A template and a sheet for the first imported course, as the Maps page would make them.
+    const courses = await trpcCall<{ id: number; name: string; controls?: unknown[] }[]>("course.list", undefined, false);
+    expect(courses.length).toBeGreaterThan(0);
+    const course = courses[0];
     const template = await trpcCall<{ seq: number }>("mapTemplate.create", {
       name: `Layout ${Date.now()}`, paper: "A4", orientation: "portrait", printScale: 10000, objects: [],
       settings: { printMarginMm: 5, mapFrame: frame, description: { visible: false, x: 150, y: 12, cellSizeMm: 6 }, appearance: { purple: "#a626ff", circleRadiusMm: 2.5, lineWidthMm: 0.35, numberHeightMm: 4 } },
@@ -769,7 +770,7 @@ test.describe("Course editor layout (docs/course-layout.md)", () => {
     // H: a header text at page (20, 20) mm, above the frame: ink where the page layer draws it.
     const toPaperMm = await pageToPaperOf(page, frame);
     const textRect = (() => {
-      const a = toPaperMm({ x: 20, y: 14 }), b = toPaperMm({ x: 50, y: 21 });
+      const a = toPaperMm({ x: 22, y: 12 }), b = toPaperMm({ x: 110, y: 21 });
       return { minX: Math.min(a.x, b.x), maxX: Math.max(a.x, b.x), minY: Math.min(a.y, b.y), maxY: Math.max(a.y, b.y) };
     })();
     const inkBefore = await inkIn(page, textRect);
@@ -778,6 +779,13 @@ test.describe("Course editor layout (docs/course-layout.md)", () => {
     await clickMap(page, await toPage(page, toPaperMm({ x: 20, y: 20 })));
     await placed;
     await expect(page.getByTestId("editor-layout-object-row")).toHaveCount(1);
+    // A long text, large: what the inspector writes, drawn by the page layer.
+    for (const [id, value] of [["editor-layout-text", "LAYOUT PAGE TEXT"], ["editor-layout-font-size", "10"]] as const) {
+      const saved = waitForTrpc(page, "courseMap.saveLayout");
+      await page.getByTestId(id).fill(value);
+      await page.getByTestId(id).press("Enter");
+      await saved;
+    }
     await expect.poll(() => inkIn(page, textRect), { timeout: 15_000 }).toBeGreaterThan(inkBefore + 20);
 
     // Select the frame (a click inside it on nothing), then drag it: align map.
