@@ -29,7 +29,8 @@ export function FixStatus({ accuracyM, error, watching }: { accuracyM: number | 
     : error === "denied" ? t("fieldFixDenied")
       : error ? t("fieldFixUnavailable")
         : watching ? t("fieldFixWaiting") : t("fieldFixOff");
-  return <span data-testid="editor-field-fix" data-state={accuracyM !== null ? "fix" : error ?? (watching ? "waiting" : "off")} className="text-slate-500">{text}</span>;
+  const state = accuracyM !== null ? "fix" : error === "denied" ? "denied" : error ? "unavailable" : watching ? "waiting" : "off";
+  return <span data-testid="editor-field-fix" data-state={state} className="text-slate-500">{text}</span>;
 }
 
 const ROW = "min-h-11 w-full flex items-center gap-2 px-2.5 text-left";
@@ -113,9 +114,11 @@ export function NudgePad({ pt, mapScale, onNudge, disabled }: { pt: Pt; mapScale
   const { t } = useTranslation("editor");
   const [unit, setUnit] = useState<"mm" | "m">("mm");
   const step = unit === "m" && mapScale ? metreStepMm(mapScale) : NUDGE_FINE_MM;
-  const arrow = (dir: NudgeDir, gridArea: string) => (
+  // Grid cells of the 3 × 3 pad: up, left, unit, right, down.
+  const CELL: Record<NudgeDir, string> = { up: "col-start-2 row-start-1", left: "col-start-1 row-start-2", right: "col-start-3 row-start-2", down: "col-start-2 row-start-3" };
+  const arrow = (dir: NudgeDir) => (
     <button type="button" data-testid={`editor-nudge-${dir}-${unit}`} aria-label={t(`nudge_${dir}`, { step: unit === "m" ? "1 m" : "0.1 mm" })}
-      disabled={disabled} className={PAD} style={{ gridArea }} onClick={() => onNudge(nudge(pt, dir, step))}>
+      disabled={disabled} className={`${PAD} ${CELL[dir]}`} onClick={() => onNudge(nudge(pt, dir, step))}>
       {ARROWS[dir]}
     </button>
   );
@@ -133,15 +136,15 @@ export function NudgePad({ pt, mapScale, onNudge, disabled }: { pt: Pt; mapScale
   );
   return (
     <div data-testid="editor-nudge-pad" className="flex items-center gap-3">
-      <div className="grid gap-1" style={{ gridTemplateAreas: '". up ." "left unit right" ". down ."', gridTemplateColumns: "repeat(3, 2.75rem)" }}>
-        {arrow("up", "up")}
-        {arrow("left", "left")}
+      <div className="grid grid-cols-[repeat(3,2.75rem)] gap-1">
+        {arrow("up")}
+        {arrow("left")}
         <button type="button" data-testid="editor-nudge-unit" data-unit={unit} disabled={!mapScale} title={t("nudgeUnit")}
-          className={`${PAD} text-xs`} style={{ gridArea: "unit" }} onClick={() => setUnit((u) => (u === "mm" ? "m" : "mm"))}>
+          className={`${PAD} col-start-2 row-start-2 text-xs`} onClick={() => setUnit((u) => (u === "mm" ? "m" : "mm"))}>
           {unit === "m" ? "1 m" : "0.1"}
         </button>
-        {arrow("right", "right")}
-        {arrow("down", "down")}
+        {arrow("right")}
+        {arrow("down")}
       </div>
       <div className="flex flex-col gap-1">{field("x")}{field("y")}</div>
     </div>

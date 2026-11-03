@@ -1315,7 +1315,7 @@ export function EditorPage() {
     </>
   );
   const fieldKpi = fieldMode && selectedCourse
-    ? t("fieldKpiChecked", { checked: fieldList.filter((r) => r.checked).length, count: fieldList.filter((r) => r.kind === "control").length })
+    ? t("fieldKpiChecked", { checked: fieldList.filter((r) => r.kind === "control" && r.checked).length, count: fieldList.filter((r) => r.kind === "control").length })
     : null;
 
   // ─── Shared by both layouts ──────────────────────────────

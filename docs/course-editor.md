@@ -484,7 +484,7 @@ the selection and the undo history (`editorReducer`'s `mode`).
   the first fix once per entry into the mode; the viewer's locate button
   still follows the fix if the user wants that. The fix's state is one
   line (`editor-field-fix`, `data-state` = `fix` / `waiting` / `denied` /
-  `unavailable` / `off`): "GPS ±8 m", "Waiting for GPS…", why there is none.
+  `unavailable` (every other error of `useGeolocationWatch`) / `off`): "GPS ±8 m", "Waiting for GPS…", why there is none.
 - **Distance and bearing** from the fix (`lib/editor/field.ts`): the fix
   goes to paper mm once per fix (`fixToPaper`: `geoToMm` through the
   document's frame with the event's rotation correction, as the viewer);
@@ -501,14 +501,15 @@ the selection and the undo history (`editorReducer`'s `mode`).
 - **The selection** adds above the site fields of §6.6 (notes there
   unchanged): distance and bearing (`editor-field-selection-distance`),
   the check-off toggle and the nudge pad.
-- **Check-off** (`editor-field-check` per row,
-  `editor-field-selection-check`): `control.check { controlId, checked }`
+- **Check-off** (`editor-field-check` on each control row — start and
+  finish rows carry none — and `editor-field-selection-check` for a
+  selected control): `control.check { controlId, checked }`
   (`courses.review`, open decision (4)) — sets or clears `checked_at` /
   `checked_by`; no token goes in (a check-off never conflicts), the
   control's token comes back into the `VersionBook`. One undo entry; undo
   is the opposite check. The toggle reads `control.list`'s `checkedAt`, so
   it survives a reload. Disabled without `courses.review`. The peek row's
-  KPIs count "n/m checked" for the course.
+  KPIs count "n/m checked" over the course's controls.
 - **Nudge pad** (08 §5.5 "Precision"; `editor-nudge-pad`): arrows
   `editor-nudge-<up|down|left|right>-<mm|m>` move the selected site by
   0.1 mm on paper, or — the unit button `editor-nudge-unit` — by 1 m on the
@@ -610,8 +611,10 @@ measures them on a real phone.
 site proves the mode. The check, on the B0 device: open an event's editor
 over mobile data — first frame to a usable map (seconds), the GPS fix and
 its ring against the map at a known feature (metres off), the sheet in
-sunlight and with gloves (can every peek target be hit first time; is
-44 px enough), a long-press move of a control by a few metres and its
+sunlight and with gloves (can every peek target and the compact top
+bar's 36 px controls be hit first time; is 44 px enough), whether the map
+wobbles under a held finger before the long press fires (the pan starts
+at touch-down; the slop only decides pan vs move), a long-press move of a control by a few metres and its
 distance / bearing afterwards against a compass, a check-off, the
 offline notice with the radio off. The numbers go here, beside the
 constants above, and any constant that fails is changed with a

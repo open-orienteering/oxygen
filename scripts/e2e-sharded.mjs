@@ -60,7 +60,7 @@ const WEIGHTS = {
   // Measured from a full sharded run after the 2026-09 merge pass
   // (sum of Playwright test durations; reseed/setup overhead included).
   "course-editor.spec.ts": 12, // ~104s — OCAD+map, 12 editor flows
-  "field-mode.spec.ts": 5, // `mobile` project: OCAD+map, 10 Field mode flows (estimate)
+  "field-mode.spec.ts": 5, // `mobile` project: OCAD+map, 11 Field mode flows (~50s single run)
   "registration-dialog.spec.ts": 8, // ~63s — reseed, dual pages, watchdog
   "rental-cards.spec.ts": 4, // ~28s
   "kiosk.spec.ts": 3, // ~22s after merges (still has 5s auto-reset)
