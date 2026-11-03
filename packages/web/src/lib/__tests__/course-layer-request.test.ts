@@ -187,3 +187,37 @@ describe("course objects (docs/course-layer.md §8.2, §8.3)", () => {
     ]);
   });
 });
+
+describe("Layout mode's sheet (docs/course-layout.md §1)", () => {
+  const frame = { x: 10, y: 10, width: 190, height: 277 };
+  const window = { minX: -65, minY: -128.5, width: 190, height: 277 };
+  const mapText = { id: "n", kind: "text" as const, anchor: "map" as const, x: 0, y: 0, text: "N", fontSizeMm: 5, color: "#000000" };
+  const pageText = { id: "t", kind: "text" as const, anchor: "page" as const, x: 20, y: 20, text: "{course}", fontSizeMm: 5, color: "#000000" };
+  const layout = {
+    page: { paper: { heightMm: 297 }, frame, window, objects: [mapText, pageText], textValues: { course: "A" }, description: null },
+    appearance: { circle: 1.2 },
+    overprintScale: 1.5,
+  };
+
+  it("passes the page through and draws layout objects, appearance and print view options in the course layer, as the composer does", () => {
+    const oob = { id: 7, kind: "oob_area", geometry: [{ x: 0, y: 0 }, { x: 5, y: 0 }, { x: 5, y: 5 }], props: {}, scope: { all: true }, z: 0, version: "1", inCourses: null } as course.CourseObject;
+    const r = courseLayerRequest(base({ layout, courseObjects: [oob] }));
+    expect(r.page).toBe(layout.page);
+    expect(r.appearance).toEqual({ circle: 1.2 });
+    expect(r.viewOptions.overprintScale).toBe(1.5);
+    expect(r.viewOptions.textValues).toEqual({ course: "A" });
+    // The frame grown by the composer's bleed, in paper mm.
+    const xs = r.viewOptions.window!.map((p) => p.x);
+    expect(Math.min(...xs)).toBeCloseTo(-66, 6);
+    expect(Math.max(...xs)).toBeCloseTo(126, 6);
+    // Layout objects first (both anchors; the layer draws the map-anchored ones), then the course objects.
+    expect(r.objects.map((o) => o.id)).toEqual(["n", "t", 7]);
+  });
+
+  it("without a sheet: Course mode's request, no page", () => {
+    const r = courseLayerRequest(base());
+    expect(r.page).toBeUndefined();
+    expect(r.appearance).toEqual({});
+    expect(r.viewOptions.window).toBeUndefined();
+  });
+});

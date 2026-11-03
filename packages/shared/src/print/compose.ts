@@ -16,18 +16,16 @@
  */
 
 import { courseLayer, courseRenderInput } from "../course/layer.js";
-import { RING_BLEED_UM, pageLayer } from "../course/page-layer.js";
+import { RING_BLEED_UM, mapLayerWindow, pageLayer } from "../course/page-layer.js";
 import type { FontMetrics } from "../render/truetype.js";
 import { symbolise } from "../render/symbolise.js";
 import { type ColourMode, colourOperator, pageColour } from "./colour.js";
 import { geoViewport } from "./geo.js";
 import { type Matrix, UM_TO_PT, cmOperator, fmtMm, mapLayerOperators } from "./operators.js";
-import { type ComposedPage, type PageImage, type PageInput, type PageWarning, frameInMap, frameRectUm, mapLayerTransform } from "./page.js";
+import { type ComposedPage, type PageImage, type PageInput, type PageWarning, frameRectUm, mapLayerTransform } from "./page.js";
 import type { PdfWriter } from "./writer.js";
 
 export { RING_BLEED_UM };
-
-const grow = (r: ComposedPage["frameUm"], d: number): ComposedPage["frameUm"] => ({ x: r.x - d, y: r.y - d, width: r.width + 2 * d, height: r.height + 2 * d });
 
 export function composePage(input: PageInput, fonts: FontMetrics[]): ComposedPage {
   const H = input.paper.heightMm;
@@ -41,7 +39,7 @@ export function composePage(input: PageInput, fonts: FontMetrics[]): ComposedPag
     sites: input.course.sites,
     objects: [...input.objects, ...(input.course.objects ?? [])],
     appearance: input.course.appearance,
-    viewOptions: { ...input.course.viewOptions, window: frameInMap(transform, grow(frameUm, RING_BLEED_UM)), textValues: input.textValues },
+    viewOptions: { ...input.course.viewOptions, window: mapLayerWindow(input), textValues: input.textValues },
     document: input.map.context,
     ...(input.map.cutFeatures ? { cutFeatures: input.map.cutFeatures } : {}),
     ...(input.course.regions ? { regions: input.course.regions } : {}),

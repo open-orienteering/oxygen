@@ -11,7 +11,7 @@ export { CUT_CODES, CUT_AIR_MM, DEFAULT_FEATURE_RADIUS_MM, circleCuts, legGaps, 
 export { CourseStackError, courseColourStack } from "./colour-stack.js";
 export { courseDocumentContext } from "./context.js";
 export { courseSymbols, type CourseSymbolSet } from "./symbols.js";
-export { RING_BLEED_UM, pageLayer, pageStreamInMap, type PageLayer, type PageLayerInput } from "./page-layer.js";
+export { RING_BLEED_UM, mapLayerWindow, pageLayer, pageStreamInMap, type PageLayer, type PageLayerInput } from "./page-layer.js";
 export {
   courseStructureSchema,
   courseStructureSchemaOf,

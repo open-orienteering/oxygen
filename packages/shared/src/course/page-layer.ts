@@ -116,3 +116,13 @@ export function pageLayer(input: PageLayerInput, mapColours: readonly DocumentCo
 export function pageStreamInMap(layer: Pick<PageLayer, "stream" | "transform">): PassStream {
   return transformPassStream(layer.stream, inverseMapLayerTransform(layer.transform));
 }
+
+/**
+ * The map layer's `viewOptions.window` of a sheet (what `composePage`
+ * passes): the frame grown by `RING_BLEED_UM`, in paper mm, so a
+ * map-anchored white-out outside reaches past the frame's clip.
+ */
+export function mapLayerWindow(input: Pick<PageLayerInput, "paper" | "frame" | "window">): MapPoint[] {
+  const t = mapLayerTransform(input.frame, input.window, input.paper.heightMm);
+  return frameInMap(t, grow(frameRectUm(input.frame, input.paper.heightMm), RING_BLEED_UM));
+}
