@@ -243,5 +243,10 @@
   "layoutClassesHint": "En klass kan skriva ut banan i en annan skala eller på en annan mall.",
   "layoutClassTemplate": "Mall",
   "layoutClassTemplateAuto": "Auto",
-  "layoutOpen": "Öppna"
+  "layoutOpen": "Öppna",
+  "presenceAnonymous": "Någon",
+  "presenceLabel": "Även öppen i editorn",
+  "externalChange": "{{who}} ändrade banan kl. {{time}} — ordningen laddades om.",
+  "externalChangeUnknown": "Banan ändrades på annat håll — ordningen laddades om.",
+  "conflictMovedBy": "Flyttad av {{who}} kl. {{time}} till x {{x}} mm, y {{y}} mm."
 }

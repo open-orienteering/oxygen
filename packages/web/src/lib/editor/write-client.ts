@@ -78,6 +78,8 @@ export class EditorConflict extends Error {
 export class EditorWrites {
   private readonly client: EditorClient;
   readonly versions: VersionBook;
+  /** Course tokens this client's own writes returned: a course token outside it moved elsewhere (D11, `presence.ts`). */
+  readonly ownCourseVersions = new Set<string>();
 
   constructor(client: EditorClient, versions: VersionBook = new VersionBook()) {
     this.client = client;
@@ -108,6 +110,7 @@ export class EditorWrites {
       this.client.course.setStructure.mutate({ courseId, structure, baseVersion }),
     );
     this.versions.seed("course", courseId, res.version);
+    this.ownCourseVersions.add(res.version);
     return res;
   }
 
@@ -130,6 +133,7 @@ export class EditorWrites {
   async setLabelOffset(courseId: number, controlId: number, offset: { dx: number; dy: number } | null): Promise<{ version: string }> {
     const res = await this.client.course.setControlLabelOffset.mutate({ id: courseId, controlId, offset });
     this.versions.seed("course", courseId, res.version);
+    this.ownCourseVersions.add(res.version);
     return res;
   }
 
@@ -144,6 +148,7 @@ export class EditorWrites {
   async deleteControl(id: number): Promise<{ courses: { id: number; version: string }[] }> {
     const res = await this.client.control.delete.mutate({ id });
     this.versions.seedAll("course", res.courses);
+    for (const c of res.courses) this.ownCourseVersions.add(c.version);
     return res;
   }
 

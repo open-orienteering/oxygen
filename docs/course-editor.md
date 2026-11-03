@@ -109,8 +109,8 @@ rules"):
 | other control write | the same field, or unknown | notice "Changed elsewhere — reloaded. Redo your edit." |
 | structure | anything | never merged: notice naming the differing items, the rows reload, the user redoes the edit |
 
-The reload is the usual cache invalidation after every write. "Moved by X
-at T" (actor and time) and presence are D11's.
+The reload is the usual cache invalidation after every write. The moved
+notice names who and when when the journal has it (§11).
 
 ## 4. Course mode
 
@@ -645,6 +645,47 @@ offline notice with the radio off. The numbers go here, beside the
 constants above, and any constant that fails is changed with a
 decision-log row.
 
+## 11. Working together
+
+Row D11; the rules of `course-layer.md` §7 "Presence and live refresh"
+(gate G1, decided by the user 2026-10-31; no new push channel). Three
+pieces, all client-visible in the top bar and the notices:
+
+**Presence.** While a course is open and the tab visible the editor sends
+`course.presence { courseId, mode, clientId }` at once and every 5 s
+(`hooks/useCoursePresence.ts`; a hidden tab stops, so its row ages out).
+`clientId` is random per page load: two tabs of one user are two entries,
+and an editor never lists itself. The server upserts one row per
+`(course, clientId)` in `course_presence` (a client's rows on other courses
+go with the switch), deletes rows older than the **30 s TTL** and answers
+the live rows of the event's other editors. The top bar lists them as
+`name · course · mode` ("Anna · Lång · Field"; the mode label is the
+mode switch's), those on the open course first and highlighted
+(`editor-presence`, `editor-presence-entry` with `data-here`); the phone's
+compact bar shows the count with the entries in its tooltip. `name` is the
+signed-in user's display name, else email; an instance without sign-in
+(or a user without either) shows "Someone". Presence is informational: it
+never blocks a write — the version tokens (§3) do that.
+
+**Others' changes refresh the editor while it is idle.** Unchanged
+machinery: `useExternalChanges`'s 5 s poll sees the `oCourse` / `oControl`
+counters move and invalidates the `course` / `control` queries, so the
+sequence, the sites and the layer re-render. Beyond that, when the selected
+course's token (from `course.list`) moves to one this client's own writes
+did not return (`EditorWrites.ownCourseVersions`), the page shows one line,
+`editor-external-change`: "‹who› changed this course at ‹time› — the
+sequence was reloaded." (who and time from `course.lastChange`, the actor
+and clock of the course's last `course.upserted`; without a name, "This
+course was changed elsewhere — the sequence was reloaded."). It stays until
+dismissed or the course changes; a structure is never swapped silently.
+
+**"Moved by X at T".** When a control move meets a move of the same control
+(§3's `moved` notice), the page asks `control.lastChange` for the control's
+newest `control.upserted` — `JournalEntry.actorId` and the physical part of
+its `hlc` — and the notice reads "Moved by ‹who› at ‹time› to x … mm, y …
+mm." with Keep mine / Keep theirs as before. If the journal has no entry,
+the §3 wording stays.
+
 ## API
 
 The course and control mutations the editors write through (08 §6;
@@ -663,6 +704,8 @@ seq). Tokens are decimal strings.
 | `control.delete` | `courses.edit` | unchanged | `{ ok, courses: { id, version }[] }` — the courses whose structure lost the control |
 | `course.list` / `course.detail` | `courses.view` | — | rows with `version`; `detail` adds `structure` (wire form) and `structureStored` |
 | `control.list` / `control.getById` | `courses.view` | — | rows with `version`, `kind`, `circleGaps`, `notes`, `checkedAt` |
+| `course.presence` | `courses.view` | `{ courseId, mode: "course" \| "layout" \| "field", clientId }` | `{ ttlMs, others: { courseId, courseName, name, mode }[] }`: the event's other live editors (§11) |
+| `course.lastChange` / `control.lastChange` | `courses.view` | `{ courseId }` / `{ id }` | `{ name, at /* ISO */ } \| null`: actor and time of the row's newest `*.upserted` entry (`name` empty without a sign-in) |
 | `event.mapPipeline` | kiosk or `event.view` | — | `{ pipeline, allowLegacy, editorVector }` (§1) |
 
 A stale `baseVersion` answers `CONFLICT` with `data: { kind, id, version,
@@ -693,6 +736,9 @@ current, differing }`; a variation group or a slice-F site kind answers
 | unit (web) | `packages/web/src/lib/editor/__tests__/checks.test.ts` | §8: sites and the explicit structure as `courseChecks` takes them, two controls 20 m apart, the server's `DESCRIPTION_STALE` merged in order, markers (rings, a leg cross, unpositioned skipped), length from the leg polylines, locate |
 | E2E | `e2e/course-editor.spec.ts` "Course editor checks" | §8: two controls 20 m apart → the count beside the section title, the row (`CONTROL_TOO_CLOSE`, "20 m"), a marker on each site, the status-bar count; a click selects the first site and centres the view on the pair's midpoint |
 | E2E | `e2e/course-editor-legacy.spec.ts` | the legacy page, unchanged (`chromium`) |
+| integration | `packages/api/src/__tests__/integration/course-presence.test.ts` | §11: the heartbeat shows the others and never the caller; one row per client, moved by a new course or mode; the 30 s TTL (hidden at read, swept by the next beat; kept just inside it); the signed-in name; a row goes with its course; unknown course refused; `control.lastChange` names the actor and time |
+| unit (web) | `lib/editor/__tests__/presence.test.ts`, `write-client.test.ts` | §11: `name · course · mode` entries (open course first, "Someone", distinct keys), `courseChangedElsewhere` (moved token, own write, first sight), the own-token set |
+| E2E | `e2e/course-presence.spec.ts` | §11, two browser contexts: B in Field mode shows in A's bar as "‹course› · Field" (here), A in Course mode in B's; a move in A moves the control in B within the poll; A leaving ages out of B's bar (TTL); a control appended in A re-renders B's sequence with `editor-external-change`, none in A |
 | unit (web) | `lib/editor/__tests__/field.test.ts` | §9, §10: the fix through `mapGeo` and back (a SWEREF99 TM frame), accuracy in paper mm, distance at two scales, bearing from paper north with the wrap at north, the list in course order (blank without a fix or a position), the nudge steps (0.1 mm, 1 m at 1:10 000 / 1:15 000, µm rounding), detent heights and snapping, the band offset, the initial mode |
 | unit (web) | `lib/editor/__tests__/touch.test.ts` | §10 gestures: a selected control drags at once; an unselected one: tap selects, drag past the slop pans, long press selects and moves (also when a late move fires it), a second finger cancels; the lift; the loupe's constants and place (above the handle, flipped below the finger at the top, kept inside sideways) |
 | unit (web) | `map-gl/__tests__/view.test.ts` "loupeView", `engine.test.ts` "the loupe" | §10 "Loupe": the view (the dragged point at the centre, distances × 2.5, the rotation kept); one more draw of the resident visible set into the inset target, composited at the box, no rebuild or worker request (`map-rendering.md` §5.2) |
@@ -713,8 +759,11 @@ current, differing }`; a variation group or a slice-F site kind answers
   are edited in the legacy editor only.
 - **Course delete** stays on the Courses page.
 - The rest of the E2E rewrite (the editor's touch subset in the `mobile`
-  project, `course-editor.spec.ts` under `map-vector`) — D10; **presence
-  and "moved by X at T"** — D11.
+  project, `course-editor.spec.ts` under `map-vector`) — D10.
+- **Presence names without sign-in**: an instance with auth off lists
+  every editor as "Someone" (the station name could stand in, D11 left it);
+  "moved by X at T" has no name there either. No leave message: a closed
+  editor shows for up to 30 s.
 - **Mouse loupe**: a desktop or tablet mouse drag shows no loupe (§10
   "Loupe"); the same layer prop from the mouse branch would give one.
 - **One-finger drag of a course object on touch** (its body or a

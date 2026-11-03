@@ -162,7 +162,7 @@ export function OfflineNotice() {
 }
 
 /** The phone's compact top bar (§10): back, course picker, mode switch, overflow. */
-export function FieldTopBar({ backTo, courses, selectedCourseId, onSelectCourse, mode, onMode, overflow }: {
+export function FieldTopBar({ backTo, courses, selectedCourseId, onSelectCourse, mode, onMode, overflow, presence }: {
   backTo: string;
   courses: { id: number; name: string }[];
   selectedCourseId: number | null;
@@ -170,6 +170,7 @@ export function FieldTopBar({ backTo, courses, selectedCourseId, onSelectCourse,
   mode: EditorMode;
   onMode: (mode: EditorMode) => void;
   overflow: ReactNode;
+  presence?: ReactNode;
 }) {
   const { t } = useTranslation("editor");
   const segment = (active: boolean) => `min-h-9 px-2.5 text-xs cursor-pointer ${active ? "bg-purple-100 text-purple-700 font-medium" : "text-slate-600"}`;
@@ -189,6 +190,7 @@ export function FieldTopBar({ backTo, courses, selectedCourseId, onSelectCourse,
           </button>
         ))}
       </div>
+      {presence}
       {overflow}
     </div>
   );

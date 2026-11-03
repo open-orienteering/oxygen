@@ -39,6 +39,18 @@ describe("EditorWrites (docs/course-editor.md §3)", () => {
     expect(f.calls[1].input.baseVersion).toBe("6");
   });
 
+  it("remembers the course tokens its own writes returned (D11: anything else moved elsewhere)", async () => {
+    const f = fakeClient();
+    const w = new EditorWrites(f.client);
+    f.ok({ version: "6" });
+    await w.setStructure(1, S);
+    f.ok({ version: "7" });
+    await w.setLabelOffset(1, 31, null);
+    f.ok({ courses: [{ id: 2, version: "8" }] });
+    await w.deleteControl(31);
+    expect([...w.ownCourseVersions].sort()).toEqual(["6", "7", "8"]);
+  });
+
   it("a move against a description change elsewhere is re-sent once with the server's token", async () => {
     const f = fakeClient();
     const w = new EditorWrites(f.client);

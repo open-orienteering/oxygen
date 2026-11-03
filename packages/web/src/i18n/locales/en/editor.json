@@ -243,5 +243,10 @@
   "layoutClassesHint": "A class may print the course at another scale or on another template.",
   "layoutClassTemplate": "Template",
   "layoutClassTemplateAuto": "Auto",
-  "layoutOpen": "Open"
+  "layoutOpen": "Open",
+  "presenceAnonymous": "Someone",
+  "presenceLabel": "Also open in the editor",
+  "externalChange": "{{who}} changed this course at {{time}} — the sequence was reloaded.",
+  "externalChangeUnknown": "This course was changed elsewhere — the sequence was reloaded.",
+  "conflictMovedBy": "Moved by {{who}} at {{time}} to x {{x}} mm, y {{y}} mm."
 }
