@@ -31,10 +31,10 @@ decoder is lenient and the question is listed under
 | --- | --- |
 | Advertised name | `Reader BT <serial>` |
 | Scan filter | primary service `bd510001-…` (optionally name prefix `Reader BT`) |
-| Advertising window | 20 s after inserting the Service/OFF card, or any SI card while in readout mode and disconnected |
+| Advertising window | 20 s after inserting the Service/OFF card, or any SI card while in readout mode and disconnected; never by itself after a disconnect or link loss (hardware finding) |
 | Pairing | none; **do not** pair in OS Bluetooth settings (causes connection problems) |
 | MTU | up to 517; larger messages are segmented |
-| Idle disconnect | after 10 h |
+| Idle | a new backup session is started after 10 h of inactivity (the docs describe no disconnect) |
 | GATT handles | may change between firmware versions; discover by UUID on every connection, never cache |
 
 All client → reader writes are **Write With Response**. Subscribe with
@@ -276,7 +276,7 @@ on hardware.
 | Identify | ReadDeviceInfo `0x010E` (serial, firmware) and ReadAllSettings `0x010C` (mode) on read settings, each with a 3 s timeout; a failure is logged and the reader still connects. Battery Level is read once and then followed by notification |
 | GATT queue | every `startNotifications`/`writeValueWithResponse`/`readValue` runs after the previous one settled; Web Bluetooth rejects overlapping operations |
 | Requests | `sendAndWait(char, bytes, responseId)` registers a waiter for the response id before writing; a notification with that id resolves it, otherwise it goes to the card flow |
-| Reconnect | after an unexpected `gattserverdisconnected`: status `error`, then for 60 s: first a direct `gatt.connect()` capped at 5 s (if setup fails on a link that is just being torn down, once more after 1.5 s), then `watchAdvertisements()` (connect on `advertisementreceived`) **and** a `gatt.connect()` poll every 2 s (first after 1 s), each connect capped at 8 s (the connect only; service discovery is not capped); then `idle`. Manual `disconnect()` suppresses it. The poll is what reconnects on Linux Chrome, see the hardware findings |
+| Reconnect | after an unexpected `gattserverdisconnected`: status `error`, then until it is back or the user disconnects/forgets it: first a direct `gatt.connect()` capped at 5 s (once more after 1.5 s if setup fails on a link that is being torn down), then `watchAdvertisements()` (connect on `advertisementreceived`) **and** a `gatt.connect()` poll every 2 s (first after 1 s; every 10 s after five minutes), each connect capped at 8 s (the connect only; service discovery is not capped). The wait is unbounded because the reader only wakes on a card, see the hardware findings. `connectWhenAdvertising(windowMs)` takes an optional window; the default is unbounded |
 | Remembered | DeviceManager keeps `{id, name, lastSeen}` per reader in `localStorage["oxygen-reader-bt-devices"]` and on load calls `connectWhenAdvertising()` (the same 60 s wait) for each granted device from `getDevices()` in that list |
 | Forget | `disconnect()` then `device.forget()` |
 
@@ -330,7 +330,7 @@ without it `navigator.bluetooth` does not exist). Regression frames are in
 | Feedback | two beeps after Feedback OK in readout mode, as documented |
 | Card that woke the reader | reported with a CardStateChange "in" right after the reconnect; read out without re-inserting |
 | Page reload | Chrome releases the old page's subscriptions at once (`Notifying = false` on all four characteristics) and drops the link about 2 s later. A connect in those 2 s gets the dying link and subscribing fails with `NotSupportedError: GATT Error Unknown` |
-| Advertising after a disconnect | none: after the central disconnects the reader stays silent until a card (or the Service/OFF card) wakes it; a reload therefore reconnects on the next card, which is then read out |
+| Advertising after a disconnect or link loss | none: after the central disconnects, **and after the link is lost out of range** (BlueZ saw no advertisement for 26 s until a card went in), the reader goes to sleep and stays silent until a card (or the Service/OFF card) wakes it. A reload or a drop therefore reconnects on the next card, which is then read out. A firmware that advertised for a minute after a link loss would let Oxygen reconnect without a card; the poll is ready for that |
 | `watchAdvertisements()` on Linux Chrome | starts the BlueZ scan (BlueZ reports the woken reader's RSSI) but Chrome never fires `advertisementreceived` to the page. `gatt.connect()` to a silent reader fails at once with `NetworkError: Bluetooth Device is no longer in range.`, so polling it every 2 s is cheap and connects as soon as the reader advertises |
 | `getDevices()` on Linux Chrome | works with the experimental-features flag; the remembered reader comes back after a reload without the picker |
 

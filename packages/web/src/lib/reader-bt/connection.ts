@@ -103,8 +103,13 @@ const hex = (b: Uint8Array) => Array.from(b, (x) => x.toString(16).padStart(2, "
 
 /** Response timeout for settings requests and card readouts */
 const RESPONSE_TIMEOUT_MS = 3000;
-/** How long to keep trying after an unexpected disconnect */
-export const RECONNECT_WINDOW_MS = 60_000;
+/**
+ * How long to keep trying after an unexpected disconnect. Unbounded: a
+ * Reader BT that loses its link goes to sleep and advertises again only when
+ * a card is inserted (hardware finding), which at a finish can be minutes
+ * away. A manual disconnect or forget stops the wait.
+ */
+export const RECONNECT_WINDOW_MS = Infinity;
 /**
  * A `gatt.connect()` to a sleeping reader may hang; give up on it after this.
  * Only the GATT connect is capped: on Linux/BlueZ connect plus service
@@ -129,6 +134,9 @@ const SETUP_RETRY_DELAY_MS = 1500;
  * reader that is not advertising fails at once ("no longer in range").
  */
 const RECONNECT_POLL_MS = [1000, 2000];
+/** After this the poll slows to SLOW_POLL_MS, still twice per 20 s advertising window */
+const POLL_SLOWDOWN_AFTER_MS = 5 * 60_000;
+const SLOW_POLL_MS = 10_000;
 
 const NAME_PREFIX = "Reader BT";
 
@@ -283,7 +291,7 @@ export class ReaderBtConnection extends EventTarget implements SIReader {
 
   /**
    * Connect as soon as the reader advertises (a card is inserted, or the
-   * Service/OFF card wakes it), for up to `windowMs`. Used for readers
+   * Service/OFF card wakes it), for up to `windowMs` (unbounded by default). Used for readers
    * remembered from an earlier visit and by the dialog's Reconnect button.
    * Resolves true once connected, false when the window ran out.
    */
@@ -650,7 +658,8 @@ export class ReaderBtConnection extends EventTarget implements SIReader {
     const abort = new AbortController();
     const state = { abort, timer: null as ReturnType<typeof setTimeout> | null };
     this.reconnect = state;
-    const deadline = Date.now() + windowMs;
+    const startedAt = Date.now();
+    const deadline = startedAt + windowMs;
 
     return new Promise<boolean>((resolve) => {
       let done = false;
@@ -686,8 +695,8 @@ export class ReaderBtConnection extends EventTarget implements SIReader {
         }
       };
 
-      // Window end
-      state.timer = setTimeout(() => finish(false), windowMs);
+      // Window end (none when unbounded)
+      if (Number.isFinite(windowMs)) state.timer = setTimeout(() => finish(false), windowMs);
 
       let connecting = false;
       const onAdvert = async (e: Event) => {
@@ -701,7 +710,8 @@ export class ReaderBtConnection extends EventTarget implements SIReader {
 
       const timedLoop = async () => {
         for (let i = 0; !done; i++) {
-          const delay = RECONNECT_POLL_MS[Math.min(i, RECONNECT_POLL_MS.length - 1)];
+          const slow = Date.now() - startedAt >= POLL_SLOWDOWN_AFTER_MS;
+          const delay = slow ? SLOW_POLL_MS : RECONNECT_POLL_MS[Math.min(i, RECONNECT_POLL_MS.length - 1)];
           if (Date.now() + delay >= deadline) return;
           await sleep(delay, abort.signal);
           if (done) return;
