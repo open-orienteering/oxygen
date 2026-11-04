@@ -1,5 +1,15 @@
 import { describe, it, expect } from "vitest";
-import { areaTool, editorReducer, escapeHasWork, initialEditorState } from "../state";
+import { areaTool, editorReducer, escapeHasWork, initialEditorState, showSelectionRing } from "../state";
+
+describe("showSelectionRing (docs/course-editor.md §6.1)", () => {
+  it("draws the ring in V and when no tool is passed, never while an exclusive tool is armed", () => {
+    expect(showSelectionRing(null)).toBe(true);
+    expect(showSelectionRing({ tool: null })).toBe(true);
+    expect(showSelectionRing({ tool: {} })).toBe(true);
+    expect(showSelectionRing({ tool: { exclusive: false } })).toBe(true);
+    expect(showSelectionRing({ tool: { exclusive: true } })).toBe(false);
+  });
+});
 
 describe("editorReducer (docs/course-editor.md §3)", () => {
   it("keeps the legacy selection model and its Escape cascade", () => {

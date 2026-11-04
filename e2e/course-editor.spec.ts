@@ -371,8 +371,9 @@ test.describe("Course editor (new, GL canvas)", () => {
       for (const p of spots) {
         await page.mouse.move(p.x, p.y);
         await page.mouse.click(p.x, p.y);
-        // No action bar while armed.
+        // No action bar while armed, and no selection ring beside the placed circle (§6.1): the purple is the mark.
         await expect(page.getByTestId("editor-action-bar")).toHaveCount(0);
+        await expect(page.getByTestId("editor-selection-ring")).toHaveCount(0);
       }
       await expect(controlRows(page)).toHaveCount(10, { timeout: 30000 });
       await expect.poll(async () => (await sites(page)).length, { timeout: 15000 }).toBe(before + 10);
@@ -390,6 +391,9 @@ test.describe("Course editor (new, GL canvas)", () => {
       await page.keyboard.press("Escape");
       await expect(page.getByTestId("editor-tool-V")).toHaveAttribute("aria-pressed", "true");
       await expect(page.getByTestId("editor-ghost")).toHaveCount(0);
+      // In V the selected control has its ring again.
+      await clickMap(page, spots[0]);
+      await expect(page.getByTestId("editor-selection-ring")).toHaveCount(1, { timeout: 10000 });
     });
 
     test("the armed tool's pending legs are drawn by the layer to the cursor; a drag labels both legs", async ({ page }) => {
@@ -677,10 +681,11 @@ test.describe("Course editor (new, GL canvas)", () => {
       await page.reload();
       await editorReady(page);
       await page.getByTestId("editor-object-row").first().waitFor({ state: "attached" });
-      // Select it again on the canvas (a click inside the area), once the layer draws it and its hit index has it.
+      // Select it again on the canvas (a click on its outline — inside, the map is the map, §7), once the layer
+      // draws it and its hit index has it.
       await expect.poll(() => inkIn(page, inner, "purple"), { timeout: 30000 }).toBeGreaterThan(purpleBefore + 5);
       await expect(async () => {
-        await clickMap(page, { x: a.x + 30, y: a.y + 15 });
+        await clickMap(page, { x: a.x + 30, y: a.y });
         await expect(page.getByTestId("editor-object")).toHaveAttribute("data-object-id", id!, { timeout: 2000 });
       }).toPass({ timeout: 20000 });
       // Its hatch and border from the inspector, then delete it (Delete key) and undo.
@@ -697,6 +702,99 @@ test.describe("Course editor (new, GL canvas)", () => {
       await expect(page.locator(`[data-testid="editor-object-row"][data-object-id="${id}"]`)).toHaveCount(0, { timeout: 15000 });
       await page.keyboard.press("Control+z");
       await expect(page.locator('[data-testid="editor-object-row"][data-object-kind="oob_area"]')).not.toHaveCount(0, { timeout: 15000 });
+    });
+
+    test("a press inside an out-of-bounds area pans the map; its outline selects and moves it (§7)", async ({ page }) => {
+      // docs/bugfix-editor-area-press-pans.md: an area (the toner saver covers every control) swallowed every press.
+      await openEditor(page);
+      const viewer = page.getByTestId("map-viewer");
+      const nameId = new URL(page.url()).pathname.split("/")[1];
+      const headers = { "content-type": "application/json", "x-event-id": nameId };
+      // A 70 px square around a clear point (no site within 60 px of its centre, no leg within 20 px).
+      const clear = await emptyPoint(page, 60);
+      const geometry = await Promise.all([[-35, -35], [35, -35], [35, 35], [-35, 35]].map(([dx, dy]) => toPaper(page, { x: clear.x + dx, y: clear.y + dy })));
+      type Pt = { x: number; y: number };
+      const mid = (p: Pt, q: Pt): Pt => ({ x: (p.x + q.x) / 2, y: (p.y + q.y) / 2 });
+      const parse = (s: string | null): Pt[] => (s ?? "").split(" ").map((q) => ({ x: Number(q.split(",")[0]), y: Number(q.split(",")[1]) }));
+      const centreMm = mid(geometry[0], geometry[2]);
+      const inner = {
+        minX: Math.min(geometry[0].x, geometry[2].x) + 1, maxX: Math.max(geometry[0].x, geometry[2].x) - 1,
+        minY: Math.min(geometry[0].y, geometry[2].y) + 1, maxY: Math.max(geometry[0].y, geometry[2].y) - 1,
+      };
+      const purpleBefore = await inkIn(page, inner, "purple");
+      const made = await page.request.post(`${API}/trpc/courseObject.create`, { headers, data: { kind: "oob_area", geometry, props: {}, scope: { all: true } } });
+      expect(made.ok(), await made.text()).toBe(true);
+      const id = ((await made.json()) as { result: { data: { id: number } } }).result.data.id;
+      try {
+        await page.reload();
+        await editorReady(page);
+        const row = page.locator(`[data-testid="editor-object-row"][data-object-id="${id}"]`);
+        await expect(row).toBeAttached({ timeout: 15000 });
+        const stored = await row.getAttribute("data-geometry");
+        // Drawn (its 709 hatch), so the hit index has it.
+        await expect.poll(() => inkIn(page, inner, "purple"), { timeout: 30000 }).toBeGreaterThan(purpleBefore + 5);
+
+        /** The edge midpoint (page px) farthest from every site and drawn leg: where a press is the outline's, not the course's. */
+        const pressOnEdge = async (): Promise<Pt> => {
+          const marks = await Promise.all((await sites(page)).map((s) => toPage(page, s.mm)));
+          const legs = await Promise.all((await legPieces(page)).map((l) => Promise.all(l.points.map((q) => toPage(page, q)))));
+          const g = parse(await row.getAttribute("data-geometry"));
+          const edges = await Promise.all(g.map((v, i) => toPage(page, mid(v, g[(i + 1) % g.length]))));
+          const segDist = (p: Pt, a: Pt, b: Pt) => {
+            const dx = b.x - a.x, dy = b.y - a.y, l2 = dx * dx + dy * dy;
+            const t = l2 === 0 ? 0 : Math.max(0, Math.min(1, ((p.x - a.x) * dx + (p.y - a.y) * dy) / l2));
+            return Math.hypot(p.x - (a.x + t * dx), p.y - (a.y + t * dy));
+          };
+          const clearance = (p: Pt) => Math.min(
+            Infinity,
+            ...marks.map((q) => Math.hypot(q.x - p.x, q.y - p.y)),
+            ...legs.flatMap((poly) => poly.slice(1).map((b, i) => segDist(p, poly[i], b))),
+          );
+          return edges.sort((p, q) => clearance(q) - clearance(p))[0];
+        };
+        const centre = async () => ({ x: Number(await viewer.getAttribute("data-centre-x")), y: Number(await viewer.getAttribute("data-centre-y")) });
+        const pans = async () => {
+          const before = await centre();
+          const inside = await toPage(page, centreMm);
+          await drag(page, inside, { x: inside.x - 60, y: inside.y + 40 });
+          await expect.poll(async () => (await centre()).x, { timeout: 10000 }).not.toBe(before.x);
+          await expect(row).toHaveAttribute("data-geometry", stored!);
+        };
+
+        // Unselected: a drag starting inside it moves the view and leaves the area alone.
+        await pans();
+        await expect(page.getByTestId("editor-object")).toHaveCount(0);
+
+        // A press on its outline selects it (four vertex handles).
+        await expect(async () => {
+          await clickMap(page, await pressOnEdge());
+          await expect(page.getByTestId("editor-object")).toHaveAttribute("data-object-id", String(id), { timeout: 2000 });
+        }).toPass({ timeout: 20000 });
+        await expect(page.getByTestId("editor-object-handle")).toHaveCount(4);
+
+        // Selected: a drag inside still pans; the selection stays.
+        await pans();
+        await expect(page.getByTestId("editor-object")).toHaveAttribute("data-object-id", String(id));
+
+        // Its edge moves it: one write, every vertex translated by the drag.
+        const edge = await pressOnEdge();
+        const [e0, e1] = await Promise.all([toPaper(page, edge), toPaper(page, { x: edge.x, y: edge.y + 30 })]);
+        const moved = waitForTrpc(page, "courseObject.update");
+        await drag(page, edge, { x: edge.x, y: edge.y + 30 });
+        await moved;
+        await expect.poll(async () => (await row.getAttribute("data-geometry")) !== stored, { timeout: 15000 }).toBe(true);
+        const now = parse(await row.getAttribute("data-geometry"));
+        parse(stored).forEach((v, i) => {
+          expect(now[i].x - v.x).toBeCloseTo(e1.x - e0.x, 0);
+          expect(now[i].y - v.y).toBeCloseTo(e1.y - e0.y, 0);
+        });
+
+        // A click inside is a map click: the area is deselected.
+        await clickMap(page, await toPage(page, mid(now[0], now[2])));
+        await expect(page.getByTestId("editor-object")).toHaveCount(0);
+      } finally {
+        await page.request.post(`${API}/trpc/courseObject.delete`, { headers, data: { id } });
+      }
     });
 
     test("A: a curved white-out in three clicks and one drag prints a Bézier; a vertex inserted on an edge and deleted", async ({ page }) => {

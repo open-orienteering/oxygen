@@ -322,10 +322,16 @@ test.describe("Field mode on a phone (docs/course-editor.md §9, §10)", () => {
     await editorReady(page);
     const row = page.locator(`[data-testid="editor-object-row"][data-object-id="${id}"]`);
     await expect(row).toBeAttached();
-    // A tap inside it selects it (its handles drawn).
+    // A tap on its outline selects it (its handles drawn); a tap inside is a map tap, which deselects it — an
+    // area is hit by its outline (docs/course-editor.md §10).
     const zoom = Number(await viewer.getAttribute("data-px-per-um"));
     const inside = await toPage(page, { x: (geometry[0].x + geometry[2].x) / 2, y: (geometry[0].y + geometry[2].y) / 2 });
+    const edge = await toPage(page, { x: (geometry[0].x + geometry[1].x) / 2, y: (geometry[0].y + geometry[1].y) / 2 });
+    await touchTap(page, edge);
+    await expect(page.getByTestId("editor-object-handle").first()).toBeAttached({ timeout: 10000 });
     await touchTap(page, inside);
+    await expect(page.getByTestId("editor-object-handle")).toHaveCount(0, { timeout: 10000 });
+    await touchTap(page, edge);
     await expect(page.getByTestId("editor-object-handle").first()).toBeAttached({ timeout: 10000 });
     // Two fingers: one on a corner handle, one on the opposite corner; spread them.
     const a = await toPage(page, geometry[2]), b = await toPage(page, geometry[0]);

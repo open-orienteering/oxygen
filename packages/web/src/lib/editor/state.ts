@@ -137,3 +137,14 @@ export function escapeHasWork(s: EditorState): boolean {
   return s.tool.kind !== "select" || s.multi.length > 0 || s.selectedObjectId !== null
     || s.phantom !== null || s.selectedControlId !== null || s.selectedCourseId !== null;
 }
+
+/**
+ * Whether the viewer draws the selected control's ring (`editor-selection-ring`,
+ * §6.1): not while an exclusive tool (`K`, `S`, `M`, `A`, `T`, `G`) is armed — the
+ * control just placed stays selected (chain anchor, inspector, `Ctrl+Z`) but its
+ * purple circle is the mark; the ring is `V`'s. Typed on the viewer's prop, which
+ * never sees `EditorState`.
+ */
+export function showSelectionRing(editor: { tool?: { exclusive?: boolean } | null } | null | undefined): boolean {
+  return !editor?.tool?.exclusive;
+}

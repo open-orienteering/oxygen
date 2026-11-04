@@ -36,16 +36,17 @@ describe("V binding (docs/course-editor.md §6.5, §7)", () => {
     expect(o.onLasso).toHaveBeenCalledWith([31]);
   });
 
+  // A closed area's target is its outline (the hit-test answers null inside it, §5): presses here are on its edge.
   it("an object is selected on press; a drag moves it, a handle drag moves its vertex", () => {
     const o = selectOpts();
-    expect(selectBinding(o).onPointerDown!(ptr(5, 5, { target: { kind: "object", id: 4 } }))).toBe(true);
+    expect(selectBinding(o).onPointerDown!(ptr(5, 0, { target: { kind: "object", id: 4 } }))).toBe(true);
     expect(o.onSelectObject).toHaveBeenCalledWith(4);
 
     const sel = selectOpts({ selected: square(4) });
     const b = selectBinding(sel);
-    b.onPointerDown!(ptr(5, 5, { target: { kind: "object", id: 4 } }));
-    b.onPointerDrag!({ x: 7, y: 5 });
-    b.onPointerUp!({ x: 7, y: 5 });
+    b.onPointerDown!(ptr(5, 0, { target: { kind: "object", id: 4 } }));
+    b.onPointerDrag!({ x: 7, y: 0 });
+    b.onPointerUp!({ x: 7, y: 0 });
     expect(sel.onObjectMoved).toHaveBeenCalledWith(4, [{ x: 2, y: 0 }, { x: 12, y: 0 }, { x: 12, y: 10 }, { x: 2, y: 10 }]);
 
     const v = selectOpts({ selected: square(4) });
@@ -70,16 +71,59 @@ describe("V binding (docs/course-editor.md §6.5, §7)", () => {
       onObjectDraft: vi.fn((id, g) => { if (g) drafts.set(id, g); else drafts.delete(id); }),
     });
     let o = opts();
-    selectBinding(o).onPointerDown!(ptr(5, 5, { target: { kind: "object", id: 4 } }));
-    selectBinding(o).onPointerDrag!({ x: 6, y: 5 });
+    selectBinding(o).onPointerDown!(ptr(5, 0, { target: { kind: "object", id: 4 } }));
+    selectBinding(o).onPointerDrag!({ x: 6, y: 0 });
     o = opts(); // re-rendered with the draft
-    selectBinding(o).onPointerDrag!({ x: 7, y: 5 });
+    selectBinding(o).onPointerDrag!({ x: 7, y: 0 });
     o = opts();
-    selectBinding(o).onPointerDrag!({ x: 8, y: 5 });
+    selectBinding(o).onPointerDrag!({ x: 8, y: 0 });
     expect(drafts.get(4)![0]).toEqual({ x: 3, y: 0 });
     o = opts();
-    selectBinding(o).onPointerUp!({ x: 8, y: 5 });
+    selectBinding(o).onPointerUp!({ x: 8, y: 0 });
     expect(o.onObjectMoved).toHaveBeenCalledWith(4, [{ x: 3, y: 0 }, { x: 13, y: 0 }, { x: 13, y: 10 }, { x: 3, y: 10 }]);
+  });
+
+  it("a closed area is pressed by its outline; inside it the map pans, also when it is selected (§7)", () => {
+    for (const kind of ["oob_area", "whiteout", "toner_saver", "filter_region"] as const) {
+      // Unselected: a press inside (the hit-test reports nothing there) is the viewer's — it pans.
+      const o = selectOpts({ objects: [square(4, kind)] });
+      expect(selectBinding(o).onPointerDown!(ptr(5, 5))).toBe(false);
+      expect(o.onSelectObject).not.toHaveBeenCalled();
+
+      // Selected: an interior press declines too — a drag inside pans and leaves the area and the selection alone.
+      const sel = selectOpts({ selected: square(4, kind), objects: [square(4, kind)] });
+      const b = selectBinding(sel);
+      expect(b.onPointerDown!(ptr(5, 5))).toBe(false);
+      expect(b.onPointerDown!(ptr(5, 1))).toBe(false); // 10 px off the edge: beyond the 7 px reach
+      expect(sel.onSelectObject).not.toHaveBeenCalled();
+      expect(sel.onObjectDraft).not.toHaveBeenCalled();
+
+      // Within 7 px of its edge (no target needed) it drags; so does the hit-test's outline target (12 px on touch).
+      expect(b.onPointerDown!(ptr(5, 0.6))).toBe(true);
+      b.onPointerDrag!({ x: 5, y: 2.6 });
+      b.onPointerUp!({ x: 5, y: 2.6 });
+      expect(sel.onObjectMoved).toHaveBeenLastCalledWith(4, [{ x: 0, y: 2 }, { x: 10, y: 2 }, { x: 10, y: 12 }, { x: 0, y: 12 }]);
+      expect(b.onPointerDown!(ptr(5, 1.1, { target: { kind: "object", id: 4 } }))).toBe(true);
+      b.onPointerUp!({ x: 5, y: 1.1 });
+
+      // The pressing order is unchanged: a vertex wins over the edge.
+      const v = selectOpts({ selected: square(4, kind), objects: [square(4, kind)] });
+      const bv = selectBinding(v);
+      bv.onPointerDown!(ptr(10, 0.2, { target: { kind: "object", id: 4 } }));
+      bv.onPointerDrag!({ x: 11, y: 1 });
+      bv.onPointerUp!({ x: 11, y: 1 });
+      expect(v.onObjectMoved).toHaveBeenCalledWith(4, [{ x: 0, y: 0 }, { x: 11, y: 0.8 }, { x: 10, y: 10 }, { x: 0, y: 10 }]);
+    }
+  });
+
+  it("a line's stroke press is still the object's", () => {
+    const line = { ...square(6, "oob_line"), geometry: [{ x: 0, y: 0 }, { x: 20, y: 0 }] } as course.CourseObject;
+    const o = selectOpts({ selected: line, objects: [line] });
+    const b = selectBinding(o);
+    expect(b.onPointerDown!(ptr(10, 0.05, { target: { kind: "object", id: 6 } }))).toBe(true);
+    b.onPointerDrag!({ x: 12, y: 0.05 });
+    b.onPointerUp!({ x: 12, y: 0.05 });
+    expect(o.onObjectMoved).toHaveBeenCalledWith(6, [{ x: 2, y: 0 }, { x: 22, y: 0 }]);
   });
 
   it("outlines filter regions and toner savers always, other objects when selected", () => {
@@ -145,8 +189,8 @@ describe("geometry editing on a selected object (docs/course-editor.md §7 \"Edi
     b.onPointerDown!(ptr(10, 10));
     b.onPointerUp!({ x: 10, y: 10 });
     expect(o.onVertexFocus).toHaveBeenLastCalledWith(2);
-    b.onPointerDown!(ptr(5, 5, { target: { kind: "object", id: 4 } }));
-    b.onPointerUp!({ x: 5, y: 5 });
+    b.onPointerDown!(ptr(5, 0, { target: { kind: "object", id: 4 } })); // a click on its edge unfocuses
+    b.onPointerUp!({ x: 5, y: 0 });
     expect(o.onVertexFocus).toHaveBeenLastCalledWith(null);
     const focused = selectBinding(selectOpts({ selected: square(4), focusedVertex: 2 }));
     expect(shapesOf(focused, "editor-object-handle").filter((h) => h.data?.focused)).toHaveLength(1);
@@ -171,7 +215,7 @@ describe("geometry editing on a selected object (docs/course-editor.md §7 \"Edi
     b.onDoubleClick!(ptr(5, 0.3));
     expect(o.onObjectMoved).toHaveBeenCalledWith(4, [{ x: 0, y: 0 }, { x: 5, y: 0 }, { x: 10, y: 0 }, { x: 10, y: 10 }, { x: 0, y: 10 }]);
     expect(o.onVertexFocus).toHaveBeenLastCalledWith(1);
-    b.onDoubleClick!(ptr(5, 5, { target: { kind: "object", id: 4 } }));
+    b.onDoubleClick!(ptr(5, 5));
     b.onDoubleClick!(ptr(10, 0.2));
     expect(o.onObjectMoved).toHaveBeenCalledTimes(1);
     const text = { ...square(5, "text"), geometry: [{ x: 0, y: 0 }] } as course.CourseObject;
