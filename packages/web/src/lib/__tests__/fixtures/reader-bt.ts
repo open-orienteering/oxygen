@@ -5,6 +5,8 @@
  * (see docs/si-protocol/reader-bt.md). Everything is little-endian.
  */
 
+import { decodeCp850 } from "../../si-protocol";
+
 export const DAY_MS = 86_400_000;
 
 /** ms since Sunday 00:00 for a weekday index (0=Sun..6=Sat) and h:m:s */
@@ -24,6 +26,22 @@ export function u64(v: number): number[] {
   const lo = v % 2 ** 32;
   const hi = Math.floor(v / 2 ** 32);
   return [...u32(lo), ...u32(hi)];
+}
+
+/** CP850, the encoding cards store owner data in (Reader BT charset byte 1) */
+export function cp850(s: string): number[] {
+  const high = new Map<string, number>();
+  for (let b = 0x80; b <= 0xff; b++) {
+    const c = decodeCp850(new Uint8Array([b]));
+    if (c && !high.has(c)) high.set(c, b);
+  }
+  return Array.from(s, (c) => {
+    const code = c.charCodeAt(0);
+    if (code < 0x80) return code;
+    const b = high.get(c);
+    if (b === undefined) throw new Error(`No CP850 byte for ${c}`);
+    return b;
+  });
 }
 
 export function latin1(s: string): number[] {
@@ -131,5 +149,5 @@ export const SIAC_CARD: CardSpec = {
     battery: [24, 3, 15],
     production: [23, 11],
   }),
-  owner: { charset: 1, bytes: latin1(SIAC_OWNER), size: 128 },
+  owner: { charset: 1, bytes: cp850(SIAC_OWNER), size: 128 },
 };
