@@ -36,6 +36,7 @@ import { isPpenContent, parsePpenCourseData } from "../ppen-course-parser.js";
 import { resolveImportAlignment } from "../course-import-align.js";
 import { publicControlId } from "./control.js";
 import { courseChecksFor } from "../course-checks.js";
+import { lastWriter, othersPresent, PRESENCE_TTL_MS, touchPresence } from "../course-presence.js";
 import {
   ocadBoundsToWgs84,
   computeMapNorthOffset,
@@ -986,6 +987,41 @@ export const courseRouter = router({
     .query(async ({ ctx, input }) => {
       const c = await getCourseBySeq(ctx.db, ctx.event.id, input.courseId);
       return courseChecksFor(ctx.db, ctx.event.id, c.id);
+    }),
+
+  /**
+   * Heartbeat of an open editor (docs/course-layer.md §7; D11): records that
+   * `clientId` has the course open in `mode` and answers who else is present
+   * in the event (live rows only, 30 s TTL). The web calls it on the 5 s
+   * poll's cadence while the editor is open.
+   */
+  presence: coursesViewProcedure
+    .input(
+      z.object({
+        courseId: z.number().int(),
+        mode: z.enum(["course", "layout", "field"]),
+        clientId: z.string().min(1).max(64),
+      }),
+    )
+    .mutation(async ({ ctx, input }) => {
+      const c = await getCourseBySeq(ctx.db, ctx.event.id, input.courseId);
+      await touchPresence(ctx.db, {
+        eventId: ctx.event.id,
+        courseUuid: c.id,
+        clientId: input.clientId,
+        mode: input.mode,
+        userId: ctx.user?.id ?? null,
+        name: ctx.user?.displayName || ctx.user?.email || "",
+      });
+      return { ttlMs: PRESENCE_TTL_MS, others: await othersPresent(ctx.db, ctx.event.id, input.clientId) };
+    }),
+
+  /** Who last wrote the course itself and when (D11: the notice for a structure changed elsewhere). */
+  lastChange: coursesViewProcedure
+    .input(z.object({ courseId: z.number().int() }))
+    .query(async ({ ctx, input }) => {
+      const c = await getCourseBySeq(ctx.db, ctx.event.id, input.courseId);
+      return lastWriter(ctx.db, ctx.event.id, "course.upserted", c.id);
     }),
 
   /**
