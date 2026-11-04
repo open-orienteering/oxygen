@@ -375,6 +375,9 @@ test.describe("Course editor (new, GL canvas)", () => {
         await expect(page.getByTestId("editor-action-bar")).toHaveCount(0);
         await expect(page.getByTestId("editor-selection-ring")).toHaveCount(0);
       }
+      // The last placed control is still the selection (the inspector shows it), only its ring is not drawn.
+      await expect(selectedCode(page)).toBeVisible();
+      await expect(page.getByTestId("editor-selection-ring")).toHaveCount(0);
       await expect(controlRows(page)).toHaveCount(10, { timeout: 30000 });
       await expect.poll(async () => (await sites(page)).length, { timeout: 15000 }).toBe(before + 10);
       await expect(page.getByTestId("editor-tool-K")).toHaveAttribute("aria-pressed", "true");
@@ -439,6 +442,9 @@ test.describe("Course editor (new, GL canvas)", () => {
       await page.keyboard.press("Escape");
       await expect(page.getByTestId("editor-ghost")).toHaveCount(0);
       await expect(page.getByTestId("editor-leg-length")).toHaveCount(0);
+      // A second Escape drops the placed control's selection: its action bar can leave no empty map point.
+      await page.keyboard.press("Escape");
+      await expect(page.getByTestId("editor-action-bar")).toHaveCount(0);
       const middle = (await controlRows(page).nth(1).getAttribute("data-control-id"))!;
       const from = await toPage(page, (await sites(page)).find((x) => x.id === middle)!.mm);
       const to = await emptyPoint(page, 60, spots);
@@ -684,8 +690,20 @@ test.describe("Course editor (new, GL canvas)", () => {
       // Select it again on the canvas (a click on its outline — inside, the map is the map, §7), once the layer
       // draws it and its hit index has it.
       await expect.poll(() => inkIn(page, inner, "purple"), { timeout: 30000 }).toBeGreaterThan(purpleBefore + 5);
+      // The reloaded view need not be the one it was drawn in: the edge midpoint from the stored geometry, the one
+      // farthest from every site (a control there would win the press).
+      const stored = ((await page.locator(`[data-testid="editor-object-row"][data-object-id="${id}"]`).getAttribute("data-geometry")) ?? "")
+        .split(" ").map((q) => ({ x: Number(q.split(",")[0]), y: Number(q.split(",")[1]) }));
+      const marks = await Promise.all((await sites(page)).map((s) => toPage(page, s.mm)));
+      const edges = await Promise.all(stored.map((v, i) => {
+        const w = stored[(i + 1) % stored.length];
+        return toPage(page, { x: (v.x + w.x) / 2, y: (v.y + w.y) / 2 });
+      }));
+      const clearance = (p: { x: number; y: number }) => Math.min(Infinity, ...marks.map((q) => Math.hypot(q.x - p.x, q.y - p.y)));
+      const onEdge = edges.sort((p, q) => clearance(q) - clearance(p))[0];
       await expect(async () => {
-        await clickMap(page, { x: a.x + 30, y: a.y });
+        await page.keyboard.press("Escape"); // a missed attempt's selection or phantom (its action bar) goes first
+        await clickMap(page, onEdge);
         await expect(page.getByTestId("editor-object")).toHaveAttribute("data-object-id", id!, { timeout: 2000 });
       }).toPass({ timeout: 20000 });
       // Its hatch and border from the inspector, then delete it (Delete key) and undo.

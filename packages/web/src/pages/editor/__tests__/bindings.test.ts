@@ -98,7 +98,8 @@ describe("V binding (docs/course-editor.md §6.5, §7)", () => {
       expect(sel.onSelectObject).not.toHaveBeenCalled();
       expect(sel.onObjectDraft).not.toHaveBeenCalled();
 
-      // Within 7 px of its edge (no target needed) it drags; so does the hit-test's outline target (12 px on touch).
+      // Within 7 px of its edge (`HANDLE_PX`, any pointer; no target needed) it drags; so does a press the hit-test
+      // reports on its outline (the viewer's tolerance: 6 px, 12 px on touch).
       expect(b.onPointerDown!(ptr(5, 0.6))).toBe(true);
       b.onPointerDrag!({ x: 5, y: 2.6 });
       b.onPointerUp!({ x: 5, y: 2.6 });
