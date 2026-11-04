@@ -52,6 +52,7 @@ import { UndoStack } from "../../lib/undo-stack";
 import { useMapDocument } from "../../lib/map-document-cache";
 import { courseObjectsForView, type ProvisionalVisit } from "../../lib/course-layer-request";
 import { snapIndexForDocument } from "../../lib/editor/snap";
+import { deleteVertex, vertexRule, type Vertex } from "../../lib/editor/geometry-edit";
 import { legLengthLabel, legLengthM } from "../../lib/editor/leg-length";
 import { EditorConflict, EditorWrites, type EditorClient } from "../../lib/editor/write-client";
 import { areaTool, editorReducer, escapeHasWork, initialEditorState, type EditorTool } from "../../lib/editor/state";
@@ -618,6 +619,15 @@ export function EditorPage() {
   /** Geometry being dragged (vertex or body) or drawn, drawn instead of the stored one until the list catches up. */
   const [drafts, setDrafts] = useState<Map<number, CourseObject["geometry"]>>(new Map());
   useEffect(() => { setDrafts((d) => (d.size ? new Map() : d)); }, [objectList.data]);
+  /** The selected object's focused vertex (a click on its handle): `Delete` removes it (§7 "Editing geometry"). */
+  // Keyed by the object it belongs to, so a selection change drops it.
+  const [focus, setFocus] = useState<{ objectId: number; index: number } | null>(null);
+  const focusedVertex = focus && focus.objectId === state.selectedObjectId ? focus.index : null;
+  const selectedObjectId = state.selectedObjectId;
+  const setFocusedVertex = (index: number | null) =>
+    setFocus(index === null || selectedObjectId === null ? null : { objectId: selectedObjectId, index });
+  /** Per object, the geometry shown when the gesture in progress drew its first draft (`onObjectDraft`). */
+  const gestureBefore = useRef(new Map<number, CourseObject["geometry"]>());
   const setDraft = useCallback((id: number, geometry: CourseObject["geometry"] | null) => {
     setDrafts((prev) => {
       const next = new Map(prev);
@@ -765,7 +775,7 @@ export function EditorPage() {
     })();
   }, [rows, selectedCourse, createObject, setTool]);
 
-  const finishArea = useCallback((kind: AreaKind, vertices: Pt[]) => {
+  const finishArea = useCallback((kind: AreaKind, vertices: Vertex[]) => {
     setTool({ kind: "select" });
     void (async () => {
       const id = await createObject({ kind, geometry: vertices, props: defaultProps(kind), scope: { all: true } } as Pick<CourseObject, "kind" | "geometry" | "props" | "scope">);
@@ -912,16 +922,24 @@ export function EditorPage() {
         }) : null;
       case "select":
         return selectBinding({
-          gesture, redraw, selected: selectedObject, objects: objectsInView.map((o) => (drafts.has(o.id) ? { ...o, geometry: drafts.get(o.id)! } : o)),
+          gesture, redraw, selected: selectedObject, focusedVertex, onVertexFocus: setFocusedVertex, objects: objectsInView.map((o) => (drafts.has(o.id) ? { ...o, geometry: drafts.get(o.id)! } : o)),
           sites: sitesForTools, multi: state.multi, ringMm: courseInfo?.metrics?.circleRadiusMm ?? 2.5,
           onToggleMulti: (id) => dispatch({ type: "toggle-multi", id }),
           onLasso: (ids) => dispatch({ type: "set-multi", ids }),
           onSelectObject: (id) => dispatch({ type: "select-object", id }),
-          onObjectDraft: setDraft,
+          onObjectDraft: (id, geometry) => {
+            // The first draft of a gesture keeps what was shown before it: the undo's "before".
+            if (geometry && !gestureBefore.current.has(id)) gestureBefore.current.set(id, drafts.get(id) ?? objects.find((x) => x.id === id)?.geometry ?? geometry);
+            if (!geometry) gestureBefore.current.delete(id);
+            setDraft(id, geometry);
+          },
           onObjectMoved: (id, geometry) => {
             const o = objects.find((x) => x.id === id);
+            // Undo restores what the gesture started from — a previous gesture's draft while the list catches up.
+            const before = gestureBefore.current.get(id) ?? drafts.get(id) ?? o?.geometry;
+            gestureBefore.current.delete(id);
             setDraft(id, geometry);
-            if (o) updateObject(o, { geometry });
+            if (o && before) updateObject({ ...o, geometry: before } as CourseObject, { geometry });
           },
           onLegDoubleClick: insertOnLeg,
         });
@@ -1103,10 +1121,12 @@ export function EditorPage() {
   // ─── Undo / redo, keyboard, deep links ───────────────────
   const runUndo = useCallback(() => {
     setMoveEpoch((v) => v + 1);
+    setFocus(null); // its index may name another vertex now
     void run(async () => { await undoStack.undo(); bumpHistory(); });
   }, [run, undoStack, bumpHistory]);
   const runRedo = useCallback(() => {
     setMoveEpoch((v) => v + 1);
+    setFocus(null);
     void run(async () => { await undoStack.redo(); bumpHistory(); });
   }, [run, undoStack, bumpHistory]);
 
@@ -1206,13 +1226,22 @@ export function EditorPage() {
       } else if (e.key === "Delete" || e.key === "Backspace") {
         e.preventDefault();
         if (state.multi.length > 0) deleteControls(state.multi);
-        else if (selectedObject) deleteObject(selectedObject);
+        else if (selectedObject && focusedVertex !== null) {
+          // A focused vertex goes first, down to the kind's minimum; there nothing happens (§7 "Editing geometry").
+          const shown = { ...selectedObject, geometry: drafts.get(selectedObject.id) ?? selectedObject.geometry } as CourseObject;
+          const geometry = deleteVertex(shown.geometry, focusedVertex, vertexRule(shown.kind).min);
+          if (geometry) {
+            setDraft(shown.id, geometry);
+            updateObject(shown, { geometry });
+            setFocus(null);
+          }
+        } else if (selectedObject) deleteObject(selectedObject);
         else handleDelete();
       }
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [descControlId, runUndo, runRedo, undoStack, state, handleDelete, deleteControls, deleteObject, selectedObject, setChain, exitTool, finishArea,
+  }, [descControlId, runUndo, runRedo, undoStack, state, handleDelete, deleteControls, deleteObject, selectedObject, focusedVertex, drafts, setDraft, updateObject, setChain, exitTool, finishArea,
     stepSelection, armPlace, setTool, canGap, fitView, areaOpen, canTonerSaver, startArea, layoutKey]);
 
   // Layout deep links (docs/course-layout.md §4): `?mode=layout` with `sheet=<seq>` or `template=<seq>`.
@@ -1420,7 +1449,7 @@ export function EditorPage() {
     <ul data-testid="editor-objects" hidden>
       {objects.map((o) => (
         <li key={o.id} data-testid="editor-object-row" data-object-id={o.id} data-object-kind={o.kind}
-          data-geometry={o.geometry.map((v) => `${v.x},${v.y}`).join(" ")} data-props={JSON.stringify(o.props)} data-scope={JSON.stringify(o.scope)} />
+          data-geometry={o.geometry.map((v) => `${v.x},${v.y}`).join(" ")} data-geometry-json={JSON.stringify(o.geometry)} data-props={JSON.stringify(o.props)} data-scope={JSON.stringify(o.scope)} />
       ))}
     </ul>
   );

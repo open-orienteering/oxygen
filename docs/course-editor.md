@@ -183,7 +183,9 @@ shared stage (04 §7; `map-rendering.md` §5.5), not SVG hit targets:
   not draw on screen — a filter region (a region, not an object) and a
   toner saver (no frame on screen) — hit by the outline the UI layer draws
   for them, over their interior and along the edge, below everything else
-  (`UiArea`, `editorHitAt`'s `uiAreas`). Imported extras do not hit.
+  (`UiArea`, `editorHitAt`'s `uiAreas`; the ring is the sampled outline of
+  §7 "Editing geometry", so a curved toner saver hits along its curve).
+  Imported extras do not hit.
 - While an armed tool's provisional visit is drawn (§6.1) only real sites
   are targets: `editorHitAt`'s `accept` passes over everything else and
   over the `provisional` site, so the shape below (a control to reuse)
@@ -210,9 +212,13 @@ The tool rail (08 §5.2, §5.3) — each tool a **viewer binding**
 `EditorToolBinding`): the viewer offers every pointer-down to the tool
 first (`onPointerDown` → `true` takes the gesture: drag, up), and an
 *exclusive* tool also keeps the viewer's own targets off, so a drag pans
-and a click without movement goes to the tool's `onClick`. Tools draw
-UI-layer shapes in paper mm (`ToolShape`: circle — true size, line,
-handle, text). The tool state is `EditorState.tool`
+and a click without movement goes to the tool's `onClick` (unless the
+tool takes the pointer-down itself, as the area tool does, §6.4). A
+`ToolPointer` carries `shift`, `alt` (mouse only; touch never) and the
+zoom's mm per px; `onPointerDrag` gets the keys held now (`{ shift, alt
+}`), so Shift and Alt act live during a drag. Tools draw UI-layer shapes
+in paper mm (`ToolShape`: circle — true size, line, handle, grip — a
+screen-size Bézier handle on a thin line from its vertex — and text). The tool state is `EditorState.tool`
 (`lib/editor/state.ts`); an active tool opens no action bar.
 
 | Key | Tool | |
@@ -343,10 +349,23 @@ menu). The chord key is read only while the menu is open, so `S` does
 not arm the start tool there; `Esc` or `A` closes the menu. A click on a
 menu item does the same.
 
-`pages/editor/tools/polygon.ts`: click per vertex, drag a vertex
-(`editor-polygon-vertex`) to adjust before closing, close by a
+`pages/editor/tools/polygon.ts`: **click = corner, click-drag = curve
+vertex** (Mapper / Illustrator): the press places the vertex where it
+went down (snapped); once the pointer is 3 px from the press the drag
+pulls **symmetric handles** out of it — `hOut` = the drag vector, `hIn` its negation
+(`pull-handles`, `symmetricHandles`) — and `Shift` turns the handle to
+the nearest 45° (`constrain45`), live. A drag back within 3 px of the
+press leaves a corner. Since the tool takes every press on the map, **a drag no longer
+pans while an area is being drawn** (the wheel zooms; on touch, where
+taps place vertices through `onClick`, one finger still pans and there
+are no curve vertices). Drag a placed vertex (`editor-polygon-vertex`)
+to adjust it before closing (its handles move with it); close by a
 double-click or a click on the first vertex, `Esc` cancels; `Enter`
-finishes any kind once it has its minimum vertices. Line kinds
+finishes any kind once it has its minimum vertices. The preview
+(`editor-polygon`) follows the curves (§7 "Editing geometry"), and a
+curve vertex shows its two grips (`editor-polygon-grip`). A **filter
+region** stays a polygon: the schema refuses handles (`course-layer.md`
+§8.1), so its click-drag is a corner. Line kinds
 (out-of-bounds line, marked route) end by a double-click or `Enter` from
 two vertices and never close on the first vertex. On closing the object is created (§7: `{ all: true }`
 scope, the kind's default props), the tool returns to `V` and the new
@@ -373,8 +392,9 @@ site's margin octagon, `TONER_MARGIN_MM` = 10 mm, convex hull —
   the course, or every positioned control without one (`viewRequest.fit`).
 - **Double-click a leg** inserts a new control there (§4's insert, without
   the action bar).
-- `Delete` / `Backspace` deletes the multi-selection, the selected object
-  or the selected control.
+- `Delete` / `Backspace` deletes the multi-selection, else the selected
+  object's **focused vertex** (§7 "Editing geometry"), else the selected
+  object, else the selected control.
 
 ### 6.6 Site fields
 
@@ -430,7 +450,59 @@ filter regions and toner savers are outlined by the UI layer.
   (`EditorWrites.createObject` / `updateObject` / `deleteObject`); a stale
   one is `CONFLICT { kind: "object" }` → the refresh notice of §3.
 - Tests read the objects from a hidden mirror, `editor-object-row`
-  (`data-object-id`, `-kind`, `-geometry`, `-props`, `-scope`).
+  (`data-object-id`, `-kind`, `-geometry` — `x,y` pairs, `-geometry-json`
+  — the stored vertices with their handles, `-props`, `-scope`).
+
+### Editing geometry
+
+A course object's path is the stored `PathVertex` list (`course-layer.md`
+§8.1): paper mm, each vertex with optional Bézier handles `hIn` / `hOut`
+as offsets from it; a segment is a cubic when either end has its handle,
+else straight — what the layer's `vertexPath` and print draw. The pure
+edits are `lib/editor/geometry-edit.ts`; the gestures are the `V`
+binding's on the **selected** object (`selectBinding`), mouse only:
+
+| Gesture | Edit | |
+|---|---|---|
+| drag a vertex handle (`editor-object-handle`) | moves the vertex, its handles with it | as before (§7) |
+| click a vertex handle | focuses it (drawn filled, `data-focused`) | no write; a text's anchor or an image's corner is never focused, so `Delete` deletes the object |
+| `Delete` / `Backspace` with a vertex focused | `deleteVertex` down to the kind's minimum; at the minimum nothing happens | the object is deleted from the inspector, or after a click on its body (which unfocuses) |
+| double-click on an edge (within the 7 px handle reach, not on a vertex) | `insertVertex` at the nearest point (`nearestEdge`): a corner on a straight edge; on a curve a **de Casteljau split**, so the shape stays as it was and the new vertex is smooth | the new vertex is focused |
+| `Alt`-drag a vertex | `symmetricHandles`: `hOut` = the drag vector, `hIn` its negation (`Shift`: 45°) | |
+| drag a grip (`editor-object-grip`, `data-index`, `data-which` `in` / `out`) | the handle moves by the pointer's offset (so a press beside the grip does not jump it) — `dragGrip`: a mirrored pair stays mirrored; a smooth pair (opposite, different lengths — a split's) stays smooth with the other's length kept; a lone or broken handle moves alone (`Shift`: 45°) | |
+| `Alt` held on a grip (live) | breaks the pair: only that handle moves | the pair stays broken afterwards |
+| `Alt`-click a vertex with handles | `retractHandles`: a corner again | on a corner nothing |
+
+- **Kinds** (`vertexRule`, kept in step with `courseObjectBodySchema` by
+  a test): closed areas (`oob_area`, `whiteout`, `toner_saver`) ≥ 3
+  vertices, lines (`oob_line`, `marked_route`) ≥ 2, curves allowed;
+  `filter_region` ≥ 3 without curves — `Alt`-drag moves its vertex, it
+  has no grips; `text` (one anchor) and `image` (two corners) take no
+  insert or delete.
+- **Writes**: each gesture is one `courseObject.update { geometry }` and
+  one undo entry (the page's `updateObject`); during a drag the object is
+  a draft as for every object drag (§7). The undo restores the geometry
+  **shown** when the gesture began — the previous gesture's result while
+  the list catches up, not the older stored row — so quick successive
+  gestures undo one at a time; a click draws no draft and leaves the
+  last write's draft in place. A press within the handle reach
+  of the selected object's edge belongs to the object (a body press), so
+  the double-click that inserts never reaches the map.
+- **Pressing order** on the selected object: a vertex, then a grip, then
+  the body or edge. A press elsewhere is the usual §6.5 / §4 one.
+- **The UI-layer outline follows the curve**: `outlinePoints` samples
+  each curved segment in **8 steps** (`CURVE_STEPS`), a curved closing
+  segment back to the first vertex too — for the selection outline
+  (`editor-object-outline`), the always-on filter region and toner saver
+  outlines and their UI-layer hit ring (§5), and the area tool's preview
+  (§6.4). Hit-testing the layer's shapes needs nothing: the hit index is
+  the symbolised stream, which already follows the curve.
+- The focused vertex is page state: cleared when the selection changes,
+  on undo / redo (its index may name another vertex then), replaced by
+  the next vertex click, cleared by a click on the body; it is not a step
+  of the Escape cascade (§3).
+- The inspector shows a one-line hint of these gestures for the kinds
+  that curve (`editor-geometry-hint`).
 
 ## 8. Checks and KPIs
 
@@ -727,11 +799,13 @@ current, differing }`; a variation group or a slice-F site kind answers
 | E2E | `e2e/course-editor.spec.ts` | the mount gate both ways and the shell; place → move → undo / redo → reload → select on the canvas → delete; create a course, append two controls, add-to-course on the map, reorder + undo, insert on a leg, remove, reload with `?course=` (explicit start / finish rows); deep links, `H`, Escape cascade |
 | unit (web) | `pages/editor/__tests__/placement.test.ts` | §6.1: insertion point (before the finish, after the selected control, at a leg, `S` at 0, no course), chain advance, `Ctrl+Z` steps back, `S` → `K`, ghost number and pending legs (a start's leg runs to the first item) |
 | unit (web) | `lib/editor/__tests__/leg-length.test.ts`, `lib/__tests__/course-layer-request.test.ts`, `lib/editor/__tests__/hit.test.ts` | §6.1: metres at the map scale, "‹n› m", the midpoint, a dragged control's labels (both legs, every visit, over undrawn items); the provisional visit in the request (`course-layer.md` §5); §5 `accept` passes over other targets and finds the site below a rejected one |
-| unit (web) | `pages/editor/__tests__/polygon.test.ts`, `gaps.test.ts` | §6.4: vertex flow, close on the first vertex / double-click, line kinds, vertex drag, hulls (toner saver margin); §6.3: compass degrees, shorter arc, minimum, merge across north, leg fractions |
+| unit (web) | `pages/editor/__tests__/polygon.test.ts`, `gaps.test.ts` | §6.4: vertex flow, close on the first vertex / double-click, line kinds, vertex drag, hulls (toner saver margin), `pull-handles` (symmetric, `Shift` 45°, back to a corner, a filter region stays a polygon, a moved curve vertex keeps its handles); §6.3: compass degrees, shorter arc, minimum, merge across north, leg fractions |
+| unit (web) | `lib/editor/__tests__/geometry-edit.test.ts` | §7 "Editing geometry": 8 samples per curved segment on the cubic, a curved closing segment, open paths never close; the nearest edge (closing edge, along a curve); insert on a straight edge, on the closing edge, on a curve (de Casteljau: the halves trace the original, the new vertex smooth); delete down to the minimum; symmetric handles, retract, grip drags (mirrored, smooth with the other's length kept, Alt breaks, broken / lone handles alone), 45°; `vertexRule` agrees with `courseObjectBodySchema` for every kind |
+| unit (web) | `pages/editor/__tests__/bindings.test.ts` "geometry editing on a selected object", "while drawing: a press places a corner…" | §7 "Editing geometry": the sampled outline and grips; Alt-drag → symmetric handles with one write (Shift 45°), a filter region's Alt-drag moves the vertex; Alt-click retracts (a corner: no write), a plain click focuses, a body click unfocuses, the focused handle drawn; a grip drag mirrored, Alt live breaks it; double-click on an edge inserts (inside, on a vertex, on a text: nothing); a press within reach of the edge is the object's; §6.4 the area tool's press places a corner, a drag past 3 px pulls handles (Shift 45°), the curved preview and its grips |
 | unit (web) | `pages/editor/__tests__/bindings.test.ts` | §6, §7: V (Shift-click, lasso, object select / move / vertex, outlines, double-click leg), armed (exclusive, right-click, touch, ghost and leg length label, no UI-layer leg), area (vertex drag, first-vertex close), G (rim drag, click removes, leg) |
 | unit (web) | `lib/__tests__/undo-stack.test.ts` | §6.1: `UndoStack.top`, which `Ctrl+Z` while armed checks before stepping the chain back |
 | unit (web) | `lib/editor/__tests__/snap.test.ts`, `hit.test.ts`, `state.test.ts`, `structure-edit.test.ts`, `write-client.test.ts` | §6.2 snap candidates and distance; §5 object targets (stream and UI-layer outline); §6 Escape order, multi-selection, object selection, tools; §6.3 / §6.6 `setLegGaps`, `setNumberHidden`; §7 object tokens |
-| E2E | `e2e/course-editor.spec.ts` "tools" | §6.1 ten controls in ten clicks with `K` (ghost, no UI-layer pending leg, the leg length label = the status bar, no action bar, `Ctrl+Z`, `Esc`), reuse of a site; the armed `K` over the map: a `course-leg` piece of the course ends at the cursor's circle (absent before the hover, follows a second hover), no `editor-pending-leg`, the label = the status bar; a drag of the middle control shows two `editor-leg-length`, none after release; §6.5 Shift-click three controls → one add-to-course (one undo entry), §6.6 a site's notes written and reloaded; §6.3 a rim drag stores a circle gap, Reset gaps clears it; the layer draws what the tools store (D1's request path): a leg gap cuts the drawn leg, a circle gap is in the drawn site's cuts (`course-site` `data-cuts`), a hidden number leaves the site without its `course-label`; §6.4 / §7 an out-of-bounds area drawn, drawn on the canvas (709: purple inside it), its hatch (710) and border later set from the inspector (the stored props; 710 on the canvas is the shared layer path, probed in print only), printed (the all-controls `maps.pdf`: one page, the 709 hatch's clip-and-stroke operators present with the `all`-scoped area, one more run with `hatch: "710"`, gone when it is parked), selected again on the canvas, deleted and undone; a filter region hides the 505 path under it live (canvas ink probe) |
+| E2E | `e2e/course-editor.spec.ts` "tools" | §6.1 ten controls in ten clicks with `K` (ghost, no UI-layer pending leg, the leg length label = the status bar, no action bar, `Ctrl+Z`, `Esc`), reuse of a site; the armed `K` over the map: a `course-leg` piece of the course ends at the cursor's circle (absent before the hover, follows a second hover), no `editor-pending-leg`, the label = the status bar; a drag of the middle control shows two `editor-leg-length`, none after release; §6.5 Shift-click three controls → one add-to-course (one undo entry), §6.6 a site's notes written and reloaded; §6.3 a rim drag stores a circle gap, Reset gaps clears it; the layer draws what the tools store (D1's request path): a leg gap cuts the drawn leg, a circle gap is in the drawn site's cuts (`course-site` `data-cuts`), a hidden number leaves the site without its `course-label`; §6.4 / §7 an out-of-bounds area drawn, drawn on the canvas (709: purple inside it), its hatch (710) and border later set from the inspector (the stored props; 710 on the canvas is the shared layer path, probed in print only), printed (the all-controls `maps.pdf`: one page, the 709 hatch's clip-and-stroke operators present with the `all`-scoped area, one more run with `hatch: "710"`, gone when it is parked), selected again on the canvas, deleted and undone; §6.4 / §7 "Editing geometry" a curved white-out in three clicks and one drag (two clicks, a click-drag that shows two `editor-polygon-grip`, the closing click): the stored vertex has `hOut` = the drag on paper and `hIn` its negation, the selection outline has 8 samples per curved segment, the all-controls `maps.pdf` gains exactly one curved fill (a fill path with `c` segments — the base map has its own); a double-click on a straight edge inserts a corner at its midpoint (handles 3 → 4), a click focuses it and `Delete` removes it (the object stays), `Ctrl+Z` brings it back, `Alt`-drag on a corner shows two more grips, `Alt`-click retracts them; a filter region hides the 505 path under it live (canvas ink probe) |
 | integration | `packages/api/src/__tests__/integration/course-print.test.ts` "course objects on the page" | §7 print: the row's "reference-raster pixel probe" of a printed course object is this test's page raster, not the E2E's — no HTTP route rasterises a composed page, and poppler is on the runner for the unit / integration jobs, not the E2E job (coordinator 2026-11-01) |
 | unit (web) | `packages/web/src/lib/editor/__tests__/checks.test.ts` | §8: sites and the explicit structure as `courseChecks` takes them, two controls 20 m apart, the server's `DESCRIPTION_STALE` merged in order, markers (rings, a leg cross, unpositioned skipped), length from the leg polylines, locate |
 | E2E | `e2e/course-editor.spec.ts` "Course editor checks" | §8: two controls 20 m apart → the count beside the section title, the row (`CONTROL_TOO_CLOSE`, "20 m"), a marker on each site, the status-bar count; a click selects the first site and centres the view on the pair's midpoint |
@@ -779,6 +853,11 @@ current, differing }`; a variation group or a slice-F site kind answers
 - **One-finger drag of a course object on touch** (its body or a
   vertex): a tap selects it and two fingers scale it (§10); moving it is
   the mouse's, or a later row with the object's own nudge.
+- **Geometry editing on touch** (§7 "Editing geometry", §6.4): there is
+  no Alt on touch, so curve vertices, handles, grips, vertex insert and
+  vertex delete are the mouse's; a touch-drawn area is a polygon. A later
+  row could give the selection a vertex action bar (insert, delete,
+  curve / corner).
 - **Offline writes in Field mode** (§9 "Offline"): a queue for
   `control.update` / `control.check` with the field-move rebase on replay
   (row D9c).

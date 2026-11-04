@@ -12,7 +12,7 @@ function selectOpts(over: Partial<Parameters<typeof selectBinding>[0]> = {}) {
   const o = {
     gesture, selected: null, objects: [square(4)], sites: [{ id: 31, x: 5, y: 5, kind: "control" as const }, { id: 32, x: 50, y: 50, kind: "control" as const }],
     multi: [], ringMm: 2.5, redraw: vi.fn(), onToggleMulti: vi.fn(), onLasso: vi.fn(), onSelectObject: vi.fn(), onObjectDraft: vi.fn(),
-    onObjectMoved: vi.fn(), onLegDoubleClick: vi.fn(), ...over,
+    onObjectMoved: vi.fn(), onLegDoubleClick: vi.fn(), onVertexFocus: vi.fn(), ...over,
   };
   return o;
 }
@@ -94,6 +94,126 @@ describe("V binding (docs/course-editor.md §6.5, §7)", () => {
   });
 });
 
+describe("geometry editing on a selected object (docs/course-editor.md §7 \"Editing geometry\")", () => {
+  type Shape = { kind: string; testId?: string; data?: Record<string, string>; points?: unknown[] };
+  const curved = (id: number): course.CourseObject =>
+    ({ ...square(id), geometry: [{ x: 0, y: 0, hIn: { x: 0, y: -2 }, hOut: { x: 0, y: 2 } }, { x: 10, y: 0 }, { x: 10, y: 10 }, { x: 0, y: 10 }] }) as course.CourseObject;
+  const shapesOf = (b: ReturnType<typeof selectBinding>, id: string) => (b.shapes as unknown as Shape[]).filter((s) => s.testId === id);
+  /** The geometry of the `n`th write. */
+  const movedTo = (o: ReturnType<typeof selectOpts>, n: number) => vi.mocked(o.onObjectMoved).mock.calls[n][1];
+
+  it("the outline follows the curve; grips for each handle, none on corners", () => {
+    const o = selectOpts({ selected: curved(4), objects: [curved(4)] });
+    const b = selectBinding(o);
+    expect(shapesOf(b, "editor-object-outline")[0].points).toHaveLength(1 + 8 + 2 + 8); // vertex 0 curves its first and its closing segment
+    expect(shapesOf(b, "editor-object-grip").map((g) => g.data)).toEqual([{ index: "0", which: "in" }, { index: "0", which: "out" }]);
+    expect(shapesOf(selectBinding(selectOpts({ selected: square(4) })), "editor-object-grip")).toHaveLength(0);
+  });
+
+  it("Alt-drag on a vertex pulls symmetric handles (Shift: 45°); one write on release", () => {
+    const o = selectOpts({ selected: square(4) });
+    const b = selectBinding(o);
+    expect(b.onPointerDown!(ptr(10, 0, { alt: true }))).toBe(true);
+    b.onPointerDrag!({ x: 13, y: 4 }, { shift: false, alt: true });
+    expect(o.onObjectDraft).toHaveBeenLastCalledWith(4, expect.arrayContaining([{ x: 10, y: 0, hIn: { x: -3, y: -4 }, hOut: { x: 3, y: 4 } }]));
+    b.onPointerDrag!({ x: 20, y: 1 }, { shift: true, alt: true });
+    b.onPointerUp!({ x: 20, y: 1 });
+    expect(o.onObjectMoved).toHaveBeenCalledTimes(1);
+    const v = movedTo(o, 0)[1];
+    expect(v).toMatchObject({ x: 10, y: 0 });
+    expect(v.hOut!.y).toBeCloseTo(0);
+  });
+
+  it("a filter region's Alt-drag moves the vertex (no handles)", () => {
+    const o = selectOpts({ selected: square(4, "filter_region"), objects: [square(4, "filter_region")] });
+    const b = selectBinding(o);
+    b.onPointerDown!(ptr(10, 0, { alt: true }));
+    b.onPointerDrag!({ x: 12, y: 0 }, { shift: false, alt: true });
+    b.onPointerUp!({ x: 12, y: 0 });
+    expect(movedTo(o, 0)[1]).toEqual({ x: 12, y: 0 });
+  });
+
+  it("Alt-click on a vertex with handles retracts them; on a corner nothing; a plain click focuses the vertex", () => {
+    const o = selectOpts({ selected: curved(4), objects: [curved(4)] });
+    const b = selectBinding(o);
+    b.onPointerDown!(ptr(0, 0, { alt: true }));
+    b.onPointerUp!({ x: 0, y: 0 });
+    expect(movedTo(o, 0)[0]).toEqual({ x: 0, y: 0 });
+    b.onPointerDown!(ptr(10, 10, { alt: true }));
+    b.onPointerUp!({ x: 10, y: 10 });
+    expect(o.onObjectMoved).toHaveBeenCalledTimes(1);
+    b.onPointerDown!(ptr(10, 10));
+    b.onPointerUp!({ x: 10, y: 10 });
+    expect(o.onVertexFocus).toHaveBeenLastCalledWith(2);
+    b.onPointerDown!(ptr(5, 5, { target: { kind: "object", id: 4 } }));
+    b.onPointerUp!({ x: 5, y: 5 });
+    expect(o.onVertexFocus).toHaveBeenLastCalledWith(null);
+    const focused = selectBinding(selectOpts({ selected: square(4), focusedVertex: 2 }));
+    expect(shapesOf(focused, "editor-object-handle").filter((h) => h.data?.focused)).toHaveLength(1);
+  });
+
+  it("a grip drag keeps the pair mirrored; Alt (live) breaks it", () => {
+    const o = selectOpts({ selected: curved(4), objects: [curved(4)] });
+    const b = selectBinding(o);
+    expect(b.onPointerDown!(ptr(0, 2))).toBe(true); // hOut's grip
+    b.onPointerDrag!({ x: 3, y: 0 }, { shift: false, alt: false });
+    b.onPointerUp!({ x: 3, y: 0 });
+    expect(movedTo(o, 0)[0]).toEqual({ x: 0, y: 0, hIn: { x: -3, y: -0 }, hOut: { x: 3, y: 0 } });
+    b.onPointerDown!(ptr(0, -2)); // hIn's grip
+    b.onPointerDrag!({ x: -1, y: -1 }, { shift: false, alt: true });
+    b.onPointerUp!({ x: -1, y: -1 });
+    expect(movedTo(o, 1)[0]).toEqual({ x: 0, y: 0, hIn: { x: -1, y: -1 }, hOut: { x: 0, y: 2 } });
+  });
+
+  it("double-click on an edge inserts a vertex there; inside the area, on a vertex or on a text nothing", () => {
+    const o = selectOpts({ selected: square(4) });
+    const b = selectBinding(o);
+    b.onDoubleClick!(ptr(5, 0.3));
+    expect(o.onObjectMoved).toHaveBeenCalledWith(4, [{ x: 0, y: 0 }, { x: 5, y: 0 }, { x: 10, y: 0 }, { x: 10, y: 10 }, { x: 0, y: 10 }]);
+    expect(o.onVertexFocus).toHaveBeenLastCalledWith(1);
+    b.onDoubleClick!(ptr(5, 5, { target: { kind: "object", id: 4 } }));
+    b.onDoubleClick!(ptr(10, 0.2));
+    expect(o.onObjectMoved).toHaveBeenCalledTimes(1);
+    const text = { ...square(5, "text"), geometry: [{ x: 0, y: 0 }] } as course.CourseObject;
+    const t = selectOpts({ selected: text, objects: [text] });
+    selectBinding(t).onDoubleClick!(ptr(0.2, 0));
+    expect(t.onObjectMoved).not.toHaveBeenCalled();
+  });
+
+  it("a click leaves the page's draft (the last write) alone; a text's anchor is never focused", () => {
+    const o = selectOpts({ selected: square(4) });
+    const b = selectBinding(o);
+    b.onPointerDown!(ptr(10, 10));
+    b.onPointerUp!({ x: 10, y: 10 });
+    expect(o.onObjectDraft).not.toHaveBeenCalled();
+    const text = { ...square(5, "text"), geometry: [{ x: 0, y: 0 }] } as course.CourseObject;
+    const t = selectOpts({ selected: text, objects: [text] });
+    const bt = selectBinding(t);
+    bt.onPointerDown!(ptr(0, 0));
+    bt.onPointerUp!({ x: 0, y: 0 });
+    expect(t.onVertexFocus).toHaveBeenLastCalledWith(null);
+  });
+
+  it("a grip drags by the pointer's offset, past a threshold", () => {
+    const o = selectOpts({ selected: curved(4), objects: [curved(4)] });
+    const b = selectBinding(o);
+    b.onPointerDown!(ptr(0.4, 2)); // 0.4 mm off hOut's grip at (0, 2)
+    b.onPointerDrag!({ x: 0.41, y: 2 }, { shift: false, alt: false }); // jitter
+    b.onPointerUp!({ x: 0.41, y: 2 });
+    expect(o.onObjectMoved).not.toHaveBeenCalled();
+    b.onPointerDown!(ptr(0.4, 2));
+    b.onPointerDrag!({ x: 0.4, y: 3 }, { shift: false, alt: false });
+    b.onPointerUp!({ x: 0.4, y: 3 });
+    expect(movedTo(o, 0)[0]).toMatchObject({ hOut: { x: 0, y: 3 } });
+  });
+
+  it("a press within reach of the selected object's edge is the object's, not the map's", () => {
+    const b = selectBinding(selectOpts({ selected: square(4) }));
+    expect(b.onPointerDown!(ptr(5, -0.5))).toBe(true);
+    expect(b.onPointerDown!(ptr(5, -3))).toBe(false);
+  });
+});
+
 describe("armed and area bindings", () => {
   it("placement is exclusive: a click places, right-click exits, touch gets Place / Done", () => {
     const onPlace = vi.fn(), onExit = vi.fn();
@@ -133,6 +253,41 @@ describe("armed and area bindings", () => {
     expect(b.onPointerDown!(ptr(0.1, 0.1))).toBe(false); // the first vertex is a click, not a drag
     b.onClick!(ptr(0.1, 0.1));
     expect(onDone).toHaveBeenCalledWith(poly.vertices);
+  });
+
+  it("while drawing: a press places a corner, a drag from it pulls symmetric handles (Shift: 45°)", () => {
+    const gesture: GestureRef = { current: null };
+    const onPoly = vi.fn();
+    const poly = { kind: "whiteout" as const, vertices: [{ x: 0, y: 0 }, { x: 10, y: 0 }] };
+    const opts = { gesture, poly, hover: null, onHover: vi.fn(), onPoly, onDone: vi.fn(), onCancel: vi.fn(), snap: (p: { x: number; y: number }) => p };
+    const b = areaBinding(opts);
+    expect(b.onPointerDown!(ptr(10, 10))).toBe(true);
+    expect(onPoly).toHaveBeenLastCalledWith({ kind: "whiteout", vertices: [...poly.vertices, { x: 10, y: 10 }] });
+    b.onPointerDrag!({ x: 10.2, y: 10 }, { shift: false, alt: false }); // within 3 px: still a corner
+    expect(onPoly).toHaveBeenCalledTimes(1);
+    b.onPointerDrag!({ x: 13, y: 14 }, { shift: false, alt: false });
+    expect(onPoly).toHaveBeenLastCalledWith({ kind: "whiteout", vertices: [...poly.vertices, { x: 10, y: 10, hOut: { x: 3, y: 4 }, hIn: { x: -3, y: -4 } }] });
+    b.onPointerDrag!({ x: 20, y: 11 }, { shift: true, alt: false });
+    const last = onPoly.mock.calls[onPoly.mock.calls.length - 1][0].vertices[2];
+    expect(last.hOut.y).toBeCloseTo(0);
+    b.onPointerUp!({ x: 20, y: 11 });
+    // The threshold is the press's, not the snapped vertex's; back within 3 px of the press is a corner again.
+    const onPoly2 = vi.fn();
+    const s2 = areaBinding({ ...opts, onPoly: onPoly2, snap: (p: { x: number; y: number }) => ({ x: Math.round(p.x), y: Math.round(p.y) }) });
+    gesture.current = null;
+    s2.onPointerDown!(ptr(20.4, 20.4));
+    expect(onPoly2).toHaveBeenCalledTimes(1); // the corner, at the snapped (20, 20)
+    s2.onPointerDrag!({ x: 20.45, y: 20.4 }, { shift: false, alt: false });
+    expect(onPoly2).toHaveBeenCalledTimes(1);
+    s2.onPointerDrag!({ x: 23.4, y: 20.4 }, { shift: false, alt: false });
+    expect(onPoly2.mock.calls[1][0].vertices[2]).toEqual({ x: 20, y: 20, hOut: { x: 3, y: 0 }, hIn: { x: -3, y: -0 } });
+    s2.onPointerDrag!({ x: 20.5, y: 20.4 }, { shift: false, alt: false });
+    expect(onPoly2.mock.calls[2][0].vertices[2]).toEqual({ x: 20, y: 20 });
+    // Drawn with its handles: the preview follows the curve, the grips show.
+    const drawn = areaBinding({ ...opts, poly: { kind: "whiteout", vertices: [...poly.vertices, { x: 10, y: 10, hOut: { x: 3, y: 0 }, hIn: { x: -3, y: 0 } }] } });
+    const shapes = drawn.shapes as unknown as { testId?: string; points?: unknown[] }[];
+    expect(shapes.find((s) => s.testId === "editor-polygon")!.points).toHaveLength(2 + 8 + 8);
+    expect(shapes.filter((s) => s.testId === "editor-polygon-grip")).toHaveLength(2);
   });
 });
 

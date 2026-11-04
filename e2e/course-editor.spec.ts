@@ -34,16 +34,18 @@ const { PDFDocument } = createRequire(resolve(process.cwd(), "packages/api/packa
 };
 
 /**
- * The event's all-controls sheet as printed (`maps.pdf`): its page count and its hatch fills — the PDF backend
- * draws a hatch pass (709) as a clip (`W* n`) and one stroke of separate `m … l` segments (`print/operators.ts`).
+ * The event's all-controls sheet as printed (`maps.pdf`): its page count, its hatch fills — the PDF backend
+ * draws a hatch pass (709) as a clip (`W* n`) and one stroke of separate `m … l` segments (`print/operators.ts`) —
+ * and its curved fills: fill paths (`m … h f*`) with a Bézier `c` among their segments (the base map has its own,
+ * so tests compare counts).
  */
-async function printedAllControls(page: Page, nameId: string): Promise<{ pages: number; hatches: number }> {
+async function printedAllControls(page: Page, nameId: string): Promise<{ pages: number; hatches: number; curvedFills: number }> {
   const res = await page.request.get(`/api/maps/${nameId}/maps.pdf?allControls=1`);
   expect(res.ok(), await res.text().catch(() => "")).toBe(true);
   const bytes = await res.body();
   const pages = (await PDFDocument.load(bytes)).getPageCount();
   const text = bytes.toString("latin1");
-  let hatches = 0;
+  let hatches = 0, curvedFills = 0;
   const run = /W\* n[^]*?(?:-?[\d.]+ -?[\d.]+ m -?[\d.]+ -?[\d.]+ l ){3,}-?[\d.]+ -?[\d.]+ m -?[\d.]+ -?[\d.]+ l S/g;
   for (let at = text.indexOf("stream"); at >= 0; at = text.indexOf("stream", at + 6)) {
     if (text.slice(at - 3, at) === "end") continue;
@@ -52,10 +54,48 @@ async function printedAllControls(page: Page, nameId: string): Promise<{ pages: 
     if (end < 0) break;
     let inflated: string | null = null;
     try { inflated = inflateSync(bytes.subarray(start, end)).toString("latin1"); } catch { /* not Flate */ }
-    if (inflated) hatches += inflated.match(run)?.length ?? 0;
+    if (inflated) {
+      hatches += inflated.match(run)?.length ?? 0;
+      let curved = false;
+      for (const op of inflated.split(/\s+/)) {
+        if (op === "c") curved = true;
+        else if (op === "f*" || op === "f") {
+          if (curved) curvedFills++;
+          curved = false;
+        } else if (op === "S" || op === "n" || op === "B" || op === "B*") curved = false;
+      }
+    }
     at = end;
   }
-  return { pages, hatches };
+  return { pages, hatches, curvedFills };
+}
+
+/** A template and an all-controls sheet on it for the event (`maps.pdf?allControls=1`); `drop` removes both. */
+async function allControlsSheet(page: Page): Promise<{ nameId: string; headers: Record<string, string>; drop: () => Promise<void> }> {
+  const nameId = new URL(page.url()).pathname.split("/")[1];
+  const headers = { "content-type": "application/json", "x-event-id": nameId };
+  const seqOf = async (res: Awaited<ReturnType<Page["request"]["post"]>>) => {
+    expect(res.ok(), await res.text()).toBe(true);
+    return ((await res.json()) as { result: { data: { seq: number } } }).result.data.seq;
+  };
+  const templateId = await seqOf(await page.request.post(`${API}/trpc/mapTemplate.create`, {
+    headers,
+    data: {
+      name: `Print probe ${Date.now() % 100000}`, paper: "A4", orientation: "portrait", printScale: 10000, objects: [],
+      settings: {
+        printMarginMm: 3, mapFrame: { x: 8, y: 8, width: 194, height: 281 }, description: { visible: false, x: 150, y: 12, cellSizeMm: 6 },
+        appearance: { purple: "#a626ff", circleRadiusMm: 2.5, lineWidthMm: 0.35, numberHeightMm: 4 },
+      },
+    },
+  }));
+  const sheetId = await seqOf(await page.request.post(`${API}/trpc/courseMap.create`, { headers, data: { kind: "all_controls", templateId } }));
+  return {
+    nameId, headers,
+    drop: async () => {
+      await page.request.post(`${API}/trpc/courseMap.delete`, { headers, data: { id: sheetId } });
+      await page.request.post(`${API}/trpc/mapTemplate.delete`, { headers, data: { id: templateId } });
+    },
+  };
 }
 
 async function selectCompetition(page: Page) {
@@ -610,23 +650,7 @@ test.describe("Course editor (new, GL canvas)", () => {
 
       // Printed: the all-controls sheet (an `all`-scoped object) carries the 709 hatch — present with it, absent parked.
       // The page raster itself is `course-print.test.ts` "course objects on the page" (docs/course-editor.md Tests).
-      const nameId = new URL(page.url()).pathname.split("/")[1];
-      const headers = { "content-type": "application/json", "x-event-id": nameId };
-      const seqOf = async (res: Awaited<ReturnType<Page["request"]["post"]>>) => {
-        expect(res.ok(), await res.text()).toBe(true);
-        return ((await res.json()) as { result: { data: { seq: number } } }).result.data.seq;
-      };
-      const templateId = await seqOf(await page.request.post(`${API}/trpc/mapTemplate.create`, {
-        headers,
-        data: {
-          name: `D5 print ${Date.now() % 100000}`, paper: "A4", orientation: "portrait", printScale: 10000, objects: [],
-          settings: {
-            printMarginMm: 3, mapFrame: { x: 8, y: 8, width: 194, height: 281 }, description: { visible: false, x: 150, y: 12, cellSizeMm: 6 },
-            appearance: { purple: "#a626ff", circleRadiusMm: 2.5, lineWidthMm: 0.35, numberHeightMm: 4 },
-          },
-        },
-      }));
-      const sheetId = await seqOf(await page.request.post(`${API}/trpc/courseMap.create`, { headers, data: { kind: "all_controls", templateId } }));
+      const { nameId, headers, drop } = await allControlsSheet(page);
       try {
         const withArea = await printedAllControls(page, nameId);
         expect(withArea.pages).toBe(1);
@@ -648,8 +672,7 @@ test.describe("Course editor (new, GL canvas)", () => {
         expect(without.hatches, "the area's hatch is gone when it is parked").toBeLessThan(withArea.hatches);
         await page.request.post(`${API}/trpc/courseObject.update`, { headers, data: { id: Number(id), scope: { all: true } } });
       } finally {
-        await page.request.post(`${API}/trpc/courseMap.delete`, { headers, data: { id: sheetId } });
-        await page.request.post(`${API}/trpc/mapTemplate.delete`, { headers, data: { id: templateId } });
+        await drop();
       }
       await page.reload();
       await editorReady(page);
@@ -674,6 +697,101 @@ test.describe("Course editor (new, GL canvas)", () => {
       await expect(page.locator(`[data-testid="editor-object-row"][data-object-id="${id}"]`)).toHaveCount(0, { timeout: 15000 });
       await page.keyboard.press("Control+z");
       await expect(page.locator('[data-testid="editor-object-row"][data-object-kind="oob_area"]')).not.toHaveCount(0, { timeout: 15000 });
+    });
+
+    test("A: a curved white-out in three clicks and one drag prints a Bézier; a vertex inserted on an edge and deleted", async ({ page }) => {
+      await openEditor(page);
+      const { nameId, drop } = await allControlsSheet(page);
+      try {
+        const before = await printedAllControls(page, nameId);
+        await page.getByTestId("editor-tool-A").click();
+        await page.getByTestId("editor-area-whiteout").click();
+        const clear = await emptyPoint(page, 40);
+        const a = { x: clear.x - 30, y: clear.y - 15 }, b = { x: a.x + 60, y: a.y }, c = { x: a.x + 60, y: a.y + 40 };
+        await page.mouse.click(a.x, a.y);
+        await page.mouse.click(b.x, b.y);
+        // Click-drag: a curve vertex at c, its handles pulled out along the drag (docs/course-editor.md §6.4).
+        const pullTo = { x: c.x - 25, y: c.y + 10 };
+        await drag(page, c, pullTo);
+        await expect(page.getByTestId("editor-polygon-vertex")).toHaveCount(3);
+        await expect(page.getByTestId("editor-polygon-grip")).toHaveCount(2);
+        const created = waitForTrpc(page, "courseObject.create");
+        await page.mouse.click(a.x, a.y); // the first vertex closes
+        await created;
+        await expect(page.getByTestId("editor-object")).toHaveAttribute("data-object-kind", "whiteout", { timeout: 15000 });
+        const id = await page.getByTestId("editor-object").getAttribute("data-object-id");
+        const row = page.locator(`[data-testid="editor-object-row"][data-object-id="${id}"]`);
+        const stored = async () => JSON.parse((await row.getAttribute("data-geometry-json")) ?? "[]") as { x: number; y: number; hIn?: { x: number; y: number }; hOut?: { x: number; y: number } }[];
+        await expect(row).toHaveCount(1, { timeout: 15000 });
+        const g = await stored();
+        expect(g).toHaveLength(3);
+        // hOut = the drag vector on paper, hIn its negation.
+        const [c0, c1] = await Promise.all([toPaper(page, c), toPaper(page, pullTo)]);
+        expect(g[2].hOut!.x).toBeCloseTo(c1.x - c0.x, 0);
+        expect(g[2].hOut!.y).toBeCloseTo(c1.y - c0.y, 0);
+        expect(g[2].hIn).toEqual({ x: -g[2].hOut!.x, y: -g[2].hOut!.y });
+        // The selection outline follows the curve: 8 samples on each of the two curved segments.
+        await expect(page.getByTestId("editor-object-grip")).toHaveCount(2);
+        const outline = page.getByTestId("editor-tool-layer").locator(`[data-testid="editor-object-outline"][data-object-id="${id}"]`);
+        expect(((await outline.getAttribute("data-points")) ?? "").split(" ")).toHaveLength(2 + 8 + 8);
+
+        // Printed: the page stream carries the white-out as one more fill with Bézier `c` segments.
+        const printed = await printedAllControls(page, nameId);
+        expect(printed.pages).toBe(1);
+        expect(printed.curvedFills, "the curved white-out's fill").toBe(before.curvedFills + 1);
+
+        // Insert: a double-click on the straight edge a → b (§7 "Editing geometry").
+        const handles = page.getByTestId("editor-tool-layer").getByTestId("editor-object-handle");
+        await expect(handles).toHaveCount(3);
+        const mid = { x: (a.x + b.x) / 2, y: (a.y + b.y) / 2 };
+        const inserted = waitForTrpc(page, "courseObject.update");
+        await page.mouse.dblclick(mid.x, mid.y);
+        await inserted;
+        await expect(handles).toHaveCount(4);
+        await expect.poll(async () => (await stored()).length, { timeout: 15000 }).toBe(4);
+        const added = (await stored())[1];
+        const [ma, mb] = await Promise.all([toPaper(page, a), toPaper(page, b)]);
+        expect(added.x).toBeCloseTo((ma.x + mb.x) / 2, 0);
+        expect(added.y).toBeCloseTo((ma.y + mb.y) / 2, 0);
+        expect(added.hIn ?? added.hOut).toBeUndefined();
+
+        // Delete: click the new vertex (focused), Delete removes it; undo brings it back.
+        const at = await toPage(page, added);
+        await page.mouse.click(at.x, at.y);
+        await expect(page.getByTestId("editor-tool-layer").locator('[data-testid="editor-object-handle"][data-focused="true"]')).toHaveCount(1);
+        const removed = waitForTrpc(page, "courseObject.update");
+        await page.keyboard.press("Delete");
+        await removed;
+        await expect(handles).toHaveCount(3);
+        await expect.poll(async () => (await stored()).length, { timeout: 15000 }).toBe(3);
+        await expect(row).toHaveCount(1); // the vertex went, not the object
+        const undone = waitForTrpc(page, "courseObject.update");
+        await page.keyboard.press("Control+z");
+        await undone;
+        await expect.poll(async () => (await stored()).length, { timeout: 15000 }).toBe(4);
+        // At the minimum (three), Delete on a focused vertex does nothing.
+
+        // Alt-drag on the corner b pulls two more grips; Alt-click retracts them.
+        const bAt = await toPage(page, (await stored())[2]);
+        const pulled = waitForTrpc(page, "courseObject.update");
+        await page.keyboard.down("Alt");
+        await drag(page, bAt, { x: bAt.x + 20, y: bAt.y + 20 });
+        await page.keyboard.up("Alt");
+        await pulled;
+        await expect(page.getByTestId("editor-object-grip")).toHaveCount(4);
+        await expect.poll(async () => (await stored())[2].hOut !== undefined, { timeout: 15000 }).toBe(true);
+        const retracted = waitForTrpc(page, "courseObject.update");
+        await page.keyboard.down("Alt");
+        await page.mouse.click(bAt.x, bAt.y);
+        await page.keyboard.up("Alt");
+        await retracted;
+        await expect(page.getByTestId("editor-object-grip")).toHaveCount(2);
+
+        await page.getByTestId("editor-object-delete").click();
+        await expect(row).toHaveCount(0, { timeout: 15000 });
+      } finally {
+        await drop();
+      }
     });
 
     test("a filter region hides the path under it live", async ({ page }) => {
