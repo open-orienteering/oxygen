@@ -777,14 +777,22 @@ predecessor's token; on a version
 `CONFLICT` they invalidate and show "Changed elsewhere — reloaded"
 (`courses:changedElsewhere`). One rule for both editors on the same rows.
 
-**Presence and live refresh** (D11). No new push channel: a heartbeat
-`course.presence { courseId, mode }` (TTL 30 s) in a small table (up to
-two Cloud Run instances, so not in process memory), read by the existing
-5 s `useExternalChanges` poll and shown in the editor's top bar. Live
-refresh is cache invalidation, not journal replay: the `oCourse` /
-`oControl` watermarks already invalidate the `course` / `control`
-queries. "Moved by X at T" reads `actorId` and `hlc` of the control's
-last `control.upserted`.
+**Presence and live refresh** (D11; `course-editor.md` §11). No new push
+channel: a heartbeat `course.presence { courseId, mode, clientId }` upserts
+a row in `course_presence` (`(course_id, client_id)` key, `ON DELETE
+CASCADE` with the course and the event; a table because up to two Cloud
+Run instances serve one event, so not process memory) and answers the
+event's other live rows. TTL **30 s**: a row older than that is neither
+shown nor kept (the next heartbeat of any client sweeps the event's stale
+rows). The editor sends it every 5 s, the cadence of the existing
+`useExternalChanges` poll; it is a mutation of its own because the poll's
+`competition.counterState` is a read-only counter query and presence is
+volatile, never journaled or shipped to peers. Live refresh is cache
+invalidation, not journal replay: the `oCourse` / `oControl` watermarks
+already invalidate the `course` / `control` queries, and a course token the
+client did not write earns a one-line notice. "Moved by X at T" reads
+`actorId` and the physical part of `hlc` of the row's last `*.upserted`
+journal entry (`course.lastChange`, `control.lastChange`).
 
 **`map_patches` (slice G, no code).** Patch operations are idempotent and
 commutative: each op is keyed by `(object id, op id)` and sets a state

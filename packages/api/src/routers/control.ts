@@ -17,6 +17,7 @@ import type {
   ControlDescription,
   ControlUnit as ControlUnitDto,
 } from "@oxygen/shared";
+import { lastWriter } from "../course-presence.js";
 import { uuidv7 } from "uuidv7";
 import { toAbsolute } from "../timeConvert.js";
 import { appendJournal } from "../journalEmit.js";
@@ -1093,6 +1094,18 @@ export const controlRouter = router({
         }
       });
       return { id: publicControlId(c) };
+    }),
+
+  /**
+   * Who last wrote the control and when (D11: "moved by X at T"): the actor
+   * and clock of its newest `control.upserted` entry. `name` is empty when
+   * the write had no signed-in user.
+   */
+  lastChange: coursesViewProcedure
+    .input(z.object({ id: z.number().int() }))
+    .query(async ({ ctx, input }) => {
+      const c = await getControlByCode(ctx.db, ctx.event.id, input.id);
+      return lastWriter(ctx.db, ctx.event.id, "control.upserted", c.id);
     }),
 
   /** Alias for getById so the web side can read `control.detail`. */

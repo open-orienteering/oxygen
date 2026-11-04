@@ -244,5 +244,10 @@
   "layoutClassTemplate": "Template",
   "layoutClassTemplateAuto": "Auto",
   "layoutOpen": "Open",
+  "presenceAnonymous": "Someone",
+  "presenceLabel": "Also open in the editor",
+  "externalChange": "{{who}} changed this course at {{time}} — the sequence was reloaded.",
+  "externalChangeUnknown": "This course was changed elsewhere — the sequence was reloaded.",
+  "conflictMovedBy": "Moved by {{who}} at {{time}} to x {{x}} mm, y {{y}} mm.",
   "geometryHint": "Double-click an edge to add a point; click a point and press Delete to remove it. Alt-drag a point to curve it, Alt-click to make it a corner again; Alt on a handle bends one side only."
 }

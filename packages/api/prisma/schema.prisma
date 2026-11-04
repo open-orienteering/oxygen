@@ -225,6 +225,7 @@ model Event {
   mapTemplates       MapTemplate[]
   courseMaps         CourseMap[]
   courseObjects      CourseObject[]
+  coursePresence     CoursePresence[]
   graphics           Graphic[]
   tracks             Track[]
   routes             Route[]
@@ -534,6 +535,7 @@ model Course {
   runners        Runner[]
   classPools     ClassCoursePool[]
   courseMaps     CourseMap[]
+  presence       CoursePresence[]
 
   @@unique([eventId, seq])
   @@index([eventId, removed])
@@ -652,6 +654,26 @@ model CourseObject {
   @@unique([eventId, seq])
   @@index([eventId, z, seq])
   @@map("course_objects")
+  @@schema("oxygen")
+}
+
+/// Who has a course open (docs/course-layer.md §7; D11): one row per open
+/// editor, upserted by the `course.presence` heartbeat. Volatile, not journaled.
+model CoursePresence {
+  courseId String   @map("course_id") @db.Uuid
+  clientId String   @map("client_id")
+  eventId  BigInt   @map("event_id")
+  userId   String?  @map("user_id") @db.Uuid
+  name     String   @default("")
+  mode     String
+  seenAt   DateTime @default(now()) @map("seen_at") @db.Timestamptz(6)
+
+  course Course @relation(fields: [courseId], references: [id], onDelete: Cascade)
+  event  Event  @relation(fields: [eventId], references: [id], onDelete: Cascade)
+
+  @@id([courseId, clientId])
+  @@index([eventId, seenAt])
+  @@map("course_presence")
   @@schema("oxygen")
 }
 

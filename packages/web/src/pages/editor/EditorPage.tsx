@@ -32,6 +32,9 @@ import { trpc } from "../../lib/trpc";
 import { MapPanel } from "../../components/MapPanel";
 import { ControlDescriptionEditor } from "../../components/ControlDescriptionEditor";
 import type { EditorDescriptionSuggestion, EditorToolBinding, MapViewerEditorProps, ToolPointer } from "../../components/MapViewer";
+import { useCoursePresence } from "../../hooks/useCoursePresence";
+import { clockTime, courseChangedElsewhere } from "../../lib/editor/presence";
+import { PresenceChips } from "./PresenceChips";
 import { useMediaQuery } from "../../hooks/useMediaQuery";
 import { useOnlineStatus } from "../../hooks/useOnlineStatus";
 import { useCapabilities } from "../../context/CapabilitiesContext";
@@ -92,7 +95,7 @@ function defaultProps(kind: AreaKind): CourseObject["props"] {
 /** A conflict the user sees (docs/course-editor.md §3). */
 type Notice =
   | { kind: "refresh"; items: string[] | null }
-  | { kind: "moved"; controlId: number; mine: Pt; theirs: Pt | null };
+  | { kind: "moved"; controlId: number; mine: Pt; theirs: Pt | null; by?: { name: string; at: string } | null };
 
 export function EditorPage() {
   const { t } = useTranslation("editor");
@@ -164,6 +167,25 @@ export function EditorPage() {
     () => (state.selectedCourseId !== null ? courses.data?.find((c) => c.id === state.selectedCourseId) ?? null : null),
     [state.selectedCourseId, courses.data],
   );
+
+  // Presence (D11): who else has a course open. Heartbeat on the poll's cadence while a course is open.
+  const presence = useCoursePresence(state.selectedCourseId, state.mode);
+  // A course token this client did not write moved: re-render has happened by the poll's invalidation; say so (never silent).
+  const [external, setExternal] = useState<{ who: string | null; at: string | null } | null>(null);
+  const seenCourse = useRef<{ id: number; version: string } | null>(null);
+  const courseVersion = selectedCourse?.version;
+  const courseSeq = selectedCourse?.id ?? null;
+  useEffect(() => {
+    const prev = seenCourse.current;
+    seenCourse.current = courseSeq !== null && courseVersion !== undefined ? { id: courseSeq, version: courseVersion } : null;
+    if (!prev || courseSeq !== prev.id) { setExternal(null); return; }
+    if (!courseChangedElsewhere(prev.version, courseVersion, writes.ownCourseVersions)) return;
+    setExternal({ who: null, at: null });
+    void client.course.lastChange.query({ courseId: courseSeq }).then(
+      (by) => setExternal((x) => (x ? { who: by?.name || null, at: by?.at ?? null } : x)),
+      () => undefined,
+    );
+  }, [courseSeq, courseVersion, writes, client]);
   /**
    * The structure this client last wrote, until the course's detail catches up with it: placements
    * follow each other faster than the refetch (§6.1), so each one builds on its predecessor's result.
@@ -217,7 +239,15 @@ export function EditorPage() {
       return out;
     } catch (e) {
       if (e instanceof EditorConflict) {
-        if (e.decision.kind === "moved" && move) setNotice({ kind: "moved", controlId: move.controlId, mine: move.mine, theirs: e.decision.theirs });
+        if (e.decision.kind === "moved" && move) {
+          const { controlId, mine } = move;
+          setNotice({ kind: "moved", controlId, mine, theirs: e.decision.theirs });
+          // "Moved by X at T" (D11): the actor and clock of the control's last write.
+          void client.control.lastChange.query({ id: controlId }).then(
+            (by) => setNotice((n) => (n?.kind === "moved" && n.controlId === controlId ? { ...n, by } : n)),
+            () => undefined,
+          );
+        }
         else setNotice({ kind: "refresh", items: e.decision.kind === "refresh" ? e.decision.differing : null });
       } else {
         setErrorMsg(e instanceof Error ? e.message : String(e));
@@ -227,7 +257,7 @@ export function EditorPage() {
       setPendingOps((n) => n - 1);
       invalidate();
     }
-  }, [invalidate]);
+  }, [invalidate, client]);
 
   /** Push an undo entry for a write that succeeded. */
   const record = useCallback((undo: () => Promise<unknown>, redo: () => Promise<unknown>) => {
@@ -1312,6 +1342,7 @@ export function EditorPage() {
           cutsEnabled={cutsEnabled} cutsBusy={setCuts.isPending || cutsQuery.isLoading} onToggleCuts={() => setCuts.mutate({ enabled: !cutsEnabled })}
         />
       )}
+      presence={<PresenceChips compact others={presence} selectedCourseId={state.selectedCourseId} />}
     />
   ) : (
     <TopBar
@@ -1341,6 +1372,7 @@ export function EditorPage() {
       cutsEnabled={cutsEnabled}
       cutsBusy={setCuts.isPending || cutsQuery.isLoading}
       onToggleCuts={() => setCuts.mutate({ enabled: !cutsEnabled })}
+      presence={<PresenceChips others={presence} selectedCourseId={state.selectedCourseId} />}
     />
   );
 
@@ -1476,6 +1508,16 @@ export function EditorPage() {
   );
 
   // Class view without a sheet for the class's course (docs/course-layout.md §6): the course draws as in Course view.
+  const externalNode = external ? (
+    <div data-testid="editor-external-change" className="pointer-events-auto w-64 rounded-lg border border-amber-300 bg-amber-50 text-amber-900 text-xs p-2 shadow-sm flex items-start gap-1.5">
+      <p className="flex-1">
+        {external.at
+          ? t("externalChange", { who: external.who ?? t("presenceAnonymous"), time: clockTime(external.at, i18n.language) })
+          : t("externalChangeUnknown")}
+      </p>
+      <button type="button" data-testid="editor-external-dismiss" className="px-1.5 rounded border border-amber-300 cursor-pointer" onClick={() => setExternal(null)}>{t("dismiss")}</button>
+    </div>
+  ) : null;
   const classNotice = state.mode === "course" && state.view === "class" && classView.missing ? (
     <div data-testid="editor-class-no-sheet" className="pointer-events-auto w-64 rounded-lg border border-slate-200 bg-white/95 text-slate-600 text-xs p-2 shadow-sm">
       {t("classNoSheet")}
@@ -1486,7 +1528,11 @@ export function EditorPage() {
       {notice.kind === "refresh" ? (
         <p>{notice.items?.length ? t("conflictRefreshItems", { items: notice.items.join(", ") }) : t("conflictRefresh")}</p>
       ) : (
-        <p>{notice.theirs ? t("conflictMoved", { x: notice.theirs.x.toFixed(1), y: notice.theirs.y.toFixed(1) }) : t("conflictRefresh")}</p>
+        <p>{notice.theirs
+          ? notice.by
+            ? t("conflictMovedBy", { who: notice.by.name || t("presenceAnonymous"), time: clockTime(notice.by.at, i18n.language), x: notice.theirs.x.toFixed(1), y: notice.theirs.y.toFixed(1) })
+            : t("conflictMoved", { x: notice.theirs.x.toFixed(1), y: notice.theirs.y.toFixed(1) })
+          : t("conflictRefresh")}</p>
       )}
       <div className="flex gap-1.5 mt-1.5">
         {notice.kind === "moved" && (
@@ -1550,6 +1596,7 @@ export function EditorPage() {
         {objectsDom}
         <div className="absolute top-2 inset-x-2 z-30 flex flex-col gap-1.5 pointer-events-none">
           {noticeNode}
+          {externalNode}
           {fieldReadOnly && <OfflineNotice />}
           {errorMsg && <span data-testid="editor-error" className="pointer-events-auto w-fit text-[11px] text-red-600 bg-white/95 rounded px-1.5">{errorMsg}</span>}
           {showExhausted && <span data-testid="series-exhausted" className="pointer-events-auto w-fit text-[11px] text-amber-700 bg-white/95 rounded px-1.5">{tc("seriesExhausted")}</span>}
@@ -1599,6 +1646,7 @@ export function EditorPage() {
       <div className="flex flex-col gap-2 min-h-0 h-full">
         {fieldReadOnly && <div className="w-64"><OfflineNotice /></div>}
         {noticeNode}
+        {externalNode}
         {classNotice}
         <Inspector>
           {state.mode === "layout" ? layoutMode.inspector : <>
