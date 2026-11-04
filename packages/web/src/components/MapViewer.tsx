@@ -85,9 +85,10 @@ import {
 import { useMediaQuery } from "../hooks/useMediaQuery";
 import { courseLayerRequest, PROVISIONAL_SITE_ID, type LayoutRequest, type ProvisionalVisit } from "../lib/course-layer-request";
 import { dragLegShapes } from "../lib/editor/leg-length";
-import { outlinePoints } from "../lib/editor/geometry-edit";
+import { outlinePoints, vertexRule } from "../lib/editor/geometry-edit";
 import type { CourseInfo } from "../map-gl/engine";
 import { editorHitAt, HIT_TOLERANCE_PX, type EditorTarget } from "../lib/editor/hit";
+import { showSelectionRing } from "../lib/editor/state";
 import { COARSE_HIT_TOLERANCE_PX, IDLE as SITE_TOUCH_IDLE, LONG_PRESS_MS, LOUPE_DIAMETER_PX, LOUPE_SCALE, liftedPoint, loupePlacement, siteTouch, type SiteTouch, type SiteTouchEvent } from "../lib/editor/touch";
 
 /** Persisted compass state: "1"/absent = rotation locked (north up). */
@@ -975,9 +976,10 @@ export function MapViewer({
 
   // ─── Editor hit-test on the shared stage (docs/course-editor.md §5) ──
   const sharedHit = !!editor?.sharedHitTest && glCourse;
-  // Course objects the layer does not draw on screen: hit by their outline (§7).
+  // Closed course objects (oob_area, whiteout, toner_saver, filter_region) hit by their outline only: their
+  // interior is the map, so a press there pans (§5, §7; docs/bugfix-editor-area-press-pans.md).
   const uiAreas = useMemo(
-    () => (editor ? drawnObjects.filter((o) => o.kind === "filter_region" || o.kind === "toner_saver").map((o) => ({ id: o.id, ring: outlinePoints(o.geometry, true) })) : []),
+    () => (editor ? drawnObjects.filter((o) => vertexRule(o.kind).closed).map((o) => ({ id: o.id, ring: outlinePoints(o.geometry, true) })) : []),
     [editor, drawnObjects],
   );
   /** The editor target under a client point, `null` for empty map; `undefined` when SVG targets are in use. */
@@ -2911,10 +2913,11 @@ export function MapViewer({
       // Editor: selection ring + grab target. The hit circle is filled
       // (transparent) so the whole symbol interior is grabbable — the
       // visible rings are stroke-only and would otherwise only respond
-      // on their outline.
+      // on their outline. No ring while an exclusive tool is armed (§6.1):
+      // the control just placed stays selected, its purple circle is the mark.
       if (editor) {
         const symbolR = c.type === "Start" ? startSize : c.type === "Finish" ? finishOuter : radius;
-        if (editor.selectedControlId === c.id) {
+        if (showSelectionRing(editor) && editor.selectedControlId === c.id) {
           upperElements.push(
             <circle key={`edit-sel-${c.id}`} cx={pos.x} cy={pos.y} r={symbolR * 1.45}
               stroke="#2563eb" strokeWidth={Math.max(1, stroke * 0.8)} fill="none"

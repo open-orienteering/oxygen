@@ -153,6 +153,8 @@ export function selectBinding(o: SelectOptions): EditorToolBinding {
           }
         }
         // The body, or within reach of its edge (a double-click there inserts a vertex, so the press must not deselect).
+        // A closed area's body is its outline: the hit-test answers null inside it (§5), so an interior press declines
+        // and the viewer pans — the area moves by its edge or a vertex (docs/bugfix-editor-area-press-pans.md).
         const edge = sel.geometry.length > 1 ? nearestEdge(sel.geometry, rule.closed, p.pt) : null;
         if ((p.target?.kind === "object" && p.target.id === sel.id) || (edge && edge.dist <= reach)) {
           g.current = { kind: "object", id: sel.id, from: p.pt, to: p.pt, moved: false, vertex: null, base: sel.geometry };

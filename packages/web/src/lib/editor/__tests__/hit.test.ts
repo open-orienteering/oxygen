@@ -77,15 +77,60 @@ describe("editorHitAt (docs/course-editor.md §5)", () => {
         { id: 13, kind: "marked_route", geometry: [{ x: 70, y: 90 }, { x: 90, y: 90 }], props: {} },
       ],
     });
+    // Without `uiAreas` the layer's answer stands (a fill's interior included); the viewer lists every closed kind.
     expect(editorHitAt(withObjects, { x: 80, y: 70 }, 0.5)).toEqual({ kind: "object", id: 12 });
     expect(editorHitAt(withObjects, { x: 80, y: 90.1 }, 0.5)).toEqual({ kind: "object", id: 13 });
     // The course still wins where it is drawn.
     expect(editorHitAt(withObjects, { x: 40, y: 10 }, 0.5)).toEqual({ kind: "site", id: "31" });
   });
 
-  it("UI-layer areas (filter regions, toner savers) hit inside and along the outline, below everything", () => {
+  describe("closed areas are hit by their outline only; their interior is the map (§5)", () => {
+    const sq = (x0: number, y0: number, x1: number, y1: number) => [{ x: x0, y: y0 }, { x: x1, y: y0 }, { x: x1, y: y1 }, { x: x0, y: y1 }];
+    const g12 = sq(70, 60, 90, 80);
+    const g14 = sq(100, 60, 120, 80);
+    const g15 = sq(70, 100, 90, 120);
+    const g16 = sq(0, 0, 100, 60);
+    const withAreas = hitIndex({
+      objects: [
+        { id: 16, kind: "whiteout", geometry: g16, props: {} },
+        { id: 12, kind: "oob_area", geometry: g12, props: {} },
+        { id: 14, kind: "oob_area", geometry: g14, props: { border: "solid" } },
+        { id: 15, kind: "whiteout", geometry: g15, props: {} },
+        { id: 13, kind: "marked_route", geometry: [{ x: 70, y: 90 }, { x: 90, y: 90 }], props: {} },
+      ],
+    });
+    const areas = [{ id: 16, ring: g16 }, { id: 12, ring: g12 }, { id: 14, ring: g14 }, { id: 15, ring: g15 }];
+    const at = (x: number, y: number) => editorHitAt(withAreas, { x, y }, 0.5, [], areas);
+
+    it("a press inside an oob_area or a white-out is the map", () => {
+      expect(at(80, 70)).toBeNull();
+      expect(at(80, 110)).toBeNull();
+    });
+
+    it("the outline, within the tolerance, is the object", () => {
+      expect(at(80, 60.2)).toEqual({ kind: "object", id: 12 });
+      expect(at(89.7, 70)).toEqual({ kind: "object", id: 12 });
+      expect(at(80, 119.6)).toEqual({ kind: "object", id: 15 });
+      expect(at(80, 61)).toBeNull();
+    });
+
+    it("a 709.b border does not grab the interior through the closed-stroke rule", () => {
+      expect(at(110, 70)).toBeNull();
+      expect(at(110, 60.1)).toEqual({ kind: "object", id: 14 });
+    });
+
+    it("a control or a leg inside an area still hits; areas sit below everything", () => {
+      // Site 31 (40, 10) and leg 1's midpoint (50, 25) lie inside the white-out 16.
+      expect(at(40, 10)).toEqual({ kind: "site", id: "31" });
+      expect(at(50, 25)).toEqual({ kind: "leg", courseId: "c1", index: 1 });
+      // A line is still hit by its stroke.
+      expect(at(80, 90.1)).toEqual({ kind: "object", id: 13 });
+    });
+  });
+
+  it("UI-layer areas (filter regions, toner savers) hit along the outline only, below everything", () => {
     const ring = [{ x: 0, y: 50 }, { x: 30, y: 50 }, { x: 30, y: 70 }, { x: 0, y: 70 }];
-    expect(editorHitAt(index, { x: 15, y: 60 }, 0.5, [], [{ id: 5, ring }])).toEqual({ kind: "object", id: 5 });
+    expect(editorHitAt(index, { x: 15, y: 60 }, 0.5, [], [{ id: 5, ring }])).toBeNull();
     expect(editorHitAt(index, { x: 30.3, y: 60 }, 0.5, [], [{ id: 5, ring }])).toEqual({ kind: "object", id: 5 });
     expect(editorHitAt(index, { x: 31, y: 60 }, 0.5, [], [{ id: 5, ring }])).toBeNull();
     expect(editorHitAt(index, { x: 40, y: 10 }, 0.5, [], [{ id: 5, ring: [{ x: 0, y: 0 }, { x: 100, y: 0 }, { x: 100, y: 100 }] }]))

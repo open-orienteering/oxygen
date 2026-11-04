@@ -7,7 +7,9 @@
  *
  * Off-course controls the editor fades are not in the layer (the UI layer
  * draws them, §5.4 "Overlay"), so they are passed as plain circles and
- * lose to any layer object at the same point.
+ * lose to any layer object at the same point. Closed course objects hit by
+ * their outline only (`UiArea`): the toner saver covers every control, and a
+ * press inside an area pans the map (docs/bugfix-editor-area-press-pans.md).
  */
 
 import { render } from "@oxygen/shared";
@@ -31,10 +33,12 @@ export interface UiSite {
 }
 
 /**
- * A course object the layer does not draw on screen — a filter region (a
- * region, not an object) or a toner saver (no frame on screen) — which the
- * UI layer outlines: its ring, paper mm. It hits over its interior and
- * along its outline, below everything else.
+ * A closed course object — `oob_area`, `whiteout`, `toner_saver`,
+ * `filter_region` (`vertexRule(kind).closed`) — by its sampled outline,
+ * paper mm. It hits only along that outline, below everything else; its
+ * interior is the map, so a press there pans (§5, §7). The layer's own
+ * passes for it (fill, hatch, a 709.b border) are passed over: inside them
+ * the layer answers distance 0.
  */
 export interface UiArea {
   id: number;
@@ -77,13 +81,15 @@ export function editorHitAt(
   index: CourseHitIndex | null, pt: Pt, toleranceMm: number, uiSites: readonly UiSite[] = [], uiAreas: readonly UiArea[] = [],
   accept: (t: EditorTarget) => boolean = () => true,
 ): EditorTarget | null {
+  const areaIds = new Set(uiAreas.map((a) => a.id));
   if (index) {
     const hits = render.hitTest(index.stream, pt.x * 1000, pt.y * 1000, {
       toleranceUm: toleranceMm * 1000,
+      // For control circles; closed areas never reach it (`areaIds`).
       closedStrokeInterior: true,
       objects: (i) => {
         const t = targetOf(index.refs[i] ?? { kind: "", id: "" });
-        return t !== null && accept(t);
+        return t !== null && !(t.kind === "object" && areaIds.has(t.id)) && accept(t);
       },
     });
     let best: { t: EditorTarget; d: number } | null = null;
@@ -103,18 +109,9 @@ export function editorHitAt(
   for (let i = uiAreas.length - 1; i >= 0; i--) {
     const a = uiAreas[i];
     if (!accept({ kind: "object", id: a.id })) continue;
-    if (insideRing(pt, a.ring) || ringDistance(pt, a.ring) <= toleranceMm) return { kind: "object", id: a.id };
+    if (ringDistance(pt, a.ring) <= toleranceMm) return { kind: "object", id: a.id };
   }
   return null;
-}
-
-function insideRing(pt: Pt, ring: readonly Pt[]): boolean {
-  let inside = false;
-  for (let i = 0, j = ring.length - 1; i < ring.length; j = i++) {
-    const a = ring[i], b = ring[j];
-    if ((a.y > pt.y) !== (b.y > pt.y) && pt.x < ((b.x - a.x) * (pt.y - a.y)) / (b.y - a.y) + a.x) inside = !inside;
-  }
-  return inside;
 }
 
 function ringDistance(pt: Pt, ring: readonly Pt[]): number {
