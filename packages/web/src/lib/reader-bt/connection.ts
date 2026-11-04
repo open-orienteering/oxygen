@@ -39,6 +39,7 @@ import {
   encodeFeedback,
   encodeMessage,
   encodeSetAutosend,
+  firmwareVersion,
   operatingModeLabel,
   toSICardReadout,
   type RbtMessage,
@@ -104,12 +105,41 @@ const hex = (b: Uint8Array) => Array.from(b, (x) => x.toString(16).padStart(2, "
 const RESPONSE_TIMEOUT_MS = 3000;
 /** How long to keep trying after an unexpected disconnect */
 export const RECONNECT_WINDOW_MS = 60_000;
-/** A `gatt.connect()` to a sleeping reader may hang; give up on it after this */
-const CONNECT_ATTEMPT_TIMEOUT_MS = 8000;
-/** Pause before each timed reconnect attempt (last value repeats) */
-const RECONNECT_BACKOFF_MS = [1000, 2000, 4000, 8000];
+/**
+ * A `gatt.connect()` to a sleeping reader may hang; give up on it after this.
+ * Only the GATT connect is capped: on Linux/BlueZ connect plus service
+ * discovery can take several seconds, and capping the whole open() made every
+ * reconnect fail. Discovery and requests have their own timeouts. Short
+ * enough that a hanging attempt cannot eat the reader's 20 s advertising
+ * window.
+ */
+export const CONNECT_ATTEMPT_TIMEOUT_MS = 8000;
+/**
+ * The first attempt of every reconnect window connects straight away, capped
+ * at this: after a page reload the OS (BlueZ) may still hold the link, and a
+ * connected reader does not advertise, so waiting for an advertisement alone
+ * would wait forever. A link that is still up connects in milliseconds.
+ */
+export const QUICK_CONNECT_TIMEOUT_MS = 5000;
+/** Pause before re-trying setup on a link that connected but failed to set up */
+const SETUP_RETRY_DELAY_MS = 1500;
+/**
+ * Pause before each timed reconnect attempt (last value repeats). Short,
+ * because a woken reader advertises for only 20 s, and cheap: a connect to a
+ * reader that is not advertising fails at once ("no longer in range").
+ */
+const RECONNECT_POLL_MS = [1000, 2000];
 
 const NAME_PREFIX = "Reader BT";
+
+/** GATT connected, but a later setup step failed (the link itself was up). */
+class SetupError extends Error {
+  constructor(step: string, cause: unknown) {
+    const c = cause as Error;
+    super(`${step}: ${c?.name ?? "Error"}: ${c?.message ?? String(cause)}`);
+    this.name = "SetupError";
+  }
+}
 
 class TimeoutError extends Error {
   constructor(message: string) {
@@ -298,21 +328,38 @@ export class ReaderBtConnection extends EventTarget implements SIReader {
 
   // ── Connection internals ───────────────────────────────
 
-  private async open(): Promise<void> {
+  /** @param connectTimeoutMs cap on `gatt.connect()` only (reconnect attempts) */
+  private async open(connectTimeoutMs?: number): Promise<void> {
     const gatt = this.device.gatt;
     if (!gatt) throw new Error("Device has no GATT server");
     rbtLog("connect", this.device.name ?? this.device.id);
     const gen = ++this.openGen;
-    const server = await gatt.connect();
+    const started = Date.now();
+    const server = connectTimeoutMs
+      ? await withTimeout(gatt.connect(), connectTimeoutMs, () => {
+          // A newer connect (e.g. the picker) owns the link now; leave it alone.
+          if (gen !== this.openGen) return;
+          this.openGen++;
+          try {
+            gatt.disconnect();
+          } catch {
+            /* ignore */
+          }
+        })
+      : await gatt.connect();
     if (gen !== this.openGen) throw new Error("Connect attempt abandoned");
+    rbtLog(`GATT connected in ${Date.now() - started} ms`);
     this.server = server;
+    let step = "discover services";
     try {
       const settings = await server.getPrimaryService(RBT_UUID.settingsService);
       const card = await server.getPrimaryService(RBT_UUID.cardService);
+      step = "discover characteristics";
       this.readSettings = await settings.getCharacteristic(RBT_UUID.readSettings);
       this.writeSettings = await settings.getCharacteristic(RBT_UUID.writeSettings);
       this.cardState = await card.getCharacteristic(RBT_UUID.cardState);
       this.cardData = await card.getCharacteristic(RBT_UUID.cardData);
+      rbtLog(`services discovered in ${Date.now() - started} ms`);
       try {
         const batt = await server.getPrimaryService(RBT_UUID.batteryService);
         this.battery = await batt.getCharacteristic(RBT_UUID.batteryLevel);
@@ -323,9 +370,14 @@ export class ReaderBtConnection extends EventTarget implements SIReader {
       this.listen(this.readSettings, "settings");
       this.listen(this.cardState, "cardState");
       this.listen(this.cardData, "cardData");
+      step = "subscribe read settings";
       await this.op(() => this.readSettings!.startNotifications());
+      step = "subscribe card state";
       await this.op(() => this.cardState!.startNotifications());
+      step = "subscribe card data";
       await this.op(() => this.cardData!.startNotifications());
+      rbtLog(`subscribed in ${Date.now() - started} ms`);
+      step = "identify";
 
       const info: SIReaderDeviceInfo = { model: NAME_PREFIX };
       try {
@@ -336,7 +388,7 @@ export class ReaderBtConnection extends EventTarget implements SIReader {
         );
         const d = decodeDeviceInfo(msg.payload);
         info.serial = d.serialNumber;
-        info.firmware = d.softwareVersion || null;
+        info.firmware = firmwareVersion(d.softwareVersion) || null;
       } catch (err) {
         rbtWarn("ReadDeviceInfo failed:", err);
       }
@@ -369,9 +421,10 @@ export class ReaderBtConnection extends EventTarget implements SIReader {
       }
       if (gen !== this.openGen) throw new Error("Connect attempt abandoned");
       this.setInfo(info);
-      rbtLog("ready", info);
+      rbtLog(`ready in ${Date.now() - started} ms`, info);
       this.setStatus("reading");
     } catch (err) {
+      rbtWarn(`setup failed at "${step}":`, err);
       this.teardown(err as Error);
       try {
         server.disconnect();
@@ -379,7 +432,9 @@ export class ReaderBtConnection extends EventTarget implements SIReader {
         /* ignore */
       }
       this.server = null;
-      throw err;
+      throw err instanceof Error && err.message === "Connect attempt abandoned"
+        ? err
+        : new SetupError(step, err);
     }
   }
 
@@ -614,21 +669,17 @@ export class ReaderBtConnection extends EventTarget implements SIReader {
       };
       abort.signal.addEventListener("abort", () => finish(this.isConnected));
 
-      const attempt = async (): Promise<boolean> => {
+      let lastError: unknown = null;
+      const attempt = async (connectTimeoutMs = CONNECT_ATTEMPT_TIMEOUT_MS): Promise<boolean> => {
         if (abort.signal.aborted) return false;
         try {
-          await withTimeout(this.open(), CONNECT_ATTEMPT_TIMEOUT_MS, () => {
-            this.openGen++;
-            try {
-              this.device.gatt?.disconnect();
-            } catch {
-              /* ignore */
-            }
-          });
+          rbtLog("reconnect attempt");
+          await this.open(connectTimeoutMs);
           if (abort.signal.aborted) return false;
           finish(true);
           return true;
         } catch (err) {
+          lastError = err;
           rbtLog("reconnect attempt failed:", err);
           if (!abort.signal.aborted) this.setStatus(waitingStatus);
           return false;
@@ -639,37 +690,73 @@ export class ReaderBtConnection extends EventTarget implements SIReader {
       state.timer = setTimeout(() => finish(false), windowMs);
 
       let connecting = false;
-      const onAdvert = async () => {
+      const onAdvert = async (e: Event) => {
+        const rssi = (e as Event & { rssi?: number }).rssi;
+        rbtLog(`advertisement received (rssi ${rssi ?? "?"})${connecting ? ", attempt already running" : ""}`);
         if (connecting || done) return;
         connecting = true;
-        rbtLog("advertisement received");
         await attempt();
         connecting = false;
       };
 
       const timedLoop = async () => {
         for (let i = 0; !done; i++) {
-          const delay = RECONNECT_BACKOFF_MS[Math.min(i, RECONNECT_BACKOFF_MS.length - 1)];
+          const delay = RECONNECT_POLL_MS[Math.min(i, RECONNECT_POLL_MS.length - 1)];
           if (Date.now() + delay >= deadline) return;
           await sleep(delay, abort.signal);
-          if (done || (await attempt())) return;
+          if (done) return;
+          if (connecting) continue; // an advertisement-triggered attempt is running
+          connecting = true;
+          const ok = await attempt();
+          connecting = false;
+          if (ok) return;
         }
       };
 
-      if (this.device.watchAdvertisements) {
+      /**
+       * Direct connect first. When the link was up but setup failed (seen on
+       * Linux after a page reload: subscribing gave "GATT Error Unknown",
+       * because Chrome still held a subscription on the old link), open() has
+       * disconnected; connect once more on a fresh link after a pause.
+       */
+      const quickConnect = async (): Promise<boolean> => {
+        connecting = true;
+        rbtLog("trying a direct connect first");
+        let ok = await attempt(QUICK_CONNECT_TIMEOUT_MS);
+        if (!ok && !done && lastError instanceof SetupError) {
+          await sleep(SETUP_RETRY_DELAY_MS, abort.signal);
+          ok = await attempt(QUICK_CONNECT_TIMEOUT_MS);
+        }
+        connecting = false;
+        return ok;
+      };
+
+      /**
+       * Poll with gatt.connect(), and watch advertisements where the browser
+       * can. Both, always: on Linux Chrome watchAdvertisements() starts the
+       * BlueZ scan (so a woken reader becomes connectable) but never fires
+       * advertisementreceived, so the poll is what actually connects there.
+       */
+      const watch = () => {
+        if (done) return;
+        void timedLoop();
+        if (!this.device.watchAdvertisements) return;
         this.device.addEventListener("advertisementreceived", onAdvert);
         this.device
           .watchAdvertisements({ signal: abort.signal })
           .then(() => rbtLog("watching advertisements"))
           .catch((err) => {
             if (done) return;
-            rbtLog("watchAdvertisements unavailable, polling instead:", err);
+            rbtLog("watchAdvertisements unavailable:", err);
             this.device.removeEventListener("advertisementreceived", onAdvert);
-            void timedLoop();
           });
-      } else {
-        void timedLoop();
-      }
+      };
+
+      // One thing at a time: the advertisement scan starts only after the
+      // direct attempt, so it never runs alongside a GATT connect.
+      void quickConnect().then((ok) => {
+        if (!ok) watch();
+      });
     });
   }
 

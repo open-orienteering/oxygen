@@ -139,20 +139,18 @@ test.describe("Reader BT (Web Bluetooth)", () => {
     await expect(btRow(page).getByTestId("reader-status-chip")).toHaveText("Connection lost");
     await expect(btRow(page).getByTestId("reader-bt-state-hint")).toContainText("Trying to reconnect");
 
-    // The next card wakes the reader, which advertises; Oxygen reconnects.
-    await page.evaluate(() => window.__readerBtMock.insertCard(2220164, []));
-    await expect(btRow(page).getByTestId("reader-status-chip")).toHaveText("Ready", { timeout: 5000 });
-    expect(await page.evaluate(() => window.__readerBtMock.connectCount())).toBe(2);
-    await page.getByTestId("reader-dialog-close").click();
-
-    // Card flow works on the new connection.
+    // The next card wakes the reader, which advertises; Oxygen reconnects and
+    // the reader reports the card that woke it, so it is read without re-inserting.
     const resolved = waitForTrpc(page, "cardReadout.readout");
-    await page.evaluate(() => window.__readerBtMock.removeCard());
     await page.evaluate(() =>
       window.__readerBtMock.insertCard(2220165, [{ controlCode: 31, time: 36360 }]),
     );
+    await expect(btRow(page).getByTestId("reader-status-chip")).toHaveText("Ready", { timeout: 5000 });
+    expect(await page.evaluate(() => window.__readerBtMock.connectCount())).toBe(2);
+    await page.getByTestId("reader-dialog-close").click();
     await resolved;
     await expect(page.getByTestId("card-notification")).toContainText("2220165", { timeout: 5000 });
+    expect(await page.evaluate(() => window.__readerBtMock.getFeedback())).toEqual([1]);
   });
 
   test("a remembered Reader BT reconnects after a reload without the picker", async ({ page }) => {

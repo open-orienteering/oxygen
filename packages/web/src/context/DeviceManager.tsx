@@ -364,6 +364,7 @@ export function DeviceManagerProvider({ children }: { children: ReactNode }) {
             punches: readout.punches.map((p) => ({
               controlCode: p.controlCode,
               time: p.time * 10,
+              ...(p.subSecond != null ? { subSecond: p.subSecond } : {}),
             })),
             checkTime:
               readout.checkTime !== null && readout.checkTime !== undefined

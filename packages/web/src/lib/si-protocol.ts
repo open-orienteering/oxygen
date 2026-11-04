@@ -357,6 +357,8 @@ export interface SIPunch {
   controlCode: number;
   /** Seconds since midnight */
   time: number;
+  /** Fraction of the second in 1/256 s, when the reader reports it (Reader BT) */
+  subSecond?: number;
 }
 
 /**

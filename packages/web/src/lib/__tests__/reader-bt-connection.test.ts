@@ -18,6 +18,8 @@ class FakeChar extends EventTarget implements BleCharacteristicLike {
   value: DataView | null = null;
   writes: number[][] = [];
   notifying = false;
+  /** Reject the next startNotifications (BlueZ right after a page reload) */
+  failNextStart = false;
   onWrite: (bytes: Uint8Array) => void = () => {};
   readonly uuid: string;
   private readonly device: FakeDevice;
@@ -37,6 +39,10 @@ class FakeChar extends EventTarget implements BleCharacteristicLike {
   }
   startNotifications() {
     return this.gattOp(() => {
+      if (this.failNextStart) {
+        this.failNextStart = false;
+        throw Object.assign(new Error("GATT Error Unknown."), { name: "NotSupportedError" });
+      }
       this.notifying = true;
       return this;
     });
@@ -76,6 +82,8 @@ class FakeServer implements BleGattServerLike {
   connectCalls = 0;
   /** asleep: connect() hangs (sleeping reader); "reject": connect() rejects */
   behaviour: "ok" | "asleep" | "reject" = "ok";
+  /** Delay per getPrimaryService call (slow BlueZ service discovery) */
+  discoveryDelayMs = 0;
   private readonly device: FakeDevice;
   constructor(device: FakeDevice) {
     this.device = device;
@@ -93,6 +101,7 @@ class FakeServer implements BleGattServerLike {
     this.device.dispatchEvent(new Event("gattserverdisconnected"));
   }
   async getPrimaryService(uuid: string) {
+    if (this.discoveryDelayMs) await new Promise((r) => setTimeout(r, this.discoveryDelayMs));
     const s = this.device.services.get(uuid);
     if (!s) throw new Error(`No service ${uuid}`);
     return s;
@@ -414,11 +423,13 @@ describe("reconnect", () => {
     expect(conn.status).toBe("error");
     expect(conn.isReconnecting).toBe(true);
 
-    await vi.advanceTimersByTimeAsync(1000); // attempt 1 fails
+    await vi.advanceTimersByTimeAsync(0); // direct attempt fails
     expect(device.gatt.connectCalls).toBe(2);
-    device.gatt.behaviour = "ok";
-    await vi.advanceTimersByTimeAsync(2000); // attempt 2 succeeds
+    await vi.advanceTimersByTimeAsync(1000); // timed attempt 1 fails
     expect(device.gatt.connectCalls).toBe(3);
+    device.gatt.behaviour = "ok";
+    await vi.advanceTimersByTimeAsync(2000); // timed attempt 2 succeeds
+    expect(device.gatt.connectCalls).toBe(4);
     expect(conn.status).toBe("reading");
     expect(conn.isReconnecting).toBe(false);
     expect(statuses(log)).toContain("error");
@@ -434,12 +445,26 @@ describe("reconnect", () => {
     const { device, conn } = await connected();
     device.gatt.behaviour = "asleep";
     device.drop();
-    await vi.advanceTimersByTimeAsync(1000 + 8000);
-    expect(conn.status).toBe("error");
+    await vi.advanceTimersByTimeAsync(5000); // direct attempt abandoned after 5 s
     expect(device.gatt.connectCalls).toBe(2);
+    await vi.advanceTimersByTimeAsync(1000 + 8000); // timed attempt abandoned after 8 s
+    expect(conn.status).toBe("error");
+    expect(device.gatt.connectCalls).toBe(3);
     device.gatt.behaviour = "ok";
     await vi.advanceTimersByTimeAsync(2000);
     expect(conn.status).toBe("reading");
+  });
+
+  it("does not abandon a reconnect whose service discovery is slow", async () => {
+    // Linux/BlueZ: GATT connect is quick, discovery took several seconds.
+    const { device, conn } = await connected({ watchAdvertisements: true });
+    device.drop();
+    device.gatt.discoveryDelayMs = 6000; // 3 services → 18 s, past the connect cap
+    await vi.advanceTimersByTimeAsync(1000);
+    device.advertise();
+    await vi.advanceTimersByTimeAsync(20_000);
+    expect(conn.status).toBe("reading");
+    expect(device.gatt.connectCalls).toBe(2);
   });
 
   it("gives up after 60 s and ends idle", async () => {
@@ -454,14 +479,50 @@ describe("reconnect", () => {
     expect(device.gatt.connectCalls).toBe(calls);
   });
 
-  it("connects on the next advertisement when watchAdvertisements is available", async () => {
+  it("connects straight away when the link is still up (no advertisement needed)", async () => {
+    // After a page reload BlueZ may still hold the link; the reader then does not advertise.
     const { device, conn } = await connected({ watchAdvertisements: true });
     device.drop();
-    await vi.advanceTimersByTimeAsync(5000);
+    await vi.advanceTimersByTimeAsync(0);
+    expect(conn.status).toBe("reading");
+    expect(device.gatt.connectCalls).toBe(2);
+    expect(device.watching).toBe(false);
+  });
+
+  it("reconnects on a fresh link when the link is up but a subscribe fails", async () => {
+    const { device, conn } = await connected({ watchAdvertisements: true });
+    device.drop();
+    device.cardState.failNextStart = true;
+    await vi.advanceTimersByTimeAsync(0);
+    expect(conn.status).toBe("error");
+    expect(device.gatt.connected).toBe(false); // dropped, so the stale subscription goes with it
+    await vi.advanceTimersByTimeAsync(1500);
+    expect(conn.status).toBe("reading");
+    expect(device.watching).toBe(false); // never needed the scan
+  });
+
+  it("connects on the next advertisement when watchAdvertisements is available", async () => {
+    const { device, conn } = await connected({ watchAdvertisements: true });
+    device.gatt.behaviour = "reject"; // asleep: connects fail at once ("no longer in range")
+    device.drop();
+    await vi.advanceTimersByTimeAsync(10_000);
     expect(device.watching).toBe(true);
-    expect(device.gatt.connectCalls).toBe(1); // no polling while watching
+    device.gatt.behaviour = "ok";
     device.advertise();
     await vi.advanceTimersByTimeAsync(0);
+    expect(conn.status).toBe("reading");
+    expect(device.watching).toBe(false);
+  });
+
+  it("connects by polling when advertisements never reach the page (Linux Chrome)", async () => {
+    const { device, conn } = await connected({ watchAdvertisements: true });
+    device.gatt.behaviour = "reject";
+    device.drop();
+    await vi.advanceTimersByTimeAsync(10_000);
+    expect(device.watching).toBe(true); // keeps the OS scanning
+    expect(conn.status).toBe("error");
+    device.gatt.behaviour = "ok"; // a card woke the reader; no advertisement event
+    await vi.advanceTimersByTimeAsync(2000);
     expect(conn.status).toBe("reading");
     expect(device.watching).toBe(false);
   });
@@ -487,12 +548,31 @@ describe("reconnect", () => {
     expect(conn.status).toBe("idle");
   });
 
+  it("a stale reconnect timeout does not disconnect a newer connect", async () => {
+    const { device, conn } = await connected({ watchAdvertisements: true });
+    device.gatt.behaviour = "asleep";
+    device.drop(); // direct attempt now hangs, its 5 s timer running
+    await vi.advanceTimersByTimeAsync(1000);
+    device.gatt.behaviour = "ok";
+    await conn.connect(); // e.g. the user picks the reader in the picker
+    expect(conn.status).toBe("reading");
+    const calls = device.gatt.connectCalls;
+    let dropped = 0;
+    device.addEventListener("gattserverdisconnected", () => dropped++);
+    await vi.advanceTimersByTimeAsync(20_000);
+    expect(dropped).toBe(0);
+    expect(device.gatt.connectCalls).toBe(calls);
+    expect(conn.status).toBe("reading");
+  });
+
   it("connectWhenAdvertising waits for the reader, then connects", async () => {
     const device = new FakeDevice({ watchAdvertisements: true });
+    device.gatt.behaviour = "reject";
     const conn = new ReaderBtConnection(device);
     const result = conn.connectWhenAdvertising();
     expect(conn.status).toBe("connecting");
     await vi.advanceTimersByTimeAsync(10_000);
+    device.gatt.behaviour = "ok";
     device.advertise();
     await vi.advanceTimersByTimeAsync(0);
     await expect(result).resolves.toBe(true);
@@ -501,6 +581,7 @@ describe("reconnect", () => {
 
   it("connectWhenAdvertising resolves false and ends idle when nothing comes", async () => {
     const device = new FakeDevice({ watchAdvertisements: true });
+    device.gatt.behaviour = "asleep";
     const conn = new ReaderBtConnection(device);
     const result = conn.connectWhenAdvertising();
     await vi.advanceTimersByTimeAsync(60_000);
