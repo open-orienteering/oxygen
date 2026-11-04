@@ -113,7 +113,7 @@ test.describe("Reader BT (Web Bluetooth)", () => {
     await openReaderDialog(page);
     await btRow(page).getByTestId("disconnect-reader").click();
     await expect(btRow(page).getByTestId("reader-status-chip")).toHaveText("Not connected");
-    await expect(btRow(page).getByTestId("reader-bt-state-hint")).toContainText("asleep");
+    await expect(btRow(page).getByTestId("reader-bt-state-hint")).toContainText("Disconnected");
     expect(await page.evaluate(() => window.__readerBtMock.isConnected())).toBe(false);
 
     await btRow(page).getByTestId("reconnect-reader").click();
@@ -137,7 +137,7 @@ test.describe("Reader BT (Web Bluetooth)", () => {
     await page.evaluate(() => window.__readerBtMock.simulateDisconnect());
     await openReaderDialog(page);
     await expect(btRow(page).getByTestId("reader-status-chip")).toHaveText("Connection lost");
-    await expect(btRow(page).getByTestId("reader-bt-state-hint")).toContainText("Trying to reconnect");
+    await expect(btRow(page).getByTestId("reader-bt-state-hint")).toContainText("Insert a card to wake the reader");
 
     // The next card wakes the reader, which advertises; Oxygen reconnects and
     // the reader reports the card that woke it, so it is read without re-inserting.

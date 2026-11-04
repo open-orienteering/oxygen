@@ -467,13 +467,34 @@ describe("reconnect", () => {
     expect(device.gatt.connectCalls).toBe(2);
   });
 
-  it("gives up after 60 s and ends idle", async () => {
+  it("keeps polling until the reader is back, slower after five minutes", async () => {
     const { device, conn } = await connected();
     device.gatt.behaviour = "reject";
     device.drop();
     await vi.advanceTimersByTimeAsync(60_000);
-    expect(conn.status).toBe("idle");
+    expect(conn.status).toBe("error");
+    expect(conn.isReconnecting).toBe(true);
+    expect(device.gatt.connectCalls).toBeGreaterThan(25); // ~every 2 s
+    await vi.advanceTimersByTimeAsync(5 * 60_000);
+    const atSlowdown = device.gatt.connectCalls;
+    await vi.advanceTimersByTimeAsync(60_000);
+    const slowCalls = device.gatt.connectCalls - atSlowdown;
+    expect(slowCalls).toBeGreaterThanOrEqual(5); // ~every 10 s
+    expect(slowCalls).toBeLessThanOrEqual(7);
+    device.gatt.behaviour = "ok"; // a card, twenty minutes later
+    await vi.advanceTimersByTimeAsync(10_000);
+    expect(conn.status).toBe("reading");
     expect(conn.isReconnecting).toBe(false);
+  });
+
+  it("stops after the window when one is given", async () => {
+    const device = new FakeDevice();
+    device.gatt.behaviour = "reject";
+    const conn = new ReaderBtConnection(device);
+    const result = conn.connectWhenAdvertising(60_000);
+    await vi.advanceTimersByTimeAsync(60_000);
+    await expect(result).resolves.toBe(false);
+    expect(conn.status).toBe("idle");
     const calls = device.gatt.connectCalls;
     await vi.advanceTimersByTimeAsync(30_000);
     expect(device.gatt.connectCalls).toBe(calls);
@@ -579,13 +600,18 @@ describe("reconnect", () => {
     expect(conn.status).toBe("reading");
   });
 
-  it("connectWhenAdvertising resolves false and ends idle when nothing comes", async () => {
+  it("connectWhenAdvertising waits indefinitely by default", async () => {
     const device = new FakeDevice({ watchAdvertisements: true });
-    device.gatt.behaviour = "asleep";
+    device.gatt.behaviour = "reject";
     const conn = new ReaderBtConnection(device);
-    const result = conn.connectWhenAdvertising();
-    await vi.advanceTimersByTimeAsync(60_000);
-    await expect(result).resolves.toBe(false);
+    let settled = false;
+    void conn.connectWhenAdvertising().then(() => (settled = true));
+    await vi.advanceTimersByTimeAsync(30 * 60_000);
+    expect(settled).toBe(false);
+    expect(conn.status).toBe("connecting");
+    await conn.disconnect();
+    await vi.advanceTimersByTimeAsync(0);
+    expect(settled).toBe(true);
     expect(conn.status).toBe("idle");
   });
 });
