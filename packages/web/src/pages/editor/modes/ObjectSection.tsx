@@ -9,6 +9,7 @@
 import { useMemo, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { vertexRule } from "../../../lib/editor/geometry-edit";
+import { TONER_MARGIN_MM } from "../tools/toner-saver";
 import type { course, mapDocument } from "@oxygen/shared";
 
 type Obj = course.CourseObject;
@@ -97,7 +98,7 @@ function KindProps(p: ObjectSectionProps) {
       return (
         <div className="space-y-1">
           <label className="block text-[11px] text-slate-500">{t("propMargin")}
-            <input data-testid="editor-prop-margin" type="number" min={0} step={1} className={FIELD} defaultValue={o.props.marginMm ?? 10}
+            <input data-testid="editor-prop-margin" type="number" min={0} step={1} className={FIELD} defaultValue={o.props.marginMm ?? TONER_MARGIN_MM}
               onBlur={(e) => { const v = Number(e.target.value); if (Number.isFinite(v) && v >= 0 && v !== o.props.marginMm) p.onProps({ ...o.props, marginMm: v }); }} />
           </label>
           {p.onRegenerate && (

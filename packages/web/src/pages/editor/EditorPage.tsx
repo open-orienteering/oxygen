@@ -63,7 +63,8 @@ import { TopBar } from "./TopBar";
 import { ToolRail, type AreaChoice } from "./ToolRail";
 import { areaChoiceOfKey } from "./tools/rail";
 import { afterPlaced, afterUndo, armPlacement, ghostInfo, switchTool, type PlacementState, type PlacementTool } from "./tools/placement";
-import { tonerSaverHull, type AreaKind } from "./tools/polygon";
+import { type AreaKind } from "./tools/polygon";
+import { TONER_MARGIN_MM, tonerSaverGeometry } from "./tools/toner-saver";
 import { mergeCircleGaps, mergeLegGaps, type AngularGap, type FractionGap } from "./tools/gaps";
 import { areaBinding, gapBinding, placeBinding, selectBinding, textBinding, type GapTarget, type Gesture } from "./tools/bindings";
 import { ObjectSection } from "./modes/ObjectSection";
@@ -81,8 +82,6 @@ type Pt = { x: number; y: number };
 type Structure = course.WireCourseStructure;
 type CourseObject = course.CourseObject;
 
-/** The toner saver's margin around the course, paper mm (§7). */
-const TONER_MARGIN_MM = 10;
 const NO_DRAFTS: CourseObject[] = [];
 /** New map text: size on paper (§7). */
 const TEXT_SIZE_MM = 4;
@@ -766,7 +765,7 @@ export function EditorPage() {
   const startArea = useCallback((kind: AreaChoice) => {
     if (kind !== "toner_saver") return setTool(areaTool(kind));
     const pts = rows.flatMap((r) => (r.pt ? [r.pt] : []));
-    const hull = tonerSaverHull(pts, TONER_MARGIN_MM);
+    const hull = tonerSaverGeometry(pts, TONER_MARGIN_MM);
     if (!hull || !selectedCourse) return;
     void (async () => {
       const id = await createObject({ kind: "toner_saver", geometry: hull, props: { marginMm: TONER_MARGIN_MM }, scope: { courses: [selectedCourse.id], classes: [] } });
@@ -1484,7 +1483,7 @@ export function EditorPage() {
       onScope={(scope) => updateObject(selectedObject, { scope })}
       onRegenerate={selectedObject.kind === "toner_saver" ? () => {
         const margin = (selectedObject.props as { marginMm?: number }).marginMm ?? TONER_MARGIN_MM;
-        const hull = tonerSaverHull(rows.flatMap((r) => (r.pt ? [r.pt] : [])), margin);
+        const hull = tonerSaverGeometry(rows.flatMap((r) => (r.pt ? [r.pt] : [])), margin);
         if (hull) updateObject(selectedObject, { geometry: hull });
       } : undefined}
       onDelete={() => deleteObject(selectedObject)}

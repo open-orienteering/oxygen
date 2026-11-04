@@ -371,11 +371,28 @@ two vertices and never close on the first vertex. On closing the object is creat
 scope, the kind's default props), the tool returns to `V` and the new
 object is selected with its inspector. A filter region being drawn is
 outlined only: it starts with nothing picked (§7), so it hides nothing
-until its symbols are chosen in the inspector, where every change is live. The **toner saver** needs no drawing: its
-hull is generated from the selected course's positioned sites (each
-site's margin octagon, `TONER_MARGIN_MM` = 10 mm, convex hull —
-`tonerSaverHull`), scoped to the course, and edited like any polygon;
-*Regenerate from the course* rebuilds it with the stored margin.
+until its symbols are chosen in the inspector, where every change is live. The **toner saver** needs no drawing: it is generated
+from the selected course's positioned sites and is smooth without any
+help — the exact **offset hull** (`pages/editor/tools/toner-saver.ts`,
+`tonerSaverGeometry`): the convex hull of the site centres (one site is a
+circle of four quarter arcs, two a stadium, collinear sites the stadium over
+the extremes, duplicate sites one), offset outward by the margin — a straight
+edge parallel to each hull edge and, at each hull vertex, an arc of radius
+= margin between the two edge normals, cut into pieces of at most 90°, each
+a cubic whose handle is (4/3)·tan(θ/4)·r (the formula of
+`shared/src/course/arcs.ts`). Stored as ordinary `PathVertex`es: an arc
+piece's two ends carry `hOut` and `hIn`, the vertex shared by two pieces of
+one arc both, a straight offset edge's two ends one handle each, so the
+outline is tangent-continuous and every site is at least the margin inside
+it; paper mm rounded to a micrometre. The default margin is `TONER_MARGIN_MM`
+= **25 paper mm** (the inspector's field shows 25 for an object without a
+stored margin); it was an octagon-rounded 10 mm hull before. The object is
+scoped to the course and edited like any polygon (curves print as stored,
+`course-layer.md` §8.1); *Regenerate from the course* rebuilds it with the
+stored margin, so an old octagonal toner saver is untouched until the user
+presses it, and a margin edit in the inspector changes nothing until then
+either. A margin of 0 regenerates the plain hull polygon (nothing for fewer
+than three hull points).
 
 ### 6.5 Selection, keys and multi-select
 
@@ -799,7 +816,8 @@ current, differing }`; a variation group or a slice-F site kind answers
 | E2E | `e2e/course-editor.spec.ts` | the mount gate both ways and the shell; place → move → undo / redo → reload → select on the canvas → delete; create a course, append two controls, add-to-course on the map, reorder + undo, insert on a leg, remove, reload with `?course=` (explicit start / finish rows); deep links, `H`, Escape cascade |
 | unit (web) | `pages/editor/__tests__/placement.test.ts` | §6.1: insertion point (before the finish, after the selected control, at a leg, `S` at 0, no course), chain advance, `Ctrl+Z` steps back, `S` → `K`, ghost number and pending legs (a start's leg runs to the first item) |
 | unit (web) | `lib/editor/__tests__/leg-length.test.ts`, `lib/__tests__/course-layer-request.test.ts`, `lib/editor/__tests__/hit.test.ts` | §6.1: metres at the map scale, "‹n› m", the midpoint, a dragged control's labels (both legs, every visit, over undrawn items); the provisional visit in the request (`course-layer.md` §5); §5 `accept` passes over other targets and finds the site below a rejected one |
-| unit (web) | `pages/editor/__tests__/polygon.test.ts`, `gaps.test.ts` | §6.4: vertex flow, close on the first vertex / double-click, line kinds, vertex drag, hulls (toner saver margin), `pull-handles` (symmetric, `Shift` 45°, back to a corner, a filter region stays a polygon, a moved curve vertex keeps its handles); §6.3: compass degrees, shorter arc, minimum, merge across north, leg fractions |
+| unit (web) | `pages/editor/__tests__/toner-saver.test.ts` | §6.4 toner saver: every site at least the margin inside the sampled outline (and the hull sites exactly), tangent continuity at every vertex and along the straight edges, one site → four quarter arcs, two → a stadium of six vertices, collinear and duplicate sites, one cubic per ≤ 90° of turn with the handle (4/3)·tan(θ/4)·r, micrometre rounding |
+| unit (web) | `pages/editor/__tests__/polygon.test.ts`, `gaps.test.ts` | §6.4: vertex flow, close on the first vertex / double-click, line kinds, vertex drag, `pull-handles` (symmetric, `Shift` 45°, back to a corner, a filter region stays a polygon, a moved curve vertex keeps its handles); §6.3: compass degrees, shorter arc, minimum, merge across north, leg fractions |
 | unit (web) | `lib/editor/__tests__/geometry-edit.test.ts` | §7 "Editing geometry": 8 samples per curved segment on the cubic, a curved closing segment, open paths never close; the nearest edge (closing edge, along a curve); insert on a straight edge, on the closing edge, on a curve (de Casteljau: the halves trace the original, the new vertex smooth); delete down to the minimum; symmetric handles, retract, grip drags (mirrored, smooth with the other's length kept, Alt breaks, broken / lone handles alone), 45°; `vertexRule` agrees with `courseObjectBodySchema` for every kind |
 | unit (web) | `pages/editor/__tests__/bindings.test.ts` "geometry editing on a selected object", "while drawing: a press places a corner…" | §7 "Editing geometry": the sampled outline and grips; Alt-drag → symmetric handles with one write (Shift 45°), a filter region's Alt-drag moves the vertex; Alt-click retracts (a corner: no write), a plain click focuses, a body click unfocuses, the focused handle drawn; a grip drag mirrored, Alt live breaks it; double-click on an edge inserts (inside, on a vertex, on a text: nothing); a press within reach of the edge is the object's; §6.4 the area tool's press places a corner, a drag past 3 px pulls handles (Shift 45°), the curved preview and its grips |
 | unit (web) | `pages/editor/__tests__/bindings.test.ts` | §6, §7: V (Shift-click, lasso, object select / move / vertex, outlines, double-click leg), armed (exclusive, right-click, touch, ghost and leg length label, no UI-layer leg), area (vertex drag, first-vertex close), G (rim drag, click removes, leg) |
@@ -832,6 +850,7 @@ current, differing }`; a variation group or a slice-F site kind answers
 - **Description instructions** (finish variant, special instructions)
   are edited in the legacy editor only.
 - **Course delete** stays on the Courses page.
+- **Toner saver in print**: the course's `maps.pdf` carrying the smooth hull's `c` segments has no E2E of its own (the shared `objects.test.ts` case covers the layer's Bézier flags); D10's list.
 - The rest of the E2E rewrite (the editor's touch subset in the `mobile`
   project, `course-editor.spec.ts` under `map-vector`) — D10.
 - **Presence names without sign-in**: an instance with auth off lists
