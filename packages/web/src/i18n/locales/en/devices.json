@@ -166,5 +166,22 @@
   "readerModeWarning": "This station is not in readout mode, so inserted cards are not read out. Switch it to Readout in SI-Config+.",
   "removeReader": "Remove",
   "readerConnectFailed": "Could not connect: {{message}}",
-  "readerLastCard": "Last card {{time}}"
+  "readerLastCard": "Last card {{time}}",
+  "addBtReader": "Bluetooth Reader BT",
+  "addBtReaderHint": "A SPORTident Reader BT. Insert the Service/OFF card first so the browser can find it.",
+  "btUnsupported": "This browser has no Web Bluetooth. Use Chrome or Edge on a computer or on Android.",
+  "btInsecure": "Bluetooth only works on a secure page (HTTPS or localhost). Open Oxygen over HTTPS to use a Reader BT.",
+  "btNoAdapter": "No Bluetooth adapter found, or Bluetooth is turned off.",
+  "readerKindBle": "Bluetooth",
+  "readerBattery": "Battery {{percent}} %",
+  "readerModeWarningBt": "This Reader BT is not in readout mode, so inserted cards are not read out. Set it to Readout in the SPORTident Config App.",
+  "forgetReader": "Forget",
+  "reconnectReader": "Reconnect",
+  "readerBtWaiting": "Waiting for the reader. Insert a card to wake it.",
+  "readerBtReconnecting": "Connection lost. Trying to reconnect…",
+  "readerBtAsleep": "The reader is asleep or out of range. Insert a card to wake it, then click Reconnect.",
+  "btHelpTitle": "Connecting a Reader BT",
+  "btHelpWake": "Insert the Service/OFF card. The red LED flashes for 20 seconds while the reader can be found.",
+  "btHelpNoPair": "Do not pair the reader in the computer's or phone's Bluetooth settings; Oxygen connects to it directly.",
+  "btHelpLinux": "On Linux, Chrome may need chrome://flags/#enable-experimental-web-platform-features before a sleeping reader reconnects by itself."
 }

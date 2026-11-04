@@ -23,11 +23,16 @@ import {
 } from "../lib/webserial";
 import { ReaderHub, type ReaderInfo } from "../lib/reader-hub";
 import type { SIReaderKind } from "../lib/si-reader";
+import {
+  ReaderBtConnection,
+  type BleDeviceLike,
+  type ReaderBtAvailability,
+} from "../lib/reader-bt";
 import { ReaderConnectionDialog } from "../components/ReaderConnectionDialog";
 import type { SICardReadout, SICardOwnerData } from "../lib/si-protocol";
 import { trpc } from "../lib/trpc";
 import { KioskChannel, recentCardToKioskMessage } from "../lib/kiosk-channel";
-import { RunnerStatus, runnerStatusLabel, type RunnerStatusValue } from "@oxygen/shared";
+import { RunnerStatus, meosFromVolts, runnerStatusLabel, type RunnerStatusValue } from "@oxygen/shared";
 import { emitEvent } from "../lib/offline/events";
 import { toOfflineCardReadPayload } from "../lib/offline/card-read-payload";
 import { computeCardReadout, lookupRunnerByCard } from "../lib/offline/local-readout";
@@ -71,6 +76,8 @@ interface DeviceManagerState {
   supported: boolean;
   /** Web Serial is available (USB SI stations). */
   serialSupported: boolean;
+  /** Whether a Reader BT can be added, and if not, why ("checking" until known). */
+  bleSupport: ReaderBtAvailability | "checking";
   /** Best status across all readers ("reading" if any reader is live). */
   readerStatus: SIReaderStatus;
   /** Best status across USB SI stations only (station programming needs one). */
@@ -86,6 +93,10 @@ interface DeviceManagerState {
   disconnectReader: (id?: string) => Promise<void>;
   /** Disconnect a reader and drop it from the list. */
   removeReader: (id: string) => Promise<void>;
+  /** Drop a Reader BT and revoke the browser's permission for it. */
+  forgetReader: (id: string) => Promise<void>;
+  /** Wait for an idle Reader BT to advertise (a card inserted) and reconnect. */
+  reconnectReader: (id: string) => Promise<void>;
   readerDialogOpen: boolean;
   openReaderDialog: () => void;
   closeReaderDialog: () => void;
@@ -111,6 +122,45 @@ interface DeviceManagerState {
 }
 
 const MAX_RECENT = 20;
+
+// ─── Remembered Reader BTs ─────────────────────────────────
+// Chromium's getDevices() returns every device this origin was ever granted;
+// this list is what Oxygen reconnects on load, so "Forget" means something
+// even where device.forget() is missing.
+
+const BT_DEVICES_KEY = "oxygen-reader-bt-devices";
+
+interface RememberedBtDevice {
+  id: string;
+  name: string | null;
+  lastSeen: number;
+}
+
+function loadRememberedBt(): RememberedBtDevice[] {
+  try {
+    const raw = JSON.parse(localStorage.getItem(BT_DEVICES_KEY) ?? "[]");
+    return Array.isArray(raw) ? raw.filter((d) => typeof d?.id === "string") : [];
+  } catch {
+    return [];
+  }
+}
+
+function saveRememberedBt(list: RememberedBtDevice[]): void {
+  try {
+    localStorage.setItem(BT_DEVICES_KEY, JSON.stringify(list));
+  } catch {
+    /* storage unavailable */
+  }
+}
+
+function rememberBt(device: BleDeviceLike): void {
+  const rest = loadRememberedBt().filter((d) => d.id !== device.id);
+  saveRememberedBt([...rest, { id: device.id, name: device.name ?? null, lastSeen: Date.now() }]);
+}
+
+function forgetBt(deviceId: string): void {
+  saveRememberedBt(loadRememberedBt().filter((d) => d.id !== deviceId));
+}
 
 // ─── Context ───────────────────────────────────────────────
 
@@ -186,7 +236,8 @@ function readoutsMatch(a: SICardReadout, b: SICardReadout): boolean {
 
 export function DeviceManagerProvider({ children }: { children: ReactNode }) {
   const serialSupported = SIReaderConnection.isSupported();
-  const supported = serialSupported;
+  const supported = serialSupported || ReaderBtConnection.isSupported();
+  const [bleSupport, setBleSupport] = useState<ReaderBtAvailability | "checking">("checking");
   const hubRef = useRef<ReaderHub | null>(null);
 
   const [readerStatus, setReaderStatus] = useState<SIReaderStatus>("idle");
@@ -328,7 +379,8 @@ export function DeviceManagerProvider({ children }: { children: ReactNode }) {
                 : undefined,
             cardType: readout.cardType,
             punchesFresh: raceData,
-            batteryVoltage: readout.batteryVoltage ?? undefined,
+            // SICardReadout carries volts; the API takes integer mV (MeOS).
+            batteryVoltage: meosFromVolts(readout.batteryVoltage) ?? undefined,
             ownerData: readout.ownerData
               ? {
                   firstName: readout.ownerData.firstName,
@@ -557,8 +609,15 @@ export function DeviceManagerProvider({ children }: { children: ReactNode }) {
   const connectReader = useCallback(
     async (kind: SIReaderKind = "serial") => {
       const hub = getHub();
-      if (kind !== "serial") {
-        throw new Error(`Reader kind "${kind}" is not supported yet`);
+      if (kind === "ble") {
+        // The picker throws NotFoundError on cancel, before anything is added.
+        const device = await ReaderBtConnection.requestDevice();
+        const existing = hub.get(`ble:${device.id}`) as ReaderBtConnection | undefined;
+        const reader = existing ?? new ReaderBtConnection(device);
+        hub.add(reader);
+        rememberBt(device);
+        if (!reader.isConnected) await reader.connect();
+        return;
       }
       // Reuse an unconnected USB station (the one ControlsPage may already
       // hold via getReaderConnection) before adding another.
@@ -584,6 +643,25 @@ export function DeviceManagerProvider({ children }: { children: ReactNode }) {
   const removeReader = useCallback(
     async (id: string) => {
       await getHub().remove(id);
+    },
+    [getHub],
+  );
+
+  const forgetReader = useCallback(
+    async (id: string) => {
+      const reader = getHub().get(id);
+      if (reader instanceof ReaderBtConnection) forgetBt(reader.device.id);
+      await getHub().remove(id, { forget: true });
+    },
+    [getHub],
+  );
+
+  const reconnectReader = useCallback(
+    async (id: string) => {
+      const reader = getHub().get(id);
+      if (reader instanceof ReaderBtConnection && !reader.isConnected) {
+        await reader.connectWhenAdvertising();
+      }
     },
     [getHub],
   );
@@ -670,6 +748,27 @@ export function DeviceManagerProvider({ children }: { children: ReactNode }) {
         .catch(() => {});
     }
 
+    // Reader BTs remembered from an earlier visit: wait for each to advertise
+    // (the next card inserted wakes it) and reconnect without a picker.
+    ReaderBtConnection.availability()
+      .then(async (availability) => {
+        if (cancelled) return;
+        setBleSupport(availability);
+        if (availability !== "ok") return;
+        const remembered = new Set(loadRememberedBt().map((d) => d.id));
+        if (remembered.size === 0) return;
+        for (const device of await ReaderBtConnection.rememberedDevices()) {
+          if (cancelled) return;
+          if (!remembered.has(device.id) || conn.get(`ble:${device.id}`)) continue;
+          const reader = new ReaderBtConnection(device);
+          conn.add(reader);
+          void reader.connectWhenAdvertising().then((ok) => {
+            if (ok) rememberBt(device);
+          });
+        }
+      })
+      .catch(() => setBleSupport("unsupported"));
+
     return () => {
       cancelled = true;
       conn.removeEventListener("hub:readers-changed", onReadersChanged);
@@ -693,12 +792,15 @@ export function DeviceManagerProvider({ children }: { children: ReactNode }) {
   const value: DeviceManagerState = {
     supported,
     serialSupported,
+    bleSupport,
     readerStatus,
     serialStatus,
     readers,
     connectReader,
     disconnectReader,
     removeReader,
+    forgetReader,
+    reconnectReader,
     readerDialogOpen,
     openReaderDialog,
     closeReaderDialog,
