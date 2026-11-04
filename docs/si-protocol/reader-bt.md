@@ -187,7 +187,7 @@ the readout.
 
 ### Feedback `0x1110` — `encodeFeedback(ok)`
 
-Payload `u8`: 1 = OK (two short beeps/flashes), 2 = error (four). In
+Payload `u8`: 1 = OK (two short beeps/flashes), 2 = error (the docs say four; firmware 2.2.0 gives five). In
 readout mode the reader gives **no** feedback of its own, with or
 without AUTOSEND: the client must send OK after each successful readout.
 In printout and standalone modes the reader beeps by itself. Works
@@ -276,7 +276,7 @@ on hardware.
 | Identify | ReadDeviceInfo `0x010E` (serial, firmware) and ReadAllSettings `0x010C` (mode) on read settings, each with a 3 s timeout; a failure is logged and the reader still connects. Battery Level is read once and then followed by notification |
 | GATT queue | every `startNotifications`/`writeValueWithResponse`/`readValue` runs after the previous one settled; Web Bluetooth rejects overlapping operations |
 | Requests | `sendAndWait(char, bytes, responseId)` registers a waiter for the response id before writing; a notification with that id resolves it, otherwise it goes to the card flow |
-| Reconnect | after an unexpected `gattserverdisconnected`: status `error`, then until it is back or the user disconnects/forgets it: first a direct `gatt.connect()` capped at 5 s (once more after 1.5 s if setup fails on a link that is being torn down), then `watchAdvertisements()` (connect on `advertisementreceived`) **and** a `gatt.connect()` poll every 2 s (first after 1 s; every 10 s after five minutes), each connect capped at 8 s (the connect only; service discovery is not capped). The wait is unbounded because the reader only wakes on a card, see the hardware findings. `connectWhenAdvertising(windowMs)` takes an optional window; the default is unbounded |
+| Reconnect | after an unexpected `gattserverdisconnected`: status `error`, then until it is back or the user disconnects/forgets it: first a direct `gatt.connect()` capped at 5 s then `watchAdvertisements()` (connect on `advertisementreceived`) **and** a `gatt.connect()` poll every 2 s (first after 1 s; every 10 s after five minutes), each connect capped at 8 s (the connect only; service discovery is not capped). The wait is unbounded because the reader only wakes on a card, see the hardware findings. `connectWhenAdvertising(windowMs)` takes an optional window; the default is unbounded |
 | Remembered | DeviceManager keeps `{id, name, lastSeen}` per reader in `localStorage["oxygen-reader-bt-devices"]` and on load calls `connectWhenAdvertising()` (the same 60 s wait) for each granted device from `getDevices()` in that list |
 | Forget | `disconnect()` then `device.forget()` |
 
@@ -327,12 +327,13 @@ without it `navigator.bluetooth` does not exist). Regression frames are in
 | CardStateChange code | the station code (5) |
 | Start punch | the card reports both type 3 and type 4 (start reserve) with the same time; same for finish 5/6 |
 | Weekday in `time_in_ms` | real: the SIAC's last race (Daladubbeln, a Sunday) decoded as day index 0 = Sunday, so `finishDayOfWeek`/`checkDayOfWeek` feed `isPunchDataFresh` correctly |
-| Feedback | two beeps after Feedback OK in readout mode, as documented |
+| Feedback | two beeps after Feedback OK; **five** after Feedback error (docs say four). Error feedback also works with the card already out |
+| Card removed during a readout | the reader sends CardStateChange "out" and never answers the pending 0x1103; Oxygen now fails the readout on the "out" and sends Feedback error at once instead of after 2 × 3 s |
 | SI6 (and by the docs SI5) | nothing at all: no message, no LED, no beep. A runner with an SI5/SI6 must use a USB station |
 | Card that woke the reader | reported with a CardStateChange "in" right after the reconnect; read out without re-inserting |
 | Link drops after a few readouts (Linux) | **supervision timeout.** Linux connects with its defaults (interval 45 ms, latency 0, supervision timeout **420 ms**); 6 s later the reader asks for interval 100–200 ms and a 6000 ms timeout (`LE Remote Connection Parameter Request`) and the kernel refuses it (`Invalid LL Parameters`, reason unknown; the values are valid per spec). A card readout keeps the reader's radio busy for more than 420 ms, so after a few quick readouts the link is declared dead (`Disconnect Complete, Reason: Connection Timeout 0x08`) right at the Feedback write. Fix on the Linux host: `[LE] ConnectionSupervisionTimeout=600` (10 ms units) in `/etc/bluetooth/main.conf`, then restart `bluetooth`; new links come up with 6000 ms and the drops stop. Android/Windows use multi-second defaults |
 | Advertising after a clean disconnect | none either: after Chrome closed the link on a reload, BlueZ scanned for 11.6 s and saw nothing until a card was inserted |
-| Page reload | Chrome releases the old page's subscriptions at once (`Notifying = false` on all four characteristics) and drops the link about 2 s later. A connect in those 2 s gets the dying link and subscribing fails with `NotSupportedError: GATT Error Unknown` |
+| Page reload | not survivable. Chrome releases the old page's subscriptions at once (`Notifying = false` on all four characteristics) and drops the link about 2 s later; a connect from the new page in those 2 s gets the dying link (subscribe fails with `NotSupportedError: GATT Error Unknown`) and the reader gives its two power-off beeps the moment the link goes. The remembered reader reconnects on the next card |
 | Advertising after a disconnect or link loss | none: after the central disconnects, **and after the link is lost out of range** (BlueZ saw no advertisement for 26 s until a card went in), the reader goes to sleep and stays silent until a card (or the Service/OFF card) wakes it. A reload or a drop therefore reconnects on the next card, which is then read out. A firmware that advertised for a minute after a link loss would let Oxygen reconnect without a card; the poll is ready for that |
 | `watchAdvertisements()` on Linux Chrome | starts the BlueZ scan (BlueZ reports the woken reader's RSSI) but Chrome never fires `advertisementreceived` to the page. `gatt.connect()` to a silent reader fails at once with `NetworkError: Bluetooth Device is no longer in range.`, so polling it every 2 s is cheap and connects as soon as the reader advertises |
 | `getDevices()` on Linux Chrome | works with the experimental-features flag; the remembered reader comes back after a reload without the picker |
@@ -346,8 +347,6 @@ without it `navigator.bluetooth` does not exist). Regression frames are in
 - **Why the kernel refuses the reader's connection-parameter request**
   (100–200 ms, latency 0, 6000 ms are valid per spec; Linux 6.8 answers
   `Invalid LL Parameters`). Harmless once the host default is 6000 ms.
-- **Reload**: whether holding the dying link and retrying the subscribe
-  for a few seconds lets the new page keep the connection.
 - **SIAC production block versions**: the SIAC above sent raw bytes 16
   and 43, decoded as `1.6` / `4.3`; compare with the same card read over
   USB before trusting `major*10+minor`.
@@ -358,7 +357,5 @@ without it `navigator.bluetooth` does not exist). Regression frames are in
 - **Web Bluetooth**: which of `getDevices()` / `watchAdvertisements()`
   work on Linux Chrome and Android without flags, and whether
   `gatt.connect()` to a sleeping reader rejects or hangs.
-- **Feedback error**: confirm Feedback error gives four beeps (OK's two
-  beeps are confirmed).
 - **Firmware < 2.0.0**: what offset 2 of ReadAllSettings returns, and
   whether SetAutosend/ReadAutosend are silently ignored.

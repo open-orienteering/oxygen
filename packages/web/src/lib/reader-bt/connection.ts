@@ -126,13 +126,7 @@ export const CONNECT_ATTEMPT_TIMEOUT_MS = 8000;
  * would wait forever. A link that is still up connects in milliseconds.
  */
 export const QUICK_CONNECT_TIMEOUT_MS = 5000;
-/**
- * After a page reload Chrome keeps the old page's link up for ~2 s while it
- * unsubscribes, and a subscribe from the new page fails meanwhile. Keep the
- * link and retry setup a few times before giving it up.
- */
-const SETUP_RETRY_DELAY_MS = 1500;
-const SETUP_RETRIES = 3;
+
 /**
  * Pause before each timed reconnect attempt (last value repeats). Short,
  * because a woken reader advertises for only 20 s, and cheap: a connect to a
@@ -151,6 +145,14 @@ class SetupError extends Error {
     const c = cause as Error;
     super(`${step}: ${c?.name ?? "Error"}: ${c?.message ?? String(cause)}`);
     this.name = "SetupError";
+  }
+}
+
+/** The card left the reader while its readout was pending. */
+class CardRemovedError extends Error {
+  constructor() {
+    super("Card removed during readout");
+    this.name = "CardRemovedError";
   }
 }
 
@@ -341,12 +343,8 @@ export class ReaderBtConnection extends EventTarget implements SIReader {
 
   // ── Connection internals ───────────────────────────────
 
-  /**
-   * @param connectTimeoutMs cap on `gatt.connect()` only (reconnect attempts)
-   * @param keepLinkOnFailure leave the GATT link up when setup fails, so a
-   *   retry can reuse it
-   */
-  private async open(connectTimeoutMs?: number, keepLinkOnFailure = false): Promise<void> {
+  /** @param connectTimeoutMs cap on `gatt.connect()` only (reconnect attempts) */
+  private async open(connectTimeoutMs?: number): Promise<void> {
     const gatt = this.device.gatt;
     if (!gatt) throw new Error("Device has no GATT server");
     rbtLog("connect", this.device.name ?? this.device.id);
@@ -452,12 +450,10 @@ export class ReaderBtConnection extends EventTarget implements SIReader {
     } catch (err) {
       rbtWarn(`setup failed at "${step}":`, err);
       this.teardown(err as Error);
-      if (!keepLinkOnFailure) {
-        try {
-          server.disconnect();
-        } catch {
-          /* ignore */
-        }
+      try {
+        server.disconnect();
+      } catch {
+        /* ignore */
       }
       this.server = null;
       throw err instanceof Error && err.message === "Connect attempt abandoned"
@@ -521,6 +517,11 @@ export class ReaderBtConnection extends EventTarget implements SIReader {
     }
     if (!state.inserted) {
       rbtLog("card removed", state.cardNumber);
+      // A pending readout cannot complete any more: fail it now rather than
+      // after the timeout and retry, so the error beeps come at once.
+      if (this.pendingCard !== null) {
+        this.failWaiters([RBT_MSG.CARD_DATA_COMPLETE, RBT_MSG.CARD_DATA_MINIMAL], new CardRemovedError());
+      }
       this.dispatchEvent(new CustomEvent("si:card-removed", { detail: {} }));
       return;
     }
@@ -557,6 +558,7 @@ export class ReaderBtConnection extends EventTarget implements SIReader {
         } catch (err) {
           lastErr = err;
           if (!this.cardData) return; // disconnected mid-readout
+          if (err instanceof CardRemovedError) break; // no point retrying
         }
       }
       rbtWarn(`readout of card ${cardNumber} failed:`, lastErr);
@@ -698,20 +700,15 @@ export class ReaderBtConnection extends EventTarget implements SIReader {
       };
       abort.signal.addEventListener("abort", () => finish(this.isConnected));
 
-      let lastError: unknown = null;
-      const attempt = async (
-        connectTimeoutMs = CONNECT_ATTEMPT_TIMEOUT_MS,
-        keepLinkOnFailure = false,
-      ): Promise<boolean> => {
+      const attempt = async (connectTimeoutMs = CONNECT_ATTEMPT_TIMEOUT_MS): Promise<boolean> => {
         if (abort.signal.aborted) return false;
         try {
           rbtLog("reconnect attempt");
-          await this.open(connectTimeoutMs, keepLinkOnFailure);
+          await this.open(connectTimeoutMs);
           if (abort.signal.aborted) return false;
           finish(true);
           return true;
         } catch (err) {
-          lastError = err;
           rbtLog("reconnect attempt failed:", err);
           if (!abort.signal.aborted) this.setStatus(waitingStatus);
           return false;
@@ -747,21 +744,15 @@ export class ReaderBtConnection extends EventTarget implements SIReader {
       };
 
       /**
-       * Direct connect first. When the link was up but setup failed (seen on
-       * Linux after a page reload: subscribing gave "GATT Error Unknown",
-       * because Chrome still held a subscription on the old link), open() has
-       * disconnected; connect once more on a fresh link after a pause.
+       * Direct connect first, for a link that is still up. After a page
+       * reload it never is for long: Chrome keeps the old page's link for
+       * about 2 s, subscribing on it fails, and the reader powers off (two
+       * beeps) the moment the link goes. So one attempt, then the poll.
        */
       const quickConnect = async (): Promise<boolean> => {
         connecting = true;
         rbtLog("trying a direct connect first");
-        let ok = await attempt(QUICK_CONNECT_TIMEOUT_MS, true);
-        for (let i = 0; !ok && !done && lastError instanceof SetupError && i < SETUP_RETRIES; i++) {
-          await sleep(SETUP_RETRY_DELAY_MS, abort.signal);
-          if (done) break;
-          rbtLog(`setup retry ${i + 1}/${SETUP_RETRIES} on the same link`);
-          ok = await attempt(QUICK_CONNECT_TIMEOUT_MS, i < SETUP_RETRIES - 1);
-        }
+        const ok = await attempt(QUICK_CONNECT_TIMEOUT_MS);
         connecting = false;
         return ok;
       };

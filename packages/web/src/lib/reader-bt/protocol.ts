@@ -506,7 +506,7 @@ export function encodeCardDataRequest(complete = true): Uint8Array {
   return encodeMessage(complete ? RBT_MSG.CARD_DATA_COMPLETE : RBT_MSG.CARD_DATA_MINIMAL);
 }
 
-/** Feedback (two beeps for OK, four for error), written to card data */
+/** Feedback (two beeps for OK, five for error on fw 2.2.0; the docs say four), written to card data */
 export function encodeFeedback(ok: boolean): Uint8Array {
   return encodeMessage(RBT_MSG.FEEDBACK, new Uint8Array([ok ? 1 : 2]));
 }
