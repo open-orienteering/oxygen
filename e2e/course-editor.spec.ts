@@ -910,6 +910,47 @@ test.describe("Course editor (new, GL canvas)", () => {
       }
     });
 
+    test("A: Alt at the second of three clicks places a smooth vertex, its handles a sixth of its neighbours' chord; one undo removes it", async ({ page }) => {
+      await openEditor(page);
+      await page.getByTestId("editor-tool-A").click();
+      await page.getByTestId("editor-area-whiteout").click();
+      const clear = await emptyPoint(page, 40);
+      const a = { x: clear.x - 30, y: clear.y - 15 }, b = { x: a.x + 60, y: a.y }, c = { x: a.x + 60, y: a.y + 40 };
+      await page.mouse.click(a.x, a.y);
+      // Alt held at the press: a smooth vertex (docs/course-editor.md §6.4); no next vertex yet, so no handles in the state.
+      await page.keyboard.down("Alt");
+      await page.mouse.click(b.x, b.y);
+      await page.keyboard.up("Alt");
+      await expect(page.getByTestId("editor-polygon-vertex")).toHaveCount(2);
+      await expect(page.getByTestId("editor-polygon-grip")).toHaveCount(0);
+      // The next vertex lands: b's handles follow its neighbours.
+      await page.mouse.click(c.x, c.y);
+      await expect(page.getByTestId("editor-polygon-grip")).toHaveCount(2);
+      const created = waitForTrpc(page, "courseObject.create");
+      await page.mouse.click(a.x, a.y); // the first vertex closes
+      await created;
+      await expect(page.getByTestId("editor-object")).toHaveAttribute("data-object-kind", "whiteout", { timeout: 15000 });
+      const id = await page.getByTestId("editor-object").getAttribute("data-object-id");
+      const row = page.locator(`[data-testid="editor-object-row"][data-object-id="${id}"]`);
+      await expect(row).toHaveCount(1, { timeout: 15000 });
+      const g = JSON.parse((await row.getAttribute("data-geometry-json")) ?? "[]") as { x: number; y: number; hIn?: { x: number; y: number }; hOut?: { x: number; y: number }; smooth?: boolean }[];
+      expect(g).toHaveLength(3);
+      // Uniform Catmull-Rom: hOut = (g2 − g0) / 6, hIn its negation; the corners keep none; no drawing flag stored.
+      expect(g[1].hOut!.x).toBeCloseTo((g[2].x - g[0].x) / 6, 3);
+      expect(g[1].hOut!.y).toBeCloseTo((g[2].y - g[0].y) / 6, 3);
+      expect(g[1].hIn).toEqual({ x: -g[1].hOut!.x, y: -g[1].hOut!.y });
+      expect(g[0].hIn ?? g[0].hOut ?? g[2].hIn ?? g[2].hOut).toBeUndefined();
+      expect(g.some((v) => "smooth" in v)).toBe(false);
+      // The chord on screen agrees (paper mm of the clicks).
+      const [pa, pc] = await Promise.all([toPaper(page, a), toPaper(page, c)]);
+      expect(g[1].hOut!.x).toBeCloseTo((pc.x - pa.x) / 6, 0);
+      expect(g[1].hOut!.y).toBeCloseTo((pc.y - pa.y) / 6, 0);
+      await expect(page.getByTestId("editor-object-grip")).toHaveCount(2);
+      // One create, one undo entry: Ctrl+Z removes the whole object.
+      await page.keyboard.press("Control+z");
+      await expect(row).toHaveCount(0, { timeout: 15000 });
+    });
+
     test("a filter region hides the path under it live", async ({ page }) => {
       await openEditor(page);
       // e2e/test.ocd: a 505 path runs along y ≈ −4 mm (the fixture's symbol index 3).
