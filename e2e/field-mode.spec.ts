@@ -304,7 +304,7 @@ test.describe("Field mode on a phone (docs/course-editor.md §9, §10)", () => {
     await expect(page.getByTestId("editor-field-add")).toBeVisible();
   });
 
-  test("a tap selects an area object; two fingers on its handle ring scale it", async ({ page }) => {
+  test("a tap on its outline selects an area object; two fingers on its handle ring scale it", async ({ page }) => {
     await openEditor(page);
     // A square of 100 px in the empty paper above the drawn map (clear of every control).
     const viewer = page.getByTestId("map-viewer");
