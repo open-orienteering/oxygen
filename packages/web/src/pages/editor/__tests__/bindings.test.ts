@@ -334,6 +334,51 @@ describe("armed and area bindings", () => {
     expect(shapes.find((s) => s.testId === "editor-polygon")!.points).toHaveLength(2 + 8 + 8);
     expect(shapes.filter((s) => s.testId === "editor-polygon-grip")).toHaveLength(2);
   });
+
+  it("Alt at the press places a smooth vertex; a pull past 3 px is still the manual curve (§6.4)", () => {
+    const gesture: GestureRef = { current: null };
+    const onPoly = vi.fn();
+    const poly = { kind: "whiteout" as const, vertices: [{ x: 0, y: 0 }, { x: 10, y: 0 }] };
+    const opts = { gesture, poly, hover: null, onHover: vi.fn(), onPoly, onDone: vi.fn(), onCancel: vi.fn(), snap: (p: { x: number; y: number }) => p };
+    const b = areaBinding(opts);
+    expect(b.onPointerDown!(ptr(10, 10, { alt: true }))).toBe(true);
+    expect(onPoly).toHaveBeenLastCalledWith({ kind: "whiteout", vertices: [...poly.vertices, { x: 10, y: 10, smooth: true }] });
+    b.onPointerUp!({ x: 10, y: 10 });
+    expect(onPoly).toHaveBeenCalledTimes(1);
+    // The pull beats Alt: the pulled handles, no flag.
+    gesture.current = null;
+    b.onPointerDown!(ptr(10, 10, { alt: true }));
+    b.onPointerDrag!({ x: 13, y: 14 }, { shift: false, alt: true });
+    expect(onPoly).toHaveBeenLastCalledWith({ kind: "whiteout", vertices: [...poly.vertices, { x: 10, y: 10, hOut: { x: 3, y: 4 }, hIn: { x: -3, y: -4 } }] });
+    // Without Alt (touch never sets it) the press is a corner.
+    gesture.current = null;
+    b.onPointerDown!(ptr(10, 10));
+    expect(onPoly).toHaveBeenLastCalledWith({ kind: "whiteout", vertices: [...poly.vertices, { x: 10, y: 10 }] });
+  });
+
+  it("Alt on the closing click smooths the first vertex with the wrap; done carries no flags", () => {
+    const onDone = vi.fn();
+    const poly = { kind: "oob_area" as const, vertices: [{ x: 0, y: 0 }, { x: 10, y: 0, smooth: true as const }, { x: 10, y: 10 }] };
+    const b = areaBinding({ gesture: { current: null }, poly, hover: null, onHover: vi.fn(), onPoly: vi.fn(), onDone, onCancel: vi.fn(), snap: (p) => p });
+    b.onClick!(ptr(0.1, 0.1, { alt: true }));
+    const done = onDone.mock.calls[0][0] as { x: number; y: number; hOut?: { x: number; y: number } }[];
+    expect(done[0].hOut!.x).toBeCloseTo(0);
+    expect(done[0].hOut!.y).toBeCloseTo(-10 / 6);
+    expect(done[1].hOut!.x).toBeCloseTo(10 / 6);
+    done.forEach((q) => expect(q).not.toHaveProperty("smooth"));
+  });
+
+  it("the preview curves a smooth vertex towards the hover point without writing it; no provisional grips", () => {
+    const onPoly = vi.fn();
+    const poly = { kind: "whiteout" as const, vertices: [{ x: 0, y: 0 }, { x: 10, y: 0, smooth: true as const }] };
+    const b = areaBinding({ gesture: { current: null }, poly, hover: { x: 10, y: 10 }, onHover: vi.fn(), onPoly, onDone: vi.fn(), onCancel: vi.fn(), snap: (p) => p });
+    const shapes = b.shapes as unknown as { testId?: string; points?: unknown[] }[];
+    // Both segments around the smooth vertex curve; the closing one is straight.
+    expect(shapes.find((s) => s.testId === "editor-polygon")!.points).toHaveLength(1 + 8 + 8);
+    expect(shapes.filter((s) => s.testId === "editor-polygon-grip")).toHaveLength(0);
+    expect(onPoly).not.toHaveBeenCalled();
+    expect(poly.vertices[1]).toEqual({ x: 10, y: 0, smooth: true });
+  });
 });
 
 describe("G binding (§6.3)", () => {
