@@ -215,11 +215,11 @@ export function useLayoutMode(a: LayoutModeArgs): LayoutMode {
       setSelection({ kind: "description" });
       return;
     }
-    const o = placeObject(what, page, geometry.printable, purple, graphicId);
+    const o = placeObject(what, page, geometry.printable, graphicId);
     if (!o) return;
     change({ objects: [...scopeObjects(data, stored).editable, o] });
     setSelection({ kind: "object", id: o.id });
-  }, [stored, geometry, data, change, purple, snapping]);
+  }, [stored, geometry, data, change, snapping]);
 
   const binding = useMemo(() => {
     if (!a.enabled || !geometry || !snap) return null;

@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { defaultMapAppearance } from "@oxygen/shared";
-import { geometryOf, layoutRequestOf, placeObject, scopeObjects, sheetKeyOf, snapshotOf, withEditable, type EditorSheet } from "../layout/model";
+import { FILL_MODES, geometryOf, layoutRequestOf, placeObject, scopeObjects, sheetKeyOf, snapshotOf, withEditable, type EditorSheet } from "../layout/model";
 
 const settings = { printMarginMm: 3, mapFrame: { x: 10, y: 10, width: 190, height: 277 }, description: { visible: false, x: 150, y: 12, cellSizeMm: 6 }, appearance: defaultMapAppearance };
 const sheetText = { id: "s", kind: "text" as const, anchor: "page" as const, x: 20, y: 30, text: "{course}", fontSizeMm: 4, color: "#000000" };
@@ -67,15 +67,18 @@ describe("Layout model (docs/course-layout.md §2)", () => {
     expect(r.appearance).toEqual({ circle: 1, line: 1, number: 1 });
   });
 
+  it("the white-out-outside fill mode stays in the inspector although the O tool is gone (D14)", () => {
+    expect(FILL_MODES).toContain("whiteoutInverted");
+  });
+
   it("placement: each rail kind at the click, clamped to the printable area", () => {
     const printable = { x: 3, y: 3, width: 204, height: 291 };
-    const header = placeObject("header", { x: 50, y: 20 }, printable, "#a626ff")!;
+    const header = placeObject("header", { x: 50, y: 20 }, printable)!;
     expect(header).toMatchObject({ kind: "text", anchor: "page", x: 50, y: 20, fontSizeMm: 6 });
-    expect(placeObject("whiteout", { x: 50, y: 50 }, printable, "#a626ff")).toMatchObject({ kind: "rectangle", fillMode: "whiteout" });
-    expect(placeObject("whiteout", { x: 50, y: 50 }, printable, "#a626ff")).not.toHaveProperty("stroke");
-    expect(placeObject("whiteoutOutside", { x: 50, y: 50 }, printable, "#a626ff")).toMatchObject({ kind: "path", fillMode: "whiteoutInverted", closed: true });
-    expect(placeObject("image", { x: 1, y: 1 }, printable, "#a626ff", 9)).toMatchObject({ kind: "image", graphicId: 9, x: 3, y: 3 });
-    expect(placeObject("image", { x: 1, y: 1 }, printable, "#a626ff")).toBeNull();
-    expect(placeObject("line", { x: 50, y: 50 }, printable, "#a626ff")).toMatchObject({ kind: "path", closed: false });
+    expect(placeObject("whiteout", { x: 50, y: 50 }, printable)).toMatchObject({ kind: "rectangle", fillMode: "whiteout" });
+    expect(placeObject("whiteout", { x: 50, y: 50 }, printable)).not.toHaveProperty("stroke");
+    expect(placeObject("image", { x: 1, y: 1 }, printable, 9)).toMatchObject({ kind: "image", graphicId: 9, x: 3, y: 3 });
+    expect(placeObject("image", { x: 1, y: 1 }, printable)).toBeNull();
+    expect(placeObject("line", { x: 50, y: 50 }, printable)).toMatchObject({ kind: "path", closed: false });
   });
 });

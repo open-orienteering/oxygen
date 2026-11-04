@@ -145,8 +145,9 @@ Maps / Map templates pages still send it (one release, as G1's
 `baseVersion` on courses).
 
 **Keys** (08 §5.3 Layout column): `V` select, `H` header, `T` text, `D`
-description block, `W` white-out, `O` white-out outside, `L` line, `R`
-rectangle, `P` polygon (`I` image is armed from the Graphics section),
+description block, `W` white-out, `L` line, `R` rectangle, `P` polygon
+(`I` image is armed from the Graphics section; there is no key for
+white-out outside, see §3),
 `F` fit page, `Tab` / `Shift+Tab` next / previous object, `Delete` the
 selected object (or hides the block), `Escape` drops the tool, then the
 selection; `Ctrl+Z` / `Ctrl+Y` undo / redo. The grid toggle
@@ -174,12 +175,23 @@ and selects the new object; a drag with a tool armed pans.
 | `I` | the picked graphic, 30 mm | `createImageObjectAt` |
 | `D` | shows the block at the click (selects it when shown) | `constrainDescription` |
 | `W` | white-out rectangle, no border | `createObjectAt("rectangle")` |
-| `O` | white-out outside, a closed path | `createObjectAt("path")` + `fillModePatch` |
 | `L` / `R` / `P` | line, rectangle, polygon | `createObjectAt` |
 
 `L`, `R` and `P` are not in 08 §5.2's list: existing templates hold them
 and `vector` events would otherwise lose them against the legacy editor
 (decision log D7).
+
+**No tool for white-out outside** (D14). D7 added an `O` tool that placed
+a closed path with `fillMode: "whiteoutInverted"` (white everywhere in
+the frame except the shape); 08 §5.2's Layout tool list never had it,
+and the course toner saver (`course-editor.md` §6, `A` then `S`) now
+does that job for ink saving on a course. The tool is gone from the rail
+and the keys; the **fill mode stays** in the inspector's fill select
+(`layoutFill_whiteoutInverted`, "White-out outside"), so an object that
+has it (legacy templates, earlier D7 sheets) stays editable and a `P`
+polygon can still be turned into one, for template-level ink saving on
+an all-controls or class sheet. Rendering, print, the schema and the
+legacy `MapLayoutEditor` are untouched; no stored object is changed.
 
 With `V`: a click selects an object of the scope (topmost by bounds;
 lines and open paths within the handle tolerance); a drag moves it
@@ -382,7 +394,7 @@ sheet prints through `classes` or `maps`.
 | unit (web) | `map-gl/__tests__/engine.test.ts`, `view.test.ts` | the page part uploaded as `P`, drawn after the course part, `pageClip` passed, both released on clear; `scissorOfRing` |
 | unit (web) | `lib/__tests__/course-layer-request.test.ts` | `layout`: the page passed through, layout objects before course objects, appearance, overprint, window, text values |
 | unit (web) | `lib/editor/__tests__/layout.test.ts` | page-view maths: the window, page ↔ view round trips (rotated), y flip, sheet shapes, page bounds, hit-testing, handles, the block's rectangle, align, page offset, grid |
-| unit (web) | `pages/editor/__tests__/layout-bindings.test.ts`, `layout-model.test.ts`, `lib/editor/__tests__/state.test.ts` | the binding (exclusive, shapes, select / move / snap / resize / locked / align / block / place); the snapshot per scope, geometry, the request, placement per kind; the mode case |
+| unit (web) | `pages/editor/__tests__/layout-bindings.test.ts`, `layout-model.test.ts`, `lib/editor/__tests__/state.test.ts` | the binding (exclusive, shapes, select / move / snap / resize / locked / align / block / place); the snapshot per scope, geometry, the request, placement per kind; the mode case; the rail's keys have no `O`, the inspector keeps the white-out outside fill mode |
 | integration | `packages/api/src/__tests__/integration/course-maps.test.ts` "resolveSheet" | a sheet (window centre, page, text values, block, template / sheet split, overprint, sibling windows), `saveLayout` without `templateObjects` leaves the template, `PRECONDITION_FAILED` without a template; a template with and without a course; `NOT_FOUND` |
 | unit (shared) | `packages/shared/src/__tests__/auto-template.test.ts` | the key (standard, custom paper), the key's name, decision (3) (most sheets, oldest, seq), `fitOrientation` (preferred kept, turned, ratio, the margin, neither fits), `defaultTemplateSettings` |
 | unit (web) | `lib/editor/__tests__/export-menu.test.ts`, `template-key.test.ts`, `state.test.ts`, `pages/editor/__tests__/layout-model.test.ts` | Export ▾ entries, routes and what is ensured first; courses in a template / at its key, the move-out target, extra names; Class view in the reducer; the sheet key |
