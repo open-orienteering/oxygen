@@ -2,7 +2,7 @@ import { describe, expect, it, vi } from "vitest";
 import type { CourseMapObject } from "@oxygen/shared";
 import type { ToolPointer } from "../../../components/MapViewer";
 import { sheetWindow, toView, type SheetGeometry } from "../../../lib/editor/layout";
-import { layoutBinding, type LayoutBindingContext, type LayoutGesture } from "../layout/bindings";
+import { LAYOUT_KEYS, layoutBinding, type LayoutBindingContext, type LayoutGesture } from "../layout/bindings";
 
 // A4, frame 10 mm in, map at the print scale (1 page mm = 1 paper mm), centred on (0, 0): page (105, 148.5) is paper (0, 0).
 const frame = { x: 10, y: 10, width: 190, height: 277 };
@@ -31,6 +31,12 @@ function ctx(over: Partial<Omit<LayoutBindingContext, "onPreview" | "onCommit" |
 }
 
 describe("Layout binding (docs/course-layout.md §2, §3; 08 §5.3 Layout column)", () => {
+  it("the rail's keys: no white-out-outside tool (D14), the polygon stays", () => {
+    expect(Object.keys(LAYOUT_KEYS)).toEqual(["V", "H", "T", "I", "D", "W", "L", "R", "P"]);
+    expect(Object.values(LAYOUT_KEYS)).not.toContain("whiteoutOutside");
+    expect(LAYOUT_KEYS.O).toBeUndefined();
+  });
+
   it("is exclusive: course targets stay off, a drag on nothing pans", () => {
     const c = ctx();
     const b = layoutBinding(c);

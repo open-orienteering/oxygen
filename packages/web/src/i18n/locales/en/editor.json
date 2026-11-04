@@ -152,7 +152,6 @@
   "layoutToolImage": "Image (I): pick a graphic under Graphics",
   "layoutToolDescription": "Description block (D)",
   "layoutToolWhiteout": "White-out (W)",
-  "layoutToolWhiteoutOutside": "White-out outside (O)",
   "layoutToolLine": "Line (L)",
   "layoutToolRectangle": "Rectangle (R)",
   "layoutToolPath": "Polygon (P)",

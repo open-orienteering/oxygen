@@ -152,7 +152,6 @@
   "layoutToolImage": "Bild (I): välj en grafik under Grafik",
   "layoutToolDescription": "Kontrollbeskrivning (D)",
   "layoutToolWhiteout": "Vitmaskering (W)",
-  "layoutToolWhiteoutOutside": "Vitmaskering utanför (O)",
   "layoutToolLine": "Linje (L)",
   "layoutToolRectangle": "Rektangel (R)",
   "layoutToolPath": "Polygon (P)",

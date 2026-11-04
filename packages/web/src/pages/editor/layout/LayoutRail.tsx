@@ -3,7 +3,7 @@
  * mode: frame, header, text, image, description block, whiteout"): `V`
  * select / move (the frame is selected with it), `H` header, `T` text, `I`
  * image (armed from the Graphics section), `D` description block, `W`
- * white-out, `O` white-out outside, `L` line, `R` rectangle, `P` polygon,
+ * white-out, `L` line, `R` rectangle, `P` polygon,
  * the 1 mm grid toggle. The page owns the keyboard.
  */
 
@@ -12,7 +12,7 @@ import { LAYOUT_KEYS, type LayoutTool, type PlaceKind } from "./bindings";
 
 const LABEL: Record<PlaceKind | "select", string> = {
   select: "toolSelect", header: "layoutToolHeader", text: "layoutToolText", image: "layoutToolImage", description: "layoutToolDescription",
-  whiteout: "layoutToolWhiteout", whiteoutOutside: "layoutToolWhiteoutOutside", line: "layoutToolLine", rectangle: "layoutToolRectangle", path: "layoutToolPath",
+  whiteout: "layoutToolWhiteout", line: "layoutToolLine", rectangle: "layoutToolRectangle", path: "layoutToolPath",
 };
 
 const BTN = "w-8 h-8 rounded-md text-xs font-semibold flex items-center justify-center";

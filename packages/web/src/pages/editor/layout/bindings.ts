@@ -22,13 +22,13 @@ type Pt = { x: number; y: number };
 
 export type LayoutSelection = { kind: "object"; id: string } | { kind: "frame" } | { kind: "description" } | null;
 
-/** What the rail arms (08 §5.2 Layout tools; `L` / `R` / `P` added, docs/course-layout.md §3). */
-export type PlaceKind = "header" | "text" | "image" | "whiteout" | "whiteoutOutside" | "line" | "rectangle" | "path" | "description";
+/** What the rail arms (08 §5.2 Layout tools; `L` / `R` / `P` added, `O` removed again, docs/course-layout.md §3). */
+export type PlaceKind = "header" | "text" | "image" | "whiteout" | "line" | "rectangle" | "path" | "description";
 export type LayoutTool = { kind: "select" } | { kind: "place"; what: PlaceKind; graphicId?: number };
 
 /** The rail's keys (the page owns the keyboard). */
 export const LAYOUT_KEYS: Record<string, PlaceKind | "select"> = {
-  V: "select", H: "header", T: "text", I: "image", D: "description", W: "whiteout", O: "whiteoutOutside", L: "line", R: "rectangle", P: "path",
+  V: "select", H: "header", T: "text", I: "image", D: "description", W: "whiteout", L: "line", R: "rectangle", P: "path",
 };
 
 /** What Layout mode shows: a sheet, or a template previewed with the selected course. */
