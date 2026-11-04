@@ -34,7 +34,7 @@ decoder is lenient and the question is listed under
 | Advertising window | 20 s after inserting the Service/OFF card, or any SI card while in readout mode and disconnected; never by itself after a disconnect or link loss (hardware finding) |
 | Pairing | none; **do not** pair in OS Bluetooth settings (causes connection problems) |
 | MTU | up to 517; larger messages are segmented |
-| Idle | a new backup session is started after 10 h of inactivity (the docs describe no disconnect) |
+| Idle | no idle disconnect: a connected reader stayed connected for several hours without a readout (hardware finding). A new backup session is started after 10 h of inactivity |
 | GATT handles | may change between firmware versions; discover by UUID on every connection, never cache |
 
 All client → reader writes are **Write With Response**. Subscribe with
@@ -337,13 +337,11 @@ without it `navigator.bluetooth` does not exist). Regression frames are in
 | Advertising after a disconnect or link loss | none: after the central disconnects, **and after the link is lost out of range** (BlueZ saw no advertisement for 26 s until a card went in), the reader goes to sleep and stays silent until a card (or the Service/OFF card) wakes it. A reload or a drop therefore reconnects on the next card, which is then read out. A firmware that advertised for a minute after a link loss would let Oxygen reconnect without a card; the poll is ready for that |
 | `watchAdvertisements()` on Linux Chrome | starts the BlueZ scan (BlueZ reports the woken reader's RSSI) but Chrome never fires `advertisementreceived` to the page. `gatt.connect()` to a silent reader fails at once with `NetworkError: Bluetooth Device is no longer in range.`, so polling it every 2 s is cheap and connects as soon as the reader advertises |
 | `getDevices()` on Linux Chrome | works with the experimental-features flag; the remembered reader comes back after a reload without the picker |
+| Idle while connected | no timeout: the link stayed up for several hours with no card inserted, and the row stayed "Ready". Only a disconnect or link loss puts the reader to sleep |
 
 ## Open questions to settle on hardware
 
 - **Card family codes** for SI8, SI9, SI10, SI11 and ComCard Pro/Up.
-- **Idle disconnect**: the docs mention none (only a new session after
-  10 h); how long a connected reader stays connected without readouts
-  is not measured yet.
 - **Why the kernel refuses the reader's connection-parameter request**
   (100–200 ms, latency 0, 6000 ms are valid per spec; Linux 6.8 answers
   `Invalid LL Parameters`). Harmless once the host default is 6000 ms.
