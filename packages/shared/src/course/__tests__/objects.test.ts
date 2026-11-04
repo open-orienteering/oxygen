@@ -3,6 +3,7 @@
 import { describe, expect, it } from "vitest";
 import { courseLayer } from "../layer.js";
 import { courseObjectBodySchema, courseObjectInScope, courseObjectScopeSchemaOf, isCourseObject, type CourseLayerObject } from "../objects.js";
+import { COORD_FLAG } from "../../render/pass-stream.js";
 import { layerInput } from "./helpers.js";
 import { z } from "zod";
 
@@ -138,6 +139,24 @@ describe("course objects in the layer (§8.3)", () => {
     const framed = draw([toner], { window });
     expect(framed.own).toHaveLength(1);
     expect(framed.own[0].path.coords).toHaveLength(16);
+
+    // A smooth toner saver (D13): the hull's handles reach the hole ring as Bézier flags, the frame ring stays straight.
+    const round = obj({
+      kind: "toner_saver",
+      props: { marginMm: 25 },
+      geometry: [
+        { x: 20, y: 10, hOut: { x: 0, y: 5 } }, { x: 25, y: 15, hIn: { x: 5, y: 0 } },
+        { x: 25, y: 25 }, { x: 15, y: 25 },
+      ],
+    });
+    const smooth = draw([round], { window });
+    expect(smooth.layer.warnings).toEqual([]);
+    const { flags } = smooth.own[0].path;
+    const bezier = COORD_FLAG.bezierFirst | COORD_FLAG.bezierSecond;
+    expect(flags.slice(0, 4).every((f) => (f & bezier) === 0)).toBe(true);
+    expect(flags.slice(4).filter((f) => f & COORD_FLAG.bezierFirst)).toHaveLength(1);
+    expect(flags.slice(4).filter((f) => f & COORD_FLAG.bezierSecond)).toHaveLength(1);
+    expect(flags[4] & COORD_FLAG.hole).toBeTruthy();
 
     expect(draw([obj({ kind: "inset_frame", geometry: SQUARE.slice(0, 2), props: {} })]).own).toHaveLength(0);
     const region = draw([obj({ kind: "filter_region", geometry: SQUARE, props: { mode: "hide", symbols: "all" } })]);
