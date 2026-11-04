@@ -16,8 +16,12 @@ are ambiguous, the decoder is lenient and the question is listed under
 
 - Vendor docs: <https://docs.sportident.com/developers/reader-bt>
 - Decoder: `packages/web/src/lib/reader-bt/protocol.ts` (pure, no Web Bluetooth)
+- Connection: `packages/web/src/lib/reader-bt/connection.ts` (`ReaderBtConnection`, Web Bluetooth)
 - Tests: `packages/web/src/lib/__tests__/reader-bt-protocol.test.ts`,
-  `reader-bt-mapping.test.ts`; byte builders in `__tests__/fixtures/reader-bt.ts`
+  `reader-bt-mapping.test.ts`, `reader-bt-connection.test.ts` (scripted fake
+  device); byte builders in `__tests__/fixtures/reader-bt.ts`
+- E2E: `e2e/reader-bt.spec.ts` against the fake `navigator.bluetooth` in
+  `e2e/helpers/mock-webbluetooth.ts`
 
 ## Discovery and connection
 
@@ -241,8 +245,9 @@ its "card inserted, do not remove" moment:
 1. Card state notifies `0x1101` with state 1 → Oxygen emits `si:card-detected`.
 2. Write an empty `0x1103` to card data.
 3. Card data notifies the (segmented) `0x1103` → `decodeCardData` → `toSICardReadout`.
-4. Write Feedback OK, then emit `si:card-readout`. On a decode error or
-   timeout, write Feedback error.
+4. Write Feedback OK, then emit `si:card-readout`. A decode error or no
+   response within 3 s is retried once (a second `0x1103` request); if
+   that fails too, write Feedback error.
 5. `0x1101` with state 0 → `si:card-removed`.
 
 **Push.** After `SetAutosend(1)` the reader sends `0x1103` on insert
@@ -250,8 +255,26 @@ with no CardStateChange; the client still sends Feedback. Oxygen treats
 an unsolicited card-data notification the same way, synthesising the
 detected event.
 
-The connection class that drives this lands in PR 3 of the Reader BT
-work; this module only encodes and decodes.
+A repeated "in" for the card already being read is ignored. Oxygen never
+turns AUTOSEND on; `ReaderBtConnection.setAutosend()` exists for testing
+on hardware.
+
+## Connection (`ReaderBtConnection`)
+
+| Step | What Oxygen does |
+| --- | --- |
+| Picker | `requestDevice({filters: [{services: [settings]}, {namePrefix: "Reader BT"}], optionalServices: [settings, card, sessions, 0x180f]})` |
+| Connect | `gatt.connect()`, services and characteristics by UUID, `startNotifications()` on read settings, card state, card data and battery level |
+| Identify | ReadDeviceInfo `0x010E` (serial, firmware) and ReadAllSettings `0x010C` (mode) on read settings, each with a 3 s timeout; a failure is logged and the reader still connects. Battery Level is read once and then followed by notification |
+| GATT queue | every `startNotifications`/`writeValueWithResponse`/`readValue` runs after the previous one settled; Web Bluetooth rejects overlapping operations |
+| Requests | `sendAndWait(char, bytes, responseId)` registers a waiter for the response id before writing; a notification with that id resolves it, otherwise it goes to the card flow |
+| Reconnect | after an unexpected `gattserverdisconnected`: status `error`, then for 60 s either `watchAdvertisements()` + connect on `advertisementreceived`, or timed `gatt.connect()` after 1/2/4/8/8 … s, each attempt abandoned after 8 s; then `idle`. Manual `disconnect()` suppresses it |
+| Remembered | DeviceManager keeps `{id, name, lastSeen}` per reader in `localStorage["oxygen-reader-bt-devices"]` and on load calls `connectWhenAdvertising()` (the same 60 s wait) for each granted device from `getDevices()` in that list |
+| Forget | `disconnect()` then `device.forget()` |
+
+A card inserted while the reader is disconnected wakes it; whether the
+reader then reports that card after Oxygen reconnects is not known yet
+(see the open questions). Until it is, the operator re-inserts it.
 
 ## Mapping to `SICardReadout` — `toSICardReadout`
 
@@ -293,5 +316,10 @@ Sub-second precision is not carried yet; see the open questions.
 - **Web Bluetooth**: which of `getDevices()` / `watchAdvertisements()`
   work on Linux Chrome and Android without flags, and whether
   `gatt.connect()` to a sleeping reader rejects or hangs.
+- **Card that woke the reader**: after a card insert wakes a disconnected
+  reader and Oxygen reconnects, does the reader send a CardStateChange
+  for the card still inserted, or must it be re-inserted?
+- **Feedback beeps**: confirm two beeps come only from Feedback OK and
+  four from Feedback error in readout mode.
 - **Firmware < 2.0.0**: what offset 2 of ReadAllSettings returns, and
   whether SetAutosend/ReadAutosend are silently ignored.

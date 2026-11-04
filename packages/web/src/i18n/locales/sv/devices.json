@@ -166,5 +166,22 @@
   "readerModeWarning": "Enheten är inte i avläsningsläge, så kort som sätts i läses inte av. Ställ om den till Readout i SI-Config+.",
   "removeReader": "Ta bort",
   "readerConnectFailed": "Kunde inte ansluta: {{message}}",
-  "readerLastCard": "Senaste kort {{time}}"
+  "readerLastCard": "Senaste kort {{time}}",
+  "addBtReader": "Bluetooth Reader BT",
+  "addBtReaderHint": "En SPORTident Reader BT. Sätt först i Service/OFF-brickan så att webbläsaren hittar den.",
+  "btUnsupported": "Webbläsaren saknar Web Bluetooth. Använd Chrome eller Edge på en dator eller på Android.",
+  "btInsecure": "Bluetooth fungerar bara på en säker sida (HTTPS eller localhost). Öppna Oxygen via HTTPS för att använda en Reader BT.",
+  "btNoAdapter": "Ingen Bluetooth-adapter hittades, eller så är Bluetooth avstängt.",
+  "readerKindBle": "Bluetooth",
+  "readerBattery": "Batteri {{percent}} %",
+  "readerModeWarningBt": "Den här Reader BT är inte i avläsningsläge, så brickor som sätts i läses inte av. Ställ in den på Readout i SPORTident Config App.",
+  "forgetReader": "Glöm",
+  "reconnectReader": "Anslut igen",
+  "readerBtWaiting": "Väntar på läsaren. Sätt i en bricka för att väcka den.",
+  "readerBtReconnecting": "Anslutningen bröts. Försöker ansluta igen…",
+  "readerBtAsleep": "Läsaren sover eller är utom räckhåll. Sätt i en bricka för att väcka den och klicka sedan på Anslut igen.",
+  "btHelpTitle": "Ansluta en Reader BT",
+  "btHelpWake": "Sätt i Service/OFF-brickan. Den röda lampan blinkar i 20 sekunder medan läsaren kan hittas.",
+  "btHelpNoPair": "Para inte ihop läsaren i datorns eller telefonens Bluetooth-inställningar; Oxygen ansluter direkt till den.",
+  "btHelpLinux": "På Linux kan Chrome behöva chrome://flags/#enable-experimental-web-platform-features innan en sovande läsare återansluter av sig själv."
 }
