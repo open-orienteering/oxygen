@@ -395,8 +395,11 @@ recomputes its handles. **Closed kinds wrap at close** (the first
 vertex's prev is the last, the last's next is the first — applied when the
 flow is done); **an open line's ends stay corners** even when flagged
 (no neighbour on one side). Alt with a click on the first vertex closes
-with the first vertex smooth; Alt with a double-click makes the
-double-click's own vertex smooth. A **drag past 3 px is still the manual
+with the first vertex smooth (replacing handles pulled there at the
+first press); Alt with a double-click makes the double-click's own vertex
+smooth — with the mouse its first press places and flags that vertex, so
+the Alt that counts is the one at that press (`step`'s `double-click`
+event carries `smooth` too, for a caller that sends no press). A **drag past 3 px is still the manual
 pull** and wins: the vertex loses its flag and keeps the pulled
 handles (a drag back within 3 px then leaves a plain corner). A **filter
 region** ignores Alt (no curves). The preview (`editor-polygon`) shows the
