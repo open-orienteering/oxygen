@@ -183,6 +183,6 @@
   "btHelpTitle": "Connecting a Reader BT",
   "btHelpWake": "Insert the Service/OFF card. The red LED flashes for 20 seconds while the reader can be found.",
   "btHelpNoPair": "Do not pair the reader in the computer's or phone's Bluetooth settings; Oxygen connects to it directly.",
-  "btHelpLinux": "On Linux, Chrome only offers Web Bluetooth after enabling chrome://flags/#enable-experimental-web-platform-features and relaunching.",
+  "btHelpLinux": "On Linux, Chrome only offers Web Bluetooth after enabling chrome://flags/#enable-experimental-web-platform-features and relaunching, and BlueZ needs ConnectionSupervisionTimeout=600 under [LE] in /etc/bluetooth/main.conf or the link drops after a few readouts.",
   "btUnsupportedLinux": "Chrome on Linux needs chrome://flags/#enable-experimental-web-platform-features enabled (then relaunch) for Bluetooth."
 }

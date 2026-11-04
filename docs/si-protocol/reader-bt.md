@@ -330,6 +330,8 @@ without it `navigator.bluetooth` does not exist). Regression frames are in
 | Feedback | two beeps after Feedback OK in readout mode, as documented |
 | SI6 (and by the docs SI5) | nothing at all: no message, no LED, no beep. A runner with an SI5/SI6 must use a USB station |
 | Card that woke the reader | reported with a CardStateChange "in" right after the reconnect; read out without re-inserting |
+| Link drops after a few readouts (Linux) | **supervision timeout.** Linux connects with its defaults (interval 45 ms, latency 0, supervision timeout **420 ms**); 6 s later the reader asks for interval 100–200 ms and a 6000 ms timeout (`LE Remote Connection Parameter Request`) and the kernel refuses it (`Invalid LL Parameters`, reason unknown; the values are valid per spec). A card readout keeps the reader's radio busy for more than 420 ms, so after a few quick readouts the link is declared dead (`Disconnect Complete, Reason: Connection Timeout 0x08`) right at the Feedback write. Fix on the Linux host: `[LE] ConnectionSupervisionTimeout=600` (10 ms units) in `/etc/bluetooth/main.conf`, then restart `bluetooth`; new links come up with 6000 ms and the drops stop. Android/Windows use multi-second defaults |
+| Advertising after a clean disconnect | none either: after Chrome closed the link on a reload, BlueZ scanned for 11.6 s and saw nothing until a card was inserted |
 | Page reload | Chrome releases the old page's subscriptions at once (`Notifying = false` on all four characteristics) and drops the link about 2 s later. A connect in those 2 s gets the dying link and subscribing fails with `NotSupportedError: GATT Error Unknown` |
 | Advertising after a disconnect or link loss | none: after the central disconnects, **and after the link is lost out of range** (BlueZ saw no advertisement for 26 s until a card went in), the reader goes to sleep and stays silent until a card (or the Service/OFF card) wakes it. A reload or a drop therefore reconnects on the next card, which is then read out. A firmware that advertised for a minute after a link loss would let Oxygen reconnect without a card; the poll is ready for that |
 | `watchAdvertisements()` on Linux Chrome | starts the BlueZ scan (BlueZ reports the woken reader's RSSI) but Chrome never fires `advertisementreceived` to the page. `gatt.connect()` to a silent reader fails at once with `NetworkError: Bluetooth Device is no longer in range.`, so polling it every 2 s is cheap and connects as soon as the reader advertises |
@@ -338,13 +340,14 @@ without it `navigator.bluetooth` does not exist). Regression frames are in
 ## Open questions to settle on hardware
 
 - **Card family codes** for SI8, SI9, SI10, SI11 and ComCard Pro/Up.
-- **Link drops after a few quick readouts** (2–3 insert/remove cycles of
-  the same SIAC, the link dropped right at the Feedback write): the
-  reader closing it, or a supervision timeout on Linux? Needs the HCI
-  disconnect reason from `btmon`.
 - **Idle disconnect**: the docs mention none (only a new session after
   10 h); how long a connected reader stays connected without readouts
   is not measured yet.
+- **Why the kernel refuses the reader's connection-parameter request**
+  (100–200 ms, latency 0, 6000 ms are valid per spec; Linux 6.8 answers
+  `Invalid LL Parameters`). Harmless once the host default is 6000 ms.
+- **Reload**: whether holding the dying link and retrying the subscribe
+  for a few seconds lets the new page keep the connection.
 - **SIAC production block versions**: the SIAC above sent raw bytes 16
   and 43, decoded as `1.6` / `4.3`; compare with the same card read over
   USB before trusting `major*10+minor`.

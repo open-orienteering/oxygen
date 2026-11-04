@@ -534,16 +534,37 @@ describe("reconnect", () => {
     expect(device.watching).toBe(false);
   });
 
-  it("reconnects on a fresh link when the link is up but a subscribe fails", async () => {
+  it("keeps the link and retries setup when a subscribe fails right after connecting", async () => {
+    // Page reload: Chrome is still tearing the old page's subscriptions down.
     const { device, conn } = await connected({ watchAdvertisements: true });
     device.drop();
     device.cardState.failNextStart = true;
     await vi.advanceTimersByTimeAsync(0);
     expect(conn.status).toBe("error");
-    expect(device.gatt.connected).toBe(false); // dropped, so the stale subscription goes with it
+    expect(device.gatt.connected).toBe(true); // kept for the retry
+    device.cardState.failNextStart = true; // still busy
+    await vi.advanceTimersByTimeAsync(1500);
+    expect(conn.status).toBe("error");
     await vi.advanceTimersByTimeAsync(1500);
     expect(conn.status).toBe("reading");
     expect(device.watching).toBe(false); // never needed the scan
+  });
+
+  it("gives the link up after the setup retries and falls back to polling", async () => {
+    const { device, conn } = await connected({ watchAdvertisements: true });
+    device.drop();
+    const alwaysFail = () => (device.cardState.failNextStart = true);
+    alwaysFail();
+    const orig = device.cardState.startNotifications.bind(device.cardState);
+    device.cardState.startNotifications = () => {
+      const p = orig();
+      alwaysFail();
+      return p;
+    };
+    await vi.advanceTimersByTimeAsync(3 * 1500 + 100);
+    expect(device.gatt.connected).toBe(false);
+    expect(device.watching).toBe(true);
+    expect(conn.status).toBe("error");
   });
 
   it("connects on the next advertisement when watchAdvertisements is available", async () => {
