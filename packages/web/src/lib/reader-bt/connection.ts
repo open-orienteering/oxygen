@@ -378,17 +378,25 @@ export class ReaderBtConnection extends EventTarget implements SIReader {
       this.listen(this.readSettings, "settings");
       this.listen(this.cardState, "cardState");
       this.listen(this.cardData, "cardData");
-      step = "subscribe read settings";
-      await this.op(() => this.readSettings!.startNotifications());
-      step = "subscribe card state";
-      await this.op(() => this.cardState!.startNotifications());
+      // Card data before card state: a reader woken by a card reports it as
+      // soon as card state is subscribed, and the readout answer must have
+      // somewhere to land. Settings last; on a reconnect they are not needed.
       step = "subscribe card data";
       await this.op(() => this.cardData!.startNotifications());
+      step = "subscribe card state";
+      await this.op(() => this.cardState!.startNotifications());
+      step = "subscribe read settings";
+      await this.op(() => this.readSettings!.startNotifications());
       rbtLog(`subscribed in ${Date.now() - started} ms`);
       step = "identify";
 
-      const info: SIReaderDeviceInfo = { model: NAME_PREFIX };
+      // Already identified on an earlier connection: skip the two round trips
+      // (about 0.4 s on Linux) and get to the waiting card sooner.
+      const known = this._info?.serial ? this._info : null;
+      const info: SIReaderDeviceInfo = known ? { ...known } : { model: NAME_PREFIX };
+      if (known) rbtLog("reconnected; keeping device info from before");
       try {
+        if (known) throw null;
         const msg = await this.sendAndWait(
           this.readSettings,
           encodeMessage(RBT_MSG.READ_DEVICE_INFO),
@@ -398,9 +406,10 @@ export class ReaderBtConnection extends EventTarget implements SIReader {
         info.serial = d.serialNumber;
         info.firmware = firmwareVersion(d.softwareVersion) || null;
       } catch (err) {
-        rbtWarn("ReadDeviceInfo failed:", err);
+        if (err !== null) rbtWarn("ReadDeviceInfo failed:", err);
       }
       try {
+        if (known) throw null;
         const msg = await this.sendAndWait(
           this.readSettings,
           encodeMessage(RBT_MSG.READ_ALL_SETTINGS),
@@ -408,7 +417,7 @@ export class ReaderBtConnection extends EventTarget implements SIReader {
         );
         info.mode = operatingModeLabel(decodeAllSettings(msg.payload).operatingMode);
       } catch (err) {
-        rbtWarn("ReadAllSettings failed:", err);
+        if (err !== null) rbtWarn("ReadAllSettings failed:", err);
       }
       if (this.battery) {
         const batt = this.battery;

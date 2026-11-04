@@ -328,6 +328,7 @@ without it `navigator.bluetooth` does not exist). Regression frames are in
 | Start punch | the card reports both type 3 and type 4 (start reserve) with the same time; same for finish 5/6 |
 | Weekday in `time_in_ms` | real: the SIAC's last race (Daladubbeln, a Sunday) decoded as day index 0 = Sunday, so `finishDayOfWeek`/`checkDayOfWeek` feed `isPunchDataFresh` correctly |
 | Feedback | two beeps after Feedback OK in readout mode, as documented |
+| SI6 (and by the docs SI5) | nothing at all: no message, no LED, no beep. A runner with an SI5/SI6 must use a USB station |
 | Card that woke the reader | reported with a CardStateChange "in" right after the reconnect; read out without re-inserting |
 | Page reload | Chrome releases the old page's subscriptions at once (`Notifying = false` on all four characteristics) and drops the link about 2 s later. A connect in those 2 s gets the dying link and subscribing fails with `NotSupportedError: GATT Error Unknown` |
 | Advertising after a disconnect or link loss | none: after the central disconnects, **and after the link is lost out of range** (BlueZ saw no advertisement for 26 s until a card went in), the reader goes to sleep and stays silent until a card (or the Service/OFF card) wakes it. A reload or a drop therefore reconnects on the next card, which is then read out. A firmware that advertised for a minute after a link loss would let Oxygen reconnect without a card; the poll is ready for that |
@@ -336,8 +337,14 @@ without it `navigator.bluetooth` does not exist). Regression frames are in
 
 ## Open questions to settle on hardware
 
-- **Card family codes** for SI8, SI9, SI10, SI11 and ComCard Pro/Up;
-  whether SI5/SI6 cards produce any message at all (unsupported per docs).
+- **Card family codes** for SI8, SI9, SI10, SI11 and ComCard Pro/Up.
+- **Link drops after a few quick readouts** (2–3 insert/remove cycles of
+  the same SIAC, the link dropped right at the Feedback write): the
+  reader closing it, or a supervision timeout on Linux? Needs the HCI
+  disconnect reason from `btmon`.
+- **Idle disconnect**: the docs mention none (only a new session after
+  10 h); how long a connected reader stays connected without readouts
+  is not measured yet.
 - **SIAC production block versions**: the SIAC above sent raw bytes 16
   and 43, decoded as `1.6` / `4.3`; compare with the same card read over
   USB before trusting `major*10+minor`.

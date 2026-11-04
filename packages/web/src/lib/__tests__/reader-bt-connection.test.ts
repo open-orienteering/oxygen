@@ -284,6 +284,30 @@ describe("ReaderBtConnection.connect", () => {
     expect(device.log).toEqual(["write 0002 14,1", "write 0002 12,1"]);
   });
 
+  it("subscribes card data, then card state, then settings", async () => {
+    const d2 = new FakeDevice();
+    const seen: string[] = [];
+    for (const c of [d2.cardData, d2.cardState, d2.readSettings]) {
+      const orig = c.startNotifications.bind(c);
+      c.startNotifications = () => {
+        seen.push(c.uuid.slice(4, 8));
+        return orig();
+      };
+    }
+    await new ReaderBtConnection(d2).connect();
+    expect(seen).toEqual(["0013", "0012", "0002"]);
+  });
+
+  it("does not re-read device info on a reconnect", async () => {
+    const { device, conn } = await connected();
+    expect(device.readSettings.writes).toHaveLength(2);
+    await conn.disconnect();
+    await conn.connect();
+    expect(device.readSettings.writes).toHaveLength(2);
+    expect(conn.info?.serial).toBe(500123);
+    expect(conn.status).toBe("reading");
+  });
+
   it("queues overlapping writes instead of letting the browser reject one", async () => {
     const { device, conn } = await connected();
     device.cardResponses.push([SI8_MSG]);
