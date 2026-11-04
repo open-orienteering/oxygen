@@ -57,6 +57,9 @@ export function getMockWebBluetoothScript(): string {
   function u32(v) { return [v & 0xff, (v >>> 8) & 0xff, (v >>> 16) & 0xff, (v >>> 24) & 0xff]; }
   function msg(id, payload) { return new Uint8Array([].concat(u16(id), u16(payload.length), payload)); }
   function latin1(s) { return Array.from(s, function(c) { return c.charCodeAt(0) & 0xff; }); }
+  // Cards store owner data in CP850 even though the charset byte says 1 (ISO-8859-1).
+  var CP850 = { "ä": 0x84, "å": 0x86, "ö": 0x94, "Ä": 0x8E, "Å": 0x8F, "Ö": 0x99, "é": 0x82, "ü": 0x81, "Ü": 0x9A };
+  function cp850(s) { return Array.from(s, function(c) { return CP850[c] !== undefined ? CP850[c] : c.charCodeAt(0) & 0x7f; }); }
 
   function segments(m) {
     if (m.length <= MTU_PAYLOAD) return [m];
@@ -97,7 +100,7 @@ export function getMockWebBluetoothScript(): string {
       payload = payload.concat([31, 64], u16(120), u16(45), u16(3050), [24, 3, 15], [23, 11]);
     }
     var o = c.ownerData || {};
-    var owner = latin1([o.firstName || "", o.lastName || "", "", "", o.club || ""].join(";")).concat([0]);
+    var owner = cp850([o.firstName || "", o.lastName || "", "", "", o.club || ""].join(";")).concat([0]);
     payload = payload.concat([1], owner);
     return msg(0x1103, payload);
   }
@@ -105,7 +108,9 @@ export function getMockWebBluetoothScript(): string {
   // ── State ──
   var state;
   function freshState() {
-    return { connected: false, advertising: false, card: null, feedback: [], connects: 0, battery: 87 };
+    // reachable: the reader is awake and can be connected (it is advertising, or
+    // the picker just found it); false once the link dropped until a card wakes it.
+    return { connected: false, advertising: false, reachable: false, card: null, feedback: [], connects: 0, battery: 87 };
   }
   state = freshState();
 
@@ -114,7 +119,16 @@ export function getMockWebBluetoothScript(): string {
     t.uuid = uuid;
     t.value = null;
     t.notifying = false;
-    t.startNotifications = function() { if (!state.connected) return Promise.reject(new Error("GATT Server is disconnected")); t.notifying = true; return Promise.resolve(t); };
+    t.startNotifications = function() {
+      if (!state.connected) return Promise.reject(new Error("GATT Server is disconnected"));
+      t.notifying = true;
+      // As on hardware: a card that woke the reader is reported once the client subscribes.
+      if (uuid === UUID.cardState && state.card) {
+        var cn = state.card.cardNumber;
+        setTimeout(function() { t.notify(msg(0x1101, [].concat(u32(cn), [1], u16(1)))); }, 20);
+      }
+      return Promise.resolve(t);
+    };
     t.stopNotifications = function() { t.notifying = false; return Promise.resolve(t); };
     t.readValue = function() {
       if (!state.connected) return Promise.reject(new Error("GATT Server is disconnected"));
@@ -155,7 +169,7 @@ export function getMockWebBluetoothScript(): string {
     var id = bytes[0] | (bytes[1] << 8);
     if (uuid === UUID.readSettings) {
       if (id === 0x010E) {
-        var sw = latin1("2.1.0").concat([0]);
+        var sw = latin1("sireader@2.1.0+0000000.20261001000000").concat([0]);
         chars[UUID.readSettings].notify(msg(0x010E, [].concat(u32(500123), u16(0x00A7), [2, 1], u16(2025), [9, 30], u16(2025), [10, 1], sw)));
       } else if (id === 0x010C) {
         chars[UUID.readSettings].notify(msg(0x010C, [].concat(u16(1), [0x05])));
@@ -190,6 +204,7 @@ export function getMockWebBluetoothScript(): string {
   function dropLink() {
     if (!state.connected) return;
     state.connected = false;
+    state.reachable = false;
     Object.keys(chars).forEach(function(u) { chars[u].notifying = false; });
     device.dispatchEvent(new Event("gattserverdisconnected"));
   }
@@ -198,8 +213,9 @@ export function getMockWebBluetoothScript(): string {
     get connected() { return state.connected; },
     device: device,
     connect: function() {
-      return new Promise(function(resolve) {
+      return new Promise(function(resolve, reject) {
         setTimeout(function() {
+          if (!state.reachable) { reject(new DOMException("Connection attempt failed.", "NetworkError")); return; }
           state.connected = true;
           state.advertising = false;
           state.connects++;
@@ -225,6 +241,7 @@ export function getMockWebBluetoothScript(): string {
     requestDevice: function(options) {
       window.__readerBtLastRequest = options;
       setGranted(true);
+      state.reachable = true; // the picker only lists an advertising reader
       return Promise.resolve(device);
     },
     getDevices: function() { return Promise.resolve(granted ? [device] : []); },
@@ -246,6 +263,7 @@ export function getMockWebBluetoothScript(): string {
       if (!state.connected) {
         // A card wakes a disconnected reader: it advertises for 20 s.
         state.advertising = true;
+        state.reachable = true;
         advertise();
         return true;
       }

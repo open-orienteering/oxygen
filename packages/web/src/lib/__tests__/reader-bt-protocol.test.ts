@@ -18,9 +18,12 @@ import {
   encodeSessionDataRequest,
   encodeSessionsListRequest,
   encodeSetAutosend,
+  firmwareVersion,
   operatingModeLabel,
   splitMessages,
+  toSICardReadout,
 } from "../reader-bt";
+import { HW_CARD_IN, HW_DEVICE_INFO, HW_SETTINGS, HW_SIAC_MESSAGE, hwSegments } from "./fixtures/reader-bt-hardware";
 import {
   SIAC_CARD,
   SIAC_OWNER,
@@ -417,5 +420,69 @@ describe("sessions", () => {
     expect(() =>
       decodeSessionData(new Uint8Array([...u16(7), ...u16(2), ...u32(a.length), ...a])),
     ).toThrow(RbtProtocolError);
+  });
+});
+
+describe("frames captured from a real Reader BT", () => {
+  it("segment wrappers start with the bytes 01 a1 (0xA101 little-endian)", () => {
+    const segs = hwSegments(HW_SIAC_MESSAGE);
+    expect(Array.from(segs[0].subarray(0, 5))).toEqual([0x01, 0xa1, 0xf4, 0x00, 0x01]);
+    const r = new SegmentReassembler();
+    expect(r.push(segs[0])).toBeNull();
+    expect(r.push(segs[1])?.raw).toEqual(HW_SIAC_MESSAGE);
+  });
+
+  it("device info: serial, hardware, dates and the long software string", () => {
+    const d = decodeDeviceInfo(decodeMessage(HW_DEVICE_INFO).payload);
+    expect(d.serialNumber).toBe(1000139);
+    expect(d.deviceType).toBe(0x00a7);
+    expect(d.hardwareVersion).toBe("4.1");
+    expect(d.productionDate).toBe("2026-10-02");
+    expect(d.softwareVersion).toBe("sireader@2.2.0+71f89ff.20261008113738");
+    expect(firmwareVersion(d.softwareVersion)).toBe("2.2.0");
+    expect(firmwareVersion("2.0.3")).toBe("2.0.3");
+    expect(firmwareVersion("beta")).toBe("beta");
+  });
+
+  it("settings and card state", () => {
+    const s = decodeAllSettings(decodeMessage(HW_SETTINGS).payload);
+    expect(s.codeNumber).toBe(5);
+    expect(operatingModeLabel(s.operatingMode)).toBe("readout");
+    expect(decodeCardStateChange(decodeMessage(HW_CARD_IN).payload)).toEqual({
+      cardNumber: 8007045,
+      inserted: true,
+      codeNumber: 5,
+    });
+  });
+
+  it("SIAC readout: punches, sub-seconds, production block and CP850 owner data", () => {
+    const d = decodeCardData(HW_SIAC_MESSAGE);
+    expect(d.cardFamily).toBe(15);
+    expect(d.punches).toHaveLength(22);
+    expect(d.siac).toMatchObject({
+      signalCount: 1016,
+      clearCount: 54,
+      batteryMv: 2980,
+      batteryDate: "2024-02-12",
+      productionDate: "2024-02",
+    });
+
+    const r = toSICardReadout(d);
+    expect(r.cardType).toBe("SIAC");
+    expect(r.clearTime).toBe(36881); // 10:14:41
+    expect(r.checkTime).toBe(37081); // 10:18:01
+    expect(r.startTime).toBe(37749); // 10:29:09
+    expect(r.finishTime).toBe(42138); // 11:42:18.359
+    expect(r.finishDayOfWeek).toBe(7); // day index 0 → Sunday
+    expect(r.punches).toHaveLength(16);
+    expect(r.punches[0]).toEqual({ controlCode: 144, time: 38031, subSecond: 215 }); // .839 s
+    expect(r.batteryVoltage).toBeCloseTo(2.98);
+    expect(r.ownerData).toMatchObject({
+      firstName: "Åsa",
+      lastName: "Öberg",
+      club: "OK Ärla",
+      city: "Västerås",
+      country: "Swedish",
+    });
   });
 });

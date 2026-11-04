@@ -145,7 +145,7 @@ export function ReaderConnectionDialog({ onClose }: { onClose: () => void }) {
                 <span>
                   <span className="block text-sm font-medium text-slate-900">{t("addBtReader")}</span>
                   <span className="block text-xs text-slate-500" data-testid="connect-reader-bt-hint">
-                    {t(BLE_HINT[bleSupport])}
+                    {t(bleSupport === "unsupported" && isDesktopLinux() ? "btUnsupportedLinux" : BLE_HINT[bleSupport])}
                   </span>
                 </span>
               </button>
@@ -185,6 +185,12 @@ const BLE_HINT = {
   insecure: "btInsecure",
   "no-adapter": "btNoAdapter",
 } as const;
+
+/** Chrome on desktop Linux ships Web Bluetooth behind a flag. */
+function isDesktopLinux(): boolean {
+  const ua = typeof navigator === "undefined" ? "" : navigator.userAgent;
+  return /Linux/.test(ua) && !/Android|CrOS/.test(ua);
+}
 
 function ReaderRow({
   reader,

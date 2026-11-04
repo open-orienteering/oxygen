@@ -11,6 +11,7 @@
 
 import {
   PERSONAL_FIELDS,
+  decodeCp850,
   getCardType,
   type SICardMetadata,
   type SICardOwnerData,
@@ -341,11 +342,16 @@ function decodeSiacProduction(b: Uint8Array): RbtSiacProduction {
   };
 }
 
-const CHARSET_LABEL: Record<number, string> = { 1: "iso-8859-1", 17: "gb2312" };
-
+/**
+ * Charset 1 is documented as ISO-8859-1, but the reader passes the card's
+ * bytes through unchanged, and cards store owner data in CP850 (the USB path
+ * decodes the same area that way). Hardware confirmed it: "ä" arrives as
+ * 0x84, a C1 control code in Latin-1. So charset 1 is decoded as CP850.
+ */
 function decodeText(charset: number, bytes: Uint8Array): string {
+  if (charset !== 17) return decodeCp850(bytes);
   try {
-    return new TextDecoder(CHARSET_LABEL[charset] ?? "iso-8859-1").decode(bytes);
+    return new TextDecoder("gb2312").decode(bytes);
   } catch {
     // Runtime without the GB2312 decoder: fall back to Latin-1 rather than losing the readout.
     return new TextDecoder("iso-8859-1").decode(bytes);
@@ -373,6 +379,15 @@ export interface RbtDeviceInfo {
   productionDate: string | null;
   batteryDate: string | null;
   softwareVersion: string;
+}
+
+/**
+ * The x.y.z part of the software string. Firmware 2.2.0 reports
+ * "sireader@2.2.0+71f89ff.20261008113738"; anything without a version is
+ * returned as is.
+ */
+export function firmwareVersion(software: string): string {
+  return /(\d+\.\d+\.\d+)/.exec(software)?.[1] ?? software;
 }
 
 export function decodeDeviceInfo(payload: Uint8Array): RbtDeviceInfo {
@@ -519,6 +534,14 @@ function siDayOfWeek(timeMs: number): number {
   return dayIdx === 0 ? 7 : dayIdx;
 }
 
+/**
+ * The millisecond part as 1/256 s, the unit SI stations use for sub-seconds.
+ * Hardware delivers SIAC times in exact multiples of 1000/256 ms.
+ */
+function subSecond256(timeMs: number): number {
+  return Math.min(255, Math.round(((timeMs % 1000) * 256) / 1000));
+}
+
 /** Integer seconds since midnight; the millisecond part is dropped */
 function secondsOfDay(timeMs: number): number {
   return Math.floor((timeMs % DAY_MS) / 1000);
@@ -537,7 +560,12 @@ export function toSICardReadout(d: RbtCardData): SICardReadout {
 
   const punches: SIPunch[] = d.punches
     .filter((p) => p.type === RBT_PUNCH_TYPE.CONTROL || p.type === RBT_PUNCH_TYPE.UNDEFINED)
-    .map((p) => ({ controlCode: p.code, time: secondsOfDay(p.timeMs) }));
+    .map((p) => {
+      const punch: SIPunch = { controlCode: p.code, time: secondsOfDay(p.timeMs) };
+      const sub = subSecond256(p.timeMs);
+      if (sub > 0) punch.subSecond = sub;
+      return punch;
+    });
 
   const byNumber = getCardType(d.cardNumber);
   const cardType = byNumber !== "Unknown" ? byNumber : (RBT_CARD_FAMILY[d.cardFamily] ?? "Unknown");

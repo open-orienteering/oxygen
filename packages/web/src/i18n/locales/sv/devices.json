@@ -183,5 +183,6 @@
   "btHelpTitle": "Ansluta en Reader BT",
   "btHelpWake": "Sätt i Service/OFF-brickan. Den röda lampan blinkar i 20 sekunder medan läsaren kan hittas.",
   "btHelpNoPair": "Para inte ihop läsaren i datorns eller telefonens Bluetooth-inställningar; Oxygen ansluter direkt till den.",
-  "btHelpLinux": "På Linux kan Chrome behöva chrome://flags/#enable-experimental-web-platform-features innan en sovande läsare återansluter av sig själv."
+  "btHelpLinux": "På Linux erbjuder Chrome Web Bluetooth först när chrome://flags/#enable-experimental-web-platform-features är aktiverad och webbläsaren startats om.",
+  "btUnsupportedLinux": "Chrome på Linux behöver chrome://flags/#enable-experimental-web-platform-features aktiverad (och en omstart) för Bluetooth."
 }
