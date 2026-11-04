@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { convexHull, pointInPolygon, step, tonerSaverHull, type PolygonState } from "../tools/polygon";
+import { step, type PolygonState } from "../tools/polygon";
 
 const area: PolygonState = { kind: "oob_area", vertices: [] };
 const click = (s: PolygonState, x: number, y: number, onFirst = false) => step(s, { type: "click", pt: { x, y }, onFirst });
@@ -73,28 +73,5 @@ describe("curve vertices while drawing (docs/course-editor.md §6.4)", () => {
     let s = pull(click(area, 0, 0).state, 0, 1, 1);
     s = step(s, { type: "move-vertex", index: 0, pt: { x: 2, y: 2 } }).state;
     expect(s.vertices[0]).toEqual({ x: 2, y: 2, hOut: { x: 1, y: 1 }, hIn: { x: -1, y: -1 } });
-  });
-});
-
-describe("hulls", () => {
-  it("convexHull drops interior and collinear points", () => {
-    const h = convexHull([{ x: 0, y: 0 }, { x: 5, y: 0 }, { x: 10, y: 0 }, { x: 10, y: 10 }, { x: 0, y: 10 }, { x: 5, y: 5 }]);
-    expect(h).toHaveLength(4);
-  });
-
-  it("the toner saver hull keeps every site at least the margin inside", () => {
-    const sites = [{ x: 0, y: 0 }, { x: 40, y: 10 }, { x: 20, y: 30 }];
-    const hull = tonerSaverHull(sites, 8)!;
-    const edgeDist = (p: { x: number; y: number }) => Math.min(...hull.map((a, i) => {
-      const b = hull[(i + 1) % hull.length];
-      const dx = b.x - a.x, dy = b.y - a.y, l2 = dx * dx + dy * dy;
-      const t = Math.max(0, Math.min(1, ((p.x - a.x) * dx + (p.y - a.y) * dy) / l2));
-      return Math.hypot(p.x - a.x - t * dx, p.y - a.y - t * dy);
-    }));
-    for (const s of sites) {
-      expect(pointInPolygon(s, hull)).toBe(true);
-      expect(edgeDist(s)).toBeGreaterThanOrEqual(8 - 1e-3);
-    }
-    expect(tonerSaverHull([], 8)).toBeNull();
   });
 });

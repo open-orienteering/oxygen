@@ -16,7 +16,7 @@ import { fileToBase64 } from "../../../lib/file-to-base64";
 import type { SheetGeometry } from "../../../lib/editor/layout";
 import { InspectorSection } from "../Inspector";
 import type { LayoutSelection, LayoutTarget, LayoutTool } from "./bindings";
-import type { EditorSheet, LayoutSnapshot } from "./model";
+import { FILL_MODES, type EditorSheet, type LayoutSnapshot } from "./model";
 
 type T = ReturnType<typeof useTranslation<"editor">>["t"];
 
@@ -52,7 +52,6 @@ function TextField({ label, value, testId, onCommit }: { label: string; value: s
   );
 }
 
-const FILL_MODES: MapFillMode[] = ["none", "solid", "whiteout", "whiteoutInverted", "outOfBounds"];
 
 function objectLabel(o: CourseMapObject, t: T): string {
   if (o.kind === "text") return o.text.trim() || t("layoutKind_text");

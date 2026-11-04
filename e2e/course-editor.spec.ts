@@ -948,6 +948,40 @@ test.describe("Course editor (new, GL canvas)", () => {
       await page.getByTestId("editor-object-delete").click();
       await expect.poll(() => inkIn(page, band), { timeout: 30000 }).toBeGreaterThan(before / 2);
     });
+
+    test("A then S: the toner saver is the smooth offset hull of the course at 25 mm, handles stored", async ({ page }) => {
+      await openEditor(page);
+      await newCourse(page, "D13 toner");
+      await expect(page.locator('[data-testid="editor-seq-row"][data-kind="start"]')).toBeAttached({ timeout: 15000 });
+      await page.keyboard.press("k");
+      const spots: { x: number; y: number }[] = [];
+      for (let i = 0; i < 3; i++) {
+        const p = await emptyPoint(page, 60, spots);
+        spots.push(p);
+        await page.mouse.click(p.x, p.y);
+        await expect(controlRows(page)).toHaveCount(i + 1, { timeout: 15000 });
+      }
+      await page.keyboard.press("Escape");
+      await expect(page.getByTestId("editor-tool-V")).toHaveAttribute("aria-pressed", "true");
+
+      const created = waitForTrpc(page, "courseObject.create");
+      await page.keyboard.press("a");
+      await page.keyboard.press("s");
+      await created;
+      await expect(page.getByTestId("editor-object")).toHaveAttribute("data-object-kind", "toner_saver", { timeout: 15000 });
+      const id = await page.getByTestId("editor-object").getAttribute("data-object-id");
+      const row = page.locator(`[data-testid="editor-object-row"][data-object-id="${id}"]`);
+      await expect(row).toHaveCount(1, { timeout: 15000 });
+      expect(JSON.parse((await row.getAttribute("data-props")) ?? "{}")).toMatchObject({ marginMm: 25 });
+      const g = JSON.parse((await row.getAttribute("data-geometry-json")) ?? "[]") as { x: number; y: number; hIn?: unknown; hOut?: { x: number; y: number } }[];
+      expect(g.filter((v) => v.hOut).length, "Bézier arcs, not an octagon").toBeGreaterThanOrEqual(3);
+      // Three sites: three arcs of one or two pieces, three straight offset edges.
+      expect(g.length).toBeGreaterThanOrEqual(6);
+      await expect(page.getByTestId("editor-prop-margin")).toHaveValue("25");
+      // The selected outline samples every curved segment.
+      const outline = page.getByTestId("editor-tool-layer").locator(`[data-testid="editor-object-outline"][data-object-id="${id}"]`);
+      expect(((await outline.getAttribute("data-points")) ?? "").split(" ").length).toBeGreaterThan(g.length);
+    });
   });
 });
 
