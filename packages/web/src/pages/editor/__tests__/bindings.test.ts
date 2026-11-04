@@ -180,6 +180,33 @@ describe("geometry editing on a selected object (docs/course-editor.md §7 \"Edi
     expect(t.onObjectMoved).not.toHaveBeenCalled();
   });
 
+  it("a click leaves the page's draft (the last write) alone; a text's anchor is never focused", () => {
+    const o = selectOpts({ selected: square(4) });
+    const b = selectBinding(o);
+    b.onPointerDown!(ptr(10, 10));
+    b.onPointerUp!({ x: 10, y: 10 });
+    expect(o.onObjectDraft).not.toHaveBeenCalled();
+    const text = { ...square(5, "text"), geometry: [{ x: 0, y: 0 }] } as course.CourseObject;
+    const t = selectOpts({ selected: text, objects: [text] });
+    const bt = selectBinding(t);
+    bt.onPointerDown!(ptr(0, 0));
+    bt.onPointerUp!({ x: 0, y: 0 });
+    expect(t.onVertexFocus).toHaveBeenLastCalledWith(null);
+  });
+
+  it("a grip drags by the pointer's offset, past a threshold", () => {
+    const o = selectOpts({ selected: curved(4), objects: [curved(4)] });
+    const b = selectBinding(o);
+    b.onPointerDown!(ptr(0.4, 2)); // 0.4 mm off hOut's grip at (0, 2)
+    b.onPointerDrag!({ x: 0.41, y: 2 }, { shift: false, alt: false }); // jitter
+    b.onPointerUp!({ x: 0.41, y: 2 });
+    expect(o.onObjectMoved).not.toHaveBeenCalled();
+    b.onPointerDown!(ptr(0.4, 2));
+    b.onPointerDrag!({ x: 0.4, y: 3 }, { shift: false, alt: false });
+    b.onPointerUp!({ x: 0.4, y: 3 });
+    expect(movedTo(o, 0)[0]).toMatchObject({ hOut: { x: 0, y: 3 } });
+  });
+
   it("a press within reach of the selected object's edge is the object's, not the map's", () => {
     const b = selectBinding(selectOpts({ selected: square(4) }));
     expect(b.onPointerDown!(ptr(5, -0.5))).toBe(true);
@@ -244,6 +271,18 @@ describe("armed and area bindings", () => {
     const last = onPoly.mock.calls[onPoly.mock.calls.length - 1][0].vertices[2];
     expect(last.hOut.y).toBeCloseTo(0);
     b.onPointerUp!({ x: 20, y: 11 });
+    // The threshold is the press's, not the snapped vertex's; back within 3 px of the press is a corner again.
+    const onPoly2 = vi.fn();
+    const s2 = areaBinding({ ...opts, onPoly: onPoly2, snap: (p: { x: number; y: number }) => ({ x: Math.round(p.x), y: Math.round(p.y) }) });
+    gesture.current = null;
+    s2.onPointerDown!(ptr(20.4, 20.4));
+    expect(onPoly2).toHaveBeenCalledTimes(1); // the corner, at the snapped (20, 20)
+    s2.onPointerDrag!({ x: 20.45, y: 20.4 }, { shift: false, alt: false });
+    expect(onPoly2).toHaveBeenCalledTimes(1);
+    s2.onPointerDrag!({ x: 23.4, y: 20.4 }, { shift: false, alt: false });
+    expect(onPoly2.mock.calls[1][0].vertices[2]).toEqual({ x: 20, y: 20, hOut: { x: 3, y: 0 }, hIn: { x: -3, y: -0 } });
+    s2.onPointerDrag!({ x: 20.5, y: 20.4 }, { shift: false, alt: false });
+    expect(onPoly2.mock.calls[2][0].vertices[2]).toEqual({ x: 20, y: 20 });
     // Drawn with its handles: the preview follows the curve, the grips show.
     const drawn = areaBinding({ ...opts, poly: { kind: "whiteout", vertices: [...poly.vertices, { x: 10, y: 10, hOut: { x: 3, y: 0 }, hIn: { x: -3, y: 0 } }] } });
     const shapes = drawn.shapes as unknown as { testId?: string; points?: unknown[] }[];

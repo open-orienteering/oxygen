@@ -66,6 +66,16 @@ describe("insert a vertex", () => {
     expect(g[4]).toEqual({ x: 0, y: 5 });
   });
 
+  it("on a curved closing edge: appended, the first vertex's hIn shortened", () => {
+    const g: Vertex[] = [{ x: 0, y: 0, hIn: { x: -4, y: 0 } }, { x: 10, y: 0 }, { x: 10, y: 10 }];
+    const out = insertVertex(g, true, 2, 0.5);
+    expect(out).toHaveLength(4);
+    expect(out[3].hIn && out[3].hOut).toBeTruthy();
+    expect(out[0].hIn!.x).toBeCloseTo(-2);
+    const before = sampleSegment(g[2], g[0], 2)[0];
+    expect(close(out[3], before)).toBe(true);
+  });
+
   it("on a curve: split so the shape is unchanged (de Casteljau)", () => {
     const g: Vertex[] = [{ x: 0, y: 0, hOut: { x: 0, y: 10 } }, { x: 10, y: 0, hIn: { x: 0, y: 10 } }];
     const out = insertVertex(g, false, 0, 0.5);

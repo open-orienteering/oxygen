@@ -590,8 +590,14 @@ export function EditorPage() {
   const [drafts, setDrafts] = useState<Map<number, CourseObject["geometry"]>>(new Map());
   useEffect(() => { setDrafts((d) => (d.size ? new Map() : d)); }, [objectList.data]);
   /** The selected object's focused vertex (a click on its handle): `Delete` removes it (§7 "Editing geometry"). */
-  const [focusedVertex, setFocusedVertex] = useState<number | null>(null);
-  useEffect(() => { setFocusedVertex(null); }, [state.selectedObjectId]);
+  // Keyed by the object it belongs to, so a selection change drops it.
+  const [focus, setFocus] = useState<{ objectId: number; index: number } | null>(null);
+  const focusedVertex = focus && focus.objectId === state.selectedObjectId ? focus.index : null;
+  const selectedObjectId = state.selectedObjectId;
+  const setFocusedVertex = (index: number | null) =>
+    setFocus(index === null || selectedObjectId === null ? null : { objectId: selectedObjectId, index });
+  /** Per object, the geometry shown when the gesture in progress drew its first draft (`onObjectDraft`). */
+  const gestureBefore = useRef(new Map<number, CourseObject["geometry"]>());
   const setDraft = useCallback((id: number, geometry: CourseObject["geometry"] | null) => {
     setDrafts((prev) => {
       const next = new Map(prev);
@@ -891,11 +897,19 @@ export function EditorPage() {
           onToggleMulti: (id) => dispatch({ type: "toggle-multi", id }),
           onLasso: (ids) => dispatch({ type: "set-multi", ids }),
           onSelectObject: (id) => dispatch({ type: "select-object", id }),
-          onObjectDraft: setDraft,
+          onObjectDraft: (id, geometry) => {
+            // The first draft of a gesture keeps what was shown before it: the undo's "before".
+            if (geometry && !gestureBefore.current.has(id)) gestureBefore.current.set(id, drafts.get(id) ?? objects.find((x) => x.id === id)?.geometry ?? geometry);
+            if (!geometry) gestureBefore.current.delete(id);
+            setDraft(id, geometry);
+          },
           onObjectMoved: (id, geometry) => {
             const o = objects.find((x) => x.id === id);
+            // Undo restores what the gesture started from — a previous gesture's draft while the list catches up.
+            const before = gestureBefore.current.get(id) ?? drafts.get(id) ?? o?.geometry;
+            gestureBefore.current.delete(id);
             setDraft(id, geometry);
-            if (o) updateObject(o, { geometry });
+            if (o && before) updateObject({ ...o, geometry: before } as CourseObject, { geometry });
           },
           onLegDoubleClick: insertOnLeg,
         });
@@ -1077,10 +1091,12 @@ export function EditorPage() {
   // ─── Undo / redo, keyboard, deep links ───────────────────
   const runUndo = useCallback(() => {
     setMoveEpoch((v) => v + 1);
+    setFocus(null); // its index may name another vertex now
     void run(async () => { await undoStack.undo(); bumpHistory(); });
   }, [run, undoStack, bumpHistory]);
   const runRedo = useCallback(() => {
     setMoveEpoch((v) => v + 1);
+    setFocus(null);
     void run(async () => { await undoStack.redo(); bumpHistory(); });
   }, [run, undoStack, bumpHistory]);
 
@@ -1187,7 +1203,7 @@ export function EditorPage() {
           if (geometry) {
             setDraft(shown.id, geometry);
             updateObject(shown, { geometry });
-            setFocusedVertex(null);
+            setFocus(null);
           }
         } else if (selectedObject) deleteObject(selectedObject);
         else handleDelete();

@@ -351,11 +351,11 @@ menu item does the same.
 
 `pages/editor/tools/polygon.ts`: **click = corner, click-drag = curve
 vertex** (Mapper / Illustrator): the press places the vertex where it
-went down; once the pointer has moved 3 px the drag pulls **symmetric
-handles** out of it — `hOut` = the drag vector, `hIn` its negation
+went down (snapped); once the pointer is 3 px from the press the drag
+pulls **symmetric handles** out of it — `hOut` = the drag vector, `hIn` its negation
 (`pull-handles`, `symmetricHandles`) — and `Shift` turns the handle to
-the nearest 45° (`constrain45`), live. A drag back onto the vertex leaves
-a corner. Since the tool takes every press on the map, **a drag no longer
+the nearest 45° (`constrain45`), live. A drag back within 3 px of the
+press leaves a corner. Since the tool takes every press on the map, **a drag no longer
 pans while an area is being drawn** (the wheel zooms; on touch, where
 taps place vertices through `onClick`, one finger still pans and there
 are no curve vertices). Drag a placed vertex (`editor-polygon-vertex`)
@@ -465,11 +465,11 @@ binding's on the **selected** object (`selectBinding`), mouse only:
 | Gesture | Edit | |
 |---|---|---|
 | drag a vertex handle (`editor-object-handle`) | moves the vertex, its handles with it | as before (§7) |
-| click a vertex handle | focuses it (drawn filled, `data-focused`) | no write |
+| click a vertex handle | focuses it (drawn filled, `data-focused`) | no write; a text's anchor or an image's corner is never focused, so `Delete` deletes the object |
 | `Delete` / `Backspace` with a vertex focused | `deleteVertex` down to the kind's minimum; at the minimum nothing happens | the object is deleted from the inspector, or after a click on its body (which unfocuses) |
 | double-click on an edge (within the 7 px handle reach, not on a vertex) | `insertVertex` at the nearest point (`nearestEdge`): a corner on a straight edge; on a curve a **de Casteljau split**, so the shape stays as it was and the new vertex is smooth | the new vertex is focused |
 | `Alt`-drag a vertex | `symmetricHandles`: `hOut` = the drag vector, `hIn` its negation (`Shift`: 45°) | |
-| drag a grip (`editor-object-grip`, `data-index`, `data-which` `in` / `out`) | `dragGrip`: a mirrored pair stays mirrored; a smooth pair (opposite, different lengths — a split's) stays smooth with the other's length kept; a lone or broken handle moves alone (`Shift`: 45°) | |
+| drag a grip (`editor-object-grip`, `data-index`, `data-which` `in` / `out`) | the handle moves by the pointer's offset (so a press beside the grip does not jump it) — `dragGrip`: a mirrored pair stays mirrored; a smooth pair (opposite, different lengths — a split's) stays smooth with the other's length kept; a lone or broken handle moves alone (`Shift`: 45°) | |
 | `Alt` held on a grip (live) | breaks the pair: only that handle moves | the pair stays broken afterwards |
 | `Alt`-click a vertex with handles | `retractHandles`: a corner again | on a corner nothing |
 
@@ -481,7 +481,11 @@ binding's on the **selected** object (`selectBinding`), mouse only:
   insert or delete.
 - **Writes**: each gesture is one `courseObject.update { geometry }` and
   one undo entry (the page's `updateObject`); during a drag the object is
-  a draft as for every object drag (§7). A press within the handle reach
+  a draft as for every object drag (§7). The undo restores the geometry
+  **shown** when the gesture began — the previous gesture's result while
+  the list catches up, not the older stored row — so quick successive
+  gestures undo one at a time; a click draws no draft and leaves the
+  last write's draft in place. A press within the handle reach
   of the selected object's edge belongs to the object (a body press), so
   the double-click that inserts never reaches the map.
 - **Pressing order** on the selected object: a vertex, then a grip, then
@@ -494,8 +498,9 @@ binding's on the **selected** object (`selectBinding`), mouse only:
   (§6.4). Hit-testing the layer's shapes needs nothing: the hit index is
   the symbolised stream, which already follows the curve.
 - The focused vertex is page state: cleared when the selection changes,
-  replaced by the next vertex click, cleared by a click on the body; it
-  is not a step of the Escape cascade (§3).
+  on undo / redo (its index may name another vertex then), replaced by
+  the next vertex click, cleared by a click on the body; it is not a step
+  of the Escape cascade (§3).
 - The inspector shows a one-line hint of these gestures for the kinds
   that curve (`editor-geometry-hint`).
 

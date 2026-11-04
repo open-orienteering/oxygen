@@ -29,13 +29,13 @@ export type Gesture =
    * `alt` on a vertex: the drag pulls symmetric handles instead of moving it (§7 "Editing geometry").
    */
   | { kind: "object"; id: number; from: Pt; to: Pt; moved: boolean; vertex: number | null; base: course.CourseObject["geometry"]; alt?: boolean; shift?: boolean }
-  /** A Bézier handle grip of vertex `index` dragged; `alt` (live) breaks the pair. */
-  | { kind: "grip"; id: number; index: number; which: "in" | "out"; to: Pt; moved: boolean; base: course.CourseObject["geometry"]; alt: boolean; shift: boolean }
+  /** A Bézier handle grip of vertex `index` dragged by the pointer's from→to offset; `alt` (live) breaks the pair. */
+  | { kind: "grip"; id: number; index: number; which: "in" | "out"; from: Pt; to: Pt; moved: boolean; base: course.CourseObject["geometry"]; alt: boolean; shift: boolean }
   /** Two fingers on a selected object's handle ring (§10): scale `base` about its centroid. */
   | { kind: "pinch"; id: number; base: course.CourseObject["geometry"]; centre: Pt; scale: number }
   | { kind: "poly-vertex"; index: number }
-  /** A press while drawing placed vertex `index` at `from`; a drag past 3 px pulls its handles (§6.4). */
-  | { kind: "poly-pull"; index: number; from: Pt; mmPerPx: number; poly: PolygonState; pulled: boolean }
+  /** A press at `press` while drawing placed vertex `index` (snapped); a drag past 3 px from the press pulls its handles (§6.4). */
+  | { kind: "poly-pull"; index: number; press: Pt; mmPerPx: number; poly: PolygonState; pulled: boolean }
   | { kind: "gap"; from: Pt; to: Pt }
   | null;
 
@@ -148,7 +148,7 @@ export function selectBinding(o: SelectOptions): EditorToolBinding {
         for (const [index, v] of (sel.geometry as Vertex[]).entries()) {
           const grip = gripsOf(v).find((q) => near(q.at, p.pt, reach));
           if (grip) {
-            g.current = { kind: "grip", id: sel.id, index, which: grip.which, to: p.pt, moved: false, base: sel.geometry, alt: !!p.alt, shift: p.shift };
+            g.current = { kind: "grip", id: sel.id, index, which: grip.which, from: p.pt, to: p.pt, moved: false, base: sel.geometry, alt: !!p.alt, shift: p.shift };
             return true;
           }
         }
@@ -189,10 +189,10 @@ export function selectBinding(o: SelectOptions): EditorToolBinding {
         if (cur.moved) o.onObjectDraft(cur.id, dragged(cur));
       } else if (cur?.kind === "grip") {
         cur.to = pt;
-        cur.moved = true;
+        cur.moved = cur.moved || !near(cur.from, pt, 0.05);
         cur.alt = mods?.alt ?? cur.alt;
         cur.shift = mods?.shift ?? cur.shift;
-        o.onObjectDraft(cur.id, gripped(cur));
+        if (cur.moved) o.onObjectDraft(cur.id, gripped(cur));
       }
     },
     onPointerUp(pt) {
@@ -208,17 +208,19 @@ export function selectBinding(o: SelectOptions): EditorToolBinding {
       } else if (cur.kind === "object") {
         if (pt) cur.to = pt;
         if (pt && cur.moved) return o.onObjectMoved(cur.id, dragged(cur));
-        o.onObjectDraft(cur.id, null);
+        // Only a drag drew a draft; a click leaves the page's (the last write, until the list catches up) alone.
+        if (cur.moved) o.onObjectDraft(cur.id, null);
         if (!pt) return;
-        // A click: on a vertex it focuses it, with Alt it retracts its handles; on the body it unfocuses.
+        // A click: on a vertex it focuses it, with Alt it retracts its handles; on the body it unfocuses. A text's
+        // anchor or an image's corner is never focused: `Delete` deletes the object.
+        const fixed = Number.isFinite(vertexRule(shown(o)?.kind ?? "").max);
         if (cur.vertex !== null && cur.alt) {
           if (hasHandles(cur.base[cur.vertex])) o.onObjectMoved(cur.id, retractHandles(cur.base, cur.vertex));
-        } else o.onVertexFocus?.(cur.vertex);
+        } else o.onVertexFocus?.(fixed ? null : cur.vertex);
       } else if (cur.kind === "grip") {
-        if (pt && cur.moved) {
-          cur.to = pt;
-          o.onObjectMoved(cur.id, gripped(cur));
-        } else o.onObjectDraft(cur.id, null);
+        if (pt) cur.to = pt;
+        if (pt && cur.moved) o.onObjectMoved(cur.id, gripped(cur));
+        else if (cur.moved) o.onObjectDraft(cur.id, null);
       }
     },
     onDoubleClick(p) {
@@ -275,8 +277,9 @@ function dragged(g: Extract<Gesture, { kind: "object" }>): course.CourseObject["
 }
 
 function gripped(g: Extract<Gesture, { kind: "grip" }>): course.CourseObject["geometry"] {
-  const v = g.base[g.index];
-  const vec = { x: g.to.x - v.x, y: g.to.y - v.y };
+  const v: Vertex = g.base[g.index];
+  const h = (g.which === "out" ? v.hOut : v.hIn) ?? { x: 0, y: 0 };
+  const vec = { x: h.x + g.to.x - g.from.x, y: h.y + g.to.y - g.from.y };
   return dragGrip(g.base, g.index, g.which, g.shift ? constrain45(vec) : vec, g.alt);
 }
 
@@ -372,16 +375,19 @@ export function areaBinding(o: AreaOptions): EditorToolBinding {
       const pt = o.snap(p.pt);
       const r = step(o.poly, { type: "click", pt, onFirst: false });
       if (r.state !== o.poly) o.onPoly(r.state);
-      o.gesture.current = { kind: "poly-pull", index: r.state.vertices.length - 1, from: pt, mmPerPx: p.mmPerPx, poly: r.state, pulled: false };
+      o.gesture.current = { kind: "poly-pull", index: r.state.vertices.length - 1, press: p.pt, mmPerPx: p.mmPerPx, poly: r.state, pulled: false };
       return true;
     },
     onPointerDrag(pt, mods) {
       const g = o.gesture.current;
       if (g?.kind === "poly-vertex") apply({ type: "move-vertex", index: g.index, pt: o.snap(pt) });
       else if (g?.kind === "poly-pull") {
-        if (!g.pulled && near(g.from, pt, 3 * g.mmPerPx)) return;
+        // Within 3 px of the press it is a corner (before the pull, and again when the drag comes back).
+        const corner = near(g.press, pt, 3 * g.mmPerPx);
+        if (!g.pulled && corner) return;
         g.pulled = true;
-        const r = step(g.poly, { type: "pull-handles", index: g.index, vec: { x: pt.x - g.from.x, y: pt.y - g.from.y }, shift: mods?.shift ?? false });
+        const vec = corner ? { x: 0, y: 0 } : { x: pt.x - g.press.x, y: pt.y - g.press.y };
+        const r = step(g.poly, { type: "pull-handles", index: g.index, vec, shift: mods?.shift ?? false });
         if (r.state !== g.poly) o.onPoly(r.state);
       }
     },
