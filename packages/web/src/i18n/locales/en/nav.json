@@ -50,5 +50,8 @@
   "hideMapPaneTitle": "Hide the map pane",
   "showMapPane": "Show map",
   "showMapPaneTitle": "Show the map pane",
-  "resizeMapPane": "Drag to resize the map pane"
+  "resizeMapPane": "Drag to resize the map pane",
+  "readersConnected_one": "{{count}} reader",
+  "readersConnected_other": "{{count}} readers",
+  "readerMenuTitle": "Card readers"
 }

@@ -18,6 +18,7 @@
 
 import { test, expect, type Page, type BrowserContext } from "@playwright/test";
 import { getMockWebSerialScript } from "./helpers/mock-webserial";
+import { connectMockSerialReader } from "./helpers/reader";
 import { waitForTrpc } from "./helpers/trpc";
 import { openKioskTab } from "./helpers/kiosk";
 import { API_BASE } from "./helpers/api-base";
@@ -65,8 +66,7 @@ function getNameId(page: Page): string {
 async function setupAdmin(page: Page) {
   await page.addInitScript(getMockWebSerialScript());
   await selectCompetition(page);
-  await page.getByTestId("connect-reader").click();
-  await expect(page.getByTestId("reader-status")).toBeVisible({ timeout: 5000 });
+  await connectMockSerialReader(page, 5000);
 }
 
 /** Set up admin + kiosk pages in the same browser context */
@@ -78,8 +78,7 @@ async function setupAdminAndKiosk(context: BrowserContext) {
 
   const kioskPage = await openKioskTab(context, nameId);
 
-  await adminPage.getByTestId("connect-reader").click();
-  await expect(adminPage.getByTestId("reader-status")).toBeVisible({ timeout: 10000 });
+  await connectMockSerialReader(adminPage, 10000);
 
   return { adminPage, kioskPage, nameId };
 }

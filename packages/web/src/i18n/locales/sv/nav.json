@@ -50,5 +50,8 @@
   "hideMapPaneTitle": "Dölj kartpanelen",
   "showMapPane": "Visa karta",
   "showMapPaneTitle": "Visa kartpanelen",
-  "resizeMapPane": "Dra för att ändra storlek på kartpanelen"
+  "resizeMapPane": "Dra för att ändra storlek på kartpanelen",
+  "readersConnected_one": "{{count}} läsare",
+  "readersConnected_other": "{{count}} läsare",
+  "readerMenuTitle": "Kortläsare"
 }
