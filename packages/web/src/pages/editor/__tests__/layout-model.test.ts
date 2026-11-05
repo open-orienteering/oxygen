@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { defaultMapAppearance } from "@oxygen/shared";
-import { FILL_MODES, geometryOf, layoutRequestOf, placeObject, scopeObjects, sheetKeyOf, snapshotOf, withEditable, type EditorSheet } from "../layout/model";
+import { FILL_MODES, geometryOf, layoutRequestOf, pathObject, placeObject, scopeObjects, sheetKeyOf, snapshotOf, withEditable, type EditorSheet } from "../layout/model";
 
 const settings = { printMarginMm: 3, mapFrame: { x: 10, y: 10, width: 190, height: 277 }, description: { visible: false, x: 150, y: 12, cellSizeMm: 6 }, appearance: defaultMapAppearance };
 const sheetText = { id: "s", kind: "text" as const, anchor: "page" as const, x: 20, y: 30, text: "{course}", fontSizeMm: 4, color: "#000000" };
@@ -80,5 +80,12 @@ describe("Layout model (docs/course-layout.md §2)", () => {
     expect(placeObject("image", { x: 1, y: 1 }, printable, 9)).toMatchObject({ kind: "image", graphicId: 9, x: 3, y: 3 });
     expect(placeObject("image", { x: 1, y: 1 }, printable)).toBeNull();
     expect(placeObject("line", { x: 50, y: 50 }, printable)).toMatchObject({ kind: "path", closed: false });
+  });
+
+  it("a drawn polygon (P, D16): a closed page path with the drawn points and createObjectAt's defaults", () => {
+    const points = [{ x: 40, y: 60 }, { x: 90, y: 60, hOut: { x: 0, y: 5 } }, { x: 60, y: 110 }];
+    const o = pathObject(points, { x: 3, y: 3, width: 204, height: 291 });
+    expect(o).toMatchObject({ kind: "path", anchor: "page", closed: true, points, stroke: "#000000", strokeWidthMm: 0.35, fillMode: "none" });
+    expect(o.id).toMatch(/^[0-9a-f-]{36}$/);
   });
 });

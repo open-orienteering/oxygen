@@ -149,9 +149,12 @@ description block, `W` white-out, `L` line, `R` rectangle, `P` polygon
 (`I` image is armed from the Graphics section; there is no key for
 white-out outside, see §3),
 `F` fit page, `Tab` / `Shift+Tab` next / previous object, `Delete` the
-selected object (or hides the block), `Escape` drops the tool, then the
+selected path's focused vertex (§3), else the selected object (or hides
+the block), `Enter` closes the polygon being drawn (from three vertices),
+`Escape` drops the tool (a polygon being drawn is discarded), then the
 selection; `Ctrl+Z` / `Ctrl+Y` undo / redo. The grid toggle
-(`editor-snapping`) moves in 1 mm steps.
+(`editor-snapping`) moves in 1 mm steps; a polygon's vertices are placed
+on the 1 mm page grid with it.
 
 **Inspector** (`layout/LayoutInspector.tsx`): the sheet / template section
 (`editor-layout-sheet`, `editor-layout-scope` with `data-scope`,
@@ -166,7 +169,8 @@ computed live from the snapshot), the graphics library
 
 The rail (`layout/LayoutRail.tsx`, `editor-layout-rail`,
 `editor-layout-tool-<key>`) arms a tool; a click places at the page point
-and selects the new object; a drag with a tool armed pans.
+and selects the new object; a drag with a tool armed pans. `P` is the
+exception: it draws (below).
 
 | Key | Places | With |
 |---|---|---|
@@ -175,11 +179,37 @@ and selects the new object; a drag with a tool armed pans.
 | `I` | the picked graphic, 30 mm | `createImageObjectAt` |
 | `D` | shows the block at the click (selects it when shown) | `constrainDescription` |
 | `W` | white-out rectangle, no border | `createObjectAt("rectangle")` |
-| `L` / `R` / `P` | line, rectangle, polygon | `createObjectAt` |
+| `L` / `R` | line, rectangle | `createObjectAt` |
+| `P` | a closed polygon, **drawn** vertex by vertex (D16) | the course editor's area flow, then `createObjectAt("path")`'s defaults |
 
 `L`, `R` and `P` are not in 08 §5.2's list: existing templates hold them
 and `vector` events would otherwise lose them against the legacy editor
 (decision log D7).
+
+**`P` draws a polygon** (D16) with the course editor's area flow
+(`course-editor.md` §6.4: `areaBinding` / `step` in `tools/polygon.ts`,
+`AreaKind` `layout_path`, closed, three or more vertices, curves): click
+= corner, click-drag = curve vertex (symmetric handles, `Shift` 45°),
+`Alt` at the press = smooth vertex, a placed vertex dragged to adjust it,
+closed by a click on the first vertex, a double-click or `Enter`; `Esc` or
+a right-click discards it. A drag pans no more while `P` is armed (the
+tool takes every press, as in Course mode). The flow runs in the
+viewer's paper mm over the sheet (`editor-polygon`, `editor-polygon-vertex`,
+`editor-polygon-grip`; the paper, frame and images stay drawn under it);
+with the grid on a vertex is snapped through the page,
+`toView ∘ gridSnap ∘ toPage`. On closing, `pathFromView`
+(`lib/editor/layout.ts`) maps it onto the page: each vertex `toPage(v)`,
+clamped to the printable area (`clampPagePoint`), each handle
+`toPage(v + h) − toPage(v)` — exact for the page ↔ view map, which is
+affine (scale, the window's rotation, the y flip), so the drawn curve is
+the stored curve. `pathObject` (`layout/model.ts`) stores it as
+`{ ...createObjectAt("path"), points, closed: true }` — page-anchored,
+black, 0.35 mm, `fillMode: "none"` — in **one** snapshot write
+(`saveLayout` / `mapTemplate.update`) and one undo entry; the new path is
+selected and `V` is armed again. The fixed trapezoid `P` used to place
+is gone. `L`, `R`, `W`, `H`, `T`, `I`, `D` keep click placement. On
+touch the flow is the course editor's (taps place corners, no curve
+vertices); Layout itself stays off the phone mode switch (`course-editor.md` §10 and Pending, "Layout on a phone").
 
 **No tool for white-out outside** (D14). D7 added an `O` tool that placed
 a closed path with `fillMode: "whiteoutInverted"` (white everywhere in
@@ -193,18 +223,49 @@ polygon can still be turned into one, for template-level ink saving on
 an all-controls or class sheet. Rendering, print, the schema and the
 legacy `MapLayoutEditor` are untouched; no stored object is changed.
 
-With `V`: a click selects an object of the scope (topmost by bounds;
-lines and open paths within the handle tolerance); a drag moves it
+With `V`: a click selects an object of the scope, topmost first
+(`layoutObjectAt`): text, rectangles and images **by their bounds**;
+lines and **paths by their outline** — within the handle tolerance (7 px
+in page mm) of the path along its curves (`nearestEdge`), a closed path
+included, so a press **inside** a closed path is not on it (D16, the
+course editor's area rule, `course-editor.md` §5 / D12): it reaches the
+object under it, else selects the frame or pans. A drag moves the object
 (`translateMapObject`, kept on the printable area by
-`constrainMapObject`); the selected object's handles (corners, line ends,
-path vertices) resize (`resizeMapObject` with the printable clamps;
-Shift keeps an image's proportions); the block moves by its own drag. All
-of it is `lib/map-layout-editor.ts`, unchanged. A click on nothing inside
-the frame selects the frame; elsewhere it deselects.
+`constrainMapObject`); a rectangle's, text's or image's corner handles
+and a line object's ends resize (`resizeMapObject` with the printable
+clamps; Shift keeps an image's proportions); the block moves by its own
+drag. A click on nothing inside the frame selects the frame; elsewhere
+it deselects.
 
-Not in D7 (Pending): Shift-click multi-select, Bézier handles and vertex
-insert / remove on the canvas (the helpers exist), the frame's own resize
-handles in template scope, edge snapping, rotation.
+**A selected path** (closed or open — `L` lines are open paths) takes
+the course editor's geometry gestures (`course-editor.md` §7 "Editing
+geometry"; `lib/editor/geometry-gestures.ts`, shared with `V` in Course
+mode) in **page mm**: a map-anchored path (legacy templates) is mapped
+onto the page and back (`pagePoints` / `nativePoints`, handles as
+offsets). It is drawn as its outline along the curves
+(`editor-layout-selection`), a handle per vertex (`editor-layout-handle`,
+`data-index`, the focused one `data-focused`) and a grip per Bézier
+handle (`editor-layout-grip`, `data-which`). Pressing order vertex →
+grip → edge:
+
+| Gesture | Edit |
+|---|---|
+| drag a vertex | moves it, its handles with it; the vertex kept on the printable area; with the grid on the offset goes in whole millimetres |
+| click a vertex | focuses it (no write); `Delete` removes it (`deleteVertex`, down to 3 vertices closed, 2 open; at the minimum nothing) |
+| `Alt`-drag a vertex | symmetric handles (`Shift`: 45° on the page) |
+| drag a grip | the handle moves by the pointer's offset, a mirrored / smooth pair kept; `Alt` held (live) breaks it |
+| `Alt`-click a vertex with handles | retracts them |
+| double-click on an edge, off the vertices | inserts a vertex there (`insertVertex`; a curve is split so it keeps its shape), focused |
+| drag the edge | moves the whole path (`translateMapObject` / `constrainMapObject`, as any object) |
+
+Each drag is one write and one undo entry, previewed live; a click
+writes nothing. The focused vertex belongs to the selected path: another
+selection, a click elsewhere, or an undo that leaves it out of range
+drops it. The pure edits are `lib/editor/geometry-edit.ts`; the legacy
+editor's `insertPolygonVertex` is not used.
+
+Not in D7 / D16 (Pending): Shift-click multi-select, the frame's own
+resize handles in template scope, edge snapping, rotation.
 
 ## 4. Align map and entry points
 
@@ -393,14 +454,16 @@ sheet prints through `classes` or `maps`.
 | unit (web) | `packages/web/src/map-gl/__tests__/worker-course.test.ts` | the page part: none without a page; its colours after every map colour, the table repeated; the page white-out at the stack's upper white; a text in paper µm; the frame ring; the block |
 | unit (web) | `map-gl/__tests__/engine.test.ts`, `view.test.ts` | the page part uploaded as `P`, drawn after the course part, `pageClip` passed, both released on clear; `scissorOfRing` |
 | unit (web) | `lib/__tests__/course-layer-request.test.ts` | `layout`: the page passed through, layout objects before course objects, appearance, overprint, window, text values |
-| unit (web) | `lib/editor/__tests__/layout.test.ts` | page-view maths: the window, page ↔ view round trips (rotated), y flip, sheet shapes, page bounds, hit-testing, handles, the block's rectangle, align, page offset, grid |
-| unit (web) | `pages/editor/__tests__/layout-bindings.test.ts`, `layout-model.test.ts`, `lib/editor/__tests__/state.test.ts` | the binding (exclusive, shapes, select / move / snap / resize / locked / align / block / place); the snapshot per scope, geometry, the request, placement per kind; the mode case; the rail's keys have no `O`, the inspector keeps the white-out outside fill mode |
+| unit (web) | `lib/editor/__tests__/layout.test.ts` | page-view maths: the window, page ↔ view round trips (rotated), y flip, sheet shapes, page bounds, hit-testing (D16: a closed path by its outline, not inside — an object under it reachable; a curved edge along its curve, not its chord; an open path without a closing edge), handles, the block's rectangle, align, page offset, grid; `pagePoints` / `nativePoints` of a map-anchored path (handles as offsets, rotated); `pathFromView` (handles mapped through the rotated, y-flipped window; a vertex outside clamped) |
+| unit (web) | `pages/editor/__tests__/layout-bindings.test.ts`, `layout-model.test.ts`, `lib/editor/__tests__/state.test.ts` | the binding (exclusive, shapes, select / move / snap / resize / locked / align / block / place); the snapshot per scope, geometry, the request, placement per kind; the mode case; the rail's keys have no `O`, the inspector keeps the white-out outside fill mode; D16 `P`: the flow armed over the sheet, a press places a vertex (on the page grid with snapping), the closing click hands one page path (handles mapped, clamped), right-click cancels; `pathObject`'s defaults; a selected path: its outline / handles / grips (focused active), a vertex drag (snapped offset, clamped, one write), Alt-drag handles in page mm, Alt-click retract, a grip drag mirrored and Alt-broken, a click focuses, a double-click inserts and focuses, the edge moves the path, a press inside pans, a map-anchored path edited on the page and stored in paper mm |
+| unit (web) | `lib/editor/__tests__/geometry-gestures.test.ts`, `pages/editor/__tests__/bindings.test.ts`, `polygon.test.ts` | D16's extraction: pressing order, a drag in the caller's units, Alt-drag / Alt-click, focus (none for fixed kinds), cancel, insert, the shapes with the caller's ids; `selectBinding`'s cases unchanged; `layout_path` is a closed, curved kind of three |
 | integration | `packages/api/src/__tests__/integration/course-maps.test.ts` "resolveSheet" | a sheet (window centre, page, text values, block, template / sheet split, overprint, sibling windows), `saveLayout` without `templateObjects` leaves the template, `PRECONDITION_FAILED` without a template; a template with and without a course; `NOT_FOUND` |
 | unit (shared) | `packages/shared/src/__tests__/auto-template.test.ts` | the key (standard, custom paper), the key's name, decision (3) (most sheets, oldest, seq), `fitOrientation` (preferred kept, turned, ratio, the margin, neither fits), `defaultTemplateSettings` |
 | unit (web) | `lib/editor/__tests__/export-menu.test.ts`, `template-key.test.ts`, `state.test.ts`, `pages/editor/__tests__/layout-model.test.ts` | Export ▾ entries, routes and what is ensured first; courses in a template / at its key, the move-out target, extra names; Class view in the reducer; the sheet key |
 | integration | `packages/api/src/__tests__/integration/auto-templates.test.ts` | the migration's backfill (scoped to one event): keys, decision (3), no sheet moved, no rename; key sync on create / update / duplicate / delete with promotion; `autoSheets` (first sheet, auto template named by key, centred, idempotent; the event's look and a landscape turn; without a course every course); class sheets (scale → auto template at that scale; explicit template + scale → sheet override; cleared → deleted; course change); `classOverrides`; `class.upserted` without the overrides; `resolveSheet { classSeq }` (own sheet, course sheet with the override, `{classes}`); version tokens (`CONFLICT` with the row now, no token = LWW); `maps.pdf?classes=` legacy (pages, the class named on its page only, `courses` / unfiltered without class sheets, 400s) and vector |
 | E2E | `e2e/course-maps.spec.ts` "export a course that has no template yet" (both pipelines) | a course without a map exports one A4 page from the Maps page; the auto badge; the route's pipeline; the template named by key with its key badge |
 | E2E | `e2e/course-editor.spec.ts` "Course editor auto templates" | Export ▾ → this course creates the sheet and prints one page; the auto badge and the sheet key; a class scale makes a class sheet; Class view shows `1:15000`; this class exports; Create extra template moves the course, its row moves it back, undo moves it again |
+| E2E | `e2e/course-editor.spec.ts` "Course editor layout" "P draws a polygon…" | D16: `P`, two clicks, a click-drag and a click, closed on the first vertex → one `saveLayout`; `courseMap.get` has a closed path of 4 points whose dragged vertex has `hOut` down-right on the page and `hIn` opposite; the path selected, `V` armed, 4 handles and 2 grips; a double-click on the top edge → 5 points and a focused handle, `Delete` → 4; `Escape` discards a polygon being drawn (no write, `V` armed), `Enter` closes one of three clicks (one write); the sheet's `maps.pdf?maps=` draws more `c` operators than before |
 | E2E | `e2e/course-editor.spec.ts` "Course editor layout" | from the Maps page into Layout mode on the sheet; the sheet shapes; `H` places a header, the inspector makes it a long 10 mm text, and ink appears where the page layer draws it; the frame selected and dragged → `courseMap.get`'s centre moved by the drag; undo restores it; the `maps.pdf?maps=` route answers one A4 page; the template link opens template scope, an orientation change writes `mapTemplate.update`; the Map templates page's *Edit template layout* opens template scope |
 
 ## Pending in this chapter
@@ -417,8 +480,11 @@ sheet prints through `classes` or `maps`.
 - **Version token from `MapLayoutEditor` and the Maps / Map templates
   pages** (§2): they write without `baseVersion` (LWW) until slice E
   retires the legacy editor.
-- **Canvas editing beyond move / resize**: multi-select, Bézier handles
-  and vertex insert / remove, frame handles, edge snapping, rotation (§3).
+- **Canvas editing beyond move / resize and the path gestures**:
+  multi-select, frame handles, edge snapping, rotation (§3).
+- **Rectangles by outline?** Layout closed paths hit by outline (D16);
+  rectangles, text and images still by bounds — flagged for the user
+  (feedback 2026-11-04, "Flagged for the morning").
 - **GL-drawn images** with their crop (§1).
 - **Retiring `MapLayoutEditor` and `window.png`'s document branch** —
   slice E, with the `map.editor.vector` gate.

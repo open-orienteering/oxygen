@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
-import { step, type PolygonState } from "../tools/polygon";
+import { isClosedKind, minVertices, step, type PolygonState } from "../tools/polygon";
+import { vertexRule } from "../../../lib/editor/geometry-edit";
 
 const area: PolygonState = { kind: "oob_area", vertices: [] };
 const click = (s: PolygonState, x: number, y: number, onFirst = false) => step(s, { type: "click", pt: { x, y }, onFirst });
@@ -169,5 +170,15 @@ describe("smooth vertices while drawing: Alt (docs/course-editor.md §6.4)", () 
   it("without Alt nothing changes (touch never sets it)", () => {
     const s = click(click(click(area, 0, 0).state, 10, 0).state, 10, 10).state;
     expect(s.vertices).toEqual([{ x: 0, y: 0 }, { x: 10, y: 0 }, { x: 10, y: 10 }]);
+  });
+});
+
+describe("Layout's polygon (layout_path, D16)", () => {
+  it("is a closed, curved kind of three or more vertices", () => {
+    expect(isClosedKind("layout_path")).toBe(true);
+    expect(minVertices("layout_path")).toBe(3);
+    expect(vertexRule("layout_path")).toEqual({ min: 3, max: Infinity, curves: true, closed: true });
+    const s: PolygonState = { kind: "layout_path", vertices: [{ x: 0, y: 0 }, { x: 10, y: 0 }, { x: 10, y: 10 }] };
+    expect(step(s, { type: "click", pt: { x: 0, y: 0 }, onFirst: true }).done).toHaveLength(3);
   });
 });

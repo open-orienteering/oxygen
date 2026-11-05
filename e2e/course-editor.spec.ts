@@ -44,30 +44,35 @@ async function printedAllControls(page: Page, nameId: string): Promise<{ pages: 
   expect(res.ok(), await res.text().catch(() => "")).toBe(true);
   const bytes = await res.body();
   const pages = (await PDFDocument.load(bytes)).getPageCount();
-  const text = bytes.toString("latin1");
   let hatches = 0, curvedFills = 0;
   const run = /W\* n[^]*?(?:-?[\d.]+ -?[\d.]+ m -?[\d.]+ -?[\d.]+ l ){3,}-?[\d.]+ -?[\d.]+ m -?[\d.]+ -?[\d.]+ l S/g;
+  for (const inflated of inflatedStreams(bytes)) {
+    hatches += inflated.match(run)?.length ?? 0;
+    let curved = false;
+    for (const op of inflated.split(/\s+/)) {
+      if (op === "c") curved = true;
+      else if (op === "f*" || op === "f") {
+        if (curved) curvedFills++;
+        curved = false;
+      } else if (op === "S" || op === "n" || op === "B" || op === "B*") curved = false;
+    }
+  }
+  return { pages, hatches, curvedFills };
+}
+
+/** A PDF's Flate content streams, inflated (latin1). */
+function inflatedStreams(bytes: Buffer): string[] {
+  const text = bytes.toString("latin1");
+  const out: string[] = [];
   for (let at = text.indexOf("stream"); at >= 0; at = text.indexOf("stream", at + 6)) {
     if (text.slice(at - 3, at) === "end") continue;
     const start = at + 6 + (text[at + 6] === "\r" ? 2 : 1);
     const end = text.indexOf("endstream", start);
     if (end < 0) break;
-    let inflated: string | null = null;
-    try { inflated = inflateSync(bytes.subarray(start, end)).toString("latin1"); } catch { /* not Flate */ }
-    if (inflated) {
-      hatches += inflated.match(run)?.length ?? 0;
-      let curved = false;
-      for (const op of inflated.split(/\s+/)) {
-        if (op === "c") curved = true;
-        else if (op === "f*" || op === "f") {
-          if (curved) curvedFills++;
-          curved = false;
-        } else if (op === "S" || op === "n" || op === "B" || op === "B*") curved = false;
-      }
-    }
+    try { out.push(inflateSync(bytes.subarray(start, end)).toString("latin1")); } catch { /* not Flate */ }
     at = end;
   }
-  return { pages, hatches, curvedFills };
+  return out;
 }
 
 /** A template and an all-controls sheet on it for the event (`maps.pdf?allControls=1`); `drop` removes both. */
@@ -1150,7 +1155,90 @@ test.describe("Course editor layout (docs/course-layout.md)", () => {
     await expect(page.getByTestId("editor-layout-scope")).toHaveAttribute("data-scope", "template", { timeout: 30_000 });
     await expect(page.getByTestId("editor-layout-scope")).toHaveAttribute("data-template", String(template.seq));
   });
+
+  test("P draws a polygon in clicks and a click-drag; its edge takes a vertex by double-click, Delete takes it out; the print has its curve", async ({ page }) => {
+    await openEditor(page);
+    const nameId = new URL(page.url()).pathname.split("/")[1];
+    const courses = await trpcCall<{ id: number }[]>("course.list", undefined, false);
+    const template = await trpcCall<{ seq: number }>("mapTemplate.create", {
+      name: `Layout polygon ${Date.now()}`, paper: "A4", orientation: "portrait", printScale: 10000, objects: [],
+      settings: { printMarginMm: 5, mapFrame: frame, description: { visible: false, x: 150, y: 12, cellSizeMm: 6 }, appearance: { purple: "#a626ff", circleRadiusMm: 2.5, lineWidthMm: 0.35, numberHeightMm: 4 } },
+    });
+    const sheet = await trpcCall<{ seq: number }>("courseMap.create", { kind: "course", courseId: courses[0].id, templateId: template.seq, overrides: {}, objects: [] });
+    type Stored = { objects: { kind: string; closed?: boolean; points?: { x: number; y: number; hIn?: { x: number; y: number }; hOut?: { x: number; y: number } }[] }[] };
+    const stored = async () => (await trpcCall<Stored>("courseMap.get", { seq: sheet.seq }, false)).objects;
+    const curvesBefore = await curveOperators(page, nameId, sheet.seq);
+
+    await page.goto(`/${nameId}/course-editor?mode=layout&sheet=${sheet.seq}`);
+    await editorReady(page);
+    await expect(page.getByTestId("editor-layout-scope")).toHaveAttribute("data-sheet", String(sheet.seq));
+    const toPaperMm = await pageToPaperOf(page, frame);
+    const at = async (x: number, y: number) => toPage(page, toPaperMm({ x, y }));
+
+    // P: corners by clicks, a curve vertex by a click-drag, closed by a click on the first vertex — one write.
+    await page.getByTestId("editor-layout-tool-P").click();
+    await expect(page.getByTestId("editor-layout-tool-P")).toHaveAttribute("aria-pressed", "true");
+    await clickMap(page, await at(40, 60));
+    await clickMap(page, await at(90, 60));
+    await drag(page, await at(90, 110), await at(100, 120));
+    await clickMap(page, await at(40, 110));
+    await expect(page.getByTestId("editor-tool-layer").getByTestId("editor-polygon-vertex")).toHaveCount(4);
+    const drawn = waitForTrpc(page, "courseMap.saveLayout");
+    await clickMap(page, await at(40, 60));
+    await drawn;
+    const [path] = await stored();
+    expect(path).toMatchObject({ kind: "path", closed: true });
+    expect(path.points).toHaveLength(4);
+    expect(Math.abs(path.points![0].x - 40) + Math.abs(path.points![0].y - 60)).toBeLessThan(2);
+    // The pull's handle on the page: down and to the right, as dragged.
+    expect(path.points![2].hOut!.x).toBeGreaterThan(5);
+    expect(path.points![2].hOut!.y).toBeGreaterThan(5);
+    expect(path.points![2].hIn!.x).toBeLessThan(-5);
+    // Selected, back in V, with the course editor's handles and grips.
+    await expect(page.getByTestId("editor-layout-selected")).toHaveAttribute("data-kind", "object");
+    await expect(page.getByTestId("editor-layout-tool-V")).toHaveAttribute("aria-pressed", "true");
+    await expect(page.getByTestId("editor-tool-layer").getByTestId("editor-layout-handle")).toHaveCount(4);
+    await expect(page.getByTestId("editor-tool-layer").getByTestId("editor-layout-grip")).toHaveCount(2);
+
+    // A double-click on the straight top edge: a vertex there, focused; Delete removes it again.
+    const mid = await at(65, 60);
+    const inserted = waitForTrpc(page, "courseMap.saveLayout");
+    await page.mouse.dblclick(mid.x, mid.y);
+    await inserted;
+    await expect.poll(async () => (await stored())[0].points?.length).toBe(5);
+    await expect(page.getByTestId("editor-tool-layer").locator('[data-testid="editor-layout-handle"][data-focused="true"]')).toHaveCount(1);
+    const removed = waitForTrpc(page, "courseMap.saveLayout");
+    await page.keyboard.press("Delete");
+    await removed;
+    await expect.poll(async () => (await stored())[0].points?.length).toBe(4);
+    await expect(page.getByTestId("editor-layout-object-row")).toHaveCount(1);
+
+    // Escape discards a polygon being drawn (no write); Enter closes one from three vertices.
+    await page.getByTestId("editor-layout-tool-P").click();
+    await clickMap(page, await at(120, 60));
+    await clickMap(page, await at(160, 60));
+    await expect(page.getByTestId("editor-tool-layer").getByTestId("editor-polygon-vertex")).toHaveCount(2);
+    await page.keyboard.press("Escape");
+    await expect(page.getByTestId("editor-layout-tool-V")).toHaveAttribute("aria-pressed", "true");
+    await expect(page.getByTestId("editor-tool-layer").getByTestId("editor-polygon-vertex")).toHaveCount(0);
+    await page.getByTestId("editor-layout-tool-P").click();
+    for (const [x, y] of [[120, 60], [160, 60], [140, 100]]) await clickMap(page, await at(x, y));
+    const entered = waitForTrpc(page, "courseMap.saveLayout");
+    await page.keyboard.press("Enter");
+    await entered;
+    await expect.poll(async () => (await stored()).map((o) => o.points?.length)).toEqual([4, 3]);
+
+    // The curve prints as a Bézier (`c`) on the sheet's page.
+    expect(await curveOperators(page, nameId, sheet.seq)).toBeGreaterThan(curvesBefore);
+  });
 });
+
+/** How many Bézier `c` operators the sheet's printed page draws (`maps.pdf?maps=`; the base map has its own). */
+async function curveOperators(page: Page, nameId: string, seq: number): Promise<number> {
+  const res = await page.request.get(`/api/maps/${nameId}/maps.pdf?maps=${seq}`);
+  expect(res.ok(), await res.text().catch(() => "")).toBe(true);
+  return inflatedStreams(await res.body()).reduce((n, s) => n + s.split(/\s+/).filter((op) => op === "c").length, 0);
+}
 
 test.describe("Course editor auto templates (docs/course-layout.md §5–§7)", () => {
   test("Export ▾ makes a course's first sheet; a class scale gets a class sheet and Class view; an extra template and a move back", async ({ page }) => {

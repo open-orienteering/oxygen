@@ -3,6 +3,8 @@ import type { CourseMapObject } from "@oxygen/shared";
 import type { ToolPointer } from "../../../components/MapViewer";
 import { sheetWindow, toView, type SheetGeometry } from "../../../lib/editor/layout";
 import { LAYOUT_KEYS, layoutBinding, type LayoutBindingContext, type LayoutGesture } from "../layout/bindings";
+import type { GestureRef } from "../tools/bindings";
+import type { PolygonState } from "../tools/polygon";
 
 // A4, frame 10 mm in, map at the print scale (1 page mm = 1 paper mm), centred on (0, 0): page (105, 148.5) is paper (0, 0).
 const frame = { x: 10, y: 10, width: 190, height: 277 };
@@ -135,5 +137,167 @@ describe("Layout binding (docs/course-layout.md §2, §3; 08 §5.3 Layout column
     expect(page.x).toBeCloseTo(40, 6);
     expect(page.y).toBeCloseTo(100, 6);
     expect(graphic).toBe(9);
+  });
+});
+
+describe("P: polygons drawn with the course editor's area flow (D16, docs/course-layout.md §3)", () => {
+  function drawing(poly: PolygonState, over: Partial<Omit<LayoutBindingContext, "onPreview" | "onCommit" | "onSelect" | "onPlace">> = {}) {
+    const draw = { gesture: { current: null } as GestureRef, hover: null, onHover: vi.fn(), onPoly: vi.fn(), onPath: vi.fn(), onCancel: vi.fn() };
+    const c = ctx({ tool: { kind: "draw", poly }, draw, ...over });
+    return { c, draw, b: layoutBinding(c) };
+  }
+  const empty: PolygonState = { kind: "layout_path", vertices: [] };
+
+  it("arms the polygon flow: exclusive, crosshair, the sheet still drawn under the preview", () => {
+    const { b } = drawing({ kind: "layout_path", vertices: [view(40, 60), view(90, 60)] });
+    expect(b.exclusive).toBe(true);
+    expect(b.cursor).toBe("crosshair");
+    const ids = b.shapes!.flatMap((s) => ("testId" in s && s.testId ? [s.testId] : []));
+    expect(ids).toEqual(expect.arrayContaining(["editor-layout-paper", "editor-layout-frame", "editor-polygon", "editor-polygon-vertex"]));
+  });
+
+  it("a press places a vertex at the pointer; with the grid on, on whole page millimetres", () => {
+    const { b, draw } = drawing(empty);
+    expect(b.onPointerDown!(at(40.4, 60.3))).toBe(true);
+    const v = draw.onPoly.mock.calls[0][0].vertices[0];
+    expect(v.x).toBeCloseTo(view(40.4, 60.3).x, 9);
+    const snapped = drawing(empty, { snapping: true });
+    snapped.b.onPointerDown!(at(40.4, 60.6));
+    const w = snapped.draw.onPoly.mock.calls[0][0].vertices[0];
+    expect(w.x).toBeCloseTo(view(40, 61).x, 9);
+    expect(w.y).toBeCloseTo(view(40, 61).y, 9);
+  });
+
+  it("a click on the first vertex closes: one path in page mm, handles mapped, vertices clamped", () => {
+    // View mm here are page mm mirrored (y up): a handle 10 view mm up is 10 page mm up the page.
+    const a = view(40, 60);
+    const poly: PolygonState = { kind: "layout_path", vertices: [a, { ...view(90, 60), hOut: { x: 0, y: 10 }, hIn: { x: 0, y: -10 } }, view(300, 110)] };
+    const { b, draw } = drawing(poly);
+    expect(b.onPointerDown!(at(40, 60))).toBe(false);
+    b.onClick!(at(40, 60));
+    expect(draw.onPath).toHaveBeenCalledTimes(1);
+    const pts = draw.onPath.mock.calls[0][0];
+    expect(pts).toHaveLength(3);
+    expect(pts[0].x).toBeCloseTo(40, 9);
+    expect(pts[0].y).toBeCloseTo(60, 9);
+    expect(pts[1].hOut.x).toBeCloseTo(0, 9);
+    expect(pts[1].hOut.y).toBeCloseTo(-10, 9);
+    expect(pts[2].x).toBeCloseTo(207, 9);
+  });
+
+  it("right-click cancels", () => {
+    const { b, draw } = drawing(empty);
+    b.onContextMenu!(at(50, 50));
+    expect(draw.onCancel).toHaveBeenCalled();
+  });
+});
+
+describe("V on a selected path: the course editor's geometry gestures (D16, docs/course-layout.md §3)", () => {
+  type Path = Extract<CourseMapObject, { kind: "path" }>;
+  const poly: Path = {
+    id: "poly", kind: "path", anchor: "page", closed: true, fillMode: "none", stroke: "#000000", strokeWidthMm: 0.35,
+    points: [{ x: 40, y: 60 }, { x: 90, y: 60, hIn: { x: -5, y: 0 }, hOut: { x: 5, y: 0 } }, { x: 90, y: 110 }, { x: 40, y: 110 }],
+  };
+  const edit = (over: Partial<Omit<LayoutBindingContext, "onPreview" | "onCommit" | "onSelect" | "onPlace">> = {}) => {
+    const onVertexFocus = vi.fn();
+    const c = ctx({ editable: [box, poly], selection: { kind: "object", id: "poly" }, onVertexFocus, ...over });
+    return { c, onVertexFocus, b: layoutBinding(c) };
+  };
+  const committed = (c: ReturnType<typeof ctx>): Path => c.onCommit.mock.calls[c.onCommit.mock.calls.length - 1][0].objects.find((o: CourseMapObject) => o.id === "poly");
+
+  it("draws the outline along its curves, a handle per vertex (focused active) and a grip per Bézier handle", () => {
+    const { b } = edit({ focusedVertex: 2 });
+    const shapes = b.shapes!;
+    const outline = shapes.filter((s) => "testId" in s && s.testId === "editor-layout-selection");
+    expect(outline).toHaveLength(1);
+    expect(outline[0].kind === "line" && outline[0].points.length).toBeGreaterThan(4);
+    const handles = shapes.filter((s) => s.kind === "handle" && s.testId === "editor-layout-handle");
+    expect(handles).toHaveLength(4);
+    expect(handles.find((h) => h.kind === "handle" && h.active)).toMatchObject({ data: { index: "2", focused: "true" } });
+    expect(shapes.filter((s) => s.kind === "grip" && s.testId === "editor-layout-grip")).toHaveLength(2);
+  });
+
+  it("a vertex drag moves that vertex by the page offset, clamped to the printable area, in whole mm with the grid", () => {
+    const { c, b } = edit({ snapping: true });
+    expect(b.onPointerDown!(at(90, 110))).toBe(true);
+    b.onPointerDrag!(view(95.4, 120.6));
+    expect(c.onPreview.mock.calls[0][0].objects[1].points[2]).toEqual({ x: 95, y: 121 });
+    b.onPointerUp!(view(400, 121));
+    const o = committed(c);
+    expect(o.points[2].x).toBeCloseTo(207, 9);
+    expect(o.points.slice(0, 2)).toEqual(poly.points.slice(0, 2));
+    expect(c.onCommit).toHaveBeenCalledTimes(1);
+  });
+
+  it("Alt-drag on a vertex pulls symmetric handles in page mm; Alt-click retracts them", () => {
+    const { c, b } = edit();
+    expect(b.onPointerDown!(at(40, 110, { alt: true }))).toBe(true);
+    b.onPointerDrag!(view(40, 120), { shift: false, alt: true });
+    b.onPointerUp!(view(40, 120));
+    const o = committed(c);
+    expect(o.points[3].hOut!.x).toBeCloseTo(0, 9);
+    expect(o.points[3].hOut!.y).toBeCloseTo(10, 9);
+    expect(o.points[3].hIn!.y).toBeCloseTo(-10, 9);
+    const r = edit();
+    r.b.onPointerDown!(at(90, 60, { alt: true }));
+    r.b.onPointerUp!(view(90, 60));
+    expect(committed(r.c).points[1]).toEqual({ x: 90, y: 60 });
+  });
+
+  it("a grip drag moves its handle, the mirrored pair kept; Alt held breaks it", () => {
+    const { c, b } = edit();
+    expect(b.onPointerDown!(at(95, 60))).toBe(true);
+    b.onPointerDrag!(view(95, 64), { shift: false, alt: false });
+    b.onPointerUp!(view(95, 64));
+    const v = committed(c).points[1];
+    expect(v.hOut!.y).toBeCloseTo(4, 9);
+    expect(v.hIn!.y).toBeCloseTo(-4, 9);
+    const r = edit();
+    r.b.onPointerDown!(at(95, 60));
+    r.b.onPointerDrag!(view(95, 64), { shift: false, alt: true });
+    r.b.onPointerUp!(view(95, 64));
+    expect(committed(r.c).points[1].hIn).toEqual({ x: -5, y: 0 });
+  });
+
+  it("a click on a vertex focuses it, without a write", () => {
+    const { c, b, onVertexFocus } = edit();
+    b.onPointerDown!(at(40, 110));
+    b.onPointerUp!(view(40, 110));
+    expect(onVertexFocus).toHaveBeenCalledWith(3);
+    expect(c.onCommit).not.toHaveBeenCalled();
+  });
+
+  it("a double-click on an edge inserts a vertex there and focuses it; off the edge nothing", () => {
+    const { c, b, onVertexFocus } = edit();
+    b.onDoubleClick!(at(65, 110.2));
+    expect(onVertexFocus).toHaveBeenCalledWith(3);
+    const o = committed(c);
+    expect(o.points).toHaveLength(5);
+    expect(o.points[3].x).toBeCloseTo(65, 6);
+    expect(o.points[3].y).toBeCloseTo(110, 6);
+    const r = edit();
+    r.b.onDoubleClick!(at(65, 85));
+    expect(r.c.onCommit).not.toHaveBeenCalled();
+  });
+
+  it("the edge drags the whole path; a press inside the selected closed path pans", () => {
+    const { c, b } = edit({ editable: [poly] });
+    expect(b.onPointerDown!(at(65, 60))).toBe(true);
+    b.onPointerDrag!(view(70, 65));
+    b.onPointerUp!(view(70, 65));
+    expect(committed(c).points[0]).toEqual({ x: 45, y: 65 });
+    expect(committed(c).points[1].hOut).toEqual({ x: 5, y: 0 });
+    expect(edit({ editable: [poly] }).b.onPointerDown!(at(65, 85))).toBe(false);
+  });
+
+  it("a map-anchored path is edited on the page and stored back in paper mm", () => {
+    const mapPoly: Path = { ...poly, anchor: "map", points: poly.points.map((v) => ({ ...view(v.x, v.y), ...(v.hOut ? { hOut: { x: v.hOut.x, y: -v.hOut.y }, hIn: { x: v.hIn!.x, y: -v.hIn!.y } } : {}) })) };
+    const { c, b } = edit({ editable: [mapPoly] });
+    expect(b.onPointerDown!(at(90, 110))).toBe(true);
+    b.onPointerDrag!(view(95, 115));
+    b.onPointerUp!(view(95, 115));
+    const p = committed(c).points[2];
+    expect(p.x).toBeCloseTo(view(95, 115).x, 9);
+    expect(p.y).toBeCloseTo(view(95, 115).y, 9);
   });
 });

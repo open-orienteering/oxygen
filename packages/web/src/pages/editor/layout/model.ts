@@ -14,6 +14,7 @@ import {
   type MapFillMode,
   type MapRect,
   type MapTemplateSettings,
+  type PathVertex,
 } from "@oxygen/shared";
 import type { LayoutRequest } from "../../../lib/course-layer-request";
 import { sheetWindow, windowCentre, type SheetGeometry } from "../../../lib/editor/layout";
@@ -128,11 +129,22 @@ export function layoutRequestOf(s: EditorSheet, snap: LayoutSnapshot, g: SheetGe
 }
 
 /**
+ * `P`'s drawn polygon (docs/course-layout.md §3, D16): a closed page path
+ * with the drawn points (page mm, already clamped) and the defaults of
+ * `createObjectAt("path")`.
+ */
+export function pathObject(points: PathVertex[], printable: MapRect): Extract<CourseMapObject, { kind: "path" }> {
+  const o = createObjectAt("path", points[0] ?? { x: printable.x, y: printable.y }, printable);
+  if (o.kind !== "path") throw new Error("createObjectAt(\"path\") made no path");
+  return { ...o, points, closed: true };
+}
+
+/**
  * A new object of a rail tool at a page point (docs/course-layout.md §3),
  * clamped to the printable area by `lib/map-layout-editor.ts`'s creators.
  * The block is not an object: the rail's `D` shows it (`description`).
  */
-export function placeObject(what: Exclude<PlaceKind, "description">, at: Pt, printable: MapRect, graphicId?: number): CourseMapObject | null {
+export function placeObject(what: Exclude<PlaceKind, "description" | "path">, at: Pt, printable: MapRect, graphicId?: number): CourseMapObject | null {
   switch (what) {
     case "header": {
       const o = createObjectAt("text", at, printable);
@@ -151,7 +163,6 @@ export function placeObject(what: Exclude<PlaceKind, "description">, at: Pt, pri
     }
     case "line":
     case "rectangle":
-    case "path":
       return createObjectAt(what, at, printable);
   }
 }

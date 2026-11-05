@@ -197,6 +197,23 @@ export function dragGrip(g: readonly Vertex[], index: number, which: "in" | "out
   });
 }
 
+/**
+ * The path through an affine map `f` (a page ↔ view transform): each vertex
+ * mapped, each handle as `f(v + h) − f(v)` — exact for an affine map, so the
+ * curve maps onto the curve.
+ */
+export function mapVertices(g: readonly Vertex[], f: (p: Pt) => Pt): Vertex[] {
+  return g.map((v) => {
+    const at = f(v);
+    const handle = (h: Pt | undefined) => {
+      if (!h) return undefined;
+      const tip = f({ x: v.x + h.x, y: v.y + h.y });
+      return { x: tip.x - at.x, y: tip.y - at.y };
+    };
+    return withHandles(at, handle(v.hIn), handle(v.hOut));
+  });
+}
+
 /** Shift: the vector turned to the nearest multiple of 45°, its length kept. */
 export function constrain45(v: Pt): Pt {
   const l = len(v);

@@ -12,9 +12,10 @@ import type { EditorTarget } from "../../../lib/editor/hit";
 import { circleGapAt, circleGapFromDrag, compassDeg, legFraction, legGapAt, legGapFromDrag, type AngularGap, type FractionGap } from "./gaps";
 import { legLengthShape } from "../../../lib/editor/leg-length";
 import { isClosedKind, pointInPolygon, smoothed, step, type PolygonState } from "./polygon";
+import { outlinePoints, vertexRule, type Vertex } from "../../../lib/editor/geometry-edit";
 import {
-  constrain45, dragGrip, hasHandles, insertVertex, nearestEdge, outlinePoints, retractHandles, symmetricHandles, vertexRule, type Vertex,
-} from "../../../lib/editor/geometry-edit";
+  dragGeometry, geometryHandles, geometryShapes, gripsOf, insertAtEdge, pressGeometry, releaseGeometry, type GeometryDrag,
+} from "../../../lib/editor/geometry-gestures";
 
 type Pt = { x: number; y: number };
 
@@ -24,13 +25,8 @@ export const HANDLE_PX = 7;
 export type Gesture =
   | { kind: "lasso"; points: Pt[] }
   | { kind: "shift-click"; id: number }
-  /**
-   * `base` is the geometry at pointer-down: every drag event applies the whole from→to offset to it, never to a draft.
-   * `alt` on a vertex: the drag pulls symmetric handles instead of moving it (§7 "Editing geometry").
-   */
-  | { kind: "object"; id: number; from: Pt; to: Pt; moved: boolean; vertex: number | null; base: course.CourseObject["geometry"]; alt?: boolean; shift?: boolean }
-  /** A Bézier handle grip of vertex `index` dragged by the pointer's from→to offset; `alt` (live) breaks the pair. */
-  | { kind: "grip"; id: number; index: number; which: "in" | "out"; from: Pt; to: Pt; moved: boolean; base: course.CourseObject["geometry"]; alt: boolean; shift: boolean }
+  /** Object `id`'s geometry dragged: the whole path, a vertex, or a handle grip (§7 "Editing geometry", `geometry-gestures.ts`). */
+  | ({ id: number } & GeometryDrag)
   /** Two fingers on a selected object's handle ring (§10): scale `base` about its centroid. */
   | { kind: "pinch"; id: number; base: course.CourseObject["geometry"]; centre: Pt; scale: number }
   | { kind: "poly-vertex"; index: number }
@@ -48,8 +44,6 @@ const PURPLE = "#7c3aed";
 const BLUE = "#2563eb";
 
 const near = (a: Pt, b: Pt, mm: number) => Math.hypot(a.x - b.x, a.y - b.y) <= mm;
-const translate = (g: readonly course.CourseObject["geometry"][number][], dx: number, dy: number) =>
-  g.map((v) => ({ ...v, x: v.x + dx, y: v.y + dy }));
 
 /** `g` scaled by `k` about `c`; Bézier handles (offsets from their vertex) scale with it. */
 export function scaleAbout(g: readonly course.CourseObject["geometry"][number][], c: Pt, k: number): course.CourseObject["geometry"] {
@@ -62,36 +56,23 @@ export function scaleAbout(g: readonly course.CourseObject["geometry"][number][]
   }));
 }
 
-/** Where a vertex's handle grips are, paper mm. */
-const gripsOf = (v: Vertex): { which: "in" | "out"; at: Pt }[] => [
-  ...(v.hIn ? [{ which: "in" as const, at: { x: v.x + v.hIn.x, y: v.y + v.hIn.y } }] : []),
-  ...(v.hOut ? [{ which: "out" as const, at: { x: v.x + v.hOut.x, y: v.y + v.hOut.y } }] : []),
-];
-
 /**
  * Outline shapes of an object (selection, or the outline of a kind the layer does not draw on screen): the path
  * with each curve sampled (§7 "Editing geometry"); when selected, a handle per vertex (`focused` drawn active) and
  * a grip per Bézier handle.
  */
 export function objectOutline(o: course.CourseObject, selected: boolean, focused: number | null = null): ToolShape[] {
-  const closed = vertexRule(o.kind).closed;
-  const ring = outlinePoints(o.geometry, closed);
-  const out: ToolShape[] = [];
   if (o.kind === "text") {
-    out.push({ kind: "circle", x: ring[0].x, y: ring[0].y, rMm: 0.6, color: selected ? BLUE : PURPLE, testId: "editor-object-outline", data: { "object-id": String(o.id) } });
-  } else if (ring.length >= 2) {
-    out.push({
-      kind: "line", points: ring, closed, dashed: !selected, color: selected ? BLUE : PURPLE, widthPx: selected ? 2 : 1.2,
-      testId: "editor-object-outline", data: { "object-id": String(o.id), "object-kind": o.kind },
-    });
+    const at = o.geometry[0];
+    return [
+      { kind: "circle", x: at.x, y: at.y, rMm: 0.6, color: selected ? BLUE : PURPLE, testId: "editor-object-outline", data: { "object-id": String(o.id) } },
+      ...(selected ? geometryHandles(o.geometry, focused, OBJECT_IDS) : []),
+    ];
   }
-  if (!selected) return out;
-  o.geometry.forEach((v: Vertex, i) => {
-    out.push({ kind: "handle", x: v.x, y: v.y, active: i === focused, testId: "editor-object-handle", data: { index: String(i), ...(i === focused ? { focused: "true" } : {}) } });
-    for (const g of gripsOf(v)) out.push({ kind: "grip", x: g.at.x, y: g.at.y, from: v, testId: "editor-object-grip", data: { index: String(i), which: g.which } });
-  });
-  return out;
+  return geometryShapes(o.geometry, vertexRule(o.kind).closed, { selected, focused, ids: OBJECT_IDS, data: { "object-id": String(o.id), "object-kind": o.kind } });
 }
+
+const OBJECT_IDS = { outline: "editor-object-outline", handle: "editor-object-handle", grip: "editor-object-grip" };
 
 // ─── V: select / move, Shift-click, lasso, objects, double-click leg ──
 
@@ -138,26 +119,13 @@ export function selectBinding(o: SelectOptions): EditorToolBinding {
     onPointerDown(p: ToolPointer) {
       const sel = shown(o);
       if (sel) {
-        const reach = HANDLE_PX * p.mmPerPx;
-        const rule = vertexRule(sel.kind);
-        const vertex = sel.geometry.findIndex((v) => near(v, p.pt, reach));
-        if (vertex >= 0) {
-          g.current = { kind: "object", id: sel.id, from: p.pt, to: p.pt, moved: false, vertex, base: sel.geometry, alt: !!p.alt && rule.curves };
-          return true;
-        }
-        for (const [index, v] of (sel.geometry as Vertex[]).entries()) {
-          const grip = gripsOf(v).find((q) => near(q.at, p.pt, reach));
-          if (grip) {
-            g.current = { kind: "grip", id: sel.id, index, which: grip.which, from: p.pt, to: p.pt, moved: false, base: sel.geometry, alt: !!p.alt, shift: p.shift };
-            return true;
-          }
-        }
-        // The body, or within reach of its edge (a double-click there inserts a vertex, so the press must not deselect).
-        // A closed area's body is its outline: the hit-test answers null inside it (§5), so an interior press declines
-        // and the viewer pans — the area moves by its edge or a vertex (docs/bugfix-editor-area-press-pans.md).
-        const edge = sel.geometry.length > 1 ? nearestEdge(sel.geometry, rule.closed, p.pt) : null;
-        if ((p.target?.kind === "object" && p.target.id === sel.id) || (edge && edge.dist <= reach)) {
-          g.current = { kind: "object", id: sel.id, from: p.pt, to: p.pt, moved: false, vertex: null, base: sel.geometry };
+        // Vertex, grip, then the body or within reach of its edge. A closed area's body is its outline: the hit-test
+        // answers null inside it (§5), so an interior press declines and the viewer pans — the area moves by its edge
+        // or a vertex (docs/bugfix-editor-area-press-pans.md).
+        const onBody = p.target?.kind === "object" && p.target.id === sel.id;
+        const d = pressGeometry(sel.geometry, vertexRule(sel.kind), { pt: p.pt, reach: HANDLE_PX * p.mmPerPx, alt: p.alt, shift: p.shift }, onBody);
+        if (d) {
+          g.current = { ...d, id: sel.id };
           return true;
         }
       }
@@ -184,17 +152,9 @@ export function selectBinding(o: SelectOptions): EditorToolBinding {
       if (cur?.kind === "lasso") {
         cur.points.push(pt);
         o.redraw();
-      } else if (cur?.kind === "object") {
-        cur.to = pt;
-        cur.shift = mods?.shift ?? false;
-        cur.moved = cur.moved || !near(cur.from, pt, 0.05);
-        if (cur.moved) o.onObjectDraft(cur.id, dragged(cur));
-      } else if (cur?.kind === "grip") {
-        cur.to = pt;
-        cur.moved = cur.moved || !near(cur.from, pt, 0.05);
-        cur.alt = mods?.alt ?? cur.alt;
-        cur.shift = mods?.shift ?? cur.shift;
-        if (cur.moved) o.onObjectDraft(cur.id, gripped(cur));
+      } else if (cur?.kind === "object" || cur?.kind === "grip") {
+        const geometry = dragGeometry(cur, pt, mods);
+        if (geometry) o.onObjectDraft(cur.id, geometry);
       }
     },
     onPointerUp(pt) {
@@ -207,35 +167,21 @@ export function selectBinding(o: SelectOptions): EditorToolBinding {
         o.redraw();
         if (!pt || cur.points.length < 3) return;
         o.onLasso(o.sites.filter((s) => s.kind === "control" && pointInPolygon(s, cur.points)).map((s) => s.id));
-      } else if (cur.kind === "object") {
-        if (pt) cur.to = pt;
-        if (pt && cur.moved) return o.onObjectMoved(cur.id, dragged(cur));
-        // Only a drag drew a draft; a click leaves the page's (the last write, until the list catches up) alone.
-        if (cur.moved) o.onObjectDraft(cur.id, null);
-        if (!pt) return;
-        // A click: on a vertex it focuses it, with Alt it retracts its handles; on the body it unfocuses. A text's
-        // anchor or an image's corner is never focused: `Delete` deletes the object.
-        const fixed = Number.isFinite(vertexRule(shown(o)?.kind ?? "").max);
-        if (cur.vertex !== null && cur.alt) {
-          if (hasHandles(cur.base[cur.vertex])) o.onObjectMoved(cur.id, retractHandles(cur.base, cur.vertex));
-        } else o.onVertexFocus?.(fixed ? null : cur.vertex);
-      } else if (cur.kind === "grip") {
-        if (pt) cur.to = pt;
-        if (pt && cur.moved) o.onObjectMoved(cur.id, gripped(cur));
-        else if (cur.moved) o.onObjectDraft(cur.id, null);
+      } else if (cur.kind === "object" || cur.kind === "grip") {
+        // A drag commits; a click focuses a vertex (Alt: retracts its handles) or, on the body, unfocuses.
+        const r = releaseGeometry(cur, pt, vertexRule(shown(o)?.kind ?? ""));
+        if (r?.kind === "commit") o.onObjectMoved(cur.id, r.geometry);
+        else if (r?.kind === "cancel") o.onObjectDraft(cur.id, null);
+        else if (r?.kind === "focus") o.onVertexFocus?.(r.index);
       }
     },
     onDoubleClick(p) {
       // On the selected object's edge, off its vertices: a vertex there (§7 "Editing geometry").
       const sel = shown(o);
-      if (sel && vertexRule(sel.kind).max === Infinity) {
-        const reach = HANDLE_PX * p.mmPerPx;
-        const edge = sel.geometry.some((v) => near(v, p.pt, reach)) ? null : nearestEdge(sel.geometry, vertexRule(sel.kind).closed, p.pt);
-        if (edge && edge.dist <= reach) {
-          const geometry = insertVertex(sel.geometry, vertexRule(sel.kind).closed, edge.index, edge.t);
-          o.onVertexFocus?.(edge.index + 1);
-          return o.onObjectMoved(sel.id, geometry);
-        }
+      const inserted = sel ? insertAtEdge(sel.geometry, vertexRule(sel.kind), p.pt, HANDLE_PX * p.mmPerPx) : null;
+      if (sel && inserted) {
+        o.onVertexFocus?.(inserted.index);
+        return o.onObjectMoved(sel.id, inserted.geometry);
       }
       if (p.target?.kind === "leg") o.onLegDoubleClick(p.target, p.pt);
     },
@@ -269,21 +215,6 @@ export function selectBinding(o: SelectOptions): EditorToolBinding {
 
 /** The selected object as the page shows it (a draft from the last gesture until the list catches up). */
 const shown = (o: SelectOptions): course.CourseObject | null => (o.selected ? o.objects.find((x) => x.id === o.selected!.id) ?? o.selected : null);
-
-function dragged(g: Extract<Gesture, { kind: "object" }>): course.CourseObject["geometry"] {
-  const dx = g.to.x - g.from.x, dy = g.to.y - g.from.y;
-  if (g.vertex === null) return translate(g.base, dx, dy);
-  // Alt-drag on a vertex: hOut follows the pointer, hIn mirrors it (Shift: 45°).
-  if (g.alt) return symmetricHandles(g.base, g.vertex, g.shift ? constrain45({ x: dx, y: dy }) : { x: dx, y: dy });
-  return g.base.map((v, i) => (i === g.vertex ? { ...v, x: v.x + dx, y: v.y + dy } : v));
-}
-
-function gripped(g: Extract<Gesture, { kind: "grip" }>): course.CourseObject["geometry"] {
-  const v: Vertex = g.base[g.index];
-  const h = (g.which === "out" ? v.hOut : v.hIn) ?? { x: 0, y: 0 };
-  const vec = { x: h.x + g.to.x - g.from.x, y: h.y + g.to.y - g.from.y };
-  return dragGrip(g.base, g.index, g.which, g.shift ? constrain45(vec) : vec, g.alt);
-}
 
 // ─── S / K / M: the armed creation tools ──────────────────
 
