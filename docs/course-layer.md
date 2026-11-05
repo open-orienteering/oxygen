@@ -160,7 +160,7 @@ automatic cuts; an empty list means automatic (decision log 2026-11-01,
 | `objects` | `(CourseMapObject \| CourseLayerObject)[]`: a sheet's layout objects (only `anchor: "map"` ones are drawn) and course objects (§8; told apart by `geometry`) | the sheet's layout objects (`course-maps` schema); the event's course objects in scope (§8.3) |
 | `appearance` | `{ circle?, line?, number?, numberStyle? }`, multipliers (1 = the spec) | `appearanceFromTemplate(template.appearance)`; the template's `purple` is not read (the purple is the stack's row) |
 | `viewOptions` | `{ allControls?, labelMode?, overprintScale?, autoCuts?, window?, textValues? }` | the view: all-controls, label mode, print enlargement, the event's **Auto cuts** toggle (`Event.autoOverprintCuts`; `false` = no automatic cuts, §3.4; absent = on), the frame polygon for white-out-outside, `{course}` placeholder values |
-| `cutFeatures` | `{ x, y, r? }[]` (`r` the drawn symbol's radius) | `cutFeaturesOfDocument(doc)` (vector events), the legacy OCAD parse (C5, §4.2) |
+| `cutFeatures` | `{ x, y, r? }[]` (`r` the drawn symbol's radius) | `cutFeaturesOfDocument(doc)` of the pinned document (every event since E1, §4.2) |
 | `regions` | `{ rings: MapPoint[][], mode: "clip" \| "hide", symbols: "all" \| number[] \| { colours }, invert? }[]` — filter regions over the map, `rings` outer first; symbol indices are the document's, colours its own stack's | explicit regions, then every `filter_region` course object in `objects` (§8.3); the layer returns them as `CourseLayer.regions` (µm paths, colours on the completed stack) and `courseRenderInput` passes them to `symbolise` with the document's object count as `regionObjectLimit` — the rule is `map-rendering.md` §4.11 |
 
 Free order is the structure's `orderMode` (a property of the course, not
@@ -279,9 +279,9 @@ boulder, boulder cluster; 206 gigantic boulder is an area and excluded,
 as today). `r` is the farthest ink of the symbol **the document draws**
 (`pointSymbolRadiusMm`): the canonical render (library entry × document
 factor) of an applied match, else the document's own render; the library
-entry × document factor only when there is neither. The caller chooses
-the source: the pinned document for `vector` events, the legacy OCAD
-parse otherwise (§4, decision of the slice-C split).
+entry × document factor only when there is neither. The source is the
+event's pinned document, whatever its pipeline (§4.2; the slice-C split
+tied it to `vector`, slice E1 made it every event's).
 
 **The event's toggle** (`Event.autoOverprintCuts`, written by
 `course.setOverprintCuts`, read by `course.getOverprintCuts`; the
@@ -398,23 +398,25 @@ editor course, for as long as the artifact has consumers (09 §4 C; 08
 
 ### 4.2 Cut features
 
-`loadEventCutFeatures(db, eventId, mapScale)`
+`loadEventCutFeatures(db, eventId)`
 (`packages/api/src/event-map-objects.ts`), skipped when the event's
 **Auto cuts** toggle is off:
 
 | Event | Source | Radii |
 |---|---|---|
-| `vector` with a pinned document (`pinnedDocumentHash`, the reads-only gate of `map-pipeline-switch.md` §3) | `cutFeaturesOfDocument` of the pinned document, memoised per hash | what the document draws (§3.4) |
-| otherwise (`legacy`, or no pin yet) | the OCAD parse of the latest upload (`loadEventMapObjects`' cache), point objects with `⌊sym / 1000⌋ ∈ CUT_CODES` (`cutFeaturesOfSlimObjects`) | the file's own symbol definition (`ocadCutSymbolRadiiMm`, the importer's `ocadSymbolToRender`); a symbol without one: the library entry of its code in the library its scale picks × reference scale / map scale (no scale: ISOM at factor 1) |
-| no map | — | no cuts |
+| a pinned document (`map_files.document_hash` of the latest row), whatever `map_pipeline` (`map-storage.md` §4.6) | `cutFeaturesOfDocument` of the pinned document, memoised per hash | what the document draws (§3.4) |
+| no map, no pin yet, or a missing / unreadable document | — | no cuts |
 
-On the fixture both sources give the same features and radii, and the
-written cuts agree within 1e-6 (integration `overprint-cuts`). A
-document whose blob is missing or unreadable falls back to the OCAD
-parse. The map **upload** rebuilds editor courses after the import hold
-(`applyEventMap`), so a `vector` event cuts against its new pin when the
-import finished within it; otherwise against the OCAD parse until the
-next write. A later re-match of the pin does not rebuild stored cuts.
+Slice E1 removed the OCAD source (the parse of the latest upload with
+`cutFeaturesOfSlimObjects`): on the fixture and the five corpus maps the
+document's features equal the OCAD adapter's within 1e-6 mm in x, y and
+r when compared on source codes (`document-readers-parity.test.ts`,
+`map-storage.md` §4.6 "Parity"); an applied symbol match can change a
+feature's code — the document rule. The map **upload** rebuilds editor
+courses after the import hold (`applyEventMap`), so an event cuts
+against its new pin when the import finished within it; otherwise the
+rebuild finds no pin and writes no cuts until the next write after the
+pin. A later re-match of the pin does not rebuild stored cuts.
 
 ### 4.3 Migration
 
@@ -437,9 +439,9 @@ what the writer would store now and compares.
   leg: same / changed / added / removed, with the opened width before and
   after (degrees, mm); rows whose points moved since they were stored
   are reported as stale — their moved controls and legs are not
-  compared and the row is left out of the cut totals. On a map with a document,
-  also the OCAD-parse vs document feature source (the "could differ by a
-  rounding" check of the slice-C split).
+  compared and the row is left out of the cut totals. (Until E1 the
+  report also compared the OCAD-parse and document feature sources; the
+  parity test replaces it, §4.2.)
 - **Imported courses** — the 09 §10 *legacy-geometry fidelity* input to
   slice D's `LegProps.path` decision: legs, legs drawn as file pieces,
   **bent** legs (a piece more than 0.1 mm off the centre-to-centre line —
@@ -1029,8 +1031,13 @@ midpoint lies inside the ring. Point objects are not obstacles.
 | Where | Codes | Inputs |
 |---|---|---|
 | Editor (client) | all but `DESCRIPTION_STALE` | the page's structure and sites, `checkObstaclesOfDocument` over the decoded document (memoised per document), the course's sheet windows from `courseMap.list`, the objects in scope, the viewer's derivation (`onCourseInfo`) |
-| `course.checks { courseId }` (server, `courses.view`) | all but `CONTROL_OUTSIDE_SHEET`, `NUMBER_UNPLACED`, `NUMBER_OVERLAPS` (`sheets` and `derivation` null), plus `DESCRIPTION_STALE` | the stored structure or its columns, the event's sites, the map scale, the pinned document's obstacles (vector events; memoised per document hash), the objects in scope |
+| `course.checks { courseId }` (server, `courses.view`) | all but `CONTROL_OUTSIDE_SHEET`, `NUMBER_UNPLACED`, `NUMBER_OVERLAPS` (`sheets` and `derivation` null), plus `DESCRIPTION_STALE` | the stored structure or its columns, the event's sites, the map scale (`loadEventCrs`), the pinned document's obstacles (every event with a pin, `map-storage.md` §4.6; memoised per document hash), the autodetect objects of the same document for `DESCRIPTION_STALE`, the objects in scope |
 | `course.setStructure` | as `course.checks`, for the written course | — |
+
+Without a pinned document the server has no map (`map-storage.md`
+§4.6): no scale, so no distance codes (`CONTROL_TOO_CLOSE`,
+`SAME_FEATURE_TOO_CLOSE`), no obstacles and no `DESCRIPTION_STALE` — until E1
+a `legacy` event took the scale from the OCAD file.
 
 The editor shows its own list and adds the server's `DESCRIPTION_STALE`
 checks. The layout checks need the viewer's placement at the document's
@@ -1049,9 +1056,9 @@ for a check (decision log, D6).
 | unit | `geojson.test.ts` | editor course in the pre-C5 editor shape with cuts, free order, preclipped pieces and extras, course by id |
 | pass-stream | `scenes.test.ts`, snapshots in `render/__fixtures__/streams/course/` | the five course scenes (`map-rendering.md` §6.3) warning-free and equal to their snapshots at 1 µm, plus each scene's rule |
 | unit | `packages/api/src/__tests__/course-geometry.test.ts` | `editorCourseGeometry` writes the exact FeatureCollection, repeated controls, cuts at the legacy sizes on controls only and gaps on legs, no keys without features, unpositioned controls, free order; `legDistancesMm`, `courseLengthM` |
-| unit | `packages/api/src/__tests__/overprint-cuts.test.ts` | the legacy adapter: which OCAD objects cut (knolls and rocks, not water / vegetation / lines / areas / 206), file radii first, sub-codes, scale fallback; the rule over them |
+| unit | `packages/api/src/__tests__/document-readers-parity.test.ts` | cut features of the document = the legacy OCAD adapter's (now a test oracle, `__tests__/helpers/ocad-oracle.ts`) within 1e-6 mm on the fixture and the corpus (§4.2) |
 | unit | `packages/api/src/__tests__/course-geometry-compare.test.ts` | identical → no diffs; changed / added / removed with widths; stale row; imported fidelity (pieces, bends, authored vs automatic cuts, extras) |
-| integration | `packages/api/src/__tests__/integration/overprint-cuts.test.ts` | legacy event: rim slit over the boulder across north, no gap through the building, leg gap over the boulder, cuts follow a move, upload rebuilds, lazy migration to v3, toggle; `vector` event: document features = OCAD features, the upload rebuild cuts the course created before the map, circle and leg cuts equal to the legacy event's within 1e-6, OCAD fallback without a pin, migration from the document; the toggle off reaches the vector print (composed sheet = the page without cut features, a stored circle gap still drawn) and `getOverprintCuts` reads with a kiosk key (§3.4); the comparison report over both events (all same, document vs OCAD 0, imported fidelity) |
+| integration | `packages/api/src/__tests__/integration/overprint-cuts.test.ts` | legacy event: rim slit over the boulder across north, no gap through the building, leg gap over the boulder, cuts follow a move, upload rebuilds, lazy migration to v3, toggle; `vector` event: the same document features as the `legacy` event's pin, the upload rebuild cuts the course created before the map, circle and leg cuts equal to the legacy event's within 1e-6, no cuts without a pin, migration from the document; the toggle off reaches the vector print (composed sheet = the page without cut features, a stored circle gap still drawn) and `getOverprintCuts` reads with a kiosk key (§3.4); the comparison report over both events (all same, both cut from the document, imported fidelity) |
 | integration | `control-editor.test.ts`, `journal-completeness.test.ts` | unchanged and green: editor geometry and lengths on create / move / delete / copy; `course.upserted` payloads |
 | unit | `packages/shared/src/course/__tests__/structure.test.ts` | §6.1: C0's linear shape accepted, the 08 leg props, groups and loops; nesting, overlap, unanchored, duplicate ids / labels, < 2 or empty alternatives, out-of-range gaps refused; interim `path` / `pieces` / `circleGaps` and `extras` refused; the wire form; site rules; `linearStructure`, `structureControlIds`; `structureDiff` (equal, moved, added, removed, leg / offset changes) |
 | unit | `packages/api/src/__tests__/course-structure.test.ts` | §6.2: `splitStructure` (explicit start / finish, implicit default, role start / finish, a start mid-sequence), `structureFromColumns` and its round trip, wire ↔ stored mapping |
@@ -1097,7 +1104,7 @@ for a check (decision log, D6).
 | `packages/shared/src/course-maps/{overlay-geometry,control-label-placement}.ts` | `clipLine` (per-obstacle clearance), `subtractLegGaps`, `circleArcs`, `placeControlLabels` — shared with the legacy overlay |
 | `packages/shared/src/render/__fixtures__/course/` | the course scenes |
 | `packages/api/src/course-geometry.ts` | the writer (§4.1): `editorCourseGeometry`, `loadCourseSequences`, `rebuildCourseGeometry`, `ensureOverprintCutsCurrent`, `OVERPRINT_CUTS_VERSION` |
-| `packages/api/src/event-map-objects.ts`, `overprint-cuts.ts` | cut features (§4.2): `loadEventCutFeatures`, document / OCAD loaders, the OCAD adapter |
+| `packages/api/src/event-map-objects.ts` | cut features (§4.2): `loadEventCutFeatures` over the pinned document (`map-store/event-document.ts`) |
 | `packages/api/src/course-geometry-{compare,report}.ts`, `scripts/compare-course-geometry.ts` | the comparison (§4.4) |
 | `packages/api/src/course-import-structure.ts`, `course-import-objects.ts`, `course-structure-backfill.ts`, `cli/course-backfill-{structure,args}.ts` | §6.4: pieces → gaps and the object bodies (pure), writing import-marked objects, the backfill and its CLI; `routers/course.ts` `importCourses`, `routers/event.ts` `structureBackfill*`, `MaintenancePanel.tsx` |
 

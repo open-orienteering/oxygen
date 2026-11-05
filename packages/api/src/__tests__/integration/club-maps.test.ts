@@ -148,50 +148,26 @@ describe("club map library", () => {
     expect(Buffer.from(dl.fileDataBase64, "base64").equals(buf)).toBe(true);
   });
 
-  it("backfills north detection for a legacy club map row on list", async () => {
-    const buf = readFileSync(FIXTURE);
-    // Simulate a row from before the north_detection column: blob only,
-    // already linked to its series by the backfill.
+  it("lists no north for a series without a version and never parses the legacy row (docs/map-storage.md §4.6)", async () => {
+    // A row from before the north_detection column, already linked to its
+    // series by the backfill but not imported yet.
     const legacy = await linkedLegacyRow({
       name: `Legacy north ${suffix}`,
       fileName: "legacy-north.ocd",
-      fileData: buf,
+      fileData: readFileSync(FIXTURE),
     });
 
     const listed = (await makeCaller().clubMap.list()).find(
       (m) => m.id === legacy.seriesId,
     );
-    // The fixture has 601 lines ≈ 6.5° stale — the backfilled analysis
-    // must surface that on the very first list read.
-    expect(listed?.meridianStalenessDeg).toBeGreaterThan(5);
-
+    expect(listed).toMatchObject({ version: null, northDetection: null, meridianStalenessDeg: null, bounds: null, northOffset: null, scale: null });
+    expect(listed?.previewUrl).toBe(`/api/club-map-preview/${legacy.legacyId}`);
+    // No lazy backfill: the read wrote nothing.
     const persisted = await ctx.db.clubMapFile.findUniqueOrThrow({
       where: { id: legacy.legacyId },
       select: { northDetection: true },
     });
-    expect(persisted.northDetection).toMatchObject({
-      meridian: { count: 12 },
-    });
-  });
-
-  it("persists an all-null detection for an unparseable legacy row (no re-parse loop)", async () => {
-    const legacy = await linkedLegacyRow({
-      name: `Legacy garbage ${suffix}`,
-      fileName: "legacy-garbage.ocd",
-      fileData: Buffer.from("not an OCAD file"),
-    });
-
-    const listed = (await makeCaller().clubMap.list()).find(
-      (m) => m.id === legacy.seriesId,
-    );
-    // Analysed, nothing found — reported as "no north lines".
-    expect(listed?.meridianStalenessDeg).toBeNull();
-    const persisted = await ctx.db.clubMapFile.findUniqueOrThrow({
-      where: { id: legacy.legacyId },
-      select: { northDetection: true },
-    });
-    // Not NULL: the marker prevents re-parsing on every future list call.
-    expect(persisted.northDetection).toMatchObject({ meridian: null });
+    expect(persisted.northDetection).toBeNull();
   });
 
   it("backfills and persists a preview for a legacy club map", async () => {
@@ -495,29 +471,25 @@ describe("club map library", () => {
     ).rejects.toMatchObject({ code: "NOT_FOUND" });
   });
 
-  it("backfills metadata and north detection for a legacy map row on first mapMetadata read", async () => {
+  it("an unpinned map row answers with its stored columns, no document and no north (no OCAD backfill)", async () => {
     const buf = readFileSync(FIXTURE);
     const caller = makeCaller(ctx.event);
-    // Simulate a pre-migration row: blob only, no parsed metadata, no
-    // north detection.
+    // A pre-migration row: blob only, no parsed metadata, no north
+    // detection, no document.
     await ctx.db.mapFile.deleteMany({ where: { eventId: ctx.eventId } });
     await ctx.db.mapFile.create({
       data: { eventId: ctx.eventId, fileName: "legacy.ocd", fileData: buf },
     });
 
     const meta = await caller.course.mapMetadata();
-    expect(meta).toBeTruthy();
-    expect(meta!.bounds.north).toBeGreaterThan(meta!.bounds.south);
-    // North analysis runs on the same first read, so the stale-lines
-    // badge appears for old events too.
-    expect(meta!.meridianStalenessDeg).toBeGreaterThan(5);
+    expect(meta).not.toBeNull();
+    expect(meta).toMatchObject({ documentHash: null, bounds: null, scale: null, meridianStalenessDeg: null, renderKey: null });
 
-    const row = await ctx.db.mapFile.findFirst({
+    const row = await ctx.db.mapFile.findFirstOrThrow({
       where: { eventId: ctx.eventId },
     });
-    expect(row!.bounds).toBeTruthy();
-    expect(row!.calibration).toBeTruthy();
-    expect(row!.northDetection).toMatchObject({ meridian: { count: 12 } });
+    expect(row.bounds).toBeNull();
+    expect(row.northDetection).toBeNull();
   });
 
   it("rejects creating an event whose slug would be library", async () => {

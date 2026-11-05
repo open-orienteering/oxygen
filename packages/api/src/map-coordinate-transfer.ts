@@ -12,11 +12,8 @@
  * than the one the event uses (Purple Pen records its map file name).
  */
 
-import {
-  mapMmToWgs84,
-  wgs84ToOcad,
-  type OcadCrs,
-} from "./map-projection.js";
+import type { mapGeo } from "@oxygen/shared";
+import { mapMmToWgs84, wgs84ToMapMm } from "./map-projection.js";
 import type {
   GeoJSONFeature,
   GeoJSONFeatureCollection,
@@ -32,26 +29,26 @@ export interface TransferredPoint {
 
 /**
  * Re-express one paper-mm point from `from`'s paper system in `to`'s.
- * Returns null when either CRS has a grid we cannot project.
+ * Returns null when either frame has a grid we cannot project.
  */
 export function transferPaperMm(
   xMm: number,
   yMm: number,
-  from: OcadCrs,
-  to: OcadCrs,
+  from: mapGeo.PaperFrame,
+  to: mapGeo.PaperFrame,
 ): TransferredPoint | null {
   const wgs = mapMmToWgs84(xMm, yMm, from);
   if (!wgs) return null;
-  const ocad = wgs84ToOcad(wgs.lat, wgs.lng, to);
-  if (!ocad) return null;
-  return { xMm: ocad.x / 100, yMm: ocad.y / 100, lat: wgs.lat, lng: wgs.lng };
+  const mm = wgs84ToMapMm(wgs.lat, wgs.lng, to);
+  if (!mm) return null;
+  return { xMm: mm.x, yMm: mm.y, lat: wgs.lat, lng: wgs.lng };
 }
 
 /** Transfer every coordinate of a GeoJSON geometry, or null on failure. */
 function transferGeometry(
   geometry: GeoJSONFeature["geometry"],
-  from: OcadCrs,
-  to: OcadCrs,
+  from: mapGeo.PaperFrame,
+  to: mapGeo.PaperFrame,
 ): GeoJSONFeature["geometry"] | null {
   const point = (c: [number, number]): [number, number] | null => {
     const t = transferPaperMm(c[0], c[1], from, to);
@@ -93,8 +90,8 @@ function transferGeometry(
 
 function transferFeatures(
   features: GeoJSONFeature[],
-  from: OcadCrs,
-  to: OcadCrs,
+  from: mapGeo.PaperFrame,
+  to: mapGeo.PaperFrame,
 ): GeoJSONFeature[] | null {
   const out: GeoJSONFeature[] = [];
   for (const f of features) {
@@ -116,8 +113,8 @@ function transferFeatures(
  */
 export function transferParsedCoordinates(
   parsed: ParsedCourseData,
-  from: OcadCrs,
-  to: OcadCrs,
+  from: mapGeo.PaperFrame,
+  to: mapGeo.PaperFrame,
 ): ParsedCourseData | null {
   const controls = [];
   for (const c of parsed.controls) {
@@ -147,6 +144,6 @@ export function transferParsedCoordinates(
     courseGeometry,
     mapFeatures,
     // Coordinates now live in the target map's paper system.
-    mapScale: to.scale > 0 ? to.scale : parsed.mapScale,
+    mapScale: to.mapScale > 0 ? to.mapScale : parsed.mapScale,
   };
 }

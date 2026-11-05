@@ -14,7 +14,7 @@ import {
 } from "../helpers/test-db.js";
 import { makeCaller } from "../helpers/caller.js";
 import { applyEventMap } from "../../event-map.js";
-import { getBaseMapInfo, clearCourseMapSourceCache } from "../../course-maps/map-source.js";
+import { getBaseMapInfo, getBaseMapInfoOrNull, clearCourseMapSourceCache } from "../../course-maps/map-source.js";
 import { hasTool, qpdfCheck } from "../../render/pdf-golden.js";
 
 const hasQpdf = await hasTool("qpdf");
@@ -27,6 +27,7 @@ let courseSeq: number;
 let startControlId: string;
 let finishControlId: string;
 const convertedSvgs: string[] = [];
+let mapBytes: Buffer;
 const clubTemplateName = `Course-map-${randomUUID()}`;
 const fixture = resolve(__dirname, "../../../../../e2e/test.ocd");
 
@@ -144,14 +145,11 @@ beforeAll(async () => {
   });
   courseId = course.seq;
   courseSeq = course.seq;
-  await ctx.db.mapFile.create({
-    data: {
-      eventId: ctx.eventId,
-      fileName: "test.ocd",
-      fileData: readFileSync(fixture),
-      scale: 7500,
-    },
-  });
+  // A real upload: the readers read the pinned document (docs/map-storage.md
+  // §4.6). Per-run trailer: content-addressed rows are global.
+  mapBytes = Buffer.concat([readFileSync(fixture), Buffer.from(`maps-${randomBytes(4).toString("hex")}`)]);
+  const uploaded = await applyEventMap(ctx.db, ctx.eventId, "test.ocd", mapBytes);
+  expect(uploaded.documentHash).toMatch(/^[0-9a-f]{64}$/);
 
   const fakeConverter = {
     async convert(svg: string) {
@@ -164,7 +162,7 @@ beforeAll(async () => {
   server = Fastify({ logger: false });
   registerCourseMapRoutes(server, { converter: fakeConverter });
   await server.ready();
-});
+}, 60_000);
 
 afterAll(async () => {
   await server.close();
@@ -182,20 +180,19 @@ describe("map file info and metadata", () => {
     const info = await caller.course.mapFileInfo();
     expect(info).not.toBeNull();
     expect(info!.fileName).toBe("test.ocd");
-    expect(info!.size).toBe(readFileSync(fixture).byteLength);
+    expect(info!.size).toBe(mapBytes.byteLength);
     expect(Number.isInteger(info!.id)).toBe(true);
   });
 
-  // The auto-profile classification reads and parses the OCAD; the
-  // result is memoised per render key so repeat calls agree and are cheap.
-  it("resolves the auto colour profile consistently across calls", async () => {
+  // `auto` resolves by the scale heuristic (the OCAD colour-table
+  // classification went with the OCAD read, slice E1): 1:7 500 is ISOM.
+  it("resolves the auto colour profile by scale, consistently across calls", async () => {
     const first = await caller.course.mapMetadata();
     const second = await caller.course.mapMetadata();
     expect(first).not.toBeNull();
     expect(first!.colorProfile).toBe("auto");
-    expect(["isom", "issprom", "isskiom", "ismtbom"]).toContain(
-      first!.resolvedProfile,
-    );
+    expect(first!.resolvedProfile).toBe("isom");
+    expect(first!.resolvedBy).toBe("scale");
     expect(second!.resolvedProfile).toBe(first!.resolvedProfile);
     expect(second!.resolvedBy).toBe(first!.resolvedBy);
     expect(second!.renderKey).toBe(first!.renderKey);
@@ -737,12 +734,16 @@ describe("window.png under a pinned document", () => {
     expect(doc.version).toBe(documentHash);
   });
 
-  it("a vector event without a pinned document keeps the legacy path", async () => {
+  it("an event without a pinned document has no base map (no OCAD fallback, docs/map-storage.md §4.6)", async () => {
     await vec.db.mapFile.updateMany({ where: { eventId: vec.eventId }, data: { documentHash: null } });
     clearCourseMapSourceCache();
-    expect((await getBaseMapInfo(vec.db, vec.eventId)).document).toBeNull();
-    await vec.db.mapFile.updateMany({ where: { eventId: vec.eventId }, data: { documentHash } });
-    clearCourseMapSourceCache();
+    try {
+      await expect(getBaseMapInfo(vec.db, vec.eventId)).rejects.toThrow("No base map uploaded");
+      expect(await getBaseMapInfoOrNull(vec.db, vec.eventId)).toBeNull();
+    } finally {
+      await vec.db.mapFile.updateMany({ where: { eventId: vec.eventId }, data: { documentHash } });
+      clearCourseMapSourceCache();
+    }
   });
 
   it("full layer: exact size, opaque, yellow area at the window centre; cached by document hash", async () => {
@@ -831,8 +832,9 @@ describe("window.png under a pinned document", () => {
 
 describe("maps.pdf route switch", () => {
   // docs/course-print.md §8: a `vector` event with a pinned document prints
-  // through the composer; `legacy`, or `vector` without a pin, through the
-  // legacy SVG → rsvg path. Both read the same template / sheet rows.
+  // through the composer; `legacy` through the legacy SVG → rsvg path.
+  // Both read the same template / sheet rows. Without a pin there is no
+  // base map (slice E1).
   let vec: TestEventContext;
   let documentHash: string;
   let courseMapSeqs: number[];
@@ -949,15 +951,15 @@ describe("maps.pdf route switch", () => {
     expect(convertedSvgs.length).toBeGreaterThan(before);
   });
 
-  it("a vector event without a pinned document prints through the legacy path", async () => {
+  it("an event without a pinned document has no base map to print (slice E1: no OCAD fallback)", async () => {
     await vec.db.mapFile.updateMany({ where: { eventId: vec.eventId }, data: { documentHash: null } });
     clearCourseMapSourceCache();
     try {
       const before = convertedSvgs.length;
       const res = await server.inject({ method: "GET", url: pdfUrl(vec.nameId) });
-      expect(res.statusCode).toBe(200);
-      expect(res.headers["x-print-pipeline"]).toBe("legacy");
-      expect(convertedSvgs).toHaveLength(before + 3);
+      expect(res.statusCode).toBe(400);
+      expect(res.json().error).toBe("No base map uploaded");
+      expect(convertedSvgs).toHaveLength(before);
     } finally {
       await vec.db.mapFile.updateMany({ where: { eventId: vec.eventId }, data: { documentHash } });
       clearCourseMapSourceCache();

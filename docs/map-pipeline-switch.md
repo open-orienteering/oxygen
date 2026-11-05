@@ -76,6 +76,12 @@ The switch gates **reads only**. It never gates imports or writes: a
 event is flipped either way. Rollback is a flip of the event (or of the
 default), or an image tag; tiles still exist or regenerate on demand.
 
+Nor does it gate the server's **data** reads: since slice E1 the event
+CRS, the autodetect objects, cut features, check obstacles, north and the
+print's scale and tilt come from the pinned document for every event,
+`legacy` included (`docs/map-storage.md` §4.6). The switch decides only
+which path *draws* — the viewer, the print and the editor below.
+
 ### 3.1 The viewer
 
 Every map of the event reaches `MapViewer` through `MapPanel`
@@ -91,6 +97,9 @@ draw = event == "vector" ∧ documentHash ≠ null ∧ (webgl2 ∨ ¬allowLegacy
 
 - `documentHash` is `course.mapMetadata.documentHash`; a map without a
   pinned document (before the backfill) stays on tiles.
+  `course.mapMetadata` answers for every `map_files` row, without the
+  legacy render key (`docs/map-storage.md` §4.6), so a null hash always
+  means "no pin", never "the render key did not resolve".
 - An unanswered or failed `event.mapPipeline` is `legacy`.
 - `MapPanel` holds the viewer in its loading state until the answer is
   in, so a `vector` event never mounts the tile layer first: **under
@@ -148,8 +157,12 @@ print = event == "vector" ∧ latest map_files row pins a document ? "vector" : 
   (`course-print.md` §8.2, CMYK, no `rsvg-convert`); `window.png` draws
   the document window with the reference raster (`course-print.md`
   §10.2).
-- `legacy`, or `vector` without a pin: the OCAD → SVG path, `rsvg-convert`
-  for the PDF — unchanged.
+- `legacy`: the OCAD → SVG path, `rsvg-convert` for the PDF; its scale
+  and meridian tilt come from the pinned document since E1
+  (`course-print.md` §10.1).
+- No pin (either value): no base map — `maps.pdf` and `window.png`
+  answer 400 "No base map uploaded" (slice E1; before, the legacy path
+  parsed the OCAD file).
 - A pinned document whose colour stack is not aligned
   (`course.CourseStackError`) prints through the legacy path with a
   logged warning (`course-print.md` §8.1).

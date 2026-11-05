@@ -5,8 +5,8 @@
  * Uses the synthetic OCAD fixture's known features in the otherwise
  * empty top-right corner (see `scripts/generate-test-ocd.mjs`): a boulder
  * (ISOM 204) at 68/42 mm and a building (ISOM 521) spanning
- * 48–58 / 39–46 mm. `legacy` events cut against the OCAD parse; `vector`
- * events against the pinned map document (docs/course-layer.md §4).
+ * 48–58 / 39–46 mm. Every event cuts against its pinned map document,
+ * whatever its `map_pipeline` (docs/course-layer.md §4.2, slice E1).
  */
 
 import { describe, it, expect, beforeAll, afterAll } from "vitest";
@@ -319,15 +319,13 @@ describe("vector events cut against the pinned document", () => {
     return row.geometry as unknown as GeoJSONFeatureCollection;
   };
 
-  it("reads the document's features, the same knolls and rocks as the OCAD parse", async () => {
-    const fromDoc = await loadEventCutFeatures(vec.db, vec.eventId, 15000);
-    const fromOcad = await loadEventCutFeatures(ctx.db, ctx.eventId, 15000);
-    expect(fromDoc?.source).toBe("document");
-    expect(fromOcad?.source).toBe("ocad");
+  it("reads the pinned document's features on a vector and on a legacy event alike", async () => {
+    const fromVector = await loadEventCutFeatures(vec.db, vec.eventId);
+    const fromLegacy = await loadEventCutFeatures(ctx.db, ctx.eventId);
     const key = (f: { x: number; y: number }) => `${f.x.toFixed(3)},${f.y.toFixed(3)}`;
-    expect(fromDoc!.features.map(key).sort()).toEqual(fromOcad!.features.map(key).sort());
+    expect(fromVector!.map(key).sort()).toEqual(fromLegacy!.map(key).sort());
     const boulder = (fs: Array<{ x: number; y: number; r?: number }>) => fs.find((f) => Math.abs(f.x - 68) < 1e-3 && Math.abs(f.y - 42) < 1e-3);
-    expect(boulder(fromDoc!.features)?.r).toBeCloseTo(boulder(fromOcad!.features)!.r!, 6);
+    expect(boulder(fromVector!)?.r).toBeCloseTo(boulder(fromLegacy!)!.r!, 6);
   });
 
   it("the upload rebuild cut the course created before the map", async () => {
@@ -417,17 +415,20 @@ describe("vector events cut against the pinned document", () => {
     }
   }, 60_000);
 
-  it("falls back to the OCAD parse while no document is pinned", async () => {
+  it("cuts nothing while no document is pinned — no OCAD fallback", async () => {
     await vec.db.mapFile.updateMany({ where: { eventId: vec.eventId }, data: { documentHash: null } });
     try {
-      expect((await loadEventCutFeatures(vec.db, vec.eventId, 15000))?.source).toBe("ocad");
+      expect(await loadEventCutFeatures(vec.db, vec.eventId)).toBeNull();
       // Away and back: only a position change rebuilds.
       await vecCaller.control.update({ id: 191, xpos: 90, ypos: 30 });
       await vecCaller.control.update({ id: 191, xpos: 68, ypos: 39.5 });
       const cuts = (await vecGeometry(uploadCourseSeq)).features.find((f) => f.properties.code === "191")?.properties.cuts;
-      expect(cuts).toHaveLength(1);
+      expect(cuts ?? []).toHaveLength(0);
     } finally {
       await vec.db.mapFile.updateMany({ where: { eventId: vec.eventId }, data: { documentHash } });
+      // Rebuild with the pin back so the tests below start from cut geometry.
+      await vecCaller.control.update({ id: 191, xpos: 90, ypos: 30 });
+      await vecCaller.control.update({ id: 191, xpos: 68, ypos: 39.5 });
     }
   });
 
@@ -470,12 +471,9 @@ describe("vector events cut against the pinned document", () => {
     expect(t.staleCourses).toBe(0);
     expect(t.circles.same).toBe(t.circles.compared);
     expect(t.legs.same).toBe(t.legs.compared);
-    // The vector event's courses cut identically from the document and from the OCAD parse.
-    expect(t.documentVsOcad.courses).toBeGreaterThan(0);
-    expect(t.documentVsOcad.differing).toBe(0);
     expect(t.importedCourses).toBe(1);
     expect(t.imported).toMatchObject({ legs: 1, preclippedLegs: 1, bentLegs: 1, authoredCutControls: 1, both: 1 });
-    expect(report.events.map((e) => [e.pipeline, e.cutSource])).toEqual([["legacy", "ocad"], ["vector", "document"]]);
+    expect(report.events.map((e) => [e.pipeline, e.cutSource])).toEqual([["legacy", "document"], ["vector", "document"]]);
     expect(formatGeometryReport(report)).toContain("| circle cuts |");
   });
 });

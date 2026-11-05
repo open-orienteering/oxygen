@@ -8,7 +8,7 @@
  */
 
 import { describe, it, expect } from "vitest";
-import type { OcadCrs } from "../map-projection.js";
+import type { mapGeo } from "@oxygen/shared";
 import {
   transferPaperMm,
   transferParsedCoordinates,
@@ -21,17 +21,15 @@ function crs(
   northing: number,
   scale = 15000,
   code = 3006,
-): OcadCrs {
+): mapGeo.PaperFrame {
   return {
-    easting,
-    northing,
-    scale,
-    grivation: 0,
-    code,
-    catalog: "EPSG",
-    toProjectedCoord([x, y]: number[]): number[] {
-      const factor = scale / 100_000;
-      return [x * factor + easting, y * factor + northing];
+    unitsPerMm: 100,
+    mapScale: scale,
+    georeferencing: {
+      crs: { authority: "EPSG", code, name: "" },
+      paperOrigin: { x: easting, y: northing },
+      gridRotationDeg: 0,
+      gridScaleFactor: 1,
     },
   };
 }
@@ -120,7 +118,7 @@ describe("transferParsedCoordinates", () => {
     const moved = transferParsedCoordinates(parsed, SOURCE, TARGET)!;
     expect(moved.controls[1].mapX).toBe(0);
     expect(moved.controls[1].mapY).toBe(0);
-    expect(moved.mapScale).toBe(TARGET.scale);
+    expect(moved.mapScale).toBe(TARGET.mapScale);
   });
 
   it("returns null rather than half-moved data on an unusable grid", () => {

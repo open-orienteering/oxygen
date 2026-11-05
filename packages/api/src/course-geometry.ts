@@ -287,12 +287,11 @@ export async function rebuildCourseGeometry(
   const updateLength = opts.updateLength ?? true;
 
   const crs = await loadEventCrs(db, eventId);
-  const mapScale = crs?.scale ?? null;
+  const mapScale = crs?.mapScale ?? null;
 
   // Features for automatic overprint cuts around compact knoll / rock
-  // point features: the pinned document on `vector` events, else the OCAD
-  // parse. Null when there is no map — and skipped when the event has auto
-  // overprint cuts turned off.
+  // point features: the pinned document's. Null when there is no pin —
+  // and skipped when the event has auto overprint cuts turned off.
   const eventRow = await db.event.findUnique({
     where: { id: eventId },
     select: { autoOverprintCuts: true },
@@ -300,7 +299,7 @@ export async function rebuildCourseGeometry(
   const cutFeatures =
     eventRow?.autoOverprintCuts === false
       ? null
-      : ((await loadEventCutFeatures(db, eventId, mapScale))?.features ?? null);
+      : await loadEventCutFeatures(db, eventId);
 
   const sequences = await loadCourseSequences(db, eventId, courseUuids);
   for (const [courseUuid, { seq, orderMode }] of sequences) {

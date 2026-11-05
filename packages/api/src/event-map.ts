@@ -14,7 +14,6 @@ import {
 import { emitCourseUpserted } from "./referenceJournal.js";
 import {
   frameFromOcadCrs,
-  mapMmToWgs84,
   type WGS84Bounds,
 } from "./map-projection.js";
 import {
@@ -24,7 +23,10 @@ import {
   type OcadNorthSource,
 } from "./map-north.js";
 import { mapFileMetadataFor } from "./map-store/map-file-metadata.js";
-import { loadEventCrs } from "./event-crs.js";
+import { synchronizePositionedControlCoordinates } from "./event-crs.js";
+import { documentMapFileColumns, eventPin } from "./map-store/event-document.js";
+
+export { synchronizePositionedControlCoordinates };
 import { computeRenderKey, hashMapFileData } from "./map-render-key.js";
 import {
   gcOrphanTiles,
@@ -208,76 +210,11 @@ export function currentMeridianStaleness(
   );
 }
 
-/**
- * North analysis for a raw OCAD buffer, for backfilling rows uploaded
- * before the `north_detection` column existed. An unparseable file (or a
- * detection crash) yields an all-null detection rather than null, so the
- * caller persists *something* and the same blob is never re-parsed on
- * every read — and the UI can honestly say "no north lines found" instead
- * of "not analysed".
- */
-export async function detectNorthFromBuffer(
-  buffer: Buffer,
-): Promise<NorthDetection> {
-  const empty: NorthDetection = {
-    declaredGrivationDeg: 0,
-    declinationDeg: null,
-    trueNorthFromGridDeg: null,
-    meridian: null,
-    meridianStalenessDeg: null,
-    centerLat: null,
-    centerLng: null,
-    asOf: new Date().toISOString(),
-  };
-  const ocad = await readOcadQuiet(buffer);
-  if (!ocad) return empty;
-  try {
-    return detectMapNorth(ocad);
-  } catch (err) {
-    console.warn("[detectNorthFromBuffer] north detection failed:", err);
-    return empty;
-  }
-}
-
 function detectionJson(
   detection: NorthDetection | null,
 ): Prisma.InputJsonValue | undefined {
   if (!detection) return undefined;
   return detection as unknown as Prisma.InputJsonValue;
-}
-
-/**
- * Recompute stored WGS84 coordinates from authoritative map-mm positions.
- * This keeps list/map consumers that read lat/lng directly aligned with
- * the corrected event CRS.
- */
-export async function synchronizePositionedControlCoordinates(
-  db: Db,
-  eventId: bigint,
-): Promise<number> {
-  const crs = await loadEventCrs(db, eventId);
-  if (!crs) return 0;
-  const controls = await db.control.findMany({
-    where: {
-      eventId,
-      removed: false,
-      OR: [{ xpos: { not: 0 } }, { ypos: { not: 0 } }],
-    },
-    select: { id: true, xpos: true, ypos: true },
-  });
-  const updates = controls.flatMap((control) => {
-    const position = mapMmToWgs84(control.xpos, control.ypos, crs);
-    return position
-      ? [
-          db.control.update({
-            where: { id: control.id },
-            data: { lat: position.lat, lng: position.lng },
-          }),
-        ]
-      : [];
-  });
-  await Promise.all(updates);
-  return updates.length;
 }
 
 /** Replace the event map, drop rendered-map caches, rebuild editor course geometry. */
@@ -381,12 +318,14 @@ export async function applyEventMap(
   await db.renderedMap.deleteMany({ where: { eventId } });
   await gcOrphanTiles(db);
   fireMapUpload(eventId);
-  await synchronizePositionedControlCoordinates(db, eventId);
+  // Control lat/lng follow when the import pins the document
+  // (`applyJobResult`, docs/map-storage.md §6.4): until then the event has
+  // no frame to convert with.
 
-  // The editor-course rebuild waits for the import (up to the hold) so a
-  // `vector` event cuts against its newly pinned document
-  // (docs/course-layer.md §4); otherwise it uses the OCAD parse and the
-  // document's cuts follow with the next write.
+  // The editor-course rebuild waits for the import (up to the hold) so the
+  // event cuts against its newly pinned document (docs/course-layer.md
+  // §4.2); an import that outlives the hold leaves no pin to cut against,
+  // and the cuts follow with the next write after the pin.
   const job = await importJob;
 
   const editorCourses = await db.course.findMany({
@@ -419,39 +358,43 @@ export async function applyEventMap(
 
 /**
  * Persist a north/grivation correction for the event's current map,
- * re-derive metadata from the stored blob, and drop tile caches so the
- * next render warps with the corrected CRS.
+ * re-derive the quick-access columns from the pinned document (the pin's
+ * function, docs/map-storage.md §6.4), and drop tile caches so the next
+ * render warps with the corrected CRS. Without a pin only the correction
+ * is stored; the pin recomputes the columns with it.
  */
 export async function applyMapRotationCorrection(
   db: Db,
   eventId: bigint,
   rotationCorrectionDeg: number,
 ): Promise<ClubMapMetadata & { rotationCorrection: number }> {
-  const row = await db.mapFile.findFirst({
-    where: { eventId },
-    orderBy: { uploadedAt: "desc" },
-    select: { id: true, fileData: true, northDetection: true },
-  });
+  const row = await eventPin(db, eventId);
   if (!row) {
     throw new Error("No map file uploaded");
   }
-  const metadata = await parseOcadMapMetadata(
-    Buffer.from(row.fileData),
-    rotationCorrectionDeg,
-  );
+  const columns = row.documentHash
+    ? await documentMapFileColumns(db, row.documentHash, rotationCorrectionDeg)
+    : null;
+  const metadata: ClubMapMetadata = columns
+    ? { ...columns, calibration: columns.calibration as MapCalibrationPoint[] | null }
+    : { scale: row.scale, bounds: null, northOffset: null, calibration: null };
   await db.mapFile.update({
     where: { id: row.id },
     data: {
       rotationCorrection: rotationCorrectionDeg,
-      scale: metadata.scale,
-      bounds: metadata.bounds
-        ? (metadata.bounds as unknown as Prisma.InputJsonValue)
-        : undefined,
-      northOffset: metadata.northOffset,
-      calibration: metadata.calibration
-        ? (metadata.calibration as unknown as Prisma.InputJsonValue)
-        : undefined,
-      // Bump stamp so clients invalidate; render_key is refreshed below.
+      ...(columns
+        ? {
+            scale: metadata.scale,
+            bounds: metadata.bounds
+              ? (metadata.bounds as unknown as Prisma.InputJsonValue)
+              : undefined,
+            northOffset: metadata.northOffset,
+            calibration: metadata.calibration
+              ? (metadata.calibration as unknown as Prisma.InputJsonValue)
+              : undefined,
+          }
+        : {}),
+      // Bump stamp so tile clients invalidate; render_key is refreshed below.
       uploadedAt: new Date(),
     },
   });
@@ -482,34 +425,43 @@ export async function applyMapRotationCorrection(
 }
 
 /**
- * Persist a north/grivation correction on a club-library map and
- * re-derive scale / bounds / northOffset / preview metadata.
+ * Persist a north/grivation correction on a linked legacy club-library
+ * row (written through for rollback, docs/map-storage.md §6.5), with
+ * scale / bounds / northOffset from the series' latest version's
+ * document. Without a version only the correction is stored.
  */
 export async function applyClubMapRotationCorrection(
   db: Db,
   clubMapId: bigint,
   rotationCorrectionDeg: number,
+  documentHash: string | null,
 ): Promise<ClubMapMetadata & { rotationCorrection: number }> {
   const row = await db.clubMapFile.findUnique({
     where: { id: clubMapId },
-    select: { id: true, fileData: true },
+    select: { id: true, scale: true },
   });
   if (!row) {
     throw new Error(`Club map ${clubMapId} not found`);
   }
-  const metadata = await parseOcadMapMetadata(
-    Buffer.from(row.fileData),
-    rotationCorrectionDeg,
-  );
+  const columns = documentHash
+    ? await documentMapFileColumns(db, documentHash, rotationCorrectionDeg)
+    : null;
+  const metadata: ClubMapMetadata = columns
+    ? { ...columns, calibration: columns.calibration as MapCalibrationPoint[] | null }
+    : { scale: row.scale, bounds: null, northOffset: null, calibration: null };
   await db.clubMapFile.update({
     where: { id: row.id },
     data: {
       rotationCorrection: rotationCorrectionDeg,
-      scale: metadata.scale,
-      bounds: metadata.bounds
-        ? (metadata.bounds as unknown as Prisma.InputJsonValue)
-        : undefined,
-      northOffset: metadata.northOffset,
+      ...(columns
+        ? {
+            scale: metadata.scale,
+            bounds: metadata.bounds
+              ? (metadata.bounds as unknown as Prisma.InputJsonValue)
+              : undefined,
+            northOffset: metadata.northOffset,
+          }
+        : {}),
     },
   });
   await refreshClubMapRenderKey(db, row.id);

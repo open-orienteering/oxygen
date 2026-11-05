@@ -319,6 +319,18 @@ still be punched, but order does not matter. See
 [free-order-courses.md](free-order-courses.md) for the full model,
 rendering rules, and IOF `randomOrder` interop.
 
+## Description autodetect: map source
+
+Suggested descriptions (`control.create` / `update` autofill,
+`control.suggestDescription`, the `DESCRIPTION_STALE` check) read the
+terrain objects of the event's **pinned map document**, never the
+uploaded OCAD file (slice E1, `docs/map-storage.md` §4.6): non-hidden
+point / line / area objects whose symbol code — the applied match's
+canonical code, else the source code — has an ISOM description entry.
+Without a pinned document (no map, or its import has not finished) there
+are no suggestions and no stale-description check. The matching rules
+themselves are `docs/course-editor-legacy.md` "Description autodetect".
+
 ## Out of scope
 
 - **Rogaining / score-O** (points, time limit, penalty) and

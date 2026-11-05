@@ -3,7 +3,7 @@
  * §9.4; row D6). A `vector` event with `e2e/test.ocd` pinned: the boulder
  * (ISOM 204) at 68/42 mm and the building (ISOM 521) spanning 48–58 /
  * 39–46 mm (`scripts/generate-test-ocd.mjs`). A `legacy` event beside it
- * has no document obstacles.
+ * reads its own pinned document (slice E1); without a pin, no map checks.
  */
 
 import { describe, it, expect, beforeAll, afterAll } from "vitest";
@@ -143,11 +143,27 @@ describe("DESCRIPTION_STALE (description_source, §6.3)", () => {
 });
 
 describe("a legacy event", () => {
-  it("has the distance codes but no document obstacles", async () => {
+  // Slice E1: the obstacles come from the pinned document whatever the
+  // event's pipeline (docs/map-storage.md §4.6).
+  let courseId: number;
+
+  it("reads its pinned document's obstacles too", async () => {
     await legacyCaller.control.create({ codes: "101", xpos: 44, ypos: 42, description: { d: "1.001" } });
     await legacyCaller.control.create({ codes: "102", xpos: 62, ypos: 42, description: { d: "1.002" } });
     await legacyCaller.control.create({ codes: "103", xpos: 62, ypos: 43, description: { d: "1.003" } });
-    const courseId = (await legacyCaller.course.create({ name: "Legacy", controlIds: [101, 102, 103] })).id;
-    expect(codesOf(await legacyCaller.course.checks({ courseId }))).toEqual(["CONTROL_TOO_CLOSE"]);
+    courseId = (await legacyCaller.course.create({ name: "Legacy", controlIds: [101, 102, 103] })).id;
+    const codes = codesOf(await legacyCaller.course.checks({ courseId }));
+    expect(codes).toContain("CONTROL_TOO_CLOSE");
+    expect(codes).toContain("LEG_THROUGH_UNCROSSABLE");
+  });
+
+  it("has no map checks without a pin: no obstacles, and no scale for the distance codes", async () => {
+    const pinned = await legacy.db.mapFile.findFirstOrThrow({ where: { eventId: legacy.eventId }, select: { documentHash: true } });
+    await legacy.db.mapFile.updateMany({ where: { eventId: legacy.eventId }, data: { documentHash: null } });
+    try {
+      expect(codesOf(await legacyCaller.course.checks({ courseId }))).toEqual([]);
+    } finally {
+      await legacy.db.mapFile.updateMany({ where: { eventId: legacy.eventId }, data: { documentHash: pinned.documentHash } });
+    }
   });
 });
