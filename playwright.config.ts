@@ -6,8 +6,10 @@ import type { MapPipeline } from "./e2e/helpers/map-pipeline";
  * Specs run once per map pipeline while both exist
  * (docs/map-pipeline-switch.md §5, 09 §3 / §10): projects `map-legacy`
  * and `map-vector` set every event's `map_pipeline` before each test.
- * They import `test` from `e2e/helpers/map-pipeline.ts`. Every other
- * spec runs once, in `chromium`, on whatever the spec sets itself.
+ * They import `test` from `e2e/helpers/map-pipeline.ts`. Every spec in
+ * none of the three lists runs once, in `chromium`, on whatever the spec
+ * sets itself. A file run by more than one project has a per-project
+ * weight in `scripts/e2e-weights.mjs` (`scripts/__tests__/e2e-config.test.mjs`).
  */
 export const MAP_PIPELINE_SPECS = [
   "**/webserial.spec.ts",
@@ -19,13 +21,26 @@ export const MAP_PIPELINE_SPECS = [
 ];
 
 /**
+ * Specs for the new course editor, which exists for `vector` only
+ * (docs/map-pipeline-switch.md §5, D10): project `map-vector` runs them on
+ * the desktop, never `map-legacy` or `chromium`. The legacy page's spec,
+ * `course-editor-legacy.spec.ts`, stays in `chromium`.
+ */
+export const VECTOR_ONLY_SPECS = [
+  "**/course-editor.spec.ts",
+];
+
+/**
  * Specs for the phone (docs/course-editor.md §10; 08 §7): project `mobile`
  * runs them on `devices["Pixel 7"]` (touch, coarse pointer, 412 px) under
- * `vector` — the new editor has no legacy run. D10 adds the editor's touch
- * subset of `course-editor.spec.ts`.
+ * `vector` — the new editor has no legacy run. `course-editor.spec.ts` is
+ * here for its touch describe; its desktop describes skip on a phone
+ * (`isMobile`), and `field-mode.spec.ts`'s desktop describe sets its own
+ * device.
  */
 export const MOBILE_SPECS = [
   "**/field-mode.spec.ts",
+  "**/course-editor.spec.ts",
 ];
 
 /**
@@ -77,7 +92,7 @@ export default defineConfig<{ mapPipeline: MapPipeline }>({
   projects: [
     {
       name: "chromium",
-      testIgnore: [...MAP_PIPELINE_SPECS, ...MOBILE_SPECS],
+      testIgnore: [...MAP_PIPELINE_SPECS, ...VECTOR_ONLY_SPECS, ...MOBILE_SPECS],
       use: { ...devices["Desktop Chrome"] },
     },
     {
@@ -87,7 +102,7 @@ export default defineConfig<{ mapPipeline: MapPipeline }>({
     },
     {
       name: "map-vector",
-      testMatch: MAP_PIPELINE_SPECS,
+      testMatch: [...MAP_PIPELINE_SPECS, ...VECTOR_ONLY_SPECS],
       use: { ...devices["Desktop Chrome"], mapPipeline: "vector" },
     },
     {

@@ -146,7 +146,7 @@ are `displaySequence` (start, controls, finish) with per-leg metres
 | inspector code | inline edit → `control.update { codes }` | the previous codes |
 | visit order | `setStructure({ orderMode })` | `setStructure(prev)` |
 | create / clone | `course.create` (suggests classes without a course; an exact name links it) / `course.clone` | not undoable (no `course.restore`) |
-| auto cuts | `course.setOverprintCuts` | — |
+| auto cuts | `course.setOverprintCuts` | the legacy geometry only: the GL layer and the vector print ignore it (Pending "Auto cuts toggle", D10) |
 
 Free-order courses show codes instead of numbers and no legs or leg
 metres, as before. The description sheet is MapPanel's (on by default on
@@ -346,8 +346,8 @@ circle's or leg's *effective* gaps — the stored ones, else the automatic
 ones from the layer's derivation — and writes the whole list. An empty
 list is "automatic" again (**Reset gaps**, `editor-gap-reset`, shown in
 `G` while a list is stored, writes it) — so a circle whose only gap is an automatic
-one cannot be left without it (turn the event's automatic cuts off for
-that). A leg's effective gaps come from the course the layer draws
+one cannot be left without it (turning the event's automatic cuts off for
+that does not reach the GL layer yet: Pending "Auto cuts toggle"). A leg's effective gaps come from the course the layer draws
 (Course view); in the All-controls view the layer draws no legs and the
 tool starts from the stored ones.
 
@@ -883,6 +883,55 @@ current, differing }`; a variation group or a slice-F site kind answers
 
 ## Tests
 
+**The E2E layout (D10).** `e2e/course-editor.spec.ts` is the new editor's
+spec and runs under two Playwright projects only (`map-pipeline-switch.md`
+§5): `map-vector` (desktop Chrome; `VECTOR_ONLY_SPECS`) runs every desktop
+describe, `mobile` (Pixel 7; `MOBILE_SPECS`) runs the touch describe at the
+end of the file. Each describe skips on the other device through the
+`isMobile` fixture, so a file run reports the other half as skipped — one
+file, one fixture import, no duplicated flows. The phone has no desktop
+flows to run: it opens in Field mode with no rail or inspector (§10), so 09
+§4 D's "green on the mobile project" is `field-mode.spec.ts` plus this touch
+subset. `course-editor-legacy.spec.ts` is the frozen legacy page's spec
+(`chromium` only, deleted in slice F). The project's fixture sets `vector`
+before every test; the spec sets `map.editor.vector` in `beforeAll` (the
+flag also changes the Maps page's *Edit layout* link, so it is not the
+project's).
+
+Hygiene (AGENTS §12): `reseed()` once in `beforeAll`; the fixture import
+(`e2e/test.ocd` courses and map) is idempotent per test (`openEditor` →
+`ensureCoursesAndMap`; the phone describe imports from a desktop context,
+`ensureFixtureFromDesktop`); courses a test creates carry a prefix and go
+with the next reseed; controls, objects, sheets and templates it creates
+are deleted in `finally` through `cleanup` (best effort, never failing or
+hanging the test it closes); a seed control a test edits (code,
+description, position) is written back in `finally`.
+
+**`e2e/helpers/editor.ts`** is the editor specs' shared helper module
+(`course-editor.spec.ts`, `field-mode.spec.ts`, `course-presence.spec.ts`;
+the presence spec keeps its own `open` / `clearCodes` copies, outside D10's
+area):
+paper ↔ page through the viewer's `data-centre-x/y`, `data-px-per-um`,
+`data-rotation` (`toPage`, `toPaper`), the mirrors (`sites`, `legPieces`,
+`labelOf` from `course-label`, `siteCuts` from `course-site`, `toolShapes`,
+`objectRow` / `geometryOf`), the gestures in paper terms (`select` — a
+click on the circle, retried past a lagging hit index, an earlier action
+bar dropped first; `arm`; `place` with an armed tool; `placeOneShot`; `drag`
+/ `dragMm`; `pressInside` / `pressOnEdge` for the area-press rule of §5 /
+§7), `emptyPoint` / `clickMap` / `coveredBy` (the chrome the editor floats
+over the map), the fixture and navigation (`openEditor`, `newCourse`,
+`regularCodes`), server-side calls (`trpcCall`, `cleanup`), prints
+(`printed` / `analysePdf`: page count and size, hatch passes, curved fills,
+`c` operators of `maps.pdf`; `probeTemplate`, `allControlsSheet`) and two
+contexts (`desktopContext`, `freezeExternalPoll`).
+
+**Conflicts in E2E.** The two-context describe opens B as a second desktop
+context on the same event; A's `competition.counterState` answers are held
+at the first one seen (`freezeExternalPoll`), because D11's live refresh
+would otherwise re-seed A's token within the 5 s poll and make the stale
+write a race. This is a test mechanism, not a product rule: a real client
+whose poll ran meanwhile simply does not conflict (decision log, D10).
+
 | Layer | Where | What |
 |---|---|---|
 | unit (shared) | `packages/shared/src/render/__tests__/hit-test.test.ts` | §5: topmost first, stroke reach = half width + tolerance, even-odd fills, closed-stroke interior on request, glyph discs, text glyph boxes, object filter, distance |
@@ -893,7 +942,12 @@ current, differing }`; a variation group or a slice-F site kind answers
 | unit (web) | `pages/editor/__tests__/action-bar.test.ts` | §4: the entries per selection, the legacy ids |
 | unit (web) | `lib/__tests__/map-pipeline.test.ts`; `packages/api/src/__tests__/map-pipeline.test.ts` | §1: `courseEditorMount`; `map.editor.vector` parsing |
 | integration | `packages/api/src/__tests__/integration/map-pipeline.test.ts` | §1: `event.mapPipeline` / `setMapPipeline` report `editorVector` |
-| E2E | `e2e/course-editor.spec.ts` | the mount gate both ways and the shell; place → move → undo / redo → reload → select on the canvas → delete; create a course, append two controls, add-to-course on the map, reorder + undo, insert on a leg, remove, reload with `?course=` (explicit start / finish rows); deep links, `H`, Escape cascade |
+| E2E | `e2e/course-editor.spec.ts` "Course editor (new, GL canvas)" (`map-vector`) | the mount gate both ways and the shell (`X` / `C` disabled); place → move → undo / redo → reload → select on the canvas → delete; create a course, append two controls, add-to-course on the map, reorder + undo, insert on a leg, remove, reload with `?course=` (explicit start / finish rows); deep links, `H`, Escape cascade; the Courses page's `course-edit-link` and the Controls page's `control-edit-link` open the new editor on the course / with the control selected (one `editor-selection-ring`) |
+| E2E | `e2e/course-editor.spec.ts` "Course mode (§4)" (`map-vector`) | delete cascade: a control on two courses is deleted from the action bar — the site goes, both structures lose it (the open one's rows, the other through `course.list`), `Ctrl+Z` restores the site and both visits; *Remove from course* drops one visit and keeps the site; inline code edit in the sequence (`editor-seq-code` → 997: the row's `data-control-id` and the site follow, `Ctrl+Z` back; a duplicate code → `editor-error` "already exists"); free order (`editor-order-mode`): the hint, no reorder arrows, the layer draws no legs and labels the circles with their codes, a number drag still writes `course.setControlLabelOffset`; a number drag (the shared hit-test's `number` target): the `course-label` moves, persists over a reload, *Reset label* puts the automatic place back, undo the dragged one; clone (`editor-clone-*`, "A (copy)" prefilled, same rows) and no `editor-toggle-first-start` / `-last-finish` even with a legacy-flag course in the event |
+| E2E | `e2e/course-editor.spec.ts` "Course mode descriptions (§4)" (`map-vector`) | the description editor: Escape closes only the dialog (the control stays selected), column C which-of-similar with written titles (`desc-opt-label-0.1N`), a boulder and dimensions with the live preview (`desc-dim-input` → `desc-preview`), saved, reloaded, the summary; *Clear* + save stores none, `Ctrl+Z` writes the saved description back (the control's own description written back after); a control placed on the map is described from the base map (no suggestion offered, a pressed option in `desc-editor`), after a move it stays selected with its action bar and at most one suggestion; the description sheet: "All controls" with every control until a course is picked, then course E's card (event name, course name, the finish row's measured metres, the thick rules) |
+| E2E | `e2e/course-editor.spec.ts` "Automatic cuts" (`map-vector`) | `course-layer.md` §3.4 through the mirror: a control whose rim passes the fixture's boulder (68 / 42 mm; radius from the `G` target) is drawn with a cut around south (`course-site` `data-cuts`); a leg across the boulder is drawn in two `course-leg` pieces on its line, none covering the boulder. The event's auto-cuts toggle is `test.fixme` (Pending "Auto cuts toggle") |
+| E2E | `e2e/course-editor.spec.ts` "conflicts (two contexts)" (`map-vector`) | §3 / §11 / `course-layout.md` §2, B a second context: **structure** — B appends, A's append on the old token answers `CONFLICT` once (no re-send), `editor-conflict[data-kind=refresh]` "Changed elsewhere…", A's rows reload to B's, the redone append lands after it; **control** — B writes the description, A's move is refused once and re-sent on the server's token with no notice (B's description kept), B moves it again (after its poll showed A's move), A's next move shows `editor-conflict[data-kind=moved]` with B's x, *Keep mine* writes A's position; **sheet / template** — B aligns the map, A's align map is refused and A shows B's centre (nothing of A's stored); both in template scope, B writes the orientation, A's paper-size write is refused (B's orientation, A4 kept) |
+| E2E | `e2e/course-editor.spec.ts` "touch" (`mobile`, Pixel 7) | §10 in Course mode on a phone: a tap selects (`editor-sheet-selection`), the peek row's ≥ 44 px *Append* (no `editor-action-bar` on the map) writes the structure, one finger on the selected control drags it at once, the overflow's undo puts it back; `+` → `K` → Place / Done in Course mode appends the placed control and the layer draws the leg to it |
 | unit (web) | `pages/editor/__tests__/placement.test.ts` | §6.1: insertion point (before the finish, after the selected control, at a leg, `S` at 0, no course), chain advance, `Ctrl+Z` steps back, `S` → `K`, ghost number and pending legs (a start's leg runs to the first item) |
 | unit (web) | `lib/editor/__tests__/leg-length.test.ts`, `lib/__tests__/course-layer-request.test.ts`, `lib/editor/__tests__/hit.test.ts` | §6.1: metres at the map scale, "‹n› m", the midpoint, a dragged control's labels (both legs, every visit, over undrawn items); the provisional visit in the request (`course-layer.md` §5); §5 `accept` passes over other targets and finds the site below a rejected one |
 | unit (web) | `pages/editor/__tests__/toner-saver.test.ts` | §6.4 toner saver: every site at least the margin inside the sampled outline (and the hull sites exactly), tangent continuity at every vertex and along the straight edges, one site → four quarter arcs, two → a stadium of six vertices, collinear and duplicate sites, one cubic per ≤ 90° of turn with the handle (4/3)·tan(θ/4)·r, micrometre rounding |
@@ -904,7 +958,7 @@ current, differing }`; a variation group or a slice-F site kind answers
 | unit (web) | `pages/editor/__tests__/bindings.test.ts` | §6, §7: V (Shift-click, lasso, object select / move / vertex, outlines, double-click leg; D12: for every closed kind an interior press declines, selected or not, an edge press within 7 px or the hit-test's outline target drags it, a vertex still wins; a line's stroke press is the object's), armed (exclusive, right-click, touch, ghost and leg length label, no UI-layer leg), area (vertex drag, first-vertex close), G (rim drag, click removes, leg) |
 | unit (web) | `lib/__tests__/undo-stack.test.ts` | §6.1: `UndoStack.top`, which `Ctrl+Z` while armed checks before stepping the chain back |
 | unit (web) | `lib/editor/__tests__/snap.test.ts`, `hit.test.ts`, `state.test.ts`, `structure-edit.test.ts`, `write-client.test.ts` | §6.2 snap candidates and distance; §5 object targets (stream and UI-layer outline); §6 Escape order, multi-selection, object selection, tools; §6.3 / §6.6 `setLegGaps`, `setNumberHidden`; §7 object tokens |
-| E2E | `e2e/course-editor.spec.ts` "tools" | §6.1 ten controls in ten clicks with `K` (ghost, no UI-layer pending leg, the leg length label = the status bar, no action bar and no `editor-selection-ring` while armed, `Ctrl+Z`, `Esc`, the ring back on a click in `V`), reuse of a site; §5 / §7 the area-press rule (D12): a drag starting inside an `oob_area` (created through `courseObject.create`) moves the view (`data-centre-x`) and leaves the area unselected and unchanged, a click on its outline selects it (four handles), a drag inside the selected area pans and keeps the selection, a drag of its edge translates every vertex (one `courseObject.update`), a click inside deselects it; the armed `K` over the map: a `course-leg` piece of the course ends at the cursor's circle (absent before the hover, follows a second hover), no `editor-pending-leg`, the label = the status bar; a drag of the middle control shows two `editor-leg-length`, none after release; §6.5 Shift-click three controls → one add-to-course (one undo entry), §6.6 a site's notes written and reloaded; §6.3 a rim drag stores a circle gap, Reset gaps clears it; the layer draws what the tools store (D1's request path): a leg gap cuts the drawn leg, a circle gap is in the drawn site's cuts (`course-site` `data-cuts`), a hidden number leaves the site without its `course-label`; §6.4 / §7 an out-of-bounds area drawn, drawn on the canvas (709: purple inside it), its hatch (710) and border later set from the inspector (the stored props; 710 on the canvas is the shared layer path, probed in print only), printed (the all-controls `maps.pdf`: one page, the 709 hatch's clip-and-stroke operators present with the `all`-scoped area, one more run with `hatch: "710"`, gone when it is parked), selected again on the canvas (a click on its outline), deleted and undone; §6.4 / §7 "Editing geometry" a curved white-out in three clicks and one drag (two clicks, a click-drag that shows two `editor-polygon-grip`, the closing click): the stored vertex has `hOut` = the drag on paper and `hIn` its negation, the selection outline has 8 samples per curved segment, the all-controls `maps.pdf` gains exactly one curved fill (a fill path with `c` segments — the base map has its own); a double-click on a straight edge inserts a corner at its midpoint (handles 3 → 4), a click focuses it and `Delete` removes it (the object stays), `Ctrl+Z` brings it back, `Alt`-drag on a corner shows two more grips, `Alt`-click retracts them; §6.4 the Alt smooth vertex (D15): three clicks with Alt held at the second — no grips until the third lands, then two — store `g[1].hOut` = `(g[2] − g[0]) / 6` (and ≈ the clicks' chord on paper / 6), `hIn` its negation, corners at `g[0]` / `g[2]`, no `smooth` key stored, and one `Ctrl+Z` removes the object (one undo entry); a filter region hides the 505 path under it live (canvas ink probe) |
+| E2E | `e2e/course-editor.spec.ts` "tools" | §6.1 ten controls in ten clicks with `K` (ghost, no UI-layer pending leg, the leg length label = the status bar, no action bar and no `editor-selection-ring` while armed, `Ctrl+Z`, `Esc`, the ring back on a click in `V`), reuse of a site; §5 / §7 the area-press rule (D12): a drag starting inside an `oob_area` (created through `courseObject.create`) moves the view (`data-centre-x`) and leaves the area unselected and unchanged, a click on its outline selects it (four handles), a drag inside the selected area pans and keeps the selection, a drag of its edge translates every vertex (one `courseObject.update`), a click inside deselects it; the armed `K` over the map: a `course-leg` piece of the course ends at the cursor's circle (absent before the hover, follows a second hover), no `editor-pending-leg`, the label = the status bar; a drag of the middle control shows two `editor-leg-length`, none after release; §6.5 Shift-click three controls → one add-to-course (one undo entry), §6.6 a site's notes written and reloaded; §6.3 a rim drag stores a circle gap, Reset gaps clears it; the layer draws what the tools store (D1's request path): a leg gap cuts the drawn leg, a circle gap is in the drawn site's cuts (`course-site` `data-cuts`), a hidden number leaves the site without its `course-label`; §6.4 / §7 an out-of-bounds area drawn, drawn on the canvas (709: purple inside it), its hatch (710) and border later set from the inspector (the stored props; 710 on the canvas is the shared layer path, probed in print only), printed (the all-controls `maps.pdf`: one page, the 709 hatch's clip-and-stroke operators present with the `all`-scoped area, one more run with `hatch: "710"`, gone when it is parked), selected again on the canvas (a click on its outline), deleted and undone; §6.4 / §7 "Editing geometry" a curved white-out in three clicks and one drag (two clicks, a click-drag that shows two `editor-polygon-grip`, the closing click): the stored vertex has `hOut` = the drag on paper and `hIn` its negation, the selection outline has 8 samples per curved segment, the all-controls `maps.pdf` gains exactly one curved fill (a fill path with `c` segments — the base map has its own); a double-click on a straight edge inserts a corner at its midpoint (handles 3 → 4), a click focuses it and `Delete` removes it (the object stays), `Ctrl+Z` brings it back, `Alt`-drag on a corner shows two more grips, `Alt`-click retracts them; §6.4 the Alt smooth vertex (D15): three clicks with Alt held at the second — no grips until the third lands, then two — store `g[1].hOut` = `(g[2] − g[0]) / 6` (and ≈ the clicks' chord on paper / 6), `hIn` its negation, corners at `g[0]` / `g[2]`, no `smooth` key stored, and one `Ctrl+Z` removes the object (one undo entry); a filter region hides the 505 path under it live (canvas ink probe); §6.4 the toner saver (`A` then `S`, D13): `marginMm` 25, Bézier arcs stored, the outline sampled, and the course's `maps.pdf` (its sheet made first) carries at least one more `c` operator per stored curved vertex than without it (D13's deferred print check) |
 | integration | `packages/api/src/__tests__/integration/course-print.test.ts` "course objects on the page" | §7 print: the row's "reference-raster pixel probe" of a printed course object is this test's page raster, not the E2E's — no HTTP route rasterises a composed page, and poppler is on the runner for the unit / integration jobs, not the E2E job (coordinator 2026-11-01) |
 | unit (web) | `packages/web/src/lib/editor/__tests__/checks.test.ts` | §8: sites and the explicit structure as `courseChecks` takes them, two controls 20 m apart, the server's `DESCRIPTION_STALE` merged in order, markers (rings, a leg cross, unpositioned skipped), length from the leg polylines, locate |
 | E2E | `e2e/course-editor.spec.ts` "Course editor checks" | §8: two controls 20 m apart → the count beside the section title, the row (`CONTROL_TOO_CLOSE`, "20 m"), a marker on each site, the status-bar count; a click selects the first site and centres the view on the pair's midpoint |
@@ -932,9 +986,14 @@ current, differing }`; a variation group or a slice-F site kind answers
 - **Description instructions** (finish variant, special instructions)
   are edited in the legacy editor only.
 - **Course delete** stays on the Courses page.
-- **Toner saver in print**: the course's `maps.pdf` carrying the smooth hull's `c` segments has no E2E of its own (the shared `objects.test.ts` case covers the layer's Bézier flags); D10's list.
-- The rest of the E2E rewrite (the editor's touch subset in the `mobile`
-  project, `course-editor.spec.ts` under `map-vector`) — D10.
+- **Auto cuts toggle** (found by D10): the event's automatic-cuts flag
+  (`course.setOverprintCuts`, `editor-toggle-cuts` in the top bar and the
+  phone's overflow) rebuilds the legacy `course.geometry` only; the GL
+  course layer (`courseLayer`, `course-layer.md` §3.4) and the vector print
+  compute cuts unconditionally, so for a `vector` event the toggle changes
+  nothing drawn or printed. The E2E is `test.fixme` ("the event's
+  automatic-cuts toggle…" in `course-editor.spec.ts`) until a row passes
+  the flag through the layer request, the shared layer and C3's composer.
 - **Presence names without sign-in**: an instance with auth off lists
   every editor as "Someone" (the station name could stand in, D11 left it);
   "moved by X at T" has no name there either. No leave message: a closed
@@ -947,8 +1006,10 @@ current, differing }`; a variation group or a slice-F site kind answers
   advances their tokens without returning them, so a site's kind change made
   in the editor would show its own "changed elsewhere" line; the new editor
   has no such path today.
-- **"Moved by X at T" has no E2E** of its own (unit and integration only); the
-  two-context conflict E2E belongs to D10.
+- **"Moved by X at T" by name in E2E**: the two-context conflict test
+  (D10) asserts the moved notice and its position, not the actor's name
+  (the E2E instance runs without per-user sign-in); the name is unit and
+  integration only.
 - **Mouse loupe**: a desktop or tablet mouse drag shows no loupe (§10
   "Loupe"); the same layer prop from the mouse branch would give one.
 - **One-finger drag of a course object on touch** (its body or a
