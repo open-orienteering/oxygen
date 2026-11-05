@@ -43,7 +43,7 @@ export interface PageInput {
     structure: CourseStructure | readonly CourseStructure[] | null;
     sites: readonly CourseSite[];
     appearance: CourseAppearance;
-    viewOptions: Pick<CourseViewOptions, "allControls" | "labelMode" | "overprintScale">;
+    viewOptions: Pick<CourseViewOptions, "allControls" | "labelMode" | "overprintScale" | "autoCuts">;
     /** Filter regions over the map window (`map-rendering.md` §4.11). */
     regions?: readonly CourseFilterRegion[];
     /** The event's course objects in scope of this sheet (docs/course-layer.md §8.3), in draw order. */

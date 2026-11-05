@@ -237,7 +237,9 @@ automatically — there is no manual cut UX (yet).
   (`course.getOverprintCuts` / `course.setOverprintCuts`,
   `events.auto_overprint_cuts`, default on) writes editor geometry
   without automatic cuts when off; imported OCD/XML geometry keeps its
-  file-authored cuts either way.
+  file-authored cuts either way. On `vector` events the GL course layer
+  and the vector print read the same flag (D17, `course-layer.md` §3.4):
+  off, they draw no automatic cuts but keep stored circle and leg gaps.
 
 - **When**: at every geometry rebuild (`rebuildCourseGeometry` — course
   create/update, control move/delete) and after a map upload, which

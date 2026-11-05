@@ -1827,7 +1827,8 @@ export const courseRouter = router({
       return { success: true as const, renderKey };
     }),
 
-  getOverprintCuts: coursesViewProcedure.query(async ({ ctx }) => {
+  // Kiosk-readable: every MapPanel's GL course layer follows it (course-layer.md §3.4).
+  getOverprintCuts: kioskOrCoursesViewProcedure.query(async ({ ctx }) => {
     const row = await ctx.db.event.findUnique({
       where: { id: ctx.event.id },
       select: { autoOverprintCuts: true },

@@ -224,6 +224,8 @@ export interface MapRowContext {
   mapInfo: { scale: number | null; meridianTiltDeg: number | null };
   courseObjects?: readonly StoredCourseObject[];
   classesByCourse?: ReadonlyMap<string, string[]>;
+  /** `Event.autoOverprintCuts`; `false` = no automatic cuts on the sheet (course-layer.md §3.4). Absent = on. */
+  autoCuts?: boolean;
 }
 
 /**
@@ -263,6 +265,7 @@ export function sheetInputForMapRow(row: PrintMapRow, ctx: MapRowContext): Resol
     structure: row.course?.structure ?? null,
     ...(row.course?.id !== undefined ? { courseId: String(row.course.id) } : {}),
     courseObjects: inScope.map(({ id: _uuid, scope: _scope, z: _z, version: _v, seq, ...body }) => ({ ...body, id: seq }) as course.CourseLayerObject),
+    ...(ctx.autoCuts === false ? { autoCuts: false } : {}),
   };
 }
 

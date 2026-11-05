@@ -118,6 +118,17 @@ describe("composePage", () => {
     ]);
   });
 
+  it("the event's auto cuts off: no automatic slits or gaps in the map layer, the same stream as without cut features", () => {
+    const base = pageScene("page-ring");
+    // On 31's rim (R 2.5 mm at 1:10 000) and on the middle of leg 31–32.
+    const cut = { ...base, map: { ...base.map, cutFeatures: [{ x: -1.5, y: 6 }, { x: 10.5, y: 13 }] } };
+    const plain = composePage(base, fonts()).mapLayer.stream;
+    const on = composePage(cut, fonts()).mapLayer.stream;
+    expect(on).not.toEqual(plain);
+    const off = composePage({ ...cut, course: { ...cut.course, viewOptions: { ...cut.course.viewOptions, autoCuts: false } } }, fonts()).mapLayer.stream;
+    expect(off).toEqual(plain);
+  });
+
   it("an unaligned document stack is a CourseStackError", () => {
     const base = pageScene("page-ring");
     const colours = base.map.context.colours.map((c) => ({ ...c, paletteIds: [] }));

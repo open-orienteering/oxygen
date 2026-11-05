@@ -81,6 +81,13 @@ export interface CourseViewOptions {
    * (the page transform enlarges the whole layer). Default 1.
    */
   overprintScale?: number;
+  /**
+   * The event's automatic cuts (`Event.autoOverprintCuts`, course-layer.md
+   * §3.4). `false`: no automatic circle slits or leg gaps whatever
+   * `cutFeatures` holds; stored `circleGaps` / leg `gaps` still apply.
+   * Default on.
+   */
+  autoCuts?: boolean;
   /** Outer ring of white-out-outside objects: the map frame as a paper-mm polygon. */
   window?: MapPoint[];
   /** Placeholder values for map-anchored text (`{course}` …). */

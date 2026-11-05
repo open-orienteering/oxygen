@@ -306,7 +306,7 @@ with `sheet` = `PageInput` minus `map` and `geo`.
 | `paper` | `getPaperDimensions(paper, orientation, custom)` |
 | `frame`, `window` | `document.mapFrame`, `layout.window` (`mapScale` and `meridianTiltDeg` from `getBaseMapInfo`) |
 | `course.appearance` | `appearanceFromTemplate(document.appearance)` — multipliers of the library sizes (`docs/course-layer.md` §2) |
-| `course.viewOptions` | `allControls` = `kind === "all_controls"`, `labelMode`, `overprintScale` from the layout |
+| `course.viewOptions` | `allControls` = `kind === "all_controls"`, `labelMode`, `overprintScale` from the layout; `autoCuts: false` when the event's **Auto cuts** toggle is off (`ResolveSheetInput.autoCuts` from `MapRowContext.autoCuts`; no key when on — `docs/course-layer.md` §3.4, D17) |
 | `objects`, `textValues` | `document.objects` (template + sheet), `layout.textValues` |
 | `description` | `document.description` position and cell size, `layout.descriptionRows` / `descriptionHeader`, title = course name, else map name; null when the template hides the block |
 | `label` | course name, else map name (page label and outline title, §7.2) |
@@ -329,10 +329,14 @@ with `sheet` = `PageInput` minus `map` and `geo`.
   to the layout's controls past the geometry's start and finish), an
   empty one meaning the automatic cuts. Every course gets legs and
   automatic cuts from the course layer, with cut features from the
-  pinned document (`cutFeaturesOfDocument`, §3.4 there).
+  pinned document (`cutFeaturesOfDocument`, §3.4 there) — unless the
+  event's **Auto cuts** toggle is off: then the sheet carries
+  `viewOptions.autoCuts: false` and the page has no automatic slits or
+  leg gaps, while the stored circle and leg gaps still print (the
+  screen's rule, `course-layer.md` §3.4, D17).
 
 `pdf-page.ts` adds the map part: `sheetForMapRow(row, { event,
-allControls, mapInfo })` maps a `course_maps` row (with template and
+allControls, mapInfo, courseObjects?, classesByCourse?, autoCuts? })` maps a `course_maps` row (with template and
 course, as `maps.pdf` loads it) to its sheet through `resolveSheet`;
 `loadPinnedPrintDocument(db, eventId)` returns the prepared document,
 `getBaseMapInfo` and the pinned `map_files` row's rotation correction,
@@ -452,11 +456,11 @@ lines drawn by the library; images DeviceRGB in `cmyk`.
 |---|---|
 | `print/__tests__/page.test.ts` | `T_map` against `mapToPage` (0°, ±rotation), inverse, frame in map space, `flipPageObject`, `transformPassStream` (slices kept, widths / taper / glyph instances / text scaled and turned, hatch lines on the transformed lines) |
 | `print/__tests__/description.test.ts` | every `IOF_SYMBOLS` key converts; 2.4 one fill, 1.10 one disc, 0.3 two strokes + disc, Bézier flags; block size and position, border, thick / thin rules, header sizes and weight, F text 0.34 × cell, pictograms centred at 0.8 × cell, one symbol per key |
-| `print/__tests__/compose.test.ts` | one colour-sorted map stream with lower purple < black < upper purple; block text / rules / pictograms on appended colours; no block → empty page layer; map ring outer boundary = frame (+1 mm) through `T_map⁻¹`, page ring = frame + 1 mm, page white-out at upper white; placeholders; rotated `T_map`; images in layer space; `CourseStackError` |
+| `print/__tests__/compose.test.ts` | one colour-sorted map stream with lower purple < black < upper purple; block text / rules / pictograms on appended colours; no block → empty page layer; map ring outer boundary = frame (+1 mm) through `T_map⁻¹`, page ring = frame + 1 mm, page white-out at upper white; placeholders; rotated `T_map`; images in layer space; `CourseStackError`; auto cuts off = the stream without cut features (D17) |
 | `print/__tests__/writer.test.ts` (C8) | a bold text symbol and a regular one embed two font objects, `…+LiberationSans` and `…+LiberationSans-Bold` |
 | `print/__tests__/write-page.test.ts` | operator order (sheet, frame clip, `T_map` `cm`, page `cm`), no `rg` in `cmyk` / no `k` in `rgb`, rotated `cm`, two pages sharing font, glyph forms and image XObject, page labels and outlines, `/Measure /GEO` (SWEREF99 TM corners near 58.6° N 15° E, rotated corners), deterministic bytes, missing image warning, an object far outside the frame absent from the content stream (C13) |
 | `print/__tests__/isomorphic.test.ts` | no Node API, `Buffer`, sharp or resvg in the module |
-| `packages/api/src/__tests__/course-print-sheet.test.ts` | `resolveSheet`: paper / frame / window / tilt, structure and roles, unique sites, label offsets, extras, `editor` vs `ocd` authored geometry, description block / hidden, all-controls, free order |
+| `packages/api/src/__tests__/course-print-sheet.test.ts` | `resolveSheet`: paper / frame / window / tilt, structure and roles, unique sites, label offsets, extras, `editor` vs `ocd` authored geometry, description block / hidden, all-controls, free order, the event's auto cuts off on the view options (D17) |
 | `packages/api/src/__tests__/integration/course-print.test.ts` | the E2E fixture map pinned on a `vector` event: legacy event → no print document; two sheets → one PDF of two A4 pages, `TrimBox`, labels, outlines, Type0 / CIDFontType2 shared, frame clip and `T_map`, no `rg`, PNG and rasterised SVG logos shared (600 dpi), `/Measure /GEO` of the fixture's georeference, deterministic bytes |
 | `packages/api/src/render/__tests__/page-raster.test.ts` | the page oracle: white outside the frame and the ring, map inside, page box on top; rotated building where `T_map` puts it; block position on A4 |
 | `packages/api/src/render/__tests__/golden-files.test.ts` | `page-sprint-a4`, `page-ring`, `page-rotated` match the page oracle |
@@ -500,7 +504,8 @@ behind rsvg.
 ### 8.2 The vector path
 
 1. The rows `findMapRows` selects, each turned into a sheet by
-   `sheetForMapRow` (§5) with the event, its controls and the pinned
+   `sheetForMapRow` (§5) with the event, its controls, its
+   `autoOverprintCuts` (`MapRowContext.autoCuts`, §5.2) and the pinned
    document's `getBaseMapInfo` scale and meridian tilt. The pinned
    document is identified, not decoded, on the request thread:
    `pinnedPrintSource` gives its hash, `rotationCorrectionDeg` and a

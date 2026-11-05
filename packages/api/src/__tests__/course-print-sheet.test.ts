@@ -143,6 +143,12 @@ describe("resolveSheet", () => {
     expect(sheet.label).toBe("Blue map");
   });
 
+  it("the event's auto cuts off reach the sheet's view options (course-layer.md §3.4); on or absent adds no key", () => {
+    expect(resolveSheet(base({ autoCuts: false })).sheet.course.viewOptions.autoCuts).toBe(false);
+    expect("autoCuts" in resolveSheet(base({ autoCuts: true })).sheet.course.viewOptions).toBe(false);
+    expect("autoCuts" in resolveSheet(base()).sheet.course.viewOptions).toBe(false);
+  });
+
   it("free order: ordered flag carried, no legs", () => {
     const { sheet } = resolveSheet(base({ course: { ...base().course!, orderMode: "free_order" } }));
     expect((sheet.course.structure as { orderMode: string }).orderMode).toBe("free_order");
