@@ -411,7 +411,7 @@ export const courseMapRouter = router({
       };
       const [mapInfo, eventRow, allControls, courseObjects, byCourse] = await Promise.all([
         getBaseMapInfoOrNull(ctx.db, ctx.event.id),
-        ctx.db.event.findUnique({ where: { id: ctx.event.id }, select: { name: true, date: true } }),
+        ctx.db.event.findUnique({ where: { id: ctx.event.id }, select: { name: true, date: true, autoOverprintCuts: true } }),
         ctx.db.control.findMany({
           where: { eventId: ctx.event.id, removed: false },
           select: { id: true, seq: true, codes: true, status: true, xpos: true, ypos: true, description: true },
@@ -419,13 +419,14 @@ export const courseMapRouter = router({
         loadCourseObjects(ctx.db, ctx.event.id),
         classesByCourse(ctx.db, ctx.event.id),
       ]);
-      const event = eventRow ?? { name: "", date: new Date(0) };
+      const event = { name: eventRow?.name ?? "", date: eventRow?.date ?? new Date(0) };
       const rowCtx: MapRowContext = {
         event,
         allControls,
         mapInfo: { scale: mapInfo?.scale ?? null, meridianTiltDeg: mapInfo?.meridianTiltDeg ?? null },
         courseObjects,
         classesByCourse: byCourse,
+        autoCuts: eventRow?.autoOverprintCuts ?? true,
       };
       const sheetInclude = { template: true, class: { select: { seq: true } }, course: { include: courseInclude } } as const;
 

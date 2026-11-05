@@ -25,6 +25,10 @@ import { OVERPRINT_CUTS_VERSION } from "../../course-geometry.js";
 import { applyEventMap } from "../../event-map.js";
 import { loadEventCutFeatures } from "../../event-map-objects.js";
 import { buildGeometryReport, formatGeometryReport, reportTotals } from "../../course-geometry-report.js";
+import { loadPinnedPrintDocument, pageInputFor, sheetForMapRow, type PrintMapRow } from "../../course-maps/pdf-page.js";
+import { loadBundledFonts } from "../../render/fonts.js";
+import { composePage } from "@oxygen/shared/print";
+import { defaultMapAppearance } from "@oxygen/shared";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const FIXTURE = resolve(__dirname, "../../../../../e2e/test.ocd");
@@ -344,6 +348,64 @@ describe("vector events cut against the pinned document", () => {
     expect(vGaps[0].from).toBeCloseTo(lGaps[0].from, 6);
     expect(vGaps[0].to).toBeCloseTo(lGaps[0].to, 6);
   });
+
+  it("the event's auto cuts off reach the vector print: no automatic slits or gaps, a stored circle gap still drawn (course-layer.md §3.4)", async () => {
+    const db = vec.db;
+    const mk = (codes: string, xpos: number, ypos: number) => db.control.create({ data: { eventId: vec.eventId, codes, xpos, ypos } });
+    const onRim = await mk("291", 68, 39.5); // the boulder on its rim
+    const a = await mk("292", 60, 42);
+    const b = await mk("293", 76, 42); // leg a–b crosses the boulder
+    const template = await db.mapTemplate.create({
+      data: {
+        eventId: vec.eventId,
+        name: "Cuts A4",
+        printScale: 15000,
+        settings: { printMarginMm: 3, mapFrame: { x: 8, y: 8, width: 194, height: 281 }, description: { visible: false, x: 150, y: 12, cellSizeMm: 6 }, appearance: defaultMapAppearance },
+        objects: [],
+      },
+    });
+    const crs = await db.course.create({
+      data: { eventId: vec.eventId, name: "Vec-Print", courseControls: { create: [{ position: 1, controlId: onRim.id }, { position: 2, controlId: a.id }, { position: 3, controlId: b.id }] } },
+    });
+    await db.courseMap.create({ data: { eventId: vec.eventId, name: "Vec-Print", kind: "course", courseId: crs.id, templateId: template.id, windowCenter: { x: 68, y: 42 } } });
+    const loadRow = async () => (await db.courseMap.findFirstOrThrow({
+      where: { eventId: vec.eventId, courseId: crs.id },
+      include: { template: true, course: { include: { classes: { select: { name: true } }, courseControls: { orderBy: { position: "asc" }, include: { control: true } } } } },
+    })) as unknown as PrintMapRow;
+    const pinned = (await loadPinnedPrintDocument(db, vec.eventId))!;
+    const fonts = await loadBundledFonts();
+    const stream = async (opts: { features?: boolean } = {}) => {
+      const event = await db.event.findUniqueOrThrow({ where: { id: vec.eventId } });
+      const allControls = await db.control.findMany({ where: { eventId: vec.eventId, removed: false } });
+      const sheet = sheetForMapRow(await loadRow(), { event: { name: event.name, date: event.date }, allControls, mapInfo: pinned.info, autoCuts: event.autoOverprintCuts });
+      const doc = opts.features === false ? { ...pinned.document, cutFeatures: [] } : pinned.document;
+      return { sheet, stream: composePage(pageInputFor(doc, sheet, null), fonts).mapLayer.stream };
+    };
+    try {
+      const on = await stream();
+      expect("autoCuts" in on.sheet.course.viewOptions).toBe(false);
+      expect(on.stream).not.toEqual((await stream({ features: false })).stream);
+
+      await vecCaller.course.setOverprintCuts({ enabled: false });
+      const off = await stream();
+      expect(off.sheet.course.viewOptions.autoCuts).toBe(false);
+      expect(off.stream).not.toEqual(on.stream);
+      // Off = exactly the page without any cut features: no automatic slit on 291, no gap on 292–293.
+      expect(off.stream).toEqual((await stream({ features: false })).stream);
+
+      // A stored circle gap is the setter's choice: it still draws with the toggle off.
+      await db.control.update({ where: { id: a.id }, data: { circleGaps: [{ start: 80, end: 100 }] } });
+      const manual = await stream();
+      expect(manual.sheet.course.sites.find((x) => x.id === a.id)?.circleGaps).toEqual([{ start: 80, end: 100 }]);
+      expect(manual.stream).not.toEqual(off.stream);
+    } finally {
+      await vecCaller.course.setOverprintCuts({ enabled: true });
+      await db.courseMap.deleteMany({ where: { eventId: vec.eventId, courseId: crs.id } });
+      await db.course.delete({ where: { id: crs.id } });
+      await db.mapTemplate.delete({ where: { id: template.id } });
+      await db.control.deleteMany({ where: { id: { in: [onRim.id, a.id, b.id] } } });
+    }
+  }, 60_000);
 
   it("falls back to the OCAD parse while no document is pinned", async () => {
     await vec.db.mapFile.updateMany({ where: { eventId: vec.eventId }, data: { documentHash: null } });

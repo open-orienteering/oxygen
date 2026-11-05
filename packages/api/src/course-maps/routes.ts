@@ -377,6 +377,7 @@ export function registerCourseMapRoutes(
               mapInfo: pinned.info,
               courseObjects,
               classesByCourse: byCourse,
+              autoCuts: event.autoOverprintCuts,
             }),
           );
           // A worker slot, then a permit like every render, but no queue

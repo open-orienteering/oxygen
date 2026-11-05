@@ -28,6 +28,12 @@ export interface ResolveSheetInput extends ResolveMapLayoutInput {
   courseObjects?: readonly course.CourseLayerObject[];
   /** Stable id carried into the structure (the course's uuid or seq); default `course`. */
   courseId?: string;
+  /**
+   * `Event.autoOverprintCuts` (course-layer.md §3.4): `false` puts
+   * `autoCuts: false` on the sheet's view options, so the composer draws no
+   * automatic slits or gaps; stored gaps still apply. Absent = on.
+   */
+  autoCuts?: boolean;
 }
 
 export interface ResolvedSheet {
@@ -137,7 +143,12 @@ export function resolveSheet(input: ResolveSheetInput): ResolvedSheet {
       structure,
       sites,
       appearance: course.appearanceFromTemplate(document.appearance),
-      viewOptions: { allControls: input.kind === "all_controls", labelMode: layout.labelMode, overprintScale: layout.overprintScale },
+      viewOptions: {
+        allControls: input.kind === "all_controls",
+        labelMode: layout.labelMode,
+        overprintScale: layout.overprintScale,
+        ...(input.autoCuts === false ? { autoCuts: false } : {}),
+      },
       ...(input.courseObjects?.length ? { objects: input.courseObjects } : {}),
     },
     objects: document.objects,
