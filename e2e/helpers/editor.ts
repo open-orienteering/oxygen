@@ -132,7 +132,7 @@ export async function emptyPoint(page: Page, clearPx = 40, avoid: Pt[] = []): Pr
     if (p.x > viewer.x + viewer.width - 80 && p.y > viewer.y + viewer.height - 200) continue;
     if (chrome.some((b) => p.x > b.x - 12 && p.x < b.x + b.width + 12 && p.y > b.y - 12 && p.y < b.y + b.height + 12)) continue;
     if (pts.some((q) => Math.hypot(q.x - p.x, q.y - p.y) < clearPx)) continue;
-    if (labels.some((q) => Math.hypot(q.x - p.x, q.y - p.y) < 30)) continue;
+    if (labels.some((q) => Math.hypot(q.x - p.x, q.y - p.y) < Math.min(40, Math.max(30, clearPx)))) continue;
     if (legs.some((poly) => poly.some((a, i) => i > 0 && segDist(p, poly[i - 1], a) < 20))) continue;
     return p;
   }
@@ -524,10 +524,12 @@ export async function pressInside(page: Page, outline: Pt[], by?: Pt): Promise<{
 
 /**
  * A page point on a closed outline (paper mm) where a press is the outline's, not the course's: the edge midpoint
- * farthest from every site and every drawn leg piece.
+ * farthest from every site, every drawn number and every drawn leg piece.
  */
 export async function pressOnEdge(page: Page, outline: Pt[]): Promise<Pt> {
-  const marks = await Promise.all((await sites(page)).map((s) => toPage(page, s.mm)));
+  // Sites and their drawn numbers (a `number` hit selects the control, D10 flake: an edge under "32").
+  const numbers = await page.getByTestId("course-label").evaluateAll((els) => els.map((el) => ({ x: Number(el.getAttribute("data-x")), y: Number(el.getAttribute("data-y")) })));
+  const marks = await Promise.all([...(await sites(page)).map((s) => s.mm), ...numbers].map((mm) => toPage(page, mm)));
   const legs = await Promise.all((await legPieces(page)).map((l) => Promise.all(l.points.map((q) => toPage(page, q)))));
   const edges = await Promise.all(outline.map((v, i) => {
     const w = outline[(i + 1) % outline.length];
@@ -686,6 +688,9 @@ export async function pageToPaperOf(page: Page, frame: Frame): Promise<(p: Pt) =
 export async function freezeExternalPoll(page: Page): Promise<void> {
   let frozen: unknown;
   const procsOf = (url: URL) => decodeURIComponent(url.pathname.split("/trpc/")[1] ?? "").split(",");
+  // The hold takes the first answer through the route; return only once there is one, so it predates whatever the
+  // test writes next (D10 flake: B's write landed before A's next poll, which then froze the moved counters).
+  const held = page.waitForResponse((r) => procsOf(new URL(r.url())).includes("competition.counterState"), { timeout: 15_000 });
   await page.route((url) => procsOf(url).includes("competition.counterState"), async (route) => {
     const res = await route.fetch();
     const at = procsOf(new URL(route.request().url())).indexOf("competition.counterState");
@@ -699,4 +704,5 @@ export async function freezeExternalPoll(page: Page): Promise<void> {
     else body[at] = frozen;
     await route.fulfill({ response: res, json: body });
   });
+  await held;
 }

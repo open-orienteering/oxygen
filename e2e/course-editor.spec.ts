@@ -1033,6 +1033,7 @@ test.describe("tools", () => {
 
       // A press on its outline selects it (four vertex handles).
       await expect(async () => {
+        await dropSelection(page); // a missed attempt's selection or phantom (its action bar) goes first
         await clickMap(page, await pressOnEdge(page, await geometryOf(row)));
         await expect(page.getByTestId("editor-object")).toHaveAttribute("data-object-id", String(id), { timeout: 2000 });
       }).toPass({ timeout: 20000 });
