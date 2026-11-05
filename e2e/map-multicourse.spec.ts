@@ -135,18 +135,18 @@ test.describe("Multi-course map: class labels + combined descriptions", () => {
       await expectLabelShown(numberLabels.first(), mapPipeline, 30000);
       // Keep clicking inside the wait window instead of exhausting a fixed
       // click budget up front — under parallel-shard load the SVG re-render
-      // after a click can lag far behind the count() poll.
-      const deadline = Date.now() + 45_000;
-      while (
-        (await overlayLabels.filter({ hasText: "Öppen 1" }).count()) === 0 &&
-        Date.now() < deadline
-      ) {
-        await zoomIn.click();
-        await page.waitForTimeout(250);
-      }
-      await expect(
-        overlayLabels.filter({ hasText: "Öppen 1" }).first(),
-      ).toBeVisible({ timeout: 5000 });
+      // after a click can lag far behind the poll. The loop ends only once
+      // the pill is *visible*: right after a viewport switch it can be
+      // counted on the outgoing panel, or on the new one before its
+      // re-fit drops the zoom back below the pill threshold.
+      await expect(async () => {
+        if ((await overlayLabels.filter({ hasText: "Öppen 1" }).count()) === 0) {
+          await zoomIn.click();
+        }
+        await expect(
+          overlayLabels.filter({ hasText: "Öppen 1" }).first(),
+        ).toBeVisible({ timeout: 1000 });
+      }).toPass({ timeout: 45_000 });
     };
     await zoomUntilLegLabels();
     await expect(
