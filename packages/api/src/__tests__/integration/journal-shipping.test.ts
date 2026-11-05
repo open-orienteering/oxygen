@@ -212,6 +212,34 @@ describe("push direction: venue writes converge on the peer", () => {
     expect(punchB!.isOriginal).toBe(false);
   });
 
+  it("ships a course's structure and both version tokens unchanged (course-layer.md §6–7)", async () => {
+    // A control without a description or circle gaps (JSON nulls) and a
+    // course with a stored structure: node B must hold the same structure
+    // and the same tokens, so a client may send B's token to A.
+    const control = await caller.control.create({ codes: "88", xpos: 12, ypos: 34 });
+    await caller.control.update({ id: control.id, notes: "south side" });
+    const course = await caller.course.create({ name: "Shipped", controlIds: [control.id] });
+    await caller.course.setStructure({
+      courseId: course.id,
+      structure: { version: 1, id: "x", orderMode: "ordered", items: [{ siteId: control.id, numberHidden: true }] },
+    });
+
+    const stats = await shipEventOnce(ctx.db, ctx.event, PEER_ID, transport);
+    expect(stats.errors).toEqual([]);
+
+    const courseA = await ctx.db.course.findFirstOrThrow({ where: { eventId: ctx.eventId, seq: course.id } });
+    const courseB = await dbB.course.findUniqueOrThrow({ where: { id: courseA.id } });
+    expect(courseB.structure).toEqual(courseA.structure);
+    expect(courseB.version).toBe(courseA.version);
+    const ccB = await dbB.courseControl.findMany({ where: { courseId: courseA.id } });
+    expect(ccB.map((cc) => cc.numberHidden)).toEqual([true]);
+    const controlA = await ctx.db.control.findFirstOrThrow({ where: { eventId: ctx.eventId, codes: "88" } });
+    const controlB = await dbB.control.findUniqueOrThrow({ where: { id: controlA.id } });
+    expect(controlB.version).toBe(controlA.version);
+    expect(controlB.notes).toBe("south side");
+    expect(controlB.kind).toBe("control");
+  });
+
   it("is idempotent: a second cycle ships nothing and changes nothing", async () => {
     const before = await dbB.journalEntry.count({
       where: { eventId: eventB.id },

@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
+import { readdirSync } from "node:fs";
 import path from "node:path";
 import test from "node:test";
 import { fileURLToPath } from "node:url";
@@ -57,4 +58,54 @@ test("E2E_*_PORT overrides still reach the servers and baseURL (sharded runner)"
   );
   assert.equal(cfg.baseURL, "http://127.0.0.1:4202");
   assert.equal(cfg.servers[2].env.API_PROXY_PORT, "4102");
+});
+
+/** The projects and their file lists, as Playwright reads them. */
+function loadProjects() {
+  const out = execFileSync(
+    "pnpm",
+    [
+      "exec",
+      "tsx",
+      "-e",
+      `import c from "./playwright.config.ts";
+       console.log(JSON.stringify(c.projects.map((p) => ({ name: p.name, testMatch: p.testMatch ?? null, testIgnore: p.testIgnore ?? null }))));`,
+    ],
+    { cwd: ROOT, encoding: "utf8" },
+  );
+  return JSON.parse(out.trim().split("\n").pop());
+}
+
+/** The config's globs are all `**` + `/<file>`: a file matches by its base name. */
+const matches = (globs, file) => (globs ?? []).some((g) => g === `**/${file}`);
+const runsIn = (project, file) =>
+  (project.testMatch === null || matches(project.testMatch, file)) && !matches(project.testIgnore, file);
+
+test("the new editor's spec runs under map-vector and mobile only; the legacy spec under chromium only (D10)", () => {
+  const projects = loadProjects();
+  const runners = (file) => projects.filter((p) => runsIn(p, file)).map((p) => p.name).sort();
+  assert.deepEqual(runners("course-editor.spec.ts"), ["map-vector", "mobile"]);
+  assert.deepEqual(runners("course-editor-legacy.spec.ts"), ["chromium"]);
+  assert.deepEqual(runners("field-mode.spec.ts"), ["mobile"]);
+  assert.deepEqual(runners("course-maps.spec.ts"), ["map-legacy", "map-vector"]);
+  assert.deepEqual(runners("kiosk.spec.ts"), ["chromium"]);
+});
+
+test("every spec file run by more than one project is weighted per project (scripts/e2e-weights.mjs)", async () => {
+  const { WEIGHTS, weightOf } = await import("../e2e-weights.mjs");
+  const projects = loadProjects();
+  const specs = readdirSync(path.join(ROOT, "e2e")).filter((f) => f.endsWith(".spec.ts"));
+  for (const file of specs) {
+    const names = projects.filter((p) => runsIn(p, file)).map((p) => p.name).sort();
+    assert.ok(names.length > 0, `${file} runs in no project`);
+    const w = WEIGHTS[file];
+    if (names.length > 1 || (w !== undefined && typeof w !== "number")) {
+      assert.equal(typeof w, "object", `${file} runs in ${names.join(", ")}: weight it per project`);
+      assert.deepEqual(Object.keys(w).sort(), names, `${file}: weights name exactly the projects that run it`);
+    }
+  }
+  for (const file of Object.keys(WEIGHTS)) assert.ok(specs.includes(file), `weight for a missing spec: ${file}`);
+  const maps = WEIGHTS["course-maps.spec.ts"];
+  assert.equal(weightOf("course-maps.spec.ts"), maps["map-legacy"] + maps["map-vector"]);
+  assert.equal(weightOf("no-such.spec.ts"), 2);
 });

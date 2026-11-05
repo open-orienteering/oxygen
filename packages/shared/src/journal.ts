@@ -191,7 +191,9 @@ export interface RunnerDeletedPayload {
  * Deletes are upserts with `removed: true` in `fields`. `fields` carries the
  * portable row (camelCase model fields, FKs as UUIDs) minus `id`, `eventId`,
  * `seq`, timestamps — and minus derived server artifacts (course `geometry`),
- * which travel with the checkout snapshot instead.
+ * which travel with the checkout snapshot instead. A course's `fields`
+ * carry its stored `structure` (the results closure, 08 §4.8) and both
+ * rows' `version` token as a decimal string (docs/course-layer.md §6–7).
  */
 export interface ReferenceUpsertPayload {
   /** Row UUID — identical on every node. */
@@ -205,6 +207,8 @@ export interface ReferenceUpsertPayload {
     controlId: string;
     labelDx?: number | null;
     labelDy?: number | null;
+    /** D0 (absent in older entries = false). */
+    numberHidden?: boolean;
   }>;
   /** `class.upserted` only: course-pool rows (replace-all). */
   coursePools?: Array<{ stage: number; courseId: string }>;

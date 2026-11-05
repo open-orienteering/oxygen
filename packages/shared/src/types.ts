@@ -421,6 +421,7 @@ export interface ClubDetail {
 // import it from "@oxygen/shared" alongside CourseInfo without
 // reaching into the readout submodule directly.
 import type { ExpectedPosition } from "./readout.js";
+import type { WireCourseStructure } from "./course/structure.js";
 export type { ExpectedPosition } from "./readout.js";
 
 /** How a course's controls must be visited. */
@@ -868,6 +869,49 @@ export interface ControlInfo {
   units: ControlUnit[]; // physical units currently mapped to this control
   /** IOF control description symbols, or null when not set. */
   description: ControlDescription | null;
+  /** Site kind; `start` / `finish` mirror `status` (docs/course-layer.md §6). */
+  kind: ControlKind;
+  /** Manual circle gaps, compass degrees. */
+  circleGaps: { start: number; end: number }[];
+  notes: string;
+  /** ISO timestamp of the field check-off, null when unchecked. */
+  checkedAt: string | null;
+  /** Concurrency token (decimal HLC), sent back as `baseVersion` (docs/course-layer.md §7). */
+  version: string;
+}
+
+/** What a control site is (08 §4.2). The last three are typed for slice F. */
+export type ControlKind = "control" | "start" | "finish" | "map_exchange" | "crossing_point" | "map_issue";
+
+/**
+ * `data` of the tRPC `CONFLICT` a stale `baseVersion` gets from
+ * `course.setStructure` / `course.update` / `control.update` /
+ * `courseObject.update` / `courseObject.delete` (docs/course-layer.md §7,
+ * §8.4). `version` and `current` are the server's row now; `differing` the
+ * structure item ids (course) or field names (control) that differ between
+ * the client's base and that row — always null for a course object (not
+ * journaled, so the base is never on the node).
+ */
+export interface VersionConflictData {
+  /** `sheet` / `template`: a `course_maps` / `map_templates` row (docs/course-layout.md §2). */
+  kind: "course" | "control" | "object" | "sheet" | "template";
+  /** Public id (course seq / control id / course object seq / sheet seq / template seq). */
+  id: number;
+  version: string;
+  current: unknown;
+  /** Null when the base row is not on this node (token 0, or its journal entry pruned). */
+  differing: string[] | null;
+}
+
+/** Narrow a tRPC error's `data` to a version conflict (the duplicate-code `CONFLICT` has no `kind`). */
+export function versionConflictOf(data: unknown): VersionConflictData | null {
+  if (typeof data !== "object" || data === null) return null;
+  const d = data as Partial<VersionConflictData>;
+  return (d.kind === "course" || d.kind === "control" || d.kind === "object" || d.kind === "sheet" || d.kind === "template") &&
+    typeof d.version === "string" &&
+    (d.differing === null || Array.isArray(d.differing))
+    ? (d as VersionConflictData)
+    : null;
 }
 
 /** Control detail with course usage */
@@ -913,10 +957,29 @@ export interface CourseSummary {
    * Absent keys are auto-placed.
    */
   labelOffsets: Record<string, { dx: number; dy: number }>;
+  /**
+   * Authored leg gaps of the stored structure, keyed `"<fromId>><toId>"`
+   * (public control ids), fractions of the leg; the layer's leg input
+   * (docs/course-layer.md §6.4). Absent keys are cut automatically.
+   */
+  legGaps?: Record<string, { from: number; to: number }[]>;
+  /** Public ids of the controls whose number every visit hides (`numberHidden`). */
+  hiddenNumbers?: number[];
+  /** Concurrency token (decimal HLC), sent back as `baseVersion` (docs/course-layer.md §7). */
+  version: string;
 }
 
 /** Course detail with class usage */
 export interface CourseDetail extends CourseSummary {
+  /**
+   * The course structure: as stored, or — while `courses.structure` is NULL —
+   * the linear one its sequence describes (docs/course-layer.md §6). Wire
+   * form: site ids are public control ids, `labelOffsets` from
+   * `course_controls`.
+   */
+  structure: WireCourseStructure;
+  /** Whether `structure` is stored (false: derived from `course_controls`). */
+  structureStored: boolean;
   classes: {
     classId: number;
     className: string;

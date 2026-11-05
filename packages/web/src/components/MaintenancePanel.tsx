@@ -75,6 +75,7 @@ export function MaintenancePanel() {
       </div>
 
       <MapBackfillCard />
+      <StructureBackfillCard />
     </div>
   );
 }
@@ -144,6 +145,71 @@ function MapBackfillCard() {
           <ul className="text-xs text-slate-600 list-disc ml-4">
             {run.failures.map((f) => (
               <li key={`${f.kind}-${f.id}`}>
+                {f.name}: {f.error}
+              </li>
+            ))}
+          </ul>
+        </div>
+      )}
+      {(status.isError || start.isError) && (
+        <p className="mt-3 text-sm text-red-600">{status.error?.message ?? start.error?.message}</p>
+      )}
+    </div>
+  );
+}
+
+/**
+ * Fills `courses.structure` where it is NULL (docs/course-layer.md §6.4);
+ * the button form of `pnpm course:backfill-structure`.
+ */
+function StructureBackfillCard() {
+  const { t } = useTranslation("event");
+  const utils = trpc.useUtils();
+  const status = trpc.event.structureBackfillStatus.useQuery();
+  const start = trpc.event.structureBackfillStart.useMutation({
+    onSuccess: () => utils.event.structureBackfillStatus.invalidate(),
+  });
+  const pending = status.data?.pending ?? 0;
+  const result = start.data;
+
+  return (
+    <div
+      data-testid="structure-backfill-card"
+      className="bg-white rounded-2xl shadow-sm border border-slate-200 p-5 mt-4"
+    >
+      <h2 className="text-sm font-semibold text-slate-800">{t("structureBackfillTitle")}</h2>
+      <p className="text-xs text-slate-500 mt-1 mb-4">{t("structureBackfillHelp")}</p>
+
+      {status.data && (
+        <p data-testid="structure-backfill-pending" className="text-sm text-slate-600 mb-3">
+          {pending === 0 ? t("structureBackfillNothing") : t("structureBackfillPending", { count: pending })}
+        </p>
+      )}
+
+      <button
+        type="button"
+        data-testid="structure-backfill-run"
+        onClick={() => start.mutate()}
+        disabled={start.isPending || pending === 0}
+        className="px-3 py-1.5 text-sm border border-slate-200 rounded-lg hover:bg-slate-50 disabled:opacity-50 cursor-pointer"
+      >
+        {t("structureBackfillRun")}
+      </button>
+
+      {result && (
+        <p
+          data-testid="structure-backfill-result"
+          className={`mt-3 text-sm ${result.failed > 0 ? "text-red-600" : "text-emerald-600"}`}
+        >
+          {t("structureBackfillDone", { filled: result.filled, failed: result.failed, total: result.total })}
+        </p>
+      )}
+      {result && result.failures.length > 0 && (
+        <div className="mt-2">
+          <p className="text-xs font-semibold text-slate-600">{t("structureBackfillFailures")}</p>
+          <ul className="text-xs text-slate-600 list-disc ml-4">
+            {result.failures.map((f) => (
+              <li key={`${f.event}-${f.name}`}>
                 {f.name}: {f.error}
               </li>
             ))}

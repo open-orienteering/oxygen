@@ -161,3 +161,24 @@ describe("passStreamToSvg", () => {
     expect(svg).toContain('fill="#eeeeee"');
   });
 });
+
+describe("passStreamToSvg — filter masks (§3.8)", () => {
+  const j = renderFixtures["dashed-bezier-stroke"];
+  const a = { coords: [0, -5000, 5000, -5000, 5000, 5000, 0, 5000], closed: true };
+  const b = { coords: [10000, -5000, 15000, -5000, 15000, 5000], closed: true };
+  it("a masked pass is nested in one clip group per region: the frame with the region as an even-odd hole", () => {
+    const stream = passStreamFromJson({ ...j, masks: [{ regions: [a, b] }], maskIdx: [0, -1] });
+    const svg = passStreamToSvg(stream, { colour, bounds: { minX: -1000, minY: -20000, maxX: 21000, maxY: 20000 } });
+    const clips = [...svg.matchAll(/<clipPath id="(mask\d+)"><path d="([^"]*)" clip-rule="evenodd" fill-rule="evenodd"\/><\/clipPath>/g)];
+    expect(clips).toHaveLength(2);
+    expect(clips[0][2]).toBe("M-1000 -20000L21000 -20000L21000 20000L-1000 20000ZM0 -5000L5000 -5000L5000 5000L0 5000Z");
+    expect(svg).toContain(`<g data-mask="0" clip-path="url(#${clips[0][1]})"><g clip-path="url(#${clips[1][1]})"><path data-pass="0"`);
+    // The unmasked pass is not wrapped.
+    expect(svg).toMatch(/<\/g><\/g><path data-pass="1"/);
+  });
+  it("masks share their clip paths; a stream without masks has none", () => {
+    const stream = passStreamFromJson({ ...j, masks: [{ regions: [a] }], maskIdx: [0, 0] });
+    expect([...passStreamToSvg(stream, { colour }).matchAll(/<clipPath id="mask/g)]).toHaveLength(1);
+    expect(passStreamToSvg(passStreamFromJson(j), { colour })).not.toContain("mask");
+  });
+});

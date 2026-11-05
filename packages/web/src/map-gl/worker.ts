@@ -14,13 +14,14 @@
  * Protocol (docs/map-rendering.md §5.2 "Worker"):
  *   → load     { source: document bytes | objects + symbols, fonts, text atlas pages }   ← loaded { summary, atlas, grid, base parts, large part }
  *   → prepare  { ids }   replaces the queue; ← part { part } per id, nearest first
- *   → course   { generation, input }   ← course { generation, part, colours, derivation, … } (§5.2 "Dynamic bucket")
+ *   → course   { generation, input }   ← course { generation, part, colours, derivation, filter, … } (§5.2 "Dynamic bucket", "Filter regions")
  *   ← error    { message } (load failures; the queue stops)
  */
 
 import { course, mapDocument, render } from "@oxygen/shared";
 import { MeshAtlasBuilder, type AtlasMesh, type MeshAtlas } from "./mesh-atlas.js";
 import { buildTextGlyphs, haloEm, textGlyphKey, type TextAtlasPage } from "./text-atlas.js";
+import { triangulateEvenOdd } from "./prepare.js";
 import {
   aboveZoomGate, assignBuckets, fitView, partTransferables, prepareBucketPart, PREFETCH_MARGIN_CELLS, visibleCells,
   type Assignment, type Grid, type PrepareContext, type PreparedPart, type TextPassGlyphs, type ViewRect,
@@ -74,7 +75,21 @@ export interface PrepareRequest {
 }
 
 /** What the viewer decides of a course layer; the worker adds the document context and cut features. */
-export type CourseLayerRequest = Pick<course.CourseLayerInput, "structure" | "sites" | "objects" | "appearance" | "viewOptions">;
+export type CourseLayerRequest = Pick<course.CourseLayerInput, "structure" | "sites" | "objects" | "appearance" | "viewOptions" | "regions"> & {
+  /**
+   * A filter region is being dragged: `hide` regions use the fast bbox predicate on the
+   * objects' symbolised bounds (04 §7); the request on release leaves it off for the exact result.
+   */
+  fastFilter?: boolean;
+  /**
+   * Layout mode's page (docs/course-layout.md §1): the sheet's page-anchored objects and
+   * description block through the composer's own page layer, answered as a second part.
+   */
+  page?: PageLayerRequest;
+};
+
+/** The page of a sheet as the composer takes it; the worker adds the document context. */
+export type PageLayerRequest = Pick<course.PageLayerInput, "paper" | "frame" | "window" | "objects" | "textValues" | "description">;
 
 export interface CourseRequest {
   type: "course";
@@ -88,6 +103,8 @@ export type WorkerRequest = LoadRequest | PrepareRequest | CourseRequest;
 
 /** The dynamic bucket's id (never a cell or the large bucket). */
 export const COURSE_BUCKET = -2;
+/** The page part's id (Layout mode, docs/course-layout.md §1). */
+export const PAGE_BUCKET = -3;
 
 /** Course symbol dimensions on paper, mm: what the UI layer sizes its hit targets and rings by. */
 export interface CourseMetrics {
@@ -134,12 +151,28 @@ export interface LoadSummary {
   courseLayer?: { supported: true; cutFeatures: number } | { supported: false; reason: string };
 }
 
+/**
+ * Filter regions resolved for the static buckets (§5.2 "Filter regions"): the hidden objects and,
+ * per range-table entry `(object, colour)`, the mask it draws under, with each mask's region
+ * triangles (origin-relative, even-odd triangulated per region).
+ */
+export interface FilterReply {
+  hidden: Uint32Array;
+  /** `object, colour, mask` triples. */
+  entries: Uint32Array;
+  positions: Float32Array;
+  indices: Uint32Array;
+  masks: { offset: number; count: number }[];
+}
+
 export interface LoadedReply {
   type: "loaded";
   summary: LoadSummary;
   atlas: MeshAtlas;
   base: PreparedPart[];
   large: PreparedPart | undefined;
+  /** A `stream` source carrying filter masks: the masks for the static buckets. */
+  filter?: FilterReply;
 }
 
 export interface PartReply {
@@ -150,6 +183,17 @@ export interface PartReply {
 export interface ErrorReply {
   type: "error";
   message: string;
+}
+
+/**
+ * The course layer as the editor hit-tests it (docs/map-rendering.md §5.5):
+ * the symbolised stream with layer-local object ids, and each object's
+ * `ref` (site, leg, number, …) by that id. Small (hundreds of passes);
+ * the main thread runs `render.hitTest` on it synchronously.
+ */
+export interface CourseHitIndex {
+  stream: render.PassStream;
+  refs: course.CourseRef[];
 }
 
 export interface CourseReply {
@@ -165,6 +209,18 @@ export interface CourseReply {
   warnings: Record<string, number>;
   /** The whole mesh atlas, only when the course added meshes to it (earlier meshes keep their `base`). */
   atlas?: MeshAtlas;
+  /** The input's filter regions over the document's objects; null without regions (clears the filter). */
+  filter: FilterReply | null;
+  /** What the editor hit-tests; null when cleared or unsupported. */
+  hit: CourseHitIndex | null;
+  /**
+   * The page part (`PAGE_BUCKET`, layer `all`; docs/course-layout.md §1): the page layer in
+   * paper µm, its colour indices offset by `page.colourBase` so it draws after every map colour,
+   * as the PDF draws the page layer after the map layer. Null without a `page` request.
+   */
+  pagePart: PreparedPart | null;
+  /** With a page: where its colours start in `colours` (the page's copy of the table) and the frame in paper µm (the map clip). */
+  page: { colourBase: number; frameRingUm: [number, number][] } | null;
 }
 
 export type WorkerReply = LoadedReply | PartReply | ErrorReply | CourseReply;
@@ -179,7 +235,45 @@ interface State {
   course?: CourseState;
   /** The stack the static parts index (document source). */
   colourStack: render.ColourStack;
+  /** Symbolised bounds per document object, computed on the first filter request. */
+  objectBounds?: Map<number, render.Bounds>;
 }
+
+/**
+ * A filter result as the engine applies it: masked range-table entries as `(object, colour, mask)`
+ * triples (a mask is a function of the pair, `render.filterStream`) and the masks' region triangles.
+ */
+export function filterReply(stream: render.PassStream, hidden: readonly number[], maskIdx: Int32Array | undefined, masks: render.FilterMask[], ctx: Pick<PrepareContext, "originX" | "originY" | "toleranceUm">): FilterReply {
+  const seen = new Set<number>();
+  const entries: number[] = [];
+  if (maskIdx) {
+    for (let i = 0; i < maskIdx.length; i++) {
+      const m = maskIdx[i];
+      if (m < 0) continue;
+      const o = stream.objectIdx[i], c = stream.passes[i].colour;
+      const key = o * 65536 + c;
+      if (seen.has(key)) continue;
+      seen.add(key);
+      entries.push(o, c, m);
+    }
+  }
+  const positions: number[] = [];
+  const indices: number[] = [];
+  const out: FilterReply["masks"] = [];
+  for (const m of masks) {
+    const offset = indices.length;
+    for (const r of m.regions) {
+      const t = triangulateEvenOdd(render.flattenRings({ ...r, closed: true }, ctx.toleranceUm));
+      const base = positions.length / 2;
+      for (let k = 0; k < t.positions.length; k += 2) positions.push(t.positions[k] - ctx.originX, t.positions[k + 1] - ctx.originY);
+      for (const i of t.indices) indices.push(i + base);
+    }
+    out.push({ offset, count: indices.length - offset });
+  }
+  return { hidden: Uint32Array.from(hidden), entries: Uint32Array.from(entries), positions: Float32Array.from(positions), indices: Uint32Array.from(indices), masks: out };
+}
+
+const filterTransferables = (f: FilterReply): ArrayBuffer[] => [f.hidden.buffer, f.entries.buffer, f.positions.buffer, f.indices.buffer] as ArrayBuffer[];
 
 interface CourseState {
   document: course.CourseDocumentContext;
@@ -395,7 +489,9 @@ function load(msg: LoadRequest): { reply: LoadedReply; transfer: ArrayBuffer[]; 
   const transfer: ArrayBuffer[] = [built.data.buffer as ArrayBuffer];
   for (const p of base) transfer.push(...partTransferables(p));
   if (large) transfer.push(...partTransferables(large));
-  return { reply: { type: "loaded", summary, atlas: built, base, large }, transfer, next: { stream, assignment, ctx, colourStack, ...(courseState ? { course: courseState } : {}) } };
+  const filter = stream.masks?.length && stream.maskIdx ? filterReply(stream, [], stream.maskIdx, stream.masks, ctx) : undefined;
+  if (filter) transfer.push(...filterTransferables(filter));
+  return { reply: { type: "loaded", summary, atlas: built, base, large, ...(filter ? { filter } : {}) }, transfer, next: { stream, assignment, ctx, colourStack, ...(courseState ? { course: courseState } : {}) } };
 }
 
 /**
@@ -408,37 +504,75 @@ function load(msg: LoadRequest): { reply: LoadedReply; transfer: ArrayBuffer[]; 
  */
 function courseReply(state: State | undefined, msg: CourseRequest): { reply: CourseReply; transfer: ArrayBuffer[] } {
   const empty = (colours: render.ColourStack, warnings: Record<string, number> = {}): { reply: CourseReply; transfer: ArrayBuffer[] } => ({
-    reply: { type: "course", generation: msg.generation, part: null, colours, derivation: null, metrics: null, warnings },
+    reply: { type: "course", generation: msg.generation, part: null, colours, derivation: null, metrics: null, warnings, filter: null, hit: null, pagePart: null, page: null },
     transfer: [],
   });
   const cs = state?.course;
   if (!state || !cs) return empty(state?.colourStack ?? [], msg.input ? { COURSE_UNAVAILABLE: 1 } : {});
   if (!msg.input) return empty(state.colourStack);
 
-  const layer = course.courseLayer({ ...msg.input, document: cs.document, cutFeatures: cs.cutFeatures });
+  const { fastFilter, page: pageInput, ...input } = msg.input;
+  const layer = course.courseLayer({ ...input, document: cs.document, cutFeatures: cs.cutFeatures });
   const set = course.courseSymbols(cs.document, cs.stackIndex, msg.input.appearance);
   const sym = render.symbolise({ objects: layer.objects.map(({ ref: _ref, ...o }) => o), symbols: layer.symbols, fonts: cs.fonts });
   const objectIdx = new Uint32Array(sym.stream.objectIdx.length);
   for (let i = 0; i < objectIdx.length; i++) objectIdx[i] = sym.stream.objectIdx[i] + cs.objectOffset;
   const stream: render.PassStream = { ...sym.stream, objectIdx };
 
+  const warnings: Record<string, number> = {};
+  for (const w of sym.warnings) warnings[w.code] = (warnings[w.code] ?? 0) + 1;
+
+  // The page layer: the composer's own, in paper µm, its colours after every map colour.
+  let pageStream: render.PassStream | null = null;
+  let colours: render.ColourStack = layer.colours;
+  let page: CourseReply["page"] = null;
+  if (pageInput) {
+    const pl = course.pageLayer({ ...pageInput, context: cs.document }, layer.colours, cs.fonts);
+    for (const w of pl.warnings) warnings[w.code] = (warnings[w.code] ?? 0) + 1;
+    const base = pl.colours.length;
+    const inMap = course.pageStreamInMap(pl);
+    const pageObjectOffset = cs.objectOffset + layer.objects.length;
+    const ids = new Uint32Array(inMap.objectIdx.length);
+    for (let i = 0; i < ids.length; i++) ids[i] = inMap.objectIdx[i] + pageObjectOffset;
+    pageStream = { ...inMap, objectIdx: ids, passes: inMap.passes.map((p) => ({ ...p, colour: p.colour + base })) };
+    colours = [...pl.colours, ...pl.colours.map((c) => ({ ...c, id: `page:${c.id}` }))];
+    page = { colourBase: base, frameRingUm: pl.frameRing.map((p) => [p.x * 1000, p.y * 1000] as [number, number]) };
+  }
+
   const before = cs.atlas.size;
-  const glyphMesh = new Map<string, number>();
   const tol = state.ctx.toleranceUm;
-  for (const m of stream.glyphTable) glyphMesh.set(`${m.glyphId}/${m.partIdx}`, cs.atlas.glyph(m, Math.max(0.5, tol / 4), `c/${meshKey(m)}`));
+  const meshesOf = (s: render.PassStream, prefix: string) => {
+    const out = new Map<string, number>();
+    for (const m of s.glyphTable) out.set(`${m.glyphId}/${m.partIdx}`, cs.atlas.glyph(m, Math.max(0.5, tol / 4), `${prefix}/${meshKey(m)}`));
+    return out;
+  };
+  const glyphMesh = meshesOf(stream, "c");
+  const pageGlyphMesh = pageStream ? meshesOf(pageStream, "c") : undefined;
   const grown = cs.atlas.size > before ? cs.atlas.build() : undefined;
   if (grown) cs.meshes = grown.meshes;
 
-  const warnings: Record<string, number> = {};
-  for (const w of sym.warnings) warnings[w.code] = (warnings[w.code] ?? 0) + 1;
-  const textGlyph = resolveText(stream, cs.fonts, cs.textAtlas, warnings, { glyphs: 0, missing: 0 });
-  const ctx: PrepareContext = { ...state.ctx, meshes: cs.meshes, glyphMesh, textGlyph };
-  const passes = stream.passes.map((_, i) => i);
-  const part = passes.length ? prepareBucketPart(stream, COURSE_BUCKET, passes, "all", ctx) : null;
+  const prepared = (s: render.PassStream, bucket: number, mesh: Map<string, number>) => {
+    const textGlyph = resolveText(s, cs.fonts, cs.textAtlas, warnings, { glyphs: 0, missing: 0 });
+    const ctx: PrepareContext = { ...state.ctx, meshes: cs.meshes, glyphMesh: mesh, textGlyph };
+    const passes = s.passes.map((_, i) => i);
+    return passes.length ? prepareBucketPart(s, bucket, passes, "all", ctx) : null;
+  };
+  const part = prepared(stream, COURSE_BUCKET, glyphMesh);
+  const pagePart = pageStream && pageGlyphMesh ? prepared(pageStream, PAGE_BUCKET, pageGlyphMesh) : null;
+
+  // Filter regions act on the document's stream only (the course part is never filtered, §4.11).
+  let filter: FilterReply | null = null;
+  if (layer.regions.length) {
+    state.objectBounds ??= render.objectBounds(state.stream);
+    const f = render.filterStream(state.stream, layer.regions, { fast: !!fastFilter, objectBounds: state.objectBounds });
+    for (const w of f.warnings) warnings[w.code] = (warnings[w.code] ?? 0) + 1;
+    filter = filterReply(state.stream, f.hidden, f.maskIdx, f.masks, state.ctx);
+  }
 
   const um = (v: number) => v / 1000;
   const reply: CourseReply = {
-    type: "course", generation: msg.generation, part, colours: layer.colours, derivation: layer.derivation, warnings,
+    type: "course", generation: msg.generation, part, colours, derivation: layer.derivation, warnings, filter, pagePart, page,
+    hit: { stream: sym.stream, refs: layer.objects.map((o) => o.ref) },
     metrics: {
       circleRadiusMm: um(set.circleRadiusUm), finishRadiusMm: um(set.finishRadiusUm), startRadiusMm: um(set.startRadiusUm),
       lineWidthMm: um(set.lineWidthUm), digitHeightMm: um(set.digitHeightUm),
@@ -446,7 +580,9 @@ function courseReply(state: State | undefined, msg: CourseRequest): { reply: Cou
     ...(grown ? { atlas: grown } : {}),
   };
   const transfer = part ? partTransferables(part) : [];
+  if (pagePart) transfer.push(...partTransferables(pagePart));
   if (grown) transfer.push(grown.data.buffer as ArrayBuffer);
+  if (filter) transfer.push(...filterTransferables(filter));
   return { reply, transfer };
 }
 

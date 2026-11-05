@@ -136,6 +136,7 @@ export const BACKUP_TABLES = [
   "course_controls",
   "classes",
   "class_course_pools",
+  "course_objects",
   "runners",
   "teams",
   "cards",

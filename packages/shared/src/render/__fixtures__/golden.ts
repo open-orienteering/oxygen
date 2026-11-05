@@ -1,7 +1,7 @@
 /**
  * The golden-image scene list (docs/map-rendering.md §6.2): the six
  * contract fixtures, the pilot scene, the library fixtures (04 §8
- * rows 1–9, colour order, precision) and the course scenes (C0), each resolved to a pass stream
+ * rows 1–9, colour order, precision), the course scenes (C0) and the filter-region scenes (D3), each resolved to a pass stream
  * and a colour lookup the same way on every side — the reference raster
  * that writes the goldens and the browser page the WebGL2 backend draws
  * into. Density and margin are fixed here so canvas and raster agree on
@@ -19,14 +19,16 @@ import { pilotColours, pilotSymbols } from "./pilot-symbols.js";
 import { pilotScene } from "./pilot-scene.js";
 import { type LibrarySceneName, isLibrarySceneName, libraryScene, librarySceneNames } from "./library/index.js";
 import { type CourseSceneName, courseScene, courseSceneNames, isCourseSceneName } from "./course/index.js";
+import { type FilterSceneName, filterScene, filterSceneNames, isFilterSceneName } from "./filter/index.js";
 
-export type GoldenSceneName = RenderFixtureName | "pilot-scene" | LibrarySceneName | CourseSceneName;
+export type GoldenSceneName = RenderFixtureName | "pilot-scene" | LibrarySceneName | CourseSceneName | FilterSceneName;
 
 export const goldenSceneNames: GoldenSceneName[] = [
   ...(Object.keys(renderFixtures) as RenderFixtureName[]),
   "pilot-scene",
   ...librarySceneNames,
   ...courseSceneNames,
+  ...filterSceneNames,
 ];
 
 export const GOLDEN_PX_PER_MM = 10;
@@ -42,6 +44,12 @@ export function goldenScene(name: GoldenSceneName, fonts: FontMetrics[]): Golden
   if (isLibrarySceneName(name) || isCourseSceneName(name)) {
     const scene = isLibrarySceneName(name) ? libraryScene(name) : courseScene(name);
     const { stream } = symbolise({ objects: scene.objects, symbols: scene.symbols, fonts });
+    const hex = scene.colours.map((c) => cmykToHex(c.cmyk));
+    return { name, stream, colour: (i) => hex[i] ?? "#ff00ff" };
+  }
+  if (isFilterSceneName(name)) {
+    const scene = filterScene(name);
+    const { stream } = symbolise({ objects: scene.objects, symbols: scene.symbols, fonts, regions: scene.regions, regionObjectLimit: scene.regionObjectLimit });
     const hex = scene.colours.map((c) => cmykToHex(c.cmyk));
     return { name, stream, colour: (i) => hex[i] ?? "#ff00ff" };
   }

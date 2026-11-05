@@ -11,6 +11,7 @@ import { PDFArray, PDFDict, PDFDocument, PDFName, PDFNumber, PDFRawStream, PDFRe
 import { describe, expect, it } from "vitest";
 import type { PaperFrame } from "../../geo/projection.js";
 import { liberation } from "../../render/__tests__/fonts.js";
+import { type Pass, makePath } from "../../render/pass-stream.js";
 import { pageScene } from "../__fixtures__/pages.js";
 import { composePage, writePage } from "../compose.js";
 import type { ColourMode } from "../colour.js";
@@ -142,5 +143,21 @@ describe("writePage", () => {
     const page = composePage({ ...pageScene("page-ring"), objects: [{ id: "x", anchor: "page", kind: "image", graphicId: 99, x: 0, y: 0, width: 5, height: 5 }] }, fonts());
     const { warnings } = await writePage(w, page, { mode: "cmyk" });
     expect(warnings).toEqual(["IMAGE_MISSING: graphic 99 has no image data; not drawn"]);
+  });
+});
+
+describe("writePage frame culling (C13)", () => {
+  it("an object far outside the frame is absent from the content stream; the page is otherwise unchanged", async () => {
+    const page = composePage(pageScene("page-sprint-a4"), fonts());
+    const stream = page.mapLayer.stream;
+    const colour = stream.passes[0].colour;
+    const far: Pass = { kind: "fill", rule: "evenodd", colour, path: makePath([9e6, 9e6, 9e6 + 5000, 9e6, 9e6 + 5000, 9e6 + 5000, 9e6, 9e6 + 5000], undefined, true) };
+    const withFar = { ...page, mapLayer: { ...page.mapLayer, stream: { ...stream, passes: [far, ...stream.passes], objectIdx: Uint32Array.from([0, ...stream.objectIdx]), symbolIdx: Uint32Array.from([0, ...stream.symbolIdx]), maskIdx: stream.maskIdx && Int32Array.from([-1, ...stream.maskIdx]) } } };
+    const write = async (p: typeof page) => {
+      const w = await PdfWriter.create({ faces, deterministic: true, info: { title: "t" } });
+      await writePage(w, p, { mode: "cmyk" });
+      return content(await PDFDocument.load(await w.save()), 0);
+    };
+    expect(await write(withFar)).toBe(await write(page));
   });
 });

@@ -50,6 +50,22 @@ describe("sortPassStream", () => {
     expect(Array.from(stream.symbolIdx)).toEqual([400, 500, 400, 700]);
   });
 
+  it("permutes maskIdx with the passes and keeps the masks", () => {
+    const region = makePath([0, 0, 10, 0, 10, 10], undefined, true);
+    const stream = sortPassStream({
+      objectIdx: Uint32Array.from([10, 11, 12]),
+      symbolIdx: Uint32Array.from([700, 500, 400]),
+      passes: [stroke(6), stroke(3), fill(1)],
+      glyphTable: [],
+      fontTable: [],
+      masks: [{ regions: [region] }],
+      maskIdx: Int32Array.from([0, -1, 0]),
+    });
+    expect(Array.from(stream.maskIdx!)).toEqual([0, -1, 0]);
+    expect(Array.from(stream.objectIdx)).toEqual([12, 11, 10]);
+    expect(stream.masks).toEqual([{ regions: [region] }]);
+  });
+
   it("is stable: ties keep insertion order", () => {
     const a = fill(1), b = fill(1), c = fill(1);
     const stream = sortPassStream({

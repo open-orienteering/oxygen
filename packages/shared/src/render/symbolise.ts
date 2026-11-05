@@ -21,6 +21,7 @@ import { flattenRings, offsetPolyline, roundCorners } from "./geometry.js";
 import { GlyphRegistry, type RegisteredGlyph, mapCap, mapJoin } from "./glyph-table.js";
 import { PathMeasure, gapIntervals, pathSections, subtractIntervals, wrapIntervals } from "./measure.js";
 import { patternInstances } from "./pattern.js";
+import { type FilterRegion, applyFilterRegions } from "./filter-region.js";
 import { placeGlyphs } from "./placement.js";
 import type { AreaSymbol, BorderSpec, LineSymbolBody, PointSymbol, RenderSymbol, StrokeSpec, TextSymbol } from "./symbol.js";
 import { type ShapedText, shapeText, shapeTextAlongPath } from "./text.js";
@@ -48,17 +49,25 @@ export interface SymboliseInput {
   symbols: RenderSymbol[];
   /** Available fonts; a text symbol resolves to the first font of its family. */
   fonts: FontMetrics[];
+  /** Filter regions (map-rendering §4.11), applied to the symbolised stream; `symbols` index `symbols` above. */
+  regions?: readonly FilterRegion[];
+  /** Objects with an index ≥ this are never filtered (`courseRenderInput`: the course layer). Default: all objects filterable. */
+  regionObjectLimit?: number;
 }
 
 export interface SymboliseWarning {
+  /** The object, or −1 for a filter-region warning (`region` says which). */
   objectIdx: number;
-  code: "UNKNOWN_SYMBOL" | "NO_FONT" | "EMPTY_GEOMETRY" | "TEXT_WITHOUT_TEXT";
+  code: "UNKNOWN_SYMBOL" | "NO_FONT" | "EMPTY_GEOMETRY" | "TEXT_WITHOUT_TEXT" | "FILTER_EMPTY_REGION";
   message: string;
+  region?: number;
 }
 
 export interface SymboliseResult {
   stream: PassStream;
   warnings: SymboliseWarning[];
+  /** Objects dropped by `hide` filter regions, ascending (their passes are not in `stream`). */
+  hidden: number[];
 }
 
 const toRad = (d: number) => (d * Math.PI) / 180;
@@ -107,7 +116,12 @@ class Stage {
       }
     });
     this.builder.glyphTable.push(...this.glyphs.table);
-    return { stream: this.builder.build(), warnings: this.warnings };
+    const stream = this.builder.build();
+    const regions = this.input.regions;
+    if (!regions?.length) return { stream, warnings: this.warnings, hidden: [] };
+    const filtered = applyFilterRegions(stream, regions, { objectLimit: this.input.regionObjectLimit });
+    for (const w of filtered.warnings) this.warnings.push({ objectIdx: -1, code: w.code, message: w.message, region: w.region });
+    return { stream: filtered.stream, warnings: this.warnings, hidden: filtered.hidden };
   }
 
   private warn(code: SymboliseWarning["code"], message: string): void {

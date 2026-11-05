@@ -83,6 +83,8 @@ interface PassStream {
   passes: Pass[];          // canonical order, §3.3
   glyphTable: GlyphMesh[];
   fontTable: FontRef[];
+  masks?: FilterMask[];    // filter masks, §3.8
+  maskIdx?: Int32Array;    // pass i → mask, −1 = none
 }
 type Pass = FillPass | StrokePass | GlyphPass | HatchPass | TextPass;
 ```
@@ -194,6 +196,25 @@ typed arrays are canonical in memory. All-zero flag arrays are omitted.
 `angles` (§3.5) and `taper` (§3.2) are projected when present and
 compared by `diffPassStreams`; `angles` keep 6 decimals (degrees; 3 put
 a line-text glyph's angle outside the 1e-4° comparison, B8). Parsing sorts.
+`masks` / `maskIdx` (§3.8) are projected together when present (an
+error when only one is, or an index points past `masks`) and compared:
+a mask present on one side only, or a region path that moved.
+
+### 3.8 Filter masks
+
+`masks: { regions: RenderPath[] }[]`, `maskIdx: Int32Array` (D3)
+
+A **masked** pass (`maskIdx[i] ≥ 0`) is drawn only **outside every
+region** of its mask: each region is a closed path read even-odd (a
+region's hole ring is outside the region), and the mask is the
+intersection of their outsides. The stream carries no frame — what
+"outside" is bounded by is each backend's own (the image frame, the PDF
+window, the stencil buffer's clear value). Masks are what clip-mode
+filter regions produce (§4.11); a stream without them omits both fields.
+`sortPassStream` permutes `maskIdx` with the passes; `maskIdx` is a
+function of (object, colour) by construction (§4.11), so a backend that
+draws per range-table entry can apply it there. Backends: §5.1
+(nested clip groups), §5.2 ("Filter regions"), §5.3 (`W* n`).
 
 ## 4. Symbolisation rules
 
@@ -216,8 +237,8 @@ stay byte-identical when they are absent, because map document hashes
 (`docs/map-document-format.md`) and review-decision fingerprints
 (`docs/map-symbols.md` §8) are computed over the parsed IR.
 
-The stage's entry point is `symbolise({ objects, symbols, fonts })` in
-`render/symbolise.ts`. An object is `{ symbolIdx, path, angleDeg?, text?, textLayout? }`;
+The stage's entry point is `symbolise({ objects, symbols, fonts, regions?, regionObjectLimit? })` in
+`render/symbolise.ts` (filter regions: §4.11). An object is `{ symbolIdx, path, angleDeg?, text?, textLayout? }`;
 a symbol is a `RenderSymbol` (`render/symbol.ts`, Zod-validated; the IR of
 03 §6.2 with defaults applied). Unknown symbols, empty geometry, text
 without text and text without a font produce a warning per object and no
@@ -622,6 +643,81 @@ Output is byte-identical across runs. `map-gl/__tests__/text-atlas.test.ts`
 fails when the committed pages no longer match the fonts (hash) or the
 ranges (a glyph the font has that no page holds).
 
+### 4.11 Filter regions
+
+A **filter region** (research 04 §7, 08 §4.5 `filter_region`; D3)
+removes chosen map symbols inside a polygon — "no contours in this
+quarry", "no paths in the arena", or a map-simplification area that
+shows only a few symbols. Regions are course-layer data: they enter the
+stage with the course layer and act on the symbolised stream, so screen
+and print get the same result by construction. `render/filter-region.ts`:
+
+```ts
+interface FilterRegion {
+  path: RenderPath;                                   // closed polygon, paper µm; holes as `hole` rings
+  mode: "clip" | "hide";
+  symbols: "all" | number[] | { colours: number[] };  // the selection
+  invert?: boolean;
+}
+```
+
+**The props** — what D2 stores and D5's tool edits (coordinator decision
+2026-10-31, the research reading of 08 §4.5):
+
+- `symbols` **selects passes**: `"all"`; or the passes of the listed
+  symbol indices (indices into the symbolised input's `symbols` — the
+  document's own symbol list, which `courseRenderInput` keeps at the
+  same indices); or the passes in the listed colour-stack indices.
+- `invert` is the **complement of the selection**: the region acts on
+  every pass the selection does *not* name — "map simplification: show
+  only these symbols inside". It never flips the side: a region always
+  removes **inside** itself.
+- `mode: "clip"` cuts the selected passes at the boundary: each gets a
+  mask (§3.8) whose regions are every clip region selecting it, so the
+  pass draws only outside them. A clip region masks a pass only when the
+  pass's object's symbolised bounds meet the region's bounds, which
+  keeps masks off far-away objects and keeps `maskIdx` a function of
+  (object, colour).
+- `mode: "hide"` drops **whole objects**: an object is hidden when any
+  of its passes is selected and its symbolised geometry **meets** the
+  region. Its passes leave the stream; `symbolise` returns the object
+  indices as `hidden`. A clip region does not mask a hidden object.
+
+**The exact predicate** (`passMeetsRegion`): paths flattened at
+`REGION_FLATTEN_UM` (10 µm), region rings likewise; a pass meets the
+region when a vertex of its path lies inside the region (even-odd), an
+edge of its path crosses or touches a region edge, or — areas only
+(fills, hatches, a pattern pass's clip area) — a region vertex lies
+inside the area. A stroke counts by its centre line (not its width), a
+glyph pass by its instances' origins, a text pass by its glyph origins.
+**The fast predicate** (`boundsMeetRegion`, 04 §7 "while dragging"):
+the object's symbolised bounds (`objectBounds`: control-point bounds
+grown by half a stroke width, glyphs by their mesh radius × scale, text
+by each glyph origin grown by the em size plus the halo width) meet the
+region — a bounds corner inside it, a region vertex inside the bounds, or
+an edge crossing. `filterStream(stream, regions, { fast })` uses it for
+`hide` while a region is dragged; the exact predicate runs on release
+(08 §4.5). On the fixture scenes the two agree (§6.3).
+
+**Only document objects** are filtered: `regionObjectLimit`
+(`courseRenderInput` sets it to the document's object count) protects
+the course layer drawn over the map. A region with fewer than three
+points draws nothing and warns `FILTER_EMPTY_REGION` (`objectIdx` −1,
+`region` its index). `filterStream` is pure and deterministic (masks
+numbered in stream order); the WebGL2 worker runs the same function on
+its document stream (§5.2 "Filter regions").
+
+**Entry.** `CourseLayerInput.regions` (`docs/course-layer.md` §2) takes
+regions in paper mm — rings of `MapPoint`, outer first — with document
+colour indices; `courseLayer()` converts them to µm paths (hole flags on
+the later rings) and re-indexes colours onto the completed stack
+(`CourseLayer.regions`); `courseRenderInput()` returns them with
+`regionObjectLimit`; the page composer passes them to `symbolise`
+(`PageInput.course.regions`). Stored regions are `filter_region` course
+objects (`docs/course-layer.md` §8): the layer appends each one in
+`objects` to the explicit `regions`, so the viewer's request and the
+print route carry them as objects.
+
 ## 5. Backends
 
 ### 5.1 Reference raster (api: tests and previews)
@@ -636,7 +732,11 @@ per instance; hatches are generated lines under a `<clipPath>`; text uses
 caller-supplied glyph outlines or, without them, em boxes (debug only,
 never an oracle). A `pointed` stroke with a `taper` is the shared
 `strokeOutline()` (`render/geometry.ts`) filled non-zero, as the PDF
-backend draws it (§5.3; SVG has no tapered stroke).
+backend draws it (§5.3; SVG has no tapered stroke). A masked pass (§3.8)
+is wrapped in one `<g clip-path>` per region of its mask, nested; each
+`<clipPath>` is the image frame (the viewBox rectangle) with the region's
+rings, `clip-rule="evenodd"` — so the pass shows outside every region.
+A mask's clip paths are defined once.
 
 This is the **oracle** of the golden-image tier. It is slow and simple on
 purpose and is never used to draw a map for use. Its production jobs
@@ -691,8 +791,12 @@ geometry per kind, flags, 3× point, whole-pixel frame, determinism,
 every entry of both shipped libraries symbolises without warnings);
 `reference-svg.test.ts` (off-frame clip groups left out, partly
 overlapping kept; a tapered pointed stroke is the `strokeOutline` path
-filled non-zero, a pointed one without taper a butt stroke); pixel probes in
-`packages/api/src/render/__tests__/previews.test.ts`.
+filled non-zero, a pointed one without taper a butt stroke; a masked pass
+nested in one frame-with-hole clip group per region, shared clip paths);
+pixel probes in `packages/api/src/render/__tests__/previews.test.ts` and,
+for the filter scenes, `reference-raster.test.ts` (a contour cut inside the
+pentagon and drawn outside it; the hidden footpath absent along its whole
+length; the 407 hatch cut by "show only").
 
 ### 5.2 WebGL2 (web)
 
@@ -838,7 +942,11 @@ when the drawn cell set or the gate state changes, when detail of a
 drawn cell arrives (coalesced, `ARRIVAL_REBUILD_MS`), and when the
 hidden set changes; never while zooming within the same cells. Hidden
 objects (`engine.setHidden`, stream `objectIdx`) are skipped entry by
-entry.
+entry. With a filter (`buildVisibleSet(parts, hidden, filter)`, "Filter
+regions" below) an entry goes to the draw of its mask: per colour the
+unmasked draw first, then one per mask, masks ascending — every kind in
+that order, which `VisibleSet.layers` lists as the draw loop's
+`(colour, mask)` steps.
 
 **Clip groups.** Pattern-clipped glyph passes of one colour are merged
 into groups whose footprints (clip area ∪ instance extents) do not meet,
@@ -873,7 +981,7 @@ growth factor).
 |---|---|---|
 | `load` | document bytes + `DocumentRenderOptions` (or, dev only, render objects + symbols, or a symbolised stream), font files, the text atlas pages (JSON, in the renderer's page order), optional first view (a view, or "fit into w × h"), gate flag | `loaded`: summary (bounds, origin, grid, detail cells, the first view resolved, stage times, bytes, text: pages, glyphs resolved, glyphs missing), mesh atlas, every cell's base part, the large part — then, without a further request, the first view's detail parts unless it is below the gate |
 | `prepare` | bucket ids, most urgent first | replaces the queue; one `part` per id |
-| `course` | a generation number and the course layer's input without the document (`CourseLayerRequest`: structure, sites, objects, appearance, view options), or `null` | `course`: the generation, the dynamic bucket's part (or `null`), the stack to draw with, the derivation and symbol sizes, warnings, and the mesh atlas when it grew — "Dynamic bucket" below |
+| `course` | a generation number and the course layer's input without the document (`CourseLayerRequest`: structure, sites, objects, appearance, view options, filter regions, `fastFilter`), or `null` | `course`: the generation, the dynamic bucket's part (or `null`), the stack to draw with, the derivation and symbol sizes, warnings, the mesh atlas when it grew, and the filter over the static buckets (or `null`) — "Dynamic bucket" and "Filter regions" below |
 | — | | `error` on a failed load |
 
 Every typed array goes back as a transferable. The worker decodes,
@@ -932,9 +1040,29 @@ counted in the reply. The reply's `colours` is `layer.colours` — the
 completed stack plus a row per hex-coloured layout object on top
 (`course-layer.md` §3.6) — and it brings `derivation` (sites, labels,
 legs) and `metrics` (circle, start and finish radii, line width, digit
-height in paper mm) for the UI layer. `input: null` clears; a load
-without course support answers `part: null` and `COURSE_UNAVAILABLE`.
+height in paper mm) for the UI layer, and `hit` — the layer's hit index:
+the symbolised stream with layer-local object ids (before the offset)
+and each object's `ref`, which the editor hit-tests on the main thread
+(§5.5). `input: null` clears; a load
+without course support answers `part: null`, `hit: null` and `COURSE_UNAVAILABLE`.
 The worker answers a request at once, between prepare slices.
+
+**Page part** (D7, `course-layout.md` §1). A request with `page` (the
+sheet's paper height, frame, window, layout objects, text values and
+description block) also answers `pagePart`: the composer's page layer
+(`course.pageLayer`, the stream `composePage` writes) through `T_map⁻¹`
+into paper µm (`pageStreamInMap`), prepared as one `all` part with bucket
+id `PAGE_BUCKET` (−3), its object ids after the course's and its glyph
+meshes in the same atlas. Every pass's colour index is offset by
+`colourBase` = the page layer's table length, and the reply's `colours`
+is that table followed by a copy of it for the page (ids `page:…`): so
+the visible set sorts every page draw after every map draw — the PDF's
+page layer after its map layer, a page white-out over upper purple — and
+`page { colourBase, frameRingUm }` tells the engine where the map stops.
+The engine uploads the page part under key `P` beside `C` (always
+resident, fixed bytes) and passes `pageClip { fromColour, ringUm }` to the
+renderer, which scissors every colour below `fromColour` to the frame's
+screen box (exact while the page is upright, which Layout mode keeps).
 
 **Engine.** `MapGlEngine.setCourse(input | null)` posts the request with
 a new generation (one made before the load waits for it and is sent
@@ -958,6 +1086,56 @@ else the load's.
 objects): the 04 §7 budget of < 1 ms is the symbolisation's; the reply
 is one worker round trip, one part upload and one visible-set rebuild.
 Main-thread symbolisation for the drag is pending (§8).
+
+#### Filter regions (D3)
+
+Filter regions (§4.11) act on the **static buckets** — the document —
+without re-preparing anything: a hidden object is skipped entry by entry
+like `setHidden`'s, and a mask is a stencil test on the entries it
+selects (04 §7: "nothing is re-tessellated when the region moves").
+
+**Worker.** A `course` request's `regions` (paper mm, document colours)
+go through `courseLayer()` like the rest of the input; the worker then
+runs `render.filterStream(stream, layer.regions, { fast: fastFilter,
+objectBounds })` on the **document stream it loaded** — the course part
+is never filtered — with the objects' symbolised bounds computed once on
+the first filter request and kept. The reply's `filter` (`FilterReply`)
+carries the hidden object ids, the masked range-table entries as
+`(object, colour, mask)` triples (a mask is a function of the pair,
+§4.11), and each mask's region triangles: every region flattened at the
+load tolerance and triangulated even-odd (`triangulateEvenOdd`),
+origin-relative, concatenated per mask (a mask's regions may overlap —
+the stencil takes their union). No regions → `filter: null`, which
+clears it. `fastFilter: true` is what a drag sends; the request on
+release leaves it off for the exact result. A `stream` source (the dev
+page, the golden arena tier) that carries masks gets the same `filter`
+on its `loaded` reply, from the stream's `maskIdx`.
+
+**Engine.** The latest reply's (or the load's) filter is kept; its
+hidden ids join `setHidden`'s for the visible set, and its entries become
+`VisibleFilter.entryMask` (`filterEntryKey(object, colour)` → mask) with
+the triangles passed through to `VisibleSet.filter`. A reply rebuilds
+the visible set at once, as any course reply does.
+
+**Drawing.** The renderer uploads the mask triangles with the visible
+set (`maskPos` / `maskIdx` buffers, one VAO) and walks `vs.layers`:
+for a masked step it writes the mask's triangles into stencil bit
+`REGION_BIT` (0x04) with `REPLACE` and no colour, draws the step's
+fills, hatches, strokes, glyphs, clip groups and text with
+`stencilFunc(EQUAL, 0, REGION_BIT)` (a clip group: `EQUAL, CLIP_BIT,
+CLIP_BIT | REGION_BIT`), and clears the bit over the same triangles —
+two extra draws per masked step. Unmasked steps draw as before, without
+the stencil. Masked draws of a colour come after its unmasked draws of
+every kind; ink of one colour is opaque, so the order within a colour
+does not show.
+
+**Per-pass path.** `prepareStream` gives each prepared item of a masked
+pass the mask's regions as stencil fans (`Prepared.mask`, one
+`FanGeometry` per region); `draw()` marks each region's even-odd parity
+in the parity bit and moves it into `REGION_BIT` under the region's
+cover (union over regions), adds `REGION_BIT` to every stencil test of
+the item (fill and hatch covers, instanced covers, strokes, pattern
+clips), and clears the bit after the item.
 
 #### Text atlas (B3)
 
@@ -1026,7 +1204,22 @@ sorting happens here.
   default the canvas at the view's size. A framebuffer target needs a
   stencil attachment (pattern clips). `compare=1&target=fbo` on the dev
   page draws into an offscreen 4× MSAA framebuffer and the E2E compares
-  it with the per-pass path like the canvas.
+  it with the per-pass path like the canvas. The editor's **loupe**
+  (§5.5) draws into `renderer.insetTarget(size)` — the supersample
+  path's recipe, a `size`² framebuffer with 4× MSAA `RGBA8` and
+  `DEPTH24_STENCIL8`, kept until the size changes or `releaseInset()` —
+  and `compositeInset(box)` resolves it into a texture and draws that
+  into the circle inscribed in `box` (top-left, device px) of the canvas
+  with the blit program (fragments outside the circle discarded; blend,
+  stencil and scissor off); the rest of the canvas is untouched.
+  `engine.renderInset(view, opts, box)` is the pair over the visible set
+  `render` last built (no cell selection, no request, no rebuild; the
+  page clip forwarded); its view is `loupeView(main, point, scale, size)`
+  (`view.ts`): centre the point, `pxPerUm × scale`, `size`² device px,
+  the main rotation — a `ViewRect` rather than a bare `viewMatrix`
+  option, because the screen-only rules read its `pxPerUm`. The GPU
+  timer counts each `renderDocument` as a frame, so during a loupe drag
+  `gpuMs` may be the loupe's draw (only the dev page reads it).
 
 * **Fills** — earcut triangles, opaque. No stencil.
 * **Strokes** — `halfWidth × offset` in the vertex shader. **Hairline
@@ -1260,7 +1453,8 @@ timings. Fonts are fetched from `packages/shared/fonts/` via Vite `?url`.
 By default it draws through the per-pass path (supersampled 2×);
 `path=arena` loads the scene's stream into an engine over the inline
 worker handler (gate off, Latin text page) and draws through the arena
-path at the context's MSAA — the §6.2 MSDF text tier.
+path at the context's MSAA — the §6.2 MSDF text tier and the filter
+scenes' arena tier (a stream with masks brings its filter on `loaded`).
 
 `/dev/map-gl-doc?mode=source|pilot|envelope[&via=document|reader][&worker=0][&gate=0][&budget=<MB>][&lod=0][&kinds=…][&compare=1][&url=…][&bench=1]`
 (`pages/dev/MapGlDocPage.tsx`) runs the whole pipeline on an OCAD,
@@ -1304,7 +1498,7 @@ published on `window.__mapGlDoc` for Playwright.
 | `map-gl/__tests__/arena.test.ts` | free list: first fit, exact accounting, coalescing, growth |
 | `map-gl/__tests__/worker-protocol.test.ts` | `loaded` contents and transfer list; `prepare` queue replacement and slicing; first-view queue and the gate; base + detail + large covers every kind; load errors |
 | `map-gl/__tests__/engine.test.ts` | residency through the real worker handler and a fake renderer: drawn + prefetch requested and uploaded; drawn parts never evicted, over budget reported; the same view never re-requests what was evicted; rebuild on drawn-set change but not on zoom within the cells; below the gate only base + large, queue cancelled; hidden objects |
-| `map-gl/__tests__/view.test.ts` | view matrix: centre → clip origin, canvas edges → ±1, y-up, rotation; sub-pixel precision far from the origin in float32 arithmetic |
+| `map-gl/__tests__/view.test.ts` | view matrix: centre → clip origin, canvas edges → ±1, y-up, rotation; sub-pixel precision far from the origin in float32 arithmetic; `loupeView`: the point → clip origin, distances × scale, rotation kept |
 | `map-gl/__tests__/prepare.test.ts` | per-pass path (fans, S1 extrusion), unchanged |
 | `map-gl/__tests__/text-atlas.test.ts` | the committed pages are current (TTF hashes, 32 px / 8 px range, PNG size = recorded size, every glyph of the ranges on a page, none on two pages, Nordic / Baltic / Cyrillic letters found); plane bounds around the origin, atlas bounds inside the image, same scale both ways, 'H' plane bounds = outline bounds ± half the range; generator JSON → page (ids, y-up, empty glyphs dropped, refuses MSDF-only / bottom origin / code-point keys); glyph table layout and entry order; page selection; halo clamp |
 | `map-gl/__tests__/buckets.test.ts` (text) | one quad instance per atlas glyph (origin-relative position, cos / sin from `angles`, em size, entry, halo), missing glyphs skipped, one draw per (colour, page), hidden objects skipped, unresolved pass draws nothing |
@@ -1312,11 +1506,18 @@ published on `window.__mapGlDoc` for Playwright.
 | `map-gl/__tests__/engine.test.ts` (text) | images to the renderer and the same pages to the worker; text bytes resident; no pages clears the renderer's atlas |
 | `lib/__tests__/map-fonts.test.ts` | `loadTextAtlas`: only the pages asked for, in order, decoded as data; once per session; a failed page retried |
 | `e2e/map-gl-doc.spec.ts` | the arena path through the real worker on `e2e/test.ocd` (pilot, envelope): buckets, complete frame, ≤ 300 draws on every bench frame of both scenarios; worker = inline; a 0.05 MB budget evicts, reports over budget and still draws; **arena = per-pass golden path within 0.5 % pixels** (envelope and source on the canvas, envelope into an offscreen framebuffer target, source on `test.xmap`); document vs reader path, native `.oxvm`, source mode, `.xmap`, decode error |
-| `e2e/map-gl-golden.spec.ts` | the per-pass path against the reference raster; the **MSDF text tier**: `text-with-halo`, `lib-text`, `lib-halos` through the arena path (§6.2) |
+| `e2e/map-gl-golden.spec.ts` | the per-pass path against the reference raster; the **MSDF text tier**: `text-with-halo`, `lib-text`, `lib-halos` through the arena path (§6.2); the **filter-region arena tier** (D3, §6.2) |
 | `e2e/map-gl-doc.spec.ts` (text) | arena = per-pass compare also on `e2e/test.xmap` (text, MSDF vs outlines) within 0.5 %; its text resolves on the Latin page with nothing missing |
 | `e2e/map-vector-layer.spec.ts` (text) | the viewer requests the Latin page and not the Cyrillic one |
 | `map-gl/__tests__/worker-course.test.ts` | dynamic bucket: static parts on the completed stack (upper white below upper purple, rows above it +1 with their CMYK), the document's stack without `courseLayer`, an unaligned stack unsupported and unchanged; a course request → one `all` part at `COURSE_BUCKET` on the completed stack (lower-purple strokes, text instances, glyph meshes in the grown atlas, earlier meshes in place, object ids after the document's, everything transferable); no atlas when nothing was added; lower purple drawn under black in one visible set; `null` and unsupported replies; a white-out at upper white above black |
 | `map-gl/__tests__/engine.test.ts` (dynamic bucket) | `setCourse` uploads `C`, drawn below the zoom gate too, rebuilt at once, `onCourse` / `onChange`, `engine.colours` = the reply's; an overtaken reply dropped; `null` releases; a request before the load waits for it; course bytes fixed |
+| `map-gl/__tests__/buckets.test.ts` (filter regions) | per colour the unmasked draw then one per mask, the same indices regrouped, `layers` in draw order, hidden objects win over masks, no `filter` without entries; instance draws and clip groups split by mask |
+| `map-gl/__tests__/worker-course.test.ts` (filter regions) | a `hide` region hides the document object meeting it, exact and `fastFilter` alike, never a course object; a far region hides nothing; a clip region by document colour → `(object, colour, mask)` on the completed stack and the region's triangles origin-relative; the course part stays unmasked in the visible set; no regions / `null` → no filter |
+| `map-gl/__tests__/worker-protocol.test.ts` (filter regions) | a `stream` source with masks → `loaded.filter`, one entry per (object, colour), transferable; none without masks |
+| `map-gl/__tests__/engine.test.ts` (loupe) | `renderInset`: one more `renderDocument` with the loupe view into the inset target, the page clip forwarded, `compositeInset` at the box; no rebuild, no worker message; nothing before the load; `releaseInset` forwarded |
+| `map-gl/__tests__/engine.test.ts` (filter regions) | a clip region masks the black line's draw, a hide region removes it, the reply's hidden ids join `setHidden`'s, `null` clears mask and hidden set |
+| `map-gl/__tests__/prepare.test.ts` (filter regions) | every item of a masked pass carries one fan per region, shared by the passes of one mask |
+| `e2e/map-gl-golden.spec.ts` (filter regions) | the four `filter-*` scenes on the per-pass path at the contract budget, and through the arena path at `ARENA_FILTER_MAX_RATIO` with pixel probes on both sides of each region (§6.2) |
 
 ### 5.4 Viewer
 
@@ -1427,7 +1628,11 @@ original stays with the cache), `{ unmatched: "proxy", proxyColours }`
 non-white for areas) and the current view as `firstView`. Every view
 change and every `engine.onChange` asks for one redraw on the next
 animation frame (`setView` then `render`; a canvas resize happens in the
-same frame). Colours are the document's stack, `render.cmykToHex` of
+same frame). With the `loupe` prop (`VectorLoupe`: the point in paper µm,
+the circle's centre and diameter in container CSS px, the scale) the same
+frame then calls `engine.renderInset` (§5.2 "Render target"; CSS → device
+px by the canvas's ratio), and the first frame without it releases the
+inset target (§5.5 "Loupe"). Colours are the document's stack, `render.cmykToHex` of
 each `header.colours[i].cmyk`. Unmount disposes the engine (terminating
 the worker) and the renderer.
 
@@ -1457,8 +1662,8 @@ In the paper view `MapViewer`:
   no access, not found, unreadable);
 - does not need `mapBounds` (a map without a CRS has none);
 - mounts no `TileLayer`, polls no `/api/map-tile-progress`, and shows no
-  editor loupe (`MapLoupe` magnifies tiles; the editor moves to the
-  document in slice D);
+  `MapLoupe` (it magnifies tiles); the new editor's touch loupe is drawn
+  by the layer (§5.5 "Loupe");
 - needs no ink split: the tiles draw the map in two halves so lower
   purple sits under black, brown and blue line art; the vector layer
   draws the course layer in the map's own colour order ("Overlay");
@@ -1495,13 +1700,16 @@ for one ordered course with the sheet or the editor and `code` otherwise,
 []` (no layout objects reach the viewer) and `appearance: {}` — the
 library's sizes × the document factor (`course-layer.md` "Decisions":
 ISOM at 1:7 500 draws 5 mm-radius circles where the SVG drew 2.5 mm).
-`course.courseGeometries` is still read, but only for what an imported
-`ocd` course authored (`course-layer.md` §2): its `preclipped` legs as
-pieces, their course's control `cuts` as circle gaps, bent legs' paths
-and the 707 / 708 / 711 / 709 features. Automatic gaps and cuts of the
-stored GeoJSON are not read: the worker cuts from the document's own
-features (`cutFeaturesOfDocument`, extracted once per load). `MapPanel`
-passes what it passed before; every 09 §1 call site — kiosk,
+`course.courseGeometries` is no longer an input (D1): authored leg gaps,
+hidden numbers and circle cuts come from the stored structure and the
+controls (`course.list` `legGaps` / `hiddenNumbers`, `controlCoordinates`
+`circleGaps`; `course-layer.md` §5, §6.4), and 707 / 708 / 709 / 711 are
+course objects. The worker cuts the rest from the document's own
+features (`cutFeaturesOfDocument`, extracted once per load) — unless the
+request's `viewOptions.autoCuts` is `false`, the event's **Auto cuts**
+toggle off, which `MapPanel` reads from `course.getOverprintCuts`
+(kiosk-readable) and passes to `MapViewer` (`course-layer.md` §3.4, D17).
+`MapPanel` passes what it passed before; every 09 §1 call site — kiosk,
 `CardReadout`, `CardMapPreview`, dashboard, `TracksPage`, the editor —
 follows through it.
 
@@ -1559,6 +1767,86 @@ changes for B4.
 | `e2e/map-control-circles.spec.ts`, `e2e/map-multicourse.spec.ts` | under `map-legacy` and `map-vector`: code labels of the selected course (SVG text, or the GL layer's `course-label` mirror), sequence numbers for one course with descriptions, codes for several; pills and the sheet SVG text under both; `data-course-layer` |
 | `e2e/map-viewer-gestures.spec.ts`, `mobile-layout.spec.ts`, `course-editor.spec.ts`, `map-control-circles.spec.ts`, `map-multicourse.spec.ts`, `wide-screen-map-pane.spec.ts`, `webserial.spec.ts`, `kiosk*.spec.ts` | under the default `legacy` the mercator model reproduces the pre-B4 viewer; `webserial`, `mobile-layout`, `map-viewer-gestures` also run under `vector` (`docs/map-pipeline-switch.md` §5) |
 
+### 5.5 Editor
+
+What the course editor (`docs/course-editor.md`) adds to the viewer.
+Research: 04 §7 ("Editing and overlay hooks").
+
+**Hit-testing on the shared stage.** `render.hitTest(stream, x, y,
+{ toleranceUm, objects?, closedStrokeInterior? })`
+(`packages/shared/src/render/hit-test.ts`) answers which objects of a
+pass stream are under a paper point (µm), topmost first — backends draw
+front to back (§3.6), so a later pass is on top — one hit per object
+with its distance to the drawn shape (0 on or inside):
+
+| Pass | Hit when |
+|---|---|
+| fill, hatch | inside, even-odd (§3.1), or within the tolerance of its outline |
+| stroke | the flattened centre line (10 µm) within half the width + tolerance; a closed path's interior too with `closedStrokeInterior` |
+| glyph | within the mesh radius × instance scale of an instance (a pattern-clipped glyph pass: its clip area) |
+| text | within a glyph box: 0.65 em wide (the course layer's estimate, `course-layer.md` §3.5), 0.2 em below to 0.8 em above the baseline |
+
+Bounding boxes reject first. No GPU readback: the same function serves
+the editor and the tests (pixel-exact GPU picking stays 04 §7's fallback).
+
+**Editor targets.** The course reply's `hit` index (§5.2) reaches the
+viewer with `CourseInfo`; with `MapViewerEditorProps.sharedHitTest` and
+the GL course layer drawn, pointer-down resolves through `editorHitAt`
+(`packages/web/src/lib/editor/hit.ts`): tolerance 6 CSS px converted to
+paper at the current zoom, circles by their interior, the nearest target
+(topmost of equally near) mapped by `ref` — `site` → the control drag,
+`number` / `leader` → the label drag, `leg` (`<courseId>:<index>`) → the
+leg click, `object` (`course-object:<seq>`) → the course object (D5,
+`course-editor.md` §7; regions and toner savers, not drawn on screen, hit
+by their UI-layer outline); imported extras do not hit. Controls the editor fades
+are drawn by the UI layer, not the layer, and hit as plain circles below
+it. In that mode the viewer renders no SVG hit targets and mirrors every
+editor site as a hidden `editor-site` (paper mm) for tests. The legacy
+editor leaves the prop off. The hit index is the course part only.
+Snapping (D5, `course-editor.md` §6.2) does not hit-test the document's
+stream: point centres and vertices are geometry, read once per document
+into a main-thread grid (`lib/editor/snap.ts`); a worker request over the
+document stream is Map mode's (slice G).
+
+**Tools.** `MapViewerEditorProps.tool` (D5, `course-editor.md` §6): the
+viewer offers pointer-down to the active tool first, routes clicks of an
+exclusive tool to it, and draws its `ToolShape`s (paper mm → the rotated
+overlay) in `editor-tool-layer` — circles, lines, handles, text and (D7)
+`image`, a raster by its three corners; `draftObjects` replace stored course
+objects in the layer request, with `fastFilter` while a filter region is
+dragged (§4.11).
+
+**Drag.** Unchanged from §5.4 "Overlay": a per-move layer request; the
+dragged object is not symbolised on the main thread.
+
+**Loupe** (D9b; `course-editor.md` §10 "Loupe"). While a control is
+dragged by touch, the viewer hands `VectorMapLayer` a `loupe` (the
+dragged point, the circle `loupePlacement` puts above the handle,
+120 CSS px, ×2.5) and draws `editor-loupe` — a ring and a crosshair, no
+fill — over it; the layer draws the magnified map into that circle of
+the canvas in the same frame as the map (§5.4 "Layer", §5.2 "Render
+target"). It shows the resident visible set: what the main view drew,
+the dynamic bucket with the dragged circle included, no detail requested
+for the loupe's footprint (below the zoom gate it is the base parts).
+The UI layer's SVG is above the canvas, so its shapes under the circle
+are not magnified. Mouse drags have none; the tiles view keeps
+`MapLoupe`.
+
+**Action bar.** `actionLayout: "bar"` lays the contextual entries out
+horizontally under the selection (`editor-action-bar`) instead of the
+popover beside it; same entries and ids.
+
+#### Tests
+
+| Test | Covers |
+|---|---|
+| `packages/shared/src/render/__tests__/hit-test.test.ts` | the table above: order, reach, even-odd, interior on request, glyph discs, text boxes, object filter, distance |
+| `map-gl/__tests__/worker-course.test.ts`, `engine.test.ts` | the reply's hit index and its way to the host |
+| `lib/editor/__tests__/hit.test.ts` | editor targets over the real worker's index |
+| `e2e/course-editor.spec.ts` | selecting, dragging and leg clicks on the canvas with no SVG targets |
+| `lib/editor/__tests__/touch.test.ts` (loupe) | `loupePlacement`: above the handle, flipped below the finger at the top, kept inside sideways |
+| `e2e/field-mode.spec.ts` (`mobile`) | the loupe during a long-press drag: 120 px above the handle; the canvas inside it differs from the same circle after release (the 1× map) and has the map's purple; gone on release |
+
 ### 5.3 PDF (shared/print)
 
 `packages/shared/src/print/operators.ts` (C1, 2026-10-23):
@@ -1614,6 +1902,7 @@ the `q`, so the tracker is unaffected.
 | `stroke`, `cap: "pointed"` with a `taper` | `strokeOutline(path, { widthUm, join, taper, slices })` (`render/geometry.ts`) as fill colour + rings + **`f`** (non-zero: the outline is a union of counter-clockwise quads and join wedges, flattened at 5 µm, integers in `u`, under its anchor). The reference raster fills the same outline (§5.1). Without a taper: a butt `S` |
 | `glyph` | fill colour if the part has fills, stroke colour if it has strokes (a form inherits both); instances by their **turn class** (`c·k`, `s·k` to 6 decimals; C11): the unturned class, and any class used by ≥ `GLYPH_FORM_REUSE` (16) instances of the pass, draws a form whose `/Matrix` is that turn and scale ÷ `u` — `q 1 0 0 1 x y cm /Gn Do`, then per next instance of the class `1 0 0 1 dx dy cm /Gn Do` (integer translation from the one before; `cm` concatenates, `Do` brackets the form's own drawing), re-anchored by `Q` + a new absolute `q` every `CHAIN_LENGTH` (32) instances or when the class changes, so a reader that concatenates in single precision drifts ≤ ~0.1 µm; any other instance `q c·k s·k −s·k c·k x y cm /Gn Do Q` on the form whose `/Matrix` is `1/u` alone. Instances stay in stream order. `/Gn` is a **form XObject per glyph part and `/Matrix`**, shared by every colour that draws it: the mesh in glyph-local µm — fills `… h f*`, strokes `w J j … S`, no colour — with a `BBox` of the mesh bounds plus 4 × half the widest stroke. Below 16 uses an own form costs more (object, dictionary, a second copy of the mesh) than the instances' `cm` operands save: on the corpus, 2 → +7 %, 4 → +0.3 %, 8–16 → −1.2 % against no per-class forms |
 | `glyph` with `clip` | `q <clip rings> W* n` (even-odd, like the oracle's clip path), the instances, `Q` |
+| a run of passes with a filter mask | `q`, `<frame + region rings> W* n` per region, the passes, `Q` ("Filter masks" below) |
 | `hatch` | stroke colour; `q <area rings> W* n`, `w 0 J 0 j`, the `hatchLines()` set (§3.4, the reference generator) as `m l` pairs, `S`, `Q` |
 | `text` | `BT /Fn size Tf` (size in `u`) with `0 Tr` (fill: fill colour) or `1 Tr` (halo: stroke colour, `2 × haloWidthUm w 1 J 1 j`); per glyph `cos sin −sin cos x y Tm <gid> Tj` (`1 0 0 1 x y` without `angles`); `ET`. Glyph ids are the shaper's, written unchanged (Identity-H, `course-print.md` §3.1); one `Tm` per glyph because positions are absolute in the stream (no `TJ`). A halo pass sits at its own colour position because the stream is sorted (§3.5) |
 | `text`, outline fallback | per glyph `q k·cos k·sin −k·sin k·cos x y cm <outline rings> f* Q` with `k = sizeUm / unitsPerEm`; a halo strokes the outline at `2 · haloWidthUm / k` with round caps and joins — what the reference raster draws |
@@ -1625,9 +1914,47 @@ instance, and the tracker restores its state at a clip's `Q` (anchors and
 instances change nothing but the CTM). Consecutive passes of one colour share one colour operator
 (05 Appendix B's size arithmetic).
 
+**Frame culling** (C13, 2026-11-03). The print window takes whole
+objects within 20 mm of the frame, so a page holds long contours and
+large areas that cross it and rings, dashes and instances far outside it
+(44 % of Club-full A4's points lie more than 5 mm outside). The page
+composer passes the printed frame (`writePage` → `mapLayerOperators`'s
+`frame`, page points); `frameInStream` takes its four corners back
+through the layer matrix into the stream's coordinates — for a turned map
+the axis-aligned box of the turned frame, which contains it — and
+`passStreamOperators` gets it as `cull` (grown by `CULL_MARGIN_UM` =
+100 µm, so rounding at the clip edge never decides). It omits, by the
+*control-point* bounds (a Bézier lies inside its hull, so a miss is a
+miss) and without moving any point that is written:
+
+| Pass | Omitted when its padded bounds miss the frame |
+|---|---|
+| `fill` | a **ring**, bounds as is. Even-odd: a ring that covers no point of the frame cannot change the parity inside it, outer or hole. The anchor follows the rings that stay |
+| `stroke` | an open stroke: a **segment**, grown by `STROKE_MITRE_LIMIT × widthUm / 2` (mitre, the farthest a join paints). The kept segments form runs, one subpath each; a closed ring cut this way loses its `h`, and its last run joins its first when both reach the start vertex, so the join there stays a join. A dropped neighbour of a kept segment lies outside by the same padding, so a join or cap cut at the shared vertex paints nothing inside. A stroke with no dropped segment is written as before |
+| `stroke` with `slices` | a **slice**, grown by the same padding |
+| `stroke`, pointed + taper | the whole **outline**, bounds as is |
+| `glyph` | an **instance**: its position grown by the form's reach (the farthest corner of `glyphFormBBox` from the origin, strokes and mitres in) × the instance's scale — a turn cannot take the form farther. Turn classes are counted over all instances, so the form choice is the unculled one's; a pass with no instance left writes nothing, not even its colour |
+
+Not culled: `text` and `hatch` (a text is one pass of few glyphs; a
+hatch is clipped to its area, whose bounds would be the test — both left
+for a measurement that asks for them), clips and filter-mask frames. A
+page is unchanged but for its bytes: the golden tier and the corpus
+pages' shapes and ratios are equal to C11's.
+
 **Clips.** `clipOperators(path, rule)` writes `<rings> W n` or `W* n` —
-the primitive for the composer's frame clip and for filter regions (05
-§5.3) once the stream carries them (`course-print.md` "Pending").
+the primitive for the composer's frame clip.
+
+**Filter masks** (§3.8, 05 §5.3; D3). A run of consecutive passes
+under one mask is written inside `q`, one `<frame + region> W* n` per
+region of the mask (successive clips intersect: outside every region),
+the passes, `Q` — closed before the next pass with another mask or none,
+and the tracker restores its state at the `Q` like at any clip. The
+clip path is `filterClipPath(frame, region)`: the frame rectangle with
+the region's rings as holes, always even-odd (`W*`), for the reason
+fills are (§3.1). The frame is the stream's bounds (`passStreamBounds`)
+united with every region's, grown by `FILTER_FRAME_MARGIN_UM` (10 mm) —
+any rectangle containing what the passes draw gives the same pixels; the
+page's own frame clip bounds what shows.
 
 Tests: `packages/shared/src/print/__tests__/operators.test.ts` (tier 1,
 05 §7) on the contract fixtures and the library scenes — a fill's exact
@@ -1643,7 +1970,7 @@ with angles; the outline fallback; per scene no `rg` in `cmyk` and no
 values; the layer `cm` for a 1:15 000 map at 1:10 000 and a rotation,
 never in exponent notation (a 0.01° tilt is `0.000000495`, not `4.95e-7`);
 round caps and joins on the fallback halo;
-`W n` / `W* n`. C11 adds: the anchor (`q 1 0 0 1 ax ay cm … Q`) on a
+`W n` / `W* n`. C13 adds ("Frame culling"): a ring, slice, tapered outline and glyph instance outside the frame omitted, one partly inside kept whole, the stroke padding (mitre × half width), open-stroke segment runs and the wrap-around run of a cut closed ring, a stroke with nothing to drop still closed by `h`, `frameInStream` under translation, scale and a quarter turn. C11 adds: the anchor (`q 1 0 0 1 ax ay cm … Q`) on a
 fill, a Bézier stroke, a dash pass and a pointed outline, none at `0 0`;
 a fill ring's closing line left to `h`, a closed stroke's kept; `layerUnitUm` per
 scale ratio (≤ 5 µm printed, a whole fraction of 10 µm); `w` / `Tf` /
@@ -1655,7 +1982,11 @@ scene round-trips** — decoded (anchors, chains and `Tm` resolved) at a
 within ½ unit of it; a turn class used `GLYPH_FORM_REUSE` times → one form
 with that `/Matrix` and a relative chain; re-anchoring every
 `CHAIN_LENGTH`; the unturned form carrying `1/u`; rarer turns under a full
-`cm`. `writer.test.ts`: a form's `/Matrix`, absent for the identity, one
+`cm`. D3 adds the filter masks: `filterClipPath` (frame ring, region as
+a hole), one `q` block per run of equally masked passes with one `W* n`
+per region and `Q` before the next run, never `W n`, the frame round the
+stream's bounds by the margin, the colour written again after a block's
+`Q`, no clip operators without masks. `writer.test.ts`: a form's `/Matrix`, absent for the identity, one
 form per part and matrix. `render/__tests__/stroke-outline.test.ts`: width inside
 and outside the tapers (a vertex at the taper length), counter-clockwise
 rings only, round / miter / bevel joins at a corner, a Bézier within the
@@ -1813,6 +2144,28 @@ atlas's 32 px), spread along edges with no systematic offset. The whole
 document compare (`compare=1`) holds MSDF to the per-pass path at the
 ordinary 0.5 % on `e2e/test.xmap`: 0.217 %.
 
+**Filter-region arena tier** (D3). The `filter-*` scenes (§6.3) pass
+the per-pass path at the contract budget; they are drawn a second time
+through the arena path, where the masks are the visible set's
+per-(colour, mask) draws (§5.2 "Filter regions"). That path is MSAA
+only, and these scenes are mostly hairlines — 0.14 mm contours and the
+407's 0.12 mm hatch lines at 10 px/mm — whose edges step in quarter
+coverage, so the whole image is held to **≤ 1.5 %**
+(`ARENA_FILTER_MAX_RATIO`, the largest measured 1.05 % + margin): the
+scene without a mask (`filter-hide-505`) measures the same as the masked
+ones. What the masks decide is checked by **pixel probes** instead: per
+scene, a point or segment in paper mm on each side of the region with
+the colour expected drawn or absent, asserted on the golden and on the
+arena image (a 5 × 5 px window, Σ|Δ| ≤ 90). Measured at introduction
+(headless Chromium, 2026-10-31):
+
+| Scene | Per-pass | Arena |
+|---|---|---|
+| `filter-clip-brown` | 304 / 260 400 (0.117 %) | 2 305 / 260 400 (0.885 %) |
+| `filter-hide-505` | 348 / 260 400 (0.134 %) | 2 320 / 260 400 (0.891 %) |
+| `filter-moved` | 267 / 260 400 (0.103 %) | 1 875 / 260 400 (0.720 %) |
+| `filter-show-only` | 373 / 260 400 (0.143 %) | 2 723 / 260 400 (1.046 %) |
+
 **PDF leg** (C3, `packages/api/src/render/__tests__/pdf-golden.test.ts`;
 the method and the full table are `docs/course-print.md` §9.2). Every
 golden scene is written as a one-page PDF covering its golden frame,
@@ -1931,6 +2284,25 @@ WebGL2 per-pass path against the golden, measured at introduction
 | `course-sprint` | ISSprOM 401, two 521 buildings; `numberStyle: "knockout"` | 6 mm circles; upper-white halo under upper-purple numbers, above the buildings' black |
 | `course-all-controls` | ISOM 403, 304; all controls with a free-order course | every site drawn, codes, no legs, start north |
 
+The **filter scenes** (D3, 04 §8 row "Filter regions", §4.11) draw one
+ISOM base map — a 407 area (0–60 × 0–40 mm), 101 contours (a straight
+one and a Bézier through the region, one below it), 505 footpaths (one
+through the region, one right of it, one above) — under one pentagon of
+radius 10 mm round (24, 20) mm, turned 12°, entered through
+`courseLayer({ regions })` and `courseRenderInput()`:
+`__fixtures__/filter/index.ts` (`filterScene`, `filterSceneNames`),
+snapshots in `streams/filter/`, assertions in
+`render/__tests__/filter-fixtures.test.ts`. Each is a golden in all three
+tiers (raster, WebGL2 per-pass and arena, PDF).
+
+| Scene | Regions | Asserted |
+|---|---|---|
+| `filter-clip-brown` | clip `{ colours: [brown] }` | the two contours through the pentagon masked, nothing else; nothing hidden; image: contours stop at the boundary, footpaths and hatch run through |
+| `filter-hide-505` | hide `[505]` | the footpath through the pentagon hidden, whole; the others drawn |
+| `filter-moved` | clip brown + hide 505, the pentagon moved 10 mm (half its width) right | the other footpath hidden instead; the contours cut further right |
+| `filter-show-only` | clip `[101, 505]`, `invert` | "show only": the 407 hatch is the one masked pass; contours and paths inside drawn |
+| (all four) | — | `filterStream`'s fast bbox predicate gives the exact result's hidden set and masks |
+
 The **page scenes** (C2, `@oxygen/shared/print` `pageScene`,
 `print/__fixtures__/pages.ts`) are whole pages through `composePage`:
 
@@ -1941,8 +2313,8 @@ The **page scenes** (C2, `@oxygen/shared/print` `pageScene`,
 | `page-rotated` | 120 × 90 mm, ISOM, window rotated 20° clockwise; map text | map, course and text turned together, corners outside the frame white |
 
 Not in the table: 04 §8 row 10 (minimum sizes) is a screen-backend rule
-(the stream is the same at every zoom), and the filter-region and
-georeference rows belong to the viewer (§5.4) and A11's `mapGeo`.
+(the stream is the same at every zoom), and the georeference row belongs
+to A11's `mapGeo`.
 
 ### 6.4 Corpus parity
 
@@ -2124,7 +2496,8 @@ what became of it:
 | `packages/shared/src/render/glyph-table.ts` | IR glyph → `GlyphMesh`, registry |
 | `packages/shared/src/render/truetype.ts`, `text.ts` | font reader, shaping |
 | `packages/shared/src/render/symbolise.ts` | the stage |
-| `packages/shared/src/render/__fixtures__/` | contract fixtures (`streams/`), library fixtures (`library/`, snapshots in `streams/library/`), pilot symbols, `pilot-scene.ts`, `golden.ts` (scene list, frame) |
+| `packages/shared/src/render/filter-region.ts` | filter regions: selection, exact and fast predicates, `filterStream` / `applyFilterRegions` (§4.11) |
+| `packages/shared/src/render/__fixtures__/` | contract fixtures (`streams/`), library fixtures (`library/`, snapshots in `streams/library/`), course and filter scenes (`course/`, `filter/`, snapshots in `streams/course/`, `streams/filter/`), pilot symbols, `pilot-scene.ts`, `golden.ts` (scene list, frame) |
 | `packages/shared/src/render/proxy-symbols.ts` | per-kind proxy symbols for the render bridge |
 | `packages/shared/src/render/__fixtures__/course/` | course scenes (C0; snapshots in `streams/course/`) — the layer itself is `packages/shared/src/course/`, `docs/course-layer.md` |
 | `packages/shared/fonts/` | bundled Liberation faces |
@@ -2146,14 +2519,14 @@ what became of it:
 | `packages/web/src/map-gl/arena.ts` | vertex arenas: free list, growth by copy |
 | `packages/web/src/map-gl/worker.ts`, `worker-entry.ts` | the worker's message handler and its binding |
 | `packages/web/src/map-gl/engine.ts` | main-thread controller: worker transport, residency, visible-set rebuilds |
-| `packages/web/src/map-gl/view.ts` | the arena path's model → clip matrix, `RenderTarget` |
-| `packages/web/src/map-gl/renderer.ts` | WebGL2 backend, GPU stage (arena programs and draw loop; per-pass path, stencil, supersampling; GPU timer) |
+| `packages/web/src/map-gl/view.ts` | the arena path's model → clip matrix, `RenderTarget`, `loupeView` |
+| `packages/web/src/map-gl/renderer.ts` | WebGL2 backend, GPU stage (arena programs and draw loop; per-pass path, stencil, supersampling; the loupe's inset target and circle composite; GPU timer) |
 | `packages/web/src/pages/dev/MapGlFixturePage.tsx` | dev-only golden page `/dev/map-gl` |
 | `packages/web/src/pages/dev/MapGlDocPage.tsx` | dev-only whole-document page `/dev/map-gl-doc` (load report, bench) |
 | `e2e/__golden__/map-gl/`, `e2e/map-gl-golden.spec.ts` | committed goldens and the browser comparison |
 | `e2e/map-gl-doc.spec.ts` | whole-document pipeline on `e2e/test.ocd`: arena path, worker, eviction, arena = per-pass path |
 | `scripts/measure-gl.mjs` | corpus measurements through `/dev/map-gl-doc` (§5.2 Measurements) |
-| `packages/web/src/components/VectorMapLayer.tsx` | the vector base layer in `MapViewer` (§5.4): canvas, engine and worker lifecycle, status; the course layer request and its replies |
+| `packages/web/src/components/VectorMapLayer.tsx` | the vector base layer in `MapViewer` (§5.4): canvas, engine and worker lifecycle, status; the course layer request and its replies; the editor's loupe |
 | `packages/web/src/lib/course-layer-request.ts` | the viewer's course-layer input (§5.4 "Overlay", `course-layer.md` §5) |
 | `packages/web/src/components/MapViewer.tsx` | the host: layer choice, viewport state, gestures, SVG overlay |
 | `packages/web/src/lib/map-viewport.ts` | the viewport model, mercator and paper (§5.4 "Viewport"), `glView` |
@@ -2168,6 +2541,18 @@ The shared module is exported as a namespace: `import { render } from
 `course-maps`).
 
 ## 8. Pending in this chapter
+
+- **§4.11 filter regions in the viewer and the print route.** The stage,
+  the three backends and the worker protocol take regions; nothing sends
+  them yet. They reach `VectorMapLayer` / `course-layer-request.ts` and
+  the print route's `PageInput.course.regions` with D2's stored
+  `course_objects` (`filter_region` kind; D2), and the editor's drag sends
+  `fastFilter` (D5).
+- **§5.2 filter-region limits.** All masks share one stencil bit, so
+  overlapping regions of different masks are fine (each masked step marks
+  only its own); nothing is capped. A stroke counts as meeting a region
+  by its centre line (§4.11), so a wide line grazing a region with its
+  edge only is not hidden — the setter's case is a path *in* the area.
 
 - **§6.4 Mapper sources.** The parity tool compares OCAD files only (the
   legacy tiles read nothing else); the corpus has no Mapper map.
@@ -2197,19 +2582,19 @@ The shared module is exported as a namespace: `import { render } from
   nothing produces `ReplayData`; B11 closed as moot (user decision
   2026-10-22). A GPS replay feature gets its own row, with a producer and
   this section's paper view and `mapGeo`.
-- **§5.2 dynamic bucket: hit-testing, hide and highlight.** The layer's
-  object ids are in the range table (`courseObjectOffset`), but the
-  editor still hit-tests its SVG targets and highlights with SVG rings;
-  04 §7's shared-stage hit test and highlight-through-the-dynamic-bucket
-  are slice D's, with the editor on the document.
+- **§5.5 highlight through the dynamic bucket.** Hit-testing landed in
+  D4 (§5.5); the selection is still marked by the SVG ring. 04 §7's
+  highlight — the selected object's passes redrawn in a highlight colour
+  in the dynamic bucket — and hiding an edited document object are still
+  open: D5 kept its selection, multi-selection and object outlines in the
+  UI layer (`map-gl` was outside its area); Map mode (slice G) needs both.
 - **§5.2 dynamic bucket: main-thread symbolisation.** A drag re-derives
   the layer in the worker (one round trip per pointer move). If D's
   editor needs lower latency, the dragged object is symbolised on the
   main thread and only it is replaced.
-- **§5.4 layout objects in the viewer.** `courseLayer()` draws
-  map-anchored layout objects (white-outs, 709 hatch, text, lines), but
-  no sheet reaches `MapPanel`, so the viewer passes `objects: []`;
-  showing a sheet's objects on the map is slice D's.
+- **§5.4 layout objects in the viewer** — resolved by D7 for Layout
+  mode (`MapViewerEditorProps.layout`, `course-layout.md` §1); Course mode
+  and the read-only viewer still draw no sheet.
 - **§5.4 lower purple below an area colour — resolved in C14
   (`ocad-16` / `omap-9`).** Alignment now places an inserted lower purple
   above the area colours as a group and reports what stays on the wrong
@@ -2221,8 +2606,6 @@ The shared module is exported as a namespace: `import { render } from
   `northLinesBelow` (the tiles' per-map colour-stack fixes) are not
   applied to the document's stack; the document's own order (and, for
   matched symbols, the library's) is drawn.
-- **§5.4 editor loupe.** `MapLoupe` magnifies tiles and is not shown in
-  the paper view; the editor moves onto the document in slice D.
 - **§5.4 lost context.** A lost context (`webglcontextlost`) is not
   restored: the host falls back to tiles while `allowLegacy`, or the
   layer shows its message (`docs/map-pipeline-switch.md` §3.3).

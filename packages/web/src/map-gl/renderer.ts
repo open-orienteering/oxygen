@@ -21,7 +21,7 @@ import { viewMatrix, type RenderTarget } from "./view.js";
 import { buildTextGlyphs, GLYPH_TABLE_TEXELS, GLYPH_TABLE_WIDTH, type TextAtlasPage } from "./text-atlas.js";
 import {
   FILL_VERTEX_BYTES, HATCH_VERTEX_BYTES, STROKE_VERTEX_BYTES,
-  type ClipGroup, type PreparedPart, type ResidentPart, type VisibleSet,
+  type ClipGroup, type DrawLayer, type PreparedPart, type ResidentPart, type VisibleSet,
 } from "./buckets.js";
 
 export interface View {
@@ -57,6 +57,30 @@ export interface DocumentRenderOptions {
   viewMatrix?: Float32Array;
   /** Profiling (dev page `kinds=`): draw only these kinds. */
   kinds?: ReadonlySet<"fill" | "hatch" | "stroke" | "glyph" | "clip" | "text">;
+  /**
+   * Layout mode's page (docs/course-layout.md §1): colours below `fromColour` are the map layer,
+   * drawn only inside the frame (`ringUm`, paper µm); the page layer above them is not clipped.
+   * The clip is the frame's screen bounding box (a scissor): exact while the page is upright on
+   * screen, which Layout mode keeps.
+   */
+  pageClip?: { fromColour: number; ringUm: readonly (readonly [number, number])[] };
+}
+
+/**
+ * The scissor box (device pixels, GL bottom-left origin) of a paper-µm ring under the model → clip
+ * matrix `m` (positions relative to the origin): the ring's screen bounding box, clamped to the target.
+ */
+export function scissorOfRing(m: ArrayLike<number>, ring: readonly (readonly [number, number])[], originX: number, originY: number, width: number, height: number): [number, number, number, number] {
+  let x0 = Infinity, y0 = Infinity, x1 = -Infinity, y1 = -Infinity;
+  for (const [x, y] of ring) {
+    const px = x - originX, py = y - originY;
+    const cx = m[0] * px + m[4] * py + m[12], cy = m[1] * px + m[5] * py + m[13], w = m[3] * px + m[7] * py + m[15];
+    const sx = ((cx / w + 1) / 2) * width, sy = ((cy / w + 1) / 2) * height;
+    x0 = Math.min(x0, sx); x1 = Math.max(x1, sx); y0 = Math.min(y0, sy); y1 = Math.max(y1, sy);
+  }
+  const l = Math.max(0, Math.min(width, Math.round(x0))), r = Math.max(0, Math.min(width, Math.round(x1)));
+  const b = Math.max(0, Math.min(height, Math.round(y0))), t = Math.max(0, Math.min(height, Math.round(y1)));
+  return [l, b, r - l, t - b];
 }
 
 export interface RenderOptions {
@@ -329,6 +353,15 @@ interface TimerExt {
   GPU_DISJOINT_EXT: number;
 }
 
+/** Where `compositeInset` draws: a square of the canvas, top-left corner and side in device px. */
+export interface InsetBox {
+  x: number;
+  y: number;
+  size: number;
+}
+
+type Offscreen = { w: number; h: number; msaa: WebGLFramebuffer; resolve: WebGLFramebuffer; tex: WebGLTexture; rbs: WebGLRenderbuffer[] };
+
 export interface FrameStats {
   drawCalls: number;
   /** JS time of the frame, ms. */
@@ -338,6 +371,8 @@ export interface FrameStats {
 
 const CLIP_BIT = 0x01;
 const PARITY_BIT = 0x02;
+/** Filter masks (map-rendering §3.8): set inside the union of a mask's regions; masked draws need it clear. */
+const REGION_BIT = 0x04;
 
 const VS_BLIT = `#version 300 es
 precision highp float;
@@ -349,9 +384,13 @@ void main() { v_uv = a_pos * 0.5 + 0.5; gl_Position = vec4(a_pos, 0.0, 1.0); }
 const FS_BLIT = `#version 300 es
 precision highp float;
 uniform sampler2D u_tex;
+uniform float u_circle;
 in vec2 v_uv;
 out vec4 o;
-void main() { o = texture(u_tex, v_uv); }
+void main() {
+  if (u_circle > 0.5 && length(v_uv - 0.5) > 0.5) discard;
+  o = texture(u_tex, v_uv);
+}
 `;
 
 interface Program {
@@ -368,6 +407,8 @@ interface Uploaded {
     strokes: { buf: WebGLBuffer; count: number; halfWidth: number }[];
     inst?: WebGLBuffer; instCount: number;
     clipFan?: WebGLBuffer; clipFanCount: number; clipCover?: WebGLBuffer;
+    /** Filter-mask regions: one stencil fan and cover per region. */
+    regions?: { fan: WebGLBuffer; fanCount: number; cover: WebGLBuffer }[];
   };
 }
 
@@ -378,9 +419,9 @@ interface ArenaState {
   atlas: { tex: WebGLTexture; bytes: number };
   parts: Map<string, ResidentPart>;
   vs: VisibleSet | undefined;
-  vsBuffers: { fill: WebGLBuffer; hatch: WebGLBuffer; stroke: WebGLBuffer; glyph: WebGLBuffer; text: WebGLBuffer; clipPos: WebGLBuffer; clipIdx: WebGLBuffer; clipInst: WebGLBuffer };
+  vsBuffers: { fill: WebGLBuffer; hatch: WebGLBuffer; stroke: WebGLBuffer; glyph: WebGLBuffer; text: WebGLBuffer; clipPos: WebGLBuffer; clipIdx: WebGLBuffer; clipInst: WebGLBuffer; maskPos: WebGLBuffer; maskIdx: WebGLBuffer };
   vsBytes: number;
-  vaos: { fill: WebGLVertexArrayObject; hatch: WebGLVertexArrayObject; stroke: WebGLVertexArrayObject; inst: WebGLVertexArrayObject; text: WebGLVertexArrayObject; clip: WebGLVertexArrayObject };
+  vaos: { fill: WebGLVertexArrayObject; hatch: WebGLVertexArrayObject; stroke: WebGLVertexArrayObject; inst: WebGLVertexArrayObject; text: WebGLVertexArrayObject; clip: WebGLVertexArrayObject; mask: WebGLVertexArrayObject };
   vaoGeneration: number;
   programs: { fill: Program; hatch: Program; stroke: Program; inst: Program; text: Program };
 }
@@ -413,7 +454,8 @@ export class MapGlRenderer {
   /** Last resolved GPU frame time, ms (needs EXT_disjoint_timer_query_webgl2). */
   lastGpuMs: number | undefined;
   private uploaded: Uploaded[] = [];
-  private offscreen?: { w: number; h: number; msaa: WebGLFramebuffer; resolve: WebGLFramebuffer; tex: WebGLTexture; rbs: WebGLRenderbuffer[] };
+  /** Offscreen MSAA + stencil targets: the supersample path's and the loupe's (`insetTarget`). */
+  private offscreen: Partial<Record<"supersample" | "inset", Offscreen>> = {};
   private quad?: WebGLBuffer;
 
   constructor(canvas: HTMLCanvasElement | OffscreenCanvas, attrs: WebGLContextAttributes = {}) {
@@ -426,7 +468,7 @@ export class MapGlRenderer {
       cover: this.link(VS_COVER, FS_COVER, ["a_pos"], ["u_centre", "u_scale", "u_colour", "u_mode", "u_normal", "u_spacing", "u_offset", "u_halfWidth", "u_pxPerUm"]),
       stroke: this.link(VS_STROKE, FS_SOLID, ["a_pos", "a_off"], ["u_centre", "u_scale", "u_colour", "u_halfWidth", "u_minHalfPx", "u_pxPerUm"]),
       strokeInst: this.link(VS_STROKE_INST, FS_SOLID, ["a_pos", "a_off", "a_inst", "a_scale"], ["u_centre", "u_scale", "u_colour", "u_halfWidth", "u_minHalfPx", "u_pxPerUm"]),
-      blit: this.link(VS_BLIT, FS_BLIT, ["a_pos"], ["u_tex"]),
+      blit: this.link(VS_BLIT, FS_BLIT, ["a_pos"], ["u_tex", "u_circle"]),
     };
     const ext = this.gl.getExtension("EXT_disjoint_timer_query_webgl2") as TimerExt | null;
     if (ext) this.timer = { ext, pending: [] };
@@ -477,6 +519,12 @@ export class MapGlRenderer {
   }
 
   private upload(item: Prepared): Uploaded["buffers"] {
+    const b = this.uploadItem(item);
+    if (!item.mask) return b;
+    return { ...b, regions: item.mask.filter((g) => g.fan.length).map((g) => ({ fan: this.buffer(g.fan), fanCount: g.fan.length / 2, cover: this.buffer(g.cover) })) };
+  }
+
+  private uploadItem(item: Prepared): Uploaded["buffers"] {
     const fanOf = (g: FanGeometry | undefined) =>
       g && g.fan.length ? { fan: this.buffer(g.fan), fanCount: g.fan.length / 2, cover: this.buffer(g.cover) } : { fanCount: 0 };
     const strokesOf = (ss: StrokeGeometry[]) =>
@@ -506,7 +554,8 @@ export class MapGlRenderer {
   dispose(): void {
     this.disposeDocument();
     this.disposeTextAtlas();
-    this.deleteOffscreen();
+    this.deleteOffscreen("supersample");
+    this.deleteOffscreen("inset");
     this.deleteBuffers();
     if (this.quad) this.gl.deleteBuffer(this.quad);
     this.quad = undefined;
@@ -518,6 +567,7 @@ export class MapGlRenderer {
       const b = u.buffers;
       for (const x of [b.fan, b.cover, b.inst, b.clipFan, b.clipCover]) if (x) gl.deleteBuffer(x);
       for (const s of b.strokes) gl.deleteBuffer(s.buf);
+      for (const r of b.regions ?? []) { gl.deleteBuffer(r.fan); gl.deleteBuffer(r.cover); }
     }
     this.uploaded = [];
   }
@@ -526,40 +576,81 @@ export class MapGlRenderer {
     const gl = this.gl;
     const ss = opts.supersample ?? 1;
     if (ss > 1) {
-      const fb = this.offscreenFramebuffer(view.widthPx * ss, view.heightPx * ss);
+      const fb = this.offscreenFramebuffer("supersample", view.widthPx * ss, view.heightPx * ss);
       gl.bindFramebuffer(gl.FRAMEBUFFER, fb.msaa);
       this.draw({ ...view, widthPx: view.widthPx * ss, heightPx: view.heightPx * ss, pxPerUm: view.pxPerUm * ss }, opts, ss);
       // Resolve the multisample buffer into a texture (same size), then
       // draw it onto the canvas with linear filtering: at exactly 2× that
       // is a 2×2 box filter. (A scaled blit into the canvas is not an
       // option — its default framebuffer is itself multisampled.)
-      gl.bindFramebuffer(gl.READ_FRAMEBUFFER, fb.msaa);
-      gl.bindFramebuffer(gl.DRAW_FRAMEBUFFER, fb.resolve);
-      gl.blitFramebuffer(0, 0, fb.w, fb.h, 0, 0, fb.w, fb.h, gl.COLOR_BUFFER_BIT, gl.NEAREST);
-      gl.bindFramebuffer(gl.FRAMEBUFFER, null);
-      gl.viewport(0, 0, view.widthPx, view.heightPx);
-      gl.disable(gl.STENCIL_TEST);
-      gl.disable(gl.BLEND);
-      const p = this.programs.blit;
-      gl.useProgram(p.prog);
-      gl.activeTexture(gl.TEXTURE0);
-      gl.bindTexture(gl.TEXTURE_2D, fb.tex);
-      gl.uniform1i(p.uniforms.u_tex, 0);
-      this.quad ??= this.buffer(Float32Array.from([-1, -1, 1, -1, -1, 1, -1, 1, 1, -1, 1, 1]));
-      gl.bindBuffer(gl.ARRAY_BUFFER, this.quad);
-      gl.enableVertexAttribArray(p.attribs.a_pos);
-      gl.vertexAttribPointer(p.attribs.a_pos, 2, gl.FLOAT, false, 0, 0);
-      gl.drawArrays(gl.TRIANGLES, 0, 6);
+      this.resolveOffscreen(fb);
+      this.drawTexture(fb.tex, [0, 0, view.widthPx, view.heightPx], false);
       return;
     }
     gl.bindFramebuffer(gl.FRAMEBUFFER, null);
     this.draw(view, opts, 1);
   }
 
-  private offscreenFramebuffer(w: number, h: number): NonNullable<MapGlRenderer["offscreen"]> {
+  /**
+   * The loupe's target (docs/map-rendering.md §5.5 "Loupe"): a `size`² offscreen framebuffer with
+   * 4× MSAA colour and `DEPTH24_STENCIL8` (the supersample path's recipe), kept until the size
+   * changes or `releaseInset`. Pass it to `renderDocument`, then `compositeInset`.
+   */
+  insetTarget(size: number): RenderTarget {
+    const fb = this.offscreenFramebuffer("inset", size, size);
+    return { framebuffer: fb.msaa, width: size, height: size };
+  }
+
+  /**
+   * Resolves the inset target and draws it into the circle inscribed in `box` of the canvas
+   * (fragments outside it discarded); the rest of the canvas is left as it is.
+   */
+  compositeInset(box: InsetBox): void {
+    const fb = this.offscreen.inset;
+    if (!fb) return;
+    this.resolveOffscreen(fb);
+    // `box` is top-left in device px; GL's viewport origin is the bottom-left.
+    this.drawTexture(fb.tex, [box.x, this.gl.drawingBufferHeight - box.y - box.size, box.size, box.size], true);
+  }
+
+  /** Frees the inset target (the loupe went away); the next `insetTarget` makes a new one. */
+  releaseInset(): void {
+    this.deleteOffscreen("inset");
+  }
+
+  private resolveOffscreen(fb: Offscreen): void {
     const gl = this.gl;
-    if (this.offscreen && this.offscreen.w === w && this.offscreen.h === h) return this.offscreen;
-    this.deleteOffscreen();
+    gl.bindFramebuffer(gl.READ_FRAMEBUFFER, fb.msaa);
+    gl.bindFramebuffer(gl.DRAW_FRAMEBUFFER, fb.resolve);
+    gl.blitFramebuffer(0, 0, fb.w, fb.h, 0, 0, fb.w, fb.h, gl.COLOR_BUFFER_BIT, gl.NEAREST);
+  }
+
+  /** Draws `tex` over the canvas viewport `[x, y, w, h]` (GL origin), optionally as its inscribed circle. */
+  private drawTexture(tex: WebGLTexture, [x, y, w, h]: [number, number, number, number], circle: boolean): void {
+    const gl = this.gl;
+    gl.bindFramebuffer(gl.FRAMEBUFFER, null);
+    gl.viewport(x, y, w, h);
+    gl.disable(gl.STENCIL_TEST);
+    gl.disable(gl.SCISSOR_TEST);
+    gl.disable(gl.BLEND);
+    const p = this.programs.blit;
+    gl.useProgram(p.prog);
+    gl.activeTexture(gl.TEXTURE0);
+    gl.bindTexture(gl.TEXTURE_2D, tex);
+    gl.uniform1i(p.uniforms.u_tex, 0);
+    gl.uniform1f(p.uniforms.u_circle, circle ? 1 : 0);
+    this.quad ??= this.buffer(Float32Array.from([-1, -1, 1, -1, -1, 1, -1, 1, 1, -1, 1, 1]));
+    gl.bindBuffer(gl.ARRAY_BUFFER, this.quad);
+    gl.enableVertexAttribArray(p.attribs.a_pos);
+    gl.vertexAttribPointer(p.attribs.a_pos, 2, gl.FLOAT, false, 0, 0);
+    gl.drawArrays(gl.TRIANGLES, 0, 6);
+  }
+
+  private offscreenFramebuffer(slot: "supersample" | "inset", w: number, h: number): Offscreen {
+    const gl = this.gl;
+    const cur = this.offscreen[slot];
+    if (cur && cur.w === w && cur.h === h) return cur;
+    this.deleteOffscreen(slot);
     const samples = Math.min(4, gl.getParameter(gl.MAX_SAMPLES) as number);
     const rb = (format: number, multisampled: boolean) => {
       const r = gl.createRenderbuffer()!;
@@ -585,18 +676,20 @@ export class MapGlRenderer {
     gl.bindFramebuffer(gl.FRAMEBUFFER, resolve);
     gl.framebufferTexture2D(gl.FRAMEBUFFER, gl.COLOR_ATTACHMENT0, gl.TEXTURE_2D, tex, 0);
     gl.bindFramebuffer(gl.FRAMEBUFFER, null);
-    this.offscreen = { w, h, msaa, resolve, tex, rbs: [colourMs, stencilMs] };
-    return this.offscreen;
+    const fb: Offscreen = { w, h, msaa, resolve, tex, rbs: [colourMs, stencilMs] };
+    this.offscreen[slot] = fb;
+    return fb;
   }
 
-  private deleteOffscreen(): void {
-    if (!this.offscreen) return;
+  private deleteOffscreen(slot: "supersample" | "inset"): void {
+    const fb = this.offscreen[slot];
+    if (!fb) return;
     const gl = this.gl;
-    gl.deleteFramebuffer(this.offscreen.msaa);
-    gl.deleteFramebuffer(this.offscreen.resolve);
-    gl.deleteTexture(this.offscreen.tex);
-    for (const r of this.offscreen.rbs) gl.deleteRenderbuffer(r);
-    this.offscreen = undefined;
+    gl.deleteFramebuffer(fb.msaa);
+    gl.deleteFramebuffer(fb.resolve);
+    gl.deleteTexture(fb.tex);
+    for (const r of fb.rbs) gl.deleteRenderbuffer(r);
+    delete this.offscreen[slot];
   }
 
   private draw(view: View, opts: RenderOptions, ss: number): void {
@@ -624,38 +717,91 @@ export class MapGlRenderer {
 
     for (const { item, buffers: b } of this.uploaded) {
       const rgb = opts.colour(item.colour);
-      switch (item.kind) {
-        case "fill":
-          if (!b.fan) break;
-          this.stencilMark(b.fan, b.fanCount, common);
-          this.coverSolid(b.cover!, rgb, common);
-          break;
-        case "hatch":
-          if (!b.fan) break;
-          this.stencilMark(b.fan, b.fanCount, common);
-          this.coverStripes(b.cover!, rgb, item, view, common);
-          break;
-        case "stroke":
-          for (const s of b.strokes) this.drawStroke(s, rgb, common);
-          break;
-        case "instanced": {
-          if (!b.inst || b.instCount === 0) break;
-          // Stencil bit 0 holds the clip mask (pattern areas), bit 1 the
-          // per-instance even-odd parity, so a clipped instanced fill can
-          // run the parity trick inside the mask.
-          const clipped = !!b.clipFan;
-          if (clipped) this.stencilMark(b.clipFan!, b.clipFanCount, common, CLIP_BIT);
-          if (b.fan) {
-            this.stencilMarkInst(b, common);
-            this.coverSolidInst(b, rgb, clipped, common);
-          }
-          for (const s of b.strokes) this.drawStrokeInst(b, s, rgb, clipped, common);
-          if (clipped) this.stencilClear(b.clipCover!, common);
-          break;
-        }
-      }
+      if (b.regions?.length) this.markRegions(b.regions, common);
+      this.drawItem(item, b, rgb, view, common);
+      if (b.regions?.length) this.clearRegions(b.regions, common);
     }
     gl.disable(gl.STENCIL_TEST);
+  }
+
+  /** Bits a masked draw requires clear: `REGION_BIT` between `markRegions` and `clearRegions`, else none. */
+  private regionTest = 0;
+
+  /** Sets `REGION_BIT` inside the union of the regions: each region's even-odd parity in the parity bit, then moved over. */
+  private markRegions(regions: NonNullable<Uploaded["buffers"]["regions"]>, common: (p: Program) => void): void {
+    const gl = this.gl;
+    for (const r of regions) {
+      this.stencilMark(r.fan, r.fanCount, common, PARITY_BIT);
+      const p = this.programs.fan;
+      common(p);
+      gl.colorMask(false, false, false, false);
+      gl.stencilMask(PARITY_BIT | REGION_BIT);
+      gl.stencilFunc(gl.EQUAL, REGION_BIT | PARITY_BIT, PARITY_BIT);
+      gl.stencilOp(gl.KEEP, gl.KEEP, gl.REPLACE);
+      // Where the parity bit is set, REPLACE writes the reference under the write mask: the region bit (and the parity bit, already set).
+      this.fanDraw(r.cover, p);
+      // Then the parity bit is cleared over the cover for the next region and the item's own fills.
+      gl.stencilMask(PARITY_BIT);
+      gl.stencilFunc(gl.ALWAYS, 0, 0xff);
+      gl.stencilOp(gl.ZERO, gl.ZERO, gl.ZERO);
+      this.fanDraw(r.cover, p);
+      gl.colorMask(true, true, true, true);
+    }
+    this.regionTest = REGION_BIT;
+  }
+
+  private clearRegions(regions: NonNullable<Uploaded["buffers"]["regions"]>, common: (p: Program) => void): void {
+    const gl = this.gl;
+    const p = this.programs.fan;
+    common(p);
+    gl.colorMask(false, false, false, false);
+    gl.stencilMask(REGION_BIT);
+    gl.stencilFunc(gl.ALWAYS, 0, 0xff);
+    gl.stencilOp(gl.ZERO, gl.ZERO, gl.ZERO);
+    for (const r of regions) this.fanDraw(r.cover, p);
+    gl.colorMask(true, true, true, true);
+    this.regionTest = 0;
+  }
+
+  private fanDraw(buf: WebGLBuffer, p: Program): void {
+    const gl = this.gl;
+    gl.bindBuffer(gl.ARRAY_BUFFER, buf);
+    gl.enableVertexAttribArray(p.attribs.a_pos);
+    gl.vertexAttribPointer(p.attribs.a_pos, 2, gl.FLOAT, false, 0, 0);
+    gl.drawArrays(gl.TRIANGLES, 0, 6);
+  }
+
+  private drawItem(item: Prepared, b: Uploaded["buffers"], rgb: [number, number, number], view: View, common: (p: Program) => void): void {
+    switch (item.kind) {
+      case "fill":
+        if (!b.fan) break;
+        this.stencilMark(b.fan, b.fanCount, common);
+        this.coverSolid(b.cover!, rgb, common);
+        break;
+      case "hatch":
+        if (!b.fan) break;
+        this.stencilMark(b.fan, b.fanCount, common);
+        this.coverStripes(b.cover!, rgb, item, view, common);
+        break;
+      case "stroke":
+        for (const s of b.strokes) this.drawStroke(s, rgb, common);
+        break;
+      case "instanced": {
+        if (!b.inst || b.instCount === 0) break;
+        // Stencil bit 0 holds the clip mask (pattern areas), bit 1 the
+        // per-instance even-odd parity, so a clipped instanced fill can
+        // run the parity trick inside the mask.
+        const clipped = !!b.clipFan;
+        if (clipped) this.stencilMark(b.clipFan!, b.clipFanCount, common, CLIP_BIT);
+        if (b.fan) {
+          this.stencilMarkInst(b, common);
+          this.coverSolidInst(b, rgb, clipped, common);
+        }
+        for (const s of b.strokes) this.drawStrokeInst(b, s, rgb, clipped, common);
+        if (clipped) this.stencilClear(b.clipCover!, common);
+        break;
+      }
+    }
   }
 
   /** Reads back finished GPU timer queries (results lag a frame or two). */
@@ -697,9 +843,10 @@ export class MapGlRenderer {
       vsBuffers: {
         fill: gl.createBuffer()!, hatch: gl.createBuffer()!, stroke: gl.createBuffer()!, glyph: gl.createBuffer()!, text: gl.createBuffer()!,
         clipPos: gl.createBuffer()!, clipIdx: gl.createBuffer()!, clipInst: gl.createBuffer()!,
+        maskPos: gl.createBuffer()!, maskIdx: gl.createBuffer()!,
       },
       vsBytes: 0,
-      vaos: { fill: gl.createVertexArray()!, hatch: gl.createVertexArray()!, stroke: gl.createVertexArray()!, inst: gl.createVertexArray()!, text: gl.createVertexArray()!, clip: gl.createVertexArray()! },
+      vaos: { fill: gl.createVertexArray()!, hatch: gl.createVertexArray()!, stroke: gl.createVertexArray()!, inst: gl.createVertexArray()!, text: gl.createVertexArray()!, clip: gl.createVertexArray()!, mask: gl.createVertexArray()! },
       vaoGeneration: -1,
       programs: p,
     };
@@ -845,7 +992,9 @@ export class MapGlRenderer {
       put(gl.ARRAY_BUFFER, a.vsBuffers.text, vs.text.instances) +
       put(gl.ELEMENT_ARRAY_BUFFER, a.vsBuffers.clipIdx, vs.clips.indices) +
       put(gl.ARRAY_BUFFER, a.vsBuffers.clipPos, vs.clips.positions) +
-      put(gl.ARRAY_BUFFER, a.vsBuffers.clipInst, vs.clips.instances);
+      put(gl.ARRAY_BUFFER, a.vsBuffers.clipInst, vs.clips.instances) +
+      put(gl.ELEMENT_ARRAY_BUFFER, a.vsBuffers.maskIdx, vs.filter?.indices ?? new Uint32Array(0)) +
+      put(gl.ARRAY_BUFFER, a.vsBuffers.maskPos, vs.filter?.positions ?? new Float32Array(0));
     a.vs = vs;
     a.vaoGeneration = -1;
   }
@@ -918,6 +1067,12 @@ export class MapGlRenderer {
     gl.enableVertexAttribArray(P.fill.attribs.a_pos);
     gl.vertexAttribPointer(P.fill.attribs.a_pos, 2, gl.FLOAT, false, 8, 0);
     gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, a.vsBuffers.clipIdx);
+
+    gl.bindVertexArray(a.vaos.mask);
+    gl.bindBuffer(gl.ARRAY_BUFFER, a.vsBuffers.maskPos);
+    gl.enableVertexAttribArray(P.fill.attribs.a_pos);
+    gl.vertexAttribPointer(P.fill.attribs.a_pos, 2, gl.FLOAT, false, 8, 0);
+    gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, a.vsBuffers.maskIdx);
     gl.bindVertexArray(null);
     a.vaoGeneration = gen;
   }
@@ -982,11 +1137,23 @@ export class MapGlRenderer {
       }
 
       const cur = { fill: 0, hatch: 0, stroke: 0, glyph: 0, text: 0, clip: 0 };
-      const indexed = (kind: "fill" | "hatch" | "stroke", colour: number, rgb: [number, number, number]) => {
+      // Draw lists and `vs.layers` share the order (colour, then unmasked, then masks ascending).
+      const before = (d: { colour: number; mask?: number }, l: DrawLayer) => d.colour < l.colour || (d.colour === l.colour && (d.mask ?? -1) < l.mask);
+      const at = (d: { colour: number; mask?: number }, l: DrawLayer) => d.colour === l.colour && (d.mask ?? -1) === l.mask;
+      /** Masked draws test the region bit (clear = outside every region); unmasked ones draw without the stencil. */
+      const regionTest = (l: DrawLayer) => {
+        if (l.mask < 0) { gl.disable(gl.STENCIL_TEST); return; }
+        gl.enable(gl.STENCIL_TEST);
+        gl.stencilMask(0);
+        gl.stencilFunc(gl.EQUAL, 0, REGION_BIT);
+        gl.stencilOp(gl.KEEP, gl.KEEP, gl.KEEP);
+      };
+      const indexed = (kind: "fill" | "hatch" | "stroke", l: DrawLayer, rgb: [number, number, number]) => {
         const list = vs[kind].draws;
-        while (cur[kind] < list.length && list[cur[kind]].colour < colour) cur[kind]++;
-        if (cur[kind] >= list.length || list[cur[kind]].colour !== colour) return;
+        while (cur[kind] < list.length && before(list[cur[kind]], l)) cur[kind]++;
+        if (cur[kind] >= list.length || !at(list[cur[kind]], l)) return;
         const d = list[cur[kind]++];
+        regionTest(l);
         const p = P[kind];
         gl.useProgram(p.prog);
         gl.uniform3f(p.uniforms.u_colour, rgb[0], rgb[1], rgb[2]);
@@ -995,15 +1162,16 @@ export class MapGlRenderer {
         draws++;
       };
       /** Text: one quad (6 vertices) per instance, one draw per atlas page in this colour. */
-      const textDraws = (colour: number, rgb: [number, number, number]) => {
+      const textDraws = (l: DrawLayer, rgb: [number, number, number]) => {
         const list = vs.text.draws;
-        while (cur.text < list.length && list[cur.text].colour < colour) cur.text++;
+        while (cur.text < list.length && before(list[cur.text], l)) cur.text++;
         let bound = false;
-        while (cur.text < list.length && list[cur.text].colour === colour) {
+        while (cur.text < list.length && at(list[cur.text], l)) {
           const d = list[cur.text++];
           const page = text?.textures[d.cls];
           if (!page) continue;
           if (!bound) {
+            regionTest(l);
             gl.useProgram(P.text.prog);
             gl.uniform3f(P.text.uniforms.u_colour, rgb[0], rgb[1], rgb[2]);
             gl.bindVertexArray(a.vaos.text);
@@ -1018,13 +1186,14 @@ export class MapGlRenderer {
           draws++;
         }
       };
-      const instanced = (kind: "glyph", colour: number, rgb: [number, number, number]) => {
+      const instanced = (kind: "glyph", l: DrawLayer, rgb: [number, number, number]) => {
         const list = vs[kind].draws;
-        while (cur[kind] < list.length && list[cur[kind]].colour < colour) cur[kind]++;
+        while (cur[kind] < list.length && before(list[cur[kind]], l)) cur[kind]++;
         let bound = false;
-        while (cur[kind] < list.length && list[cur[kind]].colour === colour) {
+        while (cur[kind] < list.length && at(list[cur[kind]], l)) {
           const d = list[cur[kind]++];
           if (!bound) {
+            regionTest(l);
             gl.useProgram(P.inst.prog);
             gl.uniform3f(P.inst.uniforms.u_colour, rgb[0], rgb[1], rgb[2]);
             gl.bindVertexArray(a.vaos.inst);
@@ -1037,22 +1206,35 @@ export class MapGlRenderer {
         }
       };
       const on = (k: "fill" | "hatch" | "stroke" | "glyph" | "clip" | "text") => !opts.kinds || opts.kinds.has(k);
-      for (const colour of vs.colours) {
-        const rgb = opts.colour(colour);
-        if (on("fill")) indexed("fill", colour, rgb);
-        if (on("hatch")) indexed("hatch", colour, rgb);
-        if (on("stroke")) indexed("stroke", colour, rgb);
-        if (on("glyph")) instanced("glyph", colour, rgb);
-        const groups = vs.clips.groups;
-        while (cur.clip < groups.length && groups[cur.clip].colour < colour) cur.clip++;
-        while (cur.clip < groups.length && groups[cur.clip].colour === colour) {
-          const g = groups[cur.clip++];
-          if (on("clip")) draws += this.drawClip(a, g, rgb);
+      const pc = opts.pageClip;
+      if (pc) {
+        const [x, y, w, h] = scissorOfRing(m, pc.ringUm, a.originX, a.originY, t.width, t.height);
+        gl.scissor(x, y, w, h);
+      }
+      for (const l of vs.layers) {
+        const rgb = opts.colour(l.colour);
+        if (pc) {
+          if (l.colour < pc.fromColour) gl.enable(gl.SCISSOR_TEST);
+          else gl.disable(gl.SCISSOR_TEST);
         }
-        if (on("text")) textDraws(colour, rgb);
+        const masked = l.mask >= 0 && vs.filter;
+        if (masked) draws += this.markMask(a, vs.filter!.masks[l.mask], true);
+        if (on("fill")) indexed("fill", l, rgb);
+        if (on("hatch")) indexed("hatch", l, rgb);
+        if (on("stroke")) indexed("stroke", l, rgb);
+        if (on("glyph")) instanced("glyph", l, rgb);
+        const groups = vs.clips.groups;
+        while (cur.clip < groups.length && before(groups[cur.clip], l)) cur.clip++;
+        while (cur.clip < groups.length && at(groups[cur.clip], l)) {
+          const g = groups[cur.clip++];
+          if (on("clip")) draws += this.drawClip(a, g, rgb, l.mask >= 0 ? REGION_BIT : 0);
+        }
+        if (on("text")) textDraws(l, rgb);
+        if (masked) draws += this.markMask(a, vs.filter!.masks[l.mask], false);
       }
       gl.bindVertexArray(null);
       gl.disable(gl.STENCIL_TEST);
+      gl.disable(gl.SCISSOR_TEST);
     }
     if (q && this.timer) {
       gl.endQuery(this.timer.ext.TIME_ELAPSED_EXT);
@@ -1070,8 +1252,29 @@ export class MapGlRenderer {
     gl.vertexAttribPointer(p.attribs.a_i1, 4, gl.FLOAT, false, INSTANCE_FLOATS * 4, offset + 16);
   }
 
-  /** A clip group: its areas into stencil bit 0, its instances where the bit is set, the areas cleared. Three draws. */
-  private drawClip(a: ArenaState, g: ClipGroup, rgb: [number, number, number]): number {
+  /**
+   * A filter mask's regions into the region bit (`set`), or the bit cleared over them: their
+   * triangles drawn with REPLACE / ZERO, no colour. One draw.
+   */
+  private markMask(a: ArenaState, m: { offset: number; count: number }, set: boolean): number {
+    const gl = this.gl;
+    if (!m.count) return 0;
+    gl.useProgram(a.programs.fill.prog);
+    gl.bindVertexArray(a.vaos.mask);
+    gl.enable(gl.STENCIL_TEST);
+    gl.colorMask(false, false, false, false);
+    gl.stencilMask(REGION_BIT);
+    gl.stencilFunc(gl.ALWAYS, REGION_BIT, 0xff);
+    const op = set ? gl.REPLACE : gl.ZERO;
+    gl.stencilOp(op, op, op);
+    gl.drawElements(gl.TRIANGLES, m.count, gl.UNSIGNED_INT, m.offset * 4);
+    gl.colorMask(true, true, true, true);
+    gl.disable(gl.STENCIL_TEST);
+    return 1;
+  }
+
+  /** A clip group: its areas into stencil bit 0, its instances where the bit is set (and `regionTest` clear), the areas cleared. Three draws. */
+  private drawClip(a: ArenaState, g: ClipGroup, rgb: [number, number, number], regionTest = 0): number {
     const gl = this.gl;
     if (!g.count) return 0;
     const P = a.programs;
@@ -1092,7 +1295,7 @@ export class MapGlRenderer {
     gl.bindVertexArray(a.vaos.inst);
     gl.bindBuffer(gl.ARRAY_BUFFER, a.vsBuffers.clipInst);
     this.instancePointers(P.inst, g.first * INSTANCE_FLOATS * 4);
-    gl.stencilFunc(gl.EQUAL, CLIP_BIT, CLIP_BIT);
+    gl.stencilFunc(gl.EQUAL, CLIP_BIT, CLIP_BIT | regionTest);
     gl.stencilOp(gl.KEEP, gl.KEEP, gl.KEEP);
     gl.drawArraysInstanced(gl.TRIANGLES, 0, classVertices(g.cls), g.instances);
     area(gl.ZERO);
@@ -1159,7 +1362,7 @@ export class MapGlRenderer {
   private coverDraw(cover: WebGLBuffer, p: Program): void {
     const gl = this.gl;
     gl.stencilMask(CLIP_BIT);
-    gl.stencilFunc(gl.EQUAL, CLIP_BIT, CLIP_BIT);
+    gl.stencilFunc(gl.EQUAL, CLIP_BIT, CLIP_BIT | this.regionTest);
     gl.stencilOp(gl.ZERO, gl.ZERO, gl.ZERO);
     gl.bindBuffer(gl.ARRAY_BUFFER, cover);
     gl.enableVertexAttribArray(p.attribs.a_pos);
@@ -1228,7 +1431,7 @@ export class MapGlRenderer {
     gl.uniform3f(p.uniforms.u_colour, rgb[0], rgb[1], rgb[2]);
     gl.stencilMask(PARITY_BIT);
     const want = clipped ? PARITY_BIT | CLIP_BIT : PARITY_BIT;
-    gl.stencilFunc(gl.EQUAL, want, want);
+    gl.stencilFunc(gl.EQUAL, want, want | this.regionTest);
     gl.stencilOp(gl.ZERO, gl.ZERO, gl.ZERO);
     gl.bindBuffer(gl.ARRAY_BUFFER, b.cover!);
     gl.enableVertexAttribArray(p.attribs.a_pos);
@@ -1246,7 +1449,8 @@ export class MapGlRenderer {
     common(p);
     gl.uniform3f(p.uniforms.u_colour, rgb[0], rgb[1], rgb[2]);
     gl.uniform1f(p.uniforms.u_halfWidth, s.halfWidth);
-    gl.stencilFunc(gl.ALWAYS, 0, 0xff);
+    if (this.regionTest) gl.stencilFunc(gl.EQUAL, 0, this.regionTest);
+    else gl.stencilFunc(gl.ALWAYS, 0, 0xff);
     gl.stencilOp(gl.KEEP, gl.KEEP, gl.KEEP);
     gl.bindBuffer(gl.ARRAY_BUFFER, s.buf);
     gl.enableVertexAttribArray(p.attribs.a_pos);
@@ -1262,7 +1466,8 @@ export class MapGlRenderer {
     common(p);
     gl.uniform3f(p.uniforms.u_colour, rgb[0], rgb[1], rgb[2]);
     gl.uniform1f(p.uniforms.u_halfWidth, s.halfWidth);
-    if (clipped) gl.stencilFunc(gl.EQUAL, CLIP_BIT, CLIP_BIT);
+    if (clipped) gl.stencilFunc(gl.EQUAL, CLIP_BIT, CLIP_BIT | this.regionTest);
+    else if (this.regionTest) gl.stencilFunc(gl.EQUAL, 0, this.regionTest);
     else gl.stencilFunc(gl.ALWAYS, 0, 0xff);
     gl.stencilOp(gl.KEEP, gl.KEEP, gl.KEEP);
     gl.bindBuffer(gl.ARRAY_BUFFER, s.buf);

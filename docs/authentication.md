@@ -146,18 +146,25 @@ UUIDs (`SYSTEM_GROUP_IDS` in `@oxygen/shared`):
 
 | Role | Capabilities |
 |-------|----------------|
-| Event admin | `event.view`, `event.manage`, `courses.view`, `courses.edit`, `race.operate`, `results.view` |
-| Course setter | `event.view`, `courses.view`, `courses.edit` |
+| Event admin | `event.view`, `event.manage`, `courses.view`, `courses.edit`, `courses.review`, `race.operate`, `results.view` |
+| Course setter | `event.view`, `courses.view`, `courses.edit`, `courses.review` |
 | Race crew | `event.view`, `race.operate`, `results.view` |
 | Member | `event.view`, `results.view` |
 
 Instance admins receive every capability on every event. `AUTH_MODE=off`
 bypasses checks (all capabilities).
 
+**`courses.review`** (the controller's capability, slice D decision 4):
+`control.check` (field check-off) and writing a control's `notes`. Every
+other course and control write needs `courses.edit`, so a controller is
+a custom role with `courses.view` + `courses.review` — it can check off
+controls and leave notes but not move them. The migration
+`20261031120000_course_structure` added it to the two seeded roles above.
+
 **Post-race rule:** if `event.date` is before today (local `YYYY-MM-DD`) **or**
 the event has at least one finished-status runner, every invited user also
 gains `event.view`, `results.view`, and `courses.view`. Mutating capabilities
-(`event.manage`, `courses.edit`, `race.operate`) are never added this way.
+(`event.manage`, `courses.edit`, `courses.review`, `race.operate`) are never added this way.
 Course/map data stays secret before the race unless the user is granted a
 role that includes `courses.view`.
 

@@ -28,6 +28,7 @@
     "document:from-ocd": "tsx scripts/ocd-to-document.ts",
     "geometry:compare": "tsx scripts/compare-course-geometry.ts",
     "map:backfill": "tsx src/cli/map-backfill.ts",
+    "course:backfill-structure": "tsx src/cli/course-backfill-structure.ts",
     "map:rematch": "tsx src/cli/map-rematch.ts"
   },
   "dependencies": {

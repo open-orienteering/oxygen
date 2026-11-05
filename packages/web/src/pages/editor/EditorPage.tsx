@@ -1,0 +1,1712 @@
+/**
+ * The new course editor (docs/course-editor.md), mounted on
+ * `/:nameId/course-editor` for `vector ∧ pinned ∧ map.editor.vector`
+ * (`CourseEditorRoute`). One GL canvas (`MapPanel` → `MapViewer` over
+ * `VectorMapLayer`) with the shell around it: top bar, tool rail,
+ * contextual action bar, inspector, status bar (§2).
+ *
+ * - Selection is the legacy model (`lib/editor/state.ts`); the viewer
+ *   hit-tests the course layer's symbolised shapes (`sharedHitTest`, §5).
+ * - Every gesture is one write and one undo entry (`UndoStack`, 50).
+ * - Sequence edits are `course.setStructure` with the course's token; the
+ *   first save makes start and finish explicit (course-layer.md §6.2).
+ *   Control writes are `control.update` with the control's token.
+ *   `EditorWrites` applies the G1 client rules (§3); a conflict the user
+ *   must see becomes the notice above the inspector.
+ * - Autosave: there is no save button; the status bar says saved /
+ *   saving / not saved / changed elsewhere.
+ *
+ * Course mode, Layout mode (`modes/LayoutMode.tsx`, docs/course-layout.md:
+ * the sheet as the view, course edits locked) and Field mode (§9; the phone default, with the bottom
+ * sheet and the compact chrome of §10). The tools (§6: the armed
+ * `S` / `K` / `M`, `A` areas, `T` text, `G` gaps, snapping, Shift-click /
+ * lasso multi-select) and course objects (§7) are D5's: each tool is a
+ * viewer binding (`tools/bindings.ts`) built here from the state.
+ */
+
+import { useCallback, useEffect, useMemo, useReducer, useRef, useState } from "react";
+import { useParams, useSearchParams } from "react-router-dom";
+import { useTranslation } from "react-i18next";
+import type { ControlDescription, course } from "@oxygen/shared";
+import { trpc } from "../../lib/trpc";
+import { MapPanel } from "../../components/MapPanel";
+import { ControlDescriptionEditor } from "../../components/ControlDescriptionEditor";
+import type { EditorDescriptionSuggestion, EditorToolBinding, MapViewerEditorProps, ToolPointer } from "../../components/MapViewer";
+import { useCoursePresence } from "../../hooks/useCoursePresence";
+import { clockTime, courseChangedElsewhere } from "../../lib/editor/presence";
+import { PresenceChips } from "./PresenceChips";
+import { useMediaQuery } from "../../hooks/useMediaQuery";
+import { useOnlineStatus } from "../../hooks/useOnlineStatus";
+import { useCapabilities } from "../../context/CapabilitiesContext";
+import { paperFrameOf } from "../../lib/vector-map";
+import { bandCentreOffsetPx, fieldRows, fixToPaper, initialModeFor, type Detent } from "../../lib/editor/field";
+import { BottomSheet } from "../../components/editor/BottomSheet";
+import { IOF_SYMBOLS } from "../../iof-symbols";
+import { iofSymbolName } from "../../iof-symbol-meta";
+import { ocadToIof } from "../../lib/control-description-options";
+import {
+  buildInventoryView, codesHaveSrr, courseMembership, courselessClassNames, matchCourselessClass,
+  nextFreeSrrCode, nextSeriesControlCode, sequenceLegMeters,
+} from "../../lib/course-editor";
+import { UndoStack } from "../../lib/undo-stack";
+import { useMapDocument } from "../../lib/map-document-cache";
+import { courseObjectsForView, type ProvisionalVisit } from "../../lib/course-layer-request";
+import { snapIndexForDocument } from "../../lib/editor/snap";
+import { deleteVertex, vertexRule, type Vertex } from "../../lib/editor/geometry-edit";
+import { legLengthLabel, legLengthM } from "../../lib/editor/leg-length";
+import { EditorConflict, EditorWrites, type EditorClient } from "../../lib/editor/write-client";
+import { areaTool, editorReducer, escapeHasWork, initialEditorState, type EditorTool } from "../../lib/editor/state";
+import { appendSite, insertSite, moveVisit, removeSite, removeVisit, setLegGaps, setNumberHidden, setRole, type KindOf } from "../../lib/editor/structure-edit";
+import { displaySequence, effectiveEnds, explicitStructure, insertIndexForLeg, kindOfSites, type SiteRow } from "../../lib/editor/sequence";
+import { courseActions } from "./ActionBar";
+import { TopBar } from "./TopBar";
+import { ToolRail, type AreaChoice } from "./ToolRail";
+import { areaChoiceOfKey } from "./tools/rail";
+import { afterPlaced, afterUndo, armPlacement, ghostInfo, switchTool, type PlacementState, type PlacementTool } from "./tools/placement";
+import { step as polygonStep, type AreaKind } from "./tools/polygon";
+import { TONER_MARGIN_MM, tonerSaverGeometry } from "./tools/toner-saver";
+import { mergeCircleGaps, mergeLegGaps, type AngularGap, type FractionGap } from "./tools/gaps";
+import { areaBinding, gapBinding, placeBinding, selectBinding, textBinding, type GapTarget, type Gesture } from "./tools/bindings";
+import { ObjectSection } from "./modes/ObjectSection";
+import { ChecksSection, Inspector, InspectorSection, InventorySection } from "./Inspector";
+import { StatusBar, type SaveState } from "./StatusBar";
+import { useCourseChecks } from "./useCourseChecks";
+import type { EditorCheck } from "../../lib/editor/checks";
+import { CourseSection, MultiSection, SelectionSection } from "./modes/CourseMode";
+import { AddMenu, FieldSection, FieldSelection, FieldTopBar, FixStatus, OfflineNotice, OverflowMenu, type AddChoice } from "./modes/FieldMode";
+import { useFieldFix } from "./useFieldFix";
+import { useLayoutMode } from "./modes/LayoutMode";
+import { useClassView } from "./modes/ClassView";
+
+type Pt = { x: number; y: number };
+type Structure = course.WireCourseStructure;
+type CourseObject = course.CourseObject;
+
+const NO_DRAFTS: CourseObject[] = [];
+/** New map text: size on paper (§7). */
+const TEXT_SIZE_MM = 4;
+
+/** Props a new object of each drawn kind starts with (§7). */
+function defaultProps(kind: AreaKind): CourseObject["props"] {
+  return kind === "filter_region" ? { mode: "hide", symbols: [] } : {};
+}
+
+/** A conflict the user sees (docs/course-editor.md §3). */
+type Notice =
+  | { kind: "refresh"; items: string[] | null }
+  | { kind: "moved"; controlId: number; mine: Pt; theirs: Pt | null; by?: { name: string; at: string } | null };
+
+export function EditorPage() {
+  const { t } = useTranslation("editor");
+  const { t: tc, i18n } = useTranslation("courses");
+  const isMobile = useMediaQuery("(max-width: 639px)");
+  const utils = trpc.useUtils();
+  const [searchParams] = useSearchParams();
+  const { nameId } = useParams<{ nameId: string }>();
+  // A phone opens in Field mode (§9, §10).
+  const [state, dispatch] = useReducer(editorReducer, isMobile, (phone: boolean) => ({ ...initialEditorState, mode: initialModeFor({ phone }) }));
+  const fieldMode = state.mode === "field";
+  const online = useOnlineStatus();
+  const caps = useCapabilities();
+  const canReview = caps.has("courses.review");
+  const canEdit = caps.has("courses.edit");
+  const geo = useFieldFix(fieldMode);
+
+  const [undoStack] = useState(() => new UndoStack(50));
+  const [, setHistVersion] = useState(0);
+  const bumpHistory = useCallback(() => setHistVersion((v) => v + 1), []);
+  const [moveEpoch, setMoveEpoch] = useState(0);
+  const [writes] = useState(() => new EditorWrites(utils.client as unknown as EditorClient));
+  const client = utils.client;
+
+  const [pendingOps, setPendingOps] = useState(0);
+  const [errorMsg, setErrorMsg] = useState<string | null>(null);
+  const [notice, setNotice] = useState<Notice | null>(null);
+  const [lastMovedId, setLastMovedId] = useState<number | null>(null);
+  const [radioSwapOffer, setRadioSwapOffer] = useState<{ controlId: number; from: string; to: number; series: string } | null>(null);
+  const exhaustedShown = useRef(false);
+  const [showExhausted, setShowExhausted] = useState(false);
+  const [allocSeriesId, setAllocSeriesId] = useState<string | null>(null);
+  const [descControlId, setDescControlId] = useState<number | null>(null);
+
+  // ─── Data ────────────────────────────────────────────────
+  const controlList = trpc.control.list.useQuery();
+  const seriesAllocation = trpc.controlSeries.allocation.useQuery(undefined, { staleTime: 60_000 });
+  const controlCoords = trpc.course.controlCoordinates.useQuery(undefined, { staleTime: Number.POSITIVE_INFINITY });
+  const courses = trpc.course.list.useQuery();
+  const classes = trpc.class.list.useQuery();
+  const mapInfo = trpc.course.mapFileInfo.useQuery(undefined, { staleTime: Number.POSITIVE_INFINITY });
+  const mapMetadata = trpc.course.mapMetadata.useQuery(undefined, { staleTime: Number.POSITIVE_INFINITY, enabled: !!mapInfo.data });
+  const mapScale = mapMetadata.data?.scale ?? null;
+  const detail = trpc.course.detail.useQuery(
+    { id: state.selectedCourseId ?? 0 },
+    { enabled: state.selectedCourseId !== null },
+  );
+
+  const objectList = trpc.courseObject.list.useQuery(undefined, { staleTime: Number.POSITIVE_INFINITY });
+  const documentHash = mapMetadata.data?.documentHash ?? null;
+  const { state: docState } = useMapDocument(documentHash, nameId ?? null);
+  const mapDoc = docState.status === "ready" ? docState.doc : null;
+  /** The layer's derivation and symbol sizes (the viewer reports them): ghost size, effective gaps. */
+  const [courseInfo, setCourseInfo] = useState<Parameters<NonNullable<MapViewerEditorProps["onCourseInfo"]>>[0]>(null);
+
+  useEffect(() => { if (objectList.data) writes.versions.seedAll("object", objectList.data); }, [objectList.data, writes]);
+  useEffect(() => { if (courses.data) writes.versions.seedAll("course", courses.data); }, [courses.data, writes]);
+  useEffect(() => { if (controlList.data) writes.versions.seedAll("control", controlList.data); }, [controlList.data, writes]);
+  useEffect(() => { if (detail.data) writes.versions.seed("course", detail.data.id, detail.data.version); }, [detail.data, writes]);
+
+  const sites: SiteRow[] = useMemo(
+    () => (controlCoords.data ?? []).map((c) => ({ id: c.id, code: c.code, status: c.status, mapX: c.mapX, mapY: c.mapY })),
+    [controlCoords.data],
+  );
+  const kindOf = useMemo(() => kindOfSites(sites), [sites]);
+  const coordsById = useMemo(() => new Map((controlCoords.data ?? []).map((c) => [c.id, c] as const)), [controlCoords.data]);
+  const controlRowsById = useMemo(() => new Map((controlList.data ?? []).map((c) => [c.id, c] as const)), [controlList.data]);
+  const selectedCourse = useMemo(
+    () => (state.selectedCourseId !== null ? courses.data?.find((c) => c.id === state.selectedCourseId) ?? null : null),
+    [state.selectedCourseId, courses.data],
+  );
+
+  // Presence (D11): who else has a course open. Heartbeat on the poll's cadence while a course is open.
+  const presence = useCoursePresence(state.selectedCourseId, state.mode);
+  // A course token this client did not write moved: re-render has happened by the poll's invalidation; say so (never silent).
+  const [external, setExternal] = useState<{ who: string | null; at: string | null } | null>(null);
+  const seenCourse = useRef<{ id: number; version: string } | null>(null);
+  const courseVersion = selectedCourse?.version;
+  const courseSeq = selectedCourse?.id ?? null;
+  useEffect(() => {
+    const prev = seenCourse.current;
+    seenCourse.current = courseSeq !== null && courseVersion !== undefined ? { id: courseSeq, version: courseVersion } : null;
+    if (!prev || courseSeq !== prev.id) { setExternal(null); return; }
+    if (!courseChangedElsewhere(prev.version, courseVersion, writes.ownCourseVersions)) return;
+    setExternal({ who: null, at: null });
+    void client.course.lastChange.query({ courseId: courseSeq }).then(
+      (by) => setExternal((x) => (x ? { who: by?.name || null, at: by?.at ?? null } : x)),
+      () => undefined,
+    );
+  }, [courseSeq, courseVersion, writes, client]);
+  /**
+   * The structure this client last wrote, until the course's detail catches up with it: placements
+   * follow each other faster than the refetch (§6.1), so each one builds on its predecessor's result.
+   */
+  const localStructure = useRef<{ courseId: number; structure: Structure; version: string } | null>(null);
+  const [, setLocalEpoch] = useState(0);
+  /** The selected course's structure as stored (or read from its columns), while its detail is current. */
+  const detailStructure: Structure | null = detail.data && detail.data.id === state.selectedCourseId ? (detail.data.structure as Structure) : null;
+  const local = localStructure.current;
+  const structure: Structure | null = local && local.courseId === state.selectedCourseId && detailStructure && BigInt(detail.data!.version) < BigInt(local.version)
+    ? local.structure
+    : detailStructure;
+  const rows = useMemo(() => (structure ? displaySequence(structure, sites) : []), [structure, sites]);
+  const sequenceIds = useMemo(() => rows.filter((r) => r.kind === "control").map((r) => r.id), [rows]);
+  const legMeters = useMemo(() => sequenceLegMeters(rows.map((r) => r.pt), mapScale), [rows, mapScale]);
+  const totalMeters = useMemo(() => legMeters.reduce<number>((sum, m) => sum + (m ?? 0), 0), [legMeters]);
+  const inventory = useMemo(
+    () => buildInventoryView(seriesAllocation.data ?? [], (controlList.data ?? []).map((c) => c.codes)),
+    [seriesAllocation.data, controlList.data],
+  );
+  const activeSeriesId = allocSeriesId !== null && inventory.some((s) => s.seriesId === allocSeriesId) ? allocSeriesId : null;
+  const membership = useMemo(() => courseMembership(courses.data ?? []), [courses.data]);
+
+  // ─── Field mode (§9): the fix on paper, distance / bearing, check-off ─
+  const rotationCorrection = mapMetadata.data?.rotationCorrection;
+  const paperFrame = useMemo(() => (mapDoc ? paperFrameOf(mapDoc.header, rotationCorrection) : null), [mapDoc, rotationCorrection]);
+  const fix = fieldMode ? geo.position : null;
+  const paperFix = useMemo(() => (fix ? fixToPaper(paperFrame, fix) : null), [fix, paperFrame]);
+  const checkedIds = useMemo(() => new Set((controlList.data ?? []).filter((c) => c.checkedAt).map((c) => c.id)), [controlList.data]);
+  const fieldList = useMemo(() => fieldRows(rows, paperFix, mapScale, checkedIds), [rows, paperFix, mapScale, checkedIds]);
+
+  // ─── Write plumbing ──────────────────────────────────────
+  const invalidate = useCallback(() => {
+    void utils.course.controlCoordinates.invalidate();
+    void utils.control.list.invalidate();
+    void utils.course.courseGeometries.invalidate();
+    void utils.course.list.invalidate();
+    void utils.course.detail.invalidate();
+    // Course objects are cached until reload in MapPanel: every write invalidates them (course-layer.md §8.3).
+    void utils.courseObject.list.invalidate();
+    void utils.course.checks.invalidate();
+  }, [utils]);
+
+  /** One write (or an undo / redo): pending count, the conflict notice or the error, then a reload. */
+  const run = useCallback(async <T,>(op: () => Promise<T>, move?: { controlId: number; mine: Pt }): Promise<T | undefined> => {
+    setPendingOps((n) => n + 1);
+    setErrorMsg(null);
+    try {
+      const out = await op();
+      setNotice(null);
+      return out;
+    } catch (e) {
+      if (e instanceof EditorConflict) {
+        if (e.decision.kind === "moved" && move) {
+          const { controlId, mine } = move;
+          setNotice({ kind: "moved", controlId, mine, theirs: e.decision.theirs });
+          // "Moved by X at T" (D11): the actor and clock of the control's last write.
+          void client.control.lastChange.query({ id: controlId }).then(
+            (by) => setNotice((n) => (n?.kind === "moved" && n.controlId === controlId ? { ...n, by } : n)),
+            () => undefined,
+          );
+        }
+        else setNotice({ kind: "refresh", items: e.decision.kind === "refresh" ? e.decision.differing : null });
+      } else {
+        setErrorMsg(e instanceof Error ? e.message : String(e));
+      }
+      return undefined;
+    } finally {
+      setPendingOps((n) => n - 1);
+      invalidate();
+    }
+  }, [invalidate, client]);
+
+  /** Push an undo entry for a write that succeeded. */
+  const record = useCallback((undo: () => Promise<unknown>, redo: () => Promise<unknown>) => {
+    const entry = { undo, redo };
+    undoStack.push(entry);
+    bumpHistory();
+    return entry;
+  }, [undoStack, bumpHistory]);
+
+  const layoutMode = useLayoutMode({
+    enabled: state.mode === "layout",
+    nameId: nameId ?? "",
+    course: selectedCourse ? { id: selectedCourse.id, name: selectedCourse.name } : null,
+    view: state.view,
+    classSeq: state.classSeq,
+    run,
+    record,
+  });
+  // The selected course's classes: Class view's picker (docs/course-layout.md §6).
+  const courseClasses = trpc.layout.classOverrides.useQuery(
+    { courseId: selectedCourse?.id ?? 1 },
+    { enabled: !!selectedCourse },
+  );
+
+  // Sites this client created since the last refetch: their kind, position and code, for the writes and the
+  // ghost that follow before `controlCoordinates` / `control.list` have them (§6.1).
+  const created = useRef(new Map<number, { kind: "control" | "start" | "finish"; pt: Pt; code: number | null }>());
+  useEffect(() => {
+    if (pendingOps === 0) created.current.clear();
+  }, [controlCoords.data, controlList.data]); // eslint-disable-line react-hooks/exhaustive-deps
+  const kindOfLatest: KindOf = useCallback((id: number) => created.current.get(id)?.kind ?? kindOf(id), [kindOf]);
+
+  // The latest values for writes queued behind each other (a chain of placements runs one at a time).
+  const latest = useRef({ detailStructure, detailVersion: detail.data?.version ?? null, selectedCourse, sites, kindOf: kindOfLatest });
+  latest.current = { detailStructure, detailVersion: detail.data?.version ?? null, selectedCourse, sites, kindOf: kindOfLatest };
+
+  /**
+   * The structure as of now, read from refs: the one this client wrote last unless the course's detail
+   * already holds a newer one. A queued placement can run before React re-renders after its predecessor.
+   */
+  const currentStructure = useCallback((): Structure | null => {
+    const { detailStructure: d, detailVersion, selectedCourse: course } = latest.current;
+    const mine = localStructure.current;
+    if (mine && course && mine.courseId === course.id && d && detailVersion !== null && BigInt(detailVersion) < BigInt(mine.version)) return mine.structure;
+    return d;
+  }, []);
+
+  /** The structure edits start from: the current one with its start and finish explicit. */
+  const baseStructure = useCallback((): Structure | null => {
+    const s = currentStructure();
+    return s ? explicitStructure(s, latest.current.sites) : null;
+  }, [currentStructure]);
+
+  /** `setStructure`, remembering the result as the local structure (every structure write and its undo / redo). */
+  const writeStructure = useCallback(async (courseId: number, next: Structure) => {
+    const res = await writes.setStructure(courseId, next);
+    localStructure.current = { courseId, structure: next, version: res.version };
+    setLocalEpoch((v) => v + 1);
+    return res;
+  }, [writes]);
+
+  /** One sequence edit: `setStructure(next)`, undo writes back the structure it replaced. */
+  const applyStructure = useCallback(async (edit: (s: Structure) => Structure): Promise<boolean> => {
+    const course = latest.current.selectedCourse;
+    const prev = currentStructure();
+    const base = baseStructure();
+    if (!course || !prev || !base) return false;
+    const next = edit(base);
+    const redo = () => writeStructure(course.id, next);
+    if ((await run(redo)) === undefined) return false;
+    record(() => writeStructure(course.id, prev), redo);
+    return true;
+  }, [currentStructure, baseStructure, writeStructure, run, record]);
+
+  /**
+   * Create a site at `pt` — a control (code from the club allocation; SRR codes get radio) or a code-less
+   * start / finish — and, with a course, write `edit(base, id)` into its structure: one undo entry (§4, §6.1).
+   */
+  const createSite = useCallback(async (pt: Pt, kind: "control" | "start" | "finish", edit: ((s: Structure, id: number) => Structure) | null): Promise<number | null> => {
+    let code: number | null = null;
+    let srr = false;
+    if (kind === "control") {
+      if (!controlList.data) return null;
+      const allocation = seriesAllocation.data ?? [];
+      const used = [...controlList.data.map((c) => c.codes), ...[...created.current.values()].flatMap((c) => (c.code !== null ? [String(c.code)] : []))];
+      const next = nextSeriesControlCode(allocation, used, activeSeriesId);
+      if (!next.entry && allocation.length > 0 && !exhaustedShown.current) {
+        exhaustedShown.current = true;
+        setShowExhausted(true);
+      }
+      code = next.code;
+      srr = next.entry?.type === "srr";
+    }
+    const made = await run(() => (kind === "control"
+      ? client.control.create.mutate({ codes: String(code), status: 0, xpos: pt.x, ypos: pt.y, autoDescribe: true })
+      : client.control.create.mutate({ status: kind === "start" ? 4 : 5, xpos: pt.x, ypos: pt.y })));
+    if (!made) return null;
+    const id = made.id;
+    created.current.set(id, { kind, pt, code });
+    if (srr) await run(() => client.control.upsertConfig.mutate({ controlIds: [id], radioType: "internal_radio" }));
+    const course = latest.current.selectedCourse;
+    const prev = currentStructure();
+    const base = baseStructure();
+    if (edit && course && base && prev) {
+      const next = edit(base, id);
+      if ((await run(() => writeStructure(course.id, next))) !== undefined) {
+        record(
+          async () => { await writeStructure(course.id, prev); await writes.deleteControl(id); },
+          async () => { await client.control.restore.mutate({ id }); await writeStructure(course.id, next); },
+        );
+        return id;
+      }
+    }
+    record(() => writes.deleteControl(id), () => client.control.restore.mutate({ id }));
+    return id;
+  }, [controlList.data, seriesAllocation.data, activeSeriesId, run, client, currentStructure, baseStructure, writeStructure, writes, record]);
+
+  /** Create a control at `pt`; with `insertAt` also into the selected course at that position (one undo entry). */
+  const createControl = useCallback(async (pt: Pt, insertAt: number | null) => {
+    const id = await createSite(pt, "control", insertAt !== null ? (s, newId) => insertSite(s, insertAt, newId, kindOfLatest) : null);
+    if (id !== null) dispatch({ type: "placed", id });
+  }, [createSite, kindOfLatest]);
+
+  /** A code-less start / finish (named "Start N" / "Mål N" by the server). */
+  const createRoleControl = useCallback(async (pt: Pt, role: "start" | "finish") => {
+    const id = await createSite(pt, role, null);
+    if (id !== null) dispatch({ type: "placed", id });
+  }, [createSite]);
+
+  // ─── Gestures (stable: they flow through MapPanel's memo) ─
+  const handleMapClick = useCallback((pt: Pt) => {
+    setRadioSwapOffer(null);
+    dispatch({ type: "map-click", x: pt.x, y: pt.y });
+  }, []);
+
+  const handleSelect = useCallback((idStr: string | null) => {
+    setRadioSwapOffer(null);
+    const id = idStr === null ? null : parseInt(idStr, 10);
+    if (id === null || !Number.isNaN(id)) dispatch({ type: "select", id });
+  }, []);
+
+  const handleMoveEnd = useCallback((idStr: string, pt: Pt) => {
+    const id = parseInt(idStr, 10);
+    if (Number.isNaN(id)) return;
+    const prev = coordsById.get(id);
+    dispatch({ type: "select", id });
+    setLastMovedId(id);
+    void (async () => {
+      const from = prev ? { x: prev.mapX, y: prev.mapY } : undefined;
+      const redo = () => writes.updateControl({ id, xpos: pt.x, ypos: pt.y, autoDescribe: true }, from);
+      if ((await run(redo, { controlId: id, mine: pt })) === undefined || !prev) return;
+      record(() => writes.updateControl({ id, xpos: prev.mapX, ypos: prev.mapY, description: prev.description ?? null }), redo);
+    })();
+  }, [coordsById, writes, run, record]);
+
+  const handleLabelMoveEnd = useCallback((idStr: string, offset: { dx: number; dy: number }) => {
+    const id = parseInt(idStr, 10);
+    const course = selectedCourse;
+    if (Number.isNaN(id) || !course) return;
+    const prev = course.labelOffsets?.[idStr] ?? null;
+    dispatch({ type: "select", id });
+    void (async () => {
+      const redo = () => writes.setLabelOffset(course.id, id, offset);
+      if ((await run(redo)) === undefined) return;
+      record(() => writes.setLabelOffset(course.id, id, prev), redo);
+    })();
+  }, [selectedCourse, writes, run, record]);
+
+  const handleLegClick = useCallback((courseName: string, legIndex: number, pt: Pt) => {
+    if (!selectedCourse || courseName !== selectedCourse.name) return;
+    setRadioSwapOffer(null);
+    dispatch({ type: "leg-click", x: pt.x, y: pt.y, insertAt: insertIndexForLeg(rows, legIndex) });
+  }, [selectedCourse, rows]);
+
+  const handleDismiss = useCallback(() => {
+    setRadioSwapOffer(null);
+    dispatch({ type: "escape" });
+  }, []);
+
+  // ─── Selection actions ───────────────────────────────────
+  const resetLabel = useCallback(() => {
+    const course = selectedCourse, id = state.selectedControlId;
+    if (!course || id === null) return;
+    const prev = course.labelOffsets?.[String(id)] ?? null;
+    if (!prev) return;
+    void (async () => {
+      const redo = () => writes.setLabelOffset(course.id, id, null);
+      if ((await run(redo)) === undefined) return;
+      record(() => writes.setLabelOffset(course.id, id, prev), redo);
+    })();
+  }, [selectedCourse, state.selectedControlId, writes, run, record]);
+
+  /** Delete controls (one, or a multi-selection's): confirm, the server cascades; one undo entry restores all. */
+  const deleteControls = useCallback((ids: number[]) => {
+    if (ids.length === 0 || pendingOps > 0) return;
+    const message = ids.length === 1
+      ? tc("editor.deleteConfirm", { code: coordsById.get(ids[0])?.code ?? String(ids[0]) })
+      : t("bulkDeleteConfirm", { count: ids.length });
+    if (!window.confirm(message)) return;
+    // The server cascades the delete out of every structure; undo puts the structures back.
+    const affected = (courses.data ?? []).filter((c) => ids.some((sel) => c.controls.split(";").filter(Boolean).map(Number).includes(sel)
+      || c.startControlId === sel || c.finishControlId === sel));
+    void (async () => {
+      const before = await Promise.all(affected.map((c) => utils.course.detail.fetch({ id: c.id }).then((d) => ({ id: c.id, structure: d.structure as Structure }))));
+      const redo = async () => { for (const id of ids) await writes.deleteControl(id); return true; };
+      if ((await run(redo)) === undefined) return;
+      record(async () => {
+        for (const id of ids) await client.control.restore.mutate({ id });
+        for (const c of before) await writeStructure(c.id, c.structure);
+      }, redo);
+      for (const id of ids) dispatch({ type: "deleted", id });
+      dispatch({ type: "set-multi", ids: [] });
+    })();
+  }, [pendingOps, coordsById, tc, t, courses.data, utils, writes, run, record, client, writeStructure]);
+  const handleDelete = useCallback(() => {
+    if (state.selectedControlId !== null) deleteControls([state.selectedControlId]);
+  }, [state.selectedControlId, deleteControls]);
+
+  const setRadioType = useCallback(async (controlId: number, radioType: "normal" | "internal_radio") => {
+    await run(() => client.control.upsertConfig.mutate({ controlIds: [controlId], radioType }));
+  }, [client, run]);
+
+  const handleRadio = useCallback(() => {
+    const id = state.selectedControlId;
+    const control = id !== null ? controlRowsById.get(id) : undefined;
+    if (!control) return;
+    if ((control.config?.radioType ?? "normal") !== "normal") return void setRadioType(control.id, "normal");
+    const allocation = seriesAllocation.data ?? [];
+    if (allocation.length === 0 || codesHaveSrr(control.codes, allocation)) return void setRadioType(control.id, "internal_radio");
+    const replacement = nextFreeSrrCode(allocation, (controlList.data ?? []).map((c) => c.codes));
+    if (replacement) {
+      setRadioSwapOffer({ controlId: control.id, from: control.codes, to: replacement.code, series: replacement.seriesName });
+      return;
+    }
+    void setRadioType(control.id, "internal_radio");
+  }, [state.selectedControlId, controlRowsById, seriesAllocation.data, controlList.data, setRadioType]);
+
+  const confirmSwap = useCallback(() => {
+    const offer = radioSwapOffer;
+    if (!offer) return;
+    setRadioSwapOffer(null);
+    void (async () => {
+      if ((await run(() => writes.updateControl({ id: offer.controlId, codes: String(offer.to) }))) === undefined) return;
+      await setRadioType(offer.to, "internal_radio");
+      dispatch({ type: "select", id: offer.to });
+    })();
+  }, [radioSwapOffer, run, writes, setRadioType]);
+
+  const declineSwap = useCallback(() => {
+    const offer = radioSwapOffer;
+    if (!offer) return;
+    setRadioSwapOffer(null);
+    void setRadioType(offer.controlId, "internal_radio");
+  }, [radioSwapOffer, setRadioType]);
+
+  // ─── Descriptions ────────────────────────────────────────
+  const descControl = descControlId !== null ? coordsById.get(descControlId) ?? null : null;
+  const saveDescription = useCallback((next: ControlDescription | null) => {
+    const id = descControlId;
+    setDescControlId(null);
+    if (id === null) return;
+    setLastMovedId((v) => (v === id ? null : v));
+    const prev = coordsById.get(id)?.description ?? null;
+    void (async () => {
+      const redo = () => writes.updateControl({ id, description: next });
+      if ((await run(redo)) === undefined) return;
+      record(() => writes.updateControl({ id, description: prev }), redo);
+    })();
+  }, [descControlId, coordsById, writes, run, record]);
+  const closeDescription = useCallback(() => setDescControlId(null), []);
+
+  useEffect(() => {
+    if (lastMovedId !== null && state.selectedControlId !== lastMovedId) setLastMovedId(null);
+  }, [state.selectedControlId, lastMovedId]);
+  const selectedCoord = state.selectedControlId !== null ? coordsById.get(state.selectedControlId) ?? null : null;
+  const suggestFor = selectedCoord && selectedCoord.id === lastMovedId && !!selectedCoord.description && !state.phantom && descControlId === null
+    ? selectedCoord : null;
+  const suggestQuery = trpc.control.suggestDescription.useQuery(
+    { x: suggestFor?.mapX ?? 0, y: suggestFor?.mapY ?? 0 },
+    { enabled: !!suggestFor && !!mapInfo.data, staleTime: Number.POSITIVE_INFINITY },
+  );
+  const suggestions = useMemo<EditorDescriptionSuggestion[]>(() => {
+    const id = suggestFor?.id;
+    const top = suggestQuery.data?.candidates?.[0];
+    if (id == null || !top) return [];
+    const next: ControlDescription = { d: top.d, ...(top.c ? { c: top.c } : {}), ...(top.e ? { e: top.e } : {}), ...(top.f ? { f: top.f } : {}), ...(top.g ? { g: top.g } : {}) };
+    const cur = suggestFor?.description;
+    if (cur && cur.d === next.d && cur.g === next.g && cur.c === next.c && cur.f === next.f && cur.e === next.e) return [];
+    const iofD = ocadToIof("d", top.d);
+    if (!iofD) return [];
+    const parts = (["c", "d", "e", "f", "g"] as const).flatMap((col) => {
+      const v = top[col];
+      const iof = v ? ocadToIof(col, v) : null;
+      return iof ? [iofSymbolName(iof, i18n.language)] : [];
+    });
+    const iofG = top.g ? ocadToIof("g", top.g) : null;
+    const prev = suggestFor?.description ?? null;
+    return [{
+      id: String(top.isom),
+      label: tc("editor.suggestedSingle", { label: parts.join(" · ") }),
+      symbolSvg: IOF_SYMBOLS[iofD] ?? null,
+      sideSvg: iofG ? IOF_SYMBOLS[iofG] ?? null : null,
+      onApply: () => {
+        setLastMovedId(null);
+        void (async () => {
+          const redo = () => writes.updateControl({ id, description: next });
+          if ((await run(redo)) === undefined) return;
+          record(() => writes.updateControl({ id, description: prev }), redo);
+        })();
+      },
+    }];
+  }, [suggestFor, suggestQuery.data, i18n.language, tc, writes, run, record]);
+
+  // ─── Site fields (§6.6): kind, notes, hidden number ─────
+  const updateField = useCallback((id: number, patch: { kind?: "control" | "start" | "finish"; notes?: string }, prev: typeof patch) => {
+    void (async () => {
+      const redo = () => writes.updateControl({ id, ...patch });
+      if ((await run(redo)) === undefined) return;
+      record(() => writes.updateControl({ id, ...prev }), redo);
+    })();
+  }, [writes, run, record]);
+
+  /** Check-off (§9; `courses.review`): one write, one undo entry (undo is the opposite check). */
+  const checkControl = useCallback((id: number, checked: boolean) => {
+    void (async () => {
+      const redo = () => writes.checkControl(id, checked);
+      if ((await run(redo)) === undefined) return;
+      record(() => writes.checkControl(id, !checked), redo);
+    })();
+  }, [writes, run, record]);
+
+  /**
+   * The nudge pad (§9): each press is one move with undo, queued behind the previous so presses faster than
+   * the refetch build on each other; `nudged` holds the newest position until `controlCoordinates` has it.
+   */
+  const [nudged, setNudged] = useState<{ id: number; pt: Pt } | null>(null);
+  const nudgeQueue = useRef<Promise<unknown>>(Promise.resolve());
+  const nudgeTo = useCallback((id: number, from: Pt, to: Pt) => {
+    setNudged({ id, pt: to });
+    setLastMovedId(id);
+    const description = coordsById.get(id)?.description ?? null;
+    nudgeQueue.current = nudgeQueue.current.then(async () => {
+      const redo = () => writes.updateControl({ id, xpos: to.x, ypos: to.y, autoDescribe: true }, from);
+      if ((await run(redo, { controlId: id, mine: to })) === undefined) { setNudged(null); return; }
+      record(() => writes.updateControl({ id, xpos: from.x, ypos: from.y, description }), redo);
+    }).catch(() => {});
+  }, [writes, run, record, coordsById]);
+  useEffect(() => {
+    if (!nudged) return;
+    const c = coordsById.get(nudged.id);
+    if (state.selectedControlId !== nudged.id || (c && Math.abs(c.mapX - nudged.pt.x) < 1e-6 && Math.abs(c.mapY - nudged.pt.y) < 1e-6)) setNudged(null);
+  }, [nudged, coordsById, state.selectedControlId]);
+
+  // ─── Course objects (§7) ─────────────────────────────────
+  const objects = useMemo(() => objectList.data ?? [], [objectList.data]);
+  const highlighted = useMemo(() => new Set(state.view !== "all" && selectedCourse ? [selectedCourse.name] : []), [state.view, selectedCourse]);
+  const objectsInView = useMemo(() => courseObjectsForView(objects, highlighted, courses.data ?? []), [objects, highlighted, courses.data]);
+  const selectedObject = state.selectedObjectId !== null ? objects.find((o) => o.id === state.selectedObjectId) ?? null : null;
+  /** Geometry being dragged (vertex or body) or drawn, drawn instead of the stored one until the list catches up. */
+  const [drafts, setDrafts] = useState<Map<number, CourseObject["geometry"]>>(new Map());
+  useEffect(() => { setDrafts((d) => (d.size ? new Map() : d)); }, [objectList.data]);
+  /** The selected object's focused vertex (a click on its handle): `Delete` removes it (§7 "Editing geometry"). */
+  // Keyed by the object it belongs to, so a selection change drops it.
+  const [focus, setFocus] = useState<{ objectId: number; index: number } | null>(null);
+  const focusedVertex = focus && focus.objectId === state.selectedObjectId ? focus.index : null;
+  const selectedObjectId = state.selectedObjectId;
+  const setFocusedVertex = (index: number | null) =>
+    setFocus(index === null || selectedObjectId === null ? null : { objectId: selectedObjectId, index });
+  /** Per object, the geometry shown when the gesture in progress drew its first draft (`onObjectDraft`). */
+  const gestureBefore = useRef(new Map<number, CourseObject["geometry"]>());
+  const setDraft = useCallback((id: number, geometry: CourseObject["geometry"] | null) => {
+    setDrafts((prev) => {
+      const next = new Map(prev);
+      if (geometry) next.set(id, geometry); else next.delete(id);
+      return next;
+    });
+  }, []);
+
+  /** Create an object: one undo entry (undo deletes it; redo creates it again, under a new id). */
+  const createObject = useCallback(async (body: Pick<CourseObject, "kind" | "geometry" | "props" | "scope">): Promise<number | null> => {
+    const made = await run(() => writes.createObject(body));
+    if (!made) return null;
+    const box = { id: made.id };
+    record(
+      () => writes.deleteObject(box.id),
+      async () => { box.id = (await writes.createObject(body)).id; },
+    );
+    return made.id;
+  }, [run, writes, record]);
+
+  const updateObject = useCallback((o: CourseObject, patch: { geometry?: CourseObject["geometry"]; props?: CourseObject["props"]; scope?: CourseObject["scope"] }) => {
+    const prev = { geometry: o.geometry, props: o.props, scope: o.scope };
+    const before = Object.fromEntries(Object.keys(patch).map((k) => [k, prev[k as keyof typeof prev]]));
+    void (async () => {
+      const redo = () => writes.updateObject({ id: o.id, ...patch });
+      if ((await run(redo)) === undefined) return;
+      record(() => writes.updateObject({ id: o.id, ...before }), redo);
+    })();
+  }, [writes, run, record]);
+
+  const deleteObject = useCallback((o: CourseObject) => {
+    const body = { kind: o.kind, geometry: o.geometry, props: o.props, scope: o.scope } as Pick<CourseObject, "kind" | "geometry" | "props" | "scope">;
+    const box = { id: o.id };
+    void (async () => {
+      const redo = async () => { await writes.deleteObject(box.id); return true; };
+      if ((await run(redo)) === undefined) return;
+      record(async () => { box.id = (await writes.createObject(body)).id; }, redo);
+      dispatch({ type: "select-object", id: null });
+    })();
+  }, [writes, run, record]);
+
+  // ─── Snapping (§6.2) ──────────────────────────────────────
+  const snapIndex = useMemo(
+    () => (state.snapping && mapDoc ? snapIndexForDocument(mapDoc.hash, mapDoc.bytes) : null),
+    [state.snapping, mapDoc],
+  );
+  const snap = useCallback((pt: Pt): Pt => snapIndex?.nearest(pt) ?? pt, [snapIndex]);
+
+  // ─── Tools (§6) ──────────────────────────────────────────
+  const gesture = useRef<Gesture>(null);
+  const [, setRedraw] = useState(0);
+  const redraw = useCallback(() => setRedraw((v) => v + 1), []);
+  /** The armed chain, kept in a ref as well: queued placements read the newest. */
+  const chainRef = useRef<PlacementState | null>(null);
+  const placeQueue = useRef<Promise<unknown>>(Promise.resolve());
+  /** The undo entries of placements (`Ctrl+Z` steps the chain back only for one of them). */
+  const placementEntries = useRef(new WeakSet<object>());
+  const [hover, setHover] = useState<{ pt: Pt; target: ToolPointer["target"] } | null>(null);
+  const onHover = useCallback((p: ToolPointer | null) => {
+    setHover((prev) => {
+      if (!p) return prev === null ? prev : null;
+      const pt = snap(p.pt);
+      const same = prev && Math.abs(prev.pt.x - pt.x) < 1e-6 && Math.abs(prev.pt.y - pt.y) < 1e-6 && prev.target?.kind === p.target?.kind
+        && (prev.target as { id?: unknown } | null)?.id === (p.target as { id?: unknown } | null)?.id;
+      return same ? prev : { pt, target: p.target };
+    });
+  }, [snap]);
+
+  const armContext = useCallback(() => ({
+    rows, course: !!(selectedCourse && structure), selectedControlId: state.selectedControlId, legInsertAt: state.phantom?.insertAt ?? null,
+  }), [rows, selectedCourse, structure, state.selectedControlId, state.phantom]);
+
+  const setTool = useCallback((tool: EditorTool) => {
+    gesture.current = null;
+    chainRef.current = tool.kind === "place" ? tool.chain : null;
+    setHover(null);
+    dispatch({ type: "tool", tool });
+  }, []);
+
+  const armPlace = useCallback((tool: PlacementTool) => {
+    const current = chainRef.current;
+    const chain = current ? switchTool(current, tool, armContext()) : armPlacement(tool, armContext());
+    setTool({ kind: "place", chain });
+  }, [armContext, setTool]);
+
+  const exitTool = useCallback(() => setTool({ kind: "select" }), [setTool]);
+
+  const setChain = useCallback((chain: PlacementState) => {
+    chainRef.current = chain;
+    dispatch({ type: "chain", chain });
+  }, []);
+
+  /** One click of an armed tool (08 §5.3): a new site, or an existing one reused; one write chain, one undo entry. */
+  const place = useCallback((p: ToolPointer) => {
+    const pt = snap(p.pt);
+    const targetId = p.target?.kind === "site" ? Number(p.target.id) : null;
+    placeQueue.current = placeQueue.current.then(async () => {
+      const chain = chainRef.current;
+      if (!chain) return;
+      const kindOfL = latest.current.kindOf;
+      const targetKind = targetId !== null ? kindOfL(targetId) : null;
+      let id: number | null;
+      if (chain.tool === "control") {
+        if (targetId !== null) {
+          if (targetKind !== "control") return;
+          // Reuse the site: into the course at the insertion point, no new site.
+          if (chain.insertAt === null) { dispatch({ type: "select", id: targetId }); return; }
+          const at = chain.insertAt;
+          if (!(await applyStructure((s) => insertSite(s, at, targetId, kindOfL)))) return;
+          id = targetId;
+        } else {
+          const at = chain.insertAt;
+          id = await createSite(pt, "control", at !== null ? (s, newId) => insertSite(s, at, newId, kindOfL) : null);
+        }
+      } else {
+        const role = chain.tool;
+        const edit = chain.insertAt !== null ? (s: Structure, siteId: number) => setRole(s, role, siteId, kindOfL) : null;
+        if (targetId !== null) {
+          if (targetKind !== role) return;
+          if (edit && !(await applyStructure((s) => edit(s, targetId)))) return;
+          id = targetId;
+        } else {
+          id = await createSite(pt, role, edit);
+        }
+      }
+      if (id === null || chainRef.current !== chain) return;
+      if (undoStack.top) placementEntries.current.add(undoStack.top);
+      dispatch({ type: "placed", id });
+      const next = afterPlaced(chain, id);
+      if (chain.tool === "finish") exitTool(); // a finish ends the chain
+      else setChain(next);
+    }).catch(() => {});
+  }, [snap, applyStructure, createSite, setChain, exitTool, undoStack]);
+
+  /** `A` → a kind: the polygon flow, or the toner saver's hull from the course straight away. */
+  const startArea = useCallback((kind: AreaChoice) => {
+    if (kind !== "toner_saver") return setTool(areaTool(kind));
+    const pts = rows.flatMap((r) => (r.pt ? [r.pt] : []));
+    const hull = tonerSaverGeometry(pts, TONER_MARGIN_MM);
+    if (!hull || !selectedCourse) return;
+    void (async () => {
+      const id = await createObject({ kind: "toner_saver", geometry: hull, props: { marginMm: TONER_MARGIN_MM }, scope: { courses: [selectedCourse.id], classes: [] } });
+      setTool({ kind: "select" });
+      if (id !== null) dispatch({ type: "select-object", id });
+    })();
+  }, [rows, selectedCourse, createObject, setTool]);
+
+  const finishArea = useCallback((kind: AreaKind, vertices: Vertex[]) => {
+    setTool({ kind: "select" });
+    void (async () => {
+      const id = await createObject({ kind, geometry: vertices, props: defaultProps(kind), scope: { all: true } } as Pick<CourseObject, "kind" | "geometry" | "props" | "scope">);
+      if (id !== null) dispatch({ type: "select-object", id });
+    })();
+  }, [createObject, setTool]);
+
+  const placeText = useCallback((pt: Pt) => {
+    setTool({ kind: "select" });
+    void (async () => {
+      const id = await createObject({ kind: "text", geometry: [pt], props: { text: t("newText"), fontSizeMm: TEXT_SIZE_MM }, scope: { all: true } });
+      if (id !== null) dispatch({ type: "select-object", id });
+    })();
+  }, [createObject, setTool, t]);
+
+  /** `G`'s target: the selected control's circle, or the clicked leg (§6.3). */
+  const gapTarget = useMemo((): GapTarget | null => {
+    const radiusMm = courseInfo?.metrics?.circleRadiusMm ?? 2.5;
+    const sel = state.selectedControlId;
+    if (sel !== null) {
+      const c = coordsById.get(sel);
+      if (!c || kindOf(sel) !== "control" || (c.mapX === 0 && c.mapY === 0)) return null;
+      const stored = controlRowsById.get(sel)?.circleGaps ?? [];
+      const effective = courseInfo?.derivation?.sites.find((d) => d.id === String(sel))?.cuts ?? [];
+      return { kind: "circle", siteId: sel, centre: { x: c.mapX, y: c.mapY }, radiusMm, gaps: stored.length ? stored : effective, stored: stored.length > 0 };
+    }
+    const insertAt = state.tool.kind === "gap" ? state.tool.legInsertAt : state.phantom?.insertAt;
+    if (insertAt == null || !structure) return null;
+    const itemIndex = rows.findIndex((r) => (r.kind === "control" ? r.seqIndex === insertAt : r.kind === "finish" && insertAt >= sequenceIds.length));
+    const to = rows[itemIndex], from = rows.slice(0, itemIndex).reverse().find((r) => r.pt);
+    if (!to?.pt || !from?.pt) return null;
+    const explicit = explicitStructure(structure, sites);
+    const item = explicit.items[itemIndex];
+    const stored = item && item.kind !== "variation" ? item.leg?.gaps ?? [] : [];
+    const effective = courseInfo?.derivation?.courses[0]?.legs.find((l) => l.from === String(from.id) && l.to === String(to.id))?.gaps ?? [];
+    return { kind: "leg", itemIndex, a: from.pt, b: to.pt, gaps: stored.length ? stored : effective, stored: stored.length > 0 };
+  }, [courseInfo, state.selectedControlId, state.phantom, state.tool, coordsById, kindOf, controlRowsById, structure, rows, sequenceIds, sites]);
+
+  const writeGaps = useCallback((target: GapTarget, gaps: AngularGap[] | FractionGap[]) => {
+    if (target.kind === "circle") {
+      const id = target.siteId;
+      const prev = controlRowsById.get(id)?.circleGaps ?? [];
+      void (async () => {
+        const redo = () => writes.updateControl({ id, circleGaps: gaps } as Parameters<typeof writes.updateControl>[0]);
+        if ((await run(redo)) === undefined) return;
+        record(() => writes.updateControl({ id, circleGaps: prev } as Parameters<typeof writes.updateControl>[0]), redo);
+      })();
+    } else {
+      void applyStructure((s) => setLegGaps(s, target.itemIndex, gaps as FractionGap[]));
+    }
+  }, [controlRowsById, writes, run, record, applyStructure]);
+
+  // The ghost's description: the top autodetect candidate under the cursor (08 §5.3), asked once the pointer rests.
+  const [ghostAsk, setGhostAsk] = useState<Pt | null>(null);
+  const placing = state.tool.kind === "place" ? state.tool.chain : null;
+  useEffect(() => {
+    if (!placing || placing.tool !== "control" || !hover || hover.target) { setGhostAsk(null); return; }
+    const h = setTimeout(() => setGhostAsk({ x: Math.round(hover.pt.x * 10) / 10, y: Math.round(hover.pt.y * 10) / 10 }), 150);
+    return () => clearTimeout(h);
+  }, [placing, hover]);
+  const ghostSuggest = trpc.control.suggestDescription.useQuery(
+    { x: ghostAsk?.x ?? 0, y: ghostAsk?.y ?? 0 },
+    { enabled: !!ghostAsk && !!mapInfo.data, staleTime: Number.POSITIVE_INFINITY },
+  );
+  const ghostDescription = useMemo(() => {
+    const top = ghostAsk ? ghostSuggest.data?.candidates?.[0] : undefined;
+    if (!top) return null;
+    const parts = (["c", "d", "e", "g"] as const).flatMap((col) => {
+      const v = top[col];
+      const iof = v ? ocadToIof(col, v) : null;
+      return iof ? [iofSymbolName(iof, i18n.language)] : [];
+    });
+    return parts.length ? parts.join(" · ") : null;
+  }, [ghostAsk, ghostSuggest.data, i18n.language]);
+
+  const nextCode = useMemo(() => {
+    if (!controlList.data) return null;
+    const used = [...controlList.data.map((c) => c.codes), ...[...created.current.values()].flatMap((c) => (c.code !== null ? [String(c.code)] : []))];
+    return nextSeriesControlCode(seriesAllocation.data ?? [], used, activeSeriesId).code;
+  }, [controlList.data, seriesAllocation.data, activeSeriesId, pendingOps]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  const ptOf = useCallback((id: number): Pt | null => {
+    const c = coordsById.get(id);
+    if (c && (c.mapX !== 0 || c.mapY !== 0)) return { x: c.mapX, y: c.mapY };
+    return created.current.get(id)?.pt ?? null;
+  }, [coordsById]);
+
+  const ghost = useMemo(() => {
+    if (!placing || !hover) return null;
+    const reuseId = hover.target?.kind === "site" ? Number(hover.target.id) : null;
+    const reuse = reuseId !== null && kindOfLatest(reuseId) === (placing.tool === "control" ? "control" : placing.tool) ? reuseId : null;
+    const at = reuse !== null ? ptOf(reuse) ?? hover.pt : hover.pt;
+    const info = ghostInfo(placing, rows, at, ptOf);
+    const radiusMm = placing.tool === "finish" ? courseInfo?.metrics?.finishRadiusMm ?? 3 : placing.tool === "start" ? courseInfo?.metrics?.startRadiusMm ?? 3.5 : courseInfo?.metrics?.circleRadiusMm ?? 2.5;
+    const code = reuse !== null ? coordsById.get(reuse)?.code ?? String(reuse) : null;
+    const label = reuse !== null
+      ? t("ghostReuse", { code })
+      : placing.tool === "control"
+        ? [info.number !== null ? String(info.number) : null, nextCode !== null ? String(nextCode) : null].filter(Boolean).join(" · ")
+        : t(placing.tool === "start" ? "kindStart" : "kindFinish");
+    const legLabel = info.legs[0] ? legLengthLabel(info.legs[0][0], info.legs[0][1], mapScale) : null;
+    return { at, radiusMm, role: placing.tool, label, description: reuse === null ? ghostDescription : null, legs: info.legs, legMm: info.legMm, legLabel, reuse };
+  }, [placing, hover, kindOfLatest, ptOf, rows, courseInfo, coordsById, t, nextCode, ghostDescription, mapScale]);
+
+  // The visit the click would write, drawn by the layer (§6.1): one course request per hover. Keyed by
+  // primitives: the ghost itself changes with every course reply (its radius), which must not re-request.
+  const ghostX = ghost?.at.x, ghostY = ghost?.at.y, ghostReuse = ghost?.reuse ?? null;
+  const provisional = useMemo((): ProvisionalVisit | null => {
+    if (!placing || placing.insertAt === null || ghostX === undefined || ghostY === undefined) return null;
+    return {
+      role: placing.tool, insertAt: placing.insertAt, pt: { x: ghostX, y: ghostY },
+      ...(ghostReuse !== null ? { reuseId: String(ghostReuse) } : { code: nextCode !== null ? String(nextCode) : "" }),
+    };
+  }, [placing, ghostX, ghostY, ghostReuse, nextCode]);
+
+  const sitesForTools = useMemo(() => sites.filter((x) => x.mapX !== 0 || x.mapY !== 0)
+    .map((x) => ({ id: x.id, x: x.mapX, y: x.mapY, kind: kindOf(x.id) })), [sites, kindOf]);
+
+  const insertOnLeg = useCallback((target: { courseId: string; index: number }, pt: Pt) => {
+    if (!selectedCourse || target.courseId !== selectedCourse.name) return;
+    void createControl(snap(pt), insertIndexForLeg(rows, target.index));
+  }, [selectedCourse, rows, createControl, snap]);
+
+  const tool = state.tool;
+  const toolBinding: EditorToolBinding | null = (() => {
+    switch (tool.kind) {
+      case "place":
+        return placeBinding({ ghost, onHover, onPlace: place, onExit: exitTool, touch: { placeLabel: t("touchPlace"), doneLabel: t("touchDone") } });
+      case "area":
+        return areaBinding({
+          gesture, poly: tool.poly, hover: hover?.pt ?? null, onHover, snap,
+          onPoly: (poly) => dispatch({ type: "polygon", poly }),
+          onDone: (vertices) => finishArea(tool.poly.kind, vertices),
+          onCancel: exitTool,
+        });
+      case "text":
+        return textBinding({ onPlace: placeText, onExit: exitTool, snap });
+      case "gap":
+        return gapTarget ? gapBinding({
+          gesture, target: gapTarget, redraw,
+          onAdd: (gap) => writeGaps(gapTarget, gapTarget.kind === "circle" ? mergeCircleGaps([...gapTarget.gaps, gap as AngularGap]) : mergeLegGaps([...gapTarget.gaps, gap as FractionGap])),
+          onRemove: (i) => writeGaps(gapTarget, (gapTarget.gaps as (AngularGap | FractionGap)[]).filter((_, k) => k !== i) as AngularGap[] | FractionGap[]),
+          onExit: exitTool,
+        }) : null;
+      case "select":
+        return selectBinding({
+          gesture, redraw, selected: selectedObject, focusedVertex, onVertexFocus: setFocusedVertex, objects: objectsInView.map((o) => (drafts.has(o.id) ? { ...o, geometry: drafts.get(o.id)! } : o)),
+          sites: sitesForTools, multi: state.multi, ringMm: courseInfo?.metrics?.circleRadiusMm ?? 2.5,
+          onToggleMulti: (id) => dispatch({ type: "toggle-multi", id }),
+          onLasso: (ids) => dispatch({ type: "set-multi", ids }),
+          onSelectObject: (id) => dispatch({ type: "select-object", id }),
+          onObjectDraft: (id, geometry) => {
+            // The first draft of a gesture keeps what was shown before it: the undo's "before".
+            if (geometry && !gestureBefore.current.has(id)) gestureBefore.current.set(id, drafts.get(id) ?? objects.find((x) => x.id === id)?.geometry ?? geometry);
+            if (!geometry) gestureBefore.current.delete(id);
+            setDraft(id, geometry);
+          },
+          onObjectMoved: (id, geometry) => {
+            const o = objects.find((x) => x.id === id);
+            // Undo restores what the gesture started from — a previous gesture's draft while the list catches up.
+            const before = gestureBefore.current.get(id) ?? drafts.get(id) ?? o?.geometry;
+            gestureBefore.current.delete(id);
+            setDraft(id, geometry);
+            if (o && before) updateObject({ ...o, geometry: before } as CourseObject, { geometry });
+          },
+          onLegDoubleClick: insertOnLeg,
+        });
+    }
+  })();
+
+  // Drafts: objects being dragged (a region's drag is live, 08 §5.3). A region being drawn picks nothing yet (§6.4).
+  const draftObjects = useMemo(() => {
+    if (drafts.size === 0) return NO_DRAFTS;
+    const out: CourseObject[] = [];
+    for (const [id, geometry] of drafts) {
+      const o = objects.find((x) => x.id === id);
+      if (o) out.push({ ...o, geometry } as CourseObject);
+    }
+    return out;
+  }, [drafts, objects]);
+  const draftFast = [...drafts.keys()].some((id) => objects.find((o) => o.id === id)?.kind === "filter_region");
+
+  const [viewRequest, setViewRequest] = useState<MapViewerEditorProps["viewRequest"]>(null);
+
+  // ─── The phone's bottom sheet (§10) ──────────────────────
+  const [detent, setDetent] = useState<Detent>("peek");
+  const [sheetPx, setSheetPx] = useState(0);
+  const sheetPxRef = useRef(0);
+  sheetPxRef.current = isMobile ? sheetPx : 0;
+  /** Centre on `pt`, in the band above the sheet on a phone (§10: the sheet never covers the selection). */
+  const centreOn = useCallback((pt: Pt, sheet = sheetPxRef.current) => {
+    setViewRequest((v) => ({ key: (v?.key ?? 0) + 1, centre: pt, offsetPx: bandCentreOffsetPx(sheet) }));
+  }, []);
+  // Field mode centres on the first fix once (the viewer's locate button follows, if the user wants that).
+  const centredOnFix = useRef(false);
+  useEffect(() => {
+    if (!fieldMode) { centredOnFix.current = false; return; }
+    if (paperFix && !centredOnFix.current) {
+      centredOnFix.current = true;
+      centreOn(paperFix);
+    }
+  }, [fieldMode, paperFix, centreOn]);
+
+  // ─── Checks and KPIs (§8) ────────────────────────────────
+  const courseChecks = useCourseChecks({
+    course: state.view !== "all" && selectedCourse ? { id: selectedCourse.id, name: selectedCourse.name } : null,
+    structure, sites, controls: controlList.data, document: mapDoc, mapScale, objects: objectsInView,
+    derivation: courseInfo?.derivation, ringMm: courseInfo?.metrics?.circleRadiusMm ?? 2.5,
+  });
+  const locateSite = courseChecks.locate;
+  const locateCheck = useCallback((c: EditorCheck) => {
+    const { selectId, centre } = locateSite(c);
+    if (selectId !== null) dispatch({ type: "select", id: selectId });
+    if (centre) setViewRequest((v) => ({ key: (v?.key ?? 0) + 1, centre }));
+  }, [locateSite]);
+
+  // ─── The action bar ──────────────────────────────────────
+  const ends = useMemo(() => (structure ? effectiveEnds(structure, sites) : { start: null, finish: null }), [structure, sites]);
+  const contextActions = useMemo(() => {
+    // An armed tool opens no action bar (08 §5.3: it would cover the map on every placement).
+    if (state.tool.kind !== "select") return [];
+    const sel = state.selectedControlId;
+    const coord = sel !== null ? coordsById.get(sel) : undefined;
+    const role = coord ? kindOf(coord.id) : "control";
+    return courseActions(
+      {
+        phantom: state.phantom ? { insertAt: state.phantom.insertAt } : null,
+        selected: coord ? {
+          id: coord.id,
+          role,
+          onCourse: sequenceIds.includes(coord.id),
+          otherRole: role === "start" ? ends.start !== coord.id : role === "finish" ? ends.finish !== coord.id : false,
+          hasLabelOffset: !!selectedCourse?.labelOffsets?.[String(coord.id)],
+          radioOn: (controlRowsById.get(coord.id)?.config?.radioType ?? "normal") !== "normal",
+          swapOffer: radioSwapOffer?.controlId === coord.id,
+        } : null,
+        course: selectedCourse && structure ? selectedCourse.name : null,
+        codesReady: !!controlList.data,
+        busy: pendingOps > 0,
+      },
+      {
+        insert: () => { const p = state.phantom; if (p) void createControl({ x: p.x, y: p.y }, p.insertAt); },
+        addToCourse: () => { const p = state.phantom; if (p) void createControl({ x: p.x, y: p.y }, sequenceIds.length); },
+        add: () => { const p = state.phantom; if (p) void createControl({ x: p.x, y: p.y }, null); },
+        addStart: () => { const p = state.phantom; if (p) void createRoleControl({ x: p.x, y: p.y }, "start"); },
+        addFinish: () => { const p = state.phantom; if (p) void createRoleControl({ x: p.x, y: p.y }, "finish"); },
+        useAsRole: (r) => { if (sel !== null) void applyStructure((s) => setRole(s, r, sel, kindOf)); },
+        append: () => { if (sel !== null) void applyStructure((s) => appendSite(s, sel, kindOf)); },
+        removeFromCourse: () => { if (sel !== null) void applyStructure((s) => removeSite(s, sel)); },
+        resetLabel,
+        radio: handleRadio,
+        confirmSwap,
+        declineSwap,
+        description: () => { if (sel !== null) setDescControlId(sel); },
+        delete: handleDelete,
+      },
+      (key, opts) => tc(key as "editor.actionAdd", opts),
+    );
+  }, [state.tool.kind, state.selectedControlId, state.phantom, coordsById, kindOf, sequenceIds, ends, selectedCourse, structure, controlRowsById,
+    radioSwapOffer, controlList.data, pendingOps, createControl, createRoleControl, applyStructure, resetLabel, handleRadio,
+    confirmSwap, declineSwap, handleDelete, tc]);
+
+  const contextInfo = useMemo(() => {
+    const sel = state.selectedControlId;
+    if (sel === null) return null;
+    if (radioSwapOffer?.controlId === sel) return tc("radioSwapConfirm", { from: radioSwapOffer.from, to: radioSwapOffer.to, series: radioSwapOffer.series });
+    const names = membership.get(sel) ?? [];
+    const others = selectedCourse ? names.filter((n) => n !== selectedCourse.name) : names;
+    return others.length > 0 ? tc("editor.alsoIn", { names: others.join(", ") }) : null;
+  }, [state.selectedControlId, radioSwapOffer, membership, selectedCourse, tc]);
+
+  const moveWarnings = useMemo(() => {
+    const m = new Map<string, string>();
+    for (const [id, names] of membership) {
+      const others = selectedCourse ? names.filter((n) => n !== selectedCourse.name) : names;
+      if (others.length > 0) m.set(String(id), tc("editor.affects", { names: others.join(", ") }));
+    }
+    return m;
+  }, [membership, selectedCourse, tc]);
+
+  const srrBadge = useMemo(() => {
+    if (!selectedCoord) return null;
+    const e = (seriesAllocation.data ?? []).find((x) => x.code === Number(selectedCoord.code) && x.type === "srr");
+    return e ? { label: tc("editor.srrBadge"), title: e.seriesName } : null;
+  }, [selectedCoord, seriesAllocation.data, tc]);
+  const radioOn = selectedCoord ? (controlRowsById.get(selectedCoord.id)?.config?.radioType ?? "normal") !== "normal" : false;
+
+  // Offline, Field mode views only (§9 "Offline"): a drag snaps back instead of writing.
+  const fieldReadOnly = fieldMode && !online;
+  const fieldMoveEnd = useCallback((id: string, pt: Pt) => {
+    if (fieldReadOnly) setMoveEpoch((v) => v + 1);
+    else handleMoveEnd(id, pt);
+  }, [fieldReadOnly, handleMoveEnd]);
+
+  // Class view is Course view drawn through the class's sheet (docs/course-layout.md §6).
+  const courseView = state.view !== "all";
+  const fitClassPage = useCallback((bounds: { minX: number; minY: number; maxX: number; maxY: number }) => {
+    setViewRequest((v) => ({ key: (v?.key ?? 0) + 1, bounds }));
+  }, []);
+  const classView = useClassView({ enabled: state.mode === "course" && state.view === "class", classSeq: state.classSeq, onFit: fitClassPage });
+  const classLayout = classView.layout;
+  const courseControlIds = useMemo(() => new Set(sequenceIds.map(String)), [sequenceIds]);
+  const toolActive = state.tool.kind !== "select";
+  const editor: MapViewerEditorProps = useMemo(() => ({
+    selectedControlId: state.selectedControlId !== null ? String(state.selectedControlId) : null,
+    phantom: state.phantom ? { x: state.phantom.x, y: state.phantom.y } : null,
+    contextActions,
+    // An active tool opens no action bar (§6): nothing in it, not even the info line and badges.
+    contextInfo: toolActive ? null : contextInfo,
+    contextBadge: toolActive ? null : srrBadge,
+    contextRadioBadge: radioOn && !toolActive ? { label: tc("editor.radioBadge") } : null,
+    suggestions: toolActive ? [] : suggestions,
+    suggestionsHeading: tc("editor.suggestedHeading"),
+    courseControlIds,
+    fadeNonCourse: courseView && !!selectedCourse,
+    moveWarnings,
+    moveEpoch,
+    onMapClick: handleMapClick,
+    onMoveEnd: fieldMoveEnd,
+    onLabelMoveEnd: handleLabelMoveEnd,
+    onSelect: handleSelect,
+    onDismiss: handleDismiss,
+    sharedHitTest: true,
+    // A phone docks the action bar in the bottom sheet's peek row (§10).
+    actionLayout: isMobile ? "host" : "bar",
+    fix,
+    bottomInsetPx: isMobile ? sheetPx : 0,
+    fullBleed: isMobile,
+    ...(selectedCourse && courseView ? { onLegClick: handleLegClick } : {}),
+    tool: toolBinding,
+    snap: snapIndex ? snap : null,
+    draftObjects,
+    draftFast,
+    viewRequest,
+    provisional,
+    onCourseInfo: setCourseInfo,
+    markers: courseChecks.markers,
+    layout: classLayout,
+  }), [classLayout, courseChecks.markers, isMobile, fix, sheetPx, fieldMoveEnd, state.selectedControlId, state.phantom, contextActions, contextInfo, srrBadge, radioOn, suggestions, tc, courseControlIds, toolActive,
+    courseView, selectedCourse, moveWarnings, moveEpoch, handleMapClick, handleLabelMoveEnd, handleSelect,
+    handleDismiss, handleLegClick, toolBinding, snapIndex, snap, draftObjects, draftFast, viewRequest, provisional]);
+
+  // ─── Undo / redo, keyboard, deep links ───────────────────
+  const runUndo = useCallback(() => {
+    setMoveEpoch((v) => v + 1);
+    setFocus(null); // its index may name another vertex now
+    void run(async () => { await undoStack.undo(); bumpHistory(); });
+  }, [run, undoStack, bumpHistory]);
+  const runRedo = useCallback(() => {
+    setMoveEpoch((v) => v + 1);
+    setFocus(null);
+    void run(async () => { await undoStack.redo(); bumpHistory(); });
+  }, [run, undoStack, bumpHistory]);
+
+  /** Tab / Shift+Tab: the next / previous control of the course, centred (§6.5). */
+  const stepSelection = useCallback((dir: 1 | -1) => {
+    const controls = rows.filter((r) => r.kind === "control");
+    if (controls.length === 0) return;
+    const at = controls.findIndex((r) => r.id === state.selectedControlId);
+    const next = controls[at < 0 ? (dir > 0 ? 0 : controls.length - 1) : (at + dir + controls.length) % controls.length];
+    dispatch({ type: "select", id: next.id });
+    if (next.pt) setViewRequest((v) => ({ key: (v?.key ?? 0) + 1, centre: next.pt! }));
+  }, [rows, state.selectedControlId]);
+
+  /** F: fit the selected course, else every positioned control. */
+  const fitView = useCallback(() => {
+    const ids = rows.length > 0 ? rows.filter((r) => r.pt).map((r) => String(r.id)) : sitesForTools.map((x) => String(x.id));
+    setViewRequest((v) => ({ key: (v?.key ?? 0) + 1, fit: ids }));
+  }, [rows, sitesForTools]);
+
+  const [areaOpen, setAreaOpen] = useState(false);
+  const canGap = state.selectedControlId !== null ? kindOf(state.selectedControlId) === "control" : (state.phantom?.insertAt ?? null) !== null;
+  const canTonerSaver = !!selectedCourse && rows.some((r) => r.pt);
+
+  const layoutKey = layoutMode.onKey;
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (descControlId !== null) return;
+      const target = e.target as HTMLElement;
+      if (target.tagName === "INPUT" || target.tagName === "TEXTAREA" || target.tagName === "SELECT" || target.isContentEditable) return;
+      const mod = e.ctrlKey || e.metaKey;
+      const plain = !mod && !e.altKey;
+      const key = e.key.length === 1 ? e.key.toUpperCase() : e.key;
+      if (state.mode === "layout") {
+        // Layout mode's own keys (docs/course-layout.md §2); undo / redo are the page's.
+        if (mod && (e.key === "z" || e.key === "Z")) { e.preventDefault(); if (e.shiftKey) runRedo(); else runUndo(); }
+        else if (mod && (e.key === "y" || e.key === "Y")) { e.preventDefault(); runRedo(); }
+        else if (!layoutKey(e) && e.key === "Escape" && document.fullscreenElement) void document.exitFullscreen().catch(() => {});
+        return;
+      }
+      if (mod && (e.key === "z" || e.key === "Z")) {
+        e.preventDefault();
+        if (e.shiftKey) runRedo();
+        else {
+          // Ctrl+Z while armed: the anchor goes back with the last placement (08 §5.3) — only when the entry
+          // about to be undone is that placement: an inspector edit made meanwhile leaves the chain alone.
+          const chain = chainRef.current;
+          const top = undoStack.top;
+          const stepsChain = state.tool.kind === "place" && !!chain && chain.placed.length > 0 && !!top && placementEntries.current.has(top);
+          runUndo();
+          if (stepsChain && chain) setChain(afterUndo(chain));
+        }
+      } else if (mod && (e.key === "y" || e.key === "Y")) {
+        e.preventDefault();
+        runRedo();
+      } else if (e.key === "Escape") {
+        setAreaOpen(false);
+        // The cascade first; with nothing left, Esc leaves fullscreen (MapPanel holds the Keyboard Lock).
+        if (!escapeHasWork(state) && document.fullscreenElement) void document.exitFullscreen().catch(() => {});
+        else {
+          setRadioSwapOffer(null);
+          if (state.tool.kind !== "select") exitTool();
+          else dispatch({ type: "escape" });
+        }
+      } else if (e.key === "Enter" && plain) {
+        if (state.tool.kind === "area") {
+          e.preventDefault();
+          // Through the flow, so the minimum and the smooth vertices' settling (flags stripped) have one home.
+          const r = polygonStep(state.tool.poly, { type: "enter" });
+          if (r.done) finishArea(state.tool.poly.kind, r.done);
+        } else if (state.tool.kind !== "select") {
+          e.preventDefault();
+          exitTool();
+        }
+      } else if (e.key === "Tab" && !mod) {
+        e.preventDefault();
+        stepSelection(e.shiftKey ? -1 : 1);
+      } else if (areaOpen && plain && areaChoiceOfKey(key)) {
+        // The `A` chord: `A` opened the menu, this key picks the kind (§6.4).
+        e.preventDefault();
+        const kind = areaChoiceOfKey(key)!;
+        setAreaOpen(false);
+        if (kind !== "toner_saver" || canTonerSaver) startArea(kind);
+      } else if (plain && key === "H") {
+        dispatch({ type: "toggle-hide-others" });
+      } else if (plain && key === "V") {
+        exitTool();
+      } else if (plain && (key === "S" || key === "K" || key === "M")) {
+        armPlace(key === "S" ? "start" : key === "M" ? "finish" : "control");
+      } else if (plain && key === "A") {
+        setAreaOpen((v) => !v);
+      } else if (plain && key === "T") {
+        setTool({ kind: "text" });
+      } else if (plain && key === "G") {
+        if (canGap) setTool({ kind: "gap", legInsertAt: state.selectedControlId === null ? state.phantom?.insertAt ?? null : null });
+      } else if (plain && key === "F") {
+        fitView();
+      } else if (e.key === "Delete" || e.key === "Backspace") {
+        e.preventDefault();
+        if (state.multi.length > 0) deleteControls(state.multi);
+        else if (selectedObject && focusedVertex !== null) {
+          // A focused vertex goes first, down to the kind's minimum; there nothing happens (§7 "Editing geometry").
+          const shown = { ...selectedObject, geometry: drafts.get(selectedObject.id) ?? selectedObject.geometry } as CourseObject;
+          const geometry = deleteVertex(shown.geometry, focusedVertex, vertexRule(shown.kind).min);
+          if (geometry) {
+            setDraft(shown.id, geometry);
+            updateObject(shown, { geometry });
+            setFocus(null);
+          }
+        } else if (selectedObject) deleteObject(selectedObject);
+        else handleDelete();
+      }
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [descControlId, runUndo, runRedo, undoStack, state, handleDelete, deleteControls, deleteObject, selectedObject, focusedVertex, drafts, setDraft, updateObject, setChain, exitTool, finishArea,
+    stepSelection, armPlace, setTool, canGap, fitView, areaOpen, canTonerSaver, startArea, layoutKey]);
+
+  // Layout deep links (docs/course-layout.md §4): `?mode=layout` with `sheet=<seq>` or `template=<seq>`.
+  const layoutLinkDone = useRef(false);
+  const openLayout = layoutMode.open;
+  useEffect(() => {
+    if (layoutLinkDone.current) return;
+    layoutLinkDone.current = true;
+    if (searchParams.get("mode") !== "layout") return;
+    const sheet = parseInt(searchParams.get("sheet") ?? "", 10), template = parseInt(searchParams.get("template") ?? "", 10);
+    if (Number.isFinite(sheet)) openLayout({ sheet });
+    else if (Number.isFinite(template)) openLayout({ template });
+    dispatch({ type: "mode", mode: "layout" });
+  }, [searchParams, openLayout]);
+
+  // A sheet opened without a course selected brings its course (it prints only that course).
+  const sheetCourse = layoutMode.sheetCourse;
+  useEffect(() => {
+    if (state.mode === "layout" && sheetCourse !== null && state.selectedCourseId === null) dispatch({ type: "select-course", id: sheetCourse });
+  }, [state.mode, sheetCourse, state.selectedCourseId]);
+
+  const deepLinkDone = useRef(false);
+  useEffect(() => {
+    if (deepLinkDone.current) return;
+    const courseParam = searchParams.get("course"), controlParam = searchParams.get("control");
+    if (!courseParam && !controlParam) { deepLinkDone.current = true; return; }
+    if ((courseParam && !courses.data) || (controlParam && !controlCoords.data)) return;
+    deepLinkDone.current = true;
+    const courseId = courseParam ? parseInt(courseParam, 10) : NaN;
+    if (courses.data?.some((c) => c.id === courseId)) dispatch({ type: "select-course", id: courseId });
+    const controlId = controlParam ? parseInt(controlParam, 10) : NaN;
+    if (controlCoords.data?.some((c) => c.id === controlId)) dispatch({ type: "select", id: controlId });
+  }, [searchParams, courses.data, controlCoords.data]);
+
+  // ─── Course-level writes from the inspector ──────────────
+  const versions = writes.versions;
+  const handleCreateCourse = useCallback((name: string) => {
+    void (async () => {
+      // Not undoable (no course.restore); the Courses page deletes courses.
+      const created = await run(() => client.course.create.mutate({ name, linkClassId: matchCourselessClass(name, classes.data ?? []) ?? undefined }));
+      if (!created) return;
+      versions.seed("course", created.id, created.version);
+      void utils.class.list.invalidate();
+      dispatch({ type: "select-course", id: created.id });
+    })();
+  }, [run, client, classes.data, versions, utils]);
+
+  const handleClone = useCallback((name: string) => {
+    if (!selectedCourse) return;
+    void (async () => {
+      const cloned = await run(() => client.course.clone.mutate({ id: selectedCourse.id, name }));
+      if (!cloned) return;
+      versions.seed("course", cloned.id, cloned.version);
+      dispatch({ type: "select-course", id: cloned.id });
+    })();
+  }, [selectedCourse, run, client, versions]);
+
+  const handleEditCode = useCallback((id: number, current: string, nextRaw: string) => {
+    const next = nextRaw.trim();
+    if (!next || next === current) return;
+    const first = parseInt(next.split(";")[0] ?? "", 10);
+    const publicNew = Number.isFinite(first) && first > 0 ? first : id;
+    const currentCodes = controlRowsById.get(id)?.codes ?? current;
+    void (async () => {
+      if ((await run(() => writes.updateControl({ id, codes: next }))) === undefined) return;
+      // After the edit the control's public id is the new first code; after an undo the old one again.
+      record(() => writes.updateControl({ id: publicNew, codes: currentCodes }), () => writes.updateControl({ id, codes: next }));
+      dispatch({ type: "select", id: publicNew });
+    })();
+  }, [controlRowsById, writes, run, record]);
+
+  const cutsQuery = trpc.course.getOverprintCuts.useQuery(undefined, { staleTime: Number.POSITIVE_INFINITY });
+  const setCuts = trpc.course.setOverprintCuts.useMutation({
+    onSuccess: async () => {
+      await cutsQuery.refetch();
+      await utils.course.geometry.invalidate();
+      await utils.course.list.invalidate();
+    },
+  });
+  const cutsEnabled = cutsQuery.data?.enabled !== false;
+
+  // ─── Chrome ──────────────────────────────────────────────
+  const canUndo = undoStack.canUndo, canRedo = undoStack.canRedo;
+  const courseOptions = useMemo(() => (courses.data ?? []).map((c) => ({ id: c.id, name: c.name })), [courses.data]);
+  const toolbar = isMobile ? (
+    <FieldTopBar
+      backTo={`/${nameId ?? ""}/courses`}
+      courses={courseOptions}
+      selectedCourseId={state.selectedCourseId}
+      onSelectCourse={(id) => dispatch({ type: "select-course", id })}
+      mode={state.mode}
+      onMode={(mode) => dispatch({ type: "mode", mode })}
+      overflow={(
+        <OverflowMenu
+          view={state.view} onView={(view) => dispatch({ type: "view", view })}
+          canUndo={canUndo} canRedo={canRedo} onUndo={runUndo} onRedo={runRedo}
+          hideOthers={state.hideOthers} canHideOthers={state.selectedCourseId !== null} onToggleHideOthers={() => dispatch({ type: "toggle-hide-others" })}
+          cutsEnabled={cutsEnabled} cutsBusy={setCuts.isPending || cutsQuery.isLoading} onToggleCuts={() => setCuts.mutate({ enabled: !cutsEnabled })}
+        />
+      )}
+      presence={<PresenceChips compact others={presence} selectedCourseId={state.selectedCourseId} />}
+    />
+  ) : (
+    <TopBar
+      courses={courseOptions}
+      selectedCourseId={state.selectedCourseId}
+      onSelectCourse={(id) => dispatch({ type: "select-course", id })}
+      view={state.view}
+      onView={(view) => dispatch({ type: "view", view })}
+      classes={selectedCourse ? (courseClasses.data ?? []) : []}
+      classSeq={state.classSeq}
+      onClass={(seq) => dispatch({ type: "class", seq })}
+      exportState={{
+        nameId: nameId ?? "",
+        courseSeq: selectedCourse?.id ?? null,
+        classSeq: state.view === "class" ? state.classSeq : null,
+        canEdit,
+      }}
+      onExportError={setErrorMsg}
+      mode={state.mode}
+      onMode={(mode) => dispatch({ type: "mode", mode })}
+      canUndo={canUndo}
+      canRedo={canRedo}
+      onUndo={runUndo}
+      onRedo={runRedo}
+      hideOthers={state.hideOthers}
+      onToggleHideOthers={() => dispatch({ type: "toggle-hide-others" })}
+      cutsEnabled={cutsEnabled}
+      cutsBusy={setCuts.isPending || cutsQuery.isLoading}
+      onToggleCuts={() => setCuts.mutate({ enabled: !cutsEnabled })}
+      presence={<PresenceChips others={presence} selectedCourseId={state.selectedCourseId} />}
+    />
+  );
+
+  const save: SaveState = pendingOps > 0 ? "saving" : notice ? "conflict" : errorMsg ? "error" : "saved";
+  const suggestionsForNew = useMemo(
+    () => courselessClassNames(classes.data ?? [], (courses.data ?? []).map((c) => c.name)),
+    [classes.data, courses.data],
+  );
+  const radioIds = useMemo(
+    () => new Set((controlList.data ?? []).filter((c) => (c.config?.radioType ?? "normal") !== "normal").map((c) => c.id)),
+    [controlList.data],
+  );
+  const selectedInfo = selectedCoord ? {
+    code: selectedCoord.code,
+    role: kindOf(selectedCoord.id),
+    x: selectedCoord.mapX,
+    y: selectedCoord.mapY,
+    description: selectedCoord.description ? describe(selectedCoord.description, i18n.language) : null,
+    alsoIn: (membership.get(selectedCoord.id) ?? []).filter((n) => n !== selectedCourse?.name),
+    badges: [
+      ...(srrBadge ? [{ label: srrBadge.label, title: srrBadge.title, testId: "editor-toolbar-srr" }] : []),
+      ...(radioOn ? [{ label: tc("editor.radioBadge"), testId: "editor-selection-radio" }] : []),
+    ],
+    notes: controlRowsById.get(selectedCoord.id)?.notes ?? "",
+    numberHidden: structure && sequenceIds.includes(selectedCoord.id)
+      ? structure.items.some((i) => i.kind !== "variation" && i.siteId === selectedCoord.id && !!i.numberHidden)
+      : null,
+  } : null;
+
+  const bulkAddToCourse = useCallback(() => {
+    const ids = state.multi;
+    void applyStructure((s) => ids.reduce((acc, id) => (kindOf(id) === "control" ? appendSite(acc, id, kindOf) : acc), s));
+  }, [state.multi, applyStructure, kindOf]);
+  const bulkRadio = useCallback(() => {
+    const ids = state.multi.filter((id) => kindOf(id) === "control");
+    if (ids.length) void run(() => client.control.upsertConfig.mutate({ controlIds: ids, radioType: "internal_radio" }));
+  }, [state.multi, kindOf, run, client]);
+
+  const pendingLegM = ghost?.legMm != null && mapScale ? legLengthM(ghost.legMm, mapScale) : null;
+
+  // ─── Field mode's parts (§9) ─────────────────────────────
+  const selectedFieldPt: Pt | null = selectedCoord
+    ? (nudged?.id === selectedCoord.id ? nudged.pt : { x: selectedCoord.mapX, y: selectedCoord.mapY })
+    : null;
+  const selectedFieldRow = selectedCoord
+    ? fieldList.find((r) => r.id === selectedCoord.id)
+      ?? fieldRows([{ id: selectedCoord.id, code: selectedCoord.code, kind: kindOf(selectedCoord.id), pt: selectedFieldPt }], paperFix, mapScale, checkedIds)[0]
+    : null;
+  const fieldSelection = fieldMode && selectedCoord && selectedFieldPt ? (
+    <FieldSelection row={selectedFieldRow} pt={selectedFieldPt} mapScale={mapScale}
+      onNudge={(to) => nudgeTo(selectedCoord.id, selectedFieldPt, to)}
+      onCheck={fieldReadOnly ? null : (checked) => checkControl(selectedCoord.id, checked)}
+      canCheck={canReview} canMove={!fieldReadOnly} />
+  ) : null;
+  const selectRow = (id: number) => {
+    dispatch({ type: "select", id });
+    const pt = ptOf(id);
+    if (pt) centreOn(pt);
+  };
+  const fieldSection = (
+    <>
+      <div className="px-2.5 py-1"><FixStatus accuracyM={fix?.accuracy ?? null} error={geo.error} watching={geo.watching} /></div>
+      <FieldSection rows={fieldList} selectedControlId={state.selectedControlId} onSelectRow={selectRow}
+        onCheck={fieldReadOnly ? null : checkControl} canCheck={canReview} hasCourse={!!(selectedCourse && structure)} />
+    </>
+  );
+  const fieldKpi = fieldMode && selectedCourse
+    ? t("fieldKpiChecked", { checked: fieldList.filter((r) => r.kind === "control" && r.checked).length, count: fieldList.filter((r) => r.kind === "control").length })
+    : null;
+
+  // ─── Shared by both layouts ──────────────────────────────
+  /* The course objects as DOM, for tests: what the editor holds (§7). */
+  const objectsDom = (
+    <ul data-testid="editor-objects" hidden>
+      {objects.map((o) => (
+        <li key={o.id} data-testid="editor-object-row" data-object-id={o.id} data-object-kind={o.kind}
+          data-geometry={o.geometry.map((v) => `${v.x},${v.y}`).join(" ")} data-geometry-json={JSON.stringify(o.geometry)} data-props={JSON.stringify(o.props)} data-scope={JSON.stringify(o.scope)} />
+      ))}
+    </ul>
+  );
+  const courseSection = (
+    <CourseSection
+      course={selectedCourse && structure ? { id: selectedCourse.id, name: selectedCourse.name, orderMode: structure.orderMode } : null}
+      rows={rows}
+      legMeters={legMeters}
+      totalMeters={totalMeters}
+      suggestions={suggestionsForNew}
+      onCreate={handleCreateCourse}
+      onClone={handleClone}
+      onOrderMode={(mode) => void applyStructure((s) => ({ ...s, orderMode: mode }))}
+      onMove={(from, to) => void applyStructure((s) => moveVisit(s, from, to, kindOf))}
+      onRemove={(seqIndex) => void applyStructure((s) => removeVisit(s, seqIndex, kindOf))}
+      onEditCode={handleEditCode}
+      onSelectRow={(id) => dispatch({ type: "select", id })}
+      selectedControlId={state.selectedControlId}
+      radioIds={radioIds}
+    />
+  );
+  const selectionSection = state.multi.length > 1 ? (
+    <MultiSection count={state.multi.length} course={selectedCourse && structure ? selectedCourse.name : null} busy={pendingOps > 0}
+      onDelete={() => deleteControls(state.multi)} onAddToCourse={bulkAddToCourse} onRadio={bulkRadio} />
+  ) : selectedObject ? (
+    <ObjectSection
+      object={drafts.has(selectedObject.id) ? { ...selectedObject, geometry: drafts.get(selectedObject.id)! } as CourseObject : selectedObject}
+      document={mapDoc?.header ?? null}
+      courses={courseOptions}
+      classes={(classes.data ?? []).map((c) => ({ id: c.id, name: c.name }))}
+      onProps={(props) => updateObject(selectedObject, { props })}
+      onScope={(scope) => updateObject(selectedObject, { scope })}
+      onRegenerate={selectedObject.kind === "toner_saver" ? () => {
+        const margin = (selectedObject.props as { marginMm?: number }).marginMm ?? TONER_MARGIN_MM;
+        const hull = tonerSaverGeometry(rows.flatMap((r) => (r.pt ? [r.pt] : [])), margin);
+        if (hull) updateObject(selectedObject, { geometry: hull });
+      } : undefined}
+      onDelete={() => deleteObject(selectedObject)}
+    />
+  ) : (
+    <>
+      {fieldSelection}
+      <SelectionSection
+        selected={selectedInfo}
+        onKind={(kind) => { if (selectedCoord) updateField(selectedCoord.id, { kind }, { kind: kindOf(selectedCoord.id) }); }}
+        onNotes={(notes) => { if (selectedCoord) updateField(selectedCoord.id, { notes }, { notes: controlRowsById.get(selectedCoord.id)?.notes ?? "" }); }}
+        onNumberHidden={(hidden) => { if (selectedCoord) { const id = selectedCoord.id; void applyStructure((s) => setNumberHidden(s, id, hidden)); } }}
+      />
+    </>
+  );
+  const statusBar = (
+    <StatusBar controls={selectedCourse ? sequenceIds.length : null} lengthM={selectedCourse ? courseChecks.lengthM ?? totalMeters : null} scale={mapScale} save={save}
+      climbM={selectedCourse?.climb ?? null} checks={courseChecks.checks.length}
+      pendingLegM={pendingLegM} snapping={state.snapping}
+      sheetKey={state.mode === "layout" ? layoutMode.sheetKey : state.mode === "course" && state.view === "class" ? classView.sheetKey : null} />
+  );
+
+  // Class view without a sheet for the class's course (docs/course-layout.md §6): the course draws as in Course view.
+  const externalNode = external ? (
+    <div data-testid="editor-external-change" className="pointer-events-auto w-64 rounded-lg border border-amber-300 bg-amber-50 text-amber-900 text-xs p-2 shadow-sm flex items-start gap-1.5">
+      <p className="flex-1">
+        {external.at
+          ? t("externalChange", { who: external.who ?? t("presenceAnonymous"), time: clockTime(external.at, i18n.language) })
+          : t("externalChangeUnknown")}
+      </p>
+      <button type="button" data-testid="editor-external-dismiss" className="px-1.5 rounded border border-amber-300 cursor-pointer" onClick={() => setExternal(null)}>{t("dismiss")}</button>
+    </div>
+  ) : null;
+  const classNotice = state.mode === "course" && state.view === "class" && classView.missing ? (
+    <div data-testid="editor-class-no-sheet" className="pointer-events-auto w-64 rounded-lg border border-slate-200 bg-white/95 text-slate-600 text-xs p-2 shadow-sm">
+      {t("classNoSheet")}
+    </div>
+  ) : null;
+  const noticeNode = notice ? (
+    <div data-testid="editor-conflict" data-kind={notice.kind} className="pointer-events-auto w-64 rounded-lg border border-amber-300 bg-amber-50 text-amber-900 text-xs p-2 shadow-sm">
+      {notice.kind === "refresh" ? (
+        <p>{notice.items?.length ? t("conflictRefreshItems", { items: notice.items.join(", ") }) : t("conflictRefresh")}</p>
+      ) : (
+        <p>{notice.theirs
+          ? notice.by
+            ? t("conflictMovedBy", { who: notice.by.name || t("presenceAnonymous"), time: clockTime(notice.by.at, i18n.language), x: notice.theirs.x.toFixed(1), y: notice.theirs.y.toFixed(1) })
+            : t("conflictMoved", { x: notice.theirs.x.toFixed(1), y: notice.theirs.y.toFixed(1) })
+          : t("conflictRefresh")}</p>
+      )}
+      <div className="flex gap-1.5 mt-1.5">
+        {notice.kind === "moved" && (
+          <button type="button" data-testid="editor-conflict-keep-mine" className="px-2 py-0.5 rounded bg-amber-600 text-white cursor-pointer"
+            onClick={() => {
+              const n = notice;
+              void run(() => writes.updateControl({ id: n.controlId, xpos: n.mine.x, ypos: n.mine.y }));
+            }}>
+            {t("keepMine")}
+          </button>
+        )}
+        <button type="button" data-testid="editor-conflict-dismiss" className="px-2 py-0.5 rounded border border-amber-300 cursor-pointer"
+          onClick={() => { setNotice(null); setMoveEpoch((v) => v + 1); }}>
+          {notice.kind === "moved" ? t("keepTheirs") : t("dismiss")}
+        </button>
+      </div>
+    </div>
+  ) : null;
+
+  /** The `+` menu (§10): an armed tool runs the pin-drop flow; the sheet drops to peek so the map shows. */
+  const pickAdd = (c: AddChoice) => {
+    setDetent("peek");
+    if (c.kind === "place") armPlace(c.tool);
+    else if (c.kind === "area") startArea(c.area);
+    else setTool({ kind: "text" });
+  };
+  /** The sheet settled at a new height: past peek, the selected control is moved into the band above it. */
+  const onSheetHeight = (px: number) => {
+    setSheetPx(px);
+    const pt = state.selectedControlId !== null ? ptOf(state.selectedControlId) : null;
+    if (pt && detent !== "peek") centreOn(pt, px);
+  };
+
+  /** The phone (§10): full-bleed map, the bottom sheet (peek: KPIs, selection, action bar), the floating `+`. */
+  const phoneOverlay = () => {
+    const actions = (
+      <div data-testid="editor-action-bar" className="flex gap-1 overflow-x-auto -mx-1 px-1">
+        {contextActions.map((a) => (
+          <button key={a.id} type="button" data-testid={`editor-action-${a.id}`} onClick={a.onClick} disabled={a.disabled}
+            className={`shrink-0 min-h-11 px-3 rounded-lg border text-sm whitespace-nowrap cursor-pointer disabled:opacity-40 ${a.variant === "danger" ? "border-red-200 text-red-600" : "border-slate-200 text-slate-700"}`}>
+            {a.label}
+          </button>
+        ))}
+      </div>
+    );
+    const selectionName = selectedCoord
+      ? `${selectedCoord.code}${selectedInfo?.description ? ` · ${selectedInfo.description}` : ""}`
+      : selectedObject ? t(`kind_${selectedObject.kind}`) : null;
+    const peek = (
+      <div className="flex flex-col gap-1.5 pb-2">
+        <div className="flex items-center gap-2 min-w-0 text-xs">
+          {statusBar}
+          {fieldKpi && <span data-testid="editor-field-kpi" className="shrink-0 text-emerald-700">{fieldKpi}</span>}
+        </div>
+        {selectionName && <div data-testid="editor-sheet-selection" className="truncate text-slate-700 font-medium">{selectionName}</div>}
+        {!toolActive && (contextActions.length > 0 || suggestions.length > 0) && actions}
+      </div>
+    );
+    return (
+      <div className="relative w-full h-full">
+        {objectsDom}
+        <div className="absolute top-2 inset-x-2 z-30 flex flex-col gap-1.5 pointer-events-none">
+          {noticeNode}
+          {externalNode}
+          {fieldReadOnly && <OfflineNotice />}
+          {errorMsg && <span data-testid="editor-error" className="pointer-events-auto w-fit text-[11px] text-red-600 bg-white/95 rounded px-1.5">{errorMsg}</span>}
+          {showExhausted && <span data-testid="series-exhausted" className="pointer-events-auto w-fit text-[11px] text-amber-700 bg-white/95 rounded px-1.5">{tc("seriesExhausted")}</span>}
+        </div>
+        {!toolActive && (
+          <AddMenu bottomPx={sheetPx} disabled={fieldReadOnly} canTonerSaver={canTonerSaver} onPick={pickAdd} />
+        )}
+        <BottomSheet detent={detent} onDetent={setDetent} onHeight={onSheetHeight} peek={peek} label={t("sheet")}>
+          {suggestions.length > 0 && !toolActive && (
+            <div className="px-2.5 py-1 flex flex-col gap-1">
+              {suggestions.map((sg) => (
+                <button key={sg.id} type="button" data-testid={`editor-suggestion-${sg.id}`} onClick={sg.onApply}
+                  className="min-h-11 px-3 rounded-lg border border-purple-200 text-left text-sm text-purple-700 cursor-pointer">{sg.label}</button>
+              ))}
+            </div>
+          )}
+          <div data-testid="editor-inspector-selection">{selectionSection}</div>
+          <div className="border-t border-slate-100 mt-1 pt-1" data-testid={fieldMode ? "editor-inspector-field" : "editor-inspector-course"}>
+            {fieldMode ? fieldSection : courseSection}
+          </div>
+          <ChecksSection checks={courseChecks.checks} onLocate={locateCheck} />
+        </BottomSheet>
+      </div>
+    );
+  };
+
+  const overlay = isMobile ? phoneOverlay() : (
+    <div className="flex gap-2 h-full min-h-0 items-stretch">
+      {objectsDom}
+      {/* Field mode has no tool rail: it plans nothing new from the desk (§9); the keys still arm the tools. */}
+      {state.mode === "layout" ? layoutMode.rail : !fieldMode && <ToolRail
+        tool={state.tool}
+        onTool={(key) => {
+          if (key === "V") exitTool();
+          else if (key === "S" || key === "K" || key === "M") armPlace(key === "S" ? "start" : key === "M" ? "finish" : "control");
+          else if (key === "T") setTool({ kind: "text" });
+          else if (key === "G") setTool({ kind: "gap", legInsertAt: state.selectedControlId === null ? state.phantom?.insertAt ?? null : null });
+        }}
+        onArea={startArea}
+        areaOpen={areaOpen}
+        onAreaOpen={setAreaOpen}
+        canGap={canGap}
+        canTonerSaver={canTonerSaver}
+        snapping={state.snapping}
+        onSnapping={() => dispatch({ type: "toggle-snapping" })}
+      />}
+      <div className="flex flex-col gap-2 min-h-0 h-full">
+        {fieldReadOnly && <div className="w-64"><OfflineNotice /></div>}
+        {noticeNode}
+        {externalNode}
+        {classNotice}
+        <Inspector>
+          {state.mode === "layout" ? layoutMode.inspector : <>
+          {fieldMode ? (
+            <InspectorSection title={t("fieldControls")} testId="editor-inspector-field" aside={selectedCourse?.name}>{fieldSection}</InspectorSection>
+          ) : (
+            <InspectorSection title={t("sequence")} testId="editor-inspector-course" aside={selectedCourse?.name}>{courseSection}</InspectorSection>
+          )}
+          <InspectorSection title={t("selection")} testId="editor-inspector-selection">{selectionSection}</InspectorSection>
+          <InventorySection inventory={inventory} activeSeriesId={activeSeriesId} onSeries={setAllocSeriesId} />
+          <ChecksSection checks={courseChecks.checks} onLocate={locateCheck} />
+          </>}
+        </Inspector>
+        <div className="mt-auto flex flex-col gap-1">
+          {state.tool.kind === "gap" && gapTarget?.stored && (
+            // Stored gaps replace the automatic ones (§6.3): an empty list is automatic again.
+            <button type="button" data-testid="editor-gap-reset" onClick={() => writeGaps(gapTarget, [])}
+              className="pointer-events-auto w-fit px-2 py-1 rounded-md bg-white/95 border border-purple-200 text-purple-700 text-[11px] shadow-sm hover:bg-purple-50 cursor-pointer">
+              {t("resetGaps")}
+            </button>
+          )}
+          {showExhausted && <span data-testid="series-exhausted" className="pointer-events-auto w-fit text-[11px] text-amber-700 bg-white/95 rounded px-1.5">{tc("seriesExhausted")}</span>}
+          {errorMsg && <span data-testid="editor-error" className="pointer-events-auto w-64 text-[11px] text-red-600 bg-white/95 rounded px-1.5">{errorMsg}</span>}
+          {statusBar}
+        </div>
+      </div>
+    </div>
+  );
+
+  return (
+    // A phone gets the whole screen (§10: full-bleed canvas, the compact top bar's back leaves the editor).
+    <div data-testid="editor-page" data-mode={state.mode} data-layout={isMobile ? "phone" : "desktop"}
+      className={isMobile ? "fixed inset-0 z-[60] bg-white" : "h-[calc(100dvh-8rem)] sm:h-[calc(100dvh-200px)] min-h-[420px]"}>
+      <div className={isMobile ? "h-full overflow-hidden" : "h-full bg-white rounded-xl border border-slate-200 overflow-hidden"}>
+        <MapPanel
+          fillContainer
+          fitToControls
+          showMapInfo={!isMobile}
+          filterMode={(state.mode === "layout" ? layoutMode.courseOnly : state.hideOthers || (state.view === "class" && !!classLayout)) && selectedCourse && courseView ? "course" : "all"}
+          defaultShowDescriptions={!isMobile}
+          descriptionsAllControls
+          toolbar={toolbar}
+          mapOverlay={overlay}
+          mapOverlayLayout={isMobile ? "fill" : "corner"}
+          fullscreenOverlay={descControl ? (
+            <ControlDescriptionEditor controlCode={descControl.code} initial={descControl.description} onSave={saveDescription} onCancel={closeDescription} />
+          ) : null}
+          editor={state.mode === "layout" ? layoutMode.editor : editor}
+          highlightCourseName={courseView ? selectedCourse?.name : undefined}
+        />
+      </div>
+    </div>
+  );
+}
+
+/** A one-line description summary for the inspector: the column-D symbol's name (+ G). */
+function describe(d: ControlDescription, lang: string): string {
+  const parts = (["c", "d", "e", "g"] as const).flatMap((col) => {
+    const v = d[col];
+    const iof = v ? ocadToIof(col, v) : null;
+    return iof ? [iofSymbolName(iof, lang)] : [];
+  });
+  return parts.join(" · ");
+}

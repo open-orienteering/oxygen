@@ -13,15 +13,15 @@
  */
 
 import {
-  aboveZoomGate, BucketLru, buildVisibleSet, CLUB_BUDGET_BYTES, DRAW_MARGIN_CELLS, PREFETCH_MARGIN_CELLS, visibleCells,
-  type PreparedPart, type ResidentPart, type ViewRect,
+  aboveZoomGate, BucketLru, buildVisibleSet, CLUB_BUDGET_BYTES, DRAW_MARGIN_CELLS, filterEntryKey, PREFETCH_MARGIN_CELLS, visibleCells,
+  type PreparedPart, type ResidentPart, type ViewRect, type VisibleFilter,
 } from "./buckets.js";
 import type { render as R } from "@oxygen/shared";
-import type { DocumentRenderOptions, FrameStats, MapGlRenderer, TextAtlasImage } from "./renderer.js";
+import type { DocumentRenderOptions, FrameStats, InsetBox, MapGlRenderer, TextAtlasImage } from "./renderer.js";
 import type { RenderTarget } from "./view.js";
 import {
   createMapGlWorker, messageChannelScheduler,
-  type CourseLayerRequest, type CourseReply, type LoadRequest, type LoadSummary, type WorkerReply, type WorkerRequest,
+  type CourseLayerRequest, type CourseReply, type FilterReply, type LoadRequest, type LoadSummary, type WorkerReply, type WorkerRequest,
 } from "./worker.js";
 
 /** Message transport to the worker: a real Web Worker, or the same handler inline. */
@@ -59,7 +59,7 @@ export type EngineLoadRequest = Omit<LoadRequest, "type" | "gate" | "prefetchMar
 };
 
 /** What a course reply tells the host (the UI layer's geometry, the stack, warnings). */
-export type CourseInfo = Pick<CourseReply, "colours" | "derivation" | "metrics" | "warnings">;
+export type CourseInfo = Pick<CourseReply, "colours" | "derivation" | "metrics" | "warnings" | "hit">;
 
 export interface EngineOptions {
   /** Resident GPU budget, bytes. Default 150 MB (club); B4 passes 30 MB for event maps. */
@@ -101,6 +101,15 @@ const BASE = (id: number) => `b${id}`;
 const DETAIL = (id: number) => `d${id}`;
 const LARGE = "L";
 const COURSE = "C";
+const PAGE = "P";
+
+/** A worker filter reply as the visible set takes it. */
+function engineFilter(f: FilterReply | null): { hidden: ReadonlySet<number>; visible: VisibleFilter } | undefined {
+  if (!f) return undefined;
+  const entryMask = new Map<number, number>();
+  for (let i = 0; i < f.entries.length; i += 3) entryMask.set(filterEntryKey(f.entries[i], f.entries[i + 1]), f.entries[i + 2]);
+  return { hidden: new Set(f.hidden), visible: { entryMask, positions: f.positions, indices: f.indices, masks: f.masks } };
+}
 
 export class MapGlEngine {
   private readonly renderer: MapGlRenderer;
@@ -124,6 +133,8 @@ export class MapGlEngine {
   private lastRebuildAt = -Infinity;
   private holdTimer: ReturnType<typeof setTimeout> | undefined;
   private hidden: ReadonlySet<number> = new Set();
+  /** Filter regions on the static buckets (§5.2 "Filter regions"): from the course reply, or a stream source's masks. */
+  private filter: { hidden: ReadonlySet<number>; visible: VisibleFilter } | undefined;
   private view: ViewRect | undefined;
   private loadWaiter: { resolve: (s: LoadSummary) => void; reject: (e: Error) => void } | undefined;
   private completeWaiters: (() => void)[] = [];
@@ -131,6 +142,9 @@ export class MapGlEngine {
   /** The dynamic bucket: resident whatever the zoom gate and the budget (counted as fixed bytes). */
   private course: ResidentPart | undefined;
   private courseColours: R.ColourStack | undefined;
+  /** Layout mode's page part (docs/course-layout.md §1): drawn after every map colour; the map clipped to its frame. */
+  private page: ResidentPart | undefined;
+  private pageClip: DocumentRenderOptions["pageClip"];
   /** The last `setCourse` input (`undefined`: never set), re-sent after a load. */
   private courseInput: CourseLayerRequest | null | undefined;
   private courseGeneration = 0;
@@ -198,19 +212,23 @@ export class MapGlEngine {
     }
     this.renderer.releasePart(COURSE);
     this.course = m.part ? this.renderer.uploadPart(COURSE, m.part) : undefined;
+    this.renderer.releasePart(PAGE);
+    this.page = m.pagePart ? this.renderer.uploadPart(PAGE, m.pagePart) : undefined;
+    this.pageClip = m.page ? { fromColour: m.page.colourBase, ringUm: m.page.frameRingUm } : undefined;
     this.courseColours = m.colours.length ? m.colours : undefined;
+    this.filter = engineFilter(m.filter);
     this.updateFixedBytes();
     this.dirty = true;
     this.arrivalOnly = false;
     this.evict();
-    this.onCourse?.({ colours: m.colours, derivation: m.derivation, metrics: m.metrics, warnings: m.warnings });
+    this.onCourse?.({ colours: m.colours, derivation: m.derivation, metrics: m.metrics, warnings: m.warnings, hit: m.hit });
     this.onChange?.();
   }
 
   private updateFixedBytes(): void {
     const s = this.summary;
     if (!s) return;
-    this.fixedBytes = s.bytes.base + s.bytes.large + this.atlasBytes + this.renderer.textAtlasBytes + (this.course?.part.gpuBytes ?? 0);
+    this.fixedBytes = s.bytes.base + s.bytes.large + this.atlasBytes + this.renderer.textAtlasBytes + (this.course?.part.gpuBytes ?? 0) + (this.page?.part.gpuBytes ?? 0);
     this.lru.fixedBytes = this.fixedBytes;
   }
 
@@ -239,6 +257,7 @@ export class MapGlEngine {
       this.detailCells = new Set(s.detailCells);
       // `setDocument` dropped every part; a course request posted after the load replies after this.
       this.course = undefined;
+      this.filter = engineFilter(m.filter ?? null);
       this.atlasBytes = s.bytes.atlas;
       this.updateFixedBytes();
       this.dirty = true;
@@ -375,7 +394,11 @@ export class MapGlEngine {
       if (this.large) parts.push(this.large);
       // Last: within a colour the course draws over the map's own objects of that colour.
       if (this.course) parts.push(this.course);
-      const vs = buildVisibleSet(parts, this.hidden);
+      // The page's colours sort after every map colour: the page layer draws over the map, as in the PDF.
+      if (this.page) parts.push(this.page);
+      const f = this.filter;
+      const hidden = f && f.hidden.size ? new Set([...this.hidden, ...f.hidden]) : this.hidden;
+      const vs = buildVisibleSet(parts, hidden, f?.visible);
       this.st.lastBuildMs = performance.now() - t0;
       this.renderer.setVisibleSet(vs);
       this.lru.fixedBytes = this.fixedBytes + this.renderer.documentBytes.visibleSet;
@@ -385,9 +408,30 @@ export class MapGlEngine {
       this.st.rebuilds++;
       this.st.lastRebuildMs = performance.now() - t0;
     }
-    const stats = this.renderer.renderDocument(view, opts, target);
+    const stats = this.renderer.renderDocument(view, this.pageClip ? { ...opts, pageClip: this.pageClip } : opts, target);
     stats.cpuMs = performance.now() - t0;
     return stats;
+  }
+
+  /**
+   * The editor's loupe (docs/map-rendering.md §5.5 "Loupe"), after `render` in the same frame:
+   * draws the visible set `render` last built once more with `view` (`loupeView`) into the
+   * renderer's inset target and composites it into the circle of `box` on the canvas. No cell
+   * selection, no worker request, no rebuild: the loupe shows what is resident.
+   */
+  renderInset(view: ViewRect, opts: DocumentRenderOptions, box: InsetBox): FrameStats {
+    if (!this.view || !this.summary) return { drawCalls: 0, cpuMs: 0 };
+    const t0 = performance.now();
+    const target = this.renderer.insetTarget(box.size);
+    const stats = this.renderer.renderDocument(view, this.pageClip ? { ...opts, pageClip: this.pageClip } : opts, target);
+    this.renderer.compositeInset(box);
+    stats.cpuMs = performance.now() - t0;
+    return stats;
+  }
+
+  /** Frees the loupe's target once it is gone. */
+  releaseInset(): void {
+    this.renderer.releaseInset();
   }
 
   stats(): EngineStats {

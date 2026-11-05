@@ -5,7 +5,7 @@ import { courseColourStack } from "../colour-stack.js";
 import { paletteStack } from "../../symbol-library/palette.js";
 import type { DocumentColour } from "../../map-document/header.js";
 import { COORD_FLAG } from "../../render/pass-stream.js";
-import type { LineSymbol, PointSymbol, TextSymbol } from "../../render/symbol.js";
+import type { AreaSymbol, LineSymbol, PointSymbol, TextSymbol } from "../../render/symbol.js";
 
 const stack = (spec: "ISOM2017-2" | "ISSprOM2019-2") =>
   courseColourStack(paletteStack("iof2024", spec).map((c): DocumentColour => ({ ...c, paletteIds: [c.id.slice(c.id.indexOf(":") + 1)] })));
@@ -66,6 +66,28 @@ describe("courseSymbols (course-layer.md §3.1)", () => {
     expect(number.halo).toEqual({ colour: index.get("white-upper"), widthUm: 150 });
     expect((s.symbols[s.idx.leader] as LineSymbol).main!.colour).toBe(index.get("purple-upper"));
   });
+});
+
+describe("dangerous area (course-layer.md §3.1, §8.1)", () => {
+  for (const spec of ["ISOM2017-2", "ISSprOM2019-2"] as const) {
+    it(`${spec}: 709's stripes in both diagonals; 709.b / 709.c's borders over them`, () => {
+      const { index } = stack(spec);
+      const s = courseSymbols({ libraryId: spec, documentFactor: 1.5 }, index, {});
+      const oob = s.symbols[s.idx.oobArea] as AreaSymbol;
+      const [h] = oob.hatches!;
+      for (const [k, of] of [["dangerousArea", "oobArea"], ["dangerousAreaBorder", "oobAreaBorder"], ["dangerousAreaDashed", "oobAreaDashed"]] as const) {
+        const d = s.symbols[s.idx[k]] as AreaSymbol, base = s.symbols[s.idx[of]] as AreaSymbol;
+        expect(d.type).toBe("area");
+        expect(d.code).toBe("710");
+        expect(d.id.startsWith("course:dangerous")).toBe(true);
+        expect(d.hatches).toEqual([h, { ...h, angleDeg: h.angleDeg + 90 }]);
+        expect(d.border).toEqual(base.border);
+      }
+      expect((s.symbols[s.idx.dangerousArea] as AreaSymbol).border).toBeUndefined();
+      // Scaled with the document like 709 itself.
+      expect(h.spacingUm).toBeCloseTo(1800, 6);
+    });
+  }
 });
 
 describe("arcs", () => {

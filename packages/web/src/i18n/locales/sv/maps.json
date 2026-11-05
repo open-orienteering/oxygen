@@ -191,5 +191,7 @@
   "removeVertex": "Ta bort punkt",
   "curveHint": "Alt-dra en punkt för att lägga till kurvhandtag.",
   "closePath": "Slut linjen",
-  "dismiss": "Stäng"
+  "dismiss": "Stäng",
+  "templateAuto": "auto",
+  "templateExtra": "extra"
 }

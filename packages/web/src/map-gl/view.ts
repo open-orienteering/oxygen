@@ -42,6 +42,17 @@ export function viewMatrix(view: ViewRect, originX: number, originY: number): Fl
   return m;
 }
 
+/**
+ * The editor's loupe (docs/map-rendering.md §5.5 "Loupe"): the main view magnified `scale` times
+ * about `pointUm` (paper µm, the dragged point) in a `sizePx` square of device pixels, the main
+ * rotation kept. Its matrix is `viewMatrix` of this view; passing the view rather than only a
+ * matrix also hands the renderer the magnified px/µm the screen-only rules read (hairline floor,
+ * glyph and text collapse, hatch tint), so the loupe draws as the map would at that zoom.
+ */
+export function loupeView(main: ViewRect, pointUm: { x: number; y: number }, scale: number, sizePx: number): ViewRect {
+  return { centreX: pointUm.x, centreY: pointUm.y, pxPerUm: main.pxPerUm * scale, widthPx: sizePx, heightPx: sizePx, rotationDeg: main.rotationDeg ?? 0 };
+}
+
 /** Applies a column-major mat4 to (x, y, 0, 1); returns clip (x, y, w). For tests. */
 export function project(m: ArrayLike<number>, x: number, y: number): [number, number, number] {
   return [m[0] * x + m[4] * y + m[12], m[1] * x + m[5] * y + m[13], m[3] * x + m[7] * y + m[15]];

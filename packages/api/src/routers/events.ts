@@ -789,7 +789,12 @@ async function applyReferenceUpsert(
   if (!UUID_RE.test(payload.id)) {
     throw new Error(`${type}: malformed row id`);
   }
-  const fields = (payload.fields ?? {}) as Record<string, never>;
+  const fields = { ...(payload.fields ?? {}) } as Record<string, never>;
+  // The version token travels as a decimal string (BigInt is not JSON).
+  const version = (fields as Record<string, unknown>).version;
+  if (typeof version === "string" && /^\d+$/.test(version)) {
+    (fields as Record<string, unknown>).version = BigInt(version);
+  }
   const create = {
     ...fields,
     id: payload.id,
@@ -822,6 +827,7 @@ async function applyReferenceUpsert(
             controlId: cc.controlId,
             labelDx: cc.labelDx ?? null,
             labelDy: cc.labelDy ?? null,
+            numberHidden: cc.numberHidden ?? false,
           })),
         });
       }

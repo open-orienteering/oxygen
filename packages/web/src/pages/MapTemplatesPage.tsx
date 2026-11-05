@@ -1,6 +1,7 @@
 import { Fragment, useMemo, useState } from "react";
 import { useTranslation } from "react-i18next";
-import { useParams } from "react-router-dom";
+import { useNavigate, useParams } from "react-router-dom";
+import { layoutEditorHref, useCourseEditorMount } from "../hooks/useCourseEditorMount";
 import { MapLayoutEditor, type MapLayoutSnapshot } from "../components/MapLayoutEditor";
 import { SortHeader } from "../components/SortHeader";
 import { StructuredSearchBar } from "../components/structured-search/StructuredSearchBar";
@@ -58,6 +59,8 @@ type TemplateRow = MapTemplateView & MapTemplateSearchRow;
 export function MapTemplatesPage() {
   const { t } = useTranslation("maps");
   const { nameId = "" } = useParams<{ nameId: string }>();
+  const editorMount = useCourseEditorMount();
+  const navigate = useNavigate();
   const { has } = useCapabilities();
   const canEdit = has("courses.edit");
   const utils = trpc.useUtils();
@@ -158,6 +161,12 @@ export function MapTemplatesPage() {
 
   const openEditor = (row: MapTemplateView) => {
     const firstCourse = (courses.data ?? [])[0];
+    // The new editor's Layout mode where the event mounts it (docs/course-layout.md §4); nothing until that is known.
+    if (editorMount === null) return;
+    if (editorMount === "vector") {
+      navigate(layoutEditorHref(nameId, { template: row.seq }, firstCourse?.id));
+      return;
+    }
     setPreviewCourseId(firstCourse?.id);
     setEditingSeq(row.seq);
   };
@@ -329,6 +338,17 @@ export function MapTemplatesPage() {
                   >
                     <td className="px-4 py-3 font-medium text-slate-900">
                       {row.name}
+                      {/* The key as a badge: templates keep their names (docs/course-layout.md §5). */}
+                      {row.autoKey && (
+                        <span
+                          data-testid={`map-template-key-${row.seq}`}
+                          data-extra={row.isExtra ? "true" : "false"}
+                          title={row.autoKey}
+                          className={`ml-2 rounded px-1.5 py-0.5 text-[10px] font-medium ${row.isExtra ? "bg-amber-100 text-amber-800" : "bg-purple-100 text-purple-700"}`}
+                        >
+                          {row.isExtra ? t("templateExtra") : t("templateAuto")}
+                        </span>
+                      )}
                     </td>
                     <td className="px-4 py-3 text-slate-600">
                       {row.paper} ·{" "}
@@ -373,6 +393,7 @@ export function MapTemplatesPage() {
                               type="button"
                               data-testid={`edit-template-layout-${row.seq}`}
                               onClick={() => openEditor(row)}
+                              disabled={editorMount === null}
                               title={t("editLayout")}
                               className="rounded p-1.5 text-slate-400 hover:bg-blue-50 hover:text-blue-700"
                             >

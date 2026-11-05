@@ -16,27 +16,16 @@
  */
 
 import { courseLayer, courseRenderInput } from "../course/layer.js";
-import { courseColourStack, withObjectColours } from "../course/colour-stack.js";
-import { layoutObjects, objectColours } from "../course/objects.js";
-import { courseSymbols } from "../course/symbols.js";
+import { RING_BLEED_UM, mapLayerWindow, pageLayer } from "../course/page-layer.js";
 import type { FontMetrics } from "../render/truetype.js";
-import type { RenderSymbol } from "../render/symbol.js";
 import { symbolise } from "../render/symbolise.js";
 import { type ColourMode, colourOperator, pageColour } from "./colour.js";
-import { descriptionBlock } from "./description.js";
 import { geoViewport } from "./geo.js";
 import { type Matrix, UM_TO_PT, cmOperator, fmtMm, mapLayerOperators } from "./operators.js";
-import { type ComposedPage, type PageImage, type PageInput, type PageWarning, flipPageObject, frameInMap, frameRectUm, mapLayerTransform } from "./page.js";
+import { type ComposedPage, type PageImage, type PageInput, type PageWarning, frameRectUm, mapLayerTransform } from "./page.js";
 import type { PdfWriter } from "./writer.js";
 
-/**
- * How far the outer boundary of a white-out outside lies beyond the frame:
- * the frame clip cuts it back, and no anti-aliased seam of map ink is left
- * between the clip edge and a ring edge on the same line.
- */
-export const RING_BLEED_UM = 1000;
-
-const grow = (r: ComposedPage["frameUm"], d: number): ComposedPage["frameUm"] => ({ x: r.x - d, y: r.y - d, width: r.width + 2 * d, height: r.height + 2 * d });
+export { RING_BLEED_UM };
 
 export function composePage(input: PageInput, fonts: FontMetrics[]): ComposedPage {
   const H = input.paper.heightMm;
@@ -48,57 +37,31 @@ export function composePage(input: PageInput, fonts: FontMetrics[]): ComposedPag
   const layer = courseLayer({
     structure: input.course.structure,
     sites: input.course.sites,
-    objects: input.objects,
+    objects: [...input.objects, ...(input.course.objects ?? [])],
     appearance: input.course.appearance,
-    viewOptions: { ...input.course.viewOptions, window: frameInMap(transform, grow(frameUm, RING_BLEED_UM)), textValues: input.textValues },
+    viewOptions: { ...input.course.viewOptions, window: mapLayerWindow(input), textValues: input.textValues },
     document: input.map.context,
     ...(input.map.cutFeatures ? { cutFeatures: input.map.cutFeatures } : {}),
+    ...(input.course.regions ? { regions: input.course.regions } : {}),
   });
   for (const w of layer.warnings) warnings.push({ code: w.code, message: w.message });
   const merged = courseRenderInput(input.map, layer);
-  const map = symbolise({ objects: merged.objects, symbols: merged.symbols, fonts });
+  const map = symbolise({ objects: merged.objects, symbols: merged.symbols, fonts, regions: merged.regions, regionObjectLimit: merged.regionObjectLimit });
   for (const w of map.warnings) warnings.push({ code: w.code, message: `map layer: ${w.message}` });
 
-  // Page layer: page-anchored objects, flipped to y-up page mm, through the course layer's object builder.
-  const pageObjects = input.objects.filter((o) => o.anchor === "page").map((o) => flipPageObject(o, H));
-  const ink = input.description?.colour ?? "#000000";
-  const palette = withObjectColours(layer.colours, [...(input.description ? ["#ffffff", ink] : []), ...objectColours(pageObjects)]);
-  // White-out and 709 on the page in the map's own entries, at the size they print on the map.
-  const set = courseSymbols(
-    { libraryId: input.map.context.libraryId, documentFactor: input.map.context.documentFactor * transform.scaleRatio },
-    courseColourStack(layer.colours).index,
-    {},
-  );
-  const pageSymbols: RenderSymbol[] = [...set.symbols];
-  // A page-anchored white-out outside covers the frame (legacy: the ring against the map frame).
-  const fr = grow(frameUm, RING_BLEED_UM);
-  const frameRing = [
-    { x: fr.x / 1000, y: fr.y / 1000 },
-    { x: (fr.x + fr.width) / 1000, y: fr.y / 1000 },
-    { x: (fr.x + fr.width) / 1000, y: (fr.y + fr.height) / 1000 },
-    { x: fr.x / 1000, y: (fr.y + fr.height) / 1000 },
-  ];
-  const built = layoutObjects(pageObjects, set, pageSymbols, palette.indexOf, { overprintScale: 1, window: frameRing, textValues: input.textValues });
-  for (const w of built.warnings) warnings.push({ code: w.code, message: w.message });
-  const pageRender = built.objects.map(({ ref: _ref, ...o }) => o);
-  if (input.description) {
-    const block = descriptionBlock(input.description, H, palette.indexOf);
-    const offset = pageSymbols.length;
-    pageSymbols.push(...block.symbols);
-    for (const o of block.objects) pageRender.push({ ...o, symbolIdx: o.symbolIdx + offset });
-  }
-  const page = symbolise({ objects: pageRender, symbols: pageSymbols, fonts });
-  for (const w of page.warnings) warnings.push({ code: w.code, message: `page layer: ${w.message}` });
+  // Page layer: page-anchored objects and the description block, colours appended to the map stack.
+  const page = pageLayer({ ...input, context: input.map.context }, layer.colours, fonts);
+  warnings.push(...page.warnings);
 
   const images: PageImage[] = [
     ...layer.images.map((i) => ({ layer: "map" as const, graphicId: i.object.graphicId, rectUm: i.rectUm, ...(i.object.crop ? { crop: i.object.crop } : {}) })),
-    ...built.images.map((i) => ({ layer: "page" as const, graphicId: i.object.graphicId, rectUm: i.rectUm, ...(i.object.crop ? { crop: i.object.crop } : {}) })),
+    ...page.images,
   ];
 
   return {
     paper: input.paper,
     frameUm,
-    colours: palette.colours,
+    colours: page.colours,
     mapLayer: { stream: map.stream, transform },
     pageLayer: { stream: page.stream },
     marksLayer: null,
@@ -172,7 +135,7 @@ export async function writePage(writer: PdfWriter, page: ComposedPage, opts: Wri
     `${colourOperator(pageColour("#ffffff", opts.mode), "fill")} 0 0 ${fmtMm(W)} ${fmtMm(Hp)} re f`,
     "q",
     `${pt(f.x)} ${pt(f.y)} ${pt(f.width)} ${pt(f.height)} re W n`,
-    mapLayerOperators(page.mapLayer.stream, { colours: page.colours, mode: opts.mode, resources: wp.resources, originUm: t.originUm, matrix: tMap }),
+    mapLayerOperators(page.mapLayer.stream, { colours: page.colours, mode: opts.mode, resources: wp.resources, originUm: t.originUm, matrix: tMap, frame: { x: f.x * UM_TO_PT, y: f.y * UM_TO_PT, width: f.width * UM_TO_PT, height: f.height * UM_TO_PT } }),
     ...(mapImages.length ? ["q", cmOperator(tMap, 9), ...mapImages, "Q"] : []),
     "Q",
     mapLayerOperators(page.pageLayer.stream, { colours: page.colours, mode: opts.mode, resources: wp.resources, matrix: pageMatrix }),

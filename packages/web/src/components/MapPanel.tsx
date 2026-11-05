@@ -7,6 +7,7 @@ import { shouldUseChunkedUpload, uploadMapFileChunked } from "../lib/map-upload"
 import { useCurrentUser } from "../context/CurrentUserContext";
 import { MapViewer, type ControlOverlay, type CourseOverlay, type MapViewerEditorProps } from "./MapViewer";
 import { useIsWideViewport } from "./map-pane-shared";
+import { courseObjectsForView } from "../lib/course-layer-request";
 import {
   IconDescriptions,
   IconEye,
@@ -72,6 +73,8 @@ export interface MapPanelPublicProps {
    * fullscreen. Stabilize via `useMemo`.
    */
   mapOverlay?: React.ReactNode;
+  /** `fill`: the overlay spans the whole map box (the editor's phone chrome, docs/course-editor.md §10). */
+  mapOverlayLayout?: "corner" | "fill";
   /**
    * Fixed modal content that must remain inside the browser fullscreen
    * subtree. Rendered as a direct child of the MapPanel fullscreen element.
@@ -129,6 +132,7 @@ function MapPanelImpl({
   completionCourseId,
   toolbar,
   mapOverlay,
+  mapOverlayLayout = "corner",
   fullscreenOverlay,
   punchStatusByCode,
   focusControlCodes,
@@ -208,6 +212,13 @@ function MapPanelImpl({
   const vectorFellBack =
     mapPipeline.data?.pipeline === "vector" && !!mapMetadata.data?.documentHash && drawPipeline === "legacy";
   const onVectorUnavailable = useCallback(() => setVectorUnavailable(true), []);
+  // The event's automatic cuts (course-layer.md §3.4): the GL course layer
+  // follows the toggle as the stored geometry does. The editors' toggle
+  // refetches this same query. Until it answers, cuts are on.
+  const overprintCuts = trpc.course.getOverprintCuts.useQuery(undefined, {
+    staleTime: Number.POSITIVE_INFINITY,
+    enabled: !!mapMetadata.data?.documentHash,
+  });
   const controlCoords = trpc.course.controlCoordinates.useQuery(undefined, {
     staleTime: Number.POSITIVE_INFINITY,
   });
@@ -225,6 +236,16 @@ function MapPanelImpl({
   const classList = trpc.class.list.useQuery(undefined, {
     staleTime: Number.POSITIVE_INFINITY,
   });
+  // Course objects (docs/course-layer.md §8): those in scope of the
+  // highlighted courses, or the `all`-scoped ones when none is (the kiosk
+  // shows the runner's course, so it gets both).
+  const courseObjectList = trpc.courseObject.list.useQuery(undefined, {
+    staleTime: Number.POSITIVE_INFINITY,
+  });
+  const courseObjectsInView = useMemo(() => {
+    if (!courseObjectList.data?.length) return undefined;
+    return courseObjectsForView(courseObjectList.data, effectiveCourseNames, courses.data ?? []);
+  }, [courseObjectList.data, effectiveCourseNames, courses.data]);
   const classNamesByCourse = useMemo(() => {
     const byCourse = new Map<string, string[]>();
     if (!classList.data) return byCourse;
@@ -533,6 +554,7 @@ function MapPanelImpl({
         completionPct,
         punchStatus: punchStatusByCode?.[c.code],
         description: c.description,
+        circleGaps: c.circleGaps,
       };
     });
   }, [controlCoords.data, effectiveControlIds, filterMode, showOnlyRelevant, courseControlIds, showCompletion, completionStatus.data, punchStatusByCode]);
@@ -598,6 +620,8 @@ function MapPanelImpl({
         orderMode: c.orderMode ?? "ordered",
         descriptionInstructions: c.descriptionInstructions ?? null,
         labelOffsets: c.labelOffsets,
+        legGaps: c.legGaps,
+        hiddenNumbers: c.hiddenNumbers,
       };
     });
   }, [courses.data, controlCoords.data, effectiveCourseNames, classNamesByCourse]);
@@ -665,9 +689,14 @@ function MapPanelImpl({
   // selection → course — instead of instantly dropping out of
   // fullscreen. Holding Esc still exits (browser-enforced escape hatch),
   // and the editor exits programmatically once the cascade is empty.
-  // No-op where the API is unavailable.
+  // No-op where the API is unavailable. Keyed on *whether* there is an
+  // editor, not on the editor object: that object is rebuilt on every
+  // editor render (a hover with an armed tool, a selection), and each
+  // re-lock makes Chrome show its "press Esc to exit full screen" bubble
+  // again (docs/bugfix-fullscreen-bubble-flicker.md).
+  const hasEditor = !!editor;
   useEffect(() => {
-    if (!editor || !isFullscreen) return;
+    if (!hasEditor || !isFullscreen) return;
     const kb = (
       navigator as Navigator & {
         keyboard?: { lock?: (keys: string[]) => Promise<void>; unlock?: () => void };
@@ -678,7 +707,7 @@ function MapPanelImpl({
       /* unsupported / denied — Esc keeps its default fullscreen-exit */
     });
     return () => kb.unlock?.();
-  }, [editor, isFullscreen]);
+  }, [hasEditor, isFullscreen]);
 
   // Highlight attribute (intent, not render outcome) — also surfaced on
   // the upload-prompt / loading-state paths so E2E tests can observe the
@@ -890,6 +919,8 @@ function MapPanelImpl({
           controls={controlOverlays}
           courses={courseOverlays}
           courseGeometry={courseGeometry}
+          courseObjects={courseObjectsInView}
+          autoCuts={overprintCuts.data?.enabled !== false}
           coursesWithGeometry={coursesWithGeometry}
           highlightControlId={highlightControlId ? String(highlightControlId) : undefined}
           highlightCourseName={highlightCourseName}
@@ -917,7 +948,7 @@ function MapPanelImpl({
           // course panel) can scroll internally instead of overflowing;
           // pointer events pass through everywhere the overlay isn't.
           // z-[8] keeps it under the editor's context menus (zIndex 9).
-          <div className="absolute top-3 left-3 bottom-3 z-[8] pointer-events-none flex flex-col items-start">
+          <div className={`absolute ${mapOverlayLayout === "fill" ? "inset-0" : "top-3 left-3 bottom-3 flex flex-col items-start"} z-[8] pointer-events-none`}>
             {mapOverlay}
           </div>
         )}

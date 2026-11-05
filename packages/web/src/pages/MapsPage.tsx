@@ -1,7 +1,8 @@
 import { Fragment, useMemo, useState } from "react";
 import type { ClassSummary } from "@oxygen/shared";
 import { useTranslation } from "react-i18next";
-import { useParams } from "react-router-dom";
+import { useNavigate, useParams } from "react-router-dom";
+import { layoutEditorHref, useCourseEditorMount } from "../hooks/useCourseEditorMount";
 import { BulkActionBar } from "../components/BulkActionBar";
 import { MapLayoutEditor, type MapLayoutSnapshot } from "../components/MapLayoutEditor";
 import { SortHeader } from "../components/SortHeader";
@@ -45,8 +46,9 @@ export function MapsPage() {
     () => (coursesQuery.data ?? []) as RawCourseRow[],
     [coursesQuery.data],
   );
+  // Class-override sheets are the editor's (docs/course-layout.md §6): the page stays per course.
   const maps = useMemo(
-    () => (mapsQuery.data ?? []) as CourseMapView[],
+    () => ((mapsQuery.data ?? []) as CourseMapView[]).filter((map) => !map.class),
     [mapsQuery.data],
   );
   const templates = useMemo(
@@ -120,6 +122,15 @@ export function MapsPage() {
   const [expandedId, setExpandedId] = useNumericSearchParam("course");
   const [bulkTemplate, setBulkTemplate] = useState<number | null>(null);
   const [editingMapSeq, setEditingMapSeq] = useState<number | null>(null);
+  // Edit layout: the new editor's Layout mode where the event mounts it, `MapLayoutEditor` otherwise (docs/course-layout.md §4).
+  const editorMount = useCourseEditorMount();
+  const navigate = useNavigate();
+  const editLayout = (map: { seq: number; courseId: number | null }) => {
+    // Disabled until the mount is known: a click before it would open the wrong editor.
+    if (editorMount === null) return;
+    if (editorMount === "vector") navigate(layoutEditorHref(nameId, { sheet: map.seq }, map.courseId));
+    else setEditingMapSeq(map.seq);
+  };
   const [addingForCourse, setAddingForCourse] = useState<number | null>(null);
   const [addTemplateSeq, setAddTemplateSeq] = useState<number | null>(null);
   const [exportOpen, setExportOpen] = useState(false);
@@ -152,6 +163,20 @@ export function MapsPage() {
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : t("downloadFailed"));
     }
+  };
+
+  /** One course's maps; a course without one gets its first sheet on its key's auto template first (docs/course-layout.md §6). */
+  const exportCourse = async (courseId: number, ensure: boolean) => {
+    if (ensure) {
+      try {
+        await utils.client.layout.autoSheets.mutate({ courseId });
+        await invalidate();
+      } catch (cause) {
+        setError(cause instanceof Error ? cause.message : t("downloadFailed"));
+        return;
+      }
+    }
+    await exportPdf(new URLSearchParams({ courses: String(courseId) }));
   };
 
   const saveLayout = async (snapshot: MapLayoutSnapshot) => {
@@ -363,6 +388,16 @@ export function MapsPage() {
                       ) : (
                         courseMaps[0]?.template?.name ?? "—"
                       )}
+                      {courseMaps[0]?.template?.autoKey && (
+                        <span
+                          data-testid={`course-template-badge-${course.id}`}
+                          data-extra={courseMaps[0].template.isExtra ? "true" : "false"}
+                          title={courseMaps[0].template.autoKey}
+                          className={`ml-1.5 rounded px-1.5 py-0.5 text-[10px] font-medium ${courseMaps[0].template.isExtra ? "bg-amber-100 text-amber-800" : "bg-purple-100 text-purple-700"}`}
+                        >
+                          {courseMaps[0].template.isExtra ? t("templateExtra") : t("templateAuto")}
+                        </span>
+                      )}
                     </td>
                     <td className="px-4 py-3 text-right tabular-nums text-slate-600">
                       {courseMaps.length}
@@ -391,7 +426,8 @@ export function MapsPage() {
                           <button
                             type="button"
                             data-testid={`edit-course-map-${courseMaps[0].seq}`}
-                            onClick={() => setEditingMapSeq(courseMaps[0].seq)}
+                            onClick={() => editLayout(courseMaps[0])}
+                            disabled={editorMount === null}
                             title={t("editLayout")}
                             className="flex items-center rounded p-1.5 text-slate-400 transition-colors hover:bg-blue-50 hover:text-blue-700"
                           >
@@ -400,16 +436,11 @@ export function MapsPage() {
                             </svg>
                           </button>
                         )}
-                        {courseMaps.length > 0 && (
+                        {(courseMaps.length > 0 || canEdit) && (
                           <button
                             type="button"
-                            onClick={() =>
-                              void exportPdf(
-                                new URLSearchParams({
-                                  courses: String(course.id),
-                                }),
-                              )
-                            }
+                            data-testid={`export-course-${course.id}`}
+                            onClick={() => void exportCourse(course.id, courseMaps.length === 0)}
                             title={t("exportCourse")}
                             className="flex items-center rounded p-1.5 text-slate-400 transition-colors hover:bg-blue-50 hover:text-blue-700"
                           >
@@ -457,7 +488,8 @@ export function MapsPage() {
                                 <button
                                   type="button"
                                   data-testid={`edit-course-map-${map.seq}`}
-                                  onClick={() => setEditingMapSeq(map.seq)}
+                                  onClick={() => editLayout(map)}
+                                  disabled={editorMount === null}
                                   title={t("editLayout")}
                                   className="rounded p-1.5 text-slate-400 hover:bg-blue-50 hover:text-blue-700"
                                 >
@@ -638,7 +670,8 @@ export function MapsPage() {
           {canEdit && map.resolved && (
             <button
               type="button"
-              onClick={() => setEditingMapSeq(map.seq)}
+              onClick={() => editLayout(map)}
+                                  disabled={editorMount === null}
               className="rounded-lg border border-blue-200 px-3 py-1.5 text-sm text-blue-700"
             >
               {t("editLayout")}

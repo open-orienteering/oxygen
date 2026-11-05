@@ -31,6 +31,7 @@ import {
   sequenceLegMeters,
 } from "../lib/course-editor";
 import { UndoStack } from "../lib/undo-stack";
+import { VersionBook, publicIdAfterCodes, versionConflictOfError } from "../lib/version-book";
 
 /**
  * Interactive course editor.
@@ -113,6 +114,16 @@ export function CourseEditorPage() {
   });
   const courses = trpc.course.list.useQuery();
   const classes = trpc.class.list.useQuery();
+
+  // Version tokens of the rows this page edits (docs/course-layer.md §7):
+  // every write sends the newest one seen, refetches and results advance it.
+  const [versions] = useState(() => new VersionBook());
+  useEffect(() => {
+    if (courses.data) versions.seedAll("course", courses.data);
+  }, [courses.data, versions]);
+  useEffect(() => {
+    if (controlList.data) versions.seedAll("control", controlList.data);
+  }, [controlList.data, versions]);
   const newCourseSuggestions = useMemo(
     () =>
       courselessClassNames(
@@ -270,17 +281,71 @@ export function CourseEditorPage() {
       try {
         return await op();
       } catch (e) {
-        setErrorMsg(e instanceof Error ? e.message : String(e));
+        // A stale token (docs/course-layer.md §7): the row changed in
+        // another tab or device. The finally-invalidate reloads it.
+        const conflict = versionConflictOfError(e);
+        if (conflict) {
+          versions.seed(conflict.kind, conflict.id, conflict.version);
+          setErrorMsg(t("changedElsewhere"));
+        } else {
+          setErrorMsg(e instanceof Error ? e.message : String(e));
+        }
         return undefined;
       } finally {
         setPendingOps((n) => n - 1);
         invalidateMapData();
       }
     },
-    [invalidateMapData],
+    [invalidateMapData, versions, t],
   );
 
   const client = utils.client;
+
+  /** `course.update` with the newest token this page has for the course. */
+  const updateCourse = useCallback(
+    async (input: Omit<Parameters<typeof client.course.update.mutate>[0], "baseVersion">) => {
+      const res = await client.course.update.mutate({
+        ...input,
+        baseVersion: versions.get("course", input.id),
+      });
+      versions.seed("course", input.id, res.version);
+      return res;
+    },
+    [client, versions],
+  );
+
+  /** `course.setControlLabelOffset`, keeping the course's token. */
+  const setLabelOffset = useCallback(
+    async (input: Parameters<typeof client.course.setControlLabelOffset.mutate>[0]) => {
+      const res = await client.course.setControlLabelOffset.mutate(input);
+      versions.seed("course", input.id, res.version);
+      return res;
+    },
+    [client, versions],
+  );
+
+  /** `control.delete`, keeping the tokens of the courses it removed an item from. */
+  const deleteControl = useCallback(
+    async (input: Parameters<typeof client.control.delete.mutate>[0]) => {
+      const res = await client.control.delete.mutate(input);
+      versions.seedAll("course", res.courses);
+      return res;
+    },
+    [client, versions],
+  );
+
+  /** `control.update` with the newest token this page has for the control. */
+  const updateControl = useCallback(
+    async (input: Omit<Parameters<typeof client.control.update.mutate>[0], "baseVersion">) => {
+      const res = await client.control.update.mutate({
+        ...input,
+        baseVersion: versions.get("control", input.id),
+      });
+      versions.seed("control", publicIdAfterCodes(input.id, input.codes), res.version);
+      return res;
+    },
+    [client, versions],
+  );
 
   /** Update a course's control sequence, undoably. */
   const applySequence = useCallback(
@@ -290,7 +355,7 @@ export function CourseEditorPage() {
       nextIds: number[],
     ) => {
       const redo = () =>
-        client.course.update.mutate({
+        updateCourse({
           id: courseSeq,
           controlIds: nextIds,
         });
@@ -299,7 +364,7 @@ export function CourseEditorPage() {
       undoStack.push({
         redo,
         undo: () =>
-          client.course.update.mutate({
+          updateCourse({
             id: courseSeq,
             controlIds: prevIds,
           }),
@@ -307,7 +372,7 @@ export function CourseEditorPage() {
       bumpHistory();
       return true;
     },
-    [client, run, undoStack, bumpHistory],
+    [updateCourse, run, undoStack, bumpHistory],
   );
 
   /** Create a control; when `insertAt` is set, also insert it into the
@@ -351,31 +416,31 @@ export function CourseEditorPage() {
         const nextIds = [...sequenceIds];
         nextIds.splice(Math.min(insertAt, nextIds.length), 0, id);
         const appended = await run(() =>
-          client.course.update.mutate({ id: course.id, controlIds: nextIds }),
+          updateCourse({ id: course.id, controlIds: nextIds }),
         );
         if (appended !== undefined) {
           undoStack.push({
             undo: async () => {
-              await client.course.update.mutate({ id: course.id, controlIds: prevIds });
-              await client.control.delete.mutate({ id });
+              await updateCourse({ id: course.id, controlIds: prevIds });
+              await deleteControl({ id });
             },
             redo: async () => {
               await client.control.restore.mutate({ id });
-              await client.course.update.mutate({ id: course.id, controlIds: nextIds });
+              await updateCourse({ id: course.id, controlIds: nextIds });
             },
           });
           bumpHistory();
         }
       } else {
         undoStack.push({
-          undo: () => client.control.delete.mutate({ id }),
+          undo: () => deleteControl({ id }),
           redo: () => client.control.restore.mutate({ id }),
         });
         bumpHistory();
       }
       dispatch({ type: "placed", id });
     },
-    [controlList.data, seriesAllocation.data, effectiveAllocSeriesId, run, client, selectedCourse, sequenceIds, undoStack, bumpHistory],
+    [deleteControl, updateCourse, controlList.data, seriesAllocation.data, effectiveAllocSeriesId, run, client, selectedCourse, sequenceIds, undoStack, bumpHistory],
   );
 
   /** Place a code-less start/finish control (auto-named server-side). */
@@ -391,13 +456,13 @@ export function CourseEditorPage() {
       if (!created) return;
       const id = created.id;
       undoStack.push({
-        undo: () => client.control.delete.mutate({ id }),
+        undo: () => deleteControl({ id }),
         redo: () => client.control.restore.mutate({ id }),
       });
       bumpHistory();
       dispatch({ type: "placed", id });
     },
-    [run, client, undoStack, bumpHistory],
+    [deleteControl, run, client, undoStack, bumpHistory],
   );
 
   /** Assign the selected start/finish control to the selected course. */
@@ -409,18 +474,18 @@ export function CourseEditorPage() {
       const prev = course[key];
       void (async () => {
         const redo = () =>
-          client.course.update.mutate({ id: course.id, [key]: id });
+          updateCourse({ id: course.id, [key]: id });
         const done = await run(redo);
         if (done === undefined) return;
         undoStack.push({
           redo,
           undo: () =>
-            client.course.update.mutate({ id: course.id, [key]: prev }),
+            updateCourse({ id: course.id, [key]: prev }),
         });
         bumpHistory();
       })();
     },
-    [selectedCourse, client, run, undoStack, bumpHistory],
+    [updateCourse, selectedCourse, run, undoStack, bumpHistory],
   );
 
   // ─── Gesture callbacks (stabilized — they flow through MapPanel's memo) ──
@@ -441,7 +506,7 @@ export function CourseEditorPage() {
       setLastMovedId(id);
       void (async () => {
         const redo = () =>
-          client.control.update.mutate({
+          updateControl({
             id,
             xpos: pt.x,
             ypos: pt.y,
@@ -455,7 +520,7 @@ export function CourseEditorPage() {
         undoStack.push({
           redo,
           undo: () =>
-            client.control.update.mutate({
+            updateControl({
               id,
               xpos: prev.mapX,
               ypos: prev.mapY,
@@ -465,7 +530,7 @@ export function CourseEditorPage() {
         bumpHistory();
       })();
     },
-    [coordsById, client, run, undoStack, bumpHistory],
+    [updateControl, coordsById, run, undoStack, bumpHistory],
   );
 
   const handleLabelMoveEnd = useCallback(
@@ -476,7 +541,7 @@ export function CourseEditorPage() {
       dispatch({ type: "select", id });
       void (async () => {
         const redo = () =>
-          client.course.setControlLabelOffset.mutate({
+          setLabelOffset({
             id: selectedCourse.id,
             controlId: id,
             offset,
@@ -486,7 +551,7 @@ export function CourseEditorPage() {
         undoStack.push({
           redo,
           undo: () =>
-            client.course.setControlLabelOffset.mutate({
+            setLabelOffset({
               id: selectedCourse.id,
               controlId: id,
               offset: prev,
@@ -495,7 +560,7 @@ export function CourseEditorPage() {
         bumpHistory();
       })();
     },
-    [selectedCourse, client, run, undoStack, bumpHistory],
+    [setLabelOffset, selectedCourse, run, undoStack, bumpHistory],
   );
 
   const resetLabelOffset = useCallback(() => {
@@ -505,7 +570,7 @@ export function CourseEditorPage() {
     if (!prev) return;
     void (async () => {
       const redo = () =>
-        client.course.setControlLabelOffset.mutate({
+        setLabelOffset({
           id: selectedCourse.id,
           controlId: id,
           offset: null,
@@ -515,7 +580,7 @@ export function CourseEditorPage() {
       undoStack.push({
         redo,
         undo: () =>
-          client.course.setControlLabelOffset.mutate({
+          setLabelOffset({
             id: selectedCourse.id,
             controlId: id,
             offset: prev,
@@ -523,7 +588,7 @@ export function CourseEditorPage() {
       });
       bumpHistory();
     })();
-  }, [selectedCourse, state.selectedControlId, client, run, undoStack, bumpHistory]);
+  }, [setLabelOffset, selectedCourse, state.selectedControlId, run, undoStack, bumpHistory]);
 
   const handleSelect = useCallback((idStr: string | null) => {
     setRadioSwapOffer(null);
@@ -568,7 +633,7 @@ export function CourseEditorPage() {
       }))
       .filter((c) => c.ids.includes(sel));
     void (async () => {
-      const redo = () => client.control.delete.mutate({ id: sel });
+      const redo = () => deleteControl({ id: sel });
       const done = await run(redo);
       if (done === undefined) return;
       undoStack.push({
@@ -576,7 +641,7 @@ export function CourseEditorPage() {
         undo: async () => {
           await client.control.restore.mutate({ id: sel });
           for (const course of affected) {
-            await client.course.update.mutate({
+            await updateCourse({
               id: course.id,
               controlIds: course.ids,
             });
@@ -586,7 +651,7 @@ export function CourseEditorPage() {
       bumpHistory();
       dispatch({ type: "deleted", id: sel });
     })();
-  }, [state.selectedControlId, pendingOps, coordsById, courses.data, t, client, run, undoStack, bumpHistory]);
+  }, [deleteControl, updateCourse, state.selectedControlId, pendingOps, coordsById, courses.data, t, client, run, undoStack, bumpHistory]);
 
   // ─── Control description editor (modal) ──────────────────
 
@@ -605,17 +670,17 @@ export function CourseEditorPage() {
       setLastMovedId((v) => (v === id ? null : v));
       const prev = coordsById.get(id)?.description ?? null;
       void (async () => {
-        const redo = () => client.control.update.mutate({ id, description: next });
+        const redo = () => updateControl({ id, description: next });
         const done = await run(redo);
         if (done === undefined) return;
         undoStack.push({
           redo,
-          undo: () => client.control.update.mutate({ id, description: prev }),
+          undo: () => updateControl({ id, description: prev }),
         });
         bumpHistory();
       })();
     },
-    [descControlId, coordsById, client, run, undoStack, bumpHistory],
+    [updateControl, descControlId, coordsById, run, undoStack, bumpHistory],
   );
 
   const closeDescription = useCallback(() => setDescControlId(null), []);
@@ -653,17 +718,17 @@ export function CourseEditorPage() {
       const prev = coordsById.get(id)?.description ?? null;
       setLastMovedId((v) => (v === id ? null : v));
       void (async () => {
-        const redo = () => client.control.update.mutate({ id, description: next });
+        const redo = () => updateControl({ id, description: next });
         const done = await run(redo);
         if (done === undefined) return;
         undoStack.push({
           redo,
-          undo: () => client.control.update.mutate({ id, description: prev }),
+          undo: () => updateControl({ id, description: prev }),
         });
         bumpHistory();
       })();
     },
-    [coordsById, client, run, undoStack, bumpHistory],
+    [updateControl, coordsById, run, undoStack, bumpHistory],
   );
 
   /**
@@ -805,7 +870,7 @@ export function CourseEditorPage() {
     setRadioSwapOffer(null);
     void (async () => {
       const updated = await run(() =>
-        client.control.update.mutate({
+        updateControl({
           id: offer.controlId,
           codes: String(offer.to),
         }),
@@ -814,7 +879,7 @@ export function CourseEditorPage() {
       await setRadioType(offer.to, "internal_radio");
       dispatch({ type: "select", id: offer.to });
     })();
-  }, [radioSwapOffer, client, run, setRadioType]);
+  }, [updateControl, radioSwapOffer, run, setRadioType]);
 
   const declineRadioSwap = useCallback(() => {
     const offer = radioSwapOffer;
@@ -1082,11 +1147,12 @@ export function CourseEditorPage() {
         }),
       );
       if (!created) return;
+      versions.seed("course", created.id, created.version);
       void utils.class.list.invalidate();
       setNewCourseName("");
       dispatch({ type: "select-course", id: created.id });
     })();
-  }, [newCourseName, run, client, classes.data, utils]);
+  }, [newCourseName, run, client, classes.data, utils, versions]);
 
   const openClone = useCallback(() => {
     if (!selectedCourse) return;
@@ -1104,11 +1170,12 @@ export function CourseEditorPage() {
         client.course.clone.mutate({ id: selectedCourse.id, name }),
       );
       if (!cloned) return;
+      versions.seed("course", cloned.id, cloned.version);
       setShowClone(false);
       setCloneName("");
       dispatch({ type: "select-course", id: cloned.id });
     })();
-  }, [selectedCourse, cloneName, client, run]);
+  }, [versions, selectedCourse, cloneName, client, run]);
 
   const sequenceUpdate = useCallback(
     (nextIds: number[]) => {
@@ -1151,20 +1218,20 @@ export function CourseEditorPage() {
       const publicNew = Number.isFinite(first) && first > 0 ? first : rowId;
       void (async () => {
         const done = await run(() =>
-          client.control.update.mutate({ id: rowId, codes: next }),
+          updateControl({ id: rowId, codes: next }),
         );
         if (done === undefined) return;
         undoStack.push({
           redo: () =>
-            client.control.update.mutate({ id: publicNew, codes: next }),
+            updateControl({ id: publicNew, codes: next }),
           undo: () =>
-            client.control.update.mutate({ id: publicNew, codes: currentCodes }),
+            updateControl({ id: publicNew, codes: currentCodes }),
         });
         bumpHistory();
         dispatch({ type: "select", id: publicNew });
       })();
     },
-    [client, run, undoStack, bumpHistory],
+    [updateControl, run, undoStack, bumpHistory],
   );
 
   // ─── Undo / redo ─────────────────────────────────────────
@@ -1619,7 +1686,7 @@ export function CourseEditorPage() {
                       onChange={(e) => {
                         const mode = e.target.value as "ordered" | "free_order";
                         void run(() =>
-                          client.course.update.mutate({
+                          updateCourse({
                             id: selectedCourse.id,
                             orderMode: mode,
                           }),
@@ -1658,7 +1725,7 @@ export function CourseEditorPage() {
                         };
                         void (async () => {
                           const redo = () =>
-                            client.course.update.mutate({
+                            updateCourse({
                               id: selectedCourse.id,
                               descriptionInstructions: next,
                             });
@@ -1667,7 +1734,7 @@ export function CourseEditorPage() {
                           undoStack.push({
                             redo,
                             undo: () =>
-                              client.course.update.mutate({
+                              updateCourse({
                                 id: selectedCourse.id,
                                 descriptionInstructions: prev ?? null,
                               }),
@@ -1725,11 +1792,11 @@ export function CourseEditorPage() {
         )}
       </div>
     ),
-    [t, courses.data, state.selectedCourseId, selectedCourse, mapSelectorOpen,
+    [updateCourse, t, courses.data, state.selectedCourseId, selectedCourse, mapSelectorOpen,
       newCourseName, newCourseSuggestions, handleCreateCourse, displaySeq, legMeters, totalMeters,
       sequenceIds.length, moveInSequence, removeFromSequence, openClone,
       showClone, cloneName, handleCloneCourse,
-      controlRowsById, seriesAllocation.data, client, run, undoStack, bumpHistory,
+      controlRowsById, seriesAllocation.data, run, undoStack, bumpHistory,
       editingSeqIndex, editingCodes, commitSeqCode],
   );
 

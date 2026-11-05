@@ -3,17 +3,27 @@ import {
   MAP_PIPELINE_SETTINGS,
   parseAllowLegacy,
   parseDefaultPipeline,
+  parseEditorVector,
   readMapPipelineFlags,
   canSwitchTo,
   flagsTtlMs,
 } from "../map-pipeline.js";
 
 describe("map pipeline instance flags (docs/map-pipeline-switch.md §1)", () => {
-  it("names the two settings keys", () => {
+  it("names the settings keys", () => {
     expect(MAP_PIPELINE_SETTINGS).toEqual({
       default: "map.pipeline.default",
       allowLegacy: "map.pipeline.allowLegacy",
+      editorVector: "map.editor.vector",
     });
+  });
+
+  it("map.editor.vector is false unless it says true (temporary, removed in E)", () => {
+    expect(parseEditorVector(null)).toBe(false);
+    expect(parseEditorVector("false")).toBe(false);
+    expect(parseEditorVector("1")).toBe(false);
+    expect(parseEditorVector("true")).toBe(true);
+    expect(parseEditorVector(" TRUE ")).toBe(true);
   });
 
   it("map.pipeline.default is legacy unless it says vector", () => {
@@ -32,23 +42,25 @@ describe("map pipeline instance flags (docs/map-pipeline-switch.md §1)", () => 
     expect(parseAllowLegacy("0")).toBe(true);
   });
 
-  it("reads both keys through the given reader", async () => {
+  it("reads every key through the given reader", async () => {
     const store: Record<string, string> = {
       "map.pipeline.default": "vector",
       "map.pipeline.allowLegacy": "false",
+      "map.editor.vector": "true",
     };
     const flags = await readMapPipelineFlags(async (k) => store[k] ?? null);
-    expect(flags).toEqual({ defaultPipeline: "vector", allowLegacy: false });
+    expect(flags).toEqual({ defaultPipeline: "vector", allowLegacy: false, editorVector: true });
     expect(await readMapPipelineFlags(async () => null)).toEqual({
       defaultPipeline: "legacy",
       allowLegacy: true,
+      editorVector: false,
     });
   });
 
   it("switching to legacy needs allowLegacy; vector is always allowed", () => {
-    expect(canSwitchTo("vector", { defaultPipeline: "legacy", allowLegacy: false })).toBe(true);
-    expect(canSwitchTo("legacy", { defaultPipeline: "vector", allowLegacy: true })).toBe(true);
-    expect(canSwitchTo("legacy", { defaultPipeline: "vector", allowLegacy: false })).toBe(false);
+    expect(canSwitchTo("vector", { defaultPipeline: "legacy", allowLegacy: false, editorVector: false })).toBe(true);
+    expect(canSwitchTo("legacy", { defaultPipeline: "vector", allowLegacy: true, editorVector: false })).toBe(true);
+    expect(canSwitchTo("legacy", { defaultPipeline: "vector", allowLegacy: false, editorVector: false })).toBe(false);
   });
 
   it("caches 30 s unless MAP_PIPELINE_FLAGS_TTL_MS says otherwise", () => {

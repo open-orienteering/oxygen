@@ -1,6 +1,6 @@
 import { describe, it, expect } from "vitest";
 import type { course } from "@oxygen/shared";
-import { courseLayerRequest, type CourseRequestInput, type RequestControl } from "../course-layer-request";
+import { courseLayerRequest, courseObjectsForView, PROVISIONAL_SITE_ID, type CourseRequestInput, type ProvisionalVisit, type RequestControl } from "../course-layer-request";
 
 const ctl = (id: string, type: RequestControl["type"] = "Control", visible?: boolean): RequestControl => ({ id, code: `c${id}`, type, ...(visible === undefined ? {} : { visible }) });
 const CONTROLS = [ctl("S", "Start"), ctl("1"), ctl("2"), ctl("3"), ctl("F", "Finish")];
@@ -40,6 +40,12 @@ describe("courseLayerRequest (docs/course-layer.md §5)", () => {
     expect(r.viewOptions).toEqual({ labelMode: "code", allControls: true });
   });
 
+  it("the event's auto cuts off go on the view options; on or absent adds no key (course-layer.md §3.4)", () => {
+    expect(courseLayerRequest(base({ autoCuts: false })).viewOptions.autoCuts).toBe(false);
+    expect("autoCuts" in courseLayerRequest(base({ autoCuts: true })).viewOptions).toBe(false);
+    expect("autoCuts" in courseLayerRequest(base()).viewOptions).toBe(false);
+  });
+
   it("sequence numbers only for one ordered course with descriptions or the editor", () => {
     expect(courseLayerRequest(base()).viewOptions.labelMode).toBe("sequence");
     expect(courseLayerRequest(base({ sequenceLabels: false })).viewOptions.labelMode).toBe("code");
@@ -76,38 +82,148 @@ describe("courseLayerRequest (docs/course-layer.md §5)", () => {
     expect(r.viewOptions.allControls).toBeUndefined();
   });
 
-  it("an imported course: preclipped legs → pieces, its cuts → circle gaps, extras; legacy automatic gaps ignored", () => {
-    const leg = (pts: number[][], props: Record<string, unknown> = {}) => ({ geometry: { type: "LineString", coordinates: pts }, properties: { symbolType: "leg", courseName: "A", ...props } });
-    const features = [
-      leg([[12, 10], [37, 10]], { preclipped: true }),
-      leg([[42, 12], [58, 38]], { preclipped: true }),
-      leg([[58, 40], [30, 45], [12, 40]], { preclipped: true }),
-      { geometry: { type: "Point", coordinates: [40, 10] }, properties: { symbolType: "control", code: "c1", courseName: "A", cuts: [{ start: 10, end: 40 }] } },
-      { geometry: { type: "LineString", coordinates: [[0, 0], [5, 5]] }, properties: { symbolType: "marked_route", courseName: "A" } },
-      { geometry: { type: "Polygon", coordinates: [[[1, 1], [3, 1], [3, 3], [1, 1]]] }, properties: { symbolType: "restricted_area", courseName: "A" } },
-      // Course B is not highlighted; an automatic-gap leg of a generated course is not read.
-      leg([[10, 10], [30, 50]], { courseName: "B", gaps: [{ from: 0.4, to: 0.5 }] }),
-    ];
-    const r = courseLayerRequest(base({ courseGeometry: { features } }));
+  it("the structure's authored leg gaps and hidden numbers, the controls' circle cuts; nothing else is read", () => {
+    const cuts = [{ start: 10, end: 40 }];
+    const gaps = [{ from: 0.4, to: 0.6 }];
+    const r = courseLayerRequest(base({
+      controls: CONTROLS.map((c) => (c.id === "1" ? { ...c, circleGaps: cuts } : c)),
+      courses: [{ name: "A", controls: ["S", "1", "2", "F"], highlight: true, legGaps: { "1>2": gaps, "9>2": [{ from: 0.1, to: 0.2 }] }, hiddenNumbers: [2] }],
+    }));
+    expect(r.sites.find((s) => s.id === "1")!.circleGaps).toEqual(cuts);
+    expect(r.sites.find((s) => s.id === "2")!.circleGaps).toBeUndefined();
     const a = structures(r)[0];
-    expect(a.items[1].leg).toEqual({ pieces: [[{ x: 12, y: 10 }, { x: 37, y: 10 }]] });
-    expect(a.items[3].leg?.pieces?.[0]).toHaveLength(3);
-    expect(a.items[1].circleGaps).toEqual([{ start: 10, end: 40 }]);
-    expect(a.extras).toEqual([
-      { kind: "marked_route", points: [{ x: 0, y: 0 }, { x: 5, y: 5 }] },
-      { kind: "oob_area", points: [{ x: 1, y: 1 }, { x: 3, y: 1 }, { x: 3, y: 3 }, { x: 1, y: 1 }] },
-    ]);
+    expect(a.items.map((i) => i.leg)).toEqual([undefined, undefined, { gaps }, undefined]);
+    expect(a.items.map((i) => i.numberHidden)).toEqual([undefined, undefined, true, undefined]);
   });
 
-  it("generated legs: a bent leg keeps its path, gaps and cuts are not taken; a count mismatch is ignored", () => {
-    const leg = (pts: number[][], props: Record<string, unknown> = {}) => ({ geometry: { type: "LineString", coordinates: pts }, properties: { symbolType: "leg", courseName: "A", gaps: [{ from: 0.2, to: 0.3 }], ...props } });
-    const cut = { geometry: { type: "Point", coordinates: [40, 10] }, properties: { symbolType: "control", code: "c1", courseName: "A", cuts: [{ start: 10, end: 40 }] } };
-    const r = courseLayerRequest(base({ courseGeometry: { features: [leg([[10, 10], [40, 10]]), leg([[40, 10], [50, 30], [60, 40]]), leg([[60, 40], [10, 40]]), cut] } }));
-    const a = structures(r)[0];
-    expect(a.items[1].leg).toBeUndefined();
-    expect(a.items[2].leg).toEqual({ path: [{ x: 40, y: 10 }, { x: 50, y: 30 }, { x: 60, y: 40 }] });
-    expect(a.items[1].circleGaps).toBeUndefined();
-    const short = courseLayerRequest(base({ courseGeometry: { features: [leg([[10, 10], [25, 30], [40, 10]], { preclipped: true })] } }));
-    expect(structures(short)[0].items.every((i) => !i.leg)).toBe(true);
+  it("an empty gap list stays out of the request (the layer cuts automatically)", () => {
+    const r = courseLayerRequest(base({
+      controls: CONTROLS.map((c) => (c.id === "1" ? { ...c, circleGaps: [] } : c)),
+      courses: [{ name: "A", controls: ["S", "1", "2", "F"], highlight: true, legGaps: { "1>2": [] } }],
+    }));
+    expect(r.sites.find((s) => s.id === "1")!.circleGaps).toBeUndefined();
+    expect(structures(r)[0].items.every((i) => i.leg === undefined)).toBe(true);
+  });
+});
+
+describe("the editor's provisional visit (docs/course-editor.md §6.1)", () => {
+  const P = PROVISIONAL_SITE_ID;
+  const at = { x: 70, y: 20 };
+  const visit = (over: Partial<ProvisionalVisit>): ProvisionalVisit => ({ role: "control", insertAt: 0, pt: at, code: "47", ...over });
+  const items = (r: ReturnType<typeof courseLayerRequest>) => structures(r)[0].items.map((i) => i.siteId);
+
+  it("a control at the insertion point: a site at the cursor and an item before the control-sequence position", () => {
+    const r = courseLayerRequest(base({ provisional: visit({ insertAt: 1 }) }));
+    expect(items(r)).toEqual(["S", "1", P, "2", "F"]);
+    expect(r.sites.find((s) => s.id === P)).toEqual({ id: P, code: "47", kind: "control", x: 70, y: 20 });
+    expect(r.viewOptions.labelMode).toBe("sequence");
+    expect(items(courseLayerRequest(base({ provisional: visit({ insertAt: 0 }) })))).toEqual(["S", P, "1", "2", "F"]);
+  });
+
+  it("past the last control: before the finish, else at the end", () => {
+    expect(items(courseLayerRequest(base({ provisional: visit({ insertAt: 2 }) })))).toEqual(["S", "1", "2", P, "F"]);
+    expect(items(courseLayerRequest(base({ provisional: visit({ insertAt: 9 }) })))).toEqual(["S", "1", "2", P, "F"]);
+    const open = courseLayerRequest(base({ courses: [{ name: "A", controls: ["S", "1"], highlight: true }], provisional: visit({ insertAt: 1 }) }));
+    expect(items(open)).toEqual(["S", "1", P]);
+  });
+
+  it("counts repeated visits of a control as positions", () => {
+    const r = courseLayerRequest(base({ courses: [{ name: "A", controls: ["S", "1", "2", "1", "F"], highlight: true }], provisional: visit({ insertAt: 2 }) }));
+    expect(items(r)).toEqual(["S", "1", "2", P, "1", "F"]);
+  });
+
+  it("a start replaces the course's start (else leads); a finish replaces its finish (else ends)", () => {
+    expect(items(courseLayerRequest(base({ provisional: visit({ role: "start" }) })))).toEqual([P, "1", "2", "F"]);
+    expect(items(courseLayerRequest(base({ provisional: visit({ role: "finish" }) })))).toEqual(["S", "1", "2", P]);
+    const bare = base({ courses: [{ name: "A", controls: ["1", "2"], highlight: true }] });
+    expect(items(courseLayerRequest({ ...bare, provisional: visit({ role: "start" }) }))).toEqual([P, "1", "2"]);
+    expect(items(courseLayerRequest({ ...bare, provisional: visit({ role: "finish" }) }))).toEqual(["1", "2", P]);
+    expect(courseLayerRequest(base({ provisional: visit({ role: "finish" }) })).sites.find((s) => s.id === P)?.kind).toBe("finish");
+  });
+
+  it("a reused site is spliced by its id and adds no site", () => {
+    const r = courseLayerRequest(base({ provisional: visit({ insertAt: 1, reuseId: "3" }) }));
+    expect(items(r)).toEqual(["S", "1", "3", "2", "F"]);
+    expect(r.sites.map((s) => s.id)).toEqual(["S", "1", "2", "3", "F"]);
+  });
+
+  it("the leg the visit splits loses its stored gaps; the others keep theirs", () => {
+    const gaps = [{ from: 0.4, to: 0.6 }];
+    const r = courseLayerRequest(base({
+      courses: [{ name: "A", controls: ["S", "1", "2", "F"], highlight: true, legGaps: { "1>2": gaps, "2>F": gaps } }],
+      provisional: visit({ insertAt: 1 }),
+    }));
+    expect(structures(r)[0].items.map((i) => i.leg)).toEqual([undefined, undefined, undefined, undefined, { gaps }]);
+  });
+
+  it("ignored without exactly one highlighted course", () => {
+    const none = courseLayerRequest(base({ courses: [{ name: "A", controls: ["S", "1", "F"] }], provisional: visit({}) }));
+    expect(none.sites.map((s) => s.id)).not.toContain(P);
+    const two = courseLayerRequest(base({
+      courses: [{ name: "A", controls: ["S", "1", "F"], highlight: true }, { name: "B", controls: ["S", "3", "F"], highlight: true }],
+      provisional: visit({}),
+    }));
+    expect(two.sites.map((s) => s.id)).not.toContain(P);
+    expect(structures(two).map((s) => s.items.map((i) => i.siteId))).toEqual([["S", "1", "F"], ["S", "3", "F"]]);
+  });
+});
+
+describe("course objects (docs/course-layer.md §8.2, §8.3)", () => {
+  const SQUARE = [{ x: 0, y: 0 }, { x: 5, y: 0 }, { x: 5, y: 5 }];
+  const obj = (id: number, inCourses: number[] | null): course.CourseObject =>
+    ({ id, kind: "oob_area", geometry: SQUARE, props: {}, scope: inCourses === null ? { all: true } : { courses: inCourses, classes: [] }, z: 0, version: "1", inCourses }) as course.CourseObject;
+  // 3: scoped to a class running A and B through its pool (resolved by the server).
+  const OBJECTS = [obj(1, null), obj(2, [10]), obj(3, [10, 11]), obj(4, [11]), obj(6, [])];
+  const COURSES = [{ id: 10, name: "A" }, { id: 11, name: "B" }];
+  const ids = (list: course.CourseObject[]) => list.map((o) => o.id);
+
+  it("drawn with a highlighted course among the resolved ones; nothing highlighted = all only; parked = nowhere", () => {
+    expect(ids(courseObjectsForView(OBJECTS, new Set(["A"]), COURSES))).toEqual([1, 2, 3]);
+    expect(ids(courseObjectsForView(OBJECTS, new Set(["B"]), COURSES))).toEqual([1, 3, 4]);
+    expect(ids(courseObjectsForView(OBJECTS, new Set(), COURSES))).toEqual([1]);
+    expect(ids(courseObjectsForView(OBJECTS, new Set(["A", "B"]), COURSES))).toEqual([1, 2, 3, 4]);
+  });
+
+  it("the request carries the objects' bodies and ids, without scope, z, token or resolved courses", () => {
+    expect(courseLayerRequest(base()).objects).toEqual([]);
+    const r = courseLayerRequest(base({ courseObjects: [OBJECTS[0], { ...obj(5, null), kind: "filter_region", props: { mode: "hide", symbols: "all" } } as course.CourseObject] }));
+    expect(r.objects).toEqual([
+      { id: 1, kind: "oob_area", geometry: SQUARE, props: {} },
+      { id: 5, kind: "filter_region", geometry: SQUARE, props: { mode: "hide", symbols: "all" } },
+    ]);
+  });
+});
+
+describe("Layout mode's sheet (docs/course-layout.md §1)", () => {
+  const frame = { x: 10, y: 10, width: 190, height: 277 };
+  const window = { minX: -65, minY: -128.5, width: 190, height: 277 };
+  const mapText = { id: "n", kind: "text" as const, anchor: "map" as const, x: 0, y: 0, text: "N", fontSizeMm: 5, color: "#000000" };
+  const pageText = { id: "t", kind: "text" as const, anchor: "page" as const, x: 20, y: 20, text: "{course}", fontSizeMm: 5, color: "#000000" };
+  const layout = {
+    page: { paper: { heightMm: 297 }, frame, window, objects: [mapText, pageText], textValues: { course: "A" }, description: null },
+    appearance: { circle: 1.2 },
+    overprintScale: 1.5,
+  };
+
+  it("passes the page through and draws layout objects, appearance and print view options in the course layer, as the composer does", () => {
+    const oob = { id: 7, kind: "oob_area", geometry: [{ x: 0, y: 0 }, { x: 5, y: 0 }, { x: 5, y: 5 }], props: {}, scope: { all: true }, z: 0, version: "1", inCourses: null } as course.CourseObject;
+    const r = courseLayerRequest(base({ layout, courseObjects: [oob] }));
+    expect(r.page).toBe(layout.page);
+    expect(r.appearance).toEqual({ circle: 1.2 });
+    expect(r.viewOptions.overprintScale).toBe(1.5);
+    expect(r.viewOptions.textValues).toEqual({ course: "A" });
+    // The frame grown by the composer's bleed, in paper mm.
+    const xs = r.viewOptions.window!.map((p) => p.x);
+    expect(Math.min(...xs)).toBeCloseTo(-66, 6);
+    expect(Math.max(...xs)).toBeCloseTo(126, 6);
+    // Layout objects first (both anchors; the layer draws the map-anchored ones), then the course objects.
+    expect(r.objects.map((o) => o.id)).toEqual(["n", "t", 7]);
+  });
+
+  it("without a sheet: Course mode's request, no page", () => {
+    const r = courseLayerRequest(base());
+    expect(r.page).toBeUndefined();
+    expect(r.appearance).toEqual({});
+    expect(r.viewOptions.window).toBeUndefined();
   });
 });

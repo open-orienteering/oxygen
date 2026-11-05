@@ -5,6 +5,7 @@ import { type Download, type Locator, type Page } from "@playwright/test";
 import { test, expect } from "./helpers/map-pipeline";
 import { API_BASE } from "./helpers/api-base";
 import { reseed } from "./helpers/reseed";
+import { waitForTrpc } from "./helpers/trpc";
 
 // pdf-lib is the API's dependency; load it from there (as fake-rsvg-convert does).
 const { PDFDocument } = createRequire(resolve(process.cwd(), "packages/api/package.json"))("pdf-lib") as {
@@ -187,7 +188,11 @@ test("creates templates, lays out several maps and exports PDFs", async ({
   page.once("dialog", (dialog) =>
     dialog.accept("E2E shared map template"),
   );
+  // The save is fire-and-forget in the page; the dialog lists what the
+  // club-template query holds when it opens, so let the write settle first.
+  const savedToClub = waitForTrpc(page, "mapTemplate.saveToClub");
   await page.getByTestId(`save-template-to-club-${templateSeq}`).click();
+  await savedToClub;
   await page.getByTestId("import-club-templates").click();
   const importDialog = page.getByTestId("club-template-import-dialog");
   const clubRow = importDialog.getByRole("row", {
@@ -217,7 +222,9 @@ test("creates templates, lays out several maps and exports PDFs", async ({
     .locator("..")
     .getByRole("combobox")
     .selectOption(String(templateSeq));
+  const applied = waitForTrpc(page, "mapTemplate.applyToCourses");
   await page.getByTestId("apply-map-template").click();
+  await applied;
 
   const courseRow = page.getByTestId(`course-map-row-${courseSeq}`);
   await courseRow.locator("td").nth(1).click();
@@ -791,3 +798,40 @@ async function touchPointerDrag(
   );
   await target.page().waitForTimeout(50);
 }
+
+test.describe("auto templates (docs/course-layout.md §5–§7)", () => {
+  test.beforeAll(seedBaseMap);
+
+  test("export a course that has no template yet", async ({ page, mapPipeline }) => {
+    test.setTimeout(90_000);
+    page.setDefaultTimeout(10_000);
+    await selectEvent(page);
+    await openTab(page, "Maps");
+    await expect(page.getByTestId("maps-page")).toBeVisible();
+    const row = page.locator("[data-testid^='course-map-row-']").first();
+    await expect(row).toBeVisible();
+    const courseId = Number((await row.getAttribute("data-testid"))!.replace("course-map-row-", ""));
+    await expect(page.getByTestId(`course-template-badge-${courseId}`)).toHaveCount(0);
+
+    // The course has no sheet: the export creates its first one on the auto template of its key.
+    const [download] = await Promise.all([
+      page.waitForEvent("download"),
+      page.getByTestId(`export-course-${courseId}`).click(),
+    ]);
+    await expectA4Pages(download, 1);
+    const badge = page.getByTestId(`course-template-badge-${courseId}`);
+    await expect(badge).toBeVisible();
+    await expect(badge).toHaveAttribute("data-extra", "false");
+    const printed = await page.request.get(`/api/maps/itest/maps.pdf?courses=${courseId}`);
+    expect(printed.ok()).toBe(true);
+    expect(printed.headers()["x-print-pipeline"]).toBe(mapPipeline);
+
+    // The template is named after its key and shows the key as a badge.
+    await openTab(page, "Map templates");
+    const key = page.locator("[data-testid^='map-template-key-']");
+    await expect(key).toHaveCount(1);
+    await expect(key).toHaveAttribute("data-extra", "false");
+    await expect(key).toHaveAttribute("title", /^A4-(portrait|landscape)-\d+$/);
+    await expect(page.locator("[data-testid^='map-template-']").filter({ hasText: /A4 (portrait|landscape) 1:\d+/ }).first()).toBeVisible();
+  });
+});

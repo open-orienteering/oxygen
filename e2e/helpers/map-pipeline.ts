@@ -62,6 +62,29 @@ export async function setAllowLegacy(allow: boolean | null): Promise<void> {
   }
 }
 
+/**
+ * Write `map.editor.vector`, the new course editor's temporary gate
+ * (docs/map-pipeline-switch.md §1, §3.6); `null` removes it (= legacy editor).
+ */
+export async function setEditorVector(on: boolean | null): Promise<void> {
+  const client = new Client({ connectionString: E2E_DATABASE_URL });
+  await client.connect();
+  try {
+    await client.query("SET search_path TO oxygen, public");
+    if (on === null) {
+      await client.query("DELETE FROM settings WHERE key = 'map.editor.vector'");
+      return;
+    }
+    await client.query(
+      `INSERT INTO settings (key, value) VALUES ('map.editor.vector', $1)
+       ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value`,
+      [String(on)],
+    );
+  } finally {
+    await client.end();
+  }
+}
+
 export const test = base.extend<{ mapPipeline: MapPipeline; applyMapPipeline: void }>({
   mapPipeline: ["legacy", { option: true }],
   applyMapPipeline: [

@@ -1,0 +1,91 @@
+/**
+ * Export ▾ in the editor's top bar (docs/course-layout.md §7; 08 §5.2):
+ * `lib/editor/export-menu.ts` lists the entries; a map entry ensures the
+ * sheets first (`layout.autoSheets`), then the file downloads from its
+ * route.
+ */
+
+import { useEffect, useRef, useState } from "react";
+import { useTranslation } from "react-i18next";
+import { trpc } from "../../lib/trpc";
+import { downloadSameOriginFile } from "../../lib/download-api";
+import { exportEntries, type ExportEntry, type ExportState } from "../../lib/editor/export-menu";
+
+const LABEL = {
+  course: "exportCourse",
+  class: "exportClass",
+  all: "exportAll",
+  allControls: "exportAllControls",
+  iofxml: "exportIofXml",
+  ppen: "exportPpen",
+} as const;
+
+export function ExportMenu({ state, onError }: { state: ExportState; onError: (message: string) => void }) {
+  const { t } = useTranslation("editor");
+  const utils = trpc.useUtils();
+  const [open, setOpen] = useState(false);
+  const [busy, setBusy] = useState(false);
+  const box = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    if (!open) return;
+    const onDoc = (e: MouseEvent) => { if (!box.current?.contains(e.target as Node)) setOpen(false); };
+    const onEsc = (e: KeyboardEvent) => { if (e.key === "Escape") setOpen(false); };
+    document.addEventListener("mousedown", onDoc);
+    document.addEventListener("keydown", onEsc);
+    return () => { document.removeEventListener("mousedown", onDoc); document.removeEventListener("keydown", onEsc); };
+  }, [open]);
+
+  const run = async (e: ExportEntry) => {
+    setOpen(false);
+    setBusy(true);
+    try {
+      if (e.ensure) {
+        const r = await utils.client.layout.autoSheets.mutate(e.ensure);
+        if (r.createdSheets.length || r.createdTemplates.length) {
+          void utils.courseMap.list.invalidate();
+          void utils.mapTemplate.list.invalidate();
+          void utils.layout.classOverrides.invalidate();
+        }
+      }
+      await downloadSameOriginFile(e.url);
+    } catch (err) {
+      onError(err instanceof Error ? err.message : String(err));
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <div ref={box} className="relative">
+      <button
+        type="button"
+        data-testid="editor-export"
+        aria-haspopup="menu"
+        aria-expanded={open}
+        disabled={busy}
+        onClick={() => setOpen((v) => !v)}
+        className="px-2 py-1 text-xs rounded-md border border-slate-200 bg-white text-slate-600 hover:bg-slate-50 cursor-pointer disabled:opacity-50 disabled:cursor-default whitespace-nowrap"
+      >
+        {busy ? t("exportBusy") : t("export")} ▾
+      </button>
+      {open && (
+        <div role="menu" className="absolute right-0 z-30 mt-1 min-w-[12rem] rounded-lg border border-slate-200 bg-white py-1 shadow-lg">
+          {exportEntries(state).map((e) => (
+            <button
+              key={e.id}
+              type="button"
+              role="menuitem"
+              data-testid={`editor-export-${e.id}`}
+              disabled={e.disabled}
+              onClick={() => void run(e)}
+              className="block w-full px-3 py-1.5 text-left text-xs text-slate-700 hover:bg-purple-50 cursor-pointer disabled:opacity-40 disabled:cursor-default"
+            >
+              {t(LABEL[e.id])}
+            </button>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}

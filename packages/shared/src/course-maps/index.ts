@@ -10,3 +10,4 @@ export * from "./description-rows.js";
 export * from "./validate.js";
 export * from "./iof-symbols.js";
 export * from "./iof-symbol-meta.js";
+export * from "./auto-template.js";

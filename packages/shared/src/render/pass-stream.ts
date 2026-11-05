@@ -156,6 +156,17 @@ export interface FontRef {
   italic: boolean;
 }
 
+/**
+ * A filter mask (docs/map-rendering.md §3.8, §4.11): a masked pass is
+ * drawn only **outside every region** — each region read even-odd, so a
+ * hole ring of a region is outside it. The outer frame of that "outside"
+ * is the backend's (image frame, PDF window); the stream has none.
+ */
+export interface FilterMask {
+  /** Closed region paths, paper µm; holes are rings starting at a `hole` point. */
+  regions: RenderPath[];
+}
+
 export interface PassStream {
   /** Per pass → owning object index (hit-testing, per-object hide). */
   objectIdx: Uint32Array;
@@ -165,6 +176,10 @@ export interface PassStream {
   passes: Pass[];
   glyphTable: GlyphMesh[];
   fontTable: FontRef[];
+  /** Filter masks (clip-mode filter regions, §4.11); absent = none. */
+  masks?: FilterMask[];
+  /** Per pass → index into `masks`, −1 = unmasked. Absent = no pass is masked. */
+  maskIdx?: Int32Array;
 }
 
 /**
@@ -196,12 +211,14 @@ export function sortPassStream(stream: PassStream): PassStream {
   const objectIdx = new Uint32Array(n);
   const symbolIdx = new Uint32Array(n);
   const passes = new Array<Pass>(n);
+  const maskIdx = stream.maskIdx ? new Int32Array(n) : undefined;
   order.forEach((src, dst) => {
     objectIdx[dst] = stream.objectIdx[src];
     symbolIdx[dst] = stream.symbolIdx[src];
     passes[dst] = stream.passes[src];
+    if (maskIdx) maskIdx[dst] = stream.maskIdx![src];
   });
-  return { ...stream, objectIdx, symbolIdx, passes };
+  return { ...stream, objectIdx, symbolIdx, passes, ...(maskIdx ? { maskIdx } : {}) };
 }
 
 /** Incremental construction of a stream; `build()` sorts canonically. */

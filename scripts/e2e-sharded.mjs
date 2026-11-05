@@ -32,6 +32,7 @@ import os from "node:os";
 import path from "node:path";
 import readline from "node:readline";
 import { fileURLToPath } from "node:url";
+import { weightOf } from "./e2e-weights.mjs";
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 /**
@@ -52,43 +53,11 @@ const WEB_PORT_BASE = 4200;
 const EVENTOR_PORT_BASE = 4300;
 
 /**
- * Relative run-time weights per spec file, used to balance the shards
- * (LPT assignment). Unlisted files get DEFAULT_WEIGHT. Rough proportions
- * only — rebalance using the per-shard durations printed after each run.
+ * Relative run-time weights per spec file (LPT assignment) live in
+ * `scripts/e2e-weights.mjs`: a file run by several Playwright projects
+ * counts once per project. Rebalance there using the per-shard durations
+ * printed after each run.
  */
-const WEIGHTS = {
-  // Measured from a full sharded run after the 2026-09 merge pass
-  // (sum of Playwright test durations; reseed/setup overhead included).
-  "course-editor.spec.ts": 12, // ~104s — OCAD+map, 12 editor flows
-  "registration-dialog.spec.ts": 8, // ~63s — reseed, dual pages, watchdog
-  "rental-cards.spec.ts": 4, // ~28s
-  "kiosk.spec.ts": 3, // ~22s after merges (still has 5s auto-reset)
-  "controls.spec.ts": 3, // ~22s
-  "courses.spec.ts": 3, // ~21s — OCAD/ppen imports
-  "phase2.spec.ts": 3, // ~21s
-  "course-maps.spec.ts": 4, // ~21s — PDF exports
-  "phase3.spec.ts": 3, // ~20s
-  "kiosk-readout.spec.ts": 3, // ~20s — dual contexts + 5s auto-reset
-  "offline.spec.ts": 3, // ~19s — drain polling
-  "draw.spec.ts": 3, // ~18s
-  "wide-screen-map-pane.spec.ts": 3, // ~18s
-  "editor-start-finish.spec.ts": 3, // ~18s — fresh event + map
-  "mobile-layout.spec.ts": 3, // ~18s — touch + map upload
-  "permissions.spec.ts": 3, // ~18s
-  "webserial.spec.ts": 2, // ~16s after merges
-  "control-series.spec.ts": 3, // ~15s — library + map upload
-  "map-multicourse.spec.ts": 4, // OCAD replace-all + wide viewport
-  "map-control-circles.spec.ts": 3,
-  "kiosk-smart.spec.ts": 2, // ~14s after merges
-  "printer-settings.spec.ts": 2,
-  "eventor.spec.ts": 2,
-  "classes.spec.ts": 2,
-  "error-paths.spec.ts": 2,
-  "competition.spec.ts": 2,
-  "event.spec.ts": 2,
-  "club-map-library.spec.ts": 2,
-};
-const DEFAULT_WEIGHT = 2;
 
 const args = process.argv.slice(2);
 const hasFileFilter = args.some((a) => !a.startsWith("-"));
@@ -132,13 +101,11 @@ if (hasFileFilter) {
     files: [],
     weight: 0,
   }));
-  const byWeightDesc = [...specs].sort(
-    (a, b) => (WEIGHTS[b] ?? DEFAULT_WEIGHT) - (WEIGHTS[a] ?? DEFAULT_WEIGHT),
-  );
+  const byWeightDesc = [...specs].sort((a, b) => weightOf(b) - weightOf(a));
   for (const file of byWeightDesc) {
     const lightest = shards.reduce((min, s) => (s.weight < min.weight ? s : min));
     lightest.files.push(`e2e/${file}`);
-    lightest.weight += WEIGHTS[file] ?? DEFAULT_WEIGHT;
+    lightest.weight += weightOf(file);
   }
 
   console.log(

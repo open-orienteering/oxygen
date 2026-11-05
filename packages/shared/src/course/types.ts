@@ -13,8 +13,10 @@ import type { MapTextValues } from "../course-maps/text.js";
 import type { AngularGap, FractionGap } from "../course-maps/overlay-geometry.js";
 import type { DocumentColour } from "../map-document/header.js";
 import type { RenderSymbol } from "../render/symbol.js";
+import type { FilterRegion } from "../render/filter-region.js";
 import type { RenderObject } from "../render/symbolise.js";
 import type { SymbolLibraryId } from "../symbol-library/index.js";
+import type { CourseLayerObject } from "./objects.js";
 
 export type { AngularGap, FractionGap };
 
@@ -26,15 +28,12 @@ export interface CourseSite {
   kind: "control" | "start" | "finish";
   x: number;
   y: number;
+  /** `controls.circle_gaps`: authored circle cuts, compass degrees. A non-empty list replaces the automatic cuts (course-layer.md §6.4). */
+  circleGaps?: AngularGap[];
 }
 
-/** File-authored geometry of the leg *into* an item (imported `ocd` courses; retired by D's `LegProps.path`). */
-export interface CourseLegInput {
-  /** Leg polyline from the previous site to this one, bends included. Default: the straight line. */
-  path?: MapPoint[];
-  /** 705 pieces as the file drew them: drawn as given, never clipped or gapped. */
-  pieces?: MapPoint[][];
-  /** Authored gaps along `path`; replace the automatic ones. */
+/** The stored `LegProps` the layer reads (08 §4.3): authored gaps of the leg *into* an item; they replace the automatic ones. */
+export interface CourseLegProps {
   gaps?: FractionGap[];
 }
 
@@ -42,16 +41,9 @@ export interface CourseItem {
   siteId: string;
   /** How the item is drawn; default the site's kind (`firstAsStart` / `lastAsFinish` set it). */
   role?: CourseSite["kind"];
-  leg?: CourseLegInput;
-  /** File-authored circle gaps; replace the automatic cuts for this circle. */
-  circleGaps?: AngularGap[];
-}
-
-/** Course-level lines and areas of imported geometry that belong to no leg. */
-export interface CourseExtra {
-  kind: "marked_route" | "restricted_line" | "forbidden_route" | "oob_area";
-  /** Polyline, or the ring of an `oob_area`. */
-  points: MapPoint[];
+  leg?: CourseLegProps;
+  /** Hide this visit's number (08 §4.2); the site stays an obstacle-free label-less circle. */
+  numberHidden?: boolean;
 }
 
 /** v1: today's linear sequence (08 §4.3 item shape; variations and insets are slice D). */
@@ -64,7 +56,6 @@ export interface CourseStructure {
   items: CourseItem[];
   /** Manual number positions: centre = site + offset, paper mm (`course_controls` label offsets). */
   labelOffsets?: Record<string, { dx: number; dy: number }>;
-  extras?: CourseExtra[];
 }
 
 /** Multipliers of the library dimensions (1 = the spec). */
@@ -90,6 +81,13 @@ export interface CourseViewOptions {
    * (the page transform enlarges the whole layer). Default 1.
    */
   overprintScale?: number;
+  /**
+   * The event's automatic cuts (`Event.autoOverprintCuts`, course-layer.md
+   * §3.4). `false`: no automatic circle slits or leg gaps whatever
+   * `cutFeatures` holds; stored `circleGaps` / leg `gaps` still apply.
+   * Default on.
+   */
+  autoCuts?: boolean;
   /** Outer ring of white-out-outside objects: the map frame as a paper-mm polygon. */
   window?: MapPoint[];
   /** Placeholder values for map-anchored text (`{course}` …). */
@@ -117,13 +115,32 @@ export interface CourseLayerInput {
   /** One course, several highlighted courses, or none (all-controls view). */
   structure: CourseStructure | readonly CourseStructure[] | null;
   sites: readonly CourseSite[];
-  /** Layout objects; only `anchor: "map"` ones are drawn. */
-  objects: readonly CourseMapObject[];
+  /**
+   * A sheet's layout objects (only `anchor: "map"` ones are drawn) and the
+   * course objects in scope (§8): `filter_region` objects join `regions`.
+   */
+  objects: readonly (CourseMapObject | CourseLayerObject)[];
   appearance: CourseAppearance;
   viewOptions: CourseViewOptions;
   document: CourseDocumentContext;
   /** Features for automatic cuts (`cutFeaturesOfDocument`, or C5's legacy adapter). Absent = no automatic cuts. */
   cutFeatures?: readonly CutFeature[];
+  /** Filter regions over the map (`map-rendering.md` §4.11; 08 §4.5 `filter_region`). */
+  regions?: readonly CourseFilterRegion[];
+}
+
+/**
+ * A filter region as the course layer takes it: paper mm, y-up. `symbols`
+ * are document symbol indices, colours the document's own stack indices
+ * (re-indexed onto the completed stack by the layer).
+ */
+export interface CourseFilterRegion {
+  /** Outer ring first, then holes; each ring a polygon (closed implicitly). */
+  rings: readonly (readonly MapPoint[])[];
+  mode: FilterRegion["mode"];
+  symbols: FilterRegion["symbols"];
+  /** Complement of `symbols`: "show only these symbols inside". */
+  invert?: boolean;
 }
 
 export type CourseRefKind = "site" | "leg" | "number" | "leader" | "extra" | "object";
@@ -147,8 +164,8 @@ export interface DerivedSite {
   y: number;
   /** Effective circle gaps (authored or automatic), compass degrees; controls only. */
   cuts: AngularGap[];
-  /** Number centre and leader, paper mm y-up. */
-  label?: { text: string; x: number; y: number; leader?: { x1: number; y1: number; x2: number; y2: number } };
+  /** Number centre and leader, paper mm y-up; `collides` when the placer fell back to a colliding box (§3.5). */
+  label?: { text: string; x: number; y: number; leader?: { x1: number; y1: number; x2: number; y2: number }; collides?: true };
   /** 701 rotation, degrees counter-clockwise (apex towards the first control). */
   angleDeg?: number;
 }
@@ -156,13 +173,12 @@ export interface DerivedSite {
 export interface DerivedLeg {
   from: string;
   to: string;
-  /** Centre-to-centre polyline (or the authored path). */
+  /** Centre-to-centre polyline. */
   points: MapPoint[];
   /** Effective gaps (authored or automatic). */
   gaps: FractionGap[];
-  /** What is drawn: after gaps and circle clipping, or the authored pieces. */
+  /** What is drawn: after gaps and circle clipping. */
   pieces: MapPoint[][];
-  preclipped: boolean;
 }
 
 export interface DerivedCourse {
@@ -171,7 +187,6 @@ export interface DerivedCourse {
   /** Positioned items in order: site id + role. */
   sequence: { siteId: string; role: CourseSite["kind"] }[];
   legs: DerivedLeg[];
-  extras: CourseExtra[];
 }
 
 /** The geometry the course-setting rules produce, before symbols (§3). */
@@ -203,6 +218,8 @@ export interface CourseLayer {
   images: CourseLayerImage[];
   derivation: CourseDerivation;
   warnings: CourseLayerWarning[];
+  /** The input's filter regions in paper µm, colours on `colours`; they act on the document's objects only. */
+  regions: FilterRegion[];
 }
 
 /** A template's stored appearance as multipliers of the library dimensions (`defaultMapAppearance` = 1). */

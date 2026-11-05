@@ -440,6 +440,72 @@ describe("map templates and course maps", () => {
     ).rejects.toMatchObject({ code: "NOT_FOUND" });
   });
 
+  it("resolveSheet: a sheet as Layout mode reads it — page, window, text values, block, template / sheet split (course-layout.md §1)", async () => {
+    const template = (await caller.mapTemplate.list())[0];
+    const stored = await ctx.db.mapTemplate.findFirstOrThrow({ where: { eventId: ctx.eventId, seq: template.seq } });
+    const sheet = await caller.courseMap.create({ name: "Layout read", courseId: courseSeq, templateId: template.seq, kind: "course", overrides: {}, objects: [] });
+    const label = { id: "sheet-label", kind: "text" as const, anchor: "page" as const, x: 20, y: 30, text: "{course}", fontSizeMm: 4, color: "#000000" };
+    await caller.courseMap.saveLayout({
+      id: sheet.seq,
+      windowCenter: { x: 5, y: -7 },
+      printScale: 10000,
+      description: { visible: true, x: 140, y: 12, cellSizeMm: 6 },
+      objects: [label],
+      templateObjects: stored.objects as never,
+    });
+    const r = await caller.courseMap.resolveSheet({ seq: sheet.seq });
+    expect(r.scope).toBe("sheet");
+    expect(r.sheet).toMatchObject({ seq: sheet.seq, courseSeq, windowCenter: { x: 5, y: -7 }, objects: [label] });
+    expect(r.sheet!.overrides.printScale).toBe(10000);
+    expect(r.template.seq).toBe(template.seq);
+    expect(r.template.objects).toEqual(stored.objects);
+    expect(r.courseSeq).toBe(courseSeq);
+    expect(r.window.minX + r.window.width / 2).toBeCloseTo(5, 6);
+    expect(r.window.minY + r.window.height / 2).toBeCloseTo(-7, 6);
+    expect(r.page.window).toEqual(r.window);
+    expect(r.page.frame).toEqual(settings.mapFrame);
+    expect(r.page.paper.widthMm).toBeGreaterThan(0);
+    expect(r.page.objects).toEqual([...(stored.objects as unknown[]), label]);
+    expect(r.page.textValues).toMatchObject({ course: "Blue", scale: "1:10000" });
+    expect(r.page.description).toMatchObject({ x: 140, y: 12, cellSizeMm: 6, title: "Blue" });
+    expect(r.page.description!.rows.map((row) => row.code)).toEqual(expect.arrayContaining(["31", "32"]));
+    expect(r.descriptionRowCount).toBe(r.page.description!.rows.length);
+    expect(r.block).toEqual({ rows: r.page.description!.rows, header: r.page.description!.header, title: "Blue" });
+    expect(r.descriptionHeaderRows).toBe(3);
+    // Base map 1:7 500 printed at 1:10 000.
+    expect(r.overprintScale).toBeCloseTo(0.75, 6);
+    expect(r.labelMode).toBe("sequence");
+    expect(r.controls.map((c) => c.code)).toEqual(expect.arrayContaining(["31", "32"]));
+    // The course's other sheets count for "outside every sheet".
+    expect(r.windows.length).toBeGreaterThan(1);
+    expect(r.windows[0]).toEqual(r.window);
+    // Without templateObjects the template is not written (Layout mode's sheet scope).
+    await caller.courseMap.saveLayout({ id: sheet.seq, windowCenter: { x: 6, y: -7 }, printScale: 10000, description: { visible: true, x: 140, y: 12, cellSizeMm: 6 }, objects: [] });
+    const kept = await ctx.db.mapTemplate.findFirstOrThrow({ where: { eventId: ctx.eventId, seq: template.seq } });
+    expect(kept.objects).toEqual(stored.objects);
+    await caller.courseMap.delete({ id: sheet.seq });
+    // A sheet without a template has nothing to lay out.
+    const bare = await caller.courseMap.create({ name: "No template", courseId: courseSeq, templateId: null, kind: "course", overrides: {}, objects: [] });
+    await expect(caller.courseMap.resolveSheet({ seq: bare.seq })).rejects.toMatchObject({ code: "PRECONDITION_FAILED" });
+    await caller.courseMap.delete({ id: bare.seq });
+  });
+
+  it("resolveSheet: a template previewed with a course, and NOT_FOUND for unknown rows", async () => {
+    const template = (await caller.mapTemplate.list())[0];
+    const r = await caller.courseMap.resolveSheet({ templateSeq: template.seq, courseSeq });
+    expect(r.scope).toBe("template");
+    expect(r.sheet).toBeNull();
+    expect(r.courseSeq).toBe(courseSeq);
+    expect(r.page.textValues).toMatchObject({ course: "Blue" });
+    expect(r.window.minX + r.window.width / 2).toBeCloseTo(0, 6);
+    const bare = await caller.courseMap.resolveSheet({ templateSeq: template.seq });
+    expect(bare.courseSeq).toBeNull();
+    expect(bare.controls).toEqual([]);
+    await expect(caller.courseMap.resolveSheet({ seq: 900_001 })).rejects.toMatchObject({ code: "NOT_FOUND" });
+    await expect(caller.courseMap.resolveSheet({ templateSeq: 900_001 })).rejects.toMatchObject({ code: "NOT_FOUND" });
+    await expect(caller.courseMap.resolveSheet({ templateSeq: template.seq, courseSeq: 900_001 })).rejects.toMatchObject({ code: "NOT_FOUND" });
+  });
+
   it("round-trips templates through the club library", async () => {
     const template = (await caller.mapTemplate.list())[0];
     const saved = await caller.mapTemplate.saveToClub({

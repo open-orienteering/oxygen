@@ -116,3 +116,44 @@ describe("diffImages", () => {
     expect(() => diffImages(a, b)).toThrow(/size mismatch/);
   });
 });
+
+describe("rasterisePassStream — filter regions (map-rendering §4.11, 04 §8)", () => {
+  const near = (img: RasterImage, x: number, y: number, css: string, tol = 40) => {
+    const [r, g, b] = hex(css);
+    const px = sampleAt(img, x, y)!;
+    return Math.abs(px[0] - r) + Math.abs(px[1] - g) + Math.abs(px[2] - b) <= tol;
+  };
+  const scene = async (name: render.GoldenSceneName) => {
+    const s = render.goldenScene(name, []);
+    return { s, img: await rasterisePassStream(s.stream, { colour: s.colour, pxPerMm: 20, marginUm: 1000 }) };
+  };
+  /** The straight contour (2, 6) → (58, 30) mm at x mm. */
+  const contourAt = (x: number) => [x * 1000, (6 + ((x - 2) * 24) / 56) * 1000] as const;
+
+  it("clip brown: the contour stops at the pentagon and runs on outside it", async () => {
+    const { s, img } = await scene("filter-clip-brown");
+    const brown = s.colour(20);
+    expect(near(img, ...contourAt(50), brown)).toBe(true);
+    expect(near(img, ...contourAt(8), brown)).toBe(true);
+    expect(near(img, ...contourAt(24), brown)).toBe(false);
+  });
+
+  it("hide 505: the footpath crossing the pentagon is gone everywhere, the one beside it is drawn", async () => {
+    const { img } = await scene("filter-hide-505");
+    const black = (x: number, y: number) => near(img, x, y, "#000000", 60);
+    // Footpath (18, 4) → (22, 36) mm: no black anywhere along it, inside or outside the pentagon.
+    const along = (x0: number, y0: number, x1: number, y1: number) =>
+      Array.from({ length: 64 }, (_, k) => black((x0 + ((x1 - x0) * k) / 63) * 1000, (y0 + ((y1 - y0) * k) / 63) * 1000));
+    expect(along(18, 4, 22, 36).some(Boolean)).toBe(false);
+    expect(along(41, 6, 43, 34).filter(Boolean).length).toBeGreaterThan(32);
+  });
+
+  it("show only: the 407 hatch is cut inside the pentagon, the contour inside stays", async () => {
+    const { s, img } = await scene("filter-show-only");
+    const green = s.colour(8);
+    const row = (y: number, x0: number, x1: number) => Array.from({ length: 80 }, (_, k) => near(img, (x0 + ((x1 - x0) * k) / 79) * 1000, y * 1000, green));
+    expect(row(22, 16, 20).some(Boolean)).toBe(false); // inside: paper
+    expect(row(22, 46, 50).some(Boolean)).toBe(true); // outside: the hatch
+    expect(near(img, ...contourAt(24), s.colour(20))).toBe(true);
+  });
+});

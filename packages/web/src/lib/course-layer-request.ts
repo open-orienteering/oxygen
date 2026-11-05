@@ -2,13 +2,15 @@
  * The course layer's input from what `MapViewer` already has
  * (docs/course-layer.md §5): controls with their positions (drag and
  * pending moves applied), the highlighted courses, their label offsets,
- * the imported courses' file-authored geometry. Pure; the worker adds the
+ * the stored structure's authored leg gaps and hidden numbers and the
+ * controls' authored circle cuts, and the editor's provisional visit.
+ * Pure; the worker adds the
  * document context and the cut features (docs/map-rendering.md §5.2
  * "Dynamic bucket").
  */
 
-import type { course } from "@oxygen/shared";
-import type { CourseLayerRequest } from "../map-gl/worker";
+import { course } from "@oxygen/shared";
+import type { CourseLayerRequest, PageLayerRequest } from "../map-gl/worker";
 
 type Pt = { x: number; y: number };
 
@@ -17,6 +19,8 @@ export interface RequestControl {
   code: string;
   type: "Start" | "Control" | "Finish";
   visible?: boolean;
+  /** `controls.circle_gaps`: authored cuts, compass degrees; non-empty replaces the automatic ones (course-layer.md §6.4). */
+  circleGaps?: course.AngularGap[];
 }
 
 export interface RequestCourse {
@@ -26,12 +30,30 @@ export interface RequestCourse {
   highlight?: boolean;
   orderMode?: "ordered" | "free_order";
   labelOffsets?: Record<string, { dx: number; dy: number }>;
+  /** Authored leg gaps of the stored structure, keyed `"<fromId>><toId>"` (course-layer.md §6.4). */
+  legGaps?: Record<string, course.FractionGap[]>;
+  /** Ids of the controls whose number every visit hides. */
+  hiddenNumbers?: readonly number[];
 }
 
-interface GeoFeature {
-  type?: string;
-  geometry?: { type: string; coordinates: unknown } | null;
-  properties?: Record<string, unknown> | null;
+/** The provisional visit's site id: not a control, never hit-tested (docs/course-editor.md §6.1). */
+export const PROVISIONAL_SITE_ID = "provisional";
+
+/**
+ * Where an armed `S` / `K` / `M` would place (docs/course-editor.md §6.1):
+ * spliced into the single highlighted course, so the layer draws the
+ * pending legs, their cuts and the numbers as the click would write them.
+ */
+export interface ProvisionalVisit {
+  role: course.CourseSite["kind"];
+  /** Control-sequence position a control goes to (its Control-typed entries, repeats counted); start and finish ignore it. */
+  insertAt: number;
+  /** The cursor, paper mm. */
+  pt: Pt;
+  /** An existing site reused at the visit: spliced by its id, no site added. */
+  reuseId?: string;
+  /** The new site's code (the next code of the allocation). */
+  code?: string;
 }
 
 export interface CourseRequestInput {
@@ -40,8 +62,6 @@ export interface CourseRequestInput {
   positions: ReadonlyMap<string, Pt>;
   courses: readonly RequestCourse[];
   highlightCourseName?: string;
-  /** `course.courseGeometries` merged, each feature tagged with `courseName` (MapPanel). */
-  courseGeometry?: { features?: GeoFeature[] } | null;
   /** Sequence numbers for a single ordered course (the description sheet or the editor is shown). */
   sequenceLabels: boolean;
   /**
@@ -51,62 +71,77 @@ export interface CourseRequestInput {
   labelOffset?: (id: string) => { dx: number; dy: number } | undefined;
   /** Controls the GL layer leaves out (the editor's faded controls; the UI layer draws them). */
   exclude?: ReadonlySet<string>;
+  /** Course objects in scope of the view (`courseObjectsForView`), in draw order (course-layer.md §8.3). */
+  courseObjects?: readonly course.CourseObject[];
+  /** The armed tool's visit; drawn with exactly one highlighted course only. */
+  provisional?: ProvisionalVisit | null;
+  /** Layout mode's sheet (docs/course-layout.md §1); absent in every other view. */
+  layout?: LayoutRequest | null;
+  /**
+   * The event's automatic cuts (`course.getOverprintCuts`, course-layer.md §3.4). `false`: the
+   * layer draws no automatic slits or leg gaps, stored ones still apply. Absent = on.
+   */
+  autoCuts?: boolean;
+}
+
+/**
+ * The sheet Layout mode draws, as the composer takes it: the page (its
+ * page-anchored objects and the block become the page part), and what
+ * the map layer of the sheet adds to the course layer — the layout objects
+ * (map-anchored ones drawn), the template's appearance, the overprint
+ * scale, the frame window and the text values.
+ */
+export interface LayoutRequest {
+  page: PageLayerRequest;
+  appearance: course.CourseAppearance;
+  overprintScale: number;
+}
+
+/**
+ * The course's control ids with the provisional visit spliced in: a control
+ * before the `insertAt`-th control visit (else before the trailing finish,
+ * else last); a start replaces the course's start (else leads); a finish
+ * replaces its finish (else ends) — the structure the click writes.
+ */
+export function spliceProvisional(ids: readonly string[], typeOf: (id: string) => RequestControl["type"] | undefined, v: ProvisionalVisit): string[] {
+  const id = v.reuseId ?? PROVISIONAL_SITE_ID;
+  const out = [...ids];
+  const lastFinish = () => out.map((x) => typeOf(x)).lastIndexOf("Finish");
+  if (v.role === "start") {
+    const i = out.findIndex((x) => typeOf(x) === "Start");
+    if (i >= 0) out[i] = id;
+    else out.unshift(id);
+  } else if (v.role === "finish") {
+    const i = lastFinish();
+    if (i >= 0) out[i] = id;
+    else out.push(id);
+  } else {
+    let seen = 0;
+    let i = out.findIndex((x) => typeOf(x) === "Control" && seen++ === v.insertAt);
+    if (i < 0) i = lastFinish();
+    if (i < 0) i = out.length;
+    out.splice(i, 0, id);
+  }
+  return out;
+}
+
+/**
+ * The course objects drawn with the highlighted courses (course-layer.md
+ * §8.2): `all`-scoped ones always, others when a drawn course is among the
+ * courses the server resolved their scope to (`inCourses`: named courses
+ * and the courses of named classes, forking pools included — print's
+ * rule). No highlighted course (all controls): `all` only.
+ */
+export function courseObjectsForView(
+  objects: readonly course.CourseObject[],
+  highlighted: ReadonlySet<string>,
+  courses: readonly { id: number; name: string }[],
+): course.CourseObject[] {
+  const drawn = new Set(courses.filter((c) => highlighted.has(c.name)).map((c) => c.id));
+  return objects.filter((o) => o.inCourses === null || o.inCourses.some((id) => drawn.has(id)));
 }
 
 const KIND: Record<RequestControl["type"], course.CourseSite["kind"]> = { Start: "start", Control: "control", Finish: "finish" };
-
-const lineCoords = (f: GeoFeature): Pt[] | null => {
-  if (f.geometry?.type !== "LineString" || !Array.isArray(f.geometry.coordinates)) return null;
-  return (f.geometry.coordinates as [number, number][]).map(([x, y]) => ({ x, y }));
-};
-
-const EXTRA_KINDS = new Set(["marked_route", "restricted_line", "forbidden_route"]);
-
-/**
- * Imported `ocd` geometry kept by the layer (course-layer.md §2): a course
- * whose GeoJSON legs are `preclipped` was drawn by the file, so its legs
- * become authored pieces and its controls' `cuts` authored circle gaps;
- * bent legs keep their path. Automatic `gaps` / `cuts` of the legacy
- * GeoJSON are not read — the worker cuts from the document's features.
- */
-function authoredGeometry(name: string, items: course.CourseItem[], codeOf: (siteId: string) => string, features: readonly GeoFeature[]): course.CourseExtra[] {
-  const own = features.filter((f) => f.properties?.courseName === name);
-  const legs = own.filter((f) => f.properties?.symbolType === "leg").map((f) => ({ pts: lineCoords(f), preclipped: f.properties?.preclipped === true }));
-  const authored = legs.some((l) => l.preclipped);
-  // Leg i runs into item i + 1; a count that does not match is not this sequence's geometry.
-  if (legs.length === items.length - 1) {
-    legs.forEach((l, i) => {
-      if (!l.pts || l.pts.length < 2) return;
-      if (l.preclipped) items[i + 1].leg = { pieces: [l.pts] };
-      else if (l.pts.length > 2) items[i + 1].leg = { path: l.pts };
-    });
-  }
-  if (authored) {
-    const cutsByCode = new Map<string, course.AngularGap[]>();
-    for (const f of own) {
-      const p = f.properties;
-      if (p?.symbolType === "control" && typeof p.code === "string" && Array.isArray(p.cuts) && p.cuts.length) cutsByCode.set(p.code, p.cuts as course.AngularGap[]);
-    }
-    for (const item of items) {
-      const cuts = cutsByCode.get(codeOf(item.siteId));
-      if (cuts) item.circleGaps = cuts.map((g) => ({ start: g.start, end: g.end }));
-    }
-  }
-  const extras: course.CourseExtra[] = [];
-  for (const f of own) {
-    const kind = f.properties?.symbolType;
-    if (typeof kind !== "string") continue;
-    if (EXTRA_KINDS.has(kind)) {
-      const pts = lineCoords(f);
-      if (pts && pts.length >= 2) extras.push({ kind: kind as course.CourseExtra["kind"], points: pts });
-    } else if (kind === "restricted_area" && f.geometry?.type === "Polygon" && Array.isArray(f.geometry.coordinates)) {
-      // 709 as the OCD importer and `courseLayerGeoJson` name it.
-      const ring = (f.geometry.coordinates as [number, number][][])[0];
-      if (ring && ring.length >= 3) extras.push({ kind: "oob_area", points: ring.map(([x, y]) => ({ x, y })) });
-    }
-  }
-  return extras;
-}
 
 export function courseLayerRequest(input: CourseRequestInput): CourseLayerRequest {
   const sites: course.CourseSite[] = [];
@@ -116,22 +151,31 @@ export function courseLayerRequest(input: CourseRequestInput): CourseLayerReques
     if (c.visible === false || input.exclude?.has(c.id)) continue;
     const p = input.positions.get(c.id);
     if (!p || (p.x === 0 && p.y === 0)) continue;
-    sites.push({ id: c.id, code: c.code, kind: KIND[c.type], x: p.x, y: p.y });
+    sites.push({ id: c.id, code: c.code, kind: KIND[c.type], x: p.x, y: p.y, ...(c.circleGaps?.length ? { circleGaps: c.circleGaps } : {}) });
   }
-  const drawn = new Set(sites.map((s) => s.id));
-
   const highlighted = input.courses.filter((c) => c.highlight || c.name === input.highlightCourseName);
-  const features = input.courseGeometry?.features ?? [];
+  const pv = highlighted.length === 1 ? input.provisional ?? null : null;
+  if (pv && !pv.reuseId) sites.push({ id: PROVISIONAL_SITE_ID, code: pv.code ?? "", kind: pv.role, x: pv.pt.x, y: pv.pt.y });
+  const drawn = new Set(sites.map((s) => s.id));
+  const typeOf = new Map(input.controls.map((c) => [c.id, c.type] as const));
+
   const structures: course.CourseStructure[] = highlighted.map((c) => {
-    const items: course.CourseItem[] = c.controls.map((siteId) => ({ siteId }));
-    const extras = authoredGeometry(c.name, items, (id) => codeOf.get(id) ?? "", features);
+    const hidden = new Set((c.hiddenNumbers ?? []).map(String));
+    const ids = pv ? spliceProvisional(c.controls, (id) => typeOf.get(id), pv) : c.controls;
+    const items: course.CourseItem[] = ids.map((siteId, i) => {
+      const item: course.CourseItem = { siteId };
+      // Keyed by the drawn neighbours: the leg a provisional visit splits is not the stored one.
+      const gaps = i > 0 ? c.legGaps?.[`${ids[i - 1]}>${siteId}`] : undefined;
+      if (gaps?.length) item.leg = { gaps };
+      if (hidden.has(siteId)) item.numberHidden = true;
+      return item;
+    });
     return {
       version: 1,
       id: c.name,
       orderMode: c.orderMode ?? "ordered",
       // Items whose site is not drawn stay: the layer skips them and joins the neighbours (§2).
       items,
-      ...(extras.length ? { extras } : {}),
     };
   });
 
@@ -151,8 +195,21 @@ export function courseLayerRequest(input: CourseRequestInput): CourseLayerReques
   return {
     structure: structures.length === 0 ? null : structures,
     sites,
-    objects: [],
-    appearance: {},
-    viewOptions: { labelMode: sequence ? "sequence" : "code", ...(allControls ? { allControls: true } : {}) },
+    // The layer reads the body and the id; scope, z, token and resolved courses stay with the list.
+    objects: [
+      // A sheet's layout objects first, as `composePage` passes them; the layer draws the map-anchored ones.
+      ...(input.layout?.page.objects ?? []),
+      ...(input.courseObjects ?? []).map(({ scope: _s, z: _z, version: _v, inCourses: _c, ...o }) => o as course.CourseLayerObject),
+    ],
+    appearance: input.layout?.appearance ?? {},
+    viewOptions: {
+      labelMode: sequence ? "sequence" : "code",
+      ...(allControls ? { allControls: true } : {}),
+      ...(input.autoCuts === false ? { autoCuts: false } : {}),
+      ...(input.layout
+        ? { overprintScale: input.layout.overprintScale, window: course.mapLayerWindow(input.layout.page), ...(input.layout.page.textValues ? { textValues: input.layout.page.textValues } : {}) }
+        : {}),
+    },
+    ...(input.layout ? { page: input.layout.page } : {}),
   };
 }

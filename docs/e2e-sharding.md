@@ -67,17 +67,27 @@ Specs never hardcode the API origin; they import `API_BASE` from
 
 Besides `chromium`, `playwright.config.ts` has projects `map-legacy` and
 `map-vector` that run the files in `MAP_PIPELINE_SPECS` once per value of
-the per-event map pipeline switch (`docs/map-pipeline-switch.md` §5).
-A shard that gets one of those files runs it twice; the weight table does
-not count that yet.
+the per-event map pipeline switch (`docs/map-pipeline-switch.md` §5);
+`map-vector` also runs `VECTOR_ONLY_SPECS` (`course-editor.spec.ts`), and
+project `mobile` runs `MOBILE_SPECS` (`field-mode.spec.ts` and
+`course-editor.spec.ts`'s touch describe) on a Pixel 7 profile. A shard
+runs a file once per project that matches it, so the weight table counts
+every run: such a file's entry is per project, `{ "map-legacy": 4,
+"map-vector": 4 }`, and its weight is the sum (below).
 
 ### File partitioning
 
 The runner assigns spec files to shards with an LPT (longest processing
 time first) heuristic over a static weight table in
-`scripts/e2e-sharded.mjs`. Weights are rough run-time proportions; the
-per-shard durations printed at the end of every run tell you when the
-table needs rebalancing — edit `WEIGHTS` and re-run.
+`scripts/e2e-weights.mjs` (`WEIGHTS`, `weightOf`). Weights are rough
+run-time proportions (one unit is about 8 s of a shard); a file run by one
+project has a number, a file run by several has one per project and
+weighs their sum. `scripts/__tests__/e2e-config.test.mjs` (`pnpm
+test:scripts`) loads the config's projects and fails when a file run by
+more than one project is not weighted per project, or when a weight names
+a spec that no longer exists. The per-shard durations printed at the end
+of every run tell you when the table needs rebalancing — edit `WEIGHTS`
+and re-run.
 
 ### Single-process seeding
 

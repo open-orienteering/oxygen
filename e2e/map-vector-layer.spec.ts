@@ -333,6 +333,48 @@ test.describe("vector map layer", () => {
     expect(beside && isYellow(beside), `yellow beside the leg: ${JSON.stringify(beside)}`).toBe(true);
   });
 
+  // docs/course-layer.md §8.3: a stored, `all`-scoped course object reaches the viewer through
+  // MapPanel's `courseObject.list` and is drawn by the GL course layer even with no course shown.
+  test("a stored white-out course object paints the map white", async ({ page }) => {
+    test.setTimeout(180_000);
+    await setMapPipeline("vector");
+    await openEvent(page);
+    await viewerWithMap(page);
+    let { viewer, canvas } = await openCourses(page);
+
+    // 1. Open yellow ground: yellow 3 mm around a spot.
+    const fit = await snapshot(viewer, canvas);
+    const spot = findSpot(fit, isYellow, (p) =>
+      [-3, 0, 3].every((dx) => [-3, 0, 3].every((dy) => { const c = fit.rgb({ x: p.x + dx, y: p.y + dy }); return !!c && isYellow(c); })));
+    expect(spot, "open yellow ground").toBeDefined();
+
+    // 2. A 2 mm white-out square on it, through the API.
+    const sq = [[-1, -1], [1, -1], [1, 1], [-1, 1]].map(([dx, dy]) => ({ x: spot!.x + dx, y: spot!.y + dy }));
+    const res = await page.request.post(`${API}/trpc/courseObject.create`, {
+      headers: { "content-type": "application/json", "x-event-id": "itest" },
+      data: { kind: "whiteout", geometry: sq, props: {}, scope: { all: true } },
+    });
+    expect(res.ok(), await res.text()).toBe(true);
+    const id = ((await res.json()) as { result: { data: { id: number } } }).result.data.id;
+    try {
+      await page.reload();
+      ({ viewer, canvas } = await openCourses(page));
+      await expect(viewer).toHaveAttribute("data-course-layer", "gl", { timeout: 30_000 });
+
+      // 3. White inside the square, yellow 3 mm beside it.
+      await zoomOn(page, viewer, canvas, spot!);
+      await expect.poll(async () => {
+        const c = (await snapshot(viewer, canvas)).rgb(spot!);
+        return !!c && isWhite(c);
+      }, { timeout: 30_000 }).toBe(true);
+      const near = await snapshot(viewer, canvas);
+      const beside = near.rgb({ x: spot!.x + 3, y: spot!.y });
+      expect(beside && isYellow(beside), `yellow beside the white-out: ${JSON.stringify(beside)}`).toBe(true);
+    } finally {
+      await page.request.post(`${API}/trpc/courseObject.delete`, { headers: { "content-type": "application/json", "x-event-id": "itest" }, data: { id } });
+    }
+  });
+
   test("a legacy event stays on tiles", async ({ page }) => {
     test.setTimeout(120_000);
     await setMapPipeline("legacy");

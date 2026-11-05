@@ -38,6 +38,11 @@ export class UndoStack {
     return this.future.length > 0;
   }
 
+  /** The entry the next `undo` reverses, if any. */
+  get top(): UndoEntry | undefined {
+    return this.past[this.past.length - 1];
+  }
+
   /** Record a completed change. Clears the redo branch. */
   push(entry: UndoEntry): void {
     this.past.push(entry);

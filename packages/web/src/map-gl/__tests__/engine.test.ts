@@ -5,7 +5,8 @@ import { render } from "@oxygen/shared";
 import { MapGlEngine, type Transport } from "../engine";
 import { createMapGlWorker, type WorkerReply, type WorkerRequest } from "../worker";
 import { CELL_UM, type PreparedPart, type ResidentPart, type VisibleSet, type ViewRect } from "../buckets";
-import type { MapGlRenderer, TextAtlasImage } from "../renderer";
+import type { DocumentRenderOptions, InsetBox, MapGlRenderer, TextAtlasImage } from "../renderer";
+import { loupeView, type RenderTarget } from "../view";
 import { parseTextAtlasPage } from "../text-atlas";
 import type { MeshAtlas } from "../mesh-atlas";
 import { documentBytes, indexOf, request } from "./course-fixture";
@@ -64,8 +65,27 @@ class FakeRenderer {
   setVisibleSet(vs: VisibleSet): void {
     this.visibleSets.push(vs);
   }
-  renderDocument() {
+  renderOpts: DocumentRenderOptions[] = [];
+  renderViews: ViewRect[] = [];
+  renderTargets: (RenderTarget | undefined)[] = [];
+  renderDocument(view: ViewRect, opts: DocumentRenderOptions, target?: RenderTarget) {
+    this.renderOpts.push(opts);
+    this.renderViews.push(view);
+    this.renderTargets.push(target);
     return { drawCalls: 1, cpuMs: 0 };
+  }
+  readonly inset: RenderTarget = { framebuffer: {} as WebGLFramebuffer, width: 0, height: 0 };
+  composites: InsetBox[] = [];
+  insetReleases = 0;
+  insetTarget(size: number): RenderTarget {
+    this.inset.width = this.inset.height = size;
+    return this.inset;
+  }
+  compositeInset(box: InsetBox): void {
+    this.composites.push(box);
+  }
+  releaseInset(): void {
+    this.insetReleases++;
   }
   get documentBytes() {
     return { arenas: 0, arenasUsed: 0, atlas: 0, text: 0, visibleSet: 0, total: 0 };
@@ -251,6 +271,8 @@ describe("MapGlEngine dynamic bucket (docs/map-rendering.md §5.2 Dynamic bucket
     expect(courseParts(renderer.visibleSets.at(-1)!, lower).length).toBe(1);
     expect(renderer.atlases).toHaveLength(1);
     expect(engine.colours).toBe((infos[0] as { colours: unknown }).colours);
+    // The editor's hit index reaches the host with the derivation (§5.5).
+    expect((infos[0] as { hit: { refs: unknown[] } | null }).hit?.refs.length).toBeGreaterThan(0);
   });
 
   it("drops a reply a newer request overtook; null releases the part", async () => {
@@ -264,6 +286,106 @@ describe("MapGlEngine dynamic bucket (docs/map-rendering.md §5.2 Dynamic bucket
     transport.flush();
     expect(renderer.parts.has("C")).toBe(false);
     expect(renderer.released).toContain("C");
+  });
+
+  it("filter regions: the reply's hidden objects join setHidden's, masks reach the visible set, null clears both", async () => {
+    const { engine, transport, renderer, summary } = await courseEngine();
+    engine.setView({ centreX: 30_000, centreY: 30_000, pxPerUm: 0.02, widthPx: 2000, heightPx: 2000 });
+    transport.flush();
+    const square = [{ x: 20, y: 5 }, { x: 30, y: 5 }, { x: 30, y: 15 }, { x: 20, y: 15 }];
+    const black = indexOf(summary.colourStack!, "black100");
+    const draw = () => { engine.render({ colour: () => [0, 0, 0] }); return renderer.visibleSets.at(-1)!; };
+    const blackDraws = (vs: VisibleSet) => vs.stroke.draws.filter((d) => d.colour === black);
+    expect(blackDraws(draw()).map((d) => d.mask)).toEqual([undefined]);
+
+    engine.setCourse(request({ regions: [{ rings: [square], mode: "clip", symbols: "all" }] }));
+    transport.flush();
+    const clipped = draw();
+    expect(blackDraws(clipped).map((d) => d.mask)).toEqual([0]);
+    expect(clipped.filter?.masks).toHaveLength(1);
+
+    engine.setCourse(request({ regions: [{ rings: [square], mode: "hide", symbols: "all" }] }));
+    transport.flush();
+    expect(blackDraws(draw())).toEqual([]);
+    engine.setHidden(new Set([1]));
+    expect(draw().stroke.draws.filter((d) => d.colour !== black && d.mask === undefined).length).toBeGreaterThan(0);
+
+    engine.setHidden(new Set());
+    engine.setCourse(null);
+    transport.flush();
+    const cleared = draw();
+    expect(blackDraws(cleared).map((d) => d.mask)).toEqual([undefined]);
+    expect(cleared.filter).toBeUndefined();
+  });
+
+  it("a page: its part drawn after the course part, the map clipped to the frame, both released on clear (docs/course-layout.md §1)", async () => {
+    const { engine, transport, renderer } = await courseEngine();
+    engine.setView({ centreX: 30_000, centreY: 30_000, pxPerUm: 0.002, widthPx: 800, heightPx: 800 });
+    const frame = { x: 10, y: 10, width: 190, height: 277 };
+    const window = { minX: -65, minY: -128.5, width: 190, height: 277 };
+    engine.setCourse(request({
+      page: { paper: { heightMm: 297 }, frame, window, objects: [
+        { id: "t", kind: "text", anchor: "page", x: 105, y: 20, text: "Bana", fontSizeMm: 6, color: "#000000" },
+        { id: "w", kind: "rectangle", anchor: "page", x: 150, y: 250, width: 30, height: 20, fillMode: "whiteout" },
+      ],
+      description: null,
+    },
+    }));
+    transport.flush();
+    expect(renderer.parts.has("P")).toBe(true);
+    const fixed = engine.stats().residentBytes;
+    engine.render({ colour: () => [0, 0, 0] });
+    const opts = renderer.renderOpts.at(-1)!;
+    const base = opts.pageClip!.fromColour;
+    expect(base * 2).toBe(engine.colours.length);
+    expect(opts.pageClip!.ringUm).toHaveLength(4);
+    const vs = renderer.visibleSets.at(-1)!;
+    expect(vs.text.draws.some((d) => d.colour >= base)).toBe(true);
+    expect(vs.layers.at(-1)!.colour).toBeGreaterThanOrEqual(base);
+
+    engine.setCourse(request());
+    transport.flush();
+    expect(renderer.released).toContain("P");
+    expect(renderer.parts.has("P")).toBe(false);
+    expect(engine.stats().residentBytes).toBeLessThan(fixed);
+    engine.render({ colour: () => [0, 0, 0] });
+    expect(renderer.renderOpts.at(-1)!.pageClip).toBeUndefined();
+  });
+
+  it("the loupe: one more draw of the visible set render built, into the inset target, composited at the box (docs/map-rendering.md §5.5)", async () => {
+    const { engine, transport, renderer } = await courseEngine();
+    const view = { centreX: 30_000, centreY: 30_000, pxPerUm: 0.002, widthPx: 800, heightPx: 800 };
+    engine.setView(view);
+    engine.setCourse(request({ page: { paper: { heightMm: 297 }, frame: { x: 10, y: 10, width: 190, height: 277 }, window: { minX: -65, minY: -128.5, width: 190, height: 277 }, objects: [], description: null } }));
+    transport.flush();
+    const opts = { colour: () => [0, 0, 0] as [number, number, number] };
+    engine.render(opts);
+    const { rebuilds } = engine.stats();
+    const posted = transport.posted.length;
+    const draws = renderer.renderViews.length;
+    const lv = loupeView(view, { x: 31_000, y: 29_500 }, 2.5, 300);
+    engine.renderInset(lv, opts, { x: 250, y: 100, size: 300 });
+    expect(renderer.renderViews.length).toBe(draws + 1);
+    expect(renderer.renderViews.at(-1)).toEqual(lv);
+    expect(renderer.renderTargets.at(-1)).toBe(renderer.inset);
+    expect(renderer.inset.width).toBe(300);
+    expect(renderer.renderOpts.at(-1)!.pageClip).toEqual(renderer.renderOpts.at(-2)!.pageClip);
+    expect(renderer.renderOpts.at(-1)!.pageClip).toBeDefined();
+    expect(renderer.composites).toEqual([{ x: 250, y: 100, size: 300 }]);
+    // Over the resident visible set: no rebuild, no request to the worker.
+    expect(engine.stats().rebuilds).toBe(rebuilds);
+    expect(transport.posted.length).toBe(posted);
+    engine.releaseInset();
+    expect(renderer.insetReleases).toBe(1);
+  });
+
+  it("the loupe before the load draws nothing", () => {
+    const renderer = new FakeRenderer();
+    const engine = new MapGlEngine(renderer as unknown as MapGlRenderer, manualTransport(), {});
+    const v = { centreX: 0, centreY: 0, pxPerUm: 0.01, widthPx: 100, heightPx: 100 };
+    expect(engine.renderInset(v, { colour: () => [0, 0, 0] }, { x: 0, y: 0, size: 100 })).toEqual({ drawCalls: 0, cpuMs: 0 });
+    expect(renderer.renderViews).toHaveLength(0);
+    expect(renderer.composites).toHaveLength(0);
   });
 
   it("a request before the load waits for it; the course counts as fixed bytes", async () => {

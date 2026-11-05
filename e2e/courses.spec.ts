@@ -78,6 +78,55 @@ test.describe("Courses Page", () => {
     await expect(page.getByText("3 courses")).toBeVisible({ timeout: 5000 });
   });
 
+  test("an edit from a stale copy is refused, reloaded and named (version conflict)", async ({ page }) => {
+    // docs/course-layer.md §7 "Legacy editor": the page sends the course's
+    // version token; another client wrote first, so the server answers
+    // CONFLICT and the page reloads the course and says so.
+    const headers = { "x-competition-id": "itest" };
+    const mine = `E2E Conflict ${Date.now()}`;
+    const created = await page.request.post("/trpc/course.create", { headers, data: { name: mine } });
+    expect(created.ok()).toBe(true);
+    const courseId = (await created.json()).result.data.id as number;
+
+    await selectCompetition(page);
+    await clickTab(page, "Courses");
+    const row = page.getByRole("row").filter({ hasText: mine });
+    await expect(row).toBeVisible({ timeout: 10000 });
+    await row.getByRole("cell", { name: mine }).click();
+    const nameInput = page.getByTestId("course-detail-name");
+    await expect(nameInput).toHaveValue(mine, { timeout: 5000 });
+
+    // Hold this page's 5 s change poll, so the other client's write stays
+    // unseen until this page edits (otherwise the poll may refresh the token
+    // first and there is nothing to conflict with).
+    let release!: () => void;
+    const held = new Promise<void>((resolve) => (release = resolve));
+    const isPoll = (url: URL) => url.pathname.includes("competition.counterState");
+    await page.route(isPoll, async (route) => {
+      await held;
+      await route.continue();
+    });
+
+    const theirs = `${mine} (theirs)`;
+    const other = await page.request.post("/trpc/course.update", { headers, data: { id: courseId, name: theirs } });
+    expect(other.ok()).toBe(true);
+
+    await nameInput.fill(`${mine} (mine)`);
+    await nameInput.press("Tab");
+    await expect(page.getByTestId("course-changed-elsewhere")).toHaveText("Changed elsewhere — reloaded", {
+      timeout: 10000,
+    });
+    release();
+    await page.unroute(isPoll);
+
+    // The server kept the other write; the page shows it.
+    await expect(nameInput).toHaveValue(theirs, { timeout: 10000 });
+    await expect(page.getByRole("cell", { name: theirs, exact: true })).toBeVisible();
+
+    const removed = await page.request.post("/trpc/course.delete", { headers, data: { id: courseId } });
+    expect(removed.ok()).toBe(true);
+  });
+
   test("should create a free-order course with badge and persisted mode", async ({
     page,
   }) => {

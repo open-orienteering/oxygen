@@ -9,7 +9,7 @@
  * translation comes from `ISOM_DESCRIPTION_MAP` in `@oxygen/shared`.
  */
 
-import { isomDescriptionFor, isomNumber } from "@oxygen/shared";
+import { isomDescriptionFor, isomNumber, type ControlDescription } from "@oxygen/shared";
 import type { SlimMapObject } from "./event-map-objects.js";
 
 export interface DescriptionCandidate {
@@ -710,4 +710,33 @@ export function suggestDescriptions(
   return [...best.values()]
     .sort((a, b) => rankOf(a) - rankOf(b) || a.isom - b.isom)
     .slice(0, limit);
+}
+
+/** An autodetect candidate as a storable description. */
+export function candidateToDescription(c: DescriptionCandidate): ControlDescription {
+  return {
+    d: c.d,
+    ...(c.c ? { c: c.c } : {}),
+    ...(c.e ? { e: c.e } : {}),
+    ...(c.f ? { f: c.f } : {}),
+    ...(c.g ? { g: c.g } : {}),
+  };
+}
+
+/** The top suggestion at a point as a storable description, or null (no feature in reach). */
+export function describeAt(objects: SlimMapObject[], x: number, y: number): ControlDescription | null {
+  if (x === 0 && y === 0) return null;
+  const [top] = suggestDescriptions(objects, x, y, { limit: 1 });
+  return top ? candidateToDescription(top) : null;
+}
+
+const DESCRIPTION_FIELDS = ["c", "d", "e", "s", "f", "g", "h"] as const;
+
+/** Field-wise equality of two descriptions (empty strings count as unset). */
+export function descriptionsEqual(
+  a: ControlDescription | null | undefined,
+  b: ControlDescription | null | undefined,
+): boolean {
+  if (!a || !b) return !a && !b;
+  return DESCRIPTION_FIELDS.every((k) => (a[k] || undefined) === (b[k] || undefined));
 }

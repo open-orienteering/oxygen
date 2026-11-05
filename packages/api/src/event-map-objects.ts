@@ -294,6 +294,37 @@ export async function loadDocumentCutFeatures(
   }
 }
 
+// ─── Check obstacles ─────────────────────────────────────────
+
+/** Obstacles of a decoded document, memoised per hash (docs/course-layer.md §9.3). */
+const documentObstacles = new LruCache<course.CheckDocument>(MAX_CACHED_EVENTS);
+
+/**
+ * The pinned document's library and leg obstacles for `course.checks`
+ * (docs/course-layer.md §9): `vector` events with a pin only (the
+ * reads-only gate of docs/map-pipeline-switch.md §3); null otherwise or
+ * when the document is unreadable.
+ */
+export async function loadEventCheckDocument(
+  db: PrismaClient | Prisma.TransactionClient,
+  eventId: bigint,
+): Promise<course.CheckDocument | null> {
+  const hash = await pinnedDocumentHash(db, eventId);
+  if (!hash) return null;
+  const cached = documentObstacles.get(hash);
+  if (cached) return cached;
+  const bytes = await getBlob(db, "map_documents", hash);
+  if (!bytes) return null;
+  try {
+    const doc = course.checkObstaclesOfDocument(mapDocument.decodeMapDocument(bytes));
+    documentObstacles.set(hash, doc);
+    return doc;
+  } catch (err) {
+    console.warn(`[event-map-objects] document ${hash} unreadable, no check obstacles:`, err);
+    return null;
+  }
+}
+
 /** Cut features of the event's latest uploaded OCAD file; null without a parseable map. */
 export async function loadOcadCutFeatures(
   db: MapFileReader,

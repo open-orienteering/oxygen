@@ -82,7 +82,7 @@ describe("course scenes", () => {
     expect(sites.get("33")!.cuts).toEqual([{ start: 300, end: 330 }]);
     const legs = scene.layer.derivation.courses[0].legs;
     expect(legs[1].gaps).toHaveLength(1); // boulder on 31 → 32
-    expect(legs[2]).toMatchObject({ preclipped: true });
+    expect(legs[2].gaps).toEqual([{ from: 0.4, to: 0.6 }]); // authored: replaces the automatic ones
     expect(sites.get("33")!.label).toMatchObject({ x: 44, y: 3 });
     // Each cut circle is open arcs, not a closed ring.
     const arcs = coursePasses(scene, stream).filter((x) => x.ref === "site:31" && x.p.kind === "stroke");
@@ -99,8 +99,8 @@ describe("course scenes", () => {
     expect(order.indexOf("white-upper")).toBeLessThan(order.indexOf("purple-upper"));
     expect(passes.find((x) => x.ref === "object:oob")!.p.kind).toBe("hatch");
     expect(passes.filter((x) => x.ref === "object:oob-b").map((x) => x.p.kind).sort()).toEqual(["hatch", "stroke"]);
-    for (const ref of ["object:oob", "extra:course:0", "extra:course:2"]) expect(passes.find((x) => x.ref === ref)!.colour, ref).toBe("purple-upper");
-    expect(passes.find((x) => x.ref === "extra:course:1")!.colour).toBe("purple-lower");
+    for (const ref of ["object:oob", "object:course-object:1", "object:course-object:3"]) expect(passes.find((x) => x.ref === ref)!.colour, ref).toBe("purple-upper");
+    expect(passes.find((x) => x.ref === "object:course-object:2")!.colour).toBe("purple-lower");
     const title = passes.find((x) => x.ref === "object:title")!;
     expect(title.colour).toBe("course-object:#1f6fb2");
     expect(title.p.colour).toBe(scene.colours.length - 1);

@@ -84,7 +84,15 @@ export interface PreparedInstanced {
   clip?: FanGeometry;
 }
 
-export type Prepared = PreparedFill | PreparedStroke | PreparedHatch | PreparedInstanced;
+/**
+ * A prepared item under a filter mask (map-rendering §3.8): drawn only
+ * outside every region; one stencil fan per region.
+ */
+export interface PreparedMask {
+  mask?: FanGeometry[];
+}
+
+export type Prepared = (PreparedFill | PreparedStroke | PreparedHatch | PreparedInstanced) & PreparedMask;
 
 export interface PreparedStream {
   items: Prepared[];
@@ -108,7 +116,22 @@ export function prepareStream(stream: render.PassStream, opts: PrepareOptions = 
   const items: Prepared[] = [];
   const bounds = render.passStreamBounds(stream);
 
-  for (const pass of stream.passes) {
+  const maskGeoms = new Map<number, FanGeometry[]>();
+  stream.passes.forEach((pass, passIndex) => {
+    const first = items.length;
+    preparePass(pass);
+    const m = stream.maskIdx?.[passIndex] ?? -1;
+    if (m < 0) return;
+    let geoms = maskGeoms.get(m);
+    if (!geoms) {
+      geoms = stream.masks![m].regions.map((r) => fanGeometry({ ...r, closed: true }, tol));
+      maskGeoms.set(m, geoms);
+    }
+    for (let k = first; k < items.length; k++) items[k] = { ...items[k], mask: geoms };
+  });
+  return { items, bounds };
+
+  function preparePass(pass: render.Pass): void {
     switch (pass.kind) {
       case "fill":
         items.push({ kind: "fill", colour: pass.colour, geometry: fanGeometry(pass.path, tol) });
@@ -151,7 +174,6 @@ export function prepareStream(stream: render.PassStream, opts: PrepareOptions = 
         break;
     }
   }
-  return { items, bounds };
 }
 
 // ---- fills ---------------------------------------------------------------

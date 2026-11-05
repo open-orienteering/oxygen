@@ -862,6 +862,13 @@ and the blobs they pin, so the box answers `/api/map-documents/:hash` for
 its kiosk and stations from its own tables, under the unchanged §4.2
 predicate evaluated against its own event copy.
 
+**Course objects.** `course_objects` (`docs/course-layer.md` §8) travel
+with the event's tables (`SNAPSHOT_TABLES`, rows verbatim: UUIDs, `seq`,
+scope UUIDs, token) although they are cloud-owned and not journaled — the
+kiosk map draws them (08 §4.8). They carry no bytes; a logo object's
+graphic is a `graphics` row, which does not travel (the venue draws no
+logos).
+
 **What travels.** The snapshot gains an optional `maps` part:
 
 | Part | Rows | Columns carried |
@@ -961,6 +968,9 @@ more `\copy` sections, before `map_files` (the blobs in FK order):
 
 All columns, `bytes` as Postgres `\x` hex in the CSV. `map_previews`
 are omitted (cache).
+
+The event's `course_objects` rows (`docs/course-layer.md` §8.5) are a
+plain event-scoped section after `class_course_pools`.
 
 **Restore is idempotent on hash.** `packages/api/scripts/restore-map-blobs.sql`
 loads both sections through temp tables with

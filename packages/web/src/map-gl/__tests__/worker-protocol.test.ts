@@ -190,6 +190,25 @@ describe("worker protocol (docs/map-rendering.md §5.2 Worker)", () => {
       expect(m.summary.text.glyphs).toBeGreaterThan(0);
     });
 
+    it("a stream with filter masks: the reply's filter lists (object, colour, mask) once per pair, with transferable buffers", () => {
+      const region = render.makePath([0, 0, 40_000, 0, 40_000, 40_000, 0, 40_000], undefined, true);
+      const { stream } = render.symbolise({ objects: objects(), symbols: render.pilotSymbols, fonts: [], regions: [{ path: region, mode: "clip", symbols: "all" }] });
+      const { w, sent } = harness();
+      w.handle({ ...load(), source: { kind: "stream", stream } });
+      const { msg, transfer } = sent[0];
+      const f = (msg as LoadedReply).filter!;
+      const pairs = new Set<string>();
+      stream.maskIdx!.forEach((m, i) => { if (m >= 0) pairs.add(`${stream.objectIdx[i]}/${stream.passes[i].colour}`); });
+      expect(f.entries.length).toBe(3 * pairs.size);
+      expect(f.masks).toHaveLength(1);
+      expect(f.masks[0].count).toBe(6);
+      expect(transfer).toContain(f.entries.buffer);
+      const plain = render.symbolise({ objects: objects(), symbols: render.pilotSymbols, fonts: [] }).stream;
+      const h2 = harness();
+      h2.w.handle({ ...load(), source: { kind: "stream", stream: plain } });
+      expect((h2.sent[0].msg as LoadedReply).filter).toBeUndefined();
+    });
+
     it(".notdef (an unmapped code point such as a tab) is not drawn and not counted as missing", () => {
       const objs = [{ symbolIdx: render.PILOT.controlNumber704, path: render.makePath([26_000, 36_000]), text: "A\tB" }];
       const { summary, text } = run({ textAtlas: [atlasPage("latin")] }, objs);

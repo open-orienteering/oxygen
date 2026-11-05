@@ -12,7 +12,9 @@
  * `course_controls` holds regular controls only, the start is the event
  * start control matched by `startName` (unless `firstAsStart`) and the
  * finish is `finishControlId` or the event's first finish control
- * (unless `lastAsFinish`).
+ * (unless `lastAsFinish`). A course with a stored `structure` takes those
+ * from it (`splitStructure`, docs/course-layer.md §6) — the columns are its
+ * mirror, so the export is the same.
  */
 
 import type { FastifyInstance } from "fastify";
@@ -28,6 +30,8 @@ import {
   type ExportCourseControl,
 } from "./iof-course-export.js";
 import { buildPpenXml } from "./ppen-course-export.js";
+import { course as courseShared } from "@oxygen/shared";
+import { rowKind, splitStructure } from "./course-structure.js";
 import type { PrismaClient, Prisma } from "./generated/prisma/client.js";
 
 type Db = PrismaClient | Prisma.TransactionClient;
@@ -75,7 +79,7 @@ export async function gatherEventCourseExport(
     where: { eventId: event.id, removed: false },
     orderBy: { seq: "asc" },
     select: {
-      id: true, seq: true, name: true, codes: true, status: true,
+      id: true, seq: true, name: true, codes: true, status: true, kind: true,
       xpos: true, ypos: true, lat: true, lng: true,
     },
   });
@@ -126,7 +130,7 @@ export async function gatherEventCourseExport(
       id: true, name: true, lengthM: true, climbM: true, legs: true,
       geometrySource: true, orderMode: true,
       firstAsStart: true, lastAsFinish: true, startName: true,
-      finishControlId: true,
+      finishControlId: true, structure: true,
       courseControls: {
         orderBy: { position: "asc" },
         select: { controlId: true },
@@ -138,20 +142,35 @@ export async function gatherEventCourseExport(
   for (const course of courseRows) {
     const seq: ExportCourseControl[] = [];
 
-    if (!course.firstAsStart) {
-      const start =
-        (course.startName
-          ? starts.find((s) => s.name === course.startName)
-          : undefined) ?? starts[0];
+    let firstAsStart = course.firstAsStart;
+    let lastAsFinish = course.lastAsFinish;
+    let explicitStart = course.startName ? starts.find((s) => s.name === course.startName) : undefined;
+    let explicitFinish = course.finishControlId ? finishes.find((f) => f.id === course.finishControlId) : undefined;
+    let middle = course.courseControls.map((cc) => cc.controlId);
+    const stored = course.structure ? courseShared.courseStructureSchema.safeParse(course.structure) : null;
+    if (stored?.success) {
+      const parts = splitStructure(courseShared.structureControlItems(stored.data), (id) => {
+        const r = rowByUuid.get(id);
+        return r ? rowKind(r) : undefined;
+      });
+      firstAsStart = parts.firstAsStart;
+      lastAsFinish = parts.lastAsFinish;
+      explicitStart = parts.start ? rowByUuid.get(parts.start) : undefined;
+      explicitFinish = parts.finish ? rowByUuid.get(parts.finish) : undefined;
+      middle = parts.middle.map((item) => item.siteId);
+    }
+
+    if (!firstAsStart) {
+      const start = explicitStart ?? starts[0];
       if (start) {
         seq.push({ controlId: displayCode(start), type: "Start" });
       }
     }
 
-    for (const cc of course.courseControls) {
-      const id = idByUuid.get(cc.controlId);
+    for (const controlId of middle) {
+      const id = idByUuid.get(controlId);
       if (!id) continue;
-      const row = rowByUuid.get(cc.controlId)!;
+      const row = rowByUuid.get(controlId)!;
       seq.push({
         controlId: id,
         type:
@@ -161,11 +180,8 @@ export async function gatherEventCourseExport(
       });
     }
 
-    if (!course.lastAsFinish) {
-      const finish =
-        (course.finishControlId
-          ? finishes.find((f) => f.id === course.finishControlId)
-          : undefined) ?? finishes[0];
+    if (!lastAsFinish) {
+      const finish = explicitFinish ?? finishes[0];
       if (finish) {
         seq.push({ controlId: displayCode(finish), type: "Finish" });
       }
@@ -173,8 +189,8 @@ export async function gatherEventCourseExport(
 
     // Mark the first row as the start and the last as the finish when the
     // course carries them itself — IOF encodes the role in `@_type`.
-    if (course.firstAsStart && seq.length > 0) seq[0].type = "Start";
-    if (course.lastAsFinish && seq.length > 0) seq[seq.length - 1].type = "Finish";
+    if (firstAsStart && seq.length > 0) seq[0].type = "Start";
+    if (lastAsFinish && seq.length > 0) seq[seq.length - 1].type = "Finish";
 
     // `legs` is one entry per leg of the *positioned* sequence, so it only
     // lines up when nothing was dropped. Attach it when the count matches.

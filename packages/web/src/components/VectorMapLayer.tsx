@@ -6,6 +6,10 @@
  * through the engine's dynamic bucket (§5.2 "Dynamic bucket", §5.4
  * "Overlay"); the React SVG on top keeps the UI layer.
  *
+ * With `loupe` set the same frame also draws the editor's loupe (§5.5
+ * "Loupe"): the resident map once more, magnified, into a circle of the
+ * canvas.
+ *
  * The canvas is not rotated by CSS: the viewport rotation is part of the
  * GL view (`glView`), so nothing is resampled. The engine and its worker
  * live as long as the layer; `view` changes only redraw (one per frame).
@@ -18,10 +22,21 @@ import { MapGlEngine, workerTransport, type CourseInfo } from "../map-gl/engine"
 import type { CourseLayerRequest } from "../map-gl/worker";
 import type { render } from "@oxygen/shared";
 import { MapGlRenderer } from "../map-gl/renderer";
+import { loupeView } from "../map-gl/view";
 import type { LoadedMapDocument } from "../lib/map-document-cache";
 import { loadMapFonts, loadTextAtlas } from "../lib/map-fonts";
 import { textAtlasPagesFor } from "../map-gl/text-atlas";
 import { budgetBytes, documentColours, documentProxyColours, type MapBudget } from "../lib/vector-map";
+
+/** The editor's loupe: the magnified point in paper µm, the circle's centre and diameter in container CSS px. */
+export interface VectorLoupe {
+  xUm: number;
+  yUm: number;
+  cx: number;
+  cy: number;
+  diameterPx: number;
+  scale: number;
+}
 
 export type VectorLayerStatus = "loading" | "drawn" | "complete" | "error" | "webgl";
 
@@ -45,9 +60,11 @@ interface Props {
   onCourse?: (info: CourseInfo) => void;
   /** After the load: whether this document can draw a course layer (an unaligned stack cannot). */
   onCourseSupport?: (supported: boolean) => void;
+  /** Draw the editor's loupe this frame (§5.5 "Loupe"); `null` none. */
+  loupe?: VectorLoupe | null;
 }
 
-export function VectorMapLayer({ doc, view, width, height, budget, zIndex = 1, onUnavailable, course = null, onCourse, onCourseSupport }: Props) {
+export function VectorMapLayer({ doc, view, width, height, budget, zIndex = 1, onUnavailable, course = null, onCourse, onCourseSupport, loupe = null }: Props) {
   const { t } = useTranslation("dashboard");
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const engineRef = useRef<MapGlEngine | null>(null);
@@ -59,6 +76,10 @@ export function VectorMapLayer({ doc, view, width, height, budget, zIndex = 1, o
   const [attempt, setAttempt] = useState(0);
   const unavailableRef = useRef(onUnavailable);
   unavailableRef.current = onUnavailable;
+
+  const loupeRef = useRef(loupe);
+  loupeRef.current = loupe;
+  const insetRef = useRef(false);
 
   const courseRef = useRef(course);
   courseRef.current = course;
@@ -84,7 +105,19 @@ export function VectorMapLayer({ doc, view, width, height, budget, zIndex = 1, o
       if (canvas.width !== v.widthPx) canvas.width = v.widthPx;
       if (canvas.height !== v.heightPx) canvas.height = v.heightPx;
       engine.setView(v);
-      engine.render({ colour: coloursOf(engine.colours) });
+      const opts = { colour: coloursOf(engine.colours) };
+      engine.render(opts);
+      const l = loupeRef.current;
+      if (l) {
+        // CSS → device px with the ratio the view was built with.
+        const k = v.widthPx / (canvas.clientWidth || v.widthPx);
+        const size = Math.round(l.diameterPx * k);
+        engine.renderInset(loupeView(v, { x: l.xUm, y: l.yUm }, l.scale, size), opts, { x: Math.round(l.cx * k - size / 2), y: Math.round(l.cy * k - size / 2), size });
+        insetRef.current = true;
+      } else if (insetRef.current) {
+        engine.releaseInset();
+        insetRef.current = false;
+      }
     });
   }, []);
 
@@ -176,6 +209,12 @@ export function VectorMapLayer({ doc, view, width, height, budget, zIndex = 1, o
   useEffect(() => {
     if (view) requestDraw();
   }, [view, requestDraw]);
+
+  // The loupe follows the finger: a redraw per change, and one more when it goes (the canvas without it).
+  const lk = loupe && `${loupe.xUm},${loupe.yUm},${loupe.cx},${loupe.cy},${loupe.diameterPx},${loupe.scale}`;
+  useEffect(() => {
+    requestDraw();
+  }, [lk, requestDraw]);
 
   return (
     <>

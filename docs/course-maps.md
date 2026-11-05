@@ -72,6 +72,10 @@ before.
 - print scale
 - map frame, control-description placement, and appearance in `settings`
 - shared text, line, rectangle, and white-out objects in `objects`
+- `auto_key` (`<paper>-<orientation>-<scale>`) and `is_extra`: the
+  template's key and whether another template is that key's auto one
+  ([`course-layout.md`](course-layout.md) §5)
+- `version`, the concurrency token (`course-layout.md` §2)
 
 `CourseMap` stores:
 
@@ -80,6 +84,13 @@ before.
 - map-window centre
 - per-map overrides and objects
 - ordering among several maps for one course
+- `class_id`: set on a class's sheet (a class print override,
+  `course-layout.md` §6), NULL on a course's own sheets; `section_index`
+  (0 until map exchange) and `props`
+- `version`, the concurrency token
+
+`Class` carries the print override: `print_scale` and
+`sheet_template_id` (`ON DELETE SET NULL`). Layout data, not journaled.
 
 Both event-scoped tables use UUIDv7 plus per-event `seq`. Deleting an event
 cascades through all maps and templates. Deleting a course cascades through
@@ -175,7 +186,20 @@ Event-scoped tRPC routers:
 
 - `mapTemplate` — list, create, update, duplicate, delete, apply to courses,
   save/load/delete club templates
-- `courseMap` — list with validation, get, create, update, delete, reorder
+- `mapTemplate.list` returns `autoKey`, `isExtra`, `version` and
+  `sheetCount`; `update` takes an optional `baseVersion`
+  (`course-layout.md` §2)
+- `layout` — `autoSheets { courseId? }`, `classOverrides { courseId }`,
+  `setClassOverride { classId, printScale?, sheetTemplateId? }`
+  (`course-layout.md` §5–§6)
+- `courseMap` — list with validation (each row with its `class` and the
+  template's key), get, create, update, delete, reorder,
+  `saveLayout` (`templateObjects` optional: omitted, the template is not written);
+  `resolveSheet` (a sheet, a template previewed with a course, or a class
+  as it prints — `{ classSeq }`, Class view — as the composer draws it:
+  the read of the new editor's Layout mode, `course-layout.md` §1, §6);
+  `saveLayout` takes an optional `baseVersion` and answers the new
+  `version`
 - `graphics` — list (event + club), upload (base64), saveToClub, delete
 
 REST:
@@ -186,7 +210,8 @@ GET /api/maps/:nameId/window.png
 
 GET /api/maps/:nameId/maps.pdf
     ?maps=1,2
-    ?courses=3,4
+    ?courses=3,4         (the courses' own sheets)
+    ?classes=5,6         (per class: its sheets, else its course's as it prints)
     ?allControls=1
 
 GET /api/maps/:nameId/graphics/:id
@@ -201,7 +226,10 @@ the document (in a worker thread, off the event loop) for a `vector` event with 
 otherwise; `X-Print-Pipeline: vector | legacy | legacy-fallback` names the
 path (`legacy-fallback`: a document whose colour stack is not aligned).
 Combined PDF pages are ordered by course, map `sort_order`, then map
-`seq`.
+`seq`; with `classes`, by the classes in the order asked. One of `maps`,
+`courses`, `classes` (400 otherwise); without a selection, every course's
+own sheet and the all-controls sheet — a class's sheets print through
+`classes` or `maps` only (`course-layout.md` §7).
 
 ## Maps and Map templates pages
 
@@ -231,7 +259,15 @@ Use **Maps / Kartor** for course assignments and per-map changes:
 4. Export one map, every map for a course, the all-controls map, or the whole
    event as PDF.
 
-In either editor, the paper is the canvas. **Align map** drags the terrain
+**Which editor opens.** For an event that mounts the new course editor
+(`course-editor.md` §1: `vector`, pinned document, `map.editor.vector`,
+WebGL2), **Edit layout** and **Edit template layout** open its Layout mode
+(`/:nameId/course-editor?mode=layout&sheet=<seq>` / `&template=<seq>`):
+the sheet drawn on the GL canvas through the composer's page layer, every
+gesture one write and one undo entry — `course-layout.md`. Every other
+event opens the legacy editor below (`MapLayoutEditor`), unchanged.
+
+In the legacy editor, the paper is the canvas. **Align map** drags the terrain
 under the map frame — the displayed raster and the course overlay move
 together, and the freshly rendered raster swaps in seamlessly afterwards.
 Mouse wheel and `−` / `+` zoom only the editor viewport. When zoomed, dragging

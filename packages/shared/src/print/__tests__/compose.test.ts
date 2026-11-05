@@ -45,6 +45,18 @@ describe("composePage", () => {
     expect(page.pageLayer.stream.glyphTable.length).toBeGreaterThan(3);
   });
 
+  it("filter regions reach the map layer: a clip region masks document passes, never the course", () => {
+    const input = pageScene("page-ring");
+    const ring = [{ x: -1000, y: -1000 }, { x: 1000, y: -1000 }, { x: 1000, y: 1000 }, { x: -1000, y: 1000 }];
+    const page = composePage({ ...input, course: { ...input.course, regions: [{ rings: [ring], mode: "clip", symbols: "all" }] } }, fonts());
+    const s = page.mapLayer.stream;
+    expect(s.masks).toHaveLength(1);
+    const plain = composePage(input, fonts()).mapLayer.stream;
+    expect(s.passes.length).toBe(plain.passes.length);
+    const docObjects = input.map.objects.length;
+    s.maskIdx!.forEach((m, i) => expect(m >= 0).toBe(s.objectIdx[i] < docObjects));
+  });
+
   it("no description block when the template hides it", () => {
     const page = composePage({ ...pageScene("page-sprint-a4"), description: null, objects: [] }, fonts());
     expect(page.pageLayer.stream.passes).toEqual([]);
@@ -104,6 +116,17 @@ describe("composePage", () => {
       { layer: "map", graphicId: 8, rectUm: { x: -5000, y: -5000, width: 10000, height: 4000 }, crop: { x: 0.5, y: 0, width: 0.5, height: 1 } },
       { layer: "page", graphicId: 7, rectUm: { x: 10000, y: 70000, width: 20000, height: 10000 } },
     ]);
+  });
+
+  it("the event's auto cuts off: no automatic slits or gaps in the map layer, the same stream as without cut features", () => {
+    const base = pageScene("page-ring");
+    // On 31's rim (R 2.5 mm at 1:10 000) and on the middle of leg 31–32.
+    const cut = { ...base, map: { ...base.map, cutFeatures: [{ x: -1.5, y: 6 }, { x: 10.5, y: 13 }] } };
+    const plain = composePage(base, fonts()).mapLayer.stream;
+    const on = composePage(cut, fonts()).mapLayer.stream;
+    expect(on).not.toEqual(plain);
+    const off = composePage({ ...cut, course: { ...cut.course, viewOptions: { ...cut.course.viewOptions, autoCuts: false } } }, fonts()).mapLayer.stream;
+    expect(off).toEqual(plain);
   });
 
   it("an unaligned document stack is a CourseStackError", () => {

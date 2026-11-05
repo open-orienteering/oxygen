@@ -35,20 +35,36 @@ describe("legs (§3.2)", () => {
     const auto = derive({ cutFeatures: [{ x: 25, y: 10.2 }] }).courses[0].legs[0];
     expect(auto.gaps).toHaveLength(1);
     expect(auto.pieces).toHaveLength(2);
-    const authored = derive({ cutFeatures: [{ x: 25, y: 10.2 }], structure: linear(undefined, { items: [{ siteId: "S" }, { siteId: "31", leg: { gaps: [] } }, { siteId: "32" }] }) }).courses[0].legs[0];
-    expect(authored.gaps).toEqual([]);
-    expect(authored.pieces).toHaveLength(1);
+    const authored = derive({ cutFeatures: [{ x: 25, y: 10.2 }], structure: linear(undefined, { items: [{ siteId: "S" }, { siteId: "31", leg: { gaps: [{ from: 0.1, to: 0.2 }] } }, { siteId: "32" }] }) }).courses[0].legs[0];
+    expect(authored.gaps).toEqual([{ from: 0.1, to: 0.2 }]);
   });
 
-  it("draw authored pieces as given and follow an authored path's bends", () => {
-    const pieces = [[{ x: 14, y: 10 }, { x: 20, y: 12 }], [{ x: 22, y: 12 }, { x: 37, y: 10 }]];
-    const bends = [{ x: 40, y: 10 }, { x: 70, y: 20 }, { x: 60, y: 40 }];
-    const d = derive({ structure: linear(undefined, { items: [{ siteId: "S" }, { siteId: "31", leg: { pieces } }, { siteId: "32", leg: { path: bends } }] }) });
-    const [a, b] = d.courses[0].legs;
-    expect(a).toMatchObject({ preclipped: true, pieces });
-    expect(b.points).toEqual(bends);
-    expect(b.pieces).toHaveLength(1);
-    expect(b.pieces[0]).toHaveLength(3); // the bend survives the clipping
+  it("authored leg gaps replace the automatic ones; an empty list means automatic", () => {
+    const gaps = [{ from: 0.4, to: 0.6 }];
+    const feature = [{ x: 25, y: 10.2 }];
+    const empty = derive({ cutFeatures: feature, structure: linear(undefined, { items: [{ siteId: "S" }, { siteId: "31", leg: { gaps: [] } }, { siteId: "32" }] }) }).courses[0].legs[0];
+    expect(empty.gaps).toHaveLength(1); // empty = automatic
+    const authored = derive({ cutFeatures: feature, structure: linear(undefined, { items: [{ siteId: "S" }, { siteId: "31", leg: { gaps } }, { siteId: "32" }] }) }).courses[0].legs[0];
+    expect(authored.gaps).toEqual(gaps);
+    expect(authored.pieces).toHaveLength(2);
+  });
+
+  it("with the event's auto cuts off, no automatic gaps; authored leg gaps still apply", () => {
+    const feature = [{ x: 25, y: 10.2 }];
+    const off = derive({ cutFeatures: feature, viewOptions: { autoCuts: false } }).courses[0].legs[0];
+    expect(off.gaps).toEqual([]);
+    expect(off.pieces).toHaveLength(1);
+    const gaps = [{ from: 0.4, to: 0.6 }];
+    const authored = derive({ cutFeatures: feature, viewOptions: { autoCuts: false }, structure: linear(undefined, { items: [{ siteId: "S" }, { siteId: "31", leg: { gaps } }, { siteId: "32" }] }) }).courses[0].legs[0];
+    expect(authored.gaps).toEqual(gaps);
+    expect(authored.pieces).toHaveLength(2);
+    expect(derive({ cutFeatures: feature, viewOptions: { autoCuts: true } }).courses[0].legs[0].gaps).toHaveLength(1);
+  });
+
+  it("numberHidden skips the visit's number, the site stays drawn", () => {
+    const d = derive({ structure: linear(undefined, { items: [{ siteId: "S" }, { siteId: "31", numberHidden: true }, { siteId: "32" }] }) });
+    expect(d.sites.find((s) => s.id === "31")!.label).toBeUndefined();
+    expect(d.sites.find((s) => s.id === "32")!.label!.text).toBe("2");
   });
 
   it("free order draws no legs and labels codes", () => {
@@ -64,8 +80,17 @@ describe("circles (§3.3)", () => {
     const d = derive({ cutFeatures: features });
     expect(d.sites.find((s) => s.id === "31")!.cuts).toHaveLength(1);
     expect(d.sites.find((s) => s.id === "S")!.cuts).toEqual([]);
-    const authored = derive({ cutFeatures: features, structure: linear(undefined, { items: [{ siteId: "S" }, { siteId: "31", circleGaps: [{ start: 200, end: 220 }] }] }) });
+    const authored = derive({ cutFeatures: features, sites: SITES.map((s) => (s.id === "31" ? { ...s, circleGaps: [{ start: 200, end: 220 }] } : s)) });
     expect(authored.sites.find((s) => s.id === "31")!.cuts).toEqual([{ start: 200, end: 220 }]);
+  });
+
+  it("with the event's auto cuts off, no automatic slits; authored circle gaps still apply", () => {
+    const features = [{ x: 42.5, y: 10 }];
+    const off = derive({ cutFeatures: features, viewOptions: { autoCuts: false } });
+    expect(off.sites.find((s) => s.id === "31")!.cuts).toEqual([]);
+    const authored = derive({ cutFeatures: features, viewOptions: { autoCuts: false }, sites: SITES.map((s) => (s.id === "32" ? { ...s, circleGaps: [{ start: 200, end: 220 }] } : s)) });
+    expect(authored.sites.find((s) => s.id === "31")!.cuts).toEqual([]);
+    expect(authored.sites.find((s) => s.id === "32")!.cuts).toEqual([{ start: 200, end: 220 }]);
   });
 
   it("all-controls draws every positioned site, codes as labels", () => {
@@ -110,5 +135,27 @@ describe("numbers (§3.5)", () => {
     const d = derive({ structure: [linear(), linear(["S", "99", "F"], { id: "c2" })] });
     expect(d.courses.map((c) => c.legs.length)).toEqual([4, 2]);
     expect(d.sites.find((s) => s.id === "31")!.label!.text).toBe("31");
+  });
+});
+
+describe("number collisions (§3.5)", () => {
+  it("surface the placer's collides flag on the label, absent on a clear map", () => {
+    expect(derive().sites.every((s) => s.label?.collides === undefined)).toBe(true);
+    // 31 boxed in by a tight ring of start-sized obstacles: no ring slot is free.
+    const ring = Array.from({ length: 30 }, (_, i) => {
+      const a = (i / 30) * 2 * Math.PI;
+      return site(`o${i}`, "finish", 50 + Math.cos(a) * 9, 50 + Math.sin(a) * 9);
+    });
+    const outer = Array.from({ length: 48 }, (_, i) => {
+      const a = (i / 48) * 2 * Math.PI;
+      return site(`p${i}`, "finish", 50 + Math.cos(a) * 16, 50 + Math.sin(a) * 16);
+    });
+    const outer2 = Array.from({ length: 64 }, (_, i) => {
+      const a = (i / 64) * 2 * Math.PI;
+      return site(`q${i}`, "finish", 50 + Math.cos(a) * 23, 50 + Math.sin(a) * 23);
+    });
+    const sites = [site("31", "control", 50, 50), ...ring, ...outer, ...outer2];
+    const d = derive({ sites, structure: null, viewOptions: { allControls: true } });
+    expect(d.sites.find((s) => s.id === "31")?.label?.collides).toBe(true);
   });
 });

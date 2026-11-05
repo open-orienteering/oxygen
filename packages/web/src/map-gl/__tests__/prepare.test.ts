@@ -185,3 +185,19 @@ describe("prepareStream", () => {
     expect(prepareStream(b.build()).items).toEqual([]);
   });
 });
+
+describe("filter masks (map-rendering §3.8)", () => {
+  it("every item of a masked pass carries one fan per region, shared between passes of one mask", () => {
+    const region = makePath([0, 0, 1000, 0, 1000, 1000], undefined, true);
+    const b = new PassStreamBuilder()
+      .push({ kind: "stroke", colour: 1, path: makePath([0, 0, 5000, 0]), widthUm: 100, cap: "butt", join: "miter" }, 0, 0)
+      .push({ kind: "fill", colour: 2, path: makePath([0, 0, 10, 0, 10, 10], undefined, true), rule: "evenodd" }, 1, 1)
+      .push({ kind: "stroke", colour: 3, path: makePath([0, 0, 0, 5000]), widthUm: 100, cap: "butt", join: "miter" }, 2, 2);
+    const stream = { ...b.build(), masks: [{ regions: [region, region] }], maskIdx: Int32Array.from([0, -1, 0]) };
+    const { items } = prepareStream(stream);
+    expect(items.map((i) => i.mask?.length ?? 0)).toEqual([2, 0, 2]);
+    expect(items[0].mask).toBe(items[2].mask);
+    expect(fanCovers(items[0].mask![0].fan, 700, 200)).toBe(true);
+    expect(fanCovers(items[0].mask![0].fan, 200, 700)).toBe(false);
+  });
+});

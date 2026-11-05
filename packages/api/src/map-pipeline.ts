@@ -1,11 +1,14 @@
 /**
  * The map pipeline switch (docs/map-pipeline-switch.md).
  *
- * Two instance flags in `oxygen.settings` and one per-event column:
+ * Three instance flags in `oxygen.settings` and one per-event column:
  *
  *   - `map.pipeline.default` — `legacy | vector`, what a new event gets.
  *   - `map.pipeline.allowLegacy` — `true | false`, whether an event may be
  *     switched (back) to `legacy`.
+ *   - `map.editor.vector` — `true | false`, whether a `vector` event with a
+ *     pinned document mounts the new course editor (temporary, slice D;
+ *     removed in E — docs/map-pipeline-switch.md §1, §3.6).
  *   - `events.map_pipeline` — which pipeline the event *reads* through.
  *
  * The flags are read through a 30 s memo (§1): flipping them takes effect
@@ -23,11 +26,14 @@ export const MAP_PIPELINES = ["legacy", "vector"] as const satisfies readonly Ma
 export const MAP_PIPELINE_SETTINGS = {
   default: "map.pipeline.default",
   allowLegacy: "map.pipeline.allowLegacy",
+  editorVector: "map.editor.vector",
 } as const;
 
 export interface MapPipelineFlags {
   defaultPipeline: MapPipeline;
   allowLegacy: boolean;
+  /** The new course editor may mount (`vector ∧ pinned ∧ editorVector`). */
+  editorVector: boolean;
 }
 
 /** Anything but `vector` (absent, empty, unknown) is `legacy`. */
@@ -40,14 +46,24 @@ export function parseAllowLegacy(raw: string | null): boolean {
   return raw?.trim().toLowerCase() !== "false";
 }
 
+/** Only an explicit `true` opens the new editor; absent means the legacy one. */
+export function parseEditorVector(raw: string | null): boolean {
+  return raw?.trim().toLowerCase() === "true";
+}
+
 export async function readMapPipelineFlags(
   read: (key: string) => Promise<string | null> = getSetting,
 ): Promise<MapPipelineFlags> {
-  const [def, allow] = await Promise.all([
+  const [def, allow, editor] = await Promise.all([
     read(MAP_PIPELINE_SETTINGS.default),
     read(MAP_PIPELINE_SETTINGS.allowLegacy),
+    read(MAP_PIPELINE_SETTINGS.editorVector),
   ]);
-  return { defaultPipeline: parseDefaultPipeline(def), allowLegacy: parseAllowLegacy(allow) };
+  return {
+    defaultPipeline: parseDefaultPipeline(def),
+    allowLegacy: parseAllowLegacy(allow),
+    editorVector: parseEditorVector(editor),
+  };
 }
 
 /** Whether an event may be switched to `target` under these flags. */

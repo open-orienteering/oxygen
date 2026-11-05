@@ -165,5 +165,6 @@
     "suggestedSingle": "Suggested: {{label}}"
   },
   "openInCourseEditor": "Open in course editor",
-  "seriesExhausted": "Club series exhausted — assigning the next free code ≥ 31."
+  "seriesExhausted": "Club series exhausted — assigning the next free code ≥ 31.",
+  "changedElsewhere": "Changed elsewhere — reloaded"
 }

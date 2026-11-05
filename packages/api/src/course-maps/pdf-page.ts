@@ -19,7 +19,8 @@ import { type PreparedDocument, WINDOW_OBJECT_MARGIN_MM, objectsNear, prepareDoc
 import { BUNDLED_FONT_FILES, bundledPdfFaces, loadBundledFonts } from "../render/fonts.js";
 import { type BaseMapInfo, getBaseMapInfo } from "./map-source.js";
 import { type LayoutControlSource, type LayoutTemplateSource, layoutControlsFromCourseControls } from "./resolve-layout.js";
-import { type SheetInput, resolveSheet } from "./resolve-sheet.js";
+import { type ResolveSheetInput, type SheetInput, resolveSheet } from "./resolve-sheet.js";
+import { objectsInScope, type StoredCourseObject } from "../course-objects.js";
 
 type Db = PrismaClient | Prisma.TransactionClient;
 
@@ -182,20 +183,63 @@ export interface PrintMapRow {
     climbM: number;
     orderMode: "ordered" | "free_order";
     geometry: unknown;
-    geometrySource?: string | null;
+    /** `courses.structure` JSONB: where the authored leg gaps come from. */
+    structure?: unknown;
     descriptionInstructions: unknown;
     classes: Array<{ name: string }>;
     courseControls: Array<{ control: LayoutControlSource; labelDx?: number | null; labelDy?: number | null }>;
   } | null;
 }
 
-/** One map row → its sheet, with the same layout input the legacy page uses (`routes.ts` `renderPage`). */
-export function sheetForMapRow(
-  row: PrintMapRow,
-  ctx: { event: { name: string; date: Date }; allControls: LayoutControlSource[]; mapInfo: Pick<BaseMapInfo, "scale" | "meridianTiltDeg"> },
-): SheetInput {
+/** A class's print override (docs/course-layout.md §6; 08 §4.4). */
+export interface ClassPrint {
+  name: string;
+  printScale: number | null;
+  /** The class's `sheet_template_id` row. */
+  sheetTemplate: LayoutTemplateSource | null;
+}
+
+/**
+ * A sheet as one class prints it (docs/course-layout.md §6): the
+ * description header names that class only. A class sheet
+ * (`course_maps.class_id`) already carries the class's template and scale;
+ * a course sheet printed for a class (the class has no sheets of its own)
+ * takes them here — the template `sheet_template_id ?? the sheet's`, the
+ * scale `print_scale ??` the template's. Both pipelines print the result.
+ */
+export function rowForClass<R extends PrintMapRow>(row: R, cls: ClassPrint, classSheet: boolean): R {
+  const course = row.course ? { ...row.course, classes: [{ name: cls.name }] } : null;
+  if (classSheet) return { ...row, course };
+  const overrides = { ...((row.overrides ?? {}) as Record<string, unknown>) };
+  if (cls.printScale !== null) overrides.printScale = cls.printScale;
+  else if (cls.sheetTemplate) delete overrides.printScale;
+  return { ...row, course, template: cls.sheetTemplate ?? row.template, overrides };
+}
+
+/** What `sheetForMapRow` and the editor's `courseMap.resolveSheet` read besides the row. */
+export interface MapRowContext {
+  event: { name: string; date: Date };
+  allControls: LayoutControlSource[];
+  /** Null fields without a base map (the editor's read; `maps.pdf` always has one). */
+  mapInfo: { scale: number | null; meridianTiltDeg: number | null };
+  courseObjects?: readonly StoredCourseObject[];
+  classesByCourse?: ReadonlyMap<string, string[]>;
+  /** `Event.autoOverprintCuts`; `false` = no automatic cuts on the sheet (course-layer.md §3.4). Absent = on. */
+  autoCuts?: boolean;
+}
+
+/**
+ * One map row → the `resolveSheet` input, with the same layout input the
+ * legacy page uses (`routes.ts` `renderPage`). `courseObjects` are the
+ * event's (`loadCourseObjects`); the sheet takes those in scope of its
+ * course, or the `all`-scoped ones for an all-controls sheet
+ * (course-layer.md §8.3).
+ */
+export function sheetInputForMapRow(row: PrintMapRow, ctx: MapRowContext): ResolveSheetInput {
   if (!row.template) throw new Error(`Map "${row.name}" has no template`);
-  const { sheet } = resolveSheet({
+  const courseUuid = row.kind === "course" && row.course?.id !== undefined ? String(row.course.id) : null;
+  const inScope = ctx.courseObjects ? objectsInScope(ctx.courseObjects, courseUuid, ctx.classesByCourse ?? new Map()) : [];
+  return {
     kind: row.kind,
     template: row.template,
     overrides: courseMapOverridesSchema.parse(row.overrides),
@@ -218,10 +262,16 @@ export function sheetForMapRow(
     meridianTiltDeg: ctx.mapInfo.meridianTiltDeg,
     event: ctx.event,
     mapName: row.name,
-    geometrySource: row.course?.geometrySource ?? null,
+    structure: row.course?.structure ?? null,
     ...(row.course?.id !== undefined ? { courseId: String(row.course.id) } : {}),
-  });
-  return sheet;
+    courseObjects: inScope.map(({ id: _uuid, scope: _scope, z: _z, version: _v, seq, ...body }) => ({ ...body, id: seq }) as course.CourseLayerObject),
+    ...(ctx.autoCuts === false ? { autoCuts: false } : {}),
+  };
+}
+
+/** One map row → its sheet (`sheetInputForMapRow` through `resolveSheet`). */
+export function sheetForMapRow(row: PrintMapRow, ctx: MapRowContext): SheetInput {
+  return resolveSheet(sheetInputForMapRow(row, ctx)).sheet;
 }
 
 /** The pinned document's identity, without decoding it. */

@@ -11,12 +11,13 @@
 import type { CourseMapObject, MapPoint, MapRect, MapWindow, PathVertex } from "../course-maps/schema.js";
 import { windowRotationDeg } from "../course-maps/geometry.js";
 import type { MapTextValues } from "../course-maps/text.js";
-import type { CourseAppearance, CourseDocumentContext, CourseSite, CourseStructure, CourseViewOptions, CutFeature } from "../course/types.js";
+import type { CourseAppearance, CourseDocumentContext, CourseFilterRegion, CourseSite, CourseStructure, CourseViewOptions, CutFeature } from "../course/types.js";
 import type { DocumentColour } from "../map-document/header.js";
 import type { PaperFrame } from "../geo/projection.js";
 import type { Pass, PassStream, RenderPath } from "../render/pass-stream.js";
 import type { RenderSymbol } from "../render/symbol.js";
 import type { RenderObject } from "../render/symbolise.js";
+import type { CourseLayerObject } from "../course/objects.js";
 import type { DescriptionBlockInput } from "./description.js";
 
 /** Page mm → page µm. */
@@ -42,7 +43,11 @@ export interface PageInput {
     structure: CourseStructure | readonly CourseStructure[] | null;
     sites: readonly CourseSite[];
     appearance: CourseAppearance;
-    viewOptions: Pick<CourseViewOptions, "allControls" | "labelMode" | "overprintScale">;
+    viewOptions: Pick<CourseViewOptions, "allControls" | "labelMode" | "overprintScale" | "autoCuts">;
+    /** Filter regions over the map window (`map-rendering.md` §4.11). */
+    regions?: readonly CourseFilterRegion[];
+    /** The event's course objects in scope of this sheet (docs/course-layer.md §8.3), in draw order. */
+    objects?: readonly CourseLayerObject[];
   };
   /** Layout objects of both anchors (template + sheet). */
   objects: readonly CourseMapObject[];
@@ -144,6 +149,15 @@ export function pagePointToMap(t: MapLayerTransform, xUm: number, yUm: number): 
   const c = Math.cos(a) / t.scaleRatio, s = Math.sin(a) / t.scaleRatio;
   const dx = xUm - t.atUm[0], dy = yUm - t.atUm[1];
   return [t.originUm[0] + c * dx - s * dy, t.originUm[1] + s * dx + c * dy];
+}
+
+/**
+ * `T_map⁻¹`: page µm → paper µm, as a transform of the same shape, so
+ * `mapPointToPage` / `transformPassStream` with it undo the forward one
+ * (the editor's page view draws the page layer in map space, docs/course-layout.md §1).
+ */
+export function inverseMapLayerTransform(t: MapLayerTransform): MapLayerTransform {
+  return { scaleRatio: 1 / t.scaleRatio, rotationDeg: t.rotationDeg === 0 ? 0 : -t.rotationDeg, originUm: [...t.atUm], atUm: [...t.originUm] };
 }
 
 /** The frame's corners in paper mm (y-up): the white-out-outside ring of the map layer. */
@@ -262,5 +276,9 @@ export function transformPassStream(stream: PassStream, t: MapLayerTransform): P
       }
     }
   };
-  return { ...stream, passes: stream.passes.map(pass) };
+  return {
+    ...stream,
+    passes: stream.passes.map(pass),
+    ...(stream.masks ? { masks: stream.masks.map((m) => ({ regions: m.regions.map((r) => transformPath(r, f)) })) } : {}),
+  };
 }

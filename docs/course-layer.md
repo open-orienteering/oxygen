@@ -9,11 +9,12 @@ This chapter is normative for `packages/shared/src/course/`
 (`import { course } from "@oxygen/shared"`). Its consumers are the
 viewer's dynamic bucket (C4, §5), the page composer (C2,
 `course-print.md`) and the `courses.geometry` compatibility artifact
-(C5). The course *structure* beyond today's linear sequence, its storage
-and editing concurrency are slice D's (decision G1, recorded before D);
-this chapter covers what C needs: how the layer is derived (§1), its v1
-input (§2), the geometry rules (§3), the GeoJSON projection (§4) and the
-viewer (§5).
+(C5). This chapter covers how the layer is derived (§1), its v1 input
+(§2), the geometry rules (§3), the GeoJSON projection (§4), the viewer
+(§5), the stored course structure (§6, slice D row D0), the
+concurrency rules for editing it (§7, gate G1) and the stored, scoped
+course objects (§8, row D2) and the advisory checks (§9, row D6). Editing the structure on
+the new canvas is `course-editor.md`'s.
 
 ## Decisions taken before the code (user, 2026-10-24)
 
@@ -45,6 +46,18 @@ Decided by the user 2026-10-24 for C5:
   air**, and a feature is "on" the line by the same sum
   (§3.4). One rule for the layer and the artifact; stored cuts migrate
   through the `OVERPRINT_CUTS_VERSION` bump.
+
+Decided by the user 2026-10-31 for slice D (gate G1, concurrent
+editing; README "Decision gates" and decision log): optimistic
+concurrency with a version token over the journal. D0 wrote the rules out
+as §7; the designs weighed and why (B) won are in the decision log.
+
+Decided by the coordinator 2026-11-02 for D6 (decision log): the
+`DESCRIPTION_STALE` provenance is a new `controls.description_source`
+column (§6.3) — the schema had none, and "equals autodetect at the
+current position" can never detect staleness; `NUMBER_OVERLAPS` is the
+placer's collision fallback and `NUMBER_UNPLACED` a visible control
+visit without a label (§3.5, §9.2); a check carries no message text.
 
 ## 1. Derivation
 
@@ -133,26 +146,28 @@ Paper mm at the base map's scale, y-up (the frame of `controls.xpos/ypos`
 and of course GeoJSON). Gaps: compass degrees for circles (0° = +y,
 clockwise, the gap sweeping clockwise from `start` to `end`), fractions
 0..1 for legs — the OCD importer's and `overprint-cuts.ts`'s conventions.
+Stored gaps — a site's `circle_gaps`, a structure's `LegProps.gaps` — are
+the **full effective set** for that circle or leg and replace the
+automatic cuts; an empty list means automatic (decision log 2026-11-01,
+"Stored gaps replace the automatic cuts"; `course-editor.md` §6.3).
 
 | Input | v1 shape | Built today from |
 |---|---|---|
-| `structure` | `CourseStructure` (one course), an array (several highlighted courses: legs of each, codes as numbers) or `null` (no course) | `{ version: 1, id, orderMode, items, labelOffsets?, extras? }`: `items` start … finish — the start by `startName` unless `firstAsStart`, `course_controls` in order, the finish by `finishControlId` unless `lastAsFinish` (`rebuildCourseGeometry` / `course-export.ts`); `labelOffsets` from `course_controls`; `extras` from imported geometry |
-| `CourseItem` | `{ siteId, role?, leg?, circleGaps? }` — 08 §4.3's item, the leg being the leg *into* the item | `role` defaults to the site's kind (set it for `firstAsStart` / `lastAsFinish`) |
-| `leg` | `{ path?, pieces?, gaps? }` | imported `ocd` courses only (decision of the slice-C split): `path` the authored polyline with bends, `pieces` the file's preclipped 705 pieces, `gaps` authored fractions. Retired by D's `LegProps.path` |
-| `circleGaps` | `{ start, end }[]` | imported `ocd` `cuts` |
-| `extras` | `{ kind: "marked_route" \| "restricted_line" \| "forbidden_route" \| "oob_area", points }[]` | imported geometry's course-level 707 / 708 / 711 lines and 709 polygons |
-| `sites` | `{ id, code, kind: "control" \| "start" \| "finish", x, y }[]` | `controls` rows; `code` the display code (first punch code, else name / seq) |
-| `objects` | `CourseMapObject[]`; only `anchor: "map"` ones are drawn | the sheet's layout objects (`course-maps` schema) |
+| `structure` | `CourseStructure` (one course), an array (several highlighted courses: legs of each, codes as numbers) or `null` (no course) — the stored form is §6 | `{ version: 1, id, orderMode, items, labelOffsets? }`: `items` start … finish — the start by `startName` unless `firstAsStart`, `course_controls` in order, the finish by `finishControlId` unless `lastAsFinish`; from the stored structure when there is one (§6), else from the columns (`rebuildCourseGeometry` / `course-export.ts`); `labelOffsets` from `course_controls` |
+| `CourseItem` | `{ siteId, role?, leg?, numberHidden? }` — 08 §4.3's item, the leg being the leg *into* the item | `role` defaults to the site's kind (set it for `firstAsStart` / `lastAsFinish`); `numberHidden` from the visit's `number_hidden` |
+| `leg` | `{ gaps? }` — the stored `LegProps.gaps`, fractions along the leg | `LegProps.gaps` of the structure's item (§6.4: written by the importers and the backfill, by the editor from D5). The v1 interim input of slice C (`path`, `pieces`, item `circleGaps`, `extras`, read from an imported `ocd` course's GeoJSON) is **retired** by D1: nothing is read from the GeoJSON |
+| `sites` | `{ id, code, kind: "control" \| "start" \| "finish", x, y, circleGaps? }[]` | `controls` rows; `code` the display code (first punch code, else name / seq); `circleGaps` = `controls.circle_gaps`, compass degrees |
+| `objects` | `(CourseMapObject \| CourseLayerObject)[]`: a sheet's layout objects (only `anchor: "map"` ones are drawn) and course objects (§8; told apart by `geometry`) | the sheet's layout objects (`course-maps` schema); the event's course objects in scope (§8.3) |
 | `appearance` | `{ circle?, line?, number?, numberStyle? }`, multipliers (1 = the spec) | `appearanceFromTemplate(template.appearance)`; the template's `purple` is not read (the purple is the stack's row) |
-| `viewOptions` | `{ allControls?, labelMode?, overprintScale?, window?, textValues? }` | the view: all-controls, label mode, print enlargement, the frame polygon for white-out-outside, `{course}` placeholder values |
+| `viewOptions` | `{ allControls?, labelMode?, overprintScale?, autoCuts?, window?, textValues? }` | the view: all-controls, label mode, print enlargement, the event's **Auto cuts** toggle (`Event.autoOverprintCuts`; `false` = no automatic cuts, §3.4; absent = on), the frame polygon for white-out-outside, `{course}` placeholder values |
 | `cutFeatures` | `{ x, y, r? }[]` (`r` the drawn symbol's radius) | `cutFeaturesOfDocument(doc)` (vector events), the legacy OCAD parse (C5, §4.2) |
+| `regions` | `{ rings: MapPoint[][], mode: "clip" \| "hide", symbols: "all" \| number[] \| { colours }, invert? }[]` — filter regions over the map, `rings` outer first; symbol indices are the document's, colours its own stack's | explicit regions, then every `filter_region` course object in `objects` (§8.3); the layer returns them as `CourseLayer.regions` (µm paths, colours on the completed stack) and `courseRenderInput` passes them to `symbolise` with the document's object count as `regionObjectLimit` — the rule is `map-rendering.md` §4.11 |
 
 Free order is the structure's `orderMode` (a property of the course, not
 of the view). A site at the origin (0, 0) is unpositioned and skipped,
 legs connecting the remaining items (the editor's rule, `editorCourseGeometry`).
-Variations, map exchanges, crossing points, map-issue points, per-course
-hidden numbers and the site-level manual `circle_gaps` of 08 §4.2 are not
-in v1 (Pending).
+Gaps follow the rule above. Variations, map exchanges, crossing points, map-issue
+points and `LegProps` beyond `gaps` are not in v1 (Pending).
 
 ## 3. Geometry rules
 
@@ -171,7 +186,14 @@ The course-setting rules are symbolisation of the layer (04 §7), in
 | leg | 705 | line |
 | marked route / restricted line / forbidden route | 707 / 708 / 711 (ISSprOM has no 711: ISOM's, same factor) | line |
 | out-of-bounds area | 709; with a stroke 709.b (solid boundary), or 709.c (dashed) when the stroke is dashed | — |
+| dangerous area | **derived** from the resolved 709 / 709.b / 709.c: the same stripes again at +90° (a cross-hatch of 709's width, spacing and colour), the same boundary; ids `course:dangerous`, `.b`, `.c`, code `710` — not a library entry (below) | — |
 | white-out | area symbol `course:whiteout`, fill = upper white | — |
+
+The dangerous area is not in ISOM 2017-2 or ISSprOM 2019-2 — their `710`
+is the crossing point (03 §2.4) — so the set derives it from 709 rather
+than reading a document or library 710; the number is the one ISOM 2000,
+OCAD's course-setting set and Purple Pen give the cross-hatched area
+(decision log, D5a). It scales with the document factor like 709.
 
 A ring's multiplier scales its centre-line diameter, the width scaling
 separately (`ringCC` geometry). Dimensions at ISOM 1:15 000, defaults:
@@ -182,18 +204,17 @@ circle radius 2.5 mm, finish 2.0 / 3.0 mm, start side 6 mm, lines
 ### 3.2 Legs
 
 For an `ordered` course, one leg per consecutive pair of positioned
-items, centre to centre (or the authored `path`):
+items, centre to centre:
 
-1. Authored `pieces` → drawn as given: no clipping, no gaps.
-2. Gaps: authored `gaps`, else the automatic ones (§3.4) for a straight
-   leg when `cutFeatures` are given. `subtractLegGaps` removes them,
-   keeping bends.
+1. Gaps: the item's authored `leg.gaps` when non-empty, else the
+   automatic ones (§3.4) when `cutFeatures` are given and the event's
+   auto cuts are on. `subtractLegGaps` removes them.
 3. Each remaining segment is clipped (`clipLine`) at every **drawn**
    site with clearance = the site's extent + 0.2 × R (R = control circle
    radius): 1.2 R at a control (legacy), outer ring + 0.2 R at a finish,
    start circumradius + 0.2 R at a start (legacy used 1.2 R everywhere and
    overlapped the start triangle). Segments sharing an end point are
-   joined back into polylines, so a bend keeps its join. Pieces of 1 mm
+   joined back into polylines. Pieces of 1 mm
    or less are dropped (`clipLine`'s rule).
 
 `free_order` courses and the all-controls view draw no legs.
@@ -211,13 +232,14 @@ appearing in several roles takes its first.
   a sanctioned difference for C3's list.
 - **Control (703)**: a closed circle, or the arcs left by its gaps
   (`circleArcs`; an arc running through north is one path). Gaps: the
-  item's authored `circleGaps` (first occurrence), else the automatic
-  cuts (§3.4). Start and finish are never cut.
+  site's authored `circleGaps` when non-empty, else the automatic
+  cuts (§3.4) while the event's auto cuts are on. Start and finish are
+  never cut.
 - **Finish (706)**: the entry's two rings.
 
 ### 3.4 Automatic cuts
 
-`circleCuts` / `legGaps` in `cuts.ts` (`docs/course-editor.md`
+`circleCuts` / `legGaps` in `cuts.ts` (`docs/course-editor-legacy.md`
 "Automatic overprint cuts"; size-aware since C5, user decision
 2026-10-24). Each feature carries the radius `r` of its drawn symbol; the
 line it may touch is drawn `w` wide. Its **clearance** is
@@ -261,6 +283,25 @@ entry × document factor only when there is neither. The caller chooses
 the source: the pinned document for `vector` events, the legacy OCAD
 parse otherwise (§4, decision of the slice-C split).
 
+**The event's toggle** (`Event.autoOverprintCuts`, written by
+`course.setOverprintCuts`, read by `course.getOverprintCuts`; the
+editor's `editor-toggle-cuts`, `course-editor.md` §4; D17). Off, the
+layer computes **no automatic cuts** — no circle slits, no leg gaps —
+whatever `cutFeatures` holds: `viewOptions.autoCuts === false` makes
+`deriveCourse` ignore the features, so the objects equal those of the
+same input without `cutFeatures` (one rule for the layer and the
+artifact writer, which passes no features when off, §4.2). **Stored
+gaps still apply**: a site's `circleGaps` and a leg's `LegProps.gaps`
+are the setter's explicit choice (the gap tool, an importer) and draw as
+authored with the toggle off (decided by the coordinator for D17 — for
+user review). The flag reaches every consumer of the layer:
+
+| Consumer | How it reads the flag |
+|---|---|
+| GL course layer (every `MapPanel`: course views, kiosk, the editors, Layout mode) | `MapPanel` reads `course.getOverprintCuts` (kiosk-readable) and passes `autoCuts` to `MapViewer` → `courseLayerRequest` → `viewOptions.autoCuts` (§5); the editors' toggle refetches the same query, so the canvas redraws without a reload. Until the query answers, cuts are on |
+| Vector print (`maps.pdf`, `course-print.md` §8.2) | the route passes `event.autoOverprintCuts` as `MapRowContext.autoCuts` → `resolveSheet` → the sheet's `course.viewOptions.autoCuts` → `composePage`; `courseMap.resolveSheet` (Layout mode's sheet) does the same |
+| Legacy artifact (`course.geometry`, the legacy PDF and SVG overlay) | `rebuildCourseGeometry` passes no `cutFeatures` when off (§4.2) and `setOverprintCuts` rebuilds every editor course. The artifact carries no stored gaps at all (Pending "Structure, beyond D1": the writer does not carry authored cuts and gaps), so under `legacy` the toggle off draws **no** cuts — the one difference from the rule above, closed when the writer carries stored gaps |
+
 ### 3.5 Numbers
 
 - **Text**: `sequence` (1, 2, … over the first course's control items; a
@@ -277,6 +318,11 @@ parse otherwise (§4, decision of the slice-C split).
   number's centre relative to the site; emitted as is, no leader.
 - **Leaders** where the placer reports a contested slot (705-derived
   line, §3.1).
+- **Collisions**: a number is never dropped; when no ring has a
+  collision-free slot the placer takes the least-bad box and marks it
+  `collides: true` (`PlacedControlLabel`, `DerivedSite.label`), which
+  §9's `NUMBER_OVERLAPS` reads. A contested slot with a leader is not a
+  collision.
 - **Anchor**: the text object's point is the baseline, half a digit
   below the placed centre, `align: "centre"` (legacy
   `controlNumberBaselineY`).
@@ -309,14 +355,16 @@ compatibility artifact C5 writes for consumers not yet ported (09 §4 C):
 | Feature | Geometry | Properties |
 |---|---|---|
 | one per positioned item, in order | `Point` | `{ symbolType: "start" \| "control" \| "finish", code, id: code }`, + `cuts` (effective gaps) on a cut control |
-| one per leg (ordered courses) | `LineString` centre to centre (or the authored path) | `{ symbolType: "leg", from, to }` (codes), + `gaps` when the leg has any |
-| authored pieces | one `LineString` per piece | `{ symbolType: "leg", from, to, preclipped: true }` |
-| extras | `LineString` / closed `Polygon` | `{ symbolType: "marked_route" \| "restricted_line" \| "forbidden_route" \| "restricted_area" }` |
+| one per leg (ordered courses) | `LineString` centre to centre | `{ symbolType: "leg", from, to }` (codes), + `gaps` when the leg has any |
 
-Points first, then legs, then extras — the shape and order the editor
+Points first, then legs — the shape and order the editor
 wrote before C5, so an editor course's stored GeoJSON keeps its consumers
-(legacy viewer, kiosk, lengths, exports). Clipped leg pieces and numbers
-are not projected: consumers clip and place themselves today.
+(legacy viewer, kiosk, lengths, exports). Clipped leg pieces, numbers and
+course objects (707 / 708 / 709 / 711 and the rest, §8) are not projected:
+consumers clip and place themselves today. An imported course's own
+GeoJSON keeps what its file drew (`preclipped` pieces, the course-level
+features) for those consumers until an edit rewrites it; the course layer
+no longer reads any of it (§6.4).
 
 ### 4.1 Writer (C5)
 
@@ -427,9 +475,12 @@ buckets. The React SVG keeps the UI layer only (`map-rendering.md` §5.4
 | `sites` | every visible control (`visible !== false`) with a position — its own paper mm, the editor's dragged position or a move still round-tripping — `code` its display code, `kind` from its type; the editor's faded off-course controls are left out (the UI layer draws them faded) |
 | `structure` | the highlighted courses (`highlight` or `highlightCourseName`) in order, one `CourseStructure` each, `id` = the course name, `items` = its control ids (start and finish as `MapPanel` completes them), `orderMode` the course's; `null` when none is highlighted |
 | `labelOffsets` | the single highlighted course's, with a drag or a pending label move winning — only with the description sheet or the editor (the SVG overlay's rule) |
-| `leg`, `circleGaps`, `extras` | for a course whose stored GeoJSON has `preclipped` legs (an imported `ocd` course, §2): each leg feature becomes the next item's `leg.pieces` when the counts match, the course's control `cuts` become `circleGaps`; a bent generated leg keeps its `path`; 707 / 708 / 711 lines and `restricted_area` polygons become `extras`. Automatic `gaps` / `cuts` in the GeoJSON are not read |
-| `viewOptions` | `labelMode: "sequence"` for one ordered course with the sheet or the editor, else `"code"`; `allControls` when a drawn site is on no highlighted course |
-| `objects`, `appearance` | `[]` (no sheet reaches the viewer) and `{}` — the spec sizes × the document factor (decision "Sizes") |
+| `leg`, `numberHidden`, `circleGaps` | from the stored structure (§6.4), not from the GeoJSON: each item's `leg.gaps` from `course.list`'s `legGaps` (keyed `"<from>><to>"`, public control ids), `numberHidden` from its `hiddenNumbers`, each site's `circleGaps` from `course.controlCoordinates`. A course with no stored structure has none (the automatic cuts); 707 / 708 / 709 / 711 are course objects (`objects` below) |
+| `viewOptions` | `labelMode: "sequence"` for one ordered course with the sheet or the editor, else `"code"`; `allControls` when a drawn site is on no highlighted course; `autoCuts: false` when the event's toggle is off (`course.getOverprintCuts`, read by `MapPanel`; no key when on, §3.4) |
+| `objects` | the event's course objects in scope of the highlighted courses (`courseObjectsForView`, §8.2; `all`-scoped only when none is highlighted), without scope, `z` or token — `MapPanel` fetches `courseObject.list` and hands them to the viewer; no sheet's layout objects reach the viewer |
+| provisional visit | the editor's armed `S` / `K` / `M` (`course-editor.md` §6.1), with exactly one highlighted course: a site `provisional` (`PROVISIONAL_SITE_ID`, the tool's kind, the cursor, the next code) — or a reused site by its id — spliced into the course's items (`spliceProvisional`): a control before the `insertAt`-th control visit (repeats counted), else before the finish, else last; a start replaces the course's start, a finish its finish (else they lead / end). The leg the visit splits takes no stored gaps (they are keyed by the drawn neighbours) |
+| `appearance` | `{}` — the spec sizes × the document factor (decision "Sizes") |
+| `layout` (Layout mode, D7) | the sheet as `composePage` passes it (`course-layout.md` §1): its layout objects of both anchors before the course objects, `appearanceFromTemplate(template.appearance)` instead of `{}`, `viewOptions.overprintScale`, `window` (the frame grown by `RING_BLEED_UM`, `course.mapLayerWindow`) and `textValues`; and `page`, which the worker turns into the page part (`map-rendering.md` §5.2). So the course changes size on a mode switch when the template's multipliers are not 1 — the preview is the print |
 | `cutFeatures` | added by the worker: `cutFeaturesOfDocument(doc)` once per document load |
 
 **Reply.** The derivation (sites with number positions and leaders, legs
@@ -441,27 +492,593 @@ the viewer mirrors the drawn numbers and legs as a hidden DOM list
 **Unaligned stack.** A document whose stack throws `CourseStackError`
 draws the SVG course overlay over the GL map instead (§1).
 
+## 6. Structure
+
+Slice D row D0 (research 08 §4.2, §4.3, §4.8). A course is stored as a
+**structure**, `courses.structure JSONB` — the §2 `CourseStructure`
+type widened to the whole 08 §4.3 item union so slice F never reshapes
+the column. `NULL` means "not written yet": every reader then reads the
+columns of §6.2, which describe the same course.
+
+### 6.1 Stored shape
+
+```ts
+// packages/shared/src/course/structure.ts — courseStructureSchema (Zod)
+{ version: 1, id, orderMode: "ordered" | "free_order", items: Item[] }
+Item =
+  | { kind?: "control", siteId, role?: "control" | "start" | "finish",
+      leg?: LegProps, numberHidden?: boolean }            // leg = the leg *into* the item
+  | { kind: "variation", id, alternatives: { label, items: ControlItem[] }[] /* ≥ 2 */, loop? }
+LegProps = { style?: "line" | "marked_route" | "none", gaps?: { from, to }[],
+             corridor?: { widthM, edge, whiteMm, whiteOpacity },
+             crossing?: { controlId, section? }, bends?: { x, y }[] }
+```
+
+- **Site ids** are control UUIDs in the column (journal-portable; a
+  public id is a punch code and can change). The tRPC **wire form**
+  (`courseStructureWireSchema`, `course.setStructure` input,
+  `course.detail.structure`) carries public control ids instead; the
+  server maps at the boundary (AGENTS §7: "tRPC inputs use seq").
+- **Rules** (Zod; issue messages are the codes): alternatives hold
+  controls only, so groups never nest; a group is never first or last
+  (`VARIATION_UNANCHORED`) nor next to another group
+  (`VARIATION_OVERLAP`); group ids and alternative labels are unique
+  (`VARIATION_ID_DUPLICATE`, `VARIATION_LABEL_DUPLICATE`); at least two
+  non-empty alternatives. Rules that need the sites
+  (`structureSiteIssues`): unknown site (`SITE_UNKNOWN`), a group holding
+  a map exchange (`VARIATION_CROSSES_EXCHANGE`). Items and legs are
+  strict objects: unknown keys are refused, not dropped.
+- **Not stored**: `labelOffsets` (one source, `course_controls`; readers
+  fill them in, the wire form carries them), and C0's interim
+  file-authored `leg.path` / `pieces` / item `circleGaps` / `extras` —
+  the slice D split decided "no `LegProps.path`": authored circle cuts
+  are `controls.circle_gaps`, authored leg gaps `LegProps.gaps`, 707 /
+  708 / 709 / 711 course objects (§6.4).
+- **Phase 1 writes control items only.** `course.setStructure` refuses a
+  structure with a variation group, and any site whose kind is a slice-F
+  kind, with `PRECONDITION_FAILED`.
+- Helpers: `linearStructure(id, items, { orderMode, labelOffsets })`,
+  `structureControlItems` / `structureControlIds` (a group by its first
+  alternative — 08 §4.3's root path), `structureDiff` (§7),
+  `hasVariations`.
+
+### 6.2 The column mirror
+
+What timing, export, the kiosk and the legacy editor read stays in the
+flat columns, written **in the same transaction** as the structure and a
+pure function of it (`splitStructure`, `packages/api/src/course-structure.ts`):
+
+| Structure | Columns |
+|---|---|
+| a leading item whose site is a start | `start_name` = that site's name (else `""`) |
+| a trailing item whose site is a finish | `finish_control_id` (else `NULL`) |
+| a leading / trailing *control* with `role: "start"` / `"finish"` | `first_as_start` / `last_as_finish` |
+| every other item, in order | `course_controls` (`position`, `control_id`, `number_hidden`; label offsets from the wire form's `labelOffsets`, else kept per control) |
+| `orderMode` | `order_mode` |
+
+The structure names only what the course **explicitly** references: a
+course that uses the event's default start (lowest-seq start, `start_name
+= ""`) has no start item, and the readers complete it exactly as before,
+so creating a new start still re-points those courses. This is a
+deviation from 08 §4.3's "items start … finish", read as *explicit*
+items (decided 2026-10-31 by the coordinator on the user's delegation,
+decision log "D0"): legacy re-pointing of implicit starts is unchanged,
+D1's backfill is a pure function of the columns, and the new editor
+makes a course explicit on its first save. The inverse,
+`structureFromColumns`, gives every course written before D0 the
+structure its columns describe (`course.detail` reports
+`structureStored: false` for those). The columns can hold legacy state no
+structure expresses — `start_name` beside `first_as_start` (the name is
+ignored), the flags on a course without controls, the name of a deleted
+start (matches no live start). Rewriting the structure *from* the columns
+(`course.update`, `bulkUpdate`, `control.delete`) writes the column only
+and leaves such state alone; every reader resolves it the same way as
+before D0. `course.setStructure` writes the columns from the structure
+and so normalises it.
+
+**Who writes it.** `course.setStructure` (the structure is the input);
+`course.update`, `course.create` and `course.bulkUpdate` (the linear
+shortcut: the structure is rewritten from the columns they wrote, an
+item keeping its `leg` when it still follows the same site);
+`course.clone` (the source's structure); `control.delete` (the courses
+whose `course_controls` or stored structure name the control lose the
+item, an explicit start / finish included); `control.update` changing a
+site's **kind** (the stored structures that name it are re-mirrored:
+`splitStructure` now reads the site differently — a control that became
+a start leads its course as the explicit start). A start is found by
+name in `start_name`, so a site turned into a start without a name
+mirrors as `""` and the legacy readers fall back to the default start;
+name a start when creating it (the editor's **Add start** does). `course.importCourses` resets it
+to `NULL` until D1 makes the importers write it. Peers apply it from the
+`course.upserted` payload like any column.
+
+**Readers.** `loadCourseSequences` (`course-geometry.ts`, hence
+`courses.geometry`, `legs`, lengths) and the IOF / PPen export
+(`course-export.ts`) take the explicit start, the sequence and the
+explicit finish from the structure when one is stored, from the columns
+otherwise, and complete an absent start / finish from the event default
+as before. Sites are drawn by their kind (`role` matters to the mirror
+and to IOF's `@type`, not to the stored GeoJSON, which keeps drawing a
+`first_as_start` control as a circle), and a soft-deleted site drops out
+as `start_name` does. The geometry of a course written through
+`setStructure` is byte-identical to the one `course.update` writes for
+the same sequence (integration test).
+
+### 6.3 Sites' new fields
+
+| Column | Type | Meaning |
+|---|---|---|
+| `controls.kind` | ENUM `control_kind`: `control`, `start`, `finish`, `map_exchange`, `crossing_point`, `map_issue` | what the site is (08 §4.2); the last three are typed now and refused until slice F |
+| `controls.circle_gaps` | JSONB `[{ start, end }]`, compass degrees | manual circle gaps on the site (same in every course) |
+| `controls.notes` | TEXT, default `""` | setter / controller notes; writing them needs `courses.review` |
+| `controls.checked_at`, `checked_by` | TIMESTAMPTZ, UUID (no FK — journaled to nodes without the users) | field check-off (`control.check`) |
+| `controls.version`, `courses.version` | BIGINT, default 0 | the §7 token |
+| `course_controls.number_hidden` | BOOLEAN, default false | hide this visit's number (08 §4.2) |
+| `controls.description_source` | TEXT NULL, CHECK `auto` \| `manual` (migration `20261102120000_control_description_source`; D6, not in 08 §4.2) | who wrote `description`: `auto` when an autodetect path filled it (`control.create` / `control.update` with `autoDescribe`), `manual` when a write carried an explicit `description` — **a manual edit that equals the autodetect result is still `manual`**; clearing the description clears it to NULL; NULL for rows written before D6 and for imported descriptions (`course.importCourses` writes none: neither autodetect nor a setter's edit) — unknown, never stale. It travels in `control.upserted` with the other portable fields (additive: phase-1 journal consumers ignore it). Read by `DESCRIPTION_STALE` (§9) |
+
+`kind` and `status` 4 / 5 are **kept in sync for one release** (08 §4.8):
+`control.create` derives `kind` from `status`; `control.update` writing
+`kind` sets `status` (start / finish, else back to `ok` from start /
+finish) and writing `status` sets `kind`. The migration backfilled
+`kind` from `status`. Readers in the API use `kind`, falling back to
+`status` for rows not rewritten yet.
+
+### 6.4 Importers and backfill
+
+Slice D1 (user: "nothing of an imported course lives only in the
+GeoJSON"). The row names this "§6.3"; §6.3 is the sites' fields, so it
+is the next number.
+
+**Importers.** `course.importCourses` (OCD, Purple Pen, IOF; through
+`resolveImportAlignment` as before) writes, per course, `persistStructure`
+of a linear structure beside the geometry — start, controls and finish
+all **explicit** as the file names them (so `finish_control_id` is set
+where the import used to leave it NULL; D0's choice (a): the structure
+names what the course explicitly references) — and the mirror follows.
+`orderMode` is the file's. An existing course keeps its label offsets
+(`persistStructure`'s default), where the old `deleteMany` / `createMany`
+dropped them. From an **OCD** file, with positions:
+
+| File | Becomes |
+|---|---|
+| 703 slits (`ParsedControl.cuts`, now filled by the parser) | `controls.circle_gaps` — the file's cuts are the effective set: a control without any gets `[]`. IOF / PPen files carry none and leave the column alone |
+| 705 pieces (and OCAD 2018's two-point 704) of a leg | `LegProps.gaps` on the item the leg runs into: the pieces are projected onto the centre line, the uncovered stretches between the first and last piece are the gaps (fractions, four decimals); the clearance at the circles is not a gap, nor is anything narrower than 0.2 mm (touching pieces). No bends are stored: the club run found 0 of 261 (§4.4) |
+| 707 lines | `marked_route` objects |
+| 708 and 709 lines | `oob_line {}` (708) |
+| 711 lines | `oob_line { symbol: "711" }` |
+| 709 polygons | `oob_area {}` (no border); the closing vertex is dropped |
+
+Every object is scoped to the courses of the file whose geometry carries it
+(`{ courses: [uuid], classes: [] }`: the T-code map for 707, every course
+of the file for 708 / 709 / 711), never `all`.
+
+Identical objects (kind, props, geometry) across courses are one object.
+The 704 leg-cut polygons and the 760000 description box are not objects
+(the first is a masking device for legs the layer cuts itself, the second
+is the description sheet): they stay in the stored GeoJSON for its legacy
+consumers. 708 lines are new to the parser (`restricted_line`, `sym`
+708000). Objects are written with `writeCourseObject` and marked
+`course_objects.source = 'import'` (migration
+`20261101130000_course_objects_source`, nullable, not on the wire): an
+OCD import first deletes the `source = 'import'` objects whose scope names a
+course it rewrites and writes the file's, so a re-import replaces exactly
+those: never an object drawn in the editor, nor another file's (an event can
+be fed from more than one file). A backfilled row (same marker) is superseded
+by a re-import the same way. `courses.geometry` is still written as the
+file's GeoJSON (`geometry_source` `ocd` / `xml`) for the consumers that
+read it until the artifact is retired. An XML re-import over an `ocd` course whose geometry is kept still
+writes the leg gaps of that kept geometry, but leaves `circle_gaps` alone
+(the XML carries none). **PPen `<gaps>` / `<leg>` bends
+are not read** (no fixture, no research record; Pending).
+
+**Tokens.** One HLC is taken for the `reference.imported` entry before its
+payloads are serialised and stamped on the `courses.version` and
+`controls.version` of every row the import wrote, so an editor open on
+any of them gets a version `CONFLICT` on its next write (§7), and a peer
+applying the entry holds the same tokens. Course objects take their own
+token. Rows the import soft-deleted under `replaceAll` are stamped too. The
+import is not atomic (structure, objects, tokens and the journal entry are
+separate statements, as before: a crash in between is repaired by running it
+again). Import-time `differing` is `null`: `basePayload` reads
+`course.upserted` / `control.upserted` entries only, not the rows inside
+a `reference.imported` one (Pending).
+
+**Backfill** (research 09 §5). `pnpm course:backfill-structure
+[--event <nameId>] [--dry-run] [--out <dir>]` and the Maintenance tab's
+"Course structures" card (`event.structureBackfillStatus` / `…Start`,
+admin, synchronous, all events) fill `structure` where it is `NULL`
+(`removed = false`):
+
+- the structure is the one the columns describe
+  (`loadExplicitStructure`); only the `structure` column is written (like
+  `rewriteStructureFromColumns`: the flat columns stay as they are), no
+  token is advanced and nothing is journaled — it derives what the columns
+  already replicate;
+- an `ocd` row also takes its stored GeoJSON's authored data, when the
+  geometry's control points are the structure's control sites one for one
+  (else the report says so and moves nothing); the start and finish points
+  are matched to a start / finish item when there is one — a row the old
+  importer wrote has no finish item (`finish_control_id` was never set) and
+  often a start by name only (`alignPointsToItems`): leg gaps from the pieces, cuts into
+  `controls.circle_gaps` where the control's is empty, and the objects
+  above — each `source = 'import'`, an equal object already imported is
+  not written again and a course-scoped one only adds the course to its
+  scope;
+- **one transaction per course** (`BEGIN … COMMIT`, the course row locked,
+  `structure IS NULL` re-checked inside): a failed course is reported and
+  rolled back, the others continue; a second run finds nothing to do;
+- the report compares, per course, the stored GeoJSON with what the layer
+  regenerates from the new structure and the controls' cuts (§4.4's
+  comparison): the points' bounding box and the controls' positions
+  (largest shift, mm), the circle cuts (compared / same) and the legs the
+  file drew as pieces against those that regenerate with a gap. The CLI
+  prints one line per course and, with `--out`, writes `report.json`.
+
+| Run | Courses | Bbox Δ / position Δ (mm) | Circle cuts same / compared | Legs with pieces / regenerated with gap |
+|---|---|---|---|---|
+| Integration fixture (`course-structure-backfill`, 2 `ocd` + 1 editor course) | 3 | 0 / 0 | 1 / 1 | 1 / 1 |
+| Club database (dev copy, 2026-11-01: 61 filled / 0 skipped / 0 failed; 21 courses without geometry, 23 `ocd`, 17 editor) | 61 | `ocd` ≤ 15.67 / ≤ 0.064; editor ≤ 21.05 / 0.000 (positions match; the bbox shift of editor rows and of demo_competition / E is not analysed — hygiene item) | `ocd` 114 / 114; editor 87 / 141 | `ocd` 17 / 257; editor 0 / 0 |
+
+The club run is the coordinator's after merge (the dev database is off
+limits from a worktree, as for §4.4); its numbers go into this table.
+
+## 7. Concurrency
+
+Gate G1, decided by the user 2026-10-31 (decision log): **optimistic
+concurrency with a version token**, over the existing journal. A client
+edits from a row's token and sends it back; the server refuses a stale
+one. (The other designs weighed — last-write-wins with visibility only,
+a server-side merge log, a CRDT — and why are in the decision log; the
+merge log is the upgrade path if real use shows frequent structure
+conflicts, and would sit on the same token.)
+
+**Token.** The HLC of the journal entry that last wrote the row — its
+`course.upserted` / `control.upserted` — mirrored onto `courses.version`
+/ `controls.version` in the same transaction as the emit: the emit takes
+the clock reading, stamps the row, then reads the payload, so the entry
+carries the token it set and a peer applying it holds the same token
+(`referenceJournal.ts`). `0` for rows written before D0. On the wire it
+is a **decimal string** (`version`, `baseVersion`): an encoded HLC
+exceeds 2^53 and tRPC runs without a transformer.
+
+**Separate tokens.** `course.setStructure`, `course.update` and every
+other write of the course itself advance the course's token;
+`control.update` and `control.check` the control's. A control move
+rebuilds its courses' geometry and re-journals them **without** advancing
+their token (`emitCourseUpserted(…, { advanceVersion: false })`; so do
+the map-upload and cut-setting rebuilds), so a structure edit and a field
+move never conflict with each other. `control.delete` advances the
+token of the courses whose structure lost the control, and a site's kind
+change the token of the courses re-mirrored for it (§6.2): the course as
+timing reads it changed.
+
+**Writes.** `course.setStructure`, `course.update` and `control.update`
+take an optional `baseVersion`. Inside the write transaction the row is
+locked (`SELECT … FOR UPDATE`) and its token compared; a mismatch is
+tRPC `CONFLICT` with
+
+```ts
+data: { kind: "course" | "control", id /* public id */, version, current, differing }
+```
+
+beside tRPC's own `code` / `httpStatus` / `path` (`errorFormatter` in
+`trpc.ts`; the client narrows with `versionConflictOf(error.data)` —
+the duplicate-code `CONFLICT` has no `kind`). `version` and `current`
+are the server's row now: the wire-form structure (course) or the
+control's editor fields. `differing` compares the client's **base** with
+that row — the item ids (public control ids; a group by its id) outside
+the longest common subsequence of the two item lists, plus sites whose
+label offset changed (`structureDiff`), or the control's field names
+(`controlFieldsDiff`). The base is read from the journal: the entry
+whose HLC is `baseVersion` *is* the row as the client saw it. When that
+entry is not on this node (token `0`, or pruned) `differing` is `null`.
+`baseVersion` stays optional for one release so clients that predate it
+keep last-write-wins; importers and the backfill send none (they replace
+by design). Course objects carry the same token per object (§8.4).
+
+**Client rules** (the new editor, D4 / D11). A **field move** on a stale
+control is re-sent with the fresh token automatically when the other
+side changed only fields the move does not touch (description, code,
+notes, kind, circle gaps, checked); when the other side also moved it,
+the editor shows "moved by X at T" with both positions and the user
+keeps one. A **structure edit** on a stale structure is never merged: the
+editor refreshes, re-renders the sequence with a one-line notice naming
+the differing items, and the user redoes the edit — concurrent
+reordering is always a conflict, by design.
+
+**Legacy editor.** `CourseEditorPage` and the Courses page send the
+token too, through the same mutations: a `VersionBook`
+(`packages/web/src/lib/version-book.ts`) keeps the newest token per row
+from the list refetches and each mutation's result — `course.update`,
+`control.update`, `course.setControlLabelOffset`, `course.create` /
+`clone` return the row's token, `control.delete` the tokens of the
+courses it advanced — so undo / redo and back-to-back writes send their
+predecessor's token; on a version
+`CONFLICT` they invalidate and show "Changed elsewhere — reloaded"
+(`courses:changedElsewhere`). One rule for both editors on the same rows.
+
+**Presence and live refresh** (D11; `course-editor.md` §11). No new push
+channel: a heartbeat `course.presence { courseId, mode, clientId }` upserts
+a row in `course_presence` (`(course_id, client_id)` key, `ON DELETE
+CASCADE` with the course and the event; a table because up to two Cloud
+Run instances serve one event, so not process memory) and answers the
+event's other live rows. TTL **30 s**: a row older than that is neither
+shown nor kept (the next heartbeat of any client sweeps the event's stale
+rows). The editor sends it every 5 s, the cadence of the existing
+`useExternalChanges` poll; it is a mutation of its own because the poll's
+`competition.counterState` is a read-only counter query and presence is
+volatile, never journaled or shipped to peers. Live refresh is cache
+invalidation, not journal replay: the `oCourse` / `oControl` watermarks
+already invalidate the `course` / `control` queries, and a course token the
+client did not write earns a one-line notice. "Moved by X at T" reads
+`actorId` and the physical part of `hlc` of the row's last `*.upserted`
+journal entry (`course.lastChange`, `control.lastChange`).
+
+**`map_patches` (slice G, no code).** Patch operations are idempotent and
+commutative: each op is keyed by `(object id, op id)` and sets a state
+(hidden, colour override, …) rather than applying a relative change, so
+applying twice equals once and two devices' patches merge through the
+journal in any order.
+
+## 8. Course objects
+
+Row D2 (research 08 §4.5, §4.8). Purple / white objects stored per event
+with a **scope**, drawn by the layer with the course on screen and in
+print: out-of-bounds areas and lines, white-outs, a toner saver, free
+marked routes, map text and logos, and filter regions. They are the
+stored, scoped kind of a sheet's map-anchored layout objects (§3.6);
+those stay in the sheets (moving them is slice F's).
+
+### 8.1 Table and kinds
+
+`oxygen.course_objects` (migration `20261101120000_course_objects`):
+
+| Column | Type | Meaning |
+|---|---|---|
+| `id` | `UUID` `uuidv7()` | row id |
+| `event_id` | `BIGINT` → `events` `ON DELETE CASCADE` | |
+| `seq` | `INT`, `allocate_event_seq` | public id on the wire; unique per event |
+| `kind` | `TEXT`, CHECK over the nine kinds below | |
+| `geometry` | `JSONB` | `PathVertex[]`: paper mm, y-up, the layout path's vertex / Bézier shape (`{ x, y, hIn?, hOut? }`) |
+| `props` | `JSONB` default `{}` | per kind, below; stored as on the wire |
+| `scope` | `JSONB` | `{ "all": true }` or `{ "courses": [uuid], "classes": [uuid] }` (§8.2); no foreign key |
+| `z` | `INT` default 0 | draw order among the event's objects (`z`, then `seq`) |
+| `version` | `BIGINT` default 0 | the §7 token (§8.4) |
+| `source` | `TEXT` NULL, CHECK `import` (migration `20261101130000_course_objects_source`; D1 deviation from D2's table) | `import` for what the importers and the backfill wrote (§6.4), NULL for an object drawn by hand; not on the wire |
+| `created_at`, `updated_at` | `TIMESTAMPTZ` | `set_updated_at` |
+
+`courseObjectBodySchema` (`packages/shared/src/course/objects.ts`)
+validates `{ kind, geometry, props }`; props are strict (an unknown key is
+refused, not dropped); a geometry of the wrong length is refused with an
+issue message starting `OBJECT_GEOMETRY`.
+
+| Kind | Geometry | Props | Drawn as |
+|---|---|---|---|
+| `oob_area` | ≥ 3 vertices, closed | `border?: "none" \| "solid" \| "dashed"` (default none); `hatch?: "709" \| "710"` (default 709) | 709; 709.b with a solid boundary, 709.c dashed; with `hatch: "710"` the dangerous area's cross-hatch (§3.1) with the same boundaries |
+| `oob_line` | ≥ 2 | `symbol?: "708" \| "711"` (default 708) | 708 out-of-bounds boundary or 711 out-of-bounds route |
+| `whiteout` | ≥ 3, closed | — | `course:whiteout` at upper white (§3.6) |
+| `toner_saver` | ≥ 3: the hull — D13's editor generates the smooth offset hull of the course's sites, so its segments carry `hIn` / `hOut` and the hole ring below has Bézier flags (the hull's own straight edges stay straight) | `marginMm?` (how D5 / D13 generated it, 25 mm by default since D13; the drawn shape is the stored hull), `holeRadiusMm?` (reserved; the editor does not set it and builds no control holes) | white-out *outside* the hull: the `viewOptions.window` ring with the hull as an even-odd hole; without a window (the viewer) not drawn, warning `WINDOW_MISSING` |
+| `marked_route` | ≥ 2 | — | 707 |
+| `text` | 1: the anchor | `text`, `fontSizeMm`, `fontFamily?`, `color?` (hex), `align?` | a text symbol: upper purple, or an own colour row for `color` (§1); `{placeholders}` expanded with `viewOptions.textValues` |
+| `image` | 2: opposite corners | `graphicId`, `crop?` | `layer.images` (a graphic of the event), drawn by the page backends |
+| `filter_region` | ≥ 3 points, **no** Bézier handles (a polygon; one outer ring) | `{ mode: "clip" \| "hide", symbols: "all" \| idx[] \| { colours }, invert? }` — D3's region exactly | not an object: a `regions` entry (`map-rendering.md` §4.11) |
+| `inset_frame` | ≥ 2 | — | reserved for micro insets: typed, refused on write (`PRECONDITION_FAILED`), never drawn |
+
+Sizes are **paper mm at the map's scale**, like the 7xx symbols: the
+geometry and a text's `fontSizeMm` are not divided by
+`viewOptions.overprintScale` (a sheet's layout objects are page mm and
+are; §3.6). The 7xx kinds take the library's dimensions × the document
+factor × appearance (decision "Sizes"): 08 §4.5's per-object width,
+cross spacing, dash and white-out opacity are not stored (decision log,
+D2).
+
+### 8.2 Scope
+
+An object is drawn with a course when its scope is `{ all: true }`, or
+names the course, or names a class that runs it — the class's own
+course or a course of its forking pool (`classes.course_id`,
+`class_course_pools`). A view with no course (all controls) draws the
+`all`-scoped objects only. Both lists empty is a parked object, drawn
+nowhere. `courseObjectInScope(scope, drawn | null)` is the rule
+(`drawn` = the drawn courses and the classes running them); the API
+resolves classes from the tables (`classesByCourse`). The viewer does not
+resolve classes itself (`class.list` names a class's own course, not its
+pool): every wire object carries `inCourses`, the public ids of the
+courses its scope resolves to by the same rule (`null` for `all`), and
+`courseObjectsForView` keeps those with a highlighted course among them.
+
+On the wire the scope names courses and classes by public id (`seq`);
+the row holds UUIDs. A write naming an unknown course or class is
+`BAD_REQUEST` naming it; a course or class removed later simply matches
+nothing and drops out of the wire scope.
+
+### 8.3 Drawing
+
+`courseLayer` takes course objects in `objects` beside a sheet's layout
+objects (`isCourseObject`: a course object has `geometry`) and draws them
+after the course in input order — the caller passes them in draw order —
+with `ref = { kind: "object", id: "course-object:<id>" }`. Every
+`filter_region` object becomes a region after the explicit `regions`
+input, so a stored region acts exactly like D3's (never on the course).
+
+- **Print.** `maps.pdf` (vector path) loads the event's objects once per
+  request; each sheet takes those in scope of its course, or the
+  `all`-scoped ones for an all-controls sheet (`sheetForMapRow` →
+  `SheetInput.course.objects`), and `composePage` hands them to the layer
+  with the sheet's objects. Filter regions therefore reach the PDF as
+  D3's clip paths by construction (`course-print.md` §5.1).
+- **Viewer.** `MapPanel` fetches `courseObject.list` (kiosk-readable;
+  cached until reload like `course.list` — a writer, D5, invalidates it),
+  keeps the objects in scope of the highlighted courses
+  (`courseObjectsForView` over `inCourses`) and hands them to `MapViewer`
+  (`courseObjects` prop), whose request carries them (§5); the worker's
+  layer lifts the regions. The kiosk map is
+  `MapPanel` with the runner's course highlighted, so it draws the
+  `all`-scoped objects and that course's. A `toner_saver` is not drawn
+  on screen (no frame).
+- **Editor.** Hit-testing, selecting, drawing and editing objects are
+  the editor's (`course-editor.md` §7, D5); importers writing their 707 /
+  708 / 711 lines and 709 polygons as objects is D1.
+
+### 8.4 API and tokens
+
+`courseObject.*` (`packages/api/src/routers/courseObject.ts`), the wire
+type `course.CourseObject = { id: seq, kind, geometry, props, scope, z, version, inCourses }`
+(`inCourses`: §8.2, read-only):
+
+| Procedure | Access | |
+|---|---|---|
+| `list` | `courses.view` or the event's kiosk key | the event's objects ordered `z`, `seq` |
+| `create { kind, geometry, props, scope, z? }` | `courses.edit` | returns the object with its token |
+| `update { id, baseVersion?, geometry?, props?, scope?, z? }` | `courses.edit` | the kind is fixed; an absent field keeps the stored one, a sent one (`null` included) is validated with the rest |
+| `delete { id, baseVersion? }` | `courses.edit` | |
+| `reorder { ids }` | `courses.edit` | `z` = the position in `ids`; takes and advances no token |
+
+Writes are not lease-guarded: objects are cloud-owned non-critical data
+(08 §4.8), like the sheets; a venue holding a checkout keeps its
+snapshot's copy until the next checkout.
+
+**Token** (§7). Objects are not journaled, so their token is not a
+journal entry's HLC: every `create` / `update` mints one from the node's
+clock (`encodeHlc(nextServerHlc())`) and stamps `version` in the same
+write. `update` / `delete` with a `baseVersion` lock the row (`FOR
+UPDATE`) and compare; a stale one is tRPC `CONFLICT` with
+`data: { kind: "object", id, version, current, differing: null }` —
+`current` the object now, `differing` always null (there is no base to
+diff against). No `baseVersion` is last-write-wins. The client rule is
+the structure rule: refresh and redo.
+
+### 8.5 Snapshot and dump
+
+`course_objects` rows travel in the checkout snapshot
+(`SNAPSHOT_TABLES`, rows verbatim with their UUIDs, `seq`, scope UUIDs
+and token; `map-storage.md` §7.2) and in the per-event dump after
+`class_course_pools` (`BACKUP_TABLES`; `map-storage.md` §7.3) — the
+venue's kiosk map draws them (08 §4.8; 07 §9.2).
+
+## 9. Checks
+
+Row D6 (research 08 §4.2, §5.6, §6). Advisory course-setting checks:
+the editor lists them (`course-editor.md` §8), marks them on the canvas
+and counts them in the status bar; `course.setStructure` returns them.
+**Nothing blocks a save.** Variation and exchange codes
+(`VARIATION_UNBALANCED`, `EXCHANGE_WITHOUT_SHEET`) and crossing-point
+exemptions are slice F's.
+
+### 9.1 The function
+
+`courseChecks(input)` (`packages/shared/src/course/checks.ts`) is pure
+and deterministic: paper mm, y-up, like the layer's input (§2).
+
+| Input | Type | Meaning |
+|---|---|---|
+| `structure` | `CourseStructure \| null` | the course checked (layer form, §2); null = event-wide checks only |
+| `sites` | `CheckSite[]` | every site of the event: `{ id, code, codes: number[], kind, x, y, description?: { d? } \| null }`; `x = y = 0` is unpositioned (§3.3) |
+| `document` | `{ libraryId, obstacles } \| null` | the base map's library and its obstacles (`checkObstaclesOfDocument`, §9.3); null on a legacy map |
+| `sheets` | `MapWindow[] \| null` | the windows of the course's sheets (`course-maps/schema.ts`); null or empty skips `CONTROL_OUTSIDE_SHEET` |
+| `objects` | `CourseLayerObject[]`, optional | the course objects in scope (§8.2); `oob_area` and `oob_line` (708) are obstacles |
+| `derivation` | `CourseDerivation \| null`, optional | the layer's result for this course (§1); null skips `NUMBER_*` |
+| `mapScale` | `number \| null` | map scale denominator; metres = paper mm × scale / 1000; null skips the distance checks |
+
+A check is `{ code, siteIds, leg?, at, params? }`: the sites involved
+(public ids on the wire), for a leg `{ from, to, index }` (index of the
+leg in the course's positioned sequence), `at` the point to locate and
+mark (paper mm), `params` what the message shows (`a` / `b` codes,
+`distanceM`, `limitM`, `feature`, `code`, `from` / `to`, `symbol`;
+`DESCRIPTION_STALE` also carries `suggested`, the column-D code the map
+suggests now, which the message does not show). There is no message text: the web formats
+it from `editor:check_<CODE>` (AGENTS.md §9). Output order: the table
+order below, then the order of the input (sites, then the course's items).
+
+### 9.2 Codes
+
+| Code | Scope | Rule | Threshold |
+|---|---|---|---|
+| `CONTROL_TOO_CLOSE` | event | two positioned `control`-kind sites closer than the limit, one check per pair, `at` the midpoint | 30 m; **15 m at sprint scale**: the document's library is ISSprOM 2019-2, or (no document) the map scale is 1:5 000 or larger |
+| `SAME_FEATURE_TOO_CLOSE` | event | two positioned `control` sites with the same non-empty column D within the limit | 60 m |
+| `CODE_BELOW_31` | event | a `control` site with a punch code < 31 | — |
+| `CODE_DUPLICATE` | event | a punch code on more than one site | — |
+| `CODE_INVERTIBLE` | event | a code that reads as another site's code upside down (digits reversed, 6 ↔ 9, 0 / 1 / 8 unchanged, any other digit not invertible): 66 / 99, 68 / 89, 161 / 191, 86 / 98 …; a code that reads as itself (69, 88, 181) is not a finding | — |
+| `CONTROL_OUTSIDE_SHEET` | course | a positioned item of the course outside every window in `sheets` | — |
+| `NUMBER_UNPLACED` | course | a `control` visit whose number is not hidden and that has no label in `derivation` (in practice an unpositioned site) | — |
+| `NUMBER_OVERLAPS` | course | a derived site whose label has `collides` (§3.5: the placer fell back to a box that intersects a circle, a number or a line) | — |
+| `DESCRIPTION_MISSING` | course | a `control` item whose site has no description or no column D | — |
+| `DESCRIPTION_STALE` | course, server | a `control` item whose `description_source` is `auto` (§6.3) and whose stored description differs from the autodetect result at the site's position now (e.g. after a map re-upload) | — |
+| `LEG_CROSSES_OOB` | course | a leg (ordered courses; centre to centre between consecutive positioned items) that crosses or runs inside an out-of-bounds obstacle: document 709 areas and 708 lines, `oob_area` and `oob_line` (symbol 708) course objects | — |
+| `LEG_THROUGH_UNCROSSABLE` | course | a leg that crosses or runs inside an uncrossable document obstacle: `UNCROSSABLE_CODES` 201 (impassable cliff), 301 (uncrossable body of water), 307 (uncrossable marsh), 411 (impassable vegetation), 515 (impassable wall), 518 (impassable fence), 520 (area that shall not be entered), 521 (building), 529 (prominent uncrossable line feature) — the same in ISOM 2017-2 and ISSprOM 2019-2 | — |
+
+Event-scoped codes run over every site, whether or not the course visits
+it: the IOF distance and code rules are about the controls in the
+terrain. Course-scoped codes run over the course's items only.
+
+### 9.3 Document obstacles
+
+`checkObstaclesOfDocument(doc)` reads a pinned document as
+`cutFeaturesOfDocument` does (§3.4): a symbol's code is its applied
+match's canonical code, else its source code; hidden symbols are
+skipped. It keeps line and area objects of the `UNCROSSABLE_CODES`
+(kind `uncrossable`) and of 708 / 709 (kind `oob`) as polylines of their
+on-curve vertices (Bézier handles skipped; an area's outer ring only,
+holes ignored — the approximation snapping makes, `course-editor.md`
+§6.2), paper mm. A leg hits an obstacle when its segment intersects a
+polyline edge (an area's ring closed), or, for an area, when the leg's
+midpoint lies inside the ring. Point objects are not obstacles.
+
+### 9.4 Where it runs
+
+| Where | Codes | Inputs |
+|---|---|---|
+| Editor (client) | all but `DESCRIPTION_STALE` | the page's structure and sites, `checkObstaclesOfDocument` over the decoded document (memoised per document), the course's sheet windows from `courseMap.list`, the objects in scope, the viewer's derivation (`onCourseInfo`) |
+| `course.checks { courseId }` (server, `courses.view`) | all but `CONTROL_OUTSIDE_SHEET`, `NUMBER_UNPLACED`, `NUMBER_OVERLAPS` (`sheets` and `derivation` null), plus `DESCRIPTION_STALE` | the stored structure or its columns, the event's sites, the map scale, the pinned document's obstacles (vector events; memoised per document hash), the objects in scope |
+| `course.setStructure` | as `course.checks`, for the written course | — |
+
+The editor shows its own list and adds the server's `DESCRIPTION_STALE`
+checks. The layout checks need the viewer's placement at the document's
+sizes and the resolved sheet windows, which the server does not compute
+for a check (decision log, D6).
+
 ## Tests
 
 | Layer | Where | What |
 |---|---|---|
 | unit | `packages/shared/src/course/__tests__/colour-stack.test.ts` | upper white inserted below upper purple with the remap; ISSprOM unchanged; source colours above upper purple; refusal without purples; `hexToCmyk` ↔ `cmykToHex`; object rows on top |
-| unit | `symbols.test.ts` | ISOM / ISSprOM dimensions, document factor, appearance multipliers, knockout, roles, 711 borrowed; arcs within 1 µm of the circle, gaps as open arcs, an arc through north one path |
+| unit | `symbols.test.ts` | ISOM / ISSprOM dimensions, document factor, appearance multipliers, knockout, roles, 711 borrowed; the dangerous area: 709's hatch in both diagonals, 709.b / 709.c's boundaries, scaled like 709 (both libraries); arcs within 1 µm of the circle, gaps as open arcs, an arc through north one path |
 | unit | `cuts.test.ts` | clearance = symbol + half line + air at both arc ends and both gap ends, on / off the rim and the line by the same sum, wider for bigger symbols and lines, default radius, north wrap, whole circle; library radii (`cutSymbolRadiusMm`), OCAD symbol radii (`ocadCutSymbolRadiiMm`), `cutContextForScale`; `cutFeaturesOfDocument` (applied match, source code, suggested match, hidden symbol, line object, own render, factor fallback) |
-| unit | `derive.test.ts` | legs and clearances, circles in the way, unpositioned sites, automatic vs authored gaps, authored pieces and bends, free order, all-controls, start rotation, sequence / repeated / code numbers, y-down placement, manual offsets, multi-course |
-| unit | `layer.test.ts` | one `symbolise` call with a document: warning-free, lower purple under black, re-indexed document colours, object offsets; turned start, arcs, legs; knockout halo order; sprint sizes; layout objects (white-out, 709.b, rows on top, text values, page-mm sizes); toner-saver ring and its warning; images; `courseDocumentContext` |
+| unit | `derive.test.ts` | legs and clearances, circles in the way, unpositioned sites, automatic vs authored gaps, the event's auto cuts off (no automatic slits / gaps, authored ones kept, §3.4), authored pieces and bends, free order, all-controls, start rotation, sequence / repeated / code numbers, y-down placement, manual offsets, multi-course |
+| unit | `layer.test.ts` | one `symbolise` call with a document: warning-free, lower purple under black, re-indexed document colours, object offsets; turned start, arcs, legs; auto cuts off = the objects without cut features; knockout halo order; sprint sizes; layout objects (white-out, 709.b, rows on top, text values, page-mm sizes); toner-saver ring and its warning; images; `courseDocumentContext` |
 | unit | `geojson.test.ts` | editor course in the pre-C5 editor shape with cuts, free order, preclipped pieces and extras, course by id |
 | pass-stream | `scenes.test.ts`, snapshots in `render/__fixtures__/streams/course/` | the five course scenes (`map-rendering.md` §6.3) warning-free and equal to their snapshots at 1 µm, plus each scene's rule |
 | unit | `packages/api/src/__tests__/course-geometry.test.ts` | `editorCourseGeometry` writes the exact FeatureCollection, repeated controls, cuts at the legacy sizes on controls only and gaps on legs, no keys without features, unpositioned controls, free order; `legDistancesMm`, `courseLengthM` |
 | unit | `packages/api/src/__tests__/overprint-cuts.test.ts` | the legacy adapter: which OCAD objects cut (knolls and rocks, not water / vegetation / lines / areas / 206), file radii first, sub-codes, scale fallback; the rule over them |
 | unit | `packages/api/src/__tests__/course-geometry-compare.test.ts` | identical → no diffs; changed / added / removed with widths; stale row; imported fidelity (pieces, bends, authored vs automatic cuts, extras) |
-| integration | `packages/api/src/__tests__/integration/overprint-cuts.test.ts` | legacy event: rim slit over the boulder across north, no gap through the building, leg gap over the boulder, cuts follow a move, upload rebuilds, lazy migration to v3, toggle; `vector` event: document features = OCAD features, the upload rebuild cuts the course created before the map, circle and leg cuts equal to the legacy event's within 1e-6, OCAD fallback without a pin, migration from the document; the comparison report over both events (all same, document vs OCAD 0, imported fidelity) |
+| integration | `packages/api/src/__tests__/integration/overprint-cuts.test.ts` | legacy event: rim slit over the boulder across north, no gap through the building, leg gap over the boulder, cuts follow a move, upload rebuilds, lazy migration to v3, toggle; `vector` event: document features = OCAD features, the upload rebuild cuts the course created before the map, circle and leg cuts equal to the legacy event's within 1e-6, OCAD fallback without a pin, migration from the document; the toggle off reaches the vector print (composed sheet = the page without cut features, a stored circle gap still drawn) and `getOverprintCuts` reads with a kiosk key (§3.4); the comparison report over both events (all same, document vs OCAD 0, imported fidelity) |
 | integration | `control-editor.test.ts`, `journal-completeness.test.ts` | unchanged and green: editor geometry and lengths on create / move / delete / copy; `course.upserted` payloads |
+| unit | `packages/shared/src/course/__tests__/structure.test.ts` | §6.1: C0's linear shape accepted, the 08 leg props, groups and loops; nesting, overlap, unanchored, duplicate ids / labels, < 2 or empty alternatives, out-of-range gaps refused; interim `path` / `pieces` / `circleGaps` and `extras` refused; the wire form; site rules; `linearStructure`, `structureControlIds`; `structureDiff` (equal, moved, added, removed, leg / offset changes) |
+| unit | `packages/api/src/__tests__/course-structure.test.ts` | §6.2: `splitStructure` (explicit start / finish, implicit default, role start / finish, a start mid-sequence), `structureFromColumns` and its round trip, wire ↔ stored mapping |
+| unit | `packages/api/src/__tests__/version-conflict.test.ts` | §7: the `errorFormatter` lifts the payload beside tRPC's fields and leaves the duplicate-code `CONFLICT` alone; `controlFieldsDiff`; `baseVersionSchema` |
+| integration | `packages/api/src/__tests__/integration/course-structure.test.ts` | kind ↔ status sync, slice-F kinds refused, circle gaps; `course.update` writes a structure, token = the entry's HLC, structure and token in the payload; a pre-D0 course reads from its columns; `setStructure` mirror (start / finish, sequence, hidden numbers, label offsets not in the column), geometry byte-identical to `update`'s, variations and unknown controls refused; stale course token → `CONFLICT` with current and differing, nothing written, no token = LWW; stale control token → differing fields; `differing: null` at token 0; separate tokens both ways; `control.delete` prunes and advances; seeded groups hold `courses.review`; a controller checks off and writes notes but cannot move |
+| unit (web) | `packages/web/src/lib/__tests__/version-book.test.ts` | §7 legacy editor: newest token as an integer compare, list seeding, the conflict payload off a client error, public id after a code change |
+| E2E | `e2e/courses.spec.ts` "an edit from a stale copy…" | §7 over HTTP: another client renames the course while this page's poll is held; this page's edit is refused, the notice shows, the page reloads the other write |
+| unit | `packages/api/src/__tests__/course-import-structure.test.ts` | §6.4: pieces → leg gaps (one piece none, two pieces one gap as fractions, either direction, touching pieces and off-axis pieces), per-course leg gaps by `from>to`, the object kinds and scopes, dedupe, leg cuts and description boxes ignored |
+| unit | `ocd-course-parser.test.ts`, `course-backfill-cli.test.ts` | §6.4: the parser fills `cuts` and reads 708; the CLI's arguments and lines |
+| integration | `packages/api/src/__tests__/integration/course-import-structure.test.ts` | §6.4: `e2e/test.ocd`, a Purple Pen and an IOF file leave stored, explicit structures and the mirror; the written rows hold the `reference.imported` HLC; a parsed OCD bundle: slits → `circle_gaps`, pieces → `leg.gaps`, objects with scopes and `source`, a re-import replaces them and keeps a hand-drawn one |
+| integration | `packages/api/src/__tests__/integration/course-structure-backfill.test.ts` | §6.4: plan filter and event scope, the fill (structure, gaps, cuts, objects, report), objects once per event with a merged 707 scope, idempotence, dry run |
+| E2E | `e2e/maintenance-course-backfill.spec.ts` | §6.4: the Maintenance card lists the pending course, fills it, reports |
 | unit | `packages/api/src/__tests__/courseGeometryStale.test.ts` | unchanged and green: OCD-vs-XML staleness of imported geometry |
 | golden | `e2e/__golden__/map-gl/course-*.png`, `packages/api/src/render/__tests__/golden-files.test.ts`, `e2e/map-gl-golden.spec.ts` | reference raster = committed golden; WebGL2 ≤ 0.5 % (`map-rendering.md` §6.2). The PDF tier joins in C3 |
-| unit (web) | `packages/web/src/lib/__tests__/course-layer-request.test.ts` | the §5 request rules (offsets only with the sheet or the editor) |
-| unit (web) | `packages/web/src/map-gl/__tests__/worker-course.test.ts`, `engine.test.ts` | the dynamic bucket (`map-rendering.md` §5.2) |
+| unit (web) | `packages/web/src/lib/__tests__/course-layer-request.test.ts` | the §5 request rules (offsets only with the sheet or the editor; `autoCuts: false` only when off); the provisional visit (a control at a position, before the finish, past the end, repeats counted; start / finish replace or lead / end; a reused site adds no site; the split leg loses its stored gaps; ignored without exactly one highlighted course); §8.2 scope by highlighted course over `inCourses`, all-controls = `all` only, parked nowhere; objects without scope / `z` / token / `inCourses` |
+| unit | `packages/shared/src/course/__tests__/objects.test.ts` | §8.1 each kind accepted (`hatch` included), short geometry / unknown props / an unknown `hatch` / bad filter props / Bézier region refused; §8.2 the scope truth table; §8.3 each kind onto its symbol (709 / 709.b / 709.c, the dangerous area and its boundaries for `hatch: "710"`, 708 / 711, 707, white-out), Bézier handles kept, text upper purple or own row and not divided by the enlargement, image corners, toner saver with and without a window and with Bézier handles (bezier flags in the hole ring only), `inset_frame` and `filter_region` draw nothing |
+| unit | `layer.test.ts` "a stored filter_region course object" | §8.3: the same region as the explicit one, after it; hides the document's 516 |
+| unit | `packages/api/src/__tests__/version-conflict.test.ts` | §8.4: the object `CONFLICT` payload |
+| integration | `packages/api/src/__tests__/integration/course-objects.test.ts` | §8.4: every kind created and listed in draw order with public ids; `inset_frame`, unknown course / class, bad body refused; update advances the token, `hatch: "710"` round-trips, `"711"` refused; stale token → `CONFLICT` with the object now and nothing written, none = LWW, stale delete; reorder keeps tokens; kiosk-key read, viewer cannot write; §8.2 class scope through `course_id` and the pool, the same resolution on the wire (`inCourses`); §8.5 snapshot round trip verbatim |
+| integration | `course-print.test.ts` "course objects on the page" | §8.3 print: a sheet takes the objects in scope (all-controls: `all` only), they add passes over the map, `hatch: "710"` adds one hatch pass, a stored filter region hides map objects |
+| integration | `backup.test.ts` | §8.5: the dump's `course_objects` section |
+| E2E | `e2e/map-vector-layer.spec.ts` "a stored white-out course object paints the map white" | §8.3 viewer: an `all`-scoped white-out created through the API turns open yellow ground white on the GL canvas, yellow beside it unchanged |
+| unit (web) | `packages/web/src/map-gl/__tests__/worker-course.test.ts`, `engine.test.ts` | the dynamic bucket (`map-rendering.md` §5.2); a document boulder slits a circle, `viewOptions.autoCuts: false` drops it and keeps a stored circle gap (§3.4) |
 | E2E | `e2e/map-vector-layer.spec.ts`, `map-control-circles.spec.ts`, `map-multicourse.spec.ts` | lower purple under black at a crossing; labels under both pipelines (`map-rendering.md` §5.4) |
+| unit | `packages/shared/src/course/__tests__/checks.test.ts` | §9: a fixture per code — both distance thresholds (library, scale fallback), event-wide distances, same feature, codes below 31 / duplicate / invertible (and the upside-down table), sheets null / empty / outside, numbers from `collides` and missing labels (hidden visits skipped), descriptions, legs through areas (crossing and inside), 708 lines, course objects (711 skipped), free order, unpositioned items; output order; `checkObstaclesOfDocument` (applied match, source code, suggested match, hidden, Bézier handles, holes, points) and the codes' library names |
+| unit | `packages/shared/src/__tests__/control-label-placement.test.ts`, `course/__tests__/derive.test.ts` "number collisions" | §3.5: `collides` on a boxed-in number, absent on a clear map and a contested cluster |
+| integration | `packages/api/src/__tests__/integration/course-checks.test.ts` | §9.4 over the pinned `e2e/test.ocd`: distance, invertible, missing description and the building leg with public ids; an `oob_area` in scope; `setStructure` returns the same list; a viewer reads it; §6.3 `description_source` writes (auto, manual even when equal, NULL on clear, auto on a re-describing move) and `DESCRIPTION_STALE` for a moved auto description only; a legacy event has no obstacle codes |
 
 ## Where things live
 
@@ -482,9 +1099,18 @@ draws the SVG course overlay over the GL map instead (§1).
 | `packages/api/src/course-geometry.ts` | the writer (§4.1): `editorCourseGeometry`, `loadCourseSequences`, `rebuildCourseGeometry`, `ensureOverprintCutsCurrent`, `OVERPRINT_CUTS_VERSION` |
 | `packages/api/src/event-map-objects.ts`, `overprint-cuts.ts` | cut features (§4.2): `loadEventCutFeatures`, document / OCAD loaders, the OCAD adapter |
 | `packages/api/src/course-geometry-{compare,report}.ts`, `scripts/compare-course-geometry.ts` | the comparison (§4.4) |
+| `packages/api/src/course-import-structure.ts`, `course-import-objects.ts`, `course-structure-backfill.ts`, `cli/course-backfill-{structure,args}.ts` | §6.4: pieces → gaps and the object bodies (pure), writing import-marked objects, the backfill and its CLI; `routers/course.ts` `importCourses`, `routers/event.ts` `structureBackfill*`, `MaintenancePanel.tsx` |
 
-| `packages/web/src/lib/course-layer-request.ts` | the viewer's request (§5) |
+| `packages/shared/src/course/structure.ts` | §6.1: `courseStructureSchema`, `courseStructureWireSchema`, `structureSiteIssues`, `linearStructure`, `structureControlIds`, `structureDiff` |
+| `packages/api/src/course-structure.ts` | §6.2: `splitStructure`, `structureFromColumns`, `persistStructure`, `rewriteStructureFromColumns`, wire mapping, `assertCourseVersion` |
+| `packages/api/src/version-conflict.ts`, `referenceJournal.ts`, `trpc.ts` (`withVersionConflict`) | §7: lock and compare, the base from the journal, the emits that stamp the token, the error shape |
+| `packages/web/src/lib/version-book.ts` | §7 legacy editor tokens |
+| `packages/web/src/lib/course-layer-request.ts` | the viewer's request (§5), `courseObjectsForView` (§8.2) |
+| `packages/shared/src/course/objects.ts` | §8: `courseObjectBodySchema`, `courseObjectScopeSchemaOf`, `courseObjectInScope`, `isCourseObject`, `filterRegionOf`, the kinds' drawing |
+| `packages/api/src/course-objects.ts`, `routers/courseObject.ts` | §8.4: wire ↔ row, scope ids, `writeCourseObject` (shared with D1's importers), `loadCourseObjects`, `classesByCourse`, `objectsInScope`; the router |
 | `packages/web/src/map-gl/worker.ts` (`courseReply`), `engine.ts` (`setCourse`) | the dynamic bucket that draws it |
+| `packages/shared/src/course/checks.ts` | §9: `courseChecks`, `checkObstaclesOfDocument`, `UNCROSSABLE_CODES`, `OOB_CODES`, `invertedCode` |
+| `packages/api/src/course-checks.ts`, `event-map-objects.ts` (`loadEventCheckDocument`), `description-autodetect.ts` (`describeAt`, `descriptionsEqual`) | §9.4: the server's list, `DESCRIPTION_STALE`; `routers/course.ts` `checks`, `setStructure` |
 
 ## Pending in this chapter
 
@@ -492,20 +1118,41 @@ draws the SVG course overlay over the GL map instead (§1).
   last consumer draws from the layer (C4 viewer, C2 / C3 print, then
   kiosk / exports in E / F); spec-size cuts reach the screen and the page
   through the layer, not through the artifact.
-- **Viewer layout objects and appearance**: the viewer passes no layout
-  objects and the spec appearance; a sheet's objects and template
-  appearance on the map are slice D's.
-- **Structure and concurrency** (G1, before slice D): `courses.structure`,
-  variations, map exchanges, crossing and map-issue points, per-course
-  hidden numbers, site-level manual `circle_gaps` (08 §4.2), corridors,
-  `LegProps.path` replacing the v1 leg input, the 08 §4.5
-  `course_objects` table with scopes and filter regions.
+- **Viewer sheet objects and appearance**: the viewer draws the course
+  objects in scope (§8.3) but no sheet's layout objects and the spec
+  appearance; a sheet's objects and template appearance on the map are
+  D7's (Layout mode).
+- **Structure, beyond D1** (§6): the layer reads `numberHidden`, the
+  site's `circle_gaps` and `LegProps.gaps` since D1; `LegProps` beyond
+  `gaps` (style, corridor, crossing, bends) is slice F's; Purple Pen's
+  `<gaps>` / `<leg>` bends are not parsed by the importer; the artifact
+  writer (`editorCourseGeometry`) does not carry an imported course's
+  authored cuts and gaps into a rewritten GeoJSON; variations and their
+  materialisation, map exchanges, crossing and map-issue points,
+  corridors (slice F).
+- **Tokens, beyond D1** (§7): the `differing` of a conflict caused by an
+  import is `null` (the base lives inside a `reference.imported`
+  entry); presence and "moved by X at T" (D11). The new editor's client rules landed in D4
+  (`course-editor.md` §3).
+- **Dangerous areas at import**: D1's importers write 709 polygons as
+  `oob_area {}`; an OCAD / Purple Pen cross-hatched 710 area is not read
+  as `hatch: "710"` (D5a added the prop only).
+- **Course objects, beyond D2** (§8): a toner saver on screen (the
+  editor outlines it, `course-editor.md` §7), holes in a stored
+  filter region, `inset_frame` (micro insets, slice F), moving sheets'
+  map-anchored layout objects into `course_objects` (F).
 - **Upper white at import**: insert the row in stage-7 alignment
   (`colour-align.ts`) at the next importer bump, so `courseColourStack`
   never has to remap.
 - **Custom purple**: a template's `appearance.purple` other than the IOF
   purple is not applied on the vector path (the purple is the stack's
   CMYK); appearance work in slice D decides whether it stays.
+- **Checks, beyond D6** (§9): `VARIATION_UNBALANCED` and
+  `EXCHANGE_WITHOUT_SHEET` (slice F); crossing-point exemptions for the
+  leg codes (F); exact Bézier and hole geometry for obstacles; the
+  server's `CONTROL_OUTSIDE_SHEET` / `NUMBER_*`; a re-describing move
+  still keys on "equals autodetect at the old position", not on
+  `description_source`.
 - **Number boxes from font metrics**: the placer estimates boxes as
   0.65 em per character (shared with the legacy overlay); measuring the
   shaped text would change placements and is left for when the legacy

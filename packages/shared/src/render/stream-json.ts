@@ -107,6 +107,10 @@ export const passStreamJsonSchema = z.object({
   passes: z.array(passJson),
   glyphTable: z.array(glyphMeshJson).default([]),
   fontTable: z.array(fontRefJson).default([]),
+  /** Filter masks (§3.8); absent = none. */
+  masks: z.array(z.object({ regions: z.array(pathJson).min(1) })).optional(),
+  /** Parallel to `passes`: index into `masks`, −1 = unmasked. */
+  maskIdx: z.array(z.number().int().min(-1)).optional(),
 });
 
 export type PassStreamJson = z.input<typeof passStreamJsonSchema>;
@@ -134,6 +138,10 @@ export function passStreamFromJson(input: unknown): PassStream {
   const j = passStreamJsonSchema.parse(input);
   if (j.objectIdx.length !== j.passes.length || j.symbolIdx.length !== j.passes.length) {
     throw new Error("objectIdx/symbolIdx must be parallel to passes");
+  }
+  if (!!j.masks !== !!j.maskIdx) throw new Error("masks and maskIdx come together");
+  if (j.maskIdx && (j.maskIdx.length !== j.passes.length || j.maskIdx.some((m) => m >= j.masks!.length))) {
+    throw new Error("maskIdx must be parallel to passes and index masks");
   }
   const passes: Pass[] = j.passes.map((p): Pass => {
     switch (p.kind) {
@@ -200,6 +208,9 @@ export function passStreamFromJson(input: unknown): PassStream {
     passes,
     glyphTable,
     fontTable,
+    ...(j.masks && j.maskIdx
+      ? { masks: j.masks.map((m) => ({ regions: m.regions.map(pathFromJson) })), maskIdx: Int32Array.from(j.maskIdx) }
+      : {}),
   });
 }
 
@@ -216,6 +227,7 @@ function q(v: number, digits = 3): number {
  * equal inputs (the stream is sorted first).
  */
 export function passStreamToJson(stream: PassStream): PassStreamJson {
+  if (!!stream.masks !== !!stream.maskIdx) throw new Error("masks and maskIdx come together");
   const s = sortPassStream(stream);
   return {
     objectIdx: Array.from(s.objectIdx),
@@ -277,6 +289,9 @@ export function passStreamToJson(stream: PassStream): PassStreamJson {
       strokes: g.strokes.map((st) => ({ path: pathToJson(st.path), widthUm: q(st.widthUm), cap: st.cap, join: st.join })),
     })),
     fontTable: s.fontTable.map((f) => ({ ...f })),
+    ...(s.masks && s.maskIdx
+      ? { masks: s.masks.map((m) => ({ regions: m.regions.map(pathToJson) })), maskIdx: Array.from(s.maskIdx) }
+      : {}),
   };
 }
 
@@ -338,6 +353,13 @@ export function diffPassStreams(a: PassStream, b: PassStream, opts: DiffOptions 
     const where = (w: string) => out.push({ pass: i, what: w });
     if (A.objectIdx[i] !== B.objectIdx[i]) where(`objectIdx ${A.objectIdx[i]} vs ${B.objectIdx[i]}`);
     if (A.symbolIdx[i] !== B.symbolIdx[i]) where(`symbolIdx ${A.symbolIdx[i]} vs ${B.symbolIdx[i]}`);
+    const ma = A.maskIdx?.[i] ?? -1, mb = B.maskIdx?.[i] ?? -1;
+    if ((ma < 0) !== (mb < 0)) where(`mask ${ma < 0 ? "absent" : "present"} vs ${mb < 0 ? "absent" : "present"}`);
+    else if (ma >= 0) {
+      const ra = A.masks![ma].regions, rb = B.masks![mb].regions;
+      if (ra.length !== rb.length) where(`mask regions ${ra.length} vs ${rb.length}`);
+      else ra.forEach((pa, k) => { const d = samePath(pa, rb[k]); if (d) where(`mask region ${k} ${d}`); });
+    }
     if (p.kind !== r.kind) { where(`kind ${p.kind} vs ${r.kind}`); continue; }
     if (p.colour !== r.colour) where(`colour ${p.colour} vs ${r.colour}`);
     switch (p.kind) {

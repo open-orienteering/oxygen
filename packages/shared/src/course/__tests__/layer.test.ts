@@ -10,6 +10,7 @@ import { makePath } from "../../render/pass-stream.js";
 import { liberation } from "../../render/__tests__/fonts.js";
 import type { RenderObject } from "../../render/symbolise.js";
 import type { CourseMapObject } from "../../course-maps/schema.js";
+import type { CourseLayerObject } from "../objects.js";
 
 /** A tiny ISOM "document": a 516 power line (black) across the first leg, resolved on the palette stack. */
 function isomDocument(): { objects: RenderObject[]; symbols: ReturnType<typeof materialiseLibrary>["symbols"] } {
@@ -55,6 +56,15 @@ describe("courseLayer + courseRenderInput → one symbolise call", () => {
     expect(layer.objects.filter((o) => o.ref.kind === "leg")).toHaveLength(4);
   });
 
+  it("auto cuts off: the same objects as without cut features (one rule for the layer and the artifact)", () => {
+    const off = courseLayer(layerInput({ cutFeatures: [{ x: 42.5, y: 10 }, { x: 25, y: 10.2 }], viewOptions: { autoCuts: false } }));
+    const none = courseLayer(layerInput({ viewOptions: { autoCuts: false } }));
+    expect(off.objects).toEqual(none.objects);
+    expect(off.objects.filter((o) => o.ref.kind === "site" && o.ref.id === "31")[0].path.closed).toBe(true);
+    const on = courseLayer(layerInput({ cutFeatures: [{ x: 42.5, y: 10 }, { x: 25, y: 10.2 }] }));
+    expect(on.objects).not.toEqual(off.objects);
+  });
+
   it("knockout numbers: an upper-white halo pass below the upper-purple text", () => {
     const layer = courseLayer(layerInput({ appearance: { numberStyle: "knockout" } }));
     const { stream } = symbolise({ ...courseRenderInput(isomDocument(), layer), fonts: fonts() });
@@ -71,6 +81,42 @@ describe("courseLayer + courseRenderInput → one symbolise call", () => {
     expect(Math.max(...Array.from(circle.path.coords).filter((_, i) => i % 2 === 1))).toBe(40000 + 3000);
     const number = layer.symbols[layer.objects.find((o) => o.ref.kind === "number")!.symbolIdx];
     expect(number.type === "text" && colourId(layer, number.colour)).toBe("purple-upper");
+  });
+});
+
+describe("filter regions (map-rendering §4.11)", () => {
+  const square = [{ x: 20, y: -5 }, { x: 30, y: -5 }, { x: 30, y: 25 }, { x: 20, y: 25 }];
+  const hole = [{ x: 24, y: 0 }, { x: 26, y: 0 }, { x: 26, y: 2 }];
+  it("rings in mm become one closed µm path with hole flags; document colours move onto the completed stack", () => {
+    const layer = courseLayer(layerInput({ regions: [{ rings: [square, hole], mode: "clip", symbols: { colours: [0, 20] }, invert: true }] }));
+    expect(layer.remap).not.toBeNull();
+    const [r] = layer.regions;
+    expect(r.path.closed).toBe(true);
+    expect(Array.from(r.path.coords.slice(0, 4))).toEqual([20000, -5000, 30000, -5000]);
+    expect(Array.from(r.path.flags)).toEqual([0, 0, 0, 0, 16, 0, 0]);
+    expect(r).toMatchObject({ mode: "clip", invert: true, symbols: { colours: [layer.remap![0], layer.remap![20]] } });
+  });
+  it("hide removes the document's 516 under the region but never the course over it", () => {
+    const layer = courseLayer(layerInput({ regions: [{ rings: [square], mode: "hide", symbols: "all" }] }));
+    const input = courseRenderInput(isomDocument(), layer);
+    expect(input.regionObjectLimit).toBe(1);
+    const plain = symbolise({ ...courseRenderInput(isomDocument(), courseLayer(layerInput())), fonts: fonts() });
+    const { stream, hidden, warnings } = symbolise({ ...input, fonts: fonts() });
+    expect(warnings).toEqual([]);
+    expect(hidden).toEqual([0]);
+    expect(stream.objectIdx.includes(0)).toBe(false);
+    expect(stream.passes.length).toBe(plain.stream.passes.filter((_, k) => plain.stream.objectIdx[k] !== 0).length);
+  });
+  it("a stored filter_region course object (§8.3) acts exactly like the explicit region, after the explicit ones", () => {
+    const stored: CourseLayerObject = { id: 4, kind: "filter_region", geometry: square, props: { mode: "hide", symbols: "all" } };
+    const layer = courseLayer(layerInput({ objects: [stored] }));
+    const explicit = courseLayer(layerInput({ regions: [{ rings: [square], mode: "hide", symbols: "all" }] }));
+    expect(layer.regions).toEqual(explicit.regions);
+    expect(layer.objects.filter((o) => o.ref.kind === "object")).toEqual([]);
+    const { hidden } = symbolise({ ...courseRenderInput(isomDocument(), layer), fonts: fonts() });
+    expect(hidden).toEqual([0]);
+    const both = courseLayer(layerInput({ objects: [stored], regions: [{ rings: [square, hole], mode: "clip", symbols: "all" }] }));
+    expect(both.regions.map((r) => r.mode)).toEqual(["clip", "hide"]);
   });
 });
 

@@ -7,6 +7,7 @@ import {
   isEventCompleted,
 } from "../permissions.js";
 import type { AuthUser } from "../auth.js";
+import { SYSTEM_GROUP_CAPABILITIES } from "@oxygen/shared";
 
 const member: AuthUser = {
   id: "u1",
@@ -98,6 +99,40 @@ describe("effectiveCapabilities", () => {
     expect(caps.has("courses.edit")).toBe(false);
     expect(caps.has("event.manage")).toBe(false);
     expect(caps.has("race.operate")).toBe(false);
+  });
+});
+
+// Controller capability (SLICES.md slice D, decision 4): control.check and a
+// control's notes. Setters and event admins hold it; a controller group is
+// `courses.view` + `courses.review` without `courses.edit`.
+describe("courses.review", () => {
+  it("is a capability, granted to the course-setter and event-admin system groups only", () => {
+    expect(ALL_CAPABILITIES).toContain("courses.review");
+    expect(SYSTEM_GROUP_CAPABILITIES.courseSetter).toContain("courses.review");
+    expect(SYSTEM_GROUP_CAPABILITIES.eventAdmin).toContain("courses.review");
+    expect(SYSTEM_GROUP_CAPABILITIES.raceCrew).not.toContain("courses.review");
+    expect(SYSTEM_GROUP_CAPABILITIES.member).not.toContain("courses.review");
+  });
+
+  it("is not added by event completion", () => {
+    const caps = effectiveCapabilities({
+      user: member,
+      grants: [["event.view"]],
+      eventCompleted: true,
+      authEnabled: true,
+    });
+    expect(caps.has("courses.review")).toBe(false);
+  });
+
+  it("does not imply courses.edit", () => {
+    const caps = effectiveCapabilities({
+      user: member,
+      grants: [["event.view", "courses.view", "courses.review"]],
+      eventCompleted: false,
+      authEnabled: true,
+    });
+    expect(caps.has("courses.review")).toBe(true);
+    expect(caps.has("courses.edit")).toBe(false);
   });
 });
 

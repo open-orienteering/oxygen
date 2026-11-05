@@ -14,6 +14,7 @@
 
 import type { Prisma, PrismaClient } from "./generated/prisma/client.js";
 import {
+  type Hlc,
   type JournalEntryType,
   type JournalPayloads,
   encodeHlc,
@@ -47,9 +48,15 @@ export async function appendJournal<T extends JournalEntryType>(
     stationId?: string;
     /** Authenticated user id. Defaults to the current tRPC actor, else null. */
     actorId?: string | null;
+    /**
+     * A clock reading taken by the caller (`nextServerHlc()`), when the row
+     * must carry the entry's HLC before the payload is read (the reference
+     * version token, docs/course-layer.md §7). Defaults to a fresh one.
+     */
+    hlc?: Hlc;
   },
-): Promise<void> {
-  const hlc = nextServerHlc();
+): Promise<bigint> {
+  const hlc = args.hlc ?? nextServerHlc();
   await db.journalEntry.create({
     data: {
       eventId: args.eventId,
@@ -62,4 +69,5 @@ export async function appendJournal<T extends JournalEntryType>(
       payload: args.payload as never,
     },
   });
+  return encodeHlc(hlc);
 }

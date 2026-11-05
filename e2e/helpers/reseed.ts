@@ -55,7 +55,7 @@ export async function reseed(): Promise<void> {
     await client.query("DELETE FROM club_user_groups");
     // The map pipeline's instance flags (docs/map-pipeline-switch.md §1):
     // a spec that flipped the default must not hand it to the next one.
-    await client.query("DELETE FROM settings WHERE key LIKE 'map.pipeline.%'");
+    await client.query("DELETE FROM settings WHERE key LIKE 'map.pipeline.%' OR key LIKE 'map.editor.%'");
   } finally {
     await client.end();
   }

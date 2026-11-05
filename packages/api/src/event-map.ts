@@ -397,7 +397,8 @@ export async function applyEventMap(
     const ids = editorCourses.map((c) => c.id);
     await rebuildCourseGeometry(db, eventId, ids, { updateLength: false });
     for (const id of ids) {
-      await emitCourseUpserted(db, eventId, id);
+      // Geometry only: the structure and its token are unchanged.
+      await emitCourseUpserted(db, eventId, id, { advanceVersion: false });
     }
   }
   await db.event.update({
@@ -468,7 +469,8 @@ export async function applyMapRotationCorrection(
     const ids = editorCourses.map((c) => c.id);
     await rebuildCourseGeometry(db, eventId, ids, { updateLength: false });
     for (const id of ids) {
-      await emitCourseUpserted(db, eventId, id);
+      // Geometry only: the structure and its token are unchanged.
+      await emitCourseUpserted(db, eventId, id, { advanceVersion: false });
     }
   }
   await db.event.update({
