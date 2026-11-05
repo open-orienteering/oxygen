@@ -421,6 +421,8 @@ interface Props {
   courses?: CourseOverlay[];
   /** Course objects in scope of the highlighted courses, drawn by the GL course layer (docs/course-layer.md §8.3). */
   courseObjects?: import("@oxygen/shared").course.CourseObject[];
+  /** The event's automatic cuts (`Event.autoOverprintCuts`); `false` = the GL course layer draws no automatic slits / gaps (course-layer.md §3.4). */
+  autoCuts?: boolean;
   highlightControlId?: string;
   highlightCourseName?: string;
   onControlClick?: (controlId: string) => void;
@@ -528,6 +530,7 @@ export function MapViewer({
   controls = [],
   courses = [],
   courseObjects,
+  autoCuts = true,
   highlightControlId,
   highlightCourseName,
   onControlClick,
@@ -960,10 +963,11 @@ export function MapViewer({
         : undefined,
       provisional: editorProvisional,
       layout: editorLayout,
+      autoCuts,
     });
     return editorDraftFast ? { ...request, fastFilter: true } : request;
   }, [glCourse, controls, controlMm, editorOn, editorFade, editorCourseIds, editorDraftFast, editorProvisional, editorLayout, pendingMoves, editorDragPos, showDescriptions,
-      courses, highlightCourseName, drawnObjects, editorLabelDragPos, pendingLabelMoves]);
+      courses, highlightCourseName, drawnObjects, editorLabelDragPos, pendingLabelMoves, autoCuts]);
   /** A dragged control's leg lengths (§6.1), from the positions the request draws. */
   const dragLegLabels = useMemo(() => {
     const st = courseRequest?.structure;

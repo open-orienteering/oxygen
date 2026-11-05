@@ -22,9 +22,10 @@ export const indexOf = (stack: readonly { id: string }[], id: string) => stack.f
 
 /**
  * A document: one black line (below upper purple: keeps its index) and one line in the stack's top
- * row (above it: moves up one when upper white is inserted). 100 units per mm.
+ * row (above it: moves up one when upper white is inserted). 100 units per mm. `boulder`: a 204
+ * point (a cut feature, course-layer.md §3.4) at that paper-mm position.
  */
-export function documentBytes(colours = isomStack()): ArrayBuffer {
+export function documentBytes(colours = isomStack(), opts: { boulder?: { x: number; y: number } } = {}): ArrayBuffer {
   const black = indexOf(colours, "black100");
   const top = colours.length - 1;
   const line = (code: string, colour: number) => ({ code, name: code, kind: "line" as const, render: { type: "line" as const, id: code, code, name: code, main: { colour, widthUm: 300 } } });
@@ -37,12 +38,15 @@ export function documentBytes(colours = isomStack()): ArrayBuffer {
       library: { id: "ISOM2017-2", version: "1" },
       georeferencing: { crs: null, paperOrigin: null },
       colours,
-      symbols: [line("516.0", black), line("999.0", top)],
+      symbols: [line("516.0", black), line("999.0", top), ...(opts.boulder ? [{ code: "204.0", name: "Boulder", kind: "point" as const, render: null }] : [])],
     },
     objects: [
       // A black line across the first leg (x = 25 mm), and a top-row line elsewhere.
       { symbolIdx: 0, type: mapDocument.OBJECT_TYPE.line, sourceIndex: 0, coords: [2500, 0, 2500, 2000], flags: [0, 0] },
       { symbolIdx: 1, type: mapDocument.OBJECT_TYPE.line, sourceIndex: 1, coords: [0, 6000, 8000, 6000], flags: [0, 0] },
+      ...(opts.boulder
+        ? [{ symbolIdx: 2, type: mapDocument.OBJECT_TYPE.point, sourceIndex: 2, coords: [Math.round(opts.boulder.x * 100), Math.round(opts.boulder.y * 100)], flags: [0] }]
+        : []),
     ],
   });
   return u8.buffer.slice(u8.byteOffset, u8.byteOffset + u8.byteLength) as ArrayBuffer;

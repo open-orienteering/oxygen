@@ -77,6 +77,11 @@ export interface CourseRequestInput {
   provisional?: ProvisionalVisit | null;
   /** Layout mode's sheet (docs/course-layout.md §1); absent in every other view. */
   layout?: LayoutRequest | null;
+  /**
+   * The event's automatic cuts (`course.getOverprintCuts`, course-layer.md §3.4). `false`: the
+   * layer draws no automatic slits or leg gaps, stored ones still apply. Absent = on.
+   */
+  autoCuts?: boolean;
 }
 
 /**
@@ -200,6 +205,7 @@ export function courseLayerRequest(input: CourseRequestInput): CourseLayerReques
     viewOptions: {
       labelMode: sequence ? "sequence" : "code",
       ...(allControls ? { allControls: true } : {}),
+      ...(input.autoCuts === false ? { autoCuts: false } : {}),
       ...(input.layout
         ? { overprintScale: input.layout.overprintScale, window: course.mapLayerWindow(input.layout.page), ...(input.layout.page.textValues ? { textValues: input.layout.page.textValues } : {}) }
         : {}),

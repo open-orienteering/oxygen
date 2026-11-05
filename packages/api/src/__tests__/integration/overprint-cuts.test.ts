@@ -253,6 +253,16 @@ describe("automatic overprint cuts in editor geometry", () => {
     const off = await caller.course.setOverprintCuts({ enabled: false });
     expect(off.enabled).toBe(false);
     expect((await caller.course.getOverprintCuts()).enabled).toBe(false);
+    // Kiosk-readable: every map view's GL course layer follows the toggle (course-layer.md §3.4).
+    const key = `k-cuts-${randomBytes(4).toString("hex")}`;
+    await ctx.db.event.update({ where: { id: ctx.eventId }, data: { kioskKey: key } });
+    try {
+      const kiosk = makeCaller({ ...ctx.event, kioskKey: key }, { user: null, authEnabled: true, authMode: "proxy", kioskKey: key });
+      expect((await kiosk.course.getOverprintCuts()).enabled).toBe(false);
+      await expect(kiosk.course.setOverprintCuts({ enabled: true })).rejects.toThrow();
+    } finally {
+      await ctx.db.event.update({ where: { id: ctx.eventId }, data: { kioskKey: null } });
+    }
 
     geom = await storedGeometry(course.id);
     expect(

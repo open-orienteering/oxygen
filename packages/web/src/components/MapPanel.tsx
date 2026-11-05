@@ -212,6 +212,13 @@ function MapPanelImpl({
   const vectorFellBack =
     mapPipeline.data?.pipeline === "vector" && !!mapMetadata.data?.documentHash && drawPipeline === "legacy";
   const onVectorUnavailable = useCallback(() => setVectorUnavailable(true), []);
+  // The event's automatic cuts (course-layer.md §3.4): the GL course layer
+  // follows the toggle as the stored geometry does. The editors' toggle
+  // refetches this same query. Until it answers, cuts are on.
+  const overprintCuts = trpc.course.getOverprintCuts.useQuery(undefined, {
+    staleTime: Number.POSITIVE_INFINITY,
+    enabled: !!mapMetadata.data?.documentHash,
+  });
   const controlCoords = trpc.course.controlCoordinates.useQuery(undefined, {
     staleTime: Number.POSITIVE_INFINITY,
   });
@@ -913,6 +920,7 @@ function MapPanelImpl({
           courses={courseOverlays}
           courseGeometry={courseGeometry}
           courseObjects={courseObjectsInView}
+          autoCuts={overprintCuts.data?.enabled !== false}
           coursesWithGeometry={coursesWithGeometry}
           highlightControlId={highlightControlId ? String(highlightControlId) : undefined}
           highlightCourseName={highlightCourseName}

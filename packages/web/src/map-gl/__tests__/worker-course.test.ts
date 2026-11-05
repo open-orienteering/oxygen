@@ -70,6 +70,25 @@ describe("course-layer load (docs/map-rendering.md §5.2 Dynamic bucket)", () =>
   });
 });
 
+describe("course request → the event's auto cuts (course-layer.md §3.4)", () => {
+  it("the document's cut features slit a circle on their rim; `viewOptions.autoCuts: false` drops the slit, a stored circle gap stays", () => {
+    const h = harness();
+    // On control 31's rim (40/10, R 2.5 mm at 1:15 000).
+    const m = loaded(h, load({ source: { kind: "document", bytes: documentBytes(isomStack(), { boulder: { x: 42.5, y: 10 } }), options: { unmatched: "proxy" } } }));
+    expect(m.summary.courseLayer).toEqual({ supported: true, cutFeatures: 1 });
+    const cutsOf = (req: CourseLayerRequest, id = "31") => {
+      h.w.handle({ type: "course", generation: 1, input: req });
+      const reply = h.sent[h.sent.length - 1].msg as CourseReply;
+      return reply.derivation!.sites.find((s) => s.id === id)!.cuts;
+    };
+    expect(cutsOf(request())).toHaveLength(1);
+    expect(cutsOf(request({ viewOptions: { labelMode: "sequence", autoCuts: false } }))).toEqual([]);
+    const gap = { start: 80, end: 100 };
+    const withGap = request({ viewOptions: { labelMode: "sequence", autoCuts: false } });
+    expect(cutsOf({ ...withGap, sites: withGap.sites.map((s) => (s.id === "32" ? { ...s, circleGaps: [gap] } : s)) }, "32")).toEqual([gap]);
+  });
+});
+
 describe("course request → the dynamic bucket", () => {
   const ask = (h: ReturnType<typeof harness>, input: CourseLayerRequest | null, generation = 1): CourseReply => {
     h.w.handle({ type: "course", generation, input });

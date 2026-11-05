@@ -40,6 +40,12 @@ describe("courseLayerRequest (docs/course-layer.md §5)", () => {
     expect(r.viewOptions).toEqual({ labelMode: "code", allControls: true });
   });
 
+  it("the event's auto cuts off go on the view options; on or absent adds no key (course-layer.md §3.4)", () => {
+    expect(courseLayerRequest(base({ autoCuts: false })).viewOptions.autoCuts).toBe(false);
+    expect("autoCuts" in courseLayerRequest(base({ autoCuts: true })).viewOptions).toBe(false);
+    expect("autoCuts" in courseLayerRequest(base()).viewOptions).toBe(false);
+  });
+
   it("sequence numbers only for one ordered course with descriptions or the editor", () => {
     expect(courseLayerRequest(base()).viewOptions.labelMode).toBe("sequence");
     expect(courseLayerRequest(base({ sequenceLabels: false })).viewOptions.labelMode).toBe("code");
