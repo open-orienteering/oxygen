@@ -5,12 +5,14 @@
  *     (the mm↔WGS84 affine comes from the map's calibration metadata,
  *     not from existing control positions — regression for the "clicking
  *     the map does nothing on a new event" bug).
- *   - Start and finish controls can be placed from the context menu
+ *   - Start and finish controls can be placed from the action bar
  *     (code-less rows, auto-named Start N / Mål N).
  *   - Multiple starts: a course can be pointed at a specific start.
  */
 import { test, expect, type Page } from "@playwright/test";
 import { reseed } from "./helpers/reseed";
+import { waitForTrpc } from "./helpers/trpc";
+import { clickMap, emptyPoint, newCourse, selectedCode, viewSettled } from "./helpers/editor";
 
 test.describe("editor start/finish on a fresh event", () => {
   test.beforeAll(async () => {
@@ -20,8 +22,8 @@ test.describe("editor start/finish on a fresh event", () => {
   test("place start/control/finish from scratch, reassign multi-start", async ({
     page,
   }) => {
-    // The map upload waits up to 60 s for server-side tile rendering,
-    // which the 30 s default would cut short.
+    // The map upload waits up to 60 s for the map's import, which the
+    // 30 s default would cut short.
     test.setTimeout(120_000);
     const stamp = Date.now();
     const eventName = `E2E StartFinish ${stamp}`;
@@ -44,59 +46,62 @@ test.describe("editor start/finish on a fresh event", () => {
     });
 
     await clickTab(page, "Course Editor");
-    await expect(page.getByTestId("course-editor-page")).toBeVisible({
-      timeout: 10000,
+    // The new editor (the stack is `vector`, docs/map-pipeline-switch.md §5).
+    // No sites yet, so `editorReady` (which waits for one) does not apply.
+    await expect(page.getByTestId("editor-page")).toBeVisible({ timeout: 15000 });
+    const viewer = page.getByTestId("map-viewer");
+    await expect(viewer).toHaveAttribute("data-editor-hit", "shared", { timeout: 60000 });
+    await expect(page.getByTestId("map-vector-layer")).toHaveAttribute("data-ready", "true", {
+      timeout: 60000,
     });
-    await expect(page.getByTestId("map-viewer")).toBeVisible({ timeout: 60000 });
 
     // A click on the empty map must produce a phantom even though no
     // control exists to derive the transform from.
     await clickEmptySpot(page);
     await page.getByTestId("editor-action-add-start").click();
-    await expect(hitByCode(page, "Start 1")).toBeAttached({ timeout: 15000 });
+    await expect(siteByCode(page, "Start 1")).toBeAttached({ timeout: 15000 });
     await page.keyboard.press("Escape");
 
     await clickEmptySpot(page);
     await page.getByTestId("editor-action-add-finish").click();
-    await expect(hitByCode(page, "Mål 1")).toBeAttached({ timeout: 15000 });
+    await expect(siteByCode(page, "Mål 1")).toBeAttached({ timeout: 15000 });
     await page.keyboard.press("Escape");
 
     // Create a course and add one numbered control to it.
-    await page.getByTestId("editor-new-course-name").fill("Bana A");
-    await page.getByTestId("editor-create-course").click();
-    await expect(
-      page.getByTestId("editor-course-item").filter({ hasText: "Bana A" }),
-    ).toBeVisible({ timeout: 15000 });
+    await newCourse(page, "Bana A");
 
     await clickEmptySpot(page);
+    const created = waitForTrpc(page, "control.create");
     await page.getByTestId("editor-action-add-to-course").click();
-    await expect(page.getByTestId("editor-selected-info")).toBeVisible({
-      timeout: 15000,
-    });
+    await created;
+    await expect(selectedCode(page)).toBeVisible({ timeout: 15000 });
     await page.keyboard.press("Escape");
 
     // Sequence shows start + control + finish.
+    const start1 = await siteId(page, "Start 1");
+    const finish1 = await siteId(page, "Mål 1");
     const seqRows = page.getByTestId("editor-seq-row");
     await expect(seqRows).toHaveCount(3, { timeout: 15000 });
     await expect(seqRows.nth(0)).toHaveAttribute("data-kind", "start");
-    await expect(seqRows.nth(0)).toHaveAttribute("data-code", "Start 1");
+    await expect(seqRows.nth(0)).toHaveAttribute("data-control-id", start1);
     await expect(seqRows.nth(1)).toHaveAttribute("data-kind", "control");
     await expect(seqRows.nth(2)).toHaveAttribute("data-kind", "finish");
-    await expect(seqRows.nth(2)).toHaveAttribute("data-code", "Mål 1");
+    await expect(seqRows.nth(2)).toHaveAttribute("data-control-id", finish1);
 
     // Second start; the freshly placed control is selected, so the
-    // context menu directly offers assigning it to the selected course.
+    // action bar directly offers assigning it to the selected course.
     await clickEmptySpot(page);
     await page.getByTestId("editor-action-add-start").click();
-    await expect(hitByCode(page, "Start 2")).toBeAttached({ timeout: 15000 });
+    await expect(siteByCode(page, "Start 2")).toBeAttached({ timeout: 15000 });
+    const start2 = await siteId(page, "Start 2");
     await page.getByTestId("editor-action-use-as-start").click();
-    await expect(seqRows.nth(0)).toHaveAttribute("data-code", "Start 2", {
+    await expect(seqRows.nth(0)).toHaveAttribute("data-control-id", start2, {
       timeout: 15000,
     });
 
     // Undo the assignment → back to the default Start 1.
     await page.getByTestId("editor-undo").click();
-    await expect(seqRows.nth(0)).toHaveAttribute("data-code", "Start 1", {
+    await expect(seqRows.nth(0)).toHaveAttribute("data-control-id", start1, {
       timeout: 15000,
     });
   });
@@ -117,45 +122,29 @@ async function clickTab(page: Page, name: string) {
   }
 }
 
-function hitByCode(page: Page, code: string) {
-  return page.locator(
-    `[data-testid="editor-control-hit"][data-control-code="${code}"]`,
-  );
+/** An editor site by its code or start / finish name (the viewer's `editor-site` mirror). */
+function siteByCode(page: Page, code: string) {
+  return page.locator(`[data-testid="editor-site"][data-control-code="${code}"]`);
 }
 
-/** Click a map point away from existing controls and the overlay cards. */
+async function siteId(page: Page, code: string): Promise<string> {
+  return (await siteByCode(page, code).getAttribute("data-control-id"))!;
+}
+
+/**
+ * Click a map point away from every site, leg and the editor's chrome; a
+ * phantom appears. With one or two sites the editor's fit zooms far in and
+ * a start triangle or finish ring spans a few hundred px, more than
+ * `emptyPoint`'s clearance: zoom out until 6 mm of paper is at most 100 px.
+ */
 async function clickEmptySpot(page: Page) {
   const viewer = page.getByTestId("map-viewer");
-  await expect(viewer).toBeVisible({ timeout: 20000 });
-  const box = await viewer.boundingBox();
-  if (!box) throw new Error("map viewer has no box");
-  const obstacles: Array<{ x: number; y: number; w: number; h: number }> = [];
-  for (const testId of ["editor-map-course-selector", "editor-inventory-panel"]) {
-    const overlay = page.getByTestId(testId);
-    const card = (await overlay.isVisible()) ? await overlay.boundingBox() : null;
-    if (card) obstacles.push({ x: card.x, y: card.y, w: card.width, h: card.height });
+  for (let i = 0; i < 6; i++) {
+    await viewSettled(page);
+    if (Number(await viewer.getAttribute("data-px-per-um")) * 6000 <= 100) break;
+    await viewer.getByTitle("Zoom out").click();
   }
-  const hits = page.getByTestId("editor-control-hit");
-  const n = await hits.count();
-  for (let i = 0; i < n; i++) {
-    const b = await hits.nth(i).boundingBox();
-    if (b) obstacles.push({ x: b.x, y: b.y, w: b.width, h: b.height });
-  }
-
-  let spot: { x: number; y: number } | null = null;
-  for (let gy = 4; gy <= 16 && !spot; gy++) {
-    for (let gx = 4; gx <= 16 && !spot; gx++) {
-      const x = box.x + (box.width * gx) / 20;
-      const y = box.y + (box.height * gy) / 20;
-      const near = obstacles.some(
-        (h) =>
-          x >= h.x - 12 && x <= h.x + h.w + 12 && y >= h.y - 12 && y <= h.y + h.h + 12,
-      );
-      if (!near) spot = { x, y };
-    }
-  }
-  if (!spot) throw new Error("no empty map point found");
-  await page.mouse.click(spot.x, spot.y);
+  await clickMap(page, await emptyPoint(page));
   await expect(page.getByTestId("editor-phantom")).toBeAttached({
     timeout: 10000,
   });

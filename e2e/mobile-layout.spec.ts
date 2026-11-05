@@ -1,7 +1,7 @@
 /**
  * Mobile layout and touch gesture regressions.
  */
-import { test, expect, type MapPipeline } from "./helpers/map-pipeline";
+import { test, expect, setEditorVector, type MapPipeline } from "./helpers/map-pipeline";
 import type { Locator, Page } from "@playwright/test";
 import { reseed } from "./helpers/reseed";
 import { uploadEventMap } from "./helpers/map-upload";
@@ -16,8 +16,10 @@ test.describe.serial("mobile layout", () => {
   test.beforeAll(async () => {
     await reseed();
   });
+  // The template part of "… toolbars fit a phone" turns the new editor off.
+  test.afterAll(() => setEditorVector(null));
 
-  test("compact header, map footer gating, editor dismiss", async ({ page }) => {
+  test("compact header, map footer gating, editor dismiss", async ({ page, mapPipeline }) => {
     test.setTimeout(120_000);
     await page.goto("/");
     await page.getByText("My example tävling").click();
@@ -93,6 +95,13 @@ test.describe.serial("mobile layout", () => {
     }
 
     await clickTab(page, "Course Editor");
+    if (mapPipeline === "vector") {
+      // The new editor on a phone (docs/map-pipeline-switch.md §5); its
+      // chrome and gestures are field-mode.spec.ts's and the touch describe
+      // of course-editor.spec.ts.
+      await expect(page.getByTestId("editor-page")).toHaveAttribute("data-layout", "phone", { timeout: 15000 });
+      return;
+    }
     await expect(page.getByTestId("course-editor-page")).toBeVisible({ timeout: 15000 });
     await expect(
       page.getByTestId("map-panel").getByRole("button", { name: "Replace map" }),
@@ -104,7 +113,11 @@ test.describe.serial("mobile layout", () => {
     await expect(page.getByTestId("editor-phantom")).toHaveCount(0);
   });
 
-  test("editor control tap-select and touch drag", async ({ page }) => {
+  test("editor control tap-select and touch drag", async ({ page, mapPipeline }) => {
+    // The legacy editor's SVG hit targets; the new editor's tap select and
+    // one-finger move are course-editor.spec.ts "Course mode on a phone…",
+    // two fingers over a control field-mode.spec.ts "two fingers cancel…".
+    test.skip(mapPipeline === "vector", "legacy editor only; the new editor's is course-editor.spec.ts (touch)");
     test.setTimeout(120_000);
     await page.goto("/");
     await page.getByText("My example tävling").click();
@@ -232,8 +245,13 @@ test.describe.serial("mobile layout", () => {
     }
   });
 
-  test("editor, template and controls toolbars fit a phone", async ({ page }) => {
+  test("editor, template and controls toolbars fit a phone", async ({ page, mapPipeline }) => {
     test.setTimeout(120_000);
+    // Under `vector` the course editor is the new one, whose phone chrome is
+    // field-mode.spec.ts "opens in Field mode … compact chrome"; the flag goes
+    // off so the template's *Edit layout* still opens `MapLayoutEditor`
+    // (until E3).
+    if (mapPipeline === "vector") await setEditorVector(false);
     await page.goto("/");
     await page.getByText("My example tävling").click();
     await expect(page.getByRole("link", { name: "Dashboard" })).toBeVisible({
@@ -243,48 +261,7 @@ test.describe.serial("mobile layout", () => {
     await expect(page.getByTestId("map-viewer").first()).toBeVisible({ timeout: 60000 });
 
     // ── Course editor: icon-only toggles, touch-sized undo/redo, one row.
-    await clickTab(page, "Course Editor");
-    await expect(page.getByTestId("course-editor-page")).toBeVisible({ timeout: 15000 });
-    const mapToolbar = page.getByTestId("map-toolbar");
-    await expect(mapToolbar).toBeVisible();
-    const toolbarBox = (await mapToolbar.boundingBox())!;
-    expect(toolbarBox.x + toolbarBox.width).toBeLessThanOrEqual(390);
-    // Every control sits inside the toolbar's own box — nothing spills
-    // over or overlaps a neighbour (the "Auto slits" over "Descriptions"
-    // bug).
-    const controls = [
-      page.getByTestId("editor-undo"),
-      page.getByTestId("editor-redo"),
-      page.getByTestId("editor-hide-others"),
-      page.getByTestId("editor-toggle-cuts"),
-      page.getByTestId("map-toggle-descriptions"),
-    ];
-    const boxes = [];
-    for (const control of controls) {
-      await expect(control).toBeVisible();
-      const box = (await control.boundingBox())!;
-      expect(box.x).toBeGreaterThanOrEqual(toolbarBox.x);
-      expect(box.x + box.width).toBeLessThanOrEqual(toolbarBox.x + toolbarBox.width + 0.5);
-      boxes.push(box);
-    }
-    for (let i = 1; i < boxes.length; i++) {
-      expect(boxes[i].x, `control ${i} overlaps its neighbour`).toBeGreaterThanOrEqual(
-        boxes[i - 1].x + boxes[i - 1].width - 0.5,
-      );
-    }
-    // Undo / redo are real touch targets now, not 12px glyphs.
-    expect(boxes[0].height).toBeGreaterThanOrEqual(36);
-    expect(boxes[0].width).toBeGreaterThanOrEqual(36);
-    // Labels collapse to icons below `sm`; the accessible names stay.
-    await expect(page.getByTestId("editor-toggle-cuts").getByText("Auto slits")).toBeHidden();
-    await expect(
-      page.getByTestId("editor-hide-others").getByText("Hide other controls"),
-    ).toBeHidden();
-    await expect(page.getByRole("button", { name: "Auto slits" })).toBeVisible();
-    await expect(page.getByRole("button", { name: "Descriptions" })).toBeVisible();
-    // The per-event "north lines under purple" checkbox is gone from the
-    // editor; it stays a club-library map setting.
-    await expect(page.getByTestId("map-north-lines-below")).toHaveCount(0);
+    if (mapPipeline === "legacy") await legacyEditorToolbarFits(page);
 
     // ── Controls page: the AIR+ / station-mode row wraps instead of
     // pushing the page wider than the screen.
@@ -617,6 +594,52 @@ async function twoFingerGesture(
     gesture,
   );
   await page.waitForTimeout(50);
+}
+
+/** The legacy course editor's toolbar on a phone (`CourseEditorPage`, until E3). */
+async function legacyEditorToolbarFits(page: Page) {
+  await clickTab(page, "Course Editor");
+  await expect(page.getByTestId("course-editor-page")).toBeVisible({ timeout: 15000 });
+  const mapToolbar = page.getByTestId("map-toolbar");
+  await expect(mapToolbar).toBeVisible();
+  const toolbarBox = (await mapToolbar.boundingBox())!;
+  expect(toolbarBox.x + toolbarBox.width).toBeLessThanOrEqual(390);
+  // Every control sits inside the toolbar's own box — nothing spills
+  // over or overlaps a neighbour (the "Auto slits" over "Descriptions"
+  // bug).
+  const controls = [
+    page.getByTestId("editor-undo"),
+    page.getByTestId("editor-redo"),
+    page.getByTestId("editor-hide-others"),
+    page.getByTestId("editor-toggle-cuts"),
+    page.getByTestId("map-toggle-descriptions"),
+  ];
+  const boxes = [];
+  for (const control of controls) {
+    await expect(control).toBeVisible();
+    const box = (await control.boundingBox())!;
+    expect(box.x).toBeGreaterThanOrEqual(toolbarBox.x);
+    expect(box.x + box.width).toBeLessThanOrEqual(toolbarBox.x + toolbarBox.width + 0.5);
+    boxes.push(box);
+  }
+  for (let i = 1; i < boxes.length; i++) {
+    expect(boxes[i].x, `control ${i} overlaps its neighbour`).toBeGreaterThanOrEqual(
+      boxes[i - 1].x + boxes[i - 1].width - 0.5,
+    );
+  }
+  // Undo / redo are real touch targets now, not 12px glyphs.
+  expect(boxes[0].height).toBeGreaterThanOrEqual(36);
+  expect(boxes[0].width).toBeGreaterThanOrEqual(36);
+  // Labels collapse to icons below `sm`; the accessible names stay.
+  await expect(page.getByTestId("editor-toggle-cuts").getByText("Auto slits")).toBeHidden();
+  await expect(
+    page.getByTestId("editor-hide-others").getByText("Hide other controls"),
+  ).toBeHidden();
+  await expect(page.getByRole("button", { name: "Auto slits" })).toBeVisible();
+  await expect(page.getByRole("button", { name: "Descriptions" })).toBeVisible();
+  // The per-event "north lines under purple" checkbox is gone from the
+  // editor; it stays a club-library map setting.
+  await expect(page.getByTestId("map-north-lines-below")).toHaveCount(0);
 }
 
 async function clickTab(page: Page, name: string) {

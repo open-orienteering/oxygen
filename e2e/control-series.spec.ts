@@ -1,5 +1,7 @@
 import { test, expect, type Page } from "@playwright/test";
 import { reseed } from "./helpers/reseed";
+import { waitForTrpc } from "./helpers/trpc";
+import { editorReady, placeOneShot, select, selectedCode } from "./helpers/editor";
 
 test.describe("club control series", () => {
   test.beforeAll(async () => {
@@ -14,7 +16,7 @@ test.describe("club control series", () => {
     page,
   }) => {
     // Includes a course import and a map upload, which wait up to 60 s
-    // for server-side tile rendering — more than the 30 s default.
+    // for the map's import — more than the 30 s default.
     test.setTimeout(120_000);
     await page.goto("/");
     await page.getByTestId("settings-link").click();
@@ -60,7 +62,7 @@ test.describe("club control series", () => {
     await openEditor(page);
 
     await placeControl(page);
-    await page.getByTestId("editor-inventory-panel").getByRole("button").click();
+    await page.getByTestId("editor-inventory-panel-toggle").click();
     await expect(page.getByTestId("editor-inventory-code-31")).toHaveAttribute(
       "data-used",
       "true",
@@ -74,36 +76,30 @@ test.describe("club control series", () => {
     // takes 40 even though 32 is free in the higher-priority own series.
     await page.getByTestId("editor-alloc-series").selectOption({ label: "Lent" });
     await placeControl(page);
-    await expect(
-      page.locator('[data-testid="editor-control-hit"][data-control-code="40"]'),
-    ).toBeAttached({ timeout: 15000 });
+    await expect(siteByCode(page, "40")).toBeAttached({ timeout: 15000 });
     await expect(page.getByTestId("editor-inventory-code-32")).toHaveAttribute(
       "data-used",
       "false",
     );
     await page.getByTestId("editor-alloc-series").selectOption({ index: 0 });
 
-    await page
-      .locator('[data-testid="editor-control-hit"][data-control-code="31"]')
-      .click();
+    await select(page, "31");
     await page.getByTestId("editor-action-radio").click();
     await expect(page.getByTestId("editor-context-info")).toContainText(
       "Swap code 31 → 33",
     );
     await page.getByTestId("editor-action-radio-swap-confirm").click();
-    await expect(
-      page.locator('[data-testid="editor-control-hit"][data-control-code="33"]'),
-    ).toBeAttached({ timeout: 15000 });
+    await expect(siteByCode(page, "33")).toBeAttached({ timeout: 15000 });
 
     await clickTab(page, "Controls");
     let row33 = page.getByRole("row").filter({ hasText: /^33\b/ }).first();
     await expect(row33.getByText("Internal Radio")).toBeVisible({ timeout: 15000 });
 
     await openEditor(page);
-    await page
-      .locator('[data-testid="editor-control-hit"][data-control-code="33"]')
-      .click();
+    await select(page, "33");
+    const radioOff = waitForTrpc(page, "control.upsertConfig");
     await page.getByTestId("editor-action-radio").click();
+    await radioOff;
     await clickTab(page, "Controls");
     row33 = page.getByRole("row").filter({ hasText: /^33\b/ }).first();
     await expect(row33.getByRole("cell").nth(4)).toHaveText("—", {
@@ -114,17 +110,13 @@ test.describe("club control series", () => {
     for (let i = 0; i < 3; i++) {
       await placeControl(page);
     }
-    for (const code of [31, 32, 33, 40, 41]) {
-      await expect(
-        page.locator(`[data-testid="editor-control-hit"][data-control-code="${code}"]`),
-      ).toBeAttached({ timeout: 15000 });
+    for (const code of ["31", "32", "33", "40", "41"]) {
+      await expect(siteByCode(page, code)).toBeAttached({ timeout: 15000 });
     }
 
     await placeControl(page);
     await expect(page.getByTestId("series-exhausted")).toBeVisible({ timeout: 15000 });
-    await expect(
-      page.locator(`[data-testid="editor-control-hit"][data-control-code="34"]`),
-    ).toBeAttached({ timeout: 15000 });
+    await expect(siteByCode(page, "34")).toBeAttached({ timeout: 15000 });
   });
 });
 
@@ -157,46 +149,20 @@ async function importCoursesAndMap(page: Page) {
   await expect(page.getByTestId("map-viewer")).toBeVisible({ timeout: 60000 });
 }
 
+/** The new course editor (docs/course-editor.md), its course layer drawn and the view settled. */
 async function openEditor(page: Page) {
   await clickTab(page, "Course Editor");
-  await expect(page.getByTestId("course-editor-page")).toBeVisible({ timeout: 10000 });
-  await expect(page.getByTestId("map-viewer")).toBeVisible({ timeout: 60000 });
-  await expect(page.getByTestId("editor-control-hit").first()).toBeAttached({ timeout: 30000 });
+  await editorReady(page);
 }
 
-async function placeControl(page: Page) {
-  const viewer = page.getByTestId("map-viewer");
-  await expect(viewer).toBeVisible({ timeout: 20000 });
-  const box = await viewer.boundingBox();
-  if (!box) throw new Error("map viewer has no box");
-  const hitBoxes: Array<{ x: number; y: number; w: number; h: number }> = [];
-  for (const testId of ["editor-map-course-selector", "editor-inventory-panel"]) {
-    const overlay = page.getByTestId(testId);
-    const card = (await overlay.isVisible()) ? await overlay.boundingBox() : null;
-    if (card) hitBoxes.push({ x: card.x, y: card.y, w: card.width, h: card.height });
-  }
-  const hits = page.getByTestId("editor-control-hit");
-  const n = await hits.count();
-  for (let i = 0; i < n; i++) {
-    const b = await hits.nth(i).boundingBox();
-    if (b) hitBoxes.push({ x: b.x, y: b.y, w: b.width, h: b.height });
-  }
+/** An editor site by control code (the viewer's `editor-site` mirror). */
+function siteByCode(page: Page, code: string) {
+  return page.locator(`[data-testid="editor-site"][data-control-code="${code}"]`);
+}
 
-  let spot: { x: number; y: number } | null = null;
-  for (let gy = 4; gy <= 16 && !spot; gy++) {
-    for (let gx = 4; gx <= 16 && !spot; gx++) {
-      const x = box.x + (box.width * gx) / 20;
-      const y = box.y + (box.height * gy) / 20;
-      const near = hitBoxes.some(
-        (h) => x >= h.x - 12 && x <= h.x + h.w + 12 && y >= h.y - 12 && y <= h.y + h.h + 12,
-      );
-      if (!near) spot = { x, y };
-    }
-  }
-  if (!spot) throw new Error("no empty map point found");
-  await page.mouse.click(spot.x, spot.y);
-  await expect(page.getByTestId("editor-phantom")).toBeAttached({ timeout: 10000 });
-  await page.getByTestId("editor-action-add").click();
-  await expect(page.getByTestId("editor-selected-info")).toBeVisible({ timeout: 15000 });
+/** In `V`: a control on an empty map point, then Escape drops the selection. */
+async function placeControl(page: Page) {
+  await placeOneShot(page);
   await page.keyboard.press("Escape");
+  await expect(selectedCode(page)).toHaveCount(0);
 }

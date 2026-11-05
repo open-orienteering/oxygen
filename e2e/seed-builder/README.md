@@ -27,6 +27,11 @@ All builders share `shared.ts` for MeOS-time helpers, status-enum
 conversion, and the `recreateEvent` primitive that wipes an event and
 re-creates it from scratch.
 
+Every seed event is `map_pipeline = vector`, and `seed-all.ts` seeds the
+instance flags `map.pipeline.default = vector` and `map.editor.vector =
+true` (`seedMapDefaults`): the E2E stack runs on the vector pipeline and
+the new course editor (`docs/map-pipeline-switch.md` §5).
+
 ## Usage
 
 ### Automatic (typical)

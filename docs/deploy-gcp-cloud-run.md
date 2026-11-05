@@ -191,6 +191,18 @@ Cloud Run keeps the previous revision; roll back by deploying an older
 tag (`./deploy.sh v1.2.2` or `sha-…`) or with
 `gcloud run services update-traffic`.
 
+The database is reachable only from Cloud Run. For a one-off query (a
+release preflight, an instance flag in `oxygen.settings`), run a small Node
+script as a job with the service's secret and the image's `pg` client:
+
+```bash
+scripts/gcp/db-job.sh scripts/gcp/jobs/map-survey.js --tag v0.5.0
+scripts/gcp/db-job.sh my-script.js --env KEY=VALUE   # extra env for the script
+```
+
+It prints the script's output from this execution's log. Scripts in
+`scripts/gcp/jobs/` are read-only unless they say otherwise.
+
 ## Competition runbook
 
 ```bash

@@ -1,4 +1,5 @@
 import { test, expect, type Browser, type Page } from "@playwright/test";
+import { uploadEventMap } from "./helpers/map-upload";
 
 async function inviteUser(page: Page, email: string) {
   await page.goto("/settings?tab=users");
@@ -34,6 +35,8 @@ test.describe("event permissions", () => {
   let kioskHref = "";
 
   test.beforeAll(async ({ browser }: { browser: Browser }) => {
+    // The map upload below waits for the document import.
+    test.setTimeout(120_000);
     const page = await browser.newPage();
     await inviteUser(page, setterEmail);
     await inviteUser(page, memberEmail);
@@ -46,6 +49,10 @@ test.describe("event permissions", () => {
       timeout: 15000,
     });
     nameId = new URL(page.url()).pathname.split("/").filter(Boolean)[0];
+    // A map, so the course editor route mounts the new editor (a `vector`
+    // event with a pinned document; docs/map-pipeline-switch.md §3.6, §5).
+    await uploadEventMap(page);
+    await expect(page.getByTestId("map-viewer").first()).toBeVisible({ timeout: 60000 });
 
     await page.goto(`/${nameId}/event`);
     await grantRole(page, setterEmail, "Course setter");
@@ -87,11 +94,11 @@ test.describe("event permissions", () => {
       extraHTTPHeaders: { "x-forwarded-email": setterEmail },
     });
     const page = await ctx.newPage();
-    await page.goto("/itest/course-editor");
-    await expect(page.getByTestId("course-editor-page")).toBeVisible({
+    await page.goto(`/${nameId}/course-editor`);
+    await expect(page.getByTestId("editor-page")).toBeVisible({
       timeout: 15000,
     });
-    await expect(page.getByTestId("course-editor-toolbar")).toBeVisible();
+    await expect(page.getByTestId("editor-tool-rail")).toBeVisible();
     await ctx.close();
   });
 
@@ -261,7 +268,7 @@ test.describe("event permissions", () => {
     });
     const memberPage = await ctx.newPage();
     await memberPage.goto(`/${nameId}/course-editor`);
-    await expect(memberPage.getByTestId("course-editor-page")).toBeVisible({
+    await expect(memberPage.getByTestId("editor-page")).toBeVisible({
       timeout: 15000,
     });
     await ctx.close();
