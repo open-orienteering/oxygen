@@ -231,9 +231,12 @@ value (09 §3, §10). `playwright.config.ts`:
   (the print path and the layout editor's `window.png`, C3; it uploads
   the map through `course.uploadMap` so both projects have a pinned
   document).
-- Projects `map-legacy` and `map-vector` match exactly those files with
-  `use: { mapPipeline }`; `chromium` ignores them and runs everything
-  else once.
+- `VECTOR_ONLY_SPECS` — `course-editor.spec.ts` (D10): the new course
+  editor, which exists for `vector` only; project `map-vector` runs it on
+  the desktop, `map-legacy` and `chromium` never do.
+- Projects `map-legacy` and `map-vector` match the `MAP_PIPELINE_SPECS`
+  with `use: { mapPipeline }` (`map-vector` the `VECTOR_ONLY_SPECS` too);
+  `chromium` ignores all three lists and runs everything else once.
 - Those specs import `test` / `expect` from `e2e/helpers/map-pipeline.ts`.
   Its auto fixture writes the project's value to every event's
   `map_pipeline` and to `map.pipeline.default` before each test (after
@@ -245,17 +248,26 @@ value (09 §3, §10). `playwright.config.ts`:
   `setMapPipeline(value, nameId?)` / `setAllowLegacy(...)` from the same
   helper (`map-vector-layer.spec.ts`, `map-pipeline-switch.spec.ts`).
   `reseed()` deletes the `map.pipeline.*` and `map.editor.*` settings.
-- `MOBILE_SPECS` — `field-mode.spec.ts` (D9): project `mobile`
-  (`devices["Pixel 7"]`, `mapPipeline: "vector"`), the new editor on a
-  phone (`course-editor.md` §9, §10); it sets `map.editor.vector` itself
-  and has no `map-legacy` run (the new editor exists for `vector` only).
-  `chromium` ignores these files too. D10 adds the editor's touch subset.
-- `course-editor.spec.ts` (the new editor) runs in `chromium` and sets
-  `vector` and `map.editor.vector` itself (`setEditorVector`) until D10
-  moves it under `map-vector`; `course-editor-legacy.spec.ts` is the
-  frozen legacy spec (`chromium`, `legacy`, deleted in F). Two specs, not
-  one dual-run spec: the editors share no selectors (SLICES "Decided in
-  this split").
+- `MOBILE_SPECS` — `field-mode.spec.ts` (D9) and `course-editor.spec.ts`
+  (D10, its touch describe): project `mobile` (`devices["Pixel 7"]`,
+  `mapPipeline: "vector"`), the new editor on a phone (`course-editor.md`
+  §9, §10, "Tests"); no `map-legacy` run (the new editor exists for
+  `vector` only). `course-editor.spec.ts`'s desktop describes skip on the
+  phone and its touch describe on the desktop (`isMobile`);
+  `field-mode.spec.ts`'s "Field mode on a desktop" describe sets the
+  desktop device itself.
+- The editor specs set `map.editor.vector` themselves (`setEditorVector`
+  in `beforeAll`, removed in `afterAll`), not through the project: the flag
+  also turns the Maps page's *Edit layout* link to the new editor for a
+  `vector` event, which `course-maps.spec.ts` under `map-vector` must not
+  see. `course-editor-legacy.spec.ts` is the frozen legacy spec
+  (`chromium`, `legacy`, deleted in F). Two specs, not one dual-run spec:
+  the editors share no selectors (SLICES "Decided in this split").
+- A file run by more than one project counts once per project in the
+  sharding weights (`scripts/e2e-weights.mjs`, `docs/e2e-sharding.md`);
+  `scripts/__tests__/e2e-config.test.mjs` pins which projects run the
+  editor specs and fails when a multi-project file is not weighted per
+  project.
 - A dual-run spec that asserts on tiles branches on the `mapPipeline`
   fixture (`mobile-layout.spec.ts` "switching events resets viewport and
   tile state": tiles of the current event under `legacy`, the vector
@@ -275,7 +287,8 @@ value (09 §3, §10). `playwright.config.ts`:
 | `packages/api/src/__tests__/integration/map-tiles.test.ts` "skips the pre-cache for a vector event" | the poll answers `{0,0,false}` and renders nothing; a requested tile is served; no background crawl to other zooms |
 | `packages/web/src/lib/__tests__/map-pipeline.test.ts` | `resolveMapPipeline`: vector needs a document, unknown = legacy, WebGL2 fallback only while `allowLegacy`; `courseEditorMount` (§3.6): the flag, the pin, the event value, the fallback |
 | `packages/api/src/__tests__/integration/map-pipeline.test.ts` "reports map.editor.vector" | `event.mapPipeline` and `setMapPipeline` carry `editorVector` |
-| `e2e/course-editor.spec.ts` "mounts behind map.editor.vector" | flag off → `CourseEditorPage` on a `vector` event; on → the new editor |
+| `e2e/course-editor.spec.ts` "mounts behind map.editor.vector" (`map-vector`) | flag off → `CourseEditorPage` on a `vector` event; on → the new editor |
+| `scripts/__tests__/e2e-config.test.mjs` | §5: `course-editor.spec.ts` in `map-vector` and `mobile` only, `course-editor-legacy.spec.ts` in `chromium` only, `field-mode.spec.ts` in `mobile`; every multi-project file weighted per project |
 | `packages/api/src/__tests__/integration/course-maps.test.ts` "window.png under a pinned document" | the editor preview reads the document only for `vector` + pin; unpinned stays legacy |
 | `packages/api/src/__tests__/integration/course-maps.test.ts` "maps.pdf route switch" | `vector` + pin prints through the composer (`X-Print-Pipeline: vector`, no rsvg); `legacy`, unpinned and flipped-back events through rsvg; `CourseStackError` falls back |
 | `e2e/course-maps.spec.ts` | under `map-legacy` and `map-vector`: the maps page's PDF downloads (page count, A4 size) and `X-Print-Pipeline` equal to the project's value |
@@ -289,9 +302,6 @@ value (09 §3, §10). `playwright.config.ts`:
 - **`map.editor.vector`** (§1, §3.6) is removed in slice E.
 - **Admin UI for the instance flags**: none until slice E needs one.
 - **Dual-run list** grows with the slices that touch maps: candidates
-  `wide-screen-map-pane`, `kiosk-readout`; `course-editor.spec.ts`
-  joins `map-vector` (not the dual list, §5) in D10.
-  `scripts/e2e-sharded.mjs` weights do not yet count the second run of a
-  dual spec.
+  `wide-screen-map-pane`, `kiosk-readout`.
 - **Lost context recovery**: the panel falls back (or shows the message)
   and does not try the vector layer again until it remounts.
