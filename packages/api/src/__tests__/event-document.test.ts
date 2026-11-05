@@ -14,7 +14,7 @@ import { mapGeo } from "@oxygen/shared";
 import { loadEventCrs } from "../event-crs.js";
 import { loadEventCheckDocument, loadEventCutFeatures, loadEventMapObjects } from "../event-map-objects.js";
 import { frameFromOcadCrs, mapMmToWgs84, type OcadCrs } from "../map-projection.js";
-import { clearEventDocumentCaches, documentMapFileColumns, documentPaperFrame, reportNorth } from "../map-store/event-document.js";
+import { clearEventDocumentCaches, documentMapFileColumns, documentPaperFrame, reportNorth, sourceFrameFallback } from "../map-store/event-document.js";
 import { documentDbStub, importForStub, type StubDocument } from "./helpers/document-db-stub.js";
 
 const FIXTURE = resolve(__dirname, "../../../../e2e/test.ocd");
@@ -101,6 +101,20 @@ describe("the CRS_UNRESOLVED fallback", () => {
     expect(frame?.mapScale).toBe(legacyCrs.scale);
     expect(mapGeo.epsgOf(frame!)).toBeNull();
     expect(mapMmToWgs84(1, 1, frame!)).toBeNull();
+  });
+
+  it("finds no CRS in a source that is not OCAD, and remembers that", async () => {
+    const u = unresolved(doc);
+    const omap = Buffer.from('<?xml version="1.0"?><map xmlns="http://openorienteering.org/apps/mapper/xml/v2"/>');
+    const { db, reads } = documentDbStub([u], { [u.sourceHash]: omap }, { documentHash: u.hash, sourceHash: u.sourceHash });
+    const frame = await loadEventCrs(db, EVENT);
+    expect(frame?.mapScale).toBe(legacyCrs.scale);
+    expect(mapGeo.epsgOf(frame!)).toBeNull();
+    clearEventDocumentCaches();
+    const before = reads.blobs;
+    await sourceFrameFallback(db, u.sourceHash);
+    await sourceFrameFallback(db, u.sourceHash);
+    expect(reads.blobs - before).toBe(1);
   });
 
   it("is not read for a header with a CRS", async () => {

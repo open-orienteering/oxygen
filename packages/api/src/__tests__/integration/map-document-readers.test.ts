@@ -144,6 +144,22 @@ describe("no pinned document: no map", () => {
     }
   });
 
+  it("a rotation change without a pin stores only the correction", async () => {
+    const before = await ctx.db.mapFile.findFirstOrThrow({ where: { eventId: ctx.eventId } });
+    await ctx.db.mapFile.updateMany({ where: { eventId: ctx.eventId }, data: { documentHash: null } });
+    try {
+      await caller.course.setMapRotation({ degrees: 2 });
+      const after = await ctx.db.mapFile.findFirstOrThrow({ where: { eventId: ctx.eventId } });
+      expect(after.rotationCorrection).toBe(2);
+      expect(after.bounds).toEqual(before.bounds);
+      expect(after.calibration).toEqual(before.calibration);
+      expect(after.northOffset).toBe(before.northOffset);
+    } finally {
+      await ctx.db.mapFile.updateMany({ where: { eventId: ctx.eventId }, data: { documentHash } });
+      await caller.course.setMapRotation({ degrees: 0 });
+    }
+  });
+
   it("an event without a map answers null", async () => {
     const bare = await createTestEvent("document_readers_bare");
     try {

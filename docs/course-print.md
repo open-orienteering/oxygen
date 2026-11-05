@@ -745,8 +745,9 @@ document header's `mapScale`, `meridianTiltDeg` the report's
 document hash — the values the A11 dual write puts into the `map_files`
 columns. `document` is `{ hash }` on a `vector` event
 (`pinnedDocumentHash`) and `null` on a `legacy` one. Without a pin it
-throws "No base map uploaded" (`getBaseMapInfoOrNull` → null); the OCAD
-fallback is gone. C2 and C3 read this one function. The legacy
+throws "No base map uploaded" (`getBaseMapInfoOrNull` → null), and a pin
+whose `map_documents` row is missing throws "Pinned map document is
+missing" (both 400 on the routes); the OCAD fallback is gone. C2 and C3 read this one function. The legacy
 `window.png` cache keys on `version`, so a colour-stack change on a
 `legacy` event no longer changes the key within a process (E4a deletes
 the route).

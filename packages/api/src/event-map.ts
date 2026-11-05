@@ -322,10 +322,10 @@ export async function applyEventMap(
   // (`applyJobResult`, docs/map-storage.md §6.4): until then the event has
   // no frame to convert with.
 
-  // The editor-course rebuild waits for the import (up to the hold) so a
-  // `vector` event cuts against its newly pinned document
-  // (docs/course-layer.md §4); otherwise it uses the OCAD parse and the
-  // document's cuts follow with the next write.
+  // The editor-course rebuild waits for the import (up to the hold) so the
+  // event cuts against its newly pinned document (docs/course-layer.md
+  // §4.2); an import that outlives the hold leaves no pin to cut against,
+  // and the cuts follow with the next write after the pin.
   const job = await importJob;
 
   const editorCourses = await db.course.findMany({
