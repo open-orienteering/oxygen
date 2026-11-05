@@ -145,6 +145,9 @@ lives in the import report (`georeference`, `north`) and in the
 `map_files` quick-access columns, computed by `@oxygen/shared` `mapGeo`
 from these fields (`docs/map-import.md` §3.8). The operator's
 `rotation_correction` and the detected north lines are *not* here (02 §5).
+The server's readers of these fields (the event CRS for lengths, export,
+control lat/lng) and their one fallback for a `crs: null` header are
+`docs/map-storage.md` §4.6.
 
 ### 2.4 Objects: fixed-width `attrs` record, 24 bytes
 

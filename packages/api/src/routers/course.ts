@@ -1223,13 +1223,15 @@ export const courseRouter = router({
     const resolvedProfile = colorProfile === "auto"
       ? (scale != null && scale > 0 && scale <= 5000 ? "issprom" : "isom")
       : colorProfile;
-    // Typed as before so the web's `file-colour` branch (E4a) still compiles; never produced now.
-    const resolvedBy: ColorStackResolvedBy =
+    // Widened to the old type so the web's `file-colour` branch (E4a)
+    // still compiles; it is never produced now.
+    const resolvedBy = (
       colorProfile === "auto"
         ? scale != null
           ? "scale"
           : "default"
-        : "explicit";
+        : "explicit"
+    ) as ColorStackResolvedBy;
 
     return {
       scale,

@@ -491,7 +491,8 @@ back to `legacy` and the same rows print through rsvg.
 | Event | Path | `X-Print-Pipeline` |
 |---|---|---|
 | `map_pipeline = vector` and the latest `map_files` row pins a document | the composer, §8.2 | `vector` |
-| `legacy`, or `vector` without a pin | SVG → `rsvg-convert` → pdf-lib merge, as before slice C (`docs/course-maps.md` "Rendering pipeline") | `legacy` |
+| `legacy` with a pin | SVG → `rsvg-convert` → pdf-lib merge, as before slice C (`docs/course-maps.md` "Rendering pipeline"); scale and tilt from the document (§10.1) | `legacy` |
+| no pin | 400 "No base map uploaded" (slice E1) | — |
 | `vector` with a pin whose colour stack is not aligned (`course.CourseStackError`: no lower / upper purple) | the legacy path, with one `warn` log line per request naming the document hash | `legacy-fallback` |
 
 The decision is `pinnedPrintSource(db, eventId)` (`pdf-page.ts`;
@@ -733,16 +734,22 @@ unchanged (`docs/course-maps.md` API).
 | Event | Path |
 |---|---|
 | `map_pipeline = vector` and the latest `map_files` row pins a document | the reference raster, §10.2 |
-| `legacy`, or `vector` without a pin | the OCAD → SVG → resvg path, as before this slice |
+| `legacy` with a pin | the OCAD → SVG → resvg path, as before this slice |
+| no pin (either value) | none: "No base map uploaded" (400) |
 
 `getBaseMapInfo(db, eventId)` makes the call and returns
-`{ scale, meridianTiltDeg, version, document }`. With a pin, `document`
-is `{ hash }`, `version` is the document hash, `scale` is the header's
-`mapScale` and `meridianTiltDeg` is the report's
-`north.meridian.medianTiltDeg` (0 when there is none) — the values the
-A11 dual write puts into the `map_files` columns, so both branches agree
-on the same map (integration-tested). On the legacy path `document` is
-`null`. C2 and C3 read this one function.
+`{ scale, meridianTiltDeg, version, document }`. For every event with a
+pin (slice E1, `docs/map-storage.md` §4.6) `scale` is the pinned
+document header's `mapScale`, `meridianTiltDeg` the report's
+`north.meridian.medianTiltDeg` (0 when there is none) and `version` the
+document hash — the values the A11 dual write puts into the `map_files`
+columns. `document` is `{ hash }` on a `vector` event
+(`pinnedDocumentHash`) and `null` on a `legacy` one. Without a pin it
+throws "No base map uploaded" (`getBaseMapInfoOrNull` → null); the OCAD
+fallback is gone. C2 and C3 read this one function. The legacy
+`window.png` cache keys on `version`, so a colour-stack change on a
+`legacy` event no longer changes the key within a process (E4a deletes
+the route).
 
 ### 10.2 The render
 
