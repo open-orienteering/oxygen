@@ -27,7 +27,7 @@ export function LayoutRail(p: {
   onSnapping: () => void;
 }) {
   const { t } = useTranslation("editor");
-  const active = p.tool.kind === "select" ? "select" : p.tool.what;
+  const active = p.tool.kind === "select" ? "select" : p.tool.kind === "draw" ? "path" : p.tool.what;
   return (
     <div data-testid="editor-layout-rail" className="pointer-events-auto relative flex flex-col gap-1 bg-white/95 backdrop-blur-sm border border-slate-200 rounded-lg shadow-sm p-1 self-start">
       {Object.entries(LAYOUT_KEYS).map(([key, what]) => {

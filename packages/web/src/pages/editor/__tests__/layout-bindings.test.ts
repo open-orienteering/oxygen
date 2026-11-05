@@ -3,6 +3,8 @@ import type { CourseMapObject } from "@oxygen/shared";
 import type { ToolPointer } from "../../../components/MapViewer";
 import { sheetWindow, toView, type SheetGeometry } from "../../../lib/editor/layout";
 import { LAYOUT_KEYS, layoutBinding, type LayoutBindingContext, type LayoutGesture } from "../layout/bindings";
+import type { GestureRef } from "../tools/bindings";
+import type { PolygonState } from "../tools/polygon";
 
 // A4, frame 10 mm in, map at the print scale (1 page mm = 1 paper mm), centred on (0, 0): page (105, 148.5) is paper (0, 0).
 const frame = { x: 10, y: 10, width: 190, height: 277 };
@@ -135,5 +137,57 @@ describe("Layout binding (docs/course-layout.md §2, §3; 08 §5.3 Layout column
     expect(page.x).toBeCloseTo(40, 6);
     expect(page.y).toBeCloseTo(100, 6);
     expect(graphic).toBe(9);
+  });
+});
+
+describe("P: polygons drawn with the course editor's area flow (D16, docs/course-layout.md §3)", () => {
+  function drawing(poly: PolygonState, over: Partial<Omit<LayoutBindingContext, "onPreview" | "onCommit" | "onSelect" | "onPlace">> = {}) {
+    const draw = { gesture: { current: null } as GestureRef, hover: null, onHover: vi.fn(), onPoly: vi.fn(), onPath: vi.fn(), onCancel: vi.fn() };
+    const c = ctx({ tool: { kind: "draw", poly }, draw, ...over });
+    return { c, draw, b: layoutBinding(c) };
+  }
+  const empty: PolygonState = { kind: "layout_path", vertices: [] };
+
+  it("arms the polygon flow: exclusive, crosshair, the sheet still drawn under the preview", () => {
+    const { b } = drawing({ kind: "layout_path", vertices: [view(40, 60), view(90, 60)] });
+    expect(b.exclusive).toBe(true);
+    expect(b.cursor).toBe("crosshair");
+    const ids = b.shapes!.flatMap((s) => ("testId" in s && s.testId ? [s.testId] : []));
+    expect(ids).toEqual(expect.arrayContaining(["editor-layout-paper", "editor-layout-frame", "editor-polygon", "editor-polygon-vertex"]));
+  });
+
+  it("a press places a vertex at the pointer; with the grid on, on whole page millimetres", () => {
+    const { b, draw } = drawing(empty);
+    expect(b.onPointerDown!(at(40.4, 60.3))).toBe(true);
+    const v = draw.onPoly.mock.calls[0][0].vertices[0];
+    expect(v.x).toBeCloseTo(view(40.4, 60.3).x, 9);
+    const snapped = drawing(empty, { snapping: true });
+    snapped.b.onPointerDown!(at(40.4, 60.6));
+    const w = snapped.draw.onPoly.mock.calls[0][0].vertices[0];
+    expect(w.x).toBeCloseTo(view(40, 61).x, 9);
+    expect(w.y).toBeCloseTo(view(40, 61).y, 9);
+  });
+
+  it("a click on the first vertex closes: one path in page mm, handles mapped, vertices clamped", () => {
+    // View mm here are page mm mirrored (y up): a handle 10 view mm up is 10 page mm up the page.
+    const a = view(40, 60);
+    const poly: PolygonState = { kind: "layout_path", vertices: [a, { ...view(90, 60), hOut: { x: 0, y: 10 }, hIn: { x: 0, y: -10 } }, view(300, 110)] };
+    const { b, draw } = drawing(poly);
+    expect(b.onPointerDown!(at(40, 60))).toBe(false);
+    b.onClick!(at(40, 60));
+    expect(draw.onPath).toHaveBeenCalledTimes(1);
+    const pts = draw.onPath.mock.calls[0][0];
+    expect(pts).toHaveLength(3);
+    expect(pts[0].x).toBeCloseTo(40, 9);
+    expect(pts[0].y).toBeCloseTo(60, 9);
+    expect(pts[1].hOut.x).toBeCloseTo(0, 9);
+    expect(pts[1].hOut.y).toBeCloseTo(-10, 9);
+    expect(pts[2].x).toBeCloseTo(207, 9);
+  });
+
+  it("right-click cancels", () => {
+    const { b, draw } = drawing(empty);
+    b.onContextMenu!(at(50, 50));
+    expect(draw.onCancel).toHaveBeenCalled();
   });
 });

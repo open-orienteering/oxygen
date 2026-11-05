@@ -2,21 +2,24 @@
  * Layout mode's viewer binding (docs/course-layout.md §2, §3; 08 §5.3
  * Layout column): click selects a page or map object of the scope, drag
  * moves it, a handle resizes it, the block moves, the selected frame
- * aligns the map; with a placement tool armed a click places. Exclusive:
- * the course layer's own targets stay off (Layout mode locks course
- * edits, 08 §5.4) and a drag on nothing pans. The object maths are
- * `lib/map-layout-editor.ts`'s, unchanged.
+ * aligns the map; with a placement tool armed a click places; `P` draws a
+ * polygon with the course editor's area flow (`areaBinding`, D16).
+ * Exclusive: the course layer's own targets stay off (Layout mode locks
+ * course edits, 08 §5.4) and a drag on nothing pans. The object maths are
+ * `lib/map-layout-editor.ts`'s.
  */
 
 import type { CourseMapObject, DescriptionBlockSettings, MapRect } from "@oxygen/shared";
 import type { EditorToolBinding, ToolPointer, ToolShape } from "../../../components/MapViewer";
 import {
-  alignedCentre, handleAt, layoutObjectAt, objectHandles, pageDelta, pagePerView, rectInView, selectionShapes, sheetShapes, toPage, toView,
+  alignedCentre, gridSnap, handleAt, layoutObjectAt, objectHandles, pageDelta, pagePerView, pathFromView, rectInView, selectionShapes, sheetShapes, toPage, toView,
   type SheetGeometry,
 } from "../../../lib/editor/layout";
 import { constrainDescription, constrainMapObject, resizeMapObject, translateMapObject, type ResizeHandle } from "../../../lib/map-layout-editor";
 import { courseMapObjectPageBounds } from "@oxygen/shared";
-import { HANDLE_PX } from "../tools/bindings";
+import { areaBinding, HANDLE_PX, type GestureRef } from "../tools/bindings";
+import type { PolygonState } from "../tools/polygon";
+import type { Vertex } from "../../../lib/editor/geometry-edit";
 
 type Pt = { x: number; y: number };
 
@@ -24,7 +27,8 @@ export type LayoutSelection = { kind: "object"; id: string } | { kind: "frame" }
 
 /** What the rail arms (08 §5.2 Layout tools; `L` / `R` / `P` added, `O` removed again, docs/course-layout.md §3). */
 export type PlaceKind = "header" | "text" | "image" | "whiteout" | "line" | "rectangle" | "path" | "description";
-export type LayoutTool = { kind: "select" } | { kind: "place"; what: PlaceKind; graphicId?: number };
+/** `P` is a drawing (`draw`, the polygon flow in the viewer's paper mm); the other tools place by a click. */
+export type LayoutTool = { kind: "select" } | { kind: "place"; what: Exclude<PlaceKind, "path">; graphicId?: number } | { kind: "draw"; poly: PolygonState };
 
 /** The rail's keys (the page owns the keyboard). */
 export const LAYOUT_KEYS: Record<string, PlaceKind | "select"> = {
@@ -67,7 +71,19 @@ export interface LayoutBindingContext {
   onPreview: (change: LayoutChange | null) => void;
   onCommit: (change: LayoutChange) => void;
   onSelect: (selection: LayoutSelection) => void;
-  onPlace: (what: PlaceKind, page: Pt, graphicId?: number) => void;
+  onPlace: (what: Exclude<PlaceKind, "path">, page: Pt, graphicId?: number) => void;
+  /**
+   * `P`'s drawing (the course editor's area flow, docs/course-layout.md §3), with `tool.kind === "draw"`:
+   * its gesture and hover live in the page; `onPath` gets the closed path on the page (page mm, clamped).
+   */
+  draw?: {
+    gesture: GestureRef;
+    hover: Pt | null;
+    onHover: (p: ToolPointer | null) => void;
+    onPoly: (poly: PolygonState) => void;
+    onPath: (points: Vertex[]) => void;
+    onCancel: () => void;
+  };
 }
 
 const inRect = (p: Pt, r: MapRect) => p.x >= r.x && p.x <= r.x + r.width && p.y >= r.y && p.y <= r.y + r.height;
@@ -111,7 +127,7 @@ export function layoutBinding(c: LayoutBindingContext): EditorToolBinding {
     const s = imageShape(o, g, c.imageHref(o.graphicId));
     if (s) shapes.push(s);
   }
-  if (selected) {
+  if (selected && c.tool.kind !== "draw") {
     const b = courseMapObjectPageBounds(selected, g.frame, g.window);
     if (b) shapes.push(...selectionShapes(b, objectHandles(selected, g), g, "editor-layout-selection"));
   }
@@ -119,6 +135,7 @@ export function layoutBinding(c: LayoutBindingContext): EditorToolBinding {
   if (c.block) shapes.push({ kind: "line", points: rectInView(c.block, g), closed: true, color: "transparent", widthPx: 0, testId: "editor-layout-description" });
 
   const placing = c.tool.kind === "place" ? c.tool : null;
+  if (c.tool.kind === "draw" && c.draw) return drawBinding(c, c.tool.poly, c.draw, shapes);
 
   return {
     exclusive: true,
@@ -176,4 +193,19 @@ export function layoutBinding(c: LayoutBindingContext): EditorToolBinding {
       c.onSelect(inRect(page, g.frame) ? { kind: "frame" } : null);
     },
   };
+}
+
+/**
+ * `P` (D16): the course editor's area flow drawn in the viewer's paper mm
+ * over the sheet, a vertex on the 1 mm page grid when snapping
+ * (`toView ∘ gridSnap ∘ toPage`), the finished path mapped onto the page.
+ */
+function drawBinding(c: LayoutBindingContext, poly: PolygonState, d: NonNullable<LayoutBindingContext["draw"]>, sheet: readonly ToolShape[]): EditorToolBinding {
+  const g = c.geometry;
+  const flow = areaBinding({
+    gesture: d.gesture, poly, hover: d.hover, onHover: d.onHover, onPoly: d.onPoly, onCancel: d.onCancel,
+    snap: (pt) => (c.snapping ? toView(gridSnap(toPage(pt, g), true), g) : pt),
+    onDone: (vertices) => d.onPath(pathFromView(vertices, g, g.printable)),
+  });
+  return { ...flow, shapes: [...sheet, ...(flow.shapes ?? [])] };
 }

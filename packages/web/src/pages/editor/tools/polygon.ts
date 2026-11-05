@@ -15,7 +15,8 @@ import { constrain45, smoothHandles, symmetricHandles, vertexRule, type Vertex }
 
 type Pt = { x: number; y: number };
 
-export type AreaKind = "oob_area" | "oob_line" | "whiteout" | "filter_region" | "marked_route";
+/** The course editor's drawn kinds, and Layout mode's `P` polygon (`layout_path`, a closed page path, docs/course-layout.md §3). */
+export type AreaKind = "oob_area" | "oob_line" | "whiteout" | "filter_region" | "marked_route" | "layout_path";
 
 /** Closed kinds need three vertices, line kinds two. */
 export const isClosedKind = (k: AreaKind): boolean => k !== "oob_line" && k !== "marked_route";

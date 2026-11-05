@@ -24,8 +24,11 @@ import { validateCourseMap, type CourseMapDocument, type CourseMapObject } from 
 import { trpc } from "../../../lib/trpc";
 import { VersionBook, versionConflictOfError } from "../../../lib/version-book";
 import { EditorConflict } from "../../../lib/editor/write-client";
-import type { MapViewerEditorProps } from "../../../components/MapViewer";
-import { descriptionRect, gridSnap, pageBounds, type SheetGeometry } from "../../../lib/editor/layout";
+import type { MapViewerEditorProps, ToolPointer } from "../../../components/MapViewer";
+import { descriptionRect, gridSnap, pageBounds, pathFromView, type SheetGeometry } from "../../../lib/editor/layout";
+import type { Vertex } from "../../../lib/editor/geometry-edit";
+import type { Gesture } from "../tools/bindings";
+import { step as polygonStep } from "../tools/polygon";
 import { constrainDescription } from "../../../lib/map-layout-editor";
 import { useMediaQuery } from "../../../hooks/useMediaQuery";
 import type { EditorView } from "../../../lib/editor/state";
@@ -34,7 +37,7 @@ import { LayoutInspector } from "../layout/LayoutInspector";
 import { LayoutRail } from "../layout/LayoutRail";
 import { ClassOverridesSection, TemplateKeySection } from "../layout/KeySections";
 import { useCapabilities } from "../../../context/CapabilitiesContext";
-import { geometryOf, layoutRequestOf, placeObject, scopeObjects, sheetKeyOf, snapshotOf, withEditable, type EditorSheet, type LayoutSnapshot } from "../layout/model";
+import { geometryOf, layoutRequestOf, pathObject, placeObject, scopeObjects, sheetKeyOf, snapshotOf, withEditable, type EditorSheet, type LayoutSnapshot } from "../layout/model";
 
 type Pt = { x: number; y: number };
 
@@ -120,6 +123,10 @@ export function useLayoutMode(a: LayoutModeArgs): LayoutMode {
   const [tool, setTool] = useState<LayoutTool>({ kind: "select" });
   const [snapping, setSnapping] = useState(false);
   const gesture = useRef<LayoutGesture>(null);
+  /** `P`'s drawing (the course editor's area flow): its gesture and hover, paper mm. */
+  const drawGesture = useRef<Gesture>(null);
+  const [drawHover, setDrawHover] = useState<Pt | null>(null);
+  useEffect(() => { drawGesture.current = null; setDrawHover(null); }, [tool.kind]);
   const [viewRequest, setViewRequest] = useState<MapViewerEditorProps["viewRequest"]>(null);
   useEffect(() => { setSelection(null); setTool({ kind: "select" }); setDraft(null); }, [key]);
 
@@ -205,7 +212,7 @@ export function useLayoutMode(a: LayoutModeArgs): LayoutMode {
     [data, snap],
   );
   const purple = snap?.settings.appearance.purple ?? "#a626ff";
-  const place = useCallback((what: PlaceKind, at: Pt, graphicId?: number) => {
+  const place = useCallback((what: Exclude<PlaceKind, "path">, at: Pt, graphicId?: number) => {
     if (!stored || !geometry || !data) return;
     const page = gridSnap(at, snapping);
     setTool({ kind: "select" });
@@ -220,6 +227,14 @@ export function useLayoutMode(a: LayoutModeArgs): LayoutMode {
     change({ objects: [...scopeObjects(data, stored).editable, o] });
     setSelection({ kind: "object", id: o.id });
   }, [stored, geometry, data, change, snapping]);
+  /** `P` closed: one closed page path, one write, selected (docs/course-layout.md §3). */
+  const finishPath = useCallback((points: Vertex[]) => {
+    setTool({ kind: "select" });
+    if (!stored || !geometry || !data) return;
+    const o = pathObject(points, geometry.printable);
+    change({ objects: [...scopeObjects(data, stored).editable, o] });
+    setSelection({ kind: "object", id: o.id });
+  }, [stored, geometry, data, change]);
 
   const binding = useMemo(() => {
     if (!a.enabled || !geometry || !snap) return null;
@@ -233,8 +248,15 @@ export function useLayoutMode(a: LayoutModeArgs): LayoutMode {
       onCommit: change,
       onSelect: setSelection,
       onPlace: place,
+      draw: tool.kind === "draw" ? {
+        gesture: drawGesture, hover: drawHover,
+        onHover: (p: ToolPointer | null) => setDrawHover(p?.pt ?? null),
+        onPoly: (poly) => setTool({ kind: "draw", poly }),
+        onPath: finishPath,
+        onCancel: () => setTool({ kind: "select" }),
+      } : undefined,
     });
-  }, [a.enabled, a.nameId, geometry, snap, scoped, block, data?.scope, selection, tool, snapping, stored, apply, change, place]);
+  }, [a.enabled, a.nameId, geometry, snap, scoped, block, data?.scope, selection, tool, snapping, stored, apply, change, place, drawHover, finishPath]);
 
   const layoutRequest = useMemo(() => (a.enabled && data && snap && geometry ? layoutRequestOf(data, snap, geometry) : null), [a.enabled, data, snap, geometry]);
 
@@ -255,6 +277,7 @@ export function useLayoutMode(a: LayoutModeArgs): LayoutMode {
     if (what === "select") { setTool({ kind: "select" }); return; }
     if (what === "description" && snap?.description.visible) { setTool({ kind: "select" }); setSelection({ kind: "description" }); return; }
     if (what === "image" && graphicId === undefined) return;
+    if (what === "path") { setTool({ kind: "draw", poly: { kind: "layout_path", vertices: [] } }); return; }
     setTool({ kind: "place", what, ...(graphicId !== undefined ? { graphicId } : {}) });
   }, [snap]);
 
@@ -265,6 +288,13 @@ export function useLayoutMode(a: LayoutModeArgs): LayoutMode {
       if (tool.kind !== "select") { setTool({ kind: "select" }); return true; }
       if (selection) { setSelection(null); return true; }
       return false;
+    }
+    if (e.key === "Enter" && plain && tool.kind === "draw") {
+      // Through the flow, as Course mode's areas: the minimum and the smooth vertices' settling have one home.
+      e.preventDefault();
+      const r = polygonStep(tool.poly, { type: "enter" });
+      if (r.done && geometry) finishPath(pathFromView(r.done, geometry, geometry.printable));
+      return true;
     }
     if (e.key === "Delete" || e.key === "Backspace") { e.preventDefault(); deleteSelected(); return true; }
     if (e.key === "Tab" && plain) {
@@ -286,7 +316,7 @@ export function useLayoutMode(a: LayoutModeArgs): LayoutMode {
       return true;
     }
     return false;
-  }, [tool, selection, deleteSelected, scoped, fit, onTool]);
+  }, [tool, selection, deleteSelected, scoped, fit, onTool, geometry, finishPath]);
 
   // ─── Validation (validate.ts, unchanged codes) ───────────
   const issues = useMemo(() => {
