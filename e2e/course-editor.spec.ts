@@ -1043,6 +1043,10 @@ test.describe("tools", () => {
   test("a press inside an out-of-bounds area pans the map; its outline selects and moves it (§7)", async ({ page }) => {
     // docs/bugfix-editor-area-press-pans.md: an area (the toner saver covers every control) swallowed every press.
     await openEditor(page);
+    // The description sheet (with no course picked, all controls') covers half the view and the shard's earlier
+    // tests leave extra controls: hide it (view state, not saved) so a 60 px clear point exists.
+    const sheetToggle = page.getByTestId("map-toggle-descriptions");
+    if (/hide/i.test((await sheetToggle.textContent()) ?? "")) await sheetToggle.click();
     // A 70 px square around a clear point (no site within 60 px of its centre, no leg within 20 px).
     const clear = await emptyPoint(page, 60);
     const geometry = await Promise.all([[-35, -35], [35, -35], [35, 35], [-35, 35]].map(([dx, dy]) => toPaper(page, { x: clear.x + dx, y: clear.y + dy })));
