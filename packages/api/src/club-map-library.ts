@@ -1,16 +1,18 @@
 /**
  * The club library read from the series (docs/map-storage.md §6.5): one
  * listed row per `club_maps` series, built from its latest
- * `club_map_versions` row, that version's `map_sources` / `map_documents`
- * rows and — for the raster-path metadata the document does not carry
- * yet — the linked legacy `club_map_files` row. Pure, so the precedence
- * rules are unit-tested without a database.
+ * `club_map_versions` row and that version's `map_sources` /
+ * `map_documents` rows — extent and north from the document's header and
+ * import report, under the series' `rotation_correction`. The linked
+ * legacy `club_map_files` row only names the PNG preview of a series that
+ * has no version yet. Pure, so the precedence rules are unit-tested
+ * without a database.
  */
 import { TRPCError } from "@trpc/server";
-import { currentMeridianStaleness } from "./event-map.js";
 import { canDownloadClubLibraryMap } from "./ocad-export.js";
-import type { WGS84Bounds } from "./map-projection.js";
-import type { NorthDetection } from "./map-north.js";
+import { meridianStalenessFromDetection } from "./map-north.js";
+import { documentFrameSchema, mapFileMetadataFor } from "./map-store/map-file-metadata.js";
+import { reportNorth } from "./map-store/event-document.js";
 
 export interface Person {
   email: string;
@@ -51,14 +53,8 @@ export interface ClubMapRowInput {
     error: string | null;
     source: { fileName: string; sizeBytes: number };
   } | null;
-  /** The linked `club_map_files` row (write-through, §6.5). */
-  legacy: {
-    id: bigint;
-    scale: number | null;
-    bounds: unknown;
-    northOffset: number | null;
-    northDetection: unknown;
-  } | null;
+  /** The linked `club_map_files` row (write-through, §6.5): its preview route only. */
+  legacy: { id: bigint } | null;
 }
 
 function headerScale(header: unknown): number | null {
@@ -82,6 +78,11 @@ function reviewCounts(report: unknown): { suggested: number; reviewed: number } 
 
 export function projectClubMapRow({ series, version, versionCount, job, legacy }: ClubMapRowInput) {
   const file = version?.source ?? job?.source ?? null;
+  const north = version ? reportNorth(version.document.report) : null;
+  const frame = version ? documentFrameSchema.safeParse(version.document.header) : null;
+  const columns = frame?.success
+    ? mapFileMetadataFor(frame.data, north?.meridian?.medianTiltDeg ?? null, series.rotationCorrection)
+    : null;
   return {
     id: series.id,
     name: series.name,
@@ -107,7 +108,7 @@ export function projectClubMapRow({ series, version, versionCount, job, legacy }
     importJob: !version && job ? { id: job.id, state: job.state, error: job.error } : null,
     fileName: version?.label || file?.fileName || null,
     sizeBytes: file?.sizeBytes ?? null,
-    scale: (version ? headerScale(version.document.header) : null) ?? legacy?.scale ?? null,
+    scale: version ? headerScale(version.document.header) : null,
     uploadedAt: (version?.uploadedAt ?? series.createdAt).toISOString(),
     uploadedBy: version ? version.uploadedBy : series.createdBy,
     uploader: version ? version.uploader : series.creator,
@@ -116,12 +117,12 @@ export function projectClubMapRow({ series, version, versionCount, job, legacy }
       : legacy
         ? `/api/club-map-preview/${legacy.id}`
         : null,
-    bounds: (legacy?.bounds as WGS84Bounds | null | undefined) ?? null,
-    northOffset: legacy?.northOffset ?? null,
-    northDetection: (legacy?.northDetection as NorthDetection | null | undefined) ?? null,
+    bounds: columns?.bounds ?? null,
+    northOffset: columns?.northOffset ?? null,
+    northDetection: north,
     // Evaluated for today, not import time, so a library map starts
     // to flag its north lines as the declination drifts away from them.
-    meridianStalenessDeg: currentMeridianStaleness(legacy?.northDetection ?? null),
+    meridianStalenessDeg: meridianStalenessFromDetection(north),
   };
 }
 

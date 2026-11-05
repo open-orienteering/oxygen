@@ -19,7 +19,7 @@
  */
 
 import { loadEventCrs } from "./event-crs.js";
-import { withGrivationCorrection, type OcadCrs } from "./map-projection.js";
+import { documentPaperFrame, eventPin } from "./map-store/event-document.js";
 import { transferParsedCoordinates } from "./map-coordinate-transfer.js";
 import type { MapCalibrationPoint } from "./event-map.js";
 import type { ParsedCourseData } from "./iof-course-parser.js";
@@ -103,22 +103,54 @@ function asCalibration(value: unknown): MapCalibrationPoint[] {
   );
 }
 
-async function crsFromBuffer(
-  data: Uint8Array,
-  rotationCorrection: number,
-): Promise<OcadCrs | null> {
-  try {
-    const ocadMod = await import("ocad2geojson");
-    const readOcad = (ocadMod as Record<string, unknown>).readOcad as (
-      buf: Buffer,
-      opts?: Record<string, unknown>,
-    ) => Promise<{ getCrs(): OcadCrs }>;
-    const file = await readOcad(Buffer.from(data), { quietWarnings: true });
-    return withGrivationCorrection(file.getCrs(), rotationCorrection);
-  } catch (err) {
-    console.warn("[course-import-align] source map CRS load failed:", err);
-    return null;
-  }
+/** A club map series' latest version, as the alignment matches it. */
+export interface ClubVersionCandidate {
+  seriesName: string;
+  label: string;
+  sourceFileName: string;
+  documentHash: string;
+  rotationCorrection: number;
+}
+
+/**
+ * The club library version a course file was set on: the first series
+ * whose latest version's label, else its source file name, names the
+ * recorded map file (`sameMapFile`). The label is what the library shows
+ * as the map's file name (`club-map-library.ts`).
+ */
+export function matchClubVersion(
+  sourceFileName: string,
+  candidates: ClubVersionCandidate[],
+): ClubVersionCandidate | null {
+  return (
+    candidates.find((c) => sameMapFile(sourceFileName, c.label)) ??
+    candidates.find((c) => sameMapFile(sourceFileName, c.sourceFileName)) ??
+    null
+  );
+}
+
+async function clubVersionCandidates(db: Db): Promise<ClubVersionCandidate[]> {
+  const series = await db.clubMap.findMany({
+    select: {
+      name: true,
+      rotationCorrection: true,
+      versions: {
+        orderBy: { seq: "desc" },
+        take: 1,
+        select: { label: true, documentHash: true, source: { select: { fileName: true } } },
+      },
+    },
+    orderBy: { createdAt: "asc" },
+  });
+  return series.flatMap((s) =>
+    s.versions.map((v) => ({
+      seriesName: s.name,
+      label: v.label,
+      sourceFileName: v.source.fileName,
+      documentHash: v.documentHash,
+      rotationCorrection: s.rotationCorrection,
+    })),
+  );
 }
 
 /**
@@ -142,11 +174,7 @@ export async function resolveImportAlignment(
   const source = parsed.sourceMap;
   if (!source) return base;
 
-  const eventMap = await db.mapFile.findFirst({
-    where: { eventId },
-    orderBy: { uploadedAt: "desc" },
-    select: { fileName: true, calibration: true },
-  });
+  const eventMap = await eventPin(db, eventId);
   if (!eventMap) return base;
 
   const outcome: AlignmentOutcome = {
@@ -160,19 +188,11 @@ export async function resolveImportAlignment(
     return { ...outcome, status: "aligned" };
   }
 
-  // Try to re-project from the source map, if the club library has it.
-  const libraryMaps = await db.clubMapFile.findMany({
-    select: { id: true, name: true, fileName: true },
-  });
-  const match = libraryMaps.find((m) => sameMapFile(source.fileName, m.fileName));
+  // Try to re-project from the source map, if the club library has it:
+  // through its latest version's document and the series' correction.
+  const match = matchClubVersion(source.fileName, await clubVersionCandidates(db));
   if (match) {
-    const row = await db.clubMapFile.findUnique({
-      where: { id: match.id },
-      select: { fileData: true, rotationCorrection: true },
-    });
-    const fromCrs = row?.fileData
-      ? await crsFromBuffer(row.fileData, row.rotationCorrection)
-      : null;
+    const fromCrs = await documentPaperFrame(db, match.documentHash, match.rotationCorrection);
     // loadEventCrs already includes the event map's persisted correction.
     const toCrs = await loadEventCrs(db, eventId);
     if (fromCrs && toCrs) {
@@ -182,7 +202,7 @@ export async function resolveImportAlignment(
           ...outcome,
           status: "transformed",
           parsed: moved,
-          alignedFromMapName: match.name || match.fileName,
+          alignedFromMapName: match.seriesName || match.label || match.sourceFileName,
         };
       }
     }

@@ -217,14 +217,13 @@ export function computeMeridianStalenessDeg(opts: {
  * grid, or the WMM cannot cover `asOf`.
  */
 export function meridianStalenessFromDetection(
-  detection: Pick<
+  detection: (Pick<
     NorthDetection,
-    | "meridian"
     | "declaredGrivationDeg"
     | "trueNorthFromGridDeg"
     | "centerLat"
     | "centerLng"
-  > | null | undefined,
+  > & { meridian: Pick<MeridianProbe, "medianTiltDeg"> | null }) | null | undefined,
   asOf: Date = new Date(),
 ): number | null {
   if (!detection?.meridian) return null;

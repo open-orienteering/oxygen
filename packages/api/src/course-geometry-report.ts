@@ -16,8 +16,7 @@ import {
   type GeometryLike,
   type ImportedFidelity,
 } from "./course-geometry-compare.js";
-import { loadEventCrs } from "./event-crs.js";
-import { loadDocumentCutFeatures, loadEventCutFeatures, loadOcadCutFeatures } from "./event-map-objects.js";
+import { loadEventCutFeatures } from "./event-map-objects.js";
 
 type Db = PrismaClient | Prisma.TransactionClient;
 
@@ -27,8 +26,6 @@ export interface CourseReport {
   source: string;
   /** Editor courses: stored vs what C5 writes. */
   editor?: EditorComparison;
-  /** Editor courses on a map with a document: the C5 output cut from the OCAD parse vs from the document. */
-  documentVsOcad?: EditorComparison;
   /** Imported courses: what structure v1 would lose. */
   imported?: ImportedFidelity;
 }
@@ -37,7 +34,7 @@ export interface EventReport {
   event: string;
   name: string;
   pipeline: string;
-  /** Where the written cuts come from: `document`, `ocad`, `off` (toggle) or `none` (no map). */
+  /** Where the written cuts come from: `document`, `off` (toggle) or `none` (no pin). */
   cutSource: string;
   hasDocument: boolean;
   courses: CourseReport[];
@@ -57,12 +54,11 @@ export async function buildGeometryReport(db: Db, opts: { eventNameIds?: string[
   });
   const out: EventReport[] = [];
   for (const ev of events) {
-    const scale = (await loadEventCrs(db, ev.id))?.scale ?? null;
-    const written = await loadEventCutFeatures(db, ev.id, scale);
-    const pin = await db.mapFile.findFirst({ where: { eventId: ev.id }, orderBy: { uploadedAt: "desc" }, select: { documentHash: true } });
-    const docFeatures = pin?.documentHash ? await loadDocumentCutFeatures(db, pin.documentHash) : null;
-    const ocadFeatures = docFeatures ? await loadOcadCutFeatures(db, ev.id, scale) : null;
-    const cuts: readonly course.CutFeature[] | null = ev.autoOverprintCuts === false ? null : (written?.features ?? null);
+    // Since slice E1 the cuts come from the pinned document only; the
+    // document-vs-OCAD comparison is the parity test's
+    // (`document-readers-parity.test.ts`).
+    const written = await loadEventCutFeatures(db, ev.id);
+    const cuts: readonly course.CutFeature[] | null = ev.autoOverprintCuts === false ? null : written;
 
     const rows = await db.course.findMany({
       where: { eventId: ev.id, removed: false },
@@ -79,24 +75,17 @@ export async function buildGeometryReport(db: Db, opts: { eventNameIds?: string[
         const s = sequences.get(row.id);
         if (!s) continue;
         const now = editorCourseGeometry(row.id, s.seq, s.orderMode, cuts);
-        const r: CourseReport = { ...base, editor: compareEditorGeometry(stored, now) };
-        if (docFeatures && ocadFeatures && cuts) {
-          r.documentVsOcad = compareEditorGeometry(
-            editorCourseGeometry(row.id, s.seq, s.orderMode, ocadFeatures),
-            editorCourseGeometry(row.id, s.seq, s.orderMode, docFeatures),
-          );
-        }
-        courses.push(r);
+        courses.push({ ...base, editor: compareEditorGeometry(stored, now) });
       } else {
-        courses.push({ ...base, imported: importedCourseFidelity(stored, written?.features ?? null) });
+        courses.push({ ...base, imported: importedCourseFidelity(stored, written) });
       }
     }
     out.push({
       event: ev.nameId,
       name: ev.name,
       pipeline: ev.mapPipeline,
-      cutSource: ev.autoOverprintCuts === false ? "off" : (written?.source ?? "none"),
-      hasDocument: docFeatures !== null,
+      cutSource: ev.autoOverprintCuts === false ? "off" : written ? "document" : "none",
+      hasDocument: written !== null,
       courses,
     });
   }
@@ -109,7 +98,6 @@ export interface ReportTotals {
   staleCourses: number;
   circles: { compared: number; same: number; changed: number; added: number; removed: number; oldDeg: number; newDeg: number };
   legs: { compared: number; same: number; changed: number; added: number; removed: number; oldMm: number; newMm: number };
-  documentVsOcad: { courses: number; differing: number };
   importedCourses: number;
   imported: { legs: number; preclippedLegs: number; bentLegs: number; maxBendMm: number; authoredCutControls: number; both: number; authoredOnly: number; automaticOnly: number; extras: Record<string, number> };
 }
@@ -121,7 +109,6 @@ export function reportTotals(report: GeometryReport): ReportTotals {
     staleCourses: 0,
     circles: { compared: 0, same: 0, changed: 0, added: 0, removed: 0, oldDeg: 0, newDeg: 0 },
     legs: { compared: 0, same: 0, changed: 0, added: 0, removed: 0, oldMm: 0, newMm: 0 },
-    documentVsOcad: { courses: 0, differing: 0 },
     importedCourses: 0,
     imported: { legs: 0, preclippedLegs: 0, bentLegs: 0, maxBendMm: 0, authoredCutControls: 0, both: 0, authoredOnly: 0, automaticOnly: 0, extras: {} },
   };
@@ -147,10 +134,6 @@ export function reportTotals(report: GeometryReport): ReportTotals {
         t.legs.oldMm += d.oldWidth;
         t.legs.newMm += d.newWidth;
       }
-    }
-    if (c.documentVsOcad) {
-      t.documentVsOcad.courses++;
-      if (c.documentVsOcad.circles.diffs.length + c.documentVsOcad.legs.diffs.length > 0) t.documentVsOcad.differing++;
     }
     if (c.imported) {
       const i = c.imported;
@@ -185,8 +168,6 @@ export function formatGeometryReport(report: GeometryReport): string {
     "|---|---|---|---|---|---|---|",
     `| circle cuts | ${t.circles.compared} | ${t.circles.same} | ${t.circles.changed} | ${t.circles.added} | ${t.circles.removed} | ${f1(t.circles.oldDeg)}° → ${f1(t.circles.newDeg)}° |`,
     `| leg gaps | ${t.legs.compared} | ${t.legs.same} | ${t.legs.changed} | ${t.legs.added} | ${t.legs.removed} | ${f1(t.legs.oldMm)} mm → ${f1(t.legs.newMm)} mm |`,
-    "",
-    `Document vs OCAD feature source (courses on a map with a document): ${t.documentVsOcad.differing} of ${t.documentVsOcad.courses} differ.`,
     "",
     "## Imported courses: what structure v1 carries (09 §10)",
     "",

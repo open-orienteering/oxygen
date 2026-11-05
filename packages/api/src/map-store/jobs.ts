@@ -20,6 +20,7 @@ import { IMPORTER_VERSIONS, type ImportStage, type MapSourceKind } from "../impo
 import { storeImportedDocument, touchDocument } from "./documents.js";
 import { deriveDocumentPreviews } from "./previews.js";
 import { writeDocumentMapFileColumns } from "./map-file-metadata.js";
+import { synchronizePositionedControlCoordinates } from "../event-crs.js";
 import type { ImportWorkerData, ImportWorkerMessage } from "./import-worker.js";
 
 type Db = PrismaClient | Prisma.TransactionClient;
@@ -263,6 +264,8 @@ export async function applyJobResult(db: Db, job: Pick<ImportJobRow, "eventId" |
     await db.mapFile.updateMany({ where: { eventId: job.eventId, sourceHash: job.sourceHash }, data: { documentHash: job.documentHash } });
     // Quick-access columns from the pinned document (docs/map-storage.md §6.4).
     await writeDocumentMapFileColumns(db, job.eventId, job.sourceHash, job.documentHash);
+    // Positioned controls' lat/lng from the pinned frame (§6.4).
+    await synchronizePositionedControlCoordinates(db, job.eventId);
   }
   if (job.clubMapId !== null) {
     const existing = await db.clubMapVersion.findFirst({ where: { clubMapId: job.clubMapId, sourceHash: job.sourceHash }, select: { id: true, documentHash: true } });

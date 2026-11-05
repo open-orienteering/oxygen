@@ -69,7 +69,7 @@ export async function courseChecksFor(db: Db, eventId: bigint, courseUuid: strin
     sheets: null,
     objects: objectsInScope(objects, courseUuid, byCourse),
     derivation: null,
-    mapScale: crs?.scale ?? null,
+    mapScale: crs?.mapScale ?? null,
   });
 
   // DESCRIPTION_STALE: an autodetected description the map now describes differently.

@@ -1,94 +1,67 @@
 /**
- * Cached access to the event map's OCAD CRS.
+ * The event map's paper frame: scale and georeference of the pinned map
+ * document (docs/map-storage.md §4.6).
  *
- * Several code paths need the coordinate reference system of the uploaded
- * OCAD map (converting control map-mm positions to WGS84, computing course
- * lengths from the map scale). Parsing the whole OCD blob just to read the
- * CRS is expensive — a big club map is tens of MB — so this module caches
- * the parsed CRS per event, keyed by the map file's `uploadedAt` stamp
- * (which `uploadMap` and `importCourses` both bump on any change).
+ * Several code paths need it — converting control map-mm positions to
+ * WGS84, computing course lengths from the map scale, the IOF / Purple
+ * Pen export, `course.checks`. The frame comes from the document's
+ * header summary (`map_documents.header`), cached per document hash in
+ * `map-store/event-document.ts`, with the row's `rotation_correction` as
+ * `correctionDeg`.
  */
 
-import {
-  withGrivationCorrection,
-  type OcadCrs,
-} from "./map-projection.js";
+import type { mapGeo } from "@oxygen/shared";
+import type { Prisma, PrismaClient } from "./generated/prisma/client.js";
+import { mapMmToWgs84 } from "./map-projection.js";
+import { documentPaperFrame, eventPin } from "./map-store/event-document.js";
 
-/** The subset of the Prisma client this helper needs (works inside $transaction too). */
-interface MapFileReader {
-  mapFile: {
-    findFirst(args: {
-      where: { eventId: bigint };
-      orderBy: { uploadedAt: "desc" };
-      select: Record<string, boolean>;
-    }): Promise<{
-      uploadedAt?: Date;
-      fileData?: Uint8Array;
-      rotationCorrection?: number;
-    } | null>;
-  };
-}
-
-const cache = new Map<
-  string,
-  { uploadedAtMs: number; rotationCorrection: number; crs: OcadCrs | null }
->();
+type Db = PrismaClient | Prisma.TransactionClient;
 
 /**
- * Return the CRS of the event's latest uploaded map, or null when there is
- * no map or its grid is unparseable. Results are cached until a newer map
- * file (by `uploadedAt`) appears.
+ * The frame of the event's pinned map document, or null when the event
+ * has no map or the import has not pinned a document yet. A frame
+ * without a projectable CRS still carries `mapScale`; conversions on it
+ * answer null.
  */
 export async function loadEventCrs(
-  db: MapFileReader,
+  db: Db,
   eventId: bigint,
-): Promise<OcadCrs | null> {
-  const key = eventId.toString();
-  const meta = await db.mapFile.findFirst({
-    where: { eventId },
-    orderBy: { uploadedAt: "desc" },
-    select: { uploadedAt: true, rotationCorrection: true },
-  });
-  if (!meta?.uploadedAt) {
-    cache.delete(key);
-    return null;
-  }
-  const uploadedAtMs = meta.uploadedAt.getTime();
-  const rotationCorrection = meta.rotationCorrection ?? 0;
-  const cached = cache.get(key);
-  if (
-    cached &&
-    cached.uploadedAtMs === uploadedAtMs &&
-    cached.rotationCorrection === rotationCorrection
-  ) {
-    return cached.crs;
-  }
+): Promise<mapGeo.PaperFrame | null> {
+  const pin = await eventPin(db, eventId);
+  if (!pin?.documentHash) return null;
+  return documentPaperFrame(db, pin.documentHash, pin.rotationCorrection);
+}
 
-  let crs: OcadCrs | null = null;
-  try {
-    const row = await db.mapFile.findFirst({
-      where: { eventId },
-      orderBy: { uploadedAt: "desc" },
-      select: { fileData: true },
-    });
-    if (row?.fileData) {
-      const ocadMod = await import("ocad2geojson");
-      const readOcad = (ocadMod as Record<string, unknown>).readOcad as (
-        buf: Buffer,
-        opts?: Record<string, unknown>,
-      ) => Promise<{ getCrs(): OcadCrs }>;
-      const ocadFile = await readOcad(Buffer.from(row.fileData), {
-        quietWarnings: true,
-      });
-      crs = withGrivationCorrection(
-        ocadFile.getCrs(),
-        rotationCorrection,
-      );
-    }
-  } catch (err) {
-    console.warn("[event-crs] OCAD CRS load failed:", err);
-    crs = null;
-  }
-  cache.set(key, { uploadedAtMs, rotationCorrection, crs });
-  return crs;
+/**
+ * Recompute stored WGS84 coordinates from authoritative map-mm positions.
+ * This keeps list/map consumers that read lat/lng directly aligned with
+ * the pinned document's frame (run on every pin and rotation change).
+ */
+export async function synchronizePositionedControlCoordinates(
+  db: Db,
+  eventId: bigint,
+): Promise<number> {
+  const crs = await loadEventCrs(db, eventId);
+  if (!crs) return 0;
+  const controls = await db.control.findMany({
+    where: {
+      eventId,
+      removed: false,
+      OR: [{ xpos: { not: 0 } }, { ypos: { not: 0 } }],
+    },
+    select: { id: true, xpos: true, ypos: true },
+  });
+  const updates = controls.flatMap((control) => {
+    const position = mapMmToWgs84(control.xpos, control.ypos, crs);
+    return position
+      ? [
+          db.control.update({
+            where: { id: control.id },
+            data: { lat: position.lat, lng: position.lng },
+          }),
+        ]
+      : [];
+  });
+  await Promise.all(updates);
+  return updates.length;
 }

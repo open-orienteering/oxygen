@@ -67,7 +67,7 @@ export async function gatherEventCourseExport(
   event: { id: bigint; name: string },
 ): Promise<GatheredCourseExport> {
   const crs = await loadEventCrs(db, event.id);
-  const mapScale = crs?.scale ?? 15000;
+  const mapScale = crs?.mapScale ?? 15000;
 
   const mapFile = await db.mapFile.findFirst({
     where: { eventId: event.id },

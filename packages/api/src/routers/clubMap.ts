@@ -4,7 +4,6 @@ import { router, authedProcedure } from "../trpc.js";
 import { prisma } from "../db.js";
 import {
   applyClubMapRotationCorrection,
-  detectNorthFromBuffer,
   resolveMapNorth,
 } from "../event-map.js";
 import { renderOcadPreview } from "../club-map-preview.js";
@@ -52,7 +51,7 @@ const SERIES_INCLUDE = {
   legacyRows: {
     orderBy: { id: "asc" },
     take: 1,
-    select: { id: true, scale: true, bounds: true, northOffset: true, northDetection: true },
+    select: { id: true },
   },
   _count: { select: { versions: true } },
 } satisfies Prisma.ClubMapInclude;
@@ -183,30 +182,6 @@ export const clubMapRouter = router({
       include: SERIES_INCLUDE,
     });
 
-    // Rows uploaded before the north_detection column exist with NULL,
-    // which is indistinguishable from "analysed, no 601 lines" in the UI.
-    // Backfill once on first read — same pattern as the preview
-    // thumbnail backfill. Unparseable blobs persist an all-null
-    // detection so they are not re-parsed on every list call. Read from
-    // the linked legacy row until stage 5 puts it in the document.
-    for (const s of series) {
-      const legacy = s.legacyRows[0];
-      if (!legacy || legacy.northDetection != null) continue;
-      const blob = await prisma().clubMapFile.findUnique({
-        where: { id: legacy.id },
-        select: { fileData: true },
-      });
-      if (!blob) continue;
-      const detection = await detectNorthFromBuffer(Buffer.from(blob.fileData));
-      await prisma().clubMapFile.update({
-        where: { id: legacy.id },
-        data: {
-          northDetection: detection as unknown as Prisma.InputJsonValue,
-        },
-      });
-      legacy.northDetection = detection as unknown as Prisma.JsonValue;
-    }
-
     return series.map((s) =>
       projectClubMapRow({
         series: s,
@@ -318,9 +293,14 @@ export const clubMapRouter = router({
     .mutation(async ({ input }) => {
       const legacyIds = await legacyRowIds(input.id);
       await prisma().clubMap.update({ where: { id: input.id }, data: { rotationCorrection: input.degrees } });
+      const latest = await prisma().clubMapVersion.findFirst({
+        where: { clubMapId: input.id },
+        orderBy: { seq: "desc" },
+        select: { documentHash: true },
+      });
       let result: Awaited<ReturnType<typeof applyClubMapRotationCorrection>> | null = null;
       for (const id of legacyIds) {
-        const applied = await applyClubMapRotationCorrection(prisma(), id, input.degrees);
+        const applied = await applyClubMapRotationCorrection(prisma(), id, input.degrees, latest?.documentHash ?? null);
         result ??= applied;
       }
       return { success: true as const, ...(result ?? { rotationCorrection: input.degrees }) };
