@@ -6,7 +6,7 @@
 import { devices, test, expect, type Browser, type BrowserContext, type Page } from "@playwright/test";
 import { setEditorVector, setMapPipeline } from "./helpers/map-pipeline";
 import { reseed } from "./helpers/reseed";
-import { clickMap, drag, editorReady, site, sitePoint, sites, toPage } from "./helpers/editor";
+import { drag, editorReady, select, site, sitePoint, sites, toPage, viewSettled } from "./helpers/editor";
 import { waitForTrpc } from "./helpers/trpc";
 
 let nameId = "";
@@ -107,11 +107,12 @@ test("two contexts: presence appears and expires; a move shows in the other with
     await b.page.getByTestId("editor-mode-course").click();
 
     // A move in A shows in B within the poll.
+    // Points are read once the view has stopped (the editor fits after mounting), and the select retries.
+    await viewSettled(a.page);
     const target = { code: (await clearCodes(a.page))[0] };
     const before = await site(b.page, target.code);
+    await select(a.page, target.code);
     const from = await sitePoint(a.page, target.code);
-    await clickMap(a.page, from);
-    await expect(a.page.getByTestId("editor-selected-code")).toContainText(target.code, { timeout: 10_000 });
     const saved = waitForTrpc(a.page, "control.update");
     await drag(a.page, from, { x: from.x + 40, y: from.y + 30 });
     await saved;
@@ -136,9 +137,9 @@ test("a course changed in another context re-renders with a one-line notice", as
     const rows = (p: Page) => p.locator('[data-testid="editor-seq-row"][data-kind="control"]');
     const count = await rows(b.page).count();
     // A appends a control at an empty spot (create-and-append).
+    await viewSettled(a.page);
     const last = (await clearCodes(a.page)).pop()!;
-    await clickMap(a.page, await sitePoint(a.page, last));
-    await expect(a.page.getByTestId("editor-selected-code")).toContainText(last, { timeout: 10_000 });
+    await select(a.page, last);
     const saved = waitForTrpc(a.page, "course.setStructure");
     await a.page.getByTestId("editor-action-bar").getByTestId("editor-action-append").click();
     await saved;
