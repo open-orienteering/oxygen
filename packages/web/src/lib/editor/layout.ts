@@ -19,7 +19,8 @@ import {
   type MapWindow,
 } from "@oxygen/shared";
 import type { ToolShape } from "../../components/MapViewer";
-import type { ResizeHandle } from "../map-layout-editor";
+import { clampPagePoint, type ResizeHandle } from "../map-layout-editor";
+import { mapVertices, nearestEdge, type Vertex } from "./geometry-edit";
 
 type Pt = { x: number; y: number };
 
@@ -104,22 +105,44 @@ function segmentDistance(p: Pt, a: Pt, b: Pt): number {
   return Math.hypot(p.x - (a.x + t * dx), p.y - (a.y + t * dy));
 }
 
+/** A path's vertices on the page (page mm): a map-anchored path's through the window, handles as offsets. */
+export function pagePoints(o: Extract<CourseMapObject, { kind: "path" }>, g: Pick<SheetGeometry, "frame" | "window">): Vertex[] {
+  return o.anchor === "page" ? o.points : mapVertices(o.points, (q) => toPage(q, g));
+}
+
+/** Page points back in the path's own space (page mm, or paper mm for a map-anchored path). */
+export function nativePoints(o: Extract<CourseMapObject, { kind: "path" }>, points: readonly Vertex[], g: Pick<SheetGeometry, "frame" | "window">): Vertex[] {
+  return o.anchor === "page" ? [...points] : mapVertices(points, (q) => toView(q, g));
+}
+
+/**
+ * A path drawn in the viewer's paper mm (the course editor's area flow,
+ * docs/course-layout.md §3 `P`) on the page: vertices and handles mapped
+ * affinely, each vertex clamped to the printable area.
+ */
+export function pathFromView(vertices: readonly Vertex[], g: Pick<SheetGeometry, "frame" | "window">, printable: MapRect): Vertex[] {
+  return mapVertices(vertices, (q) => toPage(q, g)).map((v) => ({ ...v, ...clampPagePoint(v, printable) }));
+}
+
 /**
  * The topmost layout object under a page point (the last in draw order
- * wins): text, rectangles and images by their bounds, lines and open paths
- * within `tolMm` of a segment, closed paths by their bounds. −1 for none.
+ * wins): text, rectangles and images by their bounds, lines within `tolMm`
+ * of the segment, paths within `tolMm` of their outline along its curves —
+ * a closed path never by its inside, as the course editor's areas (D16,
+ * docs/course-layout.md §3), so a press inside one reaches what is under
+ * it, or pans. −1 for none.
  */
 export function layoutObjectAt(p: Pt, objects: readonly CourseMapObject[], g: Pick<SheetGeometry, "frame" | "window">, tolMm: number): number {
   for (let i = objects.length - 1; i >= 0; i--) {
     const o = objects[i];
-    const page = (q: Pt) => (o.anchor === "page" ? q : toPage(q, g));
     if (o.kind === "line") {
+      const page = (q: Pt) => (o.anchor === "page" ? q : toPage(q, g));
       if (segmentDistance(p, page({ x: o.x1, y: o.y1 }), page({ x: o.x2, y: o.y2 })) <= tolMm) return i;
       continue;
     }
-    if (o.kind === "path" && !o.closed) {
-      const pts = o.points.map(page);
-      for (let k = 1; k < pts.length; k++) if (segmentDistance(p, pts[k - 1], pts[k]) <= tolMm) return i;
+    if (o.kind === "path") {
+      const edge = nearestEdge(pagePoints(o, g), o.closed, p);
+      if (edge && edge.dist <= tolMm) return i;
       continue;
     }
     const b = courseMapObjectPageBounds(o, g.frame, g.window);
