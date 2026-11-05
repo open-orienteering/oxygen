@@ -159,7 +159,7 @@ automatic cuts; an empty list means automatic (decision log 2026-11-01,
 | `sites` | `{ id, code, kind: "control" \| "start" \| "finish", x, y, circleGaps? }[]` | `controls` rows; `code` the display code (first punch code, else name / seq); `circleGaps` = `controls.circle_gaps`, compass degrees |
 | `objects` | `(CourseMapObject \| CourseLayerObject)[]`: a sheet's layout objects (only `anchor: "map"` ones are drawn) and course objects (§8; told apart by `geometry`) | the sheet's layout objects (`course-maps` schema); the event's course objects in scope (§8.3) |
 | `appearance` | `{ circle?, line?, number?, numberStyle? }`, multipliers (1 = the spec) | `appearanceFromTemplate(template.appearance)`; the template's `purple` is not read (the purple is the stack's row) |
-| `viewOptions` | `{ allControls?, labelMode?, overprintScale?, window?, textValues? }` | the view: all-controls, label mode, print enlargement, the frame polygon for white-out-outside, `{course}` placeholder values |
+| `viewOptions` | `{ allControls?, labelMode?, overprintScale?, autoCuts?, window?, textValues? }` | the view: all-controls, label mode, print enlargement, the event's **Auto cuts** toggle (`Event.autoOverprintCuts`; `false` = no automatic cuts, §3.4; absent = on), the frame polygon for white-out-outside, `{course}` placeholder values |
 | `cutFeatures` | `{ x, y, r? }[]` (`r` the drawn symbol's radius) | `cutFeaturesOfDocument(doc)` (vector events), the legacy OCAD parse (C5, §4.2) |
 | `regions` | `{ rings: MapPoint[][], mode: "clip" \| "hide", symbols: "all" \| number[] \| { colours }, invert? }[]` — filter regions over the map, `rings` outer first; symbol indices are the document's, colours its own stack's | explicit regions, then every `filter_region` course object in `objects` (§8.3); the layer returns them as `CourseLayer.regions` (µm paths, colours on the completed stack) and `courseRenderInput` passes them to `symbolise` with the document's object count as `regionObjectLimit` — the rule is `map-rendering.md` §4.11 |
 
@@ -207,8 +207,8 @@ For an `ordered` course, one leg per consecutive pair of positioned
 items, centre to centre:
 
 1. Gaps: the item's authored `leg.gaps` when non-empty, else the
-   automatic ones (§3.4) when `cutFeatures` are given. `subtractLegGaps`
-   removes them.
+   automatic ones (§3.4) when `cutFeatures` are given and the event's
+   auto cuts are on. `subtractLegGaps` removes them.
 3. Each remaining segment is clipped (`clipLine`) at every **drawn**
    site with clearance = the site's extent + 0.2 × R (R = control circle
    radius): 1.2 R at a control (legacy), outer ring + 0.2 R at a finish,
@@ -233,7 +233,8 @@ appearing in several roles takes its first.
 - **Control (703)**: a closed circle, or the arcs left by its gaps
   (`circleArcs`; an arc running through north is one path). Gaps: the
   site's authored `circleGaps` when non-empty, else the automatic
-  cuts (§3.4). Start and finish are never cut.
+  cuts (§3.4) while the event's auto cuts are on. Start and finish are
+  never cut.
 - **Finish (706)**: the entry's two rings.
 
 ### 3.4 Automatic cuts
@@ -281,6 +282,25 @@ factor) of an applied match, else the document's own render; the library
 entry × document factor only when there is neither. The caller chooses
 the source: the pinned document for `vector` events, the legacy OCAD
 parse otherwise (§4, decision of the slice-C split).
+
+**The event's toggle** (`Event.autoOverprintCuts`, written by
+`course.setOverprintCuts`, read by `course.getOverprintCuts`; the
+editor's `editor-toggle-cuts`, `course-editor.md` §4; D17). Off, the
+layer computes **no automatic cuts** — no circle slits, no leg gaps —
+whatever `cutFeatures` holds: `viewOptions.autoCuts === false` makes
+`deriveCourse` ignore the features, so the objects equal those of the
+same input without `cutFeatures` (one rule for the layer and the
+artifact writer, which passes no features when off, §4.2). **Stored
+gaps still apply**: a site's `circleGaps` and a leg's `LegProps.gaps`
+are the setter's explicit choice (the gap tool, an importer) and draw as
+authored with the toggle off (decided by the coordinator for D17 — for
+user review). The flag reaches every consumer of the layer:
+
+| Consumer | How it reads the flag |
+|---|---|
+| GL course layer (every `MapPanel`: course views, kiosk, the editors, Layout mode) | `MapPanel` reads `course.getOverprintCuts` (kiosk-readable) and passes `autoCuts` to `MapViewer` → `courseLayerRequest` → `viewOptions.autoCuts` (§5); the editors' toggle refetches the same query, so the canvas redraws without a reload. Until the query answers, cuts are on |
+| Vector print (`maps.pdf`, `course-print.md` §8.2) | the route passes `event.autoOverprintCuts` as `MapRowContext.autoCuts` → `resolveSheet` → the sheet's `course.viewOptions.autoCuts` → `composePage`; `courseMap.resolveSheet` (Layout mode's sheet) does the same |
+| Legacy artifact (`course.geometry`, the legacy PDF and SVG overlay) | `rebuildCourseGeometry` passes no `cutFeatures` when off (§4.2) and `setOverprintCuts` rebuilds every editor course. The artifact carries no stored gaps at all (Pending "Structure, beyond D1": the writer does not carry authored cuts and gaps), so under `legacy` the toggle off draws **no** cuts — the one difference from the rule above, closed when the writer carries stored gaps |
 
 ### 3.5 Numbers
 
@@ -456,7 +476,7 @@ buckets. The React SVG keeps the UI layer only (`map-rendering.md` §5.4
 | `structure` | the highlighted courses (`highlight` or `highlightCourseName`) in order, one `CourseStructure` each, `id` = the course name, `items` = its control ids (start and finish as `MapPanel` completes them), `orderMode` the course's; `null` when none is highlighted |
 | `labelOffsets` | the single highlighted course's, with a drag or a pending label move winning — only with the description sheet or the editor (the SVG overlay's rule) |
 | `leg`, `numberHidden`, `circleGaps` | from the stored structure (§6.4), not from the GeoJSON: each item's `leg.gaps` from `course.list`'s `legGaps` (keyed `"<from>><to>"`, public control ids), `numberHidden` from its `hiddenNumbers`, each site's `circleGaps` from `course.controlCoordinates`. A course with no stored structure has none (the automatic cuts); 707 / 708 / 709 / 711 are course objects (`objects` below) |
-| `viewOptions` | `labelMode: "sequence"` for one ordered course with the sheet or the editor, else `"code"`; `allControls` when a drawn site is on no highlighted course |
+| `viewOptions` | `labelMode: "sequence"` for one ordered course with the sheet or the editor, else `"code"`; `allControls` when a drawn site is on no highlighted course; `autoCuts: false` when the event's toggle is off (`course.getOverprintCuts`, read by `MapPanel`; no key when on, §3.4) |
 | `objects` | the event's course objects in scope of the highlighted courses (`courseObjectsForView`, §8.2; `all`-scoped only when none is highlighted), without scope, `z` or token — `MapPanel` fetches `courseObject.list` and hands them to the viewer; no sheet's layout objects reach the viewer |
 | provisional visit | the editor's armed `S` / `K` / `M` (`course-editor.md` §6.1), with exactly one highlighted course: a site `provisional` (`PROVISIONAL_SITE_ID`, the tool's kind, the cursor, the next code) — or a reused site by its id — spliced into the course's items (`spliceProvisional`): a control before the `insertAt`-th control visit (repeats counted), else before the finish, else last; a start replaces the course's start, a finish its finish (else they lead / end). The leg the visit splits takes no stored gaps (they are keyed by the drawn neighbours) |
 | `appearance` | `{}` — the spec sizes × the document factor (decision "Sizes") |
@@ -1024,14 +1044,14 @@ for a check (decision log, D6).
 | unit | `packages/shared/src/course/__tests__/colour-stack.test.ts` | upper white inserted below upper purple with the remap; ISSprOM unchanged; source colours above upper purple; refusal without purples; `hexToCmyk` ↔ `cmykToHex`; object rows on top |
 | unit | `symbols.test.ts` | ISOM / ISSprOM dimensions, document factor, appearance multipliers, knockout, roles, 711 borrowed; the dangerous area: 709's hatch in both diagonals, 709.b / 709.c's boundaries, scaled like 709 (both libraries); arcs within 1 µm of the circle, gaps as open arcs, an arc through north one path |
 | unit | `cuts.test.ts` | clearance = symbol + half line + air at both arc ends and both gap ends, on / off the rim and the line by the same sum, wider for bigger symbols and lines, default radius, north wrap, whole circle; library radii (`cutSymbolRadiusMm`), OCAD symbol radii (`ocadCutSymbolRadiiMm`), `cutContextForScale`; `cutFeaturesOfDocument` (applied match, source code, suggested match, hidden symbol, line object, own render, factor fallback) |
-| unit | `derive.test.ts` | legs and clearances, circles in the way, unpositioned sites, automatic vs authored gaps, authored pieces and bends, free order, all-controls, start rotation, sequence / repeated / code numbers, y-down placement, manual offsets, multi-course |
-| unit | `layer.test.ts` | one `symbolise` call with a document: warning-free, lower purple under black, re-indexed document colours, object offsets; turned start, arcs, legs; knockout halo order; sprint sizes; layout objects (white-out, 709.b, rows on top, text values, page-mm sizes); toner-saver ring and its warning; images; `courseDocumentContext` |
+| unit | `derive.test.ts` | legs and clearances, circles in the way, unpositioned sites, automatic vs authored gaps, the event's auto cuts off (no automatic slits / gaps, authored ones kept, §3.4), authored pieces and bends, free order, all-controls, start rotation, sequence / repeated / code numbers, y-down placement, manual offsets, multi-course |
+| unit | `layer.test.ts` | one `symbolise` call with a document: warning-free, lower purple under black, re-indexed document colours, object offsets; turned start, arcs, legs; auto cuts off = the objects without cut features; knockout halo order; sprint sizes; layout objects (white-out, 709.b, rows on top, text values, page-mm sizes); toner-saver ring and its warning; images; `courseDocumentContext` |
 | unit | `geojson.test.ts` | editor course in the pre-C5 editor shape with cuts, free order, preclipped pieces and extras, course by id |
 | pass-stream | `scenes.test.ts`, snapshots in `render/__fixtures__/streams/course/` | the five course scenes (`map-rendering.md` §6.3) warning-free and equal to their snapshots at 1 µm, plus each scene's rule |
 | unit | `packages/api/src/__tests__/course-geometry.test.ts` | `editorCourseGeometry` writes the exact FeatureCollection, repeated controls, cuts at the legacy sizes on controls only and gaps on legs, no keys without features, unpositioned controls, free order; `legDistancesMm`, `courseLengthM` |
 | unit | `packages/api/src/__tests__/overprint-cuts.test.ts` | the legacy adapter: which OCAD objects cut (knolls and rocks, not water / vegetation / lines / areas / 206), file radii first, sub-codes, scale fallback; the rule over them |
 | unit | `packages/api/src/__tests__/course-geometry-compare.test.ts` | identical → no diffs; changed / added / removed with widths; stale row; imported fidelity (pieces, bends, authored vs automatic cuts, extras) |
-| integration | `packages/api/src/__tests__/integration/overprint-cuts.test.ts` | legacy event: rim slit over the boulder across north, no gap through the building, leg gap over the boulder, cuts follow a move, upload rebuilds, lazy migration to v3, toggle; `vector` event: document features = OCAD features, the upload rebuild cuts the course created before the map, circle and leg cuts equal to the legacy event's within 1e-6, OCAD fallback without a pin, migration from the document; the comparison report over both events (all same, document vs OCAD 0, imported fidelity) |
+| integration | `packages/api/src/__tests__/integration/overprint-cuts.test.ts` | legacy event: rim slit over the boulder across north, no gap through the building, leg gap over the boulder, cuts follow a move, upload rebuilds, lazy migration to v3, toggle; `vector` event: document features = OCAD features, the upload rebuild cuts the course created before the map, circle and leg cuts equal to the legacy event's within 1e-6, OCAD fallback without a pin, migration from the document; the toggle off reaches the vector print (composed sheet = the page without cut features, a stored circle gap still drawn) and `getOverprintCuts` reads with a kiosk key (§3.4); the comparison report over both events (all same, document vs OCAD 0, imported fidelity) |
 | integration | `control-editor.test.ts`, `journal-completeness.test.ts` | unchanged and green: editor geometry and lengths on create / move / delete / copy; `course.upserted` payloads |
 | unit | `packages/shared/src/course/__tests__/structure.test.ts` | §6.1: C0's linear shape accepted, the 08 leg props, groups and loops; nesting, overlap, unanchored, duplicate ids / labels, < 2 or empty alternatives, out-of-range gaps refused; interim `path` / `pieces` / `circleGaps` and `extras` refused; the wire form; site rules; `linearStructure`, `structureControlIds`; `structureDiff` (equal, moved, added, removed, leg / offset changes) |
 | unit | `packages/api/src/__tests__/course-structure.test.ts` | §6.2: `splitStructure` (explicit start / finish, implicit default, role start / finish, a start mid-sequence), `structureFromColumns` and its round trip, wire ↔ stored mapping |
@@ -1046,7 +1066,7 @@ for a check (decision log, D6).
 | E2E | `e2e/maintenance-course-backfill.spec.ts` | §6.4: the Maintenance card lists the pending course, fills it, reports |
 | unit | `packages/api/src/__tests__/courseGeometryStale.test.ts` | unchanged and green: OCD-vs-XML staleness of imported geometry |
 | golden | `e2e/__golden__/map-gl/course-*.png`, `packages/api/src/render/__tests__/golden-files.test.ts`, `e2e/map-gl-golden.spec.ts` | reference raster = committed golden; WebGL2 ≤ 0.5 % (`map-rendering.md` §6.2). The PDF tier joins in C3 |
-| unit (web) | `packages/web/src/lib/__tests__/course-layer-request.test.ts` | the §5 request rules (offsets only with the sheet or the editor); the provisional visit (a control at a position, before the finish, past the end, repeats counted; start / finish replace or lead / end; a reused site adds no site; the split leg loses its stored gaps; ignored without exactly one highlighted course); §8.2 scope by highlighted course over `inCourses`, all-controls = `all` only, parked nowhere; objects without scope / `z` / token / `inCourses` |
+| unit (web) | `packages/web/src/lib/__tests__/course-layer-request.test.ts` | the §5 request rules (offsets only with the sheet or the editor; `autoCuts: false` only when off); the provisional visit (a control at a position, before the finish, past the end, repeats counted; start / finish replace or lead / end; a reused site adds no site; the split leg loses its stored gaps; ignored without exactly one highlighted course); §8.2 scope by highlighted course over `inCourses`, all-controls = `all` only, parked nowhere; objects without scope / `z` / token / `inCourses` |
 | unit | `packages/shared/src/course/__tests__/objects.test.ts` | §8.1 each kind accepted (`hatch` included), short geometry / unknown props / an unknown `hatch` / bad filter props / Bézier region refused; §8.2 the scope truth table; §8.3 each kind onto its symbol (709 / 709.b / 709.c, the dangerous area and its boundaries for `hatch: "710"`, 708 / 711, 707, white-out), Bézier handles kept, text upper purple or own row and not divided by the enlargement, image corners, toner saver with and without a window and with Bézier handles (bezier flags in the hole ring only), `inset_frame` and `filter_region` draw nothing |
 | unit | `layer.test.ts` "a stored filter_region course object" | §8.3: the same region as the explicit one, after it; hides the document's 516 |
 | unit | `packages/api/src/__tests__/version-conflict.test.ts` | §8.4: the object `CONFLICT` payload |
@@ -1054,7 +1074,7 @@ for a check (decision log, D6).
 | integration | `course-print.test.ts` "course objects on the page" | §8.3 print: a sheet takes the objects in scope (all-controls: `all` only), they add passes over the map, `hatch: "710"` adds one hatch pass, a stored filter region hides map objects |
 | integration | `backup.test.ts` | §8.5: the dump's `course_objects` section |
 | E2E | `e2e/map-vector-layer.spec.ts` "a stored white-out course object paints the map white" | §8.3 viewer: an `all`-scoped white-out created through the API turns open yellow ground white on the GL canvas, yellow beside it unchanged |
-| unit (web) | `packages/web/src/map-gl/__tests__/worker-course.test.ts`, `engine.test.ts` | the dynamic bucket (`map-rendering.md` §5.2) |
+| unit (web) | `packages/web/src/map-gl/__tests__/worker-course.test.ts`, `engine.test.ts` | the dynamic bucket (`map-rendering.md` §5.2); a document boulder slits a circle, `viewOptions.autoCuts: false` drops it and keeps a stored circle gap (§3.4) |
 | E2E | `e2e/map-vector-layer.spec.ts`, `map-control-circles.spec.ts`, `map-multicourse.spec.ts` | lower purple under black at a crossing; labels under both pipelines (`map-rendering.md` §5.4) |
 | unit | `packages/shared/src/course/__tests__/checks.test.ts` | §9: a fixture per code — both distance thresholds (library, scale fallback), event-wide distances, same feature, codes below 31 / duplicate / invertible (and the upside-down table), sheets null / empty / outside, numbers from `collides` and missing labels (hidden visits skipped), descriptions, legs through areas (crossing and inside), 708 lines, course objects (711 skipped), free order, unpositioned items; output order; `checkObstaclesOfDocument` (applied match, source code, suggested match, hidden, Bézier handles, holes, points) and the codes' library names |
 | unit | `packages/shared/src/__tests__/control-label-placement.test.ts`, `course/__tests__/derive.test.ts` "number collisions" | §3.5: `collides` on a boxed-in number, absent on a clear map and a contested cluster |

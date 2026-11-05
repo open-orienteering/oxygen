@@ -1705,8 +1705,11 @@ hidden numbers and circle cuts come from the stored structure and the
 controls (`course.list` `legGaps` / `hiddenNumbers`, `controlCoordinates`
 `circleGaps`; `course-layer.md` §5, §6.4), and 707 / 708 / 709 / 711 are
 course objects. The worker cuts the rest from the document's own
-features (`cutFeaturesOfDocument`, extracted once per load). `MapPanel`
-passes what it passed before; every 09 §1 call site — kiosk,
+features (`cutFeaturesOfDocument`, extracted once per load) — unless the
+request's `viewOptions.autoCuts` is `false`, the event's **Auto cuts**
+toggle off, which `MapPanel` reads from `course.getOverprintCuts`
+(kiosk-readable) and passes to `MapViewer` (`course-layer.md` §3.4, D17).
+`MapPanel` passes what it passed before; every 09 §1 call site — kiosk,
 `CardReadout`, `CardMapPreview`, dashboard, `TracksPage`, the editor —
 follows through it.
 

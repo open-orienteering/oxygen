@@ -146,7 +146,7 @@ are `displaySequence` (start, controls, finish) with per-leg metres
 | inspector code | inline edit → `control.update { codes }` | the previous codes |
 | visit order | `setStructure({ orderMode })` | `setStructure(prev)` |
 | create / clone | `course.create` (suggests classes without a course; an exact name links it) / `course.clone` | not undoable (no `course.restore`) |
-| auto cuts | `course.setOverprintCuts` | the legacy geometry only: the GL layer and the vector print ignore it (Pending "Auto cuts toggle", D10) |
+| auto cuts | `course.setOverprintCuts` | not undoable (an event setting). The GL layer, the vector print and the legacy geometry follow it (`course-layer.md` §3.4, D17): off, no automatic slits or leg gaps; stored circle and leg gaps still draw. The canvas redraws once the toggle's `course.getOverprintCuts` refetch answers |
 
 Free-order courses show codes instead of numbers and no legs or leg
 metres, as before. The description sheet is MapPanel's (on by default on
@@ -346,8 +346,9 @@ circle's or leg's *effective* gaps — the stored ones, else the automatic
 ones from the layer's derivation — and writes the whole list. An empty
 list is "automatic" again (**Reset gaps**, `editor-gap-reset`, shown in
 `G` while a list is stored, writes it) — so a circle whose only gap is an automatic
-one cannot be left without it (turning the event's automatic cuts off for
-that does not reach the GL layer yet: Pending "Auto cuts toggle"). A leg's effective gaps come from the course the layer draws
+one cannot be left without it (that takes the event's **Auto cuts**
+toggle, which drops every automatic cut and keeps the stored lists,
+`course-layer.md` §3.4). A leg's effective gaps come from the course the layer draws
 (Course view); in the All-controls view the layer draws no legs and the
 tool starts from the stored ones.
 
@@ -945,7 +946,7 @@ whose poll ran meanwhile simply does not conflict (decision log, D10).
 | E2E | `e2e/course-editor.spec.ts` "Course editor (new, GL canvas)" (`map-vector`) | the mount gate both ways and the shell (`X` / `C` disabled); place → move → undo / redo → reload → select on the canvas → delete; create a course, append two controls, add-to-course on the map, reorder + undo, insert on a leg, remove, reload with `?course=` (explicit start / finish rows); deep links, `H`, Escape cascade; the Courses page's `course-edit-link` and the Controls page's `control-edit-link` open the new editor on the course / with the control selected (one `editor-selection-ring`) |
 | E2E | `e2e/course-editor.spec.ts` "Course mode (§4)" (`map-vector`) | delete cascade: a control on two courses is deleted from the action bar — the site goes, both structures lose it (the open one's rows, the other through `course.list`), `Ctrl+Z` restores the site and both visits; *Remove from course* drops one visit and keeps the site; inline code edit in the sequence (`editor-seq-code` → 997: the row's `data-control-id` and the site follow, `Ctrl+Z` back; a duplicate code → `editor-error` "already exists"); free order (`editor-order-mode`): the hint, no reorder arrows, the layer draws no legs and labels the circles with their codes, a number drag still writes `course.setControlLabelOffset`; a number drag (the shared hit-test's `number` target): the `course-label` moves, persists over a reload, *Reset label* puts the automatic place back, undo the dragged one; clone (`editor-clone-*`, "A (copy)" prefilled, same rows) and no `editor-toggle-first-start` / `-last-finish` even with a legacy-flag course in the event |
 | E2E | `e2e/course-editor.spec.ts` "Course mode descriptions (§4)" (`map-vector`) | the description editor: Escape closes only the dialog (the control stays selected), column C which-of-similar with written titles (`desc-opt-label-0.1N`), a boulder and dimensions with the live preview (`desc-dim-input` → `desc-preview`), saved, reloaded, the summary; *Clear* + save stores none, `Ctrl+Z` writes the saved description back (the control's own description written back after); a control placed on the map is described from the base map (no suggestion offered, a pressed option in `desc-editor`), after a move it stays selected with its action bar and at most one suggestion; the description sheet: "All controls" with every control until a course is picked, then course E's card (event name, course name, the finish row's measured metres, the thick rules) |
-| E2E | `e2e/course-editor.spec.ts` "Automatic cuts" (`map-vector`) | `course-layer.md` §3.4 through the mirror: a control whose rim passes the fixture's boulder (68 / 42 mm; radius from the `G` target) is drawn with a cut around south (`course-site` `data-cuts`); a leg across the boulder is drawn in two `course-leg` pieces on its line, none covering the boulder. The event's auto-cuts toggle is `test.fixme` (Pending "Auto cuts toggle") |
+| E2E | `e2e/course-editor.spec.ts` "Automatic cuts" (`map-vector`) | `course-layer.md` §3.4 through the mirror: a control whose rim passes the fixture's boulder (68 / 42 mm; radius from the `G` target) is drawn with a cut around south (`course-site` `data-cuts`); a leg across the boulder is drawn in two `course-leg` pieces on its line, none covering the boulder. The event's auto-cuts toggle (`editor-toggle-cuts`, D17): off, the rim control's slit goes while a control's stored circle gap (`control.update { circleGaps }`) stays; on again, the slit is back |
 | E2E | `e2e/course-editor.spec.ts` "conflicts (two contexts)" (`map-vector`) | §3 / §11 / `course-layout.md` §2, B a second context: **structure** — B appends, A's append on the old token answers `CONFLICT` once (no re-send), `editor-conflict[data-kind=refresh]` "Changed elsewhere…", A's rows reload to B's, the redone append lands after it; **control** — B writes the description, A's move is refused once and re-sent on the server's token with no notice (B's description kept), B moves it again (after its poll showed A's move), A's next move shows `editor-conflict[data-kind=moved]` with B's x, *Keep mine* writes A's position; **sheet / template** — B aligns the map, A's align map is refused and A shows B's centre (nothing of A's stored); both in template scope, B writes the orientation, A's paper-size write is refused (B's orientation, A4 kept) |
 | E2E | `e2e/course-editor.spec.ts` "touch" (`mobile`, Pixel 7) | §10 in Course mode on a phone: a tap selects (`editor-sheet-selection`), the peek row's ≥ 44 px *Append* (no `editor-action-bar` on the map) writes the structure, one finger on the selected control drags it at once, the overflow's undo puts it back; `+` → `K` → Place / Done in Course mode appends the placed control and the layer draws the leg to it |
 | unit (web) | `pages/editor/__tests__/placement.test.ts` | §6.1: insertion point (before the finish, after the selected control, at a leg, `S` at 0, no course), chain advance, `Ctrl+Z` steps back, `S` → `K`, ghost number and pending legs (a start's leg runs to the first item) |
@@ -986,14 +987,6 @@ whose poll ran meanwhile simply does not conflict (decision log, D10).
 - **Description instructions** (finish variant, special instructions)
   are edited in the legacy editor only.
 - **Course delete** stays on the Courses page.
-- **Auto cuts toggle** (found by D10): the event's automatic-cuts flag
-  (`course.setOverprintCuts`, `editor-toggle-cuts` in the top bar and the
-  phone's overflow) rebuilds the legacy `course.geometry` only; the GL
-  course layer (`courseLayer`, `course-layer.md` §3.4) and the vector print
-  compute cuts unconditionally, so for a `vector` event the toggle changes
-  nothing drawn or printed. The E2E is `test.fixme` ("the event's
-  automatic-cuts toggle…" in `course-editor.spec.ts`) until a row passes
-  the flag through the layer request, the shared layer and C3's composer.
 - **Presence names without sign-in**: an instance with auth off lists
   every editor as "Someone" (the station name could stand in, D11 left it);
   "moved by X at T" has no name there either. No leave message: a closed
