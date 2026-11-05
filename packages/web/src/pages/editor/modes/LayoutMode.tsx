@@ -128,7 +128,6 @@ export function useLayoutMode(a: LayoutModeArgs): LayoutMode {
   /** `P`'s drawing (the course editor's area flow): its gesture and hover, paper mm. */
   const drawGesture = useRef<Gesture>(null);
   const [drawHover, setDrawHover] = useState<Pt | null>(null);
-  useEffect(() => { drawGesture.current = null; setDrawHover(null); }, [tool.kind]);
   const [viewRequest, setViewRequest] = useState<MapViewerEditorProps["viewRequest"]>(null);
   useEffect(() => { setSelection(null); setTool({ kind: "select" }); setDraft(null); }, [key]);
 
@@ -287,7 +286,13 @@ export function useLayoutMode(a: LayoutModeArgs): LayoutMode {
     if (what === "select") { setTool({ kind: "select" }); return; }
     if (what === "description" && snap?.description.visible) { setTool({ kind: "select" }); setSelection({ kind: "description" }); return; }
     if (what === "image" && graphicId === undefined) return;
-    if (what === "path") { setTool({ kind: "draw", poly: { kind: "layout_path", vertices: [] } }); return; }
+    if (what === "path") {
+      // A fresh drawing: no gesture or hover left from an earlier one.
+      drawGesture.current = null;
+      setDrawHover(null);
+      setTool({ kind: "draw", poly: { kind: "layout_path", vertices: [] } });
+      return;
+    }
     setTool({ kind: "place", what, ...(graphicId !== undefined ? { graphicId } : {}) });
   }, [snap]);
 
