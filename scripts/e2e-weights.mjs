@@ -17,7 +17,7 @@
 export const WEIGHTS = {
   // The new course editor (D10): every desktop flow under `map-vector`; only the touch describe under `mobile`
   // (the desktop describes skip there, the fixture import still runs per test).
-  "course-editor.spec.ts": { "map-vector": 40, mobile: 3 },
+  "course-editor.spec.ts": { "map-vector": 30, mobile: 4 }, // ~230 s + ~35 s single run (D10)
   "course-editor-legacy.spec.ts": 12, // ~104s — the legacy page's spec (`chromium`), the old course-editor.spec.ts
   "course-presence.spec.ts": 4, // OCAD+map, two contexts, 5 s polls
   // `mobile` project: OCAD+map, 11 Field mode flows (~50s single run).
