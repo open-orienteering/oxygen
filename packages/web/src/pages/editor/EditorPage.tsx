@@ -63,7 +63,7 @@ import { TopBar } from "./TopBar";
 import { ToolRail, type AreaChoice } from "./ToolRail";
 import { areaChoiceOfKey } from "./tools/rail";
 import { afterPlaced, afterUndo, armPlacement, ghostInfo, switchTool, type PlacementState, type PlacementTool } from "./tools/placement";
-import { type AreaKind } from "./tools/polygon";
+import { step as polygonStep, type AreaKind } from "./tools/polygon";
 import { TONER_MARGIN_MM, tonerSaverGeometry } from "./tools/toner-saver";
 import { mergeCircleGaps, mergeLegGaps, type AngularGap, type FractionGap } from "./tools/gaps";
 import { areaBinding, gapBinding, placeBinding, selectBinding, textBinding, type GapTarget, type Gesture } from "./tools/bindings";
@@ -1192,9 +1192,9 @@ export function EditorPage() {
       } else if (e.key === "Enter" && plain) {
         if (state.tool.kind === "area") {
           e.preventDefault();
-          if (state.tool.poly.vertices.length >= (state.tool.poly.kind === "oob_line" || state.tool.poly.kind === "marked_route" ? 2 : 3)) {
-            finishArea(state.tool.poly.kind, state.tool.poly.vertices);
-          }
+          // Through the flow, so the minimum and the smooth vertices' settling (flags stripped) have one home.
+          const r = polygonStep(state.tool.poly, { type: "enter" });
+          if (r.done) finishArea(state.tool.poly.kind, r.done);
         } else if (state.tool.kind !== "select") {
           e.preventDefault();
           exitTool();

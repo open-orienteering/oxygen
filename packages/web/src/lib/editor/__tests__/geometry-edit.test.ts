@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 import { course } from "@oxygen/shared";
 import {
   CURVE_STEPS, constrain45, deleteVertex, dragGrip, hasHandles, insertVertex, nearestEdge, outlinePoints, retractHandles,
-  sampleSegment, symmetricHandles, vertexRule, type Vertex,
+  sampleSegment, smoothHandles, symmetricHandles, vertexRule, type Vertex,
 } from "../geometry-edit";
 
 const square: Vertex[] = [{ x: 0, y: 0 }, { x: 10, y: 0 }, { x: 10, y: 10 }, { x: 0, y: 10 }];
@@ -146,6 +146,54 @@ describe("handles", () => {
     expect(c.x).toBeCloseTo(Math.hypot(10, 1));
     const d = constrain45({ x: 3, y: 2.6 });
     expect(d.x).toBeCloseTo(d.y);
+  });
+});
+
+describe("smooth vertex (uniform Catmull-Rom, docs/course-editor.md §6.4)", () => {
+  const tri: Vertex[] = [{ x: 0, y: 0 }, { x: 10, y: 0 }, { x: 10, y: 10 }];
+
+  it("an interior vertex: hOut = (next − prev) / 6, hIn its negation", () => {
+    const g = smoothHandles(tri, 1, false);
+    expect(close(g[1].hOut!, { x: 10 / 6, y: 10 / 6 })).toBe(true);
+    expect(close(g[1].hIn!, { x: -10 / 6, y: -10 / 6 })).toBe(true);
+    expect(g[1]).toMatchObject({ x: 10, y: 0 });
+  });
+
+  it("the other vertices are untouched and a new array is returned", () => {
+    const g = smoothHandles(tri, 1, false);
+    expect(g).not.toBe(tri);
+    expect(g[0]).toBe(tri[0]);
+    expect(g[2]).toBe(tri[2]);
+    expect(tri[1]).toEqual({ x: 10, y: 0 });
+  });
+
+  it("a closed path wraps: the first vertex's prev is the last, the last's next is the first", () => {
+    const first = smoothHandles(tri, 0, true)[0];
+    expect(close(first.hOut!, { x: (10 - 10) / 6, y: (0 - 10) / 6 })).toBe(true);
+    expect(close(first.hIn!, { x: 0, y: 10 / 6 })).toBe(true);
+    const last = smoothHandles(tri, 2, true)[2];
+    expect(close(last.hOut!, { x: (0 - 10) / 6, y: (0 - 0) / 6 })).toBe(true);
+  });
+
+  it("an open path's ends stay corners (existing handles removed)", () => {
+    const curved = symmetricHandles(tri, 0, { x: 1, y: 1 });
+    expect(smoothHandles(curved, 0, false)[0]).toEqual({ x: 0, y: 0 });
+    expect(smoothHandles(tri, 2, false)[2]).toEqual({ x: 10, y: 10 });
+  });
+
+  it("fewer than three vertices never wrap", () => {
+    expect(smoothHandles(tri.slice(0, 2), 0, true)[0]).toEqual({ x: 0, y: 0 });
+  });
+
+  it("prev and next at the same point give a corner (zero handles dropped)", () => {
+    const spike: Vertex[] = [{ x: 0, y: 0 }, { x: 5, y: 5 }, { x: 0, y: 0 }];
+    expect(smoothHandles(spike, 1, false)[1]).toEqual({ x: 5, y: 5 });
+  });
+
+  it("an index out of range returns a copy", () => {
+    const g = smoothHandles(tri, 5, false);
+    expect(g).toEqual(tri);
+    expect(g).not.toBe(tri);
   });
 });
 

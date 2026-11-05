@@ -11,7 +11,7 @@ import type { EditorToolBinding, ToolPointer, ToolShape } from "../../../compone
 import type { EditorTarget } from "../../../lib/editor/hit";
 import { circleGapAt, circleGapFromDrag, compassDeg, legFraction, legGapAt, legGapFromDrag, type AngularGap, type FractionGap } from "./gaps";
 import { legLengthShape } from "../../../lib/editor/leg-length";
-import { isClosedKind, pointInPolygon, step, type PolygonState } from "./polygon";
+import { isClosedKind, pointInPolygon, smoothed, step, type PolygonState } from "./polygon";
 import {
   constrain45, dragGrip, hasHandles, insertVertex, nearestEdge, outlinePoints, retractHandles, symmetricHandles, vertexRule, type Vertex,
 } from "../../../lib/editor/geometry-edit";
@@ -346,10 +346,12 @@ export function areaBinding(o: AreaOptions): EditorToolBinding {
   const v = o.poly.vertices;
   const closed = isClosedKind(o.poly.kind);
   const shapes: ToolShape[] = [];
-  // No rubber-band vertex while a press is placing one (the hover is where the press began).
+  // No rubber-band vertex while a press is placing one (the hover is where the press began). Smooth
+  // vertices preview their provisional handles with the hover as the next vertex (and, closed, as the
+  // first one's prev); nothing provisional is written to the state, and only its handles get grips.
   const preview = o.hover && o.gesture.current?.kind !== "poly-pull" ? [...v, o.hover] : v;
   const ring = closed && preview.length >= 3;
-  if (preview.length >= 2) shapes.push({ kind: "line", points: outlinePoints(preview, ring), closed: ring, dashed: true, color: PURPLE, fill: closed ? "rgba(124,58,237,0.08)" : undefined, testId: "editor-polygon" });
+  if (preview.length >= 2) shapes.push({ kind: "line", points: outlinePoints(smoothed(preview, ring), ring), closed: ring, dashed: true, color: PURPLE, fill: closed ? "rgba(124,58,237,0.08)" : undefined, testId: "editor-polygon" });
   v.forEach((p, i) => {
     shapes.push({ kind: "handle", x: p.x, y: p.y, active: i === 0 && closed, testId: "editor-polygon-vertex", data: { index: String(i) } });
     for (const g of gripsOf(p)) shapes.push({ kind: "grip", x: g.at.x, y: g.at.y, from: p, testId: "editor-polygon-grip", data: { index: String(i), which: g.which } });
@@ -373,9 +375,10 @@ export function areaBinding(o: AreaOptions): EditorToolBinding {
         return true;
       }
       if (index === 0) return false;
-      // Anywhere else the press places a corner now; a drag from it pulls its handles (click = corner, click-drag = curve).
+      // Anywhere else the press places a corner now (Alt: a smooth vertex); a drag from it pulls its
+      // handles (click = corner, click-drag = curve, the pull beating Alt).
       const pt = o.snap(p.pt);
-      const r = step(o.poly, { type: "click", pt, onFirst: false });
+      const r = step(o.poly, { type: "click", pt, onFirst: false, smooth: !!p.alt });
       if (r.state !== o.poly) o.onPoly(r.state);
       o.gesture.current = { kind: "poly-pull", index: r.state.vertices.length - 1, press: p.pt, mmPerPx: p.mmPerPx, poly: r.state, pulled: false };
       return true;
@@ -398,10 +401,10 @@ export function areaBinding(o: AreaOptions): EditorToolBinding {
     },
     onClick(p) {
       const tol = HANDLE_PX * p.mmPerPx;
-      apply({ type: "click", pt: o.snap(p.pt), onFirst: v.length > 0 && near(v[0], p.pt, tol) });
+      apply({ type: "click", pt: o.snap(p.pt), onFirst: v.length > 0 && near(v[0], p.pt, tol), smooth: !!p.alt });
     },
     onDoubleClick(p) {
-      apply({ type: "double-click", pt: o.snap(p.pt) });
+      apply({ type: "double-click", pt: o.snap(p.pt), smooth: !!p.alt });
     },
     onContextMenu: () => o.onCancel(),
   };

@@ -75,3 +75,99 @@ describe("curve vertices while drawing (docs/course-editor.md §6.4)", () => {
     expect(s.vertices[0]).toEqual({ x: 2, y: 2, hOut: { x: 1, y: 1 }, hIn: { x: -1, y: -1 } });
   });
 });
+
+describe("smooth vertices while drawing: Alt (docs/course-editor.md §6.4)", () => {
+  const alt = (s: PolygonState, x: number, y: number, onFirst = false) => step(s, { type: "click", pt: { x, y }, onFirst, smooth: true });
+  const near = (a: { x: number; y: number } | undefined, x: number, y: number) => {
+    expect(a).toBeDefined();
+    expect(a!.x).toBeCloseTo(x, 9);
+    expect(a!.y).toBeCloseTo(y, 9);
+  };
+  const noFlags = (done: readonly object[]) => done.forEach((v) => expect(v).not.toHaveProperty("smooth"));
+
+  it("the flagged vertex gains its handles when the next one lands: hOut = (next − prev) / 6", () => {
+    let s = alt(click(area, 0, 0).state, 10, 0).state;
+    expect(s.vertices[1]).toEqual({ x: 10, y: 0, smooth: true }); // no next yet: a corner for now
+    s = click(s, 10, 10).state;
+    near(s.vertices[1].hOut, 10 / 6, 10 / 6);
+    near(s.vertices[1].hIn, -10 / 6, -10 / 6);
+    expect(s.vertices[1].smooth).toBe(true);
+  });
+
+  it("moving a neighbour or the vertex itself recomputes its handles", () => {
+    let s = click(alt(click(area, 0, 0).state, 10, 0).state, 10, 10).state;
+    s = step(s, { type: "move-vertex", index: 2, pt: { x: 16, y: 10 } }).state;
+    near(s.vertices[1].hOut, 16 / 6, 10 / 6);
+    s = step(s, { type: "move-vertex", index: 0, pt: { x: -6, y: 0 } }).state;
+    near(s.vertices[1].hOut, 22 / 6, 10 / 6);
+    s = step(s, { type: "move-vertex", index: 1, pt: { x: 50, y: 50 } }).state;
+    expect(s.vertices[1]).toMatchObject({ x: 50, y: 50 });
+    near(s.vertices[1].hOut, 22 / 6, 10 / 6);
+  });
+
+  it("a manual pull wins: the flag is cleared and the pulled handles survive a neighbour move", () => {
+    let s = alt(click(area, 0, 0).state, 10, 0).state;
+    s = step(s, { type: "pull-handles", index: 1, vec: { x: 3, y: 4 }, shift: false }).state;
+    expect(s.vertices[1]).toEqual({ x: 10, y: 0, hOut: { x: 3, y: 4 }, hIn: { x: -3, y: -4 } });
+    s = click(s, 10, 10).state;
+    s = step(s, { type: "move-vertex", index: 0, pt: { x: -5, y: 0 } }).state;
+    expect(s.vertices[1].hOut).toEqual({ x: 3, y: 4 });
+    // A drag back within 3 px is a corner, not smooth again.
+    const back = step(alt(click(area, 0, 0).state, 10, 0).state, { type: "pull-handles", index: 1, vec: { x: 0, y: 0 }, shift: false }).state;
+    expect(click(back, 10, 10).state.vertices[1]).toEqual({ x: 10, y: 0 });
+  });
+
+  it("a filter region ignores Alt", () => {
+    const fr: PolygonState = { kind: "filter_region", vertices: [] };
+    let s = alt(click(fr, 0, 0).state, 10, 0).state;
+    s = click(s, 10, 10).state;
+    expect(s.vertices[1]).toEqual({ x: 10, y: 0 });
+    expect(alt(s, 0, 0, true).done).toEqual([{ x: 0, y: 0 }, { x: 10, y: 0 }, { x: 10, y: 10 }]);
+  });
+
+  it("closed kinds wrap at close; Alt on the closing click smooths the first vertex", () => {
+    let s = click(area, 0, 0).state;
+    s = click(s, 10, 0).state;
+    s = alt(s, 10, 10).state; // the last vertex: smooth, no next while drawing
+    expect(s.vertices[2]).toEqual({ x: 10, y: 10, smooth: true });
+    const done = alt(s, 0, 0, true).done!;
+    near(done[0].hOut, (10 - 10) / 6, (0 - 10) / 6); // next g1, prev g2 (the wrap)
+    near(done[2].hOut, (0 - 10) / 6, (0 - 0) / 6); // next g0 (the wrap), prev g1
+    expect(done[1]).toEqual({ x: 10, y: 0 });
+    noFlags(done);
+  });
+
+  it("an open line's ends stay corners, a flagged middle vertex curves", () => {
+    const line: PolygonState = { kind: "marked_route", vertices: [] };
+    let s = alt(line, 0, 0).state;
+    s = alt(s, 10, 0).state;
+    s = alt(s, 10, 10).state;
+    const done = step(s, { type: "enter" }).done!;
+    expect(done[0]).toEqual({ x: 0, y: 0 });
+    expect(done[2]).toEqual({ x: 10, y: 10 });
+    near(done[1].hOut, 10 / 6, 10 / 6);
+    noFlags(done);
+  });
+
+  it("every finishing path strips the flags; the state keeps them until then", () => {
+    const s = alt(alt(alt(area, 0, 0).state, 10, 0).state, 10, 10).state;
+    expect(s.vertices.every((v) => v.smooth)).toBe(true);
+    noFlags(click(s, 0, 0, true).done!);
+    noFlags(step(s, { type: "enter" }).done!);
+    noFlags(step(s, { type: "double-click", pt: { x: 10, y: 10 } }).done!);
+  });
+
+  it("Alt on a double-click flags its new point; its first click is not added twice", () => {
+    let s = click(click(area, 0, 0).state, 10, 0).state;
+    const r = step(s, { type: "double-click", pt: { x: 10, y: 10 }, smooth: true });
+    expect(r.state.vertices[2].smooth).toBe(true);
+    near(r.done![2].hOut, (0 - 10) / 6, 0);
+    s = alt(s, 10, 10).state; // the double-click's first press, with Alt
+    expect(step(s, { type: "double-click", pt: { x: 10, y: 10 } }).state.vertices).toHaveLength(3);
+  });
+
+  it("without Alt nothing changes (touch never sets it)", () => {
+    const s = click(click(click(area, 0, 0).state, 10, 0).state, 10, 10).state;
+    expect(s.vertices).toEqual([{ x: 0, y: 0 }, { x: 10, y: 0 }, { x: 10, y: 10 }]);
+  });
+});
