@@ -644,23 +644,36 @@ test.describe("Automatic cuts (course-layer.md §3.4)", () => {
     }
   });
 
-  // Product gap found by D10 (docs/course-editor.md Pending "Auto cuts toggle"): the event's automatic-cuts flag
-  // (`course.setOverprintCuts`, `editor-toggle-cuts`) rebuilds the legacy `course.geometry` only; the GL course layer
-  // and the vector print compute cuts unconditionally, so on the new canvas the toggle changes nothing drawn.
-  test.fixme("the event's automatic-cuts toggle removes the layer's slits and gaps", async ({ page }) => {
+  // D17 (course-layer.md §3.4): the event's automatic-cuts flag (`course.setOverprintCuts`, `editor-toggle-cuts`)
+  // reaches the GL course layer — off, the boulder's slit goes, a stored circle gap stays (the setter's choice).
+  test("the event's automatic-cuts toggle removes the layer's slits and gaps", async ({ page }) => {
     await openEditor(page);
-    await controlsAt([{ x: BOULDER.x, y: BOULDER.y + 3 }]);
+    const [any] = await regularCodes(page, 1);
+    await select(page, any);
+    await page.keyboard.press("g");
+    const [target] = await toolShapes(page, "editor-gap-target");
+    const r = Number(target.data.r);
+    await page.keyboard.press("Escape");
+    await page.keyboard.press("Escape");
+    // 241 with the boulder on its southern rim; 242 clear of every feature, with a stored circle gap.
+    await controlsAt([{ x: BOULDER.x, y: BOULDER.y + r }, { x: BOULDER.x + 10, y: BOULDER.y + 10 }]);
+    const stored = { start: 80, end: 100 };
+    await trpcCall("control.update", { id: CODES[1], circleGaps: [stored] });
     try {
       await page.reload();
       await editorReady(page);
       await expect.poll(async () => (await siteCuts(page, String(CODES[0]))).length, { timeout: 20000 }).toBeGreaterThan(0);
+      await expect.poll(async () => siteCuts(page, String(CODES[1])), { timeout: 20000 }).toEqual([stored]);
       const toggle = page.getByTestId("editor-toggle-cuts");
       await expect(toggle).toHaveAttribute("aria-pressed", "true");
       await toggle.click();
       await expect(toggle).toHaveAttribute("aria-pressed", "false", { timeout: 15000 });
       await expect.poll(async () => (await siteCuts(page, String(CODES[0]))).length, { timeout: 20000 }).toBe(0);
+      expect(await siteCuts(page, String(CODES[1]))).toEqual([stored]);
       await toggle.click();
       await expect(toggle).toHaveAttribute("aria-pressed", "true", { timeout: 15000 });
+      await expect.poll(async () => (await siteCuts(page, String(CODES[0]))).length, { timeout: 20000 }).toBeGreaterThan(0);
+      expect(await siteCuts(page, String(CODES[1]))).toEqual([stored]);
     } finally {
       await cleanup("course.setOverprintCuts", { enabled: true });
       for (const code of CODES) await cleanup("control.delete", { id: code });
