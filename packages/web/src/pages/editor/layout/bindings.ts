@@ -18,7 +18,9 @@ import {
   selectionShapes, sheetShapes, toPage, toView, type SheetGeometry,
 } from "../../../lib/editor/layout";
 import { clampPagePoint, constrainDescription, constrainMapObject, resizeMapObject, translateMapObject, type ResizeHandle } from "../../../lib/map-layout-editor";
-import { dragGeometry, geometryShapes, insertAtEdge, pressGeometry, releaseGeometry, type GeometryDrag } from "../../../lib/editor/geometry-gestures";
+import {
+  draggedGeometry, dragGeometry, geometryShapes, insertAtEdge, pressGeometry, releaseGeometry, type GeometryDrag,
+} from "../../../lib/editor/geometry-gestures";
 import { courseMapObjectPageBounds } from "@oxygen/shared";
 import { areaBinding, HANDLE_PX, type GestureRef } from "../tools/bindings";
 import type { PolygonState } from "../tools/polygon";
@@ -48,7 +50,7 @@ export type LayoutGesture =
   | { kind: "description"; from: Pt; base: DescriptionBlockSettings; moved: boolean }
   | { kind: "align"; from: Pt; base: Pt; moved: boolean }
   /** A vertex or a handle grip of the selected path, in page mm (`geometry-gestures.ts`). */
-  | { kind: "geometry"; id: string; base: PathObject; drag: GeometryDrag; moved: boolean }
+  | { kind: "geometry"; id: string; base: PathObject; drag: GeometryDrag }
   | null;
 
 /** What one gesture changes: the scope's objects, the block's settings, the window centre. */
@@ -102,10 +104,8 @@ const step = (d: Pt, on: boolean): Pt => (on ? { x: Math.round(d.x), y: Math.rou
 export function gestureChange(c: Pick<LayoutBindingContext, "geometry" | "editable" | "block" | "snapping">, g: NonNullable<LayoutGesture>, to: Pt): LayoutChange {
   const { frame, window, printable } = c.geometry;
   if (g.kind === "align") return { centre: alignedCentre(g.base, g.from, to) };
-  if (g.kind === "geometry") {
-    const points = dragGeometry(g.drag, geometryPoint(c, g.drag, to));
-    return points ? pathChange(c, g.base, points, movedVertex(g.drag)) : {};
-  }
+  // The drag's own state (`dragGeometry` updates it with the keys held); `to` is already in it.
+  if (g.kind === "geometry") return g.drag.moved ? pathChange(c, g.base, draggedGeometry(g.drag), movedVertex(g.drag)) : {};
   const d = step(pageDelta(g.from, to, c.geometry), c.snapping);
   if (g.kind === "description") {
     const b = c.block;
@@ -188,7 +188,7 @@ export function layoutBinding(c: LayoutBindingContext): EditorToolBinding {
         // A vertex or a grip; the edge falls through to the move below (topmost first, kept on the printable area).
         const d = pressGeometry(pagePoints(selected, g), pathRule(selected), { pt: page, reach: tol, alt: p.alt, shift: p.shift }, false);
         if (d && !(d.kind === "object" && d.vertex === null)) {
-          c.gesture.current = { kind: "geometry", id: selected.id, base: selected, drag: d, moved: false };
+          c.gesture.current = { kind: "geometry", id: selected.id, base: selected, drag: d };
           return true;
         }
       } else if (selected) {
@@ -221,8 +221,7 @@ export function layoutBinding(c: LayoutBindingContext): EditorToolBinding {
       const gst = c.gesture.current;
       if (!gst) return;
       if (gst.kind === "geometry") {
-        const points = dragGeometry(gst.drag, geometryPoint(c, gst.drag, pt), mods);
-        if (points) c.onPreview(pathChange(c, gst.base, points, movedVertex(gst.drag)));
+        if (dragGeometry(gst.drag, geometryPoint(c, gst.drag, pt), mods)) c.onPreview(gestureChange(c, gst, pt));
         return;
       }
       gst.moved = true;

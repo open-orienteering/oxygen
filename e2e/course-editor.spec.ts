@@ -44,30 +44,35 @@ async function printedAllControls(page: Page, nameId: string): Promise<{ pages: 
   expect(res.ok(), await res.text().catch(() => "")).toBe(true);
   const bytes = await res.body();
   const pages = (await PDFDocument.load(bytes)).getPageCount();
-  const text = bytes.toString("latin1");
   let hatches = 0, curvedFills = 0;
   const run = /W\* n[^]*?(?:-?[\d.]+ -?[\d.]+ m -?[\d.]+ -?[\d.]+ l ){3,}-?[\d.]+ -?[\d.]+ m -?[\d.]+ -?[\d.]+ l S/g;
+  for (const inflated of inflatedStreams(bytes)) {
+    hatches += inflated.match(run)?.length ?? 0;
+    let curved = false;
+    for (const op of inflated.split(/\s+/)) {
+      if (op === "c") curved = true;
+      else if (op === "f*" || op === "f") {
+        if (curved) curvedFills++;
+        curved = false;
+      } else if (op === "S" || op === "n" || op === "B" || op === "B*") curved = false;
+    }
+  }
+  return { pages, hatches, curvedFills };
+}
+
+/** A PDF's Flate content streams, inflated (latin1). */
+function inflatedStreams(bytes: Buffer): string[] {
+  const text = bytes.toString("latin1");
+  const out: string[] = [];
   for (let at = text.indexOf("stream"); at >= 0; at = text.indexOf("stream", at + 6)) {
     if (text.slice(at - 3, at) === "end") continue;
     const start = at + 6 + (text[at + 6] === "\r" ? 2 : 1);
     const end = text.indexOf("endstream", start);
     if (end < 0) break;
-    let inflated: string | null = null;
-    try { inflated = inflateSync(bytes.subarray(start, end)).toString("latin1"); } catch { /* not Flate */ }
-    if (inflated) {
-      hatches += inflated.match(run)?.length ?? 0;
-      let curved = false;
-      for (const op of inflated.split(/\s+/)) {
-        if (op === "c") curved = true;
-        else if (op === "f*" || op === "f") {
-          if (curved) curvedFills++;
-          curved = false;
-        } else if (op === "S" || op === "n" || op === "B" || op === "B*") curved = false;
-      }
-    }
+    try { out.push(inflateSync(bytes.subarray(start, end)).toString("latin1")); } catch { /* not Flate */ }
     at = end;
   }
-  return { pages, hatches, curvedFills };
+  return out;
 }
 
 /** A template and an all-controls sheet on it for the event (`maps.pdf?allControls=1`); `drop` removes both. */
@@ -1208,6 +1213,21 @@ test.describe("Course editor layout (docs/course-layout.md)", () => {
     await expect.poll(async () => (await stored())[0].points?.length).toBe(4);
     await expect(page.getByTestId("editor-layout-object-row")).toHaveCount(1);
 
+    // Escape discards a polygon being drawn (no write); Enter closes one from three vertices.
+    await page.getByTestId("editor-layout-tool-P").click();
+    await clickMap(page, await at(120, 60));
+    await clickMap(page, await at(160, 60));
+    await expect(page.getByTestId("editor-tool-layer").getByTestId("editor-polygon-vertex")).toHaveCount(2);
+    await page.keyboard.press("Escape");
+    await expect(page.getByTestId("editor-layout-tool-V")).toHaveAttribute("aria-pressed", "true");
+    await expect(page.getByTestId("editor-tool-layer").getByTestId("editor-polygon-vertex")).toHaveCount(0);
+    await page.getByTestId("editor-layout-tool-P").click();
+    for (const [x, y] of [[120, 60], [160, 60], [140, 100]]) await clickMap(page, await at(x, y));
+    const entered = waitForTrpc(page, "courseMap.saveLayout");
+    await page.keyboard.press("Enter");
+    await entered;
+    await expect.poll(async () => (await stored()).map((o) => o.points?.length)).toEqual([4, 3]);
+
     // The curve prints as a Bézier (`c`) on the sheet's page.
     expect(await curveOperators(page, nameId, sheet.seq)).toBeGreaterThan(curvesBefore);
   });
@@ -1217,20 +1237,7 @@ test.describe("Course editor layout (docs/course-layout.md)", () => {
 async function curveOperators(page: Page, nameId: string, seq: number): Promise<number> {
   const res = await page.request.get(`/api/maps/${nameId}/maps.pdf?maps=${seq}`);
   expect(res.ok(), await res.text().catch(() => "")).toBe(true);
-  const bytes = await res.body();
-  const text = bytes.toString("latin1");
-  let curves = 0;
-  for (let at = text.indexOf("stream"); at >= 0; at = text.indexOf("stream", at + 6)) {
-    if (text.slice(at - 3, at) === "end") continue;
-    const start = at + 6 + (text[at + 6] === "\r" ? 2 : 1);
-    const end = text.indexOf("endstream", start);
-    if (end < 0) break;
-    let inflated: string | null = null;
-    try { inflated = inflateSync(bytes.subarray(start, end)).toString("latin1"); } catch { /* not Flate */ }
-    if (inflated) curves += inflated.split(/\s+/).filter((op) => op === "c").length;
-    at = end;
-  }
-  return curves;
+  return inflatedStreams(await res.body()).reduce((n, s) => n + s.split(/\s+/).filter((op) => op === "c").length, 0);
 }
 
 test.describe("Course editor auto templates (docs/course-layout.md §5–§7)", () => {

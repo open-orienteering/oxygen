@@ -142,11 +142,11 @@ describe("layout objects on the page", () => {
     expect(pts[2].hIn).toBeUndefined();
   });
 
-  it("handles: corners, line ends, path vertices; the nearest within tolerance", () => {
+  it("handles: corners, line ends, none for a path (its vertices are the geometry gestures'); the nearest within tolerance", () => {
     expect(objectHandles(rect, g).map((h) => h.handle)).toEqual(["nw", "ne", "sw", "se"]);
     expect(objectHandles(line, g).map((h) => h.handle)).toEqual(["start", "end"]);
     const path: CourseMapObject = { id: "p", kind: "path", anchor: "page", points: [{ x: 0, y: 0 }, { x: 10, y: 0 }, { x: 10, y: 10 }], closed: true, fillMode: "none" };
-    expect(objectHandles(path, g).map((h) => h.handle)).toEqual(["vertex-0", "vertex-1", "vertex-2"]);
+    expect(objectHandles(path, g)).toEqual([]);
     expect(handleAt({ x: 80.5, y: 70.4 }, objectHandles(rect, g), 1)).toBe("se");
     expect(handleAt({ x: 65, y: 60 }, objectHandles(rect, g), 1)).toBeNull();
   });

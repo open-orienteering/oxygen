@@ -154,11 +154,14 @@ export function layoutObjectAt(p: Pt, objects: readonly CourseMapObject[], g: Pi
   return -1;
 }
 
-/** An object's resize handles on the page (`resizeMapObject`'s handle names). */
+/**
+ * An object's resize handles on the page (`resizeMapObject`'s handle names). A path has none here: its vertices
+ * and grips are the geometry gestures' (`geometry-gestures.ts`, D16).
+ */
 export function objectHandles(o: CourseMapObject, g: Pick<SheetGeometry, "frame" | "window">): { handle: ResizeHandle; at: Pt }[] {
   const page = (q: Pt) => (o.anchor === "page" ? q : toPage(q, g));
   if (o.kind === "line") return [{ handle: "start", at: page({ x: o.x1, y: o.y1 }) }, { handle: "end", at: page({ x: o.x2, y: o.y2 }) }];
-  if (o.kind === "path") return o.points.map((v, i) => ({ handle: `vertex-${i}` as ResizeHandle, at: page(v) }));
+  if (o.kind === "path") return [];
   const b = courseMapObjectPageBounds(o, g.frame, g.window);
   if (!b) return [];
   return [
