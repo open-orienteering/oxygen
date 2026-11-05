@@ -65,7 +65,8 @@ export function deriveCourse(input: CourseLayerInput, m: CourseMetrics): CourseD
   const structures = structuresOf(input);
   const siteById = new Map(input.sites.map((s) => [s.id, s]));
   const sequences = structures.map((s) => sequenceOf(s, siteById));
-  const features = input.cutFeatures;
+  // The event's auto-cuts toggle off: no automatic slits / gaps; authored ones still apply (§3.4).
+  const features = input.viewOptions.autoCuts === false ? undefined : input.cutFeatures;
   const R = m.circleRadiusMm;
 
   // ---- drawn sites: the courses' in first-visit order, then (all-controls) every other positioned site.

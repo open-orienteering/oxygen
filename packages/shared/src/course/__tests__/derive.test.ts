@@ -49,6 +49,18 @@ describe("legs (§3.2)", () => {
     expect(authored.pieces).toHaveLength(2);
   });
 
+  it("with the event's auto cuts off, no automatic gaps; authored leg gaps still apply", () => {
+    const feature = [{ x: 25, y: 10.2 }];
+    const off = derive({ cutFeatures: feature, viewOptions: { autoCuts: false } }).courses[0].legs[0];
+    expect(off.gaps).toEqual([]);
+    expect(off.pieces).toHaveLength(1);
+    const gaps = [{ from: 0.4, to: 0.6 }];
+    const authored = derive({ cutFeatures: feature, viewOptions: { autoCuts: false }, structure: linear(undefined, { items: [{ siteId: "S" }, { siteId: "31", leg: { gaps } }, { siteId: "32" }] }) }).courses[0].legs[0];
+    expect(authored.gaps).toEqual(gaps);
+    expect(authored.pieces).toHaveLength(2);
+    expect(derive({ cutFeatures: feature, viewOptions: { autoCuts: true } }).courses[0].legs[0].gaps).toHaveLength(1);
+  });
+
   it("numberHidden skips the visit's number, the site stays drawn", () => {
     const d = derive({ structure: linear(undefined, { items: [{ siteId: "S" }, { siteId: "31", numberHidden: true }, { siteId: "32" }] }) });
     expect(d.sites.find((s) => s.id === "31")!.label).toBeUndefined();
@@ -70,6 +82,15 @@ describe("circles (§3.3)", () => {
     expect(d.sites.find((s) => s.id === "S")!.cuts).toEqual([]);
     const authored = derive({ cutFeatures: features, sites: SITES.map((s) => (s.id === "31" ? { ...s, circleGaps: [{ start: 200, end: 220 }] } : s)) });
     expect(authored.sites.find((s) => s.id === "31")!.cuts).toEqual([{ start: 200, end: 220 }]);
+  });
+
+  it("with the event's auto cuts off, no automatic slits; authored circle gaps still apply", () => {
+    const features = [{ x: 42.5, y: 10 }];
+    const off = derive({ cutFeatures: features, viewOptions: { autoCuts: false } });
+    expect(off.sites.find((s) => s.id === "31")!.cuts).toEqual([]);
+    const authored = derive({ cutFeatures: features, viewOptions: { autoCuts: false }, sites: SITES.map((s) => (s.id === "32" ? { ...s, circleGaps: [{ start: 200, end: 220 }] } : s)) });
+    expect(authored.sites.find((s) => s.id === "31")!.cuts).toEqual([]);
+    expect(authored.sites.find((s) => s.id === "32")!.cuts).toEqual([{ start: 200, end: 220 }]);
   });
 
   it("all-controls draws every positioned site, codes as labels", () => {

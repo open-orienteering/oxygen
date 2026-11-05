@@ -56,6 +56,15 @@ describe("courseLayer + courseRenderInput → one symbolise call", () => {
     expect(layer.objects.filter((o) => o.ref.kind === "leg")).toHaveLength(4);
   });
 
+  it("auto cuts off: the same objects as without cut features (one rule for the layer and the artifact)", () => {
+    const off = courseLayer(layerInput({ cutFeatures: [{ x: 42.5, y: 10 }, { x: 25, y: 10.2 }], viewOptions: { autoCuts: false } }));
+    const none = courseLayer(layerInput({ viewOptions: { autoCuts: false } }));
+    expect(off.objects).toEqual(none.objects);
+    expect(off.objects.filter((o) => o.ref.kind === "site" && o.ref.id === "31")[0].path.closed).toBe(true);
+    const on = courseLayer(layerInput({ cutFeatures: [{ x: 42.5, y: 10 }, { x: 25, y: 10.2 }] }));
+    expect(on.objects).not.toEqual(off.objects);
+  });
+
   it("knockout numbers: an upper-white halo pass below the upper-purple text", () => {
     const layer = courseLayer(layerInput({ appearance: { numberStyle: "knockout" } }));
     const { stream } = symbolise({ ...courseRenderInput(isomDocument(), layer), fonts: fonts() });
