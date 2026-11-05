@@ -297,7 +297,6 @@ describe("vector events cut against the pinned document", () => {
   beforeAll(async () => {
     vec = await createTestEvent("overprint_cuts_vector");
     vecCaller = makeCaller(vec.event);
-    await vec.db.event.update({ where: { id: vec.eventId }, data: { mapPipeline: "vector" } });
     // A course on the boulder before any map: rebuilt by the upload below.
     await vecCaller.control.create({ codes: "191", xpos: 68, ypos: 39.5 });
     await vecCaller.control.create({ codes: "192", xpos: 90, ypos: 60 });
@@ -473,7 +472,7 @@ describe("vector events cut against the pinned document", () => {
     expect(t.legs.same).toBe(t.legs.compared);
     expect(t.importedCourses).toBe(1);
     expect(t.imported).toMatchObject({ legs: 1, preclippedLegs: 1, bentLegs: 1, authoredCutControls: 1, both: 1 });
-    expect(report.events.map((e) => [e.pipeline, e.cutSource])).toEqual([["legacy", "document"], ["vector", "document"]]);
+    expect(report.events.map((e) => e.cutSource)).toEqual(["document", "document"]);
     expect(formatGeometryReport(report)).toContain("| circle cuts |");
   });
 });

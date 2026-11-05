@@ -631,33 +631,23 @@ describe("course map REST rendering", () => {
     expect(response.json().error).toContain("dpi");
   });
 
-  it("returns one PDF page per map for a selected course", async () => {
+  it("returns one composed PDF page per map for a selected course, never the rsvg converter", async () => {
+    const before = convertedSvgs.length;
     const response = await server.inject({
       method: "GET",
       url: `/api/maps/${ctx.nameId}/maps.pdf?courses=${courseSeq}`,
     });
     expect(response.statusCode).toBe(200);
     expect(response.headers["content-type"]).toContain("application/pdf");
+    expect(response.headers["x-print-pipeline"]).toBeUndefined();
     const pdf = await PDFDocument.load(response.rawPayload);
     expect(pdf.getPageCount()).toBe(2);
-    expect(convertedSvgs).not.toHaveLength(0);
-    const last = convertedSvgs.at(-1)!;
-    expect(last).toContain("course-overlay-lower");
-    expect(last).toContain("course-overlay-upper");
-    expect(last).not.toContain("mix-blend-mode");
-    // Ink (when present) sits between lower and upper purple.
-    const lowerAt = last.indexOf("course-overlay-lower");
-    const upperAt = last.indexOf("course-overlay-upper");
-    expect(lowerAt).toBeGreaterThanOrEqual(0);
-    expect(upperAt).toBeGreaterThan(lowerAt);
-    const inkAt = last.indexOf('data-map-layer="map-ink"');
-    if (inkAt >= 0) {
-      expect(inkAt).toBeGreaterThan(lowerAt);
-      expect(inkAt).toBeLessThan(upperAt);
-    }
+    // The composer draws the overprint (docs/course-print.md §8;
+    // course-print.test.ts asserts the page content).
+    expect(convertedSvgs).toHaveLength(before);
   });
 
-  it("exports all-controls starts and finishes as symbols", async () => {
+  it("exports the all-controls map as one composed page", async () => {
     const allControlsMap = (await caller.courseMap.list()).find(
       (map) => map.kind === "all_controls",
     );
@@ -667,15 +657,7 @@ describe("course map REST rendering", () => {
       url: `/api/maps/${ctx.nameId}/maps.pdf?maps=${allControlsMap.seq}`,
     });
     expect(response.statusCode).toBe(200);
-    const svg = convertedSvgs.at(-1) ?? "";
-    expect(svg).toContain(`data-control-id="${startControlId}"`);
-    expect(svg).toContain(`data-control-id="${finishControlId}"`);
-    expect(svg).toMatch(
-      new RegExp(`<path[^>]+data-control-id="${startControlId}"`),
-    );
-    expect(svg).toMatch(
-      new RegExp(`<circle[^>]+data-control-id="${finishControlId}"`),
-    );
+    expect((await PDFDocument.load(response.rawPayload)).getPageCount()).toBe(1);
   });
 
   it("renders a rotated window as a distinct cached entry", async () => {
@@ -717,19 +699,18 @@ describe("window.png under a pinned document", () => {
     const applied = await applyEventMap(vec.db, vec.eventId, "test.ocd", bytes);
     expect(applied.documentHash).toMatch(/^[0-9a-f]{64}$/);
     documentHash = applied.documentHash!;
-    await vec.db.event.update({ where: { id: vec.eventId }, data: { mapPipeline: "vector" } });
   }, 60_000);
 
   afterAll(async () => {
     await vec?.cleanup();
   });
 
-  it("getBaseMapInfo: the document branch agrees with the legacy reader and carries the hash", async () => {
-    const legacy = await getBaseMapInfo(ctx.db, ctx.eventId);
+  it("getBaseMapInfo: every pinned event carries its document hash", async () => {
+    const other = await getBaseMapInfo(ctx.db, ctx.eventId);
     const doc = await getBaseMapInfo(vec.db, vec.eventId);
-    expect(legacy.document).toBeNull();
-    expect(doc.scale).toBe(legacy.scale);
-    expect(doc.meridianTiltDeg).toBeCloseTo(legacy.meridianTiltDeg, 3);
+    expect(other.document).toEqual({ hash: other.version });
+    expect(doc.scale).toBe(other.scale);
+    expect(doc.meridianTiltDeg).toBeCloseTo(other.meridianTiltDeg, 3);
     expect(doc.document).toEqual({ hash: documentHash });
     expect(doc.version).toBe(documentHash);
   });
@@ -793,48 +774,13 @@ describe("window.png under a pinned document", () => {
     expect(again.headers["x-cache"]).toBe("hit");
   });
 
-  it("agrees with the legacy window of the same map up to the sanctioned differences", async () => {
-    // Sanctioned (decision 2026-10-23): library-drawn symbols, naive colour
-    // conversion, and the document's own colour order instead of the legacy
-    // IOF rewrite (the fixture draws yellow above blue, so the ink split
-    // differs). What must agree is the geometry: the paper/area edge in
-    // the full layer and the black linework in the ink layer.
-    const iou = (a: boolean[], b: boolean[]) => {
-      let both = 0, either = 0;
-      a.forEach((v, i) => {
-        if (v || b[i]) either++;
-        if (v && b[i]) both++;
-      });
-      return { both, either, ratio: either === 0 ? 1 : both / either };
-    };
-    const mask = (img: { data: Buffer }, f: (r: number, g: number, b: number, a: number) => boolean) => {
-      const out: boolean[] = [];
-      for (let i = 0; i < img.data.length; i += 4) out.push(f(img.data[i], img.data[i + 1], img.data[i + 2], img.data[i + 3]));
-      return out;
-    };
-    const get = async (id: string, layer: string) => decode((await server.inject({ method: "GET", url: q(id, `&layer=${layer}`) })).rawPayload);
-    const [lf, df, li, di] = [await get(ctx.nameId, "full"), await get(vec.nameId, "full"), await get(ctx.nameId, "ink"), await get(vec.nameId, "ink")];
-    for (const d of [df, li, di]) expect([d.width, d.height]).toEqual([lf.width, lf.height]);
-    const area = iou(mask(lf, (r, g, b) => !(r > 245 && g > 245 && b > 245)), mask(df, (r, g, b) => !(r > 245 && g > 245 && b > 245)));
-    expect(area.either).toBeGreaterThan(0);
-    expect(area.ratio).toBeGreaterThan(0.9);
-    const dark = (r: number, g: number, b: number, a: number) => a > 128 && r + g + b < 200;
-    const lines = iou(mask(li, dark), mask(di, dark));
-    expect(lines.either).toBeGreaterThan(0);
-    expect(lines.ratio).toBeGreaterThan(0.5);
-  });
-
-  it("legacy events are unchanged: no document, same route", async () => {
-    const res = await server.inject({ method: "GET", url: q(ctx.nameId) });
-    expect(res.statusCode).toBe(200);
-  });
 });
 
-describe("maps.pdf route switch", () => {
-  // docs/course-print.md §8: a `vector` event with a pinned document prints
-  // through the composer; `legacy` through the legacy SVG → rsvg path.
-  // Both read the same template / sheet rows. Without a pin there is no
-  // base map (slice E1).
+describe("maps.pdf through the composer", () => {
+  // docs/course-print.md §8.1: every event prints its pinned document
+  // through the composer (E3). Without a pin there is no base map
+  // (slice E1); a composer error, an unaligned colour stack included, is
+  // a 400 with the reason.
   let vec: TestEventContext;
   let documentHash: string;
   let courseMapSeqs: number[];
@@ -845,7 +791,6 @@ describe("maps.pdf route switch", () => {
     const bytes = Buffer.concat([readFileSync(fixture), Buffer.from(`pdf-${randomBytes(4).toString("hex")}`)]);
     const applied = await applyEventMap(vec.db, vec.eventId, "test.ocd", bytes);
     documentHash = applied.documentHash!;
-    await vec.db.event.update({ where: { id: vec.eventId }, data: { mapPipeline: "vector" } });
     clearCourseMapSourceCache();
     const db = vec.db;
     const mk = (codes: string, xpos: number, ypos: number, extra: Record<string, unknown> = {}) =>
@@ -870,12 +815,12 @@ describe("maps.pdf route switch", () => {
     await vec?.cleanup();
   });
 
-  it("vector + pin: one composed PDF, one page per map at the template's paper size, never the rsvg converter", async () => {
+  it("one composed PDF, one page per map at the template's paper size, never the rsvg converter", async () => {
     const before = convertedSvgs.length;
     const res = await server.inject({ method: "GET", url: pdfUrl(vec.nameId) });
     expect(res.statusCode).toBe(200);
     expect(res.headers["content-type"]).toContain("application/pdf");
-    expect(res.headers["x-print-pipeline"]).toBe("vector");
+    expect(res.headers["x-print-pipeline"]).toBeUndefined();
     expect(res.headers["content-disposition"]).toContain("_maps.pdf");
     expect(convertedSvgs).toHaveLength(before);
     const pdf = await PDFDocument.load(res.rawPayload);
@@ -887,7 +832,7 @@ describe("maps.pdf route switch", () => {
     expect(pdf.getCreator()).toBe("Oxygen");
   }, 60_000);
 
-  it("vector + pin: a single map keeps the legacy file name; the selection query works as before", async () => {
+  it("a single map keeps the legacy file name; the selection query works as before", async () => {
     const res = await server.inject({ method: "GET", url: pdfUrl(vec.nameId, `?maps=${courseMapSeqs[1]}`) });
     expect(res.statusCode).toBe(200);
     expect(res.headers["content-disposition"]).toContain(`${vec.nameId}_Ro_d_A5.pdf`);
@@ -899,7 +844,7 @@ describe("maps.pdf route switch", () => {
     expect(missing.statusCode).toBe(400);
   }, 60_000);
 
-  it.skipIf(!hasQpdf && !process.env.CI)("vector + pin: qpdf --check is clean", async () => {
+  it.skipIf(!hasQpdf && !process.env.CI)("qpdf --check is clean", async () => {
     const res = await server.inject({ method: "GET", url: pdfUrl(vec.nameId) });
     expect(await qpdfCheck(res.rawPayload)).toMatch(/No syntax or stream encoding errors/);
   }, 60_000);
@@ -932,7 +877,6 @@ describe("maps.pdf route switch", () => {
       }
       const res = await print;
       expect(res.statusCode).toBe(200);
-      expect(res.headers["x-print-pipeline"]).toBe("vector");
       expect((await PDFDocument.load(res.rawPayload)).getPageCount()).toBe(153);
       // The print outlasted the probes (otherwise this proves nothing) and every probe was prompt.
       expect(latencies.length).toBeGreaterThanOrEqual(3);
@@ -942,14 +886,6 @@ describe("maps.pdf route switch", () => {
       await vec.db.courseMap.deleteMany({ where: { id: { in: extra.map((m) => m.id) } } });
     }
   }, 180_000);
-
-  it("a legacy event prints through the rsvg converter", async () => {
-    const before = convertedSvgs.length;
-    const res = await server.inject({ method: "GET", url: pdfUrl(ctx.nameId, `?courses=${courseSeq}`) });
-    expect(res.statusCode).toBe(200);
-    expect(res.headers["x-print-pipeline"]).toBe("legacy");
-    expect(convertedSvgs.length).toBeGreaterThan(before);
-  });
 
   it("an event without a pinned document has no base map to print (slice E1: no OCAD fallback)", async () => {
     await vec.db.mapFile.updateMany({ where: { eventId: vec.eventId }, data: { documentHash: null } });
@@ -966,21 +902,7 @@ describe("maps.pdf route switch", () => {
     }
   }, 60_000);
 
-  it("rollback is the switch: the same rows print legacy once the event is flipped back", async () => {
-    await vec.db.event.update({ where: { id: vec.eventId }, data: { mapPipeline: "legacy" } });
-    clearCourseMapSourceCache();
-    try {
-      const res = await server.inject({ method: "GET", url: pdfUrl(vec.nameId) });
-      expect(res.statusCode).toBe(200);
-      expect(res.headers["x-print-pipeline"]).toBe("legacy");
-      expect((await PDFDocument.load(res.rawPayload)).getPageCount()).toBe(3);
-    } finally {
-      await vec.db.event.update({ where: { id: vec.eventId }, data: { mapPipeline: "vector" } });
-      clearCourseMapSourceCache();
-    }
-  }, 60_000);
-
-  it("any other vector-path error is a 400, not a fallback", async () => {
+  it("any composer error is a 400, not a fallback", async () => {
     const failing = Fastify({ logger: false });
     registerCourseMapRoutes(failing, {
       converter: { convert: async () => { throw new Error("rsvg must not run"); } },
@@ -998,10 +920,10 @@ describe("maps.pdf route switch", () => {
     }
   }, 60_000);
 
-  it("an unaligned colour stack falls back to the legacy path", async () => {
+  it("an unaligned colour stack is a 400 with the reason; the converter is not called", async () => {
     const converted: string[] = [];
-    const fallback = Fastify({ logger: false });
-    registerCourseMapRoutes(fallback, {
+    const unaligned = Fastify({ logger: false });
+    registerCourseMapRoutes(unaligned, {
       converter: {
         async convert(svg: string) {
           converted.push(svg);
@@ -1014,14 +936,15 @@ describe("maps.pdf route switch", () => {
         throw new course.CourseStackError("document colour stack is not aligned");
       },
     });
-    await fallback.ready();
+    await unaligned.ready();
     try {
-      const res = await fallback.inject({ method: "GET", url: pdfUrl(vec.nameId) });
-      expect(res.statusCode).toBe(200);
-      expect(res.headers["x-print-pipeline"]).toBe("legacy-fallback");
-      expect(converted).toHaveLength(3);
+      const res = await unaligned.inject({ method: "GET", url: pdfUrl(vec.nameId) });
+      expect(res.statusCode).toBe(400);
+      expect(res.json().error).toBe("document colour stack is not aligned");
+      expect(res.headers["x-print-pipeline"]).toBeUndefined();
+      expect(converted).toHaveLength(0);
     } finally {
-      await fallback.close();
+      await unaligned.close();
     }
   }, 60_000);
 });
@@ -1124,7 +1047,10 @@ describe("graphics library", () => {
       url: `/api/maps/${ctx.nameId}/maps.pdf?maps=${map.seq}`,
     });
     expect(response.statusCode).toBe(200);
-    expect(convertedSvgs.at(-1)).toContain('fill="#336699"');
+    // The composer embeds the graphic as an image XObject on the page
+    // (course-print.test.ts "images" checks the bytes).
+    const pdf = await PDFDocument.load(response.rawPayload);
+    expect(pdf.getPageCount()).toBe(1);
   });
 
   it("deletes graphics and reports missing ones", async () => {

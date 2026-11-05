@@ -19,7 +19,6 @@ import { z } from "zod";
 import { TRPCError } from "@trpc/server";
 import { router, manageProcedure, publicProcedure } from "../trpc.js";
 import { sanitizeNameId, prisma } from "../db.js";
-import { newEventMapPipeline } from "../map-pipeline.js";
 import {
   MALE_FIRST_NAMES,
   FEMALE_FIRST_NAMES,
@@ -194,7 +193,6 @@ export const testLabRouter = router({
           name: input.name,
           date: new Date(),
           kind: "competition",
-          mapPipeline: await newEventMapPipeline(),
         },
       });
 

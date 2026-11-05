@@ -1,7 +1,6 @@
 import { createHash } from "node:crypto";
 import type { FastifyInstance } from "fastify";
 import {
-  course,
   courseMapObjectSchema,
   courseMapOverridesSchema,
   mapWindowForFrame,
@@ -302,9 +301,6 @@ async function renderPage(
   });
 }
 
-/** Which path drew a `maps.pdf` response (`X-Print-Pipeline`, docs/course-print.md §8.1). */
-export type PrintPipeline = "vector" | "legacy" | "legacy-fallback";
-
 export function registerCourseMapRoutes(
   server: FastifyInstance,
   options: {
@@ -361,49 +357,41 @@ export function registerCourseMapRoutes(
         title: rows.length === 1 ? `${event.name} · ${rows[0].name}` : `${event.name} maps`,
         author: event.organizerName || undefined,
       };
+      // Every event prints through the composer (docs/course-print.md
+      // §8.1). No pin is a 400 "No base map uploaded"; a document whose
+      // colour stack is not aligned (`CourseStackError`) is a 400 with the
+      // reason, like any other composer error. The rsvg branch below is
+      // unreachable since E3 and goes in E4a.
       let body: Buffer | null = null;
-      let pipeline: PrintPipeline = "legacy";
-      // The switch (docs/course-print.md §8): `vector` with a pinned
-      // document prints through the composer; everything else, and a
-      // document whose colour stack is not aligned, through rsvg.
       const pinned = await pinnedPrintSource(db, event.id);
-      if (pinned) {
-        try {
-          const [courseObjects, byCourse] = await Promise.all([loadCourseObjects(db, event.id), classesByCourse(db, event.id)]);
-          const sheets = rows.map((row) =>
-            sheetForMapRow(row, {
-              event: { name: event.name, date: event.date },
-              allControls,
-              mapInfo: pinned.info,
-              courseObjects,
-              classesByCourse: byCourse,
-              autoCuts: event.autoOverprintCuts,
-            }),
-          );
-          // A worker slot, then a permit like every render, but no queue
-          // cap: a 503 would arrive as a broken download (course-print.md
-          // §8.2). Composing runs in the print worker, off the event loop.
-          const out = await printGate(() => renderGate().run(() =>
-            renderVectorPages({
-              document: { hash: pinned.hash, bytes: pinned.bytes },
-              rotationCorrectionDeg: pinned.rotationCorrectionDeg,
-              sheets,
-              graphics,
-              mode: "cmyk",
-              info,
-              onPage: (page) => {
-                for (const warning of page.warnings) req.log.warn({ nameId }, `maps.pdf: ${warning}`);
-              },
-            }),
-          ));
-          body = Buffer.from(out.bytes);
-          pipeline = "vector";
-        } catch (error) {
-          if (!(error instanceof course.CourseStackError)) throw error;
-          req.log.warn({ nameId, hash: pinned.info.document?.hash }, `maps.pdf: ${error.message}; printing through the legacy path`);
-          pipeline = "legacy-fallback";
-        }
-      }
+      const [courseObjects, byCourse] = await Promise.all([loadCourseObjects(db, event.id), classesByCourse(db, event.id)]);
+      const sheets = rows.map((row) =>
+        sheetForMapRow(row, {
+          event: { name: event.name, date: event.date },
+          allControls,
+          mapInfo: pinned.info,
+          courseObjects,
+          classesByCourse: byCourse,
+          autoCuts: event.autoOverprintCuts,
+        }),
+      );
+      // A worker slot, then a permit like every render, but no queue
+      // cap: a 503 would arrive as a broken download (course-print.md
+      // §8.2). Composing runs in the print worker, off the event loop.
+      const out = await printGate(() => renderGate().run(() =>
+        renderVectorPages({
+          document: { hash: pinned.hash, bytes: pinned.bytes },
+          rotationCorrectionDeg: pinned.rotationCorrectionDeg,
+          sheets,
+          graphics,
+          mode: "cmyk",
+          info,
+          onPage: (page) => {
+            for (const warning of page.warnings) req.log.warn({ nameId }, `maps.pdf: ${warning}`);
+          },
+        }),
+      ));
+      body = Buffer.from(out.bytes);
       if (!body) {
         const resolveGraphic = graphicResolver(graphics);
         const converter = options.converter ?? new RsvgConverter();
@@ -425,7 +413,6 @@ export function registerCourseMapRoutes(
         .header("Content-Type", "application/pdf")
         .header("Content-Disposition", `attachment; filename="${filename}"`)
         .header("Cache-Control", "no-store")
-        .header("X-Print-Pipeline", pipeline)
         .send(body);
     } catch (error) {
       req.log.error(error);
@@ -520,8 +507,9 @@ export function registerCourseMapRoutes(
         rotation,
       );
       if (mapInfo.document) {
-        // `vector` event with a pinned document: the reference raster
-        // (docs/course-print.md §10), under the same permit pool and cache.
+        // The pinned document's reference raster (docs/course-print.md
+        // §10), under the same permit pool and cache. Every pinned event
+        // takes this branch since E3; the SVG path below goes in E4a.
         const { hash } = mapInfo.document;
         const prepared = await prepareDocument(hash, async () => {
           const bytes = await getBlob(db, "map_documents", hash);

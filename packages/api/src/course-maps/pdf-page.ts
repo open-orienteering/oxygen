@@ -284,14 +284,13 @@ export interface PinnedPrintSource {
 }
 
 /**
- * The event's pinned document for printing, not yet decoded, or null on
- * the legacy path (`getBaseMapInfo().document` null: `legacy`, or
- * `vector` without a pin). The route hands this to the print worker, which
- * decodes it on its own thread (docs/course-print.md §8.2).
+ * The event's pinned document for printing, not yet decoded. Throws "No
+ * base map uploaded" without a pin (`getBaseMapInfo`). The route hands
+ * this to the print worker, which decodes it on its own thread
+ * (docs/course-print.md §8.2).
  */
-export async function pinnedPrintSource(db: Db, eventId: bigint): Promise<PinnedPrintSource | null> {
+export async function pinnedPrintSource(db: Db, eventId: bigint): Promise<PinnedPrintSource> {
   const info = await getBaseMapInfo(db, eventId);
-  if (!info.document) return null;
   const { hash } = info.document;
   const row = await db.mapFile.findFirst({ where: { eventId, documentHash: hash }, orderBy: { uploadedAt: "desc" }, select: { rotationCorrection: true } });
   return {
@@ -313,9 +312,8 @@ export interface PinnedPrintDocument {
 }
 
 /** `pinnedPrintSource` decoded in this thread (corpus run, in-process tests). */
-export async function loadPinnedPrintDocument(db: Db, eventId: bigint): Promise<PinnedPrintDocument | null> {
+export async function loadPinnedPrintDocument(db: Db, eventId: bigint): Promise<PinnedPrintDocument> {
   const source = await pinnedPrintSource(db, eventId);
-  if (!source) return null;
   const document = await prepareDocument(source.hash, source.bytes);
   return { info: source.info, document, rotationCorrectionDeg: source.rotationCorrectionDeg };
 }

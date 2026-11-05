@@ -24,7 +24,6 @@ import {
   manageProcedure,
 } from "../trpc.js";
 import { getSetting, setSetting, prisma, sanitizeNameId, isReservedEventSlug } from "../db.js";
-import { newEventMapPipeline } from "../map-pipeline.js";
 import { grantSystemGroup } from "../permissions.js";
 import {
   SYSTEM_GROUP_IDS,
@@ -690,7 +689,6 @@ export const eventorRouter = router({
           message: `Slug "${nameId}" is reserved.`,
         });
       }
-      const mapPipeline = await newEventMapPipeline();
       const event = await db.$transaction(async (tx) => {
         const created = await tx.event.create({
           data: {
@@ -703,7 +701,6 @@ export const eventorRouter = router({
             eventorLastSync: new Date(),
             organizerName: input.organiserName ?? "",
             organizerEventorId: input.organiserId ?? 0,
-            mapPipeline,
           },
           select: { id: true, nameId: true },
         });

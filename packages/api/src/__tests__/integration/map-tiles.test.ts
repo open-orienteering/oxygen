@@ -11,8 +11,8 @@
  *   - deep zoom renders on demand (the zoom range the pre-cache skips)
  *   - an off-bounds tile returns a 200 transparent PNG
  *   - an unknown event slug returns 404
- *   - `/api/map-tile-progress` reports counts derived from the map's
- *     stored bounds and the `map_tiles` rows, not from process state
+ *   - `/api/map-tile-progress` answers zeros: the pre-cache is retired
+ *     since E3 (every event reads map documents)
  *
  * The OCAD fixture (`e2e/test.ocd`) is the same one the E2E suite
  * uses for map upload flows.
@@ -37,11 +37,7 @@ import {
   ocadBoundsToWgs84,
   type OcadCrs,
 } from "../../map-projection.js";
-import {
-  PRECACHE_MAX_ZOOM,
-  PRECACHE_MIN_ZOOM,
-  expectedTileCount,
-} from "../../map-window.js";
+import { PRECACHE_MIN_ZOOM } from "../../map-window.js";
 import { DEFAULTS } from "../../map-render-limits.js";
 
 let server: FastifyInstance;
@@ -333,156 +329,12 @@ describe("map-tile endpoint", () => {
     expect(Array.from(pixel!)).toEqual([0, 0, 0, 0]);
   });
 
-  it("reports progress from the database, not from process state", async () => {
-    const res = await server.inject({
-      method: "GET",
-      url: "/api/map-tile-progress",
-      headers: { "x-competition-id": ctx.nameId },
-    });
-    expect(res.statusCode).toBe(200);
-    const body = res.json() as {
-      total: number;
-      done: number;
-      rendering: boolean;
-    };
-
-    // The denominator is a pure function of the stored bounds, so it must
-    // match what any other instance would compute for the same map.
-    expect(body.total).toBe(
-      expectedTileCount(mapBounds, PRECACHE_MIN_ZOOM, PRECACHE_MAX_ZOOM),
-    );
-
-    // The numerator is the row count over the same span. An earlier test
-    // rendered a block at z=13, inside it; the z=16 and z=20 blocks are
-    // above the ceiling and must not be counted.
-    const rows = await ctx.db.mapTile.count({
-      where: {
-        renderKey: await eventRenderKey(ctx.eventId),
-        z: { gte: PRECACHE_MIN_ZOOM, lte: PRECACHE_MAX_ZOOM },
-      },
-    });
-    expect(body.done).toBe(rows);
-    expect(body.done).toBeGreaterThan(0);
-    expect(body.rendering).toBe(body.done < body.total);
-  });
-
-  it("advances the pre-cache from the progress poll alone", async () => {
-    // Cloud Run throttles CPU outside request handling, so the detached
-    // background loop stalls once tile requests stop. The progress
-    // endpoint therefore renders a bounded chunk itself. Proven here by
-    // never requesting a tile: nothing calls `kickOffPreCache`, so any
-    // progress at all can only have come from the poll.
-    const other = await createTestEvent("map_tiles_chunk");
-    const saved = process.env.MAP_TILE_PRECACHE;
-    process.env.MAP_TILE_PRECACHE = "on";
-    try {
-      await other.db.mapFile.create({
-        data: {
-          eventId: other.eventId,
-          fileName: "test.ocd",
-          fileData: readFileSync(FIXTURE),
-          bounds: mapBounds,
-        },
-      });
-
-      const poll = async () => {
-        const res = await server.inject({
-          method: "GET",
-          url: "/api/map-tile-progress",
-          headers: { "x-competition-id": other.nameId },
-        });
-        expect(res.statusCode).toBe(200);
-        return res.json() as {
-          total: number;
-          done: number;
-          rendering: boolean;
-        };
-      };
-
-      const first = await poll();
-      expect(first.total).toBeGreaterThan(0);
-      expect(first.done).toBeGreaterThan(0);
-      expect(first.rendering).toBe(true);
-
-      // Each poll picks up where the last left off rather than redoing
-      // the same block.
-      const second = await poll();
-      expect(second.done).toBeGreaterThan(first.done);
-    } finally {
-      process.env.MAP_TILE_PRECACHE = saved;
-      await other.cleanup();
-    }
-  }, 90_000);
-
-  it("pre-caches the overview zooms in the background until complete", async () => {
-    // The pre-cache is kicked off from the cache-hit path too, so a
-    // process that inherits a partly filled cache finishes the job
-    // instead of waiting for someone to hit an uncached tile.
-    const other = await createTestEvent("map_tiles_precache");
-    const saved = {
-      precache: process.env.MAP_TILE_PRECACHE,
-      delay: process.env.MAP_PRECACHE_BLOCK_DELAY_MS,
-    };
-    process.env.MAP_TILE_PRECACHE = "on";
-    process.env.MAP_PRECACHE_BLOCK_DELAY_MS = "0";
-    try {
-      const caller = makeCaller(other.event);
-      await caller.course.uploadMap({
-        fileName: "test.ocd",
-        fileDataBase64: readFileSync(FIXTURE).toString("base64"),
-      });
-      // Unique stack settings so this event's render_key does not share
-      // deep-zoom tiles rendered earlier by the suite's primary event.
-      await caller.course.setMapColorStack({
-        overrides: { above: [424242] },
-      });
-
-      const { x, y } = centerTile(mapBounds, PRECACHE_MIN_ZOOM);
-      const first = await server.inject({
-        method: "GET",
-        url: `/api/map-tile/${other.nameId}/${PRECACHE_MIN_ZOOM}/${x}/${y}`,
-      });
-      expect(first.statusCode).toBe(200);
-
-      const deadline = Date.now() + 60_000;
-      let progress = { total: 0, done: 0, rendering: true };
-      while (Date.now() < deadline) {
-        const res = await server.inject({
-          method: "GET",
-          url: "/api/map-tile-progress",
-          headers: { "x-competition-id": other.nameId },
-        });
-        progress = res.json();
-        if (!progress.rendering) break;
-        await new Promise((r) => setTimeout(r, 250));
-      }
-
-      expect(progress.total).toBeGreaterThan(0);
-      expect(progress.done).toBe(progress.total);
-      expect(progress.rendering).toBe(false);
-
-      // Nothing above the ceiling was rendered — that is the point of it.
-      const deep = await other.db.mapTile.count({
-        where: {
-          renderKey: (await ensureEventMapRenderKey(other.db, other.eventId))!
-            .renderKey,
-          z: { gt: PRECACHE_MAX_ZOOM },
-        },
-      });
-      expect(deep).toBe(0);
-    } finally {
-      process.env.MAP_TILE_PRECACHE = saved.precache;
-      if (saved.delay === undefined) delete process.env.MAP_PRECACHE_BLOCK_DELAY_MS;
-      else process.env.MAP_PRECACHE_BLOCK_DELAY_MS = saved.delay;
-      await other.cleanup();
-    }
-  }, 90_000);
-
-  it("skips the pre-cache for a vector event (docs/map-pipeline-switch.md §3)", async () => {
-    // A `vector` event reads map documents, so nothing should fill its
-    // tile cache in the background: neither the progress poll's chunk nor
-    // the loop a tile request would kick off. A tile asked for directly is
-    // still served on demand (rollback keeps working).
+  it("the pre-cache is retired: no progress, a tile is rendered on demand only (E3)", async () => {
+    // Every event reads map documents since E3, so nothing fills a tile
+    // cache in the background: neither the progress poll's chunk nor the
+    // loop a tile request used to kick off, even with the pre-cache on.
+    // A tile asked for directly (a tab opened before the flip) is still
+    // served on demand.
     const other = await createTestEvent("map_tiles_vector");
     const saved = {
       precache: process.env.MAP_TILE_PRECACHE,
@@ -498,7 +350,6 @@ describe("map-tile endpoint", () => {
       });
       // A render key of its own, so no other test's tiles are counted.
       await caller.course.setMapColorStack({ overrides: { above: [515151] } });
-      await caller.event.setMapPipeline({ pipeline: "vector" });
       const renderKey = (await ensureEventMapRenderKey(other.db, other.eventId))!.renderKey;
 
       const progress = await server.inject({
