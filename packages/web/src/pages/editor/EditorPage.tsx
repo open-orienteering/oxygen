@@ -1,7 +1,6 @@
 /**
- * The new course editor (docs/course-editor.md), mounted on
- * `/:nameId/course-editor` for `vector ∧ pinned ∧ map.editor.vector`
- * (`CourseEditorRoute`). One GL canvas (`MapPanel` → `MapViewer` over
+ * The course editor (docs/course-editor.md), mounted on
+ * `/:nameId/course-editor` for every event (`CourseEditorRoute`). One GL canvas (`MapPanel` → `MapViewer` over
  * `VectorMapLayer`) with the shell around it: top bar, tool rail,
  * contextual action bar, inspector, status bar (§2).
  *
