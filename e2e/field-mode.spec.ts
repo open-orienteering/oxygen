@@ -1,14 +1,16 @@
 // Field mode and the phone chrome of the new course editor
 // (docs/course-editor.md §9, §10). Runs in the `mobile` project
-// (`devices["Pixel 7"]`, `vector`); the fix is Playwright's
+// (`devices["Pixel 7"]`, `vector`; `MOBILE_SPECS` with the touch describe
+// of `course-editor.spec.ts`); the fix is Playwright's
 // `context.setGeolocation` — only a phone in a forest proves the mode
 // (D-mobile, §10 "On a real phone"). The fixture (courses and the map from
-// `e2e/test.ocd`) is set up once from a desktop context; until D10 the spec
-// sets `map.editor.vector` itself, as `course-editor.spec.ts` does.
+// `e2e/test.ocd`) is set up once from a desktop context
+// (`ensureFixtureFromDesktop`, shared with the editor spec); the spec sets
+// `map.editor.vector` itself, as `course-editor.spec.ts` does.
 import { devices, type BrowserContext, type Page } from "@playwright/test";
 import { test, expect, setEditorVector, setMapPipeline } from "./helpers/map-pipeline";
 import { reseed } from "./helpers/reseed";
-import { canvasInCircle, editorReady, nextFrames, site, sites, toPage, toPaper } from "./helpers/editor";
+import { canvasInCircle, editorReady, ensureFixtureFromDesktop, nextFrames, site, sites, toPage, toPaper } from "./helpers/editor";
 import { touchDrag, touchEnd, touchMove, touchStart, touchTap } from "./helpers/touch";
 
 type Pt = { x: number; y: number };
@@ -19,39 +21,11 @@ test.setTimeout(120_000);
 
 test.beforeAll(async ({ browser }) => {
   await reseed();
-  // The map is uploaded under `vector`, so the event pins its document (the editor's mount rule).
+  // The map is uploaded under `vector`, so the event pins its document (the editor's mount rule). The project's
+  // fixture sets it again before every test; a beforeAll runs before it.
   await setMapPipeline("vector");
   await setEditorVector(true);
-  // eslint-disable-next-line @typescript-eslint/no-unused-vars -- the browser type is the project's
-  const { defaultBrowserType: _, ...desktop } = devices["Desktop Chrome"];
-  const ctx = await browser.newContext({ ...desktop, baseURL: test.info().project.use.baseURL, extraHTTPHeaders: test.info().project.use.extraHTTPHeaders });
-  const page = await ctx.newPage();
-  await page.goto("/");
-  await page.getByText("My example tävling").click();
-  await expect(page.getByRole("link", { name: "Dashboard" })).toBeVisible({ timeout: 10000 });
-  nameId = new URL(page.url()).pathname.split("/")[1];
-  await page.goto(`/${nameId}/courses`);
-  const uploadButton = page.getByRole("button", { name: "Upload map" });
-  await expect(uploadButton.or(page.getByTestId("map-viewer")).first()).toBeVisible({ timeout: 60000 });
-  if (await uploadButton.isVisible()) {
-    await expect(page.getByText("3 courses")).toBeVisible({ timeout: 10000 });
-    await page.getByRole("button", { name: "Import courses" }).click();
-    const importChooser = page.waitForEvent("filechooser");
-    await page.getByRole("button", { name: "Browse files" }).click();
-    await (await importChooser).setFiles("e2e/test.ocd");
-    await expect(page.getByText("Courses and Class Assignments")).toBeVisible({ timeout: 20000 });
-    await page.getByRole("button", { name: "Öppen 1" }).click();
-    await page.getByRole("row", { name: /^E / }).getByRole("button", { name: "— Skip —", exact: true }).click();
-    await page.getByTestId("course-import-replace-all").uncheck();
-    await page.getByRole("button", { name: "Import 5 courses" }).click();
-    await expect(page.getByText("Import Complete")).toBeVisible({ timeout: 15000 });
-    await page.getByRole("button", { name: "Done" }).click();
-    const mapChooser = page.waitForEvent("filechooser");
-    await page.getByTestId("map-panel").getByRole("button", { name: "Upload map" }).click();
-    await (await mapChooser).setFiles("e2e/test.ocd");
-    await expect(page.getByTestId("map-viewer")).toBeVisible({ timeout: 60000 });
-  }
-  await ctx.close();
+  nameId = await ensureFixtureFromDesktop(browser, test.info());
 });
 
 test.afterAll(async () => {
