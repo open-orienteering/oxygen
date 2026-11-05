@@ -1632,8 +1632,10 @@ test.describe("Course editor checks", () => {
       // The section is collapsed by default; its count stands beside the title.
       await expect(page.getByTestId("editor-checks-count")).toBeVisible({ timeout: 20000 });
       await page.getByTestId("editor-checks-toggle").click();
-      const row = page.locator('[data-testid="editor-check-row"][data-code="CONTROL_TOO_CLOSE"][data-sites="251,252"]');
+      // The pair is listed in site order, which need not be creation order (the row ids decide): match either.
+      const row = page.locator('[data-testid="editor-check-row"][data-code="CONTROL_TOO_CLOSE"]:is([data-sites="251,252"], [data-sites="252,251"])');
       await expect(row).toBeVisible({ timeout: 20000 });
+      const first = (await row.getAttribute("data-sites"))!.split(",")[0];
       await expect(row).toContainText("20 m");
       await expect(page.locator('[data-testid="editor-check-marker"][data-code="CONTROL_TOO_CLOSE"][data-site="251"]')).toBeAttached();
       await expect(page.locator('[data-testid="editor-check-marker"][data-code="CONTROL_TOO_CLOSE"][data-site="252"]')).toBeAttached();
@@ -1641,7 +1643,7 @@ test.describe("Course editor checks", () => {
 
       // Click-to-locate: selects the first site and centres the view on the pair's midpoint.
       await row.click();
-      await expect(selectedCode(page)).toHaveText("251", { timeout: 10000 });
+      await expect(selectedCode(page)).toHaveText(first, { timeout: 10000 });
       await expect.poll(async () => (await viewCentre(page)).x / 1000, { timeout: 10000 }).toBeCloseTo(spot.x + dMm / 2, 1);
       await expect.poll(async () => (await viewCentre(page)).y / 1000, { timeout: 10000 }).toBeCloseTo(spot.y, 1);
     } finally {
