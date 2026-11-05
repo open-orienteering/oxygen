@@ -646,7 +646,7 @@ test.describe("Automatic cuts (course-layer.md §3.4)", () => {
 
   // D17 (course-layer.md §3.4): the event's automatic-cuts flag (`course.setOverprintCuts`, `editor-toggle-cuts`)
   // reaches the GL course layer — off, the boulder's slit goes, a stored circle gap stays (the setter's choice).
-  test("the event's automatic-cuts toggle removes the layer's slits and gaps", async ({ page }) => {
+  test("the event's automatic-cuts toggle removes the layer's slits; a stored circle gap stays", async ({ page }) => {
     await openEditor(page);
     const [any] = await regularCodes(page, 1);
     await select(page, any);
