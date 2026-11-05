@@ -20,7 +20,7 @@ import {
 } from "@oxygen/shared";
 import type { ToolShape } from "../../components/MapViewer";
 import { clampPagePoint, type ResizeHandle } from "../map-layout-editor";
-import { mapVertices, nearestEdge, type Vertex } from "./geometry-edit";
+import { mapVertices, nearestEdge, vertexRule, type Vertex } from "./geometry-edit";
 
 type Pt = { x: number; y: number };
 
@@ -109,6 +109,9 @@ function segmentDistance(p: Pt, a: Pt, b: Pt): number {
 export function pagePoints(o: Extract<CourseMapObject, { kind: "path" }>, g: Pick<SheetGeometry, "frame" | "window">): Vertex[] {
   return o.anchor === "page" ? o.points : mapVertices(o.points, (q) => toPage(q, g));
 }
+
+/** What a Layout path allows: a closed one is the polygon (`P`, three or more vertices), an open one a line (two or more); both curve. */
+export const pathRule = (o: Extract<CourseMapObject, { kind: "path" }>) => vertexRule(o.closed ? "layout_path" : "oob_line");
 
 /** Page points back in the path's own space (page mm, or paper mm for a map-anchored path). */
 export function nativePoints(o: Extract<CourseMapObject, { kind: "path" }>, points: readonly Vertex[], g: Pick<SheetGeometry, "frame" | "window">): Vertex[] {

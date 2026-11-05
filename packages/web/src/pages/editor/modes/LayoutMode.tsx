@@ -25,8 +25,8 @@ import { trpc } from "../../../lib/trpc";
 import { VersionBook, versionConflictOfError } from "../../../lib/version-book";
 import { EditorConflict } from "../../../lib/editor/write-client";
 import type { MapViewerEditorProps, ToolPointer } from "../../../components/MapViewer";
-import { descriptionRect, gridSnap, pageBounds, pathFromView, type SheetGeometry } from "../../../lib/editor/layout";
-import type { Vertex } from "../../../lib/editor/geometry-edit";
+import { descriptionRect, gridSnap, pageBounds, pathFromView, pathRule, type SheetGeometry } from "../../../lib/editor/layout";
+import { deleteVertex, type Vertex } from "../../../lib/editor/geometry-edit";
 import type { Gesture } from "../tools/bindings";
 import { step as polygonStep } from "../tools/polygon";
 import { constrainDescription } from "../../../lib/map-layout-editor";
@@ -120,6 +120,8 @@ export function useLayoutMode(a: LayoutModeArgs): LayoutMode {
   const scoped = useMemo(() => (data && snap ? scopeObjects(data, snap) : { editable: [], locked: [] }), [data, snap]);
 
   const [selection, setSelection] = useState<LayoutSelection>(null);
+  /** The selected path's focused vertex (a click on its handle), keyed by the object so a selection change drops it. */
+  const [focus, setFocus] = useState<{ id: string; index: number } | null>(null);
   const [tool, setTool] = useState<LayoutTool>({ kind: "select" });
   const [snapping, setSnapping] = useState(false);
   const gesture = useRef<LayoutGesture>(null);
@@ -236,6 +238,13 @@ export function useLayoutMode(a: LayoutModeArgs): LayoutMode {
     setSelection({ kind: "object", id: o.id });
   }, [stored, geometry, data, change]);
 
+  const selectedPath = selection?.kind === "object" ? scoped.editable.find((o) => o.id === selection.id && o.kind === "path") : undefined;
+  // Undo / redo may leave the index past the end: no focus then.
+  const focusedVertex = focus && selectedPath?.kind === "path" && focus.id === selectedPath.id && focus.index < selectedPath.points.length ? focus.index : null;
+  const onVertexFocus = useCallback((index: number | null) => {
+    setFocus(index === null || selection?.kind !== "object" ? null : { id: selection.id, index });
+  }, [selection]);
+
   const binding = useMemo(() => {
     if (!a.enabled || !geometry || !snap) return null;
     return layoutBinding({
@@ -248,6 +257,7 @@ export function useLayoutMode(a: LayoutModeArgs): LayoutMode {
       onCommit: change,
       onSelect: setSelection,
       onPlace: place,
+      focusedVertex, onVertexFocus,
       draw: tool.kind === "draw" ? {
         gesture: drawGesture, hover: drawHover,
         onHover: (p: ToolPointer | null) => setDrawHover(p?.pt ?? null),
@@ -256,7 +266,7 @@ export function useLayoutMode(a: LayoutModeArgs): LayoutMode {
         onCancel: () => setTool({ kind: "select" }),
       } : undefined,
     });
-  }, [a.enabled, a.nameId, geometry, snap, scoped, block, data?.scope, selection, tool, snapping, stored, apply, change, place, drawHover, finishPath]);
+  }, [a.enabled, a.nameId, geometry, snap, scoped, block, data?.scope, selection, tool, snapping, stored, apply, change, place, drawHover, finishPath, focusedVertex, onVertexFocus]);
 
   const layoutRequest = useMemo(() => (a.enabled && data && snap && geometry ? layoutRequestOf(data, snap, geometry) : null), [a.enabled, data, snap, geometry]);
 
@@ -296,7 +306,17 @@ export function useLayoutMode(a: LayoutModeArgs): LayoutMode {
       if (r.done && geometry) finishPath(pathFromView(r.done, geometry, geometry.printable));
       return true;
     }
-    if (e.key === "Delete" || e.key === "Backspace") { e.preventDefault(); deleteSelected(); return true; }
+    if (e.key === "Delete" || e.key === "Backspace") {
+      e.preventDefault();
+      // A focused vertex goes first, down to the path's minimum; there nothing happens (course-editor.md §7).
+      if (selectedPath?.kind === "path" && focusedVertex !== null) {
+        const points = deleteVertex(selectedPath.points, focusedVertex, pathRule(selectedPath).min);
+        if (points) { updateObject(selectedPath.id, { points }); setFocus(null); }
+        return true;
+      }
+      deleteSelected();
+      return true;
+    }
     if (e.key === "Tab" && plain) {
       e.preventDefault();
       const list = scoped.editable;
@@ -316,7 +336,7 @@ export function useLayoutMode(a: LayoutModeArgs): LayoutMode {
       return true;
     }
     return false;
-  }, [tool, selection, deleteSelected, scoped, fit, onTool, geometry, finishPath]);
+  }, [tool, selection, deleteSelected, scoped, fit, onTool, geometry, finishPath, selectedPath, focusedVertex, updateObject]);
 
   // ─── Validation (validate.ts, unchanged codes) ───────────
   const issues = useMemo(() => {
