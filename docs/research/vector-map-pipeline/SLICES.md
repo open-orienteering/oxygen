@@ -326,16 +326,99 @@ autodetect over the document instead of the OCAD parse; deletion of
 overlay, `resolve-layout.ts`'s SVG path and `courses.geometry` (E / F);
 an accessible map description (`map-rendering.md` §5.4 "Attributes").
 
-## Slice E — default flip and retirement I (09 §4)
+## Slice E — full migration: the flip and the retirement of the legacy pipeline (09 §4 E + F's retirement)
 
-Not split yet (09 §4 E: `map.pipeline.default = vector`, the editor gate on
-by default, tile jobs and env retired). Rows recorded ahead of the split:
+Split 2026-11-05 by the coordinator, on the user's direction the same day
+(after testing slice D on prod, mobile included): **switch everything to
+the new pipeline and remove the old one, without 09 §4's soak** ("one full
+season event cycle", "no switch-backs for two releases") and without
+keeping the two pipelines side by side for another slice. This slice
+takes 09 §4 E (flip, tile jobs, env) **and** the retirement half of 09 §4
+F (legacy editors, SVG/rsvg print, tables, base64 uploads,
+`courses.geometry`). Slice F keeps only the editor's phase 2 (variations,
+exchange, legs, 08 phase 2). Decision-log row "Slice E re-cut".
+
+What the inventory found (coordinator's survey, 2026-11-05) that shapes
+the order: the legacy pipeline is not a separable layer. The OCAD bytes in
+`map_files.file_data` are parsed on paths every event takes —
+`loadEventCrs` (course lengths, IOF/ppen export, control lat/lng, checks),
+`loadEventMapObjects` (description autodetect, `suggestDescription`,
+`DESCRIPTION_STALE`), `north_detection`, the club-map alignment of course
+imports — and `course.mapMetadata` (the viewer's `documentHash`) returns
+`null` unless the legacy render key resolves. Those readers move to the
+document first (E1); only then can the bytes go. Silent fallbacks to the
+legacy path exist for: no pinned document (tiles, rsvg print, legacy
+editor), no WebGL2 / lost context (tiles), `CourseStackError` (rsvg print,
+SVG course overlay), an unreadable document (OCAD cuts). Each gets a
+non-legacy answer in E3 — an honest message, not a second renderer.
+
+Release shape (no soak, one rollback boundary):
+
+- **v0.6.0** = E1–E4c, E6: every event on the new
+  pipeline, the switch and the legacy code gone, **columns and tables
+  kept and still dual-written**, so `./deploy.sh v0.5.0` remains a working
+  rollback.
+- **v0.6.1** = E5: the drops. A release boundary, not a waiting period —
+  it can follow as soon as the user has used v0.6.0 on prod.
+
+Order: E0 (manual), E1 (api) and E2 (e2e) start at once — disjoint areas.
+E3 after E1 and E2. Then E4a and E4b in parallel (disjoint); E4c and E6
+after E4a (the SVG emitters' API consumers; `routers/course.ts`). E5 last.
+E-pages (the templates redesign) waits for the user's design and blocks
+nothing.
+
+Decided in this split (coordinator, 2026-11-05; a row's planner may reopen
+any of them with a reason; ★ = the coordinator's recommendation, taken
+by the user's "go with recommendation" 2026-11-05, for user review):
+
+- **No per-event switch after E3.** One migration sets every event
+  `vector`; nothing reads `events.map_pipeline` or the three
+  `map.*` settings afterwards (the column stays until E5 so v0.5.0 can
+  still read it — and reads `vector`).
+- ★ **Browsers without WebGL2 get no map**, the layer's existing "cannot
+  draw the map" message (`data-status="webgl"`). Every phone and desktop
+  browser the club uses has WebGL2 (B-gate, D-mobile). A lost context
+  remounts the layer once, then shows the message.
+- **A map without a pinned document** (import running, failed, or never
+  backfilled) shows the import state — "map is being prepared" / the
+  review link — not tiles. E0 makes it zero on prod before E3 ships.
+- **`CourseStackError`** (a document whose colour stack is not aligned)
+  becomes a visible error in print (400 with the reason) and in the
+  viewer (course drawn on the GL layer's fallback colours, or a message —
+  E3's planner chooses, E0 says whether any prod map hits it).
+- ★ **Replay** (`components/replay/`, ~3,700 lines, mounted nowhere,
+  built on tile URLs) is deleted in E4b; git keeps it for a future replay
+  feature on the GL viewer.
+- **Readers move to the document, not to `map_sources.bytes`**, wherever
+  the document carries the data (CRS, north, objects, cuts); reading
+  source bytes is the planner's fallback only where it does not, named in
+  the spec. The OCAD reader (`ocad2geojson`) stays for import.
+- **E2E on the new pipeline only.** Projects `map-legacy`, the
+  `MAP_PIPELINE_SPECS` / `VECTOR_ONLY_SPECS` lists and the `mapPipeline`
+  fixture go; the six dual-run specs run once in `chromium`; legacy-only
+  specs and tests are deleted, not ported, where the new editor's specs
+  already cover the behaviour.
+
+### Done
+
+(none)
 
 ### Remaining
 
 | Id | Sub-slice | Spec home | Research | Depends on | Area (files a session may touch) | Status |
 |----|-----------|-----------|----------|------------|----------------------------------|--------|
-| E-pages | **Maps and Map templates pages folded away** (user 2026-11-05, after the coordinator's survey): with templates by key (D8) the two pages mostly expose plumbing. **Direction (user 2026-11-05): templates stop being a separate idea for the user** — to be thought through again when E is split; the list below is the coordinator's first sketch, not decided. (1) The editor's Layout mode takes what only the pages do today: rename / delete a sheet and add a second one, create the all-controls sheet on demand (as `autoSheets` does for course sheets, so Export ▾ → All controls never answers "No maps found"), export one sheet, create / rename / delete a template. (2) The **Courses page** gets the event-wide overview the Maps page gave — a template and print-status column per course, bulk apply — and the template picker there offers, in one place, **bring in a club template** (`mapTemplate.listClub` / `loadFromClub`) and **create a template for this event** (paper, orientation, scale); saving a template to the club library moves there or to the Layout inspector. (3) Maps and Map templates leave the navigation, with redirects from their routes; their E2E (`course-maps.spec.ts`) moves to the new homes. Spec questions for the session: where the save-to-club action lives; whether the Courses-page column replaces or sits beside the editor's checks | `docs/course-layout.md` §4–§7, `docs/course-maps.md` "Maps and Map templates pages" | 08 §4.6, §5.2 | the E flip (the new editor mounts by default; until then the pages are the only way into `MapLayoutEditor` for events the new editor does not mount; `legacy` events and browsers without WebGL2 keep that editor until F, so they need another entry or the pages stay for them) | `packages/web/src/pages/editor/layout/`, `lib/editor/export-menu.ts`, `pages/CoursesPage.tsx`, `pages/MapsPage.tsx`, `pages/MapTemplatesPage.tsx`, `CompetitionShell.tsx` (nav, redirects), the `mapTemplate` / `courseMap` / `layout` routers, `e2e/course-maps.spec.ts`, docs | blocked (after the E flip) |
+| E0 | **Prod preflight** (manual, coordinator + user): a reusable one-off DB job (`scripts/gcp/db-job.sh <image> <script>`, the pattern of the slice D flag job: Cloud Run job, `oxygen-database-url`, read-only by default) and a survey script. Numbers to reach before E3 ships: every event's latest `map_files` row pinned (`document_hash`) and sourced (`source_hash`); every `club_map_files` row migrated (`club_map_id`); no `error` rows in `map_import_jobs`; every live course with a `structure` (Maintenance → Course structures); the list of documents that raise `CourseStackError`. Fix by re-running the backfill / Course structures on prod; anything that will not pin is reported to the user per event | `docs/map-storage.md` §6.7 (backfill), this file | 09 §5 | — | `scripts/gcp/`, `docs/deploy-gcp-cloud-run.md` | ready (manual: prod reads need the user's approval) |
+| E1 | **The OCAD readers move to the document.** `loadEventCrs` (lengths, IOF/ppen export, control lat/lng, `course.checks` scale, course import), `loadEventMapObjects` (description autodetect, `control.suggestDescription`, `DESCRIPTION_STALE`), `north_detection` (from `detectDocumentNorth`), `course-import-align.ts` (club map → the club version's document), `course.mapMetadata` without `ensureEventMapRenderKey` (and without the colour-profile classification), `loadEventCutFeatures` without the OCAD path, `getBaseMapInfo` without the OCAD fallback, `importCourses` without the tile cache-buster bump. Uploads keep writing `file_data`, `render_key` and `club_map_files` (rollback to v0.5.0) — only the reads move. Parity tests: each reader's answer from the document equals the OCAD answer on the fixtures and the corpus maps within a stated tolerance. Planner on Fable (model policy: hard planning) | `docs/map-storage.md`, `docs/course-layer.md` §6, `docs/course-controls-and-matching.md` (autodetect), `docs/map-document-format.md` if the document needs a field | 02, 06, 07 | — | `packages/api/src/event-crs.ts`, `event-map-objects.ts`, `event-map.ts` (north only), `course-import-align.ts`, `course-geometry.ts` (CRS call), `course-export.ts`, `course-checks.ts`, `routers/control.ts`, `routers/course.ts` (`mapMetadata`, `controlCoordinates`, `importCourses`), `course-maps/map-source.ts`, `map-store/` (read helpers), their tests, docs | ready |
+| E2 | **E2E onto the new pipeline before the flip** (tests only, no product change): the E2E stack's default becomes `vector` (`map.pipeline.default` and `map.editor.vector` seeded on, every seed event `vector`), so the `chromium` specs that rely on the legacy default today — `class-presets`, `club-map-library` (asserts tile images), `control-series` and `editor-start-finish` (`editor-control-hit`), `map-review`, `permissions` (`course-editor-page`), `backup`, `competition`, `courses`, `map-documents` — run on the GL viewer and the new editor: ported where they test something `course-editor.spec.ts` does not, trimmed where they duplicate it. The `mobile-layout` / `course-maps` parts that mount `CourseEditorPage` move to the new editor; their `MapLayoutEditor` parts stay until E-pages. The legacy-only specs keep running (they set `legacy` themselves) until E3 deletes them | `docs/map-pipeline-switch.md` §5 (the E2E default), `docs/e2e-sharding.md` | 09 §3 | — | `e2e/` (not `course-editor.spec.ts`, `course-editor-legacy.spec.ts`), `e2e/helpers/`, `playwright.config.ts`, `scripts/e2e-weights.mjs`, docs | ready |
+| E3 | **The flip.** Migration: every event `vector`; the three `map.*` settings rows deleted. Code: `map-pipeline.ts` (api, web), `event.mapPipeline` / `setMapPipeline`, `MapEngineToggle`, the fallback notice and `vectorFellBack` state, `courseEditorMount` / `useCourseEditorMount` (the route always mounts the new editor; *Edit layout* on the Maps pages deep-links into Layout mode), `map.editor.vector`; `newEventMapPipeline` and the lease/snapshot copy of the column. The decided non-legacy answers for: no pin, no WebGL2, lost context, `CourseStackError` (print and viewer), unreadable document. `maps.pdf` and `pinnedDocumentHash` stop reading the event column (`X-Print-Pipeline` goes). E2E: `map-legacy` project, the spec lists and the `mapPipeline` fixture go; `course-editor-legacy.spec.ts`, `map-pipeline-switch.spec.ts` and the legacy test in `map-vector-layer.spec.ts` are deleted; `course-labels.ts` loses its SVG branch; the `course-maps.spec.ts` / `mobile-layout.spec.ts` tests that open `MapLayoutEditor` move to Layout mode or are deleted where `course-editor.spec.ts` covers them; weights and `e2e-config.test.mjs` follow. `map-pipeline-switch.md` becomes a short history note (or is deleted with a pointer in the cutover record) | `docs/map-pipeline-switch.md`, `docs/map-rendering.md` §5.4, `docs/course-editor.md` §1, `docs/course-print.md` §8.1 | 09 §3, §4 E | E1, E2, E0's numbers at zero | `packages/api/src/map-pipeline.ts`, `routers/event.ts` (switch procedures), `course-maps/routes.ts` + `map-source.ts` (path selection only), `sync/` (column copy), `packages/web/src/lib/map-pipeline.ts`, `hooks/useCourseEditorMount.ts`, `pages/editor/CourseEditorRoute.tsx`, `components/MapPanel.tsx`, `MapEngineToggle.tsx`, `VectorMapLayer.tsx` (lost context), i18n, `e2e/`, `playwright.config.ts`, `scripts/e2e-*`, a migration, docs | blocked: E1, E2 |
+| E4a | **Legacy server code and the image's tools.** Delete: `map-tiles.ts`, `map-window.ts`, the tile half of `map-render-limits.ts` (the render gate stays), `map-color-stack.ts`, `map-profile-cache.ts`, `map-render-key.ts` / `map-render-cache.ts` reads (the upload's writes stay until E5), `club-map-preview.ts` (the library's preview from the version's document thumbnail), `svg-to-pdf.ts`, `map-page-svg.ts`, the legacy branch of `maps.pdf` and the whole `window.png` route (its only caller is `MapLayoutEditor`, unreachable after E3), `graphicToResolved`, `course.setMapColorStack` / `clubMap.setColorStack` and their UI (map-info row, club card), `render/parity.ts`, `render/print-run.ts`, `scripts/measure-parity.mjs`, `scripts/measure-print.mjs`, `compare-course-geometry`; `librsvg2-bin` and `fonts-liberation` from the Dockerfile and CI, `RSVG_CONVERT_COMMAND` and `fake-rsvg-convert.mjs`, the tile `MAP_*` env vars and their deploy docs. Their tests go with them (≈2,500 lines of unit/integration tests; the mixed files keep their non-legacy cases) | `docs/course-print.md` (§7.4, §8, §9.4, §10, §11), `docs/course-maps.md`, `docs/map-storage.md`, `docs/deploy-gcp-cloud-run.md`, `docs/architecture.md`; delete `docs/map-tile-rendering.md`, `docs/map-color-stack.md` | 09 §4 E/F | E3 | `packages/api/src/` (the files named), `packages/api/scripts/`, `scripts/measure-*`, `Dockerfile`, `.github/workflows/ci.yml`, `packages/web/src/components/MapPanel.tsx` + `pages/SettingsPage.tsx` (colour-profile controls only), tests, docs | blocked: E3 |
+| E4b | **Legacy web code.** Delete: `TileLayer.tsx`, `tile-fetcher.ts`, `tile-retry.ts`, `MapLoupe.tsx`, the mercator viewport (`map-viewport.ts` `MercatorViewport`, `fitGeo`), `MapViewer`'s tile poll, `TileLayer` mounts, `tileUrlBase` / `mapVersion` props, the SVG course-drawing paths gated `!glCourse` and the `courseGeometries` query that feeds them, the editor SVG hit targets; `CourseEditorPage.tsx`; the service-worker tile cache; `kiosk-key.ts` `tileQueryString`; `components/replay/` ★; their unit tests. The SVG overlay stays as the UI layer (leg pills, GPS, description sheet) | `docs/map-rendering.md`, `docs/mobile-layout.md`; delete `docs/course-editor-legacy.md` | 04 §7 | E3 | `packages/web/src/components/` (the files named, `MapViewer.tsx`), `lib/`, `pages/CourseEditorPage.tsx`, `vite.config.ts`, tests, docs | blocked: E3 |
+| E4c | **`MapLayoutEditor` retired.** After E3 the Maps and Map templates pages' *Edit layout* always deep-links into Layout mode, so the legacy layout editor is unreachable: delete `MapLayoutEditor.tsx`, the pages' legacy branch and snapshot plumbing, the shared SVG emitters (`objects-svg.ts`, `course-overlay-svg.ts`, `description-svg.ts`, `ResolvedMapGraphic`, the no-caller helpers) and their tests (the SVG-generator describe of `shared/src/__tests__/course-maps.test.ts`). The pages stay as lists (create sheet / template, club templates) until E-pages; `lib/map-layout-editor.ts` stays (Layout mode uses it). E4a has deleted their API consumers (`map-page-svg.ts`, `window.png`) | `docs/course-maps.md` "Maps and Map templates pages", `docs/course-layout.md` §4 | 08 §5.2 | E4a | `packages/web/src/components/MapLayoutEditor.tsx`, `pages/MapsPage.tsx`, `pages/MapTemplatesPage.tsx`, `packages/shared/src/course-maps/` (the emitters), their tests, `e2e/course-maps.spec.ts` (only if a test still reaches the legacy editor), docs | blocked: E4a |
+| E-pages | **Templates rethought; Maps and Map templates pages folded away** — not on slice E's critical path (the retirement part is E4c). User 2026-11-05: **templates stop being a separate idea for the user**; the design is the user's call before this row starts. The coordinator's first sketch: (1) Layout mode takes what only the pages do: rename / delete a sheet and add a second one, the all-controls sheet on demand (as `autoSheets` does for course sheets), export one sheet, create / rename / delete a template, club templates (list / bring in / save). (2) The **Courses page** gets the event-wide overview the Maps page gave — template and print status per course, bulk apply — with **bring in a club template** and **create a template for this event** in one picker. (3) Maps and Map templates leave the navigation with redirects; `course-maps.spec.ts` moves to the new homes | `docs/course-layout.md` §4–§7, `docs/course-maps.md` | 08 §4.6, §5.2 | E4c; the user's template design | `packages/web/src/pages/editor/layout/`, `lib/editor/export-menu.ts`, `pages/CoursesPage.tsx`, `pages/MapsPage.tsx`, `pages/MapTemplatesPage.tsx`, `CompetitionShell.tsx` (nav, redirects), the `mapTemplate` / `courseMap` / `layout` routers, `e2e/course-maps.spec.ts`, docs | blocked: design (user) |
+| E6 | **`courses.geometry` retired as a read.** Its readers move to `structure` + `courseLayer()`: `resolve-layout.ts` (`courseGeometryControls` / `courseGeometryLegs`), `course-export.ts` (length choice), `routers/eventor.ts` (length sync), `importCourses` (OCD vs XML precedence), `course.geometry` / `course.courseGeometries` (deleted with their last caller), `lengthM` computed from the layer; `rebuildCourseGeometry`, `ensureOverprintCutsCurrent`, `course-geometry-report.ts` and `course-structure-backfill.ts` (E0 has run it on prod) go. The column is still written until E5 | `docs/course-layer.md` §2, §6, `docs/course-print.md` (sheet resolution), `docs/course-controls-and-matching.md` | 08 §4.1, 09 §5 | E1, E4a | `packages/api/src/course-geometry.ts`, `course-maps/resolve-layout.ts`, `course-export.ts`, `routers/eventor.ts`, `routers/course.ts` (geometry procedures, `importCourses`), `course-structure-backfill.ts`, tests, docs | blocked: E1, E4a |
+| E5 | **The drops (v0.6.1).** Migration, guarded (fails if any `map_files` row lacks `source_hash` or any `club_map_files` row lacks `club_map_id`): drop `map_tiles`, `rendered_maps`, `map_files.file_data` / `render_key` / `file_hash` / `color_profile` / `color_overrides` / `north_lines_below`, `club_map_files`, `events.map_pipeline` and its enum, `events.overprint_cuts_version`, `courses.geometry` / `geometry_source`. Code: the upload's dual writes, `fireMapUpload`, `gcOrphanTiles`, `map-store/backfill.ts` (a pre-vector per-event dump is restored by creating its sources at restore time in `backup.ts`), `snapshotMaps`' `file_data` write, `BACKUP_TABLES`, the base64 upload procedures (`course.uploadMap`, `clubMap.upload`; the web always uploads chunked; the integration tests' upload helper moves to the chunk route), `course.downloadMap` from `map_sources`. Docs: `docs/migrations/2026-vector-map-pipeline.md` (the cutover record, shaped like `2026-drop-meos.md`), `AGENTS.md` §7 and §15, the table list, release runbook `docs/release-slice-e.md` for both tags | `docs/map-storage.md`, `docs/migrations/`, `AGENTS.md` | 09 §4 F, §5, §6 | E3, E4a, E4b, E4c, E6 | `packages/api/prisma/`, `packages/api/src/event-map.ts`, `routers/course.ts` + `routers/clubMap.ts` (upload/download), `map-store/`, `backup.ts`, `sync/snapshotMaps.ts`, `packages/web/src/lib/map-upload.ts`, `MapPanel.tsx` + `SettingsPage.tsx` (upload call only), the integration tests' upload helper, `e2e/global-setup.ts`, `e2e/helpers/reseed.ts`, docs | blocked: E3, E4a, E4b, E4c, E6 |
+| E-gate | The user's check on prod after v0.6.0: an event's map, the course editor (desktop and phone), print, a readout map on the kiosk; then v0.6.1. No calendar soak (user 2026-11-05) | `docs/release-slice-e.md` | 09 §8 | E1–E4c, E6 released | — | manual |
+
 
 ## Decision gates
 
