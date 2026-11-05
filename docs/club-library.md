@@ -40,13 +40,15 @@ only once the map-document backfill has run (`pnpm map:backfill` or
 Settings → Maintenance → **Map documents**); a release containing this
 change requires that run first.
 
-Rows uploaded before north-line diagnostics existed are backfilled lazily:
-the first `clubMap.list` read parses the linked legacy row's blob, runs the north
-analysis, and persists it (an unparseable file persists an all-null result
-so it is not re-parsed on every read). Event map rows get the identical
-backfill on the first `course.mapMetadata` read. "No magnetic north lines
-found" therefore always means the analysis actually ran and found none —
-never "not analysed yet".
+North-line diagnostics come from the latest version's map document: the
+import's stage-5 analysis (`map_documents.report.north`), with the
+staleness re-evaluated for today; the card's extent and north offset
+come from the same document under the series' rotation correction
+(`map-storage.md` §4.6). Event maps read their pinned document the same
+way in `course.mapMetadata`. "No magnetic north lines found" therefore
+means the import's analysis ran and found none; a series without a
+version yet shows no north information. Nothing parses the uploaded file
+on a read (slice E1 removed the lazy backfill of `north_detection`).
 
 **Review symbols** on a card opens the import review of the version's
 document (`/settings/map-review/<document hash>?clubMap=<series>`,

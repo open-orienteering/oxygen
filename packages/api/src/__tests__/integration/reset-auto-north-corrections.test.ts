@@ -14,6 +14,8 @@ import {
   type TestEventContext,
 } from "../helpers/test-db.js";
 import { makeCaller } from "../helpers/caller.js";
+import { createHash } from "crypto";
+import { startImportJob } from "../../map-store/jobs.js";
 import { parseOcadMapMetadata } from "../../event-map.js";
 import { loadEventCrs } from "../../event-crs.js";
 import { mapMmToWgs84 } from "../../map-projection.js";
@@ -86,7 +88,7 @@ afterAll(async () => {
 });
 
 describe("reset_auto_north_corrections migration", () => {
-  it("undoes auto-applied corrections, keeps manual ones, re-derives on read", async () => {
+  it("undoes auto-applied corrections, keeps manual ones, re-derives at the pin", async () => {
     const buf = readFileSync(FIXTURE);
     const db = autoCtx.db;
     const shifted = await parseOcadMapMetadata(buf, 1.7);
@@ -205,10 +207,19 @@ describe("reset_auto_north_corrections migration", () => {
     expect(clubManualAfter.rotationCorrection).toBe(4.5);
     expect(clubManualAfter.northOffset).toBe(4.5);
 
-    // First read re-derives metadata with correction 0 and re-syncs the
-    // control's lat/lng to the file's own georeference.
+    // Reads no longer re-derive from the OCAD file (slice E1,
+    // docs/map-storage.md §4.6): the cleared row answers as stored …
     const caller = makeCaller(autoCtx.event);
+    expect(await caller.course.mapMetadata()).toMatchObject({ documentHash: null, bounds: null, rotationCorrection: 0 });
+    // … and the pin re-derives the columns with correction 0 and re-syncs
+    // the control's lat/lng to the file's own georeference (§6.4).
+    const sourceHash = createHash("sha256").update(buf).digest("hex");
+    await db.mapSource.createMany({ data: [{ fileHash: sourceHash, kind: "ocad", bytes: Uint8Array.from(buf), sizeBytes: buf.byteLength, fileName: "auto.ocd" }], skipDuplicates: true });
+    await db.mapFile.update({ where: { id: autoRow.id }, data: { sourceHash } });
+    const job = await startImportJob(db, { sourceHash, eventId: autoCtx.eventId, holdMs: 60_000 });
+    expect(job.state).toBe("done");
     const meta = await caller.course.mapMetadata();
+    expect(meta!.documentHash).toMatch(/^[0-9a-f]{64}$/);
     const clean = await parseOcadMapMetadata(buf, 0);
     expect(meta!.rotationCorrection).toBe(0);
     expect(meta!.bounds.north).toBeCloseTo(clean.bounds!.north, 9);
@@ -223,5 +234,5 @@ describe("reset_auto_north_corrections migration", () => {
     });
     expect(synced.lat).toBeCloseTo(expected.lat, 8);
     expect(synced.lng).toBeCloseTo(expected.lng, 8);
-  });
+  }, 60_000);
 });

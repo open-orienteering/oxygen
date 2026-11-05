@@ -378,6 +378,90 @@ four clauses included — the uploader of a running import sees its
 previews as it sees its document. The library route needs any
 signed-in user, or `AUTH_MODE=off` (07 §6.1): the library is public data.
 
+### 4.6 Server reads of the pinned document
+
+Every server reader of map data reads the event's **pinned document**:
+the latest `map_files` row's `document_hash` (`eventPin` /
+`eventDocumentHash`, `map-store/event-document.ts`). Nothing on these
+paths parses `map_files.file_data` or `club_map_files.file_data` (slice
+E1; decision log 2026-11-05). Uploads still write those columns,
+`render_key`, `north_detection` and `club_map_files` (§6.5) so a rollback
+to v0.5.0 works; only the reads moved.
+
+**Every event, whatever its pipeline.** The data readers ignore
+`events.map_pipeline`: a `legacy` event has a pinned document too (the
+switch never gated imports, `map-pipeline-switch.md` §3). The switch
+gates drawing paths only — the viewer, the print path
+(`pinnedDocumentHash`, `course-print.md` §10) and the editor — until E3
+removes it.
+
+**No pin, no map.** A reader whose event has no `map_files` row, or
+whose row has no `document_hash` yet (the import is running, failed, or
+the row predates the backfill), answers "no map": no frame, no objects,
+no cuts, no obstacles, no north. It never falls back to an OCAD parse.
+`course.mapMetadata` is the one exception in shape: it answers for every
+`map_files` row (below).
+
+| Reader | Answer from the document | No pin |
+|---|---|---|
+| `loadEventCrs` (`event-crs.ts`): course lengths (`rebuildCourseGeometry`), IOF / Purple Pen export, `controlCoordinates`, `control.create` / `update` lat/lng, `course.checks` scale, course import, the pin's lat/lng sync | `mapGeo.PaperFrame` from `map_documents.header` (`unitsPerMm`, `mapScale`, `georeferencing`) with `correctionDeg = map_files.rotation_correction`. A frame whose CRS proj4 cannot project still carries `mapScale` (lengths); its WGS 84 conversions answer null | null |
+| `loadEventMapObjects` (`event-map-objects.ts`): description autodetect, `control.suggestDescription`, `DESCRIPTION_STALE` | point / line / area objects of non-hidden symbols whose code — the applied match's canonical code, else the source code — is in `ISOM_DESCRIPTION_MAP`, as `SlimMapObject` (1/100 mm whatever `unitsPerMm`, `sym` = `204.1` → 204001, Béziers flattened in 8 steps, an area's outer ring) | null |
+| `loadEventCutFeatures` | `course.cutFeaturesOfDocument` (`course-layer.md` §3.4) | null: no automatic cuts |
+| `loadEventCheckDocument` | `course.checkObstaclesOfDocument` (`course-layer.md` §9.3) | null |
+| north: `course.mapMetadata` (`meridianStalenessDeg`, `cutRotationDeg`), `clubMap.list` (`northDetection`, `meridianStalenessDeg`) | `map_documents.report.north` (`detectDocumentNorth`, written at import); staleness re-evaluated for today by `meridianStalenessFromDetection` | null |
+| `clubMap.list` `bounds`, `northOffset` | `mapFileMetadataFor(header, report.north.meridian tilt, club_maps.rotation_correction)` of the latest version's document | null (no version) |
+| `getBaseMapInfo` (`course-maps/map-source.ts`) | `scale` = `header.mapScale`, `meridianTiltDeg` = `report.north.meridian.medianTiltDeg` (0 without one), `version` = the document hash; `document` = `{hash}` only on the vector print path (`pinnedDocumentHash`) | throws "No base map uploaded" (`getBaseMapInfoOrNull` → null) |
+| `resolveImportAlignment` (`course-import-align.ts`) | the club map a Purple Pen file names is the series whose latest version's label, else its source file name, matches (`matchClubVersion`); re-projection through that version's document frame with `club_maps.rotation_correction` | `unknown` / judged on the event calibration, as before |
+| `course.setMapRotation`, `clubMap.setRotation` | the quick-access columns (`map_files`, and the linked `club_map_files` rows) recomputed by `documentMapFileColumns` — the pin's function (§6.4) under the new correction | only the correction is stored; the pin recomputes the columns |
+
+**`course.mapMetadata`.** Answers non-null for every `map_files` row:
+the row's quick-access columns as stored (the pin writes them, §6.4 —
+no lazy OCAD backfill), `rotationCorrection`, `uploadedAt`,
+`documentHash` (null until the pin: the viewer's "no document" case),
+`clubMapVersionId`, the north fields above, and the legacy raster's
+`colorProfile`, `colorOverrides`, `northLinesBelow`, `renderKey` straight
+from the row (`renderKey` null on rows from before render keys; nothing
+computes it on read). `resolvedProfile` / `resolvedBy` follow the scale
+heuristic (`≤ 1:5 000` → `issprom`, `resolvedBy: "scale"`; no scale →
+`"default"`; an explicit profile → `"explicit"`); the colour-table
+classification of the OCAD file is gone with the read (`file-colour` is
+never answered). These colour fields go with the raster in E4a.
+
+**The one source read.** A document whose header has `crs: null` — the
+importer's `CRS_UNRESOLVED` (`map-import.md` §3.5: the ScalePar grid id is
+not in the reader's table and the file has no EPSG) — lacks the CRS the
+legacy readers inferred from the easting / northing range
+(`getEpsgString`, `map-projection.ts`: SWEREF99 TM, ETRS-TM35FIN, UTM
+32N / 33N). For that case only, `sourceFrameFallback` reads
+`map_sources.bytes` of the document's source once, takes the OCAD
+ScalePar through `frameFromOcadCrs` (with the inference) and caches it
+per source hash; `loadEventCrs`, the club-map alignment and
+`documentMapFileColumns` use it. A source the inference does not place
+(or an OMAP source) yields no CRS. The north analysis of such a document
+stays as the import wrote it (no centre, no staleness).
+
+**Caches.** Keyed by content hash, so never stale and nothing bumps
+`uploaded_at` to invalidate them (`importCourses` no longer does): the
+header frame and the report's `north` (32 documents each), the decoded
+document (3), the source fallback (8), and per derivation — slimmed
+objects, cut features, obstacles — 3 documents each. The pin lookup
+itself is one indexed `map_files` query per call.
+
+**Parity.** `packages/api/src/__tests__/document-readers-parity.test.ts`
+imports each map in memory and compares every reader's answer with the
+legacy OCAD reader's over the same bytes (the OCAD readers live on as a
+test-only oracle, `__tests__/helpers/ocad-oracle.ts`): WGS 84 of the
+extent's corners and centre within 1e-8° (with and without an 11°
+correction), scale exact; the autodetect object multiset exactly equal to
+the OCAD slimming minus objects of hidden symbols (coordinates to 1e-6
+units); north — meridian count exact, angles within 1e-6°, centre within
+1e-8°; cut features within 1e-6 mm in x, y, r. Objects and cuts are
+compared on source codes: an applied symbol match changing a code is the
+document's rule, not a reader difference. The E2E fixture runs in CI;
+the local corpus (`.local/corpus`, five club / sprint maps up to 37 MB,
+never committed; `OXYGEN_CORPUS_DIR` overrides) runs when present — all
+five equal on 2026-11-05.
+
 ## 5. Chunked upload: `/api/map-uploads`
 
 07 §7. Browsers upload map files in slices so a 100 MB OCAD file survives
@@ -556,11 +640,16 @@ Idempotent; also run for dedup hits:
   `map-store/map-file-metadata.ts`; rules in `docs/map-import.md` §3.8).
   Skipped — the columns keep the raster path's values — when the
   document has no projectable CRS or its report has no `north` (a
-  pre-`ocad-5` / `omap-2` document). Until slice C retires the raster
-  path, `applyEventMap`, `applyMapRotationCorrection` and the lazy
-  `course.mapMetadata` backfill write the same columns through the same
-  function, so the two writers agree (decision log 2026-10-19, A11);
-  `north_detection` and `club_map_files` are not written by the pin.
+  pre-`ocad-5` / `omap-2` document). `applyEventMap` (the upload, from
+  its own OCAD parse) and `applyMapRotationCorrection` (from the pinned
+  document, `documentMapFileColumns`, §4.6) write the same columns
+  through the same function, so the writers agree (decision log
+  2026-10-19, A11); `north_detection` and `club_map_files` are not
+  written by the pin. Then the event's positioned controls get their
+  `lat` / `lng` from the pinned frame
+  (`synchronizePositionedControlCoordinates`, `event-crs.ts`): the upload
+  no longer converts them before the pin exists, so an import that
+  outlives the upload's hold still ends with correct positions.
 - `clubMapId` set and no `club_map_versions` row for `(clubMapId,
   source_hash)` → insert one with `seq = max + 1`, label and uploader
   copied from the source row. `clubMap.upload` / `addFromSource` then
@@ -607,11 +696,12 @@ clubMap.list → [{
   importJob: {id, state, error} | null,   newest job of the series, only while version is null
   fileName,                version label, else map_sources.file_name of the version (or the job's source)
   sizeBytes,               map_sources.size_bytes of the same source
-  scale,                   map_documents.header.mapScale, else the legacy row's scale
+  scale,                   map_documents.header.mapScale of the latest version, else null
   uploadedAt, uploadedBy, uploader {email, displayName},   the version's, else the series creator's
   previewUrl,              /api/map-documents/<documentHash>/thumbnail.png (§4.5),
                            else /api/club-map-preview/<legacy id>, else null
-  bounds, northOffset, northDetection, meridianStalenessDeg,   the linked legacy row (below)
+  bounds, northOffset,     the version's header + report.north tilt under rotationCorrection (§4.6)
+  northDetection, meridianStalenessDeg,   the version's report.north; staleness for today
 }]                         ordered by club_maps.created_at desc
 ```
 
@@ -624,7 +714,7 @@ card's thumbnail follows the latest import and nothing here caches it.
 | `upload` / `addFromSource` | `club_maps` row, `map_sources`, `startImportJob {clubMapId}` → version 1 (§6.4); returns `{id: club_maps.id, name, fileName, sizeBytes, rotationCorrection, meridianStalenessDeg, importJob}` | one row with `club_map_id`, the bytes, preview, metadata, `file_hash`, `render_key` |
 | `rename {id, name}` | `club_maps.name` | `name` on every linked row |
 | `setColorStack {id, profile?, northLinesBelow?, overrides?}` | `colour_profile`, `north_lines_below`, `colour_overrides` | `color_profile`, `north_lines_below`, `color_overrides`; `render_key` recomputed, old and new tile keys invalidated, orphan tiles collected |
-| `setRotation {id, degrees}` | `rotation_correction` | `applyClubMapRotationCorrection` per linked row (bounds, north offset, render key) |
+| `setRotation {id, degrees}` | `rotation_correction` | `applyClubMapRotationCorrection` per linked row: bounds and north offset from the latest version's document (§4.6), render key |
 | `remove {id}` | deletes the series: versions cascade, `map_files.club_map_version_id` of events that pinned one is set `NULL`, jobs cascade | linked rows deleted **first** |
 | `download {id}` | the latest version's `map_sources` bytes, named by the version label (else `map_sources.file_name`) | — |
 | `course.useClubMap {clubMapId}` | settings from the series, bytes from the latest version's source; then `map_files.club_map_version_id` = that version on the event's rows with its `source_hash` | — |
@@ -632,13 +722,11 @@ card's thumbnail follows the latest import and nothing here caches it.
 - **Write-through.** `club_map_files` stays because the raster path still
   reads it until slice F drops it after a verified backfill (09 §4 F):
   the tile cache and its orphan collection (`map-render-cache.ts`), the
-  PNG preview route (`/api/club-map-preview/:id`), PPEN course import's
-  CRS lookup (`course-import-align.ts`) and the backfill itself. Every
-  mutation keeps the linked rows identical to the series. The CRUD reads
-  a linked row only for what the document does not carry yet — WGS84
-  `bounds`, `northOffset`, `northDetection` (and its lazy backfill, see
-  `club-library.md`), the PNG preview, the pre-document `scale` — which
-  move to the document with stage 5 (`map-import.md` §3.5).
+  PNG preview route (`/api/club-map-preview/:id`) and the backfill
+  itself — and a rollback to v0.5.0 reads all of it. Every mutation keeps
+  the linked rows identical to the series. The CRUD reads a linked row
+  only for the PNG preview of a series without a version; extent, north
+  and scale come from the version's document (§4.6, slice E1).
 - **Delete order.** `club_map_files.club_map_id` is `ON DELETE SET NULL`;
   deleting the series first would leave an unlinked row the backfill
   re-imports as a new series.
@@ -1128,6 +1216,14 @@ the documents-only dump variant for non-admin event managers (07 §10,
 §15 — not restorable while a document needs its source row, §7.3). Each
 lands with its own section here and its own tests.
 
+Slice E (`SLICES.md`): the upload still parses the OCAD file for the
+row's quick-access columns and `north_detection`, and still writes
+`file_data`, `render_key` and `club_map_files` — for rollback to
+v0.5.0, until E5 drops them; the legacy renderers (`map-tiles.ts`,
+`map-source.ts` `parsedMap`, `club-map-preview.ts`) still parse
+`file_data` until E4a deletes them; `pinnedDocumentHash` keeps its
+`map_pipeline` gate until E3.
+
 ## 10. Tests
 
 | Level | File | Covers |
@@ -1165,6 +1261,10 @@ lands with its own section here and its own tests.
 | Unit (api) | `packages/api/src/__tests__/backup.test.ts` | dump table order (blobs before `map_files`, decisions present, no previews / tiles), one `\copy` per table, blob filters by the event's pins, decisions unfiltered, `splitBackupSections` |
 | Integration (api) | `packages/api/src/__tests__/integration/lease.test.ts` | checkout carries file + source + document (bytes, header, pin, `file_data`, view overrides, venue-local NULLs, pre-pipeline row skipped, counts); document route on the venue 401 anonymous / 200 with the kiosk key; tampered bytes fail the checkout, release the peer lease and store nothing; exporter without `maps`; `exportBlob` refuses other events' blobs and a start past the end; re-checkout fetches nothing and keeps the blob rows; `lease.exportBlob` through the router (no / wrong secret 401, 4 MiB bound); club decisions merged (newer cloud row wins over a stale venue copy, venue-only row kept, `decided_by` NULL) |
 | Integration (api) | `packages/api/src/__tests__/integration/backup.test.ts` | dump completes with exactly the event's source and document as `\x` hex before `map_files`, no previews; event and blobs deleted → `restore-map-blobs.sql` restores byte-exact into another event (`uploaded_by` of a missing user NULL, grace restarted), second run a no-op, tampered bytes refused with nothing written, blobs alone without an event id; every `map_files` column restored; decisions in the dump, restore brings back a lost row and keeps the newer of two |
+| Unit (api) | `packages/api/src/__tests__/event-document.test.ts` | §4.6 over a stub db holding an in-memory import of `e2e/test.ocd`: no map / no pin → null with no blob read; frame from the header with the row's correction; control lat/lng equal the legacy CRS's within 1e-8°; header read once per hash; `CRS_UNRESOLVED` → the source's ScalePar (read once per source), scale-only frame when the source finds none, never read for a resolved header; objects / cuts / obstacles null without a pin or blob, decoded once per hash; `documentMapFileColumns` = the pin's columns, with the fallback, scale only; `reportNorth` |
+| Unit (api) | `packages/api/src/__tests__/event-map-objects.test.ts` | `ocadSymbolNumber`; `slimObjectsOfDocument`: kept / dropped symbols and object types, hidden, graphic, applied-match code, outer ring, Bézier flattening, unit scaling |
+| Unit (api) | `packages/api/src/__tests__/document-readers-parity.test.ts` | §4.6 "Parity": CRS, autodetect objects, north, cut features — document vs the legacy OCAD readers on `e2e/test.ocd` and, when present, the local corpus |
+| Integration (api) | `packages/api/src/__tests__/integration/map-document-readers.test.ts` | §4.6 end to end: `mapMetadata` without a render key and without a pin (non-null, `documentHash` null), north from the report; `importCourses` leaves `uploaded_at`; no pin → `controlCoordinates` stored lat/lng, no suggestions, `getBaseMapInfoOrNull` null; a `legacy` event reads its document; lat/lng synced at the pin |
 | E2E | `e2e/backup.spec.ts` | UI upload on `itest` → Download backup → `map_sources` / `map_documents` sections hold the source and document hashes before `map_files`, no previews |
 
 ## 11. Where things live
@@ -1189,6 +1289,8 @@ lands with its own section here and its own tests.
 | `packages/api/src/map-store/uploads.ts` | pure upload rules: limits, chunk sizes, kind sniffing, assembly |
 | `packages/api/src/map-store/upload-routes.ts` | `POST /api/map-uploads`, `PUT …/chunks/:n`, `POST …/finalise` |
 | `packages/api/src/map-store/jobs.ts` | job rows, claim / heartbeat / stale reclaim, worker launcher, `applyJobResult`, housekeeping, engine tick |
+| `packages/api/src/map-store/event-document.ts` | server reads of the pinned document (§4.6): `eventPin`, `eventDocumentHash`, `documentFrame`, `documentNorth` / `reportNorth`, `decodedDocument`, `documentPaperFrame`, `sourceFrameFallback`, `documentMapFileColumns`, caches |
+| `packages/api/src/event-crs.ts` / `event-map-objects.ts` | `loadEventCrs`, `synchronizePositionedControlCoordinates`; `slimObjectsOfDocument`, `loadEventMapObjects`, `loadEventCutFeatures`, `loadEventCheckDocument` (§4.6) |
 | `packages/api/src/map-store/map-file-metadata.ts` | `mapFileMetadataFor` (quick-access columns from a document frame + meridian tilt + correction; shared with the raster path), `writeDocumentMapFileColumns` (pin-time write) |
 | `packages/api/src/background/supervisor.ts` | lease-holder reconcile; starts / stops the GC |
 | `packages/api/src/map-store/import-worker.ts` | worker-thread body: `importMapToDocument` by kind + report |

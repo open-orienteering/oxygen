@@ -112,8 +112,7 @@ describe("course.importCourses — OCD coordinate conversion", () => {
     }
   });
 
-  it("bumps map_files.uploaded_at so tile cache busts after course import", async () => {
-    // Seed a map_files row so we have something to bump.
+  it("leaves map_files.uploaded_at alone (slice E1: no tile cache-buster bump)", async () => {
     const buf = readFileSync(FIXTURE);
     await ctx.db.mapFile.deleteMany({ where: { eventId: ctx.eventId } });
     await ctx.db.mapFile.create({
@@ -128,7 +127,6 @@ describe("course.importCourses — OCD coordinate conversion", () => {
       select: { uploadedAt: true },
     });
 
-    // Wait a millisecond so the timestamps definitely differ.
     await new Promise((r) => setTimeout(r, 20));
     await caller.course.importCourses({ ocdBase64 });
 
@@ -136,8 +134,6 @@ describe("course.importCourses — OCD coordinate conversion", () => {
       where: { eventId: ctx.eventId },
       select: { uploadedAt: true },
     });
-    expect(after?.uploadedAt.getTime()).toBeGreaterThan(
-      before!.uploadedAt.getTime(),
-    );
+    expect(after?.uploadedAt.getTime()).toBe(before!.uploadedAt.getTime());
   });
 });

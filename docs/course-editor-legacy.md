@@ -183,9 +183,11 @@ control.suggestDescription { x, y }   (menu after move)
   → [{ d, c?, e?, f?, g?, isom, distanceMm }] ≤ 3
 ```
 
-- **`event-map-objects.ts`** — per-event cache of slim OCAD objects
-  (invalidated on map upload), filtered to symbols in
-  `ISOM_DESCRIPTION_MAP`. Bezier segments are flattened onto the drawn
+- **`event-map-objects.ts`** — slim objects of the event's pinned map
+  document (memoised per document hash; no pin → no suggestions),
+  filtered to non-hidden symbols whose code — the applied match's, else
+  the source's — is in `ISOM_DESCRIPTION_MAP` (`map-storage.md` §4.6;
+  slice E1 moved this off the OCAD parse). Bezier segments are flattened onto the drawn
   curve (8 steps per cubic) — with the raw handles kept as vertices, a
   curved path whose end sits on another path would miss the junction
   tolerance by a millimetre.
