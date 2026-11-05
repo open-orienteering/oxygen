@@ -8,9 +8,8 @@ test.describe("club class presets", () => {
 
   test("bulk adds presets and auto-links a matching new course", async ({ page }) => {
     // Library setup, a fresh event, a bulk add and a map upload in one
-    // flow: the upload alone waits up to 60 s for server-side tile
-    // rendering, which the 30 s default would cut short under the
-    // parallel-shard load.
+    // flow: the upload alone waits up to 60 s for the map's import, which
+    // the 30 s default would cut short under the parallel-shard load.
     test.setTimeout(120_000);
     await page.goto("/");
     await page.getByTestId("settings-link").click();
@@ -78,7 +77,7 @@ test.describe("club class presets", () => {
     await expect(page.getByTestId("map-viewer")).toBeVisible({ timeout: 60_000 });
 
     await clickTab(page, "Course Editor");
-    await expect(page.getByTestId("course-editor-page")).toBeVisible({
+    await expect(page.getByTestId("editor-page")).toBeVisible({
       timeout: 15_000,
     });
     const suggestions = page.getByTestId("editor-new-course-suggestions");

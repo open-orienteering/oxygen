@@ -73,17 +73,13 @@ test.describe("club map library", () => {
     await page.getByRole("button", { name: mapName }).click();
     const viewer = mapPanel.getByTestId("map-viewer");
     await expect(viewer).toBeVisible({ timeout: 20000 });
-    // Regression: the map must actually render (viewer mounted and at least
-    // one tile image loaded) without a full page reload.
-    await expect
-      .poll(
-        async () =>
-          viewer.locator("img").evaluateAll((imgs) =>
-            imgs.filter((el) => (el as HTMLImageElement).naturalWidth > 0).length,
-          ),
-        { timeout: 30000 },
-      )
-      .toBeGreaterThan(0);
+    // Regression: the map must actually render without a full page reload —
+    // the vector layer has drawn the adopted version's document (the stack
+    // is `vector`, docs/map-pipeline-switch.md §5).
+    await expect(viewer).toHaveAttribute("data-map-pipeline", "vector", { timeout: 30000 });
+    await expect(viewer.getByTestId("map-vector-layer")).toHaveAttribute("data-ready", "true", {
+      timeout: 30000,
+    });
 
     await page.goto("/settings");
     await expect(page.getByTestId("library-map-name")).toHaveText(mapName);
@@ -202,7 +198,7 @@ test.describe("club map library", () => {
 
     // … and a persistent badge in the course editor's map info row.
     await page.goto(`/${await currentNameId(page)}/course-editor`);
-    await expect(page.getByTestId("course-editor-page")).toBeVisible({
+    await expect(page.getByTestId("editor-page")).toBeVisible({
       timeout: 15000,
     });
     const badge = page.getByTestId("map-panel").first().getByTestId("north-lines-badge");

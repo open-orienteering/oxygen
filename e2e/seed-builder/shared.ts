@@ -160,8 +160,24 @@ export function meosStatusToEnum(s: number): PgRunnerStatusLiteral {
 }
 
 /**
+ * The E2E stack's map defaults (docs/map-pipeline-switch.md §5): every seed
+ * event draws through the vector pipeline, and the instance flags make the
+ * same choice for events a test creates (`map.pipeline.default`) and mount
+ * the new course editor (`map.editor.vector`). `reseed()` deletes the
+ * `map.*` settings and runs the builders again, which puts these back.
+ */
+export const E2E_MAP_PIPELINE = "vector" as const;
+
+export async function seedMapDefaults(prisma: PrismaClient): Promise<void> {
+  for (const [key, value] of [["map.pipeline.default", E2E_MAP_PIPELINE], ["map.editor.vector", "true"]]) {
+    await prisma.setting.upsert({ where: { key }, create: { key, value }, update: { value } });
+  }
+}
+
+/**
  * Wipe any existing event with the given nameId (cascades to all children)
- * and create a fresh one with sensible defaults.
+ * and create a fresh one with sensible defaults (`map_pipeline` the stack's
+ * `E2E_MAP_PIPELINE`).
  */
 export async function recreateEvent(
   prisma: PrismaClient,
@@ -181,6 +197,7 @@ export async function recreateEvent(
       annotation: data.annotation ?? "",
       date: new Date(data.date),
       zeroTime: data.zeroTime ?? ZERO_TIME_DS,
+      mapPipeline: E2E_MAP_PIPELINE,
     },
     select: { id: true },
   });

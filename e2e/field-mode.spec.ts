@@ -8,7 +8,7 @@
 // (`ensureFixtureFromDesktop`, shared with the editor spec); the spec sets
 // `map.editor.vector` itself, as `course-editor.spec.ts` does.
 import { devices, type BrowserContext, type Page } from "@playwright/test";
-import { test, expect, setEditorVector, setMapPipeline } from "./helpers/map-pipeline";
+import { test, expect } from "./helpers/map-pipeline";
 import { reseed } from "./helpers/reseed";
 import { canvasInCircle, editorReady, ensureFixtureFromDesktop, nextFrames, site, sites, toPage, toPaper } from "./helpers/editor";
 import { touchDrag, touchEnd, touchMove, touchStart, touchTap } from "./helpers/touch";
@@ -20,17 +20,10 @@ let nameId = "";
 test.setTimeout(120_000);
 
 test.beforeAll(async ({ browser }) => {
+  // The seed is `vector` with the new editor on (docs/map-pipeline-switch.md §5), so the map is uploaded under
+  // `vector` and the event pins its document (the editor's mount rule).
   await reseed();
-  // The map is uploaded under `vector`, so the event pins its document (the editor's mount rule). The project's
-  // fixture sets it again before every test; a beforeAll runs before it.
-  await setMapPipeline("vector");
-  await setEditorVector(true);
   nameId = await ensureFixtureFromDesktop(browser, test.info());
-});
-
-test.afterAll(async () => {
-  await setEditorVector(null);
-  await setMapPipeline("legacy");
 });
 
 async function openEditor(page: Page, query = "") {

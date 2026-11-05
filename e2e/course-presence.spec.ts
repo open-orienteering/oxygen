@@ -4,7 +4,6 @@
 // · Field"), and a control moved in one context moves in the other within the
 // poll, with a one-line notice when the course itself changed.
 import { devices, test, expect, type Browser, type BrowserContext, type Page } from "@playwright/test";
-import { setEditorVector, setMapPipeline } from "./helpers/map-pipeline";
 import { reseed } from "./helpers/reseed";
 import { drag, editorReady, select, site, sitePoint, sites, toPage, viewSettled } from "./helpers/editor";
 import { waitForTrpc } from "./helpers/trpc";
@@ -47,9 +46,8 @@ async function enter(page: Page): Promise<void> {
 }
 
 test.beforeAll(async ({ browser }) => {
+  // The seed is `vector` with the new editor on (docs/map-pipeline-switch.md §5).
   await reseed();
-  await setMapPipeline("vector");
-  await setEditorVector(true);
   const { ctx, page } = await open(browser);
   await page.goto("/");
   await page.getByText("My example tävling").click();
@@ -82,11 +80,6 @@ test.beforeAll(async ({ browser }) => {
   courseSeq = (await option.getAttribute("value"))!;
   courseName = (await option.textContent())!;
   await ctx.close();
-});
-
-test.afterAll(async () => {
-  await setEditorVector(null);
-  await setMapPipeline("legacy");
 });
 
 test("two contexts: presence appears and expires; a move shows in the other within the poll", async ({ browser }) => {
