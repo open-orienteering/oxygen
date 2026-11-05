@@ -323,10 +323,15 @@ value (09 §3, §10). `playwright.config.ts`:
 | `e2e/map-vector-layer.spec.ts` | the vector layer in the viewer, the event switched through the column; a legacy event stays on tiles |
 | `e2e/map-control-circles.spec.ts`, `map-multicourse.spec.ts` | under `map-legacy` and `map-vector`: the selected course's code labels, sequence numbers for one course, codes for several, class pills and the sheet; `data-map-pipeline` and `data-course-layer` |
 | `e2e/webserial.spec.ts`, `mobile-layout.spec.ts`, `map-viewer-gestures.spec.ts` | the same flows under `map-legacy` and `map-vector`; each asserts `data-map-pipeline` equals the project's value; `webserial` "post-readout map" uploads the map, reads a card and checks the readout map (vector layer ready and no tile image under `vector`, tiles under `legacy`) |
+| `e2e/class-presets`, `club-map-library`, `control-series`, `editor-start-finish`, `map-review`, `permissions` (`chromium`) | §5 the stack's `vector` default: an event with a map mounts the new editor (`editor-page`); the adopted club map draws through the vector layer (`data-ready`), no tile image |
 
 ## 7. Pending in this chapter
 
 - **`map.editor.vector`** (§1, §3.6) is removed in slice E.
+- **E2E without a map**: under the `vector` default (§5) an event without
+  a map still mounts `CourseEditorPage` (no pin = legacy, §3.6); E3
+  decides the no-pin answer, and the specs that open the editor on a
+  map-less event follow it then.
 - **Admin UI for the instance flags**: none until slice E needs one.
 - **Dual-run list** grows with the slices that touch maps: candidates
   `wide-screen-map-pane`, `kiosk-readout`.
