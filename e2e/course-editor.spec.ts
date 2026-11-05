@@ -73,19 +73,19 @@ async function dropSelection(page: Page): Promise<void> {
  * under the selected control, so a drag that ends above it never ends on the bar (D10 flake: "the action bar
  * covered the map").
  */
-async function dragTarget(page: Page, from: Pt, avoid: Pt[] = [], clearPx = 60): Promise<Pt> {
+async function dragTarget(page: Page, from: Pt, avoid: Pt[] = [], clearPx = 45): Promise<Pt> {
   const viewer = (await page.getByTestId("map-viewer").boundingBox())!;
   const marks = [...(await Promise.all((await sites(page)).map((s) => toPage(page, s.mm)))), ...avoid];
-  for (const dy of [-80, -110, -140]) {
-    for (const dx of [0, 60, -60]) {
-      const p = { x: from.x + dx, y: from.y + dy };
-      if (p.y < viewer.y + 40 || p.x < viewer.x + 40 || p.x > viewer.x + viewer.width - 90) continue;
-      if (marks.some((q) => Math.hypot(q.x - p.x, q.y - p.y) < clearPx && Math.hypot(q.x - from.x, q.y - from.y) > 1)) continue;
-      if (await coveredBy(page, p)) continue;
-      return p;
-    }
+  // Above first (the action bar lays out below), then sideways; then any empty point (D10: a crowded view).
+  const offsets = [-80, -110, -140].flatMap((dy) => [0, 60, -60].map((dx) => [dx, dy])).concat([[90, 0], [-90, 0], [120, -40], [-120, -40]]);
+  for (const [dx, dy] of offsets) {
+    const p = { x: from.x + dx, y: from.y + dy };
+    if (p.y < viewer.y + 40 || p.y > viewer.y + viewer.height - 40 || p.x < viewer.x + 40 || p.x > viewer.x + viewer.width - 90) continue;
+    if (marks.some((q) => Math.hypot(q.x - p.x, q.y - p.y) < clearPx && Math.hypot(q.x - from.x, q.y - from.y) > 1)) continue;
+    if (await coveredBy(page, p)) continue;
+    return p;
   }
-  return emptyPoint(page, clearPx, [from, ...avoid]);
+  return emptyPoint(page, 40, [from, ...avoid]);
 }
 
 test.describe("Course editor (new, GL canvas)", () => {
@@ -467,7 +467,7 @@ test.describe("Course mode (§4)", () => {
 test.describe("Course mode descriptions (§4)", () => {
   desktopOnly();
 
-  test("column C which-of-similar: written titles, saved and reloaded", async ({ page }) => {
+  test("the description editor: Escape keeps the selection, column C's written titles, dimensions, saved and reloaded, clear and undo", async ({ page }) => {
     await openEditor(page);
     const [code] = await regularCodes(page, 1);
     const original = await trpcCall<{ description: unknown }>("control.getById", { id: Number(code) }, false);
@@ -475,6 +475,12 @@ test.describe("Course mode descriptions (§4)", () => {
       await select(page, code);
       await page.getByTestId("editor-action-bar").getByTestId("editor-action-description").click();
       const dialog = page.getByTestId("desc-editor");
+      await expect(dialog).toBeVisible();
+      // Escape closes only the dialog: the control stays selected.
+      await page.keyboard.press("Escape");
+      await expect(dialog).toHaveCount(0);
+      await expect(selectedCode(page)).toContainText(code);
+      await page.getByTestId("editor-action-bar").getByTestId("editor-action-description").click();
       await expect(dialog).toBeVisible();
       if (await page.getByTestId("desc-clear").isEnabled()) await page.getByTestId("desc-clear").click();
       // A written title beside the Northern option — not only a tooltip.
@@ -485,6 +491,9 @@ test.describe("Course mode descriptions (§4)", () => {
       await expect(northern).toHaveAttribute("aria-pressed", "true");
       // A boulder so the row is not empty (scoped to column D: E reuses D's codes).
       await dialog.getByTestId("desc-section-d").getByTestId("desc-opt-2.4").click();
+      // Dimensions (column F): the preview row writes them live.
+      await page.getByTestId("desc-dim-input").fill("1,5");
+      await expect(page.getByTestId("desc-preview")).toContainText("1.5");
       const saved = waitForTrpc(page, "control.update");
       await page.getByTestId("desc-save").click();
       await saved;
@@ -497,7 +506,23 @@ test.describe("Course mode descriptions (§4)", () => {
       await expect(dialog).toBeVisible();
       await expect(page.getByTestId("desc-opt-0.1N")).toHaveAttribute("aria-pressed", "true");
       await expect(page.getByTestId("desc-summary")).toContainText(/Northern|Norra/i);
-      await page.getByTestId("desc-cancel").click();
+      await expect(page.getByTestId("desc-dim-input")).toHaveValue("1,5");
+
+      // Clear all + save wipes it; Ctrl+Z writes the saved description back (§3: one write, one undo entry).
+      const describeOf = async () => (await trpcCall<{ description: unknown }>("control.getById", { id: Number(code) }, false)).description;
+      const savedDescription = await describeOf();
+      expect(savedDescription).not.toBeNull();
+      await page.getByTestId("desc-clear").click();
+      await expect(page.getByTestId("desc-opt-0.1N")).toHaveAttribute("aria-pressed", "false");
+      const cleared = waitForTrpc(page, "control.update");
+      await page.getByTestId("desc-save").click();
+      await cleared;
+      await expect(dialog).toHaveCount(0);
+      await expect.poll(describeOf, { timeout: 15000 }).toBeNull();
+      const undone = waitForTrpc(page, "control.update");
+      await page.keyboard.press("Control+z");
+      await undone;
+      await expect.poll(describeOf, { timeout: 15000 }).toEqual(savedDescription);
     } finally {
       await cleanup("control.update", { id: Number(code), description: original.description ?? null });
     }
@@ -1269,6 +1294,7 @@ test.describe("tools", () => {
     // The course's sheet before the toner saver (course-layout.md §5): its printed curves are the base map's.
     const template = await probeTemplate("Toner probe");
     const sheet = await trpcCall<{ seq: number }>("courseMap.create", { kind: "course", courseId, templateId: template.seq, overrides: {}, objects: [] });
+    let id = "";
     try {
       const before = await printed(page, nameId, `maps=${sheet.seq}`);
 
@@ -1277,7 +1303,7 @@ test.describe("tools", () => {
       await page.keyboard.press("s");
       await created;
       await expect(page.getByTestId("editor-object")).toHaveAttribute("data-object-kind", "toner_saver", { timeout: 15000 });
-      const id = (await page.getByTestId("editor-object").getAttribute("data-object-id"))!;
+      id = (await page.getByTestId("editor-object").getAttribute("data-object-id"))!;
       const row = objectRow(page, id);
       await expect(row).toHaveCount(1, { timeout: 15000 });
       expect(JSON.parse((await row.getAttribute("data-props")) ?? "{}")).toMatchObject({ marginMm: 25 });
@@ -1296,6 +1322,7 @@ test.describe("tools", () => {
       expect(after.pages).toBe(1);
       expect(after.curves - before.curves, "the toner saver's arcs in the course's maps.pdf").toBeGreaterThanOrEqual(g.filter((v) => v.hOut).length);
     } finally {
+      if (id) await cleanup("courseObject.delete", { id: Number(id) });
       await cleanup("courseMap.delete", { id: sheet.seq });
       await cleanup("mapTemplate.delete", { id: template.seq });
     }
