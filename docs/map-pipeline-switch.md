@@ -221,6 +221,20 @@ decision 2026-10-22).
 
 ## 5. E2E under both values
 
+**The stack's default is `vector`** (slice E2, before the flip in E3). The
+seed builders write every seed event `vector`, and `seed-all.ts` seeds
+`map.pipeline.default = vector` and `map.editor.vector = true`
+(`seedMapDefaults`, `e2e/seed-builder/shared.ts`), so `reseed()` — which
+deletes the `map.*` settings — puts them back. A spec that sets nothing
+runs on the GL viewer and, for an event with a pinned document, the new
+course editor; an event without a map still mounts the legacy
+`CourseEditorPage` (§3.6, the "no pin" answer is E3's). `setEditorVector(null)`
+and `restoreMapDefaults()` (`e2e/helpers/map-pipeline.ts`) put the stack's
+defaults back. A spec about `legacy` sets it itself:
+`course-editor-legacy.spec.ts` and `map-pipeline-switch.spec.ts` write
+`legacy` and `map.editor.vector = false` in `beforeAll` and call
+`restoreMapDefaults()` in `afterAll`; E3 deletes both.
+
 While both pipelines exist, an explicit list of specs runs once per
 value (09 §3, §10). `playwright.config.ts`:
 
@@ -240,14 +254,16 @@ value (09 §3, §10). `playwright.config.ts`:
 - Those specs import `test` / `expect` from `e2e/helpers/map-pipeline.ts`.
   Its auto fixture writes the project's value to every event's
   `map_pipeline` and to `map.pipeline.default` before each test (after
-  the spec's `beforeAll(reseed)`), and resets both to `legacy` after it.
+  the spec's `beforeAll(reseed)`), and resets both to the stack's
+  default, `vector`, after it.
 - The E2E API runs with `MAP_PIPELINE_FLAGS_TTL_MS=0`, so an event a test
   creates through the UI gets the project's value and a flag a spec
   writes applies at once.
 - A spec that is about one value sets it itself with
   `setMapPipeline(value, nameId?)` / `setAllowLegacy(...)` from the same
   helper (`map-vector-layer.spec.ts`, `map-pipeline-switch.spec.ts`).
-  `reseed()` deletes the `map.pipeline.*` and `map.editor.*` settings.
+  `reseed()` deletes the `map.pipeline.*` and `map.editor.*` settings and
+  the seed writes the defaults again.
 - `MOBILE_SPECS` — `field-mode.spec.ts` (D9) and `course-editor.spec.ts`
   (D10, its touch describe): project `mobile` (`devices["Pixel 7"]`,
   `mapPipeline: "vector"`), the new editor on a phone (`course-editor.md`
@@ -256,13 +272,24 @@ value (09 §3, §10). `playwright.config.ts`:
   phone and its touch describe on the desktop (`isMobile`);
   `field-mode.spec.ts`'s "Field mode on a desktop" describe sets the
   desktop device itself.
-- The editor specs set `map.editor.vector` themselves (`setEditorVector`
-  in `beforeAll`, removed in `afterAll`), not through the project: the flag
-  also turns the Maps page's *Edit layout* link to the new editor for a
-  `vector` event, which `course-maps.spec.ts` under `map-vector` must not
-  see. `course-editor-legacy.spec.ts` is the frozen legacy spec
-  (`chromium`, `legacy`, deleted in F). Two specs, not one dual-run spec:
+- `map.editor.vector` is seeded on, so the editor specs need nothing.
+  The flag also turns the Maps and Map templates pages' *Edit layout* link
+  to the new editor's Layout mode for a `vector` event, which the
+  `MapLayoutEditor` tests must not see until E3: `course-maps.spec.ts`
+  turns it off after its `reseed()` and puts it back in `afterAll`, and
+  `mobile-layout.spec.ts` "… toolbars fit a phone" turns it off under
+  `map-vector`. `course-editor-legacy.spec.ts` is the frozen legacy spec
+  (`chromium`, `legacy`, deleted in E3). Two specs, not one dual-run spec:
   the editors share no selectors (SLICES "Decided in this split").
+- The `chromium` specs that open the course editor on an event with a map
+  (`class-presets`, `club-map-library`, `control-series`,
+  `editor-start-finish`, `map-review`, `permissions`) mount the new editor
+  (`editor-page`) and act on paper positions through `e2e/helpers/editor.ts`
+  (`editor-site`, `emptyPoint`, `select`, `placeOneShot`).
+  `mobile-layout.spec.ts`'s editor tests branch on the project: the legacy
+  editor under `map-legacy`; under `map-vector` the new editor's phone
+  layout mounts and its gestures are left to `field-mode.spec.ts` and
+  `course-editor.spec.ts`'s touch describe (SLICES E2).
 - A file run by more than one project counts once per project in the
   sharding weights (`scripts/e2e-weights.mjs`, `docs/e2e-sharding.md`);
   `scripts/__tests__/e2e-config.test.mjs` pins which projects run the
@@ -296,10 +323,15 @@ value (09 §3, §10). `playwright.config.ts`:
 | `e2e/map-vector-layer.spec.ts` | the vector layer in the viewer, the event switched through the column; a legacy event stays on tiles |
 | `e2e/map-control-circles.spec.ts`, `map-multicourse.spec.ts` | under `map-legacy` and `map-vector`: the selected course's code labels, sequence numbers for one course, codes for several, class pills and the sheet; `data-map-pipeline` and `data-course-layer` |
 | `e2e/webserial.spec.ts`, `mobile-layout.spec.ts`, `map-viewer-gestures.spec.ts` | the same flows under `map-legacy` and `map-vector`; each asserts `data-map-pipeline` equals the project's value; `webserial` "post-readout map" uploads the map, reads a card and checks the readout map (vector layer ready and no tile image under `vector`, tiles under `legacy`) |
+| `e2e/class-presets`, `club-map-library`, `control-series`, `editor-start-finish`, `map-review`, `permissions` (`chromium`) | §5 the stack's `vector` default: an event with a map mounts the new editor (`editor-page`); the adopted club map draws through the vector layer (`data-ready`), no tile image |
 
 ## 7. Pending in this chapter
 
 - **`map.editor.vector`** (§1, §3.6) is removed in slice E.
+- **E2E without a map**: under the `vector` default (§5) an event without
+  a map still mounts `CourseEditorPage` (no pin = legacy, §3.6); E3
+  decides the no-pin answer, and the specs that open the editor on a
+  map-less event follow it then.
 - **Admin UI for the instance flags**: none until slice E needs one.
 - **Dual-run list** grows with the slices that touch maps: candidates
   `wide-screen-map-pane`, `kiosk-readout`.

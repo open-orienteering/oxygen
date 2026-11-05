@@ -6,11 +6,19 @@
 import { test, expect, type Page } from "@playwright/test";
 import { reseed } from "./helpers/reseed";
 import { waitForTrpc } from "./helpers/trpc";
+import { restoreMapDefaults, setEditorVector, setMapPipeline } from "./helpers/map-pipeline";
 
 // This spec mutates seed data (imports courses, uploads a map, creates and
 // deletes controls), so it starts from a clean seed per the e2e hygiene
 // convention.
-test.beforeAll(reseed);
+// The stack's default is `vector` with the new editor
+// (docs/map-pipeline-switch.md §5): this spec sets `legacy` itself.
+test.beforeAll(async () => {
+  await reseed();
+  await setMapPipeline("legacy");
+  await setEditorVector(false);
+});
+test.afterAll(restoreMapDefaults);
 
 async function selectCompetition(page: Page) {
   await page.goto("/");

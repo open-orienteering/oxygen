@@ -1,22 +1,31 @@
 /**
  * The map pipeline switch in E2E (docs/map-pipeline-switch.md §5).
  *
- * `setMapPipeline` writes `events.map_pipeline` for every event in the
- * E2E database and `map.pipeline.default` for the ones created later,
- * straight through Postgres like `reseed()`. `test` is Playwright's test
- * with a `mapPipeline` option: `playwright.config.ts` runs the specs in
- * `MAP_PIPELINE_SPECS` once per value (projects `map-legacy` and
- * `map-vector`), and the auto fixture applies the project's value before
- * every test — after the spec's `beforeAll(reseed)`, so freshly seeded
- * events get it too — and puts everything back to `legacy` after it, so
- * nothing leaks into the next spec. The E2E API runs with
+ * The stack's default is `vector` (slice E2): the seed builders write every
+ * seed event `vector` and seed `map.pipeline.default = vector` and
+ * `map.editor.vector = true` (`e2e/seed-builder/shared.ts`
+ * `seedMapDefaults`), so a spec that sets nothing runs on the GL viewer and
+ * the new course editor. `setMapPipeline` writes `events.map_pipeline` for
+ * every event in the E2E database and `map.pipeline.default` for the ones
+ * created later, straight through Postgres like `reseed()`. `test` is
+ * Playwright's test with a `mapPipeline` option: `playwright.config.ts`
+ * runs the specs in `MAP_PIPELINE_SPECS` once per value (projects
+ * `map-legacy` and `map-vector`), and the auto fixture applies the
+ * project's value before every test — after the spec's `beforeAll(reseed)`,
+ * so freshly seeded events get it too — and puts the stack default back
+ * after it, so nothing leaks into the next spec. The E2E API runs with
  * `MAP_PIPELINE_FLAGS_TTL_MS=0`, so an event a test creates through the UI
- * takes the project's value too.
+ * takes the project's value too. A spec about `legacy` sets it itself and
+ * calls `restoreMapDefaults()` when done.
  */
 import { test as base } from "@playwright/test";
 import { Client } from "pg";
+import { DEFAULT_MAP_PIPELINE as SEEDED_MAP_PIPELINE } from "./map-defaults";
 
 export type MapPipeline = "legacy" | "vector";
+
+/** The stack's default pipeline, the value `seedMapDefaults` seeds. */
+export const DEFAULT_MAP_PIPELINE: MapPipeline = SEEDED_MAP_PIPELINE;
 
 const E2E_DATABASE_URL =
   process.env.E2E_DATABASE_URL ??
@@ -64,34 +73,38 @@ export async function setAllowLegacy(allow: boolean | null): Promise<void> {
 
 /**
  * Write `map.editor.vector`, the new course editor's temporary gate
- * (docs/map-pipeline-switch.md §1, §3.6); `null` removes it (= legacy editor).
+ * (docs/map-pipeline-switch.md §1, §3.6); `null` puts back the stack's
+ * default (on, as seeded).
  */
 export async function setEditorVector(on: boolean | null): Promise<void> {
   const client = new Client({ connectionString: E2E_DATABASE_URL });
   await client.connect();
   try {
     await client.query("SET search_path TO oxygen, public");
-    if (on === null) {
-      await client.query("DELETE FROM settings WHERE key = 'map.editor.vector'");
-      return;
-    }
     await client.query(
       `INSERT INTO settings (key, value) VALUES ('map.editor.vector', $1)
        ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value`,
-      [String(on)],
+      [String(on ?? true)],
     );
   } finally {
     await client.end();
   }
 }
 
+/** Every event, the pipeline default and the editor flag back to the stack's defaults. */
+export async function restoreMapDefaults(): Promise<void> {
+  await setMapPipeline(DEFAULT_MAP_PIPELINE);
+  await setAllowLegacy(null);
+  await setEditorVector(null);
+}
+
 export const test = base.extend<{ mapPipeline: MapPipeline; applyMapPipeline: void }>({
-  mapPipeline: ["legacy", { option: true }],
+  mapPipeline: [DEFAULT_MAP_PIPELINE, { option: true }],
   applyMapPipeline: [
     async ({ mapPipeline }, use) => {
       await setMapPipeline(mapPipeline);
       await use();
-      if (mapPipeline !== "legacy") await setMapPipeline("legacy");
+      if (mapPipeline !== DEFAULT_MAP_PIPELINE) await setMapPipeline(DEFAULT_MAP_PIPELINE);
     },
     { auto: true },
   ],

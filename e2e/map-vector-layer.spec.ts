@@ -18,7 +18,7 @@ import { test, expect, type Locator, type Page, type Request } from "@playwright
 import { PNG } from "pngjs";
 import { reseed } from "./helpers/reseed";
 import { uploadEventMap, waitForStableMapPanel } from "./helpers/map-upload";
-import { setMapPipeline } from "./helpers/map-pipeline";
+import { restoreMapDefaults, setMapPipeline } from "./helpers/map-pipeline";
 import { API_BASE as API } from "./helpers/api-base";
 
 async function openEvent(page: Page): Promise<void> {
@@ -161,9 +161,7 @@ test.describe("vector map layer", () => {
     await reseed();
   });
 
-  test.afterAll(async () => {
-    await setMapPipeline("legacy");
-  });
+  test.afterAll(restoreMapDefaults);
 
   test("draws the pinned document and requests no tiles", async ({ page }) => {
     test.setTimeout(120_000);

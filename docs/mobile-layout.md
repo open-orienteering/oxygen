@@ -211,4 +211,4 @@ to Google Accounts and the cross-origin OAuth response is rejected by CORS.
 | Controls page toolbar | `packages/web/src/pages/ControlsPage.tsx` |
 | Shell header | `packages/web/src/pages/CompetitionShell.tsx` |
 | Editor dismiss wire-up | `packages/web/src/pages/CourseEditorPage.tsx` |
-| E2E | `e2e/mobile-layout.spec.ts`, `e2e/session-recovery.spec.ts` |
+| E2E | `e2e/mobile-layout.spec.ts` (its legacy-editor tests run under `map-legacy` only; under `map-vector` the new editor's phone layout is `e2e/field-mode.spec.ts` and the touch describe of `e2e/course-editor.spec.ts` — `docs/map-pipeline-switch.md` §5), `e2e/session-recovery.spec.ts` |

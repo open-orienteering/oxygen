@@ -2,7 +2,7 @@ import { readFile } from "node:fs/promises";
 import { createRequire } from "node:module";
 import { resolve } from "node:path";
 import { type Download, type Locator, type Page } from "@playwright/test";
-import { test, expect } from "./helpers/map-pipeline";
+import { test, expect, setEditorVector } from "./helpers/map-pipeline";
 import { API_BASE } from "./helpers/api-base";
 import { reseed } from "./helpers/reseed";
 import { waitForTrpc } from "./helpers/trpc";
@@ -16,10 +16,14 @@ const { PDFDocument } = createRequire(resolve(process.cwd(), "packages/api/packa
  * The event map through `course.uploadMap`, as the map panel uploads it:
  * the file is stored and its document pinned, so the `map-vector` project
  * prints through the composer and `map-legacy` through rsvg
- * (docs/course-print.md §8).
+ * (docs/course-print.md §8). `map.editor.vector` goes off: with it on, the
+ * pages' *Edit layout* deep-links a `vector` event into the new editor's
+ * Layout mode, and this spec is about `MapLayoutEditor` until E3
+ * (docs/map-pipeline-switch.md §5).
  */
 async function seedBaseMap() {
   await reseed();
+  await setEditorVector(false);
   const bytes = await readFile("e2e/test.ocd");
   const res = await fetch(`${API_BASE}/trpc/course.uploadMap`, {
     method: "POST",
@@ -79,6 +83,7 @@ async function placeObject(page: Page, toolTestId: string) {
 }
 
 test.beforeAll(seedBaseMap);
+test.afterAll(() => setEditorVector(null));
 
 test("creates templates, lays out several maps and exports PDFs", async ({
   page,

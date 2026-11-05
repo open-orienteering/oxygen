@@ -65,6 +65,12 @@ Specs never hardcode the API origin; they import `API_BASE` from
 
 ### Map pipeline projects
 
+The stack's default map pipeline is `vector`: the seed writes every seed
+event `vector` and seeds `map.pipeline.default` and `map.editor.vector`
+(`docs/map-pipeline-switch.md` §5), so a `chromium` spec that sets
+nothing runs on the GL viewer and the new course editor; the legacy-only
+specs set `legacy` themselves.
+
 Besides `chromium`, `playwright.config.ts` has projects `map-legacy` and
 `map-vector` that run the files in `MAP_PIPELINE_SPECS` once per value of
 the per-event map pipeline switch (`docs/map-pipeline-switch.md` §5);

@@ -13,7 +13,7 @@
 import { test, expect, type Page } from "@playwright/test";
 import { reseed } from "./helpers/reseed";
 import { uploadEventMap } from "./helpers/map-upload";
-import { setAllowLegacy, setMapPipeline } from "./helpers/map-pipeline";
+import { restoreMapDefaults, setAllowLegacy, setEditorVector, setMapPipeline } from "./helpers/map-pipeline";
 
 let nameId = "";
 
@@ -42,6 +42,10 @@ test.describe("map pipeline switch", () => {
 
   test.beforeAll(async ({ browser }) => {
     await reseed();
+    // The stack's default is `vector` with the new editor (§5); this spec is
+    // about the switch from `legacy`, in the legacy editor's map-info row.
+    await setMapPipeline("legacy");
+    await setEditorVector(false);
     const page = await browser.newPage();
     await page.goto("/");
     await page.getByRole("button", { name: /New Event/ }).click();
@@ -58,6 +62,8 @@ test.describe("map pipeline switch", () => {
     await setAllowLegacy(null);
     await setMapPipeline("legacy", nameId);
   });
+
+  test.afterAll(restoreMapDefaults);
 
   test("the toggle switches the event's maps to the vector engine and back", async ({ page }) => {
     test.setTimeout(120_000);
