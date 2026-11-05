@@ -360,7 +360,7 @@ test.describe("Courses Page", () => {
   test("should warn and skip positions when a .ppen belongs to another map", async ({
     page,
   }) => {
-    // The map upload renders tiles server-side, so this one needs room.
+    // The map upload waits for the map's import, so this one needs room.
     test.setTimeout(120_000);
     await selectCompetition(page);
     await clickTab(page, "Courses");
