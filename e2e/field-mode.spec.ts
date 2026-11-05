@@ -5,8 +5,9 @@
 // `context.setGeolocation` — only a phone in a forest proves the mode
 // (D-mobile, §10 "On a real phone"). The fixture (courses and the map from
 // `e2e/test.ocd`) is set up once from a desktop context
-// (`ensureFixtureFromDesktop`, shared with the editor spec); the spec sets
-// `map.editor.vector` itself, as `course-editor.spec.ts` does.
+// (`ensureFixtureFromDesktop`, shared with the editor spec); it relies on
+// the seeded `vector` default and `map.editor.vector`
+// (docs/map-pipeline-switch.md §5).
 import { devices, type BrowserContext, type Page } from "@playwright/test";
 import { test, expect } from "./helpers/map-pipeline";
 import { reseed } from "./helpers/reseed";

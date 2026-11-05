@@ -20,11 +20,12 @@
  */
 import { test as base } from "@playwright/test";
 import { Client } from "pg";
+import { DEFAULT_MAP_PIPELINE as SEEDED_MAP_PIPELINE } from "./map-defaults";
 
 export type MapPipeline = "legacy" | "vector";
 
-/** The stack's default pipeline (`seedMapDefaults` in `e2e/seed-builder/shared.ts`). */
-export const DEFAULT_MAP_PIPELINE: MapPipeline = "vector";
+/** The stack's default pipeline, the value `seedMapDefaults` seeds. */
+export const DEFAULT_MAP_PIPELINE: MapPipeline = SEEDED_MAP_PIPELINE;
 
 const E2E_DATABASE_URL =
   process.env.E2E_DATABASE_URL ??

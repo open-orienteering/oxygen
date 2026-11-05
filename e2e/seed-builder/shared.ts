@@ -10,6 +10,7 @@ import {
   RunnerStatus as PgRunnerStatus,
 } from "../../packages/api/src/generated/prisma/client.js";
 import { PrismaPg } from "@prisma/adapter-pg";
+import { DEFAULT_MAP_PIPELINE } from "../helpers/map-defaults.js";
 
 export type PgRunnerStatusLiteral = `${PgRunnerStatus}`;
 
@@ -166,7 +167,7 @@ export function meosStatusToEnum(s: number): PgRunnerStatusLiteral {
  * the new course editor (`map.editor.vector`). `reseed()` deletes the
  * `map.*` settings and runs the builders again, which puts these back.
  */
-export const E2E_MAP_PIPELINE = "vector" as const;
+export const E2E_MAP_PIPELINE = DEFAULT_MAP_PIPELINE;
 
 export async function seedMapDefaults(prisma: PrismaClient): Promise<void> {
   for (const [key, value] of [["map.pipeline.default", E2E_MAP_PIPELINE], ["map.editor.vector", "true"]]) {
