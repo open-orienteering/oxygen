@@ -17,7 +17,7 @@ import {
   allControlsSheet, analysePdf, arm, cleanup, clickMap, clickTab, controlRows, coveredBy, desktopContext, drag, dragMm, editorReady,
   emptyPoint, ensureCoursesAndMap, ensureFixtureFromDesktop, freezeExternalPoll, geometryOf, inkIn, labelOf, legMidpoint, legPieces, nameIdOf, objectRow,
   openEditor, pageToPaperOf, place, placeOneShot, pressInside, pressOnEdge, printed, probeTemplate, regularCodes, select, selectCompetition,
-  selectedCode, selectedPosition, siteCuts, site, sitePoint, sites, toolShapes, toPage, toPaper, trpcCall, viewCentre, newCourse,
+  selectedCode, selectedPosition, siteCuts, site, sitePoint, sites, toolShapes, toPage, toPaper, trpcCall, viewCentre, viewSettled, newCourse,
   type Frame,
 } from "./helpers/editor";
 import { touchDrag, touchTap } from "./helpers/touch";
@@ -73,6 +73,24 @@ async function dropSelection(page: Page): Promise<void> {
  * under the selected control, so a drag that ends above it never ends on the bar (D10 flake: "the action bar
  * covered the map").
  */
+/**
+ * Drags control `code`'s number off its automatic place and waits for the write; returns where the label
+ * was before. Read once the view has stopped (the editor fits after a course is picked), and dragged
+ * towards the viewer's middle so the drop never lands off the map or under the toolbar.
+ */
+async function dragNumber(page: Page, code: string): Promise<Pt> {
+  await viewSettled(page);
+  await expect.poll(async () => (await labelOf(page, code)) !== null, { timeout: 15000 }).toBe(true);
+  const label = (await labelOf(page, code))!;
+  const from = await toPage(page, label);
+  const box = (await page.getByTestId("map-viewer").boundingBox())!;
+  const to = { x: from.x + (from.x < box.x + box.width / 2 ? 48 : -48), y: from.y + (from.y < box.y + box.height / 2 ? 24 : -24) };
+  const saved = waitForTrpc(page, "course.setControlLabelOffset");
+  await drag(page, from, to);
+  await saved;
+  return label;
+}
+
 async function dragTarget(page: Page, from: Pt, avoid: Pt[] = [], clearPx = 45): Promise<Pt> {
   const viewer = (await page.getByTestId("map-viewer").boundingBox())!;
   const marks = [...(await Promise.all((await sites(page)).map((s) => toPage(page, s.mm)))), ...avoid];
@@ -376,11 +394,7 @@ test.describe("Course mode (§4)", () => {
     for (const code of codes) await expect.poll(async () => (await labelOf(page, code))?.text, { timeout: 15000 }).toBe(code);
 
     // The number still drags: the offset lives on the visit, whatever the order mode.
-    const label = (await labelOf(page, codes[0]))!;
-    const from = await toPage(page, label);
-    const offset = waitForTrpc(page, "course.setControlLabelOffset");
-    await drag(page, from, { x: from.x + 40, y: from.y - 30 });
-    await offset;
+    const label = await dragNumber(page, codes[0]);
     await expect.poll(async () => {
       const now = (await labelOf(page, codes[0]))!;
       return Math.hypot(now.x - label.x, now.y - label.y);
@@ -396,13 +410,8 @@ test.describe("Course mode (§4)", () => {
     await dropSelection(page);
     await expect(controlRows(page)).toHaveCount(1, { timeout: 15000 });
     await expect.poll(async () => (await labelOf(page, code)) !== null, { timeout: 15000 }).toBe(true);
-    const auto = (await labelOf(page, code))!;
-
     // The number is a `number` target of the shared hit-test (§5): a drag on it moves the label alone.
-    const from = await toPage(page, auto);
-    const saved = waitForTrpc(page, "course.setControlLabelOffset");
-    await drag(page, from, { x: from.x + 48, y: from.y - 24 });
-    await saved;
+    const auto = await dragNumber(page, code);
     await expect.poll(async () => {
       const now = (await labelOf(page, code))!;
       return Math.hypot(now.x - auto.x, now.y - auto.y);
@@ -440,8 +449,9 @@ test.describe("Course mode (§4)", () => {
 
   test("clone a course; the editor offers no legacy start / finish toggles", async ({ page }) => {
     // A course written with the legacy flags (the Courses page shows them read-only, course-editor-legacy.spec.ts).
-    await trpcCall("course.create", { name: `D10 Legacy flags ${Date.now() % 100000}`, firstAsStart: true, lastAsFinish: true });
+    // Created after openEditor: the fixture import (ensureCoursesAndMap) expects the seed's course count.
     await openEditor(page);
+    await trpcCall("course.create", { name: `D10 Legacy flags ${Date.now() % 100000}`, firstAsStart: true, lastAsFinish: true });
     await expect(page.getByTestId("editor-toggle-first-start")).toHaveCount(0);
     await expect(page.getByTestId("editor-toggle-last-finish")).toHaveCount(0);
 
