@@ -77,9 +77,10 @@ exit bubble on every pointer move
 | Field mode (§9) | `editor-inspector-field`, `editor-field-selection`, `editor-nudge-pad`, `editor-field-offline` | the control list with distance / bearing and check-off in place of the sequence; the selection's distance, check-off and nudge pad; no tool rail |
 | Phone chrome (§10) | `editor-field-top-bar`, `editor-overflow`, `editor-sheet`, `editor-field-add` | below 640 px: the compact top bar, the bottom sheet (peek: KPIs, selection, action bar) and the floating `+` instead of the top bar, rail, inspector strip and status bar above |
 
-The map-info row under the map (file name, *Open review*, *Replace map*,
-colour profile) is MapPanel's `showMapInfo` as in the legacy editor. The
-*Use new map engine* toggle went with the switch in E3.
+The map-info row under the map (file name, *Open review*, *Replace map*)
+is MapPanel's `showMapInfo` as in the legacy editor. The *Use new map
+engine* toggle went with the switch in E3, the colour-profile select
+with the legacy raster in E4a.
 
 ## 3. Selection, undo, autosave, conflicts
 
