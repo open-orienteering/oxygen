@@ -250,55 +250,10 @@ function MapPanelImpl({
     { staleTime: 10_000, refetchInterval: showCompletion ? 15_000 : false, enabled: showCompletion },
   );
 
-  // Fetch geometry for every highlighted course so the map can draw all of
-  // their routes at once (user-selecting three courses → three overlays,
-  // not just the first). Returns a map keyed by course name.
   const highlightedCourseNamesList = useMemo(
     () => Array.from(effectiveCourseNames),
     [effectiveCourseNames],
   );
-  const courseGeometriesQuery = trpc.course.courseGeometries.useQuery(
-    { courseNames: highlightedCourseNamesList },
-    { staleTime: 60_000, enabled: highlightedCourseNamesList.length > 0 },
-  );
-  // Merge per-course FeatureCollections into a single FeatureCollection so
-  // the downstream MapViewer can keep its existing single-input contract.
-  // Geometry features duplicated across courses (e.g. shared legs) are
-  // fine — they just draw over each other at identical coordinates. Each
-  // feature is tagged with its course name (fresh objects — the source
-  // collections live in the React Query cache) so the viewer can label
-  // legs per course in multi-course display.
-  const courseGeometry = useMemo(() => {
-    const byName = courseGeometriesQuery.data;
-    if (!byName) return undefined;
-    const names = Object.keys(byName);
-    if (names.length === 0) return null;
-    const combinedFeatures: unknown[] = [];
-    for (const name of names) {
-      const fc = byName[name];
-      if (fc?.features) {
-        for (const f of fc.features as Array<{ properties?: Record<string, unknown> }>) {
-          combinedFeatures.push({
-            ...f,
-            properties: { ...(f.properties ?? {}), courseName: name },
-          });
-        }
-      }
-    }
-    return { type: "FeatureCollection", features: combinedFeatures };
-  }, [courseGeometriesQuery.data]);
-  // Track which course names we actually have geometry for, so the
-  // fallback leg renderer below knows which courses still need lines
-  // drawn from raw control coordinates.
-  const coursesWithGeometry = useMemo(() => {
-    const set = new Set<string>();
-    const byName = courseGeometriesQuery.data;
-    if (!byName) return set;
-    for (const [name, fc] of Object.entries(byName)) {
-      if (fc?.features && fc.features.length > 0) set.add(name);
-    }
-    return set;
-  }, [courseGeometriesQuery.data]);
 
   const [isFullscreen, setIsFullscreen] = useState(false);
   const fullscreenRef = useRef<HTMLDivElement>(null);
@@ -919,10 +874,8 @@ function MapPanelImpl({
           rotationCorrection={mapMetadata.data?.rotationCorrection}
           controls={controlOverlays}
           courses={courseOverlays}
-          courseGeometry={courseGeometry}
           courseObjects={courseObjectsInView}
           autoCuts={overprintCuts.data?.enabled !== false}
-          coursesWithGeometry={coursesWithGeometry}
           highlightControlId={highlightControlId ? String(highlightControlId) : undefined}
           highlightCourseName={highlightCourseName}
           onControlClick={handleControlClick}

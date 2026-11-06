@@ -2,17 +2,8 @@ import { useState, useRef, useEffect, useCallback, useMemo, type ReactNode } fro
 import { useTranslation } from "react-i18next";
 import { useParams } from "react-router-dom";
 import {
-  clipLine,
-  controlNumberBaselineY,
   CONTROL_NUMBER_CAP_HEIGHT_RATIO,
-  CONTROL_NUMBER_FONT_FAMILY,
-  drawBrokenCircle,
-  placeControlLabels,
-  subtractLegGaps,
   type ControlDescription,
-  type PlacedControlLabel,
-  type PlacementCircle,
-  type PlacementSeg,
   defaultMapAppearance,
 } from "@oxygen/shared";
 import { descriptionCells, IOF_SYMBOLS } from "../iof-symbols";
@@ -110,20 +101,10 @@ export interface ControlOverlay {
   completionPct?: number;
   /** Punch status for mispunch visualization */
   punchStatus?: "ok" | "missing" | "extra";
-  /**
-   * IOF control description from the control row (canonical source since
-   * descriptions moved to `controls.description`). The sheet renderer
-   * falls back to legacy geometry-embedded descriptions when absent.
-   */
+  /** IOF control description from the control row (`controls.description`), for the description sheet. */
   description?: ControlDescription | null;
   /** `controls.circle_gaps`: authored circle cuts for the course layer (course-layer.md §6.4). */
   circleGaps?: { start: number; end: number }[];
-}
-
-/** A manual or automatic slit in a control circle. */
-interface SlitGap {
-  start: number; // degrees CW from North
-  end: number;   // degrees CW from North
 }
 
 export interface CourseOverlay {
@@ -163,6 +144,10 @@ export interface CourseOverlay {
  * - *Empty-map click* fires `onMapClick` with the position in map mm
  *   (paper millimetres, the `xpos`/`ypos` coordinate space of
  *   `controls`). The page typically anchors a `phantom` there.
+ * Targets are resolved by the shared hit-test over the GL course layer's
+ * symbolised shapes (docs/course-editor.md §5); a map whose stack the
+ * layer cannot take has no targets.
+ *
  * - *Drag-to-move*: mouse-down on a control symbol starts a local drag
  *   (rendered without network round-trips); mouse-up fires `onMoveEnd`
  *   once. The viewer keeps rendering the dragged position until the
@@ -171,10 +156,9 @@ export interface CourseOverlay {
  * - *Select*: clicking a control fires `onSelect(id)` (replacing
  *   `onControlClick`). The control matching `selectedControlId` gets a
  *   selection ring.
- * - *Leg click*: every drawn leg of a highlighted course gets an
- *   invisible fat hit-line; a click on it fires `onLegClick` with the
- *   course name, the 0-based leg index and the clicked point. Only
- *   rendered when `onLegClick` is provided.
+ * - *Leg click*: a click on a drawn leg of a highlighted course fires
+ *   `onLegClick` with the course name, the 0-based leg index and the
+ *   clicked point.
  * - *Phantom*: a dashed ring drawn at the given map-mm point — the
  *   page's marker for "the user clicked here" (empty map or leg).
  * - *Context actions*: a floating HTML menu anchored next to the
@@ -264,14 +248,6 @@ export interface MapViewerEditorProps {
   /** Touch-friendly dismiss (mirrors Escape cascade on the owning page). */
   onDismiss?: () => void;
   /**
-   * Hit-test on the course layer's symbolised shapes instead of SVG hit
-   * targets (docs/course-editor.md §5): with the GL course layer drawn,
-   * pointer-down resolves through `editorHitAt` over the layer's hit
-   * index and no `editor-*-hit` elements are rendered. The new editor
-   * sets it; the legacy page keeps its SVG targets.
-   */
-  sharedHitTest?: boolean;
-  /**
    * `bar`: the contextual actions as a horizontal action bar centred under
    * the selection (`editor-action-bar`, docs/course-editor.md §2) instead
    * of the popover menu beside it; same entries and `editor-action-<id>`s.
@@ -280,8 +256,7 @@ export interface MapViewerEditorProps {
   actionLayout?: "menu" | "bar" | "host";
   /**
    * The active editor tool (docs/course-editor.md §6): it sees the pointer
-   * before the viewer's own gestures and draws UI-layer shapes. Shared
-   * hit-testing only.
+   * before the viewer's own gestures and draws UI-layer shapes.
    */
   tool?: EditorToolBinding | null;
   /** Snap a dragged control's centre (§6.2); returns the point unchanged when nothing is near. */
@@ -429,16 +404,6 @@ interface Props {
   style?: React.CSSProperties;
   initialFitControls?: boolean;
   focusControlIds?: string[] | null;
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any -- untyped GeoJSON JSONB straight from the API; traversed dynamically
-  courseGeometry?: any;
-  /**
-   * Names of highlighted courses for which high-fidelity geometry is already
-   * included in `courseGeometry` (i.e. imported as OCD/XML). Any highlighted
-   * course NOT in this set gets fallback straight-line legs between its
-   * controls so the user still sees a route for it. When omitted, falls back
-   * to the legacy "draw legs only when no geometry at all" behaviour.
-   */
-  coursesWithGeometry?: Set<string>;
   showDescriptions?: boolean;
   /**
    * When no course is highlighted, list every positioned control in the
@@ -474,24 +439,6 @@ interface Props {
 // ─── Helpers ────────────────────────────────────────────────
 
 interface Pt { x: number; y: number }
-
-/** Editor hit-target metadata computed inside the overlay memo; the JSX
- *  (with ref-writing handlers) is materialized outside it. */
-interface EditorControlHit {
-  id: string; code: string;
-  px: number; py: number; r: number;
-  /** Position in map mm at render time — the drag's `from` anchor. */
-  mmX: number; mmY: number;
-}
-interface EditorLegHit { key: string; d: string; course: string; index: number }
-interface EditorLabelHit {
-  id: string;
-  px: number; py: number;
-  w: number; h: number;
-  /** Control position in map mm — the offset is drop − this. */
-  mmX: number; mmY: number;
-  from: { dx: number; dy: number } | null;
-}
 
 /**
  * A control's number offset on the single highlighted course: the one
@@ -531,8 +478,6 @@ export function MapViewer({
   style,
   initialFitControls = false,
   focusControlIds = null,
-  courseGeometry,
-  coursesWithGeometry,
   showDescriptions = false,
   descriptionsAllControls = false,
   allControlsTitle,
@@ -764,7 +709,7 @@ export function MapViewer({
   const [pendingLabelMoves, setPendingLabelMoves] = useState<
     Map<string, { from: { dx: number; dy: number } | null; to: { dx: number; dy: number } }>
   >(new Map());
-  // Mouse-down bookkeeping for the leg-insert hit lines.
+  // Pointer-down bookkeeping for a leg click (insert on leg).
   const legDownRef = useRef<{ course: string; index: number; x: number; y: number } | null>(null);
   // A gesture the active tool took on pointer-down (docs/course-editor.md §6).
   const toolDragRef = useRef<{ startX: number; startY: number } | null>(null);
@@ -900,10 +845,10 @@ export function MapViewer({
   );
 
   // ─── Course layer (vector) ──────────────────────────────
-  // Under `vector` the course is drawn by the GL backend's dynamic bucket
-  // in colour order with the map (docs/map-rendering.md §5.4 "Overlay");
-  // the SVG keeps the UI layer. A document whose stack cannot take the
-  // layer (`onCourseSupport(false)`) keeps the SVG course overlay.
+  // The course is drawn by the GL backend's dynamic bucket in colour order
+  // with the map (docs/map-rendering.md §5.4 "Overlay"); the SVG keeps the
+  // UI layer. A document whose stack cannot take the layer
+  // (`onCourseSupport(false)`) draws no course: the viewer says so.
   const [courseSupport, setCourseSupport] = useState<boolean | null>(null);
   const [courseInfo, setCourseInfo] = useState<CourseInfo | null>(null);
   const glCourse = paperMode && courseSupport !== false;
@@ -930,7 +875,7 @@ export function MapViewer({
       const mm = controlMm(c);
       if (mm) positions.set(c.id, mm);
     }
-    // The editor's local positions, as the SVG overlay draws them (pending moves while the data is stale).
+    // The editor's local positions (pending moves while the data is stale).
     if (editorOn) {
       for (const [id, m] of pendingMoves) {
         const c = controls.find((k) => k.id === id);
@@ -948,7 +893,7 @@ export function MapViewer({
       highlightCourseName,
       courseObjects: drawnObjects,
       sequenceLabels,
-      // Manual offsets apply with the sheet or the editor only, as on the SVG overlay.
+      // Manual offsets apply with the sheet or the editor only.
       labelOffset: (id) => (single ? labelOffsetOf(id, controls, single.labelOffsets, editorLabelDragPos, pendingLabelMoves) : undefined),
       exclude: editorFade
         ? new Set(controls.filter((c) => c.type === "Control" && !editorCourseIds?.has(c.id)).map((c) => c.id))
@@ -971,14 +916,14 @@ export function MapViewer({
   }, [editorOn, editorDragPos, courseRequest, mapScale]);
 
   // ─── Editor hit-test on the shared stage (docs/course-editor.md §5) ──
-  const sharedHit = !!editor?.sharedHitTest && glCourse;
+  const sharedHit = !!editor && glCourse;
   // Closed course objects (oob_area, whiteout, toner_saver, filter_region) hit by their outline only: their
   // interior is the map, so a press there pans (§5, §7; docs/bugfix-editor-area-press-pans.md).
   const uiAreas = useMemo(
     () => (editor ? drawnObjects.filter((o) => vertexRule(o.kind).closed).map((o) => ({ id: o.id, ring: outlinePoints(o.geometry, true) })) : []),
     [editor, drawnObjects],
   );
-  /** The editor target under a client point, `null` for empty map; `undefined` when SVG targets are in use. */
+  /** The editor target under a client point, `null` for empty map; `undefined` without a hit index (no editor, no course layer). */
   const resolveEditorTarget = (clientX: number, clientY: number): EditorTarget | null | undefined => {
     if (!sharedHit || !editor) return undefined;
     const pt = screenToMapMm(clientX, clientY);
@@ -1014,14 +959,11 @@ export function MapViewer({
   };
   const toolPointerRef = useRef(toolPointer);
   toolPointerRef.current = toolPointer;
-  const sharedHitRef = useRef(sharedHit);
-  sharedHitRef.current = sharedHit;
 
   /**
-   * Pointer-down on the map in shared hit-test mode: arm a control drag, a
-   * number drag or a leg click for the target under the pointer, exactly as
-   * the SVG targets' own handlers do. True when the pointer is on a target
-   * (the map does not pan); false for empty map or SVG mode.
+   * Pointer-down on the map: arm a control drag, a number drag or a leg
+   * click for the target under the pointer. True when the pointer is on a
+   * target (the map does not pan); false for empty map or no hit index.
    */
   const armEditorTargetImpl = (clientX: number, clientY: number, touch: boolean): boolean => {
     const target = resolveEditorTargetRef.current(clientX, clientY);
@@ -1035,7 +977,7 @@ export function MapViewer({
     if (!ctrl) return false;
     // Touch (§10): only a selected control drags at once; on another one the press is pending — a pan,
     // a tap that selects it, or a long press that selects it and starts the move. Its number likewise.
-    if (touch && sharedHitRef.current && ctrl.id !== editor?.selectedControlId) {
+    if (touch && ctrl.id !== editor?.selectedControlId) {
       stepSiteTouchRef.current({ type: "down", id: ctrl.id, selected: false, x: clientX, y: clientY, t: performance.now() });
       if (longPressTimerRef.current !== null) window.clearTimeout(longPressTimerRef.current);
       longPressTimerRef.current = window.setTimeout(() => {
@@ -1044,7 +986,7 @@ export function MapViewer({
       }, LONG_PRESS_MS);
       return false;
     }
-    if (touch && sharedHitRef.current && target.kind === "site") siteTouchRef.current = { kind: "drag", id: ctrl.id };
+    if (touch && target.kind === "site") siteTouchRef.current = { kind: "drag", id: ctrl.id };
     if (target.kind === "site") {
       editorDragRef.current = { id: ctrl.id, startX: clientX, startY: clientY, moved: false, origX: ctrl.x, origY: ctrl.y, touch };
       setEditorDragTouch(touch);
@@ -1549,8 +1491,8 @@ export function MapViewer({
       return;
     }
     const leg = legDownRef.current;
-    if (editor && leg && sharedHitRef.current) {
-      // The leg click of shared hit-testing (the SVG hit-line's mouse-up, §5).
+    if (editor && leg) {
+      // The leg click of shared hit-testing (§5).
       legDownRef.current = null;
       isPanningRef.current = false;
       mouseDownPosRef.current = null;
@@ -1737,7 +1679,7 @@ export function MapViewer({
         if (drag.moved || dx + dy > 3) {
           drag.moved = true;
           // Touch on the shared path: the control rides above the finger (§10), on a stem to it.
-          const lifted = drag.touch && sharedHitRef.current;
+          const lifted = drag.touch;
           const at = lifted ? liftedPoint(t.clientX, t.clientY) : { x: t.clientX, y: t.clientY };
           const raw = screenToMapMm(at.x, at.y);
           const snap = editorSnapRef.current;
@@ -1897,7 +1839,7 @@ export function MapViewer({
         }
         const t = e.changedTouches[0];
         // Dropped where it was drawn: above the finger (§10).
-        const at = drag.touch && sharedHitRef.current ? liftedPoint(t.clientX, t.clientY) : { x: t.clientX, y: t.clientY };
+        const at = drag.touch ? liftedPoint(t.clientX, t.clientY) : { x: t.clientX, y: t.clientY };
         finishEditorDrag(at.x, at.y, false);
         return;
       }
@@ -1921,7 +1863,7 @@ export function MapViewer({
       }
 
       const leg = legDownRef.current;
-      if (leg && sharedHitRef.current && e.changedTouches.length > 0 && e.touches.length === 0) {
+      if (leg && e.changedTouches.length > 0 && e.touches.length === 0) {
         legDownRef.current = null;
         const t = e.changedTouches[0];
         if (!hadMultiTouchRef.current && Date.now() >= suppressEditorSelectionUntilRef.current && Math.abs(t.clientX - leg.x) + Math.abs(t.clientY - leg.y) < 10) {
@@ -2037,223 +1979,6 @@ export function MapViewer({
     return () => window.removeEventListener("keydown", onKey);
   }, [measuring]);
 
-  // ─── Editor event handlers ──────────────────────────────
-  // Hoisted out of the overlay memo (they write refs, which must not
-  // happen in render scope) — the JSX inside the memo only closes over
-  // these stable callbacks.
-
-  /** Arm a control drag on pointer-down over a control hit target. */
-  const beginControlDrag = useCallback(
-    (id: string, origX: number, origY: number, clientX: number, clientY: number, touch = false) => {
-      editorDragRef.current = {
-        id, startX: clientX, startY: clientY, moved: false, origX, origY, touch,
-      };
-      setEditorDragTouch(touch);
-    },
-    [],
-  );
-
-  const beginControlDragMouse = useCallback(
-    (id: string, origX: number, origY: number, e: React.MouseEvent) => {
-      if (e.button !== 0) return;
-      e.stopPropagation();
-      beginControlDrag(id, origX, origY, e.clientX, e.clientY, false);
-    },
-    [beginControlDrag],
-  );
-
-  const beginControlDragTouch = useCallback(
-    (id: string, origX: number, origY: number, e: React.TouchEvent) => {
-      if (e.touches.length !== 1) return;
-      const t = e.touches[0];
-      if (!t) return;
-      e.stopPropagation();
-      touchOnEditorTargetRef.current = true;
-      if (Date.now() < suppressEditorSelectionUntilRef.current) return;
-      beginControlDrag(id, origX, origY, t.clientX, t.clientY, true);
-    },
-    [beginControlDrag],
-  );
-
-  const handleControlTouchMove = useCallback((e: React.TouchEvent) => {
-    const drag = editorDragRef.current;
-    if (!drag) return;
-    e.preventDefault();
-    e.stopPropagation();
-    const t = e.touches[0];
-    if (!t) return;
-    const dx = Math.abs(t.clientX - drag.startX);
-    const dy = Math.abs(t.clientY - drag.startY);
-    if (drag.moved || dx + dy > 3) {
-      drag.moved = true;
-      const pt = screenToMapMm(t.clientX, t.clientY);
-      if (pt) setEditorDragPos({ id: drag.id, x: pt.x, y: pt.y });
-    }
-  }, [screenToMapMm]);
-
-  const handleControlTouchEnd = useCallback((e: React.TouchEvent) => {
-    e.stopPropagation();
-    if (!editorDragRef.current) return;
-    if (
-      hadMultiTouchRef.current ||
-      Date.now() < suppressEditorSelectionUntilRef.current
-    ) {
-      editorDragRef.current = null;
-      setEditorDragPos(null);
-      return;
-    }
-    const t = e.changedTouches[0];
-    if (!t) return;
-    finishEditorDrag(t.clientX, t.clientY, false);
-  }, [finishEditorDrag]);
-
-  const beginLabelDrag = useCallback(
-    (
-      id: string,
-      ctrlX: number,
-      ctrlY: number,
-      from: { dx: number; dy: number } | null,
-      clientX: number,
-      clientY: number,
-      touch = false,
-    ) => {
-      editorLabelDragRef.current = {
-        id, startX: clientX, startY: clientY, moved: false, ctrlX, ctrlY, from, touch,
-      };
-    },
-    [],
-  );
-
-  const beginLabelDragMouse = useCallback(
-    (
-      id: string,
-      ctrlX: number,
-      ctrlY: number,
-      from: { dx: number; dy: number } | null,
-      e: React.MouseEvent,
-    ) => {
-      if (e.button !== 0) return;
-      e.stopPropagation();
-      beginLabelDrag(id, ctrlX, ctrlY, from, e.clientX, e.clientY, false);
-    },
-    [beginLabelDrag],
-  );
-
-  const beginLabelDragTouch = useCallback(
-    (
-      id: string,
-      ctrlX: number,
-      ctrlY: number,
-      from: { dx: number; dy: number } | null,
-      e: React.TouchEvent,
-    ) => {
-      if (e.touches.length !== 1) return;
-      const t = e.touches[0];
-      if (!t) return;
-      e.stopPropagation();
-      touchOnEditorTargetRef.current = true;
-      if (Date.now() < suppressEditorSelectionUntilRef.current) return;
-      beginLabelDrag(id, ctrlX, ctrlY, from, t.clientX, t.clientY, true);
-    },
-    [beginLabelDrag],
-  );
-
-  const handleLabelTouchMove = useCallback((e: React.TouchEvent) => {
-    const drag = editorLabelDragRef.current;
-    if (!drag) return;
-    e.preventDefault();
-    e.stopPropagation();
-    const t = e.touches[0];
-    if (!t) return;
-    const dx = Math.abs(t.clientX - drag.startX);
-    const dy = Math.abs(t.clientY - drag.startY);
-    if (drag.moved || dx + dy > 3) {
-      drag.moved = true;
-      const pt = screenToMapMm(t.clientX, t.clientY);
-      if (pt) setEditorLabelDragPos({ id: drag.id, x: pt.x, y: pt.y });
-    }
-  }, [screenToMapMm]);
-
-  const handleLabelTouchEnd = useCallback((e: React.TouchEvent) => {
-    e.stopPropagation();
-    if (!editorLabelDragRef.current) return;
-    if (
-      hadMultiTouchRef.current ||
-      Date.now() < suppressEditorSelectionUntilRef.current
-    ) {
-      editorLabelDragRef.current = null;
-      setEditorLabelDragPos(null);
-      return;
-    }
-    const t = e.changedTouches[0];
-    if (!t) return;
-    finishEditorLabelDrag(t.clientX, t.clientY, false);
-  }, [finishEditorLabelDrag]);
-
-  const legHitMouseDown = useCallback(
-    (course: string, index: number, e: React.MouseEvent) => {
-      if (e.button !== 0) return;
-      e.stopPropagation();
-      legDownRef.current = { course, index, x: e.clientX, y: e.clientY };
-    },
-    [],
-  );
-
-  const legHitMouseUp = useCallback(
-    (course: string, index: number, e: React.MouseEvent) => {
-      const ld = legDownRef.current;
-      legDownRef.current = null;
-      if (!ld || ld.course !== course || ld.index !== index) return;
-      if (
-        hadMultiTouchRef.current ||
-        Date.now() < suppressEditorSelectionUntilRef.current
-      ) return;
-      if (Math.abs(e.clientX - ld.x) + Math.abs(e.clientY - ld.y) >= 5) return;
-      e.stopPropagation();
-      const pt = screenToMapMm(e.clientX, e.clientY);
-      if (pt) editor?.onLegClick?.(course, index, pt);
-    },
-    [screenToMapMm, editor],
-  );
-
-  const legHitTouchStart = useCallback(
-    (course: string, index: number, e: React.TouchEvent) => {
-      const t = e.touches[0];
-      if (!t) return;
-      e.stopPropagation();
-      touchOnEditorTargetRef.current = true;
-      legDownRef.current = { course, index, x: t.clientX, y: t.clientY };
-    },
-    [],
-  );
-
-  const legHitTouchEnd = useCallback(
-    (course: string, index: number, e: React.TouchEvent) => {
-      const ld = legDownRef.current;
-      legDownRef.current = null;
-      if (!ld || ld.course !== course || ld.index !== index) return;
-      const t = e.changedTouches[0];
-      if (!t) return;
-      if (Math.abs(t.clientX - ld.x) + Math.abs(t.clientY - ld.y) >= 5) return;
-      e.stopPropagation();
-      const pt = screenToMapMm(t.clientX, t.clientY);
-      if (pt) editor?.onLegClick?.(course, index, pt);
-    },
-    [screenToMapMm, editor],
-  );
-
-  // Helper: get slit cuts from course geometry for a given control code
-  function getCourseGeomCuts(code: string): SlitGap[] | null {
-    if (!courseGeometry) return null;
-    const features = courseGeometry.features || [];
-    for (const f of features) {
-      if (f.properties?.symbolType === "control" && f.properties?.code === code && f.properties?.cuts) {
-        return f.properties.cuts;
-      }
-    }
-    return null;
-  }
-
   // ─── Overlay rendering ─────────────────────────────────
 
   // GPS tracks in paper mm for the paper view: proj4 once per point per
@@ -2268,26 +1993,20 @@ export function MapViewer({
   const overlayContent = useMemo(() => {
     if (!viewport || containerSize.w === 0 || containerSize.h === 0) return null;
 
-    // Under the GL course layer the UI layer (hit targets, status and
-    // selection rings) takes the drawn symbols' sizes: the library's
-    // dimensions × the document factor (course-layer.md §3.1).
-    const glm = glCourse ? courseInfo?.metrics : null;
+    // The UI layer (status and selection rings, faded controls, badges)
+    // takes the drawn symbols' sizes: the library's dimensions × the
+    // document factor (course-layer.md §3.1).
+    const glm = courseInfo?.metrics ?? null;
     const radius = (glm?.circleRadiusMm ?? 2.5) * symbolScale;
     const stroke = Math.max(0.5, (glm?.lineWidthMm ?? 0.35) * symbolScale);
-    // Control numbers use the print appearance's digit height (ISOM 704,
-    // 4 mm) so the editor, the layout preview and the PDF draw the same
-    // glyph at the same spot. `labelSize` is the em (SVG font-size) that
-    // yields that digit height — it is also what the placer sizes boxes
-    // from, so auto-placement picks the same ring in all three.
+    // The punch-count badge scales with the course layer's number (ISOM
+    // 704's digit height as an em).
     const labelDigitHeight = (glm?.digitHeightMm ?? defaultMapAppearance.numberHeightMm) * symbolScale;
     const labelSize = labelDigitHeight / CONTROL_NUMBER_CAP_HEIGHT_RATIO;
     const startSize = (glm?.startRadiusMm ?? 3.5) * symbolScale;
-    const finishInner = 2.0 * symbolScale;
     const finishOuter = (glm?.finishRadiusMm ?? 3.0) * symbolScale;
     const legStroke = Math.max(0.5, (glm?.lineWidthMm ?? 0.35) * symbolScale);
 
-    // Map mm → inner px: through the paper view, or (tiles) the affine.
-    const hasMm = viewport.kind === "paper" || affine !== null;
     const mmPx = (mx: number, my: number) => {
       const p = mmToInner(viewport, vctx, mx, my)!;
       return { px: p.x, py: p.y };
@@ -2304,25 +2023,11 @@ export function MapViewer({
       if (p) ctrlPixels.set(c.id, p);
     }
 
-    // Override with precise OCAD positions from courseGeometry when available
-    // (the GL layer draws at the controls' own positions; its UI layer follows).
-    if (courseGeometry && hasMm && !glCourse) {
-      for (const f of (courseGeometry.features || [])) {
-        const p = f.properties;
-        if (!p?.code || !f.geometry || f.geometry.type !== "Point") continue;
-        if (p.symbolType !== "control" && p.symbolType !== "start" && p.symbolType !== "finish") continue;
-        const [mx, my] = f.geometry.coordinates as [number, number];
-        const { px, py } = mmPx(mx, my);
-        const ctrl = controls.find(c => c.code === p.code);
-        if (ctrl) ctrlPixels.set(ctrl.id, { x: px, y: py });
-      }
-    }
-
-    // Editor overrides win over everything: a control being dragged (or
-    // whose move is still round-tripping) renders at its local position.
-    // A pending move only applies while the control still reports the
-    // position it had when the drag started — once the refetch lands (or
-    // an external writer moved it) the entry is inert.
+    // Editor overrides: a control being dragged (or whose move is still
+    // round-tripping) renders at its local position. A pending move only
+    // applies while the control still reports the position it had when
+    // the drag started — once the refetch lands (or an external writer
+    // moved it) the entry is inert.
     if (editor) {
       for (const [id, m] of pendingMoves) {
         const c = controls.find((k) => k.id === id);
@@ -2340,175 +2045,14 @@ export function MapViewer({
     const purple = defaultMapAppearance.purple;
     const lowerElements: React.ReactNode[] = [];
     const upperElements: React.ReactNode[] = [];
-    // Editor hit-target metadata. The JSX (with its ref-writing event
-    // handlers) is materialized OUTSIDE this memo — the React Compiler
-    // lint treats everything inside useMemo as render-scope, where ref
-    // access is forbidden. The memo only computes positions.
-    const controlHits: EditorControlHit[] = [];
-    const legHits: EditorLegHit[] = [];
-    const labelHits: EditorLabelHit[] = [];
 
-    // Line segments actually drawn on screen (course legs AS CLIPPED
-    // around the circles, marked and forbidden routes — of every course
-    // rendered). Collected while rendering and fed to the control-number
-    // placement so numbers avoid exactly the lines the user sees, no more
-    // (courses that are not drawn must not push labels around) and no
-    // less. The print renderer feeds the placer the same clipped pieces,
-    // which is part of what makes editor and PDF agree.
-    const drawnLineSegs: PlacementSeg[] = [];
-
-    // Highlighted courses drive fallback legs, multi-course leg labels
-    // and description numbering below.
+    // Highlighted courses drive the multi-course leg labels below.
     const highlightedCourses = courses.filter(
       (c) => c.highlight || c.name === highlightCourseName,
-    );
-    const freeOrderCourseNames = new Set(
-      courses.filter((c) => c.orderMode === "free_order").map((c) => c.name),
     );
     // With more than one course on screen it's hard to tell which lines
     // belong to what — label each leg with the classes that run it.
     const legLabelMode = highlightedCourses.length > 1;
-
-    // ─── Course geometry (GeoJSON) ───────────────────────
-
-    // Per-course running leg ordinal for the editor's insert-on-leg hit
-    // lines. Leg features appear in course order (one feature per leg),
-    // so counting them per course name yields the 0-based leg index.
-    const geomLegIndex = new Map<string, number>();
-    /** Record one invisible fat hit-line along a leg polyline. */
-    const pushLegHit = (key: string, d: string, courseName: string, legIndex: number) => {
-      if (!editor?.onLegClick) return;
-      legHits.push({ key, d, course: courseName, index: legIndex });
-    };
-
-    if (courseGeometry && hasMm && !glCourse) {
-      const features = courseGeometry.features || [];
-      for (let fi = 0; fi < features.length; fi++) {
-        const feature = features[fi];
-        const props = feature.properties || {};
-        const geom = feature.geometry;
-        if (!geom) continue;
-
-        if (props.symbolType === "leg" && geom.type === "LineString") {
-          const legCourse: string | undefined =
-            props.courseName ?? highlightCourseName ?? undefined;
-          // Free-order courses never draw connecting legs (even when
-          // imported OCD geometry still carries them).
-          if (legCourse && freeOrderCourseNames.has(legCourse)) continue;
-          if (
-            !legCourse &&
-            highlightedCourses.length === 1 &&
-            highlightedCourses[0].orderMode === "free_order"
-          ) {
-            continue;
-          }
-
-          const coords = geom.coordinates as [number, number][];
-          if (coords.length < 2) continue;
-
-          const screenPts: Pt[] = [];
-          for (const [mx, my] of coords) {
-            const { px, py } = mmPx(mx, my);
-            screenPts.push({ x: px, y: py });
-          }
-
-          // Insert-on-leg hit line spanning the full (unclipped) leg.
-          {
-            if (legCourse) {
-              const idx = geomLegIndex.get(legCourse) ?? 0;
-              geomLegIndex.set(legCourse, idx + 1);
-              const fullD = screenPts.map((p, i) => `${i === 0 ? "M" : "L"}${p.x.toFixed(1)},${p.y.toFixed(1)}`).join(" ");
-              pushLegHit(`edit-leg-${fi}`, fullD, legCourse, idx);
-            }
-          }
-
-          if (props.preclipped) {
-            for (let si = 0; si < screenPts.length - 1; si++) {
-              drawnLineSegs.push({
-                x1: screenPts[si].x, y1: screenPts[si].y,
-                x2: screenPts[si + 1].x, y2: screenPts[si + 1].y,
-              });
-            }
-            const d = screenPts.map((p, i) => `${i === 0 ? "M" : "L"}${p.x.toFixed(1)},${p.y.toFixed(1)}`).join(" ");
-            lowerElements.push(
-              <path key={`leg-${fi}`} d={d} stroke={purple} strokeWidth={legStroke} fill="none" />
-            );
-          } else {
-            // Automatic gaps around compact knoll / rock point features,
-            // computed server-side as fractions of the full leg.
-            const legGaps: { from: number; to: number }[] = Array.isArray(props.gaps)
-              ? props.gaps
-              : [];
-            const pieces =
-              legGaps.length > 0 ? subtractLegGaps(screenPts, legGaps) : [screenPts];
-            // Only visible controls clip the leg. When the user has
-            // "show only relevant" on (the default for a single-course
-            // selection), unrelated controls have `visible: false` and
-            // therefore aren't drawn as circles — so they shouldn't
-            // chop a slit out of an unrelated course's leg either.
-            // When showAllControls is on, every control is visible
-            // again and the original "leg breaks around any circle on
-            // the map" behaviour is preserved.
-            const obstacles: Pt[] = [];
-            for (const c of controls) {
-              if (c.visible === false) continue;
-              const p = ctrlPixels.get(c.id);
-              if (p) obstacles.push(p);
-            }
-            const gapped = pieces.length > 1 ? "true" : undefined;
-            for (let pi = 0; pi < pieces.length; pi++) {
-              const pts = pieces[pi];
-              for (let si = 0; si < pts.length - 1; si++) {
-                const segs = clipLine(pts[si], pts[si + 1], obstacles, radius * 1.2);
-                for (let segi = 0; segi < segs.length; segi++) {
-                  const seg = segs[segi];
-                  drawnLineSegs.push(seg);
-                  lowerElements.push(
-                    <line key={`leg-${fi}-${pi}-${si}-${segi}`}
-                      x1={seg.x1} y1={seg.y1} x2={seg.x2} y2={seg.y2}
-                      data-leg-gapped={gapped}
-                      stroke={purple} strokeWidth={legStroke} />
-                  );
-                }
-              }
-            }
-          }
-        } else if (props.symbolType === "marked_route" && geom.type === "LineString") {
-          const coords = geom.coordinates as [number, number][];
-          const screenPts = coords.map(([mx, my]) => mmPx(mx, my));
-          for (let si = 0; si < screenPts.length - 1; si++) {
-            drawnLineSegs.push({
-              x1: screenPts[si].px, y1: screenPts[si].py,
-              x2: screenPts[si + 1].px, y2: screenPts[si + 1].py,
-            });
-          }
-          const d = screenPts.map((p, i) => `${i === 0 ? "M" : "L"}${p.px.toFixed(1)},${p.py.toFixed(1)}`).join(" ");
-          upperElements.push(
-            <path key={`route-${fi}`} d={d} stroke={purple} strokeWidth={legStroke * 1.5}
-              fill="none" strokeDasharray={`${legStroke * 4} ${legStroke * 2}`} />
-          );
-        } else if ((props.symbolType === "forbidden_route" || props.symbolType === "restricted_line") && geom.type === "LineString") {
-          const coords = geom.coordinates as [number, number][];
-          const screenPts = coords.map(([mx, my]) => mmPx(mx, my));
-          for (let si = 0; si < screenPts.length - 1; si++) {
-            drawnLineSegs.push({
-              x1: screenPts[si].px, y1: screenPts[si].py,
-              x2: screenPts[si + 1].px, y2: screenPts[si + 1].py,
-            });
-          }
-          const d = screenPts.map((p, i) => `${i === 0 ? "M" : "L"}${p.px.toFixed(1)},${p.py.toFixed(1)}`).join(" ");
-          const target = props.symbolType === "restricted_line" ? lowerElements : upperElements;
-          target.push(
-            <path key={`restrict-${fi}`} d={d} stroke={purple} strokeWidth={legStroke * 2}
-              fill="none"
-              strokeDasharray={props.symbolType === "forbidden_route" ? `${legStroke * 6} ${legStroke * 3}` : "none"} />
-          );
-        }
-        // Note: start/finish/control symbols are rendered by the "Control symbols"
-        // section below (with click handlers, badges, highlights, etc.).
-        // Rendering them here from courseGeometry would produce duplicate rings.
-      }
-    }
 
     // ─── GPS route traces ─────────────────────────────────
 
@@ -2541,189 +2085,9 @@ export function MapViewer({
       }
     }
 
-    // ─── Fallback legs for every highlighted course ───────
-    //
-    // Draw straight-line legs (clipped around control circles) for every
-    // highlighted course that isn't already covered by `courseGeometry`.
-    // When `coursesWithGeometry` is provided, it lists the courses whose
-    // routes are already drawn from precise OCD/XML geometry — those we
-    // skip. Anything else highlighted (selection without imported routes,
-    // or selection alongside geometry-only courses) gets legs here so
-    // the user always sees *every* selected course connected.
-    //
-    // Back-compat: when neither `coursesWithGeometry` nor `courseGeometry`
-    // is provided, fall back to the legacy behaviour of drawing just one
-    // highlighted course.
-    let coursesToDraw: typeof courses;
-    if (glCourse) {
-      coursesToDraw = [];
-    } else if (coursesWithGeometry) {
-      coursesToDraw = highlightedCourses.filter((c) => !coursesWithGeometry.has(c.name));
-    } else if (!courseGeometry) {
-      coursesToDraw = highlightedCourses.slice(0, 1);
-    } else {
-      coursesToDraw = [];
-    }
-
-    for (const course of coursesToDraw) {
-      if (course.orderMode === "free_order") continue;
-      const obstacles: Pt[] = [];
-      for (const cid of course.controls) {
-        const p = ctrlPixels.get(cid);
-        if (p) obstacles.push(p);
-      }
-
-      for (let i = 0; i < course.controls.length - 1; i++) {
-        const fromPt = ctrlPixels.get(course.controls[i]);
-        const toPt = ctrlPixels.get(course.controls[i + 1]);
-        if (!fromPt || !toPt) continue;
-        pushLegHit(
-          `edit-fleg-${course.name}-${i}`,
-          `M${fromPt.x.toFixed(1)},${fromPt.y.toFixed(1)} L${toPt.x.toFixed(1)},${toPt.y.toFixed(1)}`,
-          course.name,
-          i,
-        );
-        const segs = clipLine(fromPt, toPt, obstacles, radius * 1.2);
-        for (let segi = 0; segi < segs.length; segi++) {
-          const seg = segs[segi];
-          drawnLineSegs.push(seg);
-          lowerElements.push(
-            <line key={`fleg-${course.name}-${i}-${segi}`}
-              x1={seg.x1} y1={seg.y1} x2={seg.x2} y2={seg.y2}
-              stroke={purple} strokeWidth={legStroke} />
-          );
-        }
-      }
-    }
-
-    // ─── GL course layer: leg hit lines from the derivation ─────
-    //
-    // The GL layer draws the legs; the editor's insert-on-leg targets run
-    // along the derived centre-to-centre lines. The index is the leg's in
-    // the course's own control list (a skipped unpositioned control keeps
-    // its slot, as on the SVG overlay).
-    if (glCourse && courseInfo?.derivation) {
-      for (const dc of courseInfo.derivation.courses) {
-        const overlay = courses.find((k) => k.name === dc.id);
-        let at = 0;
-        dc.legs.forEach((leg, i) => {
-          const j = overlay ? overlay.controls.indexOf(leg.to, at + 1) : -1;
-          if (j > 0) at = j;
-          const pts = leg.points.map((p) => mapMmToScreen(p.x, p.y)).filter((p): p is Pt => p !== null);
-          if (pts.length < 2) return;
-          const d = pts.map((p, k) => `${k === 0 ? "M" : "L"}${p.x.toFixed(1)},${p.y.toFixed(1)}`).join(" ");
-          pushLegHit(`gl-leg-${dc.id}-${i}`, d, dc.id, j > 0 ? j - 1 : i);
-        });
-      }
-    }
-
-    // ─── Control symbols ─────────────────────────────────
+    // ─── Control marks (the UI layer over the GL course layer) ─────
 
     const sortedControls = [...controls].sort((a, b) => a.id.localeCompare(b.id, undefined, { numeric: true }));
-
-    // In description mode with a SINGLE ordered course, map control IDs
-    // to sequence numbers (1, 2, 3, …) — a proper course card. Free-order
-    // courses, multi-course selections, and the all-controls view keep
-    // punch codes as labels. Manual label offsets still apply whenever
-    // a single course is highlighted (including free-order).
-    const singleCourse =
-      (showDescriptions || !!editor) && highlightedCourses.length === 1
-        ? highlightedCourses[0]
-        : null;
-    const sequenceNumbering =
-      !!singleCourse && singleCourse.orderMode !== "free_order";
-    const sequenceMap = new Map<string, number>();
-    if (sequenceNumbering && singleCourse) {
-      let seq = 0;
-      for (const cid of singleCourse.controls) {
-        const ctrl = controls.find(c => c.id === cid);
-        if (ctrl && ctrl.type === "Control") {
-          seq++;
-          sequenceMap.set(cid, seq);
-        }
-      }
-    }
-
-    // Draggable number hit-targets: every regular control on the single
-    // highlighted course, in both ordered and free-order mode. Offsets
-    // live on course_controls, so there is nothing to drag without a
-    // course selected (the all-controls view has no per-control slot).
-    const singleCourseControlIds = singleCourse
-      ? new Set(singleCourse.controls)
-      : null;
-
-    const storedOffsets = singleCourse?.labelOffsets;
-    const offsetFor = (id: string): { dx: number; dy: number } | undefined =>
-      singleCourse ? labelOffsetOf(id, controls, storedOffsets, editorLabelDragPos, pendingLabelMoves) : undefined;
-
-    // Control-number placement (pure module, unit-tested). Inputs are
-    // exactly what is on screen: every VISIBLE circle is an obstacle
-    // (start triangles and finish rings with their real extents), regular
-    // controls carry their label, and `drawnLineSegs` holds the legs of
-    // every drawn course. All cost terms scale with the symbol sizes, so
-    // the chosen slots don't change when zooming — only when the set of
-    // visible controls or drawn courses does.
-    //
-    // The placer runs in the MAP frame — overlay space rotated so map
-    // east points +x and map north up — exactly like the print renderer
-    // (which undoes the window rotation). The viewer's bearing and the
-    // print window's tilt differ, and the candidate directions are
-    // axis-relative, so placing in a shared frame is what makes a number
-    // land on the same spot on the map in the editor, the layout preview
-    // and the PDF. Rotation is rigid, so sizes/distances are unchanged;
-    // only the chosen centres are rotated back into overlay space.
-    let frameRot = 0;
-    if (hasMm) {
-      const anchor = controls[0] ? { x: controls[0].x, y: controls[0].y } : { x: 0, y: 0 };
-      const o = mapMmToScreen(anchor.x, anchor.y);
-      const e = mapMmToScreen(anchor.x + 1, anchor.y);
-      if (o && e) frameRot = Math.atan2(e.y - o.y, e.x - o.x);
-    }
-    const cosF = Math.cos(frameRot), sinF = Math.sin(frameRot);
-    const toFrame = (p: Pt): Pt => ({ x: p.x * cosF + p.y * sinF, y: -p.x * sinF + p.y * cosF });
-    const fromFrame = (p: Pt): Pt => ({ x: p.x * cosF - p.y * sinF, y: p.x * sinF + p.y * cosF });
-
-    const placementCircles: PlacementCircle[] = [];
-    for (const c of sortedControls) {
-      if (c.visible === false) continue;
-      const pos = ctrlPixels.get(c.id);
-      if (!pos) continue;
-      const fp = toFrame(pos);
-      if (c.type === "Start") {
-        placementCircles.push({ id: c.id, x: fp.x, y: fp.y, radius: startSize });
-      } else if (c.type === "Finish") {
-        placementCircles.push({ id: c.id, x: fp.x, y: fp.y, radius: finishOuter });
-      } else {
-        const label = sequenceNumbering && sequenceMap.has(c.id)
-          ? String(sequenceMap.get(c.id))
-          : c.code;
-        const off = offsetFor(c.id);
-        let fixedLabel: { x: number; y: number } | undefined;
-        if (off) {
-          const screen = mapMmToScreen(c.x + off.dx, c.y + off.dy);
-          if (screen) fixedLabel = toFrame(screen);
-        }
-        placementCircles.push({ id: c.id, x: fp.x, y: fp.y, label, ...(fixedLabel ? { fixedLabel } : {}) });
-      }
-    }
-    const frameSegs: PlacementSeg[] = drawnLineSegs.map((s) => {
-      const a = toFrame({ x: s.x1, y: s.y1 });
-      const b = toFrame({ x: s.x2, y: s.y2 });
-      return { x1: a.x, y1: a.y, x2: b.x, y2: b.y };
-    });
-    const placedControlLabels = new Map<string, PlacedControlLabel>();
-    if (!hideControls && !glCourse) {
-      for (const [id, l] of placeControlLabels(placementCircles, frameSegs, { radius, labelSize })) {
-        const centre = fromFrame(l);
-        let leader: PlacedControlLabel["leader"];
-        if (l.leader) {
-          const a = fromFrame({ x: l.leader.x1, y: l.leader.y1 });
-          const b = fromFrame({ x: l.leader.x2, y: l.leader.y2 });
-          leader = { x1: a.x, y1: a.y, x2: b.x, y2: b.y };
-        }
-        placedControlLabels.set(id, { ...l, x: centre.x, y: centre.y, ...(leader ? { leader } : {}) });
-      }
-    }
 
     for (const c of sortedControls) {
       if (c.visible === false) continue;
@@ -2738,79 +2102,41 @@ export function MapViewer({
         isHighlighted ? "#ef4444" :
         purple;
       // Editor fading: while a course is selected, regular controls off
-      // the course recede (Purple Pen style) — still purple, still
+      // the course recede (Purple Pen style). The course layer leaves them
+      // out (`exclude`); they are drawn here as plain circles, still
       // clickable. Start/finish stay at full strength.
       const fade =
         editor?.fadeNonCourse && c.type === "Control" && !editor.courseControlIds?.has(c.id)
           ? 0.3
           : undefined;
+      const symbolR = c.type === "Start" ? startSize : c.type === "Finish" ? finishOuter : radius;
 
-      if (glCourse && !fade) {
+      if (fade) {
+        lowerElements.push(
+          <circle key={`ctrl-${c.id}`} cx={pos.x} cy={pos.y} r={radius} stroke={baseColor} strokeWidth={stroke} fill="none"
+            opacity={fade}
+            data-testid="control-faded"
+            style={{ cursor: onControlClick ? "pointer" : undefined }}
+            onClick={onControlClick ? () => onControlClick(c.id) : undefined} />
+        );
+      } else if (baseColor !== purple) {
         // The GL layer draws the symbol; a status (readout punch state,
         // highlight) is a ring of the UI layer around it.
-        const symbolR = c.type === "Start" ? startSize : c.type === "Finish" ? finishOuter : radius;
-        if (baseColor !== purple) {
-          upperElements.push(
-            <circle key={`status-${c.id}`} cx={pos.x} cy={pos.y} r={symbolR + stroke * 1.5}
-              stroke={baseColor} strokeWidth={stroke * 1.5} fill="none"
-              data-testid="control-status-ring" data-control-id={c.id}
-              style={{ cursor: onControlClick ? "pointer" : undefined }}
-              onClick={onControlClick ? () => onControlClick(c.id) : undefined} />
-          );
-        } else if (onControlClick) {
-          upperElements.push(
-            <circle key={`click-${c.id}`} cx={pos.x} cy={pos.y} r={symbolR} fill="transparent" stroke="none"
-              style={{ cursor: "pointer" }} onClick={() => onControlClick(c.id)} />
-          );
-        }
+        upperElements.push(
+          <circle key={`status-${c.id}`} cx={pos.x} cy={pos.y} r={symbolR + stroke * 1.5}
+            stroke={baseColor} strokeWidth={stroke * 1.5} fill="none"
+            data-testid="control-status-ring" data-control-id={c.id}
+            style={{ cursor: onControlClick ? "pointer" : undefined }}
+            onClick={onControlClick ? () => onControlClick(c.id) : undefined} />
+        );
+      } else if (onControlClick) {
+        upperElements.push(
+          <circle key={`click-${c.id}`} cx={pos.x} cy={pos.y} r={symbolR} fill="transparent" stroke="none"
+            style={{ cursor: "pointer" }} onClick={() => onControlClick(c.id)} />
+        );
       }
-      // Under the GL layer only a faded control (left out of it) is drawn here.
-      const svgSymbol = !glCourse || !!fade;
-      if (c.type === "Start") {
-        if (svgSymbol) {
-          const s = startSize;
-          const triPath = `M${pos.x},${pos.y - s} L${pos.x - s * 0.866},${pos.y + s * 0.5} L${pos.x + s * 0.866},${pos.y + s * 0.5} Z`;
-          lowerElements.push(
-            <path key={`start-${c.id}`} d={triPath} stroke={baseColor} strokeWidth={stroke} fill="none"
-              style={{ cursor: onControlClick ? "pointer" : undefined }}
-              onClick={onControlClick ? () => onControlClick(c.id) : undefined} />
-          );
-        }
-      } else if (c.type === "Finish") {
-        if (svgSymbol) {
-          lowerElements.push(
-            <g key={`finish-${c.id}`} style={{ cursor: onControlClick ? "pointer" : undefined }}
-              onClick={onControlClick ? () => onControlClick(c.id) : undefined}>
-              <circle cx={pos.x} cy={pos.y} r={finishOuter} stroke={baseColor} strokeWidth={stroke} fill="none" />
-              <circle cx={pos.x} cy={pos.y} r={finishInner} stroke={baseColor} strokeWidth={stroke} fill="none" />
-            </g>
-          );
-        }
-      } else {
-        const cuts = svgSymbol ? getCourseGeomCuts(c.code) : null;
 
-        if (!svgSymbol) {
-          // drawn by the GL layer
-        } else if (cuts && cuts.length > 0) {
-          const rot = cutRotationDeg ?? 0;
-          const adj = cuts.map(g => ({ start: g.start + rot, end: g.end + rot }));
-          const arcs = drawBrokenCircle(pos.x, pos.y, radius, adj);
-          lowerElements.push(
-            <path key={`ctrl-${c.id}`} d={arcs} stroke={baseColor} strokeWidth={stroke} fill="none"
-              data-testid="control-circle-cut"
-              opacity={fade}
-              style={{ cursor: onControlClick ? "pointer" : undefined }}
-              onClick={onControlClick ? () => onControlClick(c.id) : undefined} />
-          );
-        } else {
-          lowerElements.push(
-            <circle key={`ctrl-${c.id}`} cx={pos.x} cy={pos.y} r={radius} stroke={baseColor} strokeWidth={stroke} fill="none"
-              opacity={fade}
-              style={{ cursor: onControlClick ? "pointer" : undefined }}
-              onClick={onControlClick ? () => onControlClick(c.id) : undefined} />
-          );
-        }
-
+      if (c.type === "Control") {
         // Completion ring (overlaps control circle at same radius)
         if (c.completionPct !== undefined && c.completionPct > 0) {
           const ringR = radius;
@@ -2851,103 +2177,19 @@ export function MapViewer({
             </g>
           );
         }
-
-        // Control code label (or sequence number in description mode) —
-        // position chosen by the placement module above.
-        const placedLabel = placedControlLabels.get(c.id);
-        if (placedLabel) {
-          const label = sequenceNumbering && sequenceMap.has(c.id)
-            ? String(sequenceMap.get(c.id))
-            : c.code;
-          const labelColor = (c.completionPct !== undefined && c.completionPct >= 1) ? "#059669" : baseColor;
-          // Contested label (congested cluster): thin leader line from the
-          // number to its own circle, so the association stays readable.
-          if (placedLabel.leader) {
-            const ld = placedLabel.leader;
-            upperElements.push(
-              <line key={`leader-${c.id}`} x1={ld.x1} y1={ld.y1} x2={ld.x2} y2={ld.y2}
-                stroke={labelColor} strokeWidth={stroke * 0.7} opacity={fade ?? 0.9}
-                data-testid="control-label-leader" />
-            );
-          }
-          // Same anchor rule as the print renderer: alphabetic baseline
-          // half a digit below the centre (no dominant-baseline), same
-          // font stack, non-bold (ISOM 704). Rotation pivots on the
-          // centre so the glyph stays centred on the placed point.
-          upperElements.push(
-            <text key={`label-${c.id}`} x={placedLabel.x}
-              y={controlNumberBaselineY(placedLabel.y, labelDigitHeight)}
-              data-testid="control-label"
-              data-control-id={c.id}
-              textAnchor="middle"
-              fontFamily={CONTROL_NUMBER_FONT_FAMILY}
-              fontSize={labelSize} fill={labelColor}
-              stroke="#fff" strokeWidth={labelSize * 0.12}
-              strokeLinejoin="round" paintOrder="stroke fill"
-              opacity={fade}
-              transform={rotDeg !== 0 ? `rotate(${-rotDeg}, ${placedLabel.x}, ${placedLabel.y})` : undefined}
-              style={{ cursor: onControlClick ? "pointer" : undefined }}
-              onClick={onControlClick ? () => onControlClick(c.id) : undefined}>
-              {label}
-            </text>
-          );
-          if (editor && singleCourseControlIds?.has(c.id)) {
-            labelHits.push({
-              id: c.id,
-              px: placedLabel.x,
-              py: placedLabel.y,
-              w: Math.max(placedLabel.w, 16),
-              h: Math.max(placedLabel.h, 16),
-              mmX: c.x,
-              mmY: c.y,
-              from: offsetFor(c.id) ?? null,
-            });
-          }
-        }
       }
 
-      // Editor: selection ring + grab target. The hit circle is filled
-      // (transparent) so the whole symbol interior is grabbable — the
-      // visible rings are stroke-only and would otherwise only respond
-      // on their outline. No ring while an exclusive tool is armed (§6.1):
-      // the control just placed stays selected, its purple circle is the mark.
-      if (editor) {
-        const symbolR = c.type === "Start" ? startSize : c.type === "Finish" ? finishOuter : radius;
-        if (showSelectionRing(editor) && editor.selectedControlId === c.id) {
-          upperElements.push(
-            <circle key={`edit-sel-${c.id}`} cx={pos.x} cy={pos.y} r={symbolR * 1.45}
-              stroke="#2563eb" strokeWidth={Math.max(1, stroke * 0.8)} fill="none"
-              strokeDasharray={`${Math.max(2, stroke * 2)} ${Math.max(2, stroke * 2)}`}
-              opacity={0.9} style={{ pointerEvents: "none" }}
-              data-testid="editor-selection-ring" />
-          );
-        }
-        controlHits.push({
-          id: c.id, code: c.code,
-          px: pos.x, py: pos.y, r: Math.max(symbolR, 10),
-          mmX: c.x, mmY: c.y,
-        });
-      }
-    }
-
-    // The GL layer's numbers: drag targets for the single course's labels.
-    if (glCourse && editor && courseInfo?.derivation && singleCourseControlIds) {
-      for (const ds of courseInfo.derivation.sites) {
-        if (!ds.label || !singleCourseControlIds.has(ds.id)) continue;
-        const ctrl = controls.find((k) => k.id === ds.id);
-        const p = mapMmToScreen(ds.label.x, ds.label.y);
-        if (!ctrl || !p) continue;
-        labelHits.push({
-          id: ds.id,
-          px: p.x,
-          py: p.y,
-          // The layer's own box estimate (0.65 em per character, course-layer.md §3.5).
-          w: Math.max(ds.label.text.length * 0.65 * labelSize, 16),
-          h: Math.max(labelSize, 16),
-          mmX: ctrl.x,
-          mmY: ctrl.y,
-          from: offsetFor(ds.id) ?? null,
-        });
+      // Editor: selection ring. No ring while an exclusive tool is armed
+      // (§6.1): the control just placed stays selected, its purple circle
+      // is the mark.
+      if (editor && showSelectionRing(editor) && editor.selectedControlId === c.id) {
+        upperElements.push(
+          <circle key={`edit-sel-${c.id}`} cx={pos.x} cy={pos.y} r={symbolR * 1.45}
+            stroke="#2563eb" strokeWidth={Math.max(1, stroke * 0.8)} fill="none"
+            strokeDasharray={`${Math.max(2, stroke * 2)} ${Math.max(2, stroke * 2)}`}
+            opacity={0.9} style={{ pointerEvents: "none" }}
+            data-testid="editor-selection-ring" />
+        );
       }
     }
 
@@ -3058,12 +2300,12 @@ export function MapViewer({
       }
     }
 
-    return { lowerNodes: lowerElements, upperNodes: upperElements, controlHits, legHits, labelHits, radiusPx: radius, strokePx: stroke };
+    return { lowerNodes: lowerElements, upperNodes: upperElements, radiusPx: radius, strokePx: stroke };
 
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [viewport, containerSize, renderW, renderH, controls, courses, courseGeometry, coursesWithGeometry, highlightControlId, highlightCourseName,
-      symbolScale, affine, vctx, controlMm, gpsRoutesMm, measuring, measurePoints, measureCursor, showDescriptions, hideControls, onControlClick,
-      mapMmToScreen, rotDeg, gpsRoutes, editor, editorDragPos, pendingMoves, editorLabelDragPos, pendingLabelMoves, glCourse, courseInfo]);
+  }, [viewport, containerSize, renderW, renderH, controls, courses, highlightControlId, highlightCourseName,
+      symbolScale, vctx, controlMm, gpsRoutesMm, measuring, measurePoints, measureCursor, onControlClick,
+      mapMmToScreen, rotDeg, gpsRoutes, editor, editorDragPos, pendingMoves, courseInfo]);
 
   // ─── Description sheet (outside rotation) ──────────────
 
@@ -3072,13 +2314,11 @@ export function MapViewer({
     const activeCourses = courses.filter(
       (c) => c.highlight || c.name === highlightCourseName,
     );
-    // Without an active course the sheet normally needs geometry to know
-    // which controls to list; `descriptionsAllControls` lists them all
-    // from the control overlays instead (no geometry required).
+    // Without an active course `descriptionsAllControls` lists every
+    // positioned control; otherwise there is no sheet.
     const allControlsMode = descriptionsAllControls && activeCourses.length === 0;
-    if (!courseGeometry && !allControlsMode) return null;
+    if (activeCourses.length === 0 && !allControlsMode) return null;
     return renderDescriptionSheet(
-      courseGeometry,
       symbolScale,
       containerSize.w,
       containerSize.h,
@@ -3088,7 +2328,7 @@ export function MapViewer({
       allControlsTitle,
       { eventName, mapScale: mapScale ?? null },
     );
-  }, [showDescriptions, courseGeometry, descriptionsAllControls, allControlsTitle, symbolScale, containerSize, courses, highlightCourseName, controls, eventName, mapScale]);
+  }, [showDescriptions, descriptionsAllControls, allControlsTitle, symbolScale, containerSize, courses, highlightCourseName, controls, eventName, mapScale]);
 
   // ─── Scale bar ─────────────────────────────────────────
 
@@ -3444,8 +2684,8 @@ export function MapViewer({
       ref={containerRef}
       data-testid="map-viewer"
       data-map-pipeline={pipeline}
-      data-course-layer={glCourse ? "gl" : "svg"}
-      data-editor-hit={editor ? (sharedHit ? "shared" : "svg") : undefined}
+      data-course-layer={glCourse ? "gl" : "none"}
+      data-editor-hit={editor ? "shared" : undefined}
       data-center-lat={viewport.kind === "mercator" ? viewport.centerLat : centreGeo?.lat}
       data-center-lng={viewport.kind === "mercator" ? viewport.centerLng : centreGeo?.lng}
       data-zoom={mercatorEquivalentZoom(viewport, mapScale, centreGeo?.lat ?? null) ?? undefined}
@@ -3487,7 +2727,7 @@ export function MapViewer({
       {paperMode && courseSupport === false && (
         // A document whose colour stack is not aligned cannot take the GL
         // course layer (`CourseStackError`, docs/map-rendering.md §5.4
-        // "Fallback"): say so; the SVG overlay still draws the course.
+        // "Fallback"): say so — no course is drawn until the map is re-imported.
         <div
           data-testid="map-course-layer-unsupported"
           className="pointer-events-none absolute inset-x-0 top-2 z-20 flex justify-center px-4"
@@ -3608,44 +2848,6 @@ export function MapViewer({
                 </g>
               );
             })()}
-            {/* Editor hit targets — topmost, so grabbing a control or a
-                leg always wins over decorative overlay shapes. Handlers
-                live here (not in the memo) because they write refs. */}
-            {editor && !sharedHit && overlayContent && overlayContent.legHits.map((h) => (
-              <path key={h.key} d={h.d} stroke="transparent" strokeWidth={12} fill="none"
-                style={{ pointerEvents: "stroke", cursor: "copy" }}
-                data-testid="editor-leg-hit"
-                data-course-name={h.course}
-                data-leg-index={h.index}
-                onMouseDown={(e) => legHitMouseDown(h.course, h.index, e)}
-                onMouseUp={(e) => legHitMouseUp(h.course, h.index, e)}
-                onTouchStart={(e) => legHitTouchStart(h.course, h.index, e)}
-                onTouchEnd={(e) => legHitTouchEnd(h.course, h.index, e)} />
-            ))}
-            {editor && !sharedHit && overlayContent && overlayContent.controlHits.map((h) => (
-              <circle key={`edit-hit-${h.id}`} cx={h.px} cy={h.py} r={h.r}
-                fill="transparent" stroke="none"
-                style={{ pointerEvents: "all", cursor: editorDragPos ? "crosshair" : "move", touchAction: "none" }}
-                data-testid="editor-control-hit"
-                data-control-id={h.id}
-                data-control-code={h.code}
-                onMouseDown={(ev) => beginControlDragMouse(h.id, h.mmX, h.mmY, ev)}
-                onTouchStart={(ev) => beginControlDragTouch(h.id, h.mmX, h.mmY, ev)}
-                onTouchMove={handleControlTouchMove}
-                onTouchEnd={handleControlTouchEnd} />
-            ))}
-            {editor && !sharedHit && overlayContent && overlayContent.labelHits.map((h) => (
-              <rect key={`edit-label-${h.id}`}
-                x={h.px - h.w / 2} y={h.py - h.h / 2} width={h.w} height={h.h}
-                fill="transparent" stroke="none"
-                style={{ pointerEvents: "all", cursor: editorLabelDragPos ? "grabbing" : "grab", touchAction: "none" }}
-                data-testid="editor-label-hit"
-                data-control-id={h.id}
-                onMouseDown={(ev) => beginLabelDragMouse(h.id, h.mmX, h.mmY, h.from, ev)}
-                onTouchStart={(ev) => beginLabelDragTouch(h.id, h.mmX, h.mmY, h.from, ev)}
-                onTouchMove={handleLabelTouchMove}
-                onTouchEnd={handleLabelTouchEnd} />
-            ))}
             {/* Phantom selection — where the user clicked empty map / a leg */}
             {overlayContent && phantomPos && !editorDragPos && (
               <circle cx={phantomPos.x} cy={phantomPos.y}
@@ -3718,8 +2920,8 @@ export function MapViewer({
         </ul>
       )}
 
-      {/* Shared hit-testing has no SVG targets: every editor site as DOM, for tests (docs/course-editor.md §5). */}
-      {sharedHit && (
+      {/* Shared hit-testing has no DOM targets: every editor site as DOM, for tests (docs/course-editor.md §5). */}
+      {editor && (
         <ul data-testid="editor-sites" hidden>
           {controls.filter((c) => c.visible !== false && (c.x !== 0 || c.y !== 0)).map((c) => {
             const pend = pendingMoves.get(c.id);
@@ -3936,20 +3138,14 @@ export function MapViewer({
 // ─── Description sheet renderer ────────────────────────────
 
 function renderDescriptionSheet(
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any -- untyped GeoJSON JSONB straight from the API; traversed dynamically
-  courseGeometry: any,
   symbolScale: number,
   cw: number,
   ch: number,
   /** The highlighted courses. 1 → sequence card; >1 → code-sorted union. */
   activeCourses?: Array<Pick<CourseOverlay, "name" | "controls" | "classNames" | "lengthM" | "climbM" | "orderMode" | "descriptionInstructions">>,
-  /** All control overlays — used to resolve id → code/type when geometry is sparse. */
+  /** All control overlays — resolve id → code / type / description. */
   controlOverlays?: ControlOverlay[],
-  /**
-   * List every positioned control from the overlays instead of a course
-   * card. Set by the caller when no course is active; works without any
-   * course geometry.
-   */
+  /** List every positioned control from the overlays instead of a course card (no course active). */
   allControlsMode = false,
   /** Localized title for the all-controls listing. */
   allControlsTitle?: string,
@@ -3960,48 +3156,15 @@ function renderDescriptionSheet(
     mapScale?: number | null;
   } = {},
 ): React.ReactNode | null {
-  if (!courseGeometry?.features && !allControlsMode) return null;
-
-  const features = courseGeometry?.features || [];
-
-  // Build a code-keyed map from the geometry. Start/finish features have
-  // their own symbolType so they can't accidentally appear here, and we
-  // de-dup by code (the same control may show up in multiple courses).
-  const featureByCode = new Map<string, { code: string; description?: unknown }>();
-  for (const f of features) {
-    if (f?.properties?.symbolType === "control" && f.properties?.code) {
-      const code = String(f.properties.code);
-      if (!featureByCode.has(code)) {
-        featureByCode.set(code, {
-          code,
-          description: f.properties.description,
-        });
-      }
-    }
-  }
-  // Descriptions live on the control rows now (`controls.description`),
-  // exposed through the overlays. They take precedence over any legacy
-  // copy embedded in geometry feature properties.
-  for (const o of controlOverlays ?? []) {
-    if (!o.description) continue;
-    const existing = featureByCode.get(String(o.code));
-    if (existing) existing.description = o.description;
-  }
+  if ((activeCourses?.length ?? 0) === 0 && !allControlsMode) return null;
 
   /** Resolve one course-control id to a row (null for start/finish). */
   const toRow = (cid: string): { code: string; description?: unknown } | null => {
     // Look up overlay first: it tells us the type so we can skip start/finish.
     const overlay = controlOverlays?.find((o) => o.id === cid);
     if (overlay && overlay.type !== "Control") return null;
-    // The id used by the course is normally the punch code (OCD parser
-    // sets `id: code`). For IOF-parsed courses the id may differ, so
-    // also fall back to the overlay's code.
-    const lookupKey = String(overlay?.code ?? cid);
-    return {
-      code: lookupKey,
-      description:
-        overlay?.description ?? featureByCode.get(lookupKey)?.description,
-    };
+    // The overlay's code; the course's own id when no overlay knows it.
+    return { code: String(overlay?.code ?? cid), description: overlay?.description ?? undefined };
   };
 
   const byCodeAsc = (a: { code: string }, b: { code: string }) =>
@@ -4011,7 +3174,7 @@ function renderDescriptionSheet(
   // numbers (a proper course card). Several courses → the code-sorted
   // UNION of all their controls, without sequence numbers (there is no
   // shared sequence, and the map keeps showing codes). No course → every
-  // positioned control (`allControlsMode`) or all geometry codes.
+  // positioned control (`allControlsMode`).
   type Row = {
     code: string;
     description?: unknown;
@@ -4121,16 +3284,9 @@ function renderDescriptionSheet(
       if (o.type !== "Control" || o.visible === false) continue;
       const code = String(o.code);
       if (byCode.has(code)) continue;
-      byCode.set(code, {
-        code,
-        description: o.description ?? featureByCode.get(code)?.description,
-      });
+      byCode.set(code, { code, description: o.description ?? undefined });
     }
     rows.push(...[...byCode.values()].sort(byCodeAsc));
-  } else {
-    for (const f of featureByCode.values()) {
-      rows.push(f);
-    }
   }
 
   if (rows.length === 0) return null;

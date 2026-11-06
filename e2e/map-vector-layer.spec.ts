@@ -452,7 +452,7 @@ test.describe("vector map layer", () => {
     }
   });
 
-  test("a document whose colours cannot take the course layer says so; the SVG draws the course", async ({ page }) => {
+  test("a document whose colours cannot take the course layer says so and draws no course", async ({ page }) => {
     test.setTimeout(120_000);
     await openEvent(page);
     await viewerWithMap(page);
@@ -463,8 +463,12 @@ test.describe("vector map layer", () => {
       await page.reload();
       const viewer = page.getByTestId("map-panel").first().getByTestId("map-viewer");
       await expect(viewer.getByTestId("map-vector-layer")).toHaveAttribute("data-ready", "true", { timeout: 60_000 });
-      await expect(viewer).toHaveAttribute("data-course-layer", "svg", { timeout: 30_000 });
+      await expect(viewer).toHaveAttribute("data-course-layer", "none", { timeout: 30_000 });
       await expect(viewer.getByTestId("map-course-layer-unsupported")).toBeVisible();
+      // No second renderer (E4b): no layer mirror, no SVG course symbols or
+      // numbers — the map shows no course until it is re-imported.
+      await expect(viewer.getByTestId("course-layer")).toHaveCount(0);
+      await expect(viewer.getByTestId("control-label")).toHaveCount(0);
     } finally {
       await restore();
     }
