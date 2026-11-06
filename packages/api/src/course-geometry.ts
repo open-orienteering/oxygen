@@ -25,10 +25,13 @@ import { loadEventCutFeatures } from "./event-map-objects.js";
 import { courseSequenceOf } from "./course-structure.js";
 
 /**
- * Increment when stored automatic cut/gap semantics change; events below
- * it get their editor courses rebuilt on the next geometry read.
- * 1: OCAD-parse cuts. 2: knolls and rocks only. 3: written by the course
- * layer, size-aware cuts, features from the pinned document on `vector`.
+ * The stored automatic cut/gap semantics `courses.geometry` is written
+ * with, stamped on `events.overprint_cuts_version` by the writes that
+ * rebuild every editor course (map upload, rotation, the toggle) until
+ * E5 drops both. 1: OCAD-parse cuts. 2: knolls and rocks only. 3: written
+ * by the course layer, size-aware cuts, features from the pinned
+ * document. Nothing reads it since E6 (the lazy read-migration went with
+ * `course.geometry`); v0.5.0 still migrates an event below it on rollback.
  */
 export const OVERPRINT_CUTS_VERSION = 3;
 
@@ -297,34 +300,4 @@ export async function rebuildCourseGeometry(
 
     await db.course.update({ where: { id: courseUuid }, data });
   }
-}
-
-/**
- * Lazily migrate editor-authored geometry after an overprint-cut algorithm
- * change. Imported OCD/XML geometry is deliberately untouched.
- */
-export async function ensureOverprintCutsCurrent(
-  db: Db,
-  eventId: bigint,
-): Promise<void> {
-  const event = await db.event.findUnique({
-    where: { id: eventId },
-    select: { overprintCutsVersion: true },
-  });
-  if (!event || event.overprintCutsVersion >= OVERPRINT_CUTS_VERSION) return;
-
-  const courses = await db.course.findMany({
-    where: { eventId, removed: false, geometrySource: "editor" },
-    select: { id: true },
-  });
-  await rebuildCourseGeometry(
-    db,
-    eventId,
-    courses.map((course) => course.id),
-    { updateLength: false },
-  );
-  await db.event.update({
-    where: { id: eventId },
-    data: { overprintCutsVersion: OVERPRINT_CUTS_VERSION },
-  });
 }

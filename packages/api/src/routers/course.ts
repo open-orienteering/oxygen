@@ -59,7 +59,6 @@ import { colorProfileSchema } from "@oxygen/shared";
 import { canDownloadEventMap } from "../ocad-export.js";
 import { loadEventCrs } from "../event-crs.js";
 import {
-  ensureOverprintCutsCurrent,
   OVERPRINT_CUTS_VERSION,
   rebuildCourseGeometry,
 } from "../course-geometry.js";
@@ -1122,65 +1121,6 @@ export const courseRouter = router({
         await emitCourseUpserted(tx, ctx.event.id, c.id);
       });
       return { ok: true };
-    }),
-
-  /** GeoJSON FeatureCollection for one course (control circles + leg lines). */
-  geometry: coursesViewProcedure
-    .input(z.object({ id: z.number().int() }))
-    .query(async ({ ctx, input }) => {
-      await ensureOverprintCutsCurrent(ctx.db, ctx.event.id);
-      const c = await ctx.db.course.findFirst({
-        where: { eventId: ctx.event.id, seq: input.id },
-        select: { geometry: true },
-      });
-      if (!c?.geometry)
-        return { type: "FeatureCollection" as const, features: [] as unknown[] };
-      return c.geometry as unknown as {
-        type: "FeatureCollection";
-        features: unknown[];
-      };
-    }),
-
-  /**
-   * Per-course geometry for many courses at once (used by map overlays).
-   * Returns a name-keyed map (legacy shape) — the web `MapPanel` joins
-   * several feature collections into one before handing to the viewer.
-   */
-  courseGeometries: kioskOrCoursesViewProcedure
-    .input(
-      z
-        .object({
-          ids: z.array(z.number().int()).optional(),
-          courseNames: z.array(z.string()).optional(),
-        })
-        .optional(),
-    )
-    .query(async ({ ctx, input }) => {
-      await ensureOverprintCutsCurrent(ctx.db, ctx.event.id);
-      const where: Record<string, unknown> = {
-        eventId: ctx.event.id,
-        removed: false,
-      };
-      if (input?.ids && input.ids.length > 0) where.seq = { in: input.ids };
-      if (input?.courseNames && input.courseNames.length > 0) {
-        where.name = { in: input.courseNames };
-      }
-      const rows = await ctx.db.course.findMany({
-        where,
-        select: { seq: true, name: true, geometry: true, geometrySource: true },
-      });
-      const out: Record<
-        string,
-        { type: "FeatureCollection"; features: unknown[] }
-      > = {};
-      for (const r of rows) {
-        if (!r.geometry) continue;
-        out[r.name] = r.geometry as unknown as {
-          type: "FeatureCollection";
-          features: unknown[];
-        };
-      }
-      return out;
     }),
 
   /**
