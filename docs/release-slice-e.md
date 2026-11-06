@@ -75,6 +75,31 @@ Re-insert exactly the flags the instance had before the flip: note them
 (`SELECT key, value FROM oxygen.settings WHERE key LIKE 'map.%'`) before
 running the v0.6.0 migration.
 
+**The image and the server's legacy code (E4a).** No migration. The
+v0.6.0 API image has no `rsvg-convert` (`librsvg2-bin`) and no
+`fonts-liberation`: printing embeds the bundled fonts. The server
+renders no tiles (`/api/map-tile*`, `/api/club-map-preview/*` and
+`/api/maps/:nameId/window.png` answer 404) and `map_tiles` is no longer
+written; its rows (517 MB on the club's production database at E0) stay
+until E5 drops the table. Tile env vars on the Cloud Run revision —
+`MAP_TILE_BLOCK_TILES`, `MAP_TILE_SUPERSAMPLE`, `MAP_TILE_PRECACHE`,
+`MAP_PRECACHE_*`, `MAP_RENDER_MAX_QUEUE`, `MAP_SVG_CACHE_EVENTS`,
+`MAP_WINDOW_MAX_PIXELS` — are ignored and can be removed after v0.6.1
+(v0.5.0 falls back to its defaults without them);
+`MAP_RENDER_CONCURRENCY` and `PRINT_WORKERS` stay. The colour-stack
+settings (the map-info select, the club card's select and north-lines
+checkbox) are gone from the UI; the columns keep their values.
+
+**Rollback and E4a.** The upload still writes everything v0.5.0 reads —
+`map_files.file_data` / `file_hash` / `render_key` / colour columns, the
+`club_map_files` row — and a rotation change still refreshes
+`render_key` and collects orphan tiles, so v0.5.0's tiles and prints
+work after a rollback. Its image brings its own `rsvg-convert` and
+fonts. Two things it rebuilds lazily: `club_map_files.preview_png` of a
+club map uploaded under v0.6.0 (rendered on the first preview request),
+and tiles of a map uploaded under v0.6.0 (rendered on first view, as
+after any upload).
+
 ## 2. v0.6.1
 
 (Written with E5.)
