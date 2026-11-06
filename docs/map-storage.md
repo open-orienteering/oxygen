@@ -510,8 +510,8 @@ step — `course.applyUploadedMap {fileHash, fileName?}` for an event,
 `clubMap.addFromSource {fileHash, fileName?, name?}` for the library.
 Both reject a `fileHash` whose source kind is not `ocad`: a Mapper
 source imports to a document through the job (§6) but cannot be made an
-event's or a club's map until the legacy tile consumers are replaced
-(`docs/map-import.md` §2.2). `fileName` overrides the name recorded on the
+event's or a club's map until the upload's OCAD parse and its dual
+writes go (E5; `docs/map-import.md` §2.2). `fileName` overrides the name recorded on the
 upload — the source row keeps whatever the first uploader called it, so
 the event's `map_files.file_name` and the version label come from the
 request, not the shared row.
@@ -1223,11 +1223,16 @@ lands with its own section here and its own tests.
 
 Slice E (`SLICES.md`): the upload still parses the OCAD file for the
 row's quick-access columns and `north_detection`, and still writes
-`file_data`, `render_key` and `club_map_files` — for rollback to
-v0.5.0, until E5 drops them; the legacy renderers (`map-tiles.ts`,
-`map-source.ts` `parsedMap`, `club-map-preview.ts`) still parse
-`file_data` until E4a deletes them. E3 removed `pinnedDocumentHash` and
-its `map_pipeline` gate.
+`file_data`, `file_hash`, `render_key`, the colour-stack columns and
+`club_map_files` — for rollback to v0.5.0, until E5 drops them;
+`render_key` is refreshed after a rotation change and `gcOrphanTiles`
+still runs after an upload, a rotation change, a club map removal and
+an event purge, so v0.5.0 finds its tiles. Nothing in this version
+reads `file_data` any more: E4a deleted the legacy renderers
+(`map-tiles.ts`, `map-source.ts` `parsedMap`, `club-map-preview.ts`)
+and the colour-stack procedures; `club_map_files.preview_png` is no
+longer written (§6.5). E3 removed `pinnedDocumentHash` and its
+`map_pipeline` gate.
 
 ## 10. Tests
 

@@ -209,9 +209,6 @@ Direct integration with the Swedish Orienteering Federation's Eventor API:
 ### Online Input (ROC)
 Per-event pull from a remote radio-control service. Currently supports the ROC protocol used by [roc.olresultat.se](https://roc.olresultat.se) (and OResults' compatible endpoint). One `setInterval` timer per event runs on the instance holding the background-jobs lease, polling the configured endpoint with a `lastId` watermark and inserting new rows into `punches` (with `source = 'online_input'`). The watermark advances in the same transaction as the inserts, and only if it still reads the value the poll started from, so a poller that raced another one rolls back rather than importing the same punches twice. Architecture and the SICenter forward-compat path are documented in [online-input-roc.md](online-input-roc.md). Code lives in `packages/api/src/online-input/` with a small `Protocol` interface so a second protocol (SICenter) is later a single new file plus a UI dropdown entry.
 
-### Map tile rendering
-Uploaded OCAD maps are served to the web viewer as slippy-map tiles. A tile request that misses the `map_tiles` cache rasterises a *window* — the region covered by a small block of tiles, expressed as a `viewBox` sub-rectangle of the map SVG — at a density derived from those tiles, then warps each tile out of it. Peak memory follows the block rather than the map, deep zoom stays sharp because the window is rendered denser than its tiles, and nothing in the path requires a single process: the cache is the `map_tiles` table and `/api/map-tile-progress` is computed from the database. See [map-tile-rendering.md](map-tile-rendering.md).
-
 ### Printable course maps
 
 `GET /api/maps/:nameId/maps.pdf` composes every page from the event's

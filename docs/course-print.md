@@ -556,7 +556,7 @@ re-import (the review's colour decisions).
    - **Shutdown.** The route's server `onClose` hook terminates the
      workers (`resetPrintWorkers`).
 4. A worker slot (`printGate`), **then** a permit of the process's
-   render gate (`renderGate()`, `MAP_RENDER_CONCURRENCY`, default 3;
+   render gate (`renderGate()`, `MAP_RENDER_CONCURRENCY`, default 2, 3 on Cloud Run;
    `map-render-limits.ts`), **without a queue cap**: the request waits
    and never answers 503 — the export is a browser download, where a
    503 body would arrive as a broken file. Since E4a nothing else takes

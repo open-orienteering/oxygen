@@ -1,19 +1,13 @@
 /**
- * The render-key helpers run on the map-tile hot path — once per tile
- * request, including cache hits — so they must never pull the OCAD blob
- * (`file_data`, often 5–40 MB) unless the hash genuinely has to be
- * computed. The September 2026 Cloud Run incident
- * (docs/bugfix-map-tile-cold-render-cloud-timeouts.md) came from exactly
- * that: every tile request dragged the whole map through Cloud SQL.
+ * The render-key writes kept for the v0.5.0 rollback (E4a; E5 drops the
+ * column) must not pull the OCAD blob (`file_data`, often 5–40 MB) unless
+ * the hash genuinely has to be computed
+ * (docs/bugfix-map-tile-cold-render-cloud-timeouts.md).
  */
 
 import { describe, expect, it } from "vitest";
-import {
-  ensureClubMapRenderKey,
-  ensureEventMapRenderKey,
-  refreshClubMapRenderKey,
-  refreshMapFileRenderKey,
-} from "../map-render-cache.js";
+import * as cache from "../map-render-cache.js";
+import { refreshClubMapRenderKey, refreshMapFileRenderKey } from "../map-render-cache.js";
 import { computeRenderKey, hashMapFileData } from "../map-render-key.js";
 
 const FILE = Buffer.from("fake ocad bytes");
@@ -88,66 +82,10 @@ function fakeDelegate(row: Row) {
   return { delegate, selects, updates, askedForBlob };
 }
 
-describe("ensureEventMapRenderKey", () => {
-  it("does not read file_data when the hash is already stored", async () => {
-    const row = baseRow();
-    const fake = fakeDelegate(row);
-    const meta = await ensureEventMapRenderKey(
-      { mapFile: fake.delegate } as never,
-      1n,
-    );
-    expect(meta?.renderKey).toBe(row.renderKey);
-    expect(fake.askedForBlob()).toBe(0);
-    expect(fake.updates).toHaveLength(0);
-  });
-
-  it("reads file_data exactly once to backfill a missing hash, then persists it", async () => {
-    const row = baseRow({ fileHash: null, renderKey: null });
-    const fake = fakeDelegate(row);
-    const meta = await ensureEventMapRenderKey(
-      { mapFile: fake.delegate } as never,
-      1n,
-    );
-    expect(meta?.fileHash).toBe(FILE_HASH);
-    expect(fake.askedForBlob()).toBe(1);
-    expect(fake.updates).toEqual([
-      { fileHash: FILE_HASH, renderKey: meta!.renderKey },
-    ]);
-
-    // Second call: hash is stored now, so no blob read at all.
-    const again = fakeDelegate(row);
-    await ensureEventMapRenderKey({ mapFile: again.delegate } as never, 1n);
-    expect(again.askedForBlob()).toBe(0);
-  });
-
-  it("recomputes a stale render_key from the stored hash without touching the blob", async () => {
-    const row = baseRow({ renderKey: "stale" });
-    const fake = fakeDelegate(row);
-    const meta = await ensureEventMapRenderKey(
-      { mapFile: fake.delegate } as never,
-      1n,
-    );
-    expect(meta?.renderKey).not.toBe("stale");
-    expect(fake.askedForBlob()).toBe(0);
-    expect(fake.updates).toHaveLength(1);
-  });
-});
-
-describe("ensureClubMapRenderKey", () => {
-  it("does not read file_data when the hash is already stored", async () => {
-    const fake = fakeDelegate(baseRow());
-    await ensureClubMapRenderKey({ clubMapFile: fake.delegate } as never, 7n);
-    expect(fake.askedForBlob()).toBe(0);
-  });
-
-  it("backfills a missing hash with a single blob read", async () => {
-    const fake = fakeDelegate(baseRow({ fileHash: null, renderKey: null }));
-    const meta = await ensureClubMapRenderKey(
-      { clubMapFile: fake.delegate } as never,
-      7n,
-    );
-    expect(meta?.fileHash).toBe(FILE_HASH);
-    expect(fake.askedForBlob()).toBe(1);
+describe("module surface", () => {
+  // The lazy read helpers (`ensure*RenderKey`) went with the tiles in E4a.
+  it("keeps only the writes and the orphan-tile collection", () => {
+    expect(Object.keys(cache).sort()).toEqual(["gcOrphanTiles", "refreshClubMapRenderKey", "refreshMapFileRenderKey"]);
   });
 });
 

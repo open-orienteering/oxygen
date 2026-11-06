@@ -485,5 +485,6 @@ sheet prints through `classes` or `maps`.
   rectangles, text and images still by bounds — flagged for the user
   (feedback 2026-11-04, "Flagged for the morning").
 - **GL-drawn images** with their crop (§1).
-- **Retiring `MapLayoutEditor` and `window.png`** — unreachable since
-  E3 (the `map.editor.vector` gate is gone); deleted in E4c / E4a.
+- **Retiring `MapLayoutEditor`** — unreachable since E3 (the
+  `map.editor.vector` gate is gone); deleted in E4c. Its map preview,
+  `window.png`, went in E4a.

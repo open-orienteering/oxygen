@@ -297,37 +297,30 @@ image ships `postgresql-client`.
 
 ## Sizing notes
 
-- **Map tile memory.** The renderer rasterises one *window* — the region
-covered by a block of tiles — per render, so peak memory follows the
-block size rather than the map size. With the defaults (4×4 tiles,
-2× supersampling, 2 concurrent renders, composite + ink side by side)
-that is roughly 600 MB for any map. The knobs are in
-`packages/api/src/map-render-limits.ts` and all have env overrides
-(`MAP_TILE_BLOCK_TILES`, `MAP_TILE_SUPERSAMPLE`,
-`MAP_RENDER_CONCURRENCY`, `MAP_RENDER_MAX_QUEUE`, `MAP_SVG_CACHE_EVENTS`,
-`MAP_WINDOW_MAX_PIXELS`); none needs setting in normal operation.
-`maps.pdf` composes in a worker thread (`course-print.md` §8.2):
-`PRINT_WORKERS` (default `1`, max `4`) is how many prints compose at once;
-each worker holds a decoded map document and fonts (a Club-full print run
-peaked at 2.6 GB RSS), so on 2 vCPU / 4 GiB keep it at 1, or 2 for small
-maps. Workers use no database connection.
-The 4 GiB allocation is headroom for parsing a large club OCAD into an
-SVG DOM, which still spikes, not for the tiles themselves.
-- **Tile requests never wait longer than the queue bound.** Cloud Run
-admits 160 requests per instance and holds each for up to 300 s, while
-the renderer runs 3 blocks at a time. Left unbounded, a cold viewport
-queued past the cap and every tile 504'd while the waiting requests
-starved tRPC of connections (September 2026, see
-[bugfix-map-tile-cold-render-cloud-timeouts.md](bugfix-map-tile-cold-render-cloud-timeouts.md)).
-The route now refuses with `503 Retry-After: 5` once
-`MAP_RENDER_MAX_QUEUE` (4) blocks are already waiting; the client backs
-off and the viewport fills in progressively. Brief 503 bursts right
-after a render-key change are expected; a steady stream means the
-renderer is under-provisioned for the load.
-- **`--cpu=2` and `MAP_RENDER_CONCURRENCY=3`.** Tile rendering is the
-only genuinely CPU-bound thing the service does, and on a single
-throttled vCPU a fresh club map took minutes to fill — the render
-semaphore had nothing to overlap onto. Two vCPUs let it run for real.
+- **Print and import memory.** `maps.pdf` composes in a worker thread
+(`course-print.md` §8.2): `PRINT_WORKERS` (default `1`, max `4`) is how
+many prints compose at once; each worker holds a decoded map document and
+fonts (a Club-full print run peaked at 2.6 GB RSS), so on 2 vCPU / 4 GiB
+keep it at 1, or 2 for small maps. Workers use no database connection.
+The rest of the 4 GiB is headroom for the map import worker (an OCAD
+file parsed into a map document) and the upload, which still parses the
+OCAD file for its quick-access columns until E5.
+- **The render gate.** Each print also takes a permit of the process's
+render gate (`renderGate()` in `packages/api/src/map-render-limits.ts`,
+`MAP_RENDER_CONCURRENCY`, default 2, `deploy.sh` sets 3). Since E4a the
+viewer draws the map document on the GPU and the server renders no
+tiles: the tile renderer and its knobs are gone. `MAP_TILE_BLOCK_TILES`,
+`MAP_TILE_SUPERSAMPLE`, `MAP_TILE_PRECACHE`, `MAP_PRECACHE_MIN_ZOOM`,
+`MAP_PRECACHE_MAX_ZOOM`, `MAP_PRECACHE_BLOCK_DELAY_MS`,
+`MAP_RENDER_MAX_QUEUE`, `MAP_SVG_CACHE_EVENTS`, `MAP_WINDOW_MAX_PIXELS`
+(and the older `MAP_RASTER_MAX_PIXELS` / `MAP_RASTER_CACHE_EVENTS`) set
+on a revision are ignored and can be removed; the v0.5.0 image, which
+reads them, falls back to its defaults without them. The September 2026
+tile incident and the whole-map raster OOM before it are recorded in
+[bugfix-map-tile-cold-render-cloud-timeouts.md](bugfix-map-tile-cold-render-cloud-timeouts.md).
+- **`--cpu=2` and `MAP_RENDER_CONCURRENCY=3`.** The CPU-bound work the
+service does is a map import and a print, both in worker threads; two
+vCPUs let them run beside request handling instead of starving it.
 The extra CPU is free in idle mode: request-based billing charges per
 vCPU-second of *request* time, and club traffic sits far under the
 180,000 vCPU-second monthly free tier. Event mode is instance-based and
@@ -335,14 +328,6 @@ bills the whole instance lifetime, so the second vCPU costs
 $0.000018/vCPU-second there — about $1.55/day. That is the one place
 this setting shows up on a bill; flip back to idle mode after the
 weekend as usual.
-  This replaced a design that rasterised the whole map into one bitmap
-  and resampled every tile from it. That bitmap reached 3.2 GB (~6.5 GB
-  peak) on a large map, OOM-killed the 4 GiB container — `Memory limit of
-  4096 MiB exceeded` plus `Container terminated on signal 9`, an instance
-  restart loop and tiles that never loaded — and the cap that made it fit
-  also made deep zoom blurry. Both problems are gone; if you still have
-  `MAP_RASTER_MAX_PIXELS` or `MAP_RASTER_CACHE_EVENTS` set on a revision,
-  they are ignored and can be removed.
 - **`--max-instances=2` and `DATABASE_POOL_MAX=8`.** These two belong
 together: the binding constraint on scale-out is Cloud SQL connections,
 not the application. A `db-f1-micro` allows 25 and reserves 3 for
@@ -379,39 +364,13 @@ numbers together — raising `--max-instances` alone exhausts the budget.
   # run.googleapis.com/maxScale: '2'        <- service level, wins
   #   autoscaling.knative.dev/maxScale: '2' <- revision level
   ```
-  The code side no longer objects. Tiles are stateless (any instance can
-  render any tile, and `/api/map-tile-progress` comes from the database),
-  and the background jobs that must not run twice elect a single runner
+  The code side no longer objects. Prints and map documents are
+  stateless (any instance can compose any print; documents are
+  content-addressed rows), and the background jobs that must not run
+  twice elect a single runner
   through the `oxygen.instance_lease` table — see
   [background-jobs-lease.md](background-jobs-lease.md). Extra instances
   therefore only serve requests.
-- **Background tile pre-caching** can be disabled with
-`MAP_TILE_PRECACHE=off` if you would rather spend request CPU on
-requests. Tiles are then rendered purely on demand.
-- **Tile pre-caching after a map upload** renders thousands of tiles into
-`map_tiles` (visible as elevated Cloud SQL write throughput for a few
-minutes). In idle mode the background job only gets CPU while requests
-are in flight, which is why `/api/map-tile-progress` renders a couple of
-blocks itself on each poll: keeping the map open in a tab is what drives
-it to completion, and the polling client now keeps asking until the
-server reports it done. See
-[map-tile-rendering.md](map-tile-rendering.md#the-progress-poll-is-also-the-engine).
-Uploading while in event mode is still faster, since CPU is allocated
-continuously there.
-- **Cloud CDN for tiles: evaluated, deferred.** Tempting, because tiles
-are immutable per upload and dominate request volume. The blockers are
-cost and topology, not caching: Cloud CDN attaches only to a *global
-external Application Load Balancer* via a serverless NEG, which means a
-forwarding rule at $0.025/hour (~$18/month, versus ~$0 today for
-Cloud-Run-native IAP) and moving IAP off the Cloud Run integration onto
-the LB, with a URL-map split so `/api/map-tile/*` reaches a
-CDN-enabled backend while everything else stays behind IAP. That split
-also needs the tile route to carry its own unguessable token, since
-tile paths are enumerable `/api/map-tile/<event-slug>/z/x/y` — the
-per-event kiosk key (`randomBytes(24)`) is the existing building block.
-Worth revisiting if events start drawing many simultaneous viewers; the
-service-worker tile cache and the 2 vCPU bump cover club-scale use for
-nothing.
 - Cloud SQL `db-f1-micro` (0.6 GB shared core) is enough for club-scale
 events. If map blobs push the DB hard, `db-g1-small` (~$26/mo) is the
 next step up.
@@ -426,13 +385,19 @@ image (`OXYGEN_BUILD_ID`). GHCR publishes use the git SHA; `--from-source`
 uses SHA + timestamp. If prompts recur without a deploy, check
 that the running revision has `OXYGEN_BUILD_ID` set
 (`gcloud run services describe "$SERVICE" --region="$REGION" --format=yaml | grep -A1 OXYGEN_BUILD_ID`).
-- **Map never loads / instance restart loop / high DB load.** Confirm
+- **Instance restart loop / `Memory limit … exceeded`.** Confirm
 with
-`gcloud logging read 'resource.labels.service_name="oxygen" severity>=WARNING' --limit=20`
-and look for `Memory limit … exceeded`. On revisions predating the
-windowed tile renderer this was the whole-map raster OOM (see Sizing
-notes); since then the likely culprit is parsing an unusually large
-OCAD, so raise `--memory` or lower `MAP_SVG_CACHE_EVENTS`.
+`gcloud logging read 'resource.labels.service_name="oxygen" severity>=WARNING' --limit=20`.
+On revisions before v0.6.0 this was the tile renderer (see
+[bugfix-map-tile-cold-render-cloud-timeouts.md](bugfix-map-tile-cold-render-cloud-timeouts.md));
+since then the likely culprits are importing an unusually large OCAD
+file or several large prints at once, so raise `--memory` or keep
+`PRINT_WORKERS` at 1.
+- **Map never loads.** The viewer reads the event's pinned map document
+(`/api/map-documents/:hash`); a map whose import has not pinned one
+shows the import state instead (`map-storage.md` §4.6). Check the
+import job (`mapImport.latestForEvent`, or Settings → Maintenance →
+**Map documents**) before the instance.
 
 ## What this deployment does NOT change
 
