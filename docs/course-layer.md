@@ -128,7 +128,8 @@ viewer builds its static buckets on `courseColourStack(header.colours)`
 from the load, course shown or not (`map-rendering.md` §5.2 "Dynamic
 bucket"), so a course never re-prepares the map. `courseLayer` throws
 `CourseStackError` for an unaligned stack; the viewer (C4) catches it
-and falls back to the legacy overlay rather than fail the view. The
+and draws the map without a course, with a notice, rather than fail the
+view (`map-rendering.md` §5.4 "Fallback"). The
 stored GeoJSON (C5) is computed on a fixed ISOM stack (§4.1), which never
 throws.
 
@@ -239,9 +240,14 @@ appearing in several roles takes its first.
 
 ### 3.4 Automatic cuts
 
-`circleCuts` / `legGaps` in `cuts.ts` (`docs/course-editor-legacy.md`
-"Automatic overprint cuts"; size-aware since C5, user decision
-2026-10-24). Each feature carries the radius `r` of its drawn symbol; the
+`circleCuts` / `legGaps` in `cuts.ts` (size-aware since C5, user
+decision 2026-10-24). The purple overprint must not hide compact map
+detail, so it is cut around **small point objects only** — circle slits
+and leg gaps reveal knolls, rocky pits and boulders; long objects
+(cliffs, paths, walls, buildings, areas) stay uncut, the colour stack
+keeps their ink readable without fragmenting the purple. There is no
+manual cut tool; a setter's explicit gaps arrive as stored `circleGaps`
+/ leg `gaps` (importers, the gap tool). Each feature carries the radius `r` of its drawn symbol; the
 line it may touch is drawn `w` wide. Its **clearance** is
 
   c = r + w / 2 + `CUT_AIR_MM` (0.25 mm)
@@ -300,7 +306,7 @@ user review). The flag reaches every consumer of the layer:
 |---|---|
 | GL course layer (every `MapPanel`: course views, kiosk, the editors, Layout mode) | `MapPanel` reads `course.getOverprintCuts` (kiosk-readable) and passes `autoCuts` to `MapViewer` → `courseLayerRequest` → `viewOptions.autoCuts` (§5); the editors' toggle refetches the same query, so the canvas redraws without a reload. Until the query answers, cuts are on |
 | Vector print (`maps.pdf`, `course-print.md` §8.2) | the route passes `event.autoOverprintCuts` as `MapRowContext.autoCuts` → `resolveSheet` → the sheet's `course.viewOptions.autoCuts` → `composePage`; `courseMap.resolveSheet` (Layout mode's sheet) does the same |
-| Legacy artifact (`course.geometry`, the legacy PDF and SVG overlay) | `rebuildCourseGeometry` passes no `cutFeatures` when off (§4.2) and `setOverprintCuts` rebuilds every editor course. The artifact carries no stored gaps at all (Pending "Structure, beyond D1": the writer does not carry authored cuts and gaps), so under `legacy` the toggle off draws **no** cuts — the one difference from the rule above, closed when the writer carries stored gaps |
+| Legacy artifact (`course.geometry`, the legacy PDF; the viewer's SVG overlay read it until E4b) | `rebuildCourseGeometry` passes no `cutFeatures` when off (§4.2) and `setOverprintCuts` rebuilds every editor course. The artifact carries no stored gaps at all (Pending "Structure, beyond D1": the writer does not carry authored cuts and gaps), so under `legacy` the toggle off draws **no** cuts — the one difference from the rule above, closed when the writer carries stored gaps |
 
 ### 3.5 Numbers
 
@@ -359,7 +365,7 @@ compatibility artifact C5 writes for consumers not yet ported (09 §4 C):
 
 Points first, then legs — the shape and order the editor
 wrote before C5, so an editor course's stored GeoJSON keeps its consumers
-(legacy viewer, kiosk, lengths, exports). Clipped leg pieces, numbers and
+(lengths, exports; the legacy viewer and kiosk overlay until E4b). Clipped leg pieces, numbers and
 course objects (707 / 708 / 709 / 711 and the rest, §8) are not projected:
 consumers clip and place themselves today. An imported course's own
 GeoJSON keeps what its file drew (`preclipped` pieces, the course-level
@@ -468,7 +474,7 @@ worker runs `courseLayer` on the request plus the document context and
 the cut features it extracted at load, symbolises the layer alone and
 prepares one always-resident part drawn in colour order with the static
 buckets. The React SVG keeps the UI layer only (`map-rendering.md` §5.4
-"Overlay"); under `legacy` nothing changes.
+"Overlay").
 
 **Request** (`packages/web/src/lib/course-layer-request.ts`, pure):
 
@@ -476,7 +482,7 @@ buckets. The React SVG keeps the UI layer only (`map-rendering.md` §5.4
 |---|---|
 | `sites` | every visible control (`visible !== false`) with a position — its own paper mm, the editor's dragged position or a move still round-tripping — `code` its display code, `kind` from its type; the editor's faded off-course controls are left out (the UI layer draws them faded) |
 | `structure` | the highlighted courses (`highlight` or `highlightCourseName`) in order, one `CourseStructure` each, `id` = the course name, `items` = its control ids (start and finish as `MapPanel` completes them), `orderMode` the course's; `null` when none is highlighted |
-| `labelOffsets` | the single highlighted course's, with a drag or a pending label move winning — only with the description sheet or the editor (the SVG overlay's rule) |
+| `labelOffsets` | the single highlighted course's, with a drag or a pending label move winning — only with the description sheet or the editor |
 | `leg`, `numberHidden`, `circleGaps` | from the stored structure (§6.4), not from the GeoJSON: each item's `leg.gaps` from `course.list`'s `legGaps` (keyed `"<from>><to>"`, public control ids), `numberHidden` from its `hiddenNumbers`, each site's `circleGaps` from `course.controlCoordinates`. A course with no stored structure has none (the automatic cuts); 707 / 708 / 709 / 711 are course objects (`objects` below) |
 | `viewOptions` | `labelMode: "sequence"` for one ordered course with the sheet or the editor, else `"code"`; `allControls` when a drawn site is on no highlighted course; `autoCuts: false` when the event's toggle is off (`course.getOverprintCuts`, read by `MapPanel`; no key when on, §3.4) |
 | `objects` | the event's course objects in scope of the highlighted courses (`courseObjectsForView`, §8.2; `all`-scoped only when none is highlighted), without scope, `z` or token — `MapPanel` fetches `courseObject.list` and hands them to the viewer; no sheet's layout objects reach the viewer |
@@ -486,13 +492,15 @@ buckets. The React SVG keeps the UI layer only (`map-rendering.md` §5.4
 | `cutFeatures` | added by the worker: `cutFeaturesOfDocument(doc)` once per document load |
 
 **Reply.** The derivation (sites with number positions and leaders, legs
-with their drawn pieces) and the symbol sizes come back with the part; the
-UI layer draws its hit targets, status rings and leg pills from them and
+with their drawn pieces), the symbol sizes and the hit index come back with
+the part; the UI layer sizes its rings from them, the editor hit-tests the
+index (`map-rendering.md` §5.5) and
 the viewer mirrors the drawn numbers and legs as a hidden DOM list
 (`map-rendering.md` §5.4 "Attributes").
 
 **Unaligned stack.** A document whose stack throws `CourseStackError`
-draws the SVG course overlay over the GL map instead (§1).
+draws no course, with a notice, until it is re-imported (§1;
+`map-rendering.md` §5.4 "Fallback").
 
 ## 6. Structure
 
@@ -546,7 +554,7 @@ LegProps = { style?: "line" | "marked_route" | "none", gaps?: { from, to }[],
 
 ### 6.2 The column mirror
 
-What timing, export, the kiosk and the legacy editor read stays in the
+What timing, export, the kiosk and the Courses page read stays in the
 flat columns, written **in the same transaction** as the structure and a
 pure function of it (`splitStructure`, `packages/api/src/course-structure.ts`):
 
@@ -788,8 +796,8 @@ editor refreshes, re-renders the sequence with a one-line notice naming
 the differing items, and the user redoes the edit — concurrent
 reordering is always a conflict, by design.
 
-**Legacy editor.** `CourseEditorPage` and the Courses page send the
-token too, through the same mutations: a `VersionBook`
+**Courses page, Layout mode and the editor's write client.** They send
+the token through the same mutations: a `VersionBook`
 (`packages/web/src/lib/version-book.ts`) keeps the newest token per row
 from the list refetches and each mutation's result — `course.update`,
 `control.update`, `course.setControlLabelOffset`, `course.create` /
@@ -797,7 +805,7 @@ from the list refetches and each mutation's result — `course.update`,
 courses it advanced — so undo / redo and back-to-back writes send their
 predecessor's token; on a version
 `CONFLICT` they invalidate and show "Changed elsewhere — reloaded"
-(`courses:changedElsewhere`). One rule for both editors on the same rows.
+(`courses:changedElsewhere`). One rule for every writer of the same rows.
 
 **Presence and live refresh** (D11; `course-editor.md` §11). No new push
 channel: a heartbeat `course.presence { courseId, mode, clientId }` upserts
@@ -1064,7 +1072,7 @@ for a check (decision log, D6).
 | unit | `packages/api/src/__tests__/course-structure.test.ts` | §6.2: `splitStructure` (explicit start / finish, implicit default, role start / finish, a start mid-sequence), `structureFromColumns` and its round trip, wire ↔ stored mapping |
 | unit | `packages/api/src/__tests__/version-conflict.test.ts` | §7: the `errorFormatter` lifts the payload beside tRPC's fields and leaves the duplicate-code `CONFLICT` alone; `controlFieldsDiff`; `baseVersionSchema` |
 | integration | `packages/api/src/__tests__/integration/course-structure.test.ts` | kind ↔ status sync, slice-F kinds refused, circle gaps; `course.update` writes a structure, token = the entry's HLC, structure and token in the payload; a pre-D0 course reads from its columns; `setStructure` mirror (start / finish, sequence, hidden numbers, label offsets not in the column), geometry byte-identical to `update`'s, variations and unknown controls refused; stale course token → `CONFLICT` with current and differing, nothing written, no token = LWW; stale control token → differing fields; `differing: null` at token 0; separate tokens both ways; `control.delete` prunes and advances; seeded groups hold `courses.review`; a controller checks off and writes notes but cannot move |
-| unit (web) | `packages/web/src/lib/__tests__/version-book.test.ts` | §7 legacy editor: newest token as an integer compare, list seeding, the conflict payload off a client error, public id after a code change |
+| unit (web) | `packages/web/src/lib/__tests__/version-book.test.ts` | §7 `VersionBook`: newest token as an integer compare, list seeding, the conflict payload off a client error, public id after a code change |
 | E2E | `e2e/courses.spec.ts` "an edit from a stale copy…" | §7 over HTTP: another client renames the course while this page's poll is held; this page's edit is refused, the notice shows, the page reloads the other write |
 | unit | `packages/api/src/__tests__/course-import-structure.test.ts` | §6.4: pieces → leg gaps (one piece none, two pieces one gap as fractions, either direction, touching pieces and off-axis pieces), per-course leg gaps by `from>to`, the object kinds and scopes, dedupe, leg cuts and description boxes ignored |
 | unit | `ocd-course-parser.test.ts`, `course-backfill-cli.test.ts` | §6.4: the parser fills `cuts` and reads 708; the CLI's arguments and lines |
@@ -1111,7 +1119,7 @@ for a check (decision log, D6).
 | `packages/shared/src/course/structure.ts` | §6.1: `courseStructureSchema`, `courseStructureWireSchema`, `structureSiteIssues`, `linearStructure`, `structureControlIds`, `structureDiff` |
 | `packages/api/src/course-structure.ts` | §6.2: `splitStructure`, `structureFromColumns`, `persistStructure`, `rewriteStructureFromColumns`, wire mapping, `assertCourseVersion` |
 | `packages/api/src/version-conflict.ts`, `referenceJournal.ts`, `trpc.ts` (`withVersionConflict`) | §7: lock and compare, the base from the journal, the emits that stamp the token, the error shape |
-| `packages/web/src/lib/version-book.ts` | §7 legacy editor tokens |
+| `packages/web/src/lib/version-book.ts` | §7 the client's row tokens |
 | `packages/web/src/lib/course-layer-request.ts` | the viewer's request (§5), `courseObjectsForView` (§8.2) |
 | `packages/shared/src/course/objects.ts` | §8: `courseObjectBodySchema`, `courseObjectScopeSchemaOf`, `courseObjectInScope`, `isCourseObject`, `filterRegionOf`, the kinds' drawing |
 | `packages/api/src/course-objects.ts`, `routers/courseObject.ts` | §8.4: wire ↔ row, scope ids, `writeCourseObject` (shared with D1's importers), `loadCourseObjects`, `classesByCourse`, `objectsInScope`; the router |

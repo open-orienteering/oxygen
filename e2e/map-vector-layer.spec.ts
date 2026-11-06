@@ -4,12 +4,12 @@
  * Every event draws its pinned document since E3 (the per-event switch is
  * gone, docs/map-pipeline-switch.md): it is fetched once from
  * `/api/map-documents/:hash` and drawn by the WebGL2 arena path on an
- * unrotated canvas; no tile is requested; gestures move a paper-space
- * view; a GPS fix reaches the overlay through `mapGeo`; the course is
- * drawn by the GL layer in colour order with the map (lower purple under
- * black line art, over the yellow area). Without WebGL2, or after a second
- * lost context, the layer says it cannot draw the map; a map without a
- * pinned document shows its import state. Never tiles.
+ * unrotated canvas; gestures move a paper-space view; a GPS fix reaches
+ * the overlay through `mapGeo`; the course is drawn by the GL layer in
+ * colour order with the map (lower purple under black line art, over the
+ * yellow area). Without WebGL2, or after a second lost context, the layer
+ * says it cannot draw the map; a map without a pinned document shows its
+ * import state; an unaligned colour stack shows a notice and no course.
  *
  * Headless Chromium draws WebGL2 with SwiftShader, so only presence and
  * geometry are asserted, never timings.
@@ -21,6 +21,7 @@ import { reseed } from "./helpers/reseed";
 import { uploadEventMap, waitForStableMapPanel } from "./helpers/map-upload";
 import { pinStacklessDocument, unpinEventMap } from "./helpers/event-map-pin";
 import { API_BASE as API } from "./helpers/api-base";
+import { EDITOR_EVENT, selectedCode, sites, toPage, viewSettled } from "./helpers/editor";
 
 async function openEvent(page: Page): Promise<void> {
   await page.goto("/");
@@ -37,16 +38,6 @@ async function withoutWebGL2(page: Page): Promise<void> {
       return (original as (...a: unknown[]) => unknown).call(this, kind, ...rest);
     } as typeof original;
   });
-}
-
-/** Every `/api/map-tile*` request the page makes from now on. */
-function watchTileRequests(page: Page): string[] {
-  const paths: string[] = [];
-  page.on("request", (req) => {
-    const path = new URL(req.url()).pathname;
-    if (path.startsWith("/api/map-tile")) paths.push(path);
-  });
-  return paths;
 }
 
 async function viewerWithMap(page: Page): Promise<Locator> {
@@ -183,14 +174,12 @@ test.describe("vector map layer", () => {
     await reseed();
   });
 
-  test("draws the pinned document and requests no tiles", async ({ page }) => {
+  test("draws the pinned document", async ({ page }) => {
     test.setTimeout(120_000);
-    const tileRequests: string[] = [];
     const documentRequests: Request[] = [];
     const atlasRequests: string[] = [];
     page.on("request", (req) => {
       const path = new URL(req.url()).pathname;
-      if (path.startsWith("/api/map-tile")) tileRequests.push(path);
       // Fetches only: under Vite dev the `?url` imports of both pages load as tiny script modules.
       if (path.includes("text-atlas.") && req.resourceType() === "fetch") atlasRequests.push(path);
       if (/^\/api\/map-documents\/[0-9a-f]{64}$/.test(path)) documentRequests.push(req);
@@ -198,7 +187,6 @@ test.describe("vector map layer", () => {
 
     await openEvent(page);
     const viewer = await viewerWithMap(page);
-    await expect(viewer).toHaveAttribute("data-map-pipeline", "vector", { timeout: 30_000 });
     const canvas = viewer.getByTestId("map-vector-layer");
     await expect(canvas).toHaveAttribute("data-ready", "true", { timeout: 60_000 });
     await expect(canvas).toHaveAttribute("data-document-hash", /^[0-9a-f]{64}$/);
@@ -209,11 +197,6 @@ test.describe("vector map layer", () => {
     expect(new URL(req.url()).search).toBe("");
     expect(req.headers()["x-event-id"]).toBeTruthy();
     expect(new URL(req.url()).pathname).toBe(`/api/map-documents/${await canvas.getAttribute("data-document-hash")}`);
-
-    // No tile layer and no tile traffic.
-    await expect(viewer.getByTestId("map-tiles-composite")).toHaveCount(0);
-    await expect(viewer.getByTestId("map-tiles-ink")).toHaveCount(0);
-    expect(tileRequests).toEqual([]);
 
     // MSDF text (map-rendering.md §5.2 "Text atlas"): the Latin page, not the Cyrillic one the
     // fixture's strings do not need.
@@ -387,23 +370,18 @@ test.describe("vector map layer", () => {
     }
   });
 
-  test("without WebGL2 the layer shows its message and no tiles are requested", async ({ page }) => {
+  test("without WebGL2 the layer shows its message", async ({ page }) => {
     test.setTimeout(120_000);
     await withoutWebGL2(page);
-    const tileRequests = watchTileRequests(page);
     await openEvent(page);
     const viewer = await viewerWithMap(page);
-    await expect(viewer).toHaveAttribute("data-map-pipeline", "vector");
     const layer = viewer.getByTestId("map-vector-layer");
     await expect(layer).toHaveAttribute("data-status", "webgl", { timeout: 30_000 });
     await expect(viewer.getByTestId("map-layer-message")).toContainText("WebGL2");
-    await expect(viewer.locator("img[data-tile-url]")).toHaveCount(0);
-    expect(tileRequests).toEqual([]);
   });
 
   test("a lost context remounts the layer once, then shows the message", async ({ page }) => {
     test.setTimeout(120_000);
-    const tileRequests = watchTileRequests(page);
     await openEvent(page);
     const viewer = await viewerWithMap(page);
     const layer = viewer.getByTestId("map-vector-layer");
@@ -418,16 +396,14 @@ test.describe("vector map layer", () => {
     await expect(layer).toHaveAttribute("data-ready", "true", { timeout: 60_000 });
     await expect(viewer.getByTestId("map-layer-message")).toHaveCount(0);
 
-    // Second loss: the message, not another remount and not tiles.
+    // Second loss: the message, not another remount.
     await loseContext();
     await expect(layer).toHaveAttribute("data-status", "webgl", { timeout: 30_000 });
     await expect(layer).toHaveAttribute("data-attempt", "1");
     await expect(viewer.getByTestId("map-layer-message")).toBeVisible();
-    await expect(viewer.locator("img[data-tile-url]")).toHaveCount(0);
-    expect(tileRequests).toEqual([]);
   });
 
-  test("a map without a pinned document shows its import state, not tiles", async ({ page }) => {
+  test("a map without a pinned document shows its import state, not a viewer", async ({ page }) => {
     test.setTimeout(120_000);
     // The event's map (uploaded here when the seed has none), its pin
     // removed: its import job is done with a document the event does not
@@ -436,7 +412,6 @@ test.describe("vector map layer", () => {
     await viewerWithMap(page);
     const restore = await unpinEventMap("itest");
     try {
-      const tileRequests = watchTileRequests(page);
       await openEvent(page);
       const panel = page.getByTestId("map-panel").first();
       const state = panel.getByTestId("map-import-state");
@@ -444,15 +419,12 @@ test.describe("vector map layer", () => {
       await expect(state).toHaveAttribute("data-state", "review");
       await expect(state.getByTestId("map-import-review-link")).toHaveAttribute("href", /\/itest\/map-review\/[0-9a-f]{64}$/);
       await expect(panel.getByTestId("map-viewer")).toHaveCount(0);
-      // Nothing asks for tiles, even after a poll interval.
-      await page.waitForTimeout(2_500);
-      expect(tileRequests).toEqual([]);
     } finally {
       await restore();
     }
   });
 
-  test("a document whose colours cannot take the course layer says so; the SVG draws the course", async ({ page }) => {
+  test("a document whose colours cannot take the course layer says so and draws no course", async ({ page }) => {
     test.setTimeout(120_000);
     await openEvent(page);
     await viewerWithMap(page);
@@ -463,8 +435,27 @@ test.describe("vector map layer", () => {
       await page.reload();
       const viewer = page.getByTestId("map-panel").first().getByTestId("map-viewer");
       await expect(viewer.getByTestId("map-vector-layer")).toHaveAttribute("data-ready", "true", { timeout: 60_000 });
-      await expect(viewer).toHaveAttribute("data-course-layer", "svg", { timeout: 30_000 });
+      await expect(viewer).toHaveAttribute("data-course-layer", "none", { timeout: 30_000 });
       await expect(viewer.getByTestId("map-course-layer-unsupported")).toBeVisible();
+      // No second renderer (E4b): no layer mirror, no SVG course symbols or
+      // numbers — the map shows no course until it is re-imported.
+      await expect(viewer.getByTestId("course-layer")).toHaveCount(0);
+      await expect(viewer.getByTestId("control-label")).toHaveCount(0);
+
+      // The editor on such a map has no hit index: a click on a control selects nothing.
+      await page.goto(`/${EDITOR_EVENT}/course-editor`);
+      await expect(page.getByTestId("editor-page")).toBeVisible({ timeout: 15_000 });
+      const editorViewer = page.getByTestId("map-viewer");
+      await expect(editorViewer.getByTestId("map-vector-layer")).toHaveAttribute("data-ready", "true", { timeout: 60_000 });
+      await expect(editorViewer).toHaveAttribute("data-course-layer", "none", { timeout: 30_000 });
+      await expect(page.getByTestId("editor-site").first()).toBeAttached({ timeout: 30_000 });
+      await viewSettled(page);
+      const control = (await sites(page)).find((x) => x.type === "Control");
+      expect(control).toBeTruthy();
+      const at = await toPage(page, control!.mm);
+      await page.mouse.click(at.x, at.y);
+      await expect(editorViewer.getByTestId("editor-selection-ring")).toHaveCount(0);
+      await expect(selectedCode(page)).toHaveCount(0);
     } finally {
       await restore();
     }

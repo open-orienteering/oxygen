@@ -328,8 +328,81 @@ uploaded OCAD file (slice E1, `docs/map-storage.md` §4.6): non-hidden
 point / line / area objects whose symbol code — the applied match's
 canonical code, else the source code — has an ISOM description entry.
 Without a pinned document (no map, or its import has not finished) there
-are no suggestions and no stale-description check. The matching rules
-themselves are `docs/course-editor-legacy.md` "Description autodetect".
+are no suggestions and no stale-description check.
+
+### Matching rules
+
+(Moved here from the legacy editor chapter when E4b deleted it; the
+course editor sends the same `autoDescribe` writes, `course-editor.md`
+§4.)
+
+Placing a control with `autoDescribe: true` fills the top map-based
+suggestion in the same `control.create` write — no menu click needed.
+The editor always sends `autoDescribe: true` on a **move** too; the
+server then re-describes the control *only if* its current description
+is exactly what the autodetect produced for the old position (i.e. the
+user never touched it). "N side of boulder" therefore follows the
+control to "W side of boulder", and a control dragged into featureless
+terrain loses its stale auto description. A hand-edited description is
+never overwritten — for those the action bar may offer a single
+*Suggested: …* row if the new spot's top candidate differs; applying it
+is a normal undoable `control.update`. Undo of a move restores both
+position and the previous description.
+
+The pipeline:
+
+```
+control.create / update { autoDescribe, xpos, ypos }
+  → loadEventMapObjects → suggestDescriptions → store top candidate
+    (update: only when no description, or old description ==
+     suggestDescriptions(old position))
+
+control.suggestDescription { x, y }   (menu after move)
+  → [{ d, c?, e?, f?, g?, isom, distanceMm }] ≤ 3
+```
+
+- **`event-map-objects.ts`** — slim objects of the event's pinned map
+  document (memoised per document hash; no pin → no suggestions),
+  filtered to non-hidden symbols whose code — the applied match's, else
+  the source's — is in `ISOM_DESCRIPTION_MAP` (`map-storage.md` §4.6;
+  slice E1 moved this off the OCAD parse). Bezier segments are flattened onto the drawn
+  curve (8 steps per cubic) — with the raw handles kept as vertices, a
+  curved path whose end sits on another path would miss the junction
+  tolerance by a millimetre.
+- **`isom-description-map.ts`** — ISOM → `{ d, kind, g? }` with
+  canonical OCAD codes.
+- **`description-autodetect.ts`** — nearest feature per column-D code,
+  plus geometric enrichments:
+  - **Crossing / junction** (`f=10.001` / `10.002`) when two lines meet
+    within 1.5 mm of the control; a line ending up to 0.3 mm short of
+    (or past) the other still counts as a junction. The nearer line goes
+    in `d`, the other in `e` — also when both are the same kind, since
+    the IOF sheet writes "path · path · junction". Within that radius
+    the junction always replaces the plain "path" candidate — nobody
+    hits the intersection point exactly.
+  - **Bend** (`f=11.001`) at a ≥45° polyline vertex.
+  - **End** (`g=11.70x`) beside a free polyline endpoint.
+  - **Side of** (`g=11.10x`) for point features and compact areas
+    (buildings, ruins) from the feature centre; **outside corner**
+    (`g=11.50x`) when the control sits at a ≥60° corner of a compact
+    area.
+  - **Extended areas** (open land, marsh, thicket, …) get a location
+    too: **edge** (`g=11.20x`) when within 1 mm of the outline (inside
+    or outside), **part** (`g=11.30x`) when well inside a large area and
+    ≥2 mm off its centroid, **inside / outside corner** (`11.40x` /
+    `11.50x`) at a sharp boundary vertex. Direction is the bearing from
+    the area's centroid. A small area (control < 0.8 mm off centre)
+    says nothing.
+  - **Which of similar** (`c=0.20x`) when another point/compact-area of
+    the same D sits within the control circle.
+  - **Ranking**: candidates sort by distance, but an extended area ranks
+    by *depth from its edge* + 0.5 mm — being inside a clearing is not
+    the same as being at it, so a boulder half a millimetre away beats
+    the open land it stands in. (`distanceMm` in the response still
+    reports 0 for "inside".)
+
+Still out of scope: upper/lower column C (needs contours), between-
+features, free-text dimensions, text/rectangle OCAD objects.
 
 ## Out of scope
 

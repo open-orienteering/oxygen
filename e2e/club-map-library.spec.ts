@@ -76,7 +76,6 @@ test.describe("club map library", () => {
     // Regression: the map must actually render without a full page reload —
     // the vector layer has drawn the adopted version's document
     // (docs/map-rendering.md §5.4).
-    await expect(viewer).toHaveAttribute("data-map-pipeline", "vector", { timeout: 30000 });
     await expect(viewer.getByTestId("map-vector-layer")).toHaveAttribute("data-ready", "true", {
       timeout: 30000,
     });

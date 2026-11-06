@@ -5,7 +5,7 @@
  * contextual action bar, inspector, status bar (§2).
  *
  * - Selection is the legacy model (`lib/editor/state.ts`); the viewer
- *   hit-tests the course layer's symbolised shapes (`sharedHitTest`, §5).
+ *   hit-tests the course layer's symbolised shapes (§5).
  * - Every gesture is one write and one undo entry (`UndoStack`, 50).
  * - Sequence edits are `course.setStructure` with the course's token; the
  *   first save makes start and finish explicit (course-layer.md §6.2).
@@ -220,7 +220,6 @@ export function EditorPage() {
   const invalidate = useCallback(() => {
     void utils.course.controlCoordinates.invalidate();
     void utils.control.list.invalidate();
-    void utils.course.courseGeometries.invalidate();
     void utils.course.list.invalidate();
     void utils.course.detail.invalidate();
     // Course objects are cached until reload in MapPanel: every write invalidates them (course-layer.md §8.3).
@@ -1149,7 +1148,6 @@ export function EditorPage() {
     onLabelMoveEnd: handleLabelMoveEnd,
     onSelect: handleSelect,
     onDismiss: handleDismiss,
-    sharedHitTest: true,
     // A phone docks the action bar in the bottom sheet's peek row (§10).
     actionLayout: isMobile ? "host" : "bar",
     fix,
@@ -1368,7 +1366,6 @@ export function EditorPage() {
   const setCuts = trpc.course.setOverprintCuts.useMutation({
     onSuccess: async () => {
       await cutsQuery.refetch();
-      await utils.course.geometry.invalidate();
       await utils.course.list.invalidate();
     },
   });

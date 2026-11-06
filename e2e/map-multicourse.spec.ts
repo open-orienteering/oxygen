@@ -77,7 +77,7 @@ test.describe("Multi-course map: class labels + combined descriptions", () => {
     // Control numbers: the GL layer's mirror.
     const numberLabels = courseLabels(mapPanel);
     await expectLabelShown(numberLabels.first(), 30000);
-    await expect(mapPanel.getByTestId("map-viewer").first()).toHaveAttribute("data-map-pipeline", "vector");
+    await expect(mapPanel.getByTestId("map-viewer").first().getByTestId("map-vector-layer")).toBeAttached();
     await expect(mapPanel.getByTestId("map-viewer").first()).toHaveAttribute("data-course-layer", "gl");
 
     // ── Deterministic class assignments via the API: Öppen 1 → A,

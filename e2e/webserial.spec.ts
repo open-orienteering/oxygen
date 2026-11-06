@@ -332,7 +332,7 @@ test.describe("WebSerial SI Reader", () => {
 test.describe("post-readout map", () => {
   test.afterAll(reseed);
 
-  test("the card readout map draws the map document, no tiles", async ({ page }) => {
+  test("the card readout map draws the map document", async ({ page }) => {
     test.setTimeout(120_000);
     await selectCompetition(page);
     const viewer = page.getByTestId("map-viewer").first();
@@ -357,10 +357,8 @@ test.describe("post-readout map", () => {
 
     const readoutMap = page.getByTestId("map-viewer").last();
     await expect(readoutMap).toBeVisible({ timeout: 60_000 });
-    await expect(readoutMap).toHaveAttribute("data-map-pipeline", "vector");
     await expect(readoutMap.getByTestId("map-vector-layer")).toHaveAttribute("data-ready", "true", {
       timeout: 30_000,
     });
-    await expect(readoutMap.locator("img[data-tile-url]")).toHaveCount(0);
   });
 });

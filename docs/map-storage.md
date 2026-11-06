@@ -921,6 +921,10 @@ document) `failed`.
 | Documents | same origin, `^/api/map-documents/[0-9a-f]{64}$` | CacheFirst | `map-documents` | 20 entries, 365 days, purge on quota error; 200 only |
 | Viewer fonts and text atlas | same origin, `/assets/*.ttf` and `/assets/text-atlas.*` | CacheFirst | `map-fonts` | 16 entries, 365 days; 200 only |
 
+The tile layer's `map-tiles` route (CacheFirst, 2 000 PNG tiles) went in
+E4b. Workbox cleans up only its own precaches, so the web deletes that
+Cache Storage on start (`dropLegacyCaches`, `lib/legacy-caches.ts`).
+
 The document route matches documents only, not `/thumbnail.png` or
 `/symbols/…`: the review page's per-symbol swatches would evict the
 documents from a 20-entry cache (07 §9.1 had previews share the route).
@@ -1307,6 +1311,7 @@ its `map_pipeline` gate.
 | `packages/web/src/lib/map-upload.ts` | client chunked uploader |
 | `packages/web/src/lib/map-document-cache.ts` | the viewer's document loader, `MAP_DOCUMENT_PATH_RE`, `requestPersistentStorage`, `useMapDocument` (§7.1) |
 | `packages/web/vite.config.ts` | service-worker routes `map-documents`, `map-fonts` (§7.1) |
+| `packages/web/src/lib/legacy-caches.ts` | deletes the retired `map-tiles` Cache Storage on start (§7.1) |
 | `packages/api/src/sync/snapshotMaps.ts` | checkout snapshot map part: export, `exportBlobSlice`, `fetchSnapshotBlobs`, `importSnapshotMaps` |
 | `packages/api/src/sync/lease.ts` / `routers/lease.ts` | `EventSnapshot.maps`, `LeasePeer.exportBlob`, `lease.exportBlob`, checkout `maps` counts |
 | `packages/api/src/backup.ts` | `BACKUP_TABLES`, `buildBackupScript`, `splitBackupSections` |

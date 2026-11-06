@@ -76,23 +76,6 @@ at once, an unselected one pans on a drag and moves after a 500 ms long
 press, a dragged control rides 48 px above the finger with a 120 px
 ×2.5 loupe above it (drawn by the GL layer), hit tolerance 12 px, two fingers always pan / zoom and cancel a pending press.
 
-### Legacy course editor on touch
-
-The legacy editor (`CourseEditorPage`; mounted nowhere since E3, deleted
-in E4b) shared the map gesture model above. In addition:
-
-- **Tap a control** — selects it and opens the floating context menu.
-- **Drag a control** — moves it (same local-drag + `onMoveEnd` path as mouse).
-- **Tap a course leg** — inserts at that leg (`onLegClick`).
-- **Tap empty map** — anchors the phantom selection menu.
-- **Dismiss (×)** — in the context menu; mirrors the keyboard Escape cascade
-  (phantom → selection → course).
-
-Control and leg hit targets use `touch-action: none` so editor gestures do not
-scroll the page underneath. A two-finger map gesture cancels any armed control
-tap and suppresses editor selections for 400 ms after movement, giving both
-fingers time to leave the screen. Descriptions start hidden below `sm`.
-
 ### Map toolbar buttons
 
 Every toggle on the map toolbar — **Hide other controls**, **Auto slits**,
@@ -158,26 +141,20 @@ Below the `sm` breakpoint (~640px):
   `height: min(<caller px>, calc(100dvh - 8rem))` so the map nearly fills the
   screen; one-finger page scroll over the map reaches content above.
 
-## Event-scoped map and tile state
+## Event-scoped map state
 
 Switching events clears the event-scoped map metadata/control queries before
 the next routed page mounts. `MapViewer` is also keyed by event, upload version,
-and bounds, so a previous viewport cannot initialize a different event.
+and document hash, so a previous viewport cannot initialize a different event.
 Event tRPC requests include the slug in both the authorization header and an
 `event` query parameter. The API trusts the header; the query parameter exists
 so the service worker's URL-based cache cannot mix responses between events.
 
-Tile caching supports multiple events at once:
-
-- Browser cache URLs contain the event `nameId`, z/x/y, and uploaded-map
-  version: `/api/map-tile/<nameId>/<z>/<x>/<y>?v=<uploadedAt>`.
-- Server-side `map_tiles` rows use the event database ID plus z/x/y.
-- `TileLayer` load/error keys include the full event URL and version, preventing
-  one event's empty or failed tile from suppressing the same z/x/y tile in
-  another event.
-
-Responses are browser-cacheable for seven days. Uploading/replacing a map
-changes `v`, so the new images do not collide with the prior browser entries.
+The map itself is the event's pinned document, addressed by its content hash
+(`/api/map-documents/<hash>`, the event and kiosk key as headers): two events
+on the same club map share one cached document, and a re-upload pins a new
+hash, so nothing stale is drawn (`docs/map-storage.md` §7.1). The tile cache
+of the retired tile layer is deleted on start (E4b, `lib/legacy-caches.ts`).
 
 ## Event list and installation
 
@@ -210,5 +187,4 @@ to Google Accounts and the cross-origin OAuth response is rejected by CORS.
 | Template editor header | `packages/web/src/components/MapLayoutEditor.tsx` |
 | Controls page toolbar | `packages/web/src/pages/ControlsPage.tsx` |
 | Shell header | `packages/web/src/pages/CompetitionShell.tsx` |
-| Editor dismiss wire-up | `packages/web/src/pages/CourseEditorPage.tsx` |
 | E2E | `e2e/mobile-layout.spec.ts` (the editor's phone layout itself is `e2e/field-mode.spec.ts` and the touch describe of `e2e/course-editor.spec.ts`; E3 deleted the legacy editor's phone tests), `e2e/session-recovery.spec.ts` |
