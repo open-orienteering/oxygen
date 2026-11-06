@@ -60,5 +60,5 @@
   "mapImportFailed": "Kartan kunde inte förberedas: {{error}}",
   "mapImportReview": "Kartan är importerad och väntar på granskning.",
   "mapImportReviewLink": "Granska kartan",
-  "mapImportUnknown": "Kartan är inte förberedd ännu. En administratör kan förbereda den under Underhåll → Kartdokument."
+  "mapImportUnknown": "Kartan är inte förberedd ännu. Ladda upp kartan igen för att förbereda den."
 }

@@ -2,7 +2,8 @@
  * Re-match pass (docs/map-storage.md §6.9): pins of documents stored under
  * an older importer / library release (`ocad-3` / `none`) are re-imported
  * and moved, club editions also when the club decisions changed, events
- * not then (copy-on-use); dry run writes nothing; a second run is empty.
+ * not then (copy-on-use); a live event's sourced row without a document
+ * is imported; dry run writes nothing; a second run is empty.
  */
 
 import { describe, it, expect, beforeAll, afterAll } from "vitest";
@@ -105,4 +106,26 @@ describe("planRematch / runRematch", () => {
     expect(await eventPin()).toBe(currentDoc);
     expect(await mine()).toEqual([]);
   }, 120_000);
+
+  it("imports a live event's sourced row that has no document, and leaves a soft-deleted event's alone (E5)", async () => {
+    const live = await createTestEvent("map_rematch_unpinned");
+    const removed = await createTestEvent("map_rematch_removed");
+    try {
+      for (const e of [live, removed]) await ctx.db.mapFile.create({ data: { eventId: e.eventId, fileName: "unpinned.ocd", sourceHash } });
+      await ctx.db.event.update({ where: { id: removed.eventId }, data: { removed: true } });
+      expect(await mine()).toEqual([
+        expect.objectContaining({ kind: "event", id: String(live.eventId), documentHash: null, reason: "unpinned" }),
+      ]);
+      const run = await runRematch(ctx.db, { eventId: live.eventId });
+      expect(run).toMatchObject({ total: 1, done: 1, failed: 0 });
+      const pinned = await ctx.db.mapFile.findFirstOrThrow({ where: { eventId: live.eventId }, select: { documentHash: true, scale: true } });
+      expect(pinned.documentHash).toMatch(/^[0-9a-f]{64}$/);
+      expect(pinned.scale).toBeGreaterThan(0);
+      expect(await mine()).toEqual([]);
+      expect((await ctx.db.mapFile.findFirstOrThrow({ where: { eventId: removed.eventId }, select: { documentHash: true } })).documentHash).toBeNull();
+    } finally {
+      await live.cleanup();
+      await removed.cleanup();
+    }
+  }, 60_000);
 });

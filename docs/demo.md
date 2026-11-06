@@ -48,6 +48,13 @@ COMPOSE_FILE=docker-compose.release.yml USE_DOCKER=1 \
 pnpm showcase:load
 ```
 
+> **v0.6.1 and later.** The committed fixture is still in the pre-v0.6.1
+> shape (`map_files.file_data`, cached `map_tiles`), which the v0.6.1 drops
+> migration removed (`docs/migrations/2026-vector-map-pipeline.md`), so
+> `load-showcase.sh` fails against a v0.6.1 database. Run the demo with an
+> image up to v0.6.0 until the fixture is regenerated on the document
+> pipeline (a follow-up row in `docs/research/vector-map-pipeline/SLICES.md`).
+
 To regenerate the committed fixture from your own live Vinterserien data (regenerates `docs/screenshots/fixtures/showcase.sql` in place):
 
 ```bash

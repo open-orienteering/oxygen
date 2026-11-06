@@ -65,10 +65,10 @@ beforeAll(async () => {
   for (const ev of [ctx, other]) await ctx.db.event.update({ where: { id: ev.eventId }, data: { kioskKey: `kiosk-${ev.nameId}`, date: new Date("2099-06-01T00:00:00Z") } });
 
   eventSrc = await source(randomBytes(3 * MiB + 17), "first-name.ocd");
-  await ctx.db.mapFile.create({ data: { eventId: ctx.eventId, fileName: "Event map å.ocd", fileData: randomBytes(4), sourceHash: eventSrc } });
+  await ctx.db.mapFile.create({ data: { eventId: ctx.eventId, fileName: "Event map å.ocd", sourceHash: eventSrc } });
 
   clubCopySrc = await source(randomBytes(2048), "club-copy.ocd");
-  await ctx.db.mapFile.create({ data: { eventId: other.eventId, fileName: "adopted.ocd", fileData: randomBytes(4), sourceHash: clubCopySrc, fromClubLibrary: true } });
+  await ctx.db.mapFile.create({ data: { eventId: other.eventId, fileName: "adopted.ocd", sourceHash: clubCopySrc, fromClubLibrary: true } });
 
   clubSrc = await source(randomBytes(4096), "club.ocd");
   const doc = randomBytes(32);
@@ -161,7 +161,7 @@ describe("GET /api/map-sources/:hash", () => {
   it("streams a source above 32 MiB intact, without a Content-Length", async () => {
     const big = randomBytes(33 * MiB + 5);
     const hash = await source(big, "big.ocd");
-    await ctx.db.mapFile.create({ data: { eventId: ctx.eventId, fileName: "big.ocd", fileData: randomBytes(4), sourceHash: hash } });
+    await ctx.db.mapFile.create({ data: { eventId: ctx.eventId, fileName: "big.ocd", sourceHash: hash } });
     const res = await get(hash, as(manager, { "x-event-id": ctx.nameId }));
     expect(res.statusCode).toBe(200);
     expect(res.headers["content-length"]).toBeUndefined();

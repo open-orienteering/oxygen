@@ -5,7 +5,10 @@
  * script loads them into a database that lost them, re-points a new
  * event's `map_files`, refuses bytes that do not match their hash, and is
  * a no-op the second time. `club_symbol_decisions` travels whole and
- * merges by key, the newer `decided_at` winning.
+ * merges by key, the newer `decided_at` winning. The `map_files` section
+ * of a dump written before v0.6.1 (bytes in `file_data`) restores through
+ * `restore-legacy-map-files.sql`, and the re-match imports what has no
+ * document (E5).
  */
 
 import { describe, it, expect, beforeAll, afterAll } from "vitest";
@@ -18,9 +21,11 @@ import Fastify, { type FastifyInstance } from "fastify";
 import { createTestEvent, disconnect, type TestEventContext } from "../helpers/test-db.js";
 import { applyEventMap } from "../../event-map.js";
 import { registerBackupRoute, splitBackupSections } from "../../backup.js";
+import { runRematch } from "../../map-store/rematch.js";
 
 const FIXTURE = resolve(__dirname, "../../../../../e2e/test.ocd");
 const RESTORE_SCRIPT = resolve(__dirname, "../../../scripts/restore-map-blobs.sql");
+const LEGACY_RESTORE_SCRIPT = resolve(__dirname, "../../../scripts/restore-legacy-map-files.sql");
 const suffix = randomBytes(4).toString("hex");
 const sha256 = (b: Uint8Array) => createHash("sha256").update(b).digest("hex");
 
@@ -42,14 +47,19 @@ const FP = (k: string) => `ocad:999.9:bk${suffix}${k}`;
 const LIB = "ISOM2017-2@2026.10.1";
 const T0 = new Date("2026-05-01T10:00:00Z");
 
-/** Run the restore script as documented: from the directory holding the `<table>.csv` sections. */
-function psqlRestore(cwd: string, eventId?: bigint): void {
+/** Run a restore script as documented: from the directory holding the `<table>.csv` sections. */
+function psqlRestore(cwd: string, eventId?: bigint, script = RESTORE_SCRIPT): void {
   const url = new URL(process.env.DATABASE_URL!);
   url.searchParams.delete("schema");
   const args = [url.toString(), "-X", "-q"];
   if (eventId !== undefined) args.push("-v", `event_id=${eventId}`);
-  args.push("-f", RESTORE_SCRIPT);
+  args.push("-f", script);
   execFileSync("psql", args, { stdio: "pipe", cwd });
+}
+
+/** Write the map sections of `text` as `<table>.csv` into a new directory under `dir`. */
+function sectionsOf(name: string, text: string): string {
+  return writeSections(name, text);
 }
 
 /** Write the map sections of `text` as `<table>.csv` into a new directory under `dir`. */
@@ -191,7 +201,6 @@ describe("restore-map-blobs.sql", () => {
     expect(files).toHaveLength(1);
     expect(files[0].sourceHash).toBe(sourceHash);
     expect(files[0].documentHash).toBe(documentHash);
-    expect(sha256(files[0].fileData)).toBe(sourceHash);
     expect(files[0].clubMapVersionId).toBeNull();
     // Every column survives except the local identity: catches a map_files
     // column added later but missing from the script's INSERT list.
@@ -222,4 +231,89 @@ describe("restore-map-blobs.sql", () => {
   it("loads the blobs alone without an event id", () => {
     expect(() => psqlRestore(sectionsDir)).not.toThrow();
   });
+});
+
+describe("restore-legacy-map-files.sql (a dump written before v0.6.1)", () => {
+  let legacy: TestEventContext;
+  // Bytes of their own, so the restore has to create the source rows.
+  const oldBytes = Buffer.concat([readFileSync(FIXTURE), Buffer.from(`backup-legacy-old-${suffix}`)]);
+  const sliceBytes = Buffer.concat([readFileSync(FIXTURE), Buffer.from(`backup-legacy-slice-${suffix}`)]);
+  const hex = (b: Buffer) => `\\x${b.toString("hex")}`;
+
+  /** A directory holding one `map_files.csv`. */
+  function legacySection(name: string, csv: string): string {
+    const out = join(dir, name);
+    mkdirSync(out);
+    writeFileSync(join(out, "map_files.csv"), csv);
+    return out;
+  }
+
+  beforeAll(async () => {
+    legacy = await createTestEvent("backup_legacy");
+  });
+
+  afterAll(async () => {
+    await legacy?.cleanup();
+    for (const b of [oldBytes, sliceBytes]) {
+      await legacy.db.mapImportJob.deleteMany({ where: { sourceHash: sha256(b) } });
+      await legacy.db.mapDocument.deleteMany({ where: { sourceHash: sha256(b) } });
+      await legacy.db.mapSource.deleteMany({ where: { fileHash: sha256(b) } });
+    }
+  }, 30_000);
+
+  it("refuses a v0.6.1 dump's section, which restore-map-blobs.sql loads", () => {
+    expect(() => psqlRestore(sectionsOf("current", dump), legacy.eventId, LEGACY_RESTORE_SCRIPT)).toThrow(/no file_data column/);
+  });
+
+  it("refuses a row whose file_data does not match its source_hash", async () => {
+    const csv = `id,event_id,file_name,file_data,uploaded_at,source_hash\n3,9,x.ocd,${hex(sliceBytes)},2026-10-01 10:00:00+00,${"0".repeat(64)}\n`;
+    expect(() => psqlRestore(legacySection("legacy-tampered", csv), legacy.eventId, LEGACY_RESTORE_SCRIPT)).toThrow(/does not match its source_hash/);
+    expect(await legacy.db.mapSource.count({ where: { fileHash: sha256(sliceBytes) } })).toBe(0);
+  });
+
+  it("makes a pre-vector row's bytes a source, pins it, and the re-match imports it", async () => {
+    // The shape of a dump from before the vector pipeline: no hashes at all.
+    const csv = [
+      "id,event_id,file_name,file_data,uploaded_at,scale,bounds,north_offset",
+      `7,42,old.ocd,${hex(oldBytes)},2026-03-01 10:00:00+00,10000,,`,
+    ].join("\n") + "\n";
+    const at = legacySection("legacy-prevector", csv);
+    psqlRestore(at, legacy.eventId, LEGACY_RESTORE_SCRIPT);
+    psqlRestore(at, legacy.eventId, LEGACY_RESTORE_SCRIPT); // idempotent
+
+    const src = await legacy.db.mapSource.findUniqueOrThrow({ where: { fileHash: sha256(oldBytes) } });
+    expect(src).toMatchObject({ kind: "ocad", fileName: "old.ocd", sizeBytes: oldBytes.byteLength });
+    expect(Buffer.from(src.bytes).equals(oldBytes)).toBe(true);
+    const rows = await legacy.db.mapFile.findMany({ where: { eventId: legacy.eventId } });
+    expect(rows).toHaveLength(1);
+    expect(rows[0]).toMatchObject({ fileName: "old.ocd", sourceHash: sha256(oldBytes), documentHash: null, scale: 10000, rotationCorrection: 0, fromClubLibrary: false });
+    expect(rows[0].uploadedAt.toISOString()).toBe("2026-03-01T10:00:00.000Z");
+
+    const run = await runRematch(legacy.db, { eventId: legacy.eventId });
+    expect(run).toMatchObject({ total: 1, done: 1, failed: 0 });
+    const pinned = await legacy.db.mapFile.findFirstOrThrow({ where: { eventId: legacy.eventId }, select: { documentHash: true, bounds: true } });
+    expect(pinned.documentHash).toMatch(/^[0-9a-f]{64}$/);
+    expect(pinned.bounds).not.toBeNull();
+  }, 120_000);
+
+  it("keeps a slice-A-or-later row's document when this database holds it, and drops the columns v0.6.1 has not", async () => {
+    // The v0.6.0 column order; `document_hash` names the document the
+    // pre-vector case above just imported (a document of another source is not taken).
+    const other = await createTestEvent("backup_legacy_slice");
+    try {
+      const doc = (await legacy.db.mapFile.findFirstOrThrow({ where: { eventId: legacy.eventId }, select: { documentHash: true } })).documentHash!;
+      const header = "id,event_id,file_name,file_data,uploaded_at,scale,bounds,north_offset,calibration,from_club_library,rotation_correction,north_detection,color_profile,color_overrides,north_lines_below,file_hash,render_key,source_hash,document_hash,club_map_version_id";
+      const row = (bytes: Buffer, uploaded: string, documentHashCol: string) =>
+        `11,9,slice.ocd,${hex(bytes)},${uploaded},10000,,,,f,1.5,,auto,{},t,${sha256(bytes)},rk,${sha256(bytes)},${documentHashCol},`;
+      const csv = [header, row(oldBytes, "2026-10-01 10:00:00+00", doc), row(sliceBytes, "2026-10-02 10:00:00+00", doc)].join("\n") + "\n";
+      psqlRestore(legacySection("legacy-slice", csv), other.eventId, LEGACY_RESTORE_SCRIPT);
+      const rows = await other.db.mapFile.findMany({ where: { eventId: other.eventId }, orderBy: { uploadedAt: "asc" } });
+      expect(rows.map((r) => [r.sourceHash, r.documentHash, r.rotationCorrection])).toEqual([
+        [sha256(oldBytes), doc, 1.5],
+        [sha256(sliceBytes), null, 1.5],
+      ]);
+    } finally {
+      await other.cleanup();
+    }
+  }, 60_000);
 });

@@ -67,10 +67,6 @@ export function documentDbStub(documents: StubDocument[], sources: Record<string
           bounds: null,
           northOffset: null,
           calibration: null,
-          colorProfile: "auto",
-          colorOverrides: {},
-          northLinesBelow: true,
-          renderKey: null,
         };
       },
     },

@@ -60,5 +60,5 @@
   "mapImportFailed": "The map could not be prepared: {{error}}",
   "mapImportReview": "The map is imported and waiting for review.",
   "mapImportReviewLink": "Review the map",
-  "mapImportUnknown": "This map has not been prepared yet. An administrator can prepare it under Maintenance → Map documents."
+  "mapImportUnknown": "This map has not been prepared yet. Upload the map again to prepare it."
 }

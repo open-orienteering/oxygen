@@ -7,8 +7,8 @@
  * - `review`: the job is done but its document is not the event's pin yet
  *   (an import that waits for review): a link to the review page.
  * - `failed`: the job failed; its error.
- * - `unknown`: no job (a map from before the backfill), or the viewer may
- *   not read jobs (a kiosk): the backfill hint.
+ * - `unknown`: no job recorded, or the viewer may not read jobs (a
+ *   kiosk): upload the map again.
  *
  * When a job finishes with a document, `onDocumentReady` asks the panel
  * to re-read the map metadata; the panel then mounts the viewer.

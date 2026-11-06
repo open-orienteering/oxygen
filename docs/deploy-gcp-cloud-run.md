@@ -303,8 +303,8 @@ many prints compose at once; each worker holds a decoded map document and
 fonts (a Club-full print run peaked at 2.6 GB RSS), so on 2 vCPU / 4 GiB
 keep it at 1, or 2 for small maps. Workers use no database connection.
 The rest of the 4 GiB is headroom for the map import worker (an OCAD
-file parsed into a map document) and the upload, which still parses the
-OCAD file for its quick-access columns until E5.
+file parsed into a map document); since v0.6.1 (E5) the upload itself
+parses nothing — it stores the chunks and starts the job.
 - **The render gate.** Each print also takes a permit of the process's
 render gate (`renderGate()` in `packages/api/src/map-render-limits.ts`,
 `MAP_RENDER_CONCURRENCY`, default 2, `deploy.sh` sets 3). Since E4a the
@@ -314,8 +314,10 @@ tiles: the tile renderer and its knobs are gone. `MAP_TILE_BLOCK_TILES`,
 `MAP_PRECACHE_MAX_ZOOM`, `MAP_PRECACHE_BLOCK_DELAY_MS`,
 `MAP_RENDER_MAX_QUEUE`, `MAP_SVG_CACHE_EVENTS`, `MAP_WINDOW_MAX_PIXELS`
 (and the older `MAP_RASTER_MAX_PIXELS` / `MAP_RASTER_CACHE_EVENTS`) set
-on a revision are ignored and can be removed; the v0.5.0 image, which
-reads them, falls back to its defaults without them. The September 2026
+on a revision are ignored; remove them from the revision after v0.6.1
+(`gcloud run services update oxygen --remove-env-vars=…`,
+`docs/release-slice-e.md` §2). Until then the v0.5.0 image, which reads
+them, falls back to its defaults without them. The September 2026
 tile incident and the whole-map raster OOM before it are recorded in
 [bugfix-map-tile-cold-render-cloud-timeouts.md](bugfix-map-tile-cold-render-cloud-timeouts.md).
 - **`--cpu=2` and `MAP_RENDER_CONCURRENCY=3`.** The CPU-bound work the
@@ -396,8 +398,9 @@ file or several large prints at once, so raise `--memory` or keep
 - **Map never loads.** The viewer reads the event's pinned map document
 (`/api/map-documents/:hash`); a map whose import has not pinned one
 shows the import state instead (`map-storage.md` §4.6). Check the
-import job (`mapImport.latestForEvent`, or Settings → Maintenance →
-**Map documents**) before the instance.
+import job (`mapImport.latestForEvent`) before the instance; re-upload
+the map, or import it again with `pnpm map:rematch --event <name_id>`
+(`scripts/gcp/backfill.sh --rematch` on Cloud Run).
 
 ## What this deployment does NOT change
 

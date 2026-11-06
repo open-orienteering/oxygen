@@ -131,8 +131,11 @@ shaped the original layout was retired in May 2026
   `oxygen.event_seqs`. URLs and tRPC inputs use `seq`; joins use `id`.
 - **Append-only / immutable** (`card_readouts`, `punches`, `event_log`) use
   UUID PK only.
-- **Pure server-side** (`map_files`, `rendered_maps`, `map_tiles`,
-  `tracks`, `routes`) use `BIGSERIAL`.
+- **Pure server-side** (`map_files`, `tracks`, `routes`) use `BIGSERIAL`.
+- **Content-addressed map store** (`map_sources`, `map_documents`,
+  `map_previews`) is keyed by SHA-256 hash; the club map series
+  (`club_maps`, `club_map_versions`) and the import plumbing
+  (`map_uploads`, `map_import_jobs`) use UUIDs (`docs/map-storage.md` §2).
 - **Top-level entity** (`events`) uses `BIGSERIAL` — there is no offline-
   authored event.
 - **Global directories** (`runner_directory`, `club_directory`,
@@ -176,11 +179,26 @@ shaped the original layout was retired in May 2026
 - A feature switch that chooses between two implementations per event is
   an additive ENUM column that gates reads only, with instance flags in
   `oxygen.settings` — the shape of the map pipeline switch
-  (`events.map_pipeline`, retired in E3; `docs/map-pipeline-switch.md` is
-  its history note, E5 drops the column).
-- JSONB columns are used for structured metadata (routes, courses
-  geometry, owner data, ROC raw payloads). Keep top-level keys
+  (`events.map_pipeline`, retired in E3 and dropped in E5;
+  `docs/map-pipeline-switch.md` is its history note).
+- JSONB columns are used for structured metadata (routes, course
+  structures, owner data, ROC raw payloads). Keep top-level keys
   snake_case to match the rest of the schema.
+- Migrations are additive by default: new tables, nullable columns,
+  backfills an older image ignores, so the previous image still runs on
+  the new schema and an image rollback works. A **drop** is its own
+  release, after a release in which nothing reads the column: one
+  migration that first runs a data guard (`DO $$ … RAISE EXCEPTION`,
+  so Prisma's per-migration transaction leaves the schema untouched when
+  it fails) proving nothing still needed is lost, with an integration
+  test of the guard on a scratch database; a runbook whose rollback is a
+  database backup taken just before (the previous image's Prisma client
+  selects the dropped columns, so there is no image rollback); and a
+  cutover record in `docs/migrations/`. Verify such a branch on copies of
+  the shared test databases (`INTEGRATION_DATABASE_URL`,
+  `E2E_DB_PREFIX`), never on the shared ones other worktrees use. The
+  precedent is the vector map pipeline's E5
+  (`docs/migrations/2026-vector-map-pipeline.md`).
 
 ### When in Doubt
 
@@ -323,3 +341,7 @@ If those settings drift back on, you'll start getting Dependabot PRs; fix the se
 6. **Prisma client singleton**: The Prisma client is exposed via `prisma()` in `packages/api/src/db.ts` and via `ctx.db` inside tRPC procedures. Do not create additional `PrismaClient` instances; doing so leaks connections and breaks transactional consistency.
 
 7. **API `.js` import extensions**: The API package uses ESM with TypeScript. All relative imports in `packages/api/src/` must use `.js` extensions, even though the source files are `.ts`.
+
+8. **Map bytes live in the content-addressed store**: an uploaded map file is a `map_sources` row and its import a `map_documents` row, both keyed by hash and never updated; `map_files` (an event) and `club_map_versions` (a club map) only pin hashes. Do not add a blob column to an event or club table, read bytes through `getBlob` (`map-store/blob-store.ts`, ranged), and make a file the event's map through the chunked upload + `course.applyUploadedMap` (`docs/map-storage.md` §3, §5). Every reader of map data reads the pinned document (§4.6), never the original file.
+
+9. **Prisma `select` objects are not excess-property checked when held in a variable**: a `const X_SELECT = { … } as const` naming a column that a migration dropped still compiles and fails at runtime (`Unknown field … for select statement`). After dropping a column, grep the code for its Prisma field name instead of trusting `pnpm build` (E5 found one in `map-store/event-document.ts` this way).

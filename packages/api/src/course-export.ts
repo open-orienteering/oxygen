@@ -8,7 +8,7 @@
  *
  * Document layout lives in `iof-course-export.ts` / `ppen-course-export.ts`
  * (pure); this module maps DB rows onto them. Sequence construction
- * mirrors `rebuildCourseGeometry` in `course-geometry.ts`:
+ * mirrors `loadCourseSequences` in `course-geometry.ts`:
  * `course_controls` holds regular controls only, the start is the event
  * start control matched by `startName` (unless `firstAsStart`) and the
  * finish is `finishControlId` or the event's first finish control

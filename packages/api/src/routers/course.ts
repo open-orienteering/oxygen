@@ -46,7 +46,6 @@ import {
   type OcadCrs,
   type WGS84Bounds,
 } from "../map-projection.js";
-import { fireMapUpload } from "../db.js";
 import {
   applyEventMap,
   applyMapRotationCorrection,
@@ -55,13 +54,9 @@ import {
 import { latestVersionOrRefuse } from "../club-map-library.js";
 import { cutRotationDeg, meridianStalenessFromDetection } from "../map-north.js";
 import { documentNorth, eventPin } from "../map-store/event-document.js";
-import { colorProfileSchema } from "@oxygen/shared";
 import { canDownloadEventMap } from "../ocad-export.js";
 import { loadEventCrs } from "../event-crs.js";
-import {
-  OVERPRINT_CUTS_VERSION,
-  rebuildCourseGeometry,
-} from "../course-geometry.js";
+import { rebuildCourseLengths } from "../course-geometry.js";
 import { appendJournal } from "../journalEmit.js";
 import {
   emitClassUpserted,
@@ -576,9 +571,9 @@ export const courseRouter = router({
               controlId: uuid,
             })),
           });
-          // Generate straight-leg overlay geometry from the control
-          // positions. An explicit length wins over the computed one.
-          await rebuildCourseGeometry(tx, ctx.event.id, [c.id], {
+          // Derive legs and length from the control positions. An
+          // explicit length wins over the computed one.
+          await rebuildCourseLengths(tx, ctx.event.id, [c.id], {
             updateLength: input.length === undefined || input.length === 0,
           });
         }
@@ -671,7 +666,7 @@ export const courseRouter = router({
           where: { id: created.id },
           data: { structure: { ...structure, id: created.id } as unknown as PrismaNs.InputJsonValue },
         });
-        await rebuildCourseGeometry(tx, ctx.event.id, [created.id], {
+        await rebuildCourseLengths(tx, ctx.event.id, [created.id], {
           updateLength: true,
         });
         const version = await emitCourseUpserted(tx, ctx.event.id, created.id);
@@ -842,11 +837,10 @@ export const courseRouter = router({
           startFinishChanged ||
           input.orderMode !== undefined
         ) {
-          // The stored overlay geometry lists the old sequence (or the
-          // old start/finish legs) — rebuild straight-leg 'editor'
-          // geometry (and length, unless the caller supplied one).
-          // Free-order rebuilds drop leg features; ordered restores them.
-          await rebuildCourseGeometry(tx, ctx.event.id, [c.id], {
+          // The derived legs list the old sequence (or the old
+          // start/finish legs) — derive them again (and the length,
+          // unless the caller supplied one).
+          await rebuildCourseLengths(tx, ctx.event.id, [c.id], {
             updateLength: input.length === undefined,
           });
         }
@@ -916,7 +910,7 @@ export const courseRouter = router({
             data: { descriptionInstructions: pruned === null ? PrismaNs.DbNull : (pruned as unknown as PrismaNs.InputJsonValue) },
           });
         }
-        await rebuildCourseGeometry(tx, ctx.event.id, [c.id]);
+        await rebuildCourseLengths(tx, ctx.event.id, [c.id]);
         return emitCourseUpserted(tx, ctx.event.id, c.id);
       });
       // The written course's advisory checks (08 §6; docs/course-layer.md §9): nothing blocks the save.
@@ -1056,7 +1050,7 @@ export const courseRouter = router({
           }
         }
         if (input.orderMode !== undefined) {
-          await rebuildCourseGeometry(
+          await rebuildCourseLengths(
             tx,
             ctx.event.id,
             rows.map((r) => r.id),
@@ -1126,33 +1120,28 @@ export const courseRouter = router({
     };
   }),
 
-  /** Info about the uploaded OCAD map file (if any). */
+  /** Info about the uploaded map file (if any). */
   mapFileInfo: kioskOrCoursesViewProcedure.query(async ({ ctx }) => {
-    // Size comes from octet_length in SQL: this query runs on every map
-    // view and the blob itself is routinely 5–40 MB — fetching it just to
-    // read `.length` was a full download per page load.
-    const rows = await ctx.db.$queryRaw<
-      Array<{ id: bigint; fileName: string; uploadedAt: Date; size: number }>
-    >`
-      SELECT id, file_name AS "fileName", uploaded_at AS "uploadedAt",
-             octet_length(file_data)::int AS size
-      FROM oxygen.map_files
-      WHERE event_id = ${ctx.event.id}
-      ORDER BY uploaded_at DESC
-      LIMIT 1
-    `;
-    const f = rows[0];
+    // Size is the source row's `size_bytes` (docs/map-storage.md §3.1):
+    // this query runs on every map view and the file is routinely
+    // 5–40 MB, so it never reads the bytes. 0 for a row without a source.
+    const f = await ctx.db.mapFile.findFirst({
+      where: { eventId: ctx.event.id },
+      orderBy: { uploadedAt: "desc" },
+      select: { id: true, fileName: true, uploadedAt: true, source: { select: { sizeBytes: true } } },
+    });
     if (!f) return null;
     return {
       id: Number(f.id),
       fileName: f.fileName,
       uploadedAt: f.uploadedAt.toISOString(),
-      size: f.size,
+      size: f.source?.sizeBytes ?? 0,
     };
   }),
 
   /**
-   * Download the OCD map file (base64-encoded). Event managers may take
+   * Download the event's original map file (base64-encoded) from
+   * `map_sources`, under the event's file name. Event managers may take
    * a map the event uploaded itself. A copy adopted from the club library
    * stays club property — only an instance admin may export it.
    */
@@ -1160,9 +1149,9 @@ export const courseRouter = router({
     const f = await ctx.db.mapFile.findFirst({
       where: { eventId: ctx.event.id },
       orderBy: { uploadedAt: "desc" },
-      select: { fileName: true, fileData: true, fromClubLibrary: true },
+      select: { fileName: true, fromClubLibrary: true, source: { select: { bytes: true } } },
     });
-    if (!f) return null;
+    if (!f?.source) return null;
     if (
       !canDownloadEventMap({
         authEnabled: ctx.authEnabled,
@@ -1177,7 +1166,7 @@ export const courseRouter = router({
     }
     return {
       fileName: f.fileName,
-      fileDataBase64: Buffer.from(f.fileData).toString("base64"),
+      fileDataBase64: Buffer.from(f.source.bytes).toString("base64"),
     };
   }),
 
@@ -1390,29 +1379,10 @@ export const courseRouter = router({
       return out;
     }),
 
-  /** Upload an OCAD map file (base64). Replaces any previous file + tiles. */
-  uploadMap: coursesEditProcedure
-    .input(
-      z.object({
-        fileName: z.string(),
-        fileDataBase64: z.string(),
-      }),
-    )
-    .mutation(async ({ ctx, input }) => {
-      const buffer = Buffer.from(input.fileDataBase64, "base64");
-      const result = await applyEventMap(
-        ctx.db,
-        ctx.event.id,
-        input.fileName,
-        buffer,
-        { uploadedBy: ctx.user?.id ?? null, startedBy: ctx.user?.id ?? null },
-      );
-      return { success: true as const, ...result };
-    }),
-
   /**
-   * Second half of the chunked upload (docs/map-storage.md §5): the file
-   * already sits in `map_sources` under `fileHash`; make it the event map.
+   * Second half of the chunked upload (docs/map-storage.md §5), the only
+   * way to set an event's map: the file (OCAD or Mapper) already sits in
+   * `map_sources` under `fileHash`; make it the event map.
    */
   applyUploadedMap: coursesEditProcedure
     .input(z.object({
@@ -1423,19 +1393,16 @@ export const courseRouter = router({
     .mutation(async ({ ctx, input }) => {
       const source = await ctx.db.mapSource.findUnique({
         where: { fileHash: input.fileHash },
-        select: { kind: true, fileName: true, bytes: true },
+        select: { fileName: true },
       });
       if (!source) {
         throw new TRPCError({ code: "NOT_FOUND", message: "Uploaded file not found; upload it again" });
-      }
-      if (source.kind !== "ocad") {
-        throw new TRPCError({ code: "BAD_REQUEST", message: `${source.kind} files cannot be used as an event map yet` });
       }
       const result = await applyEventMap(
         ctx.db,
         ctx.event.id,
         input.fileName?.trim() || source.fileName,
-        Buffer.from(source.bytes),
+        null,
         { uploadedBy: ctx.user?.id ?? null, startedBy: ctx.user?.id ?? null, fileHash: input.fileHash },
       );
       return { success: true as const, ...result };
@@ -1473,9 +1440,9 @@ export const courseRouter = router({
 
   /**
    * Copy a club-library map into this event: the latest version of the
-   * `club_maps` series (its original file from `map_sources`) with the
-   * series' settings, then pin that version (docs/map-storage.md §6.5).
-   * The event keeps its own blob; later library edits do not affect it.
+   * `club_maps` series (its original file in `map_sources`) with the
+   * series' rotation correction, then pin that version
+   * (docs/map-storage.md §6.5). Later library edits do not affect the event.
    */
   useClubMap: coursesEditProcedure
     .input(z.object({ clubMapId: z.string().uuid() }))
@@ -1485,9 +1452,6 @@ export const courseRouter = router({
         select: {
           name: true,
           rotationCorrection: true,
-          colourProfile: true,
-          colourOverrides: true,
-          northLinesBelow: true,
           versions: {
             orderBy: { seq: "desc" },
             take: 1,
@@ -1504,24 +1468,18 @@ export const courseRouter = router({
       const version = latestVersionOrRefuse(series.name, series.versions[0]);
       const source = await ctx.db.mapSource.findUniqueOrThrow({
         where: { fileHash: version.sourceHash },
-        select: { fileName: true, bytes: true },
+        select: { fileName: true },
       });
       const result = await applyEventMap(
         ctx.db,
         ctx.event.id,
         version.label || source.fileName,
-        Buffer.from(source.bytes),
+        null,
         {
           fromClubLibrary: true,
           uploadedBy: version.uploadedBy ?? ctx.user?.id ?? null,
           startedBy: ctx.user?.id ?? null,
           rotationCorrection: series.rotationCorrection,
-          colorProfile: colorProfileSchema.catch("auto").parse(series.colourProfile),
-          colorOverrides: (series.colourOverrides ?? {}) as {
-            above?: number[];
-            below?: number[];
-          },
-          northLinesBelow: series.northLinesBelow,
           fileHash: version.sourceHash,
         },
       );
@@ -1541,34 +1499,15 @@ export const courseRouter = router({
     return { enabled: row?.autoOverprintCuts !== false };
   }),
 
+  // The flag only: every reader computes the cuts from it and the pinned
+  // document (course-layer.md §4.3); nothing stored depends on it since E5.
   setOverprintCuts: coursesEditProcedure
     .input(z.object({ enabled: z.boolean() }))
     .mutation(async ({ ctx, input }) => {
       await ctx.db.event.update({
         where: { id: ctx.event.id },
-        data: {
-          autoOverprintCuts: input.enabled,
-          overprintCutsVersion: OVERPRINT_CUTS_VERSION,
-        },
+        data: { autoOverprintCuts: input.enabled },
       });
-      const editorCourses = await ctx.db.course.findMany({
-        where: {
-          eventId: ctx.event.id,
-          removed: false,
-          geometrySource: "editor",
-        },
-        select: { id: true },
-      });
-      if (editorCourses.length > 0) {
-        const ids = editorCourses.map((c) => c.id);
-        await rebuildCourseGeometry(ctx.db, ctx.event.id, ids, {
-          updateLength: false,
-        });
-        for (const id of ids) {
-          // Geometry only: the structure and its token are unchanged.
-          await emitCourseUpserted(ctx.db, ctx.event.id, id, { advanceVersion: false });
-        }
-      }
       return { success: true as const, enabled: input.enabled };
     }),
 
@@ -1943,8 +1882,8 @@ export const courseRouter = router({
         if (finishLeg) legsArr.push(Math.round(finishLeg.legLength));
         const legsStr = legsArr.length ? legsArr.join(";") + ";" : "";
 
-        // Per-course geometry: prefer OCD when fresh; otherwise XML.
-        // Free-order courses never keep connecting leg lines.
+        // The file's per-course features (import-time only: leg gaps and,
+        // for OCD, course objects). Free-order courses have no legs.
         let geom = skipPositions ? null : courseGeometry[pc.name] ?? null;
         if (geom && (pc.orderMode ?? "ordered") === "free_order") {
           geom = {
@@ -1966,22 +1905,22 @@ export const courseRouter = router({
 
         const existing = courseByName.get(pc.name.toLowerCase());
         let courseUuid: string;
-        // An IOF / PPen re-import over an OCD-imported course keeps the
-        // OCD file's `courses.geometry` (written until E5 for the v0.5.0
-        // rollback; nothing reads it) and carries the authored leg gaps
-        // from the stored structure (course-layer.md §6.4 "Importers").
-        let keepOcd = false;
+        // An IOF / PPen re-import (a format without leg gaps) carries the
+        // stored legs — gaps an OCD import or the editor wrote — where the
+        // leg still runs between the same sites (course-layer.md §6.4
+        // "Importers").
+        let carryGaps = false;
         let prevStructure: courseShared.StoredCourseStructure | null = null;
         if (existing) {
-          const prev = await ctx.db.course.findUnique({
-            where: { id: existing.id },
-            select: { geometrySource: true, structure: true },
-          });
-          keepOcd = prev?.geometrySource === "ocd" && geometrySource === "xml" && !!geom;
-          const parsedPrev = keepOcd && prev?.structure ? courseShared.courseStructureSchema.safeParse(prev.structure) : null;
-          prevStructure = parsedPrev?.success ? parsedPrev.data : null;
-          // The file's geometry, unless kept; none (position-less) leaves the column alone.
-          const written = keepOcd ? null : geom;
+          carryGaps = geometrySource === "xml" && !!geom;
+          if (carryGaps) {
+            const prev = await ctx.db.course.findUnique({
+              where: { id: existing.id },
+              select: { structure: true },
+            });
+            const parsedPrev = prev?.structure ? courseShared.courseStructureSchema.safeParse(prev.structure) : null;
+            prevStructure = parsedPrev?.success ? parsedPrev.data : null;
+          }
           await ctx.db.course.update({
             where: { id: existing.id },
             data: {
@@ -1994,9 +1933,8 @@ export const courseRouter = router({
               firstAsStart: false,
               lastAsFinish: false,
               removed: false,
-              geometry: (written ?? undefined) as never,
-              geometrySource: written ? geometrySource : undefined,
-              lengthSource: written ? "file" : undefined,
+              // The file's length; a position-less import leaves the provenance alone.
+              lengthSource: geom ? "file" : undefined,
             },
           });
           courseUuid = existing.id;
@@ -2014,8 +1952,6 @@ export const courseRouter = router({
               startName,
               firstAsStart: false,
               lastAsFinish: false,
-              geometry: (geom ?? undefined) as never,
-              geometrySource: geom ? geometrySource : "",
               lengthSource: geom ? "file" : null,
             },
             select: { id: true },
@@ -2028,7 +1964,7 @@ export const courseRouter = router({
         // The structure, and through it the column mirror: start / finish
         // sites explicit as the file names them, `course_controls`, the
         // leg gaps the file's 705 pieces leave (course-layer.md §6.4).
-        const gapsByLeg = skipPositions || keepOcd || !geom ? new Map<string, courseShared.FractionGap[]>() : legGapsOfFeatures(geom, (code) => positionOfCode.get(code));
+        const gapsByLeg = skipPositions || carryGaps || !geom ? new Map<string, courseShared.FractionGap[]>() : legGapsOfFeatures(geom, (code) => positionOfCode.get(code));
         const items: courseShared.StoredControlItem[] = [];
         let prevCode: string | null = null;
         for (const cc of pc.controls) {
@@ -2039,8 +1975,8 @@ export const courseRouter = router({
           prevCode = cc.controlId;
         }
         const linear = courseShared.linearStructure(courseUuid, items, { orderMode: pc.orderMode ?? "ordered" }) as courseShared.StoredCourseStructure;
-        // A kept OCD course: its leg gaps where the leg still runs between the same sites.
-        await persistStructure(ctx.db, eventId, keepOcd ? carryLegs(prevStructure, linear) : linear);
+        // A gap-less re-import: the stored legs where the leg still runs between the same sites.
+        await persistStructure(ctx.db, eventId, carryGaps ? carryLegs(prevStructure, linear) : linear);
       }
 
       // The file's course-level lines and areas (707 / 708 / 709 / 711) are
@@ -2056,13 +1992,13 @@ export const courseRouter = router({
         );
       }
 
-      // A position-less import must not leave geometry drawn from the
+      // A position-less import must not leave legs derived from the
       // file's unusable coordinates (or from a previous import of the
-      // same course names). Derive it from whatever positions the
+      // same course names). Derive them from whatever positions the
       // controls actually have — none, for freshly created ones.
       // Lengths stay as the file stated them: those are real metres.
       if (skipPositions) {
-        await rebuildCourseGeometry(ctx.db, eventId, [...courseIdMap.values()], {
+        await rebuildCourseLengths(ctx.db, eventId, [...courseIdMap.values()], {
           updateLength: false,
         });
       }
@@ -2088,16 +2024,7 @@ export const courseRouter = router({
         }
       }
 
-      // ── 4. Invalidate the server's rendered-map cache ──
-      //
-      // Course overlays are baked into the legacy rendered maps, so a
-      // course import drops them. `map_files.uploaded_at` is left alone
-      // (slice E1): it is the map's upload time, and the readers that
-      // keyed caches on it now key on the pinned document's hash.
-      await ctx.db.renderedMap.deleteMany({ where: { eventId } });
-      fireMapUpload(eventId);
-
-      // ── 5. Journal the import as ONE reference.imported entry ──
+      // ── 4. Journal the import as ONE reference.imported entry ──
       //
       // The full post-import reference state (active controls + courses +
       // the classes the import touched), serialized from the DB so the

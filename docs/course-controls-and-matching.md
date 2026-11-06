@@ -329,16 +329,16 @@ per-leg lengths (`"1200;900;"`). Who wrote them is
 | `length_source` | Written by | Export (IOF / Purple Pen) | Eventor sync |
 |---|---|---|---|
 | `file` | `course.importCourses` with positions (OCD, IOF, Purple Pen): the file's published length, which may include detours, marked routes or extra distance | the stored length (the derived one when it is 0) | overwritten by the start list's class length when every class of the course agrees |
-| `derived` | every rebuild of an edited course with at least one positioned control (`rebuildCourseGeometry`: create, update, sequence edits, control moves, copy, map upload, rotation, the cuts toggle, a position-less import) | recomputed from the controls' current positions and the map scale (the per-leg rounded sum), the stored length when that is 0 | never overwritten |
+| `derived` | every re-derivation of an edited course with at least one positioned control (`rebuildCourseLengths`: create, update, sequence edits, control moves, copy, map upload, rotation, a position-less import) | recomputed from the controls' current positions and the map scale (the per-leg rounded sum), the stored length when that is 0 | never overwritten |
 | NULL | a course without positioned controls; rows written before E6 without geometry | as `file` | as `file` |
 
-It replaces what `courses.geometry_source = 'editor'` meant to these two
-readers, so the GeoJSON column and its source can be dropped (E5). The
-migration backfills it 1:1 (`editor` → `derived`, `ocd` / `xml` →
-`file`, `''` → NULL) and the writers set it beside `geometry_source`
-until E5, so no exported or synced length changes. Like
-`geometry_source` it is not in the `course.upserted` journal payload; it
-travels with the checkout snapshot.
+It replaced what `courses.geometry_source = 'editor'` meant to these two
+readers: the E6 migration backfilled it 1:1 (`editor` → `derived`,
+`ocd` / `xml` → `file`, `''` → NULL) and the writers set it beside
+`geometry_source` until E5 dropped that column with the GeoJSON one, so
+no exported or synced length changed. It is not in the
+`course.upserted` journal payload; it travels with the checkout
+snapshot.
 
 Stored lengths of an edited course come from the course layer's derived
 legs (`course-layer.md` §4.1): centre to centre between consecutive
@@ -348,9 +348,9 @@ once; free-order courses keep the length the organiser typed.
 
 | Test | Covers |
 |---|---|
-| `packages/api/src/__tests__/integration/course-export.test.ts` "derives editor-course lengths…", "exports the published length of a 'file' or NULL…" | `derived` recomputes; `file` and NULL export the stored length whatever `geometry_source` says; 0 falls back to the derived one |
+| `packages/api/src/__tests__/integration/course-export.test.ts` "derives editor-course lengths…", "exports the published length of a 'file' or NULL…" | `derived` recomputes; `file` and NULL export the stored length; 0 falls back to the derived one |
 | `packages/api/src/__tests__/integration/eventor-reentry.test.ts` "overwrites a 'file'…", "does not overwrite an editor-owned course…" | the sync's guard on `length_source` |
-| `packages/api/src/__tests__/integration/control-editor.test.ts` "length_source migration" | the backfill SQL, verbatim |
+| `packages/api/src/__tests__/integration/control-editor.test.ts` "course geometry regeneration", "course.clone" | `derived` on create, sequence edits, control moves and copy (the E6 migration's backfill test went with `geometry_source` in E5) |
 | `packages/api/src/__tests__/course-geometry.test.ts` "legDistancesMm (from the course layer, E6)" | layer-derived leg lengths = the pre-E6 formula bit for bit |
 
 ## Description autodetect: map source

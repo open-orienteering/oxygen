@@ -20,6 +20,8 @@ describe("BACKUP_TABLES", () => {
   it("does not carry previews (a cache) or the global tile cache", () => {
     expect(BACKUP_TABLES).not.toContain("map_previews");
     expect(BACKUP_TABLES).not.toContain("map_tiles");
+    // Dropped with the raster pipeline (E5).
+    expect(BACKUP_TABLES).not.toContain("rendered_maps");
   });
 });
 

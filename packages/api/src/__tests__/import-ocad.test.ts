@@ -5,7 +5,7 @@ import { mapDocument, render, symbolLibrary } from "@oxygen/shared";
 import { importOcadToDocument, sha256Hex } from "../import/ocad.js";
 import { buildImportReport } from "../map-store/documents.js";
 import { mapFileMetadataFor } from "../map-store/map-file-metadata.js";
-import { parseOcadMapMetadata } from "../event-map.js";
+import { parseOcadMapMetadata } from "./helpers/ocad-oracle.js";
 import { goldenFonts } from "../render/golden.js";
 // @ts-expect-error — plain .mjs fixture writer without types
 import { buildSymbolTypesOcad } from "../../../../scripts/lib/ocad-fixture.mjs";

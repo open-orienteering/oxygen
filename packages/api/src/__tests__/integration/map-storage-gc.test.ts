@@ -126,7 +126,7 @@ describe("runStorageGc", () => {
 
   it("keeps an old document referenced by an event pin and touches it, so the grace restarts", async () => {
     const { src, doc } = await orphanPair();
-    await ctx.db.mapFile.create({ data: { eventId: ctx.eventId, fileName: "pinned.ocd", fileData: randomBytes(4), sourceHash: src, documentHash: doc } });
+    await ctx.db.mapFile.create({ data: { eventId: ctx.eventId, fileName: "pinned.ocd", sourceHash: src, documentHash: doc } });
     const result = await runStorageGc(ctx.db);
     expect(result.documents).not.toContain(doc);
     expect(result.sources).not.toContain(src);
@@ -192,7 +192,7 @@ describe("runStorageGc", () => {
   it("a dry run lists what would go — the source as if its document were gone — and changes nothing", async () => {
     const { src, doc } = await orphanPair();
     const pinned = await orphanPair();
-    await ctx.db.mapFile.create({ data: { eventId: ctx.eventId, fileName: "dry.ocd", fileData: randomBytes(4), sourceHash: pinned.src, documentHash: pinned.doc } });
+    await ctx.db.mapFile.create({ data: { eventId: ctx.eventId, fileName: "dry.ocd", sourceHash: pinned.src, documentHash: pinned.doc } });
     const before = await ctx.db.mapDocument.findUniqueOrThrow({ where: { hash: pinned.doc }, select: { lastReferencedAt: true } });
     const dry = await runStorageGc(ctx.db, { dryRun: true });
     expect(dry).toMatchObject({ dryRun: true, touched: 0, uploads: 0, jobs: 0 });

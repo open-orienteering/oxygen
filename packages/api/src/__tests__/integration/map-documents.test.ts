@@ -89,8 +89,8 @@ afterAll(async () => {
 
 describe("storeImportedDocument", () => {
   it("applyEventMap stored the source and the document, keyed by their hashes, with header summary and report", async () => {
-    const row = await ctx.db.mapFile.findFirstOrThrow({ where: { eventId: ctx.eventId }, select: { sourceHash: true, documentHash: true, fileHash: true } });
-    expect(row.sourceHash).toBe(row.fileHash);
+    const row = await ctx.db.mapFile.findFirstOrThrow({ where: { eventId: ctx.eventId }, select: { sourceHash: true, documentHash: true } });
+    expect(row.sourceHash).toBe(fileHash);
     expect(row.documentHash).toBe(documentHash);
     const doc = await ctx.db.mapDocument.findUniqueOrThrow({ where: { hash: documentHash } });
     expect(doc.sourceHash).toBe(fileHash);

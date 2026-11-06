@@ -2,8 +2,8 @@
  * What an imported course's file-authored geometry becomes besides the
  * sequence (docs/course-layer.md §6.4): leg gaps from the 705 pieces, and
  * the course-level lines and areas as course-object bodies. Pure; the
- * importer and the backfill share it, both reading the parser's GeoJSON
- * shape (`courses.geometry` of an `ocd` row has the same one).
+ * importer reads the parser's import-time GeoJSON shape (what
+ * `courses.geometry` of an `ocd` row held until E5 dropped the column).
  */
 
 import type { course } from "@oxygen/shared";

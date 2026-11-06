@@ -24,6 +24,9 @@ const LATEST = `LEFT JOIN LATERAL (SELECT * FROM oxygen.map_files m WHERE m.even
     FROM oxygen.events e ${LATEST} WHERE NOT e.removed AND lm.id IS NOT NULL AND lm.document_hash IS NULL`);
   await q("map_files_unsourced", "SELECT count(*)::int AS n FROM oxygen.map_files m JOIN oxygen.events e ON e.id = m.event_id WHERE NOT e.removed AND m.source_hash IS NULL");
   await q("club_files_unmigrated", "SELECT count(*)::int AS n FROM oxygen.club_map_files WHERE club_map_id IS NULL");
+  // The E5 (v0.6.1) migration's guard also needs each club row's bytes in map_sources.
+  await q("club_files_bytes_unsourced", `SELECT count(*)::int AS n FROM oxygen.club_map_files f WHERE NOT EXISTS (
+      SELECT 1 FROM oxygen.map_sources s WHERE s.file_hash = coalesce(f.file_hash, encode(sha256(f.file_data), 'hex')))`);
   await q("courses_no_structure", `SELECT e.name_id, c.name, c.geometry_source FROM oxygen.courses c JOIN oxygen.events e ON e.id = c.event_id
     WHERE NOT c.removed AND NOT e.removed AND c.structure IS NULL ORDER BY 1, 2`);
   await q("stack_unaligned", `SELECT DISTINCT e.name_id, lm.document_hash FROM oxygen.events e ${LATEST}

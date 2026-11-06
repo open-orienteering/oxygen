@@ -2,13 +2,14 @@ import { describe, it, expect } from "vitest";
 import { readFileSync } from "fs";
 import { resolve, dirname } from "path";
 import { fileURLToPath } from "url";
-import { parseOcadMapMetadata } from "../event-map.js";
+import { parseOcadMapMetadata } from "./helpers/ocad-oracle.js";
 import { isReservedEventSlug, sanitizeNameId } from "../db.js";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const FIXTURE = resolve(__dirname, "../../../../e2e/test.ocd");
 
-describe("parseOcadMapMetadata", () => {
+// The oracle the pin's quick-access columns are checked against (E5 moved it out of production).
+describe("parseOcadMapMetadata (test oracle)", () => {
   it("returns nulls for a corrupt buffer instead of throwing", async () => {
     const meta = await parseOcadMapMetadata(Buffer.from("not-an-ocad-file"));
     expect(meta).toEqual({

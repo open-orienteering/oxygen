@@ -10,18 +10,17 @@
  * on apply.
  *
  * Stripped from the payload: `id`/`eventId`/`seq` (carried explicitly),
- * timestamps (local defaults), and the course `geometry`/`geometrySource`
- * blobs and `lengthSource` (which mirrors `geometrySource`) — derived
- * artifacts that travel with the checkout snapshot instead of inflating
- * every journal entry. BigInt columns (`version`) travel as
- * decimal strings.
+ * timestamps (local defaults), and the course's `lengthSource` — derived,
+ * it travels with the checkout snapshot (as the `geometry` artifact did
+ * until E5 dropped it). BigInt columns (`version`) travel as decimal
+ * strings.
  *
  * Version token (docs/course-layer.md §7): a course / control row's
  * `version` is the HLC of the `*.upserted` entry that last wrote it. The
  * emit takes the clock reading first, stamps the row with it, then reads the
  * payload — so the entry carries the token it set and a peer applying it
- * ends up with the same token. Re-emits that only ship a rebuilt geometry
- * (a control moved; the event's map or cut settings changed) pass
+ * ends up with the same token. Re-emits that only ship re-derived fields
+ * (a control moved; the event's map changed) pass
  * `{ advanceVersion: false }`: the course's structure did not change, so its
  * token does not either (a structure edit and a field move never conflict).
  */
@@ -82,9 +81,7 @@ export async function courseUpsertPayload(
     id: row.id,
     seq: row.seq,
     fields: portableFields(row as unknown as Record<string, unknown>, [
-      "geometry",
-      "geometrySource",
-      // Mirrors `geometrySource` (E6): travels with the snapshot, not the journal.
+      // Derived (E6): travels with the snapshot, not the journal.
       "lengthSource",
     ]),
     courseControls: ccs,
@@ -118,7 +115,7 @@ export async function emitClassUpserted(
 }
 
 export interface EmitOptions {
-  /** Stamp the row's `version` with this entry's HLC. Default true; false for geometry-only re-emits. */
+  /** Stamp the row's `version` with this entry's HLC. Default true; false for re-emits of derived fields only. */
   advanceVersion?: boolean;
 }
 

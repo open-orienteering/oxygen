@@ -27,7 +27,7 @@ import { loadEventCrs } from "../event-crs.js";
 import { loadEventMapObjects } from "../event-map-objects.js";
 import { describeAt, descriptionsEqual, suggestDescriptions } from "../description-autodetect.js";
 import { mapMmToWgs84 } from "../map-projection.js";
-import { rebuildCourseGeometry } from "../course-geometry.js";
+import { rebuildCourseLengths } from "../course-geometry.js";
 import {
   coursesNamingInStructure,
   remirrorStoredStructures,
@@ -185,7 +185,7 @@ async function getControlByCode(
  * Ids of every course whose geometry depends on a control: courses that
  * visit it via `course_controls`, plus — for start/finish controls —
  * courses that reference it by role (startName / finishControlId, or by
- * the lowest-seq default when unset, mirroring rebuildCourseGeometry).
+ * the lowest-seq default when unset, mirroring rebuildCourseLengths).
  * Used by control.update (position moves) and control.delete (cascade).
  */
 async function courseIdsUsingControl(
@@ -725,7 +725,7 @@ export const controlRouter = router({
         if (isStartFinish && hasPosition) {
           const courseIds = await courseIdsUsingControl(tx, ctx.event.id, c);
           if (courseIds.length > 0) {
-            await rebuildCourseGeometry(tx, ctx.event.id, courseIds);
+            await rebuildCourseLengths(tx, ctx.event.id, courseIds);
             for (const courseId of courseIds) {
               await emitCourseUpserted(tx, ctx.event.id, courseId, { advanceVersion: false });
             }
@@ -938,7 +938,7 @@ export const controlRouter = router({
           // 'editor' geometry and ship the updated course rows. A move
           // leaves their structure, so their token too (G1).
           const rebuild = positionChanged ? dependent : [...remirrored];
-          await rebuildCourseGeometry(tx, ctx.event.id, rebuild);
+          await rebuildCourseLengths(tx, ctx.event.id, rebuild);
           for (const courseId of rebuild) {
             await emitCourseUpserted(tx, ctx.event.id, courseId, { advanceVersion: remirrored.has(courseId) });
           }
@@ -1006,7 +1006,7 @@ export const controlRouter = router({
         // Deletes are upserts with removed: true on the wire.
         await emitControlUpserted(tx, ctx.event.id, c.id);
         const affected = [...new Set([...courseIds, ...visited])];
-        await rebuildCourseGeometry(tx, ctx.event.id, affected);
+        await rebuildCourseLengths(tx, ctx.event.id, affected);
         const versions: { id: number; version: string }[] = [];
         for (const courseId of affected) {
           const v = await emitCourseUpserted(tx, ctx.event.id, courseId, { advanceVersion: visited.has(courseId) });
@@ -1086,7 +1086,7 @@ export const controlRouter = router({
         if (c.status === "start" || c.status === "finish") {
           const courseIds = await courseIdsUsingControl(tx, ctx.event.id, c);
           if (courseIds.length > 0) {
-            await rebuildCourseGeometry(tx, ctx.event.id, courseIds);
+            await rebuildCourseLengths(tx, ctx.event.id, courseIds);
             for (const courseId of courseIds) {
               await emitCourseUpserted(tx, ctx.event.id, courseId, { advanceVersion: false });
             }

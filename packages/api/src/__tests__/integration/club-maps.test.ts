@@ -2,46 +2,29 @@ import { describe, it, expect, beforeAll, afterAll } from "vitest";
 import { readFileSync } from "fs";
 import { resolve, dirname } from "path";
 import { fileURLToPath } from "url";
-import { randomBytes } from "crypto";
+import { createHash, randomBytes } from "crypto";
 import Fastify from "fastify";
 import {
   createTestEvent,
   type TestEventContext,
 } from "../helpers/test-db.js";
 import { makeCaller } from "../helpers/caller.js";
+import { closeUploadServer, uploadClubMap, uploadEventMap } from "../helpers/upload-map.js";
+import { parseOcadMapMetadata } from "../helpers/ocad-oracle.js";
 import type { AuthUser } from "../../auth.js";
-import type { GeoJSONFeatureCollection } from "../../iof-course-parser.js";
 import { grantSystemGroup } from "../../permissions.js";
 import { SYSTEM_GROUP_IDS } from "@oxygen/shared";
 import { registerBackupRoute } from "../../backup.js";
-import { parseOcadMapMetadata } from "../../event-map.js";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const FIXTURE = resolve(__dirname, "../../../../../e2e/test.ocd");
 const suffix = randomBytes(4).toString("hex");
 
+const sha256 = (b: Uint8Array) => createHash("sha256").update(b).digest("hex");
+
 let ctx: TestEventContext;
-/** `club_maps` ids created here; their linked legacy rows go with them. */
+/** `club_maps` ids created here. */
 let seriesIds: string[] = [];
-/** Unlinked `club_map_files` rows inserted directly. */
-let legacyOnlyIds: bigint[] = [];
-
-/**
- * A pre-pipeline row that the backfill has already linked to a series
- * (no version yet): the shape the list reads raster metadata from.
- */
-async function linkedLegacyRow(data: { name: string; fileName: string; fileData: Buffer }) {
-  const series = await ctx.db.clubMap.create({ data: { name: data.name }, select: { id: true } });
-  seriesIds.push(series.id);
-  const row = await ctx.db.clubMapFile.create({
-    data: { ...data, sizeBytes: data.fileData.length, clubMapId: series.id },
-  });
-  return { seriesId: series.id, legacyId: row.id };
-}
-
-async function legacyRowOf(seriesId: string) {
-  return ctx.db.clubMapFile.findFirstOrThrow({ where: { clubMapId: seriesId } });
-}
 
 function asUser(row: {
   id: string;
@@ -58,9 +41,7 @@ beforeAll(async () => {
 });
 
 afterAll(async () => {
-  await ctx.db.clubMapFile.deleteMany({
-    where: { OR: [{ id: { in: legacyOnlyIds } }, { clubMapId: { in: seriesIds } }] },
-  });
+  await closeUploadServer();
   await ctx.db.clubMap.deleteMany({ where: { id: { in: seriesIds } } });
   await ctx.db.user.deleteMany({
     where: { email: { endsWith: "@club-map-test.example" } },
@@ -72,11 +53,7 @@ describe("club map library", () => {
   it("uploads, lists without blob, renames, and round-trips download bytes", async () => {
     const buf = readFileSync(FIXTURE);
     const caller = makeCaller();
-    const uploaded = await caller.clubMap.upload({
-      fileName: "test.ocd",
-      name: `Club map ${suffix}`,
-      fileDataBase64: buf.toString("base64"),
-    });
+    const uploaded = await uploadClubMap(caller, buf, "test.ocd", `Club map ${suffix}`);
     seriesIds.push(uploaded.id);
     expect(uploaded.sizeBytes).toBe(buf.length);
 
@@ -116,15 +93,11 @@ describe("club map library", () => {
     expect(row!.previewUrl).toBe(
       `/api/map-documents/${series.versions[0].documentHash}/thumbnail.png`,
     );
-    // The OCAD-rendered PNG preview went in E4a: the write-through row
-    // carries none, the card shows the document thumbnail above.
-    const stored = await legacyRowOf(uploaded.id);
-    expect(stored.previewPng).toBeNull();
-
     // The fixture's north lines are drawn at grid north while the real
-    // declination at 15°E/58.6°N is ≈ 6.5° E: the detection must report
-    // that as *staleness* of the lines and must NOT touch the
-    // georeference — ScalePar is authoritative.
+    // declination at 15°E/58.6°N is ≈ 6.5° E: the document's north report
+    // gives that as *staleness* of the lines and must NOT touch the
+    // georeference — ScalePar is authoritative. No OCAD parse at upload
+    // since E5: the value is the pinned version's report.
     expect(uploaded.rotationCorrection).toBe(0);
     expect(uploaded.meridianStalenessDeg).toBeGreaterThan(5);
     expect(uploaded.meridianStalenessDeg).toBeLessThan(8);
@@ -139,47 +112,31 @@ describe("club map library", () => {
     });
     const renamed = (await caller.clubMap.list()).find((m) => m.id === uploaded.id);
     expect(renamed?.name).toBe(`Renamed ${suffix}`);
-    expect((await legacyRowOf(uploaded.id)).name).toBe(`Renamed ${suffix}`);
 
     const dl = await caller.clubMap.download({ id: uploaded.id });
     expect(dl.fileName).toBe("test.ocd");
     expect(Buffer.from(dl.fileDataBase64, "base64").equals(buf)).toBe(true);
   });
 
-  it("lists no north for a series without a version and never parses the legacy row (docs/map-storage.md §4.6)", async () => {
-    // A row from before the north_detection column, already linked to its
-    // series by the backfill but not imported yet.
-    const legacy = await linkedLegacyRow({
-      name: `Legacy north ${suffix}`,
-      fileName: "legacy-north.ocd",
-      fileData: readFileSync(FIXTURE),
-    });
+  it("lists no north for a series without a version (docs/map-storage.md §4.6)", async () => {
+    const series = await ctx.db.clubMap.create({ data: { name: `No version ${suffix}` }, select: { id: true } });
+    seriesIds.push(series.id);
 
-    const listed = (await makeCaller().clubMap.list()).find(
-      (m) => m.id === legacy.seriesId,
-    );
+    const listed = (await makeCaller().clubMap.list()).find((m) => m.id === series.id);
     expect(listed).toMatchObject({ version: null, northDetection: null, meridianStalenessDeg: null, bounds: null, northOffset: null, scale: null });
     // No document, no thumbnail: an empty frame (§6.5, E4a).
     expect(listed?.previewUrl).toBeNull();
-    // No lazy backfill: the read wrote nothing.
-    const persisted = await ctx.db.clubMapFile.findUniqueOrThrow({
-      where: { id: legacy.legacyId },
-      select: { northDetection: true },
-    });
-    expect(persisted.northDetection).toBeNull();
   });
 
-  it("keeps accepting an unparseable upload without a preview", async () => {
-    const garbage = Buffer.from("not an OCAD file");
-    const uploaded = await makeCaller().clubMap.upload({
-      fileName: "unparseable.ocd",
-      fileDataBase64: garbage.toString("base64"),
-    });
+  it("keeps accepting an unimportable upload without a preview", async () => {
+    // OCAD magic (the chunk route sniffs it) followed by bytes no reader understands.
+    const garbage = Buffer.concat([Buffer.from([0xad, 0x0c]), randomBytes(64)]);
+    const uploaded = await uploadClubMap(makeCaller(), garbage, "unparseable.ocd");
     seriesIds.push(uploaded.id);
-
-    const stored = await legacyRowOf(uploaded.id);
-    expect(Buffer.from(stored.fileData)).toEqual(garbage);
-    expect(stored.previewPng).toBeNull();
+    expect(uploaded.meridianStalenessDeg).toBeNull();
+    // The bytes are kept as the source (§3.1), whatever the import made of them.
+    const source = await ctx.db.mapSource.findUniqueOrThrow({ where: { fileHash: sha256(garbage) }, select: { bytes: true } });
+    expect(Buffer.from(source.bytes).equals(garbage)).toBe(true);
 
     // Listed as a series without a version, with its failed import.
     const listed = (await makeCaller().clubMap.list()).find((m) => m.id === uploaded.id);
@@ -198,24 +155,6 @@ describe("club map library", () => {
     await expect(
       makeCaller(ctx.event).course.useClubMap({ clubMapId: uploaded.id }),
     ).rejects.toMatchObject({ code: "PRECONDITION_FAILED" });
-  });
-
-  it("does not list a legacy row the backfill has not linked to a series", async () => {
-    const row = await ctx.db.clubMapFile.create({
-      data: {
-        name: `Unlinked ${suffix}`,
-        fileName: "unlinked.ocd",
-        fileData: Buffer.from("bytes"),
-        sizeBytes: 5,
-      },
-    });
-    legacyOnlyIds.push(row.id);
-    const list = await makeCaller().clubMap.list();
-    expect(list.find((m) => m.name === `Unlinked ${suffix}`)).toBeUndefined();
-    // A read never starts imports or creates series.
-    expect(
-      await ctx.db.clubMapFile.findUniqueOrThrow({ where: { id: row.id }, select: { clubMapId: true } }),
-    ).toEqual({ clubMapId: null });
   });
 
   it("rejects unknown and malformed library ids", async () => {
@@ -255,10 +194,7 @@ describe("club map library", () => {
       authEnabled: true,
       identityEmail: uploader.email,
     });
-    const created = await asUploader.clubMap.upload({
-      fileName: "owned.ocd",
-      fileDataBase64: buf.toString("base64"),
-    });
+    const created = await uploadClubMap(asUploader, buf, "owned.ocd");
     seriesIds.push(created.id);
 
     const asStranger = makeCaller(null, {
@@ -270,27 +206,22 @@ describe("club map library", () => {
       code: "FORBIDDEN",
     });
     expect(await ctx.db.clubMap.count({ where: { id: created.id } })).toBe(1);
-    expect(await ctx.db.clubMapFile.count({ where: { clubMapId: created.id } })).toBe(1);
 
-    // The series' creator may delete it; the linked legacy row goes too.
+    // The series' creator may delete it; its versions cascade.
     await asUploader.clubMap.remove({ id: created.id });
     expect(await ctx.db.clubMap.count({ where: { id: created.id } })).toBe(0);
-    expect(await ctx.db.clubMapFile.count({ where: { fileName: "owned.ocd", clubMapId: null } })).toBe(0);
+    expect(await ctx.db.clubMapVersion.count({ where: { clubMapId: created.id } })).toBe(0);
   });
 
-  it("copies a library map onto an event and rebuilds editor geometry", async () => {
+  it("copies a library map onto an event and keeps editor course lengths derived", async () => {
     const buf = readFileSync(FIXTURE);
     const caller = makeCaller(ctx.event);
-    const uploaded = await caller.clubMap.upload({
-      fileName: "event-copy.ocd",
-      fileDataBase64: buf.toString("base64"),
-    });
+    const uploaded = await uploadClubMap(caller, buf, "event-copy.ocd");
     seriesIds.push(uploaded.id);
 
     // Manual library correction must flow into the event MapFile.
-    await caller.clubMap.setRotation({ id: uploaded.id, degrees: 4.5 });
-    const clubRow = await legacyRowOf(uploaded.id);
-    expect(clubRow.rotationCorrection).toBe(4.5);
+    const rotated = await caller.clubMap.setRotation({ id: uploaded.id, degrees: 4.5 });
+    expect(rotated).toEqual({ success: true, rotationCorrection: 4.5 });
     expect(
       (await ctx.db.clubMap.findUniqueOrThrow({ where: { id: uploaded.id } })).rotationCorrection,
     ).toBe(4.5);
@@ -304,22 +235,7 @@ describe("club map library", () => {
     const before = await ctx.db.course.findFirst({
       where: { eventId: ctx.eventId, seq: course.id },
     });
-    expect(before?.geometrySource).toBe("editor");
-    await ctx.db.course.update({
-      where: { id: before!.id },
-      data: { geometry: { type: "FeatureCollection", features: [] } },
-    });
-
-    // Seed an orphan tile row so we can assert GC after the map is replaced.
-    await ctx.db.mapTile.create({
-      data: {
-        renderKey: "orphan-club-maps-seed",
-        z: 1,
-        x: 0,
-        y: 0,
-        tileData: Buffer.from([1, 2, 3]),
-      },
-    });
+    expect(before?.lengthSource).toBe("derived");
 
     const used = await caller.course.useClubMap({ clubMapId: uploaded.id });
     expect(used.success).toBe(true);
@@ -331,13 +247,12 @@ describe("club map library", () => {
       where: { eventId: ctx.eventId },
     });
     expect(mapRow?.fileName).toBe("event-copy.ocd");
-    expect(Buffer.from(mapRow!.fileData).equals(buf)).toBe(true);
+    expect(mapRow!.sourceHash).toBe(sha256(buf));
     expect(mapRow!.fromClubLibrary).toBe(true);
     expect(mapRow!.rotationCorrection).toBe(4.5);
-    // Metadata is parsed once at apply time and persisted, so
-    // course.mapMetadata never has to re-parse the OCAD blob per query
-    // (a multi-second stall on real maps that made the SW's NetworkFirst
-    // timeout serve a stale null → blank map panel until a full reload).
+    // The quick-access columns are the pin's (docs/map-storage.md §6.4),
+    // written when the copy's import job pinned the document.
+    expect(mapRow!.documentHash).toMatch(/^[0-9a-f]{64}$/);
     expect(mapRow!.scale).toBeGreaterThan(0);
     expect(mapRow!.bounds).toBeTruthy();
     expect(mapRow!.calibration).toBeTruthy();
@@ -349,22 +264,13 @@ describe("club map library", () => {
     expect(meta!.calibration!.length).toBeGreaterThanOrEqual(3);
     expect(meta!.rotationCorrection).toBe(4.5);
 
-    const tiles = await ctx.db.mapTile.count({
-      where: { renderKey: "orphan-club-maps-seed" },
-    });
-    expect(tiles).toBe(0);
-
     const after = await ctx.db.course.findFirst({
       where: { eventId: ctx.eventId, seq: course.id },
     });
-    expect(after?.geometrySource).toBe("editor");
-    const geomAfter = after?.geometry as unknown as GeoJSONFeatureCollection;
-    expect(geomAfter.features.length).toBeGreaterThan(0);
+    expect(after?.lengthSource).toBe("derived");
+    expect(after?.legs).not.toBeNull();
 
-    await caller.course.uploadMap({
-      fileName: "replaced.ocd",
-      fileDataBase64: buf.toString("base64"),
-    });
+    await uploadEventMap(caller, ctx.nameId, buf, "replaced.ocd");
     const replaced = await ctx.db.mapFile.findFirst({
       where: { eventId: ctx.eventId },
     });
@@ -376,10 +282,7 @@ describe("club map library", () => {
   it("event map upload keeps ScalePar and reports north-line staleness", async () => {
     const buf = readFileSync(FIXTURE);
     const caller = makeCaller(ctx.event);
-    const result = await caller.course.uploadMap({
-      fileName: "stale-lines.ocd",
-      fileDataBase64: buf.toString("base64"),
-    });
+    const result = await uploadEventMap(caller, ctx.nameId, buf, "stale-lines.ocd");
     // ≈ 6.5° stale would have been auto-applied by the retired detector.
     expect(result.rotationCorrection).toBe(0);
     expect(result.meridianStalenessDeg).toBeGreaterThan(5);
@@ -401,14 +304,13 @@ describe("club map library", () => {
     ).rejects.toMatchObject({ code: "NOT_FOUND" });
   });
 
-  it("an unpinned map row answers with its stored columns, no document and no north (no OCAD backfill)", async () => {
-    const buf = readFileSync(FIXTURE);
+  it("an unpinned map row answers with its stored columns, no document and no north", async () => {
     const caller = makeCaller(ctx.event);
-    // A pre-migration row: blob only, no parsed metadata, no north
-    // detection, no document.
+    // A row with neither source nor pin — after E5 only a soft-deleted
+    // event can hold one (the drops migration's guard).
     await ctx.db.mapFile.deleteMany({ where: { eventId: ctx.eventId } });
     await ctx.db.mapFile.create({
-      data: { eventId: ctx.eventId, fileName: "legacy.ocd", fileData: buf },
+      data: { eventId: ctx.eventId, fileName: "legacy.ocd" },
     });
 
     const meta = await caller.course.mapMetadata();
@@ -456,10 +358,7 @@ describe("club map library", () => {
       authEnabled: true,
       identityEmail: uploader.email,
     });
-    const created = await asUploader.clubMap.upload({
-      fileName: "secret.ocd",
-      fileDataBase64: buf.toString("base64"),
-    });
+    const created = await uploadClubMap(asUploader, buf, "secret.ocd");
     seriesIds.push(created.id);
 
     const asStranger = makeCaller(null, {
@@ -516,17 +415,13 @@ describe("club map library", () => {
       identityEmail: admin.email,
     });
 
-    await asManager.course.uploadMap({
-      fileName: "own.ocd",
-      fileDataBase64: buf.toString("base64"),
-    });
+    await uploadEventMap(asManager, ctx.nameId, buf, "own.ocd");
     const own = await asManager.course.downloadMap();
     expect(own?.fileName).toBe("own.ocd");
+    // The bytes come from map_sources (E5: no copy on map_files).
+    expect(Buffer.from(own!.fileDataBase64, "base64").equals(buf)).toBe(true);
 
-    const library = await asAdmin.clubMap.upload({
-      fileName: "library.ocd",
-      fileDataBase64: buf.toString("base64"),
-    });
+    const library = await uploadClubMap(asAdmin, buf, "library.ocd");
     seriesIds.push(library.id);
     await asManager.course.useClubMap({ clubMapId: library.id });
     await expect(asManager.course.downloadMap()).rejects.toMatchObject({
@@ -564,14 +459,11 @@ describe("club map library", () => {
       groupId: SYSTEM_GROUP_IDS.eventAdmin,
       grantedBy: admin.id,
     });
-    const library = await makeCaller(ctx.event, {
-      user: admin,
-      authEnabled: true,
-      identityEmail: admin.email,
-    }).clubMap.upload({
-      fileName: "backup-lib.ocd",
-      fileDataBase64: buf.toString("base64"),
-    });
+    const library = await uploadClubMap(
+      makeCaller(ctx.event, { user: admin, authEnabled: true, identityEmail: admin.email }),
+      buf,
+      "backup-lib.ocd",
+    );
     seriesIds.push(library.id);
     await makeCaller(ctx.event, {
       user: manager,

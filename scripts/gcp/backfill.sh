@@ -4,6 +4,12 @@
 # deploy.sh so the CLI, the Prisma client and the schema are the ones the
 # service runs. Nothing here touches the service itself.
 #
+# The backfill CLI exists in images up to v0.6.0 only: v0.6.1 (row E5)
+# dropped the legacy columns it reads. Before deploying v0.6.1, run it with
+# `--tag v0.6.0` if the E5 migration's guard (or the map survey) reports a
+# live map without a source. `--rematch` works on every image; from v0.6.1
+# it also imports a live map that has a source but no document.
+#
 # Usage:
 #   ./backfill.sh --dry-run                 # plan only: lists rows a run would touch
 #   ./backfill.sh                           # run with the DEPLOY_TAG image (env.sh), else :stable
