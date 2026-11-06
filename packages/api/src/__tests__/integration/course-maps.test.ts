@@ -3,7 +3,6 @@ import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
 import Fastify, { type FastifyInstance } from "fastify";
 import { PDFDocument } from "pdf-lib";
-import sharp from "sharp";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { course, defaultMapAppearance } from "@oxygen/shared";
 import { registerCourseMapRoutes } from "../../course-maps/routes.js";
@@ -14,7 +13,8 @@ import {
 } from "../helpers/test-db.js";
 import { makeCaller } from "../helpers/caller.js";
 import { applyEventMap } from "../../event-map.js";
-import { getBaseMapInfo, getBaseMapInfoOrNull, clearCourseMapSourceCache } from "../../course-maps/map-source.js";
+import { getBaseMapInfo, getBaseMapInfoOrNull } from "../../course-maps/map-source.js";
+import { clearEventDocumentCaches } from "../../map-store/event-document.js";
 import { hasTool, qpdfCheck } from "../../render/pdf-golden.js";
 
 const hasQpdf = await hasTool("qpdf");
@@ -26,7 +26,6 @@ let courseId: number;
 let courseSeq: number;
 let startControlId: string;
 let finishControlId: string;
-const convertedSvgs: string[] = [];
 let mapBytes: Buffer;
 const clubTemplateName = `Course-map-${randomUUID()}`;
 const fixture = resolve(__dirname, "../../../../../e2e/test.ocd");
@@ -151,16 +150,8 @@ beforeAll(async () => {
   const uploaded = await applyEventMap(ctx.db, ctx.eventId, "test.ocd", mapBytes);
   expect(uploaded.documentHash).toMatch(/^[0-9a-f]{64}$/);
 
-  const fakeConverter = {
-    async convert(svg: string) {
-      convertedSvgs.push(svg);
-      const pdf = await PDFDocument.create();
-      pdf.addPage([595.28, 841.89]);
-      return Buffer.from(await pdf.save());
-    },
-  };
   server = Fastify({ logger: false });
-  registerCourseMapRoutes(server, { converter: fakeConverter });
+  registerCourseMapRoutes(server);
   await server.ready();
 }, 60_000);
 
@@ -184,17 +175,18 @@ describe("map file info and metadata", () => {
     expect(Number.isInteger(info!.id)).toBe(true);
   });
 
-  // `auto` resolves by the scale heuristic (the OCAD colour-table
-  // classification went with the OCAD read, slice E1): 1:7 500 is ISOM.
-  it("resolves the auto colour profile by scale, consistently across calls", async () => {
+  // The colour-stack fields went with the raster (E4a); the render key
+  // is the stored column, written at upload for the v0.5.0 rollback.
+  it("answers the stored render key without the colour-stack fields, consistently across calls", async () => {
     const first = await caller.course.mapMetadata();
     const second = await caller.course.mapMetadata();
     expect(first).not.toBeNull();
-    expect(first!.colorProfile).toBe("auto");
-    expect(first!.resolvedProfile).toBe("isom");
-    expect(first!.resolvedBy).toBe("scale");
-    expect(second!.resolvedProfile).toBe(first!.resolvedProfile);
-    expect(second!.resolvedBy).toBe(first!.resolvedBy);
+    for (const gone of ["colorProfile", "colorOverrides", "northLinesBelow", "resolvedProfile", "resolvedBy"]) {
+      expect(first).not.toHaveProperty(gone);
+    }
+    const row = await ctx.db.mapFile.findFirstOrThrow({ where: { eventId: ctx.eventId }, orderBy: { uploadedAt: "desc" }, select: { renderKey: true } });
+    expect(row.renderKey).toBeTruthy();
+    expect(first!.renderKey).toBe(row.renderKey);
     expect(second!.renderKey).toBe(first!.renderKey);
   });
 });
@@ -575,64 +567,15 @@ describe("map templates and course maps", () => {
 });
 
 describe("course map REST rendering", () => {
-  it("renders a fixed-scale map window PNG", async () => {
-    const url = `/api/maps/${ctx.nameId}/window.png?cx=0.1234&cy=0&wMm=194&hMm=281&printScale=7500&dpi=72`;
+  it("serves no window.png (the layout editor's raster went in E4a)", async () => {
     const response = await server.inject({
       method: "GET",
-      url,
+      url: `/api/maps/${ctx.nameId}/window.png?cx=0&cy=0&wMm=60&hMm=60&printScale=7500&dpi=72`,
     });
-    expect(response.statusCode).toBe(200);
-    expect(response.headers["content-type"]).toContain("image/png");
-    expect(response.headers["x-cache"]).toBe("miss");
-    expect(response.headers.etag).toBeTruthy();
-    expect(response.rawPayload.subarray(0, 8)).toEqual(
-      Buffer.from([137, 80, 78, 71, 13, 10, 26, 10]),
-    );
-
-    const cached = await server.inject({ method: "GET", url });
-    expect(cached.statusCode).toBe(200);
-    expect(cached.headers["x-cache"]).toBe("hit");
-    expect(cached.headers.etag).toBe(response.headers.etag);
-    expect(cached.rawPayload).toEqual(response.rawPayload);
-
-    const notModified = await server.inject({
-      method: "GET",
-      url,
-      headers: { "if-none-match": String(response.headers.etag) },
-    });
-    expect(notModified.statusCode).toBe(304);
-    expect(notModified.headers["x-cache"]).toBe("hit");
+    expect(response.statusCode).toBe(404);
   });
 
-  it("allows high DPI while the raster stays within the pixel limit", async () => {
-    const response = await server.inject({
-      method: "GET",
-      url: `/api/maps/${ctx.nameId}/window.png?cx=0&cy=0&wMm=60&hMm=60&printScale=7500&dpi=600`,
-    });
-    expect(response.statusCode).toBe(200);
-    expect(response.headers["content-type"]).toContain("image/png");
-  });
-
-  it("rejects a window render that exceeds the pixel limit", async () => {
-    const response = await server.inject({
-      method: "GET",
-      url: `/api/maps/${ctx.nameId}/window.png?cx=0&cy=0&wMm=194&hMm=281&printScale=7500&dpi=600`,
-    });
-    expect(response.statusCode).toBe(400);
-    expect(response.json().error).toContain("4096");
-  });
-
-  it("rejects a dpi above the supported maximum", async () => {
-    const response = await server.inject({
-      method: "GET",
-      url: `/api/maps/${ctx.nameId}/window.png?cx=0&cy=0&wMm=60&hMm=60&printScale=7500&dpi=1200`,
-    });
-    expect(response.statusCode).toBe(400);
-    expect(response.json().error).toContain("dpi");
-  });
-
-  it("returns one composed PDF page per map for a selected course, never the rsvg converter", async () => {
-    const before = convertedSvgs.length;
+  it("returns one composed PDF page per map for a selected course", async () => {
     const response = await server.inject({
       method: "GET",
       url: `/api/maps/${ctx.nameId}/maps.pdf?courses=${courseSeq}`,
@@ -644,7 +587,6 @@ describe("course map REST rendering", () => {
     expect(pdf.getPageCount()).toBe(2);
     // The composer draws the overprint (docs/course-print.md §8;
     // course-print.test.ts asserts the page content).
-    expect(convertedSvgs).toHaveLength(before);
   });
 
   it("exports the all-controls map as one composed page", async () => {
@@ -660,42 +602,16 @@ describe("course map REST rendering", () => {
     expect((await PDFDocument.load(response.rawPayload)).getPageCount()).toBe(1);
   });
 
-  it("renders a rotated window as a distinct cached entry", async () => {
-    const base = `/api/maps/${ctx.nameId}/window.png?cx=0&cy=0&wMm=60&hMm=60&printScale=7500&dpi=72`;
-    const straight = await server.inject({ method: "GET", url: base });
-    const rotated = await server.inject({
-      method: "GET",
-      url: `${base}&rot=-15`,
-    });
-    expect(straight.statusCode).toBe(200);
-    expect(rotated.statusCode).toBe(200);
-    expect(rotated.headers["content-type"]).toContain("image/png");
-    expect(rotated.headers.etag).not.toBe(straight.headers.etag);
-    expect(rotated.rawPayload.equals(straight.rawPayload)).toBe(false);
-
-    const invalid = await server.inject({
-      method: "GET",
-      url: `${base}&rot=270`,
-    });
-    expect(invalid.statusCode).toBe(400);
-    expect(invalid.json().error).toContain("rot");
-  });
 });
 
-describe("window.png under a pinned document", () => {
+describe("getBaseMapInfo under a pinned document", () => {
   let vec: TestEventContext;
   let documentHash: string;
-  const q = (nameId: string, extra = "") =>
-    `/api/maps/${nameId}/window.png?cx=-70&cy=10&wMm=60&hMm=40&printScale=7500&dpi=100${extra}`;
-  const decode = async (png: Buffer) => {
-    const { data, info } = await sharp(png).ensureAlpha().raw().toBuffer({ resolveWithObject: true });
-    return { width: info.width, height: info.height, data };
-  };
 
   beforeAll(async () => {
     vec = await createTestEvent("course_maps_vec");
     // Per-run trailer: content-addressed rows are global (see map-documents.test.ts).
-    const bytes = Buffer.concat([readFileSync(fixture), Buffer.from(`window-${randomBytes(4).toString("hex")}`)]);
+    const bytes = Buffer.concat([readFileSync(fixture), Buffer.from(`base-${randomBytes(4).toString("hex")}`)]);
     const applied = await applyEventMap(vec.db, vec.eventId, "test.ocd", bytes);
     expect(applied.documentHash).toMatch(/^[0-9a-f]{64}$/);
     documentHash = applied.documentHash!;
@@ -717,63 +633,15 @@ describe("window.png under a pinned document", () => {
 
   it("an event without a pinned document has no base map (no OCAD fallback, docs/map-storage.md §4.6)", async () => {
     await vec.db.mapFile.updateMany({ where: { eventId: vec.eventId }, data: { documentHash: null } });
-    clearCourseMapSourceCache();
+    clearEventDocumentCaches();
     try {
       await expect(getBaseMapInfo(vec.db, vec.eventId)).rejects.toThrow("No base map uploaded");
       expect(await getBaseMapInfoOrNull(vec.db, vec.eventId)).toBeNull();
     } finally {
       await vec.db.mapFile.updateMany({ where: { eventId: vec.eventId }, data: { documentHash } });
-      clearCourseMapSourceCache();
+      clearEventDocumentCaches();
     }
   });
-
-  it("full layer: exact size, opaque, yellow area at the window centre; cached by document hash", async () => {
-    const res = await server.inject({ method: "GET", url: q(vec.nameId) });
-    expect(res.statusCode).toBe(200);
-    expect(res.headers["x-cache"]).toBe("miss");
-    const img = await decode(res.rawPayload);
-    expect([img.width, img.height]).toEqual([236, 157]);
-    // Window spans map x −100..−40: bare paper on the left, the yellow area from x ≈ −74 on.
-    const at = (x: number) => (Math.floor(img.height / 2) * img.width + x) * 4;
-    expect(Array.from(img.data.subarray(at(10), at(10) + 4))).toEqual([255, 255, 255, 255]);
-    const o = at(img.width - 10);
-    expect(img.data[o + 3]).toBe(255);
-    expect(img.data[o]).toBeGreaterThan(200); // yellow, not white
-    expect(img.data[o + 2]).toBeLessThan(120);
-    const hit = await server.inject({ method: "GET", url: q(vec.nameId) });
-    expect(hit.headers["x-cache"]).toBe("hit");
-    expect(hit.headers.etag).toBe(res.headers.etag);
-  });
-
-  it("ink layer: transparent paper, only colours above purple-lower, distinct from full", async () => {
-    const ink = await server.inject({ method: "GET", url: q(vec.nameId, "&layer=ink") });
-    const full = await server.inject({ method: "GET", url: q(vec.nameId) });
-    expect(ink.statusCode).toBe(200);
-    expect(ink.headers.etag).not.toBe(full.headers.etag);
-    const img = await decode(ink.rawPayload);
-    expect([img.width, img.height]).toEqual([236, 157]);
-    let clear = 0;
-    for (let i = 3; i < img.data.length; i += 4) if (img.data[i] === 0) clear++;
-    expect(clear).toBeGreaterThan(img.data.length / 4 / 4);
-    // A window beyond the map draws nothing: fully transparent, still full-size.
-    const empty = await server.inject({ method: "GET", url: `/api/maps/${vec.nameId}/window.png?cx=900&cy=900&wMm=30&hMm=30&printScale=7500&dpi=50&layer=ink` });
-    const e = await decode(empty.rawPayload);
-    expect([e.width, e.height]).toEqual([59, 59]);
-    expect(e.data.every((v, i) => i % 4 !== 3 || v === 0)).toBe(true);
-  });
-
-  it("rotated window: exact size and its own cache entry", async () => {
-    const straight = await server.inject({ method: "GET", url: q(vec.nameId) });
-    const rotated = await server.inject({ method: "GET", url: q(vec.nameId, "&rot=-15") });
-    expect(rotated.statusCode).toBe(200);
-    expect(rotated.headers["x-cache"]).toBe("miss");
-    expect(rotated.headers.etag).not.toBe(straight.headers.etag);
-    const img = await decode(rotated.rawPayload);
-    expect([img.width, img.height]).toEqual([236, 157]);
-    const again = await server.inject({ method: "GET", url: q(vec.nameId, "&rot=-15") });
-    expect(again.headers["x-cache"]).toBe("hit");
-  });
-
 });
 
 describe("maps.pdf through the composer", () => {
@@ -791,7 +659,7 @@ describe("maps.pdf through the composer", () => {
     const bytes = Buffer.concat([readFileSync(fixture), Buffer.from(`pdf-${randomBytes(4).toString("hex")}`)]);
     const applied = await applyEventMap(vec.db, vec.eventId, "test.ocd", bytes);
     documentHash = applied.documentHash!;
-    clearCourseMapSourceCache();
+    clearEventDocumentCaches();
     const db = vec.db;
     const mk = (codes: string, xpos: number, ypos: number, extra: Record<string, unknown> = {}) =>
       db.control.create({ data: { eventId: vec.eventId, codes, xpos, ypos, ...extra } });
@@ -815,14 +683,12 @@ describe("maps.pdf through the composer", () => {
     await vec?.cleanup();
   });
 
-  it("one composed PDF, one page per map at the template's paper size, never the rsvg converter", async () => {
-    const before = convertedSvgs.length;
+  it("one composed PDF, one page per map at the template's paper size", async () => {
     const res = await server.inject({ method: "GET", url: pdfUrl(vec.nameId) });
     expect(res.statusCode).toBe(200);
     expect(res.headers["content-type"]).toContain("application/pdf");
     expect(res.headers["x-print-pipeline"]).toBeUndefined();
     expect(res.headers["content-disposition"]).toContain("_maps.pdf");
-    expect(convertedSvgs).toHaveLength(before);
     const pdf = await PDFDocument.load(res.rawPayload);
     expect(pdf.getPageCount()).toBe(3);
     const sizes = pdf.getPages().map((p) => [p.getWidth(), p.getHeight()].map((v) => Math.round((v * 25.4) / 72)));
@@ -889,23 +755,20 @@ describe("maps.pdf through the composer", () => {
 
   it("an event without a pinned document has no base map to print (slice E1: no OCAD fallback)", async () => {
     await vec.db.mapFile.updateMany({ where: { eventId: vec.eventId }, data: { documentHash: null } });
-    clearCourseMapSourceCache();
+    clearEventDocumentCaches();
     try {
-      const before = convertedSvgs.length;
       const res = await server.inject({ method: "GET", url: pdfUrl(vec.nameId) });
       expect(res.statusCode).toBe(400);
       expect(res.json().error).toBe("No base map uploaded");
-      expect(convertedSvgs).toHaveLength(before);
     } finally {
       await vec.db.mapFile.updateMany({ where: { eventId: vec.eventId }, data: { documentHash } });
-      clearCourseMapSourceCache();
+      clearEventDocumentCaches();
     }
   }, 60_000);
 
-  it("any composer error is a 400, not a fallback", async () => {
+  it("any composer error is a 400; there is no other path to fall back to", async () => {
     const failing = Fastify({ logger: false });
     registerCourseMapRoutes(failing, {
-      converter: { convert: async () => { throw new Error("rsvg must not run"); } },
       renderCoursePages: async () => {
         throw new Error("composer bug");
       },
@@ -920,18 +783,9 @@ describe("maps.pdf through the composer", () => {
     }
   }, 60_000);
 
-  it("an unaligned colour stack is a 400 with the reason; the converter is not called", async () => {
-    const converted: string[] = [];
+  it("an unaligned colour stack is a 400 with the reason", async () => {
     const unaligned = Fastify({ logger: false });
     registerCourseMapRoutes(unaligned, {
-      converter: {
-        async convert(svg: string) {
-          converted.push(svg);
-          const pdf = await PDFDocument.create();
-          pdf.addPage([595.28, 841.89]);
-          return Buffer.from(await pdf.save());
-        },
-      },
       renderCoursePages: async () => {
         throw new course.CourseStackError("document colour stack is not aligned");
       },
@@ -942,7 +796,6 @@ describe("maps.pdf through the composer", () => {
       expect(res.statusCode).toBe(400);
       expect(res.json().error).toBe("document colour stack is not aligned");
       expect(res.headers["x-print-pipeline"]).toBeUndefined();
-      expect(converted).toHaveLength(0);
     } finally {
       await unaligned.close();
     }

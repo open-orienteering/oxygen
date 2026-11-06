@@ -45,24 +45,20 @@ terrain and are clipped to the map frame.
 
 ### Orientation
 
-The regular map view warps its tiles into true-north mercator and then
-rotates them by `-map_files.north_offset` (the bearing from true north to
-the meridian direction). The print pipeline renders raw OCAD **paper
-space** — no mercator warp — so the drawn meridian lines only lean by
-their *in-paper tilt* (ISOM 601.x lines are often rotated inside the
-drawing to fit the sheet; Nackareservatet: 3.3°). Print therefore sets
-`MapWindow.rotationDeg = -meridianTiltDeg`, where the tilt comes from
-`probeMeridianLines` via `getBaseMapInfo` (computed from the parsed OCAD
-and cached; 0 when the file has no meridian cluster). Using
-`-north_offset` here would over-rotate by the paper-to-true-north bearing
-(see `docs/bugfix-course-map-print-orientation.md`).
-`mapToPage` / `pageToMap` rotate about the
-map-frame centre when it is non-zero. The server crops the axis-aligned
-bounding box of the rotated window and wraps the base map in a `rotate`
-transform, both for `window.png` (via the `rot` query parameter) and for
-the PDF composer. Control-circle cut angles rotate with the map. Maps
-with `north_offset = 0` — the normal case — produce byte-identical output to
-before.
+The print pipeline renders the pinned document in **paper space** — no
+mercator warp — so the drawn meridian lines only lean by their *in-paper
+tilt* (ISOM 601.x lines are often rotated inside the drawing to fit the
+sheet; Nackareservatet: 3.3°). Print therefore sets
+`MapWindow.rotationDeg = -meridianTiltDeg`, where the tilt is the
+document import report's `north.meridian.medianTiltDeg`, read through
+`getBaseMapInfo` (0 when the file has no meridian cluster;
+`course-print.md` §10). Using `-north_offset` (the bearing from true
+north to the meridian direction) here would over-rotate by the
+paper-to-true-north bearing (see
+`docs/bugfix-course-map-print-orientation.md`). `mapToPage` /
+`pageToMap` rotate about the map-frame centre when it is non-zero; the
+PDF composer draws the rotated window under `T_map` (`course-print.md`
+§4.2). Control-circle cut angles rotate with the map.
 
 ## Data model
 
@@ -131,24 +127,9 @@ and the differences from the legacy page that are intended
 is a 400 with the reason (`course-print.md` §8.1); a map without a pinned
 document has no base map to print (400).
 
-The legacy path (unreachable since E3, deleted in E4a) was:
-
-```text
-map_files.file_data
-  -> readOcad
-  -> applyIofColorStack (rewrite colour renderOrder)
-  -> discard objects outside print window + 20 mm
-  -> ocadToSvg (full) + ocadToSvg (ink, toColor)
-  -> nested SVGs clipped to map frame:
-       full map → lower purple → ink → whiteouts → upper purple
-  -> IOF control descriptions
-  -> text / lines / rectangles
-  -> rsvg-convert --format=pdf
-  -> pdf-lib page merge
-```
-
-See [`map-color-stack.md`](map-color-stack.md) for IOF lower/upper purple
-stacking (no blend modes).
+The legacy path (OCAD → SVG with the IOF colour-stack rewrite →
+`rsvg-convert` → pdf-lib merge) was unreachable since E3 and went in
+E4a; git history up to v0.5.0 has it.
 
 Course symbols start from norm dimensions in output millimetres: 2.5 mm
 control radius and 0.35 mm stroke by default. When a base map is enlarged
@@ -157,27 +138,11 @@ for printing, the overprint is enlarged by the same
 fragments formerly generated in the web package now live in
 `packages/shared/src/course-maps/`, with web re-exports for compatibility.
 
-`rsvg-convert` is deliberately the only PDF converter. The implementation
-spike found that it kept OCAD patterns vector, rendering a 10,680-object
-sprint map in about 0.8 seconds with no PDF image XObjects.
-`svg-to-pdfkit` took about 14 seconds and rasterised hundreds of patterns.
-
-OCAD user-space pattern tiles are expanded before PDF composition to work
-around librsvg dropping sub-pixel tiles. The expansion repeats clipped copies
-without changing the visible pattern period; see
-[`bugfix-librsvg-pattern-tile-size.md`](bugfix-librsvg-pattern-tile-size.md).
-
-The API production image therefore installs:
-
-```bash
-apt-get install librsvg2-bin fonts-liberation
-```
-
-Both serve the legacy path until slice E removes it; the vector path
-needs no system tool. `qpdf` and `poppler-utils` (which check and
-rasterise printed PDFs in the tests) are installed on the CI runner only
-(`course-print.md` §9.4). Missing `rsvg-convert` produces a clear server
-error rather than silently falling back to lower-quality output.
+The API production image needs no system tool or font to print: the
+composer embeds the bundled Liberation files. `librsvg2-bin` and
+`fonts-liberation` left the image in E4a. `qpdf` and `poppler-utils`
+(which check and rasterise printed PDFs in the tests) are installed on
+the CI runner only (`course-print.md` §9.4).
 
 ## API
 
@@ -204,9 +169,6 @@ Event-scoped tRPC routers:
 REST:
 
 ```text
-GET /api/maps/:nameId/window.png
-    ?cx=...&cy=...&wMm=...&hMm=...&printScale=7500&dpi=120&rot=-8.5
-
 GET /api/maps/:nameId/maps.pdf
     ?maps=1,2
     ?courses=3,4         (the courses' own sheets)
@@ -216,10 +178,10 @@ GET /api/maps/:nameId/maps.pdf
 GET /api/maps/:nameId/graphics/:id
 ```
 
-Both require `courses.view`. Preview requests are capped at 4096 pixels per
-axis. `window.png` is drawn from the pinned map document by the reference
-raster (`course-print.md` §10); its only caller is `MapLayoutEditor`,
-unreachable since E3 (E4a deletes the route). `maps.pdf` is composed from
+Both require `courses.view`. The layout editor's map preview,
+`GET /api/maps/:nameId/window.png`, went in E4a (its only caller,
+`MapLayoutEditor`, is unreachable since E3; `course-print.md` §10).
+`maps.pdf` is composed from
 the document in a worker thread, off the event loop (`course-print.md`
 §8); a document whose colour stack is not aligned is a 400 with the
 reason.
@@ -368,8 +330,9 @@ and control-circle slits are retained, and control numbers avoid symbols and
 course lines (a number box that would sit on a drawn leg is rejected; a
 course-setter can also drag the number in the editor, storing a per-course
 offset that print honours as `labelPosition`). Print (and the live map) use IOF colour stacking — lower purple
-under the map ink layer, upper purple on top — instead of blend modes; see
-[`map-color-stack.md`](map-color-stack.md).
+under the map ink, upper purple on top — instead of blend modes: the
+course layer sorts into the document's own colour stack
+([`course-layer.md`](course-layer.md) §1).
 
 Appearance dimensions (circle radius, line width, number height) are ISOM
 dimensions **at the base map scale** — the defaults match ISOM 2017-2:
@@ -409,8 +372,8 @@ tiles are true-north Web Mercator images bilinearly warped from OCAD; print
 composition uses the original magnetic-north OCAD paper-millimetre geometry.
 No single CSS or SVG transform can map those tiles back to print space without
 misaligning overlays. The preview therefore uses the same unwarped OCAD window
-as PDF output. Parsed OCAD, windowed SVG and rendered PNG results are cached,
-with ETags for repeat requests.
+as PDF output. That preview (`window.png`) went in E4a; the editor itself
+is unreachable since E3 and goes in E4c.
 
 ## Validation
 

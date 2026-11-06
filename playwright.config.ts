@@ -105,7 +105,6 @@ export default defineConfig({
         OXYGEN_ADMIN_EMAILS: "e2e-admin@oxygen.test",
         OXYGEN_BUILD_ID: "e81729be4f7fd564c47bb2098137403ef6dcb922",
         OXYGEN_DEPLOY_REF: "e2e",
-        RSVG_CONVERT_COMMAND: `${process.cwd()}/e2e/helpers/fake-rsvg-convert.mjs`,
       },
     },
     {

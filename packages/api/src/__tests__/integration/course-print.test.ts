@@ -15,7 +15,7 @@ import sharp from "sharp";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { defaultMapAppearance } from "@oxygen/shared";
 import { applyEventMap } from "../../event-map.js";
-import { clearCourseMapSourceCache } from "../../course-maps/map-source.js";
+import { clearEventDocumentCaches } from "../../map-store/event-document.js";
 import { loadPinnedPrintDocument, pageInputFor, pinnedPrintSource, renderCoursePages, sheetForMapRow, type PrintMapRow } from "../../course-maps/pdf-page.js";
 import { classesByCourse, loadCourseObjects, writeCourseObject } from "../../course-objects.js";
 import { loadBundledFonts } from "../../render/fonts.js";
@@ -42,7 +42,7 @@ beforeAll(async () => {
   const bytes = Buffer.concat([readFileSync(fixture), Buffer.from(`print-${randomBytes(4).toString("hex")}`)]);
   const applied = await applyEventMap(vec.db, vec.eventId, "test.ocd", bytes);
   expect(applied.documentHash).toMatch(/^[0-9a-f]{64}$/);
-  clearCourseMapSourceCache();
+  clearEventDocumentCaches();
 
   const db = vec.db;
   const PNG = await sharp({ create: { width: 4, height: 2, channels: 4, background: "#00a000" } }).png().toBuffer();

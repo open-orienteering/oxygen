@@ -281,8 +281,8 @@ sheet; the record is the same). With nothing selected a drag pans.
 the all-controls row) and the Map templates page's
 (`edit-template-layout-<seq>`) navigate to the editor's Layout mode
 (`layoutEditorHref`, `lib/editor/layout-href.ts`) for every event since
-E3. `MapLayoutEditor` and `window.png` are unreachable from the pages
-and go in E4c / E4a (`course-print.md` §10.6).
+E3. `MapLayoutEditor` is unreachable from the pages and goes in E4c;
+its map preview, `window.png`, went in E4a (`course-print.md` §10).
 
 **What stays in `course-maps.md`:** the data model (templates, sheets,
 overrides), coordinate spaces, validation codes, the Maps and Map
