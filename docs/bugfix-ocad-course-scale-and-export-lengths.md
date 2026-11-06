@@ -36,7 +36,9 @@ in every export.
   dropping it and retaining a zero-length finish entry.
 - Export recalculates every leg from current control coordinates and
   the current OCAD CRS scale.
-- For an Oxygen-edited course (`geometry_source = 'editor'`), export
+- For an Oxygen-edited course (`geometry_source = 'editor'`; since E6
+  `length_source = 'derived'`, `docs/course-controls-and-matching.md`
+  "Course length"), export
   also recalculates the total length. This is defensive; control moves
   and course-sequence edits already call `rebuildCourseGeometry` and
   update `legs` and `length_m` transactionally.

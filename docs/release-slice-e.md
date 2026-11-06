@@ -30,7 +30,7 @@ to be empty:
 | `unpinned_events` | a live event whose latest map has no document | `./backfill.sh` (re-runnable; it lists the import error per map) |
 | `map_files_unsourced` | a live event's map row without `source_hash` | `./backfill.sh` |
 | `club_files_unmigrated` | a club library map without its series | `./backfill.sh` |
-| `courses_no_structure` | a live course without `courses.structure` | Maintenance → **Course structures** |
+| `courses_no_structure` | a live course without `courses.structure` | Maintenance → **Course structures** — on v0.5.0: v0.6.0 deletes the card and the CLI (E6). An instance upgrading straight from before slice D must run it on v0.5.0 first, or an OCAD-imported course's gaps, cuts and objects that only its GeoJSON holds are lost (it still reads from its columns) |
 | `stack_unaligned` | a pinned document without lower / upper purple (`CourseStackError`: no course layer, no vector print) | re-match: `./backfill.sh --rematch` |
 
 Soft-deleted events are left out: the backfill skips them on purpose
@@ -55,6 +55,16 @@ column default `vector`, and the three flags (`map.pipeline.default`,
 `map.pipeline.allowLegacy`, `map.editor.vector`) deleted. Nothing in
 v0.6.0 reads the column or the flags (`docs/map-pipeline-switch.md`,
 history note).
+
+**The length source (E6).** `20261106130000_course_length_source` adds
+`courses.length_source` and backfills it from `geometry_source`
+(`editor` → `derived`, `ocd` / `xml` → `file`); v0.6.0's export and
+Eventor sync read it instead of `geometry_source`
+(`docs/course-controls-and-matching.md` "Course length"). Additive:
+v0.5.0 ignores it, and v0.6.0 keeps writing `courses.geometry` and
+`geometry_source` with the values v0.5.0 reads. Nothing in v0.6.0 reads
+`courses.geometry`; the Maintenance tab's **Course structures** card and
+`pnpm course:backfill-structure` are gone.
 
 **Rollback to v0.5.0** stays possible until v0.6.1: the column and enum
 are still there. v0.5.0 then reads `vector` for every existing event and
