@@ -10,7 +10,6 @@ import {
   type MapPoint,
   type MapRect,
   type MapWindow,
-  type PaperDimensions,
 } from "@oxygen/shared";
 
 export type ResizeHandle =
