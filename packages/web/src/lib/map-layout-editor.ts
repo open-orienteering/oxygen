@@ -10,11 +10,9 @@ import {
   type MapPoint,
   type MapRect,
   type MapWindow,
-  type PathVertex,
   type PaperDimensions,
 } from "@oxygen/shared";
 
-export { OUT_OF_BOUNDS_BORDER_MM };
 export type ResizeHandle =
   | "nw"
   | "ne"
@@ -26,10 +24,6 @@ export type ResizeHandle =
   | `edge-${number}`
   | `handle-in-${number}`
   | `handle-out-${number}`;
-
-export interface EditorViewport extends MapRect {
-  zoom: number;
-}
 
 export type PlaceableMapObjectKind =
   | "text"
@@ -147,7 +141,7 @@ export function createObjectAt(
   };
 }
 
-export function pageDeltaToObject(
+function pageDeltaToObject(
   anchor: CourseMapObject["anchor"],
   pageDx: number,
   pageDy: number,
@@ -494,251 +488,6 @@ export function constrainDescription(
   };
 }
 
-type VertexMapObject = Extract<CourseMapObject, { kind: "path" }>;
-
-function midpoint(a: MapPoint, b: MapPoint): MapPoint {
-  return { x: (a.x + b.x) / 2, y: (a.y + b.y) / 2 };
-}
-
-export function updatePolygonVertex<T extends VertexMapObject>(
-  object: T,
-  index: number,
-  vertex: PathVertex,
-): T {
-  if (!Number.isInteger(index) || !object.points[index]) return object;
-  return {
-    ...object,
-    points: object.points.map((point, pointIndex) =>
-      pointIndex === index ? vertex : point,
-    ),
-  };
-}
-
-export function updatePolygonHandle<T extends VertexMapObject>(
-  object: T,
-  index: number,
-  handle: "hIn" | "hOut",
-  offset: MapPoint | undefined,
-): T {
-  const vertex = object.points[index];
-  if (!vertex) return object;
-  const updated = { ...vertex };
-  if (offset) updated[handle] = offset;
-  else delete updated[handle];
-  return updatePolygonVertex(object, index, updated);
-}
-
-export function insertPolygonVertex<T extends VertexMapObject>(
-  object: T,
-  index: number,
-): T {
-  const count = object.points.length;
-  const closes = object.closed;
-  if (
-    !Number.isInteger(index) ||
-    index < 0 ||
-    index >= count ||
-    (!closes && index === count - 1)
-  ) {
-    return object;
-  }
-
-  const nextIndex = (index + 1) % count;
-  const start = object.points[index];
-  const end = object.points[nextIndex];
-  const c1 = start.hOut
-    ? { x: start.x + start.hOut.x, y: start.y + start.hOut.y }
-    : start;
-  const c2 = end.hIn
-    ? { x: end.x + end.hIn.x, y: end.y + end.hIn.y }
-    : end;
-  const curved = start.hOut !== undefined || end.hIn !== undefined;
-
-  let inserted: PathVertex;
-  let nextStart = start;
-  let nextEnd = end;
-  if (curved) {
-    const q0 = midpoint(start, c1);
-    const q1 = midpoint(c1, c2);
-    const q2 = midpoint(c2, end);
-    const r0 = midpoint(q0, q1);
-    const r1 = midpoint(q1, q2);
-    const split = midpoint(r0, r1);
-    nextStart = {
-      ...start,
-      hOut: { x: q0.x - start.x, y: q0.y - start.y },
-    };
-    inserted = {
-      ...split,
-      hIn: { x: r0.x - split.x, y: r0.y - split.y },
-      hOut: { x: r1.x - split.x, y: r1.y - split.y },
-    };
-    nextEnd = {
-      ...end,
-      hIn: { x: q2.x - end.x, y: q2.y - end.y },
-    };
-  } else {
-    inserted = midpoint(start, end);
-  }
-
-  const points = [...object.points];
-  points[index] = nextStart;
-  points[nextIndex] = nextEnd;
-  points.splice(index + 1, 0, inserted);
-  return { ...object, points };
-}
-
-export function removePolygonVertex<T extends VertexMapObject>(
-  object: T,
-  index: number,
-): T {
-  const filled =
-    object.fillMode === "whiteout" ||
-    object.fillMode === "whiteoutInverted" ||
-    object.fillMode === "outOfBounds" ||
-    object.fillMode === "solid" ||
-    object.closed;
-  const minimum = filled ? 3 : 2;
-  if (
-    object.points.length <= minimum ||
-    !Number.isInteger(index) ||
-    !object.points[index]
-  ) {
-    return object;
-  }
-  return {
-    ...object,
-    points: object.points.filter((_, pointIndex) => pointIndex !== index),
-  };
-}
-
-/**
- * Zoom up to which editor handles (vertex squares, add-vertex dots,
- * selection outline) scale with the paper. Beyond it they shrink in page
- * mm by the same factor the view grows, so they stay a constant size on
- * screen instead of covering the detail the user zoomed in to see.
- */
-export const HANDLE_FULL_SIZE_ZOOM = 1.5;
-
-/** Multiply page-mm handle dimensions by this for the current zoom. */
-export function editorHandleScale(zoom: number): number {
-  if (!Number.isFinite(zoom) || zoom <= HANDLE_FULL_SIZE_ZOOM) return 1;
-  return HANDLE_FULL_SIZE_ZOOM / zoom;
-}
-
-export function initialEditorViewport(
-  paper: PaperDimensions,
-): EditorViewport {
-  return { x: 0, y: 0, width: paper.width, height: paper.height, zoom: 1 };
-}
-
-export function zoomEditorViewport(
-  current: EditorViewport,
-  paper: PaperDimensions,
-  anchor: MapPoint,
-  nextZoom: number,
-): EditorViewport {
-  const zoom = Math.max(1, Math.min(8, nextZoom));
-  const width = paper.width / zoom;
-  const height = paper.height / zoom;
-  const xRatio = (anchor.x - current.x) / current.width;
-  const yRatio = (anchor.y - current.y) / current.height;
-  const x = Math.min(
-    paper.width - width,
-    Math.max(0, anchor.x - xRatio * width),
-  );
-  const y = Math.min(
-    paper.height - height,
-    Math.max(0, anchor.y - yRatio * height),
-  );
-  return { x, y, width, height, zoom };
-}
-
-export function panEditorViewport(
-  current: EditorViewport,
-  paper: PaperDimensions,
-  dx: number,
-  dy: number,
-): EditorViewport {
-  return {
-    ...current,
-    x: Math.min(
-      paper.width - current.width,
-      Math.max(0, current.x - dx),
-    ),
-    y: Math.min(
-      paper.height - current.height,
-      Math.max(0, current.y - dy),
-    ),
-  };
-}
-
-/**
- * Resolve a two-finger gesture from its immutable start viewport.
- * `currentMidpoint` and `startMidpoint` are expressed in the start
- * viewport's page coordinate system, so this remains stable while React
- * updates the SVG viewBox during the gesture.
- */
-export function pinchEditorViewport(
-  base: EditorViewport,
-  paper: PaperDimensions,
-  anchor: MapPoint,
-  startMidpoint: MapPoint,
-  currentMidpoint: MapPoint,
-  distanceRatio: number,
-): EditorViewport {
-  const zoomed = zoomEditorViewport(
-    base,
-    paper,
-    anchor,
-    base.zoom * distanceRatio,
-  );
-  const scale = zoomed.width / base.width;
-  return panEditorViewport(
-    zoomed,
-    paper,
-    (currentMidpoint.x - startMidpoint.x) * scale,
-    (currentMidpoint.y - startMidpoint.y) * scale,
-  );
-}
-
-export function editorPreviewDpi(frame: MapRect): number {
-  const pixelLimitDpi = Math.min(
-    (4096 * 25.4) / frame.width,
-    (4096 * 25.4) / frame.height,
-  );
-  return Math.max(120, Math.floor(Math.min(300, pixelLimitDpi)));
-}
-
-/**
- * Page-space placement of the currently displayed base-map raster under the
- * live (unsaved) window. While the user drags the map window or changes the
- * print scale, the stale raster is repositioned through the current
- * window-to-page transform so base map and course overlay move together;
- * the freshly rendered raster then swaps in at the frame position.
- *
- * The raster is rendered rotated about its own window centre; rotating
- * about a different centre only differs by a translation, so repositioning
- * the bitmap is exact as long as the rotation itself is unchanged.
- */
-export function displayedPreviewPlacement(
-  displayed: { center: MapPoint; printScale: number },
-  currentPrintScale: number,
-  frame: MapRect,
-  currentWindow: MapWindow,
-): MapRect {
-  const scaleRatio = displayed.printScale / currentPrintScale;
-  const width = frame.width * scaleRatio;
-  const height = frame.height * scaleRatio;
-  const centerOnPage = mapToPage(displayed.center, frame, currentWindow);
-  return {
-    x: centerOnPage.x - width / 2,
-    y: centerOnPage.y - height / 2,
-    width,
-    height,
-  };
-}
-
 export function parseClampedNumberDraft(
   draft: string,
   fallback: number,
@@ -750,25 +499,6 @@ export function parseClampedNumberDraft(
   return Number.isFinite(value)
     ? Math.max(min, Math.min(max, value))
     : fallback;
-}
-
-/**
- * Parse a live number-field draft while the user is typing. Returns `null`
- * when the draft is empty or not yet a finite number in range, so the
- * caller can keep showing the draft without forcing a snap-back value.
- */
-export function parseLiveNumberDraft(
-  draft: string,
-  min: number,
-  max: number,
-): number | null {
-  const trimmed = draft.trim();
-  if (trimmed === "" || trimmed === "-" || trimmed === "." || trimmed === "-.") {
-    return null;
-  }
-  const value = Number(trimmed);
-  if (!Number.isFinite(value) || value < min || value > max) return null;
-  return value;
 }
 
 type FillableObject = Extract<CourseMapObject, { kind: "path" | "rectangle" }>;

@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState, type ReactNode } from "react";
 
 /**
- * Compact "i" popover used by course and map layout editors for
+ * Compact "i" popover used by the course editor's top bar for
  * keyboard / tool hints that would otherwise clutter the toolbar.
  */
 export function EditorHelp({

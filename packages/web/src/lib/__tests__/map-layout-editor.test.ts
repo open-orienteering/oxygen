@@ -3,21 +3,10 @@ import {
   constrainMapObject,
   createImageObjectAt,
   createObjectAt,
-  displayedPreviewPlacement,
-  editorHandleScale,
-  editorPreviewDpi,
   fillModePatch,
-  initialEditorViewport,
-  panEditorViewport,
-  pinchEditorViewport,
   parseClampedNumberDraft,
-  parseLiveNumberDraft,
-  insertPolygonVertex,
-  removePolygonVertex,
   resizeMapObject,
   translateMapObject,
-  updatePolygonHandle,
-  zoomEditorViewport,
 } from "../map-layout-editor";
 
 const frame = { x: 3, y: 3, width: 204, height: 291 };
@@ -118,175 +107,10 @@ describe("map layout editor geometry", () => {
     });
   });
 
-  it("inserts and removes vertices while enforcing object minimums", () => {
-    const path = {
-      id: "path",
-      kind: "path" as const,
-      anchor: "page" as const,
-      points: [
-        { x: 0, y: 0 },
-        { x: 10, y: 0 },
-      ],
-      stroke: "#000000",
-      strokeWidthMm: 0.3,
-      fillMode: "none" as const,
-      closed: false,
-    };
-    const insertedPath = insertPolygonVertex(path, 0);
-    expect(insertedPath.points).toEqual([
-      { x: 0, y: 0 },
-      { x: 5, y: 0 },
-      { x: 10, y: 0 },
-    ]);
-    expect(removePolygonVertex(insertedPath, 1).points).toHaveLength(2);
-    expect(removePolygonVertex(path, 0)).toBe(path);
-
-    const polygon = {
-      id: "polygon",
-      kind: "path" as const,
-      anchor: "page" as const,
-      points: [
-        { x: 0, y: 0 },
-        { x: 10, y: 0 },
-        { x: 10, y: 10 },
-      ],
-      fillMode: "whiteout" as const,
-      closed: true,
-    };
-    expect(insertPolygonVertex(polygon, 2).points[3]).toEqual({ x: 5, y: 5 });
-    expect(removePolygonVertex(polygon, 1)).toBe(polygon);
-  });
-
-  it("splits curved edges and updates relative handles", () => {
-    const path = {
-      id: "curve",
-      kind: "path" as const,
-      anchor: "page" as const,
-      points: [
-        { x: 0, y: 0, hOut: { x: 0, y: 10 } },
-        { x: 10, y: 0, hIn: { x: 0, y: 10 } },
-      ],
-      stroke: "#000000",
-      strokeWidthMm: 0.3,
-      fillMode: "none" as const,
-      closed: false,
-    };
-    const inserted = insertPolygonVertex(path, 0);
-    expect(inserted.points[1]).toEqual({
-      x: 5,
-      y: 7.5,
-      hIn: { x: -2.5, y: 0 },
-      hOut: { x: 2.5, y: 0 },
-    });
-    expect(
-      updatePolygonHandle(inserted, 1, "hOut", { x: 4, y: 2 }).points[1],
-    ).toMatchObject({ hOut: { x: 4, y: 2 } });
-  });
-
-  it("zooms the editor viewport without changing print data", () => {
-    const paper = { width: 210, height: 297 };
-    const initial = initialEditorViewport(paper);
-    const zoomed = zoomEditorViewport(
-      initial,
-      paper,
-      { x: 105, y: 148.5 },
-      2,
-    );
-    expect(zoomed).toEqual({
-      x: 52.5,
-      y: 74.25,
-      width: 105,
-      height: 148.5,
-      zoom: 2,
-    });
-  });
-
-  it("pans a zoomed viewport while keeping it on the paper", () => {
-    const paper = { width: 210, height: 297 };
-    const viewport = {
-      x: 50,
-      y: 70,
-      width: 105,
-      height: 148.5,
-      zoom: 2,
-    };
-    expect(panEditorViewport(viewport, paper, -200, -200)).toMatchObject({
-      x: 105,
-      y: 148.5,
-    });
-    expect(panEditorViewport(viewport, paper, 200, 200)).toMatchObject({
-      x: 0,
-      y: 0,
-    });
-  });
-
-  it("combines midpoint movement and pinch zoom from one stable base", () => {
-    const paper = { width: 210, height: 297 };
-    const base = initialEditorViewport(paper);
-    expect(
-      pinchEditorViewport(
-        base,
-        paper,
-        { x: 105, y: 148.5 },
-        { x: 105, y: 148.5 },
-        { x: 115, y: 158.5 },
-        2,
-      ),
-    ).toEqual({
-      x: 47.5,
-      y: 69.25,
-      width: 105,
-      height: 148.5,
-      zoom: 2,
-    });
-  });
-
-  it("chooses a stable high-resolution preview within the pixel limit", () => {
-    expect(editorPreviewDpi(frame)).toBe(300);
-    const a3 = { x: 0, y: 0, width: 420, height: 297 };
-    const dpi = editorPreviewDpi(a3);
-    expect(dpi).toBe(247);
-    expect((a3.width / 25.4) * dpi).toBeLessThanOrEqual(4096);
-  });
-
-  it("caps editor zoom at eight times", () => {
-    const paper = { width: 210, height: 297 };
-    expect(
-      zoomEditorViewport(
-        initialEditorViewport(paper),
-        paper,
-        { x: 105, y: 148.5 },
-        20,
-      ).zoom,
-    ).toBe(8);
-  });
-
-  it("keeps editor handles page-sized up to 150% and screen-sized beyond", () => {
-    // Below the knee the handles scale with the paper like everything else …
-    expect(editorHandleScale(1)).toBe(1);
-    expect(editorHandleScale(1.5)).toBe(1);
-    // … above it they shrink in page mm so they stay the same size on screen.
-    expect(editorHandleScale(3)).toBeCloseTo(0.5);
-    expect(editorHandleScale(8)).toBeCloseTo(0.1875);
-    // Garbage zoom never blows the handles up.
-    expect(editorHandleScale(0)).toBe(1);
-    expect(editorHandleScale(Number.NaN)).toBe(1);
-  });
-
   it("parses clearable number drafts on commit", () => {
     expect(parseClampedNumberDraft("", 7500, 1000, 100000)).toBe(7500);
     expect(parseClampedNumberDraft("8000", 7500, 1000, 100000)).toBe(8000);
     expect(parseClampedNumberDraft("oops", 7500, 1000, 100000)).toBe(7500);
-  });
-
-  it("parses live number drafts without snapping empty or partial values", () => {
-    expect(parseLiveNumberDraft("", 0.1, 20)).toBeNull();
-    expect(parseLiveNumberDraft("0.", 0.1, 20)).toBeNull();
-    expect(parseLiveNumberDraft("-", 0.1, 20)).toBeNull();
-    expect(parseLiveNumberDraft("0.05", 0.1, 20)).toBeNull();
-    expect(parseLiveNumberDraft("25", 0.1, 20)).toBeNull();
-    expect(parseLiveNumberDraft("0.4", 0.1, 20)).toBe(0.4);
-    expect(parseLiveNumberDraft("1.5", 1, 100)).toBe(1.5);
   });
 
   it("patches fill mode with OOB purple lock and inverted closed paths", () => {
@@ -327,22 +151,6 @@ describe("map layout editor geometry", () => {
     });
   });
 
-  it("enforces a three-vertex minimum for inverted white-out paths", () => {
-    const inverted = {
-      id: "inv",
-      kind: "path" as const,
-      anchor: "page" as const,
-      points: [
-        { x: 0, y: 0 },
-        { x: 10, y: 0 },
-        { x: 10, y: 10 },
-      ],
-      fillMode: "whiteoutInverted" as const,
-      closed: true,
-    };
-    expect(removePolygonVertex(inverted, 1)).toBe(inverted);
-  });
-
   it("places image objects at the click point clamped to the printable area", () => {
     const centered = createImageObjectAt(4, { x: 100, y: 150 }, printable);
     expect(centered).toMatchObject({
@@ -356,28 +164,6 @@ describe("map layout editor geometry", () => {
     });
     const clamped = createImageObjectAt(4, { x: 0, y: 0 }, printable);
     expect(clamped).toMatchObject({ x: 3, y: 3 });
-  });
-
-  it("keeps the displayed raster aligned with the current window during drag", () => {
-    const displayed = { center: { x: 102, y: 145.5 }, printScale: 7500 };
-    // Same window: the raster fills the frame exactly.
-    const same = displayedPreviewPlacement(
-      displayed,
-      7500,
-      frame,
-      { minX: 0, minY: 0, width: 204, height: 291 },
-    );
-    expect(same).toEqual(frame);
-    // Window panned 10 mm east: the raster shifts west on the page.
-    const panned = displayedPreviewPlacement(
-      displayed,
-      7500,
-      frame,
-      { minX: 10, minY: 0, width: 204, height: 291 },
-    );
-    expect(panned.x).toBeCloseTo(frame.x - 10, 6);
-    expect(panned.y).toBeCloseTo(frame.y, 6);
-    expect(panned.width).toBeCloseTo(frame.width, 6);
   });
 
   it("clamps resize so a dragged edge cannot grow out the opposite side", () => {

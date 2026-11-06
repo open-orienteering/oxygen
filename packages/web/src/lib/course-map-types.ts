@@ -5,12 +5,7 @@ import {
   type CourseMapDocument,
   type CourseMapObject,
   type CourseMapOverrides,
-  type CourseOverlayControl,
-  type CourseOverlayLeg,
-  type DescriptionRow,
-  type DescriptionSheetHeader,
   type MapTemplateSettings,
-  type MapTextValues,
   type MapWindow,
 } from "@oxygen/shared";
 
@@ -53,13 +48,6 @@ export interface CourseMapView {
   class?: { seq: number; name: string } | null;
   overrides: CourseMapOverrides;
   objects: CourseMapObject[];
-  controls: CourseOverlayControl[];
-  legs: CourseOverlayLeg[];
-  /** How control numbers are labelled on the overprint. */
-  labelMode?: "sequence" | "code";
-  descriptionRows: DescriptionRow[];
-  /** IOF 3-row header for course maps; null/undefined → single title row. */
-  descriptionHeader?: DescriptionSheetHeader | null;
   validation: {
     valid: boolean;
     issues: Array<{
@@ -69,17 +57,8 @@ export interface CourseMapView {
       message?: string;
     }>;
   };
+  /** The sheet as it resolves; null without a template (no *Edit layout*). */
   resolved: { document: CourseMapDocument; window: MapWindow } | null;
-}
-
-export interface TemplateLayoutPreview {
-  document: CourseMapDocument;
-  window: MapWindow;
-  controls: CourseOverlayControl[];
-  legs: CourseOverlayLeg[];
-  descriptionRows: DescriptionRow[];
-  descriptionHeader?: DescriptionSheetHeader | null;
-  textValues: MapTextValues;
 }
 
 export interface TemplateDraft {
