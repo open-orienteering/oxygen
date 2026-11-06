@@ -14,7 +14,11 @@ function fakeClient() {
     return next ? next() : { version: "100" };
   };
   const client = {
-    course: { setStructure: { mutate: vi.fn(respond("setStructure")) }, setControlLabelOffset: { mutate: vi.fn(respond("setLabelOffset")) } },
+    course: {
+      setStructure: { mutate: vi.fn(respond("setStructure")) },
+      setControlLabelOffset: { mutate: vi.fn(respond("setLabelOffset")) },
+      update: { mutate: vi.fn(respond("courseUpdate")) },
+    },
     control: { update: { mutate: vi.fn(respond("update")) }, delete: { mutate: vi.fn(respond("delete")) }, check: { mutate: vi.fn(respond("check")) } },
     courseObject: {
       create: { mutate: vi.fn(respond("objCreate")) },
@@ -81,6 +85,33 @@ describe("EditorWrites (docs/course-editor.md §3)", () => {
     const err = await w.setStructure(1, S).catch((e: unknown) => e);
     expect((err as EditorConflict).decision).toEqual({ kind: "refresh", differing: ["32"] });
     expect(f.calls).toHaveLength(1);
+  });
+
+  it("description instructions: course.update with the course's token, the result seeds it and counts as own (E3b)", async () => {
+    const f = fakeClient();
+    const w = new EditorWrites(f.client);
+    w.versions.seed("course", 1, "5");
+    f.ok({ ok: true, version: "6" });
+    await w.setInstructions(1, { finish: { kind: "14.1" } });
+    expect(f.calls[0]).toEqual({ proc: "courseUpdate", input: { id: 1, descriptionInstructions: { finish: { kind: "14.1" } }, baseVersion: "5" } });
+    expect(w.versions.get("course", 1)).toBe("6");
+    expect(w.ownCourseVersions.has("6")).toBe(true);
+    // Undo clears the column: null is sent as null, on the token the first write returned.
+    f.ok({ ok: true, version: "7" });
+    await w.setInstructions(1, null);
+    expect(f.calls[1].input).toEqual({ id: 1, descriptionInstructions: null, baseVersion: "6" });
+  });
+
+  it("description instructions on a stale token: `refresh`, never re-sent, the server's token kept (E3b)", async () => {
+    const f = fakeClient();
+    const w = new EditorWrites(f.client);
+    w.versions.seed("course", 1, "5");
+    f.fail(conflictError({ kind: "course", id: 1, version: "9", current: {}, differing: [] }));
+    const err = await w.setInstructions(1, { finish: { kind: "14.2" } }).catch((e: unknown) => e);
+    expect(err).toBeInstanceOf(EditorConflict);
+    expect((err as EditorConflict).decision.kind).toBe("refresh");
+    expect(f.calls).toHaveLength(1);
+    expect(w.versions.get("course", 1)).toBe("9");
   });
 
   it("other errors pass through", async () => {

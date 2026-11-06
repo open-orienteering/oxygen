@@ -57,7 +57,9 @@ describe("resolveMapLayout description rows", () => {
         classes: [{ name: "H40" }, { name: "H45" }],
         controls,
         descriptionInstructions: {
-          specials: [{ afterControlId: 1, kind: "13.1", lengthM: 60 }],
+          // Anchored by the public control id (the punch code 31, not seq 1),
+          // as the editor, the on-map sheet and setStructure's prune use it (E3b).
+          specials: [{ afterControlId: 31, kind: "13.1", lengthM: 60 }],
           finish: { kind: "14.1" },
         },
         // Finish 40 mm east of the last control → 600 m at 1:15000.
