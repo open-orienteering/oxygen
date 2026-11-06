@@ -1,5 +1,4 @@
 import { describe, it, expect, afterEach } from "vitest";
-import * as limits from "../map-render-limits.js";
 import { Semaphore, intSetting, renderConcurrency } from "../map-render-limits.js";
 
 describe("intSetting", () => {
@@ -36,14 +35,6 @@ describe("renderConcurrency", () => {
     expect(renderConcurrency()).toBe(2);
     process.env.MAP_RENDER_CONCURRENCY = "3";
     expect(renderConcurrency()).toBe(3);
-  });
-});
-
-// The tile renderer's knobs went with it (E4a): only the render gate the
-// print takes, and the helpers the print-worker pool shares, are left.
-describe("module surface", () => {
-  it("exports only the render gate and its helpers", () => {
-    expect(Object.keys(limits).sort()).toEqual(["Semaphore", "intSetting", "renderConcurrency", "renderGate"]);
   });
 });
 

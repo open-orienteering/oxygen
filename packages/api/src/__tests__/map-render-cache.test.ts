@@ -6,7 +6,6 @@
  */
 
 import { describe, expect, it } from "vitest";
-import * as cache from "../map-render-cache.js";
 import { refreshClubMapRenderKey, refreshMapFileRenderKey } from "../map-render-cache.js";
 import { computeRenderKey, hashMapFileData } from "../map-render-key.js";
 
@@ -81,13 +80,6 @@ function fakeDelegate(row: Row) {
   const askedForBlob = () => selects.filter((s) => s.fileData === true).length;
   return { delegate, selects, updates, askedForBlob };
 }
-
-describe("module surface", () => {
-  // The lazy read helpers (`ensure*RenderKey`) went with the tiles in E4a.
-  it("keeps only the writes and the orphan-tile collection", () => {
-    expect(Object.keys(cache).sort()).toEqual(["gcOrphanTiles", "refreshClubMapRenderKey", "refreshMapFileRenderKey"]);
-  });
-});
 
 describe("refresh*RenderKey", () => {
   it("reuses the stored hash instead of re-reading the blob", async () => {

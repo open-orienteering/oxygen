@@ -34,7 +34,7 @@ sense. The research record is `docs/research/vector-map-pipeline/09-migration.md
 | Fallback to tiles (no WebGL2, lost context) | The layer's "cannot draw the map" message; a lost context remounts the layer once first (§5.4 "Layer") |
 | Print path | Every event prints through the composer; an unaligned colour stack is a 400 with the reason (`docs/course-print.md` §8.1) |
 | Editor mount, *Edit layout* | Always the course editor, Layout mode for *Edit layout* (`docs/course-editor.md` §1, `docs/course-layout.md` §4) |
-| Tile pre-cache | Retired; a tile asked for directly is still rendered until E4a deletes the tile pipeline |
+| Tile pre-cache | Retired; the tile pipeline went in E4a (`/api/map-tile*` answers 404) |
 | Unreadable document (no OCAD fallback) | The viewer's load error with *Try again* (`map-rendering.md` §5.4 "Host"); print 400 "Pinned map document is missing" (`course-print.md` §10); no cuts (`course-layer.md` §4.2) — the answers of slices B and E1, unchanged |
 | New events | `vector` from the column default |
 
