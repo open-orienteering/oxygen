@@ -151,6 +151,32 @@ describe("eventor.sync re-entry status reset", () => {
     }
   });
 
+  it("overwrites a 'file' length_source course's length, whatever geometry_source says (E6)", async () => {
+    const ctx = await createTestEvent("evr-file-course-length");
+    try {
+      await ctx.db.event.update({
+        where: { id: ctx.eventId },
+        data: { eventorEventId: BigInt(EVENTOR_EVENT_ID), eventorEnv: "test" },
+      });
+      const course = await ctx.db.course.create({
+        data: { eventId: ctx.eventId, name: "U4 file", lengthM: 1200, lengthSource: "file", geometrySource: "editor" },
+      });
+      await ctx.db.class.create({
+        data: { eventId: ctx.eventId, name: "U4", eventorId: BigInt(CLASS_BASE + 12), courseId: course.id },
+      });
+      vi.mocked(fetchEventClasses).mockResolvedValue([makeClass(CLASS_BASE + 12, "U4", false, 2480)]);
+      vi.mocked(fetchEntries).mockResolvedValue([]);
+      vi.mocked(fetchResults).mockResolvedValue([]);
+
+      await makeCaller(ctx.event).eventor.sync();
+
+      const after = await ctx.db.course.findUnique({ where: { id: course.id }, select: { lengthM: true } });
+      expect(after?.lengthM).toBe(2480);
+    } finally {
+      await ctx.cleanup();
+    }
+  });
+
   it("does not overwrite an editor-owned course with Eventor's old published length", async () => {
     const ctx = await createTestEvent("evr-edited-course-length");
     try {
@@ -163,7 +189,8 @@ describe("eventor.sync re-entry status reset", () => {
           eventId: ctx.eventId,
           name: "U4 edited",
           lengthM: 2710,
-          geometrySource: "editor",
+          // E6: the sync reads `length_source`, not `geometry_source`.
+          lengthSource: "derived",
         },
       });
       await ctx.db.class.create({

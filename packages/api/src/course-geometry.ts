@@ -296,6 +296,10 @@ export async function rebuildCourseGeometry(
           ? (geometry as unknown as Prisma.InputJsonValue)
           : PrismaNs.DbNull,
       geometrySource: geometry.features.length > 0 ? "editor" : "",
+      // The length provenance the export and the Eventor sync read
+      // (course-controls-and-matching.md "Course length"): an edited
+      // course's length is derived from its controls.
+      lengthSource: geometry.features.length > 0 ? "derived" : null,
     };
     // Free-order courses have no meaningful legs — leave lengthM / legs
     // alone (the organiser sets length manually). Ordered courses keep

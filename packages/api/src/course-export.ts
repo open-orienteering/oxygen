@@ -127,7 +127,7 @@ export async function gatherEventCourseExport(
     orderBy: { seq: "asc" },
     select: {
       id: true, name: true, lengthM: true, climbM: true, legs: true,
-      geometrySource: true, orderMode: true,
+      lengthSource: true, orderMode: true,
       firstAsStart: true, lastAsFinish: true, startName: true,
       finishControlId: true, structure: true,
       courseControls: {
@@ -199,10 +199,11 @@ export async function gatherEventCourseExport(
 
     // Imported OCD/XML courses may carry an intentional published length
     // (detours around forbidden terrain, marked routes, extra distance).
-    // Preserve that until the course is edited. Editor-owned courses are
-    // geometry-derived and are recomputed defensively at export time too.
+    // Preserve that until the course is edited. Edited courses
+    // (`length_source = 'derived'`) are recomputed defensively at export
+    // time too (course-controls-and-matching.md "Course length").
     const lengthM =
-      course.geometrySource === "editor" && computedLengthM > 0
+      course.lengthSource === "derived" && computedLengthM > 0
         ? computedLengthM
         : course.lengthM > 0
           ? course.lengthM

@@ -361,12 +361,13 @@ async function syncClassesFromEventor(
     if (lengths.size !== 1) continue;
     await db.course.updateMany({
       // Once a course has been edited in Oxygen, its freshly-derived
-      // geometry/length supersedes Eventor's previously published snapshot.
+      // length supersedes Eventor's previously published snapshot
+      // (`length_source = 'derived'`; NULL and 'file' are overwritten).
       where: {
         id: courseId,
         eventId,
         removed: false,
-        geometrySource: { not: "editor" },
+        OR: [{ lengthSource: null }, { lengthSource: { not: "derived" } }],
       },
       data: { lengthM: [...lengths][0] },
     });

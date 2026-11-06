@@ -513,6 +513,8 @@ model Course {
   geometry        Json?
   /// Provenance for `geometry`: 'ocd' (full routed legs from OCAD) or 'xml' (straight-line fallback from IOF XML).
   geometrySource  String   @default("") @map("geometry_source")
+  /// Where `lengthM` comes from: 'file' (an imported file's published length; Eventor may overwrite it), 'derived' (edited in Oxygen: derived from the controls, recomputed at export, never overwritten by Eventor), NULL (neither). Written beside `geometrySource` until E5 drops it (E6; course-controls-and-matching.md "Course length").
+  lengthSource    String?  @map("length_source")
   /// Course-level description-sheet instructions (special rows + finish variant).
   /// Shape: { specials?: [{afterControlId, kind, lengthM?}], finish?: {kind, lengthM?} }.
   descriptionInstructions Json? @map("description_instructions")

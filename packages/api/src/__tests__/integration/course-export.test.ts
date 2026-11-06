@@ -113,10 +113,11 @@ describe("buildEventCourseDataXml", () => {
       select: { id: true },
     });
     // Simulate stale derived fields left by an old import/build. The export
-    // must not trust them for an editor-owned course.
+    // must not trust them for an edited course (`length_source = 'derived'`;
+    // `geometry_source` is no longer read, E6).
     await ctx.db.course.update({
       where: { id: course.id },
-      data: { lengthM: 1, legs: "1;1;1;", geometrySource: "editor" },
+      data: { lengthM: 1, legs: "1;1;1;", lengthSource: "derived", geometrySource: "" },
     });
 
     const parsed = parseIOFCourseData(
@@ -133,6 +134,23 @@ describe("buildEventCourseDataXml", () => {
       Math.round((40 * mapScale) / 1000),
       Math.round((40 * mapScale) / 1000),
     ]);
+  });
+
+  it("exports the published length of a 'file' or NULL length_source course, whatever geometry_source says (E6)", async () => {
+    const course = await ctx.db.course.findFirstOrThrow({ where: { eventId: ctx.eventId, name: "Export A" }, select: { id: true } });
+    try {
+      for (const lengthSource of ["file", null] as const) {
+        await ctx.db.course.update({ where: { id: course.id }, data: { lengthM: 4321, lengthSource, geometrySource: "editor" } });
+        const parsed = parseIOFCourseData(await buildEventCourseDataXml(ctx.db, { id: ctx.eventId, name: ctx.event.name }));
+        expect(parsed.courses.find((c) => c.name === "Export A")!.length).toBe(4321);
+      }
+      // No published length: the derived one.
+      await ctx.db.course.update({ where: { id: course.id }, data: { lengthM: 0, lengthSource: null } });
+      const parsed = parseIOFCourseData(await buildEventCourseDataXml(ctx.db, { id: ctx.eventId, name: ctx.event.name }));
+      expect(parsed.courses.find((c) => c.name === "Export A")!.length).toBe(Math.round((100 * mapScale) / 1000));
+    } finally {
+      await ctx.db.course.update({ where: { id: course.id }, data: { lengthSource: "derived", geometrySource: "editor" } });
+    }
   });
 
   it("emits randomOrder on free-order courses and round-trips orderMode", async () => {

@@ -11,8 +11,9 @@
  *
  * Stripped from the payload: `id`/`eventId`/`seq` (carried explicitly),
  * timestamps (local defaults), and the course `geometry`/`geometrySource`
- * blobs — derived artifacts that travel with the checkout snapshot instead
- * of inflating every journal entry. BigInt columns (`version`) travel as
+ * blobs and `lengthSource` (which mirrors `geometrySource`) — derived
+ * artifacts that travel with the checkout snapshot instead of inflating
+ * every journal entry. BigInt columns (`version`) travel as
  * decimal strings.
  *
  * Version token (docs/course-layer.md §7): a course / control row's
@@ -83,6 +84,8 @@ export async function courseUpsertPayload(
     fields: portableFields(row as unknown as Record<string, unknown>, [
       "geometry",
       "geometrySource",
+      // Mirrors `geometrySource` (E6): travels with the snapshot, not the journal.
+      "lengthSource",
     ]),
     courseControls: ccs,
   };
