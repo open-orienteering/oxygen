@@ -11,10 +11,6 @@ import {
 import { makeCaller } from "../helpers/caller.js";
 import type { AuthUser } from "../../auth.js";
 import type { GeoJSONFeatureCollection } from "../../iof-course-parser.js";
-import {
-  getOrCreateClubMapPreview,
-  registerClubMapPreviewRoute,
-} from "../../club-map-preview.js";
 import { grantSystemGroup } from "../../permissions.js";
 import { SYSTEM_GROUP_IDS } from "@oxygen/shared";
 import { registerBackupRoute } from "../../backup.js";
@@ -120,8 +116,10 @@ describe("club map library", () => {
     expect(row!.previewUrl).toBe(
       `/api/map-documents/${series.versions[0].documentHash}/thumbnail.png`,
     );
+    // The OCAD-rendered PNG preview went in E4a: the write-through row
+    // carries none, the card shows the document thumbnail above.
     const stored = await legacyRowOf(uploaded.id);
-    expect(stored.previewPng).not.toBeNull();
+    expect(stored.previewPng).toBeNull();
 
     // The fixture's north lines are drawn at grid north while the real
     // declination at 15°E/58.6°N is ≈ 6.5° E: the detection must report
@@ -161,38 +159,14 @@ describe("club map library", () => {
       (m) => m.id === legacy.seriesId,
     );
     expect(listed).toMatchObject({ version: null, northDetection: null, meridianStalenessDeg: null, bounds: null, northOffset: null, scale: null });
-    expect(listed?.previewUrl).toBe(`/api/club-map-preview/${legacy.legacyId}`);
+    // No document, no thumbnail: an empty frame (§6.5, E4a).
+    expect(listed?.previewUrl).toBeNull();
     // No lazy backfill: the read wrote nothing.
     const persisted = await ctx.db.clubMapFile.findUniqueOrThrow({
       where: { id: legacy.legacyId },
       select: { northDetection: true },
     });
     expect(persisted.northDetection).toBeNull();
-  });
-
-  it("backfills and persists a preview for a legacy club map", async () => {
-    const buf = readFileSync(FIXTURE);
-    const row = await ctx.db.clubMapFile.create({
-      data: {
-        name: `Legacy preview ${suffix}`,
-        fileName: "legacy-preview.ocd",
-        fileData: buf,
-        sizeBytes: buf.length,
-        previewPng: null,
-      },
-    });
-    legacyOnlyIds.push(row.id);
-
-    const png = await getOrCreateClubMapPreview(row.id);
-    expect(png?.subarray(0, 4)).toEqual(Buffer.from([0x89, 0x50, 0x4e, 0x47]));
-
-    const persisted = await ctx.db.clubMapFile.findUnique({
-      where: { id: row.id },
-      select: { previewPng: true },
-    });
-    expect(persisted?.previewPng).not.toBeNull();
-    const again = await getOrCreateClubMapPreview(row.id);
-    expect(again?.equals(png!)).toBe(true);
   });
 
   it("keeps accepting an unparseable upload without a preview", async () => {
@@ -215,7 +189,7 @@ describe("club map library", () => {
       importJob: { state: "failed" },
       fileName: "unparseable.ocd",
       sizeBytes: garbage.length,
-      previewUrl: `/api/club-map-preview/${stored.id}`,
+      previewUrl: null,
     });
     // Nothing to download or adopt until a version exists (06 §6).
     await expect(makeCaller().clubMap.download({ id: uploaded.id })).rejects.toMatchObject({
@@ -252,50 +226,6 @@ describe("club map library", () => {
     await expect(
       makeCaller().clubMap.rename({ id: "42" as unknown as string, name: "x" }),
     ).rejects.toMatchObject({ code: "BAD_REQUEST" });
-  });
-
-  it("requires an invited user for preview REST access when auth is on", async () => {
-    const buf = readFileSync(FIXTURE);
-    const uploaded = await makeCaller().clubMap.upload({
-      fileName: "guarded-preview.ocd",
-      fileDataBase64: buf.toString("base64"),
-    });
-    seriesIds.push(uploaded.id);
-    const legacyId = (await legacyRowOf(uploaded.id)).id;
-    const invitedEmail = `preview-${suffix}@club-map-test.example`;
-    await ctx.db.user.create({
-      data: {
-        email: invitedEmail,
-        displayName: "Preview User",
-        isAdmin: false,
-        active: true,
-      },
-    });
-
-    const server = Fastify();
-    registerClubMapPreviewRoute(server);
-    const previousMode = process.env.AUTH_MODE;
-    process.env.AUTH_MODE = "proxy";
-    try {
-      const anonymous = await server.inject({
-        method: "GET",
-        url: `/api/club-map-preview/${legacyId}`,
-      });
-      expect(anonymous.statusCode).toBe(401);
-
-      const invited = await server.inject({
-        method: "GET",
-        url: `/api/club-map-preview/${legacyId}`,
-        headers: { "x-forwarded-email": invitedEmail },
-      });
-      expect(invited.statusCode).toBe(200);
-      expect(invited.headers["content-type"]).toContain("image/png");
-      expect(invited.headers["cache-control"]).toBe("private, max-age=3600");
-    } finally {
-      if (previousMode === undefined) delete process.env.AUTH_MODE;
-      else process.env.AUTH_MODE = previousMode;
-      await server.close();
-    }
   });
 
   it("forbids delete by a non-uploader non-admin when auth is on", async () => {

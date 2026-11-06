@@ -6,7 +6,6 @@ import {
   applyClubMapRotationCorrection,
   resolveMapNorth,
 } from "../event-map.js";
-import { renderOcadPreview } from "../club-map-preview.js";
 import type { Prisma } from "../generated/prisma/client.js";
 import {
   canDownloadClubMapVersion,
@@ -24,8 +23,8 @@ const PERSON = { select: { email: true, displayName: true } } as const;
 
 /**
  * Everything `projectClubMapRow` reads for one series: the latest
- * version with its source and document header, the newest import job,
- * and the linked legacy row (raster-path metadata, §6.5).
+ * version with its source and document header and the newest import job
+ * (§6.5).
  */
 const SERIES_INCLUDE = {
   creator: PERSON,
@@ -42,11 +41,6 @@ const SERIES_INCLUDE = {
     orderBy: { createdAt: "desc" },
     take: 1,
     select: { id: true, state: true, error: true, source: { select: { fileName: true, sizeBytes: true } } },
-  },
-  legacyRows: {
-    orderBy: { id: "asc" },
-    take: 1,
-    select: { id: true },
   },
   _count: { select: { versions: true } },
 } satisfies Prisma.ClubMapInclude;
@@ -69,7 +63,7 @@ async function legacyRowIds(id: string): Promise<bigint[]> {
  * Create a club-library map from bytes: the `club_maps` series, the
  * content-addressed source row and an import job that adds version 1
  * when it finishes (docs/map-storage.md §6.5), plus the write-through
- * `club_map_files` row the raster path still reads until slice F.
+ * `club_map_files` row a rollback to v0.5.0 reads until E5 drops it.
  */
 async function createClubMap(
   buffer: Buffer,
@@ -79,7 +73,6 @@ async function createClubMap(
   opts: { fileHash?: string } = {},
 ) {
   const resolved = await resolveMapNorth(buffer);
-  const previewPng = await renderOcadPreview(buffer);
   const displayName = name?.trim() || fileName;
   const fileHash = opts.fileHash ?? hashMapFileData(buffer);
   const colorProfile = "auto" as const;
@@ -110,7 +103,6 @@ async function createClubMap(
           name: displayName,
           fileName,
           fileData: Uint8Array.from(buffer),
-          previewPng: previewPng ? Uint8Array.from(previewPng) : undefined,
           sizeBytes: buffer.length,
           scale: resolved.metadata.scale,
           bounds: (resolved.metadata.bounds ?? undefined) as
@@ -183,7 +175,6 @@ export const clubMapRouter = router({
         version: s.versions[0] ?? null,
         versionCount: s._count.versions,
         job: s.importJobs[0] ?? null,
-        legacy: s.legacyRows[0] ?? null,
       }),
     );
   }),

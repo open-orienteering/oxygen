@@ -3,10 +3,10 @@
  * listed row per `club_maps` series, built from its latest
  * `club_map_versions` row and that version's `map_sources` /
  * `map_documents` rows — extent and north from the document's header and
- * import report, under the series' `rotation_correction`. The linked
- * legacy `club_map_files` row only names the PNG preview of a series that
- * has no version yet. Pure, so the precedence rules are unit-tested
- * without a database.
+ * import report, under the series' `rotation_correction`; the preview is
+ * the version document's thumbnail. Nothing here reads the write-through
+ * `club_map_files` row (E4a). Pure, so the precedence rules are
+ * unit-tested without a database.
  */
 import { TRPCError } from "@trpc/server";
 import { canDownloadClubLibraryMap } from "./ocad-export.js";
@@ -53,8 +53,6 @@ export interface ClubMapRowInput {
     error: string | null;
     source: { fileName: string; sizeBytes: number };
   } | null;
-  /** The linked `club_map_files` row (write-through, §6.5): its preview route only. */
-  legacy: { id: bigint } | null;
 }
 
 function headerScale(header: unknown): number | null {
@@ -76,7 +74,7 @@ function reviewCounts(report: unknown): { suggested: number; reviewed: number } 
   return { suggested: symbols.suggested, reviewed: symbols.reviewed };
 }
 
-export function projectClubMapRow({ series, version, versionCount, job, legacy }: ClubMapRowInput) {
+export function projectClubMapRow({ series, version, versionCount, job }: ClubMapRowInput) {
   const file = version?.source ?? job?.source ?? null;
   const north = version ? reportNorth(version.document.report) : null;
   const frame = version ? documentFrameSchema.safeParse(version.document.header) : null;
@@ -112,11 +110,8 @@ export function projectClubMapRow({ series, version, versionCount, job, legacy }
     uploadedAt: (version?.uploadedAt ?? series.createdAt).toISOString(),
     uploadedBy: version ? version.uploadedBy : series.createdBy,
     uploader: version ? version.uploader : series.creator,
-    previewUrl: version
-      ? `/api/map-documents/${version.documentHash}/thumbnail.png`
-      : legacy
-        ? `/api/club-map-preview/${legacy.id}`
-        : null,
+    // Until the first version exists the card shows an empty frame (§6.5).
+    previewUrl: version ? `/api/map-documents/${version.documentHash}/thumbnail.png` : null,
     bounds: columns?.bounds ?? null,
     northOffset: columns?.northOffset ?? null,
     northDetection: north,

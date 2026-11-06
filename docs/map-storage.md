@@ -697,12 +697,19 @@ clubMap.list → [{
   sizeBytes,               map_sources.size_bytes of the same source
   scale,                   map_documents.header.mapScale of the latest version, else null
   uploadedAt, uploadedBy, uploader {email, displayName},   the version's, else the series creator's
-  previewUrl,              /api/map-documents/<documentHash>/thumbnail.png (§4.5),
-                           else /api/club-map-preview/<legacy id>, else null
+  previewUrl,              /api/map-documents/<documentHash>/thumbnail.png (§4.5), else null
   bounds, northOffset,     the version's header + report.north tilt under rotationCorrection (§4.6)
   northDetection, meridianStalenessDeg,   the version's report.north; staleness for today
 }]                         ordered by club_maps.created_at desc
 ```
+
+`colorProfile`, `colorOverrides` and `northLinesBelow` are the series'
+stored settings, copied by `useClubMap` into the event's dual-written row
+(rollback); since E4a nothing draws with them and no procedure changes
+them. A series without a version has no preview: the card shows an empty
+frame while its import runs and the list polls until the version lands
+(the OCAD-rendered PNG preview, `/api/club-map-preview/:id`, went in
+E4a).
 
 `documentHash` is read on every call: a version's `document_hash` is
 updated in place when its file is reviewed or re-matched (§6.4), so the
@@ -710,21 +717,23 @@ card's thumbnail follows the latest import and nothing here caches it.
 
 | Procedure | Series side | Write-through to `club_map_files` |
 |---|---|---|
-| `upload` / `addFromSource` | `club_maps` row, `map_sources`, `startImportJob {clubMapId}` → version 1 (§6.4); returns `{id: club_maps.id, name, fileName, sizeBytes, rotationCorrection, meridianStalenessDeg, importJob}` | one row with `club_map_id`, the bytes, preview, metadata, `file_hash`, `render_key` |
+| `upload` / `addFromSource` | `club_maps` row, `map_sources`, `startImportJob {clubMapId}` → version 1 (§6.4); returns `{id: club_maps.id, name, fileName, sizeBytes, rotationCorrection, meridianStalenessDeg, importJob}` | one row with `club_map_id`, the bytes, metadata, `file_hash`, `render_key` (no `preview_png` since E4a) |
 | `rename {id, name}` | `club_maps.name` | `name` on every linked row |
 | `setRotation {id, degrees}` | `rotation_correction` | `applyClubMapRotationCorrection` per linked row: bounds and north offset from the latest version's document (§4.6), render key |
 | `remove {id}` | deletes the series: versions cascade, `map_files.club_map_version_id` of events that pinned one is set `NULL`, jobs cascade | linked rows deleted **first** |
 | `download {id}` | the latest version's `map_sources` bytes, named by the version label (else `map_sources.file_name`) | — |
 | `course.useClubMap {clubMapId}` | settings from the series, bytes from the latest version's source; then `map_files.club_map_version_id` = that version on the event's rows with its `source_hash` | — |
 
-- **Write-through.** `club_map_files` stays because the raster path still
-  reads it until slice F drops it after a verified backfill (09 §4 F):
-  the tile cache and its orphan collection (`map-render-cache.ts`), the
-  PNG preview route (`/api/club-map-preview/:id`) and the backfill
-  itself — and a rollback to v0.5.0 reads all of it. Every mutation keeps
-  the linked rows identical to the series. The CRUD reads a linked row
-  only for the PNG preview of a series without a version; extent, north
-  and scale come from the version's document (§4.6, slice E1).
+- **Write-through.** `club_map_files` stays until E5 drops it after a
+  verified backfill (09 §4 F) because a rollback to v0.5.0 reads it (its
+  tile cache, PNG preview route and backfill) and the backfill (§6.7)
+  and the orphan-tile collection (`gcOrphanTiles`) still walk it. Every
+  mutation keeps the linked rows identical to the series. Since E4a
+  nothing in the running version reads a linked row's content: extent,
+  north and scale come from the version's document (§4.6, slice E1), the
+  preview is the document thumbnail. `preview_png` is no longer written
+  (`renderOcadPreview` went with `club-map-preview.ts`); the column is
+  nullable and v0.5.0 fills it lazily on its first preview request.
 - **Delete order.** `club_map_files.club_map_id` is `ON DELETE SET NULL`;
   deleting the series first would leave an unlinked row the backfill
   re-imports as a new series.
@@ -1241,8 +1250,8 @@ its `map_pipeline` gate.
 | Unit (api) | `packages/api/src/__tests__/map-rematch-cli.test.ts` | `staleReason` matrix, CLI flags, plan / item / summary lines |
 | Integration (api) | `packages/api/src/__tests__/integration/map-rematch.test.ts` | an `ocad-3` / `none` row pinned by an event and a club version is planned (both, `--event` scope), dry run writes nothing, a run moves both pins to the current document, second run empty; a decision change re-matches the club edition only |
 | Integration (api) | `packages/api/src/__tests__/integration/map-backfill.test.ts` | plan counts and ordering, dry run writes nothing, legacy club row → series (settings copied) + version 1 (label / uploader / time from the row), event rows → pins with dedup and club-version pin, unreadable rows reported and left unpinned, second run revisits only what is missing, `--event` scope and soft-deleted events skipped, `backfillStatus` / `backfillStart` admin-only, background run and `CONFLICT` |
-| Unit (api) | `packages/api/src/__tests__/club-map-library.test.ts` | `projectClubMapRow` (series settings, version label → source name fallback, header scale → legacy scale, legacy raster metadata, version-less row with its job and the job's source, nulls, job dropped once a version exists), `canRemoveClubMap` / `canDownloadClubMapVersion` matrices, `latestVersionOrRefuse` → `PRECONDITION_FAILED`; `review` counts from the import report's `matching.symbols`, null without a matched document |
-| Integration (api) | `packages/api/src/__tests__/integration/club-maps.test.ts` | upload keyed by the series UUID, list carries version / hashes / thumbnail URL / source facts, rename written through, download by version source; linked legacy row's north detection backfilled on list (and all-null for garbage); unparseable upload listed with a failed job and the legacy preview, `download` / `useClubMap` `PRECONDITION_FAILED`; unlinked legacy row not listed and not touched; unknown id `NOT_FOUND`, malformed `BAD_REQUEST`; remove stranger `FORBIDDEN`, creator ok with its legacy row; `setRotation` on series and legacy row → event copy; download stranger `FORBIDDEN`; club-library copy and backup gates; the listed `review` equals the version document's report counts |
+| Unit (api) | `packages/api/src/__tests__/club-map-library.test.ts` | `projectClubMapRow` (series settings, version label → source name fallback, header scale → legacy scale, legacy raster metadata, version-less row with its job and the job's source and no preview URL, nulls, job dropped once a version exists), `canRemoveClubMap` / `canDownloadClubMapVersion` matrices, `latestVersionOrRefuse` → `PRECONDITION_FAILED`; `review` counts from the import report's `matching.symbols`, null without a matched document |
+| Integration (api) | `packages/api/src/__tests__/integration/club-maps.test.ts` | upload keyed by the series UUID, list carries version / hashes / thumbnail URL / source facts, no `preview_png` written, rename written through, download by version source; a version-less series lists no north and no preview URL and the read writes nothing; unparseable upload listed with a failed job and no preview URL, `download` / `useClubMap` `PRECONDITION_FAILED`; unlinked legacy row not listed and not touched; unknown id `NOT_FOUND`, malformed `BAD_REQUEST`; remove stranger `FORBIDDEN`, creator ok with its legacy row; `setRotation` on series and legacy row → event copy; download stranger `FORBIDDEN`; club-library copy and backup gates; the listed `review` equals the version document's report counts |
 | Unit (web) | `packages/web/src/lib/__tests__/map-document-cache.test.ts` | §7.1: route regex (documents, not previews), URL without query and the two headers, one request per hash and the same bytes, bounded memory, 401/403/404/5xx/offline/unreadable → kinds and not cached, `storage.persist()` once and absent |
 | E2E | `e2e/map-vector-layer.spec.ts` | §7.1 through the viewer: the pinned document by hash, no query, `x-event-id` |
 | Unit (web) | `packages/web/src/__tests__/map-upload.test.ts` | threshold, init → chunks → finalise call order and progress, per-chunk retry on 5xx, no retry on 4xx, `x-event-id` only for event uploads |

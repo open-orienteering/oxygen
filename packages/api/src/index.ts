@@ -19,7 +19,6 @@ import { authHeaderName } from "./auth.js";
 import { registerBackupRoute } from "./backup.js";
 import { registerCourseExportRoute } from "./course-export.js";
 import { registerMapTileRoutes } from "./map-tiles.js";
-import { registerClubMapPreviewRoute } from "./club-map-preview.js";
 import { registerMapDocumentRoutes } from "./map-store/routes.js";
 import { registerMapPreviewRoutes } from "./map-store/preview-routes.js";
 import { registerMapSourceRoutes } from "./map-store/source-routes.js";
@@ -102,7 +101,6 @@ async function main() {
   registerBackupRoute(server);
   registerCourseExportRoute(server);
   registerMapTileRoutes(server);
-  registerClubMapPreviewRoute(server);
   registerMapDocumentRoutes(server);
   registerMapPreviewRoutes(server);
   registerMapSourceRoutes(server);

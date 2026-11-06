@@ -45,7 +45,6 @@ function input(over: Partial<ClubMapRowInput> = {}): ClubMapRowInput {
     },
     versionCount: 1,
     job: null,
-    legacy: { id: 42n },
     ...over,
   };
 }
@@ -151,12 +150,13 @@ describe("projectClubMapRow", () => {
       uploadedAt: created.toISOString(),
       uploadedBy: "creator",
       uploader: { email: "c@example", displayName: "Creator" },
-      previewUrl: "/api/club-map-preview/42",
+      // No document yet: the card shows an empty frame (§6.5; E4a).
+      previewUrl: null,
     });
   });
 
   it("reports nothing it does not have", () => {
-    const row = projectClubMapRow(input({ version: null, versionCount: 0, job: null, legacy: null }));
+    const row = projectClubMapRow(input({ version: null, versionCount: 0, job: null }));
     expect(row).toMatchObject({
       fileName: null,
       sizeBytes: null,
