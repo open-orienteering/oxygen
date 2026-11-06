@@ -102,13 +102,20 @@ describe("E5 drops migration", () => {
 
   it("fails on a club map without its series", async () => {
     await db.query("DELETE FROM map_files WHERE file_name = 'unsourced.ocd'");
-    await expect(applyE5()).rejects.toThrow(/E5 guard: 1 club_map_files row\(s\) have no club_map_id/);
+    await expect(applyE5()).rejects.toThrow(/E5 guard: 1 club_map_files row\(s\) have no club_map_id or no map_sources row/);
+    expect(await tableExists("club_map_files")).toBe(true);
+  });
+
+  it("fails on a club map whose series exists but whose bytes are in no source", async () => {
+    const series = (await db.query("INSERT INTO club_maps (name) VALUES ('Unlinked') RETURNING id")).rows[0].id;
+    await db.query("UPDATE club_map_files SET club_map_id = $1", [series]);
+    await expect(applyE5()).rejects.toThrow(/E5 guard: 1 club_map_files row\(s\)/);
     expect(await tableExists("club_map_files")).toBe(true);
   });
 
   it("passes when only a soft-deleted event's map lacks a source, and drops what E5 names", async () => {
-    const series = (await db.query("INSERT INTO club_maps (name) VALUES ('Unlinked') RETURNING id")).rows[0].id;
-    await db.query("UPDATE club_map_files SET club_map_id = $1", [series]);
+    // The club map's bytes as a source (found by the SHA-256 of file_data; file_hash is null).
+    await db.query("INSERT INTO map_sources (file_hash, kind, bytes, size_bytes, file_name) VALUES (encode(sha256('\\x04'::bytea), 'hex'), 'ocad', '\\x04', 1, 'club.ocd')");
     await applyE5();
 
     for (const t of ["map_tiles", "rendered_maps", "club_map_files"]) expect(await tableExists(t)).toBe(false);

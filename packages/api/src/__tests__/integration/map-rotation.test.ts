@@ -94,6 +94,27 @@ describe("course.setMapRotation", () => {
     expect(reset.northOffset).toBeCloseTo(uncorrected.northOffset!, 6);
   });
 
+  it("re-derives the legs of derived courses only: a file course keeps its length, legs and source", async () => {
+    await ctx.db.control.createMany({ data: [{ eventId: ctx.eventId, codes: "41", xpos: 10, ypos: 10 }, { eventId: ctx.eventId, codes: "42", xpos: 40, ypos: 10 }] });
+    const derived = await caller.course.create({ name: "Derived", controlIds: [41, 42] });
+    const file = await ctx.db.course.create({ data: { eventId: ctx.eventId, name: "From file", lengthM: 1234, legs: "600;634;", lengthSource: "file" } });
+    const before = await ctx.db.course.findFirstOrThrow({ where: { eventId: ctx.eventId, seq: derived.id } });
+    expect(before.lengthSource).toBe("derived");
+
+    await caller.course.setMapRotation({ degrees: 3 });
+    try {
+      const after = await ctx.db.course.findUniqueOrThrow({ where: { id: file.id } });
+      expect([after.lengthM, after.legs, after.lengthSource]).toEqual([1234, "600;634;", "file"]);
+      const derivedAfter = await ctx.db.course.findUniqueOrThrow({ where: { id: before.id } });
+      expect(derivedAfter.lengthSource).toBe("derived");
+      expect(derivedAfter.legs).toMatch(/^\d+;$/);
+      // Lengths stay as stored on a map change (updateLength: false); only the legs follow.
+      expect(derivedAfter.lengthM).toBe(before.lengthM);
+    } finally {
+      await caller.course.setMapRotation({ degrees: 0 });
+    }
+  });
+
   it("rejects when no map is uploaded", async () => {
     const other = await createTestEvent("map_rotation_empty");
     const emptyCaller = makeCaller(other.event);

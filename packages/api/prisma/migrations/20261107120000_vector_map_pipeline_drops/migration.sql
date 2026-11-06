@@ -15,8 +15,9 @@
 --
 -- The guard. Every map of a live event must have its bytes in
 -- `map_sources` (`map_files.source_hash`), and every legacy club map must
--- belong to a `club_maps` series, or this would delete the only copy of
--- an OCAD file. The fix is the backfill on the v0.6.0 image
+-- belong to a `club_maps` series and have its bytes in `map_sources`
+-- (`file_hash`, else the SHA-256 of `file_data`), or this would delete
+-- the only copy of an OCAD file. The fix is the backfill on the v0.6.0 image
 -- (`scripts/gcp/backfill.sh`), then deploy again. A soft-deleted event
 -- (`events.removed`) is not guarded: its unsourced rows keep their file
 -- name and lose their bytes (E0 found three such rows on production, all
@@ -36,10 +37,13 @@ BEGIN
   END IF;
 
   SELECT count(*) INTO unlinked
-    FROM "oxygen"."club_map_files"
-   WHERE "club_map_id" IS NULL;
+    FROM "oxygen"."club_map_files" f
+   WHERE f."club_map_id" IS NULL
+      OR NOT EXISTS (
+           SELECT 1 FROM "oxygen"."map_sources" s
+            WHERE s."file_hash" = coalesce(f."file_hash", encode(sha256(f."file_data"), 'hex')));
   IF unlinked > 0 THEN
-    RAISE EXCEPTION 'E5 guard: % club_map_files row(s) have no club_map_id (the club map would be lost); run the map backfill on the v0.6.0 image (scripts/gcp/backfill.sh), then retry', unlinked;
+    RAISE EXCEPTION 'E5 guard: % club_map_files row(s) have no club_map_id or no map_sources row for their bytes (the club map would be lost); run the map backfill on the v0.6.0 image (scripts/gcp/backfill.sh), then retry', unlinked;
   END IF;
 END
 $$;

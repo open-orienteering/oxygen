@@ -194,8 +194,9 @@ cd scripts/gcp
 ./db-job.sh jobs/map-survey.js --tag v0.6.0
 ```
 
-- `map_files_unsourced` and `club_files_unmigrated` must be **0** — they
-  are the migration's guard. If not: `./backfill.sh --tag v0.6.0`, then
+- `map_files_unsourced`, `club_files_unmigrated` and
+  `club_files_bytes_unsourced` must be **0** — they are the migration's
+  guard (a club row must have its series and its bytes in `map_sources`). If not: `./backfill.sh --tag v0.6.0`, then
   survey again. (The backfill CLI is not in the v0.6.1 image.)
 - `removed_events_unsourced_maps` lists soft-deleted events' map rows
   without a source: they keep their row and file name and **lose their

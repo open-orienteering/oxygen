@@ -398,8 +398,9 @@ file or several large prints at once, so raise `--memory` or keep
 - **Map never loads.** The viewer reads the event's pinned map document
 (`/api/map-documents/:hash`); a map whose import has not pinned one
 shows the import state instead (`map-storage.md` §4.6). Check the
-import job (`mapImport.latestForEvent`, or Settings → Maintenance →
-**Map documents**) before the instance.
+import job (`mapImport.latestForEvent`) before the instance; re-upload
+the map, or import it again with `pnpm map:rematch --event <name_id>`
+(`scripts/gcp/backfill.sh --rematch` on Cloud Run).
 
 ## What this deployment does NOT change
 

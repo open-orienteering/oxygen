@@ -108,8 +108,8 @@ then could roll back by image. The data moved in place:
 **The drops migration's guard.** Before dropping anything it fails —
 leaving the schema untouched — when any `map_files` row of a **live**
 event (`events.removed = false`) has no `source_hash` (its OCAD bytes
-would be lost), or any `club_map_files` row has no `club_map_id` (a club
-map would be lost). Rows of soft-deleted events are not guarded: they
+would be lost), or any `club_map_files` row has no `club_map_id` or no
+`map_sources` row for its bytes (a club map would be lost). Rows of soft-deleted events are not guarded: they
 keep their row and file name and lose their bytes. On production E0
 found exactly three such rows, all of two soft-deleted test events
 (`Ny_karta_test`, `xx`); no event or row is purged. The fix for a guard
@@ -134,8 +134,8 @@ The runbook is `docs/release-slice-e.md`: §0 preflight (E0), §1 v0.6.0,
 
 1. v0.6.0 has run on production and the user's E-gate check passed.
 2. Survey on the v0.6.0 image (`./db-job.sh jobs/map-survey.js --tag
-   v0.6.0`): `map_files_unsourced` and `club_files_unmigrated` empty
-   (the guard's two conditions); `removed_events_unsourced_maps` lists
+   v0.6.0`): `map_files_unsourced`, `club_files_unmigrated` and
+   `club_files_bytes_unsourced` zero (the guard's conditions); `removed_events_unsourced_maps` lists
    what loses its bytes.
 3. An on-demand Cloud SQL backup.
 4. `./deploy.sh v0.6.1`: the migrate job (the guard, then the drops),

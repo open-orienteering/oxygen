@@ -34,7 +34,8 @@ the new canvas is `course-editor.md`'s.
 
 Decided by the user 2026-10-24 for C5:
 
-- **Stored GeoJSON at legacy sizes.** The `courses.geometry` artifact
+- **Stored GeoJSON at legacy sizes** (the artifact and its cuts version
+  were dropped in E5, §4). The `courses.geometry` artifact
   (§4) is computed at the legacy sizes (2.5 mm circle radius, 0.35 mm
   lines) for both pipelines, because every consumer of it draws those
   sizes until it is ported (C4 viewer, C2 / C3 print). The pinned

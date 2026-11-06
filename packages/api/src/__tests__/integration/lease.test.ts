@@ -344,6 +344,37 @@ describe("checkout maps: failure and interop", () => {
     }
   });
 
+  it("checks out from a v0.6.0 exporter whose rows still carry the columns E5 dropped", async () => {
+    _setLeasePeerFactory(() => ({
+      ...leasePeerToB(),
+      exportSnapshot: async () => {
+        const snap = await exportEventSnapshot(dbB, eventB);
+        return {
+          ...snap,
+          event: { ...snap.event, mapPipeline: "vector", overprintCutsVersion: 3 },
+          tables: { ...snap.tables, course: snap.tables.course.map((c) => ({ ...c, geometry: { type: "FeatureCollection", features: [] }, geometrySource: "editor" })) },
+          maps: snap.maps && {
+            ...snap.maps,
+            files: snap.maps.files.map((m) => ({ ...m, fileHash: m.sourceHash, renderKey: "rk", colorProfile: "auto", colorOverrides: {}, northLinesBelow: true })),
+          },
+        };
+      },
+    }));
+    try {
+      const res = await caller.lease.checkout({ nameId: CHECKOUT_NAME });
+      expect(res.maps).toMatchObject({ files: 1 });
+      const local = await ctx.db.event.findUniqueOrThrow({ where: { nameId: CHECKOUT_NAME }, select: { id: true } });
+      expect(await ctx.db.mapFile.findMany({ where: { eventId: local.id }, select: { sourceHash: true } })).toEqual([{ sourceHash }]);
+      expect(await ctx.db.course.count({ where: { eventId: local.id } })).toBe(await dbB.course.count({ where: { eventId: eventB.id } }));
+    } finally {
+      _setLeasePeerFactory(() => leasePeerToB());
+      await undoCheckout();
+      // The lifecycle below fetches the blobs afresh and counts the bytes.
+      await ctx.db.mapDocument.deleteMany({ where: { hash: documentHash } });
+      await ctx.db.mapSource.deleteMany({ where: { fileHash: sourceHash } });
+    }
+  });
+
   it("exportBlob answers only for blobs the event pins", async () => {
     const other = await dbB.event.create({
       data: { nameId: `oxygen_test_lease_other_${mapSuffix}`, name: "Other", date: new Date("2026-01-01T00:00:00Z"), kind: "competition" },

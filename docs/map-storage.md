@@ -131,7 +131,7 @@ applies the pins:
 | chunked upload (§5) → `course.applyUploadedMap` → `applyEventMap` | finalise route | `eventId` | `map_files.document_hash` on every row of the event with that `source_hash` |
 | `course.useClubMap` → `applyEventMap` | — (the latest version's `map_sources` row, §6.5) | `eventId` | same; the router then pins `club_map_version_id` to that version |
 | chunked upload (§5) → `clubMap.addFromSource` | finalise route | `clubMapId` | a new `club_map_versions` row (§6.4) |
-| `applyEventMap` with bytes (tests, the venue tools) | `applyEventMap` | `eventId` | as the first row |
+| `applyEventMap` with bytes (tests only) | `applyEventMap` | `eventId` | as the first row |
 
 The chunked upload is the only way in since E5: the base64 procedures
 `course.uploadMap` and `clubMap.upload` are gone, and the web uploads

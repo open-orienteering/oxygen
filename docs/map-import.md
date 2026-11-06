@@ -203,11 +203,11 @@ mapImport.importCrt { documentHash, crt: string ≤ 1 MiB, dryRun?: boolean }   
 - Authorisation is `review`'s for the export (a kiosk key reads; the
   rows are what `review` already shows) and `decide`'s for the import.
 
-The *apply* mutations that still feed the legacy raster tile pipeline
-(`course.applyEventMap`-style event map upload, club map upload) remain
-OCAD-only: they need `ocad2geojson` for the tiles. A Mapper file can be
-imported to a document and stored, but cannot yet be made an event's or
-a club's map until slice C replaces those consumers (09 §3).
+The *apply* mutations — `course.applyUploadedMap` (an event's map) and
+`clubMap.addFromSource` (a club map) — take OCAD and Mapper sources since
+E5 removed the upload's OCAD parse and the raster pipeline's dual writes
+(`map-storage.md` §5.1). The web's map pickers still offer `.ocd` files
+only (Pending in `map-storage.md` §9).
 
 ### 2.3 CLI
 
