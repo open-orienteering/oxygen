@@ -16,6 +16,12 @@
  *                     postgresql://oxygen:oxygen@localhost:5432/oxygen?schema=oxygen)
  *   SRC_NAME_ID    — source event name_id (default: Vinterserien)
  *
+ * The source must be at the current schema (v0.6.1 or later): the
+ * fixture carries every column the source table has, so a v0.6.0 database
+ * would write columns the E5 migration dropped. The script refuses to run
+ * against one. Restore a dump into a scratch database and run
+ * `pnpm db:migrate` on it first (docs/demo.md).
+ *
  * Transformations:
  *   - events: rename to "Demo Competition" / "demo_competition",
  *     zero organizer contact fields, force a fresh event id.
@@ -28,13 +34,17 @@
  *   - club_directory: filtered to the subset of clubs referenced by
  *     the demo runners, with logos preserved. Emitted ON CONFLICT DO
  *     NOTHING so it never overwrites an operator's real club rows.
- *   - map_files: file_name / file_data always replaced with a generated
- *     synthetic OCAD that keeps the source CRS and paper extent. A source
- *     map export is never written into the fixture.
- *   - map_tiles: omitted (content-keyed cache; regenerates on first view).
- *   - All BIGSERIAL ids on map_files / rendered_maps / tracks / routes
- *     are stripped from the INSERTs so Postgres allocates fresh ones
- *     against the freshly-created demo event.
+ *   - map: the source map is never written into the fixture. In its place
+ *     the demo event gets the generated synthetic OCAD (same CRS and paper
+ *     extent) on the document pipeline: a `map_sources` row, the
+ *     `map_documents` row the API's importer makes of it, and a
+ *     `map_files` row pinning both with the pin's quick-access columns
+ *     (scripts/lib/showcase-map.mjs). Only the source row's `uploaded_at`
+ *     and `rotation_correction` carry over. The content-addressed rows
+ *     are `ON CONFLICT DO NOTHING`.
+ *   - All BIGSERIAL ids on map_files / tracks / routes are stripped from
+ *     the INSERTs so Postgres allocates fresh ones against the
+ *     freshly-created demo event.
  */
 
 import { Client } from "pg";
@@ -46,10 +56,8 @@ import {
   FEMALE_FIRST_NAMES,
   LAST_NAMES,
 } from "../packages/api/src/routers/fictional-names.js";
-import {
-  SHOWCASE_OCAD,
-  buildShowcaseOcad,
-} from "./lib/ocad-fixture.mjs";
+import { buildShowcaseMapRows } from "./lib/showcase-map.mjs";
+import { showcaseMapStatements } from "./lib/showcase-sql.mjs";
 
 // ─── Config ──────────────────────────────────────────────────
 
@@ -255,6 +263,20 @@ async function main(): Promise<void> {
 
   console.log(`Connected: ${DATABASE_URL.replace(/:[^:@/]+@/, ":***@")}`);
 
+  // The fixture copies every column of the source tables, so the source
+  // must be at the current schema.
+  const legacy = await client.query(
+    `SELECT 1 FROM information_schema.columns
+      WHERE table_schema = 'oxygen' AND table_name = 'map_files' AND column_name = 'file_data'`,
+  );
+  if (legacy.rows.length > 0) {
+    console.error(
+      "The source database is at a pre-v0.6.1 schema (oxygen.map_files.file_data exists).\n" +
+        "Restore the dump into a scratch database and run `pnpm db:migrate` on it, then point DATABASE_URL there.",
+    );
+    process.exit(1);
+  }
+
   // ─── Find source event ───────────────────────────────
   const srcEvent = await client.query<{ id: string }>(
     "SELECT id::text FROM events WHERE name_id = $1 AND NOT removed",
@@ -298,10 +320,12 @@ async function main(): Promise<void> {
     "--           courses / classes, pseudonymous runners, cards with\n",
   );
   write(
-    "--           remapped CardNo, a synthetic OCAD backing map, and the\n",
+    "--           remapped CardNo, a synthetic OCAD backing map on the\n",
   );
-  write("--           subset of club_directory referenced by demo runners.\n");
-  write("-- Excluded: map_tiles cache, renderer caches, event_log, eventor_* caches.\n");
+  write("--           document pipeline (map_sources, map_documents and the\n");
+  write("--           pinned map_files row), and the subset of club_directory\n");
+  write("--           referenced by demo runners.\n");
+  write("-- Excluded: map previews, event_log, eventor_* caches.\n");
   write("--\n");
   write(
     `-- Load with:   psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -f showcase.sql\n`,
@@ -374,6 +398,15 @@ async function main(): Promise<void> {
       where = scopeByJoin(t.name, srcEventId);
     }
 
+    if (t.mode === "syntheticMap") {
+      const n = await writeSyntheticMap(client, t.name, where, write);
+      totalRows += n;
+      console.log(
+        `  ${t.name.padEnd(30)} ${n.toString().padStart(6)} rows  (synthetic map, 3 statements)`,
+      );
+      continue;
+    }
+
     const result = await client.query({
       text: `SELECT * FROM ${t.name} ${where}`,
       rowMode: "array",
@@ -384,7 +417,7 @@ async function main(): Promise<void> {
     // Filter columns we'll emit (strip BIGSERIAL ids when requested).
     const emitCols = cols.filter((c) => {
       if (
-        (t.mode === "stripSerialId" || t.mode === "syntheticMap") &&
+        t.mode === "stripSerialId" &&
         c.name === "id"
       )
         return false;
@@ -460,6 +493,44 @@ async function main(): Promise<void> {
 
 // ─── Helpers ─────────────────────────────────────────────────
 
+/**
+ * The demo event's map. The event's latest `map_files` row (the pin every
+ * reader uses) contributes its `uploaded_at` and `rotation_correction`;
+ * everything else is the synthetic showcase map's rows. Returns the rows
+ * written (1 pinned map_files row, or 0 when the source has no map).
+ */
+async function writeSyntheticMap(
+  client: Client,
+  tableName: string,
+  where: string,
+  write: (s: string) => void,
+): Promise<number> {
+  const latest = await client.query<{
+    uploaded_at: Date;
+    rotation_correction: number;
+  }>({
+    text: `SELECT uploaded_at, rotation_correction FROM ${tableName} ${where} ORDER BY uploaded_at DESC LIMIT 1`,
+  });
+  write("-- ─── map_sources / map_documents / map_files (synthetic showcase map) ──\n");
+  write("-- Content-addressed rows are ON CONFLICT DO NOTHING; map_files pins both.\n");
+  const src = latest.rows[0];
+  if (!src) {
+    write("-- (the source event has no map)\n\n");
+    return 0;
+  }
+  const rows = await buildShowcaseMapRows({
+    rotationCorrection: src.rotation_correction,
+  });
+  for (const line of showcaseMapStatements(rows, {
+    eventId: DEMO_EVENT_ID,
+    uploadedAt: src.uploaded_at.toISOString(),
+  })) {
+    write(line + "\n");
+  }
+  write("\n");
+  return 1;
+}
+
 async function loadColumns(
   client: Client,
   tableName: string,
@@ -510,7 +581,7 @@ function transform(
   cols: ColumnInfo[],
   mode: Mode,
 ): unknown[] | null {
-  if (mode === "keep" || mode === "stripSerialId")
+  if (mode === "keep" || mode === "stripSerialId" || mode === "syntheticMap")
     return row;
 
   const r = [...row];
@@ -587,11 +658,6 @@ function transform(
     case "remapPunch": {
       const cn = numOr0(r[colIndex(cols, "card_no")]);
       setBy(r, cols, "card_no", remapCard(cn));
-      return r;
-    }
-    case "syntheticMap": {
-      setBy(r, cols, "file_name", SHOWCASE_OCAD.fileName);
-      setBy(r, cols, "file_data", buildShowcaseOcad());
       return r;
     }
   }

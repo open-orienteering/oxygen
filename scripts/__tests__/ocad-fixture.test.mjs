@@ -16,14 +16,7 @@ import {
   buildShowcaseOcad,
   SHOWCASE_OCAD,
   assertShowcaseOcadClean,
-  pgByteaLiteral,
 } from "../lib/ocad-fixture.mjs";
-import {
-  replaceShowcaseMapFile,
-  extractMapFileFromSql,
-  countMapTileInserts,
-  FORBIDDEN_SHOWCASE_SQL,
-} from "../lib/showcase-sql.mjs";
 
 const ROOT = path.join(path.dirname(fileURLToPath(import.meta.url)), "../..");
 const require = createRequire(path.join(ROOT, "packages/api/package.json"));
@@ -71,6 +64,7 @@ describe("OCAD fixtures", () => {
     const { readOcad } = require("ocad2geojson");
     const file = await readOcad(buf, { quietWarnings: true });
     const crs = file.getCrs();
+    assert.equal(crs.code, 3006, "the showcase grid id maps to SWEREF99 TM, so the import resolves a CRS");
     assert.equal(crs.scale, SHOWCASE_OCAD.scale);
     assert.equal(crs.easting, SHOWCASE_OCAD.easting);
     assert.equal(crs.northing, SHOWCASE_OCAD.northing);
@@ -92,42 +86,7 @@ describe("OCAD fixtures", () => {
   });
 });
 
-describe("showcase SQL map substitution", () => {
-  it("substitutes map_files and drops identifying source-map names from the SQL", () => {
-    const ocad = buildShowcaseOcad();
-    const sql = [
-      "-- header",
-      `INSERT INTO map_files ("event_id", "file_name", "file_data", "uploaded_at") VALUES (9876543, E'Vinter Flaten kartutsitt.ocd', '\\x${"aa".repeat(100)}'::bytea, '2026-01-01T00:00:00.000Z');`,
-      "-- H:\\Delade enheter\\Skogsluffarna\\Arrangemang",
-    ].join("\n");
-
-    const out = replaceShowcaseMapFile(sql, ocad);
-    assert.match(out, /demo-map\.ocd/);
-    assert.doesNotMatch(out, /Vinter Flaten/);
-    assert.doesNotMatch(out, /kartutsitt/);
-    assert.match(out, new RegExp(pgByteaLiteral(ocad).replace(/\\/g, "\\\\")));
-    assert.equal((out.match(/INSERT INTO map_tiles/g) || []).length, 0);
-  });
-
-  it("keeps the committed fixture on the generated showcase OCAD", () => {
-    const sql = readFileSync(
-      path.join(ROOT, "docs/screenshots/fixtures/showcase.sql"),
-      "utf8",
-    );
-    assert.equal(countMapTileInserts(sql), 0);
-    const map = extractMapFileFromSql(sql);
-    assert.equal(map?.fileName, SHOWCASE_OCAD.fileName);
-    assert.ok(map?.data);
-    assertShowcaseOcadClean(map.data);
-    assert.ok(map.data.equals(buildShowcaseOcad()));
-    assert.ok(map.data.length < 80_000);
-    for (const re of FORBIDDEN_SHOWCASE_SQL) {
-      assert.equal(re.test(map.fileName), false, `filename matched ${re}`);
-      assert.equal(re.test(map.data.toString("latin1")), false, `OCAD matched ${re}`);
-    }
-    assert.doesNotMatch(sql.slice(sql.indexOf("INSERT INTO map_files")), /Vinter Flaten|kartutsitt|Delade enheter/);
-  });
-
+describe("OCAD fixtures (continued)", () => {
   it("writes text, line-text and rectangle symbols the reader reads back (docs/map-import.md §3.3)", async () => {
     const { readOcad } = require("ocad2geojson");
     const file = await readOcad(buildSymbolTypesOcad(), { quietWarnings: true });

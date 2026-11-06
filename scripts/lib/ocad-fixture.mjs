@@ -770,14 +770,16 @@ export function buildE2eTestOcad() {
 // ─── Showcase demo map ───────────────────────────────────────────────────────
 
 /**
- * CRS / paper extent of the Demo Competition map, chosen so the five
- * cached overview tiles (z10–13) sit on the same slippy-map coordinates.
+ * CRS / paper extent of the Demo Competition map, chosen so the demo
+ * event's controls sit on the same WGS 84 positions as the source event's.
  * Geometry is synthetic.
  *
  * Bounds are OCAD paper units (1/100 mm), matching ocad2geojson getBounds().
  */
 export const SHOWCASE_OCAD = {
   fileName: "demo-map.ocd",
+  /** OCAD grid id 13002 = EPSG:3006 (SWEREF99 TM); an unmapped id would import with `crs: null`. */
+  gridId: 13002,
   scale: 15000,
   easting: 679000,
   northing: 6572000,
@@ -800,6 +802,7 @@ export function buildShowcaseOcad() {
     {
       recType: 1039,
       text: georeferenceString({
+        gridId: SHOWCASE_OCAD.gridId,
         scale: SHOWCASE_OCAD.scale,
         easting: SHOWCASE_OCAD.easting,
         northing: SHOWCASE_OCAD.northing,

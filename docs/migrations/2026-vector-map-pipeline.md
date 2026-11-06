@@ -169,6 +169,5 @@ marked rolled back (`prisma migrate resolve --rolled-back
 | E5 | v0.6.1 | the drops |
 
 Left for later rows (`SLICES.md`): the templates redesign (E-pages), the
-showcase demo fixture on the document pipeline (still in the pre-v0.6.1
-shape, `docs/demo.md`), the editor's phase 2 (slice F), map mode
-(slice G).
+editor's phase 2 (slice F), map mode (slice G). The showcase demo fixture
+was regenerated on the document pipeline by row E-demo (`docs/demo.md`).
