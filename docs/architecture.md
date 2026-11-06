@@ -37,9 +37,11 @@ Oxygen is a modern web application for managing orienteering competitions. It co
 |    events, controls, courses, course_controls,       |
 |    classes, class_course_pools, runners, teams,      |
 |    cards, card_readouts, punches, control_units,     |
-|    event_log, event_seqs, map_files, rendered_maps,  |
+|    event_log, event_seqs, map_files, map_sources,    |
+|    map_documents, map_previews, club_maps,           |
+|    club_map_versions, map_import_jobs, map_uploads,  |
 |    map_templates, course_maps, club_map_templates,   |
-|    map_tiles, tracks, routes, users                  |
+|    tracks, routes, users                             |
 |                                                      |
 |  global directories (schema `oxygen`):               |
 |    runner_directory, club_directory,                 |
@@ -88,8 +90,12 @@ full migration story.
   UUID PK only, no `seq`. The offline-first work renames `event_log` →
   `journal` and adds `hlc` / `actor_id` / `schema_version` — see
   [`offline-architecture.md`](offline-architecture.md).
-- **Pure server-side** — `map_files`, `rendered_maps`, `map_tiles`,
-  `tracks`, `routes`. `BIGSERIAL` PK.
+- **Pure server-side** — `map_files`, `tracks`, `routes`. `BIGSERIAL` PK.
+  (`rendered_maps` and `map_tiles` were dropped in v0.6.1 with the legacy
+  map pipeline, `docs/migrations/2026-vector-map-pipeline.md`.) The
+  content-addressed map store — `map_sources`, `map_documents`,
+  `map_previews` (keyed by hash) and the club series `club_maps` /
+  `club_map_versions` (UUID) — is `docs/map-storage.md` §2.
 - **Global directories** — `runner_directory`, `club_directory`,
   `eventor_event_meta`, `users`. Eventor directories are keyed by their
   natural external IDs; `users` is invite-only email identity (see

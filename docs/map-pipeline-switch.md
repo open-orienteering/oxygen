@@ -36,15 +36,20 @@ sense. The research record is `docs/research/vector-map-pipeline/09-migration.md
 | Editor mount, *Edit layout* | Always the course editor, Layout mode for *Edit layout* (`docs/course-editor.md` §1, `docs/course-layout.md` §4) |
 | Tile pre-cache | Retired; the tile pipeline went in E4a (`/api/map-tile*` answers 404) |
 | Unreadable document (no OCAD fallback) | The viewer's load error with *Try again* (`map-rendering.md` §5.4 "Host"); print 400 "Pinned map document is missing" (`course-print.md` §10); no cuts (`course-layer.md` §4.2) — the answers of slices B and E1, unchanged |
-| New events | `vector` from the column default |
+| New events | `vector` from the column default (until E5 dropped the column) |
 
 ## Rollback to v0.5.0
 
-The E3 migration (`20261106120000_map_pipeline_flip`) sets every event to
-`vector`, makes `vector` the column default and deletes the three flags.
-The column and its enum stay until E5 (v0.6.1), so `./deploy.sh v0.5.0`
-still works: that image reads `vector` for every existing event, absent
-flags as `default = legacy`, `allowLegacy = true`, `editorVector = false`
-(new events legacy, the legacy course editor). To get v0.5.0's pre-flip
-behaviour back, re-insert the flags (`docs/release-slice-e.md` §1).
-E5 drops the column and its enum.
+The E3 migration (`20261106120000_map_pipeline_flip`) set every event to
+`vector`, made `vector` the column default and deleted the three flags.
+The column and its enum stayed through v0.6.0, so `./deploy.sh v0.5.0`
+worked until then: that image reads `vector` for every existing event,
+absent flags as `default = legacy`, `allowLegacy = true`,
+`editorVector = false` (new events legacy, the legacy course editor); to
+get v0.5.0's pre-flip behaviour back, re-insert the flags
+(`docs/release-slice-e.md` §1).
+
+The E5 migration (`20261107120000_vector_map_pipeline_drops`, v0.6.1)
+dropped `events.map_pipeline` and its enum with the rest of the legacy
+pipeline's storage: from v0.6.1 on there is no rollback to v0.5.0 (nor,
+by image, to v0.6.0) — `docs/migrations/2026-vector-map-pipeline.md`.

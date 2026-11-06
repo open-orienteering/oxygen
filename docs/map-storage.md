@@ -35,8 +35,11 @@ Migrations `20261016190000_map_documents_storage`,
 `20261016210000_map_uploads_and_import_jobs`,
 `20261019120000_map_import_jobs_started_by`,
 `20261019130000_map_storage_source_hash_indexes` (`source_hash` indexes
-on `map_files` and `club_map_versions` for the GC and the source route) and
-`20261019150000_club_symbol_decisions`. All in schema `oxygen`.
+on `map_files` and `club_map_versions` for the GC and the source route),
+`20261019150000_club_symbol_decisions` and, dropping the legacy
+pipeline's storage, `20261107120000_vector_map_pipeline_drops` (E5,
+v0.6.1; `docs/migrations/2026-vector-map-pipeline.md`). All in schema
+`oxygen`.
 
 | Table | Key | Columns | Notes |
 |---|---|---|---|
@@ -45,12 +48,16 @@ on `map_files` and `club_map_versions` for the GC and the source route) and
 | `map_previews` | `(document_hash, kind, key)` | `png BYTEA`, `created_at` | `document_hash → map_documents CASCADE`; thumbnails and symbol swatches, pure cache (§4.5) |
 | `club_maps` | `id UUID` | `name`, `colour_profile`, `colour_overrides JSONB`, `north_lines_below`, `rotation_correction`, `created_by`, timestamps | a club's map as a series (06 §8) |
 | `club_map_versions` | `id UUID` | `club_map_id → club_maps CASCADE`, `seq`, `label`, `source_hash RESTRICT`, `document_hash RESTRICT`, `uploaded_by`, `uploaded_at`; `UNIQUE(club_map_id, seq)` | one edition; `uploadedAt` ordering, `seq` for display |
-| `map_files` (+) | — | `source_hash RESTRICT`, `document_hash RESTRICT`, `club_map_version_id → club_map_versions SET NULL` | the event's pins; nullable so the raster path keeps working when the import fails |
-| `club_map_files` (+) | — | `club_map_id → club_maps SET NULL` | links the legacy library row to its series while both exist (§6.5) |
+| `map_files` (+) | — | `source_hash RESTRICT`, `document_hash RESTRICT`, `club_map_version_id → club_map_versions SET NULL` | the event's pins. `document_hash` is null until the import pins (or when it failed); `source_hash` is set on every live event's row (the E5 migration's guard) and null only on a soft-deleted event's row that never had a source — a file name without bytes. Since E5 the row holds no bytes (`file_data`, `file_hash`, `render_key` and the colour-stack columns are dropped) |
 | `map_uploads` | `id UUID` | `event_id → events CASCADE` (nullable), `file_name`, `kind`, `declared_bytes`, `chunk_bytes`, `uploaded_by SET NULL`, `created_at`, `finalised_hash → map_sources SET NULL` | one chunked upload in flight (§5); `kind` is set from the first chunk |
 | `map_upload_chunks` | `(upload_id, n)` | `bytes BYTEA` | `upload_id → map_uploads CASCADE`; `STORAGE EXTERNAL`; deleted at finalise |
 | `club_symbol_decisions` | `(fingerprint, library_version)` | `canonical_id` (NULL = keep as source), `decided_by → users SET NULL`, `decided_at` | a reviewed symbol outcome reused across documents (`docs/map-symbols.md` §8.5); written only by `mapImport.decide` (§6.8), read when a job is inserted (§6.1); no event or series column — the instance is one club's |
-| `map_import_jobs` | `id UUID` | `event_id CASCADE` / `club_map_id CASCADE` (the target, either nullable), `source_hash → map_sources CASCADE`, `decisions JSONB` (the decision snapshot, §6.1), `state`, `stage`, `progress REAL`, `claimed_by`, `heartbeat_at`, `document_hash → map_documents SET NULL`, `error`, `started_by → users SET NULL`, timestamps | one import run (§6); indexed on `(state, heartbeat_at)` for the claim query and on each target; `started_by` is the user whose request started it (null for the backfill), read by §4.2 |
+| `map_import_jobs` | `id UUID` | `event_id CASCADE` / `club_map_id CASCADE` (the target, either nullable), `source_hash → map_sources CASCADE`, `decisions JSONB` (the decision snapshot, §6.1), `state`, `stage`, `progress REAL`, `claimed_by`, `heartbeat_at`, `document_hash → map_documents SET NULL`, `error`, `started_by → users SET NULL`, timestamps | one import run (§6); indexed on `(state, heartbeat_at)` for the claim query and on each target; `started_by` is the user whose request started it (null for the re-match and the retired backfill), read by §4.2 |
+
+The legacy library table `club_map_files` (linked to its series by
+`club_map_id`), the tile cache `map_tiles` and the rendered-map cache
+`rendered_maps` were dropped by the E5 migration, after its guard
+checked that every library row had a series.
 
 `STORAGE EXTERNAL` on the two blob columns keeps TOAST from compressing
 the bytes (compact binary that gains little) so `substring(bytes FROM … FOR …)`
@@ -121,18 +128,28 @@ applies the pins:
 
 | Producer | Source row written by | Target | Pin applied by the job |
 |---|---|---|---|
-| `course.uploadMap` (base64, ≤ 8 MiB) → `applyEventMap` | `applyEventMap` | `eventId` | `map_files.document_hash` on every row of the event with that `source_hash` |
-| chunked upload → `course.applyUploadedMap` → `applyEventMap` | finalise route (§5) | `eventId` | same |
-| `course.useClubMap` → `applyEventMap` | `applyEventMap` (bytes from the latest version's `map_sources` row, §6.5) | `eventId` | same; the router then pins `club_map_version_id` to that version |
-| `clubMap.upload` (base64) / `clubMap.addFromSource` (chunked) | router / finalise route | `clubMapId` | a new `club_map_versions` row (§6.4) |
+| chunked upload (§5) → `course.applyUploadedMap` → `applyEventMap` | finalise route | `eventId` | `map_files.document_hash` on every row of the event with that `source_hash` |
+| `course.useClubMap` → `applyEventMap` | — (the latest version's `map_sources` row, §6.5) | `eventId` | same; the router then pins `club_map_version_id` to that version |
+| chunked upload (§5) → `clubMap.addFromSource` | finalise route | `clubMapId` | a new `club_map_versions` row (§6.4) |
+| `applyEventMap` with bytes (tests, the venue tools) | `applyEventMap` | `eventId` | as the first row |
 
-`applyEventMap` creates the `map_files` row with `source_hash` set and
-`document_hash = NULL`, starts the job, runs the raster pipeline while the
-job works, then awaits the job up to the hold (§6.2) and returns
-`importJob {id, state, error}` plus `documentHash` when the job is done.
-A failed job is logged by the engine and leaves `document_hash = NULL`;
-the raster path is unaffected. `course.mapMetadata` returns
-`documentHash` (nullable); `mapImport.latestForEvent` returns the job.
+The chunked upload is the only way in since E5: the base64 procedures
+`course.uploadMap` and `clubMap.upload` are gone, and the web uploads
+every file in chunks (§5.2). `applyEventMap` creates the `map_files` row
+with `source_hash`, the file name, `rotation_correction` (a club copy's
+series value, else 0) and `from_club_library`, and `document_hash =
+NULL`; starts the job; awaits it up to the hold (§6.2); then re-derives
+the legs of the event's `length_source = 'derived'` courses for the new
+scale (`rebuildCourseLengths`, `docs/course-layer.md` §4.1) and returns
+`{fileName, size, rotationCorrection, meridianStalenessDeg, documentHash,
+importJob {id, state, error}}`. Nothing parses the file at upload: the
+quick-access columns are the pin's (§6.4) and `meridianStalenessDeg` is
+the pinned document's `report.north` evaluated for today (null while the
+job runs or when it failed). A failed job is logged by the engine and
+leaves `document_hash = NULL` — the map panel then shows the job's error
+(`MapImportState`). `course.mapMetadata` returns `documentHash`
+(nullable); `mapImport.latestForEvent` returns the job. Both procedures
+accept OCAD and Mapper sources (§5.1).
 
 ## 4. Delivery: `GET /api/map-documents/:hash`
 
@@ -383,10 +400,11 @@ signed-in user, or `AUTH_MODE=off` (07 §6.1): the library is public data.
 Every server reader of map data reads the event's **pinned document**:
 the latest `map_files` row's `document_hash` (`eventPin` /
 `eventDocumentHash`, `map-store/event-document.ts`). Nothing on these
-paths parses `map_files.file_data` or `club_map_files.file_data` (slice
-E1; decision log 2026-11-05). Uploads still write those columns,
-`render_key`, `north_detection` and `club_map_files` (§6.5) so a rollback
-to v0.5.0 works; only the reads moved.
+paths parses the original file (slice E1; decision log 2026-11-05); the
+legacy byte columns it once read (`map_files.file_data`,
+`club_map_files`) were dropped in E5, and `map_files.north_detection`
+(the upload's OCAD north diagnostic) has had no writer since — the north
+fields come from `report.north`.
 
 **Every event.** The data readers never read `events.map_pipeline`:
 the switch never gated imports, and since E3 it gates nothing
@@ -394,15 +412,16 @@ the switch never gated imports, and since E3 it gates nothing
 its pinned document.
 
 **No pin, no map.** A reader whose event has no `map_files` row, or
-whose row has no `document_hash` yet (the import is running, failed, or
-the row predates the backfill), answers "no map": no frame, no objects,
+whose row has no `document_hash` yet (the import is running or failed,
+or the row came from a restored pre-v0.6.1 dump the re-match has not
+imported yet, §6.9), answers "no map": no frame, no objects,
 no cuts, no obstacles, no north. It never falls back to an OCAD parse.
 `course.mapMetadata` is the one exception in shape: it answers for every
 `map_files` row (below).
 
 | Reader | Answer from the document | No pin |
 |---|---|---|
-| `loadEventCrs` (`event-crs.ts`): course lengths (`rebuildCourseGeometry`), IOF / Purple Pen export, `controlCoordinates`, `control.create` / `update` lat/lng, `course.checks` scale, course import, the pin's lat/lng sync | `mapGeo.PaperFrame` from `map_documents.header` (`unitsPerMm`, `mapScale`, `georeferencing`) with `correctionDeg = map_files.rotation_correction`. A frame whose CRS proj4 cannot project still carries `mapScale` (lengths); its WGS 84 conversions answer null | null |
+| `loadEventCrs` (`event-crs.ts`): course lengths (`rebuildCourseLengths`), IOF / Purple Pen export, `controlCoordinates`, `control.create` / `update` lat/lng, `course.checks` scale, course import, the pin's lat/lng sync | `mapGeo.PaperFrame` from `map_documents.header` (`unitsPerMm`, `mapScale`, `georeferencing`) with `correctionDeg = map_files.rotation_correction`. A frame whose CRS proj4 cannot project still carries `mapScale` (lengths); its WGS 84 conversions answer null | null |
 | `loadEventMapObjects` (`event-map-objects.ts`): description autodetect, `control.suggestDescription`, `DESCRIPTION_STALE` | point / line / area objects of non-hidden symbols whose code — the applied match's canonical code, else the source code — is in `ISOM_DESCRIPTION_MAP`, as `SlimMapObject` (1/100 mm whatever `unitsPerMm`, `sym` = `204.1` → 204001, Béziers flattened in 8 steps, an area's outer ring) | null |
 | `loadEventCutFeatures` | `course.cutFeaturesOfDocument` (`course-layer.md` §3.4) | null: no automatic cuts |
 | `loadEventCheckDocument` | `course.checkObstaclesOfDocument` (`course-layer.md` §9.3) | null |
@@ -410,7 +429,7 @@ no cuts, no obstacles, no north. It never falls back to an OCAD parse.
 | `clubMap.list` `bounds`, `northOffset` | `mapFileMetadataFor(header, report.north.meridian tilt, club_maps.rotation_correction)` of the latest version's document | null (no version) |
 | `getBaseMapInfo` (`course-maps/map-source.ts`) | `scale` = `header.mapScale`, `meridianTiltDeg` = `report.north.meridian.medianTiltDeg` (0 without one), `version` = the document hash; `document` = `{hash}`, always (`course-print.md` §10) | throws "No base map uploaded" (`getBaseMapInfoOrNull` → null); a pin naming a missing `map_documents` row throws "Pinned map document is missing" |
 | `resolveImportAlignment` (`course-import-align.ts`) | the club map a Purple Pen file names is the series whose latest version's label, else its source file name, matches (`matchClubVersion`); re-projection through that version's document frame with `club_maps.rotation_correction` | `unknown` / judged on the event calibration, as before |
-| `course.setMapRotation`, `clubMap.setRotation` | the quick-access columns (`map_files`, and the linked `club_map_files` rows) recomputed by `documentMapFileColumns` under the new correction: `mapFileMetadataFor` as the pin and the upload use it, with the upload writer's rules where the pin skips — the source fallback for `crs: null`, tilt 0 without a report `north`, scale only when nothing projects | only the correction is stored; the pin recomputes the columns |
+| `course.setMapRotation`, `clubMap.setRotation` | `course.setMapRotation`: the `map_files` quick-access columns recomputed by `documentMapFileColumns` under the new correction — the pin's function (§6.4): `mapFileMetadataFor`, the source fallback for `crs: null`, tilt 0 without a report `north`, scale only when nothing projects. `clubMap.setRotation` stores `club_maps.rotation_correction` only (the list derives the rest, row above) | only the correction is stored; the pin recomputes the columns |
 
 **`course.mapMetadata`.** Answers non-null for every `map_files` row:
 the row's quick-access columns as stored (the pin writes them, §6.4 —
@@ -420,11 +439,9 @@ no lazy OCAD backfill), `rotationCorrection`, `uploadedAt`,
 fields — `renderKey` and the colour stack's `colorProfile`,
 `colorOverrides`, `northLinesBelow`, `resolvedProfile`, `resolvedBy` —
 went with the raster in E4a (their last reader, `MapViewer`'s
-`mapVersion`, went in E4b); the upload still writes `render_key` for the
-v0.5.0 rollback and E5 drops the column. With them went
-`course.setMapColorStack`, the only writer of the event row's colour
-columns after the upload; the columns are still written at upload and
-by `useClubMap` (rollback) and read by nothing.
+`mapVersion`, went in E4b); E5 dropped `render_key` and the colour-stack
+columns of `map_files`. With them went `course.setMapColorStack`, the
+only writer of the event row's colour columns after the upload.
 
 **The one source read.** A document whose header has `crs: null` — the
 importer's `CRS_UNRESOLVED` (`map-import.md` §3.5: the ScalePar grid id is
@@ -508,21 +525,21 @@ finalised are deleted after 24 h by housekeeping (§6.6).
 The route only produces a source; importing it is the caller's next
 step — `course.applyUploadedMap {fileHash, fileName?}` for an event,
 `clubMap.addFromSource {fileHash, fileName?, name?}` for the library.
-Both reject a `fileHash` whose source kind is not `ocad`: a Mapper
-source imports to a document through the job (§6) but cannot be made an
-event's or a club's map until the upload's OCAD parse and its dual
-writes go (E5; `docs/map-import.md` §2.2). `fileName` overrides the name recorded on the
+Both take OCAD and Mapper sources since E5 removed the upload's OCAD
+parse and its dual writes (`docs/map-import.md` §2.2); the web's file
+pickers still offer `.ocd` only until a UI row widens them. `fileName`
+overrides the name recorded on the
 upload — the source row keeps whatever the first uploader called it, so
 the event's `map_files.file_name` and the version label come from the
 request, not the shared row.
 
 ### 5.2 Client
 
-`packages/web/src/lib/map-upload.ts`. `shouldUseChunkedUpload(bytes)` is
-true above 8 MiB; below that `MapPanel` and the club-library settings page
-keep the base64 tRPC mutations (`course.uploadMap`, `clubMap.upload`), so
-small files — including every E2E fixture — take one request.
-`uploadMapFileChunked(file, {eventNameId?, onProgress?, signal?})` runs
+`packages/web/src/lib/map-upload.ts`. Every map upload — `MapPanel` and
+the club-library settings page, whatever the file's size — goes through
+the chunked routes; a file under 8 MiB is one chunk (three requests). The
+base64 tRPC mutations (`course.uploadMap`, `clubMap.upload`) were removed
+in E5. `uploadMapFileChunked(file, {eventNameId?, onProgress?, signal?})` runs
 init → 4 chunks in flight (`File.slice()`, 3 retries each on network
 errors / 5xx / 408 / 429, none on other 4xx) → finalise and resolves with
 `{fileHash, bytes, deduplicated}`; the caller then applies the hash.
@@ -578,11 +595,10 @@ without `explicit` matches and an empty decision list needs no header
 read; otherwise the check reads the header (two range reads, §4.5).
 
 `startedBy` is the signed-in user whose request started the job:
-`applyEventMap` takes it as its own option (`course.uploadMap`,
-`applyUploadedMap` and `useClubMap` pass `ctx.user` — for `useClubMap`
-that is not the library row's uploader), `clubMap.upload` /
-`addFromSource` pass `ctx.user`, the backfill passes nothing. It feeds
-the fourth clause of §4.2 and nothing else.
+`applyEventMap` takes it as its own option (`applyUploadedMap` and
+`useClubMap` pass `ctx.user` — for `useClubMap` that is not the library
+row's uploader), `addFromSource` passes `ctx.user`, the re-match (§6.9)
+passes nothing. It feeds the fourth clause of §4.2 and nothing else.
 
 A dedup hit, and a worker run whose document row already existed
 (`storeImportedDocument` reports `deduplicated`), touch the document
@@ -635,24 +651,25 @@ Idempotent; also run for dedup hits:
   columns `scale`, `bounds`, `north_offset`, `calibration` on each of
   those rows recomputed from `map_documents.header` (unitsPerMm,
   mapScale, georeferencing, bounds) and `report.north.meridian`, with
-  the row's own `rotation_correction` (`writeDocumentMapFileColumns`,
-  `map-store/map-file-metadata.ts`; rules in `docs/map-import.md` §3.8).
-  Skipped — the columns keep the raster path's values — when the
-  document has no projectable CRS or its report has no `north` (a
-  pre-`ocad-5` / `omap-2` document). `applyEventMap` (the upload, from
-  its own OCAD parse) and `applyMapRotationCorrection` (from the pinned
-  document, `documentMapFileColumns`, §4.6) write the same columns
-  through the same function, so the writers agree (decision log
-  2026-10-19, A11); `north_detection` and `club_map_files` are not
-  written by the pin. Then the event's positioned controls get their
+  the row's own `rotation_correction` (`writePinnedMapFileColumns` over
+  `documentMapFileColumns`, `map-store/event-document.ts`; rules in
+  `docs/map-import.md` §3.8). Since E5 the pin is the only writer after
+  an upload (the upload no longer parses the file), so it takes the
+  rules the upload's parse had: a document whose header has `crs: null`
+  gets its CRS from the source's ScalePar (the one source read, §4.6),
+  a report without `north` (a pre-`ocad-5` / `omap-2` document) gives
+  tilt 0, and a frame nothing projects writes the scale alone.
+  `applyMapRotationCorrection` writes the same columns through the same
+  function (decision log 2026-10-19, A11; 2026-11-07, E5).
+  `north_detection` is not written. Then the event's positioned controls get their
   `lat` / `lng` from the pinned frame
   (`synchronizePositionedControlCoordinates`, `event-crs.ts`): the upload
   no longer converts them before the pin exists, so an import that
   outlives the upload's hold still ends with correct positions.
 - `clubMapId` set and no `club_map_versions` row for `(clubMapId,
   source_hash)` → insert one with `seq = max + 1`, label and uploader
-  copied from the source row. `clubMap.upload` / `addFromSource` then
-  overwrite label and uploader with the request's name and user when the
+  copied from the source row. `clubMap.addFromSource` then
+  overwrites label and uploader with the request's name and user when the
   job finished within the hold, since the source row keeps the first
   uploader's values.
 - `clubMapId` set and that version exists → its `document_hash` follows
@@ -675,14 +692,9 @@ Idempotent; also run for dedup hits:
 The club library (`clubMap.*`, `course.useClubMap`, Settings → Maps and
 the event map panel's **From club library** picker) reads and writes the
 `club_maps` series and its `club_map_versions`. The library id the
-client sees is `club_maps.id` (a UUID); the numeric `club_map_files.id`
-is no longer part of any procedure's input or output.
-
-**Prerequisite.** A `club_map_files` row with `club_map_id IS NULL` (not
-yet backfilled) is not listed. The backfill (§6.7) creates its series, so
-an instance must have run it — `pnpm map:backfill` or Settings →
-Maintenance → **Map documents** — before this release reaches its users;
-for the club's production database that is the slice A gate (09 §4 A).
+client sees is `club_maps.id` (a UUID). The legacy library table
+`club_map_files`, which every series once mirrored for rollback, was
+dropped in E5 once its guard had checked that every row had a series.
 `clubMap.list` never starts an import: a read does not create series.
 
 ```
@@ -704,9 +716,10 @@ clubMap.list → [{
 ```
 
 `colorProfile`, `colorOverrides` and `northLinesBelow` are the series'
-stored settings, copied by `useClubMap` into the event's dual-written row
-(rollback); since E4a nothing draws with them and no procedure changes
-them. A series without a version has no preview: the card shows an empty
+stored settings (`club_maps` columns, not part of the E5 drops); since
+E4a nothing draws with them, no procedure changes them, and since E5
+`useClubMap` no longer copies them (the event's colour columns are
+gone). A series without a version has no preview: the card shows an empty
 frame while its import runs and the list polls until the version lands
 (the OCAD-rendered PNG preview, `/api/club-map-preview/:id`, went in
 E4a).
@@ -715,28 +728,18 @@ E4a).
 updated in place when its file is reviewed or re-matched (§6.4), so the
 card's thumbnail follows the latest import and nothing here caches it.
 
-| Procedure | Series side | Write-through to `club_map_files` |
-|---|---|---|
-| `upload` / `addFromSource` | `club_maps` row, `map_sources`, `startImportJob {clubMapId}` → version 1 (§6.4); returns `{id: club_maps.id, name, fileName, sizeBytes, rotationCorrection, meridianStalenessDeg, importJob}` | one row with `club_map_id`, the bytes, metadata, `file_hash`, `render_key` (no `preview_png` since E4a) |
-| `rename {id, name}` | `club_maps.name` | `name` on every linked row |
-| `setRotation {id, degrees}` | `rotation_correction` | `applyClubMapRotationCorrection` per linked row: bounds and north offset from the latest version's document (§4.6), render key |
-| `remove {id}` | deletes the series: versions cascade, `map_files.club_map_version_id` of events that pinned one is set `NULL`, jobs cascade | linked rows deleted **first** |
-| `download {id}` | the latest version's `map_sources` bytes, named by the version label (else `map_sources.file_name`) | — |
-| `course.useClubMap {clubMapId}` | settings from the series, bytes from the latest version's source; then `map_files.club_map_version_id` = that version on the event's rows with its `source_hash` | — |
+| Procedure | Series side |
+|---|---|
+| `addFromSource {fileHash, fileName?, name?}` | `club_maps` row (`rotation_correction` 0), `startImportJob {clubMapId}` on the finalised source (§5) → version 1 (§6.4); returns `{id: club_maps.id, name, fileName, sizeBytes, rotationCorrection, meridianStalenessDeg, importJob}`, the staleness from the version's `report.north` when the job finished inside the hold. OCAD and Mapper sources (§5.1) |
+| `rename {id, name}` | `club_maps.name` |
+| `setRotation {id, degrees}` | `rotation_correction`; returns `{success, rotationCorrection}` (the list derives extent and north from it, §4.6) |
+| `remove {id}` | deletes the series: versions cascade, `map_files.club_map_version_id` of events that pinned one is set `NULL`, jobs cascade |
+| `download {id}` | the latest version's `map_sources` bytes, named by the version label (else `map_sources.file_name`) |
+| `course.useClubMap {clubMapId}` | the series' rotation correction and the latest version's source (by hash, no bytes copied); then `map_files.club_map_version_id` = that version on the event's rows with its `source_hash` |
 
-- **Write-through.** `club_map_files` stays until E5 drops it after a
-  verified backfill (09 §4 F) because a rollback to v0.5.0 reads it (its
-  tile cache, PNG preview route and backfill) and the backfill (§6.7)
-  and the orphan-tile collection (`gcOrphanTiles`) still walk it. Every
-  mutation keeps the linked rows identical to the series. Since E4a
-  nothing in the running version reads a linked row's content: extent,
-  north and scale come from the version's document (§4.6, slice E1), the
-  preview is the document thumbnail. `preview_png` is no longer written
-  (`renderOcadPreview` went with `club-map-preview.ts`); the column is
-  nullable and v0.5.0 fills it lazily on its first preview request.
-- **Delete order.** `club_map_files.club_map_id` is `ON DELETE SET NULL`;
-  deleting the series first would leave an unlinked row the backfill
-  re-imports as a new series.
+The base64 `clubMap.upload` went in E5 (the web uploads chunked, §5.2),
+and with `club_map_files` its write-through to every mutation above.
+
 - **Blobs.** `remove` deletes no `map_sources` or `map_documents` row and
   calls no `deleteBlob`. Event copies keep their own `source_hash` /
   `document_hash` (copy-on-use); a document nothing references any more
@@ -750,11 +753,8 @@ card's thumbnail follows the latest import and nothing here caches it.
   past the hold, is listed with `version: null` and its `importJob`.
   `download` and `useClubMap` answer `PRECONDITION_FAILED`: an event pins
   a version (06 §6), and a failed club import must not become an event
-  map. The picker shows the entry disabled with its import state. The
-  backfill (§6.7) retries a series without a version.
-- `upload` / `addFromSource` create the series, its legacy row and the
-  source row in one transaction, so every series has a legacy row the
-  backfill can retry from; the job starts after the commit.
+  map. The picker shows the entry disabled with its import state; the
+  fix is uploading the file again (a new series).
 - `remove` while the series' import is still running cascades the job
   row away; the worker's `applyJobResult` then fails on the
   `club_map_versions` foreign key and logs the job as failed. Nothing is
@@ -778,44 +778,34 @@ the client holds the hash, and it is not a GC reference (§8.1) — and
 `done` / `failed` job rows not updated for 7 days, are deleted on each
 engine tick and as the GC's last pass (§8.2).
 
-### 6.7 Backfill of pre-pipeline rows
+### 6.7 Backfill of pre-pipeline rows (retired in E5)
 
-09 slice A. Rows written before this chapter existed have bytes but no
-document: `club_map_files` without a `club_maps` series (or whose series
-has no version — a previous attempt failed), and `map_files` with
-`document_hash IS NULL` in events that are not soft-deleted.
-`packages/api/src/map-store/backfill.ts` walks them one map at a time,
-club rows first:
+09 slice A. Rows written before this chapter existed had bytes but no
+document: `club_map_files` without a `club_maps` series, and `map_files`
+with `document_hash IS NULL` in live events. `map-store/backfill.ts`
+walked them one map at a time — the club row's bytes to a source, a
+series copied from the row, an import job for version 1; the event row's
+`file_data` to a source and a job pinning it — with two front ends,
+Settings → Maintenance → **Map documents** (`mapImport.backfillStatus` /
+`backfillStart`) and `pnpm map:backfill`. Production ran it for slice A
+and E0 verified every live row sourced and pinned
+(`docs/release-slice-e.md` §0).
 
-```
-club row     file_hash ?? sha256(file_data) → map_sources (name, uploader, upload time from the row)
-             no series yet → club_maps copied from the row (name, colour profile / overrides,
-                             north lines, rotation, created_by / created_at), club_map_id set
-             startImportJob {clubMapId} → version 1 (label, uploader, uploaded_at from the row)
+E5 removed it with the tables it walked: there is no `file_data` left to
+read. Its two remaining uses moved:
 
-event row    source_hash ?? file_hash ?? sha256(file_data) → map_sources; file_hash / source_hash set
-             startImportJob {eventId} → map_files.document_hash (§6.4)
-             a club_map_versions row has that source_hash → club_map_version_id (oldest edition)
-```
+- **A live event's map without a document** (an import that failed or
+  never ran): `pnpm map:rematch` imports every live sourced row without a
+  document (§6.9, reason `unpinned`). The map panel asks the user to
+  upload the map again (`MapImportState`).
+- **A per-event dump written before v0.6.1**: its `map_files` section
+  carries the bytes in `file_data`; `packages/api/scripts/restore-legacy-map-files.sql`
+  makes them sources and the rows that pin them, and the re-match imports
+  them (§7.3).
 
-Each map is an ordinary import job (§6.1), so dedup applies — an event
-copy of a club map, or the same map in two events, imports once — and a
-failure is a `failed` job plus an entry in the run's failure list, never
-an abort. Everything is keyed by content hash and guarded by "does it
-exist already", so a re-run only revisits rows still missing a document;
-the gate for the slice is a run with zero failures on the development
-and the club's production database.
-
-Two front ends, same `runBackfill`:
-
-| | |
-|---|---|
-| Settings → Maintenance → **Map documents** | `mapImport.backfillStatus` (admin): `plan {clubRows, eventRows}` still missing + this instance's current / last `run`; `mapImport.backfillStart {limit?}` (admin) starts one in the background, `CONFLICT` while one runs; the card polls every second until the run finishes and lists failed maps by name |
-| `pnpm map:backfill [--event <nameId>] [--limit n] [--dry-run]` | `src/cli/map-backfill.ts` (`docker exec <api> node packages/api/dist/cli/map-backfill.js` inside the image); one line per map, summary, exit 1 if any map failed. `--event` restricts the event rows (club rows are always processed); `--dry-run` lists what a run would touch. The restore procedure for a pre-vector dump ends with this command |
-
-The CLI is its own job instance: if an API next to it claims the jobs
-it inserts, `awaitImportJob` notices through the DB poll rather than the
-in-process waiter, so a run finishes either way.
+Up to v0.6.0 the backfill is still in the image: the E5 migration's guard
+names it (`scripts/gcp/backfill.sh` on the v0.6.0 image) as the fix for a
+live map without a source.
 
 ### 6.8 Review, decide, finalise
 
@@ -857,23 +847,27 @@ mapImport.exportCrt / importCrt                   the decisions as a Mapper CRT 
 `packages/api/src/map-store/rematch.ts`, front end
 `pnpm map:rematch [--event <nameId>] [--limit n] [--dry-run]`
 (`src/cli/map-rematch.ts`; in the image
-`node packages/api/dist/cli/map-rematch.js`; the backfill's flags). The
-backfill (§6.7) gives rows without a document one; this pass revisits
-pins whose document is **stale** — not what importing its source gives
-now — and runs an ordinary import job (§6.1) for each with the pin's
-target, so `applyJobResult` moves the pin to the fresh document:
+`node packages/api/dist/cli/map-rematch.js`; `scripts/gcp/backfill.sh
+--rematch` on Cloud Run). This pass revisits pins whose document is
+**stale** — not what importing its source gives now — and runs an
+ordinary import job (§6.1) for each with the pin's target, so
+`applyJobResult` moves the pin to the fresh document. Since E5 it also
+takes the retired backfill's last job (§6.7): a live event's `map_files`
+row with a `source_hash` but no `document_hash` is an item with reason
+`unpinned`, imported like the others:
 
 | Stale because (`staleReason`) | `club_map_versions` | `map_files` (events not soft-deleted) |
 |---|---|---|
 | `importer` — not a current importer (`ocad-3` … `ocad-6`, `omap-1` rows) | re-matched | re-matched |
 | `library` — not the current library release (`none` rows, an older release) | re-matched | re-matched |
 | `decisions` — does not follow the current club decisions | re-matched | **kept** |
+| `unpinned` — a sourced row without any document (E5) | — | imported |
 
 A club edition's document is its file's latest import (§6.4), so all
 three move it. An event keeps the document it pinned when only the
 decisions changed (06 §6 copy-on-use): moving it is `finalise` or a new
-upload. Importer and library staleness is a format migration, like the
-backfill, and moves event pins too (03 §6.5: a re-match keeps reviewed
+upload. Importer and library staleness is a format migration and moves
+event pins too (03 §6.5: a re-match keeps reviewed
 rows and re-proposes the rest — the job applies the club decisions,
 across releases, `docs/map-symbols.md` §8.5).
 
@@ -972,7 +966,7 @@ logos).
 
 | Part | Rows | Columns carried |
 |---|---|---|
-| `files` | every `map_files` row of the event with `source_hash IS NOT NULL` | all but `id`, `event_id`, `file_data` |
+| `files` | every `map_files` row of the event with `source_hash IS NOT NULL` | all but `id`, `event_id` |
 | `sources` | the distinct `map_sources` rows those rows pin, plus the `source_hash` of every pinned document | `file_hash`, `kind`, `size_bytes`, `file_name` |
 | `documents` | the distinct `map_documents` rows pinned by `document_hash` | `hash`, `size_bytes`, `format_version`, `importer_version`, `library_version`, `source_hash`, `header`, `report` |
 | `decisions` | the whole `club_symbol_decisions` table (`docs/map-symbols.md` §8.5) | `fingerprint`, `library_version`, `canonical_id`, `decided_at` |
@@ -991,16 +985,15 @@ the hash: as `source_hash` or `document_hash`, or (sources) as the
 (`SOURCE_SLICE_BYTES`, 4 MiB), read with `getBlob` ranges (§4.3); the
 venue assembles them and checks `size === size_bytes` and
 `sha256(bytes) === hash` before inserting. 07 §9.2 put the bytes base64
-inside the one JSON snapshot; sources reach 36 MB and `map_files` also
-carries the bytes, which would pass Cloud Run's 32 MiB response ceiling
-(07 §6.4), so the bytes take the "second part" 07 §9.2 allowed.
+inside the one JSON snapshot; sources reach 36 MB, which would pass
+Cloud Run's 32 MiB response ceiling (07 §6.4), so the bytes take the
+"second part" 07 §9.2 allowed.
 
 **Import** (`importEventSnapshot`, inside the snapshot transaction, after
 the event row): sources, then documents, `createMany … skipDuplicates`
 (append-only, §1 — a blob the venue already holds is neither fetched nor
-rewritten); then the `map_files` rows with the local `event_id`,
-`file_data` set to the source's bytes (identical by construction:
-`applyEventMap` and the backfill pin the hash of `file_data`), and on the
+rewritten); then the `map_files` rows with the local `event_id` — each
+row's source must be on the box by then (fetched or held) — and on the
 venue copy:
 
 - `map_sources.uploaded_by` and `map_files.club_map_version_id` are
@@ -1010,6 +1003,12 @@ venue copy:
 - `created_at` / `last_referenced_at` take the venue's defaults: the GC
   (§8) on the box ages its own copies, and the pins keep them while the
   event exists there.
+- the fields of a v0.6.0 exporter's rows that E5 dropped (`map_files`
+  `fileData`, `fileHash`, `renderKey` and the colour stack;
+  `events.mapPipeline` / `overprintCutsVersion`; `courses.geometry` /
+  `geometrySource`) are stripped before insert
+  (`sync/dropped-columns.ts`), so a v0.6.1 box can check out from a
+  v0.6.0 cloud; a v0.6.0 box fills them from their defaults.
 - `club_symbol_decisions` rows merge by primary key: the newer
   `decided_at` wins (the order stage 6 reads them in, `map-symbols.md`
   §8.5), `decided_by` is NULL, and nothing is deleted, so a `reset` on
@@ -1024,9 +1023,10 @@ fails the checkout; the existing rollback releases the peer lease, and
 the event is not checked out. A re-checkout replaces the `map_files`
 rows with the event (cascade) and leaves the blobs alone.
 
-**Not carried.** `map_files` rows without a `source_hash` (pre-pipeline
-rows, §6.7 — run the backfill before checkout; the checkout result counts
-them as `skipped`); `map_previews` (a cache; §4.5 renders on a miss);
+**Not carried.** `map_files` rows without a `source_hash` (only a
+soft-deleted event's since E5, and a soft-deleted event is not checked
+out; the result still counts them as `skipped` for older nodes);
+`map_previews` (a cache; §4.5 renders on a miss);
 `club_maps` / `club_map_versions`; `map_import_jobs`, uploads; graphics,
 templates and print (cloud-owned during a lease, 07 §9.2).
 
@@ -1041,11 +1041,8 @@ importer ignores it.
 the event's map pipeline: it was pinned on upload for `legacy` events too
 (09 §3: the switch gated reads, never imports), so a box checked out
 before E3 already holds what the viewer reads. The retired per-event
-switch (`events.map_pipeline`, `docs/map-pipeline-switch.md`) is still a
-column until E5; the settings refresh copies it with the event's other
-cloud-owned fields (it is not in `EXCLUDED_FIELDS` of
-`packages/api/src/sync/settingsRefresh.ts`) and nothing reads it.
-What does not reach it is a *new* document: a map re-imported on the
+switch (`events.map_pipeline`, `docs/map-pipeline-switch.md`) was dropped
+in E5. What does not reach it is a *new* document: a map re-imported on the
 cloud during the lease is not refreshed on the box (Pending, §9); the box
 keeps serving the snapshot's document.
 
@@ -1064,7 +1061,8 @@ more `\copy` sections, before `map_files` (the blobs in FK order):
 | `club_symbol_decisions` | all (club-level; a restored event's re-match, §6.9, reads them) |
 
 All columns, `bytes` as Postgres `\x` hex in the CSV. `map_previews`
-are omitted (cache).
+are omitted (cache). The `map_files` section holds no bytes since E5 —
+only the pins; the blob sections carry the file.
 
 The event's `course_objects` rows (`docs/course-layer.md` §8.5) are a
 plain event-scoped section after `class_course_pools`.
@@ -1081,13 +1079,26 @@ event id it then loads the `map_files` section with `event_id` rewritten
 and `club_map_version_id` kept only when that version exists. The rest
 of the dump restores as before (`docs/backup-restore.md`).
 
-A dump taken before the pipeline has no blob sections and empty hashes;
-after restoring it, `pnpm map:backfill --event <name_id>` (§6.7, 09 §5)
-gives the map its document.
+**A dump written before v0.6.1** has `file_data` (and, before the
+pipeline, no hashes and no blob sections) in its `map_files` section, a
+column the v0.6.1 schema no longer has. Its blob sections, if any, load
+with `restore-map-blobs.sql` as above (without `-v event_id`); its
+`map_files` section loads with `packages/api/scripts/restore-legacy-map-files.sql
+-v event_id=<id>`: the script builds its temp table from the section's
+own header row (the column set differs between releases), refuses a row
+whose bytes do not hash to its `source_hash`, makes each row's bytes a
+`map_sources` row (`kind` sniffed as the upload route does) and inserts
+the event's row pinning it — with the dump's `document_hash` when this
+database holds that document for that source, else none. Then
+`pnpm map:rematch --event <name_id>` imports every row still without a
+document (§6.9, `unpinned`). It replaces the retired
+`pnpm map:backfill --event` of 09 §5 (decision log 2026-11-07, E5).
+Idempotent, as the blob script.
 
 The download gate is unchanged: a dump whose newest `map_files` row has
 `from_club_library` needs an instance admin, because it contains the
-club's source bytes (it did before, in `file_data`). 07 §10's
+club's source bytes (it did before E5 in `file_data`, now in the
+`map_sources` section). 07 §10's
 documents-only variant for non-admin event managers is not built: a
 `map_documents` row cannot exist without its `map_sources` row
 (`source_hash NOT NULL`, `RESTRICT`, §2), so such a dump would not
@@ -1222,21 +1233,13 @@ dev server, which registers no service worker) — they were checked in the
 built `sw.js`; refreshing a checked-out box's `map_files` row and document when
 the map is re-imported on the cloud during the lease (07 §9.2, §7.2);
 the documents-only dump variant for non-admin event managers (07 §10,
-§15 — not restorable while a document needs its source row, §7.3). Each
-lands with its own section here and its own tests.
-
-Slice E (`SLICES.md`): the upload still parses the OCAD file for the
-row's quick-access columns and `north_detection`, and still writes
-`file_data`, `file_hash`, `render_key`, the colour-stack columns and
-`club_map_files` — for rollback to v0.5.0, until E5 drops them;
-`render_key` is refreshed after a rotation change and `gcOrphanTiles`
-still runs after an upload, a rotation change, a club map removal and
-an event purge, so v0.5.0 finds its tiles. Nothing in this version
-reads `file_data` any more: E4a deleted the legacy renderers
-(`map-tiles.ts`, `map-source.ts` `parsedMap`, `club-map-preview.ts`)
-and the colour-stack procedures; `club_map_files.preview_png` is no
-longer written (§6.5). E3 removed `pinnedDocumentHash` and its
-`map_pipeline` gate.
+§15 — not restorable while a document needs its source row, §7.3); the
+web's map pickers offering Mapper files (`.omap` / `.xmap`) — the server
+takes them since E5 (§5.1); the series' colour-stack columns
+(`club_maps.colour_profile`, `colour_overrides`, `north_lines_below`)
+and `map_files.north_detection`, which nothing writes or reads since E5
+(kept: E5 drops only what its row names). Each lands with its own
+section here and its own tests.
 
 ## 10. Tests
 
@@ -1249,36 +1252,34 @@ longer written (§6.5). E3 removed `pinnedDocumentHash` and its
 | Integration (api) | `packages/api/src/__tests__/integration/map-sources.test.ts` | route 400 / 401 / 403 / 404 / 200; event manager streams the upload under the event's file name, chunked, no `Content-Length`, `no-store`; `?event=`; anonymous with kiosk key 401, course setter / stranger / manager of another event 403; club-library copy admin-only; club uploader / admin under the source's name; auth off; a 33 MiB source byte-exact; `streamBlob` slice sizes and a source that changed mid-stream |
 | Integration (api) | `packages/api/src/__tests__/integration/map-documents.test.ts` | store + dedup under another name, source/hash mismatch refused, `RESTRICT` on a pinned document, blob reads whole/range, `applyEventMap` pins + `mapMetadata`, route 400/401/403/404/200 with headers, `?event=` + kiosk key, brotli/gzip round trip, 304, 206/416/multi-range, club-version visibility, own import job (done → 200, other user 403, failed → 403), auth off |
 | Unit (api) | `packages/api/src/__tests__/map-import-jobs.test.ts` | `isClaimable` matrix, `stageProgress` monotonic, worker import produces the same hashes and `libraryVersion` as the inline importer with stages `parse → normalise → match → encode`, worker rejects garbage, upload validators (`validateUploadInit`, `expectedChunkSize`, `sniffMapKind`, `missingChunks`, `assembleChunks`) |
-| Integration (api) | `packages/api/src/__tests__/integration/map-import-jobs.test.ts` | `applyEventMap` job done + pins + report, dedup under another name, garbage / OMAP failures, `holdMs: 0` queued then finished by the engine, stale reclaim vs live job, `mapImport.status` auth (stranger 403, course setter ok) + `latestForEvent`, `started_by` recorded by `applyEventMap` / `applyUploadedMap` / `clubMap.upload` and null for a dedup without a user, dedup hit touches the document, housekeeping sweep (finalised uploads included), club upload → series + version 1 + written-through legacy row, `useClubMap` pin by UUID, rename / rotation on the series and written through (render key changes), unknown id `NOT_FOUND`, `addFromSource` (one legacy row), `remove` deletes legacy row then series — pins `NULL`, document and source kept, backfill plan unchanged, second remove `NOT_FOUND`, upload routes 401/403/404/400/413/201, out-of-order and repeated chunks, 415, 409 missing, finalise dedup + idempotency, 409 after finalise, `applyUploadedMap` under the upload's name, `applyJobResult` idempotent; pin writes the quick-access columns equal to `parseOcadMapMetadata`, recomputes them with a row's `rotation_correction` (11°) idempotently, report carries `georeference` / `north`, the Mapper job's stored report carries `warningDetails` (the `MISSING_SYMBOL` stub with its symbol index), a no-CRS document (`CRS_UNRESOLVED`) leaves the raster path's columns alone |
-| Unit (api) | `packages/api/src/__tests__/map-backfill-cli.test.ts` | CLI argument parsing, per-map lines and summary |
+| Integration (api) | `packages/api/src/__tests__/integration/map-import-jobs.test.ts` | `applyEventMap` job done + pins + report, dedup under another name, garbage / OMAP failures, `holdMs: 0` queued then finished by the engine, stale reclaim vs live job, `mapImport.status` auth (stranger 403, course setter ok) + `latestForEvent`, `started_by` recorded by `applyEventMap` / `applyUploadedMap` / `addFromSource` and null for a dedup without a user, dedup hit touches the document, housekeeping sweep (finalised uploads included), chunked club upload → series (`rotation_correction` 0) + version 1, `useClubMap` pin by UUID, rename / rotation on the series, unknown id `NOT_FOUND`, `addFromSource` dedup, `remove` deletes the series — pins `NULL`, document and source kept, second remove `NOT_FOUND`, a Mapper source as an event map (`applyUploadedMap`) and a club map (`addFromSource`) (E5), upload routes 401/403/404/400/413/201, out-of-order and repeated chunks, 415, 409 missing, finalise dedup + idempotency, 409 after finalise, `applyUploadedMap` under the upload's name, `applyJobResult` idempotent; pin writes the quick-access columns equal to `parseOcadMapMetadata`, recomputes them with a row's `rotation_correction` (11°) idempotently, report carries `georeference` / `north`, the Mapper job's stored report carries `warningDetails` (the `MISSING_SYMBOL` stub with its symbol index), a no-CRS document (`CRS_UNRESOLVED`) gets the columns through the source fallback, equal to the oracle (`helpers/ocad-oracle.ts` `parseOcadMapMetadata`, the upload's parse until E5) |
+| Integration (api) | `packages/api/src/__tests__/integration/vector-map-pipeline-drops.test.ts` | the E5 migration on a scratch database built to the migration before it: a live event's unsourced `map_files` row → the guard fails and nothing is dropped; an unlinked `club_map_files` row → fails; only a soft-deleted event's unsourced row → passes, every named table / column / type gone (`information_schema`), `length_source` and `north_detection` kept, the tombstone row kept without bytes |
 | Unit (api) | `packages/api/src/__tests__/map-symbol-decisions.test.ts` | `parseDecisionSnapshot` (malformed column → no decisions), `planDecisionWrites` (accept / unmatch under the current release, reset per library, last decision wins, unknown index / non-source / foreign-library / unknown entry rejected), decide input schema, the worker applying a decision snapshot with the same bytes as inline and a different hash than without |
 | Unit (api) | `packages/api/src/__tests__/map-document-route.test.ts` (edit mode) | `EDIT_ACCESS`: `courses.view` not enough, `courses.edit` admits, kiosk key never, club and own-job clauses unchanged |
 | Integration (api) | `packages/api/src/__tests__/integration/map-review.test.ts` | `review` rows on the fixture (702 suggested 703 with candidates, swatch URLs, colour class, counts, stack, report), predicate (stranger 403, anonymous 401, kiosk key with and without a user, wrong key 401, 404, bad hash); `decide` writes the row, snapshots it on the job, makes a new unpinned document drawn canonically, own-job review, old document no longer `current`, determinism, validation 400, stranger / kiosk 403; the decision applied to a second file of the same symbols; dedup to the decided document; `finalise` on the event (pins, `mapMetadata`, idempotent, other source 412, no capability 403, no event 400) and on a club version (in place, seq / label kept, event pin unchanged, 412, unknown club map 404); club target anonymous 401; `reset` back to the matcher's document |
 | Unit (api) | `packages/api/src/__tests__/map-crt.test.ts` | `crtFileName` (Mapper's `SOURCE-TARGET.crt`), the 1 MiB limit, `planCrtImport` on the `e2e/test.ocd` header (a decision, an unchanged variant line, a reported target; the full table round trip records nothing), decide's 5 000 cap |
 | Integration (api) | `packages/api/src/__tests__/integration/map-crt.test.ts` | `exportCrt` header only before any decision, the four auto matches on `includeMatches` (three until A12 added the framed 603 text to the fixture), a decision with its `# fp` from both documents of the source, predicate (stranger 403, anonymous 401, kiosk key reads, 404, bad hash); `importCrt` of the export after a `reset` writes the same row and yields the same document as `decide` (unpinned), `# keep` recorded and exported, dry run writes nothing, unappliable lines reported with no row and no job, the full-table round trip records nothing; stranger / anonymous / kiosk refused, 404, over 1 MiB 400 |
-| Unit (api) | `packages/api/src/__tests__/map-rematch-cli.test.ts` | `staleReason` matrix, CLI flags, plan / item / summary lines |
-| Integration (api) | `packages/api/src/__tests__/integration/map-rematch.test.ts` | an `ocad-3` / `none` row pinned by an event and a club version is planned (both, `--event` scope), dry run writes nothing, a run moves both pins to the current document, second run empty; a decision change re-matches the club edition only |
-| Integration (api) | `packages/api/src/__tests__/integration/map-backfill.test.ts` | plan counts and ordering, dry run writes nothing, legacy club row → series (settings copied) + version 1 (label / uploader / time from the row), event rows → pins with dedup and club-version pin, unreadable rows reported and left unpinned, second run revisits only what is missing, `--event` scope and soft-deleted events skipped, `backfillStatus` / `backfillStart` admin-only, background run and `CONFLICT` |
+| Unit (api) | `packages/api/src/__tests__/map-rematch-cli.test.ts` | `staleReason` matrix, CLI flags (parsing, either spelling, bad values), plan / item / summary lines |
+| Integration (api) | `packages/api/src/__tests__/integration/map-rematch.test.ts` | an `ocad-3` / `none` row pinned by an event and a club version is planned (both, `--event` scope), dry run writes nothing, a run moves both pins to the current document, second run empty; a decision change re-matches the club edition only; a live event's sourced row without a document is planned `unpinned` and imported, a soft-deleted event's is not (E5) |
 | Unit (api) | `packages/api/src/__tests__/club-map-library.test.ts` | `projectClubMapRow` (series settings, version label → source name fallback, header scale → legacy scale, legacy raster metadata, version-less row with its job and the job's source and no preview URL, nulls, job dropped once a version exists), `canRemoveClubMap` / `canDownloadClubMapVersion` matrices, `latestVersionOrRefuse` → `PRECONDITION_FAILED`; `review` counts from the import report's `matching.symbols`, null without a matched document |
-| Integration (api) | `packages/api/src/__tests__/integration/club-maps.test.ts` | upload keyed by the series UUID, list carries version / hashes / thumbnail URL / source facts, no `preview_png` written, rename written through, download by version source; a version-less series lists no north and no preview URL and the read writes nothing; unparseable upload listed with a failed job and no preview URL, `download` / `useClubMap` `PRECONDITION_FAILED`; unlinked legacy row not listed and not touched; unknown id `NOT_FOUND`, malformed `BAD_REQUEST`; remove stranger `FORBIDDEN`, creator ok with its legacy row; `setRotation` on series and legacy row → event copy; download stranger `FORBIDDEN`; club-library copy and backup gates; the listed `review` equals the version document's report counts |
+| Integration (api) | `packages/api/src/__tests__/integration/club-maps.test.ts` | chunked upload keyed by the series UUID, list carries version / hashes / thumbnail URL / source facts, staleness from the version's report, rename, download by version source; a version-less series lists no north and no preview URL; an unimportable upload (OCAD magic, garbage after) listed with a failed job and no preview URL, its bytes kept as the source, `download` / `useClubMap` `PRECONDITION_FAILED`; unknown id `NOT_FOUND`, malformed `BAD_REQUEST`; remove stranger `FORBIDDEN`, creator ok, versions cascade; `setRotation` on the series → event copy (columns from the pin, `length_source` stays `derived`); an event upload keeps ScalePar (columns equal to the oracle); an unpinned row answers with no document and no north; `course.downloadMap` returns the source's bytes; download stranger `FORBIDDEN`; club-library copy and backup gates; the listed `review` equals the version document's report counts |
 | Unit (web) | `packages/web/src/lib/__tests__/map-document-cache.test.ts` | §7.1: route regex (documents, not previews), URL without query and the two headers, one request per hash and the same bytes, bounded memory, 401/403/404/5xx/offline/unreadable → kinds and not cached, `storage.persist()` once and absent |
 | E2E | `e2e/map-vector-layer.spec.ts` | §7.1 through the viewer: the pinned document by hash, no query, `x-event-id` |
-| Unit (web) | `packages/web/src/__tests__/map-upload.test.ts` | threshold, init → chunks → finalise call order and progress, per-chunk retry on 5xx, no retry on 4xx, `x-event-id` only for event uploads |
+| Unit (web) | `packages/web/src/__tests__/map-upload.test.ts` | a small file is one chunk (no base64 path, E5), init → chunks → finalise call order and progress, per-chunk retry on 5xx, no retry on 4xx, `x-event-id` only for event uploads |
 | Unit (api) | `packages/api/src/__tests__/map-previews.test.ts` | preview request parsing (`:idx`, `.png`, library code, hash), ETags and `If-None-Match`, library preview of an entry and a variant, 404 for unknown code / other version, per-instance cache hit |
 | Unit (api) | `packages/api/src/render/__tests__/previews.test.ts` | swatch pixel probes (418 at 3×, 505 dash on the dash point and gaps, 403 fill, 704 text ink, neutral swatch), library entry PNG size, thumbnail long edge 512 px, object cap |
 | Integration (api) | `packages/api/src/__tests__/integration/map-previews.test.ts` | stage 10 thumbnail row after `applyEventMap`, dedup short-cut re-derives, failed derive non-fatal, over-cap decided from the header summary; thumbnail and symbol routes 400/401/403/404/200/304, kiosk key and `?event=`, render on miss, row written once, every fixture symbol 200 and one past the end 404, `render: null` 404, previews never bump `last_referenced_at`; library route 400/401/200/304/404 incl. variant and other version; auth off |
-| E2E | `e2e/map-backfill.spec.ts` | legacy club row inserted directly → Maintenance card shows it pending → Import now → "Imported n, failed 0" → series + version exist → no longer pending |
 | E2E | `e2e/club-map-library.spec.ts` | UI upload → card keyed by the series UUID with the document thumbnail → rename → **From club library** renders the event map → delete leaves the event's map; an unparseable upload is listed as "Import failed", without download, and disabled in the event picker; north-lines badge |
-| E2E | `e2e/map-documents.spec.ts` | UI upload on `itest` → `documentHash` → route 200/304/206, own import job admits the uploader through a non-pinning event, anonymous 401 → thumbnail and symbol swatch 200 / 401 anonymous, library swatch by the header's library and version → source route streams `test.ocd` back (200, `no-store`, attachment), anonymous 401 → dev page `?url=` loads it natively → `latestForEvent` done with report; chunked route (chunks out of order) → `applyUploadedMap` → `mapMetadata`; `clubMap.upload` → `mapImport.status` done |
+| E2E | `e2e/map-documents.spec.ts` | UI upload on `itest` → `documentHash` → route 200/304/206, own import job admits the uploader through a non-pinning event, anonymous 401 → thumbnail and symbol swatch 200 / 401 anonymous, library swatch by the header's library and version → source route streams `test.ocd` back (200, `no-store`, attachment), anonymous 401 → dev page `?url=` loads it natively → `latestForEvent` done with report; chunked route (chunks out of order) → `applyUploadedMap` → `mapMetadata`; the same source → `clubMap.addFromSource` → `mapImport.status` done |
 | E2E | `e2e/map-review.spec.ts` | the review round from the UI (`docs/map-symbols.md` §8.7): club card "to review" count from `clubMap.list[].review` → route keyed by the document hash → usage order, source and library swatches load → keep 850.1 as drawn → `decide` job → new document not in use → `finalise` moves the card thumbnail and count → CRT download carries `# keep 850.1` → CRT upload dry-run preview, then recorded → reset both rows → the matcher's own document hash again, finalised back; event map from the course editor, document swatches with `?event=`, nothing to finalise. `reseed()` wipes `club_symbol_decisions` on both sides |
-| Unit (api) | `packages/api/src/__tests__/snapshot-maps.test.ts` | `pinnedHashes` (dedup, each document's own source), `partitionMapFiles` (pre-pipeline rows skipped, local identity dropped), `exportBlobInput` bounds (table, hash, start, 4 MiB), `verifyBlob` size and hash, `fetchBlob` slice order, peer hash / size mismatch, short slice |
-| Unit (api) | `packages/api/src/__tests__/backup.test.ts` | dump table order (blobs before `map_files`, decisions present, no previews / tiles), one `\copy` per table, blob filters by the event's pins, decisions unfiltered, `splitBackupSections` |
-| Integration (api) | `packages/api/src/__tests__/integration/lease.test.ts` | checkout carries file + source + document (bytes, header, pin, `file_data`, view overrides, venue-local NULLs, pre-pipeline row skipped, counts); document route on the venue 401 anonymous / 200 with the kiosk key; tampered bytes fail the checkout, release the peer lease and store nothing; exporter without `maps`; `exportBlob` refuses other events' blobs and a start past the end; re-checkout fetches nothing and keeps the blob rows; `lease.exportBlob` through the router (no / wrong secret 401, 4 MiB bound); club decisions merged (newer cloud row wins over a stale venue copy, venue-only row kept, `decided_by` NULL) |
-| Integration (api) | `packages/api/src/__tests__/integration/backup.test.ts` | dump completes with exactly the event's source and document as `\x` hex before `map_files`, no previews; event and blobs deleted → `restore-map-blobs.sql` restores byte-exact into another event (`uploaded_by` of a missing user NULL, grace restarted), second run a no-op, tampered bytes refused with nothing written, blobs alone without an event id; every `map_files` column restored; decisions in the dump, restore brings back a lost row and keeps the newer of two |
+| Unit (api) | `packages/api/src/__tests__/snapshot-maps.test.ts` | `pinnedHashes` (dedup, each document's own source), `partitionMapFiles` (sourceless rows skipped, local identity dropped), `withoutDroppedFields` (a v0.6.0 exporter's map file / event / course fields stripped), `exportBlobInput` bounds (table, hash, start, 4 MiB), `verifyBlob` size and hash, `fetchBlob` slice order, peer hash / size mismatch, short slice |
+| Unit (api) | `packages/api/src/__tests__/backup.test.ts` | dump table order (blobs before `map_files`, decisions present, no previews / tiles / `rendered_maps`), one `\copy` per table, blob filters by the event's pins, decisions unfiltered, `splitBackupSections` |
+| Integration (api) | `packages/api/src/__tests__/integration/lease.test.ts` | checkout carries file + source + document (bytes, header, pin, view overrides, venue-local NULLs, a sourceless row skipped, counts); document route on the venue 401 anonymous / 200 with the kiosk key; tampered bytes fail the checkout, release the peer lease and store nothing; exporter without `maps`; `exportBlob` refuses other events' blobs and a start past the end; re-checkout fetches nothing and keeps the blob rows; `lease.exportBlob` through the router (no / wrong secret 401, 4 MiB bound); club decisions merged (newer cloud row wins over a stale venue copy, venue-only row kept, `decided_by` NULL) |
+| Integration (api) | `packages/api/src/__tests__/integration/backup.test.ts` | dump completes with exactly the event's source and document as `\x` hex before `map_files`, no previews; event and blobs deleted → `restore-map-blobs.sql` restores byte-exact into another event (`uploaded_by` of a missing user NULL, grace restarted), second run a no-op, tampered bytes refused with nothing written, blobs alone without an event id; every `map_files` column restored; decisions in the dump, restore brings back a lost row and keeps the newer of two; `restore-legacy-map-files.sql` (E5): refuses a v0.6.1 section and a row whose `file_data` does not match its `source_hash`, makes a pre-vector row's bytes a source and pins it (idempotent), `map:rematch` then imports it; a v0.6.0-shaped row keeps its document when held for that source, else none |
 | Unit (api) | `packages/api/src/__tests__/event-document.test.ts` | §4.6 over a stub db holding an in-memory import of `e2e/test.ocd`: no map / no pin → null with no blob read; frame from the header with the row's correction; control lat/lng equal the legacy CRS's within 1e-8°; header read once per hash; `CRS_UNRESOLVED` → the source's ScalePar (read once per source), scale-only frame when the source finds none, never read for a resolved header; objects / cuts / obstacles null without a pin or blob, decoded once per hash; `documentMapFileColumns` = the pin's columns, with the fallback, scale only; `reportNorth` |
 | Unit (api) | `packages/api/src/__tests__/event-map-objects.test.ts` | `ocadSymbolNumber`; `slimObjectsOfDocument`: kept / dropped symbols and object types, hidden, graphic, applied-match code, outer ring, Bézier flattening, unit scaling |
 | Unit (api) | `packages/api/src/__tests__/document-readers-parity.test.ts` | §4.6 "Parity": CRS, autodetect objects, north, cut features — document vs the legacy OCAD readers on `e2e/test.ocd` and, when present, the local corpus |
-| Integration (api) | `packages/api/src/__tests__/integration/map-document-readers.test.ts` | §4.6 end to end: `mapMetadata` without a render key and without a pin (non-null, `documentHash` null), north from the report; `importCourses` leaves `uploaded_at`; no pin → `controlCoordinates` stored lat/lng, no suggestions, `getBaseMapInfoOrNull` null; an event reads its document (`getBaseMapInfo().document` is the pin); a new event's `map_pipeline` is `vector` (E3's column default); lat/lng synced at the pin |
+| Integration (api) | `packages/api/src/__tests__/integration/map-document-readers.test.ts` | §4.6 end to end: `mapMetadata` without a pin (non-null, `documentHash` null), north from the report; `importCourses` leaves `uploaded_at`; no pin → `controlCoordinates` stored lat/lng, no suggestions, `getBaseMapInfoOrNull` null; an event reads its document (`getBaseMapInfo().document` is the pin); lat/lng synced at the pin |
 | E2E | `e2e/backup.spec.ts` | UI upload on `itest` → Download backup → `map_sources` / `map_documents` sections hold the source and document hashes before `map_files`, no previews |
 
 ## 11. Where things live
@@ -1296,20 +1297,18 @@ longer written (§6.5). E3 removed `pinnedDocumentHash` and its
 | `packages/api/src/map-store/source-routes.ts` | source route: download predicate, slice planner, `streamBlob` |
 | `packages/api/src/map-store/gc.ts` | `runStorageGc`, daily schedule (`maybeStartStorageGc` / `stopStorageGc`), grace and due rules |
 | `packages/api/src/routers/mapStorage.ts` | `mapStorage.gcRun` |
-| `packages/api/src/routers/clubMap.ts` | club library on the series, write-through to `club_map_files` (§6.5) |
+| `packages/api/src/routers/clubMap.ts` | club library on the series (§6.5) |
 | `packages/api/src/club-map-library.ts` | `projectClubMapRow`, owner checks, `latestVersionOrRefuse` |
 | `packages/api/prisma/migrations/20261019120000_map_import_jobs_started_by/` | `map_import_jobs.started_by`, `document_hash` index |
 | `packages/api/prisma/migrations/20261019130000_map_storage_source_hash_indexes/` | `source_hash` indexes on `map_files`, `club_map_versions` |
 | `packages/api/src/map-store/uploads.ts` | pure upload rules: limits, chunk sizes, kind sniffing, assembly |
 | `packages/api/src/map-store/upload-routes.ts` | `POST /api/map-uploads`, `PUT …/chunks/:n`, `POST …/finalise` |
 | `packages/api/src/map-store/jobs.ts` | job rows, claim / heartbeat / stale reclaim, worker launcher, `applyJobResult`, housekeeping, engine tick |
-| `packages/api/src/map-store/event-document.ts` | server reads of the pinned document (§4.6): `eventPin`, `eventDocumentHash`, `documentFrame`, `documentNorth` / `reportNorth`, `decodedDocument`, `documentPaperFrame`, `sourceFrameFallback`, `documentMapFileColumns`, caches |
+| `packages/api/src/map-store/event-document.ts` | server reads of the pinned document (§4.6): `eventPin`, `eventDocumentHash`, `documentFrame`, `documentNorth` / `reportNorth`, `decodedDocument`, `documentPaperFrame`, `sourceFrameFallback`, `documentMapFileColumns`, `writePinnedMapFileColumns` (pin-time write, §6.4), caches |
 | `packages/api/src/event-crs.ts` / `event-map-objects.ts` | `loadEventCrs`, `synchronizePositionedControlCoordinates`; `slimObjectsOfDocument`, `loadEventMapObjects`, `loadEventCutFeatures`, `loadEventCheckDocument` (§4.6) |
-| `packages/api/src/map-store/map-file-metadata.ts` | `mapFileMetadataFor` (quick-access columns from a document frame + meridian tilt + correction; shared with the raster path), `writeDocumentMapFileColumns` (pin-time write) |
+| `packages/api/src/map-store/map-file-metadata.ts` | `mapFileMetadataFor` (quick-access columns from a document frame + meridian tilt + correction), `documentFrameSchema` |
 | `packages/api/src/background/supervisor.ts` | lease-holder reconcile; starts / stops the GC |
 | `packages/api/src/map-store/import-worker.ts` | worker-thread body: `importMapToDocument` by kind + report |
-| `packages/api/src/map-store/backfill.ts` | plan, per-row backfill, run loop, in-process run for the Maintenance tab |
-| `packages/api/src/cli/map-backfill.ts` (+ `-args.ts`) | `pnpm map:backfill` |
 | `packages/api/prisma/migrations/20261019150000_club_symbol_decisions/` | `club_symbol_decisions` |
 | `packages/api/src/map-store/decisions.ts` | decision rows: load, plan and write `decide`'s changes, job snapshot schema, "does a stored document follow the decisions" |
 | `packages/api/src/map-store/review.ts` | review payload, `decideOnDocument`, `finaliseDocument`, `isDocumentCurrent` |
@@ -1318,10 +1317,12 @@ longer written (§6.5). E3 removed `pinnedDocumentHash` and its
 | `packages/api/src/cli/map-rematch.ts` (+ `-args.ts`) | `pnpm map:rematch` |
 | `packages/shared/src/import/decisions.ts` | fingerprints, rows → decisions, review rows (`docs/map-symbols.md` §8.5) |
 | `packages/shared/src/import/crt.ts` | the CRT codec: `parseCrt`, `formatCrt`, `resolveCrt` (`docs/map-symbols.md` §8.6) |
-| `packages/api/src/routers/mapImport.ts` | `mapImport.status`, `latestForEvent`, `review`, `decide`, `finalise`, `backfillStatus`, `backfillStart` |
-| `packages/web/src/components/MaintenancePanel.tsx` | Map documents card |
-| `packages/api/src/event-map.ts` | `applyEventMap` writes the source row and starts the event job |
-| `packages/api/src/routers/course.ts` / `clubMap.ts` | `applyUploadedMap`, `useClubMap` version pin; `createClubMap`, `addFromSource`, series mirroring |
+| `packages/api/src/routers/mapImport.ts` | `mapImport.status`, `latestForEvent`, `review`, `decide`, `finalise` |
+| `packages/api/src/event-map.ts` | `applyEventMap` writes the source row (when given bytes) and the event's pin row, starts the event job, re-derives derived course legs |
+| `packages/api/src/routers/course.ts` / `clubMap.ts` | `applyUploadedMap`, `useClubMap` version pin, `downloadMap` / `mapFileInfo` from `map_sources`; `createClubMap`, `addFromSource` |
+| `packages/api/prisma/migrations/20261107120000_vector_map_pipeline_drops/` | E5: the guard, then the legacy pipeline's tables and columns dropped |
+| `packages/api/scripts/restore-map-blobs.sql` / `restore-legacy-map-files.sql` | dump restore: blobs, decisions and a v0.6.1 `map_files` section / a pre-v0.6.1 `map_files` section (§7.3) |
+| `packages/api/src/sync/dropped-columns.ts` | the fields E5 dropped, stripped from a v0.6.0 exporter's snapshot rows (§7.2) |
 | `packages/web/src/lib/map-upload.ts` | client chunked uploader |
 | `packages/web/src/lib/map-document-cache.ts` | the viewer's document loader, `MAP_DOCUMENT_PATH_RE`, `requestPersistentStorage`, `useMapDocument` (§7.1) |
 | `packages/web/vite.config.ts` | service-worker routes `map-documents`, `map-fonts` (§7.1) |
