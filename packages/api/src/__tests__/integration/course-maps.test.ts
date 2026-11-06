@@ -503,6 +503,32 @@ describe("map templates and course maps", () => {
     await expect(caller.courseMap.resolveSheet({ templateSeq: template.seq, courseSeq: 900_001 })).rejects.toMatchObject({ code: "NOT_FOUND" });
   });
 
+  it("description instructions written by course.update reach Layout mode's block and the print rows, anchored by public id (E3b)", async () => {
+    const template = (await caller.mapTemplate.list())[0];
+    const { version } = await caller.course.detail({ id: courseSeq });
+    // After control 31 (its punch code; its seq differs), and a finish variant.
+    await caller.course.update({
+      id: courseSeq,
+      descriptionInstructions: { specials: [{ afterControlId: 31, kind: "13.2", lengthM: 120 }], finish: { kind: "14.1", lengthM: 80 } },
+      baseVersion: version,
+    });
+    try {
+      const expected = [
+        { kind: "start" },
+        { kind: "control", code: "31" },
+        { kind: "special", symbolKey: "13.2", lengthM: 120 },
+        { kind: "control", code: "32" },
+        { kind: "finish", symbolKey: "14.1", lengthM: 80 },
+      ];
+      const r = await caller.courseMap.resolveSheet({ templateSeq: template.seq, courseSeq });
+      expect(r.block!.rows).toMatchObject(expected);
+      const printed = (await caller.courseMap.list()).find((m) => m.courseId === courseSeq)!;
+      expect(printed.descriptionRows).toMatchObject(expected);
+    } finally {
+      await caller.course.update({ id: courseSeq, descriptionInstructions: null });
+    }
+  });
+
   it("round-trips templates through the club library", async () => {
     const template = (await caller.mapTemplate.list())[0];
     const saved = await caller.mapTemplate.saveToClub({

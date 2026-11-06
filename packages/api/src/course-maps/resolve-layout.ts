@@ -28,6 +28,7 @@ import {
   type MapWindow,
 } from "@oxygen/shared";
 import { z } from "zod";
+import { firstCode } from "../control-id.js";
 
 const objectsSchema = z.array(courseMapObjectSchema);
 
@@ -388,7 +389,9 @@ export function resolveMapLayout(
       controls: controlRows.map((control, index) => {
         const source = rawControls[regularControls.indexOf(control)];
         return {
-          id: source?.seq ?? index + 1,
+          // The public control id (first code, else seq) — the id space
+          // `afterControlId` is stored in (types.ts, course.setStructure's prune).
+          id: source ? firstCode(source.codes) || (source.seq ?? index + 1) : index + 1,
           code: control.code,
           description: (control.description ?? null) as ControlDescription | null,
         };

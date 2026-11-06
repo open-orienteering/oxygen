@@ -253,6 +253,34 @@ describe("concurrency (course-layer.md §7)", () => {
     expect(conflict.differing).toBeNull();
   });
 
+  it("writes description instructions alone with the course's token: structure untouched, token advanced, a stale one refused (E3b)", async () => {
+    const { id } = await caller.course.create({ name: "Instructions", controlIds: [31, 32] });
+    await caller.course.setStructure({
+      courseId: id,
+      structure: { version: 1, id: "s", orderMode: "ordered", items: [{ siteId: startSeq }, { siteId: 31 }, { siteId: 32 }, { siteId: finishSeq }] },
+    });
+    const before = await courseRow(id);
+    const ccBefore = await ccOf(id);
+    const v0 = (await caller.course.detail({ id })).version;
+    const instructions = { specials: [{ afterControlId: 31, kind: "13.2", lengthM: 120 }], finish: { kind: "14.1" } };
+    const { version: v1 } = await caller.course.update({ id, descriptionInstructions: instructions, baseVersion: v0 });
+    expect(BigInt(v1)).toBeGreaterThan(BigInt(v0));
+    const after = await courseRow(id);
+    // The editor-written structure, its mirror and geometry are left as they were (not the linear shortcut).
+    expect(after.structure).toEqual(before.structure);
+    expect(after.geometry).toEqual(before.geometry);
+    expect(await ccOf(id)).toEqual(ccBefore);
+    expect((await caller.course.list()).find((c) => c.id === id)!.descriptionInstructions).toEqual(instructions);
+    expect((await caller.course.detail({ id })).descriptionInstructions).toEqual(instructions);
+    // A second write on the old token is refused, as setStructure's (never merged).
+    const conflict = await conflictOf(caller.course.update({ id, descriptionInstructions: { finish: { kind: "14.2" } }, baseVersion: v0 }));
+    expect(conflict).toMatchObject({ kind: "course", id, version: v1 });
+    expect((await caller.course.detail({ id })).descriptionInstructions).toEqual(instructions);
+    // null clears the column (undo of a first edit).
+    await caller.course.update({ id, descriptionInstructions: null, baseVersion: v1 });
+    expect((await caller.course.detail({ id })).descriptionInstructions).toBeNull();
+  });
+
   it("keeps separate tokens: a control move leaves its courses' tokens, a course edit leaves the controls'", async () => {
     const { id } = await caller.course.create({ name: "Tokens", controlIds: [31, 33] });
     const course0 = (await courseRow(id)).version;

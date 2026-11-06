@@ -1,13 +1,24 @@
 /**
  * Course mode's inspector sections (docs/course-editor.md §4): the course
- * (create, clone, visit order) with its sequence — per-leg metres, ↑ / ↓,
+ * (create, clone, visit order, description-sheet instructions) with its sequence — per-leg metres, ↑ / ↓,
  * drag-reorder, remove, inline code edit — and the selection's properties.
  * Presentational: every write is the page's handler.
  */
 
 import { useState } from "react";
 import { useTranslation } from "react-i18next";
+import { iofSymbolName } from "@oxygen/shared";
 import type { DisplayRow } from "../../../lib/editor/sequence";
+import { FINISH_OPTIONS, SPECIAL_OPTIONS } from "../../../lib/control-description-options";
+import {
+  addSpecial,
+  DEFAULT_FINISH_KIND,
+  parseLengthM,
+  removeSpecial,
+  setFinish,
+  updateSpecial,
+  type Instructions,
+} from "../../../lib/editor/instructions";
 
 export interface CourseSectionProps {
   course: { id: number; name: string; orderMode: "ordered" | "free_order" } | null;
@@ -25,6 +36,10 @@ export interface CourseSectionProps {
   onSelectRow: (id: number) => void;
   selectedControlId: number | null;
   radioIds: ReadonlySet<number>;
+  /** The course's description instructions as the sheet prints them (specials anchored off the course left out). */
+  instructions: Instructions;
+  /** One gesture's next value: one `course.update { descriptionInstructions }`, one undo entry (§4). */
+  onInstructions: (next: Instructions) => void;
 }
 
 export function CourseSection(p: CourseSectionProps) {
@@ -162,6 +177,7 @@ export function CourseSection(p: CourseSectionProps) {
             </select>
           </label>
           {!ordered && <p className="px-2.5 text-[10px] text-slate-400 leading-snug" data-testid="editor-free-order-hint">{t("editor.freeOrderHint")}</p>}
+          <InstructionsBlock rows={p.rows} ordered={ordered} instructions={p.instructions} onChange={p.onInstructions} />
           <div className="px-2.5 py-1.5 border-t border-slate-100 flex gap-1.5 items-center">
             {cloneName !== null ? (
               <>
@@ -192,6 +208,123 @@ export function CourseSection(p: CourseSectionProps) {
         </>
       )}
     </div>
+  );
+}
+
+/**
+ * A metres field that writes on blur / Enter when its value changed; blank = unset. Keyed on the stored
+ * value by the caller, so a reload (undo, another client) shows the new one.
+ */
+function LengthInput({ value, onCommit, testId, label, placeholder }: {
+  value: number | undefined; onCommit: (m: number | null) => void; testId: string; label: string; placeholder?: string;
+}) {
+  const commit = (text: string) => {
+    const next = parseLengthM(text);
+    if (next !== (value ?? null)) onCommit(next);
+  };
+  return (
+    <input
+      type="text"
+      inputMode="numeric"
+      data-testid={testId}
+      aria-label={label}
+      title={label}
+      placeholder={placeholder}
+      defaultValue={value ?? ""}
+      onBlur={(e) => commit(e.target.value)}
+      onKeyDown={(e) => { if (e.key === "Enter") e.currentTarget.blur(); }}
+      className="w-14 px-1 py-0.5 border border-slate-200 rounded bg-white text-xs tabular-nums"
+    />
+  );
+}
+
+/**
+ * The course's description-sheet instructions (§4): the finish row's variant (14.1–14.3) and length, and
+ * the special-instruction rows (13.x) after the start or after a control. Each change is the page's one write.
+ */
+function InstructionsBlock({ rows, ordered, instructions, onChange }: {
+  rows: DisplayRow[]; ordered: boolean; instructions: Instructions; onChange: (next: Instructions) => void;
+}) {
+  const { t, i18n } = useTranslation("editor");
+  const symbol = (key: string) => iofSymbolName(key, i18n.language);
+  // Anchors: after the start, or after a control (a control visited twice anchors after every visit, as the sheet does).
+  const anchors: { id: number; label: string }[] = [];
+  for (const r of rows) {
+    if (r.kind === "control" && !anchors.some((a) => a.id === r.id)) anchors.push({ id: r.id, label: ordered ? `${r.seqIndex + 1} · ${r.code}` : r.code });
+  }
+  const finish = instructions?.finish;
+  const specials = instructions?.specials ?? [];
+  const select = "min-w-0 px-1 py-0.5 border border-slate-200 rounded bg-white text-xs";
+  // Collapsed by default (a summary line), so the sequence above keeps the inspector's height.
+  return (
+    <details className="group/instr px-2.5 py-1 border-t border-slate-100 text-[11px] text-slate-500" data-testid="editor-description-instructions">
+      <summary className="cursor-pointer select-none flex items-center gap-1.5 list-none [&::-webkit-details-marker]:hidden" title={t("instructionsHint")}
+        data-testid="editor-instructions-toggle">
+        <span className="text-slate-400 transition-transform group-open/instr:rotate-90">▸</span>
+        <span>{t("instructions")}</span>
+        <span className="ml-auto text-slate-400 tabular-nums" data-testid="editor-instructions-summary">
+          {finish?.kind ?? DEFAULT_FINISH_KIND}{specials.length > 0 ? ` · ${t("specialCount", { count: specials.length })}` : ""}
+        </span>
+      </summary>
+      <div className="space-y-1 pt-1">
+        <div className="flex items-center gap-1.5">
+          <span className="w-12 shrink-0">{t("finishVariant")}</span>
+          <select
+            data-testid="editor-finish-kind"
+            value={finish?.kind ?? DEFAULT_FINISH_KIND}
+            onChange={(e) => onChange(setFinish(instructions, { kind: e.target.value }))}
+            className={`flex-1 ${select}`}
+          >
+            {FINISH_OPTIONS.map((o) => <option key={o.iof} value={o.iof}>{o.iof} {symbol(o.iof)}</option>)}
+          </select>
+          <LengthInput
+            key={`finish:${finish?.lengthM ?? ""}`}
+            testId="editor-finish-length"
+            label={t("finishLength")}
+            placeholder={t("lengthMeasured")}
+            value={finish?.lengthM}
+            onCommit={(m) => onChange(setFinish(instructions, { lengthM: m }))}
+          />
+        </div>
+        {specials.map((s, i) => (
+          <div key={i} className="flex items-center gap-1.5" data-testid="editor-special-row" data-index={i} data-kind={s.kind} data-after={s.afterControlId ?? ""}>
+            <select
+              data-testid="editor-special-after"
+              aria-label={t("specialAfter")}
+              title={t("specialAfter")}
+              value={s.afterControlId ?? ""}
+              onChange={(e) => onChange(updateSpecial(instructions, i, { afterControlId: e.target.value === "" ? null : Number(e.target.value) }))}
+              className={`w-16 shrink-0 ${select}`}
+            >
+              <option value="">{t("specialAfterStart")}</option>
+              {anchors.map((a) => <option key={a.id} value={a.id}>{a.label}</option>)}
+            </select>
+            <select
+              data-testid="editor-special-kind"
+              aria-label={t("specialKind")}
+              value={s.kind}
+              onChange={(e) => onChange(updateSpecial(instructions, i, { kind: e.target.value }))}
+              className={`flex-1 ${select}`}
+            >
+              {SPECIAL_OPTIONS.map((o) => <option key={o.iof} value={o.iof}>{o.iof} {symbol(o.iof)}</option>)}
+            </select>
+            <LengthInput
+              key={`special:${i}:${s.lengthM ?? ""}`}
+              testId="editor-special-length"
+              label={t("specialLength")}
+              value={s.lengthM}
+              onCommit={(m) => onChange(updateSpecial(instructions, i, { lengthM: m }))}
+            />
+            <button type="button" data-testid="editor-special-remove" title={t("removeSpecial")} aria-label={t("removeSpecial")}
+              onClick={() => onChange(removeSpecial(instructions, i))} className="px-0.5 text-red-500 cursor-pointer">✕</button>
+          </div>
+        ))}
+        <button type="button" data-testid="editor-add-special" onClick={() => onChange(addSpecial(instructions, null))}
+          className="text-purple-700 hover:underline cursor-pointer">
+          + {t("addSpecial")}
+        </button>
+      </div>
+    </details>
   );
 }
 
