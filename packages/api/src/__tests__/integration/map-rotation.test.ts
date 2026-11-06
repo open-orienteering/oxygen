@@ -16,6 +16,7 @@ import { makeCaller } from "../helpers/caller.js";
 import { parseOcadMapMetadata } from "../../event-map.js";
 import { loadEventCrs } from "../../event-crs.js";
 import { mapMmToWgs84 } from "../../map-projection.js";
+import { refreshMapFileRenderKey } from "../../map-render-cache.js";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const FIXTURE = resolve(__dirname, "../../../../../e2e/test.ocd");
@@ -52,10 +53,18 @@ describe("course.setMapRotation", () => {
       },
     });
     // Unique stack settings so GC of this event's old key is not blocked
-    // by other suites that share the same OCAD blob at rotation 0.
-    await caller.course.setMapColorStack({
-      overrides: { above: [313131] },
+    // by other suites that share the same OCAD blob at rotation 0. The
+    // colour columns have no procedure since E4a; the key is still
+    // written for the v0.5.0 rollback (docs/map-storage.md §4.6).
+    const mapRow = await ctx.db.mapFile.findFirstOrThrow({
+      where: { eventId: ctx.eventId },
+      select: { id: true },
     });
+    await ctx.db.mapFile.update({
+      where: { id: mapRow.id },
+      data: { colorOverrides: { above: [313131] } },
+    });
+    await refreshMapFileRenderKey(ctx.db, mapRow.id);
     // Seed a fake cached tile under the pre-rotation render key so we can
     // assert GC drops it when rotation changes the key.
     const beforeMeta = await caller.course.mapMetadata();

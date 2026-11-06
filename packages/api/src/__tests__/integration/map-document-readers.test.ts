@@ -90,7 +90,9 @@ describe("course.mapMetadata", () => {
     expect(meta).not.toBeNull();
     expect(meta!.documentHash).toBe(documentHash);
     expect(meta!.scale).toBe((await legacyCrs()).scale);
-    expect(meta!.resolvedBy).toBe("scale");
+    // The colour-stack fields went with the raster (E4a).
+    expect(meta).not.toHaveProperty("resolvedBy");
+    expect(meta).not.toHaveProperty("colorProfile");
   });
 
   it("does not need a render key", async () => {

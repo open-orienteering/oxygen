@@ -15,12 +15,7 @@ import {
   projectClubMapRow,
 } from "../club-map-library.js";
 import { computeRenderKey, hashMapFileData } from "../map-render-key.js";
-import {
-  gcOrphanTiles,
-  refreshClubMapRenderKey,
-} from "../map-render-cache.js";
-import { colorProfileSchema, colorStackOverridesSchema } from "@oxygen/shared";
-import { invalidateRenderKey } from "../map-tiles.js";
+import { gcOrphanTiles } from "../map-render-cache.js";
 import { startImportJob, type ImportJobRow } from "../map-store/jobs.js";
 
 const clubMapId = z.string().uuid();
@@ -232,48 +227,6 @@ export const clubMapRouter = router({
         throw new TRPCError({ code: "BAD_REQUEST", message: `${source.kind} files cannot be used as a club map yet` });
       }
       return createClubMap(Buffer.from(source.bytes), input.fileName?.trim() || source.fileName, input.name, ctx.user?.id ?? null, { fileHash: input.fileHash });
-    }),
-
-  setColorStack: authedProcedure
-    .input(
-      z.object({
-        id: clubMapId,
-        profile: colorProfileSchema.optional(),
-        northLinesBelow: z.boolean().optional(),
-        overrides: colorStackOverridesSchema.optional(),
-      }),
-    )
-    .mutation(async ({ input }) => {
-      const legacyIds = await legacyRowIds(input.id);
-      const series: Prisma.ClubMapUpdateInput = {};
-      const legacy: Prisma.ClubMapFileUpdateManyMutationInput = {};
-      if (input.profile !== undefined) {
-        series.colourProfile = input.profile;
-        legacy.colorProfile = input.profile;
-      }
-      if (input.northLinesBelow !== undefined) {
-        series.northLinesBelow = input.northLinesBelow;
-        legacy.northLinesBelow = input.northLinesBelow;
-      }
-      if (input.overrides !== undefined) {
-        series.colourOverrides = input.overrides as Prisma.InputJsonValue;
-        legacy.colorOverrides = input.overrides as Prisma.InputJsonValue;
-      }
-      if (Object.keys(series).length > 0) {
-        await prisma().clubMap.update({ where: { id: input.id }, data: series });
-        await prisma().clubMapFile.updateMany({ where: { id: { in: legacyIds } }, data: legacy });
-      }
-      // Write-through: the legacy rows' render keys drive the tile cache.
-      let renderKey: string | null = null;
-      for (const id of legacyIds) {
-        const before = await prisma().clubMapFile.findUnique({ where: { id }, select: { renderKey: true } });
-        const key = await refreshClubMapRenderKey(prisma(), id);
-        if (before?.renderKey && before.renderKey !== key) invalidateRenderKey(before.renderKey);
-        invalidateRenderKey(key);
-        renderKey ??= key;
-      }
-      await gcOrphanTiles(prisma());
-      return { success: true as const, renderKey };
     }),
 
   /**
