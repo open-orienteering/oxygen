@@ -85,7 +85,7 @@ test.describe("Map control visibility with active selection", () => {
 
     // Baseline (no selection): the overlay draws code labels for the
     // imported controls.
-    await expect(mapPanel.getByTestId("map-viewer")).toHaveAttribute("data-map-pipeline", "vector", { timeout: 30000 });
+    await expect(mapPanel.getByTestId("map-viewer").getByTestId("map-vector-layer")).toBeAttached({ timeout: 30000 });
     await expect(mapPanel.getByTestId("map-viewer")).toHaveAttribute("data-course-layer", "gl");
     const overlayLabels = courseLabels(mapPanel);
     await expectLabelShown(overlayLabels.first(), 30000);

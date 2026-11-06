@@ -579,6 +579,88 @@ test.describe("Course mode descriptions (§4)", () => {
     await expect(sheet.locator('[data-testid="desc-row-length"]').last()).toHaveText(/^\d+ m$/);
     await expect(sheet.locator('[data-testid="desc-thick-rule"]').first()).toBeAttached();
   });
+
+  test("description instructions: the finish variant and a special row from the inspector reach the sheet, Layout's block and the print rows; undo; reload", async ({ page }) => {
+    await openEditor(page);
+    const name = await newCourse(page, "E3b");
+    const a = await appendClear(page);
+    await appendClear(page, [a]);
+    await expect(controlRows(page)).toHaveCount(2, { timeout: 15000 });
+    const courseSeq = Number(await page.getByTestId("editor-course-picker").inputValue());
+    const stored = async () =>
+      (await trpcCall<{ id: number; descriptionInstructions: { specials?: { afterControlId: number | null; kind: string; lengthM?: number }[]; finish?: { kind: string; lengthM?: number } } | null }[]>("course.list", undefined, false))
+        .find((c) => c.id === courseSeq)!.descriptionInstructions;
+
+    const sheet = page.getByTestId("description-sheet");
+    await expect(sheet.locator('[data-testid="desc-course-name"]')).toHaveText(name, { timeout: 20000 });
+    // Special and finish rows are drawn across the sheet (MapViewer's wide rows); the finish row is the last.
+    const wide = sheet.locator('svg[viewBox="-800 -100 1600 200"]');
+    const lengths = sheet.locator('[data-testid="desc-row-length"]');
+    await expect(wide).toHaveCount(1);
+    const defaultFinish = await wide.last().innerHTML();
+    const lengths0 = await lengths.count();
+    // The inspector's block is collapsed to a summary line (the variant, the instruction count) until opened.
+    const block = page.getByTestId("editor-description-instructions");
+    await expect(block.getByTestId("editor-instructions-summary")).toHaveText("14.3");
+    await block.getByTestId("editor-instructions-toggle").click();
+    await expect(block.getByTestId("editor-finish-kind")).toBeVisible();
+    await expect(block.getByTestId("editor-finish-kind")).toHaveValue("14.3");
+
+    // The finish variant: one course.update with the course's token; the sheet's finish row follows.
+    let saved = waitForTrpc(page, "course.update");
+    await block.getByTestId("editor-finish-kind").selectOption("14.1");
+    await saved;
+    await expect.poll(() => wide.last().innerHTML(), { timeout: 15000 }).not.toBe(defaultFinish);
+    await expect.poll(async () => (await stored())?.finish?.kind, { timeout: 15000 }).toBe("14.1");
+
+    // A special row (after the start, 13.1), then its length: a wide row with "60 m" before the controls.
+    saved = waitForTrpc(page, "course.update");
+    await block.getByTestId("editor-add-special").click();
+    await saved;
+    await expect(wide).toHaveCount(2, { timeout: 15000 });
+    await expect(block.getByTestId("editor-special-row")).toHaveCount(1);
+    saved = waitForTrpc(page, "course.update");
+    await block.getByTestId("editor-special-length").fill("60");
+    await block.getByTestId("editor-special-length").press("Enter");
+    await saved;
+    await expect(lengths).toHaveCount(lengths0 + 1, { timeout: 15000 });
+    await expect(lengths.first()).toHaveText("60 m");
+
+    // Anchored after control a (its public id, the punch code): Layout mode's block and the print read the same rows.
+    saved = waitForTrpc(page, "course.update");
+    await block.getByTestId("editor-special-after").selectOption(a);
+    await saved;
+    await expect.poll(async () => (await stored())?.specials, { timeout: 15000 }).toEqual([{ afterControlId: Number(a), kind: "13.1", lengthM: 60 }]);
+    const template = await probeTemplate("E3b sheet");
+    try {
+      type Row = { kind: string; code: string; symbolKey?: string; lengthM?: number };
+      const r = await trpcCall<{ block: { rows: Row[] } }>("courseMap.resolveSheet", { templateSeq: template.seq, courseSeq }, false);
+      const rows = r.block.rows;
+      const at = rows.findIndex((row) => row.kind === "control" && row.code === a);
+      expect(at).toBeGreaterThan(0);
+      expect(rows[at + 1]).toMatchObject({ kind: "special", symbolKey: "13.1", lengthM: 60 });
+      expect(rows.at(-1)).toMatchObject({ kind: "finish", symbolKey: "14.1" });
+    } finally {
+      await cleanup("mapTemplate.delete", { id: template.seq });
+    }
+
+    // Ctrl+Z: one entry back — the special is after the start again; the variant stays.
+    saved = waitForTrpc(page, "course.update");
+    await page.keyboard.press("Control+z");
+    await saved;
+    await expect.poll(async () => (await stored())?.specials?.[0]?.afterControlId, { timeout: 15000 }).toBeNull();
+    await expect(block.getByTestId("editor-special-after")).toHaveValue("");
+
+    // Persisted over a reload.
+    await page.goto(`/${nameIdOf(page)}/course-editor?course=${courseSeq}`);
+    await editorReady(page);
+    await expect(page.getByTestId("editor-instructions-summary")).toHaveText(/^14\.1 · 1 (instruction|anvisning)$/, { timeout: 15000 });
+    await page.getByTestId("editor-instructions-toggle").click();
+    await expect(page.getByTestId("editor-finish-kind")).toHaveValue("14.1");
+    await expect(page.getByTestId("editor-special-row")).toHaveCount(1);
+    await expect(page.getByTestId("editor-special-length")).toHaveValue("60");
+    await expect(page.getByTestId("description-sheet").locator('[data-testid="desc-row-length"]').first()).toHaveText("60 m", { timeout: 15000 });
+  });
 });
 
 // docs/course-layer.md §3.4: automatic cuts, drawn by the GL course layer (the `course-layer` mirror), D10.

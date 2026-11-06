@@ -1,8 +1,7 @@
 /**
  * The vector base map: a map document drawn by the WebGL2 arena path
  * (docs/map-rendering.md §5.2) on a canvas the size of the viewer's
- * container. The alternative to `TileLayer` inside `MapViewer`
- * (§5.4 "Layer"). With `course` set it also draws the course layer
+ * container: `MapViewer`'s only base layer (§5.4 "Layer"). With `course` set it also draws the course layer
  * through the engine's dynamic bucket (§5.2 "Dynamic bucket", §5.4
  * "Overlay"); the React SVG on top keeps the UI layer.
  *
@@ -17,7 +16,7 @@
  * No WebGL2, or a context lost a second time, shows the layer's "cannot
  * draw the map" message (`data-status="webgl"`); the first lost context
  * remounts the canvas (a fresh context) and loads again (§5.4 "Layer").
- * There is no tile fallback since E3.
+ * There is no other renderer to fall back to.
  */
 
 import { useCallback, useEffect, useRef, useState } from "react";

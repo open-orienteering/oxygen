@@ -74,31 +74,6 @@ export default defineConfig({
             },
           },
           {
-            // Map tiles — immutable for a given upload, so CacheFirst.
-            // The `?v=<upload timestamp>` in every tile URL means a
-            // re-upload lands on fresh cache keys rather than needing
-            // invalidation, and the trailing slash keeps
-            // /api/map-tile-progress (which must stay live) out.
-            // Serving these from the SW takes IAP, Cloud Run and Cloud
-            // SQL out of the loop entirely on revisits.
-            urlPattern: (ctx: { sameOrigin: boolean; url: URL }) =>
-              ctx.sameOrigin && ctx.url.pathname.startsWith("/api/map-tile/"),
-            handler: "CacheFirst",
-            options: {
-              cacheName: "map-tiles",
-              expiration: {
-                maxEntries: 2000,
-                maxAgeSeconds: 7 * 24 * 60 * 60, // matches Cache-Control
-                purgeOnQuotaError: true,
-              },
-              cacheableResponse: {
-                // 200 only: a 401/403/5xx must not be cached as a tile,
-                // or the retry book never gets a chance to recover it.
-                statuses: [200],
-              },
-            },
-          },
-          {
             // Map documents (docs/map-storage.md §7.1, 07 §9.1) — content
             // addressed and `immutable`, so CacheFirst: a map seen once
             // opens offline. Documents only (the regex is

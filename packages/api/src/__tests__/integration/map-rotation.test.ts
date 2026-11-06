@@ -68,8 +68,8 @@ describe("course.setMapRotation", () => {
     // Seed a fake cached tile under the pre-rotation render key so we can
     // assert GC drops it when rotation changes the key.
     const beforeMeta = await caller.course.mapMetadata();
-    expect(beforeMeta?.renderKey).toBeTruthy();
-    const oldRenderKey = beforeMeta!.renderKey!;
+    const oldRenderKey = (await ctx.db.mapFile.findUniqueOrThrow({ where: { id: mapRow.id }, select: { renderKey: true } })).renderKey!;
+    expect(oldRenderKey).toBeTruthy();
     await ctx.db.mapTile.create({
       data: {
         renderKey: oldRenderKey,
@@ -116,7 +116,9 @@ describe("course.setMapRotation", () => {
     const after = await caller.course.mapMetadata();
     expect(after!.rotationCorrection).toBe(11);
     expect(after!.northOffset).toBeCloseTo(expected.northOffset!, 6);
-    expect(after!.renderKey).not.toBe(oldRenderKey);
+    // Still refreshed for the v0.5.0 rollback (docs/map-storage.md §9).
+    const afterRow = await ctx.db.mapFile.findUniqueOrThrow({ where: { id: mapRow.id }, select: { renderKey: true } });
+    expect(afterRow.renderKey).not.toBe(oldRenderKey);
 
     const tiles = await ctx.db.mapTile.count({
       where: { renderKey: oldRenderKey },

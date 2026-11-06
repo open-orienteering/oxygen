@@ -1221,8 +1221,6 @@ export const courseRouter = router({
         northOffset,
         north?.meridian?.medianTiltDeg ?? null,
       ),
-      /** The legacy tile key as the upload wrote it (v0.5.0 rollback); null on rows from before render keys. E5 drops the column. */
-      renderKey: row.renderKey,
     };
   }),
 

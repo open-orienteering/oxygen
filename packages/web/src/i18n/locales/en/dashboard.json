@@ -55,7 +55,7 @@
   "compassUnlocked": "Rotation unlocked — tap to lock north up",
   "enterFullscreen": "Fullscreen",
   "exitFullscreen": "Exit fullscreen",
-  "courseLayerUnsupported": "This map's colours are not aligned for the course layer; the course is drawn on top of the map.",
+  "courseLayerUnsupported": "This map's colours are not aligned for the course layer, so no course is drawn. Re-import the map to show it.",
   "mapImportPending": "The map is being prepared…",
   "mapImportFailed": "The map could not be prepared: {{error}}",
   "mapImportReview": "The map is imported and waiting for review.",

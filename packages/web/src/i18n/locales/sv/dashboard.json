@@ -55,7 +55,7 @@
   "compassUnlocked": "Rotation upplåst — tryck för att låsa norr uppåt",
   "enterFullscreen": "Helskärm",
   "exitFullscreen": "Lämna helskärm",
-  "courseLayerUnsupported": "Kartans färger är inte anpassade för banlagret; banan ritas ovanpå kartan.",
+  "courseLayerUnsupported": "Kartans färger är inte anpassade för banlagret, så ingen bana ritas. Importera kartan på nytt för att visa den.",
   "mapImportPending": "Kartan förbereds…",
   "mapImportFailed": "Kartan kunde inte förberedas: {{error}}",
   "mapImportReview": "Kartan är importerad och väntar på granskning.",

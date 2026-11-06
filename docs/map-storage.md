@@ -416,12 +416,12 @@ no cuts, no obstacles, no north. It never falls back to an OCAD parse.
 the row's quick-access columns as stored (the pin writes them, §6.4 —
 no lazy OCAD backfill), `rotationCorrection`, `uploadedAt`,
 `documentHash` (null until the pin: the viewer's "no document" case),
-`clubMapVersionId`, the north fields above, and `renderKey` straight
-from the row (null on rows from before render keys; nothing computes it
-on read) — the upload still writes it for the v0.5.0 rollback and E5
-drops the column with it. The legacy raster's colour-stack fields
-(`colorProfile`, `colorOverrides`, `northLinesBelow`, `resolvedProfile`,
-`resolvedBy`) went with the raster in E4a, and with them
+`clubMapVersionId` and the north fields above. The legacy raster's
+fields — `renderKey` and the colour stack's `colorProfile`,
+`colorOverrides`, `northLinesBelow`, `resolvedProfile`, `resolvedBy` —
+went with the raster in E4a (their last reader, `MapViewer`'s
+`mapVersion`, went in E4b); the upload still writes `render_key` for the
+v0.5.0 rollback and E5 drops the column. With them went
 `course.setMapColorStack`, the only writer of the event row's colour
 columns after the upload; the columns are still written at upload and
 by `useClubMap` (rollback) and read by nothing.
@@ -930,6 +930,10 @@ document) `failed`.
 | Documents | same origin, `^/api/map-documents/[0-9a-f]{64}$` | CacheFirst | `map-documents` | 20 entries, 365 days, purge on quota error; 200 only |
 | Viewer fonts and text atlas | same origin, `/assets/*.ttf` and `/assets/text-atlas.*` | CacheFirst | `map-fonts` | 16 entries, 365 days; 200 only |
 
+The tile layer's `map-tiles` route (CacheFirst, 2 000 PNG tiles) went in
+E4b. Workbox cleans up only its own precaches, so the web deletes that
+Cache Storage on start (`dropLegacyCaches`, `lib/legacy-caches.ts`).
+
 The document route matches documents only, not `/thumbnail.png` or
 `/symbols/…`: the review page's per-symbol swatches would evict the
 documents from a 20-entry cache (07 §9.1 had previews share the route).
@@ -1321,6 +1325,7 @@ longer written (§6.5). E3 removed `pinnedDocumentHash` and its
 | `packages/web/src/lib/map-upload.ts` | client chunked uploader |
 | `packages/web/src/lib/map-document-cache.ts` | the viewer's document loader, `MAP_DOCUMENT_PATH_RE`, `requestPersistentStorage`, `useMapDocument` (§7.1) |
 | `packages/web/vite.config.ts` | service-worker routes `map-documents`, `map-fonts` (§7.1) |
+| `packages/web/src/lib/legacy-caches.ts` | deletes the retired `map-tiles` Cache Storage on start (§7.1) |
 | `packages/api/src/sync/snapshotMaps.ts` | checkout snapshot map part: export, `exportBlobSlice`, `fetchSnapshotBlobs`, `importSnapshotMaps` |
 | `packages/api/src/sync/lease.ts` / `routers/lease.ts` | `EventSnapshot.maps`, `LeasePeer.exportBlob`, `lease.exportBlob`, checkout `maps` counts |
 | `packages/api/src/backup.ts` | `BACKUP_TABLES`, `buildBackupScript`, `splitBackupSections` |

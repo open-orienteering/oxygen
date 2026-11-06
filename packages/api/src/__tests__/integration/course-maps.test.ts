@@ -175,19 +175,18 @@ describe("map file info and metadata", () => {
     expect(Number.isInteger(info!.id)).toBe(true);
   });
 
-  // The colour-stack fields went with the raster (E4a); the render key
-  // is the stored column, written at upload for the v0.5.0 rollback.
-  it("answers the stored render key without the colour-stack fields, consistently across calls", async () => {
-    const first = await caller.course.mapMetadata();
-    const second = await caller.course.mapMetadata();
-    expect(first).not.toBeNull();
-    for (const gone of ["colorProfile", "colorOverrides", "northLinesBelow", "resolvedProfile", "resolvedBy"]) {
-      expect(first).not.toHaveProperty(gone);
+  // The colour-stack fields and the render key went with the raster
+  // (E4a); the upload still writes the columns for the v0.5.0 rollback.
+  it("answers without the colour-stack fields or the render key, which the upload still writes", async () => {
+    const meta = await caller.course.mapMetadata();
+    expect(meta).not.toBeNull();
+    for (const gone of ["colorProfile", "colorOverrides", "northLinesBelow", "resolvedProfile", "resolvedBy", "renderKey"]) {
+      expect(meta).not.toHaveProperty(gone);
     }
-    const row = await ctx.db.mapFile.findFirstOrThrow({ where: { eventId: ctx.eventId }, orderBy: { uploadedAt: "desc" }, select: { renderKey: true } });
+    const row = await ctx.db.mapFile.findFirstOrThrow({ where: { eventId: ctx.eventId }, orderBy: { uploadedAt: "desc" }, select: { renderKey: true, fileHash: true, colorProfile: true } });
     expect(row.renderKey).toBeTruthy();
-    expect(first!.renderKey).toBe(row.renderKey);
-    expect(second!.renderKey).toBe(first!.renderKey);
+    expect(row.fileHash).toBeTruthy();
+    expect(row.colorProfile).toBe("auto");
   });
 });
 
@@ -493,6 +492,32 @@ describe("map templates and course maps", () => {
     await expect(caller.courseMap.resolveSheet({ seq: 900_001 })).rejects.toMatchObject({ code: "NOT_FOUND" });
     await expect(caller.courseMap.resolveSheet({ templateSeq: 900_001 })).rejects.toMatchObject({ code: "NOT_FOUND" });
     await expect(caller.courseMap.resolveSheet({ templateSeq: template.seq, courseSeq: 900_001 })).rejects.toMatchObject({ code: "NOT_FOUND" });
+  });
+
+  it("description instructions written by course.update reach Layout mode's block and the print rows, anchored by public id (E3b)", async () => {
+    const template = (await caller.mapTemplate.list())[0];
+    const { version } = await caller.course.detail({ id: courseSeq });
+    // After control 31 (its punch code; its seq differs), and a finish variant.
+    await caller.course.update({
+      id: courseSeq,
+      descriptionInstructions: { specials: [{ afterControlId: 31, kind: "13.2", lengthM: 120 }], finish: { kind: "14.1", lengthM: 80 } },
+      baseVersion: version,
+    });
+    try {
+      const expected = [
+        { kind: "start" },
+        { kind: "control", code: "31" },
+        { kind: "special", symbolKey: "13.2", lengthM: 120 },
+        { kind: "control", code: "32" },
+        { kind: "finish", symbolKey: "14.1", lengthM: 80 },
+      ];
+      const r = await caller.courseMap.resolveSheet({ templateSeq: template.seq, courseSeq });
+      expect(r.block!.rows).toMatchObject(expected);
+      const printed = (await caller.courseMap.list()).find((m) => m.courseId === courseSeq)!;
+      expect(printed.descriptionRows).toMatchObject(expected);
+    } finally {
+      await caller.course.update({ id: courseSeq, descriptionInstructions: null });
+    }
   });
 
   it("round-trips templates through the club library", async () => {

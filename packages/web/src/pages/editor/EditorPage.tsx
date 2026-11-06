@@ -5,7 +5,7 @@
  * contextual action bar, inspector, status bar (§2).
  *
  * - Selection is the legacy model (`lib/editor/state.ts`); the viewer
- *   hit-tests the course layer's symbolised shapes (`sharedHitTest`, §5).
+ *   hit-tests the course layer's symbolised shapes (§5).
  * - Every gesture is one write and one undo entry (`UndoStack`, 50).
  * - Sequence edits are `course.setStructure` with the course's token; the
  *   first save makes start and finish explicit (course-layer.md §6.2).
@@ -54,6 +54,7 @@ import { snapIndexForDocument } from "../../lib/editor/snap";
 import { deleteVertex, vertexRule, type Vertex } from "../../lib/editor/geometry-edit";
 import { legLengthLabel, legLengthM } from "../../lib/editor/leg-length";
 import { EditorConflict, EditorWrites, type EditorClient } from "../../lib/editor/write-client";
+import { instructionsOnCourse, type Instructions } from "../../lib/editor/instructions";
 import { areaTool, editorReducer, escapeHasWork, initialEditorState, type EditorTool } from "../../lib/editor/state";
 import { appendSite, insertSite, moveVisit, removeSite, removeVisit, setLegGaps, setNumberHidden, setRole, type KindOf } from "../../lib/editor/structure-edit";
 import { displaySequence, effectiveEnds, explicitStructure, insertIndexForLeg, kindOfSites, type SiteRow } from "../../lib/editor/sequence";
@@ -219,7 +220,6 @@ export function EditorPage() {
   const invalidate = useCallback(() => {
     void utils.course.controlCoordinates.invalidate();
     void utils.control.list.invalidate();
-    void utils.course.courseGeometries.invalidate();
     void utils.course.list.invalidate();
     void utils.course.detail.invalidate();
     // Course objects are cached until reload in MapPanel: every write invalidates them (course-layer.md §8.3).
@@ -329,6 +329,58 @@ export function EditorPage() {
     record(() => writeStructure(course.id, prev), redo);
     return true;
   }, [currentStructure, baseStructure, writeStructure, run, record]);
+
+  /**
+   * Description instructions (§4): the value this client wrote last, until `course.list` has it (a second
+   * edit right after the first builds on the first); `version` is null while the write is in flight.
+   */
+  const [localInstructions, setLocalInstructions] = useState<{ courseId: number; value: Instructions; version: string | null } | null>(null);
+  const instructionsBase: Instructions =
+    localInstructions && selectedCourse && localInstructions.courseId === selectedCourse.id &&
+    (localInstructions.version === null || BigInt(selectedCourse.version) < BigInt(localInstructions.version))
+      ? localInstructions.value
+      : selectedCourse?.descriptionInstructions ?? null;
+  const shownInstructions = useMemo(() => instructionsOnCourse(instructionsBase, sequenceIds), [instructionsBase, sequenceIds]);
+  /**
+   * One instructions write — a gesture, its undo or its redo: the value shows at once and until `course.list`
+   * carries it; refused, it is dropped (the refetch shows the stored one). Layout mode's block reads the
+   * course's value through `resolveSheet`, so that is refetched.
+   */
+  const writeInstructions = useCallback(async (courseId: number, value: Instructions) => {
+    setLocalInstructions({ courseId, value, version: null });
+    const mine = (l: typeof localInstructions) => !!l && l.courseId === courseId && l.value === value;
+    try {
+      const res = await writes.setInstructions(courseId, value);
+      setLocalInstructions((l) => (mine(l) ? { ...l!, version: res.version } : l));
+      void utils.courseMap.resolveSheet.invalidate();
+      return res;
+    } catch (e) {
+      setLocalInstructions((l) => (mine(l) ? null : l));
+      throw e;
+    }
+  }, [writes, utils]);
+  /**
+   * Gestures queue behind each other (§3: a write sends its predecessor's token); a gesture queued behind
+   * one that was refused is dropped with it, since it was built on the refused value.
+   */
+  const instructionsQueue = useRef<Promise<boolean>>(Promise.resolve(true));
+  // `next` was built from this render's `shownInstructions` (the block's prop), so that is the value it replaces.
+  const handleInstructions = useCallback((next: Instructions) => {
+    const course = selectedCourse;
+    const prev = shownInstructions;
+    if (!course || JSON.stringify(prev) === JSON.stringify(next)) return;
+    setLocalInstructions({ courseId: course.id, value: next, version: null });
+    const redo = () => writeInstructions(course.id, next);
+    instructionsQueue.current = instructionsQueue.current.then(async (predecessorOk) => {
+      if (!predecessorOk) {
+        setLocalInstructions((l) => (l && l.value === next ? null : l));
+        return true;
+      }
+      if ((await run(redo)) === undefined) return false;
+      record(() => writeInstructions(course.id, prev), redo);
+      return true;
+    });
+  }, [selectedCourse, shownInstructions, writeInstructions, run, record]);
 
   /**
    * Create a site at `pt` — a control (code from the club allocation; SRR codes get radio) or a code-less
@@ -1096,7 +1148,6 @@ export function EditorPage() {
     onLabelMoveEnd: handleLabelMoveEnd,
     onSelect: handleSelect,
     onDismiss: handleDismiss,
-    sharedHitTest: true,
     // A phone docks the action bar in the bottom sheet's peek row (§10).
     actionLayout: isMobile ? "host" : "bar",
     fix,
@@ -1315,7 +1366,6 @@ export function EditorPage() {
   const setCuts = trpc.course.setOverprintCuts.useMutation({
     onSuccess: async () => {
       await cutsQuery.refetch();
-      await utils.course.geometry.invalidate();
       await utils.course.list.invalidate();
     },
   });
@@ -1467,6 +1517,8 @@ export function EditorPage() {
       onSelectRow={(id) => dispatch({ type: "select", id })}
       selectedControlId={state.selectedControlId}
       radioIds={radioIds}
+      instructions={shownInstructions}
+      onInstructions={handleInstructions}
     />
   );
   const selectionSection = state.multi.length > 1 ? (

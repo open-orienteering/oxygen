@@ -413,7 +413,7 @@ describe("club map library", () => {
 
     const meta = await caller.course.mapMetadata();
     expect(meta).not.toBeNull();
-    expect(meta).toMatchObject({ documentHash: null, bounds: null, scale: null, meridianStalenessDeg: null, renderKey: null });
+    expect(meta).toMatchObject({ documentHash: null, bounds: null, scale: null, meridianStalenessDeg: null });
 
     const row = await ctx.db.mapFile.findFirstOrThrow({
       where: { eventId: ctx.eventId },

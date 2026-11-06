@@ -248,5 +248,18 @@
   "externalChange": "{{who}} changed this course at {{time}} — the sequence was reloaded.",
   "externalChangeUnknown": "This course was changed elsewhere — the sequence was reloaded.",
   "conflictMovedBy": "Moved by {{who}} at {{time}} to x {{x}} mm, y {{y}} mm.",
-  "geometryHint": "Double-click an edge to add a point; click a point and press Delete to remove it. Alt-drag a point to curve it, Alt-click to make it a corner again; Alt on a handle bends one side only. While drawing, Alt-click places a smooth point."
+  "geometryHint": "Double-click an edge to add a point; click a point and press Delete to remove it. Alt-drag a point to curve it, Alt-click to make it a corner again; Alt on a handle bends one side only. While drawing, Alt-click places a smooth point.",
+  "instructions": "Description sheet",
+  "instructionsHint": "The finish row's variant and the instruction rows printed between controls.",
+  "finishVariant": "Finish",
+  "finishLength": "Length to finish (m)",
+  "lengthMeasured": "measured",
+  "specialAfter": "After",
+  "specialAfterStart": "Start",
+  "specialKind": "Instruction",
+  "specialLength": "Length (m)",
+  "addSpecial": "Add instruction",
+  "removeSpecial": "Remove instruction",
+  "specialCount_one": "{{count}} instruction",
+  "specialCount_other": "{{count}} instructions"
 }

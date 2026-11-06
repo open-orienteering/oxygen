@@ -1,8 +1,8 @@
 /**
- * Version tokens for the legacy editors (docs/course-layer.md §7 "Legacy
- * editor"): `CourseEditorPage` and the Courses page send `baseVersion` from
- * the rows they loaded, and on a version `CONFLICT` invalidate and show
- * "changed elsewhere — reloaded".
+ * Version tokens for row writes (docs/course-layer.md §7): the Courses page,
+ * Layout mode and the editor's write client send `baseVersion` from the rows
+ * they loaded, and on a version `CONFLICT` invalidate and show "changed
+ * elsewhere — reloaded".
  *
  * The book holds the newest token seen per row — from the `course.list` /
  * `control.list` refetches and from each mutation's result — so a write

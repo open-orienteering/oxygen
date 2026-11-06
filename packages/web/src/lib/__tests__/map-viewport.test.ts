@@ -1,6 +1,5 @@
 import { describe, it, expect } from "vitest";
 import type { mapGeo } from "@oxygen/shared";
-import { latlngToPixel, metersPerPixel, pixelToLatlng, buildAffineTransform } from "../geo-utils";
 import { rotatedBoundingBox } from "../map-rotation";
 import { project, viewMatrix } from "../../map-gl/view";
 import {
@@ -12,7 +11,6 @@ import {
   glView,
   innerToGeo,
   innerToMm,
-  mercator,
   mercatorEquivalentZoom,
   metresPerPx,
   mmToGeo,
@@ -39,66 +37,14 @@ const FRAME: mapGeo.PaperFrame = {
 };
 
 const paper = (centreX: number, centreY: number, pxPerMm: number): PaperViewport => ({
-  kind: "paper", centreX, centreY, pxPerUm: pxPerMm / 1000,
+  centreX, centreY, pxPerUm: pxPerMm / 1000,
 });
 
-const ctx = (w: number, h: number, frame: mapGeo.PaperFrame | null = FRAME): ViewportContext => ({ w, h, affine: null, frame });
+const ctx = (w: number, h: number, frame: mapGeo.PaperFrame | null = FRAME): ViewportContext => ({ w, h, frame });
 
-describe("mercator view (the tile layer's, wrapped unchanged)", () => {
-  const vp = mercator({ centerLat: 59.3, centerLng: 18.1, zoom: 15.4 });
-  const c = ctx(800, 600, null);
-
-  it("projects like latlngToPixel / pixelToLatlng", () => {
-    const p = geoToInner(vp, c, 59.301, 18.102)!;
-    const ref = latlngToPixel(59.301, 18.102, vp, 800, 600);
-    expect(p).toEqual({ x: ref.px, y: ref.py });
-    expect(innerToGeo(vp, c, 123, 456)).toEqual(pixelToLatlng(123, 456, vp, 800, 600));
-  });
-
-  it("wheel zoom keeps the anchor pixel's position (the pre-B4 formula)", () => {
-    const anchor = pixelToLatlng(200, 150, vp, 800, 600);
-    const z = zoomAt(vp, c, 200, 150, 0.15);
-    expect(z.kind).toBe("mercator");
-    if (z.kind !== "mercator") return;
-    expect(z.zoom).toBeCloseTo(15.55, 12);
-    const after = latlngToPixel(anchor.lat, anchor.lng, z, 800, 600);
-    expect(after.px).toBeCloseTo(200, 6);
-    expect(after.py).toBeCloseTo(150, 6);
-  });
-
-  it("clamps zoom to [1, 22]", () => {
-    const z = zoomAt(vp, c, 400, 300, 40);
-    expect(z.kind === "mercator" && z.zoom).toBe(22);
-  });
-
-  it("pans so content follows the pointer", () => {
-    const before = geoToInner(vp, c, 59.301, 18.102)!;
-    const after = geoToInner(panBy(vp, c, 30, -20), c, 59.301, 18.102)!;
-    expect(after.x - before.x).toBeCloseTo(30, 6);
-    expect(after.y - before.y).toBeCloseTo(-20, 6);
-  });
-
-  it("maps mm through the affine only", () => {
-    expect(mmToInner(vp, c, 10, 10)).toBeNull();
-    const affine = buildAffineTransform([
-      { mapX: 0, mapY: 0, lat: 59.29, lng: 18.09 },
-      { mapX: 100, mapY: 0, lat: 59.29, lng: 18.11 },
-      { mapX: 0, mapY: 100, lat: 59.31, lng: 18.09 },
-    ]);
-    const ca = { ...c, affine };
-    const p = mmToInner(vp, ca, 40, 60)!;
-    const back = innerToMm(vp, ca, p.x, p.y)!;
-    expect(back.x).toBeCloseTo(40, 6);
-    expect(back.y).toBeCloseTo(60, 6);
-  });
-
-  it("symbol scale and metres per px match the pre-B4 formulas", () => {
-    expect(pxPerMapMm(vp, 10000)).toBeCloseTo(10 / metersPerPixel(59.3, 15.4), 12);
-    expect(pxPerMapMm(vp, null)).toBeNull();
-    expect(metresPerPx(vp, 10000, 60)).toBe(metersPerPixel(60, 15.4));
-    expect(mercatorEquivalentZoom(vp, 10000, 59.3)).toBe(15.4);
-  });
-});
+/** Web Mercator ground metres per CSS px at a zoom (the slippy-map formula `data-zoom` is defined by). */
+const mercatorMetresPerPx = (lat: number, zoom: number) =>
+  (40075016.686 * Math.cos((lat * Math.PI) / 180)) / (256 * 2 ** zoom);
 
 describe("paper view", () => {
   const vp = paper(150_000, 80_000, 4);
@@ -146,7 +92,7 @@ describe("paper view", () => {
     const p = mmToInner(z, c, anchorMm.x, anchorMm.y)!;
     expect(p.x).toBeCloseTo(250, 9);
     expect(p.y).toBeCloseTo(100, 9);
-    expect(z.kind === "paper" && z.pxPerUm).toBeCloseTo(vp.pxPerUm * 2 ** 0.15, 12);
+    expect(z.pxPerUm).toBeCloseTo(vp.pxPerUm * 2 ** 0.15, 12);
 
     const pinch = zoomAt(vp, c, 250, 100, Math.log2(1.5), 300, 140);
     const q = mmToInner(pinch, c, anchorMm.x, anchorMm.y)!;
@@ -156,15 +102,15 @@ describe("paper view", () => {
 
   it("clamps zoom", () => {
     const z = zoomAt(vp, c, 400, 300, 40);
-    expect(z.kind === "paper" && z.pxPerUm).toBe(PAPER_MAX_PX_PER_MM / 1000);
+    expect(z.pxPerUm).toBe(PAPER_MAX_PX_PER_MM / 1000);
   });
 
   it("pans so content follows the pointer", () => {
     const before = mmToInner(vp, c, 140, 70)!;
-    const after = mmToInner(panBy(vp, c, 30, -20), c, 140, 70)!;
+    const after = mmToInner(panBy(vp, 30, -20), c, 140, 70)!;
     expect(after.x - before.x).toBeCloseTo(30, 9);
     expect(after.y - before.y).toBeCloseTo(-20, 9);
-    expect(centreShiftPx(vp, panBy(vp, c, 30, -40), c)).toBeCloseTo(50, 9);
+    expect(centreShiftPx(vp, panBy(vp, 30, -40))).toBeCloseTo(50, 9);
   });
 
   it("centres on a GPS fix", () => {
@@ -186,32 +132,27 @@ describe("paper view", () => {
   });
 
   it("scale: px per mm, metres per px, Mercator-equivalent zoom", () => {
-    expect(pxPerMapMm(vp, null)).toBeCloseTo(4, 12);
+    expect(pxPerMapMm(vp)).toBeCloseTo(4, 12);
     // 1:10 000 at 4 px/mm → 2.5 m per px.
     expect(metresPerPx(vp, 10000)).toBeCloseTo(2.5, 12);
     expect(metresPerPx(vp, null)).toBeNull();
     const z = mercatorEquivalentZoom(vp, 10000, 59.3)!;
-    expect(metersPerPixel(59.3, z)).toBeCloseTo(2.5, 9);
+    expect(mercatorMetresPerPx(59.3, z)).toBeCloseTo(2.5, 9);
     expect(mercatorEquivalentZoom(vp, 10000, null)).toBeNull();
   });
 });
 
 describe("rotation", () => {
-  it("mercator rotates by −northOffset (pre-B4)", () => {
-    expect(viewportRotationDeg("mercator", 12, 9, 0)).toBe(-12);
-    expect(viewportRotationDeg("mercator", null, null, 5)).toBe(5);
-  });
-
-  it("paper rotates by the meridian tilt only (northOffset − cutRotationDeg)", () => {
-    expect(viewportRotationDeg("paper", 12, 9, 0)).toBe(-3);
-    expect(viewportRotationDeg("paper", 12, 9, 5)).toBe(2);
-    expect(viewportRotationDeg("paper", null, null, 0)).toBe(0);
-    expect(viewportRotationDeg("paper", 12, null, 0)).toBe(0);
+  it("rotates by the meridian tilt only (northOffset − cutRotationDeg)", () => {
+    expect(viewportRotationDeg(12, 9, 0)).toBe(-3);
+    expect(viewportRotationDeg(12, 9, 5)).toBe(2);
+    expect(viewportRotationDeg(null, null, 0)).toBe(0);
+    expect(viewportRotationDeg(12, null, 0)).toBe(0);
   });
 
   it("puts a +3° tilted paper meridian vertical on screen, overlay and GL alike", () => {
     const vp = paper(100_000, 100_000, 3);
-    const rot = viewportRotationDeg("paper", 10, 7, 0);
+    const rot = viewportRotationDeg(10, 7, 0);
     const t = (3 * Math.PI) / 180;
     // Two points on a line tilted 3° clockwise from paper +Y.
     const a = { x: 100, y: 100 }, b = { x: 100 + 50 * Math.sin(t), y: 100 + 50 * Math.cos(t) };
@@ -229,7 +170,7 @@ describe("rotation", () => {
 /** Container CSS px of a paper-mm point via the overlay path (inner frame + CSS rotation). */
 function toContainer(vp: PaperViewport, mm: { x: number; y: number }, cw: number, ch: number, rotDeg: number) {
   const { width: w, height: h } = rotatedBoundingBox(cw, ch, rotDeg);
-  const p = mmToInner(vp, { w, h, affine: null, frame: null }, mm.x, mm.y)!;
+  const p = mmToInner(vp, { w, h, frame: null }, mm.x, mm.y)!;
   const r = (rotDeg * Math.PI) / 180;
   const dx = p.x - w / 2, dy = p.y - h / 2;
   return { x: cw / 2 + dx * Math.cos(r) - dy * Math.sin(r), y: ch / 2 + dx * Math.sin(r) + dy * Math.cos(r) };
@@ -253,7 +194,7 @@ describe("overlay and GL canvas agree", () => {
       const r = (-rot * Math.PI) / 180;
       const dx = ix - cw / 2, dy = iy - ch / 2;
       const inner = { x: w / 2 + dx * Math.cos(r) - dy * Math.sin(r), y: h / 2 + dx * Math.sin(r) + dy * Math.cos(r) };
-      const mm = innerToMm(vp, { w, h, affine: null, frame: null }, inner.x, inner.y)!;
+      const mm = innerToMm(vp, { w, h, frame: null }, inner.x, inner.y)!;
       const overlay = toContainer(vp, mm, cw, ch, rot);
       const [clipX, clipY] = project(m, mm.x * 1000, mm.y * 1000);
       const glX = ((clipX + 1) / 2) * view.widthPx / dpr;
@@ -261,26 +202,5 @@ describe("overlay and GL canvas agree", () => {
       expect(Math.abs(glX - overlay.x)).toBeLessThan(0.5);
       expect(Math.abs(glY - overlay.y)).toBeLessThan(0.5);
     }
-  });
-});
-
-describe("paper view agrees with the tile viewer's transform", () => {
-  // The residual is the affine's own error (lat/lng is not linear in paper over 4 km: 0.054 mm here),
-  // not the paper view's: 0.1 mm is 1 m on the ground, under half a pixel at a 4 px/mm fit.
-  it("puts a WGS 84 point where the legacy calibration affine puts it, to < 0.1 mm", async () => {
-    const { mapGeo } = await import("@oxygen/shared");
-    // A 1:10 000 map of 400 × 300 mm (4 × 3 km), native units; the legacy viewer's affine comes from its calibration corners.
-    const bounds = { minX: -20000, minY: -15000, maxX: 20000, maxY: 15000 };
-    const corners = mapGeo.calibrationCorners(FRAME, bounds)!;
-    const affine = buildAffineTransform(corners)!;
-    let worst = 0;
-    for (const [fx, fy] of [[0.5, 0.5], [0.1, 0.9], [0.9, 0.1], [0.25, 0.75], [0.8, 0.6]]) {
-      const mmX = (bounds.minX + fx * (bounds.maxX - bounds.minX)) / 100;
-      const mmY = (bounds.minY + fy * (bounds.maxY - bounds.minY)) / 100;
-      const g = affine.toLatLng(mmX, mmY);
-      const viaMapGeo = geoToMm(FRAME, g.lat, g.lng)!;
-      worst = Math.max(worst, Math.hypot(viaMapGeo.x - mmX, viaMapGeo.y - mmY));
-    }
-    expect(worst).toBeLessThan(0.1);
   });
 });

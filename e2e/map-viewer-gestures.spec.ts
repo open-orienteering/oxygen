@@ -29,7 +29,7 @@ test.describe("map viewer gestures (touch)", () => {
     await uploadEventMap(page);
     const viewer = page.getByTestId("map-viewer").first();
     await expect(viewer).toBeVisible({ timeout: 60000 });
-    await expect(viewer).toHaveAttribute("data-map-pipeline", "vector");
+    await expect(viewer.getByTestId("map-vector-layer")).toBeAttached();
 
     await viewer.getByTitle("Measure distance").tap();
     await expect(viewer.getByTitle("Measure distance")).toHaveClass(
@@ -127,7 +127,7 @@ test.describe("map viewer gestures (desktop)", () => {
     await uploadEventMap(page);
     const viewer = page.getByTestId("map-viewer").first();
     await expect(viewer).toBeVisible({ timeout: 60000 });
-    await expect(viewer).toHaveAttribute("data-map-pipeline", "vector");
+    await expect(viewer.getByTestId("map-vector-layer")).toBeAttached();
 
     await viewer.getByTitle("Measure distance").click();
     const box = await viewer.boundingBox();
