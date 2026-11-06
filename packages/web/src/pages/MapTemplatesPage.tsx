@@ -2,7 +2,6 @@ import { Fragment, useMemo, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { useNavigate, useParams } from "react-router-dom";
 import { layoutEditorHref } from "../lib/editor/layout-href";
-import { MapLayoutEditor, type MapLayoutSnapshot } from "../components/MapLayoutEditor";
 import { SortHeader } from "../components/SortHeader";
 import { StructuredSearchBar } from "../components/structured-search/StructuredSearchBar";
 import { useCapabilities } from "../context/CapabilitiesContext";
@@ -15,7 +14,6 @@ import {
   templatePayload,
   type MapTemplateView,
   type TemplateDraft,
-  type TemplateLayoutPreview,
 } from "../lib/course-map-types";
 import {
   createMapTemplateAnchors,
@@ -107,19 +105,8 @@ export function MapTemplatesPage() {
   const [createDraft, setCreateDraft] = useState<TemplateDraft>(
     EMPTY_TEMPLATE_DRAFT,
   );
-  const [editingSeq, setEditingSeq] = useState<number | null>(null);
-  const [previewCourseId, setPreviewCourseId] = useState<number | undefined>();
   const [error, setError] = useState<string | null>(null);
   const [importNotice, setImportNotice] = useState<string | null>(null);
-
-  const editingTemplate = rows.find((row) => row.seq === editingSeq);
-  const preview = trpc.mapTemplate.previewLayout.useQuery(
-    {
-      id: editingSeq ?? 1,
-      ...(previewCourseId === undefined ? {} : { courseId: previewCourseId }),
-    },
-    { enabled: editingSeq !== null },
-  );
 
   const invalidate = () =>
     Promise.all([
@@ -160,22 +147,9 @@ export function MapTemplatesPage() {
 
   const openEditor = (row: MapTemplateView) => {
     const firstCourse = (courses.data ?? [])[0];
-    // The new editor's Layout mode (docs/course-layout.md §4). The
-    // `MapLayoutEditor` branch is unreachable since E3 and goes in E4c.
+    // The course editor's Layout mode, previewed with the first course
+    // (docs/course-layout.md §4).
     navigate(layoutEditorHref(nameId, { template: row.seq }, firstCourse?.id));
-  };
-
-  const saveLayout = async (snapshot: MapLayoutSnapshot) => {
-    if (!editingTemplate) return;
-    await updateTemplate.mutateAsync({
-      id: editingTemplate.seq,
-      printScale: snapshot.printScale,
-      settings: {
-        ...editingTemplate.settings,
-        description: snapshot.description,
-      },
-      objects: snapshot.templateObjects,
-    });
   };
 
   return (
@@ -510,38 +484,6 @@ export function MapTemplatesPage() {
           onClose={() => setShowClubImport(false)}
         />
       )}
-
-      {editingTemplate &&
-        preview.data &&
-        (() => {
-          const data = preview.data as TemplateLayoutPreview;
-          return (
-            <MapLayoutEditor
-              key={editingTemplate.seq}
-              mode="template"
-              nameId={nameId}
-              mapName={editingTemplate.name}
-              document={data.document}
-              window={data.window}
-              controls={data.controls}
-              legs={data.legs}
-              descriptionRows={data.descriptionRows}
-              descriptionHeader={data.descriptionHeader ?? null}
-              descriptionTitle={data.textValues.course || editingTemplate.name}
-              mapObjects={[]}
-              templateObjects={editingTemplate.objects}
-              textValues={data.textValues}
-              previewCourses={(courses.data ?? []).map((course) => ({
-                id: course.id,
-                name: course.name,
-              }))}
-              previewCourseId={previewCourseId}
-              onPreviewCourseChange={setPreviewCourseId}
-              onSave={saveLayout}
-              onClose={() => setEditingSeq(null)}
-            />
-          );
-        })()}
     </div>
   );
 }

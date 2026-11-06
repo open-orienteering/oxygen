@@ -189,28 +189,3 @@ export function circleArcs(gaps: AngularGap[]): Array<[number, number]> {
   if (cursor < 360) arcs.push([cursor, 360]);
   return arcs.filter(([start, end]) => end - start >= 0.5);
 }
-
-/** Build the SVG path for a control circle with angular slit gaps. */
-export function drawBrokenCircle(
-  cx: number,
-  cy: number,
-  radius: number,
-  gaps: AngularGap[],
-): string {
-  const arcs = circleArcs(gaps);
-  if (arcs.length === 1 && arcs[0][0] === 0 && arcs[0][1] === 360) {
-    return `M${cx + radius},${cy} A${radius},${radius} 0 1 1 ${cx - radius},${cy} A${radius},${radius} 0 1 1 ${cx + radius},${cy}`;
-  }
-
-  return arcs
-    .map(([start, end]) => {
-      const startRad = ((90 - start) * Math.PI) / 180;
-      const endRad = ((90 - end) * Math.PI) / 180;
-      const x1 = cx + radius * Math.cos(startRad);
-      const y1 = cy - radius * Math.sin(startRad);
-      const x2 = cx + radius * Math.cos(endRad);
-      const y2 = cy - radius * Math.sin(endRad);
-      return `M${x1.toFixed(1)},${y1.toFixed(1)} A${radius},${radius} 0 ${end - start > 180 ? 1 : 0} 1 ${x2.toFixed(1)},${y2.toFixed(1)}`;
-    })
-    .join(" ");
-}

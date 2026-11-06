@@ -11,7 +11,7 @@
  *   finish    full-width 14.x symbol (+ optional length)
  *
  * Union / all-controls sheets keep a single title row and skip this
- * builder — callers use the simpler path in MapViewer / description-svg.
+ * builder — `resolve-layout.ts` builds their rows directly.
  */
 
 import type {
@@ -19,6 +19,36 @@ import type {
   CourseDescriptionInstructions,
   CourseOrderMode,
 } from "../types.js";
+
+/**
+ * One row of a sheet's description block as `resolve-layout.ts` answers
+ * it and `print/description.ts` draws it.
+ */
+export interface DescriptionRow {
+  sequence?: number;
+  code: string;
+  description?: ControlDescription | null;
+  /**
+   * Row kind. Absent / "control" draws a normal A–H row; "start" draws
+   * the triangle in A; "special" and "finish" draw `symbolKey` across the
+   * full width with `lengthM`.
+   */
+  kind?: "start" | "control" | "special" | "finish";
+  symbolKey?: string;
+  lengthM?: number;
+}
+
+/** The block's size in page mm: 8 cells wide, rows plus header rows high. */
+export function descriptionBlockSize(
+  rowCount: number,
+  cellSizeMm: number,
+  headerRows = 1,
+): { width: number; height: number } {
+  return {
+    width: cellSizeMm * 8,
+    height: cellSizeMm * (rowCount + headerRows),
+  };
+}
 
 export type DescriptionSheetRowKind =
   | "start"

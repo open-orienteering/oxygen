@@ -166,7 +166,7 @@ export function objectColours(objects: readonly (CourseMapObject | CourseLayerOb
   return out;
 }
 
-/** `pathData`'s construction (objects-svg.ts) as a render path: a handle on either end makes the segment a cubic. */
+/** A stored path's construction as a render path: a handle on either end makes the segment a cubic. */
 function vertexPath(points: readonly PathVertex[], closed: boolean): { coords: number[]; flags: number[] } {
   const coords: number[] = [um(points[0].x), um(points[0].y)];
   const flags: number[] = [0];

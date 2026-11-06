@@ -272,6 +272,9 @@ export const defaultMapAppearance: MapAppearance = {
   numberHeightMm: 4,
 };
 
+/** ISOM 709 bounding line width (Feb 2024 revision), page mm. */
+export const OUT_OF_BOUNDS_BORDER_MM = 0.4;
+
 /**
  * IOF colour-stack profile of v0.5.0's tile and print renderer (IOF
  * Printing and Colour Definitions rev. 4 ch. 7). Nothing draws with it
