@@ -106,10 +106,9 @@ const SITES: Array<{ fx: number; fy: number; description?: ControlDescription }>
 /**
  * A deterministic course on a window: start, controls 31–34, finish at
  * fixed fractions of the window (paper mm, y-up, axis-aligned — a tilt of
- * a few degrees keeps them inside), with the GeoJSON the legacy layout
- * reads its start, finish and leg ends from. No legs and no cuts in the
- * GeoJSON: both pages derive their straight legs; the vector page cuts
- * them around document features (`size-aware-cuts`).
+ * a few degrees keeps them inside), the start and finish as the rows the
+ * layout draws. The page derives the straight legs and cuts them around
+ * document features (`size-aware-cuts`).
  */
 export function syntheticCourse(centre: { x: number; y: number }, window: { width: number; height: number }, mapScale: number): LayoutCourseSource {
   const at = (s: (typeof SITES)[number]) => ({ x: round3(centre.x + (s.fx * window.width) / 2), y: round3(centre.y + (s.fy * window.height) / 2) });
@@ -124,10 +123,14 @@ export function syntheticCourse(centre: { x: number; y: number }, window: { widt
     ypos: pts[i + 1].y,
     description: s.description,
   }));
-  const point = (symbolType: "start" | "finish", p: { x: number; y: number }) => ({
-    type: "Feature",
-    geometry: { type: "Point", coordinates: [p.x, p.y] },
-    properties: { symbolType, id: symbolType, code: symbolType === "start" ? "S" : "F" },
+  const end = (kind: "start" | "finish", p: { x: number; y: number }): LayoutControlSource => ({
+    id: kind,
+    codes: "",
+    name: kind === "start" ? "Start 1" : "Mål 1",
+    status: kind,
+    kind,
+    xpos: p.x,
+    ypos: p.y,
   });
   return {
     name: "Corpus",
@@ -136,6 +139,7 @@ export function syntheticCourse(centre: { x: number; y: number }, window: { widt
     orderMode: "ordered",
     classes: [{ name: "H21" }],
     controls,
-    geometry: { type: "FeatureCollection", features: [point("start", pts[0]), point("finish", pts[pts.length - 1])] },
+    start: end("start", pts[0]),
+    finish: end("finish", pts[pts.length - 1]),
   };
 }

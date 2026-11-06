@@ -543,7 +543,6 @@ describe("kiosk key", () => {
     // May be null (no map uploaded in this suite) — must not throw.
     await kiosk.course.mapMetadata();
     await kiosk.course.mapFileInfo();
-    await kiosk.course.courseGeometries({ courseNames: [] });
 
     // The key grants reads only — mutations still need an invited user.
     await expect(

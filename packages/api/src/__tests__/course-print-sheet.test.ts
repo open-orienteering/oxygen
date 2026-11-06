@@ -24,18 +24,10 @@ const template = {
   objects: [{ id: "t", anchor: "page", kind: "text", x: 10, y: 280, text: "{course}", fontSizeMm: 4, color: "#000000" }],
 };
 
-const geometry = {
-  type: "FeatureCollection",
-  features: [
-    { type: "Feature", geometry: { type: "Point", coordinates: [-30, 0] }, properties: { id: "S1", code: "S", symbolType: "start" } },
-    { type: "Feature", geometry: { type: "Point", coordinates: [-20, 0] }, properties: { id: "c31", code: "31", symbolType: "control", cuts: [{ start: 10, end: 40 }] } },
-    { type: "Feature", geometry: { type: "Point", coordinates: [30, 0] }, properties: { id: "F1", code: "F", symbolType: "finish" } },
-    { type: "Feature", geometry: { type: "LineString", coordinates: [[-30, 0], [-20, 0]] }, properties: { symbolType: "leg", gaps: [{ from: 0.4, to: 0.6 }] } },
-    { type: "Feature", geometry: { type: "LineString", coordinates: [[-20, 0], [0, 5], [20, 0]] }, properties: { symbolType: "leg", preclipped: true } },
-    { type: "Feature", geometry: { type: "LineString", coordinates: [[20, 0], [30, 0]] }, properties: { symbolType: "leg" } },
-    { type: "Feature", geometry: { type: "LineString", coordinates: [[20, 0], [25, -8]] }, properties: { symbolType: "marked_route" } },
-  ],
-};
+// The start and finish rows the caller resolves (`layoutCourseEnds`); the
+// layout reads no GeoJSON (course-print.md §5.2).
+const start = { id: "S1", codes: "", name: "Start 1", status: "start", kind: "start", xpos: -30, ypos: 0 };
+const finish = { id: "F1", codes: "", name: "Mål 1", status: "finish", kind: "finish", xpos: 30, ypos: 0 };
 
 const controls = [
   { id: "c31", codes: "31", xpos: -20, ypos: 0, description: { d: "2.004" }, labelOffset: { dx: 0, dy: 6 } },
@@ -45,7 +37,7 @@ const controls = [
 const base = (over: Partial<ResolveSheetInput> = {}): ResolveSheetInput => ({
   kind: "course",
   template,
-  course: { name: "Blue", lengthM: 2300, climbM: 45, geometry, classes: [{ name: "H21" }], controls },
+  course: { name: "Blue", lengthM: 2300, climbM: 45, start, finish, classes: [{ name: "H21" }], controls },
   mapScale: 15000,
   meridianTiltDeg: 2,
   event: { name: "Test", date: new Date("2026-10-24T00:00:00Z") },
@@ -82,12 +74,12 @@ describe("resolveSheet", () => {
   const uuidControls = [{ ...controls[0], id: U31, circleGaps: [{ start: 10, end: 40 }] }, { ...controls[1], id: U32 }];
   const stored = (items: unknown[]) => ({ version: 1, id: "00000000-0000-4000-8000-0000000000c1", orderMode: "ordered", items });
 
-  it("no stored structure: no authored legs or gaps — the course layer derives them (whatever geometry_source was)", () => {
+  it("no stored structure: no authored legs or gaps — the course layer derives them", () => {
     const one = resolveSheet(base()).sheet.course.structure as { items: { leg?: unknown }[] };
     expect(one.items.every((i) => i.leg === undefined)).toBe(true);
   });
 
-  it("the stored structure's leg gaps land on the item the leg runs into, aligned past the geometry's start and finish", () => {
+  it("the stored structure's leg gaps land on the item the leg runs into, aligned past the start and finish", () => {
     const gaps = [{ from: 0.4, to: 0.6 }];
     const input = base({
       course: { ...base().course!, controls: uuidControls },
@@ -100,7 +92,7 @@ describe("resolveSheet", () => {
     expect(bad.items.every((i) => i.leg === undefined)).toBe(true);
   });
 
-  it("a structure whose first site is not in the layout (an explicit start the geometry names S1) aligns on the first shared site", () => {
+  it("a structure whose first site is not in the layout (an explicit start the layout does not draw) aligns on the first shared site", () => {
     const gaps = [{ from: 0.2, to: 0.3 }];
     const input = base({
       course: { ...base().course!, controls: uuidControls },

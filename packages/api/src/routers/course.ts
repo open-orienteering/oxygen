@@ -59,7 +59,6 @@ import { colorProfileSchema } from "@oxygen/shared";
 import { canDownloadEventMap } from "../ocad-export.js";
 import { loadEventCrs } from "../event-crs.js";
 import {
-  ensureOverprintCutsCurrent,
   OVERPRINT_CUTS_VERSION,
   rebuildCourseGeometry,
 } from "../course-geometry.js";
@@ -79,6 +78,7 @@ import {
   persistStructure,
   rewriteStructureFromColumns,
   rowKind,
+  carryLegs,
   structureFromWire,
   uuidsOfPublicIds,
 } from "../course-structure.js";
@@ -217,45 +217,6 @@ function parseCourseFile(input: {
     return parseIOFCourseDataWithGeometry(input.xmlContent);
   }
   throw new Error("No course data: supply xmlContent or ocdBase64");
-}
-
-/**
- * Decide whether a previously-stored OCD geometry for a course should be
- * preferred over a freshly-built XML straight-line geometry. We keep OCD
- * unless the OCD control positions have drifted noticeably from the
- * canonical XML ones (>30 m).
- */
-export function isOcdGeometryStaleVsXml(
-  ocd: GeoJSONFeatureCollection,
-  xml: GeoJSONFeatureCollection,
-): boolean {
-  const ocdPts = ocd.features.filter((f) => f.geometry.type === "Point");
-  const xmlPts = xml.features.filter((f) => f.geometry.type === "Point");
-  if (xmlPts.length === 0) return false;
-  const byId = new Map<string, [number, number]>();
-  for (const f of xmlPts) {
-    const id = (f.properties as { id?: string } | undefined)?.id;
-    if (!id) continue;
-    byId.set(
-      id,
-      (f.geometry as { coordinates: [number, number] }).coordinates,
-    );
-  }
-  let drift = 0;
-  let pairs = 0;
-  for (const f of ocdPts) {
-    const id = (f.properties as { id?: string } | undefined)?.id;
-    if (!id) continue;
-    const xy = byId.get(id);
-    if (!xy) continue;
-    const ocdXy = (f.geometry as { coordinates: [number, number] }).coordinates;
-    // Rough planar distance — fine for stale-detection thresholds.
-    const dLng = (ocdXy[0] - xy[0]) * 111_000 * Math.cos((xy[1] * Math.PI) / 180);
-    const dLat = (ocdXy[1] - xy[1]) * 111_000;
-    drift += Math.sqrt(dLng * dLng + dLat * dLat);
-    pairs++;
-  }
-  return pairs > 0 && drift / pairs > 30;
 }
 
 async function getCourseBySeq(
@@ -1122,65 +1083,6 @@ export const courseRouter = router({
         await emitCourseUpserted(tx, ctx.event.id, c.id);
       });
       return { ok: true };
-    }),
-
-  /** GeoJSON FeatureCollection for one course (control circles + leg lines). */
-  geometry: coursesViewProcedure
-    .input(z.object({ id: z.number().int() }))
-    .query(async ({ ctx, input }) => {
-      await ensureOverprintCutsCurrent(ctx.db, ctx.event.id);
-      const c = await ctx.db.course.findFirst({
-        where: { eventId: ctx.event.id, seq: input.id },
-        select: { geometry: true },
-      });
-      if (!c?.geometry)
-        return { type: "FeatureCollection" as const, features: [] as unknown[] };
-      return c.geometry as unknown as {
-        type: "FeatureCollection";
-        features: unknown[];
-      };
-    }),
-
-  /**
-   * Per-course geometry for many courses at once (used by map overlays).
-   * Returns a name-keyed map (legacy shape) — the web `MapPanel` joins
-   * several feature collections into one before handing to the viewer.
-   */
-  courseGeometries: kioskOrCoursesViewProcedure
-    .input(
-      z
-        .object({
-          ids: z.array(z.number().int()).optional(),
-          courseNames: z.array(z.string()).optional(),
-        })
-        .optional(),
-    )
-    .query(async ({ ctx, input }) => {
-      await ensureOverprintCutsCurrent(ctx.db, ctx.event.id);
-      const where: Record<string, unknown> = {
-        eventId: ctx.event.id,
-        removed: false,
-      };
-      if (input?.ids && input.ids.length > 0) where.seq = { in: input.ids };
-      if (input?.courseNames && input.courseNames.length > 0) {
-        where.name = { in: input.courseNames };
-      }
-      const rows = await ctx.db.course.findMany({
-        where,
-        select: { seq: true, name: true, geometry: true, geometrySource: true },
-      });
-      const out: Record<
-        string,
-        { type: "FeatureCollection"; features: unknown[] }
-      > = {};
-      for (const r of rows) {
-        if (!r.geometry) continue;
-        out[r.name] = r.geometry as unknown as {
-          type: "FeatureCollection";
-          features: unknown[];
-        };
-      }
-      return out;
     }),
 
   /**
@@ -2064,28 +1966,22 @@ export const courseRouter = router({
 
         const existing = courseByName.get(pc.name.toLowerCase());
         let courseUuid: string;
-        // The geometry the course ends up with: a kept OCD one (XML re-import) still carries the authored pieces.
-        let storedGeom: GeoJSONFeatureCollection | null = geom;
+        // An IOF / PPen re-import over an OCD-imported course keeps the
+        // OCD file's `courses.geometry` (written until E5 for the v0.5.0
+        // rollback; nothing reads it) and carries the authored leg gaps
+        // from the stored structure (course-layer.md §6.4 "Importers").
+        let keepOcd = false;
+        let prevStructure: courseShared.StoredCourseStructure | null = null;
         if (existing) {
-          // Resolve geometry vs existing one: keep OCD unless drift > 30m.
-          let nextGeom: GeoJSONFeatureCollection | null = geom;
           const prev = await ctx.db.course.findUnique({
             where: { id: existing.id },
-            select: { geometry: true, geometrySource: true },
+            select: { geometrySource: true, structure: true },
           });
-          if (
-            prev?.geometrySource === "ocd" &&
-            geometrySource === "xml" &&
-            geom &&
-            prev.geometry &&
-            !isOcdGeometryStaleVsXml(
-              prev.geometry as unknown as GeoJSONFeatureCollection,
-              geom,
-            )
-          ) {
-            nextGeom = prev.geometry as unknown as GeoJSONFeatureCollection;
-          }
-          storedGeom = nextGeom;
+          keepOcd = prev?.geometrySource === "ocd" && geometrySource === "xml" && !!geom;
+          const parsedPrev = keepOcd && prev?.structure ? courseShared.courseStructureSchema.safeParse(prev.structure) : null;
+          prevStructure = parsedPrev?.success ? parsedPrev.data : null;
+          // The file's geometry, unless kept; none (position-less) leaves the column alone.
+          const written = keepOcd ? null : geom;
           await ctx.db.course.update({
             where: { id: existing.id },
             data: {
@@ -2098,12 +1994,9 @@ export const courseRouter = router({
               firstAsStart: false,
               lastAsFinish: false,
               removed: false,
-              geometry: (nextGeom ?? undefined) as never,
-              geometrySource: !nextGeom
-                ? prev?.geometrySource ?? ""
-                : nextGeom === geom
-                  ? geometrySource
-                  : prev?.geometrySource ?? "",
+              geometry: (written ?? undefined) as never,
+              geometrySource: written ? geometrySource : undefined,
+              lengthSource: written ? "file" : undefined,
             },
           });
           courseUuid = existing.id;
@@ -2123,6 +2016,7 @@ export const courseRouter = router({
               lastAsFinish: false,
               geometry: (geom ?? undefined) as never,
               geometrySource: geom ? geometrySource : "",
+              lengthSource: geom ? "file" : null,
             },
             select: { id: true },
           });
@@ -2134,7 +2028,7 @@ export const courseRouter = router({
         // The structure, and through it the column mirror: start / finish
         // sites explicit as the file names them, `course_controls`, the
         // leg gaps the file's 705 pieces leave (course-layer.md §6.4).
-        const gapsByLeg = skipPositions || !storedGeom ? new Map<string, courseShared.FractionGap[]>() : legGapsOfFeatures(storedGeom, (code) => positionOfCode.get(code));
+        const gapsByLeg = skipPositions || keepOcd || !geom ? new Map<string, courseShared.FractionGap[]>() : legGapsOfFeatures(geom, (code) => positionOfCode.get(code));
         const items: courseShared.StoredControlItem[] = [];
         let prevCode: string | null = null;
         for (const cc of pc.controls) {
@@ -2144,7 +2038,9 @@ export const courseRouter = router({
           items.push({ siteId, ...(gaps ? { leg: { gaps } } : {}) });
           prevCode = cc.controlId;
         }
-        await persistStructure(ctx.db, eventId, courseShared.linearStructure(courseUuid, items, { orderMode: pc.orderMode ?? "ordered" }) as courseShared.StoredCourseStructure);
+        const linear = courseShared.linearStructure(courseUuid, items, { orderMode: pc.orderMode ?? "ordered" }) as courseShared.StoredCourseStructure;
+        // A kept OCD course: its leg gaps where the leg still runs between the same sites.
+        await persistStructure(ctx.db, eventId, keepOcd ? carryLegs(prevStructure, linear) : linear);
       }
 
       // The file's course-level lines and areas (707 / 708 / 709 / 711) are

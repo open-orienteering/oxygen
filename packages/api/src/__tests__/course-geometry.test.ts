@@ -12,6 +12,7 @@ import { describe, it, expect } from "vitest";
 import { course } from "@oxygen/shared";
 import {
   editorCourseGeometry,
+  editorCourseLayer,
   legDistancesMm,
   courseLengthM,
   type GeometrySeqControl,
@@ -143,9 +144,17 @@ describe("editorCourseGeometry", () => {
   });
 });
 
-describe("legDistancesMm", () => {
+describe("legDistancesMm (from the course layer, E6)", () => {
+  const dist = (s: GeometrySeqControl[], mode?: "ordered" | "free_order") => legDistancesMm(editorCourseLayer("c1", s, mode));
+
+  /** The pre-E6 formula over the sequence itself: the parity reference. */
+  const reference = (s: GeometrySeqControl[]): number[] => {
+    const p = s.filter((c) => c.xMm !== 0 || c.yMm !== 0);
+    return p.slice(1).map((c, i) => Math.sqrt((c.xMm - p[i].xMm) ** 2 + (c.yMm - p[i].yMm) ** 2));
+  };
+
   it("computes euclidean distances between consecutive positioned controls", () => {
-    const d = legDistancesMm(
+    const d = dist(
       seq([
         ["S1", "Start", 0, 10],
         ["31", "Control", 30, 50], // 3-4-5 triangle → 50 mm
@@ -156,7 +165,7 @@ describe("legDistancesMm", () => {
   });
 
   it("ignores unpositioned controls", () => {
-    const d = legDistancesMm(
+    const d = dist(
       seq([
         ["31", "Control", 0, 10],
         ["32", "Control", 0, 0],
@@ -166,9 +175,31 @@ describe("legDistancesMm", () => {
     expect(d).toEqual([30]);
   });
 
-  it("is empty for fewer than two positioned controls", () => {
-    expect(legDistancesMm(seq([["31", "Control", 5, 5]]))).toEqual([]);
-    expect(legDistancesMm([])).toEqual([]);
+  it("is empty for fewer than two positioned controls, and for free order", () => {
+    expect(dist(seq([["31", "Control", 5, 5]]))).toEqual([]);
+    expect(dist([])).toEqual([]);
+    expect(dist(seq([["31", "Control", 5, 5], ["32", "Control", 9, 8]]), "free_order")).toEqual([]);
+  });
+
+  it("equals the pre-E6 sequence formula bit for bit (repeated visits, unplaced, fractional mm), and so the stored legs / lengthM", () => {
+    let x = 12.345;
+    const rnd = () => {
+      x = (x * 9301 + 49297) % 233280;
+      return (x / 233280) * 300 - 150;
+    };
+    const fixtures: GeometrySeqControl[][] = [
+      seq([["S1", "Start", -30.25, 0.125], ["31", "Control", -20.333, 7.77], ["32", "Control", 20.1, -0.05], ["31", "Control", -20.333, 7.77], ["F1", "Finish", 30, 0]]),
+      seq([["S1", "Start", 0, 0], ["31", "Control", 10.5, 3.25], ["32", "Control", 0, 0], ["33", "Control", 44.4, 12.12]]),
+      ...Array.from({ length: 50 }, (_, k) => seq(Array.from({ length: 3 + (k % 20) }, (_, i) => [`${31 + i}`, i === 0 ? "Start" : "Control", rnd(), rnd()] as [string, GeometrySeqControl["type"], number, number]))),
+    ];
+    for (const f of fixtures) {
+      expect(dist(f)).toEqual(reference(f));
+      // The stored strings: per-leg rounding and the total, at two scales.
+      for (const scale of [10000, 15000]) {
+        expect(dist(f).map((d) => Math.round((d * scale) / 1000))).toEqual(reference(f).map((d) => Math.round((d * scale) / 1000)));
+        expect(courseLengthM(dist(f), scale)).toBe(courseLengthM(reference(f), scale));
+      }
+    }
   });
 });
 

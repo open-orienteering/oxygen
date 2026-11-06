@@ -21,10 +21,8 @@ import {
 } from "../helpers/test-db.js";
 import { makeCaller } from "../helpers/caller.js";
 import type { GeoJSONFeatureCollection } from "../../iof-course-parser.js";
-import { OVERPRINT_CUTS_VERSION } from "../../course-geometry.js";
 import { applyEventMap } from "../../event-map.js";
 import { loadEventCutFeatures } from "../../event-map-objects.js";
-import { buildGeometryReport, formatGeometryReport, reportTotals } from "../../course-geometry-report.js";
 import { loadPinnedPrintDocument, pageInputFor, sheetForMapRow, type PrintMapRow } from "../../course-maps/pdf-page.js";
 import { loadBundledFonts } from "../../render/fonts.js";
 import { composePage } from "@oxygen/shared/print";
@@ -174,58 +172,6 @@ describe("automatic overprint cuts in editor geometry", () => {
       expect(
         geom.features.find((f) => f.properties.code === "171")?.properties.cuts,
       ).toHaveLength(1);
-    } finally {
-      await other.cleanup();
-    }
-  });
-
-  it("lazily rebuilds editor geometry stored by the previous cut algorithm", async () => {
-    const other = await createTestEvent("overprint_cuts_version");
-    try {
-      const otherCaller = makeCaller(other.event);
-      await otherCaller.course.uploadMap({
-        fileName: "test.ocd",
-        fileDataBase64: readFileSync(FIXTURE).toString("base64"),
-      });
-      await otherCaller.control.create({ codes: "175", xpos: 44, ypos: 42 });
-      await otherCaller.control.create({ codes: "176", xpos: 64, ypos: 42 });
-      const course = await otherCaller.course.create({
-        name: "Legacy long-object gap",
-        controlIds: [175, 176],
-      });
-      const row = await other.db.course.findFirstOrThrow({
-        where: { eventId: other.eventId, seq: course.id },
-      });
-      const stale = row.geometry as unknown as GeoJSONFeatureCollection;
-      const leg = stale.features.find(
-        (feature) =>
-          feature.properties.from === "175" &&
-          feature.properties.to === "176",
-      );
-      leg!.properties.gaps = [{ from: 0.2, to: 0.7 }];
-      await other.db.course.update({
-        where: { id: row.id },
-        data: { geometry: stale as never },
-      });
-      await other.db.event.update({
-        where: { id: other.eventId },
-        data: { overprintCutsVersion: 1 },
-      });
-
-      const rebuilt = await otherCaller.course.geometry({ id: course.id });
-      const rebuiltLeg = rebuilt.features.find(
-        (feature) =>
-          (feature as GeoJSONFeatureCollection["features"][number]).properties
-            .from === "175",
-      ) as GeoJSONFeatureCollection["features"][number];
-      expect(rebuiltLeg.properties.gaps).toBeUndefined();
-      expect(
-        (
-          await other.db.event.findUniqueOrThrow({
-            where: { id: other.eventId },
-          })
-        ).overprintCutsVersion,
-      ).toBe(OVERPRINT_CUTS_VERSION);
     } finally {
       await other.cleanup();
     }
@@ -429,50 +375,5 @@ describe("vector events cut against the pinned document", () => {
       await vecCaller.control.update({ id: 191, xpos: 90, ypos: 30 });
       await vecCaller.control.update({ id: 191, xpos: 68, ypos: 39.5 });
     }
-  });
-
-  it("migrates geometry stored by the previous version from the document", async () => {
-    const row = await vec.db.course.findFirstOrThrow({ where: { eventId: vec.eventId, seq: uploadCourseSeq } });
-    const stale = row.geometry as unknown as GeoJSONFeatureCollection;
-    const control = stale.features.find((f) => f.properties.code === "191")!;
-    control.properties.cuts = [{ start: 170, end: 190 }];
-    await vec.db.course.update({ where: { id: row.id }, data: { geometry: stale as never } });
-    await vec.db.event.update({ where: { id: vec.eventId }, data: { overprintCutsVersion: 2 } });
-
-    const rebuilt = await vecCaller.course.geometry({ id: uploadCourseSeq });
-    const cuts = (rebuilt.features as GeoJSONFeatureCollection["features"]).find((f) => f.properties.code === "191")!.properties.cuts as Array<{ start: number; end: number }>;
-    expect(cuts).toHaveLength(1);
-    expect(cuts[0].start).toBeGreaterThan(300); // north again, not the planted 170–190°
-    expect((await vec.db.event.findUniqueOrThrow({ where: { id: vec.eventId } })).overprintCutsVersion).toBe(OVERPRINT_CUTS_VERSION);
-  });
-
-  it("comparison report: stored editor geometry equals what C5 writes; imported fidelity counted", async () => {
-    // An imported OCD course on the legacy event: one leg bent round something, a file-authored slit.
-    await ctx.db.course.create({
-      data: {
-        eventId: ctx.eventId,
-        name: "Imported-OCD",
-        geometrySource: "ocd",
-        geometry: {
-          type: "FeatureCollection",
-          features: [
-            { type: "Feature", geometry: { type: "Point", coordinates: [60, 20] }, properties: { symbolType: "start", code: "S1" } },
-            { type: "Feature", geometry: { type: "Point", coordinates: [68, 39.5] }, properties: { symbolType: "control", code: "31", cuts: [{ start: 350, end: 10 }] } },
-            { type: "Feature", geometry: { type: "LineString", coordinates: [[61, 23], [66, 30], [67.5, 36]] }, properties: { symbolType: "leg", from: "S1", to: "31", preclipped: true } },
-          ],
-        },
-      },
-    });
-    const report = await buildGeometryReport(ctx.db, { eventNameIds: [ctx.nameId, vec.nameId] });
-    const t = reportTotals(report);
-    expect(t.events).toBe(2);
-    expect(t.editorCourses).toBeGreaterThan(5);
-    expect(t.staleCourses).toBe(0);
-    expect(t.circles.same).toBe(t.circles.compared);
-    expect(t.legs.same).toBe(t.legs.compared);
-    expect(t.importedCourses).toBe(1);
-    expect(t.imported).toMatchObject({ legs: 1, preclippedLegs: 1, bentLegs: 1, authoredCutControls: 1, both: 1 });
-    expect(report.events.map((e) => e.cutSource)).toEqual(["document", "document"]);
-    expect(formatGeometryReport(report)).toContain("| circle cuts |");
   });
 });

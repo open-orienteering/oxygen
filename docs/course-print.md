@@ -314,21 +314,36 @@ with `sheet` = `PageInput` minus `map` and `geo`.
 
 ### 5.2 Course structure
 
-- **Sites**: `layout.controls` (start and finish from the course
-  geometry, controls from `course_controls`, all placed controls for
-  all-controls sheets), one per id.
+- **Sites**: `layout.controls`, one per id, positions from the
+  `controls` rows. A course sheet's are its start, its `course_controls`
+  and its finish; all-controls sheets take every placed control. Since
+  E6 nothing comes from `courses.geometry`: the caller resolves the
+  start and finish (`layoutCourseEnds` in `resolve-layout.ts`) by the one
+  sequence rule every course reader uses (`courseSequenceOf`,
+  `course-layer.md` §6.2 "Readers"): the stored structure's explicit
+  ends, else the columns' (`start_name`, `finish_control_id`, the
+  flags — a NULL structure reads as the editor reads it), completed by
+  the event's lowest-seq start / finish unless `first_as_start` /
+  `last_as_finish`; an unplaced (0, 0) start or finish is not drawn.
+  `maps.pdf`, `courseMap.resolveSheet` and `courseMap.list` pass the
+  event's live controls with `name` and `kind` for it,
+  `mapTemplate.previewLayout` the live start and finish rows (all the
+  rule looks up: a structure's ends are its first and last items). The layout's `legs` (the `courseMap.list` /
+  `previewLayout` wire) are straight centre-to-centre lines between the
+  drawn controls, none under free order; the page draws the course
+  layer's own legs. `CourseOverlayControl.cuts` is no longer filled.
 - **Course sheets**: a v1 structure with one item per layout control in
   order, `role` = its type; `labelOffsets` = stored label position −
   site. The course-level lines and areas are course objects (`course-layer.md`
   §8), no longer read from the geometry. Free order is carried as `orderMode`.
 - **All-controls sheets**: `structure: null`, every site drawn with
   codes (`viewOptions.allControls`).
-- **Authored geometry** comes from the stored structure and the controls,
-  whatever `courses.geometry_source` is (D1 retired deviation (e), which
-  read the `ocd` GeoJSON): circle gaps from `controls.circle_gaps`, leg
-  gaps from the structure's `LegProps.gaps` (`courses.structure`; aligned
-  to the layout's controls past the geometry's start and finish), an
-  empty one meaning the automatic cuts. Every course gets legs and
+- **Authored geometry** comes from the stored structure and the controls
+  (D1 retired deviation (e), which read the `ocd` GeoJSON): circle gaps
+  from `controls.circle_gaps`, leg gaps from the structure's
+  `LegProps.gaps` (`courses.structure`; aligned to the layout's controls
+  on the first site both name, so a start the layout does not draw
+  shifts nothing), an empty one meaning the automatic cuts. Every course gets legs and
   automatic cuts from the course layer, with cut features from the
   pinned document (`cutFeaturesOfDocument`, §3.4 there) — unless the
   event's **Auto cuts** toggle is off: then the sheet carries
@@ -463,7 +478,9 @@ lines drawn by the library; images DeviceRGB in `cmyk`.
 | `print/__tests__/writer.test.ts` (C8) | a bold text symbol and a regular one embed two font objects, `…+LiberationSans` and `…+LiberationSans-Bold` |
 | `print/__tests__/write-page.test.ts` | operator order (sheet, frame clip, `T_map` `cm`, page `cm`), no `rg` in `cmyk` / no `k` in `rgb`, rotated `cm`, two pages sharing font, glyph forms and image XObject, page labels and outlines, `/Measure /GEO` (SWEREF99 TM corners near 58.6° N 15° E, rotated corners), deterministic bytes, missing image warning, an object far outside the frame absent from the content stream (C13) |
 | `print/__tests__/isomorphic.test.ts` | no Node API, `Buffer`, sharp or resvg in the module |
-| `packages/api/src/__tests__/course-print-sheet.test.ts` | `resolveSheet`: paper / frame / window / tilt, structure and roles, unique sites, label offsets, extras, `editor` vs `ocd` authored geometry, description block / hidden, all-controls, free order, the event's auto cuts off on the view options (D17) |
+| `packages/api/src/__tests__/course-print-sheet.test.ts` | `resolveSheet`: paper / frame / window / tilt, structure and roles, unique sites, label offsets, extras, authored gaps from the structure only (start and finish rows, no GeoJSON, E6), description block / hidden, all-controls, free order, the event's auto cuts off on the view options (D17) |
+| `packages/api/src/__tests__/course-map-layout.test.ts` "course sites", "layoutCourseEnds" (E6) | start, `course_controls` and finish from the rows with straight legs, no `cuts`; an unplaced end not drawn; the ends of a NULL structure from the columns (lowest-seq defaults, `firstAsStart`) and of a stored one from its items |
+| `packages/api/src/__tests__/integration/course-maps.test.ts` "creates, duplicates and applies…", "previews a template layout…" (E6) | a course with no structure and no GeoJSON lists and previews start → controls → finish (the event's first start / finish), straight legs |
 | `packages/api/src/__tests__/integration/course-print.test.ts` | the E2E fixture map pinned on a `vector` event: legacy event → no print document; two sheets → one PDF of two A4 pages, `TrimBox`, labels, outlines, Type0 / CIDFontType2 shared, frame clip and `T_map`, no `rg`, PNG and rasterised SVG logos shared (600 dpi), `/Measure /GEO` of the fixture's georeference, deterministic bytes |
 | `packages/api/src/render/__tests__/page-raster.test.ts` | the page oracle: white outside the frame and the ring, map inside, page box on top; rotated building where `T_map` puts it; block position on A4 |
 | `packages/api/src/render/__tests__/golden-files.test.ts` | `page-sprint-a4`, `page-ring`, `page-rotated` match the page oracle |

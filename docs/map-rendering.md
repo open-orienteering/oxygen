@@ -1698,7 +1698,8 @@ at upper white above the map's ink, upper purple (704, 707, 709,
 | start triangles (turned to the first control), circles with automatic and authored gaps, finish, legs clipped at circles and gapped at compact features, control numbers placed by the shared placer with manual offsets and leaders, imported courses' authored leg pieces and bends, circle gaps, 707 / 708 / 711 lines and 709 areas | selection ring, phantom, action-bar anchors, move warnings; status rings (readout punch state `ok` / `missing` / `extra`, highlighted control) around the GL symbol; completion rings, punch-count badges; the editor's faded off-course controls (left out of the layer, drawn as plain circles at 0.3 opacity, `control-faded`); class leg pills (multi-course); GPS position and tracks; measure; the description sheet; the editor's tool shapes |
 
 The SVG draws no course symbol, leg, route or number: E4b deleted the
-legacy SVG course paths (the GeoJSON of `course.courseGeometries`, the
+legacy SVG course paths (the GeoJSON of `course.courseGeometries`, a
+procedure E6 deleted with `course.geometry`; the
 straight fallback legs, `placeControlLabels` on screen, the broken
 circles) with the editor's SVG hit targets. The description sheet reads
 the courses and the control rows only (`ControlOverlay.description`,
