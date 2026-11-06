@@ -325,9 +325,10 @@ with `sheet` = `PageInput` minus `map` and `geo`.
   flags — a NULL structure reads as the editor reads it), completed by
   the event's lowest-seq start / finish unless `first_as_start` /
   `last_as_finish`; an unplaced (0, 0) start or finish is not drawn.
-  `maps.pdf`, `courseMap.resolveSheet`, `courseMap.list` and
-  `mapTemplate.previewLayout` pass the event's live controls with `name`
-  and `kind` for it. The layout's `legs` (the `courseMap.list` /
+  `maps.pdf`, `courseMap.resolveSheet` and `courseMap.list` pass the
+  event's live controls with `name` and `kind` for it,
+  `mapTemplate.previewLayout` the live start and finish rows (all the
+  rule looks up: a structure's ends are its first and last items). The layout's `legs` (the `courseMap.list` /
   `previewLayout` wire) are straight centre-to-centre lines between the
   drawn controls, none under free order; the page draws the course
   layer's own legs. `CourseOverlayControl.cuts` is no longer filled.
