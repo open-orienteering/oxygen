@@ -31,12 +31,19 @@ export interface DocumentRenderOptions {
    * "source" preview).
    */
   canonical?: boolean;
+  /**
+   * Only these document objects, ascending or not (the editor's eyedropper
+   * symbolises the few under a click, course-editor.md §6.4). Default: all.
+   */
+  only?: ArrayLike<number>;
 }
 
 export interface DocumentRenderInput {
   objects: RenderObject[];
   /** One entry per document symbol (null-render symbols get the proxy for their kind), plus the proxies appended. */
   symbols: RenderSymbol[];
+  /** The document object each of `objects` came from (`objects[i]` ← document object `docIdx[i]`). */
+  docIdx: number[];
   stats: {
     total: number; rendered: number; proxied: number; hidden: number; dropped: number; coordinates: number;
     /** Symbols drawn from a canonical entry rather than their source definition. */
@@ -116,7 +123,11 @@ export function documentRenderInput(doc: MapDocument, opts: DocumentRenderOption
   }
 
   const objects: RenderObject[] = [];
-  for (let i = 0; i < doc.header.objects.count; i++) {
+  const docIdx: number[] = [];
+  const order = opts.only ? Uint32Array.from(opts.only).sort() : null;
+  const count = order ? order.length : doc.header.objects.count;
+  for (let k = 0; k < count; k++) {
+    const i = order ? order[k] : k;
     const symIdx = doc.attrs.symbolIdx[i];
     const sym = doc.header.symbols[symIdx];
     if (!sym) {
@@ -157,9 +168,10 @@ export function documentRenderInput(doc: MapDocument, opts: DocumentRenderOption
       if (layout) obj.textLayout = layout;
     }
     objects.push(obj);
+    docIdx.push(i);
     stats.coordinates += n;
     if (viaProxy) stats.proxied++;
     else stats.rendered++;
   }
-  return { objects, symbols, stats };
+  return { objects, symbols, docIdx, stats };
 }
