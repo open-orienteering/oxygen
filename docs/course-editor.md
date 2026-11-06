@@ -185,8 +185,11 @@ The pure edits are `lib/editor/instructions.ts` (`setFinish`,
 positive drop, metres are whole, an empty value is `null`). The block shows
 the stored value with the specials anchored off the course left out
 (`instructionsOnCourse`; the sheet drops them and `setStructure` prunes
-them), and the page shows its own last write until `course.list` carries
-it, so a second edit builds on the first. The write is the existing
+them), and the page shows its own last write — a gesture's, an undo's or a
+redo's — until `course.list` carries it, so a second edit builds on the
+first. Gestures queue behind each other so each write sends its
+predecessor's token; one queued behind a refused write is dropped with it
+(it was built on the refused value). The write is the existing
 `course.update` with `descriptionInstructions` alone: the course's token
 is checked as `setStructure`'s, a stale one is a course conflict
 (`refresh`, never merged, §3), and the structure, its mirror and geometry
@@ -1023,11 +1026,13 @@ whose poll ran meanwhile simply does not conflict (decision log, D10).
   because it is `map-gl` work outside its area (decision log, D5).
 - **Course objects**: draw order (`courseObject.reorder`) has no control
   in the editor; no image (logo) tool; `inset_frame` is slice F's.
-- **Derived instruction rows** (08 §4.2): 13.3 / 13.4 / 13.5 (crossing
-  point, passage, map exchange) are hand-placed rows in
-  `description_instructions` (§4, E3b) rather than rows derived from
-  `crossing_point` / `map_exchange` sites; when slice F brings those kinds,
-  derived rows should replace or merge with the stored ones. The server
+- **Derived instruction rows**: 13.3 / 13.4 / 13.5 (crossing point,
+  passage, map exchange) are hand-placed rows in
+  `description_instructions` (§4, E3b). 08 §4.2 introduces
+  `crossing_point` / `map_exchange` sites without saying the sheet rows
+  follow from them; when slice F brings those kinds, rows derived from the
+  sites should probably replace or merge with the stored ones (an
+  inference, for F to decide). The server
   keeps `kind` a free string (`z.string().max(20)`); only the inspector
   restricts it to the 13.x / 14.x options.
 - **Course delete** stays on the Courses page.

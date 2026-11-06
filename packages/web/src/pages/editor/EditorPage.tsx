@@ -342,23 +342,45 @@ export function EditorPage() {
       ? localInstructions.value
       : selectedCourse?.descriptionInstructions ?? null;
   const shownInstructions = useMemo(() => instructionsOnCourse(instructionsBase, sequenceIds), [instructionsBase, sequenceIds]);
-  /** One instructions write; Layout mode's block reads the course's value through `resolveSheet`, so it is refetched. */
+  /**
+   * One instructions write — a gesture, its undo or its redo: the value shows at once and until `course.list`
+   * carries it; refused, it is dropped (the refetch shows the stored one). Layout mode's block reads the
+   * course's value through `resolveSheet`, so that is refetched.
+   */
   const writeInstructions = useCallback(async (courseId: number, value: Instructions) => {
-    const res = await writes.setInstructions(courseId, value);
-    void utils.courseMap.resolveSheet.invalidate();
-    return res;
+    setLocalInstructions({ courseId, value, version: null });
+    const mine = (l: typeof localInstructions) => !!l && l.courseId === courseId && l.value === value;
+    try {
+      const res = await writes.setInstructions(courseId, value);
+      setLocalInstructions((l) => (mine(l) ? { ...l!, version: res.version } : l));
+      void utils.courseMap.resolveSheet.invalidate();
+      return res;
+    } catch (e) {
+      setLocalInstructions((l) => (mine(l) ? null : l));
+      throw e;
+    }
   }, [writes, utils]);
+  /**
+   * Gestures queue behind each other (§3: a write sends its predecessor's token); a gesture queued behind
+   * one that was refused is dropped with it, since it was built on the refused value.
+   */
+  const instructionsQueue = useRef<Promise<boolean>>(Promise.resolve(true));
   // `next` was built from this render's `shownInstructions` (the block's prop), so that is the value it replaces.
-  const handleInstructions = useCallback(async (next: Instructions) => {
+  const handleInstructions = useCallback((next: Instructions) => {
     const course = selectedCourse;
     const prev = shownInstructions;
     if (!course || JSON.stringify(prev) === JSON.stringify(next)) return;
     setLocalInstructions({ courseId: course.id, value: next, version: null });
     const redo = () => writeInstructions(course.id, next);
-    const res = await run(redo);
-    if (res === undefined) { setLocalInstructions(null); return; }
-    setLocalInstructions((l) => (l && l.courseId === course.id && l.value === next ? { ...l, version: res.version } : l));
-    record(() => writeInstructions(course.id, prev), redo);
+    instructionsQueue.current = instructionsQueue.current.then(async (predecessorOk) => {
+      if (!predecessorOk) {
+        setLocalInstructions((l) => (l && l.value === next ? null : l));
+        return true;
+      }
+      if ((await run(redo)) === undefined) return false;
+      record(() => writeInstructions(course.id, prev), redo);
+      return true;
+    });
   }, [selectedCourse, shownInstructions, writeInstructions, run, record]);
 
   /**
@@ -1499,7 +1521,7 @@ export function EditorPage() {
       selectedControlId={state.selectedControlId}
       radioIds={radioIds}
       instructions={shownInstructions}
-      onInstructions={(next) => void handleInstructions(next)}
+      onInstructions={handleInstructions}
     />
   );
   const selectionSection = state.multi.length > 1 ? (
