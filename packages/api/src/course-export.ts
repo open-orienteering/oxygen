@@ -30,8 +30,7 @@ import {
   type ExportCourseControl,
 } from "./iof-course-export.js";
 import { buildPpenXml } from "./ppen-course-export.js";
-import { course as courseShared } from "@oxygen/shared";
-import { rowKind, splitStructure } from "./course-structure.js";
+import { courseSequenceOf } from "./course-structure.js";
 import type { PrismaClient, Prisma } from "./generated/prisma/client.js";
 
 type Db = PrismaClient | Prisma.TransactionClient;
@@ -142,30 +141,14 @@ export async function gatherEventCourseExport(
   for (const course of courseRows) {
     const seq: ExportCourseControl[] = [];
 
-    let firstAsStart = course.firstAsStart;
-    let lastAsFinish = course.lastAsFinish;
-    let explicitStart = course.startName ? starts.find((s) => s.name === course.startName) : undefined;
-    let explicitFinish = course.finishControlId ? finishes.find((f) => f.id === course.finishControlId) : undefined;
-    let middle = course.courseControls.map((cc) => cc.controlId);
-    const stored = course.structure ? courseShared.courseStructureSchema.safeParse(course.structure) : null;
-    if (stored?.success) {
-      const parts = splitStructure(courseShared.structureControlItems(stored.data), (id) => {
-        const r = rowByUuid.get(id);
-        return r ? rowKind(r) : undefined;
-      });
-      firstAsStart = parts.firstAsStart;
-      lastAsFinish = parts.lastAsFinish;
-      explicitStart = parts.start ? rowByUuid.get(parts.start) : undefined;
-      explicitFinish = parts.finish ? rowByUuid.get(parts.finish) : undefined;
-      middle = parts.middle.map((item) => item.siteId);
-    }
+    // The one sequence rule (course-structure.ts `courseSequenceOf`).
+    const { start, middle, finish, firstAsStart, lastAsFinish } = courseSequenceOf(
+      course,
+      course.courseControls.map((cc) => cc.controlId),
+      { site: (id) => rowByUuid.get(id), starts, finishes },
+    );
 
-    if (!firstAsStart) {
-      const start = explicitStart ?? starts[0];
-      if (start) {
-        seq.push({ controlId: displayCode(start), type: "Start" });
-      }
-    }
+    if (start) seq.push({ controlId: displayCode(start), type: "Start" });
 
     for (const controlId of middle) {
       const id = idByUuid.get(controlId);
@@ -180,12 +163,7 @@ export async function gatherEventCourseExport(
       });
     }
 
-    if (!lastAsFinish) {
-      const finish = explicitFinish ?? finishes[0];
-      if (finish) {
-        seq.push({ controlId: displayCode(finish), type: "Finish" });
-      }
-    }
+    if (finish) seq.push({ controlId: displayCode(finish), type: "Finish" });
 
     // Mark the first row as the start and the last as the finish when the
     // course carries them itself — IOF encodes the role in `@_type`.

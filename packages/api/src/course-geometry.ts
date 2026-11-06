@@ -22,7 +22,7 @@ import type { PrismaClient, Prisma } from "./generated/prisma/client.js";
 import { Prisma as PrismaNs } from "./generated/prisma/client.js";
 import { loadEventCrs } from "./event-crs.js";
 import { loadEventCutFeatures } from "./event-map-objects.js";
-import { rowKind, splitStructure } from "./course-structure.js";
+import { courseSequenceOf } from "./course-structure.js";
 
 /**
  * Increment when stored automatic cut/gap semantics change; events below
@@ -138,6 +138,7 @@ function siteType(c: { kind: string; status: string }): GeometrySeqControl["type
 
 const { courseStructureSchema, structureControlItems } = course;
 
+
 /**
  * The rendered sequence of each given (non-removed) course.
  *
@@ -183,64 +184,40 @@ export async function loadCourseSequences(
     });
     if (!course || course.removed) continue;
 
-    // The explicit start / finish and the sequence between them: from the
-    // stored structure (course-structure.ts `splitStructure`), else from the
-    // columns it mirrors. Sites are drawn by their kind, as before.
+    // The explicit start / finish and the sequence between them: the one
+    // sequence rule (course-structure.ts `courseSequenceOf`) over the
+    // stored structure, else the columns. Sites are drawn by their kind.
     type Row = { id: string; codes: string; name: string; seq: number; status: string; kind: string; xpos: number; ypos: number };
-    let explicitStart: Row | undefined;
-    let explicitFinish: Row | undefined;
-    let firstAsStart = course.firstAsStart;
-    let lastAsFinish = course.lastAsFinish;
-    let middle: Row[];
+    const select = { id: true, codes: true, name: true, seq: true, status: true, kind: true, xpos: true, ypos: true } as const;
     const stored = course.structure ? courseStructureSchema.safeParse(course.structure) : null;
+    let byId: Map<string, Row>;
+    let ccIds: string[] = [];
     if (stored?.success) {
       const items = structureControlItems(stored.data);
+      // A soft-deleted site drops out (an explicit start then falls back
+      // to the default, as `startName` does).
       const rows = await db.control.findMany({
-        // A soft-deleted site drops out (an explicit start then falls back
-        // to the default, as `startName` does).
         where: { eventId, removed: false, id: { in: [...new Set(items.map((i) => i.siteId))] } },
-        select: { id: true, codes: true, name: true, seq: true, status: true, kind: true, xpos: true, ypos: true },
+        select,
       });
-      const byId = new Map(rows.map((r) => [r.id, r]));
-      const parts = splitStructure(items, (id) => {
-        const r = byId.get(id);
-        return r ? rowKind(r) : undefined;
-      });
-      explicitStart = parts.start ? byId.get(parts.start) : undefined;
-      explicitFinish = parts.finish ? byId.get(parts.finish) : undefined;
-      firstAsStart = parts.firstAsStart;
-      lastAsFinish = parts.lastAsFinish;
-      middle = parts.middle.flatMap((item) => byId.get(item.siteId) ?? []);
+      byId = new Map(rows.map((r) => [r.id, r]));
     } else {
       const ccs = await db.courseControl.findMany({
         where: { courseId: courseUuid },
         orderBy: { position: "asc" },
-        select: {
-          control: {
-            select: { id: true, codes: true, name: true, seq: true, status: true, kind: true, xpos: true, ypos: true },
-          },
-        },
+        select: { control: { select } },
       });
-      middle = ccs.map((cc) => cc.control);
-      explicitStart = course.startName ? starts.find((s) => s.name === course.startName) : undefined;
-      explicitFinish = course.finishControlId
-        ? finishes.find((f) => f.id === course.finishControlId)
-        : undefined;
+      byId = new Map(ccs.map((cc) => [cc.control.id, cc.control]));
+      ccIds = ccs.map((cc) => cc.control.id);
     }
+    const parts = courseSequenceOf(course, ccIds, { site: (id) => byId.get(id), starts, finishes });
+    const middle = parts.middle.flatMap((id) => byId.get(id) ?? []);
 
     const seq: GeometrySeqControl[] = [];
 
-    if (!firstAsStart) {
-      const start = explicitStart ?? starts[0];
-      if (start) {
-        seq.push({
-          id: start.id,
-          code: displayCode(start),
-          type: "Start",
-          xMm: start.xpos,
-          yMm: start.ypos,
-        });
-      }
+    const { start, finish } = parts;
+    if (start) {
+      seq.push({ id: start.id, code: displayCode(start), type: "Start", xMm: start.xpos, yMm: start.ypos });
     }
 
     for (const c of middle) {
@@ -253,17 +230,8 @@ export async function loadCourseSequences(
       });
     }
 
-    if (!lastAsFinish) {
-      const finish = explicitFinish ?? finishes[0];
-      if (finish) {
-        seq.push({
-          id: finish.id,
-          code: displayCode(finish),
-          type: "Finish",
-          xMm: finish.xpos,
-          yMm: finish.ypos,
-        });
-      }
+    if (finish) {
+      seq.push({ id: finish.id, code: displayCode(finish), type: "Finish", xMm: finish.xpos, yMm: finish.ypos });
     }
 
     out.set(courseUuid, { seq, orderMode: course.orderMode });
