@@ -17,7 +17,7 @@ import {
 } from "@oxygen/shared";
 import { z } from "zod";
 import { Prisma } from "../generated/prisma/client.js";
-import { layoutControlsFromCourseControls, resolveMapLayout } from "../course-maps/resolve-layout.js";
+import { layoutControlsFromCourseControls, layoutCourseEnds, resolveMapLayout } from "../course-maps/resolve-layout.js";
 import { getBaseMapInfoOrNull } from "../course-maps/map-source.js";
 import { type MapRowContext, sheetInputForMapRow } from "../course-maps/pdf-page.js";
 import { resolveSheet } from "../course-maps/resolve-sheet.js";
@@ -263,7 +263,9 @@ export const courseMapRouter = router({
         id: true,
         seq: true,
         codes: true,
+        name: true,
         status: true,
+        kind: true,
         xpos: true,
         ypos: true,
         description: true,
@@ -299,7 +301,11 @@ export const courseMapRouter = router({
               lengthM: row.course.lengthM,
               climbM: row.course.climbM,
               orderMode: row.course.orderMode,
-              geometry: row.course.geometry,
+              ...layoutCourseEnds(
+                row.course,
+                row.course.courseControls.map((cc) => cc.control.id),
+                controlsForAll,
+              ),
               classes: row.course.classes,
               controls: layoutControlsFromCourseControls(
                 row.course.courseControls,
@@ -414,7 +420,7 @@ export const courseMapRouter = router({
         ctx.db.event.findUnique({ where: { id: ctx.event.id }, select: { name: true, date: true, autoOverprintCuts: true } }),
         ctx.db.control.findMany({
           where: { eventId: ctx.event.id, removed: false },
-          select: { id: true, seq: true, codes: true, status: true, xpos: true, ypos: true, description: true },
+          select: { id: true, seq: true, codes: true, name: true, status: true, kind: true, xpos: true, ypos: true, description: true },
         }),
         loadCourseObjects(ctx.db, ctx.event.id),
         classesByCourse(ctx.db, ctx.event.id),

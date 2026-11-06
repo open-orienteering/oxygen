@@ -83,57 +83,9 @@ beforeAll(async () => {
       name: "Blue",
       lengthM: 2_300,
       climbM: 45,
-      geometry: {
-        type: "FeatureCollection",
-        features: [
-          {
-            type: "Feature",
-            geometry: { type: "Point", coordinates: [-30, 0] },
-            properties: { id: "start", code: "S", symbolType: "start" },
-          },
-          {
-            type: "Feature",
-            geometry: { type: "Point", coordinates: [30, 0] },
-            properties: { id: "finish", code: "F", symbolType: "finish" },
-          },
-          {
-            type: "Feature",
-            geometry: {
-              type: "LineString",
-              coordinates: [
-                [-30, 0],
-                [-20, 0],
-              ],
-            },
-            properties: {
-              symbolType: "leg",
-              gaps: [{ from: 0.4, to: 0.6 }],
-            },
-          },
-          {
-            type: "Feature",
-            geometry: {
-              type: "LineString",
-              coordinates: [
-                [-20, 0],
-                [20, 0],
-              ],
-            },
-            properties: { symbolType: "leg" },
-          },
-          {
-            type: "Feature",
-            geometry: {
-              type: "LineString",
-              coordinates: [
-                [20, 0],
-                [30, 0],
-              ],
-            },
-            properties: { symbolType: "leg" },
-          },
-        ],
-      },
+      // No `structure` and no geometry: the course reads its start and
+      // finish from the columns (the event's first start / finish), as the
+      // editor does (docs/course-print.md §5.2).
       courseControls: {
         create: [
           { position: 1, controlId: control1.id },
@@ -244,8 +196,13 @@ describe("map templates and course maps", () => {
       "control",
       "finish",
     ]);
-    expect(maps[0].legs).toHaveLength(3);
-    expect(maps[0].legs[0].gaps).toEqual([{ from: 0.4, to: 0.6 }]);
+    expect(maps[0].controls.map((control) => control.id)).toEqual([startControlId, expect.any(String), expect.any(String), finishControlId]);
+    // Straight legs centre to centre; authored gaps live in the structure (the page's course layer).
+    expect(maps[0].legs.map((leg) => leg.points)).toEqual([
+      [{ x: -30, y: 0 }, { x: -20, y: 0 }],
+      [{ x: -20, y: 0 }, { x: 20, y: 0 }],
+      [{ x: 20, y: 0 }, { x: 30, y: 0 }],
+    ]);
     // Print sheet = the course editor's sheet: header + start + controls +
     // finish (with the measured last-control → finish distance).
     expect(maps[0].descriptionHeader).toMatchObject({ courseName: "Blue" });
@@ -402,7 +359,6 @@ describe("map templates and course maps", () => {
       "F",
     ]);
     expect(preview.legs).toHaveLength(3);
-    expect(preview.legs[0].gaps).toEqual([{ from: 0.4, to: 0.6 }]);
     // Course spans x -30..30, y 0 — the window centres on that bounding box.
     expect(preview.window.minX + preview.window.width / 2).toBeCloseTo(0);
     expect(preview.window.minY + preview.window.height / 2).toBeCloseTo(0);

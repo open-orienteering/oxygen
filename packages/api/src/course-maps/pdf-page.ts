@@ -18,7 +18,7 @@ import { getBlob } from "../map-store/blob-store.js";
 import { type PreparedDocument, WINDOW_OBJECT_MARGIN_MM, objectsNear, prepareDocument } from "../render/window-raster.js";
 import { BUNDLED_FONT_FILES, bundledPdfFaces, loadBundledFonts } from "../render/fonts.js";
 import { type BaseMapInfo, getBaseMapInfo } from "./map-source.js";
-import { type LayoutControlSource, type LayoutTemplateSource, layoutControlsFromCourseControls } from "./resolve-layout.js";
+import { type LayoutControlSource, type LayoutTemplateSource, layoutControlsFromCourseControls, layoutCourseEnds } from "./resolve-layout.js";
 import { type ResolveSheetInput, type SheetInput, resolveSheet } from "./resolve-sheet.js";
 import { objectsInScope, type StoredCourseObject } from "../course-objects.js";
 
@@ -182,9 +182,12 @@ export interface PrintMapRow {
     lengthM: number;
     climbM: number;
     orderMode: "ordered" | "free_order";
-    geometry: unknown;
-    /** `courses.structure` JSONB: where the authored leg gaps come from. */
+    /** `courses.structure` JSONB: the sequence's ends and the authored leg gaps (NULL = the columns below). */
     structure?: unknown;
+    startName: string;
+    finishControlId: string | null;
+    firstAsStart: boolean;
+    lastAsFinish: boolean;
     descriptionInstructions: unknown;
     classes: Array<{ name: string }>;
     courseControls: Array<{ control: LayoutControlSource; labelDx?: number | null; labelDy?: number | null }>;
@@ -219,7 +222,8 @@ export function rowForClass<R extends PrintMapRow>(row: R, cls: ClassPrint, clas
 /** What `sheetForMapRow` and the editor's `courseMap.resolveSheet` read besides the row. */
 export interface MapRowContext {
   event: { name: string; date: Date };
-  allControls: LayoutControlSource[];
+  /** The event's live controls; `name` and `kind` resolve a course's start and finish (`layoutCourseEnds`). */
+  allControls: Array<LayoutControlSource & { name: string; kind: string }>;
   /** Null fields without a base map (the editor's read; `maps.pdf` always has one). */
   mapInfo: { scale: number | null; meridianTiltDeg: number | null };
   courseObjects?: readonly StoredCourseObject[];
@@ -229,8 +233,9 @@ export interface MapRowContext {
 }
 
 /**
- * One map row → the `resolveSheet` input, with the same layout input the
- * legacy page uses (`routes.ts` `renderPage`). `courseObjects` are the
+ * One map row → the `resolveSheet` input: the course's start and finish
+ * by the one sequence rule over `ctx.allControls` (`layoutCourseEnds`;
+ * docs/course-print.md §5.2), never the stored GeoJSON. `courseObjects` are the
  * event's (`loadCourseObjects`); the sheet takes those in scope of its
  * course, or the `all`-scoped ones for an all-controls sheet
  * (course-layer.md §8.3).
@@ -239,6 +244,13 @@ export function sheetInputForMapRow(row: PrintMapRow, ctx: MapRowContext): Resol
   if (!row.template) throw new Error(`Map "${row.name}" has no template`);
   const courseUuid = row.kind === "course" && row.course?.id !== undefined ? String(row.course.id) : null;
   const inScope = ctx.courseObjects ? objectsInScope(ctx.courseObjects, courseUuid, ctx.classesByCourse ?? new Map()) : [];
+  const ends = row.course
+    ? layoutCourseEnds(
+        { ...row.course, structure: row.course.structure ?? null },
+        row.course.courseControls.map((cc) => cc.control.id),
+        ctx.allControls,
+      )
+    : null;
   return {
     kind: row.kind,
     template: row.template,
@@ -250,7 +262,8 @@ export function sheetInputForMapRow(row: PrintMapRow, ctx: MapRowContext): Resol
           lengthM: row.course.lengthM,
           climbM: row.course.climbM,
           orderMode: row.course.orderMode,
-          geometry: row.course.geometry,
+          start: ends?.start ?? null,
+          finish: ends?.finish ?? null,
           classes: row.course.classes,
           controls: layoutControlsFromCourseControls(row.course.courseControls),
           descriptionInstructions: row.course.descriptionInstructions,

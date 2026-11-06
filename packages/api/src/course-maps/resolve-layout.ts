@@ -29,6 +29,7 @@ import {
 } from "@oxygen/shared";
 import { z } from "zod";
 import { firstCode } from "../control-id.js";
+import { courseSequenceOf, type SequenceColumns } from "../course-structure.js";
 
 const objectsSchema = z.array(courseMapObjectSchema);
 
@@ -39,6 +40,9 @@ export interface LayoutControlSource {
   codes: string;
   /** Database role; only start/finish affect all-controls overlays. */
   status?: string;
+  /** `controls.name` / `controls.kind`: what `layoutCourseEnds` matches a course's start and finish by. */
+  name?: string;
+  kind?: string;
   xpos: number;
   ypos: number;
   /** IOF description JSONB from `oxygen.controls.description`. */
@@ -66,8 +70,13 @@ export interface LayoutCourseSource {
   climbM: number;
   /** Visit-order mode — free-order drops legs and uses code labels. */
   orderMode?: "ordered" | "free_order";
-  /** GeoJSON FeatureCollection from the course importer. */
-  geometry?: unknown;
+  /**
+   * The start and finish the course draws, resolved by the caller
+   * (`layoutCourseEnds`); null / absent = none. Unplaced (0, 0) ones are
+   * not drawn.
+   */
+  start?: LayoutControlSource | null;
+  finish?: LayoutControlSource | null;
   classes?: Array<{ name: string }>;
   /** Course controls in course order. */
   controls: LayoutControlSource[];
@@ -178,109 +187,41 @@ export interface ResolvedMapLayout {
   overprintScale: number;
 }
 
-export function courseGeometryControls(
-  geometry: unknown,
-): CourseOverlayControl[] {
-  if (!geometry || typeof geometry !== "object") return [];
-  const features = (geometry as { features?: unknown }).features;
-  if (!Array.isArray(features)) return [];
-  const controls: CourseOverlayControl[] = [];
-  for (const raw of features) {
-    if (!raw || typeof raw !== "object") continue;
-    const feature = raw as {
-      geometry?: { type?: unknown; coordinates?: unknown };
-      properties?: Record<string, unknown>;
-    };
-    const symbolType = feature.properties?.symbolType;
-    if (
-      feature.geometry?.type !== "Point" ||
-      (symbolType !== "start" &&
-        symbolType !== "control" &&
-        symbolType !== "finish") ||
-      !Array.isArray(feature.geometry.coordinates)
-    ) {
-      continue;
-    }
-    const x = Number(feature.geometry.coordinates[0]);
-    const y = Number(feature.geometry.coordinates[1]);
-    if (!Number.isFinite(x) || !Number.isFinite(y)) continue;
-    controls.push({
-      id: String(
-        feature.properties?.id ??
-          feature.properties?.code ??
-          symbolType,
-      ),
-      code: String(
-        feature.properties?.code ?? (symbolType === "start" ? "S" : "F"),
-      ),
-      type: symbolType,
-      x,
-      y,
-      cuts: Array.isArray(feature.properties?.cuts)
-        ? (feature.properties.cuts as Array<{ start: number; end: number }>)
-        : undefined,
-    });
-  }
-  return controls.sort((a, b) => {
-    const order = { start: 0, control: 1, finish: 2 };
-    return order[a.type] - order[b.type];
+/**
+ * The start and finish a course draws (docs/course-print.md §5.2 "Sites"):
+ * the one sequence rule (course-structure.ts `courseSequenceOf`) over the
+ * event's live controls — the stored structure's explicit ends, else the
+ * columns', completed by the lowest-seq start / finish unless
+ * `firstAsStart` / `lastAsFinish`. A NULL structure reads the columns, as
+ * the editor does.
+ */
+export function layoutCourseEnds(
+  course: SequenceColumns,
+  courseControlIds: readonly string[],
+  allControls: readonly LayoutControlSource[],
+): { start: LayoutControlSource | null; finish: LayoutControlSource | null } {
+  type Site = LayoutControlSource & { name: string; kind: string; status: string };
+  const sites: Site[] = allControls.map((c) => ({ ...c, name: c.name ?? "", kind: c.kind ?? "control", status: c.status ?? "" }));
+  const bySeq = (a: Site, b: Site) => (a.seq ?? 0) - (b.seq ?? 0);
+  const byId = new Map(sites.map((c) => [c.id, c]));
+  const { start, finish } = courseSequenceOf(course, courseControlIds, {
+    site: (id) => byId.get(id),
+    starts: sites.filter((c) => c.status === "start").sort(bySeq),
+    finishes: sites.filter((c) => c.status === "finish").sort(bySeq),
   });
+  return { start, finish };
 }
 
-export function courseGeometryLegs(geometry: unknown): CourseOverlayLeg[] {
-  if (!geometry || typeof geometry !== "object") return [];
-  const features = (geometry as { features?: unknown }).features;
-  if (!Array.isArray(features)) return [];
-  const legs: CourseOverlayLeg[] = [];
-  for (const raw of features) {
-    if (!raw || typeof raw !== "object") continue;
-    const feature = raw as {
-      geometry?: { type?: unknown; coordinates?: unknown };
-      properties?: Record<string, unknown>;
-    };
-    const kind = feature.properties?.symbolType;
-    if (
-      feature.geometry?.type !== "LineString" ||
-      (kind !== "leg" &&
-        kind !== "marked_route" &&
-        kind !== "forbidden_route" &&
-        kind !== "restricted_line") ||
-      !Array.isArray(feature.geometry.coordinates)
-    ) {
-      continue;
-    }
-    const points = feature.geometry.coordinates
-      .filter((coordinate): coordinate is [unknown, unknown] =>
-        Array.isArray(coordinate),
-      )
-      .map((coordinate) => ({
-        x: Number(coordinate[0]),
-        y: Number(coordinate[1]),
-      }))
-      .filter((point) => Number.isFinite(point.x) && Number.isFinite(point.y));
-    if (points.length < 2) continue;
-    const rawGaps = feature.properties?.gaps;
-    const gaps = Array.isArray(rawGaps)
-      ? rawGaps
-          .filter(
-            (gap): gap is { from: number; to: number } =>
-              typeof gap === "object" &&
-              gap !== null &&
-              typeof (gap as { from?: unknown }).from === "number" &&
-              Number.isFinite((gap as { from: number }).from) &&
-              typeof (gap as { to?: unknown }).to === "number" &&
-              Number.isFinite((gap as { to: number }).to),
-          )
-          .map((gap) => ({ from: gap.from, to: gap.to }))
-      : undefined;
-    legs.push({
-      points,
-      kind,
-      gaps,
-      preclipped: feature.properties?.preclipped === true,
-    });
-  }
-  return legs;
+/** A course end as an overlay control; null when absent or unplaced. */
+function endControl(row: LayoutControlSource | null | undefined, type: "start" | "finish"): CourseOverlayControl | null {
+  if (!row || (row.xpos === 0 && row.ypos === 0)) return null;
+  return {
+    id: row.id,
+    code: row.codes.split(";")[0]?.trim() || row.name || (type === "start" ? "S" : "F"),
+    type,
+    x: row.xpos,
+    y: row.ypos,
+  };
 }
 
 export function centerOfControls(controls: MapPoint[]): MapPoint | null {
@@ -308,30 +249,21 @@ export function resolveMapLayout(
           (control) => control.xpos !== 0 || control.ypos !== 0,
         )
       : input.course?.controls ?? [];
-  const geometryControls =
-    input.kind === "course"
-      ? courseGeometryControls(input.course?.geometry)
-      : [];
-  const geometryByCode = new Map(
-    geometryControls.map((control) => [control.code, control]),
-  );
   const regularControls = rawControls.map((control) => {
     const code = control.codes.split(";")[0] || String(control.seq ?? "");
-    const geometryControl = geometryByCode.get(code);
     const type: CourseOverlayControl["type"] =
       input.kind === "all_controls" &&
       (control.status === "start" || control.status === "finish")
         ? control.status
         : "control";
-    const x = geometryControl?.x ?? control.xpos;
-    const y = geometryControl?.y ?? control.ypos;
+    const x = control.xpos;
+    const y = control.ypos;
     return {
       id: control.id,
       code,
       type,
       x,
       y,
-      cuts: geometryControl?.cuts,
       description: control.description,
       ...(control.labelOffset
         ? {
@@ -348,15 +280,17 @@ export function resolveMapLayout(
       a.code.localeCompare(b.code, undefined, { numeric: true }),
     );
   }
+  const start = input.kind === "course" ? endControl(input.course?.start, "start") : null;
+  const finish = input.kind === "course" ? endControl(input.course?.finish, "finish") : null;
   const controls: CourseOverlayControl[] =
     input.kind === "course"
       ? [
-          ...geometryControls.filter((control) => control.type === "start"),
+          ...(start ? [start] : []),
           ...regularControls.map(({ description: _description, ...rest }) => {
             void _description;
             return rest;
           }),
-          ...geometryControls.filter((control) => control.type === "finish"),
+          ...(finish ? [finish] : []),
         ]
       : regularControls.map(({ description: _description, ...rest }) => {
           void _description;
@@ -371,11 +305,10 @@ export function resolveMapLayout(
   if (input.kind === "course" && input.course) {
     // Same row model as the on-map sheet in the course editor, so print
     // and screen agree on header, start, specials and finish.
-    const finishGeom = geometryControls.find((c) => c.type === "finish");
     const lastControl = controlRows[controlRows.length - 1];
     const finishLengthM =
-      finishGeom && lastControl && input.mapScale
-        ? (Math.hypot(finishGeom.x - lastControl.x, finishGeom.y - lastControl.y) *
+      finish && lastControl && input.mapScale
+        ? (Math.hypot(finish.x - lastControl.x, finish.y - lastControl.y) *
             input.mapScale) /
           1000
         : null;
@@ -415,21 +348,11 @@ export function resolveMapLayout(
     }));
   }
 
+  // Straight legs centre to centre between the drawn controls (the course
+  // layer derives what the page draws; these are the list's overlay).
   const freeOrder = input.course?.orderMode === "free_order";
-  const legs =
-    input.kind === "course"
-      ? courseGeometryLegs(input.course?.geometry).filter(
-          (leg) =>
-            // Free-order: keep marked/forbidden/restricted overlays, drop
-            // connecting course legs (including any leftover OCD legs).
-            !freeOrder || (leg.kind ?? "leg") !== "leg",
-        )
-      : [];
-  if (
-    input.kind === "course" &&
-    !freeOrder &&
-    !legs.some((leg) => (leg.kind ?? "leg") === "leg")
-  ) {
+  const legs: CourseOverlayLeg[] = [];
+  if (input.kind === "course" && !freeOrder) {
     for (let index = 0; index < controls.length - 1; index += 1) {
       legs.push({
         points: [

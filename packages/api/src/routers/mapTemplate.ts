@@ -15,6 +15,7 @@ import {
 import {
   resolveMapLayout,
   layoutControlsFromCourseControls,
+  layoutCourseEnds,
   type ResolvedMapLayout,
 } from "../course-maps/resolve-layout.js";
 import { getBaseMapInfoOrNull } from "../course-maps/map-source.js";
@@ -106,7 +107,7 @@ export const mapTemplateRouter = router({
       }),
     )
     .query(async ({ ctx, input }): Promise<ResolvedMapLayout> => {
-      const [template, event, mapInfo] = await Promise.all([
+      const [template, event, mapInfo, allControls] = await Promise.all([
         ctx.db.mapTemplate.findFirst({
           where: { eventId: ctx.event.id, seq: input.id },
         }),
@@ -115,6 +116,11 @@ export const mapTemplateRouter = router({
           select: { name: true, date: true },
         }),
         getBaseMapInfoOrNull(ctx.db, ctx.event.id),
+        // The course's start and finish (`layoutCourseEnds`).
+        ctx.db.control.findMany({
+          where: { eventId: ctx.event.id, removed: false, status: { in: ["start", "finish"] } },
+          select: { id: true, seq: true, codes: true, name: true, status: true, kind: true, xpos: true, ypos: true },
+        }),
       ]);
       if (!template) {
         throw new TRPCError({
@@ -151,7 +157,11 @@ export const mapTemplateRouter = router({
               lengthM: course.lengthM,
               climbM: course.climbM,
               orderMode: course.orderMode,
-              geometry: course.geometry,
+              ...layoutCourseEnds(
+                course,
+                course.courseControls.map((cc) => cc.control.id),
+                allControls,
+              ),
               classes: course.classes,
               controls: layoutControlsFromCourseControls(course.courseControls),
               descriptionInstructions: course.descriptionInstructions,
