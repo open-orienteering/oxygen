@@ -330,8 +330,8 @@ user review). The flag reaches every consumer of the layer:
   §9's `NUMBER_OVERLAPS` reads. A contested slot with a leader is not a
   collision.
 - **Anchor**: the text object's point is the baseline, half a digit
-  below the placed centre, `align: "centre"` (legacy
-  `controlNumberBaselineY`).
+  below the placed centre, `align: "centre"` (the legacy SVG overlay's
+  `controlNumberBaselineY`, deleted in E4c).
 
 ### 3.6 Layout objects
 
@@ -348,7 +348,8 @@ Map-anchored `CourseMapObject`s are the 08 §4.5 kinds they already are:
 | text | a text symbol in the colour's row: `sans` → Liberation Sans, `condensed` → Liberation Sans Narrow, `serif` / `mono` → their families (no file ships: `symbolise` warns `NO_FONT`, `map-rendering.md` §4.10); size ÷ `overprintScale`; `{placeholders}` expanded with `viewOptions.textValues`; empty text skipped |
 | image | `layer.images` (paper µm rectangle), not in the stream |
 
-Path vertices keep their Bézier handles (`pathData`'s construction);
+Path vertices keep their Bézier handles (the legacy `pathData`'s
+construction, deleted in E4c);
 closed shapes close implicitly. Layout-object symbols are deduplicated by
 content.
 
