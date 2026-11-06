@@ -2,8 +2,7 @@
  * `/:nameId/course-editor` (docs/course-editor.md §1): the course editor,
  * `EditorPage`, for every event since E3. An event without a map mounts it
  * too; its map panel shows the upload prompt, and a map whose document is
- * still being prepared shows the import state. The legacy
- * `CourseEditorPage` is unreachable and goes in E4b.
+ * still being prepared shows the import state.
  */
 
 import { lazy, Suspense } from "react";

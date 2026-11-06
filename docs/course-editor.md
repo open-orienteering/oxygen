@@ -7,11 +7,13 @@ experience), 04 §7 (hit-testing on the shared stage), 09 §3 (gated
 reads); decisions in the research README's decision log (2026-11-01,
 "D4", "D5"). The work queue is `SLICES.md` (rows D4–D11).
 
-The legacy editor (`CourseEditorPage`) mounts nowhere since E3 (the flip,
-2026-11-06) and is deleted in E4b; its chapter is frozen as
-[course-editor-legacy.md](course-editor-legacy.md), which also keeps the
-server behaviours both editors share (description autodetect, automatic
-overprint cuts, number contrast) until they get their own homes.
+The legacy editor (`CourseEditorPage`) was retired in E3 (the flip,
+2026-11-06) and deleted with its chapter in E4b; the repository history
+keeps both. The server behaviours it shared with this editor live in
+their own chapters: description autodetect in
+`course-controls-and-matching.md` "Description autodetect", automatic
+cuts in `course-layer.md` §3.4, the control number in `course-layer.md`
+§3.5.
 
 ## 1. Route and modes
 
@@ -168,7 +170,7 @@ shared stage (04 §7; `map-rendering.md` §5.5), not SVG hit targets:
   `hit: { stream, refs }`, the symbolised pass stream with layer-local
   object ids and each object's `ref` (`site`, `leg`, `number`, `leader`,
   …) — and `CourseInfo` hands it to the viewer.
-- On pointer-down the viewer (`sharedHitTest`) converts the point to paper
+- On pointer-down the viewer (any `editor`) converts the point to paper
   mm and calls `editorHitAt` (`lib/editor/hit.ts`) →
   `render.hitTest(stream, x, y, { toleranceUm, closedStrokeInterior: true })`:
   a control's circle hits over its interior, a leg within half its width,
@@ -215,11 +217,13 @@ shared stage (04 §7; `map-rendering.md` §5.5), not SVG hit targets:
   outlines — `editor-tool-layer`) and a dragged control's leg lengths. The
   armed tools' pending legs are the layer's (§6.1). Selection *highlight* through the
   dynamic bucket is Pending.
-- With shared hit-testing the viewer renders no `editor-control-hit` /
-  `editor-leg-hit` / `editor-label-hit` elements; it mirrors every editor
-  site as a hidden `editor-site` (`data-x` / `data-y`, paper mm) next to
-  the layer's `course-site` / `course-leg` mirror, which is what tests use.
-  The legacy page leaves `sharedHitTest` off and keeps its SVG targets.
+- Hit-testing is the shared stage's only (E4b deleted the SVG hit
+  targets and the `sharedHitTest` opt-in); the viewer mirrors every
+  editor site as a hidden `editor-site` (`data-x` / `data-y`, paper mm)
+  next to the layer's `course-site` / `course-leg` mirror, which is what
+  tests use. A map whose colour stack the course layer cannot draw on
+  (`CourseStackError`, `map-rendering.md` §5.4 "Fallback") has no hit
+  index: its editor cannot select or drag until the map is re-imported.
 
 ## 6. Tools and placement
 
@@ -767,8 +771,7 @@ so a tablet gets the touch rules below with the desktop chrome.
   hidden while a tool is armed.
 - Notices (conflict, offline, errors) stack at the top of the map.
 
-**Gestures** (coarse pointer, shared hit-test path; `lib/editor/touch.ts`,
-the legacy editor untouched — `mobile-layout.md` "Course editor on touch"):
+**Gestures** (coarse pointer, shared hit-test path; `lib/editor/touch.ts`):
 
 | Gesture | Effect |
 |---|---|
@@ -800,8 +803,7 @@ circle (a check marker, a leg-length label) draw over the loupe at 1×.
 It shows during every touch drag, whatever the zoom: 08 §5.5's "at high
 zoom" is read as the loupe's own magnified view, not a zoom gate. Mouse
 drags get no loupe (the finger is what hides the circle); the nudge pad
-stays the exact tool. In the tiles view (the legacy editor)
-`MapLoupe` is unchanged.
+stays the exact tool.
 
 These values (500 ms, 10 px, 48 px, 12 px, the loupe's 120 px, ×2.5 and
 16 px, the detent heights) are 08
@@ -899,7 +901,8 @@ half as skipped — one file, one fixture import, no duplicated flows. The
 phone has no desktop flows to run: it opens in Field mode with no rail or
 inspector (§10), so 09 §4 D's "green on the mobile project" is
 `field-mode.spec.ts` plus this touch subset. The legacy page's spec,
-`course-editor-legacy.spec.ts`, was deleted with the switch in E3.
+`course-editor-legacy.spec.ts`, was deleted with the switch in E3, the
+page itself in E4b.
 
 Hygiene (AGENTS §12): `reseed()` once in `beforeAll`; the fixture import
 (`e2e/test.ocd` courses and map) is idempotent per test (`openEditor` →

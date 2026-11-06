@@ -76,23 +76,6 @@ at once, an unselected one pans on a drag and moves after a 500 ms long
 press, a dragged control rides 48 px above the finger with a 120 px
 ×2.5 loupe above it (drawn by the GL layer), hit tolerance 12 px, two fingers always pan / zoom and cancel a pending press.
 
-### Legacy course editor on touch
-
-The legacy editor (`CourseEditorPage`; mounted nowhere since E3, deleted
-in E4b) shared the map gesture model above. In addition:
-
-- **Tap a control** — selects it and opens the floating context menu.
-- **Drag a control** — moves it (same local-drag + `onMoveEnd` path as mouse).
-- **Tap a course leg** — inserts at that leg (`onLegClick`).
-- **Tap empty map** — anchors the phantom selection menu.
-- **Dismiss (×)** — in the context menu; mirrors the keyboard Escape cascade
-  (phantom → selection → course).
-
-Control and leg hit targets use `touch-action: none` so editor gestures do not
-scroll the page underneath. A two-finger map gesture cancels any armed control
-tap and suppresses editor selections for 400 ms after movement, giving both
-fingers time to leave the screen. Descriptions start hidden below `sm`.
-
 ### Map toolbar buttons
 
 Every toggle on the map toolbar — **Hide other controls**, **Auto slits**,
@@ -210,5 +193,4 @@ to Google Accounts and the cross-origin OAuth response is rejected by CORS.
 | Template editor header | `packages/web/src/components/MapLayoutEditor.tsx` |
 | Controls page toolbar | `packages/web/src/pages/ControlsPage.tsx` |
 | Shell header | `packages/web/src/pages/CompetitionShell.tsx` |
-| Editor dismiss wire-up | `packages/web/src/pages/CourseEditorPage.tsx` |
 | E2E | `e2e/mobile-layout.spec.ts` (the editor's phone layout itself is `e2e/field-mode.spec.ts` and the touch describe of `e2e/course-editor.spec.ts`; E3 deleted the legacy editor's phone tests), `e2e/session-recovery.spec.ts` |

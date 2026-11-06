@@ -239,9 +239,14 @@ appearing in several roles takes its first.
 
 ### 3.4 Automatic cuts
 
-`circleCuts` / `legGaps` in `cuts.ts` (`docs/course-editor-legacy.md`
-"Automatic overprint cuts"; size-aware since C5, user decision
-2026-10-24). Each feature carries the radius `r` of its drawn symbol; the
+`circleCuts` / `legGaps` in `cuts.ts` (size-aware since C5, user
+decision 2026-10-24). The purple overprint must not hide compact map
+detail, so it is cut around **small point objects only** — circle slits
+and leg gaps reveal knolls, rocky pits and boulders; long objects
+(cliffs, paths, walls, buildings, areas) stay uncut, the colour stack
+keeps their ink readable without fragmenting the purple. There is no
+manual cut tool; a setter's explicit gaps arrive as stored `circleGaps`
+/ leg `gaps` (importers, the gap tool). Each feature carries the radius `r` of its drawn symbol; the
 line it may touch is drawn `w` wide. Its **clearance** is
 
   c = r + w / 2 + `CUT_AIR_MM` (0.25 mm)
@@ -788,8 +793,8 @@ editor refreshes, re-renders the sequence with a one-line notice naming
 the differing items, and the user redoes the edit — concurrent
 reordering is always a conflict, by design.
 
-**Legacy editor.** `CourseEditorPage` and the Courses page send the
-token too, through the same mutations: a `VersionBook`
+**Courses page, Layout mode and the editor's write client.** They send
+the token through the same mutations: a `VersionBook`
 (`packages/web/src/lib/version-book.ts`) keeps the newest token per row
 from the list refetches and each mutation's result — `course.update`,
 `control.update`, `course.setControlLabelOffset`, `course.create` /
@@ -797,7 +802,7 @@ from the list refetches and each mutation's result — `course.update`,
 courses it advanced — so undo / redo and back-to-back writes send their
 predecessor's token; on a version
 `CONFLICT` they invalidate and show "Changed elsewhere — reloaded"
-(`courses:changedElsewhere`). One rule for both editors on the same rows.
+(`courses:changedElsewhere`). One rule for every writer of the same rows.
 
 **Presence and live refresh** (D11; `course-editor.md` §11). No new push
 channel: a heartbeat `course.presence { courseId, mode, clientId }` upserts
@@ -1064,7 +1069,7 @@ for a check (decision log, D6).
 | unit | `packages/api/src/__tests__/course-structure.test.ts` | §6.2: `splitStructure` (explicit start / finish, implicit default, role start / finish, a start mid-sequence), `structureFromColumns` and its round trip, wire ↔ stored mapping |
 | unit | `packages/api/src/__tests__/version-conflict.test.ts` | §7: the `errorFormatter` lifts the payload beside tRPC's fields and leaves the duplicate-code `CONFLICT` alone; `controlFieldsDiff`; `baseVersionSchema` |
 | integration | `packages/api/src/__tests__/integration/course-structure.test.ts` | kind ↔ status sync, slice-F kinds refused, circle gaps; `course.update` writes a structure, token = the entry's HLC, structure and token in the payload; a pre-D0 course reads from its columns; `setStructure` mirror (start / finish, sequence, hidden numbers, label offsets not in the column), geometry byte-identical to `update`'s, variations and unknown controls refused; stale course token → `CONFLICT` with current and differing, nothing written, no token = LWW; stale control token → differing fields; `differing: null` at token 0; separate tokens both ways; `control.delete` prunes and advances; seeded groups hold `courses.review`; a controller checks off and writes notes but cannot move |
-| unit (web) | `packages/web/src/lib/__tests__/version-book.test.ts` | §7 legacy editor: newest token as an integer compare, list seeding, the conflict payload off a client error, public id after a code change |
+| unit (web) | `packages/web/src/lib/__tests__/version-book.test.ts` | §7 `VersionBook`: newest token as an integer compare, list seeding, the conflict payload off a client error, public id after a code change |
 | E2E | `e2e/courses.spec.ts` "an edit from a stale copy…" | §7 over HTTP: another client renames the course while this page's poll is held; this page's edit is refused, the notice shows, the page reloads the other write |
 | unit | `packages/api/src/__tests__/course-import-structure.test.ts` | §6.4: pieces → leg gaps (one piece none, two pieces one gap as fractions, either direction, touching pieces and off-axis pieces), per-course leg gaps by `from>to`, the object kinds and scopes, dedupe, leg cuts and description boxes ignored |
 | unit | `ocd-course-parser.test.ts`, `course-backfill-cli.test.ts` | §6.4: the parser fills `cuts` and reads 708; the CLI's arguments and lines |
@@ -1111,7 +1116,7 @@ for a check (decision log, D6).
 | `packages/shared/src/course/structure.ts` | §6.1: `courseStructureSchema`, `courseStructureWireSchema`, `structureSiteIssues`, `linearStructure`, `structureControlIds`, `structureDiff` |
 | `packages/api/src/course-structure.ts` | §6.2: `splitStructure`, `structureFromColumns`, `persistStructure`, `rewriteStructureFromColumns`, wire mapping, `assertCourseVersion` |
 | `packages/api/src/version-conflict.ts`, `referenceJournal.ts`, `trpc.ts` (`withVersionConflict`) | §7: lock and compare, the base from the journal, the emits that stamp the token, the error shape |
-| `packages/web/src/lib/version-book.ts` | §7 legacy editor tokens |
+| `packages/web/src/lib/version-book.ts` | §7 the client's row tokens |
 | `packages/web/src/lib/course-layer-request.ts` | the viewer's request (§5), `courseObjectsForView` (§8.2) |
 | `packages/shared/src/course/objects.ts` | §8: `courseObjectBodySchema`, `courseObjectScopeSchemaOf`, `courseObjectInScope`, `isCourseObject`, `filterRegionOf`, the kinds' drawing |
 | `packages/api/src/course-objects.ts`, `routers/courseObject.ts` | §8.4: wire ↔ row, scope ids, `writeCourseObject` (shared with D1's importers), `loadCourseObjects`, `classesByCourse`, `objectsInScope`; the router |
