@@ -77,7 +77,7 @@ DATABASE_URL='postgresql://oxygen:oxygen@localhost:5432/oxygen_vinterserien_src?
 dropdb oxygen_vinterserien_src
 ```
 
-(`pnpm db:migrate` on a restored copy applies the E5 drops, whose guard needs every live event's map to have its bytes in `map_sources` — true for any database that ran the v0.6.0 image.) With a current-schema database you can skip the restore and run the anonymiser on it directly. Override `SRC_NAME_ID` to point at a different source event.
+(`pnpm db:migrate` on a restored copy applies the E5 drops, whose guard needs every live event's map to have its bytes in `map_sources` — true once the v0.6.0 backfill has been run on it (Settings → Maintenance → Map documents, or `scripts/gcp/backfill.sh`); the guard's error message says so if not.) With a current-schema database you can skip the restore and run the anonymiser on it directly. Override `SRC_NAME_ID` to point at a different source event.
 
 The anonymiser pseudonymises runners, remaps card numbers, scrubs the event's contact and Eventor fields, and replaces the source map entirely with the synthetic map rows above (only the source row's `uploaded_at` and `rotation_correction` carry over). Run `node scripts/patch-showcase-map.mjs` afterwards only if you changed the importer.
 

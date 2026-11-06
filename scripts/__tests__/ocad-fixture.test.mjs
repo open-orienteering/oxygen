@@ -86,7 +86,7 @@ describe("OCAD fixtures", () => {
   });
 });
 
-describe("OCAD fixtures (continued)", () => {
+describe("OCAD fixture symbol types", () => {
   it("writes text, line-text and rectangle symbols the reader reads back (docs/map-import.md §3.3)", async () => {
     const { readOcad } = require("ocad2geojson");
     const file = await readOcad(buildSymbolTypesOcad(), { quietWarnings: true });
