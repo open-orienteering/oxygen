@@ -342,17 +342,16 @@ export function EditorPage() {
       ? localInstructions.value
       : selectedCourse?.descriptionInstructions ?? null;
   const shownInstructions = useMemo(() => instructionsOnCourse(instructionsBase, sequenceIds), [instructionsBase, sequenceIds]);
-  const instructionsNow = useRef(shownInstructions);
-  instructionsNow.current = shownInstructions;
   /** One instructions write; Layout mode's block reads the course's value through `resolveSheet`, so it is refetched. */
   const writeInstructions = useCallback(async (courseId: number, value: Instructions) => {
     const res = await writes.setInstructions(courseId, value);
     void utils.courseMap.resolveSheet.invalidate();
     return res;
   }, [writes, utils]);
+  // `next` was built from this render's `shownInstructions` (the block's prop), so that is the value it replaces.
   const handleInstructions = useCallback(async (next: Instructions) => {
-    const course = latest.current.selectedCourse;
-    const prev = instructionsNow.current;
+    const course = selectedCourse;
+    const prev = shownInstructions;
     if (!course || JSON.stringify(prev) === JSON.stringify(next)) return;
     setLocalInstructions({ courseId: course.id, value: next, version: null });
     const redo = () => writeInstructions(course.id, next);
@@ -360,7 +359,7 @@ export function EditorPage() {
     if (res === undefined) { setLocalInstructions(null); return; }
     setLocalInstructions((l) => (l && l.courseId === course.id && l.value === next ? { ...l, version: res.version } : l));
     record(() => writeInstructions(course.id, prev), redo);
-  }, [writeInstructions, run, record]);
+  }, [selectedCourse, shownInstructions, writeInstructions, run, record]);
 
   /**
    * Create a site at `pt` — a control (code from the club allocation; SRR codes get radio) or a code-less
