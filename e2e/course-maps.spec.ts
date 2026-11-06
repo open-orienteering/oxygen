@@ -6,7 +6,7 @@ import { API_BASE } from "./helpers/api-base";
 import { reseed } from "./helpers/reseed";
 import { waitForTrpc } from "./helpers/trpc";
 
-// pdf-lib is the API's dependency; load it from there (as fake-rsvg-convert does).
+// pdf-lib is the API's dependency; load it from there.
 const { PDFDocument } = createRequire(resolve(process.cwd(), "packages/api/package.json"))("pdf-lib") as {
   PDFDocument: { load(bytes: Uint8Array): Promise<{ getPageCount(): number; getPages(): { getSize(): { width: number; height: number } }[] }> };
 };

@@ -26,12 +26,3 @@ export function expandMapText(
     return values[key as MapTextPlaceholder] ?? "";
   });
 }
-
-export function escapeSvgText(value: string): string {
-  return value
-    .replace(/&/g, "&amp;")
-    .replace(/</g, "&lt;")
-    .replace(/>/g, "&gt;")
-    .replace(/"/g, "&quot;")
-    .replace(/'/g, "&apos;");
-}
