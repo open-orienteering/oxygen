@@ -58,9 +58,17 @@ the finish variant:
 }
 ```
 
-`afterControlId` is the public control id; `null` means after start.
-Specials whose control leaves the sequence are pruned on
-`course.update`.
+`afterControlId` is the public control id (first punch code, else seq);
+`null` means after start. Specials whose control leaves the sequence are
+pruned on `course.update { controlIds }` and `course.setStructure`. Every
+reader matches by that id: the on-map sheet, Layout mode's block and the
+print (`resolve-layout.ts`, which matched the control's seq until E3b —
+[bugfix-description-special-anchor.md](bugfix-description-special-anchor.md)).
+
+The course editor edits the value in Course mode's inspector (*Description
+sheet*: finish variant and length, special rows), one `course.update {
+descriptionInstructions, baseVersion }` per change with the course's
+token ([course-editor.md](course-editor.md) §4).
 
 ### Migration + backfill
 
