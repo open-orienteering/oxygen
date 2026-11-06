@@ -1523,12 +1523,12 @@ published on `window.__mapGlDoc` for Playwright.
 
 `MapViewer` hosts one base layer — the map document drawn by §5.2's arena
 path (`VectorMapLayer`) — and keeps everything else it had: gestures,
-measure, compass and rotation lock, GPS, the course overlay, the editor's
-hit targets. The course itself is drawn by the renderer in colour order
-with the map (C4, "Overlay" below) and the React SVG keeps the UI layer.
-The PNG tiles (`TileLayer`) were the other base layer until E3; their
-path is unreachable since (`MapPanel` mounts no viewer without a
-document) and goes in E4b.
+measure, compass and rotation lock, GPS, the editor's gestures. The course
+itself is drawn by the renderer in colour order with the map (C4,
+"Overlay" below) and the React SVG keeps the UI layer. The PNG tiles
+(`TileLayer`, `MapLoupe`, the tile-progress poll, the Web Mercator
+viewport and the calibration affine) were the other base layer until E3
+and were deleted in E4b; `documentHash` is a required prop.
 
 #### Selecting the layer
 
@@ -1540,14 +1540,14 @@ Since E3 there is no per-event switch (`docs/map-pipeline-switch.md`,
 history note): every event draws its pinned document.
 `documentHash` is `course.mapMetadata.documentHash` (the event's pinned
 document, `docs/map-storage.md` §6.4); `MapPanel` passes it to
-`MapViewer`, keyed on it, and the viewer draws the paper view whenever it
-has one (`data-map-pipeline="vector"`; the attribute goes with the tile
-path in E4b).
+`MapViewer` (keyed on the event, the upload and the hash), and the viewer
+draws its paper view. `data-map-pipeline` went with the tile path (E4b);
+specs wait for `map-vector-layer` instead.
 
 **A map without a pinned document** — its import queued or running,
 failed, finished with a document the event does not use (an import that
 waits for review), or a map from before the backfill (§6.7 of
-`map-storage.md`) — mounts no viewer and requests no tile. `MapPanel`
+`map-storage.md`) — mounts no viewer. `MapPanel`
 shows `MapImportState` (`data-testid="map-import-state"`) from
 `mapImport.latestForEvent`, `data-state` by `mapImportView`
 (`lib/map-import-view.ts`):
@@ -1565,17 +1565,16 @@ document to review.
 
 #### Viewport
 
-`lib/map-viewport.ts` holds one viewport model with two
-implementations, so `MapViewer`'s gestures, fits and overlay code call the
-same operations for either layer:
+`lib/map-viewport.ts` holds the viewport model, the paper view (the Web
+Mercator `mercator` view of the tiles went in E4b):
 
-| | `mercator` (tiles) | `paper` (vector) |
-|---|---|---|
-| State | `centerLat`, `centerLng`, fractional slippy-map `zoom` | `centreX`, `centreY` in paper µm (y-up), `pxPerUm` (CSS px per µm) |
-| Map mm ↔ inner px | through the calibration affine and Web Mercator (as before B4) | `x = w/2 + (1000·mmX − centreX)·pxPerUm`, `y = h/2 − (1000·mmY − centreY)·pxPerUm` |
-| WGS 84 ↔ inner px | Web Mercator | `mapGeo.wgs84ToPaper` / `paperToWgs84` on the document's paper frame, then the row above |
-| Zoom limits | 1 … 22 | 0.05 … 100 CSS px per paper mm |
-| Fit | WGS 84 bounds (`mapBounds`) | `header.bounds` in paper mm (`boundsMm`) |
+| | `PaperViewport` |
+|---|---|
+| State | `centreX`, `centreY` in paper µm (y-up), `pxPerUm` (CSS px per µm) |
+| Map mm ↔ inner px | `x = w/2 + (1000·mmX − centreX)·pxPerUm`, `y = h/2 − (1000·mmY − centreY)·pxPerUm` |
+| WGS 84 ↔ inner px | `mapGeo.wgs84ToPaper` / `paperToWgs84` on the document's paper frame, then the row above |
+| Zoom limits | 0.05 … 100 CSS px per paper mm |
+| Fit | `header.bounds` in paper mm (`boundsMm`) |
 
 "Inner px" is `MapViewer`'s rotated inner frame (size
 `rotatedBoundingBox(container, rotation)`, centred on the container). The
@@ -1583,20 +1582,20 @@ operations are `geoToInner`, `innerToGeo`, `mmToInner`, `innerToMm`,
 `zoomAt(vp, ctx, anchor, Δlog2, target)` (the point under the anchor moves
 to the target: wheel = same point, pinch = the fingers' midpoint),
 `panBy`, `centreOnGeo` (GPS follow), `centreShiftPx` (the measure tap's
-drift test), `fitMm` / `fitGeo`, `pxPerMapMm` (the overlay's symbol
-scale), `metresPerPx` (scale bar, GPS accuracy ring) and
-`mercatorEquivalentZoom`; in the paper view distances (scale bar,
-measure, GPS accuracy ring, `data-zoom`) use the frame's `header.mapScale`,
-the scale its transform uses. The paper view starts from `fitMm(boundsMm(header),
+drift test), `fitMm`, `pxPerMapMm` (the overlay's symbol scale),
+`metresPerPx` (scale bar, GPS accuracy ring) and `mercatorEquivalentZoom`;
+distances (scale bar, measure, GPS accuracy ring, a dragged control's leg
+lengths, `data-zoom`) use the frame's `header.mapScale`, the scale its
+transform uses (the viewer takes no `mapScale` prop). The view starts from `fitMm(boundsMm(header),
 container, 5 % padding)` — the legacy fit's padding; fits to controls take
 the controls' own paper mm plus the 2.5 mm ring, focus on one control the
 legacy one-sixth extent around it.
 
-**One transform (10 §6 point 3).** In the paper view, map mm are paper mm
-(× 1000 = µm), and every WGS 84 input — the GPS position and its
-accuracy ring, `gpsRoutes`, controls known only by lat/lng, GPS follow,
-the `data-center-*` attributes — goes through `mapGeo` and nothing else.
-The calibration affine is not used: it stays the tiles' transform.
+**One transform (10 §6 point 3).** Map mm are paper mm (× 1000 = µm),
+and every WGS 84 input — the GPS position and its accuracy ring,
+`gpsRoutes`, controls known only by lat/lng, GPS follow, the
+`data-center-*` attributes — goes through `mapGeo` and nothing else (the
+calibration affine of the tiles went with them, E4b).
 `gpsRoutes` are converted to paper mm once per route set (`useMemo`), so
 a pan or zoom scales them without calling proj4. The paper frame is
 `paperFrameOf(header, rotationCorrection)`: `unitsPerMm`, `mapScale`,
@@ -1608,17 +1607,14 @@ omitted (no GPS marker, no tracks, no `data-center-*`).
 **Rotation.** The inner frame's clockwise CSS angle is
 
 ```
-mercator:  −northOffset + userBearing
-paper:     −(northOffset − cutRotationDeg) + userBearing     (0 tilt when either is null)
+−(northOffset − cutRotationDeg) + userBearing     (0 tilt when either is null)
 ```
 
 `northOffset` is the display bearing (paper +Y from true north plus the
 drawn meridians' tilt, `mapGeo.mapFileMetadata`) and `cutRotationDeg` its
 paper-north part, so their difference is the meridian tilt from paper +Y.
-Over tiles the base is true-north-up and `−northOffset` turns the map's
-display-up to screen-up; the paper view is already paper-north-up, so
-only the tilt is undone. Both put the drawn meridians vertical — the same
-picture. The user's two-finger bearing adds on top, as before.
+The paper view is paper-north-up, so only the tilt is undone: the drawn
+meridians stand vertical. The user's two-finger bearing adds on top.
 
 #### Layer
 
@@ -1672,25 +1668,22 @@ decision 2026-10-22) set → `mapBudget="club"`, 150 MB
 
 #### Host
 
-In the paper view `MapViewer`:
+`MapViewer`:
 
 - fetches the document through `useMapDocument(hash, nameId)` (delivery:
   `docs/map-storage.md` §7.1) and shows *Loading map…* until the header
   is there, or the error with *Try again* (offline and not cached,
   no access, not found, unreadable);
-- does not need `mapBounds` (a map without a CRS has none);
-- mounts no `TileLayer`, polls no `/api/map-tile-progress`, and shows no
-  `MapLoupe` (it magnifies tiles); the new editor's touch loupe is drawn
-  by the layer (§5.5 "Loupe");
-- needs no ink split: the tiles draw the map in two halves so lower
-  purple sits under black, brown and blue line art; the vector layer
-  draws the course layer in the map's own colour order ("Overlay");
+- needs no map bounds or calibration (a map without a CRS draws without
+  geo inputs); the editor's touch loupe is drawn by the layer (§5.5
+  "Loupe");
+- needs no ink split: the vector layer draws the course layer in the
+  map's own colour order ("Overlay");
 - exposes `data-centre-x`, `data-centre-y` (µm), `data-px-per-um` and
-  `data-rotation` on `map-viewer`, and keeps `data-center-lat` /
+  `data-rotation` on `map-viewer`, and `data-center-lat` /
   `data-center-lng` (the view centre through `paperToWgs84`) and
   `data-zoom` (the Web Mercator zoom with the same ground resolution at
-  the centre) with their legacy meaning, so specs written against tiles
-  read the same numbers.
+  the centre), the meaning they had over tiles.
 
 #### Overlay (C4)
 
@@ -1774,8 +1767,8 @@ D's editor work). With an editor, `data-editor-hit="shared"`.
 #### Call sites
 
 Every 09 §1 call site reaches the base layer through `MapPanel` →
-`MapViewer`; the only direct `<MapViewer>` mount is `MapPanel`. None
-changes for B4.
+`MapViewer`; the only direct `<MapViewer>` mount is `MapPanel`, which
+mounts it only with a pinned document.
 
 | Call site | Path |
 |---|---|
@@ -1791,14 +1784,15 @@ changes for B4.
 
 | Test | Covers |
 |---|---|
-| `lib/__tests__/map-viewport.test.ts` | mercator ops = the pre-B4 formulas (projection, wheel anchor, clamp, pan, affine mm, symbol scale); paper: centre, y flip, mm round trip, WGS 84 through `mapGeo` (1e-6 mm), no CRS, wheel and pinch anchors, clamp, pan, GPS centre, fit, scale, Mercator-equivalent zoom; rotation per model; a +3° tilted meridian vertical on the overlay and through `viewMatrix`; overlay = GL canvas < 0.5 px on 200 random views (rotation, DPR); a WGS 84 point lands where the tiles' calibration affine puts it, < 0.1 mm on a 400 × 300 mm 1:10 000 frame (the residual is the affine's linearisation) |
+| `lib/__tests__/map-viewport.test.ts` | centre, y flip, mm round trip, WGS 84 through `mapGeo` (1e-6 mm), no CRS, wheel and pinch anchors, clamp, pan, GPS centre, fit, scale, Mercator-equivalent zoom; rotation by the meridian tilt; a +3° tilted meridian vertical on the overlay and through `viewMatrix`; overlay = GL canvas < 0.5 px on 200 random views (rotation, DPR) |
+| `lib/__tests__/legacy-caches.test.ts` | the retired `map-tiles` Cache Storage is deleted on start; no Cache Storage, a refused delete |
 | `lib/__tests__/map-import-view.test.ts` | `mapImportView`: pending while loading / queued / running, review for a done job with a document, failed, unknown without a job or a document |
 | `lib/__tests__/map-document-cache.test.ts` | route regex (documents, not previews); URL without query, `x-event-id` / `x-kiosk-key` headers; one request shared, same bytes; bounded memory; 401/403/404/5xx → kinds, failures not cached; offline; unreadable bytes; `storage.persist()` once, absent API |
 | `lib/__tests__/vector-map.test.ts` | paper frame with correction, bounds in mm, stack colours, proxy colours, budgets |
-| `e2e/map-vector-layer.spec.ts` | event `vector`: the pinned document by hash (no query, `x-event-id`), canvas ready and drawn, container-sized, no tile layer and no `/api/map-tile*` request, `data-*` attributes; wheel zoom keeps the paper point under the cursor (< 0.5 px); a GPS fix → follow centres it and the marker is at the viewer's centre; **lower purple under black**: a leg made across a black path on white paper (two controls through the API) is black at the crossing and lower purple 2 mm to either side, zoomed to ≥ 0.02 px/µm, with no SVG control label (fails with the course drawn on the top row); **without WebGL2** `data-status="webgl"`, the message, no tile request; **a lost context** remounts once (`data-attempt` 1, ready again), a second shows the message; **no pin** (`map_files.document_hash` cleared): `map-import-state` `review` with the review link, no viewer, no tile request; **an unaligned stack** (a palette-stripped copy of the document pinned by `e2e/helpers/stackless-document-cli.ts`): the layer draws, `data-course-layer="none"`, `map-course-layer-unsupported` shown, no `course-layer` mirror and no SVG `control-label` |
+| `e2e/map-vector-layer.spec.ts` | the pinned document by hash (no query, `x-event-id`), canvas ready and drawn, container-sized, `data-*` attributes; wheel zoom keeps the paper point under the cursor (< 0.5 px); a GPS fix → follow centres it and the marker is at the viewer's centre; **lower purple under black**: a leg made across a black path on white paper (two controls through the API) is black at the crossing and lower purple 2 mm to either side, zoomed to ≥ 0.02 px/µm, with no SVG control label (fails with the course drawn on the top row); **without WebGL2** `data-status="webgl"`, the message; **a lost context** remounts once (`data-attempt` 1, ready again), a second shows the message; **no pin** (`map_files.document_hash` cleared): `map-import-state` `review` with the review link, no viewer; **an unaligned stack** (a palette-stripped copy of the document pinned by `e2e/helpers/stackless-document-cli.ts`): the layer draws, `data-course-layer="none"`, `map-course-layer-unsupported` shown, no `course-layer` mirror and no SVG `control-label` |
 | `lib/__tests__/course-layer-request.test.ts` | sites from visible positioned controls with kinds; highlighted courses as items (by flag or name, one or several, none → `null`); all-controls when a drawn site is on no course; sequence numbers only for one ordered course with the sheet or editor; single-course label offsets, pending ones winning; positions as given; faded controls left out; an imported course's preclipped legs → pieces, its cuts → circle gaps, extras; generated legs: bent path kept, automatic gaps and cuts not read, a leg count that does not match ignored |
 | `e2e/map-control-circles.spec.ts`, `e2e/map-multicourse.spec.ts` | code labels of the selected course (the GL layer's `course-label` mirror), sequence numbers for one course with descriptions, codes for several; pills and the sheet SVG text; `data-course-layer="gl"` |
-| `e2e/map-viewer-gestures.spec.ts`, `mobile-layout.spec.ts`, `course-editor.spec.ts`, `wide-screen-map-pane.spec.ts`, `webserial.spec.ts`, `kiosk*.spec.ts` | the paper view's gestures, measure, event switching (vector layer ready, no tile image) and the readout map, once in `chromium` (E3: no per-pipeline projects) |
+| `e2e/map-viewer-gestures.spec.ts`, `mobile-layout.spec.ts`, `course-editor.spec.ts`, `wide-screen-map-pane.spec.ts`, `webserial.spec.ts`, `kiosk*.spec.ts` | the paper view's gestures, measure, event switching (vector layer ready) and the readout map, once in `chromium` (E3: no per-pipeline projects) |
 
 ### 5.5 Editor
 
@@ -2562,8 +2556,8 @@ what became of it:
 | `scripts/measure-gl.mjs` | corpus measurements through `/dev/map-gl-doc` (§5.2 Measurements) |
 | `packages/web/src/components/VectorMapLayer.tsx` | the vector base layer in `MapViewer` (§5.4): canvas, engine and worker lifecycle, status; the course layer request and its replies; the editor's loupe |
 | `packages/web/src/lib/course-layer-request.ts` | the viewer's course-layer input (§5.4 "Overlay", `course-layer.md` §5) |
-| `packages/web/src/components/MapViewer.tsx` | the host: layer choice, viewport state, gestures, SVG overlay |
-| `packages/web/src/lib/map-viewport.ts` | the viewport model, mercator and paper (§5.4 "Viewport"), `glView` |
+| `packages/web/src/components/MapViewer.tsx` | the host: viewport state, gestures, the SVG UI layer, editor hit-testing |
+| `packages/web/src/lib/map-viewport.ts` | the paper viewport model (§5.4 "Viewport"), `glView` |
 | `packages/web/src/lib/vector-map.ts` | paper frame, bounds, colours, proxy colours, budget from a document header |
 | `packages/web/src/lib/map-document-cache.ts`, `map-fonts.ts` | document, font and text atlas loading for the viewer (`docs/map-storage.md` §7.1) |
 | `packages/web/src/lib/map-import-view.ts`, `components/MapImportState.tsx` | the import state of a map without a pinned document (§5.4 "Selecting the layer") |
@@ -2635,6 +2629,12 @@ The shared module is exported as a namespace: `import { render } from
   `northLinesBelow` (the tiles' per-map colour-stack fixes) are not
   applied to the document's stack; the document's own order (and, for
   matched symbols, the library's) is drawn.
+- **§5.4 a map whose colour stack is not aligned shows no course**
+  ("Fallback"; E4b removed the SVG course that drew it until then). The
+  fix is a re-import with an aligned stack; there is no in-place repair
+  and no course in fallback colours. E0 found no such document on prod;
+  a GL fallback (the course on its own stack above the map) is the
+  option if one appears.
 - **§5.4 `data-ready`** marks the first view's detail only; later views
   stream in without an attribute (the engine's `whenComplete()` is there
   for a spec that needs it).

@@ -320,13 +320,11 @@ test.describe.serial("mobile layout", () => {
   });
 });
 
-/** The event's base map is drawn: the vector layer's first view, no tiles. */
+/** The event's base map is drawn: the vector layer's first view. */
 async function expectCurrentEventBase(viewer: Locator) {
-  await expect(viewer).toHaveAttribute("data-map-pipeline", "vector");
   await expect(viewer.getByTestId("map-vector-layer")).toHaveAttribute("data-ready", "true", {
     timeout: 30_000,
   });
-  await expect(viewer.locator("img[data-tile-url]")).toHaveCount(0);
 }
 
 async function twoFingerGesture(

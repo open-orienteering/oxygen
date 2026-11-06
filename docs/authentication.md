@@ -204,11 +204,10 @@ Identity-less devices without a key see an error pane (`kiosk-key-required`).
 
 The key covers everything the kiosk renders after a readout, including the
 course map: the read-only course/map procedures (`course.list`,
-`courseGeometries`, `mapMetadata`, `mapFileInfo`, `controlCoordinates`,
-`controlCompletionStatus`, `class.list`) sit on `kioskOr*` procedures, and
-tile `<img>` requests append `?k=` themselves (`tileQueryString` in
-`TileLayer.tsx`) since images cannot carry the header. Mutations never
-accept the key.
+`mapMetadata`, `mapFileInfo`, `controlCoordinates`,
+`controlCompletionStatus`, `getOverprintCuts`, `class.list`) sit on
+`kioskOr*` procedures, and the map document fetch sends `x-kiosk-key`
+itself (`lib/map-document-cache.ts`). Mutations never accept the key.
 
 ### REST protection
 

@@ -141,26 +141,20 @@ Below the `sm` breakpoint (~640px):
   `height: min(<caller px>, calc(100dvh - 8rem))` so the map nearly fills the
   screen; one-finger page scroll over the map reaches content above.
 
-## Event-scoped map and tile state
+## Event-scoped map state
 
 Switching events clears the event-scoped map metadata/control queries before
 the next routed page mounts. `MapViewer` is also keyed by event, upload version,
-and bounds, so a previous viewport cannot initialize a different event.
+and document hash, so a previous viewport cannot initialize a different event.
 Event tRPC requests include the slug in both the authorization header and an
 `event` query parameter. The API trusts the header; the query parameter exists
 so the service worker's URL-based cache cannot mix responses between events.
 
-Tile caching supports multiple events at once:
-
-- Browser cache URLs contain the event `nameId`, z/x/y, and uploaded-map
-  version: `/api/map-tile/<nameId>/<z>/<x>/<y>?v=<uploadedAt>`.
-- Server-side `map_tiles` rows use the event database ID plus z/x/y.
-- `TileLayer` load/error keys include the full event URL and version, preventing
-  one event's empty or failed tile from suppressing the same z/x/y tile in
-  another event.
-
-Responses are browser-cacheable for seven days. Uploading/replacing a map
-changes `v`, so the new images do not collide with the prior browser entries.
+The map itself is the event's pinned document, addressed by its content hash
+(`/api/map-documents/<hash>`, the event and kiosk key as headers): two events
+on the same club map share one cached document, and a re-upload pins a new
+hash, so nothing stale is drawn (`docs/map-storage.md` §7.1). The tile cache
+of the retired tile layer is deleted on start (E4b, `lib/legacy-caches.ts`).
 
 ## Event list and installation
 

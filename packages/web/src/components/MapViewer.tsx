@@ -13,21 +13,12 @@ import {
   hasThickRuleBelow,
   type DescriptionSheetRow,
 } from "@oxygen/shared";
-import { TileBlobCacheProvider, TileLayer } from "./TileLayer";
 import { MapLayerMessage, VectorMapLayer, type VectorLoupe } from "./VectorMapLayer";
-import { MapLoupe } from "./MapLoupe";
-import { kioskKeyFromUrl } from "../lib/kiosk-key";
-import {
-  type WGS84Bounds,
-  type AffineTransform,
-  buildAffineTransform,
-} from "../lib/geo-utils";
 import {
   type MapViewport,
   type ViewportContext,
   centreOnGeo,
   centreShiftPx,
-  fitGeo,
   fitMm,
   geoToInner,
   geoToMm,
@@ -366,31 +357,14 @@ export interface EditorToolBinding {
 }
 
 interface Props {
-  mapBounds?: WGS84Bounds | null;
-  mapScale?: number | null;
   /**
-   * Bearing from true north to the map's display-up direction, degrees.
-   * The server folds the meridian-line tilt into this (see
-   * `metadataFromOcad`), so negating it puts the map's magnetic-north
-   * lines vertical on screen. Applied as CSS rotation.
+   * Bearing from true north to the map's display-up direction, degrees
+   * (`course.mapMetadata.northOffset`: paper +Y plus the drawn meridians'
+   * tilt). With `cutRotationDeg` it gives the meridian tilt the view undoes.
    */
   northOffset?: number | null;
-  /** Rotation for circle slits (paper north only — excludes meridian tilt). */
+  /** The paper-north part of `northOffset` (`course.mapMetadata.cutRotationDeg`). */
   cutRotationDeg?: number | null;
-  /** Render key / upload stamp for cache-busting tile URLs. */
-  mapVersion?: number | string;
-  /**
-   * Map-mm ↔ WGS84 anchor points from the map's georeference
-   * (course.mapMetadata). Preferred source for the affine transform —
-   * without them a map with fewer than two placed controls has no
-   * mm↔latlng mapping and editor clicks go nowhere.
-   */
-  calibration?: Array<{
-    mapX: number;
-    mapY: number;
-    lat: number;
-    lng: number;
-  }> | null;
   controls?: ControlOverlay[];
   courses?: CourseOverlay[];
   /** Course objects in scope of the highlighted courses, drawn by the GL course layer (docs/course-layer.md §8.3). */
@@ -426,10 +400,9 @@ interface Props {
   /**
    * Content hash of the map's pinned document (`/api/map-documents/:hash`):
    * the vector base layer draws it (docs/map-rendering.md §5.4). `MapPanel`
-   * mounts the viewer only with one; without one the tile path below is
-   * unreachable since E3 and goes in E4b.
+   * mounts the viewer only with one.
    */
-  documentHash?: string | null;
+  documentHash: string;
   /** GPU budget of the vector layer: a club map's 150 MB or an event map's 30 MB. */
   mapBudget?: MapBudget;
   /** Operator rotation correction (`map_files.rotation_correction`), degrees, for the paper frame. */
@@ -461,12 +434,8 @@ function labelOffsetOf(
 // ─── Component ──────────────────────────────────────────────
 
 export function MapViewer({
-  mapBounds,
-  mapScale: mapScaleProp,
   northOffset,
   cutRotationDeg,
-  mapVersion,
-  calibration,
   controls = [],
   courses = [],
   courseObjects,
@@ -496,76 +465,29 @@ export function MapViewer({
   const isCoarsePointer = useMediaQuery("(pointer: coarse)");
   const allowOneFingerMapPan = isFullscreen || !isCoarsePointer || !!editor?.fullBleed;
   const [showTwoFingerHint, setShowTwoFingerHint] = useState(false);
-  const tileUrlBase = nameId ? `/api/map-tile/${nameId}` : "/api/map-tile";
 
   // Base layer: the map document over a paper-space view
-  // (docs/map-rendering.md §5.4). Every event draws its pinned document
-  // since E3; the tile path (no document) is unreachable from `MapPanel`
-  // and goes in E4b.
-  const paperMode = !!documentHash;
-  const pipeline = paperMode ? "vector" : "legacy";
-  const { state: docState, retry: retryDocument } = useMapDocument(paperMode ? documentHash : null, nameId ?? null);
+  // (docs/map-rendering.md §5.4).
+  const { state: docState, retry: retryDocument } = useMapDocument(documentHash, nameId ?? null);
   const mapDoc = docState.status === "ready" ? docState.doc : null;
   const paperFrame = useMemo(
     () => (mapDoc ? paperFrameOf(mapDoc.header, rotationCorrection) : null),
     [mapDoc, rotationCorrection],
   );
-  // The paper view's distances follow the frame its transform uses, not the legacy column.
-  const mapScale = paperMode && paperFrame ? paperFrame.mapScale : mapScaleProp;
+  // Distances (scale bar, measure, leg lengths) follow the frame the transform uses.
+  const mapScale = paperFrame?.mapScale ?? null;
 
   const containerRef = useRef<HTMLDivElement>(null);
   const [viewport, setViewport] = useState<MapViewport | null>(null);
   const viewportRef = useRef<MapViewport | null>(null);
   viewportRef.current = viewport;
-  // Live viewport context for native listeners and callbacks (set below, once the frame size and affine are known).
-  const vctxRef = useRef<ViewportContext>({ w: 0, h: 0, affine: null, frame: null });
+  // Live viewport context for native listeners and callbacks (set below, once the frame size is known).
+  const vctxRef = useRef<ViewportContext>({ w: 0, h: 0, frame: null });
 
   const isPanningRef = useRef(false);
   const lastPosRef = useRef({ x: 0, y: 0 });
   const hasInitialFitRef = useRef(false);
   const lastFocusKeyRef = useRef<string>("");
-
-  // ─── Tile progress polling ────────────────────────────────
-  // Runs until the server reports the pre-cache complete, not just
-  // until the first tiles paint: the endpoint renders a chunk of the
-  // remaining blocks on each poll, so a viewer that stops asking leaves
-  // a freshly uploaded map half-rendered for the next one. The progress
-  // bar itself only shows in the pre-viewport branch below.
-  const [tileProgress, setTileProgress] = useState<{ total: number; done: number; rendering: boolean } | null>(null);
-  const renderCompleteForRef = useRef<string | null>(null);
-  useEffect(() => {
-    if (!mapBounds || paperMode) return; // no map, or no tiles
-    if (renderCompleteForRef.current === (nameId ?? "")) return;
-
-    let cancelled = false;
-    // Chained timeouts, not setInterval: a poll that renders a chunk can
-    // outlast the interval, and overlapping polls would just queue.
-    let timer: ReturnType<typeof setTimeout>;
-    const tick = async () => {
-      try {
-        const headers: Record<string, string> = {};
-        if (nameId) headers["x-competition-id"] = nameId;
-        const kioskKey = kioskKeyFromUrl();
-        if (kioskKey) headers["x-kiosk-key"] = kioskKey;
-        const res = await fetch("/api/map-tile-progress", { headers });
-        if (res.ok) {
-          const progress = await res.json();
-          if (cancelled) return;
-          setTileProgress(progress);
-          if (!progress.rendering) {
-            renderCompleteForRef.current = nameId ?? "";
-            return;
-          }
-        }
-      } catch { /* ignore */ }
-      if (!cancelled) timer = setTimeout(tick, 2000);
-    };
-    timer = setTimeout(tick, 2000);
-    return () => {
-      cancelled = true;
-      clearTimeout(timer);
-    };
-  }, [mapBounds, nameId, paperMode]);
 
   // ─── Measure tool state ──────────────────────────────────
   const [measuring, setMeasuring] = useState(false);
@@ -790,10 +712,9 @@ export function MapViewer({
     return () => ro.disconnect();
   }, []);
 
-  // Map rotation: the drawn meridians vertical on screen — over tiles
-  // (true north up) by −northOffset, over the paper view (paper north
-  // up) by the meridian tilt only (see viewportRotationDeg).
-  const rotDeg = viewportRotationDeg(paperMode ? "paper" : "mercator", northOffset, cutRotationDeg, userBearing);
+  // Map rotation: the drawn meridians vertical on screen — the paper view
+  // is paper-north-up, so by the meridian tilt only (see viewportRotationDeg).
+  const rotDeg = viewportRotationDeg(northOffset, cutRotationDeg, userBearing);
   const rotRad = (rotDeg * Math.PI) / 180;
   // Effective render dimensions: minimum bounding box of a rectangle that
   // fully covers the outer container after rotation. See rotatedBoundingBox
@@ -803,24 +724,9 @@ export function MapViewer({
     containerSize.w, containerSize.h, rotDeg,
   );
 
-  // Build affine transform (mm ↔ lat/lng). The map's own calibration
-  // corners are exact and always well-conditioned, so they win when
-  // available; control-derived points remain the fallback for maps
-  // whose metadata predates calibration support.
-  const affine: AffineTransform | null = useMemo(() => {
-    if (calibration && calibration.length >= 3) {
-      const fromCalibration = buildAffineTransform(calibration);
-      if (fromCalibration) return fromCalibration;
-    }
-    const pts = controls
-      .filter((c) => c.lat !== 0 && c.lng !== 0 && c.x !== 0 && c.y !== 0)
-      .map((c) => ({ mapX: c.x, mapY: c.y, lat: c.lat, lng: c.lng }));
-    return buildAffineTransform(pts);
-  }, [controls, calibration]);
-
   const vctx: ViewportContext = useMemo(
-    () => ({ w: renderW, h: renderH, affine, frame: paperFrame }),
-    [renderW, renderH, affine, paperFrame],
+    () => ({ w: renderW, h: renderH, frame: paperFrame }),
+    [renderW, renderH, paperFrame],
   );
   vctxRef.current = vctx;
 
@@ -828,7 +734,7 @@ export function MapViewer({
   // container's size, the inner frame's rotation (docs/map-rendering.md §5.4).
   const dpr = typeof window !== "undefined" ? window.devicePixelRatio || 1 : 1;
   const glViewRect = useMemo(
-    () => viewport?.kind === "paper" && containerSize.w > 0 && containerSize.h > 0
+    () => viewport && containerSize.w > 0 && containerSize.h > 0
       ? glView(viewport, containerSize.w, containerSize.h, dpr, rotDeg)
       : null,
     [viewport, containerSize, dpr, rotDeg],
@@ -851,7 +757,7 @@ export function MapViewer({
   // (`onCourseSupport(false)`) draws no course: the viewer says so.
   const [courseSupport, setCourseSupport] = useState<boolean | null>(null);
   const [courseInfo, setCourseInfo] = useState<CourseInfo | null>(null);
-  const glCourse = paperMode && courseSupport !== false;
+  const glCourse = courseSupport !== false;
   /** The objects drawn: the stored ones in view with the editor's drafts over them (§7). */
   const drawnObjects = useMemo(() => {
     const drafts = editor?.draftObjects ?? [];
@@ -1026,76 +932,40 @@ export function MapViewer({
   armEditorTargetRef.current = armEditorTargetImpl;
   const armEditorTarget = useCallback((clientX: number, clientY: number, touch: boolean) => armEditorTargetRef.current(clientX, clientY, touch), []);
 
-  /** Fits the whole map: the document's extent (paper) or the tile bounds (mercator). */
+  /** Fits the whole map: the document's extent. */
   const fitWholeMap = useCallback(() => {
     if (containerSize.w === 0 || containerSize.h === 0) return;
-    if (paperMode) {
-      if (mapDoc) setViewport(fitMm(boundsMm(mapDoc.header), containerSize.w, containerSize.h, 0.05));
-    } else if (mapBounds) {
-      setViewport(fitGeo(mapBounds, containerSize.w, containerSize.h, 0.05));
-    }
-  }, [paperMode, mapDoc, mapBounds, containerSize]);
+    if (mapDoc) setViewport(fitMm(boundsMm(mapDoc.header), containerSize.w, containerSize.h, 0.05));
+  }, [mapDoc, containerSize]);
 
-  // ─── Viewport initialization from map bounds ────────────
+  // ─── Viewport initialization from the document's extent ──
 
   useEffect(() => {
-    // The flag flipped under a mounted viewer: start over in the other model.
-    if (viewport && viewport.kind !== (paperMode ? "paper" : "mercator")) {
-      setViewport(null);
-      return;
-    }
     if (viewport) return; // already initialized
     if (containerSize.w === 0 || containerSize.h === 0) return;
-    if (paperMode) {
-      if (!mapDoc) return;
-      setViewport(fitMm(boundsMm(mapDoc.header), containerSize.w, containerSize.h, 0.05));
-    } else {
-      if (!mapBounds) return;
-      setViewport(fitGeo(mapBounds, containerSize.w, containerSize.h, 0.05));
-    }
+    if (!mapDoc) return;
+    setViewport(fitMm(boundsMm(mapDoc.header), containerSize.w, containerSize.h, 0.05));
     hasInitialFitRef.current = false;
     lastFocusKeyRef.current = "";
-  }, [mapBounds, containerSize, viewport, paperMode, mapDoc]);
+  }, [containerSize, viewport, mapDoc]);
 
-  // ─── Helper: compute bounds from controls in lat/lng ─────
+  // ─── Helper: fit the view to controls (paper mm) ─────────
 
   const fitToControlBounds = useCallback(
     (ctrls: ControlOverlay[], padding: number) => {
       if (ctrls.length === 0 || containerSize.w === 0 || containerSize.h === 0) return;
-      if (paperMode) {
-        let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
-        for (const c of ctrls) {
-          const mm = controlMm(c);
-          if (!mm) continue;
-          minX = Math.min(minX, mm.x); maxX = Math.max(maxX, mm.x);
-          minY = Math.min(minY, mm.y); maxY = Math.max(maxY, mm.y);
-        }
-        if (minX === Infinity) return;
-        // Ring radius 2.5 mm on paper, so control rings aren't clipped at the edge.
-        setViewport(fitMm({ minX: minX - 2.5, minY: minY - 2.5, maxX: maxX + 2.5, maxY: maxY + 2.5 }, containerSize.w, containerSize.h, padding));
-        return;
-      }
-      let minLat = Infinity, maxLat = -Infinity, minLng = Infinity, maxLng = -Infinity;
+      let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
       for (const c of ctrls) {
-        if (c.lat === 0 && c.lng === 0) continue;
-        minLat = Math.min(minLat, c.lat); maxLat = Math.max(maxLat, c.lat);
-        minLng = Math.min(minLng, c.lng); maxLng = Math.max(maxLng, c.lng);
+        const mm = controlMm(c);
+        if (!mm) continue;
+        minX = Math.min(minX, mm.x); maxX = Math.max(maxX, mm.x);
+        minY = Math.min(minY, mm.y); maxY = Math.max(maxY, mm.y);
       }
-      if (minLat === Infinity) return;
-      // Expand bounds by ring radius so control rings aren't clipped at the edge.
-      // Ring radius = 2.5 mm on map × mapScale/1000 metres/mm.
-      if (mapScale) {
-        const ringM = 2.5 * mapScale / 1000;
-        const midLat = (minLat + maxLat) / 2;
-        const latMargin = ringM / 111320;
-        const lngMargin = ringM / (111320 * Math.cos(midLat * Math.PI / 180));
-        minLat -= latMargin; maxLat += latMargin;
-        minLng -= lngMargin; maxLng += lngMargin;
-      }
-      const bounds: WGS84Bounds = { north: maxLat, south: minLat, east: maxLng, west: minLng };
-      setViewport(fitGeo(bounds, containerSize.w, containerSize.h, padding));
+      if (minX === Infinity) return;
+      // Ring radius 2.5 mm on paper, so control rings aren't clipped at the edge.
+      setViewport(fitMm({ minX: minX - 2.5, minY: minY - 2.5, maxX: maxX + 2.5, maxY: maxY + 2.5 }, containerSize.w, containerSize.h, padding));
     },
-    [containerSize, mapScale, paperMode, controlMm],
+    [containerSize, controlMm],
   );
 
   // Re-fit when container size changes (e.g. fullscreen toggle).
@@ -1136,19 +1006,19 @@ export function MapViewer({
     const req = editor?.viewRequest;
     if (!req || !viewport || req.key === viewRequestKeyRef.current) return;
     viewRequestKeyRef.current = req.key;
-    if (req.bounds && viewport.kind === "paper") {
+    if (req.bounds) {
       setUserBearing(0);
       setViewport(fitMm(req.bounds, containerSize.w, containerSize.h, 0.04));
     } else if (req.fit && req.fit.length > 0) {
       const ids = new Set(req.fit);
       fitToControlBounds(controls.filter((c) => ids.has(c.id)), 0.08);
-    } else if (req.centre && viewport.kind === "paper") {
+    } else if (req.centre) {
       const c = req.centre;
       // The screen offset into the inner (rotated) frame, then into paper µm (y up).
       const o = req.offsetPx ?? { x: 0, y: 0 };
       const ix = o.x * Math.cos(rotRad) + o.y * Math.sin(rotRad);
       const iy = -o.x * Math.sin(rotRad) + o.y * Math.cos(rotRad);
-      setViewport((prev) => (prev?.kind === "paper"
+      setViewport((prev) => (prev
         ? { ...prev, centreX: c.x * 1000 - ix / prev.pxPerUm, centreY: c.y * 1000 + iy / prev.pxPerUm }
         : prev));
     }
@@ -1177,7 +1047,7 @@ export function MapViewer({
     const ch = containerSize.h || containerRef.current.clientHeight;
     if (cw === 0 || ch === 0) return;
 
-    if (focusControls.length === 1 && paperMode) {
+    if (focusControls.length === 1) {
       const fcMm = controlMm(focusControls[0]);
       if (!fcMm) return;
       const all = controls.filter((c) => c.type === "Control").map(controlMm).filter((p): p is Pt => p !== null);
@@ -1186,30 +1056,12 @@ export function MapViewer({
         const ext = Math.max(Math.max(...xs) - Math.min(...xs), Math.max(...ys) - Math.min(...ys)) * 0.167;
         setViewport(fitMm({ minX: fcMm.x - ext, minY: fcMm.y - ext, maxX: fcMm.x + ext, maxY: fcMm.y + ext }, cw, ch, 0.05));
       } else {
-        setViewport((prev) => prev?.kind === "paper" ? { ...prev, centreX: fcMm.x * 1000, centreY: fcMm.y * 1000 } : prev);
-      }
-    } else if (focusControls.length === 1) {
-      const fc = focusControls[0];
-      const allCtrls = controls.filter((c) => c.type === "Control" && c.lat !== 0);
-      if (allCtrls.length >= 2) {
-        let minLat = Infinity, maxLat = -Infinity, minLng = Infinity, maxLng = -Infinity;
-        for (const c of allCtrls) {
-          minLat = Math.min(minLat, c.lat); maxLat = Math.max(maxLat, c.lat);
-          minLng = Math.min(minLng, c.lng); maxLng = Math.max(maxLng, c.lng);
-        }
-        const ext = Math.max(maxLat - minLat, maxLng - minLng) * 0.167;
-        const bounds: WGS84Bounds = {
-          north: fc.lat + ext, south: fc.lat - ext,
-          east: fc.lng + ext, west: fc.lng - ext,
-        };
-        setViewport(fitGeo(bounds, cw, ch, 0.05));
-      } else {
-        setViewport((prev) => prev ? centreOnGeo(prev, vctxRef.current, fc.lat, fc.lng) : prev);
+        setViewport((prev) => prev ? { ...prev, centreX: fcMm.x * 1000, centreY: fcMm.y * 1000 } : prev);
       }
     } else {
       fitToControlBounds(focusControls, hideControls ? 0.02 : 0.05);
     }
-  }, [viewport, focusControlIds, controls, containerSize, hideControls, fitToControlBounds, paperMode, controlMm]);
+  }, [viewport, focusControlIds, controls, containerSize, hideControls, fitToControlBounds, controlMm]);
 
   // ─── Coordinate helpers ───────────────────────────────────
 
@@ -1233,8 +1085,8 @@ export function MapViewer({
   );
 
   /** Convert screen pixel to map mm (always reads live refs, so touchend
-   *  placement in native listeners never samples a stale viewport/affine
-   *  pair after a pan frame). */
+   *  placement in native listeners never samples a stale viewport after
+   *  a pan frame). */
   const screenToMapMm = useCallback(
     (clientX: number, clientY: number): Pt | null => {
       const vp = viewportRef.current;
@@ -1273,13 +1125,8 @@ export function MapViewer({
     [rotRad, containerSize, renderW, renderH],
   );
 
-  // Symbol size in pixels based on zoom and map scale
-  const symbolScale = useMemo(() => {
-    if (!viewport) return 1;
-    // CSS px per map mm: from the paper view directly, or (tiles) 1 mm on
-    // the map = mapScale/1000 metres on the ground.
-    return pxPerMapMm(viewport, mapScale) ?? 1;
-  }, [viewport, mapScale]);
+  // Symbol size: CSS px per paper mm at the current zoom.
+  const symbolScale = useMemo(() => (viewport ? pxPerMapMm(viewport) : 1), [viewport]);
 
   // ─── Measure helpers ────────────────────────────────────
 
@@ -1453,15 +1300,14 @@ export function MapViewer({
         const rdy = dx * sin + dy * cos;
         dx = rdx; dy = rdy;
       }
-      const vc = { ...vctxRef.current, w: renderW || 1, h: renderH || 1 };
       breakLocateFollow();
-      setViewport((prev) => (prev ? panBy(prev, vc, dx, dy) : prev));
+      setViewport((prev) => (prev ? panBy(prev, dx, dy) : prev));
     }
     if (measuring) {
       const pt = screenToMapMm(e.clientX, e.clientY);
       if (pt) setMeasureCursor(pt);
     }
-  }, [measuring, viewport, renderW, renderH, rotRad, screenToMapMm, editor, breakLocateFollow]);
+  }, [measuring, viewport, rotRad, screenToMapMm, editor, breakLocateFollow]);
 
   const handleMouseUp = useCallback((e: React.MouseEvent) => {
     if (editor && toolDragRef.current) {
@@ -1569,11 +1415,10 @@ export function MapViewer({
         const rdy = dx * sin + dy * cos;
         dx = rdx; dy = rdy;
       }
-      const vc = { ...vctxRef.current, w: renderW || 1, h: renderH || 1 };
       breakLocateFollowRef.current();
       setViewport((prev) => {
         if (!prev) return prev;
-        const next = panBy(prev, vc, dx, dy);
+        const next = panBy(prev, dx, dy);
         // Sync immediately so a tap on the same gesture frame sees the
         // post-pan viewport (React state alone would still be stale).
         viewportRef.current = next;
@@ -1890,7 +1735,7 @@ export function MapViewer({
           const vp = viewportRef.current;
           if (startVp && vp) {
             // Centre drift in CSS pixels at the current zoom.
-            viewportCenterDeltaPx = centreShiftPx(startVp, vp, { ...vctxRef.current, w: renderW || 1, h: renderH || 1 });
+            viewportCenterDeltaPx = centreShiftPx(startVp, vp);
           }
           if (isMeasureTap({ fingerMovementPx, viewportCenterDeltaPx })) {
             const pt = screenToMapMm(t.clientX, t.clientY);
@@ -1981,14 +1826,14 @@ export function MapViewer({
 
   // ─── Overlay rendering ─────────────────────────────────
 
-  // GPS tracks in paper mm for the paper view: proj4 once per point per
-  // route set, so pan and zoom only scale them.
+  // GPS tracks in paper mm: proj4 once per point per route set, so pan
+  // and zoom only scale them.
   const gpsRoutesMm = useMemo(() => {
-    if (!paperMode || !gpsRoutes || !paperFrame) return null;
+    if (!gpsRoutes || !paperFrame) return null;
     return gpsRoutes.map((r) =>
       r.points.map(({ lat, lng }) => geoToMm(paperFrame, lat, lng)).filter((p): p is Pt => p !== null),
     );
-  }, [paperMode, gpsRoutes, paperFrame]);
+  }, [gpsRoutes, paperFrame]);
 
   const overlayContent = useMemo(() => {
     if (!viewport || containerSize.w === 0 || containerSize.h === 0) return null;
@@ -2008,19 +1853,16 @@ export function MapViewer({
     const legStroke = Math.max(0.5, (glm?.lineWidthMm ?? 0.35) * symbolScale);
 
     const mmPx = (mx: number, my: number) => {
-      const p = mmToInner(viewport, vctx, mx, my)!;
+      const p = mmToInner(viewport, vctx, mx, my);
       return { px: p.x, py: p.y };
     };
 
-    // Build pixel positions for all controls: tiles from lat/lng, the
-    // paper view from the control's own mm (lat/lng only as a fallback).
+    // Pixel positions for all controls: the control's own paper mm
+    // (lat/lng through the document's frame only as a fallback).
     const ctrlPixels = new Map<string, Pt>();
     for (const c of controls) {
-      const mm = viewport.kind === "paper" ? controlMm(c) : null;
-      const p = mm
-        ? mmToInner(viewport, vctx, mm.x, mm.y)
-        : c.lat === 0 && c.lng === 0 ? null : geoToInner(viewport, vctx, c.lat, c.lng);
-      if (p) ctrlPixels.set(c.id, p);
+      const mm = controlMm(c);
+      if (mm) ctrlPixels.set(c.id, mmToInner(viewport, vctx, mm.x, mm.y));
     }
 
     // Editor overrides: a control being dragged (or whose move is still
@@ -2061,12 +1903,7 @@ export function MapViewer({
         const route = gpsRoutes[ri];
         if (route.points.length < 2) continue;
         // Tracks reach the paper view through mapGeo once per route (gpsRoutesMm), not per frame.
-        const screenPts = viewport.kind === "paper"
-          ? (gpsRoutesMm?.[ri] ?? []).map((p) => mmPx(p.x, p.y))
-          : route.points.map(({ lat, lng }) => {
-              const p = geoToInner(viewport, vctx, lat, lng)!;
-              return { px: p.x, py: p.y };
-            });
+        const screenPts = (gpsRoutesMm?.[ri] ?? []).map((p) => mmPx(p.x, p.y));
         const d = screenPts
           .map((p, i) => `${i === 0 ? "M" : "L"}${p.px.toFixed(1)},${p.py.toFixed(1)}`)
           .join(" ");
@@ -2397,18 +2234,8 @@ export function MapViewer({
 
   // ─── Render ───────────────────────────────────────────
 
-  if (!mapBounds && !paperMode) {
-    return (
-      <div className={`flex items-center justify-center bg-slate-50 rounded-lg border border-slate-200 ${className}`} style={style}>
-        <div className="text-center p-4">
-          <p className="text-sm text-slate-500">No map uploaded</p>
-        </div>
-      </div>
-    );
-  }
-
   if (!viewport) {
-    if (paperMode && docState.status === "error") {
+    if (docState.status === "error") {
       const key = {
         offline: "mapDocumentOffline",
         unauthorised: "mapDocumentUnauthorised",
@@ -2416,7 +2243,7 @@ export function MapViewer({
         failed: "mapDocumentFailed",
       } as const;
       return (
-        <div ref={containerRef} data-testid="map-viewer" data-map-pipeline={pipeline} className={`relative bg-slate-50 rounded-lg border border-slate-200 ${className}`} style={style}>
+        <div ref={containerRef} data-testid="map-viewer" className={`relative bg-slate-50 rounded-lg border border-slate-200 ${className}`} style={style}>
           <MapLayerMessage message={t(key[docState.kind])} onRetry={retryDocument} retryLabel={t("mapRetry")} />
         </div>
       );
@@ -2426,17 +2253,6 @@ export function MapViewer({
         <div className="text-center">
           <div className="w-8 h-8 border-3 border-blue-200 border-t-blue-600 rounded-full animate-spin mx-auto mb-3" />
           <p className="text-sm text-slate-500">{t("loadingMap")}</p>
-          {tileProgress && tileProgress.rendering && tileProgress.total > 0 && (
-            <>
-              <div className="w-32 h-1.5 bg-slate-200 rounded-full mt-2 mx-auto">
-                <div className="h-full bg-blue-500 rounded-full transition-all"
-                  style={{ width: `${Math.round((tileProgress.done / tileProgress.total) * 100)}%` }} />
-              </div>
-              <p className="text-xs text-slate-400 mt-1">
-                Generating tiles... {tileProgress.done}/{tileProgress.total}
-              </p>
-            </>
-          )}
         </div>
       </div>
     );
@@ -2619,7 +2435,7 @@ export function MapViewer({
           <circle cx={touchFinger.x} cy={touchFinger.y} r={12} fill="rgba(124, 58, 237, 0.18)" stroke="#7c3aed" strokeWidth={1.5} />
         </svg>
       );
-      if (viewport.kind === "paper" && glViewRect) {
+      if (glViewRect) {
         const c = loupePlacement(touchFinger, { width: containerSize.w, height: containerSize.h });
         const r = LOUPE_DIAMETER_PX / 2;
         glLoupe = { xUm: editorDragPos.x * 1000, yUm: editorDragPos.y * 1000, cx: c.x, cy: c.y, diameterPx: LOUPE_DIAMETER_PX, scale: LOUPE_SCALE };
@@ -2676,22 +2492,21 @@ export function MapViewer({
   const containerTouchAction =
     measuring || allowOneFingerMapPan ? "none" : "pan-y";
 
-  // The paper view's centre in WGS 84, for the data-* attributes only.
-  const centreGeo = viewport.kind === "paper" ? innerToGeo(viewport, vctx, renderW / 2, renderH / 2) : null;
+  // The view's centre in WGS 84, for the data-* attributes only.
+  const centreGeo = innerToGeo(viewport, vctx, renderW / 2, renderH / 2);
 
   return (
     <div
       ref={containerRef}
       data-testid="map-viewer"
-      data-map-pipeline={pipeline}
       data-course-layer={glCourse ? "gl" : "none"}
       data-editor-hit={editor ? "shared" : undefined}
-      data-center-lat={viewport.kind === "mercator" ? viewport.centerLat : centreGeo?.lat}
-      data-center-lng={viewport.kind === "mercator" ? viewport.centerLng : centreGeo?.lng}
+      data-center-lat={centreGeo?.lat}
+      data-center-lng={centreGeo?.lng}
       data-zoom={mercatorEquivalentZoom(viewport, mapScale, centreGeo?.lat ?? null) ?? undefined}
-      data-centre-x={viewport.kind === "paper" ? viewport.centreX : undefined}
-      data-centre-y={viewport.kind === "paper" ? viewport.centreY : undefined}
-      data-px-per-um={viewport.kind === "paper" ? viewport.pxPerUm : undefined}
+      data-centre-x={viewport.centreX}
+      data-centre-y={viewport.centreY}
+      data-px-per-um={viewport.pxPerUm}
       data-rotation={rotDeg}
       data-user-bearing={userBearing}
       data-measure-points={measurePoints.length}
@@ -2724,7 +2539,7 @@ export function MapViewer({
         if (p) tool.onContextMenu(p);
       }}
     >
-      {paperMode && courseSupport === false && (
+      {courseSupport === false && (
         // A document whose colour stack is not aligned cannot take the GL
         // course layer (`CourseStackError`, docs/map-rendering.md §5.4
         // "Fallback"): say so — no course is drawn until the map is re-imported.
@@ -2747,9 +2562,8 @@ export function MapViewer({
           </div>
         </div>
       )}
-      <TileBlobCacheProvider>
       {/* Vector base map: container-sized and unrotated — the rotation is in its view matrix */}
-      {viewport.kind === "paper" && mapDoc && glViewRect && (
+      {mapDoc && glViewRect && (
         <VectorMapLayer
           doc={mapDoc}
           view={glViewRect}
@@ -2763,7 +2577,7 @@ export function MapViewer({
           loupe={glLoupe}
         />
       )}
-      {/* Rotated map layer (tiles + overlay) — corrects map north offset */}
+      {/* Rotated UI layer (the overlay SVG) — the meridians vertical, as the canvas's view matrix */}
       <div style={{
         position: "absolute",
         inset: 0,
@@ -2771,19 +2585,7 @@ export function MapViewer({
         transformOrigin: "center center",
         ...(rotDeg !== 0 ? { width: renderW, height: renderH, left: (containerSize.w - renderW) / 2, top: (containerSize.h - renderH) / 2 } : {}),
       }}>
-        {/* Base map tiles (composite half) */}
-        {viewport.kind === "mercator" && <TileLayer
-          viewport={viewport}
-          containerWidth={renderW}
-          containerHeight={renderH}
-          tileUrlBase={tileUrlBase}
-          tileVersion={mapVersion}
-          half="top"
-          zIndex={1}
-          data-testid="map-tiles-composite"
-        />}
-
-        {/* Lower purple: legs, circles, start, finish */}
+        {/* Lower UI layer: faded controls, completion rings */}
         <svg
           data-testid="map-course-overlay-lower"
           style={{ position: "absolute", inset: 0, width: "100%", height: "100%", pointerEvents: "none", zIndex: 2 }}
@@ -2794,20 +2596,7 @@ export function MapViewer({
           </g>
         </svg>
 
-        {/* Ink half — black/brown/blue 100% lines and points above lower purple.
-            The vector layer has no ink split: the overlay draws above the whole map (§5.4). */}
-        {viewport.kind === "mercator" && <TileLayer
-          viewport={viewport}
-          containerWidth={renderW}
-          containerHeight={renderH}
-          tileUrlBase={tileUrlBase}
-          tileVersion={mapVersion}
-          half="bottom"
-          zIndex={3}
-          data-testid="map-tiles-ink"
-        />}
-
-        {/* Upper purple + GPS + editor hits */}
+        {/* Upper UI layer: status rings, badges, pills, GPS, measure, editor shapes */}
         <svg
           data-testid="map-course-overlay-upper"
           style={{ position: "absolute", inset: 0, width: "100%", height: "100%", pointerEvents: "none", zIndex: 4 }}
@@ -2820,7 +2609,7 @@ export function MapViewer({
               const fix = editor?.fix ?? (locateMode !== "off" ? geo.position : null);
               if (!fix || !viewport) return null;
               const p = geoToInner(viewport, vctx, fix.lat, fix.lng);
-              const mpp = metresPerPx(viewport, mapScale, fix.lat);
+              const mpp = metresPerPx(viewport, mapScale);
               if (!p || mpp == null) return null;
               const px = p.x, py = p.y;
               const radius = accuracyRadiusPx(fix.accuracy, mpp);
@@ -2936,26 +2725,6 @@ export function MapViewer({
       {editorMenu}
       {dragWarning}
       {touchHandle}
-      {editor && editorDragPos && viewport.kind === "mercator" && (() => {
-        const inner = mapMmToScreen(editorDragPos.x, editorDragPos.y);
-        if (!inner) return null;
-        const pos = innerToContainer(inner.x, inner.y);
-        return (
-          <MapLoupe
-            anchorX={pos.x}
-            anchorY={pos.y}
-            containerWidth={containerSize.w}
-            containerHeight={containerSize.h}
-            viewport={viewport}
-            tileUrlBase={tileUrlBase}
-            tileVersion={mapVersion}
-            rotDeg={rotDeg}
-            controlRadiusPx={overlayContent?.radiusPx ?? 12}
-            touch={editorDragTouch}
-          />
-        );
-      })()}
-      </TileBlobCacheProvider>
 
       {/* Description sheet (not rotated) */}
       {descriptionSheet && (

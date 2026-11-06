@@ -599,8 +599,9 @@ function MapPanelImpl({
   const isLoadingMap = mapInfo.isLoading || (mapInfo.data && mapMetadata.isLoading);
   // A map without a pinned document (its import is running, failed, or
   // never ran) shows the import state, not a viewer: there is nothing to
-  // draw and no tiles to fall back to (docs/map-rendering.md §5.4).
-  const awaitingDocument = hasMap && !isLoadingMap && !mapMetadata.data?.documentHash;
+  // draw (docs/map-rendering.md §5.4).
+  const documentHash = mapMetadata.data?.documentHash ?? null;
+  const awaitingDocument = hasMap && !isLoadingMap && !documentHash;
   const refetchMapMetadata = mapMetadata.refetch;
   const onDocumentReady = useCallback(() => {
     void refetchMapMetadata();
@@ -823,7 +824,7 @@ function MapPanelImpl({
     );
   }
 
-  if (awaitingDocument) {
+  if (awaitingDocument || !documentHash) {
     return (
       <div
         data-testid="map-panel"
@@ -862,14 +863,10 @@ function MapPanelImpl({
         style={{ flex: isFullscreen || fillContainer ? "1 1 0" : undefined }}
       >
         <MapViewer
-          key={`${nameId ?? "current"}:${mapMetadata.data?.uploadedAt ?? "loading"}:${JSON.stringify(mapMetadata.data?.bounds ?? null)}:${mapMetadata.data?.documentHash ?? ""}`}
-          mapBounds={mapMetadata.data?.bounds}
-          mapScale={mapMetadata.data?.scale}
+          key={`${nameId ?? "current"}:${mapMetadata.data?.uploadedAt ?? "loading"}:${documentHash}`}
           northOffset={mapMetadata.data?.northOffset}
           cutRotationDeg={mapMetadata.data?.cutRotationDeg}
-          mapVersion={mapMetadata.data?.renderKey ?? mapMetadata.data?.uploadedAt}
-          calibration={mapMetadata.data?.calibration}
-          documentHash={mapMetadata.data?.documentHash}
+          documentHash={documentHash}
           mapBudget={mapMetadata.data?.clubMapVersionId ? "club" : "event"}
           rotationCorrection={mapMetadata.data?.rotationCorrection}
           controls={controlOverlays}
