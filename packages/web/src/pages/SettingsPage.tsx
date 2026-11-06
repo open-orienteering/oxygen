@@ -4,8 +4,7 @@ import { useTranslation } from "react-i18next";
 import { trpc } from "../lib/trpc";
 import { LanguageSelector } from "../components/LanguageSelector";
 import { UserChip } from "../components/UserChip";
-import { fileToBase64 } from "../lib/file-to-base64";
-import { shouldUseChunkedUpload, uploadMapFileChunked } from "../lib/map-upload";
+import { uploadMapFileChunked } from "../lib/map-upload";
 import { useCurrentUser } from "../context/CurrentUserContext";
 import { LibraryControlsTab } from "./LibraryControlsTab";
 import { LibraryGroupsTab } from "./LibraryGroupsTab";
@@ -66,9 +65,6 @@ export function SettingsPage() {
         ? 2000
         : false,
   });
-  const upload = trpc.clubMap.upload.useMutation({
-    onSuccess: () => void utils.clubMap.list.invalidate(),
-  });
   const addFromSource = trpc.clubMap.addFromSource.useMutation({
     onSuccess: () => void utils.clubMap.list.invalidate(),
   });
@@ -90,6 +86,8 @@ export function SettingsPage() {
     name: string;
   } | null>(null);
   const [uploadError, setUploadError] = useState<string | null>(null);
+  // True from the first chunk until the series exists (or the upload fails).
+  const [uploading, setUploading] = useState(false);
 
   // Admin-only tabs are hidden rather than disabled, so a member never
   // sees a door they cannot open. Deep links to them fall back to maps.
@@ -112,19 +110,17 @@ export function SettingsPage() {
     async (file: File) => {
       if (!file.name.toLowerCase().endsWith(".ocd")) return;
       setUploadError(null);
+      setUploading(true);
       try {
-        if (shouldUseChunkedUpload(file.size)) {
-          const { fileHash } = await uploadMapFileChunked(file);
-          await addFromSource.mutateAsync({ fileHash, fileName: file.name });
-        } else {
-          const fileDataBase64 = await fileToBase64(file);
-          await upload.mutateAsync({ fileName: file.name, fileDataBase64 });
-        }
+        const { fileHash } = await uploadMapFileChunked(file);
+        await addFromSource.mutateAsync({ fileHash, fileName: file.name });
       } catch (err) {
         setUploadError(err instanceof Error ? err.message : String(err));
+      } finally {
+        setUploading(false);
       }
     },
-    [upload, addFromSource],
+    [addFromSource],
   );
 
   /** Series-level (`createdBy`) and version-level (`uploadedBy`) owner checks, §6.5. */
@@ -231,7 +227,7 @@ export function SettingsPage() {
                   e.target.value = "";
                 }}
               />
-              {upload.isPending && (
+              {uploading && (
                 <div className="mt-2 text-xs text-blue-600">{t("uploading")}</div>
               )}
               {uploadError && (

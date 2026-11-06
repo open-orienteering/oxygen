@@ -117,8 +117,8 @@ afterAll(async () => {
 });
 
 describe("map file info and metadata", () => {
-  // `size` is now computed in SQL (octet_length) so the query no longer
-  // ships the blob to the API just to read `.length`.
+  // `size` is the source row's `size_bytes` (E5: map_files carries no
+  // bytes), so the query never ships the blob to the API.
   it("reports the uploaded file's exact byte size without fetching it", async () => {
     const info = await caller.course.mapFileInfo();
     expect(info).not.toBeNull();
@@ -128,17 +128,13 @@ describe("map file info and metadata", () => {
   });
 
   // The colour-stack fields and the render key went with the raster
-  // (E4a); the upload still writes the columns for the v0.5.0 rollback.
-  it("answers without the colour-stack fields or the render key, which the upload still writes", async () => {
+  // (E4a); their columns with the drops (E5).
+  it("answers without the colour-stack fields or the render key", async () => {
     const meta = await caller.course.mapMetadata();
     expect(meta).not.toBeNull();
     for (const gone of ["colorProfile", "colorOverrides", "northLinesBelow", "resolvedProfile", "resolvedBy", "renderKey"]) {
       expect(meta).not.toHaveProperty(gone);
     }
-    const row = await ctx.db.mapFile.findFirstOrThrow({ where: { eventId: ctx.eventId }, orderBy: { uploadedAt: "desc" }, select: { renderKey: true, fileHash: true, colorProfile: true } });
-    expect(row.renderKey).toBeTruthy();
-    expect(row.fileHash).toBeTruthy();
-    expect(row.colorProfile).toBe("auto");
   });
 });
 

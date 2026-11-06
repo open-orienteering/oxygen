@@ -14,12 +14,16 @@
  * and runs a subset of the spec files in each with today's serial
  * semantics. `playwright.config.ts` reads E2E_SHARD / E2E_API_PORT /
  * E2E_WEB_PORT / E2E_EVENTOR_PORT / E2E_DB_NAME to wire everything up.
+ * E2E_DB_PREFIX (default `oxygen_e2e`) renames the databases — a branch
+ * whose migration drops columns runs on its own copies instead of the
+ * databases every other worktree migrates and reuses.
  *
  * Usage:
  *   pnpm test:e2e                    # full suite, sharded (default: min(4, cores/2))
  *   pnpm test:e2e e2e/kiosk.spec.ts  # selective run → single plain
  *                                    # playwright process, no sharding
  *   E2E_SHARDS=2 pnpm test:e2e       # fewer shards (lower peak load)
+ *   E2E_DB_PREFIX=oxygen_e5 pnpm test:e2e  # databases oxygen_e5_<i>
  *   pnpm test:e2e:serial             # escape hatch: plain playwright test
  *                                    # (same 4100/4200/4300 default stack as a
  *                                    # selective run, never the dev servers)
@@ -51,6 +55,7 @@ const SHARD_COUNT = Math.max(1, Number(process.env.E2E_SHARDS ?? DEFAULT_SHARDS)
 const API_PORT_BASE = 4100;
 const WEB_PORT_BASE = 4200;
 const EVENTOR_PORT_BASE = 4300;
+const DB_PREFIX = process.env.E2E_DB_PREFIX ?? "oxygen_e2e";
 
 /**
  * Relative run-time weights per spec file (LPT assignment) live in
@@ -87,7 +92,7 @@ if (hasFileFilter) {
     E2E_API_PORT: process.env.E2E_API_PORT ?? String(API_PORT_BASE),
     E2E_WEB_PORT: process.env.E2E_WEB_PORT ?? String(WEB_PORT_BASE),
     E2E_EVENTOR_PORT: process.env.E2E_EVENTOR_PORT ?? String(EVENTOR_PORT_BASE),
-    E2E_DB_NAME: process.env.E2E_DB_NAME ?? "oxygen_e2e",
+    E2E_DB_NAME: process.env.E2E_DB_NAME ?? DB_PREFIX,
   });
   child.on("exit", (code) => process.exit(code ?? 1));
 } else {
@@ -113,7 +118,7 @@ if (hasFileFilter) {
   );
   shards.forEach((s, i) => {
     console.log(
-      `  shard ${i + 1} (api :${API_PORT_BASE + i + 1}, web :${WEB_PORT_BASE + i + 1}, eventor :${EVENTOR_PORT_BASE + i + 1}, db oxygen_e2e_${i + 1}, weight ${s.weight}):`,
+      `  shard ${i + 1} (api :${API_PORT_BASE + i + 1}, web :${WEB_PORT_BASE + i + 1}, eventor :${EVENTOR_PORT_BASE + i + 1}, db ${DB_PREFIX}_${i + 1}, weight ${s.weight}):`,
     );
     for (const f of s.files) console.log(`    ${f}`);
   });
@@ -145,7 +150,7 @@ if (hasFileFilter) {
         E2E_API_PORT: String(API_PORT_BASE + n),
         E2E_WEB_PORT: String(WEB_PORT_BASE + n),
         E2E_EVENTOR_PORT: String(EVENTOR_PORT_BASE + n),
-        E2E_DB_NAME: `oxygen_e2e_${n}`,
+        E2E_DB_NAME: `${DB_PREFIX}_${n}`,
       };
       const t0 = Date.now();
       const child = runPlaywright([...args, ...shard.files], env, (line) => {

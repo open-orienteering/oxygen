@@ -49,7 +49,6 @@ async function cleanStaleEvents(): Promise<void> {
     );
     // Club-library rows outlive events; a previous run's series would keep
     // its documents visible to every signed-in user (docs/map-storage.md §4.2).
-    await client.query("DELETE FROM club_map_files");
     await client.query("DELETE FROM club_maps");
     // Instance-wide, keyed by symbol geometry (docs/map-symbols.md §8.5):
     // a previous run's decision would change every import of e2e/test.ocd.

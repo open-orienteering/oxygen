@@ -1,39 +1,22 @@
 /**
- * Editor course-geometry builder.
+ * Derived course lengths (docs/course-layer.md §4.1).
  *
- * When a course's control sequence changes, or a control is moved on the
- * map, the stored GeoJSON overlay (`courses.geometry`) and derived fields
- * (`length_m`, `legs`) must be regenerated. Imported geometry ('ocd' /
- * 'xml' sources) is import-time only, so any edit switches the course to
- * `geometrySource: "editor"` with straight-line legs — the same shape the
- * IOF XML importer produces.
+ * When a course's control sequence changes, a control is moved on the
+ * map, or the event map is replaced, the derived fields `legs` and
+ * (optionally) `length_m` are regenerated from the course layer over the
+ * course's sequence, and `length_source` is set to `derived`
+ * (docs/course-controls-and-matching.md "Course length"). The GeoJSON
+ * artifact this module wrote into `courses.geometry` until v0.6.0 went
+ * with the column (E5).
  *
- * The GeoJSON is the course layer's projection (`course.courseLayer` →
- * `course.courseLayerGeoJson`, docs/course-layer.md §4): the compatibility
- * artifact for consumers not yet drawing from the layer, computed at the
- * legacy sizes they draw (2.5 mm circles, 0.35 mm lines).
- *
- * Coordinates are paper mm (the unit of `controls.xpos/ypos` and of all
- * course-geometry GeoJSON). Terrain meters = mm × mapScale / 1000.
+ * Coordinates are paper mm (the unit of `controls.xpos/ypos`). Terrain
+ * meters = mm × mapScale / 1000.
  */
 
 import { course, symbolLibrary } from "@oxygen/shared";
 import type { PrismaClient, Prisma } from "./generated/prisma/client.js";
-import { Prisma as PrismaNs } from "./generated/prisma/client.js";
 import { loadEventCrs } from "./event-crs.js";
-import { loadEventCutFeatures } from "./event-map-objects.js";
 import { courseSequenceOf } from "./course-structure.js";
-
-/**
- * The stored automatic cut/gap semantics `courses.geometry` is written
- * with, stamped on `events.overprint_cuts_version` by the writes that
- * rebuild every editor course (map upload, rotation, the toggle) until
- * E5 drops both. 1: OCAD-parse cuts. 2: knolls and rocks only. 3: written
- * by the course layer, size-aware cuts, features from the pinned
- * document. Nothing reads it since E6 (the lazy read-migration went with
- * `course.geometry`); v0.5.0 still migrates an event below it on rollback.
- */
-export const OVERPRINT_CUTS_VERSION = 3;
 
 /** One entry of a course's rendered sequence (start + controls + finish). */
 export interface GeometrySeqControl {
@@ -47,10 +30,9 @@ export interface GeometrySeqControl {
 }
 
 /**
- * The artifact's document context: the ISOM stack at factor 1, so the
- * layer draws the legacy 2.5 mm circle and 0.35 mm line its consumers draw
- * (user decision 2026-10-24, course-layer.md). The map's own scale enters
- * only through the cut features' symbol radii.
+ * The document context the lengths are derived in: the ISOM stack at
+ * factor 1 (user decision 2026-10-24, course-layer.md). Leg lengths are
+ * centre to centre, so neither the sizes nor the map's scale change them.
  */
 let artifactContext: course.CourseDocumentContext | undefined;
 export function legacySizeContext(): course.CourseDocumentContext {
@@ -67,14 +49,13 @@ const KIND = { Start: "start", Control: "control", Finish: "finish" } as const;
 /**
  * The course layer of an editor course over its sequence (course-layer.md
  * §4.1): one item per entry (`role` = the entry's type) over the rows as
- * sites, at the legacy sizes. Unpositioned controls are skipped by the
- * layer; `cutFeatures` null = no automatic cuts.
+ * sites, without automatic cuts (they do not change a leg's length).
+ * Unpositioned controls are skipped by the layer.
  */
 export function editorCourseLayer(
   courseId: string,
   seq: GeometrySeqControl[],
   orderMode: "ordered" | "free_order" = "ordered",
-  cutFeatures: readonly course.CutFeature[] | null = null,
 ): course.CourseLayer {
   const sites = new Map<string, course.CourseSite>();
   for (const c of seq) sites.set(c.id, { id: c.id, code: c.code, kind: KIND[c.type], x: c.xMm, y: c.yMm });
@@ -85,23 +66,12 @@ export function editorCourseLayer(
     appearance: {},
     viewOptions: {},
     document: legacySizeContext(),
-    ...(cutFeatures ? { cutFeatures } : {}),
   });
 }
 
-/**
- * The stored GeoJSON of an editor course: its layer, projected
- * (course-layer.md §4). Unpositioned controls are omitted; `ordered`
- * courses get straight legs between the remaining consecutive controls,
- * free-order courses points only. Written until E5 drops the column.
- */
-export function editorCourseGeometry(
-  courseId: string,
-  seq: GeometrySeqControl[],
-  orderMode: "ordered" | "free_order" = "ordered",
-  cutFeatures: readonly course.CutFeature[] | null = null,
-): course.CourseGeoJson {
-  return course.courseLayerGeoJson(editorCourseLayer(courseId, seq, orderMode, cutFeatures), courseId);
+/** Whether the layer's first course draws anything: at least one positioned item. */
+export function hasPositionedItems(layer: Pick<course.CourseLayer, "derivation">): boolean {
+  return (layer.derivation.courses[0]?.sequence.length ?? 0) > 0;
 }
 
 /**
@@ -138,7 +108,7 @@ function displayCode(c: { codes: string; name: string; seq: number }): string {
   return first || c.name || String(c.seq);
 }
 
-/** A course's rendered sequence and order mode, as `rebuildCourseGeometry` builds it. */
+/** A course's rendered sequence and order mode, as `rebuildCourseLengths` reads it. */
 export interface CourseSequence {
   seq: GeometrySeqControl[];
   orderMode: "ordered" | "free_order";
@@ -255,12 +225,13 @@ export async function loadCourseSequences(
 }
 
 /**
- * Regenerate geometry (+ legs string and, optionally, length) for the given
- * courses. Call inside the mutating transaction, BEFORE emitting the
- * course.upserted journal entries so the shipped payloads carry the new
- * geometry. Sequences per `loadCourseSequences`.
+ * Regenerate the derived `legs` string, `length_source` and, optionally,
+ * `length_m` for the given courses (docs/course-layer.md §4.1). Call
+ * inside the mutating transaction, BEFORE emitting the course.upserted
+ * journal entries so the shipped payloads carry the new values. Sequences
+ * per `loadCourseSequences`.
  */
-export async function rebuildCourseGeometry(
+export async function rebuildCourseLengths(
   db: Db,
   eventId: bigint,
   courseUuids: string[],
@@ -272,34 +243,16 @@ export async function rebuildCourseGeometry(
   const crs = await loadEventCrs(db, eventId);
   const mapScale = crs?.mapScale ?? null;
 
-  // Features for automatic overprint cuts around compact knoll / rock
-  // point features: the pinned document's. Null when there is no pin —
-  // and skipped when the event has auto overprint cuts turned off.
-  const eventRow = await db.event.findUnique({
-    where: { id: eventId },
-    select: { autoOverprintCuts: true },
-  });
-  const cutFeatures =
-    eventRow?.autoOverprintCuts === false
-      ? null
-      : await loadEventCutFeatures(db, eventId);
-
   const sequences = await loadCourseSequences(db, eventId, courseUuids);
   for (const [courseUuid, { seq, orderMode }] of sequences) {
-    // One layer per course: the column's projection and the lengths.
-    const layer = editorCourseLayer(courseUuid, seq, orderMode, cutFeatures);
-    const geometry = course.courseLayerGeoJson(layer, courseUuid);
+    const layer = editorCourseLayer(courseUuid, seq, orderMode);
 
-    const data: Record<string, unknown> = {
-      geometry:
-        geometry.features.length > 0
-          ? (geometry as unknown as Prisma.InputJsonValue)
-          : PrismaNs.DbNull,
-      geometrySource: geometry.features.length > 0 ? "editor" : "",
+    const data: Prisma.CourseUpdateInput = {
       // The length provenance the export and the Eventor sync read
       // (course-controls-and-matching.md "Course length"): an edited
-      // course's length is derived from its controls.
-      lengthSource: geometry.features.length > 0 ? "derived" : null,
+      // course's length is derived from its controls; one with no
+      // positioned control has neither.
+      lengthSource: hasPositionedItems(layer) ? "derived" : null,
     };
     // Free-order courses have no meaningful legs — leave lengthM / legs
     // alone (the organiser sets length manually). Ordered courses keep

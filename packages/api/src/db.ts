@@ -40,18 +40,6 @@ export function prisma(): PrismaClient {
   return _prisma;
 }
 
-/**
- * Map upload listeners — fired when a new OCAD map is uploaded to an event.
- * Used to invalidate cached course geometry.
- */
-const mapUploadListeners: ((eventId: bigint) => void)[] = [];
-export function onMapUpload(cb: (eventId: bigint) => void) {
-  mapUploadListeners.push(cb);
-}
-export function fireMapUpload(eventId: bigint) {
-  for (const cb of mapUploadListeners) cb(eventId);
-}
-
 // ─── Event resolution ──────────────────────────────────────
 
 export interface EventRef {

@@ -1,10 +1,5 @@
 import { describe, it, expect, vi } from "vitest";
-import {
-  CHUNKED_UPLOAD_THRESHOLD,
-  MapUploadError,
-  shouldUseChunkedUpload,
-  uploadMapFileChunked,
-} from "../lib/map-upload";
+import { MapUploadError, uploadMapFileChunked } from "../lib/map-upload";
 
 /** In-memory stand-in for the three upload routes. */
 function fakeServer(opts: { failChunkOnce?: number; rejectChunk?: number } = {}) {
@@ -47,15 +42,19 @@ function fakeServer(opts: { failChunkOnce?: number; rejectChunk?: number } = {})
 const bytesOf = (n: number) => Uint8Array.from({ length: n }, (_, i) => i % 251);
 const file = (n: number, name = "big.ocd") => Object.assign(new Blob([bytesOf(n)]), { name });
 
-describe("shouldUseChunkedUpload", () => {
-  it("switches above the 8 MiB threshold only", () => {
-    expect(shouldUseChunkedUpload(CHUNKED_UPLOAD_THRESHOLD)).toBe(false);
-    expect(shouldUseChunkedUpload(CHUNKED_UPLOAD_THRESHOLD + 1)).toBe(true);
-    expect(shouldUseChunkedUpload(26_000)).toBe(false);
-  });
-});
-
 describe("uploadMapFileChunked", () => {
+  it("sends a small map as one chunk — there is no base64 path any more (E5)", async () => {
+    const srv = fakeServer();
+    const result = await uploadMapFileChunked(file(26_000, "small.ocd"), { fetch: srv.fetchImpl });
+    expect(result.bytes).toBe(26_000);
+    expect([...srv.chunks.keys()]).toEqual([0]);
+    expect(srv.calls).toEqual([
+      "POST /api/map-uploads",
+      "PUT /api/map-uploads/u1/chunks/0",
+      "POST /api/map-uploads/u1/finalise",
+    ]);
+  });
+
   it("inits, puts every chunk with the right slice, finalises, and reports progress", async () => {
     const srv = fakeServer();
     const progress: number[] = [];

@@ -38,9 +38,6 @@ async function legacyCrs(): Promise<OcadCrs> {
 beforeAll(async () => {
   ctx = await createTestEvent("document_readers");
   caller = makeCaller(ctx.event);
-  // Since E3 a new event gets `vector` from the column default; nothing
-  // reads the column (docs/map-pipeline-switch.md, history note).
-  expect((await ctx.db.event.findUniqueOrThrow({ where: { id: ctx.eventId } })).mapPipeline).toBe("vector");
   // A positioned control before the map: the pin gives it lat/lng.
   await ctx.db.control.create({ data: { eventId: ctx.eventId, codes: "31", xpos: 10, ypos: 20, lat: 1, lng: 2 } });
   const applied = await applyEventMap(ctx.db, ctx.eventId, "test.ocd", uniqueBytes("readers"));
@@ -93,21 +90,6 @@ describe("course.mapMetadata", () => {
     // The colour-stack fields went with the raster (E4a).
     expect(meta).not.toHaveProperty("resolvedBy");
     expect(meta).not.toHaveProperty("colorProfile");
-  });
-
-  it("does not need a render key", async () => {
-    const row = await ctx.db.mapFile.findFirstOrThrow({ where: { eventId: ctx.eventId } });
-    await ctx.db.mapFile.update({ where: { id: row.id }, data: { renderKey: null } });
-    try {
-      const meta = await caller.course.mapMetadata();
-      expect(meta?.documentHash).toBe(documentHash);
-      // The key is the rollback's column only: not answered (E4a).
-      expect(meta).not.toHaveProperty("renderKey");
-      // Nothing computed it on read.
-      expect((await ctx.db.mapFile.findUniqueOrThrow({ where: { id: row.id } })).renderKey).toBeNull();
-    } finally {
-      await ctx.db.mapFile.update({ where: { id: row.id }, data: { renderKey: row.renderKey } });
-    }
   });
 });
 

@@ -13,6 +13,7 @@ import { resolve, dirname } from "path";
 import { fileURLToPath } from "url";
 import { createTestEvent, disconnect, type TestEventContext } from "../helpers/test-db.js";
 import { makeCaller } from "../helpers/caller.js";
+import { uploadEventMap } from "../helpers/upload-map.js";
 import { applyEventMap } from "../../event-map.js";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
@@ -34,7 +35,7 @@ beforeAll(async () => {
 
   legacy = await createTestEvent("course_checks_legacy");
   legacyCaller = makeCaller(legacy.event);
-  await legacyCaller.course.uploadMap({ fileName: "test.ocd", fileDataBase64: readFileSync(FIXTURE).toString("base64") });
+  await uploadEventMap(legacyCaller, legacy.nameId, readFileSync(FIXTURE));
 }, 60_000);
 
 afterAll(async () => {

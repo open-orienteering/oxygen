@@ -1,12 +1,16 @@
 /**
  * Integration tests for automatic overprint cuts: circle slits and leg
- * gaps computed from the base map at geometry-rebuild time.
+ * gaps the course layer computes around the pinned map document's
+ * features, for the event's stored courses (docs/course-layer.md §3.4,
+ * §4.3). Nothing stores them since E5 dropped `courses.geometry`: the GL
+ * layer and the print compute them at draw time, as `drawnCuts` does here
+ * from the same inputs (the course's sequence, the document's cut
+ * features, the event's toggle).
  *
  * Uses the synthetic OCAD fixture's known features in the otherwise
  * empty top-right corner (see `scripts/generate-test-ocd.mjs`): a boulder
  * (ISOM 204) at 68/42 mm and a building (ISOM 521) spanning
- * 48–58 / 39–46 mm. Every event cuts against its pinned map document,
- * whatever its `map_pipeline` (docs/course-layer.md §4.2, slice E1).
+ * 48–58 / 39–46 mm.
  */
 
 import { describe, it, expect, beforeAll, afterAll } from "vitest";
@@ -20,13 +24,15 @@ import {
   type TestEventContext,
 } from "../helpers/test-db.js";
 import { makeCaller } from "../helpers/caller.js";
-import type { GeoJSONFeatureCollection } from "../../iof-course-parser.js";
+import { uploadEventMap } from "../helpers/upload-map.js";
 import { applyEventMap } from "../../event-map.js";
 import { loadEventCutFeatures } from "../../event-map-objects.js";
+import { legacySizeContext, loadCourseSequences } from "../../course-geometry.js";
+import type { PrismaClient } from "../../generated/prisma/client.js";
 import { loadPinnedPrintDocument, pageInputFor, sheetForMapRow, type PrintMapRow } from "../../course-maps/pdf-page.js";
 import { loadBundledFonts } from "../../render/fonts.js";
 import { composePage } from "@oxygen/shared/print";
-import { defaultMapAppearance } from "@oxygen/shared";
+import { course as courseShared, defaultMapAppearance } from "@oxygen/shared";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const FIXTURE = resolve(__dirname, "../../../../../e2e/test.ocd");
@@ -38,10 +44,7 @@ beforeAll(async () => {
   ctx = await createTestEvent("overprint_cuts");
   caller = makeCaller(ctx.event);
   const buf = readFileSync(FIXTURE);
-  await caller.course.uploadMap({
-    fileName: "test.ocd",
-    fileDataBase64: buf.toString("base64"),
-  });
+  await uploadEventMap(caller, ctx.nameId, buf);
 });
 
 afterAll(async () => {
@@ -49,16 +52,39 @@ afterAll(async () => {
   await disconnect();
 });
 
-async function storedGeometry(courseSeq: number): Promise<GeoJSONFeatureCollection> {
-  const row = await ctx.db.course.findFirst({
-    where: { eventId: ctx.eventId, seq: courseSeq },
-    select: { geometry: true, geometrySource: true },
+const KIND = { Start: "start", Control: "control", Finish: "finish" } as const;
+
+/**
+ * The automatic cuts the course layer draws for a stored course: its
+ * sequence, the pinned document's cut features, none when the event's
+ * toggle is off. `circle(code)` is a control's slits, `leg(from, to)` a
+ * leg's gaps.
+ */
+async function drawnCuts(db: PrismaClient, eventId: bigint, courseSeq: number) {
+  const row = await db.course.findFirstOrThrow({ where: { eventId, seq: courseSeq }, select: { id: true } });
+  const { seq, orderMode } = (await loadCourseSequences(db, eventId, [row.id])).get(row.id)!;
+  const event = await db.event.findUniqueOrThrow({ where: { id: eventId }, select: { autoOverprintCuts: true } });
+  const cutFeatures = event.autoOverprintCuts ? await loadEventCutFeatures(db, eventId) : null;
+  const layer = courseShared.courseLayer({
+    structure: { version: 1, id: row.id, orderMode, items: seq.map((c) => ({ siteId: c.id, role: KIND[c.type] })) },
+    sites: seq.map((c) => ({ id: c.id, code: c.code, kind: KIND[c.type], x: c.xMm, y: c.yMm })),
+    objects: [],
+    appearance: {},
+    viewOptions: {},
+    document: legacySizeContext(),
+    ...(cutFeatures ? { cutFeatures } : {}),
   });
-  expect(row?.geometrySource).toBe("editor");
-  return row!.geometry as unknown as GeoJSONFeatureCollection;
+  const idOf = new Map(seq.map((c) => [c.code, c.id]));
+  const { sites, courses } = layer.derivation;
+  return {
+    circle: (code: string) => sites.find((s) => s.id === idOf.get(code))?.cuts ?? [],
+    leg: (from: string, to: string) => courses[0]?.legs.find((l) => l.from === idOf.get(from) && l.to === idOf.get(to))?.gaps ?? [],
+  };
 }
 
-describe("automatic overprint cuts in editor geometry", () => {
+const cutsOf = (courseSeq: number) => drawnCuts(ctx.db, ctx.eventId, courseSeq);
+
+describe("automatic overprint cuts of the event's courses", () => {
   it("slits a control circle whose rim passes over the boulder", async () => {
     // 2.5 mm south of the boulder: the boulder sits due north on the rim.
     await caller.control.create({ codes: "161", xpos: 68, ypos: 39.5 });
@@ -68,15 +94,13 @@ describe("automatic overprint cuts in editor geometry", () => {
       controlIds: [161, 162],
     });
 
-    const geom = await storedGeometry(course.id);
-    const onBoulder = geom.features.find((f) => f.properties.code === "161");
-    const inEmpty = geom.features.find((f) => f.properties.code === "162");
-    const cuts = onBoulder?.properties.cuts as Array<{ start: number; end: number }>;
+    const drawn = await cutsOf(course.id);
+    const cuts = drawn.circle("161");
     expect(cuts).toHaveLength(1);
     // Slit spans compass north (start just below 360, end just above 0).
     expect(cuts[0].start).toBeGreaterThan(300);
     expect(cuts[0].end).toBeLessThan(60);
-    expect(inEmpty?.properties.cuts).toBeUndefined();
+    expect(drawn.circle("162")).toEqual([]);
   });
 
   it("does not gap a leg crossing a building", async () => {
@@ -87,11 +111,7 @@ describe("automatic overprint cuts in editor geometry", () => {
       controlIds: [163, 164],
     });
 
-    const geom = await storedGeometry(course.id);
-    const leg = geom.features.find(
-      (f) => f.properties.from === "163" && f.properties.to === "164",
-    );
-    expect(leg?.properties.gaps).toBeUndefined();
+    expect((await cutsOf(course.id)).leg("163", "164")).toEqual([]);
   });
 
   it("gaps a leg crossing the boulder", async () => {
@@ -102,11 +122,7 @@ describe("automatic overprint cuts in editor geometry", () => {
       controlIds: [167, 168],
     });
 
-    const geom = await storedGeometry(course.id);
-    const leg = geom.features.find(
-      (f) => f.properties.from === "167" && f.properties.to === "168",
-    );
-    const gaps = leg?.properties.gaps as Array<{ from: number; to: number }>;
+    const gaps = (await cutsOf(course.id)).leg("167", "168");
     expect(gaps).toHaveLength(1);
     expect(gaps[0].from).toBeLessThan(0.5);
     expect(gaps[0].to).toBeGreaterThan(0.5);
@@ -120,24 +136,18 @@ describe("automatic overprint cuts in editor geometry", () => {
       controlIds: [165, 166],
     });
 
-    let geom = await storedGeometry(course.id);
-    let f = geom.features.find((x) => x.properties.code === "165");
-    expect(f?.properties.cuts).toBeUndefined();
+    expect((await cutsOf(course.id)).circle("165")).toEqual([]);
 
     // Move 165 onto the boulder rim.
     await caller.control.update({ id: 165, xpos: 68, ypos: 39.5 });
-    geom = await storedGeometry(course.id);
-    f = geom.features.find((x) => x.properties.code === "165");
-    expect(f?.properties.cuts).toHaveLength(1);
+    expect((await cutsOf(course.id)).circle("165")).toHaveLength(1);
 
     // And away again: cuts disappear.
     await caller.control.update({ id: 165, xpos: 90, ypos: 30 });
-    geom = await storedGeometry(course.id);
-    f = geom.features.find((x) => x.properties.code === "165");
-    expect(f?.properties.cuts).toBeUndefined();
+    expect((await cutsOf(course.id)).circle("165")).toEqual([]);
   });
 
-  it("uploading a map rebuilds editor course geometry with cuts", async () => {
+  it("a course created before the map is cut once the upload pins the document", async () => {
     const other = await createTestEvent("overprint_cuts_upload");
     try {
       const otherCaller = makeCaller(other.event);
@@ -149,35 +159,18 @@ describe("automatic overprint cuts in editor geometry", () => {
       });
 
       // No map yet → no cuts.
-      let row = await other.db.course.findFirst({
-        where: { eventId: other.eventId, seq: course.id },
-        select: { geometry: true },
-      });
-      let geom = row!.geometry as unknown as GeoJSONFeatureCollection;
-      expect(
-        geom.features.find((f) => f.properties.code === "171")?.properties.cuts,
-      ).toBeUndefined();
+      expect((await drawnCuts(other.db, other.eventId, course.id)).circle("171")).toEqual([]);
 
       const buf = readFileSync(FIXTURE);
-      await otherCaller.course.uploadMap({
-        fileName: "test.ocd",
-        fileDataBase64: buf.toString("base64"),
-      });
+      await uploadEventMap(otherCaller, other.nameId, buf);
 
-      row = await other.db.course.findFirst({
-        where: { eventId: other.eventId, seq: course.id },
-        select: { geometry: true },
-      });
-      geom = row!.geometry as unknown as GeoJSONFeatureCollection;
-      expect(
-        geom.features.find((f) => f.properties.code === "171")?.properties.cuts,
-      ).toHaveLength(1);
+      expect((await drawnCuts(other.db, other.eventId, course.id)).circle("171")).toHaveLength(1);
     } finally {
       await other.cleanup();
     }
   });
 
-  it("setOverprintCuts(false) strips cuts/gaps; true restores them", async () => {
+  it("setOverprintCuts(false) strips cuts/gaps; true restores them; the toggle writes the flag only", async () => {
     await caller.control.create({ codes: "181", xpos: 68, ypos: 39.5 });
     await caller.control.create({ codes: "182", xpos: 60, ypos: 42 });
     await caller.control.create({ codes: "183", xpos: 76, ypos: 42 });
@@ -186,15 +179,11 @@ describe("automatic overprint cuts in editor geometry", () => {
       controlIds: [181, 182, 183],
     });
 
-    let geom = await storedGeometry(course.id);
-    expect(
-      geom.features.find((f) => f.properties.code === "181")?.properties.cuts,
-    ).toHaveLength(1);
-    expect(
-      geom.features.find(
-        (f) => f.properties.from === "182" && f.properties.to === "183",
-      )?.properties.gaps,
-    ).toHaveLength(1);
+    let drawn = await cutsOf(course.id);
+    expect(drawn.circle("181")).toHaveLength(1);
+    expect(drawn.leg("182", "183")).toHaveLength(1);
+    const before = await ctx.db.course.findFirstOrThrow({ where: { eventId: ctx.eventId, seq: course.id } });
+    const journalBefore = await ctx.db.journalEntry.count({ where: { eventId: ctx.eventId } });
 
     const off = await caller.course.setOverprintCuts({ enabled: false });
     expect(off.enabled).toBe(false);
@@ -210,31 +199,22 @@ describe("automatic overprint cuts in editor geometry", () => {
       await ctx.db.event.update({ where: { id: ctx.eventId }, data: { kioskKey: null } });
     }
 
-    geom = await storedGeometry(course.id);
-    expect(
-      geom.features.find((f) => f.properties.code === "181")?.properties.cuts,
-    ).toBeUndefined();
-    expect(
-      geom.features.find(
-        (f) => f.properties.from === "182" && f.properties.to === "183",
-      )?.properties.gaps,
-    ).toBeUndefined();
+    drawn = await cutsOf(course.id);
+    expect(drawn.circle("181")).toEqual([]);
+    expect(drawn.leg("182", "183")).toEqual([]);
+    // Nothing stored depends on the flag (E5): the course row and the journal are untouched.
+    expect(await ctx.db.course.findFirstOrThrow({ where: { eventId: ctx.eventId, seq: course.id } })).toEqual(before);
+    expect(await ctx.db.journalEntry.count({ where: { eventId: ctx.eventId } })).toBe(journalBefore);
 
     const on = await caller.course.setOverprintCuts({ enabled: true });
     expect(on.enabled).toBe(true);
-    geom = await storedGeometry(course.id);
-    expect(
-      geom.features.find((f) => f.properties.code === "181")?.properties.cuts,
-    ).toHaveLength(1);
-    expect(
-      geom.features.find(
-        (f) => f.properties.from === "182" && f.properties.to === "183",
-      )?.properties.gaps,
-    ).toHaveLength(1);
+    drawn = await cutsOf(course.id);
+    expect(drawn.circle("181")).toHaveLength(1);
+    expect(drawn.leg("182", "183")).toHaveLength(1);
   });
 });
 
-describe("vector events cut against the pinned document", () => {
+describe("events cut against their pinned document", () => {
   let vec: TestEventContext;
   let vecCaller: ReturnType<typeof makeCaller>;
   let documentHash: string;
@@ -243,7 +223,7 @@ describe("vector events cut against the pinned document", () => {
   beforeAll(async () => {
     vec = await createTestEvent("overprint_cuts_vector");
     vecCaller = makeCaller(vec.event);
-    // A course on the boulder before any map: rebuilt by the upload below.
+    // A course on the boulder before any map: cut once the upload below pins.
     await vecCaller.control.create({ codes: "191", xpos: 68, ypos: 39.5 });
     await vecCaller.control.create({ codes: "192", xpos: 90, ypos: 60 });
     uploadCourseSeq = (await vecCaller.course.create({ name: "Vec-Upload", controlIds: [191, 192] })).id;
@@ -258,13 +238,9 @@ describe("vector events cut against the pinned document", () => {
     await vec?.cleanup();
   });
 
-  const vecGeometry = async (seq: number) => {
-    const row = await vec.db.course.findFirstOrThrow({ where: { eventId: vec.eventId, seq }, select: { geometry: true, geometrySource: true } });
-    expect(row.geometrySource).toBe("editor");
-    return row.geometry as unknown as GeoJSONFeatureCollection;
-  };
+  const vecCuts = (seq: number) => drawnCuts(vec.db, vec.eventId, seq);
 
-  it("reads the pinned document's features on a vector and on a legacy event alike", async () => {
+  it("reads the same features for two events pinning the same map", async () => {
     const fromVector = await loadEventCutFeatures(vec.db, vec.eventId);
     const fromLegacy = await loadEventCutFeatures(ctx.db, ctx.eventId);
     const key = (f: { x: number; y: number }) => `${f.x.toFixed(3)},${f.y.toFixed(3)}`;
@@ -273,12 +249,11 @@ describe("vector events cut against the pinned document", () => {
     expect(boulder(fromVector!)?.r).toBeCloseTo(boulder(fromLegacy!)!.r!, 6);
   });
 
-  it("the upload rebuild cut the course created before the map", async () => {
-    const cuts = (await vecGeometry(uploadCourseSeq)).features.find((f) => f.properties.code === "191")?.properties.cuts;
-    expect(cuts).toHaveLength(1);
+  it("cuts the course created before the map", async () => {
+    expect((await vecCuts(uploadCourseSeq)).circle("191")).toHaveLength(1);
   });
 
-  it("cuts a circle and a leg as the legacy event does, within rounding", async () => {
+  it("cuts a circle and a leg as the other event does, within rounding", async () => {
     await vecCaller.control.create({ codes: "193", xpos: 68, ypos: 39.5 });
     await vecCaller.control.create({ codes: "194", xpos: 60, ypos: 42 });
     await vecCaller.control.create({ codes: "195", xpos: 76, ypos: 42 });
@@ -288,15 +263,15 @@ describe("vector events cut against the pinned document", () => {
     await caller.control.create({ codes: "198", xpos: 76, ypos: 42 });
     const legacyCourse = await caller.course.create({ name: "Legacy-Cuts", controlIds: [196, 197, 198] });
 
-    const v = await vecGeometry(vecCourse.id);
-    const l = await storedGeometry(legacyCourse.id);
-    const vCuts = v.features.find((f) => f.properties.code === "193")!.properties.cuts as Array<{ start: number; end: number }>;
-    const lCuts = l.features.find((f) => f.properties.code === "196")!.properties.cuts as Array<{ start: number; end: number }>;
+    const v = await vecCuts(vecCourse.id);
+    const l = await cutsOf(legacyCourse.id);
+    const vCuts = v.circle("193");
+    const lCuts = l.circle("196");
     expect(vCuts).toHaveLength(1);
     expect(vCuts[0].start).toBeCloseTo(lCuts[0].start, 6);
     expect(vCuts[0].end).toBeCloseTo(lCuts[0].end, 6);
-    const vGaps = v.features.find((f) => f.properties.from === "194")!.properties.gaps as Array<{ from: number; to: number }>;
-    const lGaps = l.features.find((f) => f.properties.from === "197")!.properties.gaps as Array<{ from: number; to: number }>;
+    const vGaps = v.leg("194", "195");
+    const lGaps = l.leg("197", "198");
     expect(vGaps).toHaveLength(1);
     expect(vGaps[0].from).toBeCloseTo(lGaps[0].from, 6);
     expect(vGaps[0].to).toBeCloseTo(lGaps[0].to, 6);
@@ -364,16 +339,9 @@ describe("vector events cut against the pinned document", () => {
     await vec.db.mapFile.updateMany({ where: { eventId: vec.eventId }, data: { documentHash: null } });
     try {
       expect(await loadEventCutFeatures(vec.db, vec.eventId)).toBeNull();
-      // Away and back: only a position change rebuilds.
-      await vecCaller.control.update({ id: 191, xpos: 90, ypos: 30 });
-      await vecCaller.control.update({ id: 191, xpos: 68, ypos: 39.5 });
-      const cuts = (await vecGeometry(uploadCourseSeq)).features.find((f) => f.properties.code === "191")?.properties.cuts;
-      expect(cuts ?? []).toHaveLength(0);
+      expect((await vecCuts(uploadCourseSeq)).circle("191")).toEqual([]);
     } finally {
       await vec.db.mapFile.updateMany({ where: { eventId: vec.eventId }, data: { documentHash } });
-      // Rebuild with the pin back so the tests below start from cut geometry.
-      await vecCaller.control.update({ id: 191, xpos: 90, ypos: 30 });
-      await vecCaller.control.update({ id: 191, xpos: 68, ypos: 39.5 });
     }
   });
 });

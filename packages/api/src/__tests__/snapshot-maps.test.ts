@@ -15,6 +15,7 @@ import {
   verifyBlob,
   type BlobSliceFetcher,
 } from "../sync/snapshotMaps.js";
+import { withoutDroppedFields } from "../sync/dropped-columns.js";
 
 const sha = (b: Uint8Array) => createHash("sha256").update(b).digest("hex");
 const H = (c: string) => c.repeat(64);
@@ -46,6 +47,17 @@ describe("partitionMapFiles", () => {
     ]);
     expect(skipped).toBe(1);
     expect(files).toEqual([{ fileName: "a.ocd", sourceHash: H("a"), documentHash: H("d"), clubMapVersionId: "v" }]);
+  });
+});
+
+describe("withoutDroppedFields (a v0.6.0 exporter's rows)", () => {
+  it("strips the columns E5 dropped and keeps the rest", () => {
+    expect(withoutDroppedFields("mapFile", { fileName: "a.ocd", sourceHash: H("a"), fileData: "x", fileHash: H("a"), renderKey: "k", colorProfile: "auto", colorOverrides: {}, northLinesBelow: true }))
+      .toEqual({ fileName: "a.ocd", sourceHash: H("a") });
+    expect(withoutDroppedFields("event", { nameId: "e", mapPipeline: "vector", overprintCutsVersion: 3, autoOverprintCuts: true }))
+      .toEqual({ nameId: "e", autoOverprintCuts: true });
+    expect(withoutDroppedFields("course", { name: "A", geometry: {}, geometrySource: "editor", lengthSource: "derived" }))
+      .toEqual({ name: "A", lengthSource: "derived" });
   });
 });
 

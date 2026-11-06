@@ -1,24 +1,18 @@
 /**
  * Chunked map upload client (docs/map-storage.md §5).
  *
- * Files above `CHUNKED_UPLOAD_THRESHOLD` go through
+ * Every map upload, whatever its size, goes through
  * `POST /api/map-uploads` → `PUT …/chunks/:n` (four in flight, retried
  * per chunk) → `POST …/finalise`, which yields the content hash the
  * tRPC `applyUploadedMap` / `addFromSource` mutations then consume.
- * Smaller files keep the one-shot base64 mutation — one request, and
- * every E2E fixture stays on the path it always used.
+ * The one-shot base64 mutations went with the legacy columns (E5).
  */
 
-export const CHUNKED_UPLOAD_THRESHOLD = 8 * 1024 * 1024;
 export const CHUNK_BYTES = 8 * 1024 * 1024;
 export const CHUNK_CONCURRENCY = 4;
 export const CHUNK_RETRIES = 3;
 
 const API_BASE = import.meta.env.VITE_API_URL ?? "";
-
-export function shouldUseChunkedUpload(bytes: number, threshold = CHUNKED_UPLOAD_THRESHOLD): boolean {
-  return bytes > threshold;
-}
 
 export interface ChunkedUploadOptions {
   /** Event nameId for an event map; omit for the club library. */

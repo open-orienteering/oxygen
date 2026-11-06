@@ -248,7 +248,7 @@ export function courseSequenceOf<R extends SequenceSite>(
  * Write a structure and its mirror: the column (without label offsets),
  * `order_mode`, the start / finish columns and `course_controls` (label
  * offsets from `structure.labelOffsets` when given, else kept per control).
- * Call inside the write transaction, before `rebuildCourseGeometry` and the
+ * Call inside the write transaction, before `rebuildCourseLengths` and the
  * emit.
  */
 export async function persistStructure(db: Db, eventId: bigint, s: Stored): Promise<void> {

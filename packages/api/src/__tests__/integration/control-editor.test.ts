@@ -5,8 +5,10 @@
  *     paper mm) and WGS84 derivation via the uploaded map's CRS
  *   - IOF control descriptions stored on the control row
  *   - control.restore (undo of soft delete)
- *   - automatic course-geometry regeneration (geometrySource: "editor")
- *     when a control moves or a course's control sequence changes
+ *   - the course as drawn (its layer over the stored sequence, the shape
+ *     `courses.geometry` held until E5) and its derived legs / length
+ *     (`length_source: "derived"`) when a control moves or a course's
+ *     control sequence changes
  *
  * Uses the synthetic OCAD fixture `e2e/test.ocd` as the event map so the
  * CRS/scale-dependent paths (lat/lng derivation, length computation) run
@@ -23,7 +25,8 @@ import {
   type TestEventContext,
 } from "../helpers/test-db.js";
 import { makeCaller } from "../helpers/caller.js";
-import type { GeoJSONFeatureCollection } from "../../iof-course-parser.js";
+import { uploadEventMap } from "../helpers/upload-map.js";
+import { drawnCourse } from "../helpers/course-drawn.js";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const FIXTURE = resolve(__dirname, "../../../../../e2e/test.ocd");
@@ -37,10 +40,7 @@ beforeAll(async () => {
   caller = makeCaller(ctx.event);
 
   const buf = readFileSync(FIXTURE);
-  await caller.course.uploadMap({
-    fileName: "test.ocd",
-    fileDataBase64: buf.toString("base64"),
-  });
+  await uploadEventMap(caller, ctx.nameId, buf);
   const meta = await caller.course.mapMetadata();
   expect(meta).not.toBeNull();
   mapScale = meta!.scale;
@@ -137,10 +137,9 @@ describe("course geometry regeneration", () => {
     const row = await ctx.db.course.findFirst({
       where: { eventId: ctx.eventId, seq: course.id },
     });
-    expect(row?.geometrySource).toBe("editor");
     // E6: the length provenance the export and the Eventor sync read.
     expect(row?.lengthSource).toBe("derived");
-    const geom = row?.geometry as unknown as GeoJSONFeatureCollection;
+    const geom = await drawnCourse(ctx.db, ctx.eventId, row!.id);
     const legs = geom.features.filter((f) => f.geometry.type === "LineString");
     const points = geom.features.filter((f) => f.geometry.type === "Point");
     expect(legs.length).toBeGreaterThanOrEqual(1);
@@ -171,9 +170,9 @@ describe("course geometry regeneration", () => {
     const after = await ctx.db.course.findFirst({
       where: { eventId: ctx.eventId, seq: course.id },
     });
-    expect(after?.geometrySource).toBe("editor");
+    expect(after?.lengthSource).toBe("derived");
     expect(after!.lengthM).toBeGreaterThan(before!.lengthM);
-    const geom = after?.geometry as unknown as GeoJSONFeatureCollection;
+    const geom = await drawnCourse(ctx.db, ctx.eventId, after!.id);
     const leg = geom.features.find(
       (f) =>
         f.geometry.type === "LineString" &&
@@ -198,12 +197,12 @@ describe("course geometry regeneration", () => {
     const row = await ctx.db.course.findFirst({
       where: { eventId: ctx.eventId, seq: course.id },
     });
-    const geom = row?.geometry as unknown as GeoJSONFeatureCollection;
+    const geom = await drawnCourse(ctx.db, ctx.eventId, row!.id);
     const codes = geom.features
       .filter((f) => f.geometry.type === "Point")
       .map((f) => f.properties.code);
     expect(codes).toContain("143");
-    expect(row?.geometrySource).toBe("editor");
+    expect(row?.lengthSource).toBe("derived");
   });
 
   it("deleting a control cascades it out of course sequences and rebuilds geometry", async () => {
@@ -225,7 +224,7 @@ describe("course geometry regeneration", () => {
     const row = await ctx.db.course.findFirst({
       where: { eventId: ctx.eventId, seq: course.id },
     });
-    const geom = row?.geometry as unknown as GeoJSONFeatureCollection;
+    const geom = await drawnCourse(ctx.db, ctx.eventId, row!.id);
     const pointCodes = geom.features
       .filter((f) => f.geometry.type === "Point")
       .map((f) => f.properties.code);
@@ -257,7 +256,7 @@ describe("course geometry regeneration", () => {
     const row = await ctx.db.course.findFirst({
       where: { eventId: ctx.eventId, seq: course.id },
     });
-    const geom = row?.geometry as unknown as GeoJSONFeatureCollection;
+    const geom = await drawnCourse(ctx.db, ctx.eventId, row!.id);
     const types = geom.features
       .filter((f) => f.geometry.type === "Point")
       .map((f) => f.properties.symbolType);
@@ -318,7 +317,7 @@ describe("course.clone", () => {
     expect(cloneRow.startName).toBe(sourceRow.startName);
     expect(cloneRow.finishControlId).toBe(sourceRow.finishControlId);
     expect(cloneRow.shorten).toBe(12);
-    expect(cloneRow.geometrySource).toBe("editor");
+    expect(cloneRow.lengthSource).toBe("derived");
     expect(cloneRow.lengthM).toBeGreaterThan(0);
 
     const sourceAfter = await ctx.db.course.findUniqueOrThrow({
@@ -411,9 +410,9 @@ describe("start/finish placement from the editor", () => {
     // count both move when the default start changes are re-derived).
     const before = await ctx.db.course.findFirst({
       where: { eventId: ctx.eventId, seq: course.id },
-      select: { geometry: true },
+      select: { id: true },
     });
-    const beforeGeom = before?.geometry as unknown as GeoJSONFeatureCollection;
+    const beforeGeom = await drawnCourse(ctx.db, ctx.eventId, before!.id);
     expect(
       beforeGeom.features.some((f) => f.properties.symbolType === "start"),
     ).toBe(true);
@@ -428,9 +427,9 @@ describe("start/finish placement from the editor", () => {
     }
     const without = await ctx.db.course.findFirst({
       where: { eventId: ctx.eventId, seq: course.id },
-      select: { geometry: true },
+      select: { id: true },
     });
-    const withoutGeom = without?.geometry as unknown as GeoJSONFeatureCollection;
+    const withoutGeom = await drawnCourse(ctx.db, ctx.eventId, without!.id);
     expect(
       withoutGeom.features.some((f) => f.properties.symbolType === "start"),
     ).toBe(false);
@@ -439,9 +438,9 @@ describe("start/finish placement from the editor", () => {
     await caller.control.create({ status: 4, xpos: 20, ypos: 200 });
     const after = await ctx.db.course.findFirst({
       where: { eventId: ctx.eventId, seq: course.id },
-      select: { geometry: true },
+      select: { id: true },
     });
-    const afterGeom = after?.geometry as unknown as GeoJSONFeatureCollection;
+    const afterGeom = await drawnCourse(ctx.db, ctx.eventId, after!.id);
     expect(
       afterGeom.features.some((f) => f.properties.symbolType === "start"),
     ).toBe(true);
@@ -481,7 +480,7 @@ describe("start/finish placement from the editor", () => {
     expect(row?.startName).toBe(sBRow?.name);
 
     // Geometry must use the assigned start's position, not the default's.
-    const geom = row?.geometry as unknown as GeoJSONFeatureCollection;
+    const geom = await drawnCourse(ctx.db, ctx.eventId, row!.id);
     const startPt = geom.features.find(
       (f) => f.properties.symbolType === "start",
     );
@@ -507,7 +506,7 @@ describe("start/finish placement from the editor", () => {
     });
     expect(cleared?.startName).toBe("");
     expect(cleared?.finishControlId).toBeNull();
-    const clearedGeom = cleared?.geometry as unknown as GeoJSONFeatureCollection;
+    const clearedGeom = await drawnCourse(ctx.db, ctx.eventId, cleared!.id);
     const clearedStart = clearedGeom.features.find(
       (f) => f.properties.symbolType === "start",
     );
@@ -515,74 +514,6 @@ describe("start/finish placement from the editor", () => {
       (clearedStart!.geometry as { coordinates: number[] }).coordinates[0],
     ).toBe(0);
     void sA;
-  });
-});
-
-describe("description backfill migration", () => {
-  it("copies geometry-embedded descriptions onto matching control rows", async () => {
-    // Legacy state: description only exists inside course geometry.
-    await caller.control.create({ codes: "171" });
-    await ctx.db.course.create({
-      data: {
-        eventId: ctx.eventId,
-        name: "LegacyGeom",
-        geometry: {
-          type: "FeatureCollection",
-          features: [
-            {
-              type: "Feature",
-              geometry: { type: "Point", coordinates: [1, 2] },
-              properties: {
-                symbolType: "control",
-                code: "171",
-                description: { d: "4.004", c: "0.208" },
-              },
-            },
-          ],
-        },
-        geometrySource: "ocd",
-      },
-    });
-
-    // Run the migration's backfill UPDATE verbatim (everything from the
-    // first UPDATE keyword onward) so this test guards the actual SQL.
-    const migrationSql = readFileSync(
-      resolve(
-        __dirname,
-        "../../../prisma/migrations/20260817000000_control_description/migration.sql",
-      ),
-      "utf8",
-    );
-    const backfill = migrationSql.slice(migrationSql.indexOf("UPDATE"));
-    await ctx.db.$executeRawUnsafe(backfill);
-
-    const detail = await caller.control.detail({ id: 171 });
-    expect(detail.description).toEqual({ d: "4.004", c: "0.208" });
-  });
-});
-
-describe("length_source migration (E6)", () => {
-  it("backfills length_source 1:1 from geometry_source", async () => {
-    const mk = (name: string, geometrySource: string) =>
-      ctx.db.course.create({ data: { eventId: ctx.eventId, name, geometrySource }, select: { id: true } });
-    const rows = {
-      editor: await mk("LS-editor", "editor"),
-      ocd: await mk("LS-ocd", "ocd"),
-      xml: await mk("LS-xml", "xml"),
-      none: await mk("LS-none", ""),
-    };
-    const migrationSql = readFileSync(
-      resolve(__dirname, "../../../prisma/migrations/20261106130000_course_length_source/migration.sql"),
-      "utf8",
-    );
-    // The backfill UPDATE verbatim (from the first UPDATE keyword on).
-    await ctx.db.$executeRawUnsafe(migrationSql.slice(migrationSql.indexOf("UPDATE")));
-    const sourceOf = async (id: string) => (await ctx.db.course.findUniqueOrThrow({ where: { id }, select: { lengthSource: true } })).lengthSource;
-    expect(await sourceOf(rows.editor.id)).toBe("derived");
-    expect(await sourceOf(rows.ocd.id)).toBe("file");
-    expect(await sourceOf(rows.xml.id)).toBe("file");
-    expect(await sourceOf(rows.none.id)).toBeNull();
-    await ctx.db.course.deleteMany({ where: { id: { in: Object.values(rows).map((r) => r.id) } } });
   });
 });
 
@@ -636,9 +567,9 @@ describe("control.restore", () => {
     const readGeom = async () => {
       const row = await ctx.db.course.findFirst({
         where: { eventId: ctx.eventId, seq: course.id },
-        select: { geometry: true },
+        select: { id: true },
       });
-      return row?.geometry as unknown as GeoJSONFeatureCollection;
+      return drawnCourse(ctx.db, ctx.eventId, row!.id);
     };
     expect(
       (await readGeom()).features.some(

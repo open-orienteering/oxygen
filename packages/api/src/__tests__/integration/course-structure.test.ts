@@ -3,8 +3,8 @@
  * §6 "Structure", §7 "Concurrency"):
  *
  *   - course.setStructure writes the column and its mirror (course_controls,
- *     start / finish columns, number_hidden, label offsets) and the same
- *     geometry the linear course.update path writes
+ *     start / finish columns, number_hidden, label offsets), drawn and
+ *     measured as the linear course.update path's
  *   - course.update { controlIds } (the linear shortcut) writes a structure
  *   - the version token is the HLC of the row's last write entry, journaled
  *     with the structure
@@ -20,6 +20,7 @@ import { TRPCError } from "@trpc/server";
 import { versionConflictOf, type VersionConflictData } from "@oxygen/shared";
 import { createTestEvent, disconnect, type TestEventContext } from "../helpers/test-db.js";
 import { makeCaller } from "../helpers/caller.js";
+import { drawnCourse } from "../helpers/course-drawn.js";
 import { VersionConflictError } from "../../version-conflict.js";
 import type { AuthUser } from "../../auth.js";
 
@@ -180,7 +181,7 @@ describe("course.setStructure", () => {
     expect(detail.structure.items[2]).toMatchObject({ siteId: 33, leg: { gaps: [{ from: 0.4, to: 0.5 }] } });
   });
 
-  it("writes the same geometry the linear course.update path writes", async () => {
+  it("draws and measures the course as the linear course.update path does", async () => {
     const a = await caller.course.create({ name: "Geo A" });
     const b = await caller.course.create({ name: "Geo B" });
     await caller.course.update({ id: a.id, controlIds: [31, 32, 33] });
@@ -190,11 +191,11 @@ describe("course.setStructure", () => {
     });
     const ra = await courseRow(a.id);
     const rb = await courseRow(b.id);
-    // Byte-identical but for the course's own id.
-    const json = (g: unknown, own: string) => JSON.stringify(g).replaceAll(own, "<course>");
-    expect((ra.geometry as { features: unknown[] }).features.length).toBeGreaterThan(0);
-    expect(json(rb.geometry, rb.id)).toBe(json(ra.geometry, ra.id));
+    const ga = await drawnCourse(ctx.db, ctx.eventId, ra.id);
+    expect(ga.features.length).toBeGreaterThan(0);
+    expect(await drawnCourse(ctx.db, ctx.eventId, rb.id)).toEqual(ga);
     expect(rb.legs).toBe(ra.legs);
+    expect([rb.lengthM, rb.lengthSource]).toEqual([ra.lengthM, ra.lengthSource]);
   });
 
   it("refuses variation groups (slice F) and unknown controls", async () => {
@@ -266,9 +267,9 @@ describe("concurrency (course-layer.md §7)", () => {
     const { version: v1 } = await caller.course.update({ id, descriptionInstructions: instructions, baseVersion: v0 });
     expect(BigInt(v1)).toBeGreaterThan(BigInt(v0));
     const after = await courseRow(id);
-    // The editor-written structure, its mirror and geometry are left as they were (not the linear shortcut).
+    // The editor-written structure, its mirror and derived legs are left as they were (not the linear shortcut).
     expect(after.structure).toEqual(before.structure);
-    expect(after.geometry).toEqual(before.geometry);
+    expect(after.legs).toEqual(before.legs);
     expect(await ccOf(id)).toEqual(ccBefore);
     expect((await caller.course.list()).find((c) => c.id === id)!.descriptionInstructions).toEqual(instructions);
     expect((await caller.course.detail({ id })).descriptionInstructions).toEqual(instructions);
@@ -287,7 +288,7 @@ describe("concurrency (course-layer.md §7)", () => {
     const control0 = (await caller.control.list()).find((c) => c.id === 33)!.version;
     await caller.control.update({ id: 33, xpos: 71, ypos: 20 });
     expect((await courseRow(id)).version).toBe(course0);
-    // ...though the course's geometry was rebuilt and re-journaled.
+    // ...though the course's derived legs were rebuilt and re-journaled.
     const control1 = (await caller.control.list()).find((c) => c.id === 33)!.version;
     expect(control1).not.toBe(control0);
     await caller.course.update({ id, controlIds: [33, 31] });
@@ -384,7 +385,7 @@ describe("the mirror stays a function of the structure (course-layer.md §6.2)",
     expect(row.startName).toBe("Start K");
     expect((await ccOf(id)).map((cc) => cc.control.codes)).toEqual(["31", "32"]);
     expect(row.version > v0).toBe(true);
-    const seq = (row.geometry as { features: { properties: { symbolType?: string; code?: string } }[] }).features
+    const seq = (await drawnCourse(ctx.db, ctx.eventId, row.id)).features
       .filter((f) => f.properties.symbolType === "start")
       .map((f) => f.properties.code);
     expect(seq).toEqual(["81"]);
@@ -408,10 +409,10 @@ describe("the mirror stays a function of the structure (course-layer.md §6.2)",
     expect(res.courses).toContainEqual({ id, version: row.version.toString() });
     const detail = await caller.course.detail({ id });
     expect(detail.structure.items.map((i) => ("siteId" in i ? i.siteId : null))).toEqual([31]);
-    // Every reader now starts the course at the event default: the geometry
-    // (structure path) and the legacy column (the deleted start's name
-    // matches no live start) agree.
-    const starts = (row.geometry as { features: { properties: { symbolType?: string; code?: string } }[] }).features
+    // Every reader now starts the course at the event default: the drawn
+    // course (structure path) and the legacy column (the deleted start's
+    // name matches no live start) agree.
+    const starts = (await drawnCourse(ctx.db, ctx.eventId, row.id)).features
       .filter((f) => f.properties.symbolType === "start")
       .map((f) => f.properties.code);
     expect(starts).toEqual(["Start 1"]); // the lowest-seq start, by its display code (name)

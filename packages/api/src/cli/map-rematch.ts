@@ -1,7 +1,8 @@
 /**
  * Re-match stored map documents that are stale — imported by an older
  * importer, against an older library release, or (club editions) before
- * the current club symbol decisions (docs/map-storage.md §6.9):
+ * the current club symbol decisions — and import a live event's map that
+ * has a source but no document (docs/map-storage.md §6.9):
  *
  *   pnpm map:rematch [--event <nameId>] [--limit <n>] [--dry-run]
  *   docker exec <api> node packages/api/dist/cli/map-rematch.js …   (inside the image)

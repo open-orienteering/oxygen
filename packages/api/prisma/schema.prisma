@@ -92,15 +92,6 @@ enum CourseOrderMode {
   @@schema("oxygen")
 }
 
-/// The retired map pipeline switch (docs/map-pipeline-switch.md); dropped in E5.
-enum MapPipeline {
-  legacy
-  vector
-
-  @@map("map_pipeline")
-  @@schema("oxygen")
-}
-
 // ─── Registry & global tables ──────────────────────────────
 
 /// An orienteering event — competition, training session, club evening, etc.
@@ -193,15 +184,9 @@ model Event {
   removed   Boolean  @default(false)
   /// Device token for kiosk / start-screen URLs when AUTH_MODE is on.
   kioskKey  String?  @map("kiosk_key")
-  /// When true, editor geometry rebuilds insert automatic circle slits
-  /// and leg gaps around compact knoll / rock point features.
+  /// When true, the course layer inserts automatic circle slits and leg
+  /// gaps around compact knoll / rock point features (docs/course-layer.md §4.3).
   autoOverprintCuts Boolean @default(true) @map("auto_overprint_cuts")
-  /// Algorithm version last applied to every editor-authored course.
-  overprintCutsVersion Int @default(2) @map("overprint_cuts_version")
-  /// The retired per-event map pipeline switch (docs/map-pipeline-switch.md,
-  /// history note). Every event is `vector` since E3 and no code reads it;
-  /// kept until E5 so a v0.5.0 rollback still reads `vector`.
-  mapPipeline MapPipeline @default(vector) @map("map_pipeline")
   createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
   updatedAt DateTime @default(now()) @map("updated_at") @db.Timestamptz(6)
 
@@ -221,7 +206,6 @@ model Event {
   mapFiles           MapFile[]
   mapUploads         MapUpload[]
   mapImportJobs      MapImportJob[]
-  renderedMaps       RenderedMap[]
   mapTemplates       MapTemplate[]
   courseMaps         CourseMap[]
   courseObjects      CourseObject[]
@@ -292,7 +276,6 @@ model User {
 
   eventPermissions     EventPermission[]     @relation("GrantSubject")
   grantsGiven          EventPermission[]     @relation("GrantActor")
-  clubMapFiles         ClubMapFile[]
   clubMapTemplates     ClubMapTemplate[]
   clubGroupMemberships ClubUserGroupMember[]
   mapSources           MapSource[]
@@ -509,11 +492,7 @@ model Course {
   lastAsFinish    Boolean  @default(false) @map("last_as_finish")
   finishControlId String?  @map("finish_control_id") @db.Uuid
   shorten         Int      @default(0)
-  /// GeoJSON FeatureCollection for control + leg overlay. Populated by the OCAD / IOF course importer.
-  geometry        Json?
-  /// Provenance for `geometry`: 'ocd' (full routed legs from OCAD) or 'xml' (straight-line fallback from IOF XML).
-  geometrySource  String   @default("") @map("geometry_source")
-  /// Where `lengthM` comes from: 'file' (an imported file's published length; Eventor may overwrite it), 'derived' (edited in Oxygen: derived from the controls, recomputed at export, never overwritten by Eventor), NULL (neither). Written beside `geometrySource` until E5 drops it (E6; course-controls-and-matching.md "Course length").
+  /// Where `lengthM` comes from: 'file' (an imported file's published length; Eventor may overwrite it), 'derived' (edited in Oxygen: derived from the controls, recomputed at export, never overwritten by Eventor), NULL (neither) (E6; course-controls-and-matching.md "Course length").
   lengthSource    String?  @map("length_source")
   /// Course-level description-sheet instructions (special rows + finish variant).
   /// Shape: { specials?: [{afterControlId, kind, lengthM?}], finish?: {kind, lengthM?} }.
@@ -1140,43 +1119,6 @@ model JournalSyncState {
 
 // ─── Maps & GPS tracks ─────────────────────────────────────
 
-/// Club-wide OCAD base maps. Copied into an event via course.useClubMap.
-model ClubMapFile {
-  id                 BigInt   @id @default(autoincrement())
-  name               String
-  fileName           String   @map("file_name")
-  fileData           Bytes    @map("file_data")
-  previewPng         Bytes?   @map("preview_png")
-  sizeBytes          Int      @map("size_bytes")
-  scale              Float?
-  bounds             Json?
-  northOffset        Float?   @map("north_offset")
-  /// Extra grivation (degrees, clockwise positive) — same semantics as
-  /// MapFile.rotationCorrection. Copied into the event MapFile on use.
-  rotationCorrection Float    @default(0) @map("rotation_correction")
-  /// Diagnostic from import-time north detection (declination, meridian…).
-  northDetection     Json?    @map("north_detection")
-  /// IOF colour-stack profile — copied into the event MapFile on use.
-  colorProfile       String   @default("auto") @map("color_profile")
-  colorOverrides     Json     @default("{}") @map("color_overrides")
-  northLinesBelow    Boolean  @default(true) @map("north_lines_below")
-  fileHash           String?  @map("file_hash")
-  renderKey          String?  @map("render_key")
-  uploadedBy         String?  @map("uploaded_by") @db.Uuid
-  uploadedAt         DateTime @default(now()) @map("uploaded_at") @db.Timestamptz(6)
-  updatedAt          DateTime @default(now()) @updatedAt @map("updated_at") @db.Timestamptz(6)
-  /// The club_maps series this legacy row is dual-written to (docs/map-storage.md §6.5).
-  clubMapId          String?  @map("club_map_id") @db.Uuid
-
-  uploader User?    @relation(fields: [uploadedBy], references: [id], onDelete: SetNull)
-  clubMap  ClubMap? @relation(fields: [clubMapId], references: [id], onDelete: SetNull)
-
-  @@index([renderKey])
-  @@index([clubMapId])
-  @@map("club_map_files")
-  @@schema("oxygen")
-}
-
 /// Uploaded SVG/PNG graphics placeable on printable course maps.
 /// event_id NULL = club-library graphic shared across events.
 model Graphic {
@@ -1265,11 +1207,9 @@ model MapFile {
   id                 BigInt   @id @default(autoincrement())
   eventId            BigInt   @map("event_id")
   fileName           String   @default("") @map("file_name")
-  fileData           Bytes    @map("file_data")
   uploadedAt         DateTime @default(now()) @map("uploaded_at") @db.Timestamptz(6)
-  // Parsed at upload (applyEventMap) so course.mapMetadata never re-parses
-  // the OCAD blob per query. Null on rows written before the migration —
-  // mapMetadata backfills those lazily.
+  // Quick-access columns written by the import job's pin from the pinned
+  // document (docs/map-storage.md §6.4); null until the pin.
   scale              Float?
   bounds             Json?
   northOffset        Float?   @map("north_offset")
@@ -1278,24 +1218,17 @@ model MapFile {
   /// OCAD file's own angle. Used when the drawing is magnetic-north-up
   /// but ScalePar declares a=0 — common for Swedish club exports.
   rotationCorrection Float    @default(0) @map("rotation_correction")
-  /// Diagnostic from import-time north detection (declination, meridian…).
+  /// The upload-time OCAD north diagnostic. Unwritten since E5 (no OCAD
+  /// parse at upload; `course.mapMetadata` reads the document report's
+  /// `north`); kept for rows written before (docs/map-storage.md §4.6).
   northDetection     Json?    @map("north_detection")
-  /// True when this blob was copied from `club_map_files`. Club maps
+  /// True when this map was copied from the club library. Club maps
   /// stay club property even after an event adopts them, so downloads
   /// and event backups of those rows require an instance admin.
   fromClubLibrary    Boolean  @default(false) @map("from_club_library")
-  /// IOF colour-stack profile (`auto` | `isom` | `issprom` | …).
-  colorProfile       String   @default("auto") @map("color_profile")
-  /// Per-colour force-above / force-below overrides (`{ above, below }`).
-  colorOverrides     Json     @default("{}") @map("color_overrides")
-  /// When true, ISOM 601.x north lines are omitted from the ink tile half.
-  northLinesBelow    Boolean  @default(true) @map("north_lines_below")
-  /// SHA-256 hex of `file_data` — content identity for shared tiles.
-  fileHash           String?  @map("file_hash")
-  /// Content-keyed tile/print cache id; lazily filled on first read.
-  renderKey          String?  @map("render_key")
-  /// Content-addressed pins (docs/map-storage.md). Null on rows written
-  /// before the document pipeline; the backfill fills them.
+  /// Content-addressed pins (docs/map-storage.md). `source_hash` is set on
+  /// every live event's row (the E5 drops migration's guard); a row of a
+  /// soft-deleted event may lack it (no bytes, file name only).
   sourceHash         String?  @map("source_hash")
   documentHash       String?  @map("document_hash")
   /// Set when the event adopted a club-library version; SET NULL when
@@ -1308,7 +1241,6 @@ model MapFile {
   clubMapVersion ClubMapVersion? @relation(fields: [clubMapVersionId], references: [id], onDelete: SetNull)
 
   @@index([eventId])
-  @@index([renderKey])
   @@index([documentHash])
   @@index([sourceHash])
   @@map("map_files")
@@ -1402,7 +1334,6 @@ model ClubMap {
 
   creator    User?            @relation(fields: [createdBy], references: [id], onDelete: SetNull)
   versions   ClubMapVersion[]
-  legacyRows ClubMapFile[]
   importJobs MapImportJob[]
 
   @@map("club_maps")
@@ -1521,38 +1452,6 @@ model ClubSymbolDecision {
 
   @@id([fingerprint, libraryVersion])
   @@map("club_symbol_decisions")
-  @@schema("oxygen")
-}
-
-model RenderedMap {
-  id         BigInt   @id @default(autoincrement())
-  eventId    BigInt   @map("event_id")
-  maxWidth   Int      @map("max_width")
-  imageData  Bytes    @map("image_data")
-  bounds     Json
-  mapScale   Int      @default(0) @map("map_scale")
-  width      Int      @default(0)
-  height     Int      @default(0)
-  renderedAt DateTime @default(now()) @map("rendered_at") @db.Timestamptz(6)
-
-  event Event @relation(fields: [eventId], references: [id], onDelete: Cascade)
-
-  @@index([eventId])
-  @@map("rendered_maps")
-  @@schema("oxygen")
-}
-
-model MapTile {
-  /// Content-keyed cache identity (see `computeRenderKey`). Shared
-  /// across events that use the same map blob + colour-stack settings.
-  renderKey String @map("render_key")
-  z         Int
-  x         Int
-  y         Int
-  tileData  Bytes  @map("tile_data")
-
-  @@id([renderKey, z, x, y])
-  @@map("map_tiles")
   @@schema("oxygen")
 }
 

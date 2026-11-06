@@ -119,7 +119,6 @@ describe("course.importCourses — OCD coordinate conversion", () => {
       data: {
         eventId: ctx.eventId,
         fileName: "test.ocd",
-        fileData: buf,
       },
     });
     const before = await ctx.db.mapFile.findFirst({

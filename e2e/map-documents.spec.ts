@@ -161,7 +161,7 @@ test.describe("Map documents", () => {
 
     // Same bytes as a club-library map: its own series, imported by a job
     // that dedups against the document already stored.
-    const club = await request.post(`${API_BASE}/trpc/clubMap.upload`, { data: { name: "E2E chunked club map", fileName: "club.ocd", fileDataBase64: file.toString("base64") } });
+    const club = await request.post(`${API_BASE}/trpc/clubMap.addFromSource`, { data: { name: "E2E chunked club map", fileName: "club.ocd", fileHash } });
     expect(club.ok()).toBe(true);
     const created = (await club.json())?.result?.data as { id: string; importJob: { id: string; state: string } };
     expect(created.importJob.state).toBe("done");

@@ -214,8 +214,7 @@ describe("reference mutations → *.upserted", () => {
     expect(p.courseControls[0].position).toBe(1);
     // Geometry blobs stay out of the journal (snapshot-only artifacts).
     expect(p.fields).not.toHaveProperty("geometry");
-    // …and so do their provenance columns (E6: `length_source` mirrors `geometry_source`).
-    expect(p.fields).not.toHaveProperty("geometrySource");
+    // …and so does the derived length provenance (E6).
     expect(p.fields).not.toHaveProperty("lengthSource");
   });
 
