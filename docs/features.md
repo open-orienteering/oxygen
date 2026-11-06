@@ -81,25 +81,16 @@ scale, margins and shared layout objects. Structured search and expandable
 rows match the other planning pages; club templates are imported from a
 dedicated modal. The separate **Maps / Kartor** table lists every course,
 assigns templates inline or in bulk, and expands to manage several
-independently positioned sheets for one course. The paper-centric editor
-preloads a cached high-resolution sheet so zoom and pan are immediate — and
-**Align map** moves map and course as one; both preview and PDF are rotated so
-meridian lines stand vertical on the page. Collapsible course-editor-style
-panels (Tools, Page, Graphics, Objects, Properties) keep the canvas usable on
-mobile; the Objects card lists and deletes anything, including perfectly
-stacked objects, and warns when items sit outside the printable area. The
-editor supports click-to-place text, rectangles, polygons and paths with a
-shared fill mode (none / solid / white-out / white-out outside for ink
-saving / ISOM 709 out-of-bounds hatch with purple-locked 0.4 mm border),
-solid or dashed strokes on lines, paths and borders, editable Bezier paths
-(square handles move, round "+" handles split a segment; handles stop growing
-past 150 % zoom), and uploaded SVG/PNG graphics (free resize, Ctrl/Cmd
-proportional, Shift crop) from a per-event or club library. Course overprint
+independently positioned sheets for one course. **Edit layout** and **Edit
+template layout** open the course editor's Layout mode (above): the sheet on
+the map canvas exactly as it prints, with shared fill modes (none / solid /
+white-out / white-out outside for ink saving / ISOM 709 out-of-bounds hatch
+with a purple-locked 0.4 mm border), solid or dashed strokes and uploaded
+SVG/PNG graphics from a per-event or club library; both preview and PDF are
+rotated so meridian lines stand vertical on the page. Course overprint
 follows ISOM: circles, numbers and lines enlarge with the map when the print
 scale is larger than the base map scale (1:15000 printed at 1:7500 → 2×).
-Layout changes autosave; the header matches the course editor (help, undo/redo,
-zoom, fullscreen, close). The control-description block previews the real rows
-of the selected course. Validation messages name the offending object rather
+Validation messages name the offending object rather
 than an opaque id. Importing a club template drops map-anchored objects that
 belonged to another event's map. Export produces one map, a whole course, all
 controls, or the complete event as vector PDF, printed straight from the

@@ -5,7 +5,7 @@ as the view, on the same GL canvas as Course mode. Research: 05 §5.12
 (the layout editor on the GL backend), 08 §4.6 (layout model), §5.2–5.4
 (anatomy, Layout column, views), §5.5 (tablet); 09 §1 "Layout editor".
 What a sheet and a template *are* (rows, overrides, coordinate spaces,
-validation, the legacy `MapLayoutEditor`) stays in `course-maps.md`; how a
+validation, the pages) stays in `course-maps.md`; how a
 sheet *prints* stays in `course-print.md`. Slices D7 (§1–§4) and D8
 (§5–§7: templates by key, class sheets, Export ▾).
 
@@ -109,7 +109,7 @@ selections of Course mode.
   Editable: the sheet's objects, the block (visible, cell size,
   position), the print scale override and the window centre; a sheet
   write leaves the template's objects alone (`saveLayout` without
-  `templateObjects`, which `MapLayoutEditor` still sends). The
+  `templateObjects`, which nothing sends since E4c). The
   template's objects are drawn **locked**, with the link
   `editor-layout-edit-template`.
 - *Template* (`mapTemplate.update`): previewed with the top bar's course.
@@ -140,9 +140,8 @@ sends the newest token it has seen (`VersionBook`: the read's, raised by
 every write result — `saveLayout` answers `{ ok, version }`) and shows a
 conflict as the editor's refresh notice: the read is refetched and the
 user redoes the gesture — two whole snapshots are never merged. Without
-`baseVersion` a write is last-writer-wins, as `MapLayoutEditor` and the
-Maps / Map templates pages still send it (one release, as G1's
-`baseVersion` on courses).
+`baseVersion` a write is last-writer-wins, as the Maps / Map templates
+pages still send it (until E-pages folds them into Layout mode).
 
 **Keys** (08 §5.3 Layout column): `V` select, `H` header, `T` text, `D`
 description block, `W` white-out, `L` line, `R` rectangle, `P` polygon
@@ -183,8 +182,8 @@ exception: it draws (below).
 | `P` | a closed polygon, **drawn** vertex by vertex (D16) | the course editor's area flow, then `createObjectAt("path")`'s defaults |
 
 `L`, `R` and `P` are not in 08 §5.2's list: existing templates hold them
-and `vector` events would otherwise lose them against the legacy editor
-(decision log D7).
+and `vector` events would otherwise have lost them against the legacy
+editor (decision log D7; that editor was deleted in E4c).
 
 **`P` draws a polygon** (D16) with the course editor's area flow
 (`course-editor.md` §6.4: `areaBinding` / `step` in `tools/polygon.ts`,
@@ -220,8 +219,8 @@ and the keys; the **fill mode stays** in the inspector's fill select
 (`layoutFill_whiteoutInverted`, "White-out outside"), so an object that
 has it (legacy templates, earlier D7 sheets) stays editable and a `P`
 polygon can still be turned into one, for template-level ink saving on
-an all-controls or class sheet. Rendering, print, the schema and the
-legacy `MapLayoutEditor` are untouched; no stored object is changed.
+an all-controls or class sheet. Rendering, print and the schema are
+untouched; no stored object is changed.
 
 With `V`: a click selects an object of the scope, topmost first
 (`layoutObjectAt`): text, rectangles and images **by their bounds**;
@@ -273,20 +272,21 @@ resize handles in template scope, edge snapping, rotation.
 the frame, then drag inside it. The sheet moves over the fixed map and the
 window centre follows the drag in paper mm (`alignedCentre`), whatever the
 window's rotation; the drop writes `courseMap.saveLayout` with the new
-centre, and undo writes the old one. The stored centre is the one
-`MapLayoutEditor` stores (that editor moved the terrain under a fixed
-sheet; the record is the same). With nothing selected a drag pans.
+centre, and undo writes the old one. The stored centre is the record
+the legacy editor kept (it moved the terrain under a fixed sheet; the
+record is the same). With nothing selected a drag pans.
 
 **Entry points.** The Maps page's *Edit layout* (`edit-course-map-<seq>`,
 the all-controls row) and the Map templates page's
 (`edit-template-layout-<seq>`) navigate to the editor's Layout mode
 (`layoutEditorHref`, `lib/editor/layout-href.ts`) for every event since
-E3. `MapLayoutEditor` is unreachable from the pages and goes in E4c;
-its map preview, `window.png`, went in E4a (`course-print.md` §10).
+E3; it is the only editor of a sheet or a template. The legacy
+`MapLayoutEditor` was deleted in E4c, its map preview `window.png` in
+E4a (`course-print.md` §10).
 
 **What stays in `course-maps.md`:** the data model (templates, sheets,
 overrides), coordinate spaces, validation codes, the Maps and Map
-templates pages' tables, club templates, and the legacy editor.
+templates pages' tables and club templates.
 
 ## 5. Templates by key
 
@@ -459,6 +459,7 @@ sheet prints through `classes` or `maps`.
 | unit (shared) | `packages/shared/src/__tests__/auto-template.test.ts` | the key (standard, custom paper), the key's name, decision (3) (most sheets, oldest, seq), `fitOrientation` (preferred kept, turned, ratio, the margin, neither fits), `defaultTemplateSettings` |
 | unit (web) | `lib/editor/__tests__/export-menu.test.ts`, `template-key.test.ts`, `state.test.ts`, `pages/editor/__tests__/layout-model.test.ts` | Export ▾ entries, routes and what is ensured first; courses in a template / at its key, the move-out target, extra names; Class view in the reducer; the sheet key |
 | integration | `packages/api/src/__tests__/integration/auto-templates.test.ts` | the migration's backfill (scoped to one event): keys, decision (3), no sheet moved, no rename; key sync on create / update / duplicate / delete with promotion; `autoSheets` (first sheet, auto template named by key, centred, idempotent; the event's look and a landscape turn; without a course every course); class sheets (scale → auto template at that scale; explicit template + scale → sheet override; cleared → deleted; course change); `classOverrides`; `class.upserted` without the overrides; `resolveSheet { classSeq }` (own sheet, course sheet with the override, `{classes}`); version tokens (`CONFLICT` with the row now, no token = LWW); `maps.pdf?classes=` through the composer (one page per class, `courses` / unfiltered without class sheets, 400s; E3 deleted the legacy variant, whose class-name check read the rsvg SVG) |
+| unit (web) | `lib/editor/__tests__/layout-href.test.ts` | E4c: the Maps / Map templates pages' *Edit layout* link — a sheet with its course, a template with and without a preview course, a null course omitted, the event name encoded |
 | E2E | `e2e/course-maps.spec.ts` "export a course that has no template yet" | a course without a map exports one A4 page from the Maps page; the auto badge; the route answers `application/pdf`; the template named by key with its key badge |
 | E2E | `e2e/course-editor.spec.ts` "Course editor auto templates" | Export ▾ → this course creates the sheet and prints one page; the auto badge and the sheet key; a class scale makes a class sheet; Class view shows `1:15000`; this class exports; Create extra template moves the course, its row moves it back, undo moves it again |
 | E2E | `e2e/course-editor.spec.ts` "Course editor layout" "graphics: upload an SVG…" | E3 (ported from `course-maps.spec.ts`'s legacy layout editor): the Graphics section uploads an SVG (`graphics.upload`), its Place button arms the image tool, a click on the page places it (one `saveLayout`, an `image` row in the list and in `courseMap.get`); selected from the list and deleted, gone from both |
@@ -476,15 +477,12 @@ sheet prints through `classes` or `maps`.
 - **Class sub-rows on the Maps page**: not planned (decided in the split);
   ClassesPage shows no override fields.
 - **Print-preview toggle** (05 §5.12): waits for print profiles.
-- **Version token from `MapLayoutEditor` and the Maps / Map templates
-  pages** (§2): they write without `baseVersion` (LWW) until slice E
-  retires the legacy editor.
+- **Version token from the Maps / Map templates pages** (§2): their
+  row writes (`courseMap.update`, `mapTemplate.update`) go without
+  `baseVersion` (LWW) until E-pages folds the pages into Layout mode.
 - **Canvas editing beyond move / resize and the path gestures**:
   multi-select, frame handles, edge snapping, rotation (§3).
 - **Rectangles by outline?** Layout closed paths hit by outline (D16);
   rectangles, text and images still by bounds — flagged for the user
   (feedback 2026-11-04, "Flagged for the morning").
 - **GL-drawn images** with their crop (§1).
-- **Retiring `MapLayoutEditor`** — unreachable since E3 (the
-  `map.editor.vector` gate is gone); deleted in E4c. Its map preview,
-  `window.png`, went in E4a.

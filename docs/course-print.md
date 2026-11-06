@@ -360,8 +360,8 @@ naive conversion in `cmyk` and as the hex in `rgb` (§2).
 ### 6.2 Description block
 
 `descriptionBlock(input, paperHeightMm, colourOf)` (`print/description.ts`)
-reproduces the legacy SVG block (`description-svg.ts`) formula for
-formula, as objects for the shared stage:
+reproduces the legacy SVG block (`description-svg.ts`, deleted in E4c)
+formula for formula, as objects for the shared stage:
 
 - white sheet (area) with a 0.35 mm border; 8 cells wide; 3 header rows
   (event, classes, course · length · climb with thick verticals after
@@ -755,7 +755,7 @@ unreachable since E3 (Layout mode draws the page on the GL canvas,
 `course-layout.md`), so E4a deleted the route with its raster
 (`renderDocumentWindow`, `inkBoundary`, `filterPassStream` in
 `render/window-raster.ts`) and the legacy OCAD → SVG branch
-(`map-source.ts` `loadBaseMapSvg`); `MapLayoutEditor` itself goes in
+(`map-source.ts` `loadBaseMapSvg`); `MapLayoutEditor` itself went in
 E4c. The request is a 404 now.
 
 ### Tests

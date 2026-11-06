@@ -97,9 +97,9 @@ so the UI can report and repair the invalid assignment.
 mime-checked at upload; SVG content is parsed and rejected if it contains
 scripts, event handlers or external references). `event_id NULL` marks a
 club-library graphic shared across events; event rows cascade on event
-delete. An `image` layout object references a graphic by id and renders it
-inline in the page SVG — sanitized SVG content directly, PNG as a `data:`
-URI — so PDF export needs no extra fetches.
+delete. An `image` layout object references a graphic by id; print
+embeds it in the page (PNG as is, SVG rasterised in the API at render
+time — [`course-print.md`](course-print.md) §6.3).
 
 Structured JSON is validated at every tRPC boundary with the Zod schemas in
 `@oxygen/shared`.
@@ -178,9 +178,14 @@ GET /api/maps/:nameId/maps.pdf
 GET /api/maps/:nameId/graphics/:id
 ```
 
-Both require `courses.view`. The layout editor's map preview,
-`GET /api/maps/:nameId/window.png`, went in E4a (its only caller,
-`MapLayoutEditor`, is unreachable since E3; `course-print.md` §10).
+Both require `courses.view`. The legacy layout editor's map preview,
+`GET /api/maps/:nameId/window.png`, went in E4a and the editor itself
+(`MapLayoutEditor`) in E4c (`course-print.md` §10). Three API shapes
+have had no web caller since E4c and stay until E-pages reworks the
+routers: `mapTemplate.previewLayout`, `courseMap.saveLayout`'s
+`templateObjects` option, and `courseMap.list`'s per-row overlay fields
+(`controls`, `legs`, `descriptionRows`, `descriptionHeader`,
+`labelMode`) — Layout mode reads `courseMap.resolveSheet` instead.
 `maps.pdf` is composed from
 the document in a worker thread, off the event loop (`course-print.md`
 §8); a document whose colour stack is not aligned is a 400 with the
@@ -199,8 +204,8 @@ Use **Map templates / Kartmallar** to define reusable output:
    A5 template, then expand its row to edit orientation, print scale and
    margin.
 2. Open **Edit template layout** to place shared text, paths, rectangles,
-   white-outs and the control-description block. Select a course in the
-   editor header to preview the template without tying it to that course.
+   white-outs and the control-description block in the course editor's
+   Layout mode.
 3. Save stable templates to the club library from the row action. **Import
    from club library** opens a modal instead of mixing club and event
    templates in the same table.
@@ -213,167 +218,69 @@ Use **Maps / Kartor** for course assignments and per-map changes:
    bar.
 2. Expand a row to rename, validate, export or delete individual maps and add
    a second sheet for a map exchange.
-3. Open **Edit layout** for map-window placement and course-specific objects.
-   Shared template objects are visible but locked; follow **Edit template
-   layout** to change them.
+3. Open **Edit layout** for map-window placement and course-specific objects
+   in the course editor's Layout mode. Shared template objects are visible
+   but locked; open the template to change them.
 4. Export one map, every map for a course, the all-controls map, or the whole
    event as PDF.
 
-**Which editor opens.** **Edit layout** and **Edit template layout** open
-the course editor's Layout mode for every event since E3
-(`/:nameId/course-editor?mode=layout&sheet=<seq>` / `&template=<seq>`):
-the sheet drawn on the GL canvas through the composer's page layer, every
-gesture one write and one undo entry — `course-layout.md`. The legacy
-editor below (`MapLayoutEditor`) is unreachable and goes in E4c; its
-description stays until then.
-
-In the legacy editor, the paper is the canvas. **Align map** drags the terrain
-under the map frame — the displayed raster and the course overlay move
-together, and the freshly rendered raster swaps in seamlessly afterwards.
-Mouse wheel and `−` / `+` zoom only the editor viewport. When zoomed, dragging
-empty paper pans around the sheet. The editor canvas uses all available
-desktop space rather than imposing a fixed maximum width. The print scale
-changes only through its number field. The editor first displays a fast 120 dpi full-page raster and
-then replaces it with a cached high-resolution full-page raster. Zooming and
-panning only change the SVG viewport, so they do not request or blank the map.
-
-On coarse touch screens outside fullscreen, one finger on empty canvas keeps
-normal page scrolling while two fingers pan and pinch-zoom the paper. In
-fullscreen, one finger pans the paper. A finger started on an editable object,
-corner, vertex, Bezier handle, or description block always manipulates that
-target instead of the viewport. Touch hit areas are larger than their visible
-handles. Screen points are converted with the SVG's inverse screen matrix, so
-letterboxing and zoom do not reduce drag distances.
-
-The header matches the course editor: help popover, undo/redo icons, compact
-zoom group, autosave status, fullscreen toggle and close. Layout changes
-autosave (~1 s after each commit, flushed on close). There is no Save button.
-
-The editor chrome is a single left column of collapsible glass cards —
-**Tools**, **Page**, **Graphics**, **Objects**, **Properties** — matching the
-course editor's inventory panels. One component serves both editors; template
-mode hides map-only sections. On mobile all cards start collapsed to header
-bars so the canvas stays visible. Tapping an object expands Properties, while
-dragging an object preserves the card's current open/closed state. The Objects card lists every object of the current scope
-with select and delete, and warns when a page-anchored object sits outside
-the printable area (map-anchored objects are clipped to the map frame at
-print, so falling outside is allowed). When editing a map whose *template*
-has objects outside the printable area, the Objects card shows an amber
-notice with a link to the template editor, since those objects are locked in
-map scope. The Graphics card uploads SVG/PNG files, lists event and club
-graphics, saves an event graphic to the club library, and arms click-to-place
-for image objects. Image resize is free by default; **Ctrl/Cmd** keeps the
-aspect ratio and **Shift** crops the source graphic.
-
-The control-description block is the same sheet the course editor shows on
-the map: `resolve-layout.ts` builds it with the shared `buildDescriptionSheet`
-(three-row IOF header — event / classes / course · length · climb — start row,
-control rows, special-instruction rows, finish row with the measured
-last-control → finish distance) and `renderDescriptionBlockSvg` draws it with
-the IOF rules: thick header cells, thick rule under the start row, after every
-third control and on either side of a special instruction, above the finish,
-and thick verticals after columns C and F (A B C | D E F | G H). The layout
-editor previews the identical block, so its printed height (3 header rows +
-sheet rows) is visible while placing it; `validateCourseMap` uses the same
-row/header count for the `description_outside_page` check. All-controls maps
-keep a single title row over code-sorted control rows.
-
-Choose an object tool and click its intended page position to create it;
-`Escape` cancels an armed tool. Rectangles and polygons share a **Fill**
-property: none, solid colour, white-out, white-out outside (ink saver), or
-ISOM 709 out-of-bounds purple cross-hatch (0.2 mm lines / 1.2 mm gap at the
-base map scale, enlarged by `overprintScale`). An optional border toggle
-controls stroke. Out-of-bounds borders default to the ISOM 709 bounding line
-(0.4 mm, Feb 2024 revision) and always use the course purple — the colour
-picker is locked so a later purple change recolours them. **White-out
-outside** draws an even-odd ring against the map frame (everything inside
-the frame except the shape is opaque white), so print ink is only spent on
-the area of interest; click the white ring to select it, click inside the
-shape hole to pass through to objects underneath. Lines, paths and rectangle
-borders have a **Line style** (solid or dashed). Dashed strokes store
-`dash: "dashed"` on the object; the shared `strokeDashArrayMm` helper turns
-that into a `stroke-dasharray` of 5 × / 2.5 × the stroke width, floored at
-2 mm / 1 mm so hairlines stay legibly dashed on paper — the editor preview
-and the PDF use the same helper. Paths support inserting
-and removing vertices. Alt-drag
-a selected vertex to create symmetric cubic Bezier handles.
-
-Handles come in two visually distinct families so their job is readable
-before touching them: **squares move** (path vertices, line ends, resize
-corners, the description-block corner; tooltip "Drag to move this point" /
-"Drag to resize") and the **round "+" splits** (edge midpoints; tooltip
-"Click to split the segment here"). Bezier control points are small filled
-circles on a leader line. Every handle carries `data-handle-role`
-(`move` / `add` / `bezier`). Handles scale with the paper up to 150 % zoom and
-then hold a constant screen size (`editorHandleScale` in
-`map-layout-editor.ts`), so zooming in to inspect detail never buries it
-under the handles. Touch hit areas shrink with the same factor. Text supports
-sans-serif, serif, condensed and monospace fonts; clicking a variable inserts
-it at the current text cursor. Objects can be fixed to paper or anchored to
-the map. `Ctrl/Cmd+Z`, `Ctrl/Cmd+Shift+Z` and `Ctrl/Cmd+Y` control undo/redo.
-
-The canvas is grey, the physical sheet is white, and one dashed red line shows
-the printable margin. Object and control-description dragging/resizing is
-clamped to the printable area (resize cannot grow out the opposite edge).
-New templates use a 3 mm margin by default; changing the template's print
-margin also updates its map frame. A data migration snaps legacy 8 mm frames
-to the current margin so the map touches the red line like other objects.
+**Which editor opens.** **Edit layout** (also on the all-controls row) and
+**Edit template layout** open the course editor's Layout mode for every
+event (`/:nameId/course-editor?mode=layout&sheet=<seq>[&course=<seq>]` /
+`&template=<seq>`, built by `layoutEditorHref`): the sheet drawn on the
+GL canvas through the composer's page layer, every gesture one write and
+one undo entry — [`course-layout.md`](course-layout.md). The pages hold
+no editor of their own: the legacy `MapLayoutEditor` (an SVG paper
+canvas over a `window.png` raster of the unwarped OCAD window) was
+unreachable from E3 and deleted in E4c, with the shared SVG emitters it
+and the legacy PDF page drew with (`objects-svg.ts`,
+`course-overlay-svg.ts`, `description-svg.ts`). Until E-pages folds the
+pages into Layout mode and the Courses page, they stay as lists: create,
+rename, delete, validate and export sheets and templates, assign a
+template inline or in bulk, and the club library.
 
 Validation issues on the Maps page are translated by code
 (`template_missing`, `map_scale_missing`, `control_outside_frame`,
 `description_outside_page`, `object_outside_page`) with human labels for
 objects rather than UUIDs.
 
-The layout editor and PDF composer use the same course-overlay geometry as the
-regular map view: legs are clipped around controls, imported overprint gaps
-and control-circle slits are retained, and control numbers avoid symbols and
-course lines (a number box that would sit on a drawn leg is rejected; a
-course-setter can also drag the number in the editor, storing a per-course
-offset that print honours as `labelPosition`). Print (and the live map) use IOF colour stacking — lower purple
-under the map ink, upper purple on top — instead of blend modes: the
-course layer sorts into the document's own colour stack
-([`course-layer.md`](course-layer.md) §1).
+The control-description block is the same sheet the course editor shows on
+the map: `resolve-layout.ts` builds it with the shared `buildDescriptionSheet`
+(three-row IOF header — event / classes / course · length · climb — start row,
+control rows, special-instruction rows, finish row with the measured
+last-control → finish distance) and `print/description.ts`
+(`descriptionBlock`) draws it with the IOF rules ([`course-print.md`](course-print.md)
+§6.2); Layout mode and print draw the identical block, and
+`validateCourseMap` uses the same row/header count (`descriptionBlockSize`)
+for the `description_outside_page` check. All-controls maps keep a single
+title row over code-sorted control rows.
+
+Rectangles and polygons share a **Fill**: none, solid colour, white-out,
+white-out outside (an even-odd ring against the map frame, the ink saver),
+or ISOM 709 out-of-bounds purple cross-hatch; out-of-bounds borders default
+to the ISOM 709 bounding line (0.4 mm, `OUT_OF_BOUNDS_BORDER_MM`) in the
+course purple. Lines, paths and rectangle borders may be dashed
+(`dash: "dashed"`). How the course layer draws them is
+[`course-layer.md`](course-layer.md) §3.6 (`shared/src/course/objects.ts`).
 
 Appearance dimensions (circle radius, line width, number height) are ISOM
 dimensions **at the base map scale** — the defaults match ISOM 2017-2:
-Ø 5 mm circles, 0.35 mm lines, and 4.0 mm control numbers (symbol 704:
-Arial, non-bold — rendered in Liberation Sans, metrically compatible).
-`numberHeightMm` is the printed **digit height**; the renderer divides by
-Liberation Sans's cap-height ratio (1409/2048) to get the SVG font-size,
-since font-size is the em box, not the glyph height. Numbers are anchored
-on the alphabetic baseline half a digit below the placed centre
-(`controlNumberBaselineY`) rather than with `dominant-baseline`, which
-librsvg does not implement; the course editor draws its numbers with the
-same font, size and anchor rule, and auto-placement runs in the unrotated
-map frame in both, so editor, layout preview and PDF put every number on
-the same spot (see
-[`bugfix-control-number-placement.md`](bugfix-control-number-placement.md)).
-The default purple is
-`#a626ff`, the sRGB equivalent of the offset CMYK 35·85·0·0 / PMS Purple
-from ISOM Appendix 1 (the same definition course-setting software uses).
-
-Following the norm, the overprint is enlarged together with the map:
-`renderCourseOverlaySvg` multiplies every dimension (including the fixed
-start-triangle and finish-circle sizes) by
-`overprintScale = mapScale / printScale`, so a 1:15000 map printed at 1:7500
-gets Ø 10 mm circles, 0.7 mm lines and 8 mm control digits. The factor is
-computed in `resolveMapLayout` and in the editor
-(`baseMapScale / printScale`), keeping the on-screen preview and the PDF
-identical. The `20260916190000_isom_overprint_defaults` migration bumps
-stored templates that still carry the old defaults (`#c026d3`, 3.5 mm) to
-the norm values; customised values are left untouched.
+Ø 5 mm circles, 0.35 mm lines, and 4.0 mm control numbers (symbol 704).
+The default purple is `#a626ff`, the sRGB equivalent of the offset CMYK
+35·85·0·0 / PMS Purple from ISOM Appendix 1. Following the norm, the
+overprint is enlarged together with the map: every dimension is multiplied
+by `overprintScale = mapScale / printScale` (computed in
+`resolveMapLayout`, passed to `courseLayer()`), so a 1:15000 map printed at
+1:7500 gets Ø 10 mm circles, 0.7 mm lines and 8 mm digits. Number
+placement and its baseline rule are [`course-layer.md`](course-layer.md)
+§3.5. History: the `20260916190000_isom_overprint_defaults` migration
+bumped stored templates that still carried the old defaults (`#c026d3`,
+3.5 mm) to the norm values, and a data migration snapped legacy 8 mm map
+frames to the template's print margin (3 mm by default).
 
 Templates can also be copied to and from the club library. A club template is
 a snapshot: changing it later does not mutate templates already copied into
 events.
-
-The editor intentionally does not embed the regular XYZ tile layer. Screen
-tiles are true-north Web Mercator images bilinearly warped from OCAD; print
-composition uses the original magnetic-north OCAD paper-millimetre geometry.
-No single CSS or SVG transform can map those tiles back to print space without
-misaligning overlays. The preview therefore uses the same unwarped OCAD window
-as PDF output. That preview (`window.png`) went in E4a; the editor itself
-is unreachable since E3 and goes in E4c.
 
 ## Validation
 

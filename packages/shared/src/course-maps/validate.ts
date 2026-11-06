@@ -5,7 +5,7 @@ import {
   rectInside,
   type PaperDimensions,
 } from "./geometry.js";
-import { descriptionBlockSize } from "./description-svg.js";
+import { descriptionBlockSize } from "./description-rows.js";
 import type {
   CourseMapDocument,
   CourseMapObject,

@@ -60,7 +60,7 @@ For `free_order` courses:
 | Surface | Behaviour |
 |---------|-----------|
 | On-screen map (`MapViewer`) | No connecting leg lines (geometry or fallback); labels show punch codes, not 1,2,3… |
-| Print / PDF (`resolve-layout` + `renderCourseOverlaySvg`) | Same: legs filtered, `labelMode: "code"` |
+| Print / PDF (`resolve-layout` + `courseLayer()` in the composer) | Same: legs filtered, `labelMode: "code"` |
 | Description sheet | Control rows omit the A-column sequence number; thick rules still every third control row |
 | Course editor geometry | `editorCourseGeometry(…, "free_order")` (the course layer draws no legs) emits points only; auto length/legs left alone |
 | Manual number offsets | Draggable in the editor and honoured in print for both modes — the offset is stored on `course_controls.label_dx/dy`, so it needs a selected course. There is no per-control slot for the all-controls view |

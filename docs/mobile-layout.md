@@ -101,14 +101,9 @@ colour-stack control.
 
 ### Map layout / template editor header
 
-`MapLayoutEditor`'s header is one row from `sm` up and two rows below: title +
-help + fullscreen/close first, then undo / redo / zoom / preview-course select
-/ save status. The two row wrappers switch to `display: contents` at `sm`
-(`sm:contents`), so their children join the header's flex line directly and
-`order` puts the window controls last. The **Preview course** caption is gone;
-the select carries the name as `aria-label` / `title`, and its "no course"
-option reads as the label. On phones the "Rendering map preview…" pill is
-spinner-only.
+Deleted with `MapLayoutEditor` in E4c: *Edit layout* and *Edit template
+layout* open the course editor's Layout mode, whose phone layout is the
+course editor's (`course-editor.md`, `course-layout.md`).
 
 ### Controls page toolbar
 
@@ -184,7 +179,6 @@ to Google Accounts and the cross-origin OAuth response is rejected by CORS.
 | Session recovery | `packages/web/src/lib/session-recovery.ts`, `CompetitionShell` |
 | Map footer / height / toolbar | `packages/web/src/components/MapPanel.tsx` |
 | Toolbar buttons + icons | `packages/web/src/components/ToolbarButton.tsx`, `map-icons.tsx` |
-| Template editor header | `packages/web/src/components/MapLayoutEditor.tsx` |
 | Controls page toolbar | `packages/web/src/pages/ControlsPage.tsx` |
 | Shell header | `packages/web/src/pages/CompetitionShell.tsx` |
 | E2E | `e2e/mobile-layout.spec.ts` (the editor's phone layout itself is `e2e/field-mode.spec.ts` and the touch describe of `e2e/course-editor.spec.ts`; E3 deleted the legacy editor's phone tests), `e2e/session-recovery.spec.ts` |
