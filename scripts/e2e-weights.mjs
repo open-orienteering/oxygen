@@ -6,19 +6,17 @@
  * of a shard's wall time.
  *
  * A file that more than one Playwright project runs (`playwright.config.ts`:
- * `MAP_PIPELINE_SPECS` under `map-legacy` and `map-vector`,
- * `VECTOR_ONLY_SPECS` under `map-vector`, `MOBILE_SPECS` under `mobile`)
- * is listed per project, `{ "<project>": weight }`, and its weight is the
+ * `course-editor.spec.ts` under `chromium` and `mobile`) is listed per
+ * project, `{ "<project>": weight }`, and its weight is the
  * sum: the shard that gets it runs it once per project.
  * `scripts/__tests__/e2e-config.test.mjs` fails when such a file's entry
  * does not name exactly the projects that run it. A plain number is a
  * file run by one project.
  */
 export const WEIGHTS = {
-  // The new course editor (D10): every desktop flow under `map-vector`; only the touch describe under `mobile`
+  // The course editor (D10): every desktop flow under `chromium`; only the touch describe under `mobile`
   // (the desktop describes skip there, the fixture import still runs per test).
-  "course-editor.spec.ts": { "map-vector": 30, mobile: 4 }, // ~230 s + ~35 s single run (D10)
-  "course-editor-legacy.spec.ts": 12, // ~104s — the legacy page's spec (`chromium`), the old course-editor.spec.ts
+  "course-editor.spec.ts": { chromium: 31, mobile: 4 }, // ~240 s + ~35 s single run (D10, E3)
   "course-presence.spec.ts": 4, // OCAD+map, two contexts, 5 s polls
   // `mobile` project: OCAD+map, 11 Field mode flows (~50s single run).
   "field-mode.spec.ts": { mobile: 5 },
@@ -28,20 +26,20 @@ export const WEIGHTS = {
   "controls.spec.ts": 3, // ~22s
   "courses.spec.ts": 3, // ~21s — OCAD/ppen imports
   "phase2.spec.ts": 3, // ~21s
-  "course-maps.spec.ts": { "map-legacy": 4, "map-vector": 4 }, // ~21s per run — PDF exports
+  "course-maps.spec.ts": 3, // PDF exports (E3: one run, the legacy layout editor's sections gone)
   "phase3.spec.ts": 3, // ~20s
   "kiosk-readout.spec.ts": 3, // ~20s — dual contexts + 5s auto-reset
   "offline.spec.ts": 3, // ~19s — drain polling
   "draw.spec.ts": 3, // ~18s
   "wide-screen-map-pane.spec.ts": 3, // ~18s
   "editor-start-finish.spec.ts": 3, // ~18s — fresh event + map
-  "mobile-layout.spec.ts": { "map-legacy": 3, "map-vector": 3 }, // ~18s per run — touch + map upload
+  "mobile-layout.spec.ts": 3, // ~18s — touch + map upload
   "permissions.spec.ts": 3, // ~18s
-  "webserial.spec.ts": { "map-legacy": 2, "map-vector": 2 }, // ~16s per run
+  "webserial.spec.ts": 2, // ~16s
   "control-series.spec.ts": 3, // ~15s — library + map upload
-  "map-multicourse.spec.ts": { "map-legacy": 4, "map-vector": 4 }, // OCAD replace-all + wide viewport
-  "map-control-circles.spec.ts": { "map-legacy": 3, "map-vector": 3 },
-  "map-viewer-gestures.spec.ts": { "map-legacy": 2, "map-vector": 2 },
+  "map-multicourse.spec.ts": 4, // OCAD replace-all + wide viewport
+  "map-control-circles.spec.ts": 3,
+  "map-viewer-gestures.spec.ts": 2,
   "kiosk-smart.spec.ts": 2, // ~14s after merges
   "printer-settings.spec.ts": 2,
   "eventor.spec.ts": 2,

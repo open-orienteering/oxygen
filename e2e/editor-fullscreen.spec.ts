@@ -8,7 +8,6 @@ import { test, expect, type Page } from "@playwright/test";
 import { reseed } from "./helpers/reseed";
 import { editorReady, emptyPoint } from "./helpers/editor";
 
-// The seed is `vector` with the new editor on (docs/map-pipeline-switch.md §5).
 test.beforeAll(reseed);
 
 test.setTimeout(120_000);

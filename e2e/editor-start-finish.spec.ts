@@ -46,7 +46,7 @@ test.describe("editor start/finish on a fresh event", () => {
     });
 
     await clickTab(page, "Course Editor");
-    // The new editor (the stack is `vector`, docs/map-pipeline-switch.md §5).
+    // The course editor (docs/course-editor.md §1).
     // No sites yet, so `editorReady` (which waits for one) does not apply.
     await expect(page.getByTestId("editor-page")).toBeVisible({ timeout: 15000 });
     const viewer = page.getByTestId("map-viewer");

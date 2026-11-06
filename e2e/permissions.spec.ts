@@ -49,8 +49,8 @@ test.describe("event permissions", () => {
       timeout: 15000,
     });
     nameId = new URL(page.url()).pathname.split("/").filter(Boolean)[0];
-    // A map, so the course editor route mounts the new editor (a `vector`
-    // event with a pinned document; docs/map-pipeline-switch.md §3.6, §5).
+    // A map, so the course editor draws a pinned document
+    // (docs/course-editor.md §1).
     await uploadEventMap(page);
     await expect(page.getByTestId("map-viewer").first()).toBeVisible({ timeout: 60000 });
 

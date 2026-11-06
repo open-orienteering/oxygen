@@ -13,18 +13,11 @@
 import { buildItest } from "./build-itest.js";
 import { buildMultirace } from "./build-multirace.js";
 import { buildTestCompetition } from "./build-test-competition.js";
-import { newPrisma, seedMapDefaults } from "./shared.js";
 
 async function main() {
   await buildItest();
   await buildMultirace();
   await buildTestCompetition();
-  const prisma = newPrisma();
-  try {
-    await seedMapDefaults(prisma);
-  } finally {
-    await prisma.$disconnect();
-  }
 }
 
 main().catch((err) => {
