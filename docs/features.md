@@ -276,12 +276,6 @@ A sortable table of every route with class and name filters, and structured sear
 
 ![Tracks with inline map preview](screenshots/tracks.png)
 
-### Replay components
-
-The `ReplayViewer` component tree (`packages/web/src/components/replay/`) renders a source-agnostic `ReplayData` structure: animated GPS playback with mass-start / real-time / legs modes, variable speed, follow mode, per-runner visibility, speed-coloured static track overlay, and heatmap. It also handles relay legs and forked courses, matching each runner to the fork they actually ran from their punch sequence.
-
-The components are in the tree and unit-tested, but no page currently feeds them — they are waiting on the Eventor GPS-track integration to supply `ReplayData`.
-
 ---
 
 ## Platform

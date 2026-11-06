@@ -1776,7 +1776,6 @@ changes for B4.
 | `RunnerMapPreview` (results, start list, runners) | `MapSlot` → `MapPanel` |
 | `CompetitionDashboard` | `MapSlot` → `MapPanel` |
 | `TracksPage` (GPS routes) | `MapSlot` → `MapPanel`; tracks through `mapGeo` |
-| Replay (`ReplayViewer` → `ReplayMapLayer`) | **mounted nowhere**: no producer feeds `ReplayData` since the Livelox source was removed; B11 closed as moot (user decision 2026-10-22) — see §8 |
 | `EditorPage` (the course editor) | `MapPanel` with `editor` |
 
 #### Tests
@@ -2602,11 +2601,6 @@ The shared module is exported as a namespace: `import { render } from
   list; hiding a *document* object needs the bridge to expose that
   mapping. The viewer (B4) hides nothing; the first consumer is the
   editor's hide / replace (slice D).
-- **§5.4 replay has no producer.** `ReplayViewer` / `ReplayMapLayer`
-  (own 2D canvas over tiles, `latLngToMapPx`) are mounted nowhere and
-  nothing produces `ReplayData`; B11 closed as moot (user decision
-  2026-10-22). A GPS replay feature gets its own row, with a producer and
-  this section's paper view and `mapGeo`.
 - **§5.5 highlight through the dynamic bucket.** Hit-testing landed in
   D4 (§5.5); the selection is still marked by the SVG ring. 04 §7's
   highlight — the selected object's passes redrawn in a highlight colour
