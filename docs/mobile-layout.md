@@ -93,11 +93,11 @@ buttons did not fit 390px and **Auto slits** rendered on top of
 The selected-control readout keeps the code and SRR/radio badges on phones
 but hides the millimetre position (`hidden sm:inline`).
 
-The **North lines under course purple** checkbox is no longer on the editor's
-map footer. It is a property of the base map, not of one event's course work,
-so it lives only on the club-library map card (**Settings → Base maps**). See
-[map-color-stack.md](map-color-stack.md#north-lines-under-the-course) for what
-the IOF colour order actually says about it.
+The **North lines under course purple** checkbox and the colour-stack
+profile select are gone (E4a): the course layer sorts into the map
+document's own colour stack ([course-layer.md](course-layer.md) §1), so
+neither the editor's map footer nor the club-library map card carries a
+colour-stack control.
 
 ### Map layout / template editor header
 

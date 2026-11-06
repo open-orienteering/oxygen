@@ -434,12 +434,13 @@ below it has its editor courses rebuilt on the next `course.geometry` /
 
 ### 4.4 Comparison
 
-`pnpm --filter @oxygen/api geometry:compare [--event <nameId>]… [--out <dir>]`
-(`scripts/compare-course-geometry.ts` over `course-geometry-report.ts`
-and the pure `course-geometry-compare.ts`) reads every event of the
-database and writes `report.md` + `courses.json` to
-`.local/course-geometry/<date>/` (never committed). Read-only: it builds
-what the writer would store now and compares.
+`course-geometry-report.ts` over the pure `course-geometry-compare.ts`
+reads every event of the database and builds what the writer would
+store now and compares (read-only). Its CLI,
+`pnpm --filter @oxygen/api geometry:compare` (`scripts/compare-course-geometry.ts`,
+which wrote `report.md` + `courses.json` to `.local/course-geometry/<date>/`),
+went in E4a; the modules stay for the course structure backfill
+(`course-structure-backfill.ts`) until E6 retires both.
 
 - **Editor courses** — stored vs written now, per control circle and per
   leg: same / changed / added / removed, with the opened width before and
@@ -1113,7 +1114,7 @@ for a check (decision log, D6).
 | `packages/shared/src/render/__fixtures__/course/` | the course scenes |
 | `packages/api/src/course-geometry.ts` | the writer (§4.1): `editorCourseGeometry`, `loadCourseSequences`, `rebuildCourseGeometry`, `ensureOverprintCutsCurrent`, `OVERPRINT_CUTS_VERSION` |
 | `packages/api/src/event-map-objects.ts` | cut features (§4.2): `loadEventCutFeatures` over the pinned document (`map-store/event-document.ts`) |
-| `packages/api/src/course-geometry-{compare,report}.ts`, `scripts/compare-course-geometry.ts` | the comparison (§4.4) |
+| `packages/api/src/course-geometry-{compare,report}.ts` | the comparison (§4.4; the CLI went in E4a) |
 | `packages/api/src/course-import-structure.ts`, `course-import-objects.ts`, `course-structure-backfill.ts`, `cli/course-backfill-{structure,args}.ts` | §6.4: pieces → gaps and the object bodies (pure), writing import-marked objects, the backfill and its CLI; `routers/course.ts` `importCourses`, `routers/event.ts` `structureBackfill*`, `MaintenancePanel.tsx` |
 
 | `packages/shared/src/course/structure.ts` | §6.1: `courseStructureSchema`, `courseStructureWireSchema`, `structureSiteIssues`, `linearStructure`, `structureControlIds`, `structureDiff` |

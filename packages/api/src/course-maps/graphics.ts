@@ -1,10 +1,9 @@
 /**
  * Upload validation and embedding helpers for course-map graphics
  * (club logos, sponsor art). Only SVG and PNG are accepted; SVG uploads
- * are restricted to self-contained documents so they can be inlined into
- * the composed page SVG that librsvg renders to PDF.
+ * are restricted to self-contained documents so the PDF composer can
+ * embed them (docs/course-print.md §6.3).
  */
-import type { ResolvedMapGraphic } from "@oxygen/shared";
 
 export const MAX_GRAPHIC_BYTES = 2 * 1024 * 1024;
 
@@ -96,28 +95,4 @@ export function validateGraphicUpload(data: Buffer): GraphicMime {
   if (data.subarray(0, 4).equals(PNG_MAGIC)) return "image/png";
   parseSvgGraphic(data);
   return "image/svg+xml";
-}
-
-/** Embedding for the PDF composer: inline SVG, data URI for PNG. */
-export function graphicToResolved(
-  mime: string,
-  data: Buffer,
-): ResolvedMapGraphic | null {
-  if (mime === "image/png") {
-    return { kind: "href", href: `data:image/png;base64,${data.toString("base64")}` };
-  }
-  if (mime === "image/svg+xml") {
-    try {
-      const parsed = parseSvgGraphic(data);
-      return {
-        kind: "svg",
-        svg: parsed.inner,
-        viewBox: parsed.viewBox,
-        ...(parsed.rootAttrs ? { rootAttrs: parsed.rootAttrs } : {}),
-      };
-    } catch {
-      return null;
-    }
-  }
-  return null;
 }

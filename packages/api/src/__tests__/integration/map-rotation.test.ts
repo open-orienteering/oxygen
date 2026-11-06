@@ -16,6 +16,7 @@ import { makeCaller } from "../helpers/caller.js";
 import { parseOcadMapMetadata } from "../../event-map.js";
 import { loadEventCrs } from "../../event-crs.js";
 import { mapMmToWgs84 } from "../../map-projection.js";
+import { refreshMapFileRenderKey } from "../../map-render-cache.js";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const FIXTURE = resolve(__dirname, "../../../../../e2e/test.ocd");
@@ -52,15 +53,23 @@ describe("course.setMapRotation", () => {
       },
     });
     // Unique stack settings so GC of this event's old key is not blocked
-    // by other suites that share the same OCAD blob at rotation 0.
-    await caller.course.setMapColorStack({
-      overrides: { above: [313131] },
+    // by other suites that share the same OCAD blob at rotation 0. The
+    // colour columns have no procedure since E4a; the key is still
+    // written for the v0.5.0 rollback (docs/map-storage.md §4.6).
+    const mapRow = await ctx.db.mapFile.findFirstOrThrow({
+      where: { eventId: ctx.eventId },
+      select: { id: true },
     });
+    await ctx.db.mapFile.update({
+      where: { id: mapRow.id },
+      data: { colorOverrides: { above: [313131] } },
+    });
+    await refreshMapFileRenderKey(ctx.db, mapRow.id);
     // Seed a fake cached tile under the pre-rotation render key so we can
     // assert GC drops it when rotation changes the key.
     const beforeMeta = await caller.course.mapMetadata();
-    expect(beforeMeta?.renderKey).toBeTruthy();
-    const oldRenderKey = beforeMeta!.renderKey!;
+    const oldRenderKey = (await ctx.db.mapFile.findUniqueOrThrow({ where: { id: mapRow.id }, select: { renderKey: true } })).renderKey!;
+    expect(oldRenderKey).toBeTruthy();
     await ctx.db.mapTile.create({
       data: {
         renderKey: oldRenderKey,
@@ -107,7 +116,9 @@ describe("course.setMapRotation", () => {
     const after = await caller.course.mapMetadata();
     expect(after!.rotationCorrection).toBe(11);
     expect(after!.northOffset).toBeCloseTo(expected.northOffset!, 6);
-    expect(after!.renderKey).not.toBe(oldRenderKey);
+    // Still refreshed for the v0.5.0 rollback (docs/map-storage.md §9).
+    const afterRow = await ctx.db.mapFile.findUniqueOrThrow({ where: { id: mapRow.id }, select: { renderKey: true } });
+    expect(afterRow.renderKey).not.toBe(oldRenderKey);
 
     const tiles = await ctx.db.mapTile.count({
       where: { renderKey: oldRenderKey },

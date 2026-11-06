@@ -1,14 +1,15 @@
 # Course print
 
 How a course map is printed from the vector pipeline: the PDF
-operators, the colour stack on paper and the layout-editor preview.
+operators, the colour stack on paper and the base map facts a print
+reads.
 Normative for slice C of the vector map pipeline (research:
 `docs/research/vector-map-pipeline/` 05, 09 §4 C).
 
 > §1–3 (writer, colour modes, fonts and determinism) are C1's; §4–7
 > (page model, `resolveSheet`, layers, page objects and graphics, boxes,
 > metadata and geospatial) C2's; §8–9 (route, golden PDFs, CI) C3's;
-> §10 (layout-editor preview) is C6's; §11 (corpus numbers) C7's. How a *pass* becomes PDF content is
+> §10 (`getBaseMapInfo`; the layout-editor preview until E4a) is C6's; §11 (corpus numbers) C7's. How a *pass* becomes PDF content is
 > `docs/map-rendering.md` §5.3; this chapter owns everything around it.
 
 Status: **draft** — §1–3 written by C1, §10 by C6 (2026-10-23), §4–7 by
@@ -222,7 +223,7 @@ against `mapToPage` at 0°, 20° and −15°. Symbol dimensions scale with
 the matrix (the ISOM rule that the overprint enlarges with the map);
 `documentFactor` stays the document's (03 §6.6).
 
-Base-map scale and meridian tilt come from `getBaseMapInfo` only (§10.1).
+Base-map scale and meridian tilt come from `getBaseMapInfo` only (§10).
 
 ### 4.3 The map layer
 
@@ -442,7 +443,9 @@ convergence with no special case. No viewport when `epsgOf` is null
 
 ### 7.4 Differences from the legacy page for C3's list
 
-Beyond §10.4 and the two differences of decision (3): spec-sized 7xx
+A record since E4a deleted the legacy page (§8.4). Beyond the base
+map's (§8.4 `library-symbols`, `stack-order`) and the two differences
+of decision (3): spec-sized 7xx
 symbols, the 701 turned to the first control, 709 from the library and
 start / finish clearance (C0); Liberation Sans in the block (the legacy font stack lists
 DejaVu Sans first); map-anchored images, control numbers and map text
@@ -483,7 +486,8 @@ ordered by course, `sort_order`, `seq`) prints every event through the
 composer (`packages/api/src/course-maps/routes.ts`) since E3, the flip
 (`map-pipeline-switch.md`, history note). It reads the `course_maps`,
 `map_templates`, course, control and graphics rows and writes nothing.
-The rsvg branch of the handler is unreachable and goes in E4a.
+The composer is the only path: the rsvg branch (OCAD → SVG →
+`rsvg-convert`, `svg-to-pdf.ts`, `map-page-svg.ts`) went in E4a.
 
 ### 8.1 Which path prints
 
@@ -491,12 +495,12 @@ The rsvg branch of the handler is unreachable and goes in E4a.
 |---|---|
 | the latest `map_files` row pins a document | the composer, §8.2 |
 | no pin | 400 "No base map uploaded" (slice E1) |
-| a pin whose colour stack is not aligned (`course.CourseStackError`: no lower / upper purple) | 400 with the error's reason (`{ error: <message> }`); rsvg is never called |
+| a pin whose colour stack is not aligned (`course.CourseStackError`: no lower / upper purple) | 400 with the error's reason (`{ error: <message> }`) |
 | any other composer error | 400 with its message |
 
 `pinnedPrintSource(db, eventId)` (`pdf-page.ts`;
 `loadPinnedPrintDocument` is its in-process wrapper) reads
-`getBaseMapInfo` (§10.1) — the same function the preview reads. There is
+`getBaseMapInfo` (§10) — the same function the layout procedures read. There is
 no fallback since E3 (decision log "E3, the flip"): an unaligned stack
 was printed through rsvg until then; E0 found no such document on prod,
 and a broken print must be seen, not hidden. The fix for such a map is a
@@ -512,7 +516,7 @@ re-import (the review's colour decisions).
    `pinnedPrintSource` gives its hash, `rotationCorrectionDeg` and a
    `bytes()` reader of the `map_documents` blob.
 2. Graphics referenced by any row's or template's image objects (event
-   or club scope), loaded once — the same query as the legacy resolver.
+   or club scope), loaded once.
 3. `renderCoursePagesInWorker({ document: { hash, bytes }, rotationCorrectionDeg,
    sheets, graphics, mode: "cmyk", info, onPage })`: the same
    `renderCoursePages` (one `PdfWriter`, one page per sheet, fonts, glyph
@@ -523,7 +527,7 @@ re-import (the review's colour decisions).
    `deterministic`: real dates (§3.2). The worker's output is
    byte-identical to the in-process call's for the same inputs (tested
    with `deterministic: true`); `renderCoursePages` itself stays in
-   process for the corpus run (§11) and the tests.
+   process for the tests.
    - **Messages.** Everything that crosses is structured-cloneable: the
      sheets, the graphics as `[id, { mime, data }]`, the writer options.
      Host → worker `print`; worker → host `page` after each page (index,
@@ -551,12 +555,15 @@ re-import (the review's colour decisions).
      and is re-created on the host (a 400 with its reason, §8.1). A worker that dies fails the request in flight.
    - **Shutdown.** The route's server `onClose` hook terminates the
      workers (`resetPrintWorkers`).
-4. A worker slot (`printGate`), **then** a `renderGate()` permit like tiles
-   and `window.png`, but **without the queue cap**: the request waits and
-   never answers 503 — the export is a browser download, where a 503 body
-   would arrive as a broken file, and the layout editor's `window.png`
-   requests share the four-deep queue. The slot comes first so a print
-   waiting for a worker holds no render permit that tiles need.
+4. A worker slot (`printGate`), **then** a permit of the process's
+   render gate (`renderGate()`, `MAP_RENDER_CONCURRENCY`, default 2, 3 on Cloud Run;
+   `map-render-limits.ts`), **without a queue cap**: the request waits
+   and never answers 503 — the export is a browser download, where a
+   503 body would arrive as a broken file. Since E4a nothing else takes
+   the gate (the tiles and `window.png` that shared it are gone), so it
+   bounds only the prints composing at once; `PRINT_WORKERS` is the
+   tighter bound by default. The slot comes first so a print waiting
+   for a worker holds no permit.
 5. Composer and writer warnings (`NO_FONT` for a page text in a family
    with no face, `IMAGE_MISSING`, `SVG_RASTER`) go to the log at `warn`;
    the PDF is still served.
@@ -579,8 +586,10 @@ for one page, `<event> maps` for several), `/Author` the organiser.
 
 The 03 §6.9 rule as `map-rendering.md` §6.4 applies it: a place where
 the vector page differs from the legacy page of the same sheet is either
-on this list or a bug. C7's corpus print run classifies by these codes;
-S2 judges the print shop's view of the first two.
+on this list or a bug. C7's corpus print run classified by these codes;
+S2 judges the print shop's view of the first two. Since E4a there is no
+legacy page to compare with: the list is the record of what changed for
+the user when every event moved to the composer (v0.6.0).
 
 | Code | Difference | Decided |
 |---|---|---|
@@ -595,11 +604,11 @@ S2 judges the print shop's view of the first two.
 | `size-aware-cuts` | automatic circle and leg cuts from the pinned document with clearance = feature radius + line width / 2 + 0.25 mm | user, 2026-10-24 (C5 question) |
 | `rotated-overprint` | on a rotated window, map-anchored images, control numbers and map text turn with the map (legacy drew the overprint upright in page space) | C2, §7.4 |
 | `image-rgb` | images stay DeviceRGB in `cmyk` (CMYK images are the profiles row) | C2, §7.4 |
-| `library-symbols`, `stack-order` | the base map as the window preview draws it (§10.4): matched symbols drawn by the library, every `map-rendering.md` §6.4 code, and the document's own colour order — where a map draws an area colour above lower purple (`COLOUR_AREA_ABOVE_LOWER_PURPLE`) or a 100 % line colour under it, legs follow that order (until `ocad-16`, C14, the inserted lower purple also went under every area on `e2e/test.ocd` and the club maps) | 2026-10-23 slice C split; C6 |
+| `library-symbols`, `stack-order` | the base map as the GL viewer draws it: matched symbols drawn by the library, every `map-rendering.md` §6.4 code, and the document's own colour order — where a map draws an area colour above lower purple (`COLOUR_AREA_ABOVE_LOWER_PURPLE`) or a 100 % line colour under it, legs follow that order (until `ocad-16`, C14, the inserted lower purple also went under every area on `e2e/test.ocd` and the club maps) | 2026-10-23 slice C split; C6 |
 
 Geometry is not on the list: paper size, frame, window, scale, rotation
-and control positions agree with the legacy page (the integration and
-E2E tests check page count and size; C7 compares the rasters).
+and control positions agreed with the legacy page (the integration and
+E2E tests check page count and size; C7 compared the rasters).
 
 ## 9. Tests and CI
 
@@ -607,7 +616,7 @@ E2E tests check page count and size; C7 compares the rasters).
 
 | Test | Covers |
 |---|---|
-| `packages/api/src/__tests__/integration/course-maps.test.ts` "maps.pdf through the composer", "course map REST rendering" | a pinned event → one composed PDF, pages at each template's paper (A4, A5), never the rsvg converter, no `X-Print-Pipeline`, `Info` title for one and several pages, file names; selection errors unchanged; `qpdf --check` clean; without a pin 400 "No base map uploaded"; an injected `CourseStackError` is a 400 with its reason and the converter is not called; any other injected error is a 400; the second event of the file (pinned too) prints composed pages per course, the all-controls map and a placed graphic |
+| `packages/api/src/__tests__/integration/course-maps.test.ts` "maps.pdf through the composer", "course map REST rendering" | a pinned event → one composed PDF, pages at each template's paper (A4, A5), no `X-Print-Pipeline`, `Info` title for one and several pages, file names; selection errors unchanged; `qpdf --check` clean; without a pin 400 "No base map uploaded"; an injected `CourseStackError` is a 400 with its reason; any other injected error is a 400 (the route has no other path, no `converter` option); the second event of the file (pinned too) prints composed pages per course, the all-controls map and a placed graphic; `window.png` is a 404 |
 | `packages/api/src/__tests__/integration/course-maps.test.ts` "a readout-path request is answered…" | 150 extra pages in one print while `race.recentActivity` is polled every 10 ms: every probe is answered within 500 ms and more than three were answered before the PDF finished; the PDF has all pages. A smoke test of the route wiring — the event-loop bound itself is `print-worker.test.ts`'s |
 | `packages/api/src/__tests__/integration/course-print.test.ts` | §7.5's row, plus `qpdf --check` of both colour modes; the worker's bytes equal the in-process bytes (`deterministic: true`) and `onPage` fires once per sheet |
 | `packages/api/src/__tests__/print-worker.test.ts` | the worker on `e2e/test.ocd`: bytes equal in-process; the blob read and sent once per worker; `page` order; an error keeps the worker usable; `CourseStackError` re-created (a document with palette ids stripped); a reset rejects the request in flight and the next call recovers; the main thread's event-loop delay stays under 25 ms (or half a page) during a 10-page A3 print; `PRINT_WORKERS` parsing |
@@ -716,137 +725,68 @@ decision log): nothing in the image calls them — the golden tier and
 script, S2 is manual — and poppler is a parser with a steady CVE stream
 that would ship unused. They join the image when a feature that runs in
 it (an in-app preflight) calls them; the measurement above stays the
-reference for that. `rsvg-convert` and `fonts-liberation` stay in the
-image until slice E removes the legacy path (09 §9 step 5).
+reference for that. `rsvg-convert` (`librsvg2-bin`) and
+`fonts-liberation` left the image and CI in E4a with the legacy path
+(09 §9 step 5): the composer embeds the bundled Liberation files
+(`render/fonts.ts`), so printing needs no system tool or font. The
+v0.5.0 image brings its own, so a rollback is unaffected.
 
-## 10. Layout-editor preview (interim)
+## 10. `getBaseMapInfo`
 
-`GET /api/maps/:nameId/window.png` feeds `MapLayoutEditor` its map
-sandwich (`docs/map-color-stack.md`: full → lower purple → ink →
-whiteouts → upper purple). The URL, the query parameters, the 4096 px and
-600 dpi caps, the cache headers and the 503 on a full render queue are
-unchanged (`docs/course-maps.md` API).
-
-### 10.1 Which path draws it
-
-| Event | Path |
-|---|---|
-| the latest `map_files` row pins a document | the reference raster, §10.2 |
-| no pin | none: "No base map uploaded" (400) |
-
-The OCAD → SVG → resvg branch (the `legacy` row until E3) is unreachable
-and goes with the route's last caller, `MapLayoutEditor`, in E4a.
-
-`getBaseMapInfo(db, eventId)` makes the call and returns
+`getBaseMapInfo(db, eventId)` (`course-maps/map-source.ts`) answers the
+base map facts a print and a layout read and returns
 `{ scale, meridianTiltDeg, version, document }`. For every event with a
 pin (slice E1, `docs/map-storage.md` §4.6) `scale` is the pinned
 document header's `mapScale`, `meridianTiltDeg` the report's
 `north.meridian.medianTiltDeg` (0 when there is none) and `version` the
 document hash — the values the A11 dual write puts into the `map_files`
 columns. `document` is `{ hash }`, always (the `pinnedDocumentHash`
-gate went with the switch in E3). Without a pin it
-throws "No base map uploaded" (`getBaseMapInfoOrNull` → null), and a pin
-whose `map_documents` row is missing throws "Pinned map document is
-missing" (both 400 on the routes); the OCAD fallback is gone. C2 and C3 read this one function. The legacy
-`window.png` cache keys on `version`, so a colour-stack change on a
-`legacy` event no longer changes the key within a process (E4a deletes
-the route).
+gate went with the switch in E3). Without a pin it throws "No base map
+uploaded" (`getBaseMapInfoOrNull` → null), and a pin whose
+`map_documents` row is missing throws "Pinned map document is missing"
+(both 400 on the route); the OCAD fallback is gone. C2, C3 and the
+layout procedures read this one function.
 
-### 10.2 The render
-
-1. Window: `mapWindowForFrame(frame, {cx, cy}, scale, printScale, rot)`,
-   unchanged. The axis-aligned `windowBoundingBox` of it is the raster's
-   paper area (paper mm = document µm / 1000, y up; the legacy OCAD
-   unit/100 is the same space).
-2. Objects: those whose path extent comes within 20 mm of the bbox (the
-   legacy crop's padding). The document is decoded once per hash
-   (`prepareDocument`, the last two hashes kept in-process).
-3. `documentRenderInput` → `symbolise` → (layer filter) →
-   `rasterisePassStream` with explicit `bounds`, so the resvg off-frame
-   guard of `map-rendering.md` §5.1 applies, at
-   `pxPerMm = widthPx / window.width`.
-4. Rotation is applied to the raster: the bbox image is rotated about its
-   centre by `rot` (positive = clockwise on the page, as the legacy SVG's
-   `rotate(rot, cx, cy)`) and cropped to the centre `widthPx × heightPx`.
-5. The permit comes from `renderGate()` as for tiles and the legacy
-   window; a full queue is a 503 with `Retry-After`.
-
-Output is exactly `round(wMm/25.4·dpi) × round(hMm/25.4·dpi)` for both
-layers, rotated or not.
-
-### 10.3 Layers
-
-- `layer=full`: the whole stack on opaque white.
-- `layer=ink`: the passes whose colour index is **above** the stack index
-  of palette id `purple-lower`, on transparent. The split is a colour
-  index filter on the colour-sorted pass stream (05 §3); everything at
-  or below that index is the "lower" part, which the editor draws itself
-  (`course-overlay-lower`) and which is never served.
-- A stack without a `purple-lower` row (only imports older than colour
-  alignment lack it): the first entry with `purpleRole: "lower"` is the
-  boundary; with none, the ink layer is a full-size transparent PNG and
-  the server logs one warning per document hash (re-import fixes it).
-  Decided in C6, 2026-10-23.
-
-Which colours are ink is therefore the document's own stack order, not
-the legacy regex classification (`map-color-stack.ts`): on an aligned ISOM
-map black, blue and brown line / point colours are ink, as before; where
-a map's source order differs from the IOF rewrite the split follows the
-document.
-
-### 10.4 Sanctioned differences from the legacy window
-
-Decision 2026-10-23 (Slice C split): library-drawn symbols for matched
-symbols; the shared naive CMYK → RGB conversion (`stackColour`) instead
-of the legacy RGB; `colorOverrides` and `northLinesBelow` are not applied
-on the vector path (the column values stay, unused); the document's stack
-order decides the ink split (§10.3). Geometry — window, scale, rotation,
-size — agrees; the integration tests compare against the legacy window
-of the same map for that.
-
-### 10.5 Cache
-
-In-process PNG cache key `[eventId, version, cx, cy, wMm, hMm,
-printScale, dpi, rot, layer]` with `version` = document hash, so a
-re-pin or re-import is a new entry and a rotated window is its own.
-ETag / 304 / `X-Cache` as before.
-
-### 10.6 Interim
-
-The preview exists because the legacy layout editor composes raster
-layers (05 §5.12). Slice D7 puts layout editing on the GL canvas for
-every event (`course-layout.md`: the page drawn through the composer's
-own page layer, no `window.png`); since E3 the Maps and Map templates
-pages open it for every event, so nothing in the UI reaches
-`MapLayoutEditor` or this route any more. §10 stays compiled until E4a
-deletes the route (with `MapLayoutEditor` in E4c). Until then the
-document branch is the second production job of the reference raster
-(`map-rendering.md` §5.1).
+Until E4a this section also specified the layout-editor preview,
+`GET /api/maps/:nameId/window.png` — the reference raster of the pinned
+document (full and ink layers, rotation, a PNG cache, the render gate's
+503) that fed `MapLayoutEditor` its map sandwich. Its last caller was
+unreachable since E3 (Layout mode draws the page on the GL canvas,
+`course-layout.md`), so E4a deleted the route with its raster
+(`renderDocumentWindow`, `inkBoundary`, `filterPassStream` in
+`render/window-raster.ts`) and the legacy OCAD → SVG branch
+(`map-source.ts` `loadBaseMapSvg`); `MapLayoutEditor` itself goes in
+E4c. The request is a 404 now.
 
 ### Tests
 
 | Test | Covers |
 |---|---|
-| `packages/api/src/render/__tests__/window-raster.test.ts` | boundary choice and fallbacks; pass filter; object selection; full / ink probes; ink at a moved boundary; stack without lower purple; 90° rotation direction |
-| `packages/api/src/__tests__/integration/course-maps.test.ts` "window.png under a pinned document" | `getBaseMapInfo` branch equality and the unpinned fallback; full size / colour / cache; ink transparency and empty window; rotated entry; agreement with the legacy window of the same map |
+| `packages/api/src/__tests__/integration/course-maps.test.ts` "getBaseMapInfo under a pinned document" | every pinned event carries its document hash and the scale / tilt agree across two events of the file; without a pin "No base map uploaded" and `getBaseMapInfoOrNull` → null |
+| `packages/api/src/render/__tests__/window-raster.test.ts` | `objectsNear` (the print's window crop) |
 
 ## 11. Corpus numbers
 
 The slice's regression net (09 §8; SLICES C7): every corpus map printed
 as one course page through the route's own function, checked, rasterised
-and compared with the two references the slice has — the page oracle
+and compared with the two references the slice had — the page oracle
 (backend parity) and the legacy rsvg page (what changes for the user).
-The tool is committed; the corpus and everything it writes stay in
-`.local/` (AGENTS.md §12): the PDFs carry the map's `/Measure /GEO`.
+This section is the record of that run. The tool
+(`render/print-run.ts`, `scripts/measure-print.mjs`) and its legacy
+reference went in E4a with the rsvg page (decision log 2026-11-06); it
+is in git history up to v0.5.0. Its sheet and synthetic course live on
+as the print worker tests' fixture (`__tests__/helpers/print-sheet.ts`).
+The corpus and everything the run wrote stay in `.local/` (AGENTS.md
+§12): the PDFs carry the map's `/Measure /GEO`.
 
 ### 11.1 The page
 
-`packages/api/src/render/print-run.ts` (`runPrint`), no database:
+`packages/api/src/render/print-run.ts` (`runPrint`, deleted in E4a), no database:
 
 - **Import** with the API's importer (`importMapToDocument`), the
   document prepared as the route prepares a pinned one
   (`prepareDocument`); the meridian tilt from the import analysis, as
-  `getBaseMapInfo`'s document branch reads it (§10.1).
+  `getBaseMapInfo` reads it (§10).
 - **Sheet** (`printSheetFor`): the OCAD print window (`header.printWindow`,
   PrintPar 1026) at its print scale is the frame, on a custom sheet of
   frame + 3 mm margins, **rounded up to whole mm** — a fractional page
@@ -911,8 +851,8 @@ document objects in the window (`objectsNear`).
 
 ### 11.3 The gate
 
-A map passes when the page composes, `qpdf` finds no errors, both pages
-have the sheet's size, every diverging symbol carries a sanctioned code,
+A map passed when the page composed, `qpdf` found no errors, both pages
+had the sheet's size, every diverging symbol carries a sanctioned code,
 and in both modes **backend parity** holds: unexplained ≤ **0.01 % of
 ink** (the same shapes) and ≤ **0.5 %** of the pixels beyond **32
 levels** (user decision 2026-10-24). The 16-level ratio and the
@@ -929,22 +869,9 @@ reported for reading with the images.
 
 ### 11.4 Invocation
 
-```
-node scripts/measure-print.mjs <map.ocd> [--paper=A4[:landscape]] [--print-scale=N]
-     [--centre=x,y] [--px-per-mm=10] [--no-legacy] [--no-symbols] [--out=<dir>]
-```
-
-writes `page.<mode>.pdf`, `page.<mode>.png`, `oracle.<mode>.png`,
-`diff.oracle.<mode>.png`, `diff.oracle.<mode>.outline.png`, `legacy.pdf`,
-`legacy.png`, `diff.legacy.png`, `symbol.<code>.{old,new,diff}.png` for
-the diverging symbols, `summary.md` and `summary.json` into
-`.local/print/<map>/`; exit 0 when the gate holds, 1 when it does not or
-the map does not print, 2 on usage errors. One map per invocation
-(Club-full is 36 MB and the per-symbol parity imports it again; its A3
-page peaks at 2.6 GB RSS). `pdftocairo` is required; `qpdf` and
-`rsvg-convert` are used when on the `PATH`, their part skipped otherwise
-— a machine without the packages can run them from an image through a
-wrapper (the script's header shows one).
+`node scripts/measure-print.mjs <map.ocd>` wrote the pages, rasters,
+diffs and `summary.{md,json}` into `.local/print/<map>/`, one map per
+invocation. Deleted in E4a with the legacy page it compared against.
 
 ### 11.5 Results
 
@@ -1076,12 +1003,12 @@ symbols on the window, unexplained ÷ ink and their codes:
 
 ### 11.6 Tests
 
+The tool's own tests (`print-run.test.ts`, `measure-print.test.mjs`,
+`parity.test.ts`) went with it in E4a. What remains:
+
 | Test | Covers |
 |---|---|
-| `packages/api/src/render/__tests__/print-run.test.ts` | the sheet from the print window (scale-up, whole-mm rounding, portrait), the bounds fallback, the overrides, the block's visibility; the synthetic course (determinism, inside the window, resolves to six sites and five legs); the page's sanctioned codes; the gate — parity (`parityFailures`) and `qpdf`, page sizes, unsanctioned symbols (`checkFailures`); the previous-run comparison |
-| `scripts/__tests__/measure-print.test.mjs` | `parseArgs`; one run on `e2e/test.ocd` — both modes, `qpdf` ok, page size, the gate's measures, legacy page and its images, the frame (850.1) as the one sanctioned divergence, `summary.md` shape and the files; a second run equal to the first (same bytes, `summary.previous.json`); an A5 override at 1:5 000; usage errors. `qpdf` / `rsvg-convert` parts skip locally without the tools and are required under CI (`librsvg2-bin` joins the PDF-tools step) |
 | `packages/api/src/render/__tests__/page-raster.test.ts` "composites the layers' premultiplied pixels" | the oracle fix the run forced (`docs/bugfix-page-oracle-premultiplied.md`) |
-| `packages/api/src/render/__tests__/parity.test.ts` "does not count a tone on the ink threshold" | the measure fix the run forced (Crop-A's 214.0) |
 
 ## Pending in this chapter
 
@@ -1091,8 +1018,9 @@ symbols on the window, unexplained ÷ ink and their codes:
   rest is points inside the frame. The object margin of the window (20 mm,
   `window-raster.ts`) is C12's area; text and hatch lines outside the
   frame are still written (`map-rendering.md` §5.3 "Frame culling").
-- **Corpus gate** (§11.3): every page passes since C10. Crop-A's 7 µm
-  hatch offset between PDF and oracle is unexplained (below every budget).
+- **Corpus gate** (§11.3): every page passed since C10, until the tool
+  went in E4a. Crop-A's 7 µm hatch offset between PDF and oracle is
+  unexplained (below every budget).
 - **Golden tier on CI's poppler**: the budgets were measured with poppler
   22.02 (dev machine); the CI runner's distribution ships a newer one.
   The embedded-font text tier (≤ 2.5 %, §9.2) is provisional: tightened
@@ -1113,5 +1041,3 @@ symbols on the window, unexplained ÷ ink and their codes:
   per-variant pages (08): one frame per page in slice C.
 - **Serif and mono faces**: no file ships (`map-rendering.md` §4.10), so
   no PDF font either.
-- §10 is unreachable since E3 (§10.6) and deleted in E4a; D7's Layout
-  mode does not use it.

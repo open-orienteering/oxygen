@@ -2,8 +2,9 @@
  * The `courses.geometry` comparison report over a database's events
  * (docs/course-layer.md §4 "Comparison"; research 09 §5, §10). Read-only:
  * it computes what `rebuildCourseGeometry` would write now and compares it
- * with the stored rows, without writing anything. The CLI is
- * `scripts/compare-course-geometry.ts`; numbers go into the spec.
+ * with the stored rows, without writing anything. Its CLI
+ * (`scripts/compare-course-geometry.ts`) went in E4a; the course
+ * structure backfill still uses the comparison, until E6.
  */
 
 import type { course } from "@oxygen/shared";

@@ -90,7 +90,9 @@ describe("course.mapMetadata", () => {
     expect(meta).not.toBeNull();
     expect(meta!.documentHash).toBe(documentHash);
     expect(meta!.scale).toBe((await legacyCrs()).scale);
-    expect(meta!.resolvedBy).toBe("scale");
+    // The colour-stack fields went with the raster (E4a).
+    expect(meta).not.toHaveProperty("resolvedBy");
+    expect(meta).not.toHaveProperty("colorProfile");
   });
 
   it("does not need a render key", async () => {
@@ -99,7 +101,8 @@ describe("course.mapMetadata", () => {
     try {
       const meta = await caller.course.mapMetadata();
       expect(meta?.documentHash).toBe(documentHash);
-      expect(meta?.renderKey).toBeNull();
+      // The key is the rollback's column only: not answered (E4a).
+      expect(meta).not.toHaveProperty("renderKey");
       // Nothing computed it on read.
       expect((await ctx.db.mapFile.findUniqueOrThrow({ where: { id: row.id } })).renderKey).toBeNull();
     } finally {

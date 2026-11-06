@@ -307,8 +307,8 @@ export async function applyEventMap(
       renderKey,
     },
   });
-  // Runs on the instance's import worker while the raster work below
-  // proceeds; awaited (up to the hold) before returning.
+  // Runs on the instance's import worker while the rollback bookkeeping
+  // below proceeds; awaited (up to the hold) before returning.
   const importJob = startImportJob(prisma(), { sourceHash: fileHash, eventId, startedBy: opts.startedBy ?? null, holdMs: opts.importHoldMs })
     .catch((err: unknown) => {
       console.error(`[map-import] event ${eventId}: could not start the import of ${fileName}:`, err);

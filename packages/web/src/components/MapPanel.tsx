@@ -323,11 +323,6 @@ function MapPanelImpl({
       setUploadError(`Map upload failed: ${err.message}`);
     },
   });
-  const setColorStack = trpc.course.setMapColorStack.useMutation({
-    onSuccess: () => {
-      mapMetadata.refetch();
-    },
-  });
   const fileInputRef = useRef<HTMLInputElement>(null);
   const [dragOver, setDragOver] = useState(false);
   // Default to hiding unrelated controls when there's a highlighted selection
@@ -928,53 +923,6 @@ function MapPanelImpl({
                 >
                   {tr("openReview")}
                 </Link>
-              )}
-              {mapMetadata.data && (
-                <>
-                  <label className="flex items-center gap-1 text-xs text-slate-500">
-                    <span className="sr-only">{tl("colorProfile")}</span>
-                    <select
-                      data-testid="map-color-profile"
-                      className="text-xs border border-slate-200 rounded-md px-1.5 py-0.5 bg-white cursor-pointer"
-                      value={mapMetadata.data.colorProfile}
-                      disabled={setColorStack.isPending}
-                      title={
-                        mapMetadata.data.colorProfile === "auto"
-                          ? mapMetadata.data.resolvedBy === "file-colour"
-                            ? tl("colorProfileResolvedFile")
-                            : mapMetadata.data.resolvedBy === "scale" && mapMetadata.data.scale
-                              ? tl("colorProfileResolvedScale", {
-                                  profile: mapMetadata.data.resolvedProfile.toUpperCase(),
-                                  scale: Math.round(mapMetadata.data.scale),
-                                })
-                              : tl("colorProfileResolvedDefault", {
-                                  profile: mapMetadata.data.resolvedProfile.toUpperCase(),
-                                })
-                          : tl("colorProfile")
-                      }
-                      onChange={(e) => {
-                        const profile = e.target.value as
-                          | "auto"
-                          | "isom"
-                          | "issprom"
-                          | "isskiom"
-                          | "ismtbom";
-                        setColorStack.mutate({ profile });
-                      }}
-                    >
-                      <option value="auto">{tl("colorProfileAuto")}</option>
-                      <option value="isom">{tl("colorProfileIsom")}</option>
-                      <option value="issprom">{tl("colorProfileIssprom")}</option>
-                      <option value="isskiom">{tl("colorProfileIsskiom")}</option>
-                      <option value="ismtbom">{tl("colorProfileIsmtbom")}</option>
-                    </select>
-                  </label>
-                  {/* The "north lines under course purple" checkbox used to
-                      sit here too. It is a property of the base map, not of
-                      one event's course work, and IOF's colour order puts
-                      blue/black 100 % lines *above* lower purple — so it
-                      now lives only on the club-library map card. */}
-                </>
               )}
             </div>
             <div className="flex items-center gap-2">

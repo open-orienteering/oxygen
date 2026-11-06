@@ -55,16 +55,7 @@ import {
 import { latestVersionOrRefuse } from "../club-map-library.js";
 import { cutRotationDeg, meridianStalenessFromDetection } from "../map-north.js";
 import { documentNorth, eventPin } from "../map-store/event-document.js";
-import type { ColorStackResolvedBy } from "../map-color-stack.js";
-import {
-  gcOrphanTiles,
-  refreshMapFileRenderKey,
-} from "../map-render-cache.js";
-import { invalidateRenderKey } from "../map-tiles.js";
-import {
-  colorProfileSchema,
-  colorStackOverridesSchema,
-} from "@oxygen/shared";
+import { colorProfileSchema } from "@oxygen/shared";
 import { canDownloadEventMap } from "../ocad-export.js";
 import { loadEventCrs } from "../event-crs.js";
 import {
@@ -1214,25 +1205,6 @@ export const courseRouter = router({
       ? await documentNorth(ctx.db, row.documentHash)
       : null;
 
-    const profile = colorProfileSchema.safeParse(row.colorProfile);
-    const colorProfile = profile.success ? profile.data : "auto";
-    const overrides = colorStackOverridesSchema.safeParse(row.colorOverrides ?? {});
-    const colorOverrides = overrides.success ? overrides.data : {};
-    // The legacy raster's colour profile: the scale heuristic for `auto`
-    // (the colour-table classification went with the OCAD read, slice E1).
-    const resolvedProfile = colorProfile === "auto"
-      ? (scale != null && scale > 0 && scale <= 5000 ? "issprom" : "isom")
-      : colorProfile;
-    // Widened to the old type so the web's `file-colour` branch (E4a)
-    // still compiles; it is never produced now.
-    const resolvedBy = (
-      colorProfile === "auto"
-        ? scale != null
-          ? "scale"
-          : "default"
-        : "explicit"
-    ) as ColorStackResolvedBy;
-
     return {
       scale,
       bounds,
@@ -1249,13 +1221,6 @@ export const courseRouter = router({
         northOffset,
         north?.meridian?.medianTiltDeg ?? null,
       ),
-      colorProfile,
-      colorOverrides,
-      northLinesBelow: row.northLinesBelow,
-      resolvedProfile,
-      resolvedBy,
-      /** The legacy tile key as the upload wrote it; null on rows from before render keys. */
-      renderKey: row.renderKey,
     };
   }),
 
@@ -1663,50 +1628,6 @@ export const courseRouter = router({
         data: { clubMapVersionId: version.id },
       });
       return { success: true as const, ...result };
-    }),
-
-  /**
-   * Update the event map's IOF colour-stack profile / north-line setting.
-   * Recomputes `render_key` and GCs orphaned tiles.
-   */
-  setMapColorStack: coursesEditProcedure
-    .input(
-      z.object({
-        profile: colorProfileSchema.optional(),
-        northLinesBelow: z.boolean().optional(),
-        overrides: colorStackOverridesSchema.optional(),
-      }),
-    )
-    .mutation(async ({ ctx, input }) => {
-      const row = await ctx.db.mapFile.findFirst({
-        where: { eventId: ctx.event.id },
-        orderBy: { uploadedAt: "desc" },
-        select: { id: true, renderKey: true },
-      });
-      if (!row) {
-        throw new TRPCError({
-          code: "NOT_FOUND",
-          message: "No map file uploaded",
-        });
-      }
-      const data: Record<string, unknown> = {};
-      if (input.profile !== undefined) data.colorProfile = input.profile;
-      if (input.northLinesBelow !== undefined) {
-        data.northLinesBelow = input.northLinesBelow;
-      }
-      if (input.overrides !== undefined) {
-        data.colorOverrides = input.overrides;
-      }
-      if (Object.keys(data).length > 0) {
-        await ctx.db.mapFile.update({ where: { id: row.id }, data });
-      }
-      const oldKey = row.renderKey;
-      const renderKey = await refreshMapFileRenderKey(ctx.db, row.id);
-      if (oldKey && oldKey !== renderKey) invalidateRenderKey(oldKey);
-      invalidateRenderKey(renderKey);
-      await gcOrphanTiles(ctx.db);
-      fireMapUpload(ctx.event.id);
-      return { success: true as const, renderKey };
     }),
 
   // Kiosk-readable: every MapPanel's GL course layer follows it (course-layer.md §3.4).

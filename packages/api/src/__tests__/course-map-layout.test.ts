@@ -1,7 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { resolveMapLayout } from "../course-maps/resolve-layout.js";
 import {
-  graphicToResolved,
   validateGraphicUpload,
   MAX_GRAPHIC_BYTES,
 } from "../course-maps/graphics.js";
@@ -323,7 +322,7 @@ describe("graphic upload validation", () => {
     }
   });
 
-  it("strips Inkscape metadata and carries xmlns attrs for PDF embedding", () => {
+  it("accepts an Inkscape SVG with metadata and foreign namespaces", () => {
     const inkscape = Buffer.from(`<?xml version="1.0"?>
 <!DOCTYPE svg>
 <svg xmlns="http://www.w3.org/2000/svg" xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#" xmlns:xlink="http://www.w3.org/1999/xlink" viewBox="0 0 20 20">
@@ -332,37 +331,12 @@ describe("graphic upload validation", () => {
   <circle cx="10" cy="10" r="8" fill="#336699"/>
 </svg>`);
     expect(validateGraphicUpload(inkscape)).toBe("image/svg+xml");
-    const resolved = graphicToResolved("image/svg+xml", inkscape);
-    expect(resolved).toMatchObject({ kind: "svg", viewBox: "0 0 20 20" });
-    if (resolved?.kind !== "svg") throw new Error("expected svg");
-    expect(resolved.svg).toContain("<circle");
-    expect(resolved.svg).not.toContain("rdf:RDF");
-    expect(resolved.svg).not.toContain("metadata");
-    expect(resolved.rootAttrs).toContain('xmlns="http://www.w3.org/2000/svg"');
-    expect(resolved.rootAttrs).toContain("xmlns:rdf=");
-    expect(resolved.rootAttrs).toContain("xmlns:xlink=");
   });
 
-  it("derives a viewBox from width and height when missing", () => {
+  it("accepts an SVG with width and height but no viewBox", () => {
     const svg = Buffer.from(
       `<svg xmlns="http://www.w3.org/2000/svg" width="24" height="12"><rect width="24" height="12"/></svg>`,
     );
     expect(validateGraphicUpload(svg)).toBe("image/svg+xml");
-    expect(graphicToResolved("image/svg+xml", svg)).toEqual({
-      kind: "svg",
-      svg: `<rect width="24" height="12"/>`,
-      viewBox: "0 0 24 12",
-      rootAttrs: 'xmlns="http://www.w3.org/2000/svg"',
-    });
-  });
-
-  it("resolves PNG to a data URI and unknown mimes to null", () => {
-    const png = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x01]);
-    expect(graphicToResolved("image/png", png)).toEqual({
-      kind: "href",
-      href: `data:image/png;base64,${png.toString("base64")}`,
-    });
-    expect(graphicToResolved("image/gif", png)).toBeNull();
-    expect(graphicToResolved("image/svg+xml", Buffer.from("broken"))).toBeNull();
   });
 });

@@ -332,8 +332,9 @@ export const resultsViewProcedure = eventProcedure.use(
 export const kioskOrViewProcedure = kioskOrCapProcedure("event.view");
 /**
  * Read-only course/map data. Kiosk-key devices need these for the
- * post-readout course map (MapPanel), mirroring the REST map-tile rule
- * that treats a kiosk key as sufficient for map access.
+ * post-readout course map (MapPanel), mirroring the map-document route
+ * (`/api/map-documents/:hash`), which treats a kiosk key as sufficient
+ * for map access.
  */
 export const kioskOrCoursesViewProcedure = kioskOrCapProcedure("courses.view");
 export const kioskOrRaceOperateProcedure = kioskOrCapProcedure("race.operate");
