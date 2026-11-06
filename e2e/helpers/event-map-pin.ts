@@ -45,18 +45,17 @@ export async function unpinEventMap(nameId: string): Promise<() => Promise<void>
 /**
  * Pin a copy of the event's document whose colour stack is not aligned
  * (`CourseStackError`, `stackless-document-cli.ts`). Returns a function that
- * pins the original back.
+ * pins the original back and deletes the copy.
  */
 export async function pinStacklessDocument(nameId: string): Promise<() => Promise<void>> {
-  const original = execFileSync("pnpm", ["exec", "tsx", "e2e/helpers/stackless-document-cli.ts", nameId], {
+  const [original, copy] = execFileSync("pnpm", ["exec", "tsx", "e2e/helpers/stackless-document-cli.ts", nameId], {
     encoding: "utf8",
     env: { ...process.env, DATABASE_URL: E2E_DATABASE_URL },
-  }).trim().split("\n").pop()!;
+  }).trim().split("\n").pop()!.split(" ");
   return () =>
     withClient(async (client) => {
-      await client.query(
-        `UPDATE map_files SET document_hash = $1 WHERE id = (SELECT m.id FROM map_files m JOIN events e ON e.id = m.event_id WHERE e.name_id = $2 ORDER BY m.uploaded_at DESC LIMIT 1)`,
-        [original, nameId],
-      );
+      await client.query("UPDATE map_files SET document_hash = $1 WHERE document_hash = $2", [original, copy]);
+      const { rows } = await client.query<{ source_hash: string }>("DELETE FROM map_documents WHERE hash = $1 RETURNING source_hash", [copy]);
+      for (const r of rows) await client.query("DELETE FROM map_sources WHERE file_hash = $1", [r.source_hash]);
     });
 }

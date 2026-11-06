@@ -4,13 +4,14 @@
  * (docs/map-rendering.md §5.4 "Fallback"). Run with tsx from
  * `e2e/helpers/stackless-document.ts` (the shared package is ESM source,
  * which Playwright's test transform cannot load). Prints the hash it
- * replaced, so the caller can pin it back.
+ * replaced and the copy's, so the caller can pin the original back and
+ * delete the copy.
  *
  *   tsx e2e/helpers/stackless-document-cli.ts <nameId>
  *
  * The copy is the document with its palette ids stripped and a single
  * object (as `print-worker.test.ts` builds one); its hash is the SHA-256 of
- * its bytes. The row reuses the original's source and report.
+ * its bytes. The row has a source of its own and the original's report.
  */
 import { createHash } from "node:crypto";
 import { mapDocument } from "../../packages/shared/src/index.js";
@@ -36,6 +37,14 @@ async function main() {
     // As `documentHeaderSummary` (map-store/documents.ts) stores it.
     const { symbols, strings, ...rest2 } = header;
     const summary = { ...rest2, symbolCount: symbols.length, stringCount: strings.length };
+    // A source of its own: sharing the original's would let a later upload of
+    // the same file be matched to this copy if a run stopped before restoring.
+    const sourceBytes = new TextEncoder().encode(`stackless copy of ${file.documentHash}`);
+    const sourceHash = createHash("sha256").update(sourceBytes).digest("hex");
+    await db.mapSource.createMany({
+      data: [{ fileHash: sourceHash, kind: "ocad", bytes: Uint8Array.from(sourceBytes), sizeBytes: sourceBytes.byteLength, fileName: "stackless.ocd" }],
+      skipDuplicates: true,
+    });
     await db.mapDocument.createMany({
       data: [{
         hash,
@@ -44,14 +53,14 @@ async function main() {
         formatVersion: original.formatVersion,
         importerVersion: original.importerVersion,
         libraryVersion: original.libraryVersion,
-        sourceHash: original.sourceHash,
+        sourceHash,
         header: summary as never,
         report: original.report as never,
       }],
       skipDuplicates: true,
     });
     await db.mapFile.update({ where: { id: file.id }, data: { documentHash: hash } });
-    process.stdout.write(`${file.documentHash}\n`);
+    process.stdout.write(`${file.documentHash} ${hash}\n`);
   } finally {
     await db.$disconnect();
   }
