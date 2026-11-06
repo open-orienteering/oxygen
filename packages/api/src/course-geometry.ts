@@ -46,11 +46,6 @@ export interface GeometrySeqControl {
   yMm: number;
 }
 
-/** A control is "positioned" once it has been placed anywhere but the map origin. */
-function isPositioned(c: GeometrySeqControl): boolean {
-  return c.xMm !== 0 || c.yMm !== 0;
-}
-
 /**
  * The artifact's document context: the ISOM stack at factor 1, so the
  * layer draws the legacy 2.5 mm circle and 0.35 mm line its consumers draw
@@ -70,21 +65,20 @@ export function legacySizeContext(): course.CourseDocumentContext {
 const KIND = { Start: "start", Control: "control", Finish: "finish" } as const;
 
 /**
- * The stored GeoJSON of an editor course: the course layer over the
- * sequence, projected (course-layer.md §4). Unpositioned controls are
- * omitted; `ordered` courses get straight legs between the remaining
- * consecutive controls, free-order courses points only. `cutFeatures`
- * null = no automatic cuts.
+ * The course layer of an editor course over its sequence (course-layer.md
+ * §4.1): one item per entry (`role` = the entry's type) over the rows as
+ * sites, at the legacy sizes. Unpositioned controls are skipped by the
+ * layer; `cutFeatures` null = no automatic cuts.
  */
-export function editorCourseGeometry(
+export function editorCourseLayer(
   courseId: string,
   seq: GeometrySeqControl[],
   orderMode: "ordered" | "free_order" = "ordered",
   cutFeatures: readonly course.CutFeature[] | null = null,
-): course.CourseGeoJson {
+): course.CourseLayer {
   const sites = new Map<string, course.CourseSite>();
   for (const c of seq) sites.set(c.id, { id: c.id, code: c.code, kind: KIND[c.type], x: c.xMm, y: c.yMm });
-  const layer = course.courseLayer({
+  return course.courseLayer({
     structure: { version: 1, id: courseId, orderMode, items: seq.map((c) => ({ siteId: c.id, role: KIND[c.type] })) },
     sites: [...sites.values()],
     objects: [],
@@ -93,19 +87,37 @@ export function editorCourseGeometry(
     document: legacySizeContext(),
     ...(cutFeatures ? { cutFeatures } : {}),
   });
-  return course.courseLayerGeoJson(layer, courseId);
 }
 
-/** Euclidean distances (paper mm) between consecutive positioned controls. */
-export function legDistancesMm(seq: GeometrySeqControl[]): number[] {
-  const positioned = seq.filter(isPositioned);
-  const out: number[] = [];
-  for (let i = 0; i < positioned.length - 1; i++) {
-    const dx = positioned[i + 1].xMm - positioned[i].xMm;
-    const dy = positioned[i + 1].yMm - positioned[i].yMm;
-    out.push(Math.sqrt(dx * dx + dy * dy));
-  }
-  return out;
+/**
+ * The stored GeoJSON of an editor course: its layer, projected
+ * (course-layer.md §4). Unpositioned controls are omitted; `ordered`
+ * courses get straight legs between the remaining consecutive controls,
+ * free-order courses points only. Written until E5 drops the column.
+ */
+export function editorCourseGeometry(
+  courseId: string,
+  seq: GeometrySeqControl[],
+  orderMode: "ordered" | "free_order" = "ordered",
+  cutFeatures: readonly course.CutFeature[] | null = null,
+): course.CourseGeoJson {
+  return course.courseLayerGeoJson(editorCourseLayer(courseId, seq, orderMode, cutFeatures), courseId);
+}
+
+/**
+ * Leg lengths (paper mm) of the layer's first course: its derived legs,
+ * centre to centre between consecutive positioned items (none for free
+ * order). The `legs` / `lengthM` source since E6 (course-layer.md §4.1).
+ */
+export function legDistancesMm(layer: Pick<course.CourseLayer, "derivation">): number[] {
+  const legs = layer.derivation.courses[0]?.legs ?? [];
+  return legs.map((leg) => {
+    const a = leg.points[0];
+    const b = leg.points[leg.points.length - 1];
+    const dx = b.x - a.x;
+    const dy = b.y - a.y;
+    return Math.sqrt(dx * dx + dy * dy);
+  });
 }
 
 /** Total course length in terrain meters, rounded (mm × scale / 1000). */
@@ -274,7 +286,9 @@ export async function rebuildCourseGeometry(
 
   const sequences = await loadCourseSequences(db, eventId, courseUuids);
   for (const [courseUuid, { seq, orderMode }] of sequences) {
-    const geometry = editorCourseGeometry(courseUuid, seq, orderMode, cutFeatures);
+    // One layer per course: the column's projection and the lengths.
+    const layer = editorCourseLayer(courseUuid, seq, orderMode, cutFeatures);
+    const geometry = course.courseLayerGeoJson(layer, courseUuid);
 
     const data: Record<string, unknown> = {
       geometry:
@@ -287,7 +301,7 @@ export async function rebuildCourseGeometry(
     // alone (the organiser sets length manually). Ordered courses keep
     // the auto-derived legs string + optional length refresh.
     if (orderMode !== "free_order" && mapScale) {
-      const distances = legDistancesMm(seq);
+      const distances = legDistancesMm(layer);
       if (distances.length > 0) {
         // Same format the importers write: per-leg terrain meters, ';'-joined
         // with a trailing separator.
