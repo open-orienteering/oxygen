@@ -21,6 +21,7 @@ import { reseed } from "./helpers/reseed";
 import { uploadEventMap, waitForStableMapPanel } from "./helpers/map-upload";
 import { pinStacklessDocument, unpinEventMap } from "./helpers/event-map-pin";
 import { API_BASE as API } from "./helpers/api-base";
+import { EDITOR_EVENT, selectedCode, sites, toPage, viewSettled } from "./helpers/editor";
 
 async function openEvent(page: Page): Promise<void> {
   await page.goto("/");
@@ -440,6 +441,21 @@ test.describe("vector map layer", () => {
       // numbers — the map shows no course until it is re-imported.
       await expect(viewer.getByTestId("course-layer")).toHaveCount(0);
       await expect(viewer.getByTestId("control-label")).toHaveCount(0);
+
+      // The editor on such a map has no hit index: a click on a control selects nothing.
+      await page.goto(`/${EDITOR_EVENT}/course-editor`);
+      await expect(page.getByTestId("editor-page")).toBeVisible({ timeout: 15_000 });
+      const editorViewer = page.getByTestId("map-viewer");
+      await expect(editorViewer.getByTestId("map-vector-layer")).toHaveAttribute("data-ready", "true", { timeout: 60_000 });
+      await expect(editorViewer).toHaveAttribute("data-course-layer", "none", { timeout: 30_000 });
+      await expect(page.getByTestId("editor-site").first()).toBeAttached({ timeout: 30_000 });
+      await viewSettled(page);
+      const control = (await sites(page)).find((x) => x.type === "Control");
+      expect(control).toBeTruthy();
+      const at = await toPage(page, control!.mm);
+      await page.mouse.click(at.x, at.y);
+      await expect(editorViewer.getByTestId("editor-selection-ring")).toHaveCount(0);
+      await expect(selectedCode(page)).toHaveCount(0);
     } finally {
       await restore();
     }
