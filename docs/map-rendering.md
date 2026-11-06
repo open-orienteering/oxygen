@@ -2347,6 +2347,12 @@ The B-gate's parity check (09 §4 B: "visual parity on the corpus against
 tiles for the sanctioned differences only") and the instrument for
 triaging a user's "this looks wrong" on a real map (B9).
 
+**Retired in E4a.** The tool (`packages/api/src/render/parity.ts`,
+`scripts/measure-parity.mjs`) and its tests went with the tile renderer
+it compared against (decision log 2026-11-06); it is in git history up
+to v0.5.0. This section is the record of its method, sanctioned codes
+and corpus results.
+
 **Method.** `runParity` (`packages/api/src/render/parity.ts`) takes an
 OCAD file and a paper window (mm, y-up, snapped outwards to whole mm) and
 renders, for every symbol with objects within 10 mm of the window, two
@@ -2429,7 +2435,7 @@ otherwise. `--source` takes the library out of the comparison
 as users see it, so canonical rows also measure library entries against
 the mapper's own definitions.
 
-Tests: `packages/api/src/render/__tests__/parity.test.ts` (pixel grid,
+Tests (deleted with the tool in E4a): `packages/api/src/render/__tests__/parity.test.ts` (pixel grid,
 isolation, agreement on `e2e/test.ocd`, the frame as a sanctioned
 divergence, ranking, shape measure, tags; a 510 power line from
 `buildParityOcad` with its poles at the corner points only; Club-full's
@@ -2533,7 +2539,7 @@ what became of it:
 | `packages/api/src/render/previews.ts` | swatch and thumbnail PNGs (`docs/map-storage.md` §4.5) |
 | `packages/api/src/render/fonts.ts` | bundled-font loader for the server backends |
 | `packages/api/src/render/golden.ts`, `scripts/render-golden.ts` | golden PNG generation (`pnpm --filter @oxygen/api golden:render`) |
-| `packages/api/src/render/parity.ts`, `scripts/measure-parity.mjs` | corpus parity against the legacy tiles (§6.4) |
+| — | corpus parity against the legacy tiles (§6.4; `render/parity.ts` and `scripts/measure-parity.mjs` went in E4a) |
 | `packages/shared/src/render/ocad-objects.ts` | dev-only: `ocad2geojson` objects → `RenderObject`s (pilot / envelope modes); `ocadFlags` for the importers |
 | `packages/web/src/map-gl/prepare.ts` | WebGL2 backend, geometry builders: flattening, indexed strips, even-odd earcut; the per-pass fan path |
 | `packages/web/src/map-gl/mesh-atlas.ts` | glyph meshes in one float texture (vertex pulling) |

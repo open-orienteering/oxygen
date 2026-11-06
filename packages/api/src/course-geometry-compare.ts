@@ -1,7 +1,7 @@
 /**
  * Old vs new `courses.geometry`, cut by cut (docs/course-layer.md §4
- * "Comparison"; research 09 §5, §10). Pure: the report script
- * (`scripts/compare-course-geometry.ts`) feeds it stored rows and what
+ * "Comparison"; research 09 §5, §10). Pure: the report
+ * (`course-geometry-report.ts`) feeds it stored rows and what
  * `rebuildCourseGeometry` would write now.
  *
  * - Editor courses: stored vs regenerated, per control circle and per leg —

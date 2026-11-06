@@ -834,14 +834,19 @@ document branch is the second production job of the reference raster
 
 The slice's regression net (09 §8; SLICES C7): every corpus map printed
 as one course page through the route's own function, checked, rasterised
-and compared with the two references the slice has — the page oracle
+and compared with the two references the slice had — the page oracle
 (backend parity) and the legacy rsvg page (what changes for the user).
-The tool is committed; the corpus and everything it writes stay in
-`.local/` (AGENTS.md §12): the PDFs carry the map's `/Measure /GEO`.
+This section is the record of that run. The tool
+(`render/print-run.ts`, `scripts/measure-print.mjs`) and its legacy
+reference went in E4a with the rsvg page (decision log 2026-11-06); it
+is in git history up to v0.5.0. Its sheet and synthetic course live on
+as the print worker tests' fixture (`__tests__/helpers/print-sheet.ts`).
+The corpus and everything the run wrote stay in `.local/` (AGENTS.md
+§12): the PDFs carry the map's `/Measure /GEO`.
 
 ### 11.1 The page
 
-`packages/api/src/render/print-run.ts` (`runPrint`), no database:
+`packages/api/src/render/print-run.ts` (`runPrint`, deleted in E4a), no database:
 
 - **Import** with the API's importer (`importMapToDocument`), the
   document prepared as the route prepares a pinned one
@@ -911,8 +916,8 @@ document objects in the window (`objectsNear`).
 
 ### 11.3 The gate
 
-A map passes when the page composes, `qpdf` finds no errors, both pages
-have the sheet's size, every diverging symbol carries a sanctioned code,
+A map passed when the page composed, `qpdf` found no errors, both pages
+had the sheet's size, every diverging symbol carries a sanctioned code,
 and in both modes **backend parity** holds: unexplained ≤ **0.01 % of
 ink** (the same shapes) and ≤ **0.5 %** of the pixels beyond **32
 levels** (user decision 2026-10-24). The 16-level ratio and the
@@ -929,22 +934,9 @@ reported for reading with the images.
 
 ### 11.4 Invocation
 
-```
-node scripts/measure-print.mjs <map.ocd> [--paper=A4[:landscape]] [--print-scale=N]
-     [--centre=x,y] [--px-per-mm=10] [--no-legacy] [--no-symbols] [--out=<dir>]
-```
-
-writes `page.<mode>.pdf`, `page.<mode>.png`, `oracle.<mode>.png`,
-`diff.oracle.<mode>.png`, `diff.oracle.<mode>.outline.png`, `legacy.pdf`,
-`legacy.png`, `diff.legacy.png`, `symbol.<code>.{old,new,diff}.png` for
-the diverging symbols, `summary.md` and `summary.json` into
-`.local/print/<map>/`; exit 0 when the gate holds, 1 when it does not or
-the map does not print, 2 on usage errors. One map per invocation
-(Club-full is 36 MB and the per-symbol parity imports it again; its A3
-page peaks at 2.6 GB RSS). `pdftocairo` is required; `qpdf` and
-`rsvg-convert` are used when on the `PATH`, their part skipped otherwise
-— a machine without the packages can run them from an image through a
-wrapper (the script's header shows one).
+`node scripts/measure-print.mjs <map.ocd>` wrote the pages, rasters,
+diffs and `summary.{md,json}` into `.local/print/<map>/`, one map per
+invocation. Deleted in E4a with the legacy page it compared against.
 
 ### 11.5 Results
 
@@ -1076,12 +1068,12 @@ symbols on the window, unexplained ÷ ink and their codes:
 
 ### 11.6 Tests
 
+The tool's own tests (`print-run.test.ts`, `measure-print.test.mjs`,
+`parity.test.ts`) went with it in E4a. What remains:
+
 | Test | Covers |
 |---|---|
-| `packages/api/src/render/__tests__/print-run.test.ts` | the sheet from the print window (scale-up, whole-mm rounding, portrait), the bounds fallback, the overrides, the block's visibility; the synthetic course (determinism, inside the window, resolves to six sites and five legs); the page's sanctioned codes; the gate — parity (`parityFailures`) and `qpdf`, page sizes, unsanctioned symbols (`checkFailures`); the previous-run comparison |
-| `scripts/__tests__/measure-print.test.mjs` | `parseArgs`; one run on `e2e/test.ocd` — both modes, `qpdf` ok, page size, the gate's measures, legacy page and its images, the frame (850.1) as the one sanctioned divergence, `summary.md` shape and the files; a second run equal to the first (same bytes, `summary.previous.json`); an A5 override at 1:5 000; usage errors. `qpdf` / `rsvg-convert` parts skip locally without the tools and are required under CI (`librsvg2-bin` joins the PDF-tools step) |
 | `packages/api/src/render/__tests__/page-raster.test.ts` "composites the layers' premultiplied pixels" | the oracle fix the run forced (`docs/bugfix-page-oracle-premultiplied.md`) |
-| `packages/api/src/render/__tests__/parity.test.ts` "does not count a tone on the ink threshold" | the measure fix the run forced (Crop-A's 214.0) |
 
 ## Pending in this chapter
 
@@ -1091,8 +1083,9 @@ symbols on the window, unexplained ÷ ink and their codes:
   rest is points inside the frame. The object margin of the window (20 mm,
   `window-raster.ts`) is C12's area; text and hatch lines outside the
   frame are still written (`map-rendering.md` §5.3 "Frame culling").
-- **Corpus gate** (§11.3): every page passes since C10. Crop-A's 7 µm
-  hatch offset between PDF and oracle is unexplained (below every budget).
+- **Corpus gate** (§11.3): every page passed since C10, until the tool
+  went in E4a. Crop-A's 7 µm hatch offset between PDF and oracle is
+  unexplained (below every budget).
 - **Golden tier on CI's poppler**: the budgets were measured with poppler
   22.02 (dev machine); the CI runner's distribution ships a newer one.
   The embedded-font text tier (≤ 2.5 %, §9.2) is provisional: tightened
