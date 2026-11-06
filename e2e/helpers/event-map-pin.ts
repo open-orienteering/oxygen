@@ -4,6 +4,7 @@
  * (docs/map-rendering.md §5.4): an import still running, failed, or a map
  * from before the backfill. Returns a function that puts the pins back.
  */
+import { execFileSync } from "node:child_process";
 import { Client } from "pg";
 
 const E2E_DATABASE_URL =
@@ -38,5 +39,24 @@ export async function unpinEventMap(nameId: string): Promise<() => Promise<void>
       for (const pin of pins) {
         await client.query("UPDATE map_files SET document_hash = $1 WHERE id = $2::bigint", [pin.document_hash, pin.id]);
       }
+    });
+}
+
+/**
+ * Pin a copy of the event's document whose colour stack is not aligned
+ * (`CourseStackError`, `stackless-document-cli.ts`). Returns a function that
+ * pins the original back.
+ */
+export async function pinStacklessDocument(nameId: string): Promise<() => Promise<void>> {
+  const original = execFileSync("pnpm", ["exec", "tsx", "e2e/helpers/stackless-document-cli.ts", nameId], {
+    encoding: "utf8",
+    env: { ...process.env, DATABASE_URL: E2E_DATABASE_URL },
+  }).trim().split("\n").pop()!;
+  return () =>
+    withClient(async (client) => {
+      await client.query(
+        `UPDATE map_files SET document_hash = $1 WHERE id = (SELECT m.id FROM map_files m JOIN events e ON e.id = m.event_id WHERE e.name_id = $2 ORDER BY m.uploaded_at DESC LIMIT 1)`,
+        [original, nameId],
+      );
     });
 }

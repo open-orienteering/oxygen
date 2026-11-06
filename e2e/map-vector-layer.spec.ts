@@ -19,7 +19,7 @@ import { test, expect, type Locator, type Page, type Request } from "@playwright
 import { PNG } from "pngjs";
 import { reseed } from "./helpers/reseed";
 import { uploadEventMap, waitForStableMapPanel } from "./helpers/map-upload";
-import { unpinEventMap } from "./helpers/event-map-pin";
+import { pinStacklessDocument, unpinEventMap } from "./helpers/event-map-pin";
 import { API_BASE as API } from "./helpers/api-base";
 
 async function openEvent(page: Page): Promise<void> {
@@ -429,8 +429,11 @@ test.describe("vector map layer", () => {
 
   test("a map without a pinned document shows its import state, not tiles", async ({ page }) => {
     test.setTimeout(120_000);
-    // The map from the first test, its pin removed: its import job is done
-    // with a document the event does not use — the review link.
+    // The event's map (uploaded here when the seed has none), its pin
+    // removed: its import job is done with a document the event does not
+    // use — the review link.
+    await openEvent(page);
+    await viewerWithMap(page);
     const restore = await unpinEventMap("itest");
     try {
       const tileRequests = watchTileRequests(page);
@@ -444,6 +447,24 @@ test.describe("vector map layer", () => {
       // Nothing asks for tiles, even after a poll interval.
       await page.waitForTimeout(2_500);
       expect(tileRequests).toEqual([]);
+    } finally {
+      await restore();
+    }
+  });
+
+  test("a document whose colours cannot take the course layer says so; the SVG draws the course", async ({ page }) => {
+    test.setTimeout(120_000);
+    await openEvent(page);
+    await viewerWithMap(page);
+    // CourseStackError (docs/map-rendering.md §5.4 "Fallback"): a copy of the
+    // document with its palette ids stripped, pinned in place of the real one.
+    const restore = await pinStacklessDocument("itest");
+    try {
+      await page.reload();
+      const viewer = page.getByTestId("map-panel").first().getByTestId("map-viewer");
+      await expect(viewer.getByTestId("map-vector-layer")).toHaveAttribute("data-ready", "true", { timeout: 60_000 });
+      await expect(viewer).toHaveAttribute("data-course-layer", "svg", { timeout: 30_000 });
+      await expect(viewer.getByTestId("map-course-layer-unsupported")).toBeVisible();
     } finally {
       await restore();
     }

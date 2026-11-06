@@ -40,6 +40,7 @@ export const WEIGHTS = {
   "map-multicourse.spec.ts": 4, // OCAD replace-all + wide viewport
   "map-control-circles.spec.ts": 3,
   "map-viewer-gestures.spec.ts": 2,
+  "map-vector-layer.spec.ts": 4, // pixel probes + E3: no WebGL2, lost context, no pin, unaligned stack
   "kiosk-smart.spec.ts": 2, // ~14s after merges
   "printer-settings.spec.ts": 2,
   "eventor.spec.ts": 2,
