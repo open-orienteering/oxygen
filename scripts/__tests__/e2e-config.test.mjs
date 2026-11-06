@@ -81,13 +81,14 @@ const matches = (globs, file) => (globs ?? []).some((g) => g === `**/${file}`);
 const runsIn = (project, file) =>
   (project.testMatch === null || matches(project.testMatch, file)) && !matches(project.testIgnore, file);
 
-test("the new editor's spec runs under map-vector and mobile only; the legacy spec under chromium only (D10)", () => {
+test("projects: chromium and mobile only; the new editor's spec in both, the rest once in chromium (E3)", () => {
   const projects = loadProjects();
+  assert.deepEqual(projects.map((p) => p.name).sort(), ["chromium", "mobile"]);
   const runners = (file) => projects.filter((p) => runsIn(p, file)).map((p) => p.name).sort();
-  assert.deepEqual(runners("course-editor.spec.ts"), ["map-vector", "mobile"]);
-  assert.deepEqual(runners("course-editor-legacy.spec.ts"), ["chromium"]);
+  assert.deepEqual(runners("course-editor.spec.ts"), ["chromium", "mobile"]);
   assert.deepEqual(runners("field-mode.spec.ts"), ["mobile"]);
-  assert.deepEqual(runners("course-maps.spec.ts"), ["map-legacy", "map-vector"]);
+  assert.deepEqual(runners("course-maps.spec.ts"), ["chromium"]);
+  assert.deepEqual(runners("webserial.spec.ts"), ["chromium"]);
   assert.deepEqual(runners("kiosk.spec.ts"), ["chromium"]);
 });
 
@@ -105,7 +106,7 @@ test("every spec file run by more than one project is weighted per project (scri
     }
   }
   for (const file of Object.keys(WEIGHTS)) assert.ok(specs.includes(file), `weight for a missing spec: ${file}`);
-  const maps = WEIGHTS["course-maps.spec.ts"];
-  assert.equal(weightOf("course-maps.spec.ts"), maps["map-legacy"] + maps["map-vector"]);
+  const editor = WEIGHTS["course-editor.spec.ts"];
+  assert.equal(weightOf("course-editor.spec.ts"), editor.chromium + editor.mobile);
   assert.equal(weightOf("no-such.spec.ts"), 2);
 });

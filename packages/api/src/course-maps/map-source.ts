@@ -298,29 +298,16 @@ export interface BaseMapInfo {
   scale: number;
   meridianTiltDeg: number;
   version: string;
-  /** The pinned map document when the event reads documents (`vector` + a pin); null on the legacy path. */
-  document: { hash: string } | null;
+  /** The pinned map document every print and window read draws from (docs/course-print.md §10.1). */
+  document: { hash: string };
 }
 
 type MapInfoReader = PrismaClient | Prisma.TransactionClient;
 
 /**
- * The pinned document of a `vector` event, or null (docs/course-print.md §10;
- * same predicate as the reads-only gate, docs/map-pipeline-switch.md §3).
- * Gates the print path selection only; the data readers read the pin of
- * every event (`map-store/event-document.ts`).
- */
-export async function pinnedDocumentHash(db: MapInfoReader, eventId: bigint): Promise<string | null> {
-  const event = await db.event.findUnique({ where: { id: eventId }, select: { mapPipeline: true } });
-  if (event?.mapPipeline !== "vector") return null;
-  return eventDocumentHash(db, eventId);
-}
-
-/**
  * Scale and meridian tilt of the event's pinned document, for every event
- * (docs/course-print.md §10.1); `version` is the document hash. `document`
- * names it only on the vector print path (`pinnedDocumentHash`). Throws
- * "No base map uploaded" without a pin.
+ * (docs/course-print.md §10.1); `version` and `document` name the pinned
+ * document. Throws "No base map uploaded" without a pin.
  */
 export async function getBaseMapInfo(db: MapInfoReader, eventId: bigint): Promise<BaseMapInfo> {
   const hash = await eventDocumentHash(db, eventId);
@@ -330,8 +317,7 @@ export async function getBaseMapInfo(db: MapInfoReader, eventId: bigint): Promis
   const scale = stored.frame.mapScale;
   if (!scale || scale <= 0) throw new Error("Base map has no usable scale");
   const meridianTiltDeg = (await documentNorth(db, hash))?.meridian?.medianTiltDeg ?? 0;
-  const document = (await pinnedDocumentHash(db, eventId)) ? { hash } : null;
-  return { scale, meridianTiltDeg, version: hash, document };
+  return { scale, meridianTiltDeg, version: hash, document: { hash } };
 }
 
 /** Like `getBaseMapInfo`, but null when no base map is uploaded. */

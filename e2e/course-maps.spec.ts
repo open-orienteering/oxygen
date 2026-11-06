@@ -1,8 +1,7 @@
 import { readFile } from "node:fs/promises";
 import { createRequire } from "node:module";
 import { resolve } from "node:path";
-import { type Download, type Locator, type Page } from "@playwright/test";
-import { test, expect, setEditorVector } from "./helpers/map-pipeline";
+import { expect, test, type Download, type Page } from "@playwright/test";
 import { API_BASE } from "./helpers/api-base";
 import { reseed } from "./helpers/reseed";
 import { waitForTrpc } from "./helpers/trpc";
@@ -13,17 +12,18 @@ const { PDFDocument } = createRequire(resolve(process.cwd(), "packages/api/packa
 };
 
 /**
- * The event map through `course.uploadMap`, as the map panel uploads it:
- * the file is stored and its document pinned, so the `map-vector` project
- * prints through the composer and `map-legacy` through rsvg
- * (docs/course-print.md §8). `map.editor.vector` goes off: with it on, the
- * pages' *Edit layout* deep-links a `vector` event into the new editor's
- * Layout mode, and this spec is about `MapLayoutEditor` until E3
- * (docs/map-pipeline-switch.md §5).
+ * The Maps and Map templates pages (docs/course-maps.md): templates,
+ * sheets per course, bulk apply and the PDF exports. *Edit layout* opens
+ * the course editor's Layout mode, whose own spec is the Layout describe
+ * of `course-editor.spec.ts` (E3: the legacy `MapLayoutEditor` sections of
+ * this spec went with the switch).
+ *
+ * The event map goes through `course.uploadMap`, as the map panel uploads
+ * it: the file is stored and its document pinned, so every print goes
+ * through the composer (docs/course-print.md §8.1).
  */
 async function seedBaseMap() {
   await reseed();
-  await setEditorVector(false);
   const bytes = await readFile("e2e/test.ocd");
   const res = await fetch(`${API_BASE}/trpc/course.uploadMap`, {
     method: "POST",
@@ -71,23 +71,10 @@ async function openTab(page: Page, name: string) {
   }
 }
 
-async function placeObject(page: Page, toolTestId: string) {
-  await page.getByTestId(toolTestId).click();
-  const paper = page.getByTestId("map-paper");
-  const box = await paper.boundingBox();
-  expect(box).not.toBeNull();
-  await page.mouse.click(
-    box!.x + box!.width * 0.55,
-    box!.y + box!.height * 0.55,
-  );
-}
-
 test.beforeAll(seedBaseMap);
-test.afterAll(() => setEditorVector(null));
 
-test("creates templates, lays out several maps and exports PDFs", async ({
+test("creates templates, applies them to courses and exports PDFs", async ({
   page,
-  mapPipeline,
 }) => {
   test.setTimeout(120_000);
   page.setDefaultTimeout(10_000);
@@ -115,80 +102,6 @@ test("creates templates, lays out several maps and exports PDFs", async ({
   const templateTestId = await templateRow.getAttribute("data-testid");
   expect(templateTestId).not.toBeNull();
   const templateSeq = Number(templateTestId!.replace("map-template-", ""));
-  await page.getByTestId(`edit-template-layout-${templateSeq}`).click();
-  await expect(page.getByTestId("map-layout-editor")).toBeVisible();
-  expect((await page.getByTestId("map-paper").boundingBox())?.width).toBeGreaterThan(
-    1100,
-  );
-  await placeObject(page, "map-tool-text");
-  await page.getByTestId("map-variable-event").click();
-  await page.getByTestId("map-text-font").selectOption("serif");
-  await placeObject(page, "map-tool-line");
-  await expect(page.getByTestId("map-resize-vertex-0")).toBeVisible();
-  // Line style: solid by default, dashed emits a stroke-dasharray on the
-  // drawn line (the line tool creates a two-point path; the print
-  // renderer shares the same dash helper).
-  const drawnLine = page.locator("path[data-object-id]").last();
-  await expect(page.getByTestId("map-object-dash")).toHaveValue("solid");
-  await expect(drawnLine).not.toHaveAttribute("stroke-dasharray", /.+/);
-  await page.getByTestId("map-object-dash").selectOption("dashed");
-  await expect(drawnLine).toHaveAttribute("stroke-dasharray", /^\d/);
-  await page.getByTestId("map-object-dash").selectOption("solid");
-  await expect(drawnLine).not.toHaveAttribute("stroke-dasharray", /.+/);
-  // Handles stop growing past 150 % zoom so they don't bury the detail.
-  const vertexAtFit = await page.getByTestId("map-resize-vertex-0").boundingBox();
-  expect(vertexAtFit).not.toBeNull();
-  for (let i = 0; i < 10; i += 1) {
-    await page.getByTitle("Zoom in").click();
-  }
-  await expect(page.getByTestId("map-zoom-reset")).toHaveText("800%");
-  const vertexZoomed = await page.getByTestId("map-resize-vertex-0").boundingBox();
-  expect(vertexZoomed).not.toBeNull();
-  // Uncapped it would be 8× — the cap holds it at 1.5×.
-  expect(vertexZoomed!.width).toBeLessThan(vertexAtFit!.width * 2);
-  expect(vertexZoomed!.width).toBeGreaterThan(vertexAtFit!.width * 1.2);
-  await page.getByTestId("map-zoom-reset").click();
-  await expect(page.getByTestId("map-zoom-reset")).toHaveText("100%");
-  const vertex = await page.getByTestId("map-resize-vertex-0").boundingBox();
-  expect(vertex).not.toBeNull();
-  await page.mouse.move(
-    vertex!.x + vertex!.width / 2,
-    vertex!.y + vertex!.height / 2,
-  );
-  await page.keyboard.down("Alt");
-  await page.mouse.down();
-  await page.mouse.move(vertex!.x + 25, vertex!.y + 18);
-  await page.mouse.up();
-  await page.keyboard.up("Alt");
-  const path = page.locator('path[data-object-id]').last();
-  const pathPoint = await path.evaluate((element) => {
-    const pathElement = element as SVGPathElement;
-    const point = pathElement.getPointAtLength(pathElement.getTotalLength() / 2);
-    const screen = point.matrixTransform(pathElement.getScreenCTM()!);
-    return { x: screen.x, y: screen.y };
-  });
-  await page.mouse.click(pathPoint.x, pathPoint.y);
-  await expect(page.getByTestId("map-resize-vertex-0")).toBeVisible({
-    timeout: 5_000,
-  });
-  await expect(page.getByTestId("map-resize-handle-out-0")).toBeVisible();
-  // Move handles are squares, split handles are round "+" — distinct
-  // roles so the user can tell them apart before touching anything.
-  await expect(page.getByTestId("map-resize-vertex-0")).toHaveAttribute(
-    "data-handle-role",
-    "move",
-  );
-  await expect(page.getByTestId("map-add-vertex-0")).toHaveAttribute(
-    "data-handle-role",
-    "add",
-  );
-  await page.getByTestId("map-add-vertex-0").click();
-  await expect(page.getByTestId("map-resize-vertex-2")).toBeVisible();
-  await page.getByTestId("map-resize-vertex-1").click();
-  await page.getByTestId("map-remove-vertex").click();
-  await expect(page.getByTestId("map-resize-vertex-2")).toHaveCount(0);
-  await expect(page.getByTestId("map-layout-save-status")).toHaveText("Saved", { timeout: 5_000 });
-  await page.getByTestId("map-editor-close").click();
 
   page.once("dialog", (dialog) =>
     dialog.accept("E2E shared map template"),
@@ -237,143 +150,6 @@ test("creates templates, lays out several maps and exports PDFs", async ({
   await expect(group).toBeVisible();
   await expect(group.locator("[data-testid^='course-map-']")).toHaveCount(1);
 
-  await group.locator("[data-testid^='edit-course-map-']").click();
-  await expect(page.getByTestId("map-layout-editor")).toBeVisible();
-  const paper = page.getByTestId("map-paper");
-  await expect(paper).toBeVisible();
-  await expect(
-    page
-      .getByTestId("map-course-overlay")
-      .locator('[data-map-layer="course-overlay-upper"]'),
-  ).toBeVisible();
-  await expect(
-    page
-      .getByTestId("map-course-overlay-lower")
-      .locator('[data-map-layer="course-overlay-lower"]'),
-  ).toBeVisible();
-  await expect(page.getByTestId("map-preview-ink")).toBeVisible();
-  await expect(page.getByTestId("map-print-margin")).toHaveCount(0);
-  await page.getByTestId("map-panel-properties-toggle").click();
-  await expect(page.getByText("Template objects are locked")).toBeVisible();
-  await page.getByTestId("map-panel-page-toggle").click();
-  await expect(page.getByTestId("map-print-scale")).toBeVisible();
-  await paper.hover();
-  await page.mouse.wheel(0, -500);
-  await page.mouse.wheel(0, -500);
-  await page.mouse.wheel(0, -500);
-  await expect(page.getByTestId("map-print-scale")).toHaveValue("7500");
-  const previewImage = page.getByTestId("map-preview-image");
-  await expect(previewImage).toHaveAttribute("href", /dpi=(?!120)/);
-  const previewHref = await previewImage.getAttribute("href");
-  await page.mouse.wheel(0, -500);
-  await expect(previewImage).toHaveAttribute("href", previewHref!);
-  const viewBoxBefore = await paper.getAttribute("viewBox");
-  const paperBox = await paper.boundingBox();
-  await page.mouse.move(
-    paperBox!.x + paperBox!.width / 2,
-    paperBox!.y + paperBox!.height / 2,
-  );
-  await page.mouse.down();
-  await page.mouse.move(
-    paperBox!.x + paperBox!.width / 2 + 30,
-    paperBox!.y + paperBox!.height / 2 + 20,
-  );
-  await page.mouse.up();
-  expect(await paper.getAttribute("viewBox")).not.toBe(viewBoxBefore);
-  await page.getByTestId("map-zoom-reset").click();
-
-  await placeObject(page, "map-tool-text");
-  await expect(page.getByTestId("map-object-properties")).toBeVisible();
-  await page.getByTestId("map-variable-event").click();
-  await expect(page.getByTestId("map-object-text")).toHaveValue(
-    "{course}{event}",
-  );
-  await page.getByTestId("map-text-font").selectOption("serif");
-  await page.getByTestId("map-editor-undo").click();
-  await expect(page.getByTestId("map-text-font")).toHaveValue("sans");
-  await page.getByTestId("map-editor-redo").click();
-  await expect(page.getByTestId("map-text-font")).toHaveValue("serif");
-  await placeObject(page, "map-tool-rectangle");
-  await page.getByTestId("map-object-fill-mode").selectOption("solid");
-  await expect(page.getByTestId("map-object-fill-mode")).toHaveValue("solid");
-  await page.getByTestId("map-object-fill-mode").selectOption("outOfBounds");
-  await expect(page.getByTestId("map-object-fill-mode")).toHaveValue(
-    "outOfBounds",
-  );
-  await expect(page.getByTestId("map-object-border")).toBeChecked();
-  await expect(page.getByTestId("map-object-stroke-follows-purple")).toBeVisible();
-  await expect(page.getByTestId("map-object-stroke-color")).toHaveCount(0);
-  await expect(page.getByTestId("map-object-stroke-width")).toHaveValue("0.4");
-  await page.getByTestId("map-object-stroke-width").fill("");
-  await expect(page.getByTestId("map-object-stroke-width")).toHaveValue("");
-  await page.getByTestId("map-object-stroke-width").fill("0.6");
-  await expect(page.getByTestId("map-object-stroke-width")).toHaveValue("0.6");
-
-  const rectangle = page.locator("[data-object-id]").last();
-  const beforeResize = await rectangle.boundingBox();
-  const resizeHandle = page.getByTestId("map-resize-se");
-  const handleBox = await resizeHandle.boundingBox();
-  expect(beforeResize).not.toBeNull();
-  expect(handleBox).not.toBeNull();
-  await page.mouse.move(
-    handleBox!.x + handleBox!.width / 2,
-    handleBox!.y + handleBox!.height / 2,
-  );
-  await page.mouse.down();
-  await page.mouse.move(handleBox!.x + 35, handleBox!.y + 25);
-  await page.mouse.up();
-  const afterResize = await rectangle.boundingBox();
-  expect(afterResize!.width).toBeGreaterThan(beforeResize!.width);
-
-  const rectangleBox = await rectangle.boundingBox();
-  const printableBox = await page.getByTestId("map-printable-area").boundingBox();
-  await page.mouse.move(
-    rectangleBox!.x + rectangleBox!.width / 2,
-    rectangleBox!.y + rectangleBox!.height / 2,
-  );
-  await page.mouse.down();
-  await page.mouse.move(0, 0);
-  await page.mouse.up();
-  const constrainedBox = await rectangle.boundingBox();
-  expect(constrainedBox!.x).toBeGreaterThanOrEqual(printableBox!.x - 1);
-
-  await page.getByTestId("map-object-fill-mode").selectOption("whiteoutInverted");
-  await expect(page.getByTestId("map-object-fill-mode")).toHaveValue(
-    "whiteoutInverted",
-  );
-  const invertedPath = page.locator(
-    'path[data-object-id][fill-rule="evenodd"]',
-  );
-  await expect(invertedPath).toHaveCount(1);
-  const invertedBox = await invertedPath.boundingBox();
-  expect(invertedBox).not.toBeNull();
-  // Switch selection via the object list (empty-canvas click is covered by
-  // the frame-sized white-out ring).
-  await page.getByTestId("map-panel-objects-toggle").click();
-  await page.getByTestId("map-object-list").locator("button").first().click();
-  await expect(page.getByTestId("map-object-text")).toBeVisible();
-  // White ring (frame corner opposite the constrained shape) re-selects.
-  await page.mouse.click(
-    invertedBox!.x + invertedBox!.width - 12,
-    invertedBox!.y + invertedBox!.height - 12,
-  );
-  await expect(page.getByTestId("map-object-fill-mode")).toHaveValue(
-    "whiteoutInverted",
-  );
-  // Hole falls through: click inside the shape does not select the inverted
-  // white-out (fill-mode control stays absent after selecting text first).
-  await page.getByTestId("map-object-list").locator("button").first().click();
-  await expect(page.getByTestId("map-object-text")).toBeVisible();
-  await page.mouse.click(
-    constrainedBox!.x + constrainedBox!.width / 2,
-    constrainedBox!.y + constrainedBox!.height / 2,
-  );
-  await expect(page.getByTestId("map-object-fill-mode")).toHaveCount(0);
-
-  await page.getByTestId("map-print-scale").fill("8000");
-  await expect(page.getByTestId("map-layout-save-status")).toHaveText("Saved", { timeout: 5_000 });
-  await page.getByTestId("map-editor-close").click();
-
   await group.getByTitle("Add map").click();
   await page
     .getByTestId("add-course-map-form")
@@ -381,10 +157,6 @@ test("creates templates, lays out several maps and exports PDFs", async ({
     .selectOption(String(templateSeq));
   await page.getByTestId("add-course-map-submit").click();
   await expect(group.locator("[data-testid^='course-map-']")).toHaveCount(2);
-
-  await group.locator("[data-testid^='edit-course-map-']").nth(1).click();
-  await expect(page.locator("[data-object-id]")).toHaveCount(2);
-  await page.getByTestId("map-editor-close").click();
 
   await page.getByTestId("add-all-controls-map").click();
   await expect(page.getByTestId("course-map-group-all")).toBeVisible();
@@ -411,403 +183,22 @@ test("creates templates, lays out several maps and exports PDFs", async ({
   ]);
   expect(allControlsDownload.suggestedFilename()).toMatch(/\.pdf$/);
   await expectA4Pages(allControlsDownload, 1);
-  // The route drew it through the project's pipeline (the map is pinned).
+  // The composer drew it (the map is pinned); no pipeline header since E3.
   const all = await page.request.get("/api/maps/itest/maps.pdf");
   expect(all.ok()).toBe(true);
-  expect(all.headers()["x-print-pipeline"]).toBe(mapPipeline);
+  expect(all.headers()["content-type"]).toContain("application/pdf");
+  expect(all.headers()["x-print-pipeline"]).toBeUndefined();
 
   // Tables use the standard horizontal-scroll wrapper for narrow screens.
   await expect(
     page.locator("[data-testid='maps-page'] div.overflow-x-auto table"),
   ).toBeVisible();
-
-  // Panels, object list, description preview and the graphics library.
-  await group.locator("[data-testid^='edit-course-map-']").first().click();
-  await expect(page.getByTestId("map-layout-editor")).toBeVisible();
-
-  // The description block previews the real rows of the course, not a
-  // placeholder: title row plus one grid row per control.
-  const descriptionBlock = page.getByTestId("map-description-block");
-  await expect(descriptionBlock).toBeVisible();
-  // Real rows: 7 column separators per control row plus the header line,
-  // and a code/sequence text per row beyond the title.
-  expect(await descriptionBlock.locator("line").count()).toBeGreaterThan(7);
-  expect(await descriptionBlock.locator("text").count()).toBeGreaterThan(1);
-
-  // Cards collapse to header bars and expand again.
-  await expect(page.getByTestId("map-tool-select")).toBeVisible();
-  await page.getByTestId("map-panel-tools-toggle").click();
-  await expect(page.getByTestId("map-tool-select")).toHaveCount(0);
-  await page.getByTestId("map-panel-tools-toggle").click();
-  await expect(page.getByTestId("map-tool-select")).toBeVisible();
-
-  // The object list selects stacked or hidden objects.
-  await page.getByTestId("map-panel-objects-toggle").click();
-  const objectItems = page.locator("[data-testid^='map-object-list-item-']");
-  const objectCountBefore = await objectItems.count();
-  expect(objectCountBefore).toBeGreaterThan(0);
-  await objectItems.first().click();
-  await expect(page.getByTestId("map-object-properties")).toBeVisible();
-
-  // Upload an SVG graphic, place it on the paper, then delete it from the
-  // object list.
-  await page.getByTestId("map-panel-graphics-toggle").click();
-  await page.getByTestId("map-graphic-upload").setInputFiles({
-    name: "e2e-logo.svg",
-    mimeType: "image/svg+xml",
-    buffer: Buffer.from(
-      `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 10 10"><circle cx="5" cy="5" r="4" fill="#336699"/></svg>`,
-    ),
-  });
-  const placeGraphic = page
-    .locator("[data-testid^='map-graphic-place-']")
-    .first();
-  await expect(placeGraphic).toBeVisible();
-  await placeGraphic.click();
-  const graphicPaper = await page.getByTestId("map-paper").boundingBox();
-  await page.mouse.click(
-    graphicPaper!.x + graphicPaper!.width * 0.6,
-    graphicPaper!.y + graphicPaper!.height * 0.6,
-  );
-  await expect(objectItems).toHaveCount(objectCountBefore + 1);
-  await page
-    .locator("[data-testid^='map-object-list-delete-']")
-    .last()
-    .click();
-  await expect(objectItems).toHaveCount(objectCountBefore);
-  await page.getByTestId("map-editor-close").click();
 });
-
-test.describe("course-map editor touch gestures", () => {
-  test.use({
-    viewport: { width: 390, height: 844 },
-    hasTouch: true,
-    isMobile: true,
-  });
-
-  test("pans with the intended finger count and drags objects exactly", async ({
-    page,
-  }) => {
-    test.setTimeout(120_000);
-    await selectEvent(page);
-    await openTab(page, "Map templates");
-    await page.getByTestId("new-map-template").tap();
-    await page.getByTestId("map-template-name").fill("E2E Mobile touch");
-    await page.getByTestId("map-template-paper").selectOption("A4");
-    await page.getByTestId("map-template-scale").fill("7500");
-    await page.getByTestId("map-template-submit").tap();
-    const mobileTemplateRow = page
-      .locator("[data-testid^='map-template-']")
-      .filter({ hasText: "E2E Mobile touch" });
-    const mobileTemplateTestId =
-      await mobileTemplateRow.getAttribute("data-testid");
-    if (!mobileTemplateTestId) throw new Error("mobile template was not created");
-    const mobileTemplateSeq = mobileTemplateTestId.replace(
-      "map-template-",
-      "",
-    );
-    await page
-      .getByTestId(`edit-template-layout-${mobileTemplateSeq}`)
-      .tap();
-    const templatePaper = page.getByTestId("map-paper");
-    await expect(templatePaper).toBeVisible();
-    const templatePaperBox = await templatePaper.boundingBox();
-    if (!templatePaperBox) throw new Error("template paper has no box");
-
-    await page.getByTestId("map-panel-tools-toggle").tap();
-    await page.getByTestId("map-tool-rectangle").tap();
-    await page.getByTestId("map-panel-tools-toggle").tap();
-    await page.touchscreen.tap(
-      templatePaperBox.x + templatePaperBox.width * 0.6,
-      templatePaperBox.y + templatePaperBox.height * 0.5,
-    );
-    const templateRectangle = page.locator("rect[data-object-id]").last();
-    await expect(templateRectangle).toBeVisible();
-    await page.getByTestId("map-panel-properties-toggle").tap();
-    await expect(page.getByTestId("map-object-properties")).toHaveCount(0);
-    const templateRectangleBox = await templateRectangle.boundingBox();
-    if (!templateRectangleBox) throw new Error("template rectangle has no box");
-    await touchPointerDrag(
-      templateRectangle,
-      templateRectangleBox.x + templateRectangleBox.width / 2,
-      templateRectangleBox.y + templateRectangleBox.height / 2,
-      35,
-      15,
-    );
-    await expect(page.getByTestId("map-object-properties")).toHaveCount(0);
-    const movedTemplateRectangleBox = await templateRectangle.boundingBox();
-    if (!movedTemplateRectangleBox) {
-      throw new Error("moved template rectangle has no box");
-    }
-    await touchPointerDrag(
-      templateRectangle,
-      movedTemplateRectangleBox.x + movedTemplateRectangleBox.width / 2,
-      movedTemplateRectangleBox.y + movedTemplateRectangleBox.height / 2,
-      0,
-      0,
-    );
-    await expect(page.getByTestId("map-object-properties")).toBeVisible();
-    await page.getByTestId("map-panel-properties-toggle").tap();
-
-    await dispatchTouchGesture(templatePaper, [
-      {
-        from: {
-          x: templatePaperBox.x + templatePaperBox.width * 0.35,
-          y: templatePaperBox.y + templatePaperBox.height * 0.5,
-        },
-        to: {
-          x: templatePaperBox.x + templatePaperBox.width * 0.25,
-          y: templatePaperBox.y + templatePaperBox.height * 0.55,
-        },
-      },
-      {
-        from: {
-          x: templatePaperBox.x + templatePaperBox.width * 0.65,
-          y: templatePaperBox.y + templatePaperBox.height * 0.5,
-        },
-        to: {
-          x: templatePaperBox.x + templatePaperBox.width * 0.78,
-          y: templatePaperBox.y + templatePaperBox.height * 0.55,
-        },
-      },
-    ]);
-    await page.waitForTimeout(550);
-    await page.getByTestId("map-editor-fullscreen").tap();
-    await expect
-      .poll(() => page.evaluate(() => Boolean(document.fullscreenElement)))
-      .toBe(true);
-    await page.getByTestId("map-panel-tools-toggle").tap();
-    await page.getByTestId("map-tool-pan").tap();
-    await page.getByTestId("map-panel-tools-toggle").tap();
-    const viewBoxBeforeAlign = await templatePaper.getAttribute("viewBox");
-    const previewImage = page.getByTestId("map-preview-image");
-    await expect(previewImage).toBeVisible();
-    const previewBeforeAlign = await previewImage.getAttribute("href");
-    const fullscreenTemplateBox = await templatePaper.boundingBox();
-    if (!fullscreenTemplateBox) {
-      throw new Error("fullscreen template paper has no box");
-    }
-    await touchPointerDrag(
-      templatePaper,
-      fullscreenTemplateBox.x + fullscreenTemplateBox.width * 0.75,
-      fullscreenTemplateBox.y + fullscreenTemplateBox.height * 0.7,
-      40,
-      20,
-    );
-    await expect(templatePaper).toHaveAttribute("viewBox", viewBoxBeforeAlign!);
-    await expect
-      .poll(() => previewImage.getAttribute("href"))
-      .not.toBe(previewBeforeAlign);
-    await page.getByTestId("map-editor-fullscreen").tap();
-    await page.getByTestId("map-editor-close").tap();
-
-    await openTab(page, "Maps");
-    const firstCourseCheckbox = page
-      .locator("[data-testid^='select-map-course-']")
-      .first();
-    await firstCourseCheckbox.check();
-    await page
-      .getByTestId("apply-map-template")
-      .locator("..")
-      .getByRole("combobox")
-      .selectOption(mobileTemplateSeq);
-    await page.getByTestId("apply-map-template").tap();
-    const courseRow = page.locator("[data-testid^='course-map-row-']").first();
-    await courseRow.locator("td").nth(1).tap();
-    const group = page.locator("[data-testid^='course-map-group-']").first();
-    await group.locator("[data-testid^='edit-course-map-']").first().tap();
-
-    const paper = page.getByTestId("map-paper");
-    await expect(paper).toBeVisible();
-    await expect(paper).toHaveCSS("touch-action", "pan-y");
-    const box = await paper.boundingBox();
-    if (!box) throw new Error("map paper has no box");
-
-    const initialViewBox = await paper.getAttribute("viewBox");
-    await dispatchTouchGesture(paper, [
-      {
-        from: { x: box.x + box.width * 0.8, y: box.y + box.height * 0.7 },
-        to: { x: box.x + box.width * 0.65, y: box.y + box.height * 0.6 },
-      },
-    ]);
-    await expect(paper).toHaveAttribute("viewBox", initialViewBox!);
-
-    await dispatchTouchGesture(paper, [
-      {
-        from: { x: box.x + box.width * 0.35, y: box.y + box.height * 0.5 },
-        to: { x: box.x + box.width * 0.25, y: box.y + box.height * 0.55 },
-      },
-      {
-        from: { x: box.x + box.width * 0.65, y: box.y + box.height * 0.5 },
-        to: { x: box.x + box.width * 0.78, y: box.y + box.height * 0.55 },
-      },
-    ]);
-    await expect
-      .poll(() => paper.getAttribute("viewBox"))
-      .not.toBe(initialViewBox);
-    await page.waitForTimeout(550);
-
-    await page.getByTestId("map-panel-tools-toggle").tap();
-    await page.getByTestId("map-tool-rectangle").tap();
-    await page.getByTestId("map-panel-tools-toggle").tap();
-    await page.touchscreen.tap(
-      box.x + box.width * 0.55,
-      box.y + box.height * 0.5,
-    );
-    const rectangle = page.locator("rect[data-object-id]").last();
-    await expect(rectangle).toBeVisible();
-    const beforeDrag = await rectangle.boundingBox();
-    if (!beforeDrag) throw new Error("rectangle has no box");
-    const viewBoxBeforeDrag = await paper.getAttribute("viewBox");
-    await touchPointerDrag(
-      rectangle,
-      beforeDrag.x + beforeDrag.width / 2,
-      beforeDrag.y + beforeDrag.height / 2,
-      40,
-      20,
-    );
-    const afterDrag = await rectangle.boundingBox();
-    expect(afterDrag).not.toBeNull();
-    expect(Math.abs(afterDrag!.x - beforeDrag.x)).toBeGreaterThan(20);
-    await expect(paper).toHaveAttribute("viewBox", viewBoxBeforeDrag!);
-
-    const handle = page.getByTestId("map-resize-se");
-    const handleBox = await handle.boundingBox();
-    if (!handleBox) throw new Error("resize handle has no box");
-    const beforeResize = await rectangle.boundingBox();
-    await touchPointerDrag(
-      handle,
-      handleBox.x + handleBox.width / 2,
-      handleBox.y + handleBox.height / 2,
-      30,
-      20,
-    );
-    const afterResize = await rectangle.boundingBox();
-    expect(afterResize!.width).toBeGreaterThan(beforeResize!.width);
-
-    await page.getByTestId("map-editor-fullscreen").tap();
-    await expect
-      .poll(() => page.evaluate(() => Boolean(document.fullscreenElement)))
-      .toBe(true);
-    await expect(paper).toHaveCSS("touch-action", "none");
-    const fullscreenBox = await paper.boundingBox();
-    if (!fullscreenBox) throw new Error("fullscreen paper has no box");
-    const fullscreenViewBox = await paper.getAttribute("viewBox");
-    await dispatchTouchGesture(paper, [
-      {
-        from: {
-          x: fullscreenBox.x + fullscreenBox.width * 0.8,
-          y: fullscreenBox.y + fullscreenBox.height * 0.75,
-        },
-        to: {
-          x: fullscreenBox.x + fullscreenBox.width * 0.65,
-          y: fullscreenBox.y + fullscreenBox.height * 0.65,
-        },
-      },
-    ]);
-    await expect
-      .poll(() => paper.getAttribute("viewBox"))
-      .not.toBe(fullscreenViewBox);
-  });
-});
-
-async function dispatchTouchGesture(
-  target: Locator,
-  fingers: Array<{
-    from: { x: number; y: number };
-    to: { x: number; y: number };
-  }>,
-) {
-  await target.evaluate((element, gesture) => {
-    const touches = (
-      points: Array<{ x: number; y: number }>,
-    ): Touch[] =>
-      points.map(
-        (point, identifier) =>
-          new Touch({
-            identifier,
-            target: element,
-            clientX: point.x,
-            clientY: point.y,
-            pageX: point.x,
-            pageY: point.y,
-            screenX: point.x,
-            screenY: point.y,
-            radiusX: 1,
-            radiusY: 1,
-            rotationAngle: 0,
-            force: 1,
-          }),
-      );
-    const fire = (
-      type: "touchstart" | "touchmove" | "touchend",
-      points: Array<{ x: number; y: number }>,
-      changed: Array<{ x: number; y: number }>,
-    ) => {
-      const active = touches(points);
-      element.dispatchEvent(
-        new TouchEvent(type, {
-          bubbles: true,
-          cancelable: true,
-          touches: active,
-          targetTouches: active,
-          changedTouches: touches(changed),
-        }),
-      );
-    };
-    fire("touchstart", gesture.map((finger) => finger.from), gesture.map((finger) => finger.from));
-    fire("touchmove", gesture.map((finger) => finger.to), gesture.map((finger) => finger.to));
-    fire("touchend", [], gesture.map((finger) => finger.to));
-  }, fingers);
-  await target.page().waitForTimeout(50);
-}
-
-async function touchPointerDrag(
-  target: Locator,
-  x: number,
-  y: number,
-  dx: number,
-  dy: number,
-) {
-  await target.evaluate(
-    (element, gesture) => {
-      // Synthetic pointer capture is not backed by an active browser
-      // pointer, so make capture a no-op while exercising the same React
-      // touch-pointer path used by a physical device.
-      const svgElement = element as SVGElement;
-      const originalCapture = svgElement.setPointerCapture;
-      svgElement.setPointerCapture = () => {};
-      const fire = (
-        type: "pointerdown" | "pointermove" | "pointerup",
-        clientX: number,
-        clientY: number,
-      ) =>
-        element.dispatchEvent(
-          new PointerEvent(type, {
-            bubbles: true,
-            cancelable: true,
-            pointerId: 7,
-            pointerType: "touch",
-            isPrimary: true,
-            clientX,
-            clientY,
-            buttons: type === "pointerup" ? 0 : 1,
-          }),
-        );
-      fire("pointerdown", gesture.x, gesture.y);
-      fire("pointermove", gesture.x + gesture.dx, gesture.y + gesture.dy);
-      fire("pointerup", gesture.x + gesture.dx, gesture.y + gesture.dy);
-      svgElement.setPointerCapture = originalCapture;
-    },
-    { x, y, dx, dy },
-  );
-  await target.page().waitForTimeout(50);
-}
 
 test.describe("auto templates (docs/course-layout.md §5–§7)", () => {
   test.beforeAll(seedBaseMap);
 
-  test("export a course that has no template yet", async ({ page, mapPipeline }) => {
+  test("export a course that has no template yet", async ({ page }) => {
     test.setTimeout(90_000);
     page.setDefaultTimeout(10_000);
     await selectEvent(page);
@@ -829,7 +220,7 @@ test.describe("auto templates (docs/course-layout.md §5–§7)", () => {
     await expect(badge).toHaveAttribute("data-extra", "false");
     const printed = await page.request.get(`/api/maps/itest/maps.pdf?courses=${courseId}`);
     expect(printed.ok()).toBe(true);
-    expect(printed.headers()["x-print-pipeline"]).toBe(mapPipeline);
+    expect(printed.headers()["content-type"]).toContain("application/pdf");
 
     // The template is named after its key and shows the key as a badge.
     await openTab(page, "Map templates");

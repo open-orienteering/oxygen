@@ -422,17 +422,23 @@ export async function newCourse(page: Page, prefix: string): Promise<string> {
  * Regular (numeric-code) controls whose page points are inside the viewer, clear of the chrome and of every leg
  * drawn now: the selected course's legs are drawn over the other controls and win the hit-test (topmost first,
  * §5), so a click on a control under one is a leg click (D10 flake: the second append of a test clicked a control
- * the first append's leg ran over and got an Insert phantom). Call it again after a structure change.
+ * the first append's leg ran over and got an Insert phantom), and clear of every other site's circle (E3 flake).
+ * Call it again after a structure change.
  */
 export async function regularCodes(page: Page, n: number, exclude: string[] = []): Promise<string[]> {
   await viewSettled(page);
   const viewer = (await page.getByTestId("map-viewer").boundingBox())!;
   const inspector = await page.getByTestId("editor-inspector").boundingBox();
   const legs = await Promise.all((await legPieces(page)).map((l) => Promise.all(l.points.map((q) => toPage(page, q)))));
+  const all = await sites(page);
+  const points = await Promise.all(all.map((s) => toPage(page, s.mm)));
   const out: string[] = [];
-  for (const s of await sites(page)) {
+  for (const [i, s] of all.entries()) {
     if (s.type !== "Control" || !/^\d+$/.test(s.code) || exclude.includes(s.code)) continue;
-    const p = await toPage(page, s.mm);
+    const p = points[i];
+    // Clear of every other site's circle too: an overlapping circle drawn later wins the click (E3 flake: a click
+    // on 32 selected 72 after a reload redrew the sites in another order).
+    if (points.some((q, j) => j !== i && Math.hypot(q.x - p.x, q.y - p.y) < 20)) continue;
     if (p.x < viewer.x + 30 || p.x > viewer.x + viewer.width - 90 || p.y < viewer.y + 30 || p.y > viewer.y + viewer.height - 30) continue;
     if (inspector && p.x < inspector.x + inspector.width + 40) continue;
     if (legs.some((poly) => poly.slice(1).some((b, i) => segDist(p, poly[i], b) < 18))) continue;

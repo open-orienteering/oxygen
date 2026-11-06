@@ -1,17 +1,13 @@
-// The new course editor on the GL canvas (docs/course-editor.md "Tests"), mounted for
-// `vector ∧ pinned ∧ map.editor.vector` (docs/map-pipeline-switch.md §3.6). It runs under the
-// `map-vector` project (desktop) and the `mobile` project (Pixel 7) only — never `chromium` or
-// `map-legacy` (§5): the desktop describes skip on a phone and the touch describe at the end skips
-// on a desktop. The project's fixture sets `vector` before every test; the spec sets
-// `map.editor.vector` itself (the flag also flips the Maps page's Edit layout link, so it is not
-// the project's). The legacy page's spec is `course-editor-legacy.spec.ts` (`chromium`).
+// The course editor on the GL canvas (docs/course-editor.md "Tests"), mounted for every event
+// since E3 (docs/course-editor.md §1). It runs under the `chromium` project (desktop) and the
+// `mobile` project (Pixel 7): the desktop describes skip on a phone and the touch describe at the
+// end skips on a desktop.
 //
 // Hygiene (AGENTS §12): `reseed()` once in `beforeAll`, the fixture import idempotent per test
 // (`openEditor` → `ensureCoursesAndMap`), courses a test creates carry a prefix and go with the
 // next reseed, controls / objects / sheets it creates are deleted in `finally` (`cleanup`).
 import { readFile } from "node:fs/promises";
-import type { Browser, Page, TestInfo } from "@playwright/test";
-import { test, expect, setEditorVector } from "./helpers/map-pipeline";
+import { expect, test, type Browser, type Page, type TestInfo } from "@playwright/test";
 import { reseed } from "./helpers/reseed";
 import {
   allControlsSheet, analysePdf, arm, cleanup, clickMap, clickTab, controlRows, coveredBy, desktopContext, drag, dragMm, editorReady,
@@ -27,11 +23,6 @@ type Pt = { x: number; y: number };
 
 test.beforeAll(async () => {
   await reseed();
-  await setEditorVector(true);
-});
-
-test.afterAll(async () => {
-  await setEditorVector(null);
 });
 
 test.setTimeout(120_000);
@@ -109,18 +100,10 @@ async function dragTarget(page: Page, from: Pt, avoid: Pt[] = [], clearPx = 45):
 test.describe("Course editor (new, GL canvas)", () => {
   desktopOnly();
 
-  test("mounts behind map.editor.vector; the legacy page otherwise", async ({ page }) => {
-    await setEditorVector(false);
-    try {
-      await selectCompetition(page);
-      await ensureCoursesAndMap(page);
-      await clickTab(page, "Course Editor");
-      await expect(page.getByTestId("course-editor-page")).toBeVisible({ timeout: 15000 });
-      await expect(page.getByTestId("editor-page")).toHaveCount(0);
-    } finally {
-      await setEditorVector(true);
-    }
-    await page.reload();
+  test("mounts the new editor, never the legacy page", async ({ page }) => {
+    await selectCompetition(page);
+    await ensureCoursesAndMap(page);
+    await clickTab(page, "Course Editor");
     await editorReady(page);
     await expect(page.getByTestId("course-editor-page")).toHaveCount(0);
     // The shell: top bar, tool rail, inspector, status bar; Layout (D7) and Field (D9) enterable.
@@ -133,6 +116,21 @@ test.describe("Course editor (new, GL canvas)", () => {
     // The rail (§6): exchange and crossing wait for slice F.
     for (const key of ["V", "S", "K", "M", "A", "T"]) await expect(page.getByTestId(`editor-tool-${key}`)).toBeEnabled();
     for (const key of ["X", "C"]) await expect(page.getByTestId(`editor-tool-${key}`)).toBeDisabled();
+  });
+
+  test("an event with no map mounts the editor over the upload prompt", async ({ page }) => {
+    await page.goto("/");
+    await page.getByRole("button", { name: /New Event/ }).click();
+    await page.getByPlaceholder(/Klubbmästerskap/).fill(`E2E Editor no map ${Date.now()}`);
+    await page.getByRole("button", { name: "Create" }).click();
+    await expect(page.getByRole("link", { name: "Dashboard" })).toBeVisible({ timeout: 15000 });
+    const nameId = new URL(page.url()).pathname.split("/")[1];
+    await page.goto(`/${nameId}/course-editor`);
+    await expect(page.getByTestId("editor-page")).toBeVisible({ timeout: 15000 });
+    await expect(page.getByTestId("course-editor-page")).toHaveCount(0);
+    const panel = page.getByTestId("editor-page").getByTestId("map-panel");
+    await expect(panel.getByRole("button", { name: "Upload map" })).toBeVisible({ timeout: 15000 });
+    await expect(panel.getByTestId("map-viewer")).toHaveCount(0);
   });
 
   test("place, move, undo / redo, persist and delete a control", async ({ page }) => {
@@ -448,7 +446,7 @@ test.describe("Course mode (§4)", () => {
   });
 
   test("clone a course; the editor offers no legacy start / finish toggles", async ({ page }) => {
-    // A course written with the legacy flags (the Courses page shows them read-only, course-editor-legacy.spec.ts).
+    // A course written with the legacy flags (the Courses page shows them read-only).
     // Created after openEditor: the fixture import (ensureCoursesAndMap) expects the seed's course count.
     await openEditor(page);
     await trpcCall("course.create", { name: `D10 Legacy flags ${Date.now() % 100000}`, firstAsStart: true, lastAsFinish: true });
@@ -1462,6 +1460,53 @@ test.describe("Course editor layout (docs/course-layout.md)", () => {
       await expect(page).toHaveURL(new RegExp(`course-editor\\?mode=layout&template=${template.seq}`));
       await expect(page.getByTestId("editor-layout-scope")).toHaveAttribute("data-scope", "template", { timeout: 30_000 });
       await expect(page.getByTestId("editor-layout-scope")).toHaveAttribute("data-template", String(template.seq));
+    } finally {
+      await drop();
+    }
+  });
+
+  test("graphics: upload an SVG, place it on the sheet, it is listed and deleted", async ({ page }) => {
+    await openEditor(page);
+    const nameId = nameIdOf(page);
+    const { sheet, drop } = await sheetFixture("Layout graphic");
+    const images = async () =>
+      (await trpcCall<{ objects: { kind: string; graphicId?: number }[] }>("courseMap.get", { seq: sheet.seq }, false)).objects.filter((o) => o.kind === "image");
+    try {
+      await page.goto(`/${nameId}/course-editor?mode=layout&sheet=${sheet.seq}`);
+      await editorReady(page);
+      await expect(page.getByTestId("editor-layout-scope")).toHaveAttribute("data-sheet", String(sheet.seq));
+
+      // Upload into the Graphics section; its Place button arms the image tool.
+      await page.getByTestId("editor-layout-graphics-toggle").click();
+      const uploaded = waitForTrpc(page, "graphics.upload");
+      await page.getByTestId("editor-layout-graphic-upload").setInputFiles({
+        name: "e2e-logo.svg",
+        mimeType: "image/svg+xml",
+        buffer: Buffer.from('<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 10 10"><circle cx="5" cy="5" r="4" fill="#336699"/></svg>'),
+      });
+      await uploaded;
+      const placeButton = page.locator('[data-testid^="editor-layout-graphic-place-"]').last();
+      await expect(placeButton).toBeVisible();
+      await placeButton.click();
+      await expect(placeButton).toHaveAttribute("aria-pressed", "true");
+
+      // A click on the page above the frame places it: one write, listed as an image row.
+      const toPaperMm = await pageToPaperOf(page, frame);
+      const placed = waitForTrpc(page, "courseMap.saveLayout");
+      await clickMap(page, await toPage(page, toPaperMm({ x: 150, y: 20 })));
+      await placed;
+      const row = page.locator('[data-testid="editor-layout-object-row"][data-kind="image"]');
+      await expect(row).toHaveCount(1);
+      expect(await images()).toHaveLength(1);
+
+      // Selected from the list and deleted: gone from the list and from the sheet.
+      await row.click();
+      await expect(page.getByTestId("editor-layout-selected")).toHaveAttribute("data-kind", "object");
+      const deleted = waitForTrpc(page, "courseMap.saveLayout");
+      await page.getByTestId("editor-layout-delete").click();
+      await deleted;
+      await expect(row).toHaveCount(0);
+      await expect.poll(async () => (await images()).length).toBe(0);
     } finally {
       await drop();
     }

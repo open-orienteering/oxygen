@@ -251,8 +251,8 @@ Base-map scale and meridian tilt come from `getBaseMapInfo` only (§10.1).
    1:1 (5 µm units of page µm).
 
 A document whose stack is not aligned (no lower / upper purple) throws
-`CourseStackError` out of `composePage`; `maps.pdf` then prints the
-legacy page (§8.1).
+`CourseStackError` out of `composePage`; `maps.pdf` answers 400 with its
+reason (§8.1).
 
 ### 4.4 The page layer
 
@@ -479,28 +479,28 @@ D); the PDF golden tier compares the `rgb` page rasterised by
 
 `GET /api/maps/:nameId/maps.pdf` (`docs/course-maps.md` API: query
 `maps` / `courses` / `allControls`, `courses.view`, 200-page cap, pages
-ordered by course, `sort_order`, `seq`) has two paths behind one
-handler (`packages/api/src/course-maps/routes.ts`). The switch gates the
-read only (`map-pipeline-switch.md` §3.4): both paths read the same
-`course_maps`, `map_templates`, course, control and graphics rows, and
-neither writes anything, so **rollback is the switch** — flip the event
-back to `legacy` and the same rows print through rsvg.
+ordered by course, `sort_order`, `seq`) prints every event through the
+composer (`packages/api/src/course-maps/routes.ts`) since E3, the flip
+(`map-pipeline-switch.md`, history note). It reads the `course_maps`,
+`map_templates`, course, control and graphics rows and writes nothing.
+The rsvg branch of the handler is unreachable and goes in E4a.
 
 ### 8.1 Which path prints
 
-| Event | Path | `X-Print-Pipeline` |
-|---|---|---|
-| `map_pipeline = vector` and the latest `map_files` row pins a document | the composer, §8.2 | `vector` |
-| `legacy` with a pin | SVG → `rsvg-convert` → pdf-lib merge, as before slice C (`docs/course-maps.md` "Rendering pipeline"); scale and tilt from the document (§10.1) | `legacy` |
-| no pin | 400 "No base map uploaded" (slice E1) | — |
-| `vector` with a pin whose colour stack is not aligned (`course.CourseStackError`: no lower / upper purple) | the legacy path, with one `warn` log line per request naming the document hash | `legacy-fallback` |
+| Event | Answer |
+|---|---|
+| the latest `map_files` row pins a document | the composer, §8.2 |
+| no pin | 400 "No base map uploaded" (slice E1) |
+| a pin whose colour stack is not aligned (`course.CourseStackError`: no lower / upper purple) | 400 with the error's reason (`{ error: <message> }`); rsvg is never called |
+| any other composer error | 400 with its message |
 
-The decision is `pinnedPrintSource(db, eventId)` (`pdf-page.ts`;
-`loadPinnedPrintDocument` is its in-process wrapper), which reads `getBaseMapInfo` (§10.1) — the same function, so the
-preview and the print never disagree on the path. Every other error on
-the vector path is an error (400 with the message, as the legacy path
-answers), not a fallback: a broken composer must be seen, not hidden
-behind rsvg.
+`pinnedPrintSource(db, eventId)` (`pdf-page.ts`;
+`loadPinnedPrintDocument` is its in-process wrapper) reads
+`getBaseMapInfo` (§10.1) — the same function the preview reads. There is
+no fallback since E3 (decision log "E3, the flip"): an unaligned stack
+was printed through rsvg until then; E0 found no such document on prod,
+and a broken print must be seen, not hidden. The fix for such a map is a
+re-import (the review's colour decisions).
 
 ### 8.2 The vector path
 
@@ -548,8 +548,7 @@ behind rsvg.
      terminated and the request fails; the next one starts a fresh worker.
    - **Errors.** An error in the worker is an `Error` with its message
      on the host (a 400, §8.1). `CourseStackError` crosses with a `code`
-     and is re-created on the host, so the `legacy-fallback` rule (§8.1)
-     is unchanged. A worker that dies fails the request in flight.
+     and is re-created on the host (a 400 with its reason, §8.1). A worker that dies fails the request in flight.
    - **Shutdown.** The route's server `onClose` hook terminates the
      workers (`resetPrintWorkers`).
 4. A worker slot (`printGate`), **then** a `renderGate()` permit like tiles
@@ -571,10 +570,9 @@ parameter reaches it.
 As before slice C: `Content-Type: application/pdf`,
 `Content-Disposition: attachment; filename="<event>_<map>.pdf"` for one
 page and `"<event>_maps.pdf"` for several, `Cache-Control: no-store`;
-404 for an unknown event or no maps, 400 for a bad selection. New:
-**`X-Print-Pipeline: vector | legacy | legacy-fallback`** names the
-path that drew the file (E2E and support read it). Any error on the
-vector path other than `CourseStackError` is a 400 with its message. `Info /Title` per §7.1 (`<event> · <map>`
+404 for an unknown event or no maps, 400 for a bad selection, no pin or
+a composer error (§8.1). The `X-Print-Pipeline` header of slices C–D is
+gone with the switch (E3). `Info /Title` per §7.1 (`<event> · <map>`
 for one page, `<event> maps` for several), `/Author` the organiser.
 
 ### 8.4 Sanctioned differences from the legacy PDF
@@ -609,13 +607,13 @@ E2E tests check page count and size; C7 compares the rasters).
 
 | Test | Covers |
 |---|---|
-| `packages/api/src/__tests__/integration/course-maps.test.ts` "maps.pdf route switch" | `vector` + pin → one composed PDF, pages at each template's paper (A4, A5), never the rsvg converter, `X-Print-Pipeline: vector`, `Info` title for one and several pages, file names; selection errors unchanged; `qpdf --check` clean; a `legacy` event, a `vector` event without a pin, and the same event flipped back all print legacy; an injected `CourseStackError` falls back (`legacy-fallback`); any other injected error is a 400 |
+| `packages/api/src/__tests__/integration/course-maps.test.ts` "maps.pdf through the composer", "course map REST rendering" | a pinned event → one composed PDF, pages at each template's paper (A4, A5), never the rsvg converter, no `X-Print-Pipeline`, `Info` title for one and several pages, file names; selection errors unchanged; `qpdf --check` clean; without a pin 400 "No base map uploaded"; an injected `CourseStackError` is a 400 with its reason and the converter is not called; any other injected error is a 400; the second event of the file (pinned too) prints composed pages per course, the all-controls map and a placed graphic |
 | `packages/api/src/__tests__/integration/course-maps.test.ts` "a readout-path request is answered…" | 150 extra pages in one print while `race.recentActivity` is polled every 10 ms: every probe is answered within 500 ms and more than three were answered before the PDF finished; the PDF has all pages. A smoke test of the route wiring — the event-loop bound itself is `print-worker.test.ts`'s |
 | `packages/api/src/__tests__/integration/course-print.test.ts` | §7.5's row, plus `qpdf --check` of both colour modes; the worker's bytes equal the in-process bytes (`deterministic: true`) and `onPage` fires once per sheet |
 | `packages/api/src/__tests__/print-worker.test.ts` | the worker on `e2e/test.ocd`: bytes equal in-process; the blob read and sent once per worker; `page` order; an error keeps the worker usable; `CourseStackError` re-created (a document with palette ids stripped); a reset rejects the request in flight and the next call recovers; the main thread's event-loop delay stays under 25 ms (or half a page) during a 10-page A3 print; `PRINT_WORKERS` parsing |
 | `packages/api/src/__tests__/worker-bootstrap.test.ts` | the shared bootstrap: `.js` imported as is, `.ts` through tsx |
 | `packages/api/src/render/__tests__/pdf-golden.test.ts` | the PDF golden tier, §9.2, and `qpdf --check` on every file it writes; `boxDown`; the swatch read-back |
-| `e2e/course-maps.spec.ts` (`map-legacy`, `map-vector`) | the export flows of the maps page: page count and A4 page size of the single-map, course and all-controls downloads (05 §7), `X-Print-Pipeline` equal to the project's value |
+| `e2e/course-maps.spec.ts` (`chromium`) | the export flows of the maps page: page count and A4 page size of the single-map, course and all-controls downloads (05 §7), `application/pdf` and no `X-Print-Pipeline` |
 
 ### 9.2 The PDF golden tier
 
@@ -733,9 +731,11 @@ unchanged (`docs/course-maps.md` API).
 
 | Event | Path |
 |---|---|
-| `map_pipeline = vector` and the latest `map_files` row pins a document | the reference raster, §10.2 |
-| `legacy` with a pin | the OCAD → SVG → resvg path, as before this slice |
-| no pin (either value) | none: "No base map uploaded" (400) |
+| the latest `map_files` row pins a document | the reference raster, §10.2 |
+| no pin | none: "No base map uploaded" (400) |
+
+The OCAD → SVG → resvg branch (the `legacy` row until E3) is unreachable
+and goes with the route's last caller, `MapLayoutEditor`, in E4a.
 
 `getBaseMapInfo(db, eventId)` makes the call and returns
 `{ scale, meridianTiltDeg, version, document }`. For every event with a
@@ -743,8 +743,8 @@ pin (slice E1, `docs/map-storage.md` §4.6) `scale` is the pinned
 document header's `mapScale`, `meridianTiltDeg` the report's
 `north.meridian.medianTiltDeg` (0 when there is none) and `version` the
 document hash — the values the A11 dual write puts into the `map_files`
-columns. `document` is `{ hash }` on a `vector` event
-(`pinnedDocumentHash`) and `null` on a `legacy` one. Without a pin it
+columns. `document` is `{ hash }`, always (the `pinnedDocumentHash`
+gate went with the switch in E3). Without a pin it
 throws "No base map uploaded" (`getBaseMapInfoOrNull` → null), and a pin
 whose `map_documents` row is missing throws "Pinned map document is
 missing" (both 400 on the routes); the OCAD fallback is gone. C2 and C3 read this one function. The legacy
@@ -815,16 +815,13 @@ ETag / 304 / `X-Cache` as before.
 
 The preview exists because the legacy layout editor composes raster
 layers (05 §5.12). Slice D7 puts layout editing on the GL canvas for
-every event that mounts the new editor (`course-layout.md`: the page drawn
-through the composer's own page layer, no `window.png`); the Maps and
-Map templates pages open it there. The row's "§10 retired for `vector`"
-is narrowed (decision log D7): the `map.editor.vector` gate (default off)
-and the WebGL2 fallback still send `vector` events to `MapLayoutEditor`,
-which needs this route's document branch and `layer=ink`. So §10 serves
-every event whose editor does not mount the new one, and is retired with
-the gate in slice E; the legacy branch stays until the legacy pipeline is
-removed. The document branch is the second production job of the
-reference raster (`map-rendering.md` §5.1).
+every event (`course-layout.md`: the page drawn through the composer's
+own page layer, no `window.png`); since E3 the Maps and Map templates
+pages open it for every event, so nothing in the UI reaches
+`MapLayoutEditor` or this route any more. §10 stays compiled until E4a
+deletes the route (with `MapLayoutEditor` in E4c). Until then the
+document branch is the second production job of the reference raster
+(`map-rendering.md` §5.1).
 
 ### Tests
 
@@ -1116,5 +1113,5 @@ symbols on the window, unexplained ÷ ink and their codes:
   per-variant pages (08): one frame per page in slice C.
 - **Serif and mono faces**: no file ships (`map-rendering.md` §4.10), so
   no PDF font either.
-- §10 is retired with the `map.editor.vector` gate in slice E (§10.6);
-  D7's Layout mode does not use it.
+- §10 is unreachable since E3 (§10.6) and deleted in E4a; D7's Layout
+  mode does not use it.

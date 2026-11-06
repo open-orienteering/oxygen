@@ -47,7 +47,33 @@ is 517 MB, freed by v0.6.1. No fix was needed.
 
 ## 1. v0.6.0
 
-(Written when E1–E4c and E6 have merged.)
+(The rest is written when E1–E4c and E6 have merged.)
+
+**The flip's migration (E3).** `20261106120000_map_pipeline_flip` runs
+with `pnpm db:migrate` before the stack: every event `vector`, the
+column default `vector`, and the three flags (`map.pipeline.default`,
+`map.pipeline.allowLegacy`, `map.editor.vector`) deleted. Nothing in
+v0.6.0 reads the column or the flags (`docs/map-pipeline-switch.md`,
+history note).
+
+**Rollback to v0.5.0** stays possible until v0.6.1: the column and enum
+are still there. v0.5.0 then reads `vector` for every existing event and
+the absent flags as `default = legacy`, `allowLegacy = true`,
+`editorVector = false` — tiles still regenerate, new events are
+`legacy`, and the legacy course editor mounts. To get v0.5.0's pre-flip
+behaviour (new events `vector`, the new editor) back, re-insert the
+flags after rolling back:
+
+```sql
+INSERT INTO oxygen.settings (key, value) VALUES
+  ('map.pipeline.default', 'vector'),
+  ('map.editor.vector', 'true')
+ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value;
+```
+
+Re-insert exactly the flags the instance had before the flip: note them
+(`SELECT key, value FROM oxygen.settings WHERE key LIKE 'map.%'`) before
+running the v0.6.0 migration.
 
 ## 2. v0.6.1
 

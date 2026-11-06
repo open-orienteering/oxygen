@@ -312,7 +312,7 @@ describe("sheet and template version tokens (course-layout.md §2)", () => {
   });
 });
 
-describe("maps.pdf?classes= on both pipelines (course-layout.md §7)", () => {
+describe("maps.pdf?classes= (course-layout.md §7)", () => {
   let t: TestEventContext;
   let caller: ReturnType<typeof makeCaller>;
   let h21Seq: number;
@@ -339,19 +339,14 @@ describe("maps.pdf?classes= on both pipelines (course-layout.md §7)", () => {
     await t?.cleanup();
   });
 
-  it("legacy: a class prints its class sheet, another class its course's sheet naming that class; courses and all leave class sheets out", async () => {
-    await t.db.event.update({ where: { id: t.eventId }, data: { mapPipeline: "legacy" } });
+  it("`?classes=` composes one page per class; courses and all leave class sheets out", async () => {
     clearCourseMapSourceCache();
     const before = convertedSvgs.length;
     const res = await server.inject({ method: "GET", url: pdfUrl(`?classes=${h21Seq},${d21Seq}`) });
     expect(res.statusCode).toBe(200);
-    expect(res.headers["x-print-pipeline"]).toBe("legacy");
+    expect(res.headers["x-print-pipeline"]).toBeUndefined();
+    expect(convertedSvgs).toHaveLength(before);
     expect((await PDFDocument.load(res.rawPayload)).getPageCount()).toBe(2);
-    const [h, d] = convertedSvgs.slice(before);
-    expect(h).toContain("H21");
-    expect(h).not.toContain("D21");
-    expect(d).toContain("D21");
-    expect(d).not.toContain("H21");
 
     const course = await server.inject({ method: "GET", url: pdfUrl(`?courses=${courseSeq}`) });
     expect((await PDFDocument.load(course.rawPayload)).getPageCount()).toBe(1);
@@ -360,16 +355,5 @@ describe("maps.pdf?classes= on both pipelines (course-layout.md §7)", () => {
 
     expect((await server.inject({ method: "GET", url: pdfUrl(`?classes=${h21Seq}&courses=${courseSeq}`) })).statusCode).toBe(400);
     expect((await server.inject({ method: "GET", url: pdfUrl("?classes=99999") })).statusCode).toBe(400);
-  }, 60_000);
-
-  it("vector: the same selection composes one page per class", async () => {
-    await t.db.event.update({ where: { id: t.eventId }, data: { mapPipeline: "vector" } });
-    clearCourseMapSourceCache();
-    const before = convertedSvgs.length;
-    const res = await server.inject({ method: "GET", url: pdfUrl(`?classes=${h21Seq},${d21Seq}`) });
-    expect(res.statusCode).toBe(200);
-    expect(res.headers["x-print-pipeline"]).toBe("vector");
-    expect(convertedSvgs).toHaveLength(before);
-    expect((await PDFDocument.load(res.rawPayload)).getPageCount()).toBe(2);
   }, 60_000);
 });

@@ -51,7 +51,6 @@ import {
   viewportRotationDeg,
   zoomAt,
 } from "../lib/map-viewport";
-import { resolveMapPipeline, type MapPipeline } from "../lib/map-pipeline";
 import { useMapDocument } from "../lib/map-document-cache";
 import { boundsMm, paperFrameOf, type MapBudget } from "../lib/vector-map";
 import { rotatedBoundingBox } from "../lib/map-rotation";
@@ -460,18 +459,12 @@ interface Props {
   /** Course-editor gesture hooks. Editing is enabled iff this is set. */
   editor?: MapViewerEditorProps;
   /**
-   * Content hash of the map's pinned document (`/api/map-documents/:hash`).
-   * With one, a `vector` event draws the vector base layer
-   * (docs/map-rendering.md §5.4); without one the map stays on tiles.
+   * Content hash of the map's pinned document (`/api/map-documents/:hash`):
+   * the vector base layer draws it (docs/map-rendering.md §5.4). `MapPanel`
+   * mounts the viewer only with one; without one the tile path below is
+   * unreachable since E3 and goes in E4b.
    */
   documentHash?: string | null;
-  /**
-   * The pipeline to draw with (docs/map-pipeline-switch.md §3): the event's
-   * switch after the host's fallback rule; default `legacy`.
-   */
-  mapPipeline?: MapPipeline;
-  /** The vector layer cannot draw in this browser (no WebGL2, lost context). */
-  onVectorUnavailable?: () => void;
   /** GPU budget of the vector layer: a club map's 150 MB or an event map's 30 MB. */
   mapBudget?: MapBudget;
   /** Operator rotation correction (`map_files.rotation_correction`), degrees, for the paper frame. */
@@ -550,8 +543,6 @@ export function MapViewer({
   gpsRoutes,
   editor,
   documentHash,
-  mapPipeline = "legacy",
-  onVectorUnavailable,
   mapBudget = "event",
   rotationCorrection,
 }: Props) {
@@ -562,11 +553,12 @@ export function MapViewer({
   const [showTwoFingerHint, setShowTwoFingerHint] = useState(false);
   const tileUrlBase = nameId ? `/api/map-tile/${nameId}` : "/api/map-tile";
 
-  // Base layer: tiles over a Web Mercator view, or the map document over a
-  // paper-space view (docs/map-rendering.md §5.4), chosen by the event's
-  // switch; a map without a pinned document stays on tiles.
-  const pipeline = resolveMapPipeline(mapPipeline, documentHash);
-  const paperMode = pipeline === "vector";
+  // Base layer: the map document over a paper-space view
+  // (docs/map-rendering.md §5.4). Every event draws its pinned document
+  // since E3; the tile path (no document) is unreachable from `MapPanel`
+  // and goes in E4b.
+  const paperMode = !!documentHash;
+  const pipeline = paperMode ? "vector" : "legacy";
   const { state: docState, retry: retryDocument } = useMapDocument(paperMode ? documentHash : null, nameId ?? null);
   const mapDoc = docState.status === "ready" ? docState.doc : null;
   const paperFrame = useMemo(
@@ -3492,6 +3484,19 @@ export function MapViewer({
         if (p) tool.onContextMenu(p);
       }}
     >
+      {paperMode && courseSupport === false && (
+        // A document whose colour stack is not aligned cannot take the GL
+        // course layer (`CourseStackError`, docs/map-rendering.md §5.4
+        // "Fallback"): say so; the SVG overlay still draws the course.
+        <div
+          data-testid="map-course-layer-unsupported"
+          className="pointer-events-none absolute inset-x-0 top-2 z-20 flex justify-center px-4"
+        >
+          <div className="rounded-md bg-amber-50/95 px-3 py-1 text-xs text-amber-800 shadow">
+            {t("courseLayerUnsupported")}
+          </div>
+        </div>
+      )}
       {showTwoFingerHint && (
         <div
           data-testid="map-two-finger-hint"
@@ -3512,7 +3517,6 @@ export function MapViewer({
           height={containerSize.h}
           budget={mapBudget}
           zIndex={0}
-          onUnavailable={onVectorUnavailable}
           course={glCourse ? courseRequest : null}
           onCourse={setCourseInfo}
           onCourseSupport={setCourseSupport}

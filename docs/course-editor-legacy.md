@@ -1,4 +1,4 @@
-> **Frozen (slice D).** The legacy course editor (`CourseEditorPage`), still mounted for `legacy` events and while `map.editor.vector` is off (`map-pipeline-switch.md` §3.6). The new editor is [course-editor.md](course-editor.md). This text is kept as it stood when D4 landed and is deleted with the legacy page in slice F; its E2E is `e2e/course-editor-legacy.spec.ts`.
+> **Frozen (slice D).** The legacy course editor (`CourseEditorPage`) mounts nowhere since E3, the flip (`map-pipeline-switch.md`, history note); E4b deletes it and this chapter. The editor is [course-editor.md](course-editor.md). This text is kept as it stood when D4 landed; its E2E (`e2e/course-editor-legacy.spec.ts`) was deleted in E3.
 
 # Course Editor (legacy)
 

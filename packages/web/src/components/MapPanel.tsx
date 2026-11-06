@@ -19,8 +19,7 @@ import {
 import { ToolbarButton } from "./ToolbarButton";
 import { NorthLinesBadge } from "./NorthLinesBadge";
 import { ClubMapImportState } from "./ClubMapImportState";
-import { MapEngineToggle } from "./MapEngineToggle";
-import { hasWebGL2, resolveMapPipeline } from "../lib/map-pipeline";
+import { MapImportState } from "./MapImportState";
 import { formatStalenessDeg, isMeridianStale } from "../lib/north-lines";
 
 /**
@@ -195,23 +194,6 @@ function MapPanelImpl({
     staleTime: Number.POSITIVE_INFINITY,
     enabled: !!mapInfo.data,
   });
-  // The event's map pipeline switch (docs/map-pipeline-switch.md §3).
-  // Only consulted once there is a document to draw.
-  const mapPipeline = trpc.event.mapPipeline.useQuery(undefined, {
-    staleTime: 30_000,
-    enabled: !!mapMetadata.data?.documentHash,
-  });
-  // The vector layer reported it cannot draw here (lost context); with no
-  // WebGL2 at all the probe says so before anything mounts.
-  const [vectorUnavailable, setVectorUnavailable] = useState(false);
-  const allowLegacy = mapPipeline.data?.allowLegacy ?? true;
-  const drawPipeline = resolveMapPipeline(mapPipeline.data?.pipeline, mapMetadata.data?.documentHash, {
-    webgl2: !vectorUnavailable && hasWebGL2(),
-    allowLegacy,
-  });
-  const vectorFellBack =
-    mapPipeline.data?.pipeline === "vector" && !!mapMetadata.data?.documentHash && drawPipeline === "legacy";
-  const onVectorUnavailable = useCallback(() => setVectorUnavailable(true), []);
   // The event's automatic cuts (course-layer.md §3.4): the GL course layer
   // follows the toggle as the stored geometry does. The editors' toggle
   // refetches this same query. Until it answers, cuts are on.
@@ -659,12 +641,15 @@ function MapPanelImpl({
   }, [onControlClick]);
 
   const hasMap = !!mapInfo.data;
-  // With a document, wait for the event's switch too: mounting the tile
-  // viewer first would request tiles a `vector` event never needs.
-  const isLoadingMap =
-    mapInfo.isLoading ||
-    (mapInfo.data && mapMetadata.isLoading) ||
-    (!!mapMetadata.data?.documentHash && mapPipeline.isLoading);
+  const isLoadingMap = mapInfo.isLoading || (mapInfo.data && mapMetadata.isLoading);
+  // A map without a pinned document (its import is running, failed, or
+  // never ran) shows the import state, not a viewer: there is nothing to
+  // draw and no tiles to fall back to (docs/map-rendering.md §5.4).
+  const awaitingDocument = hasMap && !isLoadingMap && !mapMetadata.data?.documentHash;
+  const refetchMapMetadata = mapMetadata.refetch;
+  const onDocumentReady = useCallback(() => {
+    void refetchMapMetadata();
+  }, [refetchMapMetadata]);
   const canFilter = filterMode === "course" || filterMode === "single-control";
 
   // Fullscreen hooks — MUST be before any early returns to respect hook ordering rules
@@ -883,6 +868,24 @@ function MapPanelImpl({
     );
   }
 
+  if (awaitingDocument) {
+    return (
+      <div
+        data-testid="map-panel"
+        data-instance-id={instanceId}
+        data-highlight-course={dataHighlightCourse}
+        className={`${effectiveClassName} ${fillContainer ? "h-full flex flex-col" : ""}`}
+      >
+        {paneToolbar}
+        <MapImportState
+          className={fillContainer ? "flex-1" : ""}
+          style={fillContainer ? undefined : { height: effectiveHeight }}
+          onDocumentReady={onDocumentReady}
+        />
+      </div>
+    );
+  }
+
   return (
     <div
       ref={fullscreenRef}
@@ -904,7 +907,7 @@ function MapPanelImpl({
         style={{ flex: isFullscreen || fillContainer ? "1 1 0" : undefined }}
       >
         <MapViewer
-          key={`${nameId ?? "current"}:${mapMetadata.data?.uploadedAt ?? "loading"}:${JSON.stringify(mapMetadata.data?.bounds ?? null)}:${drawPipeline}`}
+          key={`${nameId ?? "current"}:${mapMetadata.data?.uploadedAt ?? "loading"}:${JSON.stringify(mapMetadata.data?.bounds ?? null)}:${mapMetadata.data?.documentHash ?? ""}`}
           mapBounds={mapMetadata.data?.bounds}
           mapScale={mapMetadata.data?.scale}
           northOffset={mapMetadata.data?.northOffset}
@@ -912,8 +915,6 @@ function MapPanelImpl({
           mapVersion={mapMetadata.data?.renderKey ?? mapMetadata.data?.uploadedAt}
           calibration={mapMetadata.data?.calibration}
           documentHash={mapMetadata.data?.documentHash}
-          mapPipeline={drawPipeline}
-          onVectorUnavailable={onVectorUnavailable}
           mapBudget={mapMetadata.data?.clubMapVersionId ? "club" : "event"}
           rotationCorrection={mapMetadata.data?.rotationCorrection}
           controls={controlOverlays}
@@ -954,12 +955,6 @@ function MapPanelImpl({
         )}
       </div>
 
-      {vectorFellBack && (
-        <div data-testid="map-engine-fallback" className="mt-1 px-0.5 text-xs text-amber-700">
-          {t("mapEngineFallback")}
-        </div>
-      )}
-
       {/* Map info — below the map (course editor only) */}
       {showMapInfo && !hideToolbar && (
         <div className="mt-1.5 px-0.5 space-y-1.5">
@@ -983,12 +978,6 @@ function MapPanelImpl({
                 >
                   {tr("openReview")}
                 </Link>
-              )}
-              {mapMetadata.data?.documentHash && mapPipeline.data && (
-                <MapEngineToggle
-                  pipeline={mapPipeline.data.pipeline}
-                  allowLegacy={mapPipeline.data.allowLegacy}
-                />
               )}
               {mapMetadata.data && (
                 <>

@@ -817,9 +817,9 @@ export function registerMapTileRoutes(server: FastifyInstance): void {
     });
     if (!event) return;
     const eventId = event.id;
-    // A `vector` event reads map documents: nothing to pre-cache, nothing
-    // to report (docs/map-pipeline-switch.md §3).
-    if (await isVectorEvent(eventId)) {
+    // Every event reads map documents since E3: nothing to pre-cache,
+    // nothing to report (docs/map-rendering.md §5.4).
+    if (preCacheRetired()) {
       return reply.send({ total: 0, done: 0, rendering: false });
     }
     const meta = await ensureEventMapRenderKey(prisma(), eventId);
@@ -922,15 +922,13 @@ export function registerMapTileRoutes(server: FastifyInstance): void {
 }
 
 /**
- * The pre-cache gate (docs/map-pipeline-switch.md §3): a `vector` event
- * reads map documents, so its tiles are rendered on demand only.
+ * The pre-cache is retired (E3): every event reads map documents, so tiles
+ * are rendered on demand only, for a tab opened before the flip. A
+ * function rather than a constant so the code it gates stays compiled
+ * until E4a deletes it with the tile pipeline.
  */
-async function isVectorEvent(eventId: bigint): Promise<boolean> {
-  const row = await prisma().event.findUnique({
-    where: { id: eventId },
-    select: { mapPipeline: true },
-  });
-  return row?.mapPipeline === "vector";
+function preCacheRetired(): boolean {
+  return true;
 }
 
 /**
@@ -947,15 +945,10 @@ const preCacheConsidered = new Set<string>();
  * so a viewport-sized burst of requests cannot all slip past it.
  */
 async function maybePreCache(eventId: bigint, meta: MapMeta): Promise<void> {
+  if (preCacheRetired()) return;
   if (!precacheEnabled()) return;
   if (preCacheConsidered.has(meta.renderKey)) return;
   preCacheConsidered.add(meta.renderKey);
-  // Unmarked again, so an event switched back to `legacy` resumes the
-  // pre-cache on its next tile request.
-  if (await isVectorEvent(eventId)) {
-    preCacheConsidered.delete(meta.renderKey);
-    return;
-  }
 
   const bounds = parseBounds(meta.bounds);
   if (!bounds) return;

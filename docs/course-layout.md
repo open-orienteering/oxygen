@@ -279,12 +279,10 @@ sheet; the record is the same). With nothing selected a drag pans.
 
 **Entry points.** The Maps page's *Edit layout* (`edit-course-map-<seq>`,
 the all-controls row) and the Map templates page's
-(`edit-template-layout-<seq>`) navigate to the editor's Layout mode when
-the event mounts the new editor (`useCourseEditorMount`, the rule of
-`course-editor.md` §1: `vector ∧ pinned ∧ map.editor.vector`, WebGL2 or
-legacy disallowed) and open `MapLayoutEditor` otherwise. So `window.png`
-and `MapLayoutEditor` keep serving every event the new editor does not
-mount (`course-print.md` §10.6).
+(`edit-template-layout-<seq>`) navigate to the editor's Layout mode
+(`layoutEditorHref`, `lib/editor/layout-href.ts`) for every event since
+E3. `MapLayoutEditor` and `window.png` are unreachable from the pages
+and go in E4c / E4a (`course-print.md` §10.6).
 
 **What stays in `course-maps.md`:** the data model (templates, sheets,
 overrides), coordinate spaces, validation codes, the Maps and Map
@@ -460,9 +458,10 @@ sheet prints through `classes` or `maps`.
 | integration | `packages/api/src/__tests__/integration/course-maps.test.ts` "resolveSheet" | a sheet (window centre, page, text values, block, template / sheet split, overprint, sibling windows), `saveLayout` without `templateObjects` leaves the template, `PRECONDITION_FAILED` without a template; a template with and without a course; `NOT_FOUND` |
 | unit (shared) | `packages/shared/src/__tests__/auto-template.test.ts` | the key (standard, custom paper), the key's name, decision (3) (most sheets, oldest, seq), `fitOrientation` (preferred kept, turned, ratio, the margin, neither fits), `defaultTemplateSettings` |
 | unit (web) | `lib/editor/__tests__/export-menu.test.ts`, `template-key.test.ts`, `state.test.ts`, `pages/editor/__tests__/layout-model.test.ts` | Export ▾ entries, routes and what is ensured first; courses in a template / at its key, the move-out target, extra names; Class view in the reducer; the sheet key |
-| integration | `packages/api/src/__tests__/integration/auto-templates.test.ts` | the migration's backfill (scoped to one event): keys, decision (3), no sheet moved, no rename; key sync on create / update / duplicate / delete with promotion; `autoSheets` (first sheet, auto template named by key, centred, idempotent; the event's look and a landscape turn; without a course every course); class sheets (scale → auto template at that scale; explicit template + scale → sheet override; cleared → deleted; course change); `classOverrides`; `class.upserted` without the overrides; `resolveSheet { classSeq }` (own sheet, course sheet with the override, `{classes}`); version tokens (`CONFLICT` with the row now, no token = LWW); `maps.pdf?classes=` legacy (pages, the class named on its page only, `courses` / unfiltered without class sheets, 400s) and vector |
-| E2E | `e2e/course-maps.spec.ts` "export a course that has no template yet" (both pipelines) | a course without a map exports one A4 page from the Maps page; the auto badge; the route's pipeline; the template named by key with its key badge |
+| integration | `packages/api/src/__tests__/integration/auto-templates.test.ts` | the migration's backfill (scoped to one event): keys, decision (3), no sheet moved, no rename; key sync on create / update / duplicate / delete with promotion; `autoSheets` (first sheet, auto template named by key, centred, idempotent; the event's look and a landscape turn; without a course every course); class sheets (scale → auto template at that scale; explicit template + scale → sheet override; cleared → deleted; course change); `classOverrides`; `class.upserted` without the overrides; `resolveSheet { classSeq }` (own sheet, course sheet with the override, `{classes}`); version tokens (`CONFLICT` with the row now, no token = LWW); `maps.pdf?classes=` through the composer (one page per class, `courses` / unfiltered without class sheets, 400s; E3 deleted the legacy variant, whose class-name check read the rsvg SVG) |
+| E2E | `e2e/course-maps.spec.ts` "export a course that has no template yet" | a course without a map exports one A4 page from the Maps page; the auto badge; the route answers `application/pdf`; the template named by key with its key badge |
 | E2E | `e2e/course-editor.spec.ts` "Course editor auto templates" | Export ▾ → this course creates the sheet and prints one page; the auto badge and the sheet key; a class scale makes a class sheet; Class view shows `1:15000`; this class exports; Create extra template moves the course, its row moves it back, undo moves it again |
+| E2E | `e2e/course-editor.spec.ts` "Course editor layout" "graphics: upload an SVG…" | E3 (ported from `course-maps.spec.ts`'s legacy layout editor): the Graphics section uploads an SVG (`graphics.upload`), its Place button arms the image tool, a click on the page places it (one `saveLayout`, an `image` row in the list and in `courseMap.get`); selected from the list and deleted, gone from both |
 | E2E | `e2e/course-editor.spec.ts` "Course editor layout" "P draws a polygon…" | D16: `P`, two clicks, a click-drag and a click, closed on the first vertex → one `saveLayout`; `courseMap.get` has a closed path of 4 points whose dragged vertex has `hOut` down-right on the page and `hIn` opposite; the path selected, `V` armed, 4 handles and 2 grips; a double-click on the top edge → 5 points and a focused handle, `Delete` → 4; `Escape` discards a polygon being drawn (no write, `V` armed), `Enter` closes one of three clicks (one write); the sheet's `maps.pdf?maps=` draws more `c` operators than before |
 | E2E | `e2e/course-editor.spec.ts` "Course editor layout" | from the Maps page into Layout mode on the sheet; the sheet shapes; `H` places a header, the inspector makes it a long 10 mm text, and ink appears where the page layer draws it; the frame selected and dragged → `courseMap.get`'s centre moved by the drag; undo restores it; the `maps.pdf?maps=` route answers one A4 page; the template link opens template scope, an orientation change writes `mapTemplate.update`; the Map templates page's *Edit template layout* opens template scope |
 
@@ -486,5 +485,5 @@ sheet prints through `classes` or `maps`.
   rectangles, text and images still by bounds — flagged for the user
   (feedback 2026-11-04, "Flagged for the morning").
 - **GL-drawn images** with their crop (§1).
-- **Retiring `MapLayoutEditor` and `window.png`'s document branch** —
-  slice E, with the `map.editor.vector` gate.
+- **Retiring `MapLayoutEditor` and `window.png`** — unreachable since
+  E3 (the `map.editor.vector` gate is gone); deleted in E4c / E4a.

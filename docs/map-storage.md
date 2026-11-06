@@ -388,12 +388,10 @@ E1; decision log 2026-11-05). Uploads still write those columns,
 `render_key`, `north_detection` and `club_map_files` (§6.5) so a rollback
 to v0.5.0 works; only the reads moved.
 
-**Every event, whatever its pipeline.** The data readers ignore
-`events.map_pipeline`: a `legacy` event has a pinned document too (the
-switch never gated imports, `map-pipeline-switch.md` §3). The switch
-gates drawing paths only — the viewer, the print path
-(`pinnedDocumentHash`, `course-print.md` §10) and the editor — until E3
-removes it.
+**Every event.** The data readers never read `events.map_pipeline`:
+the switch never gated imports, and since E3 it gates nothing
+(`map-pipeline-switch.md`, history note) — every event draws and prints
+its pinned document.
 
 **No pin, no map.** A reader whose event has no `map_files` row, or
 whose row has no `document_hash` yet (the import is running, failed, or
@@ -1027,15 +1025,13 @@ exporter sends no `maps` (the box gets no map, as before); an old
 importer ignores it.
 
 **Coexistence (09 §10).** The document travels from slice A on whatever
-the event's map pipeline: it is pinned on upload for `legacy` events too
-(09 §3: the switch gates reads, never imports). A box checked out before
-an event is flipped to `vector` therefore already holds what the new
-viewer reads. The per-event switch (`events.map_pipeline`,
-`docs/map-pipeline-switch.md`) does
-not feed results, so under the boundary rule it is cloud-owned and is
-not in `EXCLUDED_FIELDS` of the settings refresh
-(`packages/api/src/sync/settingsRefresh.ts`): a flip on the cloud reaches
-a checked-out box within `SYNC_SETTINGS_REFRESH_MS`, with no re-checkout.
+the event's map pipeline: it was pinned on upload for `legacy` events too
+(09 §3: the switch gated reads, never imports), so a box checked out
+before E3 already holds what the viewer reads. The retired per-event
+switch (`events.map_pipeline`, `docs/map-pipeline-switch.md`) is still a
+column until E5; the settings refresh copies it with the event's other
+cloud-owned fields (it is not in `EXCLUDED_FIELDS` of
+`packages/api/src/sync/settingsRefresh.ts`) and nothing reads it.
 What does not reach it is a *new* document: a map re-imported on the
 cloud during the lease is not refreshed on the box (Pending, §9); the box
 keeps serving the snapshot's document.
@@ -1221,8 +1217,8 @@ row's quick-access columns and `north_detection`, and still writes
 `file_data`, `render_key` and `club_map_files` — for rollback to
 v0.5.0, until E5 drops them; the legacy renderers (`map-tiles.ts`,
 `map-source.ts` `parsedMap`, `club-map-preview.ts`) still parse
-`file_data` until E4a deletes them; `pinnedDocumentHash` keeps its
-`map_pipeline` gate until E3.
+`file_data` until E4a deletes them. E3 removed `pinnedDocumentHash` and
+its `map_pipeline` gate.
 
 ## 10. Tests
 
@@ -1264,7 +1260,7 @@ v0.5.0, until E5 drops them; the legacy renderers (`map-tiles.ts`,
 | Unit (api) | `packages/api/src/__tests__/event-document.test.ts` | §4.6 over a stub db holding an in-memory import of `e2e/test.ocd`: no map / no pin → null with no blob read; frame from the header with the row's correction; control lat/lng equal the legacy CRS's within 1e-8°; header read once per hash; `CRS_UNRESOLVED` → the source's ScalePar (read once per source), scale-only frame when the source finds none, never read for a resolved header; objects / cuts / obstacles null without a pin or blob, decoded once per hash; `documentMapFileColumns` = the pin's columns, with the fallback, scale only; `reportNorth` |
 | Unit (api) | `packages/api/src/__tests__/event-map-objects.test.ts` | `ocadSymbolNumber`; `slimObjectsOfDocument`: kept / dropped symbols and object types, hidden, graphic, applied-match code, outer ring, Bézier flattening, unit scaling |
 | Unit (api) | `packages/api/src/__tests__/document-readers-parity.test.ts` | §4.6 "Parity": CRS, autodetect objects, north, cut features — document vs the legacy OCAD readers on `e2e/test.ocd` and, when present, the local corpus |
-| Integration (api) | `packages/api/src/__tests__/integration/map-document-readers.test.ts` | §4.6 end to end: `mapMetadata` without a render key and without a pin (non-null, `documentHash` null), north from the report; `importCourses` leaves `uploaded_at`; no pin → `controlCoordinates` stored lat/lng, no suggestions, `getBaseMapInfoOrNull` null; a `legacy` event reads its document; lat/lng synced at the pin |
+| Integration (api) | `packages/api/src/__tests__/integration/map-document-readers.test.ts` | §4.6 end to end: `mapMetadata` without a render key and without a pin (non-null, `documentHash` null), north from the report; `importCourses` leaves `uploaded_at`; no pin → `controlCoordinates` stored lat/lng, no suggestions, `getBaseMapInfoOrNull` null; an event reads its document (`getBaseMapInfo().document` is the pin); a new event's `map_pipeline` is `vector` (E3's column default); lat/lng synced at the pin |
 | E2E | `e2e/backup.spec.ts` | UI upload on `itest` → Download backup → `map_sources` / `map_documents` sections hold the source and document hashes before `map_files`, no previews |
 
 ## 11. Where things live

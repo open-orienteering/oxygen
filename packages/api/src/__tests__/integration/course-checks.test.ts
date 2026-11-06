@@ -27,7 +27,6 @@ let legacyCaller: ReturnType<typeof makeCaller>;
 beforeAll(async () => {
   vec = await createTestEvent("course_checks_vector");
   caller = makeCaller(vec.event);
-  await vec.db.event.update({ where: { id: vec.eventId }, data: { mapPipeline: "vector" } });
   // Per-run trailer: content-addressed rows are global (see map-documents.test.ts).
   const bytes = Buffer.concat([readFileSync(FIXTURE), Buffer.from(`checks-${randomBytes(4).toString("hex")}`)]);
   const applied = await applyEventMap(vec.db, vec.eventId, "test.ocd", bytes);

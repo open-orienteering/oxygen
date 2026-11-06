@@ -1,42 +1,17 @@
 import { defineConfig, devices } from "@playwright/test";
 import { E2E_API_PORT, E2E_EVENTOR_PORT, E2E_WEB_PORT } from "./e2e/helpers/ports";
-import type { MapPipeline } from "./e2e/helpers/map-pipeline";
 
 /**
- * Specs run once per map pipeline while both exist
- * (docs/map-pipeline-switch.md §5, 09 §3 / §10): projects `map-legacy`
- * and `map-vector` set every event's `map_pipeline` before each test.
- * They import `test` from `e2e/helpers/map-pipeline.ts`. Every spec in
- * none of the three lists runs once, in `chromium`, on whatever the spec
- * sets itself. A file run by more than one project has a per-project
- * weight in `scripts/e2e-weights.mjs` (`scripts/__tests__/e2e-config.test.mjs`).
- */
-export const MAP_PIPELINE_SPECS = [
-  "**/webserial.spec.ts",
-  "**/mobile-layout.spec.ts",
-  "**/map-viewer-gestures.spec.ts",
-  "**/map-control-circles.spec.ts",
-  "**/map-multicourse.spec.ts",
-  "**/course-maps.spec.ts",
-];
-
-/**
- * Specs for the new course editor, which exists for `vector` only
- * (docs/map-pipeline-switch.md §5, D10): project `map-vector` runs them on
- * the desktop, never `map-legacy` or `chromium`. The legacy page's spec,
- * `course-editor-legacy.spec.ts`, stays in `chromium`.
- */
-export const VECTOR_ONLY_SPECS = [
-  "**/course-editor.spec.ts",
-];
-
-/**
+ * Every event reads the vector pipeline since E3 (docs/map-pipeline-switch.md,
+ * history note): every spec runs once, in `chromium`, except the phone's.
+ *
  * Specs for the phone (docs/course-editor.md §10; 08 §7): project `mobile`
- * runs them on `devices["Pixel 7"]` (touch, coarse pointer, 412 px) under
- * `vector` — the new editor has no legacy run. `course-editor.spec.ts` is
- * here for its touch describe; its desktop describes skip on a phone
- * (`isMobile`), and `field-mode.spec.ts`'s desktop describe sets its own
- * device.
+ * runs them on `devices["Pixel 7"]` (touch, coarse pointer, 412 px).
+ * `course-editor.spec.ts` runs in `chromium` too and is here for its touch
+ * describe; its desktop describes skip on a phone (`isMobile`).
+ * `field-mode.spec.ts` runs in `mobile` only; its desktop describe sets its
+ * own device. A file run by more than one project has a per-project weight
+ * in `scripts/e2e-weights.mjs` (`scripts/__tests__/e2e-config.test.mjs`).
  */
 export const MOBILE_SPECS = [
   "**/field-mode.spec.ts",
@@ -62,7 +37,7 @@ const SHARD = process.env.E2E_SHARD;
 
 const DATABASE_URL = `postgresql://oxygen:oxygen@localhost:5433/${DB_NAME}?schema=oxygen`;
 
-export default defineConfig<{ mapPipeline: MapPipeline }>({
+export default defineConfig({
   testDir: "./e2e",
   globalSetup: "./e2e/global-setup.ts",
   globalTeardown: "./e2e/global-teardown.ts",
@@ -92,23 +67,13 @@ export default defineConfig<{ mapPipeline: MapPipeline }>({
   projects: [
     {
       name: "chromium",
-      testIgnore: [...MAP_PIPELINE_SPECS, ...VECTOR_ONLY_SPECS, ...MOBILE_SPECS],
+      testIgnore: ["**/field-mode.spec.ts"],
       use: { ...devices["Desktop Chrome"] },
-    },
-    {
-      name: "map-legacy",
-      testMatch: MAP_PIPELINE_SPECS,
-      use: { ...devices["Desktop Chrome"], mapPipeline: "legacy" },
-    },
-    {
-      name: "map-vector",
-      testMatch: [...MAP_PIPELINE_SPECS, ...VECTOR_ONLY_SPECS],
-      use: { ...devices["Desktop Chrome"], mapPipeline: "vector" },
     },
     {
       name: "mobile",
       testMatch: MOBILE_SPECS,
-      use: { ...devices["Pixel 7"], mapPipeline: "vector" },
+      use: { ...devices["Pixel 7"] },
     },
   ],
 
@@ -140,9 +105,6 @@ export default defineConfig<{ mapPipeline: MapPipeline }>({
         OXYGEN_ADMIN_EMAILS: "e2e-admin@oxygen.test",
         OXYGEN_BUILD_ID: "e81729be4f7fd564c47bb2098137403ef6dcb922",
         OXYGEN_DEPLOY_REF: "e2e",
-        // Read the map pipeline flags on every request: the dual-run
-        // projects flip `map.pipeline.default` between tests.
-        MAP_PIPELINE_FLAGS_TTL_MS: "0",
         RSVG_CONVERT_COMMAND: `${process.cwd()}/e2e/helpers/fake-rsvg-convert.mjs`,
       },
     },

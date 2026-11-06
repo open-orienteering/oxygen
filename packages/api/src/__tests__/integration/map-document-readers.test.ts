@@ -38,8 +38,9 @@ async function legacyCrs(): Promise<OcadCrs> {
 beforeAll(async () => {
   ctx = await createTestEvent("document_readers");
   caller = makeCaller(ctx.event);
-  // The default pipeline: these readers do not look at it.
-  expect((await ctx.db.event.findUniqueOrThrow({ where: { id: ctx.eventId } })).mapPipeline).toBe("legacy");
+  // Since E3 a new event gets `vector` from the column default; nothing
+  // reads the column (docs/map-pipeline-switch.md, history note).
+  expect((await ctx.db.event.findUniqueOrThrow({ where: { id: ctx.eventId } })).mapPipeline).toBe("vector");
   // A positioned control before the map: the pin gives it lat/lng.
   await ctx.db.control.create({ data: { eventId: ctx.eventId, codes: "31", xpos: 10, ypos: 20, lat: 1, lng: 2 } });
   const applied = await applyEventMap(ctx.db, ctx.eventId, "test.ocd", uniqueBytes("readers"));
@@ -52,7 +53,7 @@ afterAll(async () => {
   await disconnect();
 });
 
-describe("a legacy event reads its pinned document", () => {
+describe("an event reads its pinned document", () => {
   it("CRS: the document's frame, the legacy positions", async () => {
     const frame = await loadEventCrs(ctx.db, ctx.eventId);
     const legacy = frameFromOcadCrs(await legacyCrs())!;
@@ -75,17 +76,11 @@ describe("a legacy event reads its pinned document", () => {
     expect(candidates.length).toBeGreaterThan(0);
   });
 
-  it("print scale and tilt from the document; the document itself only on the vector path", async () => {
+  it("print scale, tilt and the document itself from the pin", async () => {
     const info = await getBaseMapInfo(ctx.db, ctx.eventId);
     expect(info.scale).toBe((await legacyCrs()).scale);
     expect(info.version).toBe(documentHash);
-    expect(info.document).toBeNull();
-    await ctx.db.event.update({ where: { id: ctx.eventId }, data: { mapPipeline: "vector" } });
-    try {
-      expect((await getBaseMapInfo(ctx.db, ctx.eventId)).document).toEqual({ hash: documentHash });
-    } finally {
-      await ctx.db.event.update({ where: { id: ctx.eventId }, data: { mapPipeline: "legacy" } });
-    }
+    expect(info.document).toEqual({ hash: documentHash });
   });
 });
 

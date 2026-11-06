@@ -13,6 +13,11 @@
  * The canvas is not rotated by CSS: the viewport rotation is part of the
  * GL view (`glView`), so nothing is resampled. The engine and its worker
  * live as long as the layer; `view` changes only redraw (one per frame).
+ *
+ * No WebGL2, or a context lost a second time, shows the layer's "cannot
+ * draw the map" message (`data-status="webgl"`); the first lost context
+ * remounts the canvas (a fresh context) and loads again (§5.4 "Layer").
+ * There is no tile fallback since E3.
  */
 
 import { useCallback, useEffect, useRef, useState } from "react";
@@ -49,11 +54,6 @@ interface Props {
   height: number;
   budget: MapBudget;
   zIndex?: number;
-  /**
-   * The browser cannot draw this layer: no WebGL2 context, or the context
-   * was lost. The host decides the fallback (docs/map-pipeline-switch.md §3).
-   */
-  onUnavailable?: () => void;
   /** The course layer to draw (§5.2 "Dynamic bucket"); `null` none. */
   course?: CourseLayerRequest | null;
   /** Each current course reply: the derivation and sizes the UI layer is drawn from. */
@@ -64,7 +64,7 @@ interface Props {
   loupe?: VectorLoupe | null;
 }
 
-export function VectorMapLayer({ doc, view, width, height, budget, zIndex = 1, onUnavailable, course = null, onCourse, onCourseSupport, loupe = null }: Props) {
+export function VectorMapLayer({ doc, view, width, height, budget, zIndex = 1, course = null, onCourse, onCourseSupport, loupe = null }: Props) {
   const { t } = useTranslation("dashboard");
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const engineRef = useRef<MapGlEngine | null>(null);
@@ -73,9 +73,10 @@ export function VectorMapLayer({ doc, view, width, height, budget, zIndex = 1, o
   viewRef.current = view;
   const frameRef = useRef<number | null>(null);
   const [status, setStatus] = useState<VectorLayerStatus>("loading");
+  // Each attempt is a fresh canvas (`key`): a lost context cannot be had
+  // again from the same element. `lostRef` counts lost contexts.
   const [attempt, setAttempt] = useState(0);
-  const unavailableRef = useRef(onUnavailable);
-  unavailableRef.current = onUnavailable;
+  const lostRef = useRef(0);
 
   const loupeRef = useRef(loupe);
   loupeRef.current = loupe;
@@ -129,13 +130,13 @@ export function VectorMapLayer({ doc, view, width, height, budget, zIndex = 1, o
       renderer = new MapGlRenderer(canvas);
     } catch {
       setStatus("webgl");
-      unavailableRef.current?.();
       return;
     }
-    // A lost context is not restored here; the host falls back or shows the message.
+    // A lost context: remount once on a fresh canvas, then the message.
     const onContextLost = () => {
-      setStatus("webgl");
-      unavailableRef.current?.();
+      lostRef.current += 1;
+      if (lostRef.current === 1) setAttempt((a) => a + 1);
+      else setStatus("webgl");
     };
     canvas.addEventListener("webglcontextlost", onContextLost);
     // The worker starts with the layer, before the fonts and the document reach it.
@@ -219,8 +220,10 @@ export function VectorMapLayer({ doc, view, width, height, budget, zIndex = 1, o
   return (
     <>
       <canvas
+        key={attempt}
         ref={canvasRef}
         data-testid="map-vector-layer"
+        data-attempt={attempt}
         data-document-hash={doc.hash}
         data-status={status}
         data-ready={status === "complete" ? "true" : "false"}

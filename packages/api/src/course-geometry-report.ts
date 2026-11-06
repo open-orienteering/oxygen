@@ -33,7 +33,6 @@ export interface CourseReport {
 export interface EventReport {
   event: string;
   name: string;
-  pipeline: string;
   /** Where the written cuts come from: `document`, `off` (toggle) or `none` (no pin). */
   cutSource: string;
   hasDocument: boolean;
@@ -49,7 +48,7 @@ export interface GeometryReport {
 export async function buildGeometryReport(db: Db, opts: { eventNameIds?: string[] } = {}): Promise<GeometryReport> {
   const events = await db.event.findMany({
     where: { removed: false, ...(opts.eventNameIds ? { nameId: { in: opts.eventNameIds } } : {}) },
-    select: { id: true, nameId: true, name: true, mapPipeline: true, autoOverprintCuts: true },
+    select: { id: true, nameId: true, name: true, autoOverprintCuts: true },
     orderBy: { id: "asc" },
   });
   const out: EventReport[] = [];
@@ -83,7 +82,6 @@ export async function buildGeometryReport(db: Db, opts: { eventNameIds?: string[
     out.push({
       event: ev.nameId,
       name: ev.name,
-      pipeline: ev.mapPipeline,
       cutSource: ev.autoOverprintCuts === false ? "off" : written ? "document" : "none",
       hasDocument: written !== null,
       courses,
@@ -179,9 +177,9 @@ export function formatGeometryReport(report: GeometryReport): string {
     "",
     "## Events",
     "",
-    "| event | pipeline | cut source | document | courses |",
-    "|---|---|---|---|---|",
-    ...report.events.map((e) => `| ${e.event} | ${e.pipeline} | ${e.cutSource} | ${e.hasDocument ? "yes" : "no"} | ${e.courses.length} |`),
+    "| event | cut source | document | courses |",
+    "|---|---|---|---|",
+    ...report.events.map((e) => `| ${e.event} | ${e.cutSource} | ${e.hasDocument ? "yes" : "no"} | ${e.courses.length} |`),
     "",
     "## Differing editor courses",
     "",

@@ -59,7 +59,6 @@ async function enter(page: Page): Promise<void> {
 }
 
 test.beforeAll(async ({ browser }) => {
-  // The seed is `vector` with the new editor on (docs/map-pipeline-switch.md §5).
   await reseed();
   const { ctx, page } = await open(browser);
   await page.goto("/");
