@@ -54,6 +54,7 @@ import { snapIndexForDocument } from "../../lib/editor/snap";
 import { deleteVertex, vertexRule, type Vertex } from "../../lib/editor/geometry-edit";
 import { legLengthLabel, legLengthM } from "../../lib/editor/leg-length";
 import { EditorConflict, EditorWrites, type EditorClient } from "../../lib/editor/write-client";
+import { instructionsOnCourse, type Instructions } from "../../lib/editor/instructions";
 import { areaTool, editorReducer, escapeHasWork, initialEditorState, type EditorTool } from "../../lib/editor/state";
 import { appendSite, insertSite, moveVisit, removeSite, removeVisit, setLegGaps, setNumberHidden, setRole, type KindOf } from "../../lib/editor/structure-edit";
 import { displaySequence, effectiveEnds, explicitStructure, insertIndexForLeg, kindOfSites, type SiteRow } from "../../lib/editor/sequence";
@@ -329,6 +330,37 @@ export function EditorPage() {
     record(() => writeStructure(course.id, prev), redo);
     return true;
   }, [currentStructure, baseStructure, writeStructure, run, record]);
+
+  /**
+   * Description instructions (§4): the value this client wrote last, until `course.list` has it (a second
+   * edit right after the first builds on the first); `version` is null while the write is in flight.
+   */
+  const [localInstructions, setLocalInstructions] = useState<{ courseId: number; value: Instructions; version: string | null } | null>(null);
+  const instructionsBase: Instructions =
+    localInstructions && selectedCourse && localInstructions.courseId === selectedCourse.id &&
+    (localInstructions.version === null || BigInt(selectedCourse.version) < BigInt(localInstructions.version))
+      ? localInstructions.value
+      : selectedCourse?.descriptionInstructions ?? null;
+  const shownInstructions = useMemo(() => instructionsOnCourse(instructionsBase, sequenceIds), [instructionsBase, sequenceIds]);
+  const instructionsNow = useRef(shownInstructions);
+  instructionsNow.current = shownInstructions;
+  /** One instructions write; Layout mode's block reads the course's value through `resolveSheet`, so it is refetched. */
+  const writeInstructions = useCallback(async (courseId: number, value: Instructions) => {
+    const res = await writes.setInstructions(courseId, value);
+    void utils.courseMap.resolveSheet.invalidate();
+    return res;
+  }, [writes, utils]);
+  const handleInstructions = useCallback(async (next: Instructions) => {
+    const course = latest.current.selectedCourse;
+    const prev = instructionsNow.current;
+    if (!course || JSON.stringify(prev) === JSON.stringify(next)) return;
+    setLocalInstructions({ courseId: course.id, value: next, version: null });
+    const redo = () => writeInstructions(course.id, next);
+    const res = await run(redo);
+    if (res === undefined) { setLocalInstructions(null); return; }
+    setLocalInstructions((l) => (l && l.courseId === course.id && l.value === next ? { ...l, version: res.version } : l));
+    record(() => writeInstructions(course.id, prev), redo);
+  }, [writeInstructions, run, record]);
 
   /**
    * Create a site at `pt` — a control (code from the club allocation; SRR codes get radio) or a code-less
@@ -1467,6 +1499,8 @@ export function EditorPage() {
       onSelectRow={(id) => dispatch({ type: "select", id })}
       selectedControlId={state.selectedControlId}
       radioIds={radioIds}
+      instructions={shownInstructions}
+      onInstructions={(next) => void handleInstructions(next)}
     />
   );
   const selectionSection = state.multi.length > 1 ? (
