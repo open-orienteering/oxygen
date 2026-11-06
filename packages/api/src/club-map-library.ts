@@ -4,8 +4,8 @@
  * `club_map_versions` row and that version's `map_sources` /
  * `map_documents` rows — extent and north from the document's header and
  * import report, under the series' `rotation_correction`; the preview is
- * the version document's thumbnail. Nothing here reads the write-through
- * `club_map_files` row (E4a). Pure, so the precedence rules are
+ * the version document's thumbnail (the legacy `club_map_files` table went
+ * in E5). Pure, so the precedence rules are
  * unit-tested without a database.
  */
 import { TRPCError } from "@trpc/server";

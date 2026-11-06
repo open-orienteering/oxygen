@@ -177,7 +177,7 @@ describe("import jobs from applyEventMap", () => {
     await ctx.db.mapFile.update({ where: { id: file.id }, data: { rotationCorrection: 0, ...expected as object } });
   }, 60_000);
 
-  it("leaves the columns alone when the document has no projectable CRS", async () => {
+  it("writes the columns through the source fallback when the document has no projectable CRS (E5: the pin is the only writer)", async () => {
     const other = await createTestEvent("map_jobs_nocrs");
     try {
       // Grid 99999 is in no table: the document says crs null + CRS_UNRESOLVED, the raster path still infers SWEREF99 TM.
@@ -467,6 +467,28 @@ describe("chunked upload routes", () => {
     const created = await caller.clubMap.addFromSource({ fileHash: fixtureHash, fileName: "lib.ocd", name: `Club ${suffix} via chunks` });
     expect(created.importJob?.state).toBe("done");
     expect(created.fileName).toBe("lib.ocd");
+  }, 60_000);
+
+  it("a Mapper source becomes an event map and a club map (E5: no OCAD parse at upload)", async () => {
+    const xmap = readFileSync(resolve(__dirname, "../../../../../e2e/test.xmap"));
+    const xmapHash = sha256(xmap);
+    await ctx.db.mapSource.createMany({ data: [{ fileHash: xmapHash, kind: "omap", bytes: xmap, sizeBytes: xmap.byteLength, fileName: "test.xmap" }], skipDuplicates: true });
+    createdSourceHashes.add(xmapHash);
+    const other = await createTestEvent("map_jobs_omap");
+    try {
+      const applied = await makeCaller(other.event).course.applyUploadedMap({ fileHash: xmapHash, fileName: "event.xmap" });
+      expect(applied).toMatchObject({ success: true, fileName: "event.xmap", size: xmap.byteLength, rotationCorrection: 0 });
+      expect(applied.importJob?.state).toBe("done");
+      const file = await ctx.db.mapFile.findFirstOrThrow({ where: { eventId: other.eventId }, select: { sourceHash: true, documentHash: true } });
+      expect(file).toEqual({ sourceHash: xmapHash, documentHash: applied.documentHash });
+      const doc = await ctx.db.mapDocument.findUniqueOrThrow({ where: { hash: applied.documentHash! }, select: { importerVersion: true } });
+      expect(doc.importerVersion).toMatch(/^omap-/);
+    } finally {
+      await other.cleanup();
+    }
+    const club = await makeCaller(null, { user: admin, authEnabled: true, authMode: "proxy" }).clubMap.addFromSource({ fileHash: xmapHash, name: `Club ${suffix} mapper` });
+    expect(club.importJob?.state).toBe("done");
+    expect(await ctx.db.clubMapVersion.count({ where: { clubMapId: club.id } })).toBe(1);
   }, 60_000);
 });
 

@@ -20,6 +20,8 @@
 -- source) is skipped.
 
 \set ON_ERROR_STOP on
+-- ADD COLUMN IF NOT EXISTS notices for columns the dump already has.
+SET client_min_messages = warning;
 \if :{?event_id}
 \else
   \echo 'restore-legacy-map-files.sql needs -v event_id=<the restored event''s id>'
@@ -32,27 +34,31 @@ BEGIN;
 
 SELECT set_config('oxygen.restore_header', :'header', true);
 
--- Every column of the dump's header as text, then the ones this script
--- reads added when the dump's release did not have them.
+-- Every column of the dump's header, in its order, as text.
 DO $$
 DECLARE
   cols TEXT[] := string_to_array(trim(both E'\r' from current_setting('oxygen.restore_header')), ',');
-  known TEXT[] := ARRAY['file_name', 'file_data', 'uploaded_at', 'scale', 'bounds', 'north_offset', 'calibration',
-                        'rotation_correction', 'north_detection', 'from_club_library', 'source_hash', 'document_hash',
-                        'club_map_version_id'];
-  c TEXT;
 BEGIN
   IF NOT ('file_data' = ANY (cols)) THEN
     RAISE EXCEPTION 'map_files.csv has no file_data column: a v0.6.1 or later dump, restore it with restore-map-blobs.sql';
   END IF;
   EXECUTE format('CREATE TEMP TABLE restore_legacy_map_files (%s) ON COMMIT DROP',
                  (SELECT string_agg(format('%I text', x), ', ') FROM unnest(cols) AS x));
-  FOREACH c IN ARRAY known LOOP
-    EXECUTE format('ALTER TABLE restore_legacy_map_files ADD COLUMN IF NOT EXISTS %I text', c);
-  END LOOP;
 END $$;
 
 \copy restore_legacy_map_files FROM 'map_files.csv' WITH (FORMAT csv, HEADER true)
+
+-- The columns this script reads that the dump's release did not have yet, as NULLs.
+DO $$
+DECLARE
+  c TEXT;
+BEGIN
+  FOREACH c IN ARRAY ARRAY['file_name', 'uploaded_at', 'scale', 'bounds', 'north_offset', 'calibration',
+                           'rotation_correction', 'north_detection', 'from_club_library', 'source_hash',
+                           'document_hash', 'club_map_version_id'] LOOP
+    EXECUTE format('ALTER TABLE restore_legacy_map_files ADD COLUMN IF NOT EXISTS %I text', c);
+  END LOOP;
+END $$;
 
 -- bytea travels as `\x` hex in the dump.
 CREATE TEMP TABLE restore_legacy_rows ON COMMIT DROP AS
