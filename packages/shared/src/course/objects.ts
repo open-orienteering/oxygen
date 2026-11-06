@@ -166,6 +166,21 @@ export function objectColours(objects: readonly (CourseMapObject | CourseLayerOb
   return out;
 }
 
+/**
+ * The toner saver's own white row (§3.6, P1): on top of the layer's
+ * stack, above upper purple and the layout-object rows, so the white-out
+ * outside covers everything the map layer draws — the map's text in rows
+ * above purple, 709 areas, layout text. The page layer comes after it.
+ */
+export const TONER_WHITE_ID = "course:toner-saver-white";
+
+/** Whether the layer draws a map-anchored white-out outside (a `toner_saver` object or a `whiteoutInverted` map object). */
+export function hasTonerSaver(objects: readonly (CourseMapObject | CourseLayerObject)[]): boolean {
+  return objects.some((o) => isCourseObject(o)
+    ? o.kind === "toner_saver"
+    : o.anchor === "map" && (o.kind === "path" || o.kind === "rectangle") && o.fillMode === "whiteoutInverted");
+}
+
 /** A stored path's construction as a render path: a handle on either end makes the segment a cubic. */
 function vertexPath(points: readonly PathVertex[], closed: boolean): { coords: number[]; flags: number[] } {
   const coords: number[] = [um(points[0].x), um(points[0].y)];
@@ -209,6 +224,8 @@ export function layoutObjects(
   colourOf: (hex: string) => number,
   view: CourseViewOptions,
   upperPurple: number,
+  /** The colour a white-out outside fills: the map layer's toner white row; the page layer's upper white when absent. */
+  tonerWhite?: number,
 ): ObjectBuild {
   const os = view.overprintScale && view.overprintScale > 0 ? view.overprintScale : 1;
   const out: ObjectBuild = { objects: [], images: [], warnings: [] };
@@ -237,7 +254,8 @@ export function layoutObjects(
     const ring = view.window.flatMap((p: MapPoint) => [um(p.x), um(p.y)]);
     const flags = [...new Array(view.window.length).fill(0), ...shape.flags];
     flags[view.window.length] |= COORD_FLAG.hole;
-    out.objects.push({ symbolIdx: set.idx.whiteout, path: makePath([...ring, ...shape.coords], flags, true), ref });
+    const symbolIdx = tonerWhite === undefined ? set.idx.whiteout : symbol({ type: "area", fill: tonerWhite });
+    out.objects.push({ symbolIdx, path: makePath([...ring, ...shape.coords], flags, true), ref });
   };
   const textSymbol = (fontFamily: keyof typeof FONT | undefined, sizeUm: number, colour: number, align: "left" | "center" | "right" | undefined) =>
     symbol({ type: "text", fontFamily: FONT[fontFamily ?? "sans"], fontSizeUm: sizeUm, colour, align: align === "center" ? "centre" : (align ?? "left") });

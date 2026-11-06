@@ -62,10 +62,11 @@ describe("composePage", () => {
     expect(page.pageLayer.stream.passes).toEqual([]);
   });
 
-  it("white-out outside: the map ring's outer boundary is the frame (+1 mm under the clip) through T_map⁻¹; the page white-out is upper white", () => {
+  it("white-out outside: the map ring's outer boundary is the frame (+1 mm under the clip) through T_map⁻¹, in the toner saver's white; the page white-out is upper white", () => {
     const page = composePage(pageScene("page-ring"), fonts());
     const whiteUpper = idOf(page.colours, "white-upper");
-    const ring = page.mapLayer.stream.passes.find((p) => p.kind === "fill" && p.colour === whiteUpper && pathRings(p.path).length === 2);
+    const toner = page.colours.findIndex((c) => c.id === "course:toner-saver-white");
+    const ring = page.mapLayer.stream.passes.find((p) => p.kind === "fill" && p.colour === toner && pathRings(p.path).length === 2);
     expect(ring).toBeDefined();
     const f = page.frameUm, d = RING_BLEED_UM;
     const outer = frameInMap(page.mapLayer.transform, { x: f.x - d, y: f.y - d, width: f.width + 2 * d, height: f.height + 2 * d });
@@ -76,6 +77,29 @@ describe("composePage", () => {
     expect(pageFill).toBeDefined();
     // The page white-out at (84, 62) 32 × 24 page mm, y-up: lower-left (84, 90 − 86).
     expect(Array.from(pageFill!.kind === "fill" ? pageFill!.path.coords.slice(0, 2) : [])).toEqual([84000, 4000]);
+  });
+
+  it("a map toner saver covers the map layer's text and 709 areas outside it: its ring is the last map pass, the page layer after (P1)", () => {
+    const base = pageScene("page-ring");
+    const outside = [
+      { id: 9, kind: "oob_area" as const, geometry: [{ x: 42, y: 30 }, { x: 55, y: 30 }, { x: 55, y: 45 }], props: {} },
+      { id: 10, kind: "text" as const, geometry: [{ x: -55, y: 40 }], props: { text: "Ingen passage", fontSizeMm: 3 } },
+    ];
+    const label = { id: "label", anchor: "map" as const, kind: "text" as const, x: 45, y: -40, text: "{course}", fontSizeMm: 4, color: "#1f6fb2" };
+    const page = composePage({ ...base, objects: [...base.objects, label], course: { ...base.course, objects: outside } }, fonts());
+    expect(page.warnings).toEqual([]);
+    const passes = page.mapLayer.stream.passes;
+    const toner = page.colours.findIndex((c) => c.id === "course:toner-saver-white");
+    const last = passes.at(-1)!;
+    if (last.kind !== "fill") throw new Error("the last map pass is not a fill");
+    expect(last.colour).toBe(toner);
+    expect(pathRings(last.path)).toHaveLength(2);
+    expect(passes.filter((p) => p.colour === toner)).toHaveLength(1);
+    const upper = idOf(page.colours, "purple-upper");
+    expect(passes.some((p) => p.kind === "hatch" && p.colour === upper)).toBe(true);
+    expect(passes.filter((p) => p.kind === "text").length).toBeGreaterThan(0);
+    // The page layer is its own stream, written after the map layer (writePage), so the page box stays.
+    expect(page.pageLayer.stream.passes.some((p) => p.kind === "fill")).toBe(true);
   });
 
   it("a page-anchored white-out outside rings the frame grown by 1 mm", () => {

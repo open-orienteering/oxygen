@@ -161,6 +161,34 @@ describe("layout objects (§3.6)", () => {
     expect(missing.warnings.map((w) => w.code)).toEqual(["WINDOW_MISSING"]);
   });
 
+  it("a toner saver fills a white row on top of the stack, above upper purple and every layout colour (P1); none without one", () => {
+    const window = [{ x: 0, y: 0 }, { x: 100, y: 0 }, { x: 100, y: 100 }, { x: 0, y: 100 }];
+    const text: CourseMapObject = { id: "t", anchor: "map", kind: "text", x: 5, y: 5, text: "x", fontSizeMm: 3, color: "#0000ff" };
+    const saver: CourseLayerObject = { id: 7, kind: "toner_saver", geometry: [{ x: 10, y: 10 }, { x: 60, y: 10 }, { x: 60, y: 60 }], props: {} };
+    const oob: CourseLayerObject = { id: 8, kind: "oob_area", geometry: [{ x: 70, y: 70 }, { x: 90, y: 70 }, { x: 90, y: 90 }], props: {} };
+    for (const toner of [rect("whiteoutInverted"), saver]) {
+      const layer = courseLayer(layerInput({ objects: [text, oob, toner], viewOptions: { window } }));
+      const ring = layer.objects.find((o) => o.path.flags.some((f) => f & 16))!;
+      const fill = layer.symbols[ring.symbolIdx];
+      expect(fill.type).toBe("area");
+      const row = fill.type === "area" ? fill.fill : -1;
+      expect(row).toBe(layer.colours.length - 1);
+      expect(layer.colours[row]).toMatchObject({ id: "course:toner-saver-white", cmyk: [0, 0, 0, 0] });
+      // Symbolised with the document: the ring is the last pass — after the map's black, the course's upper
+      // purple (numbers, the 709 area) and the layout text's own row.
+      const { stream } = symbolise({ ...courseRenderInput(isomDocument(), layer), fonts: fonts() });
+      const ids = stream.passes.map((p) => colourId(layer, p.colour));
+      expect(ids.at(-1)).toBe("course:toner-saver-white");
+      expect(ids.filter((id) => id === "course:toner-saver-white")).toHaveLength(1);
+      expect(ids).toEqual(expect.arrayContaining(["black100", "purple-upper", "course-object:#0000ff"]));
+    }
+    // A plain white-out stays at upper white, and no row is added without a toner saver.
+    const plain = courseLayer(layerInput({ objects: [rect("whiteout")], viewOptions: { window } }));
+    expect(plain.colours.some((c) => c.id === "course:toner-saver-white")).toBe(false);
+    // Nor when the saver is not drawn (no window: the viewer, WINDOW_MISSING).
+    expect(courseLayer(layerInput({ objects: [saver] })).colours.some((c) => c.id === "course:toner-saver-white")).toBe(false);
+  });
+
   it("images are returned for the page backends, not as objects", () => {
     const layer = courseLayer(layerInput({ objects: [{ id: "img", anchor: "map", kind: "image", graphicId: 3, x: 1, y: 2, width: 3, height: 4 }] }));
     expect(layer.images).toEqual([expect.objectContaining({ rectUm: { x: 1000, y: 2000, width: 3000, height: 4000 } })]);

@@ -16,10 +16,12 @@ import { remapRenderColours } from "../render/transform.js";
 import { circleWithGaps } from "./arcs.js";
 import { courseColourStack, withObjectColours } from "./colour-stack.js";
 import { deriveCourse } from "./derive.js";
-import { filterRegionOf, layoutObjects, objectColours, isCourseObject } from "./objects.js";
+import { TONER_WHITE_ID, filterRegionOf, hasTonerSaver, layoutObjects, objectColours, isCourseObject } from "./objects.js";
 import { courseSymbols } from "./symbols.js";
 import type { CourseFilterRegion, CourseLayer, CourseLayerInput, CourseRenderObject } from "./types.js";
 import type { MapPoint } from "../course-maps/schema.js";
+
+const TONER_WHITE = { id: TONER_WHITE_ID, name: "Toner saver white", cmyk: [0, 0, 0, 0] as [number, number, number, number] };
 
 const um = (mm: number) => Math.round(mm * 1000);
 const line = (pts: readonly MapPoint[], closed = false) => makePath(pts.flatMap((p) => [um(p.x), um(p.y)]), undefined, closed);
@@ -65,13 +67,17 @@ export function courseLayer(input: CourseLayerInput): CourseLayer {
 
   const symbols: RenderSymbol[] = [...set.symbols];
   const palette = withObjectColours(stack.colours, objectColours(input.objects));
-  const built = layoutObjects(input.objects, set, symbols, palette.indexOf, input.viewOptions, stack.index.get("purple-upper")!);
+  // A toner saver covers everything the map layer draws: its white is the top row (objects.ts, P1).
+  const drawsToner = (input.viewOptions.window?.length ?? 0) >= 3 && hasTonerSaver(input.objects);
+  const colours = drawsToner ? [...palette.colours, TONER_WHITE] : palette.colours;
+  const tonerWhite = drawsToner ? colours.length - 1 : undefined;
+  const built = layoutObjects(input.objects, set, symbols, palette.indexOf, input.viewOptions, stack.index.get("purple-upper")!, tonerWhite);
   objects.push(...built.objects);
 
   // Stored filter regions (§8.3) follow the explicit ones.
   const stored = input.objects.flatMap((o) => (isCourseObject(o) && o.kind === "filter_region" ? [filterRegionOf(o)] : []));
   const regions = [...(input.regions ?? []), ...stored].map((r) => filterRegion(r, stack.remap));
-  return { colours: palette.colours, remap: stack.remap, symbols, objects, images: built.images, derivation, warnings: built.warnings, regions };
+  return { colours, remap: stack.remap, symbols, objects, images: built.images, derivation, warnings: built.warnings, regions };
 }
 
 /** A course filter region in stream units: rings → one closed path (holes flagged), document colours → the completed stack. */

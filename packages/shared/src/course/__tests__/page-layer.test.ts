@@ -11,13 +11,14 @@ import { mapLayerTransform, pagePointToMap } from "../../print/page.js";
 import { liberation } from "../../render/__tests__/fonts.js";
 import type { TextPass } from "../../render/pass-stream.js";
 import { courseLayer } from "../layer.js";
-import { pageLayer, pageStreamInMap } from "../page-layer.js";
+import { mapLayerWindow, pageLayer, pageStreamInMap } from "../page-layer.js";
 
 const fonts = () => [liberation().sans, liberation().narrow];
 
 function layerColours(name: "page-sprint-a4" | "page-ring") {
   const input = pageScene(name);
-  const layer = courseLayer({ ...input.course, objects: input.objects, document: input.map.context });
+  // The composer's map-layer input: the window is what draws a toner saver (and adds its white row, P1).
+  const layer = courseLayer({ ...input.course, objects: input.objects, document: input.map.context, viewOptions: { ...input.course.viewOptions, window: mapLayerWindow(input) } });
   return { input, colours: layer.colours };
 }
 
