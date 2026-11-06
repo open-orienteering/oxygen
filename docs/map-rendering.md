@@ -1521,32 +1521,47 @@ published on `window.__mapGlDoc` for Playwright.
 
 ### 5.4 Viewer
 
-`MapViewer` hosts one base layer — the PNG tiles (`TileLayer`, legacy) or
-the map document drawn by §5.2's arena path (`VectorMapLayer`) — and keeps
-everything else it had: gestures, measure, compass and rotation lock, GPS,
-the course overlay, the editor's hit targets. Under `legacy` the overlay
-(controls, legs, course geometry, GPS position and tracks, measure,
-selection) is React SVG on top of the tiles, unchanged. Under `vector`
-the course itself is drawn by the renderer in colour order with the map
-(C4, "Overlay" below) and the SVG keeps the UI layer. `TileLayer.tsx` is
-unchanged.
+`MapViewer` hosts one base layer — the map document drawn by §5.2's arena
+path (`VectorMapLayer`) — and keeps everything else it had: gestures,
+measure, compass and rotation lock, GPS, the course overlay, the editor's
+hit targets. The course itself is drawn by the renderer in colour order
+with the map (C4, "Overlay" below) and the React SVG keeps the UI layer.
+The PNG tiles (`TileLayer`) were the other base layer until E3; their
+path is unreachable since (`MapPanel` mounts no viewer without a
+document) and goes in E4b.
 
 #### Selecting the layer
 
 ```
-pipeline = event == "vector" ∧ documentHash ≠ null ∧ (webgl2 ∨ ¬allowLegacy) ? "vector" : "legacy"
+panel = no map ? upload prompt : documentHash ≠ null ? viewer (vector layer) : import state
 ```
 
-The event's switch `events.map_pipeline` and the instance flag
-`map.pipeline.allowLegacy` decide it (`docs/map-pipeline-switch.md` §3,
-row B5): `MapPanel` reads `event.mapPipeline`, resolves the rule with
-`resolveMapPipeline` (`lib/map-pipeline.ts`) and passes the result as
-`MapViewer`'s `mapPipeline` prop (default `legacy`), remounting the
-viewer when it changes. `documentHash` is `course.mapMetadata.documentHash`
-(the event's pinned document, `docs/map-storage.md` §6.4); a map without
-one (before the backfill, §6.7 of `map-storage.md`) stays on tiles. The
-viewer exposes the result as `data-map-pipeline` on `map-viewer`. B4's
-per-browser `localStorage["oxygen-map-pipeline"]` flag is gone.
+Since E3 there is no per-event switch (`docs/map-pipeline-switch.md`,
+history note): every event draws its pinned document.
+`documentHash` is `course.mapMetadata.documentHash` (the event's pinned
+document, `docs/map-storage.md` §6.4); `MapPanel` passes it to
+`MapViewer`, keyed on it, and the viewer draws the paper view whenever it
+has one (`data-map-pipeline="vector"`; the attribute goes with the tile
+path in E4b).
+
+**A map without a pinned document** — its import queued or running,
+failed, finished with a document the event does not use (an import that
+waits for review), or a map from before the backfill (§6.7 of
+`map-storage.md`) — mounts no viewer and requests no tile. `MapPanel`
+shows `MapImportState` (`data-testid="map-import-state"`) from
+`mapImport.latestForEvent`, `data-state` by `mapImportView`
+(`lib/map-import-view.ts`):
+
+| Latest job | `data-state` | Shows |
+|---|---|---|
+| loading, `queued`, `running` | `pending` | "The map is being prepared…" and the progress; polled every 2 s |
+| `done` with a document | `review` | "imported and waiting for review", a link to `/:nameId/map-review/:hash` (`map-import-review-link`); the panel re-reads `mapMetadata` once, so a pin made meanwhile mounts the viewer |
+| `failed` | `failed` | the job's error |
+| none, or not readable (a kiosk without `courses.view`) | `unknown` | the backfill hint (Maintenance → Map documents) |
+
+Decided overnight by the E3 session (for user review): the review link
+is the `done` job's document, not the failed one's — a failed job has no
+document to review.
 
 #### Viewport
 
@@ -1640,10 +1655,13 @@ The canvas carries `data-testid="map-vector-layer"`,
 `data-document-hash`, `data-status` (`loading` → `drawn` → `complete`;
 `error`, `webgl`) and `data-ready="true"` once the first view's detail is
 resident (`engine.whenComplete()`). A failed load shows a message with
-*Try again*; a browser without WebGL2 shows "cannot draw the map", and
-the layer reports it (and a `webglcontextlost`) through `onUnavailable`
-so the host can fall back to tiles while `allowLegacy`
-(`docs/map-pipeline-switch.md` §3.3).
+*Try again*; a browser without WebGL2 (the renderer fails to construct)
+shows "cannot draw the map" (`data-status="webgl"`) — there is no tile
+fallback since E3. **A lost context** (`webglcontextlost`) remounts the
+canvas once (`key` = the attempt, a fresh element and context; the canvas
+carries `data-attempt`) and loads again; a second loss in the layer's
+life shows the same message. Every phone and desktop browser the club
+uses has WebGL2 (B-gate, D-mobile).
 
 **Budget** by the document's provenance (§5.2 "Arena and buckets"):
 `course.mapMetadata.clubMapVersionId` (additive, the event's
@@ -1723,11 +1741,18 @@ request per pointer move — the layer re-derives and the reply redraws.
 
 **Fallback.** A document whose stack has no lower and upper purple
 (`LoadSummary.courseLayer.supported === false`, `CourseStackError`) keeps
-the SVG course overlay over the GL map — today's drawing, purple above
-the whole map. Before the load answers, the viewer assumes support.
+the SVG course overlay over the GL map — purple above the whole map —
+and says so: a one-line notice over the map
+(`data-testid="map-course-layer-unsupported"`, "This map's colours are
+not aligned for the course layer; the course is drawn on top of the
+map."). Before the load answers, the viewer assumes support. E0 found no
+such document on prod. Decided overnight by the E3 session (for user
+review): the notice, not GL fallback colours; when E4b deletes the SVG
+course paths the notice stays and such a document shows no course until
+its stack is fixed (re-import).
 
 **Attributes.** `map-viewer` carries `data-course-layer="gl"` (vector
-with the layer) or `"svg"` (legacy, or the fallback). Under `gl` the
+with the layer) or `"svg"` (the fallback). Under `gl` the
 viewer mirrors the layer as a hidden list: `course-layer` > one
 `course-site` per drawn site (`data-site-id`, `data-role`, `data-x/y` in
 paper mm) holding its `course-label` (`data-text`, `data-x/y`), and one
@@ -1752,20 +1777,20 @@ changes for B4.
 | `CompetitionDashboard` | `MapSlot` → `MapPanel` |
 | `TracksPage` (GPS routes) | `MapSlot` → `MapPanel`; tracks through `mapGeo` |
 | Replay (`ReplayViewer` → `ReplayMapLayer`) | **mounted nowhere**: no producer feeds `ReplayData` since the Livelox source was removed; B11 closed as moot (user decision 2026-10-22) — see §8 |
-| `CourseEditorPage` | `MapPanel` with `editor` |
+| `EditorPage` (the course editor) | `MapPanel` with `editor` |
 
 #### Tests
 
 | Test | Covers |
 |---|---|
 | `lib/__tests__/map-viewport.test.ts` | mercator ops = the pre-B4 formulas (projection, wheel anchor, clamp, pan, affine mm, symbol scale); paper: centre, y flip, mm round trip, WGS 84 through `mapGeo` (1e-6 mm), no CRS, wheel and pinch anchors, clamp, pan, GPS centre, fit, scale, Mercator-equivalent zoom; rotation per model; a +3° tilted meridian vertical on the overlay and through `viewMatrix`; overlay = GL canvas < 0.5 px on 200 random views (rotation, DPR); a WGS 84 point lands where the tiles' calibration affine puts it, < 0.1 mm on a 400 × 300 mm 1:10 000 frame (the residual is the affine's linearisation) |
-| `lib/__tests__/map-pipeline.test.ts` | `resolveMapPipeline`: a document is required, the WebGL2 fallback (`docs/map-pipeline-switch.md` §6) |
+| `lib/__tests__/map-import-view.test.ts` | `mapImportView`: pending while loading / queued / running, review for a done job with a document, failed, unknown without a job or a document |
 | `lib/__tests__/map-document-cache.test.ts` | route regex (documents, not previews); URL without query, `x-event-id` / `x-kiosk-key` headers; one request shared, same bytes; bounded memory; 401/403/404/5xx → kinds, failures not cached; offline; unreadable bytes; `storage.persist()` once, absent API |
 | `lib/__tests__/vector-map.test.ts` | paper frame with correction, bounds in mm, stack colours, proxy colours, budgets |
-| `e2e/map-vector-layer.spec.ts` | event `vector`: the pinned document by hash (no query, `x-event-id`), canvas ready and drawn, container-sized, no tile layer and no `/api/map-tile*` request, `data-*` attributes; wheel zoom keeps the paper point under the cursor (< 0.5 px); a GPS fix → follow centres it and the marker is at the viewer's centre; **lower purple under black**: a leg made across a black path on white paper (two controls through the API) is black at the crossing and lower purple 2 mm to either side, zoomed to ≥ 0.02 px/µm, with no SVG control label (fails with the course drawn on the top row); event `legacy`: tiles |
+| `e2e/map-vector-layer.spec.ts` | event `vector`: the pinned document by hash (no query, `x-event-id`), canvas ready and drawn, container-sized, no tile layer and no `/api/map-tile*` request, `data-*` attributes; wheel zoom keeps the paper point under the cursor (< 0.5 px); a GPS fix → follow centres it and the marker is at the viewer's centre; **lower purple under black**: a leg made across a black path on white paper (two controls through the API) is black at the crossing and lower purple 2 mm to either side, zoomed to ≥ 0.02 px/µm, with no SVG control label (fails with the course drawn on the top row); **without WebGL2** `data-status="webgl"`, the message, no tile request; **a lost context** remounts once (`data-attempt` 1, ready again), a second shows the message; **no pin** (`map_files.document_hash` cleared): `map-import-state` `review` with the review link, no viewer, no tile request |
 | `lib/__tests__/course-layer-request.test.ts` | sites from visible positioned controls with kinds; highlighted courses as items (by flag or name, one or several, none → `null`); all-controls when a drawn site is on no course; sequence numbers only for one ordered course with the sheet or editor; single-course label offsets, pending ones winning; positions as given; faded controls left out; an imported course's preclipped legs → pieces, its cuts → circle gaps, extras; generated legs: bent path kept, automatic gaps and cuts not read, a leg count that does not match ignored |
-| `e2e/map-control-circles.spec.ts`, `e2e/map-multicourse.spec.ts` | under `map-legacy` and `map-vector`: code labels of the selected course (SVG text, or the GL layer's `course-label` mirror), sequence numbers for one course with descriptions, codes for several; pills and the sheet SVG text under both; `data-course-layer` |
-| `e2e/map-viewer-gestures.spec.ts`, `mobile-layout.spec.ts`, `course-editor.spec.ts`, `map-control-circles.spec.ts`, `map-multicourse.spec.ts`, `wide-screen-map-pane.spec.ts`, `webserial.spec.ts`, `kiosk*.spec.ts` | under the default `legacy` the mercator model reproduces the pre-B4 viewer; `webserial`, `mobile-layout`, `map-viewer-gestures` also run under `vector` (`docs/map-pipeline-switch.md` §5) |
+| `e2e/map-control-circles.spec.ts`, `e2e/map-multicourse.spec.ts` | code labels of the selected course (the GL layer's `course-label` mirror), sequence numbers for one course with descriptions, codes for several; pills and the sheet SVG text; `data-course-layer="gl"` |
+| `e2e/map-viewer-gestures.spec.ts`, `mobile-layout.spec.ts`, `course-editor.spec.ts`, `wide-screen-map-pane.spec.ts`, `webserial.spec.ts`, `kiosk*.spec.ts` | the paper view's gestures, measure, event switching (vector layer ready, no tile image) and the readout map, once in `chromium` (E3: no per-pipeline projects) |
 
 ### 5.5 Editor
 
@@ -2532,7 +2557,7 @@ what became of it:
 | `packages/web/src/lib/map-viewport.ts` | the viewport model, mercator and paper (§5.4 "Viewport"), `glView` |
 | `packages/web/src/lib/vector-map.ts` | paper frame, bounds, colours, proxy colours, budget from a document header |
 | `packages/web/src/lib/map-document-cache.ts`, `map-fonts.ts` | document, font and text atlas loading for the viewer (`docs/map-storage.md` §7.1) |
-| `packages/web/src/lib/map-pipeline.ts` | the layer rule and the WebGL2 probe (§5.4 "Selecting the layer", `docs/map-pipeline-switch.md` §3) |
+| `packages/web/src/lib/map-import-view.ts`, `components/MapImportState.tsx` | the import state of a map without a pinned document (§5.4 "Selecting the layer") |
 | `e2e/map-vector-layer.spec.ts` | the vector layer in the viewer |
 
 The shared module is exported as a namespace: `import { render } from
@@ -2606,9 +2631,6 @@ The shared module is exported as a namespace: `import { render } from
   `northLinesBelow` (the tiles' per-map colour-stack fixes) are not
   applied to the document's stack; the document's own order (and, for
   matched symbols, the library's) is drawn.
-- **§5.4 lost context.** A lost context (`webglcontextlost`) is not
-  restored: the host falls back to tiles while `allowLegacy`, or the
-  layer shows its message (`docs/map-pipeline-switch.md` §3.3).
 - **§5.4 `data-ready`** marks the first view's detail only; later views
   stream in without an attribute (the engine's `whenComplete()` is there
   for a spec that needs it).

@@ -7,8 +7,8 @@ experience), 04 §7 (hit-testing on the shared stage), 09 §3 (gated
 reads); decisions in the research README's decision log (2026-11-01,
 "D4", "D5"). The work queue is `SLICES.md` (rows D4–D11).
 
-The legacy editor (`CourseEditorPage`) still mounts for `legacy` events
-and while the instance flag below is off; its chapter is frozen as
+The legacy editor (`CourseEditorPage`) mounts nowhere since E3 (the flip,
+2026-11-06) and is deleted in E4b; its chapter is frozen as
 [course-editor-legacy.md](course-editor-legacy.md), which also keeps the
 server behaviours both editors share (description autodetect, automatic
 overprint cuts, number contrast) until they get their own homes.
@@ -20,16 +20,23 @@ pencil icons of the Courses and Controls pages deep-link here) mounts
 through `CourseEditorRoute` (`pages/editor/CourseEditorRoute.tsx`):
 
 ```
-mount = editorVector ∧ event == "vector" ∧ documentHash ≠ null ∧ (webgl2 ∨ ¬allowLegacy) ? new editor : CourseEditorPage
+mount = new editor          (every event, since E3)
 ```
 
-(`courseEditorMount`, `packages/web/src/lib/map-pipeline.ts`;
-`map-pipeline-switch.md` §1, §3.6.) `editorVector` is the instance flag
-`map.editor.vector` (default `false`), the temporary gate of slice D while
-the editor is unproven, removed in slice E. The vector part is §3.1's
-*drawn* pipeline, so a browser that falls back to tiles gets the legacy
-editor. The route waits for `course.mapFileInfo`, `course.mapMetadata` and
-`event.mapPipeline` before mounting either page.
+There is no gate any more (the slice D flag `map.editor.vector` and the
+per-event switch are gone, `map-pipeline-switch.md` history note). The
+map panel inside the editor answers the cases without a drawable map
+(`map-rendering.md` §5.4 "Selecting the layer"):
+
+- **No map at all**: the editor mounts and its `MapPanel` shows the
+  upload prompt (*Upload map*, *From club library*) where the canvas would
+  be; the rail, inspector and course lists work, the canvas tools have
+  nothing to act on until a map is uploaded. Decided overnight by the E3
+  session (for user review): the least new UI — the panel's existing
+  prompt, no editor-specific empty state.
+- **A map without a pinned document**: the import state
+  (`map-import-state`), not tiles.
+- **No WebGL2 / a lost context**: the layer's message (§5.4 "Layer").
 
 Deep links: `?course=<seq>` selects a course, `?control=<code>` a control;
 consumed once when the data loads. `?mode=layout` with `sheet=<seq>` or
@@ -70,9 +77,9 @@ exit bubble on every pointer move
 | Field mode (§9) | `editor-inspector-field`, `editor-field-selection`, `editor-nudge-pad`, `editor-field-offline` | the control list with distance / bearing and check-off in place of the sequence; the selection's distance, check-off and nudge pad; no tool rail |
 | Phone chrome (§10) | `editor-field-top-bar`, `editor-overflow`, `editor-sheet`, `editor-field-add` | below 640 px: the compact top bar, the bottom sheet (peek: KPIs, selection, action bar) and the floating `+` instead of the top bar, rail, inspector strip and status bar above |
 
-The map-info row under the map (file name, *Open review*, *Use new map
-engine*, *Replace map*, colour profile) is MapPanel's `showMapInfo` as in
-the legacy editor.
+The map-info row under the map (file name, *Open review*, *Replace map*,
+colour profile) is MapPanel's `showMapInfo` as in the legacy editor. The
+*Use new map engine* toggle went with the switch in E3.
 
 ## 3. Selection, undo, autosave, conflicts
 
@@ -876,7 +883,6 @@ seq). Tokens are decimal strings.
 | `control.list` / `control.getById` | `courses.view` | — | rows with `version`, `kind`, `circleGaps`, `notes`, `checkedAt` |
 | `course.presence` | `courses.view` | `{ courseId, mode: "course" \| "layout" \| "field", clientId }` | `{ ttlMs, others: { courseId, courseName, name, mode }[] }`: the event's other live editors (§11) |
 | `course.lastChange` / `control.lastChange` | `courses.view` | `{ courseId }` / `{ id }` | `{ name, at /* ISO */ } \| null`: actor and time of the row's newest `*.upserted` entry (`name` empty without a sign-in) |
-| `event.mapPipeline` | kiosk or `event.view` | — | `{ pipeline, allowLegacy, editorVector }` (§1) |
 
 A stale `baseVersion` answers `CONFLICT` with `data: { kind, id, version,
 current, differing }`; a variation group or a slice-F site kind answers
@@ -884,20 +890,16 @@ current, differing }`; a variation group or a slice-F site kind answers
 
 ## Tests
 
-**The E2E layout (D10).** `e2e/course-editor.spec.ts` is the new editor's
-spec and runs under two Playwright projects only (`map-pipeline-switch.md`
-§5): `map-vector` (desktop Chrome; `VECTOR_ONLY_SPECS`) runs every desktop
-describe, `mobile` (Pixel 7; `MOBILE_SPECS`) runs the touch describe at the
-end of the file. Each describe skips on the other device through the
-`isMobile` fixture, so a file run reports the other half as skipped — one
-file, one fixture import, no duplicated flows. The phone has no desktop
-flows to run: it opens in Field mode with no rail or inspector (§10), so 09
-§4 D's "green on the mobile project" is `field-mode.spec.ts` plus this touch
-subset. `course-editor-legacy.spec.ts` is the frozen legacy page's spec
-(`chromium` only, deleted in slice F). The project's fixture sets `vector`
-before every test; the spec sets `map.editor.vector` in `beforeAll` (the
-flag also changes the Maps page's *Edit layout* link, so it is not the
-project's).
+**The E2E layout (D10, E3).** `e2e/course-editor.spec.ts` is the editor's
+spec and runs under two Playwright projects: `chromium` (desktop Chrome)
+runs every desktop describe, `mobile` (Pixel 7; `MOBILE_SPECS`) runs the
+touch describe at the end of the file. Each describe skips on the other
+device through the `isMobile` fixture, so a file run reports the other
+half as skipped — one file, one fixture import, no duplicated flows. The
+phone has no desktop flows to run: it opens in Field mode with no rail or
+inspector (§10), so 09 §4 D's "green on the mobile project" is
+`field-mode.spec.ts` plus this touch subset. The legacy page's spec,
+`course-editor-legacy.spec.ts`, was deleted with the switch in E3.
 
 Hygiene (AGENTS §12): `reseed()` once in `beforeAll`; the fixture import
 (`e2e/test.ocd` courses and map) is idempotent per test (`openEditor` →
@@ -941,13 +943,11 @@ whose poll ran meanwhile simply does not conflict (decision log, D10).
 | unit (web) | `lib/editor/__tests__/conflict.test.ts`, `write-client.test.ts` | §3: rebase vs moved vs refresh, unknown base, structure never merged; tokens sent and advanced, one re-send, `EditorConflict`, code re-keying, delete seeding |
 | unit (web) | `lib/editor/__tests__/structure-edit.test.ts`, `sequence.test.ts`, `state.test.ts` | §4: sequence positions, insert / append / remove / move / role, legs dropped on a new predecessor; display sequence, explicit structure, leg → insert position; §3 Escape cascade, hide-others, modes |
 | unit (web) | `pages/editor/__tests__/action-bar.test.ts` | §4: the entries per selection, the legacy ids |
-| unit (web) | `lib/__tests__/map-pipeline.test.ts`; `packages/api/src/__tests__/map-pipeline.test.ts` | §1: `courseEditorMount`; `map.editor.vector` parsing |
-| integration | `packages/api/src/__tests__/integration/map-pipeline.test.ts` | §1: `event.mapPipeline` / `setMapPipeline` report `editorVector` |
-| E2E | `e2e/course-editor.spec.ts` "Course editor (new, GL canvas)" (`map-vector`) | the mount gate both ways and the shell (`X` / `C` disabled); place → move → undo / redo → reload → select on the canvas → delete; create a course, append two controls, add-to-course on the map, reorder + undo, insert on a leg, remove, reload with `?course=` (explicit start / finish rows); deep links, `H`, Escape cascade; the Courses page's `course-edit-link` and the Controls page's `control-edit-link` open the new editor on the course / with the control selected (one `editor-selection-ring`) |
-| E2E | `e2e/course-editor.spec.ts` "Course mode (§4)" (`map-vector`) | delete cascade: a control on two courses is deleted from the action bar — the site goes, both structures lose it (the open one's rows, the other through `course.list`), `Ctrl+Z` restores the site and both visits; *Remove from course* drops one visit and keeps the site; inline code edit in the sequence (`editor-seq-code` → 997: the row's `data-control-id` and the site follow, `Ctrl+Z` back; a duplicate code → `editor-error` "already exists"); free order (`editor-order-mode`): the hint, no reorder arrows, the layer draws no legs and labels the circles with their codes, a number drag still writes `course.setControlLabelOffset`; a number drag (the shared hit-test's `number` target): the `course-label` moves, persists over a reload, *Reset label* puts the automatic place back, undo the dragged one; clone (`editor-clone-*`, "A (copy)" prefilled, same rows) and no `editor-toggle-first-start` / `-last-finish` even with a legacy-flag course in the event |
-| E2E | `e2e/course-editor.spec.ts` "Course mode descriptions (§4)" (`map-vector`) | the description editor: Escape closes only the dialog (the control stays selected), column C which-of-similar with written titles (`desc-opt-label-0.1N`), a boulder and dimensions with the live preview (`desc-dim-input` → `desc-preview`), saved, reloaded, the summary; *Clear* + save stores none, `Ctrl+Z` writes the saved description back (the control's own description written back after); a control placed on the map is described from the base map (no suggestion offered, a pressed option in `desc-editor`), after a move it stays selected with its action bar and at most one suggestion; the description sheet: "All controls" with every control until a course is picked, then course E's card (event name, course name, the finish row's measured metres, the thick rules) |
-| E2E | `e2e/course-editor.spec.ts` "Automatic cuts" (`map-vector`) | `course-layer.md` §3.4 through the mirror: a control whose rim passes the fixture's boulder (68 / 42 mm; radius from the `G` target) is drawn with a cut around south (`course-site` `data-cuts`); a leg across the boulder is drawn in two `course-leg` pieces on its line, none covering the boulder. The event's auto-cuts toggle (`editor-toggle-cuts`, D17): off, the rim control's slit goes while a control's stored circle gap (`control.update { circleGaps }`) stays; on again, the slit is back |
-| E2E | `e2e/course-editor.spec.ts` "conflicts (two contexts)" (`map-vector`) | §3 / §11 / `course-layout.md` §2, B a second context: **structure** — B appends, A's append on the old token answers `CONFLICT` once (no re-send), `editor-conflict[data-kind=refresh]` "Changed elsewhere…", A's rows reload to B's, the redone append lands after it; **control** — B writes the description, A's move is refused once and re-sent on the server's token with no notice (B's description kept), B moves it again (after its poll showed A's move), A's next move shows `editor-conflict[data-kind=moved]` with B's x, *Keep mine* writes A's position; **sheet / template** — B aligns the map, A's align map is refused and A shows B's centre (nothing of A's stored); both in template scope, B writes the orientation, A's paper-size write is refused (B's orientation, A4 kept) |
+| E2E | `e2e/course-editor.spec.ts` "Course editor (new, GL canvas)" (`chromium`) | §1: the editor mounts (never `course-editor-page`), and on an event with no map it mounts over the panel's upload prompt (no viewer); the shell (`X` / `C` disabled); place → move → undo / redo → reload → select on the canvas → delete; create a course, append two controls, add-to-course on the map, reorder + undo, insert on a leg, remove, reload with `?course=` (explicit start / finish rows); deep links, `H`, Escape cascade; the Courses page's `course-edit-link` and the Controls page's `control-edit-link` open the new editor on the course / with the control selected (one `editor-selection-ring`) |
+| E2E | `e2e/course-editor.spec.ts` "Course mode (§4)" (`chromium`) | delete cascade: a control on two courses is deleted from the action bar — the site goes, both structures lose it (the open one's rows, the other through `course.list`), `Ctrl+Z` restores the site and both visits; *Remove from course* drops one visit and keeps the site; inline code edit in the sequence (`editor-seq-code` → 997: the row's `data-control-id` and the site follow, `Ctrl+Z` back; a duplicate code → `editor-error` "already exists"); free order (`editor-order-mode`): the hint, no reorder arrows, the layer draws no legs and labels the circles with their codes, a number drag still writes `course.setControlLabelOffset`; a number drag (the shared hit-test's `number` target): the `course-label` moves, persists over a reload, *Reset label* puts the automatic place back, undo the dragged one; clone (`editor-clone-*`, "A (copy)" prefilled, same rows) and no `editor-toggle-first-start` / `-last-finish` even with a legacy-flag course in the event |
+| E2E | `e2e/course-editor.spec.ts` "Course mode descriptions (§4)" (`chromium`) | the description editor: Escape closes only the dialog (the control stays selected), column C which-of-similar with written titles (`desc-opt-label-0.1N`), a boulder and dimensions with the live preview (`desc-dim-input` → `desc-preview`), saved, reloaded, the summary; *Clear* + save stores none, `Ctrl+Z` writes the saved description back (the control's own description written back after); a control placed on the map is described from the base map (no suggestion offered, a pressed option in `desc-editor`), after a move it stays selected with its action bar and at most one suggestion; the description sheet: "All controls" with every control until a course is picked, then course E's card (event name, course name, the finish row's measured metres, the thick rules) |
+| E2E | `e2e/course-editor.spec.ts` "Automatic cuts" (`chromium`) | `course-layer.md` §3.4 through the mirror: a control whose rim passes the fixture's boulder (68 / 42 mm; radius from the `G` target) is drawn with a cut around south (`course-site` `data-cuts`); a leg across the boulder is drawn in two `course-leg` pieces on its line, none covering the boulder. The event's auto-cuts toggle (`editor-toggle-cuts`, D17): off, the rim control's slit goes while a control's stored circle gap (`control.update { circleGaps }`) stays; on again, the slit is back |
+| E2E | `e2e/course-editor.spec.ts` "conflicts (two contexts)" (`chromium`) | §3 / §11 / `course-layout.md` §2, B a second context: **structure** — B appends, A's append on the old token answers `CONFLICT` once (no re-send), `editor-conflict[data-kind=refresh]` "Changed elsewhere…", A's rows reload to B's, the redone append lands after it; **control** — B writes the description, A's move is refused once and re-sent on the server's token with no notice (B's description kept), B moves it again (after its poll showed A's move), A's next move shows `editor-conflict[data-kind=moved]` with B's x, *Keep mine* writes A's position; **sheet / template** — B aligns the map, A's align map is refused and A shows B's centre (nothing of A's stored); both in template scope, B writes the orientation, A's paper-size write is refused (B's orientation, A4 kept) |
 | E2E | `e2e/course-editor.spec.ts` "touch" (`mobile`, Pixel 7) | §10 in Course mode on a phone: a tap selects (`editor-sheet-selection`), the peek row's ≥ 44 px *Append* (no `editor-action-bar` on the map) writes the structure, one finger on the selected control drags it at once, the overflow's undo puts it back; `+` → `K` → Place / Done in Course mode appends the placed control and the layer draws the leg to it |
 | unit (web) | `pages/editor/__tests__/placement.test.ts` | §6.1: insertion point (before the finish, after the selected control, at a leg, `S` at 0, no course), chain advance, `Ctrl+Z` steps back, `S` → `K`, ghost number and pending legs (a start's leg runs to the first item) |
 | unit (web) | `lib/editor/__tests__/leg-length.test.ts`, `lib/__tests__/course-layer-request.test.ts`, `lib/editor/__tests__/hit.test.ts` | §6.1: metres at the map scale, "‹n› m", the midpoint, a dragged control's labels (both legs, every visit, over undrawn items); the provisional visit in the request (`course-layer.md` §5); §5 `accept` passes over other targets and finds the site below a rejected one |
@@ -963,7 +963,6 @@ whose poll ran meanwhile simply does not conflict (decision log, D10).
 | integration | `packages/api/src/__tests__/integration/course-print.test.ts` "course objects on the page" | §7 print: the row's "reference-raster pixel probe" of a printed course object is this test's page raster, not the E2E's — no HTTP route rasterises a composed page, and poppler is on the runner for the unit / integration jobs, not the E2E job (coordinator 2026-11-01) |
 | unit (web) | `packages/web/src/lib/editor/__tests__/checks.test.ts` | §8: sites and the explicit structure as `courseChecks` takes them, two controls 20 m apart, the server's `DESCRIPTION_STALE` merged in order, markers (rings, a leg cross, unpositioned skipped), length from the leg polylines, locate |
 | E2E | `e2e/course-editor.spec.ts` "Course editor checks" | §8: two controls 20 m apart → the count beside the section title, the row (`CONTROL_TOO_CLOSE`, "20 m"), a marker on each site, the status-bar count; a click selects the first site and centres the view on the pair's midpoint |
-| E2E | `e2e/course-editor-legacy.spec.ts` | the legacy page, unchanged (`chromium`) |
 | integration | `packages/api/src/__tests__/integration/course-presence.test.ts` | §11: the heartbeat shows the others and never the caller; one row per client, moved by a new course or mode; the 30 s TTL (hidden at read, swept by the next beat; kept just inside it); the signed-in name; a row goes with its course; unknown course refused; `control.lastChange` names the actor and time |
 | unit (web) | `lib/editor/__tests__/presence.test.ts`, `write-client.test.ts` | §11: `name · course · mode` entries (open course first, "Someone", distinct keys), `courseChangedElsewhere` (moved token, own write, first sight), the own-token set |
 | E2E | `e2e/course-presence.spec.ts` | §11, two browser contexts: B in Field mode shows in A's bar as "‹course› · Field" (here), A in Course mode in B's; a move in A moves the control in B within the poll; A leaving ages out of B's bar (TTL); a control appended in A re-renders B's sequence with `editor-external-change`, none in A |
@@ -985,7 +984,12 @@ whose poll ran meanwhile simply does not conflict (decision log, D10).
 - **Course objects**: draw order (`courseObject.reorder`) has no control
   in the editor; no image (logo) tool; `inset_frame` is slice F's.
 - **Description instructions** (finish variant, special instructions)
-  are edited in the legacy editor only.
+  have no control in this editor. The legacy editor's finish-variant
+  select was their only UI and is unreachable since E3: until a row adds
+  it here (a `course.update` write with the course's token, which this
+  editor does not have yet), the stored values print as they are and a
+  course without one prints the default. Found by the E3 session (for user
+  review).
 - **Course delete** stays on the Courses page.
 - **Presence names without sign-in**: an instance with auth off lists
   every editor as "Someone" (the station name could stand in, D11 left it);

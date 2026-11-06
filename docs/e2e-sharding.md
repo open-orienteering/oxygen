@@ -63,23 +63,17 @@ proxy target — both passed by the Playwright webServer config.
 Specs never hardcode the API origin; they import `API_BASE` from
 `e2e/helpers/api-base.ts`, which derives it from `E2E_API_PORT`.
 
-### Map pipeline projects
+### Projects
 
-The stack's default map pipeline is `vector`: the seed writes every seed
-event `vector` and seeds `map.pipeline.default` and `map.editor.vector`
-(`docs/map-pipeline-switch.md` §5), so a `chromium` spec that sets
-nothing runs on the GL viewer and the new course editor; the legacy-only
-specs set `legacy` themselves.
-
-Besides `chromium`, `playwright.config.ts` has projects `map-legacy` and
-`map-vector` that run the files in `MAP_PIPELINE_SPECS` once per value of
-the per-event map pipeline switch (`docs/map-pipeline-switch.md` §5);
-`map-vector` also runs `VECTOR_ONLY_SPECS` (`course-editor.spec.ts`), and
-project `mobile` runs `MOBILE_SPECS` (`field-mode.spec.ts` and
-`course-editor.spec.ts`'s touch describe) on a Pixel 7 profile. A shard
-runs a file once per project that matches it, so the weight table counts
-every run: such a file's entry is per project, `{ "map-legacy": 4,
-"map-vector": 4 }`, and its weight is the sum (below).
+Every event reads the vector pipeline since E3 (`docs/map-pipeline-switch.md`,
+history note), so there is one desktop run: project `chromium` runs every
+spec except `field-mode.spec.ts`, and project `mobile` runs `MOBILE_SPECS`
+(`field-mode.spec.ts` and `course-editor.spec.ts`'s touch describe) on a
+Pixel 7 profile. The per-pipeline projects `map-legacy` / `map-vector`
+of slices B–D are gone. A shard runs a file once per project that
+matches it, so the weight table counts every run: a file run by both
+projects (`course-editor.spec.ts`) has a per-project entry,
+`{ chromium: 31, mobile: 4 }`, and its weight is the sum (below).
 
 ### File partitioning
 

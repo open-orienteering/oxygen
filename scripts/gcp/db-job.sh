@@ -4,7 +4,7 @@
 # `oxygen-database-url` secret). The script gets DATABASE_URL and the `pg`
 # client of the image; it is passed base64-encoded because `--args` splits on
 # commas. Used for the slice E preflight (docs/release-slice-e.md) and for
-# instance flags (docs/map-pipeline-switch.md §1).
+# the rollback flags of v0.5.0 (docs/release-slice-e.md §1).
 #
 # Usage:
 #   ./db-job.sh <script.js> [--tag v0.5.0] [--env KEY=VALUE]...

@@ -236,11 +236,12 @@ Set `MAP_TILE_PRECACHE=off` to render purely on demand — worth doing
 where background CPU is not free, such as a scale-to-zero container that
 only gets CPU while a request is in flight.
 
-An event switched to the vector pipeline (`events.map_pipeline =
-'vector'`, `docs/map-pipeline-switch.md` §3.2) is never pre-cached: the
-background loop skips it and its progress poll answers
-`{ total: 0, done: 0, rendering: false }` without rendering a chunk. Its
-tiles are still served, rendered on demand, to whoever asks.
+**Retired in E3.** Every event reads the vector pipeline since the flip
+(`docs/map-pipeline-switch.md`, history note), so nothing is pre-cached:
+the background loop returns at once (`preCacheRetired()`) and the
+progress poll answers `{ total: 0, done: 0, rendering: false }` without
+rendering a chunk. A tile is still served, rendered on demand, to a tab
+opened before the flip, until E4a deletes this pipeline.
 
 `/api/map-tile-progress` reports both numbers from the database:
 
@@ -399,9 +400,9 @@ The rule matches `/api/map-tile/` with the trailing slash so
   Retry-After, concurrency cap, abort.
 - `packages/api/src/__tests__/integration/map-tiles.test.ts` — the
   routes end to end against `e2e/test.ocd`: render, cache hit, whole
-  block cached, deep zoom on demand, progress from the database, and
-  the progress poll advancing the pre-cache with no tile request to
-  trigger the background loop.
+  block cached, deep zoom on demand, and the retired pre-cache (E3: a
+  zero progress poll and no background crawl, even with
+  `MAP_TILE_PRECACHE=on`).
 - `packages/api/src/__tests__/integration/map-rotation.test.ts` —
   `setMapRotation` (ops override) re-derives metadata, re-syncs control
   coordinates and drops tiles.

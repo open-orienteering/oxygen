@@ -78,8 +78,8 @@ press, a dragged control rides 48 px above the finger with a 120 px
 
 ### Legacy course editor on touch
 
-The legacy editor (`CourseEditorPage`, `legacy` events; kept until slice
-F) shares the map gesture model above. In addition:
+The legacy editor (`CourseEditorPage`; mounted nowhere since E3, deleted
+in E4b) shared the map gesture model above. In addition:
 
 - **Tap a control** — selects it and opens the floating context menu.
 - **Drag a control** — moves it (same local-drag + `onMoveEnd` path as mouse).
@@ -211,4 +211,4 @@ to Google Accounts and the cross-origin OAuth response is rejected by CORS.
 | Controls page toolbar | `packages/web/src/pages/ControlsPage.tsx` |
 | Shell header | `packages/web/src/pages/CompetitionShell.tsx` |
 | Editor dismiss wire-up | `packages/web/src/pages/CourseEditorPage.tsx` |
-| E2E | `e2e/mobile-layout.spec.ts` (its legacy-editor tests run under `map-legacy` only; under `map-vector` the new editor's phone layout is `e2e/field-mode.spec.ts` and the touch describe of `e2e/course-editor.spec.ts` — `docs/map-pipeline-switch.md` §5), `e2e/session-recovery.spec.ts` |
+| E2E | `e2e/mobile-layout.spec.ts` (the editor's phone layout itself is `e2e/field-mode.spec.ts` and the touch describe of `e2e/course-editor.spec.ts`; E3 deleted the legacy editor's phone tests), `e2e/session-recovery.spec.ts` |

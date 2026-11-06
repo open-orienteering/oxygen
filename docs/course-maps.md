@@ -110,12 +110,10 @@ Structured JSON is validated at every tRPC boundary with the Zod schemas in
 
 ## Rendering pipeline
 
-`maps.pdf` has two paths behind the map pipeline switch
-(`map-pipeline-switch.md` §3.4; `course-print.md` §8). Both read the same
-templates, course maps, courses, controls and graphics; the response
-header `X-Print-Pipeline` says which one drew the file.
-
-A `vector` event whose map pins a document (C3):
+`maps.pdf` composes every event's pages from its pinned map document
+since E3, the flip (`course-print.md` §8; `map-pipeline-switch.md`,
+history note). It reads the templates, course maps, courses, controls
+and graphics:
 
 ```text
 map_documents (pinned) + course_maps / map_templates rows
@@ -130,9 +128,10 @@ No SVG, no `rsvg-convert`, no raster of the map. See
 [`course-print.md`](course-print.md) for the page model, the colour modes
 and the differences from the legacy page that are intended
 (`course-print.md` §8.4). A document whose colour stack is not aligned
-falls back to the legacy path.
+is a 400 with the reason (`course-print.md` §8.1); a map without a pinned
+document has no base map to print (400).
 
-Every other event (`legacy`, or `vector` before its map has a document):
+The legacy path (unreachable since E3, deleted in E4a) was:
 
 ```text
 map_files.file_data
@@ -218,13 +217,12 @@ GET /api/maps/:nameId/graphics/:id
 ```
 
 Both require `courses.view`. Preview requests are capped at 4096 pixels per
-axis. For a `vector` event with a pinned map document `window.png` is drawn
-from the document by the reference raster (`course-print.md` §10); other
-events use the OCAD → SVG path. Query, caps and caching are the same.
-`maps.pdf` follows the same switch (`course-print.md` §8): composed from
-the document (in a worker thread, off the event loop) for a `vector` event with a pinned document, `rsvg-convert`
-otherwise; `X-Print-Pipeline: vector | legacy | legacy-fallback` names the
-path (`legacy-fallback`: a document whose colour stack is not aligned).
+axis. `window.png` is drawn from the pinned map document by the reference
+raster (`course-print.md` §10); its only caller is `MapLayoutEditor`,
+unreachable since E3 (E4a deletes the route). `maps.pdf` is composed from
+the document in a worker thread, off the event loop (`course-print.md`
+§8); a document whose colour stack is not aligned is a 400 with the
+reason.
 Combined PDF pages are ordered by course, map `sort_order`, then map
 `seq`; with `classes`, by the classes in the order asked. One of `maps`,
 `courses`, `classes` (400 otherwise); without a selection, every course's
@@ -259,13 +257,13 @@ Use **Maps / Kartor** for course assignments and per-map changes:
 4. Export one map, every map for a course, the all-controls map, or the whole
    event as PDF.
 
-**Which editor opens.** For an event that mounts the new course editor
-(`course-editor.md` §1: `vector`, pinned document, `map.editor.vector`,
-WebGL2), **Edit layout** and **Edit template layout** open its Layout mode
+**Which editor opens.** **Edit layout** and **Edit template layout** open
+the course editor's Layout mode for every event since E3
 (`/:nameId/course-editor?mode=layout&sheet=<seq>` / `&template=<seq>`):
 the sheet drawn on the GL canvas through the composer's page layer, every
-gesture one write and one undo entry — `course-layout.md`. Every other
-event opens the legacy editor below (`MapLayoutEditor`), unchanged.
+gesture one write and one undo entry — `course-layout.md`. The legacy
+editor below (`MapLayoutEditor`) is unreachable and goes in E4c; its
+description stays until then.
 
 In the legacy editor, the paper is the canvas. **Align map** drags the terrain
 under the map frame — the displayed raster and the course overlay move
