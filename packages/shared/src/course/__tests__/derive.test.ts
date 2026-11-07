@@ -2,7 +2,7 @@
 
 import { describe, expect, it } from "vitest";
 import { deriveCourse, legLengthMm, type CourseMetrics } from "../derive.js";
-import { SITES, layerInput, linear, site } from "./helpers.js";
+import { SITES, isomContext, layerInput, linear, site } from "./helpers.js";
 import type { CourseLayerInput, CourseLegProps } from "../types.js";
 
 /** ISOM at 1:15 000: R 2.5, finish 3.0, start circumradius 3.46, em 4 / (1409/2048). */
@@ -153,6 +153,27 @@ describe("bends and styles (§10.1, F1)", () => {
     expect(none[0].style).toBe("none");
     expect(none[0].pieces).toHaveLength(1);
     expect(none[1].style).toBe("line");
+  });
+});
+
+describe("corridors (§10.2, F2)", () => {
+  const corridor = { widthM: 60, edge: true, whiteMm: 3, whiteOpacity: 0.4 };
+
+  it("resolve to paper mm at the document's map scale; whiteMm stays paper mm", () => {
+    const [leg] = withLeg({ corridor }, { document: { ...isomContext(1.5) } });
+    // 1:10 000: 60 m = 6 mm.
+    expect(leg.corridor).toEqual({ widthMm: 6, whiteMm: 3, edge: true });
+    const [at15] = withLeg({ corridor });
+    expect(at15.corridor!.widthMm).toBeCloseTo(4, 9);
+  });
+
+  it("never change the leg's points, gaps, pieces or length; a `none` leg keeps its corridor", () => {
+    const [plain] = withLeg({ bends: [BEND] });
+    const [cor] = withLeg({ bends: [BEND], corridor });
+    expect({ ...cor, corridor: undefined }).toEqual({ ...plain, corridor: undefined });
+    expect(along(cor.points)).toBe(along(plain.points));
+    expect(withLeg({ style: "none", corridor })[0].corridor).toBeDefined();
+    expect(plain).not.toHaveProperty("corridor");
   });
 });
 

@@ -211,6 +211,17 @@ export interface DerivedLeg {
   gaps: FractionGap[];
   /** What is drawn: after gaps and circle clipping. */
   pieces: MapPoint[][];
+  /** The stored corridor resolved to paper mm (§10.2); it follows `points`, never `pieces`. */
+  corridor?: DerivedCorridor;
+}
+
+/** A leg's corridor on paper (course-layer.md §10.2). */
+export interface DerivedCorridor {
+  /** Full width, paper mm at the base map's scale (`widthM × 1000 / mapScale`). */
+  widthMm: number;
+  /** The white band outside the edge, paper mm. */
+  whiteMm: number;
+  edge: boolean;
 }
 
 export interface DerivedCourse {
