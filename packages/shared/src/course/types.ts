@@ -137,6 +137,8 @@ export interface CourseDocumentContext {
   libraryId: SymbolLibraryId;
   /** Library reference scale / map scale × symbol scale (03 §6.6). */
   documentFactor: number;
+  /** The base map's scale denominator (`header.mapScale`): ground metres → paper mm for corridors (§10.2). */
+  mapScale: number;
 }
 
 export interface CourseLayerInput {

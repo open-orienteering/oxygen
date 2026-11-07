@@ -14,7 +14,7 @@ import type { RenderObject } from "../../symbolise.js";
 import { type SymbolLibraryId, materialiseLibrary } from "../../../symbol-library/index.js";
 import type { DocumentColour } from "../../../map-document/header.js";
 import { courseLayer, courseRenderInput } from "../../../course/layer.js";
-import type { CourseLayer, CourseLayerInput, CourseSite, CourseStructure } from "../../../course/types.js";
+import type { CourseDocumentContext, CourseLayer, CourseLayerInput, CourseSite, CourseStructure } from "../../../course/types.js";
 
 export const courseSceneNames = ["course-legs", "course-cuts", "course-objects", "course-sprint", "course-all-controls", "course-leg-styles"] as const;
 export type CourseSceneName = (typeof courseSceneNames)[number];
@@ -50,6 +50,10 @@ export class BaseMap {
     this.lib = materialiseLibrary(library);
     this.colours = this.lib.colours.map((c) => ({ ...c, paletteIds: [c.id.slice(c.id.indexOf(":") + 1)] }));
   }
+  /** The course layer's context: the library at factor 1, so the map is at the library's reference scale. */
+  context(): CourseDocumentContext {
+    return { colours: this.colours, libraryId: this.library, documentFactor: 1, mapScale: this.lib.library.referenceScale };
+  }
   add(code: string, path: RenderPath, angleDeg?: number): this {
     let i = this.at.get(code);
     if (i === undefined) {
@@ -65,7 +69,7 @@ export class BaseMap {
 }
 
 function scene(name: CourseSceneName, base: BaseMap, input: Omit<CourseLayerInput, "document">): CourseScene {
-  const layer = courseLayer({ ...input, document: { colours: base.colours, libraryId: base.library, documentFactor: 1 } });
+  const layer = courseLayer({ ...input, document: base.context() });
   const merged = courseRenderInput(base, layer);
   return { name, library: base.library, colours: layer.colours, symbols: merged.symbols, objects: merged.objects, layer, courseObjectOffset: merged.courseObjectOffset };
 }

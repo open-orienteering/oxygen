@@ -28,7 +28,7 @@ const site = (id: string, kind: CourseSite["kind"], x: number, y: number, code =
 const ordered = (ids: string[]): CourseStructure => ({ version: 1, id: "course", orderMode: "ordered", items: ids.map((siteId) => ({ siteId })) });
 
 function input(base: BaseMap, rest: Omit<PageInput, "map">): PageInput {
-  return { ...rest, map: { objects: base.objects, symbols: base.symbols, context: { colours: base.colours, libraryId: base.library, documentFactor: 1 } } };
+  return { ...rest, map: { objects: base.objects, symbols: base.symbols, context: base.context() } };
 }
 
 /** A4 portrait sprint page: ISSprOM map at 1:4 000 printed at 1:3 000, header block with pictograms, title text. */
