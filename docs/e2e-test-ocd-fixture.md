@@ -57,11 +57,10 @@ none of that.
 node scripts/generate-test-ocd.mjs
 ```
 
-The writer lives in `scripts/lib/ocad-fixture.mjs` and is also used for the
-Demo Competition backing map (`buildShowcaseOcad()`). That file is **not**
-`e2e/test.ocd`: it uses the showcase CRS (SWEREF99 TM, 1:15000, easting
-679000, northing 6572000) and paper extent so cached overview tiles still
-line up. Both fixtures are generated; do not commit a source map export for either.
+The writer lives in `scripts/lib/ocad-fixture.mjs` with the other generated
+OCAD fixtures. Do not commit a source map export. (The Demo Competition no
+longer uses a generated OCAD: its map is the CC0 Puit de Laven map, see
+`docs/demo.md`, "The map".)
 
 The generator is deterministic (seeded PRNG): running it again without
 script changes produces a byte-identical file. If you change the script,

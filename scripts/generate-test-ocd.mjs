@@ -27,8 +27,8 @@
  *   - ocad2geojson `readOcad` / `ocadToSvg` / `getCrs` / `getBounds`
  *     (map tiles, WGS84 conversion)
  *
- * Implementation lives in `scripts/lib/ocad-fixture.mjs` so the showcase
- * demo map can reuse the same writer.
+ * Implementation lives in `scripts/lib/ocad-fixture.mjs`, with the other
+ * generated OCAD fixtures.
  *
  * Regenerate with:  node scripts/generate-test-ocd.mjs
  * Output is deterministic (seeded PRNG), so a regeneration with no script

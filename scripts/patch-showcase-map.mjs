@@ -1,34 +1,28 @@
 #!/usr/bin/env node
 /**
- * Re-pin the Demo Competition's map in docs/screenshots/fixtures/showcase.sql:
- * regenerate the `map_sources`, `map_documents` and `map_files` INSERTs from
- * the synthetic showcase OCAD (docs/demo.md), through the same importer the
- * API runs. Nothing else in the fixture changes.
+ * Re-pin the Demo Competition's map in docs/screenshots/fixtures/showcase.sql
+ * (docs/demo.md, "The map"): write the demo map
+ * (`puit-de-laven-demo.omap`) from the committed CC0 original through
+ * `scripts/lib/inject-demo-points.mjs`, and point the fixture's
+ * `map_files` row at its hash. Nothing else in the fixture changes.
  *
- * Run it when the importer or the symbol library changes (the document hash
- * changes with them; `scripts/__tests__/showcase-map.test.mjs` fails until
- * you do), or to regenerate the map without a live Vinterserien source
- * event. `scripts/anonymize-vinterserien.ts` writes the same block when
- * dumping from a live database.
+ * Run it after changing the injection (its seed or plan); the importer and
+ * the symbol library need no re-pin, since the document is made on load.
+ * `scripts/__tests__/showcase-map.test.mjs` fails until the committed map
+ * and the fixture agree. `scripts/anonymize-vinterserien.ts` writes the
+ * same row when dumping from a live database.
  */
 
 import { readFileSync, writeFileSync } from "node:fs";
-import path from "node:path";
-import { fileURLToPath } from "node:url";
-import { buildShowcaseMapRows } from "./lib/showcase-map.mjs";
-import { replaceShowcaseMap, legacyMapStorageUses } from "./lib/showcase-sql.mjs";
+import { DEMO_MAP_PATH, buildDemoMap, showcaseSource } from "./lib/showcase-map.mjs";
+import { FIXTURE_PATH, replaceShowcaseMap, legacyMapStorageUses } from "./lib/showcase-sql.mjs";
 
-const ROOT = path.join(path.dirname(fileURLToPath(import.meta.url)), "..");
-const FIXTURE = path.join(ROOT, "docs/screenshots/fixtures/showcase.sql");
-
-const before = readFileSync(FIXTURE, "utf8");
+const before = readFileSync(FIXTURE_PATH, "utf8");
 const legacy = legacyMapStorageUses(before);
 if (legacy.length) {
   throw new Error(`The fixture still writes dropped map storage (${legacy.join(", ")}); regenerate it with scripts/anonymize-vinterserien.ts`);
 }
-const rows = await buildShowcaseMapRows();
-writeFileSync(FIXTURE, replaceShowcaseMap(before, rows));
-console.log(
-  `patched ${FIXTURE}: source ${rows.source.sizeBytes} bytes (${rows.source.fileHash.slice(0, 12)}), ` +
-    `document ${rows.document.sizeBytes} bytes (${rows.document.hash.slice(0, 12)}, ${rows.document.importerVersion}, ${rows.document.libraryVersion})`,
-);
+writeFileSync(DEMO_MAP_PATH, buildDemoMap());
+const source = showcaseSource();
+writeFileSync(FIXTURE_PATH, replaceShowcaseMap(before, source));
+console.log(`patched ${FIXTURE_PATH}: ${source.fileName}, ${source.sizeBytes} bytes (${source.fileHash.slice(0, 12)})`);
