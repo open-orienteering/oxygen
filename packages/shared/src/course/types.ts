@@ -36,9 +36,24 @@ export interface CourseSite {
 export type CourseLegStyle = "line" | "marked_route" | "none";
 
 /**
+ * A corridor along a leg (course-layer.md §10.2, 08 §4.3): the map shows
+ * inside it, a white band lies outside its edge.
+ */
+export interface CourseCorridor {
+  /** Full width on the ground, metres. */
+  widthM: number;
+  /** Draw the corridor's boundary in 705. */
+  edge: boolean;
+  /** Width of the white band outside the edge, paper mm at the base map's scale; 0 = none. */
+  whiteMm: number;
+  /** Stored, drawn opaque until the backends carry alpha (map-rendering.md §8). */
+  whiteOpacity: number;
+}
+
+/**
  * The stored `LegProps` the layer reads (08 §4.3) of the leg *into* an
  * item: authored gaps (replacing the automatic ones), style and bends
- * (§10.1). `corridor` and `crossing` may ride along and are not read.
+ * (§10.1), the corridor (§10.2). `crossing` may ride along and is not read.
  */
 export interface CourseLegProps {
   /** Fractions of the leg's (bent) length. */
@@ -47,6 +62,7 @@ export interface CourseLegProps {
   style?: CourseLegStyle;
   /** Paper mm: the leg runs from the previous site through these to its own. */
   bends?: MapPoint[];
+  corridor?: CourseCorridor;
 }
 
 export interface CourseItem {

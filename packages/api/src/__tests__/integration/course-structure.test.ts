@@ -181,6 +181,31 @@ describe("course.setStructure", () => {
     expect(detail.structure.items[2]).toMatchObject({ siteId: 33, leg: { gaps: [{ from: 0.4, to: 0.5 }] } });
   });
 
+  it("course.list carries every stored leg whole (style, bends, gaps, corridor) by public ids (F2)", async () => {
+    const { id } = await caller.course.create({ name: "Legs whole" });
+    const corridor = { widthM: 60, edge: true, whiteMm: 3, whiteOpacity: 0.5 };
+    await caller.course.setStructure({
+      courseId: id,
+      structure: {
+        version: 1,
+        id: "legs",
+        orderMode: "ordered",
+        items: [
+          { siteId: startSeq },
+          { siteId: 31, leg: { style: "marked_route" } },
+          { siteId: 32, leg: { bends: [{ x: 40, y: 30 }], gaps: [{ from: 0.4, to: 0.5 }], corridor } },
+          { siteId: finishSeq },
+        ],
+      },
+    });
+    const summary = (await caller.course.list()).find((c) => c.id === id)!;
+    expect(summary.legs).toEqual({
+      [`${startSeq}>31`]: { style: "marked_route" },
+      "31>32": { bends: [{ x: 40, y: 30 }], gaps: [{ from: 0.4, to: 0.5 }], corridor },
+    });
+    expect(summary).not.toHaveProperty("legGaps");
+  });
+
   it("draws and measures the course as the linear course.update path does", async () => {
     const a = await caller.course.create({ name: "Geo A" });
     const b = await caller.course.create({ name: "Geo B" });

@@ -362,7 +362,7 @@ function MapPanelImpl({
         orderMode: c.orderMode ?? "ordered",
         descriptionInstructions: c.descriptionInstructions ?? null,
         labelOffsets: c.labelOffsets,
-        legGaps: c.legGaps,
+        legs: c.legs,
         hiddenNumbers: c.hiddenNumbers,
       };
     });

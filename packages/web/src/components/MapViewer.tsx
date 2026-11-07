@@ -121,8 +121,8 @@ export interface CourseOverlay {
    * (punch codes) alike.
    */
   labelOffsets?: Record<string, { dx: number; dy: number }>;
-  /** Authored leg gaps of the stored structure, keyed `"<fromId>><toId>"` (course-layer.md §6.4). */
-  legGaps?: Record<string, { from: number; to: number }[]>;
+  /** The stored structure's legs whole (style, bends, gaps, corridor), keyed `"<fromId>><toId>"` (course-layer.md §5, §10). */
+  legs?: Record<string, import("@oxygen/shared").course.CourseLegProps>;
   /** Ids of the controls whose number every visit hides. */
   hiddenNumbers?: number[];
 }

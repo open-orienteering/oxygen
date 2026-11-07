@@ -1,7 +1,7 @@
 /** The structure ↔ columns mirror (docs/course-layer.md §6.2). */
 
 import { describe, expect, it } from "vitest";
-import { splitStructure, structureFromColumns, structureToWire, structureFromWire } from "../course-structure.js";
+import { layerPropsOfStored, splitStructure, structureFromColumns, structureToWire, structureFromWire } from "../course-structure.js";
 
 const KIND: Record<string, string> = { S1: "start", S2: "start", a: "control", b: "control", F1: "finish" };
 const kindOf = (id: string) => KIND[id];
@@ -78,5 +78,41 @@ describe("wire form (public control ids)", () => {
     expect(wire.items.map((i) => ("siteId" in i ? i.siteId : null))).toEqual([1, 31, 2]);
     expect(wire.labelOffsets).toEqual({ "31": { dx: 1, dy: 2 } });
     expect(structureFromWire(wire, (id) => uuid.get(id)!)).toEqual(stored);
+  });
+});
+
+describe("layerPropsOfStored (the viewer's leg input, course-layer.md §5)", () => {
+  const publicId = new Map([["S1", 1], ["a", 31], ["b", 32], ["F1", 2]]);
+  const of = (items: unknown[]) => layerPropsOfStored({ version: 1, id: "c", orderMode: "ordered", items }, (id) => publicId.get(id));
+  const corridor = { widthM: 60, edge: true, whiteMm: 3, whiteOpacity: 0.5 };
+
+  it("carries each stored leg whole, keyed by the public ids of its ends", () => {
+    const out = of([
+      { siteId: "S1" },
+      { siteId: "a", leg: { style: "marked_route", gaps: [{ from: 0.1, to: 0.2 }] } },
+      { siteId: "b", leg: { bends: [{ x: 1, y: 2 }], corridor } },
+      { siteId: "F1", numberHidden: true },
+    ]);
+    expect(out.legs).toEqual({
+      "1>31": { style: "marked_route", gaps: [{ from: 0.1, to: 0.2 }] },
+      "31>32": { bends: [{ x: 1, y: 2 }], corridor },
+    });
+    expect(out.hiddenNumbers).toEqual([2]);
+    expect(out).not.toHaveProperty("legGaps");
+  });
+
+  it("strips the crossing (a control uuid) and omits a leg left empty", () => {
+    const out = of([
+      { siteId: "S1" },
+      { siteId: "a", leg: { crossing: { controlId: "b" } } },
+      { siteId: "b", leg: { style: "none", crossing: { controlId: "a" } } },
+      { siteId: "F1", leg: {} },
+    ]);
+    expect(out.legs).toEqual({ "31>32": { style: "none" } });
+  });
+
+  it("has no legs for a NULL or invalid column", () => {
+    expect(layerPropsOfStored(null, () => 1)).toEqual({ legs: {}, hiddenNumbers: [] });
+    expect(layerPropsOfStored({ version: 9 }, () => 1)).toEqual({ legs: {}, hiddenNumbers: [] });
   });
 });
