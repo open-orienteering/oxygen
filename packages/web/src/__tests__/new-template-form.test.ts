@@ -1,6 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { newTemplatePayload } from "../components/NewTemplateForm";
-import { EMPTY_TEMPLATE_DRAFT } from "../lib/course-map-types";
+import { EMPTY_TEMPLATE_DRAFT, newTemplatePayload } from "../lib/course-map-types";
 
 describe("newTemplatePayload (E-pages: New template)", () => {
   it("a blank name takes the key's name", () => {

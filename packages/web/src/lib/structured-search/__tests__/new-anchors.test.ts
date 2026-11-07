@@ -111,7 +111,7 @@ describe("course anchors", () => {
       templateNames: i === 0 ? ["A4 1:10000"] : [],
       printStatus: (["ready", "noMap", "issues"] as const)[i],
     }));
-    expect(withMaps.find((a) => a.key === "template")!.suggest!("")).toEqual([{ key: "A4 1:10000", label: "A4 1:10000" }]);
+    expect(withMaps.find((a) => a.key === "template")!.suggest!("", undefined)).toEqual([{ key: "A4 1:10000", label: "A4 1:10000" }]);
     const byTemplate = [{ id: "1", anchor: "template", operator: "eq" as const, value: "a4 1:10000" }];
     expect(applyFilters(rows, byTemplate, withMaps).map((c) => c.id)).toEqual([1]);
     const byStatus = [{ id: "1", anchor: "status", operator: "eq" as const, value: "issues" }];

@@ -8,16 +8,7 @@
 
 import { useState } from "react";
 import { useTranslation } from "react-i18next";
-import { templateKeyName } from "@oxygen/shared";
-import { EMPTY_TEMPLATE_DRAFT, templatePayload, type TemplateDraft } from "../lib/course-map-types";
-
-export type NewTemplatePayload = ReturnType<typeof templatePayload>;
-
-/** The payload of a draft; a blank name takes the key's name. */
-export function newTemplatePayload(draft: TemplateDraft): NewTemplatePayload {
-  const payload = templatePayload(draft);
-  return payload.name ? payload : { ...payload, name: templateKeyName(payload) };
-}
+import { EMPTY_TEMPLATE_DRAFT, newTemplatePayload, type NewTemplatePayload, type TemplateDraft } from "../lib/course-map-types";
 
 const FIELD = "w-full px-2 py-1 border border-slate-200 rounded-md bg-white text-xs text-slate-700";
 

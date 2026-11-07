@@ -140,12 +140,19 @@ function json(value: unknown): Prisma.InputJsonValue {
   return value as Prisma.InputJsonValue;
 }
 
+type ParsedMap<T> = Omit<T, "version" | "windowCenter" | "overrides" | "objects"> & {
+  version: string;
+  windowCenter: MapPoint | null;
+  overrides: CourseMapOverrides;
+  objects: CourseMapObject[];
+};
+
 function parseMap<T extends {
   windowCenter: unknown;
   overrides: unknown;
   objects: unknown;
   version: bigint;
-}>(row: T) {
+}>(row: T): ParsedMap<T> {
   return {
     ...row,
     version: row.version.toString(),

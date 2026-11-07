@@ -16,7 +16,8 @@ import { createCourseAnchors, type CourseOverviewFields } from "../lib/structure
 import { useCapabilities } from "../context/CapabilitiesContext";
 import { layoutEditorHref } from "../lib/editor/layout-href";
 import { parsePick } from "../lib/template-picker";
-import { PrintStatusPill, TemplateBadge, TemplatePicker, useCourseMapsOverview } from "../components/CourseMapsOverview";
+import { PrintStatusPill, TemplateBadge, TemplatePicker } from "../components/CourseMapsOverview";
+import { useCourseMapsOverview } from "../hooks/useCourseMapsOverview";
 import { downloadSameOriginFile } from "../lib/download-api";
 import {
   courselessClassNames,

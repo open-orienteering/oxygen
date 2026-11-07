@@ -7,6 +7,7 @@ import {
   defaultMapAppearance,
   defaultMapFrame,
   getPaperDimensions,
+  templateKeyName,
 } from "@oxygen/shared";
 
 export type MapPaper = "A3" | "A4" | "A5";
@@ -56,4 +57,12 @@ export function templatePayload(draft: TemplateDraft) {
     },
     objects: [],
   };
+}
+
+export type NewTemplatePayload = ReturnType<typeof templatePayload>;
+
+/** The payload of a draft; a blank name takes the key's name (`A4 portrait 1:10000`). */
+export function newTemplatePayload(draft: TemplateDraft): NewTemplatePayload {
+  const payload = templatePayload(draft);
+  return payload.name ? payload : { ...payload, name: templateKeyName(payload) };
 }
