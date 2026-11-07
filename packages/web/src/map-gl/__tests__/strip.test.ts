@@ -221,8 +221,8 @@ describe("triangulateEvenOdd", () => {
         const t = triangulateEvenOdd(rings);
         expect(area(t)).toBeCloseTo(10_000 - 2_400 + 800, 3);
         expect(covers(t, 40, 40)).toBe(false);
-        expect(covers(t, 90, 90)).toBe(true);
-        expect(covers(t, -10, 40)).toBe(true);
+        expect(covers(t, 93, 81)).toBe(true);
+        expect(covers(t, -9, 37)).toBe(true);
       }
     });
 
@@ -230,16 +230,16 @@ describe("triangulateEvenOdd", () => {
       const t = triangulateEvenOdd([win, [20, 20, 60, 20, 60, -30, 20, -30]]);
       expect(area(t)).toBeCloseTo(10_000 - 800 + 1_200, 3);
       expect(covers(t, 40, 10)).toBe(false);
-      expect(covers(t, 40, 50)).toBe(true);
-      expect(covers(t, 40, -10)).toBe(true);
+      expect(covers(t, 43, 57)).toBe(true);
+      expect(covers(t, 43, -11)).toBe(true);
     });
 
     it("cuts a band beyond both sides whose every vertex lies outside", () => {
       const t = triangulateEvenOdd([win, [-20, 40, 120, 40, 120, 60, -20, 60]]);
       expect(area(t)).toBeCloseTo(10_000 - 2_000 + 800, 3);
       expect(covers(t, 50, 50)).toBe(false);
-      expect(covers(t, -10, 50)).toBe(true);
-      expect(covers(t, 50, 90)).toBe(true);
+      expect(covers(t, -9, 47)).toBe(true);
+      expect(covers(t, 47, 83)).toBe(true);
     });
 
     it("cuts a non-convex shape crossing a rotated window from a corner", () => {
@@ -252,14 +252,21 @@ describe("triangulateEvenOdd", () => {
       const at = (x: number, y: number): [number, number] => [x * c - y * s, x * s + y * c];
       expect(covers(t, ...at(30, 5))).toBe(false);
       expect(covers(t, ...at(5, 30))).toBe(false);
-      expect(covers(t, ...at(30, 30))).toBe(true);
-      expect(covers(t, ...at(-10, -10))).toBe(true);
+      expect(covers(t, ...at(31, 27))).toBe(true);
+      expect(covers(t, ...at(-11, -7))).toBe(true);
     });
 
     it("keeps a hole that touches the outer's edge", () => {
       const t = triangulateEvenOdd([win, [0, 20, 60, 20, 60, 60, 0, 60]]);
       expect(area(t)).toBeCloseTo(7_600, 3);
       expect(covers(t, 30, 40)).toBe(false);
+    });
+
+    it("cancels the window when the shape covers it whole", () => {
+      const t = triangulateEvenOdd([win, sq(-10, -10, 120)]);
+      expect(area(t)).toBeCloseTo(120 * 120 - 10_000, 3);
+      expect(covers(t, 47, 53)).toBe(false);
+      expect(covers(t, -5, 53)).toBe(true);
     });
 
     it("fills a shape wholly outside the window", () => {
