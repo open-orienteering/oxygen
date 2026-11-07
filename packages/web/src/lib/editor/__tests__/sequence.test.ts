@@ -1,6 +1,6 @@
 import { describe, it, expect } from "vitest";
 import type { course } from "@oxygen/shared";
-import { displaySequence, explicitStructure, insertIndexForLeg, type SiteRow } from "../sequence";
+import { displaySequence, explicitStructure, insertIndexForLeg, legForInsert, type SiteRow } from "../sequence";
 
 const site = (id: number, status: number, x = id, y = id, code = String(id)): SiteRow => ({ id, code, status, mapX: x, mapY: y });
 // Two starts (1 the default: lowest id), one finish.
@@ -33,5 +33,19 @@ describe("display sequence and explicit structure (docs/course-editor.md §4)", 
     expect(insertIndexForLeg(rows, 0)).toBe(0);
     expect(insertIndexForLeg(rows, 1)).toBe(2);
     expect(insertIndexForLeg(rows, 2)).toBe(3);
+  });
+
+  it("maps an insert position back to the leg's item and its ends (§6.7)", () => {
+    const rows = displaySequence(st(31, 33, 32), SITES);
+    // rows: S(0) 31(1) 33(2, unpositioned) 32(3) F(4).
+    for (let leg = 0; leg < 3; leg++) {
+      const hit = legForInsert(rows, insertIndexForLeg(rows, leg));
+      expect(hit && [hit.from.id, hit.to.id]).toEqual([[1, 31], [31, 32], [32, 9]][leg]);
+    }
+    expect(legForInsert(rows, 0)?.itemIndex).toBe(1);
+    expect(legForInsert(rows, 2)?.itemIndex).toBe(3);
+    expect(legForInsert(rows, 3)?.itemIndex).toBe(4);
+    // A leg into the unpositioned control has no point to run to.
+    expect(legForInsert(rows, 1)).toBeNull();
   });
 });

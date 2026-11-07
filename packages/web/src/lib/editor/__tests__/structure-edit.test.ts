@@ -1,6 +1,6 @@
 import { describe, it, expect } from "vitest";
 import type { course } from "@oxygen/shared";
-import { appendSite, controlSequence, insertSite, moveVisit, removeSite, removeVisit, setRole, setLegGaps, setNumberHidden } from "../structure-edit";
+import { appendSite, controlSequence, insertSite, moveVisit, removeSite, removeVisit, setRole, setLegGaps, setLegProps, setNumberHidden } from "../structure-edit";
 
 type S = course.WireCourseStructure;
 const KIND: Record<number, "start" | "finish" | "control"> = { 1: "start", 2: "start", 9: "finish", 8: "finish" };
@@ -76,5 +76,44 @@ describe("numberHidden and leg gaps (docs/course-editor.md §6)", () => {
     expect(setLegGaps(styled, 2, []).items[2]).toEqual({ siteId: 32, leg: { style: "line" } });
     expect(setLegGaps(g, 2, []).items[2]).toEqual({ siteId: 32 });
     expect(setLegGaps(base, 0, [{ from: 0, to: 1 }])).toBe(base);
+  });
+});
+
+describe("leg props (docs/course-editor.md §6.7)", () => {
+  const corridor = { widthM: 50, edge: true, whiteMm: 5, whiteOpacity: 1 };
+  const base: S = {
+    version: 1, id: "c", orderMode: "ordered",
+    items: [{ siteId: 1 }, { siteId: 31 }, { siteId: 32, leg: { gaps: [{ from: 0.2, to: 0.3 }], bends: [{ x: 5, y: 5 }] } }, { siteId: 9 }],
+  };
+
+  it("merges a patch into the item's leg and keeps its other props", () => {
+    const next = setLegProps(base, 2, { style: "marked_route", corridor });
+    expect(next.items[2]).toEqual({ siteId: 32, leg: { gaps: [{ from: 0.2, to: 0.3 }], bends: [{ x: 5, y: 5 }], style: "marked_route", corridor } });
+    expect(next.items.filter((_, i) => i !== 2)).toEqual(base.items.filter((_, i) => i !== 2));
+    expect(base.items[2]).toEqual({ siteId: 32, leg: { gaps: [{ from: 0.2, to: 0.3 }], bends: [{ x: 5, y: 5 }] } });
+  });
+
+  it("drops a key set to undefined, the default style and an empty bends list", () => {
+    const styled = setLegProps(base, 2, { style: "none", corridor });
+    expect(setLegProps(styled, 2, { corridor: undefined }).items[2]).toEqual({ siteId: 32, leg: { gaps: [{ from: 0.2, to: 0.3 }], bends: [{ x: 5, y: 5 }], style: "none" } });
+    expect(setLegProps(styled, 2, { style: "line" }).items[2]).toEqual({ siteId: 32, leg: { gaps: [{ from: 0.2, to: 0.3 }], bends: [{ x: 5, y: 5 }], corridor } });
+    expect(setLegProps(base, 2, { bends: [] }).items[2]).toEqual({ siteId: 32, leg: { gaps: [{ from: 0.2, to: 0.3 }] } });
+  });
+
+  it("drops a leg left empty, and gives a leg to an item that had none", () => {
+    expect(setLegProps(base, 2, { gaps: undefined, bends: [] }).items[2]).toEqual({ siteId: 32 });
+    expect(setLegProps(base, 1, { bends: [{ x: 1, y: 2 }] }).items[1]).toEqual({ siteId: 31, leg: { bends: [{ x: 1, y: 2 }] } });
+  });
+
+  it("is a no-op on the first item, past the end and on a variation", () => {
+    expect(setLegProps(base, 0, { style: "none" })).toBe(base);
+    expect(setLegProps(base, 9, { style: "none" })).toBe(base);
+  });
+
+  it("an item whose predecessor changes still loses its leg (bends and corridor with it)", () => {
+    const withLeg = setLegProps(base, 2, { corridor });
+    const moved = removeVisit(withLeg, 0, kindOf);
+    expect(moved.items.map((i) => (i.kind === "variation" ? null : i.siteId))).toEqual([1, 32, 9]);
+    expect(moved.items[1]).toEqual({ siteId: 32 });
   });
 });

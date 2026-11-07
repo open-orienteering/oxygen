@@ -419,10 +419,23 @@ describe("G binding (§6.3)", () => {
   it("leg gaps by fraction", () => {
     const onAdd = vi.fn();
     const gesture: GestureRef = { current: null };
-    const b = gapBinding({ gesture, target: { kind: "leg", itemIndex: 2, a: { x: 0, y: 0 }, b: { x: 100, y: 0 }, gaps: [] }, redraw: vi.fn(), onAdd, onRemove: vi.fn(), onExit: vi.fn() });
+    const b = gapBinding({ gesture, target: { kind: "leg", itemIndex: 2, points: [{ x: 0, y: 0 }, { x: 100, y: 0 }], gaps: [] }, redraw: vi.fn(), onAdd, onRemove: vi.fn(), onExit: vi.fn() });
     expect(b.onPointerDown!(ptr(40, 0.5))).toBe(true);
     b.onPointerUp!({ x: 60, y: 0 });
     expect(onAdd).toHaveBeenCalledWith({ from: 0.4, to: 0.6 });
+  });
+
+  it("on a bent leg: the target and gaps follow the bends, a press off the chord but on a bend reaches it", () => {
+    const onAdd = vi.fn();
+    const gesture: GestureRef = { current: null };
+    const points = [{ x: 0, y: 0 }, { x: 30, y: 40 }, { x: 60, y: 0 }];
+    const b = gapBinding({ gesture, target: { kind: "leg", itemIndex: 2, points, gaps: [{ from: 0.25, to: 0.75 }] }, redraw: vi.fn(), onAdd, onRemove: vi.fn(), onExit: vi.fn() });
+    expect(b.shapes!.find((s) => s.testId === "editor-gap-target")).toMatchObject({ points });
+    expect(b.shapes!.find((s) => s.testId === "editor-gap")).toMatchObject({ points: [{ x: 15, y: 20 }, { x: 30, y: 40 }, { x: 45, y: 20 }] });
+    // Far from the chord (y = 0), on the first segment.
+    expect(b.onPointerDown!(ptr(6, 8))).toBe(true);
+    b.onPointerUp!({ x: 9, y: 12 });
+    expect(onAdd).toHaveBeenCalledWith({ from: 0.1, to: 0.15 });
   });
 });
 
@@ -474,5 +487,70 @@ describe("the eyedropper binding (docs/course-editor.md §6.4)", () => {
 
   it("lights no rail button", () => {
     expect(railKeyOf({ kind: "pick-symbol" })).toBeNull();
+  });
+});
+
+describe("V on a selected leg: bend handles (docs/course-editor.md §6.7)", () => {
+  const legOpts = (over: Partial<NonNullable<Parameters<typeof selectBinding>[0]["leg"]>> = {}) => ({
+    from: { x: 0, y: 0 }, to: { x: 40, y: 0 }, bends: [{ x: 20, y: 10 }], focused: null,
+    onBendsChange: vi.fn(), onBendFocus: vi.fn(), snap: (p: { x: number; y: number }) => p, ...over,
+  });
+
+  it("draws the leg's outline through its bends and a handle per bend", () => {
+    const leg = legOpts({ focused: 0 });
+    const b = selectBinding(selectOpts({ leg }));
+    expect(b.shapes!.find((s) => s.testId === "editor-leg-outline")).toMatchObject({ kind: "line", points: [{ x: 0, y: 0 }, { x: 20, y: 10 }, { x: 40, y: 0 }], dashed: true });
+    expect(b.shapes!.filter((s) => s.testId === "editor-bend-handle")).toEqual([
+      expect.objectContaining({ kind: "handle", x: 20, y: 10, active: true, data: { index: "0", focused: "true" } }),
+    ]);
+  });
+
+  it("a drag moves the bend: the outline follows, one write on release with the moved bend", () => {
+    const o = selectOpts({ leg: legOpts() });
+    const b = selectBinding(o);
+    // Within the handle's reach (7 px × 0.1 mm/px).
+    expect(b.onPointerDown!(ptr(20.4, 10.3))).toBe(true);
+    b.onPointerDrag!({ x: 22, y: 14 });
+    expect(o.redraw).toHaveBeenCalled();
+    expect(o.leg!.onBendsChange).not.toHaveBeenCalled();
+    // The page re-renders with the gesture in flight: the outline follows.
+    const mid = selectBinding(o);
+    expect(mid.shapes!.find((s) => s.testId === "editor-leg-outline")).toMatchObject({ points: [{ x: 0, y: 0 }, { x: 22, y: 14 }, { x: 40, y: 0 }] });
+    mid.onPointerUp!({ x: 22.5, y: 15 });
+    expect(o.leg!.onBendsChange).toHaveBeenCalledTimes(1);
+    expect(o.leg!.onBendsChange).toHaveBeenCalledWith([{ x: 22.5, y: 15 }]);
+    expect(o.gesture.current).toBeNull();
+  });
+
+  it("a click on a handle focuses it; a cancelled drag writes nothing; off the handles it is the viewer's", () => {
+    const o = selectOpts({ leg: legOpts() });
+    const b = selectBinding(o);
+    expect(b.onPointerDown!(ptr(20, 10))).toBe(true);
+    b.onPointerUp!({ x: 20.05, y: 10 });
+    expect(o.leg!.onBendFocus).toHaveBeenCalledWith(0);
+    expect(o.leg!.onBendsChange).not.toHaveBeenCalled();
+    expect(b.onPointerDown!(ptr(20, 10))).toBe(true);
+    b.onPointerDrag!({ x: 25, y: 12 });
+    b.onPointerUp!(null);
+    expect(o.leg!.onBendsChange).not.toHaveBeenCalled();
+    expect(b.onPointerDown!(ptr(30, 5))).toBe(false);
+  });
+
+  it("the drag snaps the bend", () => {
+    const o = selectOpts({ leg: legOpts({ snap: () => ({ x: 50, y: 50 }) }) });
+    const b = selectBinding(o);
+    b.onPointerDown!(ptr(20, 10));
+    b.onPointerDrag!({ x: 25, y: 12 });
+    b.onPointerUp!({ x: 25, y: 12 });
+    expect(o.leg!.onBendsChange).toHaveBeenCalledWith([{ x: 50, y: 50 }]);
+  });
+
+  it("a double-click on a handle inserts no control", () => {
+    const o = selectOpts({ leg: legOpts() });
+    const b = selectBinding(o);
+    b.onDoubleClick!(ptr(20, 10, { target: { kind: "leg", courseId: "c", index: 0 } }));
+    expect(o.onLegDoubleClick).not.toHaveBeenCalled();
+    b.onDoubleClick!(ptr(10, 5, { target: { kind: "leg", courseId: "c", index: 0 } }));
+    expect(o.onLegDoubleClick).toHaveBeenCalledTimes(1);
   });
 });

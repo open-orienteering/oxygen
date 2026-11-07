@@ -45,6 +45,23 @@ export interface UiArea {
   ring: readonly Pt[];
 }
 
+/**
+ * A leg the layer draws no line for (`style: "none"`, course-layer.md
+ * §10.1 — no object, so no hit-index piece): its derived pieces, paper mm.
+ * It hits within the tolerance of them, after the layer's objects and the
+ * UI sites, before the UI areas (docs/course-editor.md §5, §6.7).
+ */
+export interface UiLeg {
+  courseId: string;
+  index: number;
+  pieces: readonly (readonly Pt[])[];
+}
+
+/** The `style: "none"` legs of a derivation as UI-layer hit targets. */
+export function uiLegsOf(courses: readonly { id: string; legs: readonly { style: string; pieces: readonly (readonly Pt[])[] }[] }[] | undefined): UiLeg[] {
+  return (courses ?? []).flatMap((c) => c.legs.flatMap((l, index) => (l.style === "none" ? [{ courseId: c.id, index, pieces: l.pieces }] : [])));
+}
+
 /** Reach around every shape, CSS px — the legacy leg hit-line was 12 px wide (6 px each side). */
 export const HIT_TOLERANCE_PX = 6;
 
@@ -79,7 +96,7 @@ function targetOf(ref: { kind: string; id: string }): EditorTarget | null {
  */
 export function editorHitAt(
   index: CourseHitIndex | null, pt: Pt, toleranceMm: number, uiSites: readonly UiSite[] = [], uiAreas: readonly UiArea[] = [],
-  accept: (t: EditorTarget) => boolean = () => true,
+  accept: (t: EditorTarget) => boolean = () => true, uiLegs: readonly UiLeg[] = [],
 ): EditorTarget | null {
   const areaIds = new Set(uiAreas.map((a) => a.id));
   if (index) {
@@ -106,6 +123,16 @@ export function editorHitAt(
     if (d <= toleranceMm && (!near || d < near.d)) near = { id: s.id, d };
   }
   if (near) return { kind: "site", id: near.id };
+  let leg: { t: EditorTarget; d: number } | null = null;
+  for (const l of uiLegs) {
+    const t: EditorTarget = { kind: "leg", courseId: l.courseId, index: l.index };
+    if (!accept(t)) continue;
+    for (const piece of l.pieces) {
+      const d = pathDistance(pt, piece, false);
+      if (d <= toleranceMm && (!leg || d < leg.d)) leg = { t, d };
+    }
+  }
+  if (leg) return leg.t;
   for (let i = uiAreas.length - 1; i >= 0; i--) {
     const a = uiAreas[i];
     if (!accept({ kind: "object", id: a.id })) continue;
@@ -114,9 +141,12 @@ export function editorHitAt(
   return null;
 }
 
-function ringDistance(pt: Pt, ring: readonly Pt[]): number {
+const ringDistance = (pt: Pt, ring: readonly Pt[]): number => pathDistance(pt, ring, true);
+
+function pathDistance(pt: Pt, ring: readonly Pt[], closed: boolean): number {
   let best = Infinity;
-  for (let i = 0; i < ring.length; i++) {
+  const n = closed ? ring.length : ring.length - 1;
+  for (let i = 0; i < n; i++) {
     const a = ring[i], b = ring[(i + 1) % ring.length];
     const dx = b.x - a.x, dy = b.y - a.y, l2 = dx * dx + dy * dy;
     const t = l2 === 0 ? 0 : Math.max(0, Math.min(1, ((pt.x - a.x) * dx + (pt.y - a.y) * dy) / l2));

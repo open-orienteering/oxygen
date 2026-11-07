@@ -11,6 +11,16 @@ export const AREA_KEYS: Record<AreaChoice, string> = {
   oob_area: "O", oob_line: "L", whiteout: "W", filter_region: "F", toner_saver: "S", marked_route: "R",
 };
 
+/**
+ * The `A` menu's *Corridor on selected leg* (08 §5.2 rail `A`;
+ * docs/course-editor.md §6.4, §6.7): not an area kind — it writes the
+ * selected leg's `LegProps.corridor` — so it is outside `AREA_CHOICES` (the
+ * phone's + menu lists those) and has its own chord key, read only while
+ * the menu is open.
+ */
+export const CORRIDOR_KEY = "C";
+export const isCorridorKey = (key: string): boolean => key.toUpperCase() === CORRIDOR_KEY;
+
 /** The area kind an `A`-menu key picks, or null. */
 export function areaChoiceOfKey(key: string): AreaChoice | null {
   const k = key.toUpperCase();

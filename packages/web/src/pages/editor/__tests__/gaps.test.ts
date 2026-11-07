@@ -40,14 +40,24 @@ describe("circle gaps (docs/course-layer.md §2 convention)", () => {
 
 describe("leg gaps", () => {
   const a = { x: 0, y: 0 }, b = { x: 100, y: 0 };
-  it("fractions of the centre-to-centre leg, clamped", () => {
-    expect(legFraction(a, b, { x: 25, y: 5 })).toBe(0.25);
-    expect(legFraction(a, b, { x: -5, y: 0 })).toBe(0);
+  const leg = [a, b];
+  it("fractions of the leg, clamped", () => {
+    expect(legFraction(leg, { x: 25, y: 5 })).toBe(0.25);
+    expect(legFraction(leg, { x: -5, y: 0 })).toBe(0);
   });
 
   it("a drag along the leg opens from the smaller fraction", () => {
-    expect(legGapFromDrag(a, b, { x: 60, y: 0 }, { x: 40, y: 1 })).toEqual({ from: 0.4, to: 0.6 });
-    expect(legGapFromDrag(a, b, { x: 40, y: 0 }, { x: 40.2, y: 0 })).toBeNull();
+    expect(legGapFromDrag(leg, { x: 60, y: 0 }, { x: 40, y: 1 })).toEqual({ from: 0.4, to: 0.6 });
+    expect(legGapFromDrag(leg, { x: 40, y: 0 }, { x: 40.2, y: 0 })).toBeNull();
+  });
+
+  it("on a bent leg, fractions of the bent length (§6.3, F3 Q1 A)", () => {
+    // 0,0 → 30,40 → 60,0: two 50 mm segments.
+    const bent = [a, { x: 30, y: 40 }, { x: 60, y: 0 }];
+    expect(legFraction(bent, { x: 30, y: 40 })).toBeCloseTo(0.5);
+    expect(legFraction(bent, { x: 45, y: 20 })).toBeCloseTo(0.75);
+    // The straight chord's projection would be 0.5 for both ends; along the bends it is 0.25 → 0.75.
+    expect(legGapFromDrag(bent, { x: 15, y: 20 }, { x: 45, y: 20 })).toEqual({ from: 0.25, to: 0.75 });
   });
 
   it("merges and finds gaps", () => {

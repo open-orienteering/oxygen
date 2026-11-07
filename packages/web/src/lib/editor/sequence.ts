@@ -94,3 +94,18 @@ export function insertIndexForLeg(rows: readonly DisplayRow[], legIndex: number)
   const target = rows.filter((r) => r.pt !== null)[legIndex + 1];
   return !target || target.kind !== "control" ? controls : target.seqIndex;
 }
+
+/**
+ * The leg a leg-click phantom's insert position names (docs/course-editor.md
+ * §4, §6.7): `itemIndex` is the row the leg runs into — rows[i] ↔ the
+ * explicit structure's items[i] — and `from` the positioned row before it.
+ * The inverse of `insertIndexForLeg`; null when either end has no point.
+ */
+export function legForInsert(rows: readonly DisplayRow[], insertAt: number): { itemIndex: number; from: DisplayRow; to: DisplayRow } | null {
+  const controls = rows.filter((r) => r.kind === "control").length;
+  const itemIndex = rows.findIndex((r) => (r.kind === "control" ? r.seqIndex === insertAt : r.kind === "finish" && insertAt >= controls));
+  const to = rows[itemIndex];
+  const from = rows.slice(0, Math.max(0, itemIndex)).reverse().find((r) => r.pt);
+  if (itemIndex < 0 || !to?.pt || !from) return null;
+  return { itemIndex, from, to };
+}

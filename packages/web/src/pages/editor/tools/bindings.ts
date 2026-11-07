@@ -10,6 +10,7 @@ import type { course } from "@oxygen/shared";
 import type { EditorToolBinding, ToolPointer, ToolShape } from "../../../components/MapViewer";
 import type { EditorTarget } from "../../../lib/editor/hit";
 import { circleGapAt, circleGapFromDrag, compassDeg, legFraction, legGapAt, legGapFromDrag, type AngularGap, type FractionGap } from "./gaps";
+import { polylineDistance, polylineSlice } from "../../../lib/editor/bends";
 import { legLengthShape } from "../../../lib/editor/leg-length";
 import { isClosedKind, pointInPolygon, smoothed, step, type PolygonState } from "./polygon";
 import { outlinePoints, vertexRule, type Vertex } from "../../../lib/editor/geometry-edit";
@@ -33,6 +34,8 @@ export type Gesture =
   /** A press at `press` while drawing placed vertex `index` (snapped); a drag past 3 px from the press pulls its handles (§6.4). */
   | { kind: "poly-pull"; index: number; press: Pt; mmPerPx: number; poly: PolygonState; pulled: boolean }
   | { kind: "gap"; from: Pt; to: Pt }
+  /** Bend `index` of the selected leg dragged from `press` (§6.7); `bends` is the live list. */
+  | { kind: "bend"; index: number; press: Pt; mmPerPx: number; bends: Pt[]; moved: boolean }
   | null;
 
 export interface GestureRef { current: Gesture }
@@ -97,7 +100,34 @@ export interface SelectOptions {
   /** Rings of the multi-selection, radius on paper. */
   ringMm: number;
   redraw: Redraw;
+  /** The selected leg (its phantom) with its bends, desktop and tablet (§6.7): handles to drag and focus. */
+  leg?: LegBends | null;
 }
+
+/** The selected leg's bends as `V` edits them (docs/course-editor.md §6.7). */
+export interface LegBends {
+  from: Pt;
+  to: Pt;
+  bends: readonly Pt[];
+  /** The focused bend (`Delete` removes it). */
+  focused: number | null;
+  /** One write per drag, on release. */
+  onBendsChange: (bends: Pt[]) => void;
+  onBendFocus: (index: number | null) => void;
+  snap: (pt: Pt) => Pt;
+}
+
+/** The bend handle within reach of `pt`, nearest first; −1 when none. */
+function bendAt(leg: LegBends, pt: Pt, reach: number): number {
+  let best = -1, bestD = Infinity;
+  leg.bends.forEach((b, i) => {
+    const d = Math.hypot(b.x - pt.x, b.y - pt.y);
+    if (d <= reach && d < bestD) { best = i; bestD = d; }
+  });
+  return best;
+}
+
+const round2 = (v: number) => Math.round(v * 100) / 100;
 
 export function selectBinding(o: SelectOptions): EditorToolBinding {
   const g = o.gesture;
@@ -113,10 +143,25 @@ export function selectBinding(o: SelectOptions): EditorToolBinding {
     if (s) shapes.push({ kind: "circle", x: s.x, y: s.y, rMm: o.ringMm * 1.35, color: BLUE, testId: "editor-multi-ring", data: { "control-id": String(id) } });
   }
   const gs = g.current;
+  const leg = o.leg ?? null;
+  if (leg) {
+    const bends = gs?.kind === "bend" ? gs.bends : leg.bends;
+    shapes.push({ kind: "line", points: [leg.from, ...bends, leg.to], dashed: true, color: BLUE, testId: "editor-leg-outline" });
+    bends.forEach((b, i) => {
+      const focused = gs?.kind === "bend" ? gs.index === i : leg.focused === i;
+      shapes.push({ kind: "handle", x: b.x, y: b.y, active: focused, testId: "editor-bend-handle", data: { index: String(i), focused: String(focused) } });
+    });
+  }
   if (gs?.kind === "lasso" && gs.points.length > 1) shapes.push({ kind: "line", points: gs.points, closed: true, dashed: true, color: BLUE, fill: "rgba(37,99,235,0.08)", testId: "editor-lasso" });
   return {
     shapes,
     onPointerDown(p: ToolPointer) {
+      // A bend handle of the selected leg first: it sits on the leg, which the viewer would take as a leg click.
+      const bend = leg ? bendAt(leg, p.pt, HANDLE_PX * p.mmPerPx) : -1;
+      if (leg && bend >= 0) {
+        g.current = { kind: "bend", index: bend, press: p.pt, mmPerPx: p.mmPerPx, bends: [...leg.bends], moved: false };
+        return true;
+      }
       const sel = shown(o);
       if (sel) {
         // Vertex, grip, then the body or within reach of its edge. A closed area's body is its outline: the hit-test
@@ -152,6 +197,13 @@ export function selectBinding(o: SelectOptions): EditorToolBinding {
       if (cur?.kind === "lasso") {
         cur.points.push(pt);
         o.redraw();
+      } else if (cur?.kind === "bend" && leg) {
+        // Past 3 px from the press it is a drag; until then a click (a focus).
+        if (!cur.moved && near(cur.press, pt, 3 * cur.mmPerPx)) return;
+        cur.moved = true;
+        const at = leg.snap(pt);
+        cur.bends = cur.bends.map((b, i) => (i === cur.index ? { x: round2(at.x), y: round2(at.y) } : b));
+        o.redraw();
       } else if (cur?.kind === "object" || cur?.kind === "grip") {
         const geometry = dragGeometry(cur, pt, mods);
         if (geometry) o.onObjectDraft(cur.id, geometry);
@@ -161,6 +213,14 @@ export function selectBinding(o: SelectOptions): EditorToolBinding {
       const cur = g.current;
       g.current = null;
       if (!cur) return;
+      if (cur.kind === "bend") {
+        o.redraw();
+        if (!pt || !leg) return;
+        if (!cur.moved) return leg.onBendFocus(cur.index);
+        const at = leg.snap(pt);
+        leg.onBendFocus(cur.index);
+        return leg.onBendsChange(cur.bends.map((b, i) => (i === cur.index ? { x: round2(at.x), y: round2(at.y) } : b)));
+      }
       if (cur.kind === "shift-click") {
         if (pt) o.onToggleMulti(cur.id);
       } else if (cur.kind === "lasso") {
@@ -176,6 +236,8 @@ export function selectBinding(o: SelectOptions): EditorToolBinding {
       }
     },
     onDoubleClick(p) {
+      // On a bend handle: the press's focus already happened; no control is inserted under it (§6.7).
+      if (leg && bendAt(leg, p.pt, HANDLE_PX * p.mmPerPx) >= 0) return;
       // On the selected object's edge, off its vertices: a vertex there (§7 "Editing geometry").
       const sel = shown(o);
       const inserted = sel ? insertAtEdge(sel.geometry, vertexRule(sel.kind), p.pt, HANDLE_PX * p.mmPerPx) : null;
@@ -376,7 +438,8 @@ export function pickSymbolBinding(o: { onPick: (pt: Pt, toleranceMm: number) => 
 /** `gaps`: the effective ones (stored, else automatic); `stored`: whether a list is stored (Reset gaps applies). */
 export type GapTarget =
   | { kind: "circle"; siteId: number; centre: Pt; radiusMm: number; gaps: AngularGap[]; stored?: boolean }
-  | { kind: "leg"; itemIndex: number; a: Pt; b: Pt; gaps: FractionGap[]; stored?: boolean };
+  /** `points`: the leg's polyline — the previous site, its bends, the site (docs/course-editor.md §6.3). */
+  | { kind: "leg"; itemIndex: number; points: Pt[]; gaps: FractionGap[]; stored?: boolean };
 
 export interface GapOptions {
   gesture: GestureRef;
@@ -406,19 +469,16 @@ export function gapBinding(o: GapOptions): EditorToolBinding {
     const preview = pending ? circleGapFromDrag(t.centre, pending.from, pending.to) : null;
     if (preview) shapes.push({ kind: "line", points: arcPoints(t.centre, t.radiusMm, preview), color: BLUE, widthPx: 5, testId: "editor-gap-preview" });
   } else {
-    const at = (f: number) => ({ x: t.a.x + (t.b.x - t.a.x) * f, y: t.a.y + (t.b.y - t.a.y) * f });
-    shapes.push({ kind: "line", points: [t.a, t.b], dashed: true, color: BLUE, testId: "editor-gap-target", data: { kind: "leg" } });
-    t.gaps.forEach((g, i) => shapes.push({ kind: "line", points: [at(g.from), at(g.to)], color: "#f59e0b", widthPx: 5, testId: "editor-gap", data: { index: String(i), from: String(g.from), to: String(g.to) } }));
-    const preview = pending ? legGapFromDrag(t.a, t.b, pending.from, pending.to) : null;
-    if (preview) shapes.push({ kind: "line", points: [at(preview.from), at(preview.to)], color: BLUE, widthPx: 5, testId: "editor-gap-preview" });
+    shapes.push({ kind: "line", points: t.points, dashed: true, color: BLUE, testId: "editor-gap-target", data: { kind: "leg" } });
+    t.gaps.forEach((g, i) => shapes.push({ kind: "line", points: polylineSlice(t.points, g.from, g.to), color: "#f59e0b", widthPx: 5, testId: "editor-gap", data: { index: String(i), from: String(g.from), to: String(g.to) } }));
+    const preview = pending ? legGapFromDrag(t.points, pending.from, pending.to) : null;
+    if (preview) shapes.push({ kind: "line", points: polylineSlice(t.points, preview.from, preview.to), color: BLUE, widthPx: 5, testId: "editor-gap-preview" });
   }
   /** On the rim / leg within reach (screen px, at least 1 mm). */
   const onTarget = (p: ToolPointer) => {
     const reach = Math.max(1, 10 * p.mmPerPx);
     if (t.kind === "circle") return Math.abs(Math.hypot(p.pt.x - t.centre.x, p.pt.y - t.centre.y) - t.radiusMm) <= reach;
-    const f = legFraction(t.a, t.b, p.pt);
-    const q = { x: t.a.x + (t.b.x - t.a.x) * f, y: t.a.y + (t.b.y - t.a.y) * f };
-    return Math.hypot(p.pt.x - q.x, p.pt.y - q.y) <= reach;
+    return polylineDistance(t.points, p.pt) <= reach;
   };
   return {
     exclusive: true,
@@ -441,10 +501,10 @@ export function gapBinding(o: GapOptions): EditorToolBinding {
       o.gesture.current = null;
       if (g?.kind !== "gap" || !pt) return o.redraw();
       g.to = pt;
-      const gap = t.kind === "circle" ? circleGapFromDrag(t.centre, g.from, g.to) : legGapFromDrag(t.a, t.b, g.from, g.to);
+      const gap = t.kind === "circle" ? circleGapFromDrag(t.centre, g.from, g.to) : legGapFromDrag(t.points, g.from, g.to);
       if (gap) return o.onAdd(gap);
       // A click on a gap removes it.
-      const index = t.kind === "circle" ? circleGapAt(t.gaps, compassDeg(t.centre, pt)) : legGapAt(t.gaps, legFraction(t.a, t.b, pt));
+      const index = t.kind === "circle" ? circleGapAt(t.gaps, compassDeg(t.centre, pt)) : legGapAt(t.gaps, legFraction(t.points, pt));
       if (index >= 0) o.onRemove(index);
       else o.redraw();
     },

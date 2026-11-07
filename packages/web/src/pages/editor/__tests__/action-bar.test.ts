@@ -3,7 +3,7 @@ import { courseActions, type ActionContext, type ActionHandlers } from "../Actio
 
 const noop = () => undefined;
 const on: ActionHandlers = {
-  insert: noop, addToCourse: noop, add: noop, addStart: noop, addFinish: noop, useAsRole: noop, append: noop,
+  insert: noop, addBend: noop, addToCourse: noop, add: noop, addStart: noop, addFinish: noop, useAsRole: noop, append: noop,
   removeFromCourse: noop, resetLabel: noop, radio: noop, confirmSwap: noop, declineSwap: noop, description: noop, delete: noop,
 };
 const label = (k: string, o?: Record<string, string>) => (o?.name ? `${k}:${o.name}` : k);
@@ -19,8 +19,9 @@ describe("courseActions (the legacy popover's entries, docs/course-editor.md §4
     expect(ids({ phantom: { insertAt: null }, course: "Lång" })).toEqual(["add-to-course", "add", "add-start", "add-finish"]);
   });
 
-  it("a leg: insert only", () => {
+  it("a leg: insert, and add bend where the leg can be edited (§6.7)", () => {
     expect(ids({ phantom: { insertAt: 2 }, course: "Lång" })).toEqual(["insert"]);
+    expect(ids({ phantom: { insertAt: 2 }, course: "Lång", legEdit: true })).toEqual(["insert", "add-bend"]);
   });
 
   it("a control on the course", () => {
