@@ -127,7 +127,8 @@ so the course layer's targets are off, and the keys are Layout's own.
 **Writes.** One gesture is one whole-snapshot write and one undo entry on
 the editor's shared stack, whose undo writes back the snapshot it
 replaced (`course-editor.md` §3); numeric fields commit on blur / Enter;
-there is no debounce. The status bar's save state is the editor's.
+there is no debounce. The save state is the editor's (the top bar's save
+indicator, `course-editor.md` §2).
 
 **Version tokens** (D8). `course_maps.version` and `map_templates.version`
 are the G1 token for rows that are not journaled: an HLC minted by the
@@ -416,7 +417,8 @@ its page. No sheet for the class's course → `editor-class-no-sheet` and
 the course as in Course view. Another course, Course or All controls
 leaves it. In Layout mode Class view opens the class's sheet.
 
-**The sheet key** in the status bar (`editor-status-sheet`, 08 §5.2):
+**The sheet key** in the top bar's course-info popover (`editor-stats-sheet`,
+`data-key`, `course-editor.md` §2; 08 §5.2 put it in a status bar, P2 moved it):
 `1:<scale> <paper> <orientation>` of the shown sheet, in Layout mode and
 Class view, in place of the map scale.
 
