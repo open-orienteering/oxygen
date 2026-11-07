@@ -5,9 +5,9 @@
  */
 
 import { placeControlLabels, type PlacementCircle, type PlacementSeg } from "../course-maps/control-label-placement.js";
-import { clipLine, subtractLegGaps, type OverlaySegment } from "../course-maps/overlay-geometry.js";
+import { subtractLegGaps } from "../course-maps/overlay-geometry.js";
 import type { MapPoint } from "../course-maps/schema.js";
-import { circleCuts, legGaps } from "./cuts.js";
+import { circleCuts, polylineLegGaps } from "./cuts.js";
 import type { CourseDerivation, CourseItem, CourseLayerInput, CourseSite, CourseStructure, DerivedCourse, DerivedLeg, DerivedSite } from "./types.js";
 
 /** Sizes the rules read, paper mm (from the resolved symbols). */
@@ -47,15 +47,76 @@ function sequenceOf(structure: CourseStructure, sites: ReadonlyMap<string, Cours
   return out;
 }
 
-/** Join clipped segments that share an end point back into polylines. */
-function joinSegments(segments: OverlaySegment[]): MapPoint[][] {
-  const out: MapPoint[][] = [];
-  for (const s of segments) {
-    const last = out.at(-1)?.at(-1);
-    if (last && Math.abs(last.x - s.x1) < 1e-9 && Math.abs(last.y - s.y1) < 1e-9) out.at(-1)!.push({ x: s.x2, y: s.y2 });
-    else out.push([{ x: s.x1, y: s.y1 }, { x: s.x2, y: s.y2 }]);
+/** Polyline length, mm: a leg's length along its bends (§4.1, §10.1). */
+export function legLengthMm(points: readonly MapPoint[]): number {
+  let sum = 0;
+  for (let i = 1; i < points.length; i++) sum += Math.hypot(points[i].x - points[i - 1].x, points[i].y - points[i - 1].y);
+  return sum;
+}
+
+/** The leg's polyline: previous site, bends, site; repeated points dropped. */
+function legPolyline(a: MapPoint, bends: readonly MapPoint[] | undefined, b: MapPoint): MapPoint[] {
+  const out: MapPoint[] = [{ x: a.x, y: a.y }];
+  for (const p of [...(bends ?? []), b]) {
+    const last = out[out.length - 1];
+    if (Math.abs(last.x - p.x) > 1e-9 || Math.abs(last.y - p.y) > 1e-9) out.push({ x: p.x, y: p.y });
   }
+  if (out.length === 1) out.push({ x: b.x, y: b.y });
   return out;
+}
+
+interface Obstacle {
+  x: number;
+  y: number;
+  clearance: number;
+}
+
+/**
+ * Clip a polyline at the sites (§3.2 step 3): each segment loses what lies
+ * within an obstacle's clearance; what is left joins back into runs
+ * through the bends, and runs of 1 mm or less are dropped. On a straight
+ * piece this is `clipLine`'s rule.
+ */
+function clipPolyline(piece: readonly MapPoint[], obstacles: readonly Obstacle[]): MapPoint[][] {
+  const runs: MapPoint[][] = [];
+  let open: MapPoint[] | null = null;
+  for (let j = 1; j < piece.length; j++) {
+    const a = piece[j - 1], b = piece[j];
+    const dx = b.x - a.x, dy = b.y - a.y;
+    const length = Math.hypot(dx, dy);
+    if (length === 0) continue;
+    const ux = dx / length, uy = dy / length;
+    const blocks: Array<[number, number]> = [];
+    for (const o of obstacles) {
+      const along = (o.x - a.x) * ux + (o.y - a.y) * uy;
+      const perpendicular = Math.hypot(a.x + along * ux - o.x, a.y + along * uy - o.y);
+      if (perpendicular < o.clearance) {
+        const half = Math.sqrt(o.clearance * o.clearance - perpendicular * perpendicular);
+        blocks.push([along - half, along + half]);
+      }
+    }
+    blocks.sort((l, r) => l[0] - r[0]);
+    const visible: Array<[number, number]> = [];
+    let cursor = 0;
+    for (const [start, end] of blocks) {
+      if (start > cursor) visible.push([cursor, Math.min(start, length)]);
+      cursor = Math.max(cursor, end);
+      if (cursor >= length) break;
+    }
+    if (cursor < length) visible.push([cursor, length]);
+    const at = (d: number): MapPoint => (d === 0 ? { x: a.x, y: a.y } : d === length ? { x: b.x, y: b.y } : { x: a.x + d * ux, y: a.y + d * uy });
+    for (const [s, e] of visible) {
+      if (e <= s) continue;
+      if (open && s === 0) open.push(at(e));
+      else {
+        open = [at(s), at(e)];
+        runs.push(open);
+      }
+      if (e < length) open = null;
+    }
+    if (visible.length === 0 || visible[visible.length - 1][1] < length) open = null;
+  }
+  return runs.filter((r) => legLengthMm(r) > 1);
 }
 
 const segmentsOf = (pts: MapPoint[]): PlacementSeg[] =>
@@ -101,15 +162,11 @@ export function deriveCourse(input: CourseLayerInput, m: CourseMetrics): CourseD
       for (let i = 1; i < seq.length; i++) {
         const a = seq[i - 1].site, b = seq[i].site;
         const leg = seq[i].item.leg;
-        const points = [{ x: a.x, y: a.y }, { x: b.x, y: b.y }];
-        const gaps = leg?.gaps && leg.gaps.length > 0 ? leg.gaps : (features ? legGaps(points[0], points[1], features, R, m.lineWidthMm) : []);
+        const points = legPolyline(a, leg?.bends, b);
+        const gaps = leg?.gaps && leg.gaps.length > 0 ? leg.gaps : (features ? polylineLegGaps(points, features, R, m.lineWidthMm) : []);
         const pieces: MapPoint[][] = [];
-        for (const piece of gaps.length ? subtractLegGaps(points, gaps) : [points]) {
-          const segs: OverlaySegment[] = [];
-          for (let j = 1; j < piece.length; j++) segs.push(...clipLine(piece[j - 1], piece[j], obstacles, CLEARANCE_EXTRA * R + R));
-          pieces.push(...joinSegments(segs));
-        }
-        legs.push({ from: a.id, to: b.id, points, gaps, pieces });
+        for (const piece of gaps.length ? subtractLegGaps(points, gaps) : [points]) pieces.push(...clipPolyline(piece, obstacles));
+        legs.push({ from: a.id, to: b.id, points, style: leg?.style ?? "line", gaps, pieces });
       }
     }
     return { id: structure.id, orderMode: structure.orderMode, sequence: seq.map((e) => ({ siteId: e.site.id, role: e.role })), legs };
