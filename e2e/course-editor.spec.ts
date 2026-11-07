@@ -2357,3 +2357,63 @@ test.describe("P2: the status bar out of the footer", () => {
     }
   });
 });
+
+// P5 (feedback-2026-11-07 item 2): its own describe, so the parallel rows' edits above merge cleanly.
+test.describe("P5: the pending leg from a just-placed start", () => {
+  desktopOnly();
+
+  const near = (p: Pt | undefined, q: Pt, mm: number) => !!p && Math.hypot(p.x - q.x, p.y - q.y) < mm;
+  /** A drawn piece of the course from (the rim of) `from` to (the rim of) `to`: 7 mm covers a start triangle, 4 mm a circle. */
+  const legFrom = async (page: Page, course: string, from: Pt, to: Pt) =>
+    (await legPieces(page, course)).some((l) => near(l.points[0], from, 7) && near(l.points.at(-1), to, 4));
+
+  test("S places a start and arms K; the hover draws the leg from the start with its length, and the click keeps it", async ({ page }) => {
+    await openEditor(page);
+    const name = await newCourse(page, "P5 start");
+    const made: string[] = [];
+    try {
+      // A fresh course has no controls and no explicit start: the event's default start already joins the hover.
+      const startId = (await page.locator('[data-testid="editor-seq-row"][data-kind="start"]').getAttribute("data-control-id"))!;
+      const defaultStart = (await sites(page)).find((s) => s.id === startId)!.mm;
+      await arm(page, "K");
+      const h = await emptyPoint(page, 60);
+      await page.mouse.move(h.x, h.y);
+      await expect(page.getByTestId("editor-leg-length")).toHaveText(/^\d+ m$/, { timeout: 10000 });
+      const hPaper = await toPaper(page, h);
+      await expect.poll(() => legFrom(page, name, defaultStart, hPaper), { timeout: 15000 }).toBe(true);
+      await page.keyboard.press("Escape");
+      await expect(page.getByTestId("editor-tool-V")).toHaveAttribute("aria-pressed", "true");
+
+      // S: a new start, the course's own; the tool goes on to K (§6.1).
+      await arm(page, "S");
+      const a = await emptyPoint(page, 60);
+      const wrote = waitForTrpc(page, "course.setStructure");
+      const start = await place(page, a);
+      await wrote;
+      made.push(start.id);
+      expect(start.type).toBe("Start");
+      await expect(page.getByTestId("editor-tool-K")).toHaveAttribute("aria-pressed", "true");
+      await expect(page.locator('[data-testid="editor-seq-row"][data-kind="start"]')).toHaveAttribute("data-control-id", start.id, { timeout: 15000 });
+      await expect(controlRows(page)).toHaveCount(0);
+
+      // The hover: the length label and the layer's pending leg from the new start to the cursor (the reported bug:
+      // the label showed, the line did not).
+      const b = await emptyPoint(page, 60, [a]);
+      await page.mouse.move(b.x, b.y);
+      await expect(page.getByTestId("editor-leg-length")).toHaveText(/^\d+ m$/, { timeout: 10000 });
+      const cursor = await toPaper(page, b);
+      await expect.poll(() => legFrom(page, name, start.mm, cursor), { timeout: 15000 }).toBe(true);
+
+      // The click: the control joins the course and the stored leg start → 1 stays once the tool is put away.
+      const ctl = await place(page, b);
+      made.push(ctl.id);
+      await expect(controlRows(page)).toHaveCount(1, { timeout: 15000 });
+      await page.keyboard.press("Escape");
+      await expect(page.getByTestId("editor-tool-V")).toHaveAttribute("aria-pressed", "true");
+      await expect(page.getByTestId("editor-leg-length")).toHaveCount(0);
+      await expect.poll(() => legFrom(page, name, start.mm, ctl.mm), { timeout: 15000 }).toBe(true);
+    } finally {
+      for (const id of made) await cleanup("control.delete", { id: Number(id) });
+    }
+  });
+});
