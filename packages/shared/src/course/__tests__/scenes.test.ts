@@ -129,4 +129,21 @@ describe("course scenes", () => {
     expect(d.sites.filter((s) => s.label).map((s) => s.label!.text)).toEqual(["41", "57", "63", "42", "100"]);
     expect(d.sites[0].angleDeg).toBeUndefined();
   });
+  it("course-leg-styles: a bent 705 through its bend, 707 dashed in upper purple over black, nothing for a none leg", () => {
+    const { scene, stream } = run("course-leg-styles");
+    const passes = coursePasses(scene, stream);
+    const line = passes.filter((x) => x.ref === "leg:course:0");
+    expect(line.map((x) => x.colour)).toEqual(["purple-lower"]);
+    const coords = line[0].p.kind === "stroke" ? Array.from(line[0].p.path.coords) : [];
+    expect(coords.some((v, i) => i % 2 === 0 && v === 14000 && coords[i + 1] === 20000)).toBe(true);
+    const route = passes.filter((x) => x.ref === "leg:course:1");
+    expect(route.length).toBeGreaterThan(0);
+    expect(route.every((x) => x.colour === "purple-upper")).toBe(true);
+    expect(route.reduce((n, x) => n + (x.p.kind === "stroke" ? (x.p.slices?.length ?? 1) : 0), 0)).toBeGreaterThan(3);
+    const order = stream.passes.map((p) => paletteId(scene, p.colour));
+    expect(Math.min(...route.map((x) => x.k))).toBeGreaterThan(order.lastIndexOf("black100"));
+    expect(passes.filter((x) => x.ref === "leg:course:2")).toEqual([]);
+    expect(scene.layer.derivation.courses[0].legs[2].pieces).toHaveLength(2);
+    expect(scene.layer.derivation.sites.filter((s) => s.label).map((s) => s.label!.text)).toEqual(["1", "2"]);
+  });
 });

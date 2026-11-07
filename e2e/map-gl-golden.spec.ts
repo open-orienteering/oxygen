@@ -127,6 +127,8 @@ const scenes = [
   "course-objects",
   "course-sprint",
   "course-all-controls",
+  // Leg styles and bends (F1): bent 705, bent 707 marked route, a none leg.
+  "course-leg-styles",
   // Filter regions (D3): clip by colour, hide by symbol, the moved polygon, "show only" (invert).
   ...FILTER_SCENES,
 ] as const;

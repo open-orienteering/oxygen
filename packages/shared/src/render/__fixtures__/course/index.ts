@@ -16,7 +16,7 @@ import type { DocumentColour } from "../../../map-document/header.js";
 import { courseLayer, courseRenderInput } from "../../../course/layer.js";
 import type { CourseLayer, CourseLayerInput, CourseSite, CourseStructure } from "../../../course/types.js";
 
-export const courseSceneNames = ["course-legs", "course-cuts", "course-objects", "course-sprint", "course-all-controls"] as const;
+export const courseSceneNames = ["course-legs", "course-cuts", "course-objects", "course-sprint", "course-all-controls", "course-leg-styles"] as const;
 export type CourseSceneName = (typeof courseSceneNames)[number];
 
 export interface CourseScene {
@@ -152,12 +152,31 @@ function allControls(): CourseScene {
   return scene("course-all-controls", base, { structure, sites, objects: [], appearance: {}, viewOptions: { allControls: true } });
 }
 
+/** Leg styles and bends (F1): a bent 705 over a black path, a bent 707 marked route over a power line, a `none` leg with a stored gap. */
+function legStyles(): CourseScene {
+  const base = new BaseMap("ISOM2017-2")
+    .add("401", area(0, 0, 50, 0, 50, 36, 0, 36))
+    .add("505", line(0, 13, 50, 19))
+    .add("516", line(33, 0, 35, 36));
+  const sites = [site("S", "start", 6, 4, "S1"), site("31", "control", 24, 6), site("32", "control", 42, 28), site("F", "finish", 10, 30, "F1")];
+  const structure = ordered([], {
+    items: [
+      { siteId: "S" },
+      { siteId: "31", leg: { bends: [{ x: 14, y: 20 }] } },
+      { siteId: "32", leg: { style: "marked_route", bends: [{ x: 40, y: 8 }] } },
+      { siteId: "F", leg: { style: "none", gaps: [{ from: 0.4, to: 0.6 }] } },
+    ],
+  });
+  return scene("course-leg-styles", base, { structure, sites, objects: [], appearance: {}, viewOptions: {} });
+}
+
 const builders: Record<CourseSceneName, () => CourseScene> = {
   "course-legs": legs,
   "course-cuts": cuts,
   "course-objects": objects,
   "course-sprint": sprint,
   "course-all-controls": allControls,
+  "course-leg-styles": legStyles,
 };
 
 export function courseScene(name: CourseSceneName): CourseScene {
