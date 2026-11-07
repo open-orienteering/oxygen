@@ -312,7 +312,8 @@ the legacy editor kept (it moved the terrain under a fixed sheet; the
 record is the same). With nothing selected a drag pans.
 
 **Entry points.** The Courses page's *Edit layout*
-(`edit-course-map-<seq>`, the course's first own sheet) navigates to the
+(`edit-course-map-<seq>`, the course's first own sheet that has a
+template, as Layout's default) navigates to the
 editor's Layout mode (`layoutEditorHref`, `lib/editor/layout-href.ts`);
 the all-controls sheet is view *All controls* in Layout mode; a template
 is reached from a sheet's template link, by *New template* or *Bring in*.

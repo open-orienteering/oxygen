@@ -223,7 +223,8 @@ course (its own sheets; class sheets follow their class's override,
 2. **Print** status (`course-print-status-<id>`: *Ready*, the issue count,
    or *No map*) over the course's own sheets.
 3. **Edit layout** (`edit-course-map-<seq>`) opens the course's first own
-   sheet in Layout mode; **the course's PDF** (`export-course-<id>`)
+   sheet that has a template (a template-less sheet cannot resolve; the
+   picker and badge show that sheet's template) in Layout mode; **the course's PDF** (`export-course-<id>`)
    ensures its first sheet under `courses.edit` (`layout.autoSheets
    { courseId }`) and downloads `maps.pdf?courses=<id>`.
 4. The bulk bar's **Template** field applies a pick (the same picker) to
