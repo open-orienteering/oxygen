@@ -121,18 +121,38 @@ export function setNumberHidden(s: Structure, siteId: number, hidden: boolean): 
   };
 }
 
+type LegProps = NonNullable<Extract<Item, { siteId: number }>["leg"]>;
+/** A patch of `LegProps`: a key set to `undefined` is removed. */
+export type LegPatch = { [K in keyof LegProps]?: LegProps[K] | undefined };
+
 /**
- * The gaps of the leg into item `index` (an index into `items`; the legs of
- * docs/course-layer.md §2, fractions of the centre-to-centre leg). An empty
- * list drops them (the automatic gaps again), and a `leg` left empty goes.
+ * Patch the leg into item `index` (an index into `items`; `LegProps`,
+ * 08 §4.3, docs/course-editor.md §6.7): the patch's keys replace the
+ * item's, its other leg props stay. A key set to `undefined`, `style:
+ * "line"` (the default) and an empty `bends` list are removed, and a leg
+ * left empty goes. The first item (no leg into it) and variation groups are
+ * returned unchanged.
  */
-export function setLegGaps(s: Structure, index: number, gaps: { from: number; to: number }[]): Structure {
+export function setLegProps(s: Structure, index: number, patch: LegPatch): Structure {
   const item = s.items[index];
   if (!item || item.kind === "variation" || index === 0) return s;
-  const { gaps: _g, ...legRest } = item.leg ?? {};
-  const leg = gaps.length > 0 ? { ...legRest, gaps } : legRest;
+  const leg: Record<string, unknown> = { ...(item.leg ?? {}) };
+  for (const [key, value] of Object.entries(patch)) {
+    const drop = value === undefined || (key === "style" && value === "line") || (key === "bends" && Array.isArray(value) && value.length === 0);
+    if (drop) delete leg[key];
+    else leg[key] = value;
+  }
   const { leg: _l, ...itemRest } = item;
   const items = [...s.items];
-  items[index] = Object.keys(leg).length > 0 ? { ...itemRest, leg } : itemRest;
+  items[index] = Object.keys(leg).length > 0 ? { ...itemRest, leg: leg as LegProps } : itemRest;
   return { ...s, items };
+}
+
+/**
+ * The gaps of the leg into item `index` (fractions of the bent leg,
+ * docs/course-editor.md §6.3). An empty list drops them (the automatic
+ * gaps again), and a `leg` left empty goes.
+ */
+export function setLegGaps(s: Structure, index: number, gaps: { from: number; to: number }[]): Structure {
+  return setLegProps(s, index, { gaps: gaps.length > 0 ? gaps : undefined });
 }
