@@ -293,7 +293,7 @@ the corpus and in unit tests). Used for fixtures, diffs and the
 
 ## 8. Render bridge
 
-`mapDocument.documentRenderInput(doc, { unmatched, proxyColours, includeHidden })`
+`mapDocument.documentRenderInput(doc, { unmatched, proxyColours, includeHidden, only })`
 produces the symboliser's input: coordinates in µm, `RenderObject`s with
 `angleDeg = angle / 10`, text from `strings`, `closed` for areas and
 rectangles, and `textLayout` from the object type — `box` for formatted
@@ -305,7 +305,12 @@ entry resolved through the stack's `paletteIds` and scaled by
 symbol from source); otherwise the symbol's `render` when it exists and
 its kind agrees with the object type; otherwise a proxy per kind
 (`unmatched: "proxy"`, the S1 envelope) or nothing (`unmatched: "drop"`).
-Hidden symbols' objects are skipped unless `includeHidden`. Statistics:
+Hidden symbols' objects are skipped unless `includeHidden`. `only` (a
+list of document object indices, any order) symbolises just those objects,
+in document order — the editor's eyedropper symbolises the few under a
+click (`course-editor.md` §5); the symbol table stays whole and aligned.
+The result's `docIdx[i]` is the document object `objects[i]` came from
+(every call: skipped and dropped objects leave gaps). Statistics:
 `total, rendered, proxied, hidden, dropped, coordinates, canonicalSymbols,
 canonicalMissing` (the last counts applied matches whose entry or colours
 could not be resolved — always 0 for a document the importer produced).
