@@ -35,8 +35,8 @@ export interface ObjectSectionProps {
     /** The eyedropper is armed. */
     picking: boolean;
     onPickToggle: () => void;
-    /** What the last pick did: added `label`, or nothing under the click. */
-    note: { kind: "added"; label: string } | { kind: "miss" } | null;
+    /** What the last pick did: added `label`, found it already in the region, or nothing under the click. */
+    note: { kind: "added" | "already"; label: string } | { kind: "miss" } | null;
   };
 }
 
@@ -212,7 +212,7 @@ function FilterProps({ props, document, filter, onProps }: { props: FilterProps;
           </button>
           {filter.picking && <p data-testid="editor-filter-pick-hint" className="mt-0.5 text-[10px] text-slate-500">{t("filterPickHint")}</p>}
           {filter.note && <p data-testid="editor-filter-pick-note" data-kind={filter.note.kind} className={`mt-0.5 text-[10px] ${filter.note.kind === "miss" ? "text-amber-700" : "text-slate-600"}`}>
-            {filter.note.kind === "miss" ? t("filterPickMiss") : t("filterPickAdded", { label: filter.note.label })}
+            {filter.note.kind === "miss" ? t("filterPickMiss") : t(filter.note.kind === "added" ? "filterPickAdded" : "filterPickAlready", { label: filter.note.label })}
           </p>}
         </div>
       )}

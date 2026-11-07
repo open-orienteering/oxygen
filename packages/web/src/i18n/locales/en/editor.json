@@ -268,5 +268,6 @@
   "filterPickAdded": "Added {{label}}",
   "filterOther_one": "Other ({{count}}): frames, legend, club symbols",
   "filterOther_other": "Other ({{count}}): frames, legend, club symbols",
-  "filterNoMatch": "No symbol matches"
+  "filterNoMatch": "No symbol matches",
+  "filterPickAlready": "{{label}} is already in the region"
 }

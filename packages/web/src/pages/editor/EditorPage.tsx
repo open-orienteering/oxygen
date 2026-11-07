@@ -736,7 +736,7 @@ export function EditorPage() {
     [pickIndex, mapDoc, i18n.language],
   );
   /** What the last pick did, for the region it was made on. */
-  const [pickNote, setPickNote] = useState<{ objectId: number; note: { kind: "added"; label: string } | { kind: "miss" } } | null>(null);
+  const [pickNote, setPickNote] = useState<{ objectId: number; note: { kind: "added" | "already"; label: string } | { kind: "miss" } } | null>(null);
   /** The props the last pick wrote, until the stored object catches up: consecutive picks build on each other. */
   const pickBase = useRef<{ id: number; version: string; props: CourseObject["props"] } | null>(null);
   const pickAt = useCallback((pt: Pt, toleranceMm: number) => {
@@ -762,8 +762,8 @@ export function EditorPage() {
       }
     }
     if (!next) { setPickNote({ objectId: o.id, note: { kind: "miss" } }); return; }
+    if (JSON.stringify(next.symbols) === JSON.stringify(base.symbols)) { setPickNote({ objectId: o.id, note: { kind: "already", label } }); return; }
     setPickNote({ objectId: o.id, note: { kind: "added", label } });
-    if (JSON.stringify(next.symbols) === JSON.stringify(base.symbols)) return;
     pickBase.current = { id: o.id, version: o.version, props: next };
     updateObject({ ...o, props: base } as CourseObject, { props: next });
   }, [selectedObject, pickIndex, filterGroups, mapDoc, updateObject]);

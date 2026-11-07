@@ -268,5 +268,6 @@
   "filterPickAdded": "Lade till {{label}}",
   "filterOther_one": "Övrigt ({{count}}): ramar, teckenförklaring, klubbsymboler",
   "filterOther_other": "Övrigt ({{count}}): ramar, teckenförklaring, klubbsymboler",
-  "filterNoMatch": "Ingen symbol matchar"
+  "filterNoMatch": "Ingen symbol matchar",
+  "filterPickAlready": "{{label}} finns redan i området"
 }

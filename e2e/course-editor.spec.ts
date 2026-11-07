@@ -2033,8 +2033,11 @@ test.describe("filter symbol picker (docs/course-editor.md §6.4, §7)", () => {
       await expect(page.getByTestId("editor-filter-pick-note")).toHaveAttribute("data-kind", "added");
       await expect(page.getByTestId("editor-filter-pick-note")).toContainText("505 Path");
       await expect.poll(() => inkIn(page, band), { timeout: 30000 }).toBeLessThan(before / 3);
-      // Still armed (several picks); Esc ends it and V is back, the region still selected.
+      // Still armed (several picks): the path again is already in the region — no write.
       await expect(pick).toHaveAttribute("aria-pressed", "true");
+      await page.mouse.click(onPath.x, onPath.y);
+      await expect(page.getByTestId("editor-filter-pick-note")).toHaveAttribute("data-kind", "already");
+      // Esc ends it and V is back, the region still selected.
       await page.keyboard.press("Escape");
       await expect(pick).toHaveAttribute("aria-pressed", "false");
       await expect(page.getByTestId("editor-tool-V")).toHaveAttribute("aria-pressed", "true");
