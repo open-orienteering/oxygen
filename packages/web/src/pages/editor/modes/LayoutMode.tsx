@@ -359,7 +359,6 @@ export function useLayoutMode(a: LayoutModeArgs): LayoutMode {
   }, [data, snap, geometry]);
 
   const editor: MapViewerEditorProps = useMemo(() => ({
-    sharedHitTest: true,
     actionLayout: "bar",
     contextActions: [],
     tool: binding,

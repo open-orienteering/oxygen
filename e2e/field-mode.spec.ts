@@ -1,14 +1,12 @@
-// Field mode and the phone chrome of the new course editor
+// Field mode and the phone chrome of the course editor
 // (docs/course-editor.md §9, §10). Runs in the `mobile` project
-// (`devices["Pixel 7"]`, `vector`; `MOBILE_SPECS` with the touch describe
-// of `course-editor.spec.ts`); the fix is Playwright's
+// (`devices["Pixel 7"]`; `MOBILE_SPECS` with the touch describe of
+// `course-editor.spec.ts`); the fix is Playwright's
 // `context.setGeolocation` — only a phone in a forest proves the mode
 // (D-mobile, §10 "On a real phone"). The fixture (courses and the map from
 // `e2e/test.ocd`) is set up once from a desktop context
-// (`ensureFixtureFromDesktop`, shared with the editor spec); the spec sets
-// `map.editor.vector` itself, as `course-editor.spec.ts` does.
-import { devices, type BrowserContext, type Page } from "@playwright/test";
-import { test, expect, setEditorVector, setMapPipeline } from "./helpers/map-pipeline";
+// (`ensureFixtureFromDesktop`, shared with the editor spec).
+import { devices, expect, test, type BrowserContext, type Page } from "@playwright/test";
 import { reseed } from "./helpers/reseed";
 import { canvasInCircle, editorReady, ensureFixtureFromDesktop, nextFrames, site, sites, toPage, toPaper } from "./helpers/editor";
 import { touchDrag, touchEnd, touchMove, touchStart, touchTap } from "./helpers/touch";
@@ -20,17 +18,9 @@ let nameId = "";
 test.setTimeout(120_000);
 
 test.beforeAll(async ({ browser }) => {
+  // The upload pins the event's document; the editor draws it.
   await reseed();
-  // The map is uploaded under `vector`, so the event pins its document (the editor's mount rule). The project's
-  // fixture sets it again before every test; a beforeAll runs before it.
-  await setMapPipeline("vector");
-  await setEditorVector(true);
   nameId = await ensureFixtureFromDesktop(browser, test.info());
-});
-
-test.afterAll(async () => {
-  await setEditorVector(null);
-  await setMapPipeline("legacy");
 });
 
 async function openEditor(page: Page, query = "") {

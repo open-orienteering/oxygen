@@ -15,7 +15,7 @@ import sharp from "sharp";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { defaultMapAppearance } from "@oxygen/shared";
 import { applyEventMap } from "../../event-map.js";
-import { clearCourseMapSourceCache } from "../../course-maps/map-source.js";
+import { clearEventDocumentCaches } from "../../map-store/event-document.js";
 import { loadPinnedPrintDocument, pageInputFor, pinnedPrintSource, renderCoursePages, sheetForMapRow, type PrintMapRow } from "../../course-maps/pdf-page.js";
 import { classesByCourse, loadCourseObjects, writeCourseObject } from "../../course-objects.js";
 import { loadBundledFonts } from "../../render/fonts.js";
@@ -30,21 +30,19 @@ const fixture = resolve(__dirname, "../../../../../e2e/test.ocd");
 const SVG = Buffer.from('<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 20 10"><rect width="20" height="10" fill="#c00"/></svg>');
 
 let vec: TestEventContext;
-let legacy: TestEventContext;
+let unpinned: TestEventContext;
 let rows: PrintMapRow[];
 let pngId: number;
 let svgId: number;
 
 beforeAll(async () => {
   vec = await createTestEvent("course_print");
-  legacy = await createTestEvent("course_print_legacy");
+  unpinned = await createTestEvent("course_print_unpinned");
   // Per-run trailer: content-addressed rows are global (see map-documents.test.ts).
   const bytes = Buffer.concat([readFileSync(fixture), Buffer.from(`print-${randomBytes(4).toString("hex")}`)]);
   const applied = await applyEventMap(vec.db, vec.eventId, "test.ocd", bytes);
   expect(applied.documentHash).toMatch(/^[0-9a-f]{64}$/);
-  await vec.db.event.update({ where: { id: vec.eventId }, data: { mapPipeline: "vector" } });
-  await applyEventMap(legacy.db, legacy.eventId, "test.ocd", bytes);
-  clearCourseMapSourceCache();
+  clearEventDocumentCaches();
 
   const db = vec.db;
   const PNG = await sharp({ create: { width: 4, height: 2, channels: 4, background: "#00a000" } }).png().toBuffer();
@@ -93,7 +91,7 @@ beforeAll(async () => {
 
 afterAll(async () => {
   await vec?.cleanup();
-  await legacy?.cleanup();
+  await unpinned?.cleanup();
   await disconnect();
 });
 
@@ -166,9 +164,10 @@ describe("course objects on the page (course-layer.md §8.3)", () => {
 });
 
 describe("course pages from the pinned document", () => {
-  it("only a vector event with a pin has a print document", async () => {
-    expect(await loadPinnedPrintDocument(legacy.db, legacy.eventId)).toBeNull();
-    expect(await loadPinnedPrintDocument(vec.db, vec.eventId)).not.toBeNull();
+  it("an event with a pin has a print document; without one there is no base map", async () => {
+    await expect(loadPinnedPrintDocument(unpinned.db, unpinned.eventId)).rejects.toThrow("No base map uploaded");
+    const pinned = await loadPinnedPrintDocument(vec.db, vec.eventId);
+    expect(pinned.info.document).toEqual({ hash: pinned.info.version });
   });
 
   it("the print worker writes the same bytes as the in-process composer, and reports each page", async () => {

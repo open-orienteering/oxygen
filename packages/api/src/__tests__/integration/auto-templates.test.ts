@@ -15,7 +15,7 @@ import { registerCourseMapRoutes } from "../../course-maps/routes.js";
 import { createTestEvent, disconnect, type TestEventContext } from "../helpers/test-db.js";
 import { makeCaller } from "../helpers/caller.js";
 import { applyEventMap } from "../../event-map.js";
-import { clearCourseMapSourceCache } from "../../course-maps/map-source.js";
+import { clearEventDocumentCaches } from "../../map-store/event-document.js";
 import { classUpsertPayload } from "../../referenceJournal.js";
 
 const fixture = resolve(__dirname, "../../../../../e2e/test.ocd");
@@ -29,19 +29,10 @@ const settings = {
 };
 
 let server: FastifyInstance;
-const convertedSvgs: string[] = [];
 
 beforeAll(async () => {
-  const fakeConverter = {
-    async convert(svg: string) {
-      convertedSvgs.push(svg);
-      const pdf = await PDFDocument.create();
-      pdf.addPage([595.28, 841.89]);
-      return Buffer.from(await pdf.save());
-    },
-  };
   server = Fastify({ logger: false });
-  registerCourseMapRoutes(server, { converter: fakeConverter });
+  registerCourseMapRoutes(server);
   await server.ready();
 });
 
@@ -180,7 +171,7 @@ describe("autoSheets and class overrides (course-layout.md §6)", () => {
     t = await createTestEvent("auto_sheets");
     caller = makeCaller(t.event);
     await t.db.mapFile.create({ data: { eventId: t.eventId, fileName: "test.ocd", fileData: readFileSync(fixture), scale: 7500 } });
-    clearCourseMapSourceCache();
+    clearEventDocumentCaches();
     course = await seedCourse(t, "Blå");
     // 252 mm wide at the map's scale: only a landscape A4 frame holds it.
     wide = await seedCourse(t, "Lång", 4.2);
@@ -281,7 +272,7 @@ describe("sheet and template version tokens (course-layout.md §2)", () => {
     t = await createTestEvent("layout_versions");
     caller = makeCaller(t.event);
     await t.db.mapFile.create({ data: { eventId: t.eventId, fileName: "test.ocd", fileData: readFileSync(fixture), scale: 7500 } });
-    clearCourseMapSourceCache();
+    clearEventDocumentCaches();
   });
   afterAll(async () => {
     await t?.cleanup();
@@ -312,7 +303,7 @@ describe("sheet and template version tokens (course-layout.md §2)", () => {
   });
 });
 
-describe("maps.pdf?classes= on both pipelines (course-layout.md §7)", () => {
+describe("maps.pdf?classes= (course-layout.md §7)", () => {
   let t: TestEventContext;
   let caller: ReturnType<typeof makeCaller>;
   let h21Seq: number;
@@ -325,7 +316,7 @@ describe("maps.pdf?classes= on both pipelines (course-layout.md §7)", () => {
     caller = makeCaller(t.event);
     const bytes = Buffer.concat([readFileSync(fixture), Buffer.from(`classes-${randomBytes(4).toString("hex")}`)]);
     await applyEventMap(t.db, t.eventId, "test.ocd", bytes);
-    clearCourseMapSourceCache();
+    clearEventDocumentCaches();
     const course = await seedCourse(t, "Röd");
     courseSeq = course.seq;
     const h21 = await t.db.class.create({ data: { eventId: t.eventId, name: "H21", courseId: course.id } });
@@ -339,19 +330,12 @@ describe("maps.pdf?classes= on both pipelines (course-layout.md §7)", () => {
     await t?.cleanup();
   });
 
-  it("legacy: a class prints its class sheet, another class its course's sheet naming that class; courses and all leave class sheets out", async () => {
-    await t.db.event.update({ where: { id: t.eventId }, data: { mapPipeline: "legacy" } });
-    clearCourseMapSourceCache();
-    const before = convertedSvgs.length;
+  it("`?classes=` composes one page per class; courses and all leave class sheets out", async () => {
+    clearEventDocumentCaches();
     const res = await server.inject({ method: "GET", url: pdfUrl(`?classes=${h21Seq},${d21Seq}`) });
     expect(res.statusCode).toBe(200);
-    expect(res.headers["x-print-pipeline"]).toBe("legacy");
+    expect(res.headers["x-print-pipeline"]).toBeUndefined();
     expect((await PDFDocument.load(res.rawPayload)).getPageCount()).toBe(2);
-    const [h, d] = convertedSvgs.slice(before);
-    expect(h).toContain("H21");
-    expect(h).not.toContain("D21");
-    expect(d).toContain("D21");
-    expect(d).not.toContain("H21");
 
     const course = await server.inject({ method: "GET", url: pdfUrl(`?courses=${courseSeq}`) });
     expect((await PDFDocument.load(course.rawPayload)).getPageCount()).toBe(1);
@@ -360,16 +344,5 @@ describe("maps.pdf?classes= on both pipelines (course-layout.md §7)", () => {
 
     expect((await server.inject({ method: "GET", url: pdfUrl(`?classes=${h21Seq}&courses=${courseSeq}`) })).statusCode).toBe(400);
     expect((await server.inject({ method: "GET", url: pdfUrl("?classes=99999") })).statusCode).toBe(400);
-  }, 60_000);
-
-  it("vector: the same selection composes one page per class", async () => {
-    await t.db.event.update({ where: { id: t.eventId }, data: { mapPipeline: "vector" } });
-    clearCourseMapSourceCache();
-    const before = convertedSvgs.length;
-    const res = await server.inject({ method: "GET", url: pdfUrl(`?classes=${h21Seq},${d21Seq}`) });
-    expect(res.statusCode).toBe(200);
-    expect(res.headers["x-print-pipeline"]).toBe("vector");
-    expect(convertedSvgs).toHaveLength(before);
-    expect((await PDFDocument.load(res.rawPayload)).getPageCount()).toBe(2);
   }, 60_000);
 });

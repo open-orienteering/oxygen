@@ -4,9 +4,8 @@
 // · Field"), and a control moved in one context moves in the other within the
 // poll, with a one-line notice when the course itself changed.
 import { devices, test, expect, type Browser, type BrowserContext, type Page } from "@playwright/test";
-import { setEditorVector, setMapPipeline } from "./helpers/map-pipeline";
 import { reseed } from "./helpers/reseed";
-import { drag, editorReady, select, site, sitePoint, sites, toPage, viewSettled } from "./helpers/editor";
+import { coveredBy, drag, editorReady, legPieces, select, site, sitePoint, sites, toPage, viewSettled } from "./helpers/editor";
 import { waitForTrpc } from "./helpers/trpc";
 
 let nameId = "";
@@ -22,16 +21,29 @@ async function open(browser: Browser): Promise<{ ctx: BrowserContext; page: Page
   return { ctx, page: await ctx.newPage() };
 }
 
-/** Regular numeric-code controls whose page points are inside the viewer, clear of the chrome (as `course-editor.spec.ts`). */
+/**
+ * Regular numeric-code controls whose page points are inside the viewer, clear of the chrome (as
+ * `course-editor.spec.ts`) and of the course's own legs: a leg drawn across another control's centre takes the
+ * click (the leg is selected, "Insert into course"), and whether one does depends on how the view settled.
+ */
 async function clearCodes(page: Page): Promise<string[]> {
   const viewer = (await page.getByTestId("map-viewer").boundingBox())!;
   const inspector = await page.getByTestId("editor-inspector").boundingBox();
+  const legs = await Promise.all((await legPieces(page)).map((l) => Promise.all(l.points.map((q) => toPage(page, q)))));
+  const segDist = (p: { x: number; y: number }, a: { x: number; y: number }, b: { x: number; y: number }) => {
+    const dx = b.x - a.x, dy = b.y - a.y, len2 = dx * dx + dy * dy;
+    const t = len2 === 0 ? 0 : Math.max(0, Math.min(1, ((p.x - a.x) * dx + (p.y - a.y) * dy) / len2));
+    return Math.hypot(p.x - (a.x + t * dx), p.y - (a.y + t * dy));
+  };
   const out: string[] = [];
   for (const s of await sites(page)) {
     if (s.type !== "Control" || !/^\d+$/.test(s.code)) continue;
     const p = await toPage(page, s.mm);
     if (p.x < viewer.x + 30 || p.x > viewer.x + viewer.width - 120 || p.y < viewer.y + 30 || p.y > viewer.y + viewer.height - 80) continue;
     if (inspector && p.x < inspector.x + inspector.width + 40) continue;
+    if (await coveredBy(page, p)) continue;
+    // A leg ends at a circle's rim, so a leg within 6 px of a centre runs across someone else's circle.
+    if (legs.some((pts) => pts.some((q, i) => i > 0 && segDist(p, pts[i - 1]!, q) < 6))) continue;
     out.push(s.code);
   }
   return out;
@@ -48,8 +60,6 @@ async function enter(page: Page): Promise<void> {
 
 test.beforeAll(async ({ browser }) => {
   await reseed();
-  await setMapPipeline("vector");
-  await setEditorVector(true);
   const { ctx, page } = await open(browser);
   await page.goto("/");
   await page.getByText("My example tävling").click();
@@ -84,11 +94,6 @@ test.beforeAll(async ({ browser }) => {
   await ctx.close();
 });
 
-test.afterAll(async () => {
-  await setEditorVector(null);
-  await setMapPipeline("legacy");
-});
-
 test("two contexts: presence appears and expires; a move shows in the other within the poll", async ({ browser }) => {
   const a = await open(browser);
   const b = await open(browser);
@@ -109,7 +114,8 @@ test("two contexts: presence appears and expires; a move shows in the other with
     // A move in A shows in B within the poll.
     // Points are read once the view has stopped (the editor fits after mounting), and the select retries.
     await viewSettled(a.page);
-    const target = { code: (await clearCodes(a.page))[0] };
+    const target = { code: (await clearCodes(a.page))[0]! };
+    expect(target.code, "a control clear of the chrome and the legs").toBeTruthy();
     const before = await site(b.page, target.code);
     await select(a.page, target.code);
     const from = await sitePoint(a.page, target.code);
@@ -138,8 +144,9 @@ test("a course changed in another context re-renders with a one-line notice", as
     const count = await rows(b.page).count();
     // A appends a control at an empty spot (create-and-append).
     await viewSettled(a.page);
-    const last = (await clearCodes(a.page)).pop()!;
-    await select(a.page, last);
+    const last = (await clearCodes(a.page)).pop();
+    expect(last, "a control clear of the chrome and the legs").toBeTruthy();
+    await select(a.page, last!);
     const saved = waitForTrpc(a.page, "course.setStructure");
     await a.page.getByTestId("editor-action-bar").getByTestId("editor-action-append").click();
     await saved;

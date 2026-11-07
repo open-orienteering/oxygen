@@ -272,11 +272,15 @@ export const defaultMapAppearance: MapAppearance = {
   numberHeightMm: 4,
 };
 
+/** ISOM 709 bounding line width (Feb 2024 revision), page mm. */
+export const OUT_OF_BOUNDS_BORDER_MM = 0.4;
+
 /**
- * IOF colour-stack profile for lower/upper purple placement.
- * See docs/map-color-stack.md and IOF Printing and Colour Definitions
- * rev. 4 ch. 7. `auto` resolves from the file's own "Lower purple"
- * colour or map scale.
+ * IOF colour-stack profile of v0.5.0's tile and print renderer (IOF
+ * Printing and Colour Definitions rev. 4 ch. 7). Nothing draws with it
+ * since E4a — the course layer sorts into the map document's own colour
+ * stack (docs/course-layer.md §1) — but the upload and `useClubMap` still
+ * write the column for the v0.5.0 rollback until E5 drops it.
  */
 export const colorProfileSchema = z.enum([
   "auto",

@@ -4,6 +4,7 @@
  * version-level ownership checks.
  */
 import { describe, it, expect } from "vitest";
+import { mapGeo } from "@oxygen/shared";
 import {
   canDownloadClubMapVersion,
   canRemoveClubMap,
@@ -44,13 +45,6 @@ function input(over: Partial<ClubMapRowInput> = {}): ClubMapRowInput {
     },
     versionCount: 1,
     job: null,
-    legacy: {
-      id: 42n,
-      scale: 15000,
-      bounds: { north: 2, south: 1, east: 2, west: 1 },
-      northOffset: 0.3,
-      northDetection: null,
-    },
     ...over,
   };
 }
@@ -95,19 +89,47 @@ describe("projectClubMapRow", () => {
     expect(row.fileName).toBe("first-name.ocd");
   });
 
-  it("falls back to the legacy scale when the header carries none", () => {
+  it("has no scale when the header carries none", () => {
     const base = input();
     const row = projectClubMapRow(input({ version: { ...base.version!, document: { header: {} } } }));
-    expect(row.scale).toBe(15000);
+    expect(row.scale).toBeNull();
   });
 
-  it("reads raster-path metadata from the linked legacy row", () => {
-    const detection = { meridian: null, grid: null };
-    const row = projectClubMapRow(input({ legacy: { ...input().legacy!, northDetection: detection } }));
-    expect(row.bounds).toEqual({ north: 2, south: 1, east: 2, west: 1 });
-    expect(row.northOffset).toBe(0.3);
-    expect(row.northDetection).toEqual(detection);
-    expect(row.meridianStalenessDeg).toBeNull();
+  it("reads extent and north from the version's document under the series' correction", () => {
+    // A SWEREF99 TM map 1:10 000 with a north-line cluster tilted 0.8°.
+    const georeferencing = { crs: { authority: "EPSG", code: 3006, name: "" }, paperOrigin: { x: 687000, y: 6574000 }, gridRotationDeg: 0, gridScaleFactor: 1 };
+    const bounds = { minX: -10_000, minY: -8_000, maxX: 10_000, maxY: 8_000 };
+    const north = {
+      meridian: { symbolIdx: 3, code: "601.0", count: 14, medianTiltDeg: 0.8, stddevDeg: 0.1 },
+      paperNorthBearingDeg: 1.2,
+      displayNorthOffsetDeg: 2,
+      declaredGrivationDeg: 0,
+      trueNorthFromGridDeg: -1.2,
+      centerLat: 59.29,
+      centerLng: 18.2,
+      declinationDeg: 6.5,
+      meridianStalenessDeg: 4.5,
+      asOf: "2026-10-02T11:00:00.000Z",
+    };
+    const base = input();
+    const row = projectClubMapRow(
+      input({
+        version: {
+          ...base.version!,
+          document: { header: { unitsPerMm: 100, mapScale: 10000, georeferencing, bounds }, report: { north } },
+        },
+      }),
+    );
+    const expected = mapGeo.mapFileMetadata({ unitsPerMm: 100, mapScale: 10000, georeferencing, correctionDeg: 1.5 }, bounds, 0.8);
+    expect(row.bounds).toEqual(expected.bounds);
+    expect(row.northOffset).toBeCloseTo(expected.northOffset!, 9);
+    expect(row.northDetection).toEqual(north);
+    expect(row.meridianStalenessDeg).not.toBeNull();
+  });
+
+  it("has no extent or north without a georeferenced document and a report", () => {
+    const row = projectClubMapRow(input());
+    expect(row).toMatchObject({ bounds: null, northOffset: null, northDetection: null, meridianStalenessDeg: null });
   });
 
   it("lists a series without a version with its import job and the job's source", () => {
@@ -124,16 +146,17 @@ describe("projectClubMapRow", () => {
       importJob: { id: "job", state: "failed", error: "unsupported" },
       fileName: "broken.ocd",
       sizeBytes: 16,
-      scale: 15000,
+      scale: null,
       uploadedAt: created.toISOString(),
       uploadedBy: "creator",
       uploader: { email: "c@example", displayName: "Creator" },
-      previewUrl: "/api/club-map-preview/42",
+      // No document yet: the card shows an empty frame (§6.5; E4a).
+      previewUrl: null,
     });
   });
 
   it("reports nothing it does not have", () => {
-    const row = projectClubMapRow(input({ version: null, versionCount: 0, job: null, legacy: null }));
+    const row = projectClubMapRow(input({ version: null, versionCount: 0, job: null }));
     expect(row).toMatchObject({
       fileName: null,
       sizeBytes: null,

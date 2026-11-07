@@ -523,7 +523,7 @@ describe("kiosk key", () => {
   it("key-only devices can read the map data set MapPanel needs, but not edit", async () => {
     // The kiosk shows the runner's course on the map after a readout —
     // all of MapPanel's queries must accept a kiosk key (mirrors the
-    // REST map-tile rule).
+    // map-document route's kiosk-key rule).
     const key = "kiosk-secret-token-bbbb";
     await ctx.db.event.update({
       where: { id: ctx.eventId },
@@ -543,7 +543,6 @@ describe("kiosk key", () => {
     // May be null (no map uploaded in this suite) — must not throw.
     await kiosk.course.mapMetadata();
     await kiosk.course.mapFileInfo();
-    await kiosk.course.courseGeometries({ courseNames: [] });
 
     // The key grants reads only — mutations still need an invited user.
     await expect(

@@ -204,11 +204,10 @@ Identity-less devices without a key see an error pane (`kiosk-key-required`).
 
 The key covers everything the kiosk renders after a readout, including the
 course map: the read-only course/map procedures (`course.list`,
-`courseGeometries`, `mapMetadata`, `mapFileInfo`, `controlCoordinates`,
-`controlCompletionStatus`, `class.list`) sit on `kioskOr*` procedures, and
-tile `<img>` requests append `?k=` themselves (`tileQueryString` in
-`TileLayer.tsx`) since images cannot carry the header. Mutations never
-accept the key.
+`mapMetadata`, `mapFileInfo`, `controlCoordinates`,
+`controlCompletionStatus`, `getOverprintCuts`, `class.list`) sit on
+`kioskOr*` procedures, and the map document fetch sends `x-kiosk-key`
+itself (`lib/map-document-cache.ts`). Mutations never accept the key.
 
 ### REST protection
 
@@ -216,8 +215,6 @@ accept the key.
 |-------|----------|
 | `/api/backup/*` | `event.manage`; **instance admin** if the event's current map was copied from the club library (the dump contains the OCAD blob) |
 | `/api/export/course-data` | `courses.view` |
-| `/api/map-tile/*` | `courses.view` or valid kiosk key (`?k=` or header) |
-| `/api/club-map-preview/*` | any invited user |
 | `/api/map-sources/:hash` | `event.manage` on an event whose map is that source (`?event=` / `x-event-id`), **instance admin** if it was copied from the club library; or the uploader of a club map version with that source, or an instance admin. Never the kiosk key. See [map-storage.md](map-storage.md) §4.4 |
 | `/health`, `/api/version`, `/api/club-logo/*` | open |
 

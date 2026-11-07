@@ -2,9 +2,8 @@ import { Fragment, useMemo, useState } from "react";
 import type { ClassSummary } from "@oxygen/shared";
 import { useTranslation } from "react-i18next";
 import { useNavigate, useParams } from "react-router-dom";
-import { layoutEditorHref, useCourseEditorMount } from "../hooks/useCourseEditorMount";
+import { layoutEditorHref } from "../lib/editor/layout-href";
 import { BulkActionBar } from "../components/BulkActionBar";
-import { MapLayoutEditor, type MapLayoutSnapshot } from "../components/MapLayoutEditor";
 import { SortHeader } from "../components/SortHeader";
 import { StructuredSearchBar } from "../components/structured-search/StructuredSearchBar";
 import { useCapabilities } from "../context/CapabilitiesContext";
@@ -121,15 +120,10 @@ export function MapsPage() {
   const selection = useTableSelection(sorted);
   const [expandedId, setExpandedId] = useNumericSearchParam("course");
   const [bulkTemplate, setBulkTemplate] = useState<number | null>(null);
-  const [editingMapSeq, setEditingMapSeq] = useState<number | null>(null);
-  // Edit layout: the new editor's Layout mode where the event mounts it, `MapLayoutEditor` otherwise (docs/course-layout.md §4).
-  const editorMount = useCourseEditorMount();
+  // Edit layout: the course editor's Layout mode (docs/course-layout.md §4).
   const navigate = useNavigate();
   const editLayout = (map: { seq: number; courseId: number | null }) => {
-    // Disabled until the mount is known: a click before it would open the wrong editor.
-    if (editorMount === null) return;
-    if (editorMount === "vector") navigate(layoutEditorHref(nameId, { sheet: map.seq }, map.courseId));
-    else setEditingMapSeq(map.seq);
+    navigate(layoutEditorHref(nameId, { sheet: map.seq }, map.courseId));
   };
   const [addingForCourse, setAddingForCourse] = useState<number | null>(null);
   const [addTemplateSeq, setAddTemplateSeq] = useState<number | null>(null);
@@ -149,9 +143,7 @@ export function MapsPage() {
     trpc.mapTemplate.applyToCourses.useMutation(mutationOptions);
   const createMap = trpc.courseMap.create.useMutation(mutationOptions);
   const updateMap = trpc.courseMap.update.useMutation(mutationOptions);
-  const saveMapLayout = trpc.courseMap.saveLayout.useMutation(mutationOptions);
   const deleteMap = trpc.courseMap.delete.useMutation(mutationOptions);
-  const editingMap = maps.find((map) => map.seq === editingMapSeq);
   const allControls = maps.filter((map) => map.kind === "all_controls");
 
   const exportPdf = async (params: URLSearchParams) => {
@@ -177,19 +169,6 @@ export function MapsPage() {
       }
     }
     await exportPdf(new URLSearchParams({ courses: String(courseId) }));
-  };
-
-  const saveLayout = async (snapshot: MapLayoutSnapshot) => {
-    if (!editingMap) return;
-    await saveMapLayout.mutateAsync({
-      id: editingMap.seq,
-      windowCenter: snapshot.center,
-      printScale: snapshot.printScale,
-      description: snapshot.description,
-      objects: snapshot.objects,
-      templateObjects: snapshot.templateObjects,
-    });
-    await utils.courseMap.list.invalidate();
   };
 
   return (
@@ -427,7 +406,6 @@ export function MapsPage() {
                             type="button"
                             data-testid={`edit-course-map-${courseMaps[0].seq}`}
                             onClick={() => editLayout(courseMaps[0])}
-                            disabled={editorMount === null}
                             title={t("editLayout")}
                             className="flex items-center rounded p-1.5 text-slate-400 transition-colors hover:bg-blue-50 hover:text-blue-700"
                           >
@@ -489,7 +467,6 @@ export function MapsPage() {
                                   type="button"
                                   data-testid={`edit-course-map-${map.seq}`}
                                   onClick={() => editLayout(map)}
-                                  disabled={editorMount === null}
                                   title={t("editLayout")}
                                   className="rounded p-1.5 text-slate-400 hover:bg-blue-50 hover:text-blue-700"
                                 >
@@ -671,7 +648,6 @@ export function MapsPage() {
             <button
               type="button"
               onClick={() => editLayout(map)}
-                                  disabled={editorMount === null}
               className="rounded-lg border border-blue-200 px-3 py-1.5 text-sm text-blue-700"
             >
               {t("editLayout")}
@@ -718,61 +694,6 @@ export function MapsPage() {
           {t("applySelected")}
         </button>
       </BulkActionBar>
-
-      {editingMap?.resolved && (
-        <MapLayoutEditor
-          key={editingMap.seq}
-          mode="map"
-          nameId={nameId}
-          mapName={editingMap.name}
-          document={editingMap.resolved.document}
-          window={editingMap.resolved.window}
-          controls={editingMap.controls}
-          legs={editingMap.legs}
-          descriptionRows={editingMap.descriptionRows}
-          descriptionHeader={editingMap.descriptionHeader ?? null}
-          descriptionTitle={
-            editingMap.kind === "all_controls"
-              ? editingMap.name
-              : editingMap.course?.name ?? editingMap.name
-          }
-          allControls={editingMap.kind === "all_controls"}
-          labelMode={editingMap.labelMode}
-          mapObjects={editingMap.objects}
-          templateObjects={editingMap.resolved.document.objects.slice(
-            0,
-            Math.max(
-              0,
-              editingMap.resolved.document.objects.length -
-                editingMap.objects.length,
-            ),
-          )}
-          textValues={{
-            event: nameId,
-            course: editingMap.course?.name ?? editingMap.name,
-            map: editingMap.name,
-            variant: "",
-            classes:
-              editingMap.course?.classes?.map((item) => item.name).join(", ") ??
-              "",
-            length: editingMap.course?.lengthM
-              ? `${(editingMap.course.lengthM / 1_000).toFixed(1)} km`
-              : "",
-            climb: editingMap.course?.climbM
-              ? `${editingMap.course.climbM} m`
-              : "",
-            controls: String(
-              editingMap.controls.filter(
-                (control) => control.type === "control",
-              ).length,
-            ),
-            date: "",
-          }}
-          templateEditHref={`/${encodeURIComponent(nameId)}/map-templates?template=${editingMap.templateId ?? ""}`}
-          onSave={saveLayout}
-          onClose={() => setEditingMapSeq(null)}
-        />
-      )}
     </div>
   );
 }

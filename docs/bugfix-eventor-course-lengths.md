@@ -50,8 +50,9 @@ length from `starts/event/iofxml`. During Eventor sync, an existing
 class with a course assignment may update an untouched imported
 course's `length_m`.
 
-An Oxygen-edited course (`geometry_source = 'editor'`) is never
-overwritten: its current coordinates and sequence are authoritative.
+An Oxygen-edited course (`geometry_source = 'editor'`; since E6
+`length_source = 'derived'`, `docs/course-controls-and-matching.md`
+"Course length") is never overwritten: its current coordinates and sequence are authoritative.
 Several classes may share one imported course; Oxygen updates it only
 when all published values encountered agree. Conflicts are left
 untouched instead of using last-write-wins.

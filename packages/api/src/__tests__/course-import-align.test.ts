@@ -3,7 +3,7 @@
  */
 
 import { describe, it, expect } from "vitest";
-import { sameMapFile, positionsOffMap } from "../course-import-align.js";
+import { sameMapFile, positionsOffMap, matchClubVersion, type ClubVersionCandidate } from "../course-import-align.js";
 import type { MapCalibrationPoint } from "../event-map.js";
 
 /** Corners of the synthetic `e2e/test.ocd` fixture, in paper mm. */
@@ -60,5 +60,33 @@ describe("positionsOffMap", () => {
   it("says nothing when there is nothing to judge", () => {
     expect(positionsOffMap([{ mapX: 0, mapY: 0 }], CALIBRATION)).toBe(false);
     expect(positionsOffMap([{ mapX: -900, mapY: 0 }], [])).toBe(false);
+  });
+});
+
+describe("matchClubVersion", () => {
+  const version = (seriesName: string, label: string, sourceFileName: string): ClubVersionCandidate => ({
+    seriesName, label, sourceFileName, documentHash: `doc-${seriesName}`, rotationCorrection: 0,
+  });
+  const library = [
+    version("Brotorp", "", "Brotorp 2024.ocd"),
+    version("Nacka", "Nackareservatet.ocd", "upload-17.ocd"),
+  ];
+
+  it("matches the version's label first", () => {
+    expect(matchClubVersion("nackareservatet.omap", library)?.seriesName).toBe("Nacka");
+  });
+
+  it("falls back to the source file name", () => {
+    expect(matchClubVersion("Brotorp 2024.OCD", library)?.seriesName).toBe("Brotorp");
+  });
+
+  it("prefers a label match over an earlier series' source name", () => {
+    const both = [version("Old", "", "Shared.ocd"), version("New", "Shared.ocd", "x.ocd")];
+    expect(matchClubVersion("Shared.ocd", both)?.seriesName).toBe("New");
+  });
+
+  it("answers null when nothing names the file", () => {
+    expect(matchClubVersion("Elsewhere.ocd", library)).toBeNull();
+    expect(matchClubVersion("", library)).toBeNull();
   });
 });

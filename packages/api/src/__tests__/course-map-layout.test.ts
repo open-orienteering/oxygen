@@ -1,7 +1,6 @@
 import { describe, expect, it } from "vitest";
-import { resolveMapLayout } from "../course-maps/resolve-layout.js";
+import { layoutCourseEnds, resolveMapLayout } from "../course-maps/resolve-layout.js";
 import {
-  graphicToResolved,
   validateGraphicUpload,
   MAX_GRAPHIC_BYTES,
 } from "../course-maps/graphics.js";
@@ -57,20 +56,13 @@ describe("resolveMapLayout description rows", () => {
         classes: [{ name: "H40" }, { name: "H45" }],
         controls,
         descriptionInstructions: {
-          specials: [{ afterControlId: 1, kind: "13.1", lengthM: 60 }],
+          // Anchored by the public control id (the punch code 31, not seq 1),
+          // as the editor, the on-map sheet and setStructure's prune use it (E3b).
+          specials: [{ afterControlId: 31, kind: "13.1", lengthM: 60 }],
           finish: { kind: "14.1" },
         },
         // Finish 40 mm east of the last control → 600 m at 1:15000.
-        geometry: {
-          type: "FeatureCollection",
-          features: [
-            {
-              type: "Feature",
-              geometry: { type: "Point", coordinates: [70, 40] },
-              properties: { symbolType: "finish", code: "F" },
-            },
-          ],
-        },
+        finish: { id: "f1", codes: "", name: "Mål 1", status: "finish", kind: "finish", xpos: 70, ypos: 40 },
       },
       event: { name: "Spring Cup", date: new Date("2026-05-01") },
       mapScale: 15_000,
@@ -104,7 +96,7 @@ describe("resolveMapLayout description rows", () => {
       courseName: "H40",
       lengthKm: "",
     });
-    // No finish geometry / no map scale → no measured finish distance.
+    // No finish row / no map scale → no measured finish distance.
     expect(layout.descriptionRows.at(-1)).toEqual({
       kind: "finish",
       code: "",
@@ -212,6 +204,57 @@ describe("resolveMapLayout label offset", () => {
   });
 });
 
+describe("resolveMapLayout course sites (docs/course-print.md §5.2)", () => {
+  const start = { id: "s1", codes: "", name: "Start 1", status: "start", kind: "start", xpos: 0, ypos: 5 };
+  const finish = { id: "f1", codes: "", name: "Mål 1", status: "finish", kind: "finish", xpos: 50, ypos: 45 };
+
+  it("start, the course controls and finish from the rows, legs centre to centre", () => {
+    const layout = resolveMapLayout({ kind: "course", template, course: { name: "A", lengthM: 0, climbM: 0, controls, start, finish } });
+    expect(layout.controls.map((c) => [c.id, c.type, c.x, c.y])).toEqual([
+      ["s1", "start", 0, 5],
+      ["c1", "control", 10, 20],
+      ["c2", "control", 30, 40],
+      ["f1", "finish", 50, 45],
+    ]);
+    expect(layout.controls.every((c) => c.cuts === undefined)).toBe(true);
+    expect(layout.legs).toEqual([
+      { points: [{ x: 0, y: 5 }, { x: 10, y: 20 }], kind: "leg" },
+      { points: [{ x: 10, y: 20 }, { x: 30, y: 40 }], kind: "leg" },
+      { points: [{ x: 30, y: 40 }, { x: 50, y: 45 }], kind: "leg" },
+    ]);
+  });
+
+  it("an unplaced start or finish (0, 0) is not drawn", () => {
+    const layout = resolveMapLayout({
+      kind: "course",
+      template,
+      course: { name: "A", lengthM: 0, climbM: 0, controls, start: { ...start, xpos: 0, ypos: 0 }, finish: null },
+    });
+    expect(layout.controls.map((c) => c.id)).toEqual(["c1", "c2"]);
+  });
+});
+
+describe("layoutCourseEnds (the one sequence rule, course-layer.md §6.2)", () => {
+  const all = [
+    { id: "s1", seq: 1, codes: "", name: "Start 1", status: "start", kind: "start", xpos: 0, ypos: 5 },
+    { id: "s2", seq: 2, codes: "", name: "Start 2", status: "start", kind: "start", xpos: 1, ypos: 5 },
+    { id: "c1", seq: 3, codes: "31", name: "", status: "ok", kind: "control", xpos: 10, ypos: 20 },
+    { id: "f2", seq: 5, codes: "", name: "Mål 2", status: "finish", kind: "finish", xpos: 50, ypos: 46 },
+    { id: "f1", seq: 4, codes: "", name: "Mål 1", status: "finish", kind: "finish", xpos: 50, ypos: 45 },
+  ];
+  const cols = { structure: null, startName: "", finishControlId: null, firstAsStart: false, lastAsFinish: false };
+
+  it("a NULL structure reads the columns, the defaults the lowest seq", () => {
+    expect(layoutCourseEnds({ ...cols, startName: "Start 2" }, ["c1"], all)).toMatchObject({ start: { id: "s2" }, finish: { id: "f1" } });
+    expect(layoutCourseEnds({ ...cols, finishControlId: "f2", firstAsStart: true }, ["c1"], all)).toMatchObject({ start: null, finish: { id: "f2" } });
+  });
+
+  it("a stored structure names its ends", () => {
+    const structure = { version: 1, id: "x", orderMode: "ordered", items: [{ siteId: "s2" }, { siteId: "c1" }, { siteId: "f2" }] };
+    expect(layoutCourseEnds({ ...cols, structure }, [], all)).toMatchObject({ start: { id: "s2" }, finish: { id: "f2" } });
+  });
+});
+
 describe("resolveMapLayout free_order", () => {
   it("drops connecting legs, uses code labels, and omits sequence on the sheet", () => {
     const layout = resolveMapLayout({
@@ -223,37 +266,11 @@ describe("resolveMapLayout free_order", () => {
         climbM: 0,
         orderMode: "free_order",
         controls,
-        geometry: {
-          type: "FeatureCollection",
-          features: [
-            {
-              type: "Feature",
-              geometry: {
-                type: "LineString",
-                coordinates: [
-                  [10, 20],
-                  [30, 40],
-                ],
-              },
-              properties: { symbolType: "leg" },
-            },
-            {
-              type: "Feature",
-              geometry: {
-                type: "LineString",
-                coordinates: [
-                  [0, 0],
-                  [5, 5],
-                ],
-              },
-              properties: { symbolType: "marked_route" },
-            },
-          ],
-        },
+        start: { id: "s1", codes: "", name: "Start 1", status: "start", kind: "start", xpos: 0, ypos: 5 },
       },
     });
     expect(layout.labelMode).toBe("code");
-    expect(layout.legs.map((l) => l.kind)).toEqual(["marked_route"]);
+    expect(layout.legs).toEqual([]);
     expect(
       layout.descriptionRows
         .filter((r) => r.kind === "control")
@@ -321,7 +338,7 @@ describe("graphic upload validation", () => {
     }
   });
 
-  it("strips Inkscape metadata and carries xmlns attrs for PDF embedding", () => {
+  it("accepts an Inkscape SVG with metadata and foreign namespaces", () => {
     const inkscape = Buffer.from(`<?xml version="1.0"?>
 <!DOCTYPE svg>
 <svg xmlns="http://www.w3.org/2000/svg" xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#" xmlns:xlink="http://www.w3.org/1999/xlink" viewBox="0 0 20 20">
@@ -330,37 +347,12 @@ describe("graphic upload validation", () => {
   <circle cx="10" cy="10" r="8" fill="#336699"/>
 </svg>`);
     expect(validateGraphicUpload(inkscape)).toBe("image/svg+xml");
-    const resolved = graphicToResolved("image/svg+xml", inkscape);
-    expect(resolved).toMatchObject({ kind: "svg", viewBox: "0 0 20 20" });
-    if (resolved?.kind !== "svg") throw new Error("expected svg");
-    expect(resolved.svg).toContain("<circle");
-    expect(resolved.svg).not.toContain("rdf:RDF");
-    expect(resolved.svg).not.toContain("metadata");
-    expect(resolved.rootAttrs).toContain('xmlns="http://www.w3.org/2000/svg"');
-    expect(resolved.rootAttrs).toContain("xmlns:rdf=");
-    expect(resolved.rootAttrs).toContain("xmlns:xlink=");
   });
 
-  it("derives a viewBox from width and height when missing", () => {
+  it("accepts an SVG with width and height but no viewBox", () => {
     const svg = Buffer.from(
       `<svg xmlns="http://www.w3.org/2000/svg" width="24" height="12"><rect width="24" height="12"/></svg>`,
     );
     expect(validateGraphicUpload(svg)).toBe("image/svg+xml");
-    expect(graphicToResolved("image/svg+xml", svg)).toEqual({
-      kind: "svg",
-      svg: `<rect width="24" height="12"/>`,
-      viewBox: "0 0 24 12",
-      rootAttrs: 'xmlns="http://www.w3.org/2000/svg"',
-    });
-  });
-
-  it("resolves PNG to a data URI and unknown mimes to null", () => {
-    const png = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x01]);
-    expect(graphicToResolved("image/png", png)).toEqual({
-      kind: "href",
-      href: `data:image/png;base64,${png.toString("base64")}`,
-    });
-    expect(graphicToResolved("image/gif", png)).toBeNull();
-    expect(graphicToResolved("image/svg+xml", Buffer.from("broken"))).toBeNull();
   });
 });

@@ -1,32 +1,11 @@
-import { createHash } from "node:crypto";
 import type { FastifyInstance } from "fastify";
-import {
-  course,
-  courseMapObjectSchema,
-  courseMapOverridesSchema,
-  mapWindowForFrame,
-  type ResolvedMapGraphic,
-} from "@oxygen/shared";
+import { courseMapObjectSchema } from "@oxygen/shared";
 import { z } from "zod";
 import { prisma } from "../db.js";
 import { assertRestAccess } from "../restGuard.js";
-import {
-  RENDER_BUSY_RETRY_AFTER_S,
-  RenderBusyError,
-  renderGate,
-  renderMaxQueue,
-} from "../map-render-limits.js";
-import { composeMapPageSvg, renderBaseMapWindow } from "./map-page-svg.js";
-import { graphicToResolved } from "./graphics.js";
-import { getBaseMapInfo, loadBaseMapSvg } from "./map-source.js";
-import { getBlob } from "../map-store/blob-store.js";
-import { prepareDocument, renderDocumentWindow } from "../render/window-raster.js";
-import { layoutControlsFromCourseControls, resolveMapLayout } from "./resolve-layout.js";
-import { LruCache } from "./lru-cache.js";
-import { RsvgConverter, mergePdfPages } from "./svg-to-pdf.js";
+import { renderGate } from "../map-render-limits.js";
 import {
   type PrintGraphic,
-  type PrintMapRow,
   pinnedPrintSource,
   rowForClass,
   sheetForMapRow,
@@ -39,39 +18,6 @@ type Db = ReturnType<typeof prisma>;
 type MapRow = Awaited<ReturnType<typeof findMapRows>>[number];
 
 const mapObjectsSchema = z.array(courseMapObjectSchema);
-
-/** High-DPI previews are allowed, but the raster stays bounded per side. */
-const MAX_DPI = 600;
-const MAX_RENDER_PX = 4096;
-const MAX_WINDOW_PNG_CACHE_ENTRIES = 16;
-const MAX_WINDOW_PNG_CACHE_BYTES = 64 * 1024 * 1024;
-
-interface WindowPngCacheEntry {
-  body: Buffer;
-  etag: string;
-}
-
-const windowPngCache = new LruCache<WindowPngCacheEntry>(
-  MAX_WINDOW_PNG_CACHE_ENTRIES,
-  MAX_WINDOW_PNG_CACHE_BYTES,
-  (entry) => entry.body.byteLength,
-);
-
-export function clearCourseMapWindowCache(): void {
-  windowPngCache.clear();
-}
-
-function parsePositive(
-  value: string | undefined,
-  name: string,
-  max = Number.POSITIVE_INFINITY,
-): number {
-  const parsed = Number(value);
-  if (!Number.isFinite(parsed) || parsed <= 0 || parsed > max) {
-    throw new Error(`${name} must be between 0 and ${max}`);
-  }
-  return parsed;
-}
 
 function parseSeqs(raw: string | undefined): number[] | null {
   if (!raw) return null;
@@ -188,16 +134,6 @@ async function findClassRows(db: Db, eventId: bigint, classSeqs: number[]) {
   return out;
 }
 
-type AllControlRow = {
-  id: string;
-  seq: number;
-  codes: string;
-  status: string;
-  xpos: number;
-  ypos: number;
-  description: unknown;
-};
-
 /**
  * Every graphic referenced by the maps being exported (event or club
  * scope), by id. Loaded once per request; unknown ids are simply absent.
@@ -233,82 +169,9 @@ async function loadGraphics(
   );
 }
 
-/**
- * Data-URI / inline-SVG resolver for the legacy page; unknown ids resolve
- * to null and the object is simply skipped.
- */
-function graphicResolver(
-  graphics: Map<number, PrintGraphic>,
-): (graphicId: number) => ResolvedMapGraphic | null {
-  const resolved = new Map<number, ResolvedMapGraphic | null>();
-  for (const [id, graphic] of graphics) {
-    resolved.set(id, graphicToResolved(graphic.mime, Buffer.from(graphic.data)));
-  }
-  return (graphicId) => resolved.get(graphicId) ?? null;
-}
-
-async function renderPage(
-  db: Db,
-  event: { id: bigint; name: string; date: Date },
-  row: MapRow,
-  allControls: AllControlRow[],
-  resolveGraphic: (graphicId: number) => ResolvedMapGraphic | null,
-): Promise<string> {
-  if (!row.template) throw new Error(`Map "${row.name}" has no template`);
-  const mapInfo = await getBaseMapInfo(db, event.id);
-  const layout = resolveMapLayout({
-    kind: row.kind,
-    template: row.template,
-    overrides: courseMapOverridesSchema.parse(row.overrides),
-    objects: mapObjectsSchema.parse(row.objects),
-    course: row.course
-      ? {
-          name: row.course.name,
-          lengthM: row.course.lengthM,
-          climbM: row.course.climbM,
-          orderMode: row.course.orderMode,
-          geometry: row.course.geometry,
-          classes: row.course.classes,
-          controls: layoutControlsFromCourseControls(row.course.courseControls),
-          descriptionInstructions: row.course.descriptionInstructions,
-        }
-      : null,
-    allControls,
-    windowCenter:
-      row.windowCenter && typeof row.windowCenter === "object"
-        ? z.object({ x: z.number(), y: z.number() }).parse(row.windowCenter)
-        : null,
-    mapScale: mapInfo.scale,
-    meridianTiltDeg: mapInfo.meridianTiltDeg,
-    event: { name: event.name, date: event.date },
-    mapName: row.name,
-  });
-  const { layers } = await loadBaseMapSvg(db, event.id, layout.window);
-  return composeMapPageSvg({
-    document: layout.document,
-    window: layout.window,
-    baseMap: layers.full,
-    inkMap: layers.ink,
-    controls: layout.controls,
-    legs: layout.legs,
-    descriptionRows: layout.descriptionRows,
-    descriptionHeader: layout.descriptionHeader,
-    title: row.course?.name ?? row.name,
-    allControls: row.kind === "all_controls",
-    labelMode: layout.labelMode,
-    textValues: layout.textValues,
-    resolveGraphic,
-    overprintScale: layout.overprintScale,
-  });
-}
-
-/** Which path drew a `maps.pdf` response (`X-Print-Pipeline`, docs/course-print.md §8.1). */
-export type PrintPipeline = "vector" | "legacy" | "legacy-fallback";
-
 export function registerCourseMapRoutes(
   server: FastifyInstance,
   options: {
-    converter?: Pick<RsvgConverter, "convert">;
     /** The composer's page writer (tests inject a failing one). */
     renderCoursePages?: typeof renderCoursePagesInWorker;
   } = {},
@@ -349,7 +212,9 @@ export function registerCourseMapRoutes(
           id: true,
           seq: true,
           codes: true,
+          name: true,
           status: true,
+          kind: true,
           xpos: true,
           ypos: true,
           description: true,
@@ -361,62 +226,39 @@ export function registerCourseMapRoutes(
         title: rows.length === 1 ? `${event.name} · ${rows[0].name}` : `${event.name} maps`,
         author: event.organizerName || undefined,
       };
-      let body: Buffer | null = null;
-      let pipeline: PrintPipeline = "legacy";
-      // The switch (docs/course-print.md §8): `vector` with a pinned
-      // document prints through the composer; everything else, and a
-      // document whose colour stack is not aligned, through rsvg.
+      // Every event prints through the composer (docs/course-print.md
+      // §8.1). No pin is a 400 "No base map uploaded"; a document whose
+      // colour stack is not aligned (`CourseStackError`) is a 400 with the
+      // reason, like any other composer error. There is no other path.
       const pinned = await pinnedPrintSource(db, event.id);
-      if (pinned) {
-        try {
-          const [courseObjects, byCourse] = await Promise.all([loadCourseObjects(db, event.id), classesByCourse(db, event.id)]);
-          const sheets = rows.map((row) =>
-            sheetForMapRow(row, {
-              event: { name: event.name, date: event.date },
-              allControls,
-              mapInfo: pinned.info,
-              courseObjects,
-              classesByCourse: byCourse,
-              autoCuts: event.autoOverprintCuts,
-            }),
-          );
-          // A worker slot, then a permit like every render, but no queue
-          // cap: a 503 would arrive as a broken download (course-print.md
-          // §8.2). Composing runs in the print worker, off the event loop.
-          const out = await printGate(() => renderGate().run(() =>
-            renderVectorPages({
-              document: { hash: pinned.hash, bytes: pinned.bytes },
-              rotationCorrectionDeg: pinned.rotationCorrectionDeg,
-              sheets,
-              graphics,
-              mode: "cmyk",
-              info,
-              onPage: (page) => {
-                for (const warning of page.warnings) req.log.warn({ nameId }, `maps.pdf: ${warning}`);
-              },
-            }),
-          ));
-          body = Buffer.from(out.bytes);
-          pipeline = "vector";
-        } catch (error) {
-          if (!(error instanceof course.CourseStackError)) throw error;
-          req.log.warn({ nameId, hash: pinned.info.document?.hash }, `maps.pdf: ${error.message}; printing through the legacy path`);
-          pipeline = "legacy-fallback";
-        }
-      }
-      if (!body) {
-        const resolveGraphic = graphicResolver(graphics);
-        const converter = options.converter ?? new RsvgConverter();
-        const pages: Buffer[] = [];
-        for (const row of rows) {
-          pages.push(
-            await converter.convert(
-              await renderPage(db, event, row, allControls, resolveGraphic),
-            ),
-          );
-        }
-        body = pages.length === 1 ? pages[0] : await mergePdfPages(pages, info);
-      }
+      const [courseObjects, byCourse] = await Promise.all([loadCourseObjects(db, event.id), classesByCourse(db, event.id)]);
+      const sheets = rows.map((row) =>
+        sheetForMapRow(row, {
+          event: { name: event.name, date: event.date },
+          allControls,
+          mapInfo: pinned.info,
+          courseObjects,
+          classesByCourse: byCourse,
+          autoCuts: event.autoOverprintCuts,
+        }),
+      );
+      // A worker slot, then a permit of the render gate, with no queue
+      // cap: a 503 would arrive as a broken download (course-print.md
+      // §8.2). Composing runs in the print worker, off the event loop.
+      const out = await printGate(() => renderGate().run(() =>
+        renderVectorPages({
+          document: { hash: pinned.hash, bytes: pinned.bytes },
+          rotationCorrectionDeg: pinned.rotationCorrectionDeg,
+          sheets,
+          graphics,
+          mode: "cmyk",
+          info,
+          onPage: (page) => {
+            for (const warning of page.warnings) req.log.warn({ nameId }, `maps.pdf: ${warning}`);
+          },
+        }),
+      ));
+      const body = Buffer.from(out.bytes);
       const filename =
         rows.length === 1
           ? `${safeFilename(event.nameId)}_${safeFilename(rows[0].name)}.pdf`
@@ -425,186 +267,11 @@ export function registerCourseMapRoutes(
         .header("Content-Type", "application/pdf")
         .header("Content-Disposition", `attachment; filename="${filename}"`)
         .header("Cache-Control", "no-store")
-        .header("X-Print-Pipeline", pipeline)
         .send(body);
     } catch (error) {
       req.log.error(error);
       return reply.code(400).send({
         error: error instanceof Error ? error.message : "Could not render maps",
-      });
-    }
-  });
-
-  server.get<{
-    Params: { nameId: string };
-    Querystring: {
-      cx?: string;
-      cy?: string;
-      wMm?: string;
-      hMm?: string;
-      printScale?: string;
-      dpi?: string;
-      rot?: string;
-      layer?: string;
-    };
-  }>("/api/maps/:nameId/window.png", async (req, reply) => {
-    const { nameId } = req.params;
-    const event = await assertRestAccess(req, reply, { nameId, cap: "courses.view" });
-    if (!event) return;
-    try {
-      const db = prisma();
-      const cx = Number(req.query.cx);
-      const cy = Number(req.query.cy);
-      if (!Number.isFinite(cx) || !Number.isFinite(cy)) {
-        throw new Error("cx and cy must be finite map coordinates");
-      }
-      const widthMm = parsePositive(req.query.wMm, "wMm", 1_000);
-      const heightMm = parsePositive(req.query.hMm, "hMm", 1_000);
-      const printScale = parsePositive(
-        req.query.printScale,
-        "printScale",
-        100_000,
-      );
-      const dpi = parsePositive(req.query.dpi ?? "120", "dpi", MAX_DPI);
-      const rotation = Number(req.query.rot ?? "0");
-      if (!Number.isFinite(rotation) || Math.abs(rotation) > 180) {
-        throw new Error("rot must be a rotation between -180 and 180 degrees");
-      }
-      const layerRaw = (req.query.layer ?? "full").toLowerCase();
-      if (layerRaw !== "full" && layerRaw !== "ink") {
-        throw new Error('layer must be "full" or "ink"');
-      }
-      const layer = layerRaw as "full" | "ink";
-      const widthPx = Math.max(1, Math.round((widthMm / 25.4) * dpi));
-      const heightPx = Math.max(1, Math.round((heightMm / 25.4) * dpi));
-      if (widthPx > MAX_RENDER_PX || heightPx > MAX_RENDER_PX) {
-        throw new Error(
-          `Requested render is ${widthPx}x${heightPx} px; each side must stay within ${MAX_RENDER_PX} px`,
-        );
-      }
-      const mapInfo = await getBaseMapInfo(db, event.id);
-      const cacheKey = [
-        event.id.toString(),
-        mapInfo.version,
-        cx.toFixed(4),
-        cy.toFixed(4),
-        widthMm.toFixed(4),
-        heightMm.toFixed(4),
-        printScale.toFixed(2),
-        dpi.toFixed(2),
-        rotation.toFixed(2),
-        layer,
-      ].join(":");
-      const cached = windowPngCache.get(cacheKey);
-      if (cached) {
-        if (req.headers["if-none-match"] === cached.etag) {
-          return reply
-            .code(304)
-            .header("ETag", cached.etag)
-            .header("X-Cache", "hit")
-            .send();
-        }
-        return reply
-          .header("Content-Type", "image/png")
-          .header("Cache-Control", "private, max-age=3600")
-          .header("ETag", cached.etag)
-          .header("X-Cache", "hit")
-          .send(cached.body);
-      }
-      const frame = { x: 0, y: 0, width: widthMm, height: heightMm };
-      const window = mapWindowForFrame(
-        frame,
-        { x: cx, y: cy },
-        mapInfo.scale,
-        printScale,
-        rotation,
-      );
-      if (mapInfo.document) {
-        // `vector` event with a pinned document: the reference raster
-        // (docs/course-print.md §10), under the same permit pool and cache.
-        const { hash } = mapInfo.document;
-        const prepared = await prepareDocument(hash, async () => {
-          const bytes = await getBlob(db, "map_documents", hash);
-          if (!bytes) throw new Error("Pinned map document is missing");
-          return bytes;
-        });
-        const body = await renderGate().run(
-          () => renderDocumentWindow(prepared, { window, widthPx, heightPx, layer, hash }),
-          { maxQueue: renderMaxQueue() },
-        );
-        const etag = `"${createHash("sha256").update(body).digest("base64url")}"`;
-        windowPngCache.set(cacheKey, { body, etag });
-        return reply
-          .header("Content-Type", "image/png")
-          .header("Cache-Control", "private, max-age=3600")
-          .header("ETag", etag)
-          .header("X-Cache", "miss")
-          .send(body);
-      }
-      const { layers } = await loadBaseMapSvg(db, event.id, window);
-      const source =
-        layer === "ink"
-          ? layers.ink
-          : layers.full;
-      if (!source) {
-        // Empty ink layer: 1×1 transparent PNG.
-        const { default: sharp } = await import("sharp");
-        const body = await sharp({
-          create: {
-            width: 1,
-            height: 1,
-            channels: 4,
-            background: { r: 0, g: 0, b: 0, alpha: 0 },
-          },
-        })
-          .png()
-          .toBuffer();
-        const etag = `"${createHash("sha256").update(body).digest("base64url")}"`;
-        windowPngCache.set(cacheKey, { body, etag });
-        return reply
-          .header("Content-Type", "image/png")
-          .header("Cache-Control", "private, max-age=3600")
-          .header("ETag", etag)
-          .header("X-Cache", "miss")
-          .send(body);
-      }
-      const svg = `<svg xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink" width="${widthMm}mm" height="${heightMm}mm" viewBox="0 0 ${widthMm} ${heightMm}">${renderBaseMapWindow(source, window, frame, {
-        forceTransparentFill: layer === "ink",
-        dataLayer: layer === "ink" ? "map-ink" : "map-full",
-      })}</svg>`;
-      const { renderAsync } = await import("@resvg/resvg-js");
-      // Same permit pool as the slippy tiles: a layout-editor preview is
-      // a full print-window rasterisation and must not run on top of
-      // `MAP_RENDER_CONCURRENCY` tile renders. Refused with 503 when the
-      // queue is full, like a tile; the editor simply retries.
-      const rendered = await renderGate().run(
-        () =>
-          renderAsync(svg, {
-            fitTo: { mode: "width", value: widthPx },
-            ...(layer === "ink" ? {} : { background: "white" }),
-          }),
-        { maxQueue: renderMaxQueue() },
-      );
-      const body = Buffer.from(rendered.asPng());
-      const etag = `"${createHash("sha256").update(body).digest("base64url")}"`;
-      windowPngCache.set(cacheKey, { body, etag });
-      return reply
-        .header("Content-Type", "image/png")
-        .header("Cache-Control", "private, max-age=3600")
-        .header("ETag", etag)
-        .header("X-Cache", "miss")
-        .send(body);
-    } catch (error) {
-      if (error instanceof RenderBusyError) {
-        return reply
-          .code(503)
-          .header("Retry-After", String(RENDER_BUSY_RETRY_AFTER_S))
-          .header("Cache-Control", "no-store")
-          .send({ error: "Map renderer busy", waiting: error.waiting });
-      }
-      return reply.code(400).send({
-        error:
-          error instanceof Error ? error.message : "Could not render map window",
       });
     }
   });

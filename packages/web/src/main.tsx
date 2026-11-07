@@ -7,6 +7,7 @@ import { httpBatchLink } from "@trpc/client";
 import { eventScopedTrpcFetch, trpc } from "./lib/trpc";
 import { createIdbPersister } from "./lib/offline/persister";
 import { startNodeDiscovery } from "./lib/node-discovery";
+import { dropLegacyCaches } from "./lib/legacy-caches";
 import { CurrentUserProvider } from "./context/CurrentUserContext";
 import App from "./App";
 import "./index.css";
@@ -63,6 +64,9 @@ const trpcClient = trpc.createClient({
     }),
   ],
 });
+
+// The tile cache of the retired tile layer (E4b): its route is gone, its entries are not.
+void dropLegacyCaches();
 
 createRoot(document.getElementById("root")!).render(
   <StrictMode>

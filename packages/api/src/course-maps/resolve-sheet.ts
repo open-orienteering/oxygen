@@ -4,8 +4,7 @@
  * paper, frame and objects, the window, the course's controls and legs,
  * the description rows and text values — turned into the page input the
  * composer (`@oxygen/shared/print`) draws. Templates and sheet rows are
- * read as they are (09 §4 C); `resolve-layout.ts` is not changed, so the
- * legacy SVG page and this one resolve the same layout.
+ * read as they are (09 §4 C).
  *
  * The map document's part of the page (`PageInput.map`, `geo`) is added
  * by the caller (`pdf-page.ts`), which loads the pinned document.
@@ -20,8 +19,8 @@ export type SheetInput = Omit<PageInput, "map" | "geo">;
 export interface ResolveSheetInput extends ResolveMapLayoutInput {
   /**
    * `courses.structure` (course-layer.md §6): the leg gaps the file or
-   * the editor authored come from it, whatever `geometry_source` is.
-   * Absent or invalid = the automatic gaps.
+   * the editor authored come from it. Absent or invalid = the automatic
+   * gaps.
    */
   structure?: unknown;
   /** The event's course objects in scope of this sheet (course-layer.md §8.3), in draw order. */
@@ -43,9 +42,10 @@ export interface ResolvedSheet {
 
 /**
  * The authored leg gaps of the stored structure, by index into the layout's
- * controls. The layout's start and finish come from the geometry (ids
- * `S1` / `F1`), the middle controls are the structure's own sites, so the
- * two sequences are aligned on the first site they share.
+ * controls. The layout's controls are the course's start and finish rows
+ * and its `course_controls`; a start the layout does not draw (unplaced,
+ * or `firstAsStart`) shifts the two sequences, so they are aligned on the
+ * first site they share.
  */
 function legGapsByIndex(layout: ResolvedMapLayout, stored: course.StoredCourseStructure | null): Map<number, course.FractionGap[]> {
   const out = new Map<number, course.FractionGap[]>();

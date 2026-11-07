@@ -209,19 +209,18 @@ Direct integration with the Swedish Orienteering Federation's Eventor API:
 ### Online Input (ROC)
 Per-event pull from a remote radio-control service. Currently supports the ROC protocol used by [roc.olresultat.se](https://roc.olresultat.se) (and OResults' compatible endpoint). One `setInterval` timer per event runs on the instance holding the background-jobs lease, polling the configured endpoint with a `lastId` watermark and inserting new rows into `punches` (with `source = 'online_input'`). The watermark advances in the same transaction as the inserts, and only if it still reads the value the poll started from, so a poller that raced another one rolls back rather than importing the same punches twice. Architecture and the SICenter forward-compat path are documented in [online-input-roc.md](online-input-roc.md). Code lives in `packages/api/src/online-input/` with a small `Protocol` interface so a second protocol (SICenter) is later a single new file plus a UI dropdown entry.
 
-### Map tile rendering
-Uploaded OCAD maps are served to the web viewer as slippy-map tiles. A tile request that misses the `map_tiles` cache rasterises a *window* — the region covered by a small block of tiles, expressed as a `viewBox` sub-rectangle of the map SVG — at a density derived from those tiles, then warps each tile out of it. Peak memory follows the block rather than the map, deep zoom stays sharp because the window is rendered denser than its tiles, and nothing in the path requires a single process: the cache is the `map_tiles` table and `/api/map-tile-progress` is computed from the database. See [map-tile-rendering.md](map-tile-rendering.md).
-
 ### Printable course maps
 
-The course-map renderer uses the OCAD SVG source directly rather than the
-slippy tile cache. It composes a paper-mm SVG from a fixed-scale map window,
-course overlay, control descriptions, and layout objects, then converts it to
-vector PDF with librsvg. `map_templates` hold reusable event layouts;
-`course_maps` are printable sheets and can be many-to-one with a course.
-Shared geometry and SVG generators live in `@oxygen/shared`; the web layout
-editor and API therefore render the same document model. See
-[course-maps.md](course-maps.md).
+`GET /api/maps/:nameId/maps.pdf` composes every page from the event's
+pinned map document: the window's map objects and the course layer in
+one colour-sorted pass stream, the page objects and the control
+description block, written as a DeviceCMYK PDF with embedded subset
+fonts — in a `worker_threads` print worker, off the API's event loop.
+No SVG, no `rsvg-convert`, no system font. `map_templates` hold reusable
+event layouts; `course_maps` are printable sheets and can be
+many-to-one with a course. Layout mode in the course editor draws the
+same page through the same composer. See [course-maps.md](course-maps.md)
+and [course-print.md](course-print.md).
 
 ### Background jobs and horizontal scaling
 Almost everything in the API scales out without coordination, because every request reads and writes Postgres. The exceptions are the timers that are not driven by a request and have effects outside the database: the LiveResults push, ROC polling, and journal shipping. Running any of them twice means duplicate pushes or duplicate punches, so exactly one instance runs them at a time, chosen by a renewable lease row in `oxygen.instance_lease`. The holder reconciles its timers against the per-event configuration every few seconds, which is also how a change made on another instance takes effect. See [background-jobs-lease.md](background-jobs-lease.md).

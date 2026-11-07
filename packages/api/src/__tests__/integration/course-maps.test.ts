@@ -3,7 +3,6 @@ import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
 import Fastify, { type FastifyInstance } from "fastify";
 import { PDFDocument } from "pdf-lib";
-import sharp from "sharp";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { course, defaultMapAppearance } from "@oxygen/shared";
 import { registerCourseMapRoutes } from "../../course-maps/routes.js";
@@ -14,7 +13,8 @@ import {
 } from "../helpers/test-db.js";
 import { makeCaller } from "../helpers/caller.js";
 import { applyEventMap } from "../../event-map.js";
-import { getBaseMapInfo, clearCourseMapSourceCache } from "../../course-maps/map-source.js";
+import { getBaseMapInfo, getBaseMapInfoOrNull } from "../../course-maps/map-source.js";
+import { clearEventDocumentCaches } from "../../map-store/event-document.js";
 import { hasTool, qpdfCheck } from "../../render/pdf-golden.js";
 
 const hasQpdf = await hasTool("qpdf");
@@ -26,7 +26,7 @@ let courseId: number;
 let courseSeq: number;
 let startControlId: string;
 let finishControlId: string;
-const convertedSvgs: string[] = [];
+let mapBytes: Buffer;
 const clubTemplateName = `Course-map-${randomUUID()}`;
 const fixture = resolve(__dirname, "../../../../../e2e/test.ocd");
 
@@ -83,57 +83,9 @@ beforeAll(async () => {
       name: "Blue",
       lengthM: 2_300,
       climbM: 45,
-      geometry: {
-        type: "FeatureCollection",
-        features: [
-          {
-            type: "Feature",
-            geometry: { type: "Point", coordinates: [-30, 0] },
-            properties: { id: "start", code: "S", symbolType: "start" },
-          },
-          {
-            type: "Feature",
-            geometry: { type: "Point", coordinates: [30, 0] },
-            properties: { id: "finish", code: "F", symbolType: "finish" },
-          },
-          {
-            type: "Feature",
-            geometry: {
-              type: "LineString",
-              coordinates: [
-                [-30, 0],
-                [-20, 0],
-              ],
-            },
-            properties: {
-              symbolType: "leg",
-              gaps: [{ from: 0.4, to: 0.6 }],
-            },
-          },
-          {
-            type: "Feature",
-            geometry: {
-              type: "LineString",
-              coordinates: [
-                [-20, 0],
-                [20, 0],
-              ],
-            },
-            properties: { symbolType: "leg" },
-          },
-          {
-            type: "Feature",
-            geometry: {
-              type: "LineString",
-              coordinates: [
-                [20, 0],
-                [30, 0],
-              ],
-            },
-            properties: { symbolType: "leg" },
-          },
-        ],
-      },
+      // No `structure` and no geometry: the course reads its start and
+      // finish from the columns (the event's first start / finish), as the
+      // editor does (docs/course-print.md §5.2).
       courseControls: {
         create: [
           { position: 1, controlId: control1.id },
@@ -144,27 +96,16 @@ beforeAll(async () => {
   });
   courseId = course.seq;
   courseSeq = course.seq;
-  await ctx.db.mapFile.create({
-    data: {
-      eventId: ctx.eventId,
-      fileName: "test.ocd",
-      fileData: readFileSync(fixture),
-      scale: 7500,
-    },
-  });
+  // A real upload: the readers read the pinned document (docs/map-storage.md
+  // §4.6). Per-run trailer: content-addressed rows are global.
+  mapBytes = Buffer.concat([readFileSync(fixture), Buffer.from(`maps-${randomBytes(4).toString("hex")}`)]);
+  const uploaded = await applyEventMap(ctx.db, ctx.eventId, "test.ocd", mapBytes);
+  expect(uploaded.documentHash).toMatch(/^[0-9a-f]{64}$/);
 
-  const fakeConverter = {
-    async convert(svg: string) {
-      convertedSvgs.push(svg);
-      const pdf = await PDFDocument.create();
-      pdf.addPage([595.28, 841.89]);
-      return Buffer.from(await pdf.save());
-    },
-  };
   server = Fastify({ logger: false });
-  registerCourseMapRoutes(server, { converter: fakeConverter });
+  registerCourseMapRoutes(server);
   await server.ready();
-});
+}, 60_000);
 
 afterAll(async () => {
   await server.close();
@@ -182,23 +123,22 @@ describe("map file info and metadata", () => {
     const info = await caller.course.mapFileInfo();
     expect(info).not.toBeNull();
     expect(info!.fileName).toBe("test.ocd");
-    expect(info!.size).toBe(readFileSync(fixture).byteLength);
+    expect(info!.size).toBe(mapBytes.byteLength);
     expect(Number.isInteger(info!.id)).toBe(true);
   });
 
-  // The auto-profile classification reads and parses the OCAD; the
-  // result is memoised per render key so repeat calls agree and are cheap.
-  it("resolves the auto colour profile consistently across calls", async () => {
-    const first = await caller.course.mapMetadata();
-    const second = await caller.course.mapMetadata();
-    expect(first).not.toBeNull();
-    expect(first!.colorProfile).toBe("auto");
-    expect(["isom", "issprom", "isskiom", "ismtbom"]).toContain(
-      first!.resolvedProfile,
-    );
-    expect(second!.resolvedProfile).toBe(first!.resolvedProfile);
-    expect(second!.resolvedBy).toBe(first!.resolvedBy);
-    expect(second!.renderKey).toBe(first!.renderKey);
+  // The colour-stack fields and the render key went with the raster
+  // (E4a); the upload still writes the columns for the v0.5.0 rollback.
+  it("answers without the colour-stack fields or the render key, which the upload still writes", async () => {
+    const meta = await caller.course.mapMetadata();
+    expect(meta).not.toBeNull();
+    for (const gone of ["colorProfile", "colorOverrides", "northLinesBelow", "resolvedProfile", "resolvedBy", "renderKey"]) {
+      expect(meta).not.toHaveProperty(gone);
+    }
+    const row = await ctx.db.mapFile.findFirstOrThrow({ where: { eventId: ctx.eventId }, orderBy: { uploadedAt: "desc" }, select: { renderKey: true, fileHash: true, colorProfile: true } });
+    expect(row.renderKey).toBeTruthy();
+    expect(row.fileHash).toBeTruthy();
+    expect(row.colorProfile).toBe("auto");
   });
 });
 
@@ -256,8 +196,13 @@ describe("map templates and course maps", () => {
       "control",
       "finish",
     ]);
-    expect(maps[0].legs).toHaveLength(3);
-    expect(maps[0].legs[0].gaps).toEqual([{ from: 0.4, to: 0.6 }]);
+    expect(maps[0].controls.map((control) => control.id)).toEqual([startControlId, expect.any(String), expect.any(String), finishControlId]);
+    // Straight legs centre to centre; authored gaps live in the structure (the page's course layer).
+    expect(maps[0].legs.map((leg) => leg.points)).toEqual([
+      [{ x: -30, y: 0 }, { x: -20, y: 0 }],
+      [{ x: -20, y: 0 }, { x: 20, y: 0 }],
+      [{ x: 20, y: 0 }, { x: 30, y: 0 }],
+    ]);
     // Print sheet = the course editor's sheet: header + start + controls +
     // finish (with the measured last-control → finish distance).
     expect(maps[0].descriptionHeader).toMatchObject({ courseName: "Blue" });
@@ -414,7 +359,6 @@ describe("map templates and course maps", () => {
       "F",
     ]);
     expect(preview.legs).toHaveLength(3);
-    expect(preview.legs[0].gaps).toEqual([{ from: 0.4, to: 0.6 }]);
     // Course spans x -30..30, y 0 — the window centres on that bounding box.
     expect(preview.window.minX + preview.window.width / 2).toBeCloseTo(0);
     expect(preview.window.minY + preview.window.height / 2).toBeCloseTo(0);
@@ -506,6 +450,32 @@ describe("map templates and course maps", () => {
     await expect(caller.courseMap.resolveSheet({ templateSeq: template.seq, courseSeq: 900_001 })).rejects.toMatchObject({ code: "NOT_FOUND" });
   });
 
+  it("description instructions written by course.update reach Layout mode's block and the print rows, anchored by public id (E3b)", async () => {
+    const template = (await caller.mapTemplate.list())[0];
+    const { version } = await caller.course.detail({ id: courseSeq });
+    // After control 31 (its punch code; its seq differs), and a finish variant.
+    await caller.course.update({
+      id: courseSeq,
+      descriptionInstructions: { specials: [{ afterControlId: 31, kind: "13.2", lengthM: 120 }], finish: { kind: "14.1", lengthM: 80 } },
+      baseVersion: version,
+    });
+    try {
+      const expected = [
+        { kind: "start" },
+        { kind: "control", code: "31" },
+        { kind: "special", symbolKey: "13.2", lengthM: 120 },
+        { kind: "control", code: "32" },
+        { kind: "finish", symbolKey: "14.1", lengthM: 80 },
+      ];
+      const r = await caller.courseMap.resolveSheet({ templateSeq: template.seq, courseSeq });
+      expect(r.block!.rows).toMatchObject(expected);
+      const printed = (await caller.courseMap.list()).find((m) => m.courseId === courseSeq)!;
+      expect(printed.descriptionRows).toMatchObject(expected);
+    } finally {
+      await caller.course.update({ id: courseSeq, descriptionInstructions: null });
+    }
+  });
+
   it("round-trips templates through the club library", async () => {
     const template = (await caller.mapTemplate.list())[0];
     const saved = await caller.mapTemplate.saveToClub({
@@ -578,89 +548,29 @@ describe("map templates and course maps", () => {
 });
 
 describe("course map REST rendering", () => {
-  it("renders a fixed-scale map window PNG", async () => {
-    const url = `/api/maps/${ctx.nameId}/window.png?cx=0.1234&cy=0&wMm=194&hMm=281&printScale=7500&dpi=72`;
+  it("serves no window.png (the layout editor's raster went in E4a)", async () => {
     const response = await server.inject({
       method: "GET",
-      url,
+      url: `/api/maps/${ctx.nameId}/window.png?cx=0&cy=0&wMm=60&hMm=60&printScale=7500&dpi=72`,
     });
-    expect(response.statusCode).toBe(200);
-    expect(response.headers["content-type"]).toContain("image/png");
-    expect(response.headers["x-cache"]).toBe("miss");
-    expect(response.headers.etag).toBeTruthy();
-    expect(response.rawPayload.subarray(0, 8)).toEqual(
-      Buffer.from([137, 80, 78, 71, 13, 10, 26, 10]),
-    );
-
-    const cached = await server.inject({ method: "GET", url });
-    expect(cached.statusCode).toBe(200);
-    expect(cached.headers["x-cache"]).toBe("hit");
-    expect(cached.headers.etag).toBe(response.headers.etag);
-    expect(cached.rawPayload).toEqual(response.rawPayload);
-
-    const notModified = await server.inject({
-      method: "GET",
-      url,
-      headers: { "if-none-match": String(response.headers.etag) },
-    });
-    expect(notModified.statusCode).toBe(304);
-    expect(notModified.headers["x-cache"]).toBe("hit");
+    expect(response.statusCode).toBe(404);
   });
 
-  it("allows high DPI while the raster stays within the pixel limit", async () => {
-    const response = await server.inject({
-      method: "GET",
-      url: `/api/maps/${ctx.nameId}/window.png?cx=0&cy=0&wMm=60&hMm=60&printScale=7500&dpi=600`,
-    });
-    expect(response.statusCode).toBe(200);
-    expect(response.headers["content-type"]).toContain("image/png");
-  });
-
-  it("rejects a window render that exceeds the pixel limit", async () => {
-    const response = await server.inject({
-      method: "GET",
-      url: `/api/maps/${ctx.nameId}/window.png?cx=0&cy=0&wMm=194&hMm=281&printScale=7500&dpi=600`,
-    });
-    expect(response.statusCode).toBe(400);
-    expect(response.json().error).toContain("4096");
-  });
-
-  it("rejects a dpi above the supported maximum", async () => {
-    const response = await server.inject({
-      method: "GET",
-      url: `/api/maps/${ctx.nameId}/window.png?cx=0&cy=0&wMm=60&hMm=60&printScale=7500&dpi=1200`,
-    });
-    expect(response.statusCode).toBe(400);
-    expect(response.json().error).toContain("dpi");
-  });
-
-  it("returns one PDF page per map for a selected course", async () => {
+  it("returns one composed PDF page per map for a selected course", async () => {
     const response = await server.inject({
       method: "GET",
       url: `/api/maps/${ctx.nameId}/maps.pdf?courses=${courseSeq}`,
     });
     expect(response.statusCode).toBe(200);
     expect(response.headers["content-type"]).toContain("application/pdf");
+    expect(response.headers["x-print-pipeline"]).toBeUndefined();
     const pdf = await PDFDocument.load(response.rawPayload);
     expect(pdf.getPageCount()).toBe(2);
-    expect(convertedSvgs).not.toHaveLength(0);
-    const last = convertedSvgs.at(-1)!;
-    expect(last).toContain("course-overlay-lower");
-    expect(last).toContain("course-overlay-upper");
-    expect(last).not.toContain("mix-blend-mode");
-    // Ink (when present) sits between lower and upper purple.
-    const lowerAt = last.indexOf("course-overlay-lower");
-    const upperAt = last.indexOf("course-overlay-upper");
-    expect(lowerAt).toBeGreaterThanOrEqual(0);
-    expect(upperAt).toBeGreaterThan(lowerAt);
-    const inkAt = last.indexOf('data-map-layer="map-ink"');
-    if (inkAt >= 0) {
-      expect(inkAt).toBeGreaterThan(lowerAt);
-      expect(inkAt).toBeLessThan(upperAt);
-    }
+    // The composer draws the overprint (docs/course-print.md §8;
+    // course-print.test.ts asserts the page content).
   });
 
-  it("exports all-controls starts and finishes as symbols", async () => {
+  it("exports the all-controls map as one composed page", async () => {
     const allControlsMap = (await caller.courseMap.list()).find(
       (map) => map.kind === "all_controls",
     );
@@ -670,169 +580,56 @@ describe("course map REST rendering", () => {
       url: `/api/maps/${ctx.nameId}/maps.pdf?maps=${allControlsMap.seq}`,
     });
     expect(response.statusCode).toBe(200);
-    const svg = convertedSvgs.at(-1) ?? "";
-    expect(svg).toContain(`data-control-id="${startControlId}"`);
-    expect(svg).toContain(`data-control-id="${finishControlId}"`);
-    expect(svg).toMatch(
-      new RegExp(`<path[^>]+data-control-id="${startControlId}"`),
-    );
-    expect(svg).toMatch(
-      new RegExp(`<circle[^>]+data-control-id="${finishControlId}"`),
-    );
+    expect((await PDFDocument.load(response.rawPayload)).getPageCount()).toBe(1);
   });
 
-  it("renders a rotated window as a distinct cached entry", async () => {
-    const base = `/api/maps/${ctx.nameId}/window.png?cx=0&cy=0&wMm=60&hMm=60&printScale=7500&dpi=72`;
-    const straight = await server.inject({ method: "GET", url: base });
-    const rotated = await server.inject({
-      method: "GET",
-      url: `${base}&rot=-15`,
-    });
-    expect(straight.statusCode).toBe(200);
-    expect(rotated.statusCode).toBe(200);
-    expect(rotated.headers["content-type"]).toContain("image/png");
-    expect(rotated.headers.etag).not.toBe(straight.headers.etag);
-    expect(rotated.rawPayload.equals(straight.rawPayload)).toBe(false);
-
-    const invalid = await server.inject({
-      method: "GET",
-      url: `${base}&rot=270`,
-    });
-    expect(invalid.statusCode).toBe(400);
-    expect(invalid.json().error).toContain("rot");
-  });
 });
 
-describe("window.png under a pinned document", () => {
+describe("getBaseMapInfo under a pinned document", () => {
   let vec: TestEventContext;
   let documentHash: string;
-  const q = (nameId: string, extra = "") =>
-    `/api/maps/${nameId}/window.png?cx=-70&cy=10&wMm=60&hMm=40&printScale=7500&dpi=100${extra}`;
-  const decode = async (png: Buffer) => {
-    const { data, info } = await sharp(png).ensureAlpha().raw().toBuffer({ resolveWithObject: true });
-    return { width: info.width, height: info.height, data };
-  };
 
   beforeAll(async () => {
     vec = await createTestEvent("course_maps_vec");
     // Per-run trailer: content-addressed rows are global (see map-documents.test.ts).
-    const bytes = Buffer.concat([readFileSync(fixture), Buffer.from(`window-${randomBytes(4).toString("hex")}`)]);
+    const bytes = Buffer.concat([readFileSync(fixture), Buffer.from(`base-${randomBytes(4).toString("hex")}`)]);
     const applied = await applyEventMap(vec.db, vec.eventId, "test.ocd", bytes);
     expect(applied.documentHash).toMatch(/^[0-9a-f]{64}$/);
     documentHash = applied.documentHash!;
-    await vec.db.event.update({ where: { id: vec.eventId }, data: { mapPipeline: "vector" } });
   }, 60_000);
 
   afterAll(async () => {
     await vec?.cleanup();
   });
 
-  it("getBaseMapInfo: the document branch agrees with the legacy reader and carries the hash", async () => {
-    const legacy = await getBaseMapInfo(ctx.db, ctx.eventId);
+  it("getBaseMapInfo: every pinned event carries its document hash", async () => {
+    const other = await getBaseMapInfo(ctx.db, ctx.eventId);
     const doc = await getBaseMapInfo(vec.db, vec.eventId);
-    expect(legacy.document).toBeNull();
-    expect(doc.scale).toBe(legacy.scale);
-    expect(doc.meridianTiltDeg).toBeCloseTo(legacy.meridianTiltDeg, 3);
+    expect(other.document).toEqual({ hash: other.version });
+    expect(doc.scale).toBe(other.scale);
+    expect(doc.meridianTiltDeg).toBeCloseTo(other.meridianTiltDeg, 3);
     expect(doc.document).toEqual({ hash: documentHash });
     expect(doc.version).toBe(documentHash);
   });
 
-  it("a vector event without a pinned document keeps the legacy path", async () => {
+  it("an event without a pinned document has no base map (no OCAD fallback, docs/map-storage.md §4.6)", async () => {
     await vec.db.mapFile.updateMany({ where: { eventId: vec.eventId }, data: { documentHash: null } });
-    clearCourseMapSourceCache();
-    expect((await getBaseMapInfo(vec.db, vec.eventId)).document).toBeNull();
-    await vec.db.mapFile.updateMany({ where: { eventId: vec.eventId }, data: { documentHash } });
-    clearCourseMapSourceCache();
-  });
-
-  it("full layer: exact size, opaque, yellow area at the window centre; cached by document hash", async () => {
-    const res = await server.inject({ method: "GET", url: q(vec.nameId) });
-    expect(res.statusCode).toBe(200);
-    expect(res.headers["x-cache"]).toBe("miss");
-    const img = await decode(res.rawPayload);
-    expect([img.width, img.height]).toEqual([236, 157]);
-    // Window spans map x −100..−40: bare paper on the left, the yellow area from x ≈ −74 on.
-    const at = (x: number) => (Math.floor(img.height / 2) * img.width + x) * 4;
-    expect(Array.from(img.data.subarray(at(10), at(10) + 4))).toEqual([255, 255, 255, 255]);
-    const o = at(img.width - 10);
-    expect(img.data[o + 3]).toBe(255);
-    expect(img.data[o]).toBeGreaterThan(200); // yellow, not white
-    expect(img.data[o + 2]).toBeLessThan(120);
-    const hit = await server.inject({ method: "GET", url: q(vec.nameId) });
-    expect(hit.headers["x-cache"]).toBe("hit");
-    expect(hit.headers.etag).toBe(res.headers.etag);
-  });
-
-  it("ink layer: transparent paper, only colours above purple-lower, distinct from full", async () => {
-    const ink = await server.inject({ method: "GET", url: q(vec.nameId, "&layer=ink") });
-    const full = await server.inject({ method: "GET", url: q(vec.nameId) });
-    expect(ink.statusCode).toBe(200);
-    expect(ink.headers.etag).not.toBe(full.headers.etag);
-    const img = await decode(ink.rawPayload);
-    expect([img.width, img.height]).toEqual([236, 157]);
-    let clear = 0;
-    for (let i = 3; i < img.data.length; i += 4) if (img.data[i] === 0) clear++;
-    expect(clear).toBeGreaterThan(img.data.length / 4 / 4);
-    // A window beyond the map draws nothing: fully transparent, still full-size.
-    const empty = await server.inject({ method: "GET", url: `/api/maps/${vec.nameId}/window.png?cx=900&cy=900&wMm=30&hMm=30&printScale=7500&dpi=50&layer=ink` });
-    const e = await decode(empty.rawPayload);
-    expect([e.width, e.height]).toEqual([59, 59]);
-    expect(e.data.every((v, i) => i % 4 !== 3 || v === 0)).toBe(true);
-  });
-
-  it("rotated window: exact size and its own cache entry", async () => {
-    const straight = await server.inject({ method: "GET", url: q(vec.nameId) });
-    const rotated = await server.inject({ method: "GET", url: q(vec.nameId, "&rot=-15") });
-    expect(rotated.statusCode).toBe(200);
-    expect(rotated.headers["x-cache"]).toBe("miss");
-    expect(rotated.headers.etag).not.toBe(straight.headers.etag);
-    const img = await decode(rotated.rawPayload);
-    expect([img.width, img.height]).toEqual([236, 157]);
-    const again = await server.inject({ method: "GET", url: q(vec.nameId, "&rot=-15") });
-    expect(again.headers["x-cache"]).toBe("hit");
-  });
-
-  it("agrees with the legacy window of the same map up to the sanctioned differences", async () => {
-    // Sanctioned (decision 2026-10-23): library-drawn symbols, naive colour
-    // conversion, and the document's own colour order instead of the legacy
-    // IOF rewrite (the fixture draws yellow above blue, so the ink split
-    // differs). What must agree is the geometry: the paper/area edge in
-    // the full layer and the black linework in the ink layer.
-    const iou = (a: boolean[], b: boolean[]) => {
-      let both = 0, either = 0;
-      a.forEach((v, i) => {
-        if (v || b[i]) either++;
-        if (v && b[i]) both++;
-      });
-      return { both, either, ratio: either === 0 ? 1 : both / either };
-    };
-    const mask = (img: { data: Buffer }, f: (r: number, g: number, b: number, a: number) => boolean) => {
-      const out: boolean[] = [];
-      for (let i = 0; i < img.data.length; i += 4) out.push(f(img.data[i], img.data[i + 1], img.data[i + 2], img.data[i + 3]));
-      return out;
-    };
-    const get = async (id: string, layer: string) => decode((await server.inject({ method: "GET", url: q(id, `&layer=${layer}`) })).rawPayload);
-    const [lf, df, li, di] = [await get(ctx.nameId, "full"), await get(vec.nameId, "full"), await get(ctx.nameId, "ink"), await get(vec.nameId, "ink")];
-    for (const d of [df, li, di]) expect([d.width, d.height]).toEqual([lf.width, lf.height]);
-    const area = iou(mask(lf, (r, g, b) => !(r > 245 && g > 245 && b > 245)), mask(df, (r, g, b) => !(r > 245 && g > 245 && b > 245)));
-    expect(area.either).toBeGreaterThan(0);
-    expect(area.ratio).toBeGreaterThan(0.9);
-    const dark = (r: number, g: number, b: number, a: number) => a > 128 && r + g + b < 200;
-    const lines = iou(mask(li, dark), mask(di, dark));
-    expect(lines.either).toBeGreaterThan(0);
-    expect(lines.ratio).toBeGreaterThan(0.5);
-  });
-
-  it("legacy events are unchanged: no document, same route", async () => {
-    const res = await server.inject({ method: "GET", url: q(ctx.nameId) });
-    expect(res.statusCode).toBe(200);
+    clearEventDocumentCaches();
+    try {
+      await expect(getBaseMapInfo(vec.db, vec.eventId)).rejects.toThrow("No base map uploaded");
+      expect(await getBaseMapInfoOrNull(vec.db, vec.eventId)).toBeNull();
+    } finally {
+      await vec.db.mapFile.updateMany({ where: { eventId: vec.eventId }, data: { documentHash } });
+      clearEventDocumentCaches();
+    }
   });
 });
 
-describe("maps.pdf route switch", () => {
-  // docs/course-print.md §8: a `vector` event with a pinned document prints
-  // through the composer; `legacy`, or `vector` without a pin, through the
-  // legacy SVG → rsvg path. Both read the same template / sheet rows.
+describe("maps.pdf through the composer", () => {
+  // docs/course-print.md §8.1: every event prints its pinned document
+  // through the composer (E3). Without a pin there is no base map
+  // (slice E1); a composer error, an unaligned colour stack included, is
+  // a 400 with the reason.
   let vec: TestEventContext;
   let documentHash: string;
   let courseMapSeqs: number[];
@@ -843,8 +640,7 @@ describe("maps.pdf route switch", () => {
     const bytes = Buffer.concat([readFileSync(fixture), Buffer.from(`pdf-${randomBytes(4).toString("hex")}`)]);
     const applied = await applyEventMap(vec.db, vec.eventId, "test.ocd", bytes);
     documentHash = applied.documentHash!;
-    await vec.db.event.update({ where: { id: vec.eventId }, data: { mapPipeline: "vector" } });
-    clearCourseMapSourceCache();
+    clearEventDocumentCaches();
     const db = vec.db;
     const mk = (codes: string, xpos: number, ypos: number, extra: Record<string, unknown> = {}) =>
       db.control.create({ data: { eventId: vec.eventId, codes, xpos, ypos, ...extra } });
@@ -868,14 +664,12 @@ describe("maps.pdf route switch", () => {
     await vec?.cleanup();
   });
 
-  it("vector + pin: one composed PDF, one page per map at the template's paper size, never the rsvg converter", async () => {
-    const before = convertedSvgs.length;
+  it("one composed PDF, one page per map at the template's paper size", async () => {
     const res = await server.inject({ method: "GET", url: pdfUrl(vec.nameId) });
     expect(res.statusCode).toBe(200);
     expect(res.headers["content-type"]).toContain("application/pdf");
-    expect(res.headers["x-print-pipeline"]).toBe("vector");
+    expect(res.headers["x-print-pipeline"]).toBeUndefined();
     expect(res.headers["content-disposition"]).toContain("_maps.pdf");
-    expect(convertedSvgs).toHaveLength(before);
     const pdf = await PDFDocument.load(res.rawPayload);
     expect(pdf.getPageCount()).toBe(3);
     const sizes = pdf.getPages().map((p) => [p.getWidth(), p.getHeight()].map((v) => Math.round((v * 25.4) / 72)));
@@ -885,7 +679,7 @@ describe("maps.pdf route switch", () => {
     expect(pdf.getCreator()).toBe("Oxygen");
   }, 60_000);
 
-  it("vector + pin: a single map keeps the legacy file name; the selection query works as before", async () => {
+  it("a single map keeps the legacy file name; the selection query works as before", async () => {
     const res = await server.inject({ method: "GET", url: pdfUrl(vec.nameId, `?maps=${courseMapSeqs[1]}`) });
     expect(res.statusCode).toBe(200);
     expect(res.headers["content-disposition"]).toContain(`${vec.nameId}_Ro_d_A5.pdf`);
@@ -897,7 +691,7 @@ describe("maps.pdf route switch", () => {
     expect(missing.statusCode).toBe(400);
   }, 60_000);
 
-  it.skipIf(!hasQpdf && !process.env.CI)("vector + pin: qpdf --check is clean", async () => {
+  it.skipIf(!hasQpdf && !process.env.CI)("qpdf --check is clean", async () => {
     const res = await server.inject({ method: "GET", url: pdfUrl(vec.nameId) });
     expect(await qpdfCheck(res.rawPayload)).toMatch(/No syntax or stream encoding errors/);
   }, 60_000);
@@ -930,7 +724,6 @@ describe("maps.pdf route switch", () => {
       }
       const res = await print;
       expect(res.statusCode).toBe(200);
-      expect(res.headers["x-print-pipeline"]).toBe("vector");
       expect((await PDFDocument.load(res.rawPayload)).getPageCount()).toBe(153);
       // The print outlasted the probes (otherwise this proves nothing) and every probe was prompt.
       expect(latencies.length).toBeGreaterThanOrEqual(3);
@@ -941,47 +734,22 @@ describe("maps.pdf route switch", () => {
     }
   }, 180_000);
 
-  it("a legacy event prints through the rsvg converter", async () => {
-    const before = convertedSvgs.length;
-    const res = await server.inject({ method: "GET", url: pdfUrl(ctx.nameId, `?courses=${courseSeq}`) });
-    expect(res.statusCode).toBe(200);
-    expect(res.headers["x-print-pipeline"]).toBe("legacy");
-    expect(convertedSvgs.length).toBeGreaterThan(before);
-  });
-
-  it("a vector event without a pinned document prints through the legacy path", async () => {
+  it("an event without a pinned document has no base map to print (slice E1: no OCAD fallback)", async () => {
     await vec.db.mapFile.updateMany({ where: { eventId: vec.eventId }, data: { documentHash: null } });
-    clearCourseMapSourceCache();
+    clearEventDocumentCaches();
     try {
-      const before = convertedSvgs.length;
       const res = await server.inject({ method: "GET", url: pdfUrl(vec.nameId) });
-      expect(res.statusCode).toBe(200);
-      expect(res.headers["x-print-pipeline"]).toBe("legacy");
-      expect(convertedSvgs).toHaveLength(before + 3);
+      expect(res.statusCode).toBe(400);
+      expect(res.json().error).toBe("No base map uploaded");
     } finally {
       await vec.db.mapFile.updateMany({ where: { eventId: vec.eventId }, data: { documentHash } });
-      clearCourseMapSourceCache();
+      clearEventDocumentCaches();
     }
   }, 60_000);
 
-  it("rollback is the switch: the same rows print legacy once the event is flipped back", async () => {
-    await vec.db.event.update({ where: { id: vec.eventId }, data: { mapPipeline: "legacy" } });
-    clearCourseMapSourceCache();
-    try {
-      const res = await server.inject({ method: "GET", url: pdfUrl(vec.nameId) });
-      expect(res.statusCode).toBe(200);
-      expect(res.headers["x-print-pipeline"]).toBe("legacy");
-      expect((await PDFDocument.load(res.rawPayload)).getPageCount()).toBe(3);
-    } finally {
-      await vec.db.event.update({ where: { id: vec.eventId }, data: { mapPipeline: "vector" } });
-      clearCourseMapSourceCache();
-    }
-  }, 60_000);
-
-  it("any other vector-path error is a 400, not a fallback", async () => {
+  it("any composer error is a 400; there is no other path to fall back to", async () => {
     const failing = Fastify({ logger: false });
     registerCourseMapRoutes(failing, {
-      converter: { convert: async () => { throw new Error("rsvg must not run"); } },
       renderCoursePages: async () => {
         throw new Error("composer bug");
       },
@@ -996,30 +764,21 @@ describe("maps.pdf route switch", () => {
     }
   }, 60_000);
 
-  it("an unaligned colour stack falls back to the legacy path", async () => {
-    const converted: string[] = [];
-    const fallback = Fastify({ logger: false });
-    registerCourseMapRoutes(fallback, {
-      converter: {
-        async convert(svg: string) {
-          converted.push(svg);
-          const pdf = await PDFDocument.create();
-          pdf.addPage([595.28, 841.89]);
-          return Buffer.from(await pdf.save());
-        },
-      },
+  it("an unaligned colour stack is a 400 with the reason", async () => {
+    const unaligned = Fastify({ logger: false });
+    registerCourseMapRoutes(unaligned, {
       renderCoursePages: async () => {
         throw new course.CourseStackError("document colour stack is not aligned");
       },
     });
-    await fallback.ready();
+    await unaligned.ready();
     try {
-      const res = await fallback.inject({ method: "GET", url: pdfUrl(vec.nameId) });
-      expect(res.statusCode).toBe(200);
-      expect(res.headers["x-print-pipeline"]).toBe("legacy-fallback");
-      expect(converted).toHaveLength(3);
+      const res = await unaligned.inject({ method: "GET", url: pdfUrl(vec.nameId) });
+      expect(res.statusCode).toBe(400);
+      expect(res.json().error).toBe("document colour stack is not aligned");
+      expect(res.headers["x-print-pipeline"]).toBeUndefined();
     } finally {
-      await fallback.close();
+      await unaligned.close();
     }
   }, 60_000);
 });
@@ -1122,7 +881,10 @@ describe("graphics library", () => {
       url: `/api/maps/${ctx.nameId}/maps.pdf?maps=${map.seq}`,
     });
     expect(response.statusCode).toBe(200);
-    expect(convertedSvgs.at(-1)).toContain('fill="#336699"');
+    // The composer embeds the graphic as an image XObject on the page
+    // (course-print.test.ts "images" checks the bytes).
+    const pdf = await PDFDocument.load(response.rawPayload);
+    expect(pdf.getPageCount()).toBe(1);
   });
 
   it("deletes graphics and reports missing ones", async () => {

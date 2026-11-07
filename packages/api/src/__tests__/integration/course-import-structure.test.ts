@@ -194,4 +194,66 @@ describe("an OCD bundle with authored geometry", () => {
     const ctl = await ctx.db.control.findFirstOrThrow({ where: { eventId: ctx.eventId, codes: "71" } });
     expect(ctl.circleGaps).toEqual([]);
   });
+
+  // E6 (course-layer.md §6.4 "Importers"): an IOF / PPen re-import over an
+  // OCD-imported course reads nothing from `courses.geometry`. The OCD
+  // column stays as it was (v0.5.0 rollback), the file's positions and
+  // length win, and the authored leg gaps come from the stored structure
+  // where the leg still runs between the same sites.
+  const ppenGapped = (order: string[]) => `<?xml version="1.0" encoding="utf-8"?>
+<course-scribe-event>
+  <event id="1"><title>Ppen</title><map kind="OCAD" scale="10000">map.ocd</map></event>
+  <control id="10" kind="start"><location x="-10" y="0" /></control>
+  <control id="11" kind="normal"><code>71</code><location x="0" y="0.5" /></control>
+  <control id="12" kind="normal"><code>72</code><location x="100" y="0.5" /></control>
+  <control id="13" kind="finish"><location x="110" y="0" /></control>
+  <course id="1" kind="normal" order="1">
+    <name>Gapped</name>
+    <first course-control="100" />
+  </course>
+  <course-control id="100" control="10"><next course-control="101" /></course-control>
+  <course-control id="101" control="${order[0]}"><next course-control="102" /></course-control>
+  <course-control id="102" control="${order[1]}"><next course-control="103" /></course-control>
+  <course-control id="103" control="13" />
+</course-scribe-event>`;
+
+  it("an XML re-import keeps the OCD column untouched and carries the leg gaps from the structure; a changed leg drops them", async () => {
+    mocked.parsed = bundle();
+    await importIt();
+    mocked.parsed = null;
+    const before = (await courses()).find((x) => x.name === "Gapped")!;
+    expect(before.geometrySource).toBe("ocd");
+    expect(before.lengthSource).toBe("file");
+    const itemsBefore = (before.structure as { items: { siteId: string; leg?: unknown }[] }).items;
+    expect(itemsBefore[2].leg).toEqual({ gaps: [{ from: 0.4, to: 0.6 }] });
+
+    await caller.course.importCourses({ xmlContent: ppenGapped(["11", "12"]) });
+    const after = (await courses()).find((x) => x.name === "Gapped")!;
+    expect(after.geometry).toEqual(before.geometry);
+    expect(after.geometrySource).toBe("ocd");
+    expect(after.lengthSource).toBe("file");
+    const items = (after.structure as { items: { siteId: string; leg?: unknown }[] }).items;
+    expect(items.map((i) => i.siteId)).toEqual(itemsBefore.map((i) => i.siteId));
+    expect(items[2].leg).toEqual({ gaps: [{ from: 0.4, to: 0.6 }] });
+    // The file's positions win on the rows.
+    const c71 = await ctx.db.control.findFirstOrThrow({ where: { eventId: ctx.eventId, codes: "71" } });
+    expect([c71.xpos, c71.ypos]).toEqual([0, 0.5]);
+
+    // Reordered: no leg runs 71 → 72 any more, so no gaps are carried.
+    await caller.course.importCourses({ xmlContent: ppenGapped(["12", "11"]) });
+    const reordered = (await courses()).find((x) => x.name === "Gapped")!;
+    expect(reordered.geometry).toEqual(before.geometry);
+    expect((reordered.structure as { items: { leg?: unknown }[] }).items.every((i) => i.leg === undefined)).toBe(true);
+  });
+
+  it("an XML import over a non-OCD course writes the file's geometry and a 'file' length source", async () => {
+    await caller.course.importCourses({ xmlContent: PPEN });
+    const row = (await courses()).find((x) => x.name === "Ppen A")!;
+    await ctx.db.course.update({ where: { id: row.id }, data: { geometrySource: "editor", lengthSource: "derived" } });
+    await caller.course.importCourses({ xmlContent: PPEN });
+    const again = (await courses()).find((x) => x.name === "Ppen A")!;
+    expect(again.geometrySource).toBe("xml");
+    expect(again.lengthSource).toBe("file");
+    expect((again.geometry as { features: unknown[] }).features.length).toBeGreaterThan(0);
+  });
 });

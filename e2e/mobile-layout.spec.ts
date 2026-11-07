@@ -1,8 +1,7 @@
 /**
  * Mobile layout and touch gesture regressions.
  */
-import { test, expect, type MapPipeline } from "./helpers/map-pipeline";
-import type { Locator, Page } from "@playwright/test";
+import { test, expect, type Locator, type Page } from "@playwright/test";
 import { reseed } from "./helpers/reseed";
 import { uploadEventMap } from "./helpers/map-upload";
 
@@ -17,7 +16,7 @@ test.describe.serial("mobile layout", () => {
     await reseed();
   });
 
-  test("compact header, map footer gating, editor dismiss", async ({ page }) => {
+  test("compact header, map footer gating, the editor on a phone", async ({ page }) => {
     test.setTimeout(120_000);
     await page.goto("/");
     await page.getByText("My example tävling").click();
@@ -93,147 +92,16 @@ test.describe.serial("mobile layout", () => {
     }
 
     await clickTab(page, "Course Editor");
-    await expect(page.getByTestId("course-editor-page")).toBeVisible({ timeout: 15000 });
-    await expect(
-      page.getByTestId("map-panel").getByRole("button", { name: "Replace map" }),
-    ).toBeVisible();
-
-    await clickEmptySpot(page);
-    await expect(page.getByTestId("editor-phantom")).toBeAttached({ timeout: 10000 });
-    await page.getByTestId("editor-dismiss").click();
-    await expect(page.getByTestId("editor-phantom")).toHaveCount(0);
+    // The editor on a phone; its chrome and gestures are field-mode.spec.ts's
+    // and the touch describe of course-editor.spec.ts.
+    await expect(page.getByTestId("editor-page")).toHaveAttribute("data-layout", "phone", { timeout: 15000 });
   });
 
-  test("editor control tap-select and touch drag", async ({ page }) => {
+  test("the controls toolbar fits a phone", async ({ page }) => {
     test.setTimeout(120_000);
-    await page.goto("/");
-    await page.getByText("My example tävling").click();
-    await expect(page.getByRole("link", { name: "Dashboard" })).toBeVisible({
-      timeout: 15000,
-    });
-
-    // Map was uploaded in the prior serial test.
-    await expect(page.getByTestId("map-viewer").first()).toBeVisible({ timeout: 60000 });
-
-    await clickTab(page, "Course Editor");
-    await expect(page.getByTestId("course-editor-page")).toBeVisible({
-      timeout: 15000,
-    });
-    await expect(page.getByTestId("map-viewer")).toBeVisible({ timeout: 60000 });
-    await expect(page.getByRole("button", { name: "Descriptions" })).toBeVisible();
-
-    // itest controls are unpositioned — place one on the map first.
-    await clickEmptySpot(page);
-    await page.getByTestId("editor-action-add-start").click();
-    const startHit = page.locator(
-      '[data-testid="editor-control-hit"][data-control-code="Start 1"]',
-    );
-    await expect(startHit).toBeAttached({ timeout: 15000 });
-
-    const box = await startHit.boundingBox();
-    if (!box) throw new Error("control hit has no box");
-    const cx = box.x + box.width / 2;
-    const cy = box.y + box.height / 2;
-
-    const viewer = page.getByTestId("map-viewer");
-    const beforeSelection = {
-      lat: await viewer.getAttribute("data-center-lat"),
-      lng: await viewer.getAttribute("data-center-lng"),
-      zoom: await viewer.getAttribute("data-zoom"),
-    };
-    await page.touchscreen.tap(cx, cy);
-    await expect(page.getByTestId("editor-context-menu")).toBeVisible({ timeout: 10000 });
-    // Opening the editor menu can alter surrounding layout; it must never
-    // trigger MapViewer's resize-to-fit path and yank the working viewport.
-    await page.waitForTimeout(350);
-    await expect(viewer).toHaveAttribute("data-center-lat", beforeSelection.lat!);
-    await expect(viewer).toHaveAttribute("data-center-lng", beforeSelection.lng!);
-    await expect(viewer).toHaveAttribute("data-zoom", beforeSelection.zoom!);
-
-    await page.getByTestId("map-panel").getByTitle("Fullscreen").first().click();
-    await expect.poll(() => page.evaluate(() => Boolean(document.fullscreenElement))).toBe(true);
-    const fullscreenZoom = Number(await viewer.getAttribute("data-zoom"));
-    await viewer.getByTitle("Zoom in").tap();
-    await expect
-      .poll(async () => Number(await viewer.getAttribute("data-zoom")))
-      .toBeGreaterThan(fullscreenZoom);
-    await viewer.getByTitle("Measure distance").tap();
-    await expect(viewer.getByTitle("Measure distance")).toHaveClass(/bg-blue-500/);
-    await viewer.getByTitle("Measure distance").tap();
-    await page.getByTestId("editor-dismiss").tap();
-    await expect(page.getByTestId("editor-context-menu")).toHaveCount(0);
-    await viewer.getByTitle("Exit fullscreen").tap();
-    await expect.poll(() => page.evaluate(() => Boolean(document.fullscreenElement))).toBe(false);
-
-    const refreshedBox = await startHit.boundingBox();
-    if (!refreshedBox) throw new Error("control hit has no box after fullscreen");
-    const refreshedCx = refreshedBox.x + refreshedBox.width / 2;
-    const refreshedCy = refreshedBox.y + refreshedBox.height / 2;
-    await twoFingerGesture(page, startHit, {
-      from: [
-        { x: refreshedCx - 25, y: refreshedCy },
-        { x: refreshedCx + 25, y: refreshedCy },
-      ],
-      to: [
-        { x: refreshedCx - 40, y: refreshedCy + 20 },
-        { x: refreshedCx + 40, y: refreshedCy + 20 },
-      ],
-    });
-    await page.waitForTimeout(450);
-    await expect(page.getByTestId("editor-context-menu")).toHaveCount(0);
-
-    const beforeDragBox = await startHit.boundingBox();
-    if (!beforeDragBox) throw new Error("control hit has no box before drag");
-    const dragStartX = beforeDragBox.x + beforeDragBox.width / 2;
-    const dragStartY = beforeDragBox.y + beforeDragBox.height / 2;
-    const dragDx = 40;
-    await page.evaluate(
-      ({ x, y, dx }) => {
-        const el = document.elementFromPoint(x, y);
-        if (!el) throw new Error("no element at control center");
-        const target = el.closest("[data-testid='editor-control-hit']") ?? el;
-        const dispatch = (type: string, clientX: number, clientY: number) => {
-          const touch = new Touch({
-            identifier: 1,
-            target,
-            clientX,
-            clientY,
-            pageX: clientX,
-            pageY: clientY,
-            screenX: clientX,
-            screenY: clientY,
-            radiusX: 1,
-            radiusY: 1,
-            rotationAngle: 0,
-            force: 1,
-          });
-          target.dispatchEvent(
-            new TouchEvent(type, {
-              bubbles: true,
-              cancelable: true,
-              touches: type === "touchend" ? [] : [touch],
-              targetTouches: type === "touchend" ? [] : [touch],
-              changedTouches: [touch],
-            }),
-          );
-        };
-        dispatch("touchstart", x, y);
-        dispatch("touchmove", x + dx / 2, y);
-        dispatch("touchmove", x + dx, y);
-        dispatch("touchend", x + dx, y);
-      },
-      { x: dragStartX, y: dragStartY, dx: dragDx },
-    );
-
-    const movedBox = await startHit.boundingBox();
-    expect(movedBox).not.toBeNull();
-    if (movedBox) {
-      expect(Math.abs(movedBox.x - beforeDragBox.x)).toBeGreaterThan(10);
-    }
-  });
-
-  test("editor, template and controls toolbars fit a phone", async ({ page }) => {
-    test.setTimeout(120_000);
+    // The course editor's phone chrome is field-mode.spec.ts "opens in Field
+    // mode … compact chrome"; Layout mode, where a template's *Edit layout*
+    // opens, is not on the phone (docs/course-editor.md §10).
     await page.goto("/");
     await page.getByText("My example tävling").click();
     await expect(page.getByRole("link", { name: "Dashboard" })).toBeVisible({
@@ -241,50 +109,6 @@ test.describe.serial("mobile layout", () => {
     });
     // Map was uploaded in the first serial test.
     await expect(page.getByTestId("map-viewer").first()).toBeVisible({ timeout: 60000 });
-
-    // ── Course editor: icon-only toggles, touch-sized undo/redo, one row.
-    await clickTab(page, "Course Editor");
-    await expect(page.getByTestId("course-editor-page")).toBeVisible({ timeout: 15000 });
-    const mapToolbar = page.getByTestId("map-toolbar");
-    await expect(mapToolbar).toBeVisible();
-    const toolbarBox = (await mapToolbar.boundingBox())!;
-    expect(toolbarBox.x + toolbarBox.width).toBeLessThanOrEqual(390);
-    // Every control sits inside the toolbar's own box — nothing spills
-    // over or overlaps a neighbour (the "Auto slits" over "Descriptions"
-    // bug).
-    const controls = [
-      page.getByTestId("editor-undo"),
-      page.getByTestId("editor-redo"),
-      page.getByTestId("editor-hide-others"),
-      page.getByTestId("editor-toggle-cuts"),
-      page.getByTestId("map-toggle-descriptions"),
-    ];
-    const boxes = [];
-    for (const control of controls) {
-      await expect(control).toBeVisible();
-      const box = (await control.boundingBox())!;
-      expect(box.x).toBeGreaterThanOrEqual(toolbarBox.x);
-      expect(box.x + box.width).toBeLessThanOrEqual(toolbarBox.x + toolbarBox.width + 0.5);
-      boxes.push(box);
-    }
-    for (let i = 1; i < boxes.length; i++) {
-      expect(boxes[i].x, `control ${i} overlaps its neighbour`).toBeGreaterThanOrEqual(
-        boxes[i - 1].x + boxes[i - 1].width - 0.5,
-      );
-    }
-    // Undo / redo are real touch targets now, not 12px glyphs.
-    expect(boxes[0].height).toBeGreaterThanOrEqual(36);
-    expect(boxes[0].width).toBeGreaterThanOrEqual(36);
-    // Labels collapse to icons below `sm`; the accessible names stay.
-    await expect(page.getByTestId("editor-toggle-cuts").getByText("Auto slits")).toBeHidden();
-    await expect(
-      page.getByTestId("editor-hide-others").getByText("Hide other controls"),
-    ).toBeHidden();
-    await expect(page.getByRole("button", { name: "Auto slits" })).toBeVisible();
-    await expect(page.getByRole("button", { name: "Descriptions" })).toBeVisible();
-    // The per-event "north lines under purple" checkbox is gone from the
-    // editor; it stays a club-library map setting.
-    await expect(page.getByTestId("map-north-lines-below")).toHaveCount(0);
 
     // ── Controls page: the AIR+ / station-mode row wraps instead of
     // pushing the page wider than the screen.
@@ -297,45 +121,9 @@ test.describe.serial("mobile layout", () => {
     expect(
       await page.evaluate(() => document.documentElement.scrollWidth),
     ).toBeLessThanOrEqual(390);
-
-    // ── Template editor: two header rows, no "Preview course" caption.
-    await clickTab(page, "Map templates");
-    await expect(page.getByTestId("map-templates-page")).toBeVisible({ timeout: 15000 });
-    await page.getByTestId("new-map-template").click();
-    await page.getByTestId("map-template-name").fill("E2E Mobile header");
-    await page.getByTestId("map-template-submit").click();
-    const templateRow = page
-      .locator("[data-testid^='map-template-']")
-      .filter({ hasText: "E2E Mobile header" });
-    await expect(templateRow).toBeVisible({ timeout: 15000 });
-    const templateSeq = (await templateRow.getAttribute("data-testid"))!.replace(
-      "map-template-",
-      "",
-    );
-    await page.getByTestId(`edit-template-layout-${templateSeq}`).click();
-    await expect(page.getByTestId("map-layout-editor")).toBeVisible();
-
-    const header = page.getByTestId("map-editor-header");
-    const headerBox = (await header.boundingBox())!;
-    expect(headerBox.x + headerBox.width).toBeLessThanOrEqual(390);
-    const undoBox = (await page.getByTestId("map-editor-undo").boundingBox())!;
-    const closeBox = (await page.getByTestId("map-editor-close").boundingBox())!;
-    expect(undoBox.height).toBeGreaterThanOrEqual(36);
-    // Window controls on the first row, tools on the second — and nothing
-    // on a third: the header is no taller than those two rows.
-    expect(undoBox.y).toBeGreaterThan(closeBox.y + closeBox.height - 1);
-    expect(headerBox.height).toBeLessThan(undoBox.height * 2 + 24);
-    await expect(page.getByText("Preview course")).toHaveCount(0);
-    const previewSelect = page.getByTestId("map-template-preview-course");
-    await expect(previewSelect).toBeVisible();
-    await expect(previewSelect).toHaveAccessibleName("Preview course");
-    const selectBox = (await previewSelect.boundingBox())!;
-    expect(selectBox.x + selectBox.width).toBeLessThanOrEqual(390);
-    await page.getByTestId("map-editor-close").click();
-    await expect(page.getByTestId("map-layout-editor")).toHaveCount(0);
   });
 
-  test("switching events resets viewport and tile state", async ({ page, mapPipeline }) => {
+  test("switching events resets the viewport and draws each event's map", async ({ page }) => {
     test.setTimeout(120_000);
     const uniqueName = `E2E Mobile Map Switch ${Date.now()}`;
 
@@ -351,7 +139,7 @@ test.describe.serial("mobile layout", () => {
     await uploadEventMap(page);
     const secondViewer = page.getByTestId("map-viewer").first();
     await expect(secondViewer).toBeVisible({ timeout: 60_000 });
-    await expectCurrentEventBase(secondViewer, secondNameId, mapPipeline);
+    await expectCurrentEventBase(secondViewer);
     const initialZoom = Number(await secondViewer.getAttribute("data-zoom"));
     await secondViewer.getByTitle("Zoom in").click();
     await secondViewer.getByTitle("Zoom in").click();
@@ -364,7 +152,7 @@ test.describe.serial("mobile layout", () => {
     await page.getByText("My example tävling").click();
     const firstViewer = page.getByTestId("map-viewer").first();
     await expect(firstViewer).toBeVisible({ timeout: 60_000 });
-    await expectCurrentEventBase(firstViewer, "itest", mapPipeline);
+    await expectCurrentEventBase(firstViewer);
     await expect
       .poll(async () => Number(await firstViewer.getAttribute("data-zoom")))
       .not.toBe(changedZoom);
@@ -373,7 +161,7 @@ test.describe.serial("mobile layout", () => {
     await page.getByText(uniqueName).click();
     const returnedViewer = page.getByTestId("map-viewer").first();
     await expect(returnedViewer).toBeVisible({ timeout: 60_000 });
-    await expectCurrentEventBase(returnedViewer, secondNameId, mapPipeline);
+    await expectCurrentEventBase(returnedViewer);
     await expect
       .poll(async () => Number(await returnedViewer.getAttribute("data-zoom")))
       .toBe(initialZoom);
@@ -532,31 +320,11 @@ test.describe.serial("mobile layout", () => {
   });
 });
 
-/**
- * The event's base map is drawn: its own tiles under `legacy`, the vector
- * layer's first view under `vector` (docs/map-pipeline-switch.md §5).
- */
-async function expectCurrentEventBase(viewer: Locator, nameId: string, pipeline: MapPipeline) {
-  await expect(viewer).toHaveAttribute("data-map-pipeline", pipeline);
-  if (pipeline === "legacy") return expectCurrentEventTile(viewer, nameId);
+/** The event's base map is drawn: the vector layer's first view. */
+async function expectCurrentEventBase(viewer: Locator) {
   await expect(viewer.getByTestId("map-vector-layer")).toHaveAttribute("data-ready", "true", {
     timeout: 30_000,
   });
-  await expect(viewer.locator("img[data-tile-url]")).toHaveCount(0);
-}
-
-async function expectCurrentEventTile(viewer: Locator, nameId: string) {
-  // Tiles are fetched into blob: URLs, so the API URL lives on a data
-  // attribute rather than src (see TileLayer).
-  const tiles = viewer.locator(`img[data-tile-url*="/api/map-tile/${nameId}/"]`);
-  await expect(tiles.first()).toBeAttached({ timeout: 30_000 });
-  await expect
-    .poll(() => tiles.evaluateAll(
-      (images: HTMLImageElement[]) => images.some((img) => img.naturalWidth > 0),
-    ), {
-      timeout: 30_000,
-    })
-    .toBe(true);
 }
 
 async function twoFingerGesture(
@@ -632,41 +400,4 @@ async function clickTab(page: Page, name: string) {
       .getByRole("link", { name, exact: true })
       .click();
   }
-}
-
-async function clickEmptySpot(page: Page) {
-  const viewer = page.getByTestId("map-viewer");
-  await expect(viewer).toBeVisible({ timeout: 20000 });
-  const box = await viewer.boundingBox();
-  if (!box) throw new Error("map viewer has no box");
-  const obstacles: Array<{ x: number; y: number; w: number; h: number }> = [];
-  for (const testId of ["editor-map-course-selector", "editor-inventory-panel"]) {
-    const overlay = page.getByTestId(testId);
-    const card = (await overlay.isVisible()) ? await overlay.boundingBox() : null;
-    if (card) obstacles.push({ x: card.x, y: card.y, w: card.width, h: card.height });
-  }
-  const hits = page.getByTestId("editor-control-hit");
-  const n = await hits.count();
-  for (let i = 0; i < n; i++) {
-    const b = await hits.nth(i).boundingBox();
-    if (b) obstacles.push({ x: b.x, y: b.y, w: b.width, h: b.height });
-  }
-
-  let spot: { x: number; y: number } | null = null;
-  for (let gy = 4; gy <= 16 && !spot; gy++) {
-    for (let gx = 4; gx <= 16 && !spot; gx++) {
-      const x = box.x + (box.width * gx) / 20;
-      const y = box.y + (box.height * gy) / 20;
-      const near = obstacles.some(
-        (h) =>
-          x >= h.x - 12 && x <= h.x + h.w + 12 && y >= h.y - 12 && y <= h.y + h.h + 12,
-      );
-      if (!near) spot = { x, y };
-    }
-  }
-  if (!spot) throw new Error("no empty map point found");
-  await page.touchscreen.tap(spot.x, spot.y);
-  await expect(page.getByTestId("editor-phantom")).toBeAttached({
-    timeout: 10000,
-  });
 }

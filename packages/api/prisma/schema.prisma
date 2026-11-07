@@ -92,7 +92,7 @@ enum CourseOrderMode {
   @@schema("oxygen")
 }
 
-/// Which map pipeline an event *reads* through (docs/map-pipeline-switch.md).
+/// The retired map pipeline switch (docs/map-pipeline-switch.md); dropped in E5.
 enum MapPipeline {
   legacy
   vector
@@ -198,10 +198,10 @@ model Event {
   autoOverprintCuts Boolean @default(true) @map("auto_overprint_cuts")
   /// Algorithm version last applied to every editor-authored course.
   overprintCutsVersion Int @default(2) @map("overprint_cuts_version")
-  /// Map pipeline the event reads through (docs/map-pipeline-switch.md §2).
-  /// New events take the `map.pipeline.default` setting; rows that predate
-  /// the column are `legacy`.
-  mapPipeline MapPipeline @default(legacy) @map("map_pipeline")
+  /// The retired per-event map pipeline switch (docs/map-pipeline-switch.md,
+  /// history note). Every event is `vector` since E3 and no code reads it;
+  /// kept until E5 so a v0.5.0 rollback still reads `vector`.
+  mapPipeline MapPipeline @default(vector) @map("map_pipeline")
   createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
   updatedAt DateTime @default(now()) @map("updated_at") @db.Timestamptz(6)
 
@@ -513,6 +513,8 @@ model Course {
   geometry        Json?
   /// Provenance for `geometry`: 'ocd' (full routed legs from OCAD) or 'xml' (straight-line fallback from IOF XML).
   geometrySource  String   @default("") @map("geometry_source")
+  /// Where `lengthM` comes from: 'file' (an imported file's published length; Eventor may overwrite it), 'derived' (edited in Oxygen: derived from the controls, recomputed at export, never overwritten by Eventor), NULL (neither). Written beside `geometrySource` until E5 drops it (E6; course-controls-and-matching.md "Course length").
+  lengthSource    String?  @map("length_source")
   /// Course-level description-sheet instructions (special rows + finish variant).
   /// Shape: { specials?: [{afterControlId, kind, lengthM?}], finish?: {kind, lengthM?} }.
   descriptionInstructions Json? @map("description_instructions")

@@ -14,7 +14,7 @@ import { importMapToDocument } from "../import/ocad.js";
 import { renderCoursePages } from "../course-maps/pdf-page.js";
 import { printGate, printWorkerCount, renderCoursePagesInWorker, resetPrintWorkers } from "../course-maps/print-worker-host.js";
 import { type SheetInput, resolveSheet } from "../course-maps/resolve-sheet.js";
-import { printSheetFor, syntheticCourse } from "../render/print-run.js";
+import { printSheetFor, syntheticCourse } from "./helpers/print-sheet.js";
 import { prepareDocument, type PreparedDocument } from "../render/window-raster.js";
 
 const fixture = resolve(__dirname, "../../../../e2e/test.ocd");

@@ -1,6 +1,6 @@
 import { z } from "zod";
 import { TRPCError } from "@trpc/server";
-import { router, publicProcedure, authedProcedure, adminProcedure, viewProcedure, manageProcedure, kioskOrViewProcedure, coursesEditProcedure } from "../trpc.js";
+import { router, publicProcedure, authedProcedure, adminProcedure, viewProcedure, manageProcedure, kioskOrViewProcedure } from "../trpc.js";
 import { prisma, sanitizeNameId, getZeroTime, isReservedEventSlug } from "../db.js";
 import { kioskKeyMatches } from "../trpc.js";
 import {
@@ -18,7 +18,6 @@ import {
 } from "@oxygen/shared";
 import { randomBytes } from "node:crypto";
 import { toAbsolute } from "../timeConvert.js";
-import { planStructureBackfill, runStructureBackfill } from "../course-structure-backfill.js";
 import { resolveCourseExpectedPositions } from "./course.js";
 import { isWithdrawn, isFinished, WITHDRAWN_STATUSES } from "@oxygen/shared";
 import type {
@@ -34,13 +33,6 @@ import type {
 import { clearSheetsCache, testGoogleSheetPush } from "../sheetsBackup.js";
 import { runnerStatusToValue, valueToRunnerStatus } from "../statusConvert.js";
 import { ttlMemo } from "../ttl-memo.js";
-import {
-  MAP_PIPELINES,
-  canSwitchTo,
-  getMapPipelineFlags,
-  newEventMapPipeline,
-  type MapPipeline,
-} from "../map-pipeline.js";
 
 /**
  * `pg_database_size()` stats every file under the database directory,
@@ -276,7 +268,6 @@ export const eventRouter = router({
           date: new Date(input.date),
           kind: input.kind,
           kindCustom: input.kindCustom,
-          mapPipeline: await newEventMapPipeline(),
         },
       });
       if (ctx.user) {
@@ -301,43 +292,6 @@ export const eventRouter = router({
         },
       });
       return toEventInfo(event);
-    }),
-
-  /**
-   * The event's map pipeline and whether `legacy` may still be chosen
-   * (docs/map-pipeline-switch.md §2), plus `map.editor.vector`, the new
-   * course editor's temporary gate (§3.6). Kiosk-readable: the kiosk map
-   * follows the event switch.
-   */
-  mapPipeline: kioskOrViewProcedure.query(async ({ ctx }) => {
-    const [row, flags] = await Promise.all([
-      ctx.db.event.findUniqueOrThrow({ where: { id: ctx.event.id }, select: { mapPipeline: true } }),
-      getMapPipelineFlags(),
-    ]);
-    return { pipeline: row.mapPipeline as MapPipeline, allowLegacy: flags.allowLegacy, editorVector: flags.editorVector };
-  }),
-
-  /**
-   * Flip the event's map pipeline (the map panel's **Use new map engine**).
-   * Gates reads only; nothing is imported, written or deleted. A switch to
-   * `legacy` is refused once `map.pipeline.allowLegacy` is false.
-   */
-  setMapPipeline: coursesEditProcedure
-    .input(z.object({ pipeline: z.enum(MAP_PIPELINES) }))
-    .mutation(async ({ ctx, input }) => {
-      const flags = await getMapPipelineFlags();
-      if (!canSwitchTo(input.pipeline, flags)) {
-        throw new TRPCError({
-          code: "PRECONDITION_FAILED",
-          message: "The legacy map pipeline is no longer available on this instance.",
-        });
-      }
-      const row = await ctx.db.event.update({
-        where: { id: ctx.event.id },
-        data: { mapPipeline: input.pipeline },
-        select: { mapPipeline: true },
-      });
-      return { pipeline: row.mapPipeline as MapPipeline, allowLegacy: flags.allowLegacy, editorVector: flags.editorVector };
     }),
 
   /** Soft-delete an event. */
@@ -386,23 +340,6 @@ export const eventRouter = router({
     const { gcOrphanTiles } = await import("../map-render-cache.js");
     await gcOrphanTiles(prisma());
     return { purged: result.count };
-  }),
-
-  /** Courses still without a stored structure, across the instance's events (course-layer.md §6.4). */
-  structureBackfillStatus: adminProcedure.query(async () => ({
-    pending: (await planStructureBackfill(prisma())).length,
-  })),
-
-  /** Fill `courses.structure` where NULL (the Maintenance entry of `pnpm course:backfill-structure`). */
-  structureBackfillStart: adminProcedure.mutation(async () => {
-    const run = await runStructureBackfill(prisma());
-    return {
-      total: run.total,
-      filled: run.filled,
-      skipped: run.skipped,
-      failed: run.failed,
-      failures: run.results.filter((r) => r.outcome === "failed").map((r) => ({ event: r.event, name: r.name, error: r.error ?? "" })),
-    };
   }),
 
   /** Return the currently selected event's slug. */

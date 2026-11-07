@@ -8,8 +8,6 @@ RUN apt-get update \
  && apt-get install -y --no-install-recommends \
       openssl \
       postgresql-client \
-      librsvg2-bin \
-      fonts-liberation \
  && rm -rf /var/lib/apt/lists/*
 
 # ─── Stage 2: Install JavaScript dependencies ──────────────
@@ -76,9 +74,10 @@ ENV OXYGEN_DEPLOY_REF=$BUILD_REF
 
 WORKDIR /app
 
-# The base stage supplies pg_dump for event backups, rsvg-convert for
-# printable course maps, Liberation Sans for deterministic text metrics,
-# and the same OpenSSL environment Prisma saw during dependency installation.
+# The base stage supplies pg_dump for event backups and the same OpenSSL
+# environment Prisma saw during dependency installation. Printing needs no
+# system tool or font: the PDF composer embeds the bundled Liberation
+# files (packages/api/src/render/fonts.ts; docs/course-print.md §9.4).
 
 # Copy the monorepo structure with deps (includes generated Prisma client)
 COPY --from=deps /app/node_modules ./node_modules

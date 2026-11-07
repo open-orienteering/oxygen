@@ -1,15 +1,14 @@
 /**
- * Ensure a map_files / club_map_files row has file_hash + render_key.
- * Used by tile serving, print SVG load, and mapMetadata so the key is
- * filled lazily (same pattern as the north_detection backfill).
+ * `file_hash` + `render_key` of a map_files / club_map_files row, written
+ * after an upload or a rotation change, and the orphan-tile collection.
+ * Writes only: nothing in this version reads the key (the tile renderer
+ * went in E4a); a rollback to v0.5.0 does, so it stays current until E5
+ * drops the column and `map_tiles` (docs/map-storage.md §4.6).
  *
- * These run on the tile hot path — once per tile request, cache hits
- * included — so they read metadata columns only. The OCAD blob
- * (`file_data`, routinely 5–40 MB) is fetched with a second query and
- * only when `file_hash` is still null, i.e. once per row for the life of
- * the upload. Selecting it unconditionally is what saturated Cloud SQL
- * in the September 2026 incident
- * (docs/bugfix-map-tile-cold-render-cloud-timeouts.md).
+ * The OCAD blob (`file_data`, routinely 5–40 MB) is fetched with a
+ * second query and only when `file_hash` is still null — selecting it
+ * unconditionally is what saturated Cloud SQL in the September 2026
+ * incident (docs/bugfix-map-tile-cold-render-cloud-timeouts.md).
  */
 
 import type { ColorProfile, ColorStackOverrides } from "@oxygen/shared";
@@ -29,20 +28,10 @@ type GcDb = {
   $executeRawUnsafe: PrismaClient["$executeRawUnsafe"];
 };
 
-export interface MapStackSettings {
-  colorProfile: ColorProfile;
-  colorOverrides: ColorStackOverrides;
-  northLinesBelow: boolean;
-  rotationCorrection: number;
-  fileHash: string;
-  renderKey: string;
-  scale: number | null;
-}
 
 /** Metadata-only projection shared by every read in this module. */
 const STACK_COLUMNS = {
   id: true,
-  scale: true,
   rotationCorrection: true,
   colorProfile: true,
   colorOverrides: true,
@@ -53,7 +42,6 @@ const STACK_COLUMNS = {
 
 type StackRow = {
   id: bigint;
-  scale: number | null;
   rotationCorrection: number;
   colorProfile: string | null;
   colorOverrides: unknown;
@@ -91,7 +79,7 @@ function parseOverrides(raw: unknown): ColorStackOverrides {
 async function settleRow(
   delegate: BlobDelegate,
   row: StackRow,
-): Promise<MapStackSettings> {
+): Promise<string> {
   const colorProfile = parseProfile(row.colorProfile);
   const colorOverrides = parseOverrides(row.colorOverrides);
 
@@ -120,63 +108,13 @@ async function settleRow(
     });
   }
 
-  return {
-    scale: row.scale,
-    colorProfile,
-    colorOverrides,
-    northLinesBelow: row.northLinesBelow,
-    rotationCorrection: row.rotationCorrection,
-    fileHash,
-    renderKey,
-  };
-}
-
-/**
- * Read the event's current map stack settings, computing and persisting
- * `file_hash` / `render_key` when missing. Returns null when the event
- * has no map file.
- */
-export async function ensureEventMapRenderKey(
-  db: MapFileDb,
-  eventId: bigint,
-): Promise<
-  (MapStackSettings & { mapFileId: bigint; uploadedAtMs: number; bounds: unknown }) | null
-> {
-  const row = await db.mapFile.findFirst({
-    where: { eventId },
-    orderBy: { id: "desc" },
-    select: { ...STACK_COLUMNS, uploadedAt: true, bounds: true },
-  });
-  if (!row) return null;
-
-  const settings = await settleRow(db.mapFile as unknown as BlobDelegate, row);
-  return {
-    ...settings,
-    mapFileId: row.id,
-    uploadedAtMs: row.uploadedAt.getTime(),
-    bounds: row.bounds,
-  };
-}
-
-/**
- * Same as `ensureEventMapRenderKey` for a club-library row.
- */
-export async function ensureClubMapRenderKey(
-  db: ClubMapDb,
-  clubMapId: bigint,
-): Promise<MapStackSettings | null> {
-  const row = await db.clubMapFile.findUnique({
-    where: { id: clubMapId },
-    select: STACK_COLUMNS,
-  });
-  if (!row) return null;
-  return settleRow(db.clubMapFile as unknown as BlobDelegate, row);
+  return renderKey;
 }
 
 /**
  * Drop tile rows whose render_key is no longer referenced by any
- * map_files or club_map_files row. Safe to call after upload, profile
- * change, rotation change, or event delete.
+ * map_files or club_map_files row. Called after upload, rotation change,
+ * club map removal and event purge; E5 drops `map_tiles`.
  */
 export async function gcOrphanTiles(db: GcDb): Promise<number> {
   // Prisma can't express NOT IN (UNION …) cleanly; raw SQL is fine —
@@ -202,8 +140,7 @@ export async function refreshMapFileRenderKey(
     where: { id: mapFileId },
     select: STACK_COLUMNS,
   });
-  const settings = await settleRow(db.mapFile as unknown as BlobDelegate, row);
-  return settings.renderKey;
+  return settleRow(db.mapFile as unknown as BlobDelegate, row);
 }
 
 export async function refreshClubMapRenderKey(
@@ -214,9 +151,5 @@ export async function refreshClubMapRenderKey(
     where: { id: clubMapId },
     select: STACK_COLUMNS,
   });
-  const settings = await settleRow(
-    db.clubMapFile as unknown as BlobDelegate,
-    row,
-  );
-  return settings.renderKey;
+  return settleRow(db.clubMapFile as unknown as BlobDelegate, row);
 }

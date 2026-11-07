@@ -214,6 +214,9 @@ describe("reference mutations → *.upserted", () => {
     expect(p.courseControls[0].position).toBe(1);
     // Geometry blobs stay out of the journal (snapshot-only artifacts).
     expect(p.fields).not.toHaveProperty("geometry");
+    // …and so do their provenance columns (E6: `length_source` mirrors `geometry_source`).
+    expect(p.fields).not.toHaveProperty("geometrySource");
+    expect(p.fields).not.toHaveProperty("lengthSource");
   });
 
   it("control.delete journals an upsert with removed: true", async () => {

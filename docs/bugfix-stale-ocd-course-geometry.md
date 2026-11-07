@@ -1,5 +1,17 @@
 # Bugfix: Stale OCD course geometry after XML re-import
 
+> **Superseded (slice E, row E6, 2026-11-06).** Nothing draws from
+> `courses.geometry` any more: the map, the editor and print draw the
+> course layer from the control rows and `courses.structure`, so the
+> symptom below cannot occur. The rule this fix introduced had also
+> stopped firing long before: the version E6 found (`isOcdGeometryStaleVsXml`)
+> joined points on `properties.id`, which the XML straight-line geometry
+> does not carry, so the OCD geometry was always kept. E6 deleted the
+> helper and its unit test; an IOF / Purple Pen re-import over an
+> OCD-imported course leaves the column as it is (written until E5 for
+> the v0.5.0 rollback) and carries the authored leg gaps from the stored
+> structure (`docs/course-layer.md` §6.4 "Importers").
+
 ## Symptom
 
 On Bagissprinten (and any other event under active course development),

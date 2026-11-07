@@ -12,7 +12,7 @@
  * tRPC; the page passes `utils.client`.
  */
 
-import type { course } from "@oxygen/shared";
+import type { course, CourseDescriptionInstructions } from "@oxygen/shared";
 import { VersionBook, publicIdAfterCodes, versionConflictOfError, type VersionedKind } from "../version-book";
 import { conflictDecision, MOVE_FIELDS, type ConflictDecision } from "./conflict";
 
@@ -43,6 +43,10 @@ export interface EditorClient {
   course: {
     setStructure: { mutate(input: { courseId: number; structure: course.WireCourseStructure; baseVersion?: string }): Promise<{ version: string }> };
     setControlLabelOffset: { mutate(input: { id: number; controlId: number; offset: { dx: number; dy: number } | null }): Promise<{ version: string }> };
+    /** Only `descriptionInstructions` is written through it here (§4); the structure goes through `setStructure`. */
+    update: {
+      mutate(input: { id: number; descriptionInstructions: CourseDescriptionInstructions | null; baseVersion?: string }): Promise<{ version: string }>;
+    };
   };
   control: {
     // `description` is the tRPC input's own type; the editor passes it through untouched.
@@ -108,6 +112,19 @@ export class EditorWrites {
   async setStructure(courseId: number, structure: course.WireCourseStructure): Promise<{ version: string }> {
     const res = await this.withToken("course", courseId, { fields: ["structure"] }, (baseVersion) =>
       this.client.course.setStructure.mutate({ courseId, structure, baseVersion }),
+    );
+    this.versions.seed("course", courseId, res.version);
+    this.ownCourseVersions.add(res.version);
+    return res;
+  }
+
+  /**
+   * The course's description instructions (finish variant, specials; §4) through `course.update` with the
+   * course's token. A stale token is a course conflict: `refresh`, never merged (as `setStructure`).
+   */
+  async setInstructions(courseId: number, descriptionInstructions: CourseDescriptionInstructions | null): Promise<{ version: string }> {
+    const res = await this.withToken("course", courseId, { fields: ["descriptionInstructions"] }, (baseVersion) =>
+      this.client.course.update.mutate({ id: courseId, descriptionInstructions, baseVersion }),
     );
     this.versions.seed("course", courseId, res.version);
     this.ownCourseVersions.add(res.version);

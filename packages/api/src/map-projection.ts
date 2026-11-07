@@ -105,16 +105,26 @@ export function ocadToWgs84(
 }
 
 /**
- * Convert map-mm coordinates to WGS84.
- * Map-mm are the units used in course geometry GeoJSON (mm on paper).
+ * Convert map-mm coordinates to WGS84 through a document's paper frame
+ * (`loadEventCrs`). Map-mm are the units used in course geometry GeoJSON
+ * (mm on paper, y-up); null when the frame has no projectable CRS.
  */
 export function mapMmToWgs84(
   xMm: number,
   yMm: number,
-  crs: OcadCrs,
+  frame: mapGeo.PaperFrame,
 ): { lat: number; lng: number } | null {
-  // Convert mm to hundredths of mm (OCAD internal unit)
-  return ocadToWgs84(xMm * 100, yMm * 100, crs);
+  return mapGeo.paperToWgs84(frame, xMm * frame.unitsPerMm, yMm * frame.unitsPerMm);
+}
+
+/** Reverse of `mapMmToWgs84`: WGS84 → map-mm in the frame's paper system. */
+export function wgs84ToMapMm(
+  lat: number,
+  lng: number,
+  frame: mapGeo.PaperFrame,
+): { x: number; y: number } | null {
+  const p = mapGeo.wgs84ToPaper(frame, lat, lng);
+  return p ? { x: p.x / frame.unitsPerMm, y: p.y / frame.unitsPerMm } : null;
 }
 
 /**

@@ -339,19 +339,17 @@ describe("club library on the series (§6.5)", () => {
     expect(meta?.clubMapVersionId).toBe(version.id);
   }, 60_000);
 
-  it("rename, colour and rotation land on the series and are written through to the legacy row", async () => {
+  it("rename and rotation land on the series and are written through to the legacy row", async () => {
     const caller = makeCaller(null, { user: admin, authEnabled: true, authMode: "proxy" });
     const before = await ctx.db.clubMapFile.findFirstOrThrow({ where: { clubMapId }, select: { renderKey: true } });
     await caller.clubMap.rename({ id: clubMapId, name: `Club ${suffix} renamed` });
-    await caller.clubMap.setColorStack({ id: clubMapId, profile: "issprom", northLinesBelow: false, overrides: { above: [2] } });
     await caller.clubMap.setRotation({ id: clubMapId, degrees: 2.5 });
     const series = await ctx.db.clubMap.findUniqueOrThrow({ where: { id: clubMapId } });
-    expect(series).toMatchObject({ name: `Club ${suffix} renamed`, colourProfile: "issprom", northLinesBelow: false, colourOverrides: { above: [2] }, rotationCorrection: 2.5 });
+    expect(series).toMatchObject({ name: `Club ${suffix} renamed`, rotationCorrection: 2.5 });
     const legacy = await ctx.db.clubMapFile.findFirstOrThrow({ where: { clubMapId } });
-    expect(legacy).toMatchObject({ name: `Club ${suffix} renamed`, colorProfile: "issprom", northLinesBelow: false, colorOverrides: { above: [2] }, rotationCorrection: 2.5 });
+    expect(legacy).toMatchObject({ name: `Club ${suffix} renamed`, rotationCorrection: 2.5 });
     expect(legacy.renderKey).not.toBe(before.renderKey);
     await expect(caller.clubMap.rename({ id: "00000000-0000-7000-8000-000000000000", name: "x" })).rejects.toMatchObject({ code: "NOT_FOUND" });
-    await expect(caller.clubMap.setColorStack({ id: "00000000-0000-7000-8000-000000000000", profile: "isom" })).rejects.toMatchObject({ code: "NOT_FOUND" });
   }, 30_000);
 
   it("addFromSource builds a library entry from a finalised source and dedups the import", async () => {

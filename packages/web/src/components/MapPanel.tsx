@@ -19,8 +19,7 @@ import {
 import { ToolbarButton } from "./ToolbarButton";
 import { NorthLinesBadge } from "./NorthLinesBadge";
 import { ClubMapImportState } from "./ClubMapImportState";
-import { MapEngineToggle } from "./MapEngineToggle";
-import { hasWebGL2, resolveMapPipeline } from "../lib/map-pipeline";
+import { MapImportState } from "./MapImportState";
 import { formatStalenessDeg, isMeridianStale } from "../lib/north-lines";
 
 /**
@@ -195,23 +194,6 @@ function MapPanelImpl({
     staleTime: Number.POSITIVE_INFINITY,
     enabled: !!mapInfo.data,
   });
-  // The event's map pipeline switch (docs/map-pipeline-switch.md §3).
-  // Only consulted once there is a document to draw.
-  const mapPipeline = trpc.event.mapPipeline.useQuery(undefined, {
-    staleTime: 30_000,
-    enabled: !!mapMetadata.data?.documentHash,
-  });
-  // The vector layer reported it cannot draw here (lost context); with no
-  // WebGL2 at all the probe says so before anything mounts.
-  const [vectorUnavailable, setVectorUnavailable] = useState(false);
-  const allowLegacy = mapPipeline.data?.allowLegacy ?? true;
-  const drawPipeline = resolveMapPipeline(mapPipeline.data?.pipeline, mapMetadata.data?.documentHash, {
-    webgl2: !vectorUnavailable && hasWebGL2(),
-    allowLegacy,
-  });
-  const vectorFellBack =
-    mapPipeline.data?.pipeline === "vector" && !!mapMetadata.data?.documentHash && drawPipeline === "legacy";
-  const onVectorUnavailable = useCallback(() => setVectorUnavailable(true), []);
   // The event's automatic cuts (course-layer.md §3.4): the GL course layer
   // follows the toggle as the stored geometry does. The editors' toggle
   // refetches this same query. Until it answers, cuts are on.
@@ -268,55 +250,10 @@ function MapPanelImpl({
     { staleTime: 10_000, refetchInterval: showCompletion ? 15_000 : false, enabled: showCompletion },
   );
 
-  // Fetch geometry for every highlighted course so the map can draw all of
-  // their routes at once (user-selecting three courses → three overlays,
-  // not just the first). Returns a map keyed by course name.
   const highlightedCourseNamesList = useMemo(
     () => Array.from(effectiveCourseNames),
     [effectiveCourseNames],
   );
-  const courseGeometriesQuery = trpc.course.courseGeometries.useQuery(
-    { courseNames: highlightedCourseNamesList },
-    { staleTime: 60_000, enabled: highlightedCourseNamesList.length > 0 },
-  );
-  // Merge per-course FeatureCollections into a single FeatureCollection so
-  // the downstream MapViewer can keep its existing single-input contract.
-  // Geometry features duplicated across courses (e.g. shared legs) are
-  // fine — they just draw over each other at identical coordinates. Each
-  // feature is tagged with its course name (fresh objects — the source
-  // collections live in the React Query cache) so the viewer can label
-  // legs per course in multi-course display.
-  const courseGeometry = useMemo(() => {
-    const byName = courseGeometriesQuery.data;
-    if (!byName) return undefined;
-    const names = Object.keys(byName);
-    if (names.length === 0) return null;
-    const combinedFeatures: unknown[] = [];
-    for (const name of names) {
-      const fc = byName[name];
-      if (fc?.features) {
-        for (const f of fc.features as Array<{ properties?: Record<string, unknown> }>) {
-          combinedFeatures.push({
-            ...f,
-            properties: { ...(f.properties ?? {}), courseName: name },
-          });
-        }
-      }
-    }
-    return { type: "FeatureCollection", features: combinedFeatures };
-  }, [courseGeometriesQuery.data]);
-  // Track which course names we actually have geometry for, so the
-  // fallback leg renderer below knows which courses still need lines
-  // drawn from raw control coordinates.
-  const coursesWithGeometry = useMemo(() => {
-    const set = new Set<string>();
-    const byName = courseGeometriesQuery.data;
-    if (!byName) return set;
-    for (const [name, fc] of Object.entries(byName)) {
-      if (fc?.features && fc.features.length > 0) set.add(name);
-    }
-    return set;
-  }, [courseGeometriesQuery.data]);
 
   const [isFullscreen, setIsFullscreen] = useState(false);
   const fullscreenRef = useRef<HTMLDivElement>(null);
@@ -384,11 +321,6 @@ function MapPanelImpl({
     },
     onError: (err) => {
       setUploadError(`Map upload failed: ${err.message}`);
-    },
-  });
-  const setColorStack = trpc.course.setMapColorStack.useMutation({
-    onSuccess: () => {
-      mapMetadata.refetch();
     },
   });
   const fileInputRef = useRef<HTMLInputElement>(null);
@@ -659,12 +591,16 @@ function MapPanelImpl({
   }, [onControlClick]);
 
   const hasMap = !!mapInfo.data;
-  // With a document, wait for the event's switch too: mounting the tile
-  // viewer first would request tiles a `vector` event never needs.
-  const isLoadingMap =
-    mapInfo.isLoading ||
-    (mapInfo.data && mapMetadata.isLoading) ||
-    (!!mapMetadata.data?.documentHash && mapPipeline.isLoading);
+  const isLoadingMap = mapInfo.isLoading || (mapInfo.data && mapMetadata.isLoading);
+  // A map without a pinned document (its import is running, failed, or
+  // never ran) shows the import state, not a viewer: there is nothing to
+  // draw (docs/map-rendering.md §5.4).
+  const documentHash = mapMetadata.data?.documentHash ?? null;
+  const awaitingDocument = hasMap && !isLoadingMap && !documentHash;
+  const refetchMapMetadata = mapMetadata.refetch;
+  const onDocumentReady = useCallback(() => {
+    void refetchMapMetadata();
+  }, [refetchMapMetadata]);
   const canFilter = filterMode === "course" || filterMode === "single-control";
 
   // Fullscreen hooks — MUST be before any early returns to respect hook ordering rules
@@ -883,6 +819,24 @@ function MapPanelImpl({
     );
   }
 
+  if (awaitingDocument || !documentHash) {
+    return (
+      <div
+        data-testid="map-panel"
+        data-instance-id={instanceId}
+        data-highlight-course={dataHighlightCourse}
+        className={`${effectiveClassName} ${fillContainer ? "h-full flex flex-col" : ""}`}
+      >
+        {paneToolbar}
+        <MapImportState
+          className={fillContainer ? "flex-1" : ""}
+          style={fillContainer ? undefined : { height: effectiveHeight }}
+          onDocumentReady={onDocumentReady}
+        />
+      </div>
+    );
+  }
+
   return (
     <div
       ref={fullscreenRef}
@@ -904,24 +858,16 @@ function MapPanelImpl({
         style={{ flex: isFullscreen || fillContainer ? "1 1 0" : undefined }}
       >
         <MapViewer
-          key={`${nameId ?? "current"}:${mapMetadata.data?.uploadedAt ?? "loading"}:${JSON.stringify(mapMetadata.data?.bounds ?? null)}:${drawPipeline}`}
-          mapBounds={mapMetadata.data?.bounds}
-          mapScale={mapMetadata.data?.scale}
+          key={`${nameId ?? "current"}:${mapMetadata.data?.uploadedAt ?? "loading"}:${documentHash}`}
           northOffset={mapMetadata.data?.northOffset}
           cutRotationDeg={mapMetadata.data?.cutRotationDeg}
-          mapVersion={mapMetadata.data?.renderKey ?? mapMetadata.data?.uploadedAt}
-          calibration={mapMetadata.data?.calibration}
-          documentHash={mapMetadata.data?.documentHash}
-          mapPipeline={drawPipeline}
-          onVectorUnavailable={onVectorUnavailable}
+          documentHash={documentHash}
           mapBudget={mapMetadata.data?.clubMapVersionId ? "club" : "event"}
           rotationCorrection={mapMetadata.data?.rotationCorrection}
           controls={controlOverlays}
           courses={courseOverlays}
-          courseGeometry={courseGeometry}
           courseObjects={courseObjectsInView}
           autoCuts={overprintCuts.data?.enabled !== false}
-          coursesWithGeometry={coursesWithGeometry}
           highlightControlId={highlightControlId ? String(highlightControlId) : undefined}
           highlightCourseName={highlightCourseName}
           onControlClick={handleControlClick}
@@ -954,12 +900,6 @@ function MapPanelImpl({
         )}
       </div>
 
-      {vectorFellBack && (
-        <div data-testid="map-engine-fallback" className="mt-1 px-0.5 text-xs text-amber-700">
-          {t("mapEngineFallback")}
-        </div>
-      )}
-
       {/* Map info — below the map (course editor only) */}
       {showMapInfo && !hideToolbar && (
         <div className="mt-1.5 px-0.5 space-y-1.5">
@@ -983,59 +923,6 @@ function MapPanelImpl({
                 >
                   {tr("openReview")}
                 </Link>
-              )}
-              {mapMetadata.data?.documentHash && mapPipeline.data && (
-                <MapEngineToggle
-                  pipeline={mapPipeline.data.pipeline}
-                  allowLegacy={mapPipeline.data.allowLegacy}
-                />
-              )}
-              {mapMetadata.data && (
-                <>
-                  <label className="flex items-center gap-1 text-xs text-slate-500">
-                    <span className="sr-only">{tl("colorProfile")}</span>
-                    <select
-                      data-testid="map-color-profile"
-                      className="text-xs border border-slate-200 rounded-md px-1.5 py-0.5 bg-white cursor-pointer"
-                      value={mapMetadata.data.colorProfile}
-                      disabled={setColorStack.isPending}
-                      title={
-                        mapMetadata.data.colorProfile === "auto"
-                          ? mapMetadata.data.resolvedBy === "file-colour"
-                            ? tl("colorProfileResolvedFile")
-                            : mapMetadata.data.resolvedBy === "scale" && mapMetadata.data.scale
-                              ? tl("colorProfileResolvedScale", {
-                                  profile: mapMetadata.data.resolvedProfile.toUpperCase(),
-                                  scale: Math.round(mapMetadata.data.scale),
-                                })
-                              : tl("colorProfileResolvedDefault", {
-                                  profile: mapMetadata.data.resolvedProfile.toUpperCase(),
-                                })
-                          : tl("colorProfile")
-                      }
-                      onChange={(e) => {
-                        const profile = e.target.value as
-                          | "auto"
-                          | "isom"
-                          | "issprom"
-                          | "isskiom"
-                          | "ismtbom";
-                        setColorStack.mutate({ profile });
-                      }}
-                    >
-                      <option value="auto">{tl("colorProfileAuto")}</option>
-                      <option value="isom">{tl("colorProfileIsom")}</option>
-                      <option value="issprom">{tl("colorProfileIssprom")}</option>
-                      <option value="isskiom">{tl("colorProfileIsskiom")}</option>
-                      <option value="ismtbom">{tl("colorProfileIsmtbom")}</option>
-                    </select>
-                  </label>
-                  {/* The "north lines under course purple" checkbox used to
-                      sit here too. It is a property of the base map, not of
-                      one event's course work, and IOF's colour order puts
-                      blue/black 100 % lines *above* lower purple — so it
-                      now lives only on the club-library map card. */}
-                </>
               )}
             </div>
             <div className="flex items-center gap-2">

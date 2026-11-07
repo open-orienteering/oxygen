@@ -55,9 +55,10 @@
   "compassUnlocked": "Rotation unlocked — tap to lock north up",
   "enterFullscreen": "Fullscreen",
   "exitFullscreen": "Exit fullscreen",
-  "mapEngineToggle": "Use new map engine",
-  "mapEngineHelp": "Draws every map of this event from the map document instead of image tiles.",
-  "mapEngineReport": "Something wrong with the map? Tell your instance maintainer.",
-  "mapEngineFallback": "This browser cannot draw the new map engine; showing the classic map.",
-  "mapEngineSwitchFailed": "Could not switch the map engine."
+  "courseLayerUnsupported": "This map's colours are not aligned for the course layer, so no course is drawn. Re-import the map to show it.",
+  "mapImportPending": "The map is being prepared…",
+  "mapImportFailed": "The map could not be prepared: {{error}}",
+  "mapImportReview": "The map is imported and waiting for review.",
+  "mapImportReviewLink": "Review the map",
+  "mapImportUnknown": "This map has not been prepared yet. An administrator can prepare it under Maintenance → Map documents."
 }

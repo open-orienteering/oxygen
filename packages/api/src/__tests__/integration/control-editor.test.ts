@@ -138,6 +138,8 @@ describe("course geometry regeneration", () => {
       where: { eventId: ctx.eventId, seq: course.id },
     });
     expect(row?.geometrySource).toBe("editor");
+    // E6: the length provenance the export and the Eventor sync read.
+    expect(row?.lengthSource).toBe("derived");
     const geom = row?.geometry as unknown as GeoJSONFeatureCollection;
     const legs = geom.features.filter((f) => f.geometry.type === "LineString");
     const points = geom.features.filter((f) => f.geometry.type === "Point");
@@ -556,6 +558,31 @@ describe("description backfill migration", () => {
 
     const detail = await caller.control.detail({ id: 171 });
     expect(detail.description).toEqual({ d: "4.004", c: "0.208" });
+  });
+});
+
+describe("length_source migration (E6)", () => {
+  it("backfills length_source 1:1 from geometry_source", async () => {
+    const mk = (name: string, geometrySource: string) =>
+      ctx.db.course.create({ data: { eventId: ctx.eventId, name, geometrySource }, select: { id: true } });
+    const rows = {
+      editor: await mk("LS-editor", "editor"),
+      ocd: await mk("LS-ocd", "ocd"),
+      xml: await mk("LS-xml", "xml"),
+      none: await mk("LS-none", ""),
+    };
+    const migrationSql = readFileSync(
+      resolve(__dirname, "../../../prisma/migrations/20261106130000_course_length_source/migration.sql"),
+      "utf8",
+    );
+    // The backfill UPDATE verbatim (from the first UPDATE keyword on).
+    await ctx.db.$executeRawUnsafe(migrationSql.slice(migrationSql.indexOf("UPDATE")));
+    const sourceOf = async (id: string) => (await ctx.db.course.findUniqueOrThrow({ where: { id }, select: { lengthSource: true } })).lengthSource;
+    expect(await sourceOf(rows.editor.id)).toBe("derived");
+    expect(await sourceOf(rows.ocd.id)).toBe("file");
+    expect(await sourceOf(rows.xml.id)).toBe("file");
+    expect(await sourceOf(rows.none.id)).toBeNull();
+    await ctx.db.course.deleteMany({ where: { id: { in: Object.values(rows).map((r) => r.id) } } });
   });
 });
 

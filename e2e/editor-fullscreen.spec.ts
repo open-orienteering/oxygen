@@ -6,19 +6,9 @@
 // `course-editor.spec.ts` until D10 folds the editor specs together.
 import { test, expect, type Page } from "@playwright/test";
 import { reseed } from "./helpers/reseed";
-import { setEditorVector, setMapPipeline } from "./helpers/map-pipeline";
 import { editorReady, emptyPoint } from "./helpers/editor";
 
-test.beforeAll(async () => {
-  await reseed();
-  await setMapPipeline("vector");
-  await setEditorVector(true);
-});
-
-test.afterAll(async () => {
-  await setEditorVector(null);
-  await setMapPipeline("legacy");
-});
+test.beforeAll(reseed);
 
 test.setTimeout(120_000);
 

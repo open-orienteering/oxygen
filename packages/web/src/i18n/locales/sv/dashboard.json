@@ -55,9 +55,10 @@
   "compassUnlocked": "Rotation upplåst — tryck för att låsa norr uppåt",
   "enterFullscreen": "Helskärm",
   "exitFullscreen": "Lämna helskärm",
-  "mapEngineToggle": "Använd ny kartmotor",
-  "mapEngineHelp": "Ritar alla kartor i tävlingen från kartdokumentet i stället för bildrutor.",
-  "mapEngineReport": "Något fel på kartan? Kontakta den som driver instansen.",
-  "mapEngineFallback": "Den här webbläsaren kan inte rita den nya kartmotorn; visar den klassiska kartan.",
-  "mapEngineSwitchFailed": "Kunde inte byta kartmotor."
+  "courseLayerUnsupported": "Kartans färger är inte anpassade för banlagret, så ingen bana ritas. Importera kartan på nytt för att visa den.",
+  "mapImportPending": "Kartan förbereds…",
+  "mapImportFailed": "Kartan kunde inte förberedas: {{error}}",
+  "mapImportReview": "Kartan är importerad och väntar på granskning.",
+  "mapImportReviewLink": "Granska kartan",
+  "mapImportUnknown": "Kartan är inte förberedd ännu. En administratör kan förbereda den under Underhåll → Kartdokument."
 }

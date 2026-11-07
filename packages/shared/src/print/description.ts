@@ -3,7 +3,8 @@
  * §6.2; research 05 §5.6): rules and text through the shared shaper, the
  * pictograms as glyphs converted from `iof-symbols.ts` path data, so a
  * pictogram used on many pages is one form XObject in the PDF. Geometry
- * is the legacy SVG block's (`description-svg.ts`), formula for formula.
+ * is the legacy SVG block's (`description-svg.ts`, deleted in E4c),
+ * formula for formula.
  *
  * Output coordinates: page µm, y-up (`paperHeightMm` flips the block's
  * y-down page mm).
@@ -11,7 +12,7 @@
 
 import { IOF_SYMBOLS, descriptionCells, type DescriptionCell } from "../course-maps/iof-symbols.js";
 import { DESCRIPTION_THICK_COLUMNS, hasThickRuleBelow, type DescriptionSheetHeader, type DescriptionSheetRow } from "../course-maps/description-rows.js";
-import type { DescriptionRow } from "../course-maps/description-svg.js";
+import type { DescriptionRow } from "../course-maps/description-rows.js";
 import { COORD_FLAG, makePath } from "../render/pass-stream.js";
 import { type Glyph, type GlyphPart, type RenderSymbol, parseRenderSymbol } from "../render/symbol.js";
 import type { RenderObject } from "../render/symbolise.js";

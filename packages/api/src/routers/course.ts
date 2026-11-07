@@ -19,6 +19,7 @@ import {
   pruneDescriptionInstructions,
   course as courseShared,
   encodeHlc,
+  mapGeo,
 } from "@oxygen/shared";
 
 const orderModeSchema = z.enum(
@@ -40,6 +41,7 @@ import { lastWriter, othersPresent, PRESENCE_TTL_MS, touchPresence } from "../co
 import {
   ocadBoundsToWgs84,
   computeMapNorthOffset,
+  frameFromOcadCrs,
   mapMmToWgs84,
   type OcadCrs,
   type WGS84Bounds,
@@ -48,34 +50,15 @@ import { fireMapUpload } from "../db.js";
 import {
   applyEventMap,
   applyMapRotationCorrection,
-  currentMeridianStaleness,
-  detectNorthFromBuffer,
-  parseOcadMapMetadata,
-  synchronizePositionedControlCoordinates,
   type MapCalibrationPoint,
 } from "../event-map.js";
 import { latestVersionOrRefuse } from "../club-map-library.js";
-import { cutRotationDeg } from "../map-north.js";
-import {
-  ensureEventMapRenderKey,
-  gcOrphanTiles,
-  refreshMapFileRenderKey,
-} from "../map-render-cache.js";
-import { invalidateRenderKey } from "../map-tiles.js";
-import {
-  colorProfileSchema,
-  colorStackOverridesSchema,
-} from "@oxygen/shared";
-import { applyIofColorStack, type StackOcadFile } from "../map-color-stack.js";
-import {
-  cachedProfileResolution,
-  rememberProfileResolution,
-  type ProfileResolvedBy,
-} from "../map-profile-cache.js";
+import { cutRotationDeg, meridianStalenessFromDetection } from "../map-north.js";
+import { documentNorth, eventPin } from "../map-store/event-document.js";
+import { colorProfileSchema } from "@oxygen/shared";
 import { canDownloadEventMap } from "../ocad-export.js";
 import { loadEventCrs } from "../event-crs.js";
 import {
-  ensureOverprintCutsCurrent,
   OVERPRINT_CUTS_VERSION,
   rebuildCourseGeometry,
 } from "../course-geometry.js";
@@ -95,6 +78,7 @@ import {
   persistStructure,
   rewriteStructureFromColumns,
   rowKind,
+  carryLegs,
   structureFromWire,
   uuidsOfPublicIds,
 } from "../course-structure.js";
@@ -233,45 +217,6 @@ function parseCourseFile(input: {
     return parseIOFCourseDataWithGeometry(input.xmlContent);
   }
   throw new Error("No course data: supply xmlContent or ocdBase64");
-}
-
-/**
- * Decide whether a previously-stored OCD geometry for a course should be
- * preferred over a freshly-built XML straight-line geometry. We keep OCD
- * unless the OCD control positions have drifted noticeably from the
- * canonical XML ones (>30 m).
- */
-export function isOcdGeometryStaleVsXml(
-  ocd: GeoJSONFeatureCollection,
-  xml: GeoJSONFeatureCollection,
-): boolean {
-  const ocdPts = ocd.features.filter((f) => f.geometry.type === "Point");
-  const xmlPts = xml.features.filter((f) => f.geometry.type === "Point");
-  if (xmlPts.length === 0) return false;
-  const byId = new Map<string, [number, number]>();
-  for (const f of xmlPts) {
-    const id = (f.properties as { id?: string } | undefined)?.id;
-    if (!id) continue;
-    byId.set(
-      id,
-      (f.geometry as { coordinates: [number, number] }).coordinates,
-    );
-  }
-  let drift = 0;
-  let pairs = 0;
-  for (const f of ocdPts) {
-    const id = (f.properties as { id?: string } | undefined)?.id;
-    if (!id) continue;
-    const xy = byId.get(id);
-    if (!xy) continue;
-    const ocdXy = (f.geometry as { coordinates: [number, number] }).coordinates;
-    // Rough planar distance — fine for stale-detection thresholds.
-    const dLng = (ocdXy[0] - xy[0]) * 111_000 * Math.cos((xy[1] * Math.PI) / 180);
-    const dLat = (ocdXy[1] - xy[1]) * 111_000;
-    drift += Math.sqrt(dLng * dLng + dLat * dLat);
-    pairs++;
-  }
-  return pairs > 0 && drift / pairs > 30;
 }
 
 async function getCourseBySeq(
@@ -1140,216 +1085,27 @@ export const courseRouter = router({
       return { ok: true };
     }),
 
-  /** GeoJSON FeatureCollection for one course (control circles + leg lines). */
-  geometry: coursesViewProcedure
-    .input(z.object({ id: z.number().int() }))
-    .query(async ({ ctx, input }) => {
-      await ensureOverprintCutsCurrent(ctx.db, ctx.event.id);
-      const c = await ctx.db.course.findFirst({
-        where: { eventId: ctx.event.id, seq: input.id },
-        select: { geometry: true },
-      });
-      if (!c?.geometry)
-        return { type: "FeatureCollection" as const, features: [] as unknown[] };
-      return c.geometry as unknown as {
-        type: "FeatureCollection";
-        features: unknown[];
-      };
-    }),
-
-  /**
-   * Per-course geometry for many courses at once (used by map overlays).
-   * Returns a name-keyed map (legacy shape) — the web `MapPanel` joins
-   * several feature collections into one before handing to the viewer.
-   */
-  courseGeometries: kioskOrCoursesViewProcedure
-    .input(
-      z
-        .object({
-          ids: z.array(z.number().int()).optional(),
-          courseNames: z.array(z.string()).optional(),
-        })
-        .optional(),
-    )
-    .query(async ({ ctx, input }) => {
-      await ensureOverprintCutsCurrent(ctx.db, ctx.event.id);
-      const where: Record<string, unknown> = {
-        eventId: ctx.event.id,
-        removed: false,
-      };
-      if (input?.ids && input.ids.length > 0) where.seq = { in: input.ids };
-      if (input?.courseNames && input.courseNames.length > 0) {
-        where.name = { in: input.courseNames };
-      }
-      const rows = await ctx.db.course.findMany({
-        where,
-        select: { seq: true, name: true, geometry: true, geometrySource: true },
-      });
-      const out: Record<
-        string,
-        { type: "FeatureCollection"; features: unknown[] }
-      > = {};
-      for (const r of rows) {
-        if (!r.geometry) continue;
-        out[r.name] = r.geometry as unknown as {
-          type: "FeatureCollection";
-          features: unknown[];
-        };
-      }
-      return out;
-    }),
-
   /**
    * Lightweight map metadata (bounds, scale, north offset, calibration)
-   * for the tile-based MapViewer. Served from columns persisted at upload
-   * time — re-parsing the OCAD blob per query took multi-second on real
-   * club maps, long enough for the service worker's NetworkFirst timeout
-   * to serve a stale cached `null` (blank map until a full page reload).
-   * Rows from before the metadata migration are parsed once and
-   * backfilled.
+   * for the viewer: the latest `map_files` row's columns as stored (the
+   * pin writes them from the document, docs/map-storage.md §6.4), the
+   * pinned `documentHash`, and north from the document's import report
+   * (`report.north`). Never null while a map row exists — a null
+   * `documentHash` means the import has not pinned a document yet
+   * (docs/map-storage.md §4.6). Nothing here parses the OCAD file.
    */
   mapMetadata: kioskOrCoursesViewProcedure.query(async ({ ctx }) => {
-    const row = await ctx.db.mapFile.findFirst({
-      where: { eventId: ctx.event.id },
-      orderBy: { uploadedAt: "desc" },
-      select: {
-        id: true,
-        uploadedAt: true,
-        scale: true,
-        bounds: true,
-        northOffset: true,
-        calibration: true,
-        rotationCorrection: true,
-        northDetection: true,
-        documentHash: true,
-        clubMapVersionId: true,
-      },
-    });
+    const row = await eventPin(ctx.db, ctx.event.id);
     if (!row) return null;
 
-    let scale = row.scale;
-    let bounds = row.bounds as unknown as WGS84Bounds | null;
-    let northOffset = row.northOffset;
-    let calibration = row.calibration as unknown as
+    const { scale, northOffset, rotationCorrection } = row;
+    const bounds = row.bounds as unknown as WGS84Bounds | null;
+    const calibration = row.calibration as unknown as
       | MapCalibrationPoint[]
       | null;
-    const rotationCorrection = row.rotationCorrection;
-
-    // Rows with every derived column null are either pre-metadata legacy
-    // uploads or rows the auto-correction reset migration deliberately
-    // cleared so they re-derive with correction 0 on first read.
-    const isLegacyRow =
-      scale === null &&
-      bounds === null &&
-      northOffset === null &&
-      calibration === null;
-    // Rows from before the north_detection column need the analysis run
-    // once, so the UI can distinguish "no north lines in the file" from
-    // "never looked". Shares the blob fetch with the metadata backfill.
-    let northDetection = row.northDetection;
-    const needsDetection = northDetection == null;
-
-    let blobBuffer: Buffer | null = null;
-    if (isLegacyRow || needsDetection) {
-      const blob = await ctx.db.mapFile.findUnique({
-        where: { id: row.id },
-        select: { fileData: true },
-      });
-      if (blob) blobBuffer = Buffer.from(blob.fileData);
-    }
-
-    if (isLegacyRow) {
-      if (!blobBuffer) return null;
-      const meta = await parseOcadMapMetadata(blobBuffer, rotationCorrection);
-      if (meta.scale === null && meta.bounds === null) return null;
-      ({ scale, bounds, northOffset, calibration } = meta);
-      await ctx.db.mapFile.update({
-        where: { id: row.id },
-        data: {
-          scale,
-          bounds: bounds
-            ? (bounds as unknown as PrismaNs.InputJsonValue)
-            : undefined,
-          northOffset,
-          calibration: calibration
-            ? (calibration as unknown as PrismaNs.InputJsonValue)
-            : undefined,
-        },
-      });
-      // Stored control lat/lng were computed against whatever correction
-      // was in force before; bring them in line with the current CRS.
-      await synchronizePositionedControlCoordinates(ctx.db, ctx.event.id);
-    }
-
-    if (needsDetection && blobBuffer) {
-      const detection = await detectNorthFromBuffer(blobBuffer);
-      await ctx.db.mapFile.update({
-        where: { id: row.id },
-        data: {
-          northDetection: detection as unknown as PrismaNs.InputJsonValue,
-        },
-      });
-      northDetection = detection as unknown as PrismaNs.JsonValue;
-    }
-
-    const stackMeta = await ensureEventMapRenderKey(ctx.db, ctx.event.id);
-    if (!stackMeta) return null;
-
-    let resolvedProfile = stackMeta.colorProfile === "auto"
-      ? (scale != null && scale > 0 && scale <= 5000 ? "issprom" : "isom")
-      : stackMeta.colorProfile;
-    let resolvedBy: ProfileResolvedBy =
-      stackMeta.colorProfile === "auto"
-        ? scale != null
-          ? "scale"
-          : "default"
-        : "explicit";
-
-    if (stackMeta.colorProfile === "auto") {
-      // Classifying the colour table needs the OCAD blob. The outcome is
-      // fixed for a render key, so pay for it once per process rather
-      // than on every page load (this query runs on each map view).
-      const remembered = cachedProfileResolution(stackMeta.renderKey);
-      if (remembered) {
-        ({ resolvedProfile, resolvedBy } = remembered);
-      } else {
-        if (!blobBuffer) {
-          const blob = await ctx.db.mapFile.findUnique({
-            where: { id: row.id },
-            select: { fileData: true },
-          });
-          if (blob) blobBuffer = Buffer.from(blob.fileData);
-        }
-        if (blobBuffer) {
-          try {
-            const ocadMod = await import("ocad2geojson");
-            const readOcad = (ocadMod as Record<string, unknown>).readOcad as (
-              buf: Buffer,
-              opts?: Record<string, unknown>,
-            ) => Promise<StackOcadFile>;
-            const ocad = await readOcad(blobBuffer, { quietWarnings: true });
-            const classified = applyIofColorStack(ocad, {
-              profile: "auto",
-              overrides: stackMeta.colorOverrides,
-              scale,
-            });
-            resolvedProfile = classified.resolvedProfile;
-            resolvedBy = classified.resolvedBy;
-            rememberProfileResolution(stackMeta.renderKey, {
-              resolvedProfile,
-              resolvedBy,
-            });
-          } catch (err) {
-            // Keep the scale heuristic, but say so: a map that cannot be
-            // classified is worth knowing about.
-            console.warn(
-              `[map-color-stack] event ${ctx.event.id}: profile classification failed, using scale heuristic:`,
-              err,
-            );
-          }
-        }
-      }
-    }
+    const north = row.documentHash
+      ? await documentNorth(ctx.db, row.documentHash)
+      : null;
 
     return {
       scale,
@@ -1357,23 +1113,16 @@ export const courseRouter = router({
       northOffset,
       calibration,
       rotationCorrection,
-      meridianStalenessDeg: currentMeridianStaleness(northDetection),
+      meridianStalenessDeg: meridianStalenessFromDetection(north),
       uploadedAt: row.uploadedAt.getTime(),
-      /** Content hash of the pinned map document (`/api/map-documents/:hash`); null before the backfill. */
+      /** Content hash of the pinned map document (`/api/map-documents/:hash`); null until the import pins one. */
       documentHash: row.documentHash,
       /** The pinned club map version, null for an event's own upload; the viewer's GPU budget follows it (docs/map-rendering.md §5.4). */
       clubMapVersionId: row.clubMapVersionId,
       cutRotationDeg: cutRotationDeg(
         northOffset,
-        (northDetection as { meridian?: { medianTiltDeg?: number } } | null)
-          ?.meridian?.medianTiltDeg ?? null,
+        north?.meridian?.medianTiltDeg ?? null,
       ),
-      colorProfile: stackMeta.colorProfile,
-      colorOverrides: stackMeta.colorOverrides,
-      northLinesBelow: stackMeta.northLinesBelow,
-      resolvedProfile,
-      resolvedBy,
-      renderKey: stackMeta.renderKey,
     };
   }),
 
@@ -1459,15 +1208,15 @@ export const courseRouter = router({
     // rows with explicit zeros that would otherwise plot at the
     // equator and be invisible. Real coordinates near the equator
     // are not a concern for orienteering data.
-    let crs: OcadCrs | null = null;
+    let crs: mapGeo.PaperFrame | null = null;
     const isMissingLatLng = (c: { lat: number | null; lng: number | null }) =>
       c.lat == null || c.lng == null || (c.lat === 0 && c.lng === 0);
     const hasPositionedControls = controls.some(
       (c) => c.xpos !== 0 || c.ypos !== 0,
     );
     if (hasPositionedControls) {
-      // Cached per event — the course editor refetches this query after
-      // every placement, so avoid re-parsing the map file each time.
+      // The pinned document's frame, cached per document hash — the
+      // course editor refetches this query after every placement.
       crs = await loadEventCrs(ctx.db, ctx.event.id);
     }
 
@@ -1783,50 +1532,6 @@ export const courseRouter = router({
       return { success: true as const, ...result };
     }),
 
-  /**
-   * Update the event map's IOF colour-stack profile / north-line setting.
-   * Recomputes `render_key` and GCs orphaned tiles.
-   */
-  setMapColorStack: coursesEditProcedure
-    .input(
-      z.object({
-        profile: colorProfileSchema.optional(),
-        northLinesBelow: z.boolean().optional(),
-        overrides: colorStackOverridesSchema.optional(),
-      }),
-    )
-    .mutation(async ({ ctx, input }) => {
-      const row = await ctx.db.mapFile.findFirst({
-        where: { eventId: ctx.event.id },
-        orderBy: { uploadedAt: "desc" },
-        select: { id: true, renderKey: true },
-      });
-      if (!row) {
-        throw new TRPCError({
-          code: "NOT_FOUND",
-          message: "No map file uploaded",
-        });
-      }
-      const data: Record<string, unknown> = {};
-      if (input.profile !== undefined) data.colorProfile = input.profile;
-      if (input.northLinesBelow !== undefined) {
-        data.northLinesBelow = input.northLinesBelow;
-      }
-      if (input.overrides !== undefined) {
-        data.colorOverrides = input.overrides;
-      }
-      if (Object.keys(data).length > 0) {
-        await ctx.db.mapFile.update({ where: { id: row.id }, data });
-      }
-      const oldKey = row.renderKey;
-      const renderKey = await refreshMapFileRenderKey(ctx.db, row.id);
-      if (oldKey && oldKey !== renderKey) invalidateRenderKey(oldKey);
-      invalidateRenderKey(renderKey);
-      await gcOrphanTiles(ctx.db);
-      fireMapUpload(ctx.event.id);
-      return { success: true as const, renderKey };
-    }),
-
   // Kiosk-readable: every MapPanel's GL course layer follows it (course-layer.md §3.4).
   getOverprintCuts: kioskOrCoursesViewProcedure.query(async ({ ctx }) => {
     const row = await ctx.db.event.findUnique({
@@ -2025,7 +1730,7 @@ export const courseRouter = router({
       // `controlCoordinates` keeps its on-the-fly conversion as a
       // belt-and-braces fallback. IOF XML imports already carry good
       // lat/lng from the parser and are not affected.
-      let ocdCrs: OcadCrs | null = null;
+      let ocdCrs: mapGeo.PaperFrame | null = null;
       if (input.ocdBase64) {
         // Alignment has already put parsed map-mm coordinates into the
         // event map's paper space, so convert them with that map's
@@ -2045,7 +1750,7 @@ export const courseRouter = router({
               Buffer.from(input.ocdBase64, "base64"),
               { quietWarnings: true },
             );
-            ocdCrs = imported.getCrs();
+            ocdCrs = frameFromOcadCrs(imported.getCrs());
           } catch (error) {
             console.warn("[importCourses] OCAD CRS load failed:", error);
           }
@@ -2261,28 +1966,22 @@ export const courseRouter = router({
 
         const existing = courseByName.get(pc.name.toLowerCase());
         let courseUuid: string;
-        // The geometry the course ends up with: a kept OCD one (XML re-import) still carries the authored pieces.
-        let storedGeom: GeoJSONFeatureCollection | null = geom;
+        // An IOF / PPen re-import over an OCD-imported course keeps the
+        // OCD file's `courses.geometry` (written until E5 for the v0.5.0
+        // rollback; nothing reads it) and carries the authored leg gaps
+        // from the stored structure (course-layer.md §6.4 "Importers").
+        let keepOcd = false;
+        let prevStructure: courseShared.StoredCourseStructure | null = null;
         if (existing) {
-          // Resolve geometry vs existing one: keep OCD unless drift > 30m.
-          let nextGeom: GeoJSONFeatureCollection | null = geom;
           const prev = await ctx.db.course.findUnique({
             where: { id: existing.id },
-            select: { geometry: true, geometrySource: true },
+            select: { geometrySource: true, structure: true },
           });
-          if (
-            prev?.geometrySource === "ocd" &&
-            geometrySource === "xml" &&
-            geom &&
-            prev.geometry &&
-            !isOcdGeometryStaleVsXml(
-              prev.geometry as unknown as GeoJSONFeatureCollection,
-              geom,
-            )
-          ) {
-            nextGeom = prev.geometry as unknown as GeoJSONFeatureCollection;
-          }
-          storedGeom = nextGeom;
+          keepOcd = prev?.geometrySource === "ocd" && geometrySource === "xml" && !!geom;
+          const parsedPrev = keepOcd && prev?.structure ? courseShared.courseStructureSchema.safeParse(prev.structure) : null;
+          prevStructure = parsedPrev?.success ? parsedPrev.data : null;
+          // The file's geometry, unless kept; none (position-less) leaves the column alone.
+          const written = keepOcd ? null : geom;
           await ctx.db.course.update({
             where: { id: existing.id },
             data: {
@@ -2295,12 +1994,9 @@ export const courseRouter = router({
               firstAsStart: false,
               lastAsFinish: false,
               removed: false,
-              geometry: (nextGeom ?? undefined) as never,
-              geometrySource: !nextGeom
-                ? prev?.geometrySource ?? ""
-                : nextGeom === geom
-                  ? geometrySource
-                  : prev?.geometrySource ?? "",
+              geometry: (written ?? undefined) as never,
+              geometrySource: written ? geometrySource : undefined,
+              lengthSource: written ? "file" : undefined,
             },
           });
           courseUuid = existing.id;
@@ -2320,6 +2016,7 @@ export const courseRouter = router({
               lastAsFinish: false,
               geometry: (geom ?? undefined) as never,
               geometrySource: geom ? geometrySource : "",
+              lengthSource: geom ? "file" : null,
             },
             select: { id: true },
           });
@@ -2331,7 +2028,7 @@ export const courseRouter = router({
         // The structure, and through it the column mirror: start / finish
         // sites explicit as the file names them, `course_controls`, the
         // leg gaps the file's 705 pieces leave (course-layer.md §6.4).
-        const gapsByLeg = skipPositions || !storedGeom ? new Map<string, courseShared.FractionGap[]>() : legGapsOfFeatures(storedGeom, (code) => positionOfCode.get(code));
+        const gapsByLeg = skipPositions || keepOcd || !geom ? new Map<string, courseShared.FractionGap[]>() : legGapsOfFeatures(geom, (code) => positionOfCode.get(code));
         const items: courseShared.StoredControlItem[] = [];
         let prevCode: string | null = null;
         for (const cc of pc.controls) {
@@ -2341,7 +2038,9 @@ export const courseRouter = router({
           items.push({ siteId, ...(gaps ? { leg: { gaps } } : {}) });
           prevCode = cc.controlId;
         }
-        await persistStructure(ctx.db, eventId, courseShared.linearStructure(courseUuid, items, { orderMode: pc.orderMode ?? "ordered" }) as courseShared.StoredCourseStructure);
+        const linear = courseShared.linearStructure(courseUuid, items, { orderMode: pc.orderMode ?? "ordered" }) as courseShared.StoredCourseStructure;
+        // A kept OCD course: its leg gaps where the leg still runs between the same sites.
+        await persistStructure(ctx.db, eventId, keepOcd ? carryLegs(prevStructure, linear) : linear);
       }
 
       // The file's course-level lines and areas (707 / 708 / 709 / 711) are
@@ -2389,20 +2088,13 @@ export const courseRouter = router({
         }
       }
 
-      // ── 4. Invalidate map tile cache (course overlays changed) ──
+      // ── 4. Invalidate the server's rendered-map cache ──
       //
-      // Course overlays (control circles + leg lines) are baked into
-      // the rendered tiles, so a course import must invalidate the
-      // tile cache. We also bump `map_files.uploaded_at` because the
-      // client uses that timestamp as the tile-URL cache buster — if
-      // we don't touch it, the browser keeps serving the stale tiles
-      // out of its HTTP cache even though the server-side `renderedMap`
-      // rows are gone.
+      // Course overlays are baked into the legacy rendered maps, so a
+      // course import drops them. `map_files.uploaded_at` is left alone
+      // (slice E1): it is the map's upload time, and the readers that
+      // keyed caches on it now key on the pinned document's hash.
       await ctx.db.renderedMap.deleteMany({ where: { eventId } });
-      await ctx.db.mapFile.updateMany({
-        where: { eventId },
-        data: { uploadedAt: new Date() },
-      });
       fireMapUpload(eventId);
 
       // ── 5. Journal the import as ONE reference.imported entry ──

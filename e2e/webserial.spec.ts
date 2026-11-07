@@ -1,4 +1,4 @@
-import { test, expect } from "./helpers/map-pipeline";
+import { test, expect } from "@playwright/test";
 import { reseed } from "./helpers/reseed";
 import { uploadEventMap } from "./helpers/map-upload";
 import { getMockWebSerialScript } from "./helpers/mock-webserial";
@@ -326,14 +326,13 @@ test.describe("WebSerial SI Reader", () => {
   });
 });
 
-// The post-readout map under both map pipelines (09 §4 B gate,
-// docs/map-pipeline-switch.md §5): the readout's map follows the event's
-// switch. Last in the file: it gives the seed event a map, and `reseed()`
-// takes it away again for the specs after this one.
+// The post-readout map draws the event's map document (09 §4 B gate,
+// docs/map-rendering.md §5.4). Last in the file: it gives the seed event a
+// map, and `reseed()` takes it away again for the specs after this one.
 test.describe("post-readout map", () => {
   test.afterAll(reseed);
 
-  test("the card readout map follows the event's map pipeline", async ({ page, mapPipeline }) => {
+  test("the card readout map draws the map document", async ({ page }) => {
     test.setTimeout(120_000);
     await selectCompetition(page);
     const viewer = page.getByTestId("map-viewer").first();
@@ -358,14 +357,8 @@ test.describe("post-readout map", () => {
 
     const readoutMap = page.getByTestId("map-viewer").last();
     await expect(readoutMap).toBeVisible({ timeout: 60_000 });
-    await expect(readoutMap).toHaveAttribute("data-map-pipeline", mapPipeline);
-    if (mapPipeline === "vector") {
-      await expect(readoutMap.getByTestId("map-vector-layer")).toHaveAttribute("data-ready", "true", {
-        timeout: 30_000,
-      });
-      await expect(readoutMap.locator("img[data-tile-url]")).toHaveCount(0);
-    } else {
-      await expect(readoutMap.getByTestId("map-tiles-composite")).toHaveCount(1);
-    }
+    await expect(readoutMap.getByTestId("map-vector-layer")).toHaveAttribute("data-ready", "true", {
+      timeout: 30_000,
+    });
   });
 });
