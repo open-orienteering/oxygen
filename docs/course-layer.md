@@ -1351,8 +1351,12 @@ root's stored structure:
   live child keeps its own and a new one takes the root's;
   `legs` / `length_m` / `length_source` by `rebuildCourseLengths`;
 - a child whose key is gone is **soft-deleted** (`removed = true`), and
-  every runner whose `course_id` named it gets `course_id = NULL` (F6b
-  re-assigns: "every runner in a pooled class has a variant");
+  every runner whose `course_id` named it gets `course_id = NULL`; after
+  the pools are written, every runner of a class whose pool changed —
+  those nulled included — is dealt a variant of the new pool
+  (`reconcileClassVariants`, F6b's invariant "every runner in a pooled
+  class has a variant", `course-controls-and-matching.md` "Forked courses
+  and variants"); a nulled runner whose class has no pool stays null;
 - a root that is removed, or whose structure has no groups any more, ends
   with no live child;
 - the root keeps `course_controls` = the first alternatives
@@ -1370,10 +1374,11 @@ one per affected row"):
   order) or soft-deleted (after them, `removed: true`);
 - one `class.upserted` per class whose pool changed (its `coursePools`
   carry the pool);
-- one `runner.updated { cardNo, runnerId, fields: { courseId: null } }`
-  per runner whose variant vanished. `buildRunnerUpdateData` translates
-  `courseId` (a course seq, or null) so the entry replays through
-  `events.push`.
+- one `runner.updated { cardNo, runnerId, fields: { courseId } }` per
+  runner whose variant changed — the seq she was dealt, or null when her
+  class has no pool (F6b; before F6b always null). `buildRunnerUpdateData`
+  translates `courseId` (a course seq, or null) so the entry replays
+  through `events.push`, and a peer takes the seq instead of re-picking.
 
 **Pools** (08 §4.3 "the editor's job ends at producing the pool"): every
 class whose `course_id` is a root has exactly one `ClassCoursePool(classId,
@@ -1385,14 +1390,18 @@ picking a root after its variants exist pools them too, and a class
 moving to a plain course loses them (decided on the user's standing
 instruction, 2026-11-07, for review — decision log "F6: pools written
 when a class picks a course"). Only pool rows of variants are touched;
-`stage` > 0 (relay legs) stays timing's (08 §12).
+`stage` > 0 (relay legs) stays timing's (08 §12). `syncClassPool` then
+reconciles the class's runners (F6b) and returns them; its callers
+journal them after the `class.upserted` (`emitRunnerVariants`; the
+import after its `reference.imported` entry).
 
 ### 12.5 API
 
 - `course.setStructure` accepts groups (§6.1) and materialises in the
   same transaction; refused on a variant.
 - `course.variantList { courseId }` → `[{ variantKey, courseId (seq),
-  lengthM }]`, the live children in key order; `[]` for a course without
+  lengthM, runnerCount }]` (`runnerCount`: non-removed runners on the
+  variant, every class on the root — F6b), the live children in key order; `[]` for a course without
   groups and for a variant. Kiosk keys may read it (as `course.list`).
 - `course.list` / `course.detail` carry `parentCourseId` (the root's seq
   or null) and `variantKey`. A root's `detail.structure.labelOffsets`
@@ -1479,6 +1488,7 @@ them.
 | unit | `packages/shared/src/course/__tests__/structure.test.ts` | §6.1: C0's linear shape accepted, the 08 leg props, groups and loops, an empty alternative beside a non-empty one (answer 5); nesting, overlap, unanchored, duplicate ids / labels, < 2 alternatives or all empty (`VARIATION_ALL_EMPTY`), out-of-range gaps refused; interim `path` / `pieces` / `circleGaps` and `extras` refused; the wire form; site rules; `linearStructure`, `structureControlIds`; `structureDiff` (equal, moved, added, removed, leg / offset changes) |
 | unit | `packages/shared/src/course/__tests__/variants.test.ts` | §12.1: no groups → no variants; the product in item order and its keys; legs and flags copied; loop permutations with the anchor between them, three alternatives → six; an empty alternative a straight leg (and no anchor visit in a loop); the anchor visit's fields; keys stable across an edit outside the groups; multi-letter labels and colliding keys; `variantCount` without building; `variantStructure` = the product's row, parsed by the column schema; `structureSiteIds`; `pruneSiteFromStructure` (every alternative, an emptied alternative kept, all emptied / unanchored / adjacent dissolved, the label offset) |
 | integration | `packages/api/src/__tests__/integration/course-variants.test.ts` | §12.2–12.5: one child per variant (name, key, parent, copied fields, linear structure with its own id, mirror, lengths as the root's path), journal root first then children; `variantList`, `list` / `detail` by seq; a loop's permutations; an empty alternative, all empty refused; colliding keys and the cap refused, nothing written; re-materialisation (same rows across an outside edit, a new key, every key gone → soft-deleted and the runner nulled with its `runner.updated`, keys back → the same uuids); `runner.updated { courseId }` replayed through `events.push`; label offsets of every alternative round-trip; pools (a class on the root, a class picking it later, a key added / dropped, a plain course clears); the refusals (`ROOT_HAS_VARIATIONS`, `COURSE_IS_VARIANT`, nothing written); name / climb / maps mirrored; an offset set through the root; clone of a root and of a variant; delete of a root; `control.delete` of a control in alternative B only (one entry per row) and of a group's anchor (dissolved); an import over a root; an import with `replaceAll` over a root (the runner on a variant nulled and journaled, the pool emptied); a peer applying a root's and its variant's `course.upserted` through `events.push`; the migration's unique pair and `CHECK`; a checkout snapshot exported and imported with its children and pools (the backup dump is `SELECT *` per table, so the children are ordinary `courses` rows there) |
+| integration | `packages/api/src/__tests__/integration/runner-variants.test.ts` | §12.3–12.4 with F6b: a vanished variant's runner dealt one of the remaining pool (the entry carries the seq), a class onto / off a root deals / clears its runners after its `class.upserted`; the rest of F6b is listed in `course-controls-and-matching.md` "Test coverage" |
 | integration | `journal-completeness.test.ts` "course.setStructure with a group" | §12.4: the variants' `course.upserted` (parent, key, name), the class's `coursePools`, the vanished variant's `runner.updated { courseId: null }` |
 | E2E | `e2e/courses.spec.ts` "a course with variations lists its variants under it" | §12.6: a root written by `course.setStructure` over HTTP shows "2 variants", its two variant rows right under it with no controls of their own, the roots-only count, and a read-only sequence in its detail |
 | unit | `packages/api/src/__tests__/course-structure.test.ts` | §6.2: `splitStructure` (explicit start / finish, implicit default, role start / finish, a start mid-sequence), `structureFromColumns` and its round trip, wire ↔ stored mapping |
@@ -1560,8 +1570,9 @@ them.
   `structure-edit.ts`); F7 makes it read and write them. Per-variant
   pages and a variant's own
   sheet (`maps.pdf?courses=<variant>` still auto-creates one) are F8's;
-  the IOF family export F9's; runners' variants and the pool's dealing
-  F6b's; the readout's other-variant match F6c's. A loop does not check
+  the IOF family export F9's; the readout's other-variant match F6c's
+  (runners' variants and the dealing landed with F6b,
+  `course-controls-and-matching.md` "Forked courses and variants"). A loop does not check
   that the item after it is its anchor (the setter's; a check in F7 if
   wanted). A 100-variant save is one transaction of about a thousand
   queries (`setStructure` allows it 30 s); a batched child write is the

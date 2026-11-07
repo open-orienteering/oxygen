@@ -114,6 +114,8 @@ The Courses page also keeps its format **Export** dropdown. It writes the whole 
 
 Every class gets its own row of options: free start, no timing (for open / HD10-style classes), direct registration, and a maximum allowed running time. The table also shows how many runners, which course, and the class leg / length directly. The Club library's **Classes** tab stores the recurring catalogue once; a new event can bulk-add the relevant presets while preserving all settings and skipping names already present. Course creation then suggests classes that still lack a course, and an exact name selection links the new course to that class atomically.
 
+**Forked courses: variants pre-set per runner.** A class on a course with variations (a butterfly or a loop) runs its variants, and every runner in it has one before the race — a runner entered at the desk, from the Registration dialog, an Eventor sync or offline gets the variant with the fewest runners so far. The class's detail lists the variants with their runner counts and a **Distribute variants…** action that deals them over the class in start order (or randomly), so consecutive starters get different variants; by default only runners without one are dealt, and runners who have already raced always keep theirs. Run it after the draw. The readout checks a runner against her own variant only, so running another variant is a mispunch. See [course-controls-and-matching.md](course-controls-and-matching.md) "Forked courses and variants".
+
 ![Class configuration](screenshots/classes.png)
 
 ### Controls and SI units
@@ -146,7 +148,7 @@ The registration trend page (overflow nav → **Trends**) plots when runners sig
 
 ### Runner list and bulk editing
 
-Every registered competitor is on one page, with class, club, SI card, and status visible at a glance. Click any row to expand an inline detail pane — name, class, club, times, punches, and status are all editable in place with auto-save.
+Every registered competitor is on one page, with class, club, SI card, and status visible at a glance. Click any row to expand an inline detail pane — name, class, club, times, punches, and status are all editable in place with auto-save. In a class on a forked course the pane also has a **Variant** select to change the runner's variant by hand; the start list shows the variant after the class (`H21 · AC`).
 
 ![Runner list with inline detail](screenshots/runners.png)
 
