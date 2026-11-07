@@ -8,6 +8,7 @@ import {
   valueToRunnerStatus,
 } from "../statusConvert.js";
 import { appendJournal } from "../journalEmit.js";
+import { assertInPool, assignVariant, poolOf } from "../variants.js";
 
 /**
  * Runner router. All inputs/outputs use the per-event integer `seq` as the
@@ -186,6 +187,8 @@ const runnerCreateSchema = z.object({
   paid: z.number().int().optional().default(0),
   payMode: z.number().int().optional().default(0),
   cardFee: z.number().int().optional().default(0),
+  /** The runner's variant (course seq) in a pooled class; absent → the least-populated one (F6b). */
+  courseId: z.number().int().positive().optional(),
 });
 
 const runnerUpdateSchema = z.object({
@@ -207,6 +210,8 @@ const runnerUpdateSchema = z.object({
   payMode: z.number().int().optional(),
   cardFee: z.number().int().optional(),
   cardReturned: z.boolean().optional(),
+  /** The runner's variant (course seq) in a pooled class; null → re-dealt (F6b). */
+  courseId: z.number().int().positive().nullable().optional(),
 });
 
 // ─── Router ────────────────────────────────────────────────
@@ -222,6 +227,12 @@ export const runnerRouter = router({
         ? await ctx.db.class.findUnique({
             where: { id: r.classId },
             select: { name: true, seq: true },
+          })
+        : null;
+      const own = r.courseId
+        ? await ctx.db.course.findUnique({
+            where: { id: r.courseId },
+            select: { seq: true, variantKey: true },
           })
         : null;
 
@@ -263,6 +274,8 @@ export const runnerRouter = router({
         bib: r.bib,
         entryDate: r.entryDate,
         transferFlags: r.transferFlags,
+        courseId: own?.seq ?? 0,
+        variantKey: own?.variantKey ?? null,
       };
     }),
 
@@ -333,7 +346,7 @@ export const runnerRouter = router({
 
       const runners = await ctx.db.runner.findMany({
         where,
-        include: { class: { select: { name: true, seq: true } } },
+        include: { class: { select: { name: true, seq: true } }, course: { select: { seq: true } } },
         orderBy: [{ class: { sortIndex: "asc" } }, { startNo: "asc" }],
       });
 
@@ -383,6 +396,7 @@ export const runnerRouter = router({
           clubName: r.clubName,
           classId: r.class?.seq ?? 0,
           className: r.class?.name ?? "",
+          courseId: r.course?.seq ?? 0,
           startNo: r.startNo,
           startTime: toAbsolute(r.startTime, zeroTime),
           finishTime: toAbsolute(r.finishTime, zeroTime),
@@ -448,6 +462,16 @@ export const runnerRouter = router({
           },
           select: { id: true, seq: true },
         });
+        // The runner's variant (F6b): the desk's pick from the pool, else the
+        // least-populated one; null when the class's course has no variants.
+        let variantSeq: number | null = null;
+        if (input.courseId !== undefined) {
+          const v = assertInPool(await poolOf(tx, classUuid), input.courseId);
+          await tx.runner.update({ where: { id: c.id }, data: { courseId: v.id } });
+          variantSeq = v.seq;
+        } else {
+          variantSeq = (await assignVariant(tx, classUuid, c.id))?.seq ?? null;
+        }
         await appendJournal(tx, {
           eventId: ctx.event.id,
           type: "runner.registered",
@@ -463,6 +487,7 @@ export const runnerRouter = router({
             eventorClubId: input.eventorClubId,
             cardNo,
             startTime: input.startTime > 0 ? input.startTime : undefined,
+            courseId: variantSeq,
           },
         });
         return c;
@@ -523,9 +548,27 @@ export const runnerRouter = router({
         journalFields[k] = v;
       }
 
+      // The runner's variant (F6b): a course seq must be in the (new)
+      // class's pool; a class change clears it and `null` asks for one —
+      // both re-dealt from the pool below, the pick journaled as the seq.
+      const targetClassId = (data.classId as string | undefined) ?? r.classId;
+      const classChanged = data.classId !== undefined && data.classId !== r.classId;
+      let redeal = false;
+      if (typeof fields.courseId === "number") {
+        const pool = targetClassId ? await poolOf(ctx.db, targetClassId) : [];
+        data.courseId = assertInPool(pool, fields.courseId).id;
+      } else if (fields.courseId === null || classChanged) {
+        data.courseId = null;
+        redeal = true;
+      }
+
       // Table write + journal entry commit or roll back together.
       await ctx.db.$transaction(async (tx) => {
         await tx.runner.update({ where: { id: r.id }, data });
+        if (redeal) {
+          const v = targetClassId ? await assignVariant(tx, targetClassId, r.id) : null;
+          journalFields.courseId = v?.seq ?? null;
+        }
         await appendJournal(tx, {
           eventId: ctx.event.id,
           type: "runner.updated",
@@ -611,7 +654,7 @@ export const runnerRouter = router({
           seq: { in: input.ids },
           removed: false,
         },
-        select: { id: true, seq: true, cardNo: true },
+        select: { id: true, seq: true, cardNo: true, classId: true },
       });
       const data: Record<string, unknown> = {};
       // Portable patch mirrors the applied change in absolute-ds / seq / numeric
@@ -647,13 +690,21 @@ export const runnerRouter = router({
           data,
         });
         for (const r of rows) {
+          // A class change clears the runner's variant and deals one of the
+          // new class's pool (F6b); the pick travels as the seq.
+          let fields = journalFields;
+          if (data.classId !== undefined && data.classId !== r.classId) {
+            await tx.runner.update({ where: { id: r.id }, data: { courseId: null } });
+            const v = await assignVariant(tx, data.classId as string, r.id);
+            fields = { ...journalFields, courseId: v?.seq ?? null };
+          }
           await appendJournal(tx, {
             eventId: ctx.event.id,
             type: "runner.updated",
             payload: {
               cardNo: r.cardNo ?? null,
               runnerId: r.seq,
-              fields: journalFields,
+              fields,
             },
           });
         }

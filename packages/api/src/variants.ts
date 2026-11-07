@@ -261,3 +261,51 @@ export async function reconcileVariants(
   for (const id of new Set(ids)) out.push(...(await reconcileClassVariants(db, id)));
   return out;
 }
+
+/** Statuses that mean the runner has raced: her variant is never re-dealt. */
+const RACED = new Set(["ok", "no_timing", "missing_punch", "dnf", "dq", "over_max_time", "out_of_competition"]);
+
+/**
+ * `class.distributeVariants`: deal the class's pool over its non-removed
+ * runners (`dealVariants`) and write the changes. A runner who has raced
+ * (a finish time, or a result status) is skipped and keeps her variant —
+ * the desk changes it by hand. Throws `CLASS_NOT_POOLED` when the class
+ * has no pool. Rows only; the caller journals `changes`.
+ */
+export async function distributeClassVariants(
+  db: Db,
+  classId: string,
+  opts: DealOptions,
+): Promise<{ changes: RunnerVariantChange[]; skipped: number; pool: PoolVariant[] }> {
+  const pool = await poolOf(db, classId);
+  if (pool.length === 0) {
+    throw new TRPCError({
+      code: "PRECONDITION_FAILED",
+      message: "CLASS_NOT_POOLED: the class's course has no variants",
+    });
+  }
+  const runners = await db.runner.findMany({
+    where: { classId, removed: false },
+    select: {
+      id: true, seq: true, cardNo: true, courseId: true, startTime: true, startNo: true, name: true,
+      finishTime: true, status: true,
+    },
+  });
+  const deal = runners.map((r) => ({
+    id: r.id,
+    courseId: r.courseId,
+    startTime: r.startTime,
+    startNo: r.startNo,
+    name: r.name,
+    locked: r.finishTime > 0 || RACED.has(r.status),
+  }));
+  const dealt = dealVariants(deal, pool, opts);
+  const seqOf = new Map(pool.map((v) => [v.id, v.seq]));
+  const changes: RunnerVariantChange[] = [];
+  for (const d of dealt) {
+    await db.runner.update({ where: { id: d.runnerId }, data: { courseId: d.courseId } });
+    const r = runners.find((x) => x.id === d.runnerId)!;
+    changes.push({ seq: r.seq, cardNo: r.cardNo, courseId: seqOf.get(d.courseId)! });
+  }
+  return { changes: changes.sort((a, b) => a.seq - b.seq), skipped: deal.filter((r) => r.locked).length, pool };
+}

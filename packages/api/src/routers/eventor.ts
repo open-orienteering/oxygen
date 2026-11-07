@@ -63,6 +63,7 @@ import {
 } from "@oxygen/shared";
 import { toAbsolute } from "../timeConvert.js";
 import { resolveCourseExpectedPositions } from "./course.js";
+import { reconcileVariants } from "../variants.js";
 import type {
   EventorEnvironment,
   RunnerStatusValue,
@@ -1196,6 +1197,10 @@ export const eventorRouter = router({
         }
       }
     }
+
+    // A new entry, or one Eventor moved to another class, in a class on a
+    // forked course is dealt a variant; one moved off it loses hers (F6b).
+    await reconcileVariants(db, ctx.event.id);
 
     await db.event.update({
       where: { id: ctx.event.id },

@@ -37,6 +37,9 @@ import {
 } from "@oxygen/shared";
 import { storeReadoutImpl } from "./cardReadout.js";
 import { buildRunnerUpdateData } from "./runner.js";
+import { appendJournal } from "../journalEmit.js";
+import { isRaceWritable } from "../sync/lease.js";
+import { assignVariant } from "../variants.js";
 import { valueToRunnerStatus } from "../statusConvert.js";
 import { foldServerHlc } from "../serverClock.js";
 import { pushToGoogleSheet } from "../sheetsBackup.js";
@@ -102,7 +105,7 @@ export async function ingestJournalEntries(
         continue;
       }
 
-      await applyEvent(db, event.id, event.zeroTime, entry);
+      const followUp = await applyEvent(db, event.id, event.zeroTime, entry);
 
       const resolved = resolveHlc({
         id: entry.id,
@@ -129,6 +132,9 @@ export async function ingestJournalEntries(
           payload: entry.payload as never,
         },
       });
+      // A decision this node made while applying (a station registration's
+      // variant, F6b) is journaled after the entry, so it sorts behind it.
+      if (followUp) await followUp();
 
       synced.push(entry.id);
     } catch (err) {
@@ -304,12 +310,40 @@ async function resolveRunner(
   return null;
 }
 
+/** Work an apply leaves for after the ingested entry is journaled. */
+type FollowUp = () => Promise<void>;
+
+/**
+ * The variant of a runner a station entry left without one (F6b): the
+ * writing node deals the least-populated variant of her class's pool and
+ * journals the pick as `runner.updated { courseId }` after the entry, so
+ * every peer converges on it; a follower during a lease deals nothing —
+ * the leaseholder's entry follows (the single-allocator rule).
+ */
+async function dealVariantFollowUp(
+  db: PrismaClient,
+  eventId: bigint,
+  runnerId: string,
+  classId: string | null,
+): Promise<FollowUp | undefined> {
+  if (!classId || !(await isRaceWritable(db, eventId))) return undefined;
+  const v = await assignVariant(db, classId, runnerId);
+  if (!v) return undefined;
+  const r = await db.runner.findUniqueOrThrow({ where: { id: runnerId }, select: { seq: true, cardNo: true } });
+  return () =>
+    appendJournal(db, {
+      eventId,
+      type: "runner.updated",
+      payload: { cardNo: r.cardNo, runnerId: r.seq, fields: { courseId: v.seq } },
+    }).then(() => undefined);
+}
+
 async function applyEvent(
   db: PrismaClient,
   eventId: bigint,
   zeroTime: number,
   event: OfflineEvent,
-) {
+): Promise<FollowUp | undefined> {
   switch (event.type) {
     case "finish.recorded": {
       const { finishTime } = event.payload as { finishTime: number };
@@ -414,6 +448,7 @@ async function applyEvent(
         clubName,
         cardNo,
         startTime,
+        courseId,
       } = event.payload as {
         tempId?: string;
         seq?: number;
@@ -423,6 +458,7 @@ async function applyEvent(
         clubName?: string;
         cardNo?: number;
         startTime?: number;
+        courseId?: number | null;
       };
       // 0 (legacy sentinel) or absent → NULL (no card).
       const card = typeof cardNo === "number" && cardNo > 0 ? cardNo : null;
@@ -455,7 +491,13 @@ async function applyEvent(
           // identical on every node. The allocate_event_seq() trigger
           // honors an explicit seq and never re-allocates it; entries
           // without one (legacy stations) let the trigger mint.
-          await db.runner.create({
+          // The originating node's variant (F6b) as given; a station
+          // entry carries none and is dealt one here.
+          const course =
+            typeof courseId === "number"
+              ? await db.course.findFirst({ where: { eventId, seq: courseId }, select: { id: true } })
+              : null;
+          const created = await db.runner.create({
             data: {
               ...(rowId ? { id: rowId } : {}),
               ...(typeof seq === "number" && seq > 0 ? { seq } : {}),
@@ -466,8 +508,13 @@ async function applyEvent(
               eventorClubId: eventorClubId ?? null,
               cardNo: card,
               startTime: startTime ? toRelative(startTime, zeroTime) : 0,
+              ...(course ? { courseId: course.id } : {}),
             },
+            select: { id: true },
           });
+          if (!("courseId" in event.payload)) {
+            return dealVariantFollowUp(db, eventId, created.id, cls.id);
+          }
         }
       }
       break;
@@ -490,8 +537,17 @@ async function applyEvent(
           zeroTime,
           fields,
         );
+        // A class change from a station (no `courseId` in the patch) clears
+        // the variant and deals one of the new class's pool (F6b);
+        // server-emitted class changes always carry the pick.
+        const before = await db.runner.findUniqueOrThrow({ where: { id: runner.id }, select: { classId: true } });
+        const classChanged = data.classId !== undefined && data.classId !== before.classId;
+        if (classChanged && !("courseId" in fields)) data.courseId = null;
         if (Object.keys(data).length > 0) {
           await db.runner.update({ where: { id: runner.id }, data });
+        }
+        if (classChanged && !("courseId" in fields)) {
+          return dealVariantFollowUp(db, eventId, runner.id, data.classId as string);
         }
       }
       break;

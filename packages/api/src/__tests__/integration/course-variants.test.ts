@@ -129,7 +129,7 @@ describe("materialisation (course-layer.md §12)", () => {
     await write(id, [ctl(S), ctl(31), group("g", [[32], [33], [35]]), ctl(34), ctl(F)]);
     const kids = await children(id);
     const list = await caller.course.variantList({ courseId: id });
-    expect(list).toEqual(kids.map((k) => ({ variantKey: k.variantKey, courseId: k.seq, lengthM: k.lengthM })));
+    expect(list).toEqual(kids.map((k) => ({ variantKey: k.variantKey, courseId: k.seq, lengthM: k.lengthM, runnerCount: 0 })));
     expect(list.map((v) => v.variantKey)).toEqual(["A", "B", "C"]);
     const summaries = await caller.course.list();
     expect(summaries.find((c) => c.id === id)).toMatchObject({ parentCourseId: null, variantKey: null });
