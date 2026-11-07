@@ -49,6 +49,7 @@ describe("golden PNGs", () => {
       "course-sprint",
       "course-all-controls",
       "course-leg-styles",
+      "course-corridor",
       "filter-clip-brown",
       "filter-hide-505",
       "filter-moved",

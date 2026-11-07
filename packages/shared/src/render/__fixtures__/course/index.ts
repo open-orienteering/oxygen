@@ -16,7 +16,7 @@ import type { DocumentColour } from "../../../map-document/header.js";
 import { courseLayer, courseRenderInput } from "../../../course/layer.js";
 import type { CourseDocumentContext, CourseLayer, CourseLayerInput, CourseSite, CourseStructure } from "../../../course/types.js";
 
-export const courseSceneNames = ["course-legs", "course-cuts", "course-objects", "course-sprint", "course-all-controls", "course-leg-styles"] as const;
+export const courseSceneNames = ["course-legs", "course-cuts", "course-objects", "course-sprint", "course-all-controls", "course-leg-styles", "course-corridor"] as const;
 export type CourseSceneName = (typeof courseSceneNames)[number];
 
 export interface CourseScene {
@@ -174,6 +174,31 @@ function legStyles(): CourseScene {
   return scene("course-leg-styles", base, { structure, sites, objects: [], appearance: {}, viewOptions: {} });
 }
 
+/**
+ * Corridors (F2, course-layer.md §10.2): S → 31 a 90 m corridor with a 3 mm band, 31 → 32 the same width bent
+ * (one joined run) with its edge, 32 → 33 a 150 m corridor (a change of width at 32), 33 → F plain. The band
+ * is a clip region: the 505, 101 and 516 are cut away in it, the course draws over it.
+ */
+function corridor(): CourseScene {
+  const base = new BaseMap("ISOM2017-2")
+    .add("401", area(0, 0, 50, 0, 50, 40, 0, 40))
+    .add("505", line(0, 14, 50, 20))
+    .add("101", line(28, 0, 30, 40))
+    .add("516", line(4, 24, 46, 36));
+  const sites = [site("S", "start", 6, 6, "S1"), site("31", "control", 22, 8), site("32", "control", 40, 24), site("33", "control", 20, 32), site("F", "finish", 6, 30, "F1")];
+  const narrow = { widthM: 90, edge: false, whiteMm: 3, whiteOpacity: 1 };
+  const structure = ordered([], {
+    items: [
+      { siteId: "S" },
+      { siteId: "31", leg: { corridor: narrow } },
+      { siteId: "32", leg: { bends: [{ x: 36, y: 10 }], corridor: { ...narrow, edge: true } } },
+      { siteId: "33", leg: { corridor: { widthM: 150, edge: false, whiteMm: 2, whiteOpacity: 0.5 } } },
+      { siteId: "F" },
+    ],
+  });
+  return scene("course-corridor", base, { structure, sites, objects: [], appearance: {}, viewOptions: {} });
+}
+
 const builders: Record<CourseSceneName, () => CourseScene> = {
   "course-legs": legs,
   "course-cuts": cuts,
@@ -181,6 +206,7 @@ const builders: Record<CourseSceneName, () => CourseScene> = {
   "course-sprint": sprint,
   "course-all-controls": allControls,
   "course-leg-styles": legStyles,
+  "course-corridor": corridor,
 };
 
 export function courseScene(name: CourseSceneName): CourseScene {

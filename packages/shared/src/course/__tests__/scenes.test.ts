@@ -16,18 +16,24 @@ import { type Pass, type PassStream } from "../../render/pass-stream.js";
 import { diffPassStreams, passStreamFromJson, passStreamToJson, type PassStreamJson } from "../../render/stream-json.js";
 import { symbolise } from "../../render/symbolise.js";
 import { liberation } from "../../render/__tests__/fonts.js";
+import { flattenRings, pointInRings } from "../../render/geometry.js";
 
 const SNAP_DIR = fileURLToPath(new URL("../../render/__fixtures__/streams/course/", import.meta.url));
 
 function run(name: CourseSceneName) {
   const scene = courseScene(name);
-  const { stream, warnings } = symbolise({ objects: scene.objects, symbols: scene.symbols, fonts: [liberation().sans, liberation().narrow] });
+  // The layer's regions (a corridor's band, §10.2) act on the base map only, as every backend passes them.
+  const { stream, warnings } = symbolise({
+    objects: scene.objects, symbols: scene.symbols, fonts: [liberation().sans, liberation().narrow],
+    regions: scene.layer.regions, regionObjectLimit: scene.courseObjectOffset,
+  });
   return { scene, stream, warnings };
 }
 
 function formatStream(j: PassStreamJson): string {
   const list = (xs: unknown[]) => (xs.length ? `[\n${xs.map((x) => JSON.stringify(x)).join(",\n")}\n]` : "[]");
-  return `{\n"objectIdx": ${JSON.stringify(j.objectIdx)},\n"symbolIdx": ${JSON.stringify(j.symbolIdx)},\n"passes": ${list(j.passes)},\n"glyphTable": ${list(j.glyphTable ?? [])},\n"fontTable": ${JSON.stringify(j.fontTable)}\n}\n`;
+  const masks = j.masks ? `,\n"masks": ${list(j.masks)},\n"maskIdx": ${JSON.stringify(j.maskIdx)}` : "";
+  return `{\n"objectIdx": ${JSON.stringify(j.objectIdx)},\n"symbolIdx": ${JSON.stringify(j.symbolIdx)},\n"passes": ${list(j.passes)},\n"glyphTable": ${list(j.glyphTable ?? [])},\n"fontTable": ${JSON.stringify(j.fontTable)}${masks}\n}\n`;
 }
 
 function matchSnapshot(name: CourseSceneName, stream: PassStream): void {
@@ -145,5 +151,33 @@ describe("course scenes", () => {
     expect(passes.filter((x) => x.ref === "leg:course:2")).toEqual([]);
     expect(scene.layer.derivation.courses[0].legs[2].pieces).toHaveLength(2);
     expect(scene.layer.derivation.sites.filter((s) => s.label).map((s) => s.label!.text)).toEqual(["1", "2"]);
+  });
+  it("course-corridor: one clip region, the map masked in the band and clear inside the corridors, the course never masked", () => {
+    const { scene, stream } = run("course-corridor");
+    expect(scene.layer.regions.map((r) => [r.mode, r.symbols])).toEqual([["clip", "all"]]);
+    const rings = flattenRings(scene.layer.regions[0].path);
+    const inBand = (x: number, y: number) => pointInRings(rings, x * 1000, y * 1000);
+    // 90 m at 1:15 000 = 6 mm: S → 31's edge 3 mm off its line, its band to 6 mm.
+    const mid = { x: 14, y: 7 }, n = { x: -2 / Math.hypot(16, 2), y: 16 / Math.hypot(16, 2) };
+    expect(inBand(mid.x + n.x * 2, mid.y + n.y * 2)).toBe(false);
+    expect(inBand(mid.x + n.x * 4.5, mid.y + n.y * 4.5)).toBe(true);
+    expect(inBand(mid.x + n.x * 6.5, mid.y + n.y * 6.5)).toBe(false);
+    // At 32 the 150 m corridor (5 mm half width) reaches past the 90 m one's band edge (3 + 3 mm): clear.
+    expect(inBand(40 - 4.5 * (20 / Math.hypot(20, 8)), 24 + 4.5 * (8 / Math.hypot(20, 8)))).toBe(false);
+    // The joined bend: inside both of the 31 → 32 pieces near (36, 10) — clear.
+    expect(inBand(35, 11)).toBe(false);
+    const masked = (k: number) => (stream.maskIdx?.[k] ?? -1) >= 0;
+    const base = stream.passes.map((_, k) => k).filter((k) => stream.objectIdx[k] < scene.courseObjectOffset);
+    // 505, 101 and 516 cross the band; the 401 fill under everything meets it too.
+    expect(base.filter(masked).length).toBe(base.length);
+    const passes = coursePasses(scene, stream);
+    expect(passes.every((x) => !masked(x.k))).toBe(true);
+    // The edge: lower purple 705, only along 31 → 32 (leg 1), over the 401 fill.
+    const edge = passes.filter((x) => x.ref.startsWith("corridor:"));
+    expect(edge.length).toBeGreaterThan(0);
+    expect(new Set(edge.map((x) => x.ref))).toEqual(new Set(["corridor:course:1"]));
+    expect(edge.every((x) => x.colour === "purple-lower")).toBe(true);
+    const fill = stream.passes.findIndex((_, k) => stream.objectIdx[k] === 0);
+    expect(Math.min(...edge.map((x) => x.k))).toBeGreaterThan(fill);
   });
 });

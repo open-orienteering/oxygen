@@ -129,6 +129,8 @@ const scenes = [
   "course-all-controls",
   // Leg styles and bends (F1): bent 705, bent 707 marked route, a none leg.
   "course-leg-styles",
+  // Corridors (F2): the band a clip region over the map, joined corridors, a lower-purple edge.
+  "course-corridor",
   // Filter regions (D3): clip by colour, hide by symbol, the moved polygon, "show only" (invert).
   ...FILTER_SCENES,
 ] as const;
