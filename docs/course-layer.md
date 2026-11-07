@@ -671,7 +671,11 @@ name in `start_name`, so a site turned into a start without a name
 mirrors as `""` and the legacy readers fall back to the default start;
 name a start when creating it (the editor's **Add start** does). `course.importCourses` resets it
 to `NULL` until D1 makes the importers write it. Peers apply it from the
-`course.upserted` payload like any column.
+`course.upserted` payload like any column. A root with variation groups
+is written through `setStructure` only — the linear shortcuts refuse
+its sequence fields (`ROOT_HAS_VARIATIONS`) — and its variants by
+`syncVariants` alone (§12); `control.delete` prunes a root in every
+alternative and re-materialises it.
 
 **Readers.** One rule, `courseSequenceOf` (`course-structure.ts`, E6),
 used by `loadCourseSequences` (`course-geometry.ts`, hence `legs` and
@@ -1256,6 +1260,181 @@ all-white corridor map); `edge` draws the boundary in purple.
   `symbolise` (`course-print.md` §5.2), the PDF as a `W*` clip round the
   map passes.
 
+## 12. Variants and materialisation
+
+Slice F row F6 (research 08 §4.3 "Materialisation", §4.8, §6, §7). A
+course whose stored structure has variation groups is a **root**; each of
+its concrete variants is a **child** `courses` row written by the server
+in the same transaction as the root's structure. A child is an ordinary
+linear course for every reader — timing (`performReadout` reads
+`runner.courseId ?? class.courseId`), results, the Eventor upload, the
+IOF / Purple Pen export, print, the kiosk — and read-only for every
+writer. Section numbering keeps §11 for F5's map-exchange sections.
+
+### 12.1 Keys and the linear variant
+
+`packages/shared/src/course/variants.ts`, pure:
+
+- `materialiseVariants(structure)` → `{ key, items }[]`: the cartesian
+  product over the groups in item order (the first group varies slowest).
+  A plain group contributes one alternative at a time; a **`loop`** group
+  (butterfly) every visiting order of its alternatives, permutations in
+  lexicographic order of the stored alternatives (`AB`, `BA`; three
+  alternatives give six). `[]` for a structure without groups.
+- **Keys.** A group's key is its alternatives' labels in visiting order,
+  the variant's key the groups' keys concatenated (`"AC"`, `"ABA"`). A key
+  depends on the groups alone, so an edit outside them keeps every key and
+  so every child row. Two variants with the same key (multi-letter labels
+  can collide) are refused (`VARIANT_KEY_DUPLICATE`), as are more than
+  `MAX_VARIANTS = 100` variants (`VARIANT_LIMIT`; `variantCount` counts
+  without building them) — both `PRECONDITION_FAILED` from
+  `course.setStructure`.
+- **Items.** Control items are copied as stored, `leg` and `numberHidden`
+  included — the leg into an alternative's first control is the leg from
+  the anchor, the item after the group keeps its own leg. A loop returns to
+  its anchor (the control before the group): between two consecutive
+  non-empty alternatives the anchor is visited again as `{ siteId }` (its
+  `numberHidden` kept, no `role` or `leg`); the visit after the last
+  alternative is the structure's own next item, which the setter places
+  (08 §4.3 "loop groups share both anchors"). An **empty alternative**
+  (§6.1, answer 5) adds nothing: the variant runs a straight leg from
+  anchor to anchor, and in a loop adds no anchor visit.
+- `variantStructure(structure, key)` → the variant as a v1 linear
+  structure (`{ version: 1, id, orderMode, items }`, no groups; null for an
+  unknown key) — the column shape every consumer reads, so the layer,
+  print, lengths and export learn nothing about groups (slice F's
+  "A variant is a linear structure"). F7's Variant view and F8's pages
+  draw it.
+- `structureSiteIds(structure)` lists every site of every alternative;
+  `pruneSiteFromStructure(structure, siteId)` removes a site from the top
+  level and from every alternative (groups kept) and dissolves a group then
+  left with no non-empty alternative, first or last (`VARIATION_UNANCHORED`)
+  or right after another group into its first alternative, so the result
+  passes §6.1 whenever the input did.
+
+### 12.2 Storage
+
+| Column | Type | Meaning |
+|---|---|---|
+| `courses.parent_course_id` | `UUID NULL → courses ON DELETE CASCADE` | the root this row is a variant of; NULL for every other course |
+| `courses.variant_key` | `TEXT NULL` | the variant's key; set exactly when `parent_course_id` is (`CHECK`) |
+| — | `UNIQUE (parent_course_id, variant_key)`, index on `parent_course_id` | one row per key; NULLs are distinct, so ordinary courses never collide |
+
+Migration `20261108120000_course_variants`, additive (AGENTS §7). On the
+wire a variant names its root by **seq** (`parentCourseId`), as every
+tRPC id. The columns travel in `course.upserted` like any other
+(`portableFields`), in the checkout snapshot and in the backup dump as
+ordinary `courses` rows.
+
+### 12.3 Materialisation (`syncVariants`)
+
+`packages/api/src/course-variants.ts`. After the root's
+`persistStructure`, inside the write's transaction, `syncVariants(tx,
+eventId, rootId, { labelOffsets? })` brings the children in line with the
+root's stored structure:
+
+- one child per key: **created** for a new key, **rewritten** for an
+  existing one, **revived** (`removed = false`, same uuid — the unique
+  pair forbids a second row, and a stable uuid keeps runner pointers and
+  journal identity) for a key that returns;
+- each child: `name` = `"<root name> <key>"`, `climb_m`,
+  `number_of_maps`, `shorten`, `description_instructions` copied from the
+  root, `order_mode` the root's; `structure` = the variant (`id` = the
+  child's uuid) written through `persistStructure`, so `course_controls`,
+  `start_name`, `finish_control_id` and the flags are its mirror (§6.2);
+  label offsets from the write's wire form when it carries them, else a
+  live child keeps its own and a new one takes the root's;
+  `legs` / `length_m` / `length_source` by `rebuildCourseLengths`;
+- a child whose key is gone is **soft-deleted** (`removed = true`), and
+  every runner whose `course_id` named it gets `course_id = NULL` (F6b
+  re-assigns: "every runner in a pooled class has a variant");
+- a root that is removed, or whose structure has no groups any more, ends
+  with no live child;
+- the root keeps `course_controls` = the first alternatives
+  (`structureControlItems`, 08 §4.3's root path), so a reader that does
+  not know variants still sees a course.
+
+### 12.4 Journal and pools
+
+`emitVariantSync` journals what `syncVariants` touched, **after** the
+root's own `course.upserted` (a peer applying a child needs the parent
+row; 08 §4.3 "journaled through the existing `course.upserted` entries,
+one per affected row"):
+
+- one `course.upserted` per child written or soft-deleted (key order;
+  `removed: true` for the latter);
+- one `class.upserted` per class whose pool changed (its `coursePools`
+  carry the pool);
+- one `runner.updated { cardNo, runnerId, fields: { courseId: null } }`
+  per runner whose variant vanished. `buildRunnerUpdateData` translates
+  `courseId` (a course seq, or null) so the entry replays through
+  `events.push`.
+
+**Pools** (08 §4.3 "the editor's job ends at producing the pool"): every
+class whose `course_id` is a root has exactly one `ClassCoursePool(classId,
+stage 0, child)` per live child; a soft-deleted child leaves every pool.
+Written by `syncVariants` for the classes on the root, and by
+`syncClassPool` when a class's course changes (`class.create`,
+`class.update { courseId }`, `class.bulkUpdate { courseId }`) — a class
+picking a root after its variants exist pools them too, and a class
+moving to a plain course loses them. Only pool rows of variants are
+touched; `stage` > 0 (relay legs) stays timing's (08 §12).
+
+### 12.5 API
+
+- `course.setStructure` accepts groups (§6.1) and materialises in the
+  same transaction; refused on a variant.
+- `course.variantList { courseId }` → `[{ variantKey, courseId (seq),
+  lengthM }]`, the live children in key order; `[]` for a course without
+  groups and for a variant. Kiosk keys may read it (as `course.list`).
+- `course.list` / `course.detail` carry `parentCourseId` (the root's seq
+  or null) and `variantKey`. A root's `detail.structure.labelOffsets`
+  includes the offsets its variants hold for controls outside the first
+  alternatives, so the wire form round-trips them.
+- **Writes that are refused** (`PRECONDITION_FAILED`, the code first in
+  `message`):
+  - `COURSE_IS_VARIANT` — any write on a child: `setStructure`, `update`,
+    `bulkUpdate` (the whole call), `delete`, `setControlLabelOffset`. A
+    variant changes through its root.
+  - `ROOT_HAS_VARIATIONS` — `course.update` on a root with `controlIds`,
+    `startControlId`, `finishControlId`, `orderMode`, `firstAsStart` or
+    `lastAsFinish`, and `course.bulkUpdate` with `orderMode`,
+    `firstAsStart` or `lastAsFinish` when `ids` holds a root (the whole
+    call): each rewrites the structure from the columns (§6.2), which
+    would flatten the groups.
+- **Writes that reach the variants**: `course.update` of a root's
+  `name` / `climb` / `numberOfMaps` / `descriptionInstructions`
+  and `bulkUpdate` of `climb` / `numberOfMaps` re-run `syncVariants`
+  (renamed `"<new name> <key>"`); `setControlLabelOffset` on a root
+  writes the root's and its variants' rows of that control (one
+  `course.upserted` each), so a control only in alternative B can be
+  given an offset; `course.delete` of a root soft-deletes its variants
+  (journaled, runners nulled); `course.clone` of a root clones a root and
+  materialises its variants (`"<clone name> <key>"`, every label offset
+  of the source), a variant's clone is a plain linear course.
+- `control.delete`: a root naming the control in any alternative
+  (`coursesNamingInStructure` walks every alternative) loses it through
+  `pruneSiteFromStructure`, is re-mirrored and re-materialised; its
+  variants are written by that alone, one entry per row. A plain course
+  is rewritten from its columns as before (§6.2).
+- `course.importCourses`: a variant is never matched by name; a root
+  replaced by an imported course becomes linear and its variants are
+  soft-deleted — they travel in the `reference.imported` entry (roots
+  before variants), its classes' pools with it, the nulled runners as
+  `runner.updated` after it.
+
+### 12.6 Courses page
+
+The table's rows are the roots (filter, sort, selection and the
+"N courses" count act on them). A root with variants shows a purple
+"2 variants" badge (`course-variant-count-<seq>`), and its variants
+follow its row, indented and read-only (`course-variant-row-<seq>`: the
+key, the variant's name, controls, length, maps; no checkbox, template,
+export, edit or delete). The root's expanded detail keeps name, length
+and maps editable; its controls and order mode are disabled with a
+one-line hint (`course-variations-hint`), since `course.update` refuses
+them.
+
 ## Tests
 
 | Layer | Where | What |
@@ -1286,7 +1465,11 @@ all-white corridor map); `edge` draws the boundary in purple.
 | unit | `packages/api/src/__tests__/course-sequence.test.ts` | §6.2 "Readers" (E6): `courseSequenceOf` — columns (defaults, `start_name`, a live `finish_control_id`, unmatched fall back, the flags), a stored structure (explicit ends, no ends → defaults, roles), a deleted explicit start, an invalid column read as the columns, no starts / finishes |
 | integration | `packages/api/src/__tests__/integration/overprint-cuts.test.ts` | what the layer draws for a stored course with the pinned document's cut features (`drawnCuts`, E5): rim slit over the boulder across north, no gap through the building, leg gap over the boulder, cuts follow a move, a course created before the map is cut once the upload pins, the toggle off draws none and writes nothing else (course row and journal untouched); two events pinning the same map read the same features and cut alike within 1e-6, no cuts without a pin; the toggle off reaches the vector print (composed sheet = the page without cut features, a stored circle gap still drawn) and `getOverprintCuts` reads with a kiosk key (§3.4) |
 | integration | `control-editor.test.ts`, `journal-completeness.test.ts`, `course-export.test.ts`, `eventor-reentry.test.ts` | the drawn course (`helpers/course-drawn.ts`) and lengths on create / move / delete / copy, `length_source = 'derived'`; `course.upserted` payloads carry no `length_source`; the export's length and the Eventor sync key on `length_source` (E6; the E6 migration's backfill test went with `geometry_source` in E5) |
-| unit | `packages/shared/src/course/__tests__/structure.test.ts` | §6.1: C0's linear shape accepted, the 08 leg props, groups and loops; nesting, overlap, unanchored, duplicate ids / labels, < 2 or empty alternatives, out-of-range gaps refused; interim `path` / `pieces` / `circleGaps` and `extras` refused; the wire form; site rules; `linearStructure`, `structureControlIds`; `structureDiff` (equal, moved, added, removed, leg / offset changes) |
+| unit | `packages/shared/src/course/__tests__/structure.test.ts` | §6.1: C0's linear shape accepted, the 08 leg props, groups and loops, an empty alternative beside a non-empty one (answer 5); nesting, overlap, unanchored, duplicate ids / labels, < 2 alternatives or all empty (`VARIATION_ALL_EMPTY`), out-of-range gaps refused; interim `path` / `pieces` / `circleGaps` and `extras` refused; the wire form; site rules; `linearStructure`, `structureControlIds`; `structureDiff` (equal, moved, added, removed, leg / offset changes) |
+| unit | `packages/shared/src/course/__tests__/variants.test.ts` | §12.1: no groups → no variants; the product in item order and its keys; legs and flags copied; loop permutations with the anchor between them, three alternatives → six; an empty alternative a straight leg (and no anchor visit in a loop); the anchor visit's fields; keys stable across an edit outside the groups; multi-letter labels and colliding keys; `variantCount` without building; `variantStructure` = the product's row, parsed by the column schema; `structureSiteIds`; `pruneSiteFromStructure` (every alternative, an emptied alternative kept, all emptied / unanchored / adjacent dissolved, the label offset) |
+| integration | `packages/api/src/__tests__/integration/course-variants.test.ts` | §12.2–12.5: one child per variant (name, key, parent, copied fields, linear structure with its own id, mirror, lengths as the root's path), journal root first then children; `variantList`, `list` / `detail` by seq; a loop's permutations; an empty alternative, all empty refused; colliding keys and the cap refused, nothing written; re-materialisation (same rows across an outside edit, a new key, every key gone → soft-deleted and the runner nulled with its `runner.updated`, keys back → the same uuids); `runner.updated { courseId }` replayed through `events.push`; label offsets of every alternative round-trip; pools (a class on the root, a class picking it later, a key added / dropped, a plain course clears); the refusals (`ROOT_HAS_VARIATIONS`, `COURSE_IS_VARIANT`, nothing written); name / climb / maps mirrored; an offset set through the root; clone of a root and of a variant; delete of a root; `control.delete` of a control in alternative B only (one entry per row) and of a group's anchor (dissolved); an import over a root; the migration's unique pair and `CHECK`; a checkout snapshot exported and imported with its children and pools |
+| integration | `journal-completeness.test.ts` "course.setStructure with a group" | §12.4: the variants' `course.upserted` (parent, key, name), the class's `coursePools`, the vanished variant's `runner.updated { courseId: null }` |
+| E2E | `e2e/courses.spec.ts` "a course with variations lists its variants under it" | §12.6: a root written by `course.setStructure` over HTTP shows "2 variants", its two variant rows right under it with no controls of their own, the roots-only count, and a read-only sequence in its detail |
 | unit | `packages/api/src/__tests__/course-structure.test.ts` | §6.2: `splitStructure` (explicit start / finish, implicit default, role start / finish, a start mid-sequence), `structureFromColumns` and its round trip, wire ↔ stored mapping |
 | unit | `packages/api/src/__tests__/version-conflict.test.ts` | §7: the `errorFormatter` lifts the payload beside tRPC's fields and leaves the duplicate-code `CONFLICT` alone; `controlFieldsDiff`; `baseVersionSchema` |
 | integration | `packages/api/src/__tests__/integration/course-structure.test.ts` | kind ↔ status sync, slice-F kinds refused, circle gaps; `course.update` writes a structure, token = the entry's HLC, structure and token in the payload; a pre-D0 course reads from its columns; `setStructure` mirror (start / finish, sequence, hidden numbers, label offsets not in the column), geometry byte-identical to `update`'s, variations and unknown controls refused; stale course token → `CONFLICT` with current and differing, nothing written, no token = LWW; stale control token → differing fields; `differing: null` at token 0; separate tokens both ways; `control.delete` prunes and advances; seeded groups hold `courses.review`; a controller checks off and writes notes but cannot move |
@@ -1333,6 +1516,8 @@ all-white corridor map); `edge` draws the boundary in purple.
 
 | `packages/shared/src/course/structure.ts` | §6.1: `courseStructureSchema`, `courseStructureWireSchema`, `structureSiteIssues`, `linearStructure`, `structureControlIds`, `structureDiff` |
 | `packages/api/src/course-structure.ts` | §6.2: `splitStructure`, `structureFromColumns`, `courseSequenceOf` (the readers' rule, E6), `carryLegs`, `persistStructure`, `rewriteStructureFromColumns`, wire mapping, `assertCourseVersion` |
+| `packages/shared/src/course/variants.ts` | §12.1: `materialiseVariants`, `variantStructure`, `variantCount`, `variantKeyDuplicates`, `structureSiteIds`, `pruneSiteFromStructure`, `MAX_VARIANTS` |
+| `packages/api/src/course-variants.ts` | §12.3–12.4: `syncVariants`, `emitVariantSync`, `syncClassPool`, `assertMaterialisable`, `assertNotVariant`, `rootStructureOf`; called by `routers/course.ts`, `routers/control.ts` (`delete`), `routers/classRouter.ts` |
 | `packages/api/src/version-conflict.ts`, `referenceJournal.ts`, `trpc.ts` (`withVersionConflict`) | §7: lock and compare, the base from the journal, the emits that stamp the token, the error shape |
 | `packages/web/src/lib/version-book.ts` | §7 the client's row tokens |
 | `packages/web/src/lib/course-layer-request.ts` | the viewer's request (§5), `courseObjectsForView` (§8.2) |
@@ -1352,8 +1537,20 @@ all-white corridor map); `edge` draws the boundary in purple.
   site's `circle_gaps` and `LegProps.gaps` since D1, `style` and `bends`
   since F1 (§10.1), `corridor` since F2 (§10.2); `crossing` (F4) is
   slice F's; Purple Pen's `<gaps>` / `<leg>` bends and OCAD / Purple Pen
-  corridors are not parsed by the importers; variations and their
-  materialisation, map exchanges, crossing and map-issue points (slice F).
+  corridors are not parsed by the importers; map exchanges, crossing and
+  map-issue points (slice F). Variations are materialised since F6 (§12).
+- **Variations, beyond F6** (§12): nothing authors a group yet — the
+  editor's *Create variation here*, the Variant / All-variations views and
+  `VARIATION_UNBALANCED` are F7's. Until then the variants are ordinary
+  courses in every course list (the editor's included): opening one in
+  the editor shows it, and a save is refused (`COURSE_IS_VARIANT`); F7
+  filters them out of its picker. Per-variant pages and a variant's own
+  sheet (`maps.pdf?courses=<variant>` still auto-creates one) are F8's;
+  the IOF family export F9's; runners' variants and the pool's dealing
+  F6b's; the readout's other-variant match F6c's. A loop does not check
+  that the item after it is its anchor (the setter's; a check in F7 if
+  wanted). `importCourses { replaceAll }` leaves the pools of variants of
+  roots the file no longer names (their classes lose the course anyway).
 - **A translucent corridor band** (§10.2): `whiteOpacity` is stored and
   drawn opaque until the stream carries alpha (`map-rendering.md` §8).
 - **Corridors in the editor** (F3): nothing authors `corridor` yet (the

@@ -319,6 +319,20 @@ still be punched, but order does not matter. See
 [free-order-courses.md](free-order-courses.md) for the full model,
 rendering rules, and IOF `randomOrder` interop.
 
+## Forked courses
+
+A course with variation groups (a root) has one child course per variant
+(`course-layer.md` §12): an ordinary course with its own
+`course_controls`, length and legs, so punch matching, results and the
+Eventor upload read a variant exactly as any course — through
+`runner.courseId ?? class.courseId`. The class keeps the root as its
+course; its stage-0 `class_course_pools` rows are the root's variants. A
+runner's own variant (`runner.courseId`) is assigned before the race
+(F6b); a variant that a structure edit removes clears `runner.courseId`
+on its runners (journaled `runner.updated { courseId: null }`). Until
+F6b, nothing writes a variant to a runner, so a runner in a pooled class
+is matched against the root's first-alternatives path.
+
 ## Course length
 
 `courses.length_m` is the course's length in metres; `courses.legs` the

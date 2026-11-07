@@ -333,11 +333,16 @@ loses only the map-anchored ones.
 For several maps on one course, a control is valid when at least one map
 contains it.
 
-## Future forking contract
+## Forking contract
 
-Forks will be authored on a root course, while concrete variants are
-materialised as child course rows for MeOS/Eventor-compatible timing.
-`course_maps.course_id` always references the root. Each map layout is shared
-by all variants, while PDF export emits one page per variant with its own
-course overlay and description block. `{variant}` is already reserved as a
-text placeholder.
+Forks are authored on a root course, and the concrete variants are
+materialised as child course rows (`courses.parent_course_id` /
+`variant_key`, `course-layer.md` §12, since F6) for MeOS/Eventor-compatible
+timing. `course_maps.course_id` always references the root. Each map layout
+is shared by all variants, while PDF export emits one page per variant with
+its own course overlay and description block (F8). `{variant}` is reserved
+as a text placeholder.
+
+Pending (F8): a `maps.pdf?courses=<variant seq>` request still resolves the
+variant as an ordinary course and auto-creates a sheet of its own; F8 sends
+a variant to its root's sheet.
