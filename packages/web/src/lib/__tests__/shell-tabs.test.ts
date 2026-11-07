@@ -58,14 +58,19 @@ describe("computeTabLayout", () => {
     assertPartition(null);
   });
 
+  it("has no Maps or Map templates tab (E-pages: folded into Courses and Layout mode)", () => {
+    for (const layout of [computeTabLayout(empty), computeTabLayout(null), computeTabLayout({ ...empty, hasRunners: true })]) {
+      expect([...ids(layout.primary), ...ids(layout.overflow)]).not.toEqual(expect.arrayContaining(["maps"]));
+      expect([...ids(layout.primary), ...ids(layout.overflow)]).not.toEqual(expect.arrayContaining(["map-templates"]));
+    }
+  });
+
   it("uses a planning bar for an empty event", () => {
     const { primary, overflow } = computeTabLayout(empty);
     expect(ids(primary)).toEqual([
       "dashboard",
       "classes",
       "courses",
-      "maps",
-      "map-templates",
       "controls",
       "course-editor",
     ]);
@@ -85,12 +90,10 @@ describe("computeTabLayout", () => {
       "startlist",
       "classes",
       "courses",
-      "maps",
       "controls",
       "cards",
     ]);
     expect(ids(overflow)).toContain("course-editor");
-    expect(ids(overflow)).toContain("map-templates");
     expect(ids(overflow)).toContain("results");
     expect(ids(overflow)).toContain("tracks");
   });
@@ -116,13 +119,11 @@ describe("computeTabLayout", () => {
       "results",
       "classes",
       "courses",
-      "maps",
       "controls",
       "cards",
       "tracks",
     ]);
     expect(ids(overflow)).toEqual([
-      "map-templates",
       "event",
       "course-editor",
       "registration-trends",

@@ -1465,13 +1465,19 @@ test.describe("Course editor layout (docs/course-layout.md)", () => {
     };
   }
 
-  test("a sheet from the Maps page: page text drawn as printed, align map saves the window centre, undo, one A4 page", async ({ page }) => {
+  test("a sheet from the Courses page: page text drawn as printed, align map saves the window centre, undo, one A4 page", async ({ page }) => {
     await openEditor(page);
     const nameId = nameIdOf(page);
     const { template, sheet, drop } = await sheetFixture("Layout");
     try {
-      await page.goto(`/${nameId}/maps`);
-      await page.getByTestId(`edit-course-map-${sheet.seq}`).click();
+      // The Courses page's Edit layout opens the course's first sheet in Layout mode (E-pages); the /maps link redirects there.
+      const courseId = (await trpcCall<{ courseId: number | null; seq: number }[]>("courseMap.list", undefined, false)).find((m) => m.seq === sheet.seq)!.courseId!;
+      await page.goto(`/${nameId}/maps?course=${courseId}`);
+      await expect(page).toHaveURL(new RegExp(`/courses\\?course=${courseId}$`));
+      const edit = page.locator("tbody tr").filter({ has: page.getByTestId(`course-template-${courseId}`) }).locator("[data-testid^='edit-course-map-']");
+      await expect(edit).toHaveAttribute("href", new RegExp(`course-editor\\?mode=layout&sheet=\\d+&course=${courseId}$`));
+      // The course may hold earlier sheets; this one opens by its own link.
+      await page.goto(`/${nameId}/course-editor?mode=layout&sheet=${sheet.seq}&course=${courseId}`);
       await expect(page).toHaveURL(new RegExp(`course-editor\\?mode=layout&sheet=${sheet.seq}`));
       await editorReady(page);
       await expect(page.getByTestId("editor-mode-layout")).toHaveAttribute("aria-pressed", "true");
@@ -1546,9 +1552,8 @@ test.describe("Course editor layout (docs/course-layout.md)", () => {
       const templates = await trpcCall<{ seq: number; orientation: string }[]>("mapTemplate.list", undefined, false);
       expect(templates.find((t) => t.seq === template.seq)?.orientation).toBe("landscape");
 
-      // The Map templates page's Edit template layout opens the same template scope.
-      await page.goto(`/${nameId}/map-templates`);
-      await page.getByTestId(`edit-template-layout-${template.seq}`).click();
+      // An old Map templates link opens the same template scope (E-pages: the page redirects to Layout mode).
+      await page.goto(`/${nameId}/map-templates?template=${template.seq}`);
       await expect(page).toHaveURL(new RegExp(`course-editor\\?mode=layout&template=${template.seq}`));
       await expect(page.getByTestId("editor-layout-scope")).toHaveAttribute("data-scope", "template", { timeout: 30_000 });
       await expect(page.getByTestId("editor-layout-scope")).toHaveAttribute("data-template", String(template.seq));

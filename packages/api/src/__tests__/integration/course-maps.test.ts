@@ -186,39 +186,24 @@ describe("map templates and course maps", () => {
       templateId: duplicate.seq,
     });
     expect(maps[0].validation.valid).toBe(true);
-    expect(maps[0].controls.map((control) => control.type)).toEqual([
-      "start",
-      "control",
-      "control",
-      "finish",
-    ]);
-    expect(maps[0].controls.map((control) => control.id)).toEqual([startControlId, expect.any(String), expect.any(String), finishControlId]);
-    // Straight legs centre to centre; authored gaps live in the structure (the page's course layer).
-    expect(maps[0].legs.map((leg) => leg.points)).toEqual([
-      [{ x: -30, y: 0 }, { x: -20, y: 0 }],
-      [{ x: -20, y: 0 }, { x: 20, y: 0 }],
-      [{ x: 20, y: 0 }, { x: 30, y: 0 }],
-    ]);
+    // The list answers the sheet rows and their validation, not the overlay
+    // (E-pages: Layout mode reads it through resolveSheet).
+    expect(maps[0]).not.toHaveProperty("controls");
+    expect(maps[0]).not.toHaveProperty("legs");
+    expect(maps[0]).not.toHaveProperty("labelMode");
+    expect(maps[0]).not.toHaveProperty("descriptionRows");
+    expect(maps[0]).not.toHaveProperty("descriptionHeader");
+    expect(maps[0].resolved?.window.width).toBeGreaterThan(0);
+    const sheet = await caller.courseMap.resolveSheet({ seq: maps[0].seq });
+    expect(sheet.controls.map((control) => control.id)).toEqual([startControlId, expect.any(String), expect.any(String), finishControlId]);
     // Print sheet = the course editor's sheet: header + start + controls +
     // finish (with the measured last-control → finish distance).
-    expect(maps[0].descriptionHeader).toMatchObject({ courseName: "Blue" });
-    expect(maps[0].descriptionRows.map((row) => row.kind)).toEqual([
-      "start",
-      "control",
-      "control",
-      "finish",
-    ]);
-    expect(maps[0].descriptionRows[1]).toMatchObject({
-      sequence: 1,
-      code: "31",
-      description: { d: "2.004" },
-    });
-    expect(maps[0].descriptionRows[2]).toMatchObject({
-      sequence: 2,
-      code: "32",
-      description: null,
-    });
-    expect(maps[0].descriptionRows[3]).toMatchObject({ kind: "finish", symbolKey: "14.3" });
+    expect(sheet.block.header).toMatchObject({ courseName: "Blue" });
+    const rows = sheet.block.rows;
+    expect(rows.map((row) => row.kind)).toEqual(["start", "control", "control", "finish"]);
+    expect(rows[1]).toMatchObject({ sequence: 1, code: "31", description: { d: "2.004" } });
+    expect(rows[2]).toMatchObject({ sequence: 2, code: "32", description: null });
+    expect(rows[3]).toMatchObject({ kind: "finish", symbolKey: "14.3" });
   });
 
   it("supports several maps per course and a single all-controls map", async () => {
@@ -249,18 +234,6 @@ describe("map templates and course maps", () => {
           color: "#000000",
         },
       ],
-      templateObjects: [
-        {
-          id: "event-label",
-          kind: "text",
-          anchor: "page",
-          x: 10,
-          y: 10,
-          text: "{event}",
-          fontSizeMm: 3,
-          color: "#000000",
-        },
-      ],
     });
     const saved = await ctx.db.courseMap.findUniqueOrThrow({
       where: { id: second.id },
@@ -269,7 +242,8 @@ describe("map templates and course maps", () => {
     expect(saved.windowCenter).toEqual({ x: 12, y: 34 });
     expect(saved.overrides).toMatchObject({ printScale: 8000 });
     expect(saved.objects).toHaveLength(1);
-    expect(saved.template?.objects).toHaveLength(1);
+    // saveLayout writes the sheet only; the template keeps its own objects.
+    expect((saved.template?.objects as Array<{ id: string }>).map((o) => o.id)).toEqual(["title"]);
 
     const allControlsMap = await caller.courseMap.create({
       name: "All controls",
@@ -283,15 +257,12 @@ describe("map templates and course maps", () => {
     const resolvedAllControls = listed.find(
       (map) => map.seq === allControlsMap.seq,
     );
-    expect(resolvedAllControls?.controls).toEqual(
-      expect.arrayContaining([
-        expect.objectContaining({ id: startControlId, type: "start" }),
-        expect.objectContaining({ id: finishControlId, type: "finish" }),
-      ]),
+    expect(resolvedAllControls?.validation.valid).toBe(true);
+    const allSheet = await caller.courseMap.resolveSheet({ seq: allControlsMap.seq });
+    expect(allSheet.controls.map((control) => control.id)).toEqual(
+      expect.arrayContaining([startControlId, finishControlId]),
     );
-    expect(
-      resolvedAllControls?.descriptionRows.map((row) => row.code),
-    ).toEqual(["31", "32"]);
+    expect(allSheet.block.rows.map((row) => row.code)).toEqual(["31", "32"]);
     await expect(
       caller.courseMap.create({
         kind: "all_controls",
@@ -303,81 +274,19 @@ describe("map templates and course maps", () => {
     ).rejects.toMatchObject({ code: "CONFLICT" });
   });
 
-  it("previews a template layout without a course", async () => {
+  it("update: CONFLICT on a stale baseVersion, last writer wins without one (course-layout.md §2)", async () => {
     const template = (await caller.mapTemplate.list())[0];
-    const preview = await caller.mapTemplate.previewLayout({
-      id: template.seq,
+    const sheet = await caller.courseMap.create({ name: "Rename me", courseId: courseSeq, templateId: template.seq, kind: "course", overrides: {}, objects: [] });
+    const renamed = await caller.courseMap.update({ id: sheet.seq, name: "Renamed", baseVersion: sheet.version });
+    expect(renamed.name).toBe("Renamed");
+    expect(renamed.version).not.toBe(sheet.version);
+    await expect(caller.courseMap.update({ id: sheet.seq, name: "Stale", baseVersion: sheet.version })).rejects.toMatchObject({
+      code: "CONFLICT",
+      cause: expect.objectContaining({ data: expect.objectContaining({ kind: "sheet", id: sheet.seq, version: renamed.version, differing: null }) }),
     });
-    expect(preview.controls).toEqual([]);
-    expect(preview.legs).toEqual([]);
-    expect(preview.document).toMatchObject({
-      paper: template.paper,
-      orientation: template.orientation,
-      printScale: template.printScale,
-      mapFrame: settings.mapFrame,
-      appearance: settings.appearance,
-      description: settings.description,
-    });
-    // Base map and print scale are both 1:7500, so the window matches the
-    // frame in millimetres and is centred on the map origin.
-    expect(preview.window.width).toBeCloseTo(settings.mapFrame.width);
-    expect(preview.window.height).toBeCloseTo(settings.mapFrame.height);
-    expect(preview.window.minX + preview.window.width / 2).toBeCloseTo(0);
-    expect(preview.window.minY + preview.window.height / 2).toBeCloseTo(0);
-    expect(preview.textValues).toMatchObject({
-      course: "",
-      classes: "",
-      length: "",
-      climb: "",
-      controls: "0",
-      map: template.name,
-      scale: `1:${template.printScale}`,
-      date: "2026-01-01",
-    });
-  });
-
-  it("previews a template layout with a course overlay", async () => {
-    const template = (await caller.mapTemplate.list())[0];
-    const preview = await caller.mapTemplate.previewLayout({
-      id: template.seq,
-      courseId: courseSeq,
-    });
-    expect(preview.controls.map((control) => control.type)).toEqual([
-      "start",
-      "control",
-      "control",
-      "finish",
-    ]);
-    expect(preview.controls.map((control) => control.code)).toEqual([
-      "S",
-      "31",
-      "32",
-      "F",
-    ]);
-    expect(preview.legs).toHaveLength(3);
-    // Course spans x -30..30, y 0 — the window centres on that bounding box.
-    expect(preview.window.minX + preview.window.width / 2).toBeCloseTo(0);
-    expect(preview.window.minY + preview.window.height / 2).toBeCloseTo(0);
-    expect(preview.textValues).toMatchObject({
-      course: "Blue",
-      length: "2300 m",
-      climb: "45 m",
-      controls: "2",
-    });
-    expect(preview.textValues.event).toContain("Test Event");
-  });
-
-  it("rejects previews for unknown templates and courses", async () => {
-    const template = (await caller.mapTemplate.list())[0];
-    await expect(
-      caller.mapTemplate.previewLayout({ id: 900_001 }),
-    ).rejects.toMatchObject({ code: "NOT_FOUND" });
-    await expect(
-      caller.mapTemplate.previewLayout({
-        id: template.seq,
-        courseId: 900_001,
-      }),
-    ).rejects.toMatchObject({ code: "NOT_FOUND" });
+    expect((await ctx.db.courseMap.findUniqueOrThrow({ where: { id: sheet.id } })).name).toBe("Renamed");
+    await expect(caller.courseMap.update({ id: sheet.seq, name: "LWW" })).resolves.toMatchObject({ name: "LWW" });
+    await caller.courseMap.delete({ id: sheet.seq });
   });
 
   it("resolveSheet: a sheet as Layout mode reads it — page, window, text values, block, template / sheet split (course-layout.md §1)", async () => {
@@ -391,7 +300,6 @@ describe("map templates and course maps", () => {
       printScale: 10000,
       description: { visible: true, x: 140, y: 12, cellSizeMm: 6 },
       objects: [label],
-      templateObjects: stored.objects as never,
     });
     const r = await caller.courseMap.resolveSheet({ seq: sheet.seq });
     expect(r.scope).toBe("sheet");
@@ -419,7 +327,7 @@ describe("map templates and course maps", () => {
     // The course's other sheets count for "outside every sheet".
     expect(r.windows.length).toBeGreaterThan(1);
     expect(r.windows[0]).toEqual(r.window);
-    // Without templateObjects the template is not written (Layout mode's sheet scope).
+    // saveLayout never writes the template (Layout mode's sheet scope).
     await caller.courseMap.saveLayout({ id: sheet.seq, windowCenter: { x: 6, y: -7 }, printScale: 10000, description: { visible: true, x: 140, y: 12, cellSizeMm: 6 }, objects: [] });
     const kept = await ctx.db.mapTemplate.findFirstOrThrow({ where: { eventId: ctx.eventId, seq: template.seq } });
     expect(kept.objects).toEqual(stored.objects);
@@ -441,6 +349,12 @@ describe("map templates and course maps", () => {
     const bare = await caller.courseMap.resolveSheet({ templateSeq: template.seq });
     expect(bare.courseSeq).toBeNull();
     expect(bare.controls).toEqual([]);
+    // Base map and print scale are both 1:7500: the window matches the frame
+    // in millimetres, centred on the map origin (was previewLayout's case).
+    expect(bare.window.width).toBeCloseTo(settings.mapFrame.width);
+    expect(bare.window.height).toBeCloseTo(settings.mapFrame.height);
+    expect(bare.window.minX + bare.window.width / 2).toBeCloseTo(0);
+    expect(bare.page.textValues).toMatchObject({ course: "", controls: "0", scale: `1:${template.printScale}`, date: "2026-01-01" });
     await expect(caller.courseMap.resolveSheet({ seq: 900_001 })).rejects.toMatchObject({ code: "NOT_FOUND" });
     await expect(caller.courseMap.resolveSheet({ templateSeq: 900_001 })).rejects.toMatchObject({ code: "NOT_FOUND" });
     await expect(caller.courseMap.resolveSheet({ templateSeq: template.seq, courseSeq: 900_001 })).rejects.toMatchObject({ code: "NOT_FOUND" });
@@ -466,7 +380,7 @@ describe("map templates and course maps", () => {
       const r = await caller.courseMap.resolveSheet({ templateSeq: template.seq, courseSeq });
       expect(r.block!.rows).toMatchObject(expected);
       const printed = (await caller.courseMap.list()).find((m) => m.courseId === courseSeq)!;
-      expect(printed.descriptionRows).toMatchObject(expected);
+      expect((await caller.courseMap.resolveSheet({ seq: printed.seq })).block.rows).toMatchObject(expected);
     } finally {
       await caller.course.update({ id: courseSeq, descriptionInstructions: null });
     }
@@ -870,7 +784,6 @@ describe("graphics library", () => {
           height: 30,
         },
       ],
-      templateObjects: [],
     });
     const response = await server.inject({
       method: "GET",

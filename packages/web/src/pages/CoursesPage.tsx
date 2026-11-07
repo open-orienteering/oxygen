@@ -12,7 +12,12 @@ import { CourseImportDialog } from "../components/CourseImportDialog";
 import { MapSlot } from "../components/MapSlot";
 import { StructuredSearchBar } from "../components/structured-search/StructuredSearchBar";
 import { useStructuredSearch } from "../hooks/useStructuredSearch";
-import { createCourseAnchors } from "../lib/structured-search/anchors/course-anchors";
+import { createCourseAnchors, type CourseOverviewFields } from "../lib/structured-search/anchors/course-anchors";
+import { useCapabilities } from "../context/CapabilitiesContext";
+import { layoutEditorHref } from "../lib/editor/layout-href";
+import { parsePick } from "../lib/template-picker";
+import { PrintStatusPill, TemplateBadge, TemplatePicker } from "../components/CourseMapsOverview";
+import { useCourseMapsOverview } from "../hooks/useCourseMapsOverview";
 import { downloadSameOriginFile } from "../lib/download-api";
 import {
   courselessClassNames,
@@ -20,7 +25,7 @@ import {
 } from "../lib/course-editor";
 import { versionConflictOfError } from "../lib/version-book";
 
-function CourseExportMenu({ nameId }: { nameId: string }) {
+function CourseExportMenu({ nameId, onAllMaps, onAllControls }: { nameId: string; onAllMaps: () => void; onAllControls: () => void }) {
   const { t } = useTranslation("courses");
   const [open, setOpen] = useState(false);
   const containerRef = useRef<HTMLDivElement>(null);
@@ -71,6 +76,25 @@ function CourseExportMenu({ nameId }: { nameId: string }) {
           role="menu"
           className="absolute right-0 z-20 mt-1 min-w-[14rem] rounded-lg border border-slate-200 bg-white py-1 shadow-lg"
         >
+          {/* The map PDFs (E-pages: the Maps page's export). */}
+          <button
+            type="button"
+            role="menuitem"
+            data-testid="course-export-all-maps"
+            onClick={() => { setOpen(false); onAllMaps(); }}
+            className="w-full px-3 py-2 text-left text-sm text-slate-700 hover:bg-blue-50 cursor-pointer"
+          >
+            {t("exportAllMaps")}
+          </button>
+          <button
+            type="button"
+            role="menuitem"
+            data-testid="course-export-all-controls"
+            onClick={() => { setOpen(false); onAllControls(); }}
+            className="w-full px-3 py-2 text-left text-sm text-slate-700 hover:bg-blue-50 cursor-pointer border-b border-slate-100"
+          >
+            {t("exportAllControlsMap")}
+          </button>
           <button
             type="button"
             role="menuitem"
@@ -103,14 +127,23 @@ export function CoursesPage() {
   const [showImportDialog, setShowImportDialog] = useState(false);
 
   const utils = trpc.useUtils();
+  const canEdit = useCapabilities().has("courses.edit");
+  // The print overview (E-pages): template, status, Edit layout, the course's PDF.
+  const overview = useCourseMapsOverview(nameId ?? "", canEdit);
+  const templateNames = useMemo(() => overview.templates.map((x) => x.name), [overview.templates]);
 
-  const anchors = useMemo(() => createCourseAnchors((key) => t(key as never)), [t]);
-  const { tokens, setTokens, filterItems } = useStructuredSearch<CourseSummary>(
+  const anchors = useMemo(() => createCourseAnchors<CourseRow>((key) => t(key as never), templateNames), [t, templateNames]);
+  const { tokens, setTokens, filterItems } = useStructuredSearch<CourseRow>(
     anchors,
     ["name"],
   );
 
   const courses = trpc.course.list.useQuery();
+  const { info } = overview;
+  const rows = useMemo<CourseRow[]>(
+    () => (courses.data ?? []).map((c) => ({ ...c, templateNames: info(c.id).templateNames, printStatus: info(c.id).printStatus })),
+    [courses.data, info],
+  );
 
   const deleteMutation = trpc.course.delete.useMutation({
     onSuccess: () => {
@@ -120,7 +153,7 @@ export function CoursesPage() {
   });
 
   const [bulkValue, setBulkValue] = useState<string>("");
-  const [bulkField, setBulkField] = useState<"numberOfMaps" | "orderMode">(
+  const [bulkField, setBulkField] = useState<"numberOfMaps" | "orderMode" | "template">(
     "numberOfMaps",
   );
 
@@ -134,7 +167,7 @@ export function CoursesPage() {
     setExpandedId(expandedId === id ? undefined : id);
   };
 
-  type Course = NonNullable<typeof courses.data>[number];
+  type Course = CourseRow;
   const comparators = useMemo(() => ({
     name: (a: Course, b: Course) => a.name.localeCompare(b.name),
     controls: (a: Course, b: Course) => a.controlCount - b.controlCount,
@@ -142,7 +175,7 @@ export function CoursesPage() {
     maps: (a: Course, b: Course) => a.numberOfMaps - b.numberOfMaps,
   }), []);
 
-  const filtered = useMemo(() => filterItems(courses.data ?? []), [courses.data, filterItems]);
+  const filtered = useMemo(() => filterItems(rows), [rows, filterItems]);
   const { sorted: items, sort, toggle } = useSort(filtered, { key: "name", dir: "asc" }, comparators);
 
   const selection = useTableSelection(items);
@@ -164,6 +197,17 @@ export function CoursesPage() {
 
   const handleApplyBulk = () => {
     if (bulkValue === "" || selection.count === 0) return;
+    if (bulkField === "template") {
+      const pick = parsePick(bulkValue);
+      if (!pick) return;
+      void overview.apply(pick, Array.from(selection.selected)).then((done) => {
+        if (done) {
+          selection.clearSelection();
+          setBulkValue("");
+        }
+      });
+      return;
+    }
     const fieldLabel =
       bulkField === "orderMode" ? t("orderMode") : t("maps");
     const displayValue =
@@ -213,7 +257,7 @@ export function CoursesPage() {
           {t("importCourses")}
         </button>
         {(courses.data?.length ?? 0) > 0 && nameId && (
-          <CourseExportMenu nameId={nameId} />
+          <CourseExportMenu nameId={nameId} onAllMaps={() => void overview.exportAll()} onAllControls={() => void overview.exportAllControls()} />
         )}
         <button
           onClick={() => setShowCreateForm(true)}
@@ -231,6 +275,8 @@ export function CoursesPage() {
           {t("courseCount", { count: items.length })}
         </span>
       </div>
+
+      {overview.messages}
 
       {/* Create form */}
       {showCreateForm && (
@@ -292,6 +338,8 @@ export function CoursesPage() {
                   <SortHeader label={t("controls")} active={sort.key === "controls"} direction={sort.dir} onClick={() => toggle("controls")} className="w-24" />
                   <SortHeader label={t("length")} active={sort.key === "length"} direction={sort.dir} onClick={() => toggle("length")} className="w-24" />
                   <SortHeader label={t("maps")} active={sort.key === "maps"} direction={sort.dir} onClick={() => toggle("maps")} className="hidden md:table-cell w-20" />
+                  <th className="px-4 py-2.5 text-left font-medium text-slate-500">{t("template")}</th>
+                  <th className="px-4 py-2.5 text-left font-medium text-slate-500 w-24">{t("printStatus")}</th>
                   <th className="px-4 py-2.5 text-left font-medium text-slate-500 hidden lg:table-cell w-32">{t("options")}</th>
                   <th className="px-4 py-2.5 text-right font-medium text-slate-500 w-24">{t("actions")}</th>
                 </tr>
@@ -337,6 +385,28 @@ export function CoursesPage() {
                       <td className="px-4 py-2.5 tabular-nums text-slate-500 hidden md:table-cell">
                         {c.numberOfMaps}
                       </td>
+                      <td className="px-4 py-2.5 whitespace-nowrap" onClick={(e) => e.stopPropagation()}>
+                        {canEdit ? (
+                          <TemplatePicker
+                            testId={`course-template-${c.id}`}
+                            ariaLabel={t("selectTemplateForCourse", { course: c.name })}
+                            placeholder={t("selectTemplate")}
+                            value={info(c.id).template ? String(info(c.id).template!.seq) : ""}
+                            templates={overview.templates}
+                            club={overview.club}
+                            disabled={overview.busy}
+                            onPick={(pick) => { if (pick) void overview.apply(pick, [c.id]); }}
+                          />
+                        ) : (
+                          <span data-testid={`course-template-${c.id}`} className="text-slate-600">
+                            {info(c.id).template?.name ?? <span className="text-slate-300">{t("noTemplate")}</span>}
+                          </span>
+                        )}
+                        <TemplateBadge template={info(c.id).template} testId={`course-template-badge-${c.id}`} />
+                      </td>
+                      <td className="px-4 py-2.5">
+                        <PrintStatusPill info={info(c.id)} testId={`course-print-status-${c.id}`} />
+                      </td>
                       <td className="px-4 py-2.5 hidden lg:table-cell">
                         <div className="flex gap-1.5">
                           {c.firstAsStart && (
@@ -362,6 +432,30 @@ export function CoursesPage() {
                       </td>
                       <td className="px-4 py-2.5" onClick={(e) => e.stopPropagation()}>
                         <div className="flex items-center justify-end gap-0.5">
+                        {info(c.id).sheetSeq !== null && (
+                          <Link
+                            to={layoutEditorHref(nameId ?? "", { sheet: info(c.id).sheetSeq! }, c.id)}
+                            data-testid={`edit-course-map-${info(c.id).sheetSeq}`}
+                            className="p-1.5 text-slate-400 hover:text-purple-600 hover:bg-purple-50 rounded transition-colors flex items-center"
+                            title={t("editLayout")}
+                          >
+                            <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 5a1 1 0 011-1h14a1 1 0 011 1v14a1 1 0 01-1 1H5a1 1 0 01-1-1V5zm4 4h8m-8 4h5" />
+                            </svg>
+                          </Link>
+                        )}
+                        <button
+                          type="button"
+                          data-testid={`export-course-${c.id}`}
+                          disabled={overview.busy || (!canEdit && info(c.id).sheetSeq === null)}
+                          onClick={() => void overview.exportCourse(c.id)}
+                          className="p-1.5 text-slate-400 hover:text-blue-600 hover:bg-blue-50 rounded transition-colors cursor-pointer flex items-center disabled:opacity-40 disabled:cursor-default"
+                          title={t("exportCourseMaps")}
+                        >
+                          <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4" />
+                          </svg>
+                        </button>
                         <Link
                           to={`/${nameId}/course-editor?course=${c.id}`}
                           data-testid="course-edit-link"
@@ -386,7 +480,7 @@ export function CoursesPage() {
                     </tr>
                     {expandedId === c.id && (
                       <tr>
-                        <td colSpan={7} className="p-0">
+                        <td colSpan={9} className="p-0">
                           <CourseInlineDetail courseId={c.id} />
                         </td>
                       </tr>
@@ -417,7 +511,7 @@ export function CoursesPage() {
         <select
           value={bulkField}
           onChange={(e) => {
-            setBulkField(e.target.value as "numberOfMaps" | "orderMode");
+            setBulkField(e.target.value as "numberOfMaps" | "orderMode" | "template");
             setBulkValue("");
           }}
           className="px-3 py-1.5 border border-slate-200 rounded-lg text-sm bg-white focus:outline-none focus:ring-2 focus:ring-blue-500 cursor-pointer"
@@ -425,8 +519,19 @@ export function CoursesPage() {
         >
           <option value="numberOfMaps">{t("maps")}</option>
           <option value="orderMode">{t("orderMode")}</option>
+          {canEdit && <option value="template">{t("template")}</option>}
         </select>
-        {bulkField === "orderMode" ? (
+        {bulkField === "template" ? (
+          <TemplatePicker
+            testId="bulk-value-input"
+            placeholder={t("selectTemplate")}
+            value={bulkValue}
+            templates={overview.templates}
+            club={overview.club}
+            disabled={overview.busy}
+            onPick={(_pick, value) => setBulkValue(value)}
+          />
+        ) : bulkField === "orderMode" ? (
           <select
             value={bulkValue}
             onChange={(e) => setBulkValue(e.target.value)}
@@ -450,17 +555,20 @@ export function CoursesPage() {
         )}
         <button
           onClick={handleApplyBulk}
-          disabled={bulkValue === "" || bulkUpdateMutation.isPending}
+          disabled={bulkValue === "" || bulkUpdateMutation.isPending || overview.busy}
           className="px-4 py-1.5 bg-blue-600 text-white text-sm font-medium rounded-lg hover:bg-blue-700 disabled:opacity-50 transition-colors cursor-pointer"
         >
           {bulkUpdateMutation.isPending ? t("applying") : t("apply")}
         </button>
       </BulkActionBar>
+      {overview.dialog}
     </>
   );
 }
 
 // ─── Helpers ─────────────────────────────────────────────────
+
+type CourseRow = CourseSummary & CourseOverviewFields;
 
 function formatLength(meters: number): string {
   if (meters <= 0) return "";

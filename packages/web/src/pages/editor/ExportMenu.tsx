@@ -12,6 +12,7 @@ import { downloadSameOriginFile } from "../../lib/download-api";
 import { exportEntries, type ExportEntry, type ExportState } from "../../lib/editor/export-menu";
 
 const LABEL = {
+  sheet: "exportSheet",
   course: "exportCourse",
   class: "exportClass",
   all: "exportAll",

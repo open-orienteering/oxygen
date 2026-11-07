@@ -8,9 +8,6 @@ import {
   type CourseMapDocument,
   type CourseMapObject,
   type CourseMapOverrides,
-  type CourseOverlayLeg,
-  type DescriptionRow,
-  type DescriptionSheetHeader,
   type MapPoint,
   type MapTemplateSettings,
   type MapWindow,
@@ -65,20 +62,6 @@ export interface CourseMapListItem {
     autoKey: string | null;
     isExtra: boolean;
   } | null;
-  controls: Array<
-    MapPoint & {
-      id: string;
-      code: string;
-      type: "start" | "control" | "finish";
-      cuts?: Array<{ start: number; end: number }>;
-    }
-  >;
-  legs: CourseOverlayLeg[];
-  /** How control numbers are labelled on the overprint. */
-  labelMode: "sequence" | "code";
-  descriptionRows: DescriptionRow[];
-  /** IOF 3-row header for course maps; null → single title row. */
-  descriptionHeader: DescriptionSheetHeader | null;
   resolved: { document: CourseMapDocument; window: MapWindow } | null;
   validation: {
     valid: boolean;
@@ -157,12 +140,19 @@ function json(value: unknown): Prisma.InputJsonValue {
   return value as Prisma.InputJsonValue;
 }
 
+type ParsedMap<T> = Omit<T, "version" | "windowCenter" | "overrides" | "objects"> & {
+  version: string;
+  windowCenter: MapPoint | null;
+  overrides: CourseMapOverrides;
+  objects: CourseMapObject[];
+};
+
 function parseMap<T extends {
   windowCenter: unknown;
   overrides: unknown;
   objects: unknown;
   version: bigint;
-}>(row: T) {
+}>(row: T): ParsedMap<T> {
   return {
     ...row,
     version: row.version.toString(),
@@ -329,10 +319,8 @@ export const courseMapRouter = router({
         ...row,
         resolved: { document: layout.document, window: layout.window },
         controls: layout.controls,
-        legs: layout.legs,
-        labelMode: layout.labelMode,
-        descriptionRows: layout.descriptionRows,
-        descriptionHeader: layout.descriptionHeader,
+        descriptionRowCount: layout.descriptionRows.length,
+        descriptionHeaderRows: layout.descriptionHeader ? 3 : 1,
         validation: { valid: true, issues: [] },
       };
     });
@@ -346,18 +334,10 @@ export const courseMapRouter = router({
               window: row.resolved.window,
               windows: windowsByCourse.get(`${row.courseId ?? "all_controls"}:${row.classId ?? ""}`),
               variants: [{ key: "", controls: row.controls }],
-              descriptionRowCount: row.descriptionRows.length,
-              descriptionHeaderRows: row.descriptionHeader ? 3 : 1,
+              descriptionRowCount: row.descriptionRowCount,
+              descriptionHeaderRows: row.descriptionHeaderRows,
             })
           : row.validation;
-      const controls = "controls" in row ? row.controls : [];
-      const legs = "legs" in row ? row.legs : [];
-      const labelMode =
-        "labelMode" in row ? row.labelMode : ("sequence" as const);
-      const descriptionRows =
-        "descriptionRows" in row ? row.descriptionRows : [];
-      const descriptionHeader =
-        "descriptionHeader" in row ? row.descriptionHeader : null;
       const resolved = "resolved" in row ? row.resolved : null;
       return {
         id: row.id,
@@ -384,11 +364,6 @@ export const courseMapRouter = router({
         template: row.template
           ? { seq: row.template.seq, name: row.template.name, autoKey: row.template.autoKey, isExtra: row.template.isExtra }
           : null,
-        controls,
-        legs,
-        labelMode,
-        descriptionRows,
-        descriptionHeader,
         resolved,
         validation,
       };
@@ -398,7 +373,7 @@ export const courseMapRouter = router({
   /**
    * Layout mode's read (docs/course-layout.md §1; research 08 §4.6
    * `resolveSheet`): `{ seq }` a sheet, `{ templateSeq, courseSeq? }` a
-   * template previewed with a course (as `mapTemplate.previewLayout`),
+   * template previewed with a course (or alone, centred on the map origin),
    * `{ classSeq }` Class view (§6): the class's first sheet, else its
    * course's first sheet as the class prints it (`rowForClass`).
    */
@@ -633,6 +608,8 @@ export const courseMapRouter = router({
           overrides: courseMapOverridesSchema,
           objects: objectsSchema,
           sortOrder: z.number().int().min(0),
+          /** The sheet's `version` the client edits from (docs/course-layout.md §2); omitted: last writer wins. */
+          baseVersion: baseVersionSchema,
         })
         .partial()
         .required({ id: true }),
@@ -656,6 +633,7 @@ export const courseMapRouter = router({
       }
       const {
         id: _publicId,
+        baseVersion,
         windowCenter,
         overrides,
         objects,
@@ -663,8 +641,16 @@ export const courseMapRouter = router({
         ...fields
       } = input;
       void _publicId;
-      return parseMap(
-        await ctx.db.courseMap.update({
+      return ctx.db.$transaction(async (tx) => {
+        const rows = await tx.$queryRaw<{ version: bigint }[]>`
+          SELECT "version" FROM "oxygen"."course_maps" WHERE "id" = ${existing.id}::uuid FOR UPDATE`;
+        const now = rows[0]?.version;
+        if (baseVersion !== undefined && now !== undefined && now !== BigInt(baseVersion)) {
+          const current = await tx.courseMap.findUniqueOrThrow({ where: { id: existing.id } });
+          throw versionConflict({ kind: "sheet", id: existing.seq, version: now.toString(), current: parseMap(current), differing: null });
+        }
+        return parseMap(
+        await tx.courseMap.update({
           where: { id: existing.id },
           data: {
             ...fields,
@@ -682,7 +668,8 @@ export const courseMapRouter = router({
             version: nextObjectVersion(),
           },
         }),
-      );
+        );
+      });
     }),
 
   saveLayout: coursesEditProcedure
@@ -693,8 +680,6 @@ export const courseMapRouter = router({
         printScale: z.number().int().positive().max(100_000),
         description: mapTemplateSettingsSchema.shape.description,
         objects: objectsSchema,
-        /** The template's objects; omitted, the template is not written (Layout mode's sheet scope, docs/course-layout.md §2). */
-        templateObjects: objectsSchema.optional(),
         /** The sheet's `version` the client edits from (docs/course-layout.md §2); omitted: last writer wins. */
         baseVersion: baseVersionSchema.optional(),
       }),
@@ -702,7 +687,6 @@ export const courseMapRouter = router({
     .mutation(async ({ ctx, input }) => {
       const map = await ctx.db.courseMap.findFirst({
         where: { eventId: ctx.event.id, seq: input.id },
-        include: { template: true },
       });
       if (!map) notFound();
       const overrides = courseMapOverridesSchema.parse(map.overrides);
@@ -728,12 +712,6 @@ export const courseMapRouter = router({
             version,
           },
         });
-        if (map.template && input.templateObjects) {
-          await tx.mapTemplate.update({
-            where: { id: map.template.id },
-            data: { objects: json(input.templateObjects), version: nextObjectVersion() },
-          });
-        }
       });
       return { ok: true as const, version: version.toString() };
     }),

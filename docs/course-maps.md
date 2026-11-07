@@ -153,17 +153,23 @@ Event-scoped tRPC routers:
 - `mapTemplate.list` returns `autoKey`, `isExtra`, `version` and
   `sheetCount`; `update` takes an optional `baseVersion`
   (`course-layout.md` §2)
-- `layout` — `autoSheets { courseId? }`, `classOverrides { courseId }`,
+- `layout` — `autoSheets { courseId?, allControls? }` (`allControls:
+  true` also ensures the event's all-controls sheet; alone it runs only
+  that part; the answer's `allControlsSheet` is its seq),
+  `classOverrides { courseId }`,
   `setClassOverride { classId, printScale?, sheetTemplateId? }`
   (`course-layout.md` §5–§6)
-- `courseMap` — list with validation (each row with its `class` and the
-  template's key), get, create, update, delete, reorder,
-  `saveLayout` (`templateObjects` optional: omitted, the template is not written);
-  `resolveSheet` (a sheet, a template previewed with a course, or a class
-  as it prints — `{ classSeq }`, Class view — as the composer draws it:
-  the read of the new editor's Layout mode, `course-layout.md` §1, §6);
-  `saveLayout` takes an optional `baseVersion` and answers the new
-  `version`
+- `courseMap` — list with validation (each row with its `class`, the
+  template's key, `resolved` — document and window — and `validation`;
+  the overlay itself is `resolveSheet`'s), get, create, update, delete,
+  reorder, `saveLayout` (the sheet only: window centre, print scale,
+  block, its own objects; it never writes the template);
+  `resolveSheet` (a sheet, a template previewed with a course or alone,
+  or a class as it prints — `{ classSeq }`, Class view — as the composer
+  draws it: the read of the editor's Layout mode, `course-layout.md` §1,
+  §6); `saveLayout` and `update` take an optional `baseVersion` (a stale
+  one is `CONFLICT` with the row now; omitted, last writer wins) and
+  answer the new `version`
 - `graphics` — list (event + club), upload (base64), saveToClub, delete
 
 REST:
@@ -180,13 +186,12 @@ GET /api/maps/:nameId/graphics/:id
 
 Both require `courses.view`. The legacy layout editor's map preview,
 `GET /api/maps/:nameId/window.png`, went in E4a and the editor itself
-(`MapLayoutEditor`) in E4c (`course-print.md` §10). Three API shapes
-have had no web caller since E4c and stay until E-pages reworks the
-routers: `mapTemplate.previewLayout`, `courseMap.saveLayout`'s
+(`MapLayoutEditor`) in E4c (`course-print.md` §10). E-pages removed the
+three API shapes that had no caller after it: `mapTemplate.previewLayout`
+(`resolveSheet { templateSeq }` reads a template), `courseMap.saveLayout`'s
 `templateObjects` option, and `courseMap.list`'s per-row overlay fields
 (`controls`, `legs`, `descriptionRows`, `descriptionHeader`,
-`labelMode`) — Layout mode reads `courseMap.resolveSheet` instead.
-`maps.pdf` is composed from
+`labelMode`). `maps.pdf` is composed from
 the document in a worker thread, off the event loop (`course-print.md`
 §8); a document whose colour stack is not aligned is a 400 with the
 reason.
@@ -196,53 +201,64 @@ Combined PDF pages are ordered by course, map `sort_order`, then map
 own sheet and the all-controls sheet — a class's sheets print through
 `classes` or `maps` only (`course-layout.md` §7).
 
-## Maps and Map templates pages
+## Where sheets and templates are managed
 
-Use **Map templates / Kartmallar** to define reusable output:
+Since E-pages (user 2026-11-05: templates stop being a separate idea for
+the user; 2026-11-07: the coordinator's sketch) there is no Maps or Map
+templates page. Their work lives in two places:
 
-1. Search by name, paper, orientation, scale or usage. Create an A3, A4, or
-   A5 template, then expand its row to edit orientation, print scale and
-   margin.
-2. Open **Edit template layout** to place shared text, paths, rectangles,
-   white-outs and the control-description block in the course editor's
-   Layout mode.
-3. Save stable templates to the club library from the row action. **Import
-   from club library** opens a modal instead of mixing club and event
-   templates in the same table.
+**The Courses page** carries the event-wide print overview, one row per
+course (its own sheets; class sheets follow their class's override,
+`course-layout.md` §6):
 
-Use **Maps / Kartor** for course assignments and per-map changes:
+1. **Template** — one picker (`course-template-<id>`): the event's
+   templates; the **club library** (an optgroup: picking one brings it
+   into the event under a free name, `base`, `base (2)`, …, then applies
+   it — `mapTemplate.loadFromClub` with the map-anchored-objects notice,
+   then `applyToCourses`); **New template…** (a dialog: paper A3/A4/A5,
+   orientation, print scale, margin, the name defaulting to the key's
+   name; `mapTemplate.create`, then `applyToCourses`). Beside it the key's
+   **auto / extra** badge (`course-template-badge-<id>`, the key in its
+   title; `course-layout.md` §5). Without `courses.edit` the name only.
+2. **Print** status (`course-print-status-<id>`: *Ready*, the issue count,
+   or *No map*) over the course's own sheets.
+3. **Edit layout** (`edit-course-map-<seq>`) opens the course's first own
+   sheet that has a template (a template-less sheet cannot resolve; the
+   picker and badge show that sheet's template) in Layout mode; **the course's PDF** (`export-course-<id>`)
+   ensures its first sheet under `courses.edit` (`layout.autoSheets
+   { courseId }`) and downloads `maps.pdf?courses=<id>`.
+4. The bulk bar's **Template** field applies a pick (the same picker) to
+   the selected courses. The export menu adds **All maps** (`autoSheets
+   {}` first) and **All controls** (`autoSheets { allControls: true }`
+   first) beside IOF XML and PPen; without `courses.edit` they export what
+   exists. Search gains `template` and `status` anchors.
 
-1. Every course has a row, including courses without an assigned map. Search
-   by course, class, template, status or number of maps. Choose a template
-   inline, or select several course rows and apply one from the bulk action
-   bar.
-2. Expand a row to rename, validate, export or delete individual maps and add
-   a second sheet for a map exchange.
-3. Open **Edit layout** for map-window placement and course-specific objects
-   in the course editor's Layout mode. Shared template objects are visible
-   but locked; open the template to change them.
-4. Export one map, every map for a course, the all-controls map, or the whole
-   event as PDF.
+**Layout mode** (`course-layout.md` §2) holds the per-sheet and
+per-template actions: rename / add / delete a sheet, *Create sheet* for a
+course without one, *Create the all-controls sheet* in view All, Export ▾
+*This sheet*; a template's name, *New template*, *Delete this template*;
+and the **Club templates** section (bring in, delete, save the shown
+template to the club library).
 
-**Which editor opens.** **Edit layout** (also on the all-controls row) and
-**Edit template layout** open the course editor's Layout mode for every
-event (`/:nameId/course-editor?mode=layout&sheet=<seq>[&course=<seq>]` /
-`&template=<seq>`, built by `layoutEditorHref`): the sheet drawn on the
+**Old links.** `/:nameId/maps[?course=N]` redirects to
+`/:nameId/courses[?course=N]`; `/:nameId/map-templates[?template=N]` to
+Layout mode (`course-editor?mode=layout[&template=N]`, `retiredPageHref`).
+Neither has a tab.
+
+**Which editor opens.** Every *Edit layout* opens the course editor's
+Layout mode (`/:nameId/course-editor?mode=layout&sheet=<seq>[&course=<seq>]`
+/ `&template=<seq>`, built by `layoutEditorHref`): the sheet drawn on the
 GL canvas through the composer's page layer, every gesture one write and
-one undo entry — [`course-layout.md`](course-layout.md). The pages hold
-no editor of their own: the legacy `MapLayoutEditor` (an SVG paper
-canvas over a `window.png` raster of the unwarped OCAD window) was
-unreachable from E3 and deleted in E4c, with the shared SVG emitters it
-and the legacy PDF page drew with (`objects-svg.ts`,
-`course-overlay-svg.ts`, `description-svg.ts`). Until E-pages folds the
-pages into Layout mode and the Courses page, they stay as lists: create,
-rename, delete, validate and export sheets and templates, assign a
-template inline or in bulk, and the club library.
+one undo entry — [`course-layout.md`](course-layout.md). The legacy
+`MapLayoutEditor` (an SVG paper canvas over a `window.png` raster of the
+unwarped OCAD window) was unreachable from E3 and deleted in E4c, with the
+shared SVG emitters it and the legacy PDF page drew with
+(`objects-svg.ts`, `course-overlay-svg.ts`, `description-svg.ts`).
 
-Validation issues on the Maps page are translated by code
-(`template_missing`, `map_scale_missing`, `control_outside_frame`,
-`description_outside_page`, `object_outside_page`) with human labels for
-objects rather than UUIDs.
+The Maps page's object-named validation messages went with it: the
+Courses page shows the issue count, Layout mode's inspector the issues by
+code (`template_missing`, `map_scale_missing`, `control_outside_frame`,
+`description_outside_page`, `object_outside_page`).
 
 The control-description block is the same sheet the course editor shows on
 the map: `resolve-layout.ts` builds it with the shared `buildDescriptionSheet`
@@ -293,9 +309,10 @@ The shared validator reports:
 
 Map-anchored objects are exempt from the printable-area check: they follow
 the terrain and are clipped to the map frame when printed, so moving the
-window until they fall off-page is by design. The Map templates page shows a
-status pill per template (Ready / issue count) computed from the template's
-own page-anchored objects, mirroring the Maps page status column.
+window until they fall off-page is by design. The Courses page's Print
+column shows a course's status (Ready / issue count / No map) over its own
+sheets; Layout mode's inspector lists the shown sheet's or template's
+issues.
 
 ## Base-map changes and club templates
 

@@ -5,7 +5,7 @@
  * the event's full control set) into the resolved print document, the map
  * window it shows, the overlay geometry and the text placeholder values.
  *
- * `courseMap.list` and `mapTemplate.previewLayout` both go through here so a
+ * `courseMap.list`, `resolveSheet` and the print path go through here so a
  * template preview and a saved map page resolve identically.
  */
 

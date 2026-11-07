@@ -45,6 +45,8 @@ export interface LayoutSnapshot {
   description: DescriptionBlockSettings;
   sheetObjects: CourseMapObject[];
   templateObjects: CourseMapObject[];
+  /** The template's name (template scope writes it with the rest, one undo entry; E-pages). */
+  templateName: string;
   /** Template scope's page settings (sheet scope: the template's, read-only). */
   paper: string;
   orientation: string;
@@ -62,12 +64,32 @@ export function snapshotOf(s: EditorSheet): LayoutSnapshot {
     description: s.scope === "sheet" ? s.document.description : t.settings.description,
     sheetObjects: s.sheet?.objects ?? [],
     templateObjects: t.objects,
+    templateName: t.name,
     paper: t.paper,
     orientation: t.orientation,
     paperWidthMm: t.paperWidthMm,
     paperHeightMm: t.paperHeightMm,
     settings: t.settings,
   };
+}
+
+/** Template scope's write (`mapTemplate.update` without the id and token): the whole template as the snapshot holds it. */
+export function templateWriteOf(s: LayoutSnapshot) {
+  return {
+    name: s.templateName,
+    paper: s.paper as "A4",
+    orientation: s.orientation as "portrait",
+    ...(s.paper === "custom" ? { paperWidthMm: s.paperWidthMm, paperHeightMm: s.paperHeightMm } : {}),
+    printScale: s.printScale,
+    settings: { ...s.settings, description: s.description },
+    objects: s.templateObjects,
+  };
+}
+
+/** A course's next sheet name: "<course> 2", "<course> 3", … — the first free number after its sheets (E-pages). */
+export function nextSheetName(base: string, taken: readonly string[]): string {
+  const names = new Set(taken);
+  for (let i = Math.max(2, taken.length + 1); ; i += 1) if (!names.has(`${base} ${i}`)) return `${base} ${i}`;
 }
 
 /** The status bar's sheet key (docs/course-layout.md §5): `1:10000 A4 portrait`. */

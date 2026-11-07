@@ -265,6 +265,60 @@ describe("autoSheets and class overrides (course-layout.md §6)", () => {
   });
 });
 
+describe("the all-controls sheet on demand (course-layout.md §6, E-pages)", () => {
+  let t: TestEventContext;
+  let caller: ReturnType<typeof makeCaller>;
+  let course: { id: string; seq: number };
+
+  beforeAll(async () => {
+    t = await createTestEvent("all_controls_sheet");
+    caller = makeCaller(t.event);
+    await t.db.mapFile.create({ data: { eventId: t.eventId, fileName: "test.ocd", scale: 7500 } });
+    clearEventDocumentCaches();
+    course = await seedCourse(t, "Blå");
+    // A second course 252 mm wide at the map's scale: the event's controls only fit landscape.
+    await seedCourse(t, "Lång", 4.2);
+  });
+  afterAll(async () => {
+    await t?.cleanup();
+  });
+
+  it("{ courseId } leaves the all-controls sheet alone", async () => {
+    const r = await caller.layout.autoSheets({ courseId: course.seq });
+    expect(r.allControlsSheet).toBeNull();
+    expect(await t.db.courseMap.count({ where: { eventId: t.eventId, kind: "all_controls" } })).toBe(0);
+  });
+
+  it("{ allControls: true } creates the sheet once on the busiest template's key, turned to fit every control; idempotent", async () => {
+    const portrait = (await caller.mapTemplate.list())[0];
+    expect(portrait.orientation).toBe("portrait");
+    const r = await caller.layout.autoSheets({ allControls: true });
+    expect(r.allControlsSheet).not.toBeNull();
+    expect(r.createdSheets).toEqual([r.allControlsSheet]);
+    // Only the all-controls part ran: no course sheets answered.
+    expect(r.courseSheets).toEqual([]);
+    const sheet = await t.db.courseMap.findFirstOrThrow({ where: { eventId: t.eventId, kind: "all_controls" }, include: { template: true } });
+    expect(sheet).toMatchObject({ seq: r.allControlsSheet, name: "All controls", courseId: null, classId: null, windowCenter: null });
+    expect(sheet.template).toMatchObject({ paper: "A4", orientation: "landscape", printScale: portrait.printScale, autoKey: `A4-landscape-${portrait.printScale}`, isExtra: false });
+    expect(r.createdTemplates).toEqual([sheet.template!.seq]);
+
+    const again = await caller.layout.autoSheets({ allControls: true });
+    expect(again).toMatchObject({ allControlsSheet: r.allControlsSheet, createdSheets: [], createdTemplates: [] });
+    const listed = await caller.courseMap.list();
+    expect(listed.filter((m) => m.kind === "all_controls")).toHaveLength(1);
+  });
+
+  it("an all-controls sheet without a template gets one; with { courseId } both parts run", async () => {
+    await t.db.courseMap.updateMany({ where: { eventId: t.eventId, kind: "all_controls" }, data: { templateId: null } });
+    const r = await caller.layout.autoSheets({ courseId: course.seq, allControls: true });
+    expect(r.createdSheets).toEqual([]);
+    expect(r.courseSheets).toHaveLength(1);
+    const sheet = await t.db.courseMap.findFirstOrThrow({ where: { eventId: t.eventId, kind: "all_controls" }, include: { template: true } });
+    expect(sheet.seq).toBe(r.allControlsSheet);
+    expect(sheet.template?.orientation).toBe("landscape");
+  });
+});
+
 describe("sheet and template version tokens (course-layout.md §2)", () => {
   let t: TestEventContext;
   let caller: ReturnType<typeof makeCaller>;
