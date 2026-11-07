@@ -1,7 +1,7 @@
 import { describe, it, expect } from "vitest";
 import { createMapGlWorker, type CourseReply, type WorkerReply } from "../../../map-gl/worker";
 import { documentBytes, fontBytes, latin, request } from "../../../map-gl/__tests__/course-fixture";
-import { editorHitAt, HIT_TOLERANCE_PX } from "../hit";
+import { editorHitAt, HIT_TOLERANCE_PX, uiLegsOf } from "../hit";
 
 /** The fixture course (S 10,10 → 31 40,10 → 32 60,40 → F 10,40) through the real worker. */
 function hitIndex(over: Parameters<typeof request>[0] = {}): NonNullable<CourseReply["hit"]> {
@@ -160,6 +160,20 @@ describe("editorHitAt (docs/course-editor.md §5)", () => {
     expect(reply.filter).not.toBeNull();
     expect(reply.filter!.masks.length).toBeGreaterThan(0);
     expect(courseReply().filter).toBeNull();
+  });
+
+  it("a leg with no line (`none`) has no hit piece; it hits from the derivation's pieces, under circles (§6.7)", () => {
+    const structure = { version: 1 as const, id: "c1", orderMode: "ordered" as const, items: [{ siteId: "S" }, { siteId: "31" }, { siteId: "32", leg: { style: "none" as const } }, { siteId: "F" }] };
+    const reply = courseReply({ structure });
+    expect(reply.hit!.refs.some((r) => r.kind === "leg" && r.id === "c1:1")).toBe(false);
+    expect(editorHitAt(reply.hit!, { x: 50, y: 25 }, 0.5)).toBeNull();
+    const uiLegs = uiLegsOf(reply.derivation!.courses);
+    expect(uiLegs.map((l) => [l.courseId, l.index])).toEqual([["c1", 1]]);
+    expect(editorHitAt(reply.hit!, { x: 50, y: 25 }, 0.5, [], [], undefined, uiLegs)).toEqual({ kind: "leg", courseId: "c1", index: 1 });
+    expect(editorHitAt(reply.hit!, { x: 52, y: 25 }, 0.5, [], [], undefined, uiLegs)).toBeNull();
+    // The circle at its end still wins, and `accept` passes over it.
+    expect(editorHitAt(reply.hit!, { x: 59, y: 39 }, 0.5, [], [], undefined, uiLegs)).toEqual({ kind: "site", id: "32" });
+    expect(editorHitAt(reply.hit!, { x: 50, y: 25 }, 0.5, [], [], (t) => t.kind === "site", uiLegs)).toBeNull();
   });
 
   it("names a screen tolerance", () => {

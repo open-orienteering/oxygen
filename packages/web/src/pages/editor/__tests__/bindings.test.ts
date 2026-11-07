@@ -419,10 +419,23 @@ describe("G binding (§6.3)", () => {
   it("leg gaps by fraction", () => {
     const onAdd = vi.fn();
     const gesture: GestureRef = { current: null };
-    const b = gapBinding({ gesture, target: { kind: "leg", itemIndex: 2, a: { x: 0, y: 0 }, b: { x: 100, y: 0 }, gaps: [] }, redraw: vi.fn(), onAdd, onRemove: vi.fn(), onExit: vi.fn() });
+    const b = gapBinding({ gesture, target: { kind: "leg", itemIndex: 2, points: [{ x: 0, y: 0 }, { x: 100, y: 0 }], gaps: [] }, redraw: vi.fn(), onAdd, onRemove: vi.fn(), onExit: vi.fn() });
     expect(b.onPointerDown!(ptr(40, 0.5))).toBe(true);
     b.onPointerUp!({ x: 60, y: 0 });
     expect(onAdd).toHaveBeenCalledWith({ from: 0.4, to: 0.6 });
+  });
+
+  it("on a bent leg: the target and gaps follow the bends, a press off the chord but on a bend reaches it", () => {
+    const onAdd = vi.fn();
+    const gesture: GestureRef = { current: null };
+    const points = [{ x: 0, y: 0 }, { x: 30, y: 40 }, { x: 60, y: 0 }];
+    const b = gapBinding({ gesture, target: { kind: "leg", itemIndex: 2, points, gaps: [{ from: 0.25, to: 0.75 }] }, redraw: vi.fn(), onAdd, onRemove: vi.fn(), onExit: vi.fn() });
+    expect(b.shapes!.find((s) => s.testId === "editor-gap-target")).toMatchObject({ points });
+    expect(b.shapes!.find((s) => s.testId === "editor-gap")).toMatchObject({ points: [{ x: 15, y: 20 }, { x: 30, y: 40 }, { x: 45, y: 20 }] });
+    // Far from the chord (y = 0), on the first segment.
+    expect(b.onPointerDown!(ptr(6, 8))).toBe(true);
+    b.onPointerUp!({ x: 9, y: 12 });
+    expect(onAdd).toHaveBeenCalledWith({ from: 0.1, to: 0.15 });
   });
 });
 

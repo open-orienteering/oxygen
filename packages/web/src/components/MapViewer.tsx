@@ -68,7 +68,7 @@ import { courseLayerRequest, PROVISIONAL_SITE_ID, type LayoutRequest, type Provi
 import { dragLegShapes } from "../lib/editor/leg-length";
 import { outlinePoints, vertexRule } from "../lib/editor/geometry-edit";
 import type { CourseInfo } from "../map-gl/engine";
-import { editorHitAt, HIT_TOLERANCE_PX, type EditorTarget } from "../lib/editor/hit";
+import { editorHitAt, HIT_TOLERANCE_PX, uiLegsOf, type EditorTarget } from "../lib/editor/hit";
 import { showSelectionRing } from "../lib/editor/state";
 import { COARSE_HIT_TOLERANCE_PX, IDLE as SITE_TOUCH_IDLE, LONG_PRESS_MS, LOUPE_DIAMETER_PX, LOUPE_SCALE, liftedPoint, loupePlacement, siteTouch, type SiteTouch, type SiteTouchEvent } from "../lib/editor/touch";
 
@@ -818,7 +818,7 @@ export function MapViewer({
     const structures: readonly Structure[] = !st ? [] : Array.isArray(st) ? st : [st as Structure];
     if (!editorOn || !editorDragPos || !courseRequest || structures.length !== 1) return [];
     const pos = new Map(courseRequest.sites.map((x) => [x.id, { x: x.x, y: x.y }] as const));
-    return dragLegShapes(structures[0].items.map((i) => i.siteId), pos, editorDragPos.id, mapScale);
+    return dragLegShapes(structures[0].items.map((i) => i.siteId), pos, editorDragPos.id, mapScale, structures[0].items.map((i) => i.leg?.bends));
   }, [editorOn, editorDragPos, courseRequest, mapScale]);
 
   // ─── Editor hit-test on the shared stage (docs/course-editor.md §5) ──
@@ -829,6 +829,8 @@ export function MapViewer({
     () => (editor ? drawnObjects.filter((o) => vertexRule(o.kind).closed).map((o) => ({ id: o.id, ring: outlinePoints(o.geometry, true) })) : []),
     [editor, drawnObjects],
   );
+  // `style: "none"` legs have no layer object, so no hit piece: they hit from the derivation (§6.7).
+  const uiLegs = useMemo(() => (editor ? uiLegsOf(courseInfo?.derivation?.courses) : []), [editor, courseInfo]);
   /** The editor target under a client point, `null` for empty map; `undefined` without a hit index (no editor, no course layer). */
   const resolveEditorTarget = (clientX: number, clientY: number): EditorTarget | null | undefined => {
     if (!sharedHit || !editor) return undefined;
@@ -849,7 +851,7 @@ export function MapViewer({
     ];
     // An armed placement draws its own visit: only real sites are targets (a reuse), never the cursor's circle or legs.
     const accept = editor.provisional ? (t: EditorTarget) => t.kind === "site" && t.id !== PROVISIONAL_SITE_ID : undefined;
-    return editorHitAt(courseInfo?.hit ?? null, pt, tol, uiSites, uiAreas, accept);
+    return editorHitAt(courseInfo?.hit ?? null, pt, tol, uiSites, uiAreas, accept, uiLegs);
   };
   const resolveEditorTargetRef = useRef(resolveEditorTarget);
   resolveEditorTargetRef.current = resolveEditorTarget;
@@ -2703,7 +2705,7 @@ export function MapViewer({
             </li>
           ))}
           {courseInfo.derivation.courses.flatMap((dc) => dc.legs.flatMap((leg, i) => leg.pieces.map((piece, k) => (
-            <li key={`l-${dc.id}-${i}-${k}`} data-testid="course-leg" data-course={dc.id} data-leg={i}
+            <li key={`l-${dc.id}-${i}-${k}`} data-testid="course-leg" data-course={dc.id} data-leg={i} data-style={leg.style}
               data-points={piece.map((q) => `${q.x},${q.y}`).join(" ")} />
           ))))}
         </ul>

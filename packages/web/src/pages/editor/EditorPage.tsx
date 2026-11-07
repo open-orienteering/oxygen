@@ -59,7 +59,8 @@ import { EditorConflict, EditorWrites, type EditorClient } from "../../lib/edito
 import { instructionsOnCourse, type Instructions } from "../../lib/editor/instructions";
 import { areaTool, editorReducer, escapeHasWork, initialEditorState, type EditorTool } from "../../lib/editor/state";
 import { appendSite, insertSite, moveVisit, removeSite, removeVisit, setLegGaps, setNumberHidden, setRole, type KindOf } from "../../lib/editor/structure-edit";
-import { displaySequence, effectiveEnds, explicitStructure, insertIndexForLeg, kindOfSites, type SiteRow } from "../../lib/editor/sequence";
+import { displaySequence, effectiveEnds, explicitStructure, insertIndexForLeg, kindOfSites, legForInsert, type SiteRow } from "../../lib/editor/sequence";
+import { legPolyline } from "../../lib/editor/bends";
 import { courseActions } from "./ActionBar";
 import { TopBar } from "./TopBar";
 import { ToolRail, type AreaChoice } from "./ToolRail";
@@ -203,7 +204,14 @@ export function EditorPage() {
     : detailStructure;
   const rows = useMemo(() => (structure ? displaySequence(structure, sites) : []), [structure, sites]);
   const sequenceIds = useMemo(() => rows.filter((r) => r.kind === "control").map((r) => r.id), [rows]);
-  const legMeters = useMemo(() => sequenceLegMeters(rows.map((r) => r.pt), mapScale), [rows, mapScale]);
+  /** The structure as drawn, start and finish explicit: rows[i] ↔ items[i] (the leg into row i is items[i].leg). */
+  const explicitItems = useMemo(() => (structure ? explicitStructure(structure, sites).items : []), [structure, sites]);
+  // Along the stored bends (course-layer.md §10.1, docs/course-editor.md §6.7).
+  const legMeters = useMemo(() => sequenceLegMeters(rows.map((r, i) => {
+    const item = explicitItems[i];
+    const bends = item && item.kind !== "variation" ? item.leg?.bends : undefined;
+    return r.pt && bends ? { ...r.pt, bends } : r.pt;
+  }), mapScale), [rows, explicitItems, mapScale]);
   const totalMeters = useMemo(() => legMeters.reduce<number>((sum, m) => sum + (m ?? 0), 0), [legMeters]);
   const inventory = useMemo(
     () => buildInventoryView(seriesAllocation.data ?? [], (controlList.data ?? []).map((c) => c.codes)),
@@ -900,15 +908,16 @@ export function EditorPage() {
     }
     const insertAt = state.tool.kind === "gap" ? state.tool.legInsertAt : state.phantom?.insertAt;
     if (insertAt == null || !structure) return null;
-    const itemIndex = rows.findIndex((r) => (r.kind === "control" ? r.seqIndex === insertAt : r.kind === "finish" && insertAt >= sequenceIds.length));
-    const to = rows[itemIndex], from = rows.slice(0, itemIndex).reverse().find((r) => r.pt);
-    if (!to?.pt || !from?.pt) return null;
-    const explicit = explicitStructure(structure, sites);
-    const item = explicit.items[itemIndex];
+    const leg = legForInsert(rows, insertAt);
+    if (!leg || !leg.from.pt || !leg.to.pt) return null;
+    const { itemIndex, from, to } = leg;
+    const item = explicitItems[itemIndex];
     const stored = item && item.kind !== "variation" ? item.leg?.gaps ?? [] : [];
+    const bends = item && item.kind !== "variation" ? item.leg?.bends : undefined;
     const effective = courseInfo?.derivation?.courses[0]?.legs.find((l) => l.from === String(from.id) && l.to === String(to.id))?.gaps ?? [];
-    return { kind: "leg", itemIndex, a: from.pt, b: to.pt, gaps: stored.length ? stored : effective, stored: stored.length > 0 };
-  }, [courseInfo, state.selectedControlId, state.phantom, state.tool, coordsById, kindOf, controlRowsById, structure, rows, sequenceIds, sites]);
+    // Fractions of the bent length (§6.3): the target is the leg's polyline through its bends.
+    return { kind: "leg", itemIndex, points: legPolyline(from.pt, bends, to.pt), gaps: stored.length ? stored : effective, stored: stored.length > 0 };
+  }, [courseInfo, state.selectedControlId, state.phantom, state.tool, coordsById, kindOf, controlRowsById, structure, rows, explicitItems]);
 
   const writeGaps = useCallback((target: GapTarget, gaps: AngularGap[] | FractionGap[]) => {
     if (target.kind === "circle") {

@@ -10,6 +10,7 @@ import type { course } from "@oxygen/shared";
 import type { EditorToolBinding, ToolPointer, ToolShape } from "../../../components/MapViewer";
 import type { EditorTarget } from "../../../lib/editor/hit";
 import { circleGapAt, circleGapFromDrag, compassDeg, legFraction, legGapAt, legGapFromDrag, type AngularGap, type FractionGap } from "./gaps";
+import { polylineDistance, polylineSlice } from "../../../lib/editor/bends";
 import { legLengthShape } from "../../../lib/editor/leg-length";
 import { isClosedKind, pointInPolygon, smoothed, step, type PolygonState } from "./polygon";
 import { outlinePoints, vertexRule, type Vertex } from "../../../lib/editor/geometry-edit";
@@ -376,7 +377,8 @@ export function pickSymbolBinding(o: { onPick: (pt: Pt, toleranceMm: number) => 
 /** `gaps`: the effective ones (stored, else automatic); `stored`: whether a list is stored (Reset gaps applies). */
 export type GapTarget =
   | { kind: "circle"; siteId: number; centre: Pt; radiusMm: number; gaps: AngularGap[]; stored?: boolean }
-  | { kind: "leg"; itemIndex: number; a: Pt; b: Pt; gaps: FractionGap[]; stored?: boolean };
+  /** `points`: the leg's polyline — the previous site, its bends, the site (docs/course-editor.md §6.3). */
+  | { kind: "leg"; itemIndex: number; points: Pt[]; gaps: FractionGap[]; stored?: boolean };
 
 export interface GapOptions {
   gesture: GestureRef;
@@ -406,19 +408,16 @@ export function gapBinding(o: GapOptions): EditorToolBinding {
     const preview = pending ? circleGapFromDrag(t.centre, pending.from, pending.to) : null;
     if (preview) shapes.push({ kind: "line", points: arcPoints(t.centre, t.radiusMm, preview), color: BLUE, widthPx: 5, testId: "editor-gap-preview" });
   } else {
-    const at = (f: number) => ({ x: t.a.x + (t.b.x - t.a.x) * f, y: t.a.y + (t.b.y - t.a.y) * f });
-    shapes.push({ kind: "line", points: [t.a, t.b], dashed: true, color: BLUE, testId: "editor-gap-target", data: { kind: "leg" } });
-    t.gaps.forEach((g, i) => shapes.push({ kind: "line", points: [at(g.from), at(g.to)], color: "#f59e0b", widthPx: 5, testId: "editor-gap", data: { index: String(i), from: String(g.from), to: String(g.to) } }));
-    const preview = pending ? legGapFromDrag(t.a, t.b, pending.from, pending.to) : null;
-    if (preview) shapes.push({ kind: "line", points: [at(preview.from), at(preview.to)], color: BLUE, widthPx: 5, testId: "editor-gap-preview" });
+    shapes.push({ kind: "line", points: t.points, dashed: true, color: BLUE, testId: "editor-gap-target", data: { kind: "leg" } });
+    t.gaps.forEach((g, i) => shapes.push({ kind: "line", points: polylineSlice(t.points, g.from, g.to), color: "#f59e0b", widthPx: 5, testId: "editor-gap", data: { index: String(i), from: String(g.from), to: String(g.to) } }));
+    const preview = pending ? legGapFromDrag(t.points, pending.from, pending.to) : null;
+    if (preview) shapes.push({ kind: "line", points: polylineSlice(t.points, preview.from, preview.to), color: BLUE, widthPx: 5, testId: "editor-gap-preview" });
   }
   /** On the rim / leg within reach (screen px, at least 1 mm). */
   const onTarget = (p: ToolPointer) => {
     const reach = Math.max(1, 10 * p.mmPerPx);
     if (t.kind === "circle") return Math.abs(Math.hypot(p.pt.x - t.centre.x, p.pt.y - t.centre.y) - t.radiusMm) <= reach;
-    const f = legFraction(t.a, t.b, p.pt);
-    const q = { x: t.a.x + (t.b.x - t.a.x) * f, y: t.a.y + (t.b.y - t.a.y) * f };
-    return Math.hypot(p.pt.x - q.x, p.pt.y - q.y) <= reach;
+    return polylineDistance(t.points, p.pt) <= reach;
   };
   return {
     exclusive: true,
@@ -441,10 +440,10 @@ export function gapBinding(o: GapOptions): EditorToolBinding {
       o.gesture.current = null;
       if (g?.kind !== "gap" || !pt) return o.redraw();
       g.to = pt;
-      const gap = t.kind === "circle" ? circleGapFromDrag(t.centre, g.from, g.to) : legGapFromDrag(t.a, t.b, g.from, g.to);
+      const gap = t.kind === "circle" ? circleGapFromDrag(t.centre, g.from, g.to) : legGapFromDrag(t.points, g.from, g.to);
       if (gap) return o.onAdd(gap);
       // A click on a gap removes it.
-      const index = t.kind === "circle" ? circleGapAt(t.gaps, compassDeg(t.centre, pt)) : legGapAt(t.gaps, legFraction(t.a, t.b, pt));
+      const index = t.kind === "circle" ? circleGapAt(t.gaps, compassDeg(t.centre, pt)) : legGapAt(t.gaps, legFraction(t.points, pt));
       if (index >= 0) o.onRemove(index);
       else o.redraw();
     },
