@@ -2228,6 +2228,20 @@ test.describe("P2: the status bar out of the footer", () => {
     await expect(popover).toHaveCount(0);
   });
 
+  test("on a 1280 × 720 laptop screen the top bar keeps one row with the indicator and the button", async ({ page }) => {
+    await page.setViewportSize({ width: 1280, height: 720 });
+    await openEditor(page);
+    await newCourse(page, "P2 row");
+    await expect(page.getByTestId("editor-save-state")).toHaveAttribute("data-state", "saved", { timeout: 15000 });
+    // Saved is the dot alone: its words are the title, not on the bar.
+    expect((await page.getByTestId("editor-save-state-text").boundingBox())!.width).toBeLessThanOrEqual(1);
+    await expect(page.getByTestId("editor-save-state")).toHaveAttribute("title", /\S/);
+    const mid = async (id: string) => { const b = (await page.getByTestId(id).boundingBox())!; return b.y + b.height / 2; };
+    const row = await mid("editor-course-picker");
+    // P2's two pieces stay on the course picker's row (presence chips of other sessions and the help may still wrap after them).
+    for (const id of ["editor-export", "editor-stats", "editor-save-state"]) expect(Math.abs((await mid(id)) - row), id).toBeLessThan(6);
+  });
+
   test("a failed save shows its text in the top bar on a small laptop screen", async ({ page }) => {
     await page.setViewportSize({ width: 1024, height: 700 });
     await openEditor(page);

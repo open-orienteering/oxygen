@@ -54,7 +54,7 @@ export const checksBadge = (checks: number | null): number | null => (checks && 
 
 export interface SaveIndicator {
   tone: "ok" | "busy" | "alert";
-  /** True for a failed or conflicting save: its text shows at every width, never only in a tooltip. */
+  /** True for a failed or conflicting save: its words show, never only in a tooltip; otherwise the dot alone. */
   alwaysText: boolean;
   key: "statusSaved" | "statusSaving" | "statusError" | "statusConflict";
 }

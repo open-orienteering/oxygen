@@ -41,7 +41,7 @@ describe("the course-info popover's rows (docs/course-editor.md §2)", () => {
 });
 
 describe("the top bar's save indicator (§3: an error or a conflict never hides)", () => {
-  it("saved and saving may collapse to the dot; error and conflict always show their text", () => {
+  it("saved and saving are the dot alone; error and conflict always show their words", () => {
     expect(saveIndicator("saved")).toEqual({ tone: "ok", alwaysText: false, key: "statusSaved" });
     expect(saveIndicator("saving")).toEqual({ tone: "busy", alwaysText: false, key: "statusSaving" });
     expect(saveIndicator("error")).toEqual({ tone: "alert", alwaysText: true, key: "statusError" });
