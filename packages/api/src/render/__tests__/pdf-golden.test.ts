@@ -23,7 +23,7 @@ import { describe, expect, it } from "vitest";
 import { render } from "@oxygen/shared";
 import { pageSceneNames } from "@oxygen/shared/print";
 import { goldenDir } from "../golden.js";
-import { composePageScene } from "../page-raster.js";
+import { DESCRIPTION_GOLDEN, PAGE_GOLDEN_SUPERSAMPLE, composeDescriptionScene, composePageScene } from "../page-raster.js";
 import {
   type GoldenPdf,
   type Pixels,
@@ -31,6 +31,8 @@ import {
   goldenOracle,
   goldenScenePdf,
   hasTool,
+  descriptionOracle,
+  descriptionScenePdf,
   pageOracle,
   pageScenePdf,
   qpdfCheck,
@@ -38,7 +40,6 @@ import {
   rasteriserCmykColours,
 } from "../pdf-golden.js";
 import { GOLDEN_SUPERSAMPLE } from "../golden.js";
-import { PAGE_GOLDEN_SUPERSAMPLE } from "../page-raster.js";
 import { diffImages } from "../reference-raster.js";
 
 /** Same per-channel tolerance as the WebGL2 golden spec (`e2e/map-gl-golden.spec.ts`). */
@@ -130,6 +131,23 @@ describe.skipIf(!tools && !required)("PDF golden tier", () => {
       const pdf = await pageScenePdf(name, "cmyk", page);
       const oracle = await pageOracle(page, await cmykColour(pdf));
       await check(pdf, oracle, PAGE_GOLDEN_SUPERSAMPLE, MAX_DIFF_RATIO, `${name} cmyk`);
+    }, 120_000);
+  });
+
+  // The description sheet is mostly text (twelve blocks of codes, numbers and headers), so it is held
+  // like the text scenes: embedded fonts to the text budget, outlines to 0.5 %. Measured at
+  // introduction (F11, 2026-11-07): rgb 0.46 %, cmyk 0.44 %, outlines 0.023 %.
+  describe(DESCRIPTION_GOLDEN, () => {
+    it("rgb: within budget of the description-sheet golden; text as outlines within 0.5 %", async () => {
+      const golden = await decode(await readFile(new URL(`${DESCRIPTION_GOLDEN}.png`, goldenDir)));
+      await check(await descriptionScenePdf("rgb"), golden, PAGE_GOLDEN_SUPERSAMPLE, FONT_TEXT_MAX_RATIO, `${DESCRIPTION_GOLDEN} rgb`);
+      await check(await descriptionScenePdf("rgb", undefined, { text: "outline" }), golden, PAGE_GOLDEN_SUPERSAMPLE, MAX_DIFF_RATIO, `${DESCRIPTION_GOLDEN} rgb outlines`);
+    }, 120_000);
+
+    it("cmyk: within budget of the oracle in the rasteriser's CMYK conversion", async () => {
+      const page = await composeDescriptionScene();
+      const pdf = await descriptionScenePdf("cmyk", page);
+      await check(pdf, await descriptionOracle(page, await cmykColour(pdf)), PAGE_GOLDEN_SUPERSAMPLE, FONT_TEXT_MAX_RATIO, `${DESCRIPTION_GOLDEN} cmyk`);
     }, 120_000);
   });
 });

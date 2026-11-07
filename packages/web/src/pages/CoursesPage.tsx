@@ -19,6 +19,7 @@ import { parsePick } from "../lib/template-picker";
 import { PrintStatusPill, TemplateBadge, TemplatePicker } from "../components/CourseMapsOverview";
 import { useCourseMapsOverview } from "../hooks/useCourseMapsOverview";
 import { downloadSameOriginFile } from "../lib/download-api";
+import { DescriptionSheetsDialog } from "./editor/DescriptionSheetsDialog";
 import {
   courselessClassNames,
   matchCourselessClass,
@@ -28,6 +29,7 @@ import { versionConflictOfError } from "../lib/version-book";
 function CourseExportMenu({ nameId, onAllMaps, onAllControls }: { nameId: string; onAllMaps: () => void; onAllControls: () => void }) {
   const { t } = useTranslation("courses");
   const [open, setOpen] = useState(false);
+  const [descriptions, setDescriptions] = useState(false);
   const containerRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
@@ -91,9 +93,19 @@ function CourseExportMenu({ nameId, onAllMaps, onAllControls }: { nameId: string
             role="menuitem"
             data-testid="course-export-all-controls"
             onClick={() => { setOpen(false); onAllControls(); }}
-            className="w-full px-3 py-2 text-left text-sm text-slate-700 hover:bg-blue-50 cursor-pointer border-b border-slate-100"
+            className="w-full px-3 py-2 text-left text-sm text-slate-700 hover:bg-blue-50 cursor-pointer"
           >
             {t("exportAllControlsMap")}
+          </button>
+          {/* Description sheets (docs/course-print.md §6.4): the editor's dialog. */}
+          <button
+            type="button"
+            role="menuitem"
+            data-testid="course-export-descriptions"
+            onClick={() => { setOpen(false); setDescriptions(true); }}
+            className="w-full px-3 py-2 text-left text-sm text-slate-700 hover:bg-blue-50 cursor-pointer border-b border-slate-100"
+          >
+            {t("exportDescriptionSheets")}
           </button>
           <button
             type="button"
@@ -115,6 +127,7 @@ function CourseExportMenu({ nameId, onAllMaps, onAllControls }: { nameId: string
           </button>
         </div>
       )}
+      {descriptions && <DescriptionSheetsDialog nameId={nameId} onClose={() => setDescriptions(false)} />}
     </div>
   );
 }

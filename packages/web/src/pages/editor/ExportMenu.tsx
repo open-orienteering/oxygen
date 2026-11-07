@@ -2,7 +2,7 @@
  * Export ▾ in the editor's top bar (docs/course-layout.md §7; 08 §5.2):
  * `lib/editor/export-menu.ts` lists the entries; a map entry ensures the
  * sheets first (`layout.autoSheets`), then the file downloads from its
- * route.
+ * route; *Description sheets…* opens its dialog (course-print.md §6.4).
  */
 
 import { useEffect, useRef, useState } from "react";
@@ -10,6 +10,7 @@ import { useTranslation } from "react-i18next";
 import { trpc } from "../../lib/trpc";
 import { downloadSameOriginFile } from "../../lib/download-api";
 import { exportEntries, type ExportEntry, type ExportState } from "../../lib/editor/export-menu";
+import { DescriptionSheetsDialog } from "./DescriptionSheetsDialog";
 
 const LABEL = {
   sheet: "exportSheet",
@@ -17,6 +18,7 @@ const LABEL = {
   class: "exportClass",
   all: "exportAll",
   allControls: "exportAllControls",
+  descriptions: "exportDescriptions",
   iofxml: "exportIofXml",
   ppen: "exportPpen",
 } as const;
@@ -26,6 +28,7 @@ export function ExportMenu({ state, onError }: { state: ExportState; onError: (m
   const utils = trpc.useUtils();
   const [open, setOpen] = useState(false);
   const [busy, setBusy] = useState(false);
+  const [descriptions, setDescriptions] = useState(false);
   const box = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
@@ -39,6 +42,10 @@ export function ExportMenu({ state, onError }: { state: ExportState; onError: (m
 
   const run = async (e: ExportEntry) => {
     setOpen(false);
+    if (e.dialog === "descriptions") {
+      setDescriptions(true);
+      return;
+    }
     setBusy(true);
     try {
       if (e.ensure) {
@@ -87,6 +94,7 @@ export function ExportMenu({ state, onError }: { state: ExportState; onError: (m
           ))}
         </div>
       )}
+      {descriptions && <DescriptionSheetsDialog nameId={state.nameId} onClose={() => setDescriptions(false)} />}
     </div>
   );
 }

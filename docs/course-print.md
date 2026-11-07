@@ -38,8 +38,10 @@ with `main` — with `exports` present Node ignores `main`.
 | `print/page.ts` | the page model (§4): `PageInput`, `ComposedPage`, `T_map`, `flipPageObject`, `transformPassStream` |
 | `print/compose.ts` | `composePage`, `writePage` (§4, §6.3) |
 | `print/description.ts` | the description block and the IOF pictogram glyphs (§6.2) |
+| `print/description-sheet.ts` | description sheets: the block tiled on A4, a page drawn on the writer (§6.4); the options' constants are `course-maps/description-sheet-options.ts` (root export, read by the web dialog too) |
 | `print/geo.ts` | the `/Measure /GEO` viewport (§7.3) |
 | `print/__fixtures__/pages.ts` | the page scenes (§7.5) |
+| `print/__fixtures__/description-sheets.ts` | description-sheet blocks and the `descriptions-a4` scene (§6.4, §7.5) |
 | `print/index.ts` | the module's exports |
 
 **Writer.** `@cantoo/pdf-lib` (the maintained fork of `pdf-lib`, 05 §6
@@ -419,6 +421,77 @@ stays isomorphic (§1; a test reads the module's imports). Images are
 DeviceRGB in both modes: CMYK conversion of images belongs to the
 offset profile (05 §5.7, §2).
 
+### 6.4 Description sheets
+
+Control descriptions printed on their own, many to a sheet, to cut apart
+and hand out at the start (08 §1 Organiser row, §3 "print sheets by
+participant count", §4.6 "Control-description sheets"; F11). Printed on
+demand from the request's options: no `course_maps` row (the slice F
+split's decision, 08 §4.8 — a row would hold three fields and need a list
+UI), no base map and no template.
+
+**Route.** `GET /api/maps/:nameId/descriptions.pdf` (`courses.view`;
+`packages/api/src/course-maps/descriptions-pdf.ts`):
+
+| Parameter | Values | Default |
+|---|---|---|
+| `classes` | class seqs, comma-separated, printed in the order given | — |
+| `courses` | course seqs, comma-separated; exclusive with `classes` (400) | — |
+| (neither) | every class with a course, in class order (`sort_index`, then seq) | |
+| `copies` | `count` · `fill` · a number 1–500 | `count` |
+| `cell` | `5` · `6` · `7` (mm) | `6` |
+| `gap` | mm between blocks, 0–30 | `5` |
+
+- **One block per class** (or per course with `courses=`). The block is
+  the map page's (§6.2): rows and header from `resolveMapLayout` — the
+  function every sheet resolves through (§5) — on a stand-in A4
+  template, so start, controls, special rows, the finish and its
+  measured length (with a base map; else the instructions' length only)
+  are the sheet's by construction. The header names the class
+  (`classes=`, as a class prints its map, `course-layout.md` §6) or every
+  class of the course (`courses=`). A class without a course is skipped.
+- **Copies.** `count` = the class's runners (not removed, not withdrawn:
+  `class.list`'s count) + its `vacant_count`; a course's = the sum over its
+  classes; at least 1, so a class with nobody yet still prints a proof.
+  `fill` = as many as one sheet holds; a number = that many.
+- **Tiling** (`tileDescriptionSheets`, `print/description-sheet.ts`; pure):
+  A4 portrait, a 10 mm margin; the block `8 × cell` wide and
+  `cell × (rows + 3)` high (`descriptionBlockSize`); columns =
+  `⌊(190 + gap) / (8·cell + gap)⌋`, rows likewise over 277 mm. Blocks are
+  placed row-major from the top-left. **Classes never share a page**: a
+  class's copies run onto as many pages as they need, the next class
+  starts a new page, so every page has one label. A 14-row block (12
+  controls) fits 4 × 3 at 5 mm, 3 × 2 at 6 and 7 mm (gap 5). A block
+  taller than the usable page is a 400 `DESCRIPTION_TOO_TALL` naming the
+  class and the cell size (a 40-control course at 7 mm).
+- **Pages.** `composeDescriptionPage` puts every block of a page through
+  `descriptionBlock()` and one `symbolise` (page µm, y-up; white and the
+  ink as the page's colours, as `pageLayer` adds the block's);
+  `writeDescriptionPage` writes the white sheet and the stream under
+  µm → pt — `writePage`'s page-layer lines without a frame or map layer
+  (§4.3–4.4). All pages go through one `PdfWriter`, so a pictogram is one
+  form XObject and each face one font for the document (§1, 05 §5.10).
+  `/PageLabels` and the outline carry the class (or course) name (§7.2).
+  **In process**, not in the print worker: there is no document to
+  decode, and §8.2's other concern — composing and writing on the event
+  loop — is met by writing **one page per turn of the loop**
+  (`setImmediate` between pages, as `renderCoursePages` does) under a
+  **render-gate permit** (`renderGate()`, so prints never exceed
+  `MAP_RENDER_CONCURRENCY` together). Measured 2026-11-07 (14-row block,
+  6 mm, `cmyk`): ~18 ms a page; 200 pages (the cap) in 3.5 s with the
+  event loop's longest wait 32 ms, the save included.
+- **Response** as `maps.pdf` (§8.3): `application/pdf`,
+  `attachment; filename="<event>_descriptions.pdf"`, `no-store`, `cmyk`,
+  real dates (the builder takes `deterministic` for tests, §3.2);
+  `Info /Title` `<event> descriptions`, `/Author` the organiser. 400 for
+  a bad parameter, an unknown class or course, a block too tall, or more
+  than 200 pages (the `maps.pdf` cap, counted before drawing); 404 "Event
+  not found" / "Unknown event"; 404 `{ error: "No descriptions" }` when
+  nothing selected has a course.
+- **UI**: Export ▾ *Description sheets…* in the editor and the Courses
+  page's export menu open one dialog (`course-layout.md` §7). `gap` is the
+  route's only (the dialog uses the default).
+
 ## 7. Boxes, metadata and geospatial
 
 ### 7.1 Boxes and metadata
@@ -484,14 +557,19 @@ lines drawn by the library; images DeviceRGB in `cmyk`.
 | `packages/api/src/__tests__/integration/course-maps.test.ts` "creates, duplicates and applies…", "resolveSheet: a template previewed…" (E6; E-pages read both through `resolveSheet`, `previewLayout` gone) | a course with no structure and no GeoJSON resolves start → controls → finish (the event's first start / finish) and its description rows; a template alone resolves centred on the map origin |
 | `packages/api/src/__tests__/integration/course-print.test.ts` | the E2E fixture map pinned on a `vector` event: legacy event → no print document; two sheets → one PDF of two A4 pages, `TrimBox`, labels, outlines, Type0 / CIDFontType2 shared, frame clip and `T_map`, no `rg`, PNG and rasterised SVG logos shared (600 dpi), `/Measure /GEO` of the fixture's georeference, deterministic bytes |
 | `packages/api/src/render/__tests__/page-raster.test.ts` | the page oracle: white outside the frame and the ring, map inside, page box on top; rotated building where `T_map` puts it; block position on A4 |
-| `packages/api/src/render/__tests__/golden-files.test.ts` | `page-sprint-a4`, `page-ring`, `page-rotated` match the page oracle |
+| `packages/api/src/render/__tests__/golden-files.test.ts` | `page-sprint-a4`, `page-ring`, `page-rotated` match the page oracle; `descriptions-a4` matches the description-sheet oracle (F11) |
+| `print/__tests__/description-sheet.test.ts` (F11) | §6.4: a 14-row block 4 × 3 / 3 × 2 / 3 × 2 per page at 5 / 6 / 7 mm; placement inside the margin; `count` (runners + vacancies, at least 1), a number, `fill`; 13 copies at 5 mm → two pages of one class; classes in order, never sharing a page; the gap only between blocks (0 / 20 / 30 mm); `DESCRIPTION_TOO_TALL`; the writer: one A4 page per tiled page labelled by class, one outline item each, the white sheet first, no `rg` in `cmyk` / no `k` in `rgb`, the XObject set the same for one page and three, deterministic bytes |
 
 The page goldens (`e2e/__golden__/map-gl/page-*.png`, 05 §7 tier 3) are
 the page oracle (`render/page-raster.ts`): the map layer moved through
 `T_map` into page µm (`transformPassStream`) and rasterised over the
 frame alone — the frame clip is the raster's extent — composited with the
 page layer on white paper, at 10 px/mm, supersampled 2× (an A4 sheet at
-the scene goldens' 4× would be a ~400 MB intermediate). The WebGL2
+the scene goldens' 4× would be a ~400 MB intermediate). The
+description-sheet golden (`descriptions-a4.png`, F11:
+`descriptionSheetScene()`, one class at 6 mm cells, `fill` → 3 × 4
+blocks) is the same oracle with no map layer
+(`rasteriseDescriptionPage`). The WebGL2
 golden spec does not draw pages (the viewer has no page view until slice
 D); the PDF golden tier compares the `rgb` page rasterised by
 `pdftocairo` against them (§9.2).
@@ -640,6 +718,10 @@ E2E tests check page count and size; C7 compared the rasters).
 | `packages/api/src/__tests__/print-worker.test.ts` | the worker on `e2e/test.ocd`: bytes equal in-process; the blob read and sent once per worker; `page` order; an error keeps the worker usable; `CourseStackError` re-created (a document with palette ids stripped); a reset rejects the request in flight and the next call recovers; the main thread's event-loop delay stays under 25 ms (or half a page) during a 10-page A3 print; `PRINT_WORKERS` parsing |
 | `packages/api/src/__tests__/worker-bootstrap.test.ts` | the shared bootstrap: `.js` imported as is, `.ts` through tsx |
 | `packages/api/src/render/__tests__/pdf-golden.test.ts` | the PDF golden tier, §9.2, and `qpdf --check` on every file it writes; `boxDown`; the swatch read-back |
+| `packages/api/src/__tests__/integration/descriptions-pdf.test.ts` (F11) | §6.4 on an event without a base map: `selectDescriptionBlocks` — classes in the order asked, count = runners (a removed and a withdrawn one left out) + vacancies, the header naming the class, the map page's rows (start, controls, the special after its control, finish); `courses=` one block per course, its classes in the header, the count their sum; neither = every class with a course in class order, a courseless class skipped. The route: one A4 page per class labelled by class, headers, file name, `Info /Title`, `qpdf --check`; 13 copies → two pages of one class; `fill` at 5 mm; 400s (both selections, bad ids, copies 0 / 501 / text, cell 8, gap −1 / 31, unknown class / course, 231 pages > 200); 404 "No descriptions" (a courseless class, an event without courses), an unknown event |
+| `packages/api/src/__tests__/descriptions-pdf.test.ts` (F11) | `buildDescriptionsPdf` yields between pages: 40 pages with the event loop's longest wait under 250 ms (the whole build without the yield); more than 200 pages refused before a page is drawn |
+| `e2e/course-editor.spec.ts` "F11: description sheets" (`chromium`) | Export ▾ → *Description sheets…*: focus inside the dialog and kept there by Tab; every class with a course checked; `k` typed in it arms no tool; *None* disables the download; two classes, two copies, 5 mm → a `…_descriptions.pdf` of two A4 pages; Escape closes the dialog only |
+| `e2e/courses.spec.ts` "Export → Description sheets…" (`chromium`) | the Courses page's export menu opens the same dialog; `fill` → `itest_descriptions.pdf`, one page per checked class |
 | `e2e/course-maps.spec.ts` (`chromium`) | the export flows (E-pages: Layout mode's Export ▾ *This sheet*, the Courses page's course PDF and export menu): page count and A4 page size of the single-sheet, course, all-controls and all-maps downloads (05 §7), `application/pdf` and no `X-Print-Pipeline` |
 
 ### 9.2 The PDF golden tier
@@ -718,6 +800,13 @@ the glyph renderer alone, largest on the small text of `lib-text` and
 text is a few short strings): the page scenes are held to **0.5 %
 with embedded fonts**, in both modes — the text tier applies to scenes
 only.
+
+The **description sheet** (`descriptions-a4`, F11) is mostly text —
+twelve blocks of headers, numbers and codes — so it is held like the
+text scenes: embedded fonts to the 2.5 % text budget in both modes, the
+`rgb` page written again with text as outlines and held to 0.5 %.
+Measured at introduction (2026-11-07, poppler 22.02): `rgb` 0.459 %,
+`cmyk` 0.439 %, outlines 0.023 %.
 
 ### 9.3 `qpdf --check`
 

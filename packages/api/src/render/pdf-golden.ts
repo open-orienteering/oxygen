@@ -25,6 +25,7 @@ import { promisify } from "node:util";
 import { render } from "@oxygen/shared";
 import {
   type ColourMode,
+  type ComposedDescriptionPage,
   type ComposedPage,
   type PageSceneName,
   PdfWriter,
@@ -32,11 +33,19 @@ import {
   layerMatrix,
   mapLayerOperators,
   rgbToCmykNaive,
+  writeDescriptionPage,
   writePage,
 } from "@oxygen/shared/print";
 import { bundledPdfFaces } from "./fonts.js";
 import { GOLDEN_SUPERSAMPLE, goldenFonts } from "./golden.js";
-import { PAGE_GOLDEN_SUPERSAMPLE, type PageRaster, composePageScene, rasterisePage } from "./page-raster.js";
+import {
+  PAGE_GOLDEN_SUPERSAMPLE,
+  type PageRaster,
+  composeDescriptionScene,
+  composePageScene,
+  rasteriseDescriptionPage,
+  rasterisePage,
+} from "./page-raster.js";
 import { rasterisePassStream } from "./reference-raster.js";
 
 /** RGBA, top row first — what `diffImages` compares. */
@@ -105,6 +114,20 @@ export async function pageScenePdf(name: PageSceneName, mode: ColourMode, page?:
     height: Math.round(composed.paper.heightMm * render.GOLDEN_PX_PER_MM),
     colours: composed.colours.map((c) => ({ cmyk: c.cmyk })),
     hasText: [composed.mapLayer.stream, composed.pageLayer.stream].some((s) => s.passes.some((p) => p.kind === "text")),
+  };
+}
+
+/** The description-sheet scene as the `descriptions.pdf` route writes it (docs/course-print.md §6.4). */
+export async function descriptionScenePdf(mode: ColourMode, page?: ComposedDescriptionPage, opts: { text?: "font" | "outline" } = {}): Promise<GoldenPdf> {
+  const composed = page ?? (await composeDescriptionScene());
+  const writer = await PdfWriter.create({ faces: await faces(), deterministic: true, info: { title: "descriptions-a4" }, text: opts.text });
+  writeDescriptionPage(writer, composed, { mode });
+  return {
+    bytes: await writer.save(),
+    width: Math.round(composed.paper.widthMm * render.GOLDEN_PX_PER_MM),
+    height: Math.round(composed.paper.heightMm * render.GOLDEN_PX_PER_MM),
+    colours: composed.colours.map((c) => ({ cmyk: c.cmyk })),
+    hasText: composed.stream.passes.some((p) => p.kind === "text"),
   };
 }
 
@@ -209,4 +232,9 @@ export async function goldenOracle(name: render.GoldenSceneName, colour: (i: num
 /** The page oracle drawn in other colours. */
 export async function pageOracle(page: ComposedPage, colour: (i: number) => string): Promise<Pixels> {
   return rasterisePage(page, { supersample: PAGE_GOLDEN_SUPERSAMPLE, colour });
+}
+
+/** The description-sheet oracle drawn in other colours. */
+export async function descriptionOracle(page: ComposedDescriptionPage, colour: (i: number) => string): Promise<Pixels> {
+  return rasteriseDescriptionPage(page, { supersample: PAGE_GOLDEN_SUPERSAMPLE, colour });
 }

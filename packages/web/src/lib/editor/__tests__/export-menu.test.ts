@@ -1,12 +1,12 @@
 import { describe, expect, it } from "vitest";
-import { exportEntries } from "../export-menu";
+import { descriptionSheetsUrl, exportEntries } from "../export-menu";
 
 const base = { nameId: "my event", courseSeq: 3, classSeq: null, sheetSeq: null, canEdit: true };
 
 describe("exportEntries (course-layout.md §7)", () => {
   it("lists the phase-1 entries on the existing routes", () => {
     const e = exportEntries(base);
-    expect(e.map((x) => x.id)).toEqual(["sheet", "course", "class", "all", "allControls", "iofxml", "ppen"]);
+    expect(e.map((x) => x.id)).toEqual(["sheet", "course", "class", "all", "allControls", "descriptions", "iofxml", "ppen"]);
     const by = Object.fromEntries(e.map((x) => [x.id, x]));
     expect(by.course.url).toBe("/api/maps/my%20event/maps.pdf?courses=3");
     expect(by.all.url).toBe("/api/maps/my%20event/maps.pdf");
@@ -42,5 +42,20 @@ describe("exportEntries (course-layout.md §7)", () => {
 
   it("without courses.edit nothing is created first", () => {
     expect(exportEntries({ ...base, classSeq: 9, canEdit: false }).every((x) => x.ensure === null)).toBe(true);
+  });
+
+  it("description sheets open a dialog: nothing to ensure, never disabled (course-print.md §6.4)", () => {
+    const by = Object.fromEntries(exportEntries({ ...base, courseSeq: null, canEdit: false }).map((x) => [x.id, x]));
+    expect(by.descriptions).toMatchObject({ ensure: null, disabled: false, dialog: "descriptions" });
+    expect(by.descriptions.url).toBe("/api/maps/my%20event/descriptions.pdf");
+    expect(by.course.dialog).toBeUndefined();
+  });
+});
+
+describe("descriptionSheetsUrl", () => {
+  it("names the classes, the copies mode and the cell size", () => {
+    expect(descriptionSheetsUrl("my event", { classSeqs: [4, 2], copies: "count", cell: 6 })).toBe("/api/maps/my%20event/descriptions.pdf?classes=4%2C2&copies=count&cell=6");
+    expect(descriptionSheetsUrl("e", { classSeqs: [1], copies: "fill", cell: 5 })).toBe("/api/maps/e/descriptions.pdf?classes=1&copies=fill&cell=5");
+    expect(descriptionSheetsUrl("e", { classSeqs: [1], copies: 12, cell: 7, gap: 3 })).toBe("/api/maps/e/descriptions.pdf?classes=1&copies=12&cell=7&gap=3");
   });
 });

@@ -12,7 +12,17 @@
  */
 
 import { render } from "@oxygen/shared";
-import { type ComposedPage, type PageSceneName, composePage, pageScene, transformPassStream } from "@oxygen/shared/print";
+import {
+  type ComposedDescriptionPage,
+  type ComposedPage,
+  type PageSceneName,
+  composeDescriptionPage,
+  composePage,
+  descriptionSheetScene,
+  pageScene,
+  tileDescriptionSheets,
+  transformPassStream,
+} from "@oxygen/shared/print";
 import { glyphOutlineFrom } from "./fonts.js";
 import { goldenFonts } from "./golden.js";
 import { encodePng, rasterisePassStream } from "./reference-raster.js";
@@ -92,4 +102,49 @@ export async function composePageScene(name: PageSceneName): Promise<ComposedPag
 /** A page scene's golden (`e2e/__golden__/map-gl/page-*.png`): the page oracle at the golden density. */
 export async function renderPageGoldenPng(name: PageSceneName): Promise<Buffer> {
   return encodePng(await rasterisePage(await composePageScene(name), { supersample: PAGE_GOLDEN_SUPERSAMPLE }));
+}
+
+// ---- description sheets (docs/course-print.md §6.4, §7.5) -------------------
+
+/** The golden's name: `e2e/__golden__/map-gl/descriptions-a4.png`. */
+export const DESCRIPTION_GOLDEN = "descriptions-a4";
+
+/**
+ * A description-sheet page by the reference raster: its one stream (page
+ * µm, y-up) over the whole sheet on white — `rasterisePage`'s page layer
+ * without a map layer.
+ */
+export async function rasteriseDescriptionPage(
+  page: ComposedDescriptionPage,
+  opts: { pxPerMm?: number; supersample?: number; colour?: (i: number) => string } = {},
+): Promise<PageRaster> {
+  const pxPerMm = opts.pxPerMm ?? render.GOLDEN_PX_PER_MM;
+  const fonts = await goldenFonts();
+  const hex = page.colours.map((c) => render.cmykToHex(c.cmyk));
+  const colour = opts.colour ?? ((i: number) => hex[i] ?? "#ff00ff");
+  const width = Math.round(page.paper.widthMm * pxPerMm);
+  const height = Math.round(page.paper.heightMm * pxPerMm);
+  const pixels = new Uint8Array(width * height * 4).fill(255);
+  const sheet = await rasterisePassStream(page.stream, {
+    colour,
+    pxPerMm,
+    background: "none",
+    glyphOutline: glyphOutlineFrom(fonts),
+    supersample: opts.supersample ?? 1,
+    bounds: { minX: 0, minY: 0, maxX: page.paper.widthMm * 1000, maxY: page.paper.heightMm * 1000 },
+  });
+  over(pixels, width, height, sheet, 0, 0);
+  return { width, height, pixels };
+}
+
+/** The `descriptions-a4` scene's one page, composed with the bundled fonts. */
+export async function composeDescriptionScene(): Promise<ComposedDescriptionPage> {
+  const { blocks, options } = descriptionSheetScene();
+  const [page] = tileDescriptionSheets(blocks, options);
+  return composeDescriptionPage(page, await goldenFonts());
+}
+
+/** The description-sheet golden: the oracle at the golden density, supersampled as the page goldens. */
+export async function renderDescriptionGoldenPng(): Promise<Buffer> {
+  return encodePng(await rasteriseDescriptionPage(await composeDescriptionScene(), { supersample: PAGE_GOLDEN_SUPERSAMPLE }));
 }
