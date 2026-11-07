@@ -103,10 +103,12 @@ test.describe("club map library", () => {
     await expect(page.getByTestId("library-tab-maps")).toBeVisible({
       timeout: 15000,
     });
+    // OCAD magic, so the chunked upload accepts it, and nothing the
+    // importer can read after it.
     await page.getByTestId("library-map-upload").setInputFiles({
       name: fileName,
       mimeType: "application/octet-stream",
-      buffer: Buffer.from("not an OCAD file"),
+      buffer: Buffer.concat([Buffer.from([0xad, 0x0c]), Buffer.from("not an OCAD file".repeat(4))]),
     });
     const card = page
       .locator('[data-testid^="library-map-card-"]')

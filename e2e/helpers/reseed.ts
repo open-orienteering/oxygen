@@ -40,10 +40,9 @@ export async function reseed(): Promise<void> {
       `DELETE FROM events WHERE name_id IN (${placeholders}) OR name_id LIKE 'E2E_%' OR name_id LIKE 'Delete_%'`,
       args,
     );
-    await client.query("DELETE FROM club_map_files");
-    // The club library is dual-written to `club_maps` (docs/map-storage.md
-    // §6.5); a leftover series keeps its versions' documents club-visible,
-    // which changes the document route's answer for later specs.
+    // A leftover club-library series (`club_maps`, docs/map-storage.md
+    // §6.5) keeps its versions' documents club-visible, which changes the
+    // document route's answer for later specs.
     await client.query("DELETE FROM club_maps");
     // Club symbol decisions are instance-wide and keyed by symbol geometry
     // (docs/map-symbols.md §8.5 "Scope"): one left behind changes how every

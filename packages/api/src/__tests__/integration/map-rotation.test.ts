@@ -1,6 +1,7 @@
 /**
  * Integration test for course.setMapRotation — persist a north/grivation
- * correction, re-derive map metadata, and clear tile caches.
+ * correction, re-derive the map metadata from the pinned document and the
+ * control coordinates from it.
  */
 
 import { describe, it, expect, beforeAll, afterAll } from "vitest";
@@ -13,10 +14,10 @@ import {
   type TestEventContext,
 } from "../helpers/test-db.js";
 import { makeCaller } from "../helpers/caller.js";
-import { parseOcadMapMetadata } from "../../event-map.js";
+import { uploadEventMap } from "../helpers/upload-map.js";
+import { parseOcadMapMetadata } from "../helpers/ocad-oracle.js";
 import { loadEventCrs } from "../../event-crs.js";
 import { mapMmToWgs84 } from "../../map-projection.js";
-import { refreshMapFileRenderKey } from "../../map-render-cache.js";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const FIXTURE = resolve(__dirname, "../../../../../e2e/test.ocd");
@@ -28,10 +29,7 @@ beforeAll(async () => {
   ctx = await createTestEvent("map_rotation");
   caller = makeCaller(ctx.event);
   const buf = readFileSync(FIXTURE);
-  await caller.course.uploadMap({
-    fileName: "test.ocd",
-    fileDataBase64: buf.toString("base64"),
-  });
+  await uploadEventMap(caller, ctx.nameId, buf);
 });
 
 afterAll(async () => {
@@ -40,7 +38,7 @@ afterAll(async () => {
 });
 
 describe("course.setMapRotation", () => {
-  it("stores the correction, re-derives metadata, and drops tiles", async () => {
+  it("stores the correction and re-derives metadata and control coordinates", async () => {
     const control = await ctx.db.control.create({
       data: {
         eventId: ctx.eventId,
@@ -52,35 +50,7 @@ describe("course.setMapRotation", () => {
         lng: 2,
       },
     });
-    // Unique stack settings so GC of this event's old key is not blocked
-    // by other suites that share the same OCAD blob at rotation 0. The
-    // colour columns have no procedure since E4a; the key is still
-    // written for the v0.5.0 rollback (docs/map-storage.md §4.6).
-    const mapRow = await ctx.db.mapFile.findFirstOrThrow({
-      where: { eventId: ctx.eventId },
-      select: { id: true },
-    });
-    await ctx.db.mapFile.update({
-      where: { id: mapRow.id },
-      data: { colorOverrides: { above: [313131] } },
-    });
-    await refreshMapFileRenderKey(ctx.db, mapRow.id);
-    // Seed a fake cached tile under the pre-rotation render key so we can
-    // assert GC drops it when rotation changes the key.
-    const beforeMeta = await caller.course.mapMetadata();
-    const oldRenderKey = (await ctx.db.mapFile.findUniqueOrThrow({ where: { id: mapRow.id }, select: { renderKey: true } })).renderKey!;
-    expect(oldRenderKey).toBeTruthy();
-    await ctx.db.mapTile.create({
-      data: {
-        renderKey: oldRenderKey,
-        z: 12,
-        x: 1,
-        y: 1,
-        tileData: Buffer.from([0x89, 0x50, 0x4e, 0x47]),
-      },
-    });
-
-    const before = beforeMeta;
+    const before = await caller.course.mapMetadata();
     expect(before).not.toBeNull();
     expect(before!.rotationCorrection).toBe(0);
 
@@ -116,20 +86,33 @@ describe("course.setMapRotation", () => {
     const after = await caller.course.mapMetadata();
     expect(after!.rotationCorrection).toBe(11);
     expect(after!.northOffset).toBeCloseTo(expected.northOffset!, 6);
-    // Still refreshed for the v0.5.0 rollback (docs/map-storage.md §9).
-    const afterRow = await ctx.db.mapFile.findUniqueOrThrow({ where: { id: mapRow.id }, select: { renderKey: true } });
-    expect(afterRow.renderKey).not.toBe(oldRenderKey);
-
-    const tiles = await ctx.db.mapTile.count({
-      where: { renderKey: oldRenderKey },
-    });
-    expect(tiles).toBe(0);
 
     // Reset to 0 should restore the uncorrected northOffset.
     const reset = await caller.course.setMapRotation({ degrees: 0 });
     expect(reset.rotationCorrection).toBe(0);
     const uncorrected = await parseOcadMapMetadata(readFileSync(FIXTURE), 0);
     expect(reset.northOffset).toBeCloseTo(uncorrected.northOffset!, 6);
+  });
+
+  it("re-derives the legs of derived courses only: a file course keeps its length, legs and source", async () => {
+    await ctx.db.control.createMany({ data: [{ eventId: ctx.eventId, codes: "41", xpos: 10, ypos: 10 }, { eventId: ctx.eventId, codes: "42", xpos: 40, ypos: 10 }] });
+    const derived = await caller.course.create({ name: "Derived", controlIds: [41, 42] });
+    const file = await ctx.db.course.create({ data: { eventId: ctx.eventId, name: "From file", lengthM: 1234, legs: "600;634;", lengthSource: "file" } });
+    const before = await ctx.db.course.findFirstOrThrow({ where: { eventId: ctx.eventId, seq: derived.id } });
+    expect(before.lengthSource).toBe("derived");
+
+    await caller.course.setMapRotation({ degrees: 3 });
+    try {
+      const after = await ctx.db.course.findUniqueOrThrow({ where: { id: file.id } });
+      expect([after.lengthM, after.legs, after.lengthSource]).toEqual([1234, "600;634;", "file"]);
+      const derivedAfter = await ctx.db.course.findUniqueOrThrow({ where: { id: before.id } });
+      expect(derivedAfter.lengthSource).toBe("derived");
+      expect(derivedAfter.legs).toMatch(/^\d+;$/);
+      // Lengths stay as stored on a map change (updateLength: false); only the legs follow.
+      expect(derivedAfter.lengthM).toBe(before.lengthM);
+    } finally {
+      await caller.course.setMapRotation({ degrees: 0 });
+    }
   });
 
   it("rejects when no map is uploaded", async () => {

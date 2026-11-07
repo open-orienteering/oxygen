@@ -170,7 +170,7 @@ describe("autoSheets and class overrides (course-layout.md §6)", () => {
   beforeAll(async () => {
     t = await createTestEvent("auto_sheets");
     caller = makeCaller(t.event);
-    await t.db.mapFile.create({ data: { eventId: t.eventId, fileName: "test.ocd", fileData: readFileSync(fixture), scale: 7500 } });
+    await t.db.mapFile.create({ data: { eventId: t.eventId, fileName: "test.ocd", scale: 7500 } });
     clearEventDocumentCaches();
     course = await seedCourse(t, "Blå");
     // 252 mm wide at the map's scale: only a landscape A4 frame holds it.
@@ -271,7 +271,7 @@ describe("sheet and template version tokens (course-layout.md §2)", () => {
   beforeAll(async () => {
     t = await createTestEvent("layout_versions");
     caller = makeCaller(t.event);
-    await t.db.mapFile.create({ data: { eventId: t.eventId, fileName: "test.ocd", fileData: readFileSync(fixture), scale: 7500 } });
+    await t.db.mapFile.create({ data: { eventId: t.eventId, fileName: "test.ocd", scale: 7500 } });
     clearEventDocumentCaches();
   });
   afterAll(async () => {

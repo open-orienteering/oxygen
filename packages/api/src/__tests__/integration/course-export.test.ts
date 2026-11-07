@@ -17,6 +17,7 @@ import {
   type TestEventContext,
 } from "../helpers/test-db.js";
 import { makeCaller } from "../helpers/caller.js";
+import { uploadEventMap } from "../helpers/upload-map.js";
 import {
   buildEventCourseDataXml,
   buildEventPpenXml,
@@ -37,10 +38,7 @@ beforeAll(async () => {
   caller = makeCaller(ctx.event);
 
   const buf = readFileSync(FIXTURE);
-  await caller.course.uploadMap({
-    fileName: "test.ocd",
-    fileDataBase64: buf.toString("base64"),
-  });
+  await uploadEventMap(caller, ctx.nameId, buf);
   const meta = await caller.course.mapMetadata();
   mapScale = meta!.scale;
 
@@ -117,7 +115,7 @@ describe("buildEventCourseDataXml", () => {
     // `geometry_source` is no longer read, E6).
     await ctx.db.course.update({
       where: { id: course.id },
-      data: { lengthM: 1, legs: "1;1;1;", lengthSource: "derived", geometrySource: "" },
+      data: { lengthM: 1, legs: "1;1;1;", lengthSource: "derived" },
     });
 
     const parsed = parseIOFCourseData(
@@ -136,11 +134,11 @@ describe("buildEventCourseDataXml", () => {
     ]);
   });
 
-  it("exports the published length of a 'file' or NULL length_source course, whatever geometry_source says (E6)", async () => {
+  it("exports the published length of a 'file' or NULL length_source course (E6)", async () => {
     const course = await ctx.db.course.findFirstOrThrow({ where: { eventId: ctx.eventId, name: "Export A" }, select: { id: true } });
     try {
       for (const lengthSource of ["file", null] as const) {
-        await ctx.db.course.update({ where: { id: course.id }, data: { lengthM: 4321, lengthSource, geometrySource: "editor" } });
+        await ctx.db.course.update({ where: { id: course.id }, data: { lengthM: 4321, lengthSource } });
         const parsed = parseIOFCourseData(await buildEventCourseDataXml(ctx.db, { id: ctx.eventId, name: ctx.event.name }));
         expect(parsed.courses.find((c) => c.name === "Export A")!.length).toBe(4321);
       }
@@ -149,7 +147,7 @@ describe("buildEventCourseDataXml", () => {
       const parsed = parseIOFCourseData(await buildEventCourseDataXml(ctx.db, { id: ctx.eventId, name: ctx.event.name }));
       expect(parsed.courses.find((c) => c.name === "Export A")!.length).toBe(Math.round((100 * mapScale) / 1000));
     } finally {
-      await ctx.db.course.update({ where: { id: course.id }, data: { lengthSource: "derived", geometrySource: "editor" } });
+      await ctx.db.course.update({ where: { id: course.id }, data: { lengthSource: "derived" } });
     }
   });
 

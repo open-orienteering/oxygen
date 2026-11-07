@@ -2,12 +2,17 @@
  * The legacy OCAD readers, kept as the parity oracle for the document
  * readers (docs/map-storage.md §4.6): the description autodetect's object
  * slimming and the automatic-cut feature source as they ran over
- * `map_files.file_data` before slice E1. Test-only — production reads the
- * pinned document (`event-map-objects.ts`).
+ * `map_files.file_data` before slice E1, and the upload's metadata parse
+ * (`parseOcadMapMetadata`) the pin's quick-access columns must equal, which
+ * production ran at upload until E5. Test-only — production reads the
+ * pinned document (`event-map-objects.ts`, `map-file-metadata.ts`).
  */
 
-import { course, isomDescriptionFor, type mapImport } from "@oxygen/shared";
+import { course, isomDescriptionFor, mapImport } from "@oxygen/shared";
 import type { SlimMapObject, SlimObjectType } from "../../event-map-objects.js";
+import type { MapFileMetadata } from "../../event-map.js";
+import { frameFromOcadCrs, type OcadCrs } from "../../map-projection.js";
+import { mapFileMetadataFor } from "../../map-store/map-file-metadata.js";
 
 /** One `TdPoly` coordinate as ocad2geojson exposes it. */
 export type RawOcadCoordinate = ArrayLike<number> & {
@@ -167,4 +172,55 @@ export function cutFeaturesOfSlimObjects(
     out.push({ x: p[0] / UNITS_PER_MM, y: p[1] / UNITS_PER_MM, r });
   }
   return out;
+}
+
+/** The fork's `readOcad` result as the shared normaliser sees it. */
+type OcadParsed = mapImport.OcadFileLike;
+
+async function readOcadQuiet(buffer: Buffer): Promise<OcadParsed | null> {
+  try {
+    const ocadMod = await import("ocad2geojson");
+    const readOcad = (ocadMod as Record<string, unknown>).readOcad as (
+      buf: Buffer,
+      opts?: Record<string, unknown>,
+    ) => Promise<OcadParsed>;
+    return await readOcad(buffer, { quietWarnings: true });
+  } catch {
+    return null;
+  }
+}
+
+const NO_METADATA: MapFileMetadata = { scale: null, bounds: null, northOffset: null, calibration: null };
+
+/**
+ * The quick-access columns as the upload derived them from the OCAD file
+ * until E5 (`event-map.ts` `parseOcadMapMetadata`): the shared normaliser's
+ * frame, the meridian tilt and `rotationCorrectionDeg` through the pin's
+ * own column function, with the legacy CRS inference for a file whose
+ * document has no CRS. Corrupt buffers give nulls.
+ */
+export async function parseOcadMapMetadata(buffer: Buffer, rotationCorrectionDeg = 0): Promise<MapFileMetadata> {
+  const ocad = await readOcadQuiet(buffer);
+  if (!ocad) return NO_METADATA;
+  try {
+    const { input, analysis } = mapImport.ocadToDocumentInput(ocad, { fileName: "", fileHash: "", fileBytes: 0, renderFor: () => null });
+    const frame = {
+      unitsPerMm: input.header.unitsPerMm,
+      mapScale: input.header.mapScale,
+      georeferencing: input.header.georeferencing,
+      bounds: analysis.bounds,
+    };
+    const tilt = analysis.north.meridian?.medianTiltDeg ?? null;
+    const metadata = mapFileMetadataFor(frame, tilt, rotationCorrectionDeg);
+    if (metadata) return metadata as MapFileMetadata;
+    // The fork's CRS object, as `event-crs.ts` reads it for the legacy inference.
+    const crs = ocad.getCrs?.();
+    const legacy = crs ? frameFromOcadCrs(crs as unknown as OcadCrs) : null;
+    const inferred = legacy
+      ? mapFileMetadataFor({ ...frame, georeferencing: legacy.georeferencing }, tilt, rotationCorrectionDeg)
+      : null;
+    return (inferred as MapFileMetadata | null) ?? { ...NO_METADATA, scale: frame.mapScale };
+  } catch {
+    return NO_METADATA;
+  }
 }

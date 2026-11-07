@@ -1,41 +1,27 @@
 /**
- * Apply an OCAD blob as the event's current map and parse library metadata.
+ * Make a map file the event's current map (docs/map-storage.md §3, §6).
  *
- * Event maps stay per-event copies (`map_files`). Club library rows live in
- * `club_map_files` and are copied in via `course.useClubMap`.
+ * The bytes are a content-addressed `map_sources` row; the event's
+ * `map_files` row pins it (`source_hash`) and, once the import job
+ * finishes, its document (`document_hash`, with the quick-access columns
+ * the pin writes, §6.4). Nothing here parses the file: since E5 the
+ * upload stores and pins only, and every reader reads the document.
+ * Club-library maps are copied in via `course.useClubMap`.
  */
 
+import { createHash } from "node:crypto";
 import type { PrismaClient, Prisma } from "./generated/prisma/client.js";
-import { fireMapUpload, prisma } from "./db.js";
-import {
-  OVERPRINT_CUTS_VERSION,
-  rebuildCourseGeometry,
-} from "./course-geometry.js";
+import { prisma } from "./db.js";
+import { rebuildCourseLengths } from "./course-geometry.js";
 import { emitCourseUpserted } from "./referenceJournal.js";
-import {
-  frameFromOcadCrs,
-  type WGS84Bounds,
-} from "./map-projection.js";
-import {
-  detectMapNorth,
-  meridianStalenessFromDetection,
-  type NorthDetection,
-  type OcadNorthSource,
-} from "./map-north.js";
-import { mapFileMetadataFor } from "./map-store/map-file-metadata.js";
+import type { WGS84Bounds } from "./map-projection.js";
+import { meridianStalenessFromDetection } from "./map-north.js";
 import { synchronizePositionedControlCoordinates } from "./event-crs.js";
-import { documentMapFileColumns, eventPin } from "./map-store/event-document.js";
+import { documentMapFileColumns, documentNorth, eventPin } from "./map-store/event-document.js";
+import { sniffMapKind } from "./map-store/uploads.js";
+import { startImportJob, type ImportJobRow } from "./map-store/jobs.js";
 
 export { synchronizePositionedControlCoordinates };
-import { computeRenderKey, hashMapFileData } from "./map-render-key.js";
-import {
-  gcOrphanTiles,
-  refreshMapFileRenderKey,
-  refreshClubMapRenderKey,
-} from "./map-render-cache.js";
-import type { ColorProfile, ColorStackOverrides } from "@oxygen/shared";
-import { colorProfileSchema, colorStackOverridesSchema, mapImport } from "@oxygen/shared";
-import { startImportJob, type ImportJobRow } from "./map-store/jobs.js";
 
 type Db = PrismaClient | Prisma.TransactionClient;
 
@@ -52,185 +38,62 @@ export type MapCalibrationPoint = {
   lng: number;
 };
 
-export type ClubMapMetadata = {
+/** The quick-access georeference columns of a `map_files` row. */
+export type MapFileMetadata = {
   scale: number | null;
   bounds: WGS84Bounds | null;
   northOffset: number | null;
   calibration: MapCalibrationPoint[] | null;
 };
 
-export type ResolvedMapNorth = {
-  metadata: ClubMapMetadata;
-  rotationCorrection: number;
-  northDetection: NorthDetection | null;
-  /** Drawn-meridian staleness today; null when the file has no north lines. */
-  meridianStalenessDeg: number | null;
-};
-
-/** The fork's `readOcad` result as both the north analysis and the shared normaliser see it. */
-type OcadParsed = OcadNorthSource & mapImport.OcadFileLike & {
-  getBounds(): number[];
-};
-
-async function readOcadQuiet(buffer: Buffer): Promise<OcadParsed | null> {
-  try {
-    const ocadMod = await import("ocad2geojson");
-    const readOcad = (ocadMod as Record<string, unknown>).readOcad as (
-      buf: Buffer,
-      opts?: Record<string, unknown>,
-    ) => Promise<OcadParsed>;
-    return await readOcad(buffer, { quietWarnings: true });
-  } catch (err) {
-    console.warn("[readOcadQuiet] OCAD parse failed:", err);
-    return null;
-  }
+/**
+ * Today's drawn-meridian staleness of a pinned document (its import
+ * report's `north`, the value `course.mapMetadata` answers); null without
+ * a document or without north lines.
+ */
+async function documentStaleness(db: Db, documentHash: string | null): Promise<number | null> {
+  if (!documentHash) return null;
+  return meridianStalenessFromDetection(await documentNorth(db, documentHash));
 }
 
-function metadataFromOcad(
-  ocad: OcadParsed,
-  rotationCorrectionDeg: number,
-): ClubMapMetadata {
-  // The same normalised input and the same column function the import
-  // job's pin uses (map-store/map-file-metadata.ts), so this write and the
-  // pin agree. Symbol conversion is skipped: only objects, symbol codes
-  // and georeferencing matter here.
-  const { input, analysis } = mapImport.ocadToDocumentInput(ocad, {
-    fileName: "",
-    fileHash: "",
-    fileBytes: 0,
-    renderFor: () => null,
+/**
+ * Re-derive the lengths of every course whose length is derived from its
+ * controls (`length_source = 'derived'`) after the map's scale or
+ * georeference changed, and re-emit them. Lengths stay as stored; the
+ * legs string follows the new scale.
+ */
+async function refreshDerivedCourses(db: Db, eventId: bigint): Promise<void> {
+  const derived = await db.course.findMany({
+    where: { eventId, removed: false, lengthSource: "derived" },
+    select: { id: true },
   });
-  const frame = {
-    unitsPerMm: input.header.unitsPerMm,
-    mapScale: input.header.mapScale,
-    georeferencing: input.header.georeferencing,
-    bounds: analysis.bounds,
-  };
-  // `northOffset` is the bearing from true north to the direction the
-  // viewer puts at the top of the screen (MapViewer rotates by
-  // -northOffset): paper +Y plus the in-paper tilt of a meridian-line
-  // cluster (ISOM 601.x, Nackareservatet: 3.3°), so screen-up follows the
-  // meridians. Without the fold the meridians lean by their tilt no matter
-  // what rotationCorrection is — correction rotates the georeference and
-  // northOffset by the same amount, which cancels on screen.
-  const tilt = analysis.north.meridian?.medianTiltDeg ?? null;
-  const metadata = mapFileMetadataFor(frame, tilt, rotationCorrectionDeg);
-  if (metadata) return metadata;
-  // Raster path only: no CRS in the document, but the legacy
-  // coordinate-range inference recognises the grid (`getEpsgString`).
-  const legacy = frameFromOcadCrs(ocad.getCrs());
-  const inferred = legacy
-    ? mapFileMetadataFor({ ...frame, georeferencing: legacy.georeferencing }, tilt, rotationCorrectionDeg)
-    : null;
-  return inferred ?? { scale: frame.mapScale, bounds: null, northOffset: null, calibration: null };
+  if (derived.length === 0) return;
+  const ids = derived.map((c) => c.id);
+  await rebuildCourseLengths(db, eventId, ids, { updateLength: false });
+  for (const id of ids) {
+    // Derived fields only: the structure and its token are unchanged.
+    await emitCourseUpserted(db, eventId, id, { advanceVersion: false });
+  }
 }
 
 /**
- * Best-effort OCAD parse. Corrupt / non-OCAD buffers return nulls and
- * never throw — same contract as `course.mapMetadata`.
+ * Make `fileName` the event's map: store the bytes as a source (unless
+ * `opts.fileHash` names one already stored — the chunked upload and the
+ * club library), replace the event's `map_files` row with one pinning it,
+ * and run the import job (awaited up to the hold).
  *
- * `rotationCorrectionDeg` (clockwise positive) is added to the file's
- * own grivation before deriving bounds / north offset / calibration —
- * for club maps whose drawing is magnetic-north-up but ScalePar a=0.
+ * `buffer` may be null when `opts.fileHash` names an existing source.
  */
-export async function parseOcadMapMetadata(
-  buffer: Buffer,
-  rotationCorrectionDeg = 0,
-): Promise<ClubMapMetadata> {
-  const ocad = await readOcadQuiet(buffer);
-  if (!ocad) {
-    return { scale: null, bounds: null, northOffset: null, calibration: null };
-  }
-  try {
-    return metadataFromOcad(ocad, rotationCorrectionDeg);
-  } catch (err) {
-    console.warn("[parseOcadMapMetadata] OCAD parse failed:", err);
-    return { scale: null, bounds: null, northOffset: null, calibration: null };
-  }
-}
-
-/**
- * Parse OCAD, run the north diagnostics, and derive metadata.
- *
- * The file's ScalePar georeference is authoritative: `rotationCorrection`
- * is `forcedCorrection` when given (a club-library copy carries the
- * library row's manual value along) and 0 otherwise. North detection is
- * diagnostic only — it reports how stale the drawn meridian lines are,
- * it never adjusts the georeference.
- */
-export async function resolveMapNorth(
-  buffer: Buffer,
-  opts: { forcedCorrection?: number } = {},
-): Promise<ResolvedMapNorth> {
-  const rotationCorrection = opts.forcedCorrection ?? 0;
-  const empty: ResolvedMapNorth = {
-    metadata: {
-      scale: null,
-      bounds: null,
-      northOffset: null,
-      calibration: null,
-    },
-    rotationCorrection,
-    northDetection: null,
-    meridianStalenessDeg: null,
-  };
-  const ocad = await readOcadQuiet(buffer);
-  if (!ocad) return empty;
-
-  let northDetection: NorthDetection | null = null;
-  try {
-    northDetection = detectMapNorth(ocad);
-  } catch (err) {
-    console.warn("[resolveMapNorth] north detection failed:", err);
-  }
-  const meridianStalenessDeg = northDetection?.meridianStalenessDeg ?? null;
-
-  try {
-    return {
-      metadata: metadataFromOcad(ocad, rotationCorrection),
-      rotationCorrection,
-      northDetection,
-      meridianStalenessDeg,
-    };
-  } catch (err) {
-    console.warn("[resolveMapNorth] metadata derive failed:", err);
-    return { ...empty, northDetection, meridianStalenessDeg };
-  }
-}
-
-/**
- * Today's drawn-meridian staleness for a stored `north_detection` row.
- * Thin wrapper so routers do not need to know the JSON shape.
- */
-export function currentMeridianStaleness(
-  northDetection: unknown,
-): number | null {
-  return meridianStalenessFromDetection(
-    (northDetection as NorthDetection | null | undefined) ?? null,
-  );
-}
-
-function detectionJson(
-  detection: NorthDetection | null,
-): Prisma.InputJsonValue | undefined {
-  if (!detection) return undefined;
-  return detection as unknown as Prisma.InputJsonValue;
-}
-
-/** Replace the event map, drop rendered-map caches, rebuild editor course geometry. */
 export async function applyEventMap(
   db: Db,
   eventId: bigint,
   fileName: string,
-  buffer: Buffer,
+  buffer: Buffer | null,
   opts: {
     fromClubLibrary?: boolean;
-    /** Club-library copy: carry the library row's manual correction along. */
+    /** Club-library copy: carry the series' manual correction along. */
     rotationCorrection?: number;
-    colorProfile?: ColorProfile;
-    colorOverrides?: ColorStackOverrides;
-    northLinesBelow?: boolean;
-    /** When copying from club library, reuse its content hash. */
+    /** The source's content hash, when it is already in `map_sources`. */
     fileHash?: string;
     /** Recorded on the content-addressed source row (docs/map-storage.md). */
     uploadedBy?: string | null;
@@ -243,131 +106,79 @@ export async function applyEventMap(
   fileName: string;
   size: number;
   rotationCorrection: number;
+  /** Drawn-meridian staleness from the pinned document's report; null until the pin or without north lines. */
   meridianStalenessDeg: number | null;
-  renderKey: string;
   /** Pinned map document; null while the import job is still running or if it failed. */
   documentHash: string | null;
   /** The import job recording this upload (docs/map-storage.md §6); null only if it could not be created. */
   importJob: { id: string; state: ImportJobRow["state"]; error: string | null } | null;
 }> {
-  const resolved = await resolveMapNorth(buffer, {
-    forcedCorrection: opts.rotationCorrection,
-  });
-  const colorProfile = (() => {
-    const p = colorProfileSchema.safeParse(opts.colorProfile ?? "auto");
-    return p.success ? p.data : "auto";
-  })();
-  const colorOverrides = (() => {
-    const p = colorStackOverridesSchema.safeParse(opts.colorOverrides ?? {});
-    return p.success ? p.data : {};
-  })();
-  const northLinesBelow = opts.northLinesBelow !== false;
-  const fileHash = opts.fileHash ?? hashMapFileData(buffer);
-  const renderKey = computeRenderKey({
-    fileHash,
-    rotationCorrection: resolved.rotationCorrection,
-    colorProfile,
-    colorOverrides,
-    northLinesBelow,
-  });
-
-  // Stage 9 of the document pipeline (docs/map-storage.md §3): the upload
-  // is also a content-addressed source row the event pins; the import job
-  // started below produces the document and writes `document_hash` onto
-  // this map_files row when it finishes. The tile path does not depend on
-  // either, so a failed import leaves the pin null and is retried by the
-  // backfill.
-  await db.mapSource.createMany({
-    data: [{ fileHash, kind: "ocad", bytes: Uint8Array.from(buffer), sizeBytes: buffer.byteLength, fileName, uploadedBy: opts.uploadedBy ?? null }],
-    skipDuplicates: true,
-  });
+  const rotationCorrection = opts.rotationCorrection ?? 0;
+  let fileHash: string;
+  let size: number;
+  if (buffer) {
+    fileHash = opts.fileHash ?? createHash("sha256").update(buffer).digest("hex");
+    size = buffer.byteLength;
+    // Stage 9 of the document pipeline (docs/map-storage.md §3): the upload
+    // is a content-addressed source row the event pins.
+    await db.mapSource.createMany({
+      data: [{ fileHash, kind: sniffMapKind(buffer) ?? "ocad", bytes: Uint8Array.from(buffer), sizeBytes: buffer.byteLength, fileName, uploadedBy: opts.uploadedBy ?? null }],
+      skipDuplicates: true,
+    });
+  } else {
+    if (!opts.fileHash) throw new Error("applyEventMap: neither bytes nor a source hash");
+    fileHash = opts.fileHash;
+    const source = await db.mapSource.findUnique({ where: { fileHash }, select: { sizeBytes: true } });
+    if (!source) throw new Error(`applyEventMap: source ${fileHash} not found`);
+    size = source.sizeBytes;
+  }
 
   await db.mapFile.deleteMany({ where: { eventId } });
   await db.mapFile.create({
     data: {
       eventId,
       fileName,
-      fileData: Uint8Array.from(buffer),
       sourceHash: fileHash,
-      scale: resolved.metadata.scale,
-      bounds: resolved.metadata.bounds
-        ? (resolved.metadata.bounds as unknown as Prisma.InputJsonValue)
-        : undefined,
-      northOffset: resolved.metadata.northOffset,
-      calibration: resolved.metadata.calibration
-        ? (resolved.metadata.calibration as unknown as Prisma.InputJsonValue)
-        : undefined,
-      rotationCorrection: resolved.rotationCorrection,
-      northDetection: detectionJson(resolved.northDetection),
+      rotationCorrection,
       fromClubLibrary: opts.fromClubLibrary === true,
-      colorProfile,
-      colorOverrides: colorOverrides as unknown as Prisma.InputJsonValue,
-      northLinesBelow,
-      fileHash,
-      renderKey,
     },
   });
-  // Runs on the instance's import worker while the rollback bookkeeping
-  // below proceeds; awaited (up to the hold) before returning.
-  const importJob = startImportJob(prisma(), { sourceHash: fileHash, eventId, startedBy: opts.startedBy ?? null, holdMs: opts.importHoldMs })
+  // The import job produces the document and pins it on this row with
+  // the quick-access columns (§6.4); control lat/lng follow the pin
+  // (`applyJobResult`). Until then the event has no frame.
+  const job = await startImportJob(prisma(), { sourceHash: fileHash, eventId, startedBy: opts.startedBy ?? null, holdMs: opts.importHoldMs })
     .catch((err: unknown) => {
       console.error(`[map-import] event ${eventId}: could not start the import of ${fileName}:`, err);
       return null;
     });
 
-  await db.renderedMap.deleteMany({ where: { eventId } });
-  await gcOrphanTiles(db);
-  fireMapUpload(eventId);
-  // Control lat/lng follow when the import pins the document
-  // (`applyJobResult`, docs/map-storage.md §6.4): until then the event has
-  // no frame to convert with.
+  // Derived lengths follow the new map's scale once it is pinned; an
+  // import that outlives the hold leaves no scale, and the lengths follow
+  // with the next write after the pin.
+  await refreshDerivedCourses(db, eventId);
 
-  // The editor-course rebuild waits for the import (up to the hold) so the
-  // event cuts against its newly pinned document (docs/course-layer.md
-  // §4.2); an import that outlives the hold leaves no pin to cut against,
-  // and the cuts follow with the next write after the pin.
-  const job = await importJob;
-
-  const editorCourses = await db.course.findMany({
-    where: { eventId, removed: false, geometrySource: "editor" },
-    select: { id: true },
-  });
-  if (editorCourses.length > 0) {
-    const ids = editorCourses.map((c) => c.id);
-    await rebuildCourseGeometry(db, eventId, ids, { updateLength: false });
-    for (const id of ids) {
-      // Geometry only: the structure and its token are unchanged.
-      await emitCourseUpserted(db, eventId, id, { advanceVersion: false });
-    }
-  }
-  await db.event.update({
-    where: { id: eventId },
-    data: { overprintCutsVersion: OVERPRINT_CUTS_VERSION },
-  });
-
+  const documentHash = job?.state === "done" ? job.documentHash : null;
   return {
     fileName,
-    size: buffer.length,
-    rotationCorrection: resolved.rotationCorrection,
-    meridianStalenessDeg: resolved.meridianStalenessDeg,
-    renderKey,
-    documentHash: job?.state === "done" ? job.documentHash : null,
+    size,
+    rotationCorrection,
+    meridianStalenessDeg: await documentStaleness(db, documentHash),
+    documentHash,
     importJob: job ? { id: job.id, state: job.state, error: job.error } : null,
   };
 }
 
 /**
- * Persist a north/grivation correction for the event's current map,
+ * Persist a north/grivation correction for the event's current map and
  * re-derive the quick-access columns from the pinned document (the pin's
- * function, docs/map-storage.md §6.4), and drop tile caches so the next
- * render warps with the corrected CRS. Without a pin only the correction
+ * function, docs/map-storage.md §6.4). Without a pin only the correction
  * is stored; the pin recomputes the columns with it.
  */
 export async function applyMapRotationCorrection(
   db: Db,
   eventId: bigint,
   rotationCorrectionDeg: number,
-): Promise<ClubMapMetadata & { rotationCorrection: number }> {
+): Promise<MapFileMetadata & { rotationCorrection: number }> {
   const row = await eventPin(db, eventId);
   if (!row) {
     throw new Error("No map file uploaded");
@@ -375,7 +186,7 @@ export async function applyMapRotationCorrection(
   const columns = row.documentHash
     ? await documentMapFileColumns(db, row.documentHash, rotationCorrectionDeg)
     : null;
-  const metadata: ClubMapMetadata = columns
+  const metadata: MapFileMetadata = columns
     ? { ...columns, calibration: columns.calibration as MapCalibrationPoint[] | null }
     : { scale: row.scale, bounds: null, northOffset: null, calibration: null };
   await db.mapFile.update({
@@ -394,77 +205,12 @@ export async function applyMapRotationCorrection(
               : undefined,
           }
         : {}),
-      // Bump stamp so tile clients invalidate; render_key is refreshed below.
+      // Bump stamp so clients holding the map's metadata refetch it.
       uploadedAt: new Date(),
     },
   });
-  await refreshMapFileRenderKey(db, row.id);
-  await db.renderedMap.deleteMany({ where: { eventId } });
-  await gcOrphanTiles(db);
-  fireMapUpload(eventId);
   await synchronizePositionedControlCoordinates(db, eventId);
+  await refreshDerivedCourses(db, eventId);
 
-  const editorCourses = await db.course.findMany({
-    where: { eventId, removed: false, geometrySource: "editor" },
-    select: { id: true },
-  });
-  if (editorCourses.length > 0) {
-    const ids = editorCourses.map((c) => c.id);
-    await rebuildCourseGeometry(db, eventId, ids, { updateLength: false });
-    for (const id of ids) {
-      // Geometry only: the structure and its token are unchanged.
-      await emitCourseUpserted(db, eventId, id, { advanceVersion: false });
-    }
-  }
-  await db.event.update({
-    where: { id: eventId },
-    data: { overprintCutsVersion: OVERPRINT_CUTS_VERSION },
-  });
-
-  return { ...metadata, rotationCorrection: rotationCorrectionDeg };
-}
-
-/**
- * Persist a north/grivation correction on a linked legacy club-library
- * row (written through for rollback, docs/map-storage.md §6.5), with
- * scale / bounds / northOffset from the series' latest version's
- * document. Without a version only the correction is stored.
- */
-export async function applyClubMapRotationCorrection(
-  db: Db,
-  clubMapId: bigint,
-  rotationCorrectionDeg: number,
-  documentHash: string | null,
-): Promise<ClubMapMetadata & { rotationCorrection: number }> {
-  const row = await db.clubMapFile.findUnique({
-    where: { id: clubMapId },
-    select: { id: true, scale: true },
-  });
-  if (!row) {
-    throw new Error(`Club map ${clubMapId} not found`);
-  }
-  const columns = documentHash
-    ? await documentMapFileColumns(db, documentHash, rotationCorrectionDeg)
-    : null;
-  const metadata: ClubMapMetadata = columns
-    ? { ...columns, calibration: columns.calibration as MapCalibrationPoint[] | null }
-    : { scale: row.scale, bounds: null, northOffset: null, calibration: null };
-  await db.clubMapFile.update({
-    where: { id: row.id },
-    data: {
-      rotationCorrection: rotationCorrectionDeg,
-      ...(columns
-        ? {
-            scale: metadata.scale,
-            bounds: metadata.bounds
-              ? (metadata.bounds as unknown as Prisma.InputJsonValue)
-              : undefined,
-            northOffset: metadata.northOffset,
-          }
-        : {}),
-    },
-  });
-  await refreshClubMapRenderKey(db, row.id);
-  await gcOrphanTiles(db);
   return { ...metadata, rotationCorrection: rotationCorrectionDeg };
 }

@@ -1,5 +1,7 @@
 -- Restore the map sections of a per-event dump (docs/backup-restore.md,
--- docs/map-storage.md §7.3). Idempotent: blobs are content-addressed and
+-- docs/map-storage.md §7.3) written by v0.6.1 or later. The map_files
+-- section of an older dump carries `file_data` and needs
+-- restore-legacy-map-files.sql instead (the blob sections load here either way). Idempotent: blobs are content-addressed and
 -- inserted ON CONFLICT DO NOTHING, map_files rows already present for the
 -- event are skipped, so running it twice changes nothing.
 --
@@ -71,17 +73,17 @@ CREATE TEMP TABLE restore_map_files (LIKE oxygen.map_files) ON COMMIT DROP;
 
 -- A fresh id from the target's sequence, the new event id, and the club
 -- library version only when it exists here (it is SET NULL on delete too).
-INSERT INTO oxygen.map_files (event_id, file_name, file_data, uploaded_at, scale, bounds, north_offset, calibration,
-                              rotation_correction, north_detection, from_club_library, color_profile, color_overrides,
-                              north_lines_below, file_hash, render_key, source_hash, document_hash, club_map_version_id)
-SELECT :event_id, r.file_name, r.file_data, r.uploaded_at, r.scale, r.bounds, r.north_offset, r.calibration,
-       r.rotation_correction, r.north_detection, r.from_club_library, r.color_profile, r.color_overrides,
-       r.north_lines_below, r.file_hash, r.render_key, r.source_hash, r.document_hash,
+INSERT INTO oxygen.map_files (event_id, file_name, uploaded_at, scale, bounds, north_offset, calibration,
+                              rotation_correction, north_detection, from_club_library,
+                              source_hash, document_hash, club_map_version_id)
+SELECT :event_id, r.file_name, r.uploaded_at, r.scale, r.bounds, r.north_offset, r.calibration,
+       r.rotation_correction, r.north_detection, r.from_club_library,
+       r.source_hash, r.document_hash,
        (SELECT v.id FROM oxygen.club_map_versions v WHERE v.id = r.club_map_version_id)
 FROM restore_map_files r
 WHERE NOT EXISTS (
   SELECT 1 FROM oxygen.map_files m
-  WHERE m.event_id = :event_id AND m.uploaded_at = r.uploaded_at AND m.file_hash IS NOT DISTINCT FROM r.file_hash
+  WHERE m.event_id = :event_id AND m.uploaded_at = r.uploaded_at AND m.source_hash IS NOT DISTINCT FROM r.source_hash
 );
 \endif
 

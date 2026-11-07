@@ -19,7 +19,7 @@ import type { Prisma, PrismaClient } from "../generated/prisma/client.js";
 import { IMPORTER_VERSIONS, type ImportStage, type MapSourceKind } from "../import/ocad.js";
 import { storeImportedDocument, touchDocument } from "./documents.js";
 import { deriveDocumentPreviews } from "./previews.js";
-import { writeDocumentMapFileColumns } from "./map-file-metadata.js";
+import { writePinnedMapFileColumns } from "./event-document.js";
 import { synchronizePositionedControlCoordinates } from "../event-crs.js";
 import type { ImportWorkerData, ImportWorkerMessage } from "./import-worker.js";
 
@@ -263,7 +263,7 @@ export async function applyJobResult(db: Db, job: Pick<ImportJobRow, "eventId" |
   if (job.eventId !== null) {
     await db.mapFile.updateMany({ where: { eventId: job.eventId, sourceHash: job.sourceHash }, data: { documentHash: job.documentHash } });
     // Quick-access columns from the pinned document (docs/map-storage.md §6.4).
-    await writeDocumentMapFileColumns(db, job.eventId, job.sourceHash, job.documentHash);
+    await writePinnedMapFileColumns(db, job.eventId, job.sourceHash, job.documentHash);
     // Positioned controls' lat/lng from the pinned frame (§6.4).
     await synchronizePositionedControlCoordinates(db, job.eventId);
   }

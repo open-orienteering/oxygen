@@ -151,7 +151,7 @@ describe("eventor.sync re-entry status reset", () => {
     }
   });
 
-  it("overwrites a 'file' length_source course's length, whatever geometry_source says (E6)", async () => {
+  it("overwrites a 'file' length_source course's length (E6)", async () => {
     const ctx = await createTestEvent("evr-file-course-length");
     try {
       await ctx.db.event.update({
@@ -159,7 +159,7 @@ describe("eventor.sync re-entry status reset", () => {
         data: { eventorEventId: BigInt(EVENTOR_EVENT_ID), eventorEnv: "test" },
       });
       const course = await ctx.db.course.create({
-        data: { eventId: ctx.eventId, name: "U4 file", lengthM: 1200, lengthSource: "file", geometrySource: "editor" },
+        data: { eventId: ctx.eventId, name: "U4 file", lengthM: 1200, lengthSource: "file" },
       });
       await ctx.db.class.create({
         data: { eventId: ctx.eventId, name: "U4", eventorId: BigInt(CLASS_BASE + 12), courseId: course.id },

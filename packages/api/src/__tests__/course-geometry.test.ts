@@ -1,18 +1,15 @@
 /**
- * Unit tests for the editor course-geometry builder.
- *
- * These cover the pure math used when the course editor (or a control
- * position change) regenerates a course's GeoJSON overlay: the course
- * layer's projection in today's `courses.geometry` shape (point/leg
- * features, cuts at the legacy sizes, unpositioned-control handling), leg
- * distances and the paper-mm → terrain-meters length computation.
+ * Unit tests for the derived course lengths (docs/course-layer.md §4.1):
+ * the course layer of an editor course over its sequence (unpositioned
+ * controls skipped, free order without legs), leg distances and the
+ * paper-mm → terrain-meters length computation. The GeoJSON projection
+ * these tests once covered went with `courses.geometry` (E5).
  */
 
 import { describe, it, expect } from "vitest";
-import { course } from "@oxygen/shared";
 import {
-  editorCourseGeometry,
   editorCourseLayer,
+  hasPositionedItems,
   legDistancesMm,
   courseLengthM,
   type GeometrySeqControl,
@@ -23,124 +20,42 @@ const seq = (
 ): GeometrySeqControl[] =>
   entries.map(([code, type, xMm, yMm]) => ({ id: `ctrl-${code}`, code, type, xMm, yMm }));
 
-const geometry = (s: GeometrySeqControl[], mode?: "ordered" | "free_order") =>
-  editorCourseGeometry("c1", s, mode);
+const derived = (s: GeometrySeqControl[], mode?: "ordered" | "free_order") => editorCourseLayer("c1", s, mode).derivation;
 
-describe("editorCourseGeometry", () => {
-  it("writes today's FeatureCollection: points in order, then centre-to-centre legs", () => {
-    expect(geometry(seq([["S1", "Start", 0, 10], ["31", "Control", 30, 10], ["F1", "Finish", 30, 40]]))).toEqual({
-      type: "FeatureCollection",
-      features: [
-        { type: "Feature", geometry: { type: "Point", coordinates: [0, 10] }, properties: { symbolType: "start", code: "S1", id: "S1" } },
-        { type: "Feature", geometry: { type: "Point", coordinates: [30, 10] }, properties: { symbolType: "control", code: "31", id: "31" } },
-        { type: "Feature", geometry: { type: "Point", coordinates: [30, 40] }, properties: { symbolType: "finish", code: "F1", id: "F1" } },
-        { type: "Feature", geometry: { type: "LineString", coordinates: [[0, 10], [30, 10]] }, properties: { symbolType: "leg", from: "S1", to: "31" } },
-        { type: "Feature", geometry: { type: "LineString", coordinates: [[30, 10], [30, 40]] }, properties: { symbolType: "leg", from: "31", to: "F1" } },
-      ],
-    });
-  });
-
-  it("repeats a control visited twice, with a leg each way", () => {
-    const fc = geometry(seq([["31", "Control", 10, 10], ["32", "Control", 40, 10], ["31", "Control", 10, 10]]));
-    expect(fc.features.map((f) => f.properties.code ?? `${f.properties.from}-${f.properties.to}`)).toEqual(["31", "32", "31", "31-32", "32-31"]);
-  });
-
-  it("cuts control circles and legs at the legacy sizes, never start or finish", () => {
-    const s = seq([["S1", "Start", 0, -10], ["31", "Control", 10, 0], ["32", "Control", 40, 0], ["F1", "Finish", 40, 20]]);
-    // A boulder on 31's 2.5 mm rim, one on the 31–32 leg, one on the start and the finish rims.
-    const features = [{ x: 12.5, y: 0, r: 0.2 }, { x: 25, y: 0.2, r: 0.2 }, { x: 0, y: -7.5, r: 0.2 }, { x: 40, y: 23, r: 0.2 }];
-    const fc = editorCourseGeometry("c1", s, "ordered", features);
-    const byCode = (code: string) => fc.features.find((f) => f.properties.code === code)!.properties;
-    expect(byCode("31").cuts).toEqual(course.circleCuts(features, 10, 0, 2.5, 0.35));
-    expect(byCode("31").cuts).toHaveLength(1);
-    expect(byCode("32")).not.toHaveProperty("cuts");
-    expect(byCode("S1")).not.toHaveProperty("cuts");
-    expect(byCode("F1")).not.toHaveProperty("cuts");
-    const leg = fc.features.find((f) => f.properties.from === "31" && f.properties.to === "32")!.properties;
-    expect(leg.gaps).toEqual(course.legGaps({ x: 10, y: 0 }, { x: 40, y: 0 }, features, 2.5, 0.35));
-    expect(fc.features.find((f) => f.properties.from === "S1")!.properties).not.toHaveProperty("gaps");
-  });
-
-  it("writes no cut keys without features", () => {
-    const fc = editorCourseGeometry("c1", seq([["31", "Control", 10, 0], ["32", "Control", 40, 0]]), "ordered", null);
-    expect(fc.features.every((f) => !("cuts" in f.properties) && !("gaps" in f.properties))).toBe(true);
-  });
-
-  it("builds point features and straight legs for an ordered sequence", () => {
-    const fc = geometry(
-      seq([
-        ["S1", "Start", 0, 10],
-        ["31", "Control", 30, 10],
-        ["32", "Control", 30, 50],
-        ["F1", "Finish", 60, 50],
-      ]),
-    );
-
-    const points = fc.features.filter((f) => f.geometry.type === "Point");
-    const legs = fc.features.filter((f) => f.geometry.type === "LineString");
-    expect(points).toHaveLength(4);
-    expect(legs).toHaveLength(3);
-
-    expect(points[0].properties).toMatchObject({ symbolType: "start", code: "S1", id: "S1" });
-    expect(points[1].properties).toMatchObject({ symbolType: "control", code: "31" });
-    expect(points[3].properties).toMatchObject({ symbolType: "finish", code: "F1" });
-
-    expect(legs[0].properties).toMatchObject({ symbolType: "leg", from: "S1", to: "31" });
-    expect(legs[0].geometry).toEqual({
-      type: "LineString",
-      coordinates: [
-        [0, 10],
-        [30, 10],
-      ],
-    });
-    expect(legs[2].properties).toMatchObject({ from: "32", to: "F1" });
+describe("editorCourseLayer", () => {
+  it("draws the sequence in order with centre-to-centre legs, each item in its role", () => {
+    const { courses } = derived(seq([["S1", "Start", 0, 10], ["31", "Control", 30, 10], ["F1", "Finish", 30, 40]]));
+    expect(courses[0].sequence.map((e) => [e.siteId, e.role])).toEqual([["ctrl-S1", "start"], ["ctrl-31", "control"], ["ctrl-F1", "finish"]]);
+    expect(courses[0].legs.map((l) => [l.from, l.to, l.points[0], l.points[l.points.length - 1]])).toEqual([
+      ["ctrl-S1", "ctrl-31", { x: 0, y: 10 }, { x: 30, y: 10 }],
+      ["ctrl-31", "ctrl-F1", { x: 30, y: 10 }, { x: 30, y: 40 }],
+    ]);
   });
 
   it("skips unpositioned (0,0) controls and connects across them", () => {
-    const fc = geometry(
-      seq([
-        ["31", "Control", 10, 10],
-        ["32", "Control", 0, 0], // never placed on the map
-        ["33", "Control", 50, 10],
-      ]),
-    );
-    const points = fc.features.filter((f) => f.geometry.type === "Point");
-    const legs = fc.features.filter((f) => f.geometry.type === "LineString");
-    expect(points.map((p) => p.properties.code)).toEqual(["31", "33"]);
-    expect(legs).toHaveLength(1);
-    expect(legs[0].properties).toMatchObject({ from: "31", to: "33" });
+    const { courses } = derived(seq([["31", "Control", 10, 10], ["32", "Control", 0, 0], ["33", "Control", 50, 10]]));
+    expect(courses[0].sequence.map((e) => e.siteId)).toEqual(["ctrl-31", "ctrl-33"]);
+    expect(courses[0].legs.map((l) => [l.from, l.to])).toEqual([["ctrl-31", "ctrl-33"]]);
   });
 
-  it("returns an empty collection when nothing is positioned", () => {
-    const fc = geometry(
-      seq([
-        ["31", "Control", 0, 0],
-        ["32", "Control", 0, 0],
-      ]),
-    );
-    expect(fc.features).toHaveLength(0);
+  it("free order has no legs", () => {
+    const { courses } = derived(seq([["S1", "Start", 0, 10], ["31", "Control", 30, 10], ["F1", "Finish", 60, 50]]), "free_order");
+    expect(courses[0].sequence).toHaveLength(3);
+    expect(courses[0].legs).toHaveLength(0);
   });
 
-  it("a single positioned control yields one point and no legs", () => {
-    const fc = geometry(seq([["31", "Control", 5, 5]]));
-    expect(fc.features).toHaveLength(1);
-    expect(fc.features[0].geometry.type).toBe("Point");
+  it("draws no automatic cuts: lengths are centre to centre", () => {
+    const { sites, courses } = derived(seq([["31", "Control", 10, 0], ["32", "Control", 40, 0]]));
+    expect(sites.every((x) => x.cuts.length === 0)).toBe(true);
+    expect(courses[0].legs.every((l) => l.gaps.length === 0)).toBe(true);
   });
+});
 
-  it("free_order emits control points but no leg lines", () => {
-    const fc = geometry(
-      seq([
-        ["S1", "Start", 0, 10],
-        ["31", "Control", 30, 10],
-        ["32", "Control", 30, 50],
-        ["F1", "Finish", 60, 50],
-      ]),
-      "free_order",
-    );
-    const points = fc.features.filter((f) => f.geometry.type === "Point");
-    const legs = fc.features.filter((f) => f.geometry.type === "LineString");
-    expect(points).toHaveLength(4);
-    expect(legs).toHaveLength(0);
+describe("hasPositionedItems (length_source 'derived' vs NULL)", () => {
+  it("is true with one positioned item and false when nothing is positioned", () => {
+    expect(hasPositionedItems(editorCourseLayer("c1", seq([["31", "Control", 5, 5]])))).toBe(true);
+    expect(hasPositionedItems(editorCourseLayer("c1", seq([["31", "Control", 0, 0], ["32", "Control", 0, 0]])))).toBe(false);
+    expect(hasPositionedItems(editorCourseLayer("c1", []))).toBe(false);
   });
 });
 

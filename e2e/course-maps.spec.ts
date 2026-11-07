@@ -18,21 +18,35 @@ const { PDFDocument } = createRequire(resolve(process.cwd(), "packages/api/packa
  * of `course-editor.spec.ts` (E3: the legacy `MapLayoutEditor` sections of
  * this spec went with the switch).
  *
- * The event map goes through `course.uploadMap`, as the map panel uploads
- * it: the file is stored and its document pinned, so every print goes
- * through the composer (docs/course-print.md §8.1).
+ * The event map goes through the chunked upload and
+ * `course.applyUploadedMap`, as the map panel uploads it: the file is
+ * stored and its document pinned, so every print goes through the
+ * composer (docs/course-print.md §8.1).
  */
 async function seedBaseMap() {
   await reseed();
   const bytes = await readFile("e2e/test.ocd");
-  const res = await fetch(`${API_BASE}/trpc/course.uploadMap`, {
+  const headers = { "x-competition-id": "itest", "x-forwarded-email": "e2e-admin@oxygen.test" };
+  const init = await fetch(`${API_BASE}/api/map-uploads`, {
     method: "POST",
-    headers: {
-      "content-type": "application/json",
-      "x-competition-id": "itest",
-      "x-forwarded-email": "e2e-admin@oxygen.test",
-    },
-    body: JSON.stringify({ fileName: "test.ocd", fileDataBase64: bytes.toString("base64") }),
+    headers: { ...headers, "content-type": "application/json" },
+    body: JSON.stringify({ fileName: "test.ocd", bytes: bytes.byteLength, chunkBytes: bytes.byteLength }),
+  });
+  expect(init.status, await init.clone().text()).toBe(201);
+  const { uploadId } = (await init.json()) as { uploadId: string };
+  const chunk = await fetch(`${API_BASE}/api/map-uploads/${uploadId}/chunks/0`, {
+    method: "PUT",
+    headers: { ...headers, "content-type": "application/octet-stream" },
+    body: bytes,
+  });
+  expect(chunk.status, await chunk.clone().text()).toBe(204);
+  const fin = await fetch(`${API_BASE}/api/map-uploads/${uploadId}/finalise`, { method: "POST", headers });
+  expect(fin.status, await fin.clone().text()).toBe(200);
+  const { fileHash } = (await fin.json()) as { fileHash: string };
+  const res = await fetch(`${API_BASE}/trpc/course.applyUploadedMap`, {
+    method: "POST",
+    headers: { ...headers, "content-type": "application/json" },
+    body: JSON.stringify({ fileHash, fileName: "test.ocd" }),
   });
   expect(res.ok, await res.text()).toBe(true);
 }

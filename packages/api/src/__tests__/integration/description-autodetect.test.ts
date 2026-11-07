@@ -18,6 +18,7 @@ import {
   type TestEventContext,
 } from "../helpers/test-db.js";
 import { makeCaller } from "../helpers/caller.js";
+import { uploadEventMap } from "../helpers/upload-map.js";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const FIXTURE = resolve(__dirname, "../../../../../e2e/test.ocd");
@@ -32,10 +33,7 @@ beforeAll(async () => {
   ctx = await createTestEvent("desc_autodetect");
   caller = makeCaller(ctx.event);
   const buf = readFileSync(FIXTURE);
-  await caller.course.uploadMap({
-    fileName: "test.ocd",
-    fileDataBase64: buf.toString("base64"),
-  });
+  await uploadEventMap(caller, ctx.nameId, buf);
 });
 
 afterAll(async () => {

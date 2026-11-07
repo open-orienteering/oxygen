@@ -148,7 +148,6 @@ export const BACKUP_TABLES = [
   "map_documents",
   "club_symbol_decisions",
   "map_files",
-  "rendered_maps",
   "tracks",
   "routes",
   "event_seqs",

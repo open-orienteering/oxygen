@@ -47,12 +47,15 @@ let transport: PeerTransport;
 async function provisionNodeB(): Promise<string> {
   const aUrl = new URL(process.env.DATABASE_URL!);
   const bUrl = new URL(aUrl.toString());
-  bUrl.pathname = "/oxygen_test_b";
+  // Beside node A's database, so a run against another test database
+  // (INTEGRATION_DATABASE_URL) has its own node B.
+  const bName = `${aUrl.pathname.replace(/^\//, "")}_b`;
+  bUrl.pathname = `/${bName}`;
 
   const admin = new Client({ connectionString: aUrl.toString() });
   await admin.connect();
   try {
-    await admin.query("CREATE DATABASE oxygen_test_b");
+    await admin.query(`CREATE DATABASE "${bName}"`);
   } catch (err) {
     const code = (err as { code?: string }).code;
     if (code !== "42P04") throw err; // 42P04 = already exists

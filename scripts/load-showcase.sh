@@ -8,6 +8,12 @@
 # generated synthetic file; overview tiles (z <= 13) are retained.
 # (see scripts/anonymize-vinterserien.ts and scripts/lib/ocad-fixture.mjs).
 #
+# NOTE (v0.6.1, row E5): the fixture is still in the pre-v0.6.1 shape — it
+# inserts map_files.file_data and map_tiles, which the E5 migration
+# dropped — so it fails against a v0.6.1 database. Use an image up to
+# v0.6.0 for the demo until the fixture is regenerated on the document
+# pipeline (follow-up row in docs/research/vector-map-pipeline/SLICES.md).
+#
 # The fixture is idempotent: it cascade-deletes any existing event whose
 # name_id matches before re-inserting, so re-running is safe.
 #

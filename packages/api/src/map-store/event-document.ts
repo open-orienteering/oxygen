@@ -1,7 +1,7 @@
 /**
  * Server reads of the event's pinned map document (docs/map-storage.md
  * §4.6). Every reader that once parsed the OCAD bytes in
- * `map_files.file_data` — the event CRS, the description autodetect's
+ * `map_files.file_data` (dropped in E5) — the event CRS, the description autodetect's
  * objects, cut features, check obstacles, north, the print's scale and
  * tilt, `course.mapMetadata` — reads through these helpers instead.
  *
@@ -36,10 +36,6 @@ export interface EventPin {
   bounds: Prisma.JsonValue;
   northOffset: number | null;
   calibration: Prisma.JsonValue;
-  colorProfile: string;
-  colorOverrides: Prisma.JsonValue;
-  northLinesBelow: boolean;
-  renderKey: string | null;
 }
 
 const PIN_SELECT = {
@@ -54,10 +50,6 @@ const PIN_SELECT = {
   bounds: true,
   northOffset: true,
   calibration: true,
-  colorProfile: true,
-  colorOverrides: true,
-  northLinesBelow: true,
-  renderKey: true,
 } as const;
 
 /** The event's latest `map_files` row (never its bytes), or null when no map was uploaded. */
@@ -200,4 +192,36 @@ export function clearEventDocumentCaches(): void {
   norths.clear();
   decoded.clear();
   sourceFrames.clear();
+}
+
+/**
+ * Pin-time write (docs/map-storage.md §6.4): for every `map_files` row of
+ * the event carrying `sourceHash`, the four quick-access columns from the
+ * pinned document under the row's own `rotation_correction`
+ * (`documentMapFileColumns`: the source fallback for an unresolved CRS,
+ * scale only when nothing projects, tilt 0 without a report `north`).
+ * Since E5 the pin is the only writer after an upload — the upload no
+ * longer parses the file — so it never leaves the columns empty where the
+ * upload's parse filled them. Returns the rows written; 0 when the
+ * document row is missing.
+ */
+export async function writePinnedMapFileColumns(db: Db, eventId: bigint, sourceHash: string, documentHash: string): Promise<number> {
+  const rows = await db.mapFile.findMany({ where: { eventId, sourceHash }, select: { id: true, rotationCorrection: true } });
+  let written = 0;
+  for (const row of rows) {
+    const m = await documentMapFileColumns(db, documentHash, row.rotationCorrection);
+    if (!m) continue;
+    await db.mapFile.update({
+      where: { id: row.id },
+      data: {
+        scale: m.scale,
+        // Spread into plain object types, which Prisma's JSON input accepts without a cast.
+        bounds: m.bounds ? { ...m.bounds } : undefined,
+        northOffset: m.northOffset,
+        calibration: m.calibration?.map((c) => ({ ...c })),
+      },
+    });
+    written++;
+  }
+  return written;
 }

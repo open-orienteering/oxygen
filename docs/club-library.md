@@ -19,10 +19,11 @@ Each entry is a `club_maps` series (identified by its UUID) whose first
 ([map-storage.md §6.5](map-storage.md)): the version names the original
 file (`map_sources`) and the imported map document, and the card's
 thumbnail is that document's (`/api/map-documents/<hash>/thumbnail.png`).
-Metadata the document does not carry yet (WGS84 bounds, north offset,
-north-line diagnostics) and the PNG thumbnail of entries without a
-document come from the legacy `club_map_files` row that every library
-mutation keeps in step with the series until slice F retires it. The
+Extent, north offset and north-line diagnostics come from the version's
+document too; an entry without a document yet shows an empty frame. (The
+legacy `club_map_files` table the library once mirrored was dropped in
+v0.6.1, row E5.) Files go up through the chunked upload
+(`docs/map-storage.md` §5), whatever their size. The
 file's ScalePar georeference is taken as authoritative — there is no
 correction input. Instead the card shows a **north lines** badge: the
 angle between the map's drawn magnetic-north lines (ISOM 601) and today's
@@ -34,11 +35,8 @@ see [bugfix-auto-north-correction-gps-offset.md](bugfix-auto-north-correction-gp
 Parse or import failure is non-fatal: the entry is kept and listed with
 its import state ("Import failed" / "Importing…"), scale and bounds stay
 empty, the unavailable thumbnail is hidden, and the entry can be neither
-downloaded nor copied into an event until a version exists (the backfill
-retries it). Entries whose `club_map_files` row predates the series appear
-only once the map-document backfill has run (`pnpm map:backfill` or
-Settings → Maintenance → **Map documents**); a release containing this
-change requires that run first.
+downloaded nor copied into an event until a version exists — upload the
+file again to retry.
 
 North-line diagnostics come from the latest version's map document: the
 import's stage-5 analysis (`map_documents.report.north`), with the
@@ -84,19 +82,19 @@ own file. That flag gates:
 
 - `course.downloadMap` — event managers may download a map the event
   uploaded itself; a club-library copy requires an instance admin.
-- `/api/backup/event` — same rule, because the dump includes
-  `map_files.file_data`.
+- `/api/backup/event` — same rule, because the dump includes the map's
+  original file (its `map_sources` section).
 - `clubMap.download` — the version's uploader or an instance admin, the
   same rule as the club clause of `GET /api/map-sources/:hash`.
 
 ### Copy-on-use
 
 On an event map panel, **From club library** copies the chosen entry's latest
-version (its original file and the series' colour and rotation settings) into that
+version (its original file, by hash, and the series' rotation correction) into that
 event's `map_files` row and runs the same pipeline as a direct upload
-(`applyEventMap`): replace the previous map, drop `map_tiles` /
-`rendered_maps`, fire map-upload listeners, rebuild `geometrySource: "editor"`
-course overlays; then it pins `map_files.club_map_version_id` to that version. The event keeps an independent copy; later library rename or
+(`applyEventMap`): replace the previous map row, run the import job (a
+dedup hit on the version's document), re-derive the legs of edited
+courses for the map's scale; then it pins `map_files.club_map_version_id` to that version. The event keeps an independent copy; later library rename or
 delete does not change events that already copied the map (delete only clears
 the event's `club_map_version_id`). Entries without a version are shown
 disabled in the picker with their import state.

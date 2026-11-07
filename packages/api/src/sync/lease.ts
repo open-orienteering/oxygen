@@ -31,6 +31,7 @@ import {
   type SnapshotBlobs,
   type SnapshotMaps,
 } from "./snapshotMaps.js";
+import { withoutDroppedFields } from "./dropped-columns.js";
 
 // ─── Active lease + write guard ─────────────────────────────
 
@@ -125,9 +126,9 @@ export async function releaseLease(
 /**
  * The event-scoped tables carried by a checkout snapshot, in FK-safe insert
  * order. Rows travel verbatim (UUID PKs and `seq` values preserved); only
- * `eventId` is rewritten to the importing node's local event id. Tile
- * caches and readout-backup staging rows stay behind — they are
- * server-local, re-creatable, and not part of the results closure. The
+ * `eventId` is rewritten to the importing node's local event id.
+ * Readout-backup staging rows stay behind — they are server-local,
+ * re-creatable, and not part of the results closure. The
  * event's map rows travel separately as `maps` (docs/map-storage.md §7.2).
  * Course objects are cloud-owned like the sheets but travel here, since the
  * kiosk map at the venue draws them (docs/course-layer.md §8).
@@ -233,7 +234,8 @@ export async function importEventSnapshot(
   snapshot: EventSnapshot,
   blobs?: SnapshotBlobs,
 ): Promise<EventRef> {
-  const { id: _dropId, ...eventData } = snapshot.event;
+  // A v0.6.0 exporter still sends the columns E5 dropped.
+  const { id: _dropId, ...eventData } = withoutDroppedFields("event", snapshot.event);
   const nameId = String(eventData.nameId);
 
   const localId = await db.$transaction(
@@ -258,7 +260,7 @@ export async function importEventSnapshot(
         await (tx[t] as unknown as {
           createMany(a: { data: Record<string, unknown>[] }): Promise<unknown>;
         }).createMany({
-          data: rows.map((r) => ({ ...r, eventId: created.id })),
+          data: rows.map((r) => ({ ...(t === "course" ? withoutDroppedFields("course", r) : r), eventId: created.id })),
         });
       }
 

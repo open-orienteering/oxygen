@@ -51,3 +51,29 @@ describe("map-rematch CLI", () => {
     expect(formatRematchSummary(run({ dryRun: true }))).toBe("dry run: 3 pin(s) would be re-matched");
   });
 });
+
+describe("map-rematch argument parsing", () => {
+  it("defaults to everything, no limit, live run", () => {
+    expect(parseRematchArgs([])).toEqual({ ok: true, value: { event: null, limit: undefined, dryRun: false } });
+  });
+
+  it("accepts flags in either spelling and any order", () => {
+    expect(parseRematchArgs(["--dry-run", "--event", "itest", "--limit=3"])).toEqual({
+      ok: true,
+      value: { event: "itest", limit: 3, dryRun: true },
+    });
+    expect(parseRematchArgs(["--limit", "10", "--event=itest"])).toEqual({
+      ok: true,
+      value: { event: "itest", limit: 10, dryRun: false },
+    });
+  });
+
+  it("rejects missing values, bad limits and unknown flags", () => {
+    expect(parseRematchArgs(["--event"])).toMatchObject({ ok: false, error: expect.stringContaining("--event") });
+    expect(parseRematchArgs(["--limit", "0"])).toMatchObject({ ok: false });
+    expect(parseRematchArgs(["--limit", "x"])).toMatchObject({ ok: false });
+    expect(parseRematchArgs(["--limit"])).toMatchObject({ ok: false });
+    expect(parseRematchArgs(["--nope"])).toMatchObject({ ok: false, error: "unknown argument: --nope" });
+    expect(parseRematchArgs(["itest"])).toMatchObject({ ok: false });
+  });
+});

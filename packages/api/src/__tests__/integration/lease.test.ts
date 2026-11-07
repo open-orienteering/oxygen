@@ -80,11 +80,14 @@ const CHECKOUT_NAME = `oxygen_test_lease_co_${randomUUID().slice(0, 8)}`;
 async function provisionNodeB(): Promise<string> {
   const aUrl = new URL(process.env.DATABASE_URL!);
   const bUrl = new URL(aUrl.toString());
-  bUrl.pathname = "/oxygen_test_b";
+  // Beside node A's database, so a run against another test database
+  // (INTEGRATION_DATABASE_URL) has its own node B.
+  const bName = `${aUrl.pathname.replace(/^\//, "")}_b`;
+  bUrl.pathname = `/${bName}`;
   const admin = new Client({ connectionString: aUrl.toString() });
   await admin.connect();
   try {
-    await admin.query("CREATE DATABASE oxygen_test_b");
+    await admin.query(`CREATE DATABASE "${bName}"`);
   } catch (err) {
     if ((err as { code?: string }).code !== "42P04") throw err;
   } finally {
@@ -178,20 +181,19 @@ beforeAll(async () => {
   });
 
   // The event's map on B: source + document stored, pinned by map_files,
-  // plus a pre-pipeline row (no hashes) that the snapshot leaves behind.
+  // plus a row without a source (a soft-deleted event's tombstone shape
+  // after E5) that the snapshot leaves behind.
   mapFixture = Buffer.concat([readFileSync(FIXTURE), Buffer.from(`lease-${mapSuffix}`)]);
   const stored = await importAndStoreOcad(dbB, mapFixture, "lease.ocd");
   sourceHash = stored.sourceHash;
   documentHash = stored.documentHash;
   await dbB.mapFile.create({
-    data: { eventId: eventB.id, fileName: "old.ocd", fileData: Uint8Array.from(Buffer.from("legacy")), uploadedAt: new Date("2025-01-01T00:00:00Z") },
+    data: { eventId: eventB.id, fileName: "old.ocd", uploadedAt: new Date("2025-01-01T00:00:00Z") },
   });
   await dbB.mapFile.create({
     data: {
       eventId: eventB.id,
       fileName: "lease.ocd",
-      fileData: Uint8Array.from(mapFixture),
-      fileHash: sourceHash,
       sourceHash,
       documentHash,
       scale: 10000,
@@ -342,6 +344,37 @@ describe("checkout maps: failure and interop", () => {
     }
   });
 
+  it("checks out from a v0.6.0 exporter whose rows still carry the columns E5 dropped", async () => {
+    _setLeasePeerFactory(() => ({
+      ...leasePeerToB(),
+      exportSnapshot: async () => {
+        const snap = await exportEventSnapshot(dbB, eventB);
+        return {
+          ...snap,
+          event: { ...snap.event, mapPipeline: "vector", overprintCutsVersion: 3 },
+          tables: { ...snap.tables, course: snap.tables.course.map((c) => ({ ...c, geometry: { type: "FeatureCollection", features: [] }, geometrySource: "editor" })) },
+          maps: snap.maps && {
+            ...snap.maps,
+            files: snap.maps.files.map((m) => ({ ...m, fileHash: m.sourceHash, renderKey: "rk", colorProfile: "auto", colorOverrides: {}, northLinesBelow: true })),
+          },
+        };
+      },
+    }));
+    try {
+      const res = await caller.lease.checkout({ nameId: CHECKOUT_NAME });
+      expect(res.maps).toMatchObject({ files: 1 });
+      const local = await ctx.db.event.findUniqueOrThrow({ where: { nameId: CHECKOUT_NAME }, select: { id: true } });
+      expect(await ctx.db.mapFile.findMany({ where: { eventId: local.id }, select: { sourceHash: true } })).toEqual([{ sourceHash }]);
+      expect(await ctx.db.course.count({ where: { eventId: local.id } })).toBe(await dbB.course.count({ where: { eventId: eventB.id } }));
+    } finally {
+      _setLeasePeerFactory(() => leasePeerToB());
+      await undoCheckout();
+      // The lifecycle below fetches the blobs afresh and counts the bytes.
+      await ctx.db.mapDocument.deleteMany({ where: { hash: documentHash } });
+      await ctx.db.mapSource.deleteMany({ where: { fileHash: sourceHash } });
+    }
+  });
+
   it("exportBlob answers only for blobs the event pins", async () => {
     const other = await dbB.event.create({
       data: { nameId: `oxygen_test_lease_other_${mapSuffix}`, name: "Other", date: new Date("2026-01-01T00:00:00Z"), kind: "competition" },
@@ -426,8 +459,7 @@ describe("checkout → write → checkin lifecycle", () => {
 
     const files = await ctx.db.mapFile.findMany({ where: { eventId: local.id } });
     expect(files).toHaveLength(1); // the pre-pipeline row stayed behind
-    expect(files[0]).toMatchObject({ fileName: "lease.ocd", sourceHash, documentHash, fileHash: sourceHash, scale: 10000, rotationCorrection: 1.5, clubMapVersionId: null });
-    expect(Buffer.from(files[0].fileData).equals(mapFixture)).toBe(true);
+    expect(files[0]).toMatchObject({ fileName: "lease.ocd", sourceHash, documentHash, scale: 10000, rotationCorrection: 1.5, clubMapVersionId: null });
   });
 
   it("merges the club's symbol decisions: newer decided_at wins, nothing deleted", async () => {
@@ -577,7 +609,7 @@ describe("checkout → write → checkin lifecycle", () => {
     const local = await ctx.db.event.findUniqueOrThrow({ where: { nameId: CHECKOUT_NAME }, select: { id: true } });
     const files = await ctx.db.mapFile.findMany({ where: { eventId: local.id } });
     expect(files).toHaveLength(1);
-    expect(Buffer.from(files[0].fileData).equals(mapFixture)).toBe(true);
+    expect(files[0].sourceHash).toBe(sourceHash);
     const after = await ctx.db.mapDocument.findUniqueOrThrow({ where: { hash: documentHash }, select: { createdAt: true } });
     expect(after.createdAt).toEqual(before.createdAt);
     await undoCheckout();

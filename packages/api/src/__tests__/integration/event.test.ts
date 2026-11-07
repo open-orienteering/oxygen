@@ -185,7 +185,6 @@ describe("event.dashboard contentSignals", () => {
         data: {
           eventId: ref.id,
           fileName: "base.ocd",
-          fileData: Buffer.from([0]),
         },
       });
       await caller.course.create({ name: "Bana 1" });

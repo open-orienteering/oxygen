@@ -16,6 +16,8 @@ import {
   type TestEventContext,
 } from "../helpers/test-db.js";
 import { makeCaller } from "../helpers/caller.js";
+import { drawnCourse } from "../helpers/course-drawn.js";
+import { uploadClubMap, uploadEventMap } from "../helpers/upload-map.js";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 /** Paper mm extent: x −76.4…76.4, y −48.4…46.4, scale 1:7500. */
@@ -149,25 +151,16 @@ describe("course.previewImport — Purple Pen coordinate alignment", () => {
   beforeAll(async () => {
     mapCtx = await createTestEvent("ppen_align");
     mapCaller = makeCaller(mapCtx.event);
-    const mapBase64 = readFileSync(MAP_FIXTURE).toString("base64");
-    await mapCaller.course.uploadMap({
-      fileName: "event-map.ocd",
-      fileDataBase64: mapBase64,
-    });
+    const mapBytes = readFileSync(MAP_FIXTURE);
+    await uploadEventMap(mapCaller, mapCtx.nameId, mapBytes, "event-map.ocd");
 
     skipCtx = await createTestEvent("ppen_skip_pos");
     skipCaller = makeCaller(skipCtx.event);
-    await skipCaller.course.uploadMap({
-      fileName: "event-map.ocd",
-      fileDataBase64: mapBase64,
-    });
+    await uploadEventMap(skipCaller, skipCtx.nameId, mapBytes, "event-map.ocd");
   }, 60_000);
 
   afterAll(async () => {
     if (clubMapIds.length) {
-      await mapCtx.db.clubMapFile.deleteMany({
-        where: { clubMapId: { in: clubMapIds } },
-      });
       await mapCtx.db.clubMap.deleteMany({ where: { id: { in: clubMapIds } } });
     }
     await mapCtx?.cleanup();
@@ -201,11 +194,7 @@ describe("course.previewImport — Purple Pen coordinate alignment", () => {
 
   it("re-projects from the source map when the club library has it", async () => {
     const libraryName = `library-${suffix}.ocd`;
-    const uploaded = await makeCaller().clubMap.upload({
-      fileName: libraryName,
-      name: `Alignment source ${suffix}`,
-      fileDataBase64: readFileSync(MAP_FIXTURE).toString("base64"),
-    });
+    const uploaded = await uploadClubMap(makeCaller(), readFileSync(MAP_FIXTURE), libraryName, `Alignment source ${suffix}`);
     clubMapIds.push(uploaded.id);
 
     const preview = await mapCaller.course.previewImport({
@@ -268,11 +257,10 @@ describe("course.previewImport — Purple Pen coordinate alignment", () => {
 
     const row = await skipCtx.db.course.findFirst({
       where: { eventId: skipCtx.eventId, name: "Align A", removed: false },
-      select: { geometry: true, lengthM: true },
+      select: { id: true, lengthM: true },
     });
-    const features =
-      (row?.geometry as { features?: unknown[] } | null)?.features ?? [];
-    expect(features).toHaveLength(0);
+    // Nothing is drawn from the file's unusable positions.
+    expect((await drawnCourse(skipCtx.db, skipCtx.eventId, row!.id)).features).toHaveLength(0);
     // Leg lengths came from the file's own map scale and stay valid.
     expect(row!.lengthM).toBeGreaterThan(0);
   }, 60_000);

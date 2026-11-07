@@ -1,14 +1,17 @@
 /**
  * Re-match pass over stored documents (docs/map-storage.md §6.9; research
- * 03 §6.5, 09 slice A). The backfill (§6.7) gives rows without a document
- * one; this pass revisits pins whose document is not what the source
- * imports to now and runs an ordinary import job for each, so the pin
- * follows the fresh document:
+ * 03 §6.5, 09 slice A). This pass revisits pins whose document is not what
+ * the source imports to now and runs an ordinary import job for each, so
+ * the pin follows the fresh document:
  *
  *   club_map_versions  stale importer, library release or club decisions
  *   map_files          stale importer or library release only — an event
  *                      keeps the document it pinned when only decisions
- *                      changed (06 §6 copy-on-use; `finalise` moves it)
+ *                      changed (06 §6 copy-on-use; `finalise` moves it) —
+ *                      and a live event's row with a source but no
+ *                      document at all (an import that failed or never
+ *                      ran, a restored pre-v0.6.1 dump; the job the
+ *                      retired backfill ran, §6.7)
  *
  * A document is judged once per run whatever pins it. Every item is
  * keyed by content hash, so a re-run finds only what is still stale.
@@ -22,7 +25,7 @@ import { awaitImportJob, startImportJob, type ImportJobRow } from "./jobs.js";
 
 type Db = PrismaClient | Prisma.TransactionClient;
 
-export type RematchReason = "importer" | "library" | "decisions";
+export type RematchReason = "importer" | "library" | "decisions" | "unpinned";
 
 export interface RematchItem {
   kind: "club" | "event";
@@ -30,7 +33,8 @@ export interface RematchItem {
   id: string;
   name: string;
   sourceHash: string;
-  documentHash: string;
+  /** The stale document; null for an `unpinned` row. */
+  documentHash: string | null;
   reason: RematchReason;
 }
 
@@ -67,7 +71,7 @@ export function staleReason(doc: { importerVersion: string; libraryVersion: stri
   return followsDecisions ? null : "decisions";
 }
 
-/** Pins whose document is stale, club versions first, oldest first. */
+/** Pins whose document is stale, club versions first, oldest first; then live events' sourced rows without a document. */
 export async function planRematch(db: Db, opts: Pick<RematchOptions, "eventId" | "limit"> = {}): Promise<RematchItem[]> {
   const versions = opts.eventId
     ? []
@@ -113,6 +117,17 @@ export async function planRematch(db: Db, opts: Pick<RematchOptions, "eventId" |
     if (seen.has(key)) continue;
     seen.add(key);
     items.push({ kind: "event", id: String(f.eventId), name: f.event.name || f.event.nameId, sourceHash: f.sourceHash!, documentHash: f.documentHash!, reason });
+  }
+  const unpinned = await db.mapFile.findMany({
+    where: { documentHash: null, sourceHash: { not: null }, event: { removed: false }, ...(opts.eventId ? { eventId: opts.eventId } : {}) },
+    orderBy: [{ eventId: "asc" }, { id: "asc" }],
+    select: { eventId: true, sourceHash: true, event: { select: { name: true, nameId: true } } },
+  });
+  for (const f of unpinned) {
+    const key = `${f.eventId}|${f.sourceHash}`;
+    if (seen.has(key)) continue;
+    seen.add(key);
+    items.push({ kind: "event", id: String(f.eventId), name: f.event.name || f.event.nameId, sourceHash: f.sourceHash!, documentHash: null, reason: "unpinned" });
   }
   return opts.limit ? items.slice(0, opts.limit) : items;
 }

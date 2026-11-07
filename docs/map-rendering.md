@@ -1544,8 +1544,8 @@ specs wait for `map-vector-layer` instead.
 
 **A map without a pinned document** — its import queued or running,
 failed, finished with a document the event does not use (an import that
-waits for review), or a map from before the backfill (§6.7 of
-`map-storage.md`) — mounts no viewer. `MapPanel`
+waits for review), or a row restored from a pre-v0.6.1 dump the re-match
+has not imported yet (§7.3 of `map-storage.md`) — mounts no viewer. `MapPanel`
 shows `MapImportState` (`data-testid="map-import-state"`) from
 `mapImport.latestForEvent`, `data-state` by `mapImportView`
 (`lib/map-import-view.ts`):
@@ -1555,7 +1555,7 @@ shows `MapImportState` (`data-testid="map-import-state"`) from
 | loading, `queued`, `running` | `pending` | "The map is being prepared…" and the progress; polled every 2 s |
 | `done` with a document | `review` | "imported and waiting for review", a link to `/:nameId/map-review/:hash` (`map-import-review-link`); the panel re-reads `mapMetadata` once, so a pin made meanwhile mounts the viewer |
 | `failed` | `failed` | the job's error |
-| none, or not readable (a kiosk without `courses.view`) | `unknown` | the backfill hint (Maintenance → Map documents) |
+| none, or not readable (a kiosk without `courses.view`) | `unknown` | "not prepared yet — upload the map again" (the Maintenance → Map documents hint until the backfill went in E5) |
 
 Decided overnight by the E3 session (for user review): the review link
 is the `done` job's document, not the failed one's — a failed job has no

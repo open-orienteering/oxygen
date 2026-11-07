@@ -32,6 +32,7 @@ reference events — nothing to provision manually.
 |---------|--------------|
 | `pnpm test:e2e` | Full suite, sharded across `min(4, floor(cores/2))` stacks — 4 on a 16-core dev box (~3-5 min), 2 on a 4 vCPU GitHub runner |
 | `pnpm test:e2e e2e/kiosk.spec.ts` | Selective run — single plain Playwright process on its own isolated stack (API :4100, web :4200, eventor stub :4300, db `oxygen_e2e`), no sharding. Works while `pnpm dev` is running, and from any worktree: it starts all three servers itself, so it always tests the checkout it is run from |
+| `E2E_DB_PREFIX=oxygen_e5 pnpm test:e2e` | The same runs on databases named `oxygen_e5` / `oxygen_e5_<i>` instead of the default prefix's. For a branch whose migration drops columns: every worktree migrates and reuses the shared databases, so a destructive migration applied there breaks the other worktrees' runs. Create the copies first (`CREATE DATABASE oxygen_e5_1 TEMPLATE <the shard database>`, under the verify lock); row E5 was verified this way |
 | `E2E_SHARDS=2 pnpm test:e2e` | Fewer shards (lower peak CPU/RAM) |
 | `pnpm test:e2e:serial` | Escape hatch: plain `playwright test` — the same 4100/4200/4300 stack as a selective run |
 

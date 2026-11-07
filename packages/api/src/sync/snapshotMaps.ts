@@ -15,6 +15,7 @@ import { TRPCError } from "@trpc/server";
 import { Prisma, type PrismaClient } from "../generated/prisma/client.js";
 import { getBlob, getBlobSize, type BlobTable } from "../map-store/blob-store.js";
 import { SOURCE_SLICE_BYTES, sliceRanges } from "../map-store/source-routes.js";
+import { withoutDroppedFields } from "./dropped-columns.js";
 
 type Db = PrismaClient | Prisma.TransactionClient;
 
@@ -62,11 +63,15 @@ export interface SnapshotDecision {
 }
 
 export interface SnapshotMaps {
-  /** `map_files` rows without `id`, `eventId` and `fileData`. */
+  /** `map_files` rows without `id` and `eventId`. */
   files: Record<string, unknown>[];
   sources: SnapshotMapSource[];
   documents: SnapshotMapDocument[];
-  /** `map_files` rows left behind because they have no `source_hash` yet. */
+  /**
+   * `map_files` rows left behind because they have no `source_hash`. Always
+   * 0 for a live event since E5 (the drops migration's guard); kept on the
+   * wire for nodes on older versions.
+   */
   skipped: number;
   /** The whole `club_symbol_decisions` table (club-level, map-symbols.md §8.5). */
   decisions?: SnapshotDecision[];
@@ -93,7 +98,7 @@ export function pinnedHashes(
 export function partitionMapFiles(rows: Array<Record<string, unknown>>): { files: Record<string, unknown>[]; skipped: number } {
   const files: Record<string, unknown>[] = [];
   let skipped = 0;
-  for (const { id: _id, eventId: _eventId, fileData: _fileData, ...rest } of rows) {
+  for (const { id: _id, eventId: _eventId, ...rest } of rows) {
     if (rest.sourceHash) files.push(rest);
     else skipped++;
   }
@@ -150,7 +155,6 @@ export async function fetchBlob(table: BlobTable, hash: string, sizeBytes: numbe
 export async function exportSnapshotMaps(db: Db, eventId: bigint): Promise<SnapshotMaps> {
   const rows = await db.mapFile.findMany({
     where: { eventId },
-    omit: { fileData: true },
     orderBy: { uploadedAt: "asc" },
   });
   const { files, skipped } = partitionMapFiles(rows as unknown as Array<Record<string, unknown>>);
@@ -244,9 +248,9 @@ export async function fetchSnapshotBlobs(db: Db, maps: SnapshotMaps, fetchSlice:
 
 /**
  * Insert the blobs and the event's `map_files` rows inside the snapshot
- * transaction, after the event row. `uploaded_by` and
- * `club_map_version_id` stay NULL: the venue has neither the users nor the
- * club library. `file_data` is the source's bytes.
+ * transaction, after the event row. `club_map_version_id` stays NULL: the
+ * venue has no club library. Every row's source must be on this node
+ * (fetched above or held already).
  */
 export async function importSnapshotMaps(
   tx: Prisma.TransactionClient,
@@ -287,11 +291,11 @@ export async function importSnapshotMaps(
   }
   for (const f of maps.files) {
     const sourceHash = String(f.sourceHash);
-    const fileData = blobs.sources.get(sourceHash) ?? (await getBlob(tx, "map_sources", sourceHash));
-    if (!fileData) {
+    if (!blobs.sources.has(sourceHash) && (await getBlobSize(tx, "map_sources", sourceHash)) === null) {
       throw new TRPCError({ code: "PRECONDITION_FAILED", message: `Checkout: map source ${sourceHash} is missing on this node.` });
     }
-    const row: Record<string, unknown> = { ...f, eventId, fileData: Uint8Array.from(fileData), clubMapVersionId: null };
+    // A v0.6.0 exporter still sends the columns E5 dropped.
+    const row: Record<string, unknown> = { ...withoutDroppedFields("mapFile", f), eventId, clubMapVersionId: null };
     // A JSON null arrives as null; Prisma wants the DbNull sentinel for a nullable Json column.
     for (const k of NULLABLE_JSON_FILE_FIELDS) if (row[k] === null) row[k] = Prisma.DbNull;
     await tx.mapFile.create({ data: row as never });

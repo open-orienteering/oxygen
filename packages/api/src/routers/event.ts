@@ -337,8 +337,6 @@ export const eventRouter = router({
     const result = await prisma().event.deleteMany({
       where: { removed: true },
     });
-    const { gcOrphanTiles } = await import("../map-render-cache.js");
-    await gcOrphanTiles(prisma());
     return { purged: result.count };
   }),
 

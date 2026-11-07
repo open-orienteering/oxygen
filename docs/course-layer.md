@@ -8,9 +8,11 @@ started by sub-slice C0. The research record is
 This chapter is normative for `packages/shared/src/course/`
 (`import { course } from "@oxygen/shared"`). Its consumers are the
 viewer's dynamic bucket (C4, §5), the page composer (C2,
-`course-print.md`) and the `courses.geometry` compatibility artifact
-(C5). This chapter covers how the layer is derived (§1), its v1 input
-(§2), the geometry rules (§3), the GeoJSON projection (§4), the viewer
+`course-print.md`) and the derived course lengths (§4.1); the
+`courses.geometry` compatibility artifact (C5) it also fed was dropped
+in E5. This chapter covers how the layer is derived (§1), its v1 input
+(§2), the geometry rules (§3), the lengths and the retired GeoJSON
+projection (§4), the viewer
 (§5), the stored course structure (§6, slice D row D0), the
 concurrency rules for editing it (§7, gate G1) and the stored, scoped
 course objects (§8, row D2) and the advisory checks (§9, row D6). Editing the structure on
@@ -32,7 +34,8 @@ the new canvas is `course-editor.md`'s.
 
 Decided by the user 2026-10-24 for C5:
 
-- **Stored GeoJSON at legacy sizes.** The `courses.geometry` artifact
+- **Stored GeoJSON at legacy sizes** (the artifact and its cuts version
+  were dropped in E5, §4). The `courses.geometry` artifact
   (§4) is computed at the legacy sizes (2.5 mm circle radius, 0.35 mm
   lines) for both pipelines, because every consumer of it draws those
   sizes until it is ported (C4 viewer, C2 / C3 print). The pinned
@@ -154,7 +157,7 @@ automatic cuts; an empty list means automatic (decision log 2026-11-01,
 
 | Input | v1 shape | Built today from |
 |---|---|---|
-| `structure` | `CourseStructure` (one course), an array (several highlighted courses: legs of each, codes as numbers) or `null` (no course) — the stored form is §6 | `{ version: 1, id, orderMode, items, labelOffsets? }`: `items` start … finish — the start by `startName` unless `firstAsStart`, `course_controls` in order, the finish by `finishControlId` unless `lastAsFinish`; from the stored structure when there is one (§6), else from the columns — one rule for every reader (`courseSequenceOf`, §6.2: `rebuildCourseGeometry`, `course-export.ts`, the print layout); `labelOffsets` from `course_controls` |
+| `structure` | `CourseStructure` (one course), an array (several highlighted courses: legs of each, codes as numbers) or `null` (no course) — the stored form is §6 | `{ version: 1, id, orderMode, items, labelOffsets? }`: `items` start … finish — the start by `startName` unless `firstAsStart`, `course_controls` in order, the finish by `finishControlId` unless `lastAsFinish`; from the stored structure when there is one (§6), else from the columns — one rule for every reader (`courseSequenceOf`, §6.2: `rebuildCourseLengths`, `course-export.ts`, the print layout); `labelOffsets` from `course_controls` |
 | `CourseItem` | `{ siteId, role?, leg?, numberHidden? }` — 08 §4.3's item, the leg being the leg *into* the item | `role` defaults to the site's kind (set it for `firstAsStart` / `lastAsFinish`); `numberHidden` from the visit's `number_hidden` |
 | `leg` | `{ gaps? }` — the stored `LegProps.gaps`, fractions along the leg | `LegProps.gaps` of the structure's item (§6.4: written by the importers and the backfill, by the editor from D5). The v1 interim input of slice C (`path`, `pieces`, item `circleGaps`, `extras`, read from an imported `ocd` course's GeoJSON) is **retired** by D1: nothing is read from the GeoJSON |
 | `sites` | `{ id, code, kind: "control" \| "start" \| "finish", x, y, circleGaps? }[]` | `controls` rows; `code` the display code (first punch code, else name / seq); `circleGaps` = `controls.circle_gaps`, compass degrees |
@@ -166,7 +169,7 @@ automatic cuts; an empty list means automatic (decision log 2026-11-01,
 
 Free order is the structure's `orderMode` (a property of the course, not
 of the view). A site at the origin (0, 0) is unpositioned and skipped,
-legs connecting the remaining items (the editor's rule, `editorCourseGeometry`).
+legs connecting the remaining items (the editor's rule, `editorCourseLayer`).
 Gaps follow the rule above. Variations, map exchanges, crossing points, map-issue
 points and `LegProps` beyond `gaps` are not in v1 (Pending).
 
@@ -306,7 +309,7 @@ user review). The flag reaches every consumer of the layer:
 |---|---|
 | GL course layer (every `MapPanel`: course views, kiosk, the editors, Layout mode) | `MapPanel` reads `course.getOverprintCuts` (kiosk-readable) and passes `autoCuts` to `MapViewer` → `courseLayerRequest` → `viewOptions.autoCuts` (§5); the editors' toggle refetches the same query, so the canvas redraws without a reload. Until the query answers, cuts are on |
 | Vector print (`maps.pdf`, `course-print.md` §8.2) | the route passes `event.autoOverprintCuts` as `MapRowContext.autoCuts` → `resolveSheet` → the sheet's `course.viewOptions.autoCuts` → `composePage`; `courseMap.resolveSheet` (Layout mode's sheet) does the same |
-| Legacy artifact (`courses.geometry`: no reader since E6, written until E5 for the v0.5.0 rollback; the viewer's SVG overlay read it until E4b) | `rebuildCourseGeometry` passes no `cutFeatures` when off (§4.2) and `setOverprintCuts` rebuilds every editor course. The artifact carries no stored gaps at all (Pending "Structure, beyond D1": the writer does not carry authored cuts and gaps), so under `legacy` the toggle off draws **no** cuts — the one difference from the rule above, closed when the writer carries stored gaps |
+| — | Nothing stored depends on the flag since E5 dropped the `courses.geometry` artifact (whose writer cut by it): `setOverprintCuts` writes `events.auto_overprint_cuts` and nothing else — no course is rebuilt or re-journaled |
 
 ### 3.5 Numbers
 
@@ -353,69 +356,55 @@ construction, deleted in E4c);
 closed shapes close implicitly. Layout-object symbols are deduplicated by
 content.
 
-## 4. GeoJSON projection
+## 4. GeoJSON projection (retired in E5) and the derived lengths
 
-`courseLayerGeoJson(layer, courseId?)` projects one course of the layer
-(default the first) onto the `courses.geometry` FeatureCollection, the
-compatibility artifact C5 writes (09 §4 C). Since E6 nothing reads it:
-every consumer draws from `structure` + `courseLayer()` and reads lengths
-from `length_m` / `length_source` (§4.1). It is still written, with the
-same value as before, until E5 drops the column — the v0.5.0 rollback
-reads it:
+`courseLayerGeoJson(layer, courseId?)` projected one course of the layer
+onto the `courses.geometry` FeatureCollection, the compatibility artifact
+C5 wrote (09 §4 C): one `Point` per positioned item (`{ symbolType,
+code, id }`, + `cuts`), then one centre-to-centre `LineString` per leg
+(`{ symbolType: "leg", from, to }`, + `gaps`), at the legacy sizes. E6
+moved its last readers to `structure` + `courseLayer()`; it was written
+for the v0.5.0 rollback until E5 dropped the column with
+`geometry_source`, and the projection (`packages/shared/src/course/geojson.ts`)
+went with it. An imported file's own GeoJSON is import-time data only:
+the importers read its leg gaps and course-level objects (§6.4, §8) and
+store nothing of it. Tests that asserted on the column assert on the
+same derivation through `__tests__/helpers/course-drawn.ts`.
 
-| Feature | Geometry | Properties |
-|---|---|---|
-| one per positioned item, in order | `Point` | `{ symbolType: "start" \| "control" \| "finish", code, id: code }`, + `cuts` (effective gaps) on a cut control |
-| one per leg (ordered courses) | `LineString` centre to centre | `{ symbolType: "leg", from, to }` (codes), + `gaps` when the leg has any |
+### 4.1 Derived lengths (`rebuildCourseLengths`)
 
-Points first, then legs — the shape and order the editor
-wrote before C5, which v0.5.0 reads. Clipped leg pieces, numbers and
-course objects (707 / 708 / 709 / 711 and the rest, §8) are not projected:
-consumers clip and place themselves today. An imported course's own
-GeoJSON keeps what its file drew (`preclipped` pieces, the course-level
-features) until an edit rewrites it; nothing in this release reads any
-of it (§6.4).
-
-### 4.1 Writer (C5)
-
-`rebuildCourseGeometry` (`packages/api/src/course-geometry.ts`) writes
-`editorCourseGeometry(courseId, seq, orderMode, cutFeatures)` =
-`courseLayerGeoJson(editorCourseLayer(…), courseId)` on every write of
-an editor course until E5 drops the column (09 §4 C; 08 §4.1). The row
-E6 names `rebuildCourseGeometry` among what goes; it stays as the writer
-of the dual write (decision log 2026-11-06, "E6: the writer stays"), and
-builds the layer once per course for the column and the lengths:
+`rebuildCourseLengths` (`packages/api/src/course-geometry.ts`, the
+writer `rebuildCourseGeometry` was until E5) derives an edited course's
+`legs`, `length_source` and (optionally) `length_m` from the layer on
+every write that can change them, inside the write's transaction and
+before its `course.upserted`:
 
 - **Input**: the sequence `loadCourseSequences` builds by the one
   sequence rule (`courseSequenceOf`, §6.2 "Readers") as a v1 `structure`
   with one item per entry (`role` = the entry's type) over `controls`
-  rows as sites (`editorCourseLayer`); no layout objects, appearance or
-  view options.
-- **Sizes**: the document context is the ISOM stack at factor 1 — the
-  legacy 2.5 mm circle and 0.35 mm line every consumer of the artifact
-  draws (user decision 2026-10-24). The map enters only through the
-  features' radii (§3.4). `courseLayer` cannot throw `CourseStackError`
-  on that fixed stack.
-- **`legs` / `lengthM`**: from the layer's derived legs since E6
+  rows as sites (`editorCourseLayer`); no layout objects, appearance,
+  view options or cut features (a leg's length is centre to centre).
+- **Sizes**: the ISOM stack at factor 1 (user decision 2026-10-24);
+  `courseLayer` cannot throw `CourseStackError` on that fixed stack.
+- **`legs` / `lengthM`**: from the layer's derived legs
   (`legDistancesMm(layer)`: centre to centre between consecutive
   positioned items of `derivation.courses[0]`), `Math.round(d × scale /
   1000)` per leg joined with `;` and a trailing `;`, the total rounded
   once; free-order courses leave both alone; `updateLength: false` (map
   upload, rotation, position-less import) keeps `lengthM`. The distances
-  are the pre-E6 sequence formula's bit for bit (same expression on the
-  same points; unit parity test over repeated visits, unplaced controls
-  and 50 generated sequences at two scales), so no stored length changes.
-- **`length_source`** (E6): `'derived'` where the writer sets
-  `geometry_source = 'editor'` (at least one positioned item), else
-  NULL — what the export and the Eventor sync read
-  (`course-controls-and-matching.md` "Course length").
-- **Imported geometry** (`ocd` / `xml`) is never rewritten until the
-  course is edited, which turns it into `editor` geometry (today's rule).
-- Call sites and signatures are unchanged: course create / update /
-  sequence edits, control create / move / delete, copy, toggle, map
-  upload and rotation correction; each emits `course.upserted` after the
-  rebuild, so the journal and the venue closure (08 §4.8) carry the new
-  geometry as before.
+  are the pre-E6 sequence formula's bit for bit (unit parity test over
+  repeated visits, unplaced controls and 50 generated sequences at two
+  scales), so no stored length changed.
+- **`length_source`**: `'derived'` when the layer has at least one
+  positioned item (`hasPositionedItems`), else NULL — what the export and
+  the Eventor sync read (`course-controls-and-matching.md` "Course
+  length").
+- **Call sites**: course create / update / sequence edits / order mode,
+  control create / move / delete / restore, copy, a position-less import;
+  a map upload and a rotation correction re-derive the legs of the
+  event's `length_source = 'derived'` courses for the new scale and
+  re-emit them without advancing their token. The **Auto cuts** toggle
+  re-derives nothing (§3.4).
 
 ### 4.2 Cut features
 
@@ -433,23 +422,20 @@ Slice E1 removed the OCAD source (the parse of the latest upload with
 document's features equal the OCAD adapter's within 1e-6 mm in x, y and
 r when compared on source codes (`document-readers-parity.test.ts`,
 `map-storage.md` §4.6 "Parity"); an applied symbol match can change a
-feature's code — the document rule. The map **upload** rebuilds editor
-courses after the import hold (`applyEventMap`), so an event cuts
-against its new pin when the import finished within it; otherwise the
-rebuild finds no pin and writes no cuts until the next write after the
-pin. A later re-match of the pin does not rebuild stored cuts.
+feature's code — the document rule. Since E5 nothing stores cuts: the
+GL layer and the print compute them at draw time from the pinned
+document, so a new pin or a re-match is reflected on the next draw.
+Server-side, `loadEventCutFeatures` is read by the tests that check what
+the layer draws for a stored course (`overprint-cuts.test.ts`); no
+production path reads it since the artifact's writer went.
 
 ### 4.3 Migration
 
-`OVERPRINT_CUTS_VERSION` = 3 (1 OCAD-parse cuts, 2 knolls and rocks
-only, 3 written by the course layer with size-aware cuts). Until E6 an
-event below it had its editor courses rebuilt on the next
-`course.geometry` / `courseGeometries` read (`ensureOverprintCutsCurrent`,
-`updateLength: false`); E6 deleted both procedures (no caller since E4b)
-and the lazy migration with them. The writes that rebuild every editor
-course (map upload, rotation, the **Auto cuts** toggle) still stamp the
-version until E5 drops the column; v0.5.0 migrates an event below it on
-rollback as before.
+Retired. `OVERPRINT_CUTS_VERSION` (1 OCAD-parse cuts, 2 knolls and rocks
+only, 3 written by the course layer with size-aware cuts) stamped
+`events.overprint_cuts_version` on the writes that rebuilt the stored
+artifact; E6 deleted the lazy read-migration (`ensureOverprintCutsCurrent`)
+and E5 dropped the constant with the column and the artifact.
 
 ### 4.4 Comparison
 
@@ -625,8 +611,8 @@ to `NULL` until D1 makes the importers write it. Peers apply it from the
 `course.upserted` payload like any column.
 
 **Readers.** One rule, `courseSequenceOf` (`course-structure.ts`, E6),
-used by `loadCourseSequences` (`course-geometry.ts`, hence
-`courses.geometry`, `legs`, lengths), the IOF / PPen export
+used by `loadCourseSequences` (`course-geometry.ts`, hence `legs` and
+lengths), the IOF / PPen export
 (`course-export.ts`) and the print layout (`layoutCourseEnds`,
 `course-print.md` §5.2): the explicit start, the sequence and the
 explicit finish from the structure when a valid one is stored, from the
@@ -634,12 +620,10 @@ columns otherwise (a NULL structure reads as `structureFromColumns`
 describes it — what the editor gets from `course.detail`), and an absent
 start / finish completed by the event's lowest-seq one unless
 `first_as_start` / `last_as_finish`. Sites are drawn by their kind
-(`role` matters to the mirror and to IOF's `@type`, not to the stored
-GeoJSON, which keeps drawing a `first_as_start` control as a circle),
-and a soft-deleted site drops out as `start_name` does (the callers pass
-live rows only). No reader reads `courses.geometry` since E6. The geometry of a course written through
-`setStructure` is byte-identical to the one `course.update` writes for
-the same sequence (integration test).
+(`role` matters to the mirror and to IOF's `@type`), and a soft-deleted
+site drops out as `start_name` does (the callers pass live rows only).
+A course written through `setStructure` is drawn and measured exactly as
+the one `course.update` writes for the same sequence (integration test).
 
 ### 6.3 Sites' new fields
 
@@ -701,20 +685,21 @@ OCD import first deletes the `source = 'import'` objects whose scope names a
 course it rewrites and writes the file's, so a re-import replaces exactly
 those: never an object drawn in the editor, nor another file's (an event can
 be fed from more than one file). A backfilled row (same marker) is superseded
-by a re-import the same way. `courses.geometry` is still written as the
-file's GeoJSON (`geometry_source` `ocd` / `xml`, `length_source`
-`'file'`) until E5 drops it; nothing reads it. An IOF / PPen re-import
-over an `ocd` course leaves its `geometry` / `geometry_source` /
-`length_source` as they are (the documented "keep the OCD geometry
-unless the controls drifted > 30 m" rule never fired: it joined points
-on `properties.id`, which the straight-line XML geometry does not carry,
-so the OCD geometry was always kept — `bugfix-stale-ocd-course-geometry.md`;
-E6 deleted `isOcdGeometryStaleVsXml`), writes the file's positions,
-length and a linear structure whose leg gaps are carried from the stored
-structure where the leg still runs between the same two sites
-(`carryLegs`; before E6 they were re-derived from the kept GeoJSON's
-pieces, which the previous OCD import had stored in the structure
-already), and leaves `circle_gaps` alone (the XML carries none). **PPen `<gaps>` / `<leg>` bends
+by a re-import the same way. An import with positions sets
+`length_source = 'file'` (the file's published length); the file's
+GeoJSON is import-time data only — E5 dropped the `courses.geometry` /
+`geometry_source` columns it was also stored in. An IOF / PPen re-import
+(a format without leg gaps) of an existing course writes the file's
+positions, length and a linear structure whose stored legs (`LegProps`:
+gaps an OCD import or the editor wrote) are carried where the leg still
+runs between the same two sites (`carryLegs`), and leaves `circle_gaps`
+alone (the XML carries none). Until E5 that carry applied only over an
+`ocd`-sourced course (the column said so); with `geometry_source` gone
+it applies to every existing course, so a gap-less file never clears
+authored gaps — the rule `circle_gaps` already followed (decision log
+2026-11-07, E5). (The older "keep the OCD geometry unless the controls
+drifted > 30 m" rule never fired — `bugfix-stale-ocd-course-geometry.md`;
+E6 deleted `isOcdGeometryStaleVsXml`.) **PPen `<gaps>` / `<leg>` bends
 are not read** (no fixture, no research record; Pending).
 
 **Tokens.** One HLC is taken for the `reference.imported` entry before its
@@ -1105,13 +1090,12 @@ for a check (decision log, D6).
 | unit | `cuts.test.ts` | clearance = symbol + half line + air at both arc ends and both gap ends, on / off the rim and the line by the same sum, wider for bigger symbols and lines, default radius, north wrap, whole circle; library radii (`cutSymbolRadiusMm`), OCAD symbol radii (`ocadCutSymbolRadiiMm`), `cutContextForScale`; `cutFeaturesOfDocument` (applied match, source code, suggested match, hidden symbol, line object, own render, factor fallback) |
 | unit | `derive.test.ts` | legs and clearances, circles in the way, unpositioned sites, automatic vs authored gaps, the event's auto cuts off (no automatic slits / gaps, authored ones kept, §3.4), authored pieces and bends, free order, all-controls, start rotation, sequence / repeated / code numbers, y-down placement, manual offsets, multi-course |
 | unit | `layer.test.ts` | one `symbolise` call with a document: warning-free, lower purple under black, re-indexed document colours, object offsets; turned start, arcs, legs; auto cuts off = the objects without cut features; knockout halo order; sprint sizes; layout objects (white-out, 709.b, rows on top, text values, page-mm sizes); toner-saver ring and its warning; images; `courseDocumentContext` |
-| unit | `geojson.test.ts` | editor course in the pre-C5 editor shape with cuts, free order, preclipped pieces and extras, course by id |
 | pass-stream | `scenes.test.ts`, snapshots in `render/__fixtures__/streams/course/` | the five course scenes (`map-rendering.md` §6.3) warning-free and equal to their snapshots at 1 µm, plus each scene's rule |
-| unit | `packages/api/src/__tests__/course-geometry.test.ts` | `editorCourseGeometry` writes the exact FeatureCollection, repeated controls, cuts at the legacy sizes on controls only and gaps on legs, no keys without features, unpositioned controls, free order; `legDistancesMm(layer)` from the derived legs = the pre-E6 sequence formula bit for bit (fixtures + 50 generated sequences, per-leg and total rounding at two scales, E6); `courseLengthM` |
+| unit | `packages/api/src/__tests__/course-geometry.test.ts` | `editorCourseLayer`: sequence in order with roles, centre-to-centre legs, unpositioned controls skipped, free order without legs, no automatic cuts; `hasPositionedItems` (`length_source` derived / NULL); `legDistancesMm(layer)` from the derived legs = the pre-E6 sequence formula bit for bit (fixtures + 50 generated sequences, per-leg and total rounding at two scales, E6); `courseLengthM` |
 | unit | `packages/api/src/__tests__/document-readers-parity.test.ts` | cut features of the document = the legacy OCAD adapter's (now a test oracle, `__tests__/helpers/ocad-oracle.ts`) within 1e-6 mm on the fixture and the corpus (§4.2) |
 | unit | `packages/api/src/__tests__/course-sequence.test.ts` | §6.2 "Readers" (E6): `courseSequenceOf` — columns (defaults, `start_name`, a live `finish_control_id`, unmatched fall back, the flags), a stored structure (explicit ends, no ends → defaults, roles), a deleted explicit start, an invalid column read as the columns, no starts / finishes |
-| integration | `packages/api/src/__tests__/integration/overprint-cuts.test.ts` | legacy event: rim slit over the boulder across north, no gap through the building, leg gap over the boulder, cuts follow a move, upload rebuilds, toggle (the lazy migration to v3 went in E6); `vector` event: the same document features as the `legacy` event's pin, the upload rebuild cuts the course created before the map, circle and leg cuts equal to the legacy event's within 1e-6, no cuts without a pin; the toggle off reaches the vector print (composed sheet = the page without cut features, a stored circle gap still drawn) and `getOverprintCuts` reads with a kiosk key (§3.4) (the lazy migration and the comparison report went in E6) |
-| integration | `control-editor.test.ts`, `journal-completeness.test.ts`, `course-export.test.ts`, `eventor-reentry.test.ts` | editor geometry and lengths on create / move / delete / copy, `length_source = 'derived'` beside `geometry_source = 'editor'`; the migration's backfill maps `editor` / `ocd` / `xml` / `''` to `derived` / `file` / `file` / NULL; `course.upserted` payloads carry neither source; the export's length and the Eventor sync key on `length_source` whatever `geometry_source` says (E6) |
+| integration | `packages/api/src/__tests__/integration/overprint-cuts.test.ts` | what the layer draws for a stored course with the pinned document's cut features (`drawnCuts`, E5): rim slit over the boulder across north, no gap through the building, leg gap over the boulder, cuts follow a move, a course created before the map is cut once the upload pins, the toggle off draws none and writes nothing else (course row and journal untouched); two events pinning the same map read the same features and cut alike within 1e-6, no cuts without a pin; the toggle off reaches the vector print (composed sheet = the page without cut features, a stored circle gap still drawn) and `getOverprintCuts` reads with a kiosk key (§3.4) |
+| integration | `control-editor.test.ts`, `journal-completeness.test.ts`, `course-export.test.ts`, `eventor-reentry.test.ts` | the drawn course (`helpers/course-drawn.ts`) and lengths on create / move / delete / copy, `length_source = 'derived'`; `course.upserted` payloads carry no `length_source`; the export's length and the Eventor sync key on `length_source` (E6; the E6 migration's backfill test went with `geometry_source` in E5) |
 | unit | `packages/shared/src/course/__tests__/structure.test.ts` | §6.1: C0's linear shape accepted, the 08 leg props, groups and loops; nesting, overlap, unanchored, duplicate ids / labels, < 2 or empty alternatives, out-of-range gaps refused; interim `path` / `pieces` / `circleGaps` and `extras` refused; the wire form; site rules; `linearStructure`, `structureControlIds`; `structureDiff` (equal, moved, added, removed, leg / offset changes) |
 | unit | `packages/api/src/__tests__/course-structure.test.ts` | §6.2: `splitStructure` (explicit start / finish, implicit default, role start / finish, a start mid-sequence), `structureFromColumns` and its round trip, wire ↔ stored mapping |
 | unit | `packages/api/src/__tests__/version-conflict.test.ts` | §7: the `errorFormatter` lifts the payload beside tRPC's fields and leaves the duplicate-code `CONFLICT` alone; `controlFieldsDiff`; `baseVersionSchema` |
@@ -1152,7 +1136,7 @@ for a check (decision log, D6).
 | `packages/shared/src/course/geojson.ts` | `courseLayerGeoJson` |
 | `packages/shared/src/course-maps/{overlay-geometry,control-label-placement}.ts` | `clipLine` (per-obstacle clearance), `subtractLegGaps`, `circleArcs`, `placeControlLabels` — shared with the legacy overlay |
 | `packages/shared/src/render/__fixtures__/course/` | the course scenes |
-| `packages/api/src/course-geometry.ts` | the writer (§4.1): `editorCourseLayer`, `editorCourseGeometry`, `legDistancesMm`, `loadCourseSequences`, `rebuildCourseGeometry`, `OVERPRINT_CUTS_VERSION` |
+| `packages/api/src/course-geometry.ts` | the lengths writer (§4.1): `editorCourseLayer`, `hasPositionedItems`, `legDistancesMm`, `loadCourseSequences`, `rebuildCourseLengths` |
 | `packages/api/src/event-map-objects.ts` | cut features (§4.2): `loadEventCutFeatures` over the pinned document (`map-store/event-document.ts`) |
 | `packages/api/src/course-import-structure.ts`, `course-import-objects.ts` | §6.4: pieces → gaps and the object bodies (pure), writing import-marked objects; `routers/course.ts` `importCourses` (the backfill and its CLI went in E6) |
 
@@ -1169,11 +1153,6 @@ for a check (decision log, D6).
 
 ## Pending in this chapter
 
-- **Dropping the artifact** (E5): no consumer reads `courses.geometry`
-  since E6; the column, `geometry_source`, `overprint_cuts_version`, the
-  writer's projection (`editorCourseGeometry`) and its selectors
-  (`event-map.ts`, `setOverprintCuts`, `importCourses`' column write) go
-  with the drops. `length_source` and the layer-derived lengths stay.
 - **Viewer sheet objects and appearance**: the viewer draws the course
   objects in scope (§8.3) but no sheet's layout objects and the spec
   appearance; a sheet's objects and template appearance on the map are
@@ -1181,9 +1160,7 @@ for a check (decision log, D6).
 - **Structure, beyond D1** (§6): the layer reads `numberHidden`, the
   site's `circle_gaps` and `LegProps.gaps` since D1; `LegProps` beyond
   `gaps` (style, corridor, crossing, bends) is slice F's; Purple Pen's
-  `<gaps>` / `<leg>` bends are not parsed by the importer; the artifact
-  writer (`editorCourseGeometry`) does not carry an imported course's
-  authored cuts and gaps into a rewritten GeoJSON; variations and their
+  `<gaps>` / `<leg>` bends are not parsed by the importer; variations and their
   materialisation, map exchanges, crossing and map-issue points,
   corridors (slice F).
 - **Tokens, beyond D1** (§7): the `differing` of a conflict caused by an
