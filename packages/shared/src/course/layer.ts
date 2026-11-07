@@ -14,6 +14,7 @@ import type { FilterRegion } from "../render/filter-region.js";
 import { COORD_FLAG } from "../render/pass-stream.js";
 import { remapRenderColours } from "../render/transform.js";
 import { circleWithGaps } from "./arcs.js";
+import { corridorGeometry } from "./corridor.js";
 import { courseColourStack, withObjectColours } from "./colour-stack.js";
 import { deriveCourse } from "./derive.js";
 import { TONER_WHITE_ID, filterRegionOf, hasTonerSaver, layoutObjects, objectColours, isCourseObject } from "./objects.js";
@@ -59,6 +60,12 @@ export function courseLayer(input: CourseLayerInput): CourseLayer {
     });
   }
 
+  // §10.2: the corridors' edges in 705 after the legs; the band is a clip region (below).
+  const corridors = corridorGeometry(derivation.courses);
+  for (const e of corridors?.edges ?? []) {
+    objects.push({ symbolIdx: idx.leg, path: makePath(e.points.flatMap((p) => [p.x, p.y]), undefined, e.closed), ref: { kind: "corridor", id: e.ref } });
+  }
+
   // 704: the anchor is the baseline, half a digit below the placed centre.
   const half = set.digitHeightUm / 2;
   for (const s of derivation.sites) {
@@ -80,7 +87,22 @@ export function courseLayer(input: CourseLayerInput): CourseLayer {
   // Stored filter regions (§8.3) follow the explicit ones.
   const stored = input.objects.flatMap((o) => (isCourseObject(o) && o.kind === "filter_region" ? [filterRegionOf(o)] : []));
   const regions = [...(input.regions ?? []), ...stored].map((r) => filterRegion(r, stack.remap));
+  // §10.2: the corridors' white band cuts every map colour away; the course is never filtered.
+  if (corridors?.band) regions.push({ path: ringsPath(corridors.band), mode: "clip", symbols: "all" });
   return { colours, remap: stack.remap, symbols, objects, images: built.images, derivation, warnings: built.warnings, regions };
+}
+
+/** Flat µm rings → one closed path, every ring after the first flagged as a new ring (even-odd). */
+function ringsPath(rings: readonly (readonly number[])[]) {
+  const coords: number[] = [];
+  const flags: number[] = [];
+  rings.forEach((r, k) => {
+    for (let i = 0; i < r.length; i += 2) {
+      coords.push(r[i], r[i + 1]);
+      flags.push(k > 0 && i === 0 ? COORD_FLAG.hole : 0);
+    }
+  });
+  return makePath(coords, flags, true);
 }
 
 /** A course filter region in stream units: rings → one closed path (holes flagged), document colours → the completed stack. */

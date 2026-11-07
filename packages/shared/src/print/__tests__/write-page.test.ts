@@ -91,6 +91,42 @@ describe("writePage", () => {
     expect(ops.lastIndexOf("0 0 0 1 K")).toBeGreaterThan(ops.indexOf(colour!));
   });
 
+  it("a corridor leg (F2): the band a W* clip round the map passes only, never a course pass; the edge a closed 705 stroke", async () => {
+    const base = pageScene("page-ring");
+    const corridor = { widthM: 120, edge: true, whiteMm: 4, whiteOpacity: 1 };
+    const items = [{ siteId: "S" }, { siteId: "31" }, { siteId: "32", leg: { corridor } }, { siteId: "F" }];
+    const withCorridor: PageInput = { ...base, course: { ...base.course, structure: { version: 1, id: "c", orderMode: "ordered", items } } };
+    const mapOps = (ops: string) => ops.slice(ops.indexOf(" cm", ops.indexOf(" re W n")), ops.lastIndexOf("0.014173228 0 0 0.014173228 0 0 cm"));
+    const plain = mapOps(content(await PDFDocument.load(await build([base])), 0)).split("\n");
+    const ops = mapOps(content(await PDFDocument.load(await build([withCorridor])), 0)).split("\n");
+    expect(plain.some((l) => l.endsWith("W* n"))).toBe(false);
+    // The band: each mask a `q <frame + band rings> W* n … Q` block — the frame, the band's outer ring and its hole.
+    const clips = ops.filter((l) => l.endsWith("W* n"));
+    expect(clips.length).toBeGreaterThan(0);
+    for (const c of clips) expect(c.match(/ m /g)?.length ?? 0).toBeGreaterThanOrEqual(3);
+    // Course strokes (the circles' and legs' purple, 705's 70 w in 5 µm units) are never inside a clip block.
+    const purple = ops.find((l) => / K$/.test(l))!;
+    let inClip = false, colour = "", masked = 0, unmasked = 0;
+    ops.forEach((l, i) => {
+      if (l.endsWith("W* n") && ops[i - 1] === "q") inClip = true;
+      else if (l === "Q" && inClip) inClip = false;
+      if (/ K$/.test(l)) colour = l;
+      if (/ S Q$/.test(l) || / S$/.test(l)) {
+        if (inClip) masked++;
+        if (colour === purple) expect(inClip, `a purple stroke inside the band's clip: ${l.slice(0, 60)}`).toBe(false);
+        if (colour === purple) unmasked++;
+      }
+    });
+    expect(masked).toBeGreaterThan(0);
+    expect(unmasked).toBeGreaterThan(0);
+    // The edge: one more closed stroke than the plain page, in the circles' purple at 705's width.
+    const edges = ops.filter((l) => !plain.includes(l) && l.endsWith(" h S Q"));
+    expect(edges).toHaveLength(1);
+    const at = ops.indexOf(edges[0]);
+    expect(ops.slice(0, at).reverse().find((l) => / K$/.test(l))).toBe(purple);
+    expect(ops.slice(0, at).reverse().find((l) => / w( |$)/.test(l))).toMatch(/^70 w/);
+  });
+
   it("cmyk writes no rg, rgb no k", async () => {
     const cmyk = content(await PDFDocument.load(await build([pageScene("page-ring")], "cmyk")), 0);
     const rgb = content(await PDFDocument.load(await build([pageScene("page-ring")], "rgb")), 0);

@@ -716,7 +716,10 @@ the later rings) and re-indexes colours onto the completed stack
 (`PageInput.course.regions`). Stored regions are `filter_region` course
 objects (`docs/course-layer.md` §8): the layer appends each one in
 `objects` to the explicit `regions`, so the viewer's request and the
-print route carry them as objects.
+print route carry them as objects. A corridor's white band is a
+**generated** region the layer appends after those
+(`docs/course-layer.md` §10.2): `clip`, `symbols: "all"`, the band's
+rings — the map cut away there, the course drawn over it.
 
 ## 5. Backends
 
@@ -1718,9 +1721,10 @@ for one ordered course with the sheet or the editor and `code` otherwise,
 []` (no layout objects reach the viewer) and `appearance: {}` — the
 library's sizes × the document factor (`course-layer.md` "Decisions":
 ISOM at 1:7 500 draws 5 mm-radius circles where the SVG drew 2.5 mm).
-`course.courseGeometries` is no longer an input (D1): authored leg gaps,
-hidden numbers and circle cuts come from the stored structure and the
-controls (`course.list` `legGaps` / `hiddenNumbers`, `controlCoordinates`
+`course.courseGeometries` is no longer an input (D1): the stored legs
+(gaps, style, bends, corridor — F2), hidden numbers and circle cuts come
+from the stored structure and the controls (`course.list` `legs` /
+`hiddenNumbers`, `controlCoordinates`
 `circleGaps`; `course-layer.md` §5, §6.4), and 707 / 708 / 709 / 711 are
 course objects. The worker cuts the rest from the document's own
 features (`cutFeaturesOfDocument`, extracted once per load) — unless the
@@ -2317,6 +2321,7 @@ WebGL2 per-pass path against the golden, measured at introduction
 | `course-sprint` | ISSprOM 401, two 521 buildings; `numberStyle: "knockout"` | 6 mm circles; upper-white halo under upper-purple numbers, above the buildings' black |
 | `course-all-controls` | ISOM 403, 304; all controls with a free-order course | every site drawn, codes, no legs, start north |
 | `course-leg-styles` | ISOM 401, 505, 516; S → 31 a bent 705, 31 → 32 a bent 707 marked route over the 516, 32 → F `style: "none"` with a stored gap (F1, `course-layer.md` §10.1) | the 705 piece runs through its bend; the route in upper purple, dashed, after black; nothing for the `none` leg, which keeps its pieces; numbers unchanged |
+| `course-corridor` | ISOM 401, 505, 101, 516; S → 31 a 90 m corridor with a 3 mm band, 31 → 32 the same width bent (one joined run) with its `edge`, 32 → 33 a 150 m corridor with a 2 mm band, 33 → F plain (F2, `course-layer.md` §10.2) | the band one generated `clip` region: every base pass masked, no course pass; clear inside every corridor (at the bend, at the change of width at 32); the edge lower purple along 31 → 32 only, over the 401. Drawn on the default GL path (the arena path's MSAA edge steps exceed `ARENA_FILTER_MAX_RATIO` on this many edges: 2.0 %, D3's filter scenes cover the arena masks) |
 
 The **filter scenes** (D3, 04 §8 row "Filter regions", §4.11) draw one
 ISOM base map — a 407 area (0–60 × 0–40 mm), 101 contours (a straight
@@ -2582,12 +2587,13 @@ The shared module is exported as a namespace: `import { render } from
 
 ## 8. Pending in this chapter
 
-- **§4.11 filter regions in the viewer and the print route.** The stage,
-  the three backends and the worker protocol take regions; nothing sends
-  them yet. They reach `VectorMapLayer` / `course-layer-request.ts` and
-  the print route's `PageInput.course.regions` with D2's stored
-  `course_objects` (`filter_region` kind; D2), and the editor's drag sends
-  `fastFilter` (D5).
+- **Alpha: a translucent corridor band** (`docs/course-layer.md` §10.2,
+  F2). `LegProps.corridor.whiteOpacity` is stored but drawn opaque: the
+  band is a clip region, which removes the map wholly. A band below 1
+  needs a fill with alpha over the same rings — a pass colour opacity the
+  stream, the three backends and the PDF (`ca` / an ExtGState) do not
+  carry yet — drawn above every map colour and below the course.
+
 - **§5.2 filter-region limits.** All masks share one stencil bit, so
   overlapping regions of different masks are fine (each masked step marks
   only its own); nothing is capped. A stroke counts as meeting a region

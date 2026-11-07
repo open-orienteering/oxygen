@@ -170,7 +170,11 @@ export function deriveCourse(input: CourseLayerInput, m: CourseMetrics): CourseD
         const gaps = leg?.gaps && leg.gaps.length > 0 ? leg.gaps : (features ? polylineLegGaps(points, features, R, m.lineWidthMm) : []);
         const pieces: MapPoint[][] = [];
         for (const piece of gaps.length ? subtractLegGaps(points, gaps) : [points]) pieces.push(...clipPolyline(piece, obstacles));
-        legs.push({ from: a.id, to: b.id, points, style: leg?.style ?? "line", gaps, pieces });
+        const derived: DerivedLeg = { from: a.id, to: b.id, points, style: leg?.style ?? "line", gaps, pieces };
+        // §10.2: ground metres at the base map's scale; the band is paper mm already.
+        const k = leg?.corridor;
+        if (k) derived.corridor = { widthMm: (k.widthM * 1000) / input.document.mapScale, whiteMm: k.whiteMm, edge: k.edge };
+        legs.push(derived);
       }
     }
     return { id: structure.id, orderMode: structure.orderMode, sequence: seq.map((e) => ({ siteId: e.site.id, role: e.role })), legs };

@@ -7,10 +7,12 @@ import { layerInput, linear, site, sprintContext } from "./helpers.js";
 import { materialiseLibrary } from "../../symbol-library/index.js";
 import { symbolise } from "../../render/symbolise.js";
 import { makePath } from "../../render/pass-stream.js";
+import { flattenRings, pointInRings } from "../../render/geometry.js";
 import { liberation } from "../../render/__tests__/fonts.js";
 import type { RenderObject } from "../../render/symbolise.js";
 import type { CourseMapObject } from "../../course-maps/schema.js";
 import type { CourseLayerObject } from "../objects.js";
+import type { CourseLegProps } from "../types.js";
 
 /** A tiny ISOM "document": a 516 power line (black) across the first leg, resolved on the palette stack. */
 function isomDocument(): { objects: RenderObject[]; symbols: ReturnType<typeof materialiseLibrary>["symbols"] } {
@@ -159,6 +161,68 @@ describe("filter regions (map-rendering §4.11)", () => {
   });
 });
 
+describe("corridors (§10.2, F2)", () => {
+  // S (10, 10) → 31 (40, 10) at 1:15 000: 60 m = 4 mm, the edge at y = 8 / 12, the band to 5 / 15.
+  const corridor = { widthM: 60, edge: true, whiteMm: 3, whiteOpacity: 0.5 };
+  const withLeg = (leg: CourseLegProps, over: Parameters<typeof layerInput>[0] = {}) =>
+    courseLayer(layerInput({ structure: linear(undefined, { items: [{ siteId: "S" }, { siteId: "31", leg }, { siteId: "32" }] }), ...over }));
+  const far = [{ x: 80, y: 80 }, { x: 90, y: 80 }, { x: 90, y: 90 }];
+
+  it("the band is one clip region of every symbol, after the explicit and the stored regions", () => {
+    const stored: CourseLayerObject = { id: 4, kind: "filter_region", geometry: far, props: { mode: "hide", symbols: "all" } };
+    const layer = withLeg({ corridor }, { objects: [stored], regions: [{ rings: [far], mode: "hide", symbols: "all" }] });
+    expect(layer.regions.map((r) => r.mode)).toEqual(["hide", "hide", "clip"]);
+    const band = layer.regions.at(-1)!;
+    expect(band.symbols).toBe("all");
+    expect(band.invert).toBeUndefined();
+    const rings = flattenRings(band.path);
+    expect(pointInRings(rings, 25000, 13500)).toBe(true);
+    expect(pointInRings(rings, 25000, 6500)).toBe(true);
+    expect(pointInRings(rings, 25000, 10000)).toBe(false);
+    expect(pointInRings(rings, 25000, 16000)).toBe(false);
+  });
+
+  it("masks the map's 516 across the band and never a course pass", () => {
+    const layer = withLeg({ corridor });
+    const input = courseRenderInput(isomDocument(), layer);
+    const { stream, warnings } = symbolise({ ...input, fonts: fonts() });
+    expect(warnings).toEqual([]);
+    const masked = stream.passes.map((_, k) => stream.maskIdx?.[k] ?? -1);
+    const doc = masked.filter((_, k) => stream.objectIdx[k] < input.courseObjectOffset);
+    expect(doc.length).toBeGreaterThan(0);
+    expect(doc.every((m) => m >= 0)).toBe(true);
+    expect(masked.filter((_, k) => stream.objectIdx[k] >= input.courseObjectOffset).every((m) => m === -1)).toBe(true);
+  });
+
+  it("the edge: closed 705 strokes of the inside, ref kind corridor; none without edge; a `none` leg keeps both", () => {
+    const layer = withLeg({ corridor });
+    const edges = layer.objects.filter((o) => o.ref.kind === "corridor");
+    expect(edges).toHaveLength(1);
+    const legSymbol = layer.objects.find((o) => o.ref.kind === "leg")!.symbolIdx;
+    expect(edges[0].symbolIdx).toBe(legSymbol);
+    expect(edges[0].path.closed).toBe(true);
+    expect(edges[0].ref).toEqual({ kind: "corridor", id: "c1:0" });
+    // Its points lie on the edge: 2 mm from the leg's line (or its round ends).
+    const c = edges[0].path.coords;
+    for (let i = 0; i < c.length; i += 2) {
+      const x = Math.max(10000, Math.min(40000, c[i]));
+      expect(Math.abs(Math.hypot(c[i] - x, c[i + 1] - 10000) - 2000)).toBeLessThan(30);
+    }
+    expect(withLeg({ corridor: { ...corridor, edge: false } }).objects.some((o) => o.ref.kind === "corridor")).toBe(false);
+    const none = withLeg({ style: "none", corridor });
+    expect(none.objects.some((o) => o.ref.kind === "leg" && o.ref.id === "c1:0")).toBe(false);
+    expect(none.objects.some((o) => o.ref.kind === "corridor")).toBe(true);
+    expect(none.regions).toHaveLength(1);
+  });
+
+  it("no band without whiteMm; no corridor, nothing new", () => {
+    expect(withLeg({ corridor: { ...corridor, whiteMm: 0 } }).regions).toEqual([]);
+    const plain = withLeg({});
+    expect(plain.regions).toEqual([]);
+    expect(plain.objects).toEqual(courseLayer(layerInput({ structure: linear(undefined, { items: [{ siteId: "S" }, { siteId: "31" }, { siteId: "32" }] }) })).objects);
+  });
+});
+
 describe("layout objects (§3.6)", () => {
   const rect = (fillMode: "whiteout" | "whiteoutInverted" | "outOfBounds" | "solid", extra: Record<string, unknown> = {}): CourseMapObject =>
     ({ id: `r-${fillMode}`, anchor: "map", kind: "rectangle", x: 20, y: 20, width: 10, height: 5, fillMode, ...extra }) as CourseMapObject;
@@ -238,9 +302,9 @@ describe("layout objects (§3.6)", () => {
 describe("courseDocumentContext", () => {
   const colours = layerInput().document.colours;
   it("reads the matched library and factor; unmatched documents choose by scale", () => {
-    expect(courseDocumentContext({ colours, library: { id: "ISOM2017-2", version: "x" }, documentFactor: 1.5, mapScale: 10000 })).toMatchObject({ libraryId: "ISOM2017-2", documentFactor: 1.5 });
-    expect(courseDocumentContext({ colours, library: null, documentFactor: 1, mapScale: 10000 })).toMatchObject({ libraryId: "ISOM2017-2", documentFactor: 1.5 });
-    expect(courseDocumentContext({ colours, library: null, documentFactor: 1, mapScale: 4000 })).toMatchObject({ libraryId: "ISSprOM2019-2", documentFactor: 1 });
+    expect(courseDocumentContext({ colours, library: { id: "ISOM2017-2", version: "x" }, documentFactor: 1.5, mapScale: 10000 })).toMatchObject({ libraryId: "ISOM2017-2", documentFactor: 1.5, mapScale: 10000 });
+    expect(courseDocumentContext({ colours, library: null, documentFactor: 1, mapScale: 10000 })).toMatchObject({ libraryId: "ISOM2017-2", documentFactor: 1.5, mapScale: 10000 });
+    expect(courseDocumentContext({ colours, library: null, documentFactor: 1, mapScale: 4000 })).toMatchObject({ libraryId: "ISSprOM2019-2", documentFactor: 1, mapScale: 4000 });
   });
 
   it("a site at the origin is not drawn", () => {

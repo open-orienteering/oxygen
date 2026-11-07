@@ -82,24 +82,29 @@ describe("courseLayerRequest (docs/course-layer.md §5)", () => {
     expect(r.viewOptions.allControls).toBeUndefined();
   });
 
-  it("the structure's authored leg gaps and hidden numbers, the controls' circle cuts; nothing else is read", () => {
+  it("the structure's stored legs whole and hidden numbers, the controls' circle cuts; nothing else is read", () => {
     const cuts = [{ start: 10, end: 40 }];
-    const gaps = [{ from: 0.4, to: 0.6 }];
+    const leg = {
+      style: "marked_route" as const,
+      gaps: [{ from: 0.4, to: 0.6 }],
+      bends: [{ x: 15, y: 25 }],
+      corridor: { widthM: 60, edge: true, whiteMm: 3, whiteOpacity: 1 },
+    };
     const r = courseLayerRequest(base({
       controls: CONTROLS.map((c) => (c.id === "1" ? { ...c, circleGaps: cuts } : c)),
-      courses: [{ name: "A", controls: ["S", "1", "2", "F"], highlight: true, legGaps: { "1>2": gaps, "9>2": [{ from: 0.1, to: 0.2 }] }, hiddenNumbers: [2] }],
+      courses: [{ name: "A", controls: ["S", "1", "2", "F"], highlight: true, legs: { "1>2": leg, "9>2": { gaps: [{ from: 0.1, to: 0.2 }] }, "2>F": { style: "none" } }, hiddenNumbers: [2] }],
     }));
     expect(r.sites.find((s) => s.id === "1")!.circleGaps).toEqual(cuts);
     expect(r.sites.find((s) => s.id === "2")!.circleGaps).toBeUndefined();
     const a = structures(r)[0];
-    expect(a.items.map((i) => i.leg)).toEqual([undefined, undefined, { gaps }, undefined]);
+    expect(a.items.map((i) => i.leg)).toEqual([undefined, undefined, leg, { style: "none" }]);
     expect(a.items.map((i) => i.numberHidden)).toEqual([undefined, undefined, true, undefined]);
   });
 
-  it("an empty gap list stays out of the request (the layer cuts automatically)", () => {
+  it("an empty leg stays out of the request (a plain 705 leg, cut automatically)", () => {
     const r = courseLayerRequest(base({
       controls: CONTROLS.map((c) => (c.id === "1" ? { ...c, circleGaps: [] } : c)),
-      courses: [{ name: "A", controls: ["S", "1", "2", "F"], highlight: true, legGaps: { "1>2": [] } }],
+      courses: [{ name: "A", controls: ["S", "1", "2", "F"], highlight: true, legs: { "1>2": {} } }],
     }));
     expect(r.sites.find((s) => s.id === "1")!.circleGaps).toBeUndefined();
     expect(structures(r)[0].items.every((i) => i.leg === undefined)).toBe(true);
@@ -157,13 +162,13 @@ describe("the editor's provisional visit (docs/course-editor.md §6.1)", () => {
     }
   });
 
-  it("the leg the visit splits loses its stored gaps; the others keep theirs", () => {
-    const gaps = [{ from: 0.4, to: 0.6 }];
+  it("the leg the visit splits loses its stored leg (style, bends, corridor too); the others keep theirs", () => {
+    const leg = { gaps: [{ from: 0.4, to: 0.6 }], style: "marked_route" as const, bends: [{ x: 15, y: 25 }] };
     const r = courseLayerRequest(base({
-      courses: [{ name: "A", controls: ["S", "1", "2", "F"], highlight: true, legGaps: { "1>2": gaps, "2>F": gaps } }],
+      courses: [{ name: "A", controls: ["S", "1", "2", "F"], highlight: true, legs: { "1>2": leg, "2>F": leg } }],
       provisional: visit({ insertAt: 1 }),
     }));
-    expect(structures(r)[0].items.map((i) => i.leg)).toEqual([undefined, undefined, undefined, undefined, { gaps }]);
+    expect(structures(r)[0].items.map((i) => i.leg)).toEqual([undefined, undefined, undefined, undefined, leg]);
   });
 
   it("ignored without exactly one highlighted course", () => {

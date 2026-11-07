@@ -114,7 +114,9 @@ the legacy print sandwich full → lower → ink → white-outs → upper,
 by construction. A white-out therefore hides lower-purple course lines
 under it, as legacy print does. A white-out *outside* (a toner saver)
 does not sit there: it fills its own row on top of the layer's stack
-(§3.6, P1).
+(§3.6, P1). A corridor's white band (§10.2) is no row at all: it is a
+clip filter region, so the map is cut away there and every course
+symbol draws over it.
 
 **Merging.** `courseRenderInput(base, layer)` appends the layer's
 symbols after the document's (re-indexed when `remap` is set) and its
@@ -161,11 +163,12 @@ automatic cuts; an empty list means automatic (decision log 2026-11-01,
 |---|---|---|
 | `structure` | `CourseStructure` (one course), an array (several highlighted courses: legs of each, codes as numbers) or `null` (no course) — the stored form is §6 | `{ version: 1, id, orderMode, items, labelOffsets? }`: `items` start … finish — the start by `startName` unless `firstAsStart`, `course_controls` in order, the finish by `finishControlId` unless `lastAsFinish`; from the stored structure when there is one (§6), else from the columns — one rule for every reader (`courseSequenceOf`, §6.2: `rebuildCourseLengths`, `course-export.ts`, the print layout); `labelOffsets` from `course_controls` |
 | `CourseItem` | `{ siteId, role?, leg?, numberHidden? }` — 08 §4.3's item, the leg being the leg *into* the item | `role` defaults to the site's kind (set it for `firstAsStart` / `lastAsFinish`); `numberHidden` from the visit's `number_hidden` |
-| `leg` | `{ gaps?, style?, bends? }` — the stored `LegProps.gaps` (fractions along the leg, bends included), `style` (`line` \| `marked_route` \| `none`, default `line`) and `bends` (paper mm), §10.1; `corridor` and `crossing` are F2's / F4's and not read | `LegProps` of the structure's item (§6.4: written by the importers and the backfill, by the editor from D5). The v1 interim input of slice C (`path`, `pieces`, item `circleGaps`, `extras`, read from an imported `ocd` course's GeoJSON) is **retired** by D1: nothing is read from the GeoJSON |
+| `leg` | `{ gaps?, style?, bends?, corridor? }` — the stored `LegProps.gaps` (fractions along the leg, bends included), `style` (`line` \| `marked_route` \| `none`, default `line`) and `bends` (paper mm), §10.1; `corridor` (`{ widthM, edge, whiteMm, whiteOpacity }`), §10.2; `crossing` is F4's and not read | `LegProps` of the structure's item (§6.4: written by the importers and the backfill, by the editor from D5). The v1 interim input of slice C (`path`, `pieces`, item `circleGaps`, `extras`, read from an imported `ocd` course's GeoJSON) is **retired** by D1: nothing is read from the GeoJSON |
 | `sites` | `{ id, code, kind: "control" \| "start" \| "finish", x, y, circleGaps? }[]` | `controls` rows; `code` the display code (first punch code, else name / seq); `circleGaps` = `controls.circle_gaps`, compass degrees |
 | `objects` | `(CourseMapObject \| CourseLayerObject)[]`: a sheet's layout objects (only `anchor: "map"` ones are drawn) and course objects (§8; told apart by `geometry`) | the sheet's layout objects (`course-maps` schema); the event's course objects in scope (§8.3) |
 | `appearance` | `{ circle?, line?, number?, numberStyle? }`, multipliers (1 = the spec) | `appearanceFromTemplate(template.appearance)`; the template's `purple` is not read (the purple is the stack's row) |
 | `viewOptions` | `{ allControls?, labelMode?, overprintScale?, autoCuts?, window?, textValues? }` | the view: all-controls, label mode, print enlargement, the event's **Auto cuts** toggle (`Event.autoOverprintCuts`; `false` = no automatic cuts, §3.4; absent = on), the frame polygon for white-out-outside, `{course}` placeholder values |
+| `document` | `{ colours, libraryId, documentFactor, mapScale }` — the aligned stack, the library, the document factor (§3.1) and the base map's scale denominator (corridor widths, §10.2) | `courseDocumentContext(header)` (`context.ts`): the viewer's worker and the print route (`pdf-page.ts`) build it from the pinned document's header; `mapScale` is `header.mapScale` |
 | `cutFeatures` | `{ x, y, r? }[]` (`r` the drawn symbol's radius) | `cutFeaturesOfDocument(doc)` of the pinned document (every event since E1, §4.2) |
 | `regions` | `{ rings: MapPoint[][], mode: "clip" \| "hide", symbols: "all" \| number[] \| { colours }, invert? }[]` — filter regions over the map, `rings` outer first; symbol indices are the document's, colours its own stack's | explicit regions, then every `filter_region` course object in `objects` (§8.3); the layer returns them as `CourseLayer.regions` (µm paths, colours on the completed stack) and `courseRenderInput` passes them to `symbolise` with the document's object count as `regionObjectLimit` — the rule is `map-rendering.md` §4.11 |
 
@@ -173,7 +176,7 @@ Free order is the structure's `orderMode` (a property of the course, not
 of the view). A site at the origin (0, 0) is unpositioned and skipped,
 legs connecting the remaining items (the editor's rule, `editorCourseLayer`).
 Gaps follow the rule above. Variations, map exchanges, crossing points, map-issue
-points, corridors and crossings are not in v1 (Pending).
+points and crossings are not in v1 (Pending).
 
 ## 3. Geometry rules
 
@@ -547,10 +550,10 @@ buckets. The React SVG keeps the UI layer only (`map-rendering.md` §5.4
 | `sites` | every visible control (`visible !== false`) with a position — its own paper mm, the editor's dragged position or a move still round-tripping — `code` its display code, `kind` from its type; the editor's faded off-course controls are left out (the UI layer draws them faded) |
 | `structure` | the highlighted courses (`highlight` or `highlightCourseName`) in order, one `CourseStructure` each, `id` = the course name, `items` = its control ids (start and finish as `MapPanel` completes them), `orderMode` the course's; `null` when none is highlighted |
 | `labelOffsets` | the single highlighted course's, with a drag or a pending label move winning — only with the description sheet or the editor |
-| `leg`, `numberHidden`, `circleGaps` | from the stored structure (§6.4), not from the GeoJSON: each item's `leg.gaps` from `course.list`'s `legGaps` (keyed `"<from>><to>"`, public control ids), `numberHidden` from its `hiddenNumbers`, each site's `circleGaps` from `course.controlCoordinates`. A course with no stored structure has none (the automatic cuts); 707 / 708 / 709 / 711 are course objects (`objects` below) |
+| `leg`, `numberHidden`, `circleGaps` | from the stored structure (§6.4), not from the GeoJSON: each item's `leg` whole — `style`, `bends`, `gaps`, `corridor` (§10) — from `course.list`'s `legs` (keyed `"<from>><to>"`, public control ids; `layerPropsOfStored` strips `crossing`, which names a control by uuid, and omits an empty leg; a pair visited twice keeps its last visit's leg), `numberHidden` from its `hiddenNumbers`, each site's `circleGaps` from `course.controlCoordinates`. A course with no stored structure has none (the automatic cuts); 707 / 708 / 709 / 711 are course objects (`objects` below) |
 | `viewOptions` | `labelMode: "sequence"` for one ordered course with the sheet or the editor, else `"code"`; `allControls` when a drawn site is on no highlighted course; `autoCuts: false` when the event's toggle is off (`course.getOverprintCuts`, read by `MapPanel`; no key when on, §3.4) |
 | `objects` | the event's course objects in scope of the highlighted courses (`courseObjectsForView`, §8.2; `all`-scoped only when none is highlighted), without scope, `z` or token — `MapPanel` fetches `courseObject.list` and hands them to the viewer; no sheet's layout objects reach the viewer |
-| provisional visit | the editor's armed `S` / `K` / `M` (`course-editor.md` §6.1), with exactly one highlighted course: a site `provisional` (`PROVISIONAL_SITE_ID`, the tool's kind, the cursor, the next code) — or a reused site by its id, which adds no site (`provisionalDrawn` is false; the editor then draws its own ghost circle, `course-editor.md` §6.1) — spliced into the course's items (`spliceProvisional`): a control before the `insertAt`-th control visit (repeats counted), else before the finish, else last; a start replaces the course's start, a finish its finish (else they lead / end). The leg the visit splits takes no stored gaps (they are keyed by the drawn neighbours) |
+| provisional visit | the editor's armed `S` / `K` / `M` (`course-editor.md` §6.1), with exactly one highlighted course: a site `provisional` (`PROVISIONAL_SITE_ID`, the tool's kind, the cursor, the next code) — or a reused site by its id, which adds no site (`provisionalDrawn` is false; the editor then draws its own ghost circle, `course-editor.md` §6.1) — spliced into the course's items (`spliceProvisional`): a control before the `insertAt`-th control visit (repeats counted), else before the finish, else last; a start replaces the course's start, a finish its finish (else they lead / end). The leg the visit splits takes no stored leg — no gaps, style, bends or corridor (they are keyed by the drawn neighbours) |
 | `appearance` | `{}` — the spec sizes × the document factor (decision "Sizes") |
 | `layout` (Layout mode, D7) | the sheet as `composePage` passes it (`course-layout.md` §1): its layout objects of both anchors before the course objects, `appearanceFromTemplate(template.appearance)` instead of `{}`, `viewOptions.overprintScale`, `window` (the frame grown by `RING_BLEED_UM`, `course.mapLayerWindow`) and `textValues`; and `page`, which the worker turns into the page part (`map-rendering.md` §5.2). So the course changes size on a mode switch when the template's multipliers are not 1 — the preview is the print |
 | `cutFeatures` | added by the worker: `cutFeaturesOfDocument(doc)` once per document load |
@@ -1141,7 +1144,7 @@ for a check (decision log, D6).
 
 A leg is the item's `leg` (08 §4.3 `LegProps`, §6.1): the leg *into*
 the item, between it and the previous positioned item. F1 makes `style`
-and `bends` real; `corridor` (F2) and `crossing` (F4) are stored and
+and `bends` real, F2 `corridor`; `crossing` (F4) is stored and
 validated but not read by the layer yet.
 
 ### 10.1 Styles and bends
@@ -1183,7 +1186,71 @@ validated but not read by the layer yet.
   §4.1); the print's sheet resolution copies the item's **whole** stored
   leg (`course-maps/resolve-sheet.ts`, `course-print.md` §5.2), so
   `maps.pdf` and Layout mode's sheet print bends, 707 and `none`; the
-  viewer's request still copies `gaps` only until F2 (Pending).
+  viewer's request carries the whole leg too since F2
+  (`layerPropsOfStored` → `course.list.legs` → `MapPanel` / `MapViewer`
+  → `course-layer-request.ts`, §5).
+
+### 10.2 Corridors
+
+`corridor: { widthM, edge, whiteMm, whiteOpacity }` (08 §4.3; semantics
+by the user, 2026-11-07, SLICES F answer 1): the map shows **inside**
+the corridor; a **white band** `whiteMm` wide lies outside its edge,
+beyond which the map shows again (a large `whiteMm` is the classic
+all-white corridor map); `edge` draws the boundary in purple.
+
+- **Units.** `widthM` is the corridor's full width on the ground:
+  `widthMm = widthM × 1000 / document.mapScale` (§2 `document`), so the
+  derivation's `DerivedLeg.corridor` is `{ widthMm, whiteMm, edge }`.
+  `whiteMm` is paper mm at the base map's scale — the structure's frame,
+  like `bends` (§2) — and is not divided by `overprintScale`: printing at
+  another scale enlarges it with the map (§1 "Scale").
+- **Along the leg.** A corridor follows the leg's `points` (the previous
+  site, the bends, the site), never its `pieces`: gaps and the clipping
+  at the sites do not change it, a `style: "none"` leg keeps its
+  corridor, and a corridor never changes a length (08 §4.3, §4.1).
+- **Geometry** (`corridor.ts`, `corridorGeometry(derivation.courses)`).
+  Per course, consecutive corridor legs of equal `widthMm` and `whiteMm`
+  are one run (repeated and straight-through points dropped). A run's
+  buffer at a distance `h` is the union of a rectangle per segment and a
+  disc per vertex (flattened at 5 µm): round joins and round ends. The
+  **inside** is the union of every run's buffer at `widthMm / 2` over
+  every drawn course; the **band** is the union of the runs' buffers at
+  `widthMm / 2 + whiteMm` (runs with `whiteMm > 0`) less the inside. So
+  corridors **join**: at a site, at a change of width, where two
+  courses' corridors cross, nothing of one corridor's band lies inside
+  another. The rings are integer µm, simple and properly nested, drawn
+  even-odd like every stream path (`map-rendering.md` §3.1). The booleans
+  are `polygon-clipping`'s: even-odd over overlapping pieces cuts a hole
+  at every join and the stream has no non-zero fill, so `strokeOutline()`
+  (non-zero by contract) cannot build the band.
+- **Drawing the band** (user, 2026-11-07): the band is a generated
+  **`clip` filter region** (`symbols: "all"`, `map-rendering.md` §4.11),
+  appended to `CourseLayer.regions` after the explicit and the stored
+  ones. Only document objects are filtered (`regionObjectLimit`), so
+  every map colour is cut away inside the band and the paper shows white,
+  while the course — circles, legs, numbers, the edge, layout and course
+  objects — draws over it with the stack and the 7xx colour roles
+  unchanged. No band (`whiteMm` 0 on every corridor) adds no region.
+- **`whiteOpacity`** is stored and validated (0 … 1) but drawn opaque: a
+  clip removes the map wholly. A translucent band needs a paint with
+  alpha over the same rings (`map-rendering.md` §8).
+- **The edge** (`edge: true`): the inside's boundary where it runs along
+  an edged leg — boundary points within 20 µm of half that leg's width
+  from it, its round end at a site counted only where no unedged
+  corridor leg meets it — stroked with the resolved 705 (lower purple, 705's width ×
+  the document factor × `appearance.line`), closed where a whole ring
+  qualifies, else open pieces. Because it is the union's boundary, an
+  edge never crosses into a joined or crossing corridor, and a leg
+  without `edge` next to one with it draws no line on its own sides. The
+  objects follow the legs; their `ref` is `{ kind: "corridor", id:
+  "<courseId>:<leg index>" }`, and the editor's hit-test takes them as no
+  target.
+- **Screen and print** need nothing of their own: the viewer's worker
+  filters its static buckets with `layer.regions` on every course reply
+  (`map-rendering.md` §5.2 "Filter regions") and draws the edge in the
+  dynamic bucket; the print route's `composePage` passes the regions to
+  `symbolise` (`course-print.md` §5.2), the PDF as a `W*` clip round the
+  map passes.
 
 ## Tests
 
@@ -1197,12 +1264,19 @@ validated but not read by the layer yet.
 | unit | `layer.test.ts` "leg styles" | §10.1: a `marked_route` leg draws 707 through its bend, upper purple, more than three dash slices, after black; a `none` leg draws nothing, numbers unchanged |
 | unit | `checks.test.ts` "test the bent polyline" | §9.2: a bend round the building clears it, the first hit along the bends |
 | PDF | `packages/shared/src/print/__tests__/write-page.test.ts` "a marked-route leg" | §10.1 print: the route is one extra stroke of dash subpaths at 707's width, in purple after black, no `d` operator |
+| unit | `corridor.test.ts` | §10.2 geometry: a straight leg (inside, band, the map beyond, round ends), a bend (no inner notch, round outer join), consecutive corridors joined, mixed widths at a site and two courses crossing, degenerate inputs (out and back, collinear legs, the same leg on two courses) give simple rings, `whiteMm` 0 has no band, edges along edged legs only (closed for a lone leg, none on an unedged course) |
+| unit | `derive.test.ts` "corridors" | §10.2: `widthM` → paper mm at the document's `mapScale`, `whiteMm` kept; points, gaps, pieces and length unchanged; a `none` leg keeps its corridor |
+| unit | `layer.test.ts` "corridors", "courseDocumentContext" | §10.2: the band one `clip` region of every symbol after the explicit and stored ones (probes inside / in the band / beyond); `symbolise` masks the map's 516 there and no course pass; the edge a closed 705 stroke on the edge line, ref `corridor`; none without `edge`; a `none` leg keeps band and edge; no band at `whiteMm` 0; §2 `mapScale` from the header on both branches |
+| unit (web) | `packages/web/src/lib/editor/__tests__/hit.test.ts` "a corridor's edge" | §10.2 through the real worker: the edge's `corridor` refs are no target (the leg still is), and the reply's static-bucket filter carries the band's mask |
+| PDF | `write-page.test.ts` "a corridor leg (F2)" | §10.2 print: the band a `q … W* n … Q` clip (frame, outer ring, hole) round map strokes only — no purple course stroke inside it; the edge one extra closed stroke (`h S`) in the circles' purple at 70 w |
+| unit / integration | `packages/api/src/__tests__/course-structure.test.ts` "layerPropsOfStored", `integration/course-structure.test.ts` "course.list carries every stored leg whole" | §5: the stored legs whole by public ids, `crossing` stripped, an empty leg omitted, no `legGaps` |
+| E2E | `e2e/map-vector-layer.spec.ts` "a stored marked-route leg draws 707's dashes", "a stored bent leg draws through its bend" | §5 / §10.1 on screen: a leg stored through `course.setStructure` reaches the GL canvas — dashes with yellow gaps between them, and purple on the bent piece with the straight chord's midpoint left yellow |
 | unit | `course-geometry.test.ts` "legs along their bends" | §4.1: a bent leg's length, style and corridor change nothing |
 | integration | `control-editor.test.ts` "course.setStructure with bends" | §4.1: `legs` / `length_m` along the bends through `setStructure`, a `none` leg still counted |
 | unit (web) | `course-editor.test.ts` `sequenceLegMeters`, `editor/__tests__/leg-length.test.ts` | §10.1: readouts along the bends, label at the bent mid-length |
 | unit | `derive.test.ts` | legs and clearances, circles in the way, unpositioned sites, automatic vs authored gaps, the event's auto cuts off (no automatic slits / gaps, authored ones kept, §3.4), authored pieces and bends, free order, all-controls, start rotation, sequence / repeated / code numbers, y-down placement, manual offsets, multi-course |
 | unit | `layer.test.ts` | one `symbolise` call with a document: warning-free, lower purple under black, re-indexed document colours, object offsets; turned start, arcs, legs; auto cuts off = the objects without cut features; knockout halo order; sprint sizes; layout objects (white-out, 709.b, rows on top, text values, page-mm sizes); toner-saver ring and its warning; the toner saver white (P1: a `toner_saver` and a `whiteoutInverted` map object fill the top row, the last pass after black, upper purple and a layout text's row; none for a plain white-out or without a window); images; `courseDocumentContext` |
-| pass-stream | `scenes.test.ts`, snapshots in `render/__fixtures__/streams/course/` | the six course scenes (`map-rendering.md` §6.3; `course-leg-styles` since F1) warning-free and equal to their snapshots at 1 µm, plus each scene's rule |
+| pass-stream | `scenes.test.ts`, snapshots in `render/__fixtures__/streams/course/` | the seven course scenes (`map-rendering.md` §6.3; `course-leg-styles` since F1, `course-corridor` since F2 — symbolised with the layer's regions, masks in the snapshot) warning-free and equal to their snapshots at 1 µm, plus each scene's rule |
 | unit | `packages/api/src/__tests__/course-geometry.test.ts` | `editorCourseLayer`: sequence in order with roles, centre-to-centre legs, unpositioned controls skipped, free order without legs, no automatic cuts; `hasPositionedItems` (`length_source` derived / NULL); `legDistancesMm(layer)` from the derived legs = the pre-E6 sequence formula bit for bit (fixtures + 50 generated sequences, per-leg and total rounding at two scales, E6); `courseLengthM` |
 | unit | `packages/api/src/__tests__/document-readers-parity.test.ts` | cut features of the document = the legacy OCAD adapter's (now a test oracle, `__tests__/helpers/ocad-oracle.ts`) within 1e-6 mm on the fixture and the corpus (§4.2) |
 | unit | `packages/api/src/__tests__/course-sequence.test.ts` | §6.2 "Readers" (E6): `courseSequenceOf` — columns (defaults, `start_name`, a live `finish_control_id`, unmatched fall back, the flags), a stored structure (explicit ends, no ends → defaults, roles), a deleted explicit start, an invalid column read as the columns, no starts / finishes |
@@ -1242,7 +1316,8 @@ validated but not read by the layer yet.
 | `packages/shared/src/course/symbols.ts` | the 7xx set: resolution, appearance, derived 703 / leader / white-out (`courseSymbols`, exported for the viewer's sizes, C4) |
 | `packages/shared/src/course/arcs.ts` | Bézier circles and arcs |
 | `packages/shared/src/course/cuts.ts` | `CUT_CODES`, `CUT_AIR_MM`, `circleCuts`, `legGaps`, `polylineLegGaps`, `cutFeaturesOfDocument`, `pointSymbolRadiusMm`, `cutSymbolRadiusMm`, `ocadCutSymbolRadiiMm`, `cutContextForScale` |
-| `packages/shared/src/course/derive.ts` | the geometry rules (§3.2–3.5), `legLengthMm` (§10.1) |
+| `packages/shared/src/course/derive.ts` | the geometry rules (§3.2–3.5), `legLengthMm` (§10.1), the resolved corridor (§10.2) |
+| `packages/shared/src/course/corridor.ts` | `corridorGeometry`: the joined insides, the band and the edges (§10.2), on `polygon-clipping` |
 | `packages/shared/src/course/objects.ts` | layout objects (§3.6) |
 | `packages/shared/src/course/layer.ts` | `courseLayer`, `courseRenderInput` |
 | `packages/shared/src/course/geojson.ts` | `courseLayerGeoJson` |
@@ -1271,17 +1346,18 @@ validated but not read by the layer yet.
   D7's (Layout mode).
 - **Structure, beyond D1** (§6): the layer reads `numberHidden`, the
   site's `circle_gaps` and `LegProps.gaps` since D1, `style` and `bends`
-  since F1 (§10.1); `corridor` (F2) and `crossing` (F4) are slice F's; Purple Pen's
-  `<gaps>` / `<leg>` bends are not parsed by the importer; variations and their
-  materialisation, map exchanges, crossing and map-issue points,
-  corridors (slice F).
-- **Leg properties on screen** (§10.1, F2 — user, 2026-11-07): the
-  layer and the print draw `style` and `bends`, but the viewer's request
-  (`layerPropsOfStored` → `course.list.legGaps` → `MapPanel` /
-  `MapViewer` → `course-layer-request.ts`) copies `LegProps.gaps` only,
-  so on screen a bent, marked-route or `none` leg still shows as a
-  straight 705. F2, which adds `mapScale` to the same request, carries
-  the whole leg. Nothing can author these props before F3.
+  since F1 (§10.1), `corridor` since F2 (§10.2); `crossing` (F4) is
+  slice F's; Purple Pen's `<gaps>` / `<leg>` bends and OCAD / Purple Pen
+  corridors are not parsed by the importers; variations and their
+  materialisation, map exchanges, crossing and map-issue points (slice F).
+- **A translucent corridor band** (§10.2): `whiteOpacity` is stored and
+  drawn opaque until the stream carries alpha (`map-rendering.md` §8).
+- **Corridors in the editor** (F3): nothing authors `corridor` yet (the
+  leg inspector's corridor fields). `corridorGeometry` runs on every
+  course reply: about 10 ms for 30 corridor legs, 47 ms with every edge,
+  96 ms for three such courses overlapping (Node, F2) — a drag on a
+  corridor course pays it per frame; caching the union per run is the
+  first lever if F3's drags need it.
 - **Leg properties in the editor** (§10.1, F3): `EditorPage.tsx`,
   `MapViewer.tsx` and `tools/bindings.ts` pass no bends to the readouts
   (`sequenceLegMeters`, `legLengthLabel`, `dragLegShapes`); a `none` leg

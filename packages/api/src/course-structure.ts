@@ -526,16 +526,19 @@ export async function assertCourseVersion(
 }
 
 /**
- * What the viewer's course layer reads of a stored structure (§6.3): the
- * authored leg gaps keyed `"<fromId>><toId>"` and the controls whose
- * number every visit hides, both in public control ids. A NULL or
- * invalid column has none.
+ * What the viewer's course layer reads of a stored structure (§5, §10):
+ * every stored leg whole — `style`, `bends`, `gaps`, `corridor` — keyed
+ * `"<fromId>><toId>"`, and the controls whose number every visit hides,
+ * both in public control ids. `crossing` names a control by uuid and is
+ * not read by the layer, so it is stripped; a leg left empty is omitted.
+ * A pair visited twice keeps its last visit's leg (the viewer keys by
+ * pair). A NULL or invalid column has none.
  */
 export function layerPropsOfStored(
   stored: unknown,
   publicId: (uuid: string) => number | undefined,
-): { legGaps: Record<string, course.FractionGap[]>; hiddenNumbers: number[] } {
-  const out = { legGaps: {} as Record<string, course.FractionGap[]>, hiddenNumbers: [] as number[] };
+): { legs: Record<string, course.CourseLegProps>; hiddenNumbers: number[] } {
+  const out = { legs: {} as Record<string, course.CourseLegProps>, hiddenNumbers: [] as number[] };
   const parsed = stored ? course.courseStructureSchema.safeParse(stored) : null;
   if (!parsed?.success) return out;
   const items = course.structureControlItems(parsed.data);
@@ -545,7 +548,9 @@ export function layerPropsOfStored(
     if (id === undefined) return;
     visits.set(id, (visits.get(id) ?? true) && !!item.numberHidden);
     const prev = i > 0 ? publicId(items[i - 1].siteId) : undefined;
-    if (prev !== undefined && item.leg?.gaps?.length) out.legGaps[`${prev}>${id}`] = item.leg.gaps;
+    if (prev === undefined || !item.leg) return;
+    const { crossing: _crossing, ...leg } = item.leg;
+    if (Object.keys(leg).length) out.legs[`${prev}>${id}`] = leg;
   });
   out.hiddenNumbers = [...visits].filter(([, hidden]) => hidden).map(([id]) => id);
   return out;

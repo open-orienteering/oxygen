@@ -42,6 +42,7 @@ export function legacySizeContext(): course.CourseDocumentContext {
     colours: symbolLibrary.paletteStack("iof2024", "ISOM2017-2").map((c) => ({ ...c, paletteIds: [c.id.slice(c.id.indexOf(":") + 1)] })),
     libraryId: "ISOM2017-2",
     documentFactor: 1,
+    mapScale: 15000,
   };
   return artifactContext;
 }

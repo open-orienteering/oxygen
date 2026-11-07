@@ -72,7 +72,7 @@ function scene(name: FilterSceneName, regions: CourseFilterRegion[]): FilterScen
   const b = base();
   const layer = courseLayer({
     structure: null, sites: [], objects: [], appearance: {}, viewOptions: {}, regions,
-    document: { colours: b.colours, libraryId: b.library, documentFactor: 1 },
+    document: b.context(),
   });
   const merged = courseRenderInput(b, layer);
   return { name, colours: layer.colours, symbols: merged.symbols, objects: merged.objects, regions: merged.regions, regionObjectLimit: merged.regionObjectLimit };

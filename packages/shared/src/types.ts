@@ -422,6 +422,7 @@ export interface ClubDetail {
 // reaching into the readout submodule directly.
 import type { ExpectedPosition } from "./readout.js";
 import type { WireCourseStructure } from "./course/structure.js";
+import type { CourseLegProps } from "./course/types.js";
 export type { ExpectedPosition } from "./readout.js";
 
 /** How a course's controls must be visited. */
@@ -958,11 +959,12 @@ export interface CourseSummary {
    */
   labelOffsets: Record<string, { dx: number; dy: number }>;
   /**
-   * Authored leg gaps of the stored structure, keyed `"<fromId>><toId>"`
-   * (public control ids), fractions of the leg; the layer's leg input
-   * (docs/course-layer.md §6.4). Absent keys are cut automatically.
+   * The stored structure's legs whole — `style`, `bends`, `gaps`,
+   * `corridor` — keyed `"<fromId>><toId>"` (public control ids); the
+   * layer's leg input (docs/course-layer.md §5, §10). Absent keys are
+   * plain 705 legs cut automatically.
    */
-  legGaps?: Record<string, { from: number; to: number }[]>;
+  legs?: Record<string, CourseLegProps>;
   /** Public ids of the controls whose number every visit hides (`numberHidden`). */
   hiddenNumbers?: number[];
   /** Concurrency token (decimal HLC), sent back as `baseVersion` (docs/course-layer.md §7). */
