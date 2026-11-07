@@ -124,8 +124,11 @@ function findSpot(shot: Awaited<ReturnType<typeof snapshot>>, first: (c: Rgb) =>
   return undefined;
 }
 
-/** A course through two new controls, created through the API and shown alone in the viewer. */
-async function showCourse(page: Page, viewer: Locator, canvas: Locator, name: string, controls: [string, Pt][]) {
+/**
+ * A course through two new controls, created through the API and shown alone in the viewer. `leg` is the
+ * stored leg into the second control (style, bends …), written with `course.setStructure` (course-layer.md §10).
+ */
+async function showCourse(page: Page, viewer: Locator, canvas: Locator, name: string, controls: [string, Pt][], leg?: Record<string, unknown>) {
   const api = async <T,>(path: string, data: unknown): Promise<T> => {
     const res = await page.request.post(`${API}/trpc/${path}`, { headers: { "content-type": "application/json", "x-event-id": "itest" }, data });
     expect(res.ok(), await res.text()).toBe(true);
@@ -133,7 +136,11 @@ async function showCourse(page: Page, viewer: Locator, canvas: Locator, name: st
   };
   const ids: number[] = [];
   for (const [code, p] of controls) ids.push((await api<{ id: number }>("control.create", { codes: code, xpos: p.x, ypos: p.y })).id);
-  await api("course.create", { name, controlIds: ids });
+  const course = await api<{ id: number }>("course.create", { name, controlIds: ids });
+  if (leg) {
+    const items = ids.map((siteId, i) => (i === ids.length - 1 ? { siteId, leg } : { siteId }));
+    await api("course.setStructure", { courseId: course.id, structure: { version: 1, id: name, orderMode: "ordered", items } });
+  }
   await page.reload();
   await waitForStableMapPanel(page);
   await page.getByRole("row").filter({ has: page.getByRole("cell", { name, exact: true }) }).getByRole("checkbox").check();
@@ -368,6 +375,68 @@ test.describe("vector map layer", () => {
     } finally {
       await page.request.post(`${API}/trpc/courseObject.delete`, { headers: { "content-type": "application/json", "x-event-id": "itest" }, data: { id } });
     }
+  });
+
+  // docs/course-layer.md §10.1 (F1) through the viewer plumbing (F2): course.list carries the stored leg whole,
+  // MapPanel → MapViewer → courseLayerRequest put it on the item, the GL layer draws it.
+  test("a stored marked-route leg draws 707's dashes on the canvas", async ({ page }) => {
+    test.setTimeout(180_000);
+    await openEvent(page);
+    await viewerWithMap(page);
+    const { viewer, canvas } = await openCourses(page);
+
+    // 1. Open yellow ground 9 mm either side of a spot along x, 2 mm across.
+    const fit = await snapshot(viewer, canvas);
+    const spot = findSpot(fit, isYellow, (p) =>
+      [-9, -6, -3, 0, 3, 6, 9].every((dx) => [-2, 0, 2].every((dy) => { const c = fit.rgb({ x: p.x + dx, y: p.y + dy }); return !!c && isYellow(c); })));
+    expect(spot, "open yellow ground").toBeDefined();
+
+    // 2. Course M: an 18 mm leg stored as a marked route.
+    await showCourse(page, viewer, canvas, "M", [["195", { x: spot!.x - 9, y: spot!.y }], ["196", { x: spot!.x + 9, y: spot!.y }]], { style: "marked_route" });
+
+    // 3. Zoomed in: along the middle 8 mm of the leg, purple dashes and yellow gaps between them (705 is unbroken).
+    await zoomOn(page, viewer, canvas, spot!);
+    await expect.poll(async () => {
+      const near = await snapshot(viewer, canvas);
+      let dash = 0, gap = 0;
+      for (let dx = -4; dx <= 4; dx += 0.1) {
+        const across = [-0.1, 0, 0.1].map((dy) => near.rgb({ x: spot!.x + dx, y: spot!.y + dy }));
+        if (across.some((c) => c && isPurple(c))) dash++;
+        else if (across.every((c) => c && isYellow(c))) gap++;
+      }
+      return dash > 10 && gap > 3;
+    }, { timeout: 30_000, message: "707 dashes with yellow gaps along the leg" }).toBe(true);
+  });
+
+  test("a stored bent leg draws through its bend on the canvas", async ({ page }) => {
+    test.setTimeout(180_000);
+    await openEvent(page);
+    await viewerWithMap(page);
+    const { viewer, canvas } = await openCourses(page);
+
+    // 1. Open yellow ground: 7 mm either side along x, 0 … 6 mm up.
+    const fit = await snapshot(viewer, canvas);
+    const spot = findSpot(fit, isYellow, (p) =>
+      [-7, -3.5, 0, 3.5, 7].every((dx) => [-1, 0, 2, 4, 6].every((dy) => { const c = fit.rgb({ x: p.x + dx, y: p.y + dy }); return !!c && isYellow(c); })));
+    expect(spot, "open yellow ground").toBeDefined();
+
+    // 2. Course B: controls 14 mm apart, the leg bent through a point 5 mm above the chord's midpoint.
+    const bend = { x: spot!.x, y: spot!.y + 5 };
+    await showCourse(page, viewer, canvas, "B", [["197", { x: spot!.x - 7, y: spot!.y }], ["198", { x: spot!.x + 7, y: spot!.y }]], { bends: [bend] });
+    await expect.poll(async () => {
+      const legs = await viewer.locator('[data-testid="course-leg"][data-course="B"]').evaluateAll((els) => els.map((el) => el.getAttribute("data-points") ?? ""));
+      return legs.some((pts) => pts.split(" ").some((q) => { const [x, y] = q.split(",").map(Number); return Math.hypot(x - bend.x, y - bend.y) < 0.05; }));
+    }, { timeout: 30_000, message: "the drawn leg passes through the bend" }).toBe(true);
+
+    // 3. Zoomed in: purple halfway between the first control and the bend, the chord's midpoint left yellow.
+    await zoomOn(page, viewer, canvas, { x: spot!.x, y: spot!.y + 2.5 });
+    const onPiece = { x: spot!.x - 3.5, y: spot!.y + 2.5 };
+    await expect.poll(async () => {
+      const near = await snapshot(viewer, canvas);
+      return [-0.1, 0, 0.1].some((d) => { const c = near.rgb({ x: onPiece.x + d, y: onPiece.y - d }); return !!c && isPurple(c); });
+    }, { timeout: 30_000, message: "purple on the bent leg" }).toBe(true);
+    const chord = (await snapshot(viewer, canvas)).rgb(spot!);
+    expect(chord && isYellow(chord), `yellow at the straight chord's midpoint: ${JSON.stringify(chord)}`).toBe(true);
   });
 
   test("without WebGL2 the layer shows its message", async ({ page }) => {
