@@ -1544,7 +1544,10 @@ them.
   `VARIATION_UNBALANCED` are F7's. Until then the variants are ordinary
   courses in every course list (the editor's included): opening one in
   the editor shows it, and a save is refused (`COURSE_IS_VARIANT`); F7
-  filters them out of its picker. Per-variant pages and a variant's own
+  filters them out of its picker. The editor opened on a root skips its
+  groups in the sequence it draws and edits (`lib/editor/sequence.ts`,
+  `structure-edit.ts`); F7 makes it read and write them. Per-variant
+  pages and a variant's own
   sheet (`maps.pdf?courses=<variant>` still auto-creates one) are F8's;
   the IOF family export F9's; runners' variants and the pool's dealing
   F6b's; the readout's other-variant match F6c's. A loop does not check
