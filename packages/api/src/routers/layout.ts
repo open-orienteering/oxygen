@@ -7,7 +7,7 @@
 
 import { TRPCError } from "@trpc/server";
 import { z } from "zod";
-import { autoSheets, type AutoSheetsResult } from "../course-maps/auto-sheets.js";
+import { autoSheets, ensureAllControlsSheet, type AutoSheetsResult } from "../course-maps/auto-sheets.js";
 import { coursesEditProcedure, coursesViewProcedure, router } from "../trpc.js";
 
 /** "All courses" on a large event creates many sheets in one transaction: more than Prisma's 5 s default. */
@@ -27,25 +27,36 @@ export const layoutRouter = router({
   /**
    * Ensure a course's first sheet on its key's auto template and its
    * overriding classes' sheets (`autoSheets`); without `courseId`, every
-   * course of the event (Export ▾ "all courses"). Idempotent.
+   * course of the event (Export ▾ "all courses"). `allControls: true` also
+   * ensures the event's all-controls sheet (`ensureAllControlsSheet`);
+   * alone (`{ allControls: true }`) it runs only that part. Idempotent.
    */
   autoSheets: coursesEditProcedure
-    .input(z.object({ courseId: z.number().int().positive().optional() }))
+    .input(z.object({ courseId: z.number().int().positive().optional(), allControls: z.boolean().optional() }))
     .mutation(async ({ ctx, input }): Promise<AutoSheetsResult> => {
-      const courses = await ctx.db.course.findMany({
-        where: { eventId: ctx.event.id, removed: false, ...(input.courseId !== undefined ? { seq: input.courseId } : {}) },
-        select: { id: true },
-        orderBy: { seq: "asc" },
-      });
+      const onlyAllControls = input.allControls === true && input.courseId === undefined;
+      const courses = onlyAllControls
+        ? []
+        : await ctx.db.course.findMany({
+            where: { eventId: ctx.event.id, removed: false, ...(input.courseId !== undefined ? { seq: input.courseId } : {}) },
+            select: { id: true },
+            orderBy: { seq: "asc" },
+          });
       if (input.courseId !== undefined && courses.length === 0) throw new TRPCError({ code: "NOT_FOUND", message: "Course not found" });
       return ctx.db.$transaction(async (tx) => {
-        const out: AutoSheetsResult = { createdSheets: [], createdTemplates: [], courseSheets: [], classSheets: {} };
+        const out: AutoSheetsResult = { createdSheets: [], createdTemplates: [], courseSheets: [], classSheets: {}, allControlsSheet: null };
         for (const c of courses) {
           const r = await autoSheets(tx, ctx.event.id, c.id);
           out.createdSheets.push(...r.createdSheets);
           out.createdTemplates.push(...r.createdTemplates);
           out.courseSheets.push(...r.courseSheets);
           Object.assign(out.classSheets, r.classSheets);
+        }
+        if (input.allControls) {
+          const a = await ensureAllControlsSheet(tx, ctx.event.id);
+          out.allControlsSheet = a.sheet;
+          if (a.createdSheet) out.createdSheets.push(a.sheet);
+          if (a.createdTemplate !== null && !out.createdTemplates.includes(a.createdTemplate)) out.createdTemplates.push(a.createdTemplate);
         }
         return out;
       }, AUTO_SHEETS_TX);

@@ -12,7 +12,8 @@
  *   named after the key the first time a course or class needs it.
  * - `autoSheets` gives a course its first sheet (the auto template of the
  *   key that fits the course) and every overriding class of the course its
- *   class sheets (`course_maps.class_id`).
+ *   class sheets (`course_maps.class_id`); `ensureAllControlsSheet` gives
+ *   the event its all-controls sheet the same way.
  */
 
 import { TRPCError } from "@trpc/server";
@@ -160,6 +161,33 @@ function specOf(t: MapTemplate, printScale = t.printScale): KeySpec {
   };
 }
 
+/**
+ * The auto template of the key that fits `points` (map mm): the event's
+ * busiest template's paper, orientation and scale — A4 portrait at the
+ * map's scale without one — turned when the points only fit the other way
+ * (`fitOrientation`). Points at (0, 0) are unplaced and left out.
+ */
+async function fittedAutoTemplate(db: Db, eventId: bigint, controls: Array<{ xpos: number; ypos: number }>): Promise<{ template: MapTemplate; created: boolean }> {
+  const busiest = await busiestTemplate(db, eventId);
+  const mapInfo = await getBaseMapInfoOrNull(db, eventId);
+  const preferred: KeySpec = busiest
+    ? specOf(busiest)
+    : { paper: "A4", orientation: "portrait", printScale: mapInfo?.scale ?? 10000 };
+  const points = controls.filter((c) => c.xpos !== 0 || c.ypos !== 0);
+  const xs = points.map((p) => p.xpos), ys = points.map((p) => p.ypos);
+  const extent = points.length ? { width: Math.max(...xs) - Math.min(...xs), height: Math.max(...ys) - Math.min(...ys) } : { width: 0, height: 0 };
+  const margin = busiest ? mapTemplateSettingsSchema.safeParse(busiest.settings) : null;
+  const orientation = fitOrientation(
+    extent,
+    (mapInfo?.scale ?? preferred.printScale) / preferred.printScale,
+    preferred.paper,
+    preferred.orientation,
+    margin?.success ? margin.data.printMarginMm : 3,
+    preferred.paper === "custom" ? { width: preferred.paperWidthMm ?? 0, height: preferred.paperHeightMm ?? 0 } : undefined,
+  );
+  return ensureAutoTemplate(db, eventId, { ...preferred, orientation }, busiest);
+}
+
 export interface AutoSheetsResult {
   /** Public ids of the sheets created. */
   createdSheets: number[];
@@ -169,6 +197,8 @@ export interface AutoSheetsResult {
   courseSheets: number[];
   /** Every overriding class's sheets, by class seq. */
   classSheets: Record<number, number[]>;
+  /** The event's all-controls sheet when it was asked for (`allControls`), else null. */
+  allControlsSheet: number | null;
 }
 
 /**
@@ -211,24 +241,7 @@ export async function autoSheets(db: Db, eventId: bigint, courseUuid: string): P
   });
   let base = sheets.find((s) => s.template)?.template ?? null;
   if (!base) {
-    const busiest = await busiestTemplate(db, eventId);
-    const mapInfo = await getBaseMapInfoOrNull(db, eventId);
-    const preferred: KeySpec = busiest
-      ? specOf(busiest)
-      : { paper: "A4", orientation: "portrait", printScale: mapInfo?.scale ?? 10000 };
-    const points = course.courseControls.map((cc) => cc.control).filter((c) => c.xpos !== 0 || c.ypos !== 0);
-    const xs = points.map((p) => p.xpos), ys = points.map((p) => p.ypos);
-    const extent = points.length ? { width: Math.max(...xs) - Math.min(...xs), height: Math.max(...ys) - Math.min(...ys) } : { width: 0, height: 0 };
-    const margin = busiest ? mapTemplateSettingsSchema.safeParse(busiest.settings) : null;
-    const orientation = fitOrientation(
-      extent,
-      (mapInfo?.scale ?? preferred.printScale) / preferred.printScale,
-      preferred.paper,
-      preferred.orientation,
-      margin?.success ? margin.data.printMarginMm : 3,
-      preferred.paper === "custom" ? { width: preferred.paperWidthMm ?? 0, height: preferred.paperHeightMm ?? 0 } : undefined,
-    );
-    const ensured = await ensureAutoTemplate(db, eventId, { ...preferred, orientation }, busiest);
+    const ensured = await fittedAutoTemplate(db, eventId, course.courseControls.map((cc) => cc.control));
     if (ensured.created) createdTemplates.push(ensured.template.seq);
     base = ensured.template;
     if (sheets.length === 0) {
@@ -307,5 +320,40 @@ export async function autoSheets(db: Db, eventId: bigint, courseUuid: string): P
     ).map((r) => r.seq);
   }
 
-  return { createdSheets, createdTemplates, courseSheets: sheets.map((s) => s.seq), classSheets };
+  return { createdSheets, createdTemplates, courseSheets: sheets.map((s) => s.seq), classSheets, allControlsSheet: null };
+}
+
+/**
+ * `layout.autoSheets { allControls: true }` (docs/course-layout.md §6): the
+ * event's one all-controls sheet (`kind = 'all_controls'`, named "All
+ * controls", window centre null = centred on the controls), created on the
+ * auto template of the key that fits every placed control
+ * (`fittedAutoTemplate`); one without a template gets that template.
+ * Idempotent.
+ */
+export async function ensureAllControlsSheet(
+  db: Db,
+  eventId: bigint,
+): Promise<{ sheet: number; createdSheet: boolean; createdTemplate: number | null }> {
+  const existing = await db.courseMap.findFirst({ where: { eventId, kind: "all_controls" }, select: { id: true, seq: true, templateId: true } });
+  if (existing?.templateId) return { sheet: existing.seq, createdSheet: false, createdTemplate: null };
+  const controls = await db.control.findMany({ where: { eventId, removed: false }, select: { xpos: true, ypos: true } });
+  const ensured = await fittedAutoTemplate(db, eventId, controls);
+  const createdTemplate = ensured.created ? ensured.template.seq : null;
+  if (existing) {
+    await db.courseMap.update({ where: { id: existing.id }, data: { templateId: ensured.template.id, version: nextObjectVersion() } });
+    return { sheet: existing.seq, createdSheet: false, createdTemplate };
+  }
+  const last = await db.courseMap.findFirst({ where: { eventId, courseId: null }, orderBy: { sortOrder: "desc" }, select: { sortOrder: true } });
+  const row = await db.courseMap.create({
+    data: {
+      eventId,
+      kind: "all_controls",
+      name: "All controls",
+      templateId: ensured.template.id,
+      sortOrder: (last?.sortOrder ?? -1) + 1,
+      version: nextObjectVersion(),
+    },
+  });
+  return { sheet: row.seq, createdSheet: true, createdTemplate };
 }
