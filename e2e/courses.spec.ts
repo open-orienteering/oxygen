@@ -2,6 +2,7 @@ import { test, expect } from "@playwright/test";
 import { readFileSync } from "node:fs";
 import { reseed } from "./helpers/reseed";
 import { uploadEventMap } from "./helpers/map-upload";
+import { analysePdf } from "./helpers/editor";
 
 test.beforeAll(reseed);
 
@@ -224,6 +225,28 @@ test.describe("Courses Page", () => {
     // The seed assigns classes to courses, so assignments come along.
     expect(xml).toContain("<ClassCourseAssignment>");
     expect(xml).toContain("<CourseName>Bana 2</CourseName>");
+  });
+
+  test("Export → Description sheets…: the dialog with every class that has a course, one page per class (course-print.md §6.4)", async ({ page }) => {
+    await selectCompetition(page);
+    await clickTab(page, "Courses");
+    await expect(page.getByText("3 courses")).toBeVisible({ timeout: 10000 });
+
+    await page.getByTestId("course-export-menu").click();
+    await page.getByTestId("course-export-descriptions").click();
+    const dialog = page.getByTestId("editor-descriptions-dialog");
+    await expect(dialog).toBeVisible();
+    const boxes = dialog.locator('input[type="checkbox"]');
+    await expect(boxes.first()).toBeChecked();
+    const classes = await boxes.count();
+    expect(classes).toBeGreaterThan(0);
+    await dialog.getByTestId("editor-descriptions-copies-fill").check();
+
+    const [download] = await Promise.all([page.waitForEvent("download"), dialog.getByTestId("editor-descriptions-download").click()]);
+    expect(download.suggestedFilename()).toBe("itest_descriptions.pdf");
+    const pdf = await analysePdf(readFileSync((await download.path())!));
+    expect(pdf.pages).toBe(classes);
+    await expect(dialog).toHaveCount(0);
   });
 
   test("should export all courses as Purple Pen .ppen", async ({ page }) => {

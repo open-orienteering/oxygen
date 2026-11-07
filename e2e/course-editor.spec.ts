@@ -2737,3 +2737,44 @@ test.describe("P7: a white-out outside crossing the frame hides only what is out
     }
   });
 });
+
+test.describe("F11: description sheets (docs/course-print.md §6.4)", () => {
+  desktopOnly();
+
+  test("Export ▾ → Description sheets… → two classes, two copies each: one A4 page per class", async ({ page }) => {
+    await openEditor(page);
+    const classes = (await trpcCall<{ id: number; name: string; courseIds: number[] }[]>("class.list", undefined, false)).filter((c) => c.courseIds.length > 0);
+    expect(classes.length, "classes with a course").toBeGreaterThanOrEqual(2);
+    const [a, b] = classes;
+
+    await page.getByTestId("editor-export").click();
+    await page.getByTestId("editor-export-descriptions").click();
+    const dialog = page.getByTestId("editor-descriptions-dialog");
+    await expect(dialog).toBeVisible();
+    // Every class with a course is checked by default.
+    for (const c of classes) await expect(dialog.getByTestId(`editor-descriptions-class-${c.id}`)).toBeChecked();
+    await dialog.getByTestId("editor-descriptions-none").click();
+    await expect(dialog.getByTestId("editor-descriptions-download")).toBeDisabled();
+    await dialog.getByTestId(`editor-descriptions-class-${a.id}`).check();
+    await dialog.getByTestId(`editor-descriptions-class-${b.id}`).check();
+    // Typing in the dialog arms no tool (the editor's single keys are inert while it is open).
+    await dialog.getByTestId("editor-descriptions-copies-value").fill("2");
+    await expect(dialog.getByTestId("editor-descriptions-copies-n")).toBeChecked();
+    await dialog.getByTestId("editor-descriptions-cell").selectOption("5");
+
+    const [download] = await Promise.all([page.waitForEvent("download"), dialog.getByTestId("editor-descriptions-download").click()]);
+    expect(download.suggestedFilename()).toMatch(/_descriptions\.pdf$/);
+    const pdf = await analysePdf(await readFile((await download.path())!));
+    expect(pdf.pages).toBe(2);
+    expect(pdf.sizeMm).toEqual([210, 297]);
+    await expect(dialog).toHaveCount(0);
+
+    // Escape closes the dialog and nothing else.
+    await page.getByTestId("editor-export").click();
+    await page.getByTestId("editor-export-descriptions").click();
+    await expect(dialog).toBeVisible();
+    await page.keyboard.press("Escape");
+    await expect(dialog).toHaveCount(0);
+    await expect(page.getByTestId("editor-page")).toBeVisible();
+  });
+});
