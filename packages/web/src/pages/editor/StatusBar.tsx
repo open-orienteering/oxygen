@@ -9,8 +9,6 @@
 import { useTranslation } from "react-i18next";
 import { saveIndicator, statusRows, type SaveState, type StatusInput } from "../../lib/editor/status";
 
-export type { SaveState } from "../../lib/editor/status";
-
 export function StatusBar({ status, save }: { status: Omit<StatusInput, "sheetKey">; save: SaveState }) {
   const { t } = useTranslation("editor");
   const s = saveIndicator(save);

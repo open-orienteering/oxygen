@@ -2303,6 +2303,16 @@ test.describe("P2: the status bar out of the footer", () => {
     await expect(popover).toBeVisible();
     await page.getByTestId("editor-inspector").click({ position: { x: 4, y: 4 } });
     await expect(popover).toHaveCount(0);
+
+    // Escape closes the popover and nothing else: an armed tool stays armed (the editor's Escape cascade, §3, is not stepped).
+    await arm(page, "K");
+    await button.click();
+    await expect(popover).toBeVisible();
+    await page.keyboard.press("Escape");
+    await expect(popover).toHaveCount(0);
+    await expect(page.getByTestId("editor-tool-K")).toHaveAttribute("aria-pressed", "true");
+    await page.keyboard.press("Escape");
+    await expect(page.getByTestId("editor-tool-V")).toHaveAttribute("aria-pressed", "true");
   });
 
   test("on a 1280 × 720 laptop screen the top bar keeps one row with the indicator and the button", async ({ page }) => {

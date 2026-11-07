@@ -39,7 +39,9 @@ export function StatsButton({ status }: { status: StatusInput }) {
   useEffect(() => {
     if (!open) return;
     const onDoc = (e: MouseEvent) => { if (!box.current?.contains(e.target as Node)) setOpen(false); };
-    const onEsc = (e: KeyboardEvent) => { if (e.key === "Escape") setOpen(false); };
+    // Escape closes the popover and nothing else: the editor's Escape cascade (§3: a tool, the selection, the
+    // course, fullscreen) listens on window, after this document listener.
+    const onEsc = (e: KeyboardEvent) => { if (e.key === "Escape") { e.stopPropagation(); setOpen(false); } };
     document.addEventListener("mousedown", onDoc);
     document.addEventListener("keydown", onEsc);
     return () => { document.removeEventListener("mousedown", onDoc); document.removeEventListener("keydown", onEsc); };
