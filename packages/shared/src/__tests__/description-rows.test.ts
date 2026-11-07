@@ -176,6 +176,42 @@ describe("buildDescriptionSheet", () => {
   });
 });
 
+describe("derived crossing rows (F4; control-descriptions §Course-level instructions)", () => {
+  const base = {
+    eventName: "E", classNames: [], courseName: "A", lengthM: 0, climbM: 0,
+    controls: [{ id: 31, code: "31" }, { id: 32, code: "32" }],
+  };
+  const specials = (sheet: ReturnType<typeof buildDescriptionSheet>) =>
+    sheet.rows.map((r) => (r.kind === "special" ? `${r.symbolKey}${r.lengthM !== undefined ? `:${r.lengthM}` : ""}` : r.kind === "control" ? r.code : r.kind));
+
+  it("13.3 after the preceding control, 13.4 for a section, after the start when the leg leaves it", () => {
+    const sheet = buildDescriptionSheet({ ...base, crossings: [{ afterControlId: 31, section: false }, { afterControlId: null, section: true }] });
+    expect(specials(sheet)).toEqual(["start", "13.4", "31", "13.3", "32", "finish"]);
+  });
+
+  it("replaces a hand-placed row of the same kind at the same anchor and inherits its length", () => {
+    const sheet = buildDescriptionSheet({
+      ...base,
+      instructions: { specials: [{ afterControlId: 31, kind: "13.1", lengthM: 40 }, { afterControlId: 31, kind: "13.3", lengthM: 120 }] },
+      crossings: [{ afterControlId: 31, section: false }],
+    });
+    expect(specials(sheet)).toEqual(["start", "31", "13.1:40", "13.3:120", "32", "finish"]);
+  });
+
+  it("keeps a hand-placed 13.3 at another anchor and one of another kind at the same anchor", () => {
+    const sheet = buildDescriptionSheet({
+      ...base,
+      instructions: { specials: [{ afterControlId: 32, kind: "13.3" }, { afterControlId: 31, kind: "13.4" }] },
+      crossings: [{ afterControlId: 31, section: false }],
+    });
+    expect(specials(sheet)).toEqual(["start", "31", "13.4", "13.3", "32", "13.3", "finish"]);
+  });
+
+  it("drops a crossing whose anchor is not on the sheet, as hand-placed rows", () => {
+    expect(specials(buildDescriptionSheet({ ...base, crossings: [{ afterControlId: 99, section: false }] }))).toEqual(["start", "31", "32", "finish"]);
+  });
+});
+
 describe("pruneDescriptionInstructions", () => {
   it("keeps finish and after-start specials, drops orphans", () => {
     const pruned = pruneDescriptionInstructions(
