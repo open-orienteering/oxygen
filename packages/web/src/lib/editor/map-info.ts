@@ -29,7 +29,8 @@ export interface MapInfoInput {
   header: MapInfoHeader | null;
 }
 
-export type MapInfoRowId = "name" | "scale" | "file" | "source" | "content" | "library" | "crs" | "importer";
+/** `symbol-library`, not `library`: `editor-map-info-library` is the dialog's *From club library* action. */
+export type MapInfoRowId = "name" | "scale" | "file" | "source" | "content" | "symbol-library" | "crs" | "importer";
 
 export interface MapInfoRow {
   id: MapInfoRowId;
@@ -91,7 +92,7 @@ export function mapInfoRows(input: MapInfoInput, t: T, formatDate: (iso: string)
     t("mapInfoColours", { count: h.colours.length }),
   ].join(" · ");
   document.push({ id: "content", label: "mapInfoContent", text: content, data: {} });
-  if (h.library) document.push({ id: "library", label: "mapInfoLibrary", text: `${h.library.id} · ${h.library.version}`, data: { id: h.library.id, version: h.library.version } });
+  if (h.library) document.push({ id: "symbol-library", label: "mapInfoLibrary", text: `${h.library.id} · ${h.library.version}`, data: { id: h.library.id, version: h.library.version } });
   const crs = h.georeferencing.crs;
   if (crs) document.push({ id: "crs", label: "mapInfoCrs", text: `${crs.authority}:${crs.code} · ${crs.name}`, data: { crs: `${crs.authority}:${crs.code}` } });
   document.push({ id: "importer", label: "mapInfoImporter", text: h.format.importer, data: { importer: h.format.importer } });

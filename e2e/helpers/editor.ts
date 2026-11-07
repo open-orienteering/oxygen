@@ -482,10 +482,16 @@ export async function statsRow(page: Page, row: string, attr: string): Promise<s
   return value;
 }
 
-/** The map scale's denominator, from the course-info popover's scale row (shown when no sheet is). */
+/** The map scale's denominator, from the map-info dialog's scale row (docs/course-editor.md §2, P6); Escape closes it. */
 export async function mapScale(page: Page): Promise<number> {
-  const scale = Number(await statsRow(page, "scale", "scale"));
-  expect(scale, "the course-info popover's scale row").toBeGreaterThan(0);
+  await page.getByTestId("editor-map-info").click();
+  const dialog = page.getByTestId("editor-map-info-dialog");
+  const row = dialog.getByTestId("editor-map-info-scale");
+  await expect(row).toHaveAttribute("data-scale", /^\d+$/, { timeout: 15000 });
+  const scale = Number(await row.getAttribute("data-scale"));
+  await page.keyboard.press("Escape");
+  await expect(dialog).toHaveCount(0);
+  expect(scale, "the map-info dialog's scale row").toBeGreaterThan(0);
   return scale;
 }
 

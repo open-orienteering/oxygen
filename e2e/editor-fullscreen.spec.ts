@@ -97,6 +97,15 @@ test("fullscreen locks Escape once; hovering with an armed tool does not re-lock
   expect(await page.evaluate(() => !!document.fullscreenElement)).toBe(true);
   expect(await lockCounts(page)).toEqual({ lock: 1, unlock: 0 });
 
+  // The map-info dialog (P6, docs/course-editor.md §2) opens inside the fullscreen element; Escape closes it and
+  // stays in fullscreen.
+  await page.getByTestId("editor-map-info").click();
+  await expect(page.getByTestId("editor-map-info-dialog")).toBeVisible();
+  expect(await page.evaluate(() => !!document.fullscreenElement?.querySelector('[data-testid="editor-map-info-dialog"]'))).toBe(true);
+  await page.keyboard.press("Escape");
+  await expect(page.getByTestId("editor-map-info-dialog")).toHaveCount(0);
+  expect(await page.evaluate(() => !!document.fullscreenElement)).toBe(true);
+
   // Leaving fullscreen releases it once.
   await page.getByTestId("map-panel").getByRole("button", { name: /^exit fullscreen$/i }).first().click();
   await expect.poll(() => page.evaluate(() => !!document.fullscreenElement), { timeout: 10000 }).toBe(false);

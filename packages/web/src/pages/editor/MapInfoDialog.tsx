@@ -5,14 +5,16 @@
  * — its name, scale, north lines, file and document — and the map's actions:
  * *Review symbols* (map-symbols.md §8.7), *Replace map* and *From club
  * library* (`useMapReplace`, shared with `MapPanel`'s drop zone). It took the
- * place of `MapPanel`'s map-info footer. The top bar sits in `MapPanel`'s
- * toolbar row, so the dialog stays in the fullscreen subtree. Escape closes
+ * place of `MapPanel`'s map-info footer. The dialog is portalled to the
+ * fullscreen element when there is one (MapPanel's root: the editor stays in
+ * it), else to the body. Escape closes
  * only the dialog (the editor's Escape cascade, §3, is not stepped) and the
  * editor's single-key shortcuts are inert while it is open. Desktop only: the
  * phone's top bar is `FieldTopBar`.
  */
 
 import { useCallback, useEffect, useRef, useState } from "react";
+import { createPortal } from "react-dom";
 import { useTranslation } from "react-i18next";
 import { Link, useParams } from "react-router-dom";
 import { IconMap } from "../../components/map-icons";
@@ -94,7 +96,10 @@ function MapInfoDialog({ map, replace, onClose }: { map: MapInfoInput; replace: 
   const fileRow = restRows.find((r) => r.id === "file");
   const action = "px-3 py-1.5 text-xs rounded-lg transition-colors cursor-pointer";
 
-  return (
+  // Portalled: the top bar's row is a stacking context (MapPanel's toolbar, `relative z-10`) under the shell's
+  // header, so a fixed layer inside it could not dim the header. In fullscreen only the fullscreen element's
+  // subtree is drawn, so the portal goes there (MapPanel's root, §2).
+  return createPortal(
     <div className="fixed inset-0 z-[60] flex items-center justify-center p-4">
       <button type="button" aria-label={tc("close")} tabIndex={-1} onClick={onClose}
         data-testid="editor-map-info-backdrop" className="absolute inset-0 bg-black/40 cursor-default" />
@@ -127,7 +132,7 @@ function MapInfoDialog({ map, replace, onClose }: { map: MapInfoInput; replace: 
                 <dd className="min-w-0">
                   {map.meridianStalenessDeg === null
                     ? <span className="text-slate-500">{tl("northLinesNone")}</span>
-                    : <NorthLinesBadge stalenessDeg={map.meridianStalenessDeg} />}
+                    : <NorthLinesBadge stalenessDeg={map.meridianStalenessDeg} className="rounded-lg! py-1" />}
                 </dd>
               </div>
               {fileRow && row(fileRow)}
@@ -172,6 +177,7 @@ function MapInfoDialog({ map, replace, onClose }: { map: MapInfoInput; replace: 
         </div>
       </div>
       <ClubMapPicker library={replace.library} />
-    </div>
+    </div>,
+    document.fullscreenElement ?? document.body,
   );
 }

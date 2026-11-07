@@ -33,7 +33,7 @@ describe("the map-info dialog's rows (docs/course-editor.md §2, P6)", () => {
     expect(info.map[1]).toMatchObject({ label: "mapInfoScale", data: { scale: "10000" } });
     expect(info.map[1].text).toBe(`mapInfoScaleValue:${JSON.stringify({ scale: (10000).toLocaleString("sv-SE") })}`);
     expect(info.map[2]).toMatchObject({ text: `mapInfoFileValue:{"size":"2.4 MB","date":"2026-11-07"}`, data: { bytes: "2500000" } });
-    expect(info.document.map((r) => r.id)).toEqual(["source", "content", "library", "crs", "importer"]);
+    expect(info.document.map((r) => r.id)).toEqual(["source", "content", "symbol-library", "crs", "importer"]);
     expect(info.document[0]).toMatchObject({ text: "OCAD 12.0.4", data: { kind: "ocad", version: "12.0.4" } });
     expect(info.document[1].text).toBe(`mapInfoObjects:{"count":1234} · mapInfoSymbols:{"count":2} · mapInfoColours:{"count":3}`);
     expect(info.document[2].text).toBe("isom-2017-2 · 1.4");

@@ -48,9 +48,6 @@ test.describe.serial("mobile layout", () => {
     expect(syncPanelZ).toBeGreaterThan(0);
     await page.locator("div.fixed.inset-0.z-20").click({ position: { x: 1, y: 1 } });
 
-    const mapPanel = page.getByTestId("map-panel").first();
-    await expect(mapPanel.getByRole("button", { name: "Replace map" })).toHaveCount(0);
-
     await uploadEventMap(page);
     const viewer = page.getByTestId("map-viewer").first();
     await expect(viewer).toBeVisible({ timeout: 60000 });
@@ -95,6 +92,9 @@ test.describe.serial("mobile layout", () => {
     // The editor on a phone; its chrome and gestures are field-mode.spec.ts's
     // and the touch describe of course-editor.spec.ts.
     await expect(page.getByTestId("editor-page")).toHaveAttribute("data-layout", "phone", { timeout: 15000 });
+    // The map info is the desktop top bar's (docs/course-editor.md §2, P6); no map chrome under the phone's map.
+    await expect(page.getByTestId("editor-map-info")).toHaveCount(0);
+    await expect(page.getByTestId("map-panel").first().getByRole("button", { name: "Replace map" })).toHaveCount(0);
   });
 
   test("the controls toolbar fits a phone", async ({ page }) => {
