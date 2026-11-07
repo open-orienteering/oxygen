@@ -7,6 +7,7 @@ import { useCurrentUser } from "../context/CurrentUserContext";
 import { MapViewer, type ControlOverlay, type CourseOverlay, type MapViewerEditorProps } from "./MapViewer";
 import { useIsWideViewport } from "./map-pane-shared";
 import { courseObjectsForView } from "../lib/course-layer-request";
+import { courseOverlayIds } from "../lib/course-overlay-ids";
 import {
   IconDescriptions,
   IconEye,
@@ -472,56 +473,14 @@ function MapPanelImpl({
     });
   }, [controlCoords.data, effectiveControlIds, filterMode, showOnlyRelevant, courseControlIds, showCompletion, completionStatus.data, punchStatusByCode]);
 
-  // Build course overlays — augment with start/finish connections
+  // Build course overlays: each course's own start and finish around its
+  // controls, whatever its control count (docs/course-editor.md §6.1, P5).
   const courseOverlays: CourseOverlay[] = useMemo(() => {
     if (!courses.data || !controlCoords.data) return [];
-
-    // Identify start and finish controls
-    const starts = controlCoords.data.filter((c) => c.status === 4);
-    const finishes = controlCoords.data.filter((c) => c.status === 5);
-
-    // Build position map for distance calculations
-    const posMap = new Map<string, { x: number; y: number }>();
-    for (const c of controlCoords.data) {
-      posMap.set(String(c.id), { x: c.mapX, y: c.mapY });
-    }
-
-    // Helper: find nearest control from a list to a given position
-    function findNearest(
-      candidates: typeof starts,
-      refPos: { x: number; y: number },
-    ) {
-      let best = candidates[0];
-      let bestDist = Infinity;
-      for (const c of candidates) {
-        const dx = c.mapX - refPos.x;
-        const dy = c.mapY - refPos.y;
-        const d = dx * dx + dy * dy;
-        if (d < bestDist) { bestDist = d; best = c; }
-      }
-      return best;
-    }
+    const coords = controlCoords.data;
 
     return courses.data.map((c) => {
-      const controlIds = c.controls.split(";").filter(Boolean);
-
-      // Prepend the nearest start control
-      if (starts.length > 0 && controlIds.length > 0) {
-        const firstPos = posMap.get(controlIds[0]);
-        if (firstPos) {
-          const nearest = findNearest(starts, firstPos);
-          controlIds.unshift(String(nearest.id));
-        }
-      }
-
-      // Append the nearest finish control
-      if (finishes.length > 0 && controlIds.length > 0) {
-        const lastPos = posMap.get(controlIds[controlIds.length - 1]);
-        if (lastPos) {
-          const nearest = findNearest(finishes, lastPos);
-          controlIds.push(String(nearest.id));
-        }
-      }
+      const controlIds = courseOverlayIds(c, coords);
 
       return {
         name: c.name,
