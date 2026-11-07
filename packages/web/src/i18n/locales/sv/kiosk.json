@@ -71,5 +71,6 @@
   "noTimingPill": "{{code}} · Utan tidtagning",
   "skippedPunchedPill": "{{code}} · Valfri",
   "skippedMissingPill": "{{code}} · Utelämnad",
-  "kioskKeyRequired": "Den här kiosk-URL:en kräver en nyckel. Öppna tävlingssidan, skapa en kiosknyckel och använd länken där."
+  "kioskKeyRequired": "Den här kiosk-URL:en kräver en nyckel. Öppna tävlingssidan, skapa en kiosknyckel och använd länken där.",
+  "seeOfficial": "Kontakta funktionären vid avläsningen"
 }

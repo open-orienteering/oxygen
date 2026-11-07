@@ -71,5 +71,6 @@
   "noTimingPill": "{{code}} · No timing",
   "skippedPunchedPill": "{{code}} · Optional",
   "skippedMissingPill": "{{code}} · Skipped",
-  "kioskKeyRequired": "This kiosk URL needs a key. Open the Event page, generate a kiosk key, and use the link shown there."
+  "kioskKeyRequired": "This kiosk URL needs a key. Open the Event page, generate a kiosk key, and use the link shown there.",
+  "seeOfficial": "See the official at the readout desk"
 }
