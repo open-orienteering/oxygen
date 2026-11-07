@@ -1271,7 +1271,10 @@ in the same transaction as the root's structure. A child is an ordinary
 linear course for every reader — timing (`performReadout` reads
 `runner.courseId ?? class.courseId`), results, the Eventor upload, the
 IOF / Purple Pen export, print, the kiosk — and read-only for every
-writer. Section numbering keeps §11 for F5's map-exchange sections.
+writer. It stays in every course list (`course.list`); a consumer that
+must not offer it filters on `parentCourseId` (decided on the user's
+standing instruction, 2026-11-07, for review). Section numbering keeps
+§11 for F5's map-exchange sections.
 
 ### 12.1 Keys and the linear variant
 
@@ -1379,8 +1382,10 @@ Written by `syncVariants` for the classes on the root, and by
 `syncClassPool` when a class's course changes (`class.create`,
 `class.update { courseId }`, `class.bulkUpdate { courseId }`) — a class
 picking a root after its variants exist pools them too, and a class
-moving to a plain course loses them. Only pool rows of variants are
-touched; `stage` > 0 (relay legs) stays timing's (08 §12).
+moving to a plain course loses them (decided on the user's standing
+instruction, 2026-11-07, for review — decision log "F6: pools written
+when a class picks a course"). Only pool rows of variants are touched;
+`stage` > 0 (relay legs) stays timing's (08 §12).
 
 ### 12.5 API
 
