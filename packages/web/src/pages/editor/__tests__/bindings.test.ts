@@ -1,7 +1,8 @@
 import { describe, expect, it, vi } from "vitest";
 import type { course } from "@oxygen/shared";
 import type { ToolPointer } from "../../../components/MapViewer";
-import { areaBinding, gapBinding, placeBinding, scaleAbout, selectBinding, type GestureRef } from "../tools/bindings";
+import { areaBinding, gapBinding, pickSymbolBinding, placeBinding, scaleAbout, selectBinding, type GestureRef } from "../tools/bindings";
+import { railKeyOf } from "../tools/rail";
 
 const ptr = (x: number, y: number, over: Partial<ToolPointer> = {}): ToolPointer => ({ pt: { x, y }, target: null, shift: false, mmPerPx: 0.1, ...over });
 const square = (id: number, kind: course.CourseObject["kind"] = "oob_area"): course.CourseObject =>
@@ -446,5 +447,22 @@ describe("pinch-scale of a selected object (docs/course-editor.md §10)", () => 
     b.onPinch!.end(true);
     expect(o.onObjectMoved).not.toHaveBeenCalled();
     expect(o.onObjectDraft).toHaveBeenLastCalledWith(4, null);
+  });
+});
+
+describe("the eyedropper binding (docs/course-editor.md §6.4)", () => {
+  it("is exclusive with a crosshair: a click picks at the pointer with its tolerance, right-click exits, no shapes", () => {
+    const onPick = vi.fn(), onExit = vi.fn();
+    const b = pickSymbolBinding({ onPick, onExit });
+    expect(b).toMatchObject({ exclusive: true, cursor: "crosshair" });
+    expect(b.shapes ?? []).toEqual([]);
+    b.onClick!(ptr(3, 4, { mmPerPx: 0.5 }));
+    expect(onPick).toHaveBeenCalledWith({ x: 3, y: 4 }, 3);
+    b.onContextMenu!(ptr(3, 4));
+    expect(onExit).toHaveBeenCalled();
+  });
+
+  it("lights no rail button", () => {
+    expect(railKeyOf({ kind: "pick-symbol" })).toBeNull();
   });
 });

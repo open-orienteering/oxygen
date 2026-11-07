@@ -347,6 +347,21 @@ export function textBinding(o: { onPlace: (pt: Pt) => void; onExit: () => void; 
   return { exclusive: true, cursor: "text", onClick: (p) => o.onPlace(o.snap(p.pt)), onContextMenu: () => o.onExit() };
 }
 
+// ─── The filter region's eyedropper (§6.4) ────────────────
+
+/** The eyedropper's reach around the click, CSS px. */
+export const PICK_PX = 6;
+
+/** Exclusive: a click (a tap) picks the map symbol at the pointer, `toleranceMm` from `tolerancePx` at this zoom; a drag pans. */
+export function pickSymbolBinding(o: { onPick: (pt: Pt, toleranceMm: number) => void; onExit: () => void; tolerancePx?: number }): EditorToolBinding {
+  return {
+    exclusive: true,
+    cursor: "crosshair",
+    onClick: (p) => o.onPick(p.pt, (o.tolerancePx ?? PICK_PX) * p.mmPerPx),
+    onContextMenu: () => o.onExit(),
+  };
+}
+
 // ─── G: gaps on the selected circle or leg ────────────────
 
 /** `gaps`: the effective ones (stored, else automatic); `stored`: whether a list is stored (Reset gaps applies). */

@@ -22,7 +22,9 @@ export type EditorTool =
   | { kind: "area"; poly: PolygonState }
   | { kind: "text" }
   /** Gaps on the selected circle, or on the leg into control-sequence position `legInsertAt` (the clicked leg). */
-  | { kind: "gap"; legInsertAt: number | null };
+  | { kind: "gap"; legInsertAt: number | null }
+  /** The filter region's eyedropper (§6.4): a click adds the symbol under it to the selected region. */
+  | { kind: "pick-symbol" };
 
 export interface EditorState extends CourseEditorState {
   mode: EditorMode;
@@ -67,10 +69,11 @@ export function editorReducer(state: EditorState, action: EditorAction): EditorS
     case "mode":
       // Course and Field (§9) keep the selection. Layout mode locks course edits (08 §5.4): the course stays
       // selected, a tool, a phantom and the selections of Course mode are dropped.
+      // The eyedropper is Course mode's (a filter region is edited there): any mode change drops it.
       if (action.mode === state.mode) return state;
       return action.mode === "layout"
         ? { ...state, mode: "layout", tool: SELECT, phantom: null, selectedControlId: null, multi: [], selectedObjectId: null }
-        : { ...state, mode: action.mode };
+        : { ...state, mode: action.mode, ...(state.tool.kind === "pick-symbol" ? { tool: SELECT } : {}) };
     case "view":
       // Class view needs a class (the "class" action); the other views drop it.
       if (action.view === "class") return state.classSeq === null ? state : { ...state, view: "class", phantom: null };

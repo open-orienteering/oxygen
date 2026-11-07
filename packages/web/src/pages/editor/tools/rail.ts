@@ -17,13 +17,14 @@ export function areaChoiceOfKey(key: string): AreaChoice | null {
   return AREA_CHOICES.find((c) => AREA_KEYS[c] === k) ?? null;
 }
 
-/** The rail key a tool lights up. */
-export function railKeyOf(tool: EditorTool): RailTool {
+/** The rail key a tool lights up; null for the inspector's eyedropper (§6.4), which lights its own button. */
+export function railKeyOf(tool: EditorTool): RailTool | null {
   switch (tool.kind) {
     case "select": return "V";
     case "place": return tool.chain.tool === "start" ? "S" : tool.chain.tool === "finish" ? "M" : "K";
     case "area": return "A";
     case "text": return "T";
     case "gap": return "G";
+    case "pick-symbol": return null;
   }
 }
