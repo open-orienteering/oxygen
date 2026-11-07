@@ -261,5 +261,13 @@
   "removeSpecial": "Ta bort anvisning",
   "specialCount_one": "{{count}} anvisning",
   "specialCount_other": "{{count}} anvisningar",
+  "filterPick": "Välj i kartan",
+  "filterPickHint": "Klicka i kartan: symbolen under pekaren läggs till i området. Esc avslutar.",
+  "filterPickMiss": "Inget att välja där",
+  "filterPickAdded": "Lade till {{label}}",
+  "filterOther_one": "Övrigt ({{count}}): ramar, teckenförklaring, klubbsymboler",
+  "filterOther_other": "Övrigt ({{count}}): ramar, teckenförklaring, klubbsymboler",
+  "filterNoMatch": "Ingen symbol matchar",
+  "filterPickAlready": "{{label}} finns redan i området",
   "stats": "Baninfo"
 }

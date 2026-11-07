@@ -137,4 +137,14 @@ describe("editorReducer (docs/course-editor.md §3)", () => {
     expect(s.tool).toEqual({ kind: "area", poly: { kind: "whiteout", vertices: [{ x: 1, y: 2 }] } });
     expect(editorReducer(s, { type: "toggle-snapping" }).snapping).toBe(true);
   });
+
+  it("the eyedropper (pick-symbol, §6.4) is a tool: Escape drops it first, any mode change drops it", () => {
+    let s = editorReducer(initialEditorState, { type: "select-object", id: 7 });
+    s = editorReducer(s, { type: "tool", tool: { kind: "pick-symbol" } });
+    expect(escapeHasWork(s)).toBe(true);
+    const esc = editorReducer(s, { type: "escape" });
+    expect([esc.tool.kind, esc.selectedObjectId]).toEqual(["select", 7]);
+    for (const mode of ["field", "layout"] as const) expect(editorReducer(s, { type: "mode", mode }).tool.kind).toBe("select");
+    expect(editorReducer(s, { type: "mode", mode: "course" }).tool.kind).toBe("pick-symbol");
+  });
 });

@@ -1,6 +1,6 @@
 import { describe, it } from "node:test";
 import assert from "node:assert/strict";
-import { readFileSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 import { spawnSync } from "node:child_process";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -38,6 +38,20 @@ describe("published-image demo", () => {
     assert.match(script, /ghcr\.io\/open-orienteering\/oxygen:edge/);
     assert.doesNotMatch(commands, /\bpnpm\b/);
     assert.doesNotMatch(commands, /docker compose .*--build/);
+  });
+
+  it("loads the showcase with the image's own re-match CLI, no host Node (docs/demo.md)", () => {
+    const loader = readFileSync(path.join(ROOT, "scripts/load-showcase.sh"), "utf8");
+    const dockerBranch = loader.slice(loader.indexOf("# ─── 4. Import and pin the map"), loader.indexOf("# ─── 5. Smoke check"));
+    const [whenDocker] = dockerBranch.split("\nelse\n");
+    assert.match(whenDocker, /docker compose exec -T "\$API_SERVICE" node packages\/api\/dist\/cli\/map-rematch\.js --event demo_competition/);
+    assert.doesNotMatch(whenDocker, /\bpnpm\b|\bnode scripts\//);
+    assert.match(loader, /docker-compose\.release\.yml"\* ]]; then\n  API_SERVICE="\$\{API_SERVICE:-oxygen\}"/);
+    // The CLI the image runs is built from packages/api/src (docs/map-storage.md §6.9).
+    assert.ok(existsSync(path.join(ROOT, "packages/api/src/cli/map-rematch.ts")));
+    // The source row travels on psql's stdin; the map file is the committed one.
+    assert.match(loader, /decode\('[^\n]*\n\s*base64 < "\$MAP_FILE"/);
+    assert.match(loader, /puit-de-laven-demo\.omap/);
   });
 
   it("installs OpenSSL before Prisma dependencies", () => {

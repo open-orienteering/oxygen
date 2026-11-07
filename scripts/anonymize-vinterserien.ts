@@ -35,13 +35,18 @@
  *     the demo runners, with logos preserved. Emitted ON CONFLICT DO
  *     NOTHING so it never overwrites an operator's real club rows.
  *   - map: the source map is never written into the fixture. In its place
- *     the demo event gets the generated synthetic OCAD (same CRS and paper
- *     extent) on the document pipeline: a `map_sources` row, the
- *     `map_documents` row the API's importer makes of it, and a
- *     `map_files` row pinning both with the pin's quick-access columns
- *     (scripts/lib/showcase-map.mjs). Only the source row's `uploaded_at`
- *     and `rotation_correction` carry over. The content-addressed rows
- *     are `ON CONFLICT DO NOTHING`.
+ *     the demo event gets a `map_files` row naming the CC0 demo map
+ *     (`docs/screenshots/fixtures/puit-de-laven-demo.omap`) by its source
+ *     hash, with no document: `scripts/load-showcase.sh` inserts the
+ *     source from the committed file and the re-match imports and pins it
+ *     (scripts/lib/showcase-map.mjs, docs/demo.md "The map"). Only the
+ *     source row's `uploaded_at` and `rotation_correction` carry over.
+ *   - controls / courses: the source event's positions belong to its map,
+ *     so after the dump `docs/screenshots/fixtures/showcase-controls.json`
+ *     is applied (scripts/lib/showcase-controls.mjs): positions on the
+ *     demo map, `lat` / `lng` NULL, `legs` / `length_m` re-derived and
+ *     `structure` NULL (its site ids name the source event's controls).
+ *     Seqs and codes are kept, so punches and splits stay valid.
  *   - All BIGSERIAL ids on map_files / tracks / routes are stripped from
  *     the INSERTs so Postgres allocates fresh ones against the
  *     freshly-created demo event.
@@ -56,8 +61,9 @@ import {
   FEMALE_FIRST_NAMES,
   LAST_NAMES,
 } from "../packages/api/src/routers/fictional-names.js";
-import { buildShowcaseMapRows } from "./lib/showcase-map.mjs";
-import { showcaseMapStatements } from "./lib/showcase-sql.mjs";
+import { showcaseSource } from "./lib/showcase-map.mjs";
+import { mapFileInsert } from "./lib/showcase-sql.mjs";
+import { CONTROLS_JSON_PATH, applyControls } from "./lib/showcase-controls.mjs";
 
 // ─── Config ──────────────────────────────────────────────────
 
@@ -90,7 +96,7 @@ type Mode =
   | "remapPunch"
   | "anonymizeEvent"
   | "stripSerialId"
-  | "syntheticMap";
+  | "showcaseMap";
 
 /**
  * Table emission order. Each child table must come after its UUID
@@ -116,7 +122,7 @@ const TABLES: { name: string; mode: Mode; whereExtra?: string }[] = [
   { name: "runners", mode: "anonymizeRunner" },
   { name: "teams", mode: "anonymizeTeam" },
   // Map / GPS.
-  { name: "map_files", mode: "syntheticMap" },
+  { name: "map_files", mode: "showcaseMap" },
   { name: "tracks", mode: "stripSerialId" },
   { name: "routes", mode: "stripSerialId" },
 ];
@@ -320,15 +326,16 @@ async function main(): Promise<void> {
     "--           courses / classes, pseudonymous runners, cards with\n",
   );
   write(
-    "--           remapped CardNo, a synthetic OCAD backing map on the\n",
+    "--           remapped CardNo, the event's map_files row naming the CC0\n",
   );
-  write("--           document pipeline (map_sources, map_documents and the\n");
-  write("--           pinned map_files row), and the subset of club_directory\n");
-  write("--           referenced by demo runners.\n");
-  write("-- Excluded: map previews, event_log, eventor_* caches.\n");
+  write("--           demo map (puit-de-laven-demo.omap) by source hash, and the\n");
+  write("--           subset of club_directory referenced by demo runners.\n");
+  write("--           Control positions come from showcase-controls.json.\n");
+  write("-- Excluded: map bytes (the loader inserts the source from the .omap),\n");
+  write("--           map previews, event_log, eventor_* caches.\n");
   write("--\n");
   write(
-    `-- Load with:   psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -f showcase.sql\n`,
+    `-- Load with:   bash scripts/load-showcase.sh  (source row, this SQL, map re-match)\n`,
   );
   write(
     "-- The script is idempotent: it deletes any existing event with\n",
@@ -398,11 +405,11 @@ async function main(): Promise<void> {
       where = scopeByJoin(t.name, srcEventId);
     }
 
-    if (t.mode === "syntheticMap") {
-      const n = await writeSyntheticMap(client, t.name, where, write);
+    if (t.mode === "showcaseMap") {
+      const n = await writeShowcaseMapPin(client, t.name, where, write);
       totalRows += n;
       console.log(
-        `  ${t.name.padEnd(30)} ${n.toString().padStart(6)} rows  (synthetic map, 3 statements)`,
+        `  ${t.name.padEnd(30)} ${n.toString().padStart(6)} rows  (demo map, source only)`,
       );
       continue;
     }
@@ -487,6 +494,12 @@ async function main(): Promise<void> {
   });
   await client.end();
 
+  // The source event's control positions belong to its map: move them onto
+  // the demo map (and re-derive the course lengths) from the committed file.
+  const positions = JSON.parse(fs.readFileSync(CONTROLS_JSON_PATH, "utf8"));
+  fs.writeFileSync(OUT_PATH, await applyControls(fs.readFileSync(OUT_PATH, "utf8"), positions));
+  console.log(`Applied ${CONTROLS_JSON_PATH}.`);
+
   const sizeMb = (fs.statSync(OUT_PATH).size / 1024 / 1024).toFixed(2);
   console.log(`\nWrote ${OUT_PATH} — ${totalRows} rows, ${sizeMb} MB.`);
 }
@@ -496,10 +509,11 @@ async function main(): Promise<void> {
 /**
  * The demo event's map. The event's latest `map_files` row (the pin every
  * reader uses) contributes its `uploaded_at` and `rotation_correction`;
- * everything else is the synthetic showcase map's rows. Returns the rows
- * written (1 pinned map_files row, or 0 when the source has no map).
+ * the row names the committed demo map's source and no document (the
+ * loader's re-match pins one). Returns the rows written (1, or 0 when the
+ * source event has no map).
  */
-async function writeSyntheticMap(
+async function writeShowcaseMapPin(
   client: Client,
   tableName: string,
   where: string,
@@ -511,23 +525,24 @@ async function writeSyntheticMap(
   }>({
     text: `SELECT uploaded_at, rotation_correction FROM ${tableName} ${where} ORDER BY uploaded_at DESC LIMIT 1`,
   });
-  write("-- ─── map_sources / map_documents / map_files (synthetic showcase map) ──\n");
-  write("-- Content-addressed rows are ON CONFLICT DO NOTHING; map_files pins both.\n");
+  write("-- ─── map_files (the CC0 demo map, source only) ──\n");
+  write("-- load-showcase.sh inserts the map_sources row from puit-de-laven-demo.omap\n");
+  write("-- and runs the map re-match, which imports the document and pins it.\n");
   const src = latest.rows[0];
   if (!src) {
     write("-- (the source event has no map)\n\n");
     return 0;
   }
-  const rows = await buildShowcaseMapRows({
-    rotationCorrection: src.rotation_correction,
-  });
-  for (const line of showcaseMapStatements(rows, {
-    eventId: DEMO_EVENT_ID,
-    uploadedAt: src.uploaded_at.toISOString(),
-  })) {
-    write(line + "\n");
-  }
-  write("\n");
+  write(
+    mapFileInsert(
+      {
+        eventId: DEMO_EVENT_ID,
+        uploadedAt: src.uploaded_at.toISOString(),
+        rotationCorrection: src.rotation_correction,
+      },
+      showcaseSource(),
+    ) + "\n\n",
+  );
   return 1;
 }
 
@@ -581,7 +596,7 @@ function transform(
   cols: ColumnInfo[],
   mode: Mode,
 ): unknown[] | null {
-  if (mode === "keep" || mode === "stripSerialId" || mode === "syntheticMap")
+  if (mode === "keep" || mode === "stripSerialId" || mode === "showcaseMap")
     return row;
 
   const r = [...row];
