@@ -102,6 +102,23 @@ describe("course anchors", () => {
     const tokens = [{ id: "1", anchor: "controls", operator: "eq" as const, value: "2" }];
     expect(applyFilters(courses, tokens, anchors).map((c) => c.id)).toEqual([2]);
   });
+
+  // E-pages: the Maps page's template and print-status filters live on the Courses page.
+  it("filters by template and print status (the Courses page's overview)", () => {
+    const withMaps = createCourseAnchors(lbl, ["A4 1:10000"]);
+    const rows = courses.map((c, i) => ({
+      ...c,
+      templateNames: i === 0 ? ["A4 1:10000"] : [],
+      printStatus: (["ready", "noMap", "issues"] as const)[i],
+    }));
+    expect(withMaps.find((a) => a.key === "template")!.suggest!("")).toEqual([{ key: "A4 1:10000", label: "A4 1:10000" }]);
+    const byTemplate = [{ id: "1", anchor: "template", operator: "eq" as const, value: "a4 1:10000" }];
+    expect(applyFilters(rows, byTemplate, withMaps).map((c) => c.id)).toEqual([1]);
+    const byStatus = [{ id: "1", anchor: "status", operator: "eq" as const, value: "issues" }];
+    expect(applyFilters(rows, byStatus, withMaps).map((c) => c.id)).toEqual([3]);
+    // Rows without the overview fields match neither.
+    expect(applyFilters(courses, byStatus, withMaps)).toEqual([]);
+  });
 });
 
 // ─── Control anchors ───────────────────────────────────────

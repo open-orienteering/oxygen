@@ -51,9 +51,17 @@ function matchBool(actual: boolean, value: string): boolean {
   return false;
 }
 
-export function createCourseAnchors(
+/** A course's print overview on the Courses page (E-pages): its sheets' template names and print status. */
+export type CoursePrintStatus = "ready" | "issues" | "noMap";
+export interface CourseOverviewFields {
+  templateNames?: string[];
+  printStatus?: CoursePrintStatus;
+}
+
+export function createCourseAnchors<T extends CourseSummary & CourseOverviewFields = CourseSummary>(
   getLabel: (key: string) => string,
-): AnchorDef<CourseSummary>[] {
+  templateNames: readonly string[] = [],
+): AnchorDef<T>[] {
   return [
     {
       key: "name",
@@ -122,6 +130,26 @@ export function createCourseAnchors(
         { key: "no", label: "No" },
       ],
       match: (item, _op, value) => matchBool(item.lastAsFinish, value),
+    },
+    {
+      key: "template",
+      label: getLabel("template"),
+      type: "enum",
+      operators: ["eq"],
+      defaultOperator: "eq",
+      color: "purple",
+      suggest: () => templateNames.map((name) => ({ key: name, label: name })),
+      match: (item, _op, value) => (item.templateNames ?? []).some((name) => name.toLowerCase() === value.toLowerCase()),
+    },
+    {
+      key: "status",
+      label: getLabel("printStatus"),
+      type: "enum",
+      operators: ["eq"],
+      defaultOperator: "eq",
+      color: "rose",
+      suggest: () => (["ready", "issues", "noMap"] as const).map((status) => ({ key: status, label: getLabel(`status_${status}`) })),
+      match: (item, _op, value) => item.printStatus === value,
     },
   ];
 }

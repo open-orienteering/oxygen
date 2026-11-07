@@ -193,5 +193,8 @@
   "newTemplateOption": "Ny mall…",
   "newTemplateTitle": "Ny kartmall",
   "printStatus": "Utskrift",
-  "noTemplate": "Ingen mall"
+  "noTemplate": "Ingen mall",
+  "status_ready": "Klar",
+  "status_issues": "Behöver åtgärdas",
+  "status_noMap": "Ingen karta"
 }
