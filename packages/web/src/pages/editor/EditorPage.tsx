@@ -73,6 +73,7 @@ import { ObjectSection } from "./modes/ObjectSection";
 import { ChecksSection, Inspector, InspectorSection, InventorySection } from "./Inspector";
 import { StatusBar } from "./StatusBar";
 import type { SaveState, StatusInput } from "../../lib/editor/status";
+import type { MapInfoInput } from "../../lib/editor/map-info";
 import { useCourseChecks } from "./useCourseChecks";
 import type { EditorCheck } from "../../lib/editor/checks";
 import { CourseSection, MultiSection, SelectionSection } from "./modes/CourseMode";
@@ -1428,7 +1429,18 @@ export function EditorPage() {
   // ─── Chrome ──────────────────────────────────────────────
   const canUndo = undoStack.canUndo, canRedo = undoStack.canRedo;
   const courseOptions = useMemo(() => (courses.data ?? []).map((c) => ({ id: c.id, name: c.name })), [courses.data]);
-  // The save state and the course-info values (§2, §3): the top bar's indicator and popover, the phone's peek line.
+  // The map-info dialog's values (§2, P6): the queries above and the loaded document's header.
+  const mapInfoInput: MapInfoInput = {
+    fileName: mapInfo.data?.fileName ?? null,
+    uploadedAt: mapInfo.data?.uploadedAt ?? null,
+    sizeBytes: mapInfo.data?.size ?? null,
+    scale: mapInfo.data ? mapScale : null,
+    meridianStalenessDeg: mapMetadata.data?.meridianStalenessDeg ?? null,
+    documentHash,
+    header: mapDoc?.header ?? null,
+  };
+  // The save state and the course-info values (§2, §3): the top bar's indicator and popover (no map scale since P6),
+  // the phone's peek line (with it).
   const save: SaveState = pendingOps > 0 ? "saving" : notice ? "conflict" : errorMsg ? "error" : "saved";
   const status: StatusInput = {
     controls: selectedCourse ? sequenceIds.length : null,
@@ -1489,6 +1501,7 @@ export function EditorPage() {
       presence={<PresenceChips others={presence} selectedCourseId={state.selectedCourseId} />}
       save={save}
       status={status}
+      map={mapInfoInput}
     />
   );
 
@@ -1800,7 +1813,6 @@ export function EditorPage() {
         <MapPanel
           fillContainer
           fitToControls
-          showMapInfo={!isMobile}
           filterMode={(state.mode === "layout" ? layoutMode.courseOnly : state.hideOthers || (state.view === "class" && !!classLayout)) && selectedCourse && courseView ? "course" : "all"}
           defaultShowDescriptions={!isMobile}
           descriptionsAllControls

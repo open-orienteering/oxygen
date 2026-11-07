@@ -2,7 +2,9 @@
  * The editor's top bar (docs/course-editor.md §2; 08 §5.2): course picker,
  * view picker (Course · All controls · Class, docs/course-layout.md §6),
  * mode switch (Course · Layout · Field), undo / redo, hide other controls,
- * auto cuts, Export ▾ (docs/course-layout.md §7), the save indicator and the
+ * auto cuts, Export ▾ (docs/course-layout.md §7), the map info (a map icon and
+ * its dialog, docs/course-editor.md §2; P6 moved it here from MapPanel's
+ * footer), the save indicator and the
  * course-info popover (docs/course-editor.md §2, §3; P2 moved them here from the
  * status bar), who else has a course open (docs/course-editor.md §11) and the help popover. It sits in `MapPanel`'s toolbar row, so it stays
  * in the fullscreen subtree; zoom and fullscreen are the viewer's and the
@@ -19,6 +21,8 @@ import type { ExportState } from "../../lib/editor/export-menu";
 import { ExportMenu } from "./ExportMenu";
 import { SaveIndicator, StatsButton } from "./EditorStatus";
 import type { SaveState, StatusInput } from "../../lib/editor/status";
+import { MapInfoButton } from "./MapInfoDialog";
+import type { MapInfoInput } from "../../lib/editor/map-info";
 
 export interface TopBarProps {
   courses: { id: number; name: string }[];
@@ -47,8 +51,10 @@ export interface TopBarProps {
   presence?: ReactNode;
   /** The autosave state (§3): always in sight. */
   save: SaveState;
-  /** The course-info popover's values (§2). */
-  status: StatusInput;
+  /** The course-info popover's values (§2); the map scale is the map-info dialog's (P6). */
+  status: Omit<StatusInput, "scale">;
+  /** The map-info dialog's values (§2, P6). */
+  map: MapInfoInput;
 }
 
 const MODES: { mode: EditorMode; key: "modeCourse" | "modeLayout" | "modeField"; slice?: string }[] = [
@@ -133,6 +139,7 @@ export function TopBar(p: TopBarProps) {
         onClick={p.onToggleCuts}
       />
       <ExportMenu state={p.exportState} onError={p.onExportError} />
+      <MapInfoButton map={p.map} />
       <StatsButton status={p.status} />
       <SaveIndicator save={p.save} />
       {p.presence}
