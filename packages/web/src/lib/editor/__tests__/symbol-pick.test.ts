@@ -25,13 +25,13 @@ function doc() {
       mapScale: 15000,
       georeferencing: { crs: null, paperOrigin: null },
       colours,
-      symbols: [
-        { code: "403.0", name: "Rough open land", kind: "area", render: { type: "area", id: "a", code: "403", name: "Rough open land", fill: YELLOW } },
+      symbols: ([
+        { code: "403.0", name: "Rough open land", kind: "area" as const, render: { type: "area" as const, id: "a", code: "403", name: "Rough open land", fill: YELLOW } },
         line("505.0", BLACK),
         line("999.0", BROWN),
-        { code: "821.0", name: "Name", kind: "text", render: { type: "text", id: "t", code: "821", name: "Name", fontFamily: "liberation-sans", fontSizeUm: 4000, colour: 0 } },
-        { code: "204.0", name: "Boulder", kind: "point", render: null },
-      ].map((s, i) => (i === 2 ? { ...s, hidden: true } : s)),
+        { code: "821.0", name: "Name", kind: "text" as const, render: { type: "text" as const, id: "t", code: "821", name: "Name", fontFamily: "liberation-sans", fontSizeUm: 4000, colour: 0 } },
+        { code: "204.0", name: "Boulder", kind: "point" as const, render: null },
+      ] as mapDocument.DocumentSymbolInput[]).map((s, i) => (i === 2 ? { ...s, hidden: true } : s)),
     },
     objects: [
       { symbolIdx: 0, type: T.area, sourceIndex: 0, coords: [0, 0, 4000, 0, 4000, 4000, 0, 4000], flags: [0, 0, 0, 0] },

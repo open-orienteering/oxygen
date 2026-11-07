@@ -1,16 +1,18 @@
 /**
  * The object inspector (docs/course-editor.md §7; 08 §4.5, §5.2): a
  * selected course object's kind props and scope, plus the filter region's
- * symbol picker — the document's symbols by their match (or source code),
- * or its colours, and `invert` ("show only these"). Every change is one
- * write (`courseObject.update`) and one undo entry; the page writes.
+ * symbol picker — the document's symbols grouped by heading
+ * (`symbol-groups.ts`), or its colours, the eyedropper, and `invert`
+ * ("show only these"). Every change is one write (`courseObject.update`)
+ * and one undo entry; the page writes.
  */
 
 import { useMemo, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { vertexRule } from "../../../lib/editor/geometry-edit";
 import { TONER_MARGIN_MM } from "../tools/toner-saver";
-import type { course, mapDocument } from "@oxygen/shared";
+import { render, type course, type mapDocument } from "@oxygen/shared";
+import { filterGroups, groupState, toggleGroup, type SymbolGroup } from "../../../lib/editor/symbol-groups";
 
 type Obj = course.CourseObject;
 type Props = Obj["props"];
@@ -26,6 +28,16 @@ export interface ObjectSectionProps {
   onScope: (scope: Obj["scope"]) => void;
   onRegenerate?: () => void;
   onDelete: () => void;
+  /** A filter region's grouped symbol list and eyedropper (§6.4, §7); absent until the document is loaded. */
+  filter?: {
+    groups: SymbolGroup[];
+    swatchUrl: (g: SymbolGroup) => string | null;
+    /** The eyedropper is armed. */
+    picking: boolean;
+    onPickToggle: () => void;
+    /** What the last pick did: added `label`, or nothing under the click. */
+    note: { kind: "added"; label: string } | { kind: "miss" } | null;
+  };
 }
 
 const FIELD = "w-full px-1.5 py-1 border border-slate-200 rounded-md bg-white text-xs";
@@ -110,7 +122,7 @@ function KindProps(p: ObjectSectionProps) {
         </div>
       );
     case "filter_region":
-      return <FilterProps props={o.props} document={p.document} onProps={p.onProps} />;
+      return <FilterProps props={o.props} document={p.document} filter={p.filter} onProps={p.onProps} />;
     default:
       return null;
   }
@@ -135,24 +147,42 @@ function TextProps({ props, onProps }: { props: Extract<Obj, { kind: "text" }>["
 
 type Pick3 = "all" | "symbols" | "colours";
 
-function FilterProps({ props, document, onProps }: { props: FilterProps; document: ObjectSectionProps["document"]; onProps: (p: Props) => void }) {
+/** A ref callback setting a checkbox's `indeterminate` (React has no prop for it). */
+const indeterminate = (on: boolean) => (el: HTMLInputElement | null) => { if (el) el.indeterminate = on; };
+
+function FilterProps({ props, document, filter, onProps }: { props: FilterProps; document: ObjectSectionProps["document"]; filter: ObjectSectionProps["filter"]; onProps: (p: Props) => void }) {
   const { t } = useTranslation("editor");
   const [query, setQuery] = useState("");
+  const [otherOpen, setOtherOpen] = useState(false);
   const by: Pick3 = props.symbols === "all" ? "all" : Array.isArray(props.symbols) ? "symbols" : "colours";
-  const picked = new Set(Array.isArray(props.symbols) ? props.symbols : typeof props.symbols === "object" ? props.symbols.colours : []);
-  const symbols = useMemo(() => (document?.symbols ?? []).map((s, index) => ({
-    index,
-    code: s.code,
-    name: s.name,
-    // "through their matches" (08 §5.3): the canonical id an applied match draws, else the source code.
-    match: s.match?.canonicalId && s.match.state === "auto" ? s.match.canonicalId : null,
-  })).filter((s) => !query || `${s.code} ${s.name} ${s.match ?? ""}`.toLowerCase().includes(query.toLowerCase())), [document, query]);
+  const pickedList = Array.isArray(props.symbols) ? props.symbols : typeof props.symbols === "object" ? props.symbols.colours : [];
+  const picked = new Set(pickedList);
+  // One entry per heading (§7 "filter region"): variants and duplicates merged, hidden / unused symbols left out.
+  const shown = useMemo(() => filterGroups(filter?.groups ?? [], query), [filter?.groups, query]);
+  const main = shown.filter((g) => !g.other);
+  const other = shown.filter((g) => g.other);
   const set = (next: Partial<FilterProps>) => onProps({ ...props, ...next });
-  const toggle = (i: number) => {
+  const toggleColour = (i: number) => {
     const next = new Set(picked);
     if (next.has(i)) next.delete(i); else next.add(i);
-    const list = [...next].sort((a, b) => a - b);
-    set({ symbols: by === "colours" ? { colours: list } : list });
+    set({ symbols: { colours: [...next].sort((a, b) => a - b) } });
+  };
+  const row = (g: SymbolGroup) => {
+    const state = groupState(g, picked);
+    const src = filter?.swatchUrl(g) ?? null;
+    return (
+      <li key={g.code}>
+        <label className="flex items-center gap-1.5 px-1.5 py-0.5 hover:bg-slate-50" title={g.members.map((i) => document?.symbols[i]?.code).join(", ")}>
+          <input type="checkbox" data-testid={`editor-filter-symbol-${g.code}`} data-members={g.members.join(",")} checked={state === "all"}
+            ref={indeterminate(state === "some")} onChange={() => set({ symbols: toggleGroup(pickedList, g) })} />
+          {src
+            ? <img data-testid="editor-filter-swatch" src={src} alt="" loading="lazy" className="w-5 h-5 shrink-0 object-contain" />
+            : <span className="w-5 h-5 shrink-0" />}
+          <span className="font-mono text-[10px] text-slate-500">{g.code}</span>
+          <span className="truncate">{g.name}</span>
+        </label>
+      </li>
+    );
   };
   return (
     <div className="space-y-1.5">
@@ -174,19 +204,33 @@ function FilterProps({ props, document, onProps }: { props: FilterProps; documen
         <input data-testid="editor-filter-invert" type="checkbox" checked={!!props.invert} onChange={(e) => set({ invert: e.target.checked || undefined })} />
         {t("filterInvert")}
       </label>
+      {filter && (
+        <div>
+          <button type="button" data-testid="editor-filter-pick" aria-pressed={filter.picking} onClick={filter.onPickToggle}
+            className={`w-full px-2 py-1 rounded-md border cursor-pointer ${filter.picking ? "border-purple-400 bg-purple-50 text-purple-800" : "border-slate-200 text-slate-700 hover:bg-slate-50"}`}>
+            {t("filterPick")}
+          </button>
+          {filter.picking && <p data-testid="editor-filter-pick-hint" className="mt-0.5 text-[10px] text-slate-500">{t("filterPickHint")}</p>}
+          {filter.note && <p data-testid="editor-filter-pick-note" data-kind={filter.note.kind} className={`mt-0.5 text-[10px] ${filter.note.kind === "miss" ? "text-amber-700" : "text-slate-600"}`}>
+            {filter.note.kind === "miss" ? t("filterPickMiss") : t("filterPickAdded", { label: filter.note.label })}
+          </p>}
+        </div>
+      )}
       {by === "symbols" && (
         <div>
           <input data-testid="editor-filter-search" className={FIELD} placeholder={t("filterSearch")} value={query} onChange={(e) => setQuery(e.target.value)} />
-          <ul className="mt-1 max-h-40 overflow-y-auto border border-slate-100 rounded-md">
-            {symbols.map((s) => (
-              <li key={s.index}>
-                <label className="flex items-center gap-1.5 px-1.5 py-0.5 hover:bg-slate-50">
-                  <input type="checkbox" data-testid={`editor-filter-symbol-${s.code}`} checked={picked.has(s.index)} onChange={() => toggle(s.index)} />
-                  <span className="font-mono text-[10px] text-slate-500">{s.match ?? s.code}</span>
-                  <span className="truncate">{s.name}</span>
-                </label>
+          <ul data-testid="editor-filter-symbols" className="mt-1 max-h-48 overflow-y-auto border border-slate-100 rounded-md">
+            {main.map(row)}
+            {other.length > 0 && (
+              <li>
+                <button type="button" data-testid="editor-filter-other" aria-expanded={otherOpen || !!query} onClick={() => setOtherOpen((v) => !v)}
+                  className="w-full text-left px-1.5 py-0.5 text-[10px] text-slate-500 hover:bg-slate-50 cursor-pointer">
+                  {otherOpen || query ? "▾" : "▸"} {t("filterOther", { count: other.length })}
+                </button>
+                {(otherOpen || !!query) && <ul>{other.map(row)}</ul>}
               </li>
-            ))}
+            )}
+            {shown.length === 0 && <li className="px-1.5 py-0.5 text-[10px] text-slate-400">{t("filterNoMatch")}</li>}
           </ul>
         </div>
       )}
@@ -195,7 +239,8 @@ function FilterProps({ props, document, onProps }: { props: FilterProps; documen
           {(document?.colours ?? []).map((c, index) => (
             <li key={index}>
               <label className="flex items-center gap-1.5 px-1.5 py-0.5 hover:bg-slate-50">
-                <input type="checkbox" data-testid={`editor-filter-colour-${index}`} checked={picked.has(index)} onChange={() => toggle(index)} />
+                <input type="checkbox" data-testid={`editor-filter-colour-${index}`} checked={picked.has(index)} onChange={() => toggleColour(index)} />
+                <span className="w-3 h-3 shrink-0 rounded-sm border border-slate-300" style={{ background: render.cmykToHex(c.cmyk) }} />
                 <span className="truncate">{c.name}</span>
               </label>
             </li>

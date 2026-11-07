@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
-import type { mapDocument } from "@oxygen/shared";
-import { filterGroups, groupOfSymbol, groupState, symbolGroups, toggleGroup } from "../symbol-groups";
+import { symbolLibrary, type mapDocument } from "@oxygen/shared";
+import { filterGroups, groupOfSymbol, groupState, swatchUrl, symbolGroups, toggleGroup } from "../symbol-groups";
 
 type Sym = mapDocument.DocumentSymbol;
 
@@ -48,20 +48,19 @@ describe("filter-region symbol groups (docs/course-editor.md §7, filter region)
     expect(symbolGroups(header, objects, "sv-SE").find((g) => g.code === "601")?.name).toBe("Magnetisk nordlinje");
   });
 
-  it("hidden, unused and missing symbols are not listed", () => {
+  it("hidden, unused, missing and proxy-drawn symbols are not listed", () => {
     const listed = groups.flatMap((g) => g.members);
-    for (const i of [6, 7, 9]) expect(listed).not.toContain(i);
+    for (const i of [6, 7, 9, 10]) expect(listed).not.toContain(i);
   });
 
   it("frames, graphics and codes outside the library fold under Other, after the library headings in code order", () => {
-    expect(groups.map((g) => g.code)).toEqual(["101", "505", "520", "601", "850", "graphic"]);
+    expect(groups.map((g) => g.code)).toEqual(["101", "505", "601", "850", "graphic"]);
     expect(groups.filter((g) => g.other).map((g) => g.code)).toEqual(["850", "graphic"]);
   });
 
-  it("swatches: the library entry for an applied heading (its most used member), else the document symbol; none without a drawing", () => {
+  it("swatches: the library entry for an applied heading (its most used member), else the document symbol", () => {
     expect(by("601")?.swatch).toEqual({ kind: "library", canonicalId: "ISOM2017-2:601.b" });
     expect(by("505")?.swatch).toEqual({ kind: "document", idx: 0 });
-    expect(by("520")?.swatch).toBeNull();
   });
 
   it("search matches the heading, the library names and the members' source codes and names", () => {
@@ -90,5 +89,11 @@ describe("filter-region symbol groups (docs/course-editor.md §7, filter region)
   it("finds the group of a document symbol (the eyedropper's hit)", () => {
     expect(groupOfSymbol(groups, 5)?.code).toBe("101");
     expect(groupOfSymbol(groups, 6)).toBeNull();
+  });
+
+  it("swatch images: the versioned library preview, or the document symbol's preview scoped to the event", () => {
+    expect(swatchUrl({ kind: "library", canonicalId: "ISOM2017-2:601.b" }, "ab", "ev")).toBe(`/api/library/ISOM2017-2/${symbolLibrary.SYMBOL_LIBRARY_VERSION}/601.b.png`);
+    expect(swatchUrl({ kind: "document", idx: 3 }, "ab", "ev")).toBe("/api/map-documents/ab/symbols/3.png?event=ev");
+    expect(swatchUrl(null, "ab", "ev")).toBeNull();
   });
 });

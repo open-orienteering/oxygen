@@ -12,13 +12,16 @@
  * §6.5: a match is a reviewable mapping, never a rewrite).
  *
  * Not listed: hidden symbols (OCAD's hidden status, OMAP helpers), symbols
- * no object uses, and `missing` symbols (drawn through a proxy, which a
- * region cannot pick) — none of them can change what a region hides.
+ * no object uses, and symbols drawn through a proxy (`missing` ones, and
+ * those with neither a drawing nor an applied match: a region selects by
+ * the drawn symbol, never the proxy) — none of them can change what a
+ * region hides.
  * Folded under "Other": headings outside the document's library (club
  * codes, frames, legends), `graphic` entries and rectangles.
  */
 
 import { mapDocument, mapImport, symbolLibrary } from "@oxygen/shared";
+import { scopePreviewUrl } from "../map-review";
 
 type Header = Pick<mapDocument.MapDocumentHeader, "symbols" | "library">;
 
@@ -70,6 +73,7 @@ export function symbolGroups(header: Header, objectsPerSymbol: ArrayLike<number>
     if (s.hidden || s.origin === "missing" || !(objectsPerSymbol[i] > 0)) return;
     const match = mapDocument.isAppliedMatch(s.match) ? s.match : null;
     const entry = match ? symbolLibrary.getLibraryEntry(match.canonicalId) : undefined;
+    if (!s.render && !entry) return;
     const code = entry?.code ?? headingOfSource(s.code);
     let g = byCode.get(code);
     if (!g) byCode.set(code, (g = { members: [], applied: [] }));
@@ -88,7 +92,7 @@ export function symbolGroups(header: Header, objectsPerSymbol: ArrayLike<number>
     const drawn = applied ? g.applied.reduce((a, b) => (objectsPerSymbol[b.idx] > objectsPerSymbol[a.idx] ? b : a)) : null;
     const withRender = g.members.filter((i) => header.symbols[i].render);
     const most = withRender.length > 0 ? withRender.reduce((a, b) => (objectsPerSymbol[b] > objectsPerSymbol[a] ? b : a)) : null;
-    const name = applied && heading ? (sv ? heading.name.sv : heading.name.en) : syms[0].name;
+    const name = applied && heading ? (sv && heading.name.sv ? heading.name.sv : heading.name.en) : syms[0].name;
     out.push({
       code,
       name,
@@ -125,4 +129,16 @@ export function toggleGroup(picked: readonly number[], g: SymbolGroup): number[]
 /** The listed group holding document symbol `idx`, or null (hidden, unused, missing). */
 export function groupOfSymbol(groups: readonly SymbolGroup[], idx: number): SymbolGroup | null {
   return groups.find((g) => g.members.includes(idx)) ?? null;
+}
+
+/**
+ * The swatch image of a group: the server's library preview (club-wide,
+ * versioned) or the document symbol's preview, scoped to the event
+ * (docs/map-storage.md §4.5, `scopePreviewUrl`).
+ */
+export function swatchUrl(swatch: SymbolGroup["swatch"], documentHash: string, nameId: string | null): string | null {
+  if (!swatch) return null;
+  if (swatch.kind === "document") return scopePreviewUrl(`/api/map-documents/${documentHash}/symbols/${swatch.idx}.png`, nameId);
+  const colon = swatch.canonicalId.indexOf(":");
+  return `/api/library/${swatch.canonicalId.slice(0, colon)}/${symbolLibrary.SYMBOL_LIBRARY_VERSION}/${swatch.canonicalId.slice(colon + 1)}.png`;
 }
