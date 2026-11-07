@@ -302,19 +302,29 @@ export function courseChecks(input: CourseChecksInput): CourseCheck[] {
     if (structure.orderMode === "ordered") {
       const obstacles = [...(input.document?.obstacles ?? []), ...objectObstacles(input.objects ?? [])];
       const boxes = obstacles.map((o) => boxOf(o.points));
-      const seq = visits.filter((v) => positioned(v.site)).map((v) => v.site);
+      const seqVisits = visits.filter((v) => positioned(v.site));
+      const seq = seqVisits.map((v) => v.site);
       for (let i = 1; i < seq.length; i++) {
         const a = seq[i - 1], b = seq[i];
-        const legBox = boxOf([a, b]);
+        // The leg as drawn (§10.1): through its bends, first hit by distance along them.
+        const pts: MapPoint[] = [a, ...(seqVisits[i].item.leg?.bends ?? []), b];
+        const legBox = boxOf(pts);
         const leg = { from: a.id, to: b.id, index: i - 1 };
         for (const kind of ["oob", "uncrossable"] as const) {
           let first: { at: MapPoint; t: number; code: string } | null = null;
           obstacles.forEach((o, k) => {
             if (o.kind !== kind || !boxesMeet(legBox, boxes[k])) return;
-            const at = legHit(a, b, o);
-            if (!at) return;
-            const t = Math.hypot(at.x - a.x, at.y - a.y);
-            if (!first || t < first.t) first = { at, t, code: o.code };
+            let start = 0;
+            for (let j = 1; j < pts.length; j++) {
+              const p = pts[j - 1], q = pts[j];
+              const at = legHit(p, q, o);
+              if (at) {
+                const t = start + Math.hypot(at.x - p.x, at.y - p.y);
+                if (!first || t < first.t) first = { at, t, code: o.code };
+                break;
+              }
+              start += Math.hypot(q.x - p.x, q.y - p.y);
+            }
           });
           if (!first) continue;
           const hit = first as { at: MapPoint; t: number; code: string };

@@ -84,6 +84,45 @@ describe("courseLayer + courseRenderInput → one symbolise call", () => {
   });
 });
 
+describe("leg styles (§10.1, F1)", () => {
+  const styled = () =>
+    courseLayer(layerInput({
+      structure: linear(undefined, {
+        items: [{ siteId: "S" }, { siteId: "31", leg: { style: "marked_route", bends: [{ x: 25, y: 20 }] } }, { siteId: "32", leg: { style: "none" } }, { siteId: "33" }],
+      }),
+    }));
+
+  it("a marked route draws 707 through its bends: upper purple, dashed, over black", () => {
+    const layer = styled();
+    const route = layer.objects.filter((o) => o.ref.kind === "leg" && o.ref.id === "c1:0");
+    expect(route).toHaveLength(1);
+    expect(layer.symbols[route[0].symbolIdx].id).toContain("707");
+    // The bend is a vertex of the drawn path.
+    const c = route[0].path.coords;
+    expect([...c].some((v, i) => i % 2 === 0 && v === 25000 && c[i + 1] === 20000)).toBe(true);
+    expect(layer.symbols[layer.objects.find((o) => o.ref.kind === "leg" && o.ref.id === "c1:2")!.symbolIdx].id).toContain("705");
+
+    const input = courseRenderInput(isomDocument(), layer);
+    const { stream } = symbolise({ ...input, fonts: fonts() });
+    const routeIdx = layer.objects.indexOf(route[0]) + input.courseObjectOffset;
+    const passes = stream.passes.map((p, k) => ({ p, k })).filter(({ k }) => stream.objectIdx[k] === routeIdx);
+    expect(passes.length).toBeGreaterThan(0);
+    expect(passes.every(({ p }) => colourId(layer, p.colour) === "purple-upper")).toBe(true);
+    const slices = passes.reduce((n, { p }) => n + (p.kind === "stroke" ? (p.slices?.length ?? 1) : 0), 0);
+    expect(slices).toBeGreaterThan(3);
+    const colours = stream.passes.map((p) => colourId(layer, p.colour));
+    expect(Math.min(...passes.map(({ k }) => k))).toBeGreaterThan(colours.lastIndexOf("black100"));
+  });
+
+  it("a none leg draws nothing; its number and the others' are unchanged", () => {
+    const layer = styled();
+    expect(layer.objects.filter((o) => o.ref.kind === "leg" && o.ref.id === "c1:1")).toEqual([]);
+    expect(layer.derivation.courses[0].legs[1].pieces.length).toBeGreaterThan(0);
+    expect(layer.derivation.sites.find((s) => s.id === "32")!.label!.text).toBe("2");
+    expect(layer.objects.filter((o) => o.ref.kind === "number").map((o) => o.text)).toEqual(["1", "2", "3"]);
+  });
+});
+
 describe("filter regions (map-rendering §4.11)", () => {
   const square = [{ x: 20, y: -5 }, { x: 30, y: -5 }, { x: 30, y: 25 }, { x: 20, y: 25 }];
   const hole = [{ x: 24, y: 0 }, { x: 26, y: 0 }, { x: 26, y: 2 }];

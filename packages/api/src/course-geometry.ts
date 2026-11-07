@@ -27,6 +27,8 @@ export interface GeometrySeqControl {
   type: "Start" | "Control" | "Finish";
   xMm: number;
   yMm: number;
+  /** The stored leg into this entry (bends, style; course-layer.md §10.1). */
+  leg?: course.CourseLegProps;
 }
 
 /**
@@ -49,7 +51,9 @@ const KIND = { Start: "start", Control: "control", Finish: "finish" } as const;
 /**
  * The course layer of an editor course over its sequence (course-layer.md
  * §4.1): one item per entry (`role` = the entry's type) over the rows as
- * sites, without automatic cuts (they do not change a leg's length).
+ * sites, without automatic cuts (they do not change a leg's length). A
+ * leg runs through its stored bends (§10.1); its style, gaps and corridor
+ * never change its length.
  * Unpositioned controls are skipped by the layer.
  */
 export function editorCourseLayer(
@@ -60,7 +64,7 @@ export function editorCourseLayer(
   const sites = new Map<string, course.CourseSite>();
   for (const c of seq) sites.set(c.id, { id: c.id, code: c.code, kind: KIND[c.type], x: c.xMm, y: c.yMm });
   return course.courseLayer({
-    structure: { version: 1, id: courseId, orderMode, items: seq.map((c) => ({ siteId: c.id, role: KIND[c.type] })) },
+    structure: { version: 1, id: courseId, orderMode, items: seq.map((c) => ({ siteId: c.id, role: KIND[c.type], ...(c.leg?.bends?.length ? { leg: { bends: c.leg.bends } } : {}) })) },
     sites: [...sites.values()],
     objects: [],
     appearance: {},
@@ -76,18 +80,12 @@ export function hasPositionedItems(layer: Pick<course.CourseLayer, "derivation">
 
 /**
  * Leg lengths (paper mm) of the layer's first course: its derived legs,
- * centre to centre between consecutive positioned items (none for free
- * order). The `legs` / `lengthM` source since E6 (course-layer.md §4.1).
+ * centre to centre between consecutive positioned items through the
+ * leg's bends (none for free order). The `legs` / `lengthM` source since
+ * E6 (course-layer.md §4.1); a straight leg is the pre-E6 formula.
  */
 export function legDistancesMm(layer: Pick<course.CourseLayer, "derivation">): number[] {
-  const legs = layer.derivation.courses[0]?.legs ?? [];
-  return legs.map((leg) => {
-    const a = leg.points[0];
-    const b = leg.points[leg.points.length - 1];
-    const dx = b.x - a.x;
-    const dy = b.y - a.y;
-    return Math.sqrt(dx * dx + dy * dy);
-  });
+  return (layer.derivation.courses[0]?.legs ?? []).map((leg) => course.legLengthMm(leg.points));
 }
 
 /** Total course length in terrain meters, rounded (mm × scale / 1000). */
@@ -177,8 +175,17 @@ export async function loadCourseSequences(
     const stored = course.structure ? courseStructureSchema.safeParse(course.structure) : null;
     let byId: Map<string, Row>;
     let ccIds: string[] = [];
+    // The stored legs into a site, by "<previous site>><site>" over consecutive items (the
+    // `carryLegs` convention: a leg is the two sites it joins), in visit order, so a pair
+    // the course runs twice takes each visit's own leg (course-layer.md §4.1, §10.1).
+    const legsByKey = new Map<string, Array<course.CourseLegProps | undefined>>();
     if (stored?.success) {
       const items = structureControlItems(stored.data);
+      items.forEach((item, i) => {
+        if (i === 0) return;
+        const key = `${items[i - 1].siteId}>${item.siteId}`;
+        legsByKey.set(key, [...(legsByKey.get(key) ?? []), item.leg]);
+      });
       // A soft-deleted site drops out (an explicit start then falls back
       // to the default, as `startName` does).
       const rows = await db.control.findMany({
@@ -217,6 +224,15 @@ export async function loadCourseSequences(
 
     if (finish) {
       seq.push({ id: finish.id, code: displayCode(finish), type: "Finish", xMm: finish.xpos, yMm: finish.ypos });
+    }
+
+    const visits = new Map<string, number>();
+    for (let i = 1; i < seq.length; i++) {
+      const key = `${seq[i - 1].id}>${seq[i].id}`;
+      const n = visits.get(key) ?? 0;
+      visits.set(key, n + 1);
+      const leg = legsByKey.get(key)?.[n];
+      if (leg) seq[i].leg = leg;
     }
 
     out.set(courseUuid, { seq, orderMode: course.orderMode });

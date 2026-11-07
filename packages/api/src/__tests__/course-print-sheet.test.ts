@@ -92,6 +92,16 @@ describe("resolveSheet", () => {
     expect(bad.items.every((i) => i.leg === undefined)).toBe(true);
   });
 
+  it("the whole stored leg reaches the sheet: style and bends print with the gaps (F1, course-layer.md §10.1)", () => {
+    const leg = { style: "marked_route" as const, bends: [{ x: 12, y: 3 }], gaps: [{ from: 0.4, to: 0.6 }] };
+    const input = base({
+      course: { ...base().course!, controls: uuidControls },
+      structure: stored([{ siteId: U31, leg: { style: "none" as const } }, { siteId: U32, leg }]),
+    });
+    const one = resolveSheet(input).sheet.course.structure as { items: { siteId: string; leg?: unknown }[] };
+    expect(one.items.map((i) => [i.siteId, i.leg])).toEqual([["S1", undefined], [U31, undefined], [U32, leg], ["F1", undefined]]);
+  });
+
   it("a structure whose first site is not in the layout (an explicit start the layout does not draw) aligns on the first shared site", () => {
     const gaps = [{ from: 0.2, to: 0.3 }];
     const input = base({

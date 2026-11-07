@@ -57,8 +57,8 @@ describe("merge, markers, length, locate", () => {
     const derivation: course.CourseDerivation = {
       sites: [],
       courses: [{ id: "A", orderMode: "ordered", sequence: [], legs: [
-        { from: "1", to: "31", points: [{ x: 0, y: 0 }, { x: 3, y: 4 }], gaps: [], pieces: [] },
-        { from: "31", to: "32", points: [{ x: 3, y: 4 }, { x: 3, y: 5 }, { x: 4, y: 5 }], gaps: [], pieces: [] },
+        { from: "1", to: "31", points: [{ x: 0, y: 0 }, { x: 3, y: 4 }], style: "line", gaps: [], pieces: [] },
+        { from: "31", to: "32", points: [{ x: 3, y: 4 }, { x: 3, y: 5 }, { x: 4, y: 5 }], style: "line", gaps: [], pieces: [] },
       ] }],
     };
     expect(legsLengthM(derivation, 10000)).toBeCloseTo(70, 9);

@@ -118,6 +118,25 @@ describe("legDistancesMm (from the course layer, E6)", () => {
   });
 });
 
+describe("legs along their bends (F1, course-layer.md §4.1, §10.1)", () => {
+  const bent = (leg: GeometrySeqControl["leg"]): GeometrySeqControl[] => [
+    { id: "s", code: "S1", type: "Start", xMm: 10, yMm: 10 },
+    { id: "a", code: "31", type: "Control", xMm: 40, yMm: 10, leg },
+    { id: "f", code: "F1", type: "Finish", xMm: 40, yMm: 50 },
+  ];
+
+  it("measures a leg through its bends; style and corridor never change it", () => {
+    expect(legDistancesMm(editorCourseLayer("c1", bent(undefined)))).toEqual([30, 40]);
+    // (10,10) → (10,50) → (40,10): 40 + 50.
+    expect(legDistancesMm(editorCourseLayer("c1", bent({ bends: [{ x: 10, y: 50 }] })))).toEqual([90, 40]);
+    for (const style of ["line", "marked_route", "none"] as const) {
+      expect(legDistancesMm(editorCourseLayer("c1", bent({ style, bends: [{ x: 10, y: 50 }] })))).toEqual([90, 40]);
+    }
+    expect(legDistancesMm(editorCourseLayer("c1", bent({ corridor: { widthM: 50, edge: true, whiteMm: 1, whiteOpacity: 1 } })))).toEqual([30, 40]);
+    expect(courseLengthM(legDistancesMm(editorCourseLayer("c1", bent({ bends: [{ x: 10, y: 50 }] }))), 10000)).toBe(1300);
+  });
+});
+
 describe("courseLengthM", () => {
   it("converts paper mm to terrain meters via the map scale", () => {
     // 100 mm on a 1:10000 map = 1000 m in terrain.

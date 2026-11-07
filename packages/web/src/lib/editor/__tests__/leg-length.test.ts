@@ -29,4 +29,17 @@ describe("leg length label (docs/course-editor.md §6.1)", () => {
     expect(dragLegShapes(["S", "1"], pos, "7", 10000)).toEqual([]);
     expect(dragLegShapes(["S", "1"], pos, "1", 10000)[0]).toMatchObject({ testId: "editor-leg-length" });
   });
+
+  it("measures and labels a bent leg along its bends (course-layer.md §10.1, F1)", () => {
+    // (0,0) → (0,30) → (40,30): 30 + 40 mm = 700 m at 1:10 000; half way is 5 mm past the bend.
+    const via = [{ x: 0, y: 30 }];
+    expect(legLengthLabel({ x: 0, y: 0 }, { x: 40, y: 30 }, 10000, via)).toBe("700 m");
+    expect(legMidpoint({ x: 0, y: 0 }, { x: 40, y: 30 }, via)).toEqual({ x: 5, y: 30 });
+    const pos = new Map(Object.entries({ S: { x: 0, y: 0 }, 1: { x: 40, y: 30 }, F: { x: 40, y: 0 } }));
+    const bendsInto = [undefined, via, [{ x: 60, y: 30 }, { x: 60, y: 0 }]];
+    const texts = dragLegShapes(["S", "1", "F"], pos, "1", 10000, bendsInto).map((s) => (s.kind === "text" ? [s.text, s.x, s.y] : null));
+    // In: 700 m; out: 1 → (60,30) → (60,0) → F = 20 + 30 + 20 mm = 700 m, half way at (60, 15).
+    expect(texts).toEqual([["700 m", 5, 30], ["700 m", 60, 15]]);
+    expect(dragLegShapes(["S", "1", "F"], pos, "1", 10000)).toHaveLength(2);
+  });
 });

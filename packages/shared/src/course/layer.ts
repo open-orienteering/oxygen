@@ -52,7 +52,10 @@ export function courseLayer(input: CourseLayerInput): CourseLayer {
 
   for (const c of derivation.courses) {
     c.legs.forEach((leg, i) => {
-      for (const piece of leg.pieces) if (piece.length >= 2) objects.push({ symbolIdx: idx.leg, path: line(piece), ref: { kind: "leg", id: `${c.id}:${i}` } });
+      // §10.1: 705, 707 along the leg, or no line (the derivation keeps its pieces for the labels).
+      if (leg.style === "none") return;
+      const symbolIdx = leg.style === "marked_route" ? idx.markedRoute : idx.leg;
+      for (const piece of leg.pieces) if (piece.length >= 2) objects.push({ symbolIdx, path: line(piece), ref: { kind: "leg", id: `${c.id}:${i}` } });
     });
   }
 

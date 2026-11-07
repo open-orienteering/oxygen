@@ -1,9 +1,9 @@
 /** The course-setting rules as geometry (course-layer.md §3.2–3.5). */
 
 import { describe, expect, it } from "vitest";
-import { deriveCourse, type CourseMetrics } from "../derive.js";
+import { deriveCourse, legLengthMm, type CourseMetrics } from "../derive.js";
 import { SITES, layerInput, linear, site } from "./helpers.js";
-import type { CourseLayerInput } from "../types.js";
+import type { CourseLayerInput, CourseLegProps } from "../types.js";
 
 /** ISOM at 1:15 000: R 2.5, finish 3.0, start circumradius 3.46, em 4 / (1409/2048). */
 const M: CourseMetrics = { circleRadiusMm: 2.5, finishRadiusMm: 3, startRadiusMm: 6 / Math.sqrt(3), numberEmMm: 4 * (2048 / 1409), lineWidthMm: 0.35 };
@@ -71,6 +71,88 @@ describe("legs (§3.2)", () => {
     const d = derive({ structure: linear(undefined, { orderMode: "free_order" }) });
     expect(d.courses[0].legs).toEqual([]);
     expect(d.sites.find((s) => s.id === "32")!.label!.text).toBe("32");
+  });
+});
+
+/** S → 31 with `leg` on 31, then 32. */
+const withLeg = (leg: CourseLegProps, over: Partial<CourseLayerInput> = {}) =>
+  derive({ structure: linear(undefined, { items: [{ siteId: "S" }, { siteId: "31", leg }, { siteId: "32" }] }), ...over }).courses[0].legs;
+const along = (pts: { x: number; y: number }[]) => legLengthMm(pts);
+const BEND = { x: 25, y: 20 };
+
+describe("bends and styles (§10.1, F1)", () => {
+  it("legLengthMm sums the polyline", () => {
+    expect(legLengthMm([{ x: 0, y: 0 }, { x: 3, y: 4 }])).toBe(5);
+    expect(legLengthMm([{ x: 0, y: 0 }, { x: 3, y: 4 }, { x: 3, y: 10 }])).toBe(11);
+    expect(legLengthMm([{ x: 1, y: 1 }])).toBe(0);
+  });
+
+  it("a bent leg is the polyline through its bends, clipped at both sites", () => {
+    const [leg] = withLeg({ bends: [BEND] });
+    expect(leg.points).toEqual([{ x: 10, y: 10 }, BEND, { x: 40, y: 10 }]);
+    expect(leg.style).toBe("line");
+    expect(leg.pieces).toHaveLength(1);
+    const piece = leg.pieces[0];
+    expect(piece).toContainEqual(BEND);
+    expect(dist(piece[0], SITES[0])).toBeCloseTo(M.startRadiusMm + 0.5, 6);
+    expect(dist(piece.at(-1)!, SITES[1])).toBeCloseTo(3, 6);
+  });
+
+  it("drops a bend on a site and repeated bends", () => {
+    const [leg] = withLeg({ bends: [{ x: 10, y: 10 }, BEND, BEND, { x: 40, y: 10 }] });
+    expect(leg.points).toEqual([{ x: 10, y: 10 }, BEND, { x: 40, y: 10 }]);
+  });
+
+  it("places stored gaps as fractions of the bent length", () => {
+    const [leg] = withLeg({ bends: [BEND], gaps: [{ from: 0.45, to: 0.55 }] });
+    expect(leg.pieces).toHaveLength(2);
+    const total = along(leg.points);
+    // The bend is the polyline's mid-length: the gap is centred on it, not on the chord's midpoint.
+    expect(dist(leg.pieces[0].at(-1)!, BEND)).toBeCloseTo(0.05 * total, 6);
+    expect(dist(leg.pieces[1][0], BEND)).toBeCloseTo(0.05 * total, 6);
+    for (const p of leg.pieces) expect(p).not.toContainEqual(BEND);
+  });
+
+  it("keeps a piece whole through a bend just after a gap", () => {
+    const total = along([{ x: 10, y: 10 }, BEND, { x: 40, y: 10 }]);
+    const toBend = Math.hypot(15, 10);
+    const [leg] = withLeg({ bends: [BEND], gaps: [{ from: 0.2, to: (toBend - 0.5) / total }] });
+    expect(leg.pieces).toHaveLength(2);
+    expect(leg.pieces[1]).toContainEqual(BEND);
+    expect(dist(leg.pieces[1][0], BEND)).toBeCloseTo(0.5, 6);
+  });
+
+  it("draws nothing within a site's clearance, a bend inside it included", () => {
+    // A drawn control 1 mm from the bend (all controls): both segments are cut, the leg splits there.
+    const mid = site("mid", "control", 25, 10);
+    const near = { x: 25, y: 11 };
+    const [leg] = withLeg({ bends: [near] }, { sites: [...SITES, mid], viewOptions: { allControls: true } });
+    expect(leg.pieces).toHaveLength(2);
+    for (const piece of leg.pieces) {
+      for (const p of piece) expect(dist(p, mid)).toBeGreaterThanOrEqual(3 - 1e-9);
+      expect(along(piece)).toBeGreaterThan(1);
+    }
+    expect(leg.pieces.flat()).not.toContainEqual(near);
+    // A bend inside the leg's own end site: the stretch into it is not drawn.
+    const [, into] = derive({ structure: linear(undefined, { items: [{ siteId: "S" }, { siteId: "31" }, { siteId: "32", leg: { bends: [{ x: 42, y: 10 }] } }] }) }).courses[0].legs;
+    expect(into.pieces).toHaveLength(1);
+    expect(dist(into.pieces[0][0], SITES[1])).toBeCloseTo(3, 6);
+  });
+
+  it("cuts a bent leg over a feature beside its bend", () => {
+    const [leg] = withLeg({ bends: [BEND] }, { cutFeatures: [{ x: 25, y: 20.2 }] });
+    expect(leg.gaps).toHaveLength(1);
+    expect(leg.gaps[0].from).toBeLessThan(0.5);
+    expect(leg.gaps[0].to).toBeGreaterThan(0.5);
+    expect(leg.pieces).toHaveLength(2);
+  });
+
+  it("resolves the style; a none leg keeps its pieces", () => {
+    expect(withLeg({ style: "marked_route" })[0].style).toBe("marked_route");
+    const none = withLeg({ style: "none", bends: [BEND] });
+    expect(none[0].style).toBe("none");
+    expect(none[0].pieces).toHaveLength(1);
+    expect(none[1].style).toBe("line");
   });
 });
 

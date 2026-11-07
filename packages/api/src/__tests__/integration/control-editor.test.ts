@@ -152,6 +152,59 @@ describe("course geometry regeneration", () => {
     expect(row?.legs).toMatch(/^\d+(;\d+)*;$/);
   });
 
+  it("course.setStructure with bends measures the legs along them; style never changes a length (F1)", async () => {
+    await caller.control.create({ codes: "171", xpos: 10, ypos: 10 });
+    await caller.control.create({ codes: "172", xpos: 40, ypos: 10 });
+    await caller.control.create({ codes: "173", xpos: 40, ypos: 50 });
+    const straight = await caller.course.create({ name: "Bends-straight" });
+    const bent = await caller.course.create({ name: "Bends-bent" });
+    await caller.course.setStructure({
+      courseId: straight.id,
+      structure: { version: 1, id: "s", orderMode: "ordered", items: [{ siteId: 171 }, { siteId: 172 }, { siteId: 173 }] },
+    });
+    await caller.course.setStructure({
+      courseId: bent.id,
+      structure: {
+        version: 1,
+        id: "b",
+        orderMode: "ordered",
+        // 171 → (10, 50) → 172: 40 + 50 mm instead of 30; 172 → 173 drawn as nothing, still 40 mm.
+        items: [{ siteId: 171 }, { siteId: 172, leg: { style: "marked_route", bends: [{ x: 10, y: 50 }] } }, { siteId: 173, leg: { style: "none" } }],
+      },
+    });
+    const rowOf = (seq: number) => ctx.db.course.findFirstOrThrow({ where: { eventId: ctx.eventId, seq } });
+    const s = await rowOf(straight.id);
+    const b = await rowOf(bent.id);
+    const m = (mm: number) => Math.round((mm * mapScale) / 1000);
+    const sl = s.legs!.split(";").filter(Boolean).map(Number);
+    const bl = b.legs!.split(";").filter(Boolean).map(Number);
+    expect(bl).toHaveLength(sl.length);
+    const i = sl.indexOf(m(30));
+    expect(i).toBeGreaterThanOrEqual(0);
+    expect(sl[i + 1]).toBe(m(40));
+    expect(bl[i]).toBe(m(90));
+    expect(bl[i + 1]).toBe(m(40));
+    expect(b.lengthM! - s.lengthM!).toBeGreaterThanOrEqual(m(60) - 1);
+    expect(b.lengthM! - s.lengthM!).toBeLessThanOrEqual(m(60) + 1);
+    expect(b.lengthSource).toBe("derived");
+
+    // A pair the course runs twice: each visit's own leg (the first bent, the second straight).
+    const twice = await caller.course.create({ name: "Bends-twice" });
+    await caller.course.setStructure({
+      courseId: twice.id,
+      structure: {
+        version: 1,
+        id: "t",
+        orderMode: "ordered",
+        items: [{ siteId: 171 }, { siteId: 172, leg: { bends: [{ x: 10, y: 50 }] } }, { siteId: 171 }, { siteId: 172 }],
+      },
+    });
+    const tl = (await rowOf(twice.id)).legs!.split(";").filter(Boolean).map(Number);
+    const k = tl.indexOf(m(90));
+    expect(k).toBeGreaterThanOrEqual(0);
+    expect(tl.slice(k, k + 3)).toEqual([m(90), m(30), m(30)]);
+  });
+
   it("moving a control rebuilds the geometry of courses that use it", async () => {
     await caller.control.create({ codes: "131", xpos: 0, ypos: 0.1 });
     await caller.control.create({ codes: "132", xpos: 40, ypos: 0.1 });

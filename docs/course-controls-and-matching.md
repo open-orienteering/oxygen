@@ -343,8 +343,17 @@ snapshot.
 Stored lengths of an edited course come from the course layer's derived
 legs (`course-layer.md` §4.1): centre to centre between consecutive
 positioned controls of the sequence `courseSequenceOf` reads (§6.2
-there), each leg `Math.round(mm × scale / 1000)`, the total rounded
-once; free-order courses keep the length the organiser typed.
+there), **along the leg's bends** when the stored structure has any
+(`LegProps.bends`, `course-layer.md` §10.1, F1), each leg
+`Math.round(mm × scale / 1000)`, the total rounded once; a leg's style
+(`line`, `marked_route`, `none`) and its corridor never change it;
+free-order courses keep the length the organiser typed.
+
+The export's `derived` recompute ("recomputed from the controls' current
+positions" above) stays straight, centre to centre (user, 2026-11-07): a
+course with bent legs exports a shorter `LegLength` / `Length` than it
+stores until the IOF / Purple Pen export row (F9) reads the layer's
+lengths. Nothing can author bends before the leg inspector (F3).
 
 | Test | Covers |
 |---|---|
@@ -352,6 +361,7 @@ once; free-order courses keep the length the organiser typed.
 | `packages/api/src/__tests__/integration/eventor-reentry.test.ts` "overwrites a 'file'…", "does not overwrite an editor-owned course…" | the sync's guard on `length_source` |
 | `packages/api/src/__tests__/integration/control-editor.test.ts` "course geometry regeneration", "course.clone" | `derived` on create, sequence edits, control moves and copy (the E6 migration's backfill test went with `geometry_source` in E5) |
 | `packages/api/src/__tests__/course-geometry.test.ts` "legDistancesMm (from the course layer, E6)" | layer-derived leg lengths = the pre-E6 formula bit for bit |
+| `packages/api/src/__tests__/course-geometry.test.ts` "legs along their bends", `integration/control-editor.test.ts` "course.setStructure with bends" | lengths along the bends; style and corridor change nothing (F1) |
 
 ## Description autodetect: map source
 

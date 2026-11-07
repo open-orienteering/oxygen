@@ -32,9 +32,21 @@ export interface CourseSite {
   circleGaps?: AngularGap[];
 }
 
-/** The stored `LegProps` the layer reads (08 §4.3): authored gaps of the leg *into* an item; they replace the automatic ones. */
+/** How a leg is drawn (course-layer.md §10.1): 705, 707 along it, or no line. */
+export type CourseLegStyle = "line" | "marked_route" | "none";
+
+/**
+ * The stored `LegProps` the layer reads (08 §4.3) of the leg *into* an
+ * item: authored gaps (replacing the automatic ones), style and bends
+ * (§10.1). `corridor` and `crossing` may ride along and are not read.
+ */
 export interface CourseLegProps {
+  /** Fractions of the leg's (bent) length. */
   gaps?: FractionGap[];
+  /** Default `line`. */
+  style?: CourseLegStyle;
+  /** Paper mm: the leg runs from the previous site through these to its own. */
+  bends?: MapPoint[];
 }
 
 export interface CourseItem {
@@ -173,9 +185,11 @@ export interface DerivedSite {
 export interface DerivedLeg {
   from: string;
   to: string;
-  /** Centre-to-centre polyline. */
+  /** Centre-to-centre polyline through the bends. */
   points: MapPoint[];
-  /** Effective gaps (authored or automatic). */
+  /** Resolved style (default `line`). */
+  style: CourseLegStyle;
+  /** Effective gaps (authored or automatic), fractions of the bent length. */
   gaps: FractionGap[];
   /** What is drawn: after gaps and circle clipping. */
   pieces: MapPoint[][];

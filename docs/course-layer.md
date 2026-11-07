@@ -161,7 +161,7 @@ automatic cuts; an empty list means automatic (decision log 2026-11-01,
 |---|---|---|
 | `structure` | `CourseStructure` (one course), an array (several highlighted courses: legs of each, codes as numbers) or `null` (no course) — the stored form is §6 | `{ version: 1, id, orderMode, items, labelOffsets? }`: `items` start … finish — the start by `startName` unless `firstAsStart`, `course_controls` in order, the finish by `finishControlId` unless `lastAsFinish`; from the stored structure when there is one (§6), else from the columns — one rule for every reader (`courseSequenceOf`, §6.2: `rebuildCourseLengths`, `course-export.ts`, the print layout); `labelOffsets` from `course_controls` |
 | `CourseItem` | `{ siteId, role?, leg?, numberHidden? }` — 08 §4.3's item, the leg being the leg *into* the item | `role` defaults to the site's kind (set it for `firstAsStart` / `lastAsFinish`); `numberHidden` from the visit's `number_hidden` |
-| `leg` | `{ gaps? }` — the stored `LegProps.gaps`, fractions along the leg | `LegProps.gaps` of the structure's item (§6.4: written by the importers and the backfill, by the editor from D5). The v1 interim input of slice C (`path`, `pieces`, item `circleGaps`, `extras`, read from an imported `ocd` course's GeoJSON) is **retired** by D1: nothing is read from the GeoJSON |
+| `leg` | `{ gaps?, style?, bends? }` — the stored `LegProps.gaps` (fractions along the leg, bends included), `style` (`line` \| `marked_route` \| `none`, default `line`) and `bends` (paper mm), §10.1; `corridor` and `crossing` are F2's / F4's and not read | `LegProps` of the structure's item (§6.4: written by the importers and the backfill, by the editor from D5). The v1 interim input of slice C (`path`, `pieces`, item `circleGaps`, `extras`, read from an imported `ocd` course's GeoJSON) is **retired** by D1: nothing is read from the GeoJSON |
 | `sites` | `{ id, code, kind: "control" \| "start" \| "finish", x, y, circleGaps? }[]` | `controls` rows; `code` the display code (first punch code, else name / seq); `circleGaps` = `controls.circle_gaps`, compass degrees |
 | `objects` | `(CourseMapObject \| CourseLayerObject)[]`: a sheet's layout objects (only `anchor: "map"` ones are drawn) and course objects (§8; told apart by `geometry`) | the sheet's layout objects (`course-maps` schema); the event's course objects in scope (§8.3) |
 | `appearance` | `{ circle?, line?, number?, numberStyle? }`, multipliers (1 = the spec) | `appearanceFromTemplate(template.appearance)`; the template's `purple` is not read (the purple is the stack's row) |
@@ -173,7 +173,7 @@ Free order is the structure's `orderMode` (a property of the course, not
 of the view). A site at the origin (0, 0) is unpositioned and skipped,
 legs connecting the remaining items (the editor's rule, `editorCourseLayer`).
 Gaps follow the rule above. Variations, map exchanges, crossing points, map-issue
-points and `LegProps` beyond `gaps` are not in v1 (Pending).
+points, corridors and crossings are not in v1 (Pending).
 
 ## 3. Geometry rules
 
@@ -189,7 +189,7 @@ The course-setting rules are symbolisation of the layer (04 §7), in
 | finish | 706 | circle, line |
 | number | 704 with `align: "centre"`; `knockout` → upper purple + 0.15 mm × factor halo in upper white | number → digit height and em |
 | leader | 705 at 0.7 × width in the number's colour | line |
-| leg | 705 | line |
+| leg | 705 (`style: "line"`, the default), 707 (`marked_route`), nothing (`none`) — §10.1 | line |
 | marked route / restricted line / forbidden route | 707 / 708 / 711 (ISSprOM has no 711: ISOM's, same factor) | line |
 | out-of-bounds area | 709; with a stroke 709.b (solid boundary), or 709.c (dashed) when the stroke is dashed | — |
 | dangerous area | **derived** from the resolved 709 / 709.b / 709.c: the same stripes again at +90° (a cross-hatch of 709's width, spacing and colour), the same boundary; ids `course:dangerous`, `.b`, `.c`, code `710` — not a library entry (below) | — |
@@ -210,18 +210,26 @@ circle radius 2.5 mm, finish 2.0 / 3.0 mm, start side 6 mm, lines
 ### 3.2 Legs
 
 For an `ordered` course, one leg per consecutive pair of positioned
-items, centre to centre:
+items, centre to centre — through the item's `leg.bends` when it has
+any (§10.1): the leg's `points` are the previous site, the bends, the
+site, with repeated points dropped.
 
 1. Gaps: the item's authored `leg.gaps` when non-empty, else the
    automatic ones (§3.4) when `cutFeatures` are given and the event's
-   auto cuts are on. `subtractLegGaps` removes them.
-3. Each remaining segment is clipped (`clipLine`) at every **drawn**
+   auto cuts are on. Both are fractions of the leg's length along its
+   bends. `subtractLegGaps` removes them, keeping the bends inside each
+   piece.
+3. Each segment of each remaining piece is clipped at every **drawn**
    site with clearance = the site's extent + 0.2 × R (R = control circle
    radius): 1.2 R at a control (legacy), outer ring + 0.2 R at a finish,
    start circumradius + 0.2 R at a start (legacy used 1.2 R everywhere and
-   overlapped the start triangle). Segments sharing an end point are
-   joined back into polylines. Pieces of 1 mm
-   or less are dropped (`clipLine`'s rule).
+   overlapped the start triangle). What is left joins back into runs
+   through the bends, and runs of 1 mm or less are dropped
+   (`clipPolyline` in `derive.ts`: `clipLine`'s rule per segment, the
+   1 mm rule per joined run, so a short stretch at a bend is never
+   dropped on its own; a straight piece gives exactly `clipLine`'s
+   result). A bend inside a site's clearance is not drawn: both
+   segments into it are cut, the leg splits there.
 
 `free_order` courses and the all-controls view draw no legs.
 
@@ -272,6 +280,13 @@ paper at any print scale (print enlarges map and course together).
   it (half-length `√(c² − δ²)`). Legs keep 1.2 R at each end (the circle
   clipping takes that anyway), gaps under 0.6 mm are dropped, never more
   than 70 % of a leg (smallest dropped first).
+- **Bent leg** (`polylineLegGaps`, F1): every segment of the polyline
+  opens the part of itself within c of a feature (the same half-length,
+  limited to the segment), stretches meeting at a bend merge into one
+  gap; the 1.2 R end keep applies at the leg's two ends only (a bend is
+  not a circle), the 0.6 mm minimum and the 70 % cap to the whole leg's
+  length; gaps are fractions of the bent length. A two-point leg is
+  exactly `legGaps`.
 
 `R` and `w` are the drawn circle and line (`CourseMetrics.lineWidthMm`
 from the 705 entry); a feature without `r` counts as
@@ -415,18 +430,27 @@ before its `course.upserted`:
   sequence rule (`courseSequenceOf`, §6.2 "Readers") as a v1 `structure`
   with one item per entry (`role` = the entry's type) over `controls`
   rows as sites (`editorCourseLayer`); no layout objects, appearance,
-  view options or cut features (a leg's length is centre to centre).
+  view options or cut features (a leg's length is centre to centre). A
+  structured course's entries carry the stored leg into them, by
+  `"<previous site>><site>"` over consecutive stored items (the
+  `carryLegs` convention; a pair the course runs twice takes each
+  visit's own stored leg, in order): a leg's `bends` reach the layer, so its
+  length is measured along them (§10.1, F1). Style, gaps, corridor and
+  crossing never change a length. An entry with no stored predecessor
+  item (a default start from the columns) has a straight leg.
 - **Sizes**: the ISOM stack at factor 1 (user decision 2026-10-24);
   `courseLayer` cannot throw `CourseStackError` on that fixed stack.
 - **`legs` / `lengthM`**: from the layer's derived legs
-  (`legDistancesMm(layer)`: centre to centre between consecutive
-  positioned items of `derivation.courses[0]`), `Math.round(d × scale /
+  (`legDistancesMm(layer)` = `legLengthMm(leg.points)`: centre to centre
+  between consecutive positioned items of `derivation.courses[0]`,
+  through the leg's bends), `Math.round(d × scale /
   1000)` per leg joined with `;` and a trailing `;`, the total rounded
   once; free-order courses leave both alone; `updateLength: false` (map
   upload, rotation, position-less import) keeps `lengthM`. The distances
   are the pre-E6 sequence formula's bit for bit (unit parity test over
   repeated visits, unplaced controls and 50 generated sequences at two
-  scales), so no stored length changed.
+  scales), so no stored length changed; a bent leg is the sum of its
+  segments by the same formula.
 - **`length_source`**: `'derived'` when the layer has at least one
   positioned item (`hasPositionedItems`), else NULL — what the export and
   the Eventor sync read (`course-controls-and-matching.md` "Course
@@ -1075,8 +1099,8 @@ order below, then the order of the input (sites, then the course's items).
 | `NUMBER_OVERLAPS` | course | a derived site whose label has `collides` (§3.5: the placer fell back to a box that intersects a circle, a number or a line) | — |
 | `DESCRIPTION_MISSING` | course | a `control` item whose site has no description or no column D | — |
 | `DESCRIPTION_STALE` | course, server | a `control` item whose `description_source` is `auto` (§6.3) and whose stored description differs from the autodetect result at the site's position now (e.g. after a map re-upload) | — |
-| `LEG_CROSSES_OOB` | course | a leg (ordered courses; centre to centre between consecutive positioned items) that crosses or runs inside an out-of-bounds obstacle: document 709 areas and 708 lines, `oob_area` and `oob_line` (symbol 708) course objects | — |
-| `LEG_THROUGH_UNCROSSABLE` | course | a leg that crosses or runs inside an uncrossable document obstacle: `UNCROSSABLE_CODES` 201 (impassable cliff), 301 (uncrossable body of water), 307 (uncrossable marsh), 411 (impassable vegetation), 515 (impassable wall), 518 (impassable fence), 520 (area that shall not be entered), 521 (building), 529 (prominent uncrossable line feature) — the same in ISOM 2017-2 and ISSprOM 2019-2 | — |
+| `LEG_CROSSES_OOB` | course | a leg (ordered courses; centre to centre between consecutive positioned items, through its bends: every segment is tested, `at` is the first hit along the leg, an area's inside test at each segment's midpoint) that crosses or runs inside an out-of-bounds obstacle: document 709 areas and 708 lines, `oob_area` and `oob_line` (symbol 708) course objects | — |
+| `LEG_THROUGH_UNCROSSABLE` | course | a leg (as for `LEG_CROSSES_OOB`, bends included) that crosses or runs inside an uncrossable document obstacle: `UNCROSSABLE_CODES` 201 (impassable cliff), 301 (uncrossable body of water), 307 (uncrossable marsh), 411 (impassable vegetation), 515 (impassable wall), 518 (impassable fence), 520 (area that shall not be entered), 521 (building), 529 (prominent uncrossable line feature) — the same in ISOM 2017-2 and ISSprOM 2019-2 | — |
 
 Event-scoped codes run over every site, whether or not the course visits
 it: the IOF distance and code rules are about the controls in the
@@ -1113,6 +1137,54 @@ checks. The layout checks need the viewer's placement at the document's
 sizes and the resolved sheet windows, which the server does not compute
 for a check (decision log, D6).
 
+## 10. Leg properties
+
+A leg is the item's `leg` (08 §4.3 `LegProps`, §6.1): the leg *into*
+the item, between it and the previous positioned item. F1 makes `style`
+and `bends` real; `corridor` (F2) and `crossing` (F4) are stored and
+validated but not read by the layer yet.
+
+### 10.1 Styles and bends
+
+| `style` | Drawn | Library entry | Colour row |
+|---|---|---|---|
+| `line` (default) | the leg's pieces | 705 | lower purple (ISOM), as §1 |
+| `marked_route` | the leg's pieces, dashed along the whole piece through its bends | 707 (ISOM / ISSprOM: 0.35 mm, 2.0 / 0.5 mm dashes × the document factor) | upper purple (03 §2.4: a route is followed, not read through) |
+| `none` | nothing | — | — |
+
+- **Bends** (`bends`, paper mm) bend the leg into a polyline through
+  them for **every** drawn style — a bent 705 is Purple Pen's bend
+  (slice F split, 2026-11-07). The derivation's `points` are the
+  previous site, the bends and the site, repeated points dropped (§3.2).
+  The automatic cuts (§3.4 "Bent leg"), the stored `gaps` (fractions of
+  the bent length) and the clipping at the sites (§3.2 step 3) apply to
+  the polyline.
+- **Dashes** are laid by `symbolise` along each piece as one path, so a
+  dash runs round a bend; every backend draws the slices it returns
+  (the PDF one subpath per dash, never `d`, `course-print.md` §4.3).
+  707 has no special treatment in the layer: `layer.ts` picks the
+  symbol (`idx.markedRoute`, already resolved for the 707 course object)
+  by the leg's resolved `style`.
+- **`none`** emits no object and so no pass and no hit-index piece; the
+  derivation keeps the leg's `pieces` (numbers avoid it, §3.5) and its
+  `style`, and the leg keeps its index (`ref` ids of the legs after it
+  are unchanged). Its number, its sites and its length are as for a
+  drawn leg.
+- **Length** follows the bends (08 §4.3 "Lengths and climb"): the
+  stored `legs` / `length_m` (§4.1), `sequenceLegMeters` and the editor's
+  leg-length label (`lib/editor/leg-length.ts`) measure along them;
+  `style` never changes a length, nor will a corridor (F2).
+- **Checks**: `LEG_CROSSES_OOB` / `LEG_THROUGH_UNCROSSABLE` test the bent
+  polyline (§9.2).
+- **The start** still turns to the next site (§3.3), not to the first
+  bend.
+- **Where the props reach the layer** (user, 2026-11-07): the
+  structure's items as stored for the lengths (`course-geometry.ts`,
+  §4.1); the print's sheet resolution copies the item's **whole** stored
+  leg (`course-maps/resolve-sheet.ts`, `course-print.md` §5.2), so
+  `maps.pdf` and Layout mode's sheet print bends, 707 and `none`; the
+  viewer's request still copies `gaps` only until F2 (Pending).
+
 ## Tests
 
 | Layer | Where | What |
@@ -1120,9 +1192,17 @@ for a check (decision log, D6).
 | unit | `packages/shared/src/course/__tests__/colour-stack.test.ts` | upper white inserted below upper purple with the remap; ISSprOM unchanged; source colours above upper purple; refusal without purples; `hexToCmyk` ↔ `cmykToHex`; object rows on top |
 | unit | `symbols.test.ts` | ISOM / ISSprOM dimensions, document factor, appearance multipliers, knockout, roles, 711 borrowed; the dangerous area: 709's hatch in both diagonals, 709.b / 709.c's boundaries, scaled like 709 (both libraries); arcs within 1 µm of the circle, gaps as open arcs, an arc through north one path |
 | unit | `cuts.test.ts` | clearance = symbol + half line + air at both arc ends and both gap ends, on / off the rim and the line by the same sum, wider for bigger symbols and lines, default radius, north wrap, whole circle; library radii (`cutSymbolRadiusMm`), OCAD symbol radii (`ocadCutSymbolRadiiMm`), `cutContextForScale`; `cutFeaturesOfDocument` (applied match, source code, suggested match, hidden symbol, line object, own render, factor fallback) |
+| unit | `cuts.test.ts` "polylineLegGaps" | §3.4 "Bent leg" (F1): a straight leg equals `legGaps`, fractions along the bends, one gap across a bend, end keep at the ends only, the 70 % cap |
+| unit | `derive.test.ts` "bends and styles" | §10.1: `legLengthMm`, a bent leg's points and pieces clipped at both sites, repeated / on-site bends dropped, stored gaps at the bent mid-length, a piece unbroken through a bend just after a gap, nothing within a site's clearance with a bend inside it, an automatic gap across a bend, the resolved style and `none`'s pieces |
+| unit | `layer.test.ts` "leg styles" | §10.1: a `marked_route` leg draws 707 through its bend, upper purple, more than three dash slices, after black; a `none` leg draws nothing, numbers unchanged |
+| unit | `checks.test.ts` "test the bent polyline" | §9.2: a bend round the building clears it, the first hit along the bends |
+| PDF | `packages/shared/src/print/__tests__/write-page.test.ts` "a marked-route leg" | §10.1 print: the route is one extra stroke of dash subpaths at 707's width, in purple after black, no `d` operator |
+| unit | `course-geometry.test.ts` "legs along their bends" | §4.1: a bent leg's length, style and corridor change nothing |
+| integration | `control-editor.test.ts` "course.setStructure with bends" | §4.1: `legs` / `length_m` along the bends through `setStructure`, a `none` leg still counted |
+| unit (web) | `course-editor.test.ts` `sequenceLegMeters`, `editor/__tests__/leg-length.test.ts` | §10.1: readouts along the bends, label at the bent mid-length |
 | unit | `derive.test.ts` | legs and clearances, circles in the way, unpositioned sites, automatic vs authored gaps, the event's auto cuts off (no automatic slits / gaps, authored ones kept, §3.4), authored pieces and bends, free order, all-controls, start rotation, sequence / repeated / code numbers, y-down placement, manual offsets, multi-course |
 | unit | `layer.test.ts` | one `symbolise` call with a document: warning-free, lower purple under black, re-indexed document colours, object offsets; turned start, arcs, legs; auto cuts off = the objects without cut features; knockout halo order; sprint sizes; layout objects (white-out, 709.b, rows on top, text values, page-mm sizes); toner-saver ring and its warning; the toner saver white (P1: a `toner_saver` and a `whiteoutInverted` map object fill the top row, the last pass after black, upper purple and a layout text's row; none for a plain white-out or without a window); images; `courseDocumentContext` |
-| pass-stream | `scenes.test.ts`, snapshots in `render/__fixtures__/streams/course/` | the five course scenes (`map-rendering.md` §6.3) warning-free and equal to their snapshots at 1 µm, plus each scene's rule |
+| pass-stream | `scenes.test.ts`, snapshots in `render/__fixtures__/streams/course/` | the six course scenes (`map-rendering.md` §6.3; `course-leg-styles` since F1) warning-free and equal to their snapshots at 1 µm, plus each scene's rule |
 | unit | `packages/api/src/__tests__/course-geometry.test.ts` | `editorCourseLayer`: sequence in order with roles, centre-to-centre legs, unpositioned controls skipped, free order without legs, no automatic cuts; `hasPositionedItems` (`length_source` derived / NULL); `legDistancesMm(layer)` from the derived legs = the pre-E6 sequence formula bit for bit (fixtures + 50 generated sequences, per-leg and total rounding at two scales, E6); `courseLengthM` |
 | unit | `packages/api/src/__tests__/document-readers-parity.test.ts` | cut features of the document = the legacy OCAD adapter's (now a test oracle, `__tests__/helpers/ocad-oracle.ts`) within 1e-6 mm on the fixture and the corpus (§4.2) |
 | unit | `packages/api/src/__tests__/course-sequence.test.ts` | §6.2 "Readers" (E6): `courseSequenceOf` — columns (defaults, `start_name`, a live `finish_control_id`, unmatched fall back, the flags), a stored structure (explicit ends, no ends → defaults, roles), a deleted explicit start, an invalid column read as the columns, no starts / finishes |
@@ -1161,8 +1241,8 @@ for a check (decision log, D6).
 | `packages/shared/src/course/colour-stack.ts` | `courseColourStack`, object colour rows, `hexToCmyk` |
 | `packages/shared/src/course/symbols.ts` | the 7xx set: resolution, appearance, derived 703 / leader / white-out (`courseSymbols`, exported for the viewer's sizes, C4) |
 | `packages/shared/src/course/arcs.ts` | Bézier circles and arcs |
-| `packages/shared/src/course/cuts.ts` | `CUT_CODES`, `CUT_AIR_MM`, `circleCuts`, `legGaps`, `cutFeaturesOfDocument`, `pointSymbolRadiusMm`, `cutSymbolRadiusMm`, `ocadCutSymbolRadiiMm`, `cutContextForScale` |
-| `packages/shared/src/course/derive.ts` | the geometry rules (§3.2–3.5) |
+| `packages/shared/src/course/cuts.ts` | `CUT_CODES`, `CUT_AIR_MM`, `circleCuts`, `legGaps`, `polylineLegGaps`, `cutFeaturesOfDocument`, `pointSymbolRadiusMm`, `cutSymbolRadiusMm`, `ocadCutSymbolRadiiMm`, `cutContextForScale` |
+| `packages/shared/src/course/derive.ts` | the geometry rules (§3.2–3.5), `legLengthMm` (§10.1) |
 | `packages/shared/src/course/objects.ts` | layout objects (§3.6) |
 | `packages/shared/src/course/layer.ts` | `courseLayer`, `courseRenderInput` |
 | `packages/shared/src/course/geojson.ts` | `courseLayerGeoJson` |
@@ -1190,11 +1270,27 @@ for a check (decision log, D6).
   appearance; a sheet's objects and template appearance on the map are
   D7's (Layout mode).
 - **Structure, beyond D1** (§6): the layer reads `numberHidden`, the
-  site's `circle_gaps` and `LegProps.gaps` since D1; `LegProps` beyond
-  `gaps` (style, corridor, crossing, bends) is slice F's; Purple Pen's
+  site's `circle_gaps` and `LegProps.gaps` since D1, `style` and `bends`
+  since F1 (§10.1); `corridor` (F2) and `crossing` (F4) are slice F's; Purple Pen's
   `<gaps>` / `<leg>` bends are not parsed by the importer; variations and their
   materialisation, map exchanges, crossing and map-issue points,
   corridors (slice F).
+- **Leg properties on screen** (§10.1, F2 — user, 2026-11-07): the
+  layer and the print draw `style` and `bends`, but the viewer's request
+  (`layerPropsOfStored` → `course.list.legGaps` → `MapPanel` /
+  `MapViewer` → `course-layer-request.ts`) copies `LegProps.gaps` only,
+  so on screen a bent, marked-route or `none` leg still shows as a
+  straight 705. F2, which adds `mapScale` to the same request, carries
+  the whole leg. Nothing can author these props before F3.
+- **Leg properties in the editor** (§10.1, F3): `EditorPage.tsx`,
+  `MapViewer.tsx` and `tools/bindings.ts` pass no bends to the readouts
+  (`sequenceLegMeters`, `legLengthLabel`, `dragLegShapes`); a `none` leg
+  has no hit piece (no pass), so the leg inspector hit-tests it from
+  `derivation.courses[].legs[].pieces`.
+- **Export lengths along bends** (F9 — user, 2026-11-07): the IOF /
+  Purple Pen export recomputes a `derived` course's leg lengths
+  straight, centre to centre (`course-controls-and-matching.md` "Course
+  length"); F9 makes it read the layer's lengths.
 - **Tokens, beyond D1** (§7): the `differing` of a conflict caused by an
   import is `null` (the base lives inside a `reference.imported`
   entry); presence and "moved by X at T" (D11). The new editor's client rules landed in D4

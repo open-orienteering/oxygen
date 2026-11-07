@@ -2066,8 +2066,8 @@ with the oracle, never with each other.
 **Golden scenes** are the six contract fixtures (§6.3), the
 `pilot-scene` (`__fixtures__/pilot-scene.ts`: one object per pilot
 symbol, hand-placed), the twelve library fixtures (`lib-*`, §6.3,
-coloured from the library's palette through `cmykToHex`) and the five
-course scenes (`course-*`, §6.3, C0: a library base map and
+coloured from the library's palette through `cmykToHex`) and the six
+course scenes (`course-*`, §6.3, C0 and F1: a library base map and
 `courseLayer()` merged into one stream, coloured from the completed
 stack). The three **page scenes** (`page-*`, C2,
 `docs/course-print.md` §7.5) are separate: a composed page drawn by the
@@ -2316,6 +2316,7 @@ WebGL2 per-pass path against the golden, measured at introduction
 | `course-objects` | ISOM 406, 505, 106; white-out rectangle, toner-saver ring, 709 rectangle, 709.b triangle, 707 / 708 / 711 extras, a map text in its own colour with `{course}` | the white-out at upper white above all ink and below upper purple, the toner-saver ring in its own white row on top of the stack (P1: the 709.b border past its edge is covered); 709 / 707 / 711 upper, 708 lower; the text's row on top of the stack |
 | `course-sprint` | ISSprOM 401, two 521 buildings; `numberStyle: "knockout"` | 6 mm circles; upper-white halo under upper-purple numbers, above the buildings' black |
 | `course-all-controls` | ISOM 403, 304; all controls with a free-order course | every site drawn, codes, no legs, start north |
+| `course-leg-styles` | ISOM 401, 505, 516; S → 31 a bent 705, 31 → 32 a bent 707 marked route over the 516, 32 → F `style: "none"` with a stored gap (F1, `course-layer.md` §10.1) | the 705 piece runs through its bend; the route in upper purple, dashed, after black; nothing for the `none` leg, which keeps its pieces; numbers unchanged |
 
 The **filter scenes** (D3, 04 §8 row "Filter regions", §4.11) draw one
 ISOM base map — a 407 area (0–60 × 0–40 mm), 101 contours (a straight

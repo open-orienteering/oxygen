@@ -129,6 +129,57 @@ export function legGaps(a: Pick<CutFeature, "x" | "y">, b: Pick<CutFeature, "x" 
   return kept.map(([from, to]) => ({ from, to }));
 }
 
+/**
+ * Gaps for a bent leg `points[0] → … → points[n-1]` (F1): each segment
+ * opens the stretch of itself within a feature's clearance, stretches
+ * that meet at a bend merge; the 1.2 R end keep applies at the leg's two
+ * ends only, the minimum and the cap to the whole leg. Fractions of the
+ * bent length. A two-point leg is exactly `legGaps`.
+ */
+export function polylineLegGaps(points: readonly Pick<CutFeature, "x" | "y">[], features: readonly CutFeature[], radiusMm = LEGACY_RADIUS_MM, lineWidthMm = LEGACY_LINE_MM): FractionGap[] {
+  if (points.length < 2) return [];
+  if (points.length === 2) return legGaps(points[0], points[1], features, radiusMm, lineWidthMm);
+  const endKeep = LEG_END_KEEP * radiusMm;
+  const starts = [0];
+  for (let i = 1; i < points.length; i++) starts.push(starts[i - 1] + Math.hypot(points[i].x - points[i - 1].x, points[i].y - points[i - 1].y));
+  const len = starts[starts.length - 1];
+  if (len < 2 * endKeep + MIN_LEG_GAP_MM) return [];
+  // Absolute intervals along the leg, mm.
+  const raw: Array<[number, number]> = [];
+  for (let i = 1; i < points.length; i++) {
+    const a = points[i - 1], b = points[i];
+    const dx = b.x - a.x, dy = b.y - a.y;
+    const L = Math.hypot(dx, dy);
+    if (L === 0) continue;
+    for (const f of features) {
+      const c = clearanceOf(f, lineWidthMm);
+      const along = ((f.x - a.x) * dx + (f.y - a.y) * dy) / L;
+      if (along < -c || along > L + c) continue;
+      const off = Math.abs((f.x - a.x) * dy - (f.y - a.y) * dx) / L;
+      if (off >= c) continue;
+      const half = Math.sqrt(c * c - off * off);
+      const lo = Math.max(along - half, 0), hi = Math.min(along + half, L);
+      if (hi > lo) raw.push([starts[i - 1] + lo, starts[i - 1] + hi]);
+    }
+  }
+  const clamped = raw.map(([lo, hi]): [number, number] => [Math.max(lo, endKeep), Math.min(hi, len - endKeep)]).filter(([lo, hi]) => hi > lo);
+  clamped.sort((p, q) => p[0] - q[0]);
+  const merged: Array<[number, number]> = [];
+  for (const g of clamped) {
+    const last = merged[merged.length - 1];
+    if (last && g[0] <= last[1]) last[1] = Math.max(last[1], g[1]);
+    else merged.push([g[0], g[1]]);
+  }
+  let kept = merged.filter(([lo, hi]) => hi - lo >= MIN_LEG_GAP_MM);
+  const total = () => kept.reduce((sum, [lo, hi]) => sum + (hi - lo), 0);
+  while (kept.length > 0 && total() > MAX_TOTAL_LEG_GAP * len) {
+    let smallest = 0;
+    for (let i = 1; i < kept.length; i++) if (kept[i][1] - kept[i][0] < kept[smallest][1] - kept[smallest][0]) smallest = i;
+    kept = kept.filter((_, i) => i !== smallest);
+  }
+  return kept.map(([from, to]) => ({ from: from / len, to: to / len }));
+}
+
 /** Farthest ink of a point symbol (library or render IR) from its origin, mm; 0 for other kinds. */
 export function pointSymbolRadiusMm(render: LibraryEntry["render"] | RenderSymbol | null | undefined): number {
   if (!render || render.type !== "point") return 0;
