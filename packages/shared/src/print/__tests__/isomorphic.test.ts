@@ -14,7 +14,7 @@ const sources: string[] = ["index.ts", ...Array.from(readFileSync(dir + "index.t
 
 describe("print module is isomorphic", () => {
   it("re-exports every file of the module", () => {
-    expect(sources).toEqual(expect.arrayContaining(["writer.ts", "operators.ts", "compose.ts", "page.ts", "description.ts", "geo.ts"]));
+    expect(sources).toEqual(expect.arrayContaining(["writer.ts", "operators.ts", "compose.ts", "page.ts", "description.ts", "description-sheet.ts", "geo.ts"]));
   });
 
   it.each(sources)("%s imports no Node API, Buffer, sharp or resvg", (file: string) => {

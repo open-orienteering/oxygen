@@ -17,7 +17,7 @@ import { mkdir, readdir, rm, writeFile } from "node:fs/promises";
 import { fileURLToPath } from "node:url";
 import { render } from "@oxygen/shared";
 import { pageSceneNames } from "@oxygen/shared/print";
-import { renderPageGoldenPng } from "../src/render/page-raster.js";
+import { DESCRIPTION_GOLDEN, renderDescriptionGoldenPng, renderPageGoldenPng } from "../src/render/page-raster.js";
 import { LIBRARY_GOLDEN_IDS, goldenDir, libraryGoldenDir, librarySheetMarkdown, renderGoldenPng, renderLibraryGoldens } from "../src/render/golden.js";
 
 const dir = fileURLToPath(goldenDir);
@@ -32,6 +32,12 @@ for (const name of pageSceneNames) {
   const png = await renderPageGoldenPng(name);
   await writeFile(`${dir}${name}.png`, png);
   console.log(`wrote ${name}.png (${png.byteLength} bytes)`);
+}
+// The description sheet (docs/course-print.md §6.4): one tiled A4 page.
+{
+  const png = await renderDescriptionGoldenPng();
+  await writeFile(`${dir}${DESCRIPTION_GOLDEN}.png`, png);
+  console.log(`wrote ${DESCRIPTION_GOLDEN}.png (${png.byteLength} bytes)`);
 }
 
 const libRoot = fileURLToPath(libraryGoldenDir);
