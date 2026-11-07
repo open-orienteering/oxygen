@@ -488,6 +488,7 @@ entries; `lib/editor/export-menu.ts`), each on an existing route:
 | This class (`…-class`, Class view only) | `maps.pdf?classes=<class>` | `autoSheets { courseId }` |
 | All courses (`…-all`) | `maps.pdf` (every own sheet and the all-controls sheet) | `autoSheets {}` |
 | All controls (`…-allControls`) | `maps.pdf?allControls=1` | `autoSheets { allControls: true }` (E-pages) |
+| Description sheets… (`…-descriptions`; F11) | opens the dialog (`editor-descriptions-dialog`), then `descriptions.pdf?classes=<seq,…>&copies=&cell=` (`course-print.md` §6.4) | — (no sheet row) |
 | IOF XML (`…-iofxml`), Purple Pen (`…-ppen`) | `/api/export/course-data?format=` | — |
 
 So a course without a template exports: its first sheet is made on the
@@ -498,7 +499,22 @@ per-course export (`export-course-<course>`) and its export menu's *All
 maps* / *All controls* do the same (`course-maps.md` "Where sheets and
 templates are managed"). This sheet is a phase-1 entry 08 §5.2 does not
 list: the Maps page's *Selected map*, kept so a second sheet prints alone.
-Variants, setter maps and description sheets arrive in F.
+Variants and setter maps arrive in later F rows.
+
+**Description sheets…** (F11; 08 §4.6, §5.2 "descriptions") opens a dialog
+(`pages/editor/DescriptionSheetsDialog.tsx`) instead of downloading at
+once: classes (`editor-descriptions-class-<seq>`, every class with a
+course checked; *All* / *None*), copies (`-copies-count` runners +
+vacancies, `-copies-fill` one full sheet, `-copies-n` with a number
+1–500), cell size (`-cell`, 5 / 6 / 7 mm, default 6) → *Download PDF*
+(`-download`; disabled with no class or an invalid number), which
+downloads `descriptionSheetsUrl(…)` — always explicit `classes=`, in class
+order — and closes; a route error shows on the dialog's error line
+(`-error`). It is a modal like the map-info dialog: no keydown reaches
+the editor's shortcuts while it is open, Escape closes only it. The
+Courses page's export menu has the same entry
+(`course-export-descriptions`) opening the same dialog. Nothing is
+created first: the sheets print on demand (`course-print.md` §6.4).
 
 **`maps.pdf?classes=<seq,…>`** (`course-maps.md` API): per class, in the
 order asked, its class sheets, else its course's own sheets as the class
@@ -523,6 +539,8 @@ sheet prints through `classes` or `maps`.
 | integration | `course-maps.test.ts` "update: CONFLICT on a stale baseVersion…", "creates, duplicates and applies…", "supports several maps…" | E-pages: `courseMap.update` refuses a stale token with `CONFLICT` (`kind: "sheet"`, the version now), LWW without; the list answers `resolved` and `validation` without the overlay fields (the rows and controls read through `resolveSheet`); `saveLayout` leaves the template's objects |
 | unit (shared) | `packages/shared/src/__tests__/auto-template.test.ts` | the key (standard, custom paper), the key's name, decision (3) (most sheets, oldest, seq), `fitOrientation` (preferred kept, turned, ratio, the margin, neither fits), `defaultTemplateSettings` |
 | unit (web) | `lib/editor/__tests__/export-menu.test.ts`, `template-key.test.ts`, `state.test.ts`, `pages/editor/__tests__/layout-model.test.ts` | Export ▾ entries, routes and what is ensured first; courses in a template / at its key, the move-out target, extra names; Class view in the reducer; the sheet key |
+| unit (web) | `lib/editor/__tests__/export-menu.test.ts` "description sheets…", "descriptionSheetsUrl" | F11: the entry opens the dialog, ensures nothing and is never disabled; the URL names the classes, copies mode and cell (and `gap` when given) |
+| E2E | `e2e/course-editor.spec.ts` "F11: description sheets", `e2e/courses.spec.ts` "Export → Description sheets…" | the dialog from Export ▾ and from the Courses page's menu → `…_descriptions.pdf` with one A4 page per class (`course-print.md` §9.1) |
 | integration | `packages/api/src/__tests__/integration/auto-templates.test.ts` | the migration's backfill (scoped to one event): keys, decision (3), no sheet moved, no rename; key sync on create / update / duplicate / delete with promotion; `autoSheets` (first sheet, auto template named by key, centred, idempotent; the event's look and a landscape turn; without a course every course); class sheets (scale → auto template at that scale; explicit template + scale → sheet override; cleared → deleted; course change); `classOverrides`; `class.upserted` without the overrides; `resolveSheet { classSeq }` (own sheet, course sheet with the override, `{classes}`); version tokens (`CONFLICT` with the row now, no token = LWW); `maps.pdf?classes=` through the composer (one page per class, `courses` / unfiltered without class sheets, 400s; E3 deleted the legacy variant, whose class-name check read the rsvg SVG) |
 | integration | `auto-templates.test.ts` "the all-controls sheet on demand" | E-pages: `{ courseId }` leaves it alone; `{ allControls: true }` creates it once (named, no course, centre NULL) on the busiest key turned landscape, answers its seq and the template created, runs no course part; a second call creates nothing; a template-less one gets the template; with `courseId` both parts run |
 | unit (web) | `lib/editor/__tests__/layout-href.test.ts` | the Courses page's *Edit layout* link — a sheet with its course, a template with and without a preview course, a null course omitted, the event name encoded; E-pages: `retiredPageHref` (`/maps` → Courses with its query, `/map-templates` → Layout mode on `?template=`, an invalid one ignored) |
@@ -540,8 +558,9 @@ sheet prints through `classes` or `maps`.
 ## Pending in this chapter
 
 - **Map exchange sections** (`section_index > 0`, auto-created from the
-  structure), **setter maps** (`kind = 'setter'`, `props.controlIds`),
-  **description sheets** and per-variant export — F (08 §4.6, §5.2).
+  structure), **setter maps** (`kind = 'setter'`, `props.controlIds`)
+  and per-variant export — F (08 §4.6, §5.2). Description sheets are
+  done (F11, §7) and print on demand, never as a sheet row.
 - **The all-controls sheet's recalculated scale and description
   placement** (08 §4.6 "computed to fit everything on A4 and can be
   recalculated"): since E-pages `autoSheets { allControls }` creates it

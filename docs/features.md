@@ -100,6 +100,14 @@ take the course layer is refused with the reason rather than printed wrong.
 See
 [course-maps.md](course-maps.md) and [course-print.md](course-print.md).
 
+**Description sheets.** Export ▾ in the course editor and the Courses page's
+export menu offer **Description sheets…**: pick the classes, how many copies
+(the class's entries plus its vacancies, one full sheet, or a number) and the
+cell size (5, 6 or 7 mm), and Oxygen prints each class's control descriptions —
+the same block as on its map, header naming the class — tiled on A4 to cut
+apart at the start, one class per page run. No map upload is needed. See
+[course-print.md](course-print.md) §6.4.
+
 The Courses page also keeps its format **Export** dropdown. It writes the whole course set — controls with paper-millimetre positions, course sequences with leg lengths, and (for IOF) class assignments — as either an IOF 3.0 CourseData file or a native Purple Pen `.ppen`. Open the IOF file in Condes, Purple Pen or OCAD, or import either format into another Oxygen event; the round-trip through Oxygen's own importer is lossless for the punchable course model. Export derives legs from the current coordinates and OCAD CRS scale; edited courses also get a freshly-derived total, while untouched imports retain deliberate OCAD/IOF extra distance. For Eventor-linked events, sync can repair an untouched imported total from Eventor's published class-course length but never overwrites a course edited in Oxygen. See [iof-coursedata-export.md](iof-coursedata-export.md), [ppen-import-export.md](ppen-import-export.md), [bugfix-ocad-course-scale-and-export-lengths.md](bugfix-ocad-course-scale-and-export-lengths.md), and [bugfix-eventor-course-lengths.md](bugfix-eventor-course-lengths.md).
 
 ### Classes

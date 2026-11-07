@@ -92,6 +92,10 @@ The backfill UPDATE is regression-tested verbatim in
 - **Description sheet** (`MapViewer`): control-row descriptions arrive via
   the control overlays and take precedence; geometry-embedded descriptions
   remain as a legacy fallback only.
+- **Printed descriptions**: the map page's block and the description
+  sheets (`descriptions.pdf`, F11 — the block tiled on A4 per class) read
+  the control rows' `description` through `resolveMapLayout`'s rows
+  (`docs/course-print.md` §6.2, §6.4).
 - **Sync**: the journal's `control.upserted` payload serializes all
   portable columns generically, so descriptions replicate to other nodes
   with no protocol change.
