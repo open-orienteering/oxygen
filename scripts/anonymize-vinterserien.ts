@@ -406,10 +406,10 @@ async function main(): Promise<void> {
     }
 
     if (t.mode === "showcaseMap") {
-      const n = await writeSyntheticMap(client, t.name, where, write);
+      const n = await writeShowcaseMapPin(client, t.name, where, write);
       totalRows += n;
       console.log(
-        `  ${t.name.padEnd(30)} ${n.toString().padStart(6)} rows  (synthetic map, 3 statements)`,
+        `  ${t.name.padEnd(30)} ${n.toString().padStart(6)} rows  (demo map, source only)`,
       );
       continue;
     }
