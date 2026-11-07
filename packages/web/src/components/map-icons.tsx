@@ -175,3 +175,14 @@ export function IconProgress({ className, title }: IconProps) {
     </svg>
   );
 }
+
+/** Three rising bars — the course editor's course-info popover (count, length, climb, scale). */
+export function IconStats({ className, title }: IconProps) {
+  return (
+    <svg {...base} className={className}>
+      {title ? <title>{title}</title> : null}
+      <path d="M5 16V11M10 16V7M15 16V4" />
+      <path d="M3 16.5h14" />
+    </svg>
+  );
+}

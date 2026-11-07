@@ -1,7 +1,7 @@
 /**
  * A leg's length on the ground as the UI layer labels it (docs/course-editor.md
  * §6.1): the pending leg while a placement tool is armed, both legs of a
- * dragged control. The status bar shows the same metres.
+ * dragged control. It is the one readout of the pending leg (P2: no status-bar number).
  */
 
 import type { ToolShape } from "../../components/MapViewer";

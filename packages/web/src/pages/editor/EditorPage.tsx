@@ -2,7 +2,7 @@
  * The course editor (docs/course-editor.md), mounted on
  * `/:nameId/course-editor` for every event (`CourseEditorRoute`). One GL canvas (`MapPanel` → `MapViewer` over
  * `VectorMapLayer`) with the shell around it: top bar, tool rail,
- * contextual action bar, inspector, status bar (§2).
+ * contextual action bar, inspector; the save indicator and the course-info popover in the top bar (§2; P2).
  *
  * - Selection is the legacy model (`lib/editor/state.ts`); the viewer
  *   hit-tests the course layer's symbolised shapes (§5).
@@ -12,8 +12,8 @@
  *   Control writes are `control.update` with the control's token.
  *   `EditorWrites` applies the G1 client rules (§3); a conflict the user
  *   must see becomes the notice above the inspector.
- * - Autosave: there is no save button; the status bar says saved /
- *   saving / not saved / changed elsewhere.
+ * - Autosave: there is no save button; the top bar's save indicator says saved /
+ *   saving / not saved / changed elsewhere (the phone: the sheet's peek line).
  *
  * Course mode, Layout mode (`modes/LayoutMode.tsx`, docs/course-layout.md:
  * the sheet as the view, course edits locked) and Field mode (§9; the phone default, with the bottom
@@ -54,7 +54,7 @@ import { snapIndexForDocument } from "../../lib/editor/snap";
 import { pickIndexForDocument } from "../../lib/editor/symbol-pick";
 import { groupOfSymbol, swatchUrl, symbolGroups, type SymbolGroup } from "../../lib/editor/symbol-groups";
 import { deleteVertex, vertexRule, type Vertex } from "../../lib/editor/geometry-edit";
-import { legLengthLabel, legLengthM } from "../../lib/editor/leg-length";
+import { legLengthLabel } from "../../lib/editor/leg-length";
 import { EditorConflict, EditorWrites, type EditorClient } from "../../lib/editor/write-client";
 import { instructionsOnCourse, type Instructions } from "../../lib/editor/instructions";
 import { areaTool, editorReducer, escapeHasWork, initialEditorState, type EditorTool } from "../../lib/editor/state";
@@ -71,7 +71,8 @@ import { mergeCircleGaps, mergeLegGaps, type AngularGap, type FractionGap } from
 import { areaBinding, gapBinding, pickSymbolBinding, placeBinding, selectBinding, textBinding, type GapTarget, type Gesture } from "./tools/bindings";
 import { ObjectSection } from "./modes/ObjectSection";
 import { ChecksSection, Inspector, InspectorSection, InventorySection } from "./Inspector";
-import { StatusBar, type SaveState } from "./StatusBar";
+import { StatusBar } from "./StatusBar";
+import type { SaveState, StatusInput } from "../../lib/editor/status";
 import { useCourseChecks } from "./useCourseChecks";
 import type { EditorCheck } from "../../lib/editor/checks";
 import { CourseSection, MultiSection, SelectionSection } from "./modes/CourseMode";
@@ -1421,6 +1422,17 @@ export function EditorPage() {
   // ─── Chrome ──────────────────────────────────────────────
   const canUndo = undoStack.canUndo, canRedo = undoStack.canRedo;
   const courseOptions = useMemo(() => (courses.data ?? []).map((c) => ({ id: c.id, name: c.name })), [courses.data]);
+  // The save state and the course-info values (§2, §3): the top bar's indicator and popover, the phone's peek line.
+  const save: SaveState = pendingOps > 0 ? "saving" : notice ? "conflict" : errorMsg ? "error" : "saved";
+  const status: StatusInput = {
+    controls: selectedCourse ? sequenceIds.length : null,
+    lengthM: selectedCourse ? courseChecks.lengthM ?? totalMeters : null,
+    climbM: selectedCourse?.climb ?? null,
+    scale: mapScale,
+    sheetKey: state.mode === "layout" ? layoutMode.sheetKey : state.mode === "course" && state.view === "class" ? classView.sheetKey : null,
+    snapping: state.snapping,
+    checks: courseChecks.checks.length,
+  };
   const toolbar = isMobile ? (
     <FieldTopBar
       backTo={`/${nameId ?? ""}/courses`}
@@ -1468,10 +1480,11 @@ export function EditorPage() {
       cutsBusy={setCuts.isPending || cutsQuery.isLoading}
       onToggleCuts={() => setCuts.mutate({ enabled: !cutsEnabled })}
       presence={<PresenceChips others={presence} selectedCourseId={state.selectedCourseId} />}
+      save={save}
+      status={status}
     />
   );
 
-  const save: SaveState = pendingOps > 0 ? "saving" : notice ? "conflict" : errorMsg ? "error" : "saved";
   const suggestionsForNew = useMemo(
     () => courselessClassNames(classes.data ?? [], (courses.data ?? []).map((c) => c.name)),
     [classes.data, courses.data],
@@ -1506,7 +1519,6 @@ export function EditorPage() {
     if (ids.length) void run(() => client.control.upsertConfig.mutate({ controlIds: ids, radioType: "internal_radio" }));
   }, [state.multi, kindOf, run, client]);
 
-  const pendingLegM = ghost?.legMm != null && mapScale ? legLengthM(ghost.legMm, mapScale) : null;
 
   // ─── Field mode's parts (§9) ─────────────────────────────
   const selectedFieldPt: Pt | null = selectedCoord
@@ -1604,12 +1616,6 @@ export function EditorPage() {
       />
     </>
   );
-  const statusBar = (
-    <StatusBar controls={selectedCourse ? sequenceIds.length : null} lengthM={selectedCourse ? courseChecks.lengthM ?? totalMeters : null} scale={mapScale} save={save}
-      climbM={selectedCourse?.climb ?? null} checks={courseChecks.checks.length}
-      pendingLegM={pendingLegM} snapping={state.snapping}
-      sheetKey={state.mode === "layout" ? layoutMode.sheetKey : state.mode === "course" && state.view === "class" ? classView.sheetKey : null} />
-  );
 
   // Class view without a sheet for the class's course (docs/course-layout.md §6): the course draws as in Course view.
   const externalNode = external ? (
@@ -1688,7 +1694,7 @@ export function EditorPage() {
     const peek = (
       <div className="flex flex-col gap-1.5 pb-2">
         <div className="flex items-center gap-2 min-w-0 text-xs">
-          {statusBar}
+          <StatusBar status={status} save={save} />
           {fieldKpi && <span data-testid="editor-field-kpi" className="shrink-0 text-emerald-700">{fieldKpi}</span>}
         </div>
         {selectionName && <div data-testid="editor-sheet-selection" className="truncate text-slate-700 font-medium">{selectionName}</div>}
@@ -1774,7 +1780,6 @@ export function EditorPage() {
           )}
           {showExhausted && <span data-testid="series-exhausted" className="pointer-events-auto w-fit text-[11px] text-amber-700 bg-white/95 rounded px-1.5">{tc("seriesExhausted")}</span>}
           {errorMsg && <span data-testid="editor-error" className="pointer-events-auto w-64 text-[11px] text-red-600 bg-white/95 rounded px-1.5">{errorMsg}</span>}
-          {statusBar}
         </div>
       </div>
     </div>

@@ -1019,7 +1019,7 @@ venue's kiosk map draws them (08 §4.8; 07 §9.2).
 
 Row D6 (research 08 §4.2, §5.6, §6). Advisory course-setting checks:
 the editor lists them (`course-editor.md` §8), marks them on the canvas
-and counts them in the status bar; `course.setStructure` returns them.
+and counts them on the top bar's course-info button (P2); `course.setStructure` returns them.
 **Nothing blocks a save.** Variation and exchange codes
 (`VARIATION_UNBALANCED`, `EXCHANGE_WITHOUT_SHEET`) and crossing-point
 exemptions are slice F's.

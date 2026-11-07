@@ -67,7 +67,7 @@ export interface LayoutMode {
   open: (target: LayoutTarget | null) => void;
   /** The shown sheet's course (its seq), null for the all-controls sheet and a template. */
   sheetCourse: number | null;
-  /** The status bar's sheet key. */
+  /** The sheet key of the top bar's course-info popover (§2; P2). */
   sheetKey: string | null;
 }
 

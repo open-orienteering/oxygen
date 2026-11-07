@@ -14,7 +14,7 @@ import {
   emptyPoint, ensureCoursesAndMap, ensureFixtureFromDesktop, freezeExternalPoll, geometryOf, inkIn, labelOf, legMidpoint, legPieces, nameIdOf, objectRow,
   openEditor, pageToPaperOf, place, placeOneShot, pressInside, pressOnEdge, printed, probeTemplate, regularCodes, select, selectCompetition,
   selectedCode, selectedPosition, siteCuts, site, sitePoint, sites, toolShapes, toPage, toPaper, trpcCall, viewCentre, viewSettled, newCourse,
-  type Frame,
+  mapScale, statsRow, type Frame, type Site,
 } from "./helpers/editor";
 import { touchDrag, touchTap } from "./helpers/touch";
 import { isTrpcResponse, waitForTrpc } from "./helpers/trpc";
@@ -106,8 +106,10 @@ test.describe("Course editor (new, GL canvas)", () => {
     await clickTab(page, "Course Editor");
     await editorReady(page);
     await expect(page.getByTestId("course-editor-page")).toHaveCount(0);
-    // The shell: top bar, tool rail, inspector, status bar; Layout (D7) and Field (D9) enterable.
-    for (const id of ["editor-top-bar", "editor-tool-rail", "editor-inspector", "editor-status"]) await expect(page.getByTestId(id)).toBeVisible();
+    // The shell: top bar (with the save indicator and the course-info button, P2), tool rail, inspector; no status
+    // bar on the desktop; Layout (D7) and Field (D9) enterable.
+    for (const id of ["editor-top-bar", "editor-tool-rail", "editor-inspector", "editor-save-state", "editor-stats"]) await expect(page.getByTestId(id)).toBeVisible();
+    await expect(page.getByTestId("editor-status")).toHaveCount(0);
     await expect(page.getByTestId("editor-mode-course")).toHaveAttribute("aria-pressed", "true");
     await expect(page.getByTestId("editor-mode-layout")).toBeEnabled();
     await expect(page.getByTestId("editor-mode-field")).toBeEnabled();
@@ -771,16 +773,15 @@ test.describe("tools", () => {
     const before = (await sites(page)).length;
 
     await arm(page, "K");
-    // The ghost: true-size circle, the next number and code; the pending leg from the start, its length in the status bar.
+    // The ghost: true-size circle, the next number and code; the pending leg from the start, its length at the pointer.
     const first = await emptyPoint(page, 40);
     await page.mouse.move(first.x, first.y);
     await expect(page.getByTestId("editor-ghost")).toBeAttached({ timeout: 10000 });
     await expect(page.getByTestId("editor-ghost-label")).toHaveText(/^1 · \d+$/);
-    // The layer draws the pending leg (§6.1); the UI layer only labels it, with the status bar's metres.
+    // The layer draws the pending leg (§6.1); the UI layer only labels it at the leg's midpoint — the one readout (P2).
     await expect(page.getByTestId("editor-pending-leg")).toHaveCount(0);
-    await expect(page.getByTestId("editor-pending-leg-length")).toHaveText(/\d+ m/);
-    const metres = (await page.getByTestId("editor-pending-leg-length").textContent())!.match(/(\d+) m/)![1];
-    await expect(page.getByTestId("editor-leg-length")).toHaveText(`${metres} m`);
+    await expect(page.getByTestId("editor-leg-length")).toHaveText(/^\d+ m$/);
+    await expect(page.getByTestId("editor-pending-leg-length")).toHaveCount(0);
 
     const spots = [first];
     for (let i = 1; i < 10; i++) spots.push(await emptyPoint(page, 30, spots));
@@ -818,14 +819,16 @@ test.describe("tools", () => {
   test("the armed tool's pending legs are drawn by the layer to the cursor; a drag labels both legs", async ({ page }) => {
     await openEditor(page);
     const name = await newCourse(page, "D5a pending");
+    const scale = await mapScale(page);
     await arm(page, "K");
     const spots: Pt[] = [];
+    let last: Site | undefined;
     for (let i = 0; i < 3; i++) {
       const p = await emptyPoint(page, 60, spots);
       spots.push(p);
       await page.mouse.move(p.x, p.y);
       await expect(page.getByTestId("editor-ghost-label")).toHaveText(new RegExp(`^${i + 1} · `), { timeout: 10000 });
-      await page.mouse.click(p.x, p.y);
+      last = await place(page, p);
       await expect(controlRows(page)).toHaveCount(i + 1, { timeout: 15000 });
     }
 
@@ -848,8 +851,14 @@ test.describe("tools", () => {
       // The leg into the cursor is a `course-leg` piece of the course: the layer's, with its slits (one round trip per hover).
       await expect.poll(() => legEndsNear(p), { timeout: 15000, message: `pass ${pass}` }).toBe(true);
       await expect(page.getByTestId("editor-pending-leg")).toHaveCount(0);
-      const metres = (await page.getByTestId("editor-pending-leg-length").textContent())!.match(/(\d+) m/)![1];
-      await expect(page.getByTestId("editor-leg-length")).toHaveText(`${metres} m`);
+      // The label at the pointer is the leg from the last placed control to the cursor, on the ground (§6.1; P2:
+      // no status-bar number to compare with, so the geometry is the reference).
+      const cursor = await toPaper(page, p);
+      const expected = (Math.hypot(cursor.x - last!.mm.x, cursor.y - last!.mm.y) * scale) / 1000;
+      await expect(page.getByTestId("editor-leg-length")).toHaveText(/^\d+ m$/);
+      const metres = Number((await page.getByTestId("editor-leg-length").textContent())!.match(/(\d+) m/)![1]);
+      expect(Math.abs(metres - expected), `pass ${pass}: ${metres} m vs ${expected.toFixed(1)} m`).toBeLessThan(2);
+      await expect(page.getByTestId("editor-pending-leg-length")).toHaveCount(0);
     }
 
     // Back to V: no provisional visit, no label; a drag of the middle control labels its two legs.
@@ -1702,7 +1711,7 @@ test.describe("Course editor auto templates (docs/course-layout.md §5–§7)", 
     const badge = page.getByTestId("editor-layout-template-badge");
     await expect(badge).toHaveAttribute("data-extra", "false");
     await expect(badge).toHaveAttribute("data-auto-key", /^A4-(portrait|landscape)-\d+$/);
-    await expect(page.getByTestId("editor-status-sheet")).toHaveAttribute("data-key", /^1:\d+ A4 /);
+    expect(await statsRow(page, "sheet", "key")).toMatch(/^1:\d+ A4 /);
 
     // A class prints at 1:15000: its class sheet appears.
     const overridden = waitForTrpc(page, "layout.setClassOverride");
@@ -1714,7 +1723,7 @@ test.describe("Course editor auto templates (docs/course-layout.md §5–§7)", 
     // Class view in Course mode: the course as the class prints it.
     await page.getByTestId("editor-mode-course").click();
     await page.getByTestId("editor-view-class").selectOption(String(cls!.seq));
-    await expect(page.getByTestId("editor-status-sheet")).toHaveAttribute("data-key", /^1:15000 A4 /, { timeout: 15_000 });
+    await expect.poll(() => statsRow(page, "sheet", "key"), { timeout: 15_000 }).toMatch(/^1:15000 A4 /);
     await page.getByTestId("editor-export").click();
     const [classDownload] = await Promise.all([page.waitForEvent("download"), page.getByTestId("editor-export-class").click()]);
     expect(classDownload.suggestedFilename()).toMatch(/\.pdf$/);
@@ -1742,10 +1751,9 @@ test.describe("Course editor auto templates (docs/course-layout.md §5–§7)", 
 test.describe("Course editor checks", () => {
   desktopOnly();
 
-  test("two controls 20 m apart: a marker, a row that locates them, the status-bar count", async ({ page }) => {
+  test("two controls 20 m apart: a marker, a row that locates them, the count on the course-info button", async ({ page }) => {
     await openEditor(page);
-    const kpis = await page.getByTestId("editor-status-kpis").textContent();
-    const scale = Number(/1:([\d\s ]+)/.exec(kpis ?? "")?.[1].replace(/[\s ]/g, ""));
+    const scale = await mapScale(page);
     expect(scale).toBeGreaterThan(0);
     const spot = await toPaper(page, await emptyPoint(page, 40));
     const dMm = 20_000 / scale;
@@ -1766,7 +1774,10 @@ test.describe("Course editor checks", () => {
       await expect(row).toContainText("20 m");
       await expect(page.locator('[data-testid="editor-check-marker"][data-code="CONTROL_TOO_CLOSE"][data-site="251"]')).toBeAttached();
       await expect(page.locator('[data-testid="editor-check-marker"][data-code="CONTROL_TOO_CLOSE"][data-site="252"]')).toBeAttached();
-      expect(Number(await page.getByTestId("editor-status-checks").getAttribute("data-count"))).toBeGreaterThan(0);
+      // The count is the course-info button's badge (P2) and a row of its popover.
+      const badge = Number(await page.getByTestId("editor-stats-badge").getAttribute("data-count"));
+      expect(badge).toBeGreaterThan(0);
+      expect(Number(await statsRow(page, "checks", "count"))).toBe(badge);
 
       // Click-to-locate: selects the first site and centres the view on the pair's midpoint.
       await row.click();
@@ -2254,6 +2265,95 @@ test.describe("P1: no blue circle on placing; the toner saver covers everything 
       for (const id of ids) await cleanup("courseObject.delete", { id });
       await cleanup("courseMap.delete", { id: sheet.seq });
       await cleanup("mapTemplate.delete", { id: template.seq });
+    }
+  });
+});
+
+// docs/course-editor.md §2, §3 (P2, feedback 2026-11-06 item 3): no status bar under the inspector; the save state is
+// a small indicator in the top bar that never hides an error, the rest is the course-info popover.
+test.describe("P2: the status bar out of the footer", () => {
+  desktopOnly();
+
+  test("the save indicator and the course-info popover sit in the top bar; the inspector column has no status bar", async ({ page }) => {
+    await openEditor(page);
+    const top = page.getByTestId("editor-top-bar");
+    await expect(page.getByTestId("editor-status")).toHaveCount(0);
+    await expect(top.getByTestId("editor-save-state")).toHaveAttribute("data-state", "saved", { timeout: 15000 });
+    await newCourse(page, "P2 stats");
+
+    // The button opens the popover: the course's control count, its length, the map scale; a second click closes it.
+    const button = top.getByTestId("editor-stats");
+    await expect(button).toHaveAttribute("aria-expanded", "false");
+    await button.click();
+    const popover = page.getByTestId("editor-stats-popover");
+    await expect(popover).toBeVisible();
+    await expect(button).toHaveAttribute("aria-expanded", "true");
+    for (const row of ["controls", "length", "scale"]) await expect(popover.getByTestId(`editor-stats-${row}`)).toBeVisible();
+    await expect(popover.getByTestId("editor-stats-controls")).toHaveAttribute("data-count", "0");
+    await expect(popover.getByTestId("editor-stats-scale")).toHaveAttribute("data-scale", /^\d+$/);
+    await button.click();
+    await expect(popover).toHaveCount(0);
+
+    // A placed control counts; an outside click closes the popover too.
+    await arm(page, "K");
+    await place(page, await emptyPoint(page, 40));
+    await page.keyboard.press("Escape");
+    await expect.poll(() => statsRow(page, "controls", "count"), { timeout: 15000 }).toBe("1");
+    await button.click();
+    await expect(popover).toBeVisible();
+    await page.getByTestId("editor-inspector").click({ position: { x: 4, y: 4 } });
+    await expect(popover).toHaveCount(0);
+
+    // Escape closes the popover and nothing else: an armed tool stays armed (the editor's Escape cascade, §3, is not stepped).
+    await arm(page, "K");
+    await button.click();
+    await expect(popover).toBeVisible();
+    await page.keyboard.press("Escape");
+    await expect(popover).toHaveCount(0);
+    await expect(page.getByTestId("editor-tool-K")).toHaveAttribute("aria-pressed", "true");
+    await page.keyboard.press("Escape");
+    await expect(page.getByTestId("editor-tool-V")).toHaveAttribute("aria-pressed", "true");
+  });
+
+  test("on a 1280 × 720 laptop screen the indicator and the button add a dot and an icon to the top bar", async ({ page }) => {
+    await page.setViewportSize({ width: 1280, height: 720 });
+    await openEditor(page);
+    await newCourse(page, "P2 row");
+    await expect(page.getByTestId("editor-save-state")).toHaveAttribute("data-state", "saved", { timeout: 15000 });
+    // Saved is the dot alone: its words are the title, not on the bar.
+    expect((await page.getByTestId("editor-save-state-text").boundingBox())!.width).toBeLessThanOrEqual(1);
+    await expect(page.getByTestId("editor-save-state")).toHaveAttribute("title", /\S/);
+    // P2's footprint on the row: a dot and an icon button. Whether the row wraps depends on the course names (the
+    // picker is as wide as the longest) and presence chips, not on P2.
+    expect((await page.getByTestId("editor-save-state").boundingBox())!.width).toBeLessThanOrEqual(16);
+    expect((await page.getByTestId("editor-stats").boundingBox())!.width).toBeLessThanOrEqual(32);
+  });
+
+  test("a failed save shows its text in the top bar on a small laptop screen", async ({ page }) => {
+    await page.setViewportSize({ width: 1024, height: 700 });
+    await openEditor(page);
+    await newCourse(page, "P2 error");
+    const indicator = page.getByTestId("editor-top-bar").getByTestId("editor-save-state");
+    await expect(indicator).toHaveAttribute("data-state", "saved", { timeout: 15000 });
+    // Every control.create fails at the network: the placement's write cannot land.
+    const create = (url: URL) => url.pathname.includes("control.create");
+    await page.route(create, (route) => route.abort());
+    try {
+      await arm(page, "K");
+      const at = await emptyPoint(page, 40);
+      await page.mouse.move(at.x, at.y);
+      await page.mouse.click(at.x, at.y);
+      await expect(indicator).toHaveAttribute("data-state", "error", { timeout: 15000 });
+      // The words, not only a dot or a tooltip, and inside the screen.
+      const text = indicator.getByTestId("editor-save-state-text");
+      await expect(text).toBeVisible();
+      await expect(text).not.toHaveText("");
+      const box = (await text.boundingBox())!;
+      expect(box.x + box.width).toBeLessThanOrEqual(1024);
+      expect(box.y + box.height).toBeLessThanOrEqual(700);
+    } finally {
+      await page.unroute(create);
+      await page.keyboard.press("Escape");
     }
   });
 });
