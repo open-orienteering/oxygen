@@ -420,6 +420,17 @@ describe("sequenceLegMeters", () => {
     expect(legs).toEqual([null, 100, 500]);
   });
 
+  it("measures a leg along its bends, as the server does (F1)", () => {
+    // 0,10 → (0,40) → 40,10: 30 + 50 mm = 800 m at 1:10 000; the leg into point 2 is straight.
+    const legs = sequenceLegMeters(
+      [{ x: 0, y: 10 }, { x: 40, y: 10, bends: [{ x: 0, y: 40 }] }, { x: 40, y: 20 }],
+      10000,
+    );
+    expect(legs).toEqual([null, 800, 100]);
+    // Across an unpositioned point the bends of the next point's leg still apply.
+    expect(sequenceLegMeters([{ x: 0, y: 10 }, null, { x: 40, y: 10, bends: [{ x: 0, y: 40 }] }], 10000)).toEqual([null, null, 800]);
+  });
+
   it("skips unpositioned points and bridges across them", () => {
     const legs = sequenceLegMeters(
       [{ x: 0, y: 10 }, null, { x: 0, y: 20 }],
