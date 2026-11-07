@@ -16,6 +16,7 @@ import {
   isNotFoundError,
 } from "../lib/session-recovery";
 import { trpc } from "../lib/trpc";
+import { retiredPageHref } from "../lib/editor/layout-href";
 import { LanguageSelector } from "../components/LanguageSelector";
 import { UserChip } from "../components/UserChip";
 import { ForbiddenPane } from "../components/ForbiddenPane";
@@ -60,9 +61,7 @@ const FinishStation = lazy(() => import("./FinishStation").then(m => ({ default:
 const CardReadout = lazy(() => import("./CardReadout").then(m => ({ default: m.CardReadout })));
 const ControlsPage = lazy(() => import("./ControlsPage").then(m => ({ default: m.ControlsPage })));
 const CoursesPage = lazy(() => import("./CoursesPage").then(m => ({ default: m.CoursesPage })));
-const MapsPage = lazy(() => import("./MapsPage").then(m => ({ default: m.MapsPage })));
 const EventMapReviewPage = lazy(() => import("./MapReviewPage").then(m => ({ default: m.EventMapReviewPage })));
-const MapTemplatesPage = lazy(() => import("./MapTemplatesPage").then(m => ({ default: m.MapTemplatesPage })));
 const CourseEditorRoute = lazy(() => import("./editor/CourseEditorRoute").then(m => ({ default: m.CourseEditorRoute })));
 const ClassesPage = lazy(() => import("./ClassesPage").then(m => ({ default: m.ClassesPage })));
 const ClubsPage = lazy(() => import("./ClubsPage").then(m => ({ default: m.ClubsPage })));
@@ -75,6 +74,13 @@ const RegistrationTrendsPage = lazy(() => import("./RegistrationTrendsPage").the
 
 type Tab = ShellTabId;
 
+/** An old `/maps` or `/map-templates` link (E-pages): to the Courses page or Layout mode, its query kept. */
+function RetiredPageRedirect({ page }: { page: "maps" | "map-templates" }) {
+  const { nameId = "" } = useParams<{ nameId: string }>();
+  const { search } = useLocation();
+  return <Navigate to={retiredPageHref(nameId, page, search)} replace />;
+}
+
 const tabLabelKeys = {
   "dashboard": "dashboard",
   "runners": "runners",
@@ -82,8 +88,6 @@ const tabLabelKeys = {
   "results": "results",
   "classes": "classes",
   "courses": "courses",
-  "maps": "maps",
-  "map-templates": "mapTemplates",
   "course-editor": "courseEditor",
   "controls": "controls",
   "cards": "cards",
@@ -617,8 +621,9 @@ function CompetitionShellInner() {
             <Route path="results" element={<Guarded cap="results.view"><ResultsPage /></Guarded>} />
             <Route path="classes" element={<Guarded cap="event.view"><ClassesPage /></Guarded>} />
             <Route path="courses" element={<Guarded cap="courses.view"><CoursesPage /></Guarded>} />
-            <Route path="maps" element={<Guarded cap="courses.view"><MapsPage /></Guarded>} />
-            <Route path="map-templates" element={<Guarded cap="courses.view"><MapTemplatesPage /></Guarded>} />
+            {/* Retired pages (E-pages): the Courses page and Layout mode hold what they did. */}
+            <Route path="maps" element={<Guarded cap="courses.view"><RetiredPageRedirect page="maps" /></Guarded>} />
+            <Route path="map-templates" element={<Guarded cap="courses.view"><RetiredPageRedirect page="map-templates" /></Guarded>} />
             <Route path="course-editor" element={<Guarded cap="courses.view"><CourseEditorRoute /></Guarded>} />
             <Route path="map-review/:documentHash" element={<Guarded cap="courses.view"><EventMapReviewPage /></Guarded>} />
             <Route path="controls" element={<Guarded cap="courses.view"><ControlsPage /></Guarded>} />

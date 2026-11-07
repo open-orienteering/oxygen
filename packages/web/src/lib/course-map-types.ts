@@ -1,65 +1,16 @@
+/**
+ * A new template's form draft and its `mapTemplate.create` payload
+ * (`components/NewTemplateForm.tsx`; E-pages).
+ */
+
 import {
   defaultMapAppearance,
   defaultMapFrame,
   getPaperDimensions,
-  type CourseMapDocument,
-  type CourseMapObject,
-  type CourseMapOverrides,
-  type MapTemplateSettings,
-  type MapWindow,
 } from "@oxygen/shared";
 
 export type MapPaper = "A3" | "A4" | "A5";
 export type MapOrientation = "portrait" | "landscape";
-
-export interface MapTemplateView {
-  id: string;
-  seq: number;
-  name: string;
-  paper: string;
-  orientation: string;
-  paperWidthMm?: number | null;
-  paperHeightMm?: number | null;
-  printScale: number;
-  settings: MapTemplateSettings;
-  objects: CourseMapObject[];
-  /** `<paper>-<orientation>-<scale>` (docs/course-layout.md §5). */
-  autoKey?: string | null;
-  /** Another template of the key is its auto template. */
-  isExtra?: boolean;
-}
-
-export interface CourseMapView {
-  id: string;
-  seq: number;
-  name: string;
-  kind: string;
-  courseId: number | null;
-  templateId: number | null;
-  course: {
-    seq: number;
-    name: string;
-    lengthM?: number;
-    climbM?: number;
-    classes?: Array<{ name: string }>;
-  } | null;
-  template: { seq: number; name: string; autoKey?: string | null; isExtra?: boolean } | null;
-  /** A class's sheet (docs/course-layout.md §6); the Maps page lists the courses' own sheets only. */
-  class?: { seq: number; name: string } | null;
-  overrides: CourseMapOverrides;
-  objects: CourseMapObject[];
-  validation: {
-    valid: boolean;
-    issues: Array<{
-      code: string;
-      controlId?: string;
-      objectId?: string;
-      message?: string;
-    }>;
-  };
-  /** The sheet as it resolves; null without a template (no *Edit layout*). */
-  resolved: { document: CourseMapDocument; window: MapWindow } | null;
-}
 
 export interface TemplateDraft {
   name: string;
@@ -77,24 +28,7 @@ export const EMPTY_TEMPLATE_DRAFT: TemplateDraft = {
   margin: "3",
 };
 
-export function draftFromTemplate(template: MapTemplateView): TemplateDraft {
-  return {
-    name: template.name,
-    paper:
-      template.paper === "A3" || template.paper === "A5"
-        ? template.paper
-        : "A4",
-    orientation:
-      template.orientation === "landscape" ? "landscape" : "portrait",
-    printScale: String(template.printScale),
-    margin: String(template.settings.printMarginMm),
-  };
-}
-
-export function templatePayload(
-  draft: TemplateDraft,
-  existing?: MapTemplateView,
-) {
+export function templatePayload(draft: TemplateDraft) {
   const printScale = Math.max(
     1_000,
     Math.min(100_000, Number.parseInt(draft.printScale, 10) || 7_500),
@@ -112,14 +46,14 @@ export function templatePayload(
     settings: {
       printMarginMm: margin,
       mapFrame: defaultMapFrame(dimensions, margin),
-      description: existing?.settings.description ?? {
+      description: {
         visible: true,
         x: Math.max(margin, dimensions.width - margin - 48),
         y: margin + 4,
         cellSizeMm: 6,
       },
-      appearance: existing?.settings.appearance ?? defaultMapAppearance,
+      appearance: defaultMapAppearance,
     },
-    objects: existing?.objects ?? [],
+    objects: [],
   };
 }
