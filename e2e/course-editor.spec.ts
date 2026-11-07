@@ -2361,6 +2361,14 @@ test.describe("P2: the status bar out of the footer", () => {
 // P5 (feedback-2026-11-07 item 2): its own describe, so the parallel rows' edits above merge cleanly.
 test.describe("P5: the pending leg from a just-placed start", () => {
   desktopOnly();
+  // A start placed with `S` has no code, so its public id is its seq (`publicControlId`). After the rest of this
+  // file has created controls the event's seq reaches the seed's punch codes (80 in a full run), and the new start
+  // then shares its id with control 80: the mirror sees no new site and the course reads the start as 80. A
+  // reseed puts the seq back at the seed's. The collision itself is a server issue outside P5
+  // (docs/bugfix-first-leg-from-start.md, "Found on the way").
+  test.beforeAll(async () => {
+    await reseed();
+  });
 
   const near = (p: Pt | undefined, q: Pt, mm: number) => !!p && Math.hypot(p.x - q.x, p.y - q.y) < mm;
   /**

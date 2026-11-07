@@ -62,3 +62,19 @@ read it.
   `editor-leg-length` and a `course-leg` piece from the new start to the
   cursor; after the click and `Esc` the leg start → control stays. Run
   against the old memo, both leg assertions fail while the label passes.
+
+## Found on the way (not fixed here)
+
+A control's public id is its first punch code, else its `seq`
+(`packages/api/src/control-id.ts`). Starts and finishes are code-less, so
+a start placed with `S` is addressed by its seq, and `control.create`
+does not check that seq against the codes already in use. Once an
+event's seq reaches a punch code (in a full E2E run of
+`course-editor.spec.ts` the new start got seq 80 beside the seed control
+coded 80), two controls share one public id. The web then sees two
+`editor-site`s keyed `80` (React's duplicate-key warning), the course
+reads the start as control 80, and a reuse or a filter can hit the wrong
+control. The P5 describe reseeds in its `beforeAll` so it doesn't depend
+on how many controls earlier tests created. A fix belongs to the id space
+(for example, skip seqs that collide with a code, or give starts and
+finishes ids from a range of their own), which is outside P5's area.
