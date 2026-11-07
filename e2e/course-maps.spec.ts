@@ -285,6 +285,19 @@ test.describe("the Courses page and Layout mode (E-pages)", () => {
 
     // Tables use the standard horizontal-scroll wrapper for narrow screens.
     await expect(page.locator("div.overflow-x-auto table")).toBeVisible();
+
+    // Layout mode's club section deletes a club template (confirmed); the row goes.
+    await rowOf(page, ids[0]).locator("[data-testid^='edit-course-map-']").click();
+    await layoutReady(page);
+    await page.getByTestId("editor-layout-club-toggle").click();
+    const clubRow = page.locator("[data-testid^='editor-layout-club-row-']").filter({ hasText: "E2E shared map template" });
+    await expect(clubRow).toHaveCount(1);
+    const clubId = (await clubRow.getAttribute("data-testid"))!.replace("editor-layout-club-row-", "");
+    page.once("dialog", (d) => void d.accept());
+    const deletedClub = waitForTrpc(page, "mapTemplate.deleteClub");
+    await page.getByTestId(`editor-layout-club-delete-${clubId}`).click();
+    await deletedClub;
+    await expect(page.getByTestId(`editor-layout-club-row-${clubId}`)).toHaveCount(0);
   });
 });
 
@@ -296,7 +309,7 @@ test.describe("auto templates (docs/course-layout.md §5–§7)", () => {
     page.setDefaultTimeout(15_000);
     await selectEvent(page);
     await openTab(page, "Courses");
-    const [courseId] = await courseIds(page);
+    const [courseId, other] = await courseIds(page);
     await expect(page.getByTestId(`course-template-badge-${courseId}`)).toHaveCount(0);
 
     // The course has no sheet: the export creates its first one on the auto template of its key.
@@ -315,6 +328,15 @@ test.describe("auto templates (docs/course-layout.md §5–§7)", () => {
     await expect(page.getByTestId("editor-layout-template-badge")).toHaveAttribute("data-auto-key", /^A4-(portrait|landscape)-\d+$/, { timeout: 30_000 });
     await page.getByTestId("editor-layout-edit-template").click();
     await expect(page.getByTestId("editor-layout-template-name")).toHaveValue(/^A4 (portrait|landscape) 1:\d+$/);
+
+    // A course without a sheet in Layout mode: Create sheet makes its first one (autoSheets { courseId }) and shows it.
+    await page.goto(`/itest/course-editor?mode=layout&course=${other}`);
+    await expect(page.getByTestId("editor-layout-no-sheet")).toBeVisible({ timeout: 30_000 });
+    const created = waitForTrpc(page, "layout.autoSheets");
+    await page.getByTestId("editor-layout-create-sheet").click();
+    await created;
+    await expect(page.getByTestId("editor-layout-scope")).toHaveAttribute("data-sheet", /^\d+$/, { timeout: 30_000 });
+    await expect(page.getByTestId("editor-layout-template-badge")).toHaveAttribute("data-extra", "false");
   });
 });
 

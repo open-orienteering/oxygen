@@ -35,12 +35,17 @@ export type Record_ = (undo: () => Promise<unknown>, redo: () => Promise<unknown
 
 const LINK = "text-[11px] text-purple-700 hover:underline cursor-pointer disabled:opacity-50";
 
+/**
+ * Reload what a sheet or template write changes. `leaving`: the shown row is
+ * gone — the reads are only marked stale (the next target's read fetches
+ * itself), so the deleted one is not read again before the view moves.
+ */
 function useRefresh() {
   const utils = trpc.useUtils();
-  return async () => {
+  return async (leaving = false) => {
     await Promise.all([
       utils.courseMap.list.invalidate(),
-      utils.courseMap.resolveSheet.invalidate(),
+      utils.courseMap.resolveSheet.invalidate(undefined, leaving ? { refetchType: "none" } : undefined),
       utils.mapTemplate.list.invalidate(),
       utils.layout.classOverrides.invalidate(),
     ]);
@@ -104,9 +109,8 @@ export function SheetActions(p: {
     if (!window.confirm(t("layoutDeleteSheetConfirm", { name: sheet.name }))) return;
     await p.run(async () => {
       await client.courseMap.delete.mutate({ id: sheet.seq });
-      // Off the deleted sheet first, so the refresh does not read it again.
       p.onOpen(null);
-      await refresh();
+      await refresh(true);
       return true;
     });
   };
@@ -194,7 +198,7 @@ export function TemplateActions(p: {
     await p.run(async () => {
       await client.mapTemplate.delete.mutate({ id: p.template.seq });
       p.onOpen(null);
-      await refresh();
+      await refresh(true);
       return true;
     });
   };
