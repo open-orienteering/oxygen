@@ -41,14 +41,15 @@ export interface ResolvedSheet {
 }
 
 /**
- * The authored leg gaps of the stored structure, by index into the layout's
- * controls. The layout's controls are the course's start and finish rows
- * and its `course_controls`; a start the layout does not draw (unplaced,
- * or `firstAsStart`) shifts the two sequences, so they are aligned on the
+ * The stored legs of the structure (`LegProps`: gaps, style, bends, …;
+ * course-layer.md §10.1), by index into the layout's controls. The
+ * layout's controls are the course's start and finish rows and its
+ * `course_controls`; a start the layout does not draw (unplaced, or
+ * `firstAsStart`) shifts the two sequences, so they are aligned on the
  * first site they share.
  */
-function legGapsByIndex(layout: ResolvedMapLayout, stored: course.StoredCourseStructure | null): Map<number, course.FractionGap[]> {
-  const out = new Map<number, course.FractionGap[]>();
+function legPropsByIndex(layout: ResolvedMapLayout, stored: course.StoredCourseStructure | null): Map<number, course.LegProps> {
+  const out = new Map<number, course.LegProps>();
   if (!stored) return out;
   const items = course.structureControlItems(stored);
   const ids = layout.controls.map((c) => c.id);
@@ -57,7 +58,7 @@ function legGapsByIndex(layout: ResolvedMapLayout, stored: course.StoredCourseSt
   const offset = ids.indexOf(items[anchor].siteId) - anchor;
   items.forEach((item, j) => {
     const i = j + offset;
-    if (j > 0 && i > 0 && i < ids.length && item.leg?.gaps?.length) out.set(i, item.leg.gaps);
+    if (j > 0 && i > 0 && i < ids.length && item.leg && Object.keys(item.leg).length > 0) out.set(i, item.leg);
   });
   return out;
 }
@@ -85,11 +86,12 @@ export function courseInputOfLayout(
   if (opts.kind !== "course") return { structure: null, sites };
 
   const parsed = opts.structure ? course.courseStructureSchema.safeParse(opts.structure) : null;
-  const gaps = legGapsByIndex(layout, parsed?.success ? parsed.data : null);
+  const legs = legPropsByIndex(layout, parsed?.success ? parsed.data : null);
   const items: course.CourseItem[] = layout.controls.map((c, i) => {
     const item: course.CourseItem = { siteId: c.id, role: c.type };
-    const legGaps = gaps.get(i);
-    if (legGaps) item.leg = { gaps: legGaps };
+    // The whole stored leg (F1): the layer reads gaps, style and bends; the rest is F2's / F4's.
+    const leg = legs.get(i);
+    if (leg) item.leg = leg;
     return item;
   });
   const labelOffsets: Record<string, { dx: number; dy: number }> = {};
