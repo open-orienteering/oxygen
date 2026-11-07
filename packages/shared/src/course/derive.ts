@@ -50,7 +50,11 @@ function sequenceOf(structure: CourseStructure, sites: ReadonlyMap<string, Cours
 /** Polyline length, mm: a leg's length along its bends (§4.1, §10.1). */
 export function legLengthMm(points: readonly MapPoint[]): number {
   let sum = 0;
-  for (let i = 1; i < points.length; i++) sum += Math.hypot(points[i].x - points[i - 1].x, points[i].y - points[i - 1].y);
+  for (let i = 1; i < points.length; i++) {
+    // sqrt(dx² + dy²), not hypot: a straight leg's stored length stays the pre-E6 formula bit for bit (§4.1).
+    const dx = points[i].x - points[i - 1].x, dy = points[i].y - points[i - 1].y;
+    sum += Math.sqrt(dx * dx + dy * dy);
+  }
   return sum;
 }
 
