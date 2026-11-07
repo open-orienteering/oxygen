@@ -201,4 +201,69 @@ describe("triangulateEvenOdd", () => {
   it("returns nothing for degenerate rings", () => {
     expect(triangulateEvenOdd([[0, 0, 1, 1]]).indices.length).toBe(0);
   });
+
+  // P7: a white-out outside is [window ring, shape]; the shape crosses the window whenever it reaches the frame.
+  describe("rings that cross a convex ring (P7)", () => {
+    const covers = (t: { positions: number[]; indices: number[] }, x: number, y: number) => {
+      const p = t.positions;
+      const side = (ax: number, ay: number, bx: number, by: number) => (bx - ax) * (y - ay) - (by - ay) * (x - ax);
+      for (let i = 0; i < t.indices.length; i += 3) {
+        const [a, b, c] = [2 * t.indices[i], 2 * t.indices[i + 1], 2 * t.indices[i + 2]];
+        const d1 = side(p[a], p[a + 1], p[b], p[b + 1]), d2 = side(p[b], p[b + 1], p[c], p[c + 1]), d3 = side(p[c], p[c + 1], p[a], p[a + 1]);
+        if ((d1 > 0 && d2 > 0 && d3 > 0) || (d1 < 0 && d2 < 0 && d3 < 0)) return true;
+      }
+      return false;
+    };
+    const win = sq(0, 0, 100);
+
+    it("cuts a shape whose first vertex lies outside, to the left (the whole frame went white)", () => {
+      for (const rings of [[win, [-20, 20, 60, 20, 60, 60, -20, 60]], [[-20, 20, 60, 20, 60, 60, -20, 60], win]]) {
+        const t = triangulateEvenOdd(rings);
+        expect(area(t)).toBeCloseTo(10_000 - 2_400 + 800, 3);
+        expect(covers(t, 40, 40)).toBe(false);
+        expect(covers(t, 90, 90)).toBe(true);
+        expect(covers(t, -10, 40)).toBe(true);
+      }
+    });
+
+    it("cuts a shape crossing the bottom edge with its first vertex inside (the white slash)", () => {
+      const t = triangulateEvenOdd([win, [20, 20, 60, 20, 60, -30, 20, -30]]);
+      expect(area(t)).toBeCloseTo(10_000 - 800 + 1_200, 3);
+      expect(covers(t, 40, 10)).toBe(false);
+      expect(covers(t, 40, 50)).toBe(true);
+      expect(covers(t, 40, -10)).toBe(true);
+    });
+
+    it("cuts a band beyond both sides whose every vertex lies outside", () => {
+      const t = triangulateEvenOdd([win, [-20, 40, 120, 40, 120, 60, -20, 60]]);
+      expect(area(t)).toBeCloseTo(10_000 - 2_000 + 800, 3);
+      expect(covers(t, 50, 50)).toBe(false);
+      expect(covers(t, -10, 50)).toBe(true);
+      expect(covers(t, 50, 90)).toBe(true);
+    });
+
+    it("cuts a non-convex shape crossing a rotated window from a corner", () => {
+      const r = 0.3, c = Math.cos(r), s = Math.sin(r);
+      const rot = (q: number[]) => q.map((v, i) => (i % 2 ? q[i - 1] * s + v * c : v * c - q[i + 1] * s));
+      const L = [-30, -30, 50, -30, 50, 10, 10, 10, 10, 50, -30, 50]; // an L over the corner (0, 0)
+      const t = triangulateEvenOdd([rot(win), rot(L)]);
+      // inside: the L ∩ square = [0,50]×[0,10] ∪ [0,10]×[10,50] = 500 + 400; the L's area 80² − 40² = 4 800.
+      expect(area(t)).toBeCloseTo(10_000 - 900 + (4_800 - 900), 2);
+      const at = (x: number, y: number): [number, number] => [x * c - y * s, x * s + y * c];
+      expect(covers(t, ...at(30, 5))).toBe(false);
+      expect(covers(t, ...at(5, 30))).toBe(false);
+      expect(covers(t, ...at(30, 30))).toBe(true);
+      expect(covers(t, ...at(-10, -10))).toBe(true);
+    });
+
+    it("keeps a hole that touches the outer's edge", () => {
+      const t = triangulateEvenOdd([win, [0, 20, 60, 20, 60, 60, 0, 60]]);
+      expect(area(t)).toBeCloseTo(7_600, 3);
+      expect(covers(t, 30, 40)).toBe(false);
+    });
+
+    it("fills a shape wholly outside the window", () => {
+      expect(area(triangulateEvenOdd([win, sq(200, 200, 50)]))).toBeCloseTo(12_500, 3);
+    });
+  });
 });
