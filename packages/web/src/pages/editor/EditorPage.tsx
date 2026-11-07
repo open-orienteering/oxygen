@@ -994,13 +994,17 @@ export function EditorPage() {
     void createControl(snap(pt), insertIndexForLeg(rows, target.index));
   }, [selectedCourse, rows, createControl, snap]);
 
+  const courseView = state.view !== "all";
+  /** The one course the layer highlights — and the only one it splices the provisional visit into. */
+  const highlightCourseName = courseView ? selectedCourse?.name : undefined;
+
   const tool = state.tool;
   const toolBinding: EditorToolBinding | null = (() => {
     switch (tool.kind) {
       case "place":
-        // The layer draws the visit only under the highlighted course (`highlightCourseName`, Course / Class view).
+        // The layer draws the visit only under the highlighted course (Course / Class view).
         return placeBinding({
-          ghost, provisionalDrawn: state.view !== "all" && !!selectedCourse && provisionalDrawn(provisional),
+          ghost, provisionalDrawn: !!highlightCourseName && provisionalDrawn(provisional),
           onHover, onPlace: place, onExit: exitTool, touch: { placeLabel: t("touchPlace"), doneLabel: t("touchDone") },
         });
       case "area":
@@ -1172,7 +1176,6 @@ export function EditorPage() {
   }, [fieldReadOnly, handleMoveEnd]);
 
   // Class view is Course view drawn through the class's sheet (docs/course-layout.md §6).
-  const courseView = state.view !== "all";
   const fitClassPage = useCallback((bounds: { minX: number; minY: number; maxX: number; maxY: number }) => {
     setViewRequest((v) => ({ key: (v?.key ?? 0) + 1, bounds }));
   }, []);
@@ -1807,7 +1810,7 @@ export function EditorPage() {
             <ControlDescriptionEditor controlCode={descControl.code} initial={descControl.description} onSave={saveDescription} onCancel={closeDescription} />
           ) : null}
           editor={state.mode === "layout" ? layoutMode.editor : editor}
-          highlightCourseName={courseView ? selectedCourse?.name : undefined}
+          highlightCourseName={highlightCourseName}
         />
       </div>
     </div>

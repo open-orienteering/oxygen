@@ -1158,6 +1158,10 @@ whose poll ran meanwhile simply does not conflict (decision log, D10).
   course). P4 draws the ghost circle there (`provisionalDrawn` is gated on
   Course / Class view at the binding); re-arming the chain on a view
   switch would make the visit itself correct (pre-existing since D5a).
+  When the viewer has fallen back to no course layer (`CourseStackError`,
+  the banner says so) the page still reports the visit drawn, so the
+  ghost has no circle there either; the binding does not see the
+  viewer's fallback (P4 review, left as is).
 - The colour-profile and north badge are the map-info row's, unchanged.
 - **Flattening the symbol table at import** (feedback 2026-11-06 item 5,
   the option not taken by P3): merging a heading's variants and dropping
