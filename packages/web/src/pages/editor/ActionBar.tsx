@@ -30,10 +30,14 @@ export interface ActionContext {
   codesReady: boolean;
   /** A write is in flight (delete waits for it). */
   busy: boolean;
+  /** The leg phantom's leg can be edited here (it resolves to an item; not on a phone, §6.7). */
+  legEdit?: boolean;
 }
 
 export interface ActionHandlers {
   insert(): void;
+  /** *Add bend here* on a leg (§6.7). */
+  addBend(): void;
   addToCourse(): void;
   add(): void;
   addStart(): void;
@@ -56,6 +60,7 @@ export function courseActions(ctx: ActionContext, on: ActionHandlers, label: Act
   if (ctx.phantom) {
     if (ctx.phantom.insertAt !== null && ctx.course) {
       out.push({ id: "insert", label: label("editor.actionInsert"), onClick: on.insert, disabled: !ctx.codesReady });
+      if (ctx.legEdit) out.push({ id: "add-bend", label: label("editor.actionAddBend"), onClick: on.addBend });
       return out;
     }
     if (ctx.course) out.push({ id: "add-to-course", label: label("editor.actionAddToCourse", { name: ctx.course }), onClick: on.addToCourse, disabled: !ctx.codesReady });

@@ -10,7 +10,7 @@ import { useLayoutEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { useTranslation } from "react-i18next";
 import type { EditorTool } from "../../lib/editor/state";
-import { AREA_CHOICES, AREA_KEYS, railKeyOf, type AreaChoice, type RailTool } from "./tools/rail";
+import { AREA_CHOICES, AREA_KEYS, CORRIDOR_KEY, railKeyOf, type AreaChoice, type RailTool } from "./tools/rail";
 
 export type { AreaChoice } from "./tools/rail";
 
@@ -26,6 +26,9 @@ export interface ToolRailProps {
   canGap: boolean;
   /** The toner saver needs a course with positioned sites. */
   canTonerSaver: boolean;
+  /** *Corridor on selected leg* (§6.7): a leg is selected and has no corridor yet. */
+  canCorridor: boolean;
+  onCorridor: () => void;
   snapping: boolean;
   onSnapping: () => void;
 }
@@ -100,6 +103,13 @@ export function ToolRail(p: ToolRailProps) {
               <span>{t(`kind_${kind}`)}</span>
             </button>
           ))}
+          <div className="h-px bg-slate-200 my-1" />
+          <button type="button" role="menuitem" data-testid="editor-area-corridor" disabled={!p.canCorridor}
+            onClick={() => { p.onAreaOpen(false); p.onCorridor(); }}
+            className="w-full flex items-center gap-2 text-left px-2.5 py-1.5 hover:bg-purple-50 disabled:opacity-40 disabled:cursor-not-allowed cursor-pointer">
+            <kbd className="w-4 text-center font-mono text-[10px] text-slate-400 border border-slate-200 rounded">{CORRIDOR_KEY}</kbd>
+            <span>{t("corridorOnLeg")}</span>
+          </button>
         </div>,
         document.body,
       )}
