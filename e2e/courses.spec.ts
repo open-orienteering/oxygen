@@ -128,6 +128,63 @@ test.describe("Courses Page", () => {
     expect(removed.ok()).toBe(true);
   });
 
+  test("a course with variations lists its variants under it, read-only (course-layer.md §12)", async ({ page }) => {
+    const headers = { "x-competition-id": "itest" };
+    const post = async (path: string, data: unknown) => {
+      const res = await page.request.post(`/trpc/${path}`, { headers, data });
+      expect(res.ok(), `${path}: ${await res.text()}`).toBe(true);
+      return (await res.json()).result.data;
+    };
+    const codes = [181, 182, 183, 184];
+    const controls: number[] = [];
+    for (const [i, code] of codes.entries()) {
+      controls.push((await post("control.create", { codes: String(code), xpos: 20 + i * 10, ypos: 20 })).id as number);
+    }
+    const name = `E2E Fork ${Date.now()}`;
+    const root = (await post("course.create", { name })).id as number;
+    await post("course.setStructure", {
+      courseId: root,
+      structure: {
+        version: 1,
+        id: "fork",
+        orderMode: "ordered",
+        items: [
+          { siteId: 181 },
+          { kind: "variation", id: "g", alternatives: [{ label: "A", items: [{ siteId: 182 }] }, { label: "B", items: [{ siteId: 183 }] }] },
+          { siteId: 184 },
+        ],
+      },
+    });
+
+    try {
+      await selectCompetition(page);
+      await clickTab(page, "Courses");
+      // The heading counts roots only: the seed's three and this one.
+      await expect(page.getByText("4 courses")).toBeVisible({ timeout: 10000 });
+      await expect(page.getByTestId(`course-variant-count-${root}`)).toHaveText("2 variants");
+      const variantRows = page.locator('[data-testid^="course-variant-row-"]');
+      await expect(variantRows).toHaveCount(2);
+      await expect(variantRows.nth(0)).toContainText(`${name} A`);
+      await expect(variantRows.nth(1)).toContainText(`${name} B`);
+      await expect(variantRows.nth(1).getByTestId("course-variant-key")).toHaveText("B");
+      // Nested right under the root's row, with no checkbox and no actions.
+      const rootRow = page.getByRole("row").filter({ hasText: name }).first();
+      await expect(rootRow.locator("xpath=following-sibling::tr[1]")).toHaveAttribute("data-testid", /course-variant-row-/);
+      await expect(variantRows.nth(0).locator("input, button, a")).toHaveCount(0);
+      // The root's own sequence is its structure's: read-only here.
+      await rootRow.getByRole("cell", { name }).click();
+      await expect(page.getByTestId("course-variations-hint")).toBeVisible({ timeout: 5000 });
+      await expect(page.getByTestId("course-detail-controls")).toBeDisabled();
+      await expect(page.getByTestId("course-order-mode")).toBeDisabled();
+    } finally {
+      await post("course.delete", { id: root });
+      for (const id of controls) await post("control.delete", { id });
+    }
+    await page.reload();
+    await expect(page.getByText("3 courses")).toBeVisible({ timeout: 10000 });
+    await expect(page.locator('[data-testid^="course-variant-row-"]')).toHaveCount(0);
+  });
+
   test("should create a free-order course with badge and persisted mode", async ({
     page,
   }) => {
