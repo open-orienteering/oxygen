@@ -363,15 +363,25 @@ export async function rewriteStructureFromColumns(db: Db, eventId: bigint, cours
   });
 }
 
-/** A course's label offsets by control UUID (first visit wins), from `course_controls`. */
-async function courseLabelOffsets(db: Db, courseUuid: string): Promise<Offsets> {
+/**
+ * A course's label offsets by control UUID (first visit wins), from
+ * `course_controls`. A root's own rows hold the first alternatives only, so
+ * its live variants' rows fill in the controls of the other alternatives
+ * (§12) — the wire form then round-trips every offset.
+ */
+export async function courseLabelOffsets(db: Db, courseUuid: string): Promise<Offsets> {
   const ccs = await db.courseControl.findMany({
     where: { courseId: courseUuid },
     orderBy: { position: "asc" },
     select: { controlId: true, labelDx: true, labelDy: true },
   });
+  const children = await db.courseControl.findMany({
+    where: { course: { parentCourseId: courseUuid, removed: false } },
+    orderBy: [{ courseId: "asc" }, { position: "asc" }],
+    select: { controlId: true, labelDx: true, labelDy: true },
+  });
   const out: Offsets = {};
-  for (const cc of ccs) {
+  for (const cc of [...ccs, ...children]) {
     if (cc.labelDx != null && cc.labelDy != null) out[cc.controlId] ??= { dx: cc.labelDx, dy: cc.labelDy };
   }
   return out;
@@ -418,7 +428,7 @@ export async function remirrorStoredStructures(db: Db, eventId: bigint, courseUu
   return out;
 }
 
-/** Courses whose stored structure names the control (any item, start and finish included). */
+/** Courses whose stored structure names the control (any item of any alternative, start and finish included). */
 export async function coursesNamingInStructure(db: Db, eventId: bigint, controlUuid: string): Promise<string[]> {
   const rows = await db.course.findMany({
     where: { eventId, removed: false, NOT: { structure: { equals: PrismaNs.DbNull } } },
@@ -427,7 +437,7 @@ export async function coursesNamingInStructure(db: Db, eventId: bigint, controlU
   return rows
     .filter((r) => {
       const parsed = course.courseStructureSchema.safeParse(r.structure);
-      return parsed.success && course.structureControlIds(parsed.data).includes(controlUuid);
+      return parsed.success && course.structureSiteIds(parsed.data).includes(controlUuid);
     })
     .map((r) => r.id);
 }
@@ -441,9 +451,9 @@ export async function publicIdsOf(db: Db, eventId: bigint, uuids: Iterable<strin
   return new Map(rows.map((r) => [r.id, publicControlId(r)]));
 }
 
-/** Every site id a structure references (label-offset keys included). */
+/** Every site id a structure references, in any alternative (label-offset keys included). */
 function siteIdsOf(s: Stored & { labelOffsets?: Offsets }): string[] {
-  return [...course.structureControlIds(s), ...Object.keys(s.labelOffsets ?? {})];
+  return [...course.structureSiteIds(s), ...Object.keys(s.labelOffsets ?? {})];
 }
 
 /** A course's explicit structure in wire form, with label offsets from `course_controls`. */

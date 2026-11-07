@@ -505,11 +505,17 @@ model Course {
   /// Concurrency token: HLC of the `course.upserted` entry that last wrote
   /// the course itself, 0 before D0 (docs/course-layer.md §7).
   version         BigInt   @default(0)
+  /// The root course this row is a materialised variant of (F6; docs/course-layer.md §12). NULL for every other course.
+  parentCourseId  String?  @map("parent_course_id") @db.Uuid
+  /// The variant's key ("AC", "BA"); set exactly when `parentCourseId` is.
+  variantKey      String?  @map("variant_key")
   removed         Boolean  @default(false)
   createdAt       DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
   updatedAt       DateTime @default(now()) @map("updated_at") @db.Timestamptz(6)
 
   event          Event             @relation(fields: [eventId], references: [id], onDelete: Cascade)
+  parent         Course?           @relation("CourseVariants", fields: [parentCourseId], references: [id], onDelete: Cascade)
+  variants       Course[]          @relation("CourseVariants")
   finishControl  Control?          @relation("CourseFinishControl", fields: [finishControlId], references: [id], onDelete: SetNull)
   courseControls CourseControl[]
   classes        Class[]
@@ -519,7 +525,9 @@ model Course {
   presence       CoursePresence[]
 
   @@unique([eventId, seq])
+  @@unique([parentCourseId, variantKey])
   @@index([eventId, removed])
+  @@index([parentCourseId])
   @@map("courses")
   @@schema("oxygen")
 }

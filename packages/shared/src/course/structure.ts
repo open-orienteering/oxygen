@@ -5,8 +5,8 @@
  * The stored shape is C0's v1 layer input (`CourseStructure`: `version`,
  * `id`, `orderMode`, `items`) with the whole 08 §4.3 item union — control
  * items with `LegProps`, and variation groups — so slice F never reshapes
- * the column. Phase 1 writes control items only: `course.setStructure`
- * refuses a structure with groups. Not stored: `labelOffsets` (one source,
+ * the column. Groups are materialised into child courses (`variants.ts`,
+ * course-layer.md §12). Not stored: `labelOffsets` (one source,
  * `course_controls`; readers fill them in), `extras` and C0's interim
  * file-authored `leg.path` / `pieces` / item `circleGaps` (the slice D split:
  * no `LegProps.path`; authored cuts become `controls.circle_gaps`, D1). Items
@@ -59,9 +59,13 @@ function variationItemSchemaOf<S extends z.ZodType<string | number>>(siteId: S) 
   return z.strictObject({
     kind: z.literal("variation"),
     id: z.string().min(1),
-    /** Alternatives hold controls only, so groups never nest. */
+    /**
+     * Alternatives hold controls only, so groups never nest. An alternative
+     * may be empty — a straight leg — as long as one is not (answer 5,
+     * `VARIATION_ALL_EMPTY`).
+     */
     alternatives: z
-      .array(z.strictObject({ label: z.string().min(1), items: z.array(controlItemSchemaOf(siteId)).min(1) }))
+      .array(z.strictObject({ label: z.string().min(1), items: z.array(controlItemSchemaOf(siteId)) }))
       .min(2),
     /** Butterfly: the alternatives return to the anchor. */
     loop: z.boolean().optional(),
@@ -72,7 +76,7 @@ function variationItemSchemaOf<S extends z.ZodType<string | number>>(siteId: S) 
  * The structure schema over a site-id type. Rule codes, reported as issue
  * messages: `VARIATION_OVERLAP` (two groups with no control between them),
  * `VARIATION_UNANCHORED` (a group first or last), `VARIATION_ID_DUPLICATE`,
- * `VARIATION_LABEL_DUPLICATE`.
+ * `VARIATION_LABEL_DUPLICATE`, `VARIATION_ALL_EMPTY` (no alternative holds a control).
  */
 export function courseStructureSchemaOf<S extends z.ZodType<string | number>>(siteId: S) {
   const item = z.union([variationItemSchemaOf(siteId), controlItemSchemaOf(siteId)]);
@@ -89,7 +93,7 @@ export function courseStructureSchemaOf<S extends z.ZodType<string | number>>(si
 }
 
 /** What the group rules read of an item, whatever the site-id type. */
-type ItemShape = { kind?: "control" | "variation"; id?: string; alternatives?: { label: string }[] };
+type ItemShape = { kind?: "control" | "variation"; id?: string; alternatives?: { label: string; items: unknown[] }[] };
 
 function variationRules(items: readonly ItemShape[], ctx: z.RefinementCtx): void {
   const ids = new Set<string>();
@@ -108,6 +112,9 @@ function variationRules(items: readonly ItemShape[], ctx: z.RefinementCtx): void
     const labels = (item.alternatives ?? []).map((a) => a.label);
     if (new Set(labels).size !== labels.length) {
       ctx.addIssue({ code: "custom", message: "VARIATION_LABEL_DUPLICATE", path });
+    }
+    if ((item.alternatives ?? []).every((a) => a.items.length === 0)) {
+      ctx.addIssue({ code: "custom", message: "VARIATION_ALL_EMPTY", path });
     }
   });
 }

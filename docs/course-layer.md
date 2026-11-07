@@ -601,7 +601,9 @@ LegProps = { style?: "line" | "marked_route" | "none", gaps?: { from, to }[],
   (`VARIATION_UNANCHORED`) nor next to another group
   (`VARIATION_OVERLAP`); group ids and alternative labels are unique
   (`VARIATION_ID_DUPLICATE`, `VARIATION_LABEL_DUPLICATE`); at least two
-  non-empty alternatives. Rules that need the sites
+  alternatives, of which at least one holds a control
+  (`VARIATION_ALL_EMPTY`) — an empty alternative is a straight leg from
+  anchor to anchor (user, 2026-11-07, slice F answer 5; F6). Rules that need the sites
   (`structureSiteIssues`): unknown site (`SITE_UNKNOWN`), a group holding
   a map exchange (`VARIATION_CROSSES_EXCHANGE`). Items and legs are
   strict objects: unknown keys are refused, not dropped.
@@ -611,13 +613,15 @@ LegProps = { style?: "line" | "marked_route" | "none", gaps?: { from, to }[],
   the slice D split decided "no `LegProps.path`": authored circle cuts
   are `controls.circle_gaps`, authored leg gaps `LegProps.gaps`, 707 /
   708 / 709 / 711 course objects (§6.4).
-- **Phase 1 writes control items only.** `course.setStructure` refuses a
-  structure with a variation group, and any site whose kind is a slice-F
-  kind, with `PRECONDITION_FAILED`.
+- **Groups are materialised** into child courses, one per variant, in
+  the write's transaction (§12, F6). `course.setStructure` still refuses
+  a site whose kind is a slice-F kind with `PRECONDITION_FAILED` (F4).
 - Helpers: `linearStructure(id, items, { orderMode, labelOffsets })`,
   `structureControlItems` / `structureControlIds` (a group by its first
   alternative — 08 §4.3's root path), `structureDiff` (§7),
-  `hasVariations`.
+  `hasVariations`; for variants (§12, `variants.ts`)
+  `materialiseVariants`, `variantStructure`, `variantCount`,
+  `structureSiteIds` (every alternative), `pruneSiteFromStructure`.
 
 ### 6.2 The column mirror
 

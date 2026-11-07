@@ -28,11 +28,14 @@ import { loadEventMapObjects } from "../event-map-objects.js";
 import { describeAt, descriptionsEqual, suggestDescriptions } from "../description-autodetect.js";
 import { mapMmToWgs84 } from "../map-projection.js";
 import { rebuildCourseLengths } from "../course-geometry.js";
+import { course as courseShared } from "@oxygen/shared";
 import {
   coursesNamingInStructure,
+  persistStructure,
   remirrorStoredStructures,
   rewriteStructureFromColumns,
 } from "../course-structure.js";
+import { emitVariantSync, mergeSyncs, rootStructureOf, syncVariants, type VariantSync } from "../course-variants.js";
 import {
   baseVersionSchema,
   basePayload,
@@ -999,13 +1002,33 @@ export const controlRouter = router({
         await tx.courseControl.deleteMany({ where: { controlId: c.id } });
         // The courses that named it lose an item: their structure is
         // rewritten (and their token advances); the rest only reference it
-        // as an implicit start / finish and get new geometry alone.
+        // as an implicit start / finish and get new geometry alone. A root
+        // loses it from every alternative, groups kept, and re-materialises
+        // its variants, which are written by that alone (course-layer.md §12).
+        const syncs: VariantSync[] = [];
         for (const courseId of visited) {
-          await rewriteStructureFromColumns(tx, ctx.event.id, courseId);
+          const row = await tx.course.findUniqueOrThrow({
+            where: { id: courseId },
+            select: { structure: true, orderMode: true, parentCourseId: true },
+          });
+          if (row.parentCourseId) continue;
+          const root = rootStructureOf(row.structure);
+          if (root) {
+            await persistStructure(
+              tx,
+              ctx.event.id,
+              courseShared.pruneSiteFromStructure({ ...root, id: courseId, orderMode: row.orderMode }, c.id),
+            );
+            syncs.push(await syncVariants(tx, ctx.event.id, courseId));
+          } else {
+            await rewriteStructureFromColumns(tx, ctx.event.id, courseId);
+          }
         }
+        const variantSync = mergeSyncs(syncs);
+        const variantIds = new Set(variantSync.childIds);
         // Deletes are upserts with removed: true on the wire.
         await emitControlUpserted(tx, ctx.event.id, c.id);
-        const affected = [...new Set([...courseIds, ...visited])];
+        const affected = [...new Set([...courseIds, ...visited])].filter((id) => !variantIds.has(id));
         await rebuildCourseLengths(tx, ctx.event.id, affected);
         const versions: { id: number; version: string }[] = [];
         for (const courseId of affected) {
@@ -1015,6 +1038,7 @@ export const controlRouter = router({
             versions.push({ id: row.seq, version: v.toString() });
           }
         }
+        await emitVariantSync(tx, ctx.event.id, variantSync);
         return versions;
       });
       // The courses whose token advanced, so an editor can keep sending

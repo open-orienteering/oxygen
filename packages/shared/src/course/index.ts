@@ -36,6 +36,16 @@ export {
   type WireCourseStructure,
 } from "./structure.js";
 export {
+  MAX_VARIANTS,
+  materialiseVariants,
+  pruneSiteFromStructure,
+  structureSiteIds,
+  variantCount,
+  variantKeyDuplicates,
+  variantStructure,
+  type MaterialisedVariant,
+} from "./variants.js";
+export {
   COURSE_OBJECT_KINDS,
   courseObjectBodySchema,
   courseObjectScopeSchemaOf,

@@ -969,6 +969,22 @@ export interface CourseSummary {
   hiddenNumbers?: number[];
   /** Concurrency token (decimal HLC), sent back as `baseVersion` (docs/course-layer.md §7). */
   version: string;
+  /**
+   * The root course (seq) this course is a materialised variant of, else
+   * null (docs/course-layer.md §12). A variant is an ordinary course for
+   * every reader and read-only for every writer.
+   */
+  parentCourseId: number | null;
+  /** The variant's key (`"AC"`, `"BA"`) when `parentCourseId` is set, else null. */
+  variantKey: string | null;
+}
+
+/** One materialised variant of a root course (`course.variantList`, docs/course-layer.md §12). */
+export interface CourseVariantSummary {
+  variantKey: string;
+  /** The variant's course seq. */
+  courseId: number;
+  lengthM: number;
 }
 
 /** Course detail with class usage */

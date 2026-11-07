@@ -8,6 +8,7 @@ import {
 } from "@oxygen/shared";
 import { valueToRunnerStatus, runnerStatusToValue } from "../statusConvert.js";
 import { emitClassUpserted } from "../referenceJournal.js";
+import { syncClassPool } from "../course-variants.js";
 
 async function getClassBySeq(
   db: import("../generated/prisma/client.js").PrismaClient,
@@ -213,6 +214,8 @@ export const classRouter = router({
           },
           select: { id: true, seq: true },
         });
+        // A class on a root course pools its variants (docs/course-layer.md §12).
+        if (courseUuid) await syncClassPool(tx, c.id);
         await emitClassUpserted(tx, ctx.event.id, c.id);
         return c;
       });
@@ -326,6 +329,7 @@ export const classRouter = router({
       if (input.classType !== undefined) data.classType = input.classType;
       await ctx.db.$transaction(async (tx) => {
         await tx.class.update({ where: { id: c.id }, data });
+        if (input.courseId !== undefined) await syncClassPool(tx, c.id);
         await emitClassUpserted(tx, ctx.event.id, c.id);
       });
       return { ok: true };
@@ -374,6 +378,7 @@ export const classRouter = router({
           data,
         });
         for (const r of rows) {
+          if (input.courseId !== undefined) await syncClassPool(tx, r.id);
           await emitClassUpserted(tx, ctx.event.id, r.id);
         }
       });
