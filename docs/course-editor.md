@@ -654,12 +654,18 @@ undo entry.
 The editor side of `LegProps` (08 §4.3, §5.2 inspector "leg: style,
 gaps, corridor, crossing"; the layer's rules are `course-layer.md` §10).
 A **selected leg** is the leg-click phantom on the selected course
-(§4: `phantom.insertAt` set) in Course or Class view, on an ordered
-course: there is no second selection model, so Escape, a course switch,
-a mode switch and arming a tool drop it as they drop the phantom. Its
-item is the row the leg runs into (`legForInsert`, `lib/editor/sequence.ts`,
-the inverse of `insertIndexForLeg`): `rows[i]` is `explicitStructure(…).items[i]`,
-and the leg is that item's `leg`.
+(§4: `phantom.insertAt` set) in Course mode, in Course or Class view, on
+an ordered course: there is no second selection model, so Escape, a
+course switch and arming a tool drop it as they drop the phantom; Layout
+mode drops the phantom, and Field mode keeps it but shows no selected
+leg (the mode is part of the rule). Its item is the row the leg runs into
+(`legForInsert`, `lib/editor/sequence.ts`, the inverse of
+`insertIndexForLeg`): `rows[i]` is `explicitStructure(…).items[i]`, and
+the leg is that item's `leg`. Where the two do not line up (an explicit
+start or finish whose site is missing from the event's controls: the
+inspector has no row for it) there is no selected leg, and the leg
+metres and the `G` target take no bends, rather than reading another
+item's leg.
 
 **Inspector.** The selection slot shows the *Leg* section (`editor-leg`,
 `modes/LegSection.tsx`, title "Leg ‹from› → ‹to›" by code):
