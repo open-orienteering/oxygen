@@ -98,6 +98,14 @@ export interface LayoutRequest {
 }
 
 /**
+ * Whether the layer adds a site — and so draws a circle — for the visit: a
+ * reuse splices an existing site and adds none. The armed tool's UI-layer
+ * ghost circle is drawn exactly when this is false (docs/course-editor.md
+ * §6.1, P4), so the two never show concentric.
+ */
+export const provisionalDrawn = (v: ProvisionalVisit | null | undefined): boolean => !!v && !v.reuseId;
+
+/**
  * The course's control ids with the provisional visit spliced in: a control
  * before the `insertAt`-th control visit (else before the trailing finish,
  * else last); a start replaces the course's start (else leads); a finish
@@ -155,7 +163,7 @@ export function courseLayerRequest(input: CourseRequestInput): CourseLayerReques
   }
   const highlighted = input.courses.filter((c) => c.highlight || c.name === input.highlightCourseName);
   const pv = highlighted.length === 1 ? input.provisional ?? null : null;
-  if (pv && !pv.reuseId) sites.push({ id: PROVISIONAL_SITE_ID, code: pv.code ?? "", kind: pv.role, x: pv.pt.x, y: pv.pt.y });
+  if (pv && provisionalDrawn(pv)) sites.push({ id: PROVISIONAL_SITE_ID, code: pv.code ?? "", kind: pv.role, x: pv.pt.x, y: pv.pt.y });
   const drawn = new Set(sites.map((s) => s.id));
   const typeOf = new Map(input.controls.map((c) => [c.id, c.type] as const));
 

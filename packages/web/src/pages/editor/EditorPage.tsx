@@ -49,7 +49,7 @@ import {
 } from "../../lib/course-editor";
 import { UndoStack } from "../../lib/undo-stack";
 import { useMapDocument } from "../../lib/map-document-cache";
-import { courseObjectsForView, type ProvisionalVisit } from "../../lib/course-layer-request";
+import { courseObjectsForView, provisionalDrawn, type ProvisionalVisit } from "../../lib/course-layer-request";
 import { snapIndexForDocument } from "../../lib/editor/snap";
 import { pickIndexForDocument } from "../../lib/editor/symbol-pick";
 import { groupOfSymbol, swatchUrl, symbolGroups, type SymbolGroup } from "../../lib/editor/symbol-groups";
@@ -998,7 +998,11 @@ export function EditorPage() {
   const toolBinding: EditorToolBinding | null = (() => {
     switch (tool.kind) {
       case "place":
-        return placeBinding({ ghost, onHover, onPlace: place, onExit: exitTool, touch: { placeLabel: t("touchPlace"), doneLabel: t("touchDone") } });
+        // The layer draws the visit only under the highlighted course (`highlightCourseName`, Course / Class view).
+        return placeBinding({
+          ghost, provisionalDrawn: state.view !== "all" && !!selectedCourse && provisionalDrawn(provisional),
+          onHover, onPlace: place, onExit: exitTool, touch: { placeLabel: t("touchPlace"), doneLabel: t("touchDone") },
+        });
       case "area":
         return areaBinding({
           gesture, poly: tool.poly, hover: hover?.pt ?? null, onHover, snap,

@@ -1,6 +1,6 @@
 import { describe, it, expect } from "vitest";
 import type { course } from "@oxygen/shared";
-import { courseLayerRequest, courseObjectsForView, PROVISIONAL_SITE_ID, type CourseRequestInput, type ProvisionalVisit, type RequestControl } from "../course-layer-request";
+import { courseLayerRequest, courseObjectsForView, provisionalDrawn, PROVISIONAL_SITE_ID, type CourseRequestInput, type ProvisionalVisit, type RequestControl } from "../course-layer-request";
 
 const ctl = (id: string, type: RequestControl["type"] = "Control", visible?: boolean): RequestControl => ({ id, code: `c${id}`, type, ...(visible === undefined ? {} : { visible }) });
 const CONTROLS = [ctl("S", "Start"), ctl("1"), ctl("2"), ctl("3"), ctl("F", "Finish")];
@@ -145,6 +145,16 @@ describe("the editor's provisional visit (docs/course-editor.md §6.1)", () => {
     const r = courseLayerRequest(base({ provisional: visit({ insertAt: 1, reuseId: "3" }) }));
     expect(items(r)).toEqual(["S", "1", "3", "2", "F"]);
     expect(r.sites.map((s) => s.id)).toEqual(["S", "1", "2", "3", "F"]);
+  });
+
+  it("provisionalDrawn: the layer adds a site for a visit, none for a reuse or without one (the UI-layer ghost circle is its negation, P4)", () => {
+    expect(provisionalDrawn(null)).toBe(false);
+    expect(provisionalDrawn(undefined)).toBe(false);
+    expect(provisionalDrawn(visit({ insertAt: 1 }))).toBe(true);
+    expect(provisionalDrawn(visit({ insertAt: 1, reuseId: "3" }))).toBe(false);
+    for (const v of [visit({ insertAt: 1 }), visit({ insertAt: 1, reuseId: "3" })]) {
+      expect(courseLayerRequest(base({ provisional: v })).sites.some((s) => s.id === P)).toBe(provisionalDrawn(v));
+    }
   });
 
   it("the leg the visit splits loses its stored gaps; the others keep theirs", () => {

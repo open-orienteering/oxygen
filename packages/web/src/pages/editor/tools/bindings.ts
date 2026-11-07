@@ -232,6 +232,12 @@ export interface PlaceOptions {
     /** The first leg's length, "123 m"; null without a map scale. */
     legLabel: string | null;
   } | null;
+  /**
+   * The layer draws the visit's circle at the ghost (`provisionalDrawn`,
+   * lib/course-layer-request.ts): then the UI layer draws no circle of its
+   * own, only the label, description and leg length (§6.1, P4).
+   */
+  provisionalDrawn: boolean;
   onHover: (p: ToolPointer | null) => void;
   onPlace: (p: ToolPointer) => void;
   onExit: () => void;
@@ -244,8 +250,11 @@ export function placeBinding(o: PlaceOptions): EditorToolBinding {
   if (gh) {
     const leg = gh.legs[0];
     if (leg && gh.legLabel) shapes.push(legLengthShape(leg[0], leg[1], gh.legLabel));
-    shapes.push({ kind: "circle", x: gh.at.x, y: gh.at.y, rMm: gh.radiusMm, color: PURPLE, testId: "editor-ghost", data: { role: gh.role } });
-    if (gh.role === "finish") shapes.push({ kind: "circle", x: gh.at.x, y: gh.at.y, rMm: gh.radiusMm * 0.7, color: PURPLE });
+    // The circle only where the layer draws none (no course, a reuse): else two concentric circles show.
+    if (!o.provisionalDrawn) {
+      shapes.push({ kind: "circle", x: gh.at.x, y: gh.at.y, rMm: gh.radiusMm, color: PURPLE, testId: "editor-ghost", data: { role: gh.role } });
+      if (gh.role === "finish") shapes.push({ kind: "circle", x: gh.at.x, y: gh.at.y, rMm: gh.radiusMm * 0.7, color: PURPLE });
+    }
     shapes.push({ kind: "text", x: gh.at.x, y: gh.at.y, text: gh.label, dxPx: 14, dyPx: -10, color: PURPLE, testId: "editor-ghost-label" });
     if (gh.description) shapes.push({ kind: "text", x: gh.at.x, y: gh.at.y, text: gh.description, dxPx: 14, dyPx: 6, color: "#475569", testId: "editor-ghost-description" });
   }
