@@ -2,8 +2,9 @@
  * The editor's status in the top bar (docs/course-editor.md §2, §3, §8; P2):
  * the save indicator (`editor-save-state`) and the course-info button
  * (`editor-stats`) whose popover lists the course's control count, length,
- * climb, the map scale or the shown sheet's key, snapping and the check
- * count. The check count is also the button's badge. A failed or
+ * climb, the shown sheet's key, snapping and the check count (the map scale
+ * is the map-info dialog's since P6, `MapInfoDialog.tsx`). The check count is
+ * also the button's badge. A failed or
  * conflicting save shows its words at every width: it never hides behind
  * a closed popover or a tooltip. `lib/editor/status.ts` is the model.
  */
@@ -11,7 +12,7 @@
 import { useEffect, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { IconStats } from "../../components/map-icons";
-import { checksBadge, saveIndicator, statusRows, type SaveState, type StatusInput } from "../../lib/editor/status";
+import { checksBadge, courseInfoRows, saveIndicator, type SaveState, type StatusInput } from "../../lib/editor/status";
 
 const DOT = { ok: "bg-emerald-500", busy: "bg-slate-300 animate-pulse", alert: "bg-red-500" } as const;
 const TEXT = { ok: "text-emerald-700", busy: "text-slate-400", alert: "text-red-600 font-medium" } as const;
@@ -31,7 +32,7 @@ export function SaveIndicator({ save }: { save: SaveState }) {
   );
 }
 
-export function StatsButton({ status }: { status: StatusInput }) {
+export function StatsButton({ status }: { status: Omit<StatusInput, "scale"> }) {
   const { t } = useTranslation("editor");
   const [open, setOpen] = useState(false);
   const box = useRef<HTMLDivElement>(null);
@@ -47,7 +48,7 @@ export function StatsButton({ status }: { status: StatusInput }) {
     return () => { document.removeEventListener("mousedown", onDoc); document.removeEventListener("keydown", onEsc); };
   }, [open]);
 
-  const rows = statusRows(status, t);
+  const rows = courseInfoRows(status, t);
   const badge = checksBadge(status.checks);
   const label = t("stats");
   return (

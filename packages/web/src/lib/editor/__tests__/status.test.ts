@@ -1,12 +1,12 @@
 import { describe, expect, it } from "vitest";
-import { checksBadge, saveIndicator, statusRows, type StatusInput } from "../status";
+import { checksBadge, courseInfoRows, saveIndicator, statusRows, type StatusInput } from "../status";
 
 /** A stand-in `t` that shows the key and its options, so the rows' wording is checked by key. */
 const t = (key: string, opts?: Record<string, unknown>) => (opts ? `${key}:${JSON.stringify(opts)}` : key);
 
 const course: StatusInput = { controls: 12, lengthM: 4321, climbM: 85, scale: 10000, sheetKey: null, snapping: false, checks: 2 };
 
-describe("the course-info popover's rows (docs/course-editor.md §2)", () => {
+describe("the course-info rows (docs/course-editor.md §2, §10: the phone's peek line shows them all)", () => {
   it("a course: controls, length, climb, scale, checks — in that order, with numeric data", () => {
     const rows = statusRows(course, t);
     expect(rows.map((r) => r.id)).toEqual(["controls", "length", "climb", "scale", "checks"]);
@@ -37,6 +37,20 @@ describe("the course-info popover's rows (docs/course-editor.md §2)", () => {
     expect(checksBadge(3)).toBe(3);
     expect(checksBadge(0)).toBeNull();
     expect(checksBadge(null)).toBeNull();
+  });
+});
+
+describe("the desktop popover leaves the map scale to the map-info dialog (P6, docs/course-editor.md §2)", () => {
+  it("a course: no scale row, the rest as the peek line's", () => {
+    expect(courseInfoRows(course, t).map((r) => r.id)).toEqual(["controls", "length", "climb", "checks"]);
+  });
+
+  it("no course and no sheet: no rows (the popover says No course)", () => {
+    expect(courseInfoRows({ ...course, controls: null, lengthM: null, climbM: null, checks: 0 }, t)).toEqual([]);
+  });
+
+  it("a shown sheet's key stays (docs/course-layout.md §6)", () => {
+    expect(courseInfoRows({ ...course, sheetKey: "1:15000 A4 portrait" }, t).map((r) => r.id)).toEqual(["controls", "length", "climb", "sheet", "checks"]);
   });
 });
 
