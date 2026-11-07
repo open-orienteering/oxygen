@@ -235,7 +235,8 @@ Base-map scale and meridian tilt come from `getBaseMapInfo` only (§10).
    where a ring edge and the clip edge coincide.
 2. `courseRenderInput(map, layer)` → one `symbolise` call: lower purple
    under the line art, map-anchored white-outs at upper white, upper
-   purple and the layout objects' colours on top — the stack's order, no
+   purple and the layout objects' colours on top, a toner saver's white
+   above them all (`course-layer.md` §3.6, P1) — the stack's order, no
    sandwich, nothing drawn twice. The layer's filter regions go into the
    same call (`regions`, `regionObjectLimit`; `map-rendering.md` §4.11):
    hidden objects leave the stream, clipped passes carry masks that the
@@ -275,7 +276,8 @@ page layer to the printable area, but legacy never clipped to
 `printMarginMm` (it only warns, `validate.ts`), and slice C keeps that.
 
 **Colour table.** The page layer shares the map layer's table: the
-course layer's completed stack (`layer.colours`, upper white included),
+course layer's completed stack (`layer.colours`, upper white included,
+ending with the toner saver white when the map layer draws one),
 then `#ffffff` and the block's ink when a block is drawn, then the hex
 colours of page objects in first-use order (`withObjectColours`). So a
 page white-out prints in the stack's upper white, a page 709 in its upper
@@ -474,7 +476,7 @@ lines drawn by the library; images DeviceRGB in `cmyk`.
 |---|---|
 | `print/__tests__/page.test.ts` | `T_map` against `mapToPage` (0°, ±rotation), inverse, frame in map space, `flipPageObject`, `transformPassStream` (slices kept, widths / taper / glyph instances / text scaled and turned, hatch lines on the transformed lines) |
 | `print/__tests__/description.test.ts` | every `IOF_SYMBOLS` key converts; 2.4 one fill, 1.10 one disc, 0.3 two strokes + disc, Bézier flags; block size and position, border, thick / thin rules, header sizes and weight, F text 0.34 × cell, pictograms centred at 0.8 × cell, one symbol per key |
-| `print/__tests__/compose.test.ts` | one colour-sorted map stream with lower purple < black < upper purple; block text / rules / pictograms on appended colours; no block → empty page layer; map ring outer boundary = frame (+1 mm) through `T_map⁻¹`, page ring = frame + 1 mm, page white-out at upper white; placeholders; rotated `T_map`; images in layer space; `CourseStackError`; auto cuts off = the stream without cut features (D17) |
+| `print/__tests__/compose.test.ts` | one colour-sorted map stream with lower purple < black < upper purple; block text / rules / pictograms on appended colours; no block → empty page layer; map ring outer boundary = frame (+1 mm) through `T_map⁻¹` in the toner saver white, page ring = frame + 1 mm, page white-out at upper white; P1: with a 709 area and a course text outside a map toner saver, its ring is the map layer's last pass (the page layer still draws after); placeholders; rotated `T_map`; images in layer space; `CourseStackError`; auto cuts off = the stream without cut features (D17) |
 | `print/__tests__/writer.test.ts` (C8) | a bold text symbol and a regular one embed two font objects, `…+LiberationSans` and `…+LiberationSans-Bold` |
 | `print/__tests__/write-page.test.ts` | operator order (sheet, frame clip, `T_map` `cm`, page `cm`), no `rg` in `cmyk` / no `k` in `rgb`, rotated `cm`, two pages sharing font, glyph forms and image XObject, page labels and outlines, `/Measure /GEO` (SWEREF99 TM corners near 58.6° N 15° E, rotated corners), deterministic bytes, missing image warning, an object far outside the frame absent from the content stream (C13) |
 | `print/__tests__/isomorphic.test.ts` | no Node API, `Buffer`, sharp or resvg in the module |

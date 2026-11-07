@@ -219,7 +219,10 @@ and the keys; the **fill mode stays** in the inspector's fill select
 (`layoutFill_whiteoutInverted`, "White-out outside"), so an object that
 has it (legacy templates, earlier D7 sheets) stays editable and a `P`
 polygon can still be turned into one, for template-level ink saving on
-an all-controls or class sheet. Rendering, print and the schema are
+an all-controls or class sheet. A map-anchored one, like the course toner
+saver, covers everything the map layer draws outside its shape — map
+text, 709 areas, the course — on the canvas and in the PDF alike: its
+white is the map layer's top row (`course-layer.md` §3.6, P1). Rendering, print and the schema are
 untouched; no stored object is changed.
 
 With `V`: a click selects an object of the scope, topmost first
@@ -465,6 +468,7 @@ sheet prints through `classes` or `maps`.
 | E2E | `e2e/course-editor.spec.ts` "Course editor layout" "graphics: upload an SVG…" | E3 (ported from `course-maps.spec.ts`'s legacy layout editor): the Graphics section uploads an SVG (`graphics.upload`), its Place button arms the image tool, a click on the page places it (one `saveLayout`, an `image` row in the list and in `courseMap.get`); selected from the list and deleted, gone from both |
 | E2E | `e2e/course-editor.spec.ts` "Course editor layout" "P draws a polygon…" | D16: `P`, two clicks, a click-drag and a click, closed on the first vertex → one `saveLayout`; `courseMap.get` has a closed path of 4 points whose dragged vertex has `hOut` down-right on the page and `hIn` opposite; the path selected, `V` armed, 4 handles and 2 grips; a double-click on the top edge → 5 points and a focused handle, `Delete` → 4; `Escape` discards a polygon being drawn (no write, `V` armed), `Enter` closes one of three clicks (one write); the sheet's `maps.pdf?maps=` draws more `c` operators than before |
 | E2E | `e2e/course-editor.spec.ts` "Course editor layout" | from the Maps page into Layout mode on the sheet; the sheet shapes; `H` places a header, the inspector makes it a long 10 mm text, and ink appears where the page layer draws it; the frame selected and dragged → `courseMap.get`'s centre moved by the drag; undo restores it; the `maps.pdf?maps=` route answers one A4 page; the template link opens template scope, an orientation change writes `mapTemplate.update`; the Map templates page's *Edit template layout* opens template scope |
+| E2E | `e2e/course-editor.spec.ts` "P1: …" "Layout mode: a toner saver hides…" | P1: on a probe course sheet in Layout mode a 709 `oob_area` (`courseObject.create`) shows purple on the canvas (`inkIn`); with a `toner_saver` elsewhere on the map, no purple and no dark pixels are left inside the 709 square (638 purple pixels with the ring at upper white) |
 
 ## Pending in this chapter
 

@@ -112,7 +112,9 @@ blue line/point rows; white-outs sit at upper white, above all map ink
 and lower purple, below upper purple (704, 707, 709, 711) —
 the legacy print sandwich full → lower → ink → white-outs → upper,
 by construction. A white-out therefore hides lower-purple course lines
-under it, as legacy print does.
+under it, as legacy print does. A white-out *outside* (a toner saver)
+does not sit there: it fills its own row on top of the layer's stack
+(§3.6, P1).
 
 **Merging.** `courseRenderInput(base, layer)` appends the layer's
 symbols after the document's (re-indexed when `remap` is set) and its
@@ -343,13 +345,31 @@ Map-anchored `CourseMapObject`s are the 08 §4.5 kinds they already are:
 | Object | Drawn as |
 |---|---|
 | rectangle / path, `fillMode: "whiteout"` | `course:whiteout` area at upper white |
-| `"whiteoutInverted"` (toner saver) | the same area: `viewOptions.window` ring with the shape as an even-odd hole; without a window, not drawn and warned (`WINDOW_MISSING`) |
+| `"whiteoutInverted"` (toner saver) | the `viewOptions.window` ring with the shape as an even-odd hole, filled with the **toner saver white**; without a window, not drawn and warned (`WINDOW_MISSING`) |
 | `"outOfBounds"` | 709; with a stroke 709.b, or 709.c for `dash: "dashed"`. The boundary is the library's (0.2 mm × factor, upper purple): the stored stroke colour *and width* are not read — legacy print kept the stored width in purple, a difference for C3's list |
 | `"solid"` | an area in the fill's own colour row |
 | any stroke (except out-of-bounds) | a line in the stroke's colour row, page-mm width ÷ `overprintScale`; `dash: "dashed"` → OCAD dashes max(2, 5 w) / max(1, 2.5 w) mm ÷ `overprintScale` |
 | line | as a stroke |
 | text | a text symbol in the colour's row: `sans` → Liberation Sans, `condensed` → Liberation Sans Narrow, `serif` / `mono` → their families (no file ships: `symbolise` warns `NO_FONT`, `map-rendering.md` §4.10); size ÷ `overprintScale`; `{placeholders}` expanded with `viewOptions.textValues`; empty text skipped |
 | image | `layer.images` (paper µm rectangle), not in the stream |
+
+**Toner saver white** (P1). A white-out outside fills its own row,
+`course:toner-saver-white` ("Toner saver white", CMYK 0/0/0/0), which
+`courseLayer` appends to `layer.colours` above every other row — upper
+purple, document colours above it (a map's text colours often are) and
+the layout-object rows — only when it draws one (a `toner_saver` object
+or a map-anchored `whiteoutInverted` object, and a window;
+`hasTonerSaver`). Both backends paint in colour order, so the ring is
+the map layer's last pass: outside the shape nothing of the map layer
+shows — map ink and text, 709 / 707 / 711 objects, map text objects, and
+the course overprint itself (a generated hull keeps the course 25 mm
+inside). The page layer (page objects, the description block) comes
+after the map layer and stays on top. At upper white, below upper
+purple and the object rows, the ring let 709 areas and text show through
+on screen and in print (feedback 2026-11-06 item 2;
+`docs/bugfix-toner-saver-draw-order.md`). A page-anchored
+`whiteoutInverted` is the page layer's and keeps upper white
+(`course-print.md` §4.4).
 
 Path vertices keep their Bézier handles (the legacy `pathData`'s
 construction, deleted in E4c);
@@ -896,7 +916,7 @@ issue message starting `OBJECT_GEOMETRY`.
 | `oob_area` | ≥ 3 vertices, closed | `border?: "none" \| "solid" \| "dashed"` (default none); `hatch?: "709" \| "710"` (default 709) | 709; 709.b with a solid boundary, 709.c dashed; with `hatch: "710"` the dangerous area's cross-hatch (§3.1) with the same boundaries |
 | `oob_line` | ≥ 2 | `symbol?: "708" \| "711"` (default 708) | 708 out-of-bounds boundary or 711 out-of-bounds route |
 | `whiteout` | ≥ 3, closed | — | `course:whiteout` at upper white (§3.6) |
-| `toner_saver` | ≥ 3: the hull — D13's editor generates the smooth offset hull of the course's sites, so its segments carry `hIn` / `hOut` and the hole ring below has Bézier flags (the hull's own straight edges stay straight) | `marginMm?` (how D5 / D13 generated it, 25 mm by default since D13; the drawn shape is the stored hull), `holeRadiusMm?` (reserved; the editor does not set it and builds no control holes) | white-out *outside* the hull: the `viewOptions.window` ring with the hull as an even-odd hole; without a window (the viewer) not drawn, warning `WINDOW_MISSING` |
+| `toner_saver` | ≥ 3: the hull — D13's editor generates the smooth offset hull of the course's sites, so its segments carry `hIn` / `hOut` and the hole ring below has Bézier flags (the hull's own straight edges stay straight) | `marginMm?` (how D5 / D13 generated it, 25 mm by default since D13; the drawn shape is the stored hull), `holeRadiusMm?` (reserved; the editor does not set it and builds no control holes) | white-out *outside* the hull in the toner saver white, the map layer's top row (§3.6, P1): the `viewOptions.window` ring with the hull as an even-odd hole; without a window (the viewer) not drawn, warning `WINDOW_MISSING` |
 | `marked_route` | ≥ 2 | — | 707 |
 | `text` | 1: the anchor | `text`, `fontSizeMm`, `fontFamily?`, `color?` (hex), `align?` | a text symbol: upper purple, or an own colour row for `color` (§1); `{placeholders}` expanded with `viewOptions.textValues` |
 | `image` | 2: opposite corners | `graphicId`, `crop?` | `layer.images` (a graphic of the event), drawn by the page backends |
@@ -1089,7 +1109,7 @@ for a check (decision log, D6).
 | unit | `symbols.test.ts` | ISOM / ISSprOM dimensions, document factor, appearance multipliers, knockout, roles, 711 borrowed; the dangerous area: 709's hatch in both diagonals, 709.b / 709.c's boundaries, scaled like 709 (both libraries); arcs within 1 µm of the circle, gaps as open arcs, an arc through north one path |
 | unit | `cuts.test.ts` | clearance = symbol + half line + air at both arc ends and both gap ends, on / off the rim and the line by the same sum, wider for bigger symbols and lines, default radius, north wrap, whole circle; library radii (`cutSymbolRadiusMm`), OCAD symbol radii (`ocadCutSymbolRadiiMm`), `cutContextForScale`; `cutFeaturesOfDocument` (applied match, source code, suggested match, hidden symbol, line object, own render, factor fallback) |
 | unit | `derive.test.ts` | legs and clearances, circles in the way, unpositioned sites, automatic vs authored gaps, the event's auto cuts off (no automatic slits / gaps, authored ones kept, §3.4), authored pieces and bends, free order, all-controls, start rotation, sequence / repeated / code numbers, y-down placement, manual offsets, multi-course |
-| unit | `layer.test.ts` | one `symbolise` call with a document: warning-free, lower purple under black, re-indexed document colours, object offsets; turned start, arcs, legs; auto cuts off = the objects without cut features; knockout halo order; sprint sizes; layout objects (white-out, 709.b, rows on top, text values, page-mm sizes); toner-saver ring and its warning; images; `courseDocumentContext` |
+| unit | `layer.test.ts` | one `symbolise` call with a document: warning-free, lower purple under black, re-indexed document colours, object offsets; turned start, arcs, legs; auto cuts off = the objects without cut features; knockout halo order; sprint sizes; layout objects (white-out, 709.b, rows on top, text values, page-mm sizes); toner-saver ring and its warning; the toner saver white (P1: a `toner_saver` and a `whiteoutInverted` map object fill the top row, the last pass after black, upper purple and a layout text's row; none for a plain white-out or without a window); images; `courseDocumentContext` |
 | pass-stream | `scenes.test.ts`, snapshots in `render/__fixtures__/streams/course/` | the five course scenes (`map-rendering.md` §6.3) warning-free and equal to their snapshots at 1 µm, plus each scene's rule |
 | unit | `packages/api/src/__tests__/course-geometry.test.ts` | `editorCourseLayer`: sequence in order with roles, centre-to-centre legs, unpositioned controls skipped, free order without legs, no automatic cuts; `hasPositionedItems` (`length_source` derived / NULL); `legDistancesMm(layer)` from the derived legs = the pre-E6 sequence formula bit for bit (fixtures + 50 generated sequences, per-leg and total rounding at two scales, E6); `courseLengthM` |
 | unit | `packages/api/src/__tests__/document-readers-parity.test.ts` | cut features of the document = the legacy OCAD adapter's (now a test oracle, `__tests__/helpers/ocad-oracle.ts`) within 1e-6 mm on the fixture and the corpus (§4.2) |
