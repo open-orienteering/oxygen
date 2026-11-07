@@ -173,6 +173,12 @@ export function StartListPage() {
                     </td>
                     <td className="px-4 py-2.5 text-slate-600">
                       {entry.className}
+                      {entry.variantKey && (
+                        <span className="text-purple-700 font-medium" data-testid="start-list-variant">
+                          {" · "}
+                          {entry.variantKey}
+                        </span>
+                      )}
                     </td>
                     <td className="px-4 py-2.5 text-slate-600 hidden sm:table-cell">
                       <span className="inline-flex items-center gap-1.5">
@@ -232,6 +238,15 @@ export function StartListPage() {
                         </td>
                         <td className="px-4 py-2.5 font-medium text-blue-700 hover:text-blue-900">
                           {entry.name}
+                          {entry.variantKey && (
+                            <span
+                              className="ml-2 px-1.5 py-0.5 rounded bg-purple-50 text-purple-700 text-xs font-semibold"
+                              data-testid="start-list-variant"
+                              title={`${className} · ${entry.variantKey}`}
+                            >
+                              {entry.variantKey}
+                            </span>
+                          )}
                         </td>
                         <td className="px-4 py-2.5 text-slate-600 hidden sm:table-cell">
                           <span className="inline-flex items-center gap-1.5">

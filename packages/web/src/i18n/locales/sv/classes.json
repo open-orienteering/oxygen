@@ -68,5 +68,14 @@
   "presetsDialogTitle": "Lägg till klasser från klubbens förinställningar",
   "alreadyAdded": "Redan tillagd",
   "presetsResult": "{{created}} tillagda, {{skipped}} överhoppade",
-  "selectAllPresets": "Välj alla"
+  "selectAllPresets": "Välj alla",
+  "variants": "Varianter",
+  "variantRunners_one": "{{count}} löpare",
+  "variantRunners_other": "{{count}} löpare",
+  "distributeVariants": "Fördela varianter…",
+  "distributeStartOrder": "I startordning",
+  "distributeRandom": "Slumpvis",
+  "distributeOnlyUnassigned": "Bara löpare utan variant",
+  "distributeConfirm": "Fördela om varianterna för alla löpare i klassen? Löpare som redan har sprungit behåller sina.",
+  "variantsDistributed": "{{changed}} löpare ändrade, {{skipped}} som redan har sprungit behöll sina"
 }

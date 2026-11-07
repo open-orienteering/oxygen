@@ -924,6 +924,8 @@ function ClassInlineDetail({ classId }: { classId: number }) {
               )}
             </div>
           )}
+
+          {d.variants.length > 0 && <ClassVariantsPanel classId={classId} variants={d.variants} />}
         </div>
 
         {/* Right: runners */}
@@ -960,6 +962,95 @@ function ClassInlineDetail({ classId }: { classId: number }) {
           )}
         </div>
       </div>
+    </div>
+  );
+}
+
+/**
+ * The class's variants with their runner counts and the deal action
+ * (F6b; docs/course-controls-and-matching.md "Forked courses and
+ * variants"). Variants are pre-set per runner before the race; the
+ * readout never picks one.
+ */
+function ClassVariantsPanel({
+  classId,
+  variants,
+}: {
+  classId: number;
+  variants: { variantKey: string; courseId: number; runnerCount: number }[];
+}) {
+  const { t } = useTranslation("classes");
+  const utils = trpc.useUtils();
+  const [onlyUnassigned, setOnlyUnassigned] = useState(true);
+  const [mode, setMode] = useState<"startOrder" | "random">("startOrder");
+  const [message, setMessage] = useState<string | null>(null);
+  const distribute = trpc.class.distributeVariants.useMutation({
+    onSuccess: (r) => {
+      setMessage(t("variantsDistributed", { changed: r.changed, skipped: r.skipped }));
+      utils.class.detail.invalidate();
+      utils.runner.list.invalidate();
+      utils.runner.getById.invalidate();
+      utils.lists.startList.invalidate();
+      utils.course.variantList.invalidate();
+    },
+    onError: (e) => setMessage(e.message),
+  });
+  const run = () => {
+    if (!onlyUnassigned && !window.confirm(t("distributeConfirm"))) return;
+    setMessage(null);
+    distribute.mutate({ classId, mode, onlyUnassigned });
+  };
+  return (
+    <div data-testid="class-variants">
+      <label className="block text-xs font-medium text-slate-500 mb-2">{t("variants")}</label>
+      <div className="flex flex-wrap gap-2 mb-3">
+        {variants.map((v) => (
+          <span
+            key={v.courseId}
+            data-testid={`class-variant-${v.variantKey}`}
+            className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-md bg-white border border-slate-200 text-sm"
+          >
+            <span className="font-semibold text-purple-700">{v.variantKey}</span>
+            <span className="text-slate-500 tabular-nums" data-testid={`class-variant-${v.variantKey}-count`}>
+              {t("variantRunners", { count: v.runnerCount })}
+            </span>
+          </span>
+        ))}
+      </div>
+      <div className="flex flex-wrap items-center gap-3">
+        <select
+          value={mode}
+          onChange={(e) => setMode(e.target.value as "startOrder" | "random")}
+          data-testid="distribute-mode"
+          className="px-2 py-1.5 border border-slate-200 rounded-lg text-sm bg-white cursor-pointer"
+        >
+          <option value="startOrder">{t("distributeStartOrder")}</option>
+          <option value="random">{t("distributeRandom")}</option>
+        </select>
+        <label className="flex items-center gap-2 text-sm text-slate-600 cursor-pointer">
+          <input
+            type="checkbox"
+            checked={onlyUnassigned}
+            onChange={(e) => setOnlyUnassigned(e.target.checked)}
+            data-testid="distribute-only-unassigned"
+            className="rounded border-slate-300 text-blue-600 focus:ring-blue-500 cursor-pointer"
+          />
+          {t("distributeOnlyUnassigned")}
+        </label>
+        <button
+          onClick={run}
+          disabled={distribute.isPending}
+          data-testid="distribute-variants"
+          className="px-3 py-1.5 bg-purple-600 text-white text-sm font-medium rounded-lg hover:bg-purple-700 disabled:opacity-50 cursor-pointer"
+        >
+          {t("distributeVariants")}
+        </button>
+      </div>
+      {message && (
+        <p className="mt-2 text-xs text-slate-500" data-testid="distribute-result">
+          {message}
+        </p>
+      )}
     </div>
   );
 }
