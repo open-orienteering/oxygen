@@ -12,13 +12,6 @@ import {
   Prisma,
   type MapTemplate,
 } from "../generated/prisma/client.js";
-import {
-  resolveMapLayout,
-  layoutControlsFromCourseControls,
-  layoutCourseEnds,
-  type ResolvedMapLayout,
-} from "../course-maps/resolve-layout.js";
-import { getBaseMapInfoOrNull } from "../course-maps/map-source.js";
 import { afterTemplateDeleted, syncTemplateKey } from "../course-maps/auto-sheets.js";
 import { nextObjectVersion } from "../course-objects.js";
 import { baseVersionSchema, versionConflict } from "../version-conflict.js";
@@ -92,87 +85,6 @@ export const mapTemplateRouter = router({
     });
     return rows.map(parseTemplate);
   }),
-
-  /**
-   * Read-only layout resolution for the template editor. Without `courseId`
-   * the template is resolved on its own (no overlay, window centered on the
-   * map origin); with one, that course's geometry, controls and classes are
-   * used exactly as `courseMap.list` would resolve them.
-   */
-  previewLayout: coursesViewProcedure
-    .input(
-      z.object({
-        id: z.number().int().positive(),
-        courseId: z.number().int().positive().optional(),
-      }),
-    )
-    .query(async ({ ctx, input }): Promise<ResolvedMapLayout> => {
-      const [template, event, mapInfo, allControls] = await Promise.all([
-        ctx.db.mapTemplate.findFirst({
-          where: { eventId: ctx.event.id, seq: input.id },
-        }),
-        ctx.db.event.findUnique({
-          where: { id: ctx.event.id },
-          select: { name: true, date: true },
-        }),
-        getBaseMapInfoOrNull(ctx.db, ctx.event.id),
-        // The course's start and finish (`layoutCourseEnds`).
-        ctx.db.control.findMany({
-          where: { eventId: ctx.event.id, removed: false, status: { in: ["start", "finish"] } },
-          select: { id: true, seq: true, codes: true, name: true, status: true, kind: true, xpos: true, ypos: true },
-        }),
-      ]);
-      if (!template) {
-        throw new TRPCError({
-          code: "NOT_FOUND",
-          message: "Map template not found",
-        });
-      }
-      const course =
-        input.courseId === undefined
-          ? null
-          : await ctx.db.course.findFirst({
-              where: {
-                eventId: ctx.event.id,
-                seq: input.courseId,
-                removed: false,
-              },
-              include: {
-                classes: { select: { name: true } },
-                courseControls: {
-                  orderBy: { position: "asc" },
-                  include: { control: true },
-                },
-              },
-            });
-      if (input.courseId !== undefined && !course) {
-        throw new TRPCError({ code: "NOT_FOUND", message: "Course not found" });
-      }
-      return resolveMapLayout({
-        kind: "course",
-        template,
-        course: course
-          ? {
-              name: course.name,
-              lengthM: course.lengthM,
-              climbM: course.climbM,
-              orderMode: course.orderMode,
-              ...layoutCourseEnds(
-                course,
-                course.courseControls.map((cc) => cc.control.id),
-                allControls,
-              ),
-              classes: course.classes,
-              controls: layoutControlsFromCourseControls(course.courseControls),
-              descriptionInstructions: course.descriptionInstructions,
-            }
-          : null,
-        mapScale: mapInfo?.scale ?? null,
-        meridianTiltDeg: mapInfo?.meridianTiltDeg ?? null,
-        mapName: template.name,
-        ...(event ? { event } : {}),
-      });
-    }),
 
   create: coursesEditProcedure
     .input(
