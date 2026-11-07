@@ -129,8 +129,9 @@ describe("corridorGeometry", () => {
       const d = p.x <= 20000 ? Math.hypot(p.x - Math.max(0, Math.min(20000, p.x)), p.y) : Math.hypot(p.x - 20000, p.y);
       expect(Math.abs(d - 2000)).toBeLessThan(30);
     }
-    // Nothing along leg 2's sides (x = 18 / 22 mm, y well up the leg).
-    expect(pts.some((p) => p.y > 4000)).toBe(false);
+    // Nothing along leg 2's sides, not even the first fraction of a mm past the join (its round end belongs to both).
+    expect(pts.every((p) => p.x <= 20001)).toBe(true);
+    expect(pts.some((p) => Math.abs(p.x - 20000) <= 2 && Math.abs(p.y + 2000) <= 2)).toBe(true);
     // An edged lone leg is one closed outline.
     const lone = corridorGeometry([course("c", [[P(0, 0), P(20, 0)]], [C(4, 3, true)])])!;
     expect(lone.edges).toHaveLength(1);

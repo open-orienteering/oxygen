@@ -63,6 +63,14 @@ interface EdgedSegment {
   b: Pt;
   half: number;
   ref: string;
+  /** Whether the round end at `a` / `b` is this leg's: no unedged corridor leg meets it there. */
+  capA: boolean;
+  capB: boolean;
+  /** Bounds grown by the half width and the tolerance: the cheap reject before the distance. */
+  minX: number;
+  minY: number;
+  maxX: number;
+  maxY: number;
 }
 
 const round = (p: { x: number; y: number }): Pt => ({ x: Math.round(p.x * 1000), y: Math.round(p.y * 1000) });
@@ -87,7 +95,10 @@ function simplify(pts: Pt[]): Pt[] {
 /** Runs of consecutive corridor legs of equal width and band, per course. */
 function runsOf(courses: readonly DerivedCourse[]): { runs: Run[]; edged: EdgedSegment[] } {
   const runs: Run[] = [];
-  const edged: EdgedSegment[] = [];
+  const edged: Omit<EdgedSegment, "capA" | "capB">[] = [];
+  /** Vertices an unedged corridor leg runs from or to: an edged leg's round end there is shared, not drawn. */
+  const unedged = new Set<string>();
+  const key = (p: Pt) => `${p.x} ${p.y}`;
   for (const c of courses) {
     let run: Run | null = null;
     c.legs.forEach((leg, i) => {
@@ -103,11 +114,20 @@ function runsOf(courses: readonly DerivedCourse[]): { runs: Run[]; edged: EdgedS
         run = { pts: [...pts], half, white };
         runs.push(run);
       }
-      if (k.edge) for (let j = 1; j < pts.length; j++) edged.push({ a: pts[j - 1], b: pts[j], half, ref: `${c.id}:${i}` });
+      for (let j = 1; j < pts.length; j++) {
+        const a = pts[j - 1], b = pts[j];
+        if (!k.edge) {
+          unedged.add(key(a));
+          unedged.add(key(b));
+          continue;
+        }
+        const g = half + EDGE_TOLERANCE_UM;
+        edged.push({ a, b, half, ref: `${c.id}:${i}`, minX: Math.min(a.x, b.x) - g, minY: Math.min(a.y, b.y) - g, maxX: Math.max(a.x, b.x) + g, maxY: Math.max(a.y, b.y) + g });
+      }
     });
   }
   for (const r of runs) r.pts = simplify(r.pts);
-  return { runs, edged };
+  return { runs, edged: edged.map((e) => ({ ...e, capA: !unedged.has(key(e.a)), capB: !unedged.has(key(e.b)) })) };
 }
 
 function disc(c: Pt, h: number): Polygon {
@@ -159,16 +179,27 @@ function flat(mp: MultiPolygon): FlatRing[] {
   return out;
 }
 
-function distToSegment(p: Pt, a: Pt, b: Pt): number {
-  const dx = b.x - a.x, dy = b.y - a.y;
+/**
+ * Distance from `p` to segment `s`, or `Infinity` when the nearest point
+ * is an end whose round end is not the segment's (`capA` / `capB` false:
+ * an unedged corridor leg continues there, and the boundary past the
+ * join is its side, course-layer.md §10.2).
+ */
+function distToEdged(p: Pt, s: EdgedSegment): number {
+  const dx = s.b.x - s.a.x, dy = s.b.y - s.a.y;
   const l2 = dx * dx + dy * dy;
-  const t = l2 ? Math.max(0, Math.min(1, ((p.x - a.x) * dx + (p.y - a.y) * dy) / l2)) : 0;
-  return Math.hypot(p.x - a.x - t * dx, p.y - a.y - t * dy);
+  const raw = l2 ? ((p.x - s.a.x) * dx + (p.y - s.a.y) * dy) / l2 : 0;
+  if ((raw < 0 && !s.capA) || (raw > 1 && !s.capB)) return Infinity;
+  const t = Math.max(0, Math.min(1, raw));
+  return Math.hypot(p.x - s.a.x - t * dx, p.y - s.a.y - t * dy);
 }
 
 /** The edged leg whose side `p` lies on, by ref; `null` when none. */
 function edgedRefAt(p: Pt, edged: readonly EdgedSegment[]): string | null {
-  for (const s of edged) if (Math.abs(distToSegment(p, s.a, s.b) - s.half) < EDGE_TOLERANCE_UM) return s.ref;
+  for (const s of edged) {
+    if (p.x < s.minX || p.x > s.maxX || p.y < s.minY || p.y > s.maxY) continue;
+    if (Math.abs(distToEdged(p, s) - s.half) < EDGE_TOLERANCE_UM) return s.ref;
+  }
   return null;
 }
 

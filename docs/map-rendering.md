@@ -2594,12 +2594,6 @@ The shared module is exported as a namespace: `import { render } from
   stream, the three backends and the PDF (`ca` / an ExtGState) do not
   carry yet — drawn above every map colour and below the course.
 
-- **§4.11 filter regions in the viewer and the print route.** The stage,
-  the three backends and the worker protocol take regions; nothing sends
-  them yet. They reach `VectorMapLayer` / `course-layer-request.ts` and
-  the print route's `PageInput.course.regions` with D2's stored
-  `course_objects` (`filter_region` kind; D2), and the editor's drag sends
-  `fastFilter` (D5).
 - **§5.2 filter-region limits.** All masks share one stencil bit, so
   overlapping regions of different masks are fine (each masked step marks
   only its own); nothing is capped. A stroke counts as meeting a region

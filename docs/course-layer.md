@@ -1236,7 +1236,8 @@ all-white corridor map); `edge` draws the boundary in purple.
   alpha over the same rings (`map-rendering.md` §8).
 - **The edge** (`edge: true`): the inside's boundary where it runs along
   an edged leg — boundary points within 20 µm of half that leg's width
-  from it — stroked with the resolved 705 (lower purple, 705's width ×
+  from it, its round end at a site counted only where no unedged
+  corridor leg meets it — stroked with the resolved 705 (lower purple, 705's width ×
   the document factor × `appearance.line`), closed where a whole ring
   qualifies, else open pieces. Because it is the union's boundary, an
   edge never crosses into a joined or crossing corridor, and a leg
@@ -1352,7 +1353,11 @@ all-white corridor map); `edge` draws the boundary in purple.
 - **A translucent corridor band** (§10.2): `whiteOpacity` is stored and
   drawn opaque until the stream carries alpha (`map-rendering.md` §8).
 - **Corridors in the editor** (F3): nothing authors `corridor` yet (the
-  leg inspector's corridor fields).
+  leg inspector's corridor fields). `corridorGeometry` runs on every
+  course reply: about 10 ms for 30 corridor legs, 47 ms with every edge,
+  96 ms for three such courses overlapping (Node, F2) — a drag on a
+  corridor course pays it per frame; caching the union per run is the
+  first lever if F3's drags need it.
 - **Leg properties in the editor** (§10.1, F3): `EditorPage.tsx`,
   `MapViewer.tsx` and `tools/bindings.ts` pass no bends to the readouts
   (`sequenceLegMeters`, `legLengthLabel`, `dragLegShapes`); a `none` leg
