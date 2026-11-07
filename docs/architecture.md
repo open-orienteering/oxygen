@@ -263,4 +263,4 @@ pnpm dev                # start dev servers
 pnpm docs:screenshots   # capture all screenshots
 ```
 
-The capture script (`docs/screenshots/capture.ts`) creates a temporary competition with fictional data, runs a draw and simulation, then captures screenshots of every major view. See [features.md](features.md) for the full screenshot gallery.
+The capture script (`docs/screenshots/capture.ts`) loads the Demo Competition fixture with `scripts/load-showcase.sh` (`docs/demo.md`), then captures screenshots of every major view; `--no-load` reuses an already loaded one. See [features.md](features.md) for the full screenshot gallery.
