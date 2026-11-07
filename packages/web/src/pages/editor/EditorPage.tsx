@@ -58,7 +58,7 @@ import { legLengthLabel } from "../../lib/editor/leg-length";
 import { EditorConflict, EditorWrites, type EditorClient } from "../../lib/editor/write-client";
 import { instructionsOnCourse, type Instructions } from "../../lib/editor/instructions";
 import { areaTool, editorReducer, escapeHasWork, initialEditorState, type EditorTool } from "../../lib/editor/state";
-import { appendSite, insertSite, moveVisit, removeSite, removeVisit, setLegGaps, setLegProps, setNumberHidden, setRole, type KindOf, type LegPatch } from "../../lib/editor/structure-edit";
+import { appendSite, insertSite, moveVisit, removeSite, removeVisit, setLegGaps, setLegProps, setNumberHidden, setRole, DEFAULT_CORRIDOR, type KindOf, type LegPatch } from "../../lib/editor/structure-edit";
 import { displaySequence, effectiveEnds, explicitStructure, insertIndexForLeg, kindOfSites, legForInsert, type SiteRow } from "../../lib/editor/sequence";
 import { insertBendAt, legPolyline } from "../../lib/editor/bends";
 import { courseActions } from "./ActionBar";
@@ -71,7 +71,7 @@ import { TONER_MARGIN_MM, tonerSaverGeometry } from "./tools/toner-saver";
 import { mergeCircleGaps, mergeLegGaps, type AngularGap, type FractionGap } from "./tools/gaps";
 import { areaBinding, gapBinding, pickSymbolBinding, placeBinding, selectBinding, textBinding, type GapTarget, type Gesture } from "./tools/bindings";
 import { ObjectSection } from "./modes/ObjectSection";
-import { DEFAULT_CORRIDOR, LegSection } from "./modes/LegSection";
+import { LegSection } from "./modes/LegSection";
 import { ChecksSection, Inspector, InspectorSection, InventorySection } from "./Inspector";
 import { StatusBar } from "./StatusBar";
 import type { SaveState, StatusInput } from "../../lib/editor/status";
@@ -947,14 +947,15 @@ export function EditorPage() {
     const insertAt = state.tool.kind === "gap" ? state.tool.legInsertAt : state.phantom?.insertAt;
     if (insertAt == null || !structure) return null;
     const leg = legForInsert(rows, insertAt);
-    if (!leg || !leg.from.pt || !leg.to.pt) return null;
+    const fromPt = leg?.from.pt, toPt = leg?.to.pt;
+    if (!leg || !fromPt || !toPt) return null;
     const { itemIndex, from, to } = leg;
     const item = explicitItems[itemIndex];
     const stored = item && item.kind !== "variation" ? item.leg?.gaps ?? [] : [];
     const bends = item && item.kind !== "variation" ? item.leg?.bends : undefined;
     const effective = courseInfo?.derivation?.courses[0]?.legs.find((l) => l.from === String(from.id) && l.to === String(to.id))?.gaps ?? [];
     // Fractions of the bent length (§6.3): the target is the leg's polyline through its bends.
-    return { kind: "leg", itemIndex, points: legPolyline(from.pt, bends, to.pt), gaps: stored.length ? stored : effective, stored: stored.length > 0 };
+    return { kind: "leg", itemIndex, points: legPolyline(fromPt, bends, toPt), gaps: stored.length ? stored : effective, stored: stored.length > 0 };
   }, [courseInfo, state.selectedControlId, state.phantom, state.tool, coordsById, kindOf, controlRowsById, structure, rows, explicitItems]);
 
   const writeGaps = useCallback((target: GapTarget, gaps: AngularGap[] | FractionGap[]) => {

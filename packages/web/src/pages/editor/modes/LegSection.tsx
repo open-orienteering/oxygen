@@ -9,13 +9,11 @@
 
 import { useTranslation } from "react-i18next";
 import type { course } from "@oxygen/shared";
-import type { LegPatch } from "../../../lib/editor/structure-edit";
+import { DEFAULT_CORRIDOR, type LegPatch } from "../../../lib/editor/structure-edit";
 
 type LegProps = course.LegProps;
 type Corridor = NonNullable<LegProps["corridor"]>;
 
-/** *Add corridor* and the `A` menu's *Corridor on selected leg*: a band visible at once (decision log, F3). */
-export const DEFAULT_CORRIDOR: Corridor = { widthM: 50, edge: true, whiteMm: 5, whiteOpacity: 1 };
 
 const FIELD = "mt-0.5 w-full px-1.5 py-1 rounded-md border border-slate-200 bg-white text-xs disabled:bg-slate-50 disabled:text-slate-400";
 const BUTTON = "px-2 py-0.5 rounded-md border text-xs cursor-pointer disabled:opacity-40 disabled:cursor-not-allowed";

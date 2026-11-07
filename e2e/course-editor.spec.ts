@@ -11,7 +11,7 @@ import { expect, test, type Browser, type Page, type TestInfo } from "@playwrigh
 import { reseed } from "./helpers/reseed";
 import {
   allControlsSheet, analysePdf, arm, cleanup, clickMap, clickTab, controlRows, coveredBy, desktopContext, drag, dragMm, editorReady,
-  emptyPoint, ensureCoursesAndMap, ensureFixtureFromDesktop, freezeExternalPoll, geometryOf, inkIn, labelOf, legMidpoint, legPieces, nameIdOf, objectRow,
+  emptyPoint, ensureCoursesAndMap, ensureFixtureFromDesktop, freezeExternalPoll, geometryOf, inkAt, inkIn, labelOf, legBetween, legMidpoint, legPieces, nameIdOf, objectRow,
   openEditor, pageToPaperOf, place, placeOneShot, pressInside, pressOnEdge, printed, probeTemplate, regularCodes, select, selectCompetition,
   selectedCode, selectedPosition, siteCuts, site, sitePoint, sites, toolShapes, toPage, toPaper, trpcCall, viewCentre, viewSettled, newCourse,
   mapScale, statsRow, type Frame, type Site,
@@ -2782,5 +2782,206 @@ test.describe("F11: description sheets (docs/course-print.md §6.4)", () => {
     await page.keyboard.press("Escape");
     await expect(dialog).toHaveCount(0);
     await expect(page.getByTestId("editor-page")).toBeVisible();
+  });
+});
+
+// F3 (docs/course-editor.md §6.7): the Leg section, bend handles, Add bend here, Corridor on selected leg. Its own
+// describe, so the parallel rows' edits above merge cleanly.
+test.describe("F3: legs — styles, bends, corridors (docs/course-editor.md §6.7)", () => {
+  desktopOnly();
+
+  /** A new course of two regular controls clear of each other's legs; the leg a → b is the one under test. */
+  async function twoControlCourse(page: Page, prefix: string): Promise<{ name: string; a: Site; b: Site }> {
+    await openEditor(page);
+    const name = await newCourse(page, prefix);
+    const a = await appendClear(page);
+    const b = await appendClear(page, [a]);
+    await expect(controlRows(page)).toHaveCount(2, { timeout: 15000 });
+    return { name, a: await site(page, a), b: await site(page, b) };
+  }
+
+  /** Click the leg a → b at its midpoint until the Leg section shows (the hit index lags the mirror by a round trip). */
+  async function selectLeg(page: Page, name: string, a: Site, b: Site): Promise<Pt> {
+    await viewSettled(page);
+    const mid = await legMidpoint(page, name, a.mm, b.mm);
+    await expect(async () => {
+      await dropSelection(page);
+      await clickMap(page, await toPage(page, mid));
+      await expect(page.getByTestId("editor-leg")).toBeVisible({ timeout: 3000 });
+    }).toPass({ timeout: 30000 });
+    return mid;
+  }
+
+  const styleOf = async (page: Page, name: string, a: Site, b: Site) => (await legBetween(page, name, a.mm, b.mm))[0]?.style ?? null;
+
+  test("a leg made a marked route: the layer's piece changes symbol; none keeps it selectable; undo", async ({ page }) => {
+    const { name, a, b } = await twoControlCourse(page, "F3 style");
+    const mid = await selectLeg(page, name, a, b);
+    await expect(page.getByTestId("editor-leg-style")).toHaveValue("line");
+    await expect.poll(() => styleOf(page, name, a, b), { timeout: 15000 }).toBe("line");
+
+    const saved = waitForTrpc(page, "course.setStructure");
+    await page.getByTestId("editor-leg-style").selectOption("marked_route");
+    await saved;
+    await expect.poll(() => styleOf(page, name, a, b), { timeout: 15000 }).toBe("marked_route");
+    await expect(page.getByTestId("editor-leg-style")).toHaveValue("marked_route");
+
+    // No line: the layer has no object for it, yet a click on it selects it (the derivation's pieces, §5).
+    const none = waitForTrpc(page, "course.setStructure");
+    await page.getByTestId("editor-leg-style").selectOption("none");
+    await none;
+    await expect.poll(() => styleOf(page, name, a, b), { timeout: 15000 }).toBe("none");
+    await expect(async () => {
+      await dropSelection(page);
+      await clickMap(page, await toPage(page, mid));
+      await expect(page.getByTestId("editor-leg-style")).toHaveValue("none", { timeout: 3000 });
+    }).toPass({ timeout: 30000 });
+
+    // Each change is one undo entry.
+    await page.keyboard.press("Control+z");
+    await expect.poll(() => styleOf(page, name, a, b), { timeout: 15000 }).toBe("marked_route");
+    await page.keyboard.press("Control+z");
+    await expect.poll(() => styleOf(page, name, a, b), { timeout: 15000 }).toBe("line");
+  });
+
+  test("Add bend here, a dragged bend handle: the leg passes through it and its metres grow; Delete removes it", async ({ page }) => {
+    const { name, a, b } = await twoControlCourse(page, "F3 bend");
+    const legRow = () => controlRows(page).nth(1).getByTestId("editor-leg-meters");
+    const metres = async () => Number(((await legRow().textContent()) ?? "").replace(/[^\d]/g, ""));
+    const before = await metres();
+    expect(before).toBeGreaterThan(0);
+    await selectLeg(page, name, a, b);
+
+    const added = waitForTrpc(page, "course.setStructure");
+    await page.getByTestId("editor-action-bar").getByTestId("editor-action-add-bend").click();
+    await added;
+    await expect.poll(async () => (await toolShapes(page, "editor-bend-handle")).length, { timeout: 15000 }).toBe(1);
+    await expect(page.getByTestId("editor-leg-bend")).toHaveCount(1);
+
+    // Drag it off the leg, perpendicular and upwards on screen (the action bar lays out below the phantom).
+    const handle = (await toolShapes(page, "editor-bend-handle"))[0];
+    const from = await toPage(page, handle);
+    const pa = await toPage(page, a.mm), pb = await toPage(page, b.mm);
+    const len = Math.hypot(pb.x - pa.x, pb.y - pa.y);
+    let n = { x: -(pb.y - pa.y) / len, y: (pb.x - pa.x) / len };
+    if (n.y > 0) n = { x: -n.x, y: -n.y };
+    const moved = waitForTrpc(page, "course.setStructure");
+    await drag(page, from, { x: from.x + n.x * 60, y: from.y + n.y * 60 });
+    await moved;
+
+    // The handle and the bends list follow the write; the drawn leg has a vertex at the bend.
+    await expect.poll(async () => {
+      const h = (await toolShapes(page, "editor-bend-handle"))[0];
+      return h ? Math.hypot(h.x - handle.x, h.y - handle.y) : 0;
+    }, { timeout: 15000 }).toBeGreaterThan(1);
+    const bend = (await toolShapes(page, "editor-bend-handle"))[0];
+    await expect.poll(async () => {
+      const pieces = await legBetween(page, name, a.mm, b.mm);
+      return pieces.some((p) => p.points.some((q) => Math.hypot(q.x - bend.x, q.y - bend.y) < 0.3));
+    }, { timeout: 15000 }).toBe(true);
+    await expect.poll(metres, { timeout: 15000 }).toBeGreaterThan(before);
+
+    // The handle is focused by the drag; Delete takes the bend out (one write), the leg is straight again.
+    await expect(page.getByTestId("editor-leg-bend").first()).toHaveAttribute("data-focused", "true");
+    const removed = waitForTrpc(page, "course.setStructure");
+    await page.keyboard.press("Delete");
+    await removed;
+    await expect.poll(async () => (await toolShapes(page, "editor-bend-handle")).length, { timeout: 15000 }).toBe(0);
+    await expect(page.getByTestId("editor-leg-bends-empty")).toBeVisible();
+    await expect.poll(metres, { timeout: 15000 }).toBe(before);
+    // Both controls are still on the course (Delete took the bend, not a control).
+    await expect(controlRows(page)).toHaveCount(2);
+  });
+
+  test("Corridor on selected leg: the map is white in the band beside the edge, the print stays one page; Remove", async ({ page }) => {
+    const { name, a, b } = await twoControlCourse(page, "F3 corridor");
+    const nameId = nameIdOf(page);
+    const scale = await mapScale(page);
+    // The default corridor (decision log, F3): 50 m wide, a 5 mm white band beyond the edge.
+    const halfMm = (50 * 1000) / scale / 2;
+    const ax = a.mm, bx = b.mm, len = Math.hypot(bx.x - ax.x, bx.y - ax.y);
+    const u = { x: (bx.x - ax.x) / len, y: (bx.y - ax.y) / len }, n = { x: -u.y, y: u.x };
+    /** Points in the band, both sides, along the leg's middle (clear of the circles and the edge line's width). */
+    const band: Pt[] = [];
+    for (let t = 0.3; t <= 0.7; t += 0.02) {
+      for (let d = halfMm + 0.8; d <= halfMm + 4.2; d += 0.2) {
+        for (const side of [1, -1]) band.push({ x: ax.x + u.x * len * t + n.x * d * side, y: ax.y + u.y * len * t + n.y * d * side });
+      }
+    }
+    const courses = await trpcCall<{ id: number; name: string }[]>("course.list", undefined, false);
+    const courseId = courses.find((c) => c.name === name)!.id;
+    const template = await probeTemplate("F3 corridor");
+    const sheet = await trpcCall<{ seq: number }>("courseMap.create", { kind: "course", courseId, templateId: template.seq, overrides: {}, objects: [] });
+    try {
+      await selectLeg(page, name, a, b);
+      await viewSettled(page);
+      const mapBefore = await inkAt(page, band, "map");
+      expect(mapBefore, "the fixture map has colour beside the leg").toBeGreaterThan(0);
+
+      // The A menu's entry (key C while it is open); disabled once the leg has a corridor.
+      await page.keyboard.press("a");
+      await expect(page.getByTestId("editor-area-corridor")).toBeEnabled();
+      const saved = waitForTrpc(page, "course.setStructure");
+      await page.keyboard.press("c");
+      await saved;
+      await expect(page.getByTestId("editor-leg-corridor-width")).toHaveValue("50");
+      await expect(page.getByTestId("editor-leg-corridor-white")).toHaveValue("5");
+      await expect(page.getByTestId("editor-leg-corridor-edge")).toBeChecked();
+      await expect.poll(() => inkAt(page, band, "map"), { timeout: 30000 }).toBe(0);
+      await page.keyboard.press("a");
+      await expect(page.getByTestId("editor-area-corridor")).toBeDisabled();
+      // A again closes the menu (Escape would step the selection back too, §3).
+      await page.keyboard.press("a");
+      await expect(page.getByTestId("editor-area-menu")).toHaveCount(0);
+
+      expect((await printed(page, nameId, `maps=${sheet.seq}`)).pages).toBe(1);
+
+      // An invalid width is not written; a valid one is, as one more undo entry.
+      await page.getByTestId("editor-leg-corridor-width").fill("0");
+      await page.getByTestId("editor-leg-corridor-width").press("Tab");
+      await expect(page.getByTestId("editor-leg-corridor-width")).toHaveValue("50");
+
+      const removed = waitForTrpc(page, "course.setStructure");
+      await page.getByTestId("editor-leg-corridor-remove").click();
+      await removed;
+      await expect(page.getByTestId("editor-leg-corridor-add")).toBeVisible();
+      await expect.poll(() => inkAt(page, band, "map"), { timeout: 30000 }).toBeGreaterThan(0);
+      // Undo brings the corridor back.
+      await page.keyboard.press("Control+z");
+      await expect(page.getByTestId("editor-leg-corridor-remove")).toBeVisible({ timeout: 15000 });
+    } finally {
+      await cleanup("courseMap.delete", { id: sheet.seq });
+      await cleanup("mapTemplate.delete", { id: template.seq });
+    }
+  });
+});
+
+test.describe("F3 on a phone: the Leg section is read-only (docs/course-editor.md §6.7, §10)", () => {
+  test.skip(({ isMobile }) => !isMobile, "the phone's subset");
+
+  test("a tapped leg shows its section, disabled, and says leg editing is for desktop and tablet", async ({ page, browser }, info) => {
+    const nameId = await ensureFixtureFromDesktop(browser, info);
+    await page.goto(`/${nameId}/course-editor`);
+    await editorReady(page);
+    await page.getByTestId("editor-mode-course").click();
+    const name = `F3 phone ${Date.now() % 100000}`;
+    const { id } = await trpcCall<{ id: number }>("course.create", { name });
+    await page.reload();
+    await editorReady(page);
+    await page.getByTestId("editor-mode-course").click();
+    await page.getByTestId("editor-course-picker").selectOption(String(id));
+    await expect(page.locator('[data-testid="editor-seq-row"][data-kind="start"]')).toBeAttached({ timeout: 15000 });
+    // The course's start → finish leg (no controls): tap its middle.
+    await expect.poll(async () => (await legPieces(page, name)).length, { timeout: 15000 }).toBeGreaterThan(0);
+    const piece = (await legPieces(page, name))[0].points;
+    const mid = { x: (piece[0].x + piece.at(-1)!.x) / 2, y: (piece[0].y + piece.at(-1)!.y) / 2 };
+    await expect(async () => {
+      await touchTap(page, await toPage(page, mid));
+      await expect(page.getByTestId("editor-leg")).toBeAttached({ timeout: 3000 });
+    }).toPass({ timeout: 30000 });
+    await expect(page.getByTestId("editor-leg")).toHaveAttribute("data-readonly", "true");
+    await expect(page.getByTestId("editor-leg-style")).toBeDisabled();
+    await expect(page.getByTestId("editor-leg-readonly")).toBeAttached();
+    await expect(page.getByTestId("editor-action-add-bend")).toHaveCount(0);
   });
 });

@@ -2,8 +2,8 @@
  * A leg's length on the ground as the UI layer labels it (docs/course-editor.md
  * §6.1): the pending leg while a placement tool is armed, both legs of a
  * dragged control. It is the one readout of the pending leg (P2: no status-bar number).
- * A leg with bends is measured and labelled along them (course-layer.md §10.1);
- * the call sites pass none until the leg inspector (F3) can author them.
+ * A leg with bends is measured and labelled along them (course-layer.md §10.1;
+ * the call sites pass the stored bends, docs/course-editor.md §6.7).
  */
 
 import { course } from "@oxygen/shared";

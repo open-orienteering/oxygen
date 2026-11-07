@@ -69,10 +69,11 @@ export async function sitePoint(page: Page, code: string): Promise<Pt> {
 }
 
 /** The leg pieces drawn for a course, paper mm. */
-export async function legPieces(page: Page, course?: string): Promise<{ course: string; leg: number; points: Pt[] }[]> {
+export async function legPieces(page: Page, course?: string): Promise<{ course: string; leg: number; style: string; points: Pt[] }[]> {
   const all = await page.getByTestId("course-leg").evaluateAll((els) => els.map((el) => ({
     course: el.getAttribute("data-course") ?? "",
     leg: Number(el.getAttribute("data-leg")),
+    style: el.getAttribute("data-style") ?? "",
     points: (el.getAttribute("data-points") ?? "").split(" ").filter(Boolean).map((p) => {
       const [x, y] = p.split(",").map(Number);
       return { x, y };
@@ -251,7 +252,20 @@ export async function toolShapes(page: Page, testId: string): Promise<{ x: numbe
  * ink) or purple (the course overprint). The canvas alone is captured (the overlays hidden), as
  * `map-vector-layer.spec.ts` does.
  */
-export async function inkIn(page: Page, rect: { minX: number; minY: number; maxX: number; maxY: number }, kind: "dark" | "purple" = "dark"): Promise<number> {
+export async function inkIn(page: Page, rect: { minX: number; minY: number; maxX: number; maxY: number }, kind: InkKind = "dark"): Promise<number> {
+  const points: Pt[] = [];
+  for (let x = rect.minX; x <= rect.maxX; x += 0.1) for (let y = rect.minY; y <= rect.maxY; y += 0.1) points.push({ x, y });
+  return inkAt(page, points, kind);
+}
+
+/**
+ * `dark`: the map's black ink; `purple`: the course overprint; `map`: any map colour — not white and not
+ * purple (a corridor's white band cuts the whole map away, docs/course-layer.md §10.2).
+ */
+export type InkKind = "dark" | "purple" | "map";
+
+/** As `inkIn`, at a list of paper points (mm): how many distinct canvas pixels under them are of `kind`. */
+export async function inkAt(page: Page, points: readonly Pt[], kind: InkKind = "dark"): Promise<number> {
   const { PNG } = await import("pngjs");
   const canvas = page.getByTestId("map-vector-layer");
   const style = "body * { visibility: hidden !important } [data-testid='map-vector-layer'] { visibility: visible !important }";
@@ -263,18 +277,17 @@ export async function inkIn(page: Page, rect: { minX: number; minY: number; maxX
   const rot = (v.rotDeg * Math.PI) / 180;
   const seen = new Set<number>();
   let n = 0;
-  for (let x = rect.minX; x <= rect.maxX; x += 0.1) {
-    for (let y = rect.minY; y <= rect.maxY; y += 0.1) {
-      const ix = (x * 1000 - v.centreX) * v.pxPerUm, iy = -(y * 1000 - v.centreY) * v.pxPerUm;
-      const q = { x: v.box.x + v.box.width / 2 + ix * Math.cos(rot) - iy * Math.sin(rot), y: v.box.y + v.box.height / 2 + ix * Math.sin(rot) + iy * Math.cos(rot) };
-      const px = Math.round((q.x - cb.x) * k), py = Math.round((q.y - cb.y) * k);
-      if (px < 0 || py < 0 || px >= png.width || py >= png.height) continue;
-      const i = (py * png.width + px) * 4;
-      if (seen.has(i)) continue;
-      seen.add(i);
-      const r = png.data[i], g = png.data[i + 1], b = png.data[i + 2];
-      if (kind === "dark" ? Math.max(r, g, b) < 110 : r - g > 50 && b - g > 50) n++;
-    }
+  for (const { x, y } of points) {
+    const ix = (x * 1000 - v.centreX) * v.pxPerUm, iy = -(y * 1000 - v.centreY) * v.pxPerUm;
+    const q = { x: v.box.x + v.box.width / 2 + ix * Math.cos(rot) - iy * Math.sin(rot), y: v.box.y + v.box.height / 2 + ix * Math.sin(rot) + iy * Math.cos(rot) };
+    const px = Math.round((q.x - cb.x) * k), py = Math.round((q.y - cb.y) * k);
+    if (px < 0 || py < 0 || px >= png.width || py >= png.height) continue;
+    const i = (py * png.width + px) * 4;
+    if (seen.has(i)) continue;
+    seen.add(i);
+    const r = png.data[i], g = png.data[i + 1], b = png.data[i + 2];
+    const purple = r - g > 50 && b - g > 50;
+    if (kind === "dark" ? Math.max(r, g, b) < 110 : kind === "purple" ? purple : !purple && Math.min(r, g, b) < 235) n++;
   }
   return n;
 }
@@ -741,4 +754,18 @@ export async function freezeExternalPoll(page: Page): Promise<void> {
     await route.fulfill({ response: res, json: body });
   });
   await held;
+}
+
+/**
+ * The drawn pieces of course `course`'s leg from `from` to `to` (paper mm, within 8 mm of the sites' centres —
+ * the pieces start and end at the circles' rims), with its style; [] while the mirror does not show it.
+ */
+export async function legBetween(page: Page, course: string, from: Pt, to: Pt): Promise<{ leg: number; style: string; points: Pt[] }[]> {
+  const near = (q: Pt | undefined, s: Pt) => !!q && Math.hypot(q.x - s.x, q.y - s.y) < 8;
+  const pieces = await legPieces(page, course);
+  for (const idx of new Set(pieces.map((l) => l.leg))) {
+    const ps = pieces.filter((l) => l.leg === idx);
+    if (near(ps[0].points[0], from) && near(ps[ps.length - 1].points.at(-1), to)) return ps;
+  }
+  return [];
 }

@@ -1568,17 +1568,12 @@ them.
   lever if real courses get near the cap.
 - **A translucent corridor band** (§10.2): `whiteOpacity` is stored and
   drawn opaque until the stream carries alpha (`map-rendering.md` §8).
-- **Corridors in the editor** (F3): nothing authors `corridor` yet (the
-  leg inspector's corridor fields). `corridorGeometry` runs on every
-  course reply: about 10 ms for 30 corridor legs, 47 ms with every edge,
-  96 ms for three such courses overlapping (Node, F2) — a drag on a
-  corridor course pays it per frame; caching the union per run is the
-  first lever if F3's drags need it.
-- **Leg properties in the editor** (§10.1, F3): `EditorPage.tsx`,
-  `MapViewer.tsx` and `tools/bindings.ts` pass no bends to the readouts
-  (`sequenceLegMeters`, `legLengthLabel`, `dragLegShapes`); a `none` leg
-  has no hit piece (no pass), so the leg inspector hit-tests it from
-  `derivation.courses[].legs[].pieces`.
+- **The corridor union per frame** (§10.2): `corridorGeometry` runs on
+  every course reply — about 10 ms for 30 corridor legs, 47 ms with every
+  edge, 96 ms for three such courses overlapping (Node, F2). The editor's
+  bend drag previews on the UI layer and writes once (`course-editor.md`
+  §6.7), so no per-move request pays it; a control drag on a corridor
+  course still does. Caching the union per run is the first lever.
 - **Export lengths along bends** (F9 — user, 2026-11-07): the IOF /
   Purple Pen export recomputes a `derived` course's leg lengths
   straight, centre to centre (`course-controls-and-matching.md` "Course

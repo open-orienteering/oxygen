@@ -122,6 +122,9 @@ export function setNumberHidden(s: Structure, siteId: number, hidden: boolean): 
 }
 
 type LegProps = NonNullable<Extract<Item, { siteId: number }>["leg"]>;
+/** *Add corridor* and the `A` menu's *Corridor on selected leg* (§6.7): a band visible at once (decision log, F3). */
+export const DEFAULT_CORRIDOR: NonNullable<LegProps["corridor"]> = { widthM: 50, edge: true, whiteMm: 5, whiteOpacity: 1 };
+
 /** A patch of `LegProps`: a key set to `undefined` is removed. */
 export type LegPatch = { [K in keyof LegProps]?: LegProps[K] | undefined };
 

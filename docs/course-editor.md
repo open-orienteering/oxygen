@@ -71,9 +71,9 @@ exit bubble on every pointer move
 | Part | `data-testid` | What it holds |
 |---|---|---|
 | Top bar (`TopBar.tsx`) | `editor-top-bar` | course picker (`editor-course-picker`), view (`editor-view-course` / `-all` / `-class`), mode (`editor-mode-course` / `-layout` / `-field`), undo / redo (`editor-undo` / `-redo`), hide other controls (`editor-hide-others`), auto cuts (`editor-toggle-cuts`), Export ▾ (`editor-export`, `course-layout.md` §7), the map info (`editor-map-info`, below), the course-info button and the save indicator (below), who else has a course open (§11), help popover; MapPanel adds descriptions, fullscreen and the viewer its zoom on the same row |
-| Tool rail (`ToolRail.tsx`; Layout mode: `layout/LayoutRail.tsx`, `editor-layout-rail`, `course-layout.md` §3) | `editor-tool-rail` | `editor-tool-<key>` for `V`, `S`, `K`, `M`, `X` / `C` (disabled, "slice F"), `A` (menu `editor-area-menu`, `editor-area-<kind>`), `T`, `G`; the snapping toggle `editor-snapping` (§6) |
+| Tool rail (`ToolRail.tsx`; Layout mode: `layout/LayoutRail.tsx`, `editor-layout-rail`, `course-layout.md` §3) | `editor-tool-rail` | `editor-tool-<key>` for `V`, `S`, `K`, `M`, `X` / `C` (disabled, "slice F"), `A` (menu `editor-area-menu`, `editor-area-<kind>`, and `editor-area-corridor` — §6.7), `T`, `G`; the snapping toggle `editor-snapping` (§6) |
 | Action bar (`ActionBar.tsx`) | `editor-action-bar` | the selection's or phantom's entries, horizontal, centred under the selection, hidden during a drag; ids `editor-action-<id>` as the legacy popover's. The viewer positions it (`actionLayout: "bar"`); on a phone the same list is the bottom sheet's peek row (`actionLayout: "host"`, §10) |
-| Inspector (`Inspector.tsx`, `modes/CourseMode.tsx`, `modes/ObjectSection.tsx`) | `editor-inspector` | collapsible sections: course (create, sequence, visit order, description sheet — `editor-description-instructions`, §4 —, clone), selection (a site: code, kind, position, description summary, "also in", hidden number, notes — §6.6; several controls: `editor-multi` with the bulk actions — §6.5; a course object: `editor-object` — §7), inventory (`editor-inventory-panel`, collapsed), checks (`editor-checks`, §8) |
+| Inspector (`Inspector.tsx`, `modes/CourseMode.tsx`, `modes/ObjectSection.tsx`) | `editor-inspector` | collapsible sections: course (create, sequence, visit order, description sheet — `editor-description-instructions`, §4 —, clone), selection (a site: code, kind, position, description summary, "also in", hidden number, notes — §6.6; several controls: `editor-multi` with the bulk actions — §6.5; a course object: `editor-object` — §7; a leg: `editor-leg` — §6.7, `modes/LegSection.tsx`), inventory (`editor-inventory-panel`, collapsed), checks (`editor-checks`, §8) |
 | Map info (`MapInfoDialog.tsx`, model `lib/editor/map-info.ts`; P6) | `editor-map-info` → `editor-map-info-dialog` | a map icon button (`IconMap`, `components/map-icons.tsx`) in the top bar right after Export ▾ (`aria-haspopup="dialog"`, `aria-expanded`); a click opens a modal (`role="dialog"`, `aria-modal="true"`, centred over a dimmed backdrop; the close button `editor-map-info-close`, a backdrop click or Escape closes it). Its header shows the map's file name (`editor-map-info-name`, `data-name`) or, without a map, `editor-map-info-none`. Its rows, each only when it has a value: the scale `editor-map-info-scale` (`data-scale`, `1:10 000`), the north lines `editor-map-info-north` (the `NorthLinesBadge` sentence, `north-lines-badge` with `data-north-lines`; *No magnetic north lines found* when the file has none), the file `editor-map-info-file` (size and upload time, `data-bytes`, `data-uploaded`); then the document section `editor-map-info-document` (`data-source`, `data-objects`, `data-symbols`, `data-colours`; read from the loaded document's header, absent while it loads or the import runs) with `editor-map-info-source` (OCAD and its version, or OpenOrienteering Mapper), `-content` (objects · symbols · colours), `-symbol-library` (the matched symbol library and version; not `-library`, which is the action below), `-crs` (EPSG code and name) and `-importer`. Its actions: *Review symbols* (`editor-map-info-review`, a link to `/<event>/map-review/<documentHash>`, only once the document exists — `map-symbols.md` §8.7), *Replace map* (`editor-map-info-replace`; *Upload map* without a map; the hidden `accept=".ocd"` input), *From club library* (`editor-map-info-library`, only when the club library lists a map; opens `club-map-picker`, `club-library.md`). An upload's progress, error and the stale-north-lines notice (`map-upload-notice`) show in the dialog's footer |
 | Course info (`EditorStatus.tsx` `StatsButton`, model `lib/editor/status.ts`) | `editor-stats` → `editor-stats-popover` | an icon button in the top bar (`aria-haspopup="dialog"`, `aria-expanded`) with the check count as its amber badge (`editor-stats-badge`, `data-count`, absent at zero, §8); a click opens the popover (`role="dialog"`; a second click, an outside click or Escape closes it — Escape closes only the popover, the editor's Escape cascade of §3 is not stepped, so an armed tool stays armed). Its rows, each only when it has a value, in this order: `editor-stats-controls` (`data-count`), `editor-stats-length` (`data-m`), `editor-stats-climb` (`data-m`), the shown sheet's key in Layout mode and Class view (`editor-stats-sheet`, `data-key`, `course-layout.md` §6), `editor-stats-snapping` when on, `editor-stats-checks` (`data-count`, amber). No map scale since P6: it is the map-info dialog's (`courseInfoRows`). With no course and no sheet the popover says *No course* |
 | Save indicator (`EditorStatus.tsx` `SaveIndicator`) | `editor-save-state` | in the top bar after the course-info button: a dot and the save state's words (`data-state` = `saved` / `saving` / `error` / `conflict`, `role="status"`, `aria-live="polite"`, the words also its `title`). `saved` / `saving` are the dot alone (green / grey pulsing; the words `sr-only`), so P2 adds a dot (≤ 16 px) and an icon button (≤ 32 px) to the top bar's row — whether the row wraps on a laptop screen depends on the course names (the picker is as wide as the longest) and the presence chips; `error` / `conflict` show their words (`editor-save-state-text`, red) at every width — a failed or conflicting save never hides behind a popover or a tooltip |
@@ -161,10 +161,11 @@ notice names who and when when the journal has it (§11).
 Structure writes go through `course.setStructure` with the course's
 token; edits are pure functions over the wire form
 (`lib/editor/structure-edit.ts`: `insertSite`, `appendSite`,
-`removeSite` (every visit), `removeVisit` (one), `moveVisit`, `setRole`)
+`removeSite` (every visit), `removeVisit` (one), `moveVisit`, `setRole`,
+and for a leg `setLegProps` — §6.7)
 in **control-sequence positions** — the items between an explicit leading
 start and trailing finish. An item whose predecessor changes loses its
-`leg` (its gaps described the old leg). The editor's first save of a
+`leg` (its gaps, bends and corridor described the old leg). The editor's first save of a
 course makes it explicit (`explicitStructure`, `lib/editor/sequence.ts`):
 the start and finish it is drawn with — the event default completing an
 implicit one — become items (`course-layer.md` §6.2). The inspector's rows
@@ -177,7 +178,12 @@ are `displaySequence` (start, controls, finish) with per-leg metres
 | Add control | `control.create { codes, xpos, ypos, autoDescribe }` (code from the club allocation, `editor-alloc-series` overrides the series; SRR codes get radio); the new control is selected with `V`'s ring and the action bar (§6.1, P4) | `control.delete` / redo `control.restore` |
 | Add to ‹course› (phantom) | create + `setStructure(appendSite)` | `setStructure(prev)` + delete / restore + `setStructure(next)` |
 | Add start / finish | code-less `control.create { status: 4 / 5 }` (named "Start N" / "Mål N") | delete / restore |
-| click a leg (selected course) | phantom with the insert position (`insertIndexForLeg`: before the row the leg ends at, last when it ends at the finish) + **Insert into course** | — |
+| click a leg (selected course) | phantom with the insert position (`insertIndexForLeg`: before the row the leg ends at, last when it ends at the finish) + **Insert into course**; the phantom is the **selected leg** — the inspector's *Leg* section (§6.7) and, on desktop and tablet, **Add bend here** | — |
+| Leg section: style, bends ✕, corridor *Add* / fields / *Remove* (§6.7) | `setStructure(setLegProps)`: the item's `leg` patched, its other props kept | `setStructure(prev)` |
+| **Add bend here** (leg phantom) | `setStructure(setLegProps { bends })`: the phantom's point inserted on the nearest segment (`insertBendAt`) | `setStructure(prev)` |
+| drag a bend handle (`V`, selected leg) | one `setStructure(setLegProps { bends })` on release | `setStructure(prev)` |
+| `Delete` / `Backspace` with a focused bend | `setStructure(setLegProps { bends })` without it | `setStructure(prev)` |
+| `A` → **Corridor on selected leg** (`C`) | `setStructure(setLegProps { corridor })` with the default corridor | `setStructure(prev)` |
 | Insert into course | create + `setStructure(insertSite)` | as Add to ‹course› |
 | click a control | select; action bar: **Add to ‹course›** (append), **Remove from ‹course›** (every visit), **Reset number position**, **Radio** / **Radio off** (SRR swap offer as legacy), **Edit description**, **Delete control**; a start / finish not used by the course offers **Use as start / finish for ‹course›** (`setRole`) | `setStructure(prev)`; radio is not undoable (as legacy) |
 | drag a control | one `control.update { xpos, ypos, autoDescribe: true }` on release; affects-chip "Affects: …" for shared controls | `control.update` with the old position and description |
@@ -294,6 +300,13 @@ shared stage (04 §7; `map-rendering.md` §5.5), not SVG hit targets:
   stays for the control circles. An area whose whole outline is
   off-screen is selected after zooming out (`F` fits the course).
   Imported extras do not hit.
+- A leg with **no line** (`style: "none"`, `course-layer.md` §10.1) has
+  no layer object, so no hit-index piece: the viewer passes the
+  derivation's pieces of such legs as `UiLeg`s (`uiLegsOf`), which hit
+  within the tolerance of their polyline after the layer's objects and the
+  UI sites and before the UI areas, as `{ kind: "leg" }` — a leg made
+  invisible stays selectable (§6.7). A corridor's edge (`ref` `corridor`)
+  is no target.
 - While an armed tool's provisional visit is drawn (§6.1) only real sites
   are targets: `editorHitAt`'s `accept` passes over everything else and
   over the `provisional` site, so the shape below (a control to reuse)
@@ -337,7 +350,7 @@ screen-size Bézier handle on a thin line from its vertex — and text). The too
 | `V` | select / move | the default; §4, plus Shift-click, lasso, objects (§6.5, §7) |
 | `S` / `K` / `M` | start / control / finish | armed, §6.1 |
 | `X` / `C` | map exchange / crossing point | shown disabled: "arrives with slice F" |
-| `A` | areas | a menu: out-of-bounds area, out-of-bounds line, white-out, filter region, toner saver, marked route (§6.4) |
+| `A` | areas | a menu: out-of-bounds area, out-of-bounds line, white-out, filter region, toner saver, marked route (§6.4); *Corridor on selected leg* (§6.7) |
 | `T` | map text | one click places it (§7) |
 | `G` | gaps | on the selected circle or leg (§6.3) |
 | — | snapping | the rail's toggle (§6.2) |
@@ -438,7 +451,7 @@ returns to select from any tool; right-click exits an exclusive tool.
 ### 6.2 Snapping
 
 The rail's toggle (default off). A dragged control's centre, a placed
-site, a polygon vertex and a text anchor snap to the nearest **point
+site, a polygon vertex, a dragged bend (§6.7) and a text anchor snap to the nearest **point
 object's centre or line / area vertex** of the map document within
 **0.5 mm** on paper (`lib/editor/snap.ts`, `SNAP_MM`). The candidates are
 document geometry — a point object's coordinate and the on-curve vertices
@@ -488,7 +501,11 @@ a portal at the button's screen position so nothing in the overlay strip
 covers it); a second key picks the kind — the **`A` chord**: `O`
 out-of-bounds area, `L` out-of-bounds line, `W` white-out, `F` filter
 region, `S` toner saver, `R` marked route (`AREA_KEYS`, shown in the
-menu). The chord key is read only while the menu is open, so `S` does
+menu). Below them, **Corridor on selected leg** (`editor-area-corridor`,
+`C`, `CORRIDOR_KEY`) writes the selected leg's corridor (§6.7); it is no
+area kind (not in `AREA_CHOICES`, so the phone's `+` menu does not list
+it) and is disabled without a selected leg, on a leg that already has a
+corridor, and on a phone. The chord key is read only while the menu is open, so `S` does
 not arm the start tool there; `Esc` or `A` closes the menu. A click on a
 menu item does the same.
 
@@ -617,8 +634,9 @@ than three hull points).
 - **Double-click a leg** inserts a new control there (§4's insert, without
   the action bar).
 - `Delete` / `Backspace` deletes the multi-selection, else the selected
-  object's **focused vertex** (§7 "Editing geometry"), else the selected
-  object, else the selected control.
+  leg's **focused bend** (§6.7), else the selected object's **focused
+  vertex** (§7 "Editing geometry"), else the selected object, else the
+  selected control.
 
 ### 6.6 Site fields
 
@@ -630,6 +648,74 @@ blur; `courses.review`), and for a control on the selected course
 **Hide the number on this course** — `numberHidden` on every visit of the
 site in the structure (`setNumberHidden`, `setStructure`). Each is one
 undo entry.
+
+### 6.7 Legs: styles, bends, corridors
+
+The editor side of `LegProps` (08 §4.3, §5.2 inspector "leg: style,
+gaps, corridor, crossing"; the layer's rules are `course-layer.md` §10).
+A **selected leg** is the leg-click phantom on the selected course
+(§4: `phantom.insertAt` set) in Course or Class view, on an ordered
+course: there is no second selection model, so Escape, a course switch,
+a mode switch and arming a tool drop it as they drop the phantom. Its
+item is the row the leg runs into (`legForInsert`, `lib/editor/sequence.ts`,
+the inverse of `insertIndexForLeg`): `rows[i]` is `explicitStructure(…).items[i]`,
+and the leg is that item's `leg`.
+
+**Inspector.** The selection slot shows the *Leg* section (`editor-leg`,
+`modes/LegSection.tsx`, title "Leg ‹from› → ‹to›" by code):
+
+- **Style** (`editor-leg-style`): *Line* (705, the default, stored as no
+  `style`), *Marked route* (707 along the leg), *None* (no line; numbers,
+  cuts and the leg's hit unchanged, §5).
+- **Bends** (`editor-leg-bend`, `data-index` / `data-x` / `data-y` paper
+  mm, `data-focused`): one row per bend in order, a click focuses it, ✕
+  (`editor-leg-bend-remove`) removes it; `editor-leg-bends-empty` without
+  bends. No numeric edit: the handle and *Add bend here* place them.
+- **Corridor** (`editor-leg-corridor`): **Add corridor**
+  (`editor-leg-corridor-add`) writes the default corridor — 50 m wide,
+  edge on, a 5 mm white band, opacity 1 (decision log, F3: a band visible
+  at once); with one, the fields width m (`-width`, > 0), white mm
+  (`-white`, ≥ 0), opacity (`-opacity`, 0–1, with the note that the band
+  is drawn opaque for now, `course-layer.md` §10.2), the edge checkbox
+  (`-edge`) and **Remove** (`-remove`). A number is written on blur or
+  Enter; a value outside its range is not written and the field shows the
+  stored value again.
+
+**Map.** In `V`, the selected leg draws its outline (`editor-leg-outline`,
+dashed, from → bends → to) and a handle per bend (`editor-bend-handle`,
+`data-index`, `data-focused`; the focused one active). A press within
+the handle reach (7 CSS px) takes the gesture before anything else under
+it: past 3 px it drags the bend (snapped, §6.2; the outline follows on
+the UI layer, no layer request per move — `corridorGeometry` is not paid
+per frame) and the release writes once and focuses it; a release without
+movement focuses it. A double-click on a handle inserts no control. The
+leg's action bar gains **Add bend here** (`editor-action-add-bend`): the
+phantom's point becomes a bend on the segment of the polyline nearest it
+(`insertBendAt`, `lib/editor/bends.ts`), focused; the double-click on a
+leg stays *insert control* (§6.5, D5). `Delete` / `Backspace` removes the
+focused bend (§6.5). Bend focus is page state keyed by the leg's item and
+cleared by another leg click, undo and redo. A bend is paper mm, rounded
+to 0.01 mm.
+
+**Writes.** Every change is one `setStructure` with the item's `leg`
+patched by `setLegProps(s, itemIndex, patch)` — the patch's keys replace
+the item's, the others stay; a key set to `undefined`, `style: "line"`
+and an empty `bends` list are removed, and a leg left empty goes — and
+one undo entry (`applyStructure`). `setLegGaps` (§6.3) is a patch of
+`gaps`. An item whose predecessor changes loses its whole `leg` (§4).
+
+**Readouts follow the bends** (`course-layer.md` §10.1 "Length"): the
+inspector's leg metres (`sequenceLegMeters` with each row's stored
+bends), a dragged control's leg labels (`dragLegShapes` with `bendsInto`)
+and the `G` tool's target (§6.3) all run along the polyline. A
+`course-leg` mirror item carries its leg's resolved `data-style`.
+
+**Phone** (08 §5.5 "desktop-only by design", §10): a tapped leg shows the
+section in the sheet with every control disabled and the line *Leg
+editing is for desktop and tablet* (`editor-leg-readonly`); no handles,
+no *Add bend here*, no corridor entry. A tablet edits from the inspector
+and the action bar; bend drags take a mouse (the touch path offers
+presses to a tool only on object targets, §10; Pending).
 
 ## 7. Course objects in the editor
 
@@ -1088,7 +1174,11 @@ whose poll ran meanwhile simply does not conflict (decision log, D10).
 | unit (web) | `packages/web/src/lib/editor/__tests__/hit.test.ts` | §5 over the real worker: interior and ring, start and finish, legs with course and index, empty map, tolerance, numbers, UI-layer sites under layer objects; closed areas by their outline only (D12): inside an `oob_area` / a white-out → null, its edge → the object, a 709.b border not grabbing the interior, a control and a leg inside a white-out still hit, a line by its stroke, a `UiArea`'s interior → null |
 | unit (web) | `lib/editor/__tests__/conflict.test.ts`, `write-client.test.ts` | §3: rebase vs moved vs refresh, unknown base, structure never merged; tokens sent and advanced, one re-send, `EditorConflict`, code re-keying, delete seeding |
 | unit (web) | `lib/editor/__tests__/structure-edit.test.ts`, `sequence.test.ts`, `state.test.ts` | §4: sequence positions, insert / append / remove / move / role, legs dropped on a new predecessor; display sequence, explicit structure, leg → insert position; §3 Escape cascade, hide-others, modes |
-| unit (web) | `pages/editor/__tests__/action-bar.test.ts` | §4: the entries per selection, the legacy ids |
+| unit (web) | `pages/editor/__tests__/action-bar.test.ts` | §4: the entries per selection, the legacy ids; a leg: *Add bend here* only where the leg can be edited (§6.7) |
+| unit (web) | `lib/editor/__tests__/structure-edit.test.ts` "leg props", `bends.test.ts`, `sequence.test.ts`, `pages/editor/__tests__/rail.test.ts` | §6.7: `setLegProps` merges and keeps the other props, drops `undefined` / `line` / empty bends and an empty leg, no-op on the first item; a leg whose predecessor changes still loses it; bends inserted on the nearest segment (first, middle, last), moved, removed; distance, fraction, point and slice along the bent length; `legForInsert` the inverse of `insertIndexForLeg` (unpositioned rows skipped); the corridor chord key outside `AREA_CHOICES` |
+| unit (web) | `pages/editor/__tests__/bindings.test.ts` "V on a selected leg", "leg gaps", `gaps.test.ts` | §6.7: outline through the bends and a handle per bend (`data-focused`); a drag redraws, writes once with the moved (snapped) bend; a click focuses; a cancelled drag writes nothing; a double-click on a handle inserts no control. §6.3: gaps along a bent leg (fractions of the bent length, the target and gaps drawn along it) |
+| unit (web) | `lib/editor/__tests__/hit.test.ts` "a leg with no line" | §5, §6.7: a `none` leg has no hit-index piece; `uiLegsOf` hits it from the derivation's pieces, a circle at its end wins, `accept` passes over it |
+| E2E | `e2e/course-editor.spec.ts` "F3: legs — styles, bends, corridors" (`chromium`), "F3 on a phone" (`mobile`) | §6.7: a leg made a marked route → its `course-leg` pieces `data-style="marked_route"`, `none` and the leg still selects by a click, two undos back to `line`; *Add bend here* → one `editor-bend-handle`, dragged 60 px → the drawn leg has a vertex within 0.3 mm of it and the row's metres grow, `Delete` removes it (metres back, both controls still on the course); `A` then `C` → the default corridor, no map colour left in the band beside the edge (`inkAt` "map" = 0, > 0 before), the entry disabled with a corridor, the course's sheet prints one page, an invalid width not written, *Remove* brings the map back, undo the corridor. On a phone a tapped leg shows `editor-leg` read-only with `editor-leg-readonly` and no *Add bend here* |
 | E2E | `e2e/course-editor.spec.ts` "Course editor (new, GL canvas)" (`chromium`) | §1: the editor mounts (never `course-editor-page`), and on an event with no map it mounts over the panel's upload prompt (no viewer); the shell (`X` / `C` disabled); place → move → undo / redo → reload → select on the canvas → delete; create a course, append two controls, add-to-course on the map, reorder + undo, insert on a leg, remove, reload with `?course=` (explicit start / finish rows); deep links, `H`, Escape cascade; the Courses page's `course-edit-link` and the Controls page's `control-edit-link` open the new editor on the course / with the control selected (one `editor-selection-ring`) |
 | E2E | `e2e/course-editor.spec.ts` "Course mode (§4)" (`chromium`) | delete cascade: a control on two courses is deleted from the action bar — the site goes, both structures lose it (the open one's rows, the other through `course.list`), `Ctrl+Z` restores the site and both visits; *Remove from course* drops one visit and keeps the site; inline code edit in the sequence (`editor-seq-code` → 997: the row's `data-control-id` and the site follow, `Ctrl+Z` back; a duplicate code → `editor-error` "already exists"); free order (`editor-order-mode`): the hint, no reorder arrows, the layer draws no legs and labels the circles with their codes, a number drag still writes `course.setControlLabelOffset`; a number drag (the shared hit-test's `number` target): the `course-label` moves, persists over a reload, *Reset label* puts the automatic place back, undo the dragged one; clone (`editor-clone-*`, "A (copy)" prefilled, same rows) and no `editor-toggle-first-start` / `-last-finish` even with a legacy-flag course in the event |
 | E2E | `e2e/course-editor.spec.ts` "Course mode descriptions (§4)" (`chromium`) | the description editor: Escape closes only the dialog (the control stays selected), column C which-of-similar with written titles (`desc-opt-label-0.1N`), a boulder and dimensions with the live preview (`desc-dim-input` → `desc-preview`), saved, reloaded, the summary; *Clear* + save stores none, `Ctrl+Z` writes the saved description back (the control's own description written back after); a control placed on the map is described from the base map (no suggestion offered, a pressed option in `desc-editor`), after a move it stays selected with its action bar and at most one suggestion; the description sheet: "All controls" with every control until a course is picked, then course E's card (event name, course name, the finish row's measured metres, the thick rules); description instructions (E3b): the collapsed block's summary, the finish variant 14.1 (one `course.update`; the sheet's finish row changes, `course.list` has it), a special row with 60 m (a wide row with "60 m"), anchored after a control by its punch code — `courseMap.resolveSheet`'s block has the special after that control and the 14.1 finish —, `Ctrl+Z` puts it after the start again, all persisted over a reload |
@@ -1139,6 +1229,14 @@ whose poll ran meanwhile simply does not conflict (decision log, D10).
 | unit, integration, E2E | `course-layout.md` "Tests" | Layout mode |
 
 ## Pending in this chapter
+
+- **Bend drags on touch** (§6.7, F3): a tablet or phone moves no bend
+  handle (the touch path offers presses to a tool only on object targets,
+  §10); the tablet adds and removes bends from the action bar and the
+  inspector. The selected leg has no highlight beyond the UI outline.
+- **The leg's gaps in the Leg section** (08 §5.2 "leg: style, gaps,
+  corridor, crossing"): gaps stay the `G` tool's (§6.3); `crossing` is
+  F4's.
 
 - **Selection highlight through the dynamic bucket** (04 §7: the
   selected object's passes redrawn in a highlight colour): the selection
