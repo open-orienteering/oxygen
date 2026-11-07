@@ -72,7 +72,7 @@ export function editorReducer(state: EditorState, action: EditorAction): EditorS
       // The eyedropper is Course mode's (a filter region is edited there): any mode change drops it.
       if (action.mode === state.mode) return state;
       return action.mode === "layout"
-        ? { ...state, mode: "layout", tool: SELECT, phantom: null, selectedControlId: null, placed: false, multi: [], selectedObjectId: null }
+        ? { ...state, mode: "layout", tool: SELECT, phantom: null, selectedControlId: null, multi: [], selectedObjectId: null }
         : { ...state, mode: action.mode, ...(state.tool.kind === "pick-symbol" ? { tool: SELECT } : {}) };
     case "view":
       // Class view needs a class (the "class" action); the other views drop it.
@@ -99,7 +99,7 @@ export function editorReducer(state: EditorState, action: EditorAction): EditorS
     case "set-multi":
       return withMulti(state, action.ids);
     case "select-object":
-      return { ...state, selectedObjectId: action.id, selectedControlId: action.id === null ? state.selectedControlId : null, placed: action.id === null && state.placed, multi: [], phantom: null };
+      return { ...state, selectedObjectId: action.id, selectedControlId: action.id === null ? state.selectedControlId : null, multi: [], phantom: null };
     case "toggle-snapping":
       return { ...state, snapping: !state.snapping };
     case "escape":
@@ -115,8 +115,8 @@ export function editorReducer(state: EditorState, action: EditorAction): EditorS
 
 /** One control selected → the plain selection; several → `multi` (the primary selection off). */
 function withMulti(state: EditorState, ids: number[]): EditorState {
-  if (ids.length <= 1) return { ...state, multi: [], selectedControlId: ids[0] ?? null, selectedObjectId: null, phantom: null, placed: false };
-  return { ...state, multi: ids, selectedControlId: null, selectedObjectId: null, phantom: null, placed: false };
+  if (ids.length <= 1) return { ...state, multi: [], selectedControlId: ids[0] ?? null, selectedObjectId: null, phantom: null };
+  return { ...state, multi: ids, selectedControlId: null, selectedObjectId: null, phantom: null };
 }
 
 function legacy(state: EditorState, action: CourseEditorAction): EditorState {
@@ -145,10 +145,9 @@ export function escapeHasWork(s: EditorState): boolean {
  * Whether the viewer draws the selected control's ring (`editor-selection-ring`,
  * §6.1): not while an exclusive tool (`K`, `S`, `M`, `A`, `T`, `G`) is armed — the
  * control just placed stays selected (chain anchor, inspector, `Ctrl+Z`) but its
- * purple circle is the mark; the ring is `V`'s. Nor on a control just placed in
- * `V` (the phantom's *Add control*, P1) until the user selects it again
- * (`selectionPlaced`). Typed on the viewer's prop, which never sees `EditorState`.
+ * purple circle is the mark; the ring is `V`'s. Typed on the viewer's prop, which
+ * never sees `EditorState`.
  */
-export function showSelectionRing(editor: { tool?: { exclusive?: boolean } | null; selectionPlaced?: boolean } | null | undefined): boolean {
-  return !editor?.tool?.exclusive && !editor?.selectionPlaced;
+export function showSelectionRing(editor: { tool?: { exclusive?: boolean } | null } | null | undefined): boolean {
+  return !editor?.tool?.exclusive;
 }
