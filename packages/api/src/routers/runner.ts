@@ -554,16 +554,18 @@ export const runnerRouter = router({
       const targetClassId = (data.classId as string | undefined) ?? r.classId;
       const classChanged = data.classId !== undefined && data.classId !== r.classId;
       let redeal = false;
-      if (typeof fields.courseId === "number") {
-        const pool = targetClassId ? await poolOf(ctx.db, targetClassId) : [];
-        data.courseId = assertInPool(pool, fields.courseId).id;
-      } else if (fields.courseId === null || classChanged) {
+      if (fields.courseId === null || (classChanged && typeof fields.courseId !== "number")) {
         data.courseId = null;
         redeal = true;
       }
 
       // Table write + journal entry commit or roll back together.
       await ctx.db.$transaction(async (tx) => {
+        if (typeof fields.courseId === "number") {
+          // Read the pool in the write's transaction (a racing edit may drop the variant).
+          const pool = targetClassId ? await poolOf(tx, targetClassId) : [];
+          data.courseId = assertInPool(pool, fields.courseId).id;
+        }
         await tx.runner.update({ where: { id: r.id }, data });
         if (redeal) {
           const v = targetClassId ? await assignVariant(tx, targetClassId, r.id) : null;

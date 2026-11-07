@@ -117,7 +117,9 @@ by the server, so the offline `local-readout.ts` can match without a
 live database connection. The cache is invalidated by tRPC's
 `utils.competition.dashboard.invalidate()` whenever a control's
 `Numbers` changes, so reconnecting clients pick up the new codes
-automatically.
+automatically. A runner is matched against her own course (her variant,
+`runner.list`'s `courseId`) before her class's — `courseOf` in
+`local-readout.ts`; see "Forked courses and variants".
 
 ### 3. Courses page (display)
 

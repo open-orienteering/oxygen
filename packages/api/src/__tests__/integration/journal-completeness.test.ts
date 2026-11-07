@@ -436,3 +436,47 @@ describe("draw.execute → start.adjusted", () => {
     }
   });
 });
+
+describe("runners' variants (F6b) → runner.registered.courseId / runner.updated { courseId }", () => {
+  it("create carries the dealt seq; distributeVariants journals one runner.updated per changed runner", async () => {
+    const ids: number[] = [];
+    for (const code of ["81", "82", "83", "84"]) ids.push((await caller.control.create({ codes: code })).id);
+    const root = await caller.course.create({ name: "Dealt" });
+    await caller.course.setStructure({
+      courseId: root.id,
+      structure: {
+        version: 1,
+        id: "d",
+        orderMode: "ordered",
+        items: [
+          { siteId: ids[0] },
+          { kind: "variation", id: "g", alternatives: [{ label: "A", items: [{ siteId: ids[1] }] }, { label: "B", items: [{ siteId: ids[2] }] }] },
+          { siteId: ids[3] },
+        ],
+      },
+    });
+    const [a, b] = await caller.course.variantList({ courseId: root.id });
+    const cls = await caller.class.create({ name: "Dealt class", courseId: root.id });
+    // Created late-first, so the start-order deal changes both.
+    const late = await caller.runner.create({ name: "Late", classId: cls.id, startTime: 361200, cardNo: 7400002 });
+    expect((await latestEntry("runner.registered"))!.payload).toMatchObject({ seq: late.id, courseId: a.courseId });
+    const early = await caller.runner.create({ name: "Early", classId: cls.id, startTime: 360000, cardNo: 7400001 });
+    expect((await latestEntry("runner.registered"))!.payload).toMatchObject({ seq: early.id, courseId: b.courseId });
+
+    const head = (await ctx.db.journalEntry.findFirst({
+      where: { eventId: ctx.eventId },
+      orderBy: { hlc: "desc" },
+      select: { hlc: true },
+    }))!.hlc;
+    const res = await caller.class.distributeVariants({ classId: cls.id, mode: "startOrder", onlyUnassigned: false });
+    expect(res.changed).toBe(2);
+    const entries = await ctx.db.journalEntry.findMany({
+      where: { eventId: ctx.eventId, hlc: { gt: head } },
+      orderBy: { hlc: "asc" },
+    });
+    expect(entries.map((e) => e.type)).toEqual(["runner.updated", "runner.updated"]);
+    const bySeq = new Map(entries.map((e) => [(e.payload as { runnerId: number }).runnerId, e.payload]));
+    expect(bySeq.get(early.id)).toEqual({ cardNo: 7400001, runnerId: early.id, fields: { courseId: a.courseId } });
+    expect(bySeq.get(late.id)).toEqual({ cardNo: 7400002, runnerId: late.id, fields: { courseId: b.courseId } });
+  });
+});

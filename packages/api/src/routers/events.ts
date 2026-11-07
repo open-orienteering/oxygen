@@ -318,7 +318,9 @@ type FollowUp = () => Promise<void>;
  * writing node deals the least-populated variant of her class's pool and
  * journals the pick as `runner.updated { courseId }` after the entry, so
  * every peer converges on it; a follower during a lease deals nothing —
- * the leaseholder's entry follows (the single-allocator rule).
+ * the leaseholder's entry follows (the single-allocator rule). The pick
+ * and its entry are one transaction, run after the ingested entry is
+ * journaled: a crash in between leaves no unjournaled pick.
  */
 async function dealVariantFollowUp(
   db: PrismaClient,
@@ -327,15 +329,17 @@ async function dealVariantFollowUp(
   classId: string | null,
 ): Promise<FollowUp | undefined> {
   if (!classId || !(await isRaceWritable(db, eventId))) return undefined;
-  const v = await assignVariant(db, classId, runnerId);
-  if (!v) return undefined;
-  const r = await db.runner.findUniqueOrThrow({ where: { id: runnerId }, select: { seq: true, cardNo: true } });
   return () =>
-    appendJournal(db, {
-      eventId,
-      type: "runner.updated",
-      payload: { cardNo: r.cardNo, runnerId: r.seq, fields: { courseId: v.seq } },
-    }).then(() => undefined);
+    db.$transaction(async (tx) => {
+      const v = await assignVariant(tx, classId, runnerId);
+      if (!v) return;
+      const r = await tx.runner.findUniqueOrThrow({ where: { id: runnerId }, select: { seq: true, cardNo: true } });
+      await appendJournal(tx, {
+        eventId,
+        type: "runner.updated",
+        payload: { cardNo: r.cardNo, runnerId: r.seq, fields: { courseId: v.seq } },
+      });
+    });
 }
 
 async function applyEvent(
