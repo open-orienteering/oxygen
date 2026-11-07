@@ -73,9 +73,13 @@ other ring. This is best effort, because the inside parts still touch the
 convex ring.
 
 Fills with no crossing are triangulated as before, so map tiles and the
-goldens are unchanged. The crossing test first filters the larger ring's
-edges against the convex ring's bounds. On a 5 000-vertex ring round 100
-convex holes it takes 9.0 ms, against 7.3 ms before P7. Two non-convex
+goldens are unchanged. The crossing test returns at once when every
+vertex of the other ring lies strictly inside the convex ring. Otherwise
+it first filters that ring's edges against the convex ring's bounds.
+Timings against the code before P7:
+
+- a 5 000-vertex ring round 100 convex holes: 7.6 ms against 6.4 ms;
+- a 64-vertex hull inside its window: 13.5 µs against 12.4 µs. Two non-convex
 rings that cross each other are still earcut's failure mode
 (`map-rendering.md` §5.2). Only malformed map data produces that case.
 

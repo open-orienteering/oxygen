@@ -830,11 +830,23 @@ function resolveConvexCrossings(rs: number[][]): number[][] | null {
 
 /**
  * Does an edge of ring `s` cross or touch an edge of the convex ring `c`
- * (bounds `cb`)? One pass over `s` against `c`'s bounds first, so a large
- * ring round a small convex hole costs O(|s|), not O(|s| · |c|).
+ * (bounds `cb`)? A ring with every vertex strictly inside `c` cannot (the
+ * in-frame white-out outside, a convex outer round one hole); otherwise
+ * one pass over `s` against `c`'s bounds first, so a large ring round a
+ * small convex hole costs O(|s|), not O(|s| · |c|).
  */
 function ringCrossesConvex(s: number[], c: number[], cb: [number, number, number, number]): boolean {
   const n = s.length / 2, m = c.length / 2;
+  const left = render.ringArea(c) > 0 ? 1 : -1;
+  let strictlyInside = true;
+  for (let e = 0; e < n && strictlyInside; e++) {
+    const x = s[2 * e], y = s[2 * e + 1];
+    for (let k = 0, l = m - 1; k < m; l = k++) {
+      const ax = c[2 * l], ay = c[2 * l + 1];
+      if (left * ((c[2 * k] - ax) * (y - ay) - (c[2 * k + 1] - ay) * (x - ax)) <= 0) { strictlyInside = false; break; }
+    }
+  }
+  if (strictlyInside) return false;
   for (let e = 0, f = n - 1; e < n; f = e++) {
     const ax = s[2 * f], ay = s[2 * f + 1], bx = s[2 * e], by = s[2 * e + 1];
     if (Math.max(ax, bx) < cb[0] || Math.min(ax, bx) > cb[2] || Math.max(ay, by) < cb[1] || Math.min(ay, by) > cb[3]) continue;
@@ -845,15 +857,19 @@ function ringCrossesConvex(s: number[], c: number[], cb: [number, number, number
   return false;
 }
 
+/** Whether r lies within the bounds of segment pq (r collinear with it). */
+function withinSegment(px: number, py: number, qx: number, qy: number, rx: number, ry: number): boolean {
+  return (px < qx ? px <= rx && rx <= qx : qx <= rx && rx <= px) && (py < qy ? py <= ry && ry <= qy : qy <= ry && ry <= py);
+}
+
 /** Whether segments ab and cd intersect or touch (collinear overlap included). */
 function segmentsMeet(ax: number, ay: number, bx: number, by: number, cx: number, cy: number, dx: number, dy: number): boolean {
-  const o = (px: number, py: number, qx: number, qy: number, rx: number, ry: number) => Math.sign((qx - px) * (ry - py) - (qy - py) * (rx - px));
-  const on = (px: number, py: number, qx: number, qy: number, rx: number, ry: number) =>
-    Math.min(px, qx) <= rx && rx <= Math.max(px, qx) && Math.min(py, qy) <= ry && ry <= Math.max(py, qy);
-  const o1 = o(ax, ay, bx, by, cx, cy), o2 = o(ax, ay, bx, by, dx, dy), o3 = o(cx, cy, dx, dy, ax, ay), o4 = o(cx, cy, dx, dy, bx, by);
-  if (o1 !== o2 && o3 !== o4) return true;
-  return (o1 === 0 && on(ax, ay, bx, by, cx, cy)) || (o2 === 0 && on(ax, ay, bx, by, dx, dy))
-    || (o3 === 0 && on(cx, cy, dx, dy, ax, ay)) || (o4 === 0 && on(cx, cy, dx, dy, bx, by));
+  const abx = bx - ax, aby = by - ay, cdx = dx - cx, cdy = dy - cy;
+  const o1 = abx * (cy - ay) - aby * (cx - ax), o2 = abx * (dy - ay) - aby * (dx - ax);
+  const o3 = cdx * (ay - cy) - cdy * (ax - cx), o4 = cdx * (by - cy) - cdy * (bx - cx);
+  if (((o1 > 0 && o2 < 0) || (o1 < 0 && o2 > 0)) && ((o3 > 0 && o4 < 0) || (o3 < 0 && o4 > 0))) return true;
+  return (o1 === 0 && withinSegment(ax, ay, bx, by, cx, cy)) || (o2 === 0 && withinSegment(ax, ay, bx, by, dx, dy))
+    || (o3 === 0 && withinSegment(cx, cy, dx, dy, ax, ay)) || (o4 === 0 && withinSegment(cx, cy, dx, dy, bx, by));
 }
 
 /** Whether a flat ring is convex and simple (turns one way, once round); collinear vertices are allowed. */
