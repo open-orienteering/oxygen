@@ -70,6 +70,12 @@ export function snapshotOf(s: EditorSheet): LayoutSnapshot {
   };
 }
 
+/** A course's next sheet name: "<course> 2", "<course> 3", … — the first free number after its sheets (E-pages). */
+export function nextSheetName(base: string, taken: readonly string[]): string {
+  const names = new Set(taken);
+  for (let i = Math.max(2, taken.length + 1); ; i += 1) if (!names.has(`${base} ${i}`)) return `${base} ${i}`;
+}
+
 /** The status bar's sheet key (docs/course-layout.md §5): `1:10000 A4 portrait`. */
 export function sheetKeyOf(snap: Pick<LayoutSnapshot, "printScale" | "paper" | "orientation" | "paperWidthMm" | "paperHeightMm">): string {
   const paper = snap.paper === "custom" ? `${Math.round(snap.paperWidthMm ?? 0)}×${Math.round(snap.paperHeightMm ?? 0)}` : snap.paper;

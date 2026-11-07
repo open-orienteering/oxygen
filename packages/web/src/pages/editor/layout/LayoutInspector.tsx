@@ -7,51 +7,19 @@
  * library for the image tool.
  */
 
-import { useRef, useState } from "react";
+import { useRef, type ReactNode } from "react";
 import { useTranslation } from "react-i18next";
 import type { CourseMapObject, MapFillMode, MapTemplateSettings } from "@oxygen/shared";
 import { trpc } from "../../../lib/trpc";
-import { fillModePatch, parseClampedNumberDraft } from "../../../lib/map-layout-editor";
+import { fillModePatch } from "../../../lib/map-layout-editor";
 import { fileToBase64 } from "../../../lib/file-to-base64";
 import type { SheetGeometry } from "../../../lib/editor/layout";
 import { InspectorSection } from "../Inspector";
 import type { LayoutSelection, LayoutTarget, LayoutTool } from "./bindings";
 import { FILL_MODES, type EditorSheet, type LayoutSnapshot } from "./model";
+import { NumberField, TextField } from "./fields";
 
 type T = ReturnType<typeof useTranslation<"editor">>["t"];
-
-function NumberField({ label, value, min, max, step = 1, testId, onCommit }: {
-  label: string; value: number; min: number; max: number; step?: number; testId: string; onCommit: (v: number) => void;
-}) {
-  const [draftText, setDraftText] = useState<string | null>(null);
-  const commit = () => {
-    if (draftText === null) return;
-    const v = parseClampedNumberDraft(draftText, value, min, max);
-    setDraftText(null);
-    if (v !== value) onCommit(v);
-  };
-  return (
-    <label className="flex items-center justify-between gap-2 text-[11px] text-slate-500">
-      <span>{label}</span>
-      <input data-testid={testId} type="number" min={min} max={max} step={step} value={draftText ?? String(value)}
-        onChange={(e) => setDraftText(e.target.value)} onBlur={commit} onKeyDown={(e) => { if (e.key === "Enter") commit(); }}
-        className="w-20 px-1.5 py-0.5 border border-slate-200 rounded text-xs text-slate-700" />
-    </label>
-  );
-}
-
-function TextField({ label, value, testId, onCommit }: { label: string; value: string; testId: string; onCommit: (v: string) => void }) {
-  const [draftText, setDraftText] = useState<string | null>(null);
-  const commit = () => { if (draftText !== null && draftText !== value) onCommit(draftText); setDraftText(null); };
-  return (
-    <label className="flex flex-col gap-0.5 text-[11px] text-slate-500">
-      <span>{label}</span>
-      <input data-testid={testId} value={draftText ?? value} onChange={(e) => setDraftText(e.target.value)} onBlur={commit}
-        onKeyDown={(e) => { if (e.key === "Enter") commit(); }} className="px-1.5 py-0.5 border border-slate-200 rounded text-xs text-slate-700" />
-    </label>
-  );
-}
-
 
 function objectLabel(o: CourseMapObject, t: T): string {
   if (o.kind === "text") return o.text.trim() || t("layoutKind_text");
@@ -80,15 +48,21 @@ export function LayoutInspector(p: {
   onObject: (id: string, patch: Partial<CourseMapObject>) => void;
   onDelete: () => void;
   onPlaceImage: (graphicId: number) => void;
+  /** No sheet to show: what creates one (`NoSheetActions`). */
+  noSheet: ReactNode;
+  /** Sheet scope: rename / add / delete (`SheetActions`). */
+  sheetActions: ReactNode;
 }) {
   const { t } = useTranslation("editor");
   const { data, snap } = p;
   if (!data || !snap) {
     return (
       <InspectorSection title={t("layoutSheet")} testId="editor-layout-sheet">
-        <p data-testid={p.loading ? "editor-layout-loading" : "editor-layout-no-sheet"} className="px-2.5 pb-2 text-[11px] text-slate-500">
-          {p.loading ? t("layoutLoading") : t("layoutNoSheet")}
-        </p>
+        {p.loading ? (
+          <p data-testid="editor-layout-loading" className="px-2.5 pb-2 text-[11px] text-slate-500">{t("layoutLoading")}</p>
+        ) : (
+          <div data-testid="editor-layout-no-sheet" className="px-2.5 pb-2">{p.noSheet}</div>
+        )}
       </InspectorSection>
     );
   }
@@ -140,6 +114,7 @@ export function LayoutInspector(p: {
                 {t("layoutEditTemplate", { name: data.template.name })}
               </button>
               {p.lockedCount > 0 && <p data-testid="editor-layout-locked" className="text-[11px] text-slate-500">{t("layoutTemplateLocked", { count: p.lockedCount })}</p>}
+              {p.sheetActions}
             </>
           )}
           <NumberField label={t("layoutPrintScale")} value={snap.printScale} min={500} max={100_000} step={500} testId="editor-layout-print-scale"

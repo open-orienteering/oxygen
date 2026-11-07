@@ -1,12 +1,12 @@
 import { describe, expect, it } from "vitest";
 import { exportEntries } from "../export-menu";
 
-const base = { nameId: "my event", courseSeq: 3, classSeq: null, canEdit: true };
+const base = { nameId: "my event", courseSeq: 3, classSeq: null, sheetSeq: null, canEdit: true };
 
 describe("exportEntries (course-layout.md §7)", () => {
   it("lists the phase-1 entries on the existing routes", () => {
     const e = exportEntries(base);
-    expect(e.map((x) => x.id)).toEqual(["course", "class", "all", "allControls", "iofxml", "ppen"]);
+    expect(e.map((x) => x.id)).toEqual(["sheet", "course", "class", "all", "allControls", "iofxml", "ppen"]);
     const by = Object.fromEntries(e.map((x) => [x.id, x]));
     expect(by.course.url).toBe("/api/maps/my%20event/maps.pdf?courses=3");
     expect(by.all.url).toBe("/api/maps/my%20event/maps.pdf");
@@ -19,8 +19,16 @@ describe("exportEntries (course-layout.md §7)", () => {
     const by = Object.fromEntries(exportEntries(base).map((x) => [x.id, x]));
     expect(by.course.ensure).toEqual({ courseId: 3 });
     expect(by.all.ensure).toEqual({});
-    expect(by.allControls.ensure).toBeNull();
+    // The all-controls sheet is created on demand (E-pages).
+    expect(by.allControls.ensure).toEqual({ allControls: true });
     expect(by.iofxml.ensure).toBeNull();
+  });
+
+  it("this sheet: Layout mode's shown sheet, as it is (E-pages)", () => {
+    let by = Object.fromEntries(exportEntries(base).map((x) => [x.id, x]));
+    expect(by.sheet.disabled).toBe(true);
+    by = Object.fromEntries(exportEntries({ ...base, sheetSeq: 12 }).map((x) => [x.id, x]));
+    expect(by.sheet).toMatchObject({ disabled: false, url: "/api/maps/my%20event/maps.pdf?maps=12", ensure: null });
   });
 
   it("this class needs Class view; this course a course", () => {

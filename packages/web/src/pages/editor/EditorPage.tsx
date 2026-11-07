@@ -1465,6 +1465,7 @@ export function EditorPage() {
         nameId: nameId ?? "",
         courseSeq: selectedCourse?.id ?? null,
         classSeq: state.view === "class" ? state.classSeq : null,
+        sheetSeq: state.mode === "layout" ? layoutMode.sheetSeq : null,
         canEdit,
       }}
       onExportError={setErrorMsg}

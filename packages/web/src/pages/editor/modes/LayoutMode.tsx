@@ -36,6 +36,7 @@ import { LAYOUT_KEYS, layoutBinding, type LayoutChange, type LayoutGesture, type
 import { LayoutInspector } from "../layout/LayoutInspector";
 import { LayoutRail } from "../layout/LayoutRail";
 import { ClassOverridesSection, TemplateKeySection } from "../layout/KeySections";
+import { NoSheetActions, SheetActions } from "../layout/SheetActions";
 import { useCapabilities } from "../../../context/CapabilitiesContext";
 import { geometryOf, layoutRequestOf, pathObject, placeObject, scopeObjects, sheetKeyOf, snapshotOf, withEditable, type EditorSheet, type LayoutSnapshot } from "../layout/model";
 
@@ -69,6 +70,8 @@ export interface LayoutMode {
   sheetCourse: number | null;
   /** The sheet key of the top bar's course-info popover (§2; P2). */
   sheetKey: string | null;
+  /** The shown sheet (its seq) for Export ▾ "This sheet"; null on a template or without a sheet. */
+  sheetSeq: number | null;
 }
 
 interface WriteTarget { key: string; scope: "sheet" | "template"; sheetSeq: number | null; templateSeq: number }
@@ -371,6 +374,8 @@ export function useLayoutMode(a: LayoutModeArgs): LayoutMode {
 
   const rail = <LayoutRail tool={tool} onTool={(w) => onTool(w)} canImage={false} snapping={snapping} onSnapping={() => setSnapping((v) => !v)} />;
 
+  const siblings = (sheets.data ?? []).filter((r) => (data?.sheet ? r.courseId === data.sheet.courseSeq && r.kind === data.sheet.kind && (r.class?.seq ?? null) === data.sheet.classSeq : false));
+
   // The sections keep their height (the inspector scrolls) instead of squeezing into each other.
   const inspector = (
     <div className="shrink-0 flex flex-col">
@@ -380,7 +385,7 @@ export function useLayoutMode(a: LayoutModeArgs): LayoutMode {
       snap={snap}
       geometry={geometry}
       courseName={a.course?.name ?? null}
-      sheets={(sheets.data ?? []).filter((r) => (data?.sheet ? r.courseId === data.sheet.courseSeq && r.kind === data.sheet.kind && (r.class?.seq ?? null) === data.sheet.classSeq : false))}
+      sheets={siblings}
       selection={selection}
       selectedObject={selectedObject}
       editable={scoped.editable}
@@ -395,6 +400,11 @@ export function useLayoutMode(a: LayoutModeArgs): LayoutMode {
       onObject={updateObject}
       onDelete={deleteSelected}
       onPlaceImage={(id) => onTool("image", id)}
+      noSheet={<NoSheetActions view={a.view} course={a.course} canEdit={canEdit} run={run} onOpen={open} />}
+      sheetActions={data?.sheet ? (
+        <SheetActions sheet={data.sheet} templateSeq={data.template.seq} siblings={siblings} courseName={a.course?.name ?? null}
+          canEdit={canEdit} versions={versions} run={run} record={record} onOpen={open} />
+      ) : null}
     />
     {data && (
       <TemplateKeySection template={data.template} sheets={sheets.data ?? []} canEdit={canEdit} run={run} record={record} onOpen={open}
@@ -406,5 +416,5 @@ export function useLayoutMode(a: LayoutModeArgs): LayoutMode {
     </div>
   );
 
-  return { editor, rail, inspector, courseOnly: data?.sheet?.kind === "course", onKey, open, sheetCourse: data?.sheet?.courseSeq ?? null, sheetKey: snap ? sheetKeyOf(snap) : null };
+  return { editor, rail, inspector, courseOnly: data?.sheet?.kind === "course", onKey, open, sheetCourse: data?.sheet?.courseSeq ?? null, sheetKey: snap ? sheetKeyOf(snap) : null, sheetSeq: data?.sheet?.seq ?? null };
 }
