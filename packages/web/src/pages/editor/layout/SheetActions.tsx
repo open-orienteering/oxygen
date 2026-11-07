@@ -6,6 +6,10 @@
  *   with the sheet's version token, one undo entry), add a second sheet of
  *   the course on the same template, delete the sheet. Create and delete
  *   are not undo entries (as the editor's course create).
+ * - **Template scope** (`TemplateActions`): *New template* (paper,
+ *   orientation, scale; it opens), *Delete this template* (its sheets keep
+ *   their layout without a template). The template's name is part of the
+ *   snapshot (one undo entry with the rest of the template).
  * - **No sheet** (`NoSheetActions`): *Create sheet* for the top bar's course
  *   (`layout.autoSheets { courseId }`, which also gives a template-less
  *   sheet its template); in view All, *Create the all-controls sheet*
@@ -15,6 +19,7 @@
  * refresh notice on a stale token).
  */
 
+import { useState } from "react";
 import { useTranslation } from "react-i18next";
 import { trpc } from "../../../lib/trpc";
 import { versionConflictOfError, type VersionBook } from "../../../lib/version-book";
@@ -23,6 +28,7 @@ import type { EditorView } from "../../../lib/editor/state";
 import type { LayoutTarget } from "./bindings";
 import { nextSheetName, type EditorSheet } from "./model";
 import { TextField } from "./fields";
+import { NewTemplateForm } from "../../../components/NewTemplateForm";
 
 export type Run = <T>(op: () => Promise<T>) => Promise<T | undefined>;
 export type Record_ = (undo: () => Promise<unknown>, redo: () => Promise<unknown>) => unknown;
@@ -165,6 +171,53 @@ export function NoSheetActions(p: {
           })}>
           {t("layoutCreateSheet")}
         </button>
+      )}
+    </div>
+  );
+}
+
+export function TemplateActions(p: {
+  template: { seq: number; name: string };
+  canEdit: boolean;
+  run: Run;
+  onOpen: (t: LayoutTarget | null) => void;
+}) {
+  const { t } = useTranslation("editor");
+  const client = trpc.useUtils().client;
+  const refresh = useRefresh();
+  const [creating, setCreating] = useState(false);
+  if (!p.canEdit) return null;
+
+  const remove = async () => {
+    if (!window.confirm(t("layoutDeleteTemplateConfirm", { name: p.template.name }))) return;
+    const done = await p.run(async () => {
+      await client.mapTemplate.delete.mutate({ id: p.template.seq });
+      await refresh();
+      return true;
+    });
+    if (done) p.onOpen(null);
+  };
+
+  return (
+    <div className="space-y-1" data-testid="editor-layout-template-actions">
+      {creating ? (
+        <NewTemplateForm
+          onCancel={() => setCreating(false)}
+          onSubmit={(payload) => void p.run(async () => {
+            const row = await client.mapTemplate.create.mutate(payload);
+            await refresh();
+            setCreating(false);
+            p.onOpen({ template: row.seq });
+            return row;
+          })}
+        />
+      ) : (
+        <div className="flex items-center gap-3">
+          <button type="button" data-testid="editor-layout-new-template" onClick={() => setCreating(true)} className={LINK}>{t("layoutNewTemplate")}</button>
+          <button type="button" data-testid="editor-layout-delete-template" onClick={() => void remove()} className="text-[11px] text-red-600 hover:underline cursor-pointer">
+            {t("layoutDeleteTemplate")}
+          </button>
+        </div>
       )}
     </div>
   );

@@ -36,9 +36,9 @@ import { LAYOUT_KEYS, layoutBinding, type LayoutChange, type LayoutGesture, type
 import { LayoutInspector } from "../layout/LayoutInspector";
 import { LayoutRail } from "../layout/LayoutRail";
 import { ClassOverridesSection, TemplateKeySection } from "../layout/KeySections";
-import { NoSheetActions, SheetActions } from "../layout/SheetActions";
+import { NoSheetActions, SheetActions, TemplateActions } from "../layout/SheetActions";
 import { useCapabilities } from "../../../context/CapabilitiesContext";
-import { geometryOf, layoutRequestOf, pathObject, placeObject, scopeObjects, sheetKeyOf, snapshotOf, withEditable, type EditorSheet, type LayoutSnapshot } from "../layout/model";
+import { geometryOf, layoutRequestOf, pathObject, placeObject, scopeObjects, sheetKeyOf, snapshotOf, templateWriteOf, withEditable, type EditorSheet, type LayoutSnapshot } from "../layout/model";
 
 type Pt = { x: number; y: number };
 
@@ -167,12 +167,7 @@ export function useLayoutMode(a: LayoutModeArgs): LayoutMode {
         });
         versions.seed("sheet", id, r.version);
       } else {
-        const r = await client.mapTemplate.update.mutate({
-          id, paper: s.paper as "A4", orientation: s.orientation as "portrait",
-          ...(s.paper === "custom" ? { paperWidthMm: s.paperWidthMm, paperHeightMm: s.paperHeightMm } : {}),
-          printScale: s.printScale, settings: { ...s.settings, description: s.description }, objects: s.templateObjects,
-          baseVersion: versions.get("template", id),
-        });
+        const r = await client.mapTemplate.update.mutate({ id, ...templateWriteOf(s), baseVersion: versions.get("template", id) });
         versions.seed("template", id, r.version);
       }
     } catch (e) {
@@ -400,6 +395,8 @@ export function useLayoutMode(a: LayoutModeArgs): LayoutMode {
       onObject={updateObject}
       onDelete={deleteSelected}
       onPlaceImage={(id) => onTool("image", id)}
+      canEdit={canEdit}
+      templateActions={data ? <TemplateActions template={data.template} canEdit={canEdit} run={run} onOpen={open} /> : null}
       noSheet={<NoSheetActions view={a.view} course={a.course} canEdit={canEdit} run={run} onOpen={open} />}
       sheetActions={data?.sheet ? (
         <SheetActions sheet={data.sheet} templateSeq={data.template.seq} siblings={siblings} courseName={a.course?.name ?? null}

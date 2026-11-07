@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { defaultMapAppearance } from "@oxygen/shared";
-import { FILL_MODES, geometryOf, layoutRequestOf, nextSheetName, pathObject, placeObject, scopeObjects, sheetKeyOf, snapshotOf, withEditable, type EditorSheet } from "../layout/model";
+import { FILL_MODES, geometryOf, layoutRequestOf, nextSheetName, pathObject, templateWriteOf, placeObject, scopeObjects, sheetKeyOf, snapshotOf, withEditable, type EditorSheet } from "../layout/model";
 
 const settings = { printMarginMm: 3, mapFrame: { x: 10, y: 10, width: 190, height: 277 }, description: { visible: false, x: 150, y: 12, cellSizeMm: 6 }, appearance: defaultMapAppearance };
 const sheetText = { id: "s", kind: "text" as const, anchor: "page" as const, x: 20, y: 30, text: "{course}", fontSizeMm: 4, color: "#000000" };
@@ -44,6 +44,17 @@ describe("Layout model (docs/course-layout.md §2)", () => {
     expect(snap.printScale).toBe(7500);
     expect(scopeObjects(s, snap)).toEqual({ editable: [templateText], locked: [] });
     expect(withEditable(s, snap, []).templateObjects).toEqual([]);
+  });
+
+  it("template scope: the name is part of the snapshot and of the template write (E-pages)", () => {
+    const s = sheet("template");
+    const snap = snapshotOf(s);
+    expect(snap.templateName).toBe("A4");
+    const write = templateWriteOf({ ...snap, templateName: "Sprint A4" });
+    expect(write).toMatchObject({ name: "Sprint A4", paper: "A4", orientation: "portrait", printScale: 7500, objects: [templateText] });
+    expect(write.settings.description).toEqual(snap.description);
+    expect(write).not.toHaveProperty("paperWidthMm");
+    expect(templateWriteOf({ ...snap, paper: "custom", paperWidthMm: 200, paperHeightMm: 300 })).toMatchObject({ paperWidthMm: 200, paperHeightMm: 300 });
   });
 
   it("geometry: A4 portrait, the printable margin, the window at the print scale", () => {

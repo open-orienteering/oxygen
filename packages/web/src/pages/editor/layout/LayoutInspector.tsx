@@ -52,6 +52,9 @@ export function LayoutInspector(p: {
   noSheet: ReactNode;
   /** Sheet scope: rename / add / delete (`SheetActions`). */
   sheetActions: ReactNode;
+  /** Template scope: new / delete (`TemplateActions`). */
+  templateActions: ReactNode;
+  canEdit: boolean;
 }) {
   const { t } = useTranslation("editor");
   const { data, snap } = p;
@@ -85,6 +88,10 @@ export function LayoutInspector(p: {
             <>
               {p.coarse && <p data-testid="editor-layout-desktop-note" className="text-[11px] text-amber-700">{t("layoutDesktopOnly")}</p>}
               <p className="text-[11px] text-slate-500">{p.courseName ? t("layoutPreviewWith", { course: p.courseName }) : t("layoutPreviewNone")}</p>
+              {p.canEdit && (
+                <TextField label={t("layoutTemplateName")} value={snap.templateName} testId="editor-layout-template-name"
+                  onCommit={(v) => { const name = v.trim(); if (name && name !== snap.templateName) p.onPatch({ templateName: name }); }} />
+              )}
               {data.sheet === null && (
                 <button type="button" data-testid="editor-layout-back-to-sheet" onClick={() => p.onOpen(null)} className="text-[11px] text-purple-700 hover:underline cursor-pointer">
                   {t("layoutBackToSheet")}
@@ -106,6 +113,7 @@ export function LayoutInspector(p: {
                   <option value="landscape">{t("layoutLandscape")}</option>
                 </select>
               </label>
+              {p.templateActions}
             </>
           ) : (
             <>

@@ -45,6 +45,8 @@ export interface LayoutSnapshot {
   description: DescriptionBlockSettings;
   sheetObjects: CourseMapObject[];
   templateObjects: CourseMapObject[];
+  /** The template's name (template scope writes it with the rest, one undo entry; E-pages). */
+  templateName: string;
   /** Template scope's page settings (sheet scope: the template's, read-only). */
   paper: string;
   orientation: string;
@@ -62,11 +64,25 @@ export function snapshotOf(s: EditorSheet): LayoutSnapshot {
     description: s.scope === "sheet" ? s.document.description : t.settings.description,
     sheetObjects: s.sheet?.objects ?? [],
     templateObjects: t.objects,
+    templateName: t.name,
     paper: t.paper,
     orientation: t.orientation,
     paperWidthMm: t.paperWidthMm,
     paperHeightMm: t.paperHeightMm,
     settings: t.settings,
+  };
+}
+
+/** Template scope's write (`mapTemplate.update` without the id and token): the whole template as the snapshot holds it. */
+export function templateWriteOf(s: LayoutSnapshot) {
+  return {
+    name: s.templateName,
+    paper: s.paper as "A4",
+    orientation: s.orientation as "portrait",
+    ...(s.paper === "custom" ? { paperWidthMm: s.paperWidthMm, paperHeightMm: s.paperHeightMm } : {}),
+    printScale: s.printScale,
+    settings: { ...s.settings, description: s.description },
+    objects: s.templateObjects,
   };
 }
 
