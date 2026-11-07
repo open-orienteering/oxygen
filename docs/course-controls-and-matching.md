@@ -350,10 +350,10 @@ there), **along the leg's bends** when the stored structure has any
 free-order courses keep the length the organiser typed.
 
 The export's `derived` recompute ("recomputed from the controls' current
-positions" above) is still straight, centre to centre: a course with
-bent legs exports a shorter `LegLength` / `Length` than it stores until
-the IOF / Purple Pen export row (F9) reads the layer's lengths. Nothing
-can author bends before the leg inspector (F3).
+positions" above) stays straight, centre to centre (user, 2026-11-07): a
+course with bent legs exports a shorter `LegLength` / `Length` than it
+stores until the IOF / Purple Pen export row (F9) reads the layer's
+lengths. Nothing can author bends before the leg inspector (F3).
 
 | Test | Covers |
 |---|---|

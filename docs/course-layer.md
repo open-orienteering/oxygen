@@ -1177,10 +1177,12 @@ validated but not read by the layer yet.
   polyline (§9.2).
 - **The start** still turns to the next site (§3.3), not to the first
   bend.
-- **Where the props reach the layer**: the structure's items as stored
-  (`course-geometry.ts` for the lengths, §4.1). The viewer's request and
-  the print's sheet resolution copy `LegProps.gaps` only until the rows
-  named in Pending.
+- **Where the props reach the layer** (user, 2026-11-07): the
+  structure's items as stored for the lengths (`course-geometry.ts`,
+  §4.1); the print's sheet resolution copies the item's **whole** stored
+  leg (`course-maps/resolve-sheet.ts`, `course-print.md` §5.2), so
+  `maps.pdf` and Layout mode's sheet print bends, 707 and `none`; the
+  viewer's request still copies `gaps` only until F2 (Pending).
 
 ## Tests
 
@@ -1272,21 +1274,22 @@ validated but not read by the layer yet.
   `<gaps>` / `<leg>` bends are not parsed by the importer; variations and their
   materialisation, map exchanges, crossing and map-issue points,
   corridors (slice F).
-- **Leg properties on screen and paper** (§10.1): the layer draws
-  `style` and `bends`, but the viewer's request (`layerPropsOfStored` →
-  `course.list.legGaps` → `MapPanel` / `MapViewer` →
-  `course-layer-request.ts`) and the print's sheet resolution
-  (`course-maps/resolve-sheet.ts` `legGapsByIndex`) copy `LegProps.gaps`
-  only, so a bent, marked-route or `none` leg still shows as a straight
-  705 there. Nothing can author them before F3.
+- **Leg properties on screen** (§10.1, F2 — user, 2026-11-07): the
+  layer and the print draw `style` and `bends`, but the viewer's request
+  (`layerPropsOfStored` → `course.list.legGaps` → `MapPanel` /
+  `MapViewer` → `course-layer-request.ts`) copies `LegProps.gaps` only,
+  so on screen a bent, marked-route or `none` leg still shows as a
+  straight 705. F2, which adds `mapScale` to the same request, carries
+  the whole leg. Nothing can author these props before F3.
 - **Leg properties in the editor** (§10.1, F3): `EditorPage.tsx`,
   `MapViewer.tsx` and `tools/bindings.ts` pass no bends to the readouts
   (`sequenceLegMeters`, `legLengthLabel`, `dragLegShapes`); a `none` leg
   has no hit piece (no pass), so the leg inspector hit-tests it from
   `derivation.courses[].legs[].pieces`.
-- **Export lengths along bends** (F9): the IOF / Purple Pen export
-  recomputes a `derived` course's leg lengths straight
-  (`course-controls-and-matching.md` "Course length").
+- **Export lengths along bends** (F9 — user, 2026-11-07): the IOF /
+  Purple Pen export recomputes a `derived` course's leg lengths
+  straight, centre to centre (`course-controls-and-matching.md` "Course
+  length"); F9 makes it read the layer's lengths.
 - **Tokens, beyond D1** (§7): the `differing` of a conflict caused by an
   import is `null` (the base lives inside a `reference.imported`
   entry); presence and "moved by X at T" (D11). The new editor's client rules landed in D4

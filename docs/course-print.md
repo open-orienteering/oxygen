@@ -341,10 +341,13 @@ with `sheet` = `PageInput` minus `map` and `geo`.
   codes (`viewOptions.allControls`).
 - **Authored geometry** comes from the stored structure and the controls
   (D1 retired deviation (e), which read the `ocd` GeoJSON): circle gaps
-  from `controls.circle_gaps`, leg gaps from the structure's
-  `LegProps.gaps` (`courses.structure`; aligned to the layout's controls
-  on the first site both name, so a start the layout does not draw
-  shifts nothing), an empty one meaning the automatic cuts. Every course gets legs and
+  from `controls.circle_gaps`, legs from the structure's `LegProps` —
+  the item's whole stored leg: gaps, style and bends since F1
+  (`course-layer.md` §10.1; `courses.structure`; aligned to the layout's
+  controls on the first site both name, so a start the layout does not
+  draw shifts nothing), an empty gap list meaning the automatic cuts. A
+  `marked_route` leg prints 707's dashes as one subpath per dash
+  (§4.3). Every course gets legs and
   automatic cuts from the course layer, with cut features from the
   pinned document (`cutFeaturesOfDocument`, §3.4 there) — unless the
   event's **Auto cuts** toggle is off: then the sheet carries
