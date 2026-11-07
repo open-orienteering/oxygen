@@ -480,3 +480,57 @@ describe("runners' variants (F6b) → runner.registered.courseId / runner.update
     expect(bySeq.get(late.id)).toEqual({ cardNo: 7400002, runnerId: late.id, fields: { courseId: b.courseId } });
   });
 });
+
+describe("cardReadout.acceptVariant (F6c) → runner.updated { courseId, variantAccepted } + result.applied", () => {
+  it("journals the variant switch then the applied result, in one call", async () => {
+    const ids: number[] = [];
+    for (const code of ["85", "86", "87", "88"]) ids.push((await caller.control.create({ codes: code })).id);
+    const root = await caller.course.create({ name: "Red exit" });
+    await caller.course.setStructure({
+      courseId: root.id,
+      structure: {
+        version: 1,
+        id: "r",
+        orderMode: "ordered",
+        items: [
+          { siteId: ids[0] },
+          { kind: "variation", id: "g", alternatives: [{ label: "A", items: [{ siteId: ids[1] }] }, { label: "B", items: [{ siteId: ids[2] }] }] },
+          { siteId: ids[3] },
+        ],
+      },
+    });
+    const [a, b] = await caller.course.variantList({ courseId: root.id });
+    const cls = await caller.class.create({ name: "Red exit class", courseId: root.id });
+    const r = await caller.runner.create({ name: "Wrong fork", classId: cls.id, cardNo: 7400101, courseId: a.courseId });
+    await caller.cardReadout.storeReadout({
+      cardNo: 7400101,
+      cardType: "SI Card 9",
+      startTime: 360000,
+      finishTime: 390000,
+      punches: [
+        { controlCode: 85, time: 366000 },
+        { controlCode: 87, time: 372000 },
+        { controlCode: 88, time: 378000 },
+      ],
+    });
+    const head = (await ctx.db.journalEntry.findFirst({
+      where: { eventId: ctx.eventId },
+      orderBy: { hlc: "desc" },
+      select: { hlc: true },
+    }))!.hlc;
+    await caller.cardReadout.acceptVariant({ runnerId: r.id, courseId: b.courseId });
+    const entries = await ctx.db.journalEntry.findMany({
+      where: { eventId: ctx.eventId, hlc: { gt: head } },
+      orderBy: { hlc: "asc" },
+    });
+    expect(entries.map((e) => e.type)).toEqual(["runner.updated", "result.applied"]);
+    expect(entries[0].payload).toEqual({
+      cardNo: 7400101,
+      runnerId: r.id,
+      fields: { courseId: b.courseId, variantAccepted: true },
+    });
+    expect(entries[1].payload).toMatchObject({ cardNo: 7400101, runnerId: r.id, status: 1 });
+    const p = entries[1].payload as { finishTime: number; startTime: number };
+    expect(p.finishTime - p.startTime).toBe(30000);
+  });
+});

@@ -13,12 +13,16 @@ import {
   computeStatus,
   computePosition,
   computeMatchScore,
+  findMatchingVariants,
+  type OtherVariantMatch,
+  type VariantCandidate,
   type ParsedPunch,
   type ControlMatch,
   type ClassRunnerForPosition,
   type PositionResult,
   PUNCH_START,
   PUNCH_FINISH,
+  RunnerStatus,
 } from "@oxygen/shared";
 
 export interface LocalReadoutResult {
@@ -154,7 +158,12 @@ export interface CardReadoutInput {
 export function computeCardReadout(
   input: CardReadoutInput,
   queryClient: QueryClient,
-): (LocalReadoutResult & { matchScore: number; punchesRelevant: boolean }) | null {
+): (LocalReadoutResult & {
+  matchScore: number;
+  punchesRelevant: boolean;
+  /** The other pooled variants the punches validate fully against (F6c); on MP only. */
+  otherVariantMatches: OtherVariantMatch[];
+}) | null {
   const dashboard = findCachedQuery<DashboardData>(queryClient, "competition.dashboard");
   const runners = findCachedQuery<RunnerListData>(queryClient, "runner.list");
 
@@ -209,6 +218,25 @@ export function computeCardReadout(
     currentStatus: runner.status,
   });
 
+  // Red exit (F6c): on MP in a pooled class, the other variants the
+  // punches validate fully against — the server's helper, the same rule.
+  const poolIds = cls?.coursePoolIds ?? [];
+  const candidates: VariantCandidate[] =
+    status === RunnerStatus.MissingPunch && poolIds.length >= 2
+      ? poolIds
+          .filter((id) => id !== course?.id)
+          .map((id) => dashboard.courses?.find((c: CourseItem) => c.id === id))
+          .filter((c): c is CourseItem => !!c)
+          .map((c) => ({
+            courseId: c.id,
+            variantKey: c.variantKey ?? "",
+            courseName: c.name,
+            orderMode: c.orderMode,
+            expectedPositions: c.expectedPositions ?? [],
+          }))
+      : [];
+  const otherVariantMatches = findMatchingVariants(allPunches, candidates, { fallbackStartTime });
+
   // Compute match score
   const matchedCount = matches.filter((m) => m.status === "ok").length;
   const matchScore = computeMatchScore(expectedPositions.length, matchedCount, input.punches.length, 0);
@@ -256,6 +284,7 @@ export function computeCardReadout(
     classResults,
     matchScore,
     punchesRelevant,
+    otherVariantMatches,
   };
 }
 
@@ -317,6 +346,8 @@ export interface ClassItem {
   courseId?: number;
   maxTime?: number;
   noTiming?: number;
+  /** The class's variant pool (course seqs, key order); absent / [] = none (F6c). */
+  coursePoolIds?: number[];
 }
 
 export interface CourseItem {
@@ -334,6 +365,8 @@ export interface CourseItem {
    * deductions, Multiple expansion).
    */
   expectedPositions: import("@oxygen/shared").ExpectedPosition[];
+  /** A variant child's key; null / absent for a root or a plain course. */
+  variantKey?: string | null;
 }
 
 export interface RunnerItem {
