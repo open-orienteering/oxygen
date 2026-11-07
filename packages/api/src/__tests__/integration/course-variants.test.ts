@@ -391,6 +391,88 @@ describe("course.importCourses over a root", () => {
     const courses = (imported.payload as { courses: { id: string; fields: Record<string, unknown> }[] }).courses;
     for (const k of kidsBefore) expect(courses.find((c) => c.id === k.id)?.fields.removed).toBe(true);
   });
+
+  it("with replaceAll clears the runners and pools of every variant the wipe removed", async () => {
+    // Its own event: replaceAll wipes every course.
+    const own = await createTestEvent("course_variants_replace_all");
+    try {
+      const c = makeCaller(own.event);
+      for (const [code, x] of [[31, 20], [32, 30], [33, 40], [34, 50]] as const) {
+        await c.control.create({ codes: String(code), xpos: x, ypos: 20 });
+      }
+      const { id } = await c.course.create({ name: "Imported root" });
+      const cls = await c.class.create({ name: "H21 import", courseId: id });
+      await c.course.setStructure({
+        courseId: id,
+        structure: { version: 1, id: "r", orderMode: "ordered", items: [ctl(31), group("g", [[32], [33]]), ctl(34)] },
+      });
+      const root = await own.db.course.findFirstOrThrow({ where: { eventId: own.eventId, seq: id } });
+      const [, b] = await own.db.course.findMany({ where: { parentCourseId: root.id }, orderBy: { variantKey: "asc" } });
+      const runner = await own.db.runner.create({
+        data: { eventId: own.eventId, name: "On B", courseId: b.id, cardNo: 7300001 },
+        select: { id: true, seq: true },
+      });
+      const clsRow = await own.db.class.findFirstOrThrow({ where: { eventId: own.eventId, seq: cls.id } });
+      expect(await own.db.classCoursePool.count({ where: { classId: clsRow.id } })).toBe(2);
+      const xml = `<?xml version="1.0" encoding="UTF-8"?>
+<CourseData xmlns="http://www.orienteering.org/datastandard/3.0" iofVersion="3.0">
+  <RaceCourseData>
+    <Map><Scale>15000</Scale></Map>
+    <Control type="Control"><Id>31</Id></Control>
+    <Control type="Control"><Id>34</Id></Control>
+    <Course>
+      <Name>Imported root</Name>
+      <CourseControl type="Control"><Control>31</Control></CourseControl>
+      <CourseControl type="Control"><Control>34</Control></CourseControl>
+    </Course>
+  </RaceCourseData>
+</CourseData>`;
+      await c.course.importCourses({ xmlContent: xml, skipPositions: true, replaceAll: true, classMapping: { "Imported root": [cls.id] } });
+      expect((await own.db.runner.findUniqueOrThrow({ where: { id: runner.id } })).courseId).toBeNull();
+      expect(await own.db.classCoursePool.count({ where: { classId: clsRow.id } })).toBe(0);
+      const ru = await own.db.journalEntry.findFirstOrThrow({ where: { eventId: own.eventId, type: "runner.updated" }, orderBy: { hlc: "desc" } });
+      expect(ru.payload).toEqual({ cardNo: 7300001, runnerId: runner.seq, fields: { courseId: null } });
+      expect(await own.db.course.count({ where: { parentCourseId: root.id, removed: false } })).toBe(0);
+    } finally {
+      await own.cleanup();
+    }
+  });
+});
+
+describe("a peer applies variants (events.push)", () => {
+  it("creates a root and its variant from their course.upserted payloads, parent first", async () => {
+    const { id } = await caller.course.create({ name: "Peer root" });
+    await write(id, [ctl(S), ctl(31), group("g", [[32], [33]]), ctl(34), ctl(F)]);
+    const root = await rowOf(id);
+    const [a] = await children(id);
+    const latest = async (rowId: string) =>
+      (await ctx.db.journalEntry.findMany({ where: { eventId: ctx.eventId, type: "course.upserted" }, orderBy: { hlc: "desc" } }))
+        .map((e) => e.payload as { id: string; seq: number; fields: Record<string, unknown>; courseControls: unknown[] })
+        .find((p) => p.id === rowId)!;
+    // The same payloads under fresh ids and seqs: what a peer that never saw the rows receives.
+    const rootId = randomUUID();
+    const childId = randomUUID();
+    const rp = await latest(root.id);
+    const cp = await latest(a.id);
+    const entry = (payload: unknown) => ({
+      id: randomUUID(),
+      type: "course.upserted" as never,
+      competitionId: ctx.event.nameId,
+      stationId: "peer",
+      timestamp: Date.now(),
+      payload: payload as Record<string, unknown>,
+    });
+    const res = await caller.events.push({
+      events: [
+        entry({ ...rp, id: rootId, seq: 9001, fields: { ...rp.fields, name: "Peer copy", structure: { ...(rp.fields.structure as object), id: rootId } }, courseControls: [] }),
+        entry({ ...cp, id: childId, seq: 9002, fields: { ...cp.fields, name: "Peer copy A", parentCourseId: rootId }, courseControls: [] }),
+      ],
+    });
+    expect(res.failed).toEqual([]);
+    const child = await ctx.db.course.findUniqueOrThrow({ where: { id: childId } });
+    expect([child.parentCourseId, child.variantKey]).toEqual([rootId, "A"]);
+    expect((await caller.course.list()).find((c) => c.id === 9002)).toMatchObject({ parentCourseId: 9001, variantKey: "A" });
+  });
 });
 
 describe("storage (the migration, backup, snapshot)", () => {

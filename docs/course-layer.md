@@ -674,7 +674,9 @@ to `NULL` until D1 makes the importers write it. Peers apply it from the
 `course.upserted` payload like any column. A root with variation groups
 is written through `setStructure` only — the linear shortcuts refuse
 its sequence fields (`ROOT_HAS_VARIATIONS`) — and its variants by
-`syncVariants` alone (§12); `control.delete` prunes a root in every
+`syncVariants` alone (§12) — except `control.update { kind }`, which
+re-mirrors every stored structure naming the site, a variant's included,
+with the same result; `control.delete` prunes a root in every
 alternative and re-materialises it.
 
 **Readers.** One rule, `courseSequenceOf` (`course-structure.ts`, E6),
@@ -1361,8 +1363,8 @@ root's own `course.upserted` (a peer applying a child needs the parent
 row; 08 §4.3 "journaled through the existing `course.upserted` entries,
 one per affected row"):
 
-- one `course.upserted` per child written or soft-deleted (key order;
-  `removed: true` for the latter);
+- one `course.upserted` per child written (in `materialiseVariants`'
+  order) or soft-deleted (after them, `removed: true`);
 - one `class.upserted` per class whose pool changed (its `coursePools`
   carry the pool);
 - one `runner.updated { cardNo, runnerId, fields: { courseId: null } }`
@@ -1403,8 +1405,9 @@ touched; `stage` > 0 (relay legs) stays timing's (08 §12).
     call): each rewrites the structure from the columns (§6.2), which
     would flatten the groups.
 - **Writes that reach the variants**: `course.update` of a root's
-  `name` / `climb` / `numberOfMaps` / `descriptionInstructions`
-  and `bulkUpdate` of `climb` / `numberOfMaps` re-run `syncVariants`
+  `name` / `climb` / `numberOfMaps` / `descriptionInstructions` (any of
+  them; a `length`-only update does not) and `bulkUpdate` of `climb` /
+  `numberOfMaps` re-run `syncVariants`
   (renamed `"<new name> <key>"`); `setControlLabelOffset` on a root
   writes the root's and its variants' rows of that control (one
   `course.upserted` each), so a control only in alternative B can be
@@ -1421,7 +1424,10 @@ touched; `stage` > 0 (relay legs) stays timing's (08 §12).
   replaced by an imported course becomes linear and its variants are
   soft-deleted — they travel in the `reference.imported` entry (roots
   before variants), its classes' pools with it, the nulled runners as
-  `runner.updated` after it.
+  `runner.updated` after it. `replaceAll`'s wipe soft-deletes variants in
+  bulk, so the import then clears every runner and pool row still naming
+  a removed variant (`clearRemovedVariants`), and a class the file maps
+  to a course gets that course's pool (`syncClassPool`).
 
 ### 12.6 Courses page
 
@@ -1467,7 +1473,7 @@ them.
 | integration | `control-editor.test.ts`, `journal-completeness.test.ts`, `course-export.test.ts`, `eventor-reentry.test.ts` | the drawn course (`helpers/course-drawn.ts`) and lengths on create / move / delete / copy, `length_source = 'derived'`; `course.upserted` payloads carry no `length_source`; the export's length and the Eventor sync key on `length_source` (E6; the E6 migration's backfill test went with `geometry_source` in E5) |
 | unit | `packages/shared/src/course/__tests__/structure.test.ts` | §6.1: C0's linear shape accepted, the 08 leg props, groups and loops, an empty alternative beside a non-empty one (answer 5); nesting, overlap, unanchored, duplicate ids / labels, < 2 alternatives or all empty (`VARIATION_ALL_EMPTY`), out-of-range gaps refused; interim `path` / `pieces` / `circleGaps` and `extras` refused; the wire form; site rules; `linearStructure`, `structureControlIds`; `structureDiff` (equal, moved, added, removed, leg / offset changes) |
 | unit | `packages/shared/src/course/__tests__/variants.test.ts` | §12.1: no groups → no variants; the product in item order and its keys; legs and flags copied; loop permutations with the anchor between them, three alternatives → six; an empty alternative a straight leg (and no anchor visit in a loop); the anchor visit's fields; keys stable across an edit outside the groups; multi-letter labels and colliding keys; `variantCount` without building; `variantStructure` = the product's row, parsed by the column schema; `structureSiteIds`; `pruneSiteFromStructure` (every alternative, an emptied alternative kept, all emptied / unanchored / adjacent dissolved, the label offset) |
-| integration | `packages/api/src/__tests__/integration/course-variants.test.ts` | §12.2–12.5: one child per variant (name, key, parent, copied fields, linear structure with its own id, mirror, lengths as the root's path), journal root first then children; `variantList`, `list` / `detail` by seq; a loop's permutations; an empty alternative, all empty refused; colliding keys and the cap refused, nothing written; re-materialisation (same rows across an outside edit, a new key, every key gone → soft-deleted and the runner nulled with its `runner.updated`, keys back → the same uuids); `runner.updated { courseId }` replayed through `events.push`; label offsets of every alternative round-trip; pools (a class on the root, a class picking it later, a key added / dropped, a plain course clears); the refusals (`ROOT_HAS_VARIATIONS`, `COURSE_IS_VARIANT`, nothing written); name / climb / maps mirrored; an offset set through the root; clone of a root and of a variant; delete of a root; `control.delete` of a control in alternative B only (one entry per row) and of a group's anchor (dissolved); an import over a root; the migration's unique pair and `CHECK`; a checkout snapshot exported and imported with its children and pools |
+| integration | `packages/api/src/__tests__/integration/course-variants.test.ts` | §12.2–12.5: one child per variant (name, key, parent, copied fields, linear structure with its own id, mirror, lengths as the root's path), journal root first then children; `variantList`, `list` / `detail` by seq; a loop's permutations; an empty alternative, all empty refused; colliding keys and the cap refused, nothing written; re-materialisation (same rows across an outside edit, a new key, every key gone → soft-deleted and the runner nulled with its `runner.updated`, keys back → the same uuids); `runner.updated { courseId }` replayed through `events.push`; label offsets of every alternative round-trip; pools (a class on the root, a class picking it later, a key added / dropped, a plain course clears); the refusals (`ROOT_HAS_VARIATIONS`, `COURSE_IS_VARIANT`, nothing written); name / climb / maps mirrored; an offset set through the root; clone of a root and of a variant; delete of a root; `control.delete` of a control in alternative B only (one entry per row) and of a group's anchor (dissolved); an import over a root; an import with `replaceAll` over a root (the runner on a variant nulled and journaled, the pool emptied); a peer applying a root's and its variant's `course.upserted` through `events.push`; the migration's unique pair and `CHECK`; a checkout snapshot exported and imported with its children and pools (the backup dump is `SELECT *` per table, so the children are ordinary `courses` rows there) |
 | integration | `journal-completeness.test.ts` "course.setStructure with a group" | §12.4: the variants' `course.upserted` (parent, key, name), the class's `coursePools`, the vanished variant's `runner.updated { courseId: null }` |
 | E2E | `e2e/courses.spec.ts` "a course with variations lists its variants under it" | §12.6: a root written by `course.setStructure` over HTTP shows "2 variants", its two variant rows right under it with no controls of their own, the roots-only count, and a read-only sequence in its detail |
 | unit | `packages/api/src/__tests__/course-structure.test.ts` | §6.2: `splitStructure` (explicit start / finish, implicit default, role start / finish, a start mid-sequence), `structureFromColumns` and its round trip, wire ↔ stored mapping |
@@ -1517,7 +1523,7 @@ them.
 | `packages/shared/src/course/structure.ts` | §6.1: `courseStructureSchema`, `courseStructureWireSchema`, `structureSiteIssues`, `linearStructure`, `structureControlIds`, `structureDiff` |
 | `packages/api/src/course-structure.ts` | §6.2: `splitStructure`, `structureFromColumns`, `courseSequenceOf` (the readers' rule, E6), `carryLegs`, `persistStructure`, `rewriteStructureFromColumns`, wire mapping, `assertCourseVersion` |
 | `packages/shared/src/course/variants.ts` | §12.1: `materialiseVariants`, `variantStructure`, `variantCount`, `variantKeyDuplicates`, `structureSiteIds`, `pruneSiteFromStructure`, `MAX_VARIANTS` |
-| `packages/api/src/course-variants.ts` | §12.3–12.4: `syncVariants`, `emitVariantSync`, `syncClassPool`, `assertMaterialisable`, `assertNotVariant`, `rootStructureOf`; called by `routers/course.ts`, `routers/control.ts` (`delete`), `routers/classRouter.ts` |
+| `packages/api/src/course-variants.ts` | §12.3–12.4: `syncVariants`, `emitVariantSync`, `syncClassPool`, `clearRemovedVariants`, `assertMaterialisable`, `assertNotVariant`, `rootStructureOf`; called by `routers/course.ts`, `routers/control.ts` (`delete`), `routers/classRouter.ts` |
 | `packages/api/src/version-conflict.ts`, `referenceJournal.ts`, `trpc.ts` (`withVersionConflict`) | §7: lock and compare, the base from the journal, the emits that stamp the token, the error shape |
 | `packages/web/src/lib/version-book.ts` | §7 the client's row tokens |
 | `packages/web/src/lib/course-layer-request.ts` | the viewer's request (§5), `courseObjectsForView` (§8.2) |
@@ -1552,8 +1558,9 @@ them.
   the IOF family export F9's; runners' variants and the pool's dealing
   F6b's; the readout's other-variant match F6c's. A loop does not check
   that the item after it is its anchor (the setter's; a check in F7 if
-  wanted). `importCourses { replaceAll }` leaves the pools of variants of
-  roots the file no longer names (their classes lose the course anyway).
+  wanted). A 100-variant save is one transaction of about a thousand
+  queries (`setStructure` allows it 30 s); a batched child write is the
+  lever if real courses get near the cap.
 - **A translucent corridor band** (§10.2): `whiteOpacity` is stored and
   drawn opaque until the stream carries alpha (`map-rendering.md` §8).
 - **Corridors in the editor** (F3): nothing authors `corridor` yet (the

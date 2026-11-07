@@ -86,6 +86,8 @@ import {
   mergeSyncs,
   rootStructureOf,
   syncVariants,
+  clearRemovedVariants,
+  syncClassPool,
   type VariantSync,
 } from "../course-variants.js";
 import { baseVersionSchema } from "../version-conflict.js";
@@ -908,7 +910,12 @@ export const courseRouter = router({
           });
         }
         // A root's name, climb, maps and instructions reach its variants.
-        const variants = isRoot ? await syncVariants(tx, ctx.event.id, c.id) : null;
+        const mirrored =
+          input.name !== undefined ||
+          input.climb !== undefined ||
+          input.numberOfMaps !== undefined ||
+          input.descriptionInstructions !== undefined;
+        const variants = isRoot && mirrored ? await syncVariants(tx, ctx.event.id, c.id) : null;
         const v = await emitCourseUpserted(tx, ctx.event.id, c.id);
         if (variants) await emitVariantSync(tx, ctx.event.id, variants);
         return v;
@@ -983,7 +990,8 @@ export const courseRouter = router({
         const v = await emitCourseUpserted(tx, ctx.event.id, c.id);
         await emitVariantSync(tx, ctx.event.id, variants);
         return v;
-      });
+        // Up to MAX_VARIANTS children, each a handful of writes and an entry.
+      }, { timeout: 30_000 });
       // The written course's advisory checks (08 §6; docs/course-layer.md §9): nothing blocks the save.
       return { version: version.toString(), checks: await courseChecksFor(ctx.db, ctx.event.id, c.id) };
     }),
@@ -2127,6 +2135,8 @@ export const courseRouter = router({
               where: { id: cls.id },
               data: { courseId: courseUuid },
             });
+            // The class's variant pool follows its course (§12.4).
+            await syncClassPool(ctx.db, cls.id);
             classesAssigned++;
           }
         }
@@ -2157,6 +2167,9 @@ export const courseRouter = router({
         where: { eventId, removed: false },
         select: { id: true },
       });
+      // The wipe soft-deleted variants behind `syncVariants`' back: their
+      // runners and pool rows are cleared here (§12.5).
+      variantSyncs.push(await clearRemovedVariants(ctx.db, eventId));
       const variantSync = mergeSyncs(variantSyncs);
       const activeCourses = await ctx.db.course.findMany({
         where: { eventId, removed: false },

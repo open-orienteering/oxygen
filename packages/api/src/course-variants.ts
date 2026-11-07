@@ -31,7 +31,7 @@ type Offsets = Record<string, { dx: number; dy: number }>;
 
 /** What `syncVariants` wrote, for `emitVariantSync`. */
 export interface VariantSync {
-  /** Children written (live) or soft-deleted, key order. */
+  /** Children written (live) in materialisation order, then those soft-deleted. */
   childIds: string[];
   /** Classes whose stage-0 pool changed. */
   classIds: string[];
@@ -217,7 +217,7 @@ async function syncPoolsOfRoot(
   live: readonly string[],
   droppedIds: readonly string[],
 ): Promise<string[]> {
-  const onRoot = await db.class.findMany({ where: { eventId, courseId: rootId }, select: { id: true } });
+  const onRoot = await db.class.findMany({ where: { eventId, courseId: rootId, removed: false }, select: { id: true } });
   const changed = new Set<string>();
   for (const cl of onRoot) if (await writeClassPool(db, cl.id, live)) changed.add(cl.id);
   if (droppedIds.length > 0) {
@@ -243,6 +243,37 @@ export async function syncClassPool(db: Db, classId: string): Promise<boolean> {
   const cl = await db.class.findUniqueOrThrow({ where: { id: classId }, select: { courseId: true } });
   const children = cl.courseId ? await liveChildren(db, cl.courseId) : [];
   return writeClassPool(db, classId, children);
+}
+
+/**
+ * Clear what still points at a removed variant (a bulk soft delete that
+ * bypassed `syncVariants` — `importCourses { replaceAll }`'s wipe): every
+ * runner whose `course_id` is a removed variant gets NULL, every pool row
+ * of a removed variant goes. Writes rows only; journal with
+ * `emitVariantSync` (`childIds` empty: the courses travel with the caller).
+ */
+export async function clearRemovedVariants(db: Db, eventId: bigint): Promise<VariantSync> {
+  const removed = await db.course.findMany({
+    where: { eventId, removed: true, parentCourseId: { not: null } },
+    select: { id: true },
+  });
+  const ids = removed.map((c) => c.id);
+  if (ids.length === 0) return { childIds: [], classIds: [], runners: [] };
+  const runners = await db.runner.findMany({
+    where: { eventId, courseId: { in: ids } },
+    select: { id: true, seq: true, cardNo: true },
+    orderBy: { seq: "asc" },
+  });
+  if (runners.length > 0) {
+    await db.runner.updateMany({ where: { id: { in: runners.map((r) => r.id) } }, data: { courseId: null } });
+  }
+  const stale = await db.classCoursePool.findMany({ where: { courseId: { in: ids } }, select: { classId: true } });
+  if (stale.length > 0) await db.classCoursePool.deleteMany({ where: { courseId: { in: ids } } });
+  return {
+    childIds: [],
+    classIds: [...new Set(stale.map((p) => p.classId))],
+    runners: runners.map((r) => ({ seq: r.seq, cardNo: r.cardNo })),
+  };
 }
 
 /**
