@@ -175,13 +175,16 @@ export async function loadCourseSequences(
     const stored = course.structure ? courseStructureSchema.safeParse(course.structure) : null;
     let byId: Map<string, Row>;
     let ccIds: string[] = [];
-    // The stored leg into a site, by "<previous site>><site>" over consecutive items (the
-    // `carryLegs` convention): a leg is the two sites it joins (course-layer.md §10.1).
-    const legByKey = new Map<string, course.CourseLegProps>();
+    // The stored legs into a site, by "<previous site>><site>" over consecutive items (the
+    // `carryLegs` convention: a leg is the two sites it joins), in visit order, so a pair
+    // the course runs twice takes each visit's own leg (course-layer.md §4.1, §10.1).
+    const legsByKey = new Map<string, Array<course.CourseLegProps | undefined>>();
     if (stored?.success) {
       const items = structureControlItems(stored.data);
       items.forEach((item, i) => {
-        if (i > 0 && item.leg) legByKey.set(`${items[i - 1].siteId}>${item.siteId}`, item.leg);
+        if (i === 0) return;
+        const key = `${items[i - 1].siteId}>${item.siteId}`;
+        legsByKey.set(key, [...(legsByKey.get(key) ?? []), item.leg]);
       });
       // A soft-deleted site drops out (an explicit start then falls back
       // to the default, as `startName` does).
@@ -223,8 +226,12 @@ export async function loadCourseSequences(
       seq.push({ id: finish.id, code: displayCode(finish), type: "Finish", xMm: finish.xpos, yMm: finish.ypos });
     }
 
+    const visits = new Map<string, number>();
     for (let i = 1; i < seq.length; i++) {
-      const leg = legByKey.get(`${seq[i - 1].id}>${seq[i].id}`);
+      const key = `${seq[i - 1].id}>${seq[i].id}`;
+      const n = visits.get(key) ?? 0;
+      visits.set(key, n + 1);
+      const leg = legsByKey.get(key)?.[n];
       if (leg) seq[i].leg = leg;
     }
 

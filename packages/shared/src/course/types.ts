@@ -32,10 +32,14 @@ export interface CourseSite {
   circleGaps?: AngularGap[];
 }
 
-/** The stored `LegProps` the layer reads (08 §4.3): authored gaps of the leg *into* an item; they replace the automatic ones. */
 /** How a leg is drawn (course-layer.md §10.1): 705, 707 along it, or no line. */
 export type CourseLegStyle = "line" | "marked_route" | "none";
 
+/**
+ * The stored `LegProps` the layer reads (08 §4.3) of the leg *into* an
+ * item: authored gaps (replacing the automatic ones), style and bends
+ * (§10.1). `corridor` and `crossing` may ride along and are not read.
+ */
 export interface CourseLegProps {
   /** Fractions of the leg's (bent) length. */
   gaps?: FractionGap[];

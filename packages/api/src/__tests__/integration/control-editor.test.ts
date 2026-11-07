@@ -187,6 +187,22 @@ describe("course geometry regeneration", () => {
     expect(b.lengthM! - s.lengthM!).toBeGreaterThanOrEqual(m(60) - 1);
     expect(b.lengthM! - s.lengthM!).toBeLessThanOrEqual(m(60) + 1);
     expect(b.lengthSource).toBe("derived");
+
+    // A pair the course runs twice: each visit's own leg (the first bent, the second straight).
+    const twice = await caller.course.create({ name: "Bends-twice" });
+    await caller.course.setStructure({
+      courseId: twice.id,
+      structure: {
+        version: 1,
+        id: "t",
+        orderMode: "ordered",
+        items: [{ siteId: 171 }, { siteId: 172, leg: { bends: [{ x: 10, y: 50 }] } }, { siteId: 171 }, { siteId: 172 }],
+      },
+    });
+    const tl = (await rowOf(twice.id)).legs!.split(";").filter(Boolean).map(Number);
+    const k = tl.indexOf(m(90));
+    expect(k).toBeGreaterThanOrEqual(0);
+    expect(tl.slice(k, k + 3)).toEqual([m(90), m(30), m(30)]);
   });
 
   it("moving a control rebuilds the geometry of courses that use it", async () => {

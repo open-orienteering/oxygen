@@ -433,7 +433,8 @@ before its `course.upserted`:
   view options or cut features (a leg's length is centre to centre). A
   structured course's entries carry the stored leg into them, by
   `"<previous site>><site>"` over consecutive stored items (the
-  `carryLegs` convention): a leg's `bends` reach the layer, so its
+  `carryLegs` convention; a pair the course runs twice takes each
+  visit's own stored leg, in order): a leg's `bends` reach the layer, so its
   length is measured along them (§10.1, F1). Style, gaps, corridor and
   crossing never change a length. An entry with no stored predecessor
   item (a default start from the columns) has a straight leg.
