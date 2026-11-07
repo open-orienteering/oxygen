@@ -43,24 +43,41 @@ have no window, so they draw no white-out outside at all
 
 ## The fix
 
-`triangulateEvenOdd` now resolves any ring that crosses (or touches) a
-**convex** ring before grouping. The window is always a convex quad,
-rotated or not. The crossing ring is replaced by:
+`triangulateEvenOdd` now checks whether a ring crosses (or touches) a
+**convex** ring. The window is always a convex quad, rotated or not.
 
-- its part inside the convex ring, which becomes a hole;
-- its parts outside the convex ring (Sutherland–Hodgman against each edge
-  of the convex ring), which are filled.
+For **two rings**, which covers every white-out outside, the region is
+triangulated exactly without giving earcut any hole that touches its
+outer ring (`convexPairTriangles`):
 
-These pieces cover the same even-odd region and cross nothing. If the
-inside part is the whole convex ring, the two cancel. The pieces share the
-convex ring's edges, so containment is then tested at a point on each
-ring's boundary that lies on no other ring, rather than at the first
-vertex.
+- The window outside the shape: earcut of a box round both rings, with the
+  shape as a hole that touches nothing. Each triangle is then clipped to
+  the window.
+- The shape outside the window: the shape's own earcut triangles, each cut
+  by the window's edges.
+
+Every clip is convex against convex, so nothing is bridged and rounding
+cannot create a crossing.
+
+A first version made the shape's part inside the window a hole of the
+window ring. The spec review found that this still failed for a
+non-convex shape with two arms crossing one edge. Sutherland–Hodgman
+joins the two pieces with a zero-width bridge, and earcut dropped holes
+that touch the outer ring at fractional coordinates (`strip.test.ts`'s
+parity oracle covers this now).
+
+For **more rings**, which no producer emits, the crossing ring is
+replaced by its parts inside and outside the convex ring, cut into simple
+rings. Containment is then tested at a boundary point that lies on no
+other ring. This is best effort, because the inside parts still touch the
+convex ring.
 
 Fills with no crossing are triangulated as before, so map tiles and the
-goldens are unchanged. Two non-convex rings that cross each other are
-still earcut's failure mode (`map-rendering.md` §5.2). Only malformed map
-data produces that case.
+goldens are unchanged. The crossing test first filters the larger ring's
+edges against the convex ring's bounds. On a 5 000-vertex ring round 100
+convex holes it takes 9.0 ms, against 7.3 ms before P7. Two non-convex
+rings that cross each other are still earcut's failure mode
+(`map-rendering.md` §5.2). Only malformed map data produces that case.
 
 ## How it is tested
 
@@ -72,9 +89,12 @@ data produces that case.
   - a non-convex L over a rotated window's corner;
   - a hole touching the outer ring's edge;
   - a shape covering the window whole;
-  - a shape wholly outside the window.
+  - a shape wholly outside the window;
+  - a U and an E whose arms cross one edge, at fractional offsets and
+    turns, checked against a grid even-odd parity oracle;
+  - two nested non-convex rings that each cover the window.
 
-  All but the last two failed before the fix.
+  The crossing cases failed before the fix.
 - `packages/web/src/map-gl/__tests__/worker-course.test.ts`: through the
   worker, the toner white of three crossing shapes (a toner saver from
   the left, one from below, a path reaching past both sides) covers the

@@ -1,6 +1,6 @@
 import { describe, it, expect } from "vitest";
 import { render } from "@oxygen/shared";
-import { extrudePolyline, extrudeStrip, JOIN_SHARE_TOLERANCE, StripGeometry, strokeGeometry, strokeStrip, triangulateEvenOdd } from "../prepare";
+import { extrudePolyline, extrudeStrip, JOIN_SHARE_TOLERANCE, pointInRing, StripGeometry, strokeGeometry, strokeStrip, triangulateEvenOdd } from "../prepare";
 
 const { makePath, PassStreamBuilder } = render;
 
@@ -267,6 +267,60 @@ describe("triangulateEvenOdd", () => {
       expect(area(t)).toBeCloseTo(120 * 120 - 10_000, 3);
       expect(covers(t, 47, 53)).toBe(false);
       expect(covers(t, -5, 53)).toBe(true);
+    });
+
+    /** Grid samples away from every ring edge where the triangles disagree with the rings' even-odd parity. */
+    const parityMismatches = (rings: number[][], t: { positions: number[]; indices: number[] }) => {
+      const p = t.positions;
+      const tri = (x: number, y: number) => {
+        const side = (ax: number, ay: number, bx: number, by: number) => (bx - ax) * (y - ay) - (by - ay) * (x - ax);
+        for (let i = 0; i < t.indices.length; i += 3) {
+          const [a, b, c] = [2 * t.indices[i], 2 * t.indices[i + 1], 2 * t.indices[i + 2]];
+          const d1 = side(p[a], p[a + 1], p[b], p[b + 1]), d2 = side(p[b], p[b + 1], p[c], p[c + 1]), d3 = side(p[c], p[c + 1], p[a], p[a + 1]);
+          if ((d1 >= -1e-6 && d2 >= -1e-6 && d3 >= -1e-6) || (d1 <= 1e-6 && d2 <= 1e-6 && d3 <= 1e-6)) return true;
+        }
+        return false;
+      };
+      const nearEdge = (x: number, y: number) => rings.some((r) => {
+        const n = r.length / 2;
+        for (let k = 0, l = n - 1; k < n; l = k++) {
+          const ax = r[2 * l], ay = r[2 * l + 1], ex = r[2 * k] - ax, ey = r[2 * k + 1] - ay;
+          const u = Math.max(0, Math.min(1, ((x - ax) * ex + (y - ay) * ey) / (ex * ex + ey * ey || 1)));
+          if (Math.hypot(ax + u * ex - x, ay + u * ey - y) < 0.7) return true;
+        }
+        return false;
+      });
+      let bad = 0;
+      for (let x = -65; x <= 165; x += 1.37) for (let y = -65; y <= 165; y += 1.31) {
+        if (nearEdge(x, y)) continue;
+        let par = false;
+        for (const r of rings) if (pointInRing(r, x, y)) par = !par;
+        if (tri(x, y) !== par) bad++;
+      }
+      return bad;
+    };
+    const shift = (q: number[], dx: number, dy: number) => q.map((v, i) => (i % 2 ? v + dy : v + dx));
+    const turn = (q: number[], r: number) => q.map((v, i) => (i % 2 ? q[i - 1] * Math.sin(r) + v * Math.cos(r) : v * Math.cos(r) - q[i + 1] * Math.sin(r)));
+    // A U whose two arms reach into the window across its left edge, the base outside: two pieces inside.
+    const U = [-20, 20, 60, 20, 60, 30, -10, 30, -10, 50, 60, 50, 60, 60, -20, 60];
+    const E = [-20, 10, 60, 10, 60, 20, -10, 20, -10, 40, 60, 40, 60, 50, -10, 50, -10, 70, 60, 70, 60, 80, -20, 80];
+
+    it("cuts a shape whose part inside is disconnected, at any offset and turn (parity oracle)", () => {
+      for (const shape of [U, E]) {
+        for (const [dx, dy, r] of [[0, 0, 0], [0.123, 0.457, 0], [0.71, 0.29, 0], [0, 0, 0.3], [0.123, 0.457, 0.3], [0, 0, 0.01], [0, 0, 1.2]]) {
+          const rings = [turn(shift(win, dx, dy), r), turn(shift(shape, dx, dy), r)];
+          expect(parityMismatches(rings, triangulateEvenOdd(rings)), `${shape === U ? "U" : "E"} ${dx},${dy},${r}`).toBe(0);
+          expect(parityMismatches([rings[1], rings[0]], triangulateEvenOdd([rings[1], rings[0]]))).toBe(0);
+        }
+      }
+    });
+
+    it("keeps parity when two nested rings each cover the window and touch it", () => {
+      const a1 = [0, 0, 120, -10, 130, 120, 60, 105, -10, 110], a2 = [0, 0, 150, -30, 160, 150, 70, 130, -30, 140]; // non-convex: the window clips both
+      const rings = [win, a1, a2];
+      const t = triangulateEvenOdd(rings);
+      expect(parityMismatches(rings, t)).toBe(0);
+      expect(covers(t, 47, 53)).toBe(true);
     });
 
     it("fills a shape wholly outside the window", () => {

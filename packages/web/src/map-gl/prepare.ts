@@ -638,14 +638,16 @@ export function strokeStrip(pass: render.StrokePass, tol: number, out: StripSink
  *
  * Rings that cross a *convex* ring are resolved first (P7): the white-out
  * outside is the window quad with the shape as its even-odd hole, and the
- * shape crosses the window whenever it reaches the frame. The crossing
- * ring is replaced by its part inside the convex ring and its parts
- * outside it (Sutherland–Hodgman, exact), which have the same even-odd
- * region and no longer cross; containment is then probed at a boundary
- * point that lies on no other ring, since the pieces share the convex
- * ring's edges. Two non-convex rings that cross each other stay earcut's
- * failure mode, drawn as earcut decides (the reference raster is the
- * oracle).
+ * shape crosses the window whenever it reaches the frame. Two such rings
+ * (every white-out outside) are triangulated exactly by convex clips of
+ * earcut triangles (`convexPairTriangles`). With more rings, the crossing
+ * ring is replaced by its parts inside the convex ring and outside it
+ * (line clips cut into simple rings), which no longer cross, and
+ * containment is probed at a boundary point on no other ring; the parts
+ * inside touch the convex ring, which earcut may mishandle at fractional
+ * coordinates — best effort, as no producer emits it. Two non-convex rings
+ * that cross each other stay earcut's failure mode, drawn as earcut
+ * decides (the reference raster is the oracle).
  *
  * Returns positions (x, y) and indices into them.
  */
@@ -654,7 +656,11 @@ export function triangulateEvenOdd(rings: number[][]): { positions: number[]; in
   const positions: number[] = [];
   const indices: number[] = [];
   if (!rs.length) return { positions, indices };
-  const resolved = rs.length > 1 ? resolveConvexCrossings(rs) : null;
+  if (rs.length === 2) {
+    const pair = convexCrossingPair(rs[0], rs[1]);
+    if (pair) return convexPairTriangles(pair[0], pair[1]);
+  }
+  const resolved = rs.length > 2 ? resolveConvexCrossings(rs) : null;
   if (resolved) rs = resolved;
   if (!rs.length) return { positions, indices };
   if (rs.length === 1) {
@@ -711,13 +717,73 @@ export function triangulateEvenOdd(rings: number[][]): { positions: number[]; in
   return { positions, indices };
 }
 
+/** [convex ring, the other] when one of two rings is convex and they cross or touch (the bigger box clips when both are). */
+function convexCrossingPair(a: number[], b: number[]): [number[], number[]] | null {
+  const ba = ringBounds(a), bb = ringBounds(b);
+  if (ba[2] < bb[0] || bb[2] < ba[0] || ba[3] < bb[1] || bb[3] < ba[1]) return null;
+  const aConvex = isConvexRing(a), bConvex = isConvexRing(b);
+  if (!aConvex && !bConvex) return null;
+  const boxArea = (q: number[]) => (q[2] - q[0]) * (q[3] - q[1]);
+  const [c, cb, s] = aConvex && (!bConvex || boxArea(ba) >= boxArea(bb)) ? [a, ba, b] : [b, bb, a];
+  return ringCrossesConvex(s, c, cb) ? [c, s] : null;
+}
+
 /**
- * Replaces each ring that crosses (or touches) a convex ring by its part
+ * The even-odd region of a convex ring `c` and a simple ring `s` that
+ * crosses it, as triangles (P7: the white-out outside's window and shape).
+ * `c` outside `s` is a box round both with `s` as its hole — a hole that
+ * touches nothing, earcut's safe case — each triangle clipped to `c`; `s`
+ * outside `c` is `s`'s own triangles, each cut by `c`'s edges. Every clip
+ * is convex against convex, so nothing is bridged or rounded into a
+ * crossing; the pieces are disjoint and fanned.
+ */
+function convexPairTriangles(c: number[], s: number[]): { positions: number[]; indices: number[] } {
+  const positions: number[] = [];
+  const indices: number[] = [];
+  const fan = (poly: number[]) => {
+    const r = cleanRing(poly);
+    if (!r) return;
+    const base = positions.length / 2;
+    for (const v of r) positions.push(v);
+    for (let i = 1; i + 1 < r.length / 2; i++) indices.push(base, base + i, base + i + 1);
+  };
+  const m = c.length / 2;
+  const left = render.ringArea(c) > 0 ? 1 : -1;
+  const edge = (poly: number[], k: number, keep: number) => {
+    const l = (k + 1) % m;
+    return fallbackClip(poly, c[2 * k], c[2 * k + 1], c[2 * l] - c[2 * k], c[2 * l + 1] - c[2 * k + 1], keep);
+  };
+  const triangles = (flat: number[], holes?: number[]) => {
+    const t = earcut(flat, holes, 2);
+    const out: number[][] = [];
+    for (let i = 0; i < t.length; i += 3) out.push([flat[2 * t[i]], flat[2 * t[i] + 1], flat[2 * t[i + 1]], flat[2 * t[i + 1] + 1], flat[2 * t[i + 2]], flat[2 * t[i + 2] + 1]]);
+    return out;
+  };
+  const b = ringBounds([...c, ...s]);
+  const pad = Math.max(b[2] - b[0], b[3] - b[1]) * 0.01 + 1;
+  const box = [b[0] - pad, b[1] - pad, b[2] + pad, b[1] - pad, b[2] + pad, b[3] + pad, b[0] - pad, b[3] + pad];
+  for (const t of triangles([...box, ...s], [4])) {
+    let p = t;
+    for (let k = 0; k < m && p.length >= 6; k++) p = edge(p, k, left);
+    fan(p);
+  }
+  for (const t of triangles(s)) {
+    let inner = t;
+    for (let k = 0; k < m && inner.length >= 6; k++) {
+      fan(edge(inner, k, -left));
+      inner = edge(inner, k, left);
+    }
+  }
+  return { positions, indices };
+}
+
+/**
+ * Replaces each ring that crosses (or touches) a convex ring by its parts
  * inside that ring and its parts outside it — the same even-odd region,
  * no crossing (P7). Returns null when no pair crosses, so the common case
  * keeps the rings as given. A ring that clips is not itself clipped, and a
  * clipped ring clips nothing; a part inside that is the whole convex ring
- * cancels it.
+ * cancels it (parity: a second such part brings it back).
  */
 function resolveConvexCrossings(rs: number[][]): number[][] | null {
   const n = rs.length;
@@ -738,14 +804,16 @@ function resolveConvexCrossings(rs: number[][]): number[][] | null {
       const boxArea = (q: number[]) => (q[2] - q[0]) * (q[3] - q[1]);
       const c = iClips && (!jClips || boxArea(a) >= boxArea(b)) ? i : j;
       const s = c === i ? j : i;
-      if (!render.polylinesCrossRings([rs[c]], true, [rs[s]])) continue;
+      if (!ringCrossesConvex(rs[s], rs[c], bb[c])) continue;
       role[c] = CLIPPER;
       role[s] = CLIPPED;
       const out: number[][] = [];
-      const inside = cleanRing(clipRingToConvex(rs[s], rs[c]));
-      if (inside && Math.abs(render.ringArea(inside)) >= Math.abs(render.ringArea(rs[c])) * (1 - 1e-9) - 1) cancelled.add(c);
-      else if (inside) out.push(inside);
-      for (const p of outsideConvexPieces(rs[s], rs[c])) out.push(p);
+      const inside = clipRingToConvex(rs[s], rs[c]);
+      if (inside.length === 1 && Math.abs(render.ringArea(inside[0])) >= Math.abs(render.ringArea(rs[c])) * (1 - 1e-9) - 1) {
+        if (cancelled.has(c)) cancelled.delete(c);
+        else cancelled.add(c);
+      } else out.push(...inside);
+      out.push(...outsideConvexPieces(rs[s], rs[c]));
       pieces.set(s, out);
     }
   }
@@ -758,6 +826,34 @@ function resolveConvexCrossings(rs: number[][]): number[][] | null {
     else result.push(rs[i]);
   }
   return result;
+}
+
+/**
+ * Does an edge of ring `s` cross or touch an edge of the convex ring `c`
+ * (bounds `cb`)? One pass over `s` against `c`'s bounds first, so a large
+ * ring round a small convex hole costs O(|s|), not O(|s| · |c|).
+ */
+function ringCrossesConvex(s: number[], c: number[], cb: [number, number, number, number]): boolean {
+  const n = s.length / 2, m = c.length / 2;
+  for (let e = 0, f = n - 1; e < n; f = e++) {
+    const ax = s[2 * f], ay = s[2 * f + 1], bx = s[2 * e], by = s[2 * e + 1];
+    if (Math.max(ax, bx) < cb[0] || Math.min(ax, bx) > cb[2] || Math.max(ay, by) < cb[1] || Math.min(ay, by) > cb[3]) continue;
+    for (let k = 0, l = m - 1; k < m; l = k++) {
+      if (segmentsMeet(ax, ay, bx, by, c[2 * l], c[2 * l + 1], c[2 * k], c[2 * k + 1])) return true;
+    }
+  }
+  return false;
+}
+
+/** Whether segments ab and cd intersect or touch (collinear overlap included). */
+function segmentsMeet(ax: number, ay: number, bx: number, by: number, cx: number, cy: number, dx: number, dy: number): boolean {
+  const o = (px: number, py: number, qx: number, qy: number, rx: number, ry: number) => Math.sign((qx - px) * (ry - py) - (qy - py) * (rx - px));
+  const on = (px: number, py: number, qx: number, qy: number, rx: number, ry: number) =>
+    Math.min(px, qx) <= rx && rx <= Math.max(px, qx) && Math.min(py, qy) <= ry && ry <= Math.max(py, qy);
+  const o1 = o(ax, ay, bx, by, cx, cy), o2 = o(ax, ay, bx, by, dx, dy), o3 = o(cx, cy, dx, dy, ax, ay), o4 = o(cx, cy, dx, dy, bx, by);
+  if (o1 !== o2 && o3 !== o4) return true;
+  return (o1 === 0 && on(ax, ay, bx, by, cx, cy)) || (o2 === 0 && on(ax, ay, bx, by, dx, dy))
+    || (o3 === 0 && on(cx, cy, dx, dy, ax, ay)) || (o4 === 0 && on(cx, cy, dx, dy, bx, by));
 }
 
 /** Whether a flat ring is convex and simple (turns one way, once round); collinear vertices are allowed. */
@@ -782,12 +878,79 @@ export function isConvexRing(r: number[]): boolean {
   return sign !== 0 && Math.abs(Math.abs(turn) - 2 * Math.PI) < 1e-6;
 }
 
-/** Sutherland–Hodgman: the part of `poly` on one side of the line a→b (`keep` +1 left, −1 right, boundary kept). */
-function clipHalfPlane(poly: number[], ax: number, ay: number, bx: number, by: number, keep: number): number[] {
+/**
+ * The part of the simple ring `poly` on one side of the line a→b (`keep`
+ * +1 left, −1 right, the line itself kept), as separate simple rings.
+ * Plain Sutherland–Hodgman joins the pieces of a non-convex ring with
+ * zero-width bridges along the line, which rounding turns into crossings
+ * earcut drops; here the ring is cut into chains between its crossings,
+ * and each chain's exit is joined to the entry next to it along the line
+ * (crossings alternate along the line for a simple ring).
+ */
+function clipHalfPlane(poly: number[], ax: number, ay: number, bx: number, by: number, keep: number): number[][] {
+  const n = poly.length / 2;
+  if (n < 3) return [];
+  const ex = bx - ax, ey = by - ay;
+  const side = new Float64Array(n);
+  let start = -1, anyIn = false;
+  for (let k = 0; k < n; k++) {
+    side[k] = keep * (ex * (poly[2 * k + 1] - ay) - ey * (poly[2 * k] - ax));
+    if (side[k] < 0) { if (start < 0) start = k; } else anyIn = true;
+  }
+  if (start < 0) return [poly];
+  if (!anyIn) return [];
+  type Cross = { u: number; chain: number; entry: boolean };
+  const chains: number[][] = [];
+  const crosses: Cross[] = [];
+  let cur: number[] | null = null;
+  for (let step = 1; step <= n; step++) {
+    const k = (start + step) % n, p = (start + step - 1) % n;
+    const sp = side[p], sk = side[k];
+    if ((sp >= 0) !== (sk >= 0)) {
+      const t = sp / (sp - sk);
+      const x = poly[2 * p] + t * (poly[2 * k] - poly[2 * p]), y = poly[2 * p + 1] + t * (poly[2 * k + 1] - poly[2 * p + 1]);
+      const u = (x - ax) * ex + (y - ay) * ey;
+      if (sk >= 0) {
+        cur = [x, y];
+        chains.push(cur);
+        crosses.push({ u, chain: chains.length - 1, entry: true });
+      } else if (cur) {
+        cur.push(x, y);
+        crosses.push({ u, chain: chains.length - 1, entry: false });
+        cur = null;
+      }
+    }
+    if (sk >= 0 && cur) cur.push(poly[2 * k], poly[2 * k + 1]);
+  }
+  // Ties (a vertex touching the line from outside): a chain's own entry and exit side by side, entry first.
+  const order = crosses.map((_, i) => i).sort((i, j) => crosses[i].u - crosses[j].u || crosses[i].chain - crosses[j].chain || (crosses[i].entry ? -1 : 1));
+  const rank = new Int32Array(crosses.length);
+  order.forEach((ci, r) => { rank[ci] = r; });
+  const exitOf = new Int32Array(chains.length);
+  crosses.forEach((c, i) => { if (!c.entry) exitOf[c.chain] = i; });
+  const done = new Uint8Array(chains.length);
+  const out: number[][] = [];
+  for (let c0 = 0; c0 < chains.length; c0++) {
+    if (done[c0]) continue;
+    const ring: number[] = [];
+    let c = c0;
+    for (let guard = 0; guard <= chains.length; guard++) {
+      done[c] = 1;
+      for (const v of chains[c]) ring.push(v);
+      const next = crosses[order[rank[exitOf[c]] ^ 1]];
+      if (!next || !next.entry) return [poly.length ? fallbackClip(poly, ax, ay, ex, ey, keep) : []].filter((r) => r.length >= 6);
+      c = next.chain;
+      if (c === c0) break;
+    }
+    out.push(ring);
+  }
+  return out;
+}
+
+/** Plain Sutherland–Hodgman (one ring, bridges and all): only for crossings that do not pair up (degenerate input). */
+function fallbackClip(poly: number[], ax: number, ay: number, ex: number, ey: number, keep: number): number[] {
   const out: number[] = [];
   const n = poly.length / 2;
-  if (!n) return out;
-  const ex = bx - ax, ey = by - ay;
   const side = (k: number) => keep * (ex * (poly[2 * k + 1] - ay) - ey * (poly[2 * k] - ax));
   let pk = n - 1, ps = side(pk);
   for (let k = 0; k < n; k++) {
@@ -803,16 +966,17 @@ function clipHalfPlane(poly: number[], ax: number, ay: number, bx: number, by: n
   return out;
 }
 
-/** The part of `poly` inside the convex ring `c`. */
-function clipRingToConvex(poly: number[], c: number[]): number[] {
+/** Clips every ring of `rings` to one side of edge e→f of `c`. */
+const clipAll = (rings: number[][], c: number[], e: number, f: number, keep: number) =>
+  rings.flatMap((r) => clipHalfPlane(r, c[2 * e], c[2 * e + 1], c[2 * f], c[2 * f + 1], keep));
+
+/** The parts of `poly` inside the convex ring `c`, as simple rings. */
+function clipRingToConvex(poly: number[], c: number[]): number[][] {
   const m = c.length / 2;
   const left = render.ringArea(c) > 0 ? 1 : -1;
-  let out = poly;
-  for (let e = 0; e < m && out.length; e++) {
-    const f = (e + 1) % m;
-    out = clipHalfPlane(out, c[2 * e], c[2 * e + 1], c[2 * f], c[2 * f + 1], left);
-  }
-  return out;
+  let out = [poly];
+  for (let e = 0; e < m && out.length; e++) out = clipAll(out, c, e, (e + 1) % m, left);
+  return out.map(cleanRing).filter((r): r is number[] => r !== null);
 }
 
 /** The parts of `poly` outside the convex ring `c`: for edge k, beyond k and inside every edge before it — disjoint, covering all. */
@@ -820,13 +984,14 @@ function outsideConvexPieces(poly: number[], c: number[]): number[][] {
   const m = c.length / 2;
   const left = render.ringArea(c) > 0 ? 1 : -1;
   const out: number[][] = [];
-  let inner = poly; // poly inside edges 0 … k−1
+  let inner = [poly]; // poly inside edges 0 … k−1
   for (let k = 0; k < m && inner.length; k++) {
     const l = (k + 1) % m;
-    const ax = c[2 * k], ay = c[2 * k + 1], bx = c[2 * l], by = c[2 * l + 1];
-    const piece = cleanRing(clipHalfPlane(inner, ax, ay, bx, by, -left));
-    if (piece) out.push(piece);
-    inner = clipHalfPlane(inner, ax, ay, bx, by, left);
+    for (const piece of clipAll(inner, c, k, l, -left)) {
+      const r = cleanRing(piece);
+      if (r) out.push(r);
+    }
+    inner = clipAll(inner, c, k, l, left);
   }
   return out;
 }
