@@ -60,7 +60,7 @@ export function courseActions(ctx: ActionContext, on: ActionHandlers, label: Act
   if (ctx.phantom) {
     if (ctx.phantom.insertAt !== null && ctx.course) {
       out.push({ id: "insert", label: label("editor.actionInsert"), onClick: on.insert, disabled: !ctx.codesReady });
-      if (ctx.legEdit) out.push({ id: "add-bend", label: label("editor.actionAddBend"), onClick: on.addBend });
+      if (ctx.legEdit) out.push({ id: "add-bend", label: label("editor:actionAddBend"), onClick: on.addBend });
       return out;
     }
     if (ctx.course) out.push({ id: "add-to-course", label: label("editor.actionAddToCourse", { name: ctx.course }), onClick: on.addToCourse, disabled: !ctx.codesReady });

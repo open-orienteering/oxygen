@@ -58,19 +58,20 @@ import { legLengthLabel } from "../../lib/editor/leg-length";
 import { EditorConflict, EditorWrites, type EditorClient } from "../../lib/editor/write-client";
 import { instructionsOnCourse, type Instructions } from "../../lib/editor/instructions";
 import { areaTool, editorReducer, escapeHasWork, initialEditorState, type EditorTool } from "../../lib/editor/state";
-import { appendSite, insertSite, moveVisit, removeSite, removeVisit, setLegGaps, setNumberHidden, setRole, type KindOf } from "../../lib/editor/structure-edit";
+import { appendSite, insertSite, moveVisit, removeSite, removeVisit, setLegGaps, setLegProps, setNumberHidden, setRole, type KindOf, type LegPatch } from "../../lib/editor/structure-edit";
 import { displaySequence, effectiveEnds, explicitStructure, insertIndexForLeg, kindOfSites, legForInsert, type SiteRow } from "../../lib/editor/sequence";
-import { legPolyline } from "../../lib/editor/bends";
+import { insertBendAt, legPolyline } from "../../lib/editor/bends";
 import { courseActions } from "./ActionBar";
 import { TopBar } from "./TopBar";
 import { ToolRail, type AreaChoice } from "./ToolRail";
-import { areaChoiceOfKey } from "./tools/rail";
+import { areaChoiceOfKey, isCorridorKey } from "./tools/rail";
 import { afterPlaced, afterUndo, armPlacement, ghostInfo, switchTool, type PlacementState, type PlacementTool } from "./tools/placement";
 import { step as polygonStep, type AreaKind } from "./tools/polygon";
 import { TONER_MARGIN_MM, tonerSaverGeometry } from "./tools/toner-saver";
 import { mergeCircleGaps, mergeLegGaps, type AngularGap, type FractionGap } from "./tools/gaps";
 import { areaBinding, gapBinding, pickSymbolBinding, placeBinding, selectBinding, textBinding, type GapTarget, type Gesture } from "./tools/bindings";
 import { ObjectSection } from "./modes/ObjectSection";
+import { DEFAULT_CORRIDOR, LegSection } from "./modes/LegSection";
 import { ChecksSection, Inspector, InspectorSection, InventorySection } from "./Inspector";
 import { StatusBar } from "./StatusBar";
 import type { SaveState, StatusInput } from "../../lib/editor/status";
@@ -342,6 +343,42 @@ export function EditorPage() {
     return true;
   }, [currentStructure, baseStructure, writeStructure, run, record]);
 
+  // ─── The selected leg (§6.7): the leg-click phantom on the selected course ──
+  const selectedLeg = useMemo(() => {
+    const insertAt = state.phantom?.insertAt;
+    if (insertAt == null || !structure || state.view === "all" || structure.orderMode !== "ordered") return null;
+    const leg = legForInsert(rows, insertAt);
+    const item = leg ? explicitItems[leg.itemIndex] : undefined;
+    if (!leg || !leg.from.pt || !leg.to.pt || !item || item.kind === "variation") return null;
+    return { itemIndex: leg.itemIndex, from: leg.from, to: leg.to, fromPt: leg.from.pt, toPt: leg.to.pt, props: item.leg ?? {} };
+  }, [state.phantom, state.view, structure, rows, explicitItems]);
+  /** Leg editing is desktop and tablet; the phone shows the section read-only (08 §5.5). */
+  const legEditable = !!selectedLeg && !isMobile;
+  /** One leg edit: a patch of the item's `LegProps`, one `setStructure`, one undo entry. */
+  const writeLeg = useCallback((patch: LegPatch) => {
+    if (!selectedLeg) return;
+    const index = selectedLeg.itemIndex;
+    void applyStructure((s) => setLegProps(s, index, patch));
+  }, [selectedLeg, applyStructure]);
+  /** The selected leg's focused bend (a click on its handle or row): `Delete` removes it. Keyed by the leg's item. */
+  const [bendFocus, setBendFocus] = useState<{ itemIndex: number; index: number } | null>(null);
+  const focusedBend = bendFocus && selectedLeg && bendFocus.itemIndex === selectedLeg.itemIndex && bendFocus.index < (selectedLeg.props.bends?.length ?? 0)
+    ? bendFocus.index : null;
+  const focusBend = useCallback((index: number | null) => {
+    setBendFocus(index === null || !selectedLeg ? null : { itemIndex: selectedLeg.itemIndex, index });
+  }, [selectedLeg]);
+  const addBend = useCallback(() => {
+    const p = state.phantom;
+    if (!selectedLeg || !p) return;
+    const before = selectedLeg.props.bends ?? [];
+    const bends = insertBendAt(selectedLeg.fromPt, before, selectedLeg.toPt, { x: p.x, y: p.y });
+    const at = bends.findIndex((b, i) => b !== before[i]);
+    writeLeg({ bends });
+    setBendFocus({ itemIndex: selectedLeg.itemIndex, index: at < 0 ? bends.length - 1 : at });
+  }, [state.phantom, selectedLeg, writeLeg]);
+  const canCorridor = legEditable && !selectedLeg?.props.corridor;
+  const addCorridor = useCallback(() => { if (canCorridor) writeLeg({ corridor: DEFAULT_CORRIDOR }); }, [canCorridor, writeLeg]);
+
   /**
    * Description instructions (§4): the value this client wrote last, until `course.list` has it (a second
    * edit right after the first builds on the first); `version` is null while the write is in flight.
@@ -491,6 +528,7 @@ export function EditorPage() {
   const handleLegClick = useCallback((courseName: string, legIndex: number, pt: Pt) => {
     if (!selectedCourse || courseName !== selectedCourse.name) return;
     setRadioSwapOffer(null);
+    setBendFocus(null);
     dispatch({ type: "leg-click", x: pt.x, y: pt.y, insertAt: insertIndexForLeg(rows, legIndex) });
   }, [selectedCourse, rows]);
 
@@ -1057,6 +1095,10 @@ export function EditorPage() {
             if (o && before) updateObject({ ...o, geometry: before } as CourseObject, { geometry });
           },
           onLegDoubleClick: insertOnLeg,
+          leg: legEditable && selectedLeg ? {
+            from: selectedLeg.fromPt, to: selectedLeg.toPt, bends: selectedLeg.props.bends ?? [], focused: focusedBend,
+            onBendsChange: (bends) => writeLeg({ bends }), onBendFocus: focusBend, snap,
+          } : null,
         });
     }
   })();
@@ -1130,8 +1172,10 @@ export function EditorPage() {
         course: selectedCourse && structure ? selectedCourse.name : null,
         codesReady: !!controlList.data,
         busy: pendingOps > 0,
+        legEdit: legEditable,
       },
       {
+        addBend,
         insert: () => { const p = state.phantom; if (p) void createControl({ x: p.x, y: p.y }, p.insertAt); },
         addToCourse: () => { const p = state.phantom; if (p) void createControl({ x: p.x, y: p.y }, sequenceIds.length); },
         add: () => { const p = state.phantom; if (p) void createControl({ x: p.x, y: p.y }, null); },
@@ -1151,7 +1195,7 @@ export function EditorPage() {
     );
   }, [state.tool.kind, state.selectedControlId, state.phantom, coordsById, kindOf, sequenceIds, ends, selectedCourse, structure, controlRowsById,
     radioSwapOffer, controlList.data, pendingOps, createControl, createRoleControl, applyStructure, resetLabel, handleRadio,
-    confirmSwap, declineSwap, handleDelete, tc]);
+    confirmSwap, declineSwap, handleDelete, tc, legEditable, addBend]);
 
   const contextInfo = useMemo(() => {
     const sel = state.selectedControlId;
@@ -1235,11 +1279,13 @@ export function EditorPage() {
   const runUndo = useCallback(() => {
     setMoveEpoch((v) => v + 1);
     setFocus(null); // its index may name another vertex now
+    setBendFocus(null);
     void run(async () => { await undoStack.undo(); bumpHistory(); });
   }, [run, undoStack, bumpHistory]);
   const runRedo = useCallback(() => {
     setMoveEpoch((v) => v + 1);
     setFocus(null);
+    setBendFocus(null);
     void run(async () => { await undoStack.redo(); bumpHistory(); });
   }, [run, undoStack, bumpHistory]);
 
@@ -1322,6 +1368,11 @@ export function EditorPage() {
         const kind = areaChoiceOfKey(key)!;
         setAreaOpen(false);
         if (kind !== "toner_saver" || canTonerSaver) startArea(kind);
+      } else if (areaOpen && plain && isCorridorKey(key)) {
+        // *Corridor on selected leg* (§6.4, §6.7).
+        e.preventDefault();
+        setAreaOpen(false);
+        addCorridor();
       } else if (plain && key === "H") {
         dispatch({ type: "toggle-hide-others" });
       } else if (plain && key === "V") {
@@ -1339,7 +1390,12 @@ export function EditorPage() {
       } else if (e.key === "Delete" || e.key === "Backspace") {
         e.preventDefault();
         if (state.multi.length > 0) deleteControls(state.multi);
-        else if (selectedObject && focusedVertex !== null) {
+        else if (selectedLeg && focusedBend !== null && legEditable) {
+          // The selected leg's focused bend (§6.7).
+          const bends = selectedLeg.props.bends ?? [];
+          writeLeg({ bends: bends.filter((_, i) => i !== focusedBend) });
+          setBendFocus(null);
+        } else if (selectedObject && focusedVertex !== null) {
           // A focused vertex goes first, down to the kind's minimum; there nothing happens (§7 "Editing geometry").
           const shown = { ...selectedObject, geometry: drafts.get(selectedObject.id) ?? selectedObject.geometry } as CourseObject;
           const geometry = deleteVertex(shown.geometry, focusedVertex, vertexRule(shown.kind).min);
@@ -1355,7 +1411,7 @@ export function EditorPage() {
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
   }, [descControlId, runUndo, runRedo, undoStack, state, handleDelete, deleteControls, deleteObject, selectedObject, focusedVertex, drafts, setDraft, updateObject, setChain, exitTool, finishArea,
-    stepSelection, armPlace, setTool, canGap, fitView, areaOpen, canTonerSaver, startArea, layoutKey]);
+    stepSelection, armPlace, setTool, canGap, fitView, areaOpen, canTonerSaver, startArea, layoutKey, selectedLeg, focusedBend, legEditable, writeLeg, addCorridor]);
 
   // Layout deep links (docs/course-layout.md §4): `?mode=layout` with `sheet=<seq>` or `template=<seq>`.
   const layoutLinkDone = useRef(false);
@@ -1634,6 +1690,15 @@ export function EditorPage() {
         note: pickNote?.objectId === selectedObject.id ? pickNote.note : null,
       } : undefined}
     />
+  ) : selectedLeg ? (
+    <LegSection
+      title={`${selectedLeg.from.code} → ${selectedLeg.to.code}`}
+      leg={selectedLeg.props}
+      focusedBend={focusedBend}
+      readOnly={!legEditable}
+      onPatch={writeLeg}
+      onFocusBend={focusBend}
+    />
   ) : (
     <>
       {fieldSelection}
@@ -1779,6 +1844,8 @@ export function EditorPage() {
         onAreaOpen={setAreaOpen}
         canGap={canGap}
         canTonerSaver={canTonerSaver}
+        canCorridor={canCorridor}
+        onCorridor={addCorridor}
         snapping={state.snapping}
         onSnapping={() => dispatch({ type: "toggle-snapping" })}
       />}
