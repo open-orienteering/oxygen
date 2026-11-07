@@ -119,10 +119,17 @@ export function variantKeyDuplicates(keys: readonly string[]): string[] {
 /** Every site a structure visits, in any alternative, once each in first-seen order. */
 export function structureSiteIds(s: StoredCourseStructure): string[] {
   const out = new Set<string>();
+  const crossings: string[] = [];
+  const visit = (c: StoredControlItem) => {
+    out.add(c.siteId);
+    if (c.leg?.crossing) crossings.push(c.leg.crossing.controlId);
+  };
   for (const item of s.items) {
-    if (item.kind === "variation") for (const alt of item.alternatives) for (const c of alt.items) out.add(c.siteId);
-    else out.add(item.siteId);
+    if (item.kind === "variation") for (const alt of item.alternatives) for (const c of alt.items) visit(c);
+    else visit(item);
   }
+  // The crossing points the legs run through (course-layer.md §10.3), after the items.
+  for (const id of crossings) out.add(id);
   return [...out];
 }
 
@@ -136,12 +143,19 @@ type Offsets = Record<string, { dx: number; dy: number }>;
  * schema whenever the input did. The site's label offset goes too.
  */
 export function pruneSiteFromStructure<T extends StoredCourseStructure & { labelOffsets?: Offsets }>(s: T, siteId: string): T {
+  // A leg that ran through the site (a crossing point, §10.3) loses its `crossing`; an empty leg goes.
+  const unroute = <C extends StoredControlItem>(c: C): C => {
+    if (c.leg?.crossing?.controlId !== siteId) return c;
+    const { crossing: _gone, ...leg } = c.leg;
+    const { leg: _leg, ...rest } = c;
+    return (Object.keys(leg).length > 0 ? { ...rest, leg } : rest) as C;
+  };
   let items: StoredCourseStructure["items"] = s.items
     .filter((item) => item.kind === "variation" || item.siteId !== siteId)
     .map((item) =>
       item.kind === "variation"
-        ? { ...item, alternatives: item.alternatives.map((alt) => ({ ...alt, items: alt.items.filter((c) => c.siteId !== siteId) })) }
-        : item,
+        ? { ...item, alternatives: item.alternatives.map((alt) => ({ ...alt, items: alt.items.filter((c) => c.siteId !== siteId).map(unroute) })) }
+        : unroute(item),
     );
   for (;;) {
     const bad = items.findIndex(

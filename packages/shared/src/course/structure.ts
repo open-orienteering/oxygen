@@ -25,21 +25,30 @@ const fractionGapSchema = z
   .object({ from: z.number().min(0).max(1), to: z.number().min(0).max(1) })
   .refine((g) => g.from <= g.to, { message: "gap from > to" });
 
-/** 08 §4.3 `LegProps` (no `path`: bends are for marked routes). */
-export const legPropsSchema = z.strictObject({
-  style: z.enum(["line", "marked_route", "none"]).optional(),
-  gaps: z.array(fractionGapSchema).optional(),
-  corridor: z
-    .object({
-      widthM: z.number().positive(),
-      edge: z.boolean(),
-      whiteMm: z.number().min(0),
-      whiteOpacity: z.number().min(0).max(1),
-    })
-    .optional(),
-  crossing: z.object({ controlId: z.string().min(1), section: z.boolean().optional() }).optional(),
-  bends: z.array(pointSchema).optional(),
-});
+/**
+ * 08 §4.3 `LegProps` over a site-id type (no `path`: bends are for marked
+ * routes). `crossing.controlId` names a `crossing_point` site the leg runs
+ * through (course-layer.md §10.3): a control UUID in the column, a public
+ * id on the wire, like every site reference.
+ */
+export function legPropsSchemaOf<S extends z.ZodType<string | number>>(siteId: S) {
+  return z.strictObject({
+    style: z.enum(["line", "marked_route", "none"]).optional(),
+    gaps: z.array(fractionGapSchema).optional(),
+    corridor: z
+      .object({
+        widthM: z.number().positive(),
+        edge: z.boolean(),
+        whiteMm: z.number().min(0),
+        whiteOpacity: z.number().min(0).max(1),
+      })
+      .optional(),
+    crossing: z.strictObject({ controlId: siteId, section: z.boolean().optional() }).optional(),
+    bends: z.array(pointSchema).optional(),
+  });
+}
+/** The column's `LegProps`. */
+export const legPropsSchema = legPropsSchemaOf(z.string().min(1));
 export type LegProps = z.infer<typeof legPropsSchema>;
 
 function controlItemSchemaOf<S extends z.ZodType<string | number>>(siteId: S) {
@@ -49,7 +58,7 @@ function controlItemSchemaOf<S extends z.ZodType<string | number>>(siteId: S) {
     /** How the item is drawn; default the site's kind. */
     role: z.enum(["control", "start", "finish"]).optional(),
     /** The leg *into* this item. */
-    leg: legPropsSchema.optional(),
+    leg: legPropsSchemaOf(siteId).optional(),
     /** Hide this visit's number (08 §4.2; mirrored to `course_controls.number_hidden`). */
     numberHidden: z.boolean().optional(),
   });
@@ -138,11 +147,19 @@ export function hasVariations(s: StoredCourseStructure): boolean {
   return s.items.some((item) => item.kind === "variation");
 }
 
-/** A rule that needs the event's sites (08 §4.3): unknown sites, a group spanning a map exchange. */
+/**
+ * A rule that needs the event's sites (08 §4.3): unknown sites, a group
+ * spanning a map exchange, a crossing or map-issue point used as an item
+ * (they are never items, slice F split), a leg crossing naming a site that
+ * is not a crossing point (course-layer.md §6.1, §10.3).
+ */
 export interface StructureSiteIssue {
-  code: "SITE_UNKNOWN" | "VARIATION_CROSSES_EXCHANGE";
+  code: "SITE_UNKNOWN" | "VARIATION_CROSSES_EXCHANGE" | "SITE_KIND_NOT_ITEM" | "CROSSING_KIND";
   siteId: string;
 }
+
+/** Site kinds that are never structure items: referenced by `LegProps.crossing`, or standing alone. */
+export const NON_ITEM_SITE_KINDS: ReadonlySet<string> = new Set(["crossing_point", "map_issue"]);
 
 /** Check a parsed structure against the event's site kinds (`controls.kind` by site id). */
 export function structureSiteIssues(
@@ -150,17 +167,25 @@ export function structureSiteIssues(
   kindById: ReadonlyMap<string, string>,
 ): StructureSiteIssue[] {
   const issues: StructureSiteIssue[] = [];
-  const check = (siteId: string, inGroup: boolean) => {
-    const kind = kindById.get(siteId);
-    if (kind === undefined) issues.push({ code: "SITE_UNKNOWN", siteId });
-    else if (inGroup && kind === "map_exchange") issues.push({ code: "VARIATION_CROSSES_EXCHANGE", siteId });
+  const crossings: string[] = [];
+  const check = (item: StoredControlItem, inGroup: boolean) => {
+    const kind = kindById.get(item.siteId);
+    if (kind === undefined) issues.push({ code: "SITE_UNKNOWN", siteId: item.siteId });
+    else if (NON_ITEM_SITE_KINDS.has(kind)) issues.push({ code: "SITE_KIND_NOT_ITEM", siteId: item.siteId });
+    else if (inGroup && kind === "map_exchange") issues.push({ code: "VARIATION_CROSSES_EXCHANGE", siteId: item.siteId });
+    if (item.leg?.crossing) crossings.push(item.leg.crossing.controlId);
   };
   for (const item of s.items) {
     if (item.kind === "variation") {
-      for (const alt of item.alternatives) for (const c of alt.items) check(c.siteId, true);
+      for (const alt of item.alternatives) for (const c of alt.items) check(c, true);
     } else {
-      check(item.siteId, false);
+      check(item, false);
     }
+  }
+  for (const siteId of crossings) {
+    const kind = kindById.get(siteId);
+    if (kind === undefined) issues.push({ code: "SITE_UNKNOWN", siteId });
+    else if (kind !== "crossing_point") issues.push({ code: "CROSSING_KIND", siteId });
   }
   return issues;
 }

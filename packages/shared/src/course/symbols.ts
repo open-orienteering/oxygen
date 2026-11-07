@@ -35,7 +35,22 @@ export interface CourseSymbolIdx {
   dangerousArea: number;
   dangerousAreaBorder: number;
   dangerousAreaDashed: number;
+  /** 702, the map-issue point (upper purple; setter views only, §10.3). */
+  mapIssue: number;
+  /**
+   * The crossing point (§10.3) as the library has it: ISOM 2017-2's 710 is
+   * a `line` drawn along the passage; ISSprOM 2019-2 has the 710.1 `point`
+   * and the 710.2 `section` line (one object per side).
+   */
+  crossing: { line?: number; point?: number; section?: number };
 }
+
+/** ISOM 710's drawn body along the passage, mm at the library scale (wings beyond it): ISSprOM 710.1's size. */
+export const CROSSING_BODY_MM = 3.0;
+/** The section form's length along the passage, mm at the library scale (§10.3; no stored length). */
+export const CROSSING_SECTION_MM = 6.0;
+/** ISSprOM 710.2: each line's offset from the passage's centre line, mm at the library scale (710.1's gap). */
+export const CROSSING_SECTION_OFFSET_MM = 0.75;
 
 export interface CourseSymbolSet {
   symbols: RenderSymbol[];
@@ -61,6 +76,8 @@ const BORROW: Partial<Record<string, string>> = {
 /** 704 em per digit height for Liberation Sans (the legacy overlay's ratio). */
 const EM_PER_DIGIT = 1 / CONTROL_NUMBER_CAP_HEIGHT_RATIO;
 const KNOCKOUT_OUTLINE_UM = 150;
+
+const hasCode = (libraryId: SymbolLibraryId, code: string) => !!getLibraryEntry(`${libraryId}:${code}`);
 
 function resolveCode<T extends RenderSymbol["type"]>(libraryId: SymbolLibraryId, code: string, type: T, index: ReadonlyMap<string, number>, factor: number): Extract<RenderSymbol, { type: T }> {
   const id = `${libraryId}:${code}`;
@@ -151,12 +168,21 @@ export function courseSymbols(doc: Pick<CourseDocumentContext, "libraryId" | "do
   const symbols: RenderSymbol[] = [
     start, circle, finish, number, leader, leg, line("707"), line("708"), line("711"), oobArea, oobAreaBorder, oobAreaDashed, whiteout,
     crossHatched(oobArea, ""), crossHatched(oobAreaBorder, ".b"), crossHatched(oobAreaDashed, ".c"),
+    point("702"),
   ];
+  // §10.3: the library's crossing symbols, after the fixed ones.
+  const crossing: CourseSymbolIdx["crossing"] = {};
+  if (hasCode(doc.libraryId, "710.1")) {
+    crossing.point = symbols.push(point("710.1")) - 1;
+    crossing.section = symbols.push(line("710.2")) - 1;
+  } else {
+    crossing.line = symbols.push(line("710")) - 1;
+  }
   const startPart = start.glyph.parts[0];
   return {
     symbols,
     idx: { start: 0, circle: 1, finish: 2, number: 3, leader: 4, leg: 5, markedRoute: 6, restrictedLine: 7, forbiddenRoute: 8, oobArea: 9, oobAreaBorder: 10, oobAreaDashed: 11, whiteout: 12,
-      dangerousArea: 13, dangerousAreaBorder: 14, dangerousAreaDashed: 15 },
+      dangerousArea: 13, dangerousAreaBorder: 14, dangerousAreaDashed: 15, mapIssue: 16, crossing },
     circleRadiusUm: (ring.diameterUm! - ring.widthUm!) / 2,
     finishRadiusUm: ((ringOf(finish).diameterUm ?? 0) - (ringOf(finish).widthUm ?? 0)) / 2,
     startRadiusUm: startPart.geometry ? Math.hypot(startPart.geometry.coords[0], startPart.geometry.coords[1]) : 0,

@@ -20,12 +20,22 @@ import type { CourseLayerObject } from "./objects.js";
 
 export type { AngularGap, FractionGap };
 
+/**
+ * A site's kind (`controls.kind`, 08 §4.2). `crossing_point` and
+ * `map_issue` are never items (course-layer.md §10.3); a `map_exchange`
+ * is an item drawn as a control until sections arrive (F5).
+ */
+export type CourseSiteKind = "control" | "start" | "finish" | "crossing_point" | "map_issue" | "map_exchange";
+
+/** How an item is drawn: a control circle, the start triangle or the finish. */
+export type CourseItemRole = "control" | "start" | "finish";
+
 /** A control site: one `controls` row (08 §4.2). */
 export interface CourseSite {
   id: string;
   /** Display code (first punch code, else name / seq). */
   code: string;
-  kind: "control" | "start" | "finish";
+  kind: CourseSiteKind;
   x: number;
   y: number;
   /** `controls.circle_gaps`: authored circle cuts, compass degrees. A non-empty list replaces the automatic cuts (course-layer.md §6.4). */
@@ -53,7 +63,7 @@ export interface CourseCorridor {
 /**
  * The stored `LegProps` the layer reads (08 §4.3) of the leg *into* an
  * item: authored gaps (replacing the automatic ones), style and bends
- * (§10.1), the corridor (§10.2). `crossing` may ride along and is not read.
+ * (§10.1), the corridor (§10.2), the crossing point it runs through (§10.3).
  */
 export interface CourseLegProps {
   /** Fractions of the leg's (bent) length. */
@@ -63,12 +73,18 @@ export interface CourseLegProps {
   /** Paper mm: the leg runs from the previous site through these to its own. */
   bends?: MapPoint[];
   corridor?: CourseCorridor;
+  /**
+   * A `crossing_point` site the leg runs through (§10.3): the site joins
+   * the leg's polyline on its nearest segment and 710 turns along it.
+   * `section`: the section form (ISSprOM 710.2; ISOM's 710 drawn longer).
+   */
+  crossing?: { controlId: string; section?: boolean };
 }
 
 export interface CourseItem {
   siteId: string;
-  /** How the item is drawn; default the site's kind (`firstAsStart` / `lastAsFinish` set it). */
-  role?: CourseSite["kind"];
+  /** How the item is drawn; default the site's kind (`firstAsStart` / `lastAsFinish` set it; an exchange draws as a control). */
+  role?: CourseItemRole;
   leg?: CourseLegProps;
   /** Hide this visit's number (08 §4.2); the site stays an obstacle-free label-less circle. */
   numberHidden?: boolean;
@@ -120,6 +136,13 @@ export interface CourseViewOptions {
   window?: MapPoint[];
   /** Placeholder values for map-anchored text (`{course}` …). */
   textValues?: MapTextValues;
+  /**
+   * Setter marks (§10.3; 08 §4.2 "renders only in setter views"): draw the
+   * map-issue points (702) and every crossing point, referenced or not.
+   * The editor's Course and All-controls views and the all-controls and
+   * setter sheets set it; a course sheet never does.
+   */
+  setterMarks?: boolean;
 }
 
 /** One compact point feature the overprint is cut around, paper mm. */
@@ -187,18 +210,27 @@ export interface CourseRenderObject extends RenderObject {
   ref: CourseRef;
 }
 
+/** How a drawn site is drawn: an item role, 710 or 702 (§10.3). */
+export type DerivedSiteRole = CourseItemRole | "crossing_point" | "map_issue";
+
 export interface DerivedSite {
   id: string;
   code: string;
-  role: CourseSite["kind"];
+  role: DerivedSiteRole;
   x: number;
   y: number;
   /** Effective circle gaps (authored or automatic), compass degrees; controls only. */
   cuts: AngularGap[];
   /** Number centre and leader, paper mm y-up; `collides` when the placer fell back to a colliding box (§3.5). */
   label?: { text: string; x: number; y: number; leader?: { x1: number; y1: number; x2: number; y2: number }; collides?: true };
-  /** 701 rotation, degrees counter-clockwise (apex towards the first control). */
+  /**
+   * 701 rotation, degrees counter-clockwise (apex towards the first
+   * control). A crossing point: the direction of passage, degrees
+   * counter-clockwise from +x (the leg through it; 90 when no leg names it).
+   */
   angleDeg?: number;
+  /** A crossing point drawn in its section form (§10.3). */
+  section?: true;
 }
 
 export interface DerivedLeg {
@@ -214,6 +246,8 @@ export interface DerivedLeg {
   pieces: MapPoint[][];
   /** The stored corridor resolved to paper mm (§10.2); it follows `points`, never `pieces`. */
   corridor?: DerivedCorridor;
+  /** The crossing point the leg runs through (§10.3), its site id; one of `points`. */
+  crossing?: string;
 }
 
 /** A leg's corridor on paper (course-layer.md §10.2). */
@@ -229,7 +263,7 @@ export interface DerivedCourse {
   id: string;
   orderMode: CourseStructure["orderMode"];
   /** Positioned items in order: site id + role. */
-  sequence: { siteId: string; role: CourseSite["kind"] }[];
+  sequence: { siteId: string; role: CourseItemRole }[];
   legs: DerivedLeg[];
 }
 
