@@ -4,15 +4,11 @@
 # Works against either a Dockerized PostgreSQL (USE_DOCKER=1, typically the
 # one in docker-compose.yml) or a native PostgreSQL running on the host.
 # The fixture itself is docs/screenshots/fixtures/showcase.sql — a portable,
-# anonymized dump derived from Vinterserien data. The OCAD source is a
-# generated synthetic file; overview tiles (z <= 13) are retained.
-# (see scripts/anonymize-vinterserien.ts and scripts/lib/ocad-fixture.mjs).
-#
-# NOTE (v0.6.1, row E5): the fixture is still in the pre-v0.6.1 shape — it
-# inserts map_files.file_data and map_tiles, which the E5 migration
-# dropped — so it fails against a v0.6.1 database. Use an image up to
-# v0.6.0 for the demo until the fixture is regenerated on the document
-# pipeline (follow-up row in docs/research/vector-map-pipeline/SLICES.md).
+# anonymized dump derived from Vinterserien data. Its map is a generated
+# synthetic OCAD on the document pipeline (a map_sources row, the imported
+# map_documents row and the pinned map_files row; see
+# scripts/anonymize-vinterserien.ts, scripts/lib/showcase-map.mjs and
+# docs/demo.md). It needs the v0.6.1 schema or later.
 #
 # The fixture is idempotent: it cascade-deletes any existing event whose
 # name_id matches before re-inserting, so re-running is safe.
