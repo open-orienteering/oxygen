@@ -69,6 +69,28 @@ describe("writePage", () => {
     expect(ops).toMatch(/\/G\d+ Do/);
   });
 
+  it("a marked-route leg (707, F1) prints as dashes: one subpath per dash, no d operator, in the map layer after black", async () => {
+    const base = pageScene("page-ring");
+    const items = [{ siteId: "S" }, { siteId: "31" }, { siteId: "32", leg: { style: "marked_route" as const, bends: [{ x: 10, y: 0 }] } }, { siteId: "F" }];
+    const routed: PageInput = { ...base, course: { ...base.course, structure: { version: 1, id: "c", orderMode: "ordered", items } } };
+    const mapOps = (ops: string) => ops.slice(ops.indexOf(" cm", ops.indexOf(" re W n")), ops.lastIndexOf("0.014173228 0 0 0.014173228 0 0 cm"));
+    const plain = mapOps(content(await PDFDocument.load(await build([base])), 0)).split("\n");
+    const ops = mapOps(content(await PDFDocument.load(await build([routed])), 0)).split("\n");
+    const subpaths = (l: string) => l.match(/ m /g)?.length ?? 0;
+    const dashedIn = (lines: string[]) => lines.filter((l) => subpaths(l) >= 3 && l.endsWith(" S Q"));
+    // The map's own dashed lines (505, 106) are in both; the route is the one more.
+    const route = dashedIn(ops).filter((l) => !plain.includes(l));
+    expect(route).toHaveLength(1);
+    expect(ops.join("\n")).not.toMatch(/\] [\d.]+ d\b/);
+    const at = ops.indexOf(route[0]);
+    // 707's 0.35 mm in the map layer's 5 µm unit; purple (the circles' colour), drawn after black.
+    expect(ops.slice(0, at).reverse().find((l) => / w( |$)/.test(l))).toMatch(/^70 w/);
+    const colour = ops.slice(0, at).reverse().find((l) => / K$/.test(l));
+    expect(colour).toBe(ops.find((l) => / K$/.test(l)));
+    expect(ops.lastIndexOf("0 0 0 1 K")).toBeLessThan(at);
+    expect(ops.lastIndexOf("0 0 0 1 K")).toBeGreaterThan(ops.indexOf(colour!));
+  });
+
   it("cmyk writes no rg, rgb no k", async () => {
     const cmyk = content(await PDFDocument.load(await build([pageScene("page-ring")], "cmyk")), 0);
     const rgb = content(await PDFDocument.load(await build([pageScene("page-ring")], "rgb")), 0);
