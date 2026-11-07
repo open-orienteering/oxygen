@@ -18,6 +18,7 @@
 
 import { withObjectColours } from "../course/colour-stack.js";
 import { type DescriptionRow, type DescriptionSheetHeader, descriptionBlockSize } from "../course-maps/description-rows.js";
+import type { DescriptionCopies } from "../course-maps/description-sheet-options.js";
 import type { DocumentColour } from "../map-document/header.js";
 import type { PassStream } from "../render/pass-stream.js";
 import type { RenderSymbol } from "../render/symbol.js";
@@ -34,14 +35,6 @@ import type { PdfWriter } from "./writer.js";
 export const DESCRIPTION_SHEET_PAPER = { widthMm: 210, heightMm: 297 } as const;
 /** The sheet's margin on every side, mm. */
 export const DESCRIPTION_SHEET_MARGIN_MM = 10;
-/** The cell sizes offered (08 §4.6: 5–7 mm). */
-export const DESCRIPTION_SHEET_CELLS = [5, 6, 7] as const;
-export type DescriptionSheetCell = (typeof DESCRIPTION_SHEET_CELLS)[number];
-/** Default space between two blocks, mm. */
-export const DESCRIPTION_SHEET_DEFAULT_GAP_MM = 5;
-
-/** `count`: the class's runners + vacancies; `fill`: one sheet's worth; a number: that many. */
-export type DescriptionCopies = "count" | "fill" | number;
 
 /** One class's (or course's) block and how many runners it is for. */
 export interface DescriptionSheetBlock {

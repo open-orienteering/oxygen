@@ -2751,15 +2751,21 @@ test.describe("F11: description sheets (docs/course-print.md §6.4)", () => {
     await page.getByTestId("editor-export-descriptions").click();
     const dialog = page.getByTestId("editor-descriptions-dialog");
     await expect(dialog).toBeVisible();
+    // Focus starts inside the dialog, and Tab keeps it there.
+    await expect(dialog.locator(":focus")).toHaveCount(1);
+    for (let i = 0; i < 12; i++) await page.keyboard.press("Tab");
+    await expect(dialog.locator(":focus")).toHaveCount(1);
     // Every class with a course is checked by default.
     for (const c of classes) await expect(dialog.getByTestId(`editor-descriptions-class-${c.id}`)).toBeChecked();
     await dialog.getByTestId("editor-descriptions-none").click();
     await expect(dialog.getByTestId("editor-descriptions-download")).toBeDisabled();
     await dialog.getByTestId(`editor-descriptions-class-${a.id}`).check();
     await dialog.getByTestId(`editor-descriptions-class-${b.id}`).check();
-    // Typing in the dialog arms no tool (the editor's single keys are inert while it is open).
     await dialog.getByTestId("editor-descriptions-copies-value").fill("2");
     await expect(dialog.getByTestId("editor-descriptions-copies-n")).toBeChecked();
+    // A tool's key typed in the dialog arms no tool (the editor's single keys are inert while it is open).
+    await dialog.getByTestId("editor-descriptions-copies-value").press("k");
+    await expect(page.getByTestId("editor-tool-K")).not.toHaveAttribute("aria-pressed", "true");
     await dialog.getByTestId("editor-descriptions-cell").selectOption("5");
 
     const [download] = await Promise.all([page.waitForEvent("download"), dialog.getByTestId("editor-descriptions-download").click()]);

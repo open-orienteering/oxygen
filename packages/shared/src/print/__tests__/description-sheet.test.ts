@@ -60,6 +60,17 @@ describe("descriptionGrid / tileDescriptionSheets", () => {
     expect(pages[0].blocks).toHaveLength(columns * rows);
   });
 
+  it.each([
+    [6, 0, 3, 2],
+    [5, 20, 3, 2],
+    [5, 0, 4, 3],
+    [7, 30, 2, 2],
+  ])("the gap counts between blocks only: %i mm cells, %i mm gap → %i × %i", (cell, gap, columns, rows) => {
+    expect(descriptionGrid({ widthMm: 8 * cell, heightMm: 17 * cell }, { gapMm: gap })).toEqual({ columns, rows, perPage: columns * rows });
+    const [page] = tileDescriptionSheets([tall("H21")], { cellSizeMm: cell, gapMm: gap, copies: "fill" });
+    expect(page.blocks[1].x - page.blocks[0].x).toBe(8 * cell + gap);
+  });
+
   it("places blocks row-major from the top-left inside the margin, never past it", () => {
     const [page] = tileDescriptionSheets([tall("H21")], opts(6));
     expect(page.blocks.map((b) => [b.x, b.y])).toEqual([

@@ -13,17 +13,26 @@
  * through — tiled on A4 portrait by `tileDescriptionSheets`
  * (`@oxygen/shared/print`). Printed on demand: no `course_maps` row (the
  * slice F split's decision), no base map needed, and no print worker —
- * there is no document to decode, so the pages are written in process.
+ * there is no document to decode, so the pages are written in process,
+ * one page per turn of the event loop (~20 ms each) under a render-gate
+ * permit, so a readout never waits on more than a page.
  */
 
 import type { FastifyInstance } from "fastify";
-import { WITHDRAWN_STATUSES, defaultTemplateSettings, getPaperDimensions } from "@oxygen/shared";
+import {
+  DESCRIPTION_SHEET_CELLS,
+  DESCRIPTION_SHEET_DEFAULT_CELL,
+  DESCRIPTION_SHEET_DEFAULT_GAP_MM,
+  DESCRIPTION_SHEET_MAX_COPIES,
+  DESCRIPTION_SHEET_MAX_GAP_MM,
+  type DescriptionCopies,
+  WITHDRAWN_STATUSES,
+  defaultTemplateSettings,
+  getPaperDimensions,
+} from "@oxygen/shared";
 import {
   type ColourMode,
-  type DescriptionCopies,
   type DescriptionSheetBlock,
-  DESCRIPTION_SHEET_CELLS,
-  DESCRIPTION_SHEET_DEFAULT_GAP_MM,
   DescriptionTooTallError,
   PdfWriter,
   composeDescriptionPage,
@@ -33,20 +42,17 @@ import {
 } from "@oxygen/shared/print";
 import type { Prisma, PrismaClient } from "../generated/prisma/client.js";
 import { prisma } from "../db.js";
+import { renderGate } from "../map-render-limits.js";
 import { assertRestAccess } from "../restGuard.js";
 import { bundledPdfFaces, loadBundledFonts } from "../render/fonts.js";
 import { valueToRunnerStatus } from "../statusConvert.js";
 import { getBaseMapInfoOrNull } from "./map-source.js";
-import { type LayoutControlSource, type LayoutTemplateSource, layoutControlsFromCourseControls, layoutCourseEnds, resolveMapLayout } from "./resolve-layout.js";
+import { type LayoutTemplateSource, layoutControlsFromCourseControls, layoutCourseEnds, resolveMapLayout } from "./resolve-layout.js";
 
 type Db = PrismaClient | Prisma.TransactionClient;
 
 /** The `maps.pdf` cap (docs/course-print.md §8.3). */
 export const DESCRIPTIONS_MAX_PAGES = 200;
-/** Most copies one `copies=<n>` asks for. */
-export const DESCRIPTIONS_MAX_COPIES = 500;
-/** Largest gap between blocks, mm. */
-export const DESCRIPTIONS_MAX_GAP_MM = 30;
 
 /** A request the route answers with 400 and this message. */
 export class DescriptionsRequestError extends Error {}
@@ -84,13 +90,13 @@ export function parseDescriptionsQuery(q: DescriptionsQuery): DescriptionsReques
     if (q.copies === "count" || q.copies === "fill") copies = q.copies;
     else {
       const n = Number(q.copies);
-      if (!/^\d+$/.test(q.copies) || n < 1 || n > DESCRIPTIONS_MAX_COPIES) {
-        throw new DescriptionsRequestError(`copies must be count, fill or a number from 1 to ${DESCRIPTIONS_MAX_COPIES}`);
+      if (!/^\d+$/.test(q.copies) || n < 1 || n > DESCRIPTION_SHEET_MAX_COPIES) {
+        throw new DescriptionsRequestError(`copies must be count, fill or a number from 1 to ${DESCRIPTION_SHEET_MAX_COPIES}`);
       }
       copies = n;
     }
   }
-  let cellSizeMm = 6;
+  let cellSizeMm: number = DESCRIPTION_SHEET_DEFAULT_CELL;
   if (q.cell !== undefined && q.cell !== "") {
     cellSizeMm = Number(q.cell);
     if (!(DESCRIPTION_SHEET_CELLS as readonly number[]).includes(cellSizeMm)) throw new DescriptionsRequestError(`cell must be one of ${DESCRIPTION_SHEET_CELLS.join(", ")} (mm)`);
@@ -98,7 +104,7 @@ export function parseDescriptionsQuery(q: DescriptionsQuery): DescriptionsReques
   let gapMm = DESCRIPTION_SHEET_DEFAULT_GAP_MM;
   if (q.gap !== undefined && q.gap !== "") {
     gapMm = Number(q.gap);
-    if (!Number.isFinite(gapMm) || gapMm < 0 || gapMm > DESCRIPTIONS_MAX_GAP_MM) throw new DescriptionsRequestError(`gap must be a number of millimetres from 0 to ${DESCRIPTIONS_MAX_GAP_MM}`);
+    if (!Number.isFinite(gapMm) || gapMm < 0 || gapMm > DESCRIPTION_SHEET_MAX_GAP_MM) throw new DescriptionsRequestError(`gap must be a number of millimetres from 0 to ${DESCRIPTION_SHEET_MAX_GAP_MM}`);
   }
   return { classSeqs, courseSeqs, copies, cellSizeMm, gapMm };
 }
@@ -142,7 +148,7 @@ export async function selectDescriptionBlocks(db: Db, event: { id: bigint; name:
     const ends = layoutCourseEnds(
       { ...course, structure: course.structure ?? null },
       course.courseControls.map((cc) => cc.control.id),
-      allControls as Array<LayoutControlSource & { name: string; kind: string }>,
+      allControls,
     );
     const layout = resolveMapLayout({
       kind: "course",
@@ -211,6 +217,8 @@ export async function buildDescriptionsPdf(opts: DescriptionsPdfOptions): Promis
   const writer = await PdfWriter.create({ faces: await bundledPdfFaces(), deterministic: opts.deterministic, info: opts.info });
   const warnings = [...writer.warnings];
   for (const page of tileDescriptionSheets(opts.blocks, options)) {
+    // One page per turn of the event loop: card readouts run between pages (course-print.md §6.4, §8.2).
+    await new Promise<void>((resolve) => setImmediate(resolve));
     const composed = composeDescriptionPage(page, fonts);
     for (const w of composed.warnings) warnings.push(`${page.label}: ${w.code}: ${w.message}`);
     writeDescriptionPage(writer, composed, { mode: opts.mode ?? "cmyk" });
@@ -237,12 +245,15 @@ export function registerDescriptionsPdfRoute(server: FastifyInstance): void {
       if (!event || event.removed) return reply.code(404).send({ error: "Event not found" });
       const blocks = await selectDescriptionBlocks(db, event, request);
       if (blocks.length === 0) return reply.code(404).send({ error: "No descriptions" });
-      const out = await buildDescriptionsPdf({
-        blocks,
-        request,
-        mode: "cmyk",
-        info: { title: `${event.name} descriptions`, author: event.organizerName || undefined },
-      });
+      // A permit of the render gate, as every print takes (course-print.md §8.2): no more prints at once than the gate allows.
+      const out = await renderGate().run(() =>
+        buildDescriptionsPdf({
+          blocks,
+          request,
+          mode: "cmyk",
+          info: { title: `${event.name} descriptions`, author: event.organizerName || undefined },
+        }),
+      );
       for (const warning of out.warnings) req.log.warn({ nameId }, `descriptions.pdf: ${warning}`);
       return reply
         .header("Content-Type", "application/pdf")

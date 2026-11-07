@@ -8,6 +8,8 @@
  * (`descriptionSheetsUrl`; docs/course-print.md §6.4).
  */
 
+import type { DescriptionCopies, DescriptionSheetCell } from "@oxygen/shared";
+
 export type ExportId = "sheet" | "course" | "class" | "all" | "allControls" | "descriptions" | "iofxml" | "ppen";
 
 export interface ExportEntry {
@@ -66,11 +68,8 @@ export function exportEntries(s: ExportState): ExportEntry[] {
   ];
 }
 
-/** `count`: the class's runners + vacancies; `fill`: one sheet's worth; a number: that many. */
-export type DescriptionCopies = "count" | "fill" | number;
-
 /** `descriptions.pdf` for the dialog's choice (docs/course-print.md §6.4): always explicit classes. */
-export function descriptionSheetsUrl(nameId: string, o: { classSeqs: readonly number[]; copies: DescriptionCopies; cell: 5 | 6 | 7; gap?: number }): string {
+export function descriptionSheetsUrl(nameId: string, o: { classSeqs: readonly number[]; copies: DescriptionCopies; cell: DescriptionSheetCell; gap?: number }): string {
   const q = new URLSearchParams({ classes: o.classSeqs.join(","), copies: String(o.copies), cell: String(o.cell) });
   if (o.gap !== undefined) q.set("gap", String(o.gap));
   return `/api/maps/${encodeURIComponent(nameId)}/descriptions.pdf?${q}`;

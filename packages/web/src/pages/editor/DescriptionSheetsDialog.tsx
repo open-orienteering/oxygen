@@ -4,29 +4,40 @@
  * export menu. Classes (every class with a course checked by default),
  * copies (runners + vacancies, one full sheet, or a number) and the cell
  * size → `descriptions.pdf`. A modal like the map-info dialog: portalled to
- * the fullscreen element or the body, and no keydown reaches the editor's
+ * the fullscreen element or the body, focus on the first control when it
+ * opens and Tab kept inside it, and no keydown reaches the editor's
  * shortcuts while it is open (Escape closes it).
  */
 
 import { useEffect, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { useTranslation } from "react-i18next";
+import {
+  DESCRIPTION_SHEET_CELLS,
+  DESCRIPTION_SHEET_DEFAULT_CELL,
+  DESCRIPTION_SHEET_MAX_COPIES,
+  type DescriptionCopies,
+  type DescriptionSheetCell,
+} from "@oxygen/shared";
 import { trpc } from "../../lib/trpc";
 import { downloadSameOriginFile } from "../../lib/download-api";
-import { type DescriptionCopies, descriptionSheetsUrl } from "../../lib/editor/export-menu";
+import { descriptionSheetsUrl } from "../../lib/editor/export-menu";
 
 type CopiesMode = "count" | "fill" | "n";
-const CELLS = [5, 6, 7] as const;
-const MAX_COPIES = 500;
+const MAX_COPIES = DESCRIPTION_SHEET_MAX_COPIES;
 
 export function DescriptionSheetsDialog({ nameId, onClose }: { nameId: string; onClose: () => void }) {
   const { t } = useTranslation("editor");
   const classes = trpc.class.list.useQuery();
-  const withCourse = useMemo(() => (classes.data ?? []).filter((c) => c.courseIds.length > 0), [classes.data]);
+  // Class order as the route's default: sort index, then seq.
+  const withCourse = useMemo(
+    () => (classes.data ?? []).filter((c) => c.courseIds.length > 0).sort((a, b) => a.sortIndex - b.sortIndex || a.id - b.id),
+    [classes.data],
+  );
   const [checked, setChecked] = useState<Set<number> | null>(null);
   const [mode, setMode] = useState<CopiesMode>("count");
   const [n, setN] = useState(1);
-  const [cell, setCell] = useState<(typeof CELLS)[number]>(6);
+  const [cell, setCell] = useState<DescriptionSheetCell>(DESCRIPTION_SHEET_DEFAULT_CELL);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const titleId = "editor-descriptions-title";
@@ -35,9 +46,20 @@ export function DescriptionSheetsDialog({ nameId, onClose }: { nameId: string; o
   // Every class with a course, once the list has loaded.
   const selected = checked ?? new Set(withCourse.map((c) => c.id));
 
+  // A modal (the map-info dialog's rule): no keydown reaches the editor's handlers (window, capture phase), Escape
+  // closes, Tab cycles inside the dialog and never reaches the page under the backdrop.
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       e.stopPropagation();
+      if (e.key === "Tab") {
+        const items = boxRef.current ? [...boxRef.current.querySelectorAll<HTMLElement>("button:not([disabled]), input:not([disabled]), select:not([disabled])")] : [];
+        if (items.length === 0) return;
+        const at = items.indexOf(document.activeElement as HTMLElement);
+        const next = at === -1 ? 0 : (at + (e.shiftKey ? -1 : 1) + items.length) % items.length;
+        e.preventDefault();
+        items[next].focus();
+        return;
+      }
       if (e.key !== "Escape") return;
       e.preventDefault();
       onClose();
@@ -45,6 +67,7 @@ export function DescriptionSheetsDialog({ nameId, onClose }: { nameId: string; o
     window.addEventListener("keydown", onKey, true);
     return () => window.removeEventListener("keydown", onKey, true);
   }, [onClose]);
+  useEffect(() => { boxRef.current?.querySelector<HTMLElement>("input, select, button")?.focus(); }, []);
 
   const toggle = (id: number) => {
     const next = new Set(selected);
@@ -128,9 +151,9 @@ export function DescriptionSheetsDialog({ nameId, onClose }: { nameId: string; o
 
           <label className="flex items-center gap-2 text-xs text-slate-700">
             <span className="font-medium text-slate-600">{t("descriptionSheetsCell")}</span>
-            <select data-testid="editor-descriptions-cell" value={cell} onChange={(e) => setCell(Number(e.target.value) as (typeof CELLS)[number])}
+            <select data-testid="editor-descriptions-cell" value={cell} onChange={(e) => setCell(Number(e.target.value) as DescriptionSheetCell)}
               className="rounded border border-slate-200 px-1.5 py-0.5 cursor-pointer">
-              {CELLS.map((c) => <option key={c} value={c}>{c} mm</option>)}
+              {DESCRIPTION_SHEET_CELLS.map((c) => <option key={c} value={c}>{c} mm</option>)}
             </select>
           </label>
 
