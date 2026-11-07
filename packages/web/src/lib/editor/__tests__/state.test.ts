@@ -16,6 +16,9 @@ describe("showSelectionRing (docs/course-editor.md §6.1)", () => {
     const placed = editorReducer(initialEditorState, { type: "placed", id: 7 });
     expect(placed).toMatchObject({ selectedControlId: 7, placed: true });
     expect(editorReducer(placed, { type: "select", id: 7 }).placed).toBe(false);
+    // Field keeps the placed selection as it is; Layout drops the selection and the flag with it.
+    expect(editorReducer(placed, { type: "mode", mode: "field" })).toMatchObject({ selectedControlId: 7, placed: true });
+    expect(editorReducer(placed, { type: "mode", mode: "layout" })).toMatchObject({ selectedControlId: null, placed: false });
   });
 });
 

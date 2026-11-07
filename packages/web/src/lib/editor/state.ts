@@ -69,7 +69,7 @@ export function editorReducer(state: EditorState, action: EditorAction): EditorS
       // selected, a tool, a phantom and the selections of Course mode are dropped.
       if (action.mode === state.mode) return state;
       return action.mode === "layout"
-        ? { ...state, mode: "layout", tool: SELECT, phantom: null, selectedControlId: null, multi: [], selectedObjectId: null }
+        ? { ...state, mode: "layout", tool: SELECT, phantom: null, selectedControlId: null, placed: false, multi: [], selectedObjectId: null }
         : { ...state, mode: action.mode };
     case "view":
       // Class view needs a class (the "class" action); the other views drop it.

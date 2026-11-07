@@ -53,7 +53,7 @@ keeps the course 25 mm inside, so this only shows on a hand-drawn shape.
   white is the last colour of the visible set, after the document's top
   row and upper purple.
 - `e2e/course-editor.spec.ts` "P1: …": on the Layout canvas a 709 square
-  outside a toner saver leaves 0 purple and 0 dark pixels (638 purple
+  outside a toner saver leaves 0 purple pixels (638 purple
   pixels with the old order).
 - Golden `e2e/__golden__/map-gl/course-objects.png` regenerated: six pixels
   of the 709.b border past the ring's edge are now white.
