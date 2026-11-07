@@ -117,7 +117,9 @@ by the server, so the offline `local-readout.ts` can match without a
 live database connection. The cache is invalidated by tRPC's
 `utils.competition.dashboard.invalidate()` whenever a control's
 `Numbers` changes, so reconnecting clients pick up the new codes
-automatically.
+automatically. A runner is matched against her own course (her variant,
+`runner.list`'s `courseId`) before her class's — `courseOf` in
+`local-readout.ts`; see "Forked courses and variants".
 
 ### 3. Courses page (display)
 
@@ -214,6 +216,10 @@ code at the relevant position. Editing the course's text input back to
 | Matcher (`matchPunchesToCourse`, including multi-code, renumbered) | `packages/api/src/__tests__/cardReadout.test.ts` |
 | End-to-end renumber → detail → readout → save → unknown-code error | `packages/api/src/__tests__/integration/course-controls-renumber.test.ts` |
 | Existing E2E flows (no Id↔Numbers divergence) | `e2e/courses.spec.ts`, `e2e/kiosk-readout.spec.ts`, `e2e/webserial.spec.ts` |
+| Variants: the pick and the dealing (`pickLeastPopulated`, `startOrderCompare`, `dealVariants`) | `packages/api/src/__tests__/variants.test.ts` |
+| Variants: the pool rule, the invariant at every seam, `distributeVariants`, reads, readout on the runner's variant, events.push dealing | `packages/api/src/__tests__/integration/runner-variants.test.ts`, `eventor-reentry.test.ts` |
+| Offline matching on the runner's course (`courseOf`, `computeCardReadout`) | `packages/web/src/lib/__tests__/local-readout.test.ts` |
+| Variants on the Classes page, Distribute, the start list keys, the Variant select | `e2e/classes.spec.ts` |
 
 ## Status semantics
 
@@ -319,19 +325,91 @@ still be punched, but order does not matter. See
 [free-order-courses.md](free-order-courses.md) for the full model,
 rendering rules, and IOF `randomOrder` interop.
 
-## Forked courses
+## Forked courses and variants
 
 A course with variation groups (a root) has one child course per variant
 (`course-layer.md` §12): an ordinary course with its own
 `course_controls`, length and legs, so punch matching, results and the
 Eventor upload read a variant exactly as any course — through
 `runner.courseId ?? class.courseId`. The class keeps the root as its
-course; its stage-0 `class_course_pools` rows are the root's variants. A
-runner's own variant (`runner.courseId`) is assigned before the race
-(F6b); a variant that a structure edit removes clears `runner.courseId`
-on its runners (journaled `runner.updated { courseId: null }`). Until
-F6b, nothing writes a variant to a runner, so a runner in a pooled class
-is matched against the root's first-alternatives path.
+course; its stage-0 `class_course_pools` rows are the root's variants
+(the class's **pool**).
+
+**A runner's variant is pre-set before the race** (user answer 3,
+2026-11-07): `runner.courseId` is the runner's variant, set by the desk,
+dealt per class, or picked automatically — **never by the readout**. A
+runner is validated against her own variant only, so a run of another
+variant is a mispunch like any other (the red-exit accept of another
+variant is F6c's, by hand at the desk). Implementation:
+`packages/api/src/variants.ts`.
+
+**The pool rule.** `runner.create` / `runner.update` accept `courseId`
+(a course seq): valid only when it is one of the runner's (new) class's
+pooled variants, else `PRECONDITION_FAILED` `VARIANT_NOT_IN_POOL` — a
+class without a pool takes no `courseId` at all. A class change clears
+the variant and deals one of the new class's pool; `courseId: null` on a
+pooled class asks for a new deal (the Variant select offers no "none").
+`runner.updated.fields` carries the resulting `courseId` (seq or null),
+so a peer replays the pick and never re-picks.
+
+**The invariant: every runner in a pooled class has a variant.** The
+pick is `assignVariant` — the least-populated variant of the pool among
+the class's non-removed runners (withdrawn ones count), ties the first
+key. Where it runs:
+
+| Seam | Call |
+|------|------|
+| `runner.create` without `courseId` (the Registration dialog sends none) | `assignVariant`, journaled in `runner.registered.courseId` |
+| `runner.update` / `bulkUpdate { classId }` (a class change) | clear + `assignVariant` |
+| `class.create` / `update` / `bulkUpdate { courseId }`, `course.importCourses`' class mapping | `syncClassPool` → `reconcileClassVariants` (deals a fresh pool in start order, balanced; clears a runner left on a variant when the class has no pool) |
+| A variant vanishing under re-materialisation (`syncVariants`, `clearRemovedVariants`) | its runners are nulled, then reconciled: dealt one of the remaining pool, null only when the class has none |
+| `events.push` of a station `runner.registered` without `courseId`, or a station `runner.updated { classId }` without `courseId` | the writing node (no lease, or the leaseholder) deals one and journals `runner.updated { courseId }` **after** the ingested entry; a follower deals nothing and waits for the leaseholder's entry (single-allocator rule, `offline-architecture.md`) |
+| Eventor `sync` (re-entry: new entries, class moves) | `reconcileVariants` over the event's classes, once at the end (not journaled, as the sync's runner writes are not) |
+| Test Lab `registerFictionalRunners` / `registerRunners` | `reconcileVariants` |
+
+Pool changes journal in the order `course.upserted` (root, children) →
+`class.upserted` → `runner.updated` per runner (`course-layer.md`
+§12.4).
+
+**Dealing.** `class.distributeVariants { classId, mode: "startOrder" |
+"random", onlyUnassigned, seed? }` (`manageRaceProcedure`) deals the pool
+round-robin in key order over the class's runners in start order (start
+time ascending, none last; then start number, none last; then name), so
+consecutive starters get different variants; `random` shuffles that
+order first (seeded Fisher–Yates — a seed reproduces the deal).
+`onlyUnassigned` (the default) keeps every runner already on a pooled
+variant and gives each other runner, in start order, the
+least-populated variant. A runner who **has raced** — a finish time, or
+a result status (OK, MP, DNF, DQ, over max time, no timing, out of
+competition) — is never re-dealt (`skipped` in the response); the desk
+changes her variant by hand. One journaled `runner.updated { courseId }`
+per changed runner; the class row is untouched. A class without a pool
+is refused (`CLASS_NOT_POOLED`). The draw does not deal variants: run
+*Distribute variants* after the draw.
+
+**Reads.** `runner.list` (`courseId`, 0 = the class's), `runner.getById`
+(`courseId`, `variantKey`), `lists.startList` (`variantKey`, shown as
+`H21 · AC`), `course.variantList` (`runnerCount`, every class on the
+root), `class.detail` (`variants: [{ variantKey, courseId, runnerCount
+}]`, this class's runners, `[]` without a pool). Matching:
+`performReadout` and the results / Eventor paths already read
+`runner.courseId ?? class.courseId`; `storeReadout`'s relevance score
+(read path 1) and the offline `local-readout.ts` (read path 2,
+`courseOf`) read the runner's course before the class's. The dashboard's
+`courses` include the variants, and `runner.list` carries `courseId`, so
+offline matching uses the runner's variant; a runner registered offline
+has none until the writing node deals one on sync, and is matched
+against the root meanwhile.
+
+**UI.** The Classes page's class detail lists the variants with this
+class's runner counts (`class-variants`, `class-variant-<key>`) and a
+**Distribute variants…** action (mode select; *Only runners without a
+variant*, on by default; a confirm when it is off). The Runners page's
+expanded row has a **Variant** select (`runner-variant`) when the class
+has a pool. The start list shows the key after the class.
+
+Out of scope here: relay leg / team variant schemes (`stage` > 0,
+teams), a draw-panel option that deals, per-runner named map pages.
 
 ## Course length
 

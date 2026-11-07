@@ -125,5 +125,6 @@
   "cardReturned": "Bricka inlämnad",
   "flagOC": "Utom tävlan",
   "flagNT": "Utan tidtagning",
-  "flagPayBefore": "Betala före resultat"
+  "flagPayBefore": "Betala före resultat",
+  "variant": "Variant"
 }

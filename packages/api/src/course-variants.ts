@@ -12,7 +12,9 @@
  * rewritten, a soft-deleted one is revived (same uuid — the key pair is
  * unique), a key that is gone soft-deletes its child and nulls
  * `runner.courseId` on the runners that pointed at it; the stage-0 pools
- * of the classes on the root become its live children. It writes rows
+ * of the classes on the root become its live children, and every runner
+ * of a class whose pool changed — the nulled ones included — is dealt a
+ * variant of the new pool (F6b's invariant, `variants.ts`). It writes rows
  * only: `emitVariantSync` journals what it touched, after the root's own
  * `course.upserted` (a peer applying a child needs the parent row).
  */
@@ -25,6 +27,7 @@ import { persistStructure } from "./course-structure.js";
 import { rebuildCourseLengths } from "./course-geometry.js";
 import { emitClassUpserted, emitCourseUpserted } from "./referenceJournal.js";
 import { appendJournal } from "./journalEmit.js";
+import { reconcileVariants, type RunnerVariantChange } from "./variants.js";
 
 type Db = PrismaClient | Prisma.TransactionClient;
 type Offsets = Record<string, { dx: number; dy: number }>;
@@ -35,8 +38,12 @@ export interface VariantSync {
   childIds: string[];
   /** Classes whose stage-0 pool changed. */
   classIds: string[];
-  /** Runners whose `course_id` was nulled (their variant vanished). */
-  runners: { seq: number; cardNo: number | null }[];
+  /**
+   * Runners whose `course_id` changed: their variant vanished or their
+   * class's pool changed. `courseId` is the variant they were dealt (a
+   * course seq), or null when their class has no pool.
+   */
+  runners: RunnerVariantChange[];
 }
 
 export const EMPTY_SYNC: VariantSync = { childIds: [], classIds: [], runners: [] };
@@ -160,24 +167,51 @@ export async function syncVariants(
   }
   if (live.length > 0) await rebuildCourseLengths(db, eventId, live);
 
-  // A runner whose variant vanished has none (F6b re-assigns).
-  const runners = droppedIds.length
-    ? await db.runner.findMany({
-        where: { eventId, courseId: { in: droppedIds } },
-        select: { id: true, seq: true, cardNo: true },
-        orderBy: { seq: "asc" },
-      })
-    : [];
-  if (runners.length > 0) {
-    await db.runner.updateMany({ where: { id: { in: runners.map((r) => r.id) } }, data: { courseId: null } });
-  }
-
+  // A runner whose variant vanished loses it, then is dealt one of the
+  // class's new pool below (null when her class has none).
+  const nulled = droppedIds.length ? await nullRunnersOn(db, eventId, droppedIds) : [];
   const classIds = await syncPoolsOfRoot(db, eventId, rootId, live, droppedIds);
   return {
     childIds: [...live, ...droppedIds],
     classIds,
-    runners: runners.map((r) => ({ seq: r.seq, cardNo: r.cardNo })),
+    runners: await reconcileAfter(db, eventId, nulled, classIds),
   };
+}
+
+/** Null `course_id` on the runners of `courseIds`; returns them with their class. */
+async function nullRunnersOn(
+  db: Db,
+  eventId: bigint,
+  courseIds: readonly string[],
+): Promise<{ seq: number; cardNo: number | null; classId: string | null }[]> {
+  const runners = await db.runner.findMany({
+    where: { eventId, courseId: { in: [...courseIds] } },
+    select: { id: true, seq: true, cardNo: true, classId: true },
+    orderBy: { seq: "asc" },
+  });
+  if (runners.length > 0) {
+    await db.runner.updateMany({ where: { id: { in: runners.map((r) => r.id) } }, data: { courseId: null } });
+  }
+  return runners;
+}
+
+/**
+ * F6b's invariant after a pool change: reconcile the changed classes and
+ * the nulled runners' classes; a nulled runner the reconcile did not deal
+ * (no class, or a class without a pool) stays null. One change per runner.
+ */
+async function reconcileAfter(
+  db: Db,
+  eventId: bigint,
+  nulled: readonly { seq: number; cardNo: number | null; classId: string | null }[],
+  classIds: readonly string[],
+): Promise<RunnerVariantChange[]> {
+  const classes = [...classIds, ...nulled.flatMap((r) => (r.classId ? [r.classId] : []))];
+  const dealt = classes.length > 0 ? await reconcileVariants(db, eventId, classes) : [];
+  const out = new Map<number, RunnerVariantChange>();
+  for (const r of nulled) out.set(r.seq, { seq: r.seq, cardNo: r.cardNo, courseId: null });
+  for (const r of dealt) out.set(r.seq, r);
+  return [...out.values()].sort((a, b) => a.seq - b.seq);
 }
 
 /** Live children of a root, key order. */
@@ -235,14 +269,24 @@ async function syncPoolsOfRoot(
 
 /**
  * A class's stage-0 variant pool after its course changed (`class.create` /
- * `update` / `bulkUpdate`): the live children of its course when that is a
- * root, else none. Returns whether the pool changed (the caller's
- * `class.upserted` carries it).
+ * `update` / `bulkUpdate`, an import's class mapping): the live children of
+ * its course when that is a root, else none; then its runners are dealt
+ * the new pool's variants (or cleared off the old one's — F6b). Writes rows
+ * only: the caller's `class.upserted` carries the pool, `emitVariantSync`
+ * (or `emitRunnerVariants`) journals the runners after it.
  */
-export async function syncClassPool(db: Db, classId: string): Promise<boolean> {
-  const cl = await db.class.findUniqueOrThrow({ where: { id: classId }, select: { courseId: true } });
+export async function syncClassPool(db: Db, classId: string): Promise<VariantSync> {
+  const cl = await db.class.findUniqueOrThrow({
+    where: { id: classId },
+    select: { courseId: true, eventId: true },
+  });
   const children = cl.courseId ? await liveChildren(db, cl.courseId) : [];
-  return writeClassPool(db, classId, children);
+  const changed = await writeClassPool(db, classId, children);
+  return {
+    childIds: [],
+    classIds: changed ? [classId] : [],
+    runners: await reconcileVariants(db, cl.eventId, [classId]),
+  };
 }
 
 /**
@@ -259,37 +303,36 @@ export async function clearRemovedVariants(db: Db, eventId: bigint): Promise<Var
   });
   const ids = removed.map((c) => c.id);
   if (ids.length === 0) return { childIds: [], classIds: [], runners: [] };
-  const runners = await db.runner.findMany({
-    where: { eventId, courseId: { in: ids } },
-    select: { id: true, seq: true, cardNo: true },
-    orderBy: { seq: "asc" },
-  });
-  if (runners.length > 0) {
-    await db.runner.updateMany({ where: { id: { in: runners.map((r) => r.id) } }, data: { courseId: null } });
-  }
+  const nulled = await nullRunnersOn(db, eventId, ids);
   const stale = await db.classCoursePool.findMany({ where: { courseId: { in: ids } }, select: { classId: true } });
   if (stale.length > 0) await db.classCoursePool.deleteMany({ where: { courseId: { in: ids } } });
-  return {
-    childIds: [],
-    classIds: [...new Set(stale.map((p) => p.classId))],
-    runners: runners.map((r) => ({ seq: r.seq, cardNo: r.cardNo })),
-  };
+  const classIds = [...new Set(stale.map((p) => p.classId))];
+  return { childIds: [], classIds, runners: await reconcileAfter(db, eventId, nulled, classIds) };
 }
 
 /**
  * Journal a sync, after the root's own `course.upserted`: one
  * `course.upserted` per child (removed ones with `removed: true`), one
  * `class.upserted` per class whose pool changed, one `runner.updated
- * { courseId: null }` per runner whose variant vanished.
+ * { courseId }` per runner whose variant changed (the seq dealt, or null).
  */
 export async function emitVariantSync(db: Db, eventId: bigint, sync: VariantSync): Promise<void> {
   for (const id of sync.childIds) await emitCourseUpserted(db, eventId, id);
   for (const id of sync.classIds) await emitClassUpserted(db, eventId, id);
-  for (const r of sync.runners) {
+  await emitRunnerVariants(db, eventId, sync.runners);
+}
+
+/** One `runner.updated { courseId }` per change (a peer replays the seq, never re-picks). */
+export async function emitRunnerVariants(
+  db: Db,
+  eventId: bigint,
+  runners: readonly RunnerVariantChange[],
+): Promise<void> {
+  for (const r of runners) {
     await appendJournal(db, {
       eventId,
       type: "runner.updated",
-      payload: { cardNo: r.cardNo, runnerId: r.seq, fields: { courseId: null } },
+      payload: { cardNo: r.cardNo, runnerId: r.seq, fields: { courseId: r.courseId } },
     });
   }
 }

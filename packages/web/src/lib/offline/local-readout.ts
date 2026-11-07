@@ -64,11 +64,9 @@ export function computeLocalReadout(
   const runner = runners.find((r: RunnerItem) => r.id === runnerId);
   if (!runner) return null;
 
-  // Find class and course
+  // Find class and course: the runner's own (her variant) before the class's
   const cls = dashboard.classes?.find((c: ClassItem) => c.id === runner.classId);
-  const course = cls?.courseId
-    ? dashboard.courses?.find((c: CourseItem) => c.id === cls.courseId)
-    : null;
+  const course = courseOf(runner, cls, dashboard);
 
   // No-op for the manual-finish path (no card data → no matching). Kept
   // here only so future telemetry can report course length etc.
@@ -166,11 +164,9 @@ export function computeCardReadout(
   const runner = runners.find((r: RunnerItem) => r.cardNo === input.cardNo);
   if (!runner) return null;
 
-  // Find class and course
+  // Find class and course: the runner's own (her variant) before the class's
   const cls = dashboard.classes?.find((c: ClassItem) => c.id === runner.classId);
-  const course = cls?.courseId
-    ? dashboard.courses?.find((c: CourseItem) => c.id === cls.courseId)
-    : null;
+  const course = courseOf(runner, cls, dashboard);
   // Use the server-resolved per-position descriptors. Status-aware:
   // multi-code controls, Bad/Optional/BadNoTiming skipping, NoTiming /
   // BadNoTiming leg deductions are all baked into this shape.
@@ -275,6 +271,21 @@ export function lookupRunnerByCard(
   return runners?.find((r: RunnerItem) => r.cardNo === cardNo);
 }
 
+/**
+ * The course a runner is matched against: her own (`runner.courseId`, a
+ * variant of a forked course — docs/course-controls-and-matching.md
+ * "Forked courses and variants") before her class's, as the server's
+ * `performReadout` does.
+ */
+export function courseOf(
+  runner: Pick<RunnerItem, "courseId">,
+  cls: Pick<ClassItem, "courseId"> | undefined,
+  dashboard: Pick<DashboardData, "courses">,
+): CourseItem | null {
+  const id = runner.courseId || cls?.courseId;
+  return id ? (dashboard.courses?.find((c: CourseItem) => c.id === id) ?? null) : null;
+}
+
 // ─── Cache access helpers ───────────────────────────────────
 
 function findCachedQuery<T>(queryClient: QueryClient, key: string): T | undefined {
@@ -292,7 +303,7 @@ function findCachedQuery<T>(queryClient: QueryClient, key: string): T | undefine
 
 // ─── Cached data type shapes (matching tRPC query responses) ──
 
-interface DashboardData {
+export interface DashboardData {
   competition?: { name: string; date?: string; eventorEventId?: number };
   organizer?: { eventorId?: number };
   classes?: ClassItem[];
@@ -300,7 +311,7 @@ interface DashboardData {
   totalControls?: number;
 }
 
-interface ClassItem {
+export interface ClassItem {
   id: number;
   name: string;
   courseId?: number;
@@ -308,7 +319,7 @@ interface ClassItem {
   noTiming?: number;
 }
 
-interface CourseItem {
+export interface CourseItem {
   id: number;
   name: string;
   length: number;
@@ -325,7 +336,7 @@ interface CourseItem {
   expectedPositions: import("@oxygen/shared").ExpectedPosition[];
 }
 
-interface RunnerItem {
+export interface RunnerItem {
   id: number;
   name: string;
   cardNo: number;
@@ -334,6 +345,8 @@ interface RunnerItem {
   clubId?: number;
   className?: string;
   classId?: number;
+  /** The runner's own course seq (her variant); 0 / absent = the class's. */
+  courseId?: number;
   status: number;
   startTime: number;
   finishTime: number;

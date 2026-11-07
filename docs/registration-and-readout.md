@@ -291,7 +291,11 @@ Finds a runner by CardNo, then calls `performReadout()` to compute the full resu
 Steps:
 
 1. **Load runner** → get Class, Course assignment
-2. **Load course** → get expected control sequence
+2. **Load course** → get expected control sequence: the runner's own
+   course (`runner.courseId` — her variant of a forked course) before the
+   class's. A runner is validated against her own variant only; another
+   variant's run is a mispunch (`course-controls-and-matching.md` "Forked
+   courses and variants")
 3. **Load card data**:
    - Prefer runner-linked oCard (`oRunner.Card` FK)
    - Fall back to CardNo lookup
@@ -408,6 +412,25 @@ IF status changed to OK:
 ```
 
 This prevents the situation where a runner is marked OK but has no placement because times are zero.
+
+### 5c. `courseId` — the runner's variant
+
+`runner.create` and `runner.update` accept `courseId` (a course seq):
+the runner's variant in a class whose course is a root with variations,
+pre-set **before the race** (user answer 3, 2026-11-07). It must be one
+of the class's pooled variants, else `PRECONDITION_FAILED`
+`VARIANT_NOT_IN_POOL`. A create without it in a pooled class is dealt the
+least-populated variant; a class change clears it and deals one of the
+new class's pool; `courseId: null` asks for a new deal. The pick travels
+in the journal as the seq (`runner.registered.courseId`,
+`runner.updated.fields.courseId`) so a peer never re-picks; a station
+registration without one is dealt by the writing node on ingest, which
+journals its pick after the entry. Dealing a whole class is
+`class.distributeVariants`. The full rule and its seams:
+`course-controls-and-matching.md` "Forked courses and variants".
+
+`storeReadout`'s relevance score (§3) likewise scores the punches against
+the runner's own course before the class's.
 
 ---
 
@@ -595,7 +618,10 @@ Results are deduplicated, limited to 12, and navigable with arrow keys.
 
 ### 8d. Submission
 
-Creates the runner via `runner.create()` with all form fields. After success:
+Creates the runner via `runner.create()` with all form fields. The dialog
+sends no `courseId`: in a class on a forked course the server deals the
+runner the least-populated variant (§5c), which the desk can change on
+the Runners page. After success:
 
 1. Sends `registration-complete` to kiosk
 2. Prints registration receipt (if printer connected)

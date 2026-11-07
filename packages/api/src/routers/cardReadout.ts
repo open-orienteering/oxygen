@@ -529,7 +529,7 @@ export async function storeReadoutImpl(
   // 3. Link the card to a runner if one matches by card number.
   const runner = await db.runner.findFirst({
     where: { eventId, cardNo: input.cardNo, removed: false },
-    select: { id: true, seq: true, classId: true },
+    select: { id: true, seq: true, classId: true, courseId: true },
   });
   if (runner) {
     await db.runner.update({
@@ -576,10 +576,12 @@ export async function storeReadoutImpl(
       where: { id: runner.classId },
       select: { courseId: true },
     });
-    if (cls?.courseId) {
+    // The runner's own course (her variant, F6b) before the class's.
+    const courseId = runner.courseId ?? cls?.courseId ?? null;
+    if (courseId) {
       const expected = await resolveCourseExpectedPositions(
         db,
-        cls.courseId,
+        courseId,
       );
       const expectedCodes = new Set<number>(
         expected.flatMap((e) => e.codes),

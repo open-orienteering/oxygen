@@ -28,6 +28,7 @@ import {
 import { valueToRunnerStatus } from "../statusConvert.js";
 import { RunnerStatus } from "@oxygen/shared";
 import { toRelative } from "../timeConvert.js";
+import { reconcileVariants } from "../variants.js";
 
 function pick<T>(arr: T[]): T {
   return arr[Math.floor(Math.random() * arr.length)];
@@ -809,6 +810,8 @@ export const testLabRouter = router({
           // unique constraint, skip
         }
       }
+      // Every runner in a pooled class has a variant (F6b).
+      await reconcileVariants(ctx.db, ctx.event.id);
       return { created };
     }),
 
@@ -847,6 +850,8 @@ export const testLabRouter = router({
           // skip
         }
       }
+      // Every runner in a pooled class has a variant (F6b).
+      await reconcileVariants(ctx.db, ctx.event.id, [cls.id]);
       return { created };
     }),
 

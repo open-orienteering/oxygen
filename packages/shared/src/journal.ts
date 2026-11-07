@@ -164,6 +164,14 @@ export interface RunnerRegisteredPayload {
   eventorClubId?: number;
   cardNo: number | null;
   startTime?: number;
+  /**
+   * The runner's own course seq (her variant, F6b), present on
+   * server-emitted entries: a number, or null for "the class's". A peer
+   * inserts it as given and never re-picks (the single-allocator rule);
+   * an entry without the key (a station registration) is dealt one by the
+   * writing node, which journals its pick as a `runner.updated`.
+   */
+  courseId?: number | null;
 }
 
 /**

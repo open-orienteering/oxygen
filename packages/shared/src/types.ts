@@ -462,6 +462,12 @@ export interface RunnerInfo {
   clubName?: string;
   classId: number;
   className?: string;
+  /**
+   * The runner's own course seq — her variant in a class on a root with
+   * variations (docs/course-controls-and-matching.md "Forked courses and
+   * variants"); 0 = the class's course.
+   */
+  courseId?: number;
   startNo: number;
   startTime: number;
   finishTime: number;
@@ -513,6 +519,10 @@ export interface RunnerDetail {
   bib: string;
   entryDate: number; // YYYYMMDD as int
   transferFlags: number;
+  /** The runner's own course seq (her variant); 0 = the class's course. */
+  courseId: number;
+  /** The variant's key when `courseId` is a materialised variant, else null. */
+  variantKey: string | null;
 }
 
 /** Input for creating/updating a runner */
@@ -578,6 +588,8 @@ export interface StartListEntry {
   startTime: number;
   cardNo: number;
   bib: string;
+  /** The runner's variant key (`AC`) when she runs a variant of a forked course. */
+  variantKey?: string;
   hasPunches?: boolean;
   hasStarted?: boolean;
 }
@@ -985,6 +997,8 @@ export interface CourseVariantSummary {
   /** The variant's course seq. */
   courseId: number;
   lengthM: number;
+  /** Non-removed runners whose course is this variant (every class on the root). */
+  runnerCount: number;
 }
 
 /** Course detail with class usage */
@@ -1060,6 +1074,11 @@ export interface ClassManageDetail extends ClassSummary {
   courseLength: number;
   controlCount: number;
   runners: { id: number; name: string; status: number }[];
+  /**
+   * The class's variant pool (stage 0) with this class's runners per
+   * variant, key order; empty when the class's course has no variations.
+   */
+  variants: { variantKey: string; courseId: number; runnerCount: number }[];
 }
 
 // --------------- Start draw types ---------------

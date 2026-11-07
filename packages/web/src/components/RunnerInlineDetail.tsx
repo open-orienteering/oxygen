@@ -41,6 +41,7 @@ export function RunnerInlineDetail({ runnerId, colSpan }: Props) {
 
   const invalidateAll = () => {
     utils.runner.list.invalidate();
+    utils.class.detail.invalidate();
     utils.runner.getById.invalidate({ id: runnerId });
     utils.competition.dashboard.invalidate();
     utils.lists.startList.invalidate();
@@ -142,6 +143,11 @@ export function RunnerInlineDetail({ runnerId, colSpan }: Props) {
               field="classId"
               currentValue={r.classId}
               debouncedSave={debouncedSave}
+            />
+            <VariantSelectField
+              classId={r.classId}
+              courseId={r.courseId}
+              onChange={(courseId) => updateMutation.mutate({ id: runnerId, courseId })}
             />
             <SelectClubField
               label={t("club")}
@@ -458,6 +464,44 @@ function SelectField({
           })) ?? []),
         ]}
       />
+    </div>
+  );
+}
+
+/**
+ * The runner's variant in a class on a forked course (F6b): one of the
+ * class's pooled variants, pre-set before the race. Hidden when the class
+ * has no variants.
+ */
+function VariantSelectField({
+  classId,
+  courseId,
+  onChange,
+}: {
+  classId: number;
+  courseId: number;
+  onChange: (courseId: number) => void;
+}) {
+  const { t } = useTranslation("runners");
+  const detail = trpc.class.detail.useQuery({ id: classId }, { enabled: classId > 0 });
+  const variants = detail.data?.variants ?? [];
+  if (classId <= 0 || variants.length === 0) return null;
+  return (
+    <div>
+      <label className="block text-xs text-slate-500 mb-1">{t("variant")}</label>
+      <select
+        value={variants.some((v) => v.courseId === courseId) ? courseId : ""}
+        onChange={(e) => onChange(Number(e.target.value))}
+        data-testid="runner-variant"
+        className="w-full px-2 py-1.5 text-sm border border-slate-200 rounded-md bg-white focus:outline-none focus:ring-2 focus:ring-blue-400 cursor-pointer"
+      >
+        {!variants.some((v) => v.courseId === courseId) && <option value="">-</option>}
+        {variants.map((v) => (
+          <option key={v.courseId} value={v.courseId}>
+            {v.variantKey}
+          </option>
+        ))}
+      </select>
     </div>
   );
 }

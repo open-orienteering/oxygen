@@ -8,7 +8,8 @@ import {
 } from "@oxygen/shared";
 import { valueToRunnerStatus, runnerStatusToValue } from "../statusConvert.js";
 import { emitClassUpserted } from "../referenceJournal.js";
-import { syncClassPool } from "../course-variants.js";
+import { emitRunnerVariants, syncClassPool } from "../course-variants.js";
+import { distributeClassVariants, poolOf } from "../variants.js";
 
 async function getClassBySeq(
   db: import("../generated/prisma/client.js").PrismaClient,
@@ -58,9 +59,13 @@ async function loadClassDetail(
     : 0;
   const runners = await db.runner.findMany({
     where: { eventId, classId: c.id, removed: false },
-    select: { id: true, seq: true, name: true, status: true },
+    select: { id: true, seq: true, name: true, status: true, courseId: true },
     orderBy: { startNo: "asc" },
   });
+  // The class's variant pool with this class's runners on each (F6b).
+  const pool = await poolOf(db, c.id);
+  const perCourse = new Map<string, number>();
+  for (const r of runners) if (r.courseId) perCourse.set(r.courseId, (perCourse.get(r.courseId) ?? 0) + 1);
   return {
     id: c.seq,
     name: c.name,
@@ -89,6 +94,7 @@ async function loadClassDetail(
       name: r.name,
       status: runnerStatusToValue(r.status),
     })),
+    variants: pool.map((v) => ({ variantKey: v.variantKey, courseId: v.seq, runnerCount: perCourse.get(v.id) ?? 0 })),
   };
 }
 
@@ -329,8 +335,11 @@ export const classRouter = router({
       if (input.classType !== undefined) data.classType = input.classType;
       await ctx.db.$transaction(async (tx) => {
         await tx.class.update({ where: { id: c.id }, data });
-        if (input.courseId !== undefined) await syncClassPool(tx, c.id);
+        // The pool follows the course, the runners the pool (F6b): journaled
+        // after the class so a peer holds the pool first.
+        const sync = input.courseId !== undefined ? await syncClassPool(tx, c.id) : null;
         await emitClassUpserted(tx, ctx.event.id, c.id);
+        if (sync) await emitRunnerVariants(tx, ctx.event.id, sync.runners);
       });
       return { ok: true };
     }),
@@ -378,11 +387,58 @@ export const classRouter = router({
           data,
         });
         for (const r of rows) {
-          if (input.courseId !== undefined) await syncClassPool(tx, r.id);
+          const sync = input.courseId !== undefined ? await syncClassPool(tx, r.id) : null;
           await emitClassUpserted(tx, ctx.event.id, r.id);
+          if (sync) await emitRunnerVariants(tx, ctx.event.id, sync.runners);
         }
       });
       return { ok: true as const, count: rows.length };
+    }),
+
+  /**
+   * Deal the class's variant pool over its runners (F6b;
+   * docs/course-controls-and-matching.md "Forked courses and variants"):
+   * round-robin in start order (`random` shuffles first), so consecutive
+   * starters get different variants; `onlyUnassigned` deals only the
+   * runners without one. Raced runners keep theirs (`skipped`). One
+   * `runner.updated { courseId }` per changed runner; the class row is
+   * untouched.
+   */
+  distributeVariants: manageRaceProcedure
+    .input(
+      z.object({
+        classId: z.number().int(),
+        mode: z.enum(["startOrder", "random"]).default("startOrder"),
+        onlyUnassigned: z.boolean().default(true),
+        seed: z.number().int().optional(),
+      }),
+    )
+    .mutation(async ({ ctx, input }) => {
+      const c = await getClassBySeq(ctx.db, ctx.event.id, input.classId);
+      const result = await ctx.db.$transaction(async (tx) => {
+        const r = await distributeClassVariants(tx, c.id, {
+          mode: input.mode,
+          onlyUnassigned: input.onlyUnassigned,
+          seed: input.seed,
+        });
+        await emitRunnerVariants(tx, ctx.event.id, r.changes);
+        return r;
+      });
+      const counts = await ctx.db.runner.groupBy({
+        by: ["courseId"],
+        where: { classId: c.id, removed: false },
+        _count: { _all: true },
+      });
+      const byCourse = new Map(counts.map((g) => [g.courseId, g._count._all]));
+      return {
+        changed: result.changes.length,
+        skipped: result.skipped,
+        counts: result.pool.map((v) => ({
+          variantKey: v.variantKey,
+          courseId: v.seq,
+          runnerCount: byCourse.get(v.id) ?? 0,
+        })),
+      };
     }),
 
   delete: manageRaceProcedure

@@ -557,9 +557,23 @@ export const courseRouter = router({
       const rows = await ctx.db.course.findMany({
         where: { parentCourseId: c.id, removed: false },
         orderBy: { variantKey: "asc" },
-        select: { seq: true, variantKey: true, lengthM: true },
+        select: { id: true, seq: true, variantKey: true, lengthM: true },
       });
-      return rows.map((r) => ({ variantKey: r.variantKey ?? "", courseId: r.seq, lengthM: r.lengthM }));
+      // Runners per variant, every class on the root (F6b; F8's copies read it).
+      const counts = rows.length
+        ? await ctx.db.runner.groupBy({
+            by: ["courseId"],
+            where: { courseId: { in: rows.map((r) => r.id) }, removed: false },
+            _count: { _all: true },
+          })
+        : [];
+      const byCourse = new Map(counts.map((g) => [g.courseId, g._count._all]));
+      return rows.map((r) => ({
+        variantKey: r.variantKey ?? "",
+        courseId: r.seq,
+        lengthM: r.lengthM,
+        runnerCount: byCourse.get(r.id) ?? 0,
+      }));
     }),
 
   create: coursesEditRaceProcedure
@@ -2135,8 +2149,9 @@ export const courseRouter = router({
               where: { id: cls.id },
               data: { courseId: courseUuid },
             });
-            // The class's variant pool follows its course (§12.4).
-            await syncClassPool(ctx.db, cls.id);
+            // The class's variant pool follows its course (§12.4), and its
+            // runners the pool (F6b).
+            variantSyncs.push(await syncClassPool(ctx.db, cls.id));
             classesAssigned++;
           }
         }
@@ -2204,8 +2219,8 @@ export const courseRouter = router({
           ),
         },
       });
-      // The runners whose variant the import dropped (the courses and pools
-      // travel in the entry above).
+      // The runners whose variant the import dropped or dealt (the courses
+      // and pools travel in the entry above).
       await emitVariantSync(ctx.db, eventId, { childIds: [], classIds: [], runners: variantSync.runners });
 
       return {

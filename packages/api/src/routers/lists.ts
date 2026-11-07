@@ -33,7 +33,10 @@ export const listsRouter = router({
       }
       const runners = await ctx.db.runner.findMany({
         where,
-        include: { class: { select: { name: true, seq: true } } },
+        include: {
+          class: { select: { name: true, seq: true } },
+          course: { select: { variantKey: true } },
+        },
         orderBy: [{ startTime: "asc" }, { startNo: "asc" }],
       });
       const zeroTime = ctx.event.zeroTime;
@@ -60,6 +63,8 @@ export const listsRouter = router({
           startTime: toAbsolute(r.startTime, zeroTime),
           cardNo: r.cardNo ?? 0,
           bib: r.bib,
+          // The runner's variant (F6b): `H21 · AC` on the start list.
+          ...(r.course?.variantKey ? { variantKey: r.course.variantKey } : {}),
           hasPunches: (r.cardNo != null && punchSet.has(r.cardNo)) || undefined,
           hasStarted:
             (r.startTime > 0 &&
