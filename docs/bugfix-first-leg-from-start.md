@@ -38,7 +38,7 @@ A pure helper, `packages/web/src/lib/course-overlay-ids.ts`
 finish?, whatever the control count. Each end is the course's explicit
 `startControlId` / `finishControlId` when it names a live control of
 that role; otherwise, for a legacy course with controls, the one nearest
-its first (last) positioned control, as before; otherwise the event
+its first (last) control when that one is positioned, as before; otherwise the event
 default of `docs/course-layer.md` §6.2 (lowest id, the same
 `effectiveRoleControlId` the inspector's rows use). `firstAsStart` /
 `lastAsFinish` courses get no start / finish added, and an end already at

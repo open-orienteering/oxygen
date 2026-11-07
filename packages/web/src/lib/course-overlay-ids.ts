@@ -5,17 +5,14 @@
  * visit into this list, so a course whose start is missing here draws no
  * pending leg from it.
  */
+import type { CourseSummary } from "@oxygen/shared";
 import { effectiveRoleControlId } from "./course-editor";
 
-/** The slice of `CourseSummary` (`course.list`) the overlay reads. */
-export interface OverlayCourse {
-  /** ";"-separated public ids of the course's controls (the middle). */
-  controls: string;
-  startControlId: number | null;
-  finishControlId: number | null;
-  firstAsStart: boolean;
-  lastAsFinish: boolean;
-}
+/**
+ * The slice of `CourseSummary` (`course.list`) the overlay reads;
+ * `controls` is the ";"-separated public ids of the middle.
+ */
+export type OverlayCourse = Pick<CourseSummary, "controls" | "startControlId" | "finishControlId" | "firstAsStart" | "lastAsFinish">;
 
 /** A `course.controlCoordinates` row: wire status 4 = start, 5 = finish. */
 export interface OverlayControl {
@@ -26,11 +23,11 @@ export interface OverlayControl {
 }
 
 /**
- * Resolve one end of a course: the explicit id when it names a live
+ * Resolve one end of a course: the explicit id when it names a positioned
  * control of the role; else, for a legacy course with controls, the one
- * nearest its first (start) or last (finish) positioned control; else the
- * event default of docs/course-layer.md §6.2 (lowest id). `null` when the
- * event has no control of the role.
+ * nearest its first (start) or last (finish) control when that one is
+ * positioned; else the event default of docs/course-layer.md §6.2 (lowest
+ * id). `null` when the event has no positioned control of the role.
  */
 function resolveEnd(
   controls: readonly OverlayControl[],

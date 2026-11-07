@@ -2363,9 +2363,18 @@ test.describe("P5: the pending leg from a just-placed start", () => {
   desktopOnly();
 
   const near = (p: Pt | undefined, q: Pt, mm: number) => !!p && Math.hypot(p.x - q.x, p.y - q.y) < mm;
-  /** A drawn piece of the course from (the rim of) `from` to (the rim of) `to`: 7 mm covers a start triangle, 4 mm a circle. */
-  const legFrom = async (page: Page, course: string, from: Pt, to: Pt) =>
-    (await legPieces(page, course)).some((l) => near(l.points[0], from, 7) && near(l.points.at(-1), to, 4));
+  /**
+   * A drawn leg of the course from (the rim of) `from` to (the rim of) `to`: 7 mm covers a start triangle, 4 mm a
+   * circle. A leg passing another circle or a boulder is cut into several pieces (course-layer.md §3.2, §3.4), so the
+   * pieces are grouped by `data-leg`: the first piece starts at `from`, the last ends at `to`.
+   */
+  const legFrom = async (page: Page, course: string, from: Pt, to: Pt) => {
+    const pieces = await legPieces(page, course);
+    return [...new Set(pieces.map((l) => l.leg))].some((leg) => {
+      const ps = pieces.filter((l) => l.leg === leg);
+      return near(ps[0].points[0], from, 7) && near(ps[ps.length - 1].points.at(-1), to, 4);
+    });
+  };
 
   test("S places a start and arms K; the hover draws the leg from the start with its length, and the click keeps it", async ({ page }) => {
     await openEditor(page);

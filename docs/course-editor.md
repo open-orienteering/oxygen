@@ -1121,7 +1121,10 @@ whose poll ran meanwhile simply does not conflict (decision log, D10).
   explicit assignment the editor can draw a leg from a start the print does
   not use. Dropping "nearest" for the readers' default (one line in
   `lib/course-overlay-ids.ts`) would make them agree; kept per the
-  feedback-2026-11-07 default.
+  feedback-2026-11-07 default. Also: an explicit start or finish that is
+  not positioned is absent from `course.controlCoordinates`, so the
+  overlay falls back for it (as the old memo did), while the readers keep
+  it and skip its leg.
 - **Presence names without sign-in**: an instance with auth off lists
   every editor as "Someone" (the station name could stand in, D11 left it);
   "moved by X at T" has no name there either. No leave message: a closed
