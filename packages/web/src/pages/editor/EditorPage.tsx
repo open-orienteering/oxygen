@@ -346,12 +346,12 @@ export function EditorPage() {
   // ─── The selected leg (§6.7): the leg-click phantom on the selected course ──
   const selectedLeg = useMemo(() => {
     const insertAt = state.phantom?.insertAt;
-    if (insertAt == null || !structure || state.view === "all" || structure.orderMode !== "ordered") return null;
+    if (insertAt == null || !structure || state.mode !== "course" || state.view === "all" || structure.orderMode !== "ordered") return null;
     const leg = legForInsert(rows, insertAt);
     const item = leg ? explicitItems[leg.itemIndex] : undefined;
     if (!leg || !leg.from.pt || !leg.to.pt || !item || item.kind === "variation") return null;
     return { itemIndex: leg.itemIndex, from: leg.from, to: leg.to, fromPt: leg.from.pt, toPt: leg.to.pt, props: item.leg ?? {} };
-  }, [state.phantom, state.view, structure, rows, explicitItems]);
+  }, [state.phantom, state.mode, state.view, structure, rows, explicitItems]);
   /** Leg editing is desktop and tablet; the phone shows the section read-only (08 §5.5). */
   const legEditable = !!selectedLeg && !isMobile;
   /** One leg edit: a patch of the item's `LegProps`, one `setStructure`, one undo entry. */
