@@ -1832,6 +1832,11 @@ it. This is the only hit-testing: the SVG hit targets and the
 mirrors every editor site as a hidden `editor-site` (paper mm) for
 tests. Without the course layer (§5.4 "Fallback") there is no hit
 index and no target. The hit index is the course part only.
+The filter region's eyedropper (P3, `course-editor.md` §5 / §6.4) is the
+one hit-test over the map document: on the main thread, over the few
+objects whose stored box holds the click, symbolised for the purpose
+(`documentRenderInput { only }`, no fonts) — topmost hit wins, nothing
+goes to the worker.
 Snapping (D5, `course-editor.md` §6.2) does not hit-test the document's
 stream: point centres and vertices are geometry, read once per document
 into a main-thread grid (`lib/editor/snap.ts`); a worker request over the

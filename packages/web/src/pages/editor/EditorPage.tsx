@@ -51,6 +51,8 @@ import { UndoStack } from "../../lib/undo-stack";
 import { useMapDocument } from "../../lib/map-document-cache";
 import { courseObjectsForView, type ProvisionalVisit } from "../../lib/course-layer-request";
 import { snapIndexForDocument } from "../../lib/editor/snap";
+import { pickIndexForDocument } from "../../lib/editor/symbol-pick";
+import { groupOfSymbol, swatchUrl, symbolGroups, type SymbolGroup } from "../../lib/editor/symbol-groups";
 import { deleteVertex, vertexRule, type Vertex } from "../../lib/editor/geometry-edit";
 import { legLengthLabel, legLengthM } from "../../lib/editor/leg-length";
 import { EditorConflict, EditorWrites, type EditorClient } from "../../lib/editor/write-client";
@@ -66,7 +68,7 @@ import { afterPlaced, afterUndo, armPlacement, ghostInfo, switchTool, type Place
 import { step as polygonStep, type AreaKind } from "./tools/polygon";
 import { TONER_MARGIN_MM, tonerSaverGeometry } from "./tools/toner-saver";
 import { mergeCircleGaps, mergeLegGaps, type AngularGap, type FractionGap } from "./tools/gaps";
-import { areaBinding, gapBinding, placeBinding, selectBinding, textBinding, type GapTarget, type Gesture } from "./tools/bindings";
+import { areaBinding, gapBinding, pickSymbolBinding, placeBinding, selectBinding, textBinding, type GapTarget, type Gesture } from "./tools/bindings";
 import { ObjectSection } from "./modes/ObjectSection";
 import { ChecksSection, Inspector, InspectorSection, InventorySection } from "./Inspector";
 import { StatusBar, type SaveState } from "./StatusBar";
@@ -726,6 +728,46 @@ export function EditorPage() {
   );
   const snap = useCallback((pt: Pt): Pt => snapIndex?.nearest(pt) ?? pt, [snapIndex]);
 
+  // ─── The filter region's symbol list and eyedropper (§6.4, §7) ─────
+  const filterSelected = selectedObject?.kind === "filter_region";
+  const pickIndex = useMemo(() => (filterSelected && mapDoc ? pickIndexForDocument(mapDoc.hash, mapDoc.bytes) : null), [filterSelected, mapDoc]);
+  const filterGroups = useMemo(
+    () => (pickIndex && mapDoc ? symbolGroups(mapDoc.header, pickIndex.objectsPerSymbol, i18n.language) : null),
+    [pickIndex, mapDoc, i18n.language],
+  );
+  /** What the last pick did, for the region it was made on. */
+  const [pickNote, setPickNote] = useState<{ objectId: number; note: { kind: "added" | "already"; label: string } | { kind: "miss" } } | null>(null);
+  /** The props the last pick wrote, until the stored object catches up: consecutive picks build on each other. */
+  const pickBase = useRef<{ id: number; version: string; props: CourseObject["props"] } | null>(null);
+  const pickAt = useCallback((pt: Pt, toleranceMm: number) => {
+    const o = selectedObject;
+    if (o?.kind !== "filter_region" || !pickIndex || !filterGroups || !mapDoc) return;
+    const base = (pickBase.current?.id === o.id && pickBase.current.version === o.version ? pickBase.current.props : o.props) as typeof o.props;
+    const hit = pickIndex.symbolAt(pt, toleranceMm);
+    let next: typeof o.props | null = null;
+    let label = "";
+    if (hit && typeof base.symbols === "object" && !Array.isArray(base.symbols)) {
+      // Colours mode: the colour of the pass under the click joins.
+      if (hit.colour !== null) {
+        next = { ...base, symbols: { colours: [...new Set([...base.symbols.colours, hit.colour])].sort((a, b) => a - b) } };
+        label = mapDoc.header.colours[hit.colour]?.name ?? String(hit.colour);
+      }
+    } else if (hit) {
+      // The hit symbol's whole group joins (§7: one entry per heading); "all" becomes a pick of that group.
+      const g: SymbolGroup | null = groupOfSymbol(filterGroups, hit.symbolIdx);
+      if (g) {
+        const cur = Array.isArray(base.symbols) ? base.symbols : [];
+        next = { ...base, symbols: [...new Set([...cur, ...g.members])].sort((a, b) => a - b) };
+        label = `${g.code} ${g.name}`;
+      }
+    }
+    if (!next) { setPickNote({ objectId: o.id, note: { kind: "miss" } }); return; }
+    if (JSON.stringify(next.symbols) === JSON.stringify(base.symbols)) { setPickNote({ objectId: o.id, note: { kind: "already", label } }); return; }
+    setPickNote({ objectId: o.id, note: { kind: "added", label } });
+    pickBase.current = { id: o.id, version: o.version, props: next };
+    updateObject({ ...o, props: base } as CourseObject, { props: next });
+  }, [selectedObject, pickIndex, filterGroups, mapDoc, updateObject]);
+
   // ─── Tools (§6) ──────────────────────────────────────────
   const gesture = useRef<Gesture>(null);
   const [, setRedraw] = useState(0);
@@ -764,6 +806,8 @@ export function EditorPage() {
   }, [armContext, setTool]);
 
   const exitTool = useCallback(() => setTool({ kind: "select" }), [setTool]);
+  // The eyedropper belongs to the selected filter region (§6.4): another selection ends it.
+  useEffect(() => { if (state.tool.kind === "pick-symbol" && !filterSelected) exitTool(); }, [state.tool.kind, filterSelected, exitTool]);
 
   const setChain = useCallback((chain: PlacementState) => {
     chainRef.current = chain;
@@ -963,6 +1007,8 @@ export function EditorPage() {
         });
       case "text":
         return textBinding({ onPlace: placeText, onExit: exitTool, snap });
+      case "pick-symbol":
+        return pickIndex ? pickSymbolBinding({ onPick: pickAt, onExit: exitTool }) : null;
       case "gap":
         return gapTarget ? gapBinding({
           gesture, target: gapTarget, redraw,
@@ -1539,6 +1585,13 @@ export function EditorPage() {
         if (hull) updateObject(selectedObject, { geometry: hull });
       } : undefined}
       onDelete={() => deleteObject(selectedObject)}
+      filter={filterGroups && mapDoc ? {
+        groups: filterGroups,
+        swatchUrl: (g) => swatchUrl(g.swatch, mapDoc.hash, nameId ?? null),
+        picking: state.tool.kind === "pick-symbol",
+        onPickToggle: () => setTool(state.tool.kind === "pick-symbol" ? { kind: "select" } : { kind: "pick-symbol" }),
+        note: pickNote?.objectId === selectedObject.id ? pickNote.note : null,
+      } : undefined}
     />
   ) : (
     <>

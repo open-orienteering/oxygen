@@ -1367,8 +1367,8 @@ test.describe("tools", () => {
       await bySymbols;
       await expect(objectRow(page, id)).toHaveAttribute("data-props", /"symbols":\[\]/, { timeout: 15000 });
       await page.getByTestId("editor-filter-search").fill("505");
-      // Listed by the source code (no applied match in the fixture): symbol index 3, "505.0 Path". A fixture change fails here.
-      const path505 = page.getByTestId("editor-filter-symbol-505.0");
+      // Listed by its heading (no applied match in the fixture: the source code's base, §7): symbol index 3, "505 Path". A fixture change fails here.
+      const path505 = page.getByTestId("editor-filter-symbol-505");
       await expect(path505.locator("xpath=..")).toContainText("Path");
       const updated = waitForTrpc(page, "courseObject.update");
       await path505.click();
@@ -1967,6 +1967,83 @@ test.describe("conflicts (two contexts)", () => {
       await b.close();
       await cleanup("courseMap.delete", { id: sheet.seq });
       await cleanup("mapTemplate.delete", { id: template.seq });
+    }
+  });
+});
+
+// docs/course-editor.md §6.4, §7 (P3): the filter region's list grouped by heading, and the eyedropper.
+test.describe("filter symbol picker (docs/course-editor.md §6.4, §7)", () => {
+  desktopOnly();
+
+  test("the list is one entry per heading with swatches; the eyedropper picks the path by clicking it", async ({ page }) => {
+    await openEditor(page);
+    // e2e/test.ocd: the 505 path (symbol index 3) runs through (0, −1.3) and (18, −7) mm; the 403 area covers the map.
+    const band = { minX: -8, minY: -6, maxX: 8, maxY: -2 };
+    const before = await inkIn(page, band);
+    expect(before, "path ink before the region").toBeGreaterThan(5);
+    await page.keyboard.press("a");
+    await page.keyboard.press("f");
+    for (const p of [{ x: -12, y: -9 }, { x: 12, y: -9 }, { x: 12, y: 1 }, { x: -12, y: 1 }]) {
+      const q = await toPage(page, p);
+      await page.mouse.click(q.x, q.y);
+    }
+    const created = waitForTrpc(page, "courseObject.create");
+    const firstVertex = await toPage(page, { x: -12, y: -9 });
+    await page.mouse.click(firstVertex.x, firstVertex.y);
+    await created;
+    await expect(page.getByTestId("editor-object")).toHaveAttribute("data-object-kind", "filter_region", { timeout: 15000 });
+    const id = (await page.getByTestId("editor-object").getAttribute("data-object-id"))!;
+    try {
+      const bySymbols = waitForTrpc(page, "courseObject.update");
+      await page.getByTestId("editor-filter-by").selectOption("symbols");
+      await bySymbols;
+      await expect(objectRow(page, id)).toHaveAttribute("data-props", /"symbols":\[\]/, { timeout: 15000 });
+
+      // One entry per heading: 505 (source 505.0), 601 (601.0 matched to 601.b) — never the source codes.
+      const list = page.getByTestId("editor-filter-symbols");
+      const path505 = page.getByTestId("editor-filter-symbol-505");
+      await expect(path505).toHaveAttribute("data-members", "3");
+      await expect(path505.locator("xpath=..")).toContainText("Path");
+      await expect(page.getByTestId("editor-filter-symbol-601").locator("xpath=..")).toContainText("Magnetic north line");
+      await expect(list.locator('[data-testid^="editor-filter-symbol-"][data-testid*="."]')).toHaveCount(0);
+      // Each entry has a swatch that loads (the server's library or document preview).
+      const swatch = path505.locator("xpath=..").getByTestId("editor-filter-swatch");
+      await expect.poll(() => swatch.evaluate((i: HTMLImageElement) => i.complete ? i.naturalWidth : 0), { timeout: 15000 }).toBeGreaterThan(0);
+      // The frame (850.1, a rectangle outside the library) is folded under Other.
+      await expect(page.getByTestId("editor-filter-symbol-850")).toHaveCount(0);
+      await page.getByTestId("editor-filter-other").click();
+      await expect(page.getByTestId("editor-filter-symbol-850")).toBeVisible();
+      // Search narrows to the matching heading.
+      await page.getByTestId("editor-filter-search").fill("path");
+      await expect(list.locator('input[type="checkbox"]')).toHaveCount(1);
+      await page.getByTestId("editor-filter-search").fill("");
+
+      // The eyedropper: exclusive (V not lit, no ring); a click on the path adds its group.
+      const pick = page.getByTestId("editor-filter-pick");
+      await pick.click();
+      await expect(pick).toHaveAttribute("aria-pressed", "true");
+      await expect(page.getByTestId("editor-tool-V")).toHaveAttribute("aria-pressed", "false");
+      await expect(page.getByTestId("editor-selection-ring")).toHaveCount(0);
+      const onPath = await toPage(page, { x: 4, y: -1.32 - (4 / 18) * 5.66 });
+      const updated = waitForTrpc(page, "courseObject.update");
+      await page.mouse.click(onPath.x, onPath.y);
+      await updated;
+      await expect(objectRow(page, id)).toHaveAttribute("data-props", /"symbols":\[3\]/, { timeout: 15000 });
+      await expect(path505).toBeChecked({ timeout: 15000 });
+      await expect(page.getByTestId("editor-filter-pick-note")).toHaveAttribute("data-kind", "added");
+      await expect(page.getByTestId("editor-filter-pick-note")).toContainText("505 Path");
+      await expect.poll(() => inkIn(page, band), { timeout: 30000 }).toBeLessThan(before / 3);
+      // Still armed (several picks): the path again is already in the region — no write.
+      await expect(pick).toHaveAttribute("aria-pressed", "true");
+      await page.mouse.click(onPath.x, onPath.y);
+      await expect(page.getByTestId("editor-filter-pick-note")).toHaveAttribute("data-kind", "already");
+      // Esc ends it and V is back, the region still selected.
+      await page.keyboard.press("Escape");
+      await expect(pick).toHaveAttribute("aria-pressed", "false");
+      await expect(page.getByTestId("editor-tool-V")).toHaveAttribute("aria-pressed", "true");
+      await expect(page.getByTestId("editor-object")).toHaveAttribute("data-object-id", id);
+    } finally {
+      await cleanup("courseObject.delete", { id: Number(id) });
     }
   });
 });

@@ -261,5 +261,13 @@
   "addSpecial": "Add instruction",
   "removeSpecial": "Remove instruction",
   "specialCount_one": "{{count}} instruction",
-  "specialCount_other": "{{count}} instructions"
+  "specialCount_other": "{{count}} instructions",
+  "filterPick": "Pick from map",
+  "filterPickHint": "Click the map: the symbol under the pointer joins the region. Esc ends.",
+  "filterPickMiss": "Nothing to pick there",
+  "filterPickAdded": "Added {{label}}",
+  "filterOther_one": "Other ({{count}}): frames, legend, club symbols",
+  "filterOther_other": "Other ({{count}}): frames, legend, club symbols",
+  "filterNoMatch": "No symbol matches",
+  "filterPickAlready": "{{label}} is already in the region"
 }
