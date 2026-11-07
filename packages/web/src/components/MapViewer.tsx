@@ -203,8 +203,6 @@ export interface EditorDescriptionSuggestion {
 export interface MapViewerEditorProps {
   /** Control overlay id (public control id as string) to mark selected. */
   selectedControlId?: string | null;
-  /** The selection is a control just placed: no selection ring (`showSelectionRing`, P1). */
-  selectionPlaced?: boolean;
   /** Dashed-ring anchor (map mm) from an empty-map or leg click. */
   phantom?: { x: number; y: number } | null;
   /** Floating action menu at the selection/phantom anchor. */
@@ -2019,8 +2017,8 @@ export function MapViewer({
       }
 
       // Editor: selection ring. No ring while an exclusive tool is armed
-      // (§6.1) nor on a control just placed (P1): it stays selected, its
-      // purple circle is the mark.
+      // (§6.1): the control just placed stays selected, its purple circle
+      // is the mark.
       if (editor && showSelectionRing(editor) && editor.selectedControlId === c.id) {
         upperElements.push(
           <circle key={`edit-sel-${c.id}`} cx={pos.x} cy={pos.y} r={symbolR * 1.45}

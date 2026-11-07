@@ -263,7 +263,7 @@ describe("geometry editing on a selected object (docs/course-editor.md §7 \"Edi
 describe("armed and area bindings", () => {
   it("placement is exclusive: a click places, right-click exits, touch gets Place / Done", () => {
     const onPlace = vi.fn(), onExit = vi.fn();
-    const b = placeBinding({ ghost: null, onHover: vi.fn(), onPlace, onExit, touch: { placeLabel: "Place", doneLabel: "Done" } });
+    const b = placeBinding({ ghost: null, provisionalDrawn: false, onHover: vi.fn(), onPlace, onExit, touch: { placeLabel: "Place", doneLabel: "Done" } });
     expect(b.exclusive).toBe(true);
     b.onClick!(ptr(1, 1));
     b.onContextMenu!(ptr(1, 1));
@@ -272,19 +272,29 @@ describe("armed and area bindings", () => {
     expect(b.touch?.placeLabel).toBe("Place");
   });
 
-  it("the ghost draws a true-size circle, its label and the pending leg's length; the layer draws the legs", () => {
+  it("with a provisional visit the layer draws the circle: the UI layer adds its label, description and the pending leg's length (P4)", () => {
     const b = placeBinding({
       ghost: { at: { x: 4, y: 2 }, radiusMm: 2.5, role: "control", label: "3 · 47", description: "boulder", legs: [[{ x: 0, y: 0 }, { x: 4, y: 2 }], [{ x: 4, y: 2 }, { x: 8, y: 0 }]], legLabel: "120 m" },
-      onHover: vi.fn(), onPlace: vi.fn(), onExit: vi.fn(), touch: null,
+      provisionalDrawn: true, onHover: vi.fn(), onPlace: vi.fn(), onExit: vi.fn(), touch: null,
     });
     const ids = b.shapes!.map((s) => s.testId);
-    expect(ids).toEqual(expect.arrayContaining(["editor-ghost", "editor-ghost-label", "editor-ghost-description", "editor-leg-length"]));
+    expect(ids).toEqual(expect.arrayContaining(["editor-ghost-label", "editor-ghost-description", "editor-leg-length"]));
+    expect(ids).not.toContain("editor-ghost");
     expect(ids).not.toContain("editor-pending-leg");
+    expect(b.shapes!.filter((s) => s.kind === "circle")).toEqual([]);
     expect(b.shapes!.filter((s) => s.kind === "line")).toEqual([]);
-    expect(b.shapes!.find((s) => s.testId === "editor-ghost")).toMatchObject({ kind: "circle", rMm: 2.5 });
     expect(b.shapes!.filter((s) => s.testId === "editor-leg-length")).toEqual([expect.objectContaining({ kind: "text", x: 2, y: 1, text: "120 m" })]);
-    const noScale = placeBinding({ ghost: { at: { x: 4, y: 2 }, radiusMm: 2.5, role: "control", label: "1", description: null, legs: [[{ x: 0, y: 0 }, { x: 4, y: 2 }]], legLabel: null }, onHover: vi.fn(), onPlace: vi.fn(), onExit: vi.fn(), touch: null });
+    const noScale = placeBinding({ ghost: { at: { x: 4, y: 2 }, radiusMm: 2.5, role: "control", label: "1", description: null, legs: [[{ x: 0, y: 0 }, { x: 4, y: 2 }]], legLabel: null }, provisionalDrawn: true, onHover: vi.fn(), onPlace: vi.fn(), onExit: vi.fn(), touch: null });
     expect(noScale.shapes!.map((s) => s.testId)).not.toContain("editor-leg-length");
+  });
+
+  it("without a provisional visit (no course, or a reuse) the UI layer draws the true-size circle; a finish adds its inner one", () => {
+    const ghost = (role: "control" | "finish") => ({ at: { x: 4, y: 2 }, radiusMm: 2.5, role, label: "Add 47", description: null, legs: [], legLabel: null });
+    const b = placeBinding({ ghost: ghost("control"), provisionalDrawn: false, onHover: vi.fn(), onPlace: vi.fn(), onExit: vi.fn(), touch: null });
+    expect(b.shapes!.filter((s) => s.kind === "circle")).toEqual([expect.objectContaining({ kind: "circle", x: 4, y: 2, rMm: 2.5, testId: "editor-ghost", data: { role: "control" } })]);
+    expect(b.shapes!.map((s) => s.testId)).toContain("editor-ghost-label");
+    const f = placeBinding({ ghost: ghost("finish"), provisionalDrawn: false, onHover: vi.fn(), onPlace: vi.fn(), onExit: vi.fn(), touch: null });
+    expect(f.shapes!.filter((s) => s.kind === "circle").map((s) => s.kind === "circle" && s.rMm)).toEqual([2.5, 1.75]);
   });
 
   it("the area flow: clicks add vertices, the first vertex closes, a vertex is dragged before closing", () => {

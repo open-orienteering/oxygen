@@ -49,7 +49,7 @@ import {
 } from "../../lib/course-editor";
 import { UndoStack } from "../../lib/undo-stack";
 import { useMapDocument } from "../../lib/map-document-cache";
-import { courseObjectsForView, type ProvisionalVisit } from "../../lib/course-layer-request";
+import { courseObjectsForView, provisionalDrawn, type ProvisionalVisit } from "../../lib/course-layer-request";
 import { snapIndexForDocument } from "../../lib/editor/snap";
 import { pickIndexForDocument } from "../../lib/editor/symbol-pick";
 import { groupOfSymbol, swatchUrl, symbolGroups, type SymbolGroup } from "../../lib/editor/symbol-groups";
@@ -994,11 +994,19 @@ export function EditorPage() {
     void createControl(snap(pt), insertIndexForLeg(rows, target.index));
   }, [selectedCourse, rows, createControl, snap]);
 
+  const courseView = state.view !== "all";
+  /** The one course the layer highlights — and the only one it splices the provisional visit into. */
+  const highlightCourseName = courseView ? selectedCourse?.name : undefined;
+
   const tool = state.tool;
   const toolBinding: EditorToolBinding | null = (() => {
     switch (tool.kind) {
       case "place":
-        return placeBinding({ ghost, onHover, onPlace: place, onExit: exitTool, touch: { placeLabel: t("touchPlace"), doneLabel: t("touchDone") } });
+        // The layer draws the visit only under the highlighted course (Course / Class view).
+        return placeBinding({
+          ghost, provisionalDrawn: !!highlightCourseName && provisionalDrawn(provisional),
+          onHover, onPlace: place, onExit: exitTool, touch: { placeLabel: t("touchPlace"), doneLabel: t("touchDone") },
+        });
       case "area":
         return areaBinding({
           gesture, poly: tool.poly, hover: hover?.pt ?? null, onHover, snap,
@@ -1168,7 +1176,6 @@ export function EditorPage() {
   }, [fieldReadOnly, handleMoveEnd]);
 
   // Class view is Course view drawn through the class's sheet (docs/course-layout.md §6).
-  const courseView = state.view !== "all";
   const fitClassPage = useCallback((bounds: { minX: number; minY: number; maxX: number; maxY: number }) => {
     setViewRequest((v) => ({ key: (v?.key ?? 0) + 1, bounds }));
   }, []);
@@ -1178,7 +1185,6 @@ export function EditorPage() {
   const toolActive = state.tool.kind !== "select";
   const editor: MapViewerEditorProps = useMemo(() => ({
     selectedControlId: state.selectedControlId !== null ? String(state.selectedControlId) : null,
-    selectionPlaced: state.placed,
     phantom: state.phantom ? { x: state.phantom.x, y: state.phantom.y } : null,
     contextActions,
     // An active tool opens no action bar (§6): nothing in it, not even the info line and badges.
@@ -1211,7 +1217,7 @@ export function EditorPage() {
     onCourseInfo: setCourseInfo,
     markers: courseChecks.markers,
     layout: classLayout,
-  }), [classLayout, courseChecks.markers, isMobile, fix, sheetPx, fieldMoveEnd, state.selectedControlId, state.placed, state.phantom, contextActions, contextInfo, srrBadge, radioOn, suggestions, tc, courseControlIds, toolActive,
+  }), [classLayout, courseChecks.markers, isMobile, fix, sheetPx, fieldMoveEnd, state.selectedControlId, state.phantom, contextActions, contextInfo, srrBadge, radioOn, suggestions, tc, courseControlIds, toolActive,
     courseView, selectedCourse, moveWarnings, moveEpoch, handleMapClick, handleLabelMoveEnd, handleSelect,
     handleDismiss, handleLegClick, toolBinding, snapIndex, snap, draftObjects, draftFast, viewRequest, provisional]);
 
@@ -1804,7 +1810,7 @@ export function EditorPage() {
             <ControlDescriptionEditor controlCode={descControl.code} initial={descControl.description} onSave={saveDescription} onCancel={closeDescription} />
           ) : null}
           editor={state.mode === "layout" ? layoutMode.editor : editor}
-          highlightCourseName={courseView ? selectedCourse?.name : undefined}
+          highlightCourseName={highlightCourseName}
         />
       </div>
     </div>

@@ -773,10 +773,11 @@ test.describe("tools", () => {
     const before = (await sites(page)).length;
 
     await arm(page, "K");
-    // The ghost: true-size circle, the next number and code; the pending leg from the start, its length at the pointer.
+    // The ghost: the next number and code (the layer draws its circle, P4); the pending leg from the start, its
+    // length at the pointer.
     const first = await emptyPoint(page, 40);
     await page.mouse.move(first.x, first.y);
-    await expect(page.getByTestId("editor-ghost")).toBeAttached({ timeout: 10000 });
+    await expect(page.getByTestId("editor-ghost-label")).toBeAttached({ timeout: 10000 });
     await expect(page.getByTestId("editor-ghost-label")).toHaveText(/^1 · \d+$/);
     // The layer draws the pending leg (§6.1); the UI layer only labels it at the leg's midpoint — the one readout (P2).
     await expect(page.getByTestId("editor-pending-leg")).toHaveCount(0);
@@ -810,7 +811,7 @@ test.describe("tools", () => {
 
     await page.keyboard.press("Escape");
     await expect(page.getByTestId("editor-tool-V")).toHaveAttribute("aria-pressed", "true");
-    await expect(page.getByTestId("editor-ghost")).toHaveCount(0);
+    await expect(page.getByTestId("editor-ghost-label")).toHaveCount(0);
     // In V the selected control has its ring again.
     await clickMap(page, spots[0]);
     await expect(page.getByTestId("editor-selection-ring")).toHaveCount(1, { timeout: 10000 });
@@ -847,7 +848,7 @@ test.describe("tools", () => {
       spots.push(p);
       expect(await legEndsNear(p)).toBe(false);
       await page.mouse.move(p.x, p.y);
-      await expect(page.getByTestId("editor-ghost")).toBeAttached({ timeout: 10000 });
+      await expect(page.getByTestId("editor-ghost-label")).toBeAttached({ timeout: 10000 });
       // The leg into the cursor is a `course-leg` piece of the course: the layer's, with its slits (one round trip per hover).
       await expect.poll(() => legEndsNear(p), { timeout: 15000, message: `pass ${pass}` }).toBe(true);
       await expect(page.getByTestId("editor-pending-leg")).toHaveCount(0);
@@ -863,7 +864,7 @@ test.describe("tools", () => {
 
     // Back to V: no provisional visit, no label; a drag of the middle control labels its two legs.
     await page.keyboard.press("Escape");
-    await expect(page.getByTestId("editor-ghost")).toHaveCount(0);
+    await expect(page.getByTestId("editor-ghost-label")).toHaveCount(0);
     await expect(page.getByTestId("editor-leg-length")).toHaveCount(0);
     // Drop the placed control's selection: its action bar must not be where the drag goes.
     await dropSelection(page);
@@ -2177,7 +2178,7 @@ test.describe("touch (mobile project; docs/course-editor.md §10)", () => {
 test.describe("P1: no blue circle on placing; the toner saver covers everything outside it", () => {
   desktopOnly();
 
-  test("no blue circle beside a placed control: K armed and after its clicks, in Layout and Field; V's Add control too; a click brings the ring", async ({ page }) => {
+  test("no blue circle beside a placed control while K is armed, in Layout and Field (D12)", async ({ page }) => {
     await openEditor(page);
     await newCourse(page, "P1 ring");
     const blue = async () => {
@@ -2189,7 +2190,7 @@ test.describe("P1: no blue circle on placing; the toner saver covers everything 
       await arm(page, "K");
       const a = await emptyPoint(page, 60);
       await page.mouse.move(a.x, a.y);
-      await expect(page.getByTestId("editor-ghost")).toBeAttached({ timeout: 10000 });
+      await expect(page.getByTestId("editor-ghost-label")).toBeAttached({ timeout: 10000 });
       await blue();
       made.push((await place(page, a)).id);
       await blue();
@@ -2203,18 +2204,7 @@ test.describe("P1: no blue circle on placing; the toner saver covers everything 
         await expect(page.getByTestId(`editor-mode-${mode}`)).toHaveAttribute("aria-pressed", "true");
         await blue();
       }
-      if ((await page.getByTestId("editor-tool-V").getAttribute("aria-pressed")) !== "true") await page.keyboard.press("Escape");
-      await expect(page.getByTestId("editor-tool-V")).toHaveAttribute("aria-pressed", "true");
-
-      // V: the phantom marks the click on empty map (no control exists yet); Add control replaces it by the purple
-      // circle alone — the selection shows in the inspector and the action bar, not as a ring (course-editor.md §4).
-      const code = await placeOneShot(page);
-      made.push(code);
-      await blue();
-      await expect(page.getByTestId("editor-action-bar")).toBeVisible();
-      // A click on the control selects it: V's ring.
-      await select(page, code);
-      await expect(page.getByTestId("editor-selection-ring")).toHaveCount(1, { timeout: 10000 });
+      // V's Add control: the P4 describe (the ring is back there, feedback 2026-11-07 item 1).
     } finally {
       for (const id of made) await cleanup("control.delete", { id: Number(id) });
     }
@@ -2429,6 +2419,70 @@ test.describe("P5: the pending leg from a just-placed start", () => {
       await expect(page.getByTestId("editor-tool-V")).toHaveAttribute("aria-pressed", "true");
       await expect(page.getByTestId("editor-leg-length")).toHaveCount(0);
       await expect.poll(() => legFrom(page, name, start.mm, ctl.mm), { timeout: 15000 }).toBe(true);
+    } finally {
+      for (const id of made) await cleanup("control.delete", { id: Number(id) });
+    }
+  });
+});
+
+// docs/course-editor.md §4, §6.1 (P4, feedback 2026-11-07 item 1; corrects P1): the thin circle the user saw beside
+// the purple one was the armed tool's UI-layer ghost circle, concentric with the layer's provisional circle. It is
+// drawn only where the layer draws no provisional visit (no course, a reuse); V's dashed ring is back on a control
+// placed from the phantom's Add control.
+test.describe("P4: the dashed ring back after placing; the ghost circle only without a provisional visit", () => {
+  desktopOnly();
+
+  test("K armed: no ghost circle over the layer's provisional one, the label stays; V's Add control has the ring and the action bar", async ({ page }) => {
+    await openEditor(page);
+    const ghost = page.getByTestId("editor-ghost");
+    const label = page.getByTestId("editor-ghost-label");
+    const ring = page.getByTestId("editor-selection-ring");
+    const made: string[] = [];
+    try {
+      // No course: the layer draws no provisional visit, so the UI layer's circle is the only mark.
+      await page.getByTestId("editor-course-picker").selectOption("");
+      await arm(page, "K");
+      const loose = await emptyPoint(page, 60);
+      await page.mouse.move(loose.x, loose.y);
+      await expect(label).toBeAttached({ timeout: 10000 });
+      await expect(ghost).toHaveCount(1);
+      await page.keyboard.press("Escape");
+      await expect(page.getByTestId("editor-tool-V")).toHaveAttribute("aria-pressed", "true");
+
+      // A course: the layer's provisional circle is the one circle; no ring, no action bar while armed (D12).
+      await newCourse(page, "P4 ring");
+      await arm(page, "K");
+      const a = await emptyPoint(page, 60);
+      await page.mouse.move(a.x, a.y);
+      await expect(label).toHaveText(/^1 · \d+$/, { timeout: 10000 });
+      await expect(ghost).toHaveCount(0);
+      await expect(ring).toHaveCount(0);
+      await expect(page.getByTestId("editor-action-bar")).toHaveCount(0);
+      const first = await place(page, a);
+      made.push(first.id);
+      await expect(controlRows(page)).toHaveCount(1, { timeout: 15000 });
+      const b = await emptyPoint(page, 60, [a]);
+      await page.mouse.move(b.x, b.y);
+      await expect(label).toHaveText(/^2 · \d+$/, { timeout: 10000 });
+      await expect(ghost).toHaveCount(0);
+      await expect(ring).toHaveCount(0);
+
+      // Over an existing control the layer splices that site and adds none: the ghost circle sits on it.
+      const [code] = await regularCodes(page, 1, [first.code]);
+      const over = await sitePoint(page, code);
+      await page.mouse.move(over.x, over.y);
+      await expect(label).toHaveText(`Add ${code}`, { timeout: 10000 });
+      await expect(ghost).toHaveCount(1);
+
+      // V: Add control selects the new control with its dashed ring and the action bar.
+      await page.keyboard.press("Escape");
+      await expect(page.getByTestId("editor-tool-V")).toHaveAttribute("aria-pressed", "true");
+      await dropSelection(page);
+      const added = await placeOneShot(page);
+      made.push((await site(page, added)).id);
+      await expect(ring).toHaveCount(1, { timeout: 10000 });
+      await expect(page.getByTestId("editor-action-bar")).toBeVisible();
+      await expect(ghost).toHaveCount(0);
     } finally {
       for (const id of made) await cleanup("control.delete", { id: Number(id) });
     }
