@@ -1,12 +1,12 @@
 /**
  * Automated screenshot capture for documentation.
  *
- * Seeds a competition from the committed showcase fixture
+ * Loads the committed Demo Competition fixture with scripts/load-showcase.sh
  * (docs/screenshots/fixtures/showcase.sql — an anonymized Vinterserien dump
- * with real controls, courses, classes, cached overview tiles, and a
- * synthetic OCAD backing map)
- * and then drives the frontend through every major user-facing feature
- * with Playwright, capturing one PNG per screen.
+ * with real controls, courses, classes and results on the CC0 Puit de
+ * Laven demo map; docs/demo.md) into the dev database and then drives the
+ * frontend through every major user-facing feature with Playwright,
+ * capturing one PNG per screen. The loaded event stays for the next run.
  *
  * Prerequisites: dev servers running (API on :3002, web on :5173)
  *   pnpm dev
@@ -15,14 +15,17 @@
  *   pnpm docs:screenshots                     — run every step
  *   pnpm docs:screenshots --only=kiosk,tracks — run only the listed steps
  *   pnpm docs:screenshots --list              — print the available step names
- *   pnpm docs:screenshots --keep              — skip final competition delete
+ *   pnpm docs:screenshots --no-load           — use the Demo Competition already loaded
+ *
+ * The fixture goes to load-showcase.sh's database (DATABASE_URL, default
+ * the dev database on :5432).
  *
  * Stepwise capture keeps the pipeline debuggable: each step is self-contained
  * (navigates fresh, screenshots, returns), so a failed step can be retried
  * without rerunning the whole thing.
  */
 import { chromium, type Browser, type BrowserContext, type Page } from "playwright";
-import { readFileSync } from "node:fs";
+import { spawnSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
 import path from "node:path";
 
@@ -32,9 +35,12 @@ import { getMockWebSerialScript } from "../../e2e/helpers/mock-webserial.js";
 
 const API_URL = process.env.API_URL ?? "http://localhost:3002";
 const WEB_URL = process.env.WEB_URL ?? "http://localhost:5173";
-const COMPETITION_NAME = process.env.COMPETITION_NAME ?? "Demo Competition";
+/** The fixture's event (docs/demo.md). */
+const DEMO_NAME_ID = "demo_competition";
+const COMPETITION_NAME = "Demo Competition";
 
 const OUTPUT_DIR = path.dirname(fileURLToPath(import.meta.url));
+const REPO_ROOT = path.join(OUTPUT_DIR, "..", "..");
 
 // ─── Lightweight tRPC caller (no @trpc/client dependency) ────
 // tRPC v11 non-batch: POST raw input, GET with ?input=<json>
@@ -146,52 +152,16 @@ async function withMockedWebSerial(context: BrowserContext): Promise<void> {
   await context.addInitScript(getMockWebSerialScript());
 }
 
-// ─── Competition lifecycle ───────────────────────────────────
+// ─── Demo Competition ────────────────────────────────────────
 
-async function createCompetition(): Promise<string> {
-  const slug = competitionSlug();
-
-  try {
-    const result = await trpcMutate<{ nameId: string }>("competition.create", {
-      name: COMPETITION_NAME,
-      date: "2026-04-15",
-    });
-    return result.nameId;
-  } catch (e: unknown) {
-    const msg = e instanceof Error ? e.message : String(e);
-    if (!msg.includes("already exists") && !msg.includes("database exists")) {
-      throw e;
-    }
-    console.log("  Competition exists, deleting and recreating...");
-    try {
-      await trpcMutate("competition.delete", { nameId: slug });
-    } catch {
-      /* ignore */
-    }
-    const result = await trpcMutate<{ nameId: string }>("competition.create", {
-      name: COMPETITION_NAME,
-      date: "2026-04-15",
-    });
-    return result.nameId;
-  }
-}
-
-function competitionSlug(): string {
-  return COMPETITION_NAME.toLowerCase()
-    .replace(/[åä]/g, "a")
-    .replace(/ö/g, "o")
-    .replace(/[^a-z0-9]+/g, "_")
-    .replace(/^_|_$/g, "");
-}
-
-async function seedShowcase(nameId: string): Promise<void> {
-  const result = await trpcMutate<{ ok: boolean; sizeBytes: number }>(
-    "testLab.seedShowcase",
-    {},
-    { "x-competition-id": nameId },
-  );
-  const mb = (result.sizeBytes / 1024 / 1024).toFixed(2);
-  console.log(`  Seeded showcase fixture (${mb} MB)`);
+/** Load the committed fixture (source row, SQL, map re-match); idempotent. */
+function loadShowcase(): void {
+  const result = spawnSync("bash", [path.join(REPO_ROOT, "scripts", "load-showcase.sh")], {
+    cwd: REPO_ROOT,
+    stdio: "inherit",
+    env: process.env,
+  });
+  if (result.status !== 0) throw new Error(`load-showcase.sh exited with ${result.status}`);
 }
 
 // ─── Capture context ─────────────────────────────────────────
@@ -556,14 +526,14 @@ const STEPS: CaptureStep[] = [
 function parseArgs(argv: string[]): {
   only?: string[];
   list: boolean;
-  keep: boolean;
+  load: boolean;
 } {
   let only: string[] | undefined;
   let list = false;
-  let keep = false;
+  let load = true;
   for (const arg of argv) {
     if (arg === "--list") list = true;
-    else if (arg === "--keep") keep = true;
+    else if (arg === "--no-load") load = false;
     else if (arg.startsWith("--only=")) {
       only = arg
         .slice("--only=".length)
@@ -572,11 +542,11 @@ function parseArgs(argv: string[]): {
         .filter(Boolean);
     }
   }
-  return { only, list, keep };
+  return { only, list, load };
 }
 
 async function main(): Promise<void> {
-  const { only, list, keep } = parseArgs(process.argv.slice(2));
+  const { only, list, load } = parseArgs(process.argv.slice(2));
 
   if (list) {
     console.log("Available steps:");
@@ -591,21 +561,22 @@ async function main(): Promise<void> {
   console.log("Step 1: Health check");
   await healthCheck();
 
-  console.log("Step 2: Create competition");
-  const nameId = await createCompetition();
-  console.log(`  Competition: ${nameId}`);
+  const nameId = DEMO_NAME_ID;
+  if (load) {
+    console.log("Step 2: Load the Demo Competition fixture");
+    loadShowcase();
+  } else {
+    console.log("Step 2: Use the loaded Demo Competition (--no-load)");
+  }
 
-  console.log("Step 3: Seed showcase fixture");
-  await seedShowcase(nameId);
-
-  console.log("Step 4: Select competition");
+  console.log("Step 3: Select competition");
   await trpcMutate(
     "competition.select",
     { nameId },
     { "x-competition-id": nameId },
   );
 
-  console.log("Step 5: Launch browser");
+  console.log("Step 4: Launch browser");
   const browser = await chromium.launch();
   const context = await browser.newContext({
     viewport: { width: 1440, height: 900 },
@@ -627,7 +598,7 @@ async function main(): Promise<void> {
     }
   }
 
-  console.log(`Step 6: Capture (${toRun.length} steps)`);
+  console.log(`Step 5: Capture (${toRun.length} steps)`);
   for (const step of toRun) {
     try {
       console.log(`  → ${step.name}`);
@@ -640,24 +611,8 @@ async function main(): Promise<void> {
 
   await browser.close();
 
-  if (!keep) {
-    console.log("Step 7: Cleanup");
-    try {
-      await trpcMutate("competition.delete", { nameId });
-      console.log("  Deleted competition");
-    } catch (e) {
-      console.warn("  (could not delete competition):", e);
-    }
-  } else {
-    console.log(`Step 7: Keeping competition ${nameId} (--keep)`);
-  }
-
   console.log("\nDone! Screenshots saved to docs/screenshots/\n");
 }
-
-// Silence TS: reference the helper so it's considered used even when only
-// a subset of steps call it through CaptureCtx.
-void readFileSync;
 
 main().catch((e) => {
   console.error("Screenshot capture failed:", e);

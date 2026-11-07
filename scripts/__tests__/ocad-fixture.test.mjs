@@ -13,9 +13,6 @@ import {
   ROTATED_POINTS_OCAD,
   SYMBOL_TYPES_OCAD,
   E2E_TEXT_SYMBOLS,
-  buildShowcaseOcad,
-  SHOWCASE_OCAD,
-  assertShowcaseOcadClean,
 } from "../lib/ocad-fixture.mjs";
 
 const ROOT = path.join(path.dirname(fileURLToPath(import.meta.url)), "../..");
@@ -53,36 +50,6 @@ describe("OCAD fixtures", () => {
       assert.equal(bySym.get(k.symNum).elements.length, k.elements.length);
     }
     assert.deepEqual(file.objects.map((o) => [o.sym, o.ang]), [...kinds.map((k) => [k.symNum, k.ang]), [t.footbridge.symNum, 0]]);
-  });
-
-  it("builds a small synthetic showcase map with the demo CRS", async () => {
-    const buf = buildShowcaseOcad();
-    assertShowcaseOcadClean(buf);
-    assert.ok(buf.length < 80_000, `expected small OCAD, got ${buf.length}`);
-    assert.equal(SHOWCASE_OCAD.fileName, "demo-map.ocd");
-
-    const { readOcad } = require("ocad2geojson");
-    const file = await readOcad(buf, { quietWarnings: true });
-    const crs = file.getCrs();
-    assert.equal(crs.code, 3006, "the showcase grid id maps to SWEREF99 TM, so the import resolves a CRS");
-    assert.equal(crs.scale, SHOWCASE_OCAD.scale);
-    assert.equal(crs.easting, SHOWCASE_OCAD.easting);
-    assert.equal(crs.northing, SHOWCASE_OCAD.northing);
-
-    const [minX, minY, maxX, maxY] = file.getBounds();
-    const [eMinX, eMinY, eMaxX, eMaxY] = SHOWCASE_OCAD.bounds;
-    const slack = 500;
-    assert.ok(Math.abs(minX - eMinX) <= slack, `minX ${minX} vs ${eMinX}`);
-    assert.ok(Math.abs(minY - eMinY) <= slack, `minY ${minY} vs ${eMinY}`);
-    assert.ok(Math.abs(maxX - eMaxX) <= slack, `maxX ${maxX} vs ${eMaxX}`);
-    assert.ok(Math.abs(maxY - eMaxY) <= slack, `maxY ${maxY} vs ${eMaxY}`);
-  });
-
-  it("parses as a renderable OCAD map with terrain objects", async () => {
-    const { readOcad } = require("ocad2geojson");
-    const file = await readOcad(buildShowcaseOcad(), { quietWarnings: true });
-    assert.ok((file.objects?.length ?? 0) > 5, "expected synthetic terrain objects");
-    assert.ok(file.getBounds().length === 4);
   });
 });
 

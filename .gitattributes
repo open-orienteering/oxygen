@@ -1,0 +1,2 @@
+# The demo map files: large single-line XML, not worth a text diff.
+docs/screenshots/fixtures/*.omap -diff
