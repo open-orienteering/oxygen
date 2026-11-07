@@ -1,9 +1,7 @@
 import { memo, useId, useState, useRef, useMemo, useEffect, useCallback } from "react";
 import { useTranslation } from "react-i18next";
-import { Link, useParams } from "react-router-dom";
+import { useParams } from "react-router-dom";
 import { trpc } from "../lib/trpc";
-import { uploadMapFileChunked } from "../lib/map-upload";
-import { useCurrentUser } from "../context/CurrentUserContext";
 import { MapViewer, type ControlOverlay, type CourseOverlay, type MapViewerEditorProps } from "./MapViewer";
 import { useIsWideViewport } from "./map-pane-shared";
 import { courseObjectsForView } from "../lib/course-layer-request";
@@ -17,10 +15,9 @@ import {
   IconProgress,
 } from "./map-icons";
 import { ToolbarButton } from "./ToolbarButton";
-import { NorthLinesBadge } from "./NorthLinesBadge";
-import { ClubMapImportState } from "./ClubMapImportState";
+import { ClubMapPicker } from "./ClubMapPicker";
+import { useMapReplace } from "./useMapReplace";
 import { MapImportState } from "./MapImportState";
-import { formatStalenessDeg, isMeridianStale } from "../lib/north-lines";
 
 /**
  * Public prop surface for `<MapPanel>`. Exported so the shell-owned
@@ -85,11 +82,6 @@ export interface MapPanelPublicProps {
   focusControlCodes?: string[];
   /** Hide the toolbar (filter/description/fullscreen buttons) entirely */
   hideToolbar?: boolean;
-  /**
-   * Show the map-name / replace-map footer row below the viewer. Only the
-   * course editor needs this — other pages hide it to save vertical space.
-   */
-  showMapInfo?: boolean;
   /** GPS route traces to overlay on the map. */
   gpsRoutes?: Array<{ color: string; points: Array<{ lat: number; lng: number }> }>;
   /**
@@ -136,7 +128,6 @@ function MapPanelImpl({
   punchStatusByCode,
   focusControlCodes,
   hideToolbar = false,
-  showMapInfo = false,
   gpsRoutes,
   fillContainer = false,
   onPaneCollapse,
@@ -145,8 +136,6 @@ function MapPanelImpl({
   const { nameId } = useParams<{ nameId: string }>();
   const { t } = useTranslation("dashboard");
   const { t: tl } = useTranslation("library");
-  const { t: tr } = useTranslation("mapReview");
-  const { user, authEnabled } = useCurrentUser();
   // Stable for the lifetime of this MapPanel instance. Exposed as
   // `data-instance-id` on every render-path root so the E2E suite can
   // assert the persistent shell-pane MapPanel doesn't remount across
@@ -269,80 +258,15 @@ function MapPanelImpl({
     return { height: `min(${callerPx}px, calc(100dvh - 8rem))` };
   }, [fillContainer, isFullscreen, isWide, effectiveHeight]);
 
-  const [uploadError, setUploadError] = useState<string | null>(null);
-  const [showLibraryPicker, setShowLibraryPicker] = useState(false);
-  const canQueryLibrary = !authEnabled || Boolean(user);
-  const clubMaps = trpc.clubMap.list.useQuery(undefined, {
-    enabled: canQueryLibrary,
-    staleTime: 30_000,
-  });
-  // Non-blocking: shown once after an upload whose drawn north lines have
-  // drifted from today's magnetic north. The persistent badge next to
-  // the file name carries the same information afterwards.
-  const [uploadNotice, setUploadNotice] = useState<string | null>(null);
-  const noticeForStaleness = useCallback(
-    (stalenessDeg: number | null) =>
-      isMeridianStale(stalenessDeg)
-        ? tl("northLinesStale", { degrees: formatStalenessDeg(stalenessDeg!) })
-        : null,
-    [tl],
-  );
-  // True from the first chunk until the map is applied (or fails).
-  const [uploading, setUploading] = useState(false);
-  // Second half of the upload (docs/map-storage.md §5): the bytes are
-  // already in map_sources; this makes them the event map.
-  const applyUploaded = trpc.course.applyUploadedMap.useMutation({
-    onSuccess: (result) => {
-      setUploadError(null);
-      setUploadNotice(noticeForStaleness(result.meridianStalenessDeg));
-      mapInfo.refetch();
-      mapMetadata.refetch();
-    },
-    onError: (err) => {
-      setUploadError(`Map upload failed: ${err.message}`);
-    },
-  });
-  const useClubMap = trpc.course.useClubMap.useMutation({
-    onSuccess: (result) => {
-      setShowLibraryPicker(false);
-      setUploadError(null);
-      setUploadNotice(noticeForStaleness(result.meridianStalenessDeg));
-      mapInfo.refetch();
-      mapMetadata.refetch();
-    },
-    onError: (err) => {
-      setUploadError(`Map upload failed: ${err.message}`);
-    },
-  });
-  const fileInputRef = useRef<HTMLInputElement>(null);
+  // Upload / replace / club library (docs/map-storage.md §5): the drop zone's; the course editor's map-info
+  // dialog has its own instance (P6).
+  const replace = useMapReplace();
   const [dragOver, setDragOver] = useState(false);
   // Default to hiding unrelated controls when there's a highlighted selection
   const [showOnlyRelevant, setShowOnlyRelevant] = useState(true);
   const [showDescriptions, setShowDescriptions] = useState(defaultShowDescriptions);
 
-  // Every failure path here has to end in `uploadError`. Returning
-  // quietly leaves the drop zone looking untouched, which reads as "the
-  // click did nothing" — the user has no way to tell a rejected file
-  // from a lost one.
-  const handleFile = useCallback((file: File) => {
-    if (!file.name.toLowerCase().endsWith(".ocd")) {
-      setUploadError(`Map upload failed: ${file.name} is not an .ocd file`);
-      return;
-    }
-    setUploadError(null);
-    setUploadNotice(null);
-    setUploading(true);
-    // Every file goes up in 8 MiB chunks (Cloud Run's request ceiling,
-    // resumable per chunk) and is applied by hash afterwards.
-    void uploadMapFileChunked(file, { eventNameId: nameId ?? null })
-      .then(({ fileHash }) => applyUploaded.mutateAsync({ fileHash, fileName: file.name }))
-      .catch((err: unknown) => {
-        const message = err instanceof Error ? err.message : String(err);
-        setUploadError(`Map upload failed: ${message}`);
-      })
-      .finally(() => setUploading(false));
-  }, [applyUploaded, nameId]);
-
+  const { handleFile } = replace;
   const handleDrop = useCallback((e: React.DragEvent) => {
     e.preventDefault();
     setDragOver(false);
@@ -350,61 +274,7 @@ function MapPanelImpl({
     if (file) handleFile(file);
   }, [handleFile]);
 
-  const libraryPicker = showLibraryPicker ? (
-    <div
-      data-testid="club-map-picker"
-      className="fixed inset-0 z-[60] bg-black/40 flex items-center justify-center p-4"
-    >
-      <div className="bg-white rounded-xl shadow-lg max-w-md w-full p-5 space-y-3">
-        <div className="flex items-center justify-between">
-          <h2 className="font-semibold text-slate-900">{tl("pickerTitle")}</h2>
-          <button
-            type="button"
-            className="text-sm text-slate-500 cursor-pointer"
-            onClick={() => setShowLibraryPicker(false)}
-          >
-            {tl("cancel")}
-          </button>
-        </div>
-        <ul className="divide-y divide-slate-100 max-h-80 overflow-auto">
-          {(clubMaps.data ?? []).map((m) => (
-            <li key={m.id}>
-              {/* A series without a version cannot be adopted (06 §6). */}
-              <button
-                type="button"
-                data-testid={`club-map-pick-${m.id}`}
-                className="w-full text-left py-2 px-1 hover:bg-slate-50 cursor-pointer disabled:cursor-not-allowed disabled:opacity-60 disabled:hover:bg-transparent"
-                disabled={m.version == null}
-                title={m.version == null ? tl("notImportedYet") : undefined}
-                onClick={() => useClubMap.mutate({ clubMapId: m.id })}
-              >
-                <div className="font-medium text-sm text-slate-900">{m.name}</div>
-                <div className="text-xs text-slate-500">
-                  {m.scale
-                    ? `1:${Math.round(m.scale).toString().replace(/\B(?=(\d{3})+(?!\d))/g, " ")}`
-                    : tl("noScale")}
-                  {m.sizeBytes != null && (
-                    <>
-                      {" · "}
-                      {m.sizeBytes < 1024 * 1024
-                        ? `${(m.sizeBytes / 1024).toFixed(1)} KB`
-                        : `${(m.sizeBytes / (1024 * 1024)).toFixed(1)} MB`}
-                    </>
-                  )}
-                </div>
-                {m.version == null && (
-                  <ClubMapImportState job={m.importJob} className="text-xs" />
-                )}
-              </button>
-            </li>
-          ))}
-        </ul>
-        {useClubMap.isPending && (
-          <p className="text-xs text-blue-600">{t("uploading")}</p>
-        )}
-      </div>
-    </div>
-  ) : null;
+  const libraryPicker = <ClubMapPicker library={replace.library} />;
 
   // Determine which control IDs belong to the highlighted course(s)
   const courseControlIds = useMemo(() => {
@@ -698,36 +568,27 @@ function MapPanelImpl({
             </svg>
             <p className="text-sm text-slate-500 mb-2">{t("dropMapHere")}</p>
             <button
-              onClick={() => fileInputRef.current?.click()}
+              onClick={replace.openFilePicker}
               className="px-3 py-1.5 text-xs bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition-colors cursor-pointer"
             >
               {t("uploadMap")}
             </button>
-            {(clubMaps.data?.length ?? 0) > 0 && (
+            {replace.library.available && (
               <button
                 type="button"
                 data-testid="use-club-map"
-                onClick={() => setShowLibraryPicker(true)}
+                onClick={() => replace.library.setOpen(true)}
                 className="ml-2 px-3 py-1.5 text-xs border border-blue-200 text-blue-700 rounded-lg hover:bg-blue-50 transition-colors cursor-pointer"
               >
                 {tl("fromClubLibrary")}
               </button>
             )}
-            <input
-              ref={fileInputRef}
-              type="file"
-              accept=".ocd"
-              className="hidden"
-              onChange={(e) => {
-                const file = e.target.files?.[0];
-                if (file) handleFile(file);
-              }}
-            />
-            {uploading && (
+            <input {...replace.fileInput} />
+            {replace.uploading && (
               <div className="mt-2 text-xs text-blue-600">{t("uploading")}</div>
             )}
-            {uploadError && (
-              <div className="mt-2 text-xs text-red-600">{uploadError}</div>
+            {replace.error && (
+              <div className="mt-2 text-xs text-red-600">{replace.error}</div>
             )}
           </div>
         </div>
@@ -840,91 +701,24 @@ function MapPanelImpl({
         )}
       </div>
 
-      {/* Map info — below the map (course editor only) */}
-      {showMapInfo && !hideToolbar && (
-        <div className="mt-1.5 px-0.5 space-y-1.5">
-          <div className="flex items-center justify-between gap-2 flex-wrap">
-            <div className="flex items-center gap-2 flex-wrap min-w-0">
-              {mapInfo.data && (
-                <span className="text-xs text-slate-400 truncate">{mapInfo.data.fileName}</span>
-              )}
-              <NorthLinesBadge
-                stalenessDeg={mapMetadata.data?.meridianStalenessDeg}
-                compact
-                hideCurrent
-              />
-              {nameId && mapMetadata.data?.documentHash && (
-                // Optional for event maps (06 §5.1, map-symbols.md §8.7);
-                // this row is the course editor's only, never the kiosk's.
-                <Link
-                  to={`/${nameId}/map-review/${mapMetadata.data.documentHash}`}
-                  data-testid="map-review-link"
-                  className="text-xs text-blue-600 hover:text-blue-800"
-                >
-                  {tr("openReview")}
-                </Link>
-              )}
-            </div>
-            <div className="flex items-center gap-2">
-              {!isFullscreen && canFilter && !toolbar && (
-                <button
-                  onClick={() => setShowOnlyRelevant((v) => !v)}
-                  className={`text-xs px-2 py-1 rounded-md transition-colors cursor-pointer ${showOnlyRelevant
-                      ? "bg-purple-100 text-purple-700 font-medium"
-                      : "text-slate-500 hover:text-slate-700 hover:bg-slate-100"
-                    }`}
-                >
-                  {showOnlyRelevant ? t("showAllControls") : t("hideOtherControls")}
-                </button>
-              )}
-              <button
-                onClick={() => fileInputRef.current?.click()}
-                className="text-xs text-blue-600 hover:text-blue-800 cursor-pointer"
-              >
-                {t("replaceMap")}
-              </button>
-              {(clubMaps.data?.length ?? 0) > 0 && (
-                <button
-                  type="button"
-                  data-testid="use-club-map"
-                  onClick={() => setShowLibraryPicker(true)}
-                  className="text-xs text-blue-600 hover:text-blue-800 cursor-pointer"
-                >
-                  {tl("fromClubLibrary")}
-                </button>
-              )}
-            </div>
-          </div>
-        </div>
-      )}
-
-      <input
-        ref={fileInputRef}
-        type="file"
-        accept=".ocd"
-        className="hidden"
-        onChange={(e) => {
-          const file = e.target.files?.[0];
-          if (file) handleFile(file);
-        }}
-      />
-      {uploading && (
+      {/* The drop zone's upload feedback, still showing once its map is in (the map-info dialog shows its own). */}
+      {replace.uploading && (
         <div className="mt-1 text-xs text-blue-600">{t("uploadingNewMap")}</div>
       )}
-      {uploadError && (
-        <div className="mt-1 text-xs text-red-600">{uploadError}</div>
+      {replace.error && (
+        <div className="mt-1 text-xs text-red-600">{replace.error}</div>
       )}
-      {uploadNotice && (
+      {replace.notice && (
         <div
           data-testid="map-upload-notice"
           className="mt-1 flex items-start gap-2 rounded-md border border-amber-200 bg-amber-50 px-2 py-1 text-xs text-amber-800"
         >
-          <span className="flex-1">{uploadNotice}</span>
+          <span className="flex-1">{replace.notice}</span>
           <button
             type="button"
             className="cursor-pointer text-amber-700 hover:text-amber-900"
             aria-label={tl("cancel")}
-            onClick={() => setUploadNotice(null)}
+            onClick={replace.dismissNotice}
           >
             ×
           </button>

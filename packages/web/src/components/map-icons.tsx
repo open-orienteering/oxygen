@@ -176,13 +176,24 @@ export function IconProgress({ className, title }: IconProps) {
   );
 }
 
-/** Three rising bars — the course editor's course-info popover (count, length, climb, scale). */
+/** Three rising bars — the course editor's course-info popover (count, length, climb, the sheet). */
 export function IconStats({ className, title }: IconProps) {
   return (
     <svg {...base} className={className}>
       {title ? <title>{title}</title> : null}
       <path d="M5 16V11M10 16V7M15 16V4" />
       <path d="M3 16.5h14" />
+    </svg>
+  );
+}
+
+/** A folded map, three panels — the course editor's map-info dialog (name, scale, north lines, replace). */
+export function IconMap({ className, title }: IconProps) {
+  return (
+    <svg {...base} className={className}>
+      {title ? <title>{title}</title> : null}
+      <path d="M2.75 5.25 7.25 3.5l5.5 2 4.5-1.75v11L12.75 16.5l-5.5-2-4.5 1.75z" />
+      <path d="M7.25 3.5v11M12.75 5.5v11" />
     </svg>
   );
 }

@@ -2,7 +2,10 @@
  * What the editor tells about the course and the save (docs/course-editor.md
  * §2, §3, §8): the rows of the top bar's course-info popover (`editor-stats`)
  * and the phone's peek line, and the save indicator's look. P2 took the
- * desktop status bar out of the editor's footer; this is its model.
+ * desktop status bar out of the editor's footer; this is its model. Since P6
+ * the desktop popover has no map scale (`courseInfoRows`): the scale is the
+ * map-info dialog's (`lib/editor/map-info.ts`); the phone, which has no such
+ * dialog, keeps it on its peek line (`statusRows`).
  */
 
 export type SaveState = "saved" | "saving" | "error" | "conflict";
@@ -47,6 +50,11 @@ export function statusRows(s: StatusInput, t: T): StatusRow[] {
   if (s.snapping) rows.push({ id: "snapping", text: t("statusSnapping"), data: {} });
   if (s.checks) rows.push({ id: "checks", text: t("statusChecks", { count: s.checks }), data: { count: String(s.checks) } });
   return rows;
+}
+
+/** The desktop course-info popover's rows (§2): `statusRows` without the map scale, which is the map-info dialog's (P6). */
+export function courseInfoRows(s: Omit<StatusInput, "scale">, t: T): StatusRow[] {
+  return statusRows({ ...s, scale: null }, t);
 }
 
 /** The check count on the popover's button (§8); none at zero. */

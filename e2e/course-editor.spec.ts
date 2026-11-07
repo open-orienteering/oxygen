@@ -2276,16 +2276,17 @@ test.describe("P2: the status bar out of the footer", () => {
     await expect(top.getByTestId("editor-save-state")).toHaveAttribute("data-state", "saved", { timeout: 15000 });
     await newCourse(page, "P2 stats");
 
-    // The button opens the popover: the course's control count, its length, the map scale; a second click closes it.
+    // The button opens the popover: the course's control count and its length (the map scale is the map-info
+    // dialog's since P6); a second click closes it.
     const button = top.getByTestId("editor-stats");
     await expect(button).toHaveAttribute("aria-expanded", "false");
     await button.click();
     const popover = page.getByTestId("editor-stats-popover");
     await expect(popover).toBeVisible();
     await expect(button).toHaveAttribute("aria-expanded", "true");
-    for (const row of ["controls", "length", "scale"]) await expect(popover.getByTestId(`editor-stats-${row}`)).toBeVisible();
+    for (const row of ["controls", "length"]) await expect(popover.getByTestId(`editor-stats-${row}`)).toBeVisible();
     await expect(popover.getByTestId("editor-stats-controls")).toHaveAttribute("data-count", "0");
-    await expect(popover.getByTestId("editor-stats-scale")).toHaveAttribute("data-scale", /^\d+$/);
+    await expect(popover.getByTestId("editor-stats-scale")).toHaveCount(0);
     await button.click();
     await expect(popover).toHaveCount(0);
 
@@ -2491,5 +2492,142 @@ test.describe("P4: the dashed ring back after placing; the ghost circle only wit
     } finally {
       for (const id of made) await cleanup("control.delete", { id: Number(id) });
     }
+  });
+});
+
+// P6 (feedback-2026-11-07 item 3): docs/course-editor.md §2. The map footer is gone; its contents and the map scale
+// are a dialog behind a map icon in the top bar.
+test.describe("P6: the map footer out; the map-info dialog", () => {
+  desktopOnly();
+
+  test("no footer under the map; the map icon after Export opens the dialog with the map's rows and actions", async ({ page }) => {
+    await openEditor(page);
+    const panel = page.getByTestId("editor-page").getByTestId("map-panel");
+    await expect(panel.getByTestId("map-viewer")).toBeVisible();
+    // Nothing under the map: the viewer reaches the panel's bottom, and none of the footer's actions is in the panel.
+    const panelBox = (await panel.boundingBox())!;
+    const viewerBox = (await panel.getByTestId("map-viewer").boundingBox())!;
+    expect(panelBox.y + panelBox.height - (viewerBox.y + viewerBox.height)).toBeLessThan(4);
+    await expect(panel.getByTestId("map-review-link")).toHaveCount(0);
+    await expect(panel.getByRole("button", { name: "Replace map" })).toHaveCount(0);
+    await expect(panel.getByTestId("use-club-map")).toHaveCount(0);
+
+    // The icon sits right after Export ▾.
+    const icon = page.getByTestId("editor-top-bar").getByTestId("editor-map-info");
+    await expect(icon).toHaveAttribute("aria-expanded", "false");
+    const afterExport = await page.getByTestId("editor-export").evaluate((exp) => {
+      const next = document.querySelector('[data-testid="editor-map-info"]');
+      return !!next && !!(exp.compareDocumentPosition(next) & Node.DOCUMENT_POSITION_FOLLOWING);
+    });
+    expect(afterExport).toBe(true);
+    await expect(icon.locator("svg")).toBeVisible();
+
+    await icon.click();
+    const dialog = page.getByTestId("editor-map-info-dialog");
+    await expect(dialog).toBeVisible();
+    await expect(dialog).toHaveAttribute("role", "dialog");
+    await expect(dialog).toHaveAttribute("aria-modal", "true");
+    await expect(icon).toHaveAttribute("aria-expanded", "true");
+    await expect(dialog.getByTestId("editor-map-info-name")).toHaveText(/\.ocd$/);
+    await expect(dialog.getByTestId("editor-map-info-scale")).toHaveAttribute("data-scale", /^\d+$/);
+    await expect(dialog.getByTestId("editor-map-info-scale")).toContainText("1:");
+    await expect(dialog.getByTestId("editor-map-info-north")).toBeVisible();
+    await expect(dialog.getByTestId("editor-map-info-file")).toHaveAttribute("data-bytes", /^[1-9]\d*$/);
+    const doc = dialog.getByTestId("editor-map-info-document");
+    await expect(doc).toHaveAttribute("data-source", "ocad", { timeout: 30000 });
+    expect(Number(await doc.getAttribute("data-objects"))).toBeGreaterThan(0);
+    expect(Number(await doc.getAttribute("data-symbols"))).toBeGreaterThan(0);
+    await expect(doc.getByTestId("editor-map-info-importer")).toHaveAttribute("data-importer", /^ocad-\d+$/);
+    // The actions: Review symbols (the document's review page), Replace map, and the library only when it lists a map.
+    await expect(dialog.getByTestId("editor-map-info-review")).toHaveAttribute("href", /\/map-review\/[0-9a-f]{64}$/);
+    await expect(dialog.getByTestId("editor-map-info-replace")).toHaveText("Replace map");
+    expect(await dialog.getByTestId("editor-map-info-library").count()).toBeLessThanOrEqual(1);
+    // A modal: focus starts on the close button and Tab / Shift+Tab cycle inside the dialog.
+    const focusInDialog = () => page.evaluate(() => !!document.activeElement?.closest('[data-testid="editor-map-info-dialog"]'));
+    expect(await focusInDialog()).toBe(true);
+    for (const key of ["Tab", "Tab", "Tab", "Tab", "Tab", "Shift+Tab", "Shift+Tab", "Shift+Tab", "Shift+Tab", "Shift+Tab", "Shift+Tab"]) {
+      await page.keyboard.press(key);
+      expect(await focusInDialog(), `focus after ${key}`).toBe(true);
+    }
+    await test.info().attach("map-info-dialog", { body: await page.screenshot(), contentType: "image/png" });
+
+    // The close button closes it; the course-info popover no longer has the scale (it is here).
+    await dialog.getByTestId("editor-map-info-close").click();
+    await expect(dialog).toHaveCount(0);
+    await expect(icon).toHaveAttribute("aria-expanded", "false");
+    await page.getByTestId("editor-stats").click();
+    await expect(page.getByTestId("editor-stats-popover")).toBeVisible();
+    await expect(page.getByTestId("editor-stats-scale")).toHaveCount(0);
+    await page.getByTestId("editor-stats").click();
+
+    // The backdrop covers the whole page, the shell's header included (the dialog is portalled out of the top bar's
+    // stacking context); a click on it closes the dialog.
+    await icon.click();
+    await expect(dialog).toBeVisible();
+    expect(await page.evaluate(() => document.elementFromPoint(5, 5)?.getAttribute("data-testid"))).toBe("editor-map-info-backdrop");
+    await page.mouse.click(5, 5);
+    await expect(dialog).toHaveCount(0);
+  });
+
+  test("Replace map opens an .ocd file chooser and changes nothing until a file is picked", async ({ page }) => {
+    await openEditor(page);
+    await page.getByTestId("editor-map-info").click();
+    const dialog = page.getByTestId("editor-map-info-dialog");
+    const name = await dialog.getByTestId("editor-map-info-name").getAttribute("data-name");
+    const chooser = page.waitForEvent("filechooser");
+    await dialog.getByTestId("editor-map-info-replace").click();
+    const fc = await chooser;
+    expect(await fc.element().getAttribute("accept")).toBe(".ocd");
+    expect(fc.isMultiple()).toBe(false);
+    await expect(dialog.getByTestId("editor-map-info-name")).toHaveAttribute("data-name", name!);
+    await page.keyboard.press("Escape");
+    await expect(dialog).toHaveCount(0);
+  });
+
+  test("Escape closes only the dialog: the armed tool and the selection stay; the tools' letters are inert while it is open", async ({ page }) => {
+    await openEditor(page);
+    await newCourse(page, "P6 escape");
+    const dialog = page.getByTestId("editor-map-info-dialog");
+
+    // An armed tool: a letter does not switch it while the dialog is open; Escape closes the dialog, and the
+    // editor's cascade (§3) steps only on the next press.
+    await arm(page, "K");
+    await page.getByTestId("editor-map-info").click();
+    await expect(dialog).toBeVisible();
+    await page.keyboard.press("a");
+    await expect(page.getByTestId("editor-tool-K")).toHaveAttribute("aria-pressed", "true");
+    await page.keyboard.press("Escape");
+    await expect(dialog).toHaveCount(0);
+    await expect(page.getByTestId("editor-tool-K")).toHaveAttribute("aria-pressed", "true");
+    await page.keyboard.press("Escape");
+    await expect(page.getByTestId("editor-tool-V")).toHaveAttribute("aria-pressed", "true");
+
+    // A selection stays through the dialog's Escape; the course too.
+    const [code] = await regularCodes(page, 1);
+    await select(page, code);
+    await page.getByTestId("editor-map-info").click();
+    await expect(dialog).toBeVisible();
+    await page.keyboard.press("Escape");
+    await expect(dialog).toHaveCount(0);
+    await expect(selectedCode(page)).toContainText(code);
+    await expect(page.getByTestId("editor-course-picker").locator("option:checked")).toHaveText(/^P6 escape /);
+  });
+
+  test("an event with no map: the dialog says so and offers Upload map, no review", async ({ page }) => {
+    await page.goto("/");
+    await page.getByRole("button", { name: /New Event/ }).click();
+    await page.getByPlaceholder(/Klubbmästerskap/).fill(`E2E Map info no map ${Date.now()}`);
+    await page.getByRole("button", { name: "Create" }).click();
+    await expect(page.getByRole("link", { name: "Dashboard" })).toBeVisible({ timeout: 15000 });
+    await page.goto(`/${new URL(page.url()).pathname.split("/")[1]}/course-editor`);
+    await expect(page.getByTestId("editor-page")).toBeVisible({ timeout: 15000 });
+    await page.getByTestId("editor-map-info").click();
+    const dialog = page.getByTestId("editor-map-info-dialog");
+    await expect(dialog.getByTestId("editor-map-info-none")).toBeVisible();
+    await expect(dialog.getByTestId("editor-map-info-scale")).toHaveCount(0);
+    await expect(dialog.getByTestId("editor-map-info-review")).toHaveCount(0);
+    await expect(dialog.getByTestId("editor-map-info-replace")).toHaveText("Upload map");
+    await page.keyboard.press("Escape");
+    await expect(dialog).toHaveCount(0);
   });
 });

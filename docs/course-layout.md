@@ -468,7 +468,9 @@ leaves it. In Layout mode Class view opens the class's sheet.
 **The sheet key** in the top bar's course-info popover (`editor-stats-sheet`,
 `data-key`, `course-editor.md` §2; 08 §5.2 put it in a status bar, P2 moved it):
 `1:<scale> <paper> <orientation>` of the shown sheet, in Layout mode and
-Class view, in place of the map scale.
+Class view. The map's own scale is not in the popover since P6: it is the
+map-info dialog's (`course-editor.md` §2); the phone's peek line shows it
+when no sheet is shown.
 
 ## 7. Export
 
