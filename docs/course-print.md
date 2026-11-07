@@ -328,10 +328,9 @@ with `sheet` = `PageInput` minus `map` and `geo`.
   the event's lowest-seq start / finish unless `first_as_start` /
   `last_as_finish`; an unplaced (0, 0) start or finish is not drawn.
   `maps.pdf`, `courseMap.resolveSheet` and `courseMap.list` pass the
-  event's live controls with `name` and `kind` for it,
-  `mapTemplate.previewLayout` the live start and finish rows (all the
-  rule looks up: a structure's ends are its first and last items). The layout's `legs` (the `courseMap.list` /
-  `previewLayout` wire) are straight centre-to-centre lines between the
+  event's live controls with `name` and `kind` for it (all the
+  rule looks up: a structure's ends are its first and last items). The layout's `legs` (`resolveMapLayout`'s;
+  no wire answers them since E-pages) are straight centre-to-centre lines between the
   drawn controls, none under free order; the page draws the course
   layer's own legs. `CourseOverlayControl.cuts` is no longer filled.
 - **Course sheets**: a v1 structure with one item per layout control in
@@ -482,7 +481,7 @@ lines drawn by the library; images DeviceRGB in `cmyk`.
 | `print/__tests__/isomorphic.test.ts` | no Node API, `Buffer`, sharp or resvg in the module |
 | `packages/api/src/__tests__/course-print-sheet.test.ts` | `resolveSheet`: paper / frame / window / tilt, structure and roles, unique sites, label offsets, extras, authored gaps from the structure only (start and finish rows, no GeoJSON, E6), description block / hidden, all-controls, free order, the event's auto cuts off on the view options (D17) |
 | `packages/api/src/__tests__/course-map-layout.test.ts` "course sites", "layoutCourseEnds" (E6) | start, `course_controls` and finish from the rows with straight legs, no `cuts`; an unplaced end not drawn; the ends of a NULL structure from the columns (lowest-seq defaults, `firstAsStart`) and of a stored one from its items |
-| `packages/api/src/__tests__/integration/course-maps.test.ts` "creates, duplicates and applies…", "previews a template layout…" (E6) | a course with no structure and no GeoJSON lists and previews start → controls → finish (the event's first start / finish), straight legs |
+| `packages/api/src/__tests__/integration/course-maps.test.ts` "creates, duplicates and applies…", "resolveSheet: a template previewed…" (E6; E-pages read both through `resolveSheet`, `previewLayout` gone) | a course with no structure and no GeoJSON resolves start → controls → finish (the event's first start / finish) and its description rows; a template alone resolves centred on the map origin |
 | `packages/api/src/__tests__/integration/course-print.test.ts` | the E2E fixture map pinned on a `vector` event: legacy event → no print document; two sheets → one PDF of two A4 pages, `TrimBox`, labels, outlines, Type0 / CIDFontType2 shared, frame clip and `T_map`, no `rg`, PNG and rasterised SVG logos shared (600 dpi), `/Measure /GEO` of the fixture's georeference, deterministic bytes |
 | `packages/api/src/render/__tests__/page-raster.test.ts` | the page oracle: white outside the frame and the ring, map inside, page box on top; rotated building where `T_map` puts it; block position on A4 |
 | `packages/api/src/render/__tests__/golden-files.test.ts` | `page-sprint-a4`, `page-ring`, `page-rotated` match the page oracle |
@@ -641,7 +640,7 @@ E2E tests check page count and size; C7 compared the rasters).
 | `packages/api/src/__tests__/print-worker.test.ts` | the worker on `e2e/test.ocd`: bytes equal in-process; the blob read and sent once per worker; `page` order; an error keeps the worker usable; `CourseStackError` re-created (a document with palette ids stripped); a reset rejects the request in flight and the next call recovers; the main thread's event-loop delay stays under 25 ms (or half a page) during a 10-page A3 print; `PRINT_WORKERS` parsing |
 | `packages/api/src/__tests__/worker-bootstrap.test.ts` | the shared bootstrap: `.js` imported as is, `.ts` through tsx |
 | `packages/api/src/render/__tests__/pdf-golden.test.ts` | the PDF golden tier, §9.2, and `qpdf --check` on every file it writes; `boxDown`; the swatch read-back |
-| `e2e/course-maps.spec.ts` (`chromium`) | the export flows of the maps page: page count and A4 page size of the single-map, course and all-controls downloads (05 §7), `application/pdf` and no `X-Print-Pipeline` |
+| `e2e/course-maps.spec.ts` (`chromium`) | the export flows (E-pages: Layout mode's Export ▾ *This sheet*, the Courses page's course PDF and export menu): page count and A4 page size of the single-sheet, course, all-controls and all-maps downloads (05 §7), `application/pdf` and no `X-Print-Pipeline` |
 
 ### 9.2 The PDF golden tier
 

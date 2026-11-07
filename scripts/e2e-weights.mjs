@@ -26,7 +26,7 @@ export const WEIGHTS = {
   "controls.spec.ts": 3, // ~22s
   "courses.spec.ts": 3, // ~21s — OCAD/ppen imports
   "phase2.spec.ts": 3, // ~21s
-  "course-maps.spec.ts": 3, // PDF exports (E3: one run, the legacy layout editor's sections gone)
+  "course-maps.spec.ts": 4, // Courses page overview + Layout sheet/template/club actions + PDF exports (E-pages)
   "phase3.spec.ts": 3, // ~20s
   "kiosk-readout.spec.ts": 3, // ~20s — dual contexts + 5s auto-reset
   "offline.spec.ts": 3, // ~19s — drain polling

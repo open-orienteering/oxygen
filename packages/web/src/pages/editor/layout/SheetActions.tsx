@@ -102,12 +102,13 @@ export function SheetActions(p: {
 
   const remove = async () => {
     if (!window.confirm(t("layoutDeleteSheetConfirm", { name: sheet.name }))) return;
-    const done = await p.run(async () => {
+    await p.run(async () => {
       await client.courseMap.delete.mutate({ id: sheet.seq });
+      // Off the deleted sheet first, so the refresh does not read it again.
+      p.onOpen(null);
       await refresh();
       return true;
     });
-    if (done) p.onOpen(null);
   };
 
   return (
@@ -190,12 +191,12 @@ export function TemplateActions(p: {
 
   const remove = async () => {
     if (!window.confirm(t("layoutDeleteTemplateConfirm", { name: p.template.name }))) return;
-    const done = await p.run(async () => {
+    await p.run(async () => {
       await client.mapTemplate.delete.mutate({ id: p.template.seq });
+      p.onOpen(null);
       await refresh();
       return true;
     });
-    if (done) p.onOpen(null);
   };
 
   return (
