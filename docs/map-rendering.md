@@ -716,7 +716,10 @@ the later rings) and re-indexes colours onto the completed stack
 (`PageInput.course.regions`). Stored regions are `filter_region` course
 objects (`docs/course-layer.md` §8): the layer appends each one in
 `objects` to the explicit `regions`, so the viewer's request and the
-print route carry them as objects.
+print route carry them as objects. A corridor's white band is a
+**generated** region the layer appends after those
+(`docs/course-layer.md` §10.2): `clip`, `symbols: "all"`, the band's
+rings — the map cut away there, the course drawn over it.
 
 ## 5. Backends
 
@@ -2582,6 +2585,13 @@ The shared module is exported as a namespace: `import { render } from
 `course-maps`).
 
 ## 8. Pending in this chapter
+
+- **Alpha: a translucent corridor band** (`docs/course-layer.md` §10.2,
+  F2). `LegProps.corridor.whiteOpacity` is stored but drawn opaque: the
+  band is a clip region, which removes the map wholly. A band below 1
+  needs a fill with alpha over the same rings — a pass colour opacity the
+  stream, the three backends and the PDF (`ca` / an ExtGState) do not
+  carry yet — drawn above every map colour and below the course.
 
 - **§4.11 filter regions in the viewer and the print route.** The stage,
   the three backends and the worker protocol take regions; nothing sends

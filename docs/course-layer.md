@@ -114,7 +114,9 @@ the legacy print sandwich full → lower → ink → white-outs → upper,
 by construction. A white-out therefore hides lower-purple course lines
 under it, as legacy print does. A white-out *outside* (a toner saver)
 does not sit there: it fills its own row on top of the layer's stack
-(§3.6, P1).
+(§3.6, P1). A corridor's white band (§10.2) is no row at all: it is a
+clip filter region, so the map is cut away there and every course
+symbol draws over it.
 
 **Merging.** `courseRenderInput(base, layer)` appends the layer's
 symbols after the document's (re-indexed when `remap` is set) and its
@@ -1142,7 +1144,7 @@ for a check (decision log, D6).
 
 A leg is the item's `leg` (08 §4.3 `LegProps`, §6.1): the leg *into*
 the item, between it and the previous positioned item. F1 makes `style`
-and `bends` real; `corridor` (F2) and `crossing` (F4) are stored and
+and `bends` real, F2 `corridor`; `crossing` (F4) is stored and
 validated but not read by the layer yet.
 
 ### 10.1 Styles and bends
@@ -1187,6 +1189,67 @@ validated but not read by the layer yet.
   viewer's request carries the whole leg too since F2
   (`layerPropsOfStored` → `course.list.legs` → `MapPanel` / `MapViewer`
   → `course-layer-request.ts`, §5).
+
+### 10.2 Corridors
+
+`corridor: { widthM, edge, whiteMm, whiteOpacity }` (08 §4.3; semantics
+by the user, 2026-11-07, SLICES F answer 1): the map shows **inside**
+the corridor; a **white band** `whiteMm` wide lies outside its edge,
+beyond which the map shows again (a large `whiteMm` is the classic
+all-white corridor map); `edge` draws the boundary in purple.
+
+- **Units.** `widthM` is the corridor's full width on the ground:
+  `widthMm = widthM × 1000 / document.mapScale` (§2 `document`), so the
+  derivation's `DerivedLeg.corridor` is `{ widthMm, whiteMm, edge }`.
+  `whiteMm` is paper mm at the base map's scale — the structure's frame,
+  like `bends` (§2) — and is not divided by `overprintScale`: printing at
+  another scale enlarges it with the map (§1 "Scale").
+- **Along the leg.** A corridor follows the leg's `points` (the previous
+  site, the bends, the site), never its `pieces`: gaps and the clipping
+  at the sites do not change it, a `style: "none"` leg keeps its
+  corridor, and a corridor never changes a length (08 §4.3, §4.1).
+- **Geometry** (`corridor.ts`, `corridorGeometry(derivation.courses)`).
+  Per course, consecutive corridor legs of equal `widthMm` and `whiteMm`
+  are one run (repeated and straight-through points dropped). A run's
+  buffer at a distance `h` is the union of a rectangle per segment and a
+  disc per vertex (flattened at 5 µm): round joins and round ends. The
+  **inside** is the union of every run's buffer at `widthMm / 2` over
+  every drawn course; the **band** is the union of the runs' buffers at
+  `widthMm / 2 + whiteMm` (runs with `whiteMm > 0`) less the inside. So
+  corridors **join**: at a site, at a change of width, where two
+  courses' corridors cross, nothing of one corridor's band lies inside
+  another. The rings are integer µm, simple and properly nested, drawn
+  even-odd like every stream path (`map-rendering.md` §3.1). The booleans
+  are `polygon-clipping`'s: even-odd over overlapping pieces cuts a hole
+  at every join and the stream has no non-zero fill, so `strokeOutline()`
+  (non-zero by contract) cannot build the band.
+- **Drawing the band** (user, 2026-11-07): the band is a generated
+  **`clip` filter region** (`symbols: "all"`, `map-rendering.md` §4.11),
+  appended to `CourseLayer.regions` after the explicit and the stored
+  ones. Only document objects are filtered (`regionObjectLimit`), so
+  every map colour is cut away inside the band and the paper shows white,
+  while the course — circles, legs, numbers, the edge, layout and course
+  objects — draws over it with the stack and the 7xx colour roles
+  unchanged. No band (`whiteMm` 0 on every corridor) adds no region.
+- **`whiteOpacity`** is stored and validated (0 … 1) but drawn opaque: a
+  clip removes the map wholly. A translucent band needs a paint with
+  alpha over the same rings (`map-rendering.md` §8).
+- **The edge** (`edge: true`): the inside's boundary where it runs along
+  an edged leg — boundary points within 20 µm of half that leg's width
+  from it — stroked with the resolved 705 (lower purple, 705's width ×
+  the document factor × `appearance.line`), closed where a whole ring
+  qualifies, else open pieces. Because it is the union's boundary, an
+  edge never crosses into a joined or crossing corridor, and a leg
+  without `edge` next to one with it draws no line on its own sides. The
+  objects follow the legs; their `ref` is `{ kind: "corridor", id:
+  "<courseId>:<leg index>" }`, and the editor's hit-test takes them as no
+  target.
+- **Screen and print** need nothing of their own: the viewer's worker
+  filters its static buckets with `layer.regions` on every course reply
+  (`map-rendering.md` §5.2 "Filter regions") and draws the edge in the
+  dynamic bucket; the print route's `composePage` passes the regions to
+  `symbolise` (`course-print.md` §5.2), the PDF as a `W*` clip round the
+  map passes.
 
 ## Tests
 
