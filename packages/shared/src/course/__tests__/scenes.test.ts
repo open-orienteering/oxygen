@@ -89,11 +89,13 @@ describe("course scenes", () => {
     expect(arcs.every((x) => x.p.kind === "stroke" && !x.p.path.closed)).toBe(true);
   });
 
-  it("course-objects: white-outs at upper white over the ink, 709 / 707 / 711 upper purple, layout colour on top", () => {
+  it("course-objects: the white-out at upper white over the ink, 709 / 707 / 711 upper purple, layout colour, the toner saver's white on top", () => {
     const { scene, stream } = run("course-objects");
     const passes = coursePasses(scene, stream);
-    const whiteout = passes.filter((x) => x.ref === "object:wo" || x.ref === "object:ring");
-    expect(whiteout.map((x) => `${x.p.kind}:${x.colour}`)).toEqual(["fill:white-upper", "fill:white-upper"]);
+    expect(passes.filter((x) => x.ref === "object:wo").map((x) => `${x.p.kind}:${x.colour}`)).toEqual(["fill:white-upper"]);
+    // P1: the toner saver's ring is the stream's last pass — over upper purple and the layout text's row.
+    expect(passes.filter((x) => x.ref === "object:ring").map((x) => `${x.p.kind}:${x.colour}`)).toEqual(["fill:course:toner-saver-white"]);
+    expect(paletteId(scene, stream.passes.at(-1)!.colour)).toBe("course:toner-saver-white");
     const order = stream.passes.map((p) => paletteId(scene, p.colour));
     expect(order.indexOf("white-upper")).toBeGreaterThan(order.lastIndexOf("black100"));
     expect(order.indexOf("white-upper")).toBeLessThan(order.indexOf("purple-upper"));
@@ -103,7 +105,7 @@ describe("course scenes", () => {
     expect(passes.find((x) => x.ref === "object:course-object:2")!.colour).toBe("purple-lower");
     const title = passes.find((x) => x.ref === "object:title")!;
     expect(title.colour).toBe("course-object:#1f6fb2");
-    expect(title.p.colour).toBe(scene.colours.length - 1);
+    expect(title.p.colour).toBe(scene.colours.length - 2);
   });
 
   it("course-sprint: 6 mm circles, knockout numbers above the building", () => {

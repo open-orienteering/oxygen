@@ -345,7 +345,11 @@ returns to select from any tool; right-click exits an exclusive tool.
   back), but no selection ring is drawn while a tool is armed — its purple
   circle is the "last placed" mark; the ring (`editor-selection-ring`) is
   `V`'s (`showSelectionRing`, `lib/editor/state.ts`: off while
-  `editor.tool.exclusive`, D12). The action bar does not open. The insertion point advances and the new site is the anchor.
+  `editor.tool.exclusive`, D12), and not on a control just placed, from
+  the phantom's *Add control* in `V` too, until the user selects a
+  control (the reducer's `placed` flag, `selectionPlaced` on the viewer
+  prop; P1). The phantom (`editor-phantom`) only marks a click on empty
+  map in `V`, before any control exists; a tool drops it. The action bar does not open. The insertion point advances and the new site is the anchor.
 - **Drag** pans (the tool is exclusive). **`Ctrl+Z`** undoes the last
   placement and steps the anchor and insertion point back; the tool
   stays armed. The chain steps back only when the entry undone is a
@@ -1016,7 +1020,9 @@ whose poll ran meanwhile simply does not conflict (decision log, D10).
 | unit (web) | `lib/editor/__tests__/field.test.ts` | §9, §10: the fix through `mapGeo` and back (a SWEREF99 TM frame), accuracy in paper mm, distance at two scales, bearing from paper north with the wrap at north, the list in course order (blank without a fix or a position), the nudge steps (0.1 mm, 1 m at 1:10 000 / 1:15 000, µm rounding), detent heights and snapping, the band offset, the initial mode |
 | unit (web) | `lib/editor/__tests__/touch.test.ts` | §10 gestures: a selected control drags at once; an unselected one: tap selects, drag past the slop pans, long press selects and moves (also when a late move fires it), a second finger cancels; the lift; the loupe's constants and place (above the handle, flipped below the finger at the top, kept inside sideways) |
 | unit (web) | `map-gl/__tests__/view.test.ts` "loupeView", `engine.test.ts` "the loupe" | §10 "Loupe": the view (the dragged point at the centre, distances × 2.5, the rotation kept); one more draw of the resident visible set into the inset target, composited at the box, no rebuild or worker request (`map-rendering.md` §5.2) |
-| unit (web) | `lib/editor/__tests__/state.test.ts` "showSelectionRing" | §6.1: the selection ring is drawn in `V` and not while an exclusive tool is armed (D12) |
+| unit (web) | `lib/editor/__tests__/state.test.ts` "showSelectionRing" | §6.1: the selection ring is drawn in `V` and not while an exclusive tool is armed (D12), nor on a control just placed (`selectionPlaced`, P1) until a `select` |
+| unit (web) | `lib/__tests__/course-editor.test.ts` | P1: `placed` sets the `placed` flag; a `select` (the same control or another), a map click, a delete or Escape clears it; a course switch keeps it |
+| E2E | `e2e/course-editor.spec.ts` "P1: …" "no blue circle beside a placed control…" (`chromium`) | §6.1, P1: with `K` armed (hover, after each of two placing clicks) and after switching to Field, Course and Layout no `editor-phantom` and no `editor-selection-ring`; in `V` the phantom's *Add control* leaves neither (the action bar shows the selection); a click on the control draws the ring |
 | unit (web) | `lib/editor/__tests__/state.test.ts`, `write-client.test.ts` | §9: Field entered and left keeping the selection, Layout entered dropping all but the course (`course-layout.md`); `checkControl` sends no token and seeds the control's |
 | unit (web) | `pages/editor/__tests__/bindings.test.ts` "pinch-scale" | §10: `scaleAbout` (handles scale with it), a finger on the ring starts it, the draft per move, one write on lift, nothing selected / cancelled / within 1 % writes nothing |
 | E2E | `e2e/field-mode.spec.ts` (`mobile` project: Pixel 7, `vector`) | §10: opens in Field mode, full-bleed, compact bar and overflow, no rail / inspector, ≥ 44 px targets; §9: `setGeolocation` → the marker with its accuracy, every row's distance and bearing = the paper geometry at one scale; detents (tap, handle drag to full) and a list row's control centred above the sheet; a quick drag on an unselected control pans without selecting, a long press selects, shows the stem and the loupe (`editor-loupe`, 120 px, above the handle; the canvas inside it differs from the same circle after release — the 1× map — and has the map's purple; gone on release) and drops the control 48 px above the finger (persisted); two fingers cancel a pending press and zoom; nudge 2 × 0.1 mm, 1 m, the x field, four undos back; `+` → `K` → Place above the sheet adds a site, Done; a tap on an `oob_area`'s outline (created through `courseObject.create`) selects it, a tap inside deselects it (D12), and two fingers on its corners scale it by their spread, the map's zoom unchanged; check-off persists over a reload; offline: the notice, `+` disabled, a long-press move snaps back. "Field mode on a desktop" (desktop viewport in the same spec): the mode switch, no rail, the list's distance after a fix, check-off and `Ctrl+Z`, back to Course mode |
@@ -1077,7 +1083,8 @@ whose poll ran meanwhile simply does not conflict (decision log, D10).
 - **Layout on a phone**: the mode switch omits it (§10, decision log
   2026-11-03; 08 §5.5 keeps template editing on the desktop); aligning
   the map by touch would be its one use — D-mobile decides.
-- **The selection ring in `V`** stays (D12 hides it only while a tool is
-  armed); whether it should go entirely, now that the purple circle is
-  the mark, is the user's call (feedback 2026-11-04, flagged).
+- **The selection ring in `V`** stays for a control the user selects
+  (D12 hides it while a tool is armed, P1 on a control just placed);
+  whether it should go entirely, now that the purple circle is the mark,
+  is the user's call (feedback 2026-11-04 and 2026-11-06, flagged).
 - The colour-profile and north badge are the map-info row's, unchanged.

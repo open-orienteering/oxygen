@@ -1131,6 +1131,7 @@ export function EditorPage() {
   const toolActive = state.tool.kind !== "select";
   const editor: MapViewerEditorProps = useMemo(() => ({
     selectedControlId: state.selectedControlId !== null ? String(state.selectedControlId) : null,
+    selectionPlaced: state.placed,
     phantom: state.phantom ? { x: state.phantom.x, y: state.phantom.y } : null,
     contextActions,
     // An active tool opens no action bar (§6): nothing in it, not even the info line and badges.
@@ -1163,7 +1164,7 @@ export function EditorPage() {
     onCourseInfo: setCourseInfo,
     markers: courseChecks.markers,
     layout: classLayout,
-  }), [classLayout, courseChecks.markers, isMobile, fix, sheetPx, fieldMoveEnd, state.selectedControlId, state.phantom, contextActions, contextInfo, srrBadge, radioOn, suggestions, tc, courseControlIds, toolActive,
+  }), [classLayout, courseChecks.markers, isMobile, fix, sheetPx, fieldMoveEnd, state.selectedControlId, state.placed, state.phantom, contextActions, contextInfo, srrBadge, radioOn, suggestions, tc, courseControlIds, toolActive,
     courseView, selectedCourse, moveWarnings, moveEpoch, handleMapClick, handleLabelMoveEnd, handleSelect,
     handleDismiss, handleLegClick, toolBinding, snapIndex, snap, draftObjects, draftFast, viewRequest, provisional]);
 

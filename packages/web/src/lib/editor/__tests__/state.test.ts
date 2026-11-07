@@ -9,6 +9,17 @@ describe("showSelectionRing (docs/course-editor.md §6.1)", () => {
     expect(showSelectionRing({ tool: { exclusive: false } })).toBe(true);
     expect(showSelectionRing({ tool: { exclusive: true } })).toBe(false);
   });
+
+  it("no ring on a control just placed, in V too (P1): its purple circle is the mark", () => {
+    expect(showSelectionRing({ tool: null, selectionPlaced: true })).toBe(false);
+    expect(showSelectionRing({ tool: { exclusive: false }, selectionPlaced: false })).toBe(true);
+    const placed = editorReducer(initialEditorState, { type: "placed", id: 7 });
+    expect(placed).toMatchObject({ selectedControlId: 7, placed: true });
+    expect(editorReducer(placed, { type: "select", id: 7 }).placed).toBe(false);
+    // Field keeps the placed selection as it is; Layout drops the selection and the flag with it.
+    expect(editorReducer(placed, { type: "mode", mode: "field" })).toMatchObject({ selectedControlId: 7, placed: true });
+    expect(editorReducer(placed, { type: "mode", mode: "layout" })).toMatchObject({ selectedControlId: null, placed: false });
+  });
 });
 
 describe("editorReducer (docs/course-editor.md §3)", () => {

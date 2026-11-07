@@ -20,6 +20,7 @@ const base = (over: Partial<CourseEditorState> = {}): CourseEditorState => ({
   selectedControlId: null,
   selectedCourseId: null,
   phantom: null,
+  placed: false,
   ...over,
 });
 
@@ -108,6 +109,17 @@ describe("courseEditorReducer", () => {
     );
     expect(s.selectedControlId).toBe(55);
     expect(s.phantom).toBeNull();
+    expect(s.placed).toBe(true);
+  });
+
+  it("a placed selection stays ringless until the user selects (P1): the same control again, or another", () => {
+    const placed = courseEditorReducer(base(), { type: "placed", id: 55 });
+    const again = courseEditorReducer(placed, { type: "select", id: 55 });
+    expect(again).toMatchObject({ selectedControlId: 55, placed: false });
+    expect(courseEditorReducer(placed, { type: "select", id: 31 })).toMatchObject({ selectedControlId: 31, placed: false });
+    expect(courseEditorReducer(placed, { type: "map-click", x: 1, y: 2 }).placed).toBe(false);
+    // A course switch keeps the selection as it is.
+    expect(courseEditorReducer(placed, { type: "select-course", id: 3 }).placed).toBe(true);
   });
 
   it("clears the selection when the selected control is deleted", () => {
