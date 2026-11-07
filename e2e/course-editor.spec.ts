@@ -2902,12 +2902,17 @@ test.describe("F3: legs — styles, bends, corridors (docs/course-editor.md §6.
     const ax = a.mm, bx = b.mm, len = Math.hypot(bx.x - ax.x, bx.y - ax.y);
     const u = { x: (bx.x - ax.x) / len, y: (bx.y - ax.y) / len }, n = { x: -u.y, y: u.x };
     /** Points in the band, both sides, along the leg's middle (clear of the circles and the edge line's width). */
+    const marks = (await sites(page)).map((x) => x.mm);
     const band: Pt[] = [];
     for (let t = 0.3; t <= 0.7; t += 0.02) {
       for (let d = halfMm + 0.8; d <= halfMm + 4.2; d += 0.2) {
         for (const side of [1, -1]) band.push({ x: ax.x + u.x * len * t + n.x * d * side, y: ax.y + u.y * len * t + n.y * d * side });
       }
     }
+    // The course is never cut (§10.2): keep the probe off every control's circle and number.
+    const clear = band.filter((q) => marks.every((m) => Math.hypot(q.x - m.x, q.y - m.y) > 6));
+    band.length = 0;
+    band.push(...clear);
     const courses = await trpcCall<{ id: number; name: string }[]>("course.list", undefined, false);
     const courseId = courses.find((c) => c.name === name)!.id;
     const template = await probeTemplate("F3 corridor");
@@ -2936,10 +2941,18 @@ test.describe("F3: legs — styles, bends, corridors (docs/course-editor.md §6.
 
       expect((await printed(page, nameId, `maps=${sheet.seq}`)).pages).toBe(1);
 
-      // An invalid width is not written; a valid one is, as one more undo entry.
-      await page.getByTestId("editor-leg-corridor-width").fill("0");
-      await page.getByTestId("editor-leg-corridor-width").press("Tab");
-      await expect(page.getByTestId("editor-leg-corridor-width")).toHaveValue("50");
+      // Values outside their ranges are not written: the fields show the stored ones again.
+      for (const [field, bad, stored] of [["width", "0", "50"], ["white", "-1", "5"], ["opacity", "2", "1"]] as const) {
+        await page.getByTestId(`editor-leg-corridor-${field}`).fill(bad);
+        await page.getByTestId(`editor-leg-corridor-${field}`).press("Tab");
+        await expect(page.getByTestId(`editor-leg-corridor-${field}`)).toHaveValue(stored);
+      }
+      // A valid width is written (one more undo entry).
+      const widened = waitForTrpc(page, "course.setStructure");
+      await page.getByTestId("editor-leg-corridor-width").fill("80");
+      await page.getByTestId("editor-leg-corridor-width").press("Enter");
+      await widened;
+      await expect(page.getByTestId("editor-leg-corridor-width")).toHaveValue("80");
 
       const removed = waitForTrpc(page, "course.setStructure");
       await page.getByTestId("editor-leg-corridor-remove").click();

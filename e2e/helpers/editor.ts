@@ -260,7 +260,7 @@ export async function inkIn(page: Page, rect: { minX: number; minY: number; maxX
 
 /**
  * `dark`: the map's black ink; `purple`: the course overprint; `map`: any map colour — not white and not
- * purple (a corridor's white band cuts the whole map away, docs/course-layer.md §10.2).
+ * a purple tint (a corridor's white band cuts the whole map away, docs/course-layer.md §10.2).
  */
 export type InkKind = "dark" | "purple" | "map";
 
@@ -287,7 +287,9 @@ export async function inkAt(page: Page, points: readonly Pt[], kind: InkKind = "
     seen.add(i);
     const r = png.data[i], g = png.data[i + 1], b = png.data[i + 2];
     const purple = r - g > 50 && b - g > 50;
-    if (kind === "dark" ? Math.max(r, g, b) < 110 : kind === "purple" ? purple : !purple && Math.min(r, g, b) < 235) n++;
+    // `map` leaves out any purple tint, the overprint's anti-aliased edges over white included.
+    const tint = r - g > 12 && b - g > 12;
+    if (kind === "dark" ? Math.max(r, g, b) < 110 : kind === "purple" ? purple : !tint && Math.min(r, g, b) < 235) n++;
   }
   return n;
 }

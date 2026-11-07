@@ -206,7 +206,12 @@ export function EditorPage() {
   const rows = useMemo(() => (structure ? displaySequence(structure, sites) : []), [structure, sites]);
   const sequenceIds = useMemo(() => rows.filter((r) => r.kind === "control").map((r) => r.id), [rows]);
   /** The structure as drawn, start and finish explicit: rows[i] ↔ items[i] (the leg into row i is items[i].leg). */
-  const explicitItems = useMemo(() => (structure ? explicitStructure(structure, sites).items : []), [structure, sites]);
+  // An explicit start or finish whose site is not among the event's controls has no row: then rows and items do
+  // not line up and no leg reads a stored prop (docs/course-editor.md §6.7).
+  const explicitItems = useMemo(() => {
+    const items = structure ? explicitStructure(structure, sites).items : [];
+    return items.length === rows.length ? items : [];
+  }, [structure, sites, rows]);
   // Along the stored bends (course-layer.md §10.1, docs/course-editor.md §6.7).
   const legMeters = useMemo(() => sequenceLegMeters(rows.map((r, i) => {
     const item = explicitItems[i];
@@ -951,8 +956,10 @@ export function EditorPage() {
     if (!leg || !fromPt || !toPt) return null;
     const { itemIndex, from, to } = leg;
     const item = explicitItems[itemIndex];
-    const stored = item && item.kind !== "variation" ? item.leg?.gaps ?? [] : [];
-    const bends = item && item.kind !== "variation" ? item.leg?.bends : undefined;
+    // Rows and items out of line (§6.7): no leg target rather than another item's leg.
+    if (!item) return null;
+    const stored = item.kind !== "variation" ? item.leg?.gaps ?? [] : [];
+    const bends = item.kind !== "variation" ? item.leg?.bends : undefined;
     const effective = courseInfo?.derivation?.courses[0]?.legs.find((l) => l.from === String(from.id) && l.to === String(to.id))?.gaps ?? [];
     // Fractions of the bent length (§6.3): the target is the leg's polyline through its bends.
     return { kind: "leg", itemIndex, points: legPolyline(fromPt, bends, toPt), gaps: stored.length ? stored : effective, stored: stored.length > 0 };
