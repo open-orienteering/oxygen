@@ -30,6 +30,25 @@ function partColours(p: PreparedPart): Set<number> {
   return out;
 }
 
+/** Whether a part's fill triangles of `colour` cover the paper point (x, y) µm (vertices are origin-relative). */
+function fillCovers(p: PreparedPart, colour: number, x: number, y: number, origin: { originX: number; originY: number }): boolean {
+  const fill = p.fill;
+  if (!fill) return false;
+  const v = new Float32Array(fill.verts);
+  const px = x - origin.originX, py = y - origin.originY;
+  const side = (a: number, b: number) => (v[2 * b] - v[2 * a]) * (py - v[2 * a + 1]) - (v[2 * b + 1] - v[2 * a + 1]) * (px - v[2 * a]);
+  const r = fill.ranges;
+  for (let k = 0; k < r.colour.length; k++) {
+    if (r.colour[k] !== colour) continue;
+    for (let i = r.start[k]; i < r.start[k] + r.count[k]; i += 3) {
+      const [a, b, c] = [fill.indices[i], fill.indices[i + 1], fill.indices[i + 2]];
+      const d1 = side(a, b), d2 = side(b, c), d3 = side(c, a);
+      if ((d1 > 0 && d2 > 0 && d3 > 0) || (d1 < 0 && d2 < 0 && d3 < 0)) return true;
+    }
+  }
+  return false;
+}
+
 function loaded(w: ReturnType<typeof harness>, req = load()): LoadedReply {
   w.w.handle(req);
   return w.sent[w.sent.length - 1].msg as LoadedReply;
@@ -204,6 +223,28 @@ describe("course request → the dynamic bucket", () => {
     expect(drawn).toEqual(expect.arrayContaining([docTop, indexOf(r.colours, "purple-upper")]));
   });
 
+  // P7: the shape crosses the window ring; the first-vertex containment probe filled it whole or handed earcut a crossing hole.
+  describe("a white-out outside crossing the window hides only its shape (P7)", () => {
+    const window = [{ x: -10, y: -10 }, { x: 100, y: -10 }, { x: 100, y: 80 }, { x: -10, y: 80 }];
+    const cases: [string, CourseLayerRequest["objects"][number], [number, number]][] = [
+      ["a toner saver whose first vertex is left of the window", { id: 5, kind: "toner_saver", geometry: [{ x: -30, y: 10 }, { x: 40, y: 10 }, { x: 40, y: 40 }, { x: -30, y: 40 }], props: {} }, [20, 25]],
+      ["a toner saver crossing the bottom edge, first vertex inside", { id: 5, kind: "toner_saver", geometry: [{ x: 20, y: 10 }, { x: 40, y: 10 }, { x: 40, y: -30 }, { x: 20, y: -30 }], props: {} }, [30, 0]],
+      ["a white-out outside path spanning beyond both sides", { id: "ts", kind: "path", anchor: "map", fillMode: "whiteoutInverted", closed: true, points: [{ x: -30, y: 30 }, { x: 130, y: 30 }, { x: 130, y: 50 }, { x: -30, y: 50 }] }, [45, 40]],
+    ];
+    for (const [name, object, inside] of cases) {
+      it(name, () => {
+        const h = harness();
+        const m = loaded(h);
+        const r = ask(h, request({ viewOptions: { labelMode: "sequence", window }, objects: [object] }));
+        const toner = r.colours.findIndex((c) => c.id === "course:toner-saver-white");
+        expect(toner).toBeGreaterThanOrEqual(0);
+        expect(fillCovers(r.part!, toner, inside[0] * 1000, inside[1] * 1000, m.summary)).toBe(false);
+        expect(fillCovers(r.part!, toner, 77_000, 63_000, m.summary)).toBe(true);
+        expect(fillCovers(r.part!, toner, -3_000, 73_000, m.summary)).toBe(true);
+      });
+    }
+  });
+
   it("a whiteout layout object sits at upper white, above black", () => {
     const h = harness();
     loaded(h);
@@ -283,6 +324,20 @@ describe("course request with a page → the page part (docs/course-layout.md §
     expect(Math.max(...xs)).toBeCloseTo(125000, 0);
     expect(Math.min(...ys)).toBeCloseTo(-128500, 0);
     expect(Math.max(...ys)).toBeCloseTo(148500, 0);
+  });
+
+  it("a page white-out outside crossing the frame's left edge hides only its shape (P7)", () => {
+    const h = harness();
+    const m = loaded(h);
+    // Page mm (y-down) → paper mm: x − 75, 158.5 − y. The rectangle reaches 8 mm left of the frame (x = 10).
+    const objects = [{ id: "wo", kind: "rectangle" as const, anchor: "page" as const, x: 2, y: 100, width: 60, height: 60, fillMode: "whiteoutInverted" as const }];
+    const r = ask(h, request({ page: page({ objects }) }));
+    const white = r.page!.colourBase + indexOf(r.colours, "purple-upper") - 1;
+    const at = (x: number, y: number) => fillCovers(r.pagePart!, white, (x - 75) * 1000, (158.5 - y) * 1000, m.summary);
+    expect(at(40, 130)).toBe(false);
+    expect(at(13, 103)).toBe(false);
+    expect(at(150, 50)).toBe(true);
+    expect(at(30, 200)).toBe(true);
   });
 
   it("the description block draws on the page", () => {

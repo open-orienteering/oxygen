@@ -2631,3 +2631,109 @@ test.describe("P6: the map footer out; the map-info dialog", () => {
     await expect(dialog).toHaveCount(0);
   });
 });
+
+// P7 (user 2026-11-07): a white-out outside whose shape crossed the frame turned the whole frame white (first vertex
+// left of the frame) or left a white slash (crossing the bottom, first vertex inside) — the GL fill's even-odd
+// triangulation (docs/bugfix-whiteout-layout.md). Its own describe, so the parallel rows' edits above merge cleanly.
+test.describe("P7: a white-out outside crossing the frame hides only what is outside its shape", () => {
+  desktopOnly();
+  const frame: Frame = { x: 10, y: 40, width: 190, height: 247 };
+
+  test("Layout mode: toner savers across the left and bottom edges; a page white-out outside dragged across both", async ({ page }) => {
+    await openEditor(page);
+    const nameId = nameIdOf(page);
+    const courses = await trpcCall<{ id: number }[]>("course.list", undefined, false);
+    const template = await probeTemplate("P7 whiteout", frame, 5);
+    const sheet = await trpcCall<{ seq: number }>("courseMap.create", { kind: "course", courseId: courses[0].id, templateId: template.seq, overrides: {}, objects: [] });
+    // The page white-out outside: tall enough that the inside square stays in it after the drag down (page mm).
+    const rect = { id: "p7-wo", kind: "rectangle", anchor: "page", x: 30, y: 150, width: 100, height: 120, fillMode: "whiteoutInverted" };
+    const sheet2 = await trpcCall<{ seq: number }>("courseMap.create", { kind: "course", courseId: courses[0].id, templateId: template.seq, overrides: {}, objects: [rect] });
+    const ids: number[] = [];
+    try {
+      const open = async (seq: number) => {
+        await page.goto(`/${nameId}/course-editor?mode=layout&sheet=${seq}`);
+        await editorReady(page);
+        await expect(page.getByTestId("editor-layout-scope")).toHaveAttribute("data-sheet", String(seq));
+        await viewSettled(page);
+      };
+      await open(sheet.seq);
+      const toPaperMm = await pageToPaperOf(page, frame);
+      const pagePt = async (x: number, y: number) => toPage(page, toPaperMm({ x, y }));
+      // Two 709 squares on the map (page mm): `inside` lies in every white-out shape below, `outside` in none.
+      const squareAt = (x: number, y: number) => [{ x, y }, { x: x + 20, y }, { x: x + 20, y: y + 15 }, { x, y: y + 15 }].map(toPaperMm);
+      const inner = (sq: Pt[]) => ({
+        minX: Math.min(...sq.map((p) => p.x)) + 2, maxX: Math.max(...sq.map((p) => p.x)) - 2,
+        minY: Math.min(...sq.map((p) => p.y)) + 2, maxY: Math.max(...sq.map((p) => p.y)) - 2,
+      });
+      const inside = squareAt(60, 200), outside = squareAt(150, 200);
+      for (const sq of [inside, outside]) {
+        ids.push((await trpcCall<{ id: number }>("courseObject.create", { kind: "oob_area", geometry: sq, props: {}, scope: { all: true } })).id);
+      }
+      /** Purple in a square's interior, zoomed in on it (the hatch resolves into purple lines), then back out. */
+      const purpleIn = async (sq: Pt[]) => {
+        const r = inner(sq);
+        const c = await toPage(page, { x: (r.minX + r.maxX) / 2, y: (r.minY + r.maxY) / 2 });
+        await page.mouse.move(c.x, c.y);
+        for (let i = 0; i < 4; i++) await page.mouse.wheel(0, -200);
+        await viewSettled(page);
+        const ink = await inkIn(page, r, "purple");
+        for (let i = 0; i < 4; i++) await page.mouse.wheel(0, 200);
+        await viewSettled(page);
+        return ink;
+      };
+      /** Reloaded (the editor caches the objects): `inside` keeps its purple, `outside` loses it. */
+      const hidesOnlyOutside = async () => {
+        await expect.poll(() => purpleIn(inside), { timeout: 30000 }).toBeGreaterThan(5);
+        await expect.poll(() => purpleIn(outside), { timeout: 30000 }).toBe(0);
+      };
+      await page.reload();
+      await editorReady(page);
+      await viewSettled(page);
+      await expect.poll(() => purpleIn(outside), { timeout: 30000 }).toBeGreaterThan(5);
+
+      // A toner saver whose first (leftmost) vertex is left of the frame: the whole frame went white.
+      const left = [{ x: 0, y: 190 }, { x: 130, y: 190 }, { x: 130, y: 230 }, { x: 0, y: 230 }].map(toPaperMm);
+      let saver = (await trpcCall<{ id: number }>("courseObject.create", { kind: "toner_saver", geometry: left, props: {}, scope: { all: true } })).id;
+      ids.push(saver);
+      await page.reload();
+      await editorReady(page);
+      await viewSettled(page);
+      await hidesOnlyOutside();
+
+      // One crossing the frame's bottom (page y 287) with its first vertex inside: a white slash.
+      await cleanup("courseObject.delete", { id: saver });
+      ids.splice(ids.indexOf(saver), 1);
+      const below = [{ x: 40, y: 190 }, { x: 130, y: 190 }, { x: 130, y: 297 }, { x: 40, y: 297 }].map(toPaperMm);
+      saver = (await trpcCall<{ id: number }>("courseObject.create", { kind: "toner_saver", geometry: below, props: {}, scope: { all: true } })).id;
+      ids.push(saver);
+      await page.reload();
+      await editorReady(page);
+      await viewSettled(page);
+      await hidesOnlyOutside();
+      await cleanup("courseObject.delete", { id: saver });
+      ids.splice(ids.indexOf(saver), 1);
+
+      // The page white-out outside, dragged with V past the frame's bottom, then past its left edge.
+      await open(sheet2.seq);
+      await hidesOnlyOutside();
+      type Stored = { objects: { id: string; x: number; y: number; width: number; height: number }[] };
+      const stored = async () => (await trpcCall<Stored>("courseMap.get", { seq: sheet2.seq }, false)).objects.find((o) => o.id === rect.id)!;
+      let saved = waitForTrpc(page, "courseMap.saveLayout");
+      await drag(page, await pagePt(100, 240), await pagePt(100, 270));
+      await saved;
+      await expect.poll(async () => { const o = await stored(); return o.y + o.height; }).toBeGreaterThan(frame.y + frame.height);
+      await hidesOnlyOutside();
+      saved = waitForTrpc(page, "courseMap.saveLayout");
+      await drag(page, await pagePt(100, 240), await pagePt(70, 240));
+      await saved;
+      await expect.poll(async () => (await stored()).x).toBeLessThan(frame.x);
+      expect((await stored()).y).toBeLessThan(200);
+      await hidesOnlyOutside();
+    } finally {
+      for (const id of ids) await cleanup("courseObject.delete", { id });
+      await cleanup("courseMap.delete", { id: sheet.seq });
+      await cleanup("courseMap.delete", { id: sheet2.seq });
+      await cleanup("mapTemplate.delete", { id: template.seq });
+    }
+  });
+});

@@ -255,7 +255,11 @@ an all-controls or class sheet. A map-anchored one, like the course toner
 saver, covers everything the map layer draws outside its shape — map
 text, 709 areas, the course — on the canvas and in the PDF alike: its
 white is the map layer's top row (`course-layer.md` §3.6, P1). Rendering, print and the schema are
-untouched; no stored object is changed.
+untouched; no stored object is changed. A white-out outside of any size
+— map- or page-anchored, a toner saver or a shape — may cross the frame
+from any side or lie beyond it: it hides only what is outside its shape,
+on the canvas as in the PDF (P7, `docs/bugfix-whiteout-layout.md`). A
+plain white-out is a single ring and was never affected.
 
 With `V`: a click selects an object of the scope, topmost first
 (`layoutObjectAt`): text, rectangles and images **by their bounds**;
@@ -509,7 +513,7 @@ sheet prints through `classes` or `maps`.
 | unit (shared) | `packages/shared/src/course/__tests__/page-layer.test.ts` | the page layer is the composer's (stream, colours, transform, images); only page-anchored objects; through `T_map⁻¹` a text sits at `pagePointToMap` of its page position; widths scale by `1 / scaleRatio` |
 | unit (shared) | `packages/shared/src/print/__tests__/page.test.ts` | `inverseMapLayerTransform` round-trips (0°, 25°) |
 | unit (shared) | `print/__tests__/compose.test.ts`, `write-page.test.ts`; `packages/api/src/render/__tests__/pdf-golden.test.ts` | unchanged after the extraction |
-| unit (web) | `packages/web/src/map-gl/__tests__/worker-course.test.ts` | the page part: none without a page; its colours after every map colour, the table repeated; the page white-out at the stack's upper white; a text in paper µm; the frame ring; the block |
+| unit (web) | `packages/web/src/map-gl/__tests__/worker-course.test.ts` | the page part: none without a page; its colours after every map colour, the table repeated; the page white-out at the stack's upper white; a text in paper µm; the frame ring; the block; P7: a page-anchored white-out outside crossing the frame's left edge covers the frame outside its shape and not its inside |
 | unit (web) | `map-gl/__tests__/engine.test.ts`, `view.test.ts` | the page part uploaded as `P`, drawn after the course part, `pageClip` passed, both released on clear; `scissorOfRing` |
 | unit (web) | `lib/__tests__/course-layer-request.test.ts` | `layout`: the page passed through, layout objects before course objects, appearance, overprint, window, text values |
 | unit (web) | `lib/editor/__tests__/layout.test.ts` | page-view maths: the window, page ↔ view round trips (rotated), y flip, sheet shapes, page bounds, hit-testing (D16: a closed path by its outline, not inside — an object under it reachable; a curved edge along its curve, not its chord; an open path without a closing edge), handles, the block's rectangle, align, page offset, grid; `pagePoints` / `nativePoints` of a map-anchored path (handles as offsets, rotated); `pathFromView` (handles mapped through the rotated, y-flipped window; a vertex outside clamped) |
@@ -531,6 +535,7 @@ sheet prints through `classes` or `maps`.
 | E2E | `e2e/course-editor.spec.ts` "Course editor layout" "P draws a polygon…" | D16: `P`, two clicks, a click-drag and a click, closed on the first vertex → one `saveLayout`; `courseMap.get` has a closed path of 4 points whose dragged vertex has `hOut` down-right on the page and `hIn` opposite; the path selected, `V` armed, 4 handles and 2 grips; a double-click on the top edge → 5 points and a focused handle, `Delete` → 4; `Escape` discards a polygon being drawn (no write, `V` armed), `Enter` closes one of three clicks (one write); the sheet's `maps.pdf?maps=` draws more `c` operators than before |
 | E2E | `e2e/course-editor.spec.ts` "Course editor layout" | from the Courses page (the `/maps?course=` redirect, the row's *Edit layout* link into Layout mode) to the sheet; the sheet shapes; `H` places a header, the inspector makes it a long 10 mm text, and ink appears where the page layer draws it; the frame selected and dragged → `courseMap.get`'s centre moved by the drag; undo restores it; the `maps.pdf?maps=` route answers one A4 page; the template link opens template scope, an orientation change writes `mapTemplate.update`; an old `/map-templates?template=` link opens template scope |
 | E2E | `e2e/course-editor.spec.ts` "P1: …" "Layout mode: a toner saver hides…" | P1: on a probe course sheet in Layout mode a 709 `oob_area` (`courseObject.create`) shows purple on the canvas (`inkIn`); with a `toner_saver` elsewhere on the map, no purple pixels are left inside the 709 square (638 purple pixels with the ring at upper white) |
+| E2E | `e2e/course-editor.spec.ts` "P7: a white-out outside crossing the frame…" | P7: two 709 squares, one inside every shape, one outside: a toner saver whose first vertex is left of the frame, then one across the frame's bottom with its first vertex inside — the inside square keeps its purple, the outside one shows none; a page-anchored white-out outside rectangle dragged with `V` past the frame's bottom, then past its left edge (one `saveLayout` each) — the same after each |
 
 ## Pending in this chapter
 

@@ -371,6 +371,18 @@ on screen and in print (feedback 2026-11-06 item 2;
 `whiteoutInverted` is the page layer's and keeps upper white
 (`course-print.md` §4.4).
 
+**The shape may leave the window** (P7). A hull or shape of any size
+may reach past the window ring on any side, or lie wholly outside it;
+the ring stays the window with the shape as its even-odd hole, so the
+white covers the window outside the shape and the shape's part outside
+the window, never the shape's inside. Print and the reference raster
+fill it even-odd (`f*`, `evenodd`); the GL arena path triangulates it
+with the crossing resolved (`map-rendering.md` §5.2 fill row). Before
+P7 the GL canvas filled the whole frame white when the shape's first
+vertex lay outside the window, or left a white slash when the shape
+crossed an edge with its first vertex inside
+(`docs/bugfix-whiteout-layout.md`).
+
 Path vertices keep their Bézier handles (the legacy `pathData`'s
 construction, deleted in E4c);
 closed shapes close implicitly. Layout-object symbols are deduplicated by
@@ -1134,7 +1146,7 @@ for a check (decision log, D6).
 | integration | `course-print.test.ts` "course objects on the page" | §8.3 print: a sheet takes the objects in scope (all-controls: `all` only), they add passes over the map, `hatch: "710"` adds one hatch pass, a stored filter region hides map objects |
 | integration | `backup.test.ts` | §8.5: the dump's `course_objects` section |
 | E2E | `e2e/map-vector-layer.spec.ts` "a stored white-out course object paints the map white" | §8.3 viewer: an `all`-scoped white-out created through the API turns open yellow ground white on the GL canvas, yellow beside it unchanged |
-| unit (web) | `packages/web/src/map-gl/__tests__/worker-course.test.ts`, `engine.test.ts` | the dynamic bucket (`map-rendering.md` §5.2); a document boulder slits a circle, `viewOptions.autoCuts: false` drops it and keeps a stored circle gap (§3.4) |
+| unit (web) | `packages/web/src/map-gl/__tests__/worker-course.test.ts`, `engine.test.ts` | the dynamic bucket (`map-rendering.md` §5.2); a document boulder slits a circle, `viewOptions.autoCuts: false` drops it and keeps a stored circle gap (§3.4); P7: a toner saver whose first vertex is left of the window, one crossing its bottom with the first vertex inside, and a white-out outside path beyond both sides — the toner white covers the window outside the shape and not its inside (§3.6) |
 | E2E | `e2e/map-vector-layer.spec.ts`, `map-control-circles.spec.ts`, `map-multicourse.spec.ts` | lower purple under black at a crossing; labels under both pipelines (`map-rendering.md` §5.4) |
 | unit | `packages/shared/src/course/__tests__/checks.test.ts` | §9: a fixture per code — both distance thresholds (library, scale fallback), event-wide distances, same feature, codes below 31 / duplicate / invertible (and the upside-down table), sheets null / empty / outside, numbers from `collides` and missing labels (hidden visits skipped), descriptions, legs through areas (crossing and inside), 708 lines, course objects (711 skipped), free order, unpositioned items; output order; `checkObstaclesOfDocument` (applied match, source code, suggested match, hidden, Bézier handles, holes, points) and the codes' library names |
 | unit | `packages/shared/src/__tests__/control-label-placement.test.ts`, `course/__tests__/derive.test.ts` "number collisions" | §3.5: `collides` on a boxed-in number, absent on a clear map and a contested cluster |
