@@ -144,6 +144,14 @@ describe("legs", () => {
       { code: "LEG_THROUGH_UNCROSSABLE", siteIds: ["31", "32"], leg: { from: "31", to: "32", index: 1 }, at: { x: 14, y: 0 }, params: { from: "31", to: "32", symbol: "521.1" } },
     ]);
   });
+  it("test the bent polyline (F1): a bend around the building clears it, the first hit along the bends is reported", () => {
+    const items = (bends: Array<{ x: number; y: number }>) => course(undefined, { items: ["S1", "31", "32", "33", "F1"].map((siteId) => (siteId === "32" ? { siteId, leg: { bends } } : { siteId })) });
+    const around = run({ document, structure: items([{ x: 15, y: 3 }]) }).filter((c) => c.code.startsWith("LEG_"));
+    expect(around.map((c) => [c.code, c.leg?.index])).toEqual([["LEG_CROSSES_OOB", 2]]);
+    const into = run({ document, structure: items([{ x: 15, y: 3 }, { x: 22.5, y: 3 }, { x: 22.5, y: 0 }]) }).filter((c) => c.code.startsWith("LEG_"));
+    expect(into.map((c) => [c.code, c.leg?.index, c.at])).toEqual([["LEG_CROSSES_OOB", 1, { x: 22.5, y: 2 }], ["LEG_CROSSES_OOB", 2, { x: 21, y: 0 }]]);
+    expect(into[0].leg).toEqual({ from: "31", to: "32", index: 1 });
+  });
   it("a leg running inside an area without crossing its edge", () => {
     const inside: CheckObstacle = { ...oob, points: [{ x: 15, y: -3 }, { x: 30, y: -3 }, { x: 30, y: 3 }, { x: 15, y: 3 }] };
     const found = run({ document: { libraryId: "ISOM2017-2", obstacles: [inside] } }).filter((c) => c.code === "LEG_CROSSES_OOB");
