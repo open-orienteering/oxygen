@@ -170,8 +170,8 @@ describe("layout objects (§3.6)", () => {
       const layer = courseLayer(layerInput({ objects: [text, oob, toner], viewOptions: { window } }));
       const ring = layer.objects.find((o) => o.path.flags.some((f) => f & 16))!;
       const fill = layer.symbols[ring.symbolIdx];
-      expect(fill.type).toBe("area");
-      const row = fill.type === "area" ? fill.fill : -1;
+      if (fill.type !== "area") throw new Error("the ring is not an area");
+      const row = fill.fill ?? -1;
       expect(row).toBe(layer.colours.length - 1);
       expect(layer.colours[row]).toMatchObject({ id: "course:toner-saver-white", cmyk: [0, 0, 0, 0] });
       // Symbolised with the document: the ring is the last pass — after the map's black, the course's upper

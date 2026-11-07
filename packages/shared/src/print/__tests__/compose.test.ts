@@ -6,6 +6,7 @@
 
 import { describe, expect, it } from "vitest";
 import { CourseStackError } from "../../course/colour-stack.js";
+import type { CourseLayerObject } from "../../course/objects.js";
 import { pathRings } from "../../render/path.js";
 import { liberation } from "../../render/__tests__/fonts.js";
 import { pageScene } from "../__fixtures__/pages.js";
@@ -81,7 +82,7 @@ describe("composePage", () => {
 
   it("a map toner saver covers the map layer's text and 709 areas outside it: its ring is the last map pass, the page layer after (P1)", () => {
     const base = pageScene("page-ring");
-    const outside = [
+    const outside: CourseLayerObject[] = [
       { id: 9, kind: "oob_area" as const, geometry: [{ x: 42, y: 30 }, { x: 55, y: 30 }, { x: 55, y: 45 }], props: {} },
       { id: 10, kind: "text" as const, geometry: [{ x: -55, y: 40 }], props: { text: "Ingen passage", fontSizeMm: 3 } },
     ];
