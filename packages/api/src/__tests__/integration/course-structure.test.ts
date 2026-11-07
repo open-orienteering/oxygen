@@ -223,23 +223,8 @@ describe("course.setStructure", () => {
     expect([rb.lengthM, rb.lengthSource]).toEqual([ra.lengthM, ra.lengthSource]);
   });
 
-  it("refuses variation groups (slice F) and unknown controls", async () => {
+  it("refuses unknown controls (variation groups are materialised: course-variants.test.ts)", async () => {
     const { id } = await caller.course.create({ name: "Var" });
-    await expect(
-      caller.course.setStructure({
-        courseId: id,
-        structure: {
-          version: 1,
-          id: "v",
-          orderMode: "ordered",
-          items: [
-            { siteId: 31 },
-            { kind: "variation", id: "g", alternatives: [{ label: "A", items: [{ siteId: 32 }] }, { label: "B", items: [{ siteId: 33 }] }] },
-            { siteId: 34 },
-          ],
-        },
-      }),
-    ).rejects.toMatchObject({ code: "PRECONDITION_FAILED" });
     await expect(
       caller.course.setStructure({ courseId: id, structure: { version: 1, id: "v", orderMode: "ordered", items: [{ siteId: 999 }] } }),
     ).rejects.toMatchObject({ code: "NOT_FOUND" });

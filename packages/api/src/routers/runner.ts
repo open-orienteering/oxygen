@@ -99,6 +99,21 @@ export async function buildRunnerUpdateData(
   if (get<number>("classId") !== undefined) {
     data.classId = await classSeqToId(db, eventId, get<number>("classId")!);
   }
+  // The runner's own course (a variant, docs/course-layer.md §12): a course
+  // seq, or null for "the class's". F6 journals `null` when a variant
+  // vanishes; F6b writes seqs.
+  if (fields.courseId === null) {
+    data.courseId = null;
+  } else if (typeof fields.courseId === "number") {
+    const course = await db.course.findFirst({
+      where: { eventId, seq: fields.courseId },
+      select: { id: true },
+    });
+    if (!course) {
+      throw new TRPCError({ code: "NOT_FOUND", message: `Course ${fields.courseId} not found` });
+    }
+    data.courseId = course.id;
+  }
   if (get<number>("startNo") !== undefined) data.startNo = get<number>("startNo");
   if (get<number>("startTime") !== undefined) {
     const st = get<number>("startTime")!;

@@ -226,6 +226,37 @@ describe("reference mutations → *.upserted", () => {
     expect(p.fields.codes).toBe("93");
     expect(p.fields.removed).toBe(true);
   });
+
+  it("course.setStructure with a group journals every variant, the pools and the runners whose variant vanished (F6)", async () => {
+    const ids: number[] = [];
+    for (const code of ["94", "95", "96", "97"]) ids.push((await caller.control.create({ codes: code })).id);
+    const root = await caller.course.create({ name: "Forked" });
+    const cls = await caller.class.create({ name: "Forked class", courseId: root.id });
+    const items = (alts: number[][]) => [
+      { siteId: ids[0] },
+      { kind: "variation" as const, id: "g", alternatives: alts.map((a, i) => ({ label: "AB"[i], items: a.map((siteId) => ({ siteId })) })) },
+      { siteId: ids[3] },
+    ];
+    await caller.course.setStructure({ courseId: root.id, structure: { version: 1, id: "f", orderMode: "ordered", items: items([[ids[1]], [ids[2]]]) } });
+    const rootRow = await ctx.db.course.findFirstOrThrow({ where: { eventId: ctx.eventId, seq: root.id } });
+    const kids = await ctx.db.course.findMany({ where: { parentCourseId: rootRow.id }, orderBy: { variantKey: "asc" } });
+    const pool = (await latestEntry("class.upserted"))!.payload as { seq: number; coursePools: { stage: number; courseId: string }[] };
+    expect(pool.seq).toBe(cls.id);
+    expect(pool.coursePools.map((p) => p.courseId).sort()).toEqual(kids.map((k) => k.id).sort());
+    const childEntry = (await latestEntry("course.upserted"))!.payload as { id: string; fields: Record<string, unknown> };
+    expect(childEntry.id).toBe(kids[1].id);
+    expect(childEntry.fields).toMatchObject({ parentCourseId: rootRow.id, variantKey: "B", name: "Forked B" });
+
+    const r = await ctx.db.runner.create({
+      data: { eventId: ctx.eventId, name: "Forked runner", courseId: kids[1].id, cardNo: 7200001 },
+      select: { seq: true },
+    });
+    await caller.course.setStructure({ courseId: root.id, structure: { version: 1, id: "f", orderMode: "ordered", items: items([[ids[1]], [ids[1], ids[2]]]) } });
+    // The keys stay, nothing vanished: no runner entry yet.
+    expect(((await latestEntry("runner.updated"))?.payload as { runnerId?: number } | undefined)?.runnerId).not.toBe(r.seq);
+    await caller.course.setStructure({ courseId: root.id, structure: { version: 1, id: "f", orderMode: "ordered", items: [{ siteId: ids[0] }, { siteId: ids[3] }] } });
+    expect((await latestEntry("runner.updated"))!.payload).toEqual({ cardNo: 7200001, runnerId: r.seq, fields: { courseId: null } });
+  });
 });
 
 describe("runner CRUD journaling", () => {

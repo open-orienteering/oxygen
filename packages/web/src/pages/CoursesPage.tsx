@@ -132,6 +132,37 @@ function CourseExportMenu({ nameId, onAllMaps, onAllControls }: { nameId: string
   );
 }
 
+/** A materialised variant under its root: key, controls, length — no actions (docs/course-layer.md §12). */
+function VariantRow({ variant, rootName }: { variant: CourseSummary; rootName: string }) {
+  const { t } = useTranslation("courses");
+  return (
+    <tr
+      data-testid={`course-variant-row-${variant.id}`}
+      className="bg-slate-50/60 text-slate-500"
+      title={t("variantOf", { key: variant.variantKey ?? "", root: rootName })}
+    >
+      <td className="px-3 py-1.5" />
+      <td className="pl-10 pr-4 py-1.5">
+        <span className="inline-flex items-center gap-1.5">
+          <span aria-hidden className="text-slate-300">↳</span>
+          <span data-testid="course-variant-key" className="px-1.5 py-0.5 rounded text-xs font-semibold bg-purple-50 text-purple-700 tabular-nums">
+            {variant.variantKey}
+          </span>
+          <span className="text-slate-500">{variant.name}</span>
+        </span>
+      </td>
+      <td className="px-4 py-1.5 tabular-nums">{variant.controlCount}</td>
+      <td className="px-4 py-1.5 tabular-nums">
+        {variant.length > 0 ? `${(variant.length / 1000).toFixed(1)} km` : <span className="text-slate-300">—</span>}
+      </td>
+      <td className="px-4 py-1.5 tabular-nums hidden md:table-cell">{variant.numberOfMaps}</td>
+      <td colSpan={2} />
+      <td className="hidden lg:table-cell" />
+      <td />
+    </tr>
+  );
+}
+
 export function CoursesPage() {
   const { t } = useTranslation("courses");
   const { nameId } = useParams<{ nameId: string }>();
@@ -153,10 +184,24 @@ export function CoursesPage() {
 
   const courses = trpc.course.list.useQuery();
   const { info } = overview;
+  // Materialised variants nest under their root, read-only (docs/course-layer.md §12):
+  // the table's rows, filter, sort, selection and count are the roots.
   const rows = useMemo<CourseRow[]>(
-    () => (courses.data ?? []).map((c) => ({ ...c, templateNames: info(c.id).templateNames, printStatus: info(c.id).printStatus })),
+    () =>
+      (courses.data ?? [])
+        .filter((c) => c.parentCourseId === null)
+        .map((c) => ({ ...c, templateNames: info(c.id).templateNames, printStatus: info(c.id).printStatus })),
     [courses.data, info],
   );
+  const variantsOf = useMemo(() => {
+    const out = new Map<number, CourseSummary[]>();
+    for (const c of courses.data ?? []) {
+      if (c.parentCourseId === null) continue;
+      out.set(c.parentCourseId, [...(out.get(c.parentCourseId) ?? []), c]);
+    }
+    for (const list of out.values()) list.sort((a, b) => (a.variantKey ?? "").localeCompare(b.variantKey ?? ""));
+    return out;
+  }, [courses.data]);
 
   const deleteMutation = trpc.course.delete.useMutation({
     onSuccess: () => {
@@ -384,6 +429,14 @@ export function CoursesPage() {
                               {t("orderModeFreeOrderBadge")}
                             </span>
                           )}
+                          {(variantsOf.get(c.id)?.length ?? 0) > 0 && (
+                            <span
+                              data-testid={`course-variant-count-${c.id}`}
+                              className="px-1.5 py-0.5 rounded text-xs font-medium bg-purple-100 text-purple-800"
+                            >
+                              {t("variantCount", { count: variantsOf.get(c.id)!.length })}
+                            </span>
+                          )}
                         </span>
                       </td>
                       <td className="px-4 py-2.5 tabular-nums text-slate-600">
@@ -498,6 +551,9 @@ export function CoursesPage() {
                         </td>
                       </tr>
                     )}
+                    {(variantsOf.get(c.id) ?? []).map((v) => (
+                      <VariantRow key={v.id} variant={v} rootName={c.name} />
+                    ))}
                   </Fragment>
                 ))}
               </tbody>
@@ -635,6 +691,9 @@ function CourseInlineDetail({ courseId }: { courseId: number }) {
   }
 
   const d = detail.data;
+  // A root's sequence and order are its structure's (docs/course-layer.md §12):
+  // `course.update` refuses them, so the fields here are read-only.
+  const hasVariations = d.structure.items.some((i) => i.kind === "variation");
 
   const handleSave = (field: string, value: string | number | boolean) => {
     updateMutation.mutate({ id: courseId, [field]: value, baseVersion: d.version });
@@ -751,6 +810,7 @@ function CourseInlineDetail({ courseId }: { courseId: number }) {
             </label>
             <select
               data-testid="course-order-mode"
+              disabled={hasVariations}
               value={d.orderMode ?? "ordered"}
               onChange={(e) => handleSave("orderMode", e.target.value)}
               className="w-full sm:w-56 px-3 py-1.5 border border-slate-200 rounded-lg text-sm bg-white focus:outline-none focus:ring-2 focus:ring-blue-500"
@@ -766,6 +826,8 @@ function CourseInlineDetail({ courseId }: { courseId: number }) {
             </label>
             <input
               type="text"
+              data-testid="course-detail-controls"
+              disabled={hasVariations}
               value={editControls ?? controlsCodeString}
               onChange={(e) => {
                 setEditControls(e.target.value);
@@ -786,6 +848,10 @@ function CourseInlineDetail({ courseId }: { courseId: number }) {
             />
             {controlsError ? (
               <p className="text-xs text-rose-600 mt-1">{controlsError}</p>
+            ) : hasVariations ? (
+              <p className="text-xs text-slate-500 mt-1" data-testid="course-variations-hint">
+                {t("variationsSequenceHint")}
+              </p>
             ) : (
               <p className="text-xs text-slate-400 mt-1">
                 {t("controlsHelp")}
