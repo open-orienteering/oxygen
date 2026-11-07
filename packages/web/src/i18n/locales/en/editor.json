@@ -70,7 +70,6 @@
   "check_DESCRIPTION_STALE": "The description of {{code}} no longer matches the map",
   "check_LEG_CROSSES_OOB": "Leg {{from}}–{{to}} crosses out-of-bounds",
   "check_LEG_THROUGH_UNCROSSABLE": "Leg {{from}}–{{to}} crosses an uncrossable feature ({{symbol}})",
-  "statusPendingLeg": "Leg {{m}} m",
   "kind_oob_area": "Out-of-bounds area",
   "kind_oob_line": "Out-of-bounds line",
   "kind_whiteout": "White-out",
@@ -261,5 +260,6 @@
   "addSpecial": "Add instruction",
   "removeSpecial": "Remove instruction",
   "specialCount_one": "{{count}} instruction",
-  "specialCount_other": "{{count}} instructions"
+  "specialCount_other": "{{count}} instructions",
+  "stats": "Course info"
 }

@@ -2,8 +2,9 @@
  * The editor's top bar (docs/course-editor.md §2; 08 §5.2): course picker,
  * view picker (Course · All controls · Class, docs/course-layout.md §6),
  * mode switch (Course · Layout · Field), undo / redo, hide other controls,
- * auto cuts, Export ▾ (docs/course-layout.md §7), who else has a course open
- * (docs/course-editor.md §11) and the help popover. It sits in `MapPanel`'s toolbar row, so it stays
+ * auto cuts, Export ▾ (docs/course-layout.md §7), the save indicator and the
+ * course-info popover (docs/course-editor.md §2, §3; P2 moved them here from the
+ * status bar), who else has a course open (docs/course-editor.md §11) and the help popover. It sits in `MapPanel`'s toolbar row, so it stays
  * in the fullscreen subtree; zoom and fullscreen are the viewer's and the
  * panel's own buttons on the same row.
  */
@@ -16,6 +17,8 @@ import type { ReactNode } from "react";
 import type { EditorMode, EditorView } from "../../lib/editor/state";
 import type { ExportState } from "../../lib/editor/export-menu";
 import { ExportMenu } from "./ExportMenu";
+import { SaveIndicator, StatsButton } from "./EditorStatus";
+import type { SaveState, StatusInput } from "../../lib/editor/status";
 
 export interface TopBarProps {
   courses: { id: number; name: string }[];
@@ -42,6 +45,10 @@ export interface TopBarProps {
   onToggleCuts: () => void;
   /** Who else has a course open (`PresenceChips`, D11). */
   presence?: ReactNode;
+  /** The autosave state (§3): always in sight. */
+  save: SaveState;
+  /** The course-info popover's values (§2). */
+  status: StatusInput;
 }
 
 const MODES: { mode: EditorMode; key: "modeCourse" | "modeLayout" | "modeField"; slice?: string }[] = [
@@ -126,6 +133,8 @@ export function TopBar(p: TopBarProps) {
         onClick={p.onToggleCuts}
       />
       <ExportMenu state={p.exportState} onError={p.onExportError} />
+      <StatsButton status={p.status} />
+      <SaveIndicator save={p.save} />
       {p.presence}
       <EditorHelp hint={t("help")} label={tc("editor.helpAria")} />
     </div>

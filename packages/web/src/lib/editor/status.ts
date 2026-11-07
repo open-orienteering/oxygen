@@ -32,7 +32,9 @@ export interface StatusRow {
   data: Record<string, string>;
 }
 
-type T = (key: string, opts?: Record<string, unknown>) => string;
+type StatusKey = "statusControls" | "statusLength" | "statusClimb" | "statusScale" | "statusSnapping" | "statusChecks";
+/** The editor namespace's `t`, narrowed to the keys the rows use. */
+type T = (key: StatusKey, opts?: { count?: number; km?: string; m?: number; scale?: string }) => string;
 
 /** The rows that have a value, in the order controls · length · climb · scale | sheet · snapping · checks. */
 export function statusRows(s: StatusInput, t: T): StatusRow[] {

@@ -77,7 +77,10 @@ test.describe("Field mode on a phone (docs/course-editor.md §9, §10)", () => {
     await expect(page.getByTestId("editor-mode-field")).toHaveAttribute("aria-pressed", "true");
     await expect(page.getByTestId("editor-field-top-bar")).toBeVisible();
     await expect(sheet(page)).toHaveAttribute("data-detent", "peek");
-    for (const id of ["editor-tool-rail", "editor-inspector", "editor-top-bar"]) await expect(page.getByTestId(id)).toHaveCount(0);
+    for (const id of ["editor-tool-rail", "editor-inspector", "editor-top-bar", "editor-stats"]) await expect(page.getByTestId(id)).toHaveCount(0);
+    // The phone keeps its peek line (P2 moved only the desktop status bar into the top bar): KPIs and the save state.
+    await expect(sheet(page).getByTestId("editor-status")).toBeVisible();
+    await expect(sheet(page).getByTestId("editor-save-state")).toHaveAttribute("data-state", "saved", { timeout: 15000 });
     // Full-bleed: the editor covers the screen, the app's header is under it.
     const box = (await page.getByTestId("editor-page").boundingBox())!;
     const vp = page.viewportSize()!;

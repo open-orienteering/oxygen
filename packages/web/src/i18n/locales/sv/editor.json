@@ -70,7 +70,6 @@
   "check_DESCRIPTION_STALE": "Beskrivningen för {{code}} stämmer inte längre med kartan",
   "check_LEG_CROSSES_OOB": "Sträckan {{from}}–{{to}} korsar förbjudet område",
   "check_LEG_THROUGH_UNCROSSABLE": "Sträckan {{from}}–{{to}} korsar ett ej passerbart objekt ({{symbol}})",
-  "statusPendingLeg": "Sträcka {{m}} m",
   "kind_oob_area": "Förbjudet område",
   "kind_oob_line": "Förbjuden linje",
   "kind_whiteout": "Vitmaskning",
@@ -261,5 +260,6 @@
   "addSpecial": "Lägg till anvisning",
   "removeSpecial": "Ta bort anvisning",
   "specialCount_one": "{{count}} anvisning",
-  "specialCount_other": "{{count}} anvisningar"
+  "specialCount_other": "{{count}} anvisningar",
+  "stats": "Baninfo"
 }

@@ -465,6 +465,30 @@ export async function select(page: Page, code: string): Promise<void> {
   }).toPass({ timeout: 20000 });
 }
 
+/**
+ * A value of the top bar's course-info popover (`editor-stats`, docs/course-editor.md §2; P2): opens it with the
+ * button, reads `editor-stats-<row>[data-<attr>]` (null when the row is absent), closes it with the button again —
+ * not Escape, which would step the editor's Escape cascade (§3) or disarm a tool.
+ */
+export async function statsRow(page: Page, row: string, attr: string): Promise<string | null> {
+  const button = page.getByTestId("editor-stats");
+  const popover = page.getByTestId("editor-stats-popover");
+  if ((await popover.count()) === 0) await button.click();
+  await expect(popover).toBeVisible();
+  const el = popover.getByTestId(`editor-stats-${row}`);
+  const value = (await el.count()) ? await el.getAttribute(`data-${attr}`) : null;
+  await button.click();
+  await expect(popover).toHaveCount(0);
+  return value;
+}
+
+/** The map scale's denominator, from the course-info popover's scale row (shown when no sheet is). */
+export async function mapScale(page: Page): Promise<number> {
+  const scale = Number(await statsRow(page, "scale", "scale"));
+  expect(scale, "the course-info popover's scale row").toBeGreaterThan(0);
+  return scale;
+}
+
 /** Arm a tool by its key (`K`, `S`, `G` …): the rail shows it pressed. */
 export async function arm(page: Page, key: string): Promise<void> {
   await page.keyboard.press(key.toLowerCase());
