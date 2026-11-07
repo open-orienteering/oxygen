@@ -452,6 +452,27 @@ export const eventRouter = router({
 
       // Resolve course seq for each class' courseId UUID.
       const courseSeqById = new Map(courses.map((c) => [c.id, c.seq]));
+
+      // Stage-0 variant pools (F6c: the offline readout's other-variant
+      // match), each class's variants in key order.
+      const poolRows = await ctx.db.classCoursePool.findMany({
+        where: {
+          stage: 0,
+          class: { eventId: ctx.event.id },
+          course: { removed: false, parentCourseId: { not: null } },
+        },
+        select: { classId: true, course: { select: { seq: true, variantKey: true } } },
+      });
+      const poolByClass = new Map<string, { seq: number; key: string }[]>();
+      for (const r of poolRows) {
+        const list = poolByClass.get(r.classId) ?? [];
+        list.push({ seq: r.course.seq, key: r.course.variantKey ?? "" });
+        poolByClass.set(r.classId, list);
+      }
+      const poolIdsOf = (classId: string): number[] =>
+        (poolByClass.get(classId) ?? [])
+          .sort((a, b) => (a.key < b.key ? -1 : a.key > b.key ? 1 : 0))
+          .map((v) => v.seq);
       const classInfos: ClassInfo[] = classes.map((c) => ({
         id: c.seq,
         name: c.name,
@@ -466,6 +487,7 @@ export const eventRouter = router({
         classType: c.classType || undefined,
         freeStart: c.freeStart,
         noTiming: c.noTiming,
+        coursePoolIds: poolIdsOf(c.id),
       }));
 
       const courseInfos: CourseInfo[] = await Promise.all(
@@ -483,6 +505,7 @@ export const eventRouter = router({
             numberOfMaps: c.numberOfMaps > 0 ? c.numberOfMaps : undefined,
             orderMode: c.orderMode,
             expectedPositions,
+            variantKey: c.variantKey,
           };
         }),
       );

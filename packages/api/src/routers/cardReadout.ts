@@ -22,8 +22,11 @@ import {
   matchPunchesToCourse,
   computeStatus,
   computeMatchScore,
+  findMatchingVariants,
   voltsFromMeos,
   RunnerStatus,
+  type OtherVariantMatch,
+  type VariantCandidate,
   type ParsedPunch,
   type ControlMatch,
   type CardReadPayload,
@@ -36,6 +39,7 @@ import {
 import { appendJournal } from "../journalEmit.js";
 import { resolveCourseExpectedPositions } from "./course.js";
 import { pushToGoogleSheet, type SheetRow } from "../sheetsBackup.js";
+import { poolOf, assertInPool } from "../variants.js";
 
 /** Works with both the singleton client and a `$transaction` client. */
 type Db = PrismaClient | Prisma.TransactionClient;
@@ -132,6 +136,14 @@ export interface PerformReadoutResult {
    * card-read as a real readout or as a pre-start scan with stale data.
    */
   matchScore: number;
+  /**
+   * Red exit (F6c, docs/registration-and-readout.md §4f): when the status
+   * is MP and the runner's class pools two or more variants, the other
+   * pooled variants the punches validate fully against; `[]` otherwise.
+   * Informational for the desk — status and course are the runner's own;
+   * `cardReadout.acceptVariant` switches by hand.
+   */
+  otherVariantMatches: OtherVariantMatch[];
 }
 
 /**
@@ -140,7 +152,7 @@ export interface PerformReadoutResult {
  * the receipt printer and the web readout view.
  */
 export async function performReadout(
-  db: PrismaClient,
+  db: Db,
   eventId: bigint,
   zeroTime: number,
   runnerUuid: string,
@@ -253,6 +265,11 @@ export async function performReadout(
     currentStatus: dbStatusNumeric,
   });
 
+  const otherVariantMatches =
+    status === RunnerStatus.MissingPunch && runner.classId
+      ? await otherVariantMatchesOf(db, runner.classId, courseId, allPunches, runnerStartTime)
+      : [];
+
   const missingControls = matches
     .filter((m) => m.status === "missing" && m.positionMode === "required")
     .map((m) => m.controlCode);
@@ -318,7 +335,43 @@ export async function performReadout(
     freePunchCount: freeParsed.length,
     hasCard: !!card,
     matchScore,
+    otherVariantMatches,
   };
+}
+
+/**
+ * The class's other pooled variants (pool minus `currentCourseId`) the
+ * punches validate fully against; nothing for a pool under two.
+ */
+async function otherVariantMatchesOf(
+  db: Db,
+  classId: string,
+  currentCourseId: string | null,
+  punches: ParsedPunch[],
+  fallbackStartTime: number,
+): Promise<OtherVariantMatch[]> {
+  const pool = await poolOf(db, classId);
+  if (pool.length < 2) return [];
+  const others = pool.filter((v) => v.id !== currentCourseId);
+  if (others.length === 0) return [];
+  const rows = await db.course.findMany({
+    where: { id: { in: others.map((v) => v.id) } },
+    select: { id: true, name: true, orderMode: true },
+  });
+  const byId = new Map(rows.map((r) => [r.id, r]));
+  const candidates: VariantCandidate[] = [];
+  for (const v of others) {
+    const row = byId.get(v.id);
+    if (!row) continue;
+    candidates.push({
+      courseId: v.seq,
+      variantKey: v.variantKey,
+      courseName: row.name,
+      orderMode: row.orderMode,
+      expectedPositions: await resolveCourseExpectedPositions(db, v.id),
+    });
+  }
+  return findMatchingVariants(punches, candidates, { fallbackStartTime });
 }
 
 /** Find a runner UUID by event + card number. */
@@ -799,6 +852,80 @@ export const cardReadoutRouter = router({
         });
       });
       return { ok: true as const };
+    }),
+
+  /**
+   * Red exit (F6c, docs/registration-and-readout.md §5c): the official
+   * accepts a run of another pooled variant. Refuses a course outside the
+   * class's pool (`VARIANT_NOT_IN_POOL`), the runner's current course
+   * (`VARIANT_IS_CURRENT`) and a variant the punches do not validate fully
+   * against with a finish (`VARIANT_NOT_MATCHED`). Otherwise, in one
+   * transaction: `runner.courseId` = the variant, status / start / finish
+   * applied from the re-run readout as `applyResult` writes them, and
+   * `runner.updated { courseId, variantAccepted }` + `result.applied`
+   * journaled. Never called by the readout itself.
+   */
+  acceptVariant: raceOperateRaceProcedure
+    .input(z.object({ runnerId: z.number().int(), courseId: z.number().int() }))
+    .mutation(async ({ ctx, input }) => {
+      const runner = await ctx.db.runner.findFirst({
+        where: { eventId: ctx.event.id, seq: input.runnerId, removed: false },
+        select: { id: true, classId: true, cardNo: true, courseId: true },
+      });
+      if (!runner) {
+        throw new TRPCError({ code: "NOT_FOUND", message: `Runner ${input.runnerId} not found` });
+      }
+      const eventId = ctx.event.id;
+      const zeroTime = ctx.event.zeroTime;
+      return ctx.db.$transaction(async (tx) => {
+        const pool = runner.classId ? await poolOf(tx, runner.classId) : [];
+        const variant = assertInPool(pool, input.courseId);
+        if (variant.id === runner.courseId) {
+          throw new TRPCError({
+            code: "PRECONDITION_FAILED",
+            message: `VARIANT_IS_CURRENT: the runner already runs variant ${variant.variantKey}`,
+          });
+        }
+        await tx.runner.update({ where: { id: runner.id }, data: { courseId: variant.id } });
+        const r = await performReadout(tx, eventId, zeroTime, runner.id);
+        if (!r || r.missingControls.length > 0 || r.timing.finishTime === 0) {
+          // Throwing rolls the course write back.
+          throw new TRPCError({
+            code: "PRECONDITION_FAILED",
+            message: `VARIANT_NOT_MATCHED: the punches do not validate fully against variant ${variant.variantKey}`,
+          });
+        }
+        const { status, finishTime, startTime } = r.timing;
+        await tx.runner.update({
+          where: { id: runner.id },
+          data: {
+            status: valueToRunnerStatus(status),
+            finishTime: finishTime > 0 ? toRelative(finishTime, zeroTime) : 0,
+            startTime: startTime > 0 ? toRelative(startTime, zeroTime) : 0,
+          },
+        });
+        await appendJournal(tx, {
+          eventId,
+          type: "runner.updated",
+          payload: {
+            cardNo: runner.cardNo ?? null,
+            runnerId: input.runnerId,
+            fields: { courseId: variant.seq, variantAccepted: true },
+          },
+        });
+        await appendJournal(tx, {
+          eventId,
+          type: "result.applied",
+          payload: {
+            cardNo: runner.cardNo ?? null,
+            runnerId: input.runnerId,
+            status,
+            finishTime,
+            startTime,
+          },
+        });
+        return { ok: true as const, courseId: variant.seq, variantKey: variant.variantKey, status };
+      });
     }),
 
   /** History of recent card readouts for the active event. */
