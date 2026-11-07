@@ -354,7 +354,18 @@ returns to select from any tool; right-click exits an exclusive tool.
   ghost ring, its label and description stay in the UI layer; there is
   no dashed UI-layer leg. In a fast chain the leg from a control placed
   a moment ago appears once the lists refetch. No model object exists
-  between clicks.
+  between clicks. The viewer's course list (`MapPanel`'s `courseOverlays`,
+  `lib/course-overlay-ids.ts`) carries each course's start and finish
+  whatever its control count, so the splice has an end to join: the
+  course's own `startControlId` / `finishControlId` when they name a live
+  control of the role; else, for a legacy course with controls, the start
+  nearest its first control and the finish nearest its last; else (no
+  controls, no explicit end — a fresh course) the event default of
+  `course-layer.md` §6.2 (lowest id, `effectiveRoleControlId`, as the
+  inspector's rows). No start under `firstAsStart`, no finish under
+  `lastAsFinish`. A start just placed with `S` therefore draws its leg to
+  the cursor on the first `K` hover (P5; before, a course without controls
+  reached the layer with no start, and only the length label showed).
 - **Leg length** (`editor-leg-length`): the first pending leg's length
   on the ground as a UI-layer label at its midpoint, "‹n› m" rounded to
   the metre (paper mm × the map scale, `lib/editor/leg-length.ts`). It is
@@ -1079,6 +1090,8 @@ whose poll ran meanwhile simply does not conflict (decision log, D10).
 | unit (web) | `pages/editor/__tests__/bindings.test.ts` "pinch-scale" | §10: `scaleAbout` (handles scale with it), a finger on the ring starts it, the draft per move, one write on lift, nothing selected / cancelled / within 1 % writes nothing |
 | unit (web) | `lib/editor/__tests__/status.test.ts` | §2, §3, §8 (P2): the course-info rows for a course (controls · length · climb · scale · checks, numeric `data`), without a course (scale only), the sheet key in place of the scale, snapping on, zero climb and checks absent; the badge (the count, none at zero); the save indicator (`saved` / `saving` the dot alone, `error` / `conflict` always show their words) |
 | E2E | `e2e/course-editor.spec.ts` "P2: the status bar out of the footer" (`chromium`) | §2, §3 (P2): no `editor-status` on the desktop; `editor-save-state` inside `editor-top-bar` reaches `saved`; `editor-stats` opens the popover (`aria-expanded`) with the controls (`data-count` 0, then 1 after a `K` placement), length and scale rows, a second click and an outside click close it, Escape with `K` armed closes it and leaves `K` pressed (a second Escape returns to `V`); at 1280 × 720 with `saved` the words take no room (width ≤ 1 px, the title set), the indicator is ≤ 16 px and the button ≤ 32 px wide; at 1024 × 700 a `control.create` aborted at the network → `data-state="error"` with `editor-save-state-text` visible, non-empty and inside the viewport. The shell test ("mounts the new editor") asserts the indicator and the button visible and no `editor-status`; the Layout / Class view test reads the sheet key from `editor-stats-sheet` |
+| unit (web) | `lib/__tests__/course-overlay-ids.test.ts` | §6.1 (P5): the overlay ids of a start-only course (the regression) and a finish-only one; a full course with explicit ends; the explicit ends win over the nearest; the legacy fallback to the start nearest the first control and the finish nearest the last; no controls and no explicit end → the event default (lowest id); a stale id or one of the wrong role treated as none; none under `firstAsStart` / `lastAsFinish`; no start or finish in the event; an end already at the head or tail not repeated; an unpositioned first control keeps the explicit start, else the default |
+| E2E | `e2e/course-editor.spec.ts` "P5: the pending leg from a just-placed start" (`chromium`) | §6.1 (P5): on a fresh course the armed `K`'s hover draws a `course-leg` piece from the default start (the inspector's start row) to the cursor; `S` places a start (`course.setStructure`), the start row names it and `K` is pressed; the hover shows `editor-leg-length` "‹n› m" and a `course-leg` piece from the new start's rim to the cursor's; the click adds the control row, and after `Esc` (no label) the leg start → control is still drawn |
 | E2E | `e2e/field-mode.spec.ts` (`mobile` project: Pixel 7, `vector`) | §10: opens in Field mode, full-bleed, compact bar and overflow, no rail / inspector / `editor-stats`, the sheet's status line (`editor-status`, `editor-save-state` `saved`) (P2), ≥ 44 px targets; §9: `setGeolocation` → the marker with its accuracy, every row's distance and bearing = the paper geometry at one scale; detents (tap, handle drag to full) and a list row's control centred above the sheet; a quick drag on an unselected control pans without selecting, a long press selects, shows the stem and the loupe (`editor-loupe`, 120 px, above the handle; the canvas inside it differs from the same circle after release — the 1× map — and has the map's purple; gone on release) and drops the control 48 px above the finger (persisted); two fingers cancel a pending press and zoom; nudge 2 × 0.1 mm, 1 m, the x field, four undos back; `+` → `K` → Place above the sheet adds a site, Done; a tap on an `oob_area`'s outline (created through `courseObject.create`) selects it, a tap inside deselects it (D12), and two fingers on its corners scale it by their spread, the map's zoom unchanged; check-off persists over a reload; offline: the notice, `+` disabled, a long-press move snaps back. "Field mode on a desktop" (desktop viewport in the same spec): the mode switch, no rail, the list's distance after a fix, check-off and `Ctrl+Z`, back to Course mode |
 | unit, integration, E2E | `course-layout.md` "Tests" | Layout mode |
 
@@ -1100,6 +1113,15 @@ whose poll ran meanwhile simply does not conflict (decision log, D10).
   keeps `kind` a free string (`z.string().max(20)`); only the inspector
   restricts it to the 13.x / 14.x options.
 - **Course delete** stays on the Courses page.
+- **One default start for every reader** (P5, for user review): the
+  viewer's course list falls back to the start nearest a legacy course's
+  first control (and the finish nearest its last), while the readers
+  (`courseSequenceOf`: legs, lengths, print, export) and the inspector's
+  rows take the event's lowest one. In an event with several starts and no
+  explicit assignment the editor can draw a leg from a start the print does
+  not use. Dropping "nearest" for the readers' default (one line in
+  `lib/course-overlay-ids.ts`) would make them agree; kept per the
+  feedback-2026-11-07 default.
 - **Presence names without sign-in**: an instance with auth off lists
   every editor as "Someone" (the station name could stand in, D11 left it);
   "moved by X at T" has no name there either. No leave message: a closed
