@@ -35,7 +35,7 @@ import type { EditorView } from "../../../lib/editor/state";
 import { LAYOUT_KEYS, layoutBinding, type LayoutChange, type LayoutGesture, type LayoutSelection, type LayoutTarget, type LayoutTool, type PlaceKind } from "../layout/bindings";
 import { LayoutInspector } from "../layout/LayoutInspector";
 import { LayoutRail } from "../layout/LayoutRail";
-import { ClassOverridesSection, TemplateKeySection } from "../layout/KeySections";
+import { ClassOverridesSection, ClubTemplatesSection, TemplateKeySection } from "../layout/KeySections";
 import { NoSheetActions, SheetActions, TemplateActions } from "../layout/SheetActions";
 import { useCapabilities } from "../../../context/CapabilitiesContext";
 import { geometryOf, layoutRequestOf, pathObject, placeObject, scopeObjects, sheetKeyOf, snapshotOf, templateWriteOf, withEditable, type EditorSheet, type LayoutSnapshot } from "../layout/model";
@@ -410,6 +410,7 @@ export function useLayoutMode(a: LayoutModeArgs): LayoutMode {
     {data?.sheet?.kind === "course" && data.sheet.courseSeq !== null && (
       <ClassOverridesSection courseSeq={data.sheet.courseSeq} canEdit={canEdit} run={run} record={record} onOpen={open} />
     )}
+    {data && <ClubTemplatesSection template={data.template} canEdit={canEdit} run={run} onOpen={open} />}
     </div>
   );
 
