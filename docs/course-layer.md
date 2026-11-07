@@ -161,11 +161,12 @@ automatic cuts; an empty list means automatic (decision log 2026-11-01,
 |---|---|---|
 | `structure` | `CourseStructure` (one course), an array (several highlighted courses: legs of each, codes as numbers) or `null` (no course) — the stored form is §6 | `{ version: 1, id, orderMode, items, labelOffsets? }`: `items` start … finish — the start by `startName` unless `firstAsStart`, `course_controls` in order, the finish by `finishControlId` unless `lastAsFinish`; from the stored structure when there is one (§6), else from the columns — one rule for every reader (`courseSequenceOf`, §6.2: `rebuildCourseLengths`, `course-export.ts`, the print layout); `labelOffsets` from `course_controls` |
 | `CourseItem` | `{ siteId, role?, leg?, numberHidden? }` — 08 §4.3's item, the leg being the leg *into* the item | `role` defaults to the site's kind (set it for `firstAsStart` / `lastAsFinish`); `numberHidden` from the visit's `number_hidden` |
-| `leg` | `{ gaps?, style?, bends? }` — the stored `LegProps.gaps` (fractions along the leg, bends included), `style` (`line` \| `marked_route` \| `none`, default `line`) and `bends` (paper mm), §10.1; `corridor` and `crossing` are F2's / F4's and not read | `LegProps` of the structure's item (§6.4: written by the importers and the backfill, by the editor from D5). The v1 interim input of slice C (`path`, `pieces`, item `circleGaps`, `extras`, read from an imported `ocd` course's GeoJSON) is **retired** by D1: nothing is read from the GeoJSON |
+| `leg` | `{ gaps?, style?, bends?, corridor? }` — the stored `LegProps.gaps` (fractions along the leg, bends included), `style` (`line` \| `marked_route` \| `none`, default `line`) and `bends` (paper mm), §10.1; `corridor` (`{ widthM, edge, whiteMm, whiteOpacity }`), §10.2; `crossing` is F4's and not read | `LegProps` of the structure's item (§6.4: written by the importers and the backfill, by the editor from D5). The v1 interim input of slice C (`path`, `pieces`, item `circleGaps`, `extras`, read from an imported `ocd` course's GeoJSON) is **retired** by D1: nothing is read from the GeoJSON |
 | `sites` | `{ id, code, kind: "control" \| "start" \| "finish", x, y, circleGaps? }[]` | `controls` rows; `code` the display code (first punch code, else name / seq); `circleGaps` = `controls.circle_gaps`, compass degrees |
 | `objects` | `(CourseMapObject \| CourseLayerObject)[]`: a sheet's layout objects (only `anchor: "map"` ones are drawn) and course objects (§8; told apart by `geometry`) | the sheet's layout objects (`course-maps` schema); the event's course objects in scope (§8.3) |
 | `appearance` | `{ circle?, line?, number?, numberStyle? }`, multipliers (1 = the spec) | `appearanceFromTemplate(template.appearance)`; the template's `purple` is not read (the purple is the stack's row) |
 | `viewOptions` | `{ allControls?, labelMode?, overprintScale?, autoCuts?, window?, textValues? }` | the view: all-controls, label mode, print enlargement, the event's **Auto cuts** toggle (`Event.autoOverprintCuts`; `false` = no automatic cuts, §3.4; absent = on), the frame polygon for white-out-outside, `{course}` placeholder values |
+| `document` | `{ colours, libraryId, documentFactor, mapScale }` — the aligned stack, the library, the document factor (§3.1) and the base map's scale denominator (corridor widths, §10.2) | `courseDocumentContext(header)` (`context.ts`): the viewer's worker and the print route (`pdf-page.ts`) build it from the pinned document's header; `mapScale` is `header.mapScale` |
 | `cutFeatures` | `{ x, y, r? }[]` (`r` the drawn symbol's radius) | `cutFeaturesOfDocument(doc)` of the pinned document (every event since E1, §4.2) |
 | `regions` | `{ rings: MapPoint[][], mode: "clip" \| "hide", symbols: "all" \| number[] \| { colours }, invert? }[]` — filter regions over the map, `rings` outer first; symbol indices are the document's, colours its own stack's | explicit regions, then every `filter_region` course object in `objects` (§8.3); the layer returns them as `CourseLayer.regions` (µm paths, colours on the completed stack) and `courseRenderInput` passes them to `symbolise` with the document's object count as `regionObjectLimit` — the rule is `map-rendering.md` §4.11 |
 
@@ -173,7 +174,7 @@ Free order is the structure's `orderMode` (a property of the course, not
 of the view). A site at the origin (0, 0) is unpositioned and skipped,
 legs connecting the remaining items (the editor's rule, `editorCourseLayer`).
 Gaps follow the rule above. Variations, map exchanges, crossing points, map-issue
-points, corridors and crossings are not in v1 (Pending).
+points and crossings are not in v1 (Pending).
 
 ## 3. Geometry rules
 
@@ -547,10 +548,10 @@ buckets. The React SVG keeps the UI layer only (`map-rendering.md` §5.4
 | `sites` | every visible control (`visible !== false`) with a position — its own paper mm, the editor's dragged position or a move still round-tripping — `code` its display code, `kind` from its type; the editor's faded off-course controls are left out (the UI layer draws them faded) |
 | `structure` | the highlighted courses (`highlight` or `highlightCourseName`) in order, one `CourseStructure` each, `id` = the course name, `items` = its control ids (start and finish as `MapPanel` completes them), `orderMode` the course's; `null` when none is highlighted |
 | `labelOffsets` | the single highlighted course's, with a drag or a pending label move winning — only with the description sheet or the editor |
-| `leg`, `numberHidden`, `circleGaps` | from the stored structure (§6.4), not from the GeoJSON: each item's `leg.gaps` from `course.list`'s `legGaps` (keyed `"<from>><to>"`, public control ids), `numberHidden` from its `hiddenNumbers`, each site's `circleGaps` from `course.controlCoordinates`. A course with no stored structure has none (the automatic cuts); 707 / 708 / 709 / 711 are course objects (`objects` below) |
+| `leg`, `numberHidden`, `circleGaps` | from the stored structure (§6.4), not from the GeoJSON: each item's `leg` whole — `style`, `bends`, `gaps`, `corridor` (§10) — from `course.list`'s `legs` (keyed `"<from>><to>"`, public control ids; `layerPropsOfStored` strips `crossing`, which names a control by uuid, and omits an empty leg; a pair visited twice keeps its last visit's leg), `numberHidden` from its `hiddenNumbers`, each site's `circleGaps` from `course.controlCoordinates`. A course with no stored structure has none (the automatic cuts); 707 / 708 / 709 / 711 are course objects (`objects` below) |
 | `viewOptions` | `labelMode: "sequence"` for one ordered course with the sheet or the editor, else `"code"`; `allControls` when a drawn site is on no highlighted course; `autoCuts: false` when the event's toggle is off (`course.getOverprintCuts`, read by `MapPanel`; no key when on, §3.4) |
 | `objects` | the event's course objects in scope of the highlighted courses (`courseObjectsForView`, §8.2; `all`-scoped only when none is highlighted), without scope, `z` or token — `MapPanel` fetches `courseObject.list` and hands them to the viewer; no sheet's layout objects reach the viewer |
-| provisional visit | the editor's armed `S` / `K` / `M` (`course-editor.md` §6.1), with exactly one highlighted course: a site `provisional` (`PROVISIONAL_SITE_ID`, the tool's kind, the cursor, the next code) — or a reused site by its id, which adds no site (`provisionalDrawn` is false; the editor then draws its own ghost circle, `course-editor.md` §6.1) — spliced into the course's items (`spliceProvisional`): a control before the `insertAt`-th control visit (repeats counted), else before the finish, else last; a start replaces the course's start, a finish its finish (else they lead / end). The leg the visit splits takes no stored gaps (they are keyed by the drawn neighbours) |
+| provisional visit | the editor's armed `S` / `K` / `M` (`course-editor.md` §6.1), with exactly one highlighted course: a site `provisional` (`PROVISIONAL_SITE_ID`, the tool's kind, the cursor, the next code) — or a reused site by its id, which adds no site (`provisionalDrawn` is false; the editor then draws its own ghost circle, `course-editor.md` §6.1) — spliced into the course's items (`spliceProvisional`): a control before the `insertAt`-th control visit (repeats counted), else before the finish, else last; a start replaces the course's start, a finish its finish (else they lead / end). The leg the visit splits takes no stored leg — no gaps, style, bends or corridor (they are keyed by the drawn neighbours) |
 | `appearance` | `{}` — the spec sizes × the document factor (decision "Sizes") |
 | `layout` (Layout mode, D7) | the sheet as `composePage` passes it (`course-layout.md` §1): its layout objects of both anchors before the course objects, `appearanceFromTemplate(template.appearance)` instead of `{}`, `viewOptions.overprintScale`, `window` (the frame grown by `RING_BLEED_UM`, `course.mapLayerWindow`) and `textValues`; and `page`, which the worker turns into the page part (`map-rendering.md` §5.2). So the course changes size on a mode switch when the template's multipliers are not 1 — the preview is the print |
 | `cutFeatures` | added by the worker: `cutFeaturesOfDocument(doc)` once per document load |
@@ -1183,7 +1184,9 @@ validated but not read by the layer yet.
   §4.1); the print's sheet resolution copies the item's **whole** stored
   leg (`course-maps/resolve-sheet.ts`, `course-print.md` §5.2), so
   `maps.pdf` and Layout mode's sheet print bends, 707 and `none`; the
-  viewer's request still copies `gaps` only until F2 (Pending).
+  viewer's request carries the whole leg too since F2
+  (`layerPropsOfStored` → `course.list.legs` → `MapPanel` / `MapViewer`
+  → `course-layer-request.ts`, §5).
 
 ## Tests
 
@@ -1275,13 +1278,6 @@ validated but not read by the layer yet.
   `<gaps>` / `<leg>` bends are not parsed by the importer; variations and their
   materialisation, map exchanges, crossing and map-issue points,
   corridors (slice F).
-- **Leg properties on screen** (§10.1, F2 — user, 2026-11-07): the
-  layer and the print draw `style` and `bends`, but the viewer's request
-  (`layerPropsOfStored` → `course.list.legGaps` → `MapPanel` /
-  `MapViewer` → `course-layer-request.ts`) copies `LegProps.gaps` only,
-  so on screen a bent, marked-route or `none` leg still shows as a
-  straight 705. F2, which adds `mapScale` to the same request, carries
-  the whole leg. Nothing can author these props before F3.
 - **Leg properties in the editor** (§10.1, F3): `EditorPage.tsx`,
   `MapViewer.tsx` and `tools/bindings.ts` pass no bends to the readouts
   (`sequenceLegMeters`, `legLengthLabel`, `dragLegShapes`); a `none` leg
