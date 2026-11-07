@@ -93,8 +93,20 @@ test.describe("club map library", () => {
     await page.keyboard.press("Escape");
     await expect(page.getByTestId("club-map-picker")).toHaveCount(0);
     await expect(dialog).toBeVisible();
+
+    // A pick from the dialog's picker copies the map again: the picker closes, the dialog stays and its rows follow
+    // the new map row (the hook refreshes `course.mapFileInfo` through the query cache), with no error.
+    const fileRow = dialog.getByTestId("editor-map-info-file");
+    const uploadedBefore = await fileRow.getAttribute("data-uploaded");
+    await dialog.getByTestId("editor-map-info-library").click();
+    await page.getByTestId("club-map-picker").getByRole("button", { name: mapName }).click();
+    await expect(page.getByTestId("club-map-picker")).toHaveCount(0, { timeout: 20000 });
+    await expect(fileRow).not.toHaveAttribute("data-uploaded", uploadedBefore!, { timeout: 20000 });
+    await expect(dialog).toBeVisible();
+    await expect(dialog.getByText(/Map upload failed/)).toHaveCount(0);
     await page.keyboard.press("Escape");
     await expect(dialog).toHaveCount(0);
+    await expect(page.getByTestId("map-viewer").first()).toBeVisible({ timeout: 30000 });
 
     await page.goto("/settings");
     await expect(page.getByTestId("library-map-name")).toHaveText(mapName);

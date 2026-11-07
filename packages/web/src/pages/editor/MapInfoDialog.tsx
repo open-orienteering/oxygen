@@ -68,11 +68,23 @@ function MapInfoDialog({ map, replace, onClose }: { map: MapInfoInput; replace: 
 
   // A modal: while it is open no keydown reaches the editor's handlers (window, capture phase: first of all
   // listeners), so the tools' letters do nothing and Escape closes the club picker, then the dialog — never a tool,
-  // the selection or the course (§3). Tab, Enter and Space keep their default actions on the dialog's buttons.
+  // the selection or the course (§3). Enter and Space keep their default actions on the dialog's buttons; Tab cycles
+  // inside the dialog (or the club picker over it) and never reaches the page under the backdrop.
   const { open: pickerOpen, setOpen: setPickerOpen } = replace.library;
+  const boxRef = useRef<HTMLDivElement>(null);
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       e.stopPropagation();
+      if (e.key === "Tab") {
+        const scope = pickerOpen ? document.querySelector<HTMLElement>('[data-testid="club-map-picker"]') : boxRef.current;
+        const items = scope ? [...scope.querySelectorAll<HTMLElement>("a[href], button:not([disabled])")] : [];
+        if (items.length === 0) return;
+        const at = items.indexOf(document.activeElement as HTMLElement);
+        const next = at === -1 ? 0 : (at + (e.shiftKey ? -1 : 1) + items.length) % items.length;
+        e.preventDefault();
+        items[next].focus();
+        return;
+      }
       if (e.key !== "Escape") return;
       e.preventDefault();
       if (pickerOpen) setPickerOpen(false);
@@ -103,7 +115,7 @@ function MapInfoDialog({ map, replace, onClose }: { map: MapInfoInput; replace: 
     <div className="fixed inset-0 z-[60] flex items-center justify-center p-4">
       <button type="button" aria-label={tc("close")} tabIndex={-1} onClick={onClose}
         data-testid="editor-map-info-backdrop" className="absolute inset-0 bg-black/40 cursor-default" />
-      <div data-testid="editor-map-info-dialog" role="dialog" aria-modal="true" aria-labelledby={titleId}
+      <div ref={boxRef} data-testid="editor-map-info-dialog" role="dialog" aria-modal="true" aria-labelledby={titleId}
         className="relative bg-white rounded-xl shadow-lg w-full max-w-md max-h-[calc(100%-2rem)] overflow-auto">
         <div className="flex items-start gap-3 px-5 pt-4 pb-3 border-b border-slate-100">
           <span className="mt-0.5 flex items-center justify-center w-8 h-8 rounded-lg bg-purple-50 text-purple-700 shrink-0">

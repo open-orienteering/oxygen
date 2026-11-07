@@ -2542,6 +2542,13 @@ test.describe("P6: the map footer out; the map-info dialog", () => {
     await expect(dialog.getByTestId("editor-map-info-review")).toHaveAttribute("href", /\/map-review\/[0-9a-f]{64}$/);
     await expect(dialog.getByTestId("editor-map-info-replace")).toHaveText("Replace map");
     expect(await dialog.getByTestId("editor-map-info-library").count()).toBeLessThanOrEqual(1);
+    // A modal: focus starts on the close button and Tab / Shift+Tab cycle inside the dialog.
+    const focusInDialog = () => page.evaluate(() => !!document.activeElement?.closest('[data-testid="editor-map-info-dialog"]'));
+    expect(await focusInDialog()).toBe(true);
+    for (const key of ["Tab", "Tab", "Tab", "Tab", "Tab", "Shift+Tab", "Shift+Tab", "Shift+Tab", "Shift+Tab", "Shift+Tab", "Shift+Tab"]) {
+      await page.keyboard.press(key);
+      expect(await focusInDialog(), `focus after ${key}`).toBe(true);
+    }
     await test.info().attach("map-info-dialog", { body: await page.screenshot(), contentType: "image/png" });
 
     // The close button closes it; the course-info popover no longer has the scale (it is here).
