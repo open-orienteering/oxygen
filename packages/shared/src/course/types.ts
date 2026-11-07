@@ -173,7 +173,8 @@ export interface CourseFilterRegion {
   invert?: boolean;
 }
 
-export type CourseRefKind = "site" | "leg" | "number" | "leader" | "extra" | "object";
+/** `corridor`: a corridor's edge (§10.2), id `<courseId>:<leg index>`. */
+export type CourseRefKind = "site" | "leg" | "number" | "leader" | "extra" | "object" | "corridor";
 
 /** Which input an output object came from (hit-testing and per-object hide in C4). */
 export interface CourseRef {

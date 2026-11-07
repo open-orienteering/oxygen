@@ -5,6 +5,10 @@ import { editorHitAt, HIT_TOLERANCE_PX } from "../hit";
 
 /** The fixture course (S 10,10 → 31 40,10 → 32 60,40 → F 10,40) through the real worker. */
 function hitIndex(over: Parameters<typeof request>[0] = {}): NonNullable<CourseReply["hit"]> {
+  return courseReply(over).hit!;
+}
+
+function courseReply(over: Parameters<typeof request>[0] = {}): CourseReply {
   const sent: WorkerReply[] = [];
   const w = createMapGlWorker((msg) => sent.push(msg), (fn) => fn(), 0);
   w.handle({
@@ -15,7 +19,7 @@ function hitIndex(over: Parameters<typeof request>[0] = {}): NonNullable<CourseR
     courseLayer: true,
   });
   w.handle({ type: "course", generation: 1, input: request(over) });
-  return (sent[sent.length - 1] as CourseReply).hit!;
+  return sent[sent.length - 1] as CourseReply;
 }
 
 describe("editorHitAt (docs/course-editor.md §5)", () => {
@@ -142,6 +146,20 @@ describe("editorHitAt (docs/course-editor.md §5)", () => {
     const gapped = hitIndex({ sites: base.sites.map((x) => (x.id === "31" ? { ...x, circleGaps: [{ start: 40, end: 100 }] } : x)) });
     expect(editorHitAt(gapped, { x: 40, y: 10 }, 0.1)).toBeNull();
     expect(editorHitAt(gapped, { x: 40, y: 10 }, 0.1, [{ id: "31", x: 40, y: 10, radiusMm: 2.5 }])).toEqual({ kind: "site", id: "31" });
+  });
+
+  it("a corridor's edge is no target (course-layer.md §10.2); its band reaches the static buckets' filter", () => {
+    // Leg 0 (S → 31, y = 10) with a 60 m corridor at 1:15 000: the edge at y = 12, the band to 15.
+    const corridor = { widthM: 60, edge: true, whiteMm: 3, whiteOpacity: 1 };
+    const structure = { version: 1 as const, id: "c1", orderMode: "ordered" as const, items: [{ siteId: "S" }, { siteId: "31", leg: { corridor } }, { siteId: "32" }, { siteId: "F" }] };
+    const reply = courseReply({ structure });
+    expect(reply.hit!.refs.some((r) => r.kind === "corridor")).toBe(true);
+    expect(editorHitAt(reply.hit!, { x: 20, y: 12 }, 0.5)).toBeNull();
+    expect(editorHitAt(reply.hit!, { x: 20, y: 10.1 }, 0.5)).toEqual({ kind: "leg", courseId: "c1", index: 0 });
+    // The document's black line crosses the band: masked in the static buckets.
+    expect(reply.filter).not.toBeNull();
+    expect(reply.filter!.masks.length).toBeGreaterThan(0);
+    expect(courseReply().filter).toBeNull();
   });
 
   it("names a screen tolerance", () => {
