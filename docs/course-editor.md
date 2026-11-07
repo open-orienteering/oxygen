@@ -456,8 +456,13 @@ paper) opens a gap in
 the site's `circle_gaps` — compass degrees, the shorter way round
 whichever direction the pointer went, at least 3° — written with
 `control.update { circleGaps }`; a drag along the leg one in the leg's
-`LegProps.gaps` (fractions of the centre-to-centre leg, at least
-0.4 mm), written with `setStructure` on the item the leg runs into. A
+`LegProps.gaps` (fractions of the **bent length** — the polyline
+from the previous site through the leg's `bends` to the site, the length
+the layer applies them along since F1, `course-layer.md` §10.1 — at least
+0.4 mm; on a leg without bends that is the centre-to-centre leg),
+written with `setStructure` on the item the leg runs into. The tool
+projects the pointer onto the nearest point of that polyline and draws
+the target and the gaps along it (user 2026-11-07, F3 Q1 A). A
 click on a gap removes it; overlapping gaps merge
 (`pages/editor/tools/gaps.ts`). Each write is one undo entry. The tool
 draws the circle or leg (`editor-gap-target`) and the gaps
