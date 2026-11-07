@@ -179,6 +179,31 @@ describe("course request → the dynamic bucket", () => {
     expect(r.warnings).toEqual({ COURSE_UNAVAILABLE: 1 });
   });
 
+  it("a toner saver's white draws last, over the document's top row and the course's upper purple (P1)", () => {
+    const h = harness();
+    const m = loaded(h);
+    h.w.handle({ type: "prepare", ids: m.summary.detailCells });
+    const parts: PreparedPart[] = [...m.base, ...(m.large ? [m.large] : [])];
+    for (const s of h.sent.slice(1)) if (s.msg.type === "part") parts.push(s.msg.part);
+    const window = [{ x: -10, y: -10 }, { x: 100, y: -10 }, { x: 100, y: 80 }, { x: -10, y: 80 }];
+    const r = ask(h, request({
+      viewOptions: { labelMode: "sequence", window },
+      objects: [
+        { id: "ts", kind: "path", anchor: "map", fillMode: "whiteoutInverted", closed: true, points: [{ x: 0, y: 0 }, { x: 70, y: 0 }, { x: 70, y: 50 }, { x: 0, y: 50 }] },
+        { id: 9, kind: "oob_area", geometry: [{ x: 80, y: 60 }, { x: 95, y: 60 }, { x: 95, y: 75 }], props: {} },
+      ],
+    }));
+    parts.push(r.part!);
+    const toner = r.colours.findIndex((c) => c.id === "course:toner-saver-white");
+    expect(toner).toBe(r.colours.length - 1);
+    const vs = buildVisibleSet(parts.map((part) => ({ part, base: { fill: 0, hatch: 0, stroke: 0 } })));
+    // The document's 999 line sits in the stack's top document row (above upper purple, like a map's text colours).
+    const docTop = indexOf(r.colours, isomStack().at(-1)!.id.replace(/^iof2024:/, ""));
+    const drawn = vs.layers.map((l) => l.colour);
+    expect(drawn.at(-1)).toBe(toner);
+    expect(drawn).toEqual(expect.arrayContaining([docTop, indexOf(r.colours, "purple-upper")]));
+  });
+
   it("a whiteout layout object sits at upper white, above black", () => {
     const h = harness();
     loaded(h);

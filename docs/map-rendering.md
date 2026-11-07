@@ -1507,7 +1507,7 @@ published on `window.__mapGlDoc` for Playwright.
 | `e2e/map-gl-golden.spec.ts` | the per-pass path against the reference raster; the **MSDF text tier**: `text-with-halo`, `lib-text`, `lib-halos` through the arena path (§6.2); the **filter-region arena tier** (D3, §6.2) |
 | `e2e/map-gl-doc.spec.ts` (text) | arena = per-pass compare also on `e2e/test.xmap` (text, MSDF vs outlines) within 0.5 %; its text resolves on the Latin page with nothing missing |
 | `e2e/map-vector-layer.spec.ts` (text) | the viewer requests the Latin page and not the Cyrillic one |
-| `map-gl/__tests__/worker-course.test.ts` | dynamic bucket: static parts on the completed stack (upper white below upper purple, rows above it +1 with their CMYK), the document's stack without `courseLayer`, an unaligned stack unsupported and unchanged; a course request → one `all` part at `COURSE_BUCKET` on the completed stack (lower-purple strokes, text instances, glyph meshes in the grown atlas, earlier meshes in place, object ids after the document's, everything transferable); no atlas when nothing was added; lower purple drawn under black in one visible set; `null` and unsupported replies; a white-out at upper white above black |
+| `map-gl/__tests__/worker-course.test.ts` | dynamic bucket: static parts on the completed stack (upper white below upper purple, rows above it +1 with their CMYK), the document's stack without `courseLayer`, an unaligned stack unsupported and unchanged; a course request → one `all` part at `COURSE_BUCKET` on the completed stack (lower-purple strokes, text instances, glyph meshes in the grown atlas, earlier meshes in place, object ids after the document's, everything transferable); no atlas when nothing was added; lower purple drawn under black in one visible set; `null` and unsupported replies; a white-out at upper white above black; a toner saver's white the last colour drawn, after the document's top row and upper purple (P1) |
 | `map-gl/__tests__/engine.test.ts` (dynamic bucket) | `setCourse` uploads `C`, drawn below the zoom gate too, rebuilt at once, `onCourse` / `onChange`, `engine.colours` = the reply's; an overtaken reply dropped; `null` releases; a request before the load waits for it; course bytes fixed |
 | `map-gl/__tests__/buckets.test.ts` (filter regions) | per colour the unmasked draw then one per mask, the same indices regrouped, `layers` in draw order, hidden objects win over masks, no `filter` without entries; instance draws and clip groups split by mask |
 | `map-gl/__tests__/worker-course.test.ts` (filter regions) | a `hide` region hides the document object meeting it, exact and `fastFilter` alike, never a course object; a far region hides nothing; a clip region by document colour → `(object, colour, mask)` on the completed stack and the region's triangles origin-relative; the course part stays unmasked in the visible set; no regions / `null` → no filter |
@@ -1691,7 +1691,8 @@ hands it to the engine's dynamic bucket (§5.2 "Dynamic bucket"), so the
 7xx symbols sort into the document's stack — lower purple (701, 703,
 705, 706, 708) under black, brown and blue line art, white-outs
 at upper white above the map's ink, upper purple (704, 707, 709,
-711) on top. What the layer draws and what it does not:
+711) on top, and a toner saver's white above everything of the map
+layer (`course-layer.md` §3.6, P1). What the layer draws and what it does not:
 
 | GL course layer (dynamic bucket) | SVG UI layer (React, screen widths) |
 |---|---|
@@ -2312,7 +2313,7 @@ WebGL2 per-pass path against the golden, measured at introduction
 |---|---|---|
 | `course-legs` | ISOM 401, 505, 101, 306, 516 under S → 31 → 32 → 33 → F | lower purple under black, brown and blue line art, above yellow; start turned to 31; sequence numbers in upper purple above the ink |
 | `course-cuts` | ISOM 204 on a rim and on a leg, 109 on a rim, 201; an authored gap and authored leg pieces on 33; a manual number position | automatic cuts from the features, authored gap and pieces kept, number at its offset, cut circles as open arcs |
-| `course-objects` | ISOM 406, 505, 106; white-out rectangle, toner-saver ring, 709 rectangle, 709.b triangle, 707 / 708 / 711 extras, a map text in its own colour with `{course}` | white-outs at upper white above all ink and below upper purple; 709 / 707 / 711 upper, 708 lower; the text's row on top of the stack |
+| `course-objects` | ISOM 406, 505, 106; white-out rectangle, toner-saver ring, 709 rectangle, 709.b triangle, 707 / 708 / 711 extras, a map text in its own colour with `{course}` | the white-out at upper white above all ink and below upper purple, the toner-saver ring in its own white row on top of the stack (P1: the 709.b border past its edge is covered); 709 / 707 / 711 upper, 708 lower; the text's row on top of the stack |
 | `course-sprint` | ISSprOM 401, two 521 buildings; `numberStyle: "knockout"` | 6 mm circles; upper-white halo under upper-purple numbers, above the buildings' black |
 | `course-all-controls` | ISOM 403, 304; all controls with a free-order course | every site drawn, codes, no legs, start north |
 

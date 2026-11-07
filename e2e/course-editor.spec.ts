@@ -2161,3 +2161,99 @@ test.describe("touch (mobile project; docs/course-editor.md §10)", () => {
     }
   });
 });
+
+// P1 (feedback-2026-11-06 items 1 and 2): its own describe, so the parallel rows' edits above merge cleanly.
+test.describe("P1: no blue circle on placing; the toner saver covers everything outside it", () => {
+  desktopOnly();
+
+  test("no blue circle beside a placed control: K armed and after its clicks, in Layout and Field; V's Add control too; a click brings the ring", async ({ page }) => {
+    await openEditor(page);
+    await newCourse(page, "P1 ring");
+    const blue = async () => {
+      await expect(page.getByTestId("editor-phantom")).toHaveCount(0);
+      await expect(page.getByTestId("editor-selection-ring")).toHaveCount(0);
+    };
+    const made: string[] = [];
+    try {
+      await arm(page, "K");
+      const a = await emptyPoint(page, 60);
+      await page.mouse.move(a.x, a.y);
+      await expect(page.getByTestId("editor-ghost")).toBeAttached({ timeout: 10000 });
+      await blue();
+      made.push((await place(page, a)).id);
+      await blue();
+      const b = await emptyPoint(page, 60, [a]);
+      made.push((await place(page, b)).id);
+      await blue();
+      // Field and back to Course keep the just-placed control selected, still without a ring; Layout drops the
+      // selection (state.ts) and shows no ring either.
+      for (const mode of ["field", "course", "layout", "course"]) {
+        await page.getByTestId(`editor-mode-${mode}`).click();
+        await expect(page.getByTestId(`editor-mode-${mode}`)).toHaveAttribute("aria-pressed", "true");
+        await blue();
+      }
+      if ((await page.getByTestId("editor-tool-V").getAttribute("aria-pressed")) !== "true") await page.keyboard.press("Escape");
+      await expect(page.getByTestId("editor-tool-V")).toHaveAttribute("aria-pressed", "true");
+
+      // V: the phantom marks the click on empty map (no control exists yet); Add control replaces it by the purple
+      // circle alone — the selection shows in the inspector and the action bar, not as a ring (course-editor.md §4).
+      const code = await placeOneShot(page);
+      made.push(code);
+      await blue();
+      await expect(page.getByTestId("editor-action-bar")).toBeVisible();
+      // A click on the control selects it: V's ring.
+      await select(page, code);
+      await expect(page.getByTestId("editor-selection-ring")).toHaveCount(1, { timeout: 10000 });
+    } finally {
+      for (const id of made) await cleanup("control.delete", { id: Number(id) });
+    }
+  });
+
+  test("Layout mode: a toner saver hides a 709 area outside its shape", async ({ page }) => {
+    await openEditor(page);
+    const nameId = nameIdOf(page);
+    const frame: Frame = { x: 10, y: 40, width: 190, height: 247 };
+    const courses = await trpcCall<{ id: number }[]>("course.list", undefined, false);
+    const template = await probeTemplate("P1 toner", frame, 5);
+    const sheet = await trpcCall<{ seq: number }>("courseMap.create", { kind: "course", courseId: courses[0].id, templateId: template.seq, overrides: {}, objects: [] });
+    const ids: number[] = [];
+    try {
+      await page.goto(`/${nameId}/course-editor?mode=layout&sheet=${sheet.seq}`);
+      await editorReady(page);
+      await expect(page.getByTestId("editor-layout-scope")).toHaveAttribute("data-sheet", String(sheet.seq));
+      await viewSettled(page);
+      const toPaperMm = await pageToPaperOf(page, frame);
+      // On the map (the page's middle at this print scale): a 709 square in its lower half, the toner saver a band
+      // across its upper half (page mm).
+      const square = [{ x: 95, y: 172 }, { x: 125, y: 172 }, { x: 125, y: 192 }, { x: 95, y: 192 }].map(toPaperMm);
+      const saver = [{ x: 40, y: 110 }, { x: 180, y: 110 }, { x: 180, y: 160 }, { x: 40, y: 160 }].map(toPaperMm);
+      const inner = {
+        minX: Math.min(...square.map((p) => p.x)) + 2, maxX: Math.max(...square.map((p) => p.x)) - 2,
+        minY: Math.min(...square.map((p) => p.y)) + 2, maxY: Math.max(...square.map((p) => p.y)) - 2,
+      };
+      /** Reload (the editor caches the objects) and zoom in on the square: the hatch resolves into purple lines. */
+      const reloadAndZoom = async () => {
+        await page.reload();
+        await editorReady(page);
+        await viewSettled(page);
+        const c = await toPage(page, { x: (inner.minX + inner.maxX) / 2, y: (inner.minY + inner.maxY) / 2 });
+        await page.mouse.move(c.x, c.y);
+        for (let i = 0; i < 4; i++) await page.mouse.wheel(0, -200);
+        await viewSettled(page);
+      };
+      ids.push((await trpcCall<{ id: number }>("courseObject.create", { kind: "oob_area", geometry: square, props: {}, scope: { all: true } })).id);
+      await reloadAndZoom();
+      await expect.poll(() => inkIn(page, inner, "purple"), { timeout: 30000 }).toBeGreaterThan(5);
+
+      ids.push((await trpcCall<{ id: number }>("courseObject.create", { kind: "toner_saver", geometry: saver, props: {}, scope: { all: true } })).id);
+      await reloadAndZoom();
+      // The saver's white is the map layer's top row (course-layer.md §3.6): the upper-purple 709 hatch, which sat
+      // above upper white before P1, no longer shows there.
+      await expect.poll(() => inkIn(page, inner, "purple"), { timeout: 30000 }).toBe(0);
+    } finally {
+      for (const id of ids) await cleanup("courseObject.delete", { id });
+      await cleanup("courseMap.delete", { id: sheet.seq });
+      await cleanup("mapTemplate.delete", { id: template.seq });
+    }
+  });
+});

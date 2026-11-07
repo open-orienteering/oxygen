@@ -33,6 +33,12 @@ export interface CourseEditorState {
   /** Course seq of the course whose sequence is being edited. */
   selectedCourseId: number | null;
   phantom: PhantomPoint | null;
+  /**
+   * The selection is the control just placed (`placed`): its purple circle
+   * is the mark and no selection ring is drawn until the user selects
+   * (docs/course-editor.md §4, §6.1; P1).
+   */
+  placed: boolean;
 }
 
 export type CourseEditorAction =
@@ -53,6 +59,7 @@ export const initialCourseEditorState: CourseEditorState = {
   selectedControlId: null,
   selectedCourseId: null,
   phantom: null,
+  placed: false,
 };
 
 export function courseEditorReducer(
@@ -61,9 +68,9 @@ export function courseEditorReducer(
 ): CourseEditorState {
   switch (action.type) {
     case "select":
-      return state.selectedControlId === action.id && state.phantom === null
+      return state.selectedControlId === action.id && state.phantom === null && !state.placed
         ? state
-        : { ...state, selectedControlId: action.id, phantom: null };
+        : { ...state, selectedControlId: action.id, phantom: null, placed: false };
     case "select-course":
       if (state.selectedCourseId === action.id) return state;
       // The phantom's contextual actions are course-scoped (insert
@@ -73,26 +80,28 @@ export function courseEditorReducer(
       return {
         ...state,
         selectedControlId: null,
+        placed: false,
         phantom: { x: action.x, y: action.y, insertAt: null },
       };
     case "leg-click":
       return {
         ...state,
         selectedControlId: null,
+        placed: false,
         phantom: { x: action.x, y: action.y, insertAt: action.insertAt },
       };
     case "placed":
-      return { ...state, selectedControlId: action.id, phantom: null };
+      return { ...state, selectedControlId: action.id, phantom: null, placed: true };
     case "deleted":
       return state.selectedControlId === action.id
-        ? { ...state, selectedControlId: null }
+        ? { ...state, selectedControlId: null, placed: false }
         : state;
     case "escape":
       if (state.phantom !== null) {
         return { ...state, phantom: null };
       }
       if (state.selectedControlId !== null) {
-        return { ...state, selectedControlId: null };
+        return { ...state, selectedControlId: null, placed: false };
       }
       if (state.selectedCourseId !== null) {
         return { ...state, selectedCourseId: null };
