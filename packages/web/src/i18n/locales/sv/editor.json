@@ -289,7 +289,7 @@
   "externalChange": "{{who}} ändrade banan kl. {{time}} — ordningen laddades om.",
   "externalChangeUnknown": "Banan ändrades på annat håll — ordningen laddades om.",
   "conflictMovedBy": "Flyttad av {{who}} kl. {{time}} till x {{x}} mm, y {{y}} mm.",
-  "geometryHint": "Dubbelklicka på en kant för att lägga till en punkt; klicka på en punkt och tryck Delete för att ta bort den. Alt-dra en punkt för att runda den, Alt-klicka för att göra den till ett hörn igen; Alt på ett handtag böjer bara ena sidan. När du ritar: Alt-klicka för en mjuk punkt.",
+  "geometryHint": "När du ritar ger ett klick en mjuk punkt, Alt-klick ett hörn, och klicka-och-dra formar kurvan. På ett markerat objekt växlar Alt-klick en punkt mellan mjuk och hörn; dra i ett handtag för att forma om (Alt böjer bara ena sidan); dubbelklicka på en kant för att lägga till en punkt (Alt: ett hörn); klicka på en punkt och tryck Delete för att ta bort den.",
   "instructions": "Kontrollbeskrivning",
   "instructionsHint": "Målradens variant och anvisningsraderna som skrivs ut mellan kontrollerna.",
   "finishVariant": "Mål",

@@ -1074,10 +1074,13 @@ test.describe("tools", () => {
     const [p0, p1] = await Promise.all([toPaper(page, { x: a.x + 35, y: a.y + 3 }), toPaper(page, { x: a.x + 55, y: a.y + 15 })]);
     const inner = { minX: Math.min(p0.x, p1.x), maxX: Math.max(p0.x, p1.x), minY: Math.min(p0.y, p1.y), maxY: Math.max(p0.y, p1.y) };
     const purpleBefore = await inkIn(page, inner, "purple");
+    // Alt held: corners (F18, docs/course-editor.md §6.4), so the stored edges are the chords `pressOnEdge` probes.
+    await page.keyboard.down("Alt");
     for (const p of corners) await page.mouse.click(p.x, p.y);
     await expect(page.getByTestId("editor-polygon-vertex")).toHaveCount(3);
     const created = waitForTrpc(page, "courseObject.create");
     await page.mouse.click(a.x, a.y); // the first vertex closes
+    await page.keyboard.up("Alt");
     await created;
     await expect(page.getByTestId("editor-object")).toHaveAttribute("data-object-kind", "oob_area", { timeout: 15000 });
     await expect(page.getByTestId("editor-tool-V")).toHaveAttribute("aria-pressed", "true");
@@ -1217,15 +1220,18 @@ test.describe("tools", () => {
       await page.getByTestId("editor-area-whiteout").click();
       const clear = await emptyPoint(page, 40);
       const a = { x: clear.x - 30, y: clear.y - 15 }, b = { x: a.x + 60, y: a.y }, c = { x: a.x + 60, y: a.y + 40 };
+      // a and b with Alt held: corners (F18), so a → b stays a straight edge.
+      await page.keyboard.down("Alt");
       await page.mouse.click(a.x, a.y);
       await page.mouse.click(b.x, b.y);
+      await page.keyboard.up("Alt");
       // Click-drag: a curve vertex at c, its handles pulled out along the drag (docs/course-editor.md §6.4).
       const pullTo = { x: c.x - 25, y: c.y + 10 };
       await drag(page, c, pullTo);
       await expect(page.getByTestId("editor-polygon-vertex")).toHaveCount(3);
       await expect(page.getByTestId("editor-polygon-grip")).toHaveCount(2);
       const created = waitForTrpc(page, "courseObject.create");
-      await page.mouse.click(a.x, a.y); // the first vertex closes
+      await page.mouse.click(a.x, a.y); // the first vertex closes (a keeps its press's kind: a corner)
       await created;
       await expect(page.getByTestId("editor-object")).toHaveAttribute("data-object-kind", "whiteout", { timeout: 15000 });
       const id = (await page.getByTestId("editor-object").getAttribute("data-object-id"))!;
@@ -1249,7 +1255,7 @@ test.describe("tools", () => {
       expect(after.pages).toBe(1);
       expect(after.curvedFills, "the curved white-out's fill").toBe(before.curvedFills + 1);
 
-      // Insert: a double-click on the straight edge a → b (§7 "Editing geometry").
+      // Insert: a double-click on the straight edge a → b inserts a smooth vertex (§7 "Editing geometry", F18).
       const handles = page.getByTestId("editor-tool-layer").getByTestId("editor-object-handle");
       await expect(handles).toHaveCount(3);
       const mid = { x: (a.x + b.x) / 2, y: (a.y + b.y) / 2 };
@@ -1262,7 +1268,11 @@ test.describe("tools", () => {
       const [ma, mb] = await Promise.all([toPaper(page, a), toPaper(page, b)]);
       expect(added.x).toBeCloseTo((ma.x + mb.x) / 2, 0);
       expect(added.y).toBeCloseTo((ma.y + mb.y) / 2, 0);
-      expect(added.hIn ?? added.hOut).toBeUndefined();
+      // Its handles from its neighbours, (b − a) / 6: collinear with the edge, so the shape is unchanged.
+      expect(added.hOut!.x).toBeCloseTo((mb.x - ma.x) / 6, 0);
+      expect(added.hOut!.y).toBeCloseTo((mb.y - ma.y) / 6, 0);
+      expect(added.hIn).toEqual({ x: -added.hOut!.x, y: -added.hOut!.y });
+      await expect(page.getByTestId("editor-object-grip")).toHaveCount(4);
 
       // Delete: click the new vertex (focused), Delete removes it; undo brings it back.
       const at = await toPage(page, added);
@@ -1279,21 +1289,23 @@ test.describe("tools", () => {
       await undone;
       await expect.poll(async () => (await stored()).length, { timeout: 15000 }).toBe(4);
 
-      // Alt-drag on the corner b pulls two more grips; Alt-click retracts them.
-      const bAt = await toPage(page, (await stored())[2]);
-      const pulled = waitForTrpc(page, "courseObject.update");
-      await page.keyboard.down("Alt");
-      await drag(page, bAt, { x: bAt.x + 20, y: bAt.y + 20 });
-      await page.keyboard.up("Alt");
-      await pulled;
+      // Alt-click on the corner b makes it smooth (two more grips); Alt-click again makes it a corner (F18).
       await expect(page.getByTestId("editor-object-grip")).toHaveCount(4);
-      await expect.poll(async () => (await stored())[2].hOut !== undefined, { timeout: 15000 }).toBe(true);
-      const retracted = waitForTrpc(page, "courseObject.update");
+      const bAt = await toPage(page, (await stored())[2]);
+      const smoothed = waitForTrpc(page, "courseObject.update");
       await page.keyboard.down("Alt");
       await page.mouse.click(bAt.x, bAt.y);
       await page.keyboard.up("Alt");
-      await retracted;
-      await expect(page.getByTestId("editor-object-grip")).toHaveCount(2);
+      await smoothed;
+      await expect(page.getByTestId("editor-object-grip")).toHaveCount(6);
+      await expect.poll(async () => (await stored())[2].hOut !== undefined, { timeout: 15000 }).toBe(true);
+      const cornered = waitForTrpc(page, "courseObject.update");
+      await page.keyboard.down("Alt");
+      await page.mouse.click(bAt.x, bAt.y);
+      await page.keyboard.up("Alt");
+      await cornered;
+      await expect(page.getByTestId("editor-object-grip")).toHaveCount(4);
+      await expect.poll(async () => (await stored())[2].hOut, { timeout: 15000 }).toBeUndefined();
 
       await page.getByTestId("editor-object-delete").click();
       await expect(row).toHaveCount(0, { timeout: 15000 });
@@ -1302,42 +1314,45 @@ test.describe("tools", () => {
     }
   });
 
-  test("A: Alt at the second of three clicks places a smooth vertex, its handles a sixth of its neighbours' chord; one undo removes it", async ({ page }) => {
+  test("A: plain clicks place smooth vertices, Alt at the third a corner; handles a sixth of the neighbours' chord, wrapped at close; one undo removes it", async ({ page }) => {
     await openEditor(page);
     await page.getByTestId("editor-tool-A").click();
     await page.getByTestId("editor-area-whiteout").click();
     const clear = await emptyPoint(page, 40);
     const a = { x: clear.x - 30, y: clear.y - 15 }, b = { x: a.x + 60, y: a.y }, c = { x: a.x + 60, y: a.y + 40 };
+    // Smooth by default (F18, docs/course-editor.md §6.4): b has no next vertex yet, so no handles in the state.
     await page.mouse.click(a.x, a.y);
-    // Alt held at the press: a smooth vertex (docs/course-editor.md §6.4); no next vertex yet, so no handles in the state.
-    await page.keyboard.down("Alt");
     await page.mouse.click(b.x, b.y);
-    await page.keyboard.up("Alt");
     await expect(page.getByTestId("editor-polygon-vertex")).toHaveCount(2);
     await expect(page.getByTestId("editor-polygon-grip")).toHaveCount(0);
-    // The next vertex lands: b's handles follow its neighbours.
+    // The next vertex lands (Alt held: a corner): b's handles follow its neighbours.
+    await page.keyboard.down("Alt");
     await page.mouse.click(c.x, c.y);
+    await page.keyboard.up("Alt");
     await expect(page.getByTestId("editor-polygon-grip")).toHaveCount(2);
     const created = waitForTrpc(page, "courseObject.create");
-    await page.mouse.click(a.x, a.y); // the first vertex closes
+    await page.mouse.click(a.x, a.y); // the first vertex closes; a, smooth, wraps
     await created;
     await expect(page.getByTestId("editor-object")).toHaveAttribute("data-object-kind", "whiteout", { timeout: 15000 });
     const id = (await page.getByTestId("editor-object").getAttribute("data-object-id"))!;
     const row = objectRow(page, id);
     await expect(row).toHaveCount(1, { timeout: 15000 });
-    const g = JSON.parse((await row.getAttribute("data-geometry-json")) ?? "[]") as { x: number; y: number; hIn?: Pt; hOut?: Pt; smooth?: boolean }[];
+    const g = JSON.parse((await row.getAttribute("data-geometry-json")) ?? "[]") as { x: number; y: number; hIn?: Pt; hOut?: Pt }[];
     expect(g).toHaveLength(3);
-    // Uniform Catmull-Rom: hOut = (g2 − g0) / 6, hIn its negation; the corners keep none; no drawing flag stored.
+    // Uniform Catmull-Rom: hOut = (next − prev) / 6, hIn its negation; the ring wraps at g0; the Alt corner keeps none;
+    // no drawing flag stored.
     expect(g[1].hOut!.x).toBeCloseTo((g[2].x - g[0].x) / 6, 3);
     expect(g[1].hOut!.y).toBeCloseTo((g[2].y - g[0].y) / 6, 3);
     expect(g[1].hIn).toEqual({ x: -g[1].hOut!.x, y: -g[1].hOut!.y });
-    expect(g[0].hIn ?? g[0].hOut ?? g[2].hIn ?? g[2].hOut).toBeUndefined();
-    expect(g.some((v) => "smooth" in v)).toBe(false);
+    expect(g[0].hOut!.x).toBeCloseTo((g[1].x - g[2].x) / 6, 3);
+    expect(g[0].hOut!.y).toBeCloseTo((g[1].y - g[2].y) / 6, 3);
+    expect(g[2].hIn ?? g[2].hOut).toBeUndefined();
+    expect(g.some((v) => "smooth" in v || "corner" in v || "pulled" in v)).toBe(false);
     // The chord on screen agrees (paper mm of the clicks).
     const [pa, pc] = await Promise.all([toPaper(page, a), toPaper(page, c)]);
     expect(g[1].hOut!.x).toBeCloseTo((pc.x - pa.x) / 6, 0);
     expect(g[1].hOut!.y).toBeCloseTo((pc.y - pa.y) / 6, 0);
-    await expect(page.getByTestId("editor-object-grip")).toHaveCount(2);
+    await expect(page.getByTestId("editor-object-grip")).toHaveCount(4);
     // One create, one undo entry: Ctrl+Z removes the whole object.
     await page.keyboard.press("Control+z");
     await expect(row).toHaveCount(0, { timeout: 15000 });
@@ -1624,11 +1639,14 @@ test.describe("Course editor layout (docs/course-layout.md)", () => {
       const toPaperMm = await pageToPaperOf(page, frame);
       const at = async (x: number, y: number) => toPage(page, toPaperMm({ x, y }));
 
-      // P: corners by clicks, a curve vertex by a click-drag, closed by a click on the first vertex — one write.
+      // P: corners by Alt-clicks, a curve vertex by a click-drag, a smooth one by a plain click (F18), closed by a click
+      // on the first vertex — one write.
       await page.getByTestId("editor-layout-tool-P").click();
       await expect(page.getByTestId("editor-layout-tool-P")).toHaveAttribute("aria-pressed", "true");
+      await page.keyboard.down("Alt");
       await clickMap(page, await at(40, 60));
       await clickMap(page, await at(90, 60));
+      await page.keyboard.up("Alt");
       await drag(page, await at(90, 110), await at(100, 120));
       await clickMap(page, await at(40, 110));
       await expect(page.getByTestId("editor-tool-layer").getByTestId("editor-polygon-vertex")).toHaveCount(4);
@@ -1643,11 +1661,14 @@ test.describe("Course editor layout (docs/course-layout.md)", () => {
       expect(path.points![2].hOut!.x).toBeGreaterThan(5);
       expect(path.points![2].hOut!.y).toBeGreaterThan(5);
       expect(path.points![2].hIn!.x).toBeLessThan(-5);
+      // The plain click's vertex is smooth; the Alt-clicks' are corners.
+      expect(path.points![3].hIn && path.points![3].hOut).toBeTruthy();
+      expect(path.points!.slice(0, 2).every((v) => !v.hIn && !v.hOut)).toBe(true);
       // Selected, back in V, with the course editor's handles and grips.
       await expect(page.getByTestId("editor-layout-selected")).toHaveAttribute("data-kind", "object");
       await expect(page.getByTestId("editor-layout-tool-V")).toHaveAttribute("aria-pressed", "true");
       await expect(page.getByTestId("editor-tool-layer").getByTestId("editor-layout-handle")).toHaveCount(4);
-      await expect(page.getByTestId("editor-tool-layer").getByTestId("editor-layout-grip")).toHaveCount(2);
+      await expect(page.getByTestId("editor-tool-layer").getByTestId("editor-layout-grip")).toHaveCount(4);
 
       // A double-click on the straight top edge: a vertex there, focused; Delete removes it again.
       const mid = await at(65, 60);

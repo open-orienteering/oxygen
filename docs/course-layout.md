@@ -248,9 +248,11 @@ editor (decision log D7; that editor was deleted in E4c).
 
 **`P` draws a polygon** (D16) with the course editor's area flow
 (`course-editor.md` §6.4: `areaBinding` / `step` in `tools/polygon.ts`,
-`AreaKind` `layout_path`, closed, three or more vertices, curves): click
-= corner, click-drag = curve vertex (symmetric handles, `Shift` 45°),
-`Alt` at the press = smooth vertex, a placed vertex dragged to adjust it,
+`AreaKind` `layout_path`, closed, three or more vertices, curves) and its
+convention, **smooth by default, Alt for sharp** (F18): a click places a
+smooth vertex (handles from its neighbours, `smoothHandles`, wrapped at
+the close), `Alt` at the press a corner, click-drag pulls symmetric
+handles by hand (`Shift` 45°), a placed vertex dragged to adjust it,
 closed by a click on the first vertex, a double-click or `Enter`; `Esc` or
 a right-click discards it. A drag pans no more while `P` is armed (the
 tool takes every press, as in Course mode). The flow runs in the
@@ -268,8 +270,8 @@ black, 0.35 mm, `fillMode: "none"` — in **one** snapshot write
 (`saveLayout` / `mapTemplate.update`) and one undo entry; the new path is
 selected and `V` is armed again. The fixed trapezoid `P` used to place
 is gone. `L`, `R`, `W`, `H`, `T`, `I`, `D` keep click placement. On
-touch the flow is the course editor's (taps place corners, no curve
-vertices); Layout itself stays off the phone mode switch (`course-editor.md` §10 and Pending, "Layout on a phone").
+touch the flow is the course editor's (taps place smooth vertices, no
+corners or pulled handles); Layout itself stays off the phone mode switch (`course-editor.md` §10 and Pending, "Layout on a phone").
 
 **No tool for white-out outside** (D14). D7 added an `O` tool that placed
 a closed path with `fillMode: "whiteoutInverted"` (white everywhere in
@@ -318,10 +320,10 @@ grip → edge:
 |---|---|
 | drag a vertex | moves it, its handles with it; the vertex kept on the printable area; with the grid on the offset goes in whole millimetres |
 | click a vertex | focuses it (no write); `Delete` removes it (`deleteVertex`, down to 3 vertices closed, 2 open; at the minimum nothing) |
-| `Alt`-drag a vertex | symmetric handles (`Shift`: 45° on the page) |
+| drag a vertex with `Alt` held | moves it like a plain drag, snapped and clamped the same (F18: no handles pulled) |
 | drag a grip | the handle moves by the pointer's offset, a mirrored / smooth pair kept; `Alt` held (live) breaks it |
-| `Alt`-click a vertex with handles | retracts them |
-| double-click on an edge, off the vertices | inserts a vertex there (`insertVertex`; a curve is split so it keeps its shape), focused |
+| `Alt`-click a vertex | switches it corner / smooth (`toggleSmooth`: handles retracted, or smooth handles from its neighbours in page mm); an open path's end corner: nothing |
+| double-click on an edge, off the vertices | inserts a **smooth** vertex there (`insertAtEdge`: on a straight edge collinear `smoothHandles`, on a curve the split that keeps its shape), focused; with `Alt` a corner |
 | drag the edge | moves the whole path (`translateMapObject` / `constrainMapObject`, as any object) |
 
 Each drag is one write and one undo entry, previewed live; a click
@@ -734,8 +736,8 @@ of the event, course seq (the event's last), sort order, seq.
 | unit (web) | `map-gl/__tests__/engine.test.ts`, `view.test.ts` | the page part uploaded as `P`, drawn after the course part, `pageClip` passed, both released on clear; `scissorOfRing` |
 | unit (web) | `lib/__tests__/course-layer-request.test.ts` | `layout`: the page passed through, the course objects only (F12), appearance, window, text values |
 | unit (web) | `lib/editor/__tests__/layout.test.ts` | page-view maths: the window, page ↔ view round trips (rotated), y flip, sheet shapes, page bounds, hit-testing (D16: a closed path by its outline, not inside — an object under it reachable; a curved edge along its curve, not its chord; an open path without a closing edge), handles, the block's rectangle, align, page offset, grid; `pathFromView` (handles mapped through the rotated, y-flipped window; a vertex outside clamped) |
-| unit (web) | `pages/editor/__tests__/layout-bindings.test.ts`, `layout-model.test.ts`, `lib/editor/__tests__/state.test.ts` | the binding (exclusive, shapes, select / move / snap / resize / locked / align / block / place); the snapshot per scope, geometry, the request, placement per kind; the mode case; the rail's keys have no `O`, the inspector keeps the white-out outside fill mode; D16 `P`: the flow armed over the sheet, a press places a vertex (on the page grid with snapping), the closing click hands one page path (handles mapped, clamped), right-click cancels; `pathObject`'s defaults; a selected path: its outline / handles / grips (focused active), a vertex drag (snapped offset, clamped, one write), Alt-drag handles in page mm, Alt-click retract, a grip drag mirrored and Alt-broken, a click focuses, a double-click inserts and focuses, the edge moves the path, a press inside pans |
-| unit (web) | `lib/editor/__tests__/geometry-gestures.test.ts`, `pages/editor/__tests__/bindings.test.ts`, `polygon.test.ts` | D16's extraction: pressing order, a drag in the caller's units, Alt-drag / Alt-click, focus (none for fixed kinds), cancel, insert, the shapes with the caller's ids; `selectBinding`'s cases unchanged; `layout_path` is a closed, curved kind of three |
+| unit (web) | `pages/editor/__tests__/layout-bindings.test.ts`, `layout-model.test.ts`, `lib/editor/__tests__/state.test.ts` | the binding (exclusive, shapes, select / move / snap / resize / locked / align / block / place); the snapshot per scope, geometry, the request, placement per kind; the mode case; the rail's keys have no `O`, the inspector keeps the white-out outside fill mode; D16 `P`: the flow armed over the sheet, a press places a vertex (on the page grid with snapping), the closing click hands one page path (handles mapped, clamped; plain clicks smooth with the wrap, no flag stored, F18), right-click cancels; `pathObject`'s defaults; a selected path: its outline / handles / grips (focused active), a vertex drag (snapped offset, clamped, one write), Alt-drag moves the vertex (snapped, F18), Alt-click toggles corner / smooth in page mm, a grip drag mirrored and Alt-broken, a click focuses, a double-click inserts a smooth vertex (Alt: a corner) and focuses, the edge moves the path, a press inside pans |
+| unit (web) | `lib/editor/__tests__/geometry-gestures.test.ts`, `pages/editor/__tests__/bindings.test.ts`, `polygon.test.ts` | D16's extraction: pressing order, a drag in the caller's units, Alt-drag moves and Alt-click toggles (F18), focus (none for fixed kinds), cancel, insert (smooth, Alt a corner, a filter region a corner; on a curve the split, Alt retracting the new vertex), the shapes with the caller's ids; `selectBinding`'s cases unchanged; `layout_path` is a closed, curved kind of three |
 | integration | `packages/api/src/__tests__/integration/course-maps.test.ts` "resolveSheet" | a sheet (window centre, page, text values, block, template / sheet split, overprint, sibling windows), `saveLayout` never writes the template, `PRECONDITION_FAILED` without a template; a template with and without a course (alone: the window is the frame centred on the map origin, the text values — `previewLayout`'s former case); `NOT_FOUND` |
 | integration | `course-maps.test.ts` "update: CONFLICT on a stale baseVersion…", "creates, duplicates and applies…", "supports several maps…" | E-pages: `courseMap.update` refuses a stale token with `CONFLICT` (`kind: "sheet"`, the version now), LWW without; the list answers `resolved` and `validation` without the overlay fields (the rows and controls read through `resolveSheet`); `saveLayout` leaves the template's objects |
 | unit (shared) | `packages/shared/src/__tests__/auto-template.test.ts` | the key (standard, custom paper), the key's name, decision (3) (most sheets, oldest, seq), `fitOrientation` (preferred kept, turned, ratio, the margin, neither fits), `defaultTemplateSettings` |

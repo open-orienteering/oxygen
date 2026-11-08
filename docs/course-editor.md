@@ -527,65 +527,76 @@ menu item does the same.
 The same flow draws Layout mode's `P` polygon (`AreaKind`
 `layout_path`, closed, not in the `A` menu; `course-layout.md` §3).
 
-`pages/editor/tools/polygon.ts`: **click = corner, click-drag = curve
-vertex** (Mapper / Illustrator): the press places the vertex where it
-went down (snapped); once the pointer is 3 px from the press the drag
-pulls **symmetric handles** out of it — `hOut` = the drag vector, `hIn` its negation
-(`pull-handles`, `symmetricHandles`) — and `Shift` turns the handle to
-the nearest 45° (`constrain45`), live. A drag back within 3 px of the
-press leaves a corner. Since the tool takes every press on the map, **a drag no longer
-pans while an area is being drawn** (the wheel zooms; on touch, where
-taps place vertices through `onClick`, one finger still pans and there
-are no curve vertices). Drag a placed vertex (`editor-polygon-vertex`)
-to adjust it before closing (its handles move with it); close by a
-double-click or a click on the first vertex, `Esc` cancels; `Enter`
-finishes any kind once it has its minimum vertices. The preview
-(`editor-polygon`) follows the curves (§7 "Editing geometry"), and a
-curve vertex shows its two grips (`editor-polygon-grip`). A **filter
-region** stays a polygon: the schema refuses handles (`course-layer.md`
-§8.1), so its click-drag is a corner.
+`pages/editor/tools/polygon.ts`: **smooth by default, Alt for sharp**
+(F18, the user's answer of 2026-11-08 to feedback Q2, reversing D15's
+Alt = smooth). The press places the vertex where it went down (snapped):
 
-**Alt = smooth vertex** (D15): with `Alt` held at the press (mouse only;
-touch never sets it) the vertex placed is **smooth** — its handles are
-not pulled but follow its neighbours by uniform Catmull-Rom,
-`smoothHandles` in `lib/editor/geometry-edit.ts`:
-`hOut_i = (P_{i+1} − P_{i−1}) / 6`, `hIn_i = −hOut_i` (the tangent at the
-vertex is parallel to its neighbours' chord; a sixth makes the cubic the
-Catmull-Rom spline). The flag lives only in the drawing state
-(`PolygonState.vertices[i].smooth`, a `DrawVertex`), and every `step`
-re-settles every flagged vertex from its current neighbours (`smoothed`
-in `tools/polygon.ts`): a smooth vertex is a corner until the next vertex
-lands, then curves, and moving it or a neighbour before closing
-recomputes its handles. **Closed kinds wrap at close** (the first
-vertex's prev is the last, the last's next is the first — applied when the
-flow is done); **an open line's ends stay corners** even when flagged
-(no neighbour on one side). Alt with a click on the first vertex closes
-with the first vertex smooth (replacing handles pulled there at the
-first press); Alt with a double-click makes the double-click's own vertex
-smooth — with the mouse its first press places and flags that vertex, so
-the Alt that counts is the one at that press (`step`'s `double-click`
-event carries `smooth` too, for a caller that sends no press). A **drag past 3 px is still the manual
-pull** and wins: the vertex loses its flag and keeps the pulled
-handles (a drag back within 3 px then leaves a plain corner). A **filter
-region** ignores Alt (no curves). The preview (`editor-polygon`) shows the
-provisional curve with the hover point standing in as the last vertex's
-next and, for a closed kind of three or more, as the first vertex's prev
-(the ring the close would make); nothing provisional is written to the
-state, and only handles in the state get grips (`editor-polygon-grip`).
-Every finishing path (`click` on the first vertex, `double-click`,
-`enter`, and the page's `Enter` key, which goes through `step`) settles
-the flags with the wrap and **strips them**: the created geometry is
-ordinary `PathVertex`es with handles, one `courseObject.create` and one
-undo entry as before. After closing a smooth vertex is a curve vertex like
-any other (its handles mirrored, §7 "Editing geometry"); nothing
-remembers that it was automatic. *Window managers:* Xfce and older KDE
-bind Alt + left-drag (and on some setups Alt + left-click) to moving the
-window, so the press never reaches the browser; there the user rebinds
-the window manager's modifier (Xfce: *Window Manager Tweaks →
-Accessibility*, the key used to grab and move windows; KDE: *Window
-Behaviour → Window Actions*, the modifier key). The same holds for `V`'s
-Alt gestures (§7 "Editing geometry"). The editor offers no second key for
-it: Shift is 45° and Ctrl is the macOS context menu.
+- **A click places a smooth vertex.** Its handles are not pulled but
+  follow its neighbours by uniform Catmull-Rom, `smoothHandles` in
+  `lib/editor/geometry-edit.ts`: `hOut_i = (P_{i+1} − P_{i−1}) / 6`,
+  `hIn_i = −hOut_i` (the tangent at the vertex is parallel to its
+  neighbours' chord; a sixth makes the cubic the Catmull-Rom spline).
+  Every `step` re-settles every smooth vertex from its current neighbours
+  (`smoothed` in `tools/polygon.ts`): the last vertex placed is a corner
+  until the next one lands, then curves, and moving it or a neighbour
+  before closing recomputes its handles. **Closed kinds wrap at close**
+  (the first vertex's prev is the last, the last's next is the first —
+  applied when the flow is done); **an open line's ends stay corners**
+  (no neighbour on one side).
+- **Alt at the press places a corner** (mouse only). Alt with a click on
+  the first vertex closes with the first vertex a corner (a vertex pulled
+  there at the first press keeps its handles); Alt with a double-click
+  makes the double-click's own vertex a corner — with the mouse its first
+  press places that vertex, so the Alt that counts is the one at that press
+  (`step`'s `double-click` event carries `corner` too, for a caller that
+  sends no press).
+- **Click-drag shapes the curve by hand** (Mapper / Illustrator): once the
+  pointer is 3 px from the press the drag pulls **symmetric handles** out
+  of the vertex — `hOut` = the drag vector, `hIn` its negation
+  (`pull-handles`, `symmetricHandles`) — Alt or not, and `Shift` turns the
+  handle to the nearest 45° (`constrain45`), live. The pull wins over the
+  automatic handles: neighbours landing or moving leave a pulled vertex
+  alone. A drag back within 3 px of the press returns the vertex to its
+  press's kind (smooth, or a corner with Alt).
+
+The kinds live only in the drawing state: a `DrawVertex` is a stored
+vertex plus `corner` (Alt at the press) or `pulled` (a click-drag);
+neither is smooth. Every finishing path (`click` on the first vertex,
+`double-click`, `enter`, and the page's `Enter` key, which goes through
+`step`) settles the smooth vertices with the wrap and **strips the
+flags**: the created geometry is ordinary `PathVertex`es with handles,
+one `courseObject.create` and one undo entry as before. After closing a
+smooth vertex is a curve vertex like any other (its handles mirrored, §7
+"Editing geometry"); nothing remembers that it was automatic. Stored
+objects are untouched by the change: a corner drawn before F18 or
+imported stays a corner until it is toggled (§7).
+
+Since the tool takes every press on the map, **a drag no longer pans
+while an area is being drawn** (the wheel zooms). **On touch**, where taps
+place vertices through `onClick` and one finger still pans, taps follow
+the default — smooth vertices — and there is neither Alt nor a pull, so a
+touch-drawn area has no corners until a vertex action bar exists
+(Pending). Drag a placed vertex (`editor-polygon-vertex`) to adjust it
+before closing (its handles move with it); close by a double-click or a
+click on the first vertex, `Esc` cancels; `Enter` finishes any kind once
+it has its minimum vertices. The preview (`editor-polygon`) follows the
+curves (§7 "Editing geometry") and shows the hover point as the smooth
+vertex a plain click would place — standing in as the last vertex's next
+and, for a closed kind of three or more, as the first vertex's prev (the
+ring the close would make); Alt is not previewed (the hover carries no
+modifier). Nothing provisional is written to the state, and only handles
+in the state get grips (`editor-polygon-grip`). A **filter region** stays
+a polygon: the schema refuses handles (`course-layer.md` §8.1), so its
+vertices are corners, it ignores Alt and its click-drag is a corner.
+
+*Window managers:* Xfce and older KDE bind Alt + left-drag (and on some
+setups Alt + left-click) to moving the window, so the press never reaches
+the browser; there the user rebinds the window manager's modifier (Xfce:
+*Window Manager Tweaks → Accessibility*, the key used to grab and move
+windows; KDE: *Window Behaviour → Window Actions*, the modifier key). The
+same holds for `V`'s Alt gestures (§7 "Editing geometry"). The editor
+offers no second key for it: Shift is 45° and Ctrl is the macOS context
+menu.
 
 Line kinds
 (out-of-bounds line, marked route) end by a double-click or `Enter` from
@@ -924,24 +935,29 @@ binding's on the **selected** object (`selectBinding`), mouse only. They
 live in `lib/editor/geometry-gestures.ts` (D16: pressing order, drags,
 grips, Alt, focus, insert and the selected path's shapes, in the path's
 own units), which Layout mode's selected paths use too, in page mm
-(`course-layout.md` §3):
+(`course-layout.md` §3). The convention is the drawing's (§6.4, F18):
+**smooth by default, Alt for sharp** — an inserted vertex is smooth, Alt
+makes it a corner, and Alt-click switches a vertex between the two. It
+lives in the shared module so that F16's leg bends take it unchanged.
 
 | Gesture | Edit | |
 |---|---|---|
 | drag a vertex handle (`editor-object-handle`) | moves the vertex, its handles with it | as before (§7) |
 | click a vertex handle | focuses it (drawn filled, `data-focused`) | no write; a text's anchor or an image's corner is never focused, so `Delete` deletes the object |
 | `Delete` / `Backspace` with a vertex focused | `deleteVertex` down to the kind's minimum; at the minimum nothing happens | the object is deleted from the inspector, or after a click on its body — an area's edge — (which unfocuses) |
-| double-click on an edge (within the 7 px handle reach, not on a vertex) | `insertVertex` at the nearest point (`nearestEdge`): a corner on a straight edge; on a curve a **de Casteljau split**, so the shape stays as it was and the new vertex is smooth | the new vertex is focused |
-| `Alt`-drag a vertex | `symmetricHandles`: `hOut` = the drag vector, `hIn` its negation (`Shift`: 45°) | |
+| drag a vertex with `Alt` held | moves the vertex like a plain drag (F18: no handles pulled) | D5b's Alt-drag "pull symmetric handles" is gone: on a stored vertex the handles come from Alt-click (smooth), then a grip |
+| double-click on an edge (within the 7 px handle reach, not on a vertex) | `insertAtEdge` at the nearest point (`nearestEdge`, `insertVertex`): a **smooth vertex** (F18) — on a straight edge its handles from its neighbours (`smoothHandles`, the closed wrap; collinear with the edge, so the shape stays until it moves), on a curve a **de Casteljau split**, so the shape stays as it was | the new vertex is focused |
+| `Alt` + double-click on an edge | the same insert as a **corner**: on a straight edge no handles; on a curve the split's handles of the new vertex dropped (its neighbours' shortened handles kept) | |
 | drag a grip (`editor-object-grip`, `data-index`, `data-which` `in` / `out`) | the handle moves by the pointer's offset (so a press beside the grip does not jump it) — `dragGrip`: a mirrored pair stays mirrored; a smooth pair (opposite, different lengths — a split's) stays smooth with the other's length kept; a lone or broken handle moves alone (`Shift`: 45°) | |
 | `Alt` held on a grip (live) | breaks the pair: only that handle moves | the pair stays broken afterwards |
-| `Alt`-click a vertex with handles | `retractHandles`: a corner again | on a corner nothing |
+| `Alt`-click a vertex | `toggleSmooth`: a vertex with a handle becomes a corner (`retractHandles`); a corner becomes smooth (`smoothHandles` from its neighbours, the closed wrap) | an open line's end corner has no smooth form: nothing; a filter region: nothing |
 
 - **Kinds** (`vertexRule`, kept in step with `courseObjectBodySchema` by
   a test): closed areas (`oob_area`, `whiteout`, `toner_saver`) ≥ 3
   vertices, lines (`oob_line`, `marked_route`) ≥ 2, curves allowed;
-  `filter_region` ≥ 3 without curves — `Alt`-drag moves its vertex, it
-  has no grips; `text` (one anchor) and `image` (two corners) take no
+  `filter_region` ≥ 3 without curves — it ignores Alt (a drag moves its
+  vertex, Alt-click writes nothing, an insert is a corner), it has no
+  grips; `text` (one anchor) and `image` (two corners) take no
   insert or delete.
 - **Writes**: each gesture is one `courseObject.update { geometry }` and
   one undo entry (the page's `updateObject`); during a drag the object is
@@ -1618,10 +1634,11 @@ whose poll ran meanwhile simply does not conflict (decision log, D10).
   vertex): a tap selects it and two fingers scale it (§10); moving it is
   the mouse's, or a later row with the object's own nudge.
 - **Geometry editing on touch** (§7 "Editing geometry", §6.4): there is
-  no Alt on touch, so curve vertices, the Alt smooth vertex, handles, grips, vertex insert and
-  vertex delete are the mouse's; a touch-drawn area is a polygon. A later
-  row could give the selection a vertex action bar (insert, delete,
-  curve / corner).
+  no Alt on touch, so corners while drawing, pulled curve vertices,
+  handles, grips, vertex insert, vertex delete and the corner / smooth
+  toggle are the mouse's; a touch-drawn area is smooth throughout (F18:
+  taps follow the default). A later row could give the selection a vertex
+  action bar (insert, delete, curve / corner).
 - **Offline writes in Field mode** (§9 "Offline"): a queue for
   `control.update` / `control.check` with the field-move rebase on replay
   (row D9c).

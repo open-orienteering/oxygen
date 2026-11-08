@@ -289,7 +289,7 @@
   "externalChange": "{{who}} changed this course at {{time}} — the sequence was reloaded.",
   "externalChangeUnknown": "This course was changed elsewhere — the sequence was reloaded.",
   "conflictMovedBy": "Moved by {{who}} at {{time}} to x {{x}} mm, y {{y}} mm.",
-  "geometryHint": "Double-click an edge to add a point; click a point and press Delete to remove it. Alt-drag a point to curve it, Alt-click to make it a corner again; Alt on a handle bends one side only. While drawing, Alt-click places a smooth point.",
+  "geometryHint": "While drawing, a click places a smooth point, Alt-click a corner, and click-drag shapes its curve. On a selected object, Alt-click a point to switch it between smooth and corner; drag a handle to reshape (Alt bends one side only); double-click an edge to add a point (Alt: a corner); click a point and press Delete to remove it.",
   "instructions": "Description sheet",
   "instructionsHint": "The finish row's variant and the instruction rows printed between controls.",
   "finishVariant": "Finish",
