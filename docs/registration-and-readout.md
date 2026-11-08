@@ -406,7 +406,10 @@ another fork completely, and to accept that at the red exit by hand.
   is not listed — it is an ordinary mispunch for the official to judge
   with the punch table. Status, course and every other field stay the
   runner's own. Every reader of `performReadout` carries it: `readout`
-  (the kiosk's source), `readoutByRunner`, the receipts.
+  (the kiosk's source), `readoutByRunner`, the receipts. An OK read and a
+  plain class cost nothing extra; an MP read resolves each other variant's
+  positions with one query apiece — fine for a butterfly, a batched
+  resolver if relay-sized pools (stage > 0, not F's) ever read here.
 - **Offline.** `computeCardReadout` (`lib/offline/local-readout.ts`) runs
   the same helper over the dashboard cache: class rows carry
   `coursePoolIds` (the pool's course seqs in key order) and course rows
@@ -485,8 +488,11 @@ another pooled variant her punches validate fully against. It refuses,
 with `PRECONDITION_FAILED` and nothing written, a course outside the
 class's pool (`VARIANT_NOT_IN_POOL`, also for a class without one), the
 runner's current course (`VARIANT_IS_CURRENT`), and a variant the
-punches do not validate fully against or a run without a finish
-(`VARIANT_NOT_MATCHED`). Otherwise, in one transaction: `runner.courseId`
+punches do not validate fully against, or a run without a finish or a
+start (no running time) (`VARIANT_NOT_MATCHED`). The check is the
+re-run readout's computed status — not MP, with a finish and a running
+time — so a missing NoTiming-leg control refuses exactly as it keeps the
+variant out of `otherVariantMatches`. Otherwise, in one transaction: `runner.courseId`
 = the variant; `performReadout` re-run on the transaction client; status,
 start and finish written from it as `applyResult` writes them; journaled
 `runner.updated { cardNo, runnerId, fields: { courseId: <seq>,

@@ -888,7 +888,16 @@ export const cardReadoutRouter = router({
         }
         await tx.runner.update({ where: { id: runner.id }, data: { courseId: variant.id } });
         const r = await performReadout(tx, eventId, zeroTime, runner.id);
-        if (!r || r.missingControls.length > 0 || r.timing.finishTime === 0) {
+        // A full match with a time: the computed status, not the display
+        // list `missingControls` (which leaves out NoTiming-leg positions
+        // that still count as missing); with a finish and a running time,
+        // status MP ⇔ a required position missing — `findMatchingVariants`' rule.
+        if (
+          !r ||
+          r.timing.finishTime === 0 ||
+          r.timing.rawRunningTime <= 0 ||
+          r.timing.status === RunnerStatus.MissingPunch
+        ) {
           // Throwing rolls the course write back.
           throw new TRPCError({
             code: "PRECONDITION_FAILED",

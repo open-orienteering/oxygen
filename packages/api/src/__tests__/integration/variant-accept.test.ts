@@ -90,6 +90,8 @@ beforeAll(async () => {
   for (const [code, x] of [[31, 20], [32, 30], [33, 40], [34, 50], [35, 60]] as const) {
     site[code] = (await caller.control.create({ codes: String(code), xpos: x, ypos: 20 })).id;
   }
+  // A NoTiming control (ControlStatus 7): required, its leg untimed.
+  site[36] = (await caller.control.create({ codes: "36", status: 7, xpos: 70, ypos: 20 })).id;
 });
 
 afterAll(async () => {
@@ -239,6 +241,44 @@ describe("cardReadout.acceptVariant", () => {
     });
     expect(entries).toEqual([]);
     for (const seq of [g, b, d]) expect((await runnerRow(seq)).course?.seq).toBe(root.key("A"));
+  });
+
+  it("refuses a variant whose only missing control is a NoTiming one, and a run without a start", async () => {
+    // 31 → (A 32 | B 33 36) → 34, with 36 a NoTiming control: still required.
+    const { id: rootId } = await caller.course.create({ name: "NoTiming fork" });
+    await caller.course.setStructure({
+      courseId: rootId,
+      structure: {
+        version: 1,
+        id: "x",
+        orderMode: "ordered",
+        items: [ctl(S), ctl(site[31]), group("g", [[site[32]], [site[33], site[36]]]), ctl(site[34]), ctl(F)],
+      },
+    });
+    const variants = await caller.course.variantList({ courseId: rootId });
+    const key = (k: string) => variants.find((v) => v.variantKey === k)!.courseId;
+    const { id: classId } = await caller.class.create({ name: "A4", courseId: rootId });
+    const skipped = nextCard();
+    const id = (await caller.runner.create({ name: "Skipped 36", classId, cardNo: skipped, courseId: key("A") })).id;
+    await caller.cardReadout.storeReadout(read(skipped, [31, 33, 34]));
+    expect((await caller.cardReadout.readoutByRunner({ runnerId: id }))?.otherVariantMatches).toEqual([]);
+
+    // No start punch and no assigned start: B's punches match fully, but there is no time to accept.
+    const noStart = nextCard();
+    const ns = (await caller.runner.create({ name: "No start", classId, cardNo: noStart, courseId: key("A") })).id;
+    await caller.cardReadout.storeReadout({ ...read(noStart, [31, 33, 36, 34]), startTime: null });
+
+    const entries = await entriesDuring(async () => {
+      await expect(caller.cardReadout.acceptVariant({ runnerId: id, courseId: key("B") })).rejects.toThrow(
+        /VARIANT_NOT_MATCHED/,
+      );
+      await expect(caller.cardReadout.acceptVariant({ runnerId: ns, courseId: key("B") })).rejects.toThrow(
+        /VARIANT_NOT_MATCHED/,
+      );
+    });
+    expect(entries).toEqual([]);
+    expect((await runnerRow(id)).course?.seq).toBe(key("A"));
+    expect((await runnerRow(ns)).course?.seq).toBe(key("A"));
   });
 
   it("a runner in a class without a pool is VARIANT_NOT_IN_POOL", async () => {
