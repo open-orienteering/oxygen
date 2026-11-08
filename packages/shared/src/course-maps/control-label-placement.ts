@@ -351,7 +351,8 @@ export function placeControlLabels(
     // test and every sum sees the same segments in the same order and the
     // result is bit-identical — at a fraction of the cost on a course of
     // smooth bends (a thousand segments, each circle near a few dozen).
-    // `!(d > reach)` keeps a segment whose distance is NaN, as before.
+    // `!(d > reach)` keeps a segment whose distance is NaN for the tests
+    // to judge, as they did before the cull.
     const reach =
       radius + gap + RING_EXTRAS[RING_EXTRAS.length - 1] * labelSize +
       Math.hypot(estW, estH) + 2 * linePad + 0.5 * labelSize + 1e-9;

@@ -559,4 +559,14 @@ describe("placeControlLabels — collisions (course-layer.md §3.5)", () => {
     const placed = placeControlLabels([{ id: "c", x: 0, y: 0, label: "31" }, ...ring, ...ring2, ...ring3], [], OPTS);
     expect(placed.get("c")?.collides).toBe(true);
   });
+  it("a segment with a NaN coordinate is judged by the line tests as before the F20 cull: it rejects nothing", () => {
+    const circles: PlacementCircle[] = [
+      { id: "a", x: 0, y: 0, label: "31" },
+      { id: "b", x: 40, y: 0, label: "32" },
+    ];
+    const leg: PlacementSeg = { x1: 0, y1: 0, x2: 40, y2: 0 };
+    const withNaN = placeControlLabels(circles, [leg, { x1: NaN, y1: 0, x2: 1, y2: 0 }], OPTS);
+    expect([...withNaN]).toEqual([...placeControlLabels(circles, [leg], OPTS)]);
+    expect(withNaN.get("a")?.collides).toBeUndefined();
+  });
 });
