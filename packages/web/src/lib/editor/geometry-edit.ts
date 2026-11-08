@@ -147,7 +147,7 @@ export function deleteVertex(g: readonly Vertex[], index: number, min: number): 
   return g.filter((_, i) => i !== index);
 }
 
-/** Alt-drag on a vertex: `hOut` = the drag vector, `hIn` its negation; a zero vector retracts both. */
+/** A click-drag while drawing (§6.4): `hOut` = the drag vector, `hIn` its negation; a zero vector retracts both. */
 export function symmetricHandles(g: readonly Vertex[], index: number, vec: Pt): Vertex[] {
   return g.map((v, i) => (i === index ? withHandles(v, neg(vec), vec) : v));
 }
