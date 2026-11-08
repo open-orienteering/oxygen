@@ -171,7 +171,11 @@ describe("P: polygons drawn with the course editor's area flow (D16, docs/course
   it("a click on the first vertex closes: one path in page mm, handles mapped, vertices clamped", () => {
     // View mm here are page mm mirrored (y up): a handle 10 view mm up is 10 page mm up the page.
     const a = view(40, 60);
-    const poly: PolygonState = { kind: "layout_path", vertices: [a, { ...view(90, 60), hOut: { x: 0, y: 10 }, hIn: { x: 0, y: -10 } }, view(300, 110)] };
+    // Vertices 0 and 2 placed with Alt (corners), vertex 1 pulled by a click-drag.
+    const poly: PolygonState = {
+      kind: "layout_path",
+      vertices: [{ ...a, corner: true }, { ...view(90, 60), hOut: { x: 0, y: 10 }, hIn: { x: 0, y: -10 }, pulled: true }, { ...view(300, 110), corner: true }],
+    };
     const { b, draw } = drawing(poly);
     expect(b.onPointerDown!(at(40, 60))).toBe(false);
     b.onClick!(at(40, 60));
@@ -183,6 +187,13 @@ describe("P: polygons drawn with the course editor's area flow (D16, docs/course
     expect(pts[1].hOut.x).toBeCloseTo(0, 9);
     expect(pts[1].hOut.y).toBeCloseTo(-10, 9);
     expect(pts[2].x).toBeCloseTo(207, 9);
+    expect(pts[0].hOut).toBeUndefined();
+    // Plain clicks are smooth (F18): every vertex of the ring gets handles, wrapped at the close; no flag is stored.
+    const plain = drawing({ kind: "layout_path", vertices: [a, view(90, 60), view(90, 110)] });
+    plain.b.onClick!(at(40, 60));
+    const smooth = plain.draw.onPath.mock.calls[0][0];
+    expect(smooth.every((q: { hOut?: unknown; hIn?: unknown }) => q.hOut && q.hIn)).toBe(true);
+    smooth.forEach((q: object) => expect(q).not.toHaveProperty("corner"));
   });
 
   it("right-click cancels", () => {

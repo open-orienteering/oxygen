@@ -396,12 +396,13 @@ export function areaBinding(o: AreaOptions): EditorToolBinding {
   const v = o.poly.vertices;
   const closed = isClosedKind(o.poly.kind);
   const shapes: ToolShape[] = [];
-  // No rubber-band vertex while a press is placing one (the hover is where the press began). Smooth
-  // vertices preview their provisional handles with the hover as the next vertex (and, closed, as the
-  // first one's prev); nothing provisional is written to the state, and only its handles get grips.
+  // No rubber-band vertex while a press is placing one (the hover is where the press began). The hover
+  // is previewed as the smooth vertex a plain click places (F18), and the smooth vertices show their
+  // provisional handles with it as the next vertex (and, closed, as the first one's prev); nothing
+  // provisional is written to the state, and only its handles get grips.
   const preview = o.hover && o.gesture.current?.kind !== "poly-pull" ? [...v, o.hover] : v;
   const ring = closed && preview.length >= 3;
-  if (preview.length >= 2) shapes.push({ kind: "line", points: outlinePoints(smoothed(preview, ring), ring), closed: ring, dashed: true, color: PURPLE, fill: closed ? "rgba(124,58,237,0.08)" : undefined, testId: "editor-polygon" });
+  if (preview.length >= 2) shapes.push({ kind: "line", points: outlinePoints(smoothed(preview, ring, vertexRule(o.poly.kind).curves), ring), closed: ring, dashed: true, color: PURPLE, fill: closed ? "rgba(124,58,237,0.08)" : undefined, testId: "editor-polygon" });
   v.forEach((p, i) => {
     shapes.push({ kind: "handle", x: p.x, y: p.y, active: i === 0 && closed, testId: "editor-polygon-vertex", data: { index: String(i) } });
     for (const g of gripsOf(p)) shapes.push({ kind: "grip", x: g.at.x, y: g.at.y, from: p, testId: "editor-polygon-grip", data: { index: String(i), which: g.which } });
@@ -425,10 +426,10 @@ export function areaBinding(o: AreaOptions): EditorToolBinding {
         return true;
       }
       if (index === 0) return false;
-      // Anywhere else the press places a corner now (Alt: a smooth vertex); a drag from it pulls its
-      // handles (click = corner, click-drag = curve, the pull beating Alt).
+      // Anywhere else the press places a smooth vertex now (Alt: a corner, F18); a drag from it pulls
+      // its handles by hand (click-drag = curve, the pull beating Alt; back within 3 px, the press's kind).
       const pt = o.snap(p.pt);
-      const r = step(o.poly, { type: "click", pt, onFirst: false, smooth: !!p.alt });
+      const r = step(o.poly, { type: "click", pt, onFirst: false, corner: !!p.alt });
       if (r.state !== o.poly) o.onPoly(r.state);
       o.gesture.current = { kind: "poly-pull", index: r.state.vertices.length - 1, press: p.pt, mmPerPx: p.mmPerPx, poly: r.state, pulled: false };
       return true;
@@ -451,10 +452,10 @@ export function areaBinding(o: AreaOptions): EditorToolBinding {
     },
     onClick(p) {
       const tol = HANDLE_PX * p.mmPerPx;
-      apply({ type: "click", pt: o.snap(p.pt), onFirst: v.length > 0 && near(v[0], p.pt, tol), smooth: !!p.alt });
+      apply({ type: "click", pt: o.snap(p.pt), onFirst: v.length > 0 && near(v[0], p.pt, tol), corner: !!p.alt });
     },
     onDoubleClick(p) {
-      apply({ type: "double-click", pt: o.snap(p.pt), smooth: !!p.alt });
+      apply({ type: "double-click", pt: o.snap(p.pt), corner: !!p.alt });
     },
     onContextMenu: () => o.onCancel(),
   };
