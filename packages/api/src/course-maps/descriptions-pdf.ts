@@ -47,7 +47,7 @@ import { assertRestAccess } from "../restGuard.js";
 import { bundledPdfFaces, loadBundledFonts } from "../render/fonts.js";
 import { valueToRunnerStatus } from "../statusConvert.js";
 import { getBaseMapInfoOrNull } from "./map-source.js";
-import { type LayoutTemplateSource, layoutControlsFromCourseControls, layoutCourseEnds, resolveMapLayout } from "./resolve-layout.js";
+import { type LayoutTemplateSource, layoutControlsFromCourseControls, layoutCourseEnds, layoutCrossings, resolveMapLayout } from "./resolve-layout.js";
 
 type Db = PrismaClient | Prisma.TransactionClient;
 
@@ -163,6 +163,7 @@ export async function selectDescriptionBlocks(db: Db, event: { id: bigint; name:
         classes: classNames.map((name) => ({ name })),
         controls: layoutControlsFromCourseControls(course.courseControls),
         descriptionInstructions: course.descriptionInstructions,
+        crossings: layoutCrossings(course.structure ?? null, allControls),
       },
       mapScale: mapInfo?.scale ?? null,
       event: { name: event.name, date: event.date },

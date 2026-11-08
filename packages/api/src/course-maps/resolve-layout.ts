@@ -29,7 +29,7 @@ import {
 } from "@oxygen/shared";
 import { z } from "zod";
 import { firstCode } from "../control-id.js";
-import { courseSequenceOf, type SequenceColumns } from "../course-structure.js";
+import { courseSequenceOf, crossingRowsOf, rowKind, type SequenceColumns } from "../course-structure.js";
 
 const objectsSchema = z.array(courseMapObjectSchema);
 
@@ -82,6 +82,33 @@ export interface LayoutCourseSource {
   controls: LayoutControlSource[];
   /** `courses.description_instructions` JSONB (specials + finish variant). */
   descriptionInstructions?: unknown;
+  /**
+   * The legs through crossing points (`crossingRowsOf`, course-layer.md
+   * §10.3): the block derives its 13.3 / 13.4 rows from them.
+   */
+  crossings?: ReadonlyArray<{ afterControlId: number | null; section: boolean }>;
+}
+
+/** A course's `crossings` from its stored structure over the event's controls (public ids: first code, else seq). */
+export function layoutCrossings(structure: unknown, allControls: readonly LayoutControlSource[]): { afterControlId: number | null; section: boolean }[] {
+  const byId = new Map(allControls.map((c) => [c.id, c]));
+  return crossingRowsOf(
+    structure,
+    (uuid) => {
+      const c = byId.get(uuid);
+      return c ? firstCode(c.codes) || (c.seq ?? undefined) : undefined;
+    },
+    (uuid) => {
+      const c = byId.get(uuid);
+      return !!c && rowKind({ kind: c.kind ?? "control", status: c.status ?? "" }) === "start";
+    },
+  );
+}
+
+/** An all-controls sheet's drawn type of a site (course-layer.md §10.3): by kind, else the legacy status; an exchange is a control. */
+function allControlsType(c: LayoutControlSource): CourseOverlayControl["type"] {
+  const kind = rowKind({ kind: c.kind ?? "control", status: c.status ?? "" });
+  return kind === "start" || kind === "finish" || kind === "crossing_point" || kind === "map_issue" ? kind : "control";
 }
 
 /** Loose reader for the instructions JSONB — anything malformed → null. */
@@ -252,10 +279,7 @@ export function resolveMapLayout(
   const regularControls = rawControls.map((control) => {
     const code = control.codes.split(";")[0] || String(control.seq ?? "");
     const type: CourseOverlayControl["type"] =
-      input.kind === "all_controls" &&
-      (control.status === "start" || control.status === "finish")
-        ? control.status
-        : "control";
+      input.kind === "all_controls" ? allControlsType(control) : "control";
     const x = control.xpos;
     const y = control.ypos;
     return {
@@ -331,6 +355,7 @@ export function resolveMapLayout(
       }),
       instructions: readInstructions(input.course.descriptionInstructions),
       finishLengthM,
+      ...(input.course.crossings?.length ? { crossings: input.course.crossings } : {}),
     });
     descriptionHeader = sheet.header;
     descriptionRows = sheet.rows.map((row) => ({

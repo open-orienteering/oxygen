@@ -957,10 +957,12 @@ export const courseRouter = router({
     .mutation(async ({ ctx, input }) => {
       const c = await getCourseBySeq(ctx.db, ctx.event.id, input.courseId);
       assertNotVariant(c);
+      const controlItems = input.structure.items.flatMap((i) => (i.kind === "variation" ? i.alternatives.flatMap((a) => a.items) : [i]));
+      const itemIds = new Set<number>(controlItems.map((x) => x.siteId));
       const publicIds = new Set<number>([
-        ...input.structure.items.flatMap((i) =>
-          i.kind === "variation" ? i.alternatives.flatMap((a) => a.items.map((x) => x.siteId)) : [i.siteId],
-        ),
+        ...itemIds,
+        // The crossing points the legs run through (course-layer.md §10.3) resolve like sites.
+        ...controlItems.flatMap((x) => (x.leg?.crossing ? [x.leg.crossing.controlId] : [])),
         ...Object.keys(input.structure.labelOffsets ?? {}).map(Number),
       ]);
       const uuidByPublic = await uuidsOfPublicIds(ctx.db, ctx.event.id, publicIds);
@@ -976,11 +978,14 @@ export const courseRouter = router({
         where: { id: { in: [...uuidByPublic.values()] } },
         select: { id: true, kind: true, status: true },
       });
-      const unsupported = rows.find((r) => !["control", "start", "finish"].includes(rowKind(r)));
-      if (unsupported) {
+      // The rules that need the sites (§6.1): crossing / map-issue points are never items, a leg's
+      // crossing names a crossing point, a group never spans a map exchange.
+      const issues = courseShared.structureSiteIssues(stored, new Map(rows.map((r) => [r.id, rowKind(r)])));
+      if (issues.length > 0) {
+        const publicOf = new Map([...uuidByPublic].map(([pid, uuid]) => [uuid, pid]));
         throw new TRPCError({
           code: "PRECONDITION_FAILED",
-          message: "Map exchanges, crossing points and map-issue points arrive in slice F",
+          message: `${issues[0].code}: control ${publicOf.get(issues[0].siteId) ?? issues[0].siteId}`,
         });
       }
       assertMaterialisable(stored);
@@ -990,7 +995,7 @@ export const courseRouter = router({
         // Drop description-sheet specials anchored on a control that left.
         const pruned = pruneDescriptionInstructions(
           instructionsDto(c.descriptionInstructions),
-          new Set([...publicIds]),
+          itemIds,
         );
         if (JSON.stringify(pruned) !== JSON.stringify(c.descriptionInstructions)) {
           await tx.course.update({
@@ -1310,6 +1315,7 @@ export const courseRouter = router({
         ypos: true,
         description: true,
         circleGaps: true,
+        kind: true,
       },
     });
 
@@ -1363,6 +1369,8 @@ export const courseRouter = router({
           mapY: c.ypos,
           description: (c.description as ControlDescription | null) ?? null,
           circleGaps: (c.circleGaps as courseShared.AngularGap[] | null) ?? [],
+          // The site's kind (docs/course-layer.md §6.3): crossing / map-issue points and exchanges are drawn by it.
+          kind: rowKind(c),
         };
       });
   }),
