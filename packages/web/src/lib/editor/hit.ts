@@ -12,7 +12,7 @@
  * press inside an area pans the map (docs/bugfix-editor-area-press-pans.md).
  */
 
-import { render } from "@oxygen/shared";
+import { course, render } from "@oxygen/shared";
 import type { CourseHitIndex } from "../../map-gl/worker";
 
 type Pt = { x: number; y: number };
@@ -46,8 +46,9 @@ export interface UiArea {
 }
 
 /**
- * A leg the layer draws no line for (`style: "none"`, course-layer.md
- * §10.1 — no object, so no hit-index piece): its derived pieces, paper mm.
+ * A leg the layer draws no line for (`style: "none"`, or a corridor leg's
+ * default line, course-layer.md §10.1–10.2 `legLine` — no object, so no
+ * hit-index piece): its derived pieces, paper mm.
  * It hits within the tolerance of them, after the layer's objects and the
  * UI sites, before the UI areas (docs/course-editor.md §5, §6.7).
  */
@@ -57,9 +58,11 @@ export interface UiLeg {
   pieces: readonly (readonly Pt[])[];
 }
 
-/** The `style: "none"` legs of a derivation as UI-layer hit targets. */
-export function uiLegsOf(courses: readonly { id: string; legs: readonly { style: string; pieces: readonly (readonly Pt[])[] }[] }[] | undefined): UiLeg[] {
-  return (courses ?? []).flatMap((c) => c.legs.flatMap((l, index) => (l.style === "none" ? [{ courseId: c.id, index, pieces: l.pieces }] : [])));
+/** The legs of a derivation the layer draws no line for (`course.legLine` null: `none`, corridor legs) as UI-layer hit targets. */
+export function uiLegsOf(
+  courses: readonly { id: string; legs: readonly { style: string; corridor?: unknown; pieces: readonly (readonly Pt[])[] }[] }[] | undefined,
+): UiLeg[] {
+  return (courses ?? []).flatMap((c) => c.legs.flatMap((l, index) => (course.legLine(l) === null ? [{ courseId: c.id, index, pieces: l.pieces }] : [])));
 }
 
 /** Reach around every shape, CSS px — the legacy leg hit-line was 12 px wide (6 px each side). */

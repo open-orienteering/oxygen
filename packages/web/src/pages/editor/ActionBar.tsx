@@ -76,7 +76,7 @@ export function courseActions(ctx: ActionContext, on: ActionHandlers, label: Act
     out.push({ id: "add", label: label("editor.actionAdd"), onClick: on.add, disabled: !ctx.codesReady });
     out.push({ id: "add-start", label: label("editor.actionAddStart"), onClick: on.addStart });
     out.push({ id: "add-finish", label: label("editor.actionAddFinish"), onClick: on.addFinish });
-    out.push({ id: "add-map-issue", label: label("editor:actionAddMapIssue"), onClick: on.addMapIssue });
+    out.push({ id: "add-map-issue", label: label("editor:actionAddMapIssue"), title: label("editor:mapIssueHint"), onClick: on.addMapIssue });
     return out;
   }
   const s = ctx.selected;

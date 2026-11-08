@@ -409,7 +409,8 @@ export function SelectionSection({ selected, onKind, onNotes, onNumberHidden }: 
             const noItem = (k === "crossing_point" || k === "map_issue") && !!selected.onCourse;
             const kept = !!selected.routed && k !== "crossing_point";
             const why = noItem ? t("kindOnCourse") : kept ? t("kindRouted") : undefined;
-            return <option key={k} value={k} disabled={!current && (noItem || kept)} title={why}>{t(KIND_LABEL[k])}{!current && why ? ` — ${why}` : ""}</option>;
+            // F14: the map-issue point says what it is (§6.6, §6.8); a disabled reason wins.
+            return <option key={k} value={k} disabled={!current && (noItem || kept)} title={why ?? (k === "map_issue" ? t("mapIssueHint") : undefined)}>{t(KIND_LABEL[k])}{!current && why ? ` — ${why}` : ""}</option>;
           })}
         </select>
       </dd>

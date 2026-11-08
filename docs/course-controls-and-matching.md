@@ -135,6 +135,11 @@ multi-code control, used everywhere a human reads the value). The chip
 strip and the editable text input both consume `code`; the user never
 sees the underlying Id.
 
+A materialised variant is an ordinary course row, so its `controlCodes`
+are its own `course_controls`; the Courses page shows them in a disabled
+input and the chip strip when its row is expanded (`course-layer.md`
+§12.6).
+
 ### 4. Courses page (save)
 
 The text input on the Courses page is parsed into a `string[]` of

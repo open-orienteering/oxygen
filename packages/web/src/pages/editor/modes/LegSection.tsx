@@ -67,6 +67,9 @@ export function LegSection(p: LegSectionProps) {
           <option value="none">{t("legStyleNone")}</option>
         </select>
       </label>
+      {corridor && (leg.style ?? "line") === "line" && (
+        <p data-testid="editor-leg-style-corridor-note" className="-mt-1.5 text-[10px] text-slate-400">{t("legStyleCorridorNote")}</p>
+      )}
 
       <div>
         <div className="text-[11px] text-slate-500">{t("legBends")}</div>

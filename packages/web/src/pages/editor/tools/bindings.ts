@@ -77,6 +77,31 @@ export function objectOutline(o: course.CourseObject, selected: boolean, focused
 
 const OBJECT_IDS = { outline: "editor-object-outline", handle: "editor-object-handle", grip: "editor-object-grip" };
 
+// ─── The corridor guide (§6.7, F14) ─────────────────────
+
+/** A corridor leg of the selected course: the layer draws no line along it (course-layer.md §10.2). */
+export interface CorridorGuide {
+  /** The derived course's id (the course name), and the leg's index in it. */
+  course: string;
+  index: number;
+  /** The derived leg's points (bends and crossing joined), paper mm. */
+  points: readonly Pt[];
+}
+
+/**
+ * `binding` with a blue dashed `editor-corridor-guide` along each corridor
+ * leg, under the tool's own shapes. The guide only draws: a press on it is
+ * the viewer's leg click (the leg hits through the UI legs, §5), and every
+ * hook of the tool is kept. With no binding the guides draw alone.
+ */
+export function withCorridorGuides(binding: EditorToolBinding | null, guides: readonly CorridorGuide[]): EditorToolBinding | null {
+  if (guides.length === 0) return binding;
+  const lines: ToolShape[] = guides.map((g) => ({
+    kind: "line", points: g.points, dashed: true, color: BLUE, testId: "editor-corridor-guide", data: { course: g.course, leg: String(g.index) },
+  }));
+  return { ...binding, shapes: [...lines, ...(binding?.shapes ?? [])] };
+}
+
 // ─── V: select / move, Shift-click, lasso, objects, double-click leg ──
 
 export interface SelectOptions {

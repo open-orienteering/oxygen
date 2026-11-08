@@ -1,7 +1,7 @@
 /** `courseLayer()` through `symbolise` with a document (course-layer.md §1, §3). */
 
 import { describe, expect, it } from "vitest";
-import { courseLayer, courseRenderInput } from "../layer.js";
+import { courseLayer, courseRenderInput, legLine } from "../layer.js";
 import { courseDocumentContext } from "../context.js";
 import { layerInput, linear, site, sprintContext } from "./helpers.js";
 import { materialiseLibrary } from "../../symbol-library/index.js";
@@ -309,6 +309,30 @@ describe("corridors (§10.2, F2)", () => {
     expect(none.objects.some((o) => o.ref.kind === "leg" && o.ref.id === "c1:0")).toBe(false);
     expect(none.objects.some((o) => o.ref.kind === "corridor")).toBe(true);
     expect(none.regions).toHaveLength(1);
+  });
+
+  it("legLine (F14): 705 unless the leg has a corridor, 707 always, none never", () => {
+    expect(legLine({ style: "line" })).toBe("line");
+    expect(legLine({ style: "line", corridor })).toBeNull();
+    expect(legLine({ style: "marked_route" })).toBe("marked_route");
+    expect(legLine({ style: "marked_route", corridor })).toBe("marked_route");
+    expect(legLine({ style: "none" })).toBeNull();
+    expect(legLine({ style: "none", corridor })).toBeNull();
+  });
+
+  it("a corridor leg draws no 705 (F14): no leg object, the edge and band kept, the pieces and numbers unchanged; 707 kept", () => {
+    const layer = withLeg({ corridor });
+    expect(layer.objects.filter((o) => o.ref.kind === "leg").map((o) => o.ref.id)).toEqual(["c1:1"]);
+    expect(layer.objects.filter((o) => o.ref.kind === "corridor")).toHaveLength(1);
+    expect(layer.regions).toHaveLength(1);
+    const plain = withLeg({});
+    expect(layer.derivation.courses[0].legs[0].pieces).toEqual(plain.derivation.courses[0].legs[0].pieces);
+    expect(layer.objects.filter((o) => o.ref.kind === "number").map((o) => [o.text, o.path.coords])).toEqual(
+      plain.objects.filter((o) => o.ref.kind === "number").map((o) => [o.text, o.path.coords]));
+    const route = withLeg({ style: "marked_route", corridor });
+    const drawn = route.objects.filter((o) => o.ref.kind === "leg" && o.ref.id === "c1:0");
+    expect(drawn.length).toBeGreaterThan(0);
+    expect(drawn.every((o) => route.symbols[o.symbolIdx].id.includes("707"))).toBe(true);
   });
 
   it("no band without whiteMm; no corridor, nothing new", () => {

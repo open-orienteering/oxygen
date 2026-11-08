@@ -17,6 +17,10 @@ describe("courseActions (the legacy popover's entries, docs/course-editor.md §4
   it("empty map: add / start / finish / map-issue point (F4), plus add-to-course with a course", () => {
     expect(ids({ phantom: { insertAt: null } })).toEqual(["add", "add-start", "add-finish", "add-map-issue"]);
     expect(ids({ phantom: { insertAt: null }, course: "Lång" })).toEqual(["add-to-course", "add", "add-start", "add-finish", "add-map-issue"]);
+    // F14: the map-issue point says what it is (§6.8).
+    const entries = courseActions({ ...base, phantom: { insertAt: null } }, on, label);
+    expect(entries.find((a) => a.id === "add-map-issue")!.title).toBe("editor:mapIssueHint");
+    expect(entries.find((a) => a.id === "add")!.title).toBeUndefined();
   });
 
   it("a crossing or map-issue point: delete only (§6.8)", () => {

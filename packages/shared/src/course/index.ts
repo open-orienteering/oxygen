@@ -5,7 +5,7 @@
  */
 
 export * from "./types.js";
-export { courseLayer, courseRenderInput, type CourseRenderInput } from "./layer.js";
+export { courseLayer, courseRenderInput, legLine, type CourseRenderInput } from "./layer.js";
 export { legLengthMm, routedBends } from "./derive.js";
 export { LEG_FLATTEN_TOLERANCE_MM, PPEN_FLATTEN_TOLERANCE_MM, bendSegmentAt, hasCurvedBends, isCurvedSegment, legPolylineOf, reverseBends, type BendSegmentHit } from "./bends.js";
 export { corridorGeometry, type CorridorEdge, type CorridorGeometry } from "./corridor.js";
