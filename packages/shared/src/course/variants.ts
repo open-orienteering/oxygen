@@ -135,6 +135,45 @@ export function pathOfOrders<C extends PathControl>(s: PathStructure<C>, orders?
   return { items, paths };
 }
 
+/** The leg props a path item may carry (only `style` is read here). */
+interface LeggedControl extends PathControl {
+  leg?: { style?: string } & Record<string, unknown>;
+}
+
+/**
+ * All variations (course-layer.md §12.7): the **spine** — the top-level
+ * items, the leg across a plain group `style: "none"` (its branches draw
+ * it; a loop keeps the anchor → next leg) — and one **branch** per
+ * alternative: the anchor (a visit only), the alternative's controls, then
+ * the next item (a loop's petal returns to the anchor instead). An empty
+ * plain alternative is the straight leg anchor → next; an empty petal is
+ * no branch. A group without a control on both sides draws no branch.
+ * The editor's screen view tints the branches (F7); the all-variations
+ * print draws them in the one purple (F8). Items are copies.
+ */
+export function allVariationStructures<C extends LeggedControl>(s: PathStructure<C>): { spine: C[]; branches: { groupId: string; label: string; items: C[] }[] } {
+  const spine: C[] = [];
+  const branches: { groupId: string; label: string; items: C[] }[] = [];
+  s.items.forEach((item, i) => {
+    if (item.kind !== "variation") {
+      const prev = s.items[i - 1] as C | PathGroup<C> | undefined;
+      const c = copy(item as C);
+      spine.push(prev?.kind === "variation" && !prev.loop ? ({ ...c, leg: { ...(c.leg ?? {}), style: "none" } } as C) : c);
+      return;
+    }
+    const group = item as PathGroup<C>;
+    const anchor = s.items[i - 1];
+    const next = s.items[i + 1];
+    if (!anchor || anchor.kind === "variation" || !next || next.kind === "variation") return;
+    const visit = () => ({ siteId: (anchor as C).siteId }) as C;
+    for (const alt of group.alternatives) {
+      if (group.loop && alt.items.length === 0) continue;
+      branches.push({ groupId: group.id, label: alt.label, items: [visit(), ...alt.items.map(copy), group.loop ? visit() : copy(next as C)] });
+    }
+  });
+  return { spine, branches };
+}
+
 /** Every visiting order of a group's labels: one alternative each, or (loop) every permutation. */
 function labelOrders(group: { alternatives: readonly { label: string }[]; loop?: boolean }): string[][] {
   const labels = group.alternatives.map((alt) => alt.label);

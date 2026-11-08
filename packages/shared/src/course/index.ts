@@ -43,6 +43,7 @@ export {
 } from "./structure.js";
 export {
   MAX_VARIANTS,
+  allVariationStructures,
   groupOrder,
   materialiseVariants,
   pathOfOrders,
