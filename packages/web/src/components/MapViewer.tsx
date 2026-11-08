@@ -862,14 +862,15 @@ export function MapViewer({
     if (!pt || !edge) return null;
     const tol = Math.hypot(edge.x - pt.x, edge.y - pt.y);
     // The faded off-course controls are drawn by the UI layer, not the layer: plain circles. The layer's own
-    // controls too, below its shapes: a circle with gaps is drawn as open arcs, whose interior does not hit.
+    // controls too, below its shapes: a circle with gaps — or opened by a corridor (F19, never a cut) — is drawn as
+    // open arcs, whose interior does not hit.
     const radiusMm = courseInfo?.metrics?.circleRadiusMm ?? 3;
     const uiSites = [
       ...(editor.fadeNonCourse
         ? controls.filter((c) => c.type === "Control" && !editor.courseControlIds?.has(c.id) && (c.x !== 0 || c.y !== 0))
           .map((c) => ({ id: c.id, x: c.x, y: c.y, radiusMm }))
         : []),
-      ...(courseInfo?.derivation?.sites ?? []).filter((d) => d.role === "control" && d.cuts.length > 0)
+      ...(courseInfo?.derivation?.sites ?? []).filter((d) => d.role === "control")
         .map((d) => ({ id: d.id, x: d.x, y: d.y, radiusMm })),
     ];
     // An armed placement draws its own visit: only real sites are targets (a reuse), never the cursor's circle or legs.
