@@ -275,17 +275,66 @@ describe("MapGlEngine dynamic bucket (docs/map-rendering.md §5.2 Dynamic bucket
     expect((infos[0] as { hit: { refs: unknown[] } | null }).hit?.refs.length).toBeGreaterThan(0);
   });
 
-  it("drops a reply a newer request overtook; null releases the part", async () => {
+  const courses = (t: { posted: WorkerRequest[] }) => t.posted.filter((m) => m.type === "course") as Extract<WorkerRequest, { type: "course" }>[];
+  const derivedCourses = (info: unknown) => (info as { derivation: { courses: unknown[] } | null }).derivation?.courses.length;
+
+  it("one request in flight, latest wins: the inputs made meanwhile wait, only the last is sent once the reply is in (docs/bugfix-course-drag-redraw.md)", async () => {
+    const { engine, transport, infos } = await courseEngine();
+    const before = courses(transport).length;
+    const a = request(), b = request({ viewOptions: { labelMode: "code" } }), c = request({ structure: null });
+    engine.setCourse(a);
+    engine.setCourse(b);
+    engine.setCourse(c);
+    // A drag's pointer moves: one request reaches the worker, the others only replace the waiting input.
+    expect(courses(transport).slice(before).map((m) => m.input)).toEqual([a]);
+    transport.flush();
+    // A's reply is the latest posted generation, so it is drawn; then C (not B) is sent and drawn.
+    expect(courses(transport).slice(before).map((m) => m.input)).toEqual([a, c]);
+    expect(infos.map(derivedCourses)).toEqual([1, 0]);
+    transport.flush();
+    expect(courses(transport).slice(before)).toHaveLength(2);
+    // Nothing in flight: the next input goes at once.
+    engine.setCourse(a);
+    expect(courses(transport).slice(before)).toHaveLength(3);
+  });
+
+  it("null counts as an input: it waits like any, and releases the part", async () => {
     const { engine, transport, renderer, infos } = await courseEngine();
     engine.setCourse(request());
-    engine.setCourse(request({ structure: null }));
-    transport.flush();
-    expect(infos).toHaveLength(1);
-    expect((infos[0] as { derivation: { courses: unknown[] } }).derivation.courses).toHaveLength(0);
     engine.setCourse(null);
     transport.flush();
+    expect(courses(transport).at(-1)!.input).toBeNull();
+    expect(infos).toHaveLength(2);
+    expect((infos[1] as { derivation: unknown }).derivation).toBeNull();
     expect(renderer.parts.has("C")).toBe(false);
     expect(renderer.released).toContain("C");
+  });
+
+  it("a stale reply is dropped: a load re-sends the course at once, the reply of the one in flight before it is ignored", async () => {
+    const { engine, transport, infos } = await courseEngine();
+    engine.setCourse(request());
+    const p = engine.load({ source: { kind: "document", bytes: documentBytes(), options: { unmatched: "proxy" } }, fonts: [{ family: "liberation-sans", bytes: fontBytes() }], courseLayer: true });
+    expect(transport.posted.slice(-3).map((m) => m.type)).toEqual(["course", "load", "course"]);
+    const [stale, current] = courses(transport).slice(-2).map((m) => m.generation);
+    expect(current).toBe(stale + 1);
+    transport.flush();
+    await p;
+    // The first reply answered the document the load replaced: only the re-sent one is drawn.
+    expect(infos).toHaveLength(1);
+    expect(courses(transport).at(-1)!.generation).toBe(current);
+  });
+
+  it("an error reply ends the request in flight, so a waiting input is not stuck behind it", async () => {
+    const { engine, transport, infos } = await courseEngine();
+    const before = courses(transport).length;
+    engine.setCourse(request());
+    engine.setCourse(request({ structure: null }));
+    expect(courses(transport).length).toBe(before + 1);
+    transport.onMessage!({ type: "error", message: "course failed" });
+    expect(courses(transport).length).toBe(before + 2);
+    transport.flush();
+    // The first request's reply is now stale; the waiting input's is drawn.
+    expect(infos.map(derivedCourses)).toEqual([0]);
   });
 
   it("filter regions: the reply's hidden objects join setHidden's, masks reach the visible set, null clears both", async () => {
@@ -392,10 +441,14 @@ describe("MapGlEngine dynamic bucket (docs/map-rendering.md §5.2 Dynamic bucket
     const renderer = new FakeRenderer();
     const transport = manualTransport();
     const engine = new MapGlEngine(renderer as unknown as MapGlRenderer, transport, {});
-    engine.setCourse(request());
+    engine.setCourse(request({ structure: null }));
+    const latest = request();
+    engine.setCourse(latest);
     expect(transport.posted).toHaveLength(0);
     const p = engine.load({ source: { kind: "document", bytes: documentBytes(), options: { unmatched: "proxy" } }, fonts: [{ family: "liberation-sans", bytes: fontBytes() }], courseLayer: true });
+    // Only the last input made before the load, right after the load message.
     expect(transport.posted.map((m) => m.type)).toEqual(["load", "course"]);
+    expect((transport.posted[1] as Extract<WorkerRequest, { type: "course" }>).input).toBe(latest);
     transport.flush();
     await p;
     expect(renderer.parts.has("C")).toBe(true);
