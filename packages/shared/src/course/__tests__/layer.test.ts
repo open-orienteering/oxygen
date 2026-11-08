@@ -10,7 +10,6 @@ import { makePath } from "../../render/pass-stream.js";
 import { flattenRings, pointInRings } from "../../render/geometry.js";
 import { liberation } from "../../render/__tests__/fonts.js";
 import type { RenderObject } from "../../render/symbolise.js";
-import type { CourseMapObject } from "../../course-maps/schema.js";
 import type { CourseLayerObject } from "../objects.js";
 import type { CourseLegProps } from "../types.js";
 
@@ -320,78 +319,73 @@ describe("corridors (§10.2, F2)", () => {
   });
 });
 
-describe("layout objects (§3.6)", () => {
-  const rect = (fillMode: "whiteout" | "whiteoutInverted" | "outOfBounds" | "solid", extra: Record<string, unknown> = {}): CourseMapObject =>
-    ({ id: `r-${fillMode}`, anchor: "map", kind: "rectangle", x: 20, y: 20, width: 10, height: 5, fillMode, ...extra }) as CourseMapObject;
+describe("course objects as F12 moved layout objects (§3.6 retired, §8.3)", () => {
+  const box = [{ x: 20, y: 20 }, { x: 30, y: 20 }, { x: 30, y: 25 }, { x: 20, y: 25 }];
+  const area = (id: string, kind: "whiteout" | "toner_saver" | "oob_area", props: Record<string, unknown> = {}): CourseLayerObject =>
+    ({ id, kind, geometry: box, props }) as CourseLayerObject;
+  const ref = (id: string) => `course-object:${id}`;
 
-  it("white-out at upper white, 709 hatch, own-colour rows on top, page objects ignored", () => {
-    const objects: CourseMapObject[] = [
-      rect("whiteout"),
-      rect("outOfBounds", { stroke: "#000000", strokeWidthMm: 0.3 }),
-      rect("solid", { fill: "#ff0000" }),
-      { id: "t", anchor: "map", kind: "text", x: 5, y: 5, text: "{course}", fontSizeMm: 3, color: "#0000ff" },
-      { id: "l", anchor: "map", kind: "line", x1: 0, y1: 0, x2: 10, y2: 0, stroke: "#0000ff", strokeWidthMm: 0.5, dash: "dashed" },
-      { id: "p", anchor: "page", kind: "text", x: 5, y: 5, text: "page", fontSizeMm: 3, color: "#000000" },
+  it("white-out at upper white, 709 / 709.b / 709.c by border, text in its own row on top at paper mm", () => {
+    const objects: CourseLayerObject[] = [
+      area("wo", "whiteout"),
+      area("b", "oob_area", { border: "solid" }),
+      area("c", "oob_area", { border: "dashed" }),
+      { id: "t", kind: "text", geometry: [{ x: 5, y: 5 }], props: { text: "{course}", fontSizeMm: 2, color: "#0000ff" } },
     ];
-    const layer = courseLayer(layerInput({ objects, viewOptions: { textValues: { course: "Lång" }, overprintScale: 1.5 } }));
-    const byRef = (id: string) => layer.objects.filter((o) => o.ref.kind === "object" && o.ref.id === id);
+    const layer = courseLayer(layerInput({ objects, viewOptions: { textValues: { course: "Lång" } } }));
+    const byRef = (id: string) => layer.objects.filter((o) => o.ref.kind === "object" && o.ref.id === ref(id));
     const sym = (id: string) => layer.symbols[byRef(id)[0].symbolIdx];
-    expect(sym("r-whiteout")).toMatchObject({ type: "area", fill: layer.colours.findIndex((c) => c.paletteIds?.includes("white-upper")) });
-    expect(sym("r-outOfBounds").id).toBe("ISOM2017-2:709.b");
-    expect(byRef("r-outOfBounds")).toHaveLength(1);
-    const dashed = courseLayer(layerInput({ objects: [rect("outOfBounds", { stroke: "#a626ff", strokeWidthMm: 0.4, dash: "dashed" })] }));
-    expect(dashed.symbols[dashed.objects.find((o) => o.ref.kind === "object")!.symbolIdx].id).toBe("ISOM2017-2:709.c");
-    const top = layer.colours.slice(-2).map((c) => c.id);
-    expect(top).toEqual(["course-object:#ff0000", "course-object:#0000ff"]);
+    expect(sym("wo")).toMatchObject({ type: "area", fill: layer.colours.findIndex((c) => c.paletteIds?.includes("white-upper")) });
+    expect(sym("b").id).toBe("ISOM2017-2:709.b");
+    expect(byRef("b")).toHaveLength(1);
+    expect(sym("c").id).toBe("ISOM2017-2:709.c");
+    expect(layer.colours.at(-1)!.id).toBe("course-object:#0000ff");
     expect(byRef("t")[0].text).toBe("Lång");
-    // Page mm sizes divided by the print enlargement.
+    // Sizes are paper mm: the migration divided a layout text's page size by the enlargement once.
     expect(sym("t")).toMatchObject({ type: "text", fontSizeUm: 2000 });
-    expect(sym("l")).toMatchObject({ type: "line", main: { widthUm: 333, dash: { dashUm: 1667, gapUm: 833 } } });
-    expect(byRef("p")).toEqual([]);
   });
 
   it("white-out outside: the window ring with the shape as a hole; warned without a window", () => {
     const window = [{ x: 0, y: 0 }, { x: 100, y: 0 }, { x: 100, y: 100 }, { x: 0, y: 100 }];
-    const layer = courseLayer(layerInput({ objects: [rect("whiteoutInverted")], viewOptions: { window } }));
+    const layer = courseLayer(layerInput({ objects: [area("ts", "toner_saver")], viewOptions: { window } }));
     const ring = layer.objects.find((o) => o.ref.kind === "object")!;
     expect(ring.path.coords.length).toBe(16);
     expect(ring.path.flags[4] & 16).toBe(16);
-    const missing = courseLayer(layerInput({ objects: [rect("whiteoutInverted")] }));
+    const missing = courseLayer(layerInput({ objects: [area("ts", "toner_saver")] }));
     expect(missing.objects.filter((o) => o.ref.kind === "object")).toEqual([]);
     expect(missing.warnings.map((w) => w.code)).toEqual(["WINDOW_MISSING"]);
   });
 
-  it("a toner saver fills a white row on top of the stack, above upper purple and every layout colour (P1); none without one", () => {
+  it("a toner saver fills a white row on top of the stack, above upper purple and every object colour (P1); none without one", () => {
     const window = [{ x: 0, y: 0 }, { x: 100, y: 0 }, { x: 100, y: 100 }, { x: 0, y: 100 }];
-    const text: CourseMapObject = { id: "t", anchor: "map", kind: "text", x: 5, y: 5, text: "x", fontSizeMm: 3, color: "#0000ff" };
+    const text: CourseLayerObject = { id: 6, kind: "text", geometry: [{ x: 5, y: 5 }], props: { text: "x", fontSizeMm: 3, color: "#0000ff" } };
     const saver: CourseLayerObject = { id: 7, kind: "toner_saver", geometry: [{ x: 10, y: 10 }, { x: 60, y: 10 }, { x: 60, y: 60 }], props: {} };
     const oob: CourseLayerObject = { id: 8, kind: "oob_area", geometry: [{ x: 70, y: 70 }, { x: 90, y: 70 }, { x: 90, y: 90 }], props: {} };
-    for (const toner of [rect("whiteoutInverted"), saver]) {
-      const layer = courseLayer(layerInput({ objects: [text, oob, toner], viewOptions: { window } }));
-      const ring = layer.objects.find((o) => o.path.flags.some((f) => f & 16))!;
-      const fill = layer.symbols[ring.symbolIdx];
-      if (fill.type !== "area") throw new Error("the ring is not an area");
-      const row = fill.fill ?? -1;
-      expect(row).toBe(layer.colours.length - 1);
-      expect(layer.colours[row]).toMatchObject({ id: "course:toner-saver-white", cmyk: [0, 0, 0, 0] });
-      // Symbolised with the document: the ring is the last pass — after the map's black, the course's upper
-      // purple (numbers, the 709 area) and the layout text's own row.
-      const { stream } = symbolise({ ...courseRenderInput(isomDocument(), layer), fonts: fonts() });
-      const ids = stream.passes.map((p) => colourId(layer, p.colour));
-      expect(ids.at(-1)).toBe("course:toner-saver-white");
-      expect(ids.filter((id) => id === "course:toner-saver-white")).toHaveLength(1);
-      expect(ids).toEqual(expect.arrayContaining(["black100", "purple-upper", "course-object:#0000ff"]));
-    }
+    const layer = courseLayer(layerInput({ objects: [text, oob, saver], viewOptions: { window } }));
+    const ring = layer.objects.find((o) => o.path.flags.some((f) => f & 16))!;
+    const fill = layer.symbols[ring.symbolIdx];
+    if (fill.type !== "area") throw new Error("the ring is not an area");
+    const row = fill.fill ?? -1;
+    expect(row).toBe(layer.colours.length - 1);
+    expect(layer.colours[row]).toMatchObject({ id: "course:toner-saver-white", cmyk: [0, 0, 0, 0] });
+    // Symbolised with the document: the ring is the last pass — after the map's black, the course's upper
+    // purple (numbers, the 709 area) and the text's own row.
+    const { stream } = symbolise({ ...courseRenderInput(isomDocument(), layer), fonts: fonts() });
+    const ids = stream.passes.map((p) => colourId(layer, p.colour));
+    expect(ids.at(-1)).toBe("course:toner-saver-white");
+    expect(ids.filter((id) => id === "course:toner-saver-white")).toHaveLength(1);
+    expect(ids).toEqual(expect.arrayContaining(["black100", "purple-upper", "course-object:#0000ff"]));
     // A plain white-out stays at upper white, and no row is added without a toner saver.
-    const plain = courseLayer(layerInput({ objects: [rect("whiteout")], viewOptions: { window } }));
+    const plain = courseLayer(layerInput({ objects: [area("wo", "whiteout")], viewOptions: { window } }));
     expect(plain.colours.some((c) => c.id === "course:toner-saver-white")).toBe(false);
     // Nor when the saver is not drawn (no window: the viewer, WINDOW_MISSING).
     expect(courseLayer(layerInput({ objects: [saver] })).colours.some((c) => c.id === "course:toner-saver-white")).toBe(false);
   });
 
-  it("images are returned for the page backends, not as objects", () => {
-    const layer = courseLayer(layerInput({ objects: [{ id: "img", anchor: "map", kind: "image", graphicId: 3, x: 1, y: 2, width: 3, height: 4 }] }));
-    expect(layer.images).toEqual([expect.objectContaining({ rectUm: { x: 1000, y: 2000, width: 3000, height: 4000 } })]);
+  it("image objects are returned for the page backends, not as objects", () => {
+    const img: CourseLayerObject = { id: "img", kind: "image", geometry: [{ x: 4, y: 6 }, { x: 1, y: 2 }], props: { graphicId: 3, crop: { x: 0, y: 0.5, width: 1, height: 0.5 } } };
+    const layer = courseLayer(layerInput({ objects: [img] }));
+    expect(layer.images).toEqual([{ graphicId: 3, crop: { x: 0, y: 0.5, width: 1, height: 0.5 }, rectUm: { x: 1000, y: 2000, width: 3000, height: 4000 } }]);
     expect(layer.objects.some((o) => o.ref.kind === "object")).toBe(false);
   });
 });

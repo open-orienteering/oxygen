@@ -91,7 +91,7 @@ describe("course map schemas and geometry", () => {
       courseMapObjectSchema.parse({
         id: "p",
         kind: "whiteoutPolygon",
-        anchor: "map",
+        anchor: "page",
         points: [
           { x: 0, y: 0 },
           { x: 1, y: 0 },
@@ -219,7 +219,7 @@ describe("course map schemas and geometry", () => {
     const parsed = courseMapObjectSchema.parse({
       id: "img",
       kind: "image",
-      anchor: "map",
+      anchor: "page",
       graphicId: 3,
       x: 12,
       y: 34,
@@ -314,32 +314,12 @@ describe("course map validation and placeholders", () => {
     );
   });
 
-  it("allows map-anchored objects outside the printable area", () => {
-    // They follow the terrain and are clipped to the map frame at print,
-    // so a moved window pushing them off-page is fine by design.
-    const result = validateCourseMap({
-      document: {
-        ...document,
-        objects: [
-          {
-            id: "terrain-whiteout",
-            kind: "rectangle",
-            anchor: "map",
-            x: -500,
-            y: -500,
-            width: 20,
-            height: 10,
-            fillMode: "whiteout",
-          },
-        ],
-      },
-      mapScale: 7500,
-      window: { minX: 0, minY: 0, width: 100, height: 100 },
-      variants: [],
-    });
-    expect(result.issues).not.toContainEqual(
-      expect.objectContaining({ code: "object_outside_page" }),
-    );
+  it("refuses a map-anchored object: F12 moved them into course objects (course-layer.md §3.6)", () => {
+    const whiteout = { id: "terrain-whiteout", kind: "rectangle", x: -500, y: -500, width: 20, height: 10, fillMode: "whiteout" };
+    expect(courseMapObjectSchema.safeParse({ ...whiteout, anchor: "map" }).success).toBe(false);
+    expect(courseMapObjectSchema.safeParse({ ...whiteout, anchor: "page" }).success).toBe(true);
+    // A legacy kind still normalises onto the page anchor.
+    expect(courseMapObjectSchema.parse({ id: "w", anchor: "page", kind: "whiteoutRect", x: 0, y: 0, width: 1, height: 1 })).toMatchObject({ kind: "rectangle", fillMode: "whiteout" });
   });
 
   it("includes path vertices and handle control points in page bounds", () => {
@@ -348,7 +328,7 @@ describe("course map validation and placeholders", () => {
         {
           id: "bounded",
           kind: "path",
-          anchor: "map",
+          anchor: "page",
           points: [
             { x: 10, y: 10, hOut: { x: -5, y: 20 } },
             { x: 30, y: 20, hIn: { x: 15, y: -5 } },
@@ -358,10 +338,8 @@ describe("course map validation and placeholders", () => {
           fillMode: "none",
           closed: false,
         },
-        { x: 0, y: 0, width: 100, height: 100 },
-        { minX: 0, minY: 0, width: 50, height: 50 },
       ),
-    ).toEqual({ x: 10, y: 40, width: 80, height: 40 });
+    ).toEqual({ x: 5, y: 10, width: 40, height: 20 });
   });
 
   it("accepts controls covered across several maps of a fork family", () => {

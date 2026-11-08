@@ -97,8 +97,10 @@ SVG/PNG graphics from a per-event or club library; both preview and PDF are
 rotated so meridian lines stand vertical on the page. Course overprint
 follows ISOM: circles, numbers and lines enlarge with the map when the print
 scale is larger than the base map scale (1:15000 printed at 1:7500 → 2×).
-Layout mode lists what would print outside the page. Importing a club template drops map-anchored objects that
-belonged to another event's map. Export produces one map, a whole course, all
+Layout mode lists what would print outside the page. Layout objects are fixed to the page; anything that belongs to
+the terrain (white-outs, out-of-bounds areas, marked routes, map text) is a course object, drawn in Course mode and
+shown in Layout mode with the course. Objects that older versions anchored to the map on a sheet or template were
+moved into course objects on upgrade, scoped to the sheet's course (a template's to every course). Export produces one map, a whole course, all
 controls, or the complete event as vector PDF, printed straight from the
 event's map document: print-ready CMYK, the course drawn with the map's own
 symbols in IOF layer order, no conversion step. A map whose colours cannot

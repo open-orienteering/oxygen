@@ -185,8 +185,6 @@
   "downloadFailed": "Kunde inte hämta PDF-filen.",
   "templateAuto": "auto",
   "templateExtra": "extra",
-  "mapAnchoredObjectsRemoved": "{{count}} kartbundet objekt togs bort (det var placerat på en annan tävlings karta).",
-  "mapAnchoredObjectsRemoved_other": "{{count}} kartbundna objekt togs bort (de var placerade på en annan tävlings karta).",
   "dismiss": "Stäng",
   "exportCourseMaps": "Kartor (PDF)",
   "exportVariantMaps": "Karta för variant {{key}} (PDF)",

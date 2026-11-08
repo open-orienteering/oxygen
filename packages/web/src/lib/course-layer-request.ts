@@ -96,15 +96,14 @@ export interface CourseRequestInput {
 
 /**
  * The sheet Layout mode draws, as the composer takes it: the page (its
- * page-anchored objects and the block become the page part), and what
- * the map layer of the sheet adds to the course layer — the layout objects
- * (map-anchored ones drawn), the template's appearance, the overprint
- * scale, the frame window and the text values.
+ * layout objects — all page-anchored since F12 — and the block become the
+ * page part), and what the map layer of the sheet adds to the course
+ * layer — the template's appearance, the frame window (a toner saver's
+ * ring) and the text values.
  */
 export interface LayoutRequest {
   page: PageLayerRequest;
   appearance: course.CourseAppearance;
-  overprintScale: number;
   /** The sheet's part of a course split by map exchanges (`course_maps.section_index`, course-layer.md §11). */
   section?: number;
 }
@@ -275,11 +274,7 @@ export function courseLayerRequest(input: CourseRequestInput): CourseLayerReques
     structure: structures.length === 0 ? null : structures,
     sites,
     // The layer reads the body and the id; scope, z, token and resolved courses stay with the list.
-    objects: [
-      // A sheet's layout objects first, as `composePage` passes them; the layer draws the map-anchored ones.
-      ...(input.layout?.page.objects ?? []),
-      ...(input.courseObjects ?? []).map(({ scope: _s, z: _z, version: _v, inCourses: _c, ...o }) => o as course.CourseLayerObject),
-    ],
+    objects: (input.courseObjects ?? []).map(({ scope: _s, z: _z, version: _v, inCourses: _c, ...o }) => o as course.CourseLayerObject),
     appearance: input.layout?.appearance ?? {},
     viewOptions: {
       labelMode: sequence ? "sequence" : "code",
@@ -290,7 +285,6 @@ export function courseLayerRequest(input: CourseRequestInput): CourseLayerReques
       ...(input.autoCuts === false ? { autoCuts: false } : {}),
       ...(input.layout
         ? {
-            overprintScale: input.layout.overprintScale,
             window: course.mapLayerWindow(input.layout.page),
             ...(input.layout.page.textValues ? { textValues: input.layout.page.textValues } : {}),
             ...(input.layout.section !== undefined ? { section: input.layout.section } : {}),

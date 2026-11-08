@@ -367,14 +367,8 @@ export const mapTemplateRouter = router({
           objects: z.array(courseMapObjectSchema),
         })
         .parse(source.payload);
-      // Map-anchored objects reference the source event's OCAD paper
-      // coordinates and would land in nonsense positions on another event's
-      // map. Keep page-anchored layout; drop the rest and report the count.
-      const pageObjects = payload.objects.filter(
-        (object) => object.anchor === "page",
-      );
-      const removedMapAnchoredCount =
-        payload.objects.length - pageObjects.length;
+      // Every layout object is page-anchored (F12 stripped the map-anchored
+      // ones from club payloads), so the template loads whole.
       try {
         const template = parseTemplate(
           await ctx.db.$transaction(async (tx) => {
@@ -388,14 +382,14 @@ export const mapTemplateRouter = router({
                 orientation: payload.orientation,
                 printScale: payload.printScale,
                 settings: json(payload.settings),
-                objects: json(pageObjects),
+                objects: json(payload.objects),
                 version: nextObjectVersion(),
               },
             });
             return syncTemplateKey(tx, row.id);
           }),
         );
-        return { template, removedMapAnchoredCount };
+        return { template };
       } catch (error) {
         templateConflict(error, input.name);
       }

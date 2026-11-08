@@ -125,12 +125,6 @@ export interface CourseViewOptions {
   /** Default `sequence` for one ordered course, else `code`. */
   labelMode?: "sequence" | "code";
   /**
-   * Print enlargement `mapScale / printScale`. Only map-anchored layout
-   * objects read it: their sizes are page mm, so they are divided by it
-   * (the page transform enlarges the whole layer). Default 1.
-   */
-  overprintScale?: number;
-  /**
    * The event's automatic cuts (`Event.autoOverprintCuts`, course-layer.md
    * §3.4). `false`: no automatic circle slits or leg gaps whatever
    * `cutFeatures` holds; stored `circleGaps` / leg `gaps` still apply.
@@ -189,10 +183,11 @@ export interface CourseLayerInput {
   structure: CourseStructure | readonly CourseStructure[] | null;
   sites: readonly CourseSite[];
   /**
-   * A sheet's layout objects (only `anchor: "map"` ones are drawn) and the
-   * course objects in scope (§8): `filter_region` objects join `regions`.
+   * The course objects in scope (§8), in draw order: `filter_region`
+   * objects join `regions`. A sheet's layout objects are the page layer's
+   * (course-print.md §4.4); map-anchored ones were moved here by F12 (§3.6).
    */
-  objects: readonly (CourseMapObject | CourseLayerObject)[];
+  objects: readonly CourseLayerObject[];
   appearance: CourseAppearance;
   viewOptions: CourseViewOptions;
   document: CourseDocumentContext;
@@ -295,8 +290,11 @@ export interface CourseDerivation {
   courses: DerivedCourse[];
 }
 
+/** An `image` object: not in the pass stream, drawn by the page backends from its graphic's bytes. */
 export interface CourseLayerImage {
-  object: Extract<CourseMapObject, { kind: "image" }>;
+  graphicId: number;
+  /** Visible part of the source as fractions, top-left origin; absent = all. */
+  crop?: { x: number; y: number; width: number; height: number };
   /** Paper µm, y-up: lower-left corner and size. */
   rectUm: { x: number; y: number; width: number; height: number };
 }
@@ -314,7 +312,7 @@ export interface CourseLayer {
   remap: number[] | null;
   symbols: RenderSymbol[];
   objects: CourseRenderObject[];
-  /** Map-anchored images: not in the pass stream, drawn by the page backends. */
+  /** `image` course objects: not in the pass stream, drawn by the page backends. */
   images: CourseLayerImage[];
   derivation: CourseDerivation;
   warnings: CourseLayerWarning[];

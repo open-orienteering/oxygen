@@ -230,7 +230,6 @@ export function resolveSheet(input: ResolveSheetInput): ResolvedSheet {
         // §10.3: the all-controls and setter sheets (F10) are setter views (702, their crossing points); a course sheet never is.
         ...(input.kind === "all_controls" || input.kind === "setter" ? { setterMarks: true } : {}),
         labelMode: layout.labelMode,
-        overprintScale: layout.overprintScale,
         ...(input.autoCuts === false ? { autoCuts: false } : {}),
         // §11: a part sheet draws its part; numbers and the block stay the whole course's.
         ...(layout.section !== undefined ? { section: layout.section } : {}),

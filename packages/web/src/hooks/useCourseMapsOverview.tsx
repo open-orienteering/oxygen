@@ -33,7 +33,6 @@ export function useCourseMapsOverview(nameId: string, canEdit: boolean) {
   const templates = trpc.mapTemplate.list.useQuery();
   const club = trpc.mapTemplate.listClub.useQuery(undefined, { enabled: canEdit });
   const [error, setError] = useState<string | null>(null);
-  const [notice, setNotice] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   /** "New template…" was picked for these courses: the dialog is open. */
   const [newFor, setNewFor] = useState<number[] | null>(null);
@@ -100,7 +99,6 @@ export function useCourseMapsOverview(nameId: string, canEdit: boolean) {
         if (!row) throw new Error(t("downloadFailed"));
         const name = freeTemplateName(row.name, (templates.data ?? []).map((x) => x.name));
         const r = await utils.client.mapTemplate.loadFromClub.mutate({ clubTemplateId: row.id, name });
-        if (r.removedMapAnchoredCount > 0) setNotice(t("mapAnchoredObjectsRemoved", { count: r.removedMapAnchoredCount }));
         seq = r.template.seq;
       } else seq = pick.seq;
       await applySeq(seq, courseIds);
@@ -180,12 +178,6 @@ export function useCourseMapsOverview(nameId: string, canEdit: boolean) {
         <div role="alert" data-testid="course-maps-error" className="mb-4 flex items-start gap-2 rounded-lg border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">
           <span className="flex-1">{error}</span>
           <button type="button" onClick={() => setError(null)} className="cursor-pointer text-red-400 hover:text-red-600">{t("dismiss")}</button>
-        </div>
-      )}
-      {notice && (
-        <div data-testid="course-maps-notice" className="mb-4 flex items-start gap-2 rounded-lg border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-800">
-          <span className="flex-1">{notice}</span>
-          <button type="button" onClick={() => setNotice(null)} className="cursor-pointer text-amber-500 hover:text-amber-700">{t("dismiss")}</button>
         </div>
       )}
     </>

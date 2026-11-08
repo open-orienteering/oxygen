@@ -65,7 +65,6 @@ export {
   courseObjectInScope,
   courseObjectRefId,
   filterRegionOf,
-  isCourseObject,
   type CourseLayerObject,
   type CourseObject,
   type CourseObjectBody,

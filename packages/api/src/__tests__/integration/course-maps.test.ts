@@ -320,8 +320,9 @@ describe("map templates and course maps", () => {
     expect(r.descriptionRowCount).toBe(r.page.description!.rows.length);
     expect(r.block).toEqual({ rows: r.page.description!.rows, header: r.page.description!.header, title: "Blue" });
     expect(r.descriptionHeaderRows).toBe(3);
-    // Base map 1:7 500 printed at 1:10 000.
-    expect(r.overprintScale).toBeCloseTo(0.75, 6);
+    // Base map 1:7 500 printed at 1:10 000; the enlargement is the editor's to compute (no map-anchored objects read it, F12).
+    expect(r.mapScale).toBe(7500);
+    expect(r).not.toHaveProperty("overprintScale");
     expect(r.labelMode).toBe("sequence");
     expect(r.controls.map((c) => c.code)).toEqual(expect.arrayContaining(["31", "32"]));
     // The course's other sheets count for "outside every sheet".
@@ -403,7 +404,7 @@ describe("map templates and course maps", () => {
       clubTemplateId: saved.id,
       name: "Loaded from club",
     });
-    expect(loaded.removedMapAnchoredCount).toBe(0);
+    expect(Object.keys(loaded)).toEqual(["template"]);
     expect(loaded.template).toMatchObject({
       paper: template.paper,
       printScale: template.printScale,
@@ -412,48 +413,20 @@ describe("map templates and course maps", () => {
     });
   });
 
-  it("strips map-anchored objects when loading a club template", async () => {
+  it("refuses a map-anchored layout object on every write: F12 made them course objects (course-layer.md §3.6)", async () => {
     const template = (await caller.mapTemplate.list())[0];
-    await caller.mapTemplate.update({
-      id: template.seq,
-      objects: [
-        {
-          id: "page-label",
-          kind: "text",
-          anchor: "page",
-          x: 20,
-          y: 20,
-          text: "Club",
-          fontSizeMm: 4,
-          color: "#000000",
-        },
-        {
-          id: "map-mark",
-          kind: "rectangle",
-          anchor: "map",
-          x: 10,
-          y: 10,
-          width: 5,
-          height: 5,
-          fillMode: "outOfBounds",
-        },
-      ],
-    });
-    const clubName = `E2E_ClubMapAnchored_${Date.now()}`;
-    const saved = await caller.mapTemplate.saveToClub({
-      templateId: template.seq,
-      name: clubName,
-    });
-    const loaded = await caller.mapTemplate.loadFromClub({
-      clubTemplateId: saved.id,
-      name: `Imported anchored ${Date.now()}`,
-    });
-    expect(loaded.removedMapAnchoredCount).toBe(1);
-    expect(loaded.template.objects).toHaveLength(1);
-    expect(loaded.template.objects[0]).toMatchObject({
-      id: "page-label",
-      anchor: "page",
-    });
+    // `anchor: "map"` is not in the schema any more: refused at the boundary (as from a client of an older image).
+    const mapMark = { id: "map-mark", kind: "rectangle", anchor: "map", x: 10, y: 10, width: 5, height: 5, fillMode: "outOfBounds" } as never;
+    const sheet = (await caller.courseMap.list()).find((m) => m.kind === "course")!;
+    await expect(caller.mapTemplate.update({ id: template.seq, objects: [mapMark] })).rejects.toMatchObject({ code: "BAD_REQUEST" });
+    await expect(caller.courseMap.saveLayout({
+      id: sheet.seq,
+      windowCenter: { x: 0, y: 0 },
+      printScale: 10000,
+      description: { visible: false, x: 10, y: 10, cellSizeMm: 5 },
+      objects: [mapMark],
+    })).rejects.toMatchObject({ code: "BAD_REQUEST" });
+    expect((await caller.mapTemplate.list())[0].objects.map((o) => o.anchor)).not.toContain("map");
   });
 });
 

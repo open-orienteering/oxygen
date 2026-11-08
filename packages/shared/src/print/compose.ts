@@ -37,7 +37,7 @@ export function composePage(input: PageInput, fonts: FontMetrics[]): ComposedPag
   const layer = courseLayer({
     structure: input.course.structure,
     sites: input.course.sites,
-    objects: [...input.objects, ...(input.course.objects ?? [])],
+    objects: input.course.objects ?? [],
     appearance: input.course.appearance,
     viewOptions: { ...input.course.viewOptions, window: mapLayerWindow(input), textValues: input.textValues },
     document: input.map.context,
@@ -54,7 +54,7 @@ export function composePage(input: PageInput, fonts: FontMetrics[]): ComposedPag
   warnings.push(...page.warnings);
 
   const images: PageImage[] = [
-    ...layer.images.map((i) => ({ layer: "map" as const, graphicId: i.object.graphicId, rectUm: i.rectUm, ...(i.object.crop ? { crop: i.object.crop } : {}) })),
+    ...layer.images.map((i) => ({ layer: "map" as const, ...i })),
     ...page.images,
   ];
 

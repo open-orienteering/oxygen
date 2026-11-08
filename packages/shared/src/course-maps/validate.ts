@@ -1,6 +1,5 @@
 import {
   getPaperDimensions,
-  mapToPage,
   pointInWindow,
   rectInside,
   type PaperDimensions,
@@ -56,21 +55,10 @@ export function printablePageRect(document: CourseMapDocument): MapRect {
   };
 }
 
-export function courseMapObjectPageBounds(
-  object: CourseMapObject,
-  frame: MapRect,
-  window?: MapWindow,
-): MapRect | null {
-  const pointFor = (point: MapPoint): MapPoint | null =>
-    object.anchor === "page"
-      ? point
-      : window
-        ? mapToPage(point, frame, window)
-        : null;
+/** A layout object's bounds on the page (page mm, y-down): every layout object is page-anchored since F12. */
+export function courseMapObjectPageBounds(object: CourseMapObject): MapRect {
   switch (object.kind) {
     case "text": {
-      const point = pointFor({ x: object.x, y: object.y });
-      if (!point) return null;
       const width =
         object.maxWidthMm ??
         Math.max(object.fontSizeMm, object.text.length * object.fontSizeMm * 0.55);
@@ -78,44 +66,27 @@ export function courseMapObjectPageBounds(
       return {
         x:
           align === "center"
-            ? point.x - width / 2
+            ? object.x - width / 2
             : align === "right"
-              ? point.x - width
-              : point.x,
-        y: point.y - object.fontSizeMm,
+              ? object.x - width
+              : object.x,
+        y: object.y - object.fontSizeMm,
         width,
         height: object.fontSizeMm * 1.25,
       };
     }
-    case "line": {
-      const start = pointFor({ x: object.x1, y: object.y1 });
-      const end = pointFor({ x: object.x2, y: object.y2 });
-      if (!start || !end) return null;
+    case "line":
       return {
-        x: Math.min(start.x, end.x),
-        y: Math.min(start.y, end.y),
-        width: Math.max(Math.abs(end.x - start.x), 0.001),
-        height: Math.max(Math.abs(end.y - start.y), 0.001),
+        x: Math.min(object.x1, object.x2),
+        y: Math.min(object.y1, object.y2),
+        width: Math.max(Math.abs(object.x2 - object.x1), 0.001),
+        height: Math.max(Math.abs(object.y2 - object.y1), 0.001),
       };
-    }
     case "rectangle":
-    case "image": {
-      if (object.anchor === "page") return object;
-      if (!window) return null;
-      const topLeft = mapToPage(
-        { x: object.x, y: object.y + object.height },
-        frame,
-        window,
-      );
-      return {
-        x: topLeft.x,
-        y: topLeft.y,
-        width: (object.width / window.width) * frame.width,
-        height: (object.height / window.height) * frame.height,
-      };
-    }
+    case "image":
+      return { x: object.x, y: object.y, width: object.width, height: object.height };
     case "path": {
-      const nativePoints = object.points.flatMap((point) => [
+      const points = object.points.flatMap((point) => [
         point,
         ...(point.hIn
           ? [{ x: point.x + point.hIn.x, y: point.y + point.hIn.y }]
@@ -124,10 +95,6 @@ export function courseMapObjectPageBounds(
           ? [{ x: point.x + point.hOut.x, y: point.y + point.hOut.y }]
           : []),
       ]);
-      const points = nativePoints
-        .map(pointFor)
-        .filter((point): point is MapPoint => point !== null);
-      if (points.length !== nativePoints.length) return null;
       const xs = points.map((point) => point.x);
       const ys = points.map((point) => point.y);
       return {
@@ -204,16 +171,8 @@ export function validateCourseMap(
   }
 
   for (const object of options.document.objects) {
-    // Map-anchored objects follow the terrain and are clipped to the map
-    // frame when printed, so ending up (partly) outside the printable area
-    // after moving the window is by design — nothing wrong to report.
-    if (object.anchor === "map") continue;
-    const bounds = courseMapObjectPageBounds(
-      object,
-      options.document.mapFrame,
-      options.window,
-    );
-    if (bounds && !rectInside(bounds, printable)) {
+    const bounds = courseMapObjectPageBounds(object);
+    if (!rectInside(bounds, printable)) {
       issues.push({
         code: "object_outside_page",
         message: `Layout object ${object.id} extends outside the printable margin`,

@@ -1,7 +1,5 @@
 import {
   courseMapObjectPageBounds,
-  mapToPage,
-  pageToMap,
   rectInside,
   OUT_OF_BOUNDS_BORDER_MM,
   type CourseMapObject,
@@ -9,7 +7,6 @@ import {
   type MapFillMode,
   type MapPoint,
   type MapRect,
-  type MapWindow,
 } from "@oxygen/shared";
 
 export type ResizeHandle =
@@ -140,29 +137,13 @@ export function createObjectAt(
   };
 }
 
-function pageDeltaToObject(
-  anchor: CourseMapObject["anchor"],
-  pageDx: number,
-  pageDy: number,
-  frame: MapRect,
-  window: MapWindow,
-): MapPoint {
-  return anchor === "map"
-    ? {
-        x: (pageDx / frame.width) * window.width,
-        y: (-pageDy / frame.height) * window.height,
-      }
-    : { x: pageDx, y: pageDy };
-}
-
+/** Move a layout object by a page delta (page mm; every layout object is page-anchored since F12). */
 export function translateMapObject(
   object: CourseMapObject,
   pageDx: number,
   pageDy: number,
-  frame: MapRect,
-  window: MapWindow,
 ): CourseMapObject {
-  const delta = pageDeltaToObject(object.anchor, pageDx, pageDy, frame, window);
+  const delta = { x: pageDx, y: pageDy };
   switch (object.kind) {
     case "text":
     case "rectangle":
@@ -232,15 +213,6 @@ export function clampPagePoint(point: MapPoint, printable: MapRect): MapPoint {
   };
 }
 
-function pagePointToNative(
-  object: CourseMapObject,
-  point: MapPoint,
-  frame: MapRect,
-  window: MapWindow,
-): MapPoint {
-  return object.anchor === "page" ? point : pageToMap(point, frame, window);
-}
-
 export type ImageResizeMode = "proportional" | "free" | "crop";
 
 export interface ResizeMapObjectOptions {
@@ -258,30 +230,19 @@ export function resizeMapObject(
   handle: ResizeHandle,
   pageDx: number,
   pageDy: number,
-  frame: MapRect,
-  window: MapWindow,
   options: ResizeMapObjectOptions = {},
 ): CourseMapObject {
   const { printable, imageMode = "free" } = options;
 
   if (object.kind === "line") {
-    const pageStart =
-      object.anchor === "page"
-        ? { x: object.x1, y: object.y1 }
-        : mapToPage({ x: object.x1, y: object.y1 }, frame, window);
-    const pageEnd =
-      object.anchor === "page"
-        ? { x: object.x2, y: object.y2 }
-        : mapToPage({ x: object.x2, y: object.y2 }, frame, window);
     let moved =
       handle === "start"
-        ? { x: pageStart.x + pageDx, y: pageStart.y + pageDy }
-        : { x: pageEnd.x + pageDx, y: pageEnd.y + pageDy };
+        ? { x: object.x1 + pageDx, y: object.y1 + pageDy }
+        : { x: object.x2 + pageDx, y: object.y2 + pageDy };
     if (printable) moved = clampPagePoint(moved, printable);
-    const native = pagePointToNative(object, moved, frame, window);
     return handle === "start"
-      ? { ...object, x1: native.x, y1: native.y }
-      : { ...object, x2: native.x, y2: native.y };
+      ? { ...object, x1: moved.x, y1: moved.y }
+      : { ...object, x2: moved.x, y2: moved.y };
   }
 
   if (object.kind === "path") {
@@ -293,23 +254,17 @@ export function resizeMapObject(
           : Number(handle.replace("vertex-", ""));
     if (!Number.isInteger(index) || !object.points[index]) return object;
     const point = object.points[index];
-    const pagePoint =
-      object.anchor === "page"
-        ? { x: point.x, y: point.y }
-        : mapToPage({ x: point.x, y: point.y }, frame, window);
-    let moved = { x: pagePoint.x + pageDx, y: pagePoint.y + pageDy };
+    let moved = { x: point.x + pageDx, y: point.y + pageDy };
     if (printable) moved = clampPagePoint(moved, printable);
-    const native = pagePointToNative(object, moved, frame, window);
     return {
       ...object,
       points: object.points.map((entry, pointIndex) =>
-        pointIndex === index ? { ...entry, x: native.x, y: native.y } : entry,
+        pointIndex === index ? { ...entry, x: moved.x, y: moved.y } : entry,
       ),
     };
   }
 
-  const bounds = courseMapObjectPageBounds(object, frame, window);
-  if (!bounds) return object;
+  const bounds = courseMapObjectPageBounds(object);
 
   if (object.kind === "text") {
     const next = resizedBounds(bounds, handle, pageDx, pageDy, printable);
@@ -329,23 +284,7 @@ export function resizeMapObject(
     next = proportionalBounds(bounds, next, handle, printable);
   }
 
-  if (object.anchor === "page") {
-    return { ...object, x: next.x, y: next.y, width: next.width, height: next.height };
-  }
-  const topLeft = pagePointToNative(object, { x: next.x, y: next.y }, frame, window);
-  const bottomRight = pagePointToNative(
-    object,
-    { x: next.x + next.width, y: next.y + next.height },
-    frame,
-    window,
-  );
-  return {
-    ...object,
-    x: topLeft.x,
-    y: bottomRight.y,
-    width: bottomRight.x - topLeft.x,
-    height: topLeft.y - bottomRight.y,
-  };
+  return { ...object, x: next.x, y: next.y, width: next.width, height: next.height };
 }
 
 /** Keep aspect ratio while clamping the result inside `printable`. */
@@ -431,18 +370,12 @@ function cropImageObject(
     cropH = clamp(crop.height + dhFrac * crop.height, 0.05, 1 - crop.y);
   }
 
-  if (object.anchor === "page") {
-    return {
-      ...object,
-      x: next.x,
-      y: next.y,
-      width: next.width,
-      height: next.height,
-      crop: { x: cropX, y: cropY, width: cropW, height: cropH },
-    };
-  }
   return {
     ...object,
+    x: next.x,
+    y: next.y,
+    width: next.width,
+    height: next.height,
     crop: { x: cropX, y: cropY, width: cropW, height: cropH },
   };
 }
@@ -450,11 +383,9 @@ function cropImageObject(
 export function constrainMapObject(
   object: CourseMapObject,
   printable: MapRect,
-  frame: MapRect,
-  window: MapWindow,
 ): CourseMapObject {
-  const bounds = courseMapObjectPageBounds(object, frame, window);
-  if (!bounds || rectInside(bounds, printable)) return object;
+  const bounds = courseMapObjectPageBounds(object);
+  if (rectInside(bounds, printable)) return object;
   let dx = 0;
   let dy = 0;
   if (bounds.x < printable.x) dx = printable.x - bounds.x;
@@ -465,7 +396,7 @@ export function constrainMapObject(
   if (bounds.y + bounds.height > printable.y + printable.height) {
     dy = printable.y + printable.height - (bounds.y + bounds.height);
   }
-  return translateMapObject(object, dx, dy, frame, window);
+  return translateMapObject(object, dx, dy);
 }
 
 export function constrainDescription(

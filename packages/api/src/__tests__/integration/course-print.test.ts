@@ -12,6 +12,7 @@ import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
 import { PDFArray, PDFDict, PDFDocument, PDFName, PDFNumber, PDFRawStream, PDFRef, decodePDFRawStream } from "pdf-lib";
 import sharp from "sharp";
+import { Client } from "pg";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { defaultMapAppearance } from "@oxygen/shared";
 import { applyEventMap } from "../../event-map.js";
@@ -159,6 +160,71 @@ describe("course objects on the page (course-layer.md §8.3)", () => {
     } finally {
       await db.courseObject.deleteMany({ where: { eventId: vec.eventId } });
       await db.course.delete({ where: { id: other.id } });
+    }
+  }, 60_000);
+});
+
+describe("F12: a sheet's legacy map-anchored objects, migrated, draw as course objects (course-layer.md §3.6)", () => {
+  /** The F12 migration file as Prisma runs it: one transaction (idempotent, so safe on the shared test database). */
+  async function migrateF12(): Promise<void> {
+    const url = new URL(process.env.DATABASE_URL!);
+    url.searchParams.delete("schema");
+    const c = new Client({ connectionString: url.toString() });
+    await c.connect();
+    try {
+      await c.query("BEGIN");
+      await c.query(readFileSync(resolve(__dirname, "../../../prisma/migrations/20261109120000_map_anchored_objects_to_course_objects/migration.sql"), "utf8"));
+      await c.query("COMMIT");
+    } catch (err) {
+      await c.query("ROLLBACK");
+      throw err;
+    } finally {
+      await c.end();
+    }
+  }
+
+  it("the white-out and the text leave the sheet for course_objects scoped to its course, and print in the map layer", async () => {
+    const db = vec.db;
+    const row = rows.find((r) => r.kind === "course")!;
+    const courseUuid = row.course!.id as string;
+    // A pre-F12 sheet: a map-anchored white-out and text beside a page-anchored text (written past the API, which refuses them now).
+    const legacy = [
+      { id: "wo", anchor: "map", kind: "rectangle", x: -90, y: -20, width: 40, height: 50, fillMode: "whiteout" },
+      { id: "label", anchor: "map", kind: "text", x: -80, y: 20, text: "{course}", fontSizeMm: 4, color: "#000000" },
+      { id: "page", anchor: "page", kind: "text", x: 12, y: 20, text: "Page", fontSizeMm: 4, color: "#000000" },
+    ];
+    await db.$executeRaw`UPDATE oxygen.course_maps SET objects = ${JSON.stringify(legacy)}::jsonb WHERE id = ${row.id}::uuid`;
+    try {
+      await migrateF12();
+      const pinned = (await loadPinnedPrintDocument(db, vec.eventId))!;
+      const os = pinned.info.scale / 7500;
+
+      const moved = await db.courseObject.findMany({ where: { eventId: vec.eventId, source: "layout" }, orderBy: { seq: "asc" } });
+      expect(moved.map((o) => [o.kind, o.scope])).toEqual([
+        ["whiteout", { courses: [courseUuid], classes: [] }],
+        ["text", { courses: [courseUuid], classes: [] }],
+      ]);
+      expect(moved[0].geometry).toEqual([{ x: -90, y: -20 }, { x: -50, y: -20 }, { x: -50, y: 30 }, { x: -90, y: 30 }]);
+      expect(moved[1].props).toEqual({ text: "{course}", fontSizeMm: 4 / os, color: "#000000" });
+      const sheetRow = await db.courseMap.findUniqueOrThrow({ where: { id: row.id } });
+      expect(sheetRow.objects).toEqual([legacy[2]]);
+
+      // The sheet prints them as the course layer's: the white-out at upper white, the text at its paper size (4 page mm on paper).
+      const event = await db.event.findUniqueOrThrow({ where: { id: vec.eventId } });
+      const allControls = await db.control.findMany({ where: { eventId: vec.eventId, removed: false } });
+      const base = { event: { name: event.name, date: event.date }, allControls, mapInfo: pinned.info };
+      const sheet = sheetForMapRow({ ...row, objects: sheetRow.objects }, { ...base, courseObjects: await loadCourseObjects(db, vec.eventId), classesByCourse: await classesByCourse(db, vec.eventId) });
+      expect((sheet.course.objects ?? []).map((o) => o.kind)).toEqual(["whiteout", "text"]);
+      const page = composePage(pageInputFor(pinned.document, sheet, null), await loadBundledFonts());
+      const white = page.colours.findIndex((c) => c.paletteIds?.includes("white-upper"));
+      expect(page.mapLayer.stream.passes.some((p) => p.kind === "fill" && p.colour === white)).toBe(true);
+      const label = page.mapLayer.stream.passes.find((p) => p.kind === "text" && Math.abs(p.sizeUm - (4000 / os)) < 2);
+      expect(label).toBeDefined();
+      expect(label!.kind === "text" && label!.sizeUm * page.mapLayer.transform.scaleRatio).toBeCloseTo(4000, -1);
+      expect(page.warnings).toEqual([]);
+    } finally {
+      await db.courseObject.deleteMany({ where: { eventId: vec.eventId, source: "layout" } });
+      await db.courseMap.update({ where: { id: row.id }, data: { objects: [] } });
     }
   }, 60_000);
 });

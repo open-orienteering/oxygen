@@ -37,7 +37,12 @@ export const mapWindowSchema = z.object({
 });
 export type MapWindow = z.infer<typeof mapWindowSchema>;
 
-export const objectAnchorSchema = z.enum(["page", "map"]);
+/**
+ * Every layout object is anchored to the page. Map-anchored objects
+ * (`"map"`) were moved into `course_objects` by F12 (docs/course-layer.md
+ * §3.6); a write naming that anchor is refused.
+ */
+export const objectAnchorSchema = z.literal("page");
 export type MapObjectAnchor = z.infer<typeof objectAnchorSchema>;
 export const mapFontFamilySchema = z.enum([
   "sans",

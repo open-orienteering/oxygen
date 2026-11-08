@@ -34,11 +34,11 @@ the grid; drags move in whole millimetres), `pageBounds`.
 | Part | Drawn by | As in the PDF |
 |---|---|---|
 | Base map | static buckets | the map layer's document part |
-| Course, course objects, map-anchored layout objects | the dynamic bucket (`courseLayerRequest` with `layout`: the sheet's layout objects first, the template's appearance, `viewOptions { overprintScale, window, textValues }` — what `composePage` passes) | the map layer's course part |
-| Page-anchored objects, the description block | the **page part**: `course.pageLayer` (extracted from `composePage`, the same stream) through `T_map⁻¹` into paper mm (`pageStreamInMap`), its colour indices offset past every map colour so it draws after the map — the PDF's page layer after the map layer | the page layer |
+| Course, course objects | the dynamic bucket (`courseLayerRequest` with `layout`: the course objects in view, the template's appearance, `viewOptions { window, textValues }` — what `composePage` passes; a former map-anchored layout object is a course object since F12, `course-layer.md` §3.6) | the map layer's course part |
+| Layout objects (all page-anchored), the description block | the **page part**: `course.pageLayer` (extracted from `composePage`, the same stream) through `T_map⁻¹` into paper mm (`pageStreamInMap`), its colour indices offset past every map colour so it draws after the map — the PDF's page layer after the map layer | the page layer |
 | Map clip | the renderer scissors every map colour to the frame (`pageClip`) | the frame clip |
 | Paper edge, printable margin (dashed red), frame (purple, solid when selected), grey surround | UI layer (`editor-layout-paper` / `-printable` / `-frame`) | — |
-| Images (page and map anchored) | UI layer (`editor-layout-image`, an SVG `<image>` of `/api/maps/<event>/graphics/<id>`) | embedded PNG |
+| Images (page objects; `image` course objects are not previewed, Pending "GL-drawn images") | UI layer (`editor-layout-image`, an SVG `<image>` of `/api/maps/<event>/graphics/<id>`) | embedded PNG |
 
 The label mode is the viewer's own rule (sequence numbers for one ordered
 course, codes for the all-controls sheet), which agrees with
@@ -86,9 +86,9 @@ the row mapping `maps.pdf` uses (`sheetInputForMapRow`, `pdf-page.ts`):
   `sectionIndex` — the part it prints, F5 —, window centre, overrides,
   objects) and `template` (page settings, objects) the
   editor writes back, the resolved `document` and `window`, `page` (the
-  composer's page input: paper, frame, window, objects of both anchors,
+  composer's page input: paper, frame, window, the layout objects,
   text values, the block), `block` (rows, header, title, also when
-  hidden), `appearance`, `overprintScale`, `labelMode`, `windows` (this
+  hidden), `appearance`, `labelMode`, `windows` (this
   sheet's and the course's other sheets', for validation), `controls`,
   the block's row counts and `mapScale`.
 
@@ -205,21 +205,27 @@ on the 1 mm page grid with it.
 (`editor-layout-sheet`, `editor-layout-scope` with `data-scope`,
 `data-sheet`, `data-template`), the selection's properties
 (`editor-layout-selected`: text, size, align, colour; fill mode, line
-colour, width; the anchor), the scope's objects (`editor-layout-object-row`)
+colour, width), the scope's objects (`editor-layout-object-row`)
 with the validation issues (`editor-layout-issue`, `validate.ts`'s codes,
 computed live from the snapshot), the graphics library
 (`editor-layout-graphics`: place, upload); then the template's key (§5),
 the classes (§6) and **Club templates** (`editor-layout-club`, collapsed;
 E-pages): the club library's rows (`editor-layout-club-row-<id>`) with
 *Bring in* (`…-club-import-<id>`: `mapTemplate.loadFromClub` under a free
-name, `base (2)`, …; it opens; `editor-layout-club-notice` when map-anchored
-objects were removed, `course-maps.md` "Base-map changes and club
-templates") and delete (`…-club-delete-<id>`, confirmed), and *Save this
+name, `base (2)`, …; it opens; the template loads whole — every layout
+object is page-anchored since F12, `course-maps.md` "Base-map changes
+and club templates") and delete (`…-club-delete-<id>`, confirmed), and *Save this
 template to the club library* (`editor-layout-save-to-club`, a name
 prompt). The library is shared between events: none of these is an undo
 entry.
 
 ## 3. Page objects
+
+Layout mode creates and edits **page-anchored objects only**: since F12
+(`course-layer.md` §3.6) the layout schema's anchor is the literal
+`"page"`, there is no anchor to choose or show, and what was anchored to
+the map is a course object — drawn in Layout mode with the course,
+edited in Course mode (`course-editor.md` §7).
 
 The rail (`layout/LayoutRail.tsx`, `editor-layout-rail`,
 `editor-layout-tool-<key>`) arms a tool; a click places at the page point
@@ -274,12 +280,12 @@ and the keys; the **fill mode stays** in the inspector's fill select
 (`layoutFill_whiteoutInverted`, "White-out outside"), so an object that
 has it (legacy templates, earlier D7 sheets) stays editable and a `P`
 polygon can still be turned into one, for template-level ink saving on
-an all-controls or class sheet. A map-anchored one, like the course toner
-saver, covers everything the map layer draws outside its shape — map
-text, 709 areas, the course — on the canvas and in the PDF alike: its
-white is the map layer's top row (`course-layer.md` §3.6, P1). Rendering, print and the schema are
-untouched; no stored object is changed. A white-out outside of any size
-— map- or page-anchored, a toner saver or a shape — may cross the frame
+an all-controls or class sheet. A map-anchored one became a course
+`toner_saver` in F12 (`course-layer.md` §3.6): like a toner saver drawn
+in Course mode it covers everything the map layer draws outside its
+shape — map text, 709 areas, the course — on the canvas and in the PDF
+alike, its white the map layer's top row (P1). A white-out outside of
+any size — a page-anchored shape or a toner saver — may cross the frame
 from any side or lie beyond it: it hides only what is outside its shape,
 on the canvas as in the PDF (P7, `docs/bugfix-whiteout-layout.md`). A
 plain white-out is a single ring and was never affected.
@@ -301,9 +307,8 @@ it deselects.
 **A selected path** (closed or open — `L` lines are open paths) takes
 the course editor's geometry gestures (`course-editor.md` §7 "Editing
 geometry"; `lib/editor/geometry-gestures.ts`, shared with `V` in Course
-mode) in **page mm**: a map-anchored path (legacy templates) is mapped
-onto the page and back (`pagePoints` / `nativePoints`, handles as
-offsets). It is drawn as its outline along the curves
+mode) in **page mm**, the space it is stored in (every layout object is
+page-anchored since F12). It is drawn as its outline along the curves
 (`editor-layout-selection`), a handle per vertex (`editor-layout-handle`,
 `data-index`, the focused one `data-focused`) and a grip per Bézier
 handle (`editor-layout-grip`, `data-which`). Pressing order vertex →
@@ -722,14 +727,14 @@ of the event, course seq (the event's last), sort order, seq.
 
 | Layer | Where | What |
 |---|---|---|
-| unit (shared) | `packages/shared/src/course/__tests__/page-layer.test.ts` | the page layer is the composer's (stream, colours, transform, images); only page-anchored objects; through `T_map⁻¹` a text sits at `pagePointToMap` of its page position; widths scale by `1 / scaleRatio` |
+| unit (shared) | `packages/shared/src/course/__tests__/page-layer.test.ts` | the page layer is the composer's (stream, colours, transform, images); no layout objects and no block draw nothing; through `T_map⁻¹` a text sits at `pagePointToMap` of its page position; widths scale by `1 / scaleRatio` |
 | unit (shared) | `packages/shared/src/print/__tests__/page.test.ts` | `inverseMapLayerTransform` round-trips (0°, 25°) |
 | unit (shared) | `print/__tests__/compose.test.ts`, `write-page.test.ts`; `packages/api/src/render/__tests__/pdf-golden.test.ts` | unchanged after the extraction |
 | unit (web) | `packages/web/src/map-gl/__tests__/worker-course.test.ts` | the page part: none without a page; its colours after every map colour, the table repeated; the page white-out at the stack's upper white; a text in paper µm; the frame ring; the block; P7: a page-anchored white-out outside crossing the frame's left edge covers the frame outside its shape and not its inside |
 | unit (web) | `map-gl/__tests__/engine.test.ts`, `view.test.ts` | the page part uploaded as `P`, drawn after the course part, `pageClip` passed, both released on clear; `scissorOfRing` |
-| unit (web) | `lib/__tests__/course-layer-request.test.ts` | `layout`: the page passed through, layout objects before course objects, appearance, overprint, window, text values |
-| unit (web) | `lib/editor/__tests__/layout.test.ts` | page-view maths: the window, page ↔ view round trips (rotated), y flip, sheet shapes, page bounds, hit-testing (D16: a closed path by its outline, not inside — an object under it reachable; a curved edge along its curve, not its chord; an open path without a closing edge), handles, the block's rectangle, align, page offset, grid; `pagePoints` / `nativePoints` of a map-anchored path (handles as offsets, rotated); `pathFromView` (handles mapped through the rotated, y-flipped window; a vertex outside clamped) |
-| unit (web) | `pages/editor/__tests__/layout-bindings.test.ts`, `layout-model.test.ts`, `lib/editor/__tests__/state.test.ts` | the binding (exclusive, shapes, select / move / snap / resize / locked / align / block / place); the snapshot per scope, geometry, the request, placement per kind; the mode case; the rail's keys have no `O`, the inspector keeps the white-out outside fill mode; D16 `P`: the flow armed over the sheet, a press places a vertex (on the page grid with snapping), the closing click hands one page path (handles mapped, clamped), right-click cancels; `pathObject`'s defaults; a selected path: its outline / handles / grips (focused active), a vertex drag (snapped offset, clamped, one write), Alt-drag handles in page mm, Alt-click retract, a grip drag mirrored and Alt-broken, a click focuses, a double-click inserts and focuses, the edge moves the path, a press inside pans, a map-anchored path edited on the page and stored in paper mm |
+| unit (web) | `lib/__tests__/course-layer-request.test.ts` | `layout`: the page passed through, the course objects only (F12), appearance, window, text values |
+| unit (web) | `lib/editor/__tests__/layout.test.ts` | page-view maths: the window, page ↔ view round trips (rotated), y flip, sheet shapes, page bounds, hit-testing (D16: a closed path by its outline, not inside — an object under it reachable; a curved edge along its curve, not its chord; an open path without a closing edge), handles, the block's rectangle, align, page offset, grid; `pathFromView` (handles mapped through the rotated, y-flipped window; a vertex outside clamped) |
+| unit (web) | `pages/editor/__tests__/layout-bindings.test.ts`, `layout-model.test.ts`, `lib/editor/__tests__/state.test.ts` | the binding (exclusive, shapes, select / move / snap / resize / locked / align / block / place); the snapshot per scope, geometry, the request, placement per kind; the mode case; the rail's keys have no `O`, the inspector keeps the white-out outside fill mode; D16 `P`: the flow armed over the sheet, a press places a vertex (on the page grid with snapping), the closing click hands one page path (handles mapped, clamped), right-click cancels; `pathObject`'s defaults; a selected path: its outline / handles / grips (focused active), a vertex drag (snapped offset, clamped, one write), Alt-drag handles in page mm, Alt-click retract, a grip drag mirrored and Alt-broken, a click focuses, a double-click inserts and focuses, the edge moves the path, a press inside pans |
 | unit (web) | `lib/editor/__tests__/geometry-gestures.test.ts`, `pages/editor/__tests__/bindings.test.ts`, `polygon.test.ts` | D16's extraction: pressing order, a drag in the caller's units, Alt-drag / Alt-click, focus (none for fixed kinds), cancel, insert, the shapes with the caller's ids; `selectBinding`'s cases unchanged; `layout_path` is a closed, curved kind of three |
 | integration | `packages/api/src/__tests__/integration/course-maps.test.ts` "resolveSheet" | a sheet (window centre, page, text values, block, template / sheet split, overprint, sibling windows), `saveLayout` never writes the template, `PRECONDITION_FAILED` without a template; a template with and without a course (alone: the window is the frame centred on the map origin, the text values — `previewLayout`'s former case); `NOT_FOUND` |
 | integration | `course-maps.test.ts` "update: CONFLICT on a stale baseVersion…", "creates, duplicates and applies…", "supports several maps…" | E-pages: `courseMap.update` refuses a stale token with `CONFLICT` (`kind: "sheet"`, the version now), LWW without; the list answers `resolved` and `validation` without the overlay fields (the rows and controls read through `resolveSheet`); `saveLayout` leaves the template's objects |

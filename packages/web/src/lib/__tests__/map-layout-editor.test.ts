@@ -9,8 +9,6 @@ import {
   translateMapObject,
 } from "../map-layout-editor";
 
-const frame = { x: 3, y: 3, width: 204, height: 291 };
-const window = { minX: 0, minY: 0, width: 204, height: 291 };
 const printable = { x: 3, y: 3, width: 204, height: 291 };
 
 describe("map layout editor geometry", () => {
@@ -31,8 +29,6 @@ describe("map layout editor geometry", () => {
       "se",
       5,
       7,
-      frame,
-      window,
     );
     expect(resized).toMatchObject({ x: 10, y: 10, width: 25, height: 17 });
   });
@@ -50,8 +46,6 @@ describe("map layout editor geometry", () => {
         fillMode: "whiteout",
       },
       printable,
-      frame,
-      window,
     );
     expect(constrained).toMatchObject({ x: 3, y: 274 });
   });
@@ -90,7 +84,7 @@ describe("map layout editor geometry", () => {
       fillMode: "none" as const,
       closed: false,
     };
-    const translated = translateMapObject(path, 5, -4, frame, window);
+    const translated = translateMapObject(path, 5, -4);
     expect(translated).toMatchObject({
       points: [
         { x: 15, y: 16, hOut: { x: 4, y: -2 } },
@@ -98,7 +92,7 @@ describe("map layout editor geometry", () => {
       ],
     });
     expect(
-      resizeMapObject(path, "vertex-1", 2, 3, frame, window),
+      resizeMapObject(path, "vertex-1", 2, 3),
     ).toMatchObject({
       points: [
         { x: 10, y: 20, hOut: { x: 4, y: -2 } },
@@ -183,8 +177,6 @@ describe("map layout editor geometry", () => {
       "se",
       500,
       500,
-      frame,
-      window,
       { printable },
     );
     expect(resized).toMatchObject({
@@ -207,7 +199,7 @@ describe("map layout editor geometry", () => {
       height: 20,
     };
     // Default (no modifier) is a free resize: width changes, height stays.
-    const free = resizeMapObject(image, "se", 20, 0, frame, window, {
+    const free = resizeMapObject(image, "se", 20, 0, {
       printable,
     });
     expect(free).toMatchObject({ width: 60, height: 20 });
@@ -216,8 +208,6 @@ describe("map layout editor geometry", () => {
       "se",
       20,
       0,
-      frame,
-      window,
       { printable, imageMode: "proportional" },
     );
     expect(proportional).toMatchObject({
@@ -229,8 +219,6 @@ describe("map layout editor geometry", () => {
       "se",
       -10,
       0,
-      frame,
-      window,
       { printable, imageMode: "crop" },
     );
     expect(cropped).toMatchObject({

@@ -111,7 +111,10 @@ function cuts(): CourseScene {
   return scene("course-cuts", base, { structure, sites, objects: [], appearance: {}, viewOptions: {}, cutFeatures });
 }
 
-/** Layout objects and course objects (marked route, 708, 711): white-out, toner-saver ring, 709 / 709.b, 707, 708, 711, map text. */
+/**
+ * Course objects: 707, 708, 711, and the former map-anchored layout objects as F12 moved them (white-out, toner-saver
+ * ring, 709 / 709.b, text) — the scene is the one they drew before (course-layer.md §3.6).
+ */
 function objects(): CourseScene {
   const base = new BaseMap("ISOM2017-2")
     .add("406", area(0, 0, 50, 0, 50, 40, 0, 40))
@@ -126,11 +129,11 @@ function objects(): CourseScene {
       { id: 1, kind: "marked_route", geometry: [{ x: 4, y: 12 }, { x: 4, y: 28 }], props: {} },
       { id: 2, kind: "oob_line", geometry: [{ x: 10, y: 30 }, { x: 22, y: 34 }], props: {} },
       { id: 3, kind: "oob_line", geometry: [{ x: 28, y: 34 }, { x: 46, y: 36 }], props: { symbol: "711" } },
-      { id: "wo", anchor: "map", kind: "rectangle", x: 14, y: 16, width: 10, height: 10, fillMode: "whiteout" },
-      { id: "oob", anchor: "map", kind: "rectangle", x: 30, y: 14, width: 8, height: 8, fillMode: "outOfBounds" },
-      { id: "oob-b", anchor: "map", kind: "path", points: [{ x: 40, y: 14 }, { x: 48, y: 14 }, { x: 44, y: 22 }], fillMode: "outOfBounds", closed: true, stroke: "#a626ff", strokeWidthMm: 0.2 },
-      { id: "ring", anchor: "map", kind: "path", points: [{ x: 2, y: 2 }, { x: 48, y: 2 }, { x: 48, y: 38 }, { x: 2, y: 38 }], fillMode: "whiteoutInverted", closed: true },
-      { id: "title", anchor: "map", kind: "text", x: 8, y: 31, text: "{course}", fontSizeMm: 3, color: "#1f6fb2" },
+      { id: "wo", kind: "whiteout", geometry: [{ x: 14, y: 16 }, { x: 24, y: 16 }, { x: 24, y: 26 }, { x: 14, y: 26 }], props: {} },
+      { id: "oob", kind: "oob_area", geometry: [{ x: 30, y: 14 }, { x: 38, y: 14 }, { x: 38, y: 22 }, { x: 30, y: 22 }], props: {} },
+      { id: "oob-b", kind: "oob_area", geometry: [{ x: 40, y: 14 }, { x: 48, y: 14 }, { x: 44, y: 22 }], props: { border: "solid" } },
+      { id: "ring", kind: "toner_saver", geometry: [{ x: 2, y: 2 }, { x: 48, y: 2 }, { x: 48, y: 38 }, { x: 2, y: 38 }], props: {} },
+      { id: "title", kind: "text", geometry: [{ x: 8, y: 31 }], props: { text: "{course}", fontSizeMm: 3, color: "#1f6fb2" } },
     ],
   });
 }

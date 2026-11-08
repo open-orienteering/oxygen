@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import type { CourseMapObject } from "@oxygen/shared";
 import {
-  alignedCentre, descriptionRect, gridSnap, handleAt, layoutObjectAt, nativePoints, objectHandles, pageBounds, pageDelta, pagePerView, pagePoints, pathFromView,
+  alignedCentre, descriptionRect, gridSnap, handleAt, layoutObjectAt, objectHandles, pageBounds, pageDelta, pagePerView, pathFromView,
   sheetShapes, sheetWindow, toPage, toView, windowCentre, type SheetGeometry,
 } from "../layout";
 
@@ -69,30 +69,23 @@ describe("layout objects on the page", () => {
   const line: CourseMapObject = { id: "l", kind: "line", anchor: "page", x1: 100, y1: 100, x2: 150, y2: 100, stroke: "#000000", strokeWidthMm: 0.35 };
   const covering: CourseMapObject = { id: "c", kind: "rectangle", anchor: "page", x: 55, y: 55, width: 10, height: 10, fillMode: "whiteout" };
   const objects = [text, rect, line, covering];
-  const g = geometry();
 
   it("hit: by bounds, lines by distance, topmost wins", () => {
-    expect(layoutObjectAt({ x: 22, y: 28 }, objects, g, 1)).toBe(0);
-    expect(layoutObjectAt({ x: 75, y: 65 }, objects, g, 1)).toBe(1);
-    expect(layoutObjectAt({ x: 60, y: 60 }, objects, g, 1)).toBe(3);
-    expect(layoutObjectAt({ x: 120, y: 100.8 }, objects, g, 1)).toBe(2);
-    expect(layoutObjectAt({ x: 120, y: 103 }, objects, g, 1)).toBe(-1);
-  });
-
-  it("a map-anchored object is hit where the window puts it", () => {
-    const at = toView({ x: 120, y: 200 }, g);
-    const mapText: CourseMapObject = { id: "m", kind: "text", anchor: "map", x: at.x, y: at.y, text: "N", fontSizeMm: 5, color: "#000000" };
-    expect(layoutObjectAt({ x: 121, y: 198 }, [mapText], g, 0.5)).toBe(0);
+    expect(layoutObjectAt({ x: 22, y: 28 }, objects, 1)).toBe(0);
+    expect(layoutObjectAt({ x: 75, y: 65 }, objects, 1)).toBe(1);
+    expect(layoutObjectAt({ x: 60, y: 60 }, objects, 1)).toBe(3);
+    expect(layoutObjectAt({ x: 120, y: 100.8 }, objects, 1)).toBe(2);
+    expect(layoutObjectAt({ x: 120, y: 103 }, objects, 1)).toBe(-1);
   });
 
   it("closed paths hit by their outline only, never inside (D16, as the course editor's areas)", () => {
     const square: CourseMapObject = { id: "s", kind: "path", anchor: "page", points: [{ x: 100, y: 150 }, { x: 140, y: 150 }, { x: 140, y: 190 }, { x: 100, y: 190 }], closed: true, fillMode: "whiteout" };
-    expect(layoutObjectAt({ x: 120, y: 150.5 }, [square], g, 1)).toBe(0);
+    expect(layoutObjectAt({ x: 120, y: 150.5 }, [square], 1)).toBe(0);
     // The closing edge (last → first).
-    expect(layoutObjectAt({ x: 100.6, y: 170 }, [square], g, 1)).toBe(0);
-    expect(layoutObjectAt({ x: 120, y: 170 }, [square], g, 1)).toBe(-1);
+    expect(layoutObjectAt({ x: 100.6, y: 170 }, [square], 1)).toBe(0);
+    expect(layoutObjectAt({ x: 120, y: 170 }, [square], 1)).toBe(-1);
     // Under it, an object stays reachable through its inside.
-    expect(layoutObjectAt({ x: 120, y: 170 }, [{ ...rect, x: 110, y: 160 }, square], g, 1)).toBe(0);
+    expect(layoutObjectAt({ x: 120, y: 170 }, [{ ...rect, x: 110, y: 160 }, square], 1)).toBe(0);
   });
 
   it("a curved path is hit along its curve, not its chord", () => {
@@ -101,29 +94,12 @@ describe("layout objects on the page", () => {
       id: "b", kind: "path", anchor: "page", closed: true, fillMode: "none",
       points: [{ x: 100, y: 150, hOut: { x: 0, y: -20 } }, { x: 140, y: 150, hIn: { x: 0, y: -20 } }, { x: 140, y: 190 }, { x: 100, y: 190 }],
     };
-    expect(layoutObjectAt({ x: 120, y: 135 }, [bulge], g, 1)).toBe(0);
-    expect(layoutObjectAt({ x: 120, y: 150 }, [bulge], g, 1)).toBe(-1);
+    expect(layoutObjectAt({ x: 120, y: 135 }, [bulge], 1)).toBe(0);
+    expect(layoutObjectAt({ x: 120, y: 150 }, [bulge], 1)).toBe(-1);
     const open: CourseMapObject = { ...bulge, id: "o", closed: false };
-    expect(layoutObjectAt({ x: 120, y: 135 }, [open], g, 1)).toBe(0);
+    expect(layoutObjectAt({ x: 120, y: 135 }, [open], 1)).toBe(0);
     // Open: no closing edge.
-    expect(layoutObjectAt({ x: 100, y: 170 }, [open], g, 1)).toBe(-1);
-  });
-
-  it("page points of a map-anchored path: vertices through the window, handles as offsets; native back", () => {
-    const r = geometry(20);
-    const v = toView({ x: 60, y: 80 }, r), w = toView({ x: 70, y: 80 }, r);
-    const mapPath: CourseMapObject = { id: "m", kind: "path", anchor: "map", closed: false, fillMode: "none", points: [{ ...v, hOut: { x: w.x - v.x, y: w.y - v.y } }, toView({ x: 90, y: 90 }, r)] };
-    const pts = pagePoints(mapPath, r);
-    expect(pts[0].x).toBeCloseTo(60, 9);
-    expect(pts[0].y).toBeCloseTo(80, 9);
-    expect(pts[0].hOut!.x).toBeCloseTo(10, 9);
-    expect(pts[0].hOut!.y).toBeCloseTo(0, 9);
-    const back = nativePoints(mapPath, pts, r);
-    expect(back[0].hOut!.x).toBeCloseTo(w.x - v.x, 9);
-    expect(back[1].x).toBeCloseTo(mapPath.points[1].x, 9);
-    const pagePath: CourseMapObject = { ...mapPath, anchor: "page", points: [{ x: 1, y: 2 }, { x: 3, y: 4 }] };
-    expect(pagePoints(pagePath, r)).toEqual(pagePath.points);
-    expect(nativePoints(pagePath, pts, r)).toEqual(pts);
+    expect(layoutObjectAt({ x: 100, y: 170 }, [open], 1)).toBe(-1);
   });
 
   it("pathFromView: drawn vertices to page mm, handles mapped affinely (y flipped, rotated), vertices clamped", () => {
@@ -143,12 +119,12 @@ describe("layout objects on the page", () => {
   });
 
   it("handles: corners, line ends, none for a path (its vertices are the geometry gestures'); the nearest within tolerance", () => {
-    expect(objectHandles(rect, g).map((h) => h.handle)).toEqual(["nw", "ne", "sw", "se"]);
-    expect(objectHandles(line, g).map((h) => h.handle)).toEqual(["start", "end"]);
+    expect(objectHandles(rect).map((h) => h.handle)).toEqual(["nw", "ne", "sw", "se"]);
+    expect(objectHandles(line).map((h) => h.handle)).toEqual(["start", "end"]);
     const path: CourseMapObject = { id: "p", kind: "path", anchor: "page", points: [{ x: 0, y: 0 }, { x: 10, y: 0 }, { x: 10, y: 10 }], closed: true, fillMode: "none" };
-    expect(objectHandles(path, g)).toEqual([]);
-    expect(handleAt({ x: 80.5, y: 70.4 }, objectHandles(rect, g), 1)).toBe("se");
-    expect(handleAt({ x: 65, y: 60 }, objectHandles(rect, g), 1)).toBeNull();
+    expect(objectHandles(path)).toEqual([]);
+    expect(handleAt({ x: 80.5, y: 70.4 }, objectHandles(rect), 1)).toBe("se");
+    expect(handleAt({ x: 65, y: 60 }, objectHandles(rect), 1)).toBeNull();
   });
 
   it("the description block's rectangle: 8 cells wide, rows + header rows high", () => {

@@ -18,7 +18,7 @@ const fonts = () => [liberation().sans, liberation().narrow];
 function layerColours(name: "page-sprint-a4" | "page-ring") {
   const input = pageScene(name);
   // The composer's map-layer input: the window is what draws a toner saver (and adds its white row, P1).
-  const layer = courseLayer({ ...input.course, objects: input.objects, document: input.map.context, viewOptions: { ...input.course.viewOptions, window: mapLayerWindow(input) } });
+  const layer = courseLayer({ ...input.course, objects: input.course.objects ?? [], document: input.map.context, viewOptions: { ...input.course.viewOptions, window: mapLayerWindow(input) } });
   return { input, colours: layer.colours };
 }
 
@@ -36,9 +36,9 @@ describe("pageLayer", () => {
     });
   }
 
-  it("draws only page-anchored objects: no page objects and no block, an empty stream", () => {
+  it("draws the sheet's layout objects and the block only: neither, an empty stream (the toner saver is the map layer's)", () => {
     const { input, colours } = layerColours("page-ring");
-    const layer = pageLayer({ ...input, objects: input.objects.filter((o) => o.anchor === "map"), context: input.map.context }, colours, fonts());
+    const layer = pageLayer({ ...input, objects: [], context: input.map.context }, colours, fonts());
     expect(layer.stream.passes).toEqual([]);
   });
 });
