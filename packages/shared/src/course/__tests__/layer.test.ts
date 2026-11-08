@@ -294,8 +294,8 @@ describe("corridors (§10.2, F2)", () => {
     const layer = withLeg({ corridor });
     const edges = layer.objects.filter((o) => o.ref.kind === "corridor");
     expect(edges).toHaveLength(1);
-    const legSymbol = layer.objects.find((o) => o.ref.kind === "leg")!.symbolIdx;
-    expect(edges[0].symbolIdx).toBe(legSymbol);
+    // F19: the round-capped 705/edge, not the leg's 705.
+    expect(layer.symbols[edges[0].symbolIdx].id).toBe(`${layer.symbols[layer.objects.find((o) => o.ref.kind === "leg")!.symbolIdx].id}/edge`);
     expect(edges[0].path.closed).toBe(true);
     expect(edges[0].ref).toEqual({ kind: "corridor", id: "c1:0" });
     // Its points lie on the edge: 2 mm from the leg's line (or its round ends).

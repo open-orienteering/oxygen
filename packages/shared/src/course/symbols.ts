@@ -55,6 +55,13 @@ export const CROSSING_SECTION_OFFSET_MM = 0.75;
 export interface CourseSymbolSet {
   symbols: RenderSymbol[];
   idx: CourseSymbolIdx;
+  /**
+   * The corridor edge (§10.2, F19): 705 with round caps (`<705 id>/edge`),
+   * so its end on a symbol leaves no notch. Not in `symbols`: the layer
+   * appends it after every other symbol when it draws an edge, so a layer
+   * without corridors keeps its indices.
+   */
+  edge: LineSymbol;
   /** 703 centre-line radius, µm. */
   circleRadiusUm: number;
   /** 706 outer ring centre-line radius, µm. */
@@ -181,6 +188,7 @@ export function courseSymbols(doc: Pick<CourseDocumentContext, "libraryId" | "do
   const startPart = start.glyph.parts[0];
   return {
     symbols,
+    edge: { ...leg, id: `${leg.id}/edge`, main: { ...leg.main!, cap: "round" } },
     idx: { start: 0, circle: 1, finish: 2, number: 3, leader: 4, leg: 5, markedRoute: 6, restrictedLine: 7, forbiddenRoute: 8, oobArea: 9, oobAreaBorder: 10, oobAreaDashed: 11, whiteout: 12,
       dangerousArea: 13, dangerousAreaBorder: 14, dangerousAreaDashed: 15, mapIssue: 16, crossing },
     circleRadiusUm: (ring.diameterUm! - ring.widthUm!) / 2,

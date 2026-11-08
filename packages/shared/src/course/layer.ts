@@ -87,10 +87,13 @@ export function courseLayer(input: CourseLayerInput): CourseLayer {
   }
 
   // §10.2: the corridors' edges in 705 after the legs; the band is a clip region (below).
+  // F19: in the round-capped 705/edge, whose index is set once every other symbol is in (below).
   const corridors = corridorGeometry(derivation.courses);
+  const edgeObjects: CourseRenderObject[] = [];
   for (const e of corridors?.edges ?? []) {
-    objects.push({ symbolIdx: idx.leg, path: makePath(e.points.flatMap((p) => [p.x, p.y]), undefined, e.closed), ref: { kind: "corridor", id: e.ref } });
+    edgeObjects.push({ symbolIdx: -1, path: makePath(e.points.flatMap((p) => [p.x, p.y]), undefined, e.closed), ref: { kind: "corridor", id: e.ref } });
   }
+  objects.push(...edgeObjects);
 
   // 704: the anchor is the baseline, half a digit below the placed centre.
   const half = set.digitHeightUm / 2;
@@ -108,6 +111,10 @@ export function courseLayer(input: CourseLayerInput): CourseLayer {
   const tonerWhite = drawsToner ? colours.length - 1 : undefined;
   const built = courseObjects(input.objects, set, symbols, palette.indexOf, input.viewOptions, stack.index.get("purple-upper")!, tonerWhite);
   objects.push(...built.objects);
+  if (edgeObjects.length) {
+    const edgeIdx = symbols.push(set.edge) - 1;
+    for (const o of edgeObjects) o.symbolIdx = edgeIdx;
+  }
 
   // Stored filter regions (§8.3) follow the explicit ones.
   const stored = input.objects.flatMap((o) => (o.kind === "filter_region" ? [filterRegionOf(o)] : []));
