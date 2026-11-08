@@ -10,6 +10,7 @@ import {
   variantOrders,
   pruneSiteFromStructure,
   structureSiteIds,
+  uniformVariantNumbers,
   variantCount,
   variantKeyDuplicates,
   variantStructure,
@@ -253,5 +254,66 @@ describe("allVariationStructures (F8, course-layer.md §12.7)", () => {
     expect(allVariationStructures(course([c("S"), c("31"), c("F")]))).toEqual({ spine: [c("S"), c("31"), c("F")], branches: [] });
     const wire = { items: [{ siteId: 1 }, { kind: "variation" as const, id: "g", alternatives: [{ label: "A", items: [{ siteId: 2 }] }] }, { siteId: 3 }] };
     expect(allVariationStructures(wire).branches[0].items.map((i) => i.siteId)).toEqual([1, 2, 3]);
+  });
+});
+
+describe("uniformVariantNumbers (F15, course-layer.md §12.7)", () => {
+  // Every site is a numbered control except the start and the finish.
+  const numbered = (item: { siteId: string }) => item.siteId !== "S" && item.siteId !== "F";
+  const nums = (s: StoredCourseStructure) => {
+    const m = uniformVariantNumbers(s, numbered);
+    return m && Object.fromEntries(m);
+  };
+
+  it("an equal fork numbers both alternatives alike: every visited site has one number", () => {
+    expect(nums(course([c("S"), c("31"), group("g", [["32"], ["33"]]), c("34"), c("F")]))).toEqual({ "31": 1, "32": 2, "33": 2, "34": 3 });
+  });
+
+  it("an unequal fork gives null: the control after it is 3 in one variant and 4 in the other", () => {
+    expect(nums(course([c("S"), c("31"), group("g", [["32"], ["33", "35"]]), c("34"), c("F")]))).toBeNull();
+  });
+
+  it("every loop gives null: the anchor is visited again", () => {
+    expect(nums(course([c("S"), c("31"), group("b", [["41"], ["42"]], { loop: true }), c("32"), c("F")]))).toBeNull();
+  });
+
+  it("a loop with one non-empty petal has no repeated anchor: it numbers as a plain fork", () => {
+    expect(nums(course([c("S"), c("31"), group("b", [["41"], []], { loop: true }), c("32"), c("F")]))).toEqual({ "31": 1, "41": 2, "32": 3 });
+  });
+
+  it("two equal groups continue the numbers across both", () => {
+    const s = course([c("S"), c("31"), group("g", [["a"], ["b"]]), c("34"), group("h", [["c"], ["d"]]), c("35"), c("F")]);
+    expect(nums(s)).toEqual({ "31": 1, a: 2, b: 2, "34": 3, c: 4, d: 4, "35": 5 });
+  });
+
+  it("an unequal second group makes the whole course codes", () => {
+    const s = course([c("S"), c("31"), group("g", [["a"], ["b"]]), c("34"), group("h", [["c"], ["d", "e"]]), c("35"), c("F")]);
+    expect(nums(s)).toBeNull();
+  });
+
+  it("a control shared by both alternatives keeps one number only at the same position", () => {
+    expect(nums(course([c("S"), c("31"), group("g", [["x", "z"], ["y", "z"]]), c("34"), c("F")]))).toEqual({ "31": 1, x: 2, y: 2, z: 3, "34": 4 });
+    expect(nums(course([c("S"), c("31"), group("g", [["z"], ["y", "z"]]), c("34"), c("F")]))).toBeNull();
+  });
+
+  it("items the predicate rejects take no number and are not in the map; an exchange counts as a control", () => {
+    const m = uniformVariantNumbers(course([c("S"), c("31"), group("g", [["x"], ["y"]]), c("F")]), (i) => i.siteId !== "S" && i.siteId !== "F" && i.siteId !== "y");
+    expect(m).toEqual(new Map([["31", 1], ["x", 2]]));
+    const ex = course([c("S"), c("31"), c("X", { role: "exchange" }), c("32"), c("F")]);
+    expect(Object.fromEntries(uniformVariantNumbers(ex, (i) => (i as { role?: string }).role !== "start" && numbered(i))!)).toEqual({ "31": 1, X: 2, "32": 3 });
+  });
+
+  it("a course whose groups are all empty gets its plain numbering; a course without groups too", () => {
+    expect(nums(course([c("S"), c("31"), group("g", [[], []]), c("34"), c("F")]))).toEqual({ "31": 1, "34": 2 });
+    expect(nums(course([c("S"), c("31"), c("32"), c("F")]))).toEqual({ "31": 1, "32": 2 });
+  });
+
+  it("a top-level site visited twice has two numbers: codes", () => {
+    expect(nums(course([c("S"), c("31"), c("32"), c("31"), c("F")]))).toBeNull();
+  });
+
+  it("works on the wire form (numeric site ids)", () => {
+    const wire = { items: [{ siteId: 1 }, { siteId: 2 }, { kind: "variation" as const, id: "g", alternatives: [{ label: "A", items: [{ siteId: 3 }] }, { label: "B", items: [{ siteId: 4 }] }] }, { siteId: 5 }] };
+    expect(uniformVariantNumbers(wire, () => true)).toEqual(new Map([[1, 1], [2, 2], [3, 3], [4, 3], [5, 4]]));
   });
 });

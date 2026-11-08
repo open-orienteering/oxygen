@@ -1434,8 +1434,11 @@ toggle back to Course view):
   Course view.
 - *All variations*: a read-only overlay — no leg clicks, no Leg section,
   no provisional visit, no *Create*. The canvas draws the spine and one
-  branch per alternative in distinct purple tints, labels as codes
-  (`course-layer.md` §12.7). Screen only: Export ▾ prints per variant
+  branch per alternative in distinct purple tints, labelled by **number**
+  when the variants number alike — every visited site has exactly one
+  sequence number across them, the forks are equal (F15; the user's
+  answer Q4) — else by code, as with loops and unequal forks
+  (`course-layer.md` §12.7; `numberHidden` is ignored here). Screen only: Export ▾ prints per variant
   and an all-variations page in one purple (F8, `course-print.md` §4.6).
 
 **The canvas.** `course.list` carries the root's first alternatives, so
@@ -1443,8 +1446,12 @@ for a course with groups the page hands the viewer `courseOverride`
 (`MapViewerEditorProps`, `lib/editor/variation-view.ts`): in Course and
 Variant view the displayed path as the course (`courseDrawOf`: controls,
 legs keyed by drawn neighbours, hidden numbers), in All variations the
-spine and the tinted branches (`allVariationDraws`); `withCourseOverride`
-replaces the overlay of the course's name and adds the branches
+spine and the tinted branches (`allVariationDraws`; the spine's draw
+carries `labels` — site id → number — exactly when
+`course.uniformVariantNumbers` over the items the layer numbers (role
+`control`, positioned: `EditorPage.tsx` passes the predicate) is not null,
+and `courseLayerRequest` turns it into `viewOptions.labels`); `withCourseOverride`
+replaces the overlay of the course's name (its `labels` too) and adds the branches
 highlighted. The description sheet and the multi-course leg labels leave
 the tinted branches out. **Class view and Layout mode draw a root as one
 variant** (F8), as it prints: `sheetVariant` — the remembered key while
@@ -1475,7 +1482,7 @@ groups (§9.4 there).
 an all-empty group is valid (answer 5's "not all of them" became a check,
 so *Create* can save A and B empty); insertion on a group's legs goes into
 the group; `1–9` act on the selection's group; activating an alternative
-claims `K`; All variations is read-only with code labels; Variant ▾ lists
+claims `K`; All variations is read-only, labelled by number when the variants number alike (F15) else by code; Variant ▾ lists
 the keys of the structure being edited; the course picker lists roots;
 group ids `v<n>`, new labels the next free capital.
 
@@ -1621,8 +1628,8 @@ whose poll ran meanwhile simply does not conflict (decision log, D10).
 | E2E | `e2e/course-editor.spec.ts` "F5: map exchange" | §6.9: `X` after a selected control → the ghost `2 · code`, the chain stays armed, three rows with the exchange second and two part headings, the exchange labelled 2, the on-map 13.5 row; Export ▾ this course → two pages, two own sheets with different windows; Layout mode → part 2's sheet (`data-section` 1) deleted → `EXCHANGE_WITHOUT_SHEET` with *Part 2* |
 | unit (web) | `lib/editor/__tests__/structure-edit.test.ts` "variation groups (F7)" | §12: the displayed path's sequence; a position after a group at the top level (the off-by-group regression); the group's legs insert into it (into, out of, an empty active alternative), the leg into the anchor top-level; ↑ / ↓ keep a row's level; a loop's anchor visit takes no ✕, move or leg, its legs belong to the alternatives, B active first; `removeSite` in every alternative, an all-empty group kept, an unanchored one dissolved; the item after a group keeps its leg, an alternative's first item's leg dropped when its predecessor changes; `setLegProps` by path; `setNumberHidden` in alternatives; `createGroup` / `canCreateGroup` (top-level legs only, `v1`, `v2`); add / remove (two left: dissolve) / rename (blank, taken) / loop; `moveToAlternative` |
 | unit (web) | `lib/editor/__tests__/sequence.test.ts` "variation groups (F7)", `state.test.ts` "variations (F7)" | §12: rows' paths in the explicit structure and their group, a loop's anchor-visit row, the leg's path, `courseViewOrders`, `variationBlocks` after the anchor, `alternativeEndAt`; the reducer's Variant view (needs a key), All variations, the active alternative (to Course view, claims `K`, Escape drops the claim before the course), a course change resets them; F8 "in Class view and Layout mode a key picks the variant drawn": the key alone changes (view, class and mode kept), null = the first, another class resets it, Variant view kept into Layout mode |
-| unit (web) | `lib/editor/__tests__/variation-view.test.ts`, `checks.test.ts` "structure with a group", `pages/editor/__tests__/action-bar.test.ts` "Create variation here" | §12: `courseDrawOf` (legs by drawn neighbours, the crossing as a string, hidden numbers), `allVariationDraws` (spine with a none leg, a branch per alternative, the shared exit leg, a loop's petals), `withCourseOverride`; the checks' displayed path and `checkGroupsOf`; *Create variation here* after *Add bend here*, only when the page says so |
-| E2E | `e2e/course-editor.spec.ts` "F7: variations and loops" (`chromium`), "F7 on a phone" (`mobile`) | §12: a leg → *Create variation here* → one block with tabs A (pressed) and B, `course.variantList` `A`, `B`; tab B, `K` with nothing selected → the control is B's row; Variant ▾ B numbers it 2, A numbers the anchor's next 2; All variations → the two alternatives' legs in different tints (canvas pixels); `VARIATION_UNBALANCED` listed and locating the anchor; *Loop* → `AB`, `BA`; F8: Export ▾ *This course (2 variants)* → two pages, *All variations* → one, *One map per runner* disabled; Layout mode's Variant ▾ shows AB, no *All variations*, BA picked keeps the mode and *This variant BA* prints one page; three undos → loop, the control, the group gone. On a phone a group written over tRPC shows its block with `editor-variation-readonly`, ＋ and *Loop* disabled, and tab B switches the rows |
+| unit (web) | `lib/editor/__tests__/variation-view.test.ts`, `checks.test.ts` "structure with a group", `pages/editor/__tests__/action-bar.test.ts` "Create variation here" | §12: `courseDrawOf` (legs by drawn neighbours, the crossing as a string, hidden numbers), `allVariationDraws` (F15: the spine carries the shared numbers when the variants number alike, never otherwise, the override carries them; spine with a none leg, a branch per alternative, the shared exit leg, a loop's petals), `withCourseOverride`; the checks' displayed path and `checkGroupsOf`; *Create variation here* after *Add bend here*, only when the page says so |
+| E2E | `e2e/course-editor.spec.ts` "F7: variations and loops" (`chromium`), "F7 on a phone" (`mobile`) | §12: a leg → *Create variation here* → one block with tabs A (pressed) and B, `course.variantList` `A`, `B`; tab B, `K` with nothing selected → the control is B's row; Variant ▾ B numbers it 2, A numbers the anchor's next 2; All variations → the two alternatives' legs in different tints (canvas pixels); `VARIATION_UNBALANCED` listed and locating the anchor; *Loop* → `AB`, `BA`; F8: Export ▾ *This course (2 variants)* → two pages, *All variations* → one, *One map per runner* disabled; Layout mode's Variant ▾ shows AB, no *All variations*, BA picked keeps the mode and *This variant BA* prints one page; three undos → loop, the control, the group gone; F15 (a second test): a control into B and one into A → All variations labels both 2, the anchor 1 and the exit 3; a second control into B → codes again. On a phone a group written over tRPC shows its block with `editor-variation-readonly`, ＋ and *Loop* disabled, and tab B switches the rows |
 
 ## Pending in this chapter
 

@@ -10,8 +10,8 @@
  *   `style: "none"` leg, a loop keeps its anchor → next leg) plus one
  *   tinted branch per alternative — anchor → its controls → the next item
  *   (a loop's petal back to the anchor; an empty plain alternative is the
- *   straight leg, an empty petal draws nothing). Labels are codes (several
- *   courses are highlighted).
+ *   straight leg, an empty petal draws nothing). Labels are the numbers every
+ *   variant shares (F15) when the variants number alike, else codes.
  *
  * Pure; ids are the overlay's (public control ids as strings).
  */
@@ -31,6 +31,8 @@ export interface CourseDraw {
   hiddenNumbers: number[];
   /** All variations: the alternative's label (its tint row, course-layer.md §12.7). */
   tint?: string;
+  /** All variations, the spine only (F15): the text of each control when the variants number alike (`course.uniformVariantNumbers`), else absent — codes. */
+  labels?: Record<string, string>;
 }
 
 /** A wire leg in the layer's form: the crossing point's id as a string (as `layerPropsOfStored`). */
@@ -67,15 +69,21 @@ export function courseDrawOf(name: string, items: readonly Control[], tint?: str
 export function withCourseOverride<O extends { name: string }>(courses: readonly O[], draws: readonly CourseDraw[] | null): (O | (CourseDraw & { highlight: true }))[] {
   if (!draws || draws.length === 0) return courses as O[];
   const [own, ...extra] = draws;
-  const out = courses.map((c) => (c.name === own.name ? { ...c, controls: own.controls, legs: own.legs, hiddenNumbers: own.hiddenNumbers } : c));
+  const out = courses.map((c) => (c.name === own.name ? { ...c, controls: own.controls, legs: own.legs, hiddenNumbers: own.hiddenNumbers, ...(own.labels ? { labels: own.labels } : {}) } : c));
   return [...out, ...extra.map((d) => ({ ...d, highlight: true as const }))];
 }
 
 /** The branch course's name: unique per group and alternative, never a stored course's. */
 export const branchName = (courseName: string, groupId: string, label: string) => `${courseName}#${groupId}/${label}`;
 
-/** All variations (§12): the spine and one tinted branch per drawn alternative (`course.allVariationStructures`, as F8's print). */
-export function allVariationDraws(name: string, s: Structure): CourseDraw[] {
+/**
+ * All variations (§12): the spine and one tinted branch per drawn alternative (`course.allVariationStructures`, as F8's print).
+ * `isNumbered` (a control the layer numbers: role `control`, positioned) lets the spine carry the numbers every variant
+ * shares (F15, course-layer.md §12.7); without it, or when the variants number unalike, the labels are codes.
+ */
+export function allVariationDraws(name: string, s: Structure, isNumbered?: (item: Control) => boolean): CourseDraw[] {
   const { spine, branches } = course.allVariationStructures<Control>(s);
-  return [courseDrawOf(name, spine), ...branches.map((b) => courseDrawOf(branchName(name, b.groupId, b.label), b.items, b.label))];
+  const numbers = isNumbered ? course.uniformVariantNumbers<Control>(s, isNumbered) : null;
+  const labels = numbers && numbers.size > 0 ? Object.fromEntries([...numbers].map(([id, n]) => [String(id), String(n)])) : undefined;
+  return [{ ...courseDrawOf(name, spine), ...(labels ? { labels } : {}) }, ...branches.map((b) => courseDrawOf(branchName(name, b.groupId, b.label), b.items, b.label))];
 }

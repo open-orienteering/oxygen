@@ -50,6 +50,7 @@ export {
   pathOfOrders,
   pruneSiteFromStructure,
   structureSiteIds,
+  uniformVariantNumbers,
   variantCount,
   variantKeyDuplicates,
   variantOrders,

@@ -97,6 +97,12 @@ export interface BuildDescriptionSheetInput {
     id: number;
     code: string;
     description?: ControlDescription | null;
+    /**
+     * An explicit A-column number (F15: the all-variations block lists rows
+     * by the number the variants share; two rows may carry the same one).
+     * Wins over the ordinal and over free order's omission.
+     */
+    sequence?: number;
   }>;
   instructions?: CourseDescriptionInstructions | null;
   /**
@@ -246,7 +252,7 @@ export function buildDescriptionSheet(
   input.controls.forEach((c, i) => {
     rows.push({
       kind: "control",
-      ...(freeOrder ? {} : { sequence: i + 1 }),
+      ...(c.sequence !== undefined ? { sequence: c.sequence } : freeOrder ? {} : { sequence: i + 1 }),
       code: c.code,
       description: c.description ?? null,
     });
