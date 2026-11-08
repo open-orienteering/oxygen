@@ -73,7 +73,7 @@ import { afterPlaced, afterUndo, armPlacement, endsChain, ghostInfo, isVisitTool
 import { step as polygonStep, type AreaKind } from "./tools/polygon";
 import { TONER_MARGIN_MM, tonerSaverGeometry } from "./tools/toner-saver";
 import { mergeCircleGaps, mergeLegGaps, type AngularGap, type FractionGap } from "./tools/gaps";
-import { areaBinding, gapBinding, pickSymbolBinding, placeBinding, selectBinding, textBinding, type GapTarget, type Gesture } from "./tools/bindings";
+import { areaBinding, gapBinding, pickSymbolBinding, placeBinding, selectBinding, textBinding, withCorridorGuides, type CorridorGuide, type GapTarget, type Gesture } from "./tools/bindings";
 import { ObjectSection } from "./modes/ObjectSection";
 import { LegSection } from "./modes/LegSection";
 import { ChecksSection, Inspector, InspectorSection, InventorySection } from "./Inspector";
@@ -1278,6 +1278,19 @@ export function EditorPage() {
     }
   })();
 
+  // §6.7 (F14): the layer draws no line inside a corridor, so a blue dashed guide marks every corridor leg of the
+  // selected course wherever its legs are clickable (Course mode; Course / Class / Variant view), whatever the tool.
+  // The selected leg's own outline (V, desktop and tablet) replaces its guide.
+  const outlinedLegAt = state.tool.kind === "select" && legEditable ? state.phantom?.insertAt ?? null : null;
+  const corridorGuides = useMemo((): CorridorGuide[] => {
+    if (state.mode !== "course" || !selectedCourse || !courseView || state.view === "all-variations") return [];
+    const derived = courseInfo?.derivation?.courses.find((c) => c.id === selectedCourse.name);
+    return (derived?.legs ?? []).flatMap((l, index) =>
+      l.corridor && l.points.length >= 2 && !(outlinedLegAt !== null && insertIndexForLeg(rows, index) === outlinedLegAt)
+        ? [{ course: derived!.id, index, points: l.points }] : []);
+  }, [state.mode, state.view, selectedCourse, courseView, courseInfo, rows, outlinedLegAt]);
+  const shownBinding = withCorridorGuides(toolBinding, corridorGuides);
+
   // Drafts: objects being dragged (a region's drag is live, 08 §5.3). A region being drawn picks nothing yet (§6.4).
   const draftObjects = useMemo(() => {
     if (drafts.size === 0) return NO_DRAFTS;
@@ -1461,7 +1474,7 @@ export function EditorPage() {
     bottomInsetPx: isMobile ? sheetPx : 0,
     fullBleed: isMobile,
     ...(selectedCourse && courseView && state.view !== "all-variations" ? { onLegClick: handleLegClick } : {}),
-    tool: toolBinding,
+    tool: shownBinding,
     snap: snapIndex ? snap : null,
     draftObjects,
     draftFast,
@@ -1473,7 +1486,7 @@ export function EditorPage() {
     courseOverride,
   }), [classLayout, courseChecks.markers, isMobile, fix, sheetPx, fieldMoveEnd, state.selectedControlId, state.phantom, contextActions, contextInfo, srrBadge, radioOn, suggestions, tc, courseControlIds, toolActive,
     courseView, selectedCourse, moveWarnings, moveEpoch, handleMapClick, handleLabelMoveEnd, handleSelect,
-    handleDismiss, handleLegClick, toolBinding, snapIndex, snap, draftObjects, draftFast, viewRequest, provisional, courseOverride, state.view]);
+    handleDismiss, handleLegClick, shownBinding, snapIndex, snap, draftObjects, draftFast, viewRequest, provisional, courseOverride, state.view]);
 
   // Layout mode draws a root's sheet as one variant (F8): its path over the root's first alternatives.
   const layoutEditor = useMemo(
@@ -2005,7 +2018,7 @@ export function EditorPage() {
     const actions = (
       <div data-testid="editor-action-bar" className="flex gap-1 overflow-x-auto -mx-1 px-1">
         {contextActions.map((a) => (
-          <button key={a.id} type="button" data-testid={`editor-action-${a.id}`} onClick={a.onClick} disabled={a.disabled}
+          <button key={a.id} type="button" data-testid={`editor-action-${a.id}`} title={a.title} onClick={a.onClick} disabled={a.disabled}
             className={`shrink-0 min-h-11 px-3 rounded-lg border text-sm whitespace-nowrap cursor-pointer disabled:opacity-40 ${a.variant === "danger" ? "border-red-200 text-red-600" : "border-slate-200 text-slate-700"}`}>
             {a.label}
           </button>
