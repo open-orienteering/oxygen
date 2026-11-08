@@ -28,6 +28,19 @@ const TONER_WHITE = { id: TONER_WHITE_ID, name: "Toner saver white", cmyk: [0, 0
 const um = (mm: number) => Math.round(mm * 1000);
 const line = (pts: readonly MapPoint[], closed = false) => makePath(pts.flatMap((p) => [um(p.x), um(p.y)]), undefined, closed);
 
+/**
+ * The line a derived leg draws (course-layer.md §10.1–10.2, F14): 705
+ * (`"line"`) unless the leg has a corridor — inside one the edge marks the
+ * route and the centre line is not drawn, on screen or in print — 707
+ * (`"marked_route"`) always, nothing for `none`. `null` is a leg without a
+ * line: the editor hits it from its derived pieces (course-editor.md §5).
+ */
+export function legLine(leg: { style: string; corridor?: unknown }): "line" | "marked_route" | null {
+  if (leg.style === "none") return null;
+  if (leg.style === "marked_route") return "marked_route";
+  return leg.corridor ? null : "line";
+}
+
 export function courseLayer(input: CourseLayerInput): CourseLayer {
   const stack = courseColourStack(input.document.colours);
   const set = courseSymbols(input.document, stack.index, input.appearance);
@@ -65,9 +78,10 @@ export function courseLayer(input: CourseLayerInput): CourseLayer {
 
   for (const c of derivation.courses) {
     c.legs.forEach((leg, i) => {
-      // §10.1: 705, 707 along the leg, or no line (the derivation keeps its pieces for the labels).
-      if (leg.style === "none") return;
-      const symbolIdx = leg.style === "marked_route" ? idx.markedRoute : (tinting.legOf(c.id) ?? idx.leg);
+      // §10.1–10.2: 705, 707 along the leg, or no line (the derivation keeps its pieces for the labels).
+      const kind = legLine(leg);
+      if (!kind) return;
+      const symbolIdx = kind === "marked_route" ? idx.markedRoute : (tinting.legOf(c.id) ?? idx.leg);
       for (const piece of leg.pieces) if (piece.length >= 2) objects.push({ symbolIdx, path: line(piece), ref: { kind: "leg", id: `${c.id}:${i}` } });
     });
   }

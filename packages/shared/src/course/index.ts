@@ -5,7 +5,7 @@
  */
 
 export * from "./types.js";
-export { courseLayer, courseRenderInput, type CourseRenderInput } from "./layer.js";
+export { courseLayer, courseRenderInput, legLine, type CourseRenderInput } from "./layer.js";
 export { legLengthMm, routedBends } from "./derive.js";
 export { corridorGeometry, type CorridorEdge, type CorridorGeometry } from "./corridor.js";
 export { CUT_CODES, CUT_AIR_MM, DEFAULT_FEATURE_RADIUS_MM, circleCuts, legGaps, polylineLegGaps, cutFeaturesOfDocument, cutSymbolRadiusMm, cutContextForScale, pointSymbolRadiusMm, ocadCutSymbolRadiiMm } from "./cuts.js";

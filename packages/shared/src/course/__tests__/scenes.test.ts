@@ -179,6 +179,10 @@ describe("course scenes", () => {
     expect(edge.every((x) => x.colour === "purple-lower")).toBe(true);
     const fill = stream.passes.findIndex((_, k) => stream.objectIdx[k] === 0);
     expect(Math.min(...edge.map((x) => x.k))).toBeGreaterThan(fill);
+    // F14: no 705 along the three corridor legs; 33 → F is the only leg line, lower purple.
+    const legs = passes.filter((x) => x.ref.startsWith("leg:"));
+    expect([...new Set(legs.map((x) => x.ref))]).toEqual(["leg:course:3"]);
+    expect(legs.every((x) => x.colour === "purple-lower")).toBe(true);
   });
   it("course-exchange: part 2 alone — the exchange numbered as a control, numbering continued, no start", () => {
     const { scene, stream } = run("course-exchange");

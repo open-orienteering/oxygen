@@ -91,7 +91,7 @@ describe("writePage", () => {
     expect(ops.lastIndexOf("0 0 0 1 K")).toBeGreaterThan(ops.indexOf(colour!));
   });
 
-  it("a corridor leg (F2): the band a W* clip round the map passes only, never a course pass; the edge a closed 705 stroke", async () => {
+  it("a corridor leg (F2, F14: no 705 along it): the band a W* clip round the map passes only, never a course pass; the edge a closed 705 stroke", async () => {
     const base = pageScene("page-ring");
     const corridor = { widthM: 120, edge: true, whiteMm: 4, whiteOpacity: 1 };
     const items = [{ siteId: "S" }, { siteId: "31" }, { siteId: "32", leg: { corridor } }, { siteId: "F" }];
@@ -125,6 +125,17 @@ describe("writePage", () => {
     const at = ops.indexOf(edges[0]);
     expect(ops.slice(0, at).reverse().find((l) => / K$/.test(l))).toBe(purple);
     expect(ops.slice(0, at).reverse().find((l) => / w( |$)/.test(l))).toMatch(/^70 w/);
+    // F14: no 705 along the corridor leg — one open purple stroke fewer than the plain page (31 → 32 gone).
+    const openPurple = (lines: string[]) => {
+      let c = "", n = 0;
+      for (const l of lines) {
+        if (/ K$/.test(l)) c = l;
+        if ((/ S Q$/.test(l) || / S$/.test(l)) && !/ h S( Q)?$/.test(l) && c === purple) n++;
+      }
+      return n;
+    };
+    expect(openPurple(plain)).toBeGreaterThan(0);
+    expect(openPurple(ops)).toBe(openPurple(plain) - 1);
   });
 
   it("cmyk writes no rg, rgb no k", async () => {
