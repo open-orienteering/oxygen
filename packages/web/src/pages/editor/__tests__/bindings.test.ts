@@ -604,6 +604,116 @@ describe("V on a selected leg: bend handles (docs/course-editor.md §6.7)", () =
   });
 });
 
+describe("V on a selected leg: smooth bends, grips, Alt (docs/course-editor.md §6.7, §7; F16)", () => {
+  // A smooth bend above the chord, its handles along the chord (2 mm each way).
+  const SMOOTH = { x: 20, y: 10, hIn: { x: -2, y: 0 }, hOut: { x: 2, y: 0 } };
+  const legOpts = (over: Partial<NonNullable<Parameters<typeof selectBinding>[0]["leg"]>> = {}) => ({
+    from: { x: 0, y: 0 }, to: { x: 40, y: 0 }, bends: [SMOOTH], focused: null,
+    onBendsChange: vi.fn(), onBendFocus: vi.fn(), snap: (p: { x: number; y: number }) => p, ...over,
+  });
+  const outline = (b: ReturnType<typeof selectBinding>) => b.shapes!.find((s) => s.testId === "editor-leg-outline") as { points: { x: number; y: number }[] };
+
+  it("the outline is the flattened curve (legPolyline); a grip per handle", () => {
+    const b = selectBinding(selectOpts({ leg: legOpts() }));
+    const pts = outline(b).points;
+    expect(pts.length).toBeGreaterThan(3);
+    expect(pts[0]).toEqual({ x: 0, y: 0 });
+    expect(pts).toContainEqual({ x: 20, y: 10 });
+    expect(pts[pts.length - 1]).toEqual({ x: 40, y: 0 });
+    expect(b.shapes!.filter((s) => s.testId === "editor-bend-grip")).toEqual([
+      { kind: "grip", x: 18, y: 10, from: SMOOTH, testId: "editor-bend-grip", data: { index: "0", which: "in" } },
+      { kind: "grip", x: 22, y: 10, from: SMOOTH, testId: "editor-bend-grip", data: { index: "0", which: "out" } },
+    ]);
+    // A corner bend has none.
+    expect(selectBinding(selectOpts({ leg: legOpts({ bends: [{ x: 20, y: 10 }] }) })).shapes!.some((s) => s.testId === "editor-bend-grip")).toBe(false);
+  });
+
+  it("a grip drag moves its handle by the pointer's offset, the pair mirrored; the outline follows; one write, the bend focused", () => {
+    const o = selectOpts({ leg: legOpts() });
+    const b = selectBinding(o);
+    // Beside the out grip (22, 10), within reach: the press does not jump it.
+    expect(b.onPointerDown!(ptr(22.3, 10.2))).toBe(true);
+    b.onPointerDrag!({ x: 22.3, y: 14.2 }, { shift: false, alt: false });
+    expect(o.redraw).toHaveBeenCalled();
+    expect(o.leg!.onBendsChange).not.toHaveBeenCalled();
+    const mid = selectBinding(o);
+    expect(mid.shapes!.filter((s) => s.testId === "editor-bend-grip").map((s) => [(s as { x: number }).x, (s as { y: number }).y])).toEqual([[18, 6], [22, 14]]);
+    expect(outline(mid).points).not.toEqual(outline(b).points);
+    mid.onPointerUp!({ x: 22.3, y: 14.2 });
+    expect(o.leg!.onBendsChange).toHaveBeenCalledTimes(1);
+    expect(o.leg!.onBendsChange).toHaveBeenCalledWith([{ x: 20, y: 10, hIn: { x: -2, y: -4 }, hOut: { x: 2, y: 4 } }]);
+    expect(o.leg!.onBendFocus).toHaveBeenCalledWith(0);
+    expect(o.gesture.current).toBeNull();
+  });
+
+  it("Alt held on a grip (live) breaks the pair; Shift turns the handle to 45°", () => {
+    const o = selectOpts({ leg: legOpts() });
+    const b = selectBinding(o);
+    b.onPointerDown!(ptr(22, 10));
+    b.onPointerDrag!({ x: 22, y: 14 }, { shift: false, alt: true });
+    b.onPointerUp!({ x: 22, y: 14 });
+    expect(o.leg!.onBendsChange).toHaveBeenCalledWith([{ x: 20, y: 10, hIn: { x: -2, y: 0 }, hOut: { x: 2, y: 4 } }]);
+
+    const s = selectOpts({ leg: legOpts() });
+    const bs = selectBinding(s);
+    bs.onPointerDown!(ptr(22, 10));
+    bs.onPointerDrag!({ x: 24, y: 13.6 }, { shift: true, alt: false });
+    bs.onPointerUp!({ x: 24, y: 13.6 });
+    const [bend] = (s.leg!.onBendsChange as ReturnType<typeof vi.fn>).mock.calls[0][0];
+    expect(bend.hOut.x).toBeCloseTo(bend.hOut.y, 1);
+    expect(bend.hIn).toEqual({ x: -bend.hOut.x, y: -bend.hOut.y });
+  });
+
+  it("a click on a grip or a cancelled grip drag writes nothing; a double-click on a grip inserts no control", () => {
+    const o = selectOpts({ leg: legOpts() });
+    const b = selectBinding(o);
+    b.onPointerDown!(ptr(18, 10));
+    b.onPointerUp!({ x: 18.05, y: 10 });
+    b.onPointerDown!(ptr(18, 10));
+    b.onPointerDrag!({ x: 15, y: 14 }, { shift: false, alt: false });
+    b.onPointerUp!(null);
+    expect(o.leg!.onBendsChange).not.toHaveBeenCalled();
+    b.onDoubleClick!(ptr(18, 10, { target: { kind: "leg", courseId: "c", index: 0 } }));
+    expect(o.onLegDoubleClick).not.toHaveBeenCalled();
+  });
+
+  it("pressing order: the bend handle before a grip on it", () => {
+    // A short handle: its grip within the bend's reach.
+    const o = selectOpts({ leg: legOpts({ bends: [{ x: 20, y: 10, hIn: { x: -0.3, y: 0 }, hOut: { x: 0.3, y: 0 } }] }) });
+    const b = selectBinding(o);
+    b.onPointerDown!(ptr(20.2, 10));
+    expect(o.gesture.current).toMatchObject({ kind: "bend", index: 0 });
+  });
+
+  it("a bend drag moves the bend with its handles, Alt or not (F18: Alt-drag is a plain move)", () => {
+    for (const alt of [false, true]) {
+      const o = selectOpts({ leg: legOpts() });
+      const b = selectBinding(o);
+      b.onPointerDown!(ptr(20, 10, { alt }));
+      b.onPointerDrag!({ x: 21, y: 13 }, { shift: false, alt });
+      expect(outline(selectBinding(o)).points).toContainEqual({ x: 21, y: 13 });
+      b.onPointerUp!({ x: 21, y: 13 });
+      expect(o.leg!.onBendsChange).toHaveBeenCalledWith([{ ...SMOOTH, x: 21, y: 13 }]);
+    }
+  });
+
+  it("Alt-click a bend toggles it: smooth → corner, corner → smooth from its neighbours; one write each", () => {
+    const o = selectOpts({ leg: legOpts() });
+    const b = selectBinding(o);
+    b.onPointerDown!(ptr(20, 10, { alt: true }));
+    b.onPointerUp!({ x: 20, y: 10 });
+    expect(o.leg!.onBendsChange).toHaveBeenCalledWith([{ x: 20, y: 10 }]);
+    expect(o.leg!.onBendFocus).toHaveBeenCalledWith(0);
+
+    const c = selectOpts({ leg: legOpts({ bends: [{ x: 20, y: 10 }] }) });
+    const bc = selectBinding(c);
+    bc.onPointerDown!(ptr(20, 10, { alt: true }));
+    bc.onPointerUp!({ x: 20, y: 10 });
+    expect(c.leg!.onBendsChange).toHaveBeenCalledTimes(1);
+    expect(c.leg!.onBendsChange).toHaveBeenCalledWith([{ x: 20, y: 10, hIn: { x: -6.67, y: 0 }, hOut: { x: 6.67, y: 0 } }]);
+  });
+});
+
 describe("corridor guides (docs/course-editor.md §6.7, F14)", () => {
   const guides = [
     { course: "A", index: 0, points: [{ x: 0, y: 0 }, { x: 20, y: 0 }] },

@@ -8,6 +8,9 @@
  */
 
 import { course, type PathVertex } from "@oxygen/shared";
+import {
+  constrain45, dragGrip, hasHandles, insertVertex, nearestEdge, retractHandles, smoothHandles, toggleSmooth, vertexRule, type Vertex,
+} from "./geometry-edit";
 
 export type Pt = { x: number; y: number };
 /** A bend: a point with optional handles, offsets from it (F13) — the shared `PathVertex`. */
@@ -92,18 +95,79 @@ export function polylineSlice(points: readonly Pt[], f0: number, f1: number): Pt
   return out;
 }
 
-const round = (v: number) => Math.round(v * 100) / 100;
+// −0 + 0 is 0: a rounded handle never stores a negative zero.
+const round = (v: number) => Math.round(v * 100) / 100 + 0;
+const roundPt = (p: Pt): Pt => ({ x: round(p.x), y: round(p.y) });
 
 /**
- * *Add bend here* (§6.7): `pt` becomes a corner bend on the segment of
- * [from, ...bends, to] whose (flattened) path is nearest it, so the leg
- * keeps its order of vertices; the other bends keep their handles (F16
- * makes a new bend smooth).
+ * The leg as an open vertex path (F16, docs/course-editor.md §6.7, §7
+ * "Editing geometry"): `[from, …bends, to]` under a line's rule — open, at
+ * least the two sites, curves allowed. The sites are its fixed ends: an
+ * open path's ends have no smooth form (`smoothHandles`, `toggleSmooth`),
+ * and `bendsOfPath` drops them, so a site never carries a handle
+ * (course-layer.md §10.1).
  */
-export function insertBendAt(from: Pt, bends: readonly Bend[] | undefined, to: Pt, pt: Pt): Bend[] {
-  const list = [...(bends ?? [])];
-  list.splice(course.bendSegmentAt(from, list, to, pt).index, 0, { x: round(pt.x), y: round(pt.y) });
-  return list;
+export const BEND_RULE = vertexRule("oob_line");
+
+export const legPath = (from: Pt, bends: readonly Bend[] | undefined, to: Pt): Vertex[] => [{ x: from.x, y: from.y }, ...(bends ?? []), { x: to.x, y: to.y }];
+
+/** A bend at 0.01 mm: its point and its handles (a handle rounded to nothing is dropped). */
+export function roundBend(v: Vertex): Bend {
+  const out: Bend = roundPt(v);
+  const hIn = v.hIn && roundPt(v.hIn), hOut = v.hOut && roundPt(v.hOut);
+  if (hIn && (hIn.x || hIn.y)) out.hIn = hIn;
+  if (hOut && (hOut.x || hOut.y)) out.hOut = hOut;
+  return out;
+}
+
+/** The bends of a leg path (`legPath`): the sites dropped, each bend rounded (`roundBend`). */
+export const bendsOfPath = (path: readonly Vertex[]): Bend[] => path.slice(1, -1).map(roundBend);
+
+/**
+ * *Add bend here* (§6.7, F16): a bend on the segment of [from, ...bends,
+ * to] whose (flattened) path is nearest `pt`, at that segment's nearest
+ * point, so the leg keeps its order of vertices and its shape. It is
+ * **smooth** (the user's answer Q2, F18's convention): on a straight
+ * segment its handles come from its neighbours (`smoothHandles`, collinear
+ * with the segment), on a curve the de Casteljau split (`insertVertex`)
+ * keeps the curve, the neighbours' facing handles shortened. `corner`
+ * (Alt) drops the new bend's handles. The other bends are untouched (a
+ * stored corner stays one). `index` is the new bend's.
+ */
+export function insertBendAt(from: Pt, bends: readonly Bend[] | undefined, to: Pt, pt: Pt, corner = false): { bends: Bend[]; index: number } {
+  const path = legPath(from, bends, to);
+  const edge = nearestEdge(path, false, pt)!;
+  const at = edge.index + 1;
+  const split = insertVertex(path, false, edge.index, edge.t);
+  const out = corner ? retractHandles(split, at) : hasHandles(split[at]) ? split : smoothHandles(split, at, false);
+  // Untouched bends keep their stored numbers exactly; the edited ones are rounded.
+  const kept = new Set<Vertex>(bends ?? []);
+  const list = out.slice(1, -1).map((b) => (kept.has(b) ? (b as Bend) : roundBend(b)));
+  return { bends: list, index: edge.index };
+}
+
+/** Alt-click on bend `index` (§6.7, F18's `toggleSmooth`): a bend with a handle becomes a corner, a corner smooth. Null out of range. */
+export function toggleBendSmooth(from: Pt, bends: readonly Bend[], to: Pt, index: number): Bend[] | null {
+  const path = legPath(from, bends, to);
+  const out = index >= 0 && index < bends.length ? toggleSmooth(path, index + 1, false) : null;
+  return out && bends.map((b, i) => (i === index ? roundBend(out[i + 1]) : b));
+}
+
+/** The bend row's **Smooth** / **Corner** (§6.7, tablets): bend `index` set to that kind; already that kind, unchanged. */
+export function setBendKind(from: Pt, bends: readonly Bend[], to: Pt, index: number, kind: "smooth" | "corner"): Bend[] {
+  const b = bends[index];
+  if (!b || hasHandles(b) === (kind === "smooth")) return [...bends];
+  return toggleBendSmooth(from, bends, to, index) ?? [...bends];
+}
+
+/**
+ * A grip of bend `index` dragged to `vec`, its new offset (§6.7, §7
+ * `dragGrip`): a mirrored or smooth pair stays so, `alt` breaks it,
+ * `shift` turns the handle to 45°. Rounded.
+ */
+export function dragBendGrip(bends: readonly Bend[], index: number, which: "in" | "out", vec: Pt, alt: boolean, shift: boolean): Bend[] {
+  const out = dragGrip(bends, index, which, shift ? constrain45(vec) : vec, alt);
+  return out.map((b, i) => (i === index ? roundBend(b) : bends[i]));
 }
 
 /** The bends without bend `index`. */

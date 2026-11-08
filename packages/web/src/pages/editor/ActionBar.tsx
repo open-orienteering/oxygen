@@ -40,8 +40,8 @@ export interface ActionContext {
 
 export interface ActionHandlers {
   insert(): void;
-  /** *Add bend here* on a leg (§6.7). */
-  addBend(): void;
+  /** *Add bend here* on a leg (§6.7): a smooth bend; with Alt held on the click, a corner (F16). */
+  addBend(e?: { altKey?: boolean }): void;
   /** *Create variation here* on a leg (§12). */
   createVariation?(): void;
   addToCourse(): void;
@@ -68,7 +68,7 @@ export function courseActions(ctx: ActionContext, on: ActionHandlers, label: Act
   if (ctx.phantom) {
     if (ctx.phantom.insertAt !== null && ctx.course) {
       out.push({ id: "insert", label: label("editor.actionInsert"), onClick: on.insert, disabled: !ctx.codesReady });
-      if (ctx.legEdit) out.push({ id: "add-bend", label: label("editor:actionAddBend"), onClick: on.addBend });
+      if (ctx.legEdit) out.push({ id: "add-bend", label: label("editor:actionAddBend"), onClick: (e) => on.addBend({ altKey: !!e?.altKey }) });
       if (ctx.variationHere && on.createVariation) out.push({ id: "create-variation", label: label("editor:actionCreateVariation"), onClick: on.createVariation });
       return out;
     }

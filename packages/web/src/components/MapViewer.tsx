@@ -184,7 +184,8 @@ export interface EditorContextAction {
   /** Stable id — rendered as `data-testid="editor-action-<id>"`. */
   id: string;
   label: string;
-  onClick: () => void;
+  /** The click (a mouse event's `altKey`: *Add bend here* with Alt inserts a corner, course-editor.md §6.7). */
+  onClick: (e?: { altKey?: boolean }) => void;
   variant?: "default" | "danger";
   /** Greyed out and inert — e.g. while an earlier edit is still saving. */
   disabled?: boolean;
