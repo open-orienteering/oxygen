@@ -9,7 +9,6 @@
  * coming back, not a slow machine.
  */
 
-import { performance } from "node:perf_hooks";
 import { describe, expect, it } from "vitest";
 import { placeControlLabels } from "../../course-maps/control-label-placement.js";
 import { deriveCourse } from "../derive.js";
