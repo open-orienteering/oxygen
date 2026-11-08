@@ -8,15 +8,16 @@
 
 import type { DocumentRenderInput } from "../map-document/render-bridge.js";
 import { makePath } from "../render/pass-stream.js";
-import type { RenderSymbol } from "../render/symbol.js";
+import type { LineSymbol, RenderSymbol } from "../render/symbol.js";
+import type { DocumentColour } from "../map-document/header.js";
 import type { RenderObject } from "../render/symbolise.js";
 import type { FilterRegion } from "../render/filter-region.js";
 import { COORD_FLAG } from "../render/pass-stream.js";
 import { remapRenderColours } from "../render/transform.js";
 import { circleWithGaps } from "./arcs.js";
 import { corridorGeometry } from "./corridor.js";
-import { courseColourStack, withObjectColours } from "./colour-stack.js";
-import { deriveCourse } from "./derive.js";
+import { courseColourStack, withObjectColours, withTintColours } from "./colour-stack.js";
+import { deriveCourse, structuresOf } from "./derive.js";
 import { TONER_WHITE_ID, filterRegionOf, hasTonerSaver, layoutObjects, objectColours, isCourseObject } from "./objects.js";
 import { CROSSING_BODY_MM, CROSSING_SECTION_MM, CROSSING_SECTION_OFFSET_MM, courseSymbols } from "./symbols.js";
 import type { CourseFilterRegion, CourseLayer, CourseLayerInput, CourseRenderObject } from "./types.js";
@@ -40,6 +41,11 @@ export function courseLayer(input: CourseLayerInput): CourseLayer {
   const { idx } = set;
   const objects: CourseRenderObject[] = [];
 
+  // §12.7: the All-variations view's tints — rows on top of the stack, tinted copies of 705 and 703.
+  const palette0 = withObjectColours(stack.colours, objectColours(input.objects));
+  const tinting = variationTints(input, set, palette0.colours);
+  const palette = { ...palette0, colours: tinting.colours };
+
   for (const s of derivation.sites) {
     const ref = { kind: "site" as const, id: s.id };
     if (s.role === "start") {
@@ -52,7 +58,8 @@ export function courseLayer(input: CourseLayerInput): CourseLayer {
     } else if (s.role === "crossing_point") {
       objects.push(...crossingObjects(s, idx.crossing, input.document.documentFactor));
     } else {
-      for (const path of circleWithGaps(um(s.x), um(s.y), set.circleRadiusUm, s.cuts)) objects.push({ symbolIdx: idx.circle, path, ref });
+      const symbolIdx = tinting.circleOf(s.id) ?? idx.circle;
+      for (const path of circleWithGaps(um(s.x), um(s.y), set.circleRadiusUm, s.cuts)) objects.push({ symbolIdx, path, ref });
     }
   }
 
@@ -60,7 +67,7 @@ export function courseLayer(input: CourseLayerInput): CourseLayer {
     c.legs.forEach((leg, i) => {
       // §10.1: 705, 707 along the leg, or no line (the derivation keeps its pieces for the labels).
       if (leg.style === "none") return;
-      const symbolIdx = leg.style === "marked_route" ? idx.markedRoute : idx.leg;
+      const symbolIdx = leg.style === "marked_route" ? idx.markedRoute : (tinting.legOf(c.id) ?? idx.leg);
       for (const piece of leg.pieces) if (piece.length >= 2) objects.push({ symbolIdx, path: line(piece), ref: { kind: "leg", id: `${c.id}:${i}` } });
     });
   }
@@ -80,8 +87,7 @@ export function courseLayer(input: CourseLayerInput): CourseLayer {
     if (l) objects.push({ symbolIdx: idx.leader, path: line([{ x: l.x1, y: l.y1 }, { x: l.x2, y: l.y2 }]), ref: { kind: "leader", id: s.id } });
   }
 
-  const symbols: RenderSymbol[] = [...set.symbols];
-  const palette = withObjectColours(stack.colours, objectColours(input.objects));
+  const symbols: RenderSymbol[] = [...set.symbols, ...tinting.symbols];
   // A toner saver covers everything the map layer draws: its white is the top row (objects.ts, P1).
   const drawsToner = (input.viewOptions.window?.length ?? 0) >= 3 && hasTonerSaver(input.objects);
   const colours = drawsToner ? [...palette.colours, TONER_WHITE] : palette.colours;
@@ -95,6 +101,63 @@ export function courseLayer(input: CourseLayerInput): CourseLayer {
   // §10.2: the corridors' white band cuts every map colour away; the course is never filtered.
   if (corridors?.band) regions.push({ path: ringsPath(corridors.band), mode: "clip", symbols: "all" });
   return { colours, remap: stack.remap, symbols, objects, images: built.images, derivation, warnings: built.warnings, regions };
+}
+
+interface VariationTinting {
+  colours: DocumentColour[];
+  /** Appended after the set's symbols (indices continue `set.symbols`). */
+  symbols: RenderSymbol[];
+  /** The tinted 705 of a course id, or undefined (no tint, or no `allVariations`). */
+  legOf: (courseId: string) => number | undefined;
+  /** The tinted 703 of a site only tinted structures visit, all with one label; else undefined. */
+  circleOf: (siteId: string) => number | undefined;
+}
+
+/**
+ * The All-variations tints (§12.7): with `viewOptions.allVariations`, one
+ * row `course-tint:<label>` per label of the tinted structures on top of
+ * `colours`, and a 705 and a 703 copy on it. A site keeps the plain purple
+ * unless every structure that visits it carries the same tint. Without the
+ * option, nothing: a tint is ignored.
+ */
+function variationTints(input: CourseLayerInput, set: ReturnType<typeof courseSymbols>, colours: DocumentColour[]): VariationTinting {
+  const none: VariationTinting = { colours, symbols: [], legOf: () => undefined, circleOf: () => undefined };
+  if (!input.viewOptions.allVariations) return none;
+  const structures = structuresOf(input);
+  const labels = structures.flatMap((s) => (s.tint ? [s.tint] : []));
+  if (labels.length === 0) return none;
+  const rows = withTintColours(colours, labels);
+  const leg = set.symbols[set.idx.leg] as LineSymbol;
+  const circle = set.symbols[set.idx.circle] as LineSymbol;
+  const symbols: RenderSymbol[] = [];
+  const legIdx = new Map<string, number>();
+  const circleIdx = new Map<string, number>();
+  for (const label of new Set(labels)) {
+    const colour = rows.indexOf(label);
+    legIdx.set(label, set.symbols.length + symbols.push({ ...leg, id: `${leg.id}/tint:${label}`, main: { ...leg.main!, colour } }) - 1);
+    circleIdx.set(label, set.symbols.length + symbols.push({ ...circle, id: `${circle.id}/tint:${label}`, main: { ...circle.main!, colour } }) - 1);
+  }
+  const tintOfCourse = new Map(structures.map((s) => [s.id, s.tint] as const));
+  // Every tint (null = plain) a site is visited with.
+  const visitors = new Map<string, Set<string | null>>();
+  for (const s of structures) for (const item of s.items) {
+    const seen = visitors.get(item.siteId) ?? new Set<string | null>();
+    seen.add(s.tint ?? null);
+    visitors.set(item.siteId, seen);
+  }
+  return {
+    colours: rows.colours,
+    symbols,
+    legOf: (courseId) => {
+      const t = tintOfCourse.get(courseId);
+      return t ? legIdx.get(t) : undefined;
+    },
+    circleOf: (siteId) => {
+      const v = visitors.get(siteId);
+      const only = v && v.size === 1 ? [...v][0] : null;
+      return only ? circleIdx.get(only) : undefined;
+    },
+  };
 }
 
 /**

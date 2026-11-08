@@ -11,7 +11,8 @@ import { pathRings } from "../../render/path.js";
 import { liberation } from "../../render/__tests__/fonts.js";
 import { pageScene } from "../__fixtures__/pages.js";
 import { RING_BLEED_UM, composePage } from "../compose.js";
-import { frameInMap } from "../page.js";
+import { frameInMap, type PageInput } from "../page.js";
+import type { CourseStructure } from "../../course/types.js";
 
 const fonts = () => [liberation().sans, liberation().narrow];
 const idOf = (colours: { paletteIds?: string[]; id: string }[], paletteId: string) => colours.findIndex((c) => c.paletteIds?.includes(paletteId));
@@ -152,6 +153,20 @@ describe("composePage", () => {
     expect(on).not.toEqual(plain);
     const off = composePage({ ...cut, course: { ...cut.course, viewOptions: { ...cut.course.viewOptions, autoCuts: false } } }, fonts()).mapLayer.stream;
     expect(off).toEqual(plain);
+  });
+
+  it("variation tints never print (F7; 08 §12): a tinted structure composes as the plain one, no tint row", () => {
+    const base = pageScene("page-ring");
+    const spine = base.course.structure as CourseStructure;
+    const branch: CourseStructure = { ...spine, id: "course:g:B", items: spine.items.slice(1, 3) };
+    const plain = composePage({ ...base, course: { ...base.course, structure: [spine, branch] } }, fonts());
+    const tinted = composePage({ ...base, course: { ...base.course, structure: [spine, { ...branch, tint: "B" }] } }, fonts());
+    expect(tinted.colours.some((c) => c.id.startsWith("course-tint:"))).toBe(false);
+    expect(tinted.mapLayer.stream).toEqual(plain.mapLayer.stream);
+    // The page's view options cannot name the All-variations view.
+    // @ts-expect-error allVariations is not a print option (PageInput.course.viewOptions)
+    const options: PageInput["course"]["viewOptions"] = { allVariations: true };
+    expect(options).toBeDefined();
   });
 
   it("an unaligned document stack is a CourseStackError", () => {
