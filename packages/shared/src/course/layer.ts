@@ -59,6 +59,11 @@ export function courseLayer(input: CourseLayerInput): CourseLayer {
   const tinting = variationTints(input, set, palette0.colours);
   const palette = { ...palette0, colours: tinting.colours };
 
+  // §10.2: the corridors, with the symbols their legs end at (F19); the band is a clip region (below).
+  const corridors = corridorGeometry(derivation.courses, {
+    sites: derivation.sites, circleUm: set.circleRadiusUm, finishUm: set.finishRadiusUm, startUm: set.startRadiusUm,
+  });
+
   for (const s of derivation.sites) {
     const ref = { kind: "site" as const, id: s.id };
     if (s.role === "start") {
@@ -72,7 +77,9 @@ export function courseLayer(input: CourseLayerInput): CourseLayer {
       objects.push(...crossingObjects(s, idx.crossing, input.document.documentFactor));
     } else {
       const symbolIdx = tinting.circleOf(s.id) ?? idx.circle;
-      for (const path of circleWithGaps(um(s.x), um(s.y), set.circleRadiusUm, s.cuts)) objects.push({ symbolIdx, path, ref });
+      // §3.3: the cuts, and at an edged corridor's end its opening (§10.2, F19) — drawn here only, never a cut.
+      const gaps = [...s.cuts, ...(corridors?.openings.get(s.id) ?? [])];
+      for (const path of circleWithGaps(um(s.x), um(s.y), set.circleRadiusUm, gaps)) objects.push({ symbolIdx, path, ref });
     }
   }
 
@@ -86,11 +93,13 @@ export function courseLayer(input: CourseLayerInput): CourseLayer {
     });
   }
 
-  // §10.2: the corridors' edges in 705 after the legs; the band is a clip region (below).
-  const corridors = corridorGeometry(derivation.courses);
+  // §10.2: the corridors' edges after the legs, in the round-capped 705/edge (F19), whose index is set once every
+  // other symbol is in (below).
+  const edgeObjects: CourseRenderObject[] = [];
   for (const e of corridors?.edges ?? []) {
-    objects.push({ symbolIdx: idx.leg, path: makePath(e.points.flatMap((p) => [p.x, p.y]), undefined, e.closed), ref: { kind: "corridor", id: e.ref } });
+    edgeObjects.push({ symbolIdx: -1, path: makePath(e.points.flatMap((p) => [p.x, p.y]), undefined, e.closed), ref: { kind: "corridor", id: e.ref } });
   }
+  objects.push(...edgeObjects);
 
   // 704: the anchor is the baseline, half a digit below the placed centre.
   const half = set.digitHeightUm / 2;
@@ -108,6 +117,10 @@ export function courseLayer(input: CourseLayerInput): CourseLayer {
   const tonerWhite = drawsToner ? colours.length - 1 : undefined;
   const built = courseObjects(input.objects, set, symbols, palette.indexOf, input.viewOptions, stack.index.get("purple-upper")!, tonerWhite);
   objects.push(...built.objects);
+  if (edgeObjects.length) {
+    const edgeIdx = symbols.push(set.edge) - 1;
+    for (const o of edgeObjects) o.symbolIdx = edgeIdx;
+  }
 
   // Stored filter regions (§8.3) follow the explicit ones.
   const stored = input.objects.flatMap((o) => (o.kind === "filter_region" ? [filterRegionOf(o)] : []));

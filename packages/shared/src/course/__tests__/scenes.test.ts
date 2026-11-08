@@ -178,33 +178,47 @@ describe("course scenes", () => {
     expect(p.role).toBe("crossing_point");
     expect(p.angleDeg).not.toBe(90);
   });
-  it("course-corridor: one clip region, the map masked in the band and clear inside the corridors, the course never masked", () => {
+  it("course-corridor: one clip region, the map masked in the band and clear inside the corridors and the mouths, the course never masked", () => {
     const { scene, stream } = run("course-corridor");
     expect(scene.layer.regions.map((r) => [r.mode, r.symbols])).toEqual([["clip", "all"]]);
     const rings = flattenRings(scene.layer.regions[0].path);
     const inBand = (x: number, y: number) => pointInRings(rings, x * 1000, y * 1000);
-    // 90 m at 1:15 000 = 6 mm: S → 31's edge 3 mm off its line, its band to 6 mm.
+    // 60 m at 1:15 000 = 4 mm: S → 31's edge 2 mm off its line, its band to 5 mm.
     const mid = { x: 14, y: 7 }, n = { x: -2 / Math.hypot(16, 2), y: 16 / Math.hypot(16, 2) };
-    expect(inBand(mid.x + n.x * 2, mid.y + n.y * 2)).toBe(false);
-    expect(inBand(mid.x + n.x * 4.5, mid.y + n.y * 4.5)).toBe(true);
-    expect(inBand(mid.x + n.x * 6.5, mid.y + n.y * 6.5)).toBe(false);
-    // At 32 the 150 m corridor (5 mm half width) reaches past the 90 m one's band edge (3 + 3 mm): clear.
+    expect(inBand(mid.x + n.x * 1, mid.y + n.y * 1)).toBe(false);
+    expect(inBand(mid.x + n.x * 3.5, mid.y + n.y * 3.5)).toBe(true);
+    expect(inBand(mid.x + n.x * 5.5, mid.y + n.y * 5.5)).toBe(false);
+    // At 32 the 150 m corridor (5 mm half width) reaches past the narrow one's band edge (2 + 3 mm): clear.
     expect(inBand(40 - 4.5 * (20 / Math.hypot(20, 8)), 24 + 4.5 * (8 / Math.hypot(20, 8)))).toBe(false);
     // The joined bend: inside both of the 31 → 32 pieces near (36, 10) — clear.
     expect(inBand(35, 11)).toBe(false);
+    // F19 mouths: 31's circle (R 2.5) clear across, past the leg's 2 mm; the band round it to R + 3.
+    expect(inBand(22, 8 - 2.4)).toBe(false);
+    expect(inBand(22, 8 - 4)).toBe(true);
+    // The 701 (apex towards 31): clear in its back corner, beyond the leg's 2 mm; nothing behind its base.
+    const back = { x: 6 - 1.5 * Math.cos(Math.atan2(2, 16)) - 2.5 * n.x, y: 6 - 1.5 * Math.sin(Math.atan2(2, 16)) - 2.5 * n.y };
+    expect(inBand(back.x, back.y)).toBe(false);
+    expect(inBand(6 - 2 * Math.cos(Math.atan2(2, 16)), 6 - 2 * Math.sin(Math.atan2(2, 16)))).toBe(true);
     const masked = (k: number) => (stream.maskIdx?.[k] ?? -1) >= 0;
     const base = stream.passes.map((_, k) => k).filter((k) => stream.objectIdx[k] < scene.courseObjectOffset);
     // 505, 101 and 516 cross the band; the 401 fill under everything meets it too.
     expect(base.filter(masked).length).toBe(base.length);
     const passes = coursePasses(scene, stream);
     expect(passes.every((x) => !masked(x.k))).toBe(true);
-    // The edge: lower purple 705, only along 31 → 32 (leg 1), over the 401 fill.
+    // The edge: lower purple 705/edge, round-capped, along S → 31 → 32 (legs 0 and 1), over the 401 fill.
     const edge = passes.filter((x) => x.ref.startsWith("corridor:"));
     expect(edge.length).toBeGreaterThan(0);
-    expect(new Set(edge.map((x) => x.ref))).toEqual(new Set(["corridor:course:1"]));
+    expect(new Set(edge.map((x) => x.ref))).toEqual(new Set(["corridor:course:0", "corridor:course:1"]));
     expect(edge.every((x) => x.colour === "purple-lower")).toBe(true);
+    expect(edge.every((x) => scene.symbols[stream.symbolIdx[x.k]].id.endsWith("705/edge"))).toBe(true);
     const fill = stream.passes.findIndex((_, k) => stream.objectIdx[k] === 0);
     expect(Math.min(...edge.map((x) => x.k))).toBeGreaterThan(fill);
+    // F19 openings: 31 opens towards both legs (two arcs); 32, 33 whole; never a cut in the derivation.
+    const circle = (id: string) => scene.layer.objects.filter((o) => o.ref.kind === "site" && o.ref.id === id);
+    expect(circle("31").map((o) => o.path.closed)).toEqual([false, false]);
+    expect(circle("32").map((o) => o.path.closed)).toEqual([true]);
+    expect(circle("33").map((o) => o.path.closed)).toEqual([true]);
+    expect(scene.layer.derivation.sites.every((x) => x.cuts.length === 0)).toBe(true);
     // F14: no 705 along the three corridor legs; 33 → F is the only leg line, lower purple.
     const legs = passes.filter((x) => x.ref.startsWith("leg:"));
     expect([...new Set(legs.map((x) => x.ref))]).toEqual(["leg:course:3"]);

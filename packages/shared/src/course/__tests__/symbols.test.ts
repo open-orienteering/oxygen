@@ -81,6 +81,22 @@ describe("courseSymbols (course-layer.md §3.1)", () => {
     expect(start.glyph.parts[0].widthUm).toBe(700);
   });
 
+  it("the corridor edge (F19): 705 with round caps, its own id, scaled like 705", () => {
+    const { index } = stack("ISOM2017-2");
+    const s = courseSymbols({ libraryId: "ISOM2017-2", documentFactor: 1.5 }, index, { line: 2 });
+    const leg = s.symbols[s.idx.leg] as LineSymbol;
+    const edge = s.edge;
+    expect(edge.id).toBe(`${leg.id}/edge`);
+    expect(edge.code).toBe("705");
+    expect(edge.main).toEqual({ ...leg.main!, cap: "round" });
+    expect(edge.main!.widthUm).toBeCloseTo(350 * 1.5 * 2, 6);
+    expect(leg.main!.cap).not.toBe("round");
+    // Not in the set's symbols: the layer appends it only when it draws an edge.
+    expect(s.symbols.some((x) => x.id === edge.id)).toBe(false);
+    const t = courseSymbols({ libraryId: "ISSprOM2019-2", documentFactor: 1 }, stack("ISSprOM2019-2").index, {});
+    expect(t.edge.main!.cap).toBe("round");
+  });
+
   it("knockout numbers: upper purple with a 0.15 mm upper-white outline", () => {
     const { index } = stack("ISOM2017-2");
     const s = courseSymbols({ libraryId: "ISOM2017-2", documentFactor: 1 }, index, { numberStyle: "knockout" });

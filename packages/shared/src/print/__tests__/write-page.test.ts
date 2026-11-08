@@ -138,6 +138,42 @@ describe("writePage", () => {
     expect(openPurple(ops)).toBe(openPurple(plain) - 1);
   });
 
+  it("a narrow edged corridor (F19): round-capped open edge pieces ending on the opened circles; the circles drawn open", async () => {
+    // 40 m at 1:10 000 = 4 mm: h 2 < R 3.75, so 31 and 32 open towards the leg and the edge ends on them.
+    const base = pageScene("page-ring");
+    const corridor = { widthM: 40, edge: true, whiteMm: 4, whiteOpacity: 1 };
+    const items = [{ siteId: "S" }, { siteId: "31" }, { siteId: "32", leg: { corridor } }, { siteId: "F" }];
+    const withCorridor: PageInput = { ...base, course: { ...base.course, structure: { version: 1, id: "c", orderMode: "ordered", items } } };
+    const mapOps = (ops: string) => ops.slice(ops.indexOf(" cm", ops.indexOf(" re W n")), ops.lastIndexOf("0.014173228 0 0 0.014173228 0 0 cm"));
+    const plain = mapOps(content(await PDFDocument.load(await build([base])), 0)).split("\n");
+    const ops = mapOps(content(await PDFDocument.load(await build([withCorridor])), 0)).split("\n");
+    const purple = ops.find((l) => / K$/.test(l))!;
+    /** Purple strokes by kind, with the line cap in force at each. */
+    const strokes = (lines: string[]) => {
+      let c = "", cap = "0";
+      const out: { line: string; closed: boolean; cap: string }[] = [];
+      for (const l of lines) {
+        if (/ K$/.test(l)) c = l;
+        const j = / (\d) J( |$)/.exec(` ${l}`);
+        if (j) cap = j[1];
+        if ((/ S Q$/.test(l) || / S$/.test(l)) && c === purple) out.push({ line: l, closed: / h S( Q)?$/.test(l), cap });
+      }
+      return out;
+    };
+    const before = strokes(plain), after = strokes(ops);
+    expect(before.filter((x) => x.closed).length).toBeGreaterThanOrEqual(2);
+    // 31 and 32 are no longer closed circles: each one open arc.
+    expect(after.filter((x) => x.closed).length).toBe(before.filter((x) => x.closed).length - 2);
+    // The edge: two open pieces, round-capped (1 J), at 705's 70 w; no closed edge.
+    const edges = after.filter((x) => !x.closed && !plain.includes(x.line) && x.cap === "1");
+    expect(edges).toHaveLength(2);
+    for (const e of edges) expect(ops.slice(0, ops.indexOf(e.line)).reverse().find((l) => / w( |$)/.test(l))).toMatch(/^70 w/);
+    // Open purple: the 31 → 32 line gone (F14), the two edge pieces and the two opened circles added.
+    expect(after.filter((x) => !x.closed).length).toBe(before.filter((x) => !x.closed).length - 1 + 2 + 2);
+    // The circles keep their flat caps.
+    expect(after.filter((x) => !x.closed && x.cap !== "1").length).toBe(before.filter((x) => !x.closed).length - 1 + 2);
+  });
+
   it("cmyk writes no rg, rgb no k", async () => {
     const cmyk = content(await PDFDocument.load(await build([pageScene("page-ring")], "cmyk")), 0);
     const rgb = content(await PDFDocument.load(await build([pageScene("page-ring")], "rgb")), 0);

@@ -3,7 +3,7 @@
 import { describe, expect, it } from "vitest";
 import { courseLayer, courseRenderInput, legLine } from "../layer.js";
 import { courseDocumentContext } from "../context.js";
-import { layerInput, linear, site, sprintContext } from "./helpers.js";
+import { SITES, layerInput, linear, site, sprintContext } from "./helpers.js";
 import { materialiseLibrary } from "../../symbol-library/index.js";
 import { symbolise } from "../../render/symbolise.js";
 import { makePath } from "../../render/pass-stream.js";
@@ -290,25 +290,85 @@ describe("corridors (§10.2, F2)", () => {
     expect(masked.filter((_, k) => stream.objectIdx[k] >= input.courseObjectOffset).every((m) => m === -1)).toBe(true);
   });
 
-  it("the edge: closed 705 strokes of the inside, ref kind corridor; none without edge; a `none` leg keeps both", () => {
+  it("the edge: 705/edge strokes of the inside, ref kind corridor; none without edge; a `none` leg keeps both", () => {
+    // F19: h 2 < R 2.5, so the edge is two open pieces from the 701 to the opened circle of 31.
     const layer = withLeg({ corridor });
     const edges = layer.objects.filter((o) => o.ref.kind === "corridor");
-    expect(edges).toHaveLength(1);
-    const legSymbol = layer.objects.find((o) => o.ref.kind === "leg")!.symbolIdx;
-    expect(edges[0].symbolIdx).toBe(legSymbol);
-    expect(edges[0].path.closed).toBe(true);
-    expect(edges[0].ref).toEqual({ kind: "corridor", id: "c1:0" });
-    // Its points lie on the edge: 2 mm from the leg's line (or its round ends).
-    const c = edges[0].path.coords;
-    for (let i = 0; i < c.length; i += 2) {
-      const x = Math.max(10000, Math.min(40000, c[i]));
-      expect(Math.abs(Math.hypot(c[i] - x, c[i + 1] - 10000) - 2000)).toBeLessThan(30);
+    expect(edges).toHaveLength(2);
+    // F19: the round-capped 705/edge, not the leg's 705.
+    expect(layer.symbols[edges[0].symbolIdx].id).toBe(`${layer.symbols[layer.objects.find((o) => o.ref.kind === "leg")!.symbolIdx].id}/edge`);
+    for (const e of edges) {
+      expect(e.path.closed).toBe(false);
+      expect(e.ref).toEqual({ kind: "corridor", id: "c1:0" });
+      // Its points lie on the edge: 2 mm from the leg's line, from the 701 to where the side meets 31's circle.
+      const c = e.path.coords;
+      for (let i = 0; i < c.length; i += 2) {
+        expect(Math.abs(Math.abs(c[i + 1] - 10000) - 2000)).toBeLessThan(30);
+        expect(c[i]).toBeLessThan(38530);
+      }
     }
+    // A corridor as wide as the circle keeps today's closed outline round both ends (answer 1).
+    const wide = withLeg({ corridor: { ...corridor, widthM: 120 } }).objects.filter((o) => o.ref.kind === "corridor");
+    expect(wide.map((o) => o.path.closed)).toEqual([true]);
     expect(withLeg({ corridor: { ...corridor, edge: false } }).objects.some((o) => o.ref.kind === "corridor")).toBe(false);
     const none = withLeg({ style: "none", corridor });
     expect(none.objects.some((o) => o.ref.kind === "leg" && o.ref.id === "c1:0")).toBe(false);
     expect(none.objects.some((o) => o.ref.kind === "corridor")).toBe(true);
     expect(none.regions).toHaveLength(1);
+  });
+
+  describe("openings (F19): drawn, not cuts", () => {
+    const circleOf = (layer: ReturnType<typeof courseLayer>, id: string) => layer.objects.filter((o) => o.ref.kind === "site" && o.ref.id === id);
+    const ends = (o: { path: { coords: ArrayLike<number> } }) => {
+      const c = o.path.coords;
+      return [[c[0], c[1]], [c[c.length - 2], c[c.length - 1]]];
+    };
+
+    it("the circle at an edged corridor's end opens between the junctions; the derivation's cuts are unchanged", () => {
+      const layer = withLeg({ corridor });
+      const plain = withLeg({});
+      const arcs = circleOf(layer, "31");
+      expect(arcs).toHaveLength(1);
+      expect(arcs[0].path.closed).toBe(false);
+      // The leg comes from the west: the junctions (40 − 1.5, 10 ± 2).
+      const js = ends(arcs[0]).sort((a, b) => a[1] - b[1]);
+      expect(Math.hypot(js[0][0] - 38500, js[0][1] - 8000)).toBeLessThan(30);
+      expect(Math.hypot(js[1][0] - 38500, js[1][1] - 12000)).toBeLessThan(30);
+      expect(circleOf(plain, "31")[0].path.closed).toBe(true);
+      // Never a cut: the derivation is the plain one's, the start drawn alike.
+      expect(layer.derivation.sites).toEqual(plain.derivation.sites);
+      expect(circleOf(layer, "S")).toEqual(circleOf(plain, "S"));
+    });
+
+    it("a leg with a smooth bend (F16's default) opens the circle too", () => {
+      const layer = withLeg({ corridor, bends: [{ x: 25, y: 13, hIn: { x: -5, y: 0 }, hOut: { x: 5, y: 0 } }] });
+      expect(layer.derivation.courses[0].legs[0].points.length).toBeGreaterThan(10);
+      const arcs = circleOf(layer, "31");
+      expect(arcs).toHaveLength(1);
+      expect(arcs[0].path.closed).toBe(false);
+      expect(layer.derivation.sites.find((x) => x.id === "31")!.cuts).toEqual([]);
+    });
+
+    it("edge: false or h ≥ R: the circle stays whole (answers 1 and 3)", () => {
+      expect(circleOf(withLeg({ corridor: { ...corridor, edge: false } }), "31")[0].path.closed).toBe(true);
+      expect(circleOf(withLeg({ corridor: { ...corridor, widthM: 75 } }), "31")[0].path.closed).toBe(true);
+    });
+
+    it("merges with a stored gap it overlaps, and stays with auto cuts off", () => {
+      const sites = SITES.map((x) => (x.id === "31" ? { ...x, circleGaps: [{ start: 250, end: 290 }] } : x));
+      const merged = withLeg({ corridor }, { sites });
+      expect(circleOf(merged, "31")).toHaveLength(1);
+      expect(merged.derivation.sites.find((x) => x.id === "31")!.cuts).toEqual([{ start: 250, end: 290 }]);
+      const off = withLeg({ corridor }, { viewOptions: { autoCuts: false } });
+      expect(circleOf(off, "31")[0].path.closed).toBe(false);
+    });
+
+    it("a corridor passing a control it does not end at leaves its circle whole", () => {
+      // 99 moved onto S → 31's corridor, beside the leg.
+      const sites = SITES.map((x) => (x.id === "99" ? { ...x, x: 25, y: 11 } : x));
+      const layer = withLeg({ corridor }, { sites, viewOptions: { allControls: true } });
+      expect(circleOf(layer, "99")[0].path.closed).toBe(true);
+    });
   });
 
   it("legLine (F14): 705 unless the leg has a corridor, 707 always, none never", () => {
@@ -323,7 +383,7 @@ describe("corridors (§10.2, F2)", () => {
   it("a corridor leg draws no 705 (F14): no leg object, the edge and band kept, the pieces and numbers unchanged; 707 kept", () => {
     const layer = withLeg({ corridor });
     expect(layer.objects.filter((o) => o.ref.kind === "leg").map((o) => o.ref.id)).toEqual(["c1:1"]);
-    expect(layer.objects.filter((o) => o.ref.kind === "corridor")).toHaveLength(1);
+    expect(layer.objects.filter((o) => o.ref.kind === "corridor")).toHaveLength(2);
     expect(layer.regions).toHaveLength(1);
     const plain = withLeg({});
     expect(layer.derivation.courses[0].legs[0].pieces).toEqual(plain.derivation.courses[0].legs[0].pieces);

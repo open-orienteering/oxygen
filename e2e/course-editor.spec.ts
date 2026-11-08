@@ -3068,6 +3068,13 @@ test.describe("F3: legs — styles, bends, corridors (docs/course-editor.md §6.
     const { name, a, b } = await twoControlCourse(page, "F3 corridor");
     const nameId = nameIdOf(page);
     const scale = await mapScale(page);
+    // F19: the drawn circle's centre-line radius, from the gap tool's target (G on a selected control).
+    await select(page, b.code);
+    await page.keyboard.press("g");
+    const R = Number((await toolShapes(page, "editor-gap-target"))[0].data.r);
+    expect(R).toBeGreaterThan(1);
+    await page.keyboard.press("Escape");
+    await page.keyboard.press("Escape");
     // The default corridor (decision log, F3): 50 m wide, a 5 mm white band beyond the edge.
     const halfMm = (50 * 1000) / scale / 2;
     const ax = a.mm, bx = b.mm, len = Math.hypot(bx.x - ax.x, bx.y - ax.y);
@@ -3094,6 +3101,36 @@ test.describe("F3: legs — styles, bends, corridors (docs/course-editor.md §6.
     };
     const centre = along([-0.1, 0, 0.1]);
     const edge = along([halfMm - 0.1, halfMm, halfMm + 0.1, -halfMm - 0.1, -halfMm, -halfMm + 0.1]);
+    // F19 (course-layer.md §10.2): the circles at the leg's ends open where a corridor narrower than them meets
+    // them. The default 50 m may be as wide as the circle on the fixture map (h ≥ R: the circle inside, answer 1),
+    // so the openings are probed at a width of about 1.2 R (h ≈ 0.6 R).
+    const narrowM = Math.max(1, Math.round((1.2 * R * scale) / 1000));
+    const narrowHalf = (narrowM * 1000) / scale / 2;
+    expect(narrowHalf).toBeLessThan(R);
+    const delta = Math.asin(narrowHalf / R);
+    const rim = (c: Pt, toward: Pt, from: number, to: number) => {
+      const t0 = Math.atan2(toward.y - c.y, toward.x - c.x);
+      const out: Pt[] = [];
+      for (let a = from; a <= to + 1e-9; a += (to - from) / 24 || 1) {
+        for (const r of [R - 0.05, R, R + 0.05]) out.push({ x: c.x + r * Math.cos(t0 + a), y: c.y + r * Math.sin(t0 + a) });
+      }
+      return out;
+    };
+    const deg = Math.PI / 180;
+    // The opening's middle half (its ends lie under the edge's round caps, a pixel or two of anti-aliasing), the far
+    // side, and the junctions.
+    const mouth = [...rim(ax, bx, -delta / 2, delta / 2), ...rim(bx, ax, -delta / 2, delta / 2)];
+    const far = [...rim(ax, bx, Math.PI - 30 * deg, Math.PI + 30 * deg), ...rim(bx, ax, Math.PI - 30 * deg, Math.PI + 30 * deg)];
+    const junctions = (c: Pt, toward: Pt) => {
+      const t0 = Math.atan2(toward.y - c.y, toward.x - c.x);
+      return [1, -1].map((side) => {
+        const j = { x: c.x + R * Math.cos(t0 + side * delta), y: c.y + R * Math.sin(t0 + side * delta) };
+        const out: Pt[] = [];
+        for (let dx = -0.3; dx <= 0.3; dx += 0.1) for (let dy = -0.3; dy <= 0.3; dy += 0.1) out.push({ x: j.x + dx, y: j.y + dy });
+        return out;
+      });
+    };
+    const junctionProbes = [...junctions(ax, bx), ...junctions(bx, ax)];
     const guides = async () => (await toolShapes(page, "editor-corridor-guide")).length;
     const courses = await trpcCall<{ id: number; name: string }[]>("course.list", undefined, false);
     const courseId = courses.find((c) => c.name === name)!.id;
@@ -3106,6 +3143,8 @@ test.describe("F3: legs — styles, bends, corridors (docs/course-editor.md §6.
       expect(mapBefore, "the fixture map has colour beside the leg").toBeGreaterThan(0);
       expect(await inkAt(page, centre, "purple"), "the leg's line before the corridor").toBeGreaterThan(0);
       expect(await guides()).toBe(0);
+      // F19: before the corridor both circles are whole where the corridor will meet them (and R is right).
+      for (const c of [ax, bx]) expect(await inkAt(page, rim(c, c === ax ? bx : ax, -delta / 2, delta / 2), "purple"), "a whole circle").toBeGreaterThan(0);
 
       // The A menu's entry (key C while it is open); disabled once the leg has a corridor.
       await page.keyboard.press("a");
@@ -3127,6 +3166,19 @@ test.describe("F3: legs — styles, bends, corridors (docs/course-editor.md §6.
       await expect.poll(() => inkAt(page, centre, "purple"), { timeout: 30000 }).toBe(0);
       expect(await inkAt(page, edge, "purple"), "the corridor's edge").toBeGreaterThan(0);
       await expect(page.getByTestId("editor-leg-style-corridor-note")).toBeVisible();
+      // F19: narrowed below the circles' width, each circle opens towards the leg, drawn on its far side; the edge
+      // meets it at both junctions.
+      const narrowed = waitForTrpc(page, "course.setStructure");
+      await page.getByTestId("editor-leg-corridor-width").fill(String(narrowM));
+      await page.getByTestId("editor-leg-corridor-width").press("Enter");
+      await narrowed;
+      await expect.poll(() => inkAt(page, mouth, "purple"), { timeout: 30000 }).toBe(0);
+      expect(await inkAt(page, far, "purple"), "the circles' far sides").toBeGreaterThan(0);
+      for (const [i, j] of junctionProbes.entries()) expect(await inkAt(page, j, "purple"), `junction ${i}`).toBeGreaterThan(0);
+      // An opened control is still selected by a click at its centre (the UI circle, course-editor.md §5).
+      await dropSelection(page);
+      await select(page, b.code);
+      await selectLeg(page, name, a, b);
       // The selected leg's outline stands in for its guide; deselected, the guide marks the leg, and a click on it selects it.
       expect(await guides()).toBe(0);
       await dropSelection(page);
@@ -3151,7 +3203,7 @@ test.describe("F3: legs — styles, bends, corridors (docs/course-editor.md §6.
       expect((await printed(page, nameId, `maps=${sheet.seq}`)).pages).toBe(1);
 
       // Values outside their ranges are not written: the fields show the stored ones again.
-      for (const [field, bad, stored] of [["width", "0", "50"], ["white", "-1", "5"], ["opacity", "2", "1"]] as const) {
+      for (const [field, bad, stored] of [["width", "0", String(narrowM)], ["white", "-1", "5"], ["opacity", "2", "1"]] as const) {
         await page.getByTestId(`editor-leg-corridor-${field}`).fill(bad);
         await page.getByTestId(`editor-leg-corridor-${field}`).press("Tab");
         await expect(page.getByTestId(`editor-leg-corridor-${field}`)).toHaveValue(stored);
@@ -3168,8 +3220,9 @@ test.describe("F3: legs — styles, bends, corridors (docs/course-editor.md §6.
       await removed;
       await expect(page.getByTestId("editor-leg-corridor-add")).toBeVisible();
       await expect.poll(() => inkAt(page, band, "map"), { timeout: 30000 }).toBeGreaterThan(0);
-      // F14: the line is back, the note and the guide gone.
+      // F14: the line is back, the note and the guide gone; F19: the circles are whole again.
       await expect.poll(() => inkAt(page, centre, "purple"), { timeout: 30000 }).toBeGreaterThan(0);
+      expect(await inkAt(page, mouth, "purple"), "the circles closed again").toBeGreaterThan(0);
       await expect(page.getByTestId("editor-leg-style-corridor-note")).toHaveCount(0);
       await dropSelection(page);
       await expect.poll(guides, { timeout: 15000 }).toBe(0);
