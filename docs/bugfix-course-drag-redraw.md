@@ -74,7 +74,7 @@ leg's box), after F19 changes the same files.
 ## Tests
 
 - `packages/shared/src/__tests__/control-label-placement-reference.test.ts`
-  with `__fixtures__/control-label-placement-reference.json`: 80 seeded
+  with `__fixtures__/control-label-placement-reference.json`: 77 seeded
   cases (courses dense to sparse with curved legs, scaled ×1000 and
   ×0.01, hatched clusters, far and degenerate segments) recorded on the
   pre-cull placer and compared as JSON, bit for bit. Shrinking the reach

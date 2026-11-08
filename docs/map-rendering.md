@@ -2650,6 +2650,15 @@ The shared module is exported as a namespace: `import { render } from
   F20). If D's
   editor needs lower latency, the dragged object is symbolised on the
   main thread and only it is replaced.
+- **§5.2 dynamic bucket: a course `error` names no generation** (F20).
+  The engine ends whatever request is in flight on any `error`, so a
+  course request that throws also rejects a load in flight (with
+  `inlineTransport`; a real worker's `onerror` always did), and an
+  overtaken request that throws after a `load` re-posted ends the newer
+  one, whose reply is then dropped: the layer stays as it was until the
+  next `setCourse`. Both need a derivation that throws, itself a bug. The
+  lever: a `generation` on the worker's course `error`, so the engine
+  ends only the matching request and leaves the load alone.
 - **§5.4 layout objects in the viewer** — resolved by D7 for Layout
   mode (`MapViewerEditorProps.layout`, `course-layout.md` §1); Course mode
   and the read-only viewer still draw no sheet.
