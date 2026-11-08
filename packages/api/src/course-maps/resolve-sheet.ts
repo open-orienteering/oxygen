@@ -36,9 +36,10 @@ export interface ResolveSheetInput extends ResolveMapLayoutInput {
   /**
    * The all-variations page (course-print.md §4.6, F8; answer 4): a root's
    * `structure` drawn as the spine and every alternative's branch, in the
-   * one purple (no tint) and with codes. `course.controls` are then every
+   * one purple (no tint), with codes — or, when the variants number alike,
+   * the numbers (F15: `viewOptions.labels`). `course.controls` are then every
    * visited control (`allVariationsRow`) and the course `free_order`, so
-   * the block lists each once without numbers.
+   * the block lists each once (by number when the variants number alike).
    */
   allVariations?: boolean;
 }
@@ -179,6 +180,33 @@ function allVariationsInput(
   return [shape(courseId, spine), ...branches.map((b) => shape(`${courseId}:${b.groupId}:${b.label}`, b.items))];
 }
 
+/**
+ * What `allVariationNumbers` reads of a site: its kind (the layer's:
+ * `control`, `map_exchange`, `start`, …) and whether it has a position.
+ */
+export interface NumberedSite {
+  kind: string;
+  positioned: boolean;
+}
+
+/**
+ * The all-variations page's numbers (course-print.md §4.6, F15;
+ * course-layer.md §12.7): `course.uniformVariantNumbers` over the numbered
+ * items — a positioned site that is a control (a map exchange is one; the
+ * start, finish, crossing and map-issue points are not) — as the layer's
+ * `viewOptions.labels` (site id → text), or null when the variants number
+ * unalike (codes). The editor's All-variations view computes the same.
+ */
+export function allVariationNumbers(stored: course.StoredCourseStructure, siteOf: (id: string) => NumberedSite | undefined): Record<string, string> | null {
+  const numbers = course.uniformVariantNumbers(stored, (item) => {
+    const site = siteOf(item.siteId);
+    if (!site?.positioned) return false;
+    const role = item.role ?? (site.kind === "start" || site.kind === "finish" ? site.kind : "control");
+    return role === "control" && site.kind !== "crossing_point" && site.kind !== "map_issue";
+  });
+  return numbers && numbers.size > 0 ? Object.fromEntries([...numbers].map(([id, n]) => [id, String(n)])) : null;
+}
+
 function circleGapsOf(controls: readonly { id: string; circleGaps?: unknown }[]): Map<string, course.AngularGap[]> {
   const out = new Map<string, course.AngularGap[]>();
   for (const c of controls) if (Array.isArray(c.circleGaps) && c.circleGaps.length > 0) out.set(c.id, c.circleGaps as course.AngularGap[]);
@@ -210,10 +238,17 @@ export function resolveSheet(input: ResolveSheetInput): ResolvedSheet {
   // A mutable copy: the all-variations page adds the crossing points its branches run through.
   const sites = [...own.sites];
   let structure: PageInput["course"]["structure"] = own.structure;
+  let labels: Record<string, string> | null = null;
   if (input.allVariations && input.kind === "course") {
     const parsed = input.structure ? course.courseStructureSchema.safeParse(input.structure) : null;
     if (parsed?.success && course.hasVariations(parsed.data)) {
       structure = allVariationsInput(layout, parsed.data, sites, input.courseId ?? "course", crossingSites);
+      // F15: numbers when the variants number alike, else codes.
+      const byId = new Map(sites.map((s) => [s.id, s]));
+      labels = allVariationNumbers(parsed.data, (id) => {
+        const s = byId.get(id);
+        return s && { kind: s.kind, positioned: s.x !== 0 || s.y !== 0 };
+      });
     }
   }
   const title = input.course?.name ?? input.mapName ?? "";
@@ -230,6 +265,7 @@ export function resolveSheet(input: ResolveSheetInput): ResolvedSheet {
         // §10.3: the all-controls and setter sheets (F10) are setter views (702, their crossing points); a course sheet never is.
         ...(input.kind === "all_controls" || input.kind === "setter" ? { setterMarks: true } : {}),
         labelMode: layout.labelMode,
+        ...(labels ? { labels } : {}),
         ...(input.autoCuts === false ? { autoCuts: false } : {}),
         // §11: a part sheet draws its part; numbers and the block stay the whole course's.
         ...(layout.section !== undefined ? { section: layout.section } : {}),

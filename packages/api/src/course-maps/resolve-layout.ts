@@ -52,6 +52,8 @@ export interface LayoutControlSource {
   labelOffset?: { dx: number; dy: number };
   /** `controls.circle_gaps` JSONB: authored circle cuts (course-layer.md §6.4). */
   circleGaps?: unknown;
+  /** The block row's A-column number, set by the all-variations page (F15, course-print.md §4.6); absent = the ordinal rule. */
+  sequence?: number;
 }
 
 /** Map template row — `settings` / `objects` are raw JSONB. */
@@ -362,6 +364,7 @@ export function resolveMapLayout(
           id: source ? firstCode(source.codes) || (source.seq ?? index + 1) : index + 1,
           code: control.code,
           description: (control.description ?? null) as ControlDescription | null,
+          ...(source?.sequence !== undefined ? { sequence: source.sequence } : {}),
         };
       }),
       instructions: readInstructions(input.course.descriptionInstructions),

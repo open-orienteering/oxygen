@@ -19,7 +19,8 @@ import { type PreparedDocument, WINDOW_OBJECT_MARGIN_MM, objectsNear, prepareDoc
 import { BUNDLED_FONT_FILES, bundledPdfFaces, loadBundledFonts } from "../render/fonts.js";
 import { type BaseMapInfo, getBaseMapInfo } from "./map-source.js";
 import { type LayoutControlSource, type LayoutTemplateSource, centerOfControls, layoutControlsFromCourseControls, layoutCourseEnds, layoutCrossings } from "./resolve-layout.js";
-import { type ResolveSheetInput, type SheetInput, resolveSheet } from "./resolve-sheet.js";
+import { rowKind } from "../course-structure.js";
+import { type ResolveSheetInput, type SheetInput, allVariationNumbers, resolveSheet } from "./resolve-sheet.js";
 import { objectsInScope, type StoredCourseObject } from "../course-objects.js";
 
 type Db = PrismaClient | Prisma.TransactionClient;
@@ -293,7 +294,10 @@ export function allVariationsRow<R extends PrintMapRow>(row: R, keys: readonly s
  * The all-variations page's controls: every control any alternative
  * visits, once, in first-seen order — the root's own rows (label offsets)
  * where it has them, else the event's control — without the course's
- * start and finish.
+ * start and finish. When the variants number alike (F15; the page's
+ * `viewOptions.labels`, `allVariationNumbers`) each row carries its number
+ * and the rows are listed by it — two rows may share one, first-seen order
+ * within a number; unnumbered rows (unplaced) come last.
  */
 function allVariationControls(
   c: NonNullable<PrintMapRow["course"]>,
@@ -318,7 +322,16 @@ function allVariationControls(
     if (item.kind === "variation") for (const alt of item.alternatives) for (const x of alt.items) visit(x.siteId);
     else visit(item.siteId);
   }
-  return out;
+  const labels = course.hasVariations(parsed.data)
+    ? allVariationNumbers(parsed.data, (id) => {
+        const row = byId.get(id);
+        return row && { kind: rowKind({ kind: row.kind ?? "control", status: row.status ?? "" }), positioned: row.xpos !== 0 || row.ypos !== 0 };
+      })
+    : null;
+  if (!labels) return out;
+  const numbered = out.map((row) => ({ ...row, ...(labels[row.id] !== undefined ? { sequence: Number(labels[row.id]) } : {}) }));
+  // Array#sort is stable: first-seen order holds within a number.
+  return numbered.sort((a, b) => (a.sequence ?? Infinity) - (b.sequence ?? Infinity));
 }
 
 /**
@@ -389,7 +402,7 @@ export function sheetInputForMapRow(row: PrintMapRow, ctx: MapRowContext): Resol
           name: row.course.name,
           lengthM: row.course.lengthM,
           climbM: row.course.climbM,
-          // The all-variations block lists each control once, by code (no sequence: there is none).
+          // The all-variations block lists each control once, by code — or by the number the variants share (F15, `allVariationControls`).
           orderMode: all ? "free_order" : row.course.orderMode,
           start: ends?.start ?? null,
           finish: ends?.finish ?? null,
