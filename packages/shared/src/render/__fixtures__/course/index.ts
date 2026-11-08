@@ -178,9 +178,12 @@ function legStyles(): CourseScene {
 }
 
 /**
- * Corridors (F2, course-layer.md §10.2): S → 31 a 90 m corridor with a 3 mm band, 31 → 32 the same width bent
- * (one joined run) with its edge, 32 → 33 a 150 m corridor (a change of width at 32), 33 → F plain. The band
- * is a clip region: the 505, 101 and 516 are cut away in it, the course draws over it.
+ * Corridors (F2, F19; course-layer.md §10.2): S → 31 → 32 one narrow run, 60 m (4 mm, h 2 < R 2.5) with its edge and
+ * a 3 mm band, bent at (36, 10); 32 → 33 a 150 m corridor without edge (h 5 ≥ R: a change of width at 32); 33 → F
+ * plain. The 701 and every circle the corridors end at are mouths: the map shows inside them and the band wraps
+ * them. The edges end on the triangle and on 31's circle, which opens towards both legs; 32's circle stays whole
+ * (the wide corridor covers the narrow one's junctions there), as does 33's. The band is a clip region: the 505,
+ * 101 and 516 are cut away in it, the course draws over it.
  */
 function corridor(): CourseScene {
   const base = new BaseMap("ISOM2017-2")
@@ -189,12 +192,12 @@ function corridor(): CourseScene {
     .add("101", line(28, 0, 30, 40))
     .add("516", line(4, 24, 46, 36));
   const sites = [site("S", "start", 6, 6, "S1"), site("31", "control", 22, 8), site("32", "control", 40, 24), site("33", "control", 20, 32), site("F", "finish", 6, 30, "F1")];
-  const narrow = { widthM: 90, edge: false, whiteMm: 3, whiteOpacity: 1 };
+  const narrow = { widthM: 60, edge: true, whiteMm: 3, whiteOpacity: 1 };
   const structure = ordered([], {
     items: [
       { siteId: "S" },
       { siteId: "31", leg: { corridor: narrow } },
-      { siteId: "32", leg: { bends: [{ x: 36, y: 10 }], corridor: { ...narrow, edge: true } } },
+      { siteId: "32", leg: { bends: [{ x: 36, y: 10 }], corridor: narrow } },
       { siteId: "33", leg: { corridor: { widthM: 150, edge: false, whiteMm: 2, whiteOpacity: 0.5 } } },
       { siteId: "F" },
     ],
