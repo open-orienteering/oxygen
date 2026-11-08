@@ -256,6 +256,53 @@ describe("crossings and map-issue points (§10.3, F4)", () => {
   });
 });
 
+describe("sections (§11, F5)", () => {
+  // S → 31 → 32 → X (exchange) → 33 → F: numbers continue across the exchange (answer 2).
+  const X = site("X", "map_exchange", 60, 10, "X1");
+  const sites = [...SITES, X];
+  const structure = linear(["S", "31", "32", "X", "33", "F"]);
+  const part = (section?: number, over: Partial<CourseLayerInput> = {}) => derive({ sites, structure, viewOptions: section === undefined ? {} : { section }, ...over });
+  const labels = (d: ReturnType<typeof derive>) => Object.fromEntries(d.sites.filter((s) => s.label).map((s) => [s.id, s.label!.text]));
+
+  it("without a section the whole course draws, numbered through the exchange", () => {
+    const d = part();
+    expect(labels(d)).toEqual({ "31": "1", "32": "2", X: "3", "33": "4" });
+    expect(d.courses[0].section).toBeUndefined();
+    expect(d.courses[0].legs).toHaveLength(5);
+  });
+
+  it("part 1 draws the start up to the exchange, the exchange numbered", () => {
+    const d = part(0);
+    expect(d.courses[0].sequence.map((e) => e.siteId)).toEqual(["S", "31", "32", "X"]);
+    expect(d.sites.map((s) => s.id)).toEqual(["S", "31", "32", "X"]);
+    expect(labels(d)).toEqual({ "31": "1", "32": "2", X: "3" });
+    expect(d.courses[0].legs.map((l) => `${l.from}-${l.to}`)).toEqual(["S-31", "31-32", "32-X"]);
+    expect(d.courses[0].section).toEqual({ index: 0, count: 2 });
+  });
+
+  it("part 2 opens at the exchange with its own number and runs to the finish; no start", () => {
+    const d = part(1);
+    expect(d.sites.map((s) => s.id)).toEqual(["X", "33", "F"]);
+    expect(d.sites.find((s) => s.role === "start")).toBeUndefined();
+    expect(labels(d)).toEqual({ X: "3", "33": "4" });
+    expect(d.courses[0].legs.map((l) => `${l.from}-${l.to}`)).toEqual(["X-33", "33-F"]);
+    expect(d.courses[0].section).toEqual({ index: 1, count: 2 });
+  });
+
+  it("a control visited in both parts carries only its part's numbers", () => {
+    const d = derive({ sites, structure: linear(["S", "31", "X", "31", "F"]), viewOptions: { section: 1 } });
+    expect(labels(d)).toEqual({ X: "2", "31": "3" });
+  });
+
+  it("out of range, a one-part course or several structures: the whole course, unchanged", () => {
+    expect(part(2)).toEqual(part());
+    const plain = derive({ viewOptions: { section: 1 } });
+    expect(plain).toEqual(derive());
+    const several = derive({ sites, structure: [structure, linear(["S", "33", "F"])], viewOptions: { section: 1 } });
+    expect(several).toEqual(derive({ sites, structure: [structure, linear(["S", "33", "F"])] }));
+  });
+});
+
 describe("circles (§3.3)", () => {
   it("cut automatically at features on the rim, authored gaps replace them, start / finish never cut", () => {
     const features = [{ x: 42.5, y: 10 }, { x: 10, y: 12.5 }];

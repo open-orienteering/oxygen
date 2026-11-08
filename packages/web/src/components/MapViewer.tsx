@@ -64,7 +64,7 @@ import {
   pillHalfWidth,
 } from "../lib/course-leg-labels";
 import { useMediaQuery } from "../hooks/useMediaQuery";
-import { courseLayerRequest, PROVISIONAL_SITE_ID, sheetCrossings, type LayoutRequest, type ProvisionalVisit } from "../lib/course-layer-request";
+import { courseLayerRequest, PROVISIONAL_SITE_ID, sheetCrossings, sheetExchanges, type LayoutRequest, type ProvisionalVisit } from "../lib/course-layer-request";
 import { dragLegShapes } from "../lib/editor/leg-length";
 import { outlinePoints, vertexRule } from "../lib/editor/geometry-edit";
 import type { CourseInfo } from "../map-gl/engine";
@@ -86,6 +86,8 @@ export interface ControlOverlay {
   lng: number;
   /** How the site draws; crossing and map-issue points are never items (course-layer.md §10.3). */
   type: "Start" | "Control" | "Finish" | "Crossing" | "MapIssue";
+  /** A `Control` that is a map exchange (course-layer.md §11). */
+  exchange?: boolean;
   highlight?: boolean;
   visible?: boolean;
   punchCount?: number;
@@ -3033,6 +3035,7 @@ function renderDescriptionSheet(
       instructions: single.descriptionInstructions ?? null,
       finishLengthM,
       crossings: sheetCrossings(single, controlOverlays),
+      exchanges: sheetExchanges(single, controlOverlays),
     });
     sheetHeader = sheet.header;
     headerRows = 3;

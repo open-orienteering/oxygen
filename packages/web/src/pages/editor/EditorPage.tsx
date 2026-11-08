@@ -65,7 +65,7 @@ import { courseActions } from "./ActionBar";
 import { TopBar } from "./TopBar";
 import { ToolRail, type AreaChoice } from "./ToolRail";
 import { areaChoiceOfKey, isCorridorKey } from "./tools/rail";
-import { afterPlaced, afterUndo, armPlacement, endsChain, ghostInfo, switchTool, type PlacementState, type PlacementTool } from "./tools/placement";
+import { afterPlaced, afterUndo, armPlacement, endsChain, ghostInfo, isVisitTool, switchTool, type PlacementState, type PlacementTool } from "./tools/placement";
 import { step as polygonStep, type AreaKind } from "./tools/polygon";
 import { TONER_MARGIN_MM, tonerSaverGeometry } from "./tools/toner-saver";
 import { mergeCircleGaps, mergeLegGaps, type AngularGap, type FractionGap } from "./tools/gaps";
@@ -162,7 +162,7 @@ export function EditorPage() {
   useEffect(() => { if (detail.data) writes.versions.seed("course", detail.data.id, detail.data.version); }, [detail.data, writes]);
 
   const sites: SiteRow[] = useMemo(
-    () => (controlCoords.data ?? []).map((c) => ({ id: c.id, code: c.code, status: c.status, mapX: c.mapX, mapY: c.mapY })),
+    () => (controlCoords.data ?? []).map((c) => ({ id: c.id, code: c.code, status: c.status, mapX: c.mapX, mapY: c.mapY, kind: c.kind })),
     [controlCoords.data],
   );
   const kindOf = useMemo(() => kindOfSites(sites), [sites]);
@@ -457,10 +457,11 @@ export function EditorPage() {
    * Create a site at `pt` — a control (code from the club allocation; SRR codes get radio) or a code-less
    * start / finish — and, with a course, write `edit(base, id)` into its structure: one undo entry (§4, §6.1).
    */
-  const createSite = useCallback(async (pt: Pt, kind: "control" | "start" | "finish" | "crossing_point" | "map_issue", edit: ((s: Structure, id: number) => Structure) | null): Promise<number | null> => {
+  const createSite = useCallback(async (pt: Pt, kind: "control" | "start" | "finish" | "crossing_point" | "map_issue" | "map_exchange", edit: ((s: Structure, id: number) => Structure) | null): Promise<number | null> => {
     let code: number | null = null;
     let srr = false;
-    if (kind === "control") {
+    // A map exchange takes a code like a control (§6.9).
+    if (kind === "control" || kind === "map_exchange") {
       if (!controlList.data) return null;
       const allocation = seriesAllocation.data ?? [];
       const used = [...controlList.data.map((c) => c.codes), ...[...created.current.values()].flatMap((c) => (c.code !== null ? [String(c.code)] : []))];
@@ -472,8 +473,8 @@ export function EditorPage() {
       code = next.code;
       srr = next.entry?.type === "srr";
     }
-    const made = await run(() => (kind === "control"
-      ? client.control.create.mutate({ codes: String(code), status: 0, xpos: pt.x, ypos: pt.y, autoDescribe: true })
+    const made = await run(() => (kind === "control" || kind === "map_exchange"
+      ? client.control.create.mutate({ codes: String(code), status: 0, xpos: pt.x, ypos: pt.y, autoDescribe: true, ...(kind === "map_exchange" ? { kind } : {}) })
       : kind === "start" || kind === "finish"
         ? client.control.create.mutate({ status: kind === "start" ? 4 : 5, xpos: pt.x, ypos: pt.y })
         // Code-less, named "Passeringspunkt N" / "Kartutdelning N" by the server (course-layer.md §6.3).
@@ -911,9 +912,12 @@ export function EditorPage() {
         } else {
           id = await createSite(pt, "crossing_point", route);
         }
-      } else if (chain.tool === "control") {
+      } else if (isVisitTool(chain.tool)) {
+        // `K` reuses a control (an exchange too: it is one), `X` only an exchange (§6.9).
+        const exchange = chain.tool === "exchange";
         if (targetId !== null) {
           if (targetKind !== "control" || latest.current.isMark(targetId)) return;
+          if (exchange && latest.current.siteKindOf(targetId) !== "map_exchange") return;
           // Reuse the site: into the course at the insertion point, no new site.
           if (chain.insertAt === null) { dispatch({ type: "select", id: targetId }); return; }
           const at = chain.insertAt;
@@ -921,7 +925,7 @@ export function EditorPage() {
           id = targetId;
         } else {
           const at = chain.insertAt;
-          id = await createSite(pt, "control", at !== null ? (s, newId) => insertSite(s, at, newId, kindOfL) : null);
+          id = await createSite(pt, exchange ? "map_exchange" : "control", at !== null ? (s, newId) => insertSite(s, at, newId, kindOfL) : null);
         }
       } else {
         const role = chain.tool;
@@ -1018,7 +1022,7 @@ export function EditorPage() {
   const [ghostAsk, setGhostAsk] = useState<Pt | null>(null);
   const placing = state.tool.kind === "place" ? state.tool.chain : null;
   useEffect(() => {
-    if (!placing || placing.tool !== "control" || !hover || hover.target) { setGhostAsk(null); return; }
+    if (!placing || !isVisitTool(placing.tool) || !hover || hover.target) { setGhostAsk(null); return; }
     const h = setTimeout(() => setGhostAsk({ x: Math.round(hover.pt.x * 10) / 10, y: Math.round(hover.pt.y * 10) / 10 }), 150);
     return () => clearTimeout(h);
   }, [placing, hover]);
@@ -1053,7 +1057,11 @@ export function EditorPage() {
     if (!placing || !hover) return null;
     const reuseId = hover.target?.kind === "site" ? Number(hover.target.id) : null;
     const crossing = placing.tool === "crossing";
-    const reusable = (id: number) => (crossing ? siteKindOf(id) === "crossing_point" : !isMark(id) && kindOfLatest(id) === (placing.tool === "control" ? "control" : placing.tool));
+    const reusable = (id: number) => (crossing
+      ? siteKindOf(id) === "crossing_point"
+      : placing.tool === "exchange"
+        ? siteKindOf(id) === "map_exchange"
+        : !isMark(id) && kindOfLatest(id) === placing.tool);
     const reuse = reuseId !== null && reusable(reuseId) ? reuseId : null;
     const at = reuse !== null ? ptOf(reuse) ?? hover.pt : hover.pt;
     const info = ghostInfo(placing, rows, at, ptOf);
@@ -1061,7 +1069,7 @@ export function EditorPage() {
     const code = reuse !== null ? coordsById.get(reuse)?.code ?? String(reuse) : null;
     const label = reuse !== null
       ? t("ghostReuse", { code })
-      : placing.tool === "control"
+      : isVisitTool(placing.tool)
         ? [info.number !== null ? String(info.number) : null, nextCode !== null ? String(nextCode) : null].filter(Boolean).join(" · ")
         : t(placing.tool === "start" ? "kindStart" : placing.tool === "crossing" ? "kind_crossing_point" : "kindFinish");
     const legLabel = info.legs[0] ? legLengthLabel(info.legs[0][0], info.legs[0][1], mapScale) : null;
@@ -1079,7 +1087,7 @@ export function EditorPage() {
         }
       }
     }
-    const role = crossing ? "crossing_point" as const : placing.tool as "start" | "control" | "finish";
+    const role = crossing ? "crossing_point" as const : isVisitTool(placing.tool) ? "control" as const : placing.tool as "start" | "finish";
     return { at, radiusMm, role, angleDeg, label, description: reuse === null && !crossing ? ghostDescription : null, legs: info.legs, legMm: info.legMm, legLabel, reuse };
   }, [placing, hover, kindOfLatest, siteKindOf, isMark, ptOf, rows, explicitItems, courseInfo, coordsById, t, nextCode, ghostDescription, mapScale]);
 
@@ -1090,7 +1098,7 @@ export function EditorPage() {
     // A crossing point is no visit (§6.8): the layer draws nothing provisional for it.
     if (!placing || placing.tool === "crossing" || placing.insertAt === null || ghostX === undefined || ghostY === undefined) return null;
     return {
-      role: placing.tool, insertAt: placing.insertAt, pt: { x: ghostX, y: ghostY },
+      role: placing.tool === "exchange" ? "map_exchange" : placing.tool, insertAt: placing.insertAt, pt: { x: ghostX, y: ghostY },
       ...(ghostReuse !== null ? { reuseId: String(ghostReuse) } : { code: nextCode !== null ? String(nextCode) : "" }),
     };
   }, [placing, ghostX, ghostY, ghostReuse, nextCode]);
@@ -1448,6 +1456,9 @@ export function EditorPage() {
       } else if (plain && key === "C") {
         // The crossing point (§6.8); with the `A` menu open, `C` was its corridor entry (above).
         armPlace("crossing");
+      } else if (plain && key === "X") {
+        // The map exchange (§6.9): a control in the chain.
+        armPlace("exchange");
       } else if (plain && key === "A") {
         setAreaOpen((v) => !v);
       } else if (plain && key === "T") {
@@ -1911,6 +1922,7 @@ export function EditorPage() {
           if (key === "V") exitTool();
           else if (key === "S" || key === "K" || key === "M") armPlace(key === "S" ? "start" : key === "M" ? "finish" : "control");
           else if (key === "C") armPlace("crossing");
+          else if (key === "X") armPlace("exchange");
           else if (key === "T") setTool({ kind: "text" });
           else if (key === "G") setTool({ kind: "gap", legInsertAt: state.selectedControlId === null ? state.phantom?.insertAt ?? null : null });
         }}

@@ -16,7 +16,7 @@ import type { DocumentColour } from "../../../map-document/header.js";
 import { courseLayer, courseRenderInput } from "../../../course/layer.js";
 import type { CourseDocumentContext, CourseLayer, CourseLayerInput, CourseSite, CourseStructure } from "../../../course/types.js";
 
-export const courseSceneNames = ["course-legs", "course-cuts", "course-objects", "course-sprint", "course-all-controls", "course-leg-styles", "course-corridor"] as const;
+export const courseSceneNames = ["course-legs", "course-cuts", "course-objects", "course-sprint", "course-all-controls", "course-leg-styles", "course-corridor", "course-exchange"] as const;
 export type CourseSceneName = (typeof courseSceneNames)[number];
 
 export interface CourseScene {
@@ -199,6 +199,18 @@ function corridor(): CourseScene {
   return scene("course-corridor", base, { structure, sites, objects: [], appearance: {}, viewOptions: {} });
 }
 
+/**
+ * Map exchange (F5, course-layer.md §11): S → 31 → 32 (exchange) → 33 → F drawn as part 2 alone — the
+ * exchange a numbered circle ("2"), no start triangle, legs 32 → 33 → F, 33 numbered "3" (numbering continues).
+ */
+function exchange(): CourseScene {
+  const base = new BaseMap("ISOM2017-2")
+    .add("401", area(0, 0, 50, 0, 50, 36, 0, 36))
+    .add("505", line(0, 18, 50, 22));
+  const sites = [site("S", "start", 6, 6, "S1"), site("31", "control", 22, 8), site("32", "map_exchange", 40, 12, "32"), site("33", "control", 30, 30), site("F", "finish", 8, 28, "F1")];
+  return scene("course-exchange", base, { structure: ordered(["S", "31", "32", "33", "F"]), sites, objects: [], appearance: {}, viewOptions: { section: 1 } });
+}
+
 const builders: Record<CourseSceneName, () => CourseScene> = {
   "course-legs": legs,
   "course-cuts": cuts,
@@ -207,6 +219,7 @@ const builders: Record<CourseSceneName, () => CourseScene> = {
   "course-all-controls": allControls,
   "course-leg-styles": legStyles,
   "course-corridor": corridor,
+  "course-exchange": exchange,
 };
 
 export function courseScene(name: CourseSceneName): CourseScene {

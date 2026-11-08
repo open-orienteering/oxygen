@@ -104,6 +104,57 @@ describe("CONTROL_OUTSIDE_SHEET", () => {
   });
 });
 
+describe("map exchange parts (§11, F5)", () => {
+  // S1 → 31 → 32 (exchange) → 33 → F1: part 1 S1…32, part 2 32…F1.
+  const sites = SITES.map((s) => (s.id === "32" ? { ...s, kind: "map_exchange" } : s));
+  const part1 = { minX: -5, minY: -5, width: 28, height: 10, section: 0 };
+  const part2 = { minX: 15, minY: -5, width: 25, height: 10, section: 1 };
+  const exchangeRun = (over: Partial<CourseChecksInput> = {}) => run({ sites, ...over });
+
+  it("EXCHANGE_WITHOUT_SHEET for a part with no sheet, at its exchange, after CONTROL_OUTSIDE_SHEET", () => {
+    const found = exchangeRun({ sheets: [part1] });
+    const missing = found.filter((c) => c.code === "EXCHANGE_WITHOUT_SHEET");
+    expect(missing).toEqual([{ code: "EXCHANGE_WITHOUT_SHEET", siteIds: ["32"], at: { x: 20, y: 0 }, params: { part: 2, code: "32" } }]);
+    // Part 2's controls lie outside part 1's window only.
+    expect(found.filter((c) => c.code === "CONTROL_OUTSIDE_SHEET").map((c) => c.siteIds[0])).toEqual(["33", "F1"]);
+    expect(found.map((c) => c.code).indexOf("EXCHANGE_WITHOUT_SHEET")).toBeGreaterThan(found.map((c) => c.code).lastIndexOf("CONTROL_OUTSIDE_SHEET"));
+    expect(exchangeRun({ sheets: [part2] }).filter((c) => c.code === "EXCHANGE_WITHOUT_SHEET").map((c) => c.params)).toEqual([{ part: 1, code: "32" }]);
+  });
+
+  it("nothing when every part has a sheet, without sheets, or on a one-part course", () => {
+    expect(exchangeRun({ sheets: [part1, part2] })).toEqual([]);
+    expect(exchangeRun({ sheets: null })).toEqual([]);
+    expect(exchangeRun({ sheets: [] })).toEqual([]);
+    expect(codes({ sheets: [part1] })).not.toContain("EXCHANGE_WITHOUT_SHEET");
+  });
+
+  it("CONTROL_OUTSIDE_SHEET is per part: a control only inside another part's window is outside", () => {
+    // 31 (x 10) lies only in a widened part-2 window; part 1's window misses it.
+    const narrow1 = { ...part1, minX: 18, width: 5 };
+    const wide2 = { ...part2, minX: 5, width: 35 };
+    const found = exchangeRun({ sheets: [{ ...narrow1, minX: -5, width: 8 }, { ...narrow1 }, wide2] }).filter((c) => c.code === "CONTROL_OUTSIDE_SHEET");
+    expect(found.map((c) => c.siteIds[0])).toEqual(["31"]);
+  });
+
+  it("a window without a section stands for every part", () => {
+    const whole = { minX: -5, minY: -5, width: 45, height: 10 };
+    expect(exchangeRun({ sheets: [whole] })).toEqual([]);
+  });
+
+  it("the exchange is a control for numbers and descriptions", () => {
+    const noDesc = sites.map((s) => (s.id === "32" ? { ...s, description: null } : s));
+    expect(exchangeRun({ sites: noDesc }).map((c) => [c.code, c.siteIds[0]])).toEqual([["DESCRIPTION_MISSING", "32"]]);
+  });
+
+  it("NUMBER_* read the derived part only", () => {
+    const derivation: CourseDerivation = {
+      sites: [{ id: "32", code: "32", role: "control", x: 1, y: 1, cuts: [], label: { text: "2", x: 2, y: 2 } }, { id: "33", code: "33", role: "control", x: 1, y: 1, cuts: [], label: { text: "3", x: 2, y: 2 } }],
+      courses: [{ id: "c", orderMode: "ordered", sequence: [{ siteId: "32", role: "control" }, { siteId: "33", role: "control" }, { siteId: "F1", role: "finish" }], legs: [], section: { index: 1, count: 2 } }],
+    };
+    expect(exchangeRun({ derivation }).filter((c) => c.code.startsWith("NUMBER_"))).toEqual([]);
+  });
+});
+
 describe("numbers", () => {
   const derivation = (labels: Record<string, { collides?: true } | null>): CourseDerivation => ({
     sites: Object.entries(labels).map(([id, l]) => ({ id, code: id, role: "control", x: 1, y: 1, cuts: [], ...(l ? { label: { text: id, x: 2, y: 2, ...l } } : {}) })),
@@ -206,7 +257,7 @@ describe("output", () => {
     const a = run({ sites });
     expect(a.map((c) => c.code)).toEqual(["CONTROL_TOO_CLOSE", "CODE_BELOW_31", "CODE_DUPLICATE", "DESCRIPTION_MISSING"]);
     expect(run({ sites })).toEqual(a);
-    expect(COURSE_CHECK_CODES).toHaveLength(12);
+    expect(COURSE_CHECK_CODES).toHaveLength(13);
   });
 });
 

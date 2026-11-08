@@ -118,18 +118,37 @@ export interface BuildDescriptionSheetInput {
    * keeps its length; other hand-placed rows stay.
    */
   crossings?: ReadonlyArray<{ afterControlId: number | null; section: boolean }>;
+  /**
+   * The course's map exchanges (course-layer.md §11), each the public id
+   * of the exchange control. They derive a 13.5 row after it, as the
+   * crossings do (in place of a hand-placed 13.5 at the same anchor).
+   */
+  exchanges?: ReadonlyArray<{ afterControlId: number }>;
 }
 
 type Special = NonNullable<CourseDescriptionInstructions["specials"]>[number];
 
-/** The stored specials with the derived crossing rows merged in (in place of a same-kind row at the anchor, else after the anchor's rows). */
-export function mergeDerivedSpecials(stored: readonly Special[], crossings: BuildDescriptionSheetInput["crossings"] = []): Special[] {
+/**
+ * The stored specials with the derived rows merged in (in place of a
+ * same-kind row at the anchor, else after the anchor's rows): the map
+ * exchanges' 13.5 first, then the crossings' 13.3 / 13.4 (the leg that
+ * leaves the anchor comes after the exchange at it).
+ */
+export function mergeDerivedSpecials(
+  stored: readonly Special[],
+  crossings: BuildDescriptionSheetInput["crossings"] = [],
+  exchanges: BuildDescriptionSheetInput["exchanges"] = [],
+): Special[] {
   const out: Special[] = stored.map((s) => ({ ...s }));
   const derived = new Set<Special>();
   // A row per anchor and kind: the sheet repeats an anchor's rows at every visit of its control.
   const seen = new Set<string>();
-  for (const c of crossings) {
-    const kind = c.section ? "13.4" : "13.3";
+  const rows = [
+    ...exchanges.map((e) => ({ afterControlId: e.afterControlId as number | null, kind: "13.5" })),
+    ...crossings.map((c) => ({ afterControlId: c.afterControlId, kind: c.section ? "13.4" : "13.3" })),
+  ];
+  for (const c of rows) {
+    const kind = c.kind;
     if (seen.has(`${c.afterControlId}:${kind}`)) continue;
     seen.add(`${c.afterControlId}:${kind}`);
     const same = out.findIndex((s) => !derived.has(s) && s.kind === kind && (s.afterControlId ?? null) === c.afterControlId);
@@ -205,7 +224,7 @@ export function buildDescriptionSheet(
   };
 
   const rows: DescriptionSheetRow[] = [];
-  const specials = mergeDerivedSpecials(input.instructions?.specials ?? [], input.crossings);
+  const specials = mergeDerivedSpecials(input.instructions?.specials ?? [], input.crossings, input.exchanges);
 
   const afterStart = specials.filter((s) => s.afterControlId == null);
   rows.push({

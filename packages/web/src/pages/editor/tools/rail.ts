@@ -2,7 +2,7 @@
 
 import type { EditorTool } from "../../../lib/editor/state";
 
-export type RailTool = "V" | "S" | "K" | "M" | "C" | "A" | "T" | "G";
+export type RailTool = "V" | "S" | "K" | "M" | "X" | "C" | "A" | "T" | "G";
 export type AreaChoice = "oob_area" | "oob_line" | "whiteout" | "filter_region" | "toner_saver" | "marked_route";
 export const AREA_CHOICES: AreaChoice[] = ["oob_area", "oob_line", "whiteout", "filter_region", "toner_saver", "marked_route"];
 
@@ -31,7 +31,7 @@ export function areaChoiceOfKey(key: string): AreaChoice | null {
 export function railKeyOf(tool: EditorTool): RailTool | null {
   switch (tool.kind) {
     case "select": return "V";
-    case "place": return tool.chain.tool === "start" ? "S" : tool.chain.tool === "finish" ? "M" : tool.chain.tool === "crossing" ? "C" : "K";
+    case "place": return { start: "S", control: "K", finish: "M", crossing: "C", exchange: "X" }[tool.chain.tool] as RailTool;
     case "area": return "A";
     case "text": return "T";
     case "gap": return "G";

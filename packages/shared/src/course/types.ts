@@ -143,6 +143,13 @@ export interface CourseViewOptions {
    * setter sheets set it; a course sheet never does.
    */
   setterMarks?: boolean;
+  /**
+   * One part of a course split by map exchanges (§11; 08 §4.6 "section
+   * index"): draw only that part's sites, legs and numbers. Numbers stay
+   * the whole course's (answer 2). Read for a single structure with ≥ 2
+   * parts; out of range, or a one-part course, draws the whole course.
+   */
+  section?: number;
 }
 
 /** One compact point feature the overprint is cut around, paper mm. */
@@ -265,6 +272,8 @@ export interface DerivedCourse {
   /** Positioned items in order: site id + role. */
   sequence: { siteId: string; role: CourseItemRole }[];
   legs: DerivedLeg[];
+  /** Set when `viewOptions.section` drew one part (§11): that part and the course's part count. */
+  section?: { index: number; count: number };
 }
 
 /** The geometry the course-setting rules produce, before symbols (§3). */

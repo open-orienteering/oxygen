@@ -166,6 +166,8 @@ export function resolveSheet(input: ResolveSheetInput): ResolvedSheet {
         labelMode: layout.labelMode,
         overprintScale: layout.overprintScale,
         ...(input.autoCuts === false ? { autoCuts: false } : {}),
+        // §11: a part sheet draws its part; numbers and the block stay the whole course's.
+        ...(layout.section !== undefined ? { section: layout.section } : {}),
       },
       ...(input.courseObjects?.length ? { objects: input.courseObjects } : {}),
     },

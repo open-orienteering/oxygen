@@ -180,4 +180,15 @@ describe("course scenes", () => {
     const fill = stream.passes.findIndex((_, k) => stream.objectIdx[k] === 0);
     expect(Math.min(...edge.map((x) => x.k))).toBeGreaterThan(fill);
   });
+  it("course-exchange: part 2 alone — the exchange numbered as a control, numbering continued, no start", () => {
+    const { scene, stream } = run("course-exchange");
+    const d = scene.layer.derivation;
+    expect(d.sites.map((s) => `${s.id}:${s.role}`)).toEqual(["32:control", "33:control", "F:finish"]);
+    expect(d.sites.filter((s) => s.label).map((s) => s.label!.text)).toEqual(["2", "3"]);
+    expect(d.courses[0].section).toEqual({ index: 1, count: 2 });
+    const refs = new Set(coursePasses(scene, stream).map((x) => x.ref));
+    expect(refs.has("site:32")).toBe(true);
+    expect(refs.has("site:S")).toBe(false);
+    expect(refs.has("site:31")).toBe(false);
+  });
 });

@@ -1,6 +1,6 @@
 import { describe, it, expect } from "vitest";
 import type { course } from "@oxygen/shared";
-import { displaySequence, explicitStructure, insertIndexForLeg, legForInsert, type SiteRow } from "../sequence";
+import { displaySequence, explicitStructure, insertIndexForLeg, legForInsert, partHeadings, type SiteRow } from "../sequence";
 
 const site = (id: number, status: number, x = id, y = id, code = String(id)): SiteRow => ({ id, code, status, mapX: x, mapY: y });
 // Two starts (1 the default: lowest id), one finish.
@@ -47,5 +47,19 @@ describe("display sequence and explicit structure (docs/course-editor.md §4)", 
     expect(legForInsert(rows, 3)?.itemIndex).toBe(4);
     // A leg into the unpositioned control has no point to run to.
     expect(legForInsert(rows, 1)).toBeNull();
+  });
+});
+
+describe("part headings (docs/course-editor.md §6.9)", () => {
+  const sites = [...SITES, { ...site(40, 0), kind: "map_exchange" }];
+
+  it("marks the exchange row; part 1 before the first row, part 2 after the exchange", () => {
+    const rows = displaySequence(st(31, 40, 32), sites);
+    expect(rows.map((r) => !!r.exchange)).toEqual([false, false, true, false, false]);
+    expect([...partHeadings(rows)]).toEqual([[0, 1], [3, 2]]);
+  });
+
+  it("is empty without an exchange", () => {
+    expect(partHeadings(displaySequence(st(31, 32), SITES)).size).toBe(0);
   });
 });

@@ -8,7 +8,7 @@
 import { useState } from "react";
 import { useTranslation } from "react-i18next";
 import { iofSymbolName, type ControlKind } from "@oxygen/shared";
-import type { DisplayRow } from "../../../lib/editor/sequence";
+import { partHeadings, type DisplayRow } from "../../../lib/editor/sequence";
 import { FINISH_OPTIONS, SPECIAL_OPTIONS } from "../../../lib/control-description-options";
 import {
   addSpecial,
@@ -51,6 +51,8 @@ export function CourseSection(p: CourseSectionProps) {
   const [dragFrom, setDragFrom] = useState<number | null>(null);
   const ordered = p.course?.orderMode !== "free_order";
   const controls = p.rows.filter((r) => r.kind === "control").length;
+  // §6.9: a course split by map exchanges lists its parts.
+  const parts = partHeadings(p.rows);
 
   const create = () => {
     const name = newName.trim();
@@ -93,11 +95,20 @@ export function CourseSection(p: CourseSectionProps) {
               const legM = p.legMeters[i];
               const isControl = row.kind === "control";
               const selected = row.id === p.selectedControlId;
-              return (
+              const part = parts.get(i);
+              return [
+                part !== undefined && (
+                  <li key={`part-${part}`} data-testid="editor-seq-part" data-part={part}
+                    title={part > 1 ? te("seqPartHint", { part: part - 1 }) : undefined}
+                    className="px-2.5 pt-1.5 pb-0.5 text-[10px] font-semibold uppercase tracking-wide text-purple-700">
+                    {te("seqPart", { part })}
+                  </li>
+                ),
                 <li
                   key={`${row.kind}-${row.id}-${i}`}
                   data-testid="editor-seq-row"
                   data-kind={row.kind}
+                  data-exchange={row.exchange ? "true" : undefined}
                   data-control-id={row.id}
                   draggable={isControl && ordered}
                   title={isControl && ordered ? te("dragToReorder") : undefined}
@@ -156,8 +167,8 @@ export function CourseSection(p: CourseSectionProps) {
                         onClick={() => p.onRemove(row.seqIndex)} className="px-0.5 text-red-500 cursor-pointer">✕</button>
                     </span>
                   )}
-                </li>
-              );
+                </li>,
+              ];
             })}
           </ol>
           <div className="px-2.5 py-1 border-t border-slate-100 text-slate-500 flex gap-2" data-testid="editor-course-total">

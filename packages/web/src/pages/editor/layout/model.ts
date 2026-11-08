@@ -132,7 +132,8 @@ export function withEditable(s: EditorSheet, snap: LayoutSnapshot, objects: Cour
 /**
  * The sheet as the course layer and the page part draw it (the composer's
  * input, `resolveSheet`): layout objects of both scopes, the scale's text
- * value and overprint, the block where the snapshot puts it.
+ * value and overprint, the block where the snapshot puts it, and a course
+ * sheet's part (`section_index`, course-layer.md §11).
  */
 export function layoutRequestOf(s: EditorSheet, snap: LayoutSnapshot, g: SheetGeometry): LayoutRequest {
   const d = snap.description;
@@ -147,6 +148,7 @@ export function layoutRequestOf(s: EditorSheet, snap: LayoutSnapshot, g: SheetGe
     },
     appearance: course.appearanceFromTemplate(snap.settings.appearance),
     overprintScale: (s.mapScale ?? snap.printScale) / snap.printScale,
+    ...(s.sheet?.kind === "course" && s.sheet.sectionIndex !== undefined ? { section: s.sheet.sectionIndex } : {}),
   };
 }
 

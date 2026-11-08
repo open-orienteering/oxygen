@@ -6,6 +6,7 @@ import {
   courseStructureWireSchema,
   hasVariations,
   linearStructure,
+  sectionsOf,
   structureControlIds,
   structureDiff,
   structureSiteIssues,
@@ -192,5 +193,40 @@ describe("structureDiff (the CONFLICT payload's `differing`, course-layer.md §7
 
   it("treats a null side as empty", () => {
     expect(structureDiff(null, linear(["S", "F"]))).toEqual(["F", "S"]);
+  });
+});
+
+describe("sectionsOf (F5, course-layer.md §11)", () => {
+  const parts = (kinds: string[]) => sectionsOf(kinds, (k) => k === "X");
+
+  it("is one part without an exchange", () => {
+    expect(parts(["S", "c", "c", "F"])).toEqual([{ index: 0, from: 0, to: 3 }]);
+    expect(parts([])).toEqual([{ index: 0, from: 0, to: -1 }]);
+  });
+
+  it("splits at an exchange that ends one part and opens the next", () => {
+    expect(parts(["S", "c", "X", "c", "F"])).toEqual([
+      { index: 0, from: 0, to: 2 },
+      { index: 1, from: 2, to: 4 },
+    ]);
+  });
+
+  it("gives two adjacent exchanges a part of their two circles", () => {
+    expect(parts(["S", "X", "X", "F"])).toEqual([
+      { index: 0, from: 0, to: 1 },
+      { index: 1, from: 1, to: 2 },
+      { index: 2, from: 2, to: 3 },
+    ]);
+  });
+
+  it("allows an exchange first or last", () => {
+    expect(parts(["X", "c"])).toEqual([
+      { index: 0, from: 0, to: 0 },
+      { index: 1, from: 0, to: 1 },
+    ]);
+    expect(parts(["c", "X"])).toEqual([
+      { index: 0, from: 0, to: 1 },
+      { index: 1, from: 1, to: 1 },
+    ]);
   });
 });

@@ -78,6 +78,14 @@ describe("Layout model (docs/course-layout.md §2)", () => {
     expect(r.appearance).toEqual({ circle: 1, line: 1, number: 1 });
   });
 
+  it("a course sheet's part reaches the layer request (course-layer.md §11, F5); a template has none", () => {
+    const s = sheet();
+    const part = { ...s, sheet: { ...s.sheet!, sectionIndex: 1 } };
+    expect(layoutRequestOf(part, snapshotOf(part), geometryOf(part, snapshotOf(part))).section).toBe(1);
+    const tpl = sheet("template");
+    expect(layoutRequestOf(tpl, snapshotOf(tpl), geometryOf(tpl, snapshotOf(tpl))).section).toBeUndefined();
+  });
+
   it("the white-out-outside fill mode stays in the inspector although the O tool is gone (D14)", () => {
     expect(FILL_MODES).toContain("whiteoutInverted");
   });

@@ -19,6 +19,8 @@ export interface SiteRow {
   status: number;
   mapX: number;
   mapY: number;
+  /** `controls.kind` (course-layer.md §6.3); absent reads as the status's. */
+  kind?: string;
 }
 
 export interface DisplayRow {
@@ -29,6 +31,8 @@ export interface DisplayRow {
   pt: Pt | null;
   /** Control-sequence position (control rows); −1 for start / finish. */
   seqIndex: number;
+  /** A control row whose site is a map exchange (§6.9): it ends one part and opens the next. */
+  exchange?: boolean;
 }
 
 export const kindOfSites = (sites: readonly SiteRow[]): KindOf => {
@@ -57,13 +61,33 @@ export function displaySequence(s: Structure, sites: readonly SiteRow[]): Displa
   const { start, finish } = effectiveEnds(s, sites);
   const row = (kind: DisplayRow["kind"], id: number, seqIndex: number): DisplayRow => {
     const site = byId.get(id);
-    return { kind, id, code: site?.code ?? String(id), pt: pointOf(site), seqIndex };
+    const out: DisplayRow = { kind, id, code: site?.code ?? String(id), pt: pointOf(site), seqIndex };
+    if (kind === "control" && site?.kind === "map_exchange") out.exchange = true;
+    return out;
   };
   const rows: DisplayRow[] = [];
   if (start != null && byId.has(start)) rows.push(row("start", start, -1));
   controlSequence(s, kindOf).forEach((id, i) => rows.push(row("control", id, i)));
   if (finish != null && byId.has(finish)) rows.push(row("finish", finish, -1));
   return rows;
+}
+
+/**
+ * The sequence's part headings (docs/course-editor.md §6.9; course-layer.md
+ * §11): by row index, the part number (1-based) whose heading goes before
+ * that row — part 1 before the first row, part n + 1 after the n-th
+ * exchange row (the exchange ends one part and opens the next). Empty when
+ * the course has no exchange.
+ */
+export function partHeadings(rows: readonly DisplayRow[]): Map<number, number> {
+  const out = new Map<number, number>();
+  if (!rows.some((r) => r.exchange)) return out;
+  out.set(0, 1);
+  let part = 1;
+  rows.forEach((r, i) => {
+    if (r.exchange) out.set(i + 1, ++part);
+  });
+  return out;
 }
 
 /**

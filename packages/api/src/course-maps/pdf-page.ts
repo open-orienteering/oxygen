@@ -172,6 +172,8 @@ export async function renderCoursePages(opts: CoursePagesOptions): Promise<Cours
 export interface PrintMapRow {
   name: string;
   kind: string;
+  /** `course_maps.section_index`: the part of a course split by map exchanges (course-layer.md §11); absent = 0. */
+  sectionIndex?: number;
   overrides: unknown;
   objects: unknown;
   windowCenter: unknown;
@@ -276,6 +278,7 @@ export function sheetInputForMapRow(row: PrintMapRow, ctx: MapRowContext): Resol
     meridianTiltDeg: ctx.mapInfo.meridianTiltDeg,
     event: ctx.event,
     mapName: row.name,
+    ...(row.kind === "course" ? { section: row.sectionIndex ?? 0 } : {}),
     structure: row.course?.structure ?? null,
     ...(row.course?.id !== undefined ? { courseId: String(row.course.id) } : {}),
     courseObjects: inScope.map(({ id: _uuid, scope: _scope, z: _z, version: _v, seq, ...body }) => ({ ...body, id: seq }) as course.CourseLayerObject),

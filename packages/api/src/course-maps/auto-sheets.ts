@@ -11,9 +11,10 @@
  * - `ensureAutoTemplate` returns the auto template of a key, creating it
  *   named after the key the first time a course or class needs it.
  * - `autoSheets` gives a course its first sheet (the auto template of the
- *   key that fits the course) and every overriding class of the course its
- *   class sheets (`course_maps.class_id`); `ensureAllControlsSheet` gives
- *   the event its all-controls sheet the same way.
+ *   key that fits the course), one own sheet per part of a course split by
+ *   map exchanges (`section_index`, F5), and every overriding class of the
+ *   course its class sheets (`course_maps.class_id`); `ensureAllControlsSheet`
+ *   gives the event its all-controls sheet the same way.
  */
 
 import { TRPCError } from "@trpc/server";
@@ -188,6 +189,15 @@ async function fittedAutoTemplate(db: Db, eventId: bigint, controls: Array<{ xpo
   return ensureAutoTemplate(db, eventId, { ...preferred, orientation }, busiest);
 }
 
+/**
+ * The parts of a course split by map exchanges (course-layer.md §11): its
+ * placed exchange visits plus one. Unplaced sites (0, 0) are not drawn, so
+ * they split nothing — as `deriveCourse`.
+ */
+export function partCountOf(controls: ReadonlyArray<{ xpos: number; ypos: number; kind: string }>): number {
+  return 1 + controls.filter((c) => c.kind === "map_exchange" && (c.xpos !== 0 || c.ypos !== 0)).length;
+}
+
 export interface AutoSheetsResult {
   /** Public ids of the sheets created. */
   createdSheets: number[];
@@ -209,12 +219,19 @@ export interface AutoSheetsResult {
  *    event's busiest template's paper, orientation and scale — A4 portrait
  *    at the map's scale without one — turned when the course only fits the
  *    other way), its window centred on the course. A sheet without a
- *    template gets that template too.
+ *    template gets that template too. A course split by map exchanges
+ *    (course-layer.md §11) has one own sheet per part: a part without a
+ *    sheet of its `section_index` gets one on the course's template, named
+ *    `<course> · part n` (part 1 the course's name), its window centre NULL
+ *    (centred on the part's controls), after the course's other sheets. A
+ *    sheet of a part that no longer exists is kept (it prints the whole
+ *    course); a deleted part sheet comes back on the next call.
  * 2. Every class of the course with `print_scale` or `sheet_template_id`:
  *    its template is `sheet_template_id`, else the auto template of the
  *    course template's paper and orientation at the class's scale (created
  *    from it). Without class sheets, one per course sheet is created
- *    (window centre, objects and block copied); existing ones are
+ *    (window centre, objects and block copied); with some, one per course
+ *    sheet of a part the class has no sheet of; existing ones are
  *    re-pointed at the template. A class sheet whose class no longer
  *    overrides, or runs another course, is deleted.
  *
@@ -224,7 +241,7 @@ export async function autoSheets(db: Db, eventId: bigint, courseUuid: string): P
   const course = await db.course.findFirst({
     where: { id: courseUuid, eventId, removed: false },
     include: {
-      courseControls: { include: { control: { select: { xpos: true, ypos: true } } } },
+      courseControls: { include: { control: { select: { xpos: true, ypos: true, kind: true } } }, orderBy: { position: "asc" } },
       classes: { where: { removed: false }, select: { id: true, seq: true, name: true, printScale: true, sheetTemplateId: true } },
     },
   });
@@ -258,6 +275,38 @@ export async function autoSheets(db: Db, eventId: bigint, courseUuid: string): P
       orderBy: [{ sortOrder: "asc" }, { seq: "asc" }],
     });
   }
+  // Parts (course-layer.md §11): one per placed map exchange of the course, plus one — as the layer splits it.
+  const parts = partCountOf(course.courseControls.map((cc) => cc.control));
+  if (parts >= 2) {
+    const has = new Set(sheets.map((s) => s.sectionIndex));
+    let sortOrder = Math.max(-1, ...sheets.map((s) => s.sortOrder));
+    let added = false;
+    for (let part = 0; part < parts; part++) {
+      if (has.has(part)) continue;
+      sortOrder += 1;
+      const sheet = await db.courseMap.create({
+        data: {
+          eventId,
+          courseId: courseUuid,
+          templateId: base.id,
+          name: part === 0 ? course.name : `${course.name} · part ${part + 1}`,
+          kind: "course",
+          sectionIndex: part,
+          sortOrder,
+          version: stamp(),
+        },
+      });
+      createdSheets.push(sheet.seq);
+      added = true;
+    }
+    if (added) {
+      sheets = await db.courseMap.findMany({
+        where: { eventId, courseId: courseUuid, classId: null, kind: "course" },
+        include: { template: true },
+        orderBy: [{ sortOrder: "asc" }, { seq: "asc" }],
+      });
+    }
+  }
 
   // ─── 2. Class sheets ────────────────────────────────────
   const overriding = course.classes.filter((c) => c.printScale !== null || c.sheetTemplateId !== null);
@@ -281,8 +330,11 @@ export async function autoSheets(db: Db, eventId: bigint, courseUuid: string): P
     // Sheets the class kept from a course it no longer runs.
     await db.courseMap.deleteMany({ where: { eventId, classId: cls.id, NOT: { courseId: courseUuid } } });
     const existing = await db.courseMap.findMany({ where: { eventId, classId: cls.id }, orderBy: [{ sortOrder: "asc" }, { seq: "asc" }] });
-    if (existing.length === 0) {
-      for (const s of sheets) {
+    // Without class sheets, one per course sheet; with some, one per course sheet of a part the class lacks (F5).
+    const classParts = new Set(existing.map((s) => s.sectionIndex));
+    const missing = existing.length === 0 ? sheets : sheets.filter((s) => !classParts.has(s.sectionIndex));
+    if (missing.length > 0) {
+      for (const s of missing) {
         const overrides = { ...(s.overrides as Record<string, unknown>) };
         delete overrides.printScale;
         if (scale !== null) overrides.printScale = scale;
@@ -304,16 +356,16 @@ export async function autoSheets(db: Db, eventId: bigint, courseUuid: string): P
         });
         createdSheets.push(row.seq);
       }
-    } else {
-      for (const s of existing) {
-        const overrides = { ...(s.overrides as Record<string, unknown>) };
-        const want = scale ?? undefined;
-        const same = s.templateId === template.id && overrides.printScale === want;
-        if (same) continue;
-        if (want === undefined) delete overrides.printScale;
-        else overrides.printScale = want;
-        await db.courseMap.update({ where: { id: s.id }, data: { templateId: template.id, overrides: json(overrides), version: stamp() } });
-      }
+    }
+    // The class's existing sheets follow its template and scale.
+    for (const s of existing) {
+      const overrides = { ...(s.overrides as Record<string, unknown>) };
+      const want = scale ?? undefined;
+      const same = s.templateId === template.id && overrides.printScale === want;
+      if (same) continue;
+      if (want === undefined) delete overrides.printScale;
+      else overrides.printScale = want;
+      await db.courseMap.update({ where: { id: s.id }, data: { templateId: template.id, overrides: json(overrides), version: stamp() } });
     }
     classSheets[cls.seq] = (
       await db.courseMap.findMany({ where: { eventId, classId: cls.id }, orderBy: [{ sortOrder: "asc" }, { seq: "asc" }], select: { seq: true } })

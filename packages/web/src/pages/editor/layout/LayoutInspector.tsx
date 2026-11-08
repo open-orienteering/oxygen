@@ -77,7 +77,7 @@ export function LayoutInspector(p: {
     <>
       <InspectorSection title={template ? t("layoutTemplate") : t("layoutSheet")} testId="editor-layout-sheet"
         aside={template ? data.template.name : data.sheet?.name}>
-        <div className="px-2.5 pb-2 space-y-1.5" data-testid="editor-layout-scope" data-scope={data.scope} data-sheet={data.sheet?.seq ?? ""} data-template={data.template.seq}>
+        <div className="px-2.5 pb-2 space-y-1.5" data-testid="editor-layout-scope" data-scope={data.scope} data-sheet={data.sheet?.seq ?? ""} data-section={data.sheet?.sectionIndex ?? ""} data-template={data.template.seq}>
           {!template && p.sheets.length > 1 && (
             <select data-testid="editor-layout-sheet-picker" value={data.sheet?.seq} onChange={(e) => p.onOpen({ sheet: Number(e.target.value) })}
               className="w-full px-1.5 py-1 border border-slate-200 rounded-md bg-white text-xs">

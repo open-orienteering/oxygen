@@ -115,9 +115,8 @@ test.describe("Course editor (new, GL canvas)", () => {
     await expect(page.getByTestId("editor-mode-field")).toBeEnabled();
     // No SVG hit targets: the viewer hit-tests the layer's shapes.
     await expect(page.getByTestId("editor-control-hit")).toHaveCount(0);
-    // The rail (§6): the crossing point is F4's; the exchange waits for F5.
-    for (const key of ["V", "S", "K", "M", "C", "A", "T"]) await expect(page.getByTestId(`editor-tool-${key}`)).toBeEnabled();
-    await expect(page.getByTestId("editor-tool-X")).toBeDisabled();
+    // The rail (§6): every placement tool, the crossing point (F4) and the map exchange (F5) included.
+    for (const key of ["V", "S", "K", "M", "X", "C", "A", "T"]) await expect(page.getByTestId(`editor-tool-${key}`)).toBeEnabled();
   });
 
   test("an event with no map mounts the editor over the upload prompt", async ({ page }) => {
@@ -3081,6 +3080,70 @@ test.describe("F4: crossing and map-issue points (docs/course-editor.md §6.8)",
       await cleanup("courseMap.delete", { id: sheet.seq });
       await cleanup("mapTemplate.delete", { id: template.seq });
     }
+  });
+});
+
+// F5 (docs/course-editor.md §6.9): the exchange tool X in the chain, the parts in the sequence, one page per part
+// on Export ▾ this course, the derived 13.5 row, and EXCHANGE_WITHOUT_SHEET once a part's sheet is deleted.
+test.describe("F5: map exchange (docs/course-editor.md §6.9)", () => {
+  desktopOnly();
+
+  test("X between two controls: two parts, two pages with different windows, 13.5; deleting part 2's sheet raises the check", async ({ page }) => {
+    await openEditor(page);
+    const name = await newCourse(page, "F5 exchange");
+    const a = await appendClear(page);
+    const b = await appendClear(page, [a]);
+    await expect(controlRows(page)).toHaveCount(2, { timeout: 15000 });
+    const courses = await trpcCall<{ id: number; name: string }[]>("course.list", undefined, false);
+    const courseId = courses.find((c) => c.name === name)!.id;
+
+    // X after a: the ghost is the next number and code, as K's; the click inserts an exchange between a and b.
+    await select(page, a);
+    await arm(page, "X");
+    const spot = await emptyPoint(page, 40);
+    await page.mouse.move(spot.x, spot.y);
+    await expect(page.getByTestId("editor-ghost-label")).toHaveText(/^2 · \d+$/, { timeout: 10000 });
+    const saved = waitForTrpc(page, "course.setStructure");
+    const x = await place(page, spot);
+    await saved;
+    // The chain stays armed (X is a control in it); V ends it.
+    await expect(page.getByTestId("editor-tool-X")).toHaveAttribute("aria-pressed", "true");
+    await page.keyboard.press("v");
+    await expect(controlRows(page)).toHaveCount(3, { timeout: 15000 });
+    await expect(controlRows(page).nth(1)).toHaveAttribute("data-exchange", "true");
+    await expect(controlRows(page).nth(1)).toHaveAttribute("data-control-id", x.id);
+    const parts = page.getByTestId("editor-seq-part");
+    await expect(parts).toHaveCount(2);
+    await expect(parts.nth(1)).toHaveAttribute("data-part", "2");
+    // Numbering continues: the exchange is 2, b is 3 (answer 2).
+    await expect(page.locator(`[data-testid="course-label"][data-site-id="${x.id}"]`)).toHaveAttribute("data-text", "2", { timeout: 15000 });
+    await expect(page.getByTestId("description-sheet").locator('[data-testid="desc-row-wide"][data-symbol-key="13.5"]')).toHaveCount(1, { timeout: 15000 });
+
+    // Export ▾ this course: the part sheets are created first, then one page per part.
+    await page.getByTestId("editor-export").click();
+    const [download] = await Promise.all([page.waitForEvent("download"), page.getByTestId("editor-export-course").click()]);
+    expect((await analysePdf(await readFile((await download.path())!))).pages).toBe(2);
+    type Listed = { seq: number; courseId: number | null; class: unknown; sectionIndex: number; resolved: { window: { minX: number; minY: number; width: number; height: number } } | null };
+    const own = (await trpcCall<Listed[]>("courseMap.list", undefined, false)).filter((s) => s.courseId === courseId && s.class === null);
+    expect(own.map((s) => s.sectionIndex)).toEqual([0, 1]);
+    const centre = (s: Listed) => ({ x: s.resolved!.window.minX + s.resolved!.window.width / 2, y: s.resolved!.window.minY + s.resolved!.window.height / 2 });
+    const [c1, c2] = own.map(centre);
+    expect(Math.hypot(c1.x - c2.x, c1.y - c2.y)).toBeGreaterThan(1);
+
+    // Layout mode lists the parts; part 2's sheet deleted → the check in Course mode.
+    await page.getByTestId("editor-mode-layout").click();
+    await expect(page.getByTestId("editor-layout-scope")).toHaveAttribute("data-sheet", String(own[0].seq), { timeout: 30_000 });
+    await page.getByTestId("editor-layout-sheet-picker").selectOption(String(own[1].seq));
+    await expect(page.getByTestId("editor-layout-scope")).toHaveAttribute("data-section", "1", { timeout: 30_000 });
+    page.once("dialog", (d) => void d.accept());
+    const deleted = waitForTrpc(page, "courseMap.delete");
+    await page.getByTestId("editor-layout-delete-sheet").click();
+    await deleted;
+    await page.getByTestId("editor-mode-course").click();
+    await page.getByTestId("editor-checks-toggle").click();
+    const row = page.locator('[data-testid="editor-check-row"][data-code="EXCHANGE_WITHOUT_SHEET"]');
+    await expect(row).toBeVisible({ timeout: 30_000 });
+    await expect(row).toContainText("Part 2");
   });
 });
 
