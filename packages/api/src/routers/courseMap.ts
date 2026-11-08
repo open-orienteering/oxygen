@@ -17,6 +17,7 @@ import { z } from "zod";
 import { Prisma } from "../generated/prisma/client.js";
 import { layoutControlsFromCourseControls, layoutCourseEnds, resolveMapLayout } from "../course-maps/resolve-layout.js";
 import { getBaseMapInfoOrNull } from "../course-maps/map-source.js";
+import { publicControlId } from "../control-id.js";
 import { type MapRowContext, setterControlIds, sheetInputForMapRow } from "../course-maps/pdf-page.js";
 import { resolveSheet } from "../course-maps/resolve-sheet.js";
 import { classesByCourse, loadCourseObjects, nextObjectVersion } from "../course-objects.js";
@@ -52,7 +53,7 @@ export interface CourseMapListItem {
   version: string;
   /** The class whose override the sheet prints (docs/course-layout.md §6); null for a course's own sheet. */
   class: { seq: number; name: string } | null;
-  /** A setter sheet's number and its group's placed controls (seqs) in code order (docs/course-layout.md §8); null for other kinds. */
+  /** A setter sheet's number and its group's placed controls (public ids) in code order (docs/course-layout.md §8); null for other kinds. */
   setter: SetterOfSheet | null;
   course: {
     seq: number;
@@ -80,7 +81,7 @@ export interface CourseMapListItem {
   };
 }
 
-/** A setter sheet's number and its group's drawn controls (seqs, in the block's code order). */
+/** A setter sheet's number and its group's drawn controls (public control ids, in the block's code order). */
 export interface SetterOfSheet {
   index: number;
   controls: number[];
@@ -289,7 +290,7 @@ export const courseMapRouter = router({
 
     const parsed = rows.map(parseMap);
     const windowsByCourse = new Map<string, MapWindow[]>();
-    const seqById = new Map(controlsForAll.map((c) => [c.id, c.seq]));
+    const seqById = new Map(controlsForAll.map((c) => [c.id, publicControlId(c)]));
     const windowsKey = (row: { kind: string; seq: number; courseId: string | null; classId: string | null }) =>
       row.kind === "setter" ? `setter:${row.seq}` : `${row.courseId ?? "all_controls"}:${row.classId ?? ""}`;
 
@@ -493,7 +494,7 @@ export const courseMapRouter = router({
             courseSeq: row.course?.seq ?? null,
             classSeq: row.class?.seq ?? null,
             sectionIndex: row.sectionIndex,
-            setter: setterOf(row, resolved.layout.controls, new Map(allControls.map((c) => [c.id, c.seq]))),
+            setter: setterOf(row, resolved.layout.controls, new Map(allControls.map((c) => [c.id, publicControlId(c)]))),
             version: parsed.version,
             windowCenter: parsed.windowCenter,
             overrides: parsed.overrides,

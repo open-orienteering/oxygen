@@ -90,11 +90,11 @@ export const layoutRouter = router({
       return ctx.db.$transaction((tx) => setterMaps(tx, ctx.event.id, { courseUuid: course?.id ?? null, groups: input.groups }), AUTO_SHEETS_TX);
     }),
 
-  /** *Move to next setter* (§8): the control (seq) leaves its setter map of `sheet`'s scope for `sheet`; windows stay. */
+  /** *Move to next setter* (§8): the control (public id) leaves its setter map of `sheet`'s scope for `sheet`; windows stay. */
   moveToSetter: coursesEditProcedure
     .input(z.object({ controlId: z.number().int().positive(), sheet: z.number().int().positive() }))
     .mutation(async ({ ctx, input }) =>
-      ctx.db.$transaction((tx) => moveToSetter(tx, ctx.event.id, { controlSeq: input.controlId, sheetSeq: input.sheet })),
+      ctx.db.$transaction((tx) => moveToSetter(tx, ctx.event.id, { controlId: input.controlId, sheetSeq: input.sheet })),
     ),
 
   /** *Recalculate* (§6, §8): an all-controls or setter sheet refitted — scale, orientation, centred window, the block's position. */

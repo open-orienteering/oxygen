@@ -102,7 +102,7 @@ describe("setter maps (course-layout.md §8, F10)", () => {
     expect(new Set(groupOf(rows[0]))).toEqual(new Set([c.c31.id, c.c32.id, c.c33.id, c.issue.id]));
     expect(new Set(groupOf(rows[1]))).toEqual(new Set([c.c41.id, c.c42.id, c.c43.id]));
     expect(r.sheets.map((s) => s.setter)).toEqual([1, 2]);
-    expect(r.sheets[1].controls.sort()).toEqual([c.c41.seq, c.c42.seq, c.c43.seq].sort());
+    expect(r.sheets[1].controls.sort()).toEqual([41, 42, 43].sort());
     for (const row of rows) {
       expect(row.template?.paper).toBe("A4");
       expect(STANDARD_PRINT_SCALES as readonly number[]).toContain(row.template?.printScale);
@@ -162,17 +162,17 @@ describe("setter maps (course-layout.md §8, F10)", () => {
     expect(resolved.sheet.course.sites.map((s) => s.kind).sort()).toEqual(["control", "control", "control", "map_issue"]);
     expect(resolved.sheet.description?.cellSizeMm).toBe(5);
 
-    // courseMap.list: the setter part, controls in code order (a code-less point by its seq).
+    // courseMap.list: the setter part, public control ids in code order (a code-less point by its seq).
     const listed = (await caller.courseMap.list()).find((m) => m.seq === west.seq)!;
     expect(listed.setter?.index).toBe(1);
-    expect(listed.setter?.controls.filter((s) => s !== c.issue.seq)).toEqual([c.c31.seq, c.c32.seq, c.c33.seq]);
+    expect(listed.setter?.controls.filter((s) => s !== c.issue.seq)).toEqual([31, 32, 33]);
     expect(listed.setter?.controls).toContain(c.issue.seq);
     expect((await caller.courseMap.list()).filter((m) => m.kind === "course").every((m) => m.setter === null)).toBe(true);
   });
 
   it("moveToSetter moves a control between two setter sheets of a scope; windows stay; undo moves it back", async () => {
     const [west, east] = await setterRows();
-    const r = await caller.layout.moveToSetter({ controlId: c.c33.seq, sheet: east.seq });
+    const r = await caller.layout.moveToSetter({ controlId: 33, sheet: east.seq });
     expect(r.from).toBe(west.seq);
     expect(r.to).toBe(east.seq);
     const [w2, e2] = await setterRows();
@@ -183,15 +183,15 @@ describe("setter maps (course-layout.md §8, F10)", () => {
     expect(r.sheets).toEqual([{ seq: west.seq, version: w2.version.toString() }, { seq: east.seq, version: e2.version.toString() }]);
     expect([w2.windowCenter, e2.windowCenter, w2.templateId, e2.templateId]).toEqual([null, null, west.templateId, east.templateId]);
     // The same sheet: nothing written.
-    const same = await caller.layout.moveToSetter({ controlId: c.c33.seq, sheet: east.seq });
+    const same = await caller.layout.moveToSetter({ controlId: 33, sheet: east.seq });
     expect(same.sheets).toEqual([{ seq: east.seq, version: e2.version.toString() }]);
     // Back.
-    await caller.layout.moveToSetter({ controlId: c.c33.seq, sheet: west.seq });
+    await caller.layout.moveToSetter({ controlId: 33, sheet: west.seq });
     expect(groupOf((await setterRows())[0])).toContain(c.c33.id);
     // A control in no setter map, and a sheet that is not a setter's.
-    expect((await errorOf(caller.layout.moveToSetter({ controlId: c.c50.seq, sheet: east.seq }))).code).toBe("BAD_REQUEST");
+    expect((await errorOf(caller.layout.moveToSetter({ controlId: 50, sheet: east.seq }))).code).toBe("BAD_REQUEST");
     const courseSheet = await t.db.courseMap.findFirstOrThrow({ where: { eventId: t.eventId, kind: "course" } });
-    expect((await errorOf(caller.layout.moveToSetter({ controlId: c.c33.seq, sheet: courseSheet.seq }))).code).toBe("NOT_FOUND");
+    expect((await errorOf(caller.layout.moveToSetter({ controlId: 33, sheet: courseSheet.seq }))).code).toBe("NOT_FOUND");
   });
 
   it("recalculateSheet refits the all-controls sheet: a standard scale, centred, no scale override, the block on the template's spot", async () => {

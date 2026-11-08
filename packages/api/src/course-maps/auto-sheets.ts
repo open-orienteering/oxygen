@@ -41,6 +41,7 @@ import {
 } from "@oxygen/shared";
 import { Prisma as PrismaNS, type MapTemplate, type Prisma, type PrismaClient } from "../generated/prisma/client.js";
 import { nextObjectVersion } from "../course-objects.js";
+import { publicControlId } from "../control-id.js";
 import { getBaseMapInfoOrNull } from "./map-source.js";
 import { layoutCourseEnds } from "./resolve-layout.js";
 
@@ -431,7 +432,7 @@ export async function ensureAllControlsSheet(
 /** `groups` of `layout.setterMaps`: at most this many setter maps per scope. */
 export const MAX_SETTER_GROUPS = 20;
 
-type SiteRow = { id: string; seq: number; xpos: number; ypos: number };
+type SiteRow = { id: string; seq: number; codes: string; xpos: number; ypos: number };
 
 const placed = (c: { xpos: number; ypos: number }) => c.xpos !== 0 || c.ypos !== 0;
 
@@ -492,7 +493,7 @@ async function setterScopeSites(db: Db, eventId: bigint, courseUuid: string | nu
 }
 
 export interface SetterMapsResult {
-  /** The setter sheets written, by setter number: seq, number, the group's control seqs. */
+  /** The setter sheets written, by setter number: seq, number, the group's public control ids (control-id.ts). */
   sheets: Array<{ seq: number; setter: number; controls: number[] }>;
   createdTemplates: number[];
 }
@@ -542,7 +543,7 @@ export async function setterMaps(db: Db, eventId: bigint, opts: { courseUuid: st
         version: nextObjectVersion(),
       },
     });
-    out.sheets.push({ seq: row.seq, setter, controls: group.map((s) => s.seq) });
+    out.sheets.push({ seq: row.seq, setter, controls: group.map((s) => publicControlId(s)) });
   }
   return out;
 }
@@ -603,11 +604,13 @@ export async function recalculateSheet(db: Db, eventId: bigint, seq: number): Pr
 export async function moveToSetter(
   db: Db,
   eventId: bigint,
-  opts: { controlSeq: number; sheetSeq: number },
+  opts: { controlId: number; sheetSeq: number },
 ): Promise<{ from: number; to: number; sheets: Array<{ seq: number; version: string }> }> {
   const target = await db.courseMap.findFirst({ where: { eventId, seq: opts.sheetSeq, kind: "setter" } });
   if (!target) throw new TRPCError({ code: "NOT_FOUND", message: "Setter map not found" });
-  const control = await db.control.findFirst({ where: { eventId, seq: opts.controlSeq, removed: false }, select: { id: true } });
+  // The public id (first code, else seq; control-id.ts), as every control-facing endpoint.
+  const control = (await db.control.findMany({ where: { eventId, removed: false }, select: { id: true, codes: true, seq: true } }))
+    .find((c) => publicControlId(c) === opts.controlId);
   if (!control) throw new TRPCError({ code: "NOT_FOUND", message: "Control not found" });
   // One mover at a time over the event's setter rows: two `props` read, changed and written.
   await db.$queryRaw`SELECT "id" FROM "oxygen"."course_maps" WHERE "event_id" = ${eventId} AND "kind" = 'setter' FOR UPDATE`;
