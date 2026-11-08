@@ -19,23 +19,30 @@
 
 import { TRPCError } from "@trpc/server";
 import {
+  course as courseLib,
   defaultTemplateSettings,
   fitOrientation,
+  fitScale,
   getPaperDimensions,
+  groupSites,
   mapTemplateSettingsSchema,
   paperOrientationSchema,
   paperSizeSchema,
   pickAutoTemplate,
+  SETTER_DESCRIPTION_CELL_MM,
+  setterSheetPropsSchema,
   templateAutoKey,
   templateKeyName,
   type MapTemplateSettings,
   type PaperOrientation,
   type PaperSize,
+  type SetterSheetProps,
   type TemplateKeyFields,
 } from "@oxygen/shared";
-import type { MapTemplate, Prisma, PrismaClient } from "../generated/prisma/client.js";
+import { Prisma as PrismaNS, type MapTemplate, type Prisma, type PrismaClient } from "../generated/prisma/client.js";
 import { nextObjectVersion } from "../course-objects.js";
 import { getBaseMapInfoOrNull } from "./map-source.js";
+import { layoutCourseEnds } from "./resolve-layout.js";
 
 type Db = PrismaClient | Prisma.TransactionClient;
 
@@ -145,11 +152,20 @@ export async function ensureAutoTemplate(db: Db, eventId: bigint, spec: KeySpec,
   return { template, created: inserted.count === 1 };
 }
 
-/** The template most sheets use (the event's default look), or null. */
+/**
+ * The template most sheets use (the event's default look), or null. Setter
+ * sheets (F10) do not count, and a template only setter sheets use is not
+ * a candidate: their fitted A4 keys are not the event's look.
+ */
 async function busiestTemplate(db: Db, eventId: bigint): Promise<MapTemplate | null> {
-  const rows = await db.mapTemplate.findMany({ where: { eventId }, include: { _count: { select: { maps: true } } } });
-  const id = pickAutoTemplate(rows.map((r) => ({ id: r.id, seq: r.seq, createdAt: r.createdAt, sheetCount: r._count.maps })));
-  return rows.find((r) => r.id === id) ?? null;
+  const [rows, setterOnly] = await Promise.all([
+    db.mapTemplate.findMany({ where: { eventId }, include: { _count: { select: { maps: { where: { kind: { not: "setter" } } } } } } }),
+    db.courseMap.findMany({ where: { eventId, kind: "setter", templateId: { not: null } }, select: { templateId: true }, distinct: ["templateId"] }),
+  ]);
+  const setterTemplates = new Set(setterOnly.map((r) => r.templateId));
+  const candidates = rows.filter((r) => r._count.maps > 0 || !setterTemplates.has(r.id));
+  const id = pickAutoTemplate(candidates.map((r) => ({ id: r.id, seq: r.seq, createdAt: r.createdAt, sheetCount: r._count.maps })));
+  return candidates.find((r) => r.id === id) ?? null;
 }
 
 function specOf(t: MapTemplate, printScale = t.printScale): KeySpec {
@@ -408,4 +424,202 @@ export async function ensureAllControlsSheet(
     },
   });
   return { sheet: row.seq, createdSheet: true, createdTemplate };
+}
+
+// ─── Setter maps and the recalculation (docs/course-layout.md §6, §8; F10) ──
+
+/** `groups` of `layout.setterMaps`: at most this many setter maps per scope. */
+export const MAX_SETTER_GROUPS = 20;
+
+type SiteRow = { id: string; seq: number; xpos: number; ypos: number };
+
+const placed = (c: { xpos: number; ypos: number }) => c.xpos !== 0 || c.ypos !== 0;
+
+function extentOf(points: ReadonlyArray<{ xpos: number; ypos: number }>): { width: number; height: number } {
+  if (points.length === 0) return { width: 0, height: 0 };
+  const xs = points.map((p) => p.xpos), ys = points.map((p) => p.ypos);
+  return { width: Math.max(...xs) - Math.min(...xs), height: Math.max(...ys) - Math.min(...ys) };
+}
+
+/**
+ * The auto template of the key fitted to `points` (08 §4.6 "compute scale,
+ * orientation … to fit everything on A4"): `page`'s paper, the orientation
+ * and the standard scale `fitScale` picks (`page.orientation` first), with
+ * the margin and look of `seed` (`ensureAutoTemplate`).
+ */
+async function scaleFittedTemplate(
+  db: Db,
+  eventId: bigint,
+  points: ReadonlyArray<{ xpos: number; ypos: number }>,
+  page: { paper: PaperSize; orientation: PaperOrientation; paperWidthMm?: number | null; paperHeightMm?: number | null },
+  seed: MapTemplate | null,
+): Promise<{ template: MapTemplate; created: boolean }> {
+  const mapInfo = await getBaseMapInfoOrNull(db, eventId);
+  const settings = seed ? mapTemplateSettingsSchema.safeParse(seed.settings) : null;
+  const custom = page.paper === "custom" ? { width: page.paperWidthMm ?? 0, height: page.paperHeightMm ?? 0 } : undefined;
+  const fit = fitScale(extentOf(points.filter(placed)), mapInfo?.scale ?? 10000, page.paper, page.orientation, settings?.success ? settings.data.printMarginMm : 3, custom);
+  return ensureAutoTemplate(db, eventId, { ...page, orientation: fit.orientation, printScale: fit.printScale }, seed);
+}
+
+/**
+ * The sites a setter visits in a scope (§8): event-wide every placed site;
+ * for a course its placed start, controls and finish (the one sequence
+ * rule, `layoutCourseEnds`) and the crossing points its legs run through —
+ * and, in both scopes, the event's map-issue points (702 belongs to no
+ * course and is what a setter fixes on the way).
+ */
+async function setterScopeSites(db: Db, eventId: bigint, courseUuid: string | null): Promise<SiteRow[]> {
+  const controls = await db.control.findMany({ where: { eventId, removed: false } });
+  if (courseUuid === null) return controls.filter(placed);
+  const c = await db.course.findFirst({
+    where: { id: courseUuid, eventId, removed: false },
+    include: { courseControls: { orderBy: { position: "asc" }, select: { controlId: true } } },
+  });
+  if (!c) throw new TRPCError({ code: "NOT_FOUND", message: "Course not found" });
+  const ids = new Set(c.courseControls.map((cc) => cc.controlId));
+  const all = controls.map((r) => ({ ...r, name: r.name ?? "" }));
+  const ends = layoutCourseEnds(c, c.courseControls.map((cc) => cc.controlId), all);
+  if (ends.start) ids.add(ends.start.id);
+  if (ends.finish) ids.add(ends.finish.id);
+  const parsed = c.structure ? courseLib.courseStructureSchema.safeParse(c.structure) : null;
+  if (parsed?.success) {
+    for (const item of courseLib.structureControlItems(parsed.data)) {
+      const crossing = item.leg?.crossing?.controlId;
+      if (crossing) ids.add(crossing);
+    }
+  }
+  return controls.filter((r) => placed(r) && (ids.has(r.id) || r.kind === "map_issue"));
+}
+
+export interface SetterMapsResult {
+  /** The setter sheets written, by setter number: seq, number, the group's control seqs. */
+  sheets: Array<{ seq: number; setter: number; controls: number[] }>;
+  createdTemplates: number[];
+}
+
+/**
+ * `layout.setterMaps { courseId?, groups }` (docs/course-layout.md §8; 08
+ * §4.6, §6): the scope's setter sheets replaced by `groups` new ones — the
+ * scope's sites (`setterScopeSites`) in deterministic k-means groups
+ * (`groupSites`, west → east), one `kind = 'setter'` row per group on the
+ * A4 auto template fitted to it (`fitScale`, the busiest template's
+ * orientation preferred and its look seeded), window centre NULL
+ * (centred on the group), 5 mm description cells
+ * (`overrides.description.cellSizeMm`), `props { setter, controlIds }`,
+ * named `Setter n` (event) / `<course> · Setter n` (English, as *All
+ * controls*), after the scope's other sheets.
+ */
+export async function setterMaps(db: Db, eventId: bigint, opts: { courseUuid: string | null; groups: number }): Promise<SetterMapsResult> {
+  const course = opts.courseUuid === null ? null : await db.course.findFirst({ where: { id: opts.courseUuid, eventId, removed: false }, select: { id: true, name: true } });
+  if (opts.courseUuid !== null && !course) throw new TRPCError({ code: "NOT_FOUND", message: "Course not found" });
+  const sites = await setterScopeSites(db, eventId, opts.courseUuid);
+  if (sites.length === 0) throw new TRPCError({ code: "PRECONDITION_FAILED", message: "No placed controls to group into setter maps" });
+  const most = Math.min(MAX_SETTER_GROUPS, sites.length);
+  if (opts.groups < 1 || opts.groups > most) {
+    throw new TRPCError({ code: "BAD_REQUEST", message: `Choose 1–${most} setter maps for ${sites.length} controls` });
+  }
+  await db.courseMap.deleteMany({ where: { eventId, kind: "setter", courseId: opts.courseUuid } });
+  const groups = groupSites(sites.map((s) => ({ ...s, x: s.xpos, y: s.ypos })), opts.groups);
+  const busiest = await busiestTemplate(db, eventId);
+  const preferred: PaperOrientation = busiest ? paperOrientationSchema.parse(busiest.orientation) : "portrait";
+  const last = await db.courseMap.findFirst({ where: { eventId, courseId: opts.courseUuid }, orderBy: { sortOrder: "desc" }, select: { sortOrder: true } });
+  const out: SetterMapsResult = { sheets: [], createdTemplates: [] };
+  for (const [i, group] of groups.entries()) {
+    const fitted = await scaleFittedTemplate(db, eventId, group, { paper: "A4", orientation: preferred }, busiest);
+    if (fitted.created) out.createdTemplates.push(fitted.template.seq);
+    const setter = i + 1;
+    const props: SetterSheetProps = { setter, controlIds: group.map((s) => s.id) };
+    const row = await db.courseMap.create({
+      data: {
+        eventId,
+        courseId: opts.courseUuid,
+        kind: "setter",
+        name: course ? `${course.name} · Setter ${setter}` : `Setter ${setter}`,
+        templateId: fitted.template.id,
+        overrides: json({ description: { cellSizeMm: SETTER_DESCRIPTION_CELL_MM } }),
+        props: json(props),
+        sortOrder: (last?.sortOrder ?? -1) + setter,
+        version: nextObjectVersion(),
+      },
+    });
+    out.sheets.push({ seq: row.seq, setter, controls: group.map((s) => s.seq) });
+  }
+  return out;
+}
+
+export interface RecalculatedSheet {
+  seq: number;
+  version: string;
+  /** The template the sheet now uses (its seq), and whether it was created. */
+  templateSeq: number;
+  createdTemplate: number | null;
+}
+
+/**
+ * `layout.recalculateSheet { sheet }` (docs/course-layout.md §6, §8; 08
+ * §4.6 "can be recalculated; moved items stay fixed until recalculated"):
+ * an all-controls or setter sheet re-pointed at the auto template fitted to
+ * its sites (`fitScale` on the sheet's paper, its orientation preferred,
+ * its template seeding the look) — every placed control of the event, or
+ * the setter's group — its window centre back to NULL (centred), its
+ * `overrides.printScale` dropped and the block's position back to the
+ * template's (`visible` and the cell size stay). Other kinds: BAD_REQUEST.
+ */
+export async function recalculateSheet(db: Db, eventId: bigint, seq: number): Promise<RecalculatedSheet> {
+  const row = await db.courseMap.findFirst({ where: { eventId, seq }, include: { template: true } });
+  if (!row) throw new TRPCError({ code: "NOT_FOUND", message: "Course map not found" });
+  if (row.kind !== "all_controls" && row.kind !== "setter") {
+    throw new TRPCError({ code: "BAD_REQUEST", message: "Only the all-controls sheet and setter maps are recalculated" });
+  }
+  const controls = await db.control.findMany({ where: { eventId, removed: false }, select: { id: true, xpos: true, ypos: true } });
+  const group = row.kind === "setter" ? new Set(setterSheetPropsSchema.safeParse(row.props).data?.controlIds ?? []) : null;
+  const sites = controls.filter((c) => placed(c) && (!group || group.has(c.id)));
+  const base = row.template ?? (await busiestTemplate(db, eventId));
+  const page = base
+    ? { paper: paperSizeSchema.parse(base.paper), orientation: paperOrientationSchema.parse(base.orientation), paperWidthMm: base.paperWidthMm, paperHeightMm: base.paperHeightMm }
+    : { paper: "A4" as const, orientation: "portrait" as const };
+  const fitted = await scaleFittedTemplate(db, eventId, sites, page, base);
+  const overrides = { ...((row.overrides ?? {}) as Record<string, unknown>) };
+  delete overrides.printScale;
+  if (overrides.description && typeof overrides.description === "object") {
+    const description = { ...(overrides.description as Record<string, unknown>) };
+    delete description.x;
+    delete description.y;
+    overrides.description = description;
+  }
+  const version = nextObjectVersion();
+  await db.courseMap.update({ where: { id: row.id }, data: { templateId: fitted.template.id, windowCenter: PrismaNS.JsonNull, overrides: json(overrides), version } });
+  return { seq: row.seq, version: version.toString(), templateSeq: fitted.template.seq, createdTemplate: fitted.created ? fitted.template.seq : null };
+}
+
+/**
+ * `layout.moveToSetter { controlId, sheet }` (docs/course-layout.md §8; 08
+ * §4.6 "a manual 'move to next setter' click"): the control leaves the
+ * setter sheet of `sheet`'s scope that holds it and joins `sheet`. Both
+ * rows get a new version; windows are untouched (moved items stay fixed
+ * until *Recalculate*). The same sheet is a no-op; a control in none of the
+ * scope's setter maps is BAD_REQUEST.
+ */
+export async function moveToSetter(
+  db: Db,
+  eventId: bigint,
+  opts: { controlSeq: number; sheetSeq: number },
+): Promise<{ from: number; to: number; sheets: Array<{ seq: number; version: string }> }> {
+  const target = await db.courseMap.findFirst({ where: { eventId, seq: opts.sheetSeq, kind: "setter" } });
+  if (!target) throw new TRPCError({ code: "NOT_FOUND", message: "Setter map not found" });
+  const control = await db.control.findFirst({ where: { eventId, seq: opts.controlSeq, removed: false }, select: { id: true } });
+  if (!control) throw new TRPCError({ code: "NOT_FOUND", message: "Control not found" });
+  // One mover at a time over the event's setter rows: two `props` read, changed and written.
+  await db.$queryRaw`SELECT "id" FROM "oxygen"."course_maps" WHERE "event_id" = ${eventId} AND "kind" = 'setter' FOR UPDATE`;
+  const scope = await db.courseMap.findMany({ where: { eventId, kind: "setter", courseId: target.courseId } });
+  const propsOf = (r: { props: unknown }): SetterSheetProps => setterSheetPropsSchema.safeParse(r.props).data ?? { setter: 1, controlIds: [] };
+  const from = scope.find((r) => propsOf(r).controlIds.includes(control.id));
+  if (!from) throw new TRPCError({ code: "BAD_REQUEST", message: "The control is in none of these setter maps" });
+  const to = scope.find((r) => r.id === target.id) ?? target;
+  if (from.id === to.id) return { from: from.seq, to: to.seq, sheets: [{ seq: to.seq, version: to.version.toString() }] };
+  const fromProps = propsOf(from), toProps = propsOf(to);
+  const v1 = nextObjectVersion(), v2 = nextObjectVersion();
+  await db.courseMap.update({ where: { id: from.id }, data: { props: json({ ...fromProps, controlIds: fromProps.controlIds.filter((id) => id !== control.id) }), version: v1 } });
+  await db.courseMap.update({ where: { id: to.id }, data: { props: json({ ...toProps, controlIds: [...toProps.controlIds, control.id] }), version: v2 } });
+  return { from: from.seq, to: to.seq, sheets: [{ seq: from.seq, version: v1.toString() }, { seq: to.seq, version: v2.toString() }] };
 }

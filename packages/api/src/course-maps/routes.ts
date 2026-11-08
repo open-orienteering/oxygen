@@ -52,28 +52,32 @@ const mapRowInclude = {
 async function findMapRows(
   db: Db,
   eventId: bigint,
-  query: { maps?: string; courses?: string; classes?: string; allControls?: string },
+  query: { maps?: string; courses?: string; classes?: string; allControls?: string; setter?: string },
 ) {
   const mapSeqs = parseSeqs(query.maps);
   const courseSeqs = parseSeqs(query.courses);
   const classSeqs = parseSeqs(query.classes);
   const includeAllControls = query.allControls === "1";
-  if ([mapSeqs, courseSeqs, classSeqs].filter(Boolean).length > 1) {
-    throw new Error("Use one of maps, courses or classes");
+  // Every setter sheet of the event (docs/course-layout.md §7–§8, F10).
+  const setter = query.setter === "1";
+  if ([mapSeqs, courseSeqs, classSeqs, setter || null].filter(Boolean).length > 1) {
+    throw new Error("Use one of maps, courses, classes or setter");
   }
   if (classSeqs) return findClassRows(db, eventId, classSeqs);
   const rows = await db.courseMap.findMany({
     where: {
       eventId,
       ...(mapSeqs ? { seq: { in: mapSeqs } } : {}),
-      // A course's own sheets; class sheets print through `classes` or `maps`
-      // (docs/course-layout.md §7).
-      ...(courseSeqs ? { course: { seq: { in: courseSeqs } }, classId: null } : {}),
-      ...(!mapSeqs && !courseSeqs && !includeAllControls
-        ? { classId: null }
-        : includeAllControls && !mapSeqs && !courseSeqs
-          ? { kind: "all_controls" }
-          : {}),
+      // A course's own sheets; class sheets print through `classes` or `maps`,
+      // setter sheets through `setter` or `maps` (docs/course-layout.md §7).
+      ...(courseSeqs ? { course: { seq: { in: courseSeqs } }, classId: null, kind: "course" } : {}),
+      ...(setter
+        ? { kind: "setter" }
+        : !mapSeqs && !courseSeqs && !includeAllControls
+          ? { classId: null, kind: { in: ["course", "all_controls"] } }
+          : includeAllControls && !mapSeqs && !courseSeqs
+            ? { kind: "all_controls" }
+            : {}),
     },
     include: mapRowInclude,
     orderBy: [
@@ -94,6 +98,7 @@ async function findMapRows(
   }
   const requested = mapSeqs?.length ?? courseSeqs?.length;
   if (requested && rows.length === 0) throw new Error("No requested maps found");
+  if (setter && rows.length === 0) throw new Error("No setter maps found: generate them in Layout mode (Setter maps)");
   return rows;
 }
 
@@ -190,6 +195,7 @@ export function registerCourseMapRoutes(
       courses?: string;
       classes?: string;
       allControls?: string;
+      setter?: string;
     };
   }>("/api/maps/:nameId/maps.pdf", async (req, reply) => {
     const { nameId } = req.params;

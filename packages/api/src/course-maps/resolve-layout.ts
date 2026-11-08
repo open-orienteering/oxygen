@@ -157,7 +157,7 @@ export function layoutControlsFromCourseControls(
 }
 
 export interface ResolveMapLayoutInput {
-  /** `"course"` or `"all_controls"`; anything else resolves without overlay. */
+  /** `"course"`, `"all_controls"` or `"setter"` (its group in `allControls`, F10); anything else resolves without overlay. */
   kind: string;
   template: LayoutTemplateSource;
   overrides?: CourseMapOverrides;
@@ -279,9 +279,11 @@ export function resolveMapLayout(
   const overrides = input.overrides ?? {};
   const frame = overrides.mapFrame ?? settings.mapFrame;
   const printScale = overrides.printScale ?? input.template.printScale;
+  // The all-controls sheet and a setter sheet (F10: its group, filtered by the caller) list sites, not a course.
+  const everySite = input.kind === "all_controls" || input.kind === "setter";
 
   const rawControls =
-    input.kind === "all_controls"
+    everySite
       ? (input.allControls ?? []).filter(
           (control) => control.xpos !== 0 || control.ypos !== 0,
         )
@@ -289,7 +291,7 @@ export function resolveMapLayout(
   const regularControls = rawControls.map((control) => {
     const code = control.codes.split(";")[0] || String(control.seq ?? "");
     const type: CourseOverlayControl["type"] =
-      input.kind === "all_controls" ? allControlsType(control) : "control";
+      everySite ? allControlsType(control) : "control";
     const x = control.xpos;
     const y = control.ypos;
     return {
@@ -309,7 +311,7 @@ export function resolveMapLayout(
         : {}),
     };
   });
-  if (input.kind === "all_controls") {
+  if (everySite) {
     regularControls.sort((a, b) =>
       a.code.localeCompare(b.code, undefined, { numeric: true }),
     );
@@ -405,7 +407,7 @@ export function resolveMapLayout(
   }
 
   const labelMode: "sequence" | "code" =
-    input.kind === "all_controls" || freeOrder ? "code" : "sequence";
+    everySite || freeOrder ? "code" : "sequence";
 
   // One part of a course split by map exchanges (course-layer.md §11): its controls centre the window.
   let section: number | undefined;

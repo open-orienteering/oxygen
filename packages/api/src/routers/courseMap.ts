@@ -4,6 +4,7 @@ import {
   courseMapObjectSchema,
   courseMapOverridesSchema,
   mapTemplateSettingsSchema,
+  setterSheetPropsSchema,
   validateCourseMap,
   type CourseMapDocument,
   type CourseMapObject,
@@ -16,7 +17,7 @@ import { z } from "zod";
 import { Prisma } from "../generated/prisma/client.js";
 import { layoutControlsFromCourseControls, layoutCourseEnds, resolveMapLayout } from "../course-maps/resolve-layout.js";
 import { getBaseMapInfoOrNull } from "../course-maps/map-source.js";
-import { type MapRowContext, sheetInputForMapRow } from "../course-maps/pdf-page.js";
+import { type MapRowContext, setterControlIds, sheetInputForMapRow } from "../course-maps/pdf-page.js";
 import { resolveSheet } from "../course-maps/resolve-sheet.js";
 import { classesByCourse, loadCourseObjects, nextObjectVersion } from "../course-objects.js";
 import { rowForClass } from "../course-maps/pdf-page.js";
@@ -51,6 +52,8 @@ export interface CourseMapListItem {
   version: string;
   /** The class whose override the sheet prints (docs/course-layout.md §6); null for a course's own sheet. */
   class: { seq: number; name: string } | null;
+  /** A setter sheet's number and its group's placed controls (seqs) in code order (docs/course-layout.md §8); null for other kinds. */
+  setter: SetterOfSheet | null;
   course: {
     seq: number;
     name: string;
@@ -77,6 +80,22 @@ export interface CourseMapListItem {
   };
 }
 
+/** A setter sheet's number and its group's drawn controls (seqs, in the block's code order). */
+export interface SetterOfSheet {
+  index: number;
+  controls: number[];
+}
+
+/** The setter part of a row (`props`, `layout.controls` in code order); null unless `kind = 'setter'`. */
+function setterOf(row: { kind: string; props: unknown }, drawn: ReadonlyArray<{ id: string }>, seqById: ReadonlyMap<string, number>): SetterOfSheet | null {
+  if (row.kind !== "setter") return null;
+  const props = setterSheetPropsSchema.safeParse(row.props);
+  return {
+    index: props.success ? props.data.setter : 0,
+    controls: drawn.flatMap((c) => (seqById.has(c.id) ? [seqById.get(c.id)!] : [])),
+  };
+}
+
 /**
  * One sheet or template as the editor's Layout mode reads it
  * (docs/course-layout.md §1 "What the editor reads"): the resolved
@@ -96,6 +115,8 @@ export interface EditorSheet {
     classSeq: number | null;
     /** The part of the course it prints (`section_index`, course-layer.md §11). */
     sectionIndex: number;
+    /** A setter sheet's number and group (§8); null for other kinds. */
+    setter: SetterOfSheet | null;
     version: string;
     windowCenter: MapPoint | null;
     overrides: CourseMapOverrides;
@@ -268,6 +289,9 @@ export const courseMapRouter = router({
 
     const parsed = rows.map(parseMap);
     const windowsByCourse = new Map<string, MapWindow[]>();
+    const seqById = new Map(controlsForAll.map((c) => [c.id, c.seq]));
+    const windowsKey = (row: { kind: string; seq: number; courseId: string | null; classId: string | null }) =>
+      row.kind === "setter" ? `setter:${row.seq}` : `${row.courseId ?? "all_controls"}:${row.classId ?? ""}`;
 
     const data = parsed.map((row) => {
       if (!row.template) {
@@ -284,12 +308,14 @@ export const courseMapRouter = router({
           },
         };
       }
+      // A setter sheet (§8) lists its group's sites only and draws no course.
+      const group = row.kind === "setter" ? setterControlIds(row.props) : null;
       const layout = resolveMapLayout({
         kind: row.kind,
         template: row.template,
         overrides: row.overrides,
         objects: row.objects,
-        course: row.course
+        course: row.course && !group
           ? {
               name: row.course.name,
               lengthM: row.course.lengthM,
@@ -307,7 +333,7 @@ export const courseMapRouter = router({
               descriptionInstructions: row.course.descriptionInstructions,
             }
           : null,
-        allControls: controlsForAll,
+        allControls: group ? controlsForAll.filter((c) => group.has(c.id)) : controlsForAll,
         ...(eventRow ? { event: eventRow } : {}),
         windowCenter: row.windowCenter,
         mapScale: mapInfo?.scale ?? null,
@@ -315,8 +341,8 @@ export const courseMapRouter = router({
         mapName: row.name,
         ...(row.kind === "course" ? { section: row.sectionIndex } : {}),
       });
-      // A class's sheets are validated among themselves (another scale).
-      const key = `${row.courseId ?? "all_controls"}:${row.classId ?? ""}`;
+      // A class's sheets are validated among themselves (another scale); a setter sheet alone (its controls are its group's).
+      const key = windowsKey(row);
       const windows = windowsByCourse.get(key);
       if (windows) windows.push(layout.window);
       else windowsByCourse.set(key, [layout.window]);
@@ -337,7 +363,7 @@ export const courseMapRouter = router({
               document: row.resolved.document,
               mapScale: mapInfo?.scale ?? null,
               window: row.resolved.window,
-              windows: windowsByCourse.get(`${row.courseId ?? "all_controls"}:${row.classId ?? ""}`),
+              windows: windowsByCourse.get(windowsKey(row)),
               variants: [{ key: "", controls: row.controls }],
               descriptionRowCount: row.descriptionRowCount,
               descriptionHeaderRows: row.descriptionHeaderRows,
@@ -358,6 +384,7 @@ export const courseMapRouter = router({
         sectionIndex: row.sectionIndex,
         version: row.version,
         class: row.class ? { seq: row.class.seq, name: row.class.name } : null,
+        setter: setterOf(row, "controls" in row ? row.controls : [], seqById),
         course: row.course
           ? {
               seq: row.course.seq,
@@ -448,7 +475,8 @@ export const courseMapRouter = router({
         if (!row.template) throw new TRPCError({ code: "PRECONDITION_FAILED", message: "No map template is assigned" });
         const resolved = resolveSheet(sheetInputForMapRow(row, rowCtx));
         // Windows of the same set's other sheets (the course's, or the class's), for the "outside every sheet" check.
-        const siblings = await ctx.db.courseMap.findMany({
+        // A setter sheet stands alone: its controls are its group's (§8).
+        const siblings = row.kind === "setter" ? [] : await ctx.db.courseMap.findMany({
           where: { eventId: ctx.event.id, kind: row.kind, courseId: row.courseId, classId: row.classId, seq: { not: row.seq }, templateId: { not: null } },
           include: { template: true },
         });
@@ -465,6 +493,7 @@ export const courseMapRouter = router({
             courseSeq: row.course?.seq ?? null,
             classSeq: row.class?.seq ?? null,
             sectionIndex: row.sectionIndex,
+            setter: setterOf(row, resolved.layout.controls, new Map(allControls.map((c) => [c.id, c.seq]))),
             version: parsed.version,
             windowCenter: parsed.windowCenter,
             overrides: parsed.overrides,

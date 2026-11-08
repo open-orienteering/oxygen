@@ -10,7 +10,7 @@
  * `graphics` rows stay as uploaded).
  */
 
-import { course, courseMapObjectSchema, courseMapOverridesSchema, mapGeo, windowBoundingBox, type MapWindow } from "@oxygen/shared";
+import { course, courseMapObjectSchema, courseMapOverridesSchema, mapGeo, setterSheetPropsSchema, windowBoundingBox, type MapWindow } from "@oxygen/shared";
 import { type ColourMode, PdfWriter, composePage, writePage, type PageInput } from "@oxygen/shared/print";
 import { z } from "zod";
 import type { PrismaClient, Prisma } from "../generated/prisma/client.js";
@@ -174,6 +174,8 @@ export interface PrintMapRow {
   kind: string;
   /** `course_maps.section_index`: the part of a course split by map exchanges (course-layer.md §11); absent = 0. */
   sectionIndex?: number;
+  /** `course_maps.props`: a setter sheet's group (`setterSheetPropsSchema`, docs/course-layout.md §8); absent = `{}`. */
+  props?: unknown;
   overrides: unknown;
   objects: unknown;
   windowCenter: unknown;
@@ -244,6 +246,7 @@ export interface MapRowContext {
  */
 export function sheetInputForMapRow(row: PrintMapRow, ctx: MapRowContext): ResolveSheetInput {
   if (!row.template) throw new Error(`Map "${row.name}" has no template`);
+  if (row.kind === "setter") return setterSheetInput(row, ctx);
   const courseUuid = row.kind === "course" && row.course?.id !== undefined ? String(row.course.id) : null;
   const inScope = ctx.courseObjects ? objectsInScope(ctx.courseObjects, courseUuid, ctx.classesByCourse ?? new Map()) : [];
   const ends = row.course
@@ -281,6 +284,40 @@ export function sheetInputForMapRow(row: PrintMapRow, ctx: MapRowContext): Resol
     ...(row.kind === "course" ? { section: row.sectionIndex ?? 0 } : {}),
     structure: row.course?.structure ?? null,
     ...(row.course?.id !== undefined ? { courseId: String(row.course.id) } : {}),
+    courseObjects: inScope.map(({ id: _uuid, scope: _scope, z: _z, version: _v, seq, ...body }) => ({ ...body, id: seq }) as course.CourseLayerObject),
+    ...(ctx.autoCuts === false ? { autoCuts: false } : {}),
+  };
+}
+
+/** A setter sheet's group: the uuids of `props.controlIds`, empty when the props are not a setter's. */
+export function setterControlIds(props: unknown): Set<string> {
+  const parsed = setterSheetPropsSchema.safeParse(props);
+  return new Set(parsed.success ? parsed.data.controlIds : []);
+}
+
+/**
+ * A setter sheet (docs/course-layout.md §8; 08 §4.6): the sites of its
+ * group only (`props.controlIds` among `ctx.allControls`) as the
+ * all-controls sheet lists sites — codes, 702 / 710 by kind, the block in
+ * code order — with no course (a course-scoped setter map draws no legs),
+ * the `all`-scoped course objects, titled by the row's name.
+ */
+function setterSheetInput(row: PrintMapRow, ctx: MapRowContext): ResolveSheetInput {
+  const group = setterControlIds(row.props);
+  const inScope = ctx.courseObjects ? objectsInScope(ctx.courseObjects, null, ctx.classesByCourse ?? new Map()) : [];
+  return {
+    kind: "setter",
+    template: row.template!,
+    overrides: courseMapOverridesSchema.parse(row.overrides),
+    objects: mapObjectsSchema.parse(row.objects),
+    course: null,
+    allControls: ctx.allControls.filter((c) => group.has(c.id)),
+    windowCenter: row.windowCenter && typeof row.windowCenter === "object" ? z.object({ x: z.number(), y: z.number() }).parse(row.windowCenter) : null,
+    mapScale: ctx.mapInfo.scale,
+    meridianTiltDeg: ctx.mapInfo.meridianTiltDeg,
+    event: ctx.event,
+    mapName: row.name,
+    structure: null,
     courseObjects: inScope.map(({ id: _uuid, scope: _scope, z: _z, version: _v, seq, ...body }) => ({ ...body, id: seq }) as course.CourseLayerObject),
     ...(ctx.autoCuts === false ? { autoCuts: false } : {}),
   };
