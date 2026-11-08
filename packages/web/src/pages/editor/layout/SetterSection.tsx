@@ -22,7 +22,7 @@ import type { EditorView } from "../../../lib/editor/state";
 import { nextSetterSheet, setterScopeOf, setterSheetsOf, type SetterSheetRow } from "../../../lib/editor/setter-maps";
 import { InspectorSection } from "../Inspector";
 import type { LayoutTarget } from "./bindings";
-import { useRefresh, type Record_, type Run } from "./SheetActions";
+import { useRefresh, type Record_, type Run } from "./refresh";
 
 const LINK = "text-[11px] text-purple-700 hover:underline cursor-pointer disabled:opacity-40 disabled:no-underline disabled:cursor-default";
 

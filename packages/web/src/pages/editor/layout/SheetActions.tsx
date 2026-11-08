@@ -30,28 +30,11 @@ import type { LayoutTarget } from "./bindings";
 import { nextSheetName, type EditorSheet } from "./model";
 import { TextField } from "./fields";
 import { NewTemplateForm } from "../../../components/NewTemplateForm";
+import { useRefresh, type Record_, type Run } from "./refresh";
 
-export type Run = <T>(op: () => Promise<T>) => Promise<T | undefined>;
-export type Record_ = (undo: () => Promise<unknown>, redo: () => Promise<unknown>) => unknown;
+export type { Record_, Run };
 
 const LINK = "text-[11px] text-purple-700 hover:underline cursor-pointer disabled:opacity-50";
-
-/**
- * Reload what a sheet or template write changes. `leaving`: the shown row is
- * gone — the reads are only marked stale (the next target's read fetches
- * itself), so the deleted one is not read again before the view moves.
- */
-export function useRefresh() {
-  const utils = trpc.useUtils();
-  return async (leaving = false) => {
-    await Promise.all([
-      utils.courseMap.list.invalidate(),
-      utils.courseMap.resolveSheet.invalidate(undefined, leaving ? { refetchType: "none" } : undefined),
-      utils.mapTemplate.list.invalidate(),
-      utils.layout.classOverrides.invalidate(),
-    ]);
-  };
-}
 
 export function SheetActions(p: {
   sheet: NonNullable<EditorSheet["sheet"]>;

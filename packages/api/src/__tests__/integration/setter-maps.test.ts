@@ -109,8 +109,9 @@ describe("setter maps (course-layout.md §8, F10)", () => {
       expect(row.overrides).toEqual({ description: { cellSizeMm: 5 } });
     }
     // Setter sheets come after the event's other course-less sheets.
-    const courseSheet = await t.db.courseMap.findFirstOrThrow({ where: { eventId: t.eventId, kind: "course" } });
-    expect(courseSheet.templateId).not.toBeNull();
+    const others = await t.db.courseMap.findMany({ where: { eventId: t.eventId, courseId: null, kind: { not: "setter" } } });
+    expect(rows[0].sortOrder).toBeGreaterThan(Math.max(-1, ...others.map((o) => o.sortOrder)));
+    expect(rows[1].sortOrder).toBeGreaterThan(rows[0].sortOrder);
 
     // Regenerate: the same groups on new rows; the old ones are gone.
     const again = await caller.layout.setterMaps({ groups: 2 });
