@@ -28,6 +28,15 @@ describe("courseActions (the legacy popover's entries, docs/course-editor.md §4
     expect(ids({ phantom: { insertAt: 2 }, course: "Lång", legEdit: true })).toEqual(["insert", "add-bend"]);
   });
 
+  it("a top-level leg: Create variation here, after add bend (§12, F7)", () => {
+    const withCreate: ActionHandlers = { ...on, createVariation: noop };
+    const list = (ctx: Partial<ActionContext>) => courseActions({ ...base, ...ctx }, withCreate, label).map((a) => a.id);
+    expect(list({ phantom: { insertAt: 2 }, course: "Lång", legEdit: true, variationHere: true })).toEqual(["insert", "add-bend", "create-variation"]);
+    // Inside or across a group, or on a phone (the page says no): not offered.
+    expect(list({ phantom: { insertAt: 2 }, course: "Lång", legEdit: true })).toEqual(["insert", "add-bend"]);
+    expect(list({ phantom: { insertAt: null }, course: "Lång", variationHere: true })).not.toContain("create-variation");
+  });
+
   it("a control on the course", () => {
     expect(ids({ selected: sel({ onCourse: true, hasLabelOffset: true }), course: "Lång" }))
       .toEqual(["append", "remove-from-course", "reset-label", "radio", "description", "delete"]);

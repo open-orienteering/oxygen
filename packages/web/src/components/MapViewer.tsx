@@ -6,6 +6,7 @@ import {
   type ControlDescription,
   defaultMapAppearance,
 } from "@oxygen/shared";
+import { withCourseOverride, type CourseDraw } from "../lib/editor/variation-view";
 import { descriptionCells, IOF_SYMBOLS } from "../iof-symbols";
 import {
   buildDescriptionSheet,
@@ -128,6 +129,8 @@ export interface CourseOverlay {
   legs?: Record<string, import("@oxygen/shared").course.CourseLegProps>;
   /** Ids of the controls whose number every visit hides. */
   hiddenNumbers?: number[];
+  /** The editor's All-variations view (docs/course-editor.md §12): an alternative drawn in its tint (course-layer.md §12.7). */
+  tint?: string;
 }
 
 /**
@@ -299,6 +302,12 @@ export interface MapViewerEditorProps {
   fullBleed?: boolean;
   /** Check markers (docs/course-editor.md §8): UI-layer shapes, never hit targets. */
   markers?: readonly ToolShape[];
+  /**
+   * A course with variation groups as the editor shows it (docs/course-editor.md §12): the first
+   * entry replaces the overlay of the same name (controls, legs, hidden numbers — the displayed
+   * path), the others are drawn beside it, highlighted (All variations' tinted branches).
+   */
+  courseOverride?: readonly CourseDraw[] | null;
 }
 
 /** What a tool gets for a pointer event. */
@@ -442,7 +451,7 @@ export function MapViewer({
   northOffset,
   cutRotationDeg,
   controls = [],
-  courses = [],
+  courses: coursesProp = [],
   courseObjects,
   autoCuts = true,
   highlightControlId,
@@ -465,6 +474,9 @@ export function MapViewer({
   mapBudget = "event",
   rotationCorrection,
 }: Props) {
+  // §12: the editor draws a course with variation groups as it shows it (the displayed path, or All variations).
+  const courseOverride = editor?.courseOverride ?? null;
+  const courses: CourseOverlay[] = useMemo(() => withCourseOverride(coursesProp, courseOverride), [coursesProp, courseOverride]);
   const { nameId } = useParams<{ nameId: string }>();
   const { t } = useTranslation("dashboard");
   const isCoarsePointer = useMediaQuery("(pointer: coarse)");

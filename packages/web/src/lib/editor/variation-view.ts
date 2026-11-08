@@ -59,6 +59,18 @@ export function courseDrawOf(name: string, items: readonly Control[], tint?: str
   };
 }
 
+/**
+ * The viewer's overlays with the editor's override applied (`MapViewerEditorProps.courseOverride`):
+ * the first draw replaces the overlay of its name (its other fields — label offsets, classes, length —
+ * kept), the rest are added highlighted. No override: the overlays as given.
+ */
+export function withCourseOverride<O extends { name: string }>(courses: readonly O[], draws: readonly CourseDraw[] | null): (O | (CourseDraw & { highlight: true }))[] {
+  if (!draws || draws.length === 0) return courses as O[];
+  const [own, ...extra] = draws;
+  const out = courses.map((c) => (c.name === own.name ? { ...c, controls: own.controls, legs: own.legs, hiddenNumbers: own.hiddenNumbers } : c));
+  return [...out, ...extra.map((d) => ({ ...d, highlight: true as const }))];
+}
+
 /** The branch course's name: unique per group and alternative, never a stored course's. */
 export const branchName = (courseName: string, groupId: string, label: string) => `${courseName}#${groupId}/${label}`;
 

@@ -34,6 +34,10 @@ export interface TopBarProps {
   classes: { seq: number; name: string }[];
   classSeq: number | null;
   onClass: (seq: number | null) => void;
+  /** The selected course's variant keys (docs/course-editor.md §12): Variant ▾ and All variations; empty without groups. */
+  variants?: string[];
+  variantKey?: string | null;
+  onVariant?: (key: string | null) => void;
   exportState: ExportState;
   onExportError: (message: string) => void;
   mode: EditorMode;
@@ -100,6 +104,25 @@ export function TopBar(p: TopBarProps) {
               <option key={c.seq} value={c.seq}>{c.name}</option>
             ))}
           </select>
+        )}
+        {(p.variants?.length ?? 0) > 0 && (
+          <>
+            <select
+              data-testid="editor-view-variant"
+              aria-label={t("viewVariant")}
+              title={t("viewVariantHint")}
+              value={p.view === "variant" && p.variantKey ? p.variantKey : ""}
+              onChange={(e) => p.onVariant?.(e.target.value === "" ? null : e.target.value)}
+              className={`max-w-[6rem] text-xs border-0 border-l border-slate-200 px-1 py-1 cursor-pointer ${p.view === "variant" ? "bg-purple-100 text-purple-700 font-medium" : "bg-white text-slate-600"}`}
+            >
+              <option value="">{t("viewVariant")}</option>
+              {p.variants!.map((k) => (
+                <option key={k} value={k}>{k}</option>
+              ))}
+            </select>
+            <button type="button" data-testid="editor-view-all-variations" aria-pressed={p.view === "all-variations"} title={t("viewAllVariationsHint")}
+              className={`border-l border-slate-200 ${segment(p.view === "all-variations")}`} onClick={() => p.onView(p.view === "all-variations" ? "course" : "all-variations")}>{t("viewAllVariations")}</button>
+          </>
         )}
       </div>
       <div className="flex rounded-md border border-slate-200 overflow-hidden" role="group" aria-label={t("mode")}>
