@@ -260,6 +260,20 @@ export const courseMapOverridesSchema = z.object({
 export type CourseMapOverrides = z.infer<typeof courseMapOverridesSchema>;
 
 /**
+ * `course_maps.props` of a `kind = 'setter'` sheet (docs/course-layout.md
+ * §8; 08 §4.6): its number among the scope's setter maps (1 …) and the
+ * control sites of its group (`controls.id` uuids).
+ */
+export const setterSheetPropsSchema = z.object({
+  setter: z.number().int().positive(),
+  controlIds: z.array(z.string()),
+});
+export type SetterSheetProps = z.infer<typeof setterSheetPropsSchema>;
+
+/** Cell size of a setter sheet's description block (08 §4.6 "5 mm description cells"), as the row's `overrides.description`. */
+export const SETTER_DESCRIPTION_CELL_MM = 5;
+
+/**
  * ISOM 2017-2 overprint defaults: purple is the sRGB equivalent of the
  * offset CMYK 35·85·0·0 ("PMS Purple", Appendix 1); circle Ø 5 mm, lines
  * 0.35 mm, control numbers 4.0 mm digit height (symbol 704) — all at the
