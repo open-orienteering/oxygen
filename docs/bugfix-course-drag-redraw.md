@@ -42,7 +42,11 @@ the shape), and stays.
   message, a `load` re-sends the input at once (the reply to a request
   before it answers the old document and is dropped as stale), and a
   worker `error` ends the request in flight so a waiting input is never
-  stuck behind a reply that will not come.
+  stuck behind a reply that will not come. For that the worker now
+  answers a course request whose derivation throws with `error`
+  (`worker.ts`); before, a real worker's `onerror` reached the engine
+  without effect and the inline transport (`?worker=0`, tests) delivered
+  nothing.
 - **The number placer tests only the segments within reach**
   (`packages/shared/src/course-maps/control-label-placement.ts`,
   `docs/course-layer.md` §3.5). Every candidate box of a circle lies
@@ -51,7 +55,8 @@ the shape), and stays.
   and the soft cost reaches `0.5·labelSize` beyond it. Each circle filters
   the segments whose distance to its centre is within that reach, in the
   original order, so every test and every sum sees the same segments in
-  the same order: the result is bit-identical, and the placer costs
+  the same order: the result is bit-identical (a segment with a NaN
+  coordinate is kept, for the tests to judge as before), and the placer costs
   30–105 ms instead of 376–1490 ms on the bench's courses.
 
 On the test fixture (25 controls, one smooth bend per leg, 3000 point
@@ -85,6 +90,11 @@ leg's box), after F19 changes the same files.
   last); `null` waits like any input; the inputs before `load` → one
   request with the last of them; a load overtakes the request in flight
   and its reply is dropped; an error reply releases the waiting input.
+- `packages/web/src/map-gl/__tests__/worker-course.test.ts`: a course
+  request whose derivation throws answers `error`, and the next request
+  is answered.
+- `packages/shared/src/__tests__/control-label-placement.test.ts`: a NaN
+  segment is judged as before the cull.
 - The course goldens (`e2e/__golden__/map-gl/course-*.png`, the scene
   streams) are unchanged; the drag E2E describes of
   `e2e/course-editor.spec.ts` and `e2e/field-mode.spec.ts` stay green.
