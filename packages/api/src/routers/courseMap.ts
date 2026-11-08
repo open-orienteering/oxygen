@@ -152,12 +152,11 @@ export interface EditorSheet {
   courseSeq: number | null;
   document: CourseMapDocument;
   window: MapWindow;
-  /** The page part of the composer's input: paper, frame, window, objects of both anchors, text values, the description block. */
+  /** The page part of the composer's input: paper, frame, window, the (page-anchored) layout objects, text values, the description block. */
   page: Omit<course.PageLayerInput, "context" | "paper"> & { paper: { widthMm: number; heightMm: number } };
   /** The description block's content whether shown or not (the editor toggles it): rows, header, title. */
   block: Pick<NonNullable<course.PageLayerInput["description"]>, "rows" | "header" | "title">;
   appearance: course.CourseAppearance;
-  overprintScale: number;
   labelMode: "sequence" | "code";
   /** Windows of every sheet of the same course (validation: a control must lie in one of them). */
   windows: MapWindow[];
@@ -257,7 +256,6 @@ function editorSheet(
     page: { paper: sheet.paper, frame: sheet.frame, window: sheet.window, objects: sheet.objects, textValues: sheet.textValues, description: sheet.description },
     block: { rows: layout.descriptionRows, header: layout.descriptionHeader, title: sheet.label },
     appearance: sheet.course.appearance,
-    overprintScale: layout.overprintScale,
     labelMode: layout.labelMode,
     windows: rest.windows,
     controls: layout.controls.map((c) => ({ id: c.id, code: c.code, x: c.x, y: c.y })),

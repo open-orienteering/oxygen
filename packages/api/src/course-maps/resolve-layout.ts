@@ -219,12 +219,6 @@ export interface ResolvedMapLayout {
    */
   descriptionHeader: DescriptionSheetHeader | null;
   textValues: MapTextValues;
-  /**
-   * ISOM overprint enlargement `mapScale / printScale` (1 when the base
-   * map scale is unknown). A 1:15000 map printed at 1:7500 doubles the
-   * control circles, numbers and line widths along with the terrain.
-   */
-  overprintScale: number;
   /** The part drawn (`input.section`) when the course has ≥ 2 parts and it is in range; the layer's `viewOptions.section`. */
   section?: number;
 }
@@ -472,7 +466,6 @@ export function resolveMapLayout(
     labelMode,
     descriptionRows,
     descriptionHeader,
-    overprintScale: (input.mapScale ?? printScale) / printScale,
     ...(section !== undefined ? { section } : {}),
     textValues: {
       event: input.event?.name ?? "",

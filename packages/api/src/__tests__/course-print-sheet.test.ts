@@ -52,7 +52,7 @@ describe("resolveSheet", () => {
     expect(sheet.frame).toEqual(template.settings.mapFrame);
     expect(sheet.window).toEqual(layout.window);
     expect(sheet.window.rotationDeg).toBe(-2);
-    expect(sheet.course.viewOptions).toEqual({ allControls: false, labelMode: "sequence", overprintScale: 1.5 });
+    expect(sheet.course.viewOptions).toEqual({ allControls: false, labelMode: "sequence" });
     expect(sheet.course.appearance.circle).toBeCloseTo(1.2, 9);
     expect(sheet.label).toBe("Blue");
     expect(sheet.textValues.course).toBe("Blue");
