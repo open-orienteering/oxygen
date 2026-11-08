@@ -90,28 +90,6 @@ export function LegSection(p: LegSectionProps) {
         {!readOnly && <p className="text-[10px] text-slate-400">{t("legBendsHint")}</p>}
       </div>
 
-      <div data-testid="editor-leg-crossing" data-site-id={leg.crossing?.controlId ?? ""} className="space-y-0.5">
-        <div className="flex items-center gap-2">
-          <span className="text-[11px] text-slate-500">{t("legCrossing")}</span>
-          {leg.crossing ? (
-            <>
-              <span data-testid="editor-leg-crossing-code" className="font-mono text-[11px] text-slate-700">{p.crossingCode ?? leg.crossing.controlId}</span>
-              <button type="button" data-testid="editor-leg-crossing-remove" disabled={readOnly} onClick={() => p.onPatch({ crossing: undefined })}
-                className={`${BUTTON} ml-auto border-red-200 text-red-600 hover:bg-red-50`}>{t("legCrossingRemove")}</button>
-            </>
-          ) : (
-            <span data-testid="editor-leg-crossing-none" className="text-[11px] text-slate-400">{t("legCrossingNone")}</span>
-          )}
-        </div>
-        {leg.crossing && (
-          <label className="flex items-center gap-1.5 text-[11px] text-slate-500">
-            <input data-testid="editor-leg-crossing-section" type="checkbox" checked={!!leg.crossing.section} disabled={readOnly}
-              onChange={(e) => p.onPatch({ crossing: { controlId: leg.crossing!.controlId, ...(e.target.checked ? { section: true } : {}) } })} />
-            {t("legCrossingSection")}
-          </label>
-        )}
-      </div>
-
       <div data-testid="editor-leg-corridor" className="space-y-1">
         <div className="flex items-center gap-2">
           <span className="text-[11px] text-slate-500">{t("legCorridor")}</span>
@@ -138,6 +116,28 @@ export function LegSection(p: LegSectionProps) {
             </label>
             <p className="col-span-2 text-[10px] text-slate-400">{t("legCorridorOpacityHint")}</p>
           </div>
+        )}
+      </div>
+
+      <div data-testid="editor-leg-crossing" data-site-id={leg.crossing?.controlId ?? ""} className="space-y-0.5">
+        <div className="flex items-center gap-2">
+          <span className="text-[11px] text-slate-500">{t("legCrossing")}</span>
+          {leg.crossing ? (
+            <>
+              <span data-testid="editor-leg-crossing-code" className="font-mono text-[11px] text-slate-700">{p.crossingCode ?? leg.crossing.controlId}</span>
+              <button type="button" data-testid="editor-leg-crossing-remove" disabled={readOnly} onClick={() => p.onPatch({ crossing: undefined })}
+                className={`${BUTTON} ml-auto border-red-200 text-red-600 hover:bg-red-50`}>{t("legCrossingRemove")}</button>
+            </>
+          ) : (
+            <span data-testid="editor-leg-crossing-none" className="text-[11px] text-slate-400">{t("legCrossingNone")}</span>
+          )}
+        </div>
+        {leg.crossing && (
+          <label className="flex items-center gap-1.5 text-[11px] text-slate-500">
+            <input data-testid="editor-leg-crossing-section" type="checkbox" checked={!!leg.crossing.section} disabled={readOnly}
+              onChange={(e) => p.onPatch({ crossing: { controlId: leg.crossing!.controlId, ...(e.target.checked ? { section: true } : {}) } })} />
+            {t("legCrossingSection")}
+          </label>
         )}
       </div>
     </div>
