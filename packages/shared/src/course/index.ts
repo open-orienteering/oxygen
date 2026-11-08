@@ -78,6 +78,7 @@ export {
   SAME_FEATURE_MIN_DISTANCE_M,
   UNCROSSABLE_CODES,
   OOB_CODES,
+  VARIATION_BALANCE_TOLERANCE,
   courseChecks,
   checkObstaclesOfDocument,
   invertedCode,
@@ -87,4 +88,5 @@ export {
   type CheckSite,
   type CheckObstacle,
   type CheckDocument,
+  type CheckVariationGroup,
 } from "./checks.js";

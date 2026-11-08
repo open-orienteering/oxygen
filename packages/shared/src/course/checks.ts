@@ -13,12 +13,16 @@ import { isAppliedMatch } from "../map-document/render-bridge.js";
 import { COORD_FLAG } from "../render/pass-stream.js";
 import type { SymbolLibraryId } from "../symbol-library/index.js";
 import { courseDocumentContext } from "./context.js";
-import { routedBends } from "./derive.js";
+import { legLengthMm, routedBends } from "./derive.js";
 import { sectionsOf } from "./structure.js";
 import type { CourseLayerObject } from "./objects.js";
-import type { CourseDerivation, CourseStructure } from "./types.js";
+import type { CourseDerivation, CourseLegProps, CourseStructure } from "./types.js";
 
-/** The phase-1 codes in output order (§9.2). `DESCRIPTION_STALE` is the server's (`course.checks`). */
+/**
+ * The codes in output order (§9.2). `DESCRIPTION_STALE` is the server's
+ * (`course.checks`); the two `VARIATION_*` codes the editor's (they read
+ * `groups`, which `course.checks` does not pass — §9.4).
+ */
 export const COURSE_CHECK_CODES = [
   "CONTROL_TOO_CLOSE",
   "SAME_FEATURE_TOO_CLOSE",
@@ -33,6 +37,8 @@ export const COURSE_CHECK_CODES = [
   "DESCRIPTION_STALE",
   "LEG_CROSSES_OOB",
   "LEG_THROUGH_UNCROSSABLE",
+  "VARIATION_UNBALANCED",
+  "VARIATION_ALL_EMPTY",
 ] as const;
 export type CourseCheckCode = (typeof COURSE_CHECK_CODES)[number];
 
@@ -55,6 +61,8 @@ export const OOB_CODES: ReadonlySet<number> = new Set([708, 709]);
  * the crossing is where the leg passes it (§9.3).
  */
 export const CROSSING_REACH_MM = 1.0;
+/** `VARIATION_UNBALANCED` (08 §5.6): the alternatives' lengths differ by more than this share of the longest. */
+export const VARIATION_BALANCE_TOLERANCE = 0.1;
 
 export interface CourseCheck {
   code: CourseCheckCode;
@@ -118,6 +126,22 @@ export interface CourseChecksInput {
   derivation?: CourseDerivation | null;
   /** Map scale denominator; null skips the distance checks. */
   mapScale: number | null;
+  /** The course's variation groups (§9.2 `VARIATION_*`; the editor's, course-editor.md §12); absent = none. */
+  groups?: readonly CheckVariationGroup[];
+}
+
+/**
+ * A variation group as the checks read it (§9.2): the control before it
+ * (`anchor`), the item after it (`next`) and the alternatives' items with
+ * the legs into them; `exitLeg` is the leg into `next`, every alternative's.
+ */
+export interface CheckVariationGroup {
+  id: string;
+  anchor: string;
+  next: string;
+  loop: boolean;
+  alternatives: { label: string; items: { siteId: string; leg?: CourseLegProps }[] }[];
+  exitLeg?: CourseLegProps;
 }
 
 const positioned = (s: { x: number; y: number }) => s.x !== 0 || s.y !== 0;
@@ -394,9 +418,61 @@ export function courseChecks(input: CourseChecksInput): CourseCheck[] {
     }
   }
 
+  for (const g of input.groups ?? []) out.push(...variationChecks(g, siteById, input.mapScale));
+
   const rank = new Map<string, number>(COURSE_CHECK_CODES.map((c, i) => [c, i]));
   return out
     .map((c, i) => ({ c, i }))
     .sort((p, q) => rank.get(p.c.code)! - rank.get(q.c.code)! || p.i - q.i)
     .map((p) => p.c);
+}
+
+/**
+ * A group's checks (§9.2; 08 §5.6): `VARIATION_ALL_EMPTY` while no
+ * alternative holds a control (valid, but every variant is the same
+ * straight leg), else `VARIATION_UNBALANCED` when the alternatives' lengths
+ * differ by more than `VARIATION_BALANCE_TOLERANCE` of the longest. An
+ * alternative is measured anchor → its controls → the next item along
+ * bends and crossing points (an empty one: the straight leg); in a loop
+ * each petal back to the anchor, empty petals not counted. At the anchor.
+ */
+function variationChecks(g: CheckVariationGroup, siteById: ReadonlyMap<string, CheckSite>, mapScale: number | null): CourseCheck[] {
+  const anchor = siteById.get(g.anchor);
+  if (!anchor || !positioned(anchor)) return [];
+  const at = { x: anchor.x, y: anchor.y };
+  if (g.alternatives.every((a) => a.items.length === 0)) {
+    return [{ code: "VARIATION_ALL_EMPTY", siteIds: [anchor.id], at, params: { code: anchor.code } }];
+  }
+  const end = g.loop ? anchor : siteById.get(g.next);
+  if (!end || !positioned(end)) return [];
+  const lengths: { label: string; mm: number }[] = [];
+  for (const alt of g.alternatives) {
+    if (g.loop && alt.items.length === 0) continue;
+    const hops: { site: CheckSite; leg?: CourseLegProps }[] = [{ site: anchor }];
+    for (const item of alt.items) {
+      const s = siteById.get(item.siteId);
+      if (s && positioned(s) && s.kind !== "crossing_point" && s.kind !== "map_issue") hops.push({ site: s, leg: item.leg });
+    }
+    hops.push({ site: end, leg: g.loop ? undefined : g.exitLeg });
+    let mm = 0;
+    for (let i = 1; i < hops.length; i++) {
+      const a = hops[i - 1].site, b = hops[i].site, leg = hops[i].leg;
+      const via = siteById.get(leg?.crossing?.controlId ?? "");
+      const crossing = via && via.kind === "crossing_point" && positioned(via) ? via : undefined;
+      mm += legLengthMm([a, ...(crossing ? routedBends(a, leg?.bends, crossing, b) : (leg?.bends ?? [])), b]);
+    }
+    lengths.push({ label: alt.label, mm });
+  }
+  if (lengths.length < 2) return [];
+  const short = lengths.reduce((p, q) => (q.mm < p.mm ? q : p));
+  const long = lengths.reduce((p, q) => (q.mm > p.mm ? q : p));
+  if (long.mm <= 0 || (long.mm - short.mm) / long.mm <= VARIATION_BALANCE_TOLERANCE) return [];
+  // Ground metres with a scale, else paper mm.
+  const m = (mm: number) => (mapScale ? Math.round((mm * mapScale) / 1000) : Math.round(mm * 10) / 10);
+  return [{
+    code: "VARIATION_UNBALANCED",
+    siteIds: [anchor.id],
+    at,
+    params: { a: short.label, b: long.label, lengthA: m(short.mm), lengthB: m(long.mm), diffPct: Math.round(((long.mm - short.mm) / long.mm) * 100), unit: mapScale ? "m" : "mm" },
+  }];
 }

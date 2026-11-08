@@ -1,7 +1,7 @@
 /** Advisory course checks (course-layer.md §9): one fixture per code. */
 
 import { describe, expect, it } from "vitest";
-import { COURSE_CHECK_CODES, OOB_CODES, UNCROSSABLE_CODES, checkObstaclesOfDocument, courseChecks, invertedCode, type CheckObstacle, type CheckSite, type CourseChecksInput } from "../checks.js";
+import { COURSE_CHECK_CODES, OOB_CODES, UNCROSSABLE_CODES, checkObstaclesOfDocument, courseChecks, invertedCode, type CheckObstacle, type CheckSite, type CheckVariationGroup, type CourseChecksInput } from "../checks.js";
 import { COORD_FLAG } from "../../render/pass-stream.js";
 import { OBJECT_TYPE, decodeMapDocument, encodeMapDocument, type MapDocumentInput } from "../../map-document/index.js";
 import { getSymbolLibrary, SYMBOL_LIBRARY_VERSION } from "../../symbol-library/index.js";
@@ -251,13 +251,66 @@ describe("legs", () => {
   });
 });
 
+describe("variation groups (§9.2 VARIATION_*, F7)", () => {
+  // Anchor 31 (10, 0), next 33 (25, 0): the straight leg is 150 m at 1:10 000.
+  const sites = [...SITES, S("40", 17.5, 2), S("41", 17.5, 10), S("P", 17.5, -3, { kind: "crossing_point", description: null })];
+  const group = (alts: string[][], over: Partial<CheckVariationGroup> = {}): CheckVariationGroup => ({
+    id: "g", anchor: "31", next: "33", loop: false,
+    alternatives: alts.map((ids, i) => ({ label: String.fromCharCode(65 + i), items: ids.map((siteId) => ({ siteId })) })),
+    ...over,
+  });
+  const found = (g: CheckVariationGroup, mapScale: number | null = 10000) =>
+    run({ sites, groups: [g], mapScale }).filter((c) => c.code.startsWith("VARIATION_"));
+
+  it("flags alternatives more than 10 % apart, once per group, at the anchor, shortest and longest named", () => {
+    const [c] = found(group([[], ["41"]]));
+    expect(c.code).toBe("VARIATION_UNBALANCED");
+    expect(c.siteIds).toEqual(["31"]);
+    expect(c.at).toEqual({ x: 10, y: 0 });
+    expect(c.params).toMatchObject({ a: "A", b: "B", lengthA: 150, unit: "m" });
+    expect(Number(c.params!.lengthB)).toBeGreaterThan(150);
+    expect(found(group([[], ["41"]]))).toHaveLength(1);
+  });
+
+  it("within 10 % is balanced; an empty plain alternative is the straight leg", () => {
+    // 31 → 40 → 33: 2 × hypot(7.5, 2) mm ≈ 155 m against 150 m.
+    expect(found(group([[], ["40"]]))).toEqual([]);
+  });
+
+  it("measures along the legs' bends and crossing points", () => {
+    const bent = group([[], []]);
+    bent.alternatives[1].items = [{ siteId: "40", leg: { bends: [{ x: 12, y: 12 }] } }];
+    expect(found(bent).map((c) => c.code)).toEqual(["VARIATION_UNBALANCED"]);
+    const crossed = group([[], []]);
+    crossed.alternatives[1].items = [{ siteId: "40", leg: { crossing: { controlId: "P" } } }];
+    expect(found(crossed).map((c) => c.code)).toEqual(["VARIATION_UNBALANCED"]);
+    // The exit leg is every alternative's: its bend lengthens both.
+    expect(found(group([[], ["40"]], { exitLeg: { bends: [{ x: 22, y: 12 }] } }))).toEqual([]);
+  });
+
+  it("a loop compares its non-empty petals back to the anchor", () => {
+    expect(found(group([["40"], ["41"]], { loop: true })).map((c) => c.code)).toEqual(["VARIATION_UNBALANCED"]);
+    expect(found(group([["41"], []], { loop: true }))).toEqual([]);
+  });
+
+  it("an all-empty group is VARIATION_ALL_EMPTY (valid, a warning); unpositioned anchors are skipped", () => {
+    expect(found(group([[], []])).map((c) => [c.code, c.siteIds])).toEqual([["VARIATION_ALL_EMPTY", ["31"]]]);
+    expect(run({ sites: sites.map((s) => (s.id === "31" ? { ...s, x: 0, y: 0 } : s)), groups: [group([[], ["41"]])] }).filter((c) => c.code.startsWith("VARIATION_"))).toEqual([]);
+  });
+
+  it("without a scale the lengths are paper mm; the codes sort after the leg checks", () => {
+    expect(found(group([[], ["41"]]), null)[0].params).toMatchObject({ lengthA: 15, unit: "mm" });
+    expect(COURSE_CHECK_CODES.slice(-3)).toEqual(["LEG_THROUGH_UNCROSSABLE", "VARIATION_UNBALANCED", "VARIATION_ALL_EMPTY"]);
+  });
+});
+
 describe("output", () => {
   it("is ordered by the code table, then input order, and deterministic", () => {
     const sites = [...SITES.map((s) => (s.id === "32" ? { ...s, description: null } : s)), S("x", 50, 50, { codes: [30] }), S("dup", 10.5, 0, { codes: [31] })];
     const a = run({ sites });
     expect(a.map((c) => c.code)).toEqual(["CONTROL_TOO_CLOSE", "CODE_BELOW_31", "CODE_DUPLICATE", "DESCRIPTION_MISSING"]);
     expect(run({ sites })).toEqual(a);
-    expect(COURSE_CHECK_CODES).toHaveLength(13);
+    expect(COURSE_CHECK_CODES).toHaveLength(15);
   });
 });
 
