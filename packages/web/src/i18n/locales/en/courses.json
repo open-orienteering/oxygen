@@ -38,6 +38,7 @@
   "variantCount": "{{count}} variant",
   "variantCount_other": "{{count}} variants",
   "variationsSequenceHint": "This course has variations: its sequence comes from its structure, and the variants below are written from it.",
+  "variantSequenceHint": "Variant {{key}} of {{root}}: its sequence is written from the root course's structure and is changed in the course editor.",
   "variantOf": "Variant {{key}} of {{root}}, written by the root course's structure",
   "removeCourse": "Remove course",
   "removeConfirm": "Remove course \"{{name}}\"?",

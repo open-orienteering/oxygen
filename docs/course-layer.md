@@ -1754,6 +1754,22 @@ and maps editable; its controls and order mode are disabled with a
 one-line hint (`course-variations-hint`), since `course.update` refuses
 them.
 
+**A variant's detail (F17).** A variant's row expands like the root's: a
+click on the row (its name cell included) toggles the same `?course=<seq>`
+param (`useNumericSearchParam("course")`), so one row is open at a time
+across roots and variants, the URL deep-links a variant, and both rows carry
+`aria-expanded`. The detail is the same `CourseInlineDetail` with
+`readOnly`: `course.detail` serves a child as it serves a root (its own
+`course_controls`, §12.3's mirror), so `course-detail-controls` and the chip
+strip show the **variant's own** sequence, with name, length and maps
+disabled, no order-mode select, a hint (`course-variant-hint`) that the
+root's structure writes it and the course editor changes it, and no "Used by
+classes" panel (classes point at the root; a child's `classes` is `[]`, so
+the panel would wrongly say "not assigned"). The detail adds no delete,
+clone or editor link; the row keeps its one action, the map export. The
+page's map highlights the expanded variant by its own name
+(`<root> <key>`), among the visible roots' variants like a root's.
+
 ### 12.7 Variation tints (screen only)
 
 Row F7 (08 §5.3 "all variations overlay … in distinct purple tints on
@@ -1842,7 +1858,7 @@ label.
 | integration | `packages/api/src/__tests__/integration/course-variants.test.ts` | §12.2–12.5: one child per variant (name, key, parent, copied fields, linear structure with its own id, mirror, lengths as the root's path), journal root first then children; `variantList`, `list` / `detail` by seq; a loop's permutations; an empty alternative, all empty accepted with identical children (F7); colliding keys and the cap refused, nothing written; re-materialisation (same rows across an outside edit, a new key, every key gone → soft-deleted and the runner nulled with its `runner.updated`, keys back → the same uuids); `runner.updated { courseId }` replayed through `events.push`; label offsets of every alternative round-trip; pools (a class on the root, a class picking it later, a key added / dropped, a plain course clears); the refusals (`ROOT_HAS_VARIATIONS`, `COURSE_IS_VARIANT`, nothing written); name / climb / maps mirrored; an offset set through the root; clone of a root and of a variant; delete of a root; `control.delete` of a control in alternative B only (one entry per row) and of a group's anchor (dissolved); an import over a root; an import with `replaceAll` over a root (the runner on a variant nulled and journaled, the pool emptied); a peer applying a root's and its variant's `course.upserted` through `events.push`; the migration's unique pair and `CHECK`; a checkout snapshot exported and imported with its children and pools (the backup dump is `SELECT *` per table, so the children are ordinary `courses` rows there) |
 | integration | `packages/api/src/__tests__/integration/runner-variants.test.ts` | §12.3–12.4 with F6b: a vanished variant's runner dealt one of the remaining pool (the entry carries the seq), a class onto / off a root deals / clears its runners after its `class.upserted`; the rest of F6b is listed in `course-controls-and-matching.md` "Test coverage" |
 | integration | `journal-completeness.test.ts` "course.setStructure with a group" | §12.4: the variants' `course.upserted` (parent, key, name), the class's `coursePools`, the vanished variant's `runner.updated { courseId: null }` |
-| E2E | `e2e/courses.spec.ts` "a course with variations lists its variants under it" | §12.6: a root written by `course.setStructure` over HTTP shows "2 variants", its two variant rows right under it with no controls of their own, the roots-only count, and a read-only sequence in its detail |
+| E2E | `e2e/courses.spec.ts` "a course with variations lists its variants under it" | §12.6: a root written by `course.setStructure` over HTTP shows "2 variants", its two variant rows right under it with no controls of their own, the roots-only count, and a read-only sequence in its detail; F17: variant B's row expands to its own codes (`181;183;184`, disabled, name disabled, hint, no order mode), the root's detail closes (`aria-expanded`), `?course=<variant>` reopens it, a second click closes it. `course-variants.test.ts` "variantList, list and detail…" adds the contract: a child's `detail` carries its own `controlCodes` and `classes: []` |
 | unit | `packages/api/src/__tests__/course-structure.test.ts` | §6.2: `splitStructure` (explicit start / finish, implicit default, role start / finish, a start mid-sequence), `structureFromColumns` and its round trip, wire ↔ stored mapping |
 | unit | `packages/api/src/__tests__/version-conflict.test.ts` | §7: the `errorFormatter` lifts the payload beside tRPC's fields and leaves the duplicate-code `CONFLICT` alone; `controlFieldsDiff`; `baseVersionSchema` |
 | integration | `packages/api/src/__tests__/integration/course-structure.test.ts` | kind ↔ status sync, the slice-F kinds written (F4), circle gaps; `course.update` writes a structure, token = the entry's HLC, structure and token in the payload; a pre-D0 course reads from its columns; `setStructure` mirror (start / finish, sequence, hidden numbers, label offsets not in the column), geometry byte-identical to `update`'s, variations and unknown controls refused; stale course token → `CONFLICT` with current and differing, nothing written, no token = LWW; stale control token → differing fields; `differing: null` at token 0; separate tokens both ways; `control.delete` prunes and advances; seeded groups hold `courses.review`; a controller checks off and writes notes but cannot move |

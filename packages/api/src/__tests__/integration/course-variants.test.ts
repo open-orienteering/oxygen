@@ -135,6 +135,10 @@ describe("materialisation (course-layer.md §12)", () => {
     expect(summaries.find((c) => c.id === id)).toMatchObject({ parentCourseId: null, variantKey: null });
     expect(summaries.find((c) => c.id === kids[2].seq)).toMatchObject({ parentCourseId: id, variantKey: "C", name: "Listed C" });
     expect(await caller.course.detail({ id: kids[0].seq })).toMatchObject({ parentCourseId: id, variantKey: "A" });
+    // A variant's detail carries its own sequence (F17: the Courses page shows it read-only).
+    const detailB = await caller.course.detail({ id: kids[1].seq });
+    expect(detailB).toMatchObject({ parentCourseId: id, variantKey: "B", classes: [] });
+    expect(detailB.controlCodes.map((c) => c.code)).toEqual(["31", "33", "34"]);
     expect(await caller.course.variantList({ courseId: kids[0].seq })).toEqual([]);
     // The root's wire structure keeps its groups by public ids.
     const detail = await caller.course.detail({ id });
