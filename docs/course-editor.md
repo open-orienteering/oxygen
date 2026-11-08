@@ -748,7 +748,7 @@ rules `course-layer.md` §10.3). Both are sites that are never items.
   cursor (north–south without a leg), labelled *Crossing point*; it adds
   no provisional visit (no number, no pending leg). **The click** (snapped)
   on a leg creates the site (code-less `control.create { kind:
-  "crossing_point" }`, named "Passerpunkt N") and sets the leg's
+  "crossing_point" }`, named "Passeringspunkt N") and sets the leg's
   `crossing` (`setLegProps(itemIndex, { crossing: { controlId } })`) —
   one undo entry, the site selected — and **returns to `V`**: one
   crossing per leg, and the selected leg is consumed by the write

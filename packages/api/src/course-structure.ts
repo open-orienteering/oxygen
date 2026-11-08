@@ -436,20 +436,22 @@ export async function remirrorStoredStructures(db: Db, eventId: bigint, courseUu
 /**
  * How stored structures use a site (course-layer.md §6.3, §10.3): the
  * courses naming it as an item (any alternative) and those whose legs run
- * through it as a crossing point.
+ * through it as a crossing point; `inGroup` those naming it in a variation's
+ * alternative.
  */
-export async function siteUseInStructures(db: Db, eventId: bigint, controlUuid: string): Promise<{ asItem: string[]; asCrossing: string[] }> {
+export async function siteUseInStructures(db: Db, eventId: bigint, controlUuid: string): Promise<{ asItem: string[]; asCrossing: string[]; inGroup: string[] }> {
   const rows = await db.course.findMany({
     where: { eventId, removed: false, NOT: { structure: { equals: PrismaNs.DbNull } } },
     select: { id: true, structure: true },
   });
-  const out = { asItem: [] as string[], asCrossing: [] as string[] };
+  const out = { asItem: [] as string[], asCrossing: [] as string[], inGroup: [] as string[] };
   for (const r of rows) {
     const parsed = course.courseStructureSchema.safeParse(r.structure);
     if (!parsed.success) continue;
     const items = parsed.data.items.flatMap((i) => (i.kind === "variation" ? i.alternatives.flatMap((a) => a.items) : [i]));
     if (items.some((i) => i.siteId === controlUuid)) out.asItem.push(r.id);
     if (items.some((i) => i.leg?.crossing?.controlId === controlUuid)) out.asCrossing.push(r.id);
+    if (parsed.data.items.some((i) => i.kind === "variation" && i.alternatives.some((a) => a.items.some((x) => x.siteId === controlUuid)))) out.inGroup.push(r.id);
   }
   return out;
 }

@@ -59,7 +59,7 @@ const through = (via: number, section?: boolean) => ({
 describe("kinds on control.create / update (§6.3)", () => {
   it("creates code-less crossing and map-issue points named like starts; their public id is the seq", async () => {
     const p = await rowOf(crossing);
-    expect([p.kind, p.status, p.codes, p.name]).toEqual(["crossing_point", "ok", "", "Passerpunkt 1"]);
+    expect([p.kind, p.status, p.codes, p.name]).toEqual(["crossing_point", "ok", "", "Passeringspunkt 1"]);
     expect(p.seq).toBe(crossing);
     // Its seq is above every punch code (MARK_SEQ_BASE), so its public id never names a control.
     expect(crossing).toBeGreaterThan(10_000);
@@ -136,6 +136,18 @@ describe("course.setStructure and the slice-F kinds (§6.1)", () => {
     expect((await rowOf(crossing)).kind).toBe("crossing_point");
     await expect(caller.control.update({ id: 31, kind: "map_issue" })).rejects.toMatchObject({ code: "PRECONDITION_FAILED", message: expect.stringContaining("SITE_KIND_NOT_ITEM") });
     expect((await rowOf(31)).kind).toBe("control");
+    // A control in a variation's alternative cannot become an exchange (VARIATION_CROSSES_EXCHANGE).
+    const g = await caller.course.create({ name: "Grouped" });
+    await caller.course.setStructure({
+      courseId: g.id,
+      structure: {
+        version: 1, id: "g", orderMode: "ordered",
+        items: [{ siteId: startSeq }, { siteId: 31 }, { kind: "variation", id: "v", alternatives: [{ label: "A", items: [{ siteId: 33 }] }, { label: "B", items: [] }] }, { siteId: 32 }, { siteId: finishSeq }],
+      },
+    });
+    await expect(caller.control.update({ id: 33, kind: "map_exchange" })).rejects.toMatchObject({ code: "PRECONDITION_FAILED", message: expect.stringContaining("VARIATION_CROSSES_EXCHANGE") });
+    expect((await rowOf(33)).kind).toBe("control");
+    await caller.course.delete({ id: g.id });
     // Unused sites change freely.
     const free = await caller.control.create({ codes: "77", xpos: 3, ypos: 3 });
     await caller.control.update({ id: free.id, kind: "map_exchange" });

@@ -454,7 +454,8 @@ Stored lengths of an edited course come from the course layer's derived
 legs (`course-layer.md` §4.1): centre to centre between consecutive
 positioned controls of the sequence `courseSequenceOf` reads (§6.2
 there), **along the leg's bends** when the stored structure has any
-(`LegProps.bends`, `course-layer.md` §10.1, F1), each leg
+(`LegProps.bends`, `course-layer.md` §10.1, F1) and through the
+crossing point the leg runs through (`LegProps.crossing`, §10.3, F4), each leg
 `Math.round(mm × scale / 1000)`, the total rounded once; a leg's style
 (`line`, `marked_route`, `none`) and its corridor never change it;
 free-order courses keep the length the organiser typed.
@@ -463,7 +464,7 @@ The export's `derived` recompute ("recomputed from the controls' current
 positions" above) stays straight, centre to centre (user, 2026-11-07): a
 course with bent legs exports a shorter `LegLength` / `Length` than it
 stores until the IOF / Purple Pen export row (F9) reads the layer's
-lengths. Nothing can author bends before the leg inspector (F3).
+lengths. The editor authors bends since F3 and crossing points since F4.
 
 | Test | Covers |
 |---|---|

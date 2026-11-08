@@ -342,7 +342,7 @@ function siteKind(row: { kind: string; status: string }): ControlKind {
 const CODELESS_NAMES: Partial<Record<ControlKind, string>> = {
   start: "Start",
   finish: "Mål",
-  crossing_point: "Passerpunkt",
+  crossing_point: "Passeringspunkt",
   map_issue: "Kartutdelning",
 };
 
@@ -361,7 +361,9 @@ const NON_ITEM_KINDS: ReadonlySet<ControlKind> = new Set(["crossing_point", "map
  * A kind change that would leave a stored structure invalid is refused, not
  * pruned (course-layer.md §6.3): a site that is an item cannot become a
  * crossing or map-issue point (`SITE_KIND_NOT_ITEM`), a crossing point a
- * leg runs through cannot become another kind (`CROSSING_KIND`).
+ * leg runs through cannot become another kind (`CROSSING_KIND`), a site in
+ * a variation's alternative cannot become a map exchange
+ * (`VARIATION_CROSSES_EXCHANGE`).
  */
 async function assertKindChangeAllowed(
   tx: PrismaNs.TransactionClient,
@@ -380,6 +382,9 @@ async function assertKindChangeAllowed(
   }
   if (current === "crossing_point" && use.asCrossing.length > 0) {
     throw new TRPCError({ code: "PRECONDITION_FAILED", message: "CROSSING_KIND: a leg runs through the crossing point" });
+  }
+  if (kind === "map_exchange" && use.inGroup.length > 0) {
+    throw new TRPCError({ code: "PRECONDITION_FAILED", message: "VARIATION_CROSSES_EXCHANGE: the control is in a variation" });
   }
 }
 

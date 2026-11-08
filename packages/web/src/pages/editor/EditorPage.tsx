@@ -171,7 +171,8 @@ export function EditorPage() {
     const byId = new Map((controlCoords.data ?? []).map((c) => [c.id, c.kind as ControlKind] as const));
     return (id: number): ControlKind => byId.get(id) ?? "control";
   }, [controlCoords.data]);
-  const isMark = useCallback((id: number) => { const k = siteKindOf(id); return k === "crossing_point" || k === "map_issue"; }, [siteKindOf]);
+  // A site this client just created counts before the coordinates refetch (`created`, below).
+  const isMark = useCallback((id: number) => { if (created.current.get(id)?.mark) return true; const k = siteKindOf(id); return k === "crossing_point" || k === "map_issue"; }, [siteKindOf]);
   /** A crossing point's position, for the legs through it (§6.8). */
   const crossingPt = useCallback((leg: { crossing?: { controlId: number } } | undefined) => {
     const c = leg?.crossing ? (controlCoords.data ?? []).find((x) => x.id === leg.crossing!.controlId) : undefined;
@@ -316,7 +317,7 @@ export function EditorPage() {
 
   // Sites this client created since the last refetch: their kind, position and code, for the writes and the
   // ghost that follow before `controlCoordinates` / `control.list` have them (§6.1).
-  const created = useRef(new Map<number, { kind: "control" | "start" | "finish"; pt: Pt; code: number | null }>());
+  const created = useRef(new Map<number, { kind: "control" | "start" | "finish"; pt: Pt; code: number | null; mark?: boolean }>());
   useEffect(() => {
     if (pendingOps === 0) created.current.clear();
   }, [controlCoords.data, controlList.data]); // eslint-disable-line react-hooks/exhaustive-deps
@@ -475,11 +476,11 @@ export function EditorPage() {
       ? client.control.create.mutate({ codes: String(code), status: 0, xpos: pt.x, ypos: pt.y, autoDescribe: true })
       : kind === "start" || kind === "finish"
         ? client.control.create.mutate({ status: kind === "start" ? 4 : 5, xpos: pt.x, ypos: pt.y })
-        // Code-less, named "Passerpunkt N" / "Kartutdelning N" by the server (course-layer.md §6.3).
+        // Code-less, named "Passeringspunkt N" / "Kartutdelning N" by the server (course-layer.md §6.3).
         : client.control.create.mutate({ kind, xpos: pt.x, ypos: pt.y })));
     if (!made) return null;
     const id = made.id;
-    created.current.set(id, { kind: kind === "start" || kind === "finish" ? kind : "control", pt, code });
+    created.current.set(id, { kind: kind === "start" || kind === "finish" ? kind : "control", pt, code, ...(kind === "crossing_point" || kind === "map_issue" ? { mark: true } : {}) });
     if (srr) await run(() => client.control.upsertConfig.mutate({ controlIds: [id], radioType: "internal_radio" }));
     const course = latest.current.selectedCourse;
     const prev = currentStructure();

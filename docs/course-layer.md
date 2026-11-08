@@ -748,7 +748,7 @@ finish) and writing `status` sets `kind`. The migration backfilled
 six (default from `status`, as before); `status` follows a start /
 finish kind and is otherwise the input's (`ok` when the input said 4 /
 5). Crossing and map-issue points are **code-less** like starts and
-finishes: named `Passerpunkt N` / `Kartutdelning N` by the server (the
+finishes: named `Passeringspunkt N` / `Kartutdelning N` by the server (the
 `Start N` / `Mål N` convention), no autodetected description, and given
 a seq above `MARK_SEQ_BASE` (10 000) so their public id — the seq, having
 no code — never meets a punch code (`uuidsOfPublicIds` resolves codes
@@ -760,7 +760,9 @@ refused with `PRECONDITION_FAILED`, nothing written
 (`assertKindChangeAllowed`): a site that is an item of a course (any
 alternative, or a column's start / finish) cannot become a crossing or
 map-issue point (`SITE_KIND_NOT_ITEM`), and a crossing point some leg
-runs through cannot become another kind (`CROSSING_KIND`).
+runs through cannot become another kind (`CROSSING_KIND`), and a site in
+a variation's alternative cannot become a map exchange
+(`VARIATION_CROSSES_EXCHANGE`).
 `control.delete` of a crossing point strips `leg.crossing` from every
 structure naming it (`pruneSiteFromStructure`; the token advances, one
 `course.upserted` each — also on a course whose structure the delete
