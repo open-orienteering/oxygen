@@ -18,7 +18,7 @@ import { getBlob } from "../map-store/blob-store.js";
 import { type PreparedDocument, WINDOW_OBJECT_MARGIN_MM, objectsNear, prepareDocument } from "../render/window-raster.js";
 import { BUNDLED_FONT_FILES, bundledPdfFaces, loadBundledFonts } from "../render/fonts.js";
 import { type BaseMapInfo, getBaseMapInfo } from "./map-source.js";
-import { type LayoutControlSource, type LayoutTemplateSource, layoutControlsFromCourseControls, layoutCourseEnds, layoutCrossings, layoutExchanges } from "./resolve-layout.js";
+import { type LayoutControlSource, type LayoutTemplateSource, layoutControlsFromCourseControls, layoutCourseEnds, layoutCrossings } from "./resolve-layout.js";
 import { type ResolveSheetInput, type SheetInput, resolveSheet } from "./resolve-sheet.js";
 import { objectsInScope, type StoredCourseObject } from "../course-objects.js";
 
@@ -172,6 +172,8 @@ export async function renderCoursePages(opts: CoursePagesOptions): Promise<Cours
 export interface PrintMapRow {
   name: string;
   kind: string;
+  /** `course_maps.section_index`: the part of a course split by map exchanges (course-layer.md §11); absent = 0. */
+  sectionIndex?: number;
   overrides: unknown;
   objects: unknown;
   windowCenter: unknown;
@@ -268,7 +270,6 @@ export function sheetInputForMapRow(row: PrintMapRow, ctx: MapRowContext): Resol
           controls: layoutControlsFromCourseControls(row.course.courseControls),
           descriptionInstructions: row.course.descriptionInstructions,
           crossings: layoutCrossings(row.course.structure ?? null, ctx.allControls),
-          exchanges: layoutExchanges(row.course.structure ?? null, ctx.allControls),
         }
       : null,
     allControls: ctx.allControls,
@@ -277,6 +278,7 @@ export function sheetInputForMapRow(row: PrintMapRow, ctx: MapRowContext): Resol
     meridianTiltDeg: ctx.mapInfo.meridianTiltDeg,
     event: ctx.event,
     mapName: row.name,
+    ...(row.kind === "course" ? { section: row.sectionIndex ?? 0 } : {}),
     structure: row.course?.structure ?? null,
     ...(row.course?.id !== undefined ? { courseId: String(row.course.id) } : {}),
     courseObjects: inScope.map(({ id: _uuid, scope: _scope, z: _z, version: _v, seq, ...body }) => ({ ...body, id: seq }) as course.CourseLayerObject),

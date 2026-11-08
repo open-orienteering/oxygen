@@ -11,6 +11,7 @@
 
 import {
   buildDescriptionSheet,
+  course as courseLib,
   mapTemplateSettingsSchema,
   mapWindowForFrame,
   courseMapObjectSchema,
@@ -29,7 +30,7 @@ import {
 } from "@oxygen/shared";
 import { z } from "zod";
 import { firstCode } from "../control-id.js";
-import { courseSequenceOf, crossingRowsOf, exchangeRowsOf, rowKind, type SequenceColumns } from "../course-structure.js";
+import { courseSequenceOf, crossingRowsOf, rowKind, type SequenceColumns } from "../course-structure.js";
 
 const objectsSchema = z.array(courseMapObjectSchema);
 
@@ -87,8 +88,6 @@ export interface LayoutCourseSource {
    * §10.3): the block derives its 13.3 / 13.4 rows from them.
    */
   crossings?: ReadonlyArray<{ afterControlId: number | null; section: boolean }>;
-  /** The map exchanges (`exchangeRowsOf`, course-layer.md §11): the block derives its 13.5 rows from them. */
-  exchanges?: ReadonlyArray<{ afterControlId: number }>;
 }
 
 /** A course's `crossings` from its stored structure over the event's controls (public ids: first code, else seq). */
@@ -104,19 +103,6 @@ export function layoutCrossings(structure: unknown, allControls: readonly Layout
       const c = byId.get(uuid);
       return !!c && rowKind({ kind: c.kind ?? "control", status: c.status ?? "" }) === "start";
     },
-  );
-}
-
-/** A course's `exchanges` from its stored structure over the event's controls (public ids as `layoutCrossings`). */
-export function layoutExchanges(structure: unknown, allControls: readonly LayoutControlSource[]): { afterControlId: number }[] {
-  const byId = new Map(allControls.map((c) => [c.id, c]));
-  return exchangeRowsOf(
-    structure,
-    (uuid) => {
-      const c = byId.get(uuid);
-      return c ? firstCode(c.codes) || (c.seq ?? undefined) : undefined;
-    },
-    (uuid) => byId.get(uuid)?.kind === "map_exchange",
   );
 }
 
@@ -198,6 +184,13 @@ export interface ResolveMapLayoutInput {
   event?: { name: string; date: Date };
   /** Value for the `{map}` placeholder. */
   mapName?: string;
+  /**
+   * The sheet's part of a course split by map exchanges
+   * (`course_maps.section_index`, course-layer.md §11). A NULL window
+   * centre then centres on that part's controls; out of range, or a
+   * one-part course, is the whole course.
+   */
+  section?: number;
 }
 
 export interface ResolvedMapLayout {
@@ -227,6 +220,8 @@ export interface ResolvedMapLayout {
    * control circles, numbers and line widths along with the terrain.
    */
   overprintScale: number;
+  /** The part drawn (`input.section`) when the course has ≥ 2 parts and it is in range; the layer's `viewOptions.section`. */
+  section?: number;
 }
 
 /**
@@ -371,7 +366,11 @@ export function resolveMapLayout(
       instructions: readInstructions(input.course.descriptionInstructions),
       finishLengthM,
       ...(input.course.crossings?.length ? { crossings: input.course.crossings } : {}),
-      ...(input.course.exchanges?.length ? { exchanges: input.course.exchanges } : {}),
+      // §11: a 13.5 row after each map exchange of the course's controls, by the rows' public id.
+      exchanges: controlRows.flatMap((control, index) => {
+        const source = rawControls[regularControls.indexOf(control)];
+        return source?.kind === "map_exchange" ? [{ afterControlId: firstCode(source.codes) || (source.seq ?? index + 1) }] : [];
+      }),
     });
     descriptionHeader = sheet.header;
     descriptionRows = sheet.rows.map((row) => ({
@@ -408,9 +407,22 @@ export function resolveMapLayout(
   const labelMode: "sequence" | "code" =
     input.kind === "all_controls" || freeOrder ? "code" : "sequence";
 
+  // One part of a course split by map exchanges (course-layer.md §11): its controls centre the window.
+  let section: number | undefined;
+  let centred = controls;
+  if (input.kind === "course" && input.section !== undefined) {
+    const exchange = new Set(rawControls.filter((c) => c.kind === "map_exchange").map((c) => c.id));
+    const placed = controls.filter((c) => c.x !== 0 || c.y !== 0);
+    const parts = courseLib.sectionsOf(placed, (c) => c.type === "control" && exchange.has(c.id));
+    const part = parts[input.section];
+    if (parts.length >= 2 && part) {
+      section = input.section;
+      centred = placed.slice(part.from, part.to + 1);
+    }
+  }
   const center =
     input.windowCenter ??
-    centerOfControls(controls) ?? {
+    centerOfControls(centred) ?? {
       x: 0,
       y: 0,
     };
@@ -454,6 +466,7 @@ export function resolveMapLayout(
     descriptionRows,
     descriptionHeader,
     overprintScale: (input.mapScale ?? printScale) / printScale,
+    ...(section !== undefined ? { section } : {}),
     textValues: {
       event: input.event?.name ?? "",
       course: course?.name ?? "",

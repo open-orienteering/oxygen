@@ -45,6 +45,8 @@ export interface CourseMapListItem {
   overrides: CourseMapOverrides;
   objects: CourseMapObject[];
   sortOrder: number;
+  /** The part of a course split by map exchanges the sheet prints (`section_index`, course-layer.md §11). */
+  sectionIndex: number;
   /** Concurrency token (docs/course-layout.md §2), a decimal HLC. */
   version: string;
   /** The class whose override the sheet prints (docs/course-layout.md §6); null for a course's own sheet. */
@@ -92,6 +94,8 @@ export interface EditorSheet {
     courseSeq: number | null;
     /** The class of a class sheet (docs/course-layout.md §6). */
     classSeq: number | null;
+    /** The part of the course it prints (`section_index`, course-layer.md §11). */
+    sectionIndex: number;
     version: string;
     windowCenter: MapPoint | null;
     overrides: CourseMapOverrides;
@@ -309,6 +313,7 @@ export const courseMapRouter = router({
         mapScale: mapInfo?.scale ?? null,
         meridianTiltDeg: mapInfo?.meridianTiltDeg ?? null,
         mapName: row.name,
+        ...(row.kind === "course" ? { section: row.sectionIndex } : {}),
       });
       // A class's sheets are validated among themselves (another scale).
       const key = `${row.courseId ?? "all_controls"}:${row.classId ?? ""}`;
@@ -350,6 +355,7 @@ export const courseMapRouter = router({
         overrides: row.overrides,
         objects: row.objects,
         sortOrder: row.sortOrder,
+        sectionIndex: row.sectionIndex,
         version: row.version,
         class: row.class ? { seq: row.class.seq, name: row.class.name } : null,
         course: row.course
@@ -458,6 +464,7 @@ export const courseMapRouter = router({
             kind: row.kind,
             courseSeq: row.course?.seq ?? null,
             classSeq: row.class?.seq ?? null,
+            sectionIndex: row.sectionIndex,
             version: parsed.version,
             windowCenter: parsed.windowCenter,
             overrides: parsed.overrides,
