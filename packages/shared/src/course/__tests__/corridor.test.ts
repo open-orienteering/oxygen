@@ -436,3 +436,49 @@ function distTo(pts: readonly MapPoint[], x: number, y: number): number {
   }
   return best;
 }
+
+describe("the last call's result is kept (F20b, course-layer.md §10.2)", () => {
+  const LEGS = [[P(0, 0), P(20, 0)], [P(20, 0), P(30, 10), P(40, 0)]];
+  const base = () => [course("c", LEGS, [C(4, 3, true), C(4, 3, true)])];
+
+  it("the same input again: the same object, without recomputing", () => {
+    const a = corridorGeometry(base(), mouths(LEGS))!;
+    expect(corridorGeometry(base(), mouths(LEGS))).toBe(a);
+  });
+
+  it("a change to anything the geometry reads recomputes it, and the result is a fresh call's", () => {
+    const m = mouths(LEGS);
+    const variants: [string, () => [DerivedCourse[], CorridorMouths | undefined]][] = [
+      ["a point moved", () => [[course("c", [LEGS[0], [P(20, 0), P(30, 10.001), P(40, 0)]], [C(4, 3, true), C(4, 3, true)])], m]],
+      ["a width", () => [[course("c", LEGS, [C(4, 3, true), C(4.5, 3, true)])], m]],
+      ["a band", () => [[course("c", LEGS, [C(4, 3, true), C(4, 2, true)])], m]],
+      ["the edge", () => [[course("c", LEGS, [C(4, 3, true), C(4, 3, false)])], m]],
+      ["the course id (the edges' refs)", () => [[course("d", LEGS, [C(4, 3, true), C(4, 3, true)])], m]],
+      ["a leg's index (a leg without a corridor before it)", () => [[course("c", [[P(-10, 0), P(0, 0)], ...LEGS], [undefined, C(4, 3, true), C(4, 3, true)])], m]],
+      ["no mouths", () => [base(), undefined]],
+      ["a mouth site moved", () => [base(), { ...m, sites: m.sites.map((s) => (s.id === "1" ? { ...s, x: 20.5 } : s)) }]],
+      ["a mouth site's role", () => [base(), { ...m, sites: m.sites.map((s) => (s.id === "0" ? { ...s, role: "start" as const } : s)) }]],
+      ["a start's turn", () => [base(), mouths(LEGS, { "0": "start" }, [], { "0": 30 })]],
+      ["an extent", () => [base(), { ...m, circleUm: 3000 }]],
+    ];
+    for (const [name, make] of variants) {
+      const a = corridorGeometry(base(), m);
+      const [courses, mo] = make();
+      const b = corridorGeometry(courses, mo);
+      expect(b, name).not.toBe(a);
+      corridorGeometry([course("x", [[P(0, 0), P(1, 0)]], [C(1, 0)])]);
+      expect(corridorGeometry(courses, mo), name).toEqual(b);
+    }
+  });
+
+  it("a -0 is not a 0 (the rings keep the sign)", () => {
+    const a = corridorGeometry([course("c", [[P(0, 0), P(20, 0)]], [C(4, 3)])]);
+    expect(corridorGeometry([course("c", [[P(-0, 0), P(20, 0)]], [C(4, 3)])])).not.toBe(a);
+  });
+
+  it("sites no corridor leg ends at do not count: moving one keeps the result", () => {
+    const m = mouths(LEGS, {}, [{ id: "far", role: "control", x: 100, y: 100 }]);
+    const a = corridorGeometry(base(), m);
+    expect(corridorGeometry(base(), { ...m, sites: m.sites.map((s) => (s.id === "far" ? { ...s, x: 101 } : s)) })).toBe(a);
+  });
+});

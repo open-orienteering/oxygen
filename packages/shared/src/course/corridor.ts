@@ -648,13 +648,67 @@ function edgesOf(inside: FlatRing[], edged: readonly EdgedSegment[], mouths: rea
 
 const ringPoints = (r: FlatRing): Pt[] => Array.from({ length: r.length / 2 }, (_, i) => ({ x: r[2 * i], y: r[2 * i + 1] }));
 
+/** A number as the key spells it: `-0` apart from `0`, since the rings keep the sign of a zero. */
+const num = (v: number | undefined) => (v === undefined ? "u" : v === 0 && 1 / v < 0 ? "-0" : String(v));
+
+/**
+ * Everything `computeCorridorGeometry` reads, as one string: per course
+ * its id and per leg its index, and for a corridor leg its ends, width,
+ * band, edge and points; the extents and the sites a corridor leg ends
+ * at (id, role, position, turn), in the order given.
+ */
+function inputKey(courses: readonly DerivedCourse[], mouths: CorridorMouths | undefined): string {
+  const parts: string[] = [];
+  const ends = new Set<string>();
+  for (const c of courses) {
+    parts.push(`C${c.id.length}:${c.id}`);
+    for (const leg of c.legs) {
+      const k = leg.corridor;
+      if (!k) {
+        parts.push("-");
+        continue;
+      }
+      ends.add(leg.from);
+      ends.add(leg.to);
+      const pts: string[] = [];
+      for (const p of leg.points) pts.push(num(p.x), num(p.y));
+      parts.push(`L${leg.from.length}:${leg.from}${leg.to.length}:${leg.to}|${num(k.widthMm)}|${num(k.whiteMm)}|${k.edge ? 1 : 0}|${pts.join(",")}`);
+    }
+  }
+  if (mouths) {
+    parts.push(`M${num(mouths.circleUm)}|${num(mouths.finishUm)}|${num(mouths.startUm)}`);
+    for (const site of mouths.sites) {
+      if (ends.has(site.id)) parts.push(`S${site.id.length}:${site.id}|${site.role}|${num(site.x)}|${num(site.y)}|${num(site.angleDeg)}`);
+    }
+  }
+  return parts.join("\n");
+}
+
+/** The last call's input key and result (F20b): a request that leaves the corridors as they were reuses them. */
+let last: { key: string; geometry: CorridorGeometry | null } | null = null;
+
 /**
  * The corridors of the derived courses: the union of their insides, the
  * band outside them, the edged legs' outlines and, with `mouths` (the
  * drawn sites and the symbols' extents, F19), the symbols the legs end at
  * joined in and the circles' openings. `null` when no leg has a corridor.
+ *
+ * The result of the last call is kept and returned again — the same
+ * object — while everything the geometry reads is unchanged (F20b,
+ * course-layer.md §10.2): a number, a course object or a control of
+ * another course dragged over a corridor course leaves the corridors as
+ * they were, and their unions are most of a request's cost. Callers
+ * treat the result as read-only.
  */
 export function corridorGeometry(courses: readonly DerivedCourse[], mouths?: CorridorMouths): CorridorGeometry | null {
+  const key = inputKey(courses, mouths);
+  if (last?.key === key) return last.geometry;
+  const geometry = computeCorridorGeometry(courses, mouths);
+  last = { key, geometry };
+  return geometry;
+}
+
+function computeCorridorGeometry(courses: readonly DerivedCourse[], mouths?: CorridorMouths): CorridorGeometry | null {
   const { runs, edged: edgedRaw, ends } = runsOf(courses);
   if (!runs.length) return null;
   const sites = mouths ? mouthsOf(ends, mouths) : new Map<string, Mouth>();

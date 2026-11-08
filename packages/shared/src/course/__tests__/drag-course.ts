@@ -9,6 +9,7 @@
 
 import type { PlacementCircle, PlacementSeg } from "../../course-maps/control-label-placement.js";
 import type { MapPoint, PathVertex } from "../../course-maps/schema.js";
+import type { CorridorMouths } from "../corridor.js";
 import type { CourseMetrics } from "../derive.js";
 import type { CourseDerivation, CourseItem, CourseLayerInput, CourseSite, CourseStructure, CutFeature } from "../types.js";
 import { isomContext } from "./helpers.js";
@@ -44,10 +45,12 @@ export interface DragCourseOptions {
   bendsPerLeg?: number;
   /** Point features for the automatic cuts. */
   features?: number;
+  /** A corridor on every leg (F20b: the corridor drag fixture; 50 m at 1:15 000 is narrower than the circle). */
+  corridor?: { widthM: number; edge: boolean; whiteMm: number };
 }
 
 /** The course on a zig-zag ring round (150, 150), alternately 55 and 110 mm out, each bend 8 mm off the chord. */
-export function dragCourse({ controls = 25, bendsPerLeg = 1, features = 3000 }: DragCourseOptions = {}): CourseLayerInput {
+export function dragCourse({ controls = 25, bendsPerLeg = 1, features = 3000, corridor }: DragCourseOptions = {}): CourseLayerInput {
   const r = seeded(42);
   const n = controls + 2;
   const sites: CourseSite[] = [];
@@ -57,8 +60,10 @@ export function dragCourse({ controls = 25, bendsPerLeg = 1, features = 3000 }: 
     const kind = i === 0 ? "start" : i === n - 1 ? "finish" : "control";
     sites.push({ id: `s${i}`, code: i === 0 ? "S1" : i === n - 1 ? "F1" : String(30 + i), kind, x: r2(150 + rad * Math.cos(th)), y: r2(150 + rad * Math.sin(th)) });
   }
+  const legCorridor = corridor ? { corridor: { ...corridor, whiteOpacity: 1 } } : {};
   const items: CourseItem[] = sites.map((s, i) => {
-    if (i === 0 || bendsPerLeg === 0) return { siteId: s.id };
+    if (i === 0) return { siteId: s.id };
+    if (bendsPerLeg === 0) return corridor ? { siteId: s.id, leg: legCorridor } : { siteId: s.id };
     const a = sites[i - 1];
     const dx = s.x - a.x, dy = s.y - a.y, len = Math.hypot(dx, dy);
     const nx = -dy / len, ny = dx / len, sign = i % 2 ? 1 : -1;
@@ -67,7 +72,7 @@ export function dragCourse({ controls = 25, bendsPerLeg = 1, features = 3000 }: 
       const t = k / (bendsPerLeg + 1);
       pts.push({ x: r2(a.x + dx * t + nx * 8 * sign), y: r2(a.y + dy * t + ny * 8 * sign) });
     }
-    return { siteId: s.id, leg: { bends: smoothBends(a, pts, s) } };
+    return { siteId: s.id, leg: { bends: smoothBends(a, pts, s), ...legCorridor } };
   });
   const structure: CourseStructure = { version: 1, id: "H21", orderMode: "ordered", items };
   const f = seeded(7);
@@ -87,4 +92,9 @@ export function placementInput(d: CourseDerivation, m: CourseMetrics = DRAG_METR
     }
   }
   return { circles, lines };
+}
+
+/** The ISOM 1:15 000 symbol extents of `DRAG_METRICS`, µm, as `corridorGeometry`'s mouths take them (F19). */
+export function dragMouths(d: CourseDerivation, m: CourseMetrics = DRAG_METRICS): CorridorMouths {
+  return { sites: d.sites, circleUm: m.circleRadiusMm * 1000, finishUm: m.finishRadiusMm * 1000, startUm: m.startRadiusMm * 1000 };
 }
