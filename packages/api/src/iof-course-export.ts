@@ -12,9 +12,25 @@
  *
  * Coordinates are paper mm (the unit of `controls.xpos/ypos` and of all
  * course geometry), written to `MapPosition` with `unit="mm"`.
+ *
+ * The course structure (slice F, row F9; docs/iof-coursedata-export.md):
+ * a variant is a `Course` with its root's name as `CourseFamily`; a
+ * crossing point is a `CrossingPoint` control and an unnumbered row before
+ * the leg's end row; a marked route is `specialInstruction="TapedRoute"` on
+ * the leg's end row; the map exchange — which IOF 3.0 has no field for —
+ * is an `Extensions` marker on the exchange's `Control`.
  */
 
 import { XMLBuilder } from "fast-xml-parser";
+
+/** The namespace of Oxygen's `Extensions` elements (the map-exchange marker). */
+export const OXYGEN_IOF_EXTENSIONS_NS = "urn:oxygen:iof:extensions";
+
+/** IOF 3.0 `CourseControl@specialInstruction` values Oxygen writes. */
+export type ExportSpecialInstruction =
+  | "TapedRoute"
+  | "MandatoryCrossingPoint"
+  | "MandatoryOutOfBoundsAreaPassage";
 
 export interface ExportControlSite {
   /**
@@ -22,24 +38,35 @@ export interface ExportControlSite {
    * the control's primary punch code (name/seq for start/finish rows).
    */
   id: string;
-  type: "Start" | "Control" | "Finish";
+  type: "Start" | "Control" | "Finish" | "CrossingPoint";
   /** Paper mm. (0, 0) means "not placed" and is skipped. */
   xMm: number;
   yMm: number;
   lat?: number | null;
   lng?: number | null;
+  /** A map-exchange site (course-layer.md §11): `Extensions/ox:MapExchange`. */
+  mapExchange?: boolean;
 }
 
 export interface ExportCourseControl {
   /** Matches an `ExportControlSite.id`. */
   controlId: string;
-  type: "Start" | "Control" | "Finish";
+  /** `CrossingPoint`: the unnumbered row of the crossing point the next row's leg runs through. */
+  type: "Start" | "Control" | "Finish" | "CrossingPoint";
   /** Terrain meters of the leg leading to this control. */
   legLengthM?: number | null;
+  /** `TapedRoute` on a marked route's end row; a crossing kind on a `CrossingPoint` row. */
+  specialInstruction?: ExportSpecialInstruction;
+  /** Metres of the taped route (`TapedRoute` only). */
+  tapedRouteLengthM?: number;
+  /** The bends of the leg into this row, paper mm — Purple Pen's `<leg>`; IOF has no field. */
+  bends?: ReadonlyArray<{ x: number; y: number }>;
 }
 
 export interface ExportCourse {
   name: string;
+  /** `CourseFamily`: the root's name for a materialised variant (course-layer.md §12). */
+  family?: string;
   lengthM: number;
   climbM: number;
   /** Visit-order mode — free-order emits `randomOrder="true"` on Controls. */
@@ -91,11 +118,16 @@ export function buildCourseDataXml(input: CourseDataExport): string {
       "@_y": round(c.yMm, 2),
       "@_unit": "mm",
     };
+    // IOF 3.0 has no map-exchange field (no ControlType value, no
+    // CourseControl attribute): the site carries Oxygen's marker.
+    if (c.mapExchange) node.Extensions = { "ox:MapExchange": "true" };
     return node;
   });
 
   const courseNodes = input.courses.map((course) => {
+    // Schema order: Name, CourseFamily, Length, Climb, CourseControl.
     const node: Record<string, unknown> = { Name: course.name };
+    if (course.family) node.CourseFamily = course.family;
     if (course.lengthM > 0) node.Length = round(course.lengthM, 1);
     if (course.climbM > 0) node.Climb = round(course.climbM, 1);
     const freeOrder = course.orderMode === "free_order";
@@ -110,6 +142,12 @@ export function buildCourseDataXml(input: CourseDataExport): string {
           // Valued attr (builder has suppressBooleanAttributes: false) so
           // XMLParser round-trips; bare `randomOrder` is dropped on parse.
           n["@_randomOrder"] = "true";
+        }
+        if (cc.specialInstruction) {
+          n["@_specialInstruction"] = cc.specialInstruction;
+          if (cc.specialInstruction === "TapedRoute" && cc.tapedRouteLengthM != null && cc.tapedRouteLengthM > 0) {
+            n["@_tapedRouteLength"] = round(cc.tapedRouteLengthM, 1);
+          }
         }
         // Free-order courses have no meaningful legs — omit LegLength.
         if (
@@ -169,6 +207,7 @@ export function buildCourseDataXml(input: CourseDataExport): string {
     CourseData: {
       "@_xmlns": "http://www.orienteering.org/datastandard/3.0",
       "@_xmlns:xsi": "http://www.w3.org/2001/XMLSchema-instance",
+      "@_xmlns:ox": OXYGEN_IOF_EXTENSIONS_NS,
       "@_iofVersion": "3.0",
       "@_createTime": input.createTime ?? new Date().toISOString(),
       "@_creator": "Oxygen",

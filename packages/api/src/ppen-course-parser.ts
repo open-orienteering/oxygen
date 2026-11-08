@@ -34,6 +34,8 @@ const parser = new XMLParser({
       "course-scribe-event.course-control.next",
       "course-scribe-event.control.location",
       "course-scribe-event.control.description",
+      "course-scribe-event.leg",
+      "course-scribe-event.leg.bends.location",
     ];
     if (arrayPaths.includes(String(jpath))) return true;
     // `<next>` may appear once or many times under a course-control.
@@ -190,6 +192,20 @@ export function parsePpenCourseData(xmlContent: string): ParsedCourseData {
     });
   }
 
+  // `<leg start-control end-control>`: the bends of the leg between two
+  // controls (internal ids), for every course that runs it (row F9).
+  // `<flagging>` and `<gaps>` are not read (docs/ppen-import-export.md).
+  const rawLegs: Record<string, unknown>[] = Array.isArray(root.leg) ? root.leg : root.leg ? [root.leg] : [];
+  const bendsByLeg = new Map<string, Array<{ x: number; y: number }>>();
+  for (const leg of rawLegs) {
+    const bendsNode = leg.bends as Record<string, unknown> | undefined;
+    const locs = bendsNode?.location;
+    const list = (Array.isArray(locs) ? locs : locs ? [locs] : []) as Record<string, unknown>[];
+    const points = list.map((l) => ({ x: safeFloat(l["@_x"]), y: safeFloat(l["@_y"]) }));
+    const key = `${safeStr(leg["@_start-control"])}>${safeStr(leg["@_end-control"])}`;
+    if (points.length > 0 && !bendsByLeg.has(key)) bendsByLeg.set(key, points);
+  }
+
   const ccById = new Map<string, RawCourseControl>();
   for (const cc of rawCCs) {
     const id = safeStr(cc["@_id"]);
@@ -218,6 +234,8 @@ export function parsePpenCourseData(xmlContent: string): ParsedCourseData {
     const sequence: ParsedCourseControl[] = [];
     let currentId: string | null = firstId;
     const seen = new Set<string>();
+    /** The internal id of the last kept control: a `<leg>`'s start. */
+    let prevInternal: string | null = null;
 
     while (currentId) {
       if (seen.has(currentId)) {
@@ -257,14 +275,17 @@ export function parsePpenCourseData(xmlContent: string): ParsedCourseData {
 
       if (!site.skip) {
         let legLength = 0;
+        const bends = prevInternal !== null ? bendsByLeg.get(`${prevInternal}>${controlInternal}`) : undefined;
         if (sequence.length > 0 && mapScale > 0) {
           const prevSite = controls.find(
             (c) => c.id === sequence[sequence.length - 1].controlId,
           );
           if (prevSite) {
-            const dx = site.mapX - prevSite.mapX;
-            const dy = site.mapY - prevSite.mapY;
-            legLength = Math.round((Math.hypot(dx, dy) * mapScale) / 1000);
+            // Along the bends (F1's rule, course-layer.md §10.1).
+            const points = [{ x: prevSite.mapX, y: prevSite.mapY }, ...(bends ?? []), { x: site.mapX, y: site.mapY }];
+            let mm = 0;
+            for (let i = 1; i < points.length; i++) mm += Math.hypot(points[i].x - points[i - 1].x, points[i].y - points[i - 1].y);
+            legLength = Math.round((mm * mapScale) / 1000);
           }
         }
 
@@ -272,7 +293,9 @@ export function parsePpenCourseData(xmlContent: string): ParsedCourseData {
           controlId: site.publicId,
           type: site.type,
           legLength,
+          ...(bends && sequence.length > 0 ? { bends } : {}),
         });
+        prevInternal = controlInternal;
       }
 
       const next = nexts[0] as Record<string, unknown> | undefined;
