@@ -174,6 +174,33 @@ export function allVariationStructures<C extends LeggedControl>(s: PathStructure
   return { spine, branches };
 }
 
+/**
+ * All variations' numbering (course-layer.md §12.7, F15): each variant's
+ * path (`variantOrders` → `pathOfOrders`) is numbered by counting the items
+ * `isNumbered` accepts, and the result maps each site to its number when
+ * **every visited site has exactly one number across all variants**, else
+ * `null` — an unequal fork, every loop (the anchor is visited again) and a
+ * top-level site visited twice keep codes. The predicate is the caller's:
+ * a stored structure knows neither site kinds nor positions. Two forks in
+ * a row continue the numbers across both. Generic over the site-id type.
+ */
+export function uniformVariantNumbers<C extends PathControl>(s: PathStructure<C>, isNumbered: (item: C) => boolean): Map<C["siteId"], number> | null {
+  const variants = variantOrders(s as { items: readonly OrderItem[] });
+  const paths = variants.length === 0 ? [pathOfOrders(s).items] : variants.map((v) => pathOfOrders(s, v.orders).items);
+  const numbers = new Map<C["siteId"], number>();
+  for (const items of paths) {
+    let n = 0;
+    for (const item of items) {
+      if (!isNumbered(item)) continue;
+      n += 1;
+      const seen = numbers.get(item.siteId);
+      if (seen !== undefined && seen !== n) return null;
+      numbers.set(item.siteId, n);
+    }
+  }
+  return numbers;
+}
+
 /** Every visiting order of a group's labels: one alternative each, or (loop) every permutation. */
 function labelOrders(group: { alternatives: readonly { label: string }[]; loop?: boolean }): string[][] {
   const labels = group.alternatives.map((alt) => alt.label);

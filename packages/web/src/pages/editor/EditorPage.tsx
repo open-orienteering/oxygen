@@ -1217,6 +1217,9 @@ export function EditorPage() {
   const sitesForTools = useMemo(() => sites.filter((x) => x.mapX !== 0 || x.mapY !== 0)
     .map((x) => ({ id: x.id, x: x.mapX, y: x.mapY, kind: kindOf(x.id) })), [sites, kindOf]);
 
+  // All variations' numbers (F15): the items the layer numbers — role control, positioned.
+  const positionedIds = useMemo(() => new Set(sitesForTools.map((x) => x.id)), [sitesForTools]);
+
   const insertOnLeg = useCallback((target: { courseId: string; index: number }, pt: Pt) => {
     // All variations is a read-only overlay (§12): its spine's legs are not the rows'.
     if (!selectedCourse || target.courseId !== selectedCourse.name || state.view === "all-variations") return;
@@ -1433,10 +1436,12 @@ export function EditorPage() {
       return v ? [courseDrawOf(selectedCourse.name, displayPath(explicit, kindOf, v.orders).items)] : null;
     }
     if (state.mode === "layout") return null;
-    if (state.view === "all-variations") return allVariationDraws(selectedCourse.name, explicit);
+    if (state.view === "all-variations") {
+      return allVariationDraws(selectedCourse.name, explicit, (item) => (item.role ?? kindOf(item.siteId)) === "control" && positionedIds.has(item.siteId));
+    }
     if (state.view !== "course" && state.view !== "variant") return null;
     return [courseDrawOf(selectedCourse.name, displayPath(explicit, kindOf, orders).items)];
-  }, [hasGroups, selectedCourse, explicit, state.mode, state.view, kindOf, orders, sheetVariant, variants]);
+  }, [hasGroups, selectedCourse, explicit, state.mode, state.view, kindOf, positionedIds, orders, sheetVariant, variants]);
 
   // Offline, Field mode views only (§9 "Offline"): a drag snaps back instead of writing.
   const fieldReadOnly = fieldMode && !online;
