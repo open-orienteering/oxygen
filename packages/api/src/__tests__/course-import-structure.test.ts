@@ -1,7 +1,7 @@
 /** Parser GeoJSON → structure parts (docs/course-layer.md §6.4). */
 
 import { describe, expect, it } from "vitest";
-import { collectImportedObjects, legGapsFromPieces, legGapsOfFeatures } from "../course-import-structure.js";
+import { collectImportedObjects, importedLegProps, legBendsOfFeatures, legGapsFromPieces, legGapsOfFeatures } from "../course-import-structure.js";
 
 const A = { x: 0, y: 0 };
 const B = { x: 100, y: 0 };
@@ -61,5 +61,44 @@ describe("collectImportedObjects", () => {
 
   it("ignores leg cuts and description boxes", () => {
     expect(collectImportedObjects(new Map([["c", fc([line("leg_cut", [[0, 0], [1, 1]]), line("description_box", [[0, 0], [1, 1]])])]]))).toEqual([]);
+  });
+});
+
+describe("legBendsOfFeatures (row F9)", () => {
+  it("keys a bent leg's inner vertices by `from>to` codes; straight and pre-clipped legs have none", () => {
+    const geom = fc([
+      line("leg", [[0, 0], [5, 5], [7, 1], [10, 0]], { from: "31", to: "32", bent: true }),
+      line("leg", [[10, 0], [20, 0]], { from: "32", to: "33" }),
+      line("leg", [[0, 0], [3, 3], [10, 0]], { from: "33", to: "34", preclipped: true }),
+    ]);
+    expect([...legBendsOfFeatures(geom)]).toEqual([["31>32", [{ x: 5, y: 5 }, { x: 7, y: 1 }]]]);
+  });
+
+  it("first leg of a pair wins", () => {
+    const geom = fc([
+      line("leg", [[0, 0], [5, 5], [10, 0]], { from: "31", to: "32", bent: true }),
+      line("leg", [[0, 0], [1, 1], [10, 0]], { from: "31", to: "32", bent: true }),
+    ]);
+    expect(legBendsOfFeatures(geom).get("31>32")).toEqual([{ x: 5, y: 5 }]);
+  });
+});
+
+describe("importedLegProps (row F9)", () => {
+  it("joins the file's gaps, bends, style and crossing into one leg", () => {
+    expect(importedLegProps({ gaps: [{ from: 0.2, to: 0.3 }], bends: [{ x: 1, y: 2 }], style: "marked_route", crossing: { controlId: "uuid-cp", section: true } })).toEqual({
+      gaps: [{ from: 0.2, to: 0.3 }],
+      bends: [{ x: 1, y: 2 }],
+      style: "marked_route",
+      crossing: { controlId: "uuid-cp", section: true },
+    });
+  });
+
+  it("is undefined when the file says nothing about the leg", () => {
+    expect(importedLegProps({})).toBeUndefined();
+    expect(importedLegProps({ gaps: [], bends: [] })).toBeUndefined();
+  });
+
+  it("a crossing without its section flag stays a point", () => {
+    expect(importedLegProps({ crossing: { controlId: "uuid-cp" } })).toEqual({ crossing: { controlId: "uuid-cp" } });
   });
 });

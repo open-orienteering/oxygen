@@ -103,7 +103,9 @@ export function structureFromColumns(
  * Carry leg props over from the previous structure to a rewritten linear
  * one: an item keeps its `leg` when it still follows the same site (the
  * leg into it is the same leg). Used by `course.update`, whose input is a
- * plain id sequence.
+ * plain id sequence, and by an IOF / PPen re-import, whose items carry the
+ * leg props the file has (bends, style, crossing — row F9): the item's own
+ * props win, the carried ones fill in what the file is silent on.
  */
 export function carryLegs(prev: Stored | null, next: Stored): Stored {
   if (!prev) return next;
@@ -118,7 +120,7 @@ export function carryLegs(prev: Stored | null, next: Stored): Stored {
     const prevItem = next.items[i - 1];
     if (prevItem.kind === "variation") return item;
     const leg = legs.get(`${prevItem.siteId}>${item.siteId}`);
-    return leg ? { ...item, leg } : item;
+    return leg ? { ...item, leg: { ...leg, ...item.leg } } : item;
   });
   return { ...next, items };
 }
