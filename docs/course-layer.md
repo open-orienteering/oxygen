@@ -1508,8 +1508,9 @@ all-white corridor map); `edge` draws the boundary in purple.
   sites a corridor leg ends at (id, role, position, turn; `-0` apart from
   `0`). So a request that leaves the corridors as they were — a number, a
   course object or a control of another course dragged over a corridor
-  course, an appearance toggle — pays nothing for them; a moved corridor
-  control recomputes. Callers treat the result as read-only. It is the
+  course, a number style — pays nothing for them; a moved corridor
+  control recomputes, and so does a circle or line appearance (it
+  changes the extents and the legs' points). Callers treat the result as read-only. It is the
   row's "per-run ring cache" widened to the whole geometry: a course of
   one width is one run, whose key changes on every move of its controls.
 - **Drawing the band** (user, 2026-11-07): the band is a generated

@@ -8,7 +8,10 @@
  * bit for bit: the same inside and band rings, the same edge pieces and
  * the same openings, to the last floating-point digit. Each case is kept
  * as a SHA-256 of its canonical JSON plus a few counts (the counts say
- * where a mismatch lies; the hash is the proof).
+ * where a mismatch lies; the hash is the proof). JSON writes `-0` as `0`,
+ * so the digest is blind to the sign of a zero; the F20b levers leave
+ * every coordinate expression as it was, and the kept result's key tells
+ * `-0` from `0` (`corridor.test.ts`).
  *
  * The cases are generated here (a seeded generator and a fixed-step cubic
  * sampler, independent of `course/bends.ts`), so a change to leg
