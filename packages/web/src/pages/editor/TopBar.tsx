@@ -36,8 +36,11 @@ export interface TopBarProps {
   onClass: (seq: number | null) => void;
   /** The selected course's variant keys (docs/course-editor.md §12): Variant ▾ and All variations; empty without groups. */
   variants?: string[];
+  /** The key Variant ▾ shows: Variant view's, or the variant Class view / Layout mode draw (F8). */
   variantKey?: string | null;
   onVariant?: (key: string | null) => void;
+  /** All variations is Course mode's (screen only, §12); Layout mode draws one variant as it prints (F8). */
+  allVariations?: boolean;
   exportState: ExportState;
   onExportError: (message: string) => void;
   mode: EditorMode;
@@ -111,7 +114,7 @@ export function TopBar(p: TopBarProps) {
               data-testid="editor-view-variant"
               aria-label={t("viewVariant")}
               title={t("viewVariantHint")}
-              value={p.view === "variant" && p.variantKey ? p.variantKey : ""}
+              value={p.variantKey ?? ""}
               onChange={(e) => p.onVariant?.(e.target.value === "" ? null : e.target.value)}
               className={`max-w-[6rem] text-xs border-0 border-l border-slate-200 px-1 py-1 cursor-pointer ${p.view === "variant" ? "bg-purple-100 text-purple-700 font-medium" : "bg-white text-slate-600"}`}
             >
@@ -120,8 +123,8 @@ export function TopBar(p: TopBarProps) {
                 <option key={k} value={k}>{k}</option>
               ))}
             </select>
-            <button type="button" data-testid="editor-view-all-variations" aria-pressed={p.view === "all-variations"} title={t("viewAllVariationsHint")}
-              className={`border-l border-slate-200 ${segment(p.view === "all-variations")}`} onClick={() => p.onView(p.view === "all-variations" ? "course" : "all-variations")}>{t("viewAllVariations")}</button>
+            {p.allVariations !== false && <button type="button" data-testid="editor-view-all-variations" aria-pressed={p.view === "all-variations"} title={t("viewAllVariationsHint")}
+              className={`border-l border-slate-200 ${segment(p.view === "all-variations")}`} onClick={() => p.onView(p.view === "all-variations" ? "course" : "all-variations")}>{t("viewAllVariations")}</button>}
           </>
         )}
       </div>

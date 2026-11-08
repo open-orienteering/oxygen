@@ -238,7 +238,8 @@ describe("per-variant pages (course-print.md §4.6)", () => {
     expect(ba.window).toEqual((await caller.courseMap.resolveSheet({ seq: sheet, variantKey: "AB" })).window);
     const cls = await caller.courseMap.resolveSheet({ classSeq: h21, variantKey: "AB" });
     expect([cls.variantKey, cls.block.header?.classNames, cls.classView?.className]).toEqual(["AB", "H21", "H21"]);
-    await expect(caller.courseMap.resolveSheet({ seq: sheet, variantKey: "ZZ" })).rejects.toMatchObject({ code: "NOT_FOUND" });
+    // A key without a live variant (the editor's structure ahead of the write) reads the sheet as is.
+    expect((await caller.courseMap.resolveSheet({ seq: sheet, variantKey: "ZZ" })).variantKey).toBeNull();
     // A course without variants ignores the key.
     const short = (await ctx.db.courseMap.findFirstOrThrow({ where: { eventId: ctx.eventId, course: { seq: shortSeq } } })).seq;
     expect((await caller.courseMap.resolveSheet({ seq: short, variantKey: "AB" })).variantKey).toBeNull();

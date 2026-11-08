@@ -504,14 +504,12 @@ export const courseMapRouter = router({
         }
         if (!row) notFound();
         if (!row.template) throw new TRPCError({ code: "PRECONDITION_FAILED", message: "No map template is assigned" });
-        // A root's sheet as one variant prints it (course-print.md §4.6, F8); the key is ignored on any other sheet.
+        // A root's sheet as one variant prints it (course-print.md §4.6, F8). A key the sheet's course has no live
+        // variant of (any other sheet, or one the editor's structure has before the write lands) reads the sheet as is.
         const child =
           input.variantKey && row.kind === "course" && row.course
             ? await ctx.db.course.findFirst({ where: { parentCourseId: row.course.id, variantKey: input.variantKey, removed: false }, include: courseInclude })
             : null;
-        if (input.variantKey && !child && row.kind === "course" && row.course && (await ctx.db.course.count({ where: { parentCourseId: row.course.id, removed: false } }))) {
-          throw new TRPCError({ code: "NOT_FOUND", message: "Variant not found" });
-        }
         const variantKey = child ? input.variantKey! : null;
         const sheetRow = child ? rowForVariant(row, child) : row;
         // The course's other sheets as this variant prints them (the shared window, `rowForVariant`).

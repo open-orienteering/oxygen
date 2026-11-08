@@ -24,9 +24,18 @@ export interface ClassView {
   sheetKey: string | null;
 }
 
-export function useClassView(a: { enabled: boolean; classSeq: number | null; onFit: (bounds: ReturnType<typeof pageBounds>) => void }): ClassView {
+export function useClassView(a: {
+  enabled: boolean;
+  classSeq: number | null;
+  /** A root's variant to draw (F8): the class's sheet as that variant prints. */
+  variantKey?: string | null;
+  onFit: (bounds: ReturnType<typeof pageBounds>) => void;
+}): ClassView {
   const on = a.enabled && a.classSeq !== null;
-  const query = trpc.courseMap.resolveSheet.useQuery({ classSeq: a.classSeq ?? 1 }, { enabled: on, retry: false });
+  const query = trpc.courseMap.resolveSheet.useQuery(
+    { classSeq: a.classSeq ?? 1, ...(a.variantKey ? { variantKey: a.variantKey } : {}) },
+    { enabled: on, retry: false },
+  );
   const data = on && query.data ? query.data : null;
   const geometry = useMemo(() => (data ? geometryOf(data, snapshotOf(data)) : null), [data]);
   const layout = useMemo(() => (data && geometry ? layoutRequestOf(data, snapshotOf(data), geometry) : null), [data, geometry]);

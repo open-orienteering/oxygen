@@ -235,6 +235,13 @@ export function EditorPage() {
     const variant = state.view === "variant" ? variants.find((v) => v.key === state.variantKey) : undefined;
     return variant ? variant.orders : courseViewOrders(structure, state.activeAlternatives);
   }, [structure, hasGroups, state.view, state.variantKey, state.activeAlternatives, variants]);
+  /**
+   * The variant Class view and Layout mode draw a root as (F8; course-editor.md §12, course-print.md §4.6):
+   * the remembered key while the structure has it, else the first — a root prints only as its variants.
+   */
+  const sheetVariant = hasGroups && (state.mode === "layout" || state.view === "class")
+    ? (state.variantKey && variantKeys.includes(state.variantKey) ? state.variantKey : variantKeys[0])
+    : null;
   const rows = useMemo(() => (structure ? displaySequence(structure, sites, orders) : []), [structure, sites, orders]);
   const blocks = useMemo(() => (structure && hasGroups ? variationBlocks(structure, sites, rows, orders) : []), [structure, hasGroups, sites, rows, orders]);
   const sequenceIds = useMemo(() => rows.filter((r) => r.kind === "control").map((r) => r.id), [rows]);
@@ -335,6 +342,7 @@ export function EditorPage() {
     course: selectedCourse ? { id: selectedCourse.id, name: selectedCourse.name } : null,
     view: state.view,
     classSeq: state.classSeq,
+    variantKey: sheetVariant,
     run,
     record,
   });
@@ -1388,14 +1396,19 @@ export function EditorPage() {
   /**
    * A course with variation groups as the view shows it (§12): `course.list` has the root's first
    * alternatives, so Course and Variant view draw the displayed path, All variations the spine and the
-   * tinted branches. Class view and Layout mode draw the sheet as it prints (the root, until F8).
+   * tinted branches. Class view and Layout mode draw the sheet as it prints: one variant (`sheetVariant`, F8).
    */
   const courseOverride = useMemo(() => {
-    if (!hasGroups || !selectedCourse || !explicit || state.mode === "layout") return null;
+    if (!hasGroups || !selectedCourse || !explicit) return null;
+    if (sheetVariant !== null) {
+      const v = variants.find((x) => x.key === sheetVariant);
+      return v ? [courseDrawOf(selectedCourse.name, displayPath(explicit, kindOf, v.orders).items)] : null;
+    }
+    if (state.mode === "layout") return null;
     if (state.view === "all-variations") return allVariationDraws(selectedCourse.name, explicit);
     if (state.view !== "course" && state.view !== "variant") return null;
     return [courseDrawOf(selectedCourse.name, displayPath(explicit, kindOf, orders).items)];
-  }, [hasGroups, selectedCourse, explicit, state.mode, state.view, kindOf, orders]);
+  }, [hasGroups, selectedCourse, explicit, state.mode, state.view, kindOf, orders, sheetVariant, variants]);
 
   // Offline, Field mode views only (§9 "Offline"): a drag snaps back instead of writing.
   const fieldReadOnly = fieldMode && !online;
@@ -1408,7 +1421,7 @@ export function EditorPage() {
   const fitClassPage = useCallback((bounds: { minX: number; minY: number; maxX: number; maxY: number }) => {
     setViewRequest((v) => ({ key: (v?.key ?? 0) + 1, bounds }));
   }, []);
-  const classView = useClassView({ enabled: state.mode === "course" && state.view === "class", classSeq: state.classSeq, onFit: fitClassPage });
+  const classView = useClassView({ enabled: state.mode === "course" && state.view === "class", classSeq: state.classSeq, variantKey: sheetVariant, onFit: fitClassPage });
   const classLayout = classView.layout;
   const courseControlIds = useMemo(() => new Set([...memberIds].map(String)), [memberIds]);
   const toolActive = state.tool.kind !== "select";
@@ -1452,6 +1465,12 @@ export function EditorPage() {
   }), [classLayout, courseChecks.markers, isMobile, fix, sheetPx, fieldMoveEnd, state.selectedControlId, state.phantom, contextActions, contextInfo, srrBadge, radioOn, suggestions, tc, courseControlIds, toolActive,
     courseView, selectedCourse, moveWarnings, moveEpoch, handleMapClick, handleLabelMoveEnd, handleSelect,
     handleDismiss, handleLegClick, toolBinding, snapIndex, snap, draftObjects, draftFast, viewRequest, provisional, courseOverride, state.view]);
+
+  // Layout mode draws a root's sheet as one variant (F8): its path over the root's first alternatives.
+  const layoutEditor = useMemo(
+    () => (state.mode === "layout" && courseOverride ? { ...layoutMode.editor, courseOverride } : layoutMode.editor),
+    [state.mode, courseOverride, layoutMode.editor],
+  );
 
   // ─── Undo / redo, keyboard, deep links ───────────────────
   const runUndo = useCallback(() => {
@@ -1733,9 +1752,10 @@ export function EditorPage() {
       classes={selectedCourse ? (courseClasses.data ?? []) : []}
       classSeq={state.classSeq}
       onClass={(seq) => dispatch({ type: "class", seq })}
-      variants={state.mode === "course" ? variantKeys : []}
-      variantKey={state.variantKey}
+      variants={state.mode === "course" || state.mode === "layout" ? variantKeys : []}
+      variantKey={state.view === "variant" ? state.variantKey : sheetVariant}
       onVariant={(key) => dispatch({ type: "variant", key })}
+      allVariations={state.mode === "course"}
       exportState={{
         nameId: nameId ?? "",
         courseSeq: selectedCourse?.id ?? null,
@@ -2099,7 +2119,7 @@ export function EditorPage() {
           fullscreenOverlay={descControl ? (
             <ControlDescriptionEditor controlCode={descControl.code} initial={descControl.description} onSave={saveDescription} onCancel={closeDescription} />
           ) : null}
-          editor={state.mode === "layout" ? layoutMode.editor : editor}
+          editor={state.mode === "layout" ? layoutEditor : editor}
           highlightCourseName={highlightCourseName}
         />
       </div>
