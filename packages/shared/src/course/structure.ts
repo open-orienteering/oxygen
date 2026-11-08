@@ -50,6 +50,9 @@ export function legPropsSchemaOf<S extends z.ZodType<string | number>>(siteId: S
 /** The column's `LegProps`. */
 export const legPropsSchema = legPropsSchemaOf(z.string().min(1));
 export type LegProps = z.infer<typeof legPropsSchema>;
+/** The tRPC wire form's `LegProps`: the crossing point by public id. */
+export const wireLegPropsSchema = legPropsSchemaOf(z.number().int());
+export type WireLegProps = z.infer<typeof wireLegPropsSchema>;
 
 function controlItemSchemaOf<S extends z.ZodType<string | number>>(siteId: S) {
   return z.strictObject({

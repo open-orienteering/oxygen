@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { DisplayRow } from "../../../lib/editor/sequence";
-import { afterPlaced, afterUndo, armPlacement, ghostInfo, switchTool } from "../tools/placement";
+import { afterPlaced, afterUndo, armPlacement, endsChain, ghostInfo, switchTool } from "../tools/placement";
 
 const row = (kind: DisplayRow["kind"], id: number, x: number, seqIndex = -1): DisplayRow => ({ kind, id, code: String(id), pt: { x, y: 0 }, seqIndex });
 // S(1) → 31 → 32 → 33 → F(2)
@@ -97,5 +97,33 @@ describe("ghostInfo", () => {
     const g = ghostInfo(armPlacement("start", ctx), rows, { x: 10, y: 8 }, ptOf);
     expect(g).toMatchObject({ number: null, legs: [[{ x: 10, y: 8 }, { x: 10, y: 0 }]] });
     expect(g.legMm).toBeCloseTo(8);
+  });
+});
+
+describe("C: the crossing tool (docs/course-editor.md §6.8)", () => {
+  it("armed on a selected leg it names that leg; without one it places free sites", () => {
+    expect(armPlacement("crossing", { ...ctx, legInsertAt: 2 })).toEqual({ tool: "crossing", insertAt: 2, anchorId: null, placed: [] });
+    expect(armPlacement("crossing", ctx)).toEqual({ tool: "crossing", insertAt: null, anchorId: null, placed: [] });
+    expect(armPlacement("crossing", { ...ctx, course: false, legInsertAt: 2 }).insertAt).toBeNull();
+  });
+
+  it("is no visit: no number, no pending leg", () => {
+    expect(ghostInfo(armPlacement("crossing", { ...ctx, legInsertAt: 2 }), rows, { x: 15, y: 1 }, ptOf)).toEqual({ number: null, legs: [], legMm: null });
+  });
+
+  it("a placement on a leg ends the chain; a free one stays armed", () => {
+    const onLeg = armPlacement("crossing", { ...ctx, legInsertAt: 2 });
+    expect(endsChain(onLeg)).toBe(true);
+    const free = armPlacement("crossing", ctx);
+    expect(endsChain(free)).toBe(false);
+    expect(afterPlaced(free, 90)).toMatchObject({ tool: "crossing", insertAt: null, placed: [{ id: 90 }] });
+    expect(endsChain(armPlacement("finish", ctx))).toBe(true);
+    expect(endsChain(armPlacement("control", ctx))).toBe(false);
+  });
+
+  it("switching to or from it arms afresh (its position names a leg, not a chain)", () => {
+    const k = afterPlaced(armPlacement("control", ctx), 40);
+    expect(switchTool(k, "crossing", { ...ctx, legInsertAt: 1 })).toEqual({ tool: "crossing", insertAt: 1, anchorId: null, placed: [] });
+    expect(switchTool(armPlacement("crossing", ctx), "control", ctx)).toMatchObject({ tool: "control", insertAt: 3, anchorId: 33 });
   });
 });

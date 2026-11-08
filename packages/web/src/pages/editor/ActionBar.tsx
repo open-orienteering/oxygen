@@ -23,6 +23,8 @@ export interface ActionContext {
     radioOn: boolean;
     /** A pending SRR swap offer for this control. */
     swapOffer: boolean;
+    /** A crossing or map-issue point (§6.8): never on a course, no radio, no description. */
+    mark?: boolean;
   } | null;
   /** The selected course's name, or null. */
   course: string | null;
@@ -42,6 +44,8 @@ export interface ActionHandlers {
   add(): void;
   addStart(): void;
   addFinish(): void;
+  /** *Add map-issue point* on empty map (§6.8). */
+  addMapIssue(): void;
   useAsRole(role: "start" | "finish"): void;
   append(): void;
   removeFromCourse(): void;
@@ -67,10 +71,16 @@ export function courseActions(ctx: ActionContext, on: ActionHandlers, label: Act
     out.push({ id: "add", label: label("editor.actionAdd"), onClick: on.add, disabled: !ctx.codesReady });
     out.push({ id: "add-start", label: label("editor.actionAddStart"), onClick: on.addStart });
     out.push({ id: "add-finish", label: label("editor.actionAddFinish"), onClick: on.addFinish });
+    out.push({ id: "add-map-issue", label: label("editor:actionAddMapIssue"), onClick: on.addMapIssue });
     return out;
   }
   const s = ctx.selected;
   if (!s) return out;
+  // A crossing or map-issue point: delete only (its notes stay in the inspector).
+  if (s.mark) {
+    out.push({ id: "delete", label: label("editor.deleteControl"), variant: "danger", onClick: on.delete, disabled: ctx.busy });
+    return out;
+  }
   const startFinish = s.role !== "control";
   if (ctx.course && startFinish && s.otherRole) {
     const role = s.role as "start" | "finish";

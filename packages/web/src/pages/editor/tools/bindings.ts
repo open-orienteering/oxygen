@@ -285,7 +285,9 @@ export interface PlaceOptions {
   ghost: {
     at: Pt;
     radiusMm: number;
-    role: "start" | "control" | "finish";
+    role: "start" | "control" | "finish" | "crossing_point";
+    /** A crossing point's direction of passage, degrees counter-clockwise from +x (§6.8); default north. */
+    angleDeg?: number;
     /** "3 · 47" (number · code), "Add 47" over an existing control, or the code. */
     label: string;
     description: string | null;
@@ -306,14 +308,35 @@ export interface PlaceOptions {
   touch: { placeLabel: string; doneLabel: string } | null;
 }
 
+/** Half the ghost 710's length and its lines' offset from the passage, paper mm (ISOM 710 at the library size). */
+const CROSSING_GHOST_HALF_MM = 1.5;
+const CROSSING_GHOST_OFFSET_MM = 0.475;
+
+/** The crossing tool's ghost: two lines either side of the passage through `at`, turned by `angleDeg`. */
+export function crossingGhost(at: Pt, angleDeg: number): ToolShape[] {
+  const a = (angleDeg * Math.PI) / 180;
+  const ux = Math.cos(a), uy = Math.sin(a);
+  const line = (off: number): Pt[] => [
+    { x: at.x - ux * CROSSING_GHOST_HALF_MM - uy * off, y: at.y - uy * CROSSING_GHOST_HALF_MM + ux * off },
+    { x: at.x + ux * CROSSING_GHOST_HALF_MM - uy * off, y: at.y + uy * CROSSING_GHOST_HALF_MM + ux * off },
+  ];
+  return [
+    { kind: "line", points: line(CROSSING_GHOST_OFFSET_MM), color: PURPLE, widthPx: 2, testId: "editor-ghost", data: { role: "crossing_point", angle: String(Math.round(angleDeg * 10) / 10) } },
+    { kind: "line", points: line(-CROSSING_GHOST_OFFSET_MM), color: PURPLE, widthPx: 2 },
+  ];
+}
+
 export function placeBinding(o: PlaceOptions): EditorToolBinding {
   const shapes: ToolShape[] = [];
   const gh = o.ghost;
   if (gh) {
     const leg = gh.legs[0];
     if (leg && gh.legLabel) shapes.push(legLengthShape(leg[0], leg[1], gh.legLabel));
-    // The circle only where the layer draws none (no course, a reuse): else two concentric circles show.
-    if (!o.provisionalDrawn) {
+    if (gh.role === "crossing_point") {
+      // 710's two lines along the passage (§6.8); the layer draws no visit for a crossing point.
+      shapes.push(...crossingGhost(gh.at, gh.angleDeg ?? 90));
+    } else if (!o.provisionalDrawn) {
+      // The circle only where the layer draws none (no course, a reuse): else two concentric circles show.
       shapes.push({ kind: "circle", x: gh.at.x, y: gh.at.y, rMm: gh.radiusMm, color: PURPLE, testId: "editor-ghost", data: { role: gh.role } });
       if (gh.role === "finish") shapes.push({ kind: "circle", x: gh.at.x, y: gh.at.y, rMm: gh.radiusMm * 0.7, color: PURPLE });
     }

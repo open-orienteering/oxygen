@@ -17,7 +17,8 @@ type Pt = { x: number; y: number };
 export interface RequestControl {
   id: string;
   code: string;
-  type: "Start" | "Control" | "Finish";
+  /** How the site draws (course-layer.md §10.3): crossing and map-issue points are never items; an exchange is a `Control`. */
+  type: "Start" | "Control" | "Finish" | "Crossing" | "MapIssue";
   visible?: boolean;
   /** `controls.circle_gaps`: authored cuts, compass degrees; non-empty replaces the automatic ones (course-layer.md §6.4). */
   circleGaps?: course.AngularGap[];
@@ -30,7 +31,7 @@ export interface RequestCourse {
   highlight?: boolean;
   orderMode?: "ordered" | "free_order";
   labelOffsets?: Record<string, { dx: number; dy: number }>;
-  /** The stored structure's legs whole (style, bends, gaps, corridor), keyed `"<fromId>><toId>"` (course-layer.md §5, §10). */
+  /** The stored structure's legs whole (style, bends, gaps, corridor, crossing), keyed `"<fromId>><toId>"` (course-layer.md §5, §10). */
   legs?: Record<string, course.CourseLegProps>;
   /** Ids of the controls whose number every visit hides. */
   hiddenNumbers?: readonly number[];
@@ -82,6 +83,11 @@ export interface CourseRequestInput {
    * layer draws no automatic slits or leg gaps, stored ones still apply. Absent = on.
    */
   autoCuts?: boolean;
+  /**
+   * Setter marks (course-layer.md §10.3): the editor's Course and All-controls views draw the
+   * map-issue points (702) and every crossing point; every other view only the crossings its legs run through.
+   */
+  setterMarks?: boolean;
 }
 
 /**
@@ -149,7 +155,45 @@ export function courseObjectsForView(
   return objects.filter((o) => o.inCourses === null || o.inCourses.some((id) => drawn.has(id)));
 }
 
-const KIND: Record<RequestControl["type"], course.CourseSite["kind"]> = { Start: "start", Control: "control", Finish: "finish" };
+const KIND: Record<RequestControl["type"], course.CourseSite["kind"]> = {
+  Start: "start", Control: "control", Finish: "finish", Crossing: "crossing_point", MapIssue: "map_issue",
+};
+/** Sites that are never items (§10.3): the layer decides when they draw, so they never make a view "all controls". */
+const isMark = (s: course.CourseSite) => s.kind === "crossing_point" || s.kind === "map_issue";
+
+/** A `course.controlCoordinates` row's drawn type: by its kind (course-layer.md §10.3), else the wire status 4 / 5; an exchange is a control. */
+export function overlayTypeOf(c: { status: number; kind?: string }): RequestControl["type"] {
+  if (c.kind === "crossing_point") return "Crossing";
+  if (c.kind === "map_issue") return "MapIssue";
+  if (c.kind === "start" || (c.kind === undefined || c.kind === "control") && c.status === 4) return "Start";
+  if (c.kind === "finish" || (c.kind === undefined || c.kind === "control") && c.status === 5) return "Finish";
+  return "Control";
+}
+
+/**
+ * The on-map sheet's derived crossing rows (`buildDescriptionSheet`'s
+ * `crossings`; course-layer.md §10.3): one per leg of the course's id list
+ * whose stored leg runs through a crossing point, anchored after the
+ * control it leaves (its code as the sheet's row id), `null` after the start.
+ */
+export function sheetCrossings(
+  c: { controls: readonly string[]; legs?: Record<string, course.CourseLegProps>; orderMode?: "ordered" | "free_order" },
+  overlays: readonly { id: string; code: string; type: RequestControl["type"] }[] | undefined,
+): { afterControlId: number | null; section: boolean }[] {
+  if (!c.legs || c.orderMode === "free_order") return [];
+  const out: { afterControlId: number | null; section: boolean }[] = [];
+  for (let i = 1; i < c.controls.length; i++) {
+    const crossing = c.legs[`${c.controls[i - 1]}>${c.controls[i]}`]?.crossing;
+    if (!crossing) continue;
+    const from = overlays?.find((o) => o.id === c.controls[i - 1]);
+    if (from?.type === "Start") out.push({ afterControlId: null, section: !!crossing.section });
+    else {
+      const id = Number.parseInt(String(from?.code ?? c.controls[i - 1]), 10);
+      if (Number.isFinite(id)) out.push({ afterControlId: id, section: !!crossing.section });
+    }
+  }
+  return out;
+}
 
 export function courseLayerRequest(input: CourseRequestInput): CourseLayerRequest {
   const sites: course.CourseSite[] = [];
@@ -198,7 +242,7 @@ export function courseLayerRequest(input: CourseRequestInput): CourseLayerReques
   }
 
   const onCourse = new Set(structures.flatMap((s) => s.items.map((i) => i.siteId)).filter((id) => drawn.has(id)));
-  const allControls = sites.some((s) => !onCourse.has(s.id));
+  const allControls = sites.some((s) => !onCourse.has(s.id) && !isMark(s));
   const sequence = input.sequenceLabels && !!single && (single.orderMode ?? "ordered") === "ordered";
   return {
     structure: structures.length === 0 ? null : structures,
@@ -213,6 +257,7 @@ export function courseLayerRequest(input: CourseRequestInput): CourseLayerReques
     viewOptions: {
       labelMode: sequence ? "sequence" : "code",
       ...(allControls ? { allControls: true } : {}),
+      ...(input.setterMarks ? { setterMarks: true } : {}),
       ...(input.autoCuts === false ? { autoCuts: false } : {}),
       ...(input.layout
         ? { overprintScale: input.layout.overprintScale, window: course.mapLayerWindow(input.layout.page), ...(input.layout.page.textValues ? { textValues: input.layout.page.textValues } : {}) }

@@ -2,7 +2,7 @@
 
 import type { EditorTool } from "../../../lib/editor/state";
 
-export type RailTool = "V" | "S" | "K" | "M" | "A" | "T" | "G";
+export type RailTool = "V" | "S" | "K" | "M" | "C" | "A" | "T" | "G";
 export type AreaChoice = "oob_area" | "oob_line" | "whiteout" | "filter_region" | "toner_saver" | "marked_route";
 export const AREA_CHOICES: AreaChoice[] = ["oob_area", "oob_line", "whiteout", "filter_region", "toner_saver", "marked_route"];
 
@@ -16,7 +16,7 @@ export const AREA_KEYS: Record<AreaChoice, string> = {
  * docs/course-editor.md §6.4, §6.7): not an area kind — it writes the
  * selected leg's `LegProps.corridor` — so it is outside `AREA_CHOICES` (the
  * phone's + menu lists those) and has its own chord key, read only while
- * the menu is open.
+ * the menu is open. A plain `C` arms the crossing-point tool (§6.8).
  */
 export const CORRIDOR_KEY = "C";
 export const isCorridorKey = (key: string): boolean => key.toUpperCase() === CORRIDOR_KEY;
@@ -31,7 +31,7 @@ export function areaChoiceOfKey(key: string): AreaChoice | null {
 export function railKeyOf(tool: EditorTool): RailTool | null {
   switch (tool.kind) {
     case "select": return "V";
-    case "place": return tool.chain.tool === "start" ? "S" : tool.chain.tool === "finish" ? "M" : "K";
+    case "place": return tool.chain.tool === "start" ? "S" : tool.chain.tool === "finish" ? "M" : tool.chain.tool === "crossing" ? "C" : "K";
     case "area": return "A";
     case "text": return "T";
     case "gap": return "G";

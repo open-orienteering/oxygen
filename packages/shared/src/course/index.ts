@@ -30,6 +30,8 @@ export {
   structureDiff,
   structureSiteIssues,
   type LegProps,
+  type WireLegProps,
+  wireLegPropsSchema,
   type StoredControlItem,
   type StoredCourseItem,
   type StoredCourseStructure,

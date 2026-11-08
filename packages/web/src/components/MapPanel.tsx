@@ -4,7 +4,7 @@ import { useParams } from "react-router-dom";
 import { trpc } from "../lib/trpc";
 import { MapViewer, type ControlOverlay, type CourseOverlay, type MapViewerEditorProps } from "./MapViewer";
 import { useIsWideViewport } from "./map-pane-shared";
-import { courseObjectsForView } from "../lib/course-layer-request";
+import { courseObjectsForView, overlayTypeOf as overlayType } from "../lib/course-layer-request";
 import { courseOverlayIds } from "../lib/course-overlay-ids";
 import {
   IconDescriptions,
@@ -304,7 +304,9 @@ function MapPanelImpl({
 
       // Determine visibility based on filter mode and toggle
       let visible = true;
-      if (showOnlyRelevant) {
+      // Crossing and map-issue points are never items: the course layer decides when they draw (course-layer.md §10.3).
+      const mark = c.kind === "crossing_point" || c.kind === "map_issue";
+      if (showOnlyRelevant && !mark) {
         if (filterMode === "course" && courseControlIds.size > 0) {
           visible = courseControlIds.has(id) || c.status === 4 || c.status === 5;
           // Extra punch controls are not in the course but should still be visible
@@ -332,7 +334,7 @@ function MapPanelImpl({
         y: c.mapY,
         lat: c.lat,
         lng: c.lng,
-        type: c.status === 4 ? "Start" as const : c.status === 5 ? "Finish" as const : "Control" as const,
+        type: overlayType(c),
         highlight: isHighlighted,
         visible,
         completionPct,

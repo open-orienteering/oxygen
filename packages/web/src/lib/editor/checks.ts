@@ -45,17 +45,28 @@ export function checkSitesOf(
   });
 }
 
-/** The (explicit) wire structure in the layer's form; a variation group is skipped (slice F). */
+/**
+ * The (explicit) wire structure in the layer's form; a variation group is
+ * skipped (slice F). Legs keep what the leg checks read: the bends (§10.1)
+ * and the crossing point (§10.3), its id as the layer's string.
+ */
 export function checkStructureOf(courseId: number, s: Structure): course.CourseStructure {
   return {
     version: 1,
     id: String(courseId),
     orderMode: s.orderMode,
-    items: s.items.flatMap((i) => (i.kind === "variation" ? [] : [{
-      siteId: String(i.siteId),
-      ...(i.role ? { role: i.role as course.CourseSite["kind"] } : {}),
-      ...(i.numberHidden ? { numberHidden: true } : {}),
-    }])),
+    items: s.items.flatMap((i) => {
+      if (i.kind === "variation") return [];
+      const leg: course.CourseLegProps = {};
+      if (i.leg?.bends?.length) leg.bends = i.leg.bends;
+      if (i.leg?.crossing) leg.crossing = { controlId: String(i.leg.crossing.controlId), ...(i.leg.crossing.section ? { section: true } : {}) };
+      return [{
+        siteId: String(i.siteId),
+        ...(i.role ? { role: i.role } : {}),
+        ...(i.numberHidden ? { numberHidden: true } : {}),
+        ...(Object.keys(leg).length ? { leg } : {}),
+      }];
+    }),
   };
 }
 

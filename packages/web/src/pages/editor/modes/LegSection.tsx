@@ -1,7 +1,7 @@
 /**
  * The inspector's *Leg* section (docs/course-editor.md §6.7; 08 §5.2
  * "leg: style, gaps, corridor, crossing"): the selected leg's style, its
- * bends and its corridor. Every change is one patch of the item's
+ * bends, its corridor and the crossing point it runs through (§6.8). Every change is one patch of the item's
  * `LegProps` (`setLegProps`), one `setStructure`, one undo entry; the page
  * writes. Invalid numbers are not written. On a phone the section is
  * read-only and says so (08 §5.5 "desktop-only by design").
@@ -11,7 +11,8 @@ import { useTranslation } from "react-i18next";
 import type { course } from "@oxygen/shared";
 import { DEFAULT_CORRIDOR, type LegPatch } from "../../../lib/editor/structure-edit";
 
-type LegProps = course.LegProps;
+/** The wire form's leg: `crossing.controlId` is a public id (course-layer.md §6.1). */
+type LegProps = course.WireLegProps;
 type Corridor = NonNullable<LegProps["corridor"]>;
 
 
@@ -22,6 +23,8 @@ export interface LegSectionProps {
   /** "31 → 32": the leg's ends by code. */
   title: string;
   leg: LegProps;
+  /** The crossing point's code (`leg.crossing`), or null without one. */
+  crossingCode?: string | null;
   focusedBend: number | null;
   /** A phone: everything shown, nothing editable. */
   readOnly: boolean;
@@ -85,6 +88,28 @@ export function LegSection(p: LegSectionProps) {
           </ul>
         )}
         {!readOnly && <p className="text-[10px] text-slate-400">{t("legBendsHint")}</p>}
+      </div>
+
+      <div data-testid="editor-leg-crossing" data-site-id={leg.crossing?.controlId ?? ""} className="space-y-0.5">
+        <div className="flex items-center gap-2">
+          <span className="text-[11px] text-slate-500">{t("legCrossing")}</span>
+          {leg.crossing ? (
+            <>
+              <span data-testid="editor-leg-crossing-code" className="font-mono text-[11px] text-slate-700">{p.crossingCode ?? leg.crossing.controlId}</span>
+              <button type="button" data-testid="editor-leg-crossing-remove" disabled={readOnly} onClick={() => p.onPatch({ crossing: undefined })}
+                className={`${BUTTON} ml-auto border-red-200 text-red-600 hover:bg-red-50`}>{t("legCrossingRemove")}</button>
+            </>
+          ) : (
+            <span data-testid="editor-leg-crossing-none" className="text-[11px] text-slate-400">{t("legCrossingNone")}</span>
+          )}
+        </div>
+        {leg.crossing && (
+          <label className="flex items-center gap-1.5 text-[11px] text-slate-500">
+            <input data-testid="editor-leg-crossing-section" type="checkbox" checked={!!leg.crossing.section} disabled={readOnly}
+              onChange={(e) => p.onPatch({ crossing: { controlId: leg.crossing!.controlId, ...(e.target.checked ? { section: true } : {}) } })} />
+            {t("legCrossingSection")}
+          </label>
+        )}
       </div>
 
       <div data-testid="editor-leg-corridor" className="space-y-1">

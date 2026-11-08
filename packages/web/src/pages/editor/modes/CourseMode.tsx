@@ -7,7 +7,7 @@
 
 import { useState } from "react";
 import { useTranslation } from "react-i18next";
-import { iofSymbolName } from "@oxygen/shared";
+import { iofSymbolName, type ControlKind } from "@oxygen/shared";
 import type { DisplayRow } from "../../../lib/editor/sequence";
 import { FINISH_OPTIONS, SPECIAL_OPTIONS } from "../../../lib/control-description-options";
 import {
@@ -332,6 +332,12 @@ export interface SelectionSectionProps {
   selected: {
     code: string;
     role: "start" | "finish" | "control";
+    /** The site's kind (08 §4.2); default the role. */
+    kind?: ControlKind;
+    /** On a course (an item, or its start / finish): it cannot become a crossing or map-issue point (§6.6). */
+    onCourse?: boolean;
+    /** A crossing point some leg runs through: its kind stays (§6.6). */
+    routed?: boolean;
     x: number;
     y: number;
     description: string | null;
@@ -341,13 +347,17 @@ export interface SelectionSectionProps {
     /** On the selected course: whether its number is hidden there (`numberHidden`); null when not on it. */
     numberHidden: boolean | null;
   } | null;
-  /** Site kind (08 §4.2); the slice-F kinds are listed disabled. */
-  onKind?: (kind: "control" | "start" | "finish") => void;
+  /** Site kind (08 §4.2): all six (F4); the ones the site's courses forbid are disabled. */
+  onKind?: (kind: ControlKind) => void;
   onNotes?: (notes: string) => void;
   onNumberHidden?: (hidden: boolean) => void;
 }
 
-const SLICE_F_KINDS = ["map_exchange", "crossing_point", "map_issue"] as const;
+const KINDS: readonly ControlKind[] = ["control", "start", "finish", "map_exchange", "crossing_point", "map_issue"];
+const KIND_LABEL: Record<ControlKind, "kindControl" | "kindStart" | "kindFinish" | "kind_map_exchange" | "kind_crossing_point" | "kind_map_issue"> = {
+  control: "kindControl", start: "kindStart", finish: "kindFinish",
+  map_exchange: "kind_map_exchange", crossing_point: "kind_crossing_point", map_issue: "kind_map_issue",
+};
 
 export function SelectionSection({ selected, onKind, onNotes, onNumberHidden }: SelectionSectionProps) {
   const { t } = useTranslation("editor");
@@ -367,13 +377,16 @@ export function SelectionSection({ selected, onKind, onNotes, onNumberHidden }: 
       </dd>
       <dt className="text-slate-400">{t("kind")}</dt>
       <dd>
-        <select data-testid="editor-selected-kind" value={selected.role} disabled={!onKind}
-          onChange={(e) => onKind?.(e.target.value as "control" | "start" | "finish")}
+        <select data-testid="editor-selected-kind" value={selected.kind ?? selected.role} disabled={!onKind}
+          onChange={(e) => onKind?.(e.target.value as ControlKind)}
           className="w-full px-1 py-0.5 border border-slate-200 rounded bg-white text-xs">
-          <option value="control">{t("kindControl")}</option>
-          <option value="start">{t("kindStart")}</option>
-          <option value="finish">{t("kindFinish")}</option>
-          {SLICE_F_KINDS.map((k) => <option key={k} value={k} disabled>{t(`kind_${k}`)} — {t("sliceF")}</option>)}
+          {KINDS.map((k) => {
+            const current = (selected.kind ?? selected.role) === k;
+            const noItem = (k === "crossing_point" || k === "map_issue") && !!selected.onCourse;
+            const kept = !!selected.routed && k !== "crossing_point";
+            const why = noItem ? t("kindOnCourse") : kept ? t("kindRouted") : undefined;
+            return <option key={k} value={k} disabled={!current && (noItem || kept)} title={why}>{t(KIND_LABEL[k])}{!current && why ? ` — ${why}` : ""}</option>;
+          })}
         </select>
       </dd>
       <dt className="text-slate-400 sr-only">x / y</dt>

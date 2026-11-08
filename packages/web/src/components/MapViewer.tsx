@@ -64,7 +64,7 @@ import {
   pillHalfWidth,
 } from "../lib/course-leg-labels";
 import { useMediaQuery } from "../hooks/useMediaQuery";
-import { courseLayerRequest, PROVISIONAL_SITE_ID, type LayoutRequest, type ProvisionalVisit } from "../lib/course-layer-request";
+import { courseLayerRequest, PROVISIONAL_SITE_ID, sheetCrossings, type LayoutRequest, type ProvisionalVisit } from "../lib/course-layer-request";
 import { dragLegShapes } from "../lib/editor/leg-length";
 import { outlinePoints, vertexRule } from "../lib/editor/geometry-edit";
 import type { CourseInfo } from "../map-gl/engine";
@@ -84,7 +84,8 @@ export interface ControlOverlay {
   y: number; // map position y (mm on map)
   lat: number;
   lng: number;
-  type: "Start" | "Control" | "Finish";
+  /** How the site draws; crossing and map-issue points are never items (course-layer.md §10.3). */
+  type: "Start" | "Control" | "Finish" | "Crossing" | "MapIssue";
   highlight?: boolean;
   visible?: boolean;
   punchCount?: number;
@@ -221,6 +222,8 @@ export interface MapViewerEditorProps {
   courseControlIds?: ReadonlySet<string>;
   /** Fade regular controls not in `courseControlIds` (course selected). */
   fadeNonCourse?: boolean;
+  /** Setter marks (course-layer.md §10.3): the Course and All-controls views draw 702 and every crossing point. */
+  setterMarks?: boolean;
   /** Pre-formatted warning per control id, shown as a chip during drag. */
   moveWarnings?: ReadonlyMap<string, string>;
   /**
@@ -770,6 +773,7 @@ export function MapViewer({
   // The request reads these of the editor only: the editor object itself changes with every tool hover.
   const editorOn = !!editor;
   const editorFade = editor?.fadeNonCourse ?? false;
+  const editorSetterMarks = editor?.setterMarks ?? false;
   const editorCourseIds = editor?.courseControlIds;
   const editorDraftFast = editor?.draftFast ?? false;
   const editorProvisional = editor?.provisional ?? null;
@@ -807,9 +811,11 @@ export function MapViewer({
       provisional: editorProvisional,
       layout: editorLayout,
       autoCuts,
+      // Layout mode draws the sheet as it prints: setter marks on the all-controls sheet only (§10.3).
+      setterMarks: editorLayout ? !highlightCourseName && courses.every((c) => !c.highlight) : editorSetterMarks,
     });
     return editorDraftFast ? { ...request, fastFilter: true } : request;
-  }, [glCourse, controls, controlMm, editorOn, editorFade, editorCourseIds, editorDraftFast, editorProvisional, editorLayout, pendingMoves, editorDragPos, showDescriptions,
+  }, [glCourse, controls, controlMm, editorOn, editorFade, editorSetterMarks, editorCourseIds, editorDraftFast, editorProvisional, editorLayout, pendingMoves, editorDragPos, showDescriptions,
       courses, highlightCourseName, drawnObjects, editorLabelDragPos, pendingLabelMoves, autoCuts]);
   /** A dragged control's leg lengths (§6.1), from the positions the request draws. */
   const dragLegLabels = useMemo(() => {
@@ -2696,6 +2702,7 @@ export function MapViewer({
         <ul data-testid="course-layer" hidden>
           {courseInfo.derivation.sites.map((ds) => (
             <li key={`s-${ds.id}`} data-testid="course-site" data-site-id={ds.id} data-role={ds.role} data-x={ds.x} data-y={ds.y}
+              data-angle={ds.angleDeg} data-section={ds.section ? "true" : undefined}
               data-cuts={ds.cuts.map((g) => `${g.start}-${g.end}`).join(" ")}>
               {ds.label && (
                 <span data-testid="course-label" data-site-id={ds.id} data-text={ds.label.text} data-x={ds.label.x} data-y={ds.label.y}>
@@ -2913,7 +2920,7 @@ function renderDescriptionSheet(
   cw: number,
   ch: number,
   /** The highlighted courses. 1 → sequence card; >1 → code-sorted union. */
-  activeCourses?: Array<Pick<CourseOverlay, "name" | "controls" | "classNames" | "lengthM" | "climbM" | "orderMode" | "descriptionInstructions">>,
+  activeCourses?: Array<Pick<CourseOverlay, "name" | "controls" | "classNames" | "lengthM" | "climbM" | "orderMode" | "descriptionInstructions" | "legs">>,
   /** All control overlays — resolve id → code / type / description. */
   controlOverlays?: ControlOverlay[],
   /** List every positioned control from the overlays instead of a course card (no course active). */
@@ -3025,6 +3032,7 @@ function renderDescriptionSheet(
       })),
       instructions: single.descriptionInstructions ?? null,
       finishLengthM,
+      crossings: sheetCrossings(single, controlOverlays),
     });
     sheetHeader = sheet.header;
     headerRows = 3;
@@ -3287,6 +3295,7 @@ function renderDescriptionRows(
         // Special / finish: symbol drawn across the full width with optional length.
         elements.push(
           <svg key={`desc-wide-${n}`} x={sheetX + 2} y={ry + 2}
+            data-testid="desc-row-wide" data-symbol-key={key}
             width={sheetW - 4} height={cellSize - 4}
             viewBox="-800 -100 1600 200"
             preserveAspectRatio="xMidYMid meet"

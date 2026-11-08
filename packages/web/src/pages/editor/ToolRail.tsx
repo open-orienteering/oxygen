@@ -2,8 +2,8 @@
  * The tool rail (docs/course-editor.md §2, §6; 08 §5.2): `V` select / move,
  * the armed creation tools `S` / `K` / `M`, `A` areas (a menu of kinds),
  * `T` map text, `G` gaps on the selected circle or leg, and the snapping
- * toggle. Map exchange `X` and crossing point `C` are shown disabled
- * until slice F. Every tool has its key; the page owns the keyboard.
+ * toggle, and `C` the crossing point (§6.8). Map exchange `X` is shown
+ * disabled until F5. Every tool has its key; the page owns the keyboard.
  */
 
 import { useLayoutEffect, useRef, useState } from "react";
@@ -69,7 +69,7 @@ export function ToolRail(p: ToolRailProps) {
       {key}
     </button>
   );
-  const later = (key: "X" | "C", name: string) => (
+  const later = (key: "X", name: string) => (
     <button key={key} type="button" data-testid={`editor-tool-${key}`} disabled title={t("toolLater", { tool: name })} aria-label={t("toolLater", { tool: name })}
       className={`${BTN} text-slate-400 opacity-40 cursor-not-allowed`}>
       {key}
@@ -82,7 +82,7 @@ export function ToolRail(p: ToolRailProps) {
       {button("K", t("toolControl"), () => p.onTool("K"))}
       {button("M", t("toolFinish"), () => p.onTool("M"))}
       {later("X", t("toolExchange"))}
-      {later("C", t("toolCrossing"))}
+      {button("C", t("toolCrossing"), () => p.onTool("C"))}
       {button("A", t("toolArea"), () => p.onAreaOpen(!areaOpen))}
       {button("T", t("toolText"), () => p.onTool("T"))}
       {button("G", t("toolGap"), () => p.onTool("G"), !p.canGap)}

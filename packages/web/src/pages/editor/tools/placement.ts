@@ -8,13 +8,18 @@
  * Positions are control-sequence positions (`structure-edit.ts`). Without
  * a selected course the tools only create sites: no insertion point, no
  * pending leg, no number.
+ *
+ * `C` (crossing point, §6.8) shares the flow but is never an item: armed on
+ * a selected leg its `insertAt` names that leg (the leg into the control at
+ * that position) and the click routes it through the new site; without a
+ * leg it places free sites and stays armed.
  */
 
 import type { DisplayRow } from "../../../lib/editor/sequence";
 
 type Pt = { x: number; y: number };
 
-export type PlacementTool = "start" | "control" | "finish";
+export type PlacementTool = "start" | "control" | "finish" | "crossing";
 
 export interface PlacementState {
   tool: PlacementTool;
@@ -59,6 +64,8 @@ export function rowAfter(rows: readonly DisplayRow[], at: number): DisplayRow | 
  */
 export function armPlacement(tool: PlacementTool, ctx: ArmContext): PlacementState {
   if (!ctx.course) return { tool, insertAt: null, anchorId: null, placed: [] };
+  // `C`: the selected leg, else free placement (§6.8).
+  if (tool === "crossing") return { tool, insertAt: ctx.legInsertAt, anchorId: null, placed: [] };
   const controls = controlRows(ctx.rows);
   let insertAt = controls.length;
   if (tool === "start") insertAt = 0;
@@ -74,13 +81,16 @@ export function armPlacement(tool: PlacementTool, ctx: ArmContext): PlacementSta
 /** Switch the armed tool keeping the chain (`S` → `K` …); `S` re-anchors at the start. */
 export function switchTool(s: PlacementState, tool: PlacementTool, ctx: ArmContext): PlacementState {
   if (tool === "start") return { ...armPlacement("start", ctx), placed: s.placed };
+  // The crossing tool's position names a leg, not a chain's: switching to or from it arms afresh.
+  if (tool === "crossing" || s.tool === "crossing") return armPlacement(tool, ctx);
   return { ...s, tool };
 }
 
 /**
  * After a site was placed (new or reused). A control advances the
  * insertion point and becomes the anchor; a start re-anchors the chain at
- * position 0; a finish ends it (the caller returns to `V`).
+ * position 0; a finish ends it (the caller returns to `V`), as does a
+ * crossing point placed on a leg (`endsChain`).
  */
 export function afterPlaced(s: PlacementState, id: number): PlacementState {
   const entry = { id, insertAt: s.insertAt, anchorId: s.anchorId };
@@ -92,6 +102,9 @@ export function afterPlaced(s: PlacementState, id: number): PlacementState {
   }
   return { ...s, placed: [...s.placed, entry] };
 }
+
+/** Whether the placement just made ends the chain (the caller returns to `V`): a finish, a crossing point on a leg. */
+export const endsChain = (s: PlacementState): boolean => s.tool === "finish" || (s.tool === "crossing" && s.insertAt !== null);
 
 /** `Ctrl+Z` while armed: the last placement is undone, the anchor and insertion point go back with it. */
 export function afterUndo(s: PlacementState): PlacementState {
@@ -114,7 +127,8 @@ export interface GhostInfo {
 
 /** The ghost at `cursor`: its number and the pending leg (08 §5.3). */
 export function ghostInfo(s: PlacementState, rows: readonly DisplayRow[], cursor: Pt, ptOf: (id: number) => Pt | null): GhostInfo {
-  if (s.insertAt === null) return { number: null, legs: [], legMm: null };
+  // A crossing point is no visit: no number, no pending leg (§6.8).
+  if (s.insertAt === null || s.tool === "crossing") return { number: null, legs: [], legMm: null };
   if (s.tool === "start") {
     const next = rowAfter(rows, 0)?.pt;
     return { number: null, legs: next ? [[cursor, next]] : [], legMm: next ? Math.hypot(next.x - cursor.x, next.y - cursor.y) : null };
