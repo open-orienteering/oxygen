@@ -127,3 +127,22 @@ describe("C: the crossing tool (docs/course-editor.md §6.8)", () => {
     expect(switchTool(armPlacement("crossing", ctx), "control", ctx)).toMatchObject({ tool: "control", insertAt: 3, anchorId: 33 });
   });
 });
+
+describe("X: the map exchange tool (docs/course-editor.md §6.9)", () => {
+  it("is a visit in the chain: armed, numbered and advanced as a control", () => {
+    const s = armPlacement("exchange", { ...ctx, selectedControlId: 31 });
+    expect(s).toMatchObject({ tool: "exchange", insertAt: 1, anchorId: 31 });
+    const g = ghostInfo(s, rows, { x: 15, y: 5 }, ptOf);
+    expect(g.number).toBe(2);
+    expect(g.legs).toHaveLength(2);
+    const next = afterPlaced(s, 50);
+    expect(next).toMatchObject({ tool: "exchange", insertAt: 2, anchorId: 50 });
+    expect(endsChain(s)).toBe(false);
+  });
+
+  it("switching K ↔ X keeps the chain", () => {
+    const s = afterPlaced(armPlacement("control", ctx), 50);
+    expect(switchTool(s, "exchange", ctx)).toEqual({ ...s, tool: "exchange" });
+    expect(switchTool({ ...s, tool: "exchange" }, "control", ctx)).toEqual(s);
+  });
+});

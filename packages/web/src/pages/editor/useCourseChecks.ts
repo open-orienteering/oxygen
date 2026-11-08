@@ -43,7 +43,8 @@ export function useCourseChecks(input: CourseChecksInput): CourseChecksResult {
   const siteById = useMemo(() => new Map(checkSites.map((s) => [s.id, s] as const)), [checkSites]);
   const checkDoc = useMemo(() => (document ? checkDocumentFor(document.hash, document.bytes) : null), [document]);
   const windows = useMemo(
-    () => (selected ? (sheets.data ?? []).flatMap((m) => (m.courseId === selected.id && m.resolved ? [m.resolved.window] : [])) : []),
+    // Each window with the part it prints (course-layer.md §11): `EXCHANGE_WITHOUT_SHEET`, per-part `CONTROL_OUTSIDE_SHEET`.
+    () => (selected ? (sheets.data ?? []).flatMap((m) => (m.courseId === selected.id && m.resolved && m.kind === "course" ? [{ ...m.resolved.window, section: m.sectionIndex }] : [])) : []),
     [sheets.data, selected],
   );
   // The viewer's derivation is this course's only while it draws it alone.
@@ -61,7 +62,8 @@ export function useCourseChecks(input: CourseChecksInput): CourseChecksResult {
 
   const checks = useMemo(() => mergeChecks(client, selected ? server.data : []), [client, server.data, selected]);
   const markers = useMemo(() => checkMarkers(checks, siteById, ringMm), [checks, siteById, ringMm]);
-  const lengthM = useMemo(() => legsLengthM(ownDerivation, mapScale), [ownDerivation, mapScale]);
+  // A part drawn alone (Layout mode, §11) is not the course's length: the stored one stands in.
+  const lengthM = useMemo(() => (ownDerivation?.courses[0]?.section ? null : legsLengthM(ownDerivation, mapScale)), [ownDerivation, mapScale]);
   const locate = useCallback((c: EditorCheck) => locateTarget(c, siteById), [siteById]);
   return { checks, markers, lengthM, locate };
 }

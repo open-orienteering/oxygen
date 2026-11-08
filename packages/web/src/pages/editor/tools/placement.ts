@@ -13,13 +13,20 @@
  * a selected leg its `insertAt` names that leg (the leg into the control at
  * that position) and the click routes it through the new site; without a
  * leg it places free sites and stays armed.
+ *
+ * `X` (map exchange, §6.9) is a control in the chain: it is placed at the
+ * insertion point, numbered, and the chain continues after it; only the
+ * site it creates differs (`kind = 'map_exchange'`).
  */
 
 import type { DisplayRow } from "../../../lib/editor/sequence";
 
 type Pt = { x: number; y: number };
 
-export type PlacementTool = "start" | "control" | "finish" | "crossing";
+export type PlacementTool = "start" | "control" | "finish" | "crossing" | "exchange";
+
+/** A tool whose site is a numbered visit in the chain: `K` and `X` (§6.9). */
+export const isVisitTool = (tool: PlacementTool): tool is "control" | "exchange" => tool === "control" || tool === "exchange";
 
 export interface PlacementState {
   tool: PlacementTool;
@@ -94,7 +101,7 @@ export function switchTool(s: PlacementState, tool: PlacementTool, ctx: ArmConte
  */
 export function afterPlaced(s: PlacementState, id: number): PlacementState {
   const entry = { id, insertAt: s.insertAt, anchorId: s.anchorId };
-  if (s.tool === "control") {
+  if (isVisitTool(s.tool)) {
     return { ...s, insertAt: s.insertAt === null ? null : s.insertAt + 1, anchorId: s.insertAt === null ? null : id, placed: [...s.placed, entry] };
   }
   if (s.tool === "start") {
@@ -136,13 +143,13 @@ export function ghostInfo(s: PlacementState, rows: readonly DisplayRow[], cursor
   const anchor = s.anchorId !== null ? ptOf(s.anchorId) : null;
   const legs: [Pt, Pt][] = [];
   if (anchor) legs.push([anchor, cursor]);
-  if (s.tool === "control") {
+  if (isVisitTool(s.tool)) {
     const next = rowAfter(rows, s.insertAt);
     // A finish placed with `M` closes the chain: nothing after it.
     if (next?.pt && next.id !== s.anchorId) legs.push([cursor, next.pt]);
   }
   return {
-    number: s.tool === "control" ? s.insertAt + 1 : null,
+    number: isVisitTool(s.tool) ? s.insertAt + 1 : null,
     legs,
     legMm: anchor ? Math.hypot(cursor.x - anchor.x, cursor.y - anchor.y) : null,
   };
