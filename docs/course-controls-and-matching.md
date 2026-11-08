@@ -454,7 +454,8 @@ Stored lengths of an edited course come from the course layer's derived
 legs (`course-layer.md` §4.1): centre to centre between consecutive
 positioned controls of the sequence `courseSequenceOf` reads (§6.2
 there), **along the leg's bends** when the stored structure has any
-(`LegProps.bends`, `course-layer.md` §10.1, F1) and through the
+(`LegProps.bends`, `course-layer.md` §10.1, F1) — along the curve,
+flattened at 5 µm, where a bend carries Bézier handles (F13) — and through the
 crossing point the leg runs through (`LegProps.crossing`, §10.3, F4), each leg
 `Math.round(mm × scale / 1000)`, the total rounded once; a leg's style
 (`line`, `marked_route`, `none`) and its corridor never change it;

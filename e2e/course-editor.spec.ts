@@ -3513,3 +3513,73 @@ test.describe("F12: a legacy map-anchored white-out is a course object (docs/cou
     }
   });
 });
+
+// F13 (docs/course-layer.md §10.1): a leg's bends are path vertices with optional handles, drawn and measured along
+// the curve flattened at 5 µm. No editor gesture writes handles yet (F16), so the curve is written over tRPC. Its own
+// describe, so the parallel rows' edits above merge cleanly.
+test.describe("F13: Bézier bends (docs/course-layer.md §10.1)", () => {
+  desktopOnly();
+
+  test("a curved leg written over tRPC draws purple at the curve's apex, not at the chord's midpoint; the print is one page", async ({ page }) => {
+    await openEditor(page);
+    const nameId = nameIdOf(page);
+    const [codeA, codeB] = await regularCodes(page, 2);
+    expect(codeB, "two regular controls clear of the drawn legs").toBeTruthy();
+    const a = await site(page, codeA), b = await site(page, codeB);
+    const controls = await trpcCall<{ id: number; codes: string }[]>("control.list", undefined, false);
+    const idOf = (code: string) => controls.find((c) => c.codes.split(";").includes(code))!.id;
+
+    // One smooth bend off the chord's midpoint by 0.3 of the leg (towards the view's centre), its handles along the
+    // chord: an arch through it.
+    const len = Math.hypot(b.mm.x - a.mm.x, b.mm.y - a.mm.y);
+    const u = { x: (b.mm.x - a.mm.x) / len, y: (b.mm.y - a.mm.y) / len };
+    const chordMid = { x: (a.mm.x + b.mm.x) / 2, y: (a.mm.y + b.mm.y) / 2 };
+    const centre = await viewCentre(page);
+    const towards = (centre.x - chordMid.x) * -u.y + (centre.y - chordMid.y) * u.x >= 0 ? 1 : -1;
+    const n = { x: -u.y * towards, y: u.x * towards };
+    const r2 = (v: number) => Math.round(v * 100) / 100;
+    const apex = { x: r2(chordMid.x + n.x * 0.3 * len), y: r2(chordMid.y + n.y * 0.3 * len) };
+    const h = { x: r2(u.x * 0.25 * len), y: r2(u.y * 0.25 * len) };
+    const bend = { ...apex, hIn: { x: -h.x, y: -h.y }, hOut: h };
+
+    const name = `F13 curve ${Date.now() % 100000}`;
+    const { id } = await trpcCall<{ id: number }>("course.create", { name });
+    await trpcCall("course.setStructure", {
+      courseId: id,
+      structure: { version: 1, id: "f13", orderMode: "ordered", items: [{ siteId: idOf(codeA) }, { siteId: idOf(codeB), leg: { bends: [bend] } }] },
+    });
+    // The stored leg reads back whole, handles included.
+    const summary = (await trpcCall<{ id: number; legs?: Record<string, unknown> }[]>("course.list", undefined, false)).find((c) => c.id === id)!;
+    expect(summary.legs).toEqual({ [`${idOf(codeA)}>${idOf(codeB)}`]: { bends: [bend] } });
+
+    const template = await probeTemplate("F13 curve");
+    const sheet = await trpcCall<{ seq: number }>("courseMap.create", { kind: "course", courseId: id, templateId: template.seq, overrides: {}, objects: [] });
+    try {
+      await page.goto(`/${nameId}/course-editor`);
+      await editorReady(page);
+      await page.getByTestId("editor-mode-course").click();
+      await page.getByTestId("editor-course-picker").selectOption(String(id));
+      await viewSettled(page);
+
+      // The drawn leg is the flattened curve: many points, through the bend.
+      await expect.poll(async () => (await legPieces(page, name)).reduce((k, p) => k + p.points.length, 0), { timeout: 30000 }).toBeGreaterThan(10);
+      const pieces = await legPieces(page, name);
+      expect(pieces.some((p) => p.points.some((q) => Math.hypot(q.x - apex.x, q.y - apex.y) < 0.05))).toBe(true);
+
+      // Purple at the apex, none at the chord's midpoint (both well clear of the circles).
+      await expect.poll(() => inkAt(page, [apex], "purple"), { timeout: 30000 }).toBeGreaterThan(0);
+      expect(await inkAt(page, [chordMid], "purple")).toBe(0);
+
+      // The leg's metres in the sequence follow the curve: longer than the chord.
+      const chordM = (len * (await mapScale(page))) / 1000;
+      const metres = async () => Number(((await controlRows(page).nth(1).getByTestId("editor-leg-meters").textContent()) ?? "").replace(/[^\d]/g, ""));
+      await expect.poll(metres, { timeout: 15000 }).toBeGreaterThan(Math.round(chordM) + 1);
+
+      expect((await printed(page, nameId, `maps=${sheet.seq}`)).pages).toBe(1);
+    } finally {
+      await cleanup("courseMap.delete", { id: sheet.seq });
+      await cleanup("mapTemplate.delete", { id: template.seq });
+      await cleanup("course.delete", { id });
+    }
+  });
+});
