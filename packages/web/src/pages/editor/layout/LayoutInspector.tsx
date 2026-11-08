@@ -180,7 +180,7 @@ export function LayoutInspector(p: {
           {p.editable.length === 0 && <li className="text-[11px] text-slate-400">{t("layoutNoObjects")}</li>}
           {p.editable.map((obj) => (
             <li key={obj.id}>
-              <button type="button" data-testid="editor-layout-object-row" data-object-id={obj.id} data-kind={obj.kind} data-anchor={obj.anchor}
+              <button type="button" data-testid="editor-layout-object-row" data-object-id={obj.id} data-kind={obj.kind}
                 data-geometry={JSON.stringify(obj)}
                 onClick={() => p.onSelect({ kind: "object", id: obj.id })}
                 className={`w-full text-left truncate text-[11px] px-1 py-0.5 rounded cursor-pointer ${p.selection?.kind === "object" && p.selection.id === obj.id ? "bg-purple-50 text-purple-700" : "text-slate-600 hover:bg-slate-50"}`}>
@@ -242,7 +242,6 @@ function ObjectProperties({ o, t, purple, onPatch }: { o: CourseMapObject; t: T;
             onCommit={(strokeWidthMm) => onPatch({ strokeWidthMm })} />
         </>
       )}
-      <p className="text-[11px] text-slate-400" data-testid="editor-layout-anchor" data-anchor={o.anchor}>{t(`layoutAnchor_${o.anchor}`)}</p>
     </div>
   );
 }

@@ -14,7 +14,7 @@
 import type { CourseMapObject, DescriptionBlockSettings, MapRect } from "@oxygen/shared";
 import type { EditorToolBinding, ToolPointer, ToolShape } from "../../../components/MapViewer";
 import {
-  alignedCentre, gridSnap, handleAt, layoutObjectAt, nativePoints, objectHandles, pageDelta, pagePerView, pagePoints, pathFromView, pathRule, rectInView,
+  alignedCentre, gridSnap, handleAt, layoutObjectAt, objectHandles, pageDelta, pagePerView, pathFromView, pathRule, rectInView,
   selectionShapes, sheetShapes, toPage, toView, type SheetGeometry,
 } from "../../../lib/editor/layout";
 import { clampPagePoint, constrainDescription, constrainMapObject, resizeMapObject, translateMapObject, type ResizeHandle } from "../../../lib/map-layout-editor";
@@ -102,7 +102,7 @@ const step = (d: Pt, on: boolean): Pt => (on ? { x: Math.round(d.x), y: Math.rou
 
 /** What a drag from `g.from` to `to` changes. */
 export function gestureChange(c: Pick<LayoutBindingContext, "geometry" | "editable" | "block" | "snapping">, g: NonNullable<LayoutGesture>, to: Pt): LayoutChange {
-  const { frame, window, printable } = c.geometry;
+  const { printable } = c.geometry;
   if (g.kind === "align") return { centre: alignedCentre(g.base, g.from, to) };
   // The drag's own state (`dragGeometry` updates it with the keys held); `to` is already in it.
   if (g.kind === "geometry") return g.drag.moved ? pathChange(c, g.base, draggedGeometry(g.drag), movedVertex(g.drag)) : {};
@@ -112,8 +112,8 @@ export function gestureChange(c: Pick<LayoutBindingContext, "geometry" | "editab
     return { description: constrainDescription({ ...g.base, x: g.base.x + d.x, y: g.base.y + d.y }, b?.width ?? 0, b?.height ?? 0, printable) };
   }
   const next = g.kind === "move"
-    ? constrainMapObject(translateMapObject(g.base, d.x, d.y, frame, window), printable, frame, window)
-    : resizeMapObject(g.base, g.handle, d.x, d.y, frame, window, { printable, imageMode: g.proportional ? "proportional" : "free" });
+    ? constrainMapObject(translateMapObject(g.base, d.x, d.y), printable)
+    : resizeMapObject(g.base, g.handle, d.x, d.y, { printable, imageMode: g.proportional ? "proportional" : "free" });
   return { objects: c.editable.map((o) => (o.id === g.id ? next : o)) };
 }
 
@@ -133,7 +133,7 @@ const movedVertex = (d: GeometryDrag): number => (d.kind === "object" && d.verte
 /** The scope's objects with the path's page points stored; the `moved` vertex kept on the printable area. */
 function pathChange(c: Pick<LayoutBindingContext, "geometry" | "editable">, base: PathObject, points: readonly Vertex[], moved = -1): LayoutChange {
   const page = points.map((v, i) => (i === moved ? { ...v, ...clampPagePoint(v, c.geometry.printable) } : v));
-  const next: PathObject = { ...base, points: nativePoints(base, page, c.geometry) };
+  const next: PathObject = { ...base, points: page };
   return { objects: c.editable.map((o) => (o.id === base.id ? next : o)) };
 }
 
@@ -144,8 +144,7 @@ const tolerance = (p: ToolPointer, g: SheetGeometry) => HANDLE_PX * p.mmPerPx * 
 
 /** An image object's corners in paper mm, for the UI layer's raster. */
 function imageShape(o: Extract<CourseMapObject, { kind: "image" }>, g: SheetGeometry, href: string): ToolShape | null {
-  const b = courseMapObjectPageBounds(o, g.frame, g.window);
-  if (!b) return null;
+  const b = courseMapObjectPageBounds(o);
   return {
     kind: "image", href, testId: "editor-layout-image", data: { objectId: o.id },
     topLeft: toView({ x: b.x, y: b.y }, g), topRight: toView({ x: b.x + b.width, y: b.y }, g), bottomLeft: toView({ x: b.x, y: b.y + b.height }, g),
@@ -164,11 +163,10 @@ export function layoutBinding(c: LayoutBindingContext): EditorToolBinding {
   }
   if (selected?.kind === "path" && c.tool.kind !== "draw") {
     // The course editor's selected path (§7 "Editing geometry"): its outline along the curves, handles, grips.
-    const inView = mapVertices(pagePoints(selected, g), (q) => toView(q, g));
+    const inView = mapVertices(selected.points, (q) => toView(q, g));
     shapes.push(...geometryShapes(inView, selected.closed, { selected: true, focused: c.focusedVertex ?? null, ids: PATH_IDS }));
   } else if (selected && c.tool.kind !== "draw") {
-    const b = courseMapObjectPageBounds(selected, g.frame, g.window);
-    if (b) shapes.push(...selectionShapes(b, objectHandles(selected, g), g, "editor-layout-selection"));
+    shapes.push(...selectionShapes(courseMapObjectPageBounds(selected), objectHandles(selected), g, "editor-layout-selection"));
   }
   if (c.block && c.selection?.kind === "description") shapes.push(...selectionShapes(c.block, [], g, "editor-layout-selection"));
   if (c.block) shapes.push({ kind: "line", points: rectInView(c.block, g), closed: true, color: "transparent", widthPx: 0, testId: "editor-layout-description" });
@@ -186,19 +184,19 @@ export function layoutBinding(c: LayoutBindingContext): EditorToolBinding {
       const tol = tolerance(p, g);
       if (selected?.kind === "path") {
         // A vertex or a grip; the edge falls through to the move below (topmost first, kept on the printable area).
-        const d = pressGeometry(pagePoints(selected, g), pathRule(selected), { pt: page, reach: tol, alt: p.alt, shift: p.shift }, false);
+        const d = pressGeometry(selected.points, pathRule(selected), { pt: page, reach: tol, alt: p.alt, shift: p.shift }, false);
         if (d && !(d.kind === "object" && d.vertex === null)) {
           c.gesture.current = { kind: "geometry", id: selected.id, base: selected, drag: d };
           return true;
         }
       } else if (selected) {
-        const h = handleAt(page, objectHandles(selected, g), tol);
+        const h = handleAt(page, objectHandles(selected), tol);
         if (h) {
           c.gesture.current = { kind: "resize", id: selected.id, handle: h, from: p.pt, base: selected, moved: false, proportional: p.shift };
           return true;
         }
       }
-      const i = layoutObjectAt(page, c.editable, g, tol);
+      const i = layoutObjectAt(page, c.editable, tol);
       if (i >= 0) {
         const o = c.editable[i];
         c.onSelect({ kind: "object", id: o.id });
@@ -245,7 +243,7 @@ export function layoutBinding(c: LayoutBindingContext): EditorToolBinding {
     onDoubleClick: (p) => {
       // On the selected path's edge, off its vertices: a vertex there, focused.
       if (selected?.kind !== "path" || placing) return;
-      const inserted = insertAtEdge(pagePoints(selected, g), pathRule(selected), toPage(p.pt, g), tolerance(p, g));
+      const inserted = insertAtEdge(selected.points, pathRule(selected), toPage(p.pt, g), tolerance(p, g));
       if (!inserted) return;
       c.onVertexFocus?.(inserted.index);
       c.onCommit(pathChange(c, selected, inserted.geometry));

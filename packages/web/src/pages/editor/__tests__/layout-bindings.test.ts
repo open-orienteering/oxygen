@@ -290,14 +290,4 @@ describe("V on a selected path: the course editor's geometry gestures (D16, docs
     expect(edit({ editable: [poly] }).b.onPointerDown!(at(65, 85))).toBe(false);
   });
 
-  it("a map-anchored path is edited on the page and stored back in paper mm", () => {
-    const mapPoly: Path = { ...poly, anchor: "map", points: poly.points.map((v) => ({ ...view(v.x, v.y), ...(v.hOut ? { hOut: { x: v.hOut.x, y: -v.hOut.y }, hIn: { x: v.hIn!.x, y: -v.hIn!.y } } : {}) })) };
-    const { c, b } = edit({ editable: [mapPoly] });
-    expect(b.onPointerDown!(at(90, 110))).toBe(true);
-    b.onPointerDrag!(view(95, 115));
-    b.onPointerUp!(view(95, 115));
-    const p = committed(c).points[2];
-    expect(p.x).toBeCloseTo(view(95, 115).x, 9);
-    expect(p.y).toBeCloseTo(view(95, 115).y, 9);
-  });
 });

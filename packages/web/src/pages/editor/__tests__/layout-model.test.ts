@@ -66,13 +66,13 @@ describe("Layout model (docs/course-layout.md §2)", () => {
     expect(g.window.minX + g.window.width / 2).toBeCloseTo(30, 9);
   });
 
-  it("the layout request: both scopes' objects, the scale's text value and overprint, the block where the snapshot puts it", () => {
+  it("the layout request: both scopes' objects, the scale's text value, the block where the snapshot puts it", () => {
     const s = sheet();
     const snap = { ...snapshotOf(s), printScale: 5000, description: { visible: true, x: 100, y: 20, cellSizeMm: 7 } };
     const r = layoutRequestOf(s, snap, geometryOf(s, snap));
     expect(r.page.objects).toEqual([templateText, sheetText]);
     expect(r.page.textValues).toMatchObject({ course: "A", scale: "1:5000" });
-    expect(r.overprintScale).toBeCloseTo(3, 9);
+    expect(r).not.toHaveProperty("overprintScale");
     expect(r.page.description).toMatchObject({ x: 100, y: 20, cellSizeMm: 7, title: "A" });
     expect(r.page.description!.rows).toHaveLength(1);
     expect(layoutRequestOf(s, { ...snap, description: { ...snap.description, visible: false } }, geometryOf(s, snap)).page.description).toBeNull();

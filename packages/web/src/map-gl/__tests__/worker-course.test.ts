@@ -208,7 +208,7 @@ describe("course request → the dynamic bucket", () => {
     const r = ask(h, request({
       viewOptions: { labelMode: "sequence", window },
       objects: [
-        { id: "ts", kind: "path", anchor: "map", fillMode: "whiteoutInverted", closed: true, points: [{ x: 0, y: 0 }, { x: 70, y: 0 }, { x: 70, y: 50 }, { x: 0, y: 50 }] },
+        { id: "ts", kind: "toner_saver", geometry: [{ x: 0, y: 0 }, { x: 70, y: 0 }, { x: 70, y: 50 }, { x: 0, y: 50 }], props: {} },
         { id: 9, kind: "oob_area", geometry: [{ x: 80, y: 60 }, { x: 95, y: 60 }, { x: 95, y: 75 }], props: {} },
       ],
     }));
@@ -229,7 +229,7 @@ describe("course request → the dynamic bucket", () => {
     const cases: [string, CourseLayerRequest["objects"][number], [number, number]][] = [
       ["a toner saver whose first vertex is left of the window", { id: 5, kind: "toner_saver", geometry: [{ x: -30, y: 10 }, { x: 40, y: 10 }, { x: 40, y: 40 }, { x: -30, y: 40 }], props: {} }, [20, 25]],
       ["a toner saver crossing the bottom edge, first vertex inside", { id: 5, kind: "toner_saver", geometry: [{ x: 20, y: 10 }, { x: 40, y: 10 }, { x: 40, y: -30 }, { x: 20, y: -30 }], props: {} }, [30, 0]],
-      ["a white-out outside path spanning beyond both sides", { id: "ts", kind: "path", anchor: "map", fillMode: "whiteoutInverted", closed: true, points: [{ x: -30, y: 30 }, { x: 130, y: 30 }, { x: 130, y: 50 }, { x: -30, y: 50 }] }, [45, 40]],
+      ["a toner saver spanning beyond both sides", { id: "ts", kind: "toner_saver", geometry: [{ x: -30, y: 30 }, { x: 130, y: 30 }, { x: 130, y: 50 }, { x: -30, y: 50 }], props: {} }, [45, 40]],
     ];
     for (const [name, object, inside] of cases) {
       it(name, () => {
@@ -245,10 +245,10 @@ describe("course request → the dynamic bucket", () => {
     }
   });
 
-  it("a whiteout layout object sits at upper white, above black", () => {
+  it("a whiteout course object sits at upper white, above black", () => {
     const h = harness();
     loaded(h);
-    const r = ask(h, request({ objects: [{ id: "w1", kind: "path", anchor: "map", fillMode: "whiteout", closed: true, points: [{ x: 20, y: 5 }, { x: 30, y: 5 }, { x: 30, y: 15 }, { x: 20, y: 15 }] }] }));
+    const r = ask(h, request({ objects: [{ id: "w1", kind: "whiteout", geometry: [{ x: 20, y: 5 }, { x: 30, y: 5 }, { x: 30, y: 15 }, { x: 20, y: 15 }], props: {} }] }));
     const fill = r.part!.fill!;
     const white = indexOf(r.colours, "purple-upper") - 1;
     expect([...fill.ranges.colour]).toContain(white);

@@ -147,7 +147,6 @@ export function layoutRequestOf(s: EditorSheet, snap: LayoutSnapshot, g: SheetGe
       description: d.visible ? { x: d.x, y: d.y, cellSizeMm: d.cellSizeMm, rows: s.block.rows, header: s.block.header, title: s.block.title } : null,
     },
     appearance: course.appearanceFromTemplate(snap.settings.appearance),
-    overprintScale: (s.mapScale ?? snap.printScale) / snap.printScale,
     ...(s.sheet?.kind === "course" && s.sheet.sectionIndex !== undefined ? { section: s.sheet.sectionIndex } : {}),
   };
 }

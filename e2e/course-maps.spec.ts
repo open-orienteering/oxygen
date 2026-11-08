@@ -209,7 +209,7 @@ test.describe("the Courses page and Layout mode (E-pages)", () => {
     await loaded;
     await expect(scope).toHaveAttribute("data-scope", "template");
     await expect(scope).not.toHaveAttribute("data-template", String(templateSeq));
-    // A template without map-anchored objects loses none.
+    // A club template loads whole: every layout object is page-anchored (F12), so there is no notice.
     await expect(page.getByTestId("editor-layout-club-notice")).toHaveCount(0);
 
     // New template from Layout mode opens it; Delete this template returns to the course's sheet.

@@ -239,7 +239,7 @@ export function ClubTemplatesSection(p: {
       return out;
     });
     if (!r) return;
-    setNotice(r.removedMapAnchoredCount > 0 ? t("layoutClubRemoved", { count: r.removedMapAnchoredCount }) : null);
+    setNotice(null);
     p.onOpen({ template: r.template.seq });
   };
   const remove = async (row: (typeof rows)[number]) => {
