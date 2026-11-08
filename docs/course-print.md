@@ -311,7 +311,7 @@ with `sheet` = `PageInput` minus `map` and `geo`.
 | `paper` | `getPaperDimensions(paper, orientation, custom)` |
 | `frame`, `window` | `document.mapFrame`, `layout.window` (`mapScale` and `meridianTiltDeg` from `getBaseMapInfo`) |
 | `course.appearance` | `appearanceFromTemplate(document.appearance)` — multipliers of the library sizes (`docs/course-layer.md` §2) |
-| `course.viewOptions` | `allControls` = `kind === "all_controls"`, `setterMarks` likewise (F4: the map-issue points and every crossing point, `course-layer.md` §10.3; F10's setter sheets later), `labelMode`, `overprintScale` from the layout; `autoCuts: false` when the event's **Auto cuts** toggle is off (`ResolveSheetInput.autoCuts` from `MapRowContext.autoCuts`; no key when on — `docs/course-layer.md` §3.4, D17); `section` = the row's `section_index` when the course has ≥ 2 parts and it is in range (`layout.section`, F5 — `course-layer.md` §11; no key otherwise, so a one-part course's stream is unchanged) |
+| `course.viewOptions` | `allControls` = `kind` is `"all_controls"` or `"setter"` (F10), `setterMarks` likewise (F4: the map-issue points and every crossing point among the sheet's sites, `course-layer.md` §10.3), `labelMode`, `overprintScale` from the layout; `autoCuts: false` when the event's **Auto cuts** toggle is off (`ResolveSheetInput.autoCuts` from `MapRowContext.autoCuts`; no key when on — `docs/course-layer.md` §3.4, D17); `section` = the row's `section_index` when the course has ≥ 2 parts and it is in range (`layout.section`, F5 — `course-layer.md` §11; no key otherwise, so a one-part course's stream is unchanged) |
 | `objects`, `textValues` | `document.objects` (template + sheet), `layout.textValues` |
 | `description` | `document.description` position and cell size, `layout.descriptionRows` / `descriptionHeader`, title = course name, else map name; null when the template hides the block |
 | `label` | course name, else map name (page label and outline title, §7.2) |
@@ -359,6 +359,15 @@ with `sheet` = `PageInput` minus `map` and `geo`.
   codes (`viewOptions.allControls`), typed by `kind` (`resolveMapLayout`,
   F4: crossing points as 710, map-issue points as 702, an exchange as a
   control); the block lists the controls only.
+- **Setter sheets** (F10, `course-layout.md` §8): `kind = 'setter'` joins
+  the all-controls branch of `resolveMapLayout` (no layer change) with
+  `ResolveSheetInput.allControls` = the group only — `sheetInputForMapRow`
+  filters `ctx.allControls` by `props.controlIds` (`setterSheetInput`,
+  `PrintMapRow.props`) and passes no course (a course's setter map draws no
+  legs), the `all`-scoped course objects and the row's name as title. So:
+  `structure: null`, the group's sites typed by `kind` (702 / 710), codes,
+  setter marks, the block the group's control rows in code order with no
+  header, at the row's 5 mm cells (`overrides.description.cellSizeMm`).
 - **Authored geometry** comes from the stored structure and the controls
   (D1 retired deviation (e), which read the `ocd` GeoJSON): circle gaps
   from `controls.circle_gaps`, legs from the structure's `LegProps` —
