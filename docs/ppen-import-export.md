@@ -114,7 +114,15 @@ the root itself not — Purple Pen's own variation courses are not written,
 since the parser refuses them (no round trip of the groups). A leg with
 bends gets one `<leg id start-control end-control><bends><location x y/>…`
 per (from, to) control pair — the first course that runs the pair wins —
-in paper mm as the controls. Crossing points (sites and their rows) are
+in paper mm as the controls. Purple Pen's bends are corners, so a
+**curved** leg (a bend with Bézier handles, `docs/course-layer.md`
+§10.1, F13) is written as its curve flattened at **0.1 mm**
+(`legPolylineOf(…, PPEN_FLATTEN_TOLERANCE_MM)`, the sites left out; user
+answer 2026-11-08 Q3): the points lie within 0.1 mm of the curve, the
+bend vertices among them, and a re-import reads them back as corner
+bends whose leg is within 0.1 mm of the curve and within a metre of its
+length. A leg without handles writes exactly what it did before F13.
+Crossing points (sites and their rows) are
 not written, a map exchange is a normal control, map-issue points are not
 exported (row F9; the IOF file carries all three, see
 [iof-coursedata-export.md](iof-coursedata-export.md)).
@@ -124,6 +132,8 @@ exported (row F9; the IOF file carries all three, see
 - **Relay / variation courses** — a `<course-control>` with more than one
   `<next>` is rejected with an error naming the course.
 - **Score courses** and other non-`kind="normal"` courses — rejected.
+- Round-tripping of a curve's handles: an exported curve comes back as
+  corners (above).
 - Round-tripping of control descriptions, number locations, leg gaps
   (`<leg>`'s `<gaps>`), marked routes (`<leg>`'s `<flagging>`), crossing,
   map-issue and map-exchange control kinds, or print-area / appearance
@@ -145,7 +155,9 @@ exported (row F9; the IOF file carries all three, see
 
 Unit tests: `ppen-course-parser.test.ts` (`<leg>` bends onto the right
 row, leg length along them, geometry), `ppen-course-export.test.ts`
-(round-trip; one `<leg>` per bent pair, crossing points skipped),
+(round-trip; one `<leg>` per bent pair, crossing points skipped; F13: a
+corner leg unchanged, a curved leg's points within 0.1 mm of the curve
+and its round trip as corners within a metre),
 `course-import-structure.test.ts` (`legBendsOfFeatures`),
 `map-coordinate-transfer.test.ts`, `course-import-align.test.ts`.
 Integration: `ppen-import.test.ts` (aligned / transformed / mismatch /

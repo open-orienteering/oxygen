@@ -226,9 +226,15 @@ circle radius 2.5 mm, finish 2.0 / 3.0 mm, start side 6 mm, lines
 For an `ordered` course, one leg per consecutive pair of positioned
 items, centre to centre — through the item's `leg.bends` when it has
 any (§10.1) and its `leg.crossing` point (§10.3): the leg's `points` are
-the previous site, the bends with the crossing point joined on the
-segment nearest it (`routedBends`), the site, with repeated points
-dropped.
+`legPolylineOf(previous site, bends, site)` (`course/bends.ts`) — the
+previous site, the bends' path with every curved segment flattened at
+5 µm (F13), the site, with repeated points dropped. A crossing point
+joins the bends first, as a corner, on the segment whose flattened path
+is nearest it (`routedBends` on `bendSegmentAt`; ties to the earlier
+segment), the neighbouring bends keeping their handles. Every anchor
+(site, bend, crossing point) is a vertex of `points` verbatim. Without
+handles `points` is exactly the polyline through the bends, so a corner
+leg is unchanged by F13.
 
 1. Gaps: the item's authored `leg.gaps` when non-empty, else the
    automatic ones (§3.4) when `cutFeatures` are given and the event's
@@ -530,14 +536,16 @@ before its `course.upserted`:
 - **`legs` / `lengthM`**: from the layer's derived legs
   (`legDistancesMm(layer)` = `legLengthMm(leg.points)`: centre to centre
   between consecutive positioned items of `derivation.courses[0]`,
-  through the leg's bends), `Math.round(d × scale /
+  through the leg's bends — the flattened curve when they carry
+  handles, §10.1, F13), `Math.round(d × scale /
   1000)` per leg joined with `;` and a trailing `;`, the total rounded
   once; free-order courses leave both alone; `updateLength: false` (map
   upload, rotation, position-less import) keeps `lengthM`. The distances
   are the pre-E6 sequence formula's bit for bit (unit parity test over
   repeated visits, unplaced controls and 50 generated sequences at two
   scales), so no stored length changed; a bent leg is the sum of its
-  segments by the same formula.
+  segments by the same formula, a curved one the sum over its flattened
+  polyline (5 µm, F13 — corner legs are bit for bit as before).
 - **`length_source`**: `'derived'` when the layer has at least one
   positioned item (`hasPositionedItems`), else NULL — what the export and
   the Eventor sync read (`course-controls-and-matching.md` "Course
@@ -672,8 +680,16 @@ Item =
   | { kind: "variation", id, alternatives: { label, items: ControlItem[] }[] /* ≥ 2 */, loop? }
 LegProps = { style?: "line" | "marked_route" | "none", gaps?: { from, to }[],
              corridor?: { widthM, edge, whiteMm, whiteOpacity },
-             crossing?: { controlId, section? }, bends?: { x, y }[] }
+             crossing?: { controlId, section? },
+             bends?: { x, y, hIn?: { x, y }, hOut?: { x, y } }[] }  // pathVertexSchema (F13)
 ```
+
+- **Bends are path vertices** since F13 (`pathVertexSchema`, the course
+  objects' vertex): paper mm, handles as offsets from their vertex, both
+  optional, so every stored corner bend parses unchanged and there was no
+  migration. The handle fields follow the vertex schema (unknown keys in
+  a vertex are dropped, as in a course object's geometry); a non-finite
+  handle is refused. What a handle draws: §10.1.
 
 - **Site ids** are control UUIDs in the column (journal-portable; a
   public id is a punch code and can change). The tRPC **wire form**
@@ -1351,6 +1367,30 @@ and `bends` real, F2 `corridor`, F4 `crossing` (§10.3).
   The automatic cuts (§3.4 "Bent leg"), the stored `gaps` (fractions of
   the bent length) and the clipping at the sites (§3.2 step 3) apply to
   the polyline.
+- **Curves** (F13; feedback 2026-11-08 item 1). A bend is a path vertex
+  `{ x, y, hIn?, hOut? }` (§6.1): segment *i* of `[previous site,
+  …bends, site]` is a cubic Bézier when its start has `hOut` or its end
+  `hIn` (controls `start + hOut`, `end + hIn`; a missing one is its
+  anchor — the course objects' rule, §8.3), else a straight segment.
+  **The sites are corners**: handles go on bends only (user answer
+  2026-11-08 Q1): a handle stored on a site is never read, and a curved
+  first or last segment leaves its site towards the bend's own control
+  point. `legPolylineOf(a, bends, b)` (`course/bends.ts`)
+  flattens each cubic at **5 µm** (the stage's tolerance, built in µm
+  so the flattener's 10 nm floor is not hit; a cubic gives `k` points at
+  `t = j / k`), keeps every anchor verbatim and drops repeats. That one
+  polyline is the leg's `points`, so the pieces, stored and automatic
+  gaps, clipping at the sites, cuts, number placement, the hit pieces,
+  the corridor (§10.2), the checks (§9.2), the lengths (§4.1) and every
+  web readout follow the curve with no rule of their own. **Legs stay
+  polylines** in the pass stream and the PDF (the flattened pieces; 705
+  and 707's dashes laid along them); course objects keep their cubics
+  (§8.3). `bendSegmentAt(a, bends, b, pt)` → `{ index, t, dist, point }`
+  is the bend segment nearest a point by flattened distance (ties to the
+  lower index; `t` the segment's own parameter): where a crossing point
+  joins (§3.2) and the editor's *Add bend here* inserts (a corner,
+  `course-editor.md` §6.7). `reverseBends` runs a leg backwards (the
+  vertices reversed, each one's `hIn` and `hOut` swapped).
 - **Dashes** are laid by `symbolise` along each piece as one path, so a
   dash runs round a bend; every backend draws the slices it returns
   (the PDF one subpath per dash, never `d`, `course-print.md` §4.3).
@@ -1368,10 +1408,13 @@ and `bends` real, F2 `corridor`, F4 `crossing` (§10.3).
   drawn leg.
 - **Length** follows the bends (08 §4.3 "Lengths and climb"): the
   stored `legs` / `length_m` (§4.1), `sequenceLegMeters` and the editor's
-  leg-length label (`lib/editor/leg-length.ts`) measure along them;
-  `style` never changes a length, nor will a corridor (F2).
+  leg-length label (`lib/editor/leg-length.ts`) measure along them —
+  along the flattened curve (F13: a quarter circle of radius 20 mm
+  measures `10π` within 0.02 mm); `style` never changes a length, nor
+  will a corridor (F2).
 - **Checks**: `LEG_CROSSES_OOB` / `LEG_THROUGH_UNCROSSABLE` test the bent
-  polyline (§9.2).
+  polyline, the flattened curve since F13 (§9.2); `VARIATION_UNBALANCED`
+  measures along it.
 - **The start** still turns to the next site (§3.3), not to the first
   bend.
 - **Where the props reach the layer** (user, 2026-11-07): the
@@ -1404,8 +1447,24 @@ all-white corridor map); `edge` draws the boundary in purple.
 - **Geometry** (`corridor.ts`, `corridorGeometry(derivation.courses)`).
   Per course, consecutive corridor legs of equal `widthMm` and `whiteMm`
   are one run (repeated and straight-through points dropped). A run's
-  buffer at a distance `h` is the union of a rectangle per segment and a
-  disc per vertex (flattened at 5 µm): round joins and round ends. The
+  buffer at a distance `h` is **one ring per run** (user answer
+  2026-11-08 to F13's corridor question, replacing F2's rectangle per
+  segment and disc per vertex): the left offset, a round cap at the end,
+  the right offset back, a round cap at the start. At each vertex the
+  outer side turns along an arc about it and the inner side runs through
+  the vertex itself (the offset point of the segment before, the vertex,
+  the offset point of the segment after), so the ring's **nonzero**
+  winding covers exactly the round-joined buffer even where it crosses
+  itself; arcs and caps are flattened at 5 µm, so a turn too small to
+  need it (below about 6.6° at a 3 mm half width — "round joins at turns
+  > 10°" of the answer, made exact to the tolerance) is one chord. A run
+  of one point is a disc. `polygon-clipping`'s union, nonzero per input
+  ring, cleans every run's ring and joins the runs; its output rings are
+  simple. Why: a flattened curved leg (F13) has ~90 vertices, and the
+  union of ~180 pieces per leg cost 0.6 s for one leg and crashed
+  `polygon-clipping` ("Unable to find segment in SweepLine tree") at ten;
+  one ring per run measured 6 / 44 / 158 ms for 1 / 10 / 30 curved legs.
+  The
   **inside** is the union of every run's buffer at `widthMm / 2` over
   every drawn course; the **band** is the union of the runs' buffers at
   `widthMm / 2 + whiteMm` (runs with `whiteMm > 0`) less the inside. So
@@ -1472,7 +1531,9 @@ three slice-F site kinds are drawn at once.
   of the course it splits (§11).
 - **Routing** (`LegProps.crossing { controlId, section? }`): the crossing
   point joins the leg's polyline on its segment nearest the site
-  (`routedBends`, the editor's *Add bend here* rule), so the leg runs
+  (`routedBends`, the editor's *Add bend here* rule; on a curved leg the
+  segment whose flattened curve is nearest, and the point joins as a
+  corner — F13, §3.2), so the leg runs
   `previous site → bends before → crossing → bends after → site`. The
   drawing, its gaps (fractions of the routed length), the derived length
   (§4.1), the editor's leg metres and `G` target and the leg checks
@@ -1486,7 +1547,8 @@ three slice-F site kinds are drawn at once.
   from +x: the chord from the polyline point before the site to the one
   after it on the first ordered course whose leg names it (the leg's
   direction when straight, the bisecting chord when the leg bends at the
-  site); **90 (north–south) when no drawn leg names it**. `section` is
+  site; on a curve the chord of the flattened points either side, F13);
+  **90 (north–south) when no drawn leg names it**. `section` is
   that leg's `crossing.section`. The symbols are §3.1's: ISOM's 710 is a
   line entry whose length "follows the crossing", but a site has no
   length and 08 §4.3's `section` is a boolean, so the layer draws it
@@ -1859,9 +1921,16 @@ label.
 | unit | `course-geometry.test.ts` "legs along their bends" | §4.1: a bent leg's length, style and corridor change nothing |
 | integration | `control-editor.test.ts` "course.setStructure with bends" | §4.1: `legs` / `length_m` along the bends through `setStructure`, a `none` leg still counted |
 | unit (web) | `course-editor.test.ts` `sequenceLegMeters`, `editor/__tests__/leg-length.test.ts` | §10.1: readouts along the bends, label at the bent mid-length |
+| unit | `packages/shared/src/course/__tests__/bends.test.ts` | §10.1 curves (F13): no handles ⇒ exactly `[a, …bends, b]` (repeats dropped); a cubic flattened within 5 µm of the exact curve, anchors verbatim; a quarter circle of radius 20 measures `20 + 10π` within 0.02 mm; a site never curves a segment; `bendSegmentAt` (curved segment at its apex with `t` ≈ 0.5, straight ones near the ends, ties to the lower index); `reverseBends` swaps the handles and flattens to the same length; determinism |
+| unit | `structure.test.ts` "takes a bend's handles", `derive.test.ts` "curved bends", `checks.test.ts` "test the flattened curve" | §6.1 / §10.1 / §9.2 (F13): handles parse in the column and wire forms, corners byte-equal, a non-finite or half handle refused, `structureDiff` sees a handle; the leg's `points` the flattened curve with the anchors, clipped at both sites; a stored gap at mid-length sits at the apex, not the chord's midpoint; a cut at the apex, none beside the chord; a crossing joined on the curved segment as a corner with the neighbours' handles kept, turned along the curve; a curve pulled through a building reports it where the corners do not; `VARIATION_UNBALANCED` along a looping handle |
+| pass-stream + golden | `scenes.test.ts` "course-legs-curved", `e2e/__golden__/map-gl/course-legs-curved.png` | §10.1 (F13): a curved 705 stroke through the curve's mid-point within 5 µm and its bend vertex, far from the chord; a curved 707 in upper purple; a crossing point on a curved leg, turned along it; snapshot, reference raster, WebGL2 and PDF tiers |
+| unit / integration | `course-geometry.test.ts` "curved legs", `integration/control-editor.test.ts` "course.setStructure with handles", `integration/course-export.test.ts` "a curved leg" | §4.1 (F13): the length along the curve (corners measure their own); stored `legs` through `setStructure`, the handles read back whole by `course.list`; IOF `LegLength`s / `Length` = stored; Purple Pen's flattened bends within a metre |
+| unit | `ppen-course-export.test.ts` "curved legs" | §6.4 / `ppen-import-export.md` (F13, answer Q3): a corner leg writes what it did; a curved leg's `<location>` points within 0.1 mm of the curve, its bend among them, no handles; the round trip as corners within 0.1 mm and a metre |
+| unit (web) | `editor/__tests__/bends.test.ts` "curved bends", `leg-length.test.ts` "curved legs", `course-editor.test.ts` "measures a curved leg" | §10.1 (F13): the editor's `legPolyline` is the layer's; *Add bend here* on a curve lands between its bends as a corner; a moved bend keeps its handles; the label and `sequenceLegMeters` along the curve; a dragged control's leg out reversed with its handles swapped |
+| E2E | `e2e/course-editor.spec.ts` "F13: Bézier bends" | §10.1 on screen and in print: a curved leg written over tRPC reads back whole, its drawn pieces through the bend, purple at the apex and none at the chord's midpoint, the leg's metres longer than the chord, `maps.pdf` one page |
 | unit | `derive.test.ts` | legs and clearances, circles in the way, unpositioned sites, automatic vs authored gaps, the event's auto cuts off (no automatic slits / gaps, authored ones kept, §3.4), authored pieces and bends, free order, all-controls, start rotation, sequence / repeated / code numbers, y-down placement, manual offsets, multi-course |
 | unit | `layer.test.ts` | one `symbolise` call with a document: warning-free, lower purple under black, re-indexed document colours, object offsets; turned start, arcs, legs; auto cuts off = the objects without cut features; knockout halo order; sprint sizes; layout objects (white-out, 709.b, rows on top, text values, page-mm sizes); toner-saver ring and its warning; the toner saver white (P1: a `toner_saver` and a `whiteoutInverted` map object fill the top row, the last pass after black, upper purple and a layout text's row; none for a plain white-out or without a window); images; `courseDocumentContext` |
-| pass-stream | `scenes.test.ts`, snapshots in `render/__fixtures__/streams/course/` | the seven course scenes (`map-rendering.md` §6.3; `course-leg-styles` since F1, `course-corridor` since F2 — symbolised with the layer's regions, masks in the snapshot; re-recorded in F14: no 705 along its three corridor legs) warning-free and equal to their snapshots at 1 µm, plus each scene's rule |
+| pass-stream | `scenes.test.ts`, snapshots in `render/__fixtures__/streams/course/` | the course scenes (`map-rendering.md` §6.3; `course-leg-styles` since F1, `course-corridor` since F2, `course-legs-curved` since F13 — symbolised with the layer's regions, masks in the snapshot; `course-corridor` re-recorded in F14: no 705 along its three corridor legs, and in F13: one buffer ring per run) warning-free and equal to their snapshots at 1 µm, plus each scene's rule |
 | unit | `packages/api/src/__tests__/course-geometry.test.ts` | `editorCourseLayer`: sequence in order with roles, centre-to-centre legs, unpositioned controls skipped, free order without legs, no automatic cuts; `hasPositionedItems` (`length_source` derived / NULL); `legDistancesMm(layer)` from the derived legs = the pre-E6 sequence formula bit for bit (fixtures + 50 generated sequences, per-leg and total rounding at two scales, E6); `courseLengthM` |
 | unit | `packages/api/src/__tests__/document-readers-parity.test.ts` | cut features of the document = the legacy OCAD adapter's (now a test oracle, `__tests__/helpers/ocad-oracle.ts`) within 1e-6 mm on the fixture and the corpus (§4.2) |
 | unit | `packages/api/src/__tests__/course-sequence.test.ts` | §6.2 "Readers" (E6): `courseSequenceOf` — columns (defaults, `start_name`, a live `finish_control_id`, unmatched fall back, the flags), a stored structure (explicit ends, no ends → defaults, roles), a deleted explicit start, an invalid column read as the columns, no starts / finishes |
@@ -1923,6 +1992,7 @@ label.
 | `packages/shared/src/course/arcs.ts` | Bézier circles and arcs |
 | `packages/shared/src/course/cuts.ts` | `CUT_CODES`, `CUT_AIR_MM`, `circleCuts`, `legGaps`, `polylineLegGaps`, `cutFeaturesOfDocument`, `pointSymbolRadiusMm`, `cutSymbolRadiusMm`, `ocadCutSymbolRadiiMm`, `cutContextForScale` |
 | `packages/shared/src/course/derive.ts` | the geometry rules (§3.2–3.5), `legLengthMm` (§10.1), the resolved corridor (§10.2), `routedBends` and the crossing angle (§10.3) |
+| `packages/shared/src/course/bends.ts` | §10.1 curves (F13): `legPolylineOf` (the leg flattened at `LEG_FLATTEN_TOLERANCE_MM`, 5 µm), `bendSegmentAt`, `reverseBends`, `isCurvedSegment`, `hasCurvedBends`, `PPEN_FLATTEN_TOLERANCE_MM` |
 | `packages/shared/src/course/corridor.ts` | `corridorGeometry`: the joined insides, the band and the edges (§10.2), on `polygon-clipping` |
 | `packages/shared/src/course/objects.ts` | course objects (§8): schema, scope, `courseObjects`; `pageObjects` for the page layer's layout objects (§3.6) |
 | `packages/api/prisma/migrations/20261109120000_map_anchored_objects_to_course_objects/` | F12's move of map-anchored layout objects (§3.6; runbook `docs/migrations/2026-f12-map-anchored-objects.md`) |
@@ -1957,11 +2027,15 @@ label.
   D7's (Layout mode).
 - **Structure, beyond D1** (§6): the layer reads `numberHidden`, the
   site's `circle_gaps` and `LegProps.gaps` since D1, `style` and `bends`
-  since F1 (§10.1), `corridor` since F2 (§10.2), `crossing` since F4
+  since F1 (§10.1), bends with handles (curves) since F13 (§10.1),
+  `corridor` since F2 (§10.2), `crossing` since F4
   (§10.3); Purple Pen's `<leg>` bends and IOF crossing points / taped
   routes are imported since F9 (§6.4); Purple Pen's `<gaps>` /
   `<flagging>` and crossing / map-issue kinds, and OCAD / Purple Pen
-  corridors, are not parsed by the importers. Map exchanges split a course into parts since F5 (§11).
+  corridors, are not parsed by the importers; no importer writes a
+  handle (Purple Pen's bends are corners — a curve goes out flattened at
+  0.1 mm and comes back as corners, `ppen-import-export.md`). No editor
+  gesture writes a handle until F16 (`course-editor.md` §6.7). Map exchanges split a course into parts since F5 (§11).
   Variations are materialised since F6 (§12).
 - **A crossing's section length** (§10.3): 08 §4.3's `section` is a
   boolean, so the section form draws at 6 mm × factor; a stored length
@@ -1988,7 +2062,10 @@ label.
   drawn opaque until the stream carries alpha (`map-rendering.md` §8).
 - **The corridor union per frame** (§10.2): `corridorGeometry` runs on
   every course reply — about 10 ms for 30 corridor legs, 47 ms with every
-  edge, 96 ms for three such courses overlapping (Node, F2). The editor's
+  edge, 96 ms for three such courses overlapping (Node, F2); on curved
+  legs (F13, one ring per run, the edge lookup on a 4 mm grid) about
+  20 ms for one, 120 ms for ten and 360 ms for thirty edged legs of ~90
+  flattened vertices each. The editor's
   bend drag previews on the UI layer and writes once (`course-editor.md`
   §6.7), so no per-move request pays it; a control drag on a corridor
   course still does. Caching the union per run is the first lever.

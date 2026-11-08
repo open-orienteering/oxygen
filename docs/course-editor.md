@@ -758,6 +758,14 @@ tool's target (§6.3, through the crossing point too) all run along the
 polyline. The bend handles and the dashed leg outline are the stored
 bends only (the crossing point is a site, moved as one). A
 `course-leg` mirror item carries its leg's resolved `data-style`.
+A stored bend may carry Bézier handles (F13, `course-layer.md` §10.1):
+the layer draws the curve, and every readout above, *Add bend here*
+(`bendSegmentAt`: the segment whose curve is nearest, the new bend a
+corner, the others' handles kept) and a moved bend (its handles move
+with it, `moveBend`) read the shared flattened polyline (`legPolyline`
+= `course.legPolylineOf`); no gesture writes a handle until F16, and
+until then the dashed outline joins the bends with straight segments
+and a dragged bend's write drops its own handles (Pending).
 
 **Phone** (08 §5.5 "desktop-only by design", §10): a tapped leg shows the
 section in the sheet with every control disabled and the line *Leg
@@ -1544,6 +1552,12 @@ whose poll ran meanwhile simply does not conflict (decision log, D10).
 
 ## Pending in this chapter
 
+- **Bézier handles on bends** (§6.7; F16): the layer, the lengths and
+  the readouts draw and measure a curved bend since F13, but no gesture
+  creates or edits a handle, the dashed outline (`editor-leg-outline`)
+  is the straight polyline through the bends, and the `V` bend drag
+  (`tools/bindings.ts`) writes the dragged bend as a corner. F16 brings
+  the grips, the smooth-by-default insert and the flattened outline.
 - **Bend drags on touch** (§6.7, F3): a tablet or phone moves no bend
   handle (the touch path offers presses to a tool only on object targets,
   §10); the tablet adds and removes bends from the action bar and the

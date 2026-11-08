@@ -180,7 +180,9 @@ test cheap: the unit tests feed hand-written data straight into
 
 Control descriptions (they have no place in CourseData; the description
 sheet is a print artefact), leg bends and corridors (CourseData has no
-leg geometry: a leg's bends shape its `LegLength` only — Purple Pen's
-`<leg>` carries them, [ppen-import-export.md](ppen-import-export.md)),
+leg geometry: a leg's bends shape its `LegLength` only — along the
+curve when they carry Bézier handles (F13, `course-layer.md` §10.1), so
+`LegLength` stays the stored `legs` entry; Purple Pen's `<leg>` carries
+them, a curve flattened at 0.1 mm, [ppen-import-export.md](ppen-import-export.md)),
 map-issue points (no `ControlType`; a setter's note), map files
 themselves. Consumers that need the map read the OCD file.

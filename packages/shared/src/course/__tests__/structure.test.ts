@@ -63,6 +63,21 @@ describe("courseStructureSchema", () => {
     expect(parse(s).success).toBe(true);
   });
 
+  it("takes a bend's handles as offsets (F13, course-layer.md §6.1), stored corners unchanged", () => {
+    const withBends = (bends: unknown) => ({ ...linear(["S", "31", "F"]), items: [{ siteId: "S" }, { siteId: "31", leg: { bends } }, { siteId: "F" }] });
+    const curved = [{ x: 1, y: 2, hIn: { x: -1, y: 0 }, hOut: { x: 1, y: 0 } }, { x: 5, y: 2, hIn: { x: 0, y: 1 } }];
+    const r = parse(withBends(curved));
+    expect(r.success).toBe(true);
+    expect((r.data!.items[1] as { leg: { bends: unknown } }).leg.bends).toEqual(curved);
+    expect(parse(withBends([{ x: 1, y: 2 }])).data).toEqual(withBends([{ x: 1, y: 2 }]));
+    expect(parse(withBends([{ x: 1, y: 2, hOut: { x: Infinity, y: 0 } }])).success).toBe(false);
+    expect(parse(withBends([{ x: 1, y: 2, hIn: { x: 1 } }])).success).toBe(false);
+    expect(courseStructureWireSchema.safeParse({ version: 1, id: "7", orderMode: "ordered", items: [{ siteId: 31 }, { siteId: 32, leg: { bends: curved } }] }).success).toBe(true);
+    // A handle change is a change of the item.
+    const a = withBends([{ x: 1, y: 2 }]) as StoredCourseStructure, b = withBends([{ x: 1, y: 2, hOut: { x: 1, y: 0 } }]) as StoredCourseStructure;
+    expect(structureDiff(a, b)).toEqual(["31"]);
+  });
+
   it("accepts a variation group between two anchors, and a butterfly loop", () => {
     const s = { ...linear([]), items: [{ siteId: "S" }, { siteId: "31" }, variation("v1", [["32"], ["33"]]), { siteId: "34" }, variation("v2", [["35"], ["36"]], { loop: true }), { siteId: "34" }, { siteId: "F" }] };
     expect(parse(s).success).toBe(true);

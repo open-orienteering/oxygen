@@ -1,14 +1,20 @@
 /**
  * A leg's bends (`LegProps.bends`, paper mm; 08 §4.3, docs/course-layer.md
- * §10.1, docs/course-editor.md §6.7): the leg is the polyline
- * [from, ...bends, to]. Pure geometry for the editor's bend gestures and the
- * gap tool along a bent leg (§6.3).
+ * §10.1, docs/course-editor.md §6.7): the leg is the path
+ * [from, ...bends, to], its bends path vertices with optional handles (F13),
+ * drawn and measured as the shared flattened polyline (`legPolylineOf`).
+ * Pure geometry for the editor's bend gestures and the gap tool along a
+ * bent leg (§6.3).
  */
 
-export type Pt = { x: number; y: number };
+import { course, type PathVertex } from "@oxygen/shared";
 
-/** The leg's polyline: from, its bends, to. */
-export const legPolyline = (from: Pt, bends: readonly Pt[] | undefined, to: Pt): Pt[] => [from, ...(bends ?? []), to];
+export type Pt = { x: number; y: number };
+/** A bend: a point with optional handles, offsets from it (F13) — the shared `PathVertex`. */
+export type Bend = PathVertex;
+
+/** The leg as drawn: from, its bends' path flattened (5 µm), to — the layer's own polyline. */
+export const legPolyline = (from: Pt, bends: readonly Bend[] | undefined, to: Pt): Pt[] => course.legPolylineOf(from, bends, to);
 
 /** The polyline's length (mm). */
 export function polylineLength(points: readonly Pt[]): number {
@@ -89,20 +95,20 @@ export function polylineSlice(points: readonly Pt[], f0: number, f1: number): Pt
 const round = (v: number) => Math.round(v * 100) / 100;
 
 /**
- * *Add bend here* (§6.7): `pt` becomes a bend on the segment of
- * [from, ...bends, to] nearest it, so the leg keeps its order of corners.
+ * *Add bend here* (§6.7): `pt` becomes a corner bend on the segment of
+ * [from, ...bends, to] whose (flattened) path is nearest it, so the leg
+ * keeps its order of vertices; the other bends keep their handles (F16
+ * makes a new bend smooth).
  */
-export function insertBendAt(from: Pt, bends: readonly Pt[] | undefined, to: Pt, pt: Pt): Pt[] {
+export function insertBendAt(from: Pt, bends: readonly Bend[] | undefined, to: Pt, pt: Pt): Bend[] {
   const list = [...(bends ?? [])];
-  const p = projectOnPolyline(legPolyline(from, list, to), pt);
-  const at = p ? p.segment : list.length;
-  list.splice(at, 0, { x: round(pt.x), y: round(pt.y) });
+  list.splice(course.bendSegmentAt(from, list, to, pt).index, 0, { x: round(pt.x), y: round(pt.y) });
   return list;
 }
 
 /** The bends without bend `index`. */
-export const removeBend = (bends: readonly Pt[], index: number): Pt[] => bends.filter((_, i) => i !== index);
+export const removeBend = (bends: readonly Bend[], index: number): Bend[] => bends.filter((_, i) => i !== index);
 
-/** The bends with bend `index` moved to `pt`. */
-export const moveBend = (bends: readonly Pt[], index: number, pt: Pt): Pt[] =>
-  bends.map((b, i) => (i === index ? { x: round(pt.x), y: round(pt.y) } : b));
+/** The bends with bend `index` moved to `pt`, its handles (offsets) moving with it. */
+export const moveBend = (bends: readonly Bend[], index: number, pt: Pt): Bend[] =>
+  bends.map((b, i) => (i === index ? { ...b, x: round(pt.x), y: round(pt.y) } : b));

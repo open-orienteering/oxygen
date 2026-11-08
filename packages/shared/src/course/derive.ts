@@ -6,7 +6,8 @@
 
 import { placeControlLabels, type PlacementCircle, type PlacementSeg } from "../course-maps/control-label-placement.js";
 import { subtractLegGaps } from "../course-maps/overlay-geometry.js";
-import type { MapPoint } from "../course-maps/schema.js";
+import type { MapPoint, PathVertex } from "../course-maps/schema.js";
+import { bendSegmentAt, legPolylineOf } from "./bends.js";
 import { circleCuts, polylineLegGaps } from "./cuts.js";
 import { sectionsOf } from "./structure.js";
 import type { CourseDerivation, CourseItem, CourseItemRole, CourseLayerInput, CourseSite, CourseStructure, DerivedCourse, DerivedLeg, DerivedSite, DerivedSiteRole } from "./types.js";
@@ -56,22 +57,15 @@ function sequenceOf(structure: CourseStructure, sites: ReadonlyMap<string, Cours
 
 /**
  * A leg's bends with the crossing point it runs through (§10.3): `via`
- * joins the polyline [a, ...bends, b] on its segment nearest it, so the
- * leg keeps its order of corners (the editor's *Add bend here* rule).
- * Lengths, checks and the drawing read the same polyline.
+ * joins the path [a, ...bends, b] as a corner on the segment whose
+ * flattened curve is nearest it (`bendSegmentAt`), so the leg keeps its
+ * order of vertices (the editor's *Add bend here* rule); the neighbours
+ * keep their handles. Lengths, checks and the drawing read the same
+ * flattened polyline (`legPolylineOf`).
  */
-export function routedBends(a: MapPoint, bends: readonly MapPoint[] | undefined, via: MapPoint, b: MapPoint): MapPoint[] {
+export function routedBends(a: MapPoint, bends: readonly PathVertex[] | undefined, via: MapPoint, b: MapPoint): PathVertex[] {
   const list = [...(bends ?? [])];
-  const pts = [a, ...list, b];
-  let best = 0, bestD = Infinity;
-  for (let i = 0; i + 1 < pts.length; i++) {
-    const p = pts[i], q = pts[i + 1];
-    const dx = q.x - p.x, dy = q.y - p.y, l2 = dx * dx + dy * dy;
-    const t = l2 === 0 ? 0 : Math.max(0, Math.min(1, ((via.x - p.x) * dx + (via.y - p.y) * dy) / l2));
-    const d = Math.hypot(via.x - (p.x + dx * t), via.y - (p.y + dy * t));
-    if (d < bestD) { bestD = d; best = i; }
-  }
-  list.splice(best, 0, { x: via.x, y: via.y });
+  list.splice(bendSegmentAt(a, list, b, via).index, 0, { x: via.x, y: via.y });
   return list;
 }
 
@@ -84,17 +78,6 @@ export function legLengthMm(points: readonly MapPoint[]): number {
     sum += Math.sqrt(dx * dx + dy * dy);
   }
   return sum;
-}
-
-/** The leg's polyline: previous site, bends, site; repeated points dropped. */
-function legPolyline(a: MapPoint, bends: readonly MapPoint[] | undefined, b: MapPoint): MapPoint[] {
-  const out: MapPoint[] = [{ x: a.x, y: a.y }];
-  for (const p of [...(bends ?? []), b]) {
-    const last = out[out.length - 1];
-    if (Math.abs(last.x - p.x) > 1e-9 || Math.abs(last.y - p.y) > 1e-9) out.push({ x: p.x, y: p.y });
-  }
-  if (out.length === 1) out.push({ x: b.x, y: b.y });
-  return out;
 }
 
 interface Obstacle {
@@ -230,7 +213,7 @@ export function deriveCourse(input: CourseLayerInput, m: CourseMetrics): CourseD
         const a = seq[i - 1].site, b = seq[i].site;
         const leg = seq[i].item.leg;
         const via = crossingOf(structure, seq[i]);
-        const points = legPolyline(a, via ? routedBends(a, leg?.bends, via, b) : leg?.bends, b);
+        const points = legPolylineOf(a, via ? routedBends(a, leg?.bends, via, b) : leg?.bends, b);
         const gaps = leg?.gaps && leg.gaps.length > 0 ? leg.gaps : (features ? polylineLegGaps(points, features, R, m.lineWidthMm) : []);
         const pieces: MapPoint[][] = [];
         for (const piece of gaps.length ? subtractLegGaps(points, gaps) : [points]) pieces.push(...clipPolyline(piece, obstacles));

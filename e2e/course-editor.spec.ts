@@ -3580,3 +3580,100 @@ test.describe("F12: a legacy map-anchored white-out is a course object (docs/cou
     }
   });
 });
+
+// F13 (docs/course-layer.md §10.1): a leg's bends are path vertices with optional handles, drawn and measured along
+// the curve flattened at 5 µm. No editor gesture writes handles yet (F16), so the curve is written over tRPC. Its own
+// describe, so the parallel rows' edits above merge cleanly.
+test.describe("F13: Bézier bends (docs/course-layer.md §10.1)", () => {
+  desktopOnly();
+
+  test("a curved leg written over tRPC draws purple at the curve's apex, not at the chord's midpoint; the print is one page", async ({ page }) => {
+    await openEditor(page);
+    const nameId = nameIdOf(page);
+    const controls = await trpcCall<{ id: number; codes: string }[]>("control.list", undefined, false);
+    const idOf = (code: string) => controls.find((c) => c.codes.split(";").includes(code))!.id;
+
+    // One smooth bend off the chord's midpoint by a fraction of the leg, its handles along the chord: an arch through
+    // it. The pair, the side and the fraction are chosen so the apex and the chord's midpoint lie in view, 6 mm clear of
+    // every site (legs are clipped at the sites) and of the default start's and finish's legs into the pair.
+    const all = await sites(page);
+    const ends = all.filter((s) => s.type !== "Control").map((s) => s.mm);
+    const viewer = (await page.getByTestId("map-viewer").boundingBox())!;
+    const segDist = (p: Pt, a: Pt, b: Pt) => {
+      const dx = b.x - a.x, dy = b.y - a.y, l2 = dx * dx + dy * dy;
+      const t = l2 === 0 ? 0 : Math.max(0, Math.min(1, ((p.x - a.x) * dx + (p.y - a.y) * dy) / l2));
+      return Math.hypot(p.x - (a.x + dx * t), p.y - (a.y + dy * t));
+    };
+    const clear = async (p: Pt, a: Pt, b: Pt) => {
+      const q = await toPage(page, p);
+      const inView = q.x > viewer.x + 60 && q.x < viewer.x + viewer.width - 100 && q.y > viewer.y + 60 && q.y < viewer.y + viewer.height - 120;
+      return inView && all.every((s) => Math.hypot(s.mm.x - p.x, s.mm.y - p.y) > 6) && ends.every((e) => segDist(p, e, a) > 3 && segDist(p, b, e) > 3);
+    };
+    const codes = await regularCodes(page, 6);
+    let pick: { a: Site; b: Site; apex: Pt; chordMid: Pt; u: Pt; len: number } | null = null;
+    search: for (let i = 0; i < codes.length; i++) {
+      for (let j = 0; j < codes.length; j++) {
+        if (i === j) continue;
+        const sa = await site(page, codes[i]), sb = await site(page, codes[j]);
+        const len = Math.hypot(sb.mm.x - sa.mm.x, sb.mm.y - sa.mm.y);
+        if (len < 15) continue;
+        const u = { x: (sb.mm.x - sa.mm.x) / len, y: (sb.mm.y - sa.mm.y) / len };
+        const chordMid = { x: (sa.mm.x + sb.mm.x) / 2, y: (sa.mm.y + sb.mm.y) / 2 };
+        if (!(await clear(chordMid, sa.mm, sb.mm))) continue;
+        for (const k of [0.3, -0.3, 0.2, -0.2]) {
+          const apex = { x: chordMid.x - u.y * k * len, y: chordMid.y + u.x * k * len };
+          if (await clear(apex, sa.mm, sb.mm)) {
+            pick = { a: sa, b: sb, apex, chordMid, u, len };
+            break search;
+          }
+        }
+      }
+    }
+    expect(pick, "a pair of regular controls with a clear apex and chord midpoint").not.toBeNull();
+    const { a, b, chordMid, u, len } = pick!;
+    const codeA = a.code, codeB = b.code;
+    const r2 = (v: number) => Math.round(v * 100) / 100;
+    const apex = { x: r2(pick!.apex.x), y: r2(pick!.apex.y) };
+    const h = { x: r2(u.x * 0.25 * len), y: r2(u.y * 0.25 * len) };
+    const bend = { ...apex, hIn: { x: -h.x, y: -h.y }, hOut: h };
+
+    const name = `F13 curve ${Date.now() % 100000}`;
+    const { id } = await trpcCall<{ id: number }>("course.create", { name });
+    await trpcCall("course.setStructure", {
+      courseId: id,
+      structure: { version: 1, id: "f13", orderMode: "ordered", items: [{ siteId: idOf(codeA) }, { siteId: idOf(codeB), leg: { bends: [bend] } }] },
+    });
+    // The stored leg reads back whole, handles included.
+    const summary = (await trpcCall<{ id: number; legs?: Record<string, unknown> }[]>("course.list", undefined, false)).find((c) => c.id === id)!;
+    expect(summary.legs).toEqual({ [`${idOf(codeA)}>${idOf(codeB)}`]: { bends: [bend] } });
+
+    const template = await probeTemplate("F13 curve");
+    const sheet = await trpcCall<{ seq: number }>("courseMap.create", { kind: "course", courseId: id, templateId: template.seq, overrides: {}, objects: [] });
+    try {
+      await page.goto(`/${nameId}/course-editor?course=${id}`);
+      await editorReady(page);
+      await expect(controlRows(page)).toHaveCount(2, { timeout: 15000 });
+      await viewSettled(page);
+
+      // The drawn leg is the flattened curve: many points, through the bend.
+      await expect.poll(async () => (await legPieces(page, name)).reduce((k, p) => k + p.points.length, 0), { timeout: 30000 }).toBeGreaterThan(10);
+      const pieces = await legPieces(page, name);
+      expect(pieces.some((p) => p.points.some((q) => Math.hypot(q.x - apex.x, q.y - apex.y) < 0.05))).toBe(true);
+
+      // Purple at the apex, none at the chord's midpoint (both well clear of the circles).
+      await expect.poll(() => inkAt(page, [apex], "purple"), { timeout: 30000 }).toBeGreaterThan(0);
+      expect(await inkAt(page, [chordMid], "purple")).toBe(0);
+
+      // The leg's metres in the sequence follow the curve: longer than the chord.
+      const chordM = (len * (await mapScale(page))) / 1000;
+      const metres = async () => Number(((await controlRows(page).nth(1).getByTestId("editor-leg-meters").textContent()) ?? "").replace(/[^\d]/g, ""));
+      await expect.poll(metres, { timeout: 15000 }).toBeGreaterThan(Math.round(chordM) + 1);
+
+      expect((await printed(page, nameId, `maps=${sheet.seq}`)).pages).toBe(1);
+    } finally {
+      await cleanup("courseMap.delete", { id: sheet.seq });
+      await cleanup("mapTemplate.delete", { id: template.seq });
+      await cleanup("course.delete", { id });
+    }
+  });
+});

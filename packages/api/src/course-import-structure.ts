@@ -74,7 +74,8 @@ export function legGapsOfFeatures(geometry: GeoJSONFeatureCollection, positionOf
  * the inner vertices of a leg feature the parser marked `bent` (Purple
  * Pen's `<leg>`, `buildStraightLineGeometry`). An OCD bundle's pre-clipped
  * pieces are not read (their bends stay Pending, course-layer.md §6.4).
- * The first leg of a pair wins.
+ * The first leg of a pair wins. Imported bends are corners: no file read
+ * here carries a handle (F13, course-layer.md §10.1).
  */
 export function legBendsOfFeatures(geometry: GeoJSONFeatureCollection): Map<string, P[]> {
   const out = new Map<string, P[]>();

@@ -133,6 +133,8 @@ const scenes = [
   "course-corridor",
   // Map exchange (F5): part 2 alone — the exchange numbered, numbering continued, no start.
   "course-exchange",
+  // Curved bends (F13): legs flattened at 5 µm along their Bézier bends, a curved 707, a crossing on a curve.
+  "course-legs-curved",
   // Filter regions (D3): clip by colour, hide by symbol, the moved polygon, "show only" (invert).
   ...FILTER_SCENES,
 ] as const;

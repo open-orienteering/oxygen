@@ -43,3 +43,28 @@ describe("leg length label (docs/course-editor.md §6.1)", () => {
     expect(dragLegShapes(["S", "1", "F"], pos, "1", 10000)).toHaveLength(2);
   });
 });
+
+describe("curved legs (course-layer.md §10.1, F13)", () => {
+  const K = 0.5522847498 * 20;
+  const A = { x: 30, y: 0 }, B = { x: 0, y: 30 };
+  const QUARTER = [{ x: 20, y: 0, hOut: { x: 0, y: K } }, { x: 0, y: 20, hIn: { x: K, y: 0 } }];
+
+  it("labels the length along the curve, at the curve's midpoint", () => {
+    expect(legLengthLabel(A, B, 10000, QUARTER)).toBe(`${Math.round((20 + 10 * Math.PI) * 10)} m`);
+    const m = legMidpoint(A, B, QUARTER);
+    expect(Math.hypot(m.x, m.y)).toBeCloseTo(20, 2);
+    expect(m.x).toBeCloseTo(m.y, 2);
+  });
+
+  it("a dragged control's leg out reads its bends backwards, handles swapped: the same length and midpoint", () => {
+    const pos = new Map(Object.entries({ S: A, 1: B, F: { x: 0, y: 60 } }));
+    // Dragging S: its leg out to 1 runs along QUARTER; the label is from the far end as before.
+    const [out] = dragLegShapes(["S", "1", "F"], pos, "S", 10000, [undefined, QUARTER, undefined]);
+    expect(out).toMatchObject({ kind: "text", text: legLengthLabel(A, B, 10000, QUARTER) });
+    if (out.kind !== "text") throw new Error("text");
+    const m = legMidpoint(A, B, QUARTER);
+    expect(out.x).toBeCloseTo(m.x, 3);
+    expect(out.y).toBeCloseTo(m.y, 3);
+  });
+});
+

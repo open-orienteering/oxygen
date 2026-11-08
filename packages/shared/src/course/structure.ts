@@ -18,7 +18,7 @@
  */
 
 import { z } from "zod";
-import { pointSchema } from "../course-maps/schema.js";
+import { pathVertexSchema } from "../course-maps/schema.js";
 import type { CourseItem, CourseStructure } from "./types.js";
 
 const fractionGapSchema = z
@@ -44,7 +44,8 @@ export function legPropsSchemaOf<S extends z.ZodType<string | number>>(siteId: S
       })
       .optional(),
     crossing: z.strictObject({ controlId: siteId, section: z.boolean().optional() }).optional(),
-    bends: z.array(pointSchema).optional(),
+    // Path vertices (F13, course-layer.md §10.1): handles are offsets; the sites stay corners.
+    bends: z.array(pathVertexSchema).optional(),
   });
 }
 /** The column's `LegProps`. */

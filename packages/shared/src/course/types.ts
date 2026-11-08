@@ -8,7 +8,7 @@
  * leg — the conventions of the OCD importer and `overprint-cuts.ts`.
  */
 
-import { type MapAppearance, type CourseMapObject, type MapPoint, defaultMapAppearance } from "../course-maps/schema.js";
+import { type MapAppearance, type CourseMapObject, type MapPoint, type PathVertex, defaultMapAppearance } from "../course-maps/schema.js";
 import type { MapTextValues } from "../course-maps/text.js";
 import type { AngularGap, FractionGap } from "../course-maps/overlay-geometry.js";
 import type { DocumentColour } from "../map-document/header.js";
@@ -70,8 +70,12 @@ export interface CourseLegProps {
   gaps?: FractionGap[];
   /** Default `line`. */
   style?: CourseLegStyle;
-  /** Paper mm: the leg runs from the previous site through these to its own. */
-  bends?: MapPoint[];
+  /**
+   * Paper mm: the leg runs from the previous site through these to its own
+   * (§10.1). A segment is a cubic when its start has `hOut` or its end
+   * `hIn` (offsets, F13); the sites are corners.
+   */
+  bends?: PathVertex[];
   corridor?: CourseCorridor;
   /**
    * A `crossing_point` site the leg runs through (§10.3): the site joins
