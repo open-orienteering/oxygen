@@ -432,7 +432,11 @@ step 1's rule — the busiest template's paper, orientation and scale,
 `fitOrientation` turning it when only the other orientation holds them. A
 sheet without a template gets that template; an existing one is answered
 (`allControlsSheet`). With `courseId` too both parts run; `{}` leaves it
-alone. Scale and description placement are not fitted (Pending).
+alone. Scale and description placement are not fitted (Pending). It is
+a setter view (F4, `course-layer.md` §10.3): it draws every crossing
+point and the map-issue points (702), on screen in Layout mode and in
+print; a course or class sheet draws only the crossing points its legs
+run through.
 
 **Class overrides** (`classes.print_scale`, `classes.sheet_template_id`
 `ON DELETE SET NULL`; 08 §4.4) are written by `layout.setClassOverride

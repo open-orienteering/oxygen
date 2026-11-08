@@ -311,7 +311,7 @@ with `sheet` = `PageInput` minus `map` and `geo`.
 | `paper` | `getPaperDimensions(paper, orientation, custom)` |
 | `frame`, `window` | `document.mapFrame`, `layout.window` (`mapScale` and `meridianTiltDeg` from `getBaseMapInfo`) |
 | `course.appearance` | `appearanceFromTemplate(document.appearance)` — multipliers of the library sizes (`docs/course-layer.md` §2) |
-| `course.viewOptions` | `allControls` = `kind === "all_controls"`, `labelMode`, `overprintScale` from the layout; `autoCuts: false` when the event's **Auto cuts** toggle is off (`ResolveSheetInput.autoCuts` from `MapRowContext.autoCuts`; no key when on — `docs/course-layer.md` §3.4, D17) |
+| `course.viewOptions` | `allControls` = `kind === "all_controls"`, `setterMarks` likewise (F4: the map-issue points and every crossing point, `course-layer.md` §10.3; F10's setter sheets later), `labelMode`, `overprintScale` from the layout; `autoCuts: false` when the event's **Auto cuts** toggle is off (`ResolveSheetInput.autoCuts` from `MapRowContext.autoCuts`; no key when on — `docs/course-layer.md` §3.4, D17) |
 | `objects`, `textValues` | `document.objects` (template + sheet), `layout.textValues` |
 | `description` | `document.description` position and cell size, `layout.descriptionRows` / `descriptionHeader`, title = course name, else map name; null when the template hides the block |
 | `label` | course name, else map name (page label and outline title, §7.2) |
@@ -336,11 +336,17 @@ with `sheet` = `PageInput` minus `map` and `geo`.
   drawn controls, none under free order; the page draws the course
   layer's own legs. `CourseOverlayControl.cuts` is no longer filled.
 - **Course sheets**: a v1 structure with one item per layout control in
-  order, `role` = its type; `labelOffsets` = stored label position −
-  site. The course-level lines and areas are course objects (`course-layer.md`
+  order, `role` = its type, each item's whole stored leg (F1–F4);
+  `labelOffsets` = stored label position − site. The **crossing points**
+  the stored legs run through join the sites (F4, `course-layer.md`
+  §10.3: `courseInputOfLayout` reads them from `ResolveSheetInput.allControls`;
+  no other crossing or map-issue point is drawn), and the block derives
+  their 13.3 / 13.4 rows (`LayoutCourseSource.crossings`). The course-level lines and areas are course objects (`course-layer.md`
   §8), no longer read from the geometry. Free order is carried as `orderMode`.
 - **All-controls sheets**: `structure: null`, every site drawn with
-  codes (`viewOptions.allControls`).
+  codes (`viewOptions.allControls`), typed by `kind` (`resolveMapLayout`,
+  F4: crossing points as 710, map-issue points as 702, an exchange as a
+  control); the block lists the controls only.
 - **Authored geometry** comes from the stored structure and the controls
   (D1 retired deviation (e), which read the `ocd` GeoJSON): circle gaps
   from `controls.circle_gaps`, legs from the structure's `LegProps` —
