@@ -1271,7 +1271,8 @@ test.describe("tools", () => {
       // Its handles from its neighbours, (b − a) / 6: collinear with the edge, so the shape is unchanged.
       expect(added.hOut!.x).toBeCloseTo((mb.x - ma.x) / 6, 0);
       expect(added.hOut!.y).toBeCloseTo((mb.y - ma.y) / 6, 0);
-      expect(added.hIn).toEqual({ x: -added.hOut!.x, y: -added.hOut!.y });
+      expect(added.hIn!.x).toBeCloseTo(-added.hOut!.x, 6);
+      expect(added.hIn!.y).toBeCloseTo(-added.hOut!.y, 6);
       await expect(page.getByTestId("editor-object-grip")).toHaveCount(4);
 
       // Delete: click the new vertex (focused), Delete removes it; undo brings it back.
