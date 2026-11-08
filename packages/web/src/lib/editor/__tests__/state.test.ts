@@ -149,3 +149,34 @@ describe("editorReducer (docs/course-editor.md §3)", () => {
     expect(editorReducer(s, { type: "mode", mode: "course" }).tool.kind).toBe("pick-symbol");
   });
 });
+
+describe("variations (docs/course-editor.md §12, F7)", () => {
+  const onCourse = editorReducer(initialEditorState, { type: "select-course", id: 1 });
+
+  it("Variant view needs a key; other views drop it", () => {
+    expect(editorReducer(onCourse, { type: "view", view: "variant" })).toBe(onCourse);
+    const v = editorReducer({ ...onCourse, phantom: { x: 1, y: 2, insertAt: 0 } }, { type: "variant", key: "AB" });
+    expect([v.view, v.variantKey, v.phantom]).toEqual(["variant", "AB", null]);
+    expect(editorReducer(v, { type: "variant", key: "AB" })).toBe(v);
+    expect([editorReducer(v, { type: "variant", key: null }).view, editorReducer(v, { type: "variant", key: null }).variantKey]).toEqual(["course", null]);
+    const all = editorReducer(v, { type: "view", view: "all-variations" });
+    expect([all.view, all.variantKey]).toEqual(["all-variations", null]);
+  });
+
+  it("an alternative is activated per group, shown in Course view and claims K until Escape", () => {
+    const v = editorReducer(onCourse, { type: "variant", key: "AB" });
+    const a = editorReducer({ ...v, phantom: { x: 1, y: 2, insertAt: 0 } }, { type: "alternative", groupId: "v1", label: "B" });
+    expect([a.view, a.variantKey, a.activeAlternatives, a.focusGroupId, a.phantom]).toEqual(["course", null, { v1: "B" }, "v1", null]);
+    expect(editorReducer(a, { type: "alternative", groupId: "v1", label: "B" })).toBe(a);
+    expect(escapeHasWork({ ...a, selectedCourseId: null })).toBe(true);
+    const esc = editorReducer(a, { type: "escape" });
+    expect([esc.focusGroupId, esc.activeAlternatives, esc.selectedCourseId]).toEqual([null, { v1: "B" }, 1]);
+  });
+
+  it("a course change resets the variant, the alternatives and the overlay", () => {
+    let s = editorReducer(onCourse, { type: "alternative", groupId: "v1", label: "B" });
+    s = editorReducer(s, { type: "view", view: "all-variations" });
+    s = editorReducer(s, { type: "select-course", id: 2 });
+    expect([s.view, s.variantKey, s.activeAlternatives, s.focusGroupId]).toEqual(["course", null, {}, null]);
+  });
+});

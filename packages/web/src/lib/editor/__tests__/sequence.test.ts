@@ -1,6 +1,6 @@
 import { describe, it, expect } from "vitest";
 import type { course } from "@oxygen/shared";
-import { displaySequence, explicitStructure, insertIndexForLeg, legForInsert, partHeadings, type SiteRow } from "../sequence";
+import { alternativeEndAt, courseViewOrders, displaySequence, explicitStructure, insertIndexForLeg, legForInsert, partHeadings, variationBlocks, type SiteRow } from "../sequence";
 
 const site = (id: number, status: number, x = id, y = id, code = String(id)): SiteRow => ({ id, code, status, mapX: x, mapY: y });
 // Two starts (1 the default: lowest id), one finish.
@@ -47,6 +47,53 @@ describe("display sequence and explicit structure (docs/course-editor.md §4)", 
     expect(legForInsert(rows, 3)?.itemIndex).toBe(4);
     // A leg into the unpositioned control has no point to run to.
     expect(legForInsert(rows, 1)).toBeNull();
+  });
+});
+
+describe("variation groups (docs/course-editor.md §12, F7)", () => {
+  type Item = course.WireCourseStructure["items"][number];
+  const g = (id: string, alts: number[][], loop = false): Item => ({
+    kind: "variation", id, alternatives: alts.map((l, i) => ({ label: String.fromCharCode(65 + i), items: l.map((siteId) => ({ siteId })) })), ...(loop ? { loop: true } : {}),
+  });
+  const mk = (...items: (number | Item)[]): course.WireCourseStructure => ({ version: 1, id: "c", orderMode: "ordered", items: items.map((i) => (typeof i === "number" ? { siteId: i } : i)) });
+  const sites = [...SITES, site(41, 0, 50, 50), site(42, 0, 60, 60)];
+  // Implicit start and finish: paths index the explicit structure (S prepended).
+  const s = mk(31, g("v1", [[41], []]), 32);
+
+  it("rows carry their path in the explicit structure and their group", () => {
+    const rows = displaySequence(s, sites);
+    expect(rows.map((r) => [r.id, r.seqIndex])).toEqual([[1, -1], [31, 0], [41, 1], [32, 2], [9, -1]]);
+    expect(rows[2].path).toEqual({ itemIndex: 2, alt: { label: "A", index: 0 } });
+    expect(rows[2].group).toEqual({ id: "v1", label: "A", loop: false });
+    expect(rows[3].path).toEqual({ itemIndex: 3 });
+    expect(displaySequence(s, sites, { v1: ["B"] }).map((r) => r.id)).toEqual([1, 31, 32, 9]);
+  });
+
+  it("a loop's anchor visit is a row of the group without an alternative", () => {
+    const rows = displaySequence(mk(31, g("b", [[41], [42]], true), 31), sites);
+    expect(rows.map((r) => r.id)).toEqual([1, 31, 41, 31, 42, 31, 9]);
+    expect(rows[3].path).toEqual({ itemIndex: 2, anchorVisit: true });
+    expect(rows[3].group).toEqual({ id: "b", label: null, loop: true });
+  });
+
+  it("the leg into a group row names its path", () => {
+    const rows = displaySequence(s, sites);
+    expect(legForInsert(rows, 1)?.path).toEqual({ itemIndex: 2, alt: { label: "A", index: 0 } });
+  });
+
+  it("Course view's orders: the active alternative, a loop with it first", () => {
+    const loop = mk(31, g("v1", [[41], []]), 32, g("b", [[41], [42]], true), 32);
+    expect(courseViewOrders(loop, { v1: "B", b: "B" })).toEqual({ v1: ["B"], b: ["B", "A"] });
+    expect(courseViewOrders(loop, { v1: "Z" })).toEqual({ v1: ["A"], b: ["A", "B"] });
+  });
+
+  it("blocks sit after the anchor's row; an alternative's end position", () => {
+    const rows = displaySequence(s, sites, { v1: ["B"] });
+    expect(variationBlocks(s, sites, rows, { v1: ["B"] })).toEqual([
+      { id: "v1", itemIndex: 2, labels: ["A", "B"], loop: false, active: "B", counts: { A: 1, B: 0 }, afterRow: 1 },
+    ]);
+    expect(alternativeEndAt(rows, 2, "B")).toBe(1);
+    expect(alternativeEndAt(displaySequence(s, sites), 2, "A")).toBe(2);
   });
 });
 
