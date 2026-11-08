@@ -160,9 +160,9 @@ export function resolveSheet(input: ResolveSheetInput): ResolvedSheet {
       sites,
       appearance: course.appearanceFromTemplate(document.appearance),
       viewOptions: {
-        allControls: input.kind === "all_controls",
-        // §10.3: the all-controls sheet is a setter view (702, every crossing point); a course sheet never is.
-        ...(input.kind === "all_controls" ? { setterMarks: true } : {}),
+        allControls: input.kind === "all_controls" || input.kind === "setter",
+        // §10.3: the all-controls and setter sheets (F10) are setter views (702, their crossing points); a course sheet never is.
+        ...(input.kind === "all_controls" || input.kind === "setter" ? { setterMarks: true } : {}),
         labelMode: layout.labelMode,
         overprintScale: layout.overprintScale,
         ...(input.autoCuts === false ? { autoCuts: false } : {}),

@@ -7,7 +7,8 @@
  *
  * - Scope: a sheet (`?sheet=`, or the selected course's first sheet; the
  *   class's first sheet in Class view, docs/course-layout.md §6; the
- *   all-controls sheet in view All) edits its own objects, block, print
+ *   all-controls sheet in view All; a setter sheet opened from the *Setter
+ *   maps* section, F10) edits its own objects, block, print
  *   scale and window centre — the template's objects are drawn locked,
  *   with a link to the template; a template (`?template=`) edits the
  *   template, previewed with the selected course.
@@ -37,6 +38,7 @@ import { LayoutInspector } from "../layout/LayoutInspector";
 import { LayoutRail } from "../layout/LayoutRail";
 import { ClassOverridesSection, ClubTemplatesSection, TemplateKeySection } from "../layout/KeySections";
 import { NoSheetActions, SheetActions, TemplateActions } from "../layout/SheetActions";
+import { SetterSection } from "../layout/SetterSection";
 import { useCapabilities } from "../../../context/CapabilitiesContext";
 import { geometryOf, layoutRequestOf, pathObject, placeObject, scopeObjects, sheetKeyOf, snapshotOf, templateWriteOf, withEditable, type EditorSheet, type LayoutSnapshot } from "../layout/model";
 
@@ -410,6 +412,8 @@ export function useLayoutMode(a: LayoutModeArgs): LayoutMode {
     {data?.sheet?.kind === "course" && data.sheet.courseSeq !== null && (
       <ClassOverridesSection courseSeq={data.sheet.courseSeq} canEdit={canEdit} run={run} record={record} onOpen={open} />
     )}
+    <SetterSection view={a.view} course={a.course} rows={sheets.data ?? []} openSheet={data?.sheet?.seq ?? null}
+      canEdit={canEdit} versions={versions} run={run} record={record} onOpen={open} />
     {data && <ClubTemplatesSection template={data.template} canEdit={canEdit} run={run} onOpen={open} />}
     </div>
   );

@@ -128,8 +128,13 @@ selections of Course mode.
   `nextSheetName` — and opened); **Delete this sheet**
   (`editor-layout-delete-sheet`, confirmed; back to the default sheet). A
   class sheet has the name only (it follows its class's override, §6).
-  Create and delete are not undo entries, as the editor's course create
-  (`course-editor.md` §3).
+  **Recalculate** (`editor-layout-recalculate`, F10) on the all-controls
+  sheet and a setter sheet refits it (`layout.recalculateSheet`, §6, §8).
+  Create, delete and recalculate are not undo entries, as the editor's
+  course create (`course-editor.md` §3). A setter sheet (F10, §8) opens
+  from the *Setter maps* section and stays open when the top bar picks
+  another course or view; the inspector's picker lists its scope's
+  setter sheets.
 - *Template* (`mapTemplate.update`): previewed with the top bar's course.
   Editable: the name (`editor-layout-template-name`, in the snapshot:
   written with the rest, one undo entry), paper, orientation, print scale,
@@ -396,7 +401,7 @@ and one undo entry.
 **Sheet rows** (`course_maps`, 08 §4.6) gain `section_index` (the part
 of a course split by map exchanges the sheet prints, `course-layer.md`
 §11; 0 for every sheet of a one-part course), `class_id` (a class sheet, below; `ON DELETE
-CASCADE`) and `props` (setter maps, F). A course's **own** sheets have
+CASCADE`) and `props` (a setter sheet's group, §8). A course's **own** sheets have
 `class_id` NULL.
 
 **`layout.autoSheets { courseId? }`** (`courses.edit`; 08 §6), idempotent,
@@ -456,7 +461,16 @@ step 1's rule — the busiest template's paper, orientation and scale,
 `fitOrientation` turning it when only the other orientation holds them. A
 sheet without a template gets that template; an existing one is answered
 (`allControlsSheet`). With `courseId` too both parts run; `{}` leaves it
-alone. Scale and description placement are not fitted (Pending). It is
+alone. **Recalculate** (F10, `layout.recalculateSheet { sheet }`; 08 §4.6
+"can be recalculated; moved items stay fixed until recalculated") refits
+it to every placed control of the event, keeping its paper: the auto
+template of the orientation and standard scale `fitScale` picks (§8,
+its current orientation preferred, its template seeding the look), the
+window centre back to NULL, `overrides.printScale` dropped (a Layout
+save writes one) and the block's position back to the template's
+(`overrides.description` keeps `visible` and the cell size, loses `x` /
+`y`). A placement of the block that avoids the controls is not computed
+(Pending). It is
 a setter view (F4, `course-layer.md` §10.3): it draws every crossing
 point and the map-issue points (702), on screen in Layout mode and in
 print; a course or class sheet draws only the crossing points its legs
@@ -516,6 +530,7 @@ entries; `lib/editor/export-menu.ts`), each on an existing route:
 | This class (`…-class`, Class view only) | `maps.pdf?classes=<class>` | `autoSheets { courseId }` |
 | All courses (`…-all`) | `maps.pdf` (every own sheet and the all-controls sheet) | `autoSheets {}` |
 | All controls (`…-allControls`) | `maps.pdf?allControls=1` | `autoSheets { allControls: true }` (E-pages) |
+| Setter maps (`…-setter`; F10) | `maps.pdf?setter=1` (every setter sheet of the event, §8) | — (generating needs a group count: Layout mode's *Setter maps*; none → the route's "No setter maps found" on the error line) |
 | Description sheets… (`…-descriptions`; F11) | opens the dialog (`editor-descriptions-dialog`), then `descriptions.pdf?classes=<seq,…>&copies=&cell=` (`course-print.md` §6.4) | — (no sheet row) |
 | IOF XML (`…-iofxml`), Purple Pen (`…-ppen`) | `/api/export/course-data?format=` | — |
 
@@ -527,7 +542,7 @@ per-course export (`export-course-<course>`) and its export menu's *All
 maps* / *All controls* do the same (`course-maps.md` "Where sheets and
 templates are managed"). This sheet is a phase-1 entry 08 §5.2 does not
 list: the Maps page's *Selected map*, kept so a second sheet prints alone.
-Variants and setter maps arrive in later F rows.
+Per-variant pages arrive in F8.
 
 **Description sheets…** (F11; 08 §4.6, §5.2 "descriptions") opens a dialog
 (`pages/editor/DescriptionSheetsDialog.tsx`) instead of downloading at
@@ -546,11 +561,124 @@ created first: the sheets print on demand (`course-print.md` §6.4).
 
 **`maps.pdf?classes=<seq,…>`** (`course-maps.md` API): per class, in the
 order asked, its class sheets, else its course's own sheets as the class
-prints them (§6); exclusive with `maps` / `courses` (400). `?courses=`
-and the unfiltered export print the courses' own sheets only; a class
-sheet prints through `classes` or `maps`. A course split by map
+prints them (§6); exclusive with `maps` / `courses` / `setter` (400). `?courses=`
+and the unfiltered export print the courses' own sheets only (the
+unfiltered one also the all-controls sheet); a class
+sheet prints through `classes` or `maps`, a setter sheet through
+`setter` or `maps` (F10). A course split by map
 exchanges prints one page per part (its part sheets in `sort_order`,
 F5); *This course* creates the missing part sheets first.
+
+## 8. Setter maps
+
+F10 (08 §4.6 "Setter maps", §5.5, §6 `layout.setterMaps`). A setter map
+is the page a control setter takes out: the controls of one area, at a
+scale that holds them on A4. There is no Setter view in the top bar
+(slice F split, since P2 / P6): a setter map is a **sheet** (Layout mode
+shows it as any sheet) and a **Field-mode pick** (`course-editor.md` §9).
+Unless stated, what follows was decided on the user's standing
+instruction (2026-11-07), for review (README decision log, "F10").
+
+**Rows.** `course_maps.kind = 'setter'` (migration
+`20261108150000_course_maps_setter_kind`), `course_id` NULL for the
+event's setter maps or the course's for a course's, `class_id` NULL,
+`section_index` 0, `props` = `setterSheetPropsSchema` `{ setter: n,
+controlIds: [controls.id …] }` (`course-maps/schema.ts`), `overrides =
+{ description: { cellSizeMm: 5 } }` (`SETTER_DESCRIPTION_CELL_MM`, 08
+"5 mm description cells"), window centre NULL. Written by
+`layout.setterMaps` only: `courseMap.create` takes no `setter` kind.
+
+**`layout.setterMaps { courseId?, groups }`** (`courses.edit`, one
+transaction, 60 s): `groups` 1 … 20 (`MAX_SETTER_GROUPS`) and at most the
+scope's placed sites (else `BAD_REQUEST`; no placed site →
+`PRECONDITION_FAILED`; an unknown course → `NOT_FOUND`).
+
+1. *The scope's sites* (`setterScopeSites`), placed ones only: without
+   `courseId` every site of the event; with it the course's start,
+   controls and finish (the one sequence rule, `layoutCourseEnds`) and the
+   crossing points its legs run through — and in both scopes the event's
+   map-issue points (702 belongs to no course; it is what a setter fixes on
+   the way).
+2. *The groups* (`groupSites`, `packages/shared/src/course-maps/setter-groups.ts`):
+   k-means on paper coordinates (map mm), deterministic — the sites in
+   `seq` order, seeds by farthest-first traversal from the lowest-seq site
+   (ties: lower seq), Lloyd iterations (≤ 100; a site tied between two
+   centroids stays; an emptied group takes the site farthest from its
+   centroid among groups of two or more), groups numbered west → east by
+   centroid x (then north first), each group's sites in `seq` order. The
+   same input always gives the same groups and numbers.
+3. *The sheets*: the scope's setter rows are **deleted** and one row per
+   group is written — *Regenerate* replaces them (their own edits are
+   lost; the UI confirms). Each is on the A4 auto template of the key
+   fitted to its group (`fitScale` below; the event's busiest template's
+   orientation preferred and its margin and look seeded,
+   `ensureAutoTemplate`), named `Setter n` (the event's) or
+   `<course> · Setter n` (English, as *All controls*), `sort_order` after
+   the scope's other sheets.
+
+The answer: `{ sheets: [{ seq, setter, controls: [public control id …] }],
+createdTemplates }`.
+
+**The fit** (`fitScale`, `course-maps/auto-template.ts`; 08 §4.6 "compute
+scale, orientation … to fit everything on A4"): of
+`STANDARD_PRINT_SCALES` = 1:4 000, 5 000, 7 500, 10 000, 15 000, largest
+map first, the first scale at which one orientation (the preferred
+first) holds the sites' extent at print scale plus `COURSE_FIT_MARGIN_MM`
+= 6 mm on every side inside the printable area (§6's `fitOrientation`
+rule at each scale); none → 1:15 000 in the orientation that comes
+closer. The map's scale is the base map's (1:10 000 without one). The
+busiest template (§6, decision (3)) no longer counts setter sheets, and a
+template only setter sheets use is never it: their fitted keys are not
+the event's look.
+
+**What a setter sheet draws** (`sheetInputForMapRow` → `setterSheetInput`,
+`course-maps/pdf-page.ts`; `course-print.md` §5.2): the all-controls
+branch of `resolveMapLayout` (`kind === "setter"` joins it: no layer
+change) over the group's sites only — every site by its kind (702 for a
+map-issue point, 710 for a crossing point, start, finish), labels by code,
+`viewOptions { allControls: true, setterMarks: true }`, no course
+structure (a course's setter map draws no legs), the `all`-scoped course
+objects; the description block lists the group's control rows in code
+order, no IOF header, titled with the row's name, at 5 mm. `courseMap.list`
+and `courseMap.resolveSheet` answer `setter { index, controls }` (public
+control ids in the block's code order; null for other kinds), and a
+setter sheet is validated against its own window only (its controls are
+its group's: no sibling windows).
+
+**Move to next setter** (`layout.moveToSetter { controlId, sheet }`; 08
+"a manual 'move to next setter' click"): the control (public id) leaves
+the setter sheet of `sheet`'s scope that holds it and joins `sheet`; both
+rows get a new version and their windows stay (08 "moved items stay fixed
+until recalculated"); the same sheet is a no-op, a control in none of the
+scope's setter maps `BAD_REQUEST`, a sheet that is not a setter's
+`NOT_FOUND`. The client picks *next* (`nextSetterSheet`,
+`lib/editor/setter-maps.ts`): the following sheet in setter order, the
+last one's next the first. One undo entry (undo moves it back to its
+sheet); the versions it answers are seeded for both rows.
+
+**Recalculate** a setter sheet (`layout.recalculateSheet`, §6): refitted
+to its group as the all-controls sheet is to every control — template,
+window centre NULL, no scale override, the block on the template's spot.
+
+**Layout mode's *Setter maps* section** (`editor-layout-setter`,
+`pages/editor/layout/SetterSection.tsx`, after *Classes*, shown with or
+without a sheet): the scope (`editor-layout-setter-scope`: every placed
+control of the event in view *All controls* or without a course, else
+the top bar's course — `setterScopeOf`), the number of setters
+(`editor-layout-setter-groups`, default the scope's count or 2),
+*Generate* / *Regenerate* (`editor-layout-setter-generate`, a confirm
+when it replaces; the first new sheet opens; not an undo entry), the
+scope's sheets (`editor-layout-setter-row`, `data-setter`, `data-sheet`:
+"Setter n · k controls", a click opens it); with a setter sheet open its
+controls in code order (`editor-layout-setter-control`,
+`data-control-id`) each with **Move to next setter**
+(`editor-layout-setter-move`; disabled with one sheet). On the canvas
+Layout mode draws the view's controls over a setter sheet (the editor's
+own layer request, F7's files); print, the block and the lists are the
+group's (Pending).
+
+**Export ▾ → Setter maps** (§7, `maps.pdf?setter=1`): every setter sheet
+of the event, course seq (the event's last), sort order, seq.
 
 ## Tests
 
@@ -586,19 +714,27 @@ F5); *This course* creates the missing part sheets first.
 | E2E | `e2e/course-editor.spec.ts` "P7: a white-out outside crossing the frame…" | P7: two 709 squares, one inside every shape, one outside: a toner saver whose first vertex is left of the frame, then one across the frame's bottom with its first vertex inside — the inside square keeps its purple, the outside one shows none; a page-anchored white-out outside rectangle dragged with `V` past the frame's bottom, then past its left edge (one `saveLayout` each) — the same after each |
 | integration | `auto-templates.test.ts` "part sheets of a map exchange (F5)" | §6 part sheets: an exchange gives the course two own sheets (names, `section_index` 0 / 1, one template, centre NULL, sort order) and the overriding class its part-2 sheet; idempotent; `courseMap.list` `sectionIndex`; `resolveSheet` of each part centred on its controls, the block whole with 13.5; `maps.pdf?courses=` two pages; a deleted part sheet recreated by the next call; the exchange removed → nothing deleted |
 | unit (web) | `pages/editor/__tests__/layout-model.test.ts` "a course sheet's part" | `layoutRequestOf` carries `section` for a course sheet, none in template scope |
+| unit (shared) | `packages/shared/src/__tests__/setter-groups.test.ts`, `auto-template.test.ts` "fitScale" | §8: two clusters numbered west → east, the same groups on a second call and on reversed input (40 sites, 4 groups, a partition), n = 1 and n = count, coincident sites never leave a group empty, n clamped; the scale list, the largest scale that holds the extent, a turn before a smaller scale, the margin on every side, 1:15 000 in the closer orientation when nothing fits, an empty extent |
+| unit (web) | `lib/editor/__tests__/setter-maps.test.ts`, `export-menu.test.ts` "setter maps" | §8: the scope by view and course, a scope's sheets by setter number, the next setter wrapping, a setter's Field rows (order, kinds, unknown ids left out, through `fieldRows`); Export ▾ *Setter maps* `?setter=1`, nothing ensured, never disabled |
+| integration | `packages/api/src/__tests__/integration/setter-maps.test.ts` | §6, §8: the migration (a setter row with and without a course; `all_controls` with a course still refused); `setterMaps { groups: 2 }` (names, NULL course and centre, numbers, the west group with the map-issue point, the unplaced control in none, A4 at a standard scale, 5 mm cells), regenerate (same groups, new rows), the refusals; a course's setter map (its sites + 702, the event's untouched); `resolveSheet` of a setter sheet (codes, no header, title, 5 mm, the group's sites, one window, centred) and its print input (`allControls` + `setterMarks`, no structure, the 702 site); `courseMap.list` `setter`; `moveToSetter` (both props, both versions, windows and templates kept, the same sheet a no-op, back, the refusals); `recalculateSheet` on the all-controls sheet after a `saveLayout` (centre NULL, no scale override, the block's `x` / `y` gone, a standard-scale key) and on a setter sheet; a course sheet refused; `maps.pdf?setter=1` two pages, `?courses=` and the unfiltered export without them, `setter` + `courses` 400, none → 400 "No setter maps" |
+| E2E | `e2e/course-editor.spec.ts` "F10: setter maps" | §8: view All → Layout mode → *Setter maps* 2 → *Generate* → two rows, two A4 standard-scale sheets, the first open; Setter 2 opened, *Move to next setter* on its first control → in Setter 1 (wrap), undo → back; a moved window → *Recalculate* → centre NULL; Export ▾ *Setter maps* → two A4 pages |
+| E2E | `e2e/field-mode.spec.ts` "Field mode on a desktop" "the setter-map picker…" | `course-editor.md` §9: `layout.setterMaps { groups: 2 }`; the picker lists *None* + two; Setter 1 picked → the list's rows are its controls in the sheet's order, the KPI says *Setter 1*; *None* → the course's list |
 | E2E | `e2e/course-editor.spec.ts` "F5: map exchange" | Export ▾ this course on a course with an exchange → two pages, two own sheets with different window centres; Layout mode's picker lists part 2 (`data-section` 1); deleting it raises `EXCHANGE_WITHOUT_SHEET` in Course mode |
 
 ## Pending in this chapter
 
-- **Setter maps** (`kind = 'setter'`, `props.controlIds`) and
-  per-variant export — F (08 §4.6, §5.2). Map exchange part sheets are
-  done (F5, §6). Description sheets are
+- **Per-variant export** — F8 (08 §4.6, §5.2). Map exchange part sheets
+  are done (F5, §6), setter maps (F10, §8); description sheets are
   done (F11, §7) and print on demand, never as a sheet row.
-- **The all-controls sheet's recalculated scale and description
-  placement** (08 §4.6 "computed to fit everything on A4 and can be
-  recalculated"): since E-pages `autoSheets { allControls }` creates it
-  with the orientation fitted (§6); the scale stays the busiest key's and
-  there is no *recalculate* — F, with setter maps.
+- **A fitted description placement** (08 §4.6 "compute … description
+  placement"): *Recalculate* (F10, §6, §8) fits scale and orientation and
+  puts the block back on the template's spot; a placement that avoids the
+  controls is not computed. The all-controls sheet's *creation* still
+  takes the busiest key's scale (only *Recalculate* fits one).
+- **A setter sheet on the canvas** (F10, §8): Layout mode draws the
+  view's controls over a setter sheet, not only its group — the editor's
+  layer request is F7's files (`course-layer-request.ts`, `MapPanel`,
+  `MapViewer`); print and the lists are the group's.
 - **Class sub-rows on the Courses page's overview**: not planned (decided
   in the split); ClassesPage shows no override fields.
 - **Print-preview toggle** (05 §5.12): waits for print profiles.

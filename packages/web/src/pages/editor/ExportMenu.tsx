@@ -18,6 +18,7 @@ const LABEL = {
   class: "exportClass",
   all: "exportAll",
   allControls: "exportAllControls",
+  setter: "exportSetter",
   descriptions: "exportDescriptions",
   iofxml: "exportIofXml",
   ppen: "exportPpen",

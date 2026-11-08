@@ -114,3 +114,38 @@ export function fitOrientation(
   if (fits) return fits;
   return fit(order[1]) > fit(order[0]) ? order[1] : order[0];
 }
+
+/** The print scales a setter or all-controls sheet is fitted to (docs/course-layout.md §8), largest map first. */
+export const STANDARD_PRINT_SCALES = [4000, 5000, 7500, 10000, 15000] as const;
+
+/**
+ * 08 §4.6 "the all-controls and setter-map sheets compute scale,
+ * orientation … to fit everything on A4": of `STANDARD_PRINT_SCALES`,
+ * largest map first, the first scale at which one of the two orientations
+ * (the preferred first) holds `extentMm` (map mm at 1:`mapScale`) with
+ * `COURSE_FIT_MARGIN_MM` on every side inside the printable area — the
+ * `fitOrientation` rule at each scale. None does: 1:15 000 in the
+ * orientation that comes closer.
+ */
+export function fitScale(
+  extentMm: { width: number; height: number },
+  mapScale: number,
+  paper: PaperSize,
+  preferred: PaperOrientation,
+  marginMm: number,
+  custom?: PaperDimensions,
+): { orientation: PaperOrientation; printScale: number } {
+  const order: PaperOrientation[] = preferred === "portrait" ? ["portrait", "landscape"] : ["landscape", "portrait"];
+  const holds = (o: PaperOrientation, scale: number) => {
+    const ratio = mapScale / scale;
+    const p = getPaperDimensions(paper, o, custom);
+    return extentMm.width * ratio + 2 * COURSE_FIT_MARGIN_MM <= p.width - 2 * marginMm + 1e-9 &&
+      extentMm.height * ratio + 2 * COURSE_FIT_MARGIN_MM <= p.height - 2 * marginMm + 1e-9;
+  };
+  for (const printScale of STANDARD_PRINT_SCALES) {
+    const orientation = order.find((o) => holds(o, printScale));
+    if (orientation) return { orientation, printScale };
+  }
+  const last = STANDARD_PRINT_SCALES[STANDARD_PRINT_SCALES.length - 1];
+  return { orientation: fitOrientation(extentMm, mapScale / last, paper, preferred, marginMm, custom), printScale: last };
+}

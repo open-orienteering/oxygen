@@ -3176,3 +3176,71 @@ test.describe("F3 on a phone: the Leg section is read-only (docs/course-editor.m
     await expect(page.getByTestId("editor-action-add-bend")).toHaveCount(0);
   });
 });
+
+// F10 (docs/course-layout.md §8): Layout mode's Setter maps section, Move to next setter, Recalculate, Export ▾ Setter
+// maps. Its own describe at the end of the file, so the parallel rows' edits above merge cleanly.
+test.describe("F10: setter maps (docs/course-layout.md §8)", () => {
+  desktopOnly();
+
+  type Listed = { seq: number; kind: string; courseId: number | null; windowCenter: Pt | null; template: { autoKey: string | null } | null; setter: { index: number; controls: number[] } | null };
+  const setterSheets = async () =>
+    (await trpcCall<Listed[]>("courseMap.list", undefined, false)).filter((s) => s.kind === "setter" && s.courseId === null).sort((a, b) => a.setter!.index - b.setter!.index);
+
+  test.afterEach(async () => {
+    for (const s of await setterSheets()) await trpcCall("courseMap.delete", { id: s.seq });
+  });
+
+  test("Setter maps 2 in view All: two sheets listed, a control moved to the next setter and back, Recalculate, two pages", async ({ page }) => {
+    await openEditor(page);
+    await page.getByTestId("editor-view-all").click();
+    await page.getByTestId("editor-mode-layout").click();
+    await expect(page.getByTestId("editor-layout-setter")).toBeVisible({ timeout: 30_000 });
+    await expect(page.getByTestId("editor-layout-setter-scope")).toHaveText(/event/i);
+
+    await page.getByTestId("editor-layout-setter-groups").fill("2");
+    page.once("dialog", (d) => void d.accept());
+    const generated = waitForTrpc(page, "layout.setterMaps");
+    await page.getByTestId("editor-layout-setter-generate").click();
+    await generated;
+    const rows = page.getByTestId("editor-layout-setter-row");
+    await expect(rows).toHaveCount(2, { timeout: 30_000 });
+    await expect(rows.nth(0)).toHaveAttribute("data-setter", "1");
+    const [s1, s2] = await setterSheets();
+    expect(s1.setter!.controls.length + s2.setter!.controls.length).toBeGreaterThan(2);
+    for (const s of [s1, s2]) expect(s.template?.autoKey).toMatch(/^A4-(portrait|landscape)-(4000|5000|7500|10000|15000)$/);
+    // The first opens.
+    const scope = page.getByTestId("editor-layout-scope");
+    await expect(scope).toHaveAttribute("data-sheet", String(s1.seq), { timeout: 30_000 });
+
+    // Setter 2: its controls; Move to next setter wraps to setter 1; undo moves it back.
+    await rows.nth(1).click();
+    await expect(scope).toHaveAttribute("data-sheet", String(s2.seq), { timeout: 30_000 });
+    const control = page.getByTestId("editor-layout-setter-control").first();
+    await expect(control).toBeVisible();
+    const id = Number(await control.getAttribute("data-control-id"));
+    const moved = waitForTrpc(page, "layout.moveToSetter");
+    await control.getByTestId("editor-layout-setter-move").click();
+    await moved;
+    await expect.poll(async () => (await setterSheets())[0].setter!.controls.includes(id), { timeout: 15000 }).toBe(true);
+    expect((await setterSheets())[1].setter!.controls).not.toContain(id);
+    await expect(page.locator(`[data-testid="editor-layout-setter-control"][data-control-id="${id}"]`)).toHaveCount(0, { timeout: 15000 });
+    const back = waitForTrpc(page, "layout.moveToSetter");
+    await page.getByTestId("editor-undo").click();
+    await back;
+    await expect.poll(async () => (await setterSheets())[1].setter!.controls.includes(id), { timeout: 15000 }).toBe(true);
+
+    // Recalculate: a moved window comes back to the group's centre (window centre NULL).
+    await trpcCall("courseMap.update", { id: s2.seq, windowCenter: { x: 1, y: 1 } });
+    const recalculated = waitForTrpc(page, "layout.recalculateSheet");
+    await page.getByTestId("editor-layout-recalculate").click();
+    await recalculated;
+    expect((await setterSheets())[1].windowCenter).toBeNull();
+
+    // Export ▾ Setter maps: one A4 page per setter sheet.
+    await page.getByTestId("editor-export").click();
+    const [download] = await Promise.all([page.waitForEvent("download"), page.getByTestId("editor-export-setter").click()]);
+    const pdf = await analysePdf(await readFile((await download.path())!));
+    expect(pdf.pages).toBe(2);
+    expect([...pdf.sizeMm].sort((a, b) => a - b)).toEqual([210, 297]);
+  });
+});

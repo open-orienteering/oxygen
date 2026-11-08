@@ -8,7 +8,7 @@
 // (`ensureFixtureFromDesktop`, shared with the editor spec).
 import { devices, expect, test, type BrowserContext, type Page } from "@playwright/test";
 import { reseed } from "./helpers/reseed";
-import { canvasInCircle, editorReady, ensureFixtureFromDesktop, nextFrames, site, sites, toPage, toPaper } from "./helpers/editor";
+import { canvasInCircle, editorReady, ensureFixtureFromDesktop, nextFrames, site, sites, toPage, toPaper, trpcCall } from "./helpers/editor";
 import { touchDrag, touchEnd, touchMove, touchStart, touchTap } from "./helpers/touch";
 
 type Pt = { x: number; y: number };
@@ -383,5 +383,31 @@ test.describe("Field mode on a desktop (docs/course-editor.md §9)", () => {
     await page.getByTestId("editor-mode-course").click();
     await expect(page.getByTestId("editor-tool-rail")).toBeVisible();
     await expect(page.getByTestId("my-location-marker")).toHaveCount(0);
+  });
+
+  // F10 (docs/course-editor.md §9; 08 §5.5 "the selected course or setter map").
+  test("the setter-map picker lists the setter maps; picked, the list is the setter's controls in code order", async ({ page }) => {
+    type Listed = { seq: number; name: string; kind: string; setter: { index: number; controls: number[] } | null };
+    await trpcCall("layout.setterMaps", { groups: 2 });
+    try {
+      const setters = (await trpcCall<Listed[]>("courseMap.list", undefined, false)).filter((s) => s.kind === "setter").sort((a, b) => a.setter!.index - b.setter!.index);
+      expect(setters).toHaveLength(2);
+      await openEditor(page);
+      await page.getByTestId("editor-mode-field").click();
+      const picker = page.getByTestId("editor-field-setter-picker");
+      await expect(picker.locator("option")).toHaveCount(3, { timeout: 15000 });
+      await picker.selectOption(String(setters[0].seq));
+      const list = page.getByTestId("editor-field-list");
+      await expect(list).toHaveAttribute("data-setter", String(setters[0].seq));
+      const rows = list.getByTestId("editor-field-row");
+      await expect(rows).toHaveCount(setters[0].setter!.controls.length, { timeout: 15000 });
+      expect((await rows.evaluateAll((els) => els.map((e) => Number(e.getAttribute("data-control-id")))))).toEqual(setters[0].setter!.controls);
+      await expect(page.getByTestId("editor-field-setter-kpi")).toContainText("Setter 1");
+      // None: the course's list again (or the "pick a course" line without one).
+      await picker.selectOption("");
+      await expect(page.locator('[data-testid="editor-field-list"]:not([data-setter=""])')).toHaveCount(0);
+    } finally {
+      for (const s of (await trpcCall<Listed[]>("courseMap.list", undefined, false)).filter((m) => m.kind === "setter")) await trpcCall("courseMap.delete", { id: s.seq });
+    }
   });
 });

@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { COURSE_FIT_MARGIN_MM, defaultTemplateSettings, fitOrientation, pickAutoTemplate, templateAutoKey, templateKeyName } from "../course-maps/auto-template.js";
+import { COURSE_FIT_MARGIN_MM, STANDARD_PRINT_SCALES, defaultTemplateSettings, fitOrientation, fitScale, pickAutoTemplate, templateAutoKey, templateKeyName } from "../course-maps/auto-template.js";
 
 describe("templateAutoKey (course-layout.md §5)", () => {
   it("is paper-orientation-scale", () => {
@@ -82,6 +82,41 @@ describe("fitOrientation — 08 §4.6 window defaults", () => {
   it("takes the closer one when neither fits", () => {
     expect(fitOrientation({ width: 600, height: 300 }, 1, "A4", "portrait", 3)).toBe("landscape");
     expect(fitOrientation({ width: 300, height: 600 }, 1, "A4", "landscape", 3)).toBe("portrait");
+  });
+});
+
+describe("fitScale — 08 §4.6 setter / all-controls recalculation (course-layout.md §8)", () => {
+  // A4 portrait less a 3 mm margin: 204 × 291 mm; less the fit margin: 192 × 279 mm of course.
+  const W = 210 - 6 - 2 * COURSE_FIT_MARGIN_MM;
+
+  it("lists the standard scales 1:4 000 … 1:15 000, largest map first", () => {
+    expect(STANDARD_PRINT_SCALES).toEqual([4000, 5000, 7500, 10000, 15000]);
+  });
+
+  it("takes the largest scale whose frame holds the extent with the margin", () => {
+    // 100 × 100 map mm at 1:10 000 is 1 km square: 250 mm at 1:4 000, 200 at 1:5 000, 133 at 1:7 500.
+    expect(fitScale({ width: 100, height: 100 }, 10000, "A4", "portrait", 3)).toEqual({ orientation: "portrait", printScale: 7500 });
+    // A small group prints at 1:4 000.
+    expect(fitScale({ width: 30, height: 20 }, 10000, "A4", "portrait", 3)).toEqual({ orientation: "portrait", printScale: 4000 });
+  });
+
+  it("turns the sheet before taking a smaller scale", () => {
+    // 270 × 150 mm at 1:10 000: at 1:10 000 only landscape (279 mm wide) holds it.
+    expect(fitScale({ width: 270, height: 150 }, 10000, "A4", "portrait", 3)).toEqual({ orientation: "landscape", printScale: 10000 });
+  });
+
+  it("counts the margin on every side", () => {
+    // Exactly W wide at 1:4 000 (a 1:4 000 map) fits portrait; a millimetre more goes landscape.
+    expect(fitScale({ width: W, height: 100 }, 4000, "A4", "portrait", 3)).toEqual({ orientation: "portrait", printScale: 4000 });
+    expect(fitScale({ width: W + 1, height: 100 }, 4000, "A4", "portrait", 3)).toEqual({ orientation: "landscape", printScale: 4000 });
+  });
+
+  it("falls back to 1:15 000 in the closer orientation when nothing fits", () => {
+    expect(fitScale({ width: 2000, height: 900 }, 10000, "A4", "portrait", 3)).toEqual({ orientation: "landscape", printScale: 15000 });
+  });
+
+  it("an empty extent (one control) takes the largest scale in the preferred orientation", () => {
+    expect(fitScale({ width: 0, height: 0 }, 15000, "A4", "landscape", 3)).toEqual({ orientation: "landscape", printScale: 4000 });
   });
 });
 

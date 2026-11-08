@@ -7,7 +7,17 @@
 
 import { TRPCError } from "@trpc/server";
 import { z } from "zod";
-import { autoSheets, ensureAllControlsSheet, type AutoSheetsResult } from "../course-maps/auto-sheets.js";
+import {
+  autoSheets,
+  ensureAllControlsSheet,
+  MAX_SETTER_GROUPS,
+  moveToSetter,
+  recalculateSheet,
+  setterMaps,
+  type AutoSheetsResult,
+  type RecalculatedSheet,
+  type SetterMapsResult,
+} from "../course-maps/auto-sheets.js";
 import { coursesEditProcedure, coursesViewProcedure, router } from "../trpc.js";
 
 /** "All courses" on a large event creates many sheets in one transaction: more than Prisma's 5 s default. */
@@ -61,6 +71,38 @@ export const layoutRouter = router({
         return out;
       }, AUTO_SHEETS_TX);
     }),
+
+  /**
+   * Setter maps (docs/course-layout.md §8; 08 §4.6, §6 `layout.setterMaps`):
+   * the scope's — the event's, or with `courseId` that course's — setter
+   * sheets replaced by `groups` sheets of geographically grouped controls,
+   * each on the A4 auto template fitted to its group. Regenerating replaces
+   * them (edits on the old ones are lost).
+   */
+  setterMaps: coursesEditProcedure
+    .input(z.object({ courseId: z.number().int().positive().optional(), groups: z.number().int().min(1).max(MAX_SETTER_GROUPS) }))
+    .mutation(async ({ ctx, input }): Promise<SetterMapsResult> => {
+      const course =
+        input.courseId === undefined
+          ? null
+          : await ctx.db.course.findFirst({ where: { eventId: ctx.event.id, seq: input.courseId, removed: false }, select: { id: true } });
+      if (input.courseId !== undefined && !course) throw new TRPCError({ code: "NOT_FOUND", message: "Course not found" });
+      return ctx.db.$transaction((tx) => setterMaps(tx, ctx.event.id, { courseUuid: course?.id ?? null, groups: input.groups }), AUTO_SHEETS_TX);
+    }),
+
+  /** *Move to next setter* (§8): the control (public id) leaves its setter map of `sheet`'s scope for `sheet`; windows stay. */
+  moveToSetter: coursesEditProcedure
+    .input(z.object({ controlId: z.number().int().positive(), sheet: z.number().int().positive() }))
+    .mutation(async ({ ctx, input }) =>
+      ctx.db.$transaction((tx) => moveToSetter(tx, ctx.event.id, { controlId: input.controlId, sheetSeq: input.sheet })),
+    ),
+
+  /** *Recalculate* (§6, §8): an all-controls or setter sheet refitted — scale, orientation, centred window, the block's position. */
+  recalculateSheet: coursesEditProcedure
+    .input(z.object({ sheet: z.number().int().positive() }))
+    .mutation(async ({ ctx, input }): Promise<RecalculatedSheet> =>
+      ctx.db.$transaction((tx) => recalculateSheet(tx, ctx.event.id, input.sheet)),
+    ),
 
   /** A course's classes with their print overrides and sheets (the Layout inspector, Class view). */
   classOverrides: coursesViewProcedure

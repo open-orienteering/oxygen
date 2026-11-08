@@ -17,7 +17,11 @@ the same geometry.
 
 An all-controls sheet is a `course_maps` row with
 `kind = 'all_controls'` and no course. A partial unique index allows one such
-map per event.
+map per event. A setter map (F10, `course-layout.md` §8) is a row with
+`kind = 'setter'`, `course_id` NULL (the event's) or set (a course's), and
+its group in `props { setter, controlIds }`; migration
+`20261108150000_course_maps_setter_kind` relaxed the two CHECK
+constraints that held `kind` to `course` / `all_controls`.
 
 ## Coordinate spaces and scale
 
@@ -158,8 +162,11 @@ Event-scoped tRPC routers:
   that part; the answer's `allControlsSheet` is its seq),
   `classOverrides { courseId }`,
   `setClassOverride { classId, printScale?, sheetTemplateId? }`
-  (`course-layout.md` §5–§6)
-- `courseMap` — list with validation (each row with its `class`, the
+  (`course-layout.md` §5–§6); `setterMaps { courseId?, groups }`,
+  `moveToSetter { controlId, sheet }`, `recalculateSheet { sheet }`
+  (F10, `course-layout.md` §6, §8)
+- `courseMap` — list with validation (each row with its `class`, a
+  setter sheet's `setter { index, controls }`, the
   template's key, `resolved` — document and window — and `validation`;
   the overlay itself is `resolveSheet`'s), get, create, update, delete,
   reorder, `saveLayout` (the sheet only: window centre, print scale,
@@ -180,6 +187,7 @@ GET /api/maps/:nameId/maps.pdf
     ?courses=3,4         (the courses' own sheets)
     ?classes=5,6         (per class: its sheets, else its course's as it prints)
     ?allControls=1
+    ?setter=1            (every setter sheet, F10)
 
 GET /api/maps/:nameId/graphics/:id
 ```
@@ -197,9 +205,10 @@ the document in a worker thread, off the event loop (`course-print.md`
 reason.
 Combined PDF pages are ordered by course, map `sort_order`, then map
 `seq`; with `classes`, by the classes in the order asked. One of `maps`,
-`courses`, `classes` (400 otherwise); without a selection, every course's
+`courses`, `classes`, `setter` (400 otherwise); without a selection, every course's
 own sheet and the all-controls sheet — a class's sheets print through
-`classes` or `maps` only (`course-layout.md` §7).
+`classes` or `maps` only, a setter sheet through `setter` or `maps`
+(`courses` prints `kind = 'course'` rows only; `course-layout.md` §7).
 
 ## Where sheets and templates are managed
 

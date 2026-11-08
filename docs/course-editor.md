@@ -53,7 +53,7 @@ offers *Course* (the selected course full-strength, other controls faded)
 and *All controls* (every site with its code, no legs; the inspector keeps
 the selected course). *Class* (`editor-view-class`, a picker of the
 selected course's classes) is the course as that class prints it —
-`course-layout.md` §6 "Class view". Variant and setter views are F.
+`course-layout.md` §6 "Class view". A variant view is F7's; there is no setter view (slice F split): a setter map is a sheet and a Field-mode pick (§9, `course-layout.md` §8).
 
 ## 2. Anatomy
 
@@ -1014,6 +1014,23 @@ the selection and the undo history (`editorReducer`'s `mode`).
   `data-bearing-deg`, `data-checked`; distance / bearing blank without a
   fix or a position) — tap selects the control and centres it. No course
   selected: "Pick a course to list its controls."
+- **A setter map** (F10; 08 §5.5 "the selected course or setter map";
+  `course-layout.md` §8): above the list, when the event has setter
+  maps, the picker `editor-field-setter-picker` (*None*, then every setter
+  sheet — the event's first, then by course and setter number,
+  `allSetterSheets`). Picked, the list (`editor-field-list`,
+  `data-setter` = the sheet's seq) is that setter's controls in the
+  sheet's code order (`courseMap.list` `setter.controls`,
+  `setterRowInputs` in `lib/editor/setter-maps.ts`; start and finish as
+  such, every other kind a checkable control row), with the same
+  distance, bearing, tap and check-off, and a line
+  `editor-field-setter-kpi` "Setter n · k/m checked"; a course need not be
+  selected. *None* is the course's list. The pick is the list's
+  (`FieldSection`, phone and desktop alike): the top bar's course picker
+  and the peek line's KPI stay the course's, and the canvas keeps the
+  course's highlight (Pending: a setter's controls highlighted on the
+  map needs the layer request, F7's files). Decided on the user's
+  standing instruction (2026-11-07), for review.
 - **The selection** adds above the site fields of §6.6 (notes there
   unchanged): distance and bearing (`editor-field-selection-distance`),
   the check-off toggle and the nudge pad.
@@ -1335,7 +1352,8 @@ whose poll ran meanwhile simply does not conflict (decision log, D10).
 | E2E | `e2e/course-editor.spec.ts` "P6: the map footer out; the map-info dialog" (`chromium`) | §2 (P6): no footer — the viewer reaches `map-panel`'s bottom (< 4 px), no `map-review-link`, *Replace map* or `use-club-map` in the panel; `editor-map-info` follows `editor-export` in document order and opens `editor-map-info-dialog` (`role="dialog"`, `aria-modal`, `aria-expanded`; focus inside it through five Tabs and six Shift+Tabs) with the name (`.ocd`), the scale (`data-scale`, "1:"), the north row, the file (`data-bytes` > 0), the document (`data-source="ocad"`, objects and symbols > 0, importer `ocad-‹n›`), *Review symbols* (`href` `/map-review/‹64 hex›`), *Replace map*, at most one *From club library*; the close button and a backdrop click close it, and the course-info popover has no scale row; *Replace map* opens a single-file chooser with `accept=".ocd"` and changes nothing; the backdrop is the element at the page's corner (it covers the shell's header); Escape with `K` armed closes only the dialog (a letter pressed while open does not switch the tool; the next Escape returns to `V`), and with a control selected keeps the selection and the course; an event with no map: `editor-map-info-none`, no scale, no review, *Upload map*. `e2e/map-review.spec.ts` and `e2e/club-map-library.spec.ts` reach the review link, the north-lines badge and the club picker through the dialog (the picker's Escape closes it before the dialog's; a pick from it closes the picker, keeps the dialog without an error, and its `editor-map-info-file` `data-uploaded` follows the new map row); `e2e/mobile-layout.spec.ts` asserts no `editor-map-info` and no *Replace map* in the phone editor; `e2e/editor-fullscreen.spec.ts` opens the dialog in fullscreen (inside `document.fullscreenElement`), and its Escape keeps fullscreen |
 | unit (web) | `lib/__tests__/course-overlay-ids.test.ts` | §6.1 (P5): the overlay ids of a start-only course (the regression) and a finish-only one; a full course with explicit ends; the explicit ends win over the nearest; the legacy fallback to the start nearest the first control and the finish nearest the last; no controls and no explicit end → the event default (lowest id); a stale id or one of the wrong role treated as none; none under `firstAsStart` / `lastAsFinish`; no start or finish in the event; an end already at the head or tail not repeated; an unpositioned first control keeps the explicit start, else the default |
 | E2E | `e2e/course-editor.spec.ts` "P5: the pending leg from a just-placed start" (`chromium`) | §6.1 (P5): on a fresh course the armed `K`'s hover draws a `course-leg` piece from the default start (the inspector's start row) to the cursor; `S` places a start (`course.setStructure`), the start row names it and `K` is pressed; the hover shows `editor-leg-length` "‹n› m" and a `course-leg` piece from the new start's rim to the cursor's; the click adds the control row, and after `Esc` (no label) the leg start → control is still drawn |
-| E2E | `e2e/field-mode.spec.ts` (`mobile` project: Pixel 7, `vector`) | §10: opens in Field mode, full-bleed, compact bar and overflow, no rail / inspector / `editor-stats`, the sheet's status line (`editor-status`, `editor-save-state` `saved`) (P2), ≥ 44 px targets; §9: `setGeolocation` → the marker with its accuracy, every row's distance and bearing = the paper geometry at one scale; detents (tap, handle drag to full) and a list row's control centred above the sheet; a quick drag on an unselected control pans without selecting, a long press selects, shows the stem and the loupe (`editor-loupe`, 120 px, above the handle; the canvas inside it differs from the same circle after release — the 1× map — and has the map's purple; gone on release) and drops the control 48 px above the finger (persisted); two fingers cancel a pending press and zoom; nudge 2 × 0.1 mm, 1 m, the x field, four undos back; `+` → `K` → Place above the sheet adds a site, Done; a tap on an `oob_area`'s outline (created through `courseObject.create`) selects it, a tap inside deselects it (D12), and two fingers on its corners scale it by their spread, the map's zoom unchanged; check-off persists over a reload; offline: the notice, `+` disabled, a long-press move snaps back. "Field mode on a desktop" (desktop viewport in the same spec): the mode switch, no rail, the list's distance after a fix, check-off and `Ctrl+Z`, back to Course mode |
+| E2E | `e2e/field-mode.spec.ts` (`mobile` project: Pixel 7, `vector`) | §10: opens in Field mode, full-bleed, compact bar and overflow, no rail / inspector / `editor-stats`, the sheet's status line (`editor-status`, `editor-save-state` `saved`) (P2), ≥ 44 px targets; §9: `setGeolocation` → the marker with its accuracy, every row's distance and bearing = the paper geometry at one scale; detents (tap, handle drag to full) and a list row's control centred above the sheet; a quick drag on an unselected control pans without selecting, a long press selects, shows the stem and the loupe (`editor-loupe`, 120 px, above the handle; the canvas inside it differs from the same circle after release — the 1× map — and has the map's purple; gone on release) and drops the control 48 px above the finger (persisted); two fingers cancel a pending press and zoom; nudge 2 × 0.1 mm, 1 m, the x field, four undos back; `+` → `K` → Place above the sheet adds a site, Done; a tap on an `oob_area`'s outline (created through `courseObject.create`) selects it, a tap inside deselects it (D12), and two fingers on its corners scale it by their spread, the map's zoom unchanged; check-off persists over a reload; offline: the notice, `+` disabled, a long-press move snaps back. "Field mode on a desktop" (desktop viewport in the same spec): the mode switch, no rail, the list's distance after a fix, check-off and `Ctrl+Z`, back to Course mode; F10: the setter-map picker (*None* + two after `layout.setterMaps { groups: 2 }`), Setter 1 picked → its controls in the sheet's order and the KPI, *None* → the course's list |
+| unit (web) | `lib/editor/__tests__/setter-maps.test.ts` "a setter's Field rows" | §9 (F10): the sheet's order, start / finish as such, other kinds as controls, unknown ids left out, distance / bearing / checked through `fieldRows` |
 | unit, integration, E2E | `course-layout.md` "Tests" | Layout mode |
 | unit (web) | `pages/editor/__tests__/placement.test.ts` "X: the map exchange tool", `rail.test.ts` "railKeyOf", `lib/editor/__tests__/sequence.test.ts` "part headings" | §6.9: `X` armed, numbered and advanced as a control, `K` ↔ `X` keep the chain, not a chain end; the rail lights `X`; the exchange row marked, part 1 before the first row and part 2 after the exchange, none without one |
 | E2E | `e2e/course-editor.spec.ts` "F5: map exchange" | §6.9: `X` after a selected control → the ghost `2 · code`, the chain stays armed, three rows with the exchange second and two part headings, the exchange labelled 2, the on-map 13.5 row; Export ▾ this course → two pages, two own sheets with different windows; Layout mode → part 2's sheet (`data-section` 1) deleted → `EXCHANGE_WITHOUT_SHEET` with *Part 2* |
@@ -1353,6 +1371,9 @@ whose poll ran meanwhile simply does not conflict (decision log, D10).
   F4; §6.9, F5): the phone's + menu offers none of them, and its rail has
   no `C` or `X`; a tapped crossing or map-issue point or exchange selects
   (delete, notes) as any site.
+- **A picked setter map on the canvas** (§9, F10): Field mode lists the
+  setter's controls, but the map keeps the course's highlight; drawing the
+  setter's group highlighted goes through the layer request (F7's files).
 
 - **Selection highlight through the dynamic bucket** (04 §7: the
   selected object's passes redrawn in a highlight colour): the selection
