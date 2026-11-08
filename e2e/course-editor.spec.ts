@@ -3358,11 +3358,36 @@ test.describe("F7: variations and loops (docs/course-editor.md §12)", () => {
     await expect(page.getByTestId("editor-variation-loop")).toBeChecked({ timeout: 15000 });
     await expect.poll(keys, { timeout: 15000 }).toEqual(["AB", "BA"]);
 
-    // Export ▾ this course still prints (the root; per-variant pages are F8's).
+    // F8 (course-print.md §4.6): Export ▾ this course prints one page per variant, AB and BA; All variations one page.
+    const exported = async (entry: string) => {
+      await page.getByTestId("editor-export").click();
+      const [download] = await Promise.all([page.waitForEvent("download"), page.getByTestId(`editor-export-${entry}`).click()]);
+      return analysePdf(await readFile((await download.path())!));
+    };
     await page.getByTestId("editor-export").click();
-    const [download] = await Promise.all([page.waitForEvent("download"), page.getByTestId("editor-export-course").click()]);
-    expect((await analysePdf(await readFile((await download.path())!))).pages).toBeGreaterThanOrEqual(1);
+    await expect(page.getByTestId("editor-export-course")).toContainText("2 variants");
+    // No runner is assigned yet: no hand-out stack to print.
+    await expect(page.getByTestId("editor-export-courseRunners")).toBeDisabled();
     await page.keyboard.press("Escape");
+    expect((await exported("course")).pages).toBe(2);
+    expect((await exported("allVariations")).pages).toBe(1);
+
+    // Layout mode draws the sheet as one variant (the first key); Variant ▾ picks another, the mode kept.
+    await page.getByTestId("editor-mode-layout").click();
+    await expect(page.getByTestId("editor-layout-scope")).toHaveAttribute("data-sheet", /\d+/, { timeout: 30_000 });
+    await expect(page.getByTestId("editor-view-variant")).toHaveValue("AB");
+    await expect(page.getByTestId("editor-view-all-variations")).toHaveCount(0);
+    const read = waitForTrpc(page, "courseMap.resolveSheet");
+    await page.getByTestId("editor-view-variant").selectOption("BA");
+    await read;
+    await expect(page.getByTestId("editor-view-variant")).toHaveValue("BA");
+    await expect(page.getByTestId("editor-mode-layout")).toHaveAttribute("aria-pressed", "true");
+    await page.getByTestId("editor-export").click();
+    await expect(page.getByTestId("editor-export-variant")).toContainText("BA");
+    await page.keyboard.press("Escape");
+    expect((await exported("variant")).pages).toBe(1);
+    await page.getByTestId("editor-mode-course").click();
+    await expect(page.getByTestId("editor-mode-course")).toHaveAttribute("aria-pressed", "true");
 
     // Undo: the loop, the placement, the group — each one entry; the course is plain again.
     await page.evaluate(() => (document.activeElement as HTMLElement | null)?.blur());
