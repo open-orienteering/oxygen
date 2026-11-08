@@ -3523,22 +3523,50 @@ test.describe("F13: Bézier bends (docs/course-layer.md §10.1)", () => {
   test("a curved leg written over tRPC draws purple at the curve's apex, not at the chord's midpoint; the print is one page", async ({ page }) => {
     await openEditor(page);
     const nameId = nameIdOf(page);
-    const [codeA, codeB] = await regularCodes(page, 2);
-    expect(codeB, "two regular controls clear of the drawn legs").toBeTruthy();
-    const a = await site(page, codeA), b = await site(page, codeB);
     const controls = await trpcCall<{ id: number; codes: string }[]>("control.list", undefined, false);
     const idOf = (code: string) => controls.find((c) => c.codes.split(";").includes(code))!.id;
 
-    // One smooth bend off the chord's midpoint by 0.3 of the leg (towards the view's centre), its handles along the
-    // chord: an arch through it.
-    const len = Math.hypot(b.mm.x - a.mm.x, b.mm.y - a.mm.y);
-    const u = { x: (b.mm.x - a.mm.x) / len, y: (b.mm.y - a.mm.y) / len };
-    const chordMid = { x: (a.mm.x + b.mm.x) / 2, y: (a.mm.y + b.mm.y) / 2 };
-    const centre = await viewCentre(page);
-    const towards = (centre.x - chordMid.x) * -u.y + (centre.y - chordMid.y) * u.x >= 0 ? 1 : -1;
-    const n = { x: -u.y * towards, y: u.x * towards };
+    // One smooth bend off the chord's midpoint by a fraction of the leg, its handles along the chord: an arch through
+    // it. The pair, the side and the fraction are chosen so the apex and the chord's midpoint lie in view, 6 mm clear of
+    // every site (legs are clipped at the sites) and of the default start's and finish's legs into the pair.
+    const all = await sites(page);
+    const ends = all.filter((s) => s.type !== "Control").map((s) => s.mm);
+    const viewer = (await page.getByTestId("map-viewer").boundingBox())!;
+    const segDist = (p: Pt, a: Pt, b: Pt) => {
+      const dx = b.x - a.x, dy = b.y - a.y, l2 = dx * dx + dy * dy;
+      const t = l2 === 0 ? 0 : Math.max(0, Math.min(1, ((p.x - a.x) * dx + (p.y - a.y) * dy) / l2));
+      return Math.hypot(p.x - (a.x + dx * t), p.y - (a.y + dy * t));
+    };
+    const clear = async (p: Pt, a: Pt, b: Pt) => {
+      const q = await toPage(page, p);
+      const inView = q.x > viewer.x + 60 && q.x < viewer.x + viewer.width - 100 && q.y > viewer.y + 60 && q.y < viewer.y + viewer.height - 120;
+      return inView && all.every((s) => Math.hypot(s.mm.x - p.x, s.mm.y - p.y) > 6) && ends.every((e) => segDist(p, e, a) > 3 && segDist(p, b, e) > 3);
+    };
+    const codes = await regularCodes(page, 6);
+    let pick: { a: Site; b: Site; apex: Pt; chordMid: Pt; u: Pt; len: number } | null = null;
+    search: for (let i = 0; i < codes.length; i++) {
+      for (let j = 0; j < codes.length; j++) {
+        if (i === j) continue;
+        const sa = await site(page, codes[i]), sb = await site(page, codes[j]);
+        const len = Math.hypot(sb.mm.x - sa.mm.x, sb.mm.y - sa.mm.y);
+        if (len < 15) continue;
+        const u = { x: (sb.mm.x - sa.mm.x) / len, y: (sb.mm.y - sa.mm.y) / len };
+        const chordMid = { x: (sa.mm.x + sb.mm.x) / 2, y: (sa.mm.y + sb.mm.y) / 2 };
+        if (!(await clear(chordMid, sa.mm, sb.mm))) continue;
+        for (const k of [0.3, -0.3, 0.2, -0.2]) {
+          const apex = { x: chordMid.x - u.y * k * len, y: chordMid.y + u.x * k * len };
+          if (await clear(apex, sa.mm, sb.mm)) {
+            pick = { a: sa, b: sb, apex, chordMid, u, len };
+            break search;
+          }
+        }
+      }
+    }
+    expect(pick, "a pair of regular controls with a clear apex and chord midpoint").not.toBeNull();
+    const { a, b, chordMid, u, len } = pick!;
+    const codeA = a.code, codeB = b.code;
     const r2 = (v: number) => Math.round(v * 100) / 100;
-    const apex = { x: r2(chordMid.x + n.x * 0.3 * len), y: r2(chordMid.y + n.y * 0.3 * len) };
+    const apex = { x: r2(pick!.apex.x), y: r2(pick!.apex.y) };
     const h = { x: r2(u.x * 0.25 * len), y: r2(u.y * 0.25 * len) };
     const bend = { ...apex, hIn: { x: -h.x, y: -h.y }, hOut: h };
 
