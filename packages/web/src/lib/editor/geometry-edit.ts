@@ -153,7 +153,8 @@ export function symmetricHandles(g: readonly Vertex[], index: number, vec: Pt): 
 }
 
 /**
- * A smooth vertex (Alt while drawing, docs/course-editor.md §6.4): uniform
+ * A smooth vertex (the default while drawing and inserting, F18;
+ * docs/course-editor.md §6.4, §7): uniform
  * Catmull-Rom handles from its neighbours — `hOut = (next − prev) / 6`,
  * `hIn = −hOut`. A closed path of three or more vertices wraps (the first
  * vertex's prev is the last); a vertex without both neighbours (an open
@@ -169,9 +170,22 @@ export function smoothHandles(g: readonly Vertex[], index: number, closed: boole
   return g.map((v, i) => (i === index ? withHandles(v, hOut && neg(hOut), hOut) : v));
 }
 
-/** Alt-click on a vertex with handles: back to a corner. */
+/** A vertex back to a corner (its handles dropped). */
 export function retractHandles(g: readonly Vertex[], index: number): Vertex[] {
   return g.map((v, i) => (i === index ? withHandles(v, undefined, undefined) : v));
+}
+
+/**
+ * Alt-click on a vertex (F18, docs/course-editor.md §7): one with a handle
+ * becomes a corner (`retractHandles`), a corner smooth (`smoothHandles`,
+ * `closed` wrapping the ends). Null when nothing would change — an open
+ * path's end corner (it has no smooth form), an index out of range.
+ */
+export function toggleSmooth(g: readonly Vertex[], index: number, closed: boolean): Vertex[] | null {
+  if (index < 0 || index >= g.length) return null;
+  if (hasHandles(g[index])) return retractHandles(g, index);
+  const out = smoothHandles(g, index, closed);
+  return hasHandles(out[index]) ? out : null;
 }
 
 /**
