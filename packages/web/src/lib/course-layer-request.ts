@@ -19,6 +19,8 @@ export interface RequestControl {
   code: string;
   /** How the site draws (course-layer.md §10.3): crossing and map-issue points are never items; an exchange is a `Control`. */
   type: "Start" | "Control" | "Finish" | "Crossing" | "MapIssue";
+  /** A `Control` that is a map exchange (`controls.kind`, course-layer.md §11): the layer splits the course into parts at it. */
+  exchange?: boolean;
   visible?: boolean;
   /** `controls.circle_gaps`: authored cuts, compass degrees; non-empty replaces the automatic ones (course-layer.md §6.4). */
   circleGaps?: course.AngularGap[];
@@ -101,6 +103,8 @@ export interface LayoutRequest {
   page: PageLayerRequest;
   appearance: course.CourseAppearance;
   overprintScale: number;
+  /** The sheet's part of a course split by map exchanges (`course_maps.section_index`, course-layer.md §11). */
+  section?: number;
 }
 
 /**
@@ -195,6 +199,25 @@ export function sheetCrossings(
   return out;
 }
 
+/**
+ * The on-map sheet's derived map-exchange rows (`buildDescriptionSheet`'s
+ * `exchanges`; course-layer.md §11): one per exchange visit of the course's
+ * id list, after the exchange control (its code as the sheet's row id).
+ */
+export function sheetExchanges(
+  c: { controls: readonly string[] },
+  overlays: readonly { id: string; code: string; exchange?: boolean }[] | undefined,
+): { afterControlId: number }[] {
+  const out: { afterControlId: number }[] = [];
+  for (const cid of c.controls) {
+    const o = overlays?.find((x) => x.id === cid);
+    if (!o?.exchange) continue;
+    const id = Number.parseInt(String(o.code), 10);
+    if (Number.isFinite(id)) out.push({ afterControlId: id });
+  }
+  return out;
+}
+
 export function courseLayerRequest(input: CourseRequestInput): CourseLayerRequest {
   const sites: course.CourseSite[] = [];
   const codeOf = new Map<string, string>();
@@ -203,7 +226,8 @@ export function courseLayerRequest(input: CourseRequestInput): CourseLayerReques
     if (c.visible === false || input.exclude?.has(c.id)) continue;
     const p = input.positions.get(c.id);
     if (!p || (p.x === 0 && p.y === 0)) continue;
-    sites.push({ id: c.id, code: c.code, kind: KIND[c.type], x: p.x, y: p.y, ...(c.circleGaps?.length ? { circleGaps: c.circleGaps } : {}) });
+    const kind = c.exchange && c.type === "Control" ? "map_exchange" : KIND[c.type];
+    sites.push({ id: c.id, code: c.code, kind, x: p.x, y: p.y, ...(c.circleGaps?.length ? { circleGaps: c.circleGaps } : {}) });
   }
   const highlighted = input.courses.filter((c) => c.highlight || c.name === input.highlightCourseName);
   const pv = highlighted.length === 1 ? input.provisional ?? null : null;
@@ -260,7 +284,12 @@ export function courseLayerRequest(input: CourseRequestInput): CourseLayerReques
       ...(input.setterMarks ? { setterMarks: true } : {}),
       ...(input.autoCuts === false ? { autoCuts: false } : {}),
       ...(input.layout
-        ? { overprintScale: input.layout.overprintScale, window: course.mapLayerWindow(input.layout.page), ...(input.layout.page.textValues ? { textValues: input.layout.page.textValues } : {}) }
+        ? {
+            overprintScale: input.layout.overprintScale,
+            window: course.mapLayerWindow(input.layout.page),
+            ...(input.layout.page.textValues ? { textValues: input.layout.page.textValues } : {}),
+            ...(input.layout.section !== undefined ? { section: input.layout.section } : {}),
+          }
         : {}),
     },
     ...(input.layout ? { page: input.layout.page } : {}),

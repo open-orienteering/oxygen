@@ -1,6 +1,6 @@
 import { describe, it, expect } from "vitest";
 import type { course } from "@oxygen/shared";
-import { courseLayerRequest, courseObjectsForView, overlayTypeOf, provisionalDrawn, sheetCrossings, PROVISIONAL_SITE_ID, type CourseRequestInput, type ProvisionalVisit, type RequestControl } from "../course-layer-request";
+import { courseLayerRequest, courseObjectsForView, overlayTypeOf, provisionalDrawn, sheetCrossings, sheetExchanges, PROVISIONAL_SITE_ID, type CourseRequestInput, type ProvisionalVisit, type RequestControl } from "../course-layer-request";
 
 const ctl = (id: string, type: RequestControl["type"] = "Control", visible?: boolean): RequestControl => ({ id, code: `c${id}`, type, ...(visible === undefined ? {} : { visible }) });
 const CONTROLS = [ctl("S", "Start"), ctl("1"), ctl("2"), ctl("3"), ctl("F", "Finish")];
@@ -272,5 +272,32 @@ describe("crossing and map-issue points (docs/course-layer.md §10.3, F4)", () =
     const legs = { "S>31": { crossing: { controlId: "P" } }, "31>32": { crossing: { controlId: "P", section: true } } };
     expect(sheetCrossings({ controls: ["S", "31", "32"], legs }, overlays)).toEqual([{ afterControlId: null, section: false }, { afterControlId: 31, section: true }]);
     expect(sheetCrossings({ controls: ["S", "31", "32"], legs, orderMode: "free_order" }, overlays)).toEqual([]);
+  });
+});
+
+describe("map exchange (docs/course-layer.md §11, F5)", () => {
+  // 3 is off course A and hidden, as the editor hides it.
+  const withX = [...CONTROLS.filter((c) => c.id !== "2" && c.id !== "3"), { ...ctl("2"), exchange: true }, ctl("3", "Control", false)];
+  const layout = {
+    page: { paper: { heightMm: 297 }, frame: { x: 10, y: 10, width: 190, height: 277 }, window: { minX: 0, minY: 0, width: 190, height: 277 }, objects: [], description: null },
+    appearance: {},
+    overprintScale: 1,
+  };
+
+  it("an exchange site is a map_exchange in the layer, still on course", () => {
+    const r = courseLayerRequest(base({ controls: withX }));
+    expect(r.sites.find((s) => s.id === "2")!.kind).toBe("map_exchange");
+    expect(r.viewOptions.allControls).toBeUndefined();
+  });
+
+  it("a sheet's section reaches the view options; none without one", () => {
+    expect(courseLayerRequest(base({ controls: withX, layout: { ...layout, section: 1 } })).viewOptions.section).toBe(1);
+    expect(courseLayerRequest(base({ controls: withX, layout })).viewOptions.section).toBeUndefined();
+  });
+
+  it("sheetExchanges: a row after each exchange visit, by its code", () => {
+    const overlays = [{ id: "S", code: "S1" }, { id: "31", code: "31" }, { id: "40", code: "40", exchange: true }, { id: "32", code: "32" }];
+    expect(sheetExchanges({ controls: ["S", "31", "40", "32"] }, overlays)).toEqual([{ afterControlId: 40 }]);
+    expect(sheetExchanges({ controls: ["S", "31"] }, overlays)).toEqual([]);
   });
 });

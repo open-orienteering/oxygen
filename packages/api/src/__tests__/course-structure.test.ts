@@ -1,7 +1,7 @@
 /** The structure ↔ columns mirror (docs/course-layer.md §6.2). */
 
 import { describe, expect, it } from "vitest";
-import { crossingRowsOf, layerPropsOfStored, splitStructure, structureFromColumns, structureToWire, structureFromWire } from "../course-structure.js";
+import { crossingRowsOf, exchangeRowsOf, layerPropsOfStored, splitStructure, structureFromColumns, structureToWire, structureFromWire } from "../course-structure.js";
 
 const KIND: Record<string, string> = { S1: "start", S2: "start", a: "control", b: "control", F1: "finish" };
 const kindOf = (id: string) => KIND[id];
@@ -161,5 +161,19 @@ describe("layerPropsOfStored (the viewer's leg input, course-layer.md §5)", () 
   it("has no legs for a NULL or invalid column", () => {
     expect(layerPropsOfStored(null, () => 1)).toEqual({ legs: {}, hiddenNumbers: [] });
     expect(layerPropsOfStored({ version: 9 }, () => 1)).toEqual({ legs: {}, hiddenNumbers: [] });
+  });
+});
+
+describe("exchangeRowsOf (the derived 13.5 rows, F5)", () => {
+  const publicId = new Map([["S1", 1], ["a", 31], ["x", 40], ["b", 32], ["F1", 2]]);
+  const of = (items: unknown[]) => exchangeRowsOf({ version: 1, id: "c", orderMode: "ordered", items }, (id) => publicId.get(id), (id) => id === "x");
+
+  it("names each exchange item by its public id, in course order", () => {
+    expect(of([{ siteId: "S1" }, { siteId: "a" }, { siteId: "x" }, { siteId: "b" }, { siteId: "F1" }])).toEqual([{ afterControlId: 40 }]);
+  });
+
+  it("is empty for a NULL column or a course without an exchange", () => {
+    expect(exchangeRowsOf(null, () => 1, () => true)).toEqual([]);
+    expect(of([{ siteId: "S1" }, { siteId: "a" }])).toEqual([]);
   });
 });

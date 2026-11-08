@@ -29,7 +29,7 @@ import {
 } from "@oxygen/shared";
 import { z } from "zod";
 import { firstCode } from "../control-id.js";
-import { courseSequenceOf, crossingRowsOf, rowKind, type SequenceColumns } from "../course-structure.js";
+import { courseSequenceOf, crossingRowsOf, exchangeRowsOf, rowKind, type SequenceColumns } from "../course-structure.js";
 
 const objectsSchema = z.array(courseMapObjectSchema);
 
@@ -87,6 +87,8 @@ export interface LayoutCourseSource {
    * §10.3): the block derives its 13.3 / 13.4 rows from them.
    */
   crossings?: ReadonlyArray<{ afterControlId: number | null; section: boolean }>;
+  /** The map exchanges (`exchangeRowsOf`, course-layer.md §11): the block derives its 13.5 rows from them. */
+  exchanges?: ReadonlyArray<{ afterControlId: number }>;
 }
 
 /** A course's `crossings` from its stored structure over the event's controls (public ids: first code, else seq). */
@@ -102,6 +104,19 @@ export function layoutCrossings(structure: unknown, allControls: readonly Layout
       const c = byId.get(uuid);
       return !!c && rowKind({ kind: c.kind ?? "control", status: c.status ?? "" }) === "start";
     },
+  );
+}
+
+/** A course's `exchanges` from its stored structure over the event's controls (public ids as `layoutCrossings`). */
+export function layoutExchanges(structure: unknown, allControls: readonly LayoutControlSource[]): { afterControlId: number }[] {
+  const byId = new Map(allControls.map((c) => [c.id, c]));
+  return exchangeRowsOf(
+    structure,
+    (uuid) => {
+      const c = byId.get(uuid);
+      return c ? firstCode(c.codes) || (c.seq ?? undefined) : undefined;
+    },
+    (uuid) => byId.get(uuid)?.kind === "map_exchange",
   );
 }
 
@@ -356,6 +371,7 @@ export function resolveMapLayout(
       instructions: readInstructions(input.course.descriptionInstructions),
       finishLengthM,
       ...(input.course.crossings?.length ? { crossings: input.course.crossings } : {}),
+      ...(input.course.exchanges?.length ? { exchanges: input.course.exchanges } : {}),
     });
     descriptionHeader = sheet.header;
     descriptionRows = sheet.rows.map((row) => ({

@@ -212,6 +212,30 @@ describe("derived crossing rows (F4; control-descriptions §Course-level instruc
   });
 });
 
+describe("derived map-exchange rows (13.5, F5)", () => {
+  const base = {
+    eventName: "E", classNames: [], courseName: "A", lengthM: 0, climbM: 0,
+    controls: [{ id: 31, code: "31" }, { id: 32, code: "32" }, { id: 33, code: "33" }],
+  };
+  const specials = (sheet: ReturnType<typeof buildDescriptionSheet>) =>
+    sheet.rows.map((r) => (r.kind === "special" ? `${r.symbolKey}${r.lengthM !== undefined ? `:${r.lengthM}` : ""}` : r.kind === "control" ? r.code : r.kind));
+
+  it("13.5 after the exchange control, before a crossing row of the leg that leaves it", () => {
+    expect(specials(buildDescriptionSheet({ ...base, exchanges: [{ afterControlId: 32 }] }))).toEqual(["start", "31", "32", "13.5", "33", "finish"]);
+    expect(specials(buildDescriptionSheet({ ...base, exchanges: [{ afterControlId: 32 }], crossings: [{ afterControlId: 32, section: false }] })))
+      .toEqual(["start", "31", "32", "13.5", "13.3", "33", "finish"]);
+  });
+
+  it("replaces a hand-placed 13.5 at the anchor keeping its length; one elsewhere stays; one row per anchor", () => {
+    const sheet = buildDescriptionSheet({
+      ...base,
+      instructions: { specials: [{ afterControlId: 32, kind: "13.5", lengthM: 50 }, { afterControlId: 31, kind: "13.5" }] },
+      exchanges: [{ afterControlId: 32 }, { afterControlId: 32 }],
+    });
+    expect(specials(sheet)).toEqual(["start", "31", "13.5", "32", "13.5:50", "33", "finish"]);
+  });
+});
+
 describe("pruneDescriptionInstructions", () => {
   it("keeps finish and after-start specials, drops orphans", () => {
     const pruned = pruneDescriptionInstructions(

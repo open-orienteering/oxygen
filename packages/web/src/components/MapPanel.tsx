@@ -335,6 +335,7 @@ function MapPanelImpl({
         lat: c.lat,
         lng: c.lng,
         type: overlayType(c),
+        ...(c.kind === "map_exchange" ? { exchange: true } : {}),
         highlight: isHighlighted,
         visible,
         completionPct,

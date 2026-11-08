@@ -593,6 +593,28 @@ export function crossingRowsOf(
 }
 
 /**
+ * The map exchanges of a stored structure, as the description sheet
+ * derives its 13.5 rows from them (`buildDescriptionSheet`'s `exchanges`;
+ * course-layer.md §11): each the public id of an exchange item, in course
+ * order. The root's path, as `crossingRowsOf`.
+ */
+export function exchangeRowsOf(
+  stored: unknown,
+  publicId: (uuid: string) => number | undefined,
+  isExchange: (uuid: string) => boolean,
+): { afterControlId: number }[] {
+  const parsed = stored ? course.courseStructureSchema.safeParse(stored) : null;
+  if (!parsed?.success) return [];
+  const out: { afterControlId: number }[] = [];
+  for (const item of course.structureControlItems(parsed.data)) {
+    if (!isExchange(item.siteId)) continue;
+    const id = publicId(item.siteId);
+    if (id !== undefined) out.push({ afterControlId: id });
+  }
+  return out;
+}
+
+/**
  * What the viewer's course layer reads of a stored structure (§5, §10):
  * every stored leg whole — `style`, `bends`, `gaps`, `corridor`,
  * `crossing` (its site as a public id, a string like the viewer's site
