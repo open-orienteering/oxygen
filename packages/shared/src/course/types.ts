@@ -129,6 +129,14 @@ export interface CourseViewOptions {
   /** Default `sequence` for one ordered course, else `code`. */
   labelMode?: "sequence" | "code";
   /**
+   * Explicit label text per control-role site, read before the sequence
+   * number and the code (F15, course-layer.md §12.7): All variations sets it
+   * when every visited site has one number across the variants. Ignores
+   * `numberHidden`; a site it omits keeps its code. Start and finish are
+   * never labelled.
+   */
+  labels?: Readonly<Record<string, string>>;
+  /**
    * The event's automatic cuts (`Event.autoOverprintCuts`, course-layer.md
    * §3.4). `false`: no automatic circle slits or leg gaps whatever
    * `cutFeatures` holds; stored `circleGaps` / leg `gaps` still apply.

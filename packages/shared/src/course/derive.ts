@@ -289,7 +289,7 @@ export function deriveCourse(input: CourseLayerInput, m: CourseMetrics): CourseD
   const circles: PlacementCircle[] = sites.filter((s) => !isMark(s.role)).map((s) => {
     const c: PlacementCircle = { id: s.id, x: s.x, y: -s.y, radius: extentOf(s.role) };
     if (s.role === "control" && !hiddenNumber.has(s.id)) {
-      c.label = numbers.get(s.id)?.join("/") ?? s.code;
+      c.label = input.viewOptions.labels?.[s.id] ?? numbers.get(s.id)?.join("/") ?? s.code;
       const off = offsets[s.id];
       if (off) c.fixedLabel = { x: s.x + off.dx, y: -(s.y + off.dy) };
     }
