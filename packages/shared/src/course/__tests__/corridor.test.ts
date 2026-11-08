@@ -1,7 +1,7 @@
 /** Corridor geometry (course-layer.md §10.2): insides joined, the band outside them, the edges along edged legs. */
 
 import { describe, expect, it } from "vitest";
-import { corridorGeometry, type CorridorGeometry } from "../corridor.js";
+import { corridorGeometry, type CorridorGeometry, type CorridorMouths, type CorridorSite } from "../corridor.js";
 import { pointInRings, polylinesCrossRings, ringArea, type FlatRing } from "../../render/geometry.js";
 import type { DerivedCourse, DerivedLeg } from "../types.js";
 import type { MapPoint } from "../../course-maps/schema.js";
@@ -208,6 +208,192 @@ describe("corridorGeometry", () => {
       expect(inBand(g, 310, 15 + 3 + 1.5)).toBe(true);
       expect(g.edges.length).toBeGreaterThan(0);
     });
+  });
+});
+
+/** ISOM 1:15 000 extents (course-layer.md §3.1): 703 R 2.5 mm, 706 outer ring 3.0 mm, 701 circumradius 6 / √3 mm. */
+const EXTENTS = { circleUm: 2500, finishUm: 3000, startUm: 6000 / Math.sqrt(3) };
+/** Sites "0", "1", … at the legs' ends (the course helper's ids), each a control unless `roles` says otherwise; `extra` appended. */
+function mouths(pts: MapPoint[][], roles: Record<string, CorridorSite["role"]> = {}, extra: CorridorSite[] = [], angles: Record<string, number> = {}): CorridorMouths {
+  const at = [pts[0][0], ...pts.map((p) => p[p.length - 1])];
+  const sites: CorridorSite[] = at.map((p, i) => ({ id: `${i}`, role: roles[`${i}`] ?? "control", x: p.x, y: p.y, ...(angles[`${i}`] !== undefined ? { angleDeg: angles[`${i}`] } : {}) }));
+  return { sites: [...sites, ...extra], ...EXTENTS };
+}
+/** Distance from (x, y) µm to the nearest edge of `rings`, µm. */
+function toBoundary(rings: FlatRing[], x: number, y: number): number {
+  let best = Infinity;
+  for (const r of rings) {
+    const n = r.length / 2;
+    for (let i = 0; i < n; i++) {
+      const ax = r[2 * i], ay = r[2 * i + 1], bx = r[(2 * i + 2) % r.length], by = r[(2 * i + 3) % r.length];
+      const dx = bx - ax, dy = by - ay, l2 = dx * dx + dy * dy;
+      const t = l2 ? Math.max(0, Math.min(1, ((x - ax) * dx + (y - ay) * dy) / l2)) : 0;
+      best = Math.min(best, Math.hypot(x - ax - t * dx, y - ay - t * dy));
+    }
+  }
+  return best;
+}
+/** asin(2 / 2.5) in degrees: the half angle of a 4 mm corridor's opening in a 2.5 mm circle. */
+const DELTA = (Math.asin(2 / 2.5) * 180) / Math.PI;
+
+describe("mouths and openings (F19, course-layer.md §10.2)", () => {
+  const LEG = [[P(0, 0), P(20, 0)]];
+
+  it("a narrow corridor's end at a control: the disc joins the inside, the band wraps it at R + whiteMm", () => {
+    const plain = corridorGeometry([course("c", LEG, [C(4, 3)])])!;
+    const g = corridorGeometry([course("c", LEG, [C(4, 3)])], mouths(LEG))!;
+    // Past the round end (radius 2) but within R = 2.5: band before F19, the map now.
+    expect(inInside(plain, 22.4, 0)).toBe(false);
+    expect(inInside(g, 22.4, 0)).toBe(true);
+    expect(inInside(g, 20, 2.4)).toBe(true);
+    expect(inBand(g, 22.4, 0)).toBe(false);
+    // The band from R to R + 3 = 5.5 round the circle.
+    expect(inBand(g, 25.4, 0)).toBe(true);
+    expect(inBand(g, 25.6, 0)).toBe(false);
+    expect(inBand(g, 20, -5.4)).toBe(true);
+    expectSimple(g.inside);
+    expectSimple(g.band!);
+  });
+
+  it("h ≥ R keeps today's geometry: the rings equal the call without mouths, nothing opens (answer 1)", () => {
+    const plain = corridorGeometry([course("c", LEG, [C(8, 3, true)])])!;
+    const g = corridorGeometry([course("c", LEG, [C(8, 3, true)])], mouths(LEG))!;
+    expect(g.inside).toEqual(plain.inside);
+    expect(g.band).toEqual(plain.band);
+    expect(g.edges).toEqual(plain.edges);
+    expect(g.edges).toHaveLength(1);
+    expect(g.edges[0].closed).toBe(true);
+    expect(g.openings.size).toBe(0);
+    expect(plain.openings.size).toBe(0);
+  });
+
+  it("a finish: its outer ring's disc and the band beyond it; never opened (answer 2)", () => {
+    const g = corridorGeometry([course("c", LEG, [C(4, 3, true)])], mouths(LEG, { "1": "finish" }))!;
+    expect(inInside(g, 22.9, 0)).toBe(true);
+    expect(inBand(g, 23.1, 0)).toBe(true);
+    expect(inBand(g, 25.9, 0)).toBe(true);
+    expect(inBand(g, 26.1, 0)).toBe(false);
+    expect(g.openings.has("1")).toBe(false);
+    expect(g.openings.has("0")).toBe(true);
+  });
+
+  it("a start: the 701 triangle turned by angleDeg joins the inside; never opened (answer 2)", () => {
+    // Apex towards the leg (+x): angleDeg −90; the corners at 120° and 240° round the centroid.
+    const g = corridorGeometry([course("c", LEG, [C(4, 3, true)])], mouths(LEG, { "0": "start" }, [], { "0": -90 }))!;
+    const plain = corridorGeometry([course("c", LEG, [C(4, 3, true)])])!;
+    // Near the back corner (−1.73, 3): inside the triangle, 2.9 mm from the site (beyond the round end).
+    expect(inInside(plain, -1.5, 2.5)).toBe(false);
+    expect(inInside(g, -1.5, 2.5)).toBe(true);
+    // Unturned (north apex), the same point is outside the triangle.
+    const north = corridorGeometry([course("c", LEG, [C(4, 3, true)])], mouths(LEG, { "0": "start" }))!;
+    expect(inInside(north, -1.5, 2.5)).toBe(false);
+    expect(inInside(north, 0, 3.3)).toBe(true);
+    expect(g.openings.has("0")).toBe(false);
+    expectSimple(g.inside);
+    expectSimple(g.band!);
+  });
+
+  it("a control the corridor passes but does not end at is no mouth", () => {
+    const g = corridorGeometry([course("c", LEG, [C(4, 3, true)])], mouths(LEG, {}, [{ id: "p", role: "control", x: 10, y: 3 }]))!;
+    expect(inBand(g, 10, 4.5)).toBe(true);
+    expect(inInside(g, 10, 4.5)).toBe(false);
+    expect(g.openings.has("p")).toBe(false);
+  });
+
+  it("edge: false: the mouth applies, nothing opens and no edge (answer 3)", () => {
+    const g = corridorGeometry([course("c", LEG, [C(4, 3)])], mouths(LEG))!;
+    expect(inInside(g, 22.4, 0)).toBe(true);
+    expect(g.openings.size).toBe(0);
+    expect(g.edges).toEqual([]);
+  });
+
+  it("two legs meeting at a control: the band round it is R + the larger whiteMm", () => {
+    const legs = [[P(0, 0), P(20, 0)], [P(20, 0), P(20, 20)]];
+    const g = corridorGeometry([course("c", legs, [C(4, 2), C(4, 4)])], mouths(legs))!;
+    expect(inBand(g, 26.4, 0)).toBe(true);
+    expect(inBand(g, 26.6, 0)).toBe(false);
+    expect(inBand(g, 20, -6.4)).toBe(true);
+    expectSimple(g.band!);
+  });
+
+  it("the edge ends where the straight sides meet the circles: two open pieces, none on the arcs", () => {
+    const g = corridorGeometry([course("c", LEG, [C(4, 3, true)])], mouths(LEG))!;
+    expect(g.edges).toHaveLength(2);
+    // √(2.5² − 2²) = 1.5 mm along the leg from each centre.
+    const junctions = [[1500, 2000], [1500, -2000], [18500, 2000], [18500, -2000]];
+    for (const e of g.edges) {
+      expect(e.closed).toBe(false);
+      for (const p of e.points) {
+        expect(Math.abs(Math.abs(p.y) - 2000)).toBeLessThan(30);
+        expect(p.x).toBeGreaterThan(1470);
+        expect(p.x).toBeLessThan(18530);
+      }
+      for (const end of [e.points[0], e.points[e.points.length - 1]]) {
+        expect(Math.min(...junctions.map(([x, y]) => Math.hypot(end.x - x, end.y - y)))).toBeLessThan(30);
+      }
+    }
+  });
+
+  it("the edge stops at a start's triangle: no piece behind it from the round end", () => {
+    const g = corridorGeometry([course("c", LEG, [C(4, 3, true)])], mouths(LEG, { "0": "start" }, [], { "0": -90 }))!;
+    expect(g.edges.length).toBeGreaterThan(0);
+    for (const e of g.edges) for (const p of e.points) expect(p.x).toBeGreaterThan(-30);
+    // The run ends flat at the 701: nothing of its round end bulges past the base (x = −1.73).
+    expect(inInside(g, -1.85, 0)).toBe(false);
+    expect(inBand(g, -1.85, 0)).toBe(true);
+  });
+
+  it("a corridor wider than the 701 at its centroid: the sides run back to the triangle, no notch", () => {
+    // h 2.6 > the triangle's half width 2.0 at the centroid: the sides meet its sides at x ≈ −0.87.
+    const g = corridorGeometry([course("c", LEG, [C(5.2, 3, true)])], mouths(LEG, { "0": "start" }, [], { "0": -90 }))!;
+    expect(inInside(g, -0.1, 2.4)).toBe(true);
+    expect(inInside(g, -0.1, -2.4)).toBe(true);
+    const r = 6000 / Math.sqrt(3);
+    const corners = [[r, 0], [-r / 2, 3000], [-r / 2, -3000]];
+    const onTriangle = (p: { x: number; y: number }) => Math.min(...[0, 1, 2].map((i) => {
+      const [ax, ay] = corners[i], [bx, by] = corners[(i + 1) % 3];
+      const dx = bx - ax, dy = by - ay, t = Math.max(0, Math.min(1, ((p.x - ax) * dx + (p.y - ay) * dy) / (dx * dx + dy * dy)));
+      return Math.hypot(p.x - ax - t * dx, p.y - ay - t * dy);
+    }));
+    const nearStart = g.edges.flatMap((e) => [e.points[0], e.points[e.points.length - 1]]).filter((p) => p.x < 5000);
+    expect(nearStart).toHaveLength(2);
+    for (const p of nearStart) expect(onTriangle(p)).toBeLessThan(30);
+    expectSimple(g.inside);
+    expectSimple(g.band!);
+  });
+
+  it("openings: θ ± asin(h/R) at each edged end, compass degrees; the junctions on the inside's boundary", () => {
+    const g = corridorGeometry([course("c", LEG, [C(4, 3, true)])], mouths(LEG))!;
+    // From 0 the leg runs east (compass 90), from 1 west (270).
+    const [a] = g.openings.get("0")!, [b] = g.openings.get("1")!;
+    expect(a.start).toBeCloseTo(90 - DELTA, 2);
+    expect(a.end).toBeCloseTo(90 + DELTA, 2);
+    expect(b.start).toBeCloseTo(270 - DELTA, 2);
+    expect(b.end).toBeCloseTo(270 + DELTA, 2);
+    for (const [x, y] of [[1500, 2000], [1500, -2000], [18500, 2000], [18500, -2000]]) expect(toBoundary(g.inside, x, y)).toBeLessThan(20);
+  });
+
+  it("a turn at a control: each leg opens its sector, together the inner corner (one junction on the boundary is enough)", () => {
+    const legs = [[P(0, 0), P(20, 0)], [P(20, 0), P(20, 20)]];
+    const g = corridorGeometry([course("c", legs, [C(4, 3, true), C(4, 3, true)])], mouths(legs))!;
+    const gaps = g.openings.get("1")!;
+    expect(gaps).toHaveLength(2);
+    expect(gaps.map((x) => Math.round(x.start + DELTA))).toEqual([270, 0]);
+    // A straight run through a control opens both sides.
+    const line = [[P(0, 0), P(20, 0)], [P(20, 0), P(40, 0)]];
+    const s = corridorGeometry([course("c", line, [C(4, 3, true), C(4, 3, true)])], mouths(line))!;
+    expect(s.openings.get("1")!.map((x) => Math.round(x.start + DELTA))).toEqual([270, 90]);
+  });
+
+  it("no opening where a wider corridor covers both junctions, at h ≥ R, or at a bend inside the circle", () => {
+    const legs = [[P(0, 0), P(20, 0)], [P(20, 0), P(20, 20)]];
+    const g = corridorGeometry([course("c", legs, [C(4, 3, true), C(10, 2)])], mouths(legs))!;
+    expect(g.openings.has("1")).toBe(false);
+    expect(g.openings.has("0")).toBe(true);
+    // A bend 1 mm from the circle's centre: the junctions are not where the leg's sides meet the circle.
+    const bent = [[P(0, 0), P(19, 1), P(20, 0)]];
+    const b = corridorGeometry([course("c", bent, [C(4, 3, true)])], mouths(bent))!;
+    expect(b.openings.has("1")).toBe(false);
   });
 });
 
