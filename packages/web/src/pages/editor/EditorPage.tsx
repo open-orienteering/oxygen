@@ -58,8 +58,12 @@ import { legLengthLabel } from "../../lib/editor/leg-length";
 import { EditorConflict, EditorWrites, type EditorClient } from "../../lib/editor/write-client";
 import { instructionsOnCourse, type Instructions } from "../../lib/editor/instructions";
 import { areaTool, editorReducer, escapeHasWork, initialEditorState, type EditorTool } from "../../lib/editor/state";
-import { appendSite, insertSite, moveVisit, removeSite, removeVisit, setLegGaps, setLegProps, setNumberHidden, setRole, DEFAULT_CORRIDOR, type KindOf, type LegPatch } from "../../lib/editor/structure-edit";
-import { displaySequence, effectiveEnds, explicitStructure, insertIndexForLeg, kindOfSites, legForInsert, type SiteRow } from "../../lib/editor/sequence";
+import {
+  addAlternative, appendSite, canCreateGroup, createGroup, displayPath, insertSite, itemAtPath, moveToAlternative, moveVisit, removeAlternative, removeSite, removeVisit,
+  renameAlternative, setLegGaps, setLegProps, setLoop, setNumberHidden, setRole, DEFAULT_CORRIDOR, type GroupOrders, type KindOf, type LegPatch,
+} from "../../lib/editor/structure-edit";
+import { allVariationDraws, courseDrawOf } from "../../lib/editor/variation-view";
+import { alternativeEndAt, courseViewOrders, displaySequence, effectiveEnds, explicitStructure, insertIndexForLeg, kindOfSites, legForInsert, variationBlocks, type SiteRow } from "../../lib/editor/sequence";
 import { insertBendAt, legPolyline, projectOnPolyline } from "../../lib/editor/bends";
 import { courseActions } from "./ActionBar";
 import { TopBar } from "./TopBar";
@@ -215,31 +219,56 @@ export function EditorPage() {
   const structure: Structure | null = local && local.courseId === state.selectedCourseId && detailStructure && BigInt(detail.data!.version) < BigInt(local.version)
     ? local.structure
     : detailStructure;
-  const rows = useMemo(() => (structure ? displaySequence(structure, sites) : []), [structure, sites]);
+  /** The structure as drawn, start and finish explicit: each row's `path` names its item here (the leg into it is its `leg`). */
+  const explicit = useMemo(() => (structure ? explicitStructure(structure, sites) : null), [structure, sites]);
+  // ─── Variations (§12): the displayed alternatives, the variants, the view's orders ──
+  const variants = useMemo(() => (structure ? courseShared.variantOrders(structure) : []), [structure]);
+  const hasGroups = variants.length > 0;
+  const variantKeys = useMemo(() => variants.map((v) => v.key), [variants]);
+  // An edit that drops the shown variant's key (Loop, a removed alternative, undo) returns to Course view (§12).
+  useEffect(() => {
+    if (state.view === "variant" && structure && !variantKeys.includes(state.variantKey ?? "")) dispatch({ type: "variant", key: null });
+  }, [state.view, state.variantKey, structure, variantKeys]);
+  /** How the view shows each group: Variant view the variant's order, else the active alternatives (default the first). */
+  const orders: GroupOrders | undefined = useMemo(() => {
+    if (!structure || !hasGroups) return undefined;
+    const variant = state.view === "variant" ? variants.find((v) => v.key === state.variantKey) : undefined;
+    return variant ? variant.orders : courseViewOrders(structure, state.activeAlternatives);
+  }, [structure, hasGroups, state.view, state.variantKey, state.activeAlternatives, variants]);
+  const rows = useMemo(() => (structure ? displaySequence(structure, sites, orders) : []), [structure, sites, orders]);
+  const blocks = useMemo(() => (structure && hasGroups ? variationBlocks(structure, sites, rows, orders) : []), [structure, hasGroups, sites, rows, orders]);
   const sequenceIds = useMemo(() => rows.filter((r) => r.kind === "control").map((r) => r.id), [rows]);
-  /** The structure as drawn, start and finish explicit: rows[i] ↔ items[i] (the leg into row i is items[i].leg). */
-  // An explicit start or finish whose site is not among the event's controls has no row: then rows and items do
-  // not line up and no leg reads a stored prop (docs/course-editor.md §6.7).
-  const explicitItems = useMemo(() => {
-    const items = structure ? explicitStructure(structure, sites).items : [];
-    return items.length === rows.length ? items : [];
-  }, [structure, sites, rows]);
+  /** Every site the course visits, in any alternative (§12: on the course, not faded). */
+  const memberIds = useMemo(() => {
+    const out = new Set(sequenceIds);
+    for (const item of structure?.items ?? []) if (item.kind === "variation") for (const a of item.alternatives) for (const c of a.items) out.add(c.siteId);
+    return out;
+  }, [structure, sequenceIds]);
+  /** The item a row names (undefined for a loop's anchor visit, §12). */
+  const itemOfRow = useCallback((i: number) => (explicit && rows[i] ? itemAtPath(explicit, rows[i].path) : undefined), [explicit, rows]);
   // Along the stored bends and the crossing point (course-layer.md §10.1, §10.3; docs/course-editor.md §6.7, §6.8).
   const legMeters = useMemo(() => sequenceLegMeters(rows.map((r, i) => {
-    const item = explicitItems[i];
-    const leg = item && item.kind !== "variation" ? item.leg : undefined;
+    const item = itemOfRow(i);
+    const leg = item?.leg;
     const via = crossingPt(leg);
     const prev = rows[i - 1]?.pt;
     const bends = via && prev && r.pt ? courseShared.routedBends(prev, leg?.bends, via, r.pt) : leg?.bends;
     return r.pt && bends ? { ...r.pt, bends } : r.pt;
-  }), mapScale), [rows, explicitItems, mapScale, crossingPt]);
+  }), mapScale), [rows, itemOfRow, mapScale, crossingPt]);
   const totalMeters = useMemo(() => legMeters.reduce<number>((sum, m) => sum + (m ?? 0), 0), [legMeters]);
   const inventory = useMemo(
     () => buildInventoryView(seriesAllocation.data ?? [], (controlList.data ?? []).map((c) => c.codes)),
     [seriesAllocation.data, controlList.data],
   );
   const activeSeriesId = allocSeriesId !== null && inventory.some((s) => s.seriesId === allocSeriesId) ? allocSeriesId : null;
-  const membership = useMemo(() => courseMembership(courses.data ?? []), [courses.data]);
+  // A materialised variant's controls are its root's (course-layer.md §12): it counts as the root, once.
+  const membership = useMemo(() => {
+    const list = courses.data ?? [];
+    const nameOf = new Map(list.map((c) => [c.id, c.name] as const));
+    const m = courseMembership(list.map((c) => (c.parentCourseId != null ? { ...c, name: nameOf.get(c.parentCourseId) ?? c.name } : c)));
+    for (const [id, names] of m) m.set(id, [...new Set(names)]);
+    return m;
+  }, [courses.data]);
   /** The crossing points some course's leg runs through (§6.6: their kind stays). */
   const crossingRefs = useMemo(() => new Set((courses.data ?? []).flatMap((c) => Object.values(c.legs ?? {}).flatMap((l) => (l.crossing ? [Number(l.crossing.controlId)] : [])))), [courses.data]);
 
@@ -324,8 +353,8 @@ export function EditorPage() {
   const kindOfLatest: KindOf = useCallback((id: number) => created.current.get(id)?.kind ?? kindOf(id), [kindOf]);
 
   // The latest values for writes queued behind each other (a chain of placements runs one at a time).
-  const latest = useRef({ detailStructure, detailVersion: detail.data?.version ?? null, selectedCourse, sites, kindOf: kindOfLatest, rows, siteKindOf, isMark });
-  latest.current = { detailStructure, detailVersion: detail.data?.version ?? null, selectedCourse, sites, kindOf: kindOfLatest, rows, siteKindOf, isMark };
+  const latest = useRef({ detailStructure, detailVersion: detail.data?.version ?? null, selectedCourse, sites, kindOf: kindOfLatest, rows, siteKindOf, isMark, orders });
+  latest.current = { detailStructure, detailVersion: detail.data?.version ?? null, selectedCourse, sites, kindOf: kindOfLatest, rows, siteKindOf, isMark, orders };
 
   /**
    * The structure as of now, read from refs: the one this client wrote last unless the course's detail
@@ -368,19 +397,20 @@ export function EditorPage() {
   // ─── The selected leg (§6.7): the leg-click phantom on the selected course ──
   const selectedLeg = useMemo(() => {
     const insertAt = state.phantom?.insertAt;
-    if (insertAt == null || !structure || state.mode !== "course" || state.view === "all" || structure.orderMode !== "ordered") return null;
+    if (insertAt == null || !structure || state.mode !== "course" || state.view === "all" || state.view === "all-variations" || structure.orderMode !== "ordered") return null;
     const leg = legForInsert(rows, insertAt);
-    const item = leg ? explicitItems[leg.itemIndex] : undefined;
-    if (!leg || !leg.from.pt || !leg.to.pt || !item || item.kind === "variation") return null;
-    return { itemIndex: leg.itemIndex, from: leg.from, to: leg.to, fromPt: leg.from.pt, toPt: leg.to.pt, props: item.leg ?? {} };
-  }, [state.phantom, state.mode, state.view, structure, rows, explicitItems]);
+    // A loop's anchor visit has no item, so no leg props (§12).
+    const item = leg && explicit ? itemAtPath(explicit, leg.path) : undefined;
+    if (!leg || !leg.from.pt || !leg.to.pt || !item) return null;
+    return { itemIndex: leg.itemIndex, path: leg.path, from: leg.from, to: leg.to, fromPt: leg.from.pt, toPt: leg.to.pt, props: item.leg ?? {} };
+  }, [state.phantom, state.mode, state.view, structure, rows, explicit]);
   /** Leg editing is desktop and tablet; the phone shows the section read-only (08 §5.5). */
   const legEditable = !!selectedLeg && !isMobile;
   /** One leg edit: a patch of the item's `LegProps`, one `setStructure`, one undo entry. */
   const writeLeg = useCallback((patch: LegPatch) => {
     if (!selectedLeg) return;
-    const index = selectedLeg.itemIndex;
-    void applyStructure((s) => setLegProps(s, index, patch));
+    const path = selectedLeg.path;
+    void applyStructure((s) => setLegProps(s, path, patch));
   }, [selectedLeg, applyStructure]);
   /** The selected leg's focused bend (a click on its handle or row): `Delete` removes it. Keyed by the leg's item. */
   const [bendFocus, setBendFocus] = useState<{ itemIndex: number; index: number } | null>(null);
@@ -398,6 +428,59 @@ export function EditorPage() {
     writeLeg({ bends });
     setBendFocus({ itemIndex: selectedLeg.itemIndex, index: at < 0 ? bends.length - 1 : at });
   }, [state.phantom, selectedLeg, writeLeg]);
+  // ─── Variation authoring (§12; 08 §5.3) ──────────────────
+  /** *Create variation here*: on a selected top-level leg in Course view, desktop and tablet. */
+  const variationHere = legEditable && state.view === "course" && !!explicit && !!state.phantom && state.phantom.insertAt !== null
+    && canCreateGroup(explicit, state.phantom.insertAt, kindOf, orders);
+  const createVariation = useCallback(() => {
+    const at = state.phantom?.insertAt;
+    if (at == null) return;
+    let made: string | null = null;
+    void applyStructure((s) => {
+      const out = createGroup(s, at, latest.current.kindOf, latest.current.orders);
+      made = out?.groupId ?? null;
+      return out?.structure ?? s;
+    }).then((ok) => {
+      // The new group's A is displayed and active: `K` places into it (§12).
+      if (ok && made) dispatch({ type: "alternative", groupId: made, label: "A" });
+    });
+  }, [state.phantom, applyStructure]);
+  /** One group edit: one `setStructure`, one undo entry. */
+  const editGroup = useCallback((fn: (s: Structure) => Structure) => { void applyStructure(fn); }, [applyStructure]);
+  const variationHandlers = useMemo(() => ({
+    readOnly: isMobile,
+    onTab: (groupId: string, label: string) => dispatch({ type: "alternative", groupId, label }),
+    onAdd: (groupId: string) => {
+      let label: string | null = null;
+      void applyStructure((s) => {
+        const out = addAlternative(s, groupId);
+        label = out?.label ?? null;
+        return out?.structure ?? s;
+      }).then((ok) => { if (ok && label) dispatch({ type: "alternative", groupId, label }); });
+    },
+    onRemove: (groupId: string, label: string) => editGroup((s) => removeAlternative(s, groupId, label)),
+    onRename: (groupId: string, label: string, next: string) => {
+      void applyStructure((s) => renameAlternative(s, groupId, label, next)).then((ok) => {
+        if (ok) dispatch({ type: "alternative", groupId, label: next.trim() });
+      });
+    },
+    onLoop: (groupId: string, loop: boolean) => editGroup((s) => setLoop(s, groupId, loop)),
+    onMoveTo: (seqIndex: number, groupId: string, label: string) =>
+      editGroup((s) => moveToAlternative(s, seqIndex, groupId, label, latest.current.kindOf, latest.current.orders)),
+  }), [isMobile, applyStructure, editGroup]);
+  /** The group the selection is in (a row, a leg into a group row, or the last activated): `1–9` picks its alternative. */
+  const selectionGroup = useMemo(() => {
+    const legRow = selectedLeg ? rows[selectedLeg.itemIndex] : undefined;
+    const selRow = state.selectedControlId !== null ? rows.find((r) => r.id === state.selectedControlId && r.group) : undefined;
+    const id = legRow?.group?.id ?? selRow?.group?.id ?? state.focusGroupId;
+    return id ? blocks.find((b) => b.id === id) ?? null : null;
+  }, [selectedLeg, rows, state.selectedControlId, state.focusGroupId, blocks]);
+  /** `K` with an alternative activated and nothing selected (§12): the end of that alternative. */
+  const focusInsertAt = useMemo(() => {
+    const b = state.focusGroupId ? blocks.find((x) => x.id === state.focusGroupId) : undefined;
+    return b && state.view === "course" ? alternativeEndAt(rows, b.itemIndex, b.active) : null;
+  }, [state.focusGroupId, state.view, blocks, rows]);
+
   const canCorridor = legEditable && !selectedLeg?.props.corridor;
   const addCorridor = useCallback(() => { if (canCorridor) writeLeg({ corridor: DEFAULT_CORRIDOR }); }, [canCorridor, writeLeg]);
 
@@ -502,7 +585,7 @@ export function EditorPage() {
 
   /** Create a control at `pt`; with `insertAt` also into the selected course at that position (one undo entry). */
   const createControl = useCallback(async (pt: Pt, insertAt: number | null) => {
-    const id = await createSite(pt, "control", insertAt !== null ? (s, newId) => insertSite(s, insertAt, newId, kindOfLatest) : null);
+    const id = await createSite(pt, "control", insertAt !== null ? (s, newId) => insertSite(s, insertAt, newId, kindOfLatest, latest.current.orders) : null);
     if (id !== null) dispatch({ type: "placed", id });
   }, [createSite, kindOfLatest]);
 
@@ -862,9 +945,12 @@ export function EditorPage() {
     });
   }, [snap]);
 
-  const armContext = useCallback(() => ({
-    rows, course: !!(selectedCourse && structure), selectedControlId: state.selectedControlId, legInsertAt: state.phantom?.insertAt ?? null,
-  }), [rows, selectedCourse, structure, state.selectedControlId, state.phantom]);
+  // §12: with an alternative activated and nothing selected, a visit tool starts at the end of that alternative.
+  const armContext = useCallback((tool?: PlacementTool) => ({
+    rows, course: !!(selectedCourse && structure), selectedControlId: state.selectedControlId,
+    legInsertAt: state.phantom?.insertAt
+      ?? (tool !== undefined && isVisitTool(tool) && state.selectedControlId === null ? focusInsertAt : null),
+  }), [rows, selectedCourse, structure, state.selectedControlId, state.phantom, focusInsertAt]);
 
   const setTool = useCallback((tool: EditorTool) => {
     gesture.current = null;
@@ -875,7 +961,7 @@ export function EditorPage() {
 
   const armPlace = useCallback((tool: PlacementTool) => {
     const current = chainRef.current;
-    const chain = current ? switchTool(current, tool, armContext()) : armPlacement(tool, armContext());
+    const chain = current ? switchTool(current, tool, armContext(tool)) : armPlacement(tool, armContext(tool));
     setTool({ kind: "place", chain });
   }, [armContext, setTool]);
 
@@ -903,7 +989,7 @@ export function EditorPage() {
         // routed through it, one undo entry; without a leg a free site.
         const legAt = chain.insertAt;
         const leg = legAt !== null ? legForInsert(latest.current.rows, legAt) : null;
-        const route = leg ? (s: Structure, siteId: number) => setLegProps(s, leg.itemIndex, { crossing: { controlId: siteId } }) : null;
+        const route = leg ? (s: Structure, siteId: number) => setLegProps(s, leg.path, { crossing: { controlId: siteId } }) : null;
         if (targetId !== null) {
           if (latest.current.siteKindOf(targetId) !== "crossing_point") return;
           if (!route) { dispatch({ type: "select", id: targetId }); return; }
@@ -921,11 +1007,11 @@ export function EditorPage() {
           // Reuse the site: into the course at the insertion point, no new site.
           if (chain.insertAt === null) { dispatch({ type: "select", id: targetId }); return; }
           const at = chain.insertAt;
-          if (!(await applyStructure((s) => insertSite(s, at, targetId, kindOfL)))) return;
+          if (!(await applyStructure((s) => insertSite(s, at, targetId, kindOfL, latest.current.orders)))) return;
           id = targetId;
         } else {
           const at = chain.insertAt;
-          id = await createSite(pt, exchange ? "map_exchange" : "control", at !== null ? (s, newId) => insertSite(s, at, newId, kindOfL) : null);
+          id = await createSite(pt, exchange ? "map_exchange" : "control", at !== null ? (s, newId) => insertSite(s, at, newId, kindOfL, latest.current.orders) : null);
         }
       } else {
         const role = chain.tool;
@@ -993,16 +1079,16 @@ export function EditorPage() {
     const fromPt = leg?.from.pt, toPt = leg?.to.pt;
     if (!leg || !fromPt || !toPt) return null;
     const { itemIndex, from, to } = leg;
-    const item = explicitItems[itemIndex];
-    // Rows and items out of line (§6.7): no leg target rather than another item's leg.
+    // A loop's anchor visit has no item (§12): no leg target rather than another item's leg.
+    const item = explicit ? itemAtPath(explicit, leg.path) : undefined;
     if (!item) return null;
-    const stored = item.kind !== "variation" ? item.leg?.gaps ?? [] : [];
-    const via = item.kind !== "variation" ? crossingPt(item.leg) : null;
-    const bends = item.kind !== "variation" ? (via ? courseShared.routedBends(fromPt, item.leg?.bends, via, toPt) : item.leg?.bends) : undefined;
+    const stored = item.leg?.gaps ?? [];
+    const via = crossingPt(item.leg);
+    const bends = via ? courseShared.routedBends(fromPt, item.leg?.bends, via, toPt) : item.leg?.bends;
     const effective = courseInfo?.derivation?.courses[0]?.legs.find((l) => l.from === String(from.id) && l.to === String(to.id))?.gaps ?? [];
     // Fractions of the bent length (§6.3): the target is the leg's polyline through its bends.
     return { kind: "leg", itemIndex, points: legPolyline(fromPt, bends, toPt), gaps: stored.length ? stored : effective, stored: stored.length > 0 };
-  }, [courseInfo, state.selectedControlId, state.phantom, state.tool, coordsById, kindOf, controlRowsById, structure, rows, explicitItems, crossingPt]);
+  }, [courseInfo, state.selectedControlId, state.phantom, state.tool, coordsById, kindOf, controlRowsById, structure, rows, explicit, crossingPt]);
 
   const writeGaps = useCallback((target: GapTarget, gaps: AngularGap[] | FractionGap[]) => {
     if (target.kind === "circle") {
@@ -1014,7 +1100,9 @@ export function EditorPage() {
         record(() => writes.updateControl({ id, circleGaps: prev } as Parameters<typeof writes.updateControl>[0]), redo);
       })();
     } else {
-      void applyStructure((s) => setLegGaps(s, target.itemIndex, gaps as FractionGap[]));
+      // The target's row (its index) names the leg's item by its path (§12).
+      const path = latest.current.rows[target.itemIndex]?.path;
+      if (path) void applyStructure((s) => setLegGaps(s, path, gaps as FractionGap[]));
     }
   }, [controlRowsById, writes, run, record, applyStructure]);
 
@@ -1077,9 +1165,9 @@ export function EditorPage() {
     let angleDeg: number | undefined;
     if (crossing && placing.insertAt !== null) {
       const leg = legForInsert(rows, placing.insertAt);
-      const item = leg ? explicitItems[leg.itemIndex] : undefined;
+      const item = leg && explicit ? itemAtPath(explicit, leg.path) : undefined;
       if (leg?.from.pt && leg.to.pt) {
-        const pts = legPolyline(leg.from.pt, item && item.kind !== "variation" ? item.leg?.bends : undefined, leg.to.pt);
+        const pts = legPolyline(leg.from.pt, item?.leg?.bends, leg.to.pt);
         const near = projectOnPolyline(pts, at);
         if (near) {
           const a = pts[near.segment], b = pts[near.segment + 1];
@@ -1089,7 +1177,7 @@ export function EditorPage() {
     }
     const role = crossing ? "crossing_point" as const : isVisitTool(placing.tool) ? "control" as const : placing.tool as "start" | "finish";
     return { at, radiusMm, role, angleDeg, label, description: reuse === null && !crossing ? ghostDescription : null, legs: info.legs, legMm: info.legMm, legLabel, reuse };
-  }, [placing, hover, kindOfLatest, siteKindOf, isMark, ptOf, rows, explicitItems, courseInfo, coordsById, t, nextCode, ghostDescription, mapScale]);
+  }, [placing, hover, kindOfLatest, siteKindOf, isMark, ptOf, rows, explicit, courseInfo, coordsById, t, nextCode, ghostDescription, mapScale]);
 
   // The visit the click would write, drawn by the layer (§6.1): one course request per hover. Keyed by
   // primitives: the ghost itself changes with every course reply (its radius), which must not re-request.
@@ -1107,9 +1195,10 @@ export function EditorPage() {
     .map((x) => ({ id: x.id, x: x.mapX, y: x.mapY, kind: kindOf(x.id) })), [sites, kindOf]);
 
   const insertOnLeg = useCallback((target: { courseId: string; index: number }, pt: Pt) => {
-    if (!selectedCourse || target.courseId !== selectedCourse.name) return;
+    // All variations is a read-only overlay (§12): its spine's legs are not the rows'.
+    if (!selectedCourse || target.courseId !== selectedCourse.name || state.view === "all-variations") return;
     void createControl(snap(pt), insertIndexForLeg(rows, target.index));
-  }, [selectedCourse, rows, createControl, snap]);
+  }, [selectedCourse, rows, createControl, snap, state.view]);
 
   const courseView = state.view !== "all";
   /** The one course the layer highlights — and the only one it splices the provisional visit into. */
@@ -1209,7 +1298,7 @@ export function EditorPage() {
   const courseChecks = useCourseChecks({
     course: state.view !== "all" && selectedCourse ? { id: selectedCourse.id, name: selectedCourse.name } : null,
     structure, sites, controls: controlList.data, document: mapDoc, mapScale, objects: objectsInView,
-    derivation: courseInfo?.derivation, ringMm: courseInfo?.metrics?.circleRadiusMm ?? 2.5,
+    derivation: courseInfo?.derivation, ringMm: courseInfo?.metrics?.circleRadiusMm ?? 2.5, orders,
   });
   const locateSite = courseChecks.locate;
   const locateCheck = useCallback((c: EditorCheck) => {
@@ -1233,7 +1322,7 @@ export function EditorPage() {
         selected: coord ? {
           id: coord.id,
           role,
-          onCourse: sequenceIds.includes(coord.id),
+          onCourse: memberIds.has(coord.id),
           otherRole: role === "start" ? ends.start !== coord.id : role === "finish" ? ends.finish !== coord.id : false,
           hasLabelOffset: !!selectedCourse?.labelOffsets?.[String(coord.id)],
           radioOn: (controlRowsById.get(coord.id)?.config?.radioType ?? "normal") !== "normal",
@@ -1244,9 +1333,11 @@ export function EditorPage() {
         codesReady: !!controlList.data,
         busy: pendingOps > 0,
         legEdit: legEditable,
+        variationHere,
       },
       {
         addBend,
+        createVariation,
         insert: () => { const p = state.phantom; if (p) void createControl({ x: p.x, y: p.y }, p.insertAt); },
         addToCourse: () => { const p = state.phantom; if (p) void createControl({ x: p.x, y: p.y }, sequenceIds.length); },
         add: () => { const p = state.phantom; if (p) void createControl({ x: p.x, y: p.y }, null); },
@@ -1267,7 +1358,7 @@ export function EditorPage() {
     );
   }, [state.tool.kind, state.selectedControlId, state.phantom, coordsById, kindOf, sequenceIds, ends, selectedCourse, structure, controlRowsById,
     radioSwapOffer, controlList.data, pendingOps, createControl, createRoleControl, applyStructure, resetLabel, handleRadio,
-    confirmSwap, declineSwap, handleDelete, tc, legEditable, addBend, isMark]);
+    confirmSwap, declineSwap, handleDelete, tc, legEditable, addBend, isMark, variationHere, createVariation, memberIds]);
 
   const contextInfo = useMemo(() => {
     const sel = state.selectedControlId;
@@ -1294,6 +1385,18 @@ export function EditorPage() {
   }, [selectedCoord, seriesAllocation.data, tc]);
   const radioOn = selectedCoord ? (controlRowsById.get(selectedCoord.id)?.config?.radioType ?? "normal") !== "normal" : false;
 
+  /**
+   * A course with variation groups as the view shows it (§12): `course.list` has the root's first
+   * alternatives, so Course and Variant view draw the displayed path, All variations the spine and the
+   * tinted branches. Class view and Layout mode draw the sheet as it prints (the root, until F8).
+   */
+  const courseOverride = useMemo(() => {
+    if (!hasGroups || !selectedCourse || !explicit || state.mode === "layout") return null;
+    if (state.view === "all-variations") return allVariationDraws(selectedCourse.name, explicit);
+    if (state.view !== "course" && state.view !== "variant") return null;
+    return [courseDrawOf(selectedCourse.name, displayPath(explicit, kindOf, orders).items)];
+  }, [hasGroups, selectedCourse, explicit, state.mode, state.view, kindOf, orders]);
+
   // Offline, Field mode views only (§9 "Offline"): a drag snaps back instead of writing.
   const fieldReadOnly = fieldMode && !online;
   const fieldMoveEnd = useCallback((id: string, pt: Pt) => {
@@ -1307,7 +1410,7 @@ export function EditorPage() {
   }, []);
   const classView = useClassView({ enabled: state.mode === "course" && state.view === "class", classSeq: state.classSeq, onFit: fitClassPage });
   const classLayout = classView.layout;
-  const courseControlIds = useMemo(() => new Set(sequenceIds.map(String)), [sequenceIds]);
+  const courseControlIds = useMemo(() => new Set([...memberIds].map(String)), [memberIds]);
   const toolActive = state.tool.kind !== "select";
   const editor: MapViewerEditorProps = useMemo(() => ({
     selectedControlId: state.selectedControlId !== null ? String(state.selectedControlId) : null,
@@ -1335,7 +1438,7 @@ export function EditorPage() {
     fix,
     bottomInsetPx: isMobile ? sheetPx : 0,
     fullBleed: isMobile,
-    ...(selectedCourse && courseView ? { onLegClick: handleLegClick } : {}),
+    ...(selectedCourse && courseView && state.view !== "all-variations" ? { onLegClick: handleLegClick } : {}),
     tool: toolBinding,
     snap: snapIndex ? snap : null,
     draftObjects,
@@ -1345,9 +1448,10 @@ export function EditorPage() {
     onCourseInfo: setCourseInfo,
     markers: courseChecks.markers,
     layout: classLayout,
+    courseOverride,
   }), [classLayout, courseChecks.markers, isMobile, fix, sheetPx, fieldMoveEnd, state.selectedControlId, state.phantom, contextActions, contextInfo, srrBadge, radioOn, suggestions, tc, courseControlIds, toolActive,
     courseView, selectedCourse, moveWarnings, moveEpoch, handleMapClick, handleLabelMoveEnd, handleSelect,
-    handleDismiss, handleLegClick, toolBinding, snapIndex, snap, draftObjects, draftFast, viewRequest, provisional]);
+    handleDismiss, handleLegClick, toolBinding, snapIndex, snap, draftObjects, draftFast, viewRequest, provisional, courseOverride, state.view]);
 
   // ─── Undo / redo, keyboard, deep links ───────────────────
   const runUndo = useCallback(() => {
@@ -1447,6 +1551,10 @@ export function EditorPage() {
         e.preventDefault();
         setAreaOpen(false);
         addCorridor();
+      } else if (plain && /^[1-9]$/.test(e.key) && selectionGroup && state.tool.kind === "select") {
+        // §12 (08 §5.3): `1–9` on a variation group switches the displayed alternative.
+        const label = selectionGroup.labels[Number(e.key) - 1];
+        if (label) dispatch({ type: "alternative", groupId: selectionGroup.id, label });
       } else if (plain && key === "H") {
         dispatch({ type: "toggle-hide-others" });
       } else if (plain && key === "V") {
@@ -1491,7 +1599,7 @@ export function EditorPage() {
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
   }, [descControlId, runUndo, runRedo, undoStack, state, handleDelete, deleteControls, deleteObject, selectedObject, focusedVertex, drafts, setDraft, updateObject, setChain, exitTool, finishArea,
-    stepSelection, armPlace, setTool, canGap, fitView, areaOpen, canTonerSaver, startArea, layoutKey, selectedLeg, focusedBend, legEditable, writeLeg, addCorridor]);
+    stepSelection, armPlace, setTool, canGap, fitView, areaOpen, canTonerSaver, startArea, layoutKey, selectedLeg, focusedBend, legEditable, writeLeg, addCorridor, selectionGroup]);
 
   // Layout deep links (docs/course-layout.md §4): `?mode=layout` with `sheet=<seq>` or `template=<seq>`.
   const layoutLinkDone = useRef(false);
@@ -1573,7 +1681,8 @@ export function EditorPage() {
 
   // ─── Chrome ──────────────────────────────────────────────
   const canUndo = undoStack.canUndo, canRedo = undoStack.canRedo;
-  const courseOptions = useMemo(() => (courses.data ?? []).map((c) => ({ id: c.id, name: c.name })), [courses.data]);
+  // Materialised variants are edited through their root (course-layer.md §12): the picker lists roots and plain courses.
+  const courseOptions = useMemo(() => (courses.data ?? []).filter((c) => c.parentCourseId == null).map((c) => ({ id: c.id, name: c.name })), [courses.data]);
   // The map-info dialog's values (§2, P6): the queries above and the loaded document's header.
   const mapInfoInput: MapInfoInput = {
     fileName: mapInfo.data?.fileName ?? null,
@@ -1624,6 +1733,9 @@ export function EditorPage() {
       classes={selectedCourse ? (courseClasses.data ?? []) : []}
       classSeq={state.classSeq}
       onClass={(seq) => dispatch({ type: "class", seq })}
+      variants={state.mode === "course" ? variantKeys : []}
+      variantKey={state.variantKey}
+      onVariant={(key) => dispatch({ type: "variant", key })}
       exportState={{
         nameId: nameId ?? "",
         courseSeq: selectedCourse?.id ?? null,
@@ -1739,14 +1851,16 @@ export function EditorPage() {
       onCreate={handleCreateCourse}
       onClone={handleClone}
       onOrderMode={(mode) => void applyStructure((s) => ({ ...s, orderMode: mode }))}
-      onMove={(from, to) => void applyStructure((s) => moveVisit(s, from, to, kindOf))}
-      onRemove={(seqIndex) => void applyStructure((s) => removeVisit(s, seqIndex, kindOf))}
+      onMove={(from, to) => void applyStructure((s) => moveVisit(s, from, to, kindOf, latest.current.orders))}
+      onRemove={(seqIndex) => void applyStructure((s) => removeVisit(s, seqIndex, kindOf, latest.current.orders))}
       onEditCode={handleEditCode}
       onSelectRow={(id) => dispatch({ type: "select", id })}
       selectedControlId={state.selectedControlId}
       radioIds={radioIds}
       instructions={shownInstructions}
       onInstructions={handleInstructions}
+      blocks={state.view === "all-variations" ? [] : blocks}
+      variation={variationHandlers}
     />
   );
   const selectionSection = state.multi.length > 1 ? (

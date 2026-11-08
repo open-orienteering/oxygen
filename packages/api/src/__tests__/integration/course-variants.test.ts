@@ -150,12 +150,17 @@ describe("materialisation (course-layer.md §12)", () => {
     expect(await codesOf(kids[1].id)).toBe("31 35 31 32 33 31");
   });
 
-  it("an empty alternative is a straight leg (answer 5); all empty is refused", async () => {
+  it("an empty alternative is a straight leg (answer 5); all empty is accepted, identical children (F7)", async () => {
     const { id } = await caller.course.create({ name: "Empty alt" });
     await write(id, [ctl(S), ctl(31), group("g", [[32], []]), ctl(34), ctl(F)]);
     const kids = await children(id);
     expect(await codesOf(kids[1].id)).toBe("31 34");
-    await expect(write(id, [ctl(S), ctl(31), group("g", [[], []]), ctl(34), ctl(F)])).rejects.toMatchObject({ code: "BAD_REQUEST" });
+    // *Create variation here* writes A and B empty at once (course-editor.md §12).
+    await write(id, [ctl(S), ctl(31), group("g", [[], []]), ctl(34), ctl(F)]);
+    const empty = await children(id);
+    expect(empty.map((k) => k.variantKey)).toEqual(["A", "B"]);
+    expect(await codesOf(empty[0].id)).toBe("31 34");
+    expect(await codesOf(empty[1].id)).toBe("31 34");
   });
 
   it("refuses colliding keys and too many variants", async () => {

@@ -1,6 +1,6 @@
 import { describe, it, expect } from "vitest";
 import { course, type ControlInfo } from "@oxygen/shared";
-import { checkMarkers, checkSitesOf, checkStructureOf, legsLengthM, locateTarget, mergeChecks, type EditorCheck } from "../checks";
+import { checkGroupsOf, checkMarkers, checkSitesOf, checkStructureOf, legsLengthM, locateTarget, mergeChecks, type EditorCheck } from "../checks";
 import { explicitStructure, type SiteRow } from "../sequence";
 
 const coord = (id: number, x: number, y: number, status = 0): SiteRow => ({ id, code: String(id), status, mapX: x, mapY: y });
@@ -32,6 +32,26 @@ describe("the editor's checks input (docs/course-editor.md §8)", () => {
     expect(checkStructureOf(7, explicitStructure(wire, sites)).items[1]).toEqual({
       siteId: "31", leg: { bends: [{ x: 7, y: 3 }], crossing: { controlId: "90", section: true } },
     });
+  });
+
+  it("structure with a group: the displayed path; the groups as VARIATION_* reads them (F7)", () => {
+    const sites = [coord(1, 5, 5, 4), coord(31, 10, 0), coord(41, 15, 5), coord(32, 20, 0), coord(9, 20, 20, 5)];
+    const wire: course.WireCourseStructure = {
+      version: 1, id: "x", orderMode: "ordered",
+      items: [
+        { siteId: 31 },
+        { kind: "variation", id: "v1", alternatives: [{ label: "A", items: [{ siteId: 41, leg: { bends: [{ x: 1, y: 1 }] } }] }, { label: "B", items: [] }] },
+        { siteId: 32, leg: { style: "none", bends: [{ x: 2, y: 2 }] } },
+      ],
+    };
+    const ex = explicitStructure(wire, sites);
+    expect(checkStructureOf(7, ex).items.map((i) => i.siteId)).toEqual(["1", "31", "41", "32", "9"]);
+    expect(checkStructureOf(7, ex, { v1: ["B"] }).items.map((i) => i.siteId)).toEqual(["1", "31", "32", "9"]);
+    expect(checkGroupsOf(ex)).toEqual([{
+      id: "v1", anchor: "31", next: "32", loop: false,
+      alternatives: [{ label: "A", items: [{ siteId: "41", leg: { bends: [{ x: 1, y: 1 }] } }] }, { label: "B", items: [] }],
+      exitLeg: { bends: [{ x: 2, y: 2 }] },
+    }]);
   });
 
   it("runs the shared checks: two controls 20 m apart at 1:10 000", () => {

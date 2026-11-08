@@ -10,7 +10,7 @@ import { course, type ControlInfo } from "@oxygen/shared";
 import { trpc } from "../../lib/trpc";
 import type { ToolShape } from "../../components/MapViewer";
 import { explicitStructure, type SiteRow } from "../../lib/editor/sequence";
-import { checkDocumentFor, checkMarkers, checkSitesOf, checkStructureOf, legsLengthM, locateTarget, mergeChecks, type EditorCheck } from "../../lib/editor/checks";
+import { checkDocumentFor, checkGroupsOf, checkMarkers, checkSitesOf, checkStructureOf, legsLengthM, locateTarget, mergeChecks, type EditorCheck } from "../../lib/editor/checks";
 
 export interface CourseChecksInput {
   /** The selected course (course view), else null: the event-wide codes only. */
@@ -24,6 +24,8 @@ export interface CourseChecksInput {
   derivation: course.CourseDerivation | null | undefined;
   /** The circle radius the markers are sized from, paper mm. */
   ringMm: number;
+  /** How the view shows the variation groups (docs/course-editor.md §12): the leg checks follow the displayed path. */
+  orders?: course.GroupOrders;
 }
 
 export interface CourseChecksResult {
@@ -35,7 +37,7 @@ export interface CourseChecksResult {
 }
 
 export function useCourseChecks(input: CourseChecksInput): CourseChecksResult {
-  const { course: selected, structure, sites, controls, document, mapScale, objects, derivation, ringMm } = input;
+  const { course: selected, structure, sites, controls, document, mapScale, objects, derivation, ringMm, orders } = input;
   const server = trpc.course.checks.useQuery({ courseId: selected?.id ?? 0 }, { enabled: selected !== null });
   const sheets = trpc.courseMap.list.useQuery(undefined, { staleTime: 60_000 });
 
@@ -50,15 +52,18 @@ export function useCourseChecks(input: CourseChecksInput): CourseChecksResult {
   // The viewer's derivation is this course's only while it draws it alone.
   const ownDerivation = selected && derivation?.courses.length === 1 && derivation.courses[0].id === selected.name ? derivation : null;
 
+  const explicit = useMemo(() => (selected && structure ? explicitStructure(structure, sites) : null), [selected, structure, sites]);
   const client = useMemo(() => course.courseChecks({
-    structure: selected && structure ? checkStructureOf(selected.id, explicitStructure(structure, sites)) : null,
+    structure: selected && explicit ? checkStructureOf(selected.id, explicit, orders) : null,
+    // §9.2 VARIATION_*: the editor's, from the structure's groups.
+    groups: explicit ? checkGroupsOf(explicit) : [],
     sites: checkSites,
     document: checkDoc,
     sheets: windows,
     objects,
     derivation: ownDerivation,
     mapScale,
-  }), [selected, structure, sites, checkSites, checkDoc, windows, objects, ownDerivation, mapScale]);
+  }), [selected, explicit, orders, checkSites, checkDoc, windows, objects, ownDerivation, mapScale]);
 
   const checks = useMemo(() => mergeChecks(client, selected ? server.data : []), [client, server.data, selected]);
   const markers = useMemo(() => checkMarkers(checks, siteById, ringMm), [checks, siteById, ringMm]);

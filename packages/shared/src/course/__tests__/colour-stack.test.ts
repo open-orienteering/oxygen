@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { CourseStackError, courseColourStack, hexToCmyk, withObjectColours } from "../colour-stack.js";
+import { CourseStackError, VARIATION_TINTS, courseColourStack, hexToCmyk, withObjectColours, withTintColours } from "../colour-stack.js";
 import { paletteStack } from "../../symbol-library/palette.js";
 import type { DocumentColour } from "../../map-document/header.js";
 import { cmykToHex } from "../../render/symbol.js";
@@ -65,5 +65,19 @@ describe("layout-object colours", () => {
     expect(out.indexOf("#ff0000")).toBe(n);
     expect(out.indexOf("#000000")).toBe(n + 1);
     expect(out.colours[n]).toMatchObject({ id: "course-object:#ff0000", cmyk: [0, 1, 1, 0] });
+  });
+});
+
+describe("variation tint rows (§12.7, F7)", () => {
+  it("one row per label in first-use order on top, distinct tints, cycling past the palette", () => {
+    const base: DocumentColour[] = [{ id: "x", name: "x", cmyk: [0, 0, 0, 1] }];
+    const labels = ["B", "A", "B", ...Array.from({ length: VARIATION_TINTS.length }, (_, i) => `L${i}`)];
+    const out = withTintColours(base, labels);
+    expect(out.colours.slice(1, 3).map((c) => c.id)).toEqual(["course-tint:B", "course-tint:A"]);
+    expect(out.colours).toHaveLength(1 + 2 + VARIATION_TINTS.length);
+    expect(out.colours[1].cmyk).not.toEqual(out.colours[2].cmyk);
+    expect(out.colours.at(-1)!.cmyk).toEqual(out.colours[2].cmyk);
+    expect(out.indexOf("A")).toBe(2);
+    expect(() => out.indexOf("Z")).toThrow();
   });
 });

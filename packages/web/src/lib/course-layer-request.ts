@@ -37,6 +37,8 @@ export interface RequestCourse {
   legs?: Record<string, course.CourseLegProps>;
   /** Ids of the controls whose number every visit hides. */
   hiddenNumbers?: readonly number[];
+  /** The editor's All-variations view (docs/course-editor.md §12): an alternative drawn in its tint (course-layer.md §12.7). */
+  tint?: string;
 }
 
 /** The provisional visit's site id: not a control, never hit-tested (docs/course-editor.md §6.1). */
@@ -252,6 +254,7 @@ export function courseLayerRequest(input: CourseRequestInput): CourseLayerReques
       orderMode: c.orderMode ?? "ordered",
       // Items whose site is not drawn stay: the layer skips them and joins the neighbours (§2).
       items,
+      ...(c.tint ? { tint: c.tint } : {}),
     };
   });
 
@@ -282,6 +285,8 @@ export function courseLayerRequest(input: CourseRequestInput): CourseLayerReques
       labelMode: sequence ? "sequence" : "code",
       ...(allControls ? { allControls: true } : {}),
       ...(input.setterMarks ? { setterMarks: true } : {}),
+      // §12.7: a tinted course is the editor's All-variations view, never print.
+      ...(highlighted.some((c) => c.tint) ? { allVariations: true } : {}),
       ...(input.autoCuts === false ? { autoCuts: false } : {}),
       ...(input.layout
         ? {

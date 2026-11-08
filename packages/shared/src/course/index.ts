@@ -43,13 +43,19 @@ export {
 } from "./structure.js";
 export {
   MAX_VARIANTS,
+  groupOrder,
   materialiseVariants,
+  pathOfOrders,
   pruneSiteFromStructure,
   structureSiteIds,
   variantCount,
   variantKeyDuplicates,
+  variantOrders,
   variantStructure,
+  type GroupOrders,
   type MaterialisedVariant,
+  type PathGroup,
+  type RowPath,
 } from "./variants.js";
 export {
   COURSE_OBJECT_KINDS,
@@ -72,6 +78,7 @@ export {
   SAME_FEATURE_MIN_DISTANCE_M,
   UNCROSSABLE_CODES,
   OOB_CODES,
+  VARIATION_BALANCE_TOLERANCE,
   courseChecks,
   checkObstaclesOfDocument,
   invertedCode,
@@ -81,4 +88,5 @@ export {
   type CheckSite,
   type CheckObstacle,
   type CheckDocument,
+  type CheckVariationGroup,
 } from "./checks.js";

@@ -80,13 +80,16 @@ describe("courseStructureSchema", () => {
     expect(issueCodes({ ...linear([]), items: [{ siteId: "S" }, variation("v1", [["32"], ["33"]])] })).toContain("VARIATION_UNANCHORED");
   });
 
-  it("rejects duplicate group ids, duplicate labels, fewer than two alternatives and a group of empty alternatives only", () => {
+  it("rejects duplicate group ids, duplicate labels and fewer than two alternatives", () => {
     const dupId = { ...linear([]), items: [{ siteId: "S" }, variation("v", [["32"], ["33"]]), { siteId: "34" }, variation("v", [["35"], ["36"]]), { siteId: "F" }] };
     expect(issueCodes(dupId)).toContain("VARIATION_ID_DUPLICATE");
     const dupLabel = { ...linear([]), items: [{ siteId: "S" }, { kind: "variation", id: "v", alternatives: [{ label: "A", items: [{ siteId: "1" }] }, { label: "A", items: [{ siteId: "2" }] }] }, { siteId: "F" }] };
     expect(issueCodes(dupLabel)).toContain("VARIATION_LABEL_DUPLICATE");
     expect(parse({ ...linear([]), items: [{ siteId: "S" }, variation("v", [["32"]]), { siteId: "F" }] }).success).toBe(false);
-    expect(issueCodes({ ...linear([]), items: [{ siteId: "S" }, variation("v", [[], []]), { siteId: "F" }] })).toContain("VARIATION_ALL_EMPTY");
+  });
+
+  it("accepts a group of empty alternatives only (F7: *Create variation here* saves A and B empty at once)", () => {
+    expect(parse({ ...linear([]), items: [{ siteId: "S" }, variation("v", [[], []]), { siteId: "F" }] }).success).toBe(true);
   });
 
   it("accepts an empty alternative beside a non-empty one (answer 5: a straight leg)", () => {

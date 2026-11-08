@@ -30,23 +30,6 @@ export interface MaterialisedVariant {
   items: StoredControlItem[];
 }
 
-type Alternative = StoredVariationItem["alternatives"][number];
-
-/** Every visiting order of a group: one alternative each, or (loop) every permutation. */
-function groupOrders(group: StoredVariationItem): Alternative[][] {
-  if (!group.loop) return group.alternatives.map((alt) => [alt]);
-  const out: Alternative[][] = [];
-  const permute = (rest: Alternative[], acc: Alternative[]) => {
-    if (rest.length === 0) {
-      out.push(acc);
-      return;
-    }
-    rest.forEach((alt, i) => permute([...rest.slice(0, i), ...rest.slice(i + 1)], [...acc, alt]));
-  };
-  permute(group.alternatives, []);
-  return out;
-}
-
 function factorial(n: number): number {
   let f = 1;
   for (let i = 2; i <= n; i += 1) f *= i;
@@ -64,41 +47,136 @@ export function variantCount(s: StoredCourseStructure): number {
   return n;
 }
 
-/** The anchor's repeated visit in a loop: the site, no role or leg, its hidden number kept. */
-function anchorVisit(anchor: StoredControlItem): StoredControlItem {
-  return anchor.numberHidden ? { siteId: anchor.siteId, numberHidden: true } : { siteId: anchor.siteId };
+/**
+ * The visiting order of each group's alternatives, by group id: one label
+ * for a plain group, every label once for a loop (course-editor.md §12). A
+ * group missing from the record is visited by its first alternative (a
+ * loop: every alternative in stored order); unknown labels are skipped.
+ */
+export type GroupOrders = Readonly<Record<string, readonly string[]>>;
+
+/**
+ * Where a path row comes from in its structure (course-editor.md §12): a
+ * top-level item, the `index`-th item of a group's alternative, or a loop's
+ * repeated anchor visit (no item of its own; `itemIndex` is the group's).
+ */
+export type RowPath =
+  | { itemIndex: number; alt?: undefined; anchorVisit?: undefined }
+  | { itemIndex: number; alt: { label: string; index: number }; anchorVisit?: undefined }
+  | { itemIndex: number; alt?: undefined; anchorVisit: true };
+
+/** What a path reads of a control item, whatever the site-id type. */
+interface PathControl {
+  kind?: "control";
+  siteId: string | number;
+  numberHidden?: boolean;
+}
+/** What a path reads of a group, whatever the site-id type. */
+export interface PathGroup<C> {
+  kind: "variation";
+  id: string;
+  alternatives: { label: string; items: C[] }[];
+  loop?: boolean;
+}
+interface PathStructure<C> {
+  items: readonly (C | PathGroup<C>)[];
 }
 
-const copy = (item: StoredControlItem): StoredControlItem => structuredClone(item);
+/** A group's alternatives in their visiting order under `orders`: the ones named, else the first (a loop: all, stored order). */
+export function groupOrder<C>(group: PathGroup<C>, orders: GroupOrders | undefined): PathGroup<C>["alternatives"] {
+  const named = orders?.[group.id];
+  if (named) {
+    const out = named.flatMap((label) => group.alternatives.filter((a) => a.label === label));
+    if (out.length > 0) return out;
+  }
+  return group.loop ? group.alternatives : group.alternatives.slice(0, 1);
+}
 
-/** The concrete variants of a structure; `[]` for a structure without groups. */
-export function materialiseVariants(s: StoredCourseStructure): MaterialisedVariant[] {
-  if (!s.items.some((item) => item.kind === "variation")) return [];
-  let partial: MaterialisedVariant[] = [{ key: "", items: [] }];
-  s.items.forEach((item, index) => {
+/** The anchor's repeated visit in a loop: the site, no role or leg, its hidden number kept. */
+function anchorVisit<C extends PathControl>(anchor: C): C {
+  return (anchor.numberHidden ? { siteId: anchor.siteId, numberHidden: true } : { siteId: anchor.siteId }) as C;
+}
+
+const copy = <C,>(item: C): C => structuredClone(item);
+
+/**
+ * One path through a structure (course-editor.md §12): every group visited
+ * in the order `orders` names — the displayed alternatives in Course view,
+ * a variant's orders in Variant view — with a loop's anchor visit between
+ * consecutive non-empty alternatives, exactly as a variant is materialised.
+ * `paths[i]` says where `items[i]` comes from. Items are copies.
+ */
+export function pathOfOrders<C extends PathControl>(s: PathStructure<C>, orders?: GroupOrders): { items: C[]; paths: RowPath[] } {
+  const items: C[] = [];
+  const paths: RowPath[] = [];
+  s.items.forEach((item, itemIndex) => {
     if (item.kind !== "variation") {
-      for (const p of partial) p.items.push(copy(item));
+      items.push(copy(item as C));
+      paths.push({ itemIndex });
       return;
     }
-    const prev = s.items[index - 1];
-    const anchor = prev && prev.kind !== "variation" ? prev : undefined;
-    const next: MaterialisedVariant[] = [];
+    const group = item as PathGroup<C>;
+    const prev = s.items[itemIndex - 1];
+    const anchor = prev && prev.kind !== "variation" ? (prev as C) : undefined;
+    let visited = false;
+    for (const alt of groupOrder(group, orders)) {
+      if (alt.items.length === 0) continue;
+      if (group.loop && visited && anchor) {
+        items.push(anchorVisit(anchor));
+        paths.push({ itemIndex, anchorVisit: true });
+      }
+      alt.items.forEach((c, index) => {
+        items.push(copy(c));
+        paths.push({ itemIndex, alt: { label: alt.label, index } });
+      });
+      visited = true;
+    }
+  });
+  return { items, paths };
+}
+
+/** Every visiting order of a group's labels: one alternative each, or (loop) every permutation. */
+function labelOrders(group: { alternatives: readonly { label: string }[]; loop?: boolean }): string[][] {
+  const labels = group.alternatives.map((alt) => alt.label);
+  if (!group.loop) return labels.map((label) => [label]);
+  const out: string[][] = [];
+  const permute = (rest: string[], acc: string[]) => {
+    if (rest.length === 0) {
+      out.push(acc);
+      return;
+    }
+    rest.forEach((label, i) => permute([...rest.slice(0, i), ...rest.slice(i + 1)], [...acc, label]));
+  };
+  permute(labels, []);
+  return out;
+}
+
+type OrderItem = { kind?: "control" | "variation"; id?: string; alternatives?: readonly { label: string }[]; loop?: boolean };
+
+/**
+ * Every variant's key and its groups' visiting orders, in
+ * `materialiseVariants`' order (the cartesian product over groups in item
+ * order); `[]` without groups. `pathOfOrders(s, orders)` is that variant.
+ */
+export function variantOrders(s: { items: readonly OrderItem[] }): { key: string; orders: Record<string, string[]> }[] {
+  const groups = s.items.filter((item) => item.kind === "variation");
+  if (groups.length === 0) return [];
+  let partial: { key: string; orders: Record<string, string[]> }[] = [{ key: "", orders: {} }];
+  for (const group of groups) {
+    const next: typeof partial = [];
     for (const p of partial) {
-      for (const order of groupOrders(item)) {
-        const items = [...p.items];
-        let visited = false;
-        for (const alt of order) {
-          if (alt.items.length === 0) continue;
-          if (item.loop && visited && anchor) items.push(anchorVisit(anchor));
-          items.push(...alt.items.map(copy));
-          visited = true;
-        }
-        next.push({ key: p.key + order.map((alt) => alt.label).join(""), items: items.map(copy) });
+      for (const order of labelOrders({ alternatives: group.alternatives ?? [], loop: group.loop })) {
+        next.push({ key: p.key + order.join(""), orders: { ...p.orders, [group.id ?? ""]: order } });
       }
     }
     partial = next;
-  });
+  }
   return partial;
+}
+
+/** The concrete variants of a structure; `[]` for a structure without groups. */
+export function materialiseVariants(s: StoredCourseStructure): MaterialisedVariant[] {
+  return variantOrders(s).map(({ key, orders }) => ({ key, items: pathOfOrders<StoredControlItem>(s, orders).items }));
 }
 
 /** One variant as a linear structure (the column's shape, no groups); null for an unknown key. */
@@ -137,8 +215,9 @@ type Offsets = Record<string, { dx: number; dy: number }>;
 
 /**
  * Remove a site from a structure (a deleted control): from the top level and
- * from every alternative, groups kept. A group then left without a non-empty
- * alternative, unanchored (first or last) or directly after another group
+ * from every alternative, groups kept — one left with every alternative
+ * empty too (valid since F7: straight legs until controls land). A group
+ * left unanchored (first or last) or directly after another group
  * dissolves into its first alternative's items, so the result passes the
  * schema whenever the input did. The site's label offset goes too.
  */
@@ -163,8 +242,7 @@ export function pruneSiteFromStructure<T extends StoredCourseStructure & { label
         item.kind === "variation" &&
         (i === 0 ||
           i === items.length - 1 ||
-          items[i - 1].kind === "variation" ||
-          item.alternatives.every((alt) => alt.items.length === 0)),
+          items[i - 1].kind === "variation"),
     );
     if (bad < 0) break;
     const group = items[bad] as StoredVariationItem;

@@ -100,6 +100,11 @@ export interface CourseStructure {
   items: CourseItem[];
   /** Manual number positions: centre = site + offset, paper mm (`course_controls` label offsets). */
   labelOffsets?: Record<string, { dx: number; dy: number }>;
+  /**
+   * A variation alternative drawn in the All-variations view (§12.7): its
+   * label names the tint row. Read only with `viewOptions.allVariations`.
+   */
+  tint?: string;
 }
 
 /** Multipliers of the library dimensions (1 = the spec). */
@@ -150,6 +155,14 @@ export interface CourseViewOptions {
    * parts; out of range, or a one-part course, draws the whole course.
    */
   section?: number;
+  /**
+   * The editor's All-variations view (§12.7; 08 §5.3, §12 "Variation
+   * tints"): a structure with a `tint` draws its legs and the circles only
+   * it visits on a tint row (`course-tint:<label>`). Screen only — the
+   * print path never sets it (a compose fixture asserts the plain stream),
+   * and without it a tint is ignored.
+   */
+  allVariations?: boolean;
 }
 
 /** One compact point feature the overprint is cut around, paper mm. */

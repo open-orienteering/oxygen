@@ -125,6 +125,47 @@ describe("leg styles (§10.1, F1)", () => {
   });
 });
 
+describe("variation tints (§12.7, F7)", () => {
+  // The spine S → 31 → 33 → F with a none leg across the group, and the alternatives as tinted branches.
+  const structures = () => [
+    linear(["S", "31", "33", "F"], { id: "c1", items: [{ siteId: "S" }, { siteId: "31" }, { siteId: "33", leg: { style: "none" } }, { siteId: "F" }] }),
+    { ...linear(["31", "32", "33"]), id: "c1:g:A", tint: "A" },
+    { ...linear(["31", "33"]), id: "c1:g:B", tint: "B" },
+  ];
+  const legSymbol = (layer: ReturnType<typeof courseLayer>, id: string) =>
+    layer.symbols[layer.objects.find((o) => o.ref.kind === "leg" && o.ref.id === id)!.symbolIdx];
+
+  it("with allVariations, each tint has its row on top and the tinted courses' legs and own circles use it", () => {
+    const layer = courseLayer(layerInput({ structure: structures(), viewOptions: { allVariations: true } }));
+    const ids = layer.colours.map((c) => c.id);
+    expect(ids.slice(-2)).toEqual(["course-tint:A", "course-tint:B"]);
+    expect(layer.colours.at(-1)!.cmyk).not.toEqual(layer.colours.at(-2)!.cmyk);
+    const a = legSymbol(layer, "c1:g:A:0"), b = legSymbol(layer, "c1:g:B:0");
+    expect(a.type === "line" && colourId(layer, a.main!.colour)).toBe("course-tint:A");
+    expect(b.type === "line" && colourId(layer, b.main!.colour)).toBe("course-tint:B");
+    expect(legSymbol(layer, "c1:0").id).not.toContain("tint");
+    // 32 is visited by A alone: tinted; 31 by the spine too: plain purple.
+    const circleOf = (id: string) => layer.symbols[layer.objects.find((o) => o.ref.kind === "site" && o.ref.id === id)!.symbolIdx];
+    const c32 = circleOf("32");
+    expect(c32.type === "line" && colourId(layer, c32.main!.colour)).toBe("course-tint:A");
+    expect(circleOf("31").id).not.toContain("tint");
+  });
+
+  it("without the option a tint is ignored: the layer equals the untinted structures'", () => {
+    const tinted = courseLayer(layerInput({ structure: structures() }));
+    const plain = courseLayer(layerInput({ structure: structures().map(({ tint: _t, ...s }) => s) }));
+    expect(tinted).toEqual(plain);
+    expect(tinted.colours.some((c) => c.id.startsWith("course-tint:"))).toBe(false);
+  });
+
+  it("the tint rows stay below a toner saver's white", () => {
+    const toner = { id: "t", kind: "toner_saver", geometry: [{ x: 0, y: 0 }, { x: 90, y: 0 }, { x: 90, y: 90 }], props: { marginMm: 5 } } as unknown as CourseLayerObject;
+    const window = [{ x: 0, y: 0 }, { x: 100, y: 0 }, { x: 100, y: 100 }, { x: 0, y: 100 }];
+    const layer = courseLayer(layerInput({ structure: structures(), objects: [toner], viewOptions: { allVariations: true, window } }));
+    expect(layer.colours.map((c) => c.id).slice(-3)).toEqual(["course-tint:A", "course-tint:B", "course:toner-saver-white"]);
+  });
+});
+
 describe("crossings and map-issue points (§10.3, F4)", () => {
   const P = site("P", "crossing_point", 25, 10);
   const MI = site("MI", "map_issue", 50, 60);

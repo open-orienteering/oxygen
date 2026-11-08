@@ -8,7 +8,8 @@
 import { useState } from "react";
 import { useTranslation } from "react-i18next";
 import { iofSymbolName, type ControlKind } from "@oxygen/shared";
-import { partHeadings, type DisplayRow } from "../../../lib/editor/sequence";
+import { partHeadings, type DisplayRow, type VariationBlockInfo } from "../../../lib/editor/sequence";
+import { VariationBlock, type VariationHandlers } from "./VariationBlock";
 import { FINISH_OPTIONS, SPECIAL_OPTIONS } from "../../../lib/control-description-options";
 import {
   addSpecial,
@@ -40,6 +41,9 @@ export interface CourseSectionProps {
   instructions: Instructions;
   /** One gesture's next value: one `course.update { descriptionInstructions }`, one undo entry (§4). */
   onInstructions: (next: Instructions) => void;
+  /** The course's variation groups (§12), each shown after its anchor's row. */
+  blocks?: VariationBlockInfo[];
+  variation?: VariationHandlers;
 }
 
 export function CourseSection(p: CourseSectionProps) {
@@ -94,8 +98,11 @@ export function CourseSection(p: CourseSectionProps) {
             {p.rows.map((row, i) => {
               const legM = p.legMeters[i];
               const isControl = row.kind === "control";
+              // §12: a loop's repeated anchor visit is no item — no drag, no ↑ / ↓, no ✕.
+              const movable = isControl && !row.path.anchorVisit;
               const selected = row.id === p.selectedControlId;
               const part = parts.get(i);
+              const blocks = p.variation ? (p.blocks ?? []).filter((b) => b.afterRow === i) : [];
               return [
                 part !== undefined && (
                   <li key={`part-${part}`} data-testid="editor-seq-part" data-part={part}
@@ -110,16 +117,19 @@ export function CourseSection(p: CourseSectionProps) {
                   data-kind={row.kind}
                   data-exchange={row.exchange ? "true" : undefined}
                   data-control-id={row.id}
-                  draggable={isControl && ordered}
-                  title={isControl && ordered ? te("dragToReorder") : undefined}
+                  data-group={row.group?.id}
+                  data-alternative={row.group?.label ?? undefined}
+                  data-anchor-visit={row.path.anchorVisit ? "true" : undefined}
+                  draggable={movable && ordered}
+                  title={movable && ordered ? te("dragToReorder") : undefined}
                   onDragStart={() => setDragFrom(row.seqIndex)}
-                  onDragOver={(e) => { if (isControl && dragFrom !== null) e.preventDefault(); }}
+                  onDragOver={(e) => { if (movable && dragFrom !== null) e.preventDefault(); }}
                   onDrop={() => {
-                    if (dragFrom !== null && isControl && dragFrom !== row.seqIndex) p.onMove(dragFrom, row.seqIndex);
+                    if (dragFrom !== null && movable && dragFrom !== row.seqIndex) p.onMove(dragFrom, row.seqIndex);
                     setDragFrom(null);
                   }}
                   onDragEnd={() => setDragFrom(null)}
-                  className={`group flex items-center gap-1.5 px-2.5 py-0.5 ${selected ? "bg-purple-50" : "hover:bg-slate-50"}`}
+                  className={`group flex items-center gap-1.5 ${row.group ? "pl-6 pr-2.5 border-l-2 border-purple-200 ml-2.5" : "px-2.5"} py-0.5 ${selected ? "bg-purple-50" : "hover:bg-slate-50"}`}
                 >
                   <button type="button" data-testid="editor-seq-select" onClick={() => p.onSelectRow(row.id)}
                     className="w-5 text-right text-slate-400 tabular-nums cursor-pointer hover:text-purple-700">
@@ -153,7 +163,7 @@ export function CourseSection(p: CourseSectionProps) {
                     <span data-testid="editor-radio-badge" className="px-1 rounded-full text-[9px] bg-sky-100 text-sky-800">{t("editor.radioBadge")}</span>
                   )}
                   {ordered && legM != null && <span className="ml-auto text-slate-400 tabular-nums" data-testid="editor-leg-meters">{legM} m</span>}
-                  {isControl && (
+                  {movable && (
                     <span className={`flex gap-0.5 ${ordered && legM != null ? "" : "ml-auto"} opacity-60 group-hover:opacity-100`}>
                       {ordered && (
                         <>
@@ -168,6 +178,9 @@ export function CourseSection(p: CourseSectionProps) {
                     </span>
                   )}
                 </li>,
+                ...blocks.map((b) => (
+                  <VariationBlock key={`variation-${b.id}`} block={b} on={p.variation!} dragFrom={dragFrom} onDropped={() => setDragFrom(null)} />
+                )),
               ];
             })}
           </ol>

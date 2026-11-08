@@ -70,10 +70,10 @@ exit bubble on every pointer move
 
 | Part | `data-testid` | What it holds |
 |---|---|---|
-| Top bar (`TopBar.tsx`) | `editor-top-bar` | course picker (`editor-course-picker`), view (`editor-view-course` / `-all` / `-class`), mode (`editor-mode-course` / `-layout` / `-field`), undo / redo (`editor-undo` / `-redo`), hide other controls (`editor-hide-others`), auto cuts (`editor-toggle-cuts`), Export ▾ (`editor-export`, `course-layout.md` §7), the map info (`editor-map-info`, below), the course-info button and the save indicator (below), who else has a course open (§11), help popover; MapPanel adds descriptions, fullscreen and the viewer its zoom on the same row |
+| Top bar (`TopBar.tsx`) | `editor-top-bar` | course picker (`editor-course-picker`; roots and plain courses — a materialised variant is edited through its root, §12), view (`editor-view-course` / `-all` / `-class`, and for a course with variations `editor-view-variant` (Variant ▾) and `editor-view-all-variations`, §12), mode (`editor-mode-course` / `-layout` / `-field`), undo / redo (`editor-undo` / `-redo`), hide other controls (`editor-hide-others`), auto cuts (`editor-toggle-cuts`), Export ▾ (`editor-export`, `course-layout.md` §7), the map info (`editor-map-info`, below), the course-info button and the save indicator (below), who else has a course open (§11), help popover; MapPanel adds descriptions, fullscreen and the viewer its zoom on the same row |
 | Tool rail (`ToolRail.tsx`; Layout mode: `layout/LayoutRail.tsx`, `editor-layout-rail`, `course-layout.md` §3) | `editor-tool-rail` | `editor-tool-<key>` for `V`, `S`, `K`, `M`, `X` (map exchange, §6.9), `C` (crossing point, §6.8), `A` (menu `editor-area-menu`, `editor-area-<kind>`, and `editor-area-corridor` — §6.7), `T`, `G`; the snapping toggle `editor-snapping` (§6) |
 | Action bar (`ActionBar.tsx`) | `editor-action-bar` | the selection's or phantom's entries, horizontal, centred under the selection, hidden during a drag; ids `editor-action-<id>` as the legacy popover's. The viewer positions it (`actionLayout: "bar"`); on a phone the same list is the bottom sheet's peek row (`actionLayout: "host"`, §10) |
-| Inspector (`Inspector.tsx`, `modes/CourseMode.tsx`, `modes/ObjectSection.tsx`) | `editor-inspector` | collapsible sections: course (create, sequence, visit order, description sheet — `editor-description-instructions`, §4 —, clone), selection (a site: code, kind, position, description summary, "also in", hidden number, notes — §6.6; several controls: `editor-multi` with the bulk actions — §6.5; a course object: `editor-object` — §7; a leg: `editor-leg` — §6.7, `modes/LegSection.tsx`), inventory (`editor-inventory-panel`, collapsed), checks (`editor-checks`, §8) |
+| Inspector (`Inspector.tsx`, `modes/CourseMode.tsx`, `modes/ObjectSection.tsx`) | `editor-inspector` | collapsible sections: course (create, sequence — a variation group as a nested block `editor-variation`, §12 —, visit order, description sheet — `editor-description-instructions`, §4 —, clone), selection (a site: code, kind, position, description summary, "also in", hidden number, notes — §6.6; several controls: `editor-multi` with the bulk actions — §6.5; a course object: `editor-object` — §7; a leg: `editor-leg` — §6.7, `modes/LegSection.tsx`), inventory (`editor-inventory-panel`, collapsed), checks (`editor-checks`, §8) |
 | Map info (`MapInfoDialog.tsx`, model `lib/editor/map-info.ts`; P6) | `editor-map-info` → `editor-map-info-dialog` | a map icon button (`IconMap`, `components/map-icons.tsx`) in the top bar right after Export ▾ (`aria-haspopup="dialog"`, `aria-expanded`); a click opens a modal (`role="dialog"`, `aria-modal="true"`, centred over a dimmed backdrop; the close button `editor-map-info-close`, a backdrop click or Escape closes it). Its header shows the map's file name (`editor-map-info-name`, `data-name`) or, without a map, `editor-map-info-none`. Its rows, each only when it has a value: the scale `editor-map-info-scale` (`data-scale`, `1:10 000`), the north lines `editor-map-info-north` (the `NorthLinesBadge` sentence, `north-lines-badge` with `data-north-lines`; *No magnetic north lines found* when the file has none), the file `editor-map-info-file` (size and upload time, `data-bytes`, `data-uploaded`); then the document section `editor-map-info-document` (`data-source`, `data-objects`, `data-symbols`, `data-colours`; read from the loaded document's header, absent while it loads or the import runs) with `editor-map-info-source` (OCAD and its version, or OpenOrienteering Mapper), `-content` (objects · symbols · colours), `-symbol-library` (the matched symbol library and version; not `-library`, which is the action below), `-crs` (EPSG code and name) and `-importer`. Its actions: *Review symbols* (`editor-map-info-review`, a link to `/<event>/map-review/<documentHash>`, only once the document exists — `map-symbols.md` §8.7), *Replace map* (`editor-map-info-replace`; *Upload map* without a map; the hidden `accept=".ocd"` input), *From club library* (`editor-map-info-library`, only when the club library lists a map; opens `club-map-picker`, `club-library.md`). An upload's progress, error and the stale-north-lines notice (`map-upload-notice`) show in the dialog's footer |
 | Course info (`EditorStatus.tsx` `StatsButton`, model `lib/editor/status.ts`) | `editor-stats` → `editor-stats-popover` | an icon button in the top bar (`aria-haspopup="dialog"`, `aria-expanded`) with the check count as its amber badge (`editor-stats-badge`, `data-count`, absent at zero, §8); a click opens the popover (`role="dialog"`; a second click, an outside click or Escape closes it — Escape closes only the popover, the editor's Escape cascade of §3 is not stepped, so an armed tool stays armed). Its rows, each only when it has a value, in this order: `editor-stats-controls` (`data-count`), `editor-stats-length` (`data-m`), `editor-stats-climb` (`data-m`), the shown sheet's key in Layout mode and Class view (`editor-stats-sheet`, `data-key`, `course-layout.md` §6), `editor-stats-snapping` when on, `editor-stats-checks` (`data-count`, amber). No map scale since P6: it is the map-info dialog's (`courseInfoRows`). With no course and no sheet the popover says *No course* |
 | Save indicator (`EditorStatus.tsx` `SaveIndicator`) | `editor-save-state` | in the top bar after the course-info button: a dot and the save state's words (`data-state` = `saved` / `saving` / `error` / `conflict`, `role="status"`, `aria-live="polite"`, the words also its `title`). `saved` / `saving` are the dot alone (green / grey pulsing; the words `sr-only`), so P2 adds a dot (≤ 16 px) and an icon button (≤ 32 px) to the top bar's row — whether the row wraps on a laptop screen depends on the course names (the picker is as wide as the longest) and the presence chips; `error` / `conflict` show their words (`editor-save-state-text`, red) at every width — a failed or conflicting save never hides behind a popover or a tooltip |
@@ -162,10 +162,13 @@ Structure writes go through `course.setStructure` with the course's
 token; edits are pure functions over the wire form
 (`lib/editor/structure-edit.ts`: `insertSite`, `appendSite`,
 `removeSite` (every visit), `removeVisit` (one), `moveVisit`, `setRole`,
-and for a leg `setLegProps` — §6.7)
+for a leg `setLegProps` — §6.7 — and the group edits of §12)
 in **control-sequence positions** — the items between an explicit leading
-start and trailing finish. An item whose predecessor changes loses its
-`leg` (its gaps, bends and corridor described the old leg). The editor's first save of a
+start and trailing finish, of the **displayed path** when the course has
+variation groups (each group shown by its displayed alternative, §12). An
+item whose predecessor changes loses its
+`leg` (its gaps, bends and corridor described the old leg); the item after
+a group keeps its leg while the group changes. The editor's first save of a
 course makes it explicit (`explicitStructure`, `lib/editor/sequence.ts`):
 the start and finish it is drawn with — the event default completing an
 implicit one — become items (`course-layer.md` §6.2). The inspector's rows
@@ -186,6 +189,9 @@ exchange lists its parts (§6.9).
 | click a leg (selected course) | phantom with the insert position (`insertIndexForLeg`: before the row the leg ends at, last when it ends at the finish) + **Insert into course**; the phantom is the **selected leg** — the inspector's *Leg* section (§6.7) and, on desktop and tablet, **Add bend here** | — |
 | Leg section: style, bends ✕, corridor *Add* / fields / *Remove* (§6.7) | `setStructure(setLegProps)`: the item's `leg` patched, its other props kept | `setStructure(prev)` |
 | **Add bend here** (leg phantom) | `setStructure(setLegProps { bends })`: the phantom's point inserted on the nearest segment (`insertBendAt`) | `setStructure(prev)` |
+| **Create variation here** (a top-level leg phantom, desktop and tablet; §12) | `setStructure(createGroup)`: a group with empty alternatives A and B between the leg's ends; A is shown and active | `setStructure(prev)` — the group and its variants go |
+| variation block: a tab (`editor-variation-tab-<label>`), `1–9` on the selection's group (§12) | — the alternative shown in Course view and where `K` goes | — |
+| variation block: ＋ (`editor-variation-add`), ✎ / double-click a tab (`editor-variation-rename`, `-label`), ✕ (`editor-variation-remove`), *Loop* (`editor-variation-loop`), a row dropped on a tab | `setStructure(addAlternative / renameAlternative / removeAlternative / setLoop / moveToAlternative)` | `setStructure(prev)` |
 | drag a bend handle (`V`, selected leg) | one `setStructure(setLegProps { bends })` on release | `setStructure(prev)` |
 | `Delete` / `Backspace` with a focused bend | `setStructure(setLegProps { bends })` without it | `setStructure(prev)` |
 | `A` → **Corridor on selected leg** (`C`) | `setStructure(setLegProps { corridor })` with the default corridor | `setStructure(prev)` |
@@ -638,7 +644,9 @@ than three hull points).
   course and centre the view on it (`viewRequest.centre`); **`F`** fits
   the course, or every positioned control without one (`viewRequest.fit`).
 - **Double-click a leg** inserts a new control there (§4's insert, without
-  the action bar).
+  the action bar; not in All variations, §12).
+- **`1`–`9`** show and activate the n-th alternative of the selection's
+  variation group (§12; with `V`).
 - `Delete` / `Backspace` deletes the multi-selection, else the selected
   leg's **focused bend** (§6.7), else the selected object's **focused
   vertex** (§7 "Editing geometry"), else the selected object, else the
@@ -1219,6 +1227,133 @@ its `hlc` — and the notice reads "Moved by ‹who› at ‹time› to x … mm
 mm." with Keep mine / Keep theirs as before. If the journal has no entry,
 the §3 wording stays.
 
+## 12. Variations and loops
+
+Row F7 (08 §5.2 inspector and view picker, §5.3 "Variation authoring",
+`1–9`, §5.4 Variant view, §5.5, §5.6; slice F answer 5). The stored
+groups and their materialisation are `course-layer.md` §6.1 and §12; the
+editor reads and writes them through `course.setStructure` like every
+other structure edit — one write and one undo entry per gesture.
+
+**Create a group.** A selected **top-level** leg (§6.7: the leg phantom;
+both ends top-level items, no group between them — `canCreateGroup`)
+offers **Create variation here** in its action bar
+(`editor-action-create-variation`, after *Add bend here*; desktop and
+tablet). It writes `createGroup`: a group `{ kind: "variation", id:
+"v<n>", alternatives: [A: [], B: []] }` before the leg's end item — the
+leg's start is the group's **anchor**. Both alternatives start empty and
+the group is saved at once (answer 5); an empty alternative draws as the
+straight leg, so nothing moves on the map until a control lands. The
+leg's props (style, bends, gaps, corridor, crossing) stay on its end item:
+they become the group's exit leg, every alternative's. The new
+group's A is shown and activated (below). No nesting: a leg into, inside
+or out of a group offers no *Create*, nor does Variant view (Course view
+is where groups are made).
+
+**The displayed path.** In Course view each group is shown by one
+alternative — its **active** one (default the first) — and a loop by
+every alternative, the active one first (`courseViewOrders`); in Variant
+view each group by the variant's order. That path
+(`course.pathOfOrders`, `course-layer.md` §12.1) is what the inspector
+lists (`displaySequence(structure, sites, orders)`: each row's `path`
+names its item, an alternative's item or a loop's repeated **anchor
+visit**), what the canvas draws (`courseOverride`, below), what the leg
+metres, the leg phantom and the checks read, and what every
+structure-edit position means. So:
+
+- **Inserting on a group's legs goes into the group** (`insertSite`): on
+  the leg into an alternative's control it lands before it in that
+  alternative; on the leg out of an alternative's last control (the exit
+  leg, or a loop's leg back to the anchor visit) after it; on the
+  straight leg of an empty active alternative into it (a loop's empty
+  petal has no leg: the leg after the anchor stays the drawn petal's,
+  unless every petal is empty). The leg into the anchor stays top-level. Before F7 the positions skipped groups and were
+  off by one after a group.
+- **↑ / ↓ and a dragged row keep their level** (`moveVisit`): a top-level
+  row passes a group without entering it, an alternative's row moves
+  within the displayed path.
+- **A loop's anchor visit** is no item: its row has no ✕, ↑ / ↓ or drag,
+  and the leg into it has no Leg section.
+- `removeSite` (*Remove from ‹course›*) takes the control out of every
+  alternative too; a group left first, last or beside another dissolves
+  into its first alternative (the schema's rule); one with every
+  alternative empty stays (`course-layer.md` §6.1, `VARIATION_ALL_EMPTY`
+  is a check).
+- The item after a group keeps its `leg` while the group changes (its
+  predecessor is the group); an alternative's first item has the leg from
+  the anchor.
+- *Add to ‹course›* appends at the top level, before the finish.
+
+**The block** (`modes/VariationBlock.tsx`, `editor-variation`,
+`data-group`, `data-loop`) sits in the sequence after the anchor's row;
+the group's rows follow it indented (`data-group`, `data-alternative`,
+`data-anchor-visit`). Its parts:
+
+| Part | `data-testid` | Write |
+|---|---|---|
+| a tab per alternative (`aria-pressed` on the shown one; its control count beside the label) | `editor-variation-tab-<label>` | none: the alternative is shown and activated; a row dragged onto a tab moves to the end of that alternative (`moveToAlternative`) |
+| ＋ | `editor-variation-add` | `addAlternative`: an empty one, the next free capital (A … Z, then A2 …); it is shown |
+| ✎, or double-click a tab | `editor-variation-rename` → `editor-variation-label` | `renameAlternative`: a blank or taken label is ignored |
+| ✕ | `editor-variation-remove` | `removeAlternative` of the shown one with its controls; with two alternatives the group dissolves into the other's controls |
+| *Loop (butterfly)* | `editor-variation-loop` | `setLoop`: the variants become the visiting orders (`AB`, `BA`), the anchor visited between the alternatives |
+| on a phone | `editor-variation-readonly` | the tabs still switch the shown alternative; the rest is disabled and the line says editing is for desktop and tablet (08 §5.5) |
+
+**Activating an alternative** (a tab, `1–9`). `1`–`9` pick the n-th
+alternative of the **selection's group** — the group of the selected leg,
+of the selected control's row, else the group activated last
+(`EditorState.focusGroupId`). Activating shows the alternative in Course
+view (from Variant or All variations too), and claims `K`: armed with
+nothing selected, the chain starts at the end of that alternative
+(`alternativeEndAt`), so successive placements fill it. Escape drops the
+claim before the course (the alternative stays shown); a course change
+resets the active alternatives.
+
+**Views** (top bar; `EditorView` `variant`, `all-variations`). For a
+course with groups the view group gains **Variant ▾**
+(`editor-view-variant`: every key, `course.variantOrders` of the
+structure being edited — the keys `course.variantList` answers once the
+write lands) and **All variations** (`editor-view-all-variations`, a
+toggle back to Course view):
+
+- *Variant*: the variant's path with its own numbering, editable as Course
+  view (its legs insert into the variant's alternatives). An edit that
+  drops the shown key (*Loop*, a removed alternative, an undo) returns to
+  Course view.
+- *All variations*: a read-only overlay — no leg clicks, no Leg section,
+  no provisional visit, no *Create*. The canvas draws the spine and one
+  branch per alternative in distinct purple tints, labels as codes
+  (`course-layer.md` §12.7). Screen only: Export ▾ prints the root (F8
+  prints per variant and an all-variations page in one purple).
+
+**The canvas.** `course.list` carries the root's first alternatives, so
+for a course with groups the page hands the viewer `courseOverride`
+(`MapViewerEditorProps`, `lib/editor/variation-view.ts`): in Course and
+Variant view the displayed path as the course (`courseDrawOf`: controls,
+legs keyed by drawn neighbours, hidden numbers), in All variations the
+spine and the tinted branches (`allVariationDraws`); `withCourseOverride`
+replaces the overlay of the course's name and adds the branches
+highlighted. The description sheet and the multi-course leg labels leave
+the tinted branches out. Class view and Layout mode draw the sheet as it
+prints (the root) until F8.
+
+**Membership.** A control in any alternative is on the course (not
+faded, *Remove from ‹course›* offered); "also in" counts a variant as its
+root, once.
+
+**Checks** (§8). The leg, number and description checks run over the
+displayed path; `VARIATION_UNBALANCED` (alternatives more than 10 % apart)
+and `VARIATION_ALL_EMPTY` over the groups (`checkGroupsOf`;
+`course-layer.md` §9.2). Both are the editor's: `course.checks` has no
+groups (§9.4 there).
+
+**Decided on the user's standing instruction (2026-11-07), for review**:
+an all-empty group is valid (answer 5's "not all of them" became a check,
+so *Create* can save A and B empty); insertion on a group's legs goes into
+the group; `1–9` act on the selection's group; activating an alternative
+claims `K`; All variations is read-only with code labels; Variant ▾ lists
+the keys of the structure being edited; the course picker lists roots;
+group ids `v<n>`, new labels the next free capital.
+
 ## API
 
 The course and control mutations the editors write through (08 §6;
@@ -1241,8 +1376,9 @@ seq). Tokens are decimal strings.
 | `course.lastChange` / `control.lastChange` | `courses.view` | `{ courseId }` / `{ id }` | `{ name, at /* ISO */ } \| null`: actor and time of the row's newest `*.upserted` entry (`name` empty without a sign-in) |
 
 A stale `baseVersion` answers `CONFLICT` with `data: { kind, id, version,
-current, differing }`; a variation group or a slice-F site kind answers
-`PRECONDITION_FAILED`.
+current, differing }`. Variation groups are written since F6 and authored
+since F7 (§12; `course.variantList { courseId }` lists the variants); the
+slice-F site kinds since F4.
 
 ## Tests
 
@@ -1357,6 +1493,10 @@ whose poll ran meanwhile simply does not conflict (decision log, D10).
 | unit, integration, E2E | `course-layout.md` "Tests" | Layout mode |
 | unit (web) | `pages/editor/__tests__/placement.test.ts` "X: the map exchange tool", `rail.test.ts` "railKeyOf", `lib/editor/__tests__/sequence.test.ts` "part headings" | §6.9: `X` armed, numbered and advanced as a control, `K` ↔ `X` keep the chain, not a chain end; the rail lights `X`; the exchange row marked, part 1 before the first row and part 2 after the exchange, none without one |
 | E2E | `e2e/course-editor.spec.ts` "F5: map exchange" | §6.9: `X` after a selected control → the ghost `2 · code`, the chain stays armed, three rows with the exchange second and two part headings, the exchange labelled 2, the on-map 13.5 row; Export ▾ this course → two pages, two own sheets with different windows; Layout mode → part 2's sheet (`data-section` 1) deleted → `EXCHANGE_WITHOUT_SHEET` with *Part 2* |
+| unit (web) | `lib/editor/__tests__/structure-edit.test.ts` "variation groups (F7)" | §12: the displayed path's sequence; a position after a group at the top level (the off-by-group regression); the group's legs insert into it (into, out of, an empty active alternative), the leg into the anchor top-level; ↑ / ↓ keep a row's level; a loop's anchor visit takes no ✕, move or leg, its legs belong to the alternatives, B active first; `removeSite` in every alternative, an all-empty group kept, an unanchored one dissolved; the item after a group keeps its leg, an alternative's first item's leg dropped when its predecessor changes; `setLegProps` by path; `setNumberHidden` in alternatives; `createGroup` / `canCreateGroup` (top-level legs only, `v1`, `v2`); add / remove (two left: dissolve) / rename (blank, taken) / loop; `moveToAlternative` |
+| unit (web) | `lib/editor/__tests__/sequence.test.ts` "variation groups (F7)", `state.test.ts` "variations (F7)" | §12: rows' paths in the explicit structure and their group, a loop's anchor-visit row, the leg's path, `courseViewOrders`, `variationBlocks` after the anchor, `alternativeEndAt`; the reducer's Variant view (needs a key), All variations, the active alternative (to Course view, claims `K`, Escape drops the claim before the course), a course change resets them |
+| unit (web) | `lib/editor/__tests__/variation-view.test.ts`, `checks.test.ts` "structure with a group", `pages/editor/__tests__/action-bar.test.ts` "Create variation here" | §12: `courseDrawOf` (legs by drawn neighbours, the crossing as a string, hidden numbers), `allVariationDraws` (spine with a none leg, a branch per alternative, the shared exit leg, a loop's petals), `withCourseOverride`; the checks' displayed path and `checkGroupsOf`; *Create variation here* after *Add bend here*, only when the page says so |
+| E2E | `e2e/course-editor.spec.ts` "F7: variations and loops" (`chromium`), "F7 on a phone" (`mobile`) | §12: a leg → *Create variation here* → one block with tabs A (pressed) and B, `course.variantList` `A`, `B`; tab B, `K` with nothing selected → the control is B's row; Variant ▾ B numbers it 2, A numbers the anchor's next 2; All variations → the two alternatives' legs in different tints (canvas pixels); `VARIATION_UNBALANCED` listed and locating the anchor; *Loop* → `AB`, `BA`; Export ▾ this course prints; three undos → loop, the control, the group gone. On a phone a group written over tRPC shows its block with `editor-variation-readonly`, ＋ and *Loop* disabled, and tab B switches the rows |
 
 ## Pending in this chapter
 
@@ -1374,6 +1514,16 @@ whose poll ran meanwhile simply does not conflict (decision log, D10).
 - **A picked setter map on the canvas** (§9, F10): Field mode lists the
   setter's controls, but the map keeps the course's highlight; drawing the
   setter's group highlighted goes through the layer request (F7's files).
+- **Variations, beyond F7** (§12): Variant ▾ and All variations are the
+  desktop top bar's — the phone's overflow menu offers neither (its block
+  switches the alternative shown). Export ▾'s variant entries, the
+  per-variant and all-variations pages and Class view / Layout mode of a
+  root per variant are F8's. Rows move between alternatives by a drop on
+  a tab (to the end); a drop at a position inside another alternative is
+  ↑ / ↓ after it. A course ending `… group, finish` takes an armed `K`
+  with nothing selected and no activated alternative into the group (its
+  last leg is the group's exit leg); select the last top-level control
+  first to append at the top level.
 
 - **Selection highlight through the dynamic bucket** (04 §7: the
   selected object's passes redrawn in a highlight colour): the selection

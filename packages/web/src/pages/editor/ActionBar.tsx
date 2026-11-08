@@ -34,12 +34,16 @@ export interface ActionContext {
   busy: boolean;
   /** The leg phantom's leg can be edited here (it resolves to an item; not on a phone, §6.7). */
   legEdit?: boolean;
+  /** The leg phantom's leg can become a variation group (§12: a top-level leg, desktop and tablet). */
+  variationHere?: boolean;
 }
 
 export interface ActionHandlers {
   insert(): void;
   /** *Add bend here* on a leg (§6.7). */
   addBend(): void;
+  /** *Create variation here* on a leg (§12). */
+  createVariation?(): void;
   addToCourse(): void;
   add(): void;
   addStart(): void;
@@ -65,6 +69,7 @@ export function courseActions(ctx: ActionContext, on: ActionHandlers, label: Act
     if (ctx.phantom.insertAt !== null && ctx.course) {
       out.push({ id: "insert", label: label("editor.actionInsert"), onClick: on.insert, disabled: !ctx.codesReady });
       if (ctx.legEdit) out.push({ id: "add-bend", label: label("editor:actionAddBend"), onClick: on.addBend });
+      if (ctx.variationHere && on.createVariation) out.push({ id: "create-variation", label: label("editor:actionCreateVariation"), onClick: on.createVariation });
       return out;
     }
     if (ctx.course) out.push({ id: "add-to-course", label: label("editor.actionAddToCourse", { name: ctx.course }), onClick: on.addToCourse, disabled: !ctx.codesReady });

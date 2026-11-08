@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 import type { DisplayRow } from "../../../lib/editor/sequence";
 import { afterPlaced, afterUndo, armPlacement, endsChain, ghostInfo, switchTool } from "../tools/placement";
 
-const row = (kind: DisplayRow["kind"], id: number, x: number, seqIndex = -1): DisplayRow => ({ kind, id, code: String(id), pt: { x, y: 0 }, seqIndex });
+const row = (kind: DisplayRow["kind"], id: number, x: number, seqIndex = -1): DisplayRow => ({ kind, id, code: String(id), pt: { x, y: 0 }, seqIndex, path: { itemIndex: 0 } });
 // S(1) → 31 → 32 → 33 → F(2)
 const rows: DisplayRow[] = [row("start", 1, 0), row("control", 31, 10, 0), row("control", 32, 20, 1), row("control", 33, 30, 2), row("finish", 2, 40)];
 const ptOf = (id: number) => rows.find((r) => r.id === id)?.pt ?? null;
