@@ -10,7 +10,7 @@ import { readFile } from "node:fs/promises";
 import { expect, test, type Browser, type Page, type TestInfo } from "@playwright/test";
 import { reseed } from "./helpers/reseed";
 import {
-  allControlsSheet, analysePdf, arm, cleanup, clickMap, clickTab, controlRows, coveredBy, desktopContext, drag, dragMm, editorReady,
+  allControlsSheet, analysePdf, arm, canvasInCircle, cleanup, clickMap, clickTab, controlRows, coveredBy, desktopContext, drag, dragMm, editorReady,
   emptyPoint, ensureCoursesAndMap, ensureFixtureFromDesktop, freezeExternalPoll, geometryOf, inkAt, inkIn, labelOf, legBetween, legMidpoint, legPieces, nameIdOf, objectRow,
   openEditor, pageToPaperOf, place, placeOneShot, pressInside, pressOnEdge, printed, probeTemplate, regularCodes, select, selectCompetition,
   selectedCode, selectedPosition, siteCuts, site, sitePoint, sites, toolShapes, toPage, toPaper, trpcCall, viewCentre, viewSettled, newCourse,
@@ -3175,4 +3175,173 @@ test.describe("F3 on a phone: the Leg section is read-only (docs/course-editor.m
     await expect(page.getByTestId("editor-leg-readonly")).toBeAttached();
     await expect(page.getByTestId("editor-action-add-bend")).toHaveCount(0);
   });
+});
+
+// F7 (docs/course-editor.md §12): variation authoring. Its own describe, after F3–F5's (F10 shares this file).
+test.describe("F7: variations and loops (docs/course-editor.md §12)", () => {
+  desktopOnly();
+
+  /**
+   * The leg's drawn colour around a paper point: the mean of the canvas pixels in the purple-to-blue family
+   * (blue well above green — the tints; the map's yellows, oranges and greens are left out).
+   */
+  async function colourAt(page: Page, mm: Pt): Promise<number[]> {
+    const p = await toPage(page, mm);
+    const { rgb } = await canvasInCircle(page, { x: p.x - 6, y: p.y - 6, width: 12, height: 12 }, 0);
+    const sum = [0, 0, 0];
+    let n = 0;
+    for (let i = 0; i < rgb.length; i += 3) {
+      const [r, g, b] = [rgb[i], rgb[i + 1], rgb[i + 2]];
+      if (b - g < 80) continue;
+      sum[0] += r; sum[1] += g; sum[2] += b; n++;
+    }
+    expect(n, "tinted pixels at the leg").toBeGreaterThan(0);
+    return sum.map((v) => v / n);
+  }
+
+  /** A page point well off the leg a → b (half its length to one side), clear of every site. */
+  async function offLeg(page: Page, a: Site, b: Site): Promise<Pt> {
+    const pa = await toPage(page, a.mm), pb = await toPage(page, b.mm);
+    const mid = { x: (pa.x + pb.x) / 2, y: (pa.y + pb.y) / 2 };
+    const len = Math.hypot(pb.x - pa.x, pb.y - pa.y);
+    const n = { x: -(pb.y - pa.y) / len, y: (pb.x - pa.x) / len };
+    const viewer = (await page.getByTestId("map-viewer").boundingBox())!;
+    const marks = await Promise.all((await sites(page)).map((s) => toPage(page, s.mm)));
+    for (const k of [0.5, -0.5, 0.7, -0.7, 0.35, -0.35]) {
+      const p = { x: mid.x + n.x * len * k, y: mid.y + n.y * len * k };
+      const inside = p.x > viewer.x + 60 && p.x < viewer.x + viewer.width - 100 && p.y > viewer.y + 60 && p.y < viewer.y + viewer.height - 120;
+      if (inside && marks.every((q) => Math.hypot(q.x - p.x, q.y - p.y) > 45)) return p;
+    }
+    return emptyPoint(page, 40);
+  }
+
+  test("Create variation here, a control into B, Variant and All-variations views, the unbalanced check, Loop, export, undo", async ({ page }) => {
+    await openEditor(page);
+    const name = await newCourse(page, "F7 variation");
+    const codeA = await appendClear(page);
+    const codeB = await appendClear(page, [codeA]);
+    await expect(controlRows(page)).toHaveCount(2, { timeout: 15000 });
+    const a = await site(page, codeA), b = await site(page, codeB);
+    const courseId = (await trpcCall<{ id: number; name: string }[]>("course.list", undefined, false)).find((c) => c.name === name)!.id;
+    const keys = async () => (await trpcCall<{ variantKey: string }[]>("course.variantList", { courseId }, false)).map((v) => v.variantKey);
+
+    // The leg a → b, then Create variation here: one write, A and B empty (answer 5), the leg still drawn straight.
+    await viewSettled(page);
+    const mid = await legMidpoint(page, name, a.mm, b.mm);
+    await expect(async () => {
+      await dropSelection(page);
+      await clickMap(page, await toPage(page, mid));
+      await expect(page.getByTestId("editor-action-create-variation")).toBeVisible({ timeout: 3000 });
+    }).toPass({ timeout: 30000 });
+    const created = waitForTrpc(page, "course.setStructure");
+    await page.getByTestId("editor-action-bar").getByTestId("editor-action-create-variation").click();
+    await created;
+    const block = page.getByTestId("editor-variation");
+    await expect(block).toHaveCount(1, { timeout: 15000 });
+    await expect(block.getByTestId("editor-variation-tab-A")).toHaveAttribute("aria-pressed", "true");
+    await expect(block.getByTestId("editor-variation-tab-B")).toBeVisible();
+    await expect.poll(keys, { timeout: 15000 }).toEqual(["A", "B"]);
+    await expect.poll(async () => (await legPieces(page, name)).length, { timeout: 15000 }).toBeGreaterThan(0);
+
+    // Tab B, then K with nothing selected: the control goes into B (§12).
+    const offPt = await offLeg(page, a, b);
+    await block.getByTestId("editor-variation-tab-B").click();
+    await expect(block.getByTestId("editor-variation-tab-B")).toHaveAttribute("aria-pressed", "true");
+    await arm(page, "K");
+    const placed = waitForTrpc(page, "course.setStructure");
+    const x = await place(page, offPt);
+    await placed;
+    await page.keyboard.press("v");
+    await expect(page.locator('[data-testid="editor-seq-row"][data-alternative="B"]')).toHaveCount(1, { timeout: 15000 });
+    await expect(page.locator('[data-testid="editor-seq-row"][data-alternative="B"]')).toHaveAttribute("data-control-id", x.id);
+    await expect(controlRows(page)).toHaveCount(3);
+
+    // Variant ▾ B: the variant's numbering (a 1, x 2, b 3); A: x is on no leg of it.
+    await page.getByTestId("editor-view-variant").selectOption("B");
+    await expect(page.getByTestId("editor-view-variant")).toHaveValue("B");
+    await expect(page.locator(`[data-testid="course-label"][data-site-id="${x.id}"]`)).toHaveAttribute("data-text", "2", { timeout: 15000 });
+    await page.getByTestId("editor-view-variant").selectOption("A");
+    await expect(page.locator(`[data-testid="course-label"][data-site-id="${b.id}"]`)).toHaveAttribute("data-text", "2", { timeout: 15000 });
+
+    // All variations: every alternative drawn, each in its own tint (screen only).
+    await page.getByTestId("editor-view-all-variations").click();
+    await expect(page.getByTestId("editor-view-all-variations")).toHaveAttribute("aria-pressed", "true");
+    const branchA = `${name}#v1/A`, branchB = `${name}#v1/B`;
+    await expect.poll(async () => (await legPieces(page, branchB)).length, { timeout: 15000 }).toBeGreaterThan(0);
+    await viewSettled(page);
+    const tintA = await colourAt(page, await legMidpoint(page, branchA, a.mm, b.mm));
+    const tintB = await colourAt(page, await legMidpoint(page, branchB, a.mm, x.mm));
+    expect(Math.hypot(tintA[0] - tintB[0], tintA[1] - tintB[1], tintA[2] - tintB[2]), `tints ${tintA} / ${tintB}`).toBeGreaterThan(40);
+
+    // Back in Course view: A straight against B through x — the unbalanced check, which locates at the anchor.
+    await page.getByTestId("editor-view-course").click();
+    await page.getByTestId("editor-checks-toggle").click();
+    const row = page.locator('[data-testid="editor-check-row"][data-code="VARIATION_UNBALANCED"]');
+    await expect(row).toBeVisible({ timeout: 20000 });
+    await expect(row).toContainText("A and B");
+    await row.click();
+    await expect(selectedCode(page)).toHaveText(codeA, { timeout: 10000 });
+    await dropSelection(page);
+
+    // Loop: the butterfly's variants are the visiting orders.
+    const looped = waitForTrpc(page, "course.setStructure");
+    await page.getByTestId("editor-variation-loop").check();
+    await looped;
+    await expect.poll(keys, { timeout: 15000 }).toEqual(["AB", "BA"]);
+
+    // Export ▾ this course still prints (the root; per-variant pages are F8's).
+    await page.getByTestId("editor-export").click();
+    const [download] = await Promise.all([page.waitForEvent("download"), page.getByTestId("editor-export-course").click()]);
+    expect((await analysePdf(await readFile((await download.path())!))).pages).toBeGreaterThanOrEqual(1);
+    await page.keyboard.press("Escape");
+
+    // Undo: the loop, the placement, the group — each one entry; the course is plain again.
+    await page.evaluate(() => (document.activeElement as HTMLElement | null)?.blur());
+    await page.keyboard.press("Control+z");
+    await expect.poll(keys, { timeout: 15000 }).toEqual(["A", "B"]);
+    await page.keyboard.press("Control+z");
+    await expect(page.locator('[data-testid="editor-seq-row"][data-alternative="B"]')).toHaveCount(0, { timeout: 15000 });
+    await expect(page.getByTestId("editor-variation")).toHaveCount(1);
+    await page.keyboard.press("Control+z");
+    await expect(page.getByTestId("editor-variation")).toHaveCount(0, { timeout: 15000 });
+    await expect.poll(keys, { timeout: 15000 }).toEqual([]);
+    await expect(controlRows(page)).toHaveCount(2);
+  });
+});
+
+test.describe("F7 on a phone: the variation block switches alternatives only (docs/course-editor.md §12, §10)", () => {
+  test.skip(({ isMobile }) => !isMobile, "the phone's subset");
+
+  test("the tabs show the alternatives; adding, renaming, the loop are disabled and the block says so", async ({ page, browser }, info) => {
+    const nameId = await ensureFixtureFromDesktop(browser, info);
+    const [c1, c2, c3] = await regularCodesOver(4);
+    const name = `F7 phone ${Date.now() % 100000}`;
+    const { id } = await trpcCall<{ id: number }>("course.create", { name });
+    await trpcCall("course.setStructure", {
+      courseId: id,
+      structure: {
+        version: 1, id: "f7", orderMode: "ordered",
+        items: [{ siteId: c1 }, { kind: "variation", id: "v1", alternatives: [{ label: "A", items: [{ siteId: c2 }] }, { label: "B", items: [] }] }, { siteId: c3 }],
+      },
+    });
+    await page.goto(`/${nameId}/course-editor`);
+    await editorReady(page);
+    await page.getByTestId("editor-mode-course").click();
+    await page.getByTestId("editor-course-picker").selectOption(String(id));
+    const block = page.getByTestId("editor-variation");
+    await expect(block).toBeAttached({ timeout: 15000 });
+    await expect(page.getByTestId("editor-variation-readonly")).toBeAttached();
+    await expect(page.getByTestId("editor-variation-add")).toBeDisabled();
+    await expect(page.getByTestId("editor-variation-loop")).toBeDisabled();
+    await expect(page.locator('[data-testid="editor-seq-row"][data-alternative="A"]')).toHaveCount(1);
+    await page.getByTestId("editor-variation-tab-B").dispatchEvent("click");
+    await expect(page.getByTestId("editor-variation-tab-B")).toHaveAttribute("aria-pressed", "true");
+    await expect(page.locator('[data-testid="editor-seq-row"][data-alternative="A"]')).toHaveCount(0);
+  });
+
+  /** Regular controls of the fixture event, by public id. */
+  async function regularCodesOver(n: number): Promise<number[]> {
+    const list = await trpcCall<{ id: number; kind: string }[]>("control.list", undefined, false);
+    return list.filter((c) => c.kind === "control").slice(0, n).map((c) => c.id);
+  }
 });

@@ -1912,7 +1912,8 @@ export function MapViewer({
 
     // Highlighted courses drive the multi-course leg labels below.
     const highlightedCourses = courses.filter(
-      (c) => c.highlight || c.name === highlightCourseName,
+      // All variations' tinted branches (docs/course-editor.md §12) are the selected course's: no per-leg class labels.
+      (c) => (c.highlight || c.name === highlightCourseName) && !c.tint,
     );
     // With more than one course on screen it's hard to tell which lines
     // belong to what — label each leg with the classes that run it.
@@ -2171,7 +2172,8 @@ export function MapViewer({
   const descriptionSheet = useMemo(() => {
     if (!showDescriptions || containerSize.w === 0 || containerSize.h === 0) return null;
     const activeCourses = courses.filter(
-      (c) => c.highlight || c.name === highlightCourseName,
+      // The sheet is the selected course's, not All variations' branches (docs/course-editor.md §12).
+      (c) => (c.highlight || c.name === highlightCourseName) && !c.tint,
     );
     // Without an active course `descriptionsAllControls` lists every
     // positioned control; otherwise there is no sheet.

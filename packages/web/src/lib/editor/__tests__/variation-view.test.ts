@@ -1,6 +1,6 @@
 import { describe, it, expect } from "vitest";
 import type { course } from "@oxygen/shared";
-import { allVariationDraws, branchName, courseDrawOf } from "../variation-view";
+import { allVariationDraws, branchName, courseDrawOf, withCourseOverride } from "../variation-view";
 
 type S = course.WireCourseStructure;
 type Item = S["items"][number];
@@ -25,6 +25,15 @@ describe("the drawn course of a structure with groups (docs/course-editor.md §1
     expect(draws[0].legs["31>32"]).toEqual({ bends: [{ x: 1, y: 1 }], style: "none" });
     // The exit leg's props are every alternative's.
     expect(draws[1].legs["42>32"]).toEqual({ bends: [{ x: 1, y: 1 }] });
+  });
+
+  it("the override replaces the overlay of its name, keeping its other fields, and adds the rest highlighted", () => {
+    const overlays = [{ name: "Lång", controls: ["1", "9"], labelOffsets: { 1: { dx: 1, dy: 1 } } }, { name: "Kort", controls: ["1", "9"] }];
+    const out = withCourseOverride(overlays, allVariationDraws("Lång", mk(1, 31, g("v1", [[41], []]), 32, 9)));
+    expect(out.map((c) => c.name)).toEqual(["Lång", "Kort", branchName("Lång", "v1", "A"), branchName("Lång", "v1", "B")]);
+    expect(out[0]).toMatchObject({ controls: ["1", "31", "32", "9"], labelOffsets: { 1: { dx: 1, dy: 1 } } });
+    expect(out[2]).toMatchObject({ highlight: true, tint: "A" });
+    expect(withCourseOverride(overlays, null)).toBe(overlays);
   });
 
   it("a loop: petals back to the anchor, an empty petal draws nothing, the spine keeps its leg", () => {

@@ -98,6 +98,11 @@ boxes are estimated like the legacy placer's (0.65 em per character).
   first-use order, **on top of the stack** (`course-object:#rrggbb`,
   CMYK by the naive inverse of `cmykToHex`): legacy print draws them
   after everything else.
+- **Variation tints** (§12.7, F7): with `viewOptions.allVariations` — the
+  editor's All-variations view, screen only — one row per tinted
+  structure's label (`course-tint:<label>`, `VARIATION_TINTS`) after the
+  layout-object rows, below a toner saver's white. Never on paper: the
+  print path cannot set the option.
 
 `layer.colours` is the stack the merged input is drawn with.
 
@@ -161,13 +166,13 @@ automatic cuts; an empty list means automatic (decision log 2026-11-01,
 
 | Input | v1 shape | Built today from |
 |---|---|---|
-| `structure` | `CourseStructure` (one course), an array (several highlighted courses: legs of each, codes as numbers) or `null` (no course) — the stored form is §6 | `{ version: 1, id, orderMode, items, labelOffsets? }`: `items` start … finish — the start by `startName` unless `firstAsStart`, `course_controls` in order, the finish by `finishControlId` unless `lastAsFinish`; from the stored structure when there is one (§6), else from the columns — one rule for every reader (`courseSequenceOf`, §6.2: `rebuildCourseLengths`, `course-export.ts`, the print layout); `labelOffsets` from `course_controls` |
+| `structure` | `CourseStructure` (one course), an array (several highlighted courses: legs of each, codes as numbers) or `null` (no course) — the stored form is §6; `tint?` (a label) marks an alternative of the editor's All-variations view (§12.7), read only with `viewOptions.allVariations` | `{ version: 1, id, orderMode, items, labelOffsets? }`: `items` start … finish — the start by `startName` unless `firstAsStart`, `course_controls` in order, the finish by `finishControlId` unless `lastAsFinish`; from the stored structure when there is one (§6), else from the columns — one rule for every reader (`courseSequenceOf`, §6.2: `rebuildCourseLengths`, `course-export.ts`, the print layout); `labelOffsets` from `course_controls` |
 | `CourseItem` | `{ siteId, role?, leg?, numberHidden? }` — 08 §4.3's item, the leg being the leg *into* the item | `role` (`control` \| `start` \| `finish`) defaults to the site's kind — a `map_exchange` draws as a control and splits the course into parts (§10.3, §11) — (set it for `firstAsStart` / `lastAsFinish`); `numberHidden` from the visit's `number_hidden`. An item naming a `crossing_point` or `map_issue` site is skipped (they are never items, §10.3) |
 | `leg` | `{ gaps?, style?, bends?, corridor?, crossing? }` — the stored `LegProps.gaps` (fractions along the leg, bends and crossing point included), `style` (`line` \| `marked_route` \| `none`, default `line`) and `bends` (paper mm), §10.1; `corridor` (`{ widthM, edge, whiteMm, whiteOpacity }`), §10.2; `crossing` (`{ controlId, section? }`, the site id of a `crossing_point` the leg runs through), §10.3 | `LegProps` of the structure's item (§6.4: written by the importers and the backfill, by the editor from D5). The v1 interim input of slice C (`path`, `pieces`, item `circleGaps`, `extras`, read from an imported `ocd` course's GeoJSON) is **retired** by D1: nothing is read from the GeoJSON |
 | `sites` | `{ id, code, kind, x, y, circleGaps? }[]`, `kind` one of `control`, `start`, `finish`, `crossing_point`, `map_issue`, `map_exchange` (§6.3) | `controls` rows; `code` the display code (first punch code, else name / seq); `circleGaps` = `controls.circle_gaps`, compass degrees |
 | `objects` | `(CourseMapObject \| CourseLayerObject)[]`: a sheet's layout objects (only `anchor: "map"` ones are drawn) and course objects (§8; told apart by `geometry`) | the sheet's layout objects (`course-maps` schema); the event's course objects in scope (§8.3) |
 | `appearance` | `{ circle?, line?, number?, numberStyle? }`, multipliers (1 = the spec) | `appearanceFromTemplate(template.appearance)`; the template's `purple` is not read (the purple is the stack's row) |
-| `viewOptions` | `{ allControls?, labelMode?, overprintScale?, autoCuts?, window?, textValues?, setterMarks?, section? }` | the view: all-controls, label mode, print enlargement, the event's **Auto cuts** toggle (`Event.autoOverprintCuts`; `false` = no automatic cuts, §3.4; absent = on), the frame polygon for white-out-outside, `{course}` placeholder values; `setterMarks` (§10.3): the map-issue points and every crossing point are drawn — the editor's Course and All-controls views and the all-controls sheet set it, a course sheet never does; `section` (§11): one part of a course split by map exchanges — a part sheet in print, Layout mode and Class view set it from `course_maps.section_index`, Course mode never does |
+| `viewOptions` | `{ allControls?, labelMode?, overprintScale?, autoCuts?, window?, textValues?, setterMarks?, section?, allVariations? }` — `allVariations` (§12.7): the tinted structures draw on tint rows, screen only | the view: all-controls, label mode, print enlargement, the event's **Auto cuts** toggle (`Event.autoOverprintCuts`; `false` = no automatic cuts, §3.4; absent = on), the frame polygon for white-out-outside, `{course}` placeholder values; `setterMarks` (§10.3): the map-issue points and every crossing point are drawn — the editor's Course and All-controls views and the all-controls sheet set it, a course sheet never does; `section` (§11): one part of a course split by map exchanges — a part sheet in print, Layout mode and Class view set it from `course_maps.section_index`, Course mode never does |
 | `document` | `{ colours, libraryId, documentFactor, mapScale }` — the aligned stack, the library, the document factor (§3.1) and the base map's scale denominator (corridor widths, §10.2) | `courseDocumentContext(header)` (`context.ts`): the viewer's worker and the print route (`pdf-page.ts`) build it from the pinned document's header; `mapScale` is `header.mapScale` |
 | `cutFeatures` | `{ x, y, r? }[]` (`r` the drawn symbol's radius) | `cutFeaturesOfDocument(doc)` of the pinned document (every event since E1, §4.2) |
 | `regions` | `{ rings: MapPoint[][], mode: "clip" \| "hide", symbols: "all" \| number[] \| { colours }, invert? }[]` — filter regions over the map, `rings` outer first; symbol indices are the document's, colours its own stack's | explicit regions, then every `filter_region` course object in `objects` (§8.3); the layer returns them as `CourseLayer.regions` (µm paths, colours on the completed stack) and `courseRenderInput` passes them to `symbolise` with the document's object count as `regionObjectLimit` — the rule is `map-rendering.md` §4.11 |
@@ -178,7 +183,8 @@ legs connecting the remaining items (the editor's rule, `editorCourseLayer`).
 Gaps follow the rule above. Crossing points, map-issue points and map
 exchanges are drawn since F4 (§10.3; an exchange as a control, the
 course split into parts at it since F5, §11); variations reach the layer
-as materialised linear variants (§12).
+as materialised linear variants (§12), and in the editor as the
+displayed path or, in All variations, as tinted linear branches (§12.7).
 
 ## 3. Geometry rules
 
@@ -566,10 +572,10 @@ buckets. The React SVG keeps the UI layer only (`map-rendering.md` §5.4
 | Input | From the viewer |
 |---|---|
 | `sites` | every visible control (`visible !== false`) with a position — its own paper mm, the editor's dragged position or a move still round-tripping — `code` its display code, `kind` from its type (`overlayTypeOf`: `course.controlCoordinates`' `kind`, else the wire status 4 / 5; an exchange is a `Control`); the editor's faded off-course controls are left out (the UI layer draws them faded). Crossing and map-issue points are always visible to the request (`MapPanel`): the layer decides when they draw (§10.3) |
-| `structure` | the highlighted courses (`highlight` or `highlightCourseName`) in order, one `CourseStructure` each, `id` = the course name, `items` = its control ids (start and finish as `MapPanel` completes them), `orderMode` the course's; `null` when none is highlighted |
+| `structure` | the highlighted courses (`highlight` or `highlightCourseName`) in order, one `CourseStructure` each, `id` = the course name, `items` = its control ids (start and finish as `MapPanel` completes them), `orderMode` the course's; `null` when none is highlighted. A course with variation groups in the editor (`course-editor.md` §12) is drawn as the editor shows it (`MapViewerEditorProps.courseOverride`): its overlay's controls, legs and hidden numbers replaced by the displayed path's, and in All variations the tinted branches added highlighted, each with its `tint` (§12.7) |
 | `labelOffsets` | the single highlighted course's, with a drag or a pending label move winning — only with the description sheet or the editor |
 | `leg`, `numberHidden`, `circleGaps` | from the stored structure (§6.4), not from the GeoJSON: each item's `leg` whole — `style`, `bends`, `gaps`, `corridor`, `crossing` (§10) — from `course.list`'s `legs` (keyed `"<from>><to>"`, public control ids; `layerPropsOfStored` maps `crossing.controlId` to the site's public id as a string, the viewer's site id, drops a crossing naming an unknown control and omits an empty leg; a pair visited twice keeps its last visit's leg), `numberHidden` from its `hiddenNumbers`, each site's `circleGaps` from `course.controlCoordinates`. A course with no stored structure has none (the automatic cuts); 707 / 708 / 709 / 711 are course objects (`objects` below) |
-| `viewOptions` | `labelMode: "sequence"` for one ordered course with the sheet or the editor, else `"code"`; `allControls` when a drawn site other than a crossing or map-issue point is on no highlighted course; `autoCuts: false` when the event's toggle is off (`course.getOverprintCuts`, read by `MapPanel`; no key when on, §3.4); `setterMarks` (§10.3) in the editor's Course and All-controls views (not Class view: the class's print has none) and, in Layout mode, on the all-controls sheet (no course highlighted) |
+| `viewOptions` | `labelMode: "sequence"` for one ordered course with the sheet or the editor, else `"code"` (so All variations, several highlighted courses, shows codes); `allVariations` when a highlighted course has a `tint` (§12.7); `allControls` when a drawn site other than a crossing or map-issue point is on no highlighted course; `autoCuts: false` when the event's toggle is off (`course.getOverprintCuts`, read by `MapPanel`; no key when on, §3.4); `setterMarks` (§10.3) in the editor's Course and All-controls views (not Class view: the class's print has none) and, in Layout mode, on the all-controls sheet (no course highlighted) |
 | `objects` | the event's course objects in scope of the highlighted courses (`courseObjectsForView`, §8.2; `all`-scoped only when none is highlighted), without scope, `z` or token — `MapPanel` fetches `courseObject.list` and hands them to the viewer; no sheet's layout objects reach the viewer |
 | provisional visit | the editor's armed `S` / `K` / `M` (`course-editor.md` §6.1), with exactly one highlighted course: a site `provisional` (`PROVISIONAL_SITE_ID`, the tool's kind, the cursor, the next code) — or a reused site by its id, which adds no site (`provisionalDrawn` is false; the editor then draws its own ghost circle, `course-editor.md` §6.1) — spliced into the course's items (`spliceProvisional`): a control before the `insertAt`-th control visit (repeats counted), else before the finish, else last; a start replaces the course's start, a finish its finish (else they lead / end). The leg the visit splits takes no stored leg — no gaps, style, bends or corridor (they are keyed by the drawn neighbours) |
 | `appearance` | `{}` — the spec sizes × the document factor (decision "Sizes") |
@@ -619,9 +625,15 @@ LegProps = { style?: "line" | "marked_route" | "none", gaps?: { from, to }[],
   (`VARIATION_UNANCHORED`) nor next to another group
   (`VARIATION_OVERLAP`); group ids and alternative labels are unique
   (`VARIATION_ID_DUPLICATE`, `VARIATION_LABEL_DUPLICATE`); at least two
-  alternatives, of which at least one holds a control
-  (`VARIATION_ALL_EMPTY`) — an empty alternative is a straight leg from
-  anchor to anchor (user, 2026-11-07, slice F answer 5; F6). Rules that need the sites
+  alternatives — an empty alternative is a straight leg from anchor to
+  anchor (user, 2026-11-07, slice F answer 5; F6). **All of them may be
+  empty** since F7: *Create variation here* writes A and B empty in one
+  `setStructure` (`course-editor.md` §12), so F6's refusal
+  `VARIATION_ALL_EMPTY` became an advisory check of the same code (§9.2;
+  decided on the user's standing instruction 2026-11-07, for review —
+  answer 5's "not all of them" and its "saves at once" cannot both hold
+  for a new group). Such a group materialises identical variants under
+  distinct keys until a control lands. Rules that need the sites
   (`structureSiteIssues`, called by `course.setStructure` since F4):
   unknown site (`SITE_UNKNOWN`, a leg's crossing point included), a group
   holding a map exchange (`VARIATION_CROSSES_EXCHANGE`), a crossing or
@@ -1156,7 +1168,8 @@ venue's kiosk map draws them (08 §4.8; 07 §9.2).
 Row D6 (research 08 §4.2, §5.6, §6). Advisory course-setting checks:
 the editor lists them (`course-editor.md` §8), marks them on the canvas
 and counts them on the top bar's course-info button (P2); `course.setStructure` returns them.
-**Nothing blocks a save.** `VARIATION_UNBALANCED` is F7's; the
+**Nothing blocks a save.** `VARIATION_UNBALANCED` and
+`VARIATION_ALL_EMPTY` are F7's (the editor's, §9.4); the
 crossing-point exemption is F4's (§9.3), `EXCHANGE_WITHOUT_SHEET` and the
 per-part sheet test F5's (§11).
 
@@ -1174,6 +1187,11 @@ and deterministic: paper mm, y-up, like the layer's input (§2).
 | `objects` | `CourseLayerObject[]`, optional | the course objects in scope (§8.2); `oob_area` and `oob_line` (708) are obstacles |
 | `derivation` | `CourseDerivation \| null`, optional | the layer's result for this course (§1); null skips `NUMBER_*` |
 | `mapScale` | `number \| null` | map scale denominator; metres = paper mm × scale / 1000; null skips the distance checks |
+| `groups` | `CheckVariationGroup[]`, optional (F7) | the course's variation groups: `{ id, anchor, next, loop, alternatives: { label, items: { siteId, leg? }[] }[], exitLeg? }` — the control before the group, the item after it, each alternative's items with the legs into them, the leg into `next`; absent = none (the server passes none) |
+
+The `structure` the editor passes is its **displayed path** (F7,
+`course-editor.md` §12): each group by the alternative the view shows, so
+the leg, number and description codes follow what is drawn.
 
 A check is `{ code, siteIds, leg?, at, params? }`: the sites involved
 (public ids on the wire), for a leg `{ from, to, index }` (index of the
@@ -1202,6 +1220,9 @@ order below, then the order of the input (sites, then the course's items).
 | `DESCRIPTION_STALE` | course, server | a `control` item whose `description_source` is `auto` (§6.3) and whose stored description differs from the autodetect result at the site's position now (e.g. after a map re-upload) | — |
 | `LEG_CROSSES_OOB` | course | a leg (ordered courses; centre to centre between consecutive positioned items, through its bends and its crossing point (§10.3): every segment is tested, `at` is the first hit along the leg, an area's inside test at each segment's midpoint) that crosses or runs inside an out-of-bounds obstacle: document 709 areas and 708 lines, `oob_area` and `oob_line` (symbol 708) course objects; **not** an obstacle the leg's crossing point sits on (§9.3) | — |
 | `LEG_THROUGH_UNCROSSABLE` | course | a leg (as for `LEG_CROSSES_OOB`, bends and crossing point included, the same exemption) that crosses or runs inside an uncrossable document obstacle: `UNCROSSABLE_CODES` 201 (impassable cliff), 301 (uncrossable body of water), 307 (uncrossable marsh), 411 (impassable vegetation), 515 (impassable wall), 518 (impassable fence), 520 (area that shall not be entered), 521 (building), 529 (prominent uncrossable line feature) — the same in ISOM 2017-2 and ISSprOM 2019-2 | — |
+
+| `VARIATION_UNBALANCED` | course, editor (F7) | a group whose alternatives' lengths differ by more than the tolerance of the longest (08 §5.6). An alternative is measured anchor → its controls → `next`, along each leg's bends and crossing point (the exit leg's props are every alternative's); an empty plain alternative is the straight leg; in a loop each petal runs anchor → its controls → anchor and empty petals are not compared. One check per group, `siteIds` and `at` the anchor, `params { a, b, lengthA, lengthB, diffPct, unit }` (shortest and longest; metres with a scale, else paper mm) | `VARIATION_BALANCE_TOLERANCE` = 10 % |
+| `VARIATION_ALL_EMPTY` | course, editor (F7) | a group none of whose alternatives holds a control yet (valid, §6.1: every variant is the same straight leg); at the anchor, `params { code }` | — |
 
 Event-scoped codes run over every site, whether or not the course visits
 it: the IOF distance and code rules are about the controls in the
@@ -1236,8 +1257,8 @@ user's standing instruction 2026-11-07, for review).
 
 | Where | Codes | Inputs |
 |---|---|---|
-| Editor (client) | all but `DESCRIPTION_STALE` | the page's structure (`checkStructureOf`: each item's leg with its `bends` and `crossing`, F4 — before F4 the client dropped the legs, so it ignored bends) and sites, `checkObstaclesOfDocument` over the decoded document (memoised per document), the course's sheet windows from `courseMap.list` with each sheet's `sectionIndex` (F5), the objects in scope, the viewer's derivation (`onCourseInfo`) |
-| `course.checks { courseId }` (server, `courses.view`) | all but `CONTROL_OUTSIDE_SHEET`, `EXCHANGE_WITHOUT_SHEET`, `NUMBER_UNPLACED`, `NUMBER_OVERLAPS` (`sheets` and `derivation` null), plus `DESCRIPTION_STALE` | the stored structure or its columns (each entry's leg with its bends and crossing point, `loadCourseSequences`, F4), the event's sites, the map scale (`loadEventCrs`), the pinned document's obstacles (every event with a pin, `map-storage.md` §4.6; memoised per document hash), the autodetect objects of the same document for `DESCRIPTION_STALE`, the objects in scope |
+| Editor (client) | all but `DESCRIPTION_STALE` | the page's structure (`checkStructureOf`: the displayed path since F7, each item's leg with its `bends` and `crossing`, F4 — before F4 the client dropped the legs, so it ignored bends) and its groups (`checkGroupsOf`, F7), sites, `checkObstaclesOfDocument` over the decoded document (memoised per document), the course's sheet windows from `courseMap.list` with each sheet's `sectionIndex` (F5), the objects in scope, the viewer's derivation (`onCourseInfo`) |
+| `course.checks { courseId }` (server, `courses.view`) | all but `CONTROL_OUTSIDE_SHEET`, `EXCHANGE_WITHOUT_SHEET`, `NUMBER_UNPLACED`, `NUMBER_OVERLAPS` (`sheets` and `derivation` null) and the `VARIATION_*` codes (no `groups`: the server's sequence is the root's first alternatives), plus `DESCRIPTION_STALE` | the stored structure or its columns (each entry's leg with its bends and crossing point, `loadCourseSequences`, F4), the event's sites, the map scale (`loadEventCrs`), the pinned document's obstacles (every event with a pin, `map-storage.md` §4.6; memoised per document hash), the autodetect objects of the same document for `DESCRIPTION_STALE`, the objects in scope |
 | `course.setStructure` | as `course.checks`, for the written course | — |
 
 Without a pinned document the server has no map (`map-storage.md`
@@ -1507,12 +1528,25 @@ standing instruction, 2026-11-07, for review). Section numbering keeps
   print, lengths and export learn nothing about groups (slice F's
   "A variant is a linear structure"). F7's Variant view and F8's pages
   draw it.
+- **Paths** (F7). `variantOrders(structure)` → `{ key, orders }[]` in the
+  same order: each variant's groups' visiting orders by group id (a plain
+  group one label, a loop its permutation). `pathOfOrders(structure,
+  orders?)` → `{ items, paths }` is the one walk behind both:
+  `materialiseVariants` is `pathOfOrders` over each variant's orders, and
+  the editor's Course view walks the displayed alternatives
+  (`course-editor.md` §12; a group missing from `orders` shows its first
+  alternative, a loop every alternative in stored order). `paths[i]` says
+  where `items[i]` comes from: `{ itemIndex }` (a top-level item),
+  `{ itemIndex, alt: { label, index } }` (an alternative's item) or
+  `{ itemIndex, anchorVisit: true }` (a loop's repeated anchor, no item of
+  its own). Generic over the site-id type, so the wire form walks too.
 - `structureSiteIds(structure)` lists every site of every alternative;
   `pruneSiteFromStructure(structure, siteId)` removes a site from the top
-  level and from every alternative (groups kept) and dissolves a group then
-  left with no non-empty alternative, first or last (`VARIATION_UNANCHORED`)
-  or right after another group into its first alternative, so the result
-  passes §6.1 whenever the input did.
+  level and from every alternative (groups kept — since F7 also one left
+  with every alternative empty, §6.1) and dissolves a group then left
+  first or last (`VARIATION_UNANCHORED`) or right after another group
+  into its first alternative, so the result passes §6.1 whenever the
+  input did.
 
 ### 12.2 Storage
 
@@ -1652,6 +1686,43 @@ and maps editable; its controls and order mode are disabled with a
 one-line hint (`course-variations-hint`), since `course.update` refuses
 them.
 
+### 12.7 Variation tints (screen only)
+
+Row F7 (08 §5.3 "all variations overlay … in distinct purple tints on
+screen only — print is always one variant", §12 "Variation tints on
+screen"). The layer learns no groups: the editor's All-variations view
+(`course-editor.md` §12) hands it linear structures — the course's
+**spine** (its top-level items; across a plain group a `style: "none"`
+leg, a loop keeps its anchor → next leg) and one **branch** per
+alternative (anchor → its controls → the next item; a loop's petal back to
+the anchor; an empty plain alternative the straight leg; an empty petal
+none), each branch with `CourseStructure.tint` = its label and an id of
+its own (`<course>#<group>/<label>`).
+
+With `viewOptions.allVariations` the layer appends one colour row per
+label, in first-use order, **on top of the stack** after the
+layout-object rows and below a toner saver's white (`withTintColours`:
+`course-tint:<label>`, named `Variation <label>`, CMYK from
+`VARIATION_TINTS` — six purples, distinct on screen, cycling), and draws
+with copies of 705 and 703 on those rows: a tinted structure's 705 legs
+(707 and `none` legs as ever) and the circles of the sites that only
+structures with that one tint visit (a site the spine visits stays plain
+purple). Numbers, starts, finishes and everything else are unchanged.
+On top of the stack the tints draw over black: a screen overview, not an
+overprint.
+
+**Never on paper.** Without the option a `tint` is ignored — the layer's
+output equals the untinted structures' — and the print path cannot set
+it: `PageInput.course.viewOptions` is a `Pick` without `allVariations`,
+and `composePage` of tinted structures emits the plain stream with no
+tint row (`print/__tests__/compose.test.ts`). F8's all-variations page
+prints every alternative in the one purple. Decided on the user's
+standing instruction (2026-11-07), for review: branches rather than
+groups in the layer (keeps "a variant is a linear structure"); the tint
+rows on top rather than beside lower purple (no document re-index for a
+screen-only view); one row per label, shared by groups with the same
+label.
+
 ## Tests
 
 | Layer | Where | What |
@@ -1689,9 +1760,13 @@ them.
 | unit | `packages/api/src/__tests__/course-sequence.test.ts` | §6.2 "Readers" (E6): `courseSequenceOf` — columns (defaults, `start_name`, a live `finish_control_id`, unmatched fall back, the flags), a stored structure (explicit ends, no ends → defaults, roles), a deleted explicit start, an invalid column read as the columns, no starts / finishes |
 | integration | `packages/api/src/__tests__/integration/overprint-cuts.test.ts` | what the layer draws for a stored course with the pinned document's cut features (`drawnCuts`, E5): rim slit over the boulder across north, no gap through the building, leg gap over the boulder, cuts follow a move, a course created before the map is cut once the upload pins, the toggle off draws none and writes nothing else (course row and journal untouched); two events pinning the same map read the same features and cut alike within 1e-6, no cuts without a pin; the toggle off reaches the vector print (composed sheet = the page without cut features, a stored circle gap still drawn) and `getOverprintCuts` reads with a kiosk key (§3.4) |
 | integration | `control-editor.test.ts`, `journal-completeness.test.ts`, `course-export.test.ts`, `eventor-reentry.test.ts` | the drawn course (`helpers/course-drawn.ts`) and lengths on create / move / delete / copy, `length_source = 'derived'`; `course.upserted` payloads carry no `length_source`; the export's length and the Eventor sync key on `length_source` (E6; the E6 migration's backfill test went with `geometry_source` in E5) |
-| unit | `packages/shared/src/course/__tests__/structure.test.ts` | §6.1: C0's linear shape accepted, the 08 leg props, groups and loops, an empty alternative beside a non-empty one (answer 5); nesting, overlap, unanchored, duplicate ids / labels, < 2 alternatives or all empty (`VARIATION_ALL_EMPTY`), out-of-range gaps refused; interim `path` / `pieces` / `circleGaps` and `extras` refused; the wire form; site rules; `linearStructure`, `structureControlIds`; `structureDiff` (equal, moved, added, removed, leg / offset changes) |
-| unit | `packages/shared/src/course/__tests__/variants.test.ts` | §12.1: no groups → no variants; the product in item order and its keys; legs and flags copied; loop permutations with the anchor between them, three alternatives → six; an empty alternative a straight leg (and no anchor visit in a loop); the anchor visit's fields; keys stable across an edit outside the groups; multi-letter labels and colliding keys; `variantCount` without building; `variantStructure` = the product's row, parsed by the column schema; `structureSiteIds`; `pruneSiteFromStructure` (every alternative, an emptied alternative kept, all emptied / unanchored / adjacent dissolved, the label offset) |
-| integration | `packages/api/src/__tests__/integration/course-variants.test.ts` | §12.2–12.5: one child per variant (name, key, parent, copied fields, linear structure with its own id, mirror, lengths as the root's path), journal root first then children; `variantList`, `list` / `detail` by seq; a loop's permutations; an empty alternative, all empty refused; colliding keys and the cap refused, nothing written; re-materialisation (same rows across an outside edit, a new key, every key gone → soft-deleted and the runner nulled with its `runner.updated`, keys back → the same uuids); `runner.updated { courseId }` replayed through `events.push`; label offsets of every alternative round-trip; pools (a class on the root, a class picking it later, a key added / dropped, a plain course clears); the refusals (`ROOT_HAS_VARIATIONS`, `COURSE_IS_VARIANT`, nothing written); name / climb / maps mirrored; an offset set through the root; clone of a root and of a variant; delete of a root; `control.delete` of a control in alternative B only (one entry per row) and of a group's anchor (dissolved); an import over a root; an import with `replaceAll` over a root (the runner on a variant nulled and journaled, the pool emptied); a peer applying a root's and its variant's `course.upserted` through `events.push`; the migration's unique pair and `CHECK`; a checkout snapshot exported and imported with its children and pools (the backup dump is `SELECT *` per table, so the children are ordinary `courses` rows there) |
+| unit | `packages/shared/src/course/__tests__/structure.test.ts` | §6.1: C0's linear shape accepted, the 08 leg props, groups and loops, an empty alternative beside a non-empty one (answer 5), a group of empty alternatives only (F7); nesting, overlap, unanchored, duplicate ids / labels, < 2 alternatives, out-of-range gaps refused; interim `path` / `pieces` / `circleGaps` and `extras` refused; the wire form; site rules; `linearStructure`, `structureControlIds`; `structureDiff` (equal, moved, added, removed, leg / offset changes) |
+| unit | `packages/shared/src/course/__tests__/variants.test.ts` | §12.1: no groups → no variants; the product in item order and its keys; legs and flags copied; loop permutations with the anchor between them, three alternatives → six; an empty alternative a straight leg (and no anchor visit in a loop); the anchor visit's fields; keys stable across an edit outside the groups; multi-letter labels and colliding keys; `variantCount` without building; `variantStructure` = the product's row, parsed by the column schema; `structureSiteIds`; `pruneSiteFromStructure` (every alternative, an emptied alternative kept, all emptied kept (F7), unanchored / adjacent dissolved, the label offset); F7: `variantOrders` (keys and orders in the product's order), `pathOfOrders` = each variant, row paths (top level, an alternative's index, the loop's anchor visit), a missing / unknown order shows the first alternative, an all-empty group's identical variants, the wire form |
+| unit | `layer.test.ts` "variation tints (§12.7, F7)", `colour-stack.test.ts` "variation tint rows" | §12.7: with `allVariations` the rows on top in first-use order, distinct tints, a tinted course's 705 and the circle only it visits on its row, the spine's untouched; without the option the layer equals the untinted one, no tint row; the rows below a toner saver's white; `withTintColours` cycling and `indexOf` |
+| unit | `packages/shared/src/print/__tests__/compose.test.ts` "variation tints never print" | §12.7: `composePage` of a tinted structure = the plain one's stream, no `course-tint:` colour; `allVariations` is no `PageInput` option (`@ts-expect-error`) |
+| unit | `checks.test.ts` "variation groups (§9.2 VARIATION_*, F7)" | §9.2: unbalanced beyond 10 % at the anchor with the shortest / longest, within 10 % none, an empty alternative the straight leg, bends and a crossing lengthen, the shared exit leg, a loop's petals (an empty one skipped), all empty → `VARIATION_ALL_EMPTY`, an unpositioned anchor skipped, paper mm without a scale, the codes' order |
+| unit (web) | `course-layer-request.test.ts` "variation tints (F7)" | §5: a tinted course carries its tint and sets `allVariations`, codes with several courses; none without a tint |
+| integration | `packages/api/src/__tests__/integration/course-variants.test.ts` | §12.2–12.5: one child per variant (name, key, parent, copied fields, linear structure with its own id, mirror, lengths as the root's path), journal root first then children; `variantList`, `list` / `detail` by seq; a loop's permutations; an empty alternative, all empty accepted with identical children (F7); colliding keys and the cap refused, nothing written; re-materialisation (same rows across an outside edit, a new key, every key gone → soft-deleted and the runner nulled with its `runner.updated`, keys back → the same uuids); `runner.updated { courseId }` replayed through `events.push`; label offsets of every alternative round-trip; pools (a class on the root, a class picking it later, a key added / dropped, a plain course clears); the refusals (`ROOT_HAS_VARIATIONS`, `COURSE_IS_VARIANT`, nothing written); name / climb / maps mirrored; an offset set through the root; clone of a root and of a variant; delete of a root; `control.delete` of a control in alternative B only (one entry per row) and of a group's anchor (dissolved); an import over a root; an import with `replaceAll` over a root (the runner on a variant nulled and journaled, the pool emptied); a peer applying a root's and its variant's `course.upserted` through `events.push`; the migration's unique pair and `CHECK`; a checkout snapshot exported and imported with its children and pools (the backup dump is `SELECT *` per table, so the children are ordinary `courses` rows there) |
 | integration | `packages/api/src/__tests__/integration/runner-variants.test.ts` | §12.3–12.4 with F6b: a vanished variant's runner dealt one of the remaining pool (the entry carries the seq), a class onto / off a root deals / clears its runners after its `class.upserted`; the rest of F6b is listed in `course-controls-and-matching.md` "Test coverage" |
 | integration | `journal-completeness.test.ts` "course.setStructure with a group" | §12.4: the variants' `course.upserted` (parent, key, name), the class's `coursePools`, the vanished variant's `runner.updated { courseId: null }` |
 | E2E | `e2e/courses.spec.ts` "a course with variations lists its variants under it" | §12.6: a root written by `course.setStructure` over HTTP shows "2 variants", its two variant rows right under it with no controls of their own, the roots-only count, and a read-only sequence in its detail |
@@ -1748,7 +1823,9 @@ them.
 
 | `packages/shared/src/course/structure.ts` | §6.1: `courseStructureSchema`, `courseStructureWireSchema`, `structureSiteIssues`, `linearStructure`, `structureControlIds`, `structureDiff` |
 | `packages/api/src/course-structure.ts` | §6.2: `splitStructure`, `structureFromColumns`, `courseSequenceOf` (the readers' rule, E6), `carryLegs`, `persistStructure`, `rewriteStructureFromColumns`, wire mapping, `assertCourseVersion` |
-| `packages/shared/src/course/variants.ts` | §12.1: `materialiseVariants`, `variantStructure`, `variantCount`, `variantKeyDuplicates`, `structureSiteIds`, `pruneSiteFromStructure`, `MAX_VARIANTS` |
+| `packages/shared/src/course/variants.ts` | §12.1: `materialiseVariants`, `variantStructure`, `variantCount`, `variantKeyDuplicates`, `structureSiteIds`, `pruneSiteFromStructure`, `MAX_VARIANTS`; F7: `variantOrders`, `pathOfOrders`, `groupOrder` |
+| `packages/shared/src/course/colour-stack.ts` (`withTintColours`, `VARIATION_TINTS`), `layer.ts` (`variationTints`) | §12.7: the screen-only tints |
+| `packages/web/src/lib/editor/variation-view.ts` | §5 / §12.7: the editor's drawn course of a grouped structure (`courseDrawOf`, `allVariationDraws`, `withCourseOverride`) |
 | `packages/api/src/course-variants.ts` | §12.3–12.4: `syncVariants`, `emitVariantSync`, `syncClassPool`, `clearRemovedVariants`, `assertMaterialisable`, `assertNotVariant`, `rootStructureOf`; called by `routers/course.ts`, `routers/control.ts` (`delete`), `routers/classRouter.ts` |
 | `packages/api/src/version-conflict.ts`, `referenceJournal.ts`, `trpc.ts` (`withVersionConflict`) | §7: lock and compare, the base from the journal, the emits that stamp the token, the error shape |
 | `packages/web/src/lib/version-book.ts` | §7 the client's row tokens |
@@ -1778,23 +1855,22 @@ them.
   (`section: { lengthMm }` and a Leg-section field) waits for a row that
   needs true lengths (decided on the user's standing instruction
   2026-11-07, for review).
-- **Variations, beyond F6** (§12): nothing authors a group yet — the
-  editor's *Create variation here*, the Variant / All-variations views and
-  `VARIATION_UNBALANCED` are F7's. Until then the variants are ordinary
-  courses in every course list (the editor's included): opening one in
-  the editor shows it, and a save is refused (`COURSE_IS_VARIANT`); F7
-  filters them out of its picker. The editor opened on a root skips its
-  groups in the sequence it draws and edits (`lib/editor/sequence.ts`,
-  `structure-edit.ts`); F7 makes it read and write them. Per-variant
-  pages and a variant's own
-  sheet (`maps.pdf?courses=<variant>` still auto-creates one) are F8's
-  (the IOF family export landed with F9; runners' variants and the dealing landed
+- **Variations, beyond F7** (§12): the editor authors groups since F7
+  (`course-editor.md` §12) and its picker lists roots only; a variant is
+  still an ordinary course in every other course list, a deep link opens
+  it in the editor, and a save is refused (`COURSE_IS_VARIANT`).
+  Per-variant pages and a variant's own sheet
+  (`maps.pdf?courses=<variant>` still auto-creates one) are F8's, as are
+  the all-variations print in one purple and Class view / Layout mode of
+  a root per variant (both draw the root's first alternatives today); the
+  IOF family export landed with F9 (runners' variants and the dealing
   with F6b, the desk's accept of another variant's run with F6c —
   `course-controls-and-matching.md` "Forked courses and variants"). An
   imported `CourseFamily` stays separate linear courses (no group
-  inference, F9). A loop does not check
-  that the item after it is its anchor (the setter's; a check in F7 if
-  wanted). A 100-variant save is one transaction of about a thousand
+  inference, F9). A loop does not check that the item after it is its
+  anchor (the setter's; not added in F7). The server's `course.checks`
+  computes no `VARIATION_*` code (§9.4). A 100-variant save is one
+  transaction of about a thousand
   queries (`setStructure` allows it 30 s); a batched child write is the
   lever if real courses get near the cap.
 - **A translucent corridor band** (§10.2): `whiteOpacity` is stored and
@@ -1822,9 +1898,9 @@ them.
 - **Custom purple**: a template's `appearance.purple` other than the IOF
   purple is not applied on the vector path (the purple is the stack's
   CMYK); appearance work in slice D decides whether it stays.
-- **Checks, beyond D6** (§9): `VARIATION_UNBALANCED` (F7); exact Bézier and hole
+- **Checks, beyond D6** (§9): exact Bézier and hole
   geometry for obstacles; the
-  server's `CONTROL_OUTSIDE_SHEET` / `NUMBER_*`; a re-describing move
+  server's `CONTROL_OUTSIDE_SHEET` / `NUMBER_*` / `VARIATION_*`; a re-describing move
   still keys on "equals autodetect at the old position", not on
   `description_source`.
 - **Number boxes from font metrics**: the placer estimates boxes as
