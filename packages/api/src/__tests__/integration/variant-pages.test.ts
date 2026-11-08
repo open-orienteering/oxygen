@@ -292,3 +292,45 @@ describe("per-variant pages (course-print.md §4.6)", () => {
     }
   });
 });
+
+describe("the all-variations page numbers an equal fork (F15; course-print.md §4.6)", () => {
+  it("?allVariations=<root> of S 31 [32 | 33] 34 F: labels by number, the block rows 1, 2, 2, 3; the butterfly page above stays codes", async () => {
+    const { id } = await caller.course.create({ name: "Fork" });
+    await caller.course.setStructure({
+      courseId: id,
+      structure: {
+        version: 1,
+        id: "f",
+        orderMode: "ordered",
+        items: [ctl(S), ctl(site[31]), { kind: "variation", id: "g", alternatives: [{ label: "A", items: [ctl(site[32])] }, { label: "B", items: [ctl(site[33])] }] }, ctl(site[34]), ctl(F)],
+      },
+    });
+    await caller.layout.autoSheets({});
+    const res = await get(`?allVariations=${id}`);
+    expect(res.statusCode).toBe(200);
+    const pages = await selectPrintPages(ctx.db, ctx.eventId, { allVariations: String(id) });
+    const c = await context();
+    const sheet = sheetForMapRow(pages[0].row, c);
+    const idOf = (code: string) => c.allControls.find((x) => x.codes === code)!.id;
+    expect(sheet.course.viewOptions.labels).toEqual({ [idOf("31")]: "1", [idOf("32")]: "2", [idOf("33")]: "2", [idOf("34")]: "3" });
+    expect(sheet.course.viewOptions.labelMode).toBe("code");
+    expect("allVariations" in sheet.course.viewOptions).toBe(false);
+    const structures = sheet.course.structure as readonly { tint?: string }[];
+    expect(structures.some((s) => s.tint)).toBe(false);
+    expect(sheet.description?.rows.filter((r) => r.kind === "control").map((r) => [r.sequence, r.code])).toEqual([[1, "31"], [2, "32"], [2, "33"], [3, "34"]]);
+
+    // An unequal fork keeps codes: no labels, rows without numbers.
+    await caller.course.setStructure({
+      courseId: id,
+      structure: {
+        version: 1,
+        id: "f",
+        orderMode: "ordered",
+        items: [ctl(S), ctl(site[31]), { kind: "variation", id: "g", alternatives: [{ label: "A", items: [ctl(site[32])] }, { label: "B", items: [ctl(site[33]), ctl(site[34])] }] }, ctl(site[34]), ctl(F)],
+      },
+    });
+    const unequal = sheetForMapRow((await selectPrintPages(ctx.db, ctx.eventId, { allVariations: String(id) }))[0].row, c);
+    expect("labels" in unequal.course.viewOptions).toBe(false);
+    expect(unequal.description?.rows.filter((r) => r.kind === "control").map((r) => r.sequence)).toEqual([undefined, undefined, undefined, undefined]);
+  }, 90_000);
+});

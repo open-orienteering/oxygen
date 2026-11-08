@@ -3675,6 +3675,61 @@ test.describe("F7: variations and loops (docs/course-editor.md §12)", () => {
     await expect.poll(keys, { timeout: 15000 }).toEqual([]);
     await expect(controlRows(page)).toHaveCount(2);
   });
+
+  test("F15: All variations numbers the sites when the variants number alike, codes when a fork is unequal (course-layer.md §12.7)", async ({ page }) => {
+    await openEditor(page);
+    const name = await newCourse(page, "F15 numbers");
+    const codeA = await appendClear(page);
+    const codeB = await appendClear(page, [codeA]);
+    await expect(controlRows(page)).toHaveCount(2, { timeout: 15000 });
+    const a = await site(page, codeA), b = await site(page, codeB);
+    await viewSettled(page);
+    const mid = await legMidpoint(page, name, a.mm, b.mm);
+    await expect(async () => {
+      await dropSelection(page);
+      await clickMap(page, await toPage(page, mid));
+      await expect(page.getByTestId("editor-action-create-variation")).toBeVisible({ timeout: 3000 });
+    }).toPass({ timeout: 30000 });
+    const created = waitForTrpc(page, "course.setStructure");
+    await page.getByTestId("editor-action-bar").getByTestId("editor-action-create-variation").click();
+    await created;
+    const block = page.getByTestId("editor-variation");
+    await expect(block).toHaveCount(1, { timeout: 15000 });
+
+    /** A control into the alternative `tab` (K with nothing selected: it goes into the shown alternative, §12). */
+    const into = async (tab: "A" | "B") => {
+      await block.getByTestId(`editor-variation-tab-${tab}`).click();
+      await expect(block.getByTestId(`editor-variation-tab-${tab}`)).toHaveAttribute("aria-pressed", "true");
+      await dropSelection(page);
+      await arm(page, "K");
+      const placed = waitForTrpc(page, "course.setStructure");
+      const c = await place(page, await offLeg(page, a, b));
+      await placed;
+      await page.keyboard.press("v");
+      return c;
+    };
+    const label = (id: string) => page.locator(`[data-testid="course-label"][data-site-id="${id}"]`);
+    const x = await into("B");
+    const y = await into("A");
+    await expect(page.locator('[data-testid="editor-seq-row"][data-alternative="A"]')).toHaveCount(1, { timeout: 15000 });
+
+    // a 1, x and y 2 (the alternatives number alike), b 3.
+    await page.getByTestId("editor-view-all-variations").click();
+    await expect(page.getByTestId("editor-view-all-variations")).toHaveAttribute("aria-pressed", "true");
+    await expect(label(x.id)).toHaveAttribute("data-text", "2", { timeout: 15000 });
+    await expect(label(y.id)).toHaveAttribute("data-text", "2");
+    await expect(label(a.id)).toHaveAttribute("data-text", "1");
+    await expect(label(b.id)).toHaveAttribute("data-text", "3");
+
+    // A second control into B: the variants number unalike (b is 3 or 4), so codes again.
+    await page.getByTestId("editor-view-course").click();
+    const z = await into("B");
+    await expect(page.locator('[data-testid="editor-seq-row"][data-alternative="B"]')).toHaveCount(2, { timeout: 15000 });
+    await page.getByTestId("editor-view-all-variations").click();
+    await expect(label(x.id)).toHaveAttribute("data-text", x.code, { timeout: 15000 });
+    await expect(label(b.id)).toHaveAttribute("data-text", b.code);
+    await expect(label(z.id)).toHaveAttribute("data-text", z.code);
+  });
 });
 
 test.describe("F7 on a phone: the variation block switches alternatives only (docs/course-editor.md §12, §10)", () => {

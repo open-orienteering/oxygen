@@ -417,6 +417,30 @@ describe("numbers (§3.5)", () => {
     expect(d.sites.find((s) => s.id === "32")!.label).toMatchObject({ x: 56, y: 39 });
   });
 
+  it("viewOptions.labels (F15) wins over the sequence and over codes with several structures; a site it omits keeps its code; the start is never labelled", () => {
+    const labels = { "31": "7", "32": "2", S: "x" };
+    const one = derive({ viewOptions: { labels } });
+    expect(one.sites.find((s) => s.id === "31")!.label!.text).toBe("7");
+    expect(one.sites.find((s) => s.id === "33")!.label!.text).toBe("3");
+    expect(one.sites.find((s) => s.id === "S")!.label).toBeUndefined();
+    const many = derive({ structure: [linear(), linear(["S", "99", "F"], { id: "c2" })], viewOptions: { labels } });
+    expect(many.sites.find((s) => s.id === "31")!.label!.text).toBe("7");
+    expect(many.sites.find((s) => s.id === "99")!.label!.text).toBe("99");
+  });
+
+  it("viewOptions.labels ignores numberHidden: All variations draws the number (course-layer.md §12.7)", () => {
+    const spine = linear(["S", "31", "32", "F"], { items: [{ siteId: "S" }, { siteId: "31", numberHidden: true }, { siteId: "32" }, { siteId: "F" }] });
+    const branch = linear(["31", "99", "32"], { id: "b" });
+    const d = derive({ structure: [spine, branch], viewOptions: { labels: { "31": "1", "99": "2", "32": "3" } } });
+    expect(d.sites.find((x) => x.id === "31")!.label!.text).toBe("1");
+  });
+
+  it("viewOptions.labels shows a hidden number even for a single structure (All variations with no branch drawn)", () => {
+    const only = linear(["S", "31", "32", "F"], { items: [{ siteId: "S" }, { siteId: "31", numberHidden: true }, { siteId: "32" }, { siteId: "F" }] });
+    expect(derive({ structure: only }).sites.find((x) => x.id === "31")!.label).toBeUndefined();
+    expect(derive({ structure: only, viewOptions: { labels: { "31": "1" } } }).sites.find((x) => x.id === "31")!.label!.text).toBe("1");
+  });
+
   it("multi-course views label codes and draw both courses' legs", () => {
     const d = derive({ structure: [linear(), linear(["S", "99", "F"], { id: "c2" })] });
     expect(d.courses.map((c) => c.legs.length)).toEqual([4, 2]);

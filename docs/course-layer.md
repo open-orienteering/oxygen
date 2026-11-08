@@ -173,7 +173,7 @@ automatic cuts; an empty list means automatic (decision log 2026-11-01,
 | `sites` | `{ id, code, kind, x, y, circleGaps? }[]`, `kind` one of `control`, `start`, `finish`, `crossing_point`, `map_issue`, `map_exchange` (§6.3) | `controls` rows; `code` the display code (first punch code, else name / seq); `circleGaps` = `controls.circle_gaps`, compass degrees |
 | `objects` | `CourseLayerObject[]`: the course objects (§8) — since F12 a sheet's layout objects are all page-anchored and the page layer's (§3.6) | the event's course objects in scope (§8.3) |
 | `appearance` | `{ circle?, line?, number?, numberStyle? }`, multipliers (1 = the spec) | `appearanceFromTemplate(template.appearance)`; the template's `purple` is not read (the purple is the stack's row) |
-| `viewOptions` | `{ allControls?, labelMode?, autoCuts?, window?, textValues?, setterMarks?, section?, allVariations? }` — `allVariations` (§12.7): the tinted structures draw on tint rows, screen only | the view: all-controls, label mode, the event's **Auto cuts** toggle (`Event.autoOverprintCuts`; `false` = no automatic cuts, §3.4; absent = on), the frame polygon for white-out-outside, `{course}` placeholder values; `setterMarks` (§10.3): the map-issue points and every crossing point are drawn — the editor's Course and All-controls views and the all-controls sheet set it, a course sheet never does; `section` (§11): one part of a course split by map exchanges — a part sheet in print, Layout mode and Class view set it from `course_maps.section_index`, Course mode never does |
+| `viewOptions` | `{ allControls?, labelMode?, labels?, autoCuts?, window?, textValues?, setterMarks?, section?, allVariations? }` — `allVariations` (§12.7): the tinted structures draw on tint rows, screen only; `labels` (F15, §12.7): explicit text per control site, read before the sequence number and the code | the view: all-controls, label mode (and, for All variations, the explicit labels), the event's **Auto cuts** toggle (`Event.autoOverprintCuts`; `false` = no automatic cuts, §3.4; absent = on), the frame polygon for white-out-outside, `{course}` placeholder values; `setterMarks` (§10.3): the map-issue points and every crossing point are drawn — the editor's Course and All-controls views and the all-controls sheet set it, a course sheet never does; `section` (§11): one part of a course split by map exchanges — a part sheet in print, Layout mode and Class view set it from `course_maps.section_index`, Course mode never does |
 | `document` | `{ colours, libraryId, documentFactor, mapScale }` — the aligned stack, the library, the document factor (§3.1) and the base map's scale denominator (corridor widths, §10.2) | `courseDocumentContext(header)` (`context.ts`): the viewer's worker and the print route (`pdf-page.ts`) build it from the pinned document's header; `mapScale` is `header.mapScale` |
 | `cutFeatures` | `{ x, y, r? }[]` (`r` the drawn symbol's radius) | `cutFeaturesOfDocument(doc)` of the pinned document (every event since E1, §4.2) |
 | `regions` | `{ rings: MapPoint[][], mode: "clip" \| "hide", symbols: "all" \| number[] \| { colours }, invert? }[]` — filter regions over the map, `rings` outer first; symbol indices are the document's, colours its own stack's | explicit regions, then every `filter_region` course object in `objects` (§8.3); the layer returns them as `CourseLayer.regions` (µm paths, colours on the completed stack) and `courseRenderInput` passes them to `symbolise` with the document's object count as `regionObjectLimit` — the rule is `map-rendering.md` §4.11 |
@@ -367,6 +367,10 @@ user review). The flag reaches every consumer of the layer:
 - **Text**: `sequence` (1, 2, … over the first course's control items; a
   site visited twice gets `3/7`) by default for one ordered course
   outside the all-controls view; `code` otherwise, or by `labelMode`.
+  `viewOptions.labels` (F15) wins over both for the control-role sites it
+  names: the text is the entry's, `numberHidden` ignored; a site it omits
+  keeps its code (several structures) or number. All variations sets it
+  when the variants number alike (§12.7).
   Start and finish carry no number. A map exchange is a control item and
   takes its number; the numbers **continue** across it, and a part drawn
   alone (§11) keeps the whole course's numbers (answer 2).
@@ -648,7 +652,7 @@ buckets. The React SVG keeps the UI layer only (`map-rendering.md` §5.4
 | `structure` | the highlighted courses (`highlight` or `highlightCourseName`) in order, one `CourseStructure` each, `id` = the course name, `items` = its control ids (start and finish as `MapPanel` completes them), `orderMode` the course's; `null` when none is highlighted. A course with variation groups in the editor (`course-editor.md` §12) is drawn as the editor shows it (`MapViewerEditorProps.courseOverride`): its overlay's controls, legs and hidden numbers replaced by the displayed path's, and in All variations the tinted branches added highlighted, each with its `tint` (§12.7) |
 | `labelOffsets` | the single highlighted course's, with a drag or a pending label move winning — only with the description sheet or the editor |
 | `leg`, `numberHidden`, `circleGaps` | from the stored structure (§6.4), not from the GeoJSON: each item's `leg` whole — `style`, `bends`, `gaps`, `corridor`, `crossing` (§10) — from `course.list`'s `legs` (keyed `"<from>><to>"`, public control ids; `layerPropsOfStored` maps `crossing.controlId` to the site's public id as a string, the viewer's site id, drops a crossing naming an unknown control and omits an empty leg; a pair visited twice keeps its last visit's leg), `numberHidden` from its `hiddenNumbers`, each site's `circleGaps` from `course.controlCoordinates`. A course with no stored structure has none (the automatic cuts); 707 / 708 / 709 / 711 are course objects (`objects` below) |
-| `viewOptions` | `labelMode: "sequence"` for one ordered course with the sheet or the editor, else `"code"` (so All variations, several highlighted courses, shows codes); `allVariations` when a highlighted course has a `tint` (§12.7); `allControls` when a drawn site other than a crossing or map-issue point is on no highlighted course; `autoCuts: false` when the event's toggle is off (`course.getOverprintCuts`, read by `MapPanel`; no key when on, §3.4); `setterMarks` (§10.3) in the editor's Course and All-controls views (not Class view: the class's print has none) and, in Layout mode, on the all-controls sheet (no course highlighted) |
+| `viewOptions` | `labelMode: "sequence"` for one ordered course with the sheet or the editor, else `"code"` (several highlighted courses show codes; All variations adds `labels` — numbers — when the variants number alike, F15, §12.7); `allVariations` when a highlighted course has a `tint` (§12.7); `labels` merged from the highlighted courses that carry one (the All-variations spine, F15); `allControls` when a drawn site other than a crossing or map-issue point is on no highlighted course; `autoCuts: false` when the event's toggle is off (`course.getOverprintCuts`, read by `MapPanel`; no key when on, §3.4); `setterMarks` (§10.3) in the editor's Course and All-controls views (not Class view: the class's print has none) and, in Layout mode, on the all-controls sheet (no course highlighted) |
 | `objects` | the event's course objects in scope of the highlighted courses (`courseObjectsForView`, §8.2; `all`-scoped only when none is highlighted), without scope, `z` or token — `MapPanel` fetches `courseObject.list` and hands them to the viewer; no sheet's layout objects reach the viewer |
 | provisional visit | the editor's armed `S` / `K` / `M` (`course-editor.md` §6.1), with exactly one highlighted course: a site `provisional` (`PROVISIONAL_SITE_ID`, the tool's kind, the cursor, the next code) — or a reused site by its id, which adds no site (`provisionalDrawn` is false; the editor then draws its own ghost circle, `course-editor.md` §6.1) — spliced into the course's items (`spliceProvisional`): a control before the `insertAt`-th control visit (repeats counted), else before the finish, else last; a start replaces the course's start, a finish its finish (else they lead / end). The leg the visit splits takes no stored leg — no gaps, style, bends or corridor (they are keyed by the drawn neighbours) |
 | `appearance` | `{}` — the spec sizes × the document factor (decision "Sizes") |
@@ -1692,6 +1696,18 @@ standing instruction, 2026-11-07, for review). Section numbering keeps
   (butterfly) every visiting order of its alternatives, permutations in
   lexicographic order of the stored alternatives (`AB`, `BA`; three
   alternatives give six). `[]` for a structure without groups.
+- `uniformVariantNumbers(structure, isNumbered)` (F15; All variations,
+  §12.7) → `Map<siteId, number> | null`: over every variant's path
+  (`variantOrders` → `pathOfOrders`) the items `isNumbered` accepts are
+  counted 1, 2, …; the map site → number when **every visited site has
+  exactly one number across all variants**, else `null`. The predicate
+  is the caller's (the stored structure knows neither site kinds nor
+  positions): role `control` — a map exchange is one, the start, finish,
+  crossing and map-issue points are not — and positioned, what the layer
+  numbers. An unequal fork, every loop with two or more non-empty petals (the anchor is visited again; a loop with one has no repeat and numbers as a plain fork) and
+  a top-level site visited twice give `null`; two forks in a row continue
+  the numbers across both; one unequal group makes the whole course
+  codes.
 - **Keys.** A group's key is its alternatives' labels in visiting order,
   the variant's key the groups' keys concatenated (`"AC"`, `"ABA"`). A key
   depends on the groups alone, so an edit outside them keeps every key and
@@ -1924,17 +1940,32 @@ purple). Numbers, starts, finishes and everything else are unchanged.
 On top of the stack the tints draw over black: a screen overview, not an
 overprint.
 
+**Numbers when the variants number alike (F15; the user's answer Q4,
+2026-11-08).** All variations labels the sites by number when
+`uniformVariantNumbers` is not `null` — every visited site has exactly one
+sequence number in every variant that visits it (equal forks) — and by
+code otherwise (unequal forks, loops of two or more petals). The numbers travel as
+`viewOptions.labels` (site id → text, §3.5): the spine's draw carries
+them on screen (`course-editor.md` §12), the all-variations sheet on
+paper (`course-print.md` §4.6), both from the same helper, so the two
+agree. The labels are the variant numbers (`S 31 [A:32 | B:33] 34 F`:
+31 is 1, 32 and 33 both 2, 34 is 3). **`numberHidden` is ignored in
+All variations** — as the view draws every alternative, a hidden visit
+in one variant has no single answer — so a hidden number shows here, as
+the codes always did. Tints, the one purple in print and `allVariations`
+as a non-print option are unchanged.
+
 **Never on paper.** Without the option a `tint` is ignored — the layer's
 output equals the untinted structures' — and nothing in the print path
 sets it: `PageInput.course.viewOptions` is a `Pick` without
-`allVariations` (a hint, not a guarantee — `resolve-sheet.ts` adds
+`allVariations` (and with `labels`, F15; a hint, not a guarantee — `resolve-sheet.ts` adds
 options through spreads), and the guard is the fixture: `composePage` of
 tinted structures emits the plain stream with no tint row
 (`print/__tests__/compose.test.ts`). F8's all-variations page
 prints every alternative in the one purple: the same spine and branches
 (`allVariationStructures`) without `tint`, no `allVariations` option,
-codes (`course-print.md` §4.6; a second compose fixture checks the plain
-colour table). Decided on the user's
+codes — or the numbers of the equal fork above (F15; `course-print.md`
+§4.6; a second compose fixture checks the plain colour table). Decided on the user's
 standing instruction (2026-11-07), for review: branches rather than
 groups in the layer (keeps "a variant is a linear structure"); the tint
 rows on top rather than beside lower purple (no document re-index for a
@@ -1991,7 +2022,10 @@ label.
 | unit | `layer.test.ts` "variation tints (§12.7, F7)", `colour-stack.test.ts` "variation tint rows" | §12.7: with `allVariations` the rows on top in first-use order, distinct tints, a tinted course's 705 and the circle only it visits on its row, the spine's untouched; without the option the layer equals the untinted one, no tint row; the rows below a toner saver's white; `withTintColours` cycling and `indexOf` |
 | unit | `packages/shared/src/print/__tests__/compose.test.ts` "variation tints never print" | §12.7: `composePage` of a tinted structure = the plain one's stream, no `course-tint:` colour; `allVariations` is no `PageInput` option (`@ts-expect-error`) |
 | unit | `checks.test.ts` "variation groups (§9.2 VARIATION_*, F7)" | §9.2: unbalanced beyond 10 % at the anchor with the shortest / longest, within 10 % none, an empty alternative the straight leg, bends and a crossing lengthen, the shared exit leg, a loop's petals (an empty one skipped), all empty → `VARIATION_ALL_EMPTY`, an unpositioned anchor skipped, paper mm without a scale, the codes' order |
-| unit (web) | `course-layer-request.test.ts` "variation tints (F7)" | §5: a tinted course carries its tint and sets `allVariations`, codes with several courses; none without a tint |
+| unit (web) | `course-layer-request.test.ts` "variation tints (F7)" | §5: a tinted course carries its tint and sets `allVariations`, codes with several courses; none without a tint; F15: a spine's `labels` become `viewOptions.labels`, none without one |
+| unit | `variants.test.ts` "uniformVariantNumbers (F15)" | §12.1 / §12.7: an equal fork numbers both alternatives alike, an unequal fork / a loop of two petals (one petal has no repeat) / a repeated top-level site → `null`, two forks continue the numbers, an unequal second fork makes it codes, a shared control at the same position only, rejected items take no number, an exchange counts, wire ids |
+| unit | `derive.test.ts` "numbers (§3.5)" | §3.5 / §12.7 (F15): `viewOptions.labels` wins over the sequence and over codes with several structures, an omitted site keeps its code, the start is not labelled, `numberHidden` ignored |
+| integration | `variant-pages.test.ts` "the all-variations page numbers an equal fork (F15)" | §12.7 / `course-print.md` §4.6: an equal fork's page carries `labels` (1, 2, 2, 3) and its block rows 1, 2, 2, 3, still no tint and no `allVariations`; an unequal fork has neither |
 | integration | `packages/api/src/__tests__/integration/course-variants.test.ts` | §12.2–12.5: one child per variant (name, key, parent, copied fields, linear structure with its own id, mirror, lengths as the root's path), journal root first then children; `variantList`, `list` / `detail` by seq; a loop's permutations; an empty alternative, all empty accepted with identical children (F7); colliding keys and the cap refused, nothing written; re-materialisation (same rows across an outside edit, a new key, every key gone → soft-deleted and the runner nulled with its `runner.updated`, keys back → the same uuids); `runner.updated { courseId }` replayed through `events.push`; label offsets of every alternative round-trip; pools (a class on the root, a class picking it later, a key added / dropped, a plain course clears); the refusals (`ROOT_HAS_VARIATIONS`, `COURSE_IS_VARIANT`, nothing written); name / climb / maps mirrored; an offset set through the root; clone of a root and of a variant; delete of a root; `control.delete` of a control in alternative B only (one entry per row) and of a group's anchor (dissolved); an import over a root; an import with `replaceAll` over a root (the runner on a variant nulled and journaled, the pool emptied); a peer applying a root's and its variant's `course.upserted` through `events.push`; the migration's unique pair and `CHECK`; a checkout snapshot exported and imported with its children and pools (the backup dump is `SELECT *` per table, so the children are ordinary `courses` rows there) |
 | integration | `packages/api/src/__tests__/integration/runner-variants.test.ts` | §12.3–12.4 with F6b: a vanished variant's runner dealt one of the remaining pool (the entry carries the seq), a class onto / off a root deals / clears its runners after its `class.upserted`; the rest of F6b is listed in `course-controls-and-matching.md` "Test coverage" |
 | integration | `journal-completeness.test.ts` "course.setStructure with a group" | §12.4: the variants' `course.upserted` (parent, key, name), the class's `coursePools`, the vanished variant's `runner.updated { courseId: null }` |
@@ -2056,7 +2090,7 @@ label.
 
 | `packages/shared/src/course/structure.ts` | §6.1: `courseStructureSchema`, `courseStructureWireSchema`, `structureSiteIssues`, `linearStructure`, `structureControlIds`, `structureDiff` |
 | `packages/api/src/course-structure.ts` | §6.2: `splitStructure`, `structureFromColumns`, `courseSequenceOf` (the readers' rule, E6), `carryLegs`, `persistStructure`, `rewriteStructureFromColumns`, wire mapping, `assertCourseVersion` |
-| `packages/shared/src/course/variants.ts` | §12.1: `materialiseVariants`, `variantStructure`, `variantCount`, `variantKeyDuplicates`, `structureSiteIds`, `pruneSiteFromStructure`, `MAX_VARIANTS`; F7: `variantOrders`, `pathOfOrders`, `groupOrder` |
+| `packages/shared/src/course/variants.ts` | §12.1: `materialiseVariants`, `variantStructure`, `variantCount`, `variantKeyDuplicates`, `structureSiteIds`, `pruneSiteFromStructure`, `MAX_VARIANTS`; F7: `variantOrders`, `pathOfOrders`, `groupOrder`; F15: `uniformVariantNumbers` |
 | `packages/shared/src/course/colour-stack.ts` (`withTintColours`, `VARIATION_TINTS`), `layer.ts` (`variationTints`) | §12.7: the screen-only tints |
 | `packages/web/src/lib/editor/variation-view.ts` | §5 / §12.7: the editor's drawn course of a grouped structure (`courseDrawOf`, `allVariationDraws`, `withCourseOverride`) |
 | `packages/api/src/course-variants.ts` | §12.3–12.4: `syncVariants`, `emitVariantSync`, `syncClassPool`, `clearRemovedVariants`, `assertMaterialisable`, `assertNotVariant`, `rootStructureOf`; called by `routers/course.ts`, `routers/control.ts` (`delete`), `routers/classRouter.ts` |
@@ -2097,7 +2131,8 @@ label.
   still an ordinary course in every other course list, a deep link opens
   it in the editor, and a save is refused (`COURSE_IS_VARIANT`).
   Per-variant pages, the all-variations print and Class view / Layout
-  mode per variant landed with F8 (`course-print.md` §4.6); the
+  mode per variant landed with F8 (`course-print.md` §4.6), and the
+  all-variations numbers (equal forks) with F15 (§12.7); the
   IOF family export landed with F9 (runners' variants and the dealing
   with F6b, the desk's accept of another variant's run with F6c —
   `course-controls-and-matching.md` "Forked courses and variants"). An

@@ -131,6 +131,8 @@ export interface CourseOverlay {
   hiddenNumbers?: number[];
   /** The editor's All-variations view (docs/course-editor.md §12): an alternative drawn in its tint (course-layer.md §12.7). */
   tint?: string;
+  /** All variations (F15): explicit label text per control id when the variants number alike. */
+  labels?: Record<string, string>;
 }
 
 /**
