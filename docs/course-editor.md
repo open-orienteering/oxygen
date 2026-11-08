@@ -354,7 +354,7 @@ tool takes the pointer-down itself, as the area tool does, §6.4). A
 `ToolPointer` carries `shift`, `alt` (mouse only; touch never) and the
 zoom's mm per px; `onPointerDrag` gets the keys held now (`{ shift, alt
 }`), so Shift and Alt act live during a drag; Alt held at the area
-tool's press places a smooth vertex (§6.4). Tools draw UI-layer shapes
+tool's press places a corner (§6.4, F18). Tools draw UI-layer shapes
 in paper mm (`ToolShape`: circle — true size, line, handle, grip — a
 screen-size Bézier handle on a thin line from its vertex — and text). The tool state is `EditorState.tool`
 (`lib/editor/state.ts`); an active tool opens no action bar.
