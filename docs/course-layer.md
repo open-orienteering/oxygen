@@ -1443,8 +1443,24 @@ all-white corridor map); `edge` draws the boundary in purple.
 - **Geometry** (`corridor.ts`, `corridorGeometry(derivation.courses)`).
   Per course, consecutive corridor legs of equal `widthMm` and `whiteMm`
   are one run (repeated and straight-through points dropped). A run's
-  buffer at a distance `h` is the union of a rectangle per segment and a
-  disc per vertex (flattened at 5 µm): round joins and round ends. The
+  buffer at a distance `h` is **one ring per run** (user answer
+  2026-11-08 to F13's corridor question, replacing F2's rectangle per
+  segment and disc per vertex): the left offset, a round cap at the end,
+  the right offset back, a round cap at the start. At each vertex the
+  outer side turns along an arc about it and the inner side runs through
+  the vertex itself (the offset point of the segment before, the vertex,
+  the offset point of the segment after), so the ring's **nonzero**
+  winding covers exactly the round-joined buffer even where it crosses
+  itself; arcs and caps are flattened at 5 µm, so a turn too small to
+  need it (below about 6.6° at a 3 mm half width — "round joins at turns
+  > 10°" of the answer, made exact to the tolerance) is one chord. A run
+  of one point is a disc. `polygon-clipping`'s union, nonzero per input
+  ring, cleans every run's ring and joins the runs; its output rings are
+  simple. Why: a flattened curved leg (F13) has ~90 vertices, and the
+  union of ~180 pieces per leg cost 0.6 s for one leg and crashed
+  `polygon-clipping` ("Unable to find segment in SweepLine tree") at ten;
+  one ring per run measured 6 / 44 / 158 ms for 1 / 10 / 30 curved legs.
+  The
   **inside** is the union of every run's buffer at `widthMm / 2` over
   every drawn course; the **band** is the union of the runs' buffers at
   `widthMm / 2 + whiteMm` (runs with `whiteMm > 0`) less the inside. So
@@ -2012,7 +2028,10 @@ label.
   drawn opaque until the stream carries alpha (`map-rendering.md` §8).
 - **The corridor union per frame** (§10.2): `corridorGeometry` runs on
   every course reply — about 10 ms for 30 corridor legs, 47 ms with every
-  edge, 96 ms for three such courses overlapping (Node, F2). The editor's
+  edge, 96 ms for three such courses overlapping (Node, F2); on curved
+  legs (F13, one ring per run, the edge lookup on a 4 mm grid) about
+  20 ms for one, 120 ms for ten and 360 ms for thirty edged legs of ~90
+  flattened vertices each. The editor's
   bend drag previews on the UI layer and writes once (`course-editor.md`
   §6.7), so no per-move request pays it; a control drag on a corridor
   course still does. Caching the union per run is the first lever.

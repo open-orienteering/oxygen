@@ -9,10 +9,12 @@
  *
  * The pass stream fills and clips even-odd only (map-rendering.md §3.1),
  * and even-odd over overlapping pieces cuts a hole at every join, so the
- * buffers are built as unions of convex pieces (a rectangle per segment,
- * a disc per vertex: the exact round-joined buffer) with polygon-clipping.
- * The output rings are simple and properly nested; even-odd draws them as
- * the union and the difference they are.
+ * buffers are unioned with polygon-clipping, whose output rings are simple
+ * and properly nested; even-odd draws them as the union and the difference
+ * they are. Each run's buffer is one ring (F13, user answer 2026-11-08):
+ * its nonzero winding is the round-joined buffer, which polygon-clipping
+ * (nonzero per input ring) cleans — a rectangle per segment and a disc per
+ * vertex cost too much, and crashed it, on a flattened curve.
  */
 
 import * as polygonClippingModule from "polygon-clipping";
@@ -130,35 +132,82 @@ function runsOf(courses: readonly DerivedCourse[]): { runs: Run[]; edged: EdgedS
   return { runs, edged: edged.map((e) => ({ ...e, capA: !unedged.has(key(e.a)), capB: !unedged.has(key(e.b)) })) };
 }
 
-function disc(c: Pt, h: number): Polygon {
-  const n = Math.max(8, Math.ceil((2 * Math.PI) / (2 * Math.acos(Math.max(-1, 1 - TOLERANCE_UM / h)))));
-  const ring: [number, number][] = [];
-  for (let k = 0; k < n; k++) ring.push([c.x + h * Math.cos((2 * Math.PI * k) / n), c.y + h * Math.sin((2 * Math.PI * k) / n)]);
-  ring.push(ring[0]);
-  return [ring];
+/** Angular step of an arc of radius `h` flattened at the tolerance. */
+const arcStep = (h: number) => 2 * Math.acos(Math.max(-1, 1 - TOLERANCE_UM / h));
+
+/** Appends the arc about `c` of radius `h` from angle `a0` turning by `sweep` (signed), its end included, its start not. */
+function arc(out: [number, number][], c: Pt, h: number, a0: number, sweep: number): void {
+  const n = Math.max(1, Math.ceil(Math.abs(sweep) / arcStep(h)));
+  for (let k = 1; k <= n; k++) {
+    const a = a0 + (sweep * k) / n;
+    out.push([c.x + h * Math.cos(a), c.y + h * Math.sin(a)]);
+  }
 }
 
-function rect(a: Pt, b: Pt, h: number): Polygon {
-  const l = Math.hypot(b.x - a.x, b.y - a.y);
-  const nx = (-(b.y - a.y) / l) * h, ny = ((b.x - a.x) / l) * h;
-  return [[[a.x - nx, a.y - ny], [b.x - nx, b.y - ny], [b.x + nx, b.y + ny], [a.x + nx, a.y + ny], [a.x - nx, a.y - ny]]];
+/**
+ * One run's buffer at `h` as one ring (course-layer.md §10.2, F13): the
+ * left offset forward, a round cap, the right offset back, a round cap.
+ * At a vertex the outer side follows an arc about it and the inner side
+ * runs through the vertex itself, so the ring's nonzero winding is the
+ * round-joined buffer even where it crosses itself; the union cleans it.
+ */
+function runRing(pts: readonly Pt[], h: number): Polygon {
+  const ring: [number, number][] = [];
+  if (pts.length < 2) {
+    const c = pts[0];
+    ring.push([c.x + h, c.y]);
+    arc(ring, c, h, 0, 2 * Math.PI);
+    return [integral(ring)];
+  }
+  const dir = (a: Pt, b: Pt) => Math.atan2(b.y - a.y, b.x - a.x);
+  /** One side, walking `p` in order: offset to the left of the direction of travel. */
+  const side = (p: readonly Pt[]) => {
+    for (let i = 0; i + 1 < p.length; i++) {
+      const a = p[i], b = p[i + 1], t = dir(a, b), nx = -Math.sin(t) * h, ny = Math.cos(t) * h;
+      if (i === 0) ring.push([a.x + nx, a.y + ny]);
+      ring.push([b.x + nx, b.y + ny]);
+      if (i + 2 >= p.length) break;
+      // The turn at b to the next segment: left (positive) puts this side inside, right outside.
+      let turn = dir(b, p[i + 2]) - t;
+      while (turn > Math.PI) turn -= 2 * Math.PI;
+      while (turn <= -Math.PI) turn += 2 * Math.PI;
+      if (turn > 0) ring.push([b.x, b.y]);
+      else arc(ring, b, h, t + Math.PI / 2, turn);
+      if (turn >= 0) {
+        const u = t + turn;
+        ring.push([b.x - Math.sin(u) * h, b.y + Math.cos(u) * h]);
+      }
+    }
+  };
+  const capAt = (end: Pt, before: Pt) => arc(ring, end, h, dir(before, end) + Math.PI / 2, -Math.PI);
+  side(pts);
+  capAt(pts[pts.length - 1], pts[pts.length - 2]);
+  const back = [...pts].reverse();
+  side(back);
+  capAt(back[back.length - 1], back[back.length - 2]);
+  return [integral(ring)];
+}
+
+/** Integer µm, consecutive repeats dropped, closed: polygon-clipping's sweep is stable on it (float arcs crash it). */
+function integral(ring: readonly [number, number][]): [number, number][] {
+  const out: [number, number][] = [];
+  for (const [x, y] of ring) {
+    const p: [number, number] = [Math.round(x), Math.round(y)];
+    const last = out[out.length - 1];
+    if (!last || last[0] !== p[0] || last[1] !== p[1]) out.push(p);
+  }
+  if (out.length > 1 && (out[0][0] !== out[out.length - 1][0] || out[0][1] !== out[out.length - 1][1])) out.push(out[0]);
+  return out;
 }
 
 /** The round-joined buffer of every run at its half width plus `extra(run)`, as one union. */
 function buffer(runs: readonly Run[], extra: (r: Run) => number): MultiPolygon {
-  const pieces = new Map<string, Polygon>();
+  const rings: Polygon[] = [];
   for (const r of runs) {
     const h = r.half + extra(r);
-    if (h <= 0) continue;
-    for (const p of r.pts) pieces.set(`d ${p.x} ${p.y} ${h}`, disc(p, h));
-    for (let i = 1; i < r.pts.length; i++) {
-      const a = r.pts[i - 1], b = r.pts[i];
-      const [s, t] = a.x < b.x || (a.x === b.x && a.y < b.y) ? [a, b] : [b, a];
-      pieces.set(`r ${s.x} ${s.y} ${t.x} ${t.y} ${h}`, rect(s, t, h));
-    }
+    if (h > 0) rings.push(runRing(r.pts, h));
   }
-  const all = [...pieces.values()];
-  return all.length ? pc.union(all[0], ...all.slice(1)) : [];
+  return rings.length ? pc.union(rings[0], ...rings.slice(1)) : [];
 }
 
 /** polygon-clipping rings (closed, float) → flat integer-µm rings, the closing point dropped. */
@@ -194,9 +243,33 @@ function distToEdged(p: Pt, s: EdgedSegment): number {
   return Math.hypot(p.x - s.a.x - t * dx, p.y - s.a.y - t * dy);
 }
 
-/** The edged leg whose side `p` lies on, by ref; `null` when none. */
-function edgedRefAt(p: Pt, edged: readonly EdgedSegment[]): string | null {
-  for (const s of edged) {
+/** Grid cell of the edged segments' index, µm. */
+const EDGE_CELL_UM = 4000;
+
+/**
+ * The edged segments bucketed by grid cell over their grown bounds, each
+ * cell's indices ascending: a flattened curve (F13) has hundreds of
+ * segments, and every boundary sample asks.
+ */
+function edgeIndex(edged: readonly EdgedSegment[]): Map<string, number[]> {
+  const cells = new Map<string, number[]>();
+  edged.forEach((s, i) => {
+    for (let cx = Math.floor(s.minX / EDGE_CELL_UM); cx <= Math.floor(s.maxX / EDGE_CELL_UM); cx++) {
+      for (let cy = Math.floor(s.minY / EDGE_CELL_UM); cy <= Math.floor(s.maxY / EDGE_CELL_UM); cy++) {
+        const k = `${cx} ${cy}`;
+        const list = cells.get(k);
+        if (list) list.push(i);
+        else cells.set(k, [i]);
+      }
+    }
+  });
+  return cells;
+}
+
+/** The edged leg whose side `p` lies on, by ref (the first such segment); `null` when none. */
+function edgedRefAt(p: Pt, edged: readonly EdgedSegment[], index: Map<string, number[]>): string | null {
+  for (const i of index.get(`${Math.floor(p.x / EDGE_CELL_UM)} ${Math.floor(p.y / EDGE_CELL_UM)}`) ?? []) {
+    const s = edged[i];
     if (p.x < s.minX || p.x > s.maxX || p.y < s.minY || p.y > s.maxY) continue;
     if (Math.abs(distToEdged(p, s) - s.half) < EDGE_TOLERANCE_UM) return s.ref;
   }
@@ -206,6 +279,7 @@ function edgedRefAt(p: Pt, edged: readonly EdgedSegment[]): string | null {
 /** The parts of the inside's boundary rings that run along edged legs. */
 function edgesOf(inside: FlatRing[], edged: readonly EdgedSegment[]): CorridorEdge[] {
   if (!edged.length) return [];
+  const index = edgeIndex(edged);
   const out: CorridorEdge[] = [];
   for (const ring of inside) {
     const n = ring.length / 2;
@@ -219,7 +293,7 @@ function edgesOf(inside: FlatRing[], edged: readonly EdgedSegment[]): CorridorEd
         const t0 = j / k, tm = (j + 0.5) / k;
         const p = j === 0 ? a : { x: Math.round(a.x + (b.x - a.x) * t0), y: Math.round(a.y + (b.y - a.y) * t0) };
         const m = { x: a.x + (b.x - a.x) * tm, y: a.y + (b.y - a.y) * tm };
-        samples.push({ p, ref: edgedRefAt(m, edged), vertex: j === 0 });
+        samples.push({ p, ref: edgedRefAt(m, edged, index), vertex: j === 0 });
       }
     }
     if (samples.every((s) => s.ref !== null && s.ref === samples[0].ref)) {

@@ -3555,10 +3555,9 @@ test.describe("F13: Bézier bends (docs/course-layer.md §10.1)", () => {
     const template = await probeTemplate("F13 curve");
     const sheet = await trpcCall<{ seq: number }>("courseMap.create", { kind: "course", courseId: id, templateId: template.seq, overrides: {}, objects: [] });
     try {
-      await page.goto(`/${nameId}/course-editor`);
+      await page.goto(`/${nameId}/course-editor?course=${id}`);
       await editorReady(page);
-      await page.getByTestId("editor-mode-course").click();
-      await page.getByTestId("editor-course-picker").selectOption(String(id));
+      await expect(controlRows(page)).toHaveCount(2, { timeout: 15000 });
       await viewSettled(page);
 
       // The drawn leg is the flattened curve: many points, through the bend.
