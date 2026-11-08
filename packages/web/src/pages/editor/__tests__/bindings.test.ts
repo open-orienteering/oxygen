@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 import type { course } from "@oxygen/shared";
-import type { ToolPointer } from "../../../components/MapViewer";
+import type { ToolPointer, ToolShape } from "../../../components/MapViewer";
 import { areaBinding, crossingGhost, gapBinding, pickSymbolBinding, placeBinding, scaleAbout, selectBinding, withCorridorGuides, type GestureRef } from "../tools/bindings";
 import { railKeyOf } from "../tools/rail";
 
@@ -611,7 +611,7 @@ describe("V on a selected leg: smooth bends, grips, Alt (docs/course-editor.md Â
     from: { x: 0, y: 0 }, to: { x: 40, y: 0 }, bends: [SMOOTH], focused: null,
     onBendsChange: vi.fn(), onBendFocus: vi.fn(), snap: (p: { x: number; y: number }) => p, ...over,
   });
-  const outline = (b: ReturnType<typeof selectBinding>) => b.shapes!.find((s) => s.testId === "editor-leg-outline") as { points: { x: number; y: number }[] };
+  const outline = (b: ReturnType<typeof selectBinding>) => b.shapes!.find((s) => s.testId === "editor-leg-outline") as Extract<ToolShape, { kind: "line" }>;
 
   it("the outline is the flattened curve (legPolyline); a grip per handle", () => {
     const b = selectBinding(selectOpts({ leg: legOpts() }));
