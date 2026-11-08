@@ -69,7 +69,6 @@ describe("layout objects on the page", () => {
   const line: CourseMapObject = { id: "l", kind: "line", anchor: "page", x1: 100, y1: 100, x2: 150, y2: 100, stroke: "#000000", strokeWidthMm: 0.35 };
   const covering: CourseMapObject = { id: "c", kind: "rectangle", anchor: "page", x: 55, y: 55, width: 10, height: 10, fillMode: "whiteout" };
   const objects = [text, rect, line, covering];
-  const g = geometry();
 
   it("hit: by bounds, lines by distance, topmost wins", () => {
     expect(layoutObjectAt({ x: 22, y: 28 }, objects, 1)).toBe(0);
