@@ -1046,7 +1046,9 @@ the symbolised stream with layer-local object ids (before the offset)
 and each object's `ref`, which the editor hit-tests on the main thread
 (§5.5). `input: null` clears; a load
 without course support answers `part: null`, `hit: null` and `COURSE_UNAVAILABLE`.
-The worker answers a request at once, between prepare slices.
+The worker answers a request at once, between prepare slices. A request
+whose derivation throws answers `error` (F20), so the engine's request in
+flight ends.
 
 **Page part** (D7, `course-layout.md` §1). A request with `page` (the
 sheet's paper height, frame, window, layout objects, text values and
@@ -1065,10 +1067,16 @@ resident, fixed bytes) and passes `pageClip { fromColour, ringUm }` to the
 renderer, which scissors every colour below `fromColour` to the frame's
 screen box (exact while the page is upright, which Layout mode keeps).
 
-**Engine.** `MapGlEngine.setCourse(input | null)` posts the request with
-a new generation (one made before the load waits for it and is sent
-right after the load message); a reply whose generation is not the
-latest is dropped. The current reply's part is uploaded under key `C` —
+**Engine.** `MapGlEngine.setCourse(input | null)` keeps **one request in
+flight** (F20, `docs/bugfix-course-drag-redraw.md`): with none, it posts
+the input with a new generation; during one it records the input — the
+latest call wins, `null` included — and posts it when the reply is in, so
+a drag re-derives at the worker's rate, every reply of a posted request is
+drawn and no input a newer one replaced is ever derived. One made before
+the load waits for it and is sent right after the load message; a `load`
+during a request posts the current input at once with a new generation,
+and a reply whose generation is not the latest posted is dropped. A
+worker `error` ends the request in flight and the recorded input goes. The current reply's part is uploaded under key `C` —
 through `GpuArena.put` like any part, so a grow re-uploads it with the
 rest and nothing goes through `copyBufferSubData`
 (`docs/bugfix-adreno-arena-grow.md`) — and the previous one released;
@@ -1086,7 +1094,13 @@ else the load's.
 **Cost.** A dragged control re-symbolises the whole layer (tens of
 objects): the 04 §7 budget of < 1 ms is the symbolisation's; the reply
 is one worker round trip, one part upload and one visible-set rebuild.
-Main-thread symbolisation for the drag is pending (§8).
+The derivation is the larger part since F13: on 25 controls with one
+smooth bend per leg it was ~400 ms, 376 of them the number placer's, and
+with a request per pointer move a second of drag queued ~24 s of worker
+time. F20 culls the placer (`course-layer.md` §3.5; ~70 ms for the whole
+derivation on the budget fixture) and keeps one request in flight; the
+corridor and cut-feature cost per request is F20b's (`course-layer.md`
+§10.2 Pending). Main-thread symbolisation for the drag is pending (§8).
 
 #### Filter regions (D3)
 
@@ -1510,8 +1524,8 @@ published on `window.__mapGlDoc` for Playwright.
 | `e2e/map-gl-golden.spec.ts` | the per-pass path against the reference raster; the **MSDF text tier**: `text-with-halo`, `lib-text`, `lib-halos` through the arena path (§6.2); the **filter-region arena tier** (D3, §6.2) |
 | `e2e/map-gl-doc.spec.ts` (text) | arena = per-pass compare also on `e2e/test.xmap` (text, MSDF vs outlines) within 0.5 %; its text resolves on the Latin page with nothing missing |
 | `e2e/map-vector-layer.spec.ts` (text) | the viewer requests the Latin page and not the Cyrillic one |
-| `map-gl/__tests__/worker-course.test.ts` | dynamic bucket: static parts on the completed stack (upper white below upper purple, rows above it +1 with their CMYK), the document's stack without `courseLayer`, an unaligned stack unsupported and unchanged; a course request → one `all` part at `COURSE_BUCKET` on the completed stack (lower-purple strokes, text instances, glyph meshes in the grown atlas, earlier meshes in place, object ids after the document's, everything transferable); no atlas when nothing was added; lower purple drawn under black in one visible set; `null` and unsupported replies; a white-out at upper white above black; a toner saver's white the last colour drawn, after the document's top row and upper purple (P1) |
-| `map-gl/__tests__/engine.test.ts` (dynamic bucket) | `setCourse` uploads `C`, drawn below the zoom gate too, rebuilt at once, `onCourse` / `onChange`, `engine.colours` = the reply's; an overtaken reply dropped; `null` releases; a request before the load waits for it; course bytes fixed |
+| `map-gl/__tests__/worker-course.test.ts` | dynamic bucket: static parts on the completed stack (upper white below upper purple, rows above it +1 with their CMYK), the document's stack without `courseLayer`, an unaligned stack unsupported and unchanged; a course request → one `all` part at `COURSE_BUCKET` on the completed stack (lower-purple strokes, text instances, glyph meshes in the grown atlas, earlier meshes in place, object ids after the document's, everything transferable); no atlas when nothing was added; lower purple drawn under black in one visible set; `null` and unsupported replies; a white-out at upper white above black; a toner saver's white the last colour drawn, after the document's top row and upper purple (P1); a request whose derivation throws answers `error` and the next is answered (F20) |
+| `map-gl/__tests__/engine.test.ts` (dynamic bucket) | `setCourse` uploads `C`, drawn below the zoom gate too, rebuilt at once, `onCourse` / `onChange`, `engine.colours` = the reply's; one request in flight (F20): of three calls during one request the first and the last are posted, both replies drawn in order, the middle never sent; `null` recorded and posted like any input, releasing `C`; the inputs before the load → one request with the last, right after the load message; a `load` during a request re-posts at once with a new generation and the older reply is dropped; a worker `error` ends the request and the recorded input goes; course bytes fixed |
 | `map-gl/__tests__/buckets.test.ts` (filter regions) | per colour the unmasked draw then one per mask, the same indices regrouped, `layers` in draw order, hidden objects win over masks, no `filter` without entries; instance draws and clip groups split by mask |
 | `map-gl/__tests__/worker-course.test.ts` (filter regions) | a `hide` region hides the document object meeting it, exact and `fastFilter` alike, never a course object; a far region hides nothing; a clip region by document colour → `(object, colour, mask)` on the completed stack and the region's triangles origin-relative; the course part stays unmasked in the visible set; no regions / `null` → no filter |
 | `map-gl/__tests__/worker-protocol.test.ts` (filter regions) | a `stream` source with masks → `loaded.filter`, one entry per (object, colour), transferable; none without masks |
@@ -1739,8 +1753,9 @@ follows through it.
 derivation (sites, number positions, legs), the symbol sizes in paper mm
 and the hit index (§5.5); the UI layer sizes its status, selection and
 completion rings by those sizes, and the editor's targets are the hit
-index's (§5.5 "Editor targets"). A move or a label drag is a new request
-per pointer move — the layer re-derives and the reply redraws.
+index's (§5.5 "Editor targets"). A move or a label drag is a new input
+per pointer move; the engine keeps one request in flight (§5.2 "Engine"),
+so the layer re-derives at the worker's rate and every reply redraws.
 
 **Fallback.** A document whose stack has no lower and upper purple
 (`LoadSummary.courseLayer.supported === false`, `CourseStackError`) draws
@@ -1854,8 +1869,9 @@ overlay) in `editor-tool-layer` — circles, lines, handles, text and (D7)
 objects in the layer request, with `fastFilter` while a filter region is
 dragged (§4.11).
 
-**Drag.** Unchanged from §5.4 "Overlay": a per-move layer request; the
-dragged object is not symbolised on the main thread.
+**Drag.** Unchanged from §5.4 "Overlay": a layer input per move, one
+request in flight (§5.2 "Engine"); the dragged object is not symbolised
+on the main thread.
 
 **Loupe** (D9b; `course-editor.md` §10 "Loupe"). While a control is
 dragged by touch, the viewer hands `VectorMapLayer` a `loupe` (the
@@ -2563,7 +2579,7 @@ what became of it:
 | `packages/web/src/map-gl/buckets.ts` | cells, large bucket, per-part preparation and range table, visible set, clip groups, zoom gate, LRU |
 | `packages/web/src/map-gl/arena.ts` | vertex arenas: free list, growth by copy |
 | `packages/web/src/map-gl/worker.ts`, `worker-entry.ts` | the worker's message handler and its binding |
-| `packages/web/src/map-gl/engine.ts` | main-thread controller: worker transport, residency, visible-set rebuilds |
+| `packages/web/src/map-gl/engine.ts` | main-thread controller: worker transport, residency, visible-set rebuilds, the one course request in flight (F20) |
 | `packages/web/src/map-gl/view.ts` | the arena path's model → clip matrix, `RenderTarget`, `loupeView` |
 | `packages/web/src/map-gl/renderer.ts` | WebGL2 backend, GPU stage (arena programs and draw loop; per-pass path, stencil, supersampling; the loupe's inset target and circle composite; GPU timer) |
 | `packages/web/src/pages/dev/MapGlFixturePage.tsx` | dev-only golden page `/dev/map-gl` |
@@ -2630,7 +2646,8 @@ The shared module is exported as a namespace: `import { render } from
   open: D5 kept its selection, multi-selection and object outlines in the
   UI layer (`map-gl` was outside its area); Map mode (slice G) needs both.
 - **§5.2 dynamic bucket: main-thread symbolisation.** A drag re-derives
-  the layer in the worker (one round trip per pointer move). If D's
+  the layer in the worker (one request in flight, the latest input next —
+  F20). If D's
   editor needs lower latency, the dragged object is symbolised on the
   main thread and only it is replaced.
 - **§5.4 layout objects in the viewer** — resolved by D7 for Layout
