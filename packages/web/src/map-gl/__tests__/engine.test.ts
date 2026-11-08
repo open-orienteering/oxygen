@@ -337,6 +337,45 @@ describe("MapGlEngine dynamic bucket (docs/map-rendering.md §5.2 Dynamic bucket
     expect(infos.map(derivedCourses)).toEqual([0]);
   });
 
+  it("a course error names its generation (F20b): it ends that request only, and leaves a load in flight alone", async () => {
+    const { engine, transport, infos } = await courseEngine();
+    const before = courses(transport).length;
+    engine.setCourse(request());
+    engine.setCourse(request({ structure: null }));
+    const g = courses(transport).at(-1)!.generation;
+    let failed: unknown;
+    const p = engine.load({ source: { kind: "document", bytes: documentBytes(), options: { unmatched: "proxy" } }, fonts: [{ family: "liberation-sans", bytes: fontBytes() }], courseLayer: true });
+    p.catch((e) => (failed = e));
+    // The load re-sent the course at g + 1; an error of the overtaken request g ends nothing.
+    const current = courses(transport).at(-1)!.generation;
+    expect(current).toBe(g + 1);
+    transport.onMessage!({ type: "error", message: "course failed", generation: g });
+    expect(courses(transport).length).toBe(before + 2);
+    // The load re-sent the latest input: nothing waits. Still in flight, a new input waits behind it.
+    engine.setCourse(request({ viewOptions: { labelMode: "code" } }));
+    expect(courses(transport).length).toBe(before + 2);
+    // The matching error ends the request in flight: the waiting input goes, the load still stands.
+    transport.onMessage!({ type: "error", message: "course failed", generation: current });
+    expect(courses(transport).length).toBe(before + 3);
+    transport.flush();
+    await p;
+    expect(failed).toBeUndefined();
+    // The ended request's late reply is stale; only the waiting input's is drawn.
+    expect(infos.map(derivedCourses)).toEqual([1]);
+  });
+
+  it("a course error of a request no longer in flight is ignored: the one in flight is still drawn", async () => {
+    const { engine, transport, infos } = await courseEngine();
+    engine.setCourse(request());
+    const g = courses(transport).at(-1)!.generation;
+    transport.onMessage!({ type: "error", message: "old", generation: g - 1 });
+    engine.setCourse(request({ structure: null }));
+    // Still one in flight: the second input waits behind it.
+    expect(courses(transport).at(-1)!.generation).toBe(g);
+    transport.flush();
+    expect(infos.map(derivedCourses)).toEqual([1, 0]);
+  });
+
   it("filter regions: the reply's hidden objects join setHidden's, masks reach the visible set, null clears both", async () => {
     const { engine, transport, renderer, summary } = await courseEngine();
     engine.setView({ centreX: 30_000, centreY: 30_000, pxPerUm: 0.02, widthPx: 2000, heightPx: 2000 });

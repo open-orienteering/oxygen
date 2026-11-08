@@ -183,6 +183,8 @@ export interface PartReply {
 export interface ErrorReply {
   type: "error";
   message: string;
+  /** Set when a `course` request threw: that request's generation (F20b). A failed load, or `onerror`, has none. */
+  generation?: number;
 }
 
 /**
@@ -353,7 +355,8 @@ export function createMapGlWorker(post: Post, schedule: (fn: () => void) => void
           const { reply, transfer } = courseReply(state, msg);
           post(reply, transfer);
         } catch (e) {
-          post({ type: "error", message: e instanceof Error ? e.message : String(e) }, []);
+          // Its generation, so the engine ends this request only and leaves a load in flight alone (F20b).
+          post({ type: "error", message: e instanceof Error ? e.message : String(e), generation: msg.generation }, []);
         }
         return;
       }

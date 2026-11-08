@@ -198,12 +198,12 @@ describe("course request → the dynamic bucket", () => {
     expect(r.warnings).toEqual({ COURSE_UNAVAILABLE: 1 });
   });
 
-  it("a request whose derivation throws answers `error`, and the next is answered (F20: the engine's request in flight ends)", () => {
+  it("a request whose derivation throws answers `error` with its generation (F20b), and the next is answered (F20: the engine's request in flight ends)", () => {
     const h = harness();
     loaded(h);
     const broken = { ...request(), sites: null } as unknown as CourseLayerRequest;
     expect(() => h.w.handle({ type: "course", generation: 5, input: broken })).not.toThrow();
-    expect(h.sent.at(-1)!.msg).toMatchObject({ type: "error", message: expect.any(String) });
+    expect(h.sent.at(-1)!.msg).toMatchObject({ type: "error", message: expect.any(String), generation: 5 });
     h.w.handle({ type: "course", generation: 6, input: request() });
     const r = h.sent.at(-1)!.msg as CourseReply;
     expect(r.type).toBe("course");

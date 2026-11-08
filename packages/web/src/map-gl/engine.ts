@@ -260,10 +260,16 @@ export class MapGlEngine {
 
   private receive(m: WorkerReply): void {
     if (m.type === "error") {
+      // A course request that threw names its generation (F20b): it ends that request only — a stale one
+      // (overtaken by a load's re-send) ends nothing — and never a load in flight.
+      if (m.generation !== undefined) {
+        if (m.generation === this.courseInFlight) this.courseDone();
+        return;
+      }
       this.loadWaiter?.reject(new Error(m.message));
       this.loadWaiter = undefined;
-      // A worker error may be the course request's own (`onerror` carries no generation): never leave
-      // the waiting input stuck behind a reply that will not come. A late reply is then stale.
+      // A worker error without a generation (`onerror`, a failed load) may be the course request's own:
+      // never leave the waiting input stuck behind a reply that will not come. A late reply is then stale.
       if (this.courseInFlight !== undefined) this.courseDone();
       return;
     }

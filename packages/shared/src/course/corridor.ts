@@ -349,10 +349,17 @@ function openingsOf(ends: readonly LegEnd[], mouths: ReadonlyMap<string, Mouth>,
     const R = mouth.extent, h = e.half, c = e.c;
     if (!(h > 0 && h < R)) continue;
     // The leg's segments that come within h of the circle.
-    const near: [Pt, Pt][] = [];
-    for (let i = 0; i + 1 < e.path.length; i++) if (distToSegment(c, e.path[i], e.path[i + 1]) <= R + h) near.push([e.path[i], e.path[i + 1]]);
+    // Each with its bounds grown by h and 1 µm for rounding: a point outside them is farther than h (F20b).
+    const near: { p: Pt; q: Pt; x0: number; x1: number; y0: number; y1: number }[] = [];
+    for (let i = 0; i + 1 < e.path.length; i++) {
+      const p = e.path[i], q = e.path[i + 1], g = h + 1;
+      if (distToSegment(c, p, q) <= R + h) near.push({ p, q, x0: Math.min(p.x, q.x) - g, x1: Math.max(p.x, q.x) + g, y0: Math.min(p.y, q.y) - g, y1: Math.max(p.y, q.y) + g });
+    }
     const at = (a: number): Pt => ({ x: c.x + R * Math.cos(a), y: c.y + R * Math.sin(a) });
-    const inStrip = (a: number) => near.some(([p, q]) => distToSegment(at(a), p, q) < h);
+    const inStrip = (a: number) => {
+      const pt = at(a);
+      return near.some((s) => pt.x >= s.x0 && pt.x <= s.x1 && pt.y >= s.y0 && pt.y <= s.y1 && distToSegment(pt, s.p, s.q) < h);
+    };
     const step = (2 * Math.PI) / OPENING_SAMPLES;
     const flags = Array.from({ length: OPENING_SAMPLES }, (_, k) => inStrip(k * step));
     const first = flags.indexOf(false);
@@ -503,17 +510,20 @@ function distToEdged(p: Pt, s: EdgedSegment): number {
 /** Grid cell of the edged segments' index, µm. */
 const EDGE_CELL_UM = 4000;
 
+/** A grid cell's key: exact in a double for any cell of a sheet (|cx|, |cy| < 2²⁵, i.e. 134 km of paper). */
+const cellKey = (cx: number, cy: number) => cx * 67108864 + cy;
+
 /**
  * The edged segments bucketed by grid cell over their grown bounds, each
  * cell's indices ascending: a flattened curve (F13) has hundreds of
  * segments, and every boundary sample asks.
  */
-function edgeIndex(edged: readonly EdgedSegment[]): Map<string, number[]> {
-  const cells = new Map<string, number[]>();
+function edgeIndex(edged: readonly EdgedSegment[]): Map<number, number[]> {
+  const cells = new Map<number, number[]>();
   edged.forEach((s, i) => {
     for (let cx = Math.floor(s.minX / EDGE_CELL_UM); cx <= Math.floor(s.maxX / EDGE_CELL_UM); cx++) {
       for (let cy = Math.floor(s.minY / EDGE_CELL_UM); cy <= Math.floor(s.maxY / EDGE_CELL_UM); cy++) {
-        const k = `${cx} ${cy}`;
+        const k = cellKey(cx, cy);
         const list = cells.get(k);
         if (list) list.push(i);
         else cells.set(k, [i]);
@@ -523,14 +533,42 @@ function edgeIndex(edged: readonly EdgedSegment[]): Map<string, number[]> {
   return cells;
 }
 
-/** The edged leg whose side `p` lies on, by ref (the first such segment); `null` when none. */
-function edgedRefAt(p: Pt, edged: readonly EdgedSegment[], index: Map<string, number[]>): string | null {
-  for (const i of index.get(`${Math.floor(p.x / EDGE_CELL_UM)} ${Math.floor(p.y / EDGE_CELL_UM)}`) ?? []) {
+const NO_SEGMENTS: number[] = [];
+
+/**
+ * The edged leg whose side (x, y) lies on, as the index of its ref in
+ * `refIds` order (the first such segment of `candidates`, ascending); −1
+ * when none.
+ */
+function edgedRefAt(x: number, y: number, edged: readonly EdgedSegment[], refIds: Int32Array, candidates: readonly number[]): number {
+  const p = { x, y };
+  for (const i of candidates) {
     const s = edged[i];
-    if (p.x < s.minX || p.x > s.maxX || p.y < s.minY || p.y > s.maxY) continue;
-    if (Math.abs(distToEdged(p, s) - s.half) < EDGE_TOLERANCE_UM) return s.ref;
+    if (x < s.minX || x > s.maxX || y < s.minY || y > s.maxY) continue;
+    if (Math.abs(distToEdged(p, s) - s.half) < EDGE_TOLERANCE_UM) return refIds[i];
   }
-  return null;
+  return -1;
+}
+
+/**
+ * The edged segments whose grown bounds meet the ring edge a → b's
+ * bounds, ascending: a superset of those whose bounds hold any sample on
+ * the edge (bounds grown by 1 µm), in ascending order, so the first match of
+ * `edgedRefAt` is the cell lookup's (F20b: looked up once per ring edge,
+ * not per 50 µm sample).
+ */
+function candidatesOf(ax: number, ay: number, bx: number, by: number, edged: readonly EdgedSegment[], index: Map<number, number[]>): number[] {
+  // Grown by 1 µm: a sample's float midpoint never falls outside them by a rounding step.
+  const x0 = Math.min(ax, bx) - 1, x1 = Math.max(ax, bx) + 1, y0 = Math.min(ay, by) - 1, y1 = Math.max(ay, by) + 1;
+  const c0 = Math.floor(x0 / EDGE_CELL_UM), c1 = Math.floor(x1 / EDGE_CELL_UM), r0 = Math.floor(y0 / EDGE_CELL_UM), r1 = Math.floor(y1 / EDGE_CELL_UM);
+  const meets = (i: number) => {
+    const s = edged[i];
+    return !(x1 < s.minX || x0 > s.maxX || y1 < s.minY || y0 > s.maxY);
+  };
+  if (c0 === c1 && r0 === r1) return (index.get(cellKey(c0, r0)) ?? NO_SEGMENTS).filter(meets);
+  const set = new Set<number>();
+  for (let cx = c0; cx <= c1; cx++) for (let cy = r0; cy <= r1; cy++) for (const i of index.get(cellKey(cx, cy)) ?? NO_SEGMENTS) if (meets(i)) set.add(i);
+  return [...set].sort((p, q) => p - q);
 }
 
 /**
@@ -541,42 +579,69 @@ function edgedRefAt(p: Pt, edged: readonly EdgedSegment[], index: Map<string, nu
 function edgesOf(inside: FlatRing[], edged: readonly EdgedSegment[], mouths: readonly Mouth[] = []): CorridorEdge[] {
   if (!edged.length) return [];
   const index = edgeIndex(edged);
+  // Refs by number, so a sample holds an integer (F20b: the samples are flat arrays, not objects).
+  const refs: string[] = [];
+  const refId = new Map<string, number>();
+  const refIds = Int32Array.from(edged, (s) => {
+    let id = refId.get(s.ref);
+    if (id === undefined) {
+      id = refs.push(s.ref) - 1;
+      refId.set(s.ref, id);
+    }
+    return id;
+  });
   const onMouth = (a: Pt, b: Pt) => mouths.some((m) => toOutline(a, m) <= MOUTH_TOLERANCE_UM && toOutline(b, m) <= MOUTH_TOLERANCE_UM);
   const out: CorridorEdge[] = [];
   for (const ring of inside) {
     const n = ring.length / 2;
-    // Samples around the ring: each a point and the ref of the piece from it to the next sample.
-    const samples: { p: Pt; ref: string | null; vertex: boolean }[] = [];
+    // Samples around the ring: each a point, the ref of the piece from it to the next sample, whether it is a vertex.
+    let total = 0;
+    for (let i = 0; i < n; i++) {
+      const ax = ring[2 * i], ay = ring[2 * i + 1], bx = ring[(2 * i + 2) % ring.length], by = ring[(2 * i + 3) % ring.length];
+      total += Math.max(1, Math.ceil(Math.hypot(bx - ax, by - ay) / EDGE_STEP_UM));
+    }
+    const sx = new Float64Array(total), sy = new Float64Array(total), sref = new Int32Array(total), svertex = new Uint8Array(total);
+    let at = 0;
     for (let i = 0; i < n; i++) {
       const a = { x: ring[2 * i], y: ring[2 * i + 1] };
       const b = { x: ring[(2 * i + 2) % ring.length], y: ring[(2 * i + 3) % ring.length] };
       const k = Math.max(1, Math.ceil(Math.hypot(b.x - a.x, b.y - a.y) / EDGE_STEP_UM));
       const symbol = mouths.length > 0 && onMouth(a, b);
-      for (let j = 0; j < k; j++) {
+      const candidates = symbol ? NO_SEGMENTS : candidatesOf(a.x, a.y, b.x, b.y, edged, index);
+      for (let j = 0; j < k; j++, at++) {
         const t0 = j / k, tm = (j + 0.5) / k;
-        const p = j === 0 ? a : { x: Math.round(a.x + (b.x - a.x) * t0), y: Math.round(a.y + (b.y - a.y) * t0) };
-        const m = { x: a.x + (b.x - a.x) * tm, y: a.y + (b.y - a.y) * tm };
-        samples.push({ p, ref: symbol ? null : edgedRefAt(m, edged, index), vertex: j === 0 });
+        sx[at] = j === 0 ? a.x : Math.round(a.x + (b.x - a.x) * t0);
+        sy[at] = j === 0 ? a.y : Math.round(a.y + (b.y - a.y) * t0);
+        sref[at] = symbol ? -1 : edgedRefAt(a.x + (b.x - a.x) * tm, a.y + (b.y - a.y) * tm, edged, refIds, candidates);
+        svertex[at] = j === 0 ? 1 : 0;
       }
     }
-    if (samples.every((s) => s.ref !== null && s.ref === samples[0].ref)) {
-      out.push({ points: ringPoints(ring), closed: true, ref: samples[0].ref! });
+    if (sref.every((r) => r >= 0 && r === sref[0])) {
+      out.push({ points: ringPoints(ring), closed: true, ref: refs[sref[0]] });
       continue;
     }
     // Start at a change so no piece wraps around the ring's first point; none = no edged part on this ring.
-    const start = samples.findIndex((s, i) => s.ref !== samples[(i + samples.length - 1) % samples.length].ref);
+    let start = -1;
+    for (let i = 0; i < total; i++) {
+      if (sref[i] !== sref[(i + total - 1) % total]) {
+        start = i;
+        break;
+      }
+    }
     if (start < 0) continue;
-    let cur: CorridorEdge | null = null;
-    for (let k = 0; k <= samples.length; k++) {
-      const s = samples[(start + k) % samples.length];
-      if (cur && (k === samples.length || s.ref !== cur.ref)) {
-        cur.points.push(s.p);
+    let cur: CorridorEdge | null = null, curRef = -1;
+    for (let k = 0; k <= total; k++) {
+      const s = (start + k) % total;
+      if (cur && (k === total || sref[s] !== curRef)) {
+        cur.points.push({ x: sx[s], y: sy[s] });
         if (cur.points.length >= 2) out.push(cur);
         cur = null;
       }
-      if (k === samples.length) break;
-      if (!cur && s.ref !== null) cur = { points: [s.p], closed: false, ref: s.ref };
-      else if (cur && s.vertex) cur.points.push(s.p);
+      if (k === total) break;
+      if (!cur && sref[s] >= 0) {
+        cur = { points: [{ x: sx[s], y: sy[s] }], closed: false, ref: refs[sref[s]] };
+        curRef = sref[s];
+      } else if (cur && svertex[s]) cur.points.push({ x: sx[s], y: sy[s] });
     }
   }
   return out;
@@ -584,13 +649,67 @@ function edgesOf(inside: FlatRing[], edged: readonly EdgedSegment[], mouths: rea
 
 const ringPoints = (r: FlatRing): Pt[] => Array.from({ length: r.length / 2 }, (_, i) => ({ x: r[2 * i], y: r[2 * i + 1] }));
 
+/** A number as the key spells it: `-0` apart from `0`, since the rings keep the sign of a zero. */
+const num = (v: number | undefined) => (v === undefined ? "u" : v === 0 && 1 / v < 0 ? "-0" : String(v));
+
+/**
+ * Everything `computeCorridorGeometry` reads, as one string: per course
+ * its id and per leg its index, and for a corridor leg its ends, width,
+ * band, edge and points; the extents and the sites a corridor leg ends
+ * at (id, role, position, turn), in the order given.
+ */
+function inputKey(courses: readonly DerivedCourse[], mouths: CorridorMouths | undefined): string {
+  const parts: string[] = [];
+  const ends = new Set<string>();
+  for (const c of courses) {
+    parts.push(`C${c.id.length}:${c.id}`);
+    for (const leg of c.legs) {
+      const k = leg.corridor;
+      if (!k) {
+        parts.push("-");
+        continue;
+      }
+      ends.add(leg.from);
+      ends.add(leg.to);
+      const pts: string[] = [];
+      for (const p of leg.points) pts.push(num(p.x), num(p.y));
+      parts.push(`L${leg.from.length}:${leg.from}${leg.to.length}:${leg.to}|${num(k.widthMm)}|${num(k.whiteMm)}|${k.edge ? 1 : 0}|${pts.join(",")}`);
+    }
+  }
+  if (mouths) {
+    parts.push(`M${num(mouths.circleUm)}|${num(mouths.finishUm)}|${num(mouths.startUm)}`);
+    for (const site of mouths.sites) {
+      if (ends.has(site.id)) parts.push(`S${site.id.length}:${site.id}|${site.role}|${num(site.x)}|${num(site.y)}|${num(site.angleDeg)}`);
+    }
+  }
+  return parts.join("\n");
+}
+
+/** The last call's input key and result (F20b): a request that leaves the corridors as they were reuses them. */
+let last: { key: string; geometry: CorridorGeometry | null } | null = null;
+
 /**
  * The corridors of the derived courses: the union of their insides, the
  * band outside them, the edged legs' outlines and, with `mouths` (the
  * drawn sites and the symbols' extents, F19), the symbols the legs end at
  * joined in and the circles' openings. `null` when no leg has a corridor.
+ *
+ * The result of the last call is kept and returned again — the same
+ * object — while everything the geometry reads is unchanged (F20b,
+ * course-layer.md §10.2): a number, a course object or a control of
+ * another course dragged over a corridor course leaves the corridors as
+ * they were, and their unions are most of a request's cost. Callers
+ * treat the result as read-only.
  */
 export function corridorGeometry(courses: readonly DerivedCourse[], mouths?: CorridorMouths): CorridorGeometry | null {
+  const key = inputKey(courses, mouths);
+  if (last?.key === key) return last.geometry;
+  const geometry = computeCorridorGeometry(courses, mouths);
+  last = { key, geometry };
+  return geometry;
+}
+
+function computeCorridorGeometry(courses: readonly DerivedCourse[], mouths?: CorridorMouths): CorridorGeometry | null {
   const { runs, edged: edgedRaw, ends } = runsOf(courses);
   if (!runs.length) return null;
   const sites = mouths ? mouthsOf(ends, mouths) : new Map<string, Mouth>();

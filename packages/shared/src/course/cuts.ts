@@ -144,6 +144,22 @@ export function polylineLegGaps(points: readonly Pick<CutFeature, "x" | "y">[], 
   for (let i = 1; i < points.length; i++) starts.push(starts[i - 1] + Math.hypot(points[i].x - points[i - 1].x, points[i].y - points[i - 1].y));
   const len = starts[starts.length - 1];
   if (len < 2 * endKeep + MIN_LEG_GAP_MM) return [];
+  // F20b: only the features within reach of the leg, in their order. A feature passes the tests below only within
+  // its clearance c of the segment's line and c past its ends, so within c·√2 of its bounds on each axis; 2c
+  // leaves room for rounding. Skipping the rest changes nothing: same intervals, same order.
+  let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
+  for (const p of points) {
+    if (p.x < minX) minX = p.x;
+    if (p.x > maxX) maxX = p.x;
+    if (p.y < minY) minY = p.y;
+    if (p.y > maxY) maxY = p.y;
+  }
+  const near: { f: CutFeature; c: number }[] = [];
+  for (const f of features) {
+    const c = clearanceOf(f, lineWidthMm), m = 2 * c;
+    if (f.x < minX - m || f.x > maxX + m || f.y < minY - m || f.y > maxY + m) continue;
+    near.push({ f, c });
+  }
   // Absolute intervals along the leg, mm.
   const raw: Array<[number, number]> = [];
   for (let i = 1; i < points.length; i++) {
@@ -151,8 +167,10 @@ export function polylineLegGaps(points: readonly Pick<CutFeature, "x" | "y">[], 
     const dx = b.x - a.x, dy = b.y - a.y;
     const L = Math.hypot(dx, dy);
     if (L === 0) continue;
-    for (const f of features) {
-      const c = clearanceOf(f, lineWidthMm);
+    const sx0 = Math.min(a.x, b.x), sx1 = Math.max(a.x, b.x), sy0 = Math.min(a.y, b.y), sy1 = Math.max(a.y, b.y);
+    for (const { f, c } of near) {
+      const m = 2 * c;
+      if (f.x < sx0 - m || f.x > sx1 + m || f.y < sy0 - m || f.y > sy1 + m) continue;
       const along = ((f.x - a.x) * dx + (f.y - a.y) * dy) / L;
       if (along < -c || along > L + c) continue;
       const off = Math.abs((f.x - a.x) * dy - (f.y - a.y) * dx) / L;
