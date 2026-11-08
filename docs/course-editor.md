@@ -573,9 +573,10 @@ imported stays a corner until it is toggled (§7).
 
 Since the tool takes every press on the map, **a drag no longer pans
 while an area is being drawn** (the wheel zooms). **On touch**, where taps
-place vertices through `onClick` and one finger still pans, taps follow
-the default — smooth vertices — and there is neither Alt nor a pull, so a
-touch-drawn area has no corners until a vertex action bar exists
+place vertices through `onClick` and one finger still pans, **taps follow
+the default — smooth vertices** (answered by the user on 2026-11-08) —
+and there is neither Alt nor a pull, so a touch-drawn area has no corners
+until a vertex action bar with **Smooth** / **Corner** buttons exists
 (Pending). Drag a placed vertex (`editor-polygon-vertex`) to adjust it
 before closing (its handles move with it); close by a double-click or a
 click on the first vertex, `Esc` cancels; `Enter` finishes any kind once
@@ -1637,8 +1638,9 @@ whose poll ran meanwhile simply does not conflict (decision log, D10).
   no Alt on touch, so corners while drawing, pulled curve vertices,
   handles, grips, vertex insert, vertex delete and the corner / smooth
   toggle are the mouse's; a touch-drawn area is smooth throughout (F18:
-  taps follow the default). A later row could give the selection a vertex
-  action bar (insert, delete, curve / corner).
+  taps follow the default, answered by the user on 2026-11-08). Corners on
+  touch wait for a vertex action bar on the selection with **Smooth** /
+  **Corner** buttons (and insert, delete).
 - **Offline writes in Field mode** (§9 "Offline"): a queue for
   `control.update` / `control.check` with the field-move rebase on replay
   (row D9c).
