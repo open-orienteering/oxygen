@@ -152,6 +152,32 @@ describe("course scenes", () => {
     expect(scene.layer.derivation.courses[0].legs[2].pieces).toHaveLength(2);
     expect(scene.layer.derivation.sites.filter((s) => s.label).map((s) => s.label!.text)).toEqual(["1", "2"]);
   });
+  it("course-legs-curved: a curved 705 drawn along the flattened curve, not the chord; a curved 707; the crossing on the curve (F13)", () => {
+    const { scene, stream } = run("course-legs-curved");
+    const passes = coursePasses(scene, stream);
+    const line = passes.filter((x) => x.ref === "leg:course:1");
+    expect(line.map((x) => x.colour)).toEqual(["purple-lower"]);
+    const coords = line[0].p.kind === "stroke" ? Array.from(line[0].p.path.coords) : [];
+    expect(coords.length).toBeGreaterThan(30);
+    const pts: Array<[number, number]> = [];
+    for (let i = 0; i + 1 < coords.length; i += 2) pts.push([coords[i] / 1000, coords[i + 1] / 1000]);
+    const near = (x: number, y: number) => Math.min(...pts.slice(1).map((q, i) => segDist(pts[i], q, [x, y])));
+    // The first curved segment's t = 0.5 — p0 = c0 = (24, 6), c1 = (38, 7), p1 = (40, 12) — lies on the stroke.
+    expect(near(31.25, 7.125)).toBeLessThan(0.005 + 0.001);
+    // The bend itself is a vertex of the stroke; the chord's midpoint is far from it.
+    expect(coords.some((v, i) => i % 2 === 0 && v === 40000 && coords[i + 1] === 12000)).toBe(true);
+    expect(near(33, 17)).toBeGreaterThan(2);
+    const route = passes.filter((x) => x.ref === "leg:course:2");
+    expect(route.length).toBeGreaterThan(0);
+    expect(route.every((x) => x.colour === "purple-upper")).toBe(true);
+    // The crossing point sits on the curved leg as one of its vertices, turned along it.
+    const leg = scene.layer.derivation.courses[0].legs[3];
+    expect(leg.crossing).toBe("P");
+    expect(leg.points).toContainEqual({ x: 21.5, y: 28 });
+    const p = scene.layer.derivation.sites.find((s) => s.id === "P")!;
+    expect(p.role).toBe("crossing_point");
+    expect(p.angleDeg).not.toBe(90);
+  });
   it("course-corridor: one clip region, the map masked in the band and clear inside the corridors, the course never masked", () => {
     const { scene, stream } = run("course-corridor");
     expect(scene.layer.regions.map((r) => [r.mode, r.symbols])).toEqual([["clip", "all"]]);
@@ -192,3 +218,9 @@ describe("course scenes", () => {
     expect(refs.has("site:31")).toBe(false);
   });
 });
+
+function segDist(a: [number, number], b: [number, number], p: [number, number]): number {
+  const dx = b[0] - a[0], dy = b[1] - a[1], l2 = dx * dx + dy * dy;
+  const t = l2 === 0 ? 0 : Math.max(0, Math.min(1, ((p[0] - a[0]) * dx + (p[1] - a[1]) * dy) / l2));
+  return Math.hypot(p[0] - (a[0] + dx * t), p[1] - (a[1] + dy * t));
+}
