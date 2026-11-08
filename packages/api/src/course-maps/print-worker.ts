@@ -14,8 +14,7 @@ import { parentPort } from "node:worker_threads";
 import { course } from "@oxygen/shared";
 import type { ColourMode } from "@oxygen/shared/print";
 import { prepareDocument } from "../render/window-raster.js";
-import { type PrintGraphic, renderCoursePages } from "./pdf-page.js";
-import type { SheetInput } from "./resolve-sheet.js";
+import { type PrintGraphic, type PrintSheet, renderCoursePages } from "./pdf-page.js";
 
 export interface PrintWorkerRequest {
   type: "print";
@@ -23,7 +22,7 @@ export interface PrintWorkerRequest {
   hash: string;
   /** The document blob; absent when the host believes this worker already holds `hash`. */
   bytes?: Uint8Array;
-  sheets: SheetInput[];
+  sheets: PrintSheet[];
   graphics: Array<[number, PrintGraphic]>;
   rotationCorrectionDeg?: number;
   mode?: ColourMode;

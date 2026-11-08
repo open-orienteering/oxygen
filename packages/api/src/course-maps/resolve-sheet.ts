@@ -33,6 +33,14 @@ export interface ResolveSheetInput extends ResolveMapLayoutInput {
    * automatic slits or gaps; stored gaps still apply. Absent = on.
    */
   autoCuts?: boolean;
+  /**
+   * The all-variations page (course-print.md §4.6, F8; answer 4): a root's
+   * `structure` drawn as the spine and every alternative's branch, in the
+   * one purple (no tint) and with codes. `course.controls` are then every
+   * visited control (`allVariationsRow`) and the course `free_order`, so
+   * the block lists each once without numbers.
+   */
+  allVariations?: boolean;
 }
 
 export interface ResolvedSheet {
@@ -123,6 +131,54 @@ export function courseInputOfLayout(
   };
 }
 
+/**
+ * The all-variations page's structures (course-print.md §4.6): the root's
+ * spine and one branch per alternative (`course.allVariationStructures`,
+ * the editor's All-variations view without its tints), the layout's start
+ * and finish completing the spine when the stored structure leaves them
+ * implicit. Every structure carries the sheet's label offsets; the
+ * crossing points any branch runs through are added to `sites`.
+ */
+function allVariationsInput(
+  layout: ResolvedMapLayout,
+  stored: course.StoredCourseStructure,
+  sites: course.CourseSite[],
+  courseId: string,
+  crossingSites: ReadonlyMap<string, LayoutControlSource>,
+): course.CourseStructure[] {
+  const { spine, branches } = course.allVariationStructures(stored);
+  const first = layout.controls[0];
+  const last = layout.controls[layout.controls.length - 1];
+  if (first?.type === "start" && spine[0]?.siteId !== first.id) spine.unshift({ siteId: first.id });
+  if (last?.type === "finish" && spine[spine.length - 1]?.siteId !== last.id) spine.push({ siteId: last.id });
+  const seen = new Set(sites.map((s) => s.id));
+  const items = (list: readonly course.StoredControlItem[]): course.CourseItem[] =>
+    list.map((c) => {
+      const crossing = c.leg?.crossing?.controlId;
+      const site = crossing && !seen.has(crossing) ? crossingSites.get(crossing) : undefined;
+      if (site && (site.xpos !== 0 || site.ypos !== 0)) {
+        seen.add(site.id);
+        sites.push({ id: site.id, code: site.name || String(site.seq ?? ""), kind: "crossing_point", x: site.xpos, y: site.ypos });
+      }
+      const item: course.CourseItem = { siteId: c.siteId };
+      if (c.leg && Object.keys(c.leg).length > 0) item.leg = c.leg;
+      if (c.numberHidden) item.numberHidden = true;
+      return item;
+    });
+  const labelOffsets: Record<string, { dx: number; dy: number }> = {};
+  for (const c of layout.controls) {
+    if (c.labelPosition) labelOffsets[c.id] = { dx: c.labelPosition.x - c.x, dy: c.labelPosition.y - c.y };
+  }
+  const shape = (id: string, list: readonly course.StoredControlItem[]): course.CourseStructure => ({
+    version: 1,
+    id,
+    orderMode: stored.orderMode,
+    items: items(list),
+    ...(Object.keys(labelOffsets).length ? { labelOffsets } : {}),
+  });
+  return [shape(courseId, spine), ...branches.map((b) => shape(`${courseId}:${b.groupId}:${b.label}`, b.items))];
+}
+
 function circleGapsOf(controls: readonly { id: string; circleGaps?: unknown }[]): Map<string, course.AngularGap[]> {
   const out = new Map<string, course.AngularGap[]>();
   for (const c of controls) if (Array.isArray(c.circleGaps) && c.circleGaps.length > 0) out.set(c.id, c.circleGaps as course.AngularGap[]);
@@ -142,14 +198,24 @@ export function resolveSheet(input: ResolveSheetInput): ResolvedSheet {
     document.orientation,
     document.paper === "custom" ? { width: document.paperWidthMm!, height: document.paperHeightMm! } : undefined,
   );
-  const { structure, sites } = courseInputOfLayout(layout, {
+  const crossingSites = new Map((input.allControls ?? []).filter((c) => c.kind === "crossing_point").map((c) => [c.id, c]));
+  const own = courseInputOfLayout(layout, {
     kind: input.kind,
     orderMode: input.course?.orderMode,
     structure: input.structure,
     circleGaps: circleGapsOf([...(input.course?.controls ?? []), ...(input.allControls ?? [])]),
     courseId: input.courseId,
-    crossingSites: new Map((input.allControls ?? []).filter((c) => c.kind === "crossing_point").map((c) => [c.id, c])),
+    crossingSites,
   });
+  // A mutable copy: the all-variations page adds the crossing points its branches run through.
+  const sites = [...own.sites];
+  let structure: PageInput["course"]["structure"] = own.structure;
+  if (input.allVariations && input.kind === "course") {
+    const parsed = input.structure ? course.courseStructureSchema.safeParse(input.structure) : null;
+    if (parsed?.success && course.hasVariations(parsed.data)) {
+      structure = allVariationsInput(layout, parsed.data, sites, input.courseId ?? "course", crossingSites);
+    }
+  }
   const title = input.course?.name ?? input.mapName ?? "";
   const sheet: SheetInput = {
     paper: { widthMm: paper.width, heightMm: paper.height },

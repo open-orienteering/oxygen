@@ -48,7 +48,8 @@ export const layoutRouter = router({
       const courses = onlyAllControls
         ? []
         : await ctx.db.course.findMany({
-            where: { eventId: ctx.event.id, removed: false, ...(input.courseId !== undefined ? { seq: input.courseId } : {}) },
+            // Every course is every root and plain course: a variant prints on its root's sheets (F8); asked by seq, `autoSheets` sends it there.
+            where: { eventId: ctx.event.id, removed: false, ...(input.courseId !== undefined ? { seq: input.courseId } : { parentCourseId: null }) },
             select: { id: true },
             orderBy: { seq: "asc" },
           });

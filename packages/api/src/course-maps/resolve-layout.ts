@@ -191,6 +191,11 @@ export interface ResolveMapLayoutInput {
    * one-part course, is the whole course.
    */
   section?: number;
+  /**
+   * The `{variant}` placeholder (course-print.md §4.6, F8): a variant
+   * page's key, the all-variations page's keys; absent = "".
+   */
+  variantKey?: string;
 }
 
 export interface ResolvedMapLayout {
@@ -473,7 +478,7 @@ export function resolveMapLayout(
       event: input.event?.name ?? "",
       course: course?.name ?? "",
       map: input.mapName ?? "",
-      variant: "",
+      variant: input.variantKey ?? "",
       classes: course?.classes?.map((entry) => entry.name).join(", ") ?? "",
       scale: `1:${printScale}`,
       length: course ? `${course.lengthM} m` : "",

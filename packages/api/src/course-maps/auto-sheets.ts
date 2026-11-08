@@ -207,6 +207,22 @@ async function fittedAutoTemplate(db: Db, eventId: bigint, controls: Array<{ xpo
 }
 
 /**
+ * What a course's first window fits: its controls — for a root with
+ * variation groups every site any alternative visits, so the sheet its
+ * variants share holds them all (08 §4.6; course-print.md §4.6).
+ */
+async function fitSitesOf(
+  db: Db,
+  c: { structure: unknown; courseControls: Array<{ control: { xpos: number; ypos: number } }> },
+): Promise<Array<{ xpos: number; ypos: number }>> {
+  const own = c.courseControls.map((cc) => cc.control);
+  const parsed = c.structure ? courseLib.courseStructureSchema.safeParse(c.structure) : null;
+  if (!parsed?.success || !courseLib.hasVariations(parsed.data)) return own;
+  const ids = courseLib.structureSiteIds(parsed.data);
+  return [...own, ...(await db.control.findMany({ where: { id: { in: ids } }, select: { xpos: true, ypos: true } }))];
+}
+
+/**
  * The parts of a course split by map exchanges (course-layer.md §11): its
  * placed exchange visits plus one. Unplaced sites (0, 0) are not drawn, so
  * they split nothing — as `deriveCourse`.
@@ -263,6 +279,8 @@ export async function autoSheets(db: Db, eventId: bigint, courseUuid: string): P
     },
   });
   if (!course) throw new TRPCError({ code: "NOT_FOUND", message: "Course not found" });
+  // A variant prints on its root's sheets (course-print.md §4.6, F8): it gets none of its own.
+  if (course.parentCourseId) return autoSheets(db, eventId, course.parentCourseId);
   const createdSheets: number[] = [];
   const createdTemplates: number[] = [];
   const stamp = () => nextObjectVersion();
@@ -275,7 +293,7 @@ export async function autoSheets(db: Db, eventId: bigint, courseUuid: string): P
   });
   let base = sheets.find((s) => s.template)?.template ?? null;
   if (!base) {
-    const ensured = await fittedAutoTemplate(db, eventId, course.courseControls.map((cc) => cc.control));
+    const ensured = await fittedAutoTemplate(db, eventId, await fitSitesOf(db, course));
     if (ensured.created) createdTemplates.push(ensured.template.seq);
     base = ensured.template;
     if (sheets.length === 0) {
