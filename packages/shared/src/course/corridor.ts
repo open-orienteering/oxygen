@@ -553,12 +553,13 @@ function edgedRefAt(x: number, y: number, edged: readonly EdgedSegment[], refIds
 /**
  * The edged segments whose grown bounds meet the ring edge a → b's
  * bounds, ascending: a superset of those whose bounds hold any sample on
- * the edge, in the order the cell lists give them, so the first match of
+ * the edge (bounds grown by 1 µm), in ascending order, so the first match of
  * `edgedRefAt` is the cell lookup's (F20b: looked up once per ring edge,
  * not per 50 µm sample).
  */
 function candidatesOf(ax: number, ay: number, bx: number, by: number, edged: readonly EdgedSegment[], index: Map<number, number[]>): number[] {
-  const x0 = Math.min(ax, bx), x1 = Math.max(ax, bx), y0 = Math.min(ay, by), y1 = Math.max(ay, by);
+  // Grown by 1 µm: a sample's float midpoint never falls outside them by a rounding step.
+  const x0 = Math.min(ax, bx) - 1, x1 = Math.max(ax, bx) + 1, y0 = Math.min(ay, by) - 1, y1 = Math.max(ay, by) + 1;
   const c0 = Math.floor(x0 / EDGE_CELL_UM), c1 = Math.floor(x1 / EDGE_CELL_UM), r0 = Math.floor(y0 / EDGE_CELL_UM), r1 = Math.floor(y1 / EDGE_CELL_UM);
   const meets = (i: number) => {
     const s = edged[i];
