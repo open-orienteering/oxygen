@@ -1,7 +1,7 @@
 /**
  * Export ▾ (docs/course-layout.md §7; research 08 §5.2, phase-1 entries):
  * this sheet (Layout mode) · this course · this class · all courses · all
- * controls · description sheets · IOF XML · PPen, each on an existing
+ * controls · setter maps · description sheets · IOF XML · PPen, each on an existing
  * route. The map entries first ensure the sheets (`layout.autoSheets`), so
  * a course without a template, or an event without an all-controls sheet,
  * exports. *Description sheets…* opens a dialog that builds its URL
@@ -10,7 +10,7 @@
 
 import type { DescriptionCopies, DescriptionSheetCell } from "@oxygen/shared";
 
-export type ExportId = "sheet" | "course" | "class" | "all" | "allControls" | "descriptions" | "iofxml" | "ppen";
+export type ExportId = "sheet" | "course" | "class" | "all" | "allControls" | "setter" | "descriptions" | "iofxml" | "ppen";
 
 export interface ExportEntry {
   id: ExportId;
@@ -61,6 +61,9 @@ export function exportEntries(s: ExportState): ExportEntry[] {
     { id: "all", url: maps, ensure: ensure({}), disabled: false },
     // Without courses.edit and without an all-controls sheet the route answers "No maps found", shown on the error line.
     { id: "allControls", url: `${maps}?allControls=1`, ensure: ensure({ allControls: true }), disabled: false },
+    // Every setter sheet (F10). Generating them needs a group count (Layout mode's Setter maps), so nothing is
+    // ensured: without any the route's "No setter maps found" shows on the error line.
+    { id: "setter", url: `${maps}?setter=1`, ensure: null, disabled: false },
     // Printed on demand from the dialog's options; no sheet row to ensure (course-print.md §6.4).
     { id: "descriptions", url: `/api/maps/${encodeURIComponent(s.nameId)}/descriptions.pdf`, ensure: null, disabled: false, dialog: "descriptions" },
     { id: "iofxml", url: data("iofxml"), ensure: null, disabled: false },

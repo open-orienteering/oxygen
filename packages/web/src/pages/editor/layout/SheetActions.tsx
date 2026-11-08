@@ -4,8 +4,9 @@
  *
  * - **Sheet scope** (`SheetActions`): rename the sheet (`courseMap.update`
  *   with the sheet's version token, one undo entry), add a second sheet of
- *   the course on the same template, delete the sheet. Create and delete
- *   are not undo entries (as the editor's course create).
+ *   the course on the same template, delete the sheet; *Recalculate* an
+ *   all-controls or setter sheet (`layout.recalculateSheet`, F10). Create,
+ *   delete and recalculate are not undo entries (as the editor's course create).
  * - **Template scope** (`TemplateActions`): *New template* (paper,
  *   orientation, scale; it opens), *Delete this template* (its sheets keep
  *   their layout without a template). The template's name is part of the
@@ -40,7 +41,7 @@ const LINK = "text-[11px] text-purple-700 hover:underline cursor-pointer disable
  * gone — the reads are only marked stale (the next target's read fetches
  * itself), so the deleted one is not read again before the view moves.
  */
-function useRefresh() {
+export function useRefresh() {
   const utils = trpc.useUtils();
   return async (leaving = false) => {
     await Promise.all([
@@ -105,6 +106,16 @@ export function SheetActions(p: {
     if (created) p.onOpen({ sheet: created.seq });
   };
 
+  // F10 (§6, §8): an all-controls or setter sheet refitted on the server — not an undo entry, as create / delete.
+  const recalculate = async () => {
+    await p.run(async () => {
+      const r = await client.layout.recalculateSheet.mutate({ sheet: sheet.seq });
+      versions.seed("sheet", sheet.seq, r.version);
+      await refresh();
+      return r;
+    });
+  };
+
   const remove = async () => {
     if (!window.confirm(t("layoutDeleteSheetConfirm", { name: sheet.name }))) return;
     await p.run(async () => {
@@ -123,6 +134,11 @@ export function SheetActions(p: {
         <div className="flex items-center gap-3">
           {sheet.kind === "course" && (
             <button type="button" data-testid="editor-layout-add-sheet" onClick={() => void add()} className={LINK}>{t("layoutAddSheet")}</button>
+          )}
+          {(sheet.kind === "all_controls" || sheet.kind === "setter") && (
+            <button type="button" data-testid="editor-layout-recalculate" title={t("layoutRecalculateHint")} onClick={() => void recalculate()} className={LINK}>
+              {t("layoutRecalculate")}
+            </button>
           )}
           <button type="button" data-testid="editor-layout-delete-sheet" onClick={() => void remove()} className="text-[11px] text-red-600 hover:underline cursor-pointer">
             {t("layoutDeleteSheet")}

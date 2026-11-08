@@ -1712,7 +1712,7 @@ export function EditorPage() {
     <>
       <div className="px-2.5 py-1"><FixStatus accuracyM={fix?.accuracy ?? null} error={geo.error} watching={geo.watching} /></div>
       <FieldSection rows={fieldList} selectedControlId={state.selectedControlId} onSelectRow={selectRow}
-        onCheck={fieldReadOnly ? null : checkControl} canCheck={canReview} hasCourse={!!(selectedCourse && structure)} />
+        onCheck={fieldReadOnly ? null : checkControl} canCheck={canReview} hasCourse={!!(selectedCourse && structure)} fix={paperFix} mapScale={mapScale} />
     </>
   );
   const fieldKpi = fieldMode && selectedCourse

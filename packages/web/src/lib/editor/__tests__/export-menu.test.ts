@@ -6,7 +6,7 @@ const base = { nameId: "my event", courseSeq: 3, classSeq: null, sheetSeq: null,
 describe("exportEntries (course-layout.md §7)", () => {
   it("lists the phase-1 entries on the existing routes", () => {
     const e = exportEntries(base);
-    expect(e.map((x) => x.id)).toEqual(["sheet", "course", "class", "all", "allControls", "descriptions", "iofxml", "ppen"]);
+    expect(e.map((x) => x.id)).toEqual(["sheet", "course", "class", "all", "allControls", "setter", "descriptions", "iofxml", "ppen"]);
     const by = Object.fromEntries(e.map((x) => [x.id, x]));
     expect(by.course.url).toBe("/api/maps/my%20event/maps.pdf?courses=3");
     expect(by.all.url).toBe("/api/maps/my%20event/maps.pdf");
@@ -49,6 +49,13 @@ describe("exportEntries (course-layout.md §7)", () => {
     expect(by.descriptions).toMatchObject({ ensure: null, disabled: false, dialog: "descriptions" });
     expect(by.descriptions.url).toBe("/api/maps/my%20event/descriptions.pdf");
     expect(by.course.dialog).toBeUndefined();
+  });
+
+  it("setter maps: every setter sheet (`?setter=1`), nothing ensured, never disabled (course-layout.md §7, §8)", () => {
+    for (const s of [base, { ...base, courseSeq: null, canEdit: false }]) {
+      const by = Object.fromEntries(exportEntries(s).map((x) => [x.id, x]));
+      expect(by.setter).toMatchObject({ url: "/api/maps/my%20event/maps.pdf?setter=1", ensure: null, disabled: false });
+    }
   });
 });
 
