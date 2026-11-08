@@ -3112,13 +3112,14 @@ test.describe("F3: legs — styles, bends, corridors (docs/course-editor.md §6.
       const t0 = Math.atan2(toward.y - c.y, toward.x - c.x);
       const out: Pt[] = [];
       for (let a = from; a <= to + 1e-9; a += (to - from) / 24 || 1) {
-        for (const r of [R - 0.1, R, R + 0.1]) out.push({ x: c.x + r * Math.cos(t0 + a), y: c.y + r * Math.sin(t0 + a) });
+        for (const r of [R - 0.05, R, R + 0.05]) out.push({ x: c.x + r * Math.cos(t0 + a), y: c.y + r * Math.sin(t0 + a) });
       }
       return out;
     };
     const deg = Math.PI / 180;
-    // The opening's middle (its ends are under the edge's round caps), the far side, and the junctions.
-    const mouth = [...rim(ax, bx, -(delta - 12 * deg), delta - 12 * deg), ...rim(bx, ax, -(delta - 12 * deg), delta - 12 * deg)];
+    // The opening's middle half (its ends lie under the edge's round caps, a pixel or two of anti-aliasing), the far
+    // side, and the junctions.
+    const mouth = [...rim(ax, bx, -delta / 2, delta / 2), ...rim(bx, ax, -delta / 2, delta / 2)];
     const far = [...rim(ax, bx, Math.PI - 30 * deg, Math.PI + 30 * deg), ...rim(bx, ax, Math.PI - 30 * deg, Math.PI + 30 * deg)];
     const junctions = (c: Pt, toward: Pt) => {
       const t0 = Math.atan2(toward.y - c.y, toward.x - c.x);
@@ -3143,7 +3144,7 @@ test.describe("F3: legs — styles, bends, corridors (docs/course-editor.md §6.
       expect(await inkAt(page, centre, "purple"), "the leg's line before the corridor").toBeGreaterThan(0);
       expect(await guides()).toBe(0);
       // F19: before the corridor both circles are whole where the corridor will meet them (and R is right).
-      for (const c of [ax, bx]) expect(await inkAt(page, rim(c, c === ax ? bx : ax, -(delta - 12 * deg), delta - 12 * deg), "purple"), "a whole circle").toBeGreaterThan(0);
+      for (const c of [ax, bx]) expect(await inkAt(page, rim(c, c === ax ? bx : ax, -delta / 2, delta / 2), "purple"), "a whole circle").toBeGreaterThan(0);
 
       // The A menu's entry (key C while it is open); disabled once the leg has a corridor.
       await page.keyboard.press("a");
