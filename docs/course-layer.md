@@ -1340,7 +1340,7 @@ and `bends` real, F2 `corridor`, F4 `crossing` (§10.3).
 
 | `style` | Drawn | Library entry | Colour row |
 |---|---|---|---|
-| `line` (default) | the leg's pieces | 705 | lower purple (ISOM), as §1 |
+| `line` (default) | the leg's pieces — **nothing** when the leg has a corridor (§10.2 "No centre line", F14) | 705 | lower purple (ISOM), as §1 |
 | `marked_route` | the leg's pieces, dashed along the whole piece through its bends | 707 (ISOM / ISSprOM: 0.35 mm, 2.0 / 0.5 mm dashes × the document factor) | upper purple (03 §2.4: a route is followed, not read through) |
 | `none` | nothing | — | — |
 
@@ -1356,7 +1356,11 @@ and `bends` real, F2 `corridor`, F4 `crossing` (§10.3).
   (the PDF one subpath per dash, never `d`, `course-print.md` §4.3).
   707 has no special treatment in the layer: `layer.ts` picks the
   symbol (`idx.markedRoute`, already resolved for the 707 course object)
-  by the leg's resolved `style`.
+  by `legLine(leg)` (F14): `"line"` (705) for `line` without a corridor,
+  `"marked_route"` (707) for `marked_route` with or without one, `null`
+  (no object) for `none` and for a `line` leg with a corridor. The
+  editor's hit-test reads the same function (`course-editor.md` §5), so
+  a leg without a line on paper is a leg without a hit piece.
 - **`none`** emits no object and so no pass and no hit-index piece; the
   derivation keeps the leg's `pieces` (numbers avoid it, §3.5) and its
   `style`, and the leg keeps its index (`ref` ids of the legs after it
@@ -1417,8 +1421,8 @@ all-white corridor map); `edge` draws the boundary in purple.
   appended to `CourseLayer.regions` after the explicit and the stored
   ones. Only document objects are filtered (`regionObjectLimit`), so
   every map colour is cut away inside the band and the paper shows white,
-  while the course — circles, legs, numbers, the edge, layout and course
-  objects — draws over it with the stack and the 7xx colour roles
+  while the course — circles, the legs that draw a line (below), numbers,
+  the edge, layout and course objects — draws over it with the stack and the 7xx colour roles
   unchanged. No band (`whiteMm` 0 on every corridor) adds no region.
 - **`whiteOpacity`** is stored and validated (0 … 1) but drawn opaque: a
   clip removes the map wholly. A translucent band needs a paint with
@@ -1434,6 +1438,20 @@ all-white corridor map); `edge` draws the boundary in purple.
   objects follow the legs; their `ref` is `{ kind: "corridor", id:
   "<courseId>:<leg index>" }`, and the editor's hit-test takes them as no
   target.
+- **No centre line** (user feedback 2026-11-08 item 2, F14; deviates
+  from F2, where the leg's 705 was drawn over the band): a leg with a
+  corridor and `style` `line` draws **no** 705 — on screen and in print
+  alike, both reading `legLine` (§10.1). Inside a corridor the edge
+  marks the route, and the centre line only obscured the map the
+  corridor shows. The edge is still `edge` (default on, `course-editor.md`
+  §6.7); with `edge: false` the corridor is the band alone. A
+  `marked_route` leg keeps its 707 inside a corridor, and `none` is
+  unchanged. Nothing else moves: the derivation keeps the leg's `pieces`,
+  `style` and `corridor`, so the numbers still avoid it (§3.5), the cuts,
+  the stored `gaps` (`G` still writes them) and the lengths are as
+  before, and the leg keeps its index. The editor selects such a leg from
+  its derived pieces and draws a guide along it (`course-editor.md` §5,
+  §6.7).
 - **Screen and print** need nothing of their own: the viewer's worker
   filters its static buckets with `layer.regions` on every course reply
   (`map-rendering.md` §5.2 "Filter regions") and draws the edge in the
@@ -1810,9 +1828,9 @@ label.
 | PDF | `packages/shared/src/print/__tests__/write-page.test.ts` "a marked-route leg" | §10.1 print: the route is one extra stroke of dash subpaths at 707's width, in purple after black, no `d` operator |
 | unit | `corridor.test.ts` | §10.2 geometry: a straight leg (inside, band, the map beyond, round ends), a bend (no inner notch, round outer join), consecutive corridors joined, mixed widths at a site and two courses crossing, degenerate inputs (out and back, collinear legs, the same leg on two courses) give simple rings, `whiteMm` 0 has no band, edges along edged legs only (closed for a lone leg, none on an unedged course) |
 | unit | `derive.test.ts` "corridors" | §10.2: `widthM` → paper mm at the document's `mapScale`, `whiteMm` kept; points, gaps, pieces and length unchanged; a `none` leg keeps its corridor |
-| unit | `layer.test.ts` "corridors", "courseDocumentContext" | §10.2: the band one `clip` region of every symbol after the explicit and stored ones (probes inside / in the band / beyond); `symbolise` masks the map's 516 there and no course pass; the edge a closed 705 stroke on the edge line, ref `corridor`; none without `edge`; a `none` leg keeps band and edge; no band at `whiteMm` 0; §2 `mapScale` from the header on both branches |
-| unit (web) | `packages/web/src/lib/editor/__tests__/hit.test.ts` "a corridor's edge" | §10.2 through the real worker: the edge's `corridor` refs are no target (the leg still is), and the reply's static-bucket filter carries the band's mask |
-| PDF | `write-page.test.ts` "a corridor leg (F2)" | §10.2 print: the band a `q … W* n … Q` clip (frame, outer ring, hole) round map strokes only — no purple course stroke inside it; the edge one extra closed stroke (`h S`) in the circles' purple at 70 w |
+| unit | `layer.test.ts` "corridors", "courseDocumentContext" | §10.2: the band one `clip` region of every symbol after the explicit and stored ones (probes inside / in the band / beyond); `symbolise` masks the map's 516 there and no course pass; the edge a closed 705 stroke on the edge line, ref `corridor`; none without `edge`; a `none` leg keeps band and edge; no band at `whiteMm` 0; §2 `mapScale` from the header on both branches; F14: the `legLine` table, a corridor leg no `leg` object (edge, band, pieces and numbers kept), a `marked_route` one still 707 |
+| unit (web) | `packages/web/src/lib/editor/__tests__/hit.test.ts` "a corridor's edge" | §10.2 through the real worker: the edge's `corridor` refs are no target; the corridor leg has no hit piece and hits from `uiLegsOf` (F14), a circle at its end still wins, a `marked_route` one keeps its piece; the reply's static-bucket filter carries the band's mask |
+| PDF | `write-page.test.ts` "a corridor leg (F2, F14 …)" | §10.2 print: the band a `q … W* n … Q` clip (frame, outer ring, hole) round map strokes only — no purple course stroke inside it; the edge one extra closed stroke (`h S`) in the circles' purple at 70 w; one open purple stroke fewer than the plain page (no 705 along the corridor leg, F14) |
 | unit / integration | `packages/api/src/__tests__/course-structure.test.ts` "layerPropsOfStored", `integration/course-structure.test.ts` "course.list carries every stored leg whole" | §5: the stored legs whole by public ids, `crossing` as the site's public id (string; an unknown one dropped, F4), an empty leg omitted, no `legGaps` |
 | unit | `structure.test.ts` "slice-F kinds (F4)", `variants.test.ts` | §6.1: `SITE_KIND_NOT_ITEM` for a crossing / map-issue item (top level, in an alternative), an exchange item passes, `CROSSING_KIND` / `SITE_UNKNOWN` for a leg crossing, the wire form takes the crossing by public id; `structureSiteIds` lists the crossing points after the items; `pruneSiteFromStructure` strips a crossing and keeps the rest of the leg |
 | unit | `derive.test.ts`, `layer.test.ts`, `symbols.test.ts` "crossings and map-issue points" | §10.3: `routedBends` (nearest segment, before / after a bend); the leg through the site, its length grown; 710 numberless, uncut, no clip, turned along the chord; the section reported; an unreferenced crossing and a map-issue point only with setter marks (north–south), crossings with `allControls`; an exchange numbered as a control; a crossing / map-issue item skipped. ISOM 710 one line over the body (6 mm section) in lower purple; ISSprOM 710.1 turned, a section two 710.2 lines either side, the second reversed; 702 only with `setterMarks`, unrotated; the library entries per standard |
@@ -1827,7 +1845,7 @@ label.
 | unit (web) | `course-editor.test.ts` `sequenceLegMeters`, `editor/__tests__/leg-length.test.ts` | §10.1: readouts along the bends, label at the bent mid-length |
 | unit | `derive.test.ts` | legs and clearances, circles in the way, unpositioned sites, automatic vs authored gaps, the event's auto cuts off (no automatic slits / gaps, authored ones kept, §3.4), authored pieces and bends, free order, all-controls, start rotation, sequence / repeated / code numbers, y-down placement, manual offsets, multi-course |
 | unit | `layer.test.ts` | one `symbolise` call with a document: warning-free, lower purple under black, re-indexed document colours, object offsets; turned start, arcs, legs; auto cuts off = the objects without cut features; knockout halo order; sprint sizes; layout objects (white-out, 709.b, rows on top, text values, page-mm sizes); toner-saver ring and its warning; the toner saver white (P1: a `toner_saver` and a `whiteoutInverted` map object fill the top row, the last pass after black, upper purple and a layout text's row; none for a plain white-out or without a window); images; `courseDocumentContext` |
-| pass-stream | `scenes.test.ts`, snapshots in `render/__fixtures__/streams/course/` | the seven course scenes (`map-rendering.md` §6.3; `course-leg-styles` since F1, `course-corridor` since F2 — symbolised with the layer's regions, masks in the snapshot) warning-free and equal to their snapshots at 1 µm, plus each scene's rule |
+| pass-stream | `scenes.test.ts`, snapshots in `render/__fixtures__/streams/course/` | the seven course scenes (`map-rendering.md` §6.3; `course-leg-styles` since F1, `course-corridor` since F2 — symbolised with the layer's regions, masks in the snapshot; re-recorded in F14: no 705 along its three corridor legs) warning-free and equal to their snapshots at 1 µm, plus each scene's rule |
 | unit | `packages/api/src/__tests__/course-geometry.test.ts` | `editorCourseLayer`: sequence in order with roles, centre-to-centre legs, unpositioned controls skipped, free order without legs, no automatic cuts; `hasPositionedItems` (`length_source` derived / NULL); `legDistancesMm(layer)` from the derived legs = the pre-E6 sequence formula bit for bit (fixtures + 50 generated sequences, per-leg and total rounding at two scales, E6); `courseLengthM` |
 | unit | `packages/api/src/__tests__/document-readers-parity.test.ts` | cut features of the document = the legacy OCAD adapter's (now a test oracle, `__tests__/helpers/ocad-oracle.ts`) within 1e-6 mm on the fixture and the corpus (§4.2) |
 | unit | `packages/api/src/__tests__/course-sequence.test.ts` | §6.2 "Readers" (E6): `courseSequenceOf` — columns (defaults, `start_name`, a live `finish_control_id`, unmatched fall back, the flags), a stored structure (explicit ends, no ends → defaults, roles), a deleted explicit start, an invalid column read as the columns, no starts / finishes |

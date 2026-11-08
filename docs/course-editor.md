@@ -311,13 +311,16 @@ shared stage (04 §7; `map-rendering.md` §5.5), not SVG hit targets:
   stays for the control circles. An area whose whole outline is
   off-screen is selected after zooming out (`F` fits the course).
   Imported extras do not hit.
-- A leg with **no line** (`style: "none"`, `course-layer.md` §10.1) has
-  no layer object, so no hit-index piece: the viewer passes the
-  derivation's pieces of such legs as `UiLeg`s (`uiLegsOf`), which hit
+- A leg with **no line** — `style: "none"`, or a `line` leg with a
+  corridor (F14): `course.legLine(leg) === null`, the layer's own
+  predicate (`course-layer.md` §10.1–10.2) — has no layer object, so no
+  hit-index piece: the viewer passes the derivation's pieces of such
+  legs as `UiLeg`s (`uiLegsOf`), which hit
   within the tolerance of their polyline after the layer's objects and the
   UI sites and before the UI areas, as `{ kind: "leg" }` — a leg made
-  invisible stays selectable (§6.7). A corridor's edge (`ref` `corridor`)
-  is no target.
+  invisible stays selectable (§6.7), and so does a corridor leg along its
+  hidden line (the guide marks it, §6.7). A corridor's edge (`ref`
+  `corridor`) is no target.
 - While an armed tool's provisional visit is drawn (§6.1) only real sites
   are targets: `editorHitAt`'s `accept` passes over everything else and
   over the `provisional` site, so the shape below (a control to reuse)
@@ -660,7 +663,8 @@ F4) with `control.update { kind }` (`course-layer.md` §6.3 keeps
 `status` in step and refuses a change that breaks a stored structure) —
 crossing and map-issue points are disabled while the site is on a course
 ("on a course"), and a crossing point some leg runs through keeps its
-kind ("a leg runs through it"), the option's title and label saying why —, **notes** (`control.update { notes }`, on
+kind ("a leg runs through it"), the option's title and label saying why;
+the map-issue option's title otherwise says what the point is (§6.8) —, **notes** (`control.update { notes }`, on
 blur; `courses.review`), and for a control on the selected course
 **Hide the number on this course** — `numberHidden` on every visit of the
 site in the structure (`setNumberHidden`, `setStructure`). Each is one
@@ -689,7 +693,10 @@ or writing another item's leg.
 
 - **Style** (`editor-leg-style`): *Line* (705, the default, stored as no
   `style`), *Marked route* (707 along the leg), *None* (no line; numbers,
-  cuts and the leg's hit unchanged, §5).
+  cuts and the leg's hit unchanged, §5). With a corridor and *Line* a
+  note under it (`editor-leg-style-corridor-note`) says the line is
+  hidden inside the corridor and its edge marks the leg (F14,
+  `course-layer.md` §10.2 "No centre line").
 - **Bends** (`editor-leg-bend`, `data-index` / `data-x` / `data-y` paper
   mm, `data-focused`): one row per bend in order, a click focuses it, ✕
   (`editor-leg-bend-remove`) removes it; `editor-leg-bends-empty` without
@@ -719,6 +726,22 @@ leg stays *insert control* (§6.5, D5). `Delete` / `Backspace` removes the
 focused bend (§6.5). Bend focus is page state keyed by the leg's item and
 cleared by another leg click, undo and redo. A bend is paper mm, rounded
 to 0.01 mm.
+
+**The corridor guide** (F14, user feedback 2026-11-08 item 2): the layer
+draws no line along a `line` leg with a corridor (`course-layer.md`
+§10.2), so the UI layer draws a blue dashed guide
+(`editor-corridor-guide`, `data-course`, `data-leg` — the derived
+course's id and the leg's index) along the derived `points` (bends and
+the crossing point joined) of **every** corridor leg of the selected
+course, always: wherever its legs are clickable — Course mode in Course,
+Class or Variant view, desktop and phone, with any tool (an armed tool
+keeps it: `withCorridorGuides` wraps the active binding) — and never in
+All variations, All controls, Layout or Field mode, nor in print. A
+`marked_route` or `none` leg with a corridor gets one too (the guide
+follows the corridor, not the line). In `V` on desktop and tablet the
+selected leg's own outline replaces its guide (no second line while a
+bend is dragged). The guide only draws: a click on it is the viewer's
+leg click (the leg hits through its UI leg, §5), which selects it.
 
 **Writes.** Every change is one `setStructure` with the item's `leg`
 patched by `setLegProps(s, itemIndex, patch)` — the patch's keys replace
@@ -775,7 +798,12 @@ rules `course-layer.md` §10.3). Both are sites that are never items.
   changes loses its `leg`, the crossing with it (§4).
 - **Add map-issue point** on the empty-map action bar
   (`editor-action-add-map-issue`): a code-less `control.create { kind:
-  "map_issue" }` at the phantom, named "Kartutdelning N".
+  "map_issue" }` at the phantom, named "Kartutdelning N". Its tooltip
+  (`title`, `EditorContextAction.title`, on the bar and the phone's
+  host; F14, feedback 2026-11-08 item 4) and the kind select's map-issue
+  option's (§6.6) say what it is: IOF 702, where runners receive their
+  maps, shown on the all-controls and setter maps only, never on a course
+  map (`mapIssueHint`, en + sv).
 - **A selected crossing or map-issue point**: the action bar is *Delete*
   only (no radio, no description, no course entries); the inspector keeps
   notes and the kind select (§6.6). Delete strips the legs through a
@@ -1450,13 +1478,14 @@ whose poll ran meanwhile simply does not conflict (decision log, D10).
 | unit (web) | `packages/web/src/lib/editor/__tests__/hit.test.ts` | §5 over the real worker: interior and ring, start and finish, legs with course and index, empty map, tolerance, numbers, UI-layer sites under layer objects; closed areas by their outline only (D12): inside an `oob_area` / a white-out → null, its edge → the object, a 709.b border not grabbing the interior, a control and a leg inside a white-out still hit, a line by its stroke, a `UiArea`'s interior → null |
 | unit (web) | `lib/editor/__tests__/conflict.test.ts`, `write-client.test.ts` | §3: rebase vs moved vs refresh, unknown base, structure never merged; tokens sent and advanced, one re-send, `EditorConflict`, code re-keying, delete seeding |
 | unit (web) | `lib/editor/__tests__/structure-edit.test.ts`, `sequence.test.ts`, `state.test.ts` | §4: sequence positions, insert / append / remove / move / role, legs dropped on a new predecessor; display sequence, explicit structure, leg → insert position; §3 Escape cascade, hide-others, modes |
-| unit (web) | `pages/editor/__tests__/action-bar.test.ts` | §4: the entries per selection, the legacy ids; a leg: *Add bend here* only where the leg can be edited (§6.7); empty map: *Add map-issue point*, a crossing / map-issue point: *Delete* only (§6.8) |
+| unit (web) | `pages/editor/__tests__/action-bar.test.ts` | §4: the entries per selection, the legacy ids; a leg: *Add bend here* only where the leg can be edited (§6.7); empty map: *Add map-issue point* with its tooltip key (F14), a crossing / map-issue point: *Delete* only (§6.8) |
 | unit (web) | `pages/editor/__tests__/placement.test.ts` "C: the crossing tool", `bindings.test.ts` "the crossing ghost", `lib/editor/__tests__/checks.test.ts` "legs keep their bends and crossing point" | §6.8: armed on a leg it names the leg, free otherwise; no number or pending leg; a placement on a leg ends the chain (`endsChain`), a free one stays armed; switching arms afresh; the ghost's two lines along the passage (east, north), no circle, its label, the rail lights `C`; `checkStructureOf` keeps bends and the crossing (public id as a string) |
 | E2E | `e2e/course-editor.spec.ts` "F4: crossing and map-issue points" (`chromium`) | §6.8: a selected leg, `C` (lit), the ghost `crossing_point`, a click → one `course.setStructure`, back to `V`, one `course-site` `data-role="crossing_point"` whose `data-angle` is the leg's direction, the leg's drawn piece has a vertex within 0.3 mm of it, the on-map sheet's wide row `data-symbol-key="13.3"`; the Leg section names it, *Crossing section* → 13.4 (`data-section`); two undos → 13.3 again, then no crossing and no row. *Add map-issue point* on empty map → a `course-site` `data-role="map_issue"` in Course view, the kind select reads it; the course sheet's `maps.pdf` has the same stroke count, the all-controls print gains strokes (`analysePdf.strokes`) |
 | unit (web) | `lib/editor/__tests__/structure-edit.test.ts` "leg props", `bends.test.ts`, `sequence.test.ts`, `pages/editor/__tests__/rail.test.ts` | §6.7: `setLegProps` merges and keeps the other props, drops `undefined` / `line` / empty bends and an empty leg, no-op on the first item; a leg whose predecessor changes still loses it; bends inserted on the nearest segment (first, middle, last), moved, removed; distance, fraction, point and slice along the bent length; `legForInsert` the inverse of `insertIndexForLeg` (unpositioned rows skipped); the corridor chord key outside `AREA_CHOICES` |
 | unit (web) | `pages/editor/__tests__/bindings.test.ts` "V on a selected leg", "leg gaps", `gaps.test.ts` | §6.7: outline through the bends and a handle per bend (`data-focused`); a drag redraws, writes once with the moved (snapped) bend; a click focuses; a cancelled drag writes nothing; a double-click on a handle inserts no control. §6.3: gaps along a bent leg (fractions of the bent length, the target and gaps drawn along it) |
-| unit (web) | `lib/editor/__tests__/hit.test.ts` "a leg with no line" | §5, §6.7: a `none` leg has no hit-index piece; `uiLegsOf` hits it from the derivation's pieces, a circle at its end wins, `accept` passes over it |
-| E2E | `e2e/course-editor.spec.ts` "F3: legs — styles, bends, corridors" (`chromium`), "F3 on a phone" (`mobile`) | §6.7: a leg made a marked route → its `course-leg` pieces `data-style="marked_route"`, `none` and the leg still selects by a click, two undos back to `line`; *Add bend here* → one `editor-bend-handle`, dragged 60 px → the drawn leg has a vertex within 0.3 mm of it and the row's metres grow, `Delete` removes it (metres back, both controls still on the course); `A` then `C` → the default corridor, no map colour left in the band beside the edge (`inkAt` "map" = 0, > 0 before), the entry disabled with a corridor, the course's sheet prints one page, a width of 0, a white band of −1 and an opacity of 2 not written (the stored values shown again), a width of 80 written, *Remove* brings the map back, undo the corridor. On a phone a tapped leg shows `editor-leg` read-only with `editor-leg-readonly` and no *Add bend here* |
+| unit (web) | `lib/editor/__tests__/hit.test.ts` "a leg with no line", "a corridor's edge …" | §5, §6.7: a `none` leg has no hit-index piece; `uiLegsOf` hits it from the derivation's pieces, a circle at its end wins, `accept` passes over it; F14: a corridor leg likewise (no hit piece, a UI leg, the edge no target), a `marked_route` one keeps its piece |
+| unit (web) | `pages/editor/__tests__/bindings.test.ts` "corridor guides" | §6.7 (F14): one blue dashed `editor-corridor-guide` per corridor leg along its points with `data-course` / `data-leg`, under the tool's shapes; the tool's hooks kept (a press on a guide declines; an armed tool stays exclusive); no guides → the binding unchanged, no binding → the guides alone |
+| E2E | `e2e/course-editor.spec.ts` "F3: legs — styles, bends, corridors" (`chromium`), "F3 on a phone" (`mobile`) | §6.7: a leg made a marked route → its `course-leg` pieces `data-style="marked_route"`, `none` and the leg still selects by a click, two undos back to `line`; *Add bend here* → one `editor-bend-handle`, dragged 60 px → the drawn leg has a vertex within 0.3 mm of it and the row's metres grow, `Delete` removes it (metres back, both controls still on the course); `A` then `C` → the default corridor, no map colour left in the band beside the edge (`inkAt` "map" = 0, > 0 before), the entry disabled with a corridor, the course's sheet prints one page, a width of 0, a white band of −1 and an opacity of 2 not written (the stored values shown again), a width of 80 written, *Remove* brings the map back, undo the corridor; F14: no purple along the leg's middle inside the corridor (> 0 before and after *Remove*) while the edge is purple, the Style note shown, with the leg selected no `editor-corridor-guide` (its outline instead), deselected exactly one, a click at the leg's midpoint selects it again, after *Remove* no guide and no note. On a phone a tapped leg shows `editor-leg` read-only with `editor-leg-readonly` and no *Add bend here* |
 | E2E | `e2e/course-editor.spec.ts` "Course editor (new, GL canvas)" (`chromium`) | §1: the editor mounts (never `course-editor-page`), and on an event with no map it mounts over the panel's upload prompt (no viewer); the shell (`C` enabled since F4, `X` since F5); place → move → undo / redo → reload → select on the canvas → delete; create a course, append two controls, add-to-course on the map, reorder + undo, insert on a leg, remove, reload with `?course=` (explicit start / finish rows); deep links, `H`, Escape cascade; the Courses page's `course-edit-link` and the Controls page's `control-edit-link` open the new editor on the course / with the control selected (one `editor-selection-ring`) |
 | E2E | `e2e/course-editor.spec.ts` "Course mode (§4)" (`chromium`) | delete cascade: a control on two courses is deleted from the action bar — the site goes, both structures lose it (the open one's rows, the other through `course.list`), `Ctrl+Z` restores the site and both visits; *Remove from course* drops one visit and keeps the site; inline code edit in the sequence (`editor-seq-code` → 997: the row's `data-control-id` and the site follow, `Ctrl+Z` back; a duplicate code → `editor-error` "already exists"); free order (`editor-order-mode`): the hint, no reorder arrows, the layer draws no legs and labels the circles with their codes, a number drag still writes `course.setControlLabelOffset`; a number drag (the shared hit-test's `number` target): the `course-label` moves, persists over a reload, *Reset label* puts the automatic place back, undo the dragged one; clone (`editor-clone-*`, "A (copy)" prefilled, same rows) and no `editor-toggle-first-start` / `-last-finish` even with a legacy-flag course in the event |
 | E2E | `e2e/course-editor.spec.ts` "Course mode descriptions (§4)" (`chromium`) | the description editor: Escape closes only the dialog (the control stays selected), column C which-of-similar with written titles (`desc-opt-label-0.1N`), a boulder and dimensions with the live preview (`desc-dim-input` → `desc-preview`), saved, reloaded, the summary; *Clear* + save stores none, `Ctrl+Z` writes the saved description back (the control's own description written back after); a control placed on the map is described from the base map (no suggestion offered, a pressed option in `desc-editor`), after a move it stays selected with its action bar and at most one suggestion; the description sheet: "All controls" with every control until a course is picked, then course E's card (event name, course name, the finish row's measured metres, the thick rules); description instructions (E3b): the collapsed block's summary, the finish variant 14.1 (one `course.update`; the sheet's finish row changes, `course.list` has it), a special row with 60 m (a wide row with "60 m"), anchored after a control by its punch code — `courseMap.resolveSheet`'s block has the special after that control and the 14.1 finish —, `Ctrl+Z` puts it after the start again, all persisted over a reload |
