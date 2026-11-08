@@ -95,8 +95,8 @@ export function polylineSlice(points: readonly Pt[], f0: number, f1: number): Pt
   return out;
 }
 
-// −0 + 0 is 0: a rounded handle never stores a negative zero.
-const round = (v: number) => Math.round(v * 100) / 100 + 0;
+// Half away from zero, so round(−v) = −round(v) and a mirrored pair stays mirrored; −0 + 0 is 0 (no negative zero stored).
+const round = (v: number) => Math.sign(v) * Math.round(Math.abs(v) * 100) / 100 + 0;
 const roundPt = (p: Pt): Pt => ({ x: round(p.x), y: round(p.y) });
 
 /**

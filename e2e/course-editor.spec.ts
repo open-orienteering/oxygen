@@ -2972,35 +2972,41 @@ test.describe("F3: legs — styles, bends, corridors (docs/course-editor.md §6.
     expect(await outlinePoints(page)).toBe(3);
     expect(await metres()).toBe(before);
 
-    // Drag the out grip perpendicular to the leg: one write, the pair mirrored, the outline a curve, the metres grow.
-    const grip = async (which: string) => (await toolShapes(page, "editor-bend-grip")).find((g) => g.data.which === which)!;
+    // Drag the grip that lies higher on screen (the action bar lays out below the phantom) perpendicular to the leg,
+    // upwards: one write, the pair mirrored, the outline a curve, the metres grow.
+    const grips = await toolShapes(page, "editor-bend-grip");
+    const onScreen = await Promise.all(grips.map((g) => toPage(page, g)));
+    const k = onScreen[0].y <= onScreen[1].y ? 0 : 1;
+    const which = grips[k].data.which as "in" | "out";
+    const other = which === "out" ? "hIn" : "hOut";
+    const mine = which === "out" ? "hOut" : "hIn";
+    const gripAt = async () => toPage(page, (await toolShapes(page, "editor-bend-grip")).find((g) => g.data.which === which)!);
     const pa = await toPage(page, a.mm), pb = await toPage(page, b.mm);
     const len = Math.hypot(pb.x - pa.x, pb.y - pa.y);
     let n = { x: -(pb.y - pa.y) / len, y: (pb.x - pa.x) / len };
     if (n.y > 0) n = { x: -n.x, y: -n.y };
-    const out = await toPage(page, await grip("out"));
+    const start = await gripAt();
     const handleAt = await toPage(page, (await toolShapes(page, "editor-bend-handle"))[0]);
-    expect(Math.hypot(out.x - handleAt.x, out.y - handleAt.y), "the grip clear of the bend's handle").toBeGreaterThan(16);
+    expect(Math.hypot(start.x - handleAt.x, start.y - handleAt.y), "the grip clear of the bend's handle").toBeGreaterThan(16);
     const pulled = waitForTrpc(page, "course.setStructure");
-    await drag(page, out, { x: out.x + n.x * 60, y: out.y + n.y * 60 });
+    await drag(page, start, { x: start.x + n.x * 60, y: start.y + n.y * 60 });
     await pulled;
-    await expect.poll(async () => (await storedBends(courseId))[0]?.hOut?.x !== bend.hOut!.x || (await storedBends(courseId))[0]?.hOut?.y !== bend.hOut!.y, { timeout: 15000 }).toBe(true);
+    await expect.poll(async () => JSON.stringify((await storedBends(courseId))[0]?.[mine]), { timeout: 15000 }).not.toBe(JSON.stringify(bend[mine]));
     const curved = (await storedBends(courseId))[0];
-    expect(curved.hIn).toEqual({ x: -curved.hOut!.x, y: -curved.hOut!.y });
+    expect(curved[other]).toEqual({ x: -curved[mine]!.x, y: -curved[mine]!.y });
     await expect.poll(() => outlinePoints(page), { timeout: 15000 }).toBeGreaterThan(3);
     await expect.poll(metres, { timeout: 15000 }).toBeGreaterThan(before);
 
-    // Alt held on the out grip again (the in grip now lies below the leg, where the action bar is): only that handle
-    // moves, the pair broken.
-    const outAt = await toPage(page, await grip("out"));
+    // Alt held on the same grip: only that handle moves, the pair broken.
+    const again = await gripAt();
     const broken = waitForTrpc(page, "course.setStructure");
     await page.keyboard.down("Alt");
-    await drag(page, outAt, { x: outAt.x + n.x * 30, y: outAt.y + n.y * 30 });
+    await drag(page, again, { x: again.x + n.x * 30, y: again.y + n.y * 30 });
     await page.keyboard.up("Alt");
     await broken;
-    await expect.poll(async () => JSON.stringify((await storedBends(courseId))[0]?.hOut), { timeout: 15000 }).not.toBe(JSON.stringify(curved.hOut));
+    await expect.poll(async () => JSON.stringify((await storedBends(courseId))[0]?.[mine]), { timeout: 15000 }).not.toBe(JSON.stringify(curved[mine]));
     const pair = (await storedBends(courseId))[0];
-    expect(pair.hIn).toEqual(curved.hIn);
+    expect(pair[other]).toEqual(curved[other]);
 
     // Alt-click the bend: a corner (no handles stored, no grips); the row says so and offers Smooth.
     const bendAt = await toPage(page, (await toolShapes(page, "editor-bend-handle"))[0]);
@@ -3027,7 +3033,7 @@ test.describe("F3: legs — styles, bends, corridors (docs/course-editor.md §6.
     await page.keyboard.press("Control+z");
     await expect.poll(async () => (await storedBends(courseId))[0]?.hOut ?? null, { timeout: 15000 }).toBeNull();
     await page.keyboard.press("Control+z");
-    await expect.poll(async () => (await storedBends(courseId))[0]?.hOut ?? null, { timeout: 15000 }).toEqual(pair.hOut);
+    await expect.poll(async () => (await storedBends(courseId))[0]?.[mine] ?? null, { timeout: 15000 }).toEqual(pair[mine]);
 
     // The course's map prints as one page with the curved leg.
     const template = await probeTemplate("F16 curve");

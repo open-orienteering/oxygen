@@ -104,7 +104,8 @@ export function LegSection(p: LegSectionProps) {
             })}
           </ul>
         )}
-        {!readOnly && <p className="text-[10px] text-slate-400">{t("legBendsHint")}</p>}
+        {/* Without bends: how to add one; with bends: the gestures on them (F16): a leg without bends keeps its height. */}
+        {!readOnly && <p data-testid="editor-leg-bends-hint" className="text-[10px] text-slate-400">{t(bends.length === 0 ? "legBendsHint" : "legBendsEditHint")}</p>}
       </div>
 
       <div data-testid="editor-leg-corridor" className="space-y-1">

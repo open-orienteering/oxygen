@@ -58,6 +58,8 @@ describe("bends (docs/course-editor.md §6.7)", () => {
     const smooth = [{ x: 10, y: 0, hIn: { x: -3, y: 0 }, hOut: { x: 3, y: 0 } }];
     expect(dragBendGrip(smooth, 0, "out", { x: 2, y: 2.004 }, false, false)).toEqual([{ x: 10, y: 0, hIn: { x: -2, y: -2 }, hOut: { x: 2, y: 2 } }]);
     expect(dragBendGrip(smooth, 0, "out", { x: 2, y: 2 }, true, false)).toEqual([{ x: 10, y: 0, hIn: { x: -3, y: 0 }, hOut: { x: 2, y: 2 } }]);
+    // A half-way value rounds the same either way: the pair stays exactly mirrored.
+    expect(dragBendGrip(smooth, 0, "out", { x: 7.985, y: -1.006 }, false, false)).toEqual([{ x: 10, y: 0, hIn: { x: -7.99, y: 1.01 }, hOut: { x: 7.99, y: -1.01 } }]);
     expect(dragBendGrip(smooth, 0, "in", { x: -3, y: 0.4 }, true, true)).toEqual([{ x: 10, y: 0, hIn: { x: -3.03, y: 0 }, hOut: { x: 3, y: 0 } }]);
   });
   it("moves and removes a bend", () => {
