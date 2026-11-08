@@ -61,6 +61,8 @@ describe("kinds on control.create / update (§6.3)", () => {
     const p = await rowOf(crossing);
     expect([p.kind, p.status, p.codes, p.name]).toEqual(["crossing_point", "ok", "", "Passerpunkt 1"]);
     expect(p.seq).toBe(crossing);
+    // Its seq is above every punch code (MARK_SEQ_BASE), so its public id never names a control.
+    expect(crossing).toBeGreaterThan(10_000);
     const m = await caller.control.create({ kind: "map_issue", xpos: 60, ypos: 30 });
     const mr = await rowOf(m.id);
     expect([mr.kind, mr.status, mr.name]).toEqual(["map_issue", "ok", "Kartutdelning 1"]);

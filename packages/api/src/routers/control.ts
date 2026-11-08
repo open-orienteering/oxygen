@@ -346,6 +346,14 @@ const CODELESS_NAMES: Partial<Record<ControlKind, string>> = {
   map_issue: "Kartutdelning",
 };
 
+/**
+ * Code-less crossing and map-issue points take a seq above this (course-layer.md
+ * §6.3): their public id (`publicControlId`, the seq without a code) stays clear
+ * of every punch code (SI codes end at 1023), where an allocated seq would meet
+ * one (`uuidsOfPublicIds` resolves codes first).
+ */
+export const MARK_SEQ_BASE = 10_000;
+
 /** Kinds that are never structure items (the slice-F split; course-layer.md §10.3). */
 const NON_ITEM_KINDS: ReadonlySet<ControlKind> = new Set(["crossing_point", "map_issue"]);
 
@@ -752,9 +760,17 @@ export const controlRouter = router({
 
       // Table write + control.upserted journal entry commit together.
       const created = await ctx.db.$transaction(async (tx) => {
+        // A code-less crossing / map-issue point is addressed by its seq: one above MARK_SEQ_BASE, so its public
+        // id never meets a punch code (course-layer.md §6.3).
+        let seq: number | undefined;
+        if (codeless && !isStartFinish && parts.length === 0) {
+          const top = await tx.control.aggregate({ where: { eventId: ctx.event.id, seq: { gt: MARK_SEQ_BASE } }, _max: { seq: true } });
+          seq = Math.max(MARK_SEQ_BASE, top._max.seq ?? 0) + 1;
+        }
         const c = await tx.control.create({
           data: {
             eventId: ctx.event.id,
+            ...(seq !== undefined ? { seq } : {}),
             name,
             codes: input.codes,
             status: statusEnum,
