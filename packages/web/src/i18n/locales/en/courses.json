@@ -189,6 +189,8 @@
   "mapAnchoredObjectsRemoved_other": "{{count}} map-anchored objects were removed (they were positioned on another event's map).",
   "dismiss": "Dismiss",
   "exportCourseMaps": "Maps (PDF)",
+  "exportVariantMaps": "Variant {{key}} map (PDF)",
+  "exportAllVariationsMaps": "All variations (PDF, officials)",
   "exportAllMaps": "All maps (PDF)",
   "exportAllControlsMap": "All controls (PDF)",
   "exportDescriptionSheets": "Description sheets… (PDF)",

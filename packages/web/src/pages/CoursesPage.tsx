@@ -132,8 +132,8 @@ function CourseExportMenu({ nameId, onAllMaps, onAllControls }: { nameId: string
   );
 }
 
-/** A materialised variant under its root: key, controls, length — no actions (docs/course-layer.md §12). */
-function VariantRow({ variant, rootName }: { variant: CourseSummary; rootName: string }) {
+/** A materialised variant under its root: key, controls, length — read-only; one action, its map on the root's sheets (F8). */
+function VariantRow({ variant, rootName, onExport, exportDisabled }: { variant: CourseSummary; rootName: string; onExport: () => void; exportDisabled: boolean }) {
   const { t } = useTranslation("courses");
   return (
     <tr
@@ -158,7 +158,22 @@ function VariantRow({ variant, rootName }: { variant: CourseSummary; rootName: s
       <td className="px-4 py-1.5 tabular-nums hidden md:table-cell">{variant.numberOfMaps}</td>
       <td colSpan={2} />
       <td className="hidden lg:table-cell" />
-      <td />
+      <td className="px-4 py-1.5">
+        <div className="flex items-center justify-end">
+          <button
+            type="button"
+            data-testid={`export-variant-${variant.id}`}
+            disabled={exportDisabled}
+            onClick={onExport}
+            className="p-1.5 text-slate-400 hover:text-blue-600 hover:bg-blue-50 rounded transition-colors cursor-pointer flex items-center disabled:opacity-40 disabled:cursor-default"
+            title={t("exportVariantMaps", { key: variant.variantKey ?? "" })}
+          >
+            <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4" />
+            </svg>
+          </button>
+        </div>
+      </td>
     </tr>
   );
 }
@@ -522,6 +537,20 @@ export function CoursesPage() {
                             <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4" />
                           </svg>
                         </button>
+                        {(variantsOf.get(c.id)?.length ?? 0) > 0 && (
+                          <button
+                            type="button"
+                            data-testid={`export-all-variations-${c.id}`}
+                            disabled={overview.busy || (!canEdit && info(c.id).sheetSeq === null)}
+                            onClick={() => void overview.exportAllVariations(c.id)}
+                            className="p-1.5 text-slate-400 hover:text-purple-600 hover:bg-purple-50 rounded transition-colors cursor-pointer flex items-center disabled:opacity-40 disabled:cursor-default"
+                            title={t("exportAllVariationsMaps")}
+                          >
+                            <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 4v6m0 0a3 3 0 103 3m-3-3a3 3 0 113 3m0 0h6m0 0a3 3 0 103-3m-3 3a3 3 0 113-3m0 0V4" />
+                            </svg>
+                          </button>
+                        )}
                         <Link
                           to={`/${nameId}/course-editor?course=${c.id}`}
                           data-testid="course-edit-link"
@@ -552,7 +581,13 @@ export function CoursesPage() {
                       </tr>
                     )}
                     {(variantsOf.get(c.id) ?? []).map((v) => (
-                      <VariantRow key={v.id} variant={v} rootName={c.name} />
+                      <VariantRow
+                        key={v.id}
+                        variant={v}
+                        rootName={c.name}
+                        onExport={() => void overview.exportVariant(c.id, v.variantKey ?? "")}
+                        exportDisabled={overview.busy || (!canEdit && info(c.id).sheetSeq === null)}
+                      />
                     ))}
                   </Fragment>
                 ))}
