@@ -43,9 +43,11 @@ windowWidthMapMm = frameWidthPageMm / scaleRatio
 Thus a 1:15000 base map printed at 1:7500 enlarges by 2×. UI zoom is only
 screen magnification and never changes `printScale`.
 
-`packages/shared/src/course-maps/geometry.ts` owns this math. Page-anchored
-objects remain fixed when the map window moves; map-anchored objects move with
-terrain and are clipped to the map frame.
+`packages/shared/src/course-maps/geometry.ts` owns this math. Layout
+objects are page-anchored and stay fixed when the map window moves; what
+moves with the terrain (white-outs, 709 areas, map text, logos on the map)
+is a course object ([`course-layer.md`](course-layer.md) §8), clipped to
+the map frame.
 
 ### Orientation
 
@@ -71,7 +73,10 @@ PDF composer draws the rotated window under `T_map` (`course-print.md`
 - A3, A4, A5, or custom paper and portrait/landscape orientation
 - print scale
 - map frame, control-description placement, and appearance in `settings`
-- shared text, line, rectangle, and white-out objects in `objects`
+- shared text, line, rectangle, path, image and white-out objects in
+  `objects`, all **page-anchored** (`anchor: "page"`, the only value the
+  schema takes since F12; the map-anchored ones moved into
+  `course_objects` with scope `{ all }`, [`course-layer.md`](course-layer.md) §3.6)
 - `auto_key` (`<paper>-<orientation>-<scale>`) and `is_extra`: the
   template's key and whether another template is that key's auto one
   ([`course-layout.md`](course-layout.md) §5)
@@ -82,7 +87,9 @@ PDF composer draws the rotated window under `T_map` (`course-print.md`
 - course or all-controls kind
 - optional template
 - map-window centre
-- per-map overrides and objects
+- per-map overrides and (page-anchored) objects; F12 moved a sheet's
+  map-anchored objects into `course_objects` scoped to its course (a
+  class sheet's to its class, an all-controls sheet's `{ all }`)
 - ordering among several maps for one course
 - `class_id`: set on a class's sheet (a class print override,
   `course-layout.md` §6), NULL on a course's own sheets; `section_index`
@@ -226,8 +233,7 @@ course (its own sheets; class sheets follow their class's override,
 1. **Template** — one picker (`course-template-<id>`): the event's
    templates; the **club library** (an optgroup: picking one brings it
    into the event under a free name, `base`, `base (2)`, …, then applies
-   it — `mapTemplate.loadFromClub` with the map-anchored-objects notice,
-   then `applyToCourses`); **New template…** (a dialog: paper A3/A4/A5,
+   it — `mapTemplate.loadFromClub`, then `applyToCourses`); **New template…** (a dialog: paper A3/A4/A5,
    orientation, print scale, margin, the name defaulting to the key's
    name; `mapTemplate.create`, then `applyToCourses`). Beside it the key's
    **auto / extra** badge (`course-template-badge-<id>`, the key in its
@@ -297,9 +303,10 @@ dimensions **at the base map scale** — the defaults match ISOM 2017-2:
 The default purple is `#a626ff`, the sRGB equivalent of the offset CMYK
 35·85·0·0 / PMS Purple from ISOM Appendix 1. Following the norm, the
 overprint is enlarged together with the map: every dimension is multiplied
-by `overprintScale = mapScale / printScale` (computed in
-`resolveMapLayout`, passed to `courseLayer()`), so a 1:15000 map printed at
-1:7500 gets Ø 10 mm circles, 0.7 mm lines and 8 mm digits. Number
+by `mapScale / printScale` — the page transform `T_map` enlarges the map
+layer, course included ([`course-print.md`](course-print.md) §4.1) — so a
+1:15000 map printed at 1:7500 gets Ø 10 mm circles, 0.7 mm lines and 8 mm
+digits. Number
 placement and its baseline rule are [`course-layer.md`](course-layer.md)
 §3.5. History: the `20260916190000_isom_overprint_defaults` migration
 bumped stored templates that still carried the old defaults (`#c026d3`,
@@ -319,7 +326,7 @@ The shared validator reports:
 - descriptions or page-anchored objects outside the paper
 - missing template (added by the API list resolver)
 
-Map-anchored objects are exempt from the printable-area check: they follow
+Course objects are not layout objects and are not checked: they follow
 the terrain and are clipped to the map frame when printed, so moving the
 window until they fall off-page is by design. The Courses page's Print
 column shows a course's status (Ready / issue count / No map) over its own
@@ -328,19 +335,18 @@ issues.
 
 ## Base-map changes and club templates
 
-Map-anchored objects are stored in OCAD paper millimetres — the same space as
+Course objects are stored in OCAD paper millimetres — the same space as
 `course_maps.window_center` and (scaled to metres) the event's controls. A
 revision of the same map project keeps everything aligned. Replacing the
-base map with a differently georeferenced file shifts map-anchored objects
-exactly as much as every control and course; the course setter re-aligns as
-usual.
+base map with a differently georeferenced file shifts them exactly as much
+as every control and course; the course setter re-aligns as usual.
 
-Club library templates are the exception: map-anchored objects reference the
-source event's map coordinates. `mapTemplate.loadFromClub` therefore strips
-map-anchored objects on import and reports how many were removed. Page-
-anchored layout (logos, titles, description position) is kept. Saving *to*
-the club library still stores every object so re-import into the same event
-loses only the map-anchored ones.
+A club library template holds page-anchored layout only (logos, titles,
+description position), so `mapTemplate.loadFromClub` brings it in whole
+and answers `{ template }`. Until F12 a template could carry map-anchored
+objects, which referenced the source event's map coordinates: the import
+stripped them and reported the count, and the F12 migration removed them
+from every club payload ([`course-layer.md`](course-layer.md) §3.6).
 
 For several maps on one course, a control is valid when at least one map
 contains it.

@@ -837,7 +837,10 @@ The editor reads `courseObject.list` (MapPanel's cache, until reload) and
 invalidates it after every write. On the canvas it shows the objects
 `courseObjectsForView` keeps for the view (the selected course's, else
 the `all`-scoped ones) — the layer draws them (`course-layer.md` §8.3);
-filter regions and toner savers are outlined by the UI layer.
+filter regions and toner savers are outlined by the UI layer. Since F12
+the objects a sheet or template once anchored to the map are course
+objects too (`course-layer.md` §3.6): listed, drawn and edited here like
+any other, with `source = 'layout'` that the wire does not carry.
 
 - **Select** (`V`): a click on an object selects it (exclusive with a
   control selection) — a line on its stroke, a text on its glyphs, a

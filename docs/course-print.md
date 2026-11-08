@@ -202,8 +202,8 @@ appearance, view options, filter regions, and the event's course objects
 in scope of the sheet — `objects`, `docs/course-layer.md` §8.3 — the
 course layer's input without the document, `docs/course-layer.md` §2;
 stored `filter_region` objects reach the page's clip paths through them),
-`objects` (layout objects of both
-anchors), `textValues`, `description` (§6.2, or null), `label`, `geo`
+`objects` (the template's and the
+sheet's layout objects, all page-anchored since F12), `textValues`, `description` (§6.2, or null), `label`, `geo`
 (§7.3, or null). `resolveSheet` (§5) builds everything but `map` and
 `geo`; `pdf-page.ts` adds them from the pinned document.
 
@@ -232,12 +232,12 @@ Base-map scale and meridian tilt come from `getBaseMapInfo` only (§10).
 1. `courseLayer({ …input.course, objects, viewOptions: { …, window,
    textValues }, document: map.context, cutFeatures })`. `window` is the
    frame mapped back through `T_map⁻¹`, grown by 1 mm
-   (`RING_BLEED_UM`), as the outer ring of a map-anchored white-out
+   (`RING_BLEED_UM`), as the outer ring of a toner saver's white-out
    outside: the clip trims it, and no anti-aliased seam of map ink is left
    where a ring edge and the clip edge coincide.
 2. `courseRenderInput(map, layer)` → one `symbolise` call: lower purple
-   under the line art, map-anchored white-outs at upper white, upper
-   purple and the layout objects' colours on top, a toner saver's white
+   under the line art, white-out course objects at upper white, upper
+   purple and the course objects' colours on top, a toner saver's white
    above them all (`course-layer.md` §3.6, P1) — the stack's order, no
    sandwich, nothing drawn twice. The layer's filter regions go into the
    same call (`regions`, `regionObjectLimit`; `map-rendering.md` §4.11):
@@ -265,9 +265,10 @@ course layer so the web worker has it without the PDF writer) builds it;
 `composePage` calls it, and the editor's Layout mode draws the same
 stream (`course-layout.md` §1).
 
-Page-anchored objects are flipped to y-up page mm, re-anchored as `map`
-and drawn by the course layer's own object builder (`layoutObjects`, C0)
-with `overprintScale: 1` and the frame, grown by the same 1 mm
+Layout objects (all page-anchored) are flipped to y-up page mm
+(`flipPageObject`) and drawn by the course layer's object builder in its
+page form (`pageObjects`, `objects.ts`; F12 split it from the course
+objects' `courseObjects`) with the frame, grown by the same 1 mm
 (`RING_BLEED_UM`), as the white-out-outside ring (legacy: the ring against
 the map frame; the extra millimetre is white on the white sheet and keeps
 the ring's outer edge off the frame clip's edge, so no map ink seam shows
@@ -476,12 +477,12 @@ document objects within 20 mm of the window's bounding box (C6's
 
 ### 6.1 Page-anchored objects
 
-All `course-maps` schema kinds, as on the map (`docs/course-layer.md`
-§3.6) but in page mm: text with placeholders, lines and paths (dashes as
+All `course-maps` schema kinds (`docs/course-layer.md` §3.6) in page mm:
+text with placeholders, lines and paths (dashes as
 legacy print draws them), rectangles, `solid` fills, `whiteout`,
 `whiteoutInverted` (ring against the frame + 1 mm, §4.4), `outOfBounds` (709 / 709.b /
-709.c from the library), images (§6.3). Sizes are page mm and never
-divided by `overprintScale`. User colours print through the inverse
+709.c from the library), images (§6.3). Sizes are page mm as stored.
+User colours print through the inverse
 naive conversion in `cmyk` and as the hex in `rgb` (§2).
 
 ### 6.2 Description block
@@ -511,9 +512,9 @@ formula for formula, as objects for the shared stage:
 
 ### 6.3 Graphics
 
-Image objects become `PageImage`s in their layer's space (map-anchored:
-paper µm under `T_map`, so they turn with a rotated window; page-anchored:
-page µm). The composer takes PNG bytes per graphic id; `writePage`
+Image objects become `PageImage`s in their layer's space (an `image`
+course object: paper µm under `T_map`, so it turns with a rotated window;
+a page-anchored layout object: page µm). The composer takes PNG bytes per graphic id; `writePage`
 embeds each distinct PNG once (`/Subtype /Image`, `Im<n>` in first-use
 order) and draws it `q [<rect> re W n] <w 0 0 h x y> cm /Imn Do Q`,
 stretched to the rectangle like the legacy `preserveAspectRatio="none"`,
@@ -646,7 +647,7 @@ map's (§8.4 `library-symbols`, `stack-order`) and the two differences
 of decision (3): spec-sized 7xx
 symbols, the 701 turned to the first control, 709 from the library and
 start / finish clearance (C0); Liberation Sans in the block (the legacy font stack lists
-DejaVu Sans first); map-anchored images, control numbers and map text
+DejaVu Sans first); image and text course objects and control numbers
 turn with a rotated window (legacy drew the overprint upright in page
 space); imported `marked_route` / `restricted_line` / `forbidden_route`
 lines drawn by the library; images DeviceRGB in `cmyk`.
@@ -814,7 +815,7 @@ the user when every event moved to the composer (v0.6.0).
 | `library-course-lines` | 709 out-of-bounds boundary and imported `marked_route` / `restricted_line` / `forbidden_route` lines drawn by the library | C0, C2 |
 | `start-finish-clearance` | legs cut at the start / finish symbols' own outlines | C0 |
 | `size-aware-cuts` | automatic circle and leg cuts from the pinned document with clearance = feature radius + line width / 2 + 0.25 mm | user, 2026-10-24 (C5 question) |
-| `rotated-overprint` | on a rotated window, map-anchored images, control numbers and map text turn with the map (legacy drew the overprint upright in page space) | C2, §7.4 |
+| `rotated-overprint` | on a rotated window, image and text course objects (map-anchored layout objects until F12) and control numbers turn with the map (legacy drew the overprint upright in page space) | C2, §7.4 |
 | `image-rgb` | images stay DeviceRGB in `cmyk` (CMYK images are the profiles row) | C2, §7.4 |
 | `library-symbols`, `stack-order` | the base map as the GL viewer draws it: matched symbols drawn by the library, every `map-rendering.md` §6.4 code, and the document's own colour order — where a map draws an area colour above lower purple (`COLOUR_AREA_ABOVE_LOWER_PURPLE`) or a 100 % line colour under it, legs follow that order (until `ocad-16`, C14, the inserted lower purple also went under every area on `e2e/test.ocd` and the club maps) | 2026-10-23 slice C split; C6 |
 

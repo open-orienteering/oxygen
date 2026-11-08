@@ -65,8 +65,8 @@ visit without a label (§3.5, §9.2); a check carries no message text.
 ## 1. Derivation
 
 The course layer is **derived, never stored** (08 §4.1): a pure function
-of the course structure, the event's control sites, the map-anchored
-layout objects, an appearance and view options, run by every consumer:
+of the course structure, the event's control sites, the course objects
+in scope (§8), an appearance and view options, run by every consumer:
 
 ```ts
 courseLayer({ structure, sites, objects, appearance, viewOptions, document, cutFeatures? }): CourseLayer
@@ -94,14 +94,14 @@ boxes are estimated like the legacy placer's (0.65 em per character).
   re-indexes the document's symbols with `remapRenderColours`. Done at
   layer-build time, not by import alignment, so no stored document
   changes hash (Pending: fold it into stage 7 at the next importer bump).
-- Layout objects in their own hex colours (§3.6) get one row each, in
+- Course objects in their own hex colours (a `text` object's `color`, §8.3) get one row each, in
   first-use order, **on top of the stack** (`course-object:#rrggbb`,
   CMYK by the naive inverse of `cmykToHex`): legacy print draws them
   after everything else.
 - **Variation tints** (§12.7, F7): with `viewOptions.allVariations` — the
   editor's All-variations view, screen only — one row per tinted
   structure's label (`course-tint:<label>`, `VARIATION_TINTS`) after the
-  layout-object rows, below a toner saver's white. Never on paper: the
+  object rows, below a toner saver's white. Never on paper: the
   print path never sets the option (a compose fixture asserts it).
 
 `layer.colours` is the stack the merged input is drawn with.
@@ -149,9 +149,10 @@ throws.
 y-up), like the map. Printing at another scale is the page transform's
 job (`T_map`, 05 §5.1), which enlarges map and course together — so an
 ISOM course printed at 1:10 000 from a 1:15 000 map gets 7.5 mm circles
-as the spec requires. There is no overprint factor for the 7xx symbols;
-`viewOptions.overprintScale` (= mapScale / printScale) only divides the
-page-mm sizes of layout objects (§3.6).
+as the spec requires. There is no overprint factor for the 7xx symbols,
+nor for course objects; `viewOptions.overprintScale`, which divided the
+page-mm sizes of map-anchored layout objects, retired with them in F12
+(§3.6).
 
 ## 2. Input, version 1
 
@@ -170,9 +171,9 @@ automatic cuts; an empty list means automatic (decision log 2026-11-01,
 | `CourseItem` | `{ siteId, role?, leg?, numberHidden? }` — 08 §4.3's item, the leg being the leg *into* the item | `role` (`control` \| `start` \| `finish`) defaults to the site's kind — a `map_exchange` draws as a control and splits the course into parts (§10.3, §11) — (set it for `firstAsStart` / `lastAsFinish`); `numberHidden` from the visit's `number_hidden`. An item naming a `crossing_point` or `map_issue` site is skipped (they are never items, §10.3) |
 | `leg` | `{ gaps?, style?, bends?, corridor?, crossing? }` — the stored `LegProps.gaps` (fractions along the leg, bends and crossing point included), `style` (`line` \| `marked_route` \| `none`, default `line`) and `bends` (paper mm), §10.1; `corridor` (`{ widthM, edge, whiteMm, whiteOpacity }`), §10.2; `crossing` (`{ controlId, section? }`, the site id of a `crossing_point` the leg runs through), §10.3 | `LegProps` of the structure's item (§6.4: written by the importers and the backfill, by the editor from D5). The v1 interim input of slice C (`path`, `pieces`, item `circleGaps`, `extras`, read from an imported `ocd` course's GeoJSON) is **retired** by D1: nothing is read from the GeoJSON |
 | `sites` | `{ id, code, kind, x, y, circleGaps? }[]`, `kind` one of `control`, `start`, `finish`, `crossing_point`, `map_issue`, `map_exchange` (§6.3) | `controls` rows; `code` the display code (first punch code, else name / seq); `circleGaps` = `controls.circle_gaps`, compass degrees |
-| `objects` | `(CourseMapObject \| CourseLayerObject)[]`: a sheet's layout objects (only `anchor: "map"` ones are drawn) and course objects (§8; told apart by `geometry`) | the sheet's layout objects (`course-maps` schema); the event's course objects in scope (§8.3) |
+| `objects` | `CourseLayerObject[]`: the course objects (§8) — since F12 a sheet's layout objects are all page-anchored and the page layer's (§3.6) | the event's course objects in scope (§8.3) |
 | `appearance` | `{ circle?, line?, number?, numberStyle? }`, multipliers (1 = the spec) | `appearanceFromTemplate(template.appearance)`; the template's `purple` is not read (the purple is the stack's row) |
-| `viewOptions` | `{ allControls?, labelMode?, overprintScale?, autoCuts?, window?, textValues?, setterMarks?, section?, allVariations? }` — `allVariations` (§12.7): the tinted structures draw on tint rows, screen only | the view: all-controls, label mode, print enlargement, the event's **Auto cuts** toggle (`Event.autoOverprintCuts`; `false` = no automatic cuts, §3.4; absent = on), the frame polygon for white-out-outside, `{course}` placeholder values; `setterMarks` (§10.3): the map-issue points and every crossing point are drawn — the editor's Course and All-controls views and the all-controls sheet set it, a course sheet never does; `section` (§11): one part of a course split by map exchanges — a part sheet in print, Layout mode and Class view set it from `course_maps.section_index`, Course mode never does |
+| `viewOptions` | `{ allControls?, labelMode?, autoCuts?, window?, textValues?, setterMarks?, section?, allVariations? }` — `allVariations` (§12.7): the tinted structures draw on tint rows, screen only | the view: all-controls, label mode, the event's **Auto cuts** toggle (`Event.autoOverprintCuts`; `false` = no automatic cuts, §3.4; absent = on), the frame polygon for white-out-outside, `{course}` placeholder values; `setterMarks` (§10.3): the map-issue points and every crossing point are drawn — the editor's Course and All-controls views and the all-controls sheet set it, a course sheet never does; `section` (§11): one part of a course split by map exchanges — a part sheet in print, Layout mode and Class view set it from `course_maps.section_index`, Course mode never does |
 | `document` | `{ colours, libraryId, documentFactor, mapScale }` — the aligned stack, the library, the document factor (§3.1) and the base map's scale denominator (corridor widths, §10.2) | `courseDocumentContext(header)` (`context.ts`): the viewer's worker and the print route (`pdf-page.ts`) build it from the pinned document's header; `mapScale` is `header.mapScale` |
 | `cutFeatures` | `{ x, y, r? }[]` (`r` the drawn symbol's radius) | `cutFeaturesOfDocument(doc)` of the pinned document (every event since E1, §4.2) |
 | `regions` | `{ rings: MapPoint[][], mode: "clip" \| "hide", symbols: "all" \| number[] \| { colours }, invert? }[]` — filter regions over the map, `rings` outer first; symbol indices are the document's, colours its own stack's | explicit regions, then every `filter_region` course object in `objects` (§8.3); the layer returns them as `CourseLayer.regions` (µm paths, colours on the completed stack) and `courseRenderInput` passes them to `symbolise` with the document's object count as `regionObjectLimit` — the rule is `map-rendering.md` §4.11 |
@@ -377,35 +378,89 @@ user review). The flag reaches every consumer of the layer:
   below the placed centre, `align: "centre"` (the legacy SVG overlay's
   `controlNumberBaselineY`, deleted in E4c).
 
-### 3.6 Layout objects
+### 3.6 Layout objects (map-anchored: retired in F12)
 
-Map-anchored `CourseMapObject`s are the 08 §4.5 kinds they already are:
+The course layer draws **course objects only** (§8). Until F12 a sheet's
+or template's *map-anchored* layout objects (`CourseMapObject` with
+`anchor: "map"`, `course-maps.md` Data model) were drawn here too, their
+page-mm sizes divided by `viewOptions.overprintScale`. F12 moved every
+one of them into `course_objects` (the migration below) and retired the
+branch: `CourseLayerInput.objects` is `CourseLayerObject[]`,
+`viewOptions.overprintScale` is gone, `layer.images` holds `image` course
+objects only, and the layout schema's anchor is the literal `"page"` (a
+write naming `"map"` is `BAD_REQUEST`). A sheet's layout objects are the
+page layer's (`course-print.md` §4.4): `pageObjects` (`objects.ts`) draws
+them through the same builder in page mm — white-out at upper white, a
+page white-out outside the frame ring at upper white, 709 / 709.b /
+709.c, a solid fill or a stroke in its own colour row (dashes max(2, 5 w)
+/ max(1, 2.5 w) mm), text in its colour's row (`sans` → Liberation Sans,
+`condensed` → Liberation Sans Narrow, `serif` / `mono` → their families,
+which ship no file: `symbolise` warns `NO_FONT`, `map-rendering.md`
+§4.10; `{placeholders}` expanded; empty text skipped), images as page
+images.
 
-| Object | Drawn as |
+**Migration (F12).** `packages/api/prisma/migrations/20261109120000_map_anchored_objects_to_course_objects`
+(the runbook: `docs/migrations/2026-f12-map-anchored-objects.md`). Every
+map-anchored object of `map_templates.objects` and `course_maps.objects`
+becomes one `course_objects` row; the geometry is copied as it is (both
+are paper mm, y-up), so the object stays where it was on the map:
+
+| Legacy object | Course object |
 |---|---|
-| rectangle / path, `fillMode: "whiteout"` | `course:whiteout` area at upper white |
-| `"whiteoutInverted"` (toner saver) | the `viewOptions.window` ring with the shape as an even-odd hole, filled with the **toner saver white**; without a window, not drawn and warned (`WINDOW_MISSING`) |
-| `"outOfBounds"` | 709; with a stroke 709.b, or 709.c for `dash: "dashed"`. The boundary is the library's (0.2 mm × factor, upper purple): the stored stroke colour *and width* are not read — legacy print kept the stored width in purple, a difference for C3's list |
-| `"solid"` | an area in the fill's own colour row |
-| any stroke (except out-of-bounds) | a line in the stroke's colour row, page-mm width ÷ `overprintScale`; `dash: "dashed"` → OCAD dashes max(2, 5 w) / max(1, 2.5 w) mm ÷ `overprintScale` |
-| line | as a stroke |
-| text | a text symbol in the colour's row: `sans` → Liberation Sans, `condensed` → Liberation Sans Narrow, `serif` / `mono` → their families (no file ships: `symbolise` warns `NO_FONT`, `map-rendering.md` §4.10); size ÷ `overprintScale`; `{placeholders}` expanded with `viewOptions.textValues`; empty text skipped |
-| image | `layer.images` (paper µm rectangle), not in the stream |
+| rectangle / path, `fillMode: "whiteout"` (and the legacy `whiteoutRect` / `whiteoutPolygon` kinds) | `whiteout {}`; a rectangle as its four corners (`x, y` → `x + width` → `+ height` → back, the layer's `rectVertices` order) |
+| `"whiteoutInverted"` | `toner_saver {}` — the drawn shape is the stored one (no `marginMm`) |
+| `"outOfBounds"` | `oob_area`: `{}` without a stroke, `{ border: "solid" }` with one, `{ border: "dashed" }` with `dash: "dashed"` (the stroke's colour and width were never read) |
+| line, or a path / rectangle with no fill (`none`, or `solid` without `fill`), stroked in **purple** | `oob_line {}` (708) when solid, `marked_route {}` (707) when `dash: "dashed"`; a closed path or a rectangle gets its first vertex appended; the stroke width goes (the 7xx symbols take the library's) |
+| text | `text { text, fontSizeMm: fontSizeMm ÷ os, color, fontFamily?, align? }` at its anchor point (`maxWidthMm` goes: it was never drawn) |
+| image | `image { graphicId, crop? }`, geometry the two corners `(x, y)`, `(x + width, y + height)` |
+
+*Purple* is the row's template's `appearance.purple` or the ISOM default
+`#a626ff`, case-insensitive. `os` is the overprint enlargement the
+retired branch divided by: the event's base map scale (its latest map
+file's document, `getBaseMapInfo`) over the print scale (a sheet's
+`overrides.printScale`, else its template's; a template's own
+`print_scale`), 1 without a base map or a template — so a moved text
+prints at the size it did on that sheet.
+
+The scope (§8.2): a template's objects `{ all: true }` (no template scope
+exists; a template's object was drawn on every sheet of it); a course
+sheet's `{ courses: [its course] }`; a class sheet's (`class_id`)
+`{ classes: [its class] }`; an all-controls sheet's, and a setter sheet's
+without a course, `{ all: true }`; a setter sheet with a course, that
+course. The rows: `source = 'layout'` (§8.1), `version = 0`, `z` one
+below the event's lowest (so they draw under the objects drawn by hand,
+as layout objects drew before course objects), `seq` in the order
+templates (by seq, array order), then sheets (likewise). The template and
+sheet rows keep their page-anchored objects in order; a club template's
+map-anchored objects (`club_map_templates.payload`, never drawn: the
+import has always dropped them) are removed.
+
+**Guard.** An object with no course-object kind is **refused, never
+dropped**: a solid fill (`solid_fill`), a stroke that is not purple on a
+line (`coloured_line`) or an unfilled shape (`coloured_stroke`), a stroke
+on a white-out or white-out outside (`stroked_whiteout`), an area of
+fewer than three vertices (`degenerate_area`), an unknown kind or fill
+mode. The migration raises `F12 guard: …` with the count per reason and
+lists each object (event, table, row seq, object id, reason) in the
+error's detail; nothing is changed. A soft-deleted event
+(`events.removed`) is not guarded: its refused objects are removed with
+the move (E5's precedent). Objects that draw nothing — no fill and no
+stroke, an empty text — are removed and counted. A second run finds no
+map-anchored object and changes nothing.
 
 **Toner saver white** (P1). A white-out outside fills its own row,
 `course:toner-saver-white` ("Toner saver white", CMYK 0/0/0/0), which
 `courseLayer` appends to `layer.colours` above every other row — upper
 purple, document colours above it (a map's text colours often are) and
-the layout-object rows — only when it draws one (a `toner_saver` object
-or a map-anchored `whiteoutInverted` object, and a window;
-`hasTonerSaver`). Both backends paint in colour order, so the ring is
-the map layer's last pass: outside the shape nothing of the map layer
-shows — map ink and text, 709 / 707 / 711 objects, map text objects, and
-the course overprint itself (a generated hull keeps the course 25 mm
-inside). The page layer (page objects, the description block) comes
-after the map layer and stays on top. At upper white, below upper
-purple and the object rows, the ring let 709 areas and text show through
-on screen and in print (feedback 2026-11-06 item 2;
+the course-object rows — only when it draws one (a `toner_saver` object
+and a window; `hasTonerSaver`). Both backends paint in colour order, so
+the ring is the map layer's last pass: outside the shape nothing of the
+map layer shows — map ink and text, 709 / 707 / 711 objects, text
+objects, and the course overprint itself (a generated hull keeps the
+course 25 mm inside). The page layer (page objects, the description
+block) comes after the map layer and stays on top. At upper white, below
+upper purple and the object rows, the ring let 709 areas and text show
+through on screen and in print (feedback 2026-11-06 item 2;
 `docs/bugfix-toner-saver-draw-order.md`). A page-anchored
 `whiteoutInverted` is the page layer's and keeps upper white
 (`course-print.md` §4.4).
@@ -579,7 +634,7 @@ buckets. The React SVG keeps the UI layer only (`map-rendering.md` §5.4
 | `objects` | the event's course objects in scope of the highlighted courses (`courseObjectsForView`, §8.2; `all`-scoped only when none is highlighted), without scope, `z` or token — `MapPanel` fetches `courseObject.list` and hands them to the viewer; no sheet's layout objects reach the viewer |
 | provisional visit | the editor's armed `S` / `K` / `M` (`course-editor.md` §6.1), with exactly one highlighted course: a site `provisional` (`PROVISIONAL_SITE_ID`, the tool's kind, the cursor, the next code) — or a reused site by its id, which adds no site (`provisionalDrawn` is false; the editor then draws its own ghost circle, `course-editor.md` §6.1) — spliced into the course's items (`spliceProvisional`): a control before the `insertAt`-th control visit (repeats counted), else before the finish, else last; a start replaces the course's start, a finish its finish (else they lead / end). The leg the visit splits takes no stored leg — no gaps, style, bends or corridor (they are keyed by the drawn neighbours) |
 | `appearance` | `{}` — the spec sizes × the document factor (decision "Sizes") |
-| `layout` (Layout mode, D7) | the sheet as `composePage` passes it (`course-layout.md` §1): its layout objects of both anchors before the course objects, `appearanceFromTemplate(template.appearance)` instead of `{}`, `viewOptions.overprintScale`, `window` (the frame grown by `RING_BLEED_UM`, `course.mapLayerWindow`) and `textValues`; and `page`, which the worker turns into the page part (`map-rendering.md` §5.2). So the course changes size on a mode switch when the template's multipliers are not 1 — the preview is the print |
+| `layout` (Layout mode, D7) | the sheet as `composePage` passes it (`course-layout.md` §1): the course objects (the sheet's layout objects are the page part's since F12, §3.6), `appearanceFromTemplate(template.appearance)` instead of `{}`, `window` (the frame grown by `RING_BLEED_UM`, `course.mapLayerWindow`) and `textValues`; and `page`, which the worker turns into the page part (`map-rendering.md` §5.2). So the course changes size on a mode switch when the template's multipliers are not 1 — the preview is the print |
 | `cutFeatures` | added by the worker: `cutFeaturesOfDocument(doc)` once per document load |
 
 **Reply.** The derivation (sites with number positions and leaders, legs
@@ -1033,8 +1088,8 @@ Row D2 (research 08 §4.5, §4.8). Purple / white objects stored per event
 with a **scope**, drawn by the layer with the course on screen and in
 print: out-of-bounds areas and lines, white-outs, a toner saver, free
 marked routes, map text and logos, and filter regions. They are the
-stored, scoped kind of a sheet's map-anchored layout objects (§3.6);
-those stay in the sheets (moving them is slice F's).
+stored, scoped kind of a sheet's map-anchored layout objects, which F12
+moved into them (§3.6).
 
 ### 8.1 Table and kinds
 
@@ -1051,7 +1106,7 @@ those stay in the sheets (moving them is slice F's).
 | `scope` | `JSONB` | `{ "all": true }` or `{ "courses": [uuid], "classes": [uuid] }` (§8.2); no foreign key |
 | `z` | `INT` default 0 | draw order among the event's objects (`z`, then `seq`) |
 | `version` | `BIGINT` default 0 | the §7 token (§8.4) |
-| `source` | `TEXT` NULL, CHECK `import` (migration `20261101130000_course_objects_source`; D1 deviation from D2's table) | `import` for what the importers and the backfill wrote (§6.4), NULL for an object drawn by hand; not on the wire |
+| `source` | `TEXT` NULL, CHECK `import` / `layout` (migrations `20261101130000_course_objects_source`; D1 deviation from D2's table; `layout` F12) | `import` for what the importers and the backfill wrote (§6.4; a re-import replaces exactly those), `layout` for what F12 moved from a template's or sheet's map-anchored layout objects (§3.6), NULL for an object drawn by hand; not on the wire |
 | `created_at`, `updated_at` | `TIMESTAMPTZ` | `set_updated_at` |
 
 `courseObjectBodySchema` (`packages/shared/src/course/objects.ts`)
@@ -1072,9 +1127,9 @@ issue message starting `OBJECT_GEOMETRY`.
 | `inset_frame` | ≥ 2 | — | reserved for micro insets: typed, refused on write (`PRECONDITION_FAILED`), never drawn |
 
 Sizes are **paper mm at the map's scale**, like the 7xx symbols: the
-geometry and a text's `fontSizeMm` are not divided by
-`viewOptions.overprintScale` (a sheet's layout objects are page mm and
-are; §3.6). The 7xx kinds take the library's dimensions × the document
+geometry and a text's `fontSizeMm` are not divided by the print
+enlargement (the page transform enlarges them with the map; F12 divided
+a moved text's page size once, §3.6). The 7xx kinds take the library's dimensions × the document
 factor × appearance (decision "Sizes"): 08 §4.5's per-object width,
 cross spacing, dash and white-out opacity are not stored (decision log,
 D2).
@@ -1331,7 +1386,7 @@ all-white corridor map); `edge` draws the boundary in purple.
   `widthMm = widthM × 1000 / document.mapScale` (§2 `document`), so the
   derivation's `DerivedLeg.corridor` is `{ widthMm, whiteMm, edge }`.
   `whiteMm` is paper mm at the base map's scale — the structure's frame,
-  like `bends` (§2) — and is not divided by `overprintScale`: printing at
+  like `bends` (§2) — and is not divided by the print enlargement: printing at
   another scale enlarges it with the map (§1 "Scale").
 - **Along the leg.** A corridor follows the leg's `points` (the previous
   site, the bends, the site), never its `pieces`: gaps and the clipping
@@ -1709,7 +1764,7 @@ its own (`<course>#<group>/<label>`).
 
 With `viewOptions.allVariations` the layer appends one colour row per
 label, in first-use order, **on top of the stack** after the
-layout-object rows and below a toner saver's white (`withTintColours`:
+object rows and below a toner saver's white (`withTintColours`:
 `course-tint:<label>`, named `Variation <label>`, CMYK from
 `VARIATION_TINTS` — six purples, distinct on screen, cycling), and draws
 with copies of 705 and 703 on those rows: a tinted structure's 705 legs
@@ -1798,12 +1853,17 @@ label.
 | unit (web) | `packages/web/src/lib/__tests__/course-layer-request.test.ts` | the §5 request rules (offsets only with the sheet or the editor; `autoCuts: false` only when off; F4: `overlayTypeOf`, crossing / map-issue sites never make the view all-controls, `setterMarks` and a leg's `crossing` passed through, `sheetCrossings`); the provisional visit (a control at a position, before the finish, past the end, repeats counted; start / finish replace or lead / end; a reused site adds no site, `provisionalDrawn` agrees with the site pushed (P4); the split leg loses its stored gaps; ignored without exactly one highlighted course); §8.2 scope by highlighted course over `inCourses`, all-controls = `all` only, parked nowhere; objects without scope / `z` / token / `inCourses` |
 | unit | `packages/shared/src/course/__tests__/objects.test.ts` | §8.1 each kind accepted (`hatch` included), short geometry / unknown props / an unknown `hatch` / bad filter props / Bézier region refused; §8.2 the scope truth table; §8.3 each kind onto its symbol (709 / 709.b / 709.c, the dangerous area and its boundaries for `hatch: "710"`, 708 / 711, 707, white-out), Bézier handles kept, text upper purple or own row and not divided by the enlargement, image corners, toner saver with and without a window and with Bézier handles (bezier flags in the hole ring only), `inset_frame` and `filter_region` draw nothing |
 | unit | `layer.test.ts` "a stored filter_region course object" | §8.3: the same region as the explicit one, after it; hides the document's 516 |
+| unit | `layer.test.ts` "course objects as F12 moved layout objects" | §3.6: white-out at upper white, 709 / 709.b / 709.c by border, a text's own row on top at paper mm (no division), the toner saver ring and its white row last (P1), `WINDOW_MISSING`, an image to `layer.images` as `{ graphicId, crop, rectUm }` |
+| pass-stream | `scenes.test.ts` "course-objects", `print/__tests__` page scenes "page-ring", "page-rotated" | §3.6: the fixtures' former map-anchored objects written as the course objects F12 makes; the stream snapshots unchanged byte for byte — the move draws the same |
+| integration | `course-objects-migration.test.ts` | §3.6 the F12 migration on a scratch database built to the migration before it: the guard refuses a solid fill, a black stroke and a stroked white-out of a live event, names each in the detail and changes nothing; after the runbook's fix-ups every kind maps (whiteout, legacy `whiteoutRect`, toner saver, 709 / .b / .c, 708 / 707 from purple lines and closed outlines, a template's own purple, text ÷ os with the latest map's scale and a sheet's print-scale override, image corners), scopes per row type (template, course / class / all-controls / setter sheets), `source = 'layout'`, `version 0`, `z` under a hand-drawn object, seq order; invisible objects removed; a soft-deleted event's refused object removed; club payloads stripped; page objects kept in order; every body parses; a second run changes nothing |
+| integration | `course-print.test.ts` "F12" | §3.6: a sheet's map-anchored white-out and text, migrated on the shared database, are `source = 'layout'` objects scoped to its course; the sheet keeps its page object; the composed page draws the white-out at upper white and the text at 4 mm on paper |
+| E2E | `course-editor.spec.ts` "F12" | §3.6: a legacy map-anchored white-out and 709 area seeded on a sheet and migrated: listed in Course mode scoped to the course, the map's ink under the white-out gone on the canvas, the sheet's `maps.pdf` one page with one more hatch |
 | unit | `packages/api/src/__tests__/version-conflict.test.ts` | §8.4: the object `CONFLICT` payload |
 | integration | `packages/api/src/__tests__/integration/course-objects.test.ts` | §8.4: every kind created and listed in draw order with public ids; `inset_frame`, unknown course / class, bad body refused; update advances the token, `hatch: "710"` round-trips, `"711"` refused; stale token → `CONFLICT` with the object now and nothing written, none = LWW, stale delete; reorder keeps tokens; kiosk-key read, viewer cannot write; §8.2 class scope through `course_id` and the pool, the same resolution on the wire (`inCourses`); §8.5 snapshot round trip verbatim |
 | integration | `course-print.test.ts` "course objects on the page" | §8.3 print: a sheet takes the objects in scope (all-controls: `all` only), they add passes over the map, `hatch: "710"` adds one hatch pass, a stored filter region hides map objects |
 | integration | `backup.test.ts` | §8.5: the dump's `course_objects` section |
 | E2E | `e2e/map-vector-layer.spec.ts` "a stored white-out course object paints the map white" | §8.3 viewer: an `all`-scoped white-out created through the API turns open yellow ground white on the GL canvas, yellow beside it unchanged |
-| unit (web) | `packages/web/src/map-gl/__tests__/worker-course.test.ts`, `engine.test.ts` | the dynamic bucket (`map-rendering.md` §5.2); a document boulder slits a circle, `viewOptions.autoCuts: false` drops it and keeps a stored circle gap (§3.4); P7: a toner saver whose first vertex is left of the window, one crossing its bottom with the first vertex inside, and a white-out outside path beyond both sides — the toner white covers the window outside the shape and not its inside (§3.6) |
+| unit (web) | `packages/web/src/map-gl/__tests__/worker-course.test.ts`, `engine.test.ts` | the dynamic bucket (`map-rendering.md` §5.2); a document boulder slits a circle, `viewOptions.autoCuts: false` drops it and keeps a stored circle gap (§3.4); P7: a toner saver whose first vertex is left of the window, one crossing its bottom with the first vertex inside, and a toner saver beyond both sides — the toner white covers the window outside the shape and not its inside (§3.6) |
 | E2E | `e2e/map-vector-layer.spec.ts`, `map-control-circles.spec.ts`, `map-multicourse.spec.ts` | lower purple under black at a crossing; labels under both pipelines (`map-rendering.md` §5.4) |
 | unit | `packages/shared/src/course/__tests__/checks.test.ts` | §9: a fixture per code — both distance thresholds (library, scale fallback), event-wide distances, same feature, codes below 31 / duplicate / invertible (and the upside-down table), sheets null / empty / outside, numbers from `collides` and missing labels (hidden visits skipped), descriptions, legs through areas (crossing and inside), 708 lines, course objects (711 skipped), free order, unpositioned items; output order; `checkObstaclesOfDocument` (applied match, source code, suggested match, hidden, Bézier handles, holes, points) and the codes' library names |
 | unit | `packages/shared/src/__tests__/control-label-placement.test.ts`, `course/__tests__/derive.test.ts` "number collisions" | §3.5: `collides` on a boxed-in number, absent on a clear map and a contested cluster |
@@ -1825,7 +1885,8 @@ label.
 | `packages/shared/src/course/cuts.ts` | `CUT_CODES`, `CUT_AIR_MM`, `circleCuts`, `legGaps`, `polylineLegGaps`, `cutFeaturesOfDocument`, `pointSymbolRadiusMm`, `cutSymbolRadiusMm`, `ocadCutSymbolRadiiMm`, `cutContextForScale` |
 | `packages/shared/src/course/derive.ts` | the geometry rules (§3.2–3.5), `legLengthMm` (§10.1), the resolved corridor (§10.2), `routedBends` and the crossing angle (§10.3) |
 | `packages/shared/src/course/corridor.ts` | `corridorGeometry`: the joined insides, the band and the edges (§10.2), on `polygon-clipping` |
-| `packages/shared/src/course/objects.ts` | layout objects (§3.6) |
+| `packages/shared/src/course/objects.ts` | course objects (§8): schema, scope, `courseObjects`; `pageObjects` for the page layer's layout objects (§3.6) |
+| `packages/api/prisma/migrations/20261109120000_map_anchored_objects_to_course_objects/` | F12's move of map-anchored layout objects (§3.6; runbook `docs/migrations/2026-f12-map-anchored-objects.md`) |
 | `packages/shared/src/course/layer.ts` | `courseLayer`, `courseRenderInput` |
 | `packages/shared/src/course/geojson.ts` | `courseLayerGeoJson` |
 | `packages/shared/src/course-maps/{overlay-geometry,control-label-placement}.ts` | `clipLine` (per-obstacle clearance), `subtractLegGaps`, `circleArcs`, `placeControlLabels` — shared with the legacy overlay |
@@ -1901,8 +1962,13 @@ label.
   as `hatch: "710"` (D5a added the prop only).
 - **Course objects, beyond D2** (§8): a toner saver on screen (the
   editor outlines it, `course-editor.md` §7), holes in a stored
-  filter region, `inset_frame` (micro insets, slice F), moving sheets'
-  map-anchored layout objects into `course_objects` (F).
+  filter region, `inset_frame` (micro insets, slice F).
+- **Fidelity of the F12 move** (§3.6): a purple line's stored width and a
+  template object's per-sheet text size (each sheet had its own
+  enlargement; the moved text takes the template's print scale) are not
+  kept; a sheet's object now draws on every sheet of its course (a map
+  exchange's other parts included) and a template's on every sheet of the
+  event. A per-sheet scope is not planned.
 - **Upper white at import**: insert the row in stage-7 alignment
   (`colour-align.ts`) at the next importer bump, so `courseColourStack`
   never has to remap.

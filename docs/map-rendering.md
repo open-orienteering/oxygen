@@ -2348,7 +2348,7 @@ The **page scenes** (C2, `@oxygen/shared/print` `pageScene`,
 | Scene | Page | Asserted |
 |---|---|---|
 | `page-sprint-a4` | A4 portrait, ISSprOM map 1:4 000 printed at 1:3 000, six-site course, IOF header block with pictograms, page title | map layer under `T_map` (×4/3) clipped to the frame; block geometry and pictograms; page text on top |
-| `page-ring` | 120 × 90 mm, ISOM 1:10 000; map-anchored white-out outside, page white-out box over the frame edge, page text and dashed line | white margin and ring, map inside the ring, page objects above the map |
+| `page-ring` | 120 × 90 mm, ISOM 1:10 000; a toner saver course object (a map-anchored white-out outside until F12), page white-out box over the frame edge, page text and dashed line | white margin and ring, map inside the ring, page objects above the map |
 | `page-rotated` | 120 × 90 mm, ISOM, window rotated 20° clockwise; map text | map, course and text turned together, corners outside the frame white |
 
 Not in the table: 04 §8 row 10 (minimum sizes) is a screen-backend rule
