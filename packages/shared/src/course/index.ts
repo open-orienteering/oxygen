@@ -29,6 +29,8 @@ export {
   structureControlItems,
   structureDiff,
   structureSiteIssues,
+  sectionsOf,
+  type CourseSection,
   type LegProps,
   type WireLegProps,
   wireLegPropsSchema,

@@ -14,6 +14,7 @@ import { COORD_FLAG } from "../render/pass-stream.js";
 import type { SymbolLibraryId } from "../symbol-library/index.js";
 import { courseDocumentContext } from "./context.js";
 import { routedBends } from "./derive.js";
+import { sectionsOf } from "./structure.js";
 import type { CourseLayerObject } from "./objects.js";
 import type { CourseDerivation, CourseStructure } from "./types.js";
 
@@ -25,6 +26,7 @@ export const COURSE_CHECK_CODES = [
   "CODE_DUPLICATE",
   "CODE_INVERTIBLE",
   "CONTROL_OUTSIDE_SHEET",
+  "EXCHANGE_WITHOUT_SHEET",
   "NUMBER_UNPLACED",
   "NUMBER_OVERLAPS",
   "DESCRIPTION_MISSING",
@@ -95,14 +97,21 @@ export interface CheckDocument {
   obstacles: readonly CheckObstacle[];
 }
 
+/**
+ * A sheet window as the checks read it: `section` is the part of a course
+ * split by map exchanges the sheet prints (§11; `course_maps.section_index`).
+ * Absent, the window stands for every part.
+ */
+export type CheckSheet = MapWindow & { section?: number };
+
 export interface CourseChecksInput {
   /** The course checked; null = the event-wide codes only. */
   structure: CourseStructure | null;
   /** Every site of the event. */
   sites: readonly CheckSite[];
   document: CheckDocument | null;
-  /** The course's sheet windows; null or empty skips `CONTROL_OUTSIDE_SHEET`. */
-  sheets: readonly MapWindow[] | null;
+  /** The course's sheet windows; null or empty skips `CONTROL_OUTSIDE_SHEET` and `EXCHANGE_WITHOUT_SHEET`. */
+  sheets: readonly CheckSheet[] | null;
   /** Course objects in scope: `oob_area` and 708 `oob_line` are obstacles. */
   objects?: readonly CourseLayerObject[];
   /** The layer's derivation of this course; absent skips `NUMBER_*`. */
@@ -291,7 +300,8 @@ export function courseChecks(input: CourseChecksInput): CourseCheck[] {
     const visits = structure.items
       .map((item) => ({ item, site: siteById.get(item.siteId) }))
       .filter((v): v is { item: (typeof structure.items)[number]; site: CheckSite } => v.site !== undefined);
-    const roleOf = (v: (typeof visits)[number]) => v.item.role ?? v.site.kind;
+    // A map exchange is a numbered control on both its parts (§11).
+    const roleOf = (v: (typeof visits)[number]) => v.item.role ?? (v.site.kind === "map_exchange" ? "control" : v.site.kind);
     const once = <T extends { site: CheckSite }>(list: T[]) => {
       const seen = new Set<string>();
       return list.filter((v) => !seen.has(v.site.id) && seen.add(v.site.id));
@@ -300,14 +310,33 @@ export function courseChecks(input: CourseChecksInput): CourseCheck[] {
 
     if (input.sheets && input.sheets.length > 0) {
       const sheets = input.sheets;
+      // The parts (§11) over the drawn sequence; one part when the course has no exchange.
+      const drawnVisits = visits.filter((v) => positioned(v.site) && v.site.kind !== "crossing_point" && v.site.kind !== "map_issue");
+      const parts = sectionsOf(drawnVisits, (v) => v.site.kind === "map_exchange");
+      const covers = (w: CheckSheet, part: number) => parts.length < 2 || w.section === undefined || w.section === part;
+      const outside = new Set<string>();
+      drawnVisits.forEach((v, i) => {
+        const own = parts.filter((p) => p.from <= i && i <= p.to);
+        if (!sheets.some((w) => own.some((p) => covers(w, p.index)) && pointInWindow(v.site, w))) outside.add(v.site.id);
+      });
       for (const { site } of once(visits.filter((v) => positioned(v.site)))) {
-        if (!sheets.some((w) => pointInWindow(site, w))) siteCheck("CONTROL_OUTSIDE_SHEET", site);
+        if (outside.has(site.id)) siteCheck("CONTROL_OUTSIDE_SHEET", site);
+      }
+      if (parts.length >= 2) {
+        for (const p of parts) {
+          if (sheets.some((w) => covers(w, p.index))) continue;
+          const exchange = drawnVisits[p.index === 0 ? p.to : p.from].site;
+          out.push({ code: "EXCHANGE_WITHOUT_SHEET", siteIds: [exchange.id], at: { x: exchange.x, y: exchange.y }, params: { part: p.index + 1, code: exchange.code } });
+        }
       }
     }
 
     if (input.derivation) {
       const derived = new Map(input.derivation.sites.map((s) => [s.id, s]));
-      const controlVisits = visits.filter((v) => roleOf(v) === "control");
+      // One part drawn (§11): the numbers of that part's visits only.
+      const course = input.derivation.courses[0];
+      const inPart = course?.section ? new Set(course.sequence.map((e) => e.siteId)) : null;
+      const controlVisits = visits.filter((v) => roleOf(v) === "control" && (!inPart || inPart.has(v.site.id)));
       for (const { site } of once(controlVisits.filter((v) => !v.item.numberHidden))) {
         if (!derived.get(site.id)?.label) siteCheck("NUMBER_UNPLACED", site);
       }

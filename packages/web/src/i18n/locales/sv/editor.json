@@ -64,6 +64,7 @@
   "check_CODE_DUPLICATE": "Kod {{code}} används på mer än en kontroll",
   "check_CODE_INVERTIBLE": "Koderna {{a}} och {{b}} kan förväxlas upp och ner",
   "check_CONTROL_OUTSIDE_SHEET": "{{code}} ligger utanför banans alla kartblad",
+  "check_EXCHANGE_WITHOUT_SHEET": "Del {{part}} saknar kartblad — Export skapar det, eller lägg till ett i Layout-läget",
   "check_NUMBER_UNPLACED": "{{code}} har inget nummer på kartan (inte placerad)",
   "check_NUMBER_OVERLAPS": "Numret för {{code}} överlappar en ring, ett nummer eller en linje",
   "check_DESCRIPTION_MISSING": "{{code}} saknar kontrollbeskrivning",
