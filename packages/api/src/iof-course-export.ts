@@ -59,8 +59,8 @@ export interface ExportCourseControl {
   specialInstruction?: ExportSpecialInstruction;
   /** Metres of the taped route (`TapedRoute` only). */
   tapedRouteLengthM?: number;
-  /** The bends of the leg into this row, paper mm — Purple Pen's `<leg>`; IOF has no field. */
-  bends?: ReadonlyArray<{ x: number; y: number }>;
+  /** The bends of the leg into this row, paper mm, handles as offsets (F13) — Purple Pen's `<leg>`; IOF has no field. */
+  bends?: ReadonlyArray<{ x: number; y: number; hIn?: { x: number; y: number }; hOut?: { x: number; y: number } }>;
 }
 
 export interface ExportCourse {

@@ -14,6 +14,7 @@ import {
   courseLengthM,
   type GeometrySeqControl,
 } from "../course-geometry.js";
+import type { course } from "@oxygen/shared";
 
 const seq = (
   entries: Array<[string, GeometrySeqControl["type"], number, number]>,
@@ -141,6 +142,22 @@ describe("legs along their bends (F1, course-layer.md §4.1, §10.1)", () => {
     // (10,10) → (10,50) → (40,10): the crossing point is the corner.
     s[1].via = { id: "p", xMm: 10, yMm: 50 };
     expect(legDistancesMm(editorCourseLayer("c1", s))).toEqual([90, 40]);
+  });
+});
+
+describe("curved legs (F13, course-layer.md §4.1, §10.1)", () => {
+  // (40,10) → (30,10) ⌒ quarter circle r 20 about (10,10) ⌒ (10,30) → (10,40): 20 + 10π mm.
+  const K = 0.5522847498 * 20;
+  const curvedSeq = (bends: course.CourseLegProps["bends"]): GeometrySeqControl[] => [
+    { id: "s", code: "S1", type: "Start", xMm: 40, yMm: 10 },
+    { id: "a", code: "31", type: "Control", xMm: 10, yMm: 40, leg: { bends } },
+  ];
+
+  it("measures a curved leg along the curve; the same bends as corners along the corners", () => {
+    const [curved] = legDistancesMm(editorCourseLayer("c1", curvedSeq([{ x: 30, y: 10, hOut: { x: 0, y: K } }, { x: 10, y: 30, hIn: { x: K, y: 0 } }])));
+    expect(Math.abs(curved - (20 + 10 * Math.PI))).toBeLessThan(0.02);
+    expect(legDistancesMm(editorCourseLayer("c1", curvedSeq([{ x: 30, y: 10 }, { x: 10, y: 30 }])))).toEqual([20 + Math.sqrt(800)]);
+    expect(courseLengthM([curved], 10000)).toBe(Math.round((20 + 10 * Math.PI) * 10));
   });
 });
 

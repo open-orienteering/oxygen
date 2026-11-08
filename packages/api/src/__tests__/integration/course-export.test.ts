@@ -25,6 +25,7 @@ import {
 } from "../../course-export.js";
 import { parseIOFCourseData } from "../../iof-course-parser.js";
 import { parsePpenCourseData } from "../../ppen-course-parser.js";
+import { course } from "@oxygen/shared";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const FIXTURE = resolve(__dirname, "../../../../../e2e/test.ocd");
@@ -249,6 +250,36 @@ describe("lengths along the legs (F1 Q2 B, row F9)", () => {
     const p = ppen.courses.find((c) => c.name === "Export Bent")!;
     expect(p.controls[1].bends).toEqual([{ x: 10, y: 30 }]);
     expect(p.controls.slice(1).map((cc) => cc.legLength)).toEqual(legs);
+    await caller.course.delete({ id });
+  });
+});
+
+describe("a curved leg (F13)", () => {
+  it("IOF LegLengths equal the stored legs along the curve; Purple Pen carries the curve flattened at 0.1 mm", async () => {
+    const { id } = await caller.course.create({ name: "Export Curved" });
+    // Start (0, 0.5) ⌒ arched through (10, 30) ⌒ 31 (20, 0.5).
+    const arch = { x: 10, y: 30, hIn: { x: -6, y: 0 }, hOut: { x: 6, y: 0 } };
+    await caller.course.setStructure({
+      courseId: id,
+      structure: { version: 1, id: "c", orderMode: "ordered", items: [{ siteId: 901 }, { siteId: 31, leg: { bends: [arch] } }, { siteId: 32 }, { siteId: 902 }] },
+    });
+    const row = await ctx.db.course.findFirstOrThrow({ where: { eventId: ctx.eventId, seq: id } });
+    const legs = storedLegs(row.legs);
+    const curveMm = course.legLengthMm(course.legPolylineOf({ x: 0, y: 0.5 }, [arch], { x: 20, y: 0.5 }));
+    expect(legs[0]).toBe(Math.round((curveMm * mapScale) / 1000));
+    // Not the corners' length through the same bend.
+    expect(legs[0]).not.toBe(Math.round((2 * Math.hypot(10, 29.5) * mapScale) / 1000));
+
+    const iof = parseIOFCourseData(await buildEventCourseDataXml(ctx.db, { id: ctx.eventId, name: ctx.event.name }));
+    const exported = iof.courses.find((c) => c.name === "Export Curved")!;
+    expect(exported.controls.slice(1).map((cc) => cc.legLength)).toEqual(legs);
+    expect(exported.length).toBe(row.lengthM);
+
+    const ppen = parsePpenCourseData(await buildEventPpenXml(ctx.db, { id: ctx.eventId, name: ctx.event.name }));
+    const p = ppen.courses.find((c) => c.name === "Export Curved")!;
+    expect(p.controls[1].bends!.length).toBeGreaterThan(3);
+    expect(p.controls[1].bends).toContainEqual({ x: 10, y: 30 });
+    expect(Math.abs(p.controls[1].legLength! - legs[0])).toBeLessThanOrEqual(1);
     await caller.course.delete({ id });
   });
 });
