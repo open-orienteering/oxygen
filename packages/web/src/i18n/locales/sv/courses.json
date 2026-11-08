@@ -38,6 +38,7 @@
   "variantCount": "{{count}} gaffling",
   "variantCount_other": "{{count}} gafflingar",
   "variationsSequenceHint": "Banan har gafflingar: sekvensen kommer från banans struktur och gafflingarna nedan skrivs från den.",
+  "variantSequenceHint": "Gaffling {{key}} av {{root}}: sekvensen skrivs från huvudbanans struktur och ändras i baneditorn.",
   "variantOf": "Gaffling {{key}} av {{root}}, skrivs av huvudbanans struktur",
   "removeCourse": "Ta bort bana",
   "removeConfirm": "Ta bort bana \"{{name}}\"?",

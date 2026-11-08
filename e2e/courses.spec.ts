@@ -187,6 +187,30 @@ test.describe("Courses Page", () => {
       await expect(page.getByTestId("course-variations-hint")).toBeVisible({ timeout: 5000 });
       await expect(page.getByTestId("course-detail-controls")).toBeDisabled();
       await expect(page.getByTestId("course-order-mode")).toBeDisabled();
+      await expect(rootRow).toHaveAttribute("aria-expanded", "true");
+
+      // A variant's row expands like the root's (F17): same ?course= param, one open
+      // row, its own sequence read-only; the root's detail closes.
+      const variantSeq = Number((await variantRows.nth(1).getAttribute("data-testid"))!.replace("course-variant-row-", ""));
+      await variantRows.nth(1).getByText(`${name} B`).click();
+      await expect(page).toHaveURL(new RegExp(`course=${variantSeq}(&|$)`));
+      await expect(variantRows.nth(1)).toHaveAttribute("aria-expanded", "true");
+      await expect(rootRow).toHaveAttribute("aria-expanded", "false");
+      await expect(variantRows.nth(0)).toHaveAttribute("aria-expanded", "false");
+      await expect(page.getByTestId("course-detail-controls")).toHaveValue("181;183;184");
+      await expect(page.getByTestId("course-detail-controls")).toBeDisabled();
+      await expect(page.getByTestId("course-detail-name")).toBeDisabled();
+      await expect(page.getByTestId("course-variant-hint")).toBeVisible();
+      await expect(page.getByTestId("course-variations-hint")).toHaveCount(0);
+      await expect(page.getByTestId("course-order-mode")).toHaveCount(0);
+      await expect(variantRows.nth(1).locator("input, button, a")).toHaveCount(1);
+      // Deep link: the variant's detail reopens from the URL.
+      await page.goto(`/itest/courses?course=${variantSeq}`);
+      await expect(page.getByTestId("course-detail-controls")).toHaveValue("181;183;184", { timeout: 10000 });
+      await expect(variantRows.nth(1)).toHaveAttribute("aria-expanded", "true");
+      // Clicking it again closes it.
+      await variantRows.nth(1).getByText(`${name} B`).click();
+      await expect(page.getByTestId("course-detail-controls")).toHaveCount(0);
     } finally {
       await post("course.delete", { id: root });
       for (const id of controls) await post("control.delete", { id });
