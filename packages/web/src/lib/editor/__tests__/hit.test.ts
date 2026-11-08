@@ -162,8 +162,15 @@ describe("editorHitAt (docs/course-editor.md §5)", () => {
     expect(uiLegs.map((l) => [l.courseId, l.index])).toEqual([["c1", 0]]);
     expect(editorHitAt(reply.hit!, { x: 20, y: 10.1 }, 0.5, [], [], undefined, uiLegs)).toEqual({ kind: "leg", courseId: "c1", index: 0 });
     expect(editorHitAt(reply.hit!, { x: 20, y: 12 }, 0.5, [], [], undefined, uiLegs)).toBeNull();
-    // A circle at its end still wins; a marked route inside a corridor keeps its 707 piece and is no UI leg.
-    expect(editorHitAt(reply.hit!, { x: 40, y: 10 }, 0.5, [], [], undefined, uiLegs)).toEqual({ kind: "site", id: "31" });
+    // F19: h 2 < R 2.5, so 31's circle opens towards S — drawn open arcs, never a cut: its centre hits only through
+    // the UI-layer circle (as a gapped one, §5), its far rim through the arc, its opening not at all.
+    expect(reply.derivation!.sites.find((x) => x.id === "31")!.cuts).toEqual([]);
+    expect(editorHitAt(reply.hit!, { x: 40, y: 10 }, 0.5, [], [], undefined, uiLegs)).toBeNull();
+    const ui31 = [{ id: "31", x: 40, y: 10, radiusMm: 2.5 }];
+    expect(editorHitAt(reply.hit!, { x: 40, y: 10 }, 0.5, ui31, [], undefined, uiLegs)).toEqual({ kind: "site", id: "31" });
+    expect(editorHitAt(reply.hit!, { x: 42.5, y: 10 }, 0.1)).toEqual({ kind: "site", id: "31" });
+    expect(editorHitAt(reply.hit!, { x: 37.5, y: 10 }, 0.1)).toBeNull();
+    // A marked route inside a corridor keeps its 707 piece and is no UI leg.
     const routed = courseReply({ structure: { ...structure, items: [{ siteId: "S" }, { siteId: "31", leg: { corridor, style: "marked_route" as const } }, { siteId: "32" }, { siteId: "F" }] } });
     expect(uiLegsOf(routed.derivation!.courses)).toEqual([]);
     expect(editorHitAt(routed.hit!, { x: 20, y: 10.1 }, 0.5)).toEqual({ kind: "leg", courseId: "c1", index: 0 });
