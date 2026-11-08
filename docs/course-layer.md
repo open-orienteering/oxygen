@@ -1402,7 +1402,7 @@ drawing — 08 §7's fixture had numbering restart per section.
   is the site's kind — the stored structure gains no field (08 §4.3
   names no section marker). The layer splits its positioned sequence
   (unplaced sites split nothing), `autoSheets` counts the placed exchange
-  sites of the course mirror (`partCountOf`), `resolveMapLayout` splits
+  visits of the course mirror (`partCountOf`), `resolveMapLayout` splits
   the layout's placed controls, `courseChecks` the positioned visits —
   the same parts everywhere.
 - **`viewOptions.section`** draws one part of a **single** structure with
