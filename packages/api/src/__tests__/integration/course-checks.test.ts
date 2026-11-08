@@ -91,6 +91,23 @@ describe("course.checks", () => {
     expect(codesOf(await caller.course.checks({ courseId }))).not.toContain("LEG_CROSSES_OOB");
   });
 
+  it("a leg through a crossing point on the building's wall is exempt there (F4, §9.3)", async () => {
+    const p = await caller.control.create({ kind: "crossing_point", xpos: 48, ypos: 42 });
+    const { id } = await caller.course.create({ name: "Crossed" });
+    const detail = await caller.course.detail({ id: courseId });
+    const items = detail.structure!.items.map((item) =>
+      "siteId" in item && item.siteId === 102 ? { ...item, leg: { crossing: { controlId: p.id } } } : item,
+    );
+    await caller.course.setStructure({ courseId: id, structure: { ...detail.structure!, items } });
+    const crossed = await caller.course.checks({ courseId: id });
+    expect(codesOf(crossed)).not.toContain("LEG_THROUGH_UNCROSSABLE");
+    // The crossing point is no control: no distance or description check names it.
+    expect(crossed.flatMap((c) => c.siteIds)).not.toContain(p.id);
+    expect(codesOf(await caller.course.checks({ courseId }))).toContain("LEG_THROUGH_UNCROSSABLE");
+    await caller.course.delete({ id });
+    await caller.control.delete({ id: p.id });
+  });
+
   it("setStructure returns the same list and saves regardless", async () => {
     const detail = await caller.course.detail({ id: courseId });
     const res = await caller.course.setStructure({ courseId, structure: detail.structure!, baseVersion: detail.version });

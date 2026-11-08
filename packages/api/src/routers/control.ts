@@ -1074,6 +1074,15 @@ export const controlRouter = router({
             syncs.push(await syncVariants(tx, ctx.event.id, courseId));
           } else {
             await rewriteStructureFromColumns(tx, ctx.event.id, courseId);
+            // The rewrite carries the legs over; a leg through the deleted crossing point loses it (§10.3).
+            const after = await tx.course.findUniqueOrThrow({ where: { id: courseId }, select: { structure: true } });
+            const parsed = courseShared.courseStructureSchema.safeParse(after.structure);
+            if (parsed.success) {
+              const pruned = courseShared.pruneSiteFromStructure(parsed.data, c.id);
+              if (JSON.stringify(pruned) !== JSON.stringify(parsed.data)) {
+                await tx.course.update({ where: { id: courseId }, data: { structure: pruned as unknown as PrismaNs.InputJsonValue } });
+              }
+            }
           }
         }
         const variantSync = mergeSyncs(syncs);

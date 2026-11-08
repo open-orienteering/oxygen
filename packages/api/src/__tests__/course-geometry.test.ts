@@ -135,6 +135,13 @@ describe("legs along their bends (F1, course-layer.md §4.1, §10.1)", () => {
     expect(legDistancesMm(editorCourseLayer("c1", bent({ corridor: { widthM: 50, edge: true, whiteMm: 1, whiteOpacity: 1 } })))).toEqual([30, 40]);
     expect(courseLengthM(legDistancesMm(editorCourseLayer("c1", bent({ bends: [{ x: 10, y: 50 }] }))), 10000)).toBe(1300);
   });
+
+  it("measures a leg through its crossing point (F4, §10.3)", () => {
+    const s = bent(undefined);
+    // (10,10) → (10,50) → (40,10): the crossing point is the corner.
+    s[1].via = { id: "p", xMm: 10, yMm: 50 };
+    expect(legDistancesMm(editorCourseLayer("c1", s))).toEqual([90, 40]);
+  });
 });
 
 describe("courseLengthM", () => {
