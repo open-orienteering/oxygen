@@ -75,7 +75,7 @@ type RawControl = Record<string, unknown>;
 type RawCourse = Record<string, unknown>;
 type RawCourseControl = Record<string, unknown>;
 
-function controlKind(raw: RawControl): ParsedControl["type"] | null {
+function controlKind(raw: RawControl): ParsedCourseControl["type"] | null {
   const kind = safeStr(raw["@_kind"]).toLowerCase();
   if (kind === "start") return "Start";
   if (kind === "finish") return "Finish";
@@ -149,7 +149,7 @@ export function parsePpenCourseData(xmlContent: string): ParsedCourseData {
   const byInternalId = new Map<
     string,
     | { skip: true }
-    | { skip?: false; publicId: string; type: ParsedControl["type"]; mapX: number; mapY: number }
+    | { skip?: false; publicId: string; type: ParsedCourseControl["type"]; mapX: number; mapY: number }
   >();
   const controls: ParsedControl[] = [];
   let startN = 0;
