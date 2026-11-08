@@ -156,18 +156,15 @@ describe("geometry editing on a selected object (docs/course-editor.md §7 \"Edi
     expect(shapesOf(selectBinding(selectOpts({ selected: square(4) })), "editor-object-grip")).toHaveLength(0);
   });
 
-  it("Alt-drag on a vertex pulls symmetric handles (Shift: 45°); one write on release", () => {
+  it("Alt-drag on a vertex moves it like a plain drag (F18: no handles pulled); one write on release", () => {
     const o = selectOpts({ selected: square(4) });
     const b = selectBinding(o);
     expect(b.onPointerDown!(ptr(10, 0, { alt: true }))).toBe(true);
     b.onPointerDrag!({ x: 13, y: 4 }, { shift: false, alt: true });
-    expect(o.onObjectDraft).toHaveBeenLastCalledWith(4, expect.arrayContaining([{ x: 10, y: 0, hIn: { x: -3, y: -4 }, hOut: { x: 3, y: 4 } }]));
-    b.onPointerDrag!({ x: 20, y: 1 }, { shift: true, alt: true });
-    b.onPointerUp!({ x: 20, y: 1 });
+    expect(o.onObjectDraft).toHaveBeenLastCalledWith(4, expect.arrayContaining([{ x: 13, y: 4 }]));
+    b.onPointerUp!({ x: 13, y: 4 });
     expect(o.onObjectMoved).toHaveBeenCalledTimes(1);
-    const v = movedTo(o, 0)[1];
-    expect(v).toMatchObject({ x: 10, y: 0 });
-    expect(v.hOut!.y).toBeCloseTo(0);
+    expect(movedTo(o, 0)[1]).toEqual({ x: 13, y: 4 });
   });
 
   it("a filter region's Alt-drag moves the vertex (no handles)", () => {
@@ -179,15 +176,22 @@ describe("geometry editing on a selected object (docs/course-editor.md §7 \"Edi
     expect(movedTo(o, 0)[1]).toEqual({ x: 12, y: 0 });
   });
 
-  it("Alt-click on a vertex with handles retracts them; on a corner nothing; a plain click focuses the vertex", () => {
+  it("Alt-click toggles a vertex: handles → corner, corner → smooth (F18); a filter region nothing; a plain click focuses the vertex", () => {
     const o = selectOpts({ selected: curved(4), objects: [curved(4)] });
     const b = selectBinding(o);
     b.onPointerDown!(ptr(0, 0, { alt: true }));
     b.onPointerUp!({ x: 0, y: 0 });
     expect(movedTo(o, 0)[0]).toEqual({ x: 0, y: 0 });
+    // A corner becomes smooth: handles from its neighbours, (next − prev) / 6.
     b.onPointerDown!(ptr(10, 10, { alt: true }));
     b.onPointerUp!({ x: 10, y: 10 });
-    expect(o.onObjectMoved).toHaveBeenCalledTimes(1);
+    expect(o.onObjectMoved).toHaveBeenCalledTimes(2);
+    expect(movedTo(o, 1)[2]).toEqual({ x: 10, y: 10, hIn: { x: 10 / 6, y: -10 / 6 }, hOut: { x: -10 / 6, y: 10 / 6 } });
+    const f = selectOpts({ selected: square(4, "filter_region"), objects: [square(4, "filter_region")] });
+    const bf = selectBinding(f);
+    bf.onPointerDown!(ptr(10, 10, { alt: true }));
+    bf.onPointerUp!({ x: 10, y: 10 });
+    expect(f.onObjectMoved).not.toHaveBeenCalled();
     b.onPointerDown!(ptr(10, 10));
     b.onPointerUp!({ x: 10, y: 10 });
     expect(o.onVertexFocus).toHaveBeenLastCalledWith(2);
@@ -211,15 +215,18 @@ describe("geometry editing on a selected object (docs/course-editor.md §7 \"Edi
     expect(movedTo(o, 1)[0]).toEqual({ x: 0, y: 0, hIn: { x: -1, y: -1 }, hOut: { x: 0, y: 2 } });
   });
 
-  it("double-click on an edge inserts a vertex there; inside the area, on a vertex or on a text nothing", () => {
+  it("double-click on an edge inserts a smooth vertex there (F18), Alt a corner; inside the area, on a vertex or on a text nothing", () => {
     const o = selectOpts({ selected: square(4) });
     const b = selectBinding(o);
     b.onDoubleClick!(ptr(5, 0.3));
-    expect(o.onObjectMoved).toHaveBeenCalledWith(4, [{ x: 0, y: 0 }, { x: 5, y: 0 }, { x: 10, y: 0 }, { x: 10, y: 10 }, { x: 0, y: 10 }]);
+    // Collinear handles from its neighbours: the edge stays straight until the vertex moves.
+    expect(o.onObjectMoved).toHaveBeenCalledWith(4, [{ x: 0, y: 0 }, { x: 5, y: 0, hIn: { x: -10 / 6, y: -0 }, hOut: { x: 10 / 6, y: 0 } }, { x: 10, y: 0 }, { x: 10, y: 10 }, { x: 0, y: 10 }]);
     expect(o.onVertexFocus).toHaveBeenLastCalledWith(1);
+    b.onDoubleClick!(ptr(5, 0.3, { alt: true }));
+    expect(movedTo(o, 1)).toEqual([{ x: 0, y: 0 }, { x: 5, y: 0 }, { x: 10, y: 0 }, { x: 10, y: 10 }, { x: 0, y: 10 }]);
     b.onDoubleClick!(ptr(5, 5));
     b.onDoubleClick!(ptr(10, 0.2));
-    expect(o.onObjectMoved).toHaveBeenCalledTimes(1);
+    expect(o.onObjectMoved).toHaveBeenCalledTimes(2);
     const text = { ...square(5, "text"), geometry: [{ x: 0, y: 0 }] } as course.CourseObject;
     const t = selectOpts({ selected: text, objects: [text] });
     selectBinding(t).onDoubleClick!(ptr(0.2, 0));

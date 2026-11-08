@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
   dragGeometry, geometryShapes, insertAtEdge, pressGeometry, releaseGeometry, type GeometryShapeIds,
 } from "../geometry-gestures";
-import { vertexRule, type Vertex } from "../geometry-edit";
+import { smoothHandles, vertexRule, type Vertex } from "../geometry-edit";
 
 // The gestures are in the path's own units (D16): the course editor's paper mm, Layout's page mm. The caller
 // converts the pointer and the reach; `selectBinding`'s cases in bindings.test.ts are the behaviour net.
@@ -19,8 +19,6 @@ describe("geometry gestures (docs/course-editor.md §7 \"Editing geometry\")", (
     expect(pressGeometry(curved, area, { pt: { x: 5, y: 5 }, reach: 0.5, shift: false }, false)).toBeNull();
     // The caller's hit-test said "on the body" (an open line, a text): the whole path.
     expect(pressGeometry(curved, area, { pt: { x: 5, y: 5 }, reach: 0.5, shift: false }, true)).toMatchObject({ vertex: null });
-    // Alt on a vertex pulls handles only for kinds that curve.
-    expect(pressGeometry(square, vertexRule("filter_region"), { pt: { x: 0, y: 0 }, reach: 0.5, alt: true, shift: false }, false)).toMatchObject({ alt: false });
   });
 
   it("a vertex drag moves it by the whole offset, in the caller's units; until it moves, no geometry", () => {
@@ -30,16 +28,22 @@ describe("geometry gestures (docs/course-editor.md §7 \"Editing geometry\")", (
     expect(releaseGeometry(d, { x: 12, y: 13 }, area)).toEqual({ kind: "commit", geometry: [square[0], square[1], { x: 12, y: 13 }, square[3]] });
   });
 
-  it("Alt-drag on a vertex pulls symmetric handles (Shift: 45°); Alt-click retracts", () => {
+  it("Alt-drag on a vertex moves it like a plain drag (F18: no handles pulled)", () => {
     const d = pressGeometry(square, area, { pt: { x: 10, y: 0 }, reach: 0.5, alt: true, shift: false }, false)!;
-    const g = dragGeometry(d, { x: 14, y: 1 }, { shift: true, alt: true })!;
-    expect(g[1].hOut!.y).toBeCloseTo(0, 9);
-    expect(g[1].hIn!.x).toBeLessThan(0);
-    const curved = releaseGeometry(d, { x: 14, y: 1 }, area);
-    expect(curved?.kind).toBe("commit");
-    const geometry = (curved as { geometry: Vertex[] }).geometry;
-    const click = pressGeometry(geometry, area, { pt: { x: 10, y: 0 }, reach: 0.5, alt: true, shift: false }, false)!;
-    expect(releaseGeometry(click, { x: 10, y: 0 }, area)).toEqual({ kind: "commit", geometry: square });
+    expect(dragGeometry(d, { x: 14, y: 1 }, { shift: false, alt: true })![1]).toEqual({ x: 14, y: 1 });
+    expect(releaseGeometry(d, { x: 14, y: 1 }, area)).toEqual({ kind: "commit", geometry: [square[0], { x: 14, y: 1 }, ...square.slice(2)] });
+  });
+
+  it("Alt-click toggles a vertex corner ⇄ smooth; an open end and kinds without curves write nothing", () => {
+    const altClick = (g: Vertex[], rule: typeof area, at: { x: number; y: number }) =>
+      releaseGeometry(pressGeometry(g, rule, { pt: at, reach: 0.5, alt: true, shift: false }, false)!, at, rule);
+    const smooth = altClick(square, area, { x: 10, y: 0 });
+    expect(smooth).toEqual({ kind: "commit", geometry: smoothHandles(square, 1, true) });
+    expect(altClick((smooth as { geometry: Vertex[] }).geometry, area, { x: 10, y: 0 })).toEqual({ kind: "commit", geometry: square });
+    // A closed area wraps at vertex 0; an open line's end has no smooth form.
+    expect(altClick(square, area, { x: 0, y: 0 })).toEqual({ kind: "commit", geometry: smoothHandles(square, 0, true) });
+    expect(altClick(square.slice(0, 3), vertexRule("oob_line"), { x: 0, y: 0 })).toBeNull();
+    expect(altClick(square, vertexRule("filter_region"), { x: 10, y: 0 })).toBeNull();
   });
 
   it("a click focuses a vertex (none for fixed kinds), on the body unfocuses; a cancelled drag drops its draft", () => {
@@ -54,11 +58,28 @@ describe("geometry gestures (docs/course-editor.md §7 \"Editing geometry\")", (
     expect(releaseGeometry(drag, null, area)).toEqual({ kind: "cancel" });
   });
 
-  it("a double-click on an edge inserts there, off the vertices; the new index is returned", () => {
-    expect(insertAtEdge(square, area, { x: 5, y: 10.2 }, 0.5)).toEqual({ geometry: [...square.slice(0, 3), { x: 5, y: 10 }, square[3]], index: 3 });
+  it("a double-click on an edge inserts a smooth vertex there, off the vertices; Alt a corner; the new index is returned", () => {
+    const withNew = [...square.slice(0, 3), { x: 5, y: 10 }, square[3]];
+    // Smooth on a straight edge: collinear handles, so the shape stays until the vertex moves.
+    const smooth = insertAtEdge(square, area, { x: 5, y: 10.2 }, 0.5)!;
+    expect(smooth).toEqual({ geometry: smoothHandles(withNew, 3, true), index: 3 });
+    expect(smooth.geometry[3].hOut!.y).toBeCloseTo(0, 9);
+    expect(insertAtEdge(square, area, { x: 5, y: 10.2 }, 0.5, true)).toEqual({ geometry: withNew, index: 3 });
+    // A filter region is a polygon: a corner, Alt or not.
+    expect(insertAtEdge(square, vertexRule("filter_region"), { x: 5, y: 10.2 }, 0.5)).toEqual({ geometry: withNew, index: 3 });
     expect(insertAtEdge(square, area, { x: 0.1, y: 0 }, 0.5)).toBeNull();
     expect(insertAtEdge(square, area, { x: 5, y: 5 }, 0.5)).toBeNull();
     expect(insertAtEdge(square.slice(0, 2), vertexRule("image"), { x: 5, y: 0 }, 0.5)).toBeNull();
+  });
+
+  it("on a curve the split keeps the shape (the new vertex smooth); Alt retracts the new vertex's handles", () => {
+    const curved: Vertex[] = [{ x: 0, y: 0, hOut: { x: 4, y: -4 } }, { x: 10, y: 0, hIn: { x: -4, y: -4 } }, square[2], square[3]];
+    const split = insertAtEdge(curved, area, { x: 5, y: -3 }, 0.5)!;
+    expect(split.index).toBe(1);
+    expect(split.geometry[1].hIn && split.geometry[1].hOut).toBeTruthy();
+    const corner = insertAtEdge(curved, area, { x: 5, y: -3 }, 0.5, true)!;
+    expect(corner.geometry[1]).toEqual({ x: split.geometry[1].x, y: split.geometry[1].y });
+    expect(corner.geometry[0]).toEqual(split.geometry[0]);
   });
 
   it("shapes: the outline, a handle per vertex (focused marked), a grip per handle, with the caller's ids", () => {

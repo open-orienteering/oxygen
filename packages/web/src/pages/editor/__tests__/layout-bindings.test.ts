@@ -229,19 +229,24 @@ describe("V on a selected path: the course editor's geometry gestures (D16, docs
     expect(c.onCommit).toHaveBeenCalledTimes(1);
   });
 
-  it("Alt-drag on a vertex pulls symmetric handles in page mm; Alt-click retracts them", () => {
-    const { c, b } = edit();
+  it("Alt-drag on a vertex moves it (F18), snapped with the grid as any vertex drag; Alt-click toggles corner / smooth in page mm", () => {
+    const { c, b } = edit({ snapping: true });
     expect(b.onPointerDown!(at(40, 110, { alt: true }))).toBe(true);
-    b.onPointerDrag!(view(40, 120), { shift: false, alt: true });
-    b.onPointerUp!(view(40, 120));
-    const o = committed(c);
-    expect(o.points[3].hOut!.x).toBeCloseTo(0, 9);
-    expect(o.points[3].hOut!.y).toBeCloseTo(10, 9);
-    expect(o.points[3].hIn!.y).toBeCloseTo(-10, 9);
+    b.onPointerDrag!(view(41.4, 120.6), { shift: false, alt: true });
+    b.onPointerUp!(view(41.4, 120.6));
+    expect(committed(c).points[3]).toEqual({ x: 41, y: 121 });
     const r = edit();
     r.b.onPointerDown!(at(90, 60, { alt: true }));
     r.b.onPointerUp!(view(90, 60));
     expect(committed(r.c).points[1]).toEqual({ x: 90, y: 60 });
+    // A corner becomes smooth: (next − prev) / 6 in page mm, the ring wrapped at vertex 3.
+    const s = edit();
+    s.b.onPointerDown!(at(40, 110, { alt: true }));
+    s.b.onPointerUp!(view(40, 110));
+    const v = committed(s.c).points[3];
+    expect(v.hOut!.x).toBeCloseTo(-50 / 6, 9);
+    expect(v.hOut!.y).toBeCloseTo(-50 / 6, 9);
+    expect(v.hIn!.y).toBeCloseTo(50 / 6, 9);
   });
 
   it("a grip drag moves its handle, the mirrored pair kept; Alt held breaks it", () => {
@@ -267,7 +272,7 @@ describe("V on a selected path: the course editor's geometry gestures (D16, docs
     expect(c.onCommit).not.toHaveBeenCalled();
   });
 
-  it("a double-click on an edge inserts a vertex there and focuses it; off the edge nothing", () => {
+  it("a double-click on an edge inserts a smooth vertex there (Alt: a corner) and focuses it; off the edge nothing", () => {
     const { c, b, onVertexFocus } = edit();
     b.onDoubleClick!(at(65, 110.2));
     expect(onVertexFocus).toHaveBeenCalledWith(3);
@@ -275,6 +280,11 @@ describe("V on a selected path: the course editor's geometry gestures (D16, docs
     expect(o.points).toHaveLength(5);
     expect(o.points[3].x).toBeCloseTo(65, 6);
     expect(o.points[3].y).toBeCloseTo(110, 6);
+    expect(o.points[3].hOut!.x).toBeCloseTo(-50 / 6, 6);
+    expect(o.points[3].hOut!.y).toBeCloseTo(0, 6);
+    const a = edit();
+    a.b.onDoubleClick!(at(65, 110.2, { alt: true }));
+    expect(committed(a.c).points[3].hOut).toBeUndefined();
     const r = edit();
     r.b.onDoubleClick!(at(65, 85));
     expect(r.c.onCommit).not.toHaveBeenCalled();

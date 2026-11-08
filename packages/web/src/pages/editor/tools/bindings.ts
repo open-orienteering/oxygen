@@ -253,7 +253,7 @@ export function selectBinding(o: SelectOptions): EditorToolBinding {
         if (!pt || cur.points.length < 3) return;
         o.onLasso(o.sites.filter((s) => s.kind === "control" && pointInPolygon(s, cur.points)).map((s) => s.id));
       } else if (cur.kind === "object" || cur.kind === "grip") {
-        // A drag commits; a click focuses a vertex (Alt: retracts its handles) or, on the body, unfocuses.
+        // A drag commits; a click focuses a vertex (Alt: toggles corner / smooth) or, on the body, unfocuses.
         const r = releaseGeometry(cur, pt, vertexRule(shown(o)?.kind ?? ""));
         if (r?.kind === "commit") o.onObjectMoved(cur.id, r.geometry);
         else if (r?.kind === "cancel") o.onObjectDraft(cur.id, null);
@@ -263,9 +263,9 @@ export function selectBinding(o: SelectOptions): EditorToolBinding {
     onDoubleClick(p) {
       // On a bend handle: the press's focus already happened; no control is inserted under it (§6.7).
       if (leg && bendAt(leg, p.pt, HANDLE_PX * p.mmPerPx) >= 0) return;
-      // On the selected object's edge, off its vertices: a vertex there (§7 "Editing geometry").
+      // On the selected object's edge, off its vertices: a smooth vertex there, Alt a corner (§7 "Editing geometry").
       const sel = shown(o);
-      const inserted = sel ? insertAtEdge(sel.geometry, vertexRule(sel.kind), p.pt, HANDLE_PX * p.mmPerPx) : null;
+      const inserted = sel ? insertAtEdge(sel.geometry, vertexRule(sel.kind), p.pt, HANDLE_PX * p.mmPerPx, !!p.alt) : null;
       if (sel && inserted) {
         o.onVertexFocus?.(inserted.index);
         return o.onObjectMoved(sel.id, inserted.geometry);

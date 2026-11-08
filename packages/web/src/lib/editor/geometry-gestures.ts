@@ -3,10 +3,12 @@
  * "Editing geometry"; D5b), shared by the course editor's `V`
  * (`selectBinding`) and Layout mode's paths (`layoutBinding`, D16,
  * docs/course-layout.md §3): the pressing order vertex → handle grip →
- * edge / body, a vertex drag, Alt-drag on a vertex (symmetric handles,
- * Shift 45°), a grip drag (a mirrored or smooth pair kept, Alt live breaks
- * it), Alt-click retract, a click that focuses a vertex, a double-click on
- * an edge that inserts one — and the shapes of the selected path.
+ * edge / body, a vertex drag (Alt or not), a grip drag (a mirrored or smooth
+ * pair kept, Alt live breaks it), Alt-click that toggles a vertex corner /
+ * smooth, a click that focuses a vertex, a double-click on an edge that
+ * inserts a smooth vertex (Alt: a corner) — and the shapes of the selected
+ * path. One convention for every vertex tool (F18: smooth by default, Alt
+ * sharp; F16's leg bends reuse it).
  *
  * Everything is in the path's own space ("model" units: paper mm for a
  * course object, page mm for a Layout path); the caller converts the
@@ -18,7 +20,7 @@
 
 import type { ToolShape } from "../../components/MapViewer";
 import {
-  constrain45, dragGrip, hasHandles, insertVertex, nearestEdge, outlinePoints, retractHandles, symmetricHandles, type Vertex,
+  constrain45, dragGrip, insertVertex, nearestEdge, outlinePoints, retractHandles, smoothHandles, toggleSmooth, type Vertex,
 } from "./geometry-edit";
 
 type Pt = { x: number; y: number };
@@ -28,8 +30,8 @@ export interface VertexRule { min: number; max: number; curves: boolean; closed:
 
 /**
  * A drag on the selected path. `base` is the geometry at pointer-down: every drag event applies the whole from→to
- * offset to it, never to a draft. `vertex` null drags the whole path; `alt` on a vertex pulls symmetric handles
- * instead of moving it. A `grip` is a Bézier handle of vertex `index` dragged by the pointer's offset; its `alt` is
+ * offset to it, never to a draft. `vertex` null drags the whole path; `alt` on a vertex is read at the release (an
+ * Alt-click toggles it), a drag moves it as without. A `grip` is a Bézier handle of vertex `index` dragged by the pointer's offset; its `alt` is
  * live (it breaks the pair).
  */
 export type GeometryDrag =
@@ -87,8 +89,7 @@ export function geometryShapes(
 }
 
 /**
- * A press on the selected path, in pressing order: a vertex within `reach` (Alt: its handles are pulled, for kinds
- * that curve), a handle grip, then the edge within `reach` or the body (`onBody`: the caller's hit-test answered
+ * A press on the selected path, in pressing order: a vertex within `reach` (Alt kept for the release), a handle grip, then the edge within `reach` or the body (`onBody`: the caller's hit-test answered
  * this path) — the whole path. Null: not on the path; a closed area's inside is not its body (§5), so the viewer
  * pans.
  */
@@ -96,7 +97,7 @@ export function pressGeometry(
   g: readonly Vertex[], rule: VertexRule, p: { pt: Pt; reach: number; alt?: boolean; shift: boolean }, onBody: boolean,
 ): GeometryDrag | null {
   const vertex = g.findIndex((v) => near(v, p.pt, p.reach));
-  if (vertex >= 0) return { kind: "object", from: p.pt, to: p.pt, moved: false, vertex, base: g, alt: !!p.alt && rule.curves };
+  if (vertex >= 0) return { kind: "object", from: p.pt, to: p.pt, moved: false, vertex, base: g, alt: !!p.alt };
   for (const [index, v] of g.entries()) {
     const grip = gripsOf(v).find((q) => near(q.at, p.pt, p.reach));
     if (grip) return { kind: "grip", index, which: grip.which, from: p.pt, to: p.pt, moved: false, base: g, alt: !!p.alt, shift: p.shift };
@@ -117,8 +118,6 @@ export function draggedGeometry(d: GeometryDrag): Vertex[] {
     return dragGrip(d.base, d.index, d.which, d.shift ? constrain45(vec) : vec, d.alt);
   }
   if (d.vertex === null) return d.base.map((v) => ({ ...v, x: v.x + dx, y: v.y + dy }));
-  // Alt-drag on a vertex: hOut follows the pointer, hIn mirrors it (Shift: 45°).
-  if (d.alt) return symmetricHandles(d.base, d.vertex, d.shift ? constrain45({ x: dx, y: dy }) : { x: dx, y: dy });
   return d.base.map((v, i) => (i === d.vertex ? { ...v, x: v.x + dx, y: v.y + dy } : v));
 }
 
@@ -139,7 +138,8 @@ export function dragGeometry(d: GeometryDrag, pt: Pt, mods?: { shift: boolean; a
 
 /**
  * The release at `pt` (null: cancelled). A drag commits, a cancelled one drops its draft; a click on a vertex
- * focuses it — with Alt it retracts its handles instead — and on the body unfocuses. A kind with a fixed vertex
+ * focuses it — with Alt it toggles corner / smooth instead (`toggleSmooth`; nothing for kinds without curves or an
+ * open end) — and on the body unfocuses. A kind with a fixed vertex
  * count (a text's anchor, an image's corners) focuses nothing: `Delete` deletes the object. A click on a grip does
  * nothing.
  */
@@ -149,17 +149,28 @@ export function releaseGeometry(d: GeometryDrag, pt: Pt | null, rule: VertexRule
   // Only a drag drew a draft; a click leaves the page's (the last write, until the list catches up) alone.
   if (d.moved) return { kind: "cancel" };
   if (!pt || d.kind === "grip") return null;
-  if (d.vertex !== null && d.alt) return hasHandles(d.base[d.vertex]) ? { kind: "commit", geometry: retractHandles(d.base, d.vertex) } : null;
+  if (d.vertex !== null && d.alt) {
+    const toggled = rule.curves ? toggleSmooth(d.base, d.vertex, rule.closed) : null;
+    return toggled ? { kind: "commit", geometry: toggled } : null;
+  }
   return { kind: "focus", index: Number.isFinite(rule.max) ? null : d.vertex };
 }
 
 /**
  * A double-click on the path's edge within `reach`, off its vertices, for kinds without a vertex limit: the path
- * with a vertex there (a curve split so its shape stays) and the new vertex's index, to focus.
+ * with a vertex there and the new vertex's index, to focus. The new vertex is smooth (F18): on a straight edge its
+ * handles come from its neighbours (`smoothHandles`, collinear, so the shape stays until it moves), on a curve the
+ * split keeps the shape. `alt` (or a kind without curves) inserts a corner — on a curve the split's handles of the
+ * new vertex dropped, its neighbours' kept.
  */
-export function insertAtEdge(g: readonly Vertex[], rule: VertexRule, pt: Pt, reach: number): { geometry: Vertex[]; index: number } | null {
+export function insertAtEdge(
+  g: readonly Vertex[], rule: VertexRule, pt: Pt, reach: number, alt = false,
+): { geometry: Vertex[]; index: number } | null {
   if (rule.max !== Infinity) return null;
   const edge = g.some((v) => near(v, pt, reach)) ? null : nearestEdge(g, rule.closed, pt);
   if (!edge || edge.dist > reach) return null;
-  return { geometry: insertVertex(g, rule.closed, edge.index, edge.t), index: edge.index + 1 };
+  const index = edge.index + 1;
+  const split = insertVertex(g, rule.closed, edge.index, edge.t);
+  if (alt || !rule.curves) return { geometry: retractHandles(split, index), index };
+  return { geometry: split[index].hIn || split[index].hOut ? split : smoothHandles(split, index, rule.closed), index };
 }

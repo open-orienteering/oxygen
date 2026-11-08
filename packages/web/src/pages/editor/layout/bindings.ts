@@ -123,12 +123,12 @@ export function gestureChange(c: Pick<LayoutBindingContext, "geometry" | "editab
  */
 function geometryPoint(c: Pick<LayoutBindingContext, "geometry" | "snapping">, d: GeometryDrag, to: Pt): Pt {
   const page = toPage(to, c.geometry);
-  if (!c.snapping || d.kind !== "object" || d.vertex === null || d.alt) return page;
+  if (!c.snapping || d.kind !== "object" || d.vertex === null) return page;
   return { x: d.from.x + Math.round(page.x - d.from.x), y: d.from.y + Math.round(page.y - d.from.y) };
 }
 
-/** The vertex a drag moves (not an Alt-drag, which pulls its handles), −1 for none. */
-const movedVertex = (d: GeometryDrag): number => (d.kind === "object" && d.vertex !== null && !d.alt ? d.vertex : -1);
+/** The vertex a drag moves (Alt or not, F18), −1 for none. */
+const movedVertex = (d: GeometryDrag): number => (d.kind === "object" && d.vertex !== null ? d.vertex : -1);
 
 /** The scope's objects with the path's page points stored; the `moved` vertex kept on the printable area. */
 function pathChange(c: Pick<LayoutBindingContext, "geometry" | "editable">, base: PathObject, points: readonly Vertex[], moved = -1): LayoutChange {
@@ -230,7 +230,7 @@ export function layoutBinding(c: LayoutBindingContext): EditorToolBinding {
       c.gesture.current = null;
       c.onPreview(null);
       if (gst?.kind === "geometry") {
-        // A drag writes; a click focuses the vertex, Alt-click retracts its handles (§7 "Editing geometry").
+        // A drag writes; a click focuses the vertex, Alt-click toggles it corner / smooth (§7 "Editing geometry").
         const r = releaseGeometry(gst.drag, pt ? geometryPoint(c, gst.drag, pt) : null, pathRule(gst.base));
         if (r?.kind === "commit") c.onCommit(pathChange(c, gst.base, r.geometry, movedVertex(gst.drag)));
         else if (r?.kind === "focus") c.onVertexFocus?.(r.index);
@@ -241,9 +241,9 @@ export function layoutBinding(c: LayoutBindingContext): EditorToolBinding {
       else if (pt) c.onVertexFocus?.(null);
     },
     onDoubleClick: (p) => {
-      // On the selected path's edge, off its vertices: a vertex there, focused.
+      // On the selected path's edge, off its vertices: a smooth vertex there (Alt: a corner), focused.
       if (selected?.kind !== "path" || placing) return;
-      const inserted = insertAtEdge(selected.points, pathRule(selected), toPage(p.pt, g), tolerance(p, g));
+      const inserted = insertAtEdge(selected.points, pathRule(selected), toPage(p.pt, g), tolerance(p, g), !!p.alt);
       if (!inserted) return;
       c.onVertexFocus?.(inserted.index);
       c.onCommit(pathChange(c, selected, inserted.geometry));
