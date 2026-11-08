@@ -2991,6 +2991,14 @@ test.describe("F3: legs — styles, bends, corridors (docs/course-editor.md §6.
         await expect(page.getByTestId("editor-leg-corridor-remove")).toBeVisible({ timeout: 3000 });
       }).toPass({ timeout: 30000 });
       expect(await guides()).toBe(0);
+      // Never outside the views where legs are clickable: All controls draws none; back in Course view it is there.
+      await dropSelection(page);
+      await expect.poll(guides, { timeout: 15000 }).toBe(1);
+      await page.getByTestId("editor-view-all").click();
+      await expect.poll(guides, { timeout: 15000 }).toBe(0);
+      await page.getByTestId("editor-view-course").click();
+      await expect.poll(guides, { timeout: 15000 }).toBe(1);
+      await selectLeg(page, name, a, b);
 
       expect((await printed(page, nameId, `maps=${sheet.seq}`)).pages).toBe(1);
 
