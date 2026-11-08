@@ -22,6 +22,7 @@
  */
 
 import { XMLBuilder } from "fast-xml-parser";
+import type { PathVertex } from "@oxygen/shared";
 
 /** The namespace of Oxygen's `Extensions` elements (the map-exchange marker). */
 export const OXYGEN_IOF_EXTENSIONS_NS = "urn:oxygen:iof:extensions";
@@ -60,7 +61,7 @@ export interface ExportCourseControl {
   /** Metres of the taped route (`TapedRoute` only). */
   tapedRouteLengthM?: number;
   /** The bends of the leg into this row, paper mm, handles as offsets (F13) — Purple Pen's `<leg>`; IOF has no field. */
-  bends?: ReadonlyArray<{ x: number; y: number; hIn?: { x: number; y: number }; hOut?: { x: number; y: number } }>;
+  bends?: ReadonlyArray<PathVertex>;
 }
 
 export interface ExportCourse {

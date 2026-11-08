@@ -6,7 +6,7 @@
  * the call sites pass the stored bends, docs/course-editor.md §6.7).
  */
 
-import { course } from "@oxygen/shared";
+import { course, type PathVertex } from "@oxygen/shared";
 import type { ToolShape } from "../../components/MapViewer";
 
 type Pt = { x: number; y: number };
@@ -15,7 +15,7 @@ type Pt = { x: number; y: number };
 export const legLengthM = (mm: number, mapScale: number): number => (mm * mapScale) / 1000;
 
 /** A bend, its handles optional (F13). */
-type Bend = Pt & { hIn?: Pt; hOut?: Pt };
+type Bend = PathVertex;
 
 /** The leg's polyline: `a`, the bends' path flattened as the layer does (F13), `b`. */
 const polyline = (a: Pt, b: Pt, via: readonly Bend[]): Pt[] => course.legPolylineOf(a, via, b);

@@ -10,7 +10,7 @@
  * keyboard and gesture handling on the page trivially unit-testable.
  */
 
-import { course, type SeriesAllocationEntry } from "@oxygen/shared";
+import { course, type PathVertex, type SeriesAllocationEntry } from "@oxygen/shared";
 
 export type { SeriesAllocationEntry } from "@oxygen/shared";
 
@@ -286,7 +286,7 @@ export function effectiveRoleControlId(
  *   is unknown.
  */
 export function sequenceLegMeters(
-  points: Array<{ x: number; y: number; bends?: readonly { x: number; y: number; hIn?: { x: number; y: number }; hOut?: { x: number; y: number } }[] } | null>,
+  points: Array<{ x: number; y: number; bends?: readonly PathVertex[] } | null>,
   mapScale: number | null,
 ): Array<number | null> {
   const out: Array<number | null> = new Array(points.length).fill(null);

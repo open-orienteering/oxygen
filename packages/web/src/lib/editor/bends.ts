@@ -7,11 +7,11 @@
  * bent leg (§6.3).
  */
 
-import { course } from "@oxygen/shared";
+import { course, type PathVertex } from "@oxygen/shared";
 
 export type Pt = { x: number; y: number };
-/** A bend: a point with optional handles, offsets from it (F13). */
-export type Bend = Pt & { hIn?: Pt; hOut?: Pt };
+/** A bend: a point with optional handles, offsets from it (F13) — the shared `PathVertex`. */
+export type Bend = PathVertex;
 
 /** The leg as drawn: from, its bends' path flattened (5 µm), to — the layer's own polyline. */
 export const legPolyline = (from: Pt, bends: readonly Bend[] | undefined, to: Pt): Pt[] => course.legPolylineOf(from, bends, to);
