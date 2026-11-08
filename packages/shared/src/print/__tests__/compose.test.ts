@@ -13,6 +13,7 @@ import { pageScene } from "../__fixtures__/pages.js";
 import { RING_BLEED_UM, composePage } from "../compose.js";
 import { frameInMap, type PageInput } from "../page.js";
 import type { CourseStructure } from "../../course/types.js";
+import { allVariationStructures } from "../../course/variants.js";
 
 const fonts = () => [liberation().sans, liberation().narrow];
 const idOf = (colours: { paletteIds?: string[]; id: string }[], paletteId: string) => colours.findIndex((c) => c.paletteIds?.includes(paletteId));
@@ -167,6 +168,27 @@ describe("composePage", () => {
     // @ts-expect-error allVariations is not a print option (PageInput.course.viewOptions)
     const options: PageInput["course"]["viewOptions"] = { allVariations: true };
     expect(options).toBeDefined();
+  });
+
+  it("the all-variations page (F8; answer 4): spine and branches in the one purple — the plain colour table, no tint row, codes", () => {
+    const base = pageScene("page-sprint-a4");
+    const root = {
+      items: [
+        { siteId: "S" }, { siteId: "31" },
+        { kind: "variation" as const, id: "g", alternatives: [{ label: "A", items: [{ siteId: "32" }] }, { label: "B", items: [{ siteId: "33" }] }] },
+        { siteId: "34" }, { siteId: "F" },
+      ],
+    };
+    const { spine, branches } = allVariationStructures(root);
+    const ordered = (id: string, items: CourseStructure["items"]): CourseStructure => ({ version: 1, id, orderMode: "ordered", items });
+    const structure = [ordered("course", spine), ...branches.map((b) => ordered(`course:${b.groupId}:${b.label}`, b.items))];
+    const viewOptions = { ...base.course.viewOptions, labelMode: "code" as const };
+    const all = composePage({ ...base, course: { ...base.course, structure, viewOptions } }, fonts());
+    const spineOnly = composePage({ ...base, course: { ...base.course, structure: structure[0], viewOptions } }, fonts());
+    expect(all.colours.some((c) => c.id.startsWith("course-tint:"))).toBe(false);
+    expect(all.colours).toEqual(spineOnly.colours);
+    // The branches are drawn: more course passes than the spine alone.
+    expect(all.mapLayer.stream.passes.length).toBeGreaterThan(spineOnly.mapLayer.stream.passes.length);
   });
 
   it("an unaligned document stack is a CourseStackError", () => {

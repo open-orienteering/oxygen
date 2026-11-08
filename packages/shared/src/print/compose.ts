@@ -23,7 +23,7 @@ import { type ColourMode, colourOperator, pageColour } from "./colour.js";
 import { geoViewport } from "./geo.js";
 import { type Matrix, UM_TO_PT, cmOperator, fmtMm, mapLayerOperators } from "./operators.js";
 import { type ComposedPage, type PageImage, type PageInput, type PageWarning, frameRectUm, mapLayerTransform } from "./page.js";
-import type { PdfWriter } from "./writer.js";
+import type { PdfWriter, PdfWriterPage } from "./writer.js";
 
 export { RING_BLEED_UM };
 
@@ -104,7 +104,7 @@ export interface WritePageOptions {
  * q <µm → pt> cm 4 M <passes> <page images> Q   page layer
  * ```
  */
-export async function writePage(writer: PdfWriter, page: ComposedPage, opts: WritePageOptions): Promise<{ warnings: string[] }> {
+export async function writePage(writer: PdfWriter, page: ComposedPage, opts: WritePageOptions): Promise<{ warnings: string[]; page: PdfWriterPage }> {
   const warnings: string[] = [];
   const W = page.paper.widthMm * (72 / 25.4), Hp = page.paper.heightMm * (72 / 25.4);
   const wp = writer.addPage({ widthPt: W, heightPt: Hp, label: page.label, outlineTitle: page.label });
@@ -143,5 +143,5 @@ export async function writePage(writer: PdfWriter, page: ComposedPage, opts: Wri
   ];
   wp.addContent(ops.join("\n"));
   if (page.geo) wp.setGeoViewports([page.geo]);
-  return { warnings };
+  return { warnings, page: wp };
 }

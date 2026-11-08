@@ -213,4 +213,32 @@ describe("PdfWriter", async () => {
     expect(content).not.toContain("BT");
     expect(content).toMatch(/ f\* Q/);
   });
+
+  it("copies a page (F8, course-print.md §4.5): the copies share its content stream and resources, label repeated, one outline item", async () => {
+    const w = await PdfWriter.create({ faces, deterministic: true });
+    const scene = libraryScene("lib-text");
+    const { stream } = symbolise({ objects: scene.objects, symbols: scene.symbols, fonts: [sans, narrow] });
+    const page = w.addPage({ widthPt: A4[0], heightPt: A4[1], trimBox: [10, 10, 500, 800], label: "Long AB", outlineTitle: "Long AB" });
+    page.addContent(mapLayerOperators(stream, { colours: scene.colours, mode: "cmyk", resources: page.resources, matrix: layerMatrix({ scaleRatio: 1, atPt: [50, 400] }) }));
+    w.copyPage(page, 2);
+    w.addPage({ widthPt: A4[0], heightPt: A4[1], label: "Long BA", outlineTitle: "Long BA" }).addContent("0 0 m");
+    const once = await PdfWriter.create({ faces, deterministic: true });
+    const p1 = once.addPage({ widthPt: A4[0], heightPt: A4[1] });
+    p1.addContent(mapLayerOperators(stream, { colours: scene.colours, mode: "cmyk", resources: p1.resources, matrix: layerMatrix({ scaleRatio: 1, atPt: [50, 400] }) }));
+    const [bytes, single] = [await w.save(), await once.save()];
+    const d = await PDFDocument.load(bytes, { updateMetadata: false });
+    expect(d.getPageCount()).toBe(4);
+    const contents = [0, 1, 2].map((i) => d.getPage(i).node.Contents()!.toString());
+    expect(new Set(contents).size).toBe(1);
+    expect(contents[0]).toMatch(/\d+ 0 R/);
+    expect(d.getPage(2).node.Resources()!.toString()).toBe(d.getPage(0).node.Resources()!.toString());
+    expect(d.getPage(2).getTrimBox()).toEqual({ x: 10, y: 10, width: 490, height: 790 });
+    expect(pageContent(d, 2)).toBe(pageContent(d, 0));
+    // Three copies cost far less than three pages: the content stream is written once.
+    expect(bytes.length).toBeLessThan(single.length + 2000);
+    const nums = d.catalog.lookup(PDFName.of("PageLabels"), PDFDict).lookup(PDFName.of("Nums"), PDFArray).asArray();
+    const labels = nums.filter((_, i) => i % 2 === 1).map((o) => (o as PDFDict).lookup(PDFName.of("P"))!.toString());
+    expect(new Set(labels.slice(0, 3)).size).toBe(1);
+    expect(d.catalog.lookup(PDFName.of("Outlines"), PDFDict).lookup(PDFName.of("Count"), PDFNumber).asNumber()).toBe(2);
+  });
 });
