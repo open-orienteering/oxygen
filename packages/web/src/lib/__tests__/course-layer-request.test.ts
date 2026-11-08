@@ -301,3 +301,17 @@ describe("map exchange (docs/course-layer.md §11, F5)", () => {
     expect(sheetExchanges({ controls: ["S", "31"] }, overlays)).toEqual([]);
   });
 });
+
+describe("variation tints (docs/course-layer.md §12.7, F7)", () => {
+  it("a tinted course carries its tint and turns on allVariations; labels are codes with several courses", () => {
+    const r = courseLayerRequest(base({
+      courses: [{ name: "A", controls: ["S", "1", "F"], highlight: true }, { name: "A#v1/B", controls: ["1", "2", "F"], highlight: true, tint: "B" }],
+    }));
+    expect(structures(r).map((s) => s.tint)).toEqual([undefined, "B"]);
+    expect(r.viewOptions).toMatchObject({ allVariations: true, labelMode: "code" });
+  });
+
+  it("no tint, no allVariations (every other view, and print)", () => {
+    expect(courseLayerRequest(base()).viewOptions.allVariations).toBeUndefined();
+  });
+});
