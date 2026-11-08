@@ -320,7 +320,13 @@ paper at any print scale (print enlarges map and course together).
   gap; the 1.2 R end keep applies at the leg's two ends only (a bend is
   not a circle), the 0.6 mm minimum and the 70 % cap to the whole leg's
   length; gaps are fractions of the bent length. A two-point leg is
-  exactly `legGaps`.
+  exactly `legGaps`. Only the features within reach are tested (F20b):
+  a feature outside the leg's bounds grown by twice its own clearance,
+  or outside a segment's bounds grown the same, is skipped — it lies
+  farther than c from the line beyond every segment (a passing feature
+  lies within c·√2 of a segment's bounds on each axis), so it opens
+  nothing — and the rest keep their order, so the result is bit for bit
+  the unfiltered loop's (`cuts-reference.test.ts`).
 
 `R` and `w` are the drawn circle and line (`CourseMetrics.lineWidthMm`
 from the 705 entry); a feature without `r` counts as
@@ -1494,6 +1500,18 @@ all-white corridor map); `edge` draws the boundary in purple.
   are `polygon-clipping`'s: even-odd over overlapping pieces cuts a hole
   at every join and the stream has no non-zero fill, so `strokeOutline()`
   (non-zero by contract) cannot build the band.
+- **The last result is kept** (F20b). `corridorGeometry` keeps its last
+  call's input key and result and returns that result — the same object —
+  while everything the geometry reads is unchanged: per course its id and
+  per leg its index (the edges' refs), for a corridor leg its ends,
+  width, band, edge and points, and with `mouths` the extents and the
+  sites a corridor leg ends at (id, role, position, turn; `-0` apart from
+  `0`). So a request that leaves the corridors as they were — a number, a
+  course object or a control of another course dragged over a corridor
+  course, an appearance toggle — pays nothing for them; a moved corridor
+  control recomputes. Callers treat the result as read-only. It is the
+  row's "per-run ring cache" widened to the whole geometry: a course of
+  one width is one run, whose key changes on every move of its controls.
 - **Drawing the band** (user, 2026-11-07): the band is a generated
   **`clip` filter region** (`symbols: "all"`, `map-rendering.md` §4.11),
   appended to `CourseLayer.regions` after the explicit and the stored
@@ -1988,10 +2006,13 @@ label.
 | unit | `symbols.test.ts` | ISOM / ISSprOM dimensions, document factor, appearance multipliers, knockout, roles, 711 borrowed; F19: the corridor edge `705/edge` with round caps, 705's colour and width × factor × `line`, not in `symbols`; the dangerous area: 709's hatch in both diagonals, 709.b / 709.c's boundaries, scaled like 709 (both libraries); arcs within 1 µm of the circle, gaps as open arcs, an arc through north one path |
 | unit | `cuts.test.ts` | clearance = symbol + half line + air at both arc ends and both gap ends, on / off the rim and the line by the same sum, wider for bigger symbols and lines, default radius, north wrap, whole circle; library radii (`cutSymbolRadiusMm`), OCAD symbol radii (`ocadCutSymbolRadiiMm`), `cutContextForScale`; `cutFeaturesOfDocument` (applied match, source code, suggested match, hidden symbol, line object, own render, factor fallback) |
 | unit | `cuts.test.ts` "polylineLegGaps" | §3.4 "Bent leg" (F1): a straight leg equals `legGaps`, fractions along the bends, one gap across a bend, end keep at the ends only, the 70 % cap |
+| unit | `course/__tests__/cuts-reference.test.ts` (fixture `__fixtures__/cuts-reference.json`) | §3.4 (F20b): 40 seeded cases of 12 legs (straight, bent, cubic up to 84 points) over up to 2000 features with and without `r` plus clusters on the legs (the 70 % cap), several `R` and `w`, through `polylineLegGaps` and `circleCuts`, recorded before the prefilter and compared bit for bit; `UPDATE_CUTS_REFERENCE=1` re-records (only for an intended change) |
 | unit | `derive.test.ts` "bends and styles" | §10.1: `legLengthMm`, a bent leg's points and pieces clipped at both sites, repeated / on-site bends dropped, stored gaps at the bent mid-length, a piece unbroken through a bend just after a gap, nothing within a site's clearance with a bend inside it, an automatic gap across a bend, the resolved style and `none`'s pieces |
 | unit | `layer.test.ts` "leg styles" | §10.1: a `marked_route` leg draws 707 through its bend, upper purple, more than three dash slices, after black; a `none` leg draws nothing, numbers unchanged |
 | unit | `checks.test.ts` "test the bent polyline" | §9.2: a bend round the building clears it, the first hit along the bends |
 | PDF | `packages/shared/src/print/__tests__/write-page.test.ts` "a marked-route leg" | §10.1 print: the route is one extra stroke of dash subpaths at 707's width, in purple after black, no `d` operator |
+| unit | `course/__tests__/corridor-reference.test.ts` (fixture `__fixtures__/corridor-reference.json`) | §10.2 (F20b): 66 cases — h = R, a lone wide leg, a one-point run, a 701 wider than the triangle, edged meeting unedged, a reversal, and 60 seeded courses (straight, bent and cubic legs, widths 2–8 mm, bands 0–5 mm, edged or not, one width or mixed, a turned start, a second course crossing or sharing legs, a passing site, with and without mouths) — recorded before F20b; each case's inside, band, edges and openings as a SHA-256 of their JSON plus counts, compared bit for bit; `UPDATE_CORRIDOR_REFERENCE=1` re-records (only for an intended change) |
+| unit | `corridor.test.ts` "the last call's result is kept" | §10.2 (F20b): the same input → the same object; a moved point, a width, a band, the edge, the course id, a leg's index, no mouths, a moved mouth site, its role, a start's turn, an extent each recompute and equal a fresh call; `-0` is not `0`; a site no corridor leg ends at does not count |
 | unit | `corridor.test.ts` | §10.2 geometry: a straight leg (inside, band, the map beyond, round ends), a bend (no inner notch, round outer join), consecutive corridors joined, mixed widths at a site and two courses crossing, degenerate inputs (out and back, collinear legs, the same leg on two courses) give simple rings, `whiteMm` 0 has no band, edges along edged legs only (closed for a lone leg, none on an unedged course); F19 "mouths and openings": a control's disc in the inside and the band to R + `whiteMm`, h ≥ R equal to the rings without mouths (answer 1), a finish's outer ring, the turned 701 (and unturned), a passing control no mouth, `edge: false` a mouth without opening or edge, the larger `whiteMm` of two legs, the edge two open pieces ending within 30 µm of the junctions, no edge behind the 701 (flat run end), a corridor wider than the 701 at its centroid with its sides carried back to it, the openings `θ ± asin(h/R)` with the junctions on the boundary, a turn and a straight run through a control (two sectors), none where a wider corridor covers the junctions, a curved leg (F16 smooth bend: end segments far shorter than √(R² − h²)) opening both circles about 2 asin(h/R) wide with its junctions on the boundary and the edges ending on them, a bend inside the circle opening where the corridor crosses it |
 | unit | `derive.test.ts` "corridors" | §10.2: `widthM` → paper mm at the document's `mapScale`, `whiteMm` kept; points, gaps, pieces and length unchanged; a `none` leg keeps its corridor |
 | unit | `layer.test.ts` "corridors", "courseDocumentContext" | §10.2: the band one `clip` region of every symbol after the explicit and stored ones (probes inside / in the band / beyond); `symbolise` masks the map's 516 there and no course pass; the edge `705/edge` strokes on the edge line, ref `corridor` (F19: two open pieces from the 701 to 31's opened circle; a 120 m corridor one closed outline); none without `edge`; a `none` leg keeps band and edge; F19 "openings": 31's circle one open arc ending within 30 µm of the junctions, the derivation's sites equal to the plain layer's, the start alike, a smooth-bend leg opening it too, whole with `edge: false` and at h ≥ R, merged with an overlapping stored gap (the cuts still the stored one), kept with auto cuts off, a passing control whole; no band at `whiteMm` 0; §2 `mapScale` from the header on both branches; F14: the `legLine` table, a corridor leg no `leg` object (edge, band, pieces and numbers kept), a `marked_route` one still 707 |
@@ -2068,7 +2089,7 @@ label.
 | unit | `packages/shared/src/course/__tests__/checks.test.ts` | §9: a fixture per code — both distance thresholds (library, scale fallback), event-wide distances, same feature, codes below 31 / duplicate / invertible (and the upside-down table), sheets null / empty / outside, numbers from `collides` and missing labels (hidden visits skipped), descriptions, legs through areas (crossing and inside), 708 lines, course objects (711 skipped), free order, unpositioned items; output order; `checkObstaclesOfDocument` (applied match, source code, suggested match, hidden, Bézier handles, holes, points) and the codes' library names |
 | unit | `packages/shared/src/__tests__/control-label-placement.test.ts`, `course/__tests__/derive.test.ts` "number collisions" | §3.5: `collides` on a boxed-in number, absent on a clear map and a contested cluster; a NaN segment judged as before the F20 cull |
 | unit | `packages/shared/src/__tests__/control-label-placement-reference.test.ts` (`__fixtures__/control-label-placement-reference.json`) | §3.5 (F20): 77 seeded cases — 64 courses dense to sparse with curved legs, 3 at ×1000 and 3 at ×0.01, 6 hatched clusters, far and degenerate segments — equal to the result recorded on the pre-cull placer, bit for bit (`UPDATE_PLACEMENT_REFERENCE=1` re-records, only for an intended change) |
-| unit | `course/__tests__/drag-budget.test.ts` (fixture `drag-course.ts`) | §3.5, §10.2 (F20): 25 controls, one smooth bend per leg, 3000 cut features → > 800 segments after the cuts; `placeControlLabels` < 400 ms, `deriveCourse` < 500 ms (loose: they catch the quadratic coming back) |
+| unit | `course/__tests__/drag-budget.test.ts` (fixture `drag-course.ts`) | §3.5, §10.2 (F20): 25 controls, one smooth bend per leg, 3000 cut features → > 800 segments after the cuts; `placeControlLabels` < 400 ms, `deriveCourse` < 500 ms (loose: they catch the quadratic coming back); F20b, the same course with a 50 m edged corridor and a 5 mm band on every leg: one run, 25 openings, `polylineLegGaps` over every leg < 100 ms, `corridorGeometry` < 600 ms for a moved course and < 20 ms for the same one (the kept result), `courseLayer` < 1000 ms |
 | integration | `packages/api/src/__tests__/integration/course-checks.test.ts` | §9.4 over the pinned `e2e/test.ocd`: distance, invertible, missing description and the building leg with public ids; an `oob_area` in scope; `setStructure` returns the same list; a viewer reads it; §6.3 `description_source` writes (auto, manual even when equal, NULL on clear, auto on a re-describing move) and `DESCRIPTION_STALE` for a moved auto description only; a legacy event has no obstacle codes |
 | unit | `structure.test.ts` "sectionsOf (F5)", `derive.test.ts` "sections (§11, F5)", `checks.test.ts` "map exchange parts (§11, F5)" | §11: one part without an exchange, the exchange in both parts, adjacent exchanges, an exchange first / last; numbers continue across the exchange, part 1 / part 2 drawn alone (no start on part 2, the exchange numbered on both, legs of the part only, `section` reported), a control visited in both parts, out of range / one part / several structures unchanged; `EXCHANGE_WITHOUT_SHEET` at the exchange after `CONTROL_OUTSIDE_SHEET`, none with every part covered / no sheets / one part, `CONTROL_OUTSIDE_SHEET` per part, a section-less window for every part, the exchange a control for descriptions, `NUMBER_*` over the derived part |
 | pass stream + golden | `scenes.test.ts` "course-exchange", `e2e/__golden__/map-gl/course-exchange.png` | §11: part 2 alone — the exchange circle numbered 2, 33 numbered 3, no start, legs 32 → 33 → F |
@@ -2093,7 +2114,8 @@ label.
 | `packages/shared/src/course/layer.ts` | `courseLayer`, `courseRenderInput` |
 | `packages/shared/src/course/geojson.ts` | `courseLayerGeoJson` |
 | `packages/shared/src/course-maps/{overlay-geometry,control-label-placement}.ts` | `clipLine` (per-obstacle clearance), `subtractLegGaps`, `circleArcs`, `placeControlLabels` (F20: the per-circle segment cull) — shared with the legacy overlay |
-| `packages/shared/src/course/__tests__/drag-course.ts` | the F20 drag fixture (a seeded 25-control smooth-bend course, the placer's input from a derivation), for the budget tests; its `seeded` generator also drives the placer reference |
+| `packages/shared/src/course/__tests__/drag-course.ts` | the F20 drag fixture (a seeded 25-control smooth-bend course, the placer's input from a derivation; F20b: `corridor` on every leg, `dragMouths`), for the budget tests; its `seeded` generator also drives the placer, corridor and cuts references |
+| `packages/shared/src/course/__tests__/__fixtures__/` | F20b's reference fixtures: `corridor-reference.json`, `cuts-reference.json` |
 | `packages/shared/src/render/__fixtures__/course/` | the course scenes |
 | `packages/api/src/course-geometry.ts` | the lengths writer (§4.1): `editorCourseLayer`, `hasPositionedItems`, `legDistancesMm`, `loadCourseSequences`, `rebuildCourseLengths` |
 | `packages/api/src/event-map-objects.ts` | cut features (§4.2): `loadEventCutFeatures` over the pinned document (`map-store/event-document.ts`) |
@@ -2156,24 +2178,33 @@ label.
   lever if real courses get near the cap.
 - **A translucent corridor band** (§10.2): `whiteOpacity` is stored and
   drawn opaque until the stream carries alpha (`map-rendering.md` §8).
-- **Per-request cost on corridor courses** (§10.2, F20b): `corridorGeometry` runs on
-  every course reply — about 10 ms for 30 corridor legs, 47 ms with every
-  edge, 96 ms for three such courses overlapping (Node, F2); on curved
-  legs (F13, one ring per run, the edge lookup on a 4 mm grid) about
-  20 ms for one, 120 ms for ten and 360 ms for thirty edged legs of ~90
-  flattened vertices each. The editor's
-  bend drag previews on the UI layer and writes once (`course-editor.md`
-  §6.7), so no per-move request pays it; a control drag on a corridor
-  course still does — one request in flight since F20
-  (`map-rendering.md` §5.2 "Engine"). On F20's bench (25 controls, one
-  smooth bend per leg, 1:15 000) `corridorGeometry` costs 126–230 ms per
-  request and `polylineLegGaps` 22–40 ms at 3000 cut features; the
-  number placer's 376 ms went with F20 (§3.5). F20b's levers: a per-run
-  cache of the cleaned ring (keyed by points, h and white), adaptive
-  `edgesOf` sampling, a `polylineLegGaps` feature prefilter by the leg's
-  grown bounding box, optionally `fastFilter` on control drags over
-  corridor courses. F19 adds one polygon per mouth to each union and a scan of
-  the inside's edges per junction.
+- **Per-request cost on corridor courses** (§10.2). A control drag on a
+  corridor course re-derives the corridors on every request (one request
+  in flight since F20, `map-rendering.md` §5.2 "Engine"; the bend drag
+  previews on the UI layer and writes once, `course-editor.md` §6.7). On
+  the corridor drag fixture (`dragCourse({ corridor })`: 25 controls, one
+  smooth bend per leg, a 50 m edged corridor with a 5 mm band on every
+  leg, 1:15 000, mouths, 3000 cut features; Node, development machine)
+  F20b took the request from about 230 to about 180 ms with only
+  bit-identical levers: `polylineLegGaps` 22 → 1.6 ms (the feature
+  prefilter, §3.4), `openingsOf` 10 → 4 ms (the circle point once per
+  sample, segments rejected by bounds), `edgesOf` 16 → 12 ms (candidates
+  per ring edge, numeric cells), and the kept result (above) for every
+  request that leaves the corridors alone (0.1 ms). What is left is
+  `polygon-clipping`: the inside union about 34 ms, the outer union about
+  69 ms, the band's difference about 17 ms — no bit-identical lever
+  reaches it (any re-association of the unions moves vertices).
+  Measured and not taken (user, 2026-11-08, F20b answers): a per-leg
+  cleaned-ring cache with a second union (inside 34 → 22, outer 69 →
+  39 ms, but the boundary moves up to 5–7 µm in 28 of the 66 reference
+  cases and the round joins at sites become two caps), and adaptive
+  `edgesOf` sampling (moves edge-piece ends by up to a 50 µm step).
+  `fastFilter` saves nothing here: the band is a `clip` region, decided
+  by object bounds with or without it (`map-rendering.md` §5.2 "Filter
+  regions"). The candidate for a later row (user: identity only in
+  F20b): drag-time corridors on the `fastFilter` model — approximate
+  while dragging (e.g. the per-leg cache), exact on release, the result
+  at rest unchanged.
 - **Corridor openings are geometric only** (§10.2, F19): no stored
   form, no `G` editing of them, not in the IOF XML / OCAD exports; the
   circle opens where the corridor meets it and nowhere else. A

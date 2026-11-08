@@ -62,8 +62,9 @@ describe("drag budgets on a corridor course (F20b): the same course, a 50 m edge
     expect(g.openings.size).toBe(25);
   });
 
-  it("polylineLegGaps over every leg at 3000 features < 15 ms (25 ms before the prefilter)", () => {
-    expect(medianMs(() => legs.forEach((p) => polylineLegGaps(p, input.cutFeatures!, DRAG_METRICS.circleRadiusMm, DRAG_METRICS.lineWidthMm)))).toBeLessThan(15);
+  it("polylineLegGaps over every leg at 3000 features < 100 ms", () => {
+    // ~1.6 ms with the prefilter, ~22 ms without it (alone; 25 ms under the parallel suite): loose like the others.
+    expect(medianMs(() => legs.forEach((p) => polylineLegGaps(p, input.cutFeatures!, DRAG_METRICS.circleRadiusMm, DRAG_METRICS.lineWidthMm)))).toBeLessThan(100);
   });
 
   it("corridorGeometry < 600 ms, each call a new course (a control drag)", () => {

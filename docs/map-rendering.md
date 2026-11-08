@@ -983,7 +983,7 @@ growth factor).
 | `load` | document bytes + `DocumentRenderOptions` (or, dev only, render objects + symbols, or a symbolised stream), font files, the text atlas pages (JSON, in the renderer's page order), optional first view (a view, or "fit into w × h"), gate flag | `loaded`: summary (bounds, origin, grid, detail cells, the first view resolved, stage times, bytes, text: pages, glyphs resolved, glyphs missing), mesh atlas, every cell's base part, the large part — then, without a further request, the first view's detail parts unless it is below the gate |
 | `prepare` | bucket ids, most urgent first | replaces the queue; one `part` per id |
 | `course` | a generation number and the course layer's input without the document (`CourseLayerRequest`: structure, sites, objects, appearance, view options, filter regions, `fastFilter`), or `null` | `course`: the generation, the dynamic bucket's part (or `null`), the stack to draw with, the derivation and symbol sizes, warnings, the mesh atlas when it grew, and the filter over the static buckets (or `null`) — "Dynamic bucket" and "Filter regions" below |
-| — | | `error` on a failed load |
+| — | | `error` on a failed load; on a `course` request whose derivation throws, with that request's generation (F20b) |
 
 Every typed array goes back as a transferable. The worker decodes,
 bridges (`documentRenderInput`), symbolises, builds the atlas, assigns
@@ -1047,8 +1047,8 @@ and each object's `ref`, which the editor hit-tests on the main thread
 (§5.5). `input: null` clears; a load
 without course support answers `part: null`, `hit: null` and `COURSE_UNAVAILABLE`.
 The worker answers a request at once, between prepare slices. A request
-whose derivation throws answers `error` (F20), so the engine's request in
-flight ends.
+whose derivation throws answers `error` (F20) carrying the request's
+`generation` (F20b), so the engine ends that request — and only it.
 
 **Page part** (D7, `course-layout.md` §1). A request with `page` (the
 sheet's paper height, frame, window, layout objects, text values and
@@ -1076,7 +1076,11 @@ drawn and no input a newer one replaced is ever derived. One made before
 the load waits for it and is sent right after the load message; a `load`
 during a request posts the current input at once with a new generation,
 and a reply whose generation is not the latest posted is dropped. A
-worker `error` ends the request in flight and the recorded input goes. The current reply's part is uploaded under key `C` —
+course `error` (with a generation, F20b) ends the request in flight when
+the generations match — the recorded input goes — and is otherwise stale
+and ignored; it never touches a load in flight. An `error` without a
+generation (a failed load, a real worker's `onerror`) rejects the load in
+flight and ends the request in flight, as before F20b. The current reply's part is uploaded under key `C` —
 through `GpuArena.put` like any part, so a grow re-uploads it with the
 rest and nothing goes through `copyBufferSubData`
 (`docs/bugfix-adreno-arena-grow.md`) — and the previous one released;
@@ -1524,8 +1528,8 @@ published on `window.__mapGlDoc` for Playwright.
 | `e2e/map-gl-golden.spec.ts` | the per-pass path against the reference raster; the **MSDF text tier**: `text-with-halo`, `lib-text`, `lib-halos` through the arena path (§6.2); the **filter-region arena tier** (D3, §6.2) |
 | `e2e/map-gl-doc.spec.ts` (text) | arena = per-pass compare also on `e2e/test.xmap` (text, MSDF vs outlines) within 0.5 %; its text resolves on the Latin page with nothing missing |
 | `e2e/map-vector-layer.spec.ts` (text) | the viewer requests the Latin page and not the Cyrillic one |
-| `map-gl/__tests__/worker-course.test.ts` | dynamic bucket: static parts on the completed stack (upper white below upper purple, rows above it +1 with their CMYK), the document's stack without `courseLayer`, an unaligned stack unsupported and unchanged; a course request → one `all` part at `COURSE_BUCKET` on the completed stack (lower-purple strokes, text instances, glyph meshes in the grown atlas, earlier meshes in place, object ids after the document's, everything transferable); no atlas when nothing was added; lower purple drawn under black in one visible set; `null` and unsupported replies; a white-out at upper white above black; a toner saver's white the last colour drawn, after the document's top row and upper purple (P1); a request whose derivation throws answers `error` and the next is answered (F20) |
-| `map-gl/__tests__/engine.test.ts` (dynamic bucket) | `setCourse` uploads `C`, drawn below the zoom gate too, rebuilt at once, `onCourse` / `onChange`, `engine.colours` = the reply's; one request in flight (F20): of three calls during one request the first and the last are posted, both replies drawn in order, the middle never sent; `null` recorded and posted like any input, releasing `C`; the inputs before the load → one request with the last, right after the load message; a `load` during a request re-posts at once with a new generation and the older reply is dropped; a worker `error` ends the request and the recorded input goes; course bytes fixed |
+| `map-gl/__tests__/worker-course.test.ts` | dynamic bucket: static parts on the completed stack (upper white below upper purple, rows above it +1 with their CMYK), the document's stack without `courseLayer`, an unaligned stack unsupported and unchanged; a course request → one `all` part at `COURSE_BUCKET` on the completed stack (lower-purple strokes, text instances, glyph meshes in the grown atlas, earlier meshes in place, object ids after the document's, everything transferable); no atlas when nothing was added; lower purple drawn under black in one visible set; `null` and unsupported replies; a white-out at upper white above black; a toner saver's white the last colour drawn, after the document's top row and upper purple (P1); a request whose derivation throws answers `error` with its generation (F20b) and the next is answered (F20) |
+| `map-gl/__tests__/engine.test.ts` (dynamic bucket) | `setCourse` uploads `C`, drawn below the zoom gate too, rebuilt at once, `onCourse` / `onChange`, `engine.colours` = the reply's; one request in flight (F20): of three calls during one request the first and the last are posted, both replies drawn in order, the middle never sent; `null` recorded and posted like any input, releasing `C`; the inputs before the load → one request with the last, right after the load message; a `load` during a request re-posts at once with a new generation and the older reply is dropped; a worker `error` ends the request and the recorded input goes; F20b: a course `error` of an overtaken generation ends nothing and leaves the load in flight standing, the matching one ends the request (its late reply dropped, the waiting input drawn), one of an older generation leaves the request in flight; course bytes fixed |
 | `map-gl/__tests__/buckets.test.ts` (filter regions) | per colour the unmasked draw then one per mask, the same indices regrouped, `layers` in draw order, hidden objects win over masks, no `filter` without entries; instance draws and clip groups split by mask |
 | `map-gl/__tests__/worker-course.test.ts` (filter regions) | a `hide` region hides the document object meeting it, exact and `fastFilter` alike, never a course object; a far region hides nothing; a clip region by document colour → `(object, colour, mask)` on the completed stack and the region's triangles origin-relative; the course part stays unmasked in the visible set; no regions / `null` → no filter |
 | `map-gl/__tests__/worker-protocol.test.ts` (filter regions) | a `stream` source with masks → `loaded.filter`, one entry per (object, colour), transferable; none without masks |
@@ -2650,15 +2654,6 @@ The shared module is exported as a namespace: `import { render } from
   F20). If D's
   editor needs lower latency, the dragged object is symbolised on the
   main thread and only it is replaced.
-- **§5.2 dynamic bucket: a course `error` names no generation** (F20).
-  The engine ends whatever request is in flight on any `error`, so a
-  course request that throws also rejects a load in flight (with
-  `inlineTransport`; a real worker's `onerror` always did), and an
-  overtaken request that throws after a `load` re-posted ends the newer
-  one, whose reply is then dropped: the layer stays as it was until the
-  next `setCourse`. Both need a derivation that throws, itself a bug. The
-  lever: a `generation` on the worker's course `error`, so the engine
-  ends only the matching request and leaves the load alone.
 - **§5.4 layout objects in the viewer** — resolved by D7 for Layout
   mode (`MapViewerEditorProps.layout`, `course-layout.md` §1); Course mode
   and the read-only viewer still draw no sheet.

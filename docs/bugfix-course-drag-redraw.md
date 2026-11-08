@@ -64,12 +64,40 @@ features, ~860 segments after the cuts) the placer went from 354 ms to
 about 40 ms and `deriveCourse` from 378 ms to about 70 ms on the
 development machine.
 
-## Not in this fix (F20b)
+## Corridor courses (F20b)
 
-On corridor courses `corridorGeometry` adds 126–230 ms per request and
-`polylineLegGaps` 22–40 ms at 3000 cut features. Their cost is F20b's
-(a per-run ring cache, adaptive edge sampling, a feature prefilter by the
-leg's box), after F19 changes the same files.
+After F20 a control drag on a corridor course still cost about 230 ms
+per request on the corridor variant of the fixture (`dragCourse({
+corridor })`: a 50 m edged corridor with a 5 mm band on every leg, F19's
+mouths and openings, 3000 cut features): `corridorGeometry` about 140 ms
+and `polylineLegGaps` 22 ms. F20b took only levers whose result is bit
+for bit the old one (the user's rule), proven by reference fixtures
+recorded before the change:
+
+- **`polylineLegGaps` tests only the features within reach**
+  (`packages/shared/src/course/cuts.ts`, `docs/course-layer.md` §3.4): a
+  feature outside the leg's — or a segment's — bounds grown by twice its
+  clearance can open nothing, and the rest keep their order. 22 → 1.6 ms.
+- **`openingsOf` and `edgesOf`** (`corridor.ts`): the circle point is
+  computed once per sample and segments are rejected by their bounds
+  (10 → 4 ms); the edged segments are looked up once per ring edge, in
+  ascending order, instead of once per 50 µm sample (16 → 12 ms).
+- **The last corridor geometry is kept** (`corridor.ts`, §10.2 "The last
+  result is kept"): returned again while nothing it reads has changed, so
+  a number, course-object or other-course drag over a corridor course
+  pays 0.1 ms for the corridors instead of ~130.
+- **A course `error` names its generation** (`worker.ts`, `engine.ts`,
+  `docs/map-rendering.md` §5.2): the engine ends only the matching request
+  and never rejects a load in flight on it; before, any `error` did both.
+
+A corridor control drag now costs about 180 ms per request. The rest is
+`polygon-clipping` — the inside union ~34 ms, the outer union ~69 ms,
+the band's difference ~17 ms — which no bit-identical change reaches. A
+per-leg cleaned-ring cache would save ~40 ms but moves the boundary by up
+to 5–7 µm, and adaptive edge sampling moves the edge's ends: both
+declined by the user for F20b; drag-time corridors (approximate while
+dragging, exact on release) are the candidate for a later row
+(`course-layer.md` Pending).
 
 ## Tests
 
@@ -98,3 +126,13 @@ leg's box), after F19 changes the same files.
 - The course goldens (`e2e/__golden__/map-gl/course-*.png`, the scene
   streams) are unchanged; the drag E2E describes of
   `e2e/course-editor.spec.ts` and `e2e/field-mode.spec.ts` stay green.
+- F20b: `packages/shared/src/course/__tests__/corridor-reference.test.ts`
+  (66 cases: inside, band, edges and openings as digests, recorded before
+  F20b) and `cuts-reference.test.ts` (40 seeded cases of
+  `polylineLegGaps` and `circleCuts`), both bit for bit;
+  `corridor.test.ts` "the last call's result is kept" (the same object
+  for the same input, every input it reads recomputes); the corridor
+  budgets in `drag-budget.test.ts`; `engine.test.ts` and
+  `worker-course.test.ts` for the error's generation. The course goldens,
+  the `course-corridor` stream and the corridor and drag E2E describes
+  are unchanged.
