@@ -1655,7 +1655,7 @@ standing instruction, 2026-11-07, for review). Section numbering keeps
   is the caller's (the stored structure knows neither site kinds nor
   positions): role `control` — a map exchange is one, the start, finish,
   crossing and map-issue points are not — and positioned, what the layer
-  numbers. An unequal fork, every loop (the anchor is visited again) and
+  numbers. An unequal fork, every loop with two or more non-empty petals (the anchor is visited again; a loop with one has no repeat and numbers as a plain fork) and
   a top-level site visited twice give `null`; two forks in a row continue
   the numbers across both; one unequal group makes the whole course
   codes.
@@ -1895,7 +1895,7 @@ overprint.
 2026-11-08).** All variations labels the sites by number when
 `uniformVariantNumbers` is not `null` — every visited site has exactly one
 sequence number in every variant that visits it (equal forks) — and by
-code otherwise (unequal forks, every loop). The numbers travel as
+code otherwise (unequal forks, loops of two or more petals). The numbers travel as
 `viewOptions.labels` (site id → text, §3.5): the spine's draw carries
 them on screen (`course-editor.md` §12), the all-variations sheet on
 paper (`course-print.md` §4.6), both from the same helper, so the two
@@ -1973,7 +1973,7 @@ label.
 | unit | `packages/shared/src/print/__tests__/compose.test.ts` "variation tints never print" | §12.7: `composePage` of a tinted structure = the plain one's stream, no `course-tint:` colour; `allVariations` is no `PageInput` option (`@ts-expect-error`) |
 | unit | `checks.test.ts` "variation groups (§9.2 VARIATION_*, F7)" | §9.2: unbalanced beyond 10 % at the anchor with the shortest / longest, within 10 % none, an empty alternative the straight leg, bends and a crossing lengthen, the shared exit leg, a loop's petals (an empty one skipped), all empty → `VARIATION_ALL_EMPTY`, an unpositioned anchor skipped, paper mm without a scale, the codes' order |
 | unit (web) | `course-layer-request.test.ts` "variation tints (F7)" | §5: a tinted course carries its tint and sets `allVariations`, codes with several courses; none without a tint; F15: a spine's `labels` become `viewOptions.labels`, none without one |
-| unit | `variants.test.ts` "uniformVariantNumbers (F15)" | §12.1 / §12.7: an equal fork numbers both alternatives alike, an unequal fork / every loop / a repeated top-level site → `null`, two forks continue the numbers, an unequal second fork makes it codes, a shared control at the same position only, rejected items take no number, an exchange counts, wire ids |
+| unit | `variants.test.ts` "uniformVariantNumbers (F15)" | §12.1 / §12.7: an equal fork numbers both alternatives alike, an unequal fork / a loop of two petals (one petal has no repeat) / a repeated top-level site → `null`, two forks continue the numbers, an unequal second fork makes it codes, a shared control at the same position only, rejected items take no number, an exchange counts, wire ids |
 | unit | `derive.test.ts` "numbers (§3.5)" | §3.5 / §12.7 (F15): `viewOptions.labels` wins over the sequence and over codes with several structures, an omitted site keeps its code, the start is not labelled, `numberHidden` ignored |
 | integration | `variant-pages.test.ts` "the all-variations page numbers an equal fork (F15)" | §12.7 / `course-print.md` §4.6: an equal fork's page carries `labels` (1, 2, 2, 3) and its block rows 1, 2, 2, 3, still no tint and no `allVariations`; an unequal fork has neither |
 | integration | `packages/api/src/__tests__/integration/course-variants.test.ts` | §12.2–12.5: one child per variant (name, key, parent, copied fields, linear structure with its own id, mirror, lengths as the root's path), journal root first then children; `variantList`, `list` / `detail` by seq; a loop's permutations; an empty alternative, all empty accepted with identical children (F7); colliding keys and the cap refused, nothing written; re-materialisation (same rows across an outside edit, a new key, every key gone → soft-deleted and the runner nulled with its `runner.updated`, keys back → the same uuids); `runner.updated { courseId }` replayed through `events.push`; label offsets of every alternative round-trip; pools (a class on the root, a class picking it later, a key added / dropped, a plain course clears); the refusals (`ROOT_HAS_VARIATIONS`, `COURSE_IS_VARIANT`, nothing written); name / climb / maps mirrored; an offset set through the root; clone of a root and of a variant; delete of a root; `control.delete` of a control in alternative B only (one entry per row) and of a group's anchor (dissolved); an import over a root; an import with `replaceAll` over a root (the runner on a variant nulled and journaled, the pool emptied); a peer applying a root's and its variant's `course.upserted` through `events.push`; the migration's unique pair and `CHECK`; a checkout snapshot exported and imported with its children and pools (the backup dump is `SELECT *` per table, so the children are ordinary `courses` rows there) |

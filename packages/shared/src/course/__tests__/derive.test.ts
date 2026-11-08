@@ -435,6 +435,12 @@ describe("numbers (§3.5)", () => {
     expect(d.sites.find((x) => x.id === "31")!.label!.text).toBe("1");
   });
 
+  it("viewOptions.labels shows a hidden number even for a single structure (All variations with no branch drawn)", () => {
+    const only = linear(["S", "31", "32", "F"], { items: [{ siteId: "S" }, { siteId: "31", numberHidden: true }, { siteId: "32" }, { siteId: "F" }] });
+    expect(derive({ structure: only }).sites.find((x) => x.id === "31")!.label).toBeUndefined();
+    expect(derive({ structure: only, viewOptions: { labels: { "31": "1" } } }).sites.find((x) => x.id === "31")!.label!.text).toBe("1");
+  });
+
   it("multi-course views label codes and draw both courses' legs", () => {
     const d = derive({ structure: [linear(), linear(["S", "99", "F"], { id: "c2" })] });
     expect(d.courses.map((c) => c.legs.length)).toEqual([4, 2]);

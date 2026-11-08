@@ -288,7 +288,7 @@ export function deriveCourse(input: CourseLayerInput, m: CourseMetrics): CourseD
   // Crossing and map-issue points are no placement obstacle (§10.3).
   const circles: PlacementCircle[] = sites.filter((s) => !isMark(s.role)).map((s) => {
     const c: PlacementCircle = { id: s.id, x: s.x, y: -s.y, radius: extentOf(s.role) };
-    if (s.role === "control" && !hiddenNumber.has(s.id)) {
+    if (s.role === "control" && (input.viewOptions.labels?.[s.id] !== undefined || !hiddenNumber.has(s.id))) {
       c.label = input.viewOptions.labels?.[s.id] ?? numbers.get(s.id)?.join("/") ?? s.code;
       const off = offsets[s.id];
       if (off) c.fixedLabel = { x: s.x + off.dx, y: -(s.y + off.dy) };

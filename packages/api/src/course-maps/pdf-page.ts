@@ -331,7 +331,8 @@ function allVariationControls(
   if (!labels) return out;
   const numbered = out.map((row) => ({ ...row, ...(labels[row.id] !== undefined ? { sequence: Number(labels[row.id]) } : {}) }));
   // Array#sort is stable: first-seen order holds within a number.
-  return numbered.sort((a, b) => (a.sequence ?? Infinity) - (b.sequence ?? Infinity));
+  const key = (row: { sequence?: number }) => row.sequence ?? Infinity;
+  return numbered.sort((a, b) => (key(a) < key(b) ? -1 : key(a) > key(b) ? 1 : 0));
 }
 
 /**

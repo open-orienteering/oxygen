@@ -277,6 +277,10 @@ describe("uniformVariantNumbers (F15, course-layer.md §12.7)", () => {
     expect(nums(course([c("S"), c("31"), group("b", [["41"], ["42"]], { loop: true }), c("32"), c("F")]))).toBeNull();
   });
 
+  it("a loop with one non-empty petal has no repeated anchor: it numbers as a plain fork", () => {
+    expect(nums(course([c("S"), c("31"), group("b", [["41"], []], { loop: true }), c("32"), c("F")]))).toEqual({ "31": 1, "41": 2, "32": 3 });
+  });
+
   it("two equal groups continue the numbers across both", () => {
     const s = course([c("S"), c("31"), group("g", [["a"], ["b"]]), c("34"), group("h", [["c"], ["d"]]), c("35"), c("F")]);
     expect(nums(s)).toEqual({ "31": 1, a: 2, b: 2, "34": 3, c: 4, d: 4, "35": 5 });

@@ -341,7 +341,7 @@ export):
   holds). **Labels** (F15; the user's answer Q4, 2026-11-08): numbers
   when every visited site has exactly one sequence number across all
   variants (`course.uniformVariantNumbers`, `course-layer.md` §12.1 —
-  equal forks), else codes (unequal forks, every loop). The numbers go as
+  equal forks), else codes (unequal forks, every loop with two or more non-empty petals). The numbers go as
   `viewOptions.labels` (`PageInput.course.viewOptions` gains `labels`;
   `labelMode` stays `code`), computed in `resolve-sheet.ts`
   (`allVariationNumbers`: a positioned site that is a control, as the
@@ -352,7 +352,7 @@ export):
   .controls[i].sequence`, `LayoutControlSource.sequence`), two rows
   (the alternatives' second controls) may share one, listed in first-seen
   order within a number, the thick rule after every third row counting
-  rows — else in first-seen order without numbers (the course is passed
+  rows, a control without a number (unplaced) last — else in first-seen order without numbers (the course is passed
   as `free_order` to the layout; its structures stay ordered, so legs
   draw); the name, label and `{variant}` carry the keys joined by `/`
   (`Long AB/BA`; after five, `…`: `allVariationsSuffix`). The length is
