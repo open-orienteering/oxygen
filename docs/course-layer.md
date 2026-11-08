@@ -1570,8 +1570,8 @@ them.
   `structure-edit.ts`); F7 makes it read and write them. Per-variant
   pages and a variant's own
   sheet (`maps.pdf?courses=<variant>` still auto-creates one) are F8's;
-  the IOF family export F9's; the readout's other-variant match F6c's
-  (runners' variants and the dealing landed with F6b,
+  the IOF family export F9's (runners' variants and the dealing landed
+  with F6b, the desk's accept of another variant's run with F6c —
   `course-controls-and-matching.md` "Forked courses and variants"). A loop does not check
   that the item after it is its anchor (the setter's; a check in F7 if
   wanted). A 100-variant save is one transaction of about a thousand

@@ -218,8 +218,11 @@ code at the relevant position. Editing the course's text input back to
 | Existing E2E flows (no Id↔Numbers divergence) | `e2e/courses.spec.ts`, `e2e/kiosk-readout.spec.ts`, `e2e/webserial.spec.ts` |
 | Variants: the pick and the dealing (`pickLeastPopulated`, `startOrderCompare`, `dealVariants`) | `packages/api/src/__tests__/variants.test.ts` |
 | Variants: the pool rule, the invariant at every seam, `distributeVariants`, reads, readout on the runner's variant, events.push dealing | `packages/api/src/__tests__/integration/runner-variants.test.ts`, `eventor-reentry.test.ts` |
-| Offline matching on the runner's course (`courseOf`, `computeCardReadout`) | `packages/web/src/lib/__tests__/local-readout.test.ts` |
+| Offline matching on the runner's course (`courseOf`, `computeCardReadout`), and the other-variant match offline (F6c) | `packages/web/src/lib/__tests__/local-readout.test.ts` |
 | Variants on the Classes page, Distribute, the start list keys, the Variant select | `e2e/classes.spec.ts` |
+| Red exit: `findMatchingVariants` (full match only, partial ignored, ordered / free-order loops, empty variant) | `packages/shared/src/__tests__/readout.test.ts` |
+| Red exit: `otherVariantMatches`, the dashboard's `coursePoolIds` / `variantKey`, `acceptVariant` (accept, journal rows, refusals writing nothing) | `packages/api/src/__tests__/integration/variant-accept.test.ts`, `journal-completeness.test.ts` |
+| Red exit end to end: B's punches on an A runner → kiosk MP + desk pointer, banner on the readout station and the Runners page, Accept → OK on B, start list B | `e2e/red-exit.spec.ts` |
 
 ## Status semantics
 
@@ -339,8 +342,8 @@ course; its stage-0 `class_course_pools` rows are the root's variants
 2026-11-07): `runner.courseId` is the runner's variant, set by the desk,
 dealt per class, or picked automatically — **never by the readout**. A
 runner is validated against her own variant only, so a run of another
-variant is a mispunch like any other (the red-exit accept of another
-variant is F6c's, by hand at the desk). Implementation:
+variant is a mispunch like any other; the desk accepts another
+variant's complete run by hand ("The desk rule" below). Implementation:
 `packages/api/src/variants.ts`.
 
 **The pool rule.** `runner.create` / `runner.update` accept `courseId`
@@ -400,6 +403,21 @@ root), `class.detail` (`variants: [{ variantKey, courseId, runnerCount
 offline matching uses the runner's variant; a runner registered offline
 has none until the writing node deals one on sync, and is matched
 against the root meanwhile.
+
+**The desk rule** (red exit, F6c; `registration-and-readout.md` §4f,
+§5c). When a pooled runner's read is MP, `performReadout` lists in
+`otherVariantMatches` the other pooled variants the punches validate
+fully against (`findMatchingVariants` in `packages/shared/src/readout.ts`:
+no required position missing under the variant's own `orderMode`, at
+least one position; a near miss is not listed). Status and course stay
+the runner's own. The Runners page's expanded row and the readout-station
+page show it with **Accept variant XX**; `cardReadout.acceptVariant`
+re-checks the pool and the full match (with a finish), sets
+`runner.courseId`, applies status and times, and journals
+`runner.updated { courseId, variantAccepted: true }` + `result.applied`.
+Never automatic; offline the banner shows (the dashboard's class rows
+carry `coursePoolIds`, course rows `variantKey`) and the button is
+disabled. The kiosk shows MP and points to the desk.
 
 **UI.** The Classes page's class detail lists the variants with this
 class's runner counts (`class-variants`, `class-variant-<key>`) and a

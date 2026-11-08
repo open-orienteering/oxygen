@@ -88,5 +88,8 @@
   "returnRentalCard": "Return your SI card",
   "rentalCardReturned": "SI card returned",
   "markReturned": "Mark returned",
-  "markNotReturned": "Undo return"
+  "markNotReturned": "Undo return",
+  "otherVariantMatch": "Punches match variant <b>{{key}}</b> ({{course}}) completely",
+  "acceptVariant": "Accept variant {{key}}",
+  "acceptVariantOffline": "Needs the server"
 }

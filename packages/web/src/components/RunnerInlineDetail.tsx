@@ -11,6 +11,7 @@ import {
   type RunnerStatusValue,
 } from "@oxygen/shared";
 import { PunchTable } from "./PunchTable";
+import { OtherVariantBanner } from "./OtherVariantBanner";
 import { ClubLogo } from "./ClubLogo";
 import { SearchableSelect } from "./SearchableSelect";
 import { formatEntryDate } from "../lib/format";
@@ -289,6 +290,17 @@ export function RunnerInlineDetail({ runnerId, colSpan }: Props) {
               </div>
             )}
           </div>
+
+          {/* Red exit (F6c): the punches match another variant fully */}
+          {readout.data && readout.data.otherVariantMatches.length > 0 && (
+            <div className="mt-4">
+              <OtherVariantBanner
+                matches={readout.data.otherVariantMatches}
+                runnerId={runnerId}
+                onAccepted={invalidateAll}
+              />
+            </div>
+          )}
 
           {/* Punch data (editable) */}
           {readout.data?.controls && readout.data.controls.length > 0 && (

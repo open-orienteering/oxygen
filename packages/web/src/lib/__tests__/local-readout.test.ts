@@ -1,7 +1,8 @@
 /**
  * Offline readout reads the runner's own course (her variant) before her
  * class's (slice F, row F6b; docs/course-controls-and-matching.md "Forked
- * courses and variants", "Read paths" §2).
+ * courses and variants", "Read paths" §2), and names the other pooled
+ * variant a mispunched run matches fully (F6c, the red exit).
  */
 
 import { describe, it, expect } from "vitest";
@@ -34,9 +35,15 @@ const runner = (id: number, cardNo: number, courseId?: number) => ({
   ...(courseId !== undefined ? { courseId } : {}),
 });
 
-function client(runners: ReturnType<typeof runner>[]): QueryClient {
+// The same event with the class's pool on the dashboard (A = 11, B = 12).
+const pooled = {
+  classes: [{ id: 1, name: "H21", courseId: 10, coursePoolIds: [11, 12] }],
+  courses: dashboard.courses.map((c) => ({ ...c, variantKey: c.id === 11 ? "A" : c.id === 12 ? "B" : null })),
+};
+
+function client(runners: ReturnType<typeof runner>[], dash: object = dashboard): QueryClient {
   const qc = new QueryClient();
-  qc.setQueryData([["competition", "dashboard"], { type: "query" }], dashboard);
+  qc.setQueryData([["competition", "dashboard"], { type: "query" }], dash);
   qc.setQueryData([["runner", "list"], { type: "query" }], runners);
   return qc;
 }
@@ -76,5 +83,20 @@ describe("computeCardReadout with variants", () => {
   it("a runner without a course of her own is matched against the class's", () => {
     const r = computeCardReadout({ cardNo: 502, ...bPunches }, client([runner(3, 502)]))!;
     expect(r.course?.name).toBe("Long");
+  });
+});
+
+describe("computeCardReadout: another variant matched (F6c)", () => {
+  it("a runner on A with B's punches is MP and names B", () => {
+    const r = computeCardReadout({ cardNo: 510, ...bPunches }, client([runner(4, 510, 11)], pooled))!;
+    expect(r.timing.status).toBe(RunnerStatus.MissingPunch);
+    expect(r.otherVariantMatches).toEqual([{ courseId: 12, variantKey: "B", courseName: "Long B" }]);
+  });
+
+  it("names nothing for an OK run or a class without coursePoolIds", () => {
+    const ok = computeCardReadout({ cardNo: 511, ...bPunches }, client([runner(5, 511, 12)], pooled))!;
+    expect(ok.otherVariantMatches).toEqual([]);
+    const plain = computeCardReadout({ cardNo: 512, ...bPunches }, client([runner(6, 512, 11)]))!;
+    expect(plain.otherVariantMatches).toEqual([]);
   });
 });

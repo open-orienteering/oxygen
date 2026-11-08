@@ -88,5 +88,8 @@
   "returnRentalCard": "Lämna tillbaka brickan",
   "rentalCardReturned": "Bricka inlämnad",
   "markReturned": "Markera inlämnad",
-  "markNotReturned": "Ångra inlämning"
+  "markNotReturned": "Ångra inlämning",
+  "otherVariantMatch": "Stämplingarna stämmer helt med variant <b>{{key}}</b> ({{course}})",
+  "acceptVariant": "Godkänn variant {{key}}",
+  "acceptVariantOffline": "Kräver servern"
 }

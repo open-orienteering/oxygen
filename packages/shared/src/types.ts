@@ -380,6 +380,13 @@ export interface ClassInfo {
   freeStart?: boolean;
   /** Class runs without timing. */
   noTiming?: boolean;
+  /**
+   * The class's stage-0 variant pool: its variant child courses' seqs in
+   * key order, `[]` for a plain class (docs/course-controls-and-matching.md
+   * "Forked courses and variants"). The offline readout matches a
+   * mispunched run against these (`findMatchingVariants`).
+   */
+  coursePoolIds?: number[];
 }
 
 /** Club summary */
@@ -451,6 +458,8 @@ export interface CourseInfo {
    * and Multiple-expanded positions all baked in by the server).
    */
   expectedPositions: ExpectedPosition[];
+  /** A variant child course's key (`AC`), null for a root or a plain course. */
+  variantKey?: string | null;
 }
 
 /** Runner summary (list view) */

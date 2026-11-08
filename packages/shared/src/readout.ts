@@ -491,6 +491,54 @@ function matchFreeOrder(
   };
 }
 
+// ─── Another variant matched (red exit, F6c) ────────────────
+
+/** A pooled variant the punches validate fully against (`performReadout.otherVariantMatches`). */
+export interface OtherVariantMatch {
+  /** The variant child course's seq. */
+  courseId: number;
+  variantKey: string;
+  courseName: string;
+}
+
+/** A pooled variant to try: its identity plus what the matcher needs. */
+export interface VariantCandidate extends OtherVariantMatch {
+  expectedPositions: ExpectedPosition[];
+  orderMode?: CourseOrderMode;
+}
+
+/**
+ * The candidates the punches validate **fully** against: matched with
+ * `matchPunchesToCourse` under the candidate's own `orderMode`, no
+ * required position missing (`missingCount === 0` — skipped positions
+ * never count, exactly the MP rule) and at least one position, so an
+ * empty variant never matches. Candidate order is kept. A near miss is
+ * not listed: it is an ordinary mispunch for the official to judge.
+ *
+ * Informational only — the desk accepts a match by hand
+ * (`cardReadout.acceptVariant`); nothing here changes a status.
+ */
+export function findMatchingVariants(
+  punches: ParsedPunch[],
+  variants: readonly VariantCandidate[],
+  options?: { fallbackStartTime?: number },
+): OtherVariantMatch[] {
+  const out: OtherVariantMatch[] = [];
+  for (const v of variants) {
+    if (v.expectedPositions.length === 0) continue;
+    const { missingCount } = matchPunchesToCourse(
+      punches,
+      v.expectedPositions,
+      options?.fallbackStartTime ?? 0,
+      { orderMode: v.orderMode ?? "ordered" },
+    );
+    if (missingCount === 0) {
+      out.push({ courseId: v.courseId, variantKey: v.variantKey, courseName: v.courseName });
+    }
+  }
+  return out;
+}
+
 // ─── Status Computation ─────────────────────────────────────
 
 /**

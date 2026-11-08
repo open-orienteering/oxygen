@@ -378,8 +378,58 @@ Priority: MaxTime > OutOfCompetition > NoTiming. If MaxTime is exceeded, the run
   missingControls: [...],   // control codes with status "missing"
   isRentalCard: boolean,
   hasCard: boolean,
+  otherVariantMatches: [{   // §4f; [] unless MP in a class pooling ≥ 2 variants
+    courseId, variantKey, courseName,
+  }],
 }
 ```
+
+### 4f. Another variant matched (red exit)
+
+A runner in a class on a forked course runs **her own pre-set variant**
+(§5c): the readout never chooses one, so a runner who followed another
+fork is a mispunch like any other (user answer 3, 2026-11-07 — "it must
+be pre-set, if not someone could just follow another runner"). The same
+answer asks that it be easy to see when such a runner has in fact run
+another fork completely, and to accept that at the red exit by hand.
+
+- **Detection.** When the computed status is MP and the runner's class
+  has a stage-0 pool of two or more variants, `performReadout` matches
+  the punches against every other pooled variant with the shared pure
+  `findMatchingVariants(punches, candidates, { fallbackStartTime })`
+  (`packages/shared/src/readout.ts`, over `matchPunchesToCourse`, each
+  candidate under its own `orderMode`) and returns the ones the punches
+  validate **fully** against in `otherVariantMatches` — no required
+  position missing (`missingCount === 0`; skipped positions never count,
+  exactly the MP rule) and at least one position. A loop course may list
+  several (a free-order loop matches every visiting order); a near miss
+  is not listed — it is an ordinary mispunch for the official to judge
+  with the punch table. Status, course and every other field stay the
+  runner's own. Every reader of `performReadout` carries it: `readout`
+  (the kiosk's source), `readoutByRunner`, the receipts. An OK read and a
+  plain class cost nothing extra; an MP read resolves each other variant's
+  positions with one query apiece — fine for a butterfly, a batched
+  resolver if relay-sized pools (stage > 0, not F's) ever read here.
+- **Offline.** `computeCardReadout` (`lib/offline/local-readout.ts`) runs
+  the same helper over the dashboard cache: class rows carry
+  `coursePoolIds` (the pool's course seqs in key order) and course rows
+  `variantKey`. Its result feeds the DeviceManager's offline kiosk
+  broadcast, which shows no banner (the kiosk never does); the desk pages
+  render the banner from their `readout` / `readoutByRunner` query data,
+  so offline it shows for a read still in the query cache, with the
+  button disabled.
+- **The desk.** The Runners page's expanded row (`RunnerInlineDetail`,
+  above the punch table) and the readout-station page (`CardReadout.tsx`,
+  before the mispunch map) show the banner `readout-other-variant` —
+  "Punches match variant **B** (Lång B) completely" — with one button per
+  match, **Accept variant B** (`readout-accept-variant`), which calls
+  `cardReadout.acceptVariant` (§5c). Offline the banner shows and the
+  button is disabled ("Needs the server").
+- **The kiosk** is the runner's screen: it shows MP as before plus one
+  line, "See the official at the readout desk" (§7d). It never accepts.
+
+Nothing in timing switches a variant automatically; the accept is one
+manual, journaled action per runner.
 
 ---
 
@@ -431,6 +481,27 @@ journals its pick after the entry. Dealing a whole class is
 
 `storeReadout`'s relevance score (§3) likewise scores the punches against
 the runner's own course before the class's.
+
+**The desk's accept** (red exit, §4f): `cardReadout.acceptVariant
+{ runnerId, courseId }` (race-operate, lease-gated) switches a runner to
+another pooled variant her punches validate fully against. It refuses,
+with `PRECONDITION_FAILED` and nothing written, a course outside the
+class's pool (`VARIANT_NOT_IN_POOL`, also for a class without one), the
+runner's current course (`VARIANT_IS_CURRENT`), and a variant the
+punches do not validate fully against, or a run without a finish or a
+start (no running time) (`VARIANT_NOT_MATCHED`). The check is the
+re-run readout's computed status — not MP, with a finish and a running
+time — so a missing NoTiming-leg control refuses exactly as it keeps the
+variant out of `otherVariantMatches`. Otherwise, in one transaction: `runner.courseId`
+= the variant; `performReadout` re-run on the transaction client; status,
+start and finish written from it as `applyResult` writes them; journaled
+`runner.updated { cardNo, runnerId, fields: { courseId: <seq>,
+variantAccepted: true } }` then `result.applied { cardNo, runnerId,
+status, finishTime, startTime }`. `variantAccepted` is informational — a
+peer replays `courseId` through `buildRunnerUpdateData`, which ignores
+it, and the `result.applied` carries the status. Results, splits, the
+start list (`variantKey`), the kiosk's next read and the Eventor export
+read the new course by construction.
 
 ---
 
@@ -539,6 +610,7 @@ Registration goes directly to `registration-waiting` (no `card-done` transition)
 - Position in class (rank/total)
 - Controls matched vs. expected
 - Missing controls list (if MP)
+- On MP, one line "See the official at the readout desk" (`kiosk-see-official`) — another variant's run is accepted at the desk, never here (§4f)
 - Class results table
 - Auto-triggers receipt print
 

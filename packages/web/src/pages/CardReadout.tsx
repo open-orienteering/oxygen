@@ -11,6 +11,7 @@ import {
 import { useRunnerStatusLabel } from "../hooks/useStatusLabels";
 import { PunchTable, type PunchTableData } from "../components/PunchTable";
 import { MapPanel } from "../components/MapPanel";
+import { OtherVariantBanner } from "../components/OtherVariantBanner";
 import { useSearchParam } from "../hooks/useSearchParam";
 import { useDeviceManager } from "../context/DeviceManager";
 import { useStationSync } from "../hooks/useStationSync";
@@ -153,6 +154,17 @@ function toPunchTableData(data: FoundReadout): PunchTableData {
 
 function ReadoutView({ data, onCardReturnedChange }: { data: FoundReadout; onCardReturnedChange?: () => void }) {
   const { t: tr } = useTranslation("race");
+  const utils = trpc.useUtils();
+  const onAccepted = () => {
+    onCardReturnedChange?.();
+    utils.runner.list.invalidate();
+    utils.runner.getById.invalidate({ id: data.runner.id });
+    utils.class.detail.invalidate();
+    utils.competition.dashboard.invalidate();
+    utils.lists.startList.invalidate();
+    utils.lists.resultList.invalidate();
+    utils.cardReadout.readoutByRunner.invalidate({ runnerId: data.runner.id });
+  };
   const statusLabel = useRunnerStatusLabel();
   const t = data.timing;
   const isOK = t.status === RunnerStatus.OK;
@@ -246,6 +258,13 @@ function ReadoutView({ data, onCardReturnedChange }: { data: FoundReadout; onCar
           {tr("km", { ns: "common" })} &middot; {tr("nControls", { count: data.course.controlCount })}
         </div>
       )}
+
+      {/* Red exit (F6c): the punches match another variant fully */}
+      <OtherVariantBanner
+        matches={data.otherVariantMatches}
+        runnerId={data.runner.id}
+        onAccepted={onAccepted}
+      />
 
       {/* Mispunch map — immediately after status, before the split table */}
       {data.course && (data.missingControls.length > 0 || data.extraPunches.length > 0) && (
