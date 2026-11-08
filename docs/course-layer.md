@@ -374,7 +374,15 @@ user review). The flag reaches every consumer of the layer:
   extras' lines, with `radius` R and `labelSize` the 704 em. The placer's
   direction preferences are screen conventions, so it runs in the map
   frame flipped to y-down and its centres are flipped back — the legacy
-  print's "map frame" placement, rotation-invariant.
+  print's "map frame" placement, rotation-invariant. Per auto-placed
+  number the placer tests only the segments within reach of its
+  candidate boxes — `R + gap + 2·labelSize` (the outermost ring) plus the
+  box diagonal, `2·linePad` and `0.5·labelSize` (the soft clearance) of
+  the centre — in input order, so the result is bit-identical to testing
+  every segment at a fraction of the cost (F20,
+  `docs/bugfix-course-drag-redraw.md`; ~40 ms instead of ~350 ms on 25
+  controls with smooth bends). A segment with a NaN coordinate is kept
+  for the tests to judge, as before.
 - **Manual positions**: `labelOffsets[siteId]` (one course only) is the
   number's centre relative to the site; emitted as is, no leader.
 - **Leaders** where the placer reports a contested slot (705-derived
@@ -2008,7 +2016,9 @@ label.
 | unit (web) | `packages/web/src/map-gl/__tests__/worker-course.test.ts`, `engine.test.ts` | the dynamic bucket (`map-rendering.md` §5.2); a document boulder slits a circle, `viewOptions.autoCuts: false` drops it and keeps a stored circle gap (§3.4); P7: a toner saver whose first vertex is left of the window, one crossing its bottom with the first vertex inside, and a toner saver beyond both sides — the toner white covers the window outside the shape and not its inside (§3.6) |
 | E2E | `e2e/map-vector-layer.spec.ts`, `map-control-circles.spec.ts`, `map-multicourse.spec.ts` | lower purple under black at a crossing; labels under both pipelines (`map-rendering.md` §5.4) |
 | unit | `packages/shared/src/course/__tests__/checks.test.ts` | §9: a fixture per code — both distance thresholds (library, scale fallback), event-wide distances, same feature, codes below 31 / duplicate / invertible (and the upside-down table), sheets null / empty / outside, numbers from `collides` and missing labels (hidden visits skipped), descriptions, legs through areas (crossing and inside), 708 lines, course objects (711 skipped), free order, unpositioned items; output order; `checkObstaclesOfDocument` (applied match, source code, suggested match, hidden, Bézier handles, holes, points) and the codes' library names |
-| unit | `packages/shared/src/__tests__/control-label-placement.test.ts`, `course/__tests__/derive.test.ts` "number collisions" | §3.5: `collides` on a boxed-in number, absent on a clear map and a contested cluster |
+| unit | `packages/shared/src/__tests__/control-label-placement.test.ts`, `course/__tests__/derive.test.ts` "number collisions" | §3.5: `collides` on a boxed-in number, absent on a clear map and a contested cluster; a NaN segment judged as before the F20 cull |
+| unit | `packages/shared/src/__tests__/control-label-placement-reference.test.ts` (`__fixtures__/control-label-placement-reference.json`) | §3.5 (F20): 77 seeded cases — 64 courses dense to sparse with curved legs, 3 at ×1000 and 3 at ×0.01, 6 hatched clusters, far and degenerate segments — equal to the result recorded on the pre-cull placer, bit for bit (`UPDATE_PLACEMENT_REFERENCE=1` re-records, only for an intended change) |
+| unit | `course/__tests__/drag-budget.test.ts` (fixture `drag-course.ts`) | §3.5, §10.2 (F20): 25 controls, one smooth bend per leg, 3000 cut features → > 800 segments after the cuts; `placeControlLabels` < 400 ms, `deriveCourse` < 500 ms (loose: they catch the quadratic coming back) |
 | integration | `packages/api/src/__tests__/integration/course-checks.test.ts` | §9.4 over the pinned `e2e/test.ocd`: distance, invertible, missing description and the building leg with public ids; an `oob_area` in scope; `setStructure` returns the same list; a viewer reads it; §6.3 `description_source` writes (auto, manual even when equal, NULL on clear, auto on a re-describing move) and `DESCRIPTION_STALE` for a moved auto description only; a legacy event has no obstacle codes |
 | unit | `structure.test.ts` "sectionsOf (F5)", `derive.test.ts` "sections (§11, F5)", `checks.test.ts` "map exchange parts (§11, F5)" | §11: one part without an exchange, the exchange in both parts, adjacent exchanges, an exchange first / last; numbers continue across the exchange, part 1 / part 2 drawn alone (no start on part 2, the exchange numbered on both, legs of the part only, `section` reported), a control visited in both parts, out of range / one part / several structures unchanged; `EXCHANGE_WITHOUT_SHEET` at the exchange after `CONTROL_OUTSIDE_SHEET`, none with every part covered / no sheets / one part, `CONTROL_OUTSIDE_SHEET` per part, a section-less window for every part, the exchange a control for descriptions, `NUMBER_*` over the derived part |
 | pass stream + golden | `scenes.test.ts` "course-exchange", `e2e/__golden__/map-gl/course-exchange.png` | §11: part 2 alone — the exchange circle numbered 2, 33 numbered 3, no start, legs 32 → 33 → F |
@@ -2032,7 +2042,8 @@ label.
 | `packages/api/prisma/migrations/20261109120000_map_anchored_objects_to_course_objects/` | F12's move of map-anchored layout objects (§3.6; runbook `docs/migrations/2026-f12-map-anchored-objects.md`) |
 | `packages/shared/src/course/layer.ts` | `courseLayer`, `courseRenderInput` |
 | `packages/shared/src/course/geojson.ts` | `courseLayerGeoJson` |
-| `packages/shared/src/course-maps/{overlay-geometry,control-label-placement}.ts` | `clipLine` (per-obstacle clearance), `subtractLegGaps`, `circleArcs`, `placeControlLabels` — shared with the legacy overlay |
+| `packages/shared/src/course-maps/{overlay-geometry,control-label-placement}.ts` | `clipLine` (per-obstacle clearance), `subtractLegGaps`, `circleArcs`, `placeControlLabels` (F20: the per-circle segment cull) — shared with the legacy overlay |
+| `packages/shared/src/course/__tests__/drag-course.ts` | the F20 drag fixture (a seeded 25-control smooth-bend course, the placer's input from a derivation), for the budget tests; its `seeded` generator also drives the placer reference |
 | `packages/shared/src/render/__fixtures__/course/` | the course scenes |
 | `packages/api/src/course-geometry.ts` | the lengths writer (§4.1): `editorCourseLayer`, `hasPositionedItems`, `legDistancesMm`, `loadCourseSequences`, `rebuildCourseLengths` |
 | `packages/api/src/event-map-objects.ts` | cut features (§4.2): `loadEventCutFeatures` over the pinned document (`map-store/event-document.ts`) |
@@ -2095,7 +2106,7 @@ label.
   lever if real courses get near the cap.
 - **A translucent corridor band** (§10.2): `whiteOpacity` is stored and
   drawn opaque until the stream carries alpha (`map-rendering.md` §8).
-- **The corridor union per frame** (§10.2): `corridorGeometry` runs on
+- **Per-request cost on corridor courses** (§10.2, F20b): `corridorGeometry` runs on
   every course reply — about 10 ms for 30 corridor legs, 47 ms with every
   edge, 96 ms for three such courses overlapping (Node, F2); on curved
   legs (F13, one ring per run, the edge lookup on a 4 mm grid) about
@@ -2103,7 +2114,15 @@ label.
   flattened vertices each. The editor's
   bend drag previews on the UI layer and writes once (`course-editor.md`
   §6.7), so no per-move request pays it; a control drag on a corridor
-  course still does. Caching the union per run is the first lever.
+  course still does — one request in flight since F20
+  (`map-rendering.md` §5.2 "Engine"). On F20's bench (25 controls, one
+  smooth bend per leg, 1:15 000) `corridorGeometry` costs 126–230 ms per
+  request and `polylineLegGaps` 22–40 ms at 3000 cut features; the
+  number placer's 376 ms went with F20 (§3.5). F20b's levers: a per-run
+  cache of the cleaned ring (keyed by points, h and white), adaptive
+  `edgesOf` sampling, a `polylineLegGaps` feature prefilter by the leg's
+  grown bounding box, optionally `fastFilter` on control drags over
+  corridor courses.
 - **Tokens, beyond D1** (§7): the `differing` of a conflict caused by an
   import is `null` (the base lives inside a `reference.imported`
   entry); presence and "moved by X at T" (D11). The new editor's client rules landed in D4

@@ -15,7 +15,7 @@
  *   → load     { source: document bytes | objects + symbols, fonts, text atlas pages }   ← loaded { summary, atlas, grid, base parts, large part }
  *   → prepare  { ids }   replaces the queue; ← part { part } per id, nearest first
  *   → course   { generation, input }   ← course { generation, part, colours, derivation, filter, … } (§5.2 "Dynamic bucket", "Filter regions")
- *   ← error    { message } (load failures; the queue stops)
+ *   ← error    { message } (load failures, the queue stops; a course request that throws)
  */
 
 import { course, mapDocument, render } from "@oxygen/shared";
@@ -347,8 +347,14 @@ export function createMapGlWorker(post: Post, schedule: (fn: () => void) => void
         return;
       }
       if (msg.type === "course") {
-        const { reply, transfer } = courseReply(state, msg);
-        post(reply, transfer);
+        // A request whose derivation throws answers `error`: the engine keeps one course request in
+        // flight and must hear that it ended (F20, docs/bugfix-course-drag-redraw.md).
+        try {
+          const { reply, transfer } = courseReply(state, msg);
+          post(reply, transfer);
+        } catch (e) {
+          post({ type: "error", message: e instanceof Error ? e.message : String(e) }, []);
+        }
         return;
       }
       queue = msg.ids.slice();

@@ -199,7 +199,7 @@ exchange lists its parts (§6.9).
 | `A` → **Corridor on selected leg** (`C`) | `setStructure(setLegProps { corridor })` with the default corridor | `setStructure(prev)` |
 | Insert into course | create + `setStructure(insertSite)` | as Add to ‹course› |
 | click a control | select; action bar: **Add to ‹course›** (append), **Remove from ‹course›** (every visit), **Reset number position**, **Radio** / **Radio off** (SRR swap offer as legacy), **Edit description**, **Delete control**; a start / finish not used by the course offers **Use as start / finish for ‹course›** (`setRole`) | `setStructure(prev)`; radio is not undoable (as legacy) |
-| drag a control | one `control.update { xpos, ypos, autoDescribe: true }` on release; affects-chip "Affects: …" for shared controls | `control.update` with the old position and description |
+| drag a control | one `control.update { xpos, ypos, autoDescribe: true }` on release; affects-chip "Affects: …" for shared controls; during the drag the layer follows at the worker's rate (`map-rendering.md` §5.2 "Engine", F20) | `control.update` with the old position and description |
 | drag a number | `course.setControlLabelOffset` | the previous offset |
 | Delete / Backspace, **Delete control** | confirm, `control.delete` (the server cascades it out of every structure) | `control.restore` + `setStructure(before)` for every course that held it (read with `course.detail` before the delete) |
 | **Edit description** | modal `ControlDescriptionEditor` → `control.update { description }` | the previous description |
@@ -327,8 +327,10 @@ shared stage (04 §7; `map-rendering.md` §5.5), not SVG hit targets:
   are targets: `editorHitAt`'s `accept` passes over everything else and
   over the `provisional` site, so the shape below (a control to reuse)
   is found through the cursor's own circle.
-- A drag stays a per-move layer request: the layer re-derives in the
-  worker and the reply redraws (`map-rendering.md` §5.4). Main-thread
+- A drag stays a layer request: each move updates the input, the engine
+  keeps one request in flight and posts the latest when it answers
+  (`map-rendering.md` §5.2 "Engine", §5.4), so the circle follows at the
+  derivation rate (F20, `docs/bugfix-course-drag-redraw.md`). Main-thread
   symbolisation of the dragged object is not needed so far.
 - The selection ring, phantom, affects-chip and action bar stay UI layer
   (screen space), and so does everything a tool draws (§6: ghost, leg

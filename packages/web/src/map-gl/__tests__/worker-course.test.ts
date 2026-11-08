@@ -198,6 +198,19 @@ describe("course request → the dynamic bucket", () => {
     expect(r.warnings).toEqual({ COURSE_UNAVAILABLE: 1 });
   });
 
+  it("a request whose derivation throws answers `error`, and the next is answered (F20: the engine's request in flight ends)", () => {
+    const h = harness();
+    loaded(h);
+    const broken = { ...request(), sites: null } as unknown as CourseLayerRequest;
+    expect(() => h.w.handle({ type: "course", generation: 5, input: broken })).not.toThrow();
+    expect(h.sent.at(-1)!.msg).toMatchObject({ type: "error", message: expect.any(String) });
+    h.w.handle({ type: "course", generation: 6, input: request() });
+    const r = h.sent.at(-1)!.msg as CourseReply;
+    expect(r.type).toBe("course");
+    expect(r.generation).toBe(6);
+    expect(r.part).not.toBeNull();
+  });
+
   it("a toner saver's white draws last, over the document's top row and the course's upper purple (P1)", () => {
     const h = harness();
     const m = loaded(h);

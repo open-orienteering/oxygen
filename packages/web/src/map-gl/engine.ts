@@ -148,11 +148,23 @@ export class MapGlEngine {
   /** The last `setCourse` input (`undefined`: never set), re-sent after a load. */
   private courseInput: CourseLayerRequest | null | undefined;
   private courseGeneration = 0;
+  /**
+   * The generation the worker is deriving (`undefined`: none). One course request is in flight at a
+   * time: a drag's pointer moves would otherwise queue a full derivation each, all run to completion
+   * (docs/bugfix-course-drag-redraw.md).
+   */
+  private courseInFlight: number | undefined;
+  /** A `setCourse` came while one was in flight: `courseInput` is posted when its reply is in. */
+  private courseWaiting = false;
   private loadPosted = false;
   private atlasBytes = 0;
   /** Called when something arrived that changes the picture (a detail part for a drawn cell, a course layer). */
   onChange: (() => void) | undefined;
-  /** Called with each current course reply (not with replies a newer `setCourse` overtook). */
+  /**
+   * Called with each course reply the engine draws: the latest posted generation's. While one is in
+   * flight, newer inputs wait and only the last is posted after its reply, so a drag redraws at the
+   * rate the worker derives (one in flight, latest wins).
+   */
   onCourse: ((info: CourseInfo) => void) | undefined;
 
   constructor(renderer: MapGlRenderer, transport: Transport, opts: EngineOptions = {}) {
@@ -181,6 +193,7 @@ export class MapGlEngine {
       this.transport.post(msg, transfer);
       this.loadPosted = true;
       this.courseColours = undefined;
+      // Sent at once, in flight or not: a reply to a request before this load answers the old document and is dropped.
       if (this.courseInput !== undefined) this.postCourse();
     });
   }
@@ -188,15 +201,28 @@ export class MapGlEngine {
   /**
    * Shows (or with `null` clears) the course layer (§5.2 "Dynamic bucket"): the worker symbolises it
    * and prepares one part; the reply replaces the resident one and the next `render` rebuilds the
-   * visible set at once. Only the latest request's reply is used. Before `load`, the request waits.
+   * visible set at once. One request is in flight at a time: an input made meanwhile (`null`
+   * included) waits, replaced by any newer one, and the last is posted when the reply is in. Only
+   * the latest posted generation's reply is used. Before `load`, the input waits and is posted right
+   * after the load message.
    */
   setCourse(input: CourseLayerRequest | null): void {
     this.courseInput = input;
-    if (this.loadPosted) this.postCourse();
+    if (!this.loadPosted) return;
+    if (this.courseInFlight !== undefined) this.courseWaiting = true;
+    else this.postCourse();
   }
 
   private postCourse(): void {
-    this.transport.post({ type: "course", generation: ++this.courseGeneration, input: this.courseInput ?? null }, []);
+    this.courseWaiting = false;
+    this.courseInFlight = ++this.courseGeneration;
+    this.transport.post({ type: "course", generation: this.courseInFlight, input: this.courseInput ?? null }, []);
+  }
+
+  /** The request in flight is answered (or failed): post the input that waited for it, if any. */
+  private courseDone(): void {
+    this.courseInFlight = undefined;
+    if (this.courseWaiting) this.postCourse();
   }
 
   /** The stack to draw with: the course reply's (layout-object rows on top) once one arrived, else the load's. */
@@ -236,10 +262,16 @@ export class MapGlEngine {
     if (m.type === "error") {
       this.loadWaiter?.reject(new Error(m.message));
       this.loadWaiter = undefined;
+      // A worker error may be the course request's own (`onerror` carries no generation): never leave
+      // the waiting input stuck behind a reply that will not come. A late reply is then stale.
+      if (this.courseInFlight !== undefined) this.courseDone();
       return;
     }
     if (m.type === "course") {
+      // Not the one in flight: overtaken by a load's re-send, or by an error that ended it.
+      if (m.generation !== this.courseInFlight) return;
       this.acceptCourse(m);
+      this.courseDone();
       return;
     }
     if (m.type === "loaded") {
