@@ -29,6 +29,8 @@ export interface GeometrySeqControl {
   yMm: number;
   /** The stored leg into this entry (bends, style; course-layer.md §10.1). */
   leg?: course.CourseLegProps;
+  /** The crossing point the leg into this entry runs through (§10.3), when its site is live. */
+  via?: { id: string; xMm: number; yMm: number };
 }
 
 /**
@@ -53,8 +55,8 @@ const KIND = { Start: "start", Control: "control", Finish: "finish" } as const;
  * The course layer of an editor course over its sequence (course-layer.md
  * §4.1): one item per entry (`role` = the entry's type) over the rows as
  * sites, without automatic cuts (they do not change a leg's length). A
- * leg runs through its stored bends (§10.1); its style, gaps and corridor
- * never change its length.
+ * leg runs through its stored bends (§10.1) and its crossing point
+ * (§10.3); its style, gaps and corridor never change its length.
  * Unpositioned controls are skipped by the layer.
  */
 export function editorCourseLayer(
@@ -64,8 +66,15 @@ export function editorCourseLayer(
 ): course.CourseLayer {
   const sites = new Map<string, course.CourseSite>();
   for (const c of seq) sites.set(c.id, { id: c.id, code: c.code, kind: KIND[c.type], x: c.xMm, y: c.yMm });
+  for (const c of seq) if (c.via && !sites.has(c.via.id)) sites.set(c.via.id, { id: c.via.id, code: "", kind: "crossing_point", x: c.via.xMm, y: c.via.yMm });
+  const legOf = (c: GeometrySeqControl): course.CourseLegProps | undefined => {
+    const leg: course.CourseLegProps = {};
+    if (c.leg?.bends?.length) leg.bends = c.leg.bends;
+    if (c.via) leg.crossing = { controlId: c.via.id };
+    return Object.keys(leg).length ? leg : undefined;
+  };
   return course.courseLayer({
-    structure: { version: 1, id: courseId, orderMode, items: seq.map((c) => ({ siteId: c.id, role: KIND[c.type], ...(c.leg?.bends?.length ? { leg: { bends: c.leg.bends } } : {}) })) },
+    structure: { version: 1, id: courseId, orderMode, items: seq.map((c) => { const leg = legOf(c); return { siteId: c.id, role: KIND[c.type], ...(leg ? { leg } : {}) }; }) },
     sites: [...sites.values()],
     objects: [],
     appearance: {},
@@ -176,6 +185,7 @@ export async function loadCourseSequences(
     const stored = course.structure ? courseStructureSchema.safeParse(course.structure) : null;
     let byId: Map<string, Row>;
     let ccIds: string[] = [];
+    const viaById = new Map<string, { id: string; xpos: number; ypos: number }>();
     // The stored legs into a site, by "<previous site>><site>" over consecutive items (the
     // `carryLegs` convention: a leg is the two sites it joins), in visit order, so a pair
     // the course runs twice takes each visit's own leg (course-layer.md §4.1, §10.1).
@@ -194,6 +204,12 @@ export async function loadCourseSequences(
         select,
       });
       byId = new Map(rows.map((r) => [r.id, r]));
+      // The crossing points the legs run through (§10.3): a leg's length follows them.
+      const viaIds = [...new Set(items.flatMap((i) => (i.leg?.crossing ? [i.leg.crossing.controlId] : [])))];
+      if (viaIds.length > 0) {
+        const vias = await db.control.findMany({ where: { eventId, removed: false, kind: "crossing_point", id: { in: viaIds } }, select: { id: true, xpos: true, ypos: true } });
+        for (const v of vias) viaById.set(v.id, v);
+      }
     } else {
       const ccs = await db.courseControl.findMany({
         where: { courseId: courseUuid },
@@ -234,6 +250,8 @@ export async function loadCourseSequences(
       visits.set(key, n + 1);
       const leg = legsByKey.get(key)?.[n];
       if (leg) seq[i].leg = leg;
+      const via = viaById.get(leg?.crossing?.controlId ?? "");
+      if (via && (via.xpos !== 0 || via.ypos !== 0)) seq[i].via = { id: via.id, xMm: via.xpos, yMm: via.ypos };
     }
 
     out.set(courseUuid, { seq, orderMode: course.orderMode });

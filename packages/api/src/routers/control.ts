@@ -32,6 +32,7 @@ import { course as courseShared } from "@oxygen/shared";
 import {
   coursesNamingInStructure,
   persistStructure,
+  siteUseInStructures,
   remirrorStoredStructures,
   rewriteStructureFromColumns,
 } from "../course-structure.js";
@@ -333,8 +334,59 @@ function siteKind(row: { kind: string; status: string }): ControlKind {
   return row.status === "start" || row.status === "finish" ? row.status : "control";
 }
 
-/** Phase-1 site kinds; the rest of the `control_kind` enum is written from slice F. */
-const PHASE1_KINDS: readonly ControlKind[] = ["control", "start", "finish"];
+/**
+ * Kinds created without punch codes (addressed by seq), and their names
+ * ("Start N" / "Mål N" as the importers; crossing and map-issue points
+ * by the same rule, course-layer.md §6.3).
+ */
+const CODELESS_NAMES: Partial<Record<ControlKind, string>> = {
+  start: "Start",
+  finish: "Mål",
+  crossing_point: "Passeringspunkt",
+  map_issue: "Kartutdelning",
+};
+
+/**
+ * Code-less crossing and map-issue points take a seq above this (course-layer.md
+ * §6.3): their public id (`publicControlId`, the seq without a code) stays clear
+ * of every punch code (SI codes end at 1023), where an allocated seq would meet
+ * one (`uuidsOfPublicIds` resolves codes first).
+ */
+export const MARK_SEQ_BASE = 10_000;
+
+/** Kinds that are never structure items (the slice-F split; course-layer.md §10.3). */
+const NON_ITEM_KINDS: ReadonlySet<ControlKind> = new Set(["crossing_point", "map_issue"]);
+
+/**
+ * A kind change that would leave a stored structure invalid is refused, not
+ * pruned (course-layer.md §6.3): a site that is an item cannot become a
+ * crossing or map-issue point (`SITE_KIND_NOT_ITEM`), a crossing point a
+ * leg runs through cannot become another kind (`CROSSING_KIND`), a site in
+ * a variation's alternative cannot become a map exchange
+ * (`VARIATION_CROSSES_EXCHANGE`).
+ */
+async function assertKindChangeAllowed(
+  tx: PrismaNs.TransactionClient,
+  eventId: bigint,
+  c: { id: string; name: string; status: string; kind: string },
+  kind: ControlKind,
+): Promise<void> {
+  const current = siteKind(c);
+  if (kind === current) return;
+  const use = await siteUseInStructures(tx, eventId, c.id);
+  if (NON_ITEM_KINDS.has(kind)) {
+    const columns = await courseIdsUsingControl(tx, eventId, c);
+    if (use.asItem.length > 0 || columns.length > 0) {
+      throw new TRPCError({ code: "PRECONDITION_FAILED", message: "SITE_KIND_NOT_ITEM: the control is on a course" });
+    }
+  }
+  if (current === "crossing_point" && use.asCrossing.length > 0) {
+    throw new TRPCError({ code: "PRECONDITION_FAILED", message: "CROSSING_KIND: a leg runs through the crossing point" });
+  }
+  if (kind === "map_exchange" && use.inGroup.length > 0) {
+    throw new TRPCError({ code: "PRECONDITION_FAILED", message: "VARIATION_CROSSES_EXCHANGE: the control is in a variation" });
+  }
+}
 
 /**
  * `kind` and `status` 4 / 5 kept in sync for one release (08 §4.8): the
@@ -604,6 +656,13 @@ export const controlRouter = router({
            */
           codes: z.string().optional().default(""),
           status: z.number().int().optional().default(0),
+          /**
+           * Site kind (docs/course-layer.md §6.3); default from `status`
+           * (4 / 5 → start / finish, else control). Start, finish, crossing
+           * and map-issue points are code-less; `status` follows a start /
+           * finish kind.
+           */
+          kind: z.enum(["control", "start", "finish", "map_exchange", "crossing_point", "map_issue"]).optional(),
           timeAdjust: z.number().int().optional().default(0),
           minTime: z.number().int().optional().default(0),
           /** Map position in paper mm (course editor). Both or neither. */
@@ -621,11 +680,16 @@ export const controlRouter = router({
         }),
     )
     .mutation(async ({ ctx, input }) => {
-      const statusEnum = valueToControlStatus(input.status);
-      const isStartFinish = statusEnum === "start" || statusEnum === "finish";
+      const fromStatus = valueToControlStatus(input.status);
+      const kind: ControlKind = input.kind ?? (fromStatus === "start" || fromStatus === "finish" ? fromStatus : "control");
+      // `status` 4 / 5 kept in sync with the kind for one release (08 §4.8).
+      const statusEnum =
+        kind === "start" || kind === "finish" ? kind : fromStatus === "start" || fromStatus === "finish" ? "ok" : fromStatus;
+      const isStartFinish = kind === "start" || kind === "finish";
+      const codeless = CODELESS_NAMES[kind] !== undefined;
       // Validate codes: each part must be a positive integer.
       const parts = input.codes.split(";").map((p) => p.trim()).filter(Boolean);
-      if (parts.length === 0 && !isStartFinish) {
+      if (parts.length === 0 && !codeless) {
         throw new TRPCError({
           code: "BAD_REQUEST",
           message: "Invalid control code: at least one code is required",
@@ -671,14 +735,16 @@ export const controlRouter = router({
         ? await positionToWgs84(ctx.db, ctx.event.id, input.xpos!, input.ypos!)
         : null;
 
-      // Auto-name start/finish rows following the import convention
+      // Auto-name code-less rows following the import convention
       // ("Start N" / "Mål N") — courses reference starts by this name.
       let name = input.name;
-      if (!name && isStartFinish) {
+      if (!name && codeless) {
         const count = await ctx.db.control.count({
-          where: { eventId: ctx.event.id, status: statusEnum, removed: false },
+          where: isStartFinish
+            ? { eventId: ctx.event.id, status: statusEnum, removed: false }
+            : { eventId: ctx.event.id, kind, removed: false },
         });
-        name = `${statusEnum === "start" ? "Start" : "Mål"} ${count + 1}`;
+        name = `${CODELESS_NAMES[kind]} ${count + 1}`;
       }
 
       let description = input.description as ControlDescription | undefined;
@@ -686,7 +752,7 @@ export const controlRouter = router({
         !description &&
         input.autoDescribe &&
         hasPosition &&
-        !isStartFinish
+        !codeless
       ) {
         description =
           (await autoDescribeAt(
@@ -699,13 +765,21 @@ export const controlRouter = router({
 
       // Table write + control.upserted journal entry commit together.
       const created = await ctx.db.$transaction(async (tx) => {
+        // A code-less crossing / map-issue point is addressed by its seq: one above MARK_SEQ_BASE, so its public
+        // id never meets a punch code (course-layer.md §6.3).
+        let seq: number | undefined;
+        if (codeless && !isStartFinish && parts.length === 0) {
+          const top = await tx.control.aggregate({ where: { eventId: ctx.event.id, seq: { gt: MARK_SEQ_BASE } }, _max: { seq: true } });
+          seq = Math.max(MARK_SEQ_BASE, top._max.seq ?? 0) + 1;
+        }
         const c = await tx.control.create({
           data: {
             eventId: ctx.event.id,
+            ...(seq !== undefined ? { seq } : {}),
             name,
             codes: input.codes,
             status: statusEnum,
-            kind: isStartFinish ? statusEnum : "control",
+            kind,
             timeAdjust: input.timeAdjust,
             minTime: input.minTime,
             ...(hasPosition
@@ -768,7 +842,11 @@ export const controlRouter = router({
            * position. Hand-edited descriptions are left alone.
            */
           autoDescribe: z.boolean().optional(),
-          /** Site kind (docs/course-layer.md §6); `status` 4 / 5 follows it. Phase 1: control, start, finish. */
+          /**
+           * Site kind (docs/course-layer.md §6.3); `status` 4 / 5 follows it.
+           * A change that would leave a stored structure invalid is refused
+           * (`assertKindChangeAllowed`).
+           */
           kind: z.enum(["control", "start", "finish", "map_exchange", "crossing_point", "map_issue"]).optional(),
           /** Manual circle gaps, compass degrees. */
           circleGaps: z
@@ -792,12 +870,6 @@ export const controlRouter = router({
       }
       if (notes !== undefined && !caps.has("courses.review")) {
         throw new TRPCError({ code: "FORBIDDEN", message: "Missing capability courses.review" });
-      }
-      if (input.kind !== undefined && !PHASE1_KINDS.includes(input.kind)) {
-        throw new TRPCError({
-          code: "PRECONDITION_FAILED",
-          message: "Map exchanges, crossing points and map-issue points arrive in slice F",
-        });
       }
       const c = await getControlByCode(ctx.db, ctx.event.id, input.id);
       const data: Record<string, unknown> = {};
@@ -915,6 +987,7 @@ export const controlRouter = router({
           }
         }
         const kindChanged = data.kind !== undefined && data.kind !== siteKind(c);
+        if (kindChanged) await assertKindChangeAllowed(tx, ctx.event.id, c, data.kind as ControlKind);
         // Courses that depend on the control, computed before the write (a
         // start / finish default is the lowest live seq of the old world).
         const dependent =
@@ -1022,6 +1095,15 @@ export const controlRouter = router({
             syncs.push(await syncVariants(tx, ctx.event.id, courseId));
           } else {
             await rewriteStructureFromColumns(tx, ctx.event.id, courseId);
+            // The rewrite carries the legs over; a leg through the deleted crossing point loses it (§10.3).
+            const after = await tx.course.findUniqueOrThrow({ where: { id: courseId }, select: { structure: true } });
+            const parsed = courseShared.courseStructureSchema.safeParse(after.structure);
+            if (parsed.success) {
+              const pruned = courseShared.pruneSiteFromStructure(parsed.data, c.id);
+              if (JSON.stringify(pruned) !== JSON.stringify(parsed.data)) {
+                await tx.course.update({ where: { id: courseId }, data: { structure: pruned as unknown as PrismaNs.InputJsonValue } });
+              }
+            }
           }
         }
         const variantSync = mergeSyncs(syncs);

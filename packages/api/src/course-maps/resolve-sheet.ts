@@ -12,7 +12,7 @@
 
 import { course, getPaperDimensions } from "@oxygen/shared";
 import type { PageInput } from "@oxygen/shared/print";
-import { type ResolveMapLayoutInput, type ResolvedMapLayout, resolveMapLayout } from "./resolve-layout.js";
+import { type LayoutControlSource, type ResolveMapLayoutInput, type ResolvedMapLayout, resolveMapLayout } from "./resolve-layout.js";
 
 export type SheetInput = Omit<PageInput, "map" | "geo">;
 
@@ -73,6 +73,8 @@ export function courseInputOfLayout(
     /** `controls.circle_gaps` by control id. */
     circleGaps?: ReadonlyMap<string, course.AngularGap[]>;
     courseId?: string;
+    /** The event's crossing points by control id (§10.3): a course sheet draws those its legs run through. */
+    crossingSites?: ReadonlyMap<string, LayoutControlSource>;
   },
 ): Pick<PageInput["course"], "structure" | "sites"> {
   const sites: course.CourseSite[] = [];
@@ -86,10 +88,21 @@ export function courseInputOfLayout(
   if (opts.kind !== "course") return { structure: null, sites };
 
   const parsed = opts.structure ? course.courseStructureSchema.safeParse(opts.structure) : null;
+  // The crossing points the legs run through (§10.3) are the sheet's sites too; others are not drawn.
+  if (parsed?.success) {
+    for (const item of course.structureControlItems(parsed.data)) {
+      const id = item.leg?.crossing?.controlId;
+      const c = id && !seen.has(id) ? opts.crossingSites?.get(id) : undefined;
+      if (!c || (c.xpos === 0 && c.ypos === 0)) continue;
+      seen.add(c.id);
+      sites.push({ id: c.id, code: c.name || String(c.seq ?? ""), kind: "crossing_point", x: c.xpos, y: c.ypos });
+    }
+  }
   const legs = legPropsByIndex(layout, parsed?.success ? parsed.data : null);
   const items: course.CourseItem[] = layout.controls.map((c, i) => {
-    const item: course.CourseItem = { siteId: c.id, role: c.type };
-    // The whole stored leg (F1): the layer reads gaps, style and bends; the rest is F2's / F4's.
+    // A course sheet's controls are its items: start, controls, finish.
+    const item: course.CourseItem = { siteId: c.id, role: c.type === "start" || c.type === "finish" ? c.type : "control" };
+    // The whole stored leg: gaps, style, bends (F1), corridor (F2), crossing (F4).
     const leg = legs.get(i);
     if (leg) item.leg = leg;
     return item;
@@ -135,6 +148,7 @@ export function resolveSheet(input: ResolveSheetInput): ResolvedSheet {
     structure: input.structure,
     circleGaps: circleGapsOf([...(input.course?.controls ?? []), ...(input.allControls ?? [])]),
     courseId: input.courseId,
+    crossingSites: new Map((input.allControls ?? []).filter((c) => c.kind === "crossing_point").map((c) => [c.id, c])),
   });
   const title = input.course?.name ?? input.mapName ?? "";
   const sheet: SheetInput = {
@@ -147,6 +161,8 @@ export function resolveSheet(input: ResolveSheetInput): ResolvedSheet {
       appearance: course.appearanceFromTemplate(document.appearance),
       viewOptions: {
         allControls: input.kind === "all_controls",
+        // §10.3: the all-controls sheet is a setter view (702, every crossing point); a course sheet never is.
+        ...(input.kind === "all_controls" ? { setterMarks: true } : {}),
         labelMode: layout.labelMode,
         overprintScale: layout.overprintScale,
         ...(input.autoCuts === false ? { autoCuts: false } : {}),

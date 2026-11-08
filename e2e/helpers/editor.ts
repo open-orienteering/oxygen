@@ -664,6 +664,8 @@ export interface PrintedPdf {
   curvedFills: number;
   /** Every Bézier `c` operator. */
   curves: number;
+  /** Every stroke (`S`) operator: an object added to the page adds its strokes (tests compare counts). */
+  strokes: number;
 }
 
 /** A print of the event (`/api/maps/<nameId>/maps.pdf?<query>`, e.g. `allControls=1` or `maps=<seq>`), analysed. */
@@ -676,12 +678,13 @@ export async function printed(page: Page, nameId: string, query: string): Promis
 export async function analysePdf(bytes: Buffer): Promise<PrintedPdf> {
   const pdf = await loadPdf(bytes);
   const { width, height } = pdf.getPages()[0].getSize();
-  let hatches = 0, curvedFills = 0, curves = 0;
+  let hatches = 0, curvedFills = 0, curves = 0, strokes = 0;
   const run = /W\* n[^]*?(?:-?[\d.]+ -?[\d.]+ m -?[\d.]+ -?[\d.]+ l ){3,}-?[\d.]+ -?[\d.]+ m -?[\d.]+ -?[\d.]+ l S/g;
   for (const inflated of inflatedStreams(bytes)) {
     hatches += inflated.match(run)?.length ?? 0;
     let curved = false;
     for (const op of inflated.split(/\s+/)) {
+      if (op === "S") strokes++;
       if (op === "c") { curved = true; curves++; }
       else if (op === "f*" || op === "f") {
         if (curved) curvedFills++;
@@ -689,7 +692,7 @@ export async function analysePdf(bytes: Buffer): Promise<PrintedPdf> {
       } else if (op === "S" || op === "n" || op === "B" || op === "B*") curved = false;
     }
   }
-  return { pages: pdf.getPageCount(), sizeMm: [Math.round((width * 25.4) / 72), Math.round((height * 25.4) / 72)], hatches, curvedFills, curves };
+  return { pages: pdf.getPageCount(), sizeMm: [Math.round((width * 25.4) / 72), Math.round((height * 25.4) / 72)], hatches, curvedFills, curves, strokes };
 }
 
 export type Frame = { x: number; y: number; width: number; height: number };

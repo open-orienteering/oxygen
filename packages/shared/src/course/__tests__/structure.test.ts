@@ -115,6 +115,41 @@ describe("structureSiteIssues (rules that need the sites)", () => {
   it("is empty for a valid linear course", () => {
     expect(structureSiteIssues(linear(["S", "31", "32", "F"]), kinds)).toEqual([]);
   });
+
+  describe("slice-F kinds (F4)", () => {
+    const fk = new Map<string, string>([...kinds, ["P", "crossing_point"], ["M", "map_issue"]]);
+    const withLeg = (leg: Record<string, unknown>) =>
+      courseStructureSchema.parse({ ...linear([]), items: [{ siteId: "S" }, { siteId: "31", leg }, { siteId: "F" }] });
+
+    it("refuses a crossing point or a map-issue point as an item, top level or in an alternative", () => {
+      expect(structureSiteIssues(linear(["S", "P", "31", "M", "F"]), fk)).toEqual([
+        { code: "SITE_KIND_NOT_ITEM", siteId: "P" },
+        { code: "SITE_KIND_NOT_ITEM", siteId: "M" },
+      ]);
+      const g = courseStructureSchema.parse({ ...linear([]), items: [{ siteId: "S" }, { siteId: "31" }, variation("v1", [["P"], ["33"]]), { siteId: "32" }, { siteId: "F" }] });
+      expect(structureSiteIssues(g, fk)).toEqual([{ code: "SITE_KIND_NOT_ITEM", siteId: "P" }]);
+    });
+
+    it("accepts a map exchange as an ordinary item", () => {
+      expect(structureSiteIssues(linear(["S", "31", "X", "32", "F"]), fk)).toEqual([]);
+    });
+
+    it("accepts a leg crossing that names a crossing point", () => {
+      expect(structureSiteIssues(withLeg({ crossing: { controlId: "P", section: true } }), fk)).toEqual([]);
+    });
+
+    it("refuses a leg crossing naming another kind (CROSSING_KIND) or an unknown site", () => {
+      expect(structureSiteIssues(withLeg({ crossing: { controlId: "32" } }), fk)).toEqual([{ code: "CROSSING_KIND", siteId: "32" }]);
+      expect(structureSiteIssues(withLeg({ crossing: { controlId: "nope" } }), fk)).toEqual([{ code: "SITE_UNKNOWN", siteId: "nope" }]);
+    });
+
+    it("the wire form names the crossing by public id", () => {
+      const wire = { version: 1, id: "7", orderMode: "ordered", items: [{ siteId: 31 }, { siteId: 32, leg: { crossing: { controlId: 90 } } }] };
+      expect(courseStructureWireSchema.safeParse(wire).success).toBe(true);
+      const bad = { ...wire, items: [{ siteId: 31 }, { siteId: 32, leg: { crossing: { controlId: "90" } } }] };
+      expect(courseStructureWireSchema.safeParse(bad).success).toBe(false);
+    });
+  });
 });
 
 describe("linearStructure / structureControlIds", () => {

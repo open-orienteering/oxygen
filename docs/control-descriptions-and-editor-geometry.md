@@ -65,6 +65,23 @@ reader matches by that id: the on-map sheet, Layout mode's block and the
 print (`resolve-layout.ts`, which matched the control's seq until E3b —
 [bugfix-description-special-anchor.md](bugfix-description-special-anchor.md)).
 
+**Derived rows** (F4; `course-layer.md` §10.3). A leg that runs through a
+crossing point (`LegProps.crossing`) derives a **13.3** row (*Mandatory
+crossing point*), **13.4** (*Mandatory passage*) when the crossing is a
+section, after the control the leg leaves (`null`: after the start) —
+`buildDescriptionSheet({ crossings })`, `mergeDerivedSpecials`. A derived
+row **replaces** a stored special of the same kind at the same anchor
+and keeps its `lengthM` (the stored row's only extra; dropping it would
+lose the setter's entry on the first save after F4); stored rows of
+another kind or at another anchor stay; one derived row per anchor and
+kind (the sheet repeats an anchor's rows at each visit of its control).
+Every reader passes the crossings: print and Layout mode's block and the
+description-sheet PDF (`resolve-layout.ts` `LayoutCourseSource.crossings`
+from `layoutCrossings` → `crossingRowsOf` over the stored structure, the
+root's path for a group) and the on-map sheet (`sheetCrossings` over
+`course.list`'s legs). Decided on the user's standing instruction
+2026-11-07, for review. 13.5 (map exchange) is F5's.
+
 The course editor edits the value in Course mode's inspector (*Description
 sheet*: finish variant and length, special rows), one `course.update {
 descriptionInstructions, baseVersion }` per change with the course's

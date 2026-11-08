@@ -13,6 +13,7 @@ import { isAppliedMatch } from "../map-document/render-bridge.js";
 import { COORD_FLAG } from "../render/pass-stream.js";
 import type { SymbolLibraryId } from "../symbol-library/index.js";
 import { courseDocumentContext } from "./context.js";
+import { routedBends } from "./derive.js";
 import type { CourseLayerObject } from "./objects.js";
 import type { CourseDerivation, CourseStructure } from "./types.js";
 
@@ -46,6 +47,12 @@ const MIN_CODE = 31;
 export const UNCROSSABLE_CODES: ReadonlySet<number> = new Set([201, 301, 307, 411, 515, 518, 520, 521, 529]);
 /** Out-of-bounds boundary and area (708, 709). */
 export const OOB_CODES: ReadonlySet<number> = new Set([708, 709]);
+/**
+ * A leg through a crossing point (§10.3) is exempt at an obstacle whose
+ * line (an area's ring closed) comes within this of the site, paper mm:
+ * the crossing is where the leg passes it (§9.3).
+ */
+export const CROSSING_REACH_MM = 1.0;
 
 export interface CourseCheck {
   code: CourseCheckCode;
@@ -211,6 +218,20 @@ function legHit(a: MapPoint, b: MapPoint, o: CheckObstacle): MapPoint | null {
   return o.closed && insideRing(mid, pts) ? mid : null;
 }
 
+/** Distance from `p` to the obstacle's polyline (its ring closed for an area), mm. */
+function obstacleDistance(p: MapPoint, o: CheckObstacle): number {
+  const pts = o.points;
+  const n = o.closed ? pts.length : pts.length - 1;
+  let best = Infinity;
+  for (let i = 0; i < n; i++) {
+    const a = pts[i], b = pts[(i + 1) % pts.length];
+    const dx = b.x - a.x, dy = b.y - a.y, l2 = dx * dx + dy * dy;
+    const t = l2 === 0 ? 0 : Math.max(0, Math.min(1, ((p.x - a.x) * dx + (p.y - a.y) * dy) / l2));
+    best = Math.min(best, Math.hypot(p.x - (a.x + dx * t), p.y - (a.y + dy * t)));
+  }
+  return best;
+}
+
 const descriptionD = (s: CheckSite) => s.description?.d?.trim() || "";
 
 /** The advisory checks of a course and its event's sites (docs/course-layer.md §9). */
@@ -302,18 +323,24 @@ export function courseChecks(input: CourseChecksInput): CourseCheck[] {
     if (structure.orderMode === "ordered") {
       const obstacles = [...(input.document?.obstacles ?? []), ...objectObstacles(input.objects ?? [])];
       const boxes = obstacles.map((o) => boxOf(o.points));
-      const seqVisits = visits.filter((v) => positioned(v.site));
+      // Crossing and map-issue points are never items (§10.3): the layer skips them, so do the legs.
+      const seqVisits = visits.filter((v) => positioned(v.site) && v.site.kind !== "crossing_point" && v.site.kind !== "map_issue");
       const seq = seqVisits.map((v) => v.site);
       for (let i = 1; i < seq.length; i++) {
         const a = seq[i - 1], b = seq[i];
-        // The leg as drawn (§10.1): through its bends, first hit by distance along them.
-        const pts: MapPoint[] = [a, ...(seqVisits[i].item.leg?.bends ?? []), b];
+        // The leg as drawn (§10.1, §10.3): through its bends and its crossing point, first hit by distance along them.
+        const legProps = seqVisits[i].item.leg;
+        const via = siteById.get(legProps?.crossing?.controlId ?? "");
+        const crossing = via && via.kind === "crossing_point" && positioned(via) ? via : undefined;
+        const pts: MapPoint[] = [a, ...(crossing ? routedBends(a, legProps?.bends, crossing, b) : (legProps?.bends ?? [])), b];
         const legBox = boxOf(pts);
         const leg = { from: a.id, to: b.id, index: i - 1 };
         for (const kind of ["oob", "uncrossable"] as const) {
           let first: { at: MapPoint; t: number; code: string } | null = null;
           obstacles.forEach((o, k) => {
             if (o.kind !== kind || !boxesMeet(legBox, boxes[k])) return;
+            // The obstacle the leg crosses at its crossing point is exempt (§9.3); others still report.
+            if (crossing && obstacleDistance(crossing, o) <= CROSSING_REACH_MM) return;
             let start = 0;
             for (let j = 1; j < pts.length; j++) {
               const p = pts[j - 1], q = pts[j];

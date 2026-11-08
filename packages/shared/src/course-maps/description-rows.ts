@@ -110,6 +110,35 @@ export interface BuildDescriptionSheetInput {
    * number on control rows (controls are listed by code only).
    */
   orderMode?: CourseOrderMode;
+  /**
+   * The course's legs through crossing points (`LegProps.crossing`,
+   * course-layer.md §10.3), each anchored after the control the leg leaves
+   * (null: the start). They derive a 13.3 row (13.4 for a section) that
+   * replaces a hand-placed row of the same kind at the same anchor and
+   * keeps its length; other hand-placed rows stay.
+   */
+  crossings?: ReadonlyArray<{ afterControlId: number | null; section: boolean }>;
+}
+
+type Special = NonNullable<CourseDescriptionInstructions["specials"]>[number];
+
+/** The stored specials with the derived crossing rows merged in (in place of a same-kind row at the anchor, else after the anchor's rows). */
+export function mergeDerivedSpecials(stored: readonly Special[], crossings: BuildDescriptionSheetInput["crossings"] = []): Special[] {
+  const out: Special[] = stored.map((s) => ({ ...s }));
+  const derived = new Set<Special>();
+  // A row per anchor and kind: the sheet repeats an anchor's rows at every visit of its control.
+  const seen = new Set<string>();
+  for (const c of crossings) {
+    const kind = c.section ? "13.4" : "13.3";
+    if (seen.has(`${c.afterControlId}:${kind}`)) continue;
+    seen.add(`${c.afterControlId}:${kind}`);
+    const same = out.findIndex((s) => !derived.has(s) && s.kind === kind && (s.afterControlId ?? null) === c.afterControlId);
+    const row: Special = { afterControlId: c.afterControlId, kind, ...(same >= 0 && out[same].lengthM !== undefined ? { lengthM: out[same].lengthM } : {}) };
+    if (same >= 0) out[same] = row;
+    else out.push(row);
+    derived.add(row);
+  }
+  return out;
 }
 
 /**
@@ -176,7 +205,7 @@ export function buildDescriptionSheet(
   };
 
   const rows: DescriptionSheetRow[] = [];
-  const specials = input.instructions?.specials ?? [];
+  const specials = mergeDerivedSpecials(input.instructions?.specials ?? [], input.crossings);
 
   const afterStart = specials.filter((s) => s.afterControlId == null);
   rows.push({

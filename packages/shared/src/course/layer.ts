@@ -18,7 +18,7 @@ import { corridorGeometry } from "./corridor.js";
 import { courseColourStack, withObjectColours } from "./colour-stack.js";
 import { deriveCourse } from "./derive.js";
 import { TONER_WHITE_ID, filterRegionOf, hasTonerSaver, layoutObjects, objectColours, isCourseObject } from "./objects.js";
-import { courseSymbols } from "./symbols.js";
+import { CROSSING_BODY_MM, CROSSING_SECTION_MM, CROSSING_SECTION_OFFSET_MM, courseSymbols } from "./symbols.js";
 import type { CourseFilterRegion, CourseLayer, CourseLayerInput, CourseRenderObject } from "./types.js";
 import type { MapPoint } from "../course-maps/schema.js";
 
@@ -46,6 +46,11 @@ export function courseLayer(input: CourseLayerInput): CourseLayer {
       objects.push({ symbolIdx: idx.start, path: makePath([um(s.x), um(s.y)]), ...(s.angleDeg ? { angleDeg: s.angleDeg } : {}), ref });
     } else if (s.role === "finish") {
       objects.push({ symbolIdx: idx.finish, path: makePath([um(s.x), um(s.y)]), ref });
+    } else if (s.role === "map_issue") {
+      // §10.3: 702 unrotated; the derivation draws it with setter marks only.
+      objects.push({ symbolIdx: idx.mapIssue, path: makePath([um(s.x), um(s.y)]), ref });
+    } else if (s.role === "crossing_point") {
+      objects.push(...crossingObjects(s, idx.crossing, input.document.documentFactor));
     } else {
       for (const path of circleWithGaps(um(s.x), um(s.y), set.circleRadiusUm, s.cuts)) objects.push({ symbolIdx: idx.circle, path, ref });
     }
@@ -90,6 +95,35 @@ export function courseLayer(input: CourseLayerInput): CourseLayer {
   // §10.2: the corridors' white band cuts every map colour away; the course is never filtered.
   if (corridors?.band) regions.push({ path: ringsPath(corridors.band), mode: "clip", symbols: "all" });
   return { colours, remap: stack.remap, symbols, objects, images: built.images, derivation, warnings: built.warnings, regions };
+}
+
+/**
+ * A crossing point's objects (§10.3), turned along the passage
+ * (`angleDeg`, counter-clockwise from +x). ISOM: 710 as a line over
+ * `CROSSING_BODY_MM` (the section form `CROSSING_SECTION_MM`). ISSprOM:
+ * the 710.1 point, or for a section two 710.2 lines either side of the
+ * passage, the second reversed so both ends curve outwards.
+ */
+function crossingObjects(s: CourseLayer["derivation"]["sites"][number], idx: { line?: number; point?: number; section?: number }, factor: number): CourseRenderObject[] {
+  const ref = { kind: "site" as const, id: s.id };
+  const a = ((s.angleDeg ?? 90) * Math.PI) / 180;
+  const ux = Math.cos(a), uy = Math.sin(a);
+  const along = (half: number, off: number): MapPoint[] => [
+    { x: s.x - ux * half - uy * off, y: s.y - uy * half + ux * off },
+    { x: s.x + ux * half - uy * off, y: s.y + uy * half + ux * off },
+  ];
+  if (idx.point !== undefined) {
+    if (s.section && idx.section !== undefined) {
+      const half = (CROSSING_SECTION_MM * factor) / 2, off = CROSSING_SECTION_OFFSET_MM * factor;
+      return [
+        { symbolIdx: idx.section, path: line(along(half, off)), ref },
+        { symbolIdx: idx.section, path: line(along(half, -off).reverse()), ref },
+      ];
+    }
+    return [{ symbolIdx: idx.point, path: makePath([um(s.x), um(s.y)]), angleDeg: s.angleDeg ?? 90, ref }];
+  }
+  const half = ((s.section ? CROSSING_SECTION_MM : CROSSING_BODY_MM) * factor) / 2;
+  return [{ symbolIdx: idx.line!, path: line(along(half, 0)), ref }];
 }
 
 /** Flat µm rings → one closed path, every ring after the first flagged as a new ring (even-odd). */

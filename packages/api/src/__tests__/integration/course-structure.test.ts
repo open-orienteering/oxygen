@@ -93,8 +93,12 @@ describe("kind ↔ status", () => {
     await caller.control.delete({ id: c.id });
   });
 
-  it("refuses the slice-F kinds", async () => {
-    await expect(caller.control.update({ id: 31, kind: "map_exchange" })).rejects.toMatchObject({ code: "PRECONDITION_FAILED" });
+  it("writes the slice-F kinds (F4; course-crossings.test.ts has the rules)", async () => {
+    const c = await caller.control.create({ codes: "91", xpos: 6, ypos: 6 });
+    await caller.control.update({ id: c.id, kind: "map_exchange" });
+    const row = await ctx.db.control.findFirstOrThrow({ where: { eventId: ctx.eventId, codes: "91" } });
+    expect([row.kind, row.status]).toEqual(["map_exchange", "ok"]);
+    await caller.control.delete({ id: c.id });
   });
 
   it("stores circle gaps", async () => {

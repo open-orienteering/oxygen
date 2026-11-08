@@ -1,6 +1,6 @@
 import { describe, it, expect } from "vitest";
 import type { course } from "@oxygen/shared";
-import { courseLayerRequest, courseObjectsForView, provisionalDrawn, PROVISIONAL_SITE_ID, type CourseRequestInput, type ProvisionalVisit, type RequestControl } from "../course-layer-request";
+import { courseLayerRequest, courseObjectsForView, overlayTypeOf, provisionalDrawn, sheetCrossings, PROVISIONAL_SITE_ID, type CourseRequestInput, type ProvisionalVisit, type RequestControl } from "../course-layer-request";
 
 const ctl = (id: string, type: RequestControl["type"] = "Control", visible?: boolean): RequestControl => ({ id, code: `c${id}`, type, ...(visible === undefined ? {} : { visible }) });
 const CONTROLS = [ctl("S", "Start"), ctl("1"), ctl("2"), ctl("3"), ctl("F", "Finish")];
@@ -240,5 +240,37 @@ describe("Layout mode's sheet (docs/course-layout.md §1)", () => {
     expect(r.page).toBeUndefined();
     expect(r.appearance).toEqual({});
     expect(r.viewOptions.window).toBeUndefined();
+  });
+});
+
+describe("crossing and map-issue points (docs/course-layer.md §10.3, F4)", () => {
+  // 3 is off course A and hidden, as the editor hides it: only the marks are off the course.
+  const marks = [...CONTROLS.filter((c) => c.id !== "3"), ctl("3", "Control", false), ctl("P", "Crossing"), ctl("M", "MapIssue")];
+  const pos = new Map([...POS, ["P", { x: 50, y: 25 }], ["M", { x: 70, y: 70 }]]);
+
+  it("types a site by its kind, else the wire status; an exchange is a control", () => {
+    expect(overlayTypeOf({ status: 0, kind: "crossing_point" })).toBe("Crossing");
+    expect(overlayTypeOf({ status: 0, kind: "map_issue" })).toBe("MapIssue");
+    expect(overlayTypeOf({ status: 0, kind: "map_exchange" })).toBe("Control");
+    expect(overlayTypeOf({ status: 4, kind: "start" })).toBe("Start");
+    expect(overlayTypeOf({ status: 5 })).toBe("Finish");
+    expect(overlayTypeOf({ status: 0 })).toBe("Control");
+  });
+
+  it("their sites never make the view all-controls; setter marks and the legs' crossing pass through", () => {
+    const legs = { "1>2": { crossing: { controlId: "P" } } };
+    const r = courseLayerRequest(base({ controls: marks, positions: pos, courses: [{ name: "A", controls: ["S", "1", "2", "F"], highlight: true, legs }], setterMarks: true }));
+    expect(r.sites.filter((x) => x.id === "P" || x.id === "M").map((x) => x.kind)).toEqual(["crossing_point", "map_issue"]);
+    expect(r.viewOptions.allControls).toBeUndefined();
+    expect(r.viewOptions.setterMarks).toBe(true);
+    expect(structures(r)[0].items[2].leg).toEqual({ crossing: { controlId: "P" } });
+    expect(courseLayerRequest(base({ controls: marks, positions: pos })).viewOptions.setterMarks).toBeUndefined();
+  });
+
+  it("sheetCrossings: a row per leg through a crossing, after the control it leaves (its code), null after the start", () => {
+    const overlays = [{ id: "S", code: "S1", type: "Start" as const }, { id: "31", code: "31", type: "Control" as const }, { id: "32", code: "32", type: "Control" as const }];
+    const legs = { "S>31": { crossing: { controlId: "P" } }, "31>32": { crossing: { controlId: "P", section: true } } };
+    expect(sheetCrossings({ controls: ["S", "31", "32"], legs }, overlays)).toEqual([{ afterControlId: null, section: false }, { afterControlId: 31, section: true }]);
+    expect(sheetCrossings({ controls: ["S", "31", "32"], legs, orderMode: "free_order" }, overlays)).toEqual([]);
   });
 });

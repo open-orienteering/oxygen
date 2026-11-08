@@ -125,6 +125,62 @@ describe("leg styles (§10.1, F1)", () => {
   });
 });
 
+describe("crossings and map-issue points (§10.3, F4)", () => {
+  const P = site("P", "crossing_point", 25, 10);
+  const MI = site("MI", "map_issue", 50, 60);
+  const sites = [site("S", "start", 10, 10), site("31", "control", 40, 10), site("32", "control", 60, 40), P, MI];
+  const layerOf = (crossing: CourseLegProps["crossing"], over: Parameters<typeof layerInput>[0] = {}) =>
+    courseLayer(layerInput({ sites, structure: linear(undefined, { items: [{ siteId: "S" }, { siteId: "31", leg: { crossing } }, { siteId: "32" }] }), ...over }));
+  const siteObjects = (layer: ReturnType<typeof courseLayer>, id: string) => layer.objects.filter((o) => o.ref.kind === "site" && o.ref.id === id);
+  const xs = (o: { path: { coords: ArrayLike<number> } }) => Array.from(o.path.coords).filter((_, i) => i % 2 === 0);
+  const ys = (o: { path: { coords: ArrayLike<number> } }) => Array.from(o.path.coords).filter((_, i) => i % 2 === 1);
+
+  it("ISOM: one 710 line along the leg over the body length, lower purple, under black's top", () => {
+    const layer = layerOf({ controlId: "P" });
+    const [o] = siteObjects(layer, "P");
+    expect(layer.symbols[o.symbolIdx].id).toBe("ISOM2017-2:710");
+    // Due east, 3.0 mm centred on the site.
+    expect(xs(o)).toEqual([23500, 26500]);
+    expect(ys(o)).toEqual([10000, 10000]);
+    const section = siteObjects(layerOf({ controlId: "P", section: true }), "P")[0];
+    expect(xs(section)).toEqual([22000, 28000]);
+    const input = courseRenderInput(isomDocument(), layer);
+    const { stream } = symbolise({ ...input, fonts: fonts() });
+    const k = layer.objects.indexOf(o) + input.courseObjectOffset;
+    const passes = stream.passes.filter((_, j) => stream.objectIdx[j] === k);
+    expect(passes.length).toBeGreaterThan(0);
+    expect(passes.every((p) => colourId(layer, p.colour) === "purple-lower")).toBe(true);
+  });
+
+  it("ISSprOM: 710.1 turned along the leg; a section is two 710.2 lines in upper purple", () => {
+    const sprint = { document: sprintContext() };
+    const [pt] = siteObjects(layerOf({ controlId: "P" }, sprint), "P");
+    const layer = layerOf({ controlId: "P" }, sprint);
+    expect(layer.symbols[pt.symbolIdx].id).toBe("ISSprOM2019-2:710.1");
+    expect(pt.angleDeg).toBeCloseTo(0, 9);
+    const sec = siteObjects(layerOf({ controlId: "P", section: true }, sprint), "P");
+    expect(sec).toHaveLength(2);
+    const secLayer = layerOf({ controlId: "P", section: true }, sprint);
+    expect(sec.every((o) => secLayer.symbols[o.symbolIdx].id === "ISSprOM2019-2:710.2")).toBe(true);
+    expect(ys(sec[0])).toEqual([10750, 10750]);
+    // The second runs the other way, so its ends curve outwards too.
+    expect(ys(sec[1])).toEqual([9250, 9250]);
+    expect(xs(sec[1])).toEqual([28000, 22000]);
+  });
+
+  it("702 only with setter marks; the leg draws through the crossing in one piece", () => {
+    expect(siteObjects(layerOf({ controlId: "P" }), "MI")).toEqual([]);
+    const marked = layerOf({ controlId: "P" }, { viewOptions: { setterMarks: true } });
+    const [mi] = siteObjects(marked, "MI");
+    expect(marked.symbols[mi.symbolIdx].id).toBe("ISOM2017-2:702");
+    expect(mi.angleDeg).toBeUndefined();
+    const legs = marked.objects.filter((o) => o.ref.kind === "leg" && o.ref.id === "c1:0");
+    expect(legs).toHaveLength(1);
+    // No number for a crossing or a map-issue point.
+    expect(marked.objects.filter((o) => o.ref.kind === "number").map((o) => o.ref.id)).toEqual(["31", "32"]);
+  });
+});
+
 describe("filter regions (map-rendering §4.11)", () => {
   const square = [{ x: 20, y: -5 }, { x: 30, y: -5 }, { x: 30, y: 25 }, { x: 20, y: 25 }];
   const hole = [{ x: 24, y: 0 }, { x: 26, y: 0 }, { x: 26, y: 2 }];

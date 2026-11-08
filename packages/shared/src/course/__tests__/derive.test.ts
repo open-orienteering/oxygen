@@ -1,7 +1,7 @@
 /** The course-setting rules as geometry (course-layer.md §3.2–3.5). */
 
 import { describe, expect, it } from "vitest";
-import { deriveCourse, legLengthMm, type CourseMetrics } from "../derive.js";
+import { deriveCourse, legLengthMm, routedBends, type CourseMetrics } from "../derive.js";
 import { SITES, isomContext, layerInput, linear, site } from "./helpers.js";
 import type { CourseLayerInput, CourseLegProps } from "../types.js";
 
@@ -174,6 +174,85 @@ describe("corridors (§10.2, F2)", () => {
     expect(along(cor.points)).toBe(along(plain.points));
     expect(withLeg({ style: "none", corridor })[0].corridor).toBeDefined();
     expect(plain).not.toHaveProperty("corridor");
+  });
+});
+
+describe("crossings and map-issue points (§10.3, F4)", () => {
+  // S (10,10) → 31 (40,10): a crossing point just above the leg, a free one, a map-issue point, an exchange.
+  const P = site("P", "crossing_point", 25, 12, "P1");
+  const Q = site("Q", "crossing_point", 70, 70, "Q1");
+  const MI = site("MI", "map_issue", 50, 60, "M1");
+  const X = site("X", "map_exchange", 60, 10, "X1");
+  const sites = [...SITES, P, Q, MI, X];
+  const crossed = (leg: CourseLegProps = { crossing: { controlId: "P" } }, over: Partial<CourseLayerInput> = {}) =>
+    derive({ sites, structure: linear(undefined, { items: [{ siteId: "S" }, { siteId: "31", leg }, { siteId: "32" }] }), ...over });
+
+  it("routedBends puts the crossing on the nearest segment of the bent polyline", () => {
+    const a = { x: 0, y: 0 }, b = { x: 40, y: 0 };
+    expect(routedBends(a, undefined, { x: 10, y: 1 }, b)).toEqual([{ x: 10, y: 1 }]);
+    expect(routedBends(a, [{ x: 20, y: 10 }], { x: 5, y: 2 }, b)).toEqual([{ x: 5, y: 2 }, { x: 20, y: 10 }]);
+    expect(routedBends(a, [{ x: 20, y: 10 }], { x: 35, y: 4 }, b)).toEqual([{ x: 20, y: 10 }, { x: 35, y: 4 }]);
+  });
+
+  it("routes the leg through the crossing point: its points pass the site, the length grows", () => {
+    const leg = crossed().courses[0].legs[0];
+    expect(leg.points).toEqual([{ x: 10, y: 10 }, { x: 25, y: 12 }, { x: 40, y: 10 }]);
+    expect(leg.crossing).toBe("P");
+    expect(legLengthMm(leg.points)).toBeGreaterThan(30);
+    // Through a bend: before or after it, by the nearest segment.
+    const bent = crossed({ bends: [{ x: 30, y: 20 }], crossing: { controlId: "P" } }).courses[0].legs[0];
+    expect(bent.points).toEqual([{ x: 10, y: 10 }, { x: 25, y: 12 }, { x: 30, y: 20 }, { x: 40, y: 10 }]);
+  });
+
+  it("the site is drawn as 710, numberless, turned along the leg; it never clips the leg", () => {
+    const d = crossed();
+    const p = d.sites.find((x) => x.id === "P")!;
+    expect(p.role).toBe("crossing_point");
+    expect(p.label).toBeUndefined();
+    expect(p.cuts).toEqual([]);
+    // The chord S → 31 is due east.
+    expect(p.angleDeg).toBeCloseTo(0, 9);
+    // One piece runs through the site (no clearance around it).
+    const leg = d.courses[0].legs[0];
+    expect(leg.pieces).toHaveLength(1);
+    expect(leg.pieces[0]).toContainEqual({ x: 25, y: 12 });
+    // The numbering is unchanged: 31 is 1, 32 is 2.
+    expect(d.sites.find((x) => x.id === "31")!.label!.text).toBe("1");
+    expect(d.sites.find((x) => x.id === "32")!.label!.text).toBe("2");
+  });
+
+  it("the section form is reported; a crossing no drawn leg names is not drawn without setter marks", () => {
+    expect(crossed({ crossing: { controlId: "P", section: true } }).sites.find((x) => x.id === "P")!.section).toBe(true);
+    const d = crossed();
+    expect(d.sites.find((x) => x.id === "Q")).toBeUndefined();
+    expect(d.sites.find((x) => x.id === "MI")).toBeUndefined();
+  });
+
+  it("setter marks draw every crossing point (an unreferenced one north–south) and the map-issue points", () => {
+    const d = crossed(undefined, { viewOptions: { setterMarks: true } });
+    const q = d.sites.find((x) => x.id === "Q")!;
+    expect(q.role).toBe("crossing_point");
+    expect(q.angleDeg).toBe(90);
+    const mi = d.sites.find((x) => x.id === "MI")!;
+    expect(mi.role).toBe("map_issue");
+    expect(mi.label).toBeUndefined();
+    // No setter marks in an all-controls view without the option: crossings yes (sites), map-issue points no.
+    const all = derive({ sites, structure: null, viewOptions: { allControls: true } });
+    expect(all.sites.find((x) => x.id === "Q")?.role).toBe("crossing_point");
+    expect(all.sites.find((x) => x.id === "MI")).toBeUndefined();
+  });
+
+  it("a map exchange is an item drawn and numbered as a control", () => {
+    const d = derive({ sites, structure: linear(["S", "31", "X", "32", "F"]) });
+    const x = d.sites.find((s) => s.id === "X")!;
+    expect(x.role).toBe("control");
+    expect(x.label!.text).toBe("2");
+    expect(d.sites.find((s) => s.id === "32")!.label!.text).toBe("3");
+  });
+
+  it("a crossing or map-issue site named as an item is skipped (never items)", () => {
+    const d = derive({ sites, structure: linear(["S", "31", "P", "MI", "32", "F"]) });
+    expect(d.courses[0].sequence.map((e) => e.siteId)).toEqual(["S", "31", "32", "F"]);
   });
 });
 

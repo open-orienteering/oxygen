@@ -468,6 +468,7 @@ function ControlRow({
         </td>
         <td className="px-4 py-2.5">
           <ControlStatusBadge status={ctrl.status as ControlStatusValue} />
+          <ControlKindBadge kind={ctrl.kind} />
         </td>
         <td className="px-4 py-2.5">
           <RadioTypeBadge type={config?.radioType ?? "normal"} />
@@ -530,6 +531,17 @@ function ControlStatusBadge({ status }: { status: ControlStatusValue }) {
   else if (status === 4 || status === 5 || status === 11) cls += "bg-blue-100 text-blue-800";
   else cls += "bg-slate-100 text-slate-600";
   return <span className={cls}>{label}</span>;
+}
+
+/** The slice-F site kinds (docs/course-layer.md §6.3): a crossing point, a map-issue point, a map exchange. */
+function ControlKindBadge({ kind }: { kind: string }) {
+  const { t } = useTranslation("controls");
+  if (kind !== "crossing_point" && kind !== "map_issue" && kind !== "map_exchange") return null;
+  return (
+    <span data-testid="control-kind-badge" data-kind={kind} className="ml-1 px-2 py-0.5 rounded-full text-xs font-medium bg-purple-50 text-purple-700">
+      {t(kind === "crossing_point" ? "kindCrossingPoint" : kind === "map_issue" ? "kindMapIssue" : "kindMapExchange")}
+    </span>
+  );
 }
 
 function RadioTypeBadge({ type }: { type: RadioType }) {

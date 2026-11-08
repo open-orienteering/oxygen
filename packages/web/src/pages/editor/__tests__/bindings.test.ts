@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 import type { course } from "@oxygen/shared";
 import type { ToolPointer } from "../../../components/MapViewer";
-import { areaBinding, gapBinding, pickSymbolBinding, placeBinding, scaleAbout, selectBinding, type GestureRef } from "../tools/bindings";
+import { areaBinding, crossingGhost, gapBinding, pickSymbolBinding, placeBinding, scaleAbout, selectBinding, type GestureRef } from "../tools/bindings";
 import { railKeyOf } from "../tools/rail";
 
 const ptr = (x: number, y: number, over: Partial<ToolPointer> = {}): ToolPointer => ({ pt: { x, y }, target: null, shift: false, mmPerPx: 0.1, ...over });
@@ -295,6 +295,27 @@ describe("armed and area bindings", () => {
     expect(b.shapes!.map((s) => s.testId)).toContain("editor-ghost-label");
     const f = placeBinding({ ghost: ghost("finish"), provisionalDrawn: false, onHover: vi.fn(), onPlace: vi.fn(), onExit: vi.fn(), touch: null });
     expect(f.shapes!.filter((s) => s.kind === "circle").map((s) => s.kind === "circle" && s.rMm)).toEqual([2.5, 1.75]);
+  });
+
+  it("the crossing ghost (§6.8): two lines along the passage, no circle, the label; lit as C", () => {
+    const ghost = { at: { x: 10, y: 5 }, radiusMm: 2.5, role: "crossing_point" as const, angleDeg: 0, label: "Crossing point", description: null, legs: [], legLabel: null };
+    const b = placeBinding({ ghost, provisionalDrawn: false, onHover: vi.fn(), onPlace: vi.fn(), onExit: vi.fn(), touch: null });
+    expect(b.shapes!.filter((s) => s.kind === "circle")).toEqual([]);
+    const lines = b.shapes!.filter((s) => s.kind === "line");
+    expect(lines).toHaveLength(2);
+    expect(lines[0]).toMatchObject({ testId: "editor-ghost", data: { role: "crossing_point", angle: "0" } });
+    // Due east: both lines run along x, either side of the site.
+    const [a, c] = lines.map((l) => (l.kind === "line" ? l.points : []));
+    expect(a.map((p) => p.y)).toEqual([5.475, 5.475]);
+    expect(c.map((p) => p.y)).toEqual([4.525, 4.525]);
+    expect(a.map((p) => p.x)).toEqual([8.5, 11.5]);
+    // North without a leg.
+    const north = crossingGhost({ x: 0, y: 0 }, 90);
+    const pts = north[0].kind === "line" ? north[0].points : [];
+    expect(pts[0].x).toBeCloseTo(-0.475, 9);
+    expect(pts[1].y).toBeCloseTo(1.5, 9);
+    expect(b.shapes!.map((s) => s.testId)).toContain("editor-ghost-label");
+    expect(railKeyOf({ kind: "place", chain: { tool: "crossing", insertAt: null, anchorId: null, placed: [] } })).toBe("C");
   });
 
   it("the area flow: clicks add vertices, the first vertex closes, a vertex is dragged before closing", () => {

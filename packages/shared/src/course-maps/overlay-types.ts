@@ -15,7 +15,8 @@ export interface CircleCut {
 export interface CourseOverlayControl extends MapPoint {
   id: string;
   code: string;
-  type: "start" | "control" | "finish";
+  /** How the site is drawn; an all-controls sheet types its sites by kind (crossing and map-issue points, course-layer.md §10.3). */
+  type: "start" | "control" | "finish" | "crossing_point" | "map_issue";
   cuts?: CircleCut[];
   labelPosition?: MapPoint;
 }

@@ -130,9 +130,14 @@ function mapSites<A extends string | number, B extends string | number>(
   s: { items: readonly unknown[]; labelOffsets?: Offsets },
   f: (id: A) => B,
 ): { items: unknown[]; labelOffsets?: Offsets } {
-  type Ctl = { siteId: A };
+  type Ctl = { siteId: A; leg?: { crossing?: { controlId: A } } };
   type Item = Ctl & { kind?: string; alternatives?: { items: Ctl[] }[] };
-  const ctl = (i: Ctl) => ({ ...i, siteId: f(i.siteId) });
+  // A leg's crossing point is a site reference too (course-layer.md §10.3).
+  const ctl = (i: Ctl) => ({
+    ...i,
+    siteId: f(i.siteId),
+    ...(i.leg?.crossing ? { leg: { ...i.leg, crossing: { ...i.leg.crossing, controlId: f(i.leg.crossing.controlId) } } } : {}),
+  });
   const out: { items: unknown[]; labelOffsets?: Offsets } = {
     ...s,
     items: (s.items as Item[]).map((i) =>
@@ -428,7 +433,30 @@ export async function remirrorStoredStructures(db: Db, eventId: bigint, courseUu
   return out;
 }
 
-/** Courses whose stored structure names the control (any item of any alternative, start and finish included). */
+/**
+ * How stored structures use a site (course-layer.md §6.3, §10.3): the
+ * courses naming it as an item (any alternative) and those whose legs run
+ * through it as a crossing point; `inGroup` those naming it in a variation's
+ * alternative.
+ */
+export async function siteUseInStructures(db: Db, eventId: bigint, controlUuid: string): Promise<{ asItem: string[]; asCrossing: string[]; inGroup: string[] }> {
+  const rows = await db.course.findMany({
+    where: { eventId, removed: false, NOT: { structure: { equals: PrismaNs.DbNull } } },
+    select: { id: true, structure: true },
+  });
+  const out = { asItem: [] as string[], asCrossing: [] as string[], inGroup: [] as string[] };
+  for (const r of rows) {
+    const parsed = course.courseStructureSchema.safeParse(r.structure);
+    if (!parsed.success) continue;
+    const items = parsed.data.items.flatMap((i) => (i.kind === "variation" ? i.alternatives.flatMap((a) => a.items) : [i]));
+    if (items.some((i) => i.siteId === controlUuid)) out.asItem.push(r.id);
+    if (items.some((i) => i.leg?.crossing?.controlId === controlUuid)) out.asCrossing.push(r.id);
+    if (parsed.data.items.some((i) => i.kind === "variation" && i.alternatives.some((a) => a.items.some((x) => x.siteId === controlUuid)))) out.inGroup.push(r.id);
+  }
+  return out;
+}
+
+/** Courses whose stored structure names the control (any item of any alternative, start and finish included, or a leg's crossing point). */
 export async function coursesNamingInStructure(db: Db, eventId: bigint, controlUuid: string): Promise<string[]> {
   const rows = await db.course.findMany({
     where: { eventId, removed: false, NOT: { structure: { equals: PrismaNs.DbNull } } },
@@ -536,13 +564,43 @@ export async function assertCourseVersion(
 }
 
 /**
+ * The legs through crossing points of a stored structure, as the
+ * description sheet derives its 13.3 / 13.4 rows from them
+ * (`buildDescriptionSheet`'s `crossings`; course-layer.md §10.3): each
+ * anchored after the item the leg leaves — its public id, `null` when
+ * that item is the start (by role, else the first item of a course whose
+ * first site is a start). The root's path: a group by its first
+ * alternative, as `structureControlItems`.
+ */
+export function crossingRowsOf(
+  stored: unknown,
+  publicId: (uuid: string) => number | undefined,
+  isStart: (uuid: string) => boolean = () => false,
+): { afterControlId: number | null; section: boolean }[] {
+  const parsed = stored ? course.courseStructureSchema.safeParse(stored) : null;
+  if (!parsed?.success) return [];
+  const items = course.structureControlItems(parsed.data);
+  const out: { afterControlId: number | null; section: boolean }[] = [];
+  items.forEach((item, i) => {
+    if (i === 0 || !item.leg?.crossing) return;
+    const from = items[i - 1];
+    const start = from.role === "start" || (from.role === undefined && i - 1 === 0 && isStart(from.siteId));
+    const anchor = start ? null : publicId(from.siteId);
+    if (anchor === undefined) return;
+    out.push({ afterControlId: anchor, section: !!item.leg.crossing.section });
+  });
+  return out;
+}
+
+/**
  * What the viewer's course layer reads of a stored structure (§5, §10):
- * every stored leg whole — `style`, `bends`, `gaps`, `corridor` — keyed
- * `"<fromId>><toId>"`, and the controls whose number every visit hides,
- * both in public control ids. `crossing` names a control by uuid and is
- * not read by the layer, so it is stripped; a leg left empty is omitted.
- * A pair visited twice keeps its last visit's leg (the viewer keys by
- * pair). A NULL or invalid column has none.
+ * every stored leg whole — `style`, `bends`, `gaps`, `corridor`,
+ * `crossing` (its site as a public id, a string like the viewer's site
+ * ids; §10.3) — keyed `"<fromId>><toId>"`, and the controls whose number
+ * every visit hides, both in public control ids. A crossing naming an
+ * unknown control is dropped; a leg left empty is omitted. A pair visited
+ * twice keeps its last visit's leg (the viewer keys by pair). A NULL or
+ * invalid column has none.
  */
 export function layerPropsOfStored(
   stored: unknown,
@@ -559,7 +617,9 @@ export function layerPropsOfStored(
     visits.set(id, (visits.get(id) ?? true) && !!item.numberHidden);
     const prev = i > 0 ? publicId(items[i - 1].siteId) : undefined;
     if (prev === undefined || !item.leg) return;
-    const { crossing: _crossing, ...leg } = item.leg;
+    const { crossing, ...rest } = item.leg;
+    const via = crossing ? publicId(crossing.controlId) : undefined;
+    const leg: course.CourseLegProps = via === undefined ? rest : { ...rest, crossing: { ...crossing, controlId: String(via) } };
     if (Object.keys(leg).length) out.legs[`${prev}>${id}`] = leg;
   });
   out.hiddenNumbers = [...visits].filter(([, hidden]) => hidden).map(([id]) => id);

@@ -129,6 +129,11 @@ describe("structureSiteIds", () => {
     const s = course([c("S"), c("31"), group("g", [["32"], ["33", "31"]]), c("34"), c("F")]);
     expect(structureSiteIds(s)).toEqual(["S", "31", "32", "33", "34", "F"]);
   });
+
+  it("lists the crossing points the legs name (F4), after the items", () => {
+    const s = course([c("S"), { siteId: "31", leg: { crossing: { controlId: "P" } } }, { kind: "variation", id: "g", alternatives: [{ label: "A", items: [{ siteId: "32", leg: { crossing: { controlId: "Q" } } }] }, { label: "B", items: [{ siteId: "33" }] }] }, c("34"), c("F")] as never);
+    expect(structureSiteIds(s)).toEqual(["S", "31", "32", "33", "34", "F", "P", "Q"]);
+  });
 });
 
 describe("pruneSiteFromStructure", () => {
@@ -156,6 +161,13 @@ describe("pruneSiteFromStructure", () => {
     const s = pruneSiteFromStructure(course([c("S"), group("g1", [["32"], ["33"]]), c("34"), group("g2", [["35"], ["36"]]), c("F")]), "34");
     expect(s.items.map((i) => (i.kind === "variation" ? i.id : i.siteId))).toEqual(["S", "g1", "35", "F"]);
     expect(courseStructureSchema.safeParse(s).success).toBe(true);
+  });
+
+  it("strips a leg crossing naming the site and keeps the rest of the leg (F4)", () => {
+    const s = course([c("S"), { siteId: "31", leg: { bends: [{ x: 1, y: 2 }], crossing: { controlId: "P" } } }, { siteId: "F", leg: { crossing: { controlId: "P" } } }] as never);
+    const out = pruneSiteFromStructure(s, "P");
+    expect(out.items[1]).toEqual({ siteId: "31", leg: { bends: [{ x: 1, y: 2 }] } });
+    expect(out.items[2]).toEqual({ siteId: "F" });
   });
 
   it("drops the site's label offset", () => {

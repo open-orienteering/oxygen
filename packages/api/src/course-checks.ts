@@ -54,7 +54,13 @@ export async function courseChecksFor(db: Db, eventId: bigint, courseUuid: strin
     version: 1,
     id: courseUuid,
     orderMode: sequence.orderMode,
-    items: sequence.seq.map((s) => ({ siteId: s.id, role: ROLE[s.type] })),
+    // The leg as drawn (§9.3): through its bends (§10.1) and its crossing point (§10.3).
+    items: sequence.seq.map((s) => {
+      const leg: course.CourseLegProps = {};
+      if (s.leg?.bends?.length) leg.bends = s.leg.bends;
+      if (s.via) leg.crossing = { controlId: s.via.id };
+      return { siteId: s.id, role: ROLE[s.type], ...(Object.keys(leg).length ? { leg } : {}) };
+    }),
   };
   const [crs, document, objects, byCourse] = await Promise.all([
     loadEventCrs(db, eventId),

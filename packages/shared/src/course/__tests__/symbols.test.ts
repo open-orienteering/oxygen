@@ -46,6 +46,29 @@ describe("courseSymbols (course-layer.md §3.1)", () => {
     expect(s.symbols[s.idx.forbiddenRoute].id).toBe("ISOM2017-2:711");
   });
 
+  it("crossing and map-issue symbols (§10.3): ISOM's 710 line, ISSprOM's 710.1 point and 710.2 section; 702 upper", () => {
+    const isom = stack("ISOM2017-2");
+    const s = courseSymbols({ libraryId: "ISOM2017-2", documentFactor: 1 }, isom.index, {});
+    expect(s.idx.crossing.point).toBeUndefined();
+    const l710 = s.symbols[s.idx.crossing.line!] as LineSymbol;
+    expect(l710.id).toBe("ISOM2017-2:710");
+    expect(l710.type).toBe("line");
+    expect(l710.borders?.left?.colour).toBe(isom.index.get("purple-lower"));
+    const m702 = s.symbols[s.idx.mapIssue] as PointSymbol;
+    expect(m702.id).toBe("ISOM2017-2:702");
+    expect(m702.glyph.parts[0].colour).toBe(isom.index.get("purple-upper"));
+
+    const spr = stack("ISSprOM2019-2");
+    const t = courseSymbols({ libraryId: "ISSprOM2019-2", documentFactor: 1 }, spr.index, {});
+    expect(t.idx.crossing.line).toBeUndefined();
+    const p = t.symbols[t.idx.crossing.point!] as PointSymbol;
+    expect(p.id).toBe("ISSprOM2019-2:710.1");
+    expect(p.glyph.parts[0].colour).toBe(spr.index.get("purple-lower"));
+    const sec = t.symbols[t.idx.crossing.section!] as LineSymbol;
+    expect(sec.id).toBe("ISSprOM2019-2:710.2");
+    expect(sec.main!.colour).toBe(spr.index.get("purple-upper"));
+  });
+
   it("appearance multipliers: circle geometry, line widths, digit height", () => {
     const { index } = stack("ISOM2017-2");
     const s = courseSymbols({ libraryId: "ISOM2017-2", documentFactor: 1 }, index, { circle: 1.2, line: 2, number: 1.25 });

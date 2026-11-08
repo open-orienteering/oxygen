@@ -23,6 +23,17 @@ describe("the editor's checks input (docs/course-editor.md §8)", () => {
     });
   });
 
+  it("structure: legs keep their bends and crossing point (F4: the leg checks read the routed leg)", () => {
+    const sites = [coord(1, 5, 5, 4), coord(31, 10, 0), coord(9, 20, 20, 5)];
+    const wire: course.WireCourseStructure = {
+      version: 1, id: "x", orderMode: "ordered",
+      items: [{ siteId: 31, leg: { style: "marked_route", bends: [{ x: 7, y: 3 }], crossing: { controlId: 90, section: true } } }],
+    };
+    expect(checkStructureOf(7, explicitStructure(wire, sites)).items[1]).toEqual({
+      siteId: "31", leg: { bends: [{ x: 7, y: 3 }], crossing: { controlId: "90", section: true } },
+    });
+  });
+
   it("runs the shared checks: two controls 20 m apart at 1:10 000", () => {
     const sites = checkSitesOf([coord(31, 10, 0), coord(32, 12, 0)], [row(31), row(32, { description: { d: "1.002" } })]);
     const found = course.courseChecks({ structure: null, sites, document: null, sheets: null, mapScale: 10000 });

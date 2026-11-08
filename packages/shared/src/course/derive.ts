@@ -8,7 +8,7 @@ import { placeControlLabels, type PlacementCircle, type PlacementSeg } from "../
 import { subtractLegGaps } from "../course-maps/overlay-geometry.js";
 import type { MapPoint } from "../course-maps/schema.js";
 import { circleCuts, polylineLegGaps } from "./cuts.js";
-import type { CourseDerivation, CourseItem, CourseLayerInput, CourseSite, CourseStructure, DerivedCourse, DerivedLeg, DerivedSite } from "./types.js";
+import type { CourseDerivation, CourseItem, CourseItemRole, CourseLayerInput, CourseSite, CourseStructure, DerivedCourse, DerivedLeg, DerivedSite, DerivedSiteRole } from "./types.js";
 
 /** Sizes the rules read, paper mm (from the resolved symbols). */
 export interface CourseMetrics {
@@ -33,18 +33,45 @@ export function structuresOf(input: Pick<CourseLayerInput, "structure">): readon
 
 interface SeqEntry {
   site: CourseSite;
-  role: CourseSite["kind"];
+  role: CourseItemRole;
   item: CourseItem;
 }
+
+/** The role an item takes from its site's kind: a map exchange draws as a control until F5's sections (§10.3). */
+const itemRoleOf = (kind: CourseSite["kind"]): CourseItemRole => (kind === "start" || kind === "finish" ? kind : "control");
+
+/** Crossing and map-issue points are never items (§10.3): an item naming one is skipped. */
+const isItemSite = (s: CourseSite) => s.kind !== "crossing_point" && s.kind !== "map_issue";
 
 function sequenceOf(structure: CourseStructure, sites: ReadonlyMap<string, CourseSite>): SeqEntry[] {
   const out: SeqEntry[] = [];
   for (const item of structure.items) {
     const site = sites.get(item.siteId);
-    if (!site || !positioned(site)) continue;
-    out.push({ site, role: item.role ?? site.kind, item });
+    if (!site || !positioned(site) || !isItemSite(site)) continue;
+    out.push({ site, role: item.role ?? itemRoleOf(site.kind), item });
   }
   return out;
+}
+
+/**
+ * A leg's bends with the crossing point it runs through (§10.3): `via`
+ * joins the polyline [a, ...bends, b] on its segment nearest it, so the
+ * leg keeps its order of corners (the editor's *Add bend here* rule).
+ * Lengths, checks and the drawing read the same polyline.
+ */
+export function routedBends(a: MapPoint, bends: readonly MapPoint[] | undefined, via: MapPoint, b: MapPoint): MapPoint[] {
+  const list = [...(bends ?? [])];
+  const pts = [a, ...list, b];
+  let best = 0, bestD = Infinity;
+  for (let i = 0; i + 1 < pts.length; i++) {
+    const p = pts[i], q = pts[i + 1];
+    const dx = q.x - p.x, dy = q.y - p.y, l2 = dx * dx + dy * dy;
+    const t = l2 === 0 ? 0 : Math.max(0, Math.min(1, ((via.x - p.x) * dx + (via.y - p.y) * dy) / l2));
+    const d = Math.hypot(via.x - (p.x + dx * t), via.y - (p.y + dy * t));
+    if (d < bestD) { bestD = d; best = i; }
+  }
+  list.splice(best, 0, { x: via.x, y: via.y });
+  return list;
 }
 
 /** Polyline length, mm: a leg's length along its bends (§4.1, §10.1). */
@@ -134,19 +161,40 @@ export function deriveCourse(input: CourseLayerInput, m: CourseMetrics): CourseD
   const features = input.viewOptions.autoCuts === false ? undefined : input.cutFeatures;
   const R = m.circleRadiusMm;
 
-  // ---- drawn sites: the courses' in first-visit order, then (all-controls) every other positioned site.
-  const drawn = new Map<string, { site: CourseSite; role: CourseSite["kind"]; }>();
+  // ---- drawn sites: the courses' in first-visit order, then the crossing points their legs run
+  // through (§10.3), then (all-controls) every other positioned site; setter marks add every
+  // crossing and map-issue point. A map-issue point is drawn with setter marks only.
+  const setterMarks = !!input.viewOptions.setterMarks;
+  const drawn = new Map<string, { site: CourseSite; role: DerivedSiteRole; }>();
   for (const seq of sequences) {
     for (const e of seq) {
       if (!drawn.has(e.site.id)) drawn.set(e.site.id, { site: e.site, role: e.role });
     }
   }
-  if (input.viewOptions.allControls) {
-    for (const site of input.sites) if (positioned(site) && !drawn.has(site.id)) drawn.set(site.id, { site, role: site.kind });
+  const crossingOf = (structure: CourseStructure, e: SeqEntry): CourseSite | undefined => {
+    if (structure.orderMode !== "ordered") return undefined;
+    const site = siteById.get(e.item.leg?.crossing?.controlId ?? "");
+    return site && site.kind === "crossing_point" && positioned(site) ? site : undefined;
+  };
+  structures.forEach((structure, k) => {
+    sequences[k].forEach((e, i) => {
+      const site = i > 0 ? crossingOf(structure, e) : undefined;
+      if (site && !drawn.has(site.id)) drawn.set(site.id, { site, role: "crossing_point" });
+    });
+  });
+  const roleOfSite = (site: CourseSite): DerivedSiteRole | null =>
+    site.kind === "crossing_point" ? "crossing_point" : site.kind === "map_issue" ? (setterMarks ? "map_issue" : null) : itemRoleOf(site.kind);
+  for (const site of input.sites) {
+    if (!positioned(site) || drawn.has(site.id)) continue;
+    const marked = setterMarks && (site.kind === "crossing_point" || site.kind === "map_issue");
+    const role = input.viewOptions.allControls || marked ? roleOfSite(site) : null;
+    if (role) drawn.set(site.id, { site, role });
   }
 
-  const extentOf = (role: CourseSite["kind"]) => (role === "start" ? m.startRadiusMm : role === "finish" ? m.finishRadiusMm : R);
-  const obstacles = [...drawn.values()].map(({ site, role }) => ({ x: site.x, y: site.y, clearance: extentOf(role) + CLEARANCE_EXTRA * R }));
+  const extentOf = (role: DerivedSiteRole) => (role === "start" ? m.startRadiusMm : role === "finish" ? m.finishRadiusMm : R);
+  // Crossing and map-issue points never clip a leg (§10.3): the leg runs through them.
+  const isMark = (role: DerivedSiteRole) => role === "crossing_point" || role === "map_issue";
+  const obstacles = [...drawn.values()].filter(({ role }) => !isMark(role)).map(({ site, role }) => ({ x: site.x, y: site.y, clearance: extentOf(role) + CLEARANCE_EXTRA * R }));
 
   const sites: DerivedSite[] = [...drawn.values()].map(({ site, role }) => ({
     id: site.id,
@@ -166,7 +214,8 @@ export function deriveCourse(input: CourseLayerInput, m: CourseMetrics): CourseD
       for (let i = 1; i < seq.length; i++) {
         const a = seq[i - 1].site, b = seq[i].site;
         const leg = seq[i].item.leg;
-        const points = legPolyline(a, leg?.bends, b);
+        const via = crossingOf(structure, seq[i]);
+        const points = legPolyline(a, via ? routedBends(a, leg?.bends, via, b) : leg?.bends, b);
         const gaps = leg?.gaps && leg.gaps.length > 0 ? leg.gaps : (features ? polylineLegGaps(points, features, R, m.lineWidthMm) : []);
         const pieces: MapPoint[][] = [];
         for (const piece of gaps.length ? subtractLegGaps(points, gaps) : [points]) pieces.push(...clipPolyline(piece, obstacles));
@@ -174,6 +223,7 @@ export function deriveCourse(input: CourseLayerInput, m: CourseMetrics): CourseD
         // §10.2: ground metres at the base map's scale; the band is paper mm already.
         const k = leg?.corridor;
         if (k) derived.corridor = { widthMm: (k.widthM * 1000) / input.document.mapScale, whiteMm: k.whiteMm, edge: k.edge };
+        if (via) derived.crossing = via.id;
         legs.push(derived);
       }
     }
@@ -190,6 +240,26 @@ export function deriveCourse(input: CourseLayerInput, m: CourseMetrics): CourseD
       if (!next) continue;
       s.angleDeg = (Math.atan2(next.y - s.y, next.x - s.x) * 180) / Math.PI - 90;
       break;
+    }
+  }
+
+  // ---- crossing points (§10.3): passage along the leg through them — the chord from the point
+  // before the site to the point after — of the first ordered course whose leg names it; else
+  // north–south. The section form follows that leg's `section`.
+  for (const s of sites) {
+    if (s.role !== "crossing_point") continue;
+    s.angleDeg = 90;
+    found: for (let k = 0; k < courses.length; k++) {
+      for (let i = 0; i < courses[k].legs.length; i++) {
+        const leg = courses[k].legs[i];
+        if (leg.crossing !== s.id) continue;
+        const j = leg.points.findIndex((p) => p.x === s.x && p.y === s.y);
+        const before = leg.points[Math.max(0, j - 1)], after = leg.points[Math.min(leg.points.length - 1, j + 1)];
+        if (before && after && (before.x !== after.x || before.y !== after.y)) s.angleDeg = (Math.atan2(after.y - before.y, after.x - before.x) * 180) / Math.PI;
+        // The leg into sequence entry i + 1 carries the crossing.
+        if (sequences[k][i + 1]?.item.leg?.crossing?.section) s.section = true;
+        break found;
+      }
     }
   }
 
@@ -215,7 +285,8 @@ export function deriveCourse(input: CourseLayerInput, m: CourseMetrics): CourseD
   }
   const offsets = single?.labelOffsets ?? {};
   // The placer's direction preferences are screen conventions: place in y-down, then flip back.
-  const circles: PlacementCircle[] = sites.map((s) => {
+  // Crossing and map-issue points are no placement obstacle (§10.3).
+  const circles: PlacementCircle[] = sites.filter((s) => !isMark(s.role)).map((s) => {
     const c: PlacementCircle = { id: s.id, x: s.x, y: -s.y, radius: extentOf(s.role) };
     if (s.role === "control" && !hiddenNumber.has(s.id)) {
       c.label = numbers.get(s.id)?.join("/") ?? s.code;

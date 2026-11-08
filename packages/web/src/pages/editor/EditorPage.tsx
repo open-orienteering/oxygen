@@ -26,7 +26,7 @@
 import { useCallback, useEffect, useMemo, useReducer, useRef, useState } from "react";
 import { useParams, useSearchParams } from "react-router-dom";
 import { useTranslation } from "react-i18next";
-import type { ControlDescription, course } from "@oxygen/shared";
+import { course as courseShared, type ControlDescription, type ControlKind, type course } from "@oxygen/shared";
 import { trpc } from "../../lib/trpc";
 import { MapPanel } from "../../components/MapPanel";
 import { ControlDescriptionEditor } from "../../components/ControlDescriptionEditor";
@@ -60,12 +60,12 @@ import { instructionsOnCourse, type Instructions } from "../../lib/editor/instru
 import { areaTool, editorReducer, escapeHasWork, initialEditorState, type EditorTool } from "../../lib/editor/state";
 import { appendSite, insertSite, moveVisit, removeSite, removeVisit, setLegGaps, setLegProps, setNumberHidden, setRole, DEFAULT_CORRIDOR, type KindOf, type LegPatch } from "../../lib/editor/structure-edit";
 import { displaySequence, effectiveEnds, explicitStructure, insertIndexForLeg, kindOfSites, legForInsert, type SiteRow } from "../../lib/editor/sequence";
-import { insertBendAt, legPolyline } from "../../lib/editor/bends";
+import { insertBendAt, legPolyline, projectOnPolyline } from "../../lib/editor/bends";
 import { courseActions } from "./ActionBar";
 import { TopBar } from "./TopBar";
 import { ToolRail, type AreaChoice } from "./ToolRail";
 import { areaChoiceOfKey, isCorridorKey } from "./tools/rail";
-import { afterPlaced, afterUndo, armPlacement, ghostInfo, switchTool, type PlacementState, type PlacementTool } from "./tools/placement";
+import { afterPlaced, afterUndo, armPlacement, endsChain, ghostInfo, switchTool, type PlacementState, type PlacementTool } from "./tools/placement";
 import { step as polygonStep, type AreaKind } from "./tools/polygon";
 import { TONER_MARGIN_MM, tonerSaverGeometry } from "./tools/toner-saver";
 import { mergeCircleGaps, mergeLegGaps, type AngularGap, type FractionGap } from "./tools/gaps";
@@ -166,6 +166,18 @@ export function EditorPage() {
     [controlCoords.data],
   );
   const kindOf = useMemo(() => kindOfSites(sites), [sites]);
+  /** A site's kind (course-layer.md §6.3): crossing and map-issue points are never items, `kindOf` reads them as controls. */
+  const siteKindOf = useMemo(() => {
+    const byId = new Map((controlCoords.data ?? []).map((c) => [c.id, c.kind as ControlKind] as const));
+    return (id: number): ControlKind => byId.get(id) ?? "control";
+  }, [controlCoords.data]);
+  // A site this client just created counts before the coordinates refetch (`created`, below).
+  const isMark = useCallback((id: number) => { if (created.current.get(id)?.mark) return true; const k = siteKindOf(id); return k === "crossing_point" || k === "map_issue"; }, [siteKindOf]);
+  /** A crossing point's position, for the legs through it (§6.8). */
+  const crossingPt = useCallback((leg: { crossing?: { controlId: number } } | undefined) => {
+    const c = leg?.crossing ? (controlCoords.data ?? []).find((x) => x.id === leg.crossing!.controlId) : undefined;
+    return c && (c.mapX !== 0 || c.mapY !== 0) && c.kind === "crossing_point" ? { x: c.mapX, y: c.mapY } : null;
+  }, [controlCoords.data]);
   const coordsById = useMemo(() => new Map((controlCoords.data ?? []).map((c) => [c.id, c] as const)), [controlCoords.data]);
   const controlRowsById = useMemo(() => new Map((controlList.data ?? []).map((c) => [c.id, c] as const)), [controlList.data]);
   const selectedCourse = useMemo(
@@ -212,12 +224,15 @@ export function EditorPage() {
     const items = structure ? explicitStructure(structure, sites).items : [];
     return items.length === rows.length ? items : [];
   }, [structure, sites, rows]);
-  // Along the stored bends (course-layer.md §10.1, docs/course-editor.md §6.7).
+  // Along the stored bends and the crossing point (course-layer.md §10.1, §10.3; docs/course-editor.md §6.7, §6.8).
   const legMeters = useMemo(() => sequenceLegMeters(rows.map((r, i) => {
     const item = explicitItems[i];
-    const bends = item && item.kind !== "variation" ? item.leg?.bends : undefined;
+    const leg = item && item.kind !== "variation" ? item.leg : undefined;
+    const via = crossingPt(leg);
+    const prev = rows[i - 1]?.pt;
+    const bends = via && prev && r.pt ? courseShared.routedBends(prev, leg?.bends, via, r.pt) : leg?.bends;
     return r.pt && bends ? { ...r.pt, bends } : r.pt;
-  }), mapScale), [rows, explicitItems, mapScale]);
+  }), mapScale), [rows, explicitItems, mapScale, crossingPt]);
   const totalMeters = useMemo(() => legMeters.reduce<number>((sum, m) => sum + (m ?? 0), 0), [legMeters]);
   const inventory = useMemo(
     () => buildInventoryView(seriesAllocation.data ?? [], (controlList.data ?? []).map((c) => c.codes)),
@@ -225,6 +240,8 @@ export function EditorPage() {
   );
   const activeSeriesId = allocSeriesId !== null && inventory.some((s) => s.seriesId === allocSeriesId) ? allocSeriesId : null;
   const membership = useMemo(() => courseMembership(courses.data ?? []), [courses.data]);
+  /** The crossing points some course's leg runs through (§6.6: their kind stays). */
+  const crossingRefs = useMemo(() => new Set((courses.data ?? []).flatMap((c) => Object.values(c.legs ?? {}).flatMap((l) => (l.crossing ? [Number(l.crossing.controlId)] : [])))), [courses.data]);
 
   // ─── Field mode (§9): the fix on paper, distance / bearing, check-off ─
   const rotationCorrection = mapMetadata.data?.rotationCorrection;
@@ -300,15 +317,15 @@ export function EditorPage() {
 
   // Sites this client created since the last refetch: their kind, position and code, for the writes and the
   // ghost that follow before `controlCoordinates` / `control.list` have them (§6.1).
-  const created = useRef(new Map<number, { kind: "control" | "start" | "finish"; pt: Pt; code: number | null }>());
+  const created = useRef(new Map<number, { kind: "control" | "start" | "finish"; pt: Pt; code: number | null; mark?: boolean }>());
   useEffect(() => {
     if (pendingOps === 0) created.current.clear();
   }, [controlCoords.data, controlList.data]); // eslint-disable-line react-hooks/exhaustive-deps
   const kindOfLatest: KindOf = useCallback((id: number) => created.current.get(id)?.kind ?? kindOf(id), [kindOf]);
 
   // The latest values for writes queued behind each other (a chain of placements runs one at a time).
-  const latest = useRef({ detailStructure, detailVersion: detail.data?.version ?? null, selectedCourse, sites, kindOf: kindOfLatest });
-  latest.current = { detailStructure, detailVersion: detail.data?.version ?? null, selectedCourse, sites, kindOf: kindOfLatest };
+  const latest = useRef({ detailStructure, detailVersion: detail.data?.version ?? null, selectedCourse, sites, kindOf: kindOfLatest, rows, siteKindOf, isMark });
+  latest.current = { detailStructure, detailVersion: detail.data?.version ?? null, selectedCourse, sites, kindOf: kindOfLatest, rows, siteKindOf, isMark };
 
   /**
    * The structure as of now, read from refs: the one this client wrote last unless the course's detail
@@ -440,7 +457,7 @@ export function EditorPage() {
    * Create a site at `pt` — a control (code from the club allocation; SRR codes get radio) or a code-less
    * start / finish — and, with a course, write `edit(base, id)` into its structure: one undo entry (§4, §6.1).
    */
-  const createSite = useCallback(async (pt: Pt, kind: "control" | "start" | "finish", edit: ((s: Structure, id: number) => Structure) | null): Promise<number | null> => {
+  const createSite = useCallback(async (pt: Pt, kind: "control" | "start" | "finish" | "crossing_point" | "map_issue", edit: ((s: Structure, id: number) => Structure) | null): Promise<number | null> => {
     let code: number | null = null;
     let srr = false;
     if (kind === "control") {
@@ -457,10 +474,13 @@ export function EditorPage() {
     }
     const made = await run(() => (kind === "control"
       ? client.control.create.mutate({ codes: String(code), status: 0, xpos: pt.x, ypos: pt.y, autoDescribe: true })
-      : client.control.create.mutate({ status: kind === "start" ? 4 : 5, xpos: pt.x, ypos: pt.y })));
+      : kind === "start" || kind === "finish"
+        ? client.control.create.mutate({ status: kind === "start" ? 4 : 5, xpos: pt.x, ypos: pt.y })
+        // Code-less, named "Passeringspunkt N" / "Kartutdelning N" by the server (course-layer.md §6.3).
+        : client.control.create.mutate({ kind, xpos: pt.x, ypos: pt.y })));
     if (!made) return null;
     const id = made.id;
-    created.current.set(id, { kind, pt, code });
+    created.current.set(id, { kind: kind === "start" || kind === "finish" ? kind : "control", pt, code, ...(kind === "crossing_point" || kind === "map_issue" ? { mark: true } : {}) });
     if (srr) await run(() => client.control.upsertConfig.mutate({ controlIds: [id], radioType: "internal_radio" }));
     const course = latest.current.selectedCourse;
     const prev = currentStructure();
@@ -485,8 +505,8 @@ export function EditorPage() {
     if (id !== null) dispatch({ type: "placed", id });
   }, [createSite, kindOfLatest]);
 
-  /** A code-less start / finish (named "Start N" / "Mål N" by the server). */
-  const createRoleControl = useCallback(async (pt: Pt, role: "start" | "finish") => {
+  /** A code-less start / finish (named "Start N" / "Mål N" by the server), or a free map-issue point (§6.8). */
+  const createRoleControl = useCallback(async (pt: Pt, role: "start" | "finish" | "map_issue") => {
     const id = await createSite(pt, role, null);
     if (id !== null) dispatch({ type: "placed", id });
   }, [createSite]);
@@ -677,7 +697,7 @@ export function EditorPage() {
   }, [suggestFor, suggestQuery.data, i18n.language, tc, writes, run, record]);
 
   // ─── Site fields (§6.6): kind, notes, hidden number ─────
-  const updateField = useCallback((id: number, patch: { kind?: "control" | "start" | "finish"; notes?: string }, prev: typeof patch) => {
+  const updateField = useCallback((id: number, patch: { kind?: ControlKind; notes?: string }, prev: typeof patch) => {
     void (async () => {
       const redo = () => writes.updateControl({ id, ...patch });
       if ((await run(redo)) === undefined) return;
@@ -877,9 +897,23 @@ export function EditorPage() {
       const kindOfL = latest.current.kindOf;
       const targetKind = targetId !== null ? kindOfL(targetId) : null;
       let id: number | null;
-      if (chain.tool === "control") {
+      if (chain.tool === "crossing") {
+        // §6.8: on a selected leg the site is created (or an existing crossing point reused) and the leg
+        // routed through it, one undo entry; without a leg a free site.
+        const legAt = chain.insertAt;
+        const leg = legAt !== null ? legForInsert(latest.current.rows, legAt) : null;
+        const route = leg ? (s: Structure, siteId: number) => setLegProps(s, leg.itemIndex, { crossing: { controlId: siteId } }) : null;
         if (targetId !== null) {
-          if (targetKind !== "control") return;
+          if (latest.current.siteKindOf(targetId) !== "crossing_point") return;
+          if (!route) { dispatch({ type: "select", id: targetId }); return; }
+          if (!(await applyStructure((s) => route(s, targetId)))) return;
+          id = targetId;
+        } else {
+          id = await createSite(pt, "crossing_point", route);
+        }
+      } else if (chain.tool === "control") {
+        if (targetId !== null) {
+          if (targetKind !== "control" || latest.current.isMark(targetId)) return;
           // Reuse the site: into the course at the insertion point, no new site.
           if (chain.insertAt === null) { dispatch({ type: "select", id: targetId }); return; }
           const at = chain.insertAt;
@@ -904,7 +938,7 @@ export function EditorPage() {
       if (undoStack.top) placementEntries.current.add(undoStack.top);
       dispatch({ type: "placed", id });
       const next = afterPlaced(chain, id);
-      if (chain.tool === "finish") exitTool(); // a finish ends the chain
+      if (endsChain(chain)) exitTool(); // a finish ends the chain, as does a crossing point on a leg
       else setChain(next);
     }).catch(() => {});
   }, [snap, applyStructure, createSite, setChain, exitTool, undoStack]);
@@ -959,11 +993,12 @@ export function EditorPage() {
     // Rows and items out of line (§6.7): no leg target rather than another item's leg.
     if (!item) return null;
     const stored = item.kind !== "variation" ? item.leg?.gaps ?? [] : [];
-    const bends = item.kind !== "variation" ? item.leg?.bends : undefined;
+    const via = item.kind !== "variation" ? crossingPt(item.leg) : null;
+    const bends = item.kind !== "variation" ? (via ? courseShared.routedBends(fromPt, item.leg?.bends, via, toPt) : item.leg?.bends) : undefined;
     const effective = courseInfo?.derivation?.courses[0]?.legs.find((l) => l.from === String(from.id) && l.to === String(to.id))?.gaps ?? [];
     // Fractions of the bent length (§6.3): the target is the leg's polyline through its bends.
     return { kind: "leg", itemIndex, points: legPolyline(fromPt, bends, toPt), gaps: stored.length ? stored : effective, stored: stored.length > 0 };
-  }, [courseInfo, state.selectedControlId, state.phantom, state.tool, coordsById, kindOf, controlRowsById, structure, rows, explicitItems]);
+  }, [courseInfo, state.selectedControlId, state.phantom, state.tool, coordsById, kindOf, controlRowsById, structure, rows, explicitItems, crossingPt]);
 
   const writeGaps = useCallback((target: GapTarget, gaps: AngularGap[] | FractionGap[]) => {
     if (target.kind === "circle") {
@@ -1017,7 +1052,9 @@ export function EditorPage() {
   const ghost = useMemo(() => {
     if (!placing || !hover) return null;
     const reuseId = hover.target?.kind === "site" ? Number(hover.target.id) : null;
-    const reuse = reuseId !== null && kindOfLatest(reuseId) === (placing.tool === "control" ? "control" : placing.tool) ? reuseId : null;
+    const crossing = placing.tool === "crossing";
+    const reusable = (id: number) => (crossing ? siteKindOf(id) === "crossing_point" : !isMark(id) && kindOfLatest(id) === (placing.tool === "control" ? "control" : placing.tool));
+    const reuse = reuseId !== null && reusable(reuseId) ? reuseId : null;
     const at = reuse !== null ? ptOf(reuse) ?? hover.pt : hover.pt;
     const info = ghostInfo(placing, rows, at, ptOf);
     const radiusMm = placing.tool === "finish" ? courseInfo?.metrics?.finishRadiusMm ?? 3 : placing.tool === "start" ? courseInfo?.metrics?.startRadiusMm ?? 3.5 : courseInfo?.metrics?.circleRadiusMm ?? 2.5;
@@ -1026,16 +1063,32 @@ export function EditorPage() {
       ? t("ghostReuse", { code })
       : placing.tool === "control"
         ? [info.number !== null ? String(info.number) : null, nextCode !== null ? String(nextCode) : null].filter(Boolean).join(" · ")
-        : t(placing.tool === "start" ? "kindStart" : "kindFinish");
+        : t(placing.tool === "start" ? "kindStart" : placing.tool === "crossing" ? "kind_crossing_point" : "kindFinish");
     const legLabel = info.legs[0] ? legLengthLabel(info.legs[0][0], info.legs[0][1], mapScale) : null;
-    return { at, radiusMm, role: placing.tool, label, description: reuse === null ? ghostDescription : null, legs: info.legs, legMm: info.legMm, legLabel, reuse };
-  }, [placing, hover, kindOfLatest, ptOf, rows, courseInfo, coordsById, t, nextCode, ghostDescription, mapScale]);
+    // §6.8: the ghost 710 turns along the selected leg's segment nearest the cursor; north without a leg.
+    let angleDeg: number | undefined;
+    if (crossing && placing.insertAt !== null) {
+      const leg = legForInsert(rows, placing.insertAt);
+      const item = leg ? explicitItems[leg.itemIndex] : undefined;
+      if (leg?.from.pt && leg.to.pt) {
+        const pts = legPolyline(leg.from.pt, item && item.kind !== "variation" ? item.leg?.bends : undefined, leg.to.pt);
+        const near = projectOnPolyline(pts, at);
+        if (near) {
+          const a = pts[near.segment], b = pts[near.segment + 1];
+          angleDeg = (Math.atan2(b.y - a.y, b.x - a.x) * 180) / Math.PI;
+        }
+      }
+    }
+    const role = crossing ? "crossing_point" as const : placing.tool as "start" | "control" | "finish";
+    return { at, radiusMm, role, angleDeg, label, description: reuse === null && !crossing ? ghostDescription : null, legs: info.legs, legMm: info.legMm, legLabel, reuse };
+  }, [placing, hover, kindOfLatest, siteKindOf, isMark, ptOf, rows, explicitItems, courseInfo, coordsById, t, nextCode, ghostDescription, mapScale]);
 
   // The visit the click would write, drawn by the layer (§6.1): one course request per hover. Keyed by
   // primitives: the ghost itself changes with every course reply (its radius), which must not re-request.
   const ghostX = ghost?.at.x, ghostY = ghost?.at.y, ghostReuse = ghost?.reuse ?? null;
   const provisional = useMemo((): ProvisionalVisit | null => {
-    if (!placing || placing.insertAt === null || ghostX === undefined || ghostY === undefined) return null;
+    // A crossing point is no visit (§6.8): the layer draws nothing provisional for it.
+    if (!placing || placing.tool === "crossing" || placing.insertAt === null || ghostX === undefined || ghostY === undefined) return null;
     return {
       role: placing.tool, insertAt: placing.insertAt, pt: { x: ghostX, y: ghostY },
       ...(ghostReuse !== null ? { reuseId: String(ghostReuse) } : { code: nextCode !== null ? String(nextCode) : "" }),
@@ -1165,6 +1218,7 @@ export function EditorPage() {
     const sel = state.selectedControlId;
     const coord = sel !== null ? coordsById.get(sel) : undefined;
     const role = coord ? kindOf(coord.id) : "control";
+    const mark = coord ? isMark(coord.id) : false;
     return courseActions(
       {
         phantom: state.phantom ? { insertAt: state.phantom.insertAt } : null,
@@ -1176,6 +1230,7 @@ export function EditorPage() {
           hasLabelOffset: !!selectedCourse?.labelOffsets?.[String(coord.id)],
           radioOn: (controlRowsById.get(coord.id)?.config?.radioType ?? "normal") !== "normal",
           swapOffer: radioSwapOffer?.controlId === coord.id,
+          mark,
         } : null,
         course: selectedCourse && structure ? selectedCourse.name : null,
         codesReady: !!controlList.data,
@@ -1189,6 +1244,7 @@ export function EditorPage() {
         add: () => { const p = state.phantom; if (p) void createControl({ x: p.x, y: p.y }, null); },
         addStart: () => { const p = state.phantom; if (p) void createRoleControl({ x: p.x, y: p.y }, "start"); },
         addFinish: () => { const p = state.phantom; if (p) void createRoleControl({ x: p.x, y: p.y }, "finish"); },
+        addMapIssue: () => { const p = state.phantom; if (p) void createRoleControl({ x: p.x, y: p.y }, "map_issue"); },
         useAsRole: (r) => { if (sel !== null) void applyStructure((s) => setRole(s, r, sel, kindOf)); },
         append: () => { if (sel !== null) void applyStructure((s) => appendSite(s, sel, kindOf)); },
         removeFromCourse: () => { if (sel !== null) void applyStructure((s) => removeSite(s, sel)); },
@@ -1203,7 +1259,7 @@ export function EditorPage() {
     );
   }, [state.tool.kind, state.selectedControlId, state.phantom, coordsById, kindOf, sequenceIds, ends, selectedCourse, structure, controlRowsById,
     radioSwapOffer, controlList.data, pendingOps, createControl, createRoleControl, applyStructure, resetLabel, handleRadio,
-    confirmSwap, declineSwap, handleDelete, tc, legEditable, addBend]);
+    confirmSwap, declineSwap, handleDelete, tc, legEditable, addBend, isMark]);
 
   const contextInfo = useMemo(() => {
     const sel = state.selectedControlId;
@@ -1257,6 +1313,8 @@ export function EditorPage() {
     suggestionsHeading: tc("editor.suggestedHeading"),
     courseControlIds,
     fadeNonCourse: courseView && !!selectedCourse,
+    // §10.3: the Course and All-controls views are setter views (702, every crossing point); Class view prints as the class's sheet.
+    setterMarks: state.mode === "course" && state.view !== "class",
     moveWarnings,
     moveEpoch,
     onMapClick: handleMapClick,
@@ -1387,6 +1445,9 @@ export function EditorPage() {
         exitTool();
       } else if (plain && (key === "S" || key === "K" || key === "M")) {
         armPlace(key === "S" ? "start" : key === "M" ? "finish" : "control");
+      } else if (plain && key === "C") {
+        // The crossing point (§6.8); with the `A` menu open, `C` was its corridor entry (above).
+        armPlace("crossing");
       } else if (plain && key === "A") {
         setAreaOpen((v) => !v);
       } else if (plain && key === "T") {
@@ -1589,6 +1650,10 @@ export function EditorPage() {
   const selectedInfo = selectedCoord ? {
     code: selectedCoord.code,
     role: kindOf(selectedCoord.id),
+    kind: siteKindOf(selectedCoord.id),
+    // §6.6: an item cannot become a crossing / map-issue point, a crossing point a leg runs through cannot change.
+    onCourse: (membership.get(selectedCoord.id) ?? []).length > 0 || ends.start === selectedCoord.id || ends.finish === selectedCoord.id,
+    routed: crossingRefs.has(selectedCoord.id),
     x: selectedCoord.mapX,
     y: selectedCoord.mapY,
     description: selectedCoord.description ? describe(selectedCoord.description, i18n.language) : null,
@@ -1702,6 +1767,7 @@ export function EditorPage() {
     <LegSection
       title={`${selectedLeg.from.code} → ${selectedLeg.to.code}`}
       leg={selectedLeg.props}
+      crossingCode={selectedLeg.props.crossing ? coordsById.get(selectedLeg.props.crossing.controlId)?.code ?? String(selectedLeg.props.crossing.controlId) : null}
       focusedBend={focusedBend}
       readOnly={!legEditable}
       onPatch={writeLeg}
@@ -1712,7 +1778,7 @@ export function EditorPage() {
       {fieldSelection}
       <SelectionSection
         selected={selectedInfo}
-        onKind={(kind) => { if (selectedCoord) updateField(selectedCoord.id, { kind }, { kind: kindOf(selectedCoord.id) }); }}
+        onKind={(kind) => { if (selectedCoord) updateField(selectedCoord.id, { kind }, { kind: siteKindOf(selectedCoord.id) }); }}
         onNotes={(notes) => { if (selectedCoord) updateField(selectedCoord.id, { notes }, { notes: controlRowsById.get(selectedCoord.id)?.notes ?? "" }); }}
         onNumberHidden={(hidden) => { if (selectedCoord) { const id = selectedCoord.id; void applyStructure((s) => setNumberHidden(s, id, hidden)); } }}
       />
@@ -1844,6 +1910,7 @@ export function EditorPage() {
         onTool={(key) => {
           if (key === "V") exitTool();
           else if (key === "S" || key === "K" || key === "M") armPlace(key === "S" ? "start" : key === "M" ? "finish" : "control");
+          else if (key === "C") armPlace("crossing");
           else if (key === "T") setTool({ kind: "text" });
           else if (key === "G") setTool({ kind: "gap", legInsertAt: state.selectedControlId === null ? state.phantom?.insertAt ?? null : null });
         }}

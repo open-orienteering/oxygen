@@ -3,7 +3,7 @@ import { courseActions, type ActionContext, type ActionHandlers } from "../Actio
 
 const noop = () => undefined;
 const on: ActionHandlers = {
-  insert: noop, addBend: noop, addToCourse: noop, add: noop, addStart: noop, addFinish: noop, useAsRole: noop, append: noop,
+  insert: noop, addBend: noop, addToCourse: noop, add: noop, addStart: noop, addFinish: noop, addMapIssue: noop, useAsRole: noop, append: noop,
   removeFromCourse: noop, resetLabel: noop, radio: noop, confirmSwap: noop, declineSwap: noop, description: noop, delete: noop,
 };
 const label = (k: string, o?: Record<string, string>) => (o?.name ? `${k}:${o.name}` : k);
@@ -14,9 +14,13 @@ const sel = (over: Partial<NonNullable<ActionContext["selected"]>> = {}) => ({
 });
 
 describe("courseActions (the legacy popover's entries, docs/course-editor.md §4)", () => {
-  it("empty map: add / start / finish, plus add-to-course with a course", () => {
-    expect(ids({ phantom: { insertAt: null } })).toEqual(["add", "add-start", "add-finish"]);
-    expect(ids({ phantom: { insertAt: null }, course: "Lång" })).toEqual(["add-to-course", "add", "add-start", "add-finish"]);
+  it("empty map: add / start / finish / map-issue point (F4), plus add-to-course with a course", () => {
+    expect(ids({ phantom: { insertAt: null } })).toEqual(["add", "add-start", "add-finish", "add-map-issue"]);
+    expect(ids({ phantom: { insertAt: null }, course: "Lång" })).toEqual(["add-to-course", "add", "add-start", "add-finish", "add-map-issue"]);
+  });
+
+  it("a crossing or map-issue point: delete only (§6.8)", () => {
+    expect(ids({ selected: sel({ mark: true }), course: "Lång" })).toEqual(["delete"]);
   });
 
   it("a leg: insert, and add bend where the leg can be edited (§6.7)", () => {

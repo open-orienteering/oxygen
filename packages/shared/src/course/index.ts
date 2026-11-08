@@ -6,7 +6,7 @@
 
 export * from "./types.js";
 export { courseLayer, courseRenderInput, type CourseRenderInput } from "./layer.js";
-export { legLengthMm } from "./derive.js";
+export { legLengthMm, routedBends } from "./derive.js";
 export { corridorGeometry, type CorridorEdge, type CorridorGeometry } from "./corridor.js";
 export { CUT_CODES, CUT_AIR_MM, DEFAULT_FEATURE_RADIUS_MM, circleCuts, legGaps, polylineLegGaps, cutFeaturesOfDocument, cutSymbolRadiusMm, cutContextForScale, pointSymbolRadiusMm, ocadCutSymbolRadiiMm } from "./cuts.js";
 export { CourseStackError, courseColourStack } from "./colour-stack.js";
@@ -21,6 +21,8 @@ export {
   controlItemSchema,
   variationItemSchema,
   legPropsSchema,
+  legPropsSchemaOf,
+  NON_ITEM_SITE_KINDS,
   hasVariations,
   linearStructure,
   structureControlIds,
@@ -28,6 +30,8 @@ export {
   structureDiff,
   structureSiteIssues,
   type LegProps,
+  type WireLegProps,
+  wireLegPropsSchema,
   type StoredControlItem,
   type StoredCourseItem,
   type StoredCourseStructure,

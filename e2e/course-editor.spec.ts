@@ -115,9 +115,9 @@ test.describe("Course editor (new, GL canvas)", () => {
     await expect(page.getByTestId("editor-mode-field")).toBeEnabled();
     // No SVG hit targets: the viewer hit-tests the layer's shapes.
     await expect(page.getByTestId("editor-control-hit")).toHaveCount(0);
-    // The rail (§6): exchange and crossing wait for slice F.
-    for (const key of ["V", "S", "K", "M", "A", "T"]) await expect(page.getByTestId(`editor-tool-${key}`)).toBeEnabled();
-    for (const key of ["X", "C"]) await expect(page.getByTestId(`editor-tool-${key}`)).toBeDisabled();
+    // The rail (§6): the crossing point is F4's; the exchange waits for F5.
+    for (const key of ["V", "S", "K", "M", "C", "A", "T"]) await expect(page.getByTestId(`editor-tool-${key}`)).toBeEnabled();
+    await expect(page.getByTestId("editor-tool-X")).toBeDisabled();
   });
 
   test("an event with no map mounts the editor over the upload prompt", async ({ page }) => {
@@ -2963,6 +2963,121 @@ test.describe("F3: legs — styles, bends, corridors (docs/course-editor.md §6.
       await page.keyboard.press("Control+z");
       await expect(page.getByTestId("editor-leg-corridor-remove")).toBeVisible({ timeout: 15000 });
     } finally {
+      await cleanup("courseMap.delete", { id: sheet.seq });
+      await cleanup("mapTemplate.delete", { id: template.seq });
+    }
+  });
+});
+
+// F4 (docs/course-editor.md §6.8): the crossing tool C on a selected leg, the derived 13.3 / 13.4 rows, the map-issue
+// point only in setter views. Its own describe, so the parallel rows' edits above merge cleanly.
+test.describe("F4: crossing and map-issue points (docs/course-editor.md §6.8)", () => {
+  desktopOnly();
+
+  async function twoControlCourse(page: Page, prefix: string): Promise<{ name: string; a: Site; b: Site }> {
+    await openEditor(page);
+    const name = await newCourse(page, prefix);
+    const a = await appendClear(page);
+    const b = await appendClear(page, [a]);
+    await expect(controlRows(page)).toHaveCount(2, { timeout: 15000 });
+    return { name, a: await site(page, a), b: await site(page, b) };
+  }
+
+  /** Click the leg a → b at `at` (paper mm, on the leg) until the Leg section shows. */
+  async function selectLegAt(page: Page, at: Pt): Promise<void> {
+    await viewSettled(page);
+    await expect(async () => {
+      await dropSelection(page);
+      await clickMap(page, await toPage(page, at));
+      await expect(page.getByTestId("editor-leg")).toBeVisible({ timeout: 3000 });
+    }).toPass({ timeout: 30000 });
+  }
+
+  const wideRows = (page: Page, key: string) => page.getByTestId("description-sheet").locator(`[data-testid="desc-row-wide"][data-symbol-key="${key}"]`);
+
+  test("C on a selected leg: a 710 site the leg bends through, 13.3 on the sheet; a section is 13.4; undo removes both", async ({ page }) => {
+    const { name, a, b } = await twoControlCourse(page, "F4 crossing");
+    await legMidpoint(page, name, a.mm, b.mm);
+    // A third of the way along the leg: the leg's midpoint stays clear of the new site for the second click.
+    const along = (t: number): Pt => ({ x: a.mm.x + (b.mm.x - a.mm.x) * t, y: a.mm.y + (b.mm.y - a.mm.y) * t });
+    await selectLegAt(page, along(0.5));
+    await expect(page.getByTestId("editor-leg-crossing-none")).toBeVisible();
+
+    await page.keyboard.press("c");
+    await expect(page.getByTestId("editor-tool-C")).toHaveAttribute("aria-pressed", "true");
+    const target = await toPage(page, along(0.35));
+    await page.mouse.move(target.x, target.y);
+    await expect.poll(async () => (await toolShapes(page, "editor-ghost"))[0]?.data.role ?? null, { timeout: 10000 }).toBe("crossing_point");
+    const routed = waitForTrpc(page, "course.setStructure");
+    await clickMap(page, target);
+    await routed;
+    // One crossing per leg: the tool hands back to V.
+    await expect(page.getByTestId("editor-tool-V")).toHaveAttribute("aria-pressed", "true");
+
+    const crossing = page.locator('[data-testid="course-site"][data-role="crossing_point"]');
+    await expect(crossing).toHaveCount(1, { timeout: 15000 });
+    const p = { x: Number(await crossing.getAttribute("data-x")), y: Number(await crossing.getAttribute("data-y")) };
+    // Turned along the leg: the chord a → b (the site sits on the straight leg).
+    const legDeg = (Math.atan2(b.mm.y - a.mm.y, b.mm.x - a.mm.x) * 180) / Math.PI;
+    // (The site draws north–south first, as an unreferenced one, until the course list carries the route.)
+    await expect.poll(async () => Math.abs(Number(await crossing.getAttribute("data-angle")) - legDeg), { timeout: 15000 }).toBeLessThan(0.5);
+    // The leg runs through it: a vertex of its drawn piece at the site.
+    await expect.poll(async () => (await legBetween(page, name, a.mm, b.mm)).some((piece) => piece.points.some((q) => Math.hypot(q.x - p.x, q.y - p.y) < 0.3)), { timeout: 15000 }).toBe(true);
+    await expect(wideRows(page, "13.3")).toHaveCount(1, { timeout: 15000 });
+
+    // The Leg section names it; the section form turns the row into 13.4 (one more write).
+    await selectLegAt(page, along(0.65));
+    await expect(page.getByTestId("editor-leg-crossing-code")).toBeVisible();
+    const sectioned = waitForTrpc(page, "course.setStructure");
+    // The box shows the stored value, so it flips once the write is back (a click, not `check()`).
+    await page.getByTestId("editor-leg-crossing-section").click();
+    await sectioned;
+    await expect(page.getByTestId("editor-leg-crossing-section")).toBeChecked({ timeout: 15000 });
+    await expect(wideRows(page, "13.4")).toHaveCount(1, { timeout: 15000 });
+    await expect(wideRows(page, "13.3")).toHaveCount(0);
+    await expect(crossing).toHaveAttribute("data-section", "true", { timeout: 15000 });
+
+    // Undo: the section, then the crossing (site and route in one entry). The page owns the keys: out of the checkbox first.
+    await page.evaluate(() => (document.activeElement as HTMLElement | null)?.blur());
+    await page.keyboard.press("Control+z");
+    await expect(wideRows(page, "13.3")).toHaveCount(1, { timeout: 15000 });
+    await page.keyboard.press("Control+z");
+    await expect(crossing).toHaveCount(0, { timeout: 15000 });
+    await expect(wideRows(page, "13.3")).toHaveCount(0);
+  });
+
+  test("Add map-issue point: drawn in Course view, absent from the course's print, present on the all-controls print", async ({ page }) => {
+    const { name } = await twoControlCourse(page, "F4 map issue");
+    const nameId = nameIdOf(page);
+    const courses = await trpcCall<{ id: number; name: string }[]>("course.list", undefined, false);
+    const courseId = courses.find((c) => c.name === name)!.id;
+    const template = await probeTemplate("F4 map issue");
+    const sheet = await trpcCall<{ seq: number }>("courseMap.create", { kind: "course", courseId, templateId: template.seq, overrides: {}, objects: [] });
+    const all = await allControlsSheet();
+    let created: number | null = null;
+    try {
+      const courseBefore = await printed(page, nameId, `maps=${sheet.seq}`);
+      const allBefore = await printed(page, nameId, "allControls=1");
+
+      await viewSettled(page);
+      const spot = await emptyPoint(page);
+      await dropSelection(page);
+      await clickMap(page, spot);
+      const made = waitForTrpc(page, "control.create");
+      await page.getByTestId("editor-action-bar").getByTestId("editor-action-add-map-issue").click();
+      await made;
+      await expect(page.locator('[data-testid="course-site"][data-role="map_issue"]')).toHaveCount(1, { timeout: 15000 });
+      const list = await trpcCall<{ id: number; kind: string }[]>("control.list", undefined, false);
+      created = Math.max(...list.filter((c) => c.kind === "map_issue").map((c) => c.id));
+      // Its action bar is Delete only.
+      await expect(page.getByTestId("editor-selected-kind")).toHaveValue("map_issue", { timeout: 15000 });
+
+      // 702 renders only in setter views (08 §4.2): the course sheet is unchanged, the all-controls sheet has its bar.
+      expect((await printed(page, nameId, `maps=${sheet.seq}`)).strokes).toBe(courseBefore.strokes);
+      expect((await printed(page, nameId, "allControls=1")).strokes).toBeGreaterThan(allBefore.strokes);
+    } finally {
+      if (created !== null) await cleanup("control.delete", { id: created });
+      await all.drop();
       await cleanup("courseMap.delete", { id: sheet.seq });
       await cleanup("mapTemplate.delete", { id: template.seq });
     }
