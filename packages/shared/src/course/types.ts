@@ -159,7 +159,7 @@ export interface CourseViewOptions {
    * The editor's All-variations view (§12.7; 08 §5.3, §12 "Variation
    * tints"): a structure with a `tint` draws its legs and the circles only
    * it visits on a tint row (`course-tint:<label>`). Screen only — the
-   * print path's options cannot name it (`PageInput.course.viewOptions`),
+   * print path never sets it (a compose fixture asserts the plain stream),
    * and without it a tint is ignored.
    */
   allVariations?: boolean;

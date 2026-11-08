@@ -205,6 +205,16 @@ describe("variation groups (docs/course-editor.md §12, F7)", () => {
     expect(canCreateGroup(s, 2, kindOf)).toBe(false);
     expect(canCreateGroup(s, 3, kindOf)).toBe(true);
     expect(createGroup(s, 3, kindOf)!.groupId).toBe("v2");
+    // The leg's props stay on its end item: they are the group's exit leg, every alternative's.
+    const legged: S = { ...plain, items: [{ siteId: 1 }, { siteId: 31 }, { siteId: 32, leg: { style: "marked_route", bends: [{ x: 1, y: 1 }] } }, { siteId: 9 }] };
+    expect(createGroup(legged, 1, kindOf)!.structure.items[3]).toEqual({ siteId: 32, leg: { style: "marked_route", bends: [{ x: 1, y: 1 }] } });
+  });
+
+  it("a loop with an empty active petal: the drawn petal's legs stay that petal's; with every petal empty the active one fills", () => {
+    const loop = mk(1, 31, g("b", [[], [42]], true), 31, 9);
+    // Displayed: 31 42 31 — the leg 31 → 42 is petal B's.
+    expect(show(insertSite(loop, 1, 40, kindOf))).toBe("1 31 [|40 42] 31 9");
+    expect(show(insertSite(mk(1, 31, g("b", [[], []], true), 31, 9), 1, 40, kindOf, { b: ["B", "A"] }))).toBe("1 31 [|40] 31 9");
   });
 
   it("add, remove, rename an alternative; the loop flag", () => {

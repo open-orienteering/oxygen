@@ -225,6 +225,10 @@ export function EditorPage() {
   const variants = useMemo(() => (structure ? courseShared.variantOrders(structure) : []), [structure]);
   const hasGroups = variants.length > 0;
   const variantKeys = useMemo(() => variants.map((v) => v.key), [variants]);
+  // An edit that drops the shown variant's key (Loop, a removed alternative, undo) returns to Course view (§12).
+  useEffect(() => {
+    if (state.view === "variant" && structure && !variantKeys.includes(state.variantKey ?? "")) dispatch({ type: "variant", key: null });
+  }, [state.view, state.variantKey, structure, variantKeys]);
   /** How the view shows each group: Variant view the variant's order, else the active alternatives (default the first). */
   const orders: GroupOrders | undefined = useMemo(() => {
     if (!structure || !hasGroups) return undefined;

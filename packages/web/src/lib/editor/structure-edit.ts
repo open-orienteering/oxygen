@@ -153,7 +153,9 @@ function slotBefore(s: Structure, paths: readonly RowPath[], t: number, orders?:
     const group = s.items[prev.itemIndex + 1];
     if (group?.kind === "variation") {
       const active = course.groupOrder(group, orders)[0];
-      if (active && active.items.length === 0) return { group: prev.itemIndex + 1, label: active.label, index: 0 };
+      // A loop's empty petal has no leg of its own: a drawn petal's leg after the anchor stays that petal's.
+      const drawnPetal = group.loop && next?.alt !== undefined && next.itemIndex === prev.itemIndex + 1;
+      if (active && active.items.length === 0 && !drawnPetal) return { group: prev.itemIndex + 1, label: active.label, index: 0 };
     }
   }
   if (next?.alt) return { group: next.itemIndex, label: next.alt.label, index: next.alt.index };
@@ -352,7 +354,15 @@ export function createGroup(s: Structure, at: number, kindOf: KindOf, orders?: G
   const group: Group = { kind: "variation", id: groupId, alternatives: [{ label: "A", items: [] }, { label: "B", items: [] }] };
   const items = [...s.items];
   items.splice(index, 0, group);
-  return { structure: edit(s, items), groupId };
+  // The leg's props stay on its end item: they become the group's exit leg, every alternative's (the
+  // item's predecessor changes from the anchor to the group, which would otherwise drop them).
+  const out = edit(s, items);
+  const end = s.items[index];
+  const now = out.items[index + 1];
+  if (end && end.kind !== "variation" && end.leg && now && now.kind !== "variation") {
+    out.items[index + 1] = { ...now, leg: end.leg };
+  }
+  return { structure: out, groupId };
 }
 
 /** *Add alternative*: an empty one with the next free label. */

@@ -3285,8 +3285,10 @@ test.describe("F7: variations and loops (docs/course-editor.md §12)", () => {
 
     // Loop: the butterfly's variants are the visiting orders.
     const looped = waitForTrpc(page, "course.setStructure");
-    await page.getByTestId("editor-variation-loop").check();
+    // The box shows the stored flag, so it flips once the write lands: a click, not `check()`.
+    await page.getByTestId("editor-variation-loop").click();
     await looped;
+    await expect(page.getByTestId("editor-variation-loop")).toBeChecked({ timeout: 15000 });
     await expect.poll(keys, { timeout: 15000 }).toEqual(["AB", "BA"]);
 
     // Export ▾ this course still prints (the root; per-variant pages are F8's).

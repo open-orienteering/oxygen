@@ -1226,9 +1226,12 @@ tablet). It writes `createGroup`: a group `{ kind: "variation", id:
 "v<n>", alternatives: [A: [], B: []] }` before the leg's end item — the
 leg's start is the group's **anchor**. Both alternatives start empty and
 the group is saved at once (answer 5); an empty alternative draws as the
-straight leg, so nothing moves on the map until a control lands. The new
+straight leg, so nothing moves on the map until a control lands. The
+leg's props (style, bends, gaps, corridor, crossing) stay on its end item:
+they become the group's exit leg, every alternative's. The new
 group's A is shown and activated (below). No nesting: a leg into, inside
-or out of a group offers no *Create*.
+or out of a group offers no *Create*, nor does Variant view (Course view
+is where groups are made).
 
 **The displayed path.** In Course view each group is shown by one
 alternative — its **active** one (default the first) — and a loop by
@@ -1245,8 +1248,9 @@ structure-edit position means. So:
   the leg into an alternative's control it lands before it in that
   alternative; on the leg out of an alternative's last control (the exit
   leg, or a loop's leg back to the anchor visit) after it; on the
-  straight leg of an empty active alternative into it. The leg into the
-  anchor stays top-level. Before F7 the positions skipped groups and were
+  straight leg of an empty active alternative into it (a loop's empty
+  petal has no leg: the leg after the anchor stays the drawn petal's,
+  unless every petal is empty). The leg into the anchor stays top-level. Before F7 the positions skipped groups and were
   off by one after a group.
 - **↑ / ↓ and a dragged row keep their level** (`moveVisit`): a top-level
   row passes a group without entering it, an alternative's row moves
@@ -1295,7 +1299,9 @@ write lands) and **All variations** (`editor-view-all-variations`, a
 toggle back to Course view):
 
 - *Variant*: the variant's path with its own numbering, editable as Course
-  view (its legs insert into the variant's alternatives).
+  view (its legs insert into the variant's alternatives). An edit that
+  drops the shown key (*Loop*, a removed alternative, an undo) returns to
+  Course view.
 - *All variations*: a read-only overlay — no leg clicks, no Leg section,
   no provisional visit, no *Create*. The canvas draws the spine and one
   branch per alternative in distinct purple tints, labels as codes

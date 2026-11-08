@@ -102,7 +102,7 @@ boxes are estimated like the legacy placer's (0.65 em per character).
   editor's All-variations view, screen only — one row per tinted
   structure's label (`course-tint:<label>`, `VARIATION_TINTS`) after the
   layout-object rows, below a toner saver's white. Never on paper: the
-  print path cannot set the option.
+  print path never sets the option (a compose fixture asserts it).
 
 `layer.colours` is the stack the merged input is drawn with.
 
@@ -1220,7 +1220,6 @@ order below, then the order of the input (sites, then the course's items).
 | `DESCRIPTION_STALE` | course, server | a `control` item whose `description_source` is `auto` (§6.3) and whose stored description differs from the autodetect result at the site's position now (e.g. after a map re-upload) | — |
 | `LEG_CROSSES_OOB` | course | a leg (ordered courses; centre to centre between consecutive positioned items, through its bends and its crossing point (§10.3): every segment is tested, `at` is the first hit along the leg, an area's inside test at each segment's midpoint) that crosses or runs inside an out-of-bounds obstacle: document 709 areas and 708 lines, `oob_area` and `oob_line` (symbol 708) course objects; **not** an obstacle the leg's crossing point sits on (§9.3) | — |
 | `LEG_THROUGH_UNCROSSABLE` | course | a leg (as for `LEG_CROSSES_OOB`, bends and crossing point included, the same exemption) that crosses or runs inside an uncrossable document obstacle: `UNCROSSABLE_CODES` 201 (impassable cliff), 301 (uncrossable body of water), 307 (uncrossable marsh), 411 (impassable vegetation), 515 (impassable wall), 518 (impassable fence), 520 (area that shall not be entered), 521 (building), 529 (prominent uncrossable line feature) — the same in ISOM 2017-2 and ISSprOM 2019-2 | — |
-
 | `VARIATION_UNBALANCED` | course, editor (F7) | a group whose alternatives' lengths differ by more than the tolerance of the longest (08 §5.6). An alternative is measured anchor → its controls → `next`, along each leg's bends and crossing point (the exit leg's props are every alternative's); an empty plain alternative is the straight leg; in a loop each petal runs anchor → its controls → anchor and empty petals are not compared. One check per group, `siteIds` and `at` the anchor, `params { a, b, lengthA, lengthB, diffPct, unit }` (shortest and longest; metres with a scale, else paper mm) | `VARIATION_BALANCE_TOLERANCE` = 10 % |
 | `VARIATION_ALL_EMPTY` | course, editor (F7) | a group none of whose alternatives holds a control yet (valid, §6.1: every variant is the same straight leg); at the anchor, `params { code }` | — |
 
@@ -1712,10 +1711,12 @@ On top of the stack the tints draw over black: a screen overview, not an
 overprint.
 
 **Never on paper.** Without the option a `tint` is ignored — the layer's
-output equals the untinted structures' — and the print path cannot set
-it: `PageInput.course.viewOptions` is a `Pick` without `allVariations`,
-and `composePage` of tinted structures emits the plain stream with no
-tint row (`print/__tests__/compose.test.ts`). F8's all-variations page
+output equals the untinted structures' — and nothing in the print path
+sets it: `PageInput.course.viewOptions` is a `Pick` without
+`allVariations` (a hint, not a guarantee — `resolve-sheet.ts` adds
+options through spreads), and the guard is the fixture: `composePage` of
+tinted structures emits the plain stream with no tint row
+(`print/__tests__/compose.test.ts`). F8's all-variations page
 prints every alternative in the one purple. Decided on the user's
 standing instruction (2026-11-07), for review: branches rather than
 groups in the layer (keeps "a variant is a linear structure"); the tint
