@@ -311,7 +311,7 @@ with `sheet` = `PageInput` minus `map` and `geo`.
 | `paper` | `getPaperDimensions(paper, orientation, custom)` |
 | `frame`, `window` | `document.mapFrame`, `layout.window` (`mapScale` and `meridianTiltDeg` from `getBaseMapInfo`) |
 | `course.appearance` | `appearanceFromTemplate(document.appearance)` — multipliers of the library sizes (`docs/course-layer.md` §2) |
-| `course.viewOptions` | `allControls` = `kind === "all_controls"`, `setterMarks` likewise (F4: the map-issue points and every crossing point, `course-layer.md` §10.3; F10's setter sheets later), `labelMode`, `overprintScale` from the layout; `autoCuts: false` when the event's **Auto cuts** toggle is off (`ResolveSheetInput.autoCuts` from `MapRowContext.autoCuts`; no key when on — `docs/course-layer.md` §3.4, D17) |
+| `course.viewOptions` | `allControls` = `kind === "all_controls"`, `setterMarks` likewise (F4: the map-issue points and every crossing point, `course-layer.md` §10.3; F10's setter sheets later), `labelMode`, `overprintScale` from the layout; `autoCuts: false` when the event's **Auto cuts** toggle is off (`ResolveSheetInput.autoCuts` from `MapRowContext.autoCuts`; no key when on — `docs/course-layer.md` §3.4, D17); `section` = the row's `section_index` when the course has ≥ 2 parts and it is in range (`layout.section`, F5 — `course-layer.md` §11; no key otherwise, so a one-part course's stream is unchanged) |
 | `objects`, `textValues` | `document.objects` (template + sheet), `layout.textValues` |
 | `description` | `document.description` position and cell size, `layout.descriptionRows` / `descriptionHeader`, title = course name, else map name; null when the template hides the block |
 | `label` | course name, else map name (page label and outline title, §7.2) |
@@ -343,6 +343,18 @@ with `sheet` = `PageInput` minus `map` and `geo`.
   no other crossing or map-issue point is drawn), and the block derives
   their 13.3 / 13.4 rows (`LayoutCourseSource.crossings`). The course-level lines and areas are course objects (`course-layer.md`
   §8), no longer read from the geometry. Free order is carried as `orderMode`.
+- **Part sheets** (F5, `course-layer.md` §11): `PrintMapRow.sectionIndex`
+  (`course_maps.section_index`) reaches `resolveMapLayout { section }`.
+  On a course of ≥ 2 parts with the section in range, a NULL window
+  centre centres on **that part's** placed controls (the exchange
+  included, `sectionsOf` over the layout's controls typed by the
+  sites' `kind`) and the sheet's `viewOptions.section` draws the part;
+  the description block, its header and `{controls}` stay the whole
+  course's (answer 2) and carry a **13.5** row after each exchange
+  control (derived from the course's own control rows' `kind`, so a
+  NULL structure gets it too). A stored centre wins as on any sheet. Out
+  of range (a part sheet whose exchange was removed) the sheet is the
+  whole course.
 - **All-controls sheets**: `structure: null`, every site drawn with
   codes (`viewOptions.allControls`), typed by `kind` (`resolveMapLayout`,
   F4: crossing points as 710, map-issue points as 702, an exchange as a
@@ -1155,6 +1167,9 @@ The tool's own tests (`print-run.test.ts`, `measure-print.test.mjs`,
 - **Vector SVG logos** (05 §5.7 b): a safe SVG subset as form XObjects;
   rasterised at 600 dpi until a club asks.
 - **Several frames per sheet** (map exchange on one sheet, 05 §5.9) and
-  per-variant pages (08): one frame per page in slice C.
+  per-variant pages (08): one frame per page in slice C; F5 prints a map
+  exchange as one sheet per part (§5.2), so several frames on one sheet
+  stay Pending (decided on the user's standing instruction 2026-11-07,
+  for review).
 - **Serif and mono faces**: no file ships (`map-rendering.md` §4.10), so
   no PDF font either.

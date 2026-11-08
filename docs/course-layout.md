@@ -73,8 +73,9 @@ the row mapping `maps.pdf` uses (`sheetInputForMapRow`, `pdf-page.ts`):
   `mapTemplate.previewLayout`). `NOT_FOUND` for an unknown sheet,
   template or course; `PRECONDITION_FAILED` for a sheet without a
   template.
-- Returns `scope`, the raw `sheet` (seq, name, kind, course, window
-  centre, overrides, objects) and `template` (page settings, objects) the
+- Returns `scope`, the raw `sheet` (seq, name, kind, course, class,
+  `sectionIndex` — the part it prints, F5 —, window centre, overrides,
+  objects) and `template` (page settings, objects) the
   editor writes back, the resolved `document` and `window`, `page` (the
   composer's page input: paper, frame, window, objects of both anchors,
   text values, the block), `block` (rows, header, title, also when
@@ -85,7 +86,10 @@ the row mapping `maps.pdf` uses (`sheetInputForMapRow`, `pdf-page.ts`):
 The editor builds the page request from its snapshot and this read
 (`pages/editor/layout/model.ts` `layoutRequestOf`): objects of both
 scopes, the scale's text value at the snapshot's print scale, the block
-where the snapshot puts it.
+where the snapshot puts it, and a course sheet's part (`section`, from
+`sheet.sectionIndex`; `course-layer.md` §11) — so Layout mode and Class
+view draw a part sheet's part as it prints. `courseMap.list` items carry
+`sectionIndex` too, and their `resolved.window` is the part's.
 
 ## 2. Layout mode
 
@@ -389,8 +393,9 @@ and one undo entry.
 
 ## 6. Sheets and class overrides
 
-**Sheet rows** (`course_maps`, 08 §4.6) gain `section_index` (0; map
-exchange writes more in F), `class_id` (a class sheet, below; `ON DELETE
+**Sheet rows** (`course_maps`, 08 §4.6) gain `section_index` (the part
+of a course split by map exchanges the sheet prints, `course-layer.md`
+§11; 0 for every sheet of a one-part course), `class_id` (a class sheet, below; `ON DELETE
 CASCADE`) and `props` (setter maps, F). A course's **own** sheets have
 `class_id` NULL.
 
@@ -412,10 +417,29 @@ in one transaction (60 s timeout); without `courseId` every course of the event:
    margin" (08 §4.6).
    A concurrent first export of the same key does not fail: the insert
    is `ON CONFLICT DO NOTHING` and the key's auto template is read back.
+   **Part sheets** (F5; 08 §4.6 "auto-created from the structure"): a
+   course split by map exchanges (`course-layer.md` §11; the parts are
+   its placed exchange sites plus one, `partCountOf` over the course
+   mirror) has one own sheet per part. A part without an own sheet of its
+   `section_index` gets one on the course's template — the parts share
+   it, fitted on the whole course; only the window differs — named
+   `<course> · part n` (part 1 the course's name; the server writes no
+   localised name, as *All controls*), window centre NULL (centred on
+   the part's controls, `course-print.md` §5.2), `sort_order` after the
+   course's other sheets. A part sheet the setter deleted comes back on
+   the next `autoSheets` (Export ▾ runs it), never by itself. A sheet of
+   a part that no longer exists (the exchange removed) is **kept**: no
+   automation deletes a layout the setter may have edited, and it prints
+   the whole course (its `section` is out of range) until the setter
+   deletes it. *Add a sheet* (E-pages) and `courseMap.create` write
+   `section_index` 0. (Decided on the user's standing instruction
+   2026-11-07, for review.)
 2. *Class sheets.* Every class of the course with `print_scale` or
    `sheet_template_id` gets sheet rows keyed by `class_id`: one per course
-   sheet (name `<sheet> · <class>`; window centre, objects, block and
-   sort order copied). Its template is `sheet_template_id`, else the auto
+   sheet (name `<sheet> · <class>`; window centre, objects, block, sort
+   order and `section_index` copied) when the class has none; when it
+   has some, one per course sheet of a part the class has no sheet of
+   (F5: a new exchange gives every overriding class its part sheet). Its template is `sheet_template_id`, else the auto
    template of the course template's paper and orientation at the class's
    scale (created from the course template). With both set and the scales
    different, the sheet's `overrides.printScale` is the class's. Existing
@@ -524,7 +548,9 @@ created first: the sheets print on demand (`course-print.md` §6.4).
 order asked, its class sheets, else its course's own sheets as the class
 prints them (§6); exclusive with `maps` / `courses` (400). `?courses=`
 and the unfiltered export print the courses' own sheets only; a class
-sheet prints through `classes` or `maps`.
+sheet prints through `classes` or `maps`. A course split by map
+exchanges prints one page per part (its part sheets in `sort_order`,
+F5); *This course* creates the missing part sheets first.
 
 ## Tests
 
@@ -558,12 +584,15 @@ sheet prints through `classes` or `maps`.
 | E2E | `e2e/course-editor.spec.ts` "Course editor layout" | from the Courses page (the `/maps?course=` redirect, the row's *Edit layout* link into Layout mode) to the sheet; the sheet shapes; `H` places a header, the inspector makes it a long 10 mm text, and ink appears where the page layer draws it; the frame selected and dragged → `courseMap.get`'s centre moved by the drag; undo restores it; the `maps.pdf?maps=` route answers one A4 page; the template link opens template scope, an orientation change writes `mapTemplate.update`; an old `/map-templates?template=` link opens template scope |
 | E2E | `e2e/course-editor.spec.ts` "P1: …" "Layout mode: a toner saver hides…" | P1: on a probe course sheet in Layout mode a 709 `oob_area` (`courseObject.create`) shows purple on the canvas (`inkIn`); with a `toner_saver` elsewhere on the map, no purple pixels are left inside the 709 square (638 purple pixels with the ring at upper white) |
 | E2E | `e2e/course-editor.spec.ts` "P7: a white-out outside crossing the frame…" | P7: two 709 squares, one inside every shape, one outside: a toner saver whose first vertex is left of the frame, then one across the frame's bottom with its first vertex inside — the inside square keeps its purple, the outside one shows none; a page-anchored white-out outside rectangle dragged with `V` past the frame's bottom, then past its left edge (one `saveLayout` each) — the same after each |
+| integration | `auto-templates.test.ts` "part sheets of a map exchange (F5)" | §6 part sheets: an exchange gives the course two own sheets (names, `section_index` 0 / 1, one template, centre NULL, sort order) and the overriding class its part-2 sheet; idempotent; `courseMap.list` `sectionIndex`; `resolveSheet` of each part centred on its controls, the block whole with 13.5; `maps.pdf?courses=` two pages; a deleted part sheet recreated by the next call; the exchange removed → nothing deleted |
+| unit (web) | `pages/editor/__tests__/layout-model.test.ts` "a course sheet's part" | `layoutRequestOf` carries `section` for a course sheet, none in template scope |
+| E2E | `e2e/course-editor.spec.ts` "F5: map exchange" | Export ▾ this course on a course with an exchange → two pages, two own sheets with different window centres; Layout mode's picker lists part 2 (`data-section` 1); deleting it raises `EXCHANGE_WITHOUT_SHEET` in Course mode |
 
 ## Pending in this chapter
 
-- **Map exchange sections** (`section_index > 0`, auto-created from the
-  structure), **setter maps** (`kind = 'setter'`, `props.controlIds`)
-  and per-variant export — F (08 §4.6, §5.2). Description sheets are
+- **Setter maps** (`kind = 'setter'`, `props.controlIds`) and
+  per-variant export — F (08 §4.6, §5.2). Map exchange part sheets are
+  done (F5, §6). Description sheets are
   done (F11, §7) and print on demand, never as a sheet row.
 - **The all-controls sheet's recalculated scale and description
   placement** (08 §4.6 "computed to fit everything on A4 and can be

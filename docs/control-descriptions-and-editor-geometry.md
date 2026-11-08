@@ -80,7 +80,20 @@ description-sheet PDF (`resolve-layout.ts` `LayoutCourseSource.crossings`
 from `layoutCrossings` → `crossingRowsOf` over the stored structure, the
 root's path for a group) and the on-map sheet (`sheetCrossings` over
 `course.list`'s legs). Decided on the user's standing instruction
-2026-11-07, for review. 13.5 (map exchange) is F5's.
+2026-11-07, for review.
+
+A **map exchange** (F5; `course-layer.md` §11) derives a **13.5** row
+(*Map exchange*) after the exchange control, by the same rule
+(`buildDescriptionSheet({ exchanges })`: in place of a stored 13.5 at
+that anchor, keeping its `lengthM`; one per anchor). The exchange rows
+merge before the crossing rows, so after an exchange whose outgoing leg
+has a crossing the sheet reads 13.5, then 13.3. Print, Layout mode's
+block and the description-sheet PDF derive them inside
+`resolveMapLayout` from the course's own control rows (`kind =
+'map_exchange'`, the rows' public id — so a course with a NULL structure
+gets them too); the on-map sheet from the overlays' `exchange` flag
+(`sheetExchanges`). Every part's block carries the whole course with
+its 13.5 rows (answer 2).
 
 The course editor edits the value in Course mode's inspector (*Description
 sheet*: finish variant and length, special rows), one `course.update {

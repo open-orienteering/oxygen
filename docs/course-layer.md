@@ -162,12 +162,12 @@ automatic cuts; an empty list means automatic (decision log 2026-11-01,
 | Input | v1 shape | Built today from |
 |---|---|---|
 | `structure` | `CourseStructure` (one course), an array (several highlighted courses: legs of each, codes as numbers) or `null` (no course) — the stored form is §6 | `{ version: 1, id, orderMode, items, labelOffsets? }`: `items` start … finish — the start by `startName` unless `firstAsStart`, `course_controls` in order, the finish by `finishControlId` unless `lastAsFinish`; from the stored structure when there is one (§6), else from the columns — one rule for every reader (`courseSequenceOf`, §6.2: `rebuildCourseLengths`, `course-export.ts`, the print layout); `labelOffsets` from `course_controls` |
-| `CourseItem` | `{ siteId, role?, leg?, numberHidden? }` — 08 §4.3's item, the leg being the leg *into* the item | `role` (`control` \| `start` \| `finish`) defaults to the site's kind — a `map_exchange` draws as a control (§10.3) — (set it for `firstAsStart` / `lastAsFinish`); `numberHidden` from the visit's `number_hidden`. An item naming a `crossing_point` or `map_issue` site is skipped (they are never items, §10.3) |
+| `CourseItem` | `{ siteId, role?, leg?, numberHidden? }` — 08 §4.3's item, the leg being the leg *into* the item | `role` (`control` \| `start` \| `finish`) defaults to the site's kind — a `map_exchange` draws as a control and splits the course into parts (§10.3, §11) — (set it for `firstAsStart` / `lastAsFinish`); `numberHidden` from the visit's `number_hidden`. An item naming a `crossing_point` or `map_issue` site is skipped (they are never items, §10.3) |
 | `leg` | `{ gaps?, style?, bends?, corridor?, crossing? }` — the stored `LegProps.gaps` (fractions along the leg, bends and crossing point included), `style` (`line` \| `marked_route` \| `none`, default `line`) and `bends` (paper mm), §10.1; `corridor` (`{ widthM, edge, whiteMm, whiteOpacity }`), §10.2; `crossing` (`{ controlId, section? }`, the site id of a `crossing_point` the leg runs through), §10.3 | `LegProps` of the structure's item (§6.4: written by the importers and the backfill, by the editor from D5). The v1 interim input of slice C (`path`, `pieces`, item `circleGaps`, `extras`, read from an imported `ocd` course's GeoJSON) is **retired** by D1: nothing is read from the GeoJSON |
 | `sites` | `{ id, code, kind, x, y, circleGaps? }[]`, `kind` one of `control`, `start`, `finish`, `crossing_point`, `map_issue`, `map_exchange` (§6.3) | `controls` rows; `code` the display code (first punch code, else name / seq); `circleGaps` = `controls.circle_gaps`, compass degrees |
 | `objects` | `(CourseMapObject \| CourseLayerObject)[]`: a sheet's layout objects (only `anchor: "map"` ones are drawn) and course objects (§8; told apart by `geometry`) | the sheet's layout objects (`course-maps` schema); the event's course objects in scope (§8.3) |
 | `appearance` | `{ circle?, line?, number?, numberStyle? }`, multipliers (1 = the spec) | `appearanceFromTemplate(template.appearance)`; the template's `purple` is not read (the purple is the stack's row) |
-| `viewOptions` | `{ allControls?, labelMode?, overprintScale?, autoCuts?, window?, textValues?, setterMarks? }` | the view: all-controls, label mode, print enlargement, the event's **Auto cuts** toggle (`Event.autoOverprintCuts`; `false` = no automatic cuts, §3.4; absent = on), the frame polygon for white-out-outside, `{course}` placeholder values; `setterMarks` (§10.3): the map-issue points and every crossing point are drawn — the editor's Course and All-controls views and the all-controls sheet set it, a course sheet never does |
+| `viewOptions` | `{ allControls?, labelMode?, overprintScale?, autoCuts?, window?, textValues?, setterMarks?, section? }` | the view: all-controls, label mode, print enlargement, the event's **Auto cuts** toggle (`Event.autoOverprintCuts`; `false` = no automatic cuts, §3.4; absent = on), the frame polygon for white-out-outside, `{course}` placeholder values; `setterMarks` (§10.3): the map-issue points and every crossing point are drawn — the editor's Course and All-controls views and the all-controls sheet set it, a course sheet never does; `section` (§11): one part of a course split by map exchanges — a part sheet in print, Layout mode and Class view set it from `course_maps.section_index`, Course mode never does |
 | `document` | `{ colours, libraryId, documentFactor, mapScale }` — the aligned stack, the library, the document factor (§3.1) and the base map's scale denominator (corridor widths, §10.2) | `courseDocumentContext(header)` (`context.ts`): the viewer's worker and the print route (`pdf-page.ts`) build it from the pinned document's header; `mapScale` is `header.mapScale` |
 | `cutFeatures` | `{ x, y, r? }[]` (`r` the drawn symbol's radius) | `cutFeaturesOfDocument(doc)` of the pinned document (every event since E1, §4.2) |
 | `regions` | `{ rings: MapPoint[][], mode: "clip" \| "hide", symbols: "all" \| number[] \| { colours }, invert? }[]` — filter regions over the map, `rings` outer first; symbol indices are the document's, colours its own stack's | explicit regions, then every `filter_region` course object in `objects` (§8.3); the layer returns them as `CourseLayer.regions` (µm paths, colours on the completed stack) and `courseRenderInput` passes them to `symbolise` with the document's object count as `regionObjectLimit` — the rule is `map-rendering.md` §4.11 |
@@ -176,9 +176,9 @@ Free order is the structure's `orderMode` (a property of the course, not
 of the view). A site at the origin (0, 0) is unpositioned and skipped,
 legs connecting the remaining items (the editor's rule, `editorCourseLayer`).
 Gaps follow the rule above. Crossing points, map-issue points and map
-exchanges are drawn since F4 (§10.3; an exchange as a control until F5's
-sections); variations reach the layer as materialised linear variants
-(§12).
+exchanges are drawn since F4 (§10.3; an exchange as a control, the
+course split into parts at it since F5, §11); variations reach the layer
+as materialised linear variants (§12).
 
 ## 3. Geometry rules
 
@@ -349,7 +349,9 @@ user review). The flag reaches every consumer of the layer:
 - **Text**: `sequence` (1, 2, … over the first course's control items; a
   site visited twice gets `3/7`) by default for one ordered course
   outside the all-controls view; `code` otherwise, or by `labelMode`.
-  Start and finish carry no number.
+  Start and finish carry no number. A map exchange is a control item and
+  takes its number; the numbers **continue** across it, and a part drawn
+  alone (§11) keeps the whole course's numbers (answer 2).
 - **Placement**: `placeControlLabels` over every drawn site (start and
   finish as obstacles with their extents), the drawn leg pieces and the
   extras' lines, with `radius` R and `labelSize` the 704 em. The placer's
@@ -1126,9 +1128,9 @@ venue's kiosk map draws them (08 §4.8; 07 §9.2).
 Row D6 (research 08 §4.2, §5.6, §6). Advisory course-setting checks:
 the editor lists them (`course-editor.md` §8), marks them on the canvas
 and counts them on the top bar's course-info button (P2); `course.setStructure` returns them.
-**Nothing blocks a save.** Variation and exchange codes
-(`VARIATION_UNBALANCED`, `EXCHANGE_WITHOUT_SHEET`) are slice F's (F7,
-F5); the crossing-point exemption is F4's (§9.3).
+**Nothing blocks a save.** `VARIATION_UNBALANCED` is F7's; the
+crossing-point exemption is F4's (§9.3), `EXCHANGE_WITHOUT_SHEET` and the
+per-part sheet test F5's (§11).
 
 ### 9.1 The function
 
@@ -1140,7 +1142,7 @@ and deterministic: paper mm, y-up, like the layer's input (§2).
 | `structure` | `CourseStructure \| null` | the course checked (layer form, §2); null = event-wide checks only |
 | `sites` | `CheckSite[]` | every site of the event: `{ id, code, codes: number[], kind, x, y, description?: { d? } \| null }`; `x = y = 0` is unpositioned (§3.3) |
 | `document` | `{ libraryId, obstacles } \| null` | the base map's library and its obstacles (`checkObstaclesOfDocument`, §9.3); null on a legacy map |
-| `sheets` | `MapWindow[] \| null` | the windows of the course's sheets (`course-maps/schema.ts`); null or empty skips `CONTROL_OUTSIDE_SHEET` |
+| `sheets` | `CheckSheet[] \| null` | the windows of the course's sheets (`MapWindow` of `course-maps/schema.ts`), each with the part it prints, `section?` (`course_maps.section_index`, §11; absent = every part); null or empty skips `CONTROL_OUTSIDE_SHEET` and `EXCHANGE_WITHOUT_SHEET` |
 | `objects` | `CourseLayerObject[]`, optional | the course objects in scope (§8.2); `oob_area` and `oob_line` (708) are obstacles |
 | `derivation` | `CourseDerivation \| null`, optional | the layer's result for this course (§1); null skips `NUMBER_*` |
 | `mapScale` | `number \| null` | map scale denominator; metres = paper mm × scale / 1000; null skips the distance checks |
@@ -1164,8 +1166,9 @@ order below, then the order of the input (sites, then the course's items).
 | `CODE_BELOW_31` | event | a `control` site with a punch code < 31 | — |
 | `CODE_DUPLICATE` | event | a punch code on more than one site | — |
 | `CODE_INVERTIBLE` | event | a code that reads as another site's code upside down (digits reversed, 6 ↔ 9, 0 / 1 / 8 unchanged, any other digit not invertible): 66 / 99, 68 / 89, 161 / 191, 86 / 98 …; a code that reads as itself (69, 88, 181) is not a finding | — |
-| `CONTROL_OUTSIDE_SHEET` | course | a positioned item of the course outside every window in `sheets` | — |
-| `NUMBER_UNPLACED` | course | a `control` visit whose number is not hidden and that has no label in `derivation` (in practice an unpositioned site) | — |
+| `CONTROL_OUTSIDE_SHEET` | course | a positioned item of the course outside every window in `sheets` that prints one of the item's parts (§11: on a course split by map exchanges an item is tested against its own part's windows — the exchange against both parts'; a window without `section` stands for every part) | — |
+| `EXCHANGE_WITHOUT_SHEET` | course | a course of ≥ 2 parts (§11) with sheets, one part of which has no window of its `section`; `at` and `siteIds` the exchange bounding the part (part 1: the first exchange, part n: the exchange that opens it), `params { part, code }` (`part` 1-based) | — |
+| `NUMBER_UNPLACED` | course | a `control` visit (a map exchange counts as a control here and for `DESCRIPTION_MISSING`) whose number is not hidden and that has no label in `derivation` (in practice an unpositioned site); when the derivation drew one part (`DerivedCourse.section`, §11) only that part's visits are tested, by both `NUMBER_*` codes | — |
 | `NUMBER_OVERLAPS` | course | a derived site whose label has `collides` (§3.5: the placer fell back to a box that intersects a circle, a number or a line) | — |
 | `DESCRIPTION_MISSING` | course | a `control` item whose site has no description or no column D | — |
 | `DESCRIPTION_STALE` | course, server | a `control` item whose `description_source` is `auto` (§6.3) and whose stored description differs from the autodetect result at the site's position now (e.g. after a map re-upload) | — |
@@ -1205,8 +1208,8 @@ user's standing instruction 2026-11-07, for review).
 
 | Where | Codes | Inputs |
 |---|---|---|
-| Editor (client) | all but `DESCRIPTION_STALE` | the page's structure (`checkStructureOf`: each item's leg with its `bends` and `crossing`, F4 — before F4 the client dropped the legs, so it ignored bends) and sites, `checkObstaclesOfDocument` over the decoded document (memoised per document), the course's sheet windows from `courseMap.list`, the objects in scope, the viewer's derivation (`onCourseInfo`) |
-| `course.checks { courseId }` (server, `courses.view`) | all but `CONTROL_OUTSIDE_SHEET`, `NUMBER_UNPLACED`, `NUMBER_OVERLAPS` (`sheets` and `derivation` null), plus `DESCRIPTION_STALE` | the stored structure or its columns (each entry's leg with its bends and crossing point, `loadCourseSequences`, F4), the event's sites, the map scale (`loadEventCrs`), the pinned document's obstacles (every event with a pin, `map-storage.md` §4.6; memoised per document hash), the autodetect objects of the same document for `DESCRIPTION_STALE`, the objects in scope |
+| Editor (client) | all but `DESCRIPTION_STALE` | the page's structure (`checkStructureOf`: each item's leg with its `bends` and `crossing`, F4 — before F4 the client dropped the legs, so it ignored bends) and sites, `checkObstaclesOfDocument` over the decoded document (memoised per document), the course's sheet windows from `courseMap.list` with each sheet's `sectionIndex` (F5), the objects in scope, the viewer's derivation (`onCourseInfo`) |
+| `course.checks { courseId }` (server, `courses.view`) | all but `CONTROL_OUTSIDE_SHEET`, `EXCHANGE_WITHOUT_SHEET`, `NUMBER_UNPLACED`, `NUMBER_OVERLAPS` (`sheets` and `derivation` null), plus `DESCRIPTION_STALE` | the stored structure or its columns (each entry's leg with its bends and crossing point, `loadCourseSequences`, F4), the event's sites, the map scale (`loadEventCrs`), the pinned document's obstacles (every event with a pin, `map-storage.md` §4.6; memoised per document hash), the autodetect objects of the same document for `DESCRIPTION_STALE`, the objects in scope |
 | `course.setStructure` | as `course.checks`, for the written course | — |
 
 Without a pinned document the server has no map (`map-storage.md`
@@ -1339,7 +1342,8 @@ three slice-F site kinds are drawn at once.
   leg's `crossing` or stands alone, a `map_issue` site stands alone. The
   structure refuses them as items (`SITE_KIND_NOT_ITEM`, §6.1) and the
   layer skips such an item. A `map_exchange` is an ordinary item drawn
-  and numbered as a control circle — its final drawing; F5 adds sections.
+  and numbered as a control circle — its final drawing, on both parts
+  of the course it splits (§11).
 - **Routing** (`LegProps.crossing { controlId, section? }`): the crossing
   point joins the leg's polyline on its segment nearest the site
   (`routedBends`, the editor's *Add bend here* rule), so the leg runs
@@ -1381,6 +1385,49 @@ three slice-F site kinds are drawn at once.
   types its sites by `kind` (`resolveMapLayout`; a crossing or
   map-issue point is no row of its description block) and sets
   `setterMarks`.
+
+## 11. Sections
+
+Row F5 (research 08 §4.3 "sections", §4.6 "sheets per section", §5.3
+"Map exchange"; 03 §2.4). A course with map exchanges is printed in
+**parts**, one sheet each; answer 2 (user 2026-11-07) settled the
+drawing — 08 §7's fixture had numbering restart per section.
+
+- **`sectionsOf(items, isExchange)`** (`structure.ts`): the inclusive
+  index ranges `{ index, from, to }` of a sequence split at the entries
+  `isExchange` names. The exchange **ends part n and opens part n + 1**,
+  so it lies in both; a course without one is one part over everything;
+  two adjacent exchanges make a part of their two circles; an exchange
+  first or last is allowed (the setter's call, no check). Part identity
+  is the site's kind — the stored structure gains no field (08 §4.3
+  names no section marker). The layer splits its positioned sequence
+  (unplaced sites split nothing), `autoSheets` counts the placed exchange
+  sites of the course mirror (`partCountOf`), `resolveMapLayout` splits
+  the layout's placed controls, `courseChecks` the positioned visits —
+  the same parts everywhere.
+- **`viewOptions.section`** draws one part of a **single** structure with
+  ≥ 2 parts: that part's sites, legs and numbers. Part 1 has the start,
+  the last part the finish; the exchange is a numbered control circle
+  on both. Numbers are counted over the **whole** sequence before the
+  part is cut out, so part 2 opens with the exchange's own number
+  (answer 2), and a site visited in both parts carries only its part's
+  numbers. Out of range, a one-part course or several structures draw
+  the whole course unchanged — so every sheet without parts (all of
+  them, `section_index` 0) draws as before. `DerivedCourse.section {
+  index, count }` reports a part drawn; its `sequence` and `legs` are the
+  part's.
+- **The description block** of every part carries the **whole course**
+  (answer 2): header, rows, `{controls}` and the derived **13.5** row
+  after each exchange control (`buildDescriptionSheet { exchanges }`,
+  `control-descriptions-and-editor-geometry.md` "Derived rows").
+- **ISOM 715** (continuing point after a map exchange, 03 §2.4) is not
+  drawn: answer 2 makes the exchange a numbered control circle on both
+  parts (decided on the user's standing instruction 2026-11-07, for
+  review).
+- **Sheets**: one own sheet per part (`course_maps.section_index`,
+  `course-layout.md` §6), the window of a sheet without a stored centre
+  centred on its part's controls (`course-print.md` §5.2);
+  `EXCHANGE_WITHOUT_SHEET` names a part whose sheet is missing (§9.2).
 
 ## 12. Variants and materialisation
 
@@ -1640,6 +1687,10 @@ them.
 | unit | `packages/shared/src/course/__tests__/checks.test.ts` | §9: a fixture per code — both distance thresholds (library, scale fallback), event-wide distances, same feature, codes below 31 / duplicate / invertible (and the upside-down table), sheets null / empty / outside, numbers from `collides` and missing labels (hidden visits skipped), descriptions, legs through areas (crossing and inside), 708 lines, course objects (711 skipped), free order, unpositioned items; output order; `checkObstaclesOfDocument` (applied match, source code, suggested match, hidden, Bézier handles, holes, points) and the codes' library names |
 | unit | `packages/shared/src/__tests__/control-label-placement.test.ts`, `course/__tests__/derive.test.ts` "number collisions" | §3.5: `collides` on a boxed-in number, absent on a clear map and a contested cluster |
 | integration | `packages/api/src/__tests__/integration/course-checks.test.ts` | §9.4 over the pinned `e2e/test.ocd`: distance, invertible, missing description and the building leg with public ids; an `oob_area` in scope; `setStructure` returns the same list; a viewer reads it; §6.3 `description_source` writes (auto, manual even when equal, NULL on clear, auto on a re-describing move) and `DESCRIPTION_STALE` for a moved auto description only; a legacy event has no obstacle codes |
+| unit | `structure.test.ts` "sectionsOf (F5)", `derive.test.ts` "sections (§11, F5)", `checks.test.ts` "map exchange parts (§11, F5)" | §11: one part without an exchange, the exchange in both parts, adjacent exchanges, an exchange first / last; numbers continue across the exchange, part 1 / part 2 drawn alone (no start on part 2, the exchange numbered on both, legs of the part only, `section` reported), a control visited in both parts, out of range / one part / several structures unchanged; `EXCHANGE_WITHOUT_SHEET` at the exchange after `CONTROL_OUTSIDE_SHEET`, none with every part covered / no sheets / one part, `CONTROL_OUTSIDE_SHEET` per part, a section-less window for every part, the exchange a control for descriptions, `NUMBER_*` over the derived part |
+| pass stream + golden | `scenes.test.ts` "course-exchange", `e2e/__golden__/map-gl/course-exchange.png` | §11: part 2 alone — the exchange circle numbered 2, 33 numbered 3, no start, legs 32 → 33 → F |
+| integration | `auto-templates.test.ts` "part sheets of a map exchange (F5)", `course-maps` print | §11 with `course-layout.md` §6: part sheets created (names, `section_index`, one template, NULL centre), class sheets per part, idempotent; `resolveSheet` of each part centred on its controls with the whole block and 13.5, `viewOptions.section` on the part sheet; `maps.pdf?courses=` one page per part; a deleted part sheet recreated by the next `autoSheets`, a removed exchange's part sheet kept |
+| unit (web) | `course-layer-request.test.ts` "map exchange (F5)" | an exchange control is a `map_exchange` site, still on course; a sheet's `section` reaches `viewOptions`; `sheetExchanges` |
 
 ## Where things live
 
@@ -1686,8 +1737,8 @@ them.
   since F1 (§10.1), `corridor` since F2 (§10.2), `crossing` since F4
   (§10.3); Purple Pen's `<gaps>` / `<leg>` bends and OCAD / Purple Pen
   corridors, crossing points and map-issue points are not parsed by the
-  importers. Map exchanges are items drawn as controls; their sections
-  are F5's. Variations are materialised since F6 (§12).
+  importers. Map exchanges split a course into parts since F5 (§11).
+  Variations are materialised since F6 (§12).
 - **A crossing's section length** (§10.3): 08 §4.3's `section` is a
   boolean, so the section form draws at 6 mm × factor; a stored length
   (`section: { lengthMm }` and a Leg-section field) waits for a row that
@@ -1739,8 +1790,7 @@ them.
 - **Custom purple**: a template's `appearance.purple` other than the IOF
   purple is not applied on the vector path (the purple is the stack's
   CMYK); appearance work in slice D decides whether it stays.
-- **Checks, beyond D6** (§9): `VARIATION_UNBALANCED` and
-  `EXCHANGE_WITHOUT_SHEET` (slice F: F7, F5); exact Bézier and hole
+- **Checks, beyond D6** (§9): `VARIATION_UNBALANCED` (F7); exact Bézier and hole
   geometry for obstacles; the
   server's `CONTROL_OUTSIDE_SHEET` / `NUMBER_*`; a re-describing move
   still keys on "equals autodetect at the old position", not on
