@@ -16,6 +16,7 @@ import {
   selectedCode, selectedPosition, siteCuts, site, sitePoint, sites, toolShapes, toPage, toPaper, trpcCall, viewCentre, viewSettled, newCourse,
   mapScale, statsRow, type Frame, type Site,
 } from "./helpers/editor";
+import { migrateLegacySheetObjects } from "./helpers/legacy-objects";
 import { touchDrag, touchTap } from "./helpers/touch";
 import { isTrpcResponse, waitForTrpc } from "./helpers/trpc";
 
@@ -3443,4 +3444,72 @@ test.describe("F7 on a phone: the variation block switches alternatives only (do
     const list = await trpcCall<{ id: number; kind: string }[]>("control.list", undefined, false);
     return list.filter((c) => c.kind === "control").slice(0, n).map((c) => c.id);
   }
+});
+
+test.describe("F12: a legacy map-anchored white-out is a course object (docs/course-layer.md §3.6, §8)", () => {
+  desktopOnly();
+
+  test("seeded on a sheet and migrated: listed in Course mode scoped to the sheet's course, white on the canvas, printed; the sheet keeps its page objects", async ({ page }) => {
+    await openEditor(page);
+    const nameId = nameIdOf(page);
+    const courses = await trpcCall<{ id: number; name: string }[]>("course.list", undefined, false);
+    const course = courses[0];
+    await page.getByTestId("editor-course-picker").selectOption(await courseIdByName(page, course.name));
+    await viewSettled(page);
+    const template = await probeTemplate("F12 legacy");
+    const sheet = await trpcCall<{ seq: number }>("courseMap.create", { kind: "course", courseId: course.id, templateId: template.seq, overrides: {}, objects: [] });
+    const moved: number[] = [];
+    try {
+      const before = await printed(page, nameId, `maps=${sheet.seq}`);
+      // A white-out and a 709 area beside it, near the view's centre (paper mm), where the map has ink.
+      const c = await viewCentre(page);
+      const x = c.x / 1000 - 30, y = c.y / 1000 - 8;
+      const inner = { minX: x + 2, maxX: x + 18, minY: y + 2, maxY: y + 13 };
+      await expect.poll(() => inkIn(page, inner, "map"), { timeout: 30000 }).toBeGreaterThan(20);
+      const inkBefore = await inkIn(page, inner, "map");
+      const pageText = { id: "f12-page", anchor: "page", kind: "text", x: 12, y: 20, text: "{course}", fontSizeMm: 4, color: "#000000" };
+      const kept = await migrateLegacySheetObjects(nameId, sheet.seq, [
+        { id: "f12-wo", anchor: "map", kind: "rectangle", x, y, width: 20, height: 15, fillMode: "whiteout" },
+        { id: "f12-oob", anchor: "map", kind: "rectangle", x: x + 40, y, width: 20, height: 15, fillMode: "outOfBounds" },
+        pageText,
+      ]);
+      expect(kept).toEqual([pageText]);
+
+      // The editor caches the objects: reloaded, it holds them as course objects scoped to the course.
+      await page.reload();
+      await editorReady(page);
+      const rows = page.locator('[data-testid="editor-object-row"]');
+      /** The migrated object of `kind` whose first vertex is `at`: its public id and wire scope. */
+      const find = async (kind: string, at: Pt) => {
+        for (const r of await rows.all()) {
+          const g = await geometryOf(r);
+          if ((await r.getAttribute("data-object-kind")) === kind && g.length === 4 && Math.abs(g[0].x - at.x) < 1e-6 && Math.abs(g[0].y - at.y) < 1e-6) {
+            return { id: Number(await r.getAttribute("data-object-id")), scope: await r.getAttribute("data-scope") };
+          }
+        }
+        return null;
+      };
+      const scope = JSON.stringify({ courses: [course.id], classes: [] });
+      await expect.poll(async () => (await find("whiteout", { x, y }))?.scope, { timeout: 15000 }).toBe(scope);
+      for (const [kind, at] of [["whiteout", { x, y }], ["oob_area", { x: x + 40, y }]] as const) {
+        const o = await find(kind, at);
+        expect(o?.scope, kind).toBe(scope);
+        moved.push(o!.id);
+      }
+      // Drawn with the course: the white-out covers the map's ink under it (a course leg across it may leave an
+      // anti-aliased pixel that is not purple enough to count as overprint).
+      await page.getByTestId("editor-course-picker").selectOption(await courseIdByName(page, course.name));
+      await viewSettled(page);
+      await expect.poll(() => inkIn(page, inner, "map"), { timeout: 30000 }).toBeLessThanOrEqual(Math.min(3, inkBefore / 10));
+
+      // Printed from course_objects: the course's sheet gains the 709 hatch; one page.
+      const after = await printed(page, nameId, `maps=${sheet.seq}`);
+      expect(after.pages).toBe(1);
+      expect(after.hatches).toBeGreaterThan(before.hatches);
+    } finally {
+      for (const id of moved) await cleanup("courseObject.delete", { id });
+      await cleanup("courseMap.delete", { id: sheet.seq });
+      await cleanup("mapTemplate.delete", { id: template.seq });
+    }
+  });
 });
