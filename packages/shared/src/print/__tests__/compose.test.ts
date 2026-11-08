@@ -189,6 +189,20 @@ describe("composePage", () => {
     expect(all.mapLayer.stream.passes.length).toBeGreaterThan(spineOnly.mapLayer.stream.passes.length);
   });
 
+  it("the all-variations page labels (F15): viewOptions.labels draws the numbers the sequence would, the colour table unchanged", () => {
+    const base = pageScene("page-sprint-a4");
+    const structure = base.course.structure as CourseStructure;
+    const sites = structure.items.filter((i) => i.kind !== "variation").map((i) => (i as { siteId: string }).siteId);
+    const labels = Object.fromEntries(sites.filter((id) => id !== "S" && id !== "F").map((id, i) => [id, String(i + 1)]));
+    const code = { ...base.course.viewOptions, labelMode: "code" as const };
+    const sequence = composePage({ ...base, course: { ...base.course, viewOptions: { ...base.course.viewOptions, labelMode: "sequence" } } }, fonts());
+    const codes = composePage({ ...base, course: { ...base.course, viewOptions: code } }, fonts());
+    const labelled = composePage({ ...base, course: { ...base.course, viewOptions: { ...code, labels } } }, fonts());
+    expect(codes.mapLayer.stream).not.toEqual(sequence.mapLayer.stream);
+    expect(labelled.mapLayer.stream).toEqual(sequence.mapLayer.stream);
+    expect(labelled.colours).toEqual(codes.colours);
+  });
+
   it("an unaligned document stack is a CourseStackError", () => {
     const base = pageScene("page-ring");
     const colours = base.map.context.colours.map((c) => ({ ...c, paletteIds: [] }));

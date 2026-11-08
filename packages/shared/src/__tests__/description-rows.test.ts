@@ -43,6 +43,25 @@ describe("buildDescriptionSheet", () => {
     });
   });
 
+  it("an explicit sequence wins over the ordinal and over free order's omission (F15: the all-variations block)", () => {
+    const input = {
+      eventName: "E", classNames: [], courseName: "Fork", lengthM: 0, climbM: 0,
+      controls: [
+        { id: 31, code: "31", sequence: 1 },
+        { id: 32, code: "32", sequence: 2 },
+        { id: 33, code: "33", sequence: 2 },
+        { id: 34, code: "34", sequence: 3 },
+      ],
+    };
+    for (const orderMode of ["ordered", "free_order"] as const) {
+      const rows = buildDescriptionSheet({ ...input, orderMode }).rows.filter((r) => r.kind === "control");
+      expect(rows.map((r) => r.sequence)).toEqual([1, 2, 2, 3]);
+    }
+    // A control without one keeps the old rule.
+    const mixed = buildDescriptionSheet({ ...input, controls: [{ id: 31, code: "31" }, { id: 32, code: "32", sequence: 7 }] });
+    expect(mixed.rows.filter((r) => r.kind === "control").map((r) => r.sequence)).toEqual([1, 7]);
+  });
+
   it("free_order omits sequence numbers on control rows", () => {
     const sheet = buildDescriptionSheet({
       eventName: "E",
