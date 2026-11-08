@@ -219,6 +219,33 @@ export function structureControlItems(s: StoredCourseStructure | CourseStructure
   return out;
 }
 
+/**
+ * One part of a course split by its map exchanges (course-layer.md §11;
+ * 08 §4.3 "sections"): the inclusive index range `from … to` into the
+ * sequence. The exchange ends part n and opens part n + 1, so it lies in both.
+ */
+export interface CourseSection {
+  index: number;
+  from: number;
+  to: number;
+}
+
+/**
+ * The parts of a sequence (items, sites, derived entries) split at the
+ * entries `isExchange` names. No exchange → one part covering everything.
+ */
+export function sectionsOf<T>(items: readonly T[], isExchange: (item: T, i: number) => boolean): CourseSection[] {
+  const out: CourseSection[] = [];
+  let from = 0;
+  items.forEach((item, i) => {
+    if (!isExchange(item, i)) return;
+    out.push({ index: out.length, from, to: i });
+    from = i;
+  });
+  out.push({ index: out.length, from, to: items.length - 1 });
+  return out;
+}
+
 /** The flat site sequence of `structureControlItems`. */
 export function structureControlIds(s: StoredCourseStructure | CourseStructure): string[] {
   return structureControlItems(s).map((item) => item.siteId);

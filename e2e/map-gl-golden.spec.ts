@@ -131,6 +131,8 @@ const scenes = [
   "course-leg-styles",
   // Corridors (F2): the band a clip region over the map, joined corridors, a lower-purple edge.
   "course-corridor",
+  // Map exchange (F5): part 2 alone — the exchange numbered, numbering continued, no start.
+  "course-exchange",
   // Filter regions (D3): clip by colour, hide by symbol, the moved polygon, "show only" (invert).
   ...FILTER_SCENES,
 ] as const;

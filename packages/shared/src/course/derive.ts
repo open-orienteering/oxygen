@@ -8,6 +8,7 @@ import { placeControlLabels, type PlacementCircle, type PlacementSeg } from "../
 import { subtractLegGaps } from "../course-maps/overlay-geometry.js";
 import type { MapPoint } from "../course-maps/schema.js";
 import { circleCuts, polylineLegGaps } from "./cuts.js";
+import { sectionsOf } from "./structure.js";
 import type { CourseDerivation, CourseItem, CourseItemRole, CourseLayerInput, CourseSite, CourseStructure, DerivedCourse, DerivedLeg, DerivedSite, DerivedSiteRole } from "./types.js";
 
 /** Sizes the rules read, paper mm (from the resolved symbols). */
@@ -37,7 +38,7 @@ interface SeqEntry {
   item: CourseItem;
 }
 
-/** The role an item takes from its site's kind: a map exchange draws as a control until F5's sections (§10.3). */
+/** The role an item takes from its site's kind: a map exchange draws as a numbered control on both its parts (§10.3, §11). */
 const itemRoleOf = (kind: CourseSite["kind"]): CourseItemRole => (kind === "start" || kind === "finish" ? kind : "control");
 
 /** Crossing and map-issue points are never items (§10.3): an item naming one is skipped. */
@@ -157,6 +158,20 @@ export function deriveCourse(input: CourseLayerInput, m: CourseMetrics): CourseD
   const structures = structuresOf(input);
   const siteById = new Map(input.sites.map((s) => [s.id, s]));
   const sequences = structures.map((s) => sequenceOf(s, siteById));
+  // ---- one part (§11): a single structure split at its map exchanges. The numbers continue across
+  // the exchange (answer 2), so the part's first number counts the controls before it.
+  let part: { index: number; count: number } | undefined;
+  let numberBase = 0;
+  const wanted = input.viewOptions.section;
+  if (wanted !== undefined && sequences.length === 1) {
+    const parts = sectionsOf(sequences[0], (e) => e.site.kind === "map_exchange");
+    const p = parts[wanted];
+    if (parts.length >= 2 && p) {
+      numberBase = sequences[0].slice(0, p.from).filter((e) => e.role === "control").length;
+      sequences[0] = sequences[0].slice(p.from, p.to + 1);
+      part = { index: p.index, count: parts.length };
+    }
+  }
   // The event's auto-cuts toggle off: no automatic slits / gaps; authored ones still apply (§3.4).
   const features = input.viewOptions.autoCuts === false ? undefined : input.cutFeatures;
   const R = m.circleRadiusMm;
@@ -227,7 +242,9 @@ export function deriveCourse(input: CourseLayerInput, m: CourseMetrics): CourseD
         legs.push(derived);
       }
     }
-    return { id: structure.id, orderMode: structure.orderMode, sequence: seq.map((e) => ({ siteId: e.site.id, role: e.role })), legs };
+    const course: DerivedCourse = { id: structure.id, orderMode: structure.orderMode, sequence: seq.map((e) => ({ siteId: e.site.id, role: e.role })), legs };
+    if (part) course.section = part;
+    return course;
   });
 
   // ---- start rotation: apex towards the next site of the first ordered course that starts there.
@@ -268,7 +285,7 @@ export function deriveCourse(input: CourseLayerInput, m: CourseMetrics): CourseD
   const labelMode = input.viewOptions.labelMode ?? (single?.orderMode === "ordered" && !input.viewOptions.allControls ? "sequence" : "code");
   const numbers = new Map<string, number[]>();
   if (labelMode === "sequence" && courses[0]) {
-    let n = 0;
+    let n = numberBase;
     for (const e of sequences[0]) {
       if (e.role !== "control") continue;
       n++;
