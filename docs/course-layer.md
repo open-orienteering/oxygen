@@ -827,8 +827,36 @@ it applies to every existing course, so a gap-less file never clears
 authored gaps — the rule `circle_gaps` already followed (decision log
 2026-11-07, E5). (The older "keep the OCD geometry unless the controls
 drifted > 30 m" rule never fired — `bugfix-stale-ocd-course-geometry.md`;
-E6 deleted `isOcdGeometryStaleVsXml`.) **PPen `<gaps>` / `<leg>` bends
-are not read** (no fixture, no research record; Pending).
+E6 deleted `isOcdGeometryStaleVsXml`.) **PPen `<gaps>` are not read**
+(no fixture, no research record; Pending).
+
+**The structure from IOF and Purple Pen files** (row F9;
+`iof-coursedata-export.md` "Importing it back", `ppen-import-export.md`).
+Each item's leg is the file's leg props joined (`importedLegProps`,
+`course-import-structure.ts`): the gaps above (OCD), a Purple Pen
+`<leg>`'s **bends** (drawn into the parser's leg feature, so the import
+alignment moves them; read back by `legBendsOfFeatures`), an IOF
+`TapedRoute` / `FunnelTapedRoute` as `style: "marked_route"` and an IOF
+`CrossingPoint` row as the leg's `crossing` (`section` for
+`MandatoryOutOfBoundsAreaPassage`). The crossing point itself is a
+code-less `crossing_point` site named by its IOF `Id`, seq above
+`MARK_SEQ_BASE` (§6.3), matched on a re-import by name among the crossing
+points only — never an item, and never a control row rewritten into one.
+An IOF `Extensions` map-exchange marker makes a **new** site
+`kind: "map_exchange"`; an existing site keeps its kind (the F4 kind-change
+rules are not re-implemented in the import's raw writes). Courses of one
+`CourseFamily` import as separate linear courses — no variation group is
+inferred (§12); the family is shown on the preview's course rows. A free
+order course takes no leg props. On a re-import `carryLegs` merges: the
+file's props win, the stored ones fill in what the file is silent on
+(an IOF file has no bends, a PPen file no style), so an IOF / PPen round
+trip keeps what the editor authored (decided on the user's standing
+instruction, 2026-11-07, for review). Two consequences: a file cannot
+*remove* a crossing point or a marked route (a leg without them is
+indistinguishable from a silent one — a leg loses them in the editor),
+and carried bends are paper-mm points, so a leg whose controls the file
+moves keeps bending through the old points until the setter moves them
+(gaps are fractions and follow the leg).
 
 **Tokens.** One HLC is taken for the `reference.imported` entry before its
 payloads are serialised and stamped on the `courses.version` and
@@ -1437,7 +1465,9 @@ its concrete variants is a **child** `courses` row written by the server
 in the same transaction as the root's structure. A child is an ordinary
 linear course for every reader — timing (`performReadout` reads
 `runner.courseId ?? class.courseId`), results, the Eventor upload, the
-IOF / Purple Pen export, print, the kiosk — and read-only for every
+IOF / Purple Pen export (where the root is not written: each variant is a
+`<Course>` with the root's name as its `CourseFamily`, a class on the root
+assigned to each — F9, `iof-coursedata-export.md` "Variants"), print, the kiosk — and read-only for every
 writer. It stays in every course list (`course.list`); a consumer that
 must not offer it filters on `parentCourseId` (decided on the user's
 standing instruction, 2026-11-07, for review). Section numbering keeps
@@ -1670,9 +1700,12 @@ them.
 | integration | `packages/api/src/__tests__/integration/course-structure.test.ts` | kind ↔ status sync, the slice-F kinds written (F4), circle gaps; `course.update` writes a structure, token = the entry's HLC, structure and token in the payload; a pre-D0 course reads from its columns; `setStructure` mirror (start / finish, sequence, hidden numbers, label offsets not in the column), geometry byte-identical to `update`'s, variations and unknown controls refused; stale course token → `CONFLICT` with current and differing, nothing written, no token = LWW; stale control token → differing fields; `differing: null` at token 0; separate tokens both ways; `control.delete` prunes and advances; seeded groups hold `courses.review`; a controller checks off and writes notes but cannot move |
 | unit (web) | `packages/web/src/lib/__tests__/version-book.test.ts` | §7 `VersionBook`: newest token as an integer compare, list seeding, the conflict payload off a client error, public id after a code change |
 | E2E | `e2e/courses.spec.ts` "an edit from a stale copy…" | §7 over HTTP: another client renames the course while this page's poll is held; this page's edit is refused, the notice shows, the page reloads the other write |
-| unit | `packages/api/src/__tests__/course-import-structure.test.ts` | §6.4: pieces → leg gaps (one piece none, two pieces one gap as fractions, either direction, touching pieces and off-axis pieces), per-course leg gaps by `from>to`, the object kinds and scopes, dedupe, leg cuts and description boxes ignored |
+| unit | `packages/api/src/__tests__/course-import-structure.test.ts` | §6.4: pieces → leg gaps (one piece none, two pieces one gap as fractions, either direction, touching pieces and off-axis pieces), per-course leg gaps by `from>to`, the object kinds and scopes, dedupe, leg cuts and description boxes ignored; F9: a bent leg feature's inner vertices as bends (straight and pre-clipped legs none, first of a pair wins), `importedLegProps` joining gaps / bends / style / crossing |
+| unit | `packages/api/src/__tests__/course-structure.test.ts` "carryLegs" | §6.4 (F9): a leg carried to an item that still follows the same site, none on a new predecessor; the item's own props win, the carried ones fill in |
+| unit | `iof-course-export.test.ts` "course structure (F9)", `ppen-course-export.test.ts` / `ppen-course-parser.test.ts` (F9) | §6.4, §12: `CourseFamily`, the crossing point's control and row, `TapedRoute`, the exchange marker, each round-tripped; a foreign file's folded rows; Purple Pen `<leg>` bends both ways, the leg measured along them |
+| integration | `packages/api/src/__tests__/integration/course-export.test.ts` (F9) | §4.1 (F1 Q2 B): a bent course's exported `LegLength`s and `Length` equal the stored `legs` / `length_m` (IOF and Purple Pen); a forked event: variants with their family, root omitted, class per variant, crossing row, taped route, exchange marker, no map-issue point, every variant's legs equal its stored ones |
 | unit | `ocd-course-parser.test.ts` | §6.4: the parser fills `cuts` and reads 708 |
-| integration | `packages/api/src/__tests__/integration/course-import-structure.test.ts` | §6.4: `e2e/test.ocd`, a Purple Pen and an IOF file leave stored, explicit structures and the mirror; the written rows hold the `reference.imported` HLC; a parsed OCD bundle: slits → `circle_gaps`, pieces → `leg.gaps`, objects with scopes and `source`, a re-import replaces them and keeps a hand-drawn one; an XML re-import over an `ocd` course leaves its column byte-equal, carries the leg gaps on an unchanged leg and drops them on a reordered one, and writes the file's positions; an XML import over a non-`ocd` course writes its geometry and `length_source = 'file'` (E6) |
+| integration | `packages/api/src/__tests__/integration/course-import-structure.test.ts` | §6.4: `e2e/test.ocd`, a Purple Pen and an IOF file leave stored, explicit structures and the mirror; the written rows hold the `reference.imported` HLC; a parsed OCD bundle: slits → `circle_gaps`, pieces → `leg.gaps`, objects with scopes and `source`, a re-import replaces them and keeps a hand-drawn one; an XML re-import over an `ocd` course leaves its column byte-equal, carries the leg gaps on an unchanged leg and drops them on a reordered one, and writes the file's positions; an XML import over a non-`ocd` course writes its geometry and `length_source = 'file'` (E6); F9: an IOF file with a family, a crossing point (passage), a taped route and the exchange marker → the family in the preview, two linear courses and no root, a `crossing_point` site above `MARK_SEQ_BASE` that is no item, the finish's leg `{ style, crossing }`, a `map_exchange` site; a re-import matches the crossing point by name |
 | golden | `e2e/__golden__/map-gl/course-*.png`, `packages/api/src/render/__tests__/golden-files.test.ts`, `e2e/map-gl-golden.spec.ts` | reference raster = committed golden; WebGL2 ≤ 0.5 % (`map-rendering.md` §6.2). The PDF tier joins in C3 |
 | unit (web) | `packages/web/src/lib/__tests__/course-layer-request.test.ts` | the §5 request rules (offsets only with the sheet or the editor; `autoCuts: false` only when off; F4: `overlayTypeOf`, crossing / map-issue sites never make the view all-controls, `setterMarks` and a leg's `crossing` passed through, `sheetCrossings`); the provisional visit (a control at a position, before the finish, past the end, repeats counted; start / finish replace or lead / end; a reused site adds no site, `provisionalDrawn` agrees with the site pushed (P4); the split leg loses its stored gaps; ignored without exactly one highlighted course); §8.2 scope by highlighted course over `inCourses`, all-controls = `all` only, parked nowhere; objects without scope / `z` / token / `inCourses` |
 | unit | `packages/shared/src/course/__tests__/objects.test.ts` | §8.1 each kind accepted (`hatch` included), short geometry / unknown props / an unknown `hatch` / bad filter props / Bézier region refused; §8.2 the scope truth table; §8.3 each kind onto its symbol (709 / 709.b / 709.c, the dangerous area and its boundaries for `hatch: "710"`, 708 / 711, 707, white-out), Bézier handles kept, text upper purple or own row and not divided by the enlargement, image corners, toner saver with and without a window and with Bézier handles (bezier flags in the hole ring only), `inset_frame` and `filter_region` draw nothing |
@@ -1735,9 +1768,10 @@ them.
 - **Structure, beyond D1** (§6): the layer reads `numberHidden`, the
   site's `circle_gaps` and `LegProps.gaps` since D1, `style` and `bends`
   since F1 (§10.1), `corridor` since F2 (§10.2), `crossing` since F4
-  (§10.3); Purple Pen's `<gaps>` / `<leg>` bends and OCAD / Purple Pen
-  corridors, crossing points and map-issue points are not parsed by the
-  importers. Map exchanges split a course into parts since F5 (§11).
+  (§10.3); Purple Pen's `<leg>` bends and IOF crossing points / taped
+  routes are imported since F9 (§6.4); Purple Pen's `<gaps>` /
+  `<flagging>` and crossing / map-issue kinds, and OCAD / Purple Pen
+  corridors, are not parsed by the importers. Map exchanges split a course into parts since F5 (§11).
   Variations are materialised since F6 (§12).
 - **A crossing's section length** (§10.3): 08 §4.3's `section` is a
   boolean, so the section form draws at 6 mm × factor; a stored length
@@ -1753,10 +1787,12 @@ them.
   groups in the sequence it draws and edits (`lib/editor/sequence.ts`,
   `structure-edit.ts`); F7 makes it read and write them. Per-variant
   pages and a variant's own
-  sheet (`maps.pdf?courses=<variant>` still auto-creates one) are F8's;
-  the IOF family export F9's (runners' variants and the dealing landed
+  sheet (`maps.pdf?courses=<variant>` still auto-creates one) are F8's
+  (the IOF family export landed with F9; runners' variants and the dealing landed
   with F6b, the desk's accept of another variant's run with F6c —
-  `course-controls-and-matching.md` "Forked courses and variants"). A loop does not check
+  `course-controls-and-matching.md` "Forked courses and variants"). An
+  imported `CourseFamily` stays separate linear courses (no group
+  inference, F9). A loop does not check
   that the item after it is its anchor (the setter's; a check in F7 if
   wanted). A 100-variant save is one transaction of about a thousand
   queries (`setStructure` allows it 30 s); a batched child write is the
@@ -1769,10 +1805,6 @@ them.
   bend drag previews on the UI layer and writes once (`course-editor.md`
   §6.7), so no per-move request pays it; a control drag on a corridor
   course still does. Caching the union per run is the first lever.
-- **Export lengths along bends** (F9 — user, 2026-11-07): the IOF /
-  Purple Pen export recomputes a `derived` course's leg lengths
-  straight, centre to centre (`course-controls-and-matching.md` "Course
-  length"); F9 makes it read the layer's lengths.
 - **Tokens, beyond D1** (§7): the `differing` of a conflict caused by an
   import is `null` (the base lives inside a `reference.imported`
   entry); presence and "moved by X at T" (D11). The new editor's client rules landed in D4

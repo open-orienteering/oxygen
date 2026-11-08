@@ -1,7 +1,7 @@
 /** The structure ↔ columns mirror (docs/course-layer.md §6.2). */
 
 import { describe, expect, it } from "vitest";
-import { crossingRowsOf, layerPropsOfStored, splitStructure, structureFromColumns, structureToWire, structureFromWire } from "../course-structure.js";
+import { carryLegs, crossingRowsOf, layerPropsOfStored, splitStructure, structureFromColumns, structureToWire, structureFromWire } from "../course-structure.js";
 
 const KIND: Record<string, string> = { S1: "start", S2: "start", a: "control", b: "control", F1: "finish" };
 const kindOf = (id: string) => KIND[id];
@@ -161,5 +161,30 @@ describe("layerPropsOfStored (the viewer's leg input, course-layer.md §5)", () 
   it("has no legs for a NULL or invalid column", () => {
     expect(layerPropsOfStored(null, () => 1)).toEqual({ legs: {}, hiddenNumbers: [] });
     expect(layerPropsOfStored({ version: 9 }, () => 1)).toEqual({ legs: {}, hiddenNumbers: [] });
+  });
+});
+
+describe("carryLegs", () => {
+  const linear = (legs: Array<[string, object?]>) => ({
+    version: 1 as const,
+    id: "c",
+    orderMode: "ordered" as const,
+    items: legs.map(([siteId, leg]) => ({ siteId, ...(leg ? { leg } : {}) })),
+  });
+
+  it("carries a leg to an item that still follows the same site", () => {
+    const prev = linear([["S1"], ["a", { gaps: [{ from: 0.2, to: 0.4 }] }], ["F1"]]);
+    expect(carryLegs(prev, linear([["S1"], ["a"], ["F1"]])).items[1]).toEqual({ siteId: "a", leg: { gaps: [{ from: 0.2, to: 0.4 }] } });
+    // A different predecessor is a different leg.
+    expect(carryLegs(prev, linear([["S1"], ["b"], ["a"], ["F1"]])).items[2]).toEqual({ siteId: "a" });
+  });
+
+  it("keeps the rewritten item's own props over the carried ones (an import's bends / style, row F9)", () => {
+    const prev = linear([["S1"], ["a", { gaps: [{ from: 0.2, to: 0.4 }], style: "marked_route", bends: [{ x: 1, y: 1 }] }]]);
+    const next = linear([["S1"], ["a", { bends: [{ x: 5, y: 5 }] }]]);
+    expect(carryLegs(prev, next).items[1]).toEqual({
+      siteId: "a",
+      leg: { gaps: [{ from: 0.2, to: 0.4 }], style: "marked_route", bends: [{ x: 5, y: 5 }] },
+    });
   });
 });

@@ -216,3 +216,125 @@ describe("buildEventPpenXml", () => {
     ]);
   });
 });
+
+/** The stored per-leg metres of a course row. */
+const storedLegs = (legs: string | null) => (legs ?? "").split(";").filter(Boolean).map(Number);
+
+describe("lengths along the legs (F1 Q2 B, row F9)", () => {
+  it("a bent course's exported LegLengths and Length equal the stored legs / length_m, in IOF and Purple Pen", async () => {
+    const { id } = await caller.course.create({ name: "Export Bent" });
+    await caller.course.setStructure({
+      courseId: id,
+      structure: {
+        version: 1,
+        id: "b",
+        orderMode: "ordered",
+        // Start (0, 0.5) → (10, 30) → 31 (20, 0.5): the leg runs along the bend.
+        items: [{ siteId: 901 }, { siteId: 31, leg: { bends: [{ x: 10, y: 30 }] } }, { siteId: 32 }, { siteId: 902 }],
+      },
+    });
+    const row = await ctx.db.course.findFirstOrThrow({ where: { eventId: ctx.eventId, seq: id } });
+    const legs = storedLegs(row.legs);
+    expect(legs).toHaveLength(3);
+    // The bend lengthens the first leg well beyond the straight 20 mm.
+    expect(legs[0]).toBeGreaterThan(Math.round((50 * mapScale) / 1000));
+
+    const iof = parseIOFCourseData(await buildEventCourseDataXml(ctx.db, { id: ctx.eventId, name: ctx.event.name }));
+    const exported = iof.courses.find((c) => c.name === "Export Bent")!;
+    expect(exported.controls.slice(1).map((cc) => cc.legLength)).toEqual(legs);
+    expect(exported.length).toBe(row.lengthM);
+
+    // Purple Pen carries the bend as a <leg>; its parser measures along it too.
+    const ppen = parsePpenCourseData(await buildEventPpenXml(ctx.db, { id: ctx.eventId, name: ctx.event.name }));
+    const p = ppen.courses.find((c) => c.name === "Export Bent")!;
+    expect(p.controls[1].bends).toEqual([{ x: 10, y: 30 }]);
+    expect(p.controls.slice(1).map((cc) => cc.legLength)).toEqual(legs);
+    await caller.course.delete({ id });
+  });
+});
+
+describe("a forked event with a crossing point and a map exchange (row F9)", () => {
+  let crossingId: number;
+
+  beforeAll(async () => {
+    await caller.control.create({ codes: "41", xpos: 30, ypos: 10 });
+    await caller.control.create({ codes: "42", xpos: 30, ypos: 30 });
+    await caller.control.create({ kind: "map_exchange", codes: "80", xpos: 70, ypos: 10 });
+    crossingId = (await caller.control.create({ kind: "crossing_point", xpos: 85, ypos: 20 })).id;
+    await caller.control.create({ kind: "map_issue", xpos: 50, ypos: 50 });
+    const { id } = await caller.course.create({ name: "Fork" });
+    await caller.course.setStructure({
+      courseId: id,
+      structure: {
+        version: 1,
+        id: "fork",
+        orderMode: "ordered",
+        items: [
+          { siteId: 901 },
+          { kind: "variation", id: "g", alternatives: [{ label: "A", items: [{ siteId: 41 }] }, { label: "B", items: [{ siteId: 42 }] }] },
+          { siteId: 80 },
+          { siteId: 902, leg: { crossing: { controlId: crossingId }, style: "marked_route", bends: [{ x: 80, y: 30 }] } },
+        ],
+      },
+    });
+    const cls = await caller.class.create({ name: "H21 Fork" });
+    await caller.class.update({ id: cls.id, courseId: id });
+  });
+
+  async function variantRows() {
+    const root = await ctx.db.course.findFirstOrThrow({ where: { eventId: ctx.eventId, name: "Fork", removed: false, parentCourseId: null } });
+    return ctx.db.course.findMany({ where: { parentCourseId: root.id, removed: false }, orderBy: { variantKey: "asc" } });
+  }
+
+  it("exports each variant as a Course of the root's family, and the class on the root to each", async () => {
+    const xml = await buildEventCourseDataXml(ctx.db, { id: ctx.eventId, name: ctx.event.name });
+    const parsed = parseIOFCourseData(xml);
+    const names = parsed.courses.map((c) => c.name);
+    expect(names).toEqual(expect.arrayContaining(["Fork A", "Fork B"]));
+    expect(names).not.toContain("Fork");
+    expect(parsed.courses.filter((c) => c.family === "Fork").map((c) => c.name)).toEqual(["Fork A", "Fork B"]);
+    expect(parsed.courses.find((c) => c.name === "Export A")!.family).toBeUndefined();
+    expect(parsed.classAssignments.filter((a) => a.className === "H21 Fork")).toEqual([
+      { className: "H21 Fork", courseName: "Fork A" },
+      { className: "H21 Fork", courseName: "Fork B" },
+    ]);
+    expect(parsed.courses.find((c) => c.name === "Fork A")!.controls.map((cc) => cc.controlId)).toEqual(["901", "41", "80", "902"]);
+    expect(parsed.courses.find((c) => c.name === "Fork B")!.controls.map((cc) => cc.controlId)).toEqual(["901", "42", "80", "902"]);
+  });
+
+  it("writes the crossing point, the taped route and the exchange marker; no map-issue point", async () => {
+    const xml = await buildEventCourseDataXml(ctx.db, { id: ctx.eventId, name: ctx.event.name });
+    const parsed = parseIOFCourseData(xml);
+    expect(parsed.controls.find((c) => c.id === "Passeringspunkt 1")).toMatchObject({ type: "CrossingPoint", mapX: 85, mapY: 20 });
+    expect(parsed.controls.find((c) => c.id === "80")!.mapExchange).toBe(true);
+    expect(parsed.controls.some((c) => c.id.startsWith("Kartutdelning"))).toBe(false);
+    expect(xml).toMatch(/<CourseControl type="CrossingPoint" specialInstruction="MandatoryCrossingPoint">\s*<Control>Passeringspunkt 1<\/Control>\s*<\/CourseControl>\s*<CourseControl type="Finish" specialInstruction="TapedRoute" tapedRouteLength="(\d+)">/);
+    const a = parsed.courses.find((c) => c.name === "Fork A")!;
+    const last = a.controls.at(-1)!;
+    expect(last).toMatchObject({ crossing: { controlId: "Passeringspunkt 1" }, style: "marked_route" });
+    const taped = Number(/tapedRouteLength="(\d+)"/.exec(xml)![1]);
+    expect(taped).toBe(last.legLength);
+  });
+
+  it("every exported leg and length equals the variant row's stored legs / length_m (through the bend and the crossing)", async () => {
+    const parsed = parseIOFCourseData(await buildEventCourseDataXml(ctx.db, { id: ctx.eventId, name: ctx.event.name }));
+    for (const row of await variantRows()) {
+      const exported = parsed.courses.find((c) => c.name === row.name)!;
+      expect(exported.controls.slice(1).map((cc) => cc.legLength)).toEqual(storedLegs(row.legs));
+      expect(exported.length).toBe(row.lengthM);
+    }
+  });
+
+  it("Purple Pen: one kind=normal course per variant with the bend, no crossing point", async () => {
+    const xml = await buildEventPpenXml(ctx.db, { id: ctx.eventId, name: ctx.event.name });
+    expect(xml).not.toContain("Passeringspunkt");
+    expect(xml).not.toContain("Kartutdelning");
+    const parsed = parsePpenCourseData(xml);
+    const names = parsed.courses.map((c) => c.name);
+    expect(names).toEqual(expect.arrayContaining(["Fork A", "Fork B"]));
+    expect(names).not.toContain("Fork");
+    for (const name of ["Fork A", "Fork B"]) {
+      expect(parsed.courses.find((c) => c.name === name)!.controls.at(-1)!.bends).toEqual([{ x: 80, y: 30 }]);
+    }
+  });
+});

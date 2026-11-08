@@ -51,7 +51,8 @@ export interface SlitGap {
 
 export interface ParsedControl {
   id: string;           // "31", "STA1", "FIN1"
-  type: "Start" | "Control" | "Finish";
+  /** `CrossingPoint`: an IOF crossing point, imported as a `crossing_point` site (F9). */
+  type: "Start" | "Control" | "Finish" | "CrossingPoint";
   lat: number;          // WGS84 latitude
   lng: number;          // WGS84 longitude
   mapX: number;         // map position X in mm
@@ -59,6 +60,8 @@ export interface ParsedControl {
   cuts?: SlitGap[];     // Optional gap angles for OCAD circle masking
   /** IOF control description (OCD imports only — parsed from 702000 text). */
   description?: ControlDescription;
+  /** Oxygen's IOF `Extensions` map-exchange marker (docs/iof-coursedata-export.md). */
+  mapExchange?: true;
 }
 
 export interface ParsedCourseControl {
@@ -67,10 +70,26 @@ export interface ParsedCourseControl {
   legLength: number;    // meters
   /** IOF `randomOrder="true"` — free-order block member. */
   randomOrder?: boolean;
+  /**
+   * The crossing point the leg into this row runs through (a folded IOF
+   * `CrossingPoint` row: its control id; `section` for a passage).
+   */
+  crossing?: { controlId: string; section?: true };
+  /** IOF `TapedRoute` / `FunnelTapedRoute` on the leg into this row. */
+  style?: "marked_route";
+  /**
+   * The bends of the leg into this row (Purple Pen `<leg>`), paper mm in
+   * the file's frame. `buildStraightLineGeometry` draws them into the leg
+   * feature, which the import alignment moves; the importer reads them
+   * from there (course-import-structure.ts `legBendsOfFeatures`).
+   */
+  bends?: Array<{ x: number; y: number }>;
 }
 
 export interface ParsedCourse {
   name: string;
+  /** IOF `CourseFamily` (a variant's root, for the import preview). */
+  family?: string;
   length: number;       // meters
   climb: number;
   controls: ParsedCourseControl[];
@@ -157,6 +176,18 @@ function safeStr(val: unknown): string {
   return String(val);
 }
 
+/**
+ * Whether a `Control`'s `Extensions` carry the map-exchange marker
+ * (`<ox:MapExchange>true</ox:MapExchange>`, under whatever prefix the
+ * writer bound Oxygen's namespace to).
+ */
+function hasMapExchangeMarker(extensions: unknown): boolean {
+  if (!extensions || typeof extensions !== "object") return false;
+  return Object.entries(extensions as Record<string, unknown>).some(
+    ([key, value]) => (key === "MapExchange" || key.endsWith(":MapExchange")) && safeStr(value).trim().toLowerCase() === "true",
+  );
+}
+
 export function parseIOFCourseData(xmlContent: string): ParsedCourseData {
   const parsed = parser.parse(xmlContent);
   const courseData = parsed.CourseData;
@@ -176,7 +207,11 @@ export function parseIOFCourseData(xmlContent: string): ParsedCourseData {
   const rawControls = raceCourseData.Control ?? [];
   const controls: ParsedControl[] = [];
   for (const rc of Array.isArray(rawControls) ? rawControls : [rawControls]) {
-    const type = safeStr(rc["@_type"]) as ParsedControl["type"] || "Control";
+    const rawType = safeStr(rc["@_type"]) || "Control";
+    // An end-of-marked-route point has no Oxygen site kind: its rows fold
+    // into the leg (below), the point itself is not imported.
+    if (rawType === "EndOfMarkedRoute") continue;
+    const type = rawType as ParsedControl["type"];
     const id = safeStr(rc.Id);
     if (!id) continue;
 
@@ -190,6 +225,7 @@ export function parseIOFCourseData(xmlContent: string): ParsedCourseData {
       lng: safeFloat(pos["@_lng"]),
       mapX: safeFloat(mapPos["@_x"]),
       mapY: safeFloat(mapPos["@_y"]),
+      ...(hasMapExchangeMarker(rc.Extensions) ? { mapExchange: true as const } : {}),
     });
   }
 
@@ -205,7 +241,25 @@ export function parseIOFCourseData(xmlContent: string): ParsedCourseData {
 
     const rawCCs = rc.CourseControl ?? [];
     const courseControls: ParsedCourseControl[] = [];
+    // What the rows folded since the last kept one carry into the next leg:
+    // a `CrossingPoint` / `EndOfMarkedRoute` row is a point on a leg, not
+    // a control of the course (docs/iof-coursedata-export.md).
+    let pending: Pick<ParsedCourseControl, "crossing" | "style"> & { legLength: number } = { legLength: 0 };
     for (const cc of Array.isArray(rawCCs) ? rawCCs : [rawCCs]) {
+      const rowType = safeStr(cc["@_type"]) || "Control";
+      const instruction = safeStr(cc["@_specialInstruction"]);
+      const taped = instruction === "TapedRoute" || instruction === "FunnelTapedRoute";
+      if (rowType === "CrossingPoint" || rowType === "EndOfMarkedRoute") {
+        pending.legLength += safeFloat(cc.LegLength);
+        if (taped) pending.style = "marked_route";
+        if (rowType === "CrossingPoint" && !pending.crossing && safeStr(cc.Control)) {
+          pending.crossing = {
+            controlId: safeStr(cc.Control),
+            ...(instruction === "MandatoryOutOfBoundsAreaPassage" ? { section: true as const } : {}),
+          };
+        }
+        continue;
+      }
       // IOF / Purple Pen emit randomOrder="true"; also accept bare/empty
       // boolean forms from older exporters.
       const rawRo = cc["@_randomOrder"];
@@ -213,12 +267,17 @@ export function parseIOFCourseData(xmlContent: string): ParsedCourseData {
         rawRo === true ||
         rawRo === "" ||
         safeStr(rawRo).toLowerCase() === "true";
+      // A row before the course's first one joins no leg.
+      const first = courseControls.length === 0;
       courseControls.push({
         controlId: safeStr(cc.Control),
-        type: safeStr(cc["@_type"]) as ParsedCourseControl["type"] || "Control",
-        legLength: safeFloat(cc.LegLength),
+        type: rowType as ParsedCourseControl["type"],
+        legLength: safeFloat(cc.LegLength) + (first ? 0 : pending.legLength),
         ...(randomOrder ? { randomOrder: true } : {}),
+        ...(!first && pending.crossing ? { crossing: pending.crossing } : {}),
+        ...(taped || (!first && pending.style) ? { style: "marked_route" as const } : {}),
       });
+      pending = { legLength: 0 };
     }
 
     // Whole-course free order: every Control-type row has randomOrder.
@@ -230,7 +289,8 @@ export function parseIOFCourseData(xmlContent: string): ParsedCourseData {
         ? "free_order"
         : "ordered";
 
-    courses.push({ name, length, climb, controls: courseControls, orderMode });
+    const family = safeStr(rc.CourseFamily).trim();
+    courses.push({ name, ...(family ? { family } : {}), length, climb, controls: courseControls, orderMode });
   }
 
   // Parse class-course assignments
@@ -291,13 +351,14 @@ export function buildStraightLineGeometry(
       });
     }
 
-    // Legs (straight lines)
+    // Legs (straight lines, through the file's bends where it has them)
     for (let i = 0; i < course.controls.length - 1; i++) {
       const fromId = course.controls[i].controlId;
       const toId = course.controls[i + 1].controlId;
       const fromP = posById.get(fromId);
       const toP = posById.get(toId);
       if (!fromP || !toP) continue;
+      const bends = course.controls[i + 1].bends ?? [];
 
       features.push({
         type: "Feature",
@@ -305,10 +366,14 @@ export function buildStraightLineGeometry(
           type: "LineString",
           coordinates: [
             [fromP.xMm, fromP.yMm],
+            ...bends.map((b): [number, number] => [b.x, b.y]),
             [toP.xMm, toP.yMm],
           ],
         },
-        properties: { symbolType: "leg", from: fromId, to: toId, isDoglegFrom: false, isDoglegTo: false },
+        properties: {
+          symbolType: "leg", from: fromId, to: toId, isDoglegFrom: false, isDoglegTo: false,
+          ...(bends.length > 0 ? { bent: true } : {}),
+        },
       });
     }
 

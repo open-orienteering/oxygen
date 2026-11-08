@@ -242,3 +242,144 @@ describe("buildCourseDataXml", () => {
     expect(parsed.courses[0].orderMode).toBe("ordered");
   });
 });
+
+/**
+ * The slice-F structure in CourseData (row F9; docs/iof-coursedata-export.md
+ * "What ends up in the file"): course families, crossing points, taped
+ * routes and the map exchange, and their way back through the parser.
+ */
+describe("buildCourseDataXml — course structure (F9)", () => {
+  function forked(): CourseDataExport {
+    return {
+      eventName: "Gaffling",
+      mapScale: 10000,
+      createTime: "2026-11-08T10:00:00.000Z",
+      controls: [
+        { id: "S1", type: "Start", xMm: 0, yMm: 0.5 },
+        { id: "41", type: "Control", xMm: 20, yMm: 0.5 },
+        { id: "42", type: "Control", xMm: 20, yMm: 30 },
+        { id: "80", type: "Control", xMm: 40, yMm: 0.5, mapExchange: true },
+        { id: "Passeringspunkt 1", type: "CrossingPoint", xMm: 50, yMm: 10 },
+        { id: "F1", type: "Finish", xMm: 60, yMm: 0.5 },
+      ],
+      courses: ["A", "B"].map((key) => ({
+        name: `Lång ${key}`,
+        family: "Lång",
+        lengthM: 900,
+        climbM: 0,
+        controls: [
+          { controlId: "S1", type: "Start" as const },
+          { controlId: key === "A" ? "41" : "42", type: "Control" as const, legLengthM: 200 },
+          { controlId: "80", type: "Control" as const, legLengthM: 200 },
+          { controlId: "Passeringspunkt 1", type: "CrossingPoint" as const, specialInstruction: "MandatoryCrossingPoint" as const },
+          { controlId: "F1", type: "Finish" as const, legLengthM: 300, specialInstruction: "TapedRoute" as const, tapedRouteLengthM: 300 },
+        ],
+      })),
+      classAssignments: [
+        { className: "H21", courseName: "Lång A" },
+        { className: "H21", courseName: "Lång B" },
+      ],
+    };
+  }
+
+  it("writes CourseFamily after Name, one Course per variant", () => {
+    const xml = buildCourseDataXml(forked());
+    expect(xml).toMatch(/<Name>Lång A<\/Name>\s*<CourseFamily>Lång<\/CourseFamily>\s*<Length>900<\/Length>/);
+    expect(xml.match(/<Course>/g)).toHaveLength(2);
+    expect(xml.match(/<ClassCourseAssignment>/g)).toHaveLength(2);
+  });
+
+  it("writes the crossing point as a CrossingPoint control and an unnumbered row without LegLength", () => {
+    const xml = buildCourseDataXml(forked());
+    expect(xml).toMatch(/<Control type="CrossingPoint">\s*<Id>Passeringspunkt 1<\/Id>/);
+    expect(xml).toMatch(/<CourseControl type="CrossingPoint" specialInstruction="MandatoryCrossingPoint">\s*<Control>Passeringspunkt 1<\/Control>\s*<\/CourseControl>/);
+  });
+
+  it("writes the taped route on the leg's end row with its length", () => {
+    const xml = buildCourseDataXml(forked());
+    expect(xml).toMatch(/<CourseControl type="Finish" specialInstruction="TapedRoute" tapedRouteLength="300">\s*<Control>F1<\/Control>\s*<LegLength>300<\/LegLength>/);
+    // An ordinary leg has no instruction.
+    expect(xml).not.toMatch(/<CourseControl type="Control" specialInstruction/);
+  });
+
+  it("marks the map exchange in the site's Extensions, nowhere else", () => {
+    const xml = buildCourseDataXml(forked());
+    expect(xml).toContain('xmlns:ox="urn:oxygen:iof:extensions"');
+    expect(xml).toMatch(/<Control type="Control">\s*<Id>80<\/Id>[\s\S]*?<Extensions>\s*<ox:MapExchange>true<\/ox:MapExchange>\s*<\/Extensions>\s*<\/Control>/);
+    expect(xml.match(/MapExchange>true/g)).toHaveLength(1);
+    expect(xml).not.toContain("<MapText>");
+  });
+
+  it("round-trips the family, the crossing, the taped route and the exchange through the parser", () => {
+    const parsed = parseIOFCourseData(buildCourseDataXml(forked()));
+    const a = parsed.courses.find((c) => c.name === "Lång A")!;
+    expect(a.family).toBe("Lång");
+    // The crossing row folds into the leg it is on: no row of its own, the
+    // end row carries it and the whole leg.
+    expect(a.controls.map((cc) => cc.controlId)).toEqual(["S1", "41", "80", "F1"]);
+    expect(a.controls[3]).toMatchObject({ type: "Finish", legLength: 300, crossing: { controlId: "Passeringspunkt 1" }, style: "marked_route" });
+    expect(a.controls[2].crossing).toBeUndefined();
+    expect(a.controls[2].style).toBeUndefined();
+    expect(parsed.controls.find((c) => c.id === "Passeringspunkt 1")!.type).toBe("CrossingPoint");
+    expect(parsed.controls.find((c) => c.id === "80")!.mapExchange).toBe(true);
+    expect(parsed.controls.find((c) => c.id === "41")!.mapExchange).toBeUndefined();
+    expect(parsed.classAssignments).toEqual([
+      { className: "H21", courseName: "Lång A" },
+      { className: "H21", courseName: "Lång B" },
+    ]);
+  });
+
+  it("a passage (crossing section) writes MandatoryOutOfBoundsAreaPassage and reads back as section", () => {
+    const input = forked();
+    input.courses[0].controls[3].specialInstruction = "MandatoryOutOfBoundsAreaPassage";
+    const xml = buildCourseDataXml(input);
+    expect(xml).toContain('specialInstruction="MandatoryOutOfBoundsAreaPassage"');
+    const a = parseIOFCourseData(xml).courses.find((c) => c.name === "Lång A")!;
+    expect(a.controls[3].crossing).toEqual({ controlId: "Passeringspunkt 1", section: true });
+  });
+
+  it("writes no family for a course without one", () => {
+    const xml = buildCourseDataXml(sample());
+    expect(xml).not.toContain("CourseFamily");
+    expect(parseIOFCourseData(xml).courses[0].family).toBeUndefined();
+  });
+});
+
+describe("parseIOFCourseData — a foreign file's structure (F9)", () => {
+  const xml = `<?xml version="1.0" encoding="UTF-8"?>
+<CourseData xmlns="http://www.orienteering.org/datastandard/3.0" iofVersion="3.0">
+  <RaceCourseData>
+    <Map><Scale>10000</Scale></Map>
+    <Control type="Start"><Id>S1</Id><MapPosition x="0" y="0" unit="mm"/></Control>
+    <Control type="Control"><Id>31</Id><MapPosition x="10" y="0" unit="mm"/></Control>
+    <Control type="CrossingPoint"><Id>CP</Id><MapPosition x="15" y="5" unit="mm"/></Control>
+    <Control type="EndOfMarkedRoute"><Id>EMR</Id><MapPosition x="18" y="0" unit="mm"/></Control>
+    <Control type="Finish"><Id>F1</Id><MapPosition x="20" y="0" unit="mm"/></Control>
+    <Course>
+      <Name>Split</Name>
+      <CourseControl type="CrossingPoint"><Control>CP</Control></CourseControl>
+      <CourseControl type="Start"><Control>S1</Control></CourseControl>
+      <CourseControl type="Control"><Control>31</Control><LegLength>100</LegLength></CourseControl>
+      <CourseControl type="CrossingPoint"><Control>CP</Control><LegLength>70</LegLength></CourseControl>
+      <CourseControl type="EndOfMarkedRoute" specialInstruction="FunnelTapedRoute"><Control>EMR</Control><LegLength>30</LegLength></CourseControl>
+      <CourseControl type="Finish"><Control>F1</Control><LegLength>20</LegLength></CourseControl>
+      <CourseControl type="CrossingPoint"><Control>CP</Control></CourseControl>
+    </Course>
+  </RaceCourseData>
+</CourseData>`;
+
+  it("folds crossing and end-of-marked-route rows into the next row, summing a split LegLength", () => {
+    const course = parseIOFCourseData(xml).courses[0];
+    // A crossing row before the first or after the last row joins no leg.
+    expect(course.controls.map((cc) => cc.controlId)).toEqual(["S1", "31", "F1"]);
+    expect(course.controls[0].crossing).toBeUndefined();
+    expect(course.controls[2]).toMatchObject({ legLength: 120, crossing: { controlId: "CP" }, style: "marked_route" });
+  });
+
+  it("keeps the crossing point as a site and drops the end-of-marked-route point", () => {
+    const parsed = parseIOFCourseData(xml);
+    expect(parsed.controls.map((c) => [c.id, c.type])).toEqual([
+      ["S1", "Start"], ["31", "Control"], ["CP", "CrossingPoint"], ["F1", "Finish"],
+    ]);
+  });
+});

@@ -439,7 +439,7 @@ per-leg lengths (`"1200;900;"`). Who wrote them is
 | `length_source` | Written by | Export (IOF / Purple Pen) | Eventor sync |
 |---|---|---|---|
 | `file` | `course.importCourses` with positions (OCD, IOF, Purple Pen): the file's published length, which may include detours, marked routes or extra distance | the stored length (the derived one when it is 0) | overwritten by the start list's class length when every class of the course agrees |
-| `derived` | every re-derivation of an edited course with at least one positioned control (`rebuildCourseLengths`: create, update, sequence edits, control moves, copy, map upload, rotation, a position-less import) | recomputed from the controls' current positions and the map scale (the per-leg rounded sum), the stored length when that is 0 | never overwritten |
+| `derived` | every re-derivation of an edited course with at least one positioned control (`rebuildCourseLengths`: create, update, sequence edits, control moves, copy, map upload, rotation, a position-less import) | recomputed from the controls' current positions and the map scale by the stored rule below (along the bends, through the crossing point, rounded once), the stored length when that is 0 | never overwritten |
 | NULL | a course without positioned controls; rows written before E6 without geometry | as `file` | as `file` |
 
 It replaced what `courses.geometry_source = 'editor'` meant to these two
@@ -460,15 +460,23 @@ crossing point the leg runs through (`LegProps.crossing`, §10.3, F4), each leg
 (`line`, `marked_route`, `none`) and its corridor never change it;
 free-order courses keep the length the organiser typed.
 
-The export's `derived` recompute ("recomputed from the controls' current
-positions" above) stays straight, centre to centre (user, 2026-11-07): a
-course with bent legs exports a shorter `LegLength` / `Length` than it
-stores until the IOF / Purple Pen export row (F9) reads the layer's
-lengths. The editor authors bends since F3 and crossing points since F4.
+The export reads the same layer (row F9, user 2026-11-07 — F1 Q2 B):
+`gatherEventCourseExport` (`course-export.ts`) takes each course's
+sequence from `loadCourseSequences` and its legs from `editorCourseLayer`
+→ `legDistancesMm`, the functions `rebuildCourseLengths` stores from, so
+an exported `LegLength` is the stored `legs` entry (along the bends,
+through the crossing point) and a `derived` course's `Length` is
+`courseLengthM` — the stored `length_m`, rounded once over the
+millimetres, not the sum of the rounded legs. Until F9 the export
+recomputed straight, centre to centre, and a bent course exported
+shorter than it stored. A leg through a crossing point keeps its whole
+length on its end row (`iof-coursedata-export.md`). The editor authors
+bends since F3 and crossing points since F4.
 
 | Test | Covers |
 |---|---|
 | `packages/api/src/__tests__/integration/course-export.test.ts` "derives editor-course lengths…", "exports the published length of a 'file' or NULL…" | `derived` recomputes; `file` and NULL export the stored length; 0 falls back to the derived one |
+| `packages/api/src/__tests__/integration/course-export.test.ts` "a bent course's exported LegLengths and Length equal the stored legs / length_m…", "every exported leg and length equals the variant row's stored legs…" | the export along the bends and through a crossing point equals the stored lengths, IOF and Purple Pen (F9) |
 | `packages/api/src/__tests__/integration/eventor-reentry.test.ts` "overwrites a 'file'…", "does not overwrite an editor-owned course…" | the sync's guard on `length_source` |
 | `packages/api/src/__tests__/integration/control-editor.test.ts` "course geometry regeneration", "course.clone" | `derived` on create, sequence edits, control moves and copy (the E6 migration's backfill test went with `geometry_source` in E5) |
 | `packages/api/src/__tests__/course-geometry.test.ts` "legDistancesMm (from the course layer, E6)" | layer-derived leg lengths = the pre-E6 formula bit for bit |

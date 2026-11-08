@@ -239,4 +239,46 @@ describe("parsePpenCourseData", () => {
       "FIN1",
     ]);
   });
+
+  // Purple Pen's <leg> (row F9; docs/ppen-import-export.md): the bends of
+  // the leg between two controls, for every course that runs it.
+  const WITH_LEGS = SAMPLE_PPEN.replace(
+    "</course-scribe-event>",
+    `  <leg id="300" start-control="11" end-control="12">
+    <bends>
+      <location x="40" y="40.25" />
+      <location x="40" y="60" />
+    </bends>
+  </leg>
+  <leg id="301" start-control="13" end-control="11">
+    <bends>
+      <location x="1" y="1" />
+    </bends>
+  </leg>
+  <leg id="302" start-control="10" end-control="13">
+    <flagging kind="all" />
+  </leg>
+</course-scribe-event>`,
+  );
+
+  it("reads a <leg>'s bends onto the row it ends at and measures the leg along them", () => {
+    const parsed = parsePpenCourseData(WITH_LEGS);
+    const a = parsed.courses.find((c) => c.name === "A")!;
+    expect(a.controls[2].bends).toEqual([{ x: 40, y: 40.25 }, { x: 40, y: 60 }]);
+    // 31 (30.5, 40.25) → (40, 40.25) → (40, 60) → 32 (50, 60).
+    expect(a.controls[2].legLength).toBe(Math.round(((9.5 + 19.75 + 10) * 10000) / 1000));
+    expect(a.length).toBe(a.controls.slice(1).reduce((sum, cc) => sum + cc.legLength, 0));
+    // A <leg> for a pair the course does not run (13 → 11), or one without bends, adds nothing.
+    expect(a.controls.filter((cc) => cc.bends)).toHaveLength(1);
+    expect(parsed.courses.find((c) => c.name === "B")!.controls.some((cc) => cc.bends)).toBe(false);
+  });
+
+  it("draws the bends into the leg's geometry feature", () => {
+    const parsed = parsePpenCourseData(WITH_LEGS);
+    const leg = parsed.courseGeometry.A.features.find(
+      (f) => f.geometry.type === "LineString" && f.properties.from === "31" && f.properties.to === "32",
+    )!;
+    expect(leg.geometry.coordinates).toEqual([[30.5, 40.25], [40, 40.25], [40, 60], [50, 60]]);
+    expect(leg.properties.bent).toBe(true);
+  });
 });

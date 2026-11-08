@@ -36,7 +36,7 @@ import {
 import { parseOCDCourseData } from "../ocd-course-parser.js";
 import { isPpenContent, parsePpenCourseData } from "../ppen-course-parser.js";
 import { resolveImportAlignment } from "../course-import-align.js";
-import { publicControlId } from "./control.js";
+import { MARK_SEQ_BASE, publicControlId } from "./control.js";
 import { courseChecksFor } from "../course-checks.js";
 import { lastWriter, othersPresent, PRESENCE_TTL_MS, touchPresence } from "../course-presence.js";
 import {
@@ -91,7 +91,7 @@ import {
   type VariantSync,
 } from "../course-variants.js";
 import { baseVersionSchema } from "../version-conflict.js";
-import { collectImportedObjects, legGapsOfFeatures } from "../course-import-structure.js";
+import { collectImportedObjects, importedLegProps, legBendsOfFeatures, legGapsOfFeatures } from "../course-import-structure.js";
 import { nextServerHlc } from "../serverClock.js";
 import { writeImportedObjects } from "../course-import-objects.js";
 
@@ -1712,6 +1712,9 @@ export const courseRouter = router({
           .map((a) => a.className);
         return {
           name: c.name,
+          // IOF `CourseFamily` (row F9): a variant of another tool's forked
+          // course; it imports as a separate linear course, no group inferred.
+          family: c.family ?? null,
           length: c.length,
           climb: c.climb,
           controlCount,
@@ -1861,6 +1864,7 @@ export const courseRouter = router({
           name: true,
           codes: true,
           removed: true,
+          kind: true,
         },
       });
       const controlByKey = new Map<string, (typeof existingControls)[number]>();
@@ -1875,8 +1879,45 @@ export const courseRouter = router({
 
       /** Map: parsed control id (e.g. "31", "STA1") → PG control UUID. */
       const controlIdMap = new Map<string, string>();
+      /** The parsed ids that are crossing points (row F9): a leg's `crossing` may name only these. */
+      const crossingIds = new Set<string>();
 
       for (const pc of parsed.controls) {
+        // An IOF crossing point is a code-less `crossing_point` site named by
+        // its id ("Passeringspunkt 1" from an Oxygen export), matched on
+        // re-import by name among the crossing points only, and created with a
+        // seq above MARK_SEQ_BASE as `control.create` allocates it
+        // (course-layer.md §6.3, §10.3; row F9).
+        if (pc.type === "CrossingPoint") {
+          const existing = existingControls.find((c) => c.kind === "crossing_point" && c.name.toLowerCase() === pc.id.toLowerCase());
+          // WGS84 as for a control: a real pair overwrites, none keeps the stored one (null on create).
+          const hasWgs = !skipPositions && (pc.lat !== 0 || pc.lng !== 0);
+          const data = {
+            name: pc.id,
+            codes: "",
+            status: valueToControlStatus(0),
+            ...(skipPositions ? {} : { xpos: pc.mapX, ypos: pc.mapY }),
+            ...(hasWgs ? { lat: pc.lat, lng: pc.lng } : {}),
+            removed: false,
+          };
+          if (existing) {
+            await ctx.db.control.update({ where: { id: existing.id }, data });
+            controlIdMap.set(pc.id, existing.id);
+            if (existing.removed) controlsCreated++;
+            else controlsUpdated++;
+          } else {
+            const top = await ctx.db.control.aggregate({ where: { eventId, seq: { gt: MARK_SEQ_BASE } }, _max: { seq: true } });
+            const created = await ctx.db.control.create({
+              data: { eventId, seq: Math.max(MARK_SEQ_BASE, top._max.seq ?? 0) + 1, kind: "crossing_point", ...data },
+              select: { id: true },
+            });
+            controlIdMap.set(pc.id, created.id);
+            controlsCreated++;
+          }
+          crossingIds.add(pc.id);
+          continue;
+        }
+
         const status =
           pc.type === "Start"
             ? valueToControlStatus(4)
@@ -1933,9 +1974,11 @@ export const courseRouter = router({
         //      this is how start/finish controls survive a re-import,
         //      because they're stored with name = "Start N"/"Mål N" and
         //      empty `codes`, so step 1 never finds them on round two.
-        const matched =
+        const byKey =
           controlByKey.get(pc.id.toLowerCase()) ??
           (name ? controlByKey.get(name.toLowerCase()) : undefined);
+        // A crossing point is never rewritten into a control (its name may equal a code).
+        const matched = byKey?.kind === "crossing_point" ? undefined : byKey;
         const baseData = {
           name,
           codes,
@@ -1979,6 +2022,9 @@ export const courseRouter = router({
             data: {
               eventId,
               ...baseData,
+              // The exchange marker of an Oxygen IOF export (row F9) makes a
+              // new site a map exchange; an existing site keeps its kind.
+              ...(pc.mapExchange && pc.type === "Control" ? { kind: "map_exchange" as const } : {}),
               lat: nextLat,
               lng: nextLng,
             },
@@ -2099,15 +2145,29 @@ export const courseRouter = router({
 
         // The structure, and through it the column mirror: start / finish
         // sites explicit as the file names them, `course_controls`, the
-        // leg gaps the file's 705 pieces leave (course-layer.md §6.4).
+        // leg gaps the file's 705 pieces leave, the bends of a Purple Pen
+        // `<leg>`, an IOF taped route and crossing point (course-layer.md
+        // §6.4; row F9). A free-order course has no legs.
         const gapsByLeg = skipPositions || carryGaps || !geom ? new Map<string, courseShared.FractionGap[]>() : legGapsOfFeatures(geom, (code) => positionOfCode.get(code));
+        const bendsByLeg = skipPositions || !geom ? new Map<string, { x: number; y: number }[]>() : legBendsOfFeatures(geom);
+        const ordered = (pc.orderMode ?? "ordered") === "ordered";
         const items: courseShared.StoredControlItem[] = [];
         let prevCode: string | null = null;
         for (const cc of pc.controls) {
           const siteId = controlIdMap.get(cc.controlId);
-          if (!siteId) continue;
-          const gaps = prevCode === null ? undefined : gapsByLeg.get(`${prevCode}>${cc.controlId}`);
-          items.push({ siteId, ...(gaps ? { leg: { gaps } } : {}) });
+          // A crossing point is never an item (course-layer.md §10.3).
+          if (!siteId || crossingIds.has(cc.controlId)) continue;
+          const key = `${prevCode}>${cc.controlId}`;
+          const crossingSite = cc.crossing && crossingIds.has(cc.crossing.controlId) ? controlIdMap.get(cc.crossing.controlId) : undefined;
+          const leg = prevCode === null || !ordered
+            ? undefined
+            : importedLegProps({
+                gaps: gapsByLeg.get(key),
+                bends: bendsByLeg.get(key),
+                style: cc.style,
+                crossing: crossingSite ? { controlId: crossingSite, section: cc.crossing?.section } : undefined,
+              });
+          items.push({ siteId, ...(leg ? { leg } : {}) });
           prevCode = cc.controlId;
         }
         const linear = courseShared.linearStructure(courseUuid, items, { orderMode: pc.orderMode ?? "ordered" }) as courseShared.StoredCourseStructure;
