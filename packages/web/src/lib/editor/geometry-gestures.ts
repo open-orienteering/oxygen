@@ -30,8 +30,8 @@ export interface VertexRule { min: number; max: number; curves: boolean; closed:
 
 /**
  * A drag on the selected path. `base` is the geometry at pointer-down: every drag event applies the whole from→to
- * offset to it, never to a draft. `vertex` null drags the whole path; `alt` on a vertex is read at the release (an
- * Alt-click toggles it), a drag moves it as without. A `grip` is a Bézier handle of vertex `index` dragged by the pointer's offset; its `alt` is
+ * offset to it, never to a draft. `vertex` null drags the whole path; `alt` on a vertex is the press's: a click with it
+ * toggles the vertex (`toggleSmooth`), a drag moves it as without. A `grip` is a Bézier handle of vertex `index` dragged by the pointer's offset; its `alt` is
  * live (it breaks the pair).
  */
 export type GeometryDrag =
