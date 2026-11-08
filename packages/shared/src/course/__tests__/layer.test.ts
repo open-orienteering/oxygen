@@ -319,7 +319,7 @@ describe("corridors (§10.2, F2)", () => {
 
   describe("openings (F19): drawn, not cuts", () => {
     const circleOf = (layer: ReturnType<typeof courseLayer>, id: string) => layer.objects.filter((o) => o.ref.kind === "site" && o.ref.id === id);
-    const ends = (o: { path: { coords: number[] } }) => {
+    const ends = (o: { path: { coords: ArrayLike<number> } }) => {
       const c = o.path.coords;
       return [[c[0], c[1]], [c[c.length - 2], c[c.length - 1]]];
     };
