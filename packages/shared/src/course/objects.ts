@@ -1,13 +1,13 @@
 /**
- * Map-anchored layout objects → course-layer objects (docs/course-layer.md
- * §3.6): today's `CourseMapObject`s are the 08 §4.5 kinds they already
- * are — white-out, white-out outside (toner saver), 709 hatch, and plain
- * text / line / path / rectangle in their own colours, plus images that
- * the page backends draw.
+ * Course objects (docs/course-layer.md §8; 08 §4.5): `course_objects` rows
+ * with a kind, a vertex path in paper mm and kind props — their schema,
+ * scope rule and drawing onto the 7xx set. Map-anchored layout objects
+ * were moved into them by F12 (§3.6, retired).
  *
- * Course objects (§8; 08 §4.5) are the stored, scoped kind of the same
- * thing: `course_objects` rows with a kind, a vertex path in paper mm and
- * kind props. Their schema, scope rule and drawing live here too.
+ * The page layer (`page-layer.ts`, course-print.md §4.4) draws a sheet's
+ * page-anchored layout objects through the same builder: white-out,
+ * white-out outside, 709 hatch and plain text / line / path / rectangle in
+ * their own colours, in page mm, plus images the page backends draw.
  */
 
 import { z } from "zod";
@@ -129,11 +129,6 @@ export type CourseObject = CourseObjectBody & {
   inCourses: number[] | null;
 };
 
-/** A course object, as opposed to a sheet's layout object (`CourseMapObject` has no `geometry`). */
-export function isCourseObject(o: CourseMapObject | CourseLayerObject): o is CourseLayerObject {
-  return "geometry" in o;
-}
-
 /**
  * Whether an object is drawn with a course (§8.2). `drawn` = the drawn
  * courses and the classes that run them; `null` = no course (all-controls
@@ -147,15 +142,15 @@ export function courseObjectInScope<Id>(scope: CourseObjectScope<Id>, drawn: { c
 
 const FONT = { sans: "liberation-sans", condensed: "liberation-sans-narrow", serif: "liberation-serif", mono: "liberation-mono" } as const;
 
-/** Hex colours the objects draw in (stroke, solid fill, text), in object order. */
-export function objectColours(objects: readonly (CourseMapObject | CourseLayerObject)[]): string[] {
+/** Hex colours course objects draw in (a text's own colour), in object order. */
+export function objectColours(objects: readonly CourseLayerObject[]): string[] {
+  return objects.flatMap((o) => (o.kind === "text" && o.props.color ? [o.props.color] : []));
+}
+
+/** Hex colours page-anchored layout objects draw in (stroke, solid fill, text), in object order. */
+export function pageObjectColours(objects: readonly CourseMapObject[]): string[] {
   const out: string[] = [];
   for (const o of objects) {
-    if (isCourseObject(o)) {
-      if (o.kind === "text" && o.props.color) out.push(o.props.color);
-      continue;
-    }
-    if (o.anchor !== "map") continue;
     if (o.kind === "text") out.push(o.color);
     else if (o.kind === "line") out.push(o.stroke);
     else if (o.kind === "path" || o.kind === "rectangle") {
@@ -168,17 +163,15 @@ export function objectColours(objects: readonly (CourseMapObject | CourseLayerOb
 
 /**
  * The toner saver's own white row (§3.6, P1): on top of the layer's
- * stack, above upper purple and the layout-object rows, so the white-out
+ * stack, above upper purple and the course-object rows, so the white-out
  * outside covers everything the map layer draws — the map's text in rows
- * above purple, 709 areas, layout text. The page layer comes after it.
+ * above purple, 709 areas, object text. The page layer comes after it.
  */
 export const TONER_WHITE_ID = "course:toner-saver-white";
 
-/** Whether the layer draws a map-anchored white-out outside (a `toner_saver` object or a `whiteoutInverted` map object). */
-export function hasTonerSaver(objects: readonly (CourseMapObject | CourseLayerObject)[]): boolean {
-  return objects.some((o) => isCourseObject(o)
-    ? o.kind === "toner_saver"
-    : o.anchor === "map" && (o.kind === "path" || o.kind === "rectangle") && o.fillMode === "whiteoutInverted");
+/** Whether the layer draws a white-out outside (a `toner_saver` course object). */
+export function hasTonerSaver(objects: readonly CourseLayerObject[]): boolean {
+  return objects.some((o) => o.kind === "toner_saver");
 }
 
 /** A stored path's construction as a render path: a handle on either end makes the segment a cubic. */
@@ -207,8 +200,8 @@ const rectVertices = (o: { x: number; y: number; width: number; height: number }
 ];
 
 /** Dashes as legacy print draws them: dash max(2, 5w), gap max(1, 2.5w), page mm. */
-const dashFor = (dashed: boolean, widthMm: number, os: number) =>
-  dashed ? { layout: "ocad" as const, dashUm: um(Math.max(2, 5 * widthMm) / os), gapUm: um(Math.max(1, 2.5 * widthMm) / os) } : undefined;
+const dashFor = (dashed: boolean, widthMm: number) =>
+  dashed ? { layout: "ocad" as const, dashUm: um(Math.max(2, 5 * widthMm)), gapUm: um(Math.max(1, 2.5 * widthMm)) } : undefined;
 
 export interface ObjectBuild {
   objects: CourseRenderObject[];
@@ -216,18 +209,17 @@ export interface ObjectBuild {
   warnings: CourseLayerWarning[];
 }
 
-/** Adds symbols to `symbols` (deduplicated by content) and returns the layer objects. */
-export function layoutObjects(
-  input: readonly (CourseMapObject | CourseLayerObject)[],
+/** What both builders read of the view: the white-out-outside ring and the text values. */
+type ObjectView = Pick<CourseViewOptions, "window" | "textValues">;
+
+/** The shared part of the two builders: symbols deduplicated by content, white-out outside, text symbols. */
+function objectBuilder(
   set: CourseSymbolSet,
   symbols: RenderSymbol[],
   colourOf: (hex: string) => number,
-  view: CourseViewOptions,
-  upperPurple: number,
-  /** The colour a white-out outside fills: the map layer's toner white row; the page layer's upper white when absent. */
-  tonerWhite?: number,
-): ObjectBuild {
-  const os = view.overprintScale && view.overprintScale > 0 ? view.overprintScale : 1;
+  view: ObjectView,
+  tonerWhite: number | undefined,
+) {
   const out: ObjectBuild = { objects: [], images: [], warnings: [] };
   const known = new Map<string, number>();
   const symbol = (body: Record<string, unknown>): number => {
@@ -240,12 +232,7 @@ export function layoutObjects(
     }
     return i;
   };
-  const strokeSymbol = (hex: string, widthMm: number, dashed: boolean) => {
-    const dash = dashFor(dashed, widthMm, os);
-    return symbol({ type: "line", main: { colour: colourOf(hex), widthUm: um(widthMm / os), ...(dash ? { dash } : {}) } });
-  };
-
-  /** White-out outside `shape`: the map frame with the shape as an even-odd hole. */
+  /** White-out outside `shape`: the ring (the map frame) with the shape as an even-odd hole. */
   const whiteoutOutside = (shape: { coords: number[]; flags: number[] }, ref: CourseRenderObject["ref"], what: string) => {
     if (!view.window || view.window.length < 3) {
       out.warnings.push({ code: "WINDOW_MISSING", ref, message: `${what} needs viewOptions.window; not drawn` });
@@ -259,55 +246,29 @@ export function layoutObjects(
   };
   const textSymbol = (fontFamily: keyof typeof FONT | undefined, sizeUm: number, colour: number, align: "left" | "center" | "right" | undefined) =>
     symbol({ type: "text", fontFamily: FONT[fontFamily ?? "sans"], fontSizeUm: sizeUm, colour, align: align === "center" ? "centre" : (align ?? "left") });
+  const image = (graphicId: number, crop: CourseLayerImage["crop"], x: number, y: number, width: number, height: number) =>
+    out.images.push({ graphicId, ...(crop ? { crop } : {}), rectUm: { x: um(x), y: um(y), width: um(width), height: um(height) } });
+  return { out, symbol, whiteoutOutside, textSymbol, image };
+}
 
+/**
+ * Course objects onto the 7xx set (§8.3), symbols added to `symbols`.
+ * Geometry and text sizes are paper mm like the course symbols, so nothing
+ * is divided by the print enlargement. `filter_region` is not an object
+ * (the layer lifts it into `regions`); `inset_frame` is reserved.
+ */
+export function courseObjects(
+  input: readonly CourseLayerObject[],
+  set: CourseSymbolSet,
+  symbols: RenderSymbol[],
+  colourOf: (hex: string) => number,
+  view: ObjectView,
+  upperPurple: number,
+  /** The colour a toner saver fills: the map layer's toner white row (the set's white-out when absent). */
+  tonerWhite?: number,
+): ObjectBuild {
+  const b = objectBuilder(set, symbols, colourOf, view, tonerWhite);
   for (const o of input) {
-    if (isCourseObject(o)) {
-      courseObject(o);
-      continue;
-    }
-    if (o.anchor !== "map") continue;
-    const ref = { kind: "object" as const, id: o.id };
-    if (o.kind === "image") {
-      out.images.push({ object: o, rectUm: { x: um(o.x), y: um(o.y), width: um(o.width), height: um(o.height) } });
-      continue;
-    }
-    if (o.kind === "text") {
-      const text = expandMapText(o.text, view.textValues ?? {});
-      if (!text) continue;
-      const idx = textSymbol(o.fontFamily, um(o.fontSizeMm / os), colourOf(o.color), o.align);
-      out.objects.push({ symbolIdx: idx, path: makePath([um(o.x), um(o.y)]), text, ref });
-      continue;
-    }
-    if (o.kind === "line") {
-      out.objects.push({ symbolIdx: strokeSymbol(o.stroke, o.strokeWidthMm, o.dash === "dashed"), path: makePath([um(o.x1), um(o.y1), um(o.x2), um(o.y2)]), ref });
-      continue;
-    }
-
-    const fillMode = o.fillMode ?? "none";
-    const vertices = o.kind === "rectangle" ? rectVertices(o) : o.points;
-    const closed = o.kind === "rectangle" || o.closed || fillMode === "whiteout" || fillMode === "whiteoutInverted" || fillMode === "outOfBounds";
-    const shape = vertexPath(vertices, closed);
-    const shapePath = makePath(shape.coords, shape.flags, closed);
-    const hasStroke = !!o.stroke && o.strokeWidthMm !== undefined;
-
-    if (fillMode === "whiteout") out.objects.push({ symbolIdx: set.idx.whiteout, path: shapePath, ref });
-    else if (fillMode === "solid" && o.fill) out.objects.push({ symbolIdx: symbol({ type: "area", fill: colourOf(o.fill) }), path: shapePath, ref });
-    else if (fillMode === "outOfBounds") {
-      const idx = !hasStroke ? set.idx.oobArea : o.dash === "dashed" ? set.idx.oobAreaDashed : set.idx.oobAreaBorder;
-      out.objects.push({ symbolIdx: idx, path: shapePath, ref });
-      continue; // the library entry draws the boundary: stored colour and width are not read
-    } else if (fillMode === "whiteoutInverted") whiteoutOutside(shape, ref, `white-out outside ${o.id}`);
-    if (hasStroke) out.objects.push({ symbolIdx: strokeSymbol(o.stroke!, o.strokeWidthMm!, o.dash === "dashed"), path: shapePath, ref });
-  }
-  return out;
-
-  /**
-   * A course object onto the 7xx set (§8.3). Geometry and text sizes are
-   * paper mm like the course symbols, so nothing is divided by the print
-   * enlargement. `filter_region` is not an object (the layer lifts it into
-   * `regions`); `inset_frame` is reserved.
-   */
-  function courseObject(o: CourseLayerObject): void {
     const ref = { kind: "object" as const, id: courseObjectRefId(o.id) };
     const area = (closed: boolean) => {
       const shape = vertexPath(o.geometry, closed);
@@ -319,41 +280,95 @@ export function layoutObjects(
         const idx = o.props.hatch === "710"
           ? border === "solid" ? set.idx.dangerousAreaBorder : border === "dashed" ? set.idx.dangerousAreaDashed : set.idx.dangerousArea
           : border === "solid" ? set.idx.oobAreaBorder : border === "dashed" ? set.idx.oobAreaDashed : set.idx.oobArea;
-        out.objects.push({ symbolIdx: idx, path: area(true).path, ref });
-        return;
+        b.out.objects.push({ symbolIdx: idx, path: area(true).path, ref });
+        break;
       }
       case "oob_line":
-        out.objects.push({ symbolIdx: o.props.symbol === "711" ? set.idx.forbiddenRoute : set.idx.restrictedLine, path: area(false).path, ref });
-        return;
+        b.out.objects.push({ symbolIdx: o.props.symbol === "711" ? set.idx.forbiddenRoute : set.idx.restrictedLine, path: area(false).path, ref });
+        break;
       case "marked_route":
-        out.objects.push({ symbolIdx: set.idx.markedRoute, path: area(false).path, ref });
-        return;
+        b.out.objects.push({ symbolIdx: set.idx.markedRoute, path: area(false).path, ref });
+        break;
       case "whiteout":
-        out.objects.push({ symbolIdx: set.idx.whiteout, path: area(true).path, ref });
-        return;
+        b.out.objects.push({ symbolIdx: set.idx.whiteout, path: area(true).path, ref });
+        break;
       case "toner_saver":
-        whiteoutOutside(area(true).shape, ref, `toner saver ${o.id}`);
-        return;
+        b.whiteoutOutside(area(true).shape, ref, `toner saver ${o.id}`);
+        break;
       case "text": {
         const text = expandMapText(o.props.text, view.textValues ?? {});
-        if (!text) return;
+        if (!text) break;
         const colour = o.props.color ? colourOf(o.props.color) : upperPurple;
         const p = o.geometry[0];
-        out.objects.push({ symbolIdx: textSymbol(o.props.fontFamily, um(o.props.fontSizeMm), colour, o.props.align), path: makePath([um(p.x), um(p.y)]), text, ref });
-        return;
+        b.out.objects.push({ symbolIdx: b.textSymbol(o.props.fontFamily, um(o.props.fontSizeMm), colour, o.props.align), path: makePath([um(p.x), um(p.y)]), text, ref });
+        break;
       }
       case "image": {
-        const [a, b] = o.geometry;
-        const x = Math.min(a.x, b.x), y = Math.min(a.y, b.y), width = Math.abs(a.x - b.x), height = Math.abs(a.y - b.y);
-        const object = { id: ref.id, anchor: "map" as const, kind: "image" as const, graphicId: o.props.graphicId, x, y, width, height, ...(o.props.crop ? { crop: o.props.crop } : {}) };
-        out.images.push({ object, rectUm: { x: um(x), y: um(y), width: um(width), height: um(height) } });
-        return;
+        const [p, q] = o.geometry;
+        b.image(o.props.graphicId, o.props.crop, Math.min(p.x, q.x), Math.min(p.y, q.y), Math.abs(p.x - q.x), Math.abs(p.y - q.y));
+        break;
       }
       case "filter_region":
       case "inset_frame":
-        return;
+        break;
     }
   }
+  return b.out;
+}
+
+/**
+ * A sheet's page-anchored layout objects (course-print.md §4.4), flipped
+ * to y-up page mm by the caller (`flipPageObject`), symbols added to
+ * `symbols`. Sizes are page mm as stored: the page layer is not enlarged.
+ * A white-out outside fills the ring `view.window` (the frame) with the
+ * set's white-out.
+ */
+export function pageObjects(
+  input: readonly CourseMapObject[],
+  set: CourseSymbolSet,
+  symbols: RenderSymbol[],
+  colourOf: (hex: string) => number,
+  view: ObjectView,
+): ObjectBuild {
+  const b = objectBuilder(set, symbols, colourOf, view, undefined);
+  const strokeSymbol = (hex: string, widthMm: number, dashed: boolean) => {
+    const dash = dashFor(dashed, widthMm);
+    return b.symbol({ type: "line", main: { colour: colourOf(hex), widthUm: um(widthMm), ...(dash ? { dash } : {}) } });
+  };
+  for (const o of input) {
+    const ref = { kind: "object" as const, id: o.id };
+    if (o.kind === "image") {
+      b.image(o.graphicId, o.crop, o.x, o.y, o.width, o.height);
+      continue;
+    }
+    if (o.kind === "text") {
+      const text = expandMapText(o.text, view.textValues ?? {});
+      if (!text) continue;
+      b.out.objects.push({ symbolIdx: b.textSymbol(o.fontFamily, um(o.fontSizeMm), colourOf(o.color), o.align), path: makePath([um(o.x), um(o.y)]), text, ref });
+      continue;
+    }
+    if (o.kind === "line") {
+      b.out.objects.push({ symbolIdx: strokeSymbol(o.stroke, o.strokeWidthMm, o.dash === "dashed"), path: makePath([um(o.x1), um(o.y1), um(o.x2), um(o.y2)]), ref });
+      continue;
+    }
+
+    const fillMode = o.fillMode ?? "none";
+    const vertices = o.kind === "rectangle" ? rectVertices(o) : o.points;
+    const closed = o.kind === "rectangle" || o.closed || fillMode === "whiteout" || fillMode === "whiteoutInverted" || fillMode === "outOfBounds";
+    const shape = vertexPath(vertices, closed);
+    const shapePath = makePath(shape.coords, shape.flags, closed);
+    const hasStroke = !!o.stroke && o.strokeWidthMm !== undefined;
+
+    if (fillMode === "whiteout") b.out.objects.push({ symbolIdx: set.idx.whiteout, path: shapePath, ref });
+    else if (fillMode === "solid" && o.fill) b.out.objects.push({ symbolIdx: b.symbol({ type: "area", fill: colourOf(o.fill) }), path: shapePath, ref });
+    else if (fillMode === "outOfBounds") {
+      const idx = !hasStroke ? set.idx.oobArea : o.dash === "dashed" ? set.idx.oobAreaDashed : set.idx.oobAreaBorder;
+      b.out.objects.push({ symbolIdx: idx, path: shapePath, ref });
+      continue; // the library entry draws the boundary: stored colour and width are not read
+    } else if (fillMode === "whiteoutInverted") b.whiteoutOutside(shape, ref, `white-out outside ${o.id}`);
+    if (hasStroke) b.out.objects.push({ symbolIdx: strokeSymbol(o.stroke!, o.strokeWidthMm!, o.dash === "dashed"), path: shapePath, ref });
+  }
+  return b.out;
 }
 
 /** A course object's `ref.id`: distinct from a sheet's layout-object ids. */

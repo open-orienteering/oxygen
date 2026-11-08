@@ -64,7 +64,7 @@ function sprintA4(): PageInput {
     paper: { widthMm: 210, heightMm: 297 },
     frame,
     window,
-    course: { structure: ordered(["S", "31", "32", "33", "34", "F"]), sites, appearance: {}, viewOptions: { overprintScale: 4000 / 3000 } },
+    course: { structure: ordered(["S", "31", "32", "33", "34", "F"]), sites, appearance: {}, viewOptions: {} },
     objects: [{ id: "title", anchor: "page", kind: "text", x: 14, y: 282, text: "{event} · {course}", fontSizeMm: 5, color: "#000000" }],
     textValues: { event: "Sprint-SM", course: "A" },
     description: { x: 137, y: 14, cellSizeMm: 7, rows: sheet.rows, header: sheet.header, title: "A" },
@@ -72,7 +72,7 @@ function sprintA4(): PageInput {
   });
 }
 
-/** Toner saver: a map-anchored white-out-outside ring, a page white-out over the frame edge, page text and line. */
+/** Toner saver: a `toner_saver` course object (F12's form of a map-anchored white-out outside), a page white-out over the frame edge, page text and line. */
 function ring(): PageInput {
   const base = new BaseMap("ISOM2017-2")
     .add("406", area(-60, -50, 60, -50, 60, 50, -60, 50))
@@ -83,7 +83,6 @@ function ring(): PageInput {
   const frame = { x: 8, y: 8, width: 104, height: 74 };
   const window = mapWindowForFrame(frame, { x: 0, y: 0 }, 10000, 10000);
   const objects: CourseMapObject[] = [
-    { id: "ring", anchor: "map", kind: "path", points: [{ x: -38, y: -32 }, { x: 38, y: -32 }, { x: 38, y: 28 }, { x: -38, y: 28 }], fillMode: "whiteoutInverted", closed: true },
     { id: "box", anchor: "page", kind: "rectangle", x: 84, y: 62, width: 32, height: 24, fillMode: "whiteout", stroke: "#000000", strokeWidthMm: 0.3 },
     { id: "name", anchor: "page", kind: "text", x: 100, y: 72, text: "{course}", fontSizeMm: 4, color: "#000000", align: "center" },
     { id: "rule", anchor: "page", kind: "line", x1: 88, y1: 76, x2: 112, y2: 76, stroke: "#1f6fb2", strokeWidthMm: 0.5, dash: "dashed" },
@@ -92,7 +91,10 @@ function ring(): PageInput {
     paper: { widthMm: 120, heightMm: 90 },
     frame,
     window,
-    course: { structure: ordered(["S", "31", "32", "F"]), sites, appearance: {}, viewOptions: {} },
+    course: {
+      structure: ordered(["S", "31", "32", "F"]), sites, appearance: {}, viewOptions: {},
+      objects: [{ id: "ring", kind: "toner_saver", geometry: [{ x: -38, y: -32 }, { x: 38, y: -32 }, { x: 38, y: 28 }, { x: -38, y: 28 }], props: {} }],
+    },
     objects,
     textValues: { course: "Bana 2" },
     description: null,
@@ -100,7 +102,7 @@ function ring(): PageInput {
   });
 }
 
-/** A window rotated 20° clockwise on the page (meridian tilt −20°): map, course and a map-anchored text turn together. */
+/** A window rotated 20° clockwise on the page (meridian tilt −20°): map, course and a text course object turn together. */
 function rotated(): PageInput {
   const base = new BaseMap("ISOM2017-2")
     .add("401", area(-70, -60, 70, -60, 70, 60, -70, 60))
@@ -114,8 +116,11 @@ function rotated(): PageInput {
     paper: { widthMm: 120, heightMm: 90 },
     frame,
     window,
-    course: { structure: ordered(["S", "31", "32", "F"]), sites, appearance: {}, viewOptions: {} },
-    objects: [{ id: "north", anchor: "map", kind: "text", x: -32, y: 4, text: "N", fontSizeMm: 5, color: "#000000" }],
+    course: {
+      structure: ordered(["S", "31", "32", "F"]), sites, appearance: {}, viewOptions: {},
+      objects: [{ id: "north", kind: "text", geometry: [{ x: -32, y: 4 }], props: { text: "N", fontSizeMm: 5, color: "#000000" } }],
+    },
+    objects: [],
     textValues: {},
     description: null,
     label: "Rotated",

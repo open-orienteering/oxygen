@@ -98,18 +98,18 @@ describe("course scenes", () => {
   it("course-objects: the white-out at upper white over the ink, 709 / 707 / 711 upper purple, layout colour, the toner saver's white on top", () => {
     const { scene, stream } = run("course-objects");
     const passes = coursePasses(scene, stream);
-    expect(passes.filter((x) => x.ref === "object:wo").map((x) => `${x.p.kind}:${x.colour}`)).toEqual(["fill:white-upper"]);
+    expect(passes.filter((x) => x.ref === "object:course-object:wo").map((x) => `${x.p.kind}:${x.colour}`)).toEqual(["fill:white-upper"]);
     // P1: the toner saver's ring is the stream's last pass — over upper purple and the layout text's row.
-    expect(passes.filter((x) => x.ref === "object:ring").map((x) => `${x.p.kind}:${x.colour}`)).toEqual(["fill:course:toner-saver-white"]);
+    expect(passes.filter((x) => x.ref === "object:course-object:ring").map((x) => `${x.p.kind}:${x.colour}`)).toEqual(["fill:course:toner-saver-white"]);
     expect(paletteId(scene, stream.passes.at(-1)!.colour)).toBe("course:toner-saver-white");
     const order = stream.passes.map((p) => paletteId(scene, p.colour));
     expect(order.indexOf("white-upper")).toBeGreaterThan(order.lastIndexOf("black100"));
     expect(order.indexOf("white-upper")).toBeLessThan(order.indexOf("purple-upper"));
-    expect(passes.find((x) => x.ref === "object:oob")!.p.kind).toBe("hatch");
-    expect(passes.filter((x) => x.ref === "object:oob-b").map((x) => x.p.kind).sort()).toEqual(["hatch", "stroke"]);
-    for (const ref of ["object:oob", "object:course-object:1", "object:course-object:3"]) expect(passes.find((x) => x.ref === ref)!.colour, ref).toBe("purple-upper");
+    expect(passes.find((x) => x.ref === "object:course-object:oob")!.p.kind).toBe("hatch");
+    expect(passes.filter((x) => x.ref === "object:course-object:oob-b").map((x) => x.p.kind).sort()).toEqual(["hatch", "stroke"]);
+    for (const ref of ["object:course-object:oob", "object:course-object:1", "object:course-object:3"]) expect(passes.find((x) => x.ref === ref)!.colour, ref).toBe("purple-upper");
     expect(passes.find((x) => x.ref === "object:course-object:2")!.colour).toBe("purple-lower");
-    const title = passes.find((x) => x.ref === "object:title")!;
+    const title = passes.find((x) => x.ref === "object:course-object:title")!;
     expect(title.colour).toBe("course-object:#1f6fb2");
     expect(title.p.colour).toBe(scene.colours.length - 2);
   });

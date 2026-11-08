@@ -18,7 +18,7 @@ import { circleWithGaps } from "./arcs.js";
 import { corridorGeometry } from "./corridor.js";
 import { courseColourStack, withObjectColours, withTintColours } from "./colour-stack.js";
 import { deriveCourse, structuresOf } from "./derive.js";
-import { TONER_WHITE_ID, filterRegionOf, hasTonerSaver, layoutObjects, objectColours, isCourseObject } from "./objects.js";
+import { TONER_WHITE_ID, courseObjects, filterRegionOf, hasTonerSaver, objectColours } from "./objects.js";
 import { CROSSING_BODY_MM, CROSSING_SECTION_MM, CROSSING_SECTION_OFFSET_MM, courseSymbols } from "./symbols.js";
 import type { CourseFilterRegion, CourseLayer, CourseLayerInput, CourseRenderObject } from "./types.js";
 import type { MapPoint } from "../course-maps/schema.js";
@@ -92,11 +92,11 @@ export function courseLayer(input: CourseLayerInput): CourseLayer {
   const drawsToner = (input.viewOptions.window?.length ?? 0) >= 3 && hasTonerSaver(input.objects);
   const colours = drawsToner ? [...palette.colours, TONER_WHITE] : palette.colours;
   const tonerWhite = drawsToner ? colours.length - 1 : undefined;
-  const built = layoutObjects(input.objects, set, symbols, palette.indexOf, input.viewOptions, stack.index.get("purple-upper")!, tonerWhite);
+  const built = courseObjects(input.objects, set, symbols, palette.indexOf, input.viewOptions, stack.index.get("purple-upper")!, tonerWhite);
   objects.push(...built.objects);
 
   // Stored filter regions (§8.3) follow the explicit ones.
-  const stored = input.objects.flatMap((o) => (isCourseObject(o) && o.kind === "filter_region" ? [filterRegionOf(o)] : []));
+  const stored = input.objects.flatMap((o) => (o.kind === "filter_region" ? [filterRegionOf(o)] : []));
   const regions = [...(input.regions ?? []), ...stored].map((r) => filterRegion(r, stack.remap));
   // §10.2: the corridors' white band cuts every map colour away; the course is never filtered.
   if (corridors?.band) regions.push({ path: ringsPath(corridors.band), mode: "clip", symbols: "all" });

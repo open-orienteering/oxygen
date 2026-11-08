@@ -69,9 +69,9 @@ describe("T_map", () => {
 });
 
 describe("flipPageObject", () => {
-  it("text and lines by y, rectangles by their lower-left corner, handles negated; anchor becomes map", () => {
+  it("text and lines by y, rectangles by their lower-left corner, handles negated; the anchor stays page", () => {
     const text: CourseMapObject = { id: "t", anchor: "page", kind: "text", x: 5, y: 10, text: "x", fontSizeMm: 3, color: "#000000" };
-    expect(flipPageObject(text, H)).toMatchObject({ anchor: "map", x: 5, y: 287 });
+    expect(flipPageObject(text, H)).toMatchObject({ anchor: "page", x: 5, y: 287 });
     const rect: CourseMapObject = { id: "r", anchor: "page", kind: "rectangle", x: 5, y: 10, width: 20, height: 30, fillMode: "whiteout" };
     expect(flipPageObject(rect, H)).toMatchObject({ x: 5, y: 257, width: 20, height: 30 });
     const path: CourseMapObject = { id: "p", anchor: "page", kind: "path", points: [{ x: 0, y: 0, hOut: { x: 1, y: 2 } }, { x: 4, y: 8 }], fillMode: "none", closed: false };

@@ -87,9 +87,9 @@ describe("composePage", () => {
     const outside: CourseLayerObject[] = [
       { id: 9, kind: "oob_area" as const, geometry: [{ x: 42, y: 30 }, { x: 55, y: 30 }, { x: 55, y: 45 }], props: {} },
       { id: 10, kind: "text" as const, geometry: [{ x: -55, y: 40 }], props: { text: "Ingen passage", fontSizeMm: 3 } },
+      { id: 11, kind: "text" as const, geometry: [{ x: 45, y: -40 }], props: { text: "{course}", fontSizeMm: 4, color: "#1f6fb2" } },
     ];
-    const label = { id: "label", anchor: "map" as const, kind: "text" as const, x: 45, y: -40, text: "{course}", fontSizeMm: 4, color: "#1f6fb2" };
-    const page = composePage({ ...base, objects: [...base.objects, label], course: { ...base.course, objects: outside } }, fonts());
+    const page = composePage({ ...base, course: { ...base.course, objects: [...(base.course.objects ?? []), ...outside] } }, fonts());
     expect(page.warnings).toEqual([]);
     const passes = page.mapLayer.stream.passes;
     const toner = page.colours.findIndex((c) => c.id === "course:toner-saver-white");
@@ -126,16 +126,14 @@ describe("composePage", () => {
     expect(page.mapLayer.stream.passes.some((p) => p.kind === "text")).toBe(true);
   });
 
-  it("images: map- and page-anchored image objects become page images in their layer's space", () => {
+  it("images: an image course object and a page-anchored image object become page images in their layer's space", () => {
     const base = pageScene("page-ring");
+    const mapLogo: CourseLayerObject = { id: "map-logo", kind: "image", geometry: [{ x: -5, y: -1 }, { x: 5, y: -5 }], props: { graphicId: 8, crop: { x: 0.5, y: 0, width: 0.5, height: 1 } } };
     const page = composePage(
       {
         ...base,
-        objects: [
-          ...base.objects,
-          { id: "logo", anchor: "page", kind: "image", graphicId: 7, x: 10, y: 10, width: 20, height: 10 },
-          { id: "map-logo", anchor: "map", kind: "image", graphicId: 8, x: -5, y: -5, width: 10, height: 4, crop: { x: 0.5, y: 0, width: 0.5, height: 1 } },
-        ],
+        course: { ...base.course, objects: [...(base.course.objects ?? []), mapLogo] },
+        objects: [...base.objects, { id: "logo", anchor: "page", kind: "image", graphicId: 7, x: 10, y: 10, width: 20, height: 10 }],
       },
       fonts(),
     );
