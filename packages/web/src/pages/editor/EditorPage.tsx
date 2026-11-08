@@ -296,6 +296,8 @@ export function EditorPage() {
     // Course objects are cached until reload in MapPanel: every write invalidates them (course-layer.md §8.3).
     void utils.courseObject.list.invalidate();
     void utils.course.checks.invalidate();
+    // A structure write re-materialises the variants and deals their runners (F6b): Export ▾'s counts (F8).
+    void utils.course.variantList.invalidate();
   }, [utils]);
 
   /** One write (or an undo / redo): pending count, the conflict notice or the error, then a reload. */
@@ -346,6 +348,13 @@ export function EditorPage() {
     run,
     record,
   });
+  // A root's variants as stored, with their runners (F6b): Export ▾'s variant entries (F8).
+  const variantList = trpc.course.variantList.useQuery({ courseId: selectedCourse?.id ?? 1 }, { enabled: !!selectedCourse && hasGroups });
+  // The keys of the structure being edited (a new key has no runners until the write lands and they are dealt).
+  const exportVariants = useMemo(() => {
+    const counts = new Map((variantList.data ?? []).map((v) => [v.variantKey, v.runnerCount]));
+    return variantKeys.map((key) => ({ key, runnerCount: counts.get(key) ?? 0 }));
+  }, [variantKeys, variantList.data]);
   // The selected course's classes: Class view's picker (docs/course-layout.md §6).
   const courseClasses = trpc.layout.classOverrides.useQuery(
     { courseId: selectedCourse?.id ?? 1 },
@@ -1762,6 +1771,8 @@ export function EditorPage() {
         classSeq: state.view === "class" ? state.classSeq : null,
         sheetSeq: state.mode === "layout" ? layoutMode.sheetSeq : null,
         canEdit,
+        variants: exportVariants,
+        variantKey: state.view === "variant" ? state.variantKey : sheetVariant,
       }}
       onExportError={setErrorMsg}
       mode={state.mode}
