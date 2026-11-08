@@ -3369,8 +3369,13 @@ test.describe("F7: variations and loops (docs/course-editor.md §12)", () => {
     // No runner is assigned yet: no hand-out stack to print.
     await expect(page.getByTestId("editor-export-courseRunners")).toBeDisabled();
     await page.keyboard.press("Escape");
-    expect((await exported("course")).pages).toBe(2);
-    expect((await exported("allVariations")).pages).toBe(1);
+    // One page per own sheet and variant: a reused control may be another test's map exchange (two part sheets).
+    const printed = await exported("course");
+    type Listed = { courseId: number | null; class: unknown; kind: string };
+    const sheets = (await trpcCall<Listed[]>("courseMap.list", undefined, false)).filter((s) => s.courseId === courseId && s.class === null && s.kind === "course").length;
+    expect(sheets).toBeGreaterThanOrEqual(1);
+    expect(printed.pages).toBe(2 * sheets);
+    expect((await exported("allVariations")).pages).toBe(sheets);
 
     // Layout mode draws the sheet as one variant (the first key); Variant ▾ picks another, the mode kept.
     await page.getByTestId("editor-mode-layout").click();
@@ -3385,7 +3390,7 @@ test.describe("F7: variations and loops (docs/course-editor.md §12)", () => {
     await page.getByTestId("editor-export").click();
     await expect(page.getByTestId("editor-export-variant")).toContainText("BA");
     await page.keyboard.press("Escape");
-    expect((await exported("variant")).pages).toBe(1);
+    expect((await exported("variant")).pages).toBe(sheets);
     await page.getByTestId("editor-mode-course").click();
     await expect(page.getByTestId("editor-mode-course")).toHaveAttribute("aria-pressed", "true");
 
