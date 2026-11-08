@@ -439,8 +439,13 @@ import has always dropped them) are removed.
 dropped**: a solid fill (`solid_fill`), a stroke that is not purple on a
 line (`coloured_line`) or an unfilled shape (`coloured_stroke`), a stroke
 on a white-out or white-out outside (`stroked_whiteout`), an area of
-fewer than three vertices (`degenerate_area`), an unknown kind or fill
-mode. The migration raises `F12 guard: …` with the count per reason and
+fewer than three vertices (`degenerate_area`) or a line of fewer than two
+(`degenerate_line`), a text without a size, position or colour
+(`malformed_text`) or one over the course object's 100 mm once divided
+by the enlargement (`text_too_large`), an image without its graphic
+(`image_without_graphic`), an unknown kind or fill mode
+(`unknown_kind`, `unknown_fill`) — every body that is moved is one
+`courseObjectBodySchema` reads back. The migration raises `F12 guard: …` with the count per reason and
 lists each object (event, table, row seq, object id, reason) in the
 error's detail; nothing is changed. A soft-deleted event
 (`events.removed`) is not guarded: its refused objects are removed with
@@ -1855,7 +1860,7 @@ label.
 | unit | `layer.test.ts` "a stored filter_region course object" | §8.3: the same region as the explicit one, after it; hides the document's 516 |
 | unit | `layer.test.ts` "course objects as F12 moved layout objects" | §3.6: white-out at upper white, 709 / 709.b / 709.c by border, a text's own row on top at paper mm (no division), the toner saver ring and its white row last (P1), `WINDOW_MISSING`, an image to `layer.images` as `{ graphicId, crop, rectUm }` |
 | pass-stream | `scenes.test.ts` "course-objects", `print/__tests__` page scenes "page-ring", "page-rotated" | §3.6: the fixtures' former map-anchored objects written as the course objects F12 makes; the stream snapshots unchanged byte for byte — the move draws the same |
-| integration | `course-objects-migration.test.ts` | §3.6 the F12 migration on a scratch database built to the migration before it: the guard refuses a solid fill, a black stroke and a stroked white-out of a live event, names each in the detail and changes nothing; after the runbook's fix-ups every kind maps (whiteout, legacy `whiteoutRect`, toner saver, 709 / .b / .c, 708 / 707 from purple lines and closed outlines, a template's own purple, text ÷ os with the latest map's scale and a sheet's print-scale override, image corners), scopes per row type (template, course / class / all-controls / setter sheets), `source = 'layout'`, `version 0`, `z` under a hand-drawn object, seq order; invisible objects removed; a soft-deleted event's refused object removed; club payloads stripped; page objects kept in order; every body parses; a second run changes nothing |
+| integration | `course-objects-migration.test.ts` | §3.6 the F12 migration on a scratch database built to the migration before it: the guard refuses all eleven reasons of a live event (a solid fill, a black stroke and line, a stroked white-out, short areas and lines, an image without its graphic, a text without a size or over 100 mm at os 0.75, an unknown kind and fill), names each in the detail and changes nothing; after the runbook's fix-ups every kind maps (whiteout, legacy `whiteoutRect`, toner saver, 709 / .b / .c, 708 / 707 from purple lines and closed outlines, a template's own purple, text ÷ os with the latest map's scale and a sheet's print-scale override, image corners), scopes per row type (template, course / class / all-controls / setter sheets), `source = 'layout'`, `version 0`, `z` under a hand-drawn object, seq order; invisible objects removed; a soft-deleted event's refused object removed; club payloads stripped; page objects kept in order; every body parses; a second run changes nothing |
 | integration | `course-print.test.ts` "F12" | §3.6: a sheet's map-anchored white-out and text, migrated on the shared database, are `source = 'layout'` objects scoped to its course; the sheet keeps its page object; the composed page draws the white-out at upper white and the text at 4 mm on paper |
 | E2E | `course-editor.spec.ts` "F12" | §3.6: a legacy map-anchored white-out and 709 area seeded on a sheet and migrated: listed in Course mode scoped to the course, the map's ink under the white-out gone on the canvas, the sheet's `maps.pdf` one page with one more hatch |
 | unit | `packages/api/src/__tests__/version-conflict.test.ts` | §8.4: the object `CONFLICT` payload |
@@ -1968,7 +1973,10 @@ label.
   enlargement; the moved text takes the template's print scale) are not
   kept; a sheet's object now draws on every sheet of its course (a map
   exchange's other parts included) and a template's on every sheet of the
-  event. A per-sheet scope is not planned.
+  event; a moved `image` prints but is not previewed on the canvas (no
+  mode draws image course objects yet, `course-layout.md` Pending
+  "GL-drawn images"; Layout mode showed a map-anchored image). A
+  per-sheet scope is not planned.
 - **Upper white at import**: insert the row in stage-7 alignment
   (`colour-align.ts`) at the next importer bump, so `courseColourStack`
   never has to remap.

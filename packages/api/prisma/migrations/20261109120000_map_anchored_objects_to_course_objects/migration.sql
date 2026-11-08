@@ -21,7 +21,9 @@
 -- The guard. An object with no course-object kind is refused, never
 -- dropped: a solid fill, a stroke that is not the template's purple on a
 -- line or an unfilled shape, a stroke on a white-out, an area of fewer than
--- three vertices, an unknown kind or fill mode. The exception names each
+-- three vertices, a text without a size or one that would exceed the course
+-- object's 100 mm once divided by the enlargement, an unknown kind or fill
+-- mode. The exception names each
 -- one (event, table, row seq, object id, reason); the runbook says how to
 -- fix them. A soft-deleted event (`events.removed`) is not guarded: its
 -- unmappable objects are removed with the move (E5's precedent). Objects
@@ -51,8 +53,10 @@ $$;
 -- The course-object kind of one map-anchored object, 'invisible' (draws
 -- nothing) or 'reject:<reason>'. Mirrors the retired layer branch: a
 -- stroke needs both `stroke` and `strokeWidthMm`, a 709 area's stroke is
--- its 709.b / 709.c boundary (colour and width were never read).
-CREATE FUNCTION "oxygen"."f12_class"(raw jsonb, purple text) RETURNS text LANGUAGE plpgsql IMMUTABLE AS $$
+-- its 709.b / 709.c boundary (colour and width were never read). A body
+-- the API would not read back (`courseObjectBodySchema`) is refused, so no
+-- moved row can vanish from the lists.
+CREATE FUNCTION "oxygen"."f12_class"(raw jsonb, purple text, os double precision) RETURNS text LANGUAGE plpgsql IMMUTABLE AS $$
 DECLARE
   o jsonb := "oxygen"."f12_norm"(raw);
   k text := o->>'kind';
@@ -66,7 +70,14 @@ BEGIN
     RETURN CASE WHEN o ? 'graphicId' AND o ? 'width' AND o ? 'height' THEN 'image' ELSE 'reject:image_without_graphic' END;
   END IF;
   IF k = 'text' THEN
-    RETURN CASE WHEN coalesce(o->>'text', '') = '' THEN 'invisible' ELSE 'text' END;
+    IF coalesce(o->>'text', '') = '' THEN RETURN 'invisible'; END IF;
+    IF jsonb_typeof(o->'fontSizeMm') IS DISTINCT FROM 'number' OR (o->>'fontSizeMm')::double precision <= 0
+       OR jsonb_typeof(o->'x') IS DISTINCT FROM 'number' OR jsonb_typeof(o->'y') IS DISTINCT FROM 'number'
+       OR coalesce(o->>'color', '') !~* '^#[0-9a-f]{6}$' THEN
+      RETURN 'reject:malformed_text';
+    END IF;
+    IF (o->>'fontSizeMm')::double precision / os > 100 THEN RETURN 'reject:text_too_large'; END IF;
+    RETURN 'text';
   END IF;
   IF k = 'line' THEN
     IF NOT stroked THEN RETURN 'invisible'; END IF;
@@ -98,7 +109,7 @@ $$;
 CREATE FUNCTION "oxygen"."f12_body"(raw jsonb, os double precision, purple text) RETURNS jsonb LANGUAGE plpgsql IMMUTABLE AS $$
 DECLARE
   o jsonb := "oxygen"."f12_norm"(raw);
-  c text := "oxygen"."f12_class"(raw, purple);
+  c text := "oxygen"."f12_class"(raw, purple, os);
   k text := o->>'kind';
   x double precision;
   y double precision;
@@ -187,13 +198,12 @@ src AS (
 )
 SELECT s."src_order", s."tbl", s."row_id", s."event_id", s."row_seq", s."scope", e."removed",
        a."obj", a."ord",
-       "oxygen"."f12_class"(a."obj", s."purple") AS class,
-       "oxygen"."f12_body"(a."obj",
-         CASE WHEN d."map_scale" > 0 AND s."print_scale" > 0 THEN d."map_scale" / s."print_scale" ELSE 1 END,
-         s."purple") AS body
+       "oxygen"."f12_class"(a."obj", s."purple", os.v) AS class,
+       "oxygen"."f12_body"(a."obj", os.v, s."purple") AS body
   FROM src s
   JOIN "oxygen"."events" e ON e."id" = s."event_id"
   LEFT JOIN doc d ON d."event_id" = s."event_id"
+  CROSS JOIN LATERAL (SELECT CASE WHEN d."map_scale" > 0 AND s."print_scale" > 0 THEN d."map_scale" / s."print_scale" ELSE 1 END AS v) os
   CROSS JOIN LATERAL jsonb_array_elements(CASE WHEN jsonb_typeof(s."objects") = 'array' THEN s."objects" ELSE '[]'::jsonb END)
     WITH ORDINALITY AS a("obj", "ord")
  WHERE a."obj"->>'anchor' = 'map';
@@ -268,5 +278,5 @@ $$;
 DROP TABLE "f12_objects";
 DROP FUNCTION "oxygen"."f12_page_only"(jsonb);
 DROP FUNCTION "oxygen"."f12_body"(jsonb, double precision, text);
-DROP FUNCTION "oxygen"."f12_class"(jsonb, text);
+DROP FUNCTION "oxygen"."f12_class"(jsonb, text, double precision);
 DROP FUNCTION "oxygen"."f12_norm"(jsonb);

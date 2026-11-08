@@ -32,7 +32,7 @@ const ids = {} as {
   live: string; nomap: string; removed: string;
   course: string; cls: string; template: string; purpleTemplate: string;
   courseSheet: string; classSheet: string; allSheet: string; setterSheet: string; setterCourseSheet: string; bareSheet: string; nomapSheet: string;
-  removedSheet: string;
+  removedSheet: string; refusedSheet: string;
 };
 
 async function admin<T>(f: (c: Client) => Promise<T>): Promise<T> {
@@ -161,6 +161,19 @@ beforeAll(async () => {
   // No template: os 1 (resolveMapLayout's `(mapScale ?? printScale) / printScale` has no print scale to divide by).
   ids.bareSheet = await sheet("kind, objects", "$1, 'Bare', 'setter', $2", [ids.live, JSON.stringify([{ id: "b-text", anchor: "map", kind: "text", x: 0, y: 0, text: "T", fontSizeMm: 3, color: "#000000" }])]);
 
+  // A sheet of every other refusal, printed at 1:20 000 from the 1:15 000 map (os 0.75: 90 mm text → 120 mm, over the 100 mm cap).
+  const mapped = (o: Record<string, unknown>) => ({ anchor: "map", ...o });
+  ids.refusedSheet = await sheet("kind, overrides, template_id, objects", "$1, 'Refusals', 'setter', $2, $3, $4", [ids.live, { printScale: 20000 }, ids.template, JSON.stringify([
+    mapped({ id: "r-line", kind: "line", x1: 0, y1: 0, x2: 1, y2: 1, stroke: "#000000", strokeWidthMm: 0.35 }),
+    mapped({ id: "r-thin", kind: "path", points: [{ x: 0, y: 0 }, { x: 1, y: 0 }], fillMode: "whiteout", closed: true }),
+    mapped({ id: "r-dot", kind: "path", points: [{ x: 0, y: 0 }], fillMode: "none", stroke: "#a626ff", strokeWidthMm: 0.35 }),
+    mapped({ id: "r-img", kind: "image", x: 0, y: 0, width: 1, height: 1 }),
+    mapped({ id: "r-nosize", kind: "text", x: 0, y: 0, text: "T", color: "#000000" }),
+    mapped({ id: "r-huge", kind: "text", x: 0, y: 0, text: "T", fontSizeMm: 90, color: "#000000" }),
+    mapped({ id: "r-fill", kind: "rectangle", x: 0, y: 0, width: 1, height: 1, fillMode: "gradient" }),
+    mapped({ id: "r-kind", kind: "ellipse", x: 0, y: 0 }),
+  ])]);
+
   // An event without a base map: os 1.
   const nomapTemplate = await id("INSERT INTO map_templates (event_id, name, print_scale) VALUES ($1, 'A4', 10000)", [ids.nomap]);
   ids.nomapSheet = await sheet("kind, template_id, objects", "$1, 'Alla', 'all_controls', $2, $3",
@@ -186,11 +199,18 @@ afterAll(async () => {
 describe("F12 migration: map-anchored layout objects become course objects", () => {
   it("refuses a live event's object with no course-object kind, names each one and changes nothing", async () => {
     const err = await applyF12().then(() => null, (e: unknown) => e as Error & { detail?: string });
-    expect(err?.message).toMatch(/^F12 guard: 3 map-anchored layout object\(s\) of live events have no course-object kind \(1 × coloured_stroke, 1 × solid_fill, 1 × stroked_whiteout\)/);
+    expect(err?.message).toMatch(new RegExp("^F12 guard: 11 map-anchored layout object\\(s\\) of live events have no course-object kind \\(" + [
+      "coloured_line", "coloured_stroke", "degenerate_area", "degenerate_line", "image_without_graphic", "malformed_text", "solid_fill",
+      "stroked_whiteout", "text_too_large", "unknown_fill", "unknown_kind",
+    ].map((r) => `1 × ${r}`).join(", ") + "\\)"));
+    const refused = (oid: string, reason: string) => `event ${ids.live} course_maps seq 7 object ${oid}: ${reason}`;
     expect(err?.detail?.split("\n")).toEqual([
       `event ${ids.live} map_templates seq 1 object t-black: coloured_stroke`,
       `event ${ids.live} course_maps seq 1 object s-solid: solid_fill`,
       `event ${ids.live} course_maps seq 1 object s-stroked-wo: stroked_whiteout`,
+      refused("r-line", "coloured_line"), refused("r-thin", "degenerate_area"), refused("r-dot", "degenerate_line"),
+      refused("r-img", "image_without_graphic"), refused("r-nosize", "malformed_text"), refused("r-huge", "text_too_large"),
+      refused("r-fill", "unknown_fill"), refused("r-kind", "unknown_kind"),
     ]);
     expect(await objectRows(ids.live)).toHaveLength(1);
     expect((await mapObjects("map_templates", ids.template)).map((o) => o.id)).toContain("t-wo");
@@ -213,6 +233,7 @@ describe("F12 migration: map-anchored layout objects become course objects", () 
         [ids.live, oid],
       );
     }
+    await db.query("UPDATE course_maps SET objects = '[]' WHERE id = $1", [ids.refusedSheet]);
     await applyF12();
 
     const rows = await objectRows(ids.live);

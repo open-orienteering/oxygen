@@ -48,7 +48,8 @@ DETAIL: event 12 map_templates seq 1 object 6f0c…: coloured_stroke
 | `coloured_stroke` | an unfilled rectangle / path stroked in a colour other than purple | as `coloured_line` |
 | `stroked_whiteout` | a white-out or white-out outside with a border | drop the border (the white-out moves without it) |
 | `degenerate_area` | a white-out / 709 / white-out outside path of fewer than three points | delete it |
-| `unknown_kind`, `unknown_fill`, `image_without_graphic`, `degenerate_line` | a malformed object | delete it |
+| `text_too_large` | a text whose size divided by the sheet's enlargement (`mapScale / printScale`, below 1 when printing smaller than the map) exceeds a course object's 100 mm | make it smaller (or page-anchored) |
+| `unknown_kind`, `unknown_fill`, `image_without_graphic`, `degenerate_line`, `malformed_text` | a malformed object | delete it |
 
 Fix on the **current** release, before deploying: open the sheet or
 template in Layout mode (the inspector still shows the anchor there) and
