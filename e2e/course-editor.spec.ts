@@ -2800,10 +2800,33 @@ test.describe("F3: legs — styles, bends, corridors (docs/course-editor.md §6.
     return { name, a: await site(page, a), b: await site(page, b) };
   }
 
-  /** Click the leg a → b at its midpoint until the Leg section shows (the hit index lags the mirror by a round trip). */
+  /**
+   * The point along the leg a → b farthest from every site. A leg without a line (`none`, or inside a corridor,
+   * F14) hits after the UI layer's off-course controls (§5), so a click at the plain midpoint can select a faded
+   * control lying on the leg instead (F14 run: control 79 on the leg's middle).
+   */
+  async function legClickPoint(page: Page, name: string, a: Site, b: Site): Promise<Pt> {
+    const mid = await legMidpoint(page, name, a.mm, b.mm);
+    const marks = (await sites(page)).map((x) => x.mm);
+    const clearance = (q: Pt) => Math.min(...marks.map((m) => Math.hypot(q.x - m.x, q.y - m.y)));
+    let best = mid, bestD = clearance(mid);
+    for (const piece of await legBetween(page, name, a.mm, b.mm)) {
+      piece.points.slice(1).forEach((q, i) => {
+        const p0 = piece.points[i];
+        for (let t = 0.05; t < 1; t += 0.05) {
+          const c = { x: p0.x + (q.x - p0.x) * t, y: p0.y + (q.y - p0.y) * t };
+          const d = clearance(c);
+          if (d > bestD) { best = c; bestD = d; }
+        }
+      });
+    }
+    return best;
+  }
+
+  /** Click the leg a → b where it is clearest of other sites until the Leg section shows (the hit index lags the mirror by a round trip). */
   async function selectLeg(page: Page, name: string, a: Site, b: Site): Promise<Pt> {
     await viewSettled(page);
-    const mid = await legMidpoint(page, name, a.mm, b.mm);
+    const mid = await legClickPoint(page, name, a, b);
     await expect(async () => {
       await dropSelection(page);
       await clickMap(page, await toPage(page, mid));
@@ -2961,7 +2984,7 @@ test.describe("F3: legs — styles, bends, corridors (docs/course-editor.md §6.
       await dropSelection(page);
       await expect.poll(guides, { timeout: 15000 }).toBe(1);
       expect((await toolShapes(page, "editor-corridor-guide"))[0].data).toMatchObject({ course: name });
-      const mid = await legMidpoint(page, name, a.mm, b.mm);
+      const mid = await legClickPoint(page, name, a, b);
       await expect(async () => {
         await dropSelection(page);
         await clickMap(page, await toPage(page, mid));
