@@ -73,8 +73,9 @@ function variationItemSchemaOf<S extends z.ZodType<string | number>>(siteId: S) 
     id: z.string().min(1),
     /**
      * Alternatives hold controls only, so groups never nest. An alternative
-     * may be empty — a straight leg — as long as one is not (answer 5,
-     * `VARIATION_ALL_EMPTY`).
+     * may be empty — a straight leg (answer 5) — and since F7 all of them may
+     * be (*Create variation here* saves A and B empty; the editor warns,
+     * `VARIATION_ALL_EMPTY` in the checks).
      */
     alternatives: z
       .array(z.strictObject({ label: z.string().min(1), items: z.array(controlItemSchemaOf(siteId)) }))
@@ -88,7 +89,7 @@ function variationItemSchemaOf<S extends z.ZodType<string | number>>(siteId: S) 
  * The structure schema over a site-id type. Rule codes, reported as issue
  * messages: `VARIATION_OVERLAP` (two groups with no control between them),
  * `VARIATION_UNANCHORED` (a group first or last), `VARIATION_ID_DUPLICATE`,
- * `VARIATION_LABEL_DUPLICATE`, `VARIATION_ALL_EMPTY` (no alternative holds a control).
+ * `VARIATION_LABEL_DUPLICATE`.
  */
 export function courseStructureSchemaOf<S extends z.ZodType<string | number>>(siteId: S) {
   const item = z.union([variationItemSchemaOf(siteId), controlItemSchemaOf(siteId)]);
@@ -124,9 +125,6 @@ function variationRules(items: readonly ItemShape[], ctx: z.RefinementCtx): void
     const labels = (item.alternatives ?? []).map((a) => a.label);
     if (new Set(labels).size !== labels.length) {
       ctx.addIssue({ code: "custom", message: "VARIATION_LABEL_DUPLICATE", path });
-    }
-    if ((item.alternatives ?? []).every((a) => a.items.length === 0)) {
-      ctx.addIssue({ code: "custom", message: "VARIATION_ALL_EMPTY", path });
     }
   });
 }

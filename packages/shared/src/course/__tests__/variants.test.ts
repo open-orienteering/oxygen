@@ -5,6 +5,8 @@ import { courseStructureSchema, structureControlItems, type StoredCourseStructur
 import {
   MAX_VARIANTS,
   materialiseVariants,
+  pathOfOrders,
+  variantOrders,
   pruneSiteFromStructure,
   structureSiteIds,
   variantCount,
@@ -144,11 +146,12 @@ describe("pruneSiteFromStructure", () => {
     expect(ids(structureControlItems(out))).toBe("S 31 32 34 F");
   });
 
-  it("keeps a group whose one alternative empties (answer 5) and dissolves one left with none", () => {
+  it("keeps a group whose alternatives empty (answer 5; F7: an all-empty group is valid)", () => {
     const one = pruneSiteFromStructure(course([c("S"), c("31"), group("g", [["32"], ["33"]]), c("34"), c("F")]), "33");
     expect(one.items[2]).toEqual(group("g", [["32"], []]));
     const both = pruneSiteFromStructure(course([c("S"), c("31"), group("g", [["32"], ["32"]]), c("34"), c("F")]), "32");
-    expect(both.items.map((i) => i.kind ?? "control")).toEqual(["control", "control", "control", "control"]);
+    expect(both.items[2]).toEqual(group("g", [[], []]));
+    expect(courseStructureSchema.safeParse(both).success).toBe(true);
   });
 
   it("dissolves a group left unanchored into its first alternative", () => {
@@ -173,5 +176,50 @@ describe("pruneSiteFromStructure", () => {
   it("drops the site's label offset", () => {
     const s = { ...course([c("S"), c("31"), c("F")]), labelOffsets: { "31": { dx: 1, dy: 2 }, S: { dx: 0, dy: 1 } } };
     expect(pruneSiteFromStructure(s, "31").labelOffsets).toEqual({ S: { dx: 0, dy: 1 } });
+  });
+});
+
+describe("pathOfOrders and variantOrders (F7, course-editor.md §12)", () => {
+  const s = course([c("S"), c("31"), group("g", [["32", "33"], []]), c("34"), group("b", [["35"], ["36"]], { loop: true }), c("34"), c("F")]);
+
+  it("variantOrders lists every key with its groups' orders, in materialiseVariants' order", () => {
+    const orders = variantOrders(s);
+    expect(orders.map((o) => o.key)).toEqual(materialiseVariants(s).map((v) => v.key));
+    expect(orders[0]).toEqual({ key: "AAB", orders: { g: ["A"], b: ["A", "B"] } });
+    expect(variantOrders(course([c("S"), c("F")]))).toEqual([]);
+  });
+
+  it("the path of a variant's orders is that variant", () => {
+    for (const { key, orders } of variantOrders(s)) {
+      expect(pathOfOrders(s, orders).items).toEqual(materialiseVariants(s).find((v) => v.key === key)!.items);
+    }
+  });
+
+  it("names where each row comes from: a top-level item, an alternative's item, a loop's anchor visit", () => {
+    const { items, paths } = pathOfOrders(s, { g: ["A"], b: ["B", "A"] });
+    expect(ids(items)).toBe("S 31 32 33 34 36 34 35 34 F");
+    expect(paths).toEqual([
+      { itemIndex: 0 }, { itemIndex: 1 },
+      { itemIndex: 2, alt: { label: "A", index: 0 } }, { itemIndex: 2, alt: { label: "A", index: 1 } },
+      { itemIndex: 3 },
+      { itemIndex: 4, alt: { label: "B", index: 0 } }, { itemIndex: 4, anchorVisit: true }, { itemIndex: 4, alt: { label: "A", index: 0 } },
+      { itemIndex: 5 }, { itemIndex: 6 },
+    ]);
+  });
+
+  it("a group missing from the orders shows its first alternative (a loop: every one in stored order); an empty one adds nothing", () => {
+    expect(ids(pathOfOrders(s).items)).toBe("S 31 32 33 34 35 34 36 34 F");
+    expect(ids(pathOfOrders(s, { g: ["B"] }).items)).toBe("S 31 34 35 34 36 34 F");
+    expect(ids(pathOfOrders(s, { g: ["Z"] }).items)).toBe("S 31 32 33 34 35 34 36 34 F");
+  });
+
+  it("an all-empty group materialises identical paths under distinct keys (F7)", () => {
+    const empty = course([c("S"), c("31"), group("g", [[], []]), c("34"), c("F")]);
+    expect(materialiseVariants(empty).map((v) => [v.key, ids(v.items)])).toEqual([["A", "S 31 34 F"], ["B", "S 31 34 F"]]);
+  });
+
+  it("works on the wire form (numeric site ids)", () => {
+    const wire = { items: [{ siteId: 1 }, { kind: "variation" as const, id: "g", alternatives: [{ label: "A", items: [] }, { label: "B", items: [{ siteId: 2 }] }] }, { siteId: 3 }] };
+    expect(pathOfOrders(wire, { g: ["B"] }).items.map((i) => i.siteId)).toEqual([1, 2, 3]);
   });
 });

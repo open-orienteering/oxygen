@@ -43,13 +43,19 @@ export {
 } from "./structure.js";
 export {
   MAX_VARIANTS,
+  groupOrder,
   materialiseVariants,
+  pathOfOrders,
   pruneSiteFromStructure,
   structureSiteIds,
   variantCount,
   variantKeyDuplicates,
+  variantOrders,
   variantStructure,
+  type GroupOrders,
   type MaterialisedVariant,
+  type PathGroup,
+  type RowPath,
 } from "./variants.js";
 export {
   COURSE_OBJECT_KINDS,
