@@ -7,6 +7,7 @@
 export * from "./types.js";
 export { courseLayer, courseRenderInput, legLine, type CourseRenderInput } from "./layer.js";
 export { legLengthMm, routedBends } from "./derive.js";
+export { LEG_FLATTEN_TOLERANCE_MM, PPEN_FLATTEN_TOLERANCE_MM, bendSegmentAt, hasCurvedBends, isCurvedSegment, legPolylineOf, reverseBends, type BendSegmentHit } from "./bends.js";
 export { corridorGeometry, type CorridorEdge, type CorridorGeometry } from "./corridor.js";
 export { CUT_CODES, CUT_AIR_MM, DEFAULT_FEATURE_RADIUS_MM, circleCuts, legGaps, polylineLegGaps, cutFeaturesOfDocument, cutSymbolRadiusMm, cutContextForScale, pointSymbolRadiusMm, ocadCutSymbolRadiiMm } from "./cuts.js";
 export { CourseStackError, courseColourStack } from "./colour-stack.js";

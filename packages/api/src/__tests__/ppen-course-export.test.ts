@@ -1,6 +1,7 @@
 import { describe, it, expect } from "vitest";
 import { buildPpenXml, type PpenExportInput } from "../ppen-course-export.js";
 import { parsePpenCourseData } from "../ppen-course-parser.js";
+import { course } from "@oxygen/shared";
 
 /** A two-course event: shared start/finish, one control only on course B. */
 function sample(): PpenExportInput {
@@ -140,3 +141,53 @@ describe("buildPpenXml — course structure (F9)", () => {
     expect(a.controls[1].bends).toBeUndefined();
   });
 });
+
+describe("buildPpenXml — curved legs (F13, user answer 2026-11-08 Q3)", () => {
+  // 31 (30.5, 40.25) → 32 (50, 60) arched through (45, 42) with handles: Purple Pen gets the curve flattened at 0.1 mm.
+  const ARCH = { x: 45, y: 42, hIn: { x: -6, y: -2 }, hOut: { x: 4, y: 4 } };
+  function curved(): PpenExportInput {
+    const input = sample();
+    input.courses[0].controls[2] = { controlId: "32", type: "Control", legLengthM: 1500, bends: [ARCH] };
+    return input;
+  }
+  const A = { x: 30.5, y: 40.25 }, B = { x: 50, y: 60 };
+
+  it("a corner-only leg writes what it wrote before", () => {
+    const input = sample();
+    input.courses[0].controls[2] = { controlId: "32", type: "Control", legLengthM: 1500, bends: [{ x: 45, y: 42 }] };
+    expect(buildPpenXml(input)).toMatch(/<bends>\s*<location x="45" y="42"(\s*\/>|><\/location>)\s*<\/bends>/);
+  });
+
+  it("writes the curve's points within 0.1 mm, its bend among them, no handles", () => {
+    const xml = buildPpenXml(curved());
+    expect(xml).not.toMatch(/hIn|hOut/);
+    const bends = /<bends>([\s\S]*?)<\/bends>/.exec(xml)![1];
+    const locs = [...bends.matchAll(/<location x="([-\d.]+)" y="([-\d.]+)"/g)].map((m) => ({ x: Number(m[1]), y: Number(m[2]) }));
+    expect(locs.length).toBeGreaterThan(3);
+    expect(locs).toContainEqual({ x: 45, y: 42 });
+    const exact = course.legPolylineOf(A, [ARCH], B);
+    for (const p of locs) expect(distTo(exact, p)).toBeLessThan(0.1 + 1e-6);
+  });
+
+  it("round-trips as corner bends within 0.1 mm, the length within a metre", () => {
+    const parsed = parsePpenCourseData(buildPpenXml(curved()));
+    const leg = parsed.courses.find((c) => c.name === "A")!.controls[2];
+    expect(leg.bends!.every((b) => !("hIn" in b) && !("hOut" in b))).toBe(true);
+    const back = course.legPolylineOf(A, leg.bends, B);
+    for (const p of back) expect(distTo(course.legPolylineOf(A, [ARCH], B), p)).toBeLessThan(0.1 + 1e-6);
+    const metres = (course.legLengthMm(course.legPolylineOf(A, [ARCH], B)) * 10000) / 1000;
+    expect(Math.abs(leg.legLength! - metres)).toBeLessThanOrEqual(1);
+  });
+});
+
+function distTo(pts: readonly { x: number; y: number }[], p: { x: number; y: number }): number {
+  let best = Infinity;
+  for (let i = 0; i + 1 < pts.length; i++) {
+    const a = pts[i], b = pts[i + 1];
+    const dx = b.x - a.x, dy = b.y - a.y, l2 = dx * dx + dy * dy;
+    const t = l2 === 0 ? 0 : Math.max(0, Math.min(1, ((p.x - a.x) * dx + (p.y - a.y) * dy) / l2));
+    best = Math.min(best, Math.hypot(p.x - (a.x + dx * t), p.y - (a.y + dy * t)));
+  }
+  return best;
+}
+

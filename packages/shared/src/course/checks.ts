@@ -13,6 +13,7 @@ import { isAppliedMatch } from "../map-document/render-bridge.js";
 import { COORD_FLAG } from "../render/pass-stream.js";
 import type { SymbolLibraryId } from "../symbol-library/index.js";
 import { courseDocumentContext } from "./context.js";
+import { legPolylineOf } from "./bends.js";
 import { legLengthMm, routedBends } from "./derive.js";
 import { sectionsOf } from "./structure.js";
 import type { CourseLayerObject } from "./objects.js";
@@ -381,11 +382,11 @@ export function courseChecks(input: CourseChecksInput): CourseCheck[] {
       const seq = seqVisits.map((v) => v.site);
       for (let i = 1; i < seq.length; i++) {
         const a = seq[i - 1], b = seq[i];
-        // The leg as drawn (§10.1, §10.3): through its bends and its crossing point, first hit by distance along them.
+        // The leg as drawn (§10.1, §10.3): along its flattened bends and its crossing point, first hit by distance along them.
         const legProps = seqVisits[i].item.leg;
         const via = siteById.get(legProps?.crossing?.controlId ?? "");
         const crossing = via && via.kind === "crossing_point" && positioned(via) ? via : undefined;
-        const pts: MapPoint[] = [a, ...(crossing ? routedBends(a, legProps?.bends, crossing, b) : (legProps?.bends ?? [])), b];
+        const pts: MapPoint[] = legPolylineOf(a, crossing ? routedBends(a, legProps?.bends, crossing, b) : legProps?.bends, b);
         const legBox = boxOf(pts);
         const leg = { from: a.id, to: b.id, index: i - 1 };
         for (const kind of ["oob", "uncrossable"] as const) {
@@ -459,7 +460,7 @@ function variationChecks(g: CheckVariationGroup, siteById: ReadonlyMap<string, C
       const a = hops[i - 1].site, b = hops[i].site, leg = hops[i].leg;
       const via = siteById.get(leg?.crossing?.controlId ?? "");
       const crossing = via && via.kind === "crossing_point" && positioned(via) ? via : undefined;
-      mm += legLengthMm([a, ...(crossing ? routedBends(a, leg?.bends, crossing, b) : (leg?.bends ?? [])), b]);
+      mm += legLengthMm(legPolylineOf(a, crossing ? routedBends(a, leg?.bends, crossing, b) : leg?.bends, b));
     }
     lengths.push({ label: alt.label, mm });
   }

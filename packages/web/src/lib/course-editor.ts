@@ -10,7 +10,7 @@
  * keyboard and gesture handling on the page trivially unit-testable.
  */
 
-import { course, type SeriesAllocationEntry } from "@oxygen/shared";
+import { course, type PathVertex, type SeriesAllocationEntry } from "@oxygen/shared";
 
 export type { SeriesAllocationEntry } from "@oxygen/shared";
 
@@ -286,7 +286,7 @@ export function effectiveRoleControlId(
  *   is unknown.
  */
 export function sequenceLegMeters(
-  points: Array<{ x: number; y: number; bends?: readonly { x: number; y: number }[] } | null>,
+  points: Array<{ x: number; y: number; bends?: readonly PathVertex[] } | null>,
   mapScale: number | null,
 ): Array<number | null> {
   const out: Array<number | null> = new Array(points.length).fill(null);
@@ -296,8 +296,8 @@ export function sequenceLegMeters(
     const p = points[i];
     if (!p) continue;
     if (prev) {
-      // Along the leg's bends (course-layer.md §10.1); straight, the centre-to-centre distance.
-      const mm = course.legLengthMm([prev, ...(p.bends ?? []), { x: p.x, y: p.y }]);
+      // Along the leg's bends, curves flattened (course-layer.md §10.1, F13); straight, the centre-to-centre distance.
+      const mm = course.legLengthMm(course.legPolylineOf(prev, p.bends, { x: p.x, y: p.y }));
       out[i] = Math.round((mm * mapScale) / 1000);
     }
     prev = p;

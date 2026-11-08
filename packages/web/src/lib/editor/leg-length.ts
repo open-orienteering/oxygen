@@ -6,7 +6,7 @@
  * the call sites pass the stored bends, docs/course-editor.md §6.7).
  */
 
-import { course } from "@oxygen/shared";
+import { course, type PathVertex } from "@oxygen/shared";
 import type { ToolShape } from "../../components/MapViewer";
 
 type Pt = { x: number; y: number };
@@ -14,17 +14,20 @@ type Pt = { x: number; y: number };
 /** Metres on the ground for `mm` on paper at 1:`mapScale`. */
 export const legLengthM = (mm: number, mapScale: number): number => (mm * mapScale) / 1000;
 
-/** The leg's polyline: `a`, the bends, `b`. */
-const polyline = (a: Pt, b: Pt, via: readonly Pt[]): Pt[] => [a, ...via, b];
+/** A bend, its handles optional (F13). */
+type Bend = PathVertex;
+
+/** The leg's polyline: `a`, the bends' path flattened as the layer does (F13), `b`. */
+const polyline = (a: Pt, b: Pt, via: readonly Bend[]): Pt[] => course.legPolylineOf(a, via, b);
 
 /** "123 m", rounded to the metre, along the bends `via`; null without a scale. */
-export function legLengthLabel(a: Pt, b: Pt, mapScale: number | null | undefined, via: readonly Pt[] = []): string | null {
+export function legLengthLabel(a: Pt, b: Pt, mapScale: number | null | undefined, via: readonly Bend[] = []): string | null {
   if (!mapScale) return null;
   return `${Math.round(legLengthM(course.legLengthMm(polyline(a, b, via)), mapScale))} m`;
 }
 
 /** Where the label sits: the leg's midpoint, paper mm — half way along its bends `via`. */
-export function legMidpoint(a: Pt, b: Pt, via: readonly Pt[] = []): Pt {
+export function legMidpoint(a: Pt, b: Pt, via: readonly Bend[] = []): Pt {
   const pts = polyline(a, b, via);
   let left = course.legLengthMm(pts) / 2;
   for (let i = 1; i < pts.length; i++) {
@@ -37,7 +40,7 @@ export function legMidpoint(a: Pt, b: Pt, via: readonly Pt[] = []): Pt {
 }
 
 /** The label as a UI-layer shape (`editor-leg-length`) at the leg's midpoint. */
-export function legLengthShape(a: Pt, b: Pt, text: string, via: readonly Pt[] = []): ToolShape {
+export function legLengthShape(a: Pt, b: Pt, text: string, via: readonly Bend[] = []): ToolShape {
   const m = legMidpoint(a, b, via);
   return { kind: "text", x: m.x, y: m.y, text, dxPx: 6, dyPx: -6, color: "#7c3aed", testId: "editor-leg-length" };
 }
@@ -53,7 +56,7 @@ export function dragLegShapes(
   pos: ReadonlyMap<string, Pt>,
   id: string,
   mapScale: number | null | undefined,
-  bendsInto: ReadonlyArray<readonly Pt[] | undefined> = [],
+  bendsInto: ReadonlyArray<readonly Bend[] | undefined> = [],
 ): ToolShape[] {
   const out: ToolShape[] = [];
   const at = pos.get(id);
@@ -74,8 +77,8 @@ export function dragLegShapes(
     }
     const after = drawn(i + 1, 1);
     if (after) {
-      // The leg out runs at → bends → after; labelled from the far end, as before.
-      const via = [...(bendsInto[after.i] ?? [])].reverse();
+      // The leg out runs at → bends → after; labelled from the far end, as before (handles swap, F13).
+      const via = course.reverseBends(bendsInto[after.i]);
       out.push(legLengthShape(after.p, at, legLengthLabel(after.p, at, mapScale, via)!, via));
     }
   });

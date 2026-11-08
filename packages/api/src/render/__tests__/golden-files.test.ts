@@ -51,6 +51,7 @@ describe("golden PNGs", () => {
       "course-leg-styles",
       "course-corridor",
       "course-exchange",
+      "course-legs-curved",
       "filter-clip-brown",
       "filter-hide-505",
       "filter-moved",

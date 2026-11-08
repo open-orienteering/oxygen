@@ -205,6 +205,29 @@ describe("course geometry regeneration", () => {
     expect(tl.slice(k, k + 3)).toEqual([m(90), m(30), m(30)]);
   });
 
+  it("course.setStructure with handles stores them and measures the leg along the curve (F13)", async () => {
+    // 176 (40,10) → (30,10) ⌒ quarter circle r 20 ⌒ (10,30) → 177 (10,40): 20 + 10π mm; as corners 20 + √800.
+    await caller.control.create({ codes: "176", xpos: 40, ypos: 10 });
+    await caller.control.create({ codes: "177", xpos: 10, ypos: 40 });
+    const K = 11.045694996;
+    const curvedBends = [{ x: 30, y: 10, hOut: { x: 0, y: K } }, { x: 10, y: 30, hIn: { x: K, y: 0 } }];
+    const set = async (name: string, bends: Array<{ x: number; y: number }>) => {
+      const { id } = await caller.course.create({ name });
+      await caller.course.setStructure({ courseId: id, structure: { version: 1, id: name, orderMode: "ordered", items: [{ siteId: 176 }, { siteId: 177, leg: { bends } }] } });
+      return id;
+    };
+    const curved = await set("Curved", curvedBends);
+    const corners = await set("Corners", curvedBends.map(({ x, y }) => ({ x, y })));
+    const rowOf = (seq: number) => ctx.db.course.findFirstOrThrow({ where: { eventId: ctx.eventId, seq } });
+    const m = (mm: number) => Math.round((mm * mapScale) / 1000);
+    const legsOf = async (seq: number) => (await rowOf(seq)).legs!.split(";").filter(Boolean).map(Number);
+    expect(await legsOf(curved)).toEqual([m(20 + 10 * Math.PI)]);
+    expect(await legsOf(corners)).toEqual([m(20 + Math.sqrt(800))]);
+    // The handles are stored and read back whole.
+    const summary = (await caller.course.list()).find((c) => c.id === curved)!;
+    expect(summary.legs).toEqual({ "176>177": { bends: curvedBends } });
+  });
+
   it("moving a control rebuilds the geometry of courses that use it", async () => {
     await caller.control.create({ codes: "131", xpos: 0, ypos: 0.1 });
     await caller.control.create({ codes: "132", xpos: 40, ypos: 0.1 });

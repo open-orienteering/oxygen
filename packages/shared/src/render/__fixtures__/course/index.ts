@@ -16,7 +16,7 @@ import type { DocumentColour } from "../../../map-document/header.js";
 import { courseLayer, courseRenderInput } from "../../../course/layer.js";
 import type { CourseDocumentContext, CourseLayer, CourseLayerInput, CourseSite, CourseStructure } from "../../../course/types.js";
 
-export const courseSceneNames = ["course-legs", "course-cuts", "course-objects", "course-sprint", "course-all-controls", "course-leg-styles", "course-corridor", "course-exchange"] as const;
+export const courseSceneNames = ["course-legs", "course-cuts", "course-objects", "course-sprint", "course-all-controls", "course-leg-styles", "course-corridor", "course-exchange", "course-legs-curved"] as const;
 export type CourseSceneName = (typeof courseSceneNames)[number];
 
 export interface CourseScene {
@@ -214,6 +214,31 @@ function exchange(): CourseScene {
   return scene("course-exchange", base, { structure: ordered(["S", "31", "32", "33", "F"]), sites, objects: [], appearance: {}, viewOptions: { section: 1 } });
 }
 
+/**
+ * Curved bends (F13, course-layer.md §10.1): S → 31 straight, 31 → 32 a 705 curved through one smooth bend,
+ * 32 → 33 a curved 707, 33 → F curved through a crossing point joined on its curved segment. The legs stay
+ * polylines in the stream: the curves flattened at 5 µm.
+ */
+function legsCurved(): CourseScene {
+  const base = new BaseMap("ISOM2017-2")
+    .add("401", area(0, 0, 50, 0, 50, 36, 0, 36))
+    .add("505", line(0, 18, 50, 14));
+  const sites = [
+    site("S", "start", 6, 4, "S1"), site("31", "control", 24, 6), site("32", "control", 42, 28), site("33", "control", 24, 30),
+    site("F", "finish", 8, 30, "F1"), site("P", "crossing_point", 21.5, 28, "P1"),
+  ];
+  const structure = ordered([], {
+    items: [
+      { siteId: "S" },
+      { siteId: "31" },
+      { siteId: "32", leg: { bends: [{ x: 40, y: 12, hIn: { x: -2, y: -5 }, hOut: { x: 2, y: 5 } }] } },
+      { siteId: "33", leg: { style: "marked_route", bends: [{ x: 33, y: 33, hIn: { x: 4, y: 0 }, hOut: { x: -4, y: 0 } }] } },
+      { siteId: "F", leg: { bends: [{ x: 16, y: 26, hIn: { x: 4, y: 0 }, hOut: { x: -4, y: 0 } }], crossing: { controlId: "P" } } },
+    ],
+  });
+  return scene("course-legs-curved", base, { structure, sites, objects: [], appearance: {}, viewOptions: {} });
+}
+
 const builders: Record<CourseSceneName, () => CourseScene> = {
   "course-legs": legs,
   "course-cuts": cuts,
@@ -223,6 +248,7 @@ const builders: Record<CourseSceneName, () => CourseScene> = {
   "course-leg-styles": legStyles,
   "course-corridor": corridor,
   "course-exchange": exchange,
+  "course-legs-curved": legsCurved,
 };
 
 export function courseScene(name: CourseSceneName): CourseScene {
