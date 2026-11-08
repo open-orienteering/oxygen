@@ -39,6 +39,8 @@ export interface RequestCourse {
   hiddenNumbers?: readonly number[];
   /** The editor's All-variations view (docs/course-editor.md §12): an alternative drawn in its tint (course-layer.md §12.7). */
   tint?: string;
+  /** All variations (F15): explicit label text per control id when the variants number alike → `viewOptions.labels`. */
+  labels?: Record<string, string>;
 }
 
 /** The provisional visit's site id: not a control, never hit-tested (docs/course-editor.md §6.1). */
@@ -269,6 +271,9 @@ export function courseLayerRequest(input: CourseRequestInput): CourseLayerReques
 
   const onCourse = new Set(structures.flatMap((s) => s.items.map((i) => i.siteId)).filter((id) => drawn.has(id)));
   const allControls = sites.some((s) => !onCourse.has(s.id) && !isMark(s));
+  // F15: the All-variations spine's numbers (no other draw carries labels).
+  const labelled = highlighted.filter((c) => c.labels);
+  const labels = labelled.length > 0 ? Object.assign({}, ...labelled.map((c) => c.labels)) as Record<string, string> : undefined;
   const sequence = input.sequenceLabels && !!single && (single.orderMode ?? "ordered") === "ordered";
   return {
     structure: structures.length === 0 ? null : structures,
@@ -282,6 +287,7 @@ export function courseLayerRequest(input: CourseRequestInput): CourseLayerReques
       ...(input.setterMarks ? { setterMarks: true } : {}),
       // §12.7: a tinted course is the editor's All-variations view, never print.
       ...(highlighted.some((c) => c.tint) ? { allVariations: true } : {}),
+      ...(labels ? { labels } : {}),
       ...(input.autoCuts === false ? { autoCuts: false } : {}),
       ...(input.layout
         ? {

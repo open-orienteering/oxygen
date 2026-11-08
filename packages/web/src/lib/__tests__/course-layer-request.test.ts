@@ -308,6 +308,13 @@ describe("variation tints (docs/course-layer.md §12.7, F7)", () => {
     expect(r.viewOptions).toMatchObject({ allVariations: true, labelMode: "code" });
   });
 
+  it("a labels map on the spine becomes viewOptions.labels (F15); a draw without one adds none", () => {
+    const courses = [{ name: "A", controls: ["S", "1", "F"], highlight: true, labels: { "1": "1", "2": "2" } }, { name: "A#v1/B", controls: ["1", "2", "F"], highlight: true, tint: "B" }];
+    const r = courseLayerRequest(base({ courses }));
+    expect(r.viewOptions).toMatchObject({ allVariations: true, labelMode: "code", labels: { "1": "1", "2": "2" } });
+    expect(courseLayerRequest(base({ courses: courses.map(({ labels: _l, ...c }) => c) })).viewOptions.labels).toBeUndefined();
+  });
+
   it("no tint, no allVariations (every other view, and print)", () => {
     expect(courseLayerRequest(base()).viewOptions.allVariations).toBeUndefined();
   });

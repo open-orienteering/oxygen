@@ -36,6 +36,22 @@ describe("the drawn course of a structure with groups (docs/course-editor.md §1
     expect(withCourseOverride(overlays, null)).toBe(overlays);
   });
 
+  it("All variations numbers (F15): the spine carries the shared numbers when the variants number alike, never otherwise", () => {
+    const isNumbered = (item: { siteId: number }) => item.siteId >= 30;
+    const equal = allVariationDraws("Lång", mk(1, 31, g("v1", [[41], [42]]), 32, 9), isNumbered);
+    expect(equal[0].labels).toEqual({ "31": "1", "41": "2", "42": "2", "32": "3" });
+    expect(equal[1].labels).toBeUndefined();
+    expect(allVariationDraws("Lång", mk(1, 31, g("v1", [[41], [42, 43]]), 32, 9), isNumbered)[0].labels).toBeUndefined();
+    expect(allVariationDraws("B", mk(1, 31, g("b", [[41], [42]], true), 32, 9), isNumbered)[0].labels).toBeUndefined();
+    // Without a predicate (the caller does not know the sites) the draws are as before.
+    expect(allVariationDraws("Lång", mk(1, 31, g("v1", [[41], [42]]), 32, 9))[0].labels).toBeUndefined();
+  });
+
+  it("the override carries labels with the controls (F15)", () => {
+    const out = withCourseOverride([{ name: "Lång", controls: ["1", "9"] }], allVariationDraws("Lång", mk(1, 31, g("v1", [[41], [42]]), 32, 9), (i) => i.siteId >= 30));
+    expect(out[0]).toMatchObject({ labels: { "41": "2" } });
+  });
+
   it("a loop: petals back to the anchor, an empty petal draws nothing, the spine keeps its leg", () => {
     const draws = allVariationDraws("B", mk(1, 31, g("b", [[41], [42], []], true), 31, 9));
     expect(draws.map((d) => d.controls.join(" "))).toEqual(["1 31 31 9", "31 41 31", "31 42 31"]);
