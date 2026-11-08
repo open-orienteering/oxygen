@@ -184,10 +184,13 @@ REST:
 ```text
 GET /api/maps/:nameId/maps.pdf
     ?maps=1,2
-    ?courses=3,4         (the courses' own sheets)
+    ?courses=3,4         (the courses' own sheets; a root's per variant, a variant's on its root's — F8)
     ?classes=5,6         (per class: its sheets, else its course's as it prints)
     ?allControls=1
     ?setter=1            (every setter sheet, F10)
+    ?variants=3:AB,BA    (those variants of one root, F8)
+    ?allVariations=3     (the root's all-variations page, F8)
+    &copies=runners[&spare=n]   (each page once per runner it is for, F8)
 
 GET /api/maps/:nameId/graphics/:id
 ```
@@ -204,8 +207,8 @@ the document in a worker thread, off the event loop (`course-print.md`
 §8); a document whose colour stack is not aligned is a 400 with the
 reason.
 Combined PDF pages are ordered by course, map `sort_order`, then map
-`seq`; with `classes`, by the classes in the order asked. One of `maps`,
-`courses`, `classes`, `setter` (400 otherwise); without a selection, every course's
+`seq`, then variant key; with `classes`, by the classes in the order asked. One of `maps`,
+`courses`, `classes`, `setter`, `variants`, `allVariations` (400 otherwise); without a selection, every course's
 own sheet and the all-controls sheet — a class's sheets print through
 `classes` or `maps` only, a setter sheet through `setter` or `maps`
 (`courses` prints `kind = 'course'` rows only; `course-layout.md` §7).
@@ -352,6 +355,9 @@ is shared by all variants, while PDF export emits one page per variant with
 its own course overlay and description block (F8). `{variant}` is reserved
 as a text placeholder.
 
-Pending (F8): a `maps.pdf?courses=<variant seq>` request still resolves the
-variant as an ordinary course and auto-creates a sheet of its own; F8 sends
-a variant to its root's sheet.
+Since F8 a root's sheet prints once per variant and as the
+all-variations page (`course-print.md` §4.6): `maps.pdf?courses=<variant
+seq>` prints that key on its root's sheets and `layout.autoSheets` of a
+variant is its root's, so no variant gets a sheet of its own. A sheet a
+variant was given before F8 is left in place, printed only through
+`maps=` (the unfiltered export skips it).

@@ -1526,7 +1526,13 @@ standing instruction, 2026-11-07, for review). Section numbering keeps
   unknown key) — the column shape every consumer reads, so the layer,
   print, lengths and export learn nothing about groups (slice F's
   "A variant is a linear structure"). F7's Variant view and F8's pages
-  draw it.
+  draw it (a page reads the materialised child, which holds the same
+  structure, `course-print.md` §4.6).
+- `allVariationStructures(structure)` (F8) → `{ spine, branches }`: the
+  spine and one branch per alternative of §12.7, generic over the site
+  id like `pathOfOrders`. The editor's All-variations view tints the
+  branches (`allVariationDraws`); the all-variations print draws them in
+  the one purple.
 - **Paths** (F7). `variantOrders(structure)` → `{ key, orders }[]` in the
   same order: each variant's groups' visiting orders by group id (a plain
   group one label, a loop its permutation). `pathOfOrders(structure,
@@ -1680,7 +1686,10 @@ The table's rows are the roots (filter, sort, selection and the
 "2 variants" badge (`course-variant-count-<seq>`), and its variants
 follow its row, indented and read-only (`course-variant-row-<seq>`: the
 key, the variant's name, controls, length, maps; no checkbox, template,
-export, edit or delete). The root's expanded detail keeps name, length
+edit or delete — one action since F8, `export-variant-<seq>`: its map on
+the root's sheets, `maps.pdf?variants=<root>:<key>`). The root's row
+adds `export-all-variations-<seq>` (`?allVariations=`), and its
+`export-course-<seq>` prints every variant (`course-print.md` §4.6). The root's expanded detail keeps name, length
 and maps editable; its controls and order mode are disabled with a
 one-line hint (`course-variations-hint`), since `course.update` refuses
 them.
@@ -1717,7 +1726,10 @@ sets it: `PageInput.course.viewOptions` is a `Pick` without
 options through spreads), and the guard is the fixture: `composePage` of
 tinted structures emits the plain stream with no tint row
 (`print/__tests__/compose.test.ts`). F8's all-variations page
-prints every alternative in the one purple. Decided on the user's
+prints every alternative in the one purple: the same spine and branches
+(`allVariationStructures`) without `tint`, no `allVariations` option,
+codes (`course-print.md` §4.6; a second compose fixture checks the plain
+colour table). Decided on the user's
 standing instruction (2026-11-07), for review: branches rather than
 groups in the layer (keeps "a variant is a linear structure"); the tint
 rows on top rather than beside lower purple (no document re-index for a
@@ -1860,10 +1872,8 @@ label.
   (`course-editor.md` §12) and its picker lists roots only; a variant is
   still an ordinary course in every other course list, a deep link opens
   it in the editor, and a save is refused (`COURSE_IS_VARIANT`).
-  Per-variant pages and a variant's own sheet
-  (`maps.pdf?courses=<variant>` still auto-creates one) are F8's, as are
-  the all-variations print in one purple and Class view / Layout mode of
-  a root per variant (both draw the root's first alternatives today); the
+  Per-variant pages, the all-variations print and Class view / Layout
+  mode per variant landed with F8 (`course-print.md` §4.6); the
   IOF family export landed with F9 (runners' variants and the dealing
   with F6b, the desk's accept of another variant's run with F6c —
   `course-controls-and-matching.md` "Forked courses and variants"). An
