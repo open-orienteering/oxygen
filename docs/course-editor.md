@@ -354,7 +354,7 @@ tool takes the pointer-down itself, as the area tool does, §6.4). A
 `ToolPointer` carries `shift`, `alt` (mouse only; touch never) and the
 zoom's mm per px; `onPointerDrag` gets the keys held now (`{ shift, alt
 }`), so Shift and Alt act live during a drag; Alt held at the area
-tool's press places a smooth vertex (§6.4). Tools draw UI-layer shapes
+tool's press places a corner (§6.4, F18). Tools draw UI-layer shapes
 in paper mm (`ToolShape`: circle — true size, line, handle, grip — a
 screen-size Bézier handle on a thin line from its vertex — and text). The tool state is `EditorState.tool`
 (`lib/editor/state.ts`); an active tool opens no action bar.
@@ -527,65 +527,77 @@ menu item does the same.
 The same flow draws Layout mode's `P` polygon (`AreaKind`
 `layout_path`, closed, not in the `A` menu; `course-layout.md` §3).
 
-`pages/editor/tools/polygon.ts`: **click = corner, click-drag = curve
-vertex** (Mapper / Illustrator): the press places the vertex where it
-went down (snapped); once the pointer is 3 px from the press the drag
-pulls **symmetric handles** out of it — `hOut` = the drag vector, `hIn` its negation
-(`pull-handles`, `symmetricHandles`) — and `Shift` turns the handle to
-the nearest 45° (`constrain45`), live. A drag back within 3 px of the
-press leaves a corner. Since the tool takes every press on the map, **a drag no longer
-pans while an area is being drawn** (the wheel zooms; on touch, where
-taps place vertices through `onClick`, one finger still pans and there
-are no curve vertices). Drag a placed vertex (`editor-polygon-vertex`)
-to adjust it before closing (its handles move with it); close by a
-double-click or a click on the first vertex, `Esc` cancels; `Enter`
-finishes any kind once it has its minimum vertices. The preview
-(`editor-polygon`) follows the curves (§7 "Editing geometry"), and a
-curve vertex shows its two grips (`editor-polygon-grip`). A **filter
-region** stays a polygon: the schema refuses handles (`course-layer.md`
-§8.1), so its click-drag is a corner.
+`pages/editor/tools/polygon.ts`: **smooth by default, Alt for sharp**
+(F18, the user's answer of 2026-11-08 to feedback Q2, reversing D15's
+Alt = smooth). The press places the vertex where it went down (snapped):
 
-**Alt = smooth vertex** (D15): with `Alt` held at the press (mouse only;
-touch never sets it) the vertex placed is **smooth** — its handles are
-not pulled but follow its neighbours by uniform Catmull-Rom,
-`smoothHandles` in `lib/editor/geometry-edit.ts`:
-`hOut_i = (P_{i+1} − P_{i−1}) / 6`, `hIn_i = −hOut_i` (the tangent at the
-vertex is parallel to its neighbours' chord; a sixth makes the cubic the
-Catmull-Rom spline). The flag lives only in the drawing state
-(`PolygonState.vertices[i].smooth`, a `DrawVertex`), and every `step`
-re-settles every flagged vertex from its current neighbours (`smoothed`
-in `tools/polygon.ts`): a smooth vertex is a corner until the next vertex
-lands, then curves, and moving it or a neighbour before closing
-recomputes its handles. **Closed kinds wrap at close** (the first
-vertex's prev is the last, the last's next is the first — applied when the
-flow is done); **an open line's ends stay corners** even when flagged
-(no neighbour on one side). Alt with a click on the first vertex closes
-with the first vertex smooth (replacing handles pulled there at the
-first press); Alt with a double-click makes the double-click's own vertex
-smooth — with the mouse its first press places and flags that vertex, so
-the Alt that counts is the one at that press (`step`'s `double-click`
-event carries `smooth` too, for a caller that sends no press). A **drag past 3 px is still the manual
-pull** and wins: the vertex loses its flag and keeps the pulled
-handles (a drag back within 3 px then leaves a plain corner). A **filter
-region** ignores Alt (no curves). The preview (`editor-polygon`) shows the
-provisional curve with the hover point standing in as the last vertex's
-next and, for a closed kind of three or more, as the first vertex's prev
-(the ring the close would make); nothing provisional is written to the
-state, and only handles in the state get grips (`editor-polygon-grip`).
-Every finishing path (`click` on the first vertex, `double-click`,
-`enter`, and the page's `Enter` key, which goes through `step`) settles
-the flags with the wrap and **strips them**: the created geometry is
-ordinary `PathVertex`es with handles, one `courseObject.create` and one
-undo entry as before. After closing a smooth vertex is a curve vertex like
-any other (its handles mirrored, §7 "Editing geometry"); nothing
-remembers that it was automatic. *Window managers:* Xfce and older KDE
-bind Alt + left-drag (and on some setups Alt + left-click) to moving the
-window, so the press never reaches the browser; there the user rebinds
-the window manager's modifier (Xfce: *Window Manager Tweaks →
-Accessibility*, the key used to grab and move windows; KDE: *Window
-Behaviour → Window Actions*, the modifier key). The same holds for `V`'s
-Alt gestures (§7 "Editing geometry"). The editor offers no second key for
-it: Shift is 45° and Ctrl is the macOS context menu.
+- **A click places a smooth vertex.** Its handles are not pulled but
+  follow its neighbours by uniform Catmull-Rom, `smoothHandles` in
+  `lib/editor/geometry-edit.ts`: `hOut_i = (P_{i+1} − P_{i−1}) / 6`,
+  `hIn_i = −hOut_i` (the tangent at the vertex is parallel to its
+  neighbours' chord; a sixth makes the cubic the Catmull-Rom spline).
+  Every `step` re-settles every smooth vertex from its current neighbours
+  (`smoothed` in `tools/polygon.ts`): the last vertex placed is a corner
+  until the next one lands, then curves, and moving it or a neighbour
+  before closing recomputes its handles. **Closed kinds wrap at close**
+  (the first vertex's prev is the last, the last's next is the first —
+  applied when the flow is done); **an open line's ends stay corners**
+  (no neighbour on one side).
+- **Alt at the press places a corner** (mouse only). Alt with a click on
+  the first vertex closes with the first vertex a corner (a vertex pulled
+  there at the first press keeps its handles); Alt with a double-click
+  makes the double-click's own vertex a corner — with the mouse its first
+  press places that vertex, so the Alt that counts is the one at that press
+  (`step`'s `double-click` event carries `corner` too, for a caller that
+  sends no press).
+- **Click-drag shapes the curve by hand** (Mapper / Illustrator): once the
+  pointer is 3 px from the press the drag pulls **symmetric handles** out
+  of the vertex — `hOut` = the drag vector, `hIn` its negation
+  (`pull-handles`, `symmetricHandles`) — Alt or not, and `Shift` turns the
+  handle to the nearest 45° (`constrain45`), live. The pull wins over the
+  automatic handles: neighbours landing or moving leave a pulled vertex
+  alone. A drag back within 3 px of the press returns the vertex to its
+  press's kind (smooth, or a corner with Alt).
+
+The kinds live only in the drawing state: a `DrawVertex` is a stored
+vertex plus `corner` (Alt at the press) or `pulled` (a click-drag);
+neither is smooth. Every finishing path (`click` on the first vertex,
+`double-click`, `enter`, and the page's `Enter` key, which goes through
+`step`) settles the smooth vertices with the wrap and **strips the
+flags**: the created geometry is ordinary `PathVertex`es with handles,
+one `courseObject.create` and one undo entry as before. After closing a
+smooth vertex is a curve vertex like any other (its handles mirrored, §7
+"Editing geometry"); nothing remembers that it was automatic. Stored
+objects are untouched by the change: a corner drawn before F18 or
+imported stays a corner until it is toggled (§7).
+
+Since the tool takes every press on the map, **a drag no longer pans
+while an area is being drawn** (the wheel zooms). **On touch**, where taps
+place vertices through `onClick` and one finger still pans, **taps follow
+the default — smooth vertices** (answered by the user on 2026-11-08) —
+and there is neither Alt nor a pull, so a touch-drawn area has no corners
+until a vertex action bar with **Smooth** / **Corner** buttons exists
+(Pending). Drag a placed vertex (`editor-polygon-vertex`) to adjust it
+before closing (its handles move with it); close by a double-click or a
+click on the first vertex, `Esc` cancels; `Enter` finishes any kind once
+it has its minimum vertices. The preview (`editor-polygon`) follows the
+curves (§7 "Editing geometry") and shows the hover point as the smooth
+vertex a plain click would place — standing in as the last vertex's next
+and, for a closed kind of three or more, as the first vertex's prev (the
+ring the close would make); Alt is not previewed (the hover carries no
+modifier). Nothing provisional is written to the state, and only handles
+in the state get grips (`editor-polygon-grip`). A **filter region** stays
+a polygon: the schema refuses handles (`course-layer.md` §8.1), so its
+vertices are corners, it ignores Alt and its click-drag is a corner.
+
+*Window managers:* Xfce and older KDE bind Alt + left-drag (and on some
+setups Alt + left-click) to moving the window, so the press never reaches
+the browser; there the user rebinds the window manager's modifier (Xfce:
+*Window Manager Tweaks → Accessibility*, the key used to grab and move
+windows; KDE: *Window Behaviour → Window Actions*, the modifier key). The
+same holds for `V`'s Alt gestures (§7 "Editing geometry"). The editor
+offers no second key for it: Shift is 45° and Ctrl is the macOS context
+menu.
 
 Line kinds
 (out-of-bounds line, marked route) end by a double-click or `Enter` from
@@ -932,24 +944,29 @@ binding's on the **selected** object (`selectBinding`), mouse only. They
 live in `lib/editor/geometry-gestures.ts` (D16: pressing order, drags,
 grips, Alt, focus, insert and the selected path's shapes, in the path's
 own units), which Layout mode's selected paths use too, in page mm
-(`course-layout.md` §3):
+(`course-layout.md` §3). The convention is the drawing's (§6.4, F18):
+**smooth by default, Alt for sharp** — an inserted vertex is smooth, Alt
+makes it a corner, and Alt-click switches a vertex between the two. It
+lives in the shared module so that F16's leg bends take it unchanged.
 
 | Gesture | Edit | |
 |---|---|---|
 | drag a vertex handle (`editor-object-handle`) | moves the vertex, its handles with it | as before (§7) |
 | click a vertex handle | focuses it (drawn filled, `data-focused`) | no write; a text's anchor or an image's corner is never focused, so `Delete` deletes the object |
 | `Delete` / `Backspace` with a vertex focused | `deleteVertex` down to the kind's minimum; at the minimum nothing happens | the object is deleted from the inspector, or after a click on its body — an area's edge — (which unfocuses) |
-| double-click on an edge (within the 7 px handle reach, not on a vertex) | `insertVertex` at the nearest point (`nearestEdge`): a corner on a straight edge; on a curve a **de Casteljau split**, so the shape stays as it was and the new vertex is smooth | the new vertex is focused |
-| `Alt`-drag a vertex | `symmetricHandles`: `hOut` = the drag vector, `hIn` its negation (`Shift`: 45°) | |
+| drag a vertex with `Alt` held | moves the vertex like a plain drag (F18: no handles pulled) | D5b's Alt-drag "pull symmetric handles" is gone: on a stored vertex the handles come from Alt-click (smooth), then a grip |
+| double-click on an edge (within the 7 px handle reach, not on a vertex) | `insertAtEdge` at the nearest point (`nearestEdge`, `insertVertex`): a **smooth vertex** (F18) — on a straight edge its handles from its neighbours (`smoothHandles`, the closed wrap; collinear with the edge, so the shape stays until it moves), on a curve a **de Casteljau split**, so the shape stays as it was | the new vertex is focused |
+| `Alt` + double-click on an edge | the same insert as a **corner**: on a straight edge no handles; on a curve the split's handles of the new vertex dropped (its neighbours' shortened handles kept) | |
 | drag a grip (`editor-object-grip`, `data-index`, `data-which` `in` / `out`) | the handle moves by the pointer's offset (so a press beside the grip does not jump it) — `dragGrip`: a mirrored pair stays mirrored; a smooth pair (opposite, different lengths — a split's) stays smooth with the other's length kept; a lone or broken handle moves alone (`Shift`: 45°) | |
 | `Alt` held on a grip (live) | breaks the pair: only that handle moves | the pair stays broken afterwards |
-| `Alt`-click a vertex with handles | `retractHandles`: a corner again | on a corner nothing |
+| `Alt`-click a vertex | `toggleSmooth`: a vertex with a handle becomes a corner (`retractHandles`); a corner becomes smooth (`smoothHandles` from its neighbours, the closed wrap) | an open line's end corner has no smooth form: nothing; a filter region: nothing |
 
 - **Kinds** (`vertexRule`, kept in step with `courseObjectBodySchema` by
   a test): closed areas (`oob_area`, `whiteout`, `toner_saver`) ≥ 3
   vertices, lines (`oob_line`, `marked_route`) ≥ 2, curves allowed;
-  `filter_region` ≥ 3 without curves — `Alt`-drag moves its vertex, it
-  has no grips; `text` (one anchor) and `image` (two corners) take no
+  `filter_region` ≥ 3 without curves — it ignores Alt (a drag moves its
+  vertex, Alt-click writes nothing, an insert is a corner), it has no
+  grips; `text` (one anchor) and `image` (two corners) take no
   insert or delete.
 - **Writes**: each gesture is one `courseObject.update { geometry }` and
   one undo entry (the page's `updateObject`); during a drag the object is
@@ -1505,14 +1522,14 @@ whose poll ran meanwhile simply does not conflict (decision log, D10).
 | unit (web) | `pages/editor/__tests__/placement.test.ts` | §6.1: insertion point (before the finish, after the selected control, at a leg, `S` at 0, no course), chain advance, `Ctrl+Z` steps back, `S` → `K`, ghost number and pending legs (a start's leg runs to the first item) |
 | unit (web) | `lib/editor/__tests__/leg-length.test.ts`, `lib/__tests__/course-layer-request.test.ts`, `lib/editor/__tests__/hit.test.ts` | §6.1: metres at the map scale, "‹n› m", the midpoint, a dragged control's labels (both legs, every visit, over undrawn items); the provisional visit in the request (`course-layer.md` §5); §5 `accept` passes over other targets and finds the site below a rejected one |
 | unit (web) | `pages/editor/__tests__/toner-saver.test.ts` | §6.4 toner saver: every site at least the margin inside the sampled outline (and the hull sites exactly), tangent continuity at every vertex and along the straight edges, one site → four quarter arcs, two → a stadium of six vertices, collinear and duplicate sites, one cubic per ≤ 90° of turn with the handle (4/3)·tan(θ/4)·r, micrometre rounding |
-| unit (web) | `pages/editor/__tests__/polygon.test.ts`, `gaps.test.ts` | §6.4: vertex flow, close on the first vertex / double-click, line kinds, vertex drag, `pull-handles` (symmetric, `Shift` 45°, back to a corner, a filter region stays a polygon, a moved curve vertex keeps its handles); the Alt smooth vertex (D15: a corner until the next vertex lands, then `(next − prev) / 6`; recomputed when it or a neighbour moves; a pull clears the flag and keeps its handles, a pull back is a corner; a filter region ignores it; closed kinds wrap at close, Alt on the closing click smooths the first vertex; an open line's ends stay corners; every finishing path strips the flags; Alt on a double-click); §6.3: compass degrees, shorter arc, minimum, merge across north, leg fractions |
-| unit (web) | `lib/editor/__tests__/geometry-edit.test.ts` | §7 "Editing geometry": 8 samples per curved segment on the cubic, a curved closing segment, open paths never close; the nearest edge (closing edge, along a curve); insert on a straight edge, on the closing edge, on a curve (de Casteljau: the halves trace the original, the new vertex smooth); delete down to the minimum; symmetric handles, retract, grip drags (mirrored, smooth with the other's length kept, Alt breaks, broken / lone handles alone), 45°; `smoothHandles` (D15: an interior vertex `(next − prev) / 6` and its negation, the others untouched, the closed wrap at both ends, open ends corners, fewer than three never wrap, a spike a corner, out of range a copy); `vertexRule` agrees with `courseObjectBodySchema` for every kind |
-| unit (web) | `pages/editor/__tests__/bindings.test.ts` "geometry editing on a selected object", "while drawing: a press places a corner…" | §7 "Editing geometry": the sampled outline and grips; Alt-drag → symmetric handles with one write (Shift 45°), a filter region's Alt-drag moves the vertex; Alt-click retracts (a corner: no write), a plain click focuses, a body click unfocuses, the focused handle drawn; a grip drag mirrored, Alt live breaks it; double-click on an edge inserts (inside, on a vertex, on a text: nothing); a press within reach of the edge is the object's; §6.4 the area tool's press places a corner, a drag past 3 px pulls handles (Shift 45°), the curved preview and its grips; Alt at the press a smooth vertex (the pull still wins, no Alt = a corner), Alt on the closing click wraps the first vertex and `onDone` carries no flags, the preview curves a smooth vertex towards the hover with no provisional grips and nothing written (D15) |
-| unit (web) | `lib/editor/__tests__/geometry-gestures.test.ts` | §7 "Editing geometry" after D16's extraction: the pressing order (vertex, grip, edge within reach, the inside no press, the caller's body), a vertex drag in the caller's units (nothing until it moves), Alt-drag (Shift 45°) and Alt-click retract, focus (none for fixed kinds, the body unfocuses), a cancelled drag, insert on an edge (not on a vertex, not inside, not for fixed kinds), the shapes with the caller's ids; `bindings.test.ts` unchanged is the net for `selectBinding` |
+| unit (web) | `pages/editor/__tests__/polygon.test.ts`, `gaps.test.ts` | §6.4: vertex flow, close on the first vertex / double-click, line kinds, vertex drag, `pull-handles` (symmetric, `Shift` 45°, back to zero the press's kind — smooth, or a corner with Alt —, a filter region stays a polygon, a moved curve vertex keeps its handles); smooth by default (F18: a placed vertex a corner until the next lands, then `(next − prev) / 6`; recomputed when it or a neighbour moves; a pull wins over a neighbour move; Alt at the press a corner through landings and moves; a filter region a polygon, Alt ignored; closed kinds wrap at close, Alt on the closing click makes the first vertex a corner; an open line's ends stay corners; every finishing path strips `corner` / `pulled`; Alt on a double-click a corner, the others wrapped; a plain click stores no flag); §6.3: compass degrees, shorter arc, minimum, merge across north, leg fractions |
+| unit (web) | `lib/editor/__tests__/geometry-edit.test.ts` | §7 "Editing geometry": 8 samples per curved segment on the cubic, a curved closing segment, open paths never close; the nearest edge (closing edge, along a curve); insert on a straight edge, on the closing edge, on a curve (de Casteljau: the halves trace the original, the new vertex smooth); delete down to the minimum; symmetric handles, retract, `toggleSmooth` (F18: a corner → `smoothHandles`, a handle → a corner, the closed wrap, null for an open end corner and out of range, an open end with handles retracts), grip drags (mirrored, smooth with the other's length kept, Alt breaks, broken / lone handles alone), 45°; `smoothHandles` (D15, F18: an interior vertex `(next − prev) / 6` and its negation, the others untouched, the closed wrap at both ends, open ends corners, fewer than three never wrap, a spike a corner, out of range a copy); `vertexRule` agrees with `courseObjectBodySchema` for every kind |
+| unit (web) | `pages/editor/__tests__/bindings.test.ts` "geometry editing on a selected object", "while drawing: a press places a smooth vertex…" | §7 "Editing geometry": the sampled outline and grips; Alt-drag moves the vertex with one write (F18), a filter region's Alt-drag moves it too; Alt-click toggles (handles → a corner, a corner → smooth `(next − prev) / 6`; a filter region: no write), a plain click focuses, a body click unfocuses, the focused handle drawn; a grip drag mirrored, Alt live breaks it; double-click on an edge inserts a smooth vertex with collinear handles, Alt a corner (inside, on a vertex, on a text: nothing); a press within reach of the edge is the object's; §6.4 the area tool's press places a smooth vertex (its neighbour gaining handles on the same write), a drag past 3 px pulls handles (Shift 45°), back within 3 px the press's kind, the curved preview and its grips; Alt at the press a corner (the pull still wins, the corner kept; no Alt = smooth; a filter region ignores Alt), the closing click wraps every smooth vertex, Alt on it makes the first a corner, `onDone` carries no flags; the preview shows the hover as a smooth vertex (a ring of three curves throughout; a filter region's straight) with no provisional grips and nothing written (F18) |
+| unit (web) | `lib/editor/__tests__/geometry-gestures.test.ts` | §7 "Editing geometry" after D16's extraction: the pressing order (vertex, grip, edge within reach, the inside no press, the caller's body), a vertex drag in the caller's units (nothing until it moves), Alt-drag moves and Alt-click toggles both ways (F18; the wrap at vertex 0, nothing for an open end and a filter region), focus (none for fixed kinds, the body unfocuses), a cancelled drag, insert on an edge (smooth with collinear handles, Alt a corner, a filter region a corner; on a curve the split, Alt dropping the new vertex's handles; not on a vertex, not inside, not for fixed kinds), the shapes with the caller's ids; `bindings.test.ts` unchanged is the net for `selectBinding` |
 | unit (web) | `pages/editor/__tests__/bindings.test.ts` | §6, §7: V (Shift-click, lasso, object select / move / vertex, outlines, double-click leg; D12: for every closed kind an interior press declines, selected or not, an edge press within 7 px or the hit-test's outline target drags it, a vertex still wins; a line's stroke press is the object's), armed (exclusive, right-click, touch, ghost label and leg length label, no UI-layer leg; the ghost circle only without a drawn provisional visit, a finish's two circles, P4), area (vertex drag, first-vertex close), G (rim drag, click removes, leg) |
 | unit (web) | `lib/__tests__/undo-stack.test.ts` | §6.1: `UndoStack.top`, which `Ctrl+Z` while armed checks before stepping the chain back |
 | unit (web) | `lib/editor/__tests__/snap.test.ts`, `hit.test.ts`, `state.test.ts`, `structure-edit.test.ts`, `write-client.test.ts` | §6.2 snap candidates and distance; §5 object targets (stream and UI-layer outline); §6 Escape order, multi-selection, object selection, tools; §6.3 / §6.6 `setLegGaps`, `setNumberHidden`; §7 object tokens |
-| E2E | `e2e/course-editor.spec.ts` "tools" | §6.1 ten controls in ten clicks with `K` (the ghost label — its circle is the layer's, P4 —, no UI-layer pending leg, the leg length label "‹n› m" and no `editor-pending-leg-length` (P2), no action bar and no `editor-selection-ring` while armed, `Ctrl+Z`, `Esc`, the ring back on a click in `V`), reuse of a site; §5 / §7 the area-press rule (D12): a drag starting inside an `oob_area` (created through `courseObject.create`) moves the view (`data-centre-x`) and leaves the area unselected and unchanged, a click on its outline selects it (four handles), a drag inside the selected area pans and keeps the selection, a drag of its edge translates every vertex (one `courseObject.update`), a click inside deselects it; the armed `K` over the map: a `course-leg` piece of the course ends at the cursor's circle (absent before the hover, follows a second hover), no `editor-pending-leg`, the label = the metres from the last placed control's stored mm to the cursor's paper point at the map scale (read from the map-info dialog's `editor-map-info-scale`, P6) within 2 m (P2); a drag of the middle control shows two `editor-leg-length`, none after release; §6.5 Shift-click three controls → one add-to-course (one undo entry), §6.6 a site's notes written and reloaded; §6.3 a rim drag stores a circle gap, Reset gaps clears it; the layer draws what the tools store (D1's request path): a leg gap cuts the drawn leg, a circle gap is in the drawn site's cuts (`course-site` `data-cuts`), a hidden number leaves the site without its `course-label`; §6.4 / §7 an out-of-bounds area drawn, drawn on the canvas (709: purple inside it), its hatch (710) and border later set from the inspector (the stored props; 710 on the canvas is the shared layer path, probed in print only), printed (the all-controls `maps.pdf`: one page, the 709 hatch's clip-and-stroke operators present with the `all`-scoped area, one more run with `hatch: "710"`, gone when it is parked), selected again on the canvas (a click on its outline), deleted and undone; §6.4 / §7 "Editing geometry" a curved white-out in three clicks and one drag (two clicks, a click-drag that shows two `editor-polygon-grip`, the closing click): the stored vertex has `hOut` = the drag on paper and `hIn` its negation, the selection outline has 8 samples per curved segment, the all-controls `maps.pdf` gains exactly one curved fill (a fill path with `c` segments — the base map has its own); a double-click on a straight edge inserts a corner at its midpoint (handles 3 → 4), a click focuses it and `Delete` removes it (the object stays), `Ctrl+Z` brings it back, `Alt`-drag on a corner shows two more grips, `Alt`-click retracts them; §6.4 the Alt smooth vertex (D15): three clicks with Alt held at the second — no grips until the third lands, then two — store `g[1].hOut` = `(g[2] − g[0]) / 6` (and ≈ the clicks' chord on paper / 6), `hIn` its negation, corners at `g[0]` / `g[2]`, no `smooth` key stored, and one `Ctrl+Z` removes the object (one undo entry); a filter region hides the 505 path under it live (canvas ink probe; its entry is the heading `editor-filter-symbol-505`, §7); §6.4 the toner saver (`A` then `S`, D13): `marginMm` 25, Bézier arcs stored, the outline sampled, and the course's `maps.pdf` (its sheet made first) carries at least one more `c` operator per stored curved vertex than without it (D13's deferred print check) |
+| E2E | `e2e/course-editor.spec.ts` "tools" | §6.1 ten controls in ten clicks with `K` (the ghost label — its circle is the layer's, P4 —, no UI-layer pending leg, the leg length label "‹n› m" and no `editor-pending-leg-length` (P2), no action bar and no `editor-selection-ring` while armed, `Ctrl+Z`, `Esc`, the ring back on a click in `V`), reuse of a site; §5 / §7 the area-press rule (D12): a drag starting inside an `oob_area` (created through `courseObject.create`) moves the view (`data-centre-x`) and leaves the area unselected and unchanged, a click on its outline selects it (four handles), a drag inside the selected area pans and keeps the selection, a drag of its edge translates every vertex (one `courseObject.update`), a click inside deselects it; the armed `K` over the map: a `course-leg` piece of the course ends at the cursor's circle (absent before the hover, follows a second hover), no `editor-pending-leg`, the label = the metres from the last placed control's stored mm to the cursor's paper point at the map scale (read from the map-info dialog's `editor-map-info-scale`, P6) within 2 m (P2); a drag of the middle control shows two `editor-leg-length`, none after release; §6.5 Shift-click three controls → one add-to-course (one undo entry), §6.6 a site's notes written and reloaded; §6.3 a rim drag stores a circle gap, Reset gaps clears it; the layer draws what the tools store (D1's request path): a leg gap cuts the drawn leg, a circle gap is in the drawn site's cuts (`course-site` `data-cuts`), a hidden number leaves the site without its `course-label`; §6.4 / §7 an out-of-bounds area drawn (Alt-clicks: corners, F18), drawn on the canvas (709: purple inside it), its hatch (710) and border later set from the inspector (the stored props; 710 on the canvas is the shared layer path, probed in print only), printed (the all-controls `maps.pdf`: one page, the 709 hatch's clip-and-stroke operators present with the `all`-scoped area, one more run with `hatch: "710"`, gone when it is parked), selected again on the canvas (a click on its outline), deleted and undone; §6.4 / §7 "Editing geometry" a curved white-out in three clicks and one drag (two Alt-clicks — corners —, a click-drag that shows two `editor-polygon-grip`, the closing click): the stored vertex has `hOut` = the drag on paper and `hIn` its negation, the selection outline has 8 samples per curved segment, the all-controls `maps.pdf` gains exactly one curved fill (a fill path with `c` segments — the base map has its own); a double-click on a straight edge inserts a smooth vertex at its midpoint (handles 3 → 4, `hOut` ≈ the edge on paper / 6, grips 2 → 4), a click focuses it and `Delete` removes it (the object stays), `Ctrl+Z` brings it back, `Alt`-click on the corner b makes it smooth (grips 4 → 6, `hOut` stored), `Alt`-click again a corner (6 → 4, no handle stored); §6.4 smooth by default (F18): three clicks, Alt held at the third — no grips until the third lands, then two — and a plain closing click store `g[1].hOut` = `(g[2] − g[0]) / 6` (and ≈ the clicks' chord on paper / 6), `hIn` its negation, `g[0].hOut` = `(g[1] − g[2]) / 6` (the wrap), the Alt corner `g[2]` without handles, no `smooth` / `corner` / `pulled` key stored, four grips, and one `Ctrl+Z` removes the object (one undo entry); a filter region hides the 505 path under it live (canvas ink probe; its entry is the heading `editor-filter-symbol-505`, §7); §6.4 the toner saver (`A` then `S`, D13): `marginMm` 25, Bézier arcs stored, the outline sampled, and the course's `maps.pdf` (its sheet made first) carries at least one more `c` operator per stored curved vertex than without it (D13's deferred print check) |
 | unit (web) | `lib/editor/__tests__/symbol-groups.test.ts` | §7 filter region: one entry per heading (an applied match's library heading, `601.b` + `601` merged; else the source base, `101.1` joins `101`; a suggested match is not applied), library names by UI language (`sv`, `sv-SE`), hidden / unused / missing / proxy-drawn symbols not listed, library headings first in code order and Other last (a rectangle frame, `graphic`), swatches (the most used applied entry, else the document symbol), search (heading, both library names, member codes and names), all / some / none, a toggle completes or removes the whole group, the group of a symbol, the swatch URLs (versioned library path; event-scoped document preview) |
 | unit (web) | `lib/editor/__tests__/symbol-pick.test.ts` | §5 / §6.4 the eyedropper's pick over an encoded document: objects per symbol, an area inside it with its pass colour, a line over the area within the tolerance (topmost wins), the area beyond half width + tolerance, a hidden symbol never, a text by its box, a proxy-drawn point by its disc, empty map null |
 | unit (shared) | `packages/shared/src/map-document/__tests__/render-bridge.test.ts` "a subset of objects" | `map-document-format.md` §8: `docIdx` maps each render object to its document object; `only` symbolises the listed objects and keeps the symbol table aligned |
@@ -1632,10 +1649,12 @@ whose poll ran meanwhile simply does not conflict (decision log, D10).
   vertex): a tap selects it and two fingers scale it (§10); moving it is
   the mouse's, or a later row with the object's own nudge.
 - **Geometry editing on touch** (§7 "Editing geometry", §6.4): there is
-  no Alt on touch, so curve vertices, the Alt smooth vertex, handles, grips, vertex insert and
-  vertex delete are the mouse's; a touch-drawn area is a polygon. A later
-  row could give the selection a vertex action bar (insert, delete,
-  curve / corner).
+  no Alt on touch, so corners while drawing, pulled curve vertices,
+  handles, grips, vertex insert, vertex delete and the corner / smooth
+  toggle are the mouse's; a touch-drawn area is smooth throughout (F18:
+  taps follow the default, answered by the user on 2026-11-08). Corners on
+  touch wait for a vertex action bar on the selection with **Smooth** /
+  **Corner** buttons (and insert, delete).
 - **Offline writes in Field mode** (§9 "Offline"): a queue for
   `control.update` / `control.check` with the field-move rebase on replay
   (row D9c).

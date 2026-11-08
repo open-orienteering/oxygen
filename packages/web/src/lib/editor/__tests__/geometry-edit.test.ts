@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 import { course } from "@oxygen/shared";
 import {
   CURVE_STEPS, constrain45, deleteVertex, dragGrip, hasHandles, insertVertex, nearestEdge, outlinePoints, retractHandles,
-  sampleSegment, smoothHandles, symmetricHandles, vertexRule, type Vertex,
+  sampleSegment, smoothHandles, symmetricHandles, toggleSmooth, vertexRule, type Vertex,
 } from "../geometry-edit";
 
 const square: Vertex[] = [{ x: 0, y: 0 }, { x: 10, y: 0 }, { x: 10, y: 10 }, { x: 0, y: 10 }];
@@ -194,6 +194,31 @@ describe("smooth vertex (uniform Catmull-Rom, docs/course-editor.md §6.4)", () 
     const g = smoothHandles(tri, 5, false);
     expect(g).toEqual(tri);
     expect(g).not.toBe(tri);
+  });
+});
+
+describe("toggle corner / smooth (Alt-click, F18, docs/course-editor.md §7)", () => {
+  const tri: Vertex[] = [{ x: 0, y: 0 }, { x: 10, y: 0 }, { x: 10, y: 10 }];
+
+  it("a corner becomes smooth (handles from its neighbours), a vertex with handles a corner", () => {
+    const smooth = toggleSmooth(tri, 1, false)!;
+    expect(smooth).toEqual(smoothHandles(tri, 1, false));
+    expect(toggleSmooth(smooth, 1, false)).toEqual(tri);
+    // Any handle counts: a lone pulled handle retracts too.
+    const lone: Vertex[] = [tri[0], { x: 10, y: 0, hOut: { x: 2, y: 0 } }, tri[2]];
+    expect(toggleSmooth(lone, 1, false)).toEqual(tri);
+  });
+
+  it("a closed path wraps at its ends", () => {
+    expect(toggleSmooth(tri, 0, true)).toEqual(smoothHandles(tri, 0, true));
+  });
+
+  it("null when nothing changes: an open path's end corner, an index out of range", () => {
+    expect(toggleSmooth(tri, 0, false)).toBeNull();
+    expect(toggleSmooth(tri, 2, false)).toBeNull();
+    expect(toggleSmooth(tri, 5, false)).toBeNull();
+    // An open end that carries handles (an import) still retracts.
+    expect(toggleSmooth([{ x: 0, y: 0, hOut: { x: 1, y: 0 } }, ...tri.slice(1)], 0, false)![0]).toEqual({ x: 0, y: 0 });
   });
 });
 

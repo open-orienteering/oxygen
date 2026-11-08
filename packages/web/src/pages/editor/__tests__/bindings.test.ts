@@ -156,18 +156,15 @@ describe("geometry editing on a selected object (docs/course-editor.md §7 \"Edi
     expect(shapesOf(selectBinding(selectOpts({ selected: square(4) })), "editor-object-grip")).toHaveLength(0);
   });
 
-  it("Alt-drag on a vertex pulls symmetric handles (Shift: 45°); one write on release", () => {
+  it("Alt-drag on a vertex moves it like a plain drag (F18: no handles pulled); one write on release", () => {
     const o = selectOpts({ selected: square(4) });
     const b = selectBinding(o);
     expect(b.onPointerDown!(ptr(10, 0, { alt: true }))).toBe(true);
     b.onPointerDrag!({ x: 13, y: 4 }, { shift: false, alt: true });
-    expect(o.onObjectDraft).toHaveBeenLastCalledWith(4, expect.arrayContaining([{ x: 10, y: 0, hIn: { x: -3, y: -4 }, hOut: { x: 3, y: 4 } }]));
-    b.onPointerDrag!({ x: 20, y: 1 }, { shift: true, alt: true });
-    b.onPointerUp!({ x: 20, y: 1 });
+    expect(o.onObjectDraft).toHaveBeenLastCalledWith(4, expect.arrayContaining([{ x: 13, y: 4 }]));
+    b.onPointerUp!({ x: 13, y: 4 });
     expect(o.onObjectMoved).toHaveBeenCalledTimes(1);
-    const v = movedTo(o, 0)[1];
-    expect(v).toMatchObject({ x: 10, y: 0 });
-    expect(v.hOut!.y).toBeCloseTo(0);
+    expect(movedTo(o, 0)[1]).toEqual({ x: 13, y: 4 });
   });
 
   it("a filter region's Alt-drag moves the vertex (no handles)", () => {
@@ -179,15 +176,22 @@ describe("geometry editing on a selected object (docs/course-editor.md §7 \"Edi
     expect(movedTo(o, 0)[1]).toEqual({ x: 12, y: 0 });
   });
 
-  it("Alt-click on a vertex with handles retracts them; on a corner nothing; a plain click focuses the vertex", () => {
+  it("Alt-click toggles a vertex: handles → corner, corner → smooth (F18); a filter region nothing; a plain click focuses the vertex", () => {
     const o = selectOpts({ selected: curved(4), objects: [curved(4)] });
     const b = selectBinding(o);
     b.onPointerDown!(ptr(0, 0, { alt: true }));
     b.onPointerUp!({ x: 0, y: 0 });
     expect(movedTo(o, 0)[0]).toEqual({ x: 0, y: 0 });
+    // A corner becomes smooth: handles from its neighbours, (next − prev) / 6.
     b.onPointerDown!(ptr(10, 10, { alt: true }));
     b.onPointerUp!({ x: 10, y: 10 });
-    expect(o.onObjectMoved).toHaveBeenCalledTimes(1);
+    expect(o.onObjectMoved).toHaveBeenCalledTimes(2);
+    expect(movedTo(o, 1)[2]).toEqual({ x: 10, y: 10, hIn: { x: 10 / 6, y: -10 / 6 }, hOut: { x: -10 / 6, y: 10 / 6 } });
+    const f = selectOpts({ selected: square(4, "filter_region"), objects: [square(4, "filter_region")] });
+    const bf = selectBinding(f);
+    bf.onPointerDown!(ptr(10, 10, { alt: true }));
+    bf.onPointerUp!({ x: 10, y: 10 });
+    expect(f.onObjectMoved).not.toHaveBeenCalled();
     b.onPointerDown!(ptr(10, 10));
     b.onPointerUp!({ x: 10, y: 10 });
     expect(o.onVertexFocus).toHaveBeenLastCalledWith(2);
@@ -211,15 +215,18 @@ describe("geometry editing on a selected object (docs/course-editor.md §7 \"Edi
     expect(movedTo(o, 1)[0]).toEqual({ x: 0, y: 0, hIn: { x: -1, y: -1 }, hOut: { x: 0, y: 2 } });
   });
 
-  it("double-click on an edge inserts a vertex there; inside the area, on a vertex or on a text nothing", () => {
+  it("double-click on an edge inserts a smooth vertex there (F18), Alt a corner; inside the area, on a vertex or on a text nothing", () => {
     const o = selectOpts({ selected: square(4) });
     const b = selectBinding(o);
     b.onDoubleClick!(ptr(5, 0.3));
-    expect(o.onObjectMoved).toHaveBeenCalledWith(4, [{ x: 0, y: 0 }, { x: 5, y: 0 }, { x: 10, y: 0 }, { x: 10, y: 10 }, { x: 0, y: 10 }]);
+    // Collinear handles from its neighbours: the edge stays straight until the vertex moves.
+    expect(o.onObjectMoved).toHaveBeenCalledWith(4, [{ x: 0, y: 0 }, { x: 5, y: 0, hIn: { x: -10 / 6, y: -0 }, hOut: { x: 10 / 6, y: 0 } }, { x: 10, y: 0 }, { x: 10, y: 10 }, { x: 0, y: 10 }]);
     expect(o.onVertexFocus).toHaveBeenLastCalledWith(1);
+    b.onDoubleClick!(ptr(5, 0.3, { alt: true }));
+    expect(movedTo(o, 1)).toEqual([{ x: 0, y: 0 }, { x: 5, y: 0 }, { x: 10, y: 0 }, { x: 10, y: 10 }, { x: 0, y: 10 }]);
     b.onDoubleClick!(ptr(5, 5));
     b.onDoubleClick!(ptr(10, 0.2));
-    expect(o.onObjectMoved).toHaveBeenCalledTimes(1);
+    expect(o.onObjectMoved).toHaveBeenCalledTimes(2);
     const text = { ...square(5, "text"), geometry: [{ x: 0, y: 0 }] } as course.CourseObject;
     const t = selectOpts({ selected: text, objects: [text] });
     selectBinding(t).onDoubleClick!(ptr(0.2, 0));
@@ -321,95 +328,116 @@ describe("armed and area bindings", () => {
   it("the area flow: clicks add vertices, the first vertex closes, a vertex is dragged before closing", () => {
     const gesture: GestureRef = { current: null };
     const onPoly = vi.fn(), onDone = vi.fn();
-    const poly = { kind: "oob_area" as const, vertices: [{ x: 0, y: 0 }, { x: 10, y: 0 }, { x: 10, y: 10 }] };
+    // Corners (placed with Alt), so the flow's moves are plain.
+    const poly = { kind: "oob_area" as const, vertices: [{ x: 0, y: 0, corner: true as const }, { x: 10, y: 0, corner: true as const }, { x: 10, y: 10, corner: true as const }] };
     const b = areaBinding({ gesture, poly, hover: null, onHover: vi.fn(), onPoly, onDone, onCancel: vi.fn(), snap: (p) => p });
     expect(b.onPointerDown!(ptr(10, 0.2))).toBe(true); // vertex 1
     b.onPointerDrag!({ x: 11, y: 1 });
-    expect(onPoly).toHaveBeenCalledWith({ kind: "oob_area", vertices: [{ x: 0, y: 0 }, { x: 11, y: 1 }, { x: 10, y: 10 }] });
+    expect(onPoly).toHaveBeenCalledWith({ kind: "oob_area", vertices: [poly.vertices[0], { x: 11, y: 1, corner: true }, poly.vertices[2]] });
     b.onPointerUp!({ x: 11, y: 1 });
     expect(b.onPointerDown!(ptr(0.1, 0.1))).toBe(false); // the first vertex is a click, not a drag
     b.onClick!(ptr(0.1, 0.1));
-    expect(onDone).toHaveBeenCalledWith(poly.vertices);
+    expect(onDone).toHaveBeenCalledWith([{ x: 0, y: 0 }, { x: 10, y: 0 }, { x: 10, y: 10 }]);
   });
 
-  it("while drawing: a press places a corner, a drag from it pulls symmetric handles (Shift: 45°)", () => {
+  it("while drawing: a press places a smooth vertex (F18), a drag from it pulls symmetric handles (Shift: 45°)", () => {
     const gesture: GestureRef = { current: null };
     const onPoly = vi.fn();
     const poly = { kind: "whiteout" as const, vertices: [{ x: 0, y: 0 }, { x: 10, y: 0 }] };
     const opts = { gesture, poly, hover: null, onHover: vi.fn(), onPoly, onDone: vi.fn(), onCancel: vi.fn(), snap: (p: { x: number; y: number }) => p };
     const b = areaBinding(opts);
     expect(b.onPointerDown!(ptr(10, 10))).toBe(true);
-    expect(onPoly).toHaveBeenLastCalledWith({ kind: "whiteout", vertices: [...poly.vertices, { x: 10, y: 10 }] });
-    b.onPointerDrag!({ x: 10.2, y: 10 }, { shift: false, alt: false }); // within 3 px: still a corner
+    // The new vertex is the open end for now; vertex 1, now between two, gains its smooth handles on the same write.
+    expect(onPoly).toHaveBeenLastCalledWith({ kind: "whiteout", vertices: [poly.vertices[0], { x: 10, y: 0, hIn: { x: -10 / 6, y: -10 / 6 }, hOut: { x: 10 / 6, y: 10 / 6 } }, { x: 10, y: 10 }] });
+    b.onPointerDrag!({ x: 10.2, y: 10 }, { shift: false, alt: false }); // within 3 px: still the press's vertex
     expect(onPoly).toHaveBeenCalledTimes(1);
     b.onPointerDrag!({ x: 13, y: 14 }, { shift: false, alt: false });
-    expect(onPoly).toHaveBeenLastCalledWith({ kind: "whiteout", vertices: [...poly.vertices, { x: 10, y: 10, hOut: { x: 3, y: 4 }, hIn: { x: -3, y: -4 } }] });
+    expect(onPoly.mock.calls[1][0].vertices[2]).toEqual({ x: 10, y: 10, hOut: { x: 3, y: 4 }, hIn: { x: -3, y: -4 }, pulled: true });
     b.onPointerDrag!({ x: 20, y: 11 }, { shift: true, alt: false });
     const last = onPoly.mock.calls[onPoly.mock.calls.length - 1][0].vertices[2];
     expect(last.hOut.y).toBeCloseTo(0);
     b.onPointerUp!({ x: 20, y: 11 });
-    // The threshold is the press's, not the snapped vertex's; back within 3 px of the press is a corner again.
+    // The threshold is the press's, not the snapped vertex's; back within 3 px of the press is the press's kind again.
     const onPoly2 = vi.fn();
     const s2 = areaBinding({ ...opts, onPoly: onPoly2, snap: (p: { x: number; y: number }) => ({ x: Math.round(p.x), y: Math.round(p.y) }) });
     gesture.current = null;
     s2.onPointerDown!(ptr(20.4, 20.4));
-    expect(onPoly2).toHaveBeenCalledTimes(1); // the corner, at the snapped (20, 20)
+    expect(onPoly2).toHaveBeenCalledTimes(1); // the vertex, at the snapped (20, 20)
     s2.onPointerDrag!({ x: 20.45, y: 20.4 }, { shift: false, alt: false });
     expect(onPoly2).toHaveBeenCalledTimes(1);
     s2.onPointerDrag!({ x: 23.4, y: 20.4 }, { shift: false, alt: false });
-    expect(onPoly2.mock.calls[1][0].vertices[2]).toEqual({ x: 20, y: 20, hOut: { x: 3, y: 0 }, hIn: { x: -3, y: -0 } });
+    expect(onPoly2.mock.calls[1][0].vertices[2]).toEqual({ x: 20, y: 20, hOut: { x: 3, y: 0 }, hIn: { x: -3, y: -0 }, pulled: true });
     s2.onPointerDrag!({ x: 20.5, y: 20.4 }, { shift: false, alt: false });
     expect(onPoly2.mock.calls[2][0].vertices[2]).toEqual({ x: 20, y: 20 });
     // Drawn with its handles: the preview follows the curve, the grips show.
-    const drawn = areaBinding({ ...opts, poly: { kind: "whiteout", vertices: [...poly.vertices, { x: 10, y: 10, hOut: { x: 3, y: 0 }, hIn: { x: -3, y: 0 } }] } });
+    const drawn = areaBinding({
+      ...opts,
+      poly: { kind: "whiteout", vertices: [{ x: 0, y: 0, corner: true }, { x: 10, y: 0, corner: true }, { x: 10, y: 10, hOut: { x: 3, y: 0 }, hIn: { x: -3, y: 0 }, pulled: true }] },
+    });
     const shapes = drawn.shapes as unknown as { testId?: string; points?: unknown[] }[];
     expect(shapes.find((s) => s.testId === "editor-polygon")!.points).toHaveLength(2 + 8 + 8);
     expect(shapes.filter((s) => s.testId === "editor-polygon-grip")).toHaveLength(2);
   });
 
-  it("Alt at the press places a smooth vertex; a pull past 3 px is still the manual curve (§6.4)", () => {
+  it("Alt at the press places a corner (F18); a pull past 3 px is still the manual curve (§6.4)", () => {
     const gesture: GestureRef = { current: null };
     const onPoly = vi.fn();
     const poly = { kind: "whiteout" as const, vertices: [{ x: 0, y: 0 }, { x: 10, y: 0 }] };
     const opts = { gesture, poly, hover: null, onHover: vi.fn(), onPoly, onDone: vi.fn(), onCancel: vi.fn(), snap: (p: { x: number; y: number }) => p };
     const b = areaBinding(opts);
     expect(b.onPointerDown!(ptr(10, 10, { alt: true }))).toBe(true);
-    expect(onPoly).toHaveBeenLastCalledWith({ kind: "whiteout", vertices: [...poly.vertices, { x: 10, y: 10, smooth: true }] });
+    expect(onPoly.mock.calls[0][0].vertices[2]).toEqual({ x: 10, y: 10, corner: true });
     b.onPointerUp!({ x: 10, y: 10 });
     expect(onPoly).toHaveBeenCalledTimes(1);
-    // The pull beats Alt: the pulled handles, no flag.
+    // The pull beats Alt: the pulled handles (the corner kept for a drag back).
     gesture.current = null;
     b.onPointerDown!(ptr(10, 10, { alt: true }));
     b.onPointerDrag!({ x: 13, y: 14 }, { shift: false, alt: true });
-    expect(onPoly).toHaveBeenLastCalledWith({ kind: "whiteout", vertices: [...poly.vertices, { x: 10, y: 10, hOut: { x: 3, y: 4 }, hIn: { x: -3, y: -4 } }] });
-    // Without Alt (touch never sets it) the press is a corner.
+    expect(onPoly.mock.calls[onPoly.mock.calls.length - 1][0].vertices[2]).toEqual({ x: 10, y: 10, hOut: { x: 3, y: 4 }, hIn: { x: -3, y: -4 }, corner: true, pulled: true });
+    // Without Alt the press is smooth: no flag.
     gesture.current = null;
     b.onPointerDown!(ptr(10, 10));
-    expect(onPoly).toHaveBeenLastCalledWith({ kind: "whiteout", vertices: [...poly.vertices, { x: 10, y: 10 }] });
+    expect(onPoly.mock.calls[onPoly.mock.calls.length - 1][0].vertices[2]).toEqual({ x: 10, y: 10 });
+    // A filter region ignores Alt and smooths nothing.
+    const onFr = vi.fn();
+    gesture.current = null;
+    areaBinding({ ...opts, poly: { kind: "filter_region", vertices: poly.vertices }, onPoly: onFr }).onPointerDown!(ptr(10, 10, { alt: true }));
+    expect(onFr).toHaveBeenLastCalledWith({ kind: "filter_region", vertices: [...poly.vertices, { x: 10, y: 10 }] });
   });
 
-  it("Alt on the closing click smooths the first vertex with the wrap; done carries no flags", () => {
-    const onDone = vi.fn();
-    const poly = { kind: "oob_area" as const, vertices: [{ x: 0, y: 0 }, { x: 10, y: 0, smooth: true as const }, { x: 10, y: 10 }] };
-    const b = areaBinding({ gesture: { current: null }, poly, hover: null, onHover: vi.fn(), onPoly: vi.fn(), onDone, onCancel: vi.fn(), snap: (p) => p });
-    b.onClick!(ptr(0.1, 0.1, { alt: true }));
-    const done = onDone.mock.calls[0][0] as { x: number; y: number; hOut?: { x: number; y: number } }[];
-    expect(done[0].hOut!.x).toBeCloseTo(0);
-    expect(done[0].hOut!.y).toBeCloseTo(-10 / 6);
-    expect(done[1].hOut!.x).toBeCloseTo(10 / 6);
-    done.forEach((q) => expect(q).not.toHaveProperty("smooth"));
+  it("the closing click wraps the smooth vertices; Alt on it makes the first a corner; done carries no flags", () => {
+    const poly = { kind: "oob_area" as const, vertices: [{ x: 0, y: 0 }, { x: 10, y: 0 }, { x: 10, y: 10 }] };
+    const close = (alt: boolean) => {
+      const onDone = vi.fn();
+      areaBinding({ gesture: { current: null }, poly, hover: null, onHover: vi.fn(), onPoly: vi.fn(), onDone, onCancel: vi.fn(), snap: (p) => p }).onClick!(ptr(0.1, 0.1, { alt }));
+      return onDone.mock.calls[0][0] as { x: number; y: number; hOut?: { x: number; y: number } }[];
+    };
+    const smooth = close(false);
+    expect(smooth[0].hOut!.x).toBeCloseTo(0);
+    expect(smooth[0].hOut!.y).toBeCloseTo(-10 / 6);
+    const sharp = close(true);
+    expect(sharp[0]).toEqual({ x: 0, y: 0 });
+    expect(sharp[1].hOut!.x).toBeCloseTo(10 / 6);
+    expect(sharp[2].hOut!.x).toBeCloseTo(-10 / 6);
+    [...smooth, ...sharp].forEach((q) => {
+      expect(q).not.toHaveProperty("corner");
+      expect(q).not.toHaveProperty("pulled");
+    });
   });
 
-  it("the preview curves a smooth vertex towards the hover point without writing it; no provisional grips", () => {
+  it("the preview shows the hover as the smooth vertex a click places, without writing it; no provisional grips", () => {
     const onPoly = vi.fn();
-    const poly = { kind: "whiteout" as const, vertices: [{ x: 0, y: 0 }, { x: 10, y: 0, smooth: true as const }] };
+    const poly = { kind: "whiteout" as const, vertices: [{ x: 0, y: 0 }, { x: 10, y: 0 }] };
     const b = areaBinding({ gesture: { current: null }, poly, hover: { x: 10, y: 10 }, onHover: vi.fn(), onPoly, onDone: vi.fn(), onCancel: vi.fn(), snap: (p) => p });
     const shapes = b.shapes as unknown as { testId?: string; points?: unknown[] }[];
-    // Both segments around the smooth vertex curve; the closing one is straight.
-    expect(shapes.find((s) => s.testId === "editor-polygon")!.points).toHaveLength(1 + 8 + 8);
+    // The ring of three, all smooth, wrapped: every segment curves.
+    expect(shapes.find((s) => s.testId === "editor-polygon")!.points).toHaveLength(1 + 8 + 8 + 8);
     expect(shapes.filter((s) => s.testId === "editor-polygon-grip")).toHaveLength(0);
     expect(onPoly).not.toHaveBeenCalled();
-    expect(poly.vertices[1]).toEqual({ x: 10, y: 0, smooth: true });
+    expect(poly.vertices[1]).toEqual({ x: 10, y: 0 });
+    // A filter region's preview is a polygon.
+    const fr = areaBinding({ gesture: { current: null }, poly: { ...poly, kind: "filter_region" }, hover: { x: 10, y: 10 }, onHover: vi.fn(), onPoly, onDone: vi.fn(), onCancel: vi.fn(), snap: (p) => p });
+    expect((fr.shapes as unknown as { testId?: string; points?: unknown[] }[]).find((s) => s.testId === "editor-polygon")!.points).toHaveLength(3);
   });
 });
 
