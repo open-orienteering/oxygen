@@ -2800,10 +2800,33 @@ test.describe("F3: legs — styles, bends, corridors (docs/course-editor.md §6.
     return { name, a: await site(page, a), b: await site(page, b) };
   }
 
-  /** Click the leg a → b at its midpoint until the Leg section shows (the hit index lags the mirror by a round trip). */
+  /**
+   * The point along the leg a → b farthest from every site. A leg without a line (`none`, or inside a corridor,
+   * F14) hits after the UI layer's off-course controls (§5), so a click at the plain midpoint can select a faded
+   * control lying on the leg instead (F14 run: control 79 on the leg's middle).
+   */
+  async function legClickPoint(page: Page, name: string, a: Site, b: Site): Promise<Pt> {
+    const mid = await legMidpoint(page, name, a.mm, b.mm);
+    const marks = (await sites(page)).map((x) => x.mm);
+    const clearance = (q: Pt) => Math.min(...marks.map((m) => Math.hypot(q.x - m.x, q.y - m.y)));
+    let best = mid, bestD = clearance(mid);
+    for (const piece of await legBetween(page, name, a.mm, b.mm)) {
+      piece.points.slice(1).forEach((q, i) => {
+        const p0 = piece.points[i];
+        for (let t = 0.05; t < 1; t += 0.05) {
+          const c = { x: p0.x + (q.x - p0.x) * t, y: p0.y + (q.y - p0.y) * t };
+          const d = clearance(c);
+          if (d > bestD) { best = c; bestD = d; }
+        }
+      });
+    }
+    return best;
+  }
+
+  /** Click the leg a → b where it is clearest of other sites until the Leg section shows (the hit index lags the mirror by a round trip). */
   async function selectLeg(page: Page, name: string, a: Site, b: Site): Promise<Pt> {
     await viewSettled(page);
-    const mid = await legMidpoint(page, name, a.mm, b.mm);
+    const mid = await legClickPoint(page, name, a, b);
     await expect(async () => {
       await dropSelection(page);
       await clickMap(page, await toPage(page, mid));
@@ -2893,7 +2916,7 @@ test.describe("F3: legs — styles, bends, corridors (docs/course-editor.md §6.
     await expect(controlRows(page)).toHaveCount(2);
   });
 
-  test("Corridor on selected leg: the map is white in the band beside the edge, the print stays one page; Remove", async ({ page }) => {
+  test("Corridor on selected leg: the map is white in the band beside the edge, no centre line, a guide; the print stays one page; Remove", async ({ page }) => {
     const { name, a, b } = await twoControlCourse(page, "F3 corridor");
     const nameId = nameIdOf(page);
     const scale = await mapScale(page);
@@ -2913,6 +2936,17 @@ test.describe("F3: legs — styles, bends, corridors (docs/course-editor.md §6.
     const clear = band.filter((q) => marks.every((m) => Math.hypot(q.x - m.x, q.y - m.y) > 6));
     band.length = 0;
     band.push(...clear);
+    // F14 (course-layer.md §10.2): the leg's own line along its middle, and the edge `halfMm` beside it.
+    const along = (offsets: readonly number[]) => {
+      const out: Pt[] = [];
+      for (let t = 0.3; t <= 0.7; t += 0.02) {
+        for (const d of offsets) out.push({ x: ax.x + u.x * len * t + n.x * d, y: ax.y + u.y * len * t + n.y * d });
+      }
+      return out.filter((q) => marks.every((m) => Math.hypot(q.x - m.x, q.y - m.y) > 6));
+    };
+    const centre = along([-0.1, 0, 0.1]);
+    const edge = along([halfMm - 0.1, halfMm, halfMm + 0.1, -halfMm - 0.1, -halfMm, -halfMm + 0.1]);
+    const guides = async () => (await toolShapes(page, "editor-corridor-guide")).length;
     const courses = await trpcCall<{ id: number; name: string }[]>("course.list", undefined, false);
     const courseId = courses.find((c) => c.name === name)!.id;
     const template = await probeTemplate("F3 corridor");
@@ -2922,6 +2956,8 @@ test.describe("F3: legs — styles, bends, corridors (docs/course-editor.md §6.
       await viewSettled(page);
       const mapBefore = await inkAt(page, band, "map");
       expect(mapBefore, "the fixture map has colour beside the leg").toBeGreaterThan(0);
+      expect(await inkAt(page, centre, "purple"), "the leg's line before the corridor").toBeGreaterThan(0);
+      expect(await guides()).toBe(0);
 
       // The A menu's entry (key C while it is open); disabled once the leg has a corridor.
       await page.keyboard.press("a");
@@ -2938,6 +2974,31 @@ test.describe("F3: legs — styles, bends, corridors (docs/course-editor.md §6.
       // A again closes the menu (Escape would step the selection back too, §3).
       await page.keyboard.press("a");
       await expect(page.getByTestId("editor-area-menu")).toHaveCount(0);
+
+      // F14: inside the corridor the leg's line is gone, the edge is drawn; the Style note says so.
+      await expect.poll(() => inkAt(page, centre, "purple"), { timeout: 30000 }).toBe(0);
+      expect(await inkAt(page, edge, "purple"), "the corridor's edge").toBeGreaterThan(0);
+      await expect(page.getByTestId("editor-leg-style-corridor-note")).toBeVisible();
+      // The selected leg's outline stands in for its guide; deselected, the guide marks the leg, and a click on it selects it.
+      expect(await guides()).toBe(0);
+      await dropSelection(page);
+      await expect.poll(guides, { timeout: 15000 }).toBe(1);
+      expect((await toolShapes(page, "editor-corridor-guide"))[0].data).toMatchObject({ course: name });
+      const mid = await legClickPoint(page, name, a, b);
+      await expect(async () => {
+        await dropSelection(page);
+        await clickMap(page, await toPage(page, mid));
+        await expect(page.getByTestId("editor-leg-corridor-remove")).toBeVisible({ timeout: 3000 });
+      }).toPass({ timeout: 30000 });
+      expect(await guides()).toBe(0);
+      // Never outside the views where legs are clickable: All controls draws none; back in Course view it is there.
+      await dropSelection(page);
+      await expect.poll(guides, { timeout: 15000 }).toBe(1);
+      await page.getByTestId("editor-view-all").click();
+      await expect.poll(guides, { timeout: 15000 }).toBe(0);
+      await page.getByTestId("editor-view-course").click();
+      await expect.poll(guides, { timeout: 15000 }).toBe(1);
+      await selectLeg(page, name, a, b);
 
       expect((await printed(page, nameId, `maps=${sheet.seq}`)).pages).toBe(1);
 
@@ -2959,6 +3020,12 @@ test.describe("F3: legs — styles, bends, corridors (docs/course-editor.md §6.
       await removed;
       await expect(page.getByTestId("editor-leg-corridor-add")).toBeVisible();
       await expect.poll(() => inkAt(page, band, "map"), { timeout: 30000 }).toBeGreaterThan(0);
+      // F14: the line is back, the note and the guide gone.
+      await expect.poll(() => inkAt(page, centre, "purple"), { timeout: 30000 }).toBeGreaterThan(0);
+      await expect(page.getByTestId("editor-leg-style-corridor-note")).toHaveCount(0);
+      await dropSelection(page);
+      await expect.poll(guides, { timeout: 15000 }).toBe(0);
+      await selectLeg(page, name, a, b);
       // Undo brings the corridor back.
       await page.keyboard.press("Control+z");
       await expect(page.getByTestId("editor-leg-corridor-remove")).toBeVisible({ timeout: 15000 });

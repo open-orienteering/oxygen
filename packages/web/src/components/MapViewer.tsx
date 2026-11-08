@@ -188,6 +188,8 @@ export interface EditorContextAction {
   variant?: "default" | "danger";
   /** Greyed out and inert — e.g. while an earlier edit is still saving. */
   disabled?: boolean;
+  /** A tooltip: what the entry does where its label does not say it (the map-issue point, course-editor.md §6.8). */
+  title?: string;
 }
 
 /**
@@ -2426,6 +2428,7 @@ export function MapViewer({
                 <button
                   key={a.id}
                   data-testid={`editor-action-${a.id}`}
+                  title={a.title}
                   onClick={a.onClick}
                   disabled={a.disabled}
                   className={`text-xs text-left ${bar ? "px-2.5" : "pl-2.5 pr-8"} py-1.5 rounded-md whitespace-nowrap transition-colors cursor-pointer disabled:opacity-40 disabled:cursor-default ${

@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 import type { course } from "@oxygen/shared";
 import type { ToolPointer } from "../../../components/MapViewer";
-import { areaBinding, crossingGhost, gapBinding, pickSymbolBinding, placeBinding, scaleAbout, selectBinding, type GestureRef } from "../tools/bindings";
+import { areaBinding, crossingGhost, gapBinding, pickSymbolBinding, placeBinding, scaleAbout, selectBinding, withCorridorGuides, type GestureRef } from "../tools/bindings";
 import { railKeyOf } from "../tools/rail";
 
 const ptr = (x: number, y: number, over: Partial<ToolPointer> = {}): ToolPointer => ({ pt: { x, y }, target: null, shift: false, mmPerPx: 0.1, ...over });
@@ -573,5 +573,42 @@ describe("V on a selected leg: bend handles (docs/course-editor.md §6.7)", () =
     expect(o.onLegDoubleClick).not.toHaveBeenCalled();
     b.onDoubleClick!(ptr(10, 5, { target: { kind: "leg", courseId: "c", index: 0 } }));
     expect(o.onLegDoubleClick).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe("corridor guides (docs/course-editor.md §6.7, F14)", () => {
+  const guides = [
+    { course: "A", index: 0, points: [{ x: 0, y: 0 }, { x: 20, y: 0 }] },
+    { course: "A", index: 2, points: [{ x: 20, y: 0 }, { x: 25, y: 5 }, { x: 40, y: 10 }] },
+  ];
+
+  it("one blue dashed line per corridor leg, along its derived points, under the tool's own shapes", () => {
+    const base = selectBinding(selectOpts({ selected: square(4) }));
+    const b = withCorridorGuides(base, guides)!;
+    const drawn = b.shapes!.filter((s) => s.testId === "editor-corridor-guide");
+    expect(drawn).toEqual([
+      { kind: "line", points: guides[0].points, dashed: true, color: "#2563eb", testId: "editor-corridor-guide", data: { course: "A", leg: "0" } },
+      { kind: "line", points: guides[1].points, dashed: true, color: "#2563eb", testId: "editor-corridor-guide", data: { course: "A", leg: "2" } },
+    ]);
+    expect(b.shapes!.slice(0, 2)).toEqual(drawn);
+    expect(b.shapes!.slice(2)).toEqual(base.shapes);
+  });
+
+  it("keeps the tool's hooks; a press on a guide is the viewer's (the leg click through the UI legs)", () => {
+    const o = selectOpts();
+    const b = withCorridorGuides(selectBinding(o), guides)!;
+    expect(b.onPointerDown!(ptr(10, 0, { target: { kind: "leg", courseId: "A", index: 0 } }))).toBe(false);
+    const area = areaBinding({ gesture: { current: null }, poly: { kind: "oob_area" as const, vertices: [] }, hover: null, onHover: vi.fn(), snap: (p) => p, onPoly: vi.fn(), onDone: vi.fn(), onCancel: vi.fn() });
+    const armed = withCorridorGuides(area, guides)!;
+    expect(armed.exclusive).toBe(area.exclusive);
+    expect(armed.onClick).toBe(area.onClick);
+  });
+
+  it("no guides: the binding unchanged; no binding: the guides alone", () => {
+    const base = selectBinding(selectOpts());
+    expect(withCorridorGuides(base, [])).toBe(base);
+    expect(withCorridorGuides(null, [])).toBeNull();
+    expect(withCorridorGuides(null, guides)!.shapes).toHaveLength(2);
+    expect(withCorridorGuides(null, guides)!.onPointerDown).toBeUndefined();
   });
 });
