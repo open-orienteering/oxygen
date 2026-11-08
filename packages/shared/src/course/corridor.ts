@@ -349,10 +349,17 @@ function openingsOf(ends: readonly LegEnd[], mouths: ReadonlyMap<string, Mouth>,
     const R = mouth.extent, h = e.half, c = e.c;
     if (!(h > 0 && h < R)) continue;
     // The leg's segments that come within h of the circle.
-    const near: [Pt, Pt][] = [];
-    for (let i = 0; i + 1 < e.path.length; i++) if (distToSegment(c, e.path[i], e.path[i + 1]) <= R + h) near.push([e.path[i], e.path[i + 1]]);
+    // Each with its bounds grown by h and 1 µm for rounding: a point outside them is farther than h (F20b).
+    const near: { p: Pt; q: Pt; x0: number; x1: number; y0: number; y1: number }[] = [];
+    for (let i = 0; i + 1 < e.path.length; i++) {
+      const p = e.path[i], q = e.path[i + 1], g = h + 1;
+      if (distToSegment(c, p, q) <= R + h) near.push({ p, q, x0: Math.min(p.x, q.x) - g, x1: Math.max(p.x, q.x) + g, y0: Math.min(p.y, q.y) - g, y1: Math.max(p.y, q.y) + g });
+    }
     const at = (a: number): Pt => ({ x: c.x + R * Math.cos(a), y: c.y + R * Math.sin(a) });
-    const inStrip = (a: number) => near.some(([p, q]) => distToSegment(at(a), p, q) < h);
+    const inStrip = (a: number) => {
+      const pt = at(a);
+      return near.some((s) => pt.x >= s.x0 && pt.x <= s.x1 && pt.y >= s.y0 && pt.y <= s.y1 && distToSegment(pt, s.p, s.q) < h);
+    };
     const step = (2 * Math.PI) / OPENING_SAMPLES;
     const flags = Array.from({ length: OPENING_SAMPLES }, (_, k) => inStrip(k * step));
     const first = flags.indexOf(false);
