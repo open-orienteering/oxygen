@@ -188,11 +188,13 @@ exchange lists its parts (§6.9).
 | Leg section: crossing ✕, *section* (§6.8) | `setStructure(setLegProps { crossing })` | `setStructure(prev)` |
 | click a leg (selected course) | phantom with the insert position (`insertIndexForLeg`: before the row the leg ends at, last when it ends at the finish) + **Insert into course**; the phantom is the **selected leg** — the inspector's *Leg* section (§6.7) and, on desktop and tablet, **Add bend here** | — |
 | Leg section: style, bends ✕, corridor *Add* / fields / *Remove* (§6.7) | `setStructure(setLegProps)`: the item's `leg` patched, its other props kept | `setStructure(prev)` |
-| **Add bend here** (leg phantom) | `setStructure(setLegProps { bends })`: the phantom's point inserted on the nearest segment (`insertBendAt`) | `setStructure(prev)` |
+| **Add bend here** (leg phantom) | `setStructure(setLegProps { bends })`: a **smooth** bend at the nearest point of the nearest segment (`insertBendAt`; F16) — `Alt` held on the click: a corner | `setStructure(prev)` |
 | **Create variation here** (a top-level leg phantom, desktop and tablet; §12) | `setStructure(createGroup)`: a group with empty alternatives A and B between the leg's ends; A is shown and active | `setStructure(prev)` — the group and its variants go |
 | variation block: a tab (`editor-variation-tab-<label>`), `1–9` on the selection's group (§12) | — the alternative shown in Course view and where `K` goes | — |
 | variation block: ＋ (`editor-variation-add`), ✎ / double-click a tab (`editor-variation-rename`, `-label`), ✕ (`editor-variation-remove`), *Loop* (`editor-variation-loop`), a row dropped on a tab | `setStructure(addAlternative / renameAlternative / removeAlternative / setLoop / moveToAlternative)` | `setStructure(prev)` |
-| drag a bend handle (`V`, selected leg) | one `setStructure(setLegProps { bends })` on release | `setStructure(prev)` |
+| drag a bend handle (`V`, selected leg) | one `setStructure(setLegProps { bends })` on release, the bend's handles moved with it | `setStructure(prev)` |
+| drag a bend grip (`V`, selected leg; F16) | one `setStructure(setLegProps { bends })` on release: that handle moved, the pair mirrored unless `Alt` | `setStructure(prev)` |
+| `Alt`-click a bend handle, or the bend row's **Smooth** / **Corner** (F16) | one `setStructure(setLegProps { bends })`: the bend corner ↔ smooth | `setStructure(prev)` |
 | `Delete` / `Backspace` with a focused bend | `setStructure(setLegProps { bends })` without it | `setStructure(prev)` |
 | `A` → **Corridor on selected leg** (`C`) | `setStructure(setLegProps { corridor })` with the default corridor | `setStructure(prev)` |
 | Insert into course | create + `setStructure(insertSite)` | as Add to ‹course› |
@@ -710,9 +712,19 @@ or writing another item's leg.
   hidden inside the corridor and its edge marks the leg (F14,
   `course-layer.md` §10.2 "No centre line").
 - **Bends** (`editor-leg-bend`, `data-index` / `data-x` / `data-y` paper
-  mm, `data-focused`): one row per bend in order, a click focuses it, ✕
-  (`editor-leg-bend-remove`) removes it; `editor-leg-bends-empty` without
-  bends. No numeric edit: the handle and *Add bend here* place them.
+  mm, `data-curve` `smooth` (a handle stored) / `corner`, `data-focused`):
+  one row per bend in order, its kind named after its point, a click
+  focuses it, ✕ (`editor-leg-bend-remove`) removes it;
+  `editor-leg-bends-empty` without bends. The focused row shows
+  **Smooth** (`editor-leg-bend-smooth`) and **Corner**
+  (`editor-leg-bend-corner`), the bend's current kind disabled: each is
+  the Alt-click below, one write — the tablet's way to switch a bend
+  (F16; no Alt on touch). No numeric edit: the handle, its grips and
+  *Add bend here* place them. A hint line (`editor-leg-bends-hint`)
+  says how to add one while the leg has none (`legBendsHint`) and names
+  the gestures once it has bends (`legBendsEditHint`), so a leg without
+  bends keeps the section's height of before (the inspector's Checks
+  header sits over a scrolled section's lower rows).
 - **Corridor** (`editor-leg-corridor`): **Add corridor**
   (`editor-leg-corridor-add`) writes the default corridor — 50 m wide,
   edge on, a 5 mm white band, opacity 1 (decision log, F3: a band visible
@@ -724,20 +736,63 @@ or writing another item's leg.
   stored value again.
 
 **Map.** In `V`, the selected leg draws its outline (`editor-leg-outline`,
-dashed, from → bends → to) and a handle per bend (`editor-bend-handle`,
-`data-index`, `data-focused`; the focused one active). A press within
-the handle reach (7 CSS px) takes the gesture before anything else under
-it: past 3 px it drags the bend (snapped, §6.2; the outline follows on
-the UI layer, no layer request per move — `corridorGeometry` is not paid
-per frame) and the release writes once and focuses it; a release without
-movement focuses it. A double-click on a handle inserts no control. The
-leg's action bar gains **Add bend here** (`editor-action-add-bend`): the
-phantom's point becomes a bend on the segment of the polyline nearest it
-(`insertBendAt`, `lib/editor/bends.ts`), focused; the double-click on a
-leg stays *insert control* (§6.5, D5). `Delete` / `Backspace` removes the
-focused bend (§6.5). Bend focus is page state keyed by the leg's item and
-cleared by another leg click, undo and redo. A bend is paper mm, rounded
-to 0.01 mm.
+dashed: the leg as the layer draws it, `legPolyline(from, bends, to)` —
+the curve flattened at 5 µm, exactly from → bends → to without handles),
+a handle per bend (`editor-bend-handle`, `data-index`, `data-focused`;
+the focused one active) and a grip per stored Bézier handle
+(`editor-bend-grip`, `data-index`, `data-which` `in` / `out`). The
+gestures are §7's "Editing geometry" on the open path
+`[from, …bends, to]` (F16, user answer Q2 of feedback 2026-11-08: the
+same convention as every vertex tool, F18 — **smooth by default, Alt
+for sharp**), edited through `geometry-edit.ts` by `lib/editor/bends.ts`
+(`legPath`, edited with `closed: false`: an open path, curves allowed).
+The sites are the path's fixed ends: they are never dragged here and
+never carry a handle (an open path's ends have no smooth form, a split
+gives a corner end no handle, and only the bends — the path without its
+two ends — are written back), and handles exist on bends only (user
+answer Q1).
+
+- **Pressing order**: a bend handle, then a grip, within the handle
+  reach (7 CSS px), before anything else under it (the leg would be a leg
+  click); then the selected object's and the usual §6.5 ones.
+- **Drag a bend** (past 3 px; with `Alt` too, F18): the bend moves,
+  snapped (§6.2), its handles with it (`moveBend`); the outline follows on
+  the UI layer, no layer request per move (`corridorGeometry` is not paid
+  per frame); the release writes once and focuses it. A release without
+  movement focuses it.
+- **`Alt`-click a bend**: focuses it and toggles it (`toggleBendSmooth` =
+  `toggleSmooth`): a bend with a handle becomes a corner, a corner
+  becomes smooth with handles from its neighbours (`smoothHandles`:
+  `hOut = (next − prev) / 6`, `hIn = −hOut`, the neighbours being the
+  adjacent bends or sites). One write.
+- **Drag a grip** (past 3 px, not snapped: a handle is shape, not a
+  place): the handle moves by the pointer's offset (`dragBendGrip` =
+  `dragGrip`): a mirrored pair stays mirrored, a smooth pair keeps the
+  other's length, a lone handle moves alone; `Alt` held (live) breaks the
+  pair, `Shift` turns the handle to 45°. The release writes once and
+  focuses the bend; a click on a grip does nothing.
+- **Add bend here** (`editor-action-add-bend`, the leg's action bar):
+  a bend on the segment whose (flattened) path is nearest the phantom's
+  point, at that segment's nearest point (`insertBendAt`, `nearestEdge`
+  on the path), so the leg keeps its order of vertices and its shape:
+  **smooth** — on a straight segment with handles from its neighbours
+  (collinear with the segment, so the leg is unchanged until a grip or
+  the bend moves), on a curved one by `insertVertex`'s de Casteljau
+  split (the curve kept, the neighbours' facing handles shortened);
+  with `Alt` held on the click, a **corner** (on a curve the split's
+  handles of the new bend dropped, the neighbours' kept). The new bend is
+  focused. The double-click on a leg stays *insert control* (§6.5, D5);
+  a double-click on a handle or grip inserts nothing.
+- **Stored corner bends** (imports, F3's bends) stay corners until edited:
+  a drag moves no handle into them, a neighbour's insert leaves them
+  alone.
+- `Delete` / `Backspace` removes the focused bend (§6.5). Bend focus is
+  page state keyed by the leg's item and cleared by another leg click,
+  undo and redo.
+- A bend and its handles are paper mm, rounded to 0.01 mm half away from
+  zero (so a mirrored pair stays exactly mirrored; a handle that rounds to
+  nothing is dropped); every gesture is one `setStructure`
+  and one undo entry.
 
 **The corridor guide** (F14, user feedback 2026-11-08 item 2): the layer
 draws no line along a `line` leg with a corridor (`course-layer.md`
@@ -771,19 +826,18 @@ polyline. The bend handles and the dashed leg outline are the stored
 bends only (the crossing point is a site, moved as one). A
 `course-leg` mirror item carries its leg's resolved `data-style`.
 A stored bend may carry Bézier handles (F13, `course-layer.md` §10.1):
-the layer draws the curve, and every readout above, *Add bend here*
-(`bendSegmentAt`: the segment whose curve is nearest, the new bend a
-corner, the others' handles kept) and a moved bend (its handles move
-with it, `moveBend`) read the shared flattened polyline (`legPolyline`
-= `course.legPolylineOf`); no gesture writes a handle until F16, and
-until then the dashed outline joins the bends with straight segments
-and a dragged bend's write drops its own handles (Pending).
+the layer draws the curve, and every readout above and the dashed
+outline read the shared flattened polyline (`legPolyline` =
+`course.legPolylineOf`), so every editor composition of
+`[from, …bends, to]` is the drawn curve (F16); *Add bend here* finds its
+segment on the path itself (`nearestEdge`, the exact cubics).
 
 **Phone** (08 §5.5 "desktop-only by design", §10): a tapped leg shows the
 section in the sheet with every control disabled and the line *Leg
 editing is for desktop and tablet* (`editor-leg-readonly`); no handles,
 no *Add bend here*, no corridor entry. A tablet edits from the inspector
-and the action bar; bend drags take a mouse (the touch path offers
+and the action bar (its bend row's **Smooth** / **Corner** in place of
+Alt-click); bend and grip drags take a mouse (the touch path offers
 presses to a tool only on object targets, §10; Pending).
 
 ### 6.8 Crossing and map-issue points
@@ -947,7 +1001,8 @@ own units), which Layout mode's selected paths use too, in page mm
 (`course-layout.md` §3). The convention is the drawing's (§6.4, F18):
 **smooth by default, Alt for sharp** — an inserted vertex is smooth, Alt
 makes it a corner, and Alt-click switches a vertex between the two. It
-lives in the shared module so that F16's leg bends take it unchanged.
+lives in the shared module, and a selected leg's bends take it unchanged
+(F16, §6.7: the open path `[from, …bends, to]`, its sites fixed corners).
 
 | Gesture | Edit | |
 |---|---|---|
@@ -1503,14 +1558,14 @@ whose poll ran meanwhile simply does not conflict (decision log, D10).
 | unit (web) | `packages/web/src/lib/editor/__tests__/hit.test.ts` | §5 over the real worker: interior and ring, start and finish, legs with course and index, empty map, tolerance, numbers, UI-layer sites under layer objects; closed areas by their outline only (D12): inside an `oob_area` / a white-out → null, its edge → the object, a 709.b border not grabbing the interior, a control and a leg inside a white-out still hit, a line by its stroke, a `UiArea`'s interior → null |
 | unit (web) | `lib/editor/__tests__/conflict.test.ts`, `write-client.test.ts` | §3: rebase vs moved vs refresh, unknown base, structure never merged; tokens sent and advanced, one re-send, `EditorConflict`, code re-keying, delete seeding |
 | unit (web) | `lib/editor/__tests__/structure-edit.test.ts`, `sequence.test.ts`, `state.test.ts` | §4: sequence positions, insert / append / remove / move / role, legs dropped on a new predecessor; display sequence, explicit structure, leg → insert position; §3 Escape cascade, hide-others, modes |
-| unit (web) | `pages/editor/__tests__/action-bar.test.ts` | §4: the entries per selection, the legacy ids; a leg: *Add bend here* only where the leg can be edited (§6.7); empty map: *Add map-issue point* with its tooltip key (F14), a crossing / map-issue point: *Delete* only (§6.8) |
+| unit (web) | `pages/editor/__tests__/action-bar.test.ts` | §4: the entries per selection, the legacy ids; a leg: *Add bend here* only where the leg can be edited (§6.7), its click's Alt handed to the page (F16); empty map: *Add map-issue point* with its tooltip key (F14), a crossing / map-issue point: *Delete* only (§6.8) |
 | unit (web) | `pages/editor/__tests__/placement.test.ts` "C: the crossing tool", `bindings.test.ts` "the crossing ghost", `lib/editor/__tests__/checks.test.ts` "legs keep their bends and crossing point" | §6.8: armed on a leg it names the leg, free otherwise; no number or pending leg; a placement on a leg ends the chain (`endsChain`), a free one stays armed; switching arms afresh; the ghost's two lines along the passage (east, north), no circle, its label, the rail lights `C`; `checkStructureOf` keeps bends and the crossing (public id as a string) |
 | E2E | `e2e/course-editor.spec.ts` "F4: crossing and map-issue points" (`chromium`) | §6.8: a selected leg, `C` (lit), the ghost `crossing_point`, a click → one `course.setStructure`, back to `V`, one `course-site` `data-role="crossing_point"` whose `data-angle` is the leg's direction, the leg's drawn piece has a vertex within 0.3 mm of it, the on-map sheet's wide row `data-symbol-key="13.3"`; the Leg section names it, *Crossing section* → 13.4 (`data-section`); two undos → 13.3 again, then no crossing and no row. *Add map-issue point* on empty map → a `course-site` `data-role="map_issue"` in Course view, the kind select reads it; the course sheet's `maps.pdf` has the same stroke count, the all-controls print gains strokes (`analysePdf.strokes`) |
-| unit (web) | `lib/editor/__tests__/structure-edit.test.ts` "leg props", `bends.test.ts`, `sequence.test.ts`, `pages/editor/__tests__/rail.test.ts` | §6.7: `setLegProps` merges and keeps the other props, drops `undefined` / `line` / empty bends and an empty leg, no-op on the first item; a leg whose predecessor changes still loses it; bends inserted on the nearest segment (first, middle, last), moved, removed; distance, fraction, point and slice along the bent length; `legForInsert` the inverse of `insertIndexForLeg` (unpositioned rows skipped); the corridor chord key outside `AREA_CHOICES` |
-| unit (web) | `pages/editor/__tests__/bindings.test.ts` "V on a selected leg", "leg gaps", `gaps.test.ts` | §6.7: outline through the bends and a handle per bend (`data-focused`); a drag redraws, writes once with the moved (snapped) bend; a click focuses; a cancelled drag writes nothing; a double-click on a handle inserts no control. §6.3: gaps along a bent leg (fractions of the bent length, the target and gaps drawn along it) |
+| unit (web) | `lib/editor/__tests__/structure-edit.test.ts` "leg props", `bends.test.ts`, `sequence.test.ts`, `pages/editor/__tests__/rail.test.ts` | §6.7: `setLegProps` merges and keeps the other props, drops `undefined` / `line` / empty bends and an empty leg, no-op on the first item; a leg whose predecessor changes still loses it; bends inserted on the nearest segment (first, middle, last) smooth with handles from their neighbours, Alt a corner, a curved segment split with its shape kept (F16), toggled corner ↔ smooth and set by Smooth / Corner, a grip mirrored / Alt / Shift, every number at 0.01 mm, moved with their handles, removed; distance, fraction, point and slice along the bent length; `legForInsert` the inverse of `insertIndexForLeg` (unpositioned rows skipped); the corridor chord key outside `AREA_CHOICES` |
+| unit (web) | `pages/editor/__tests__/bindings.test.ts` "V on a selected leg", "leg gaps", `gaps.test.ts` | §6.7: outline through the bends and a handle per bend (`data-focused`); a drag redraws, writes once with the moved (snapped) bend; a click focuses; a cancelled drag writes nothing; a double-click on a handle inserts no control. F16 ("smooth bends, grips, Alt"): the outline the flattened curve, a grip per handle (none on a corner); a grip drag by the pointer's offset, mirrored, the outline following, one write and the bend focused; Alt live breaks the pair, Shift 45°; a grip click or cancelled drag writes nothing, a double-click on a grip inserts no control; a handle beats a grip; a bend drag keeps its handles, Alt or not; Alt-click toggles both ways, one write. §6.3: gaps along a bent leg (fractions of the bent length, the target and gaps drawn along it) |
 | unit (web) | `lib/editor/__tests__/hit.test.ts` "a leg with no line", "a corridor's edge …" | §5, §6.7: a `none` leg has no hit-index piece; `uiLegsOf` hits it from the derivation's pieces, a circle at its end wins, `accept` passes over it; F14: a corridor leg likewise (no hit piece, a UI leg, the edge no target), a `marked_route` one keeps its piece |
 | unit (web) | `pages/editor/__tests__/bindings.test.ts` "corridor guides" | §6.7 (F14): one blue dashed `editor-corridor-guide` per corridor leg along its points with `data-course` / `data-leg`, under the tool's shapes; the tool's hooks kept (a press on a guide declines; an armed tool stays exclusive); no guides → the binding unchanged, no binding → the guides alone |
-| E2E | `e2e/course-editor.spec.ts` "F3: legs — styles, bends, corridors" (`chromium`), "F3 on a phone" (`mobile`) | §6.7: a leg made a marked route → its `course-leg` pieces `data-style="marked_route"`, `none` and the leg still selects by a click, two undos back to `line`; *Add bend here* → one `editor-bend-handle`, dragged 60 px → the drawn leg has a vertex within 0.3 mm of it and the row's metres grow, `Delete` removes it (metres back, both controls still on the course); `A` then `C` → the default corridor, no map colour left in the band beside the edge (`inkAt` "map" = 0, > 0 before), the entry disabled with a corridor, the course's sheet prints one page, a width of 0, a white band of −1 and an opacity of 2 not written (the stored values shown again), a width of 80 written, *Remove* brings the map back, undo the corridor; F14: no purple along the leg's middle inside the corridor (> 0 before and after *Remove*) while the edge is purple, the Style note shown, with the leg selected no `editor-corridor-guide` (its outline instead), deselected exactly one, none in All controls and one again in Course view, a click on the leg (where it is clearest of other sites — every F3 leg click, `legClickPoint`) selects it again, after *Remove* no guide and no note. On a phone a tapped leg shows `editor-leg` read-only with `editor-leg-readonly` and no *Add bend here* |
+| E2E | `e2e/course-editor.spec.ts` "F3: legs — styles, bends, corridors" (`chromium`), "F3 on a phone" (`mobile`) | §6.7: a leg made a marked route → its `course-leg` pieces `data-style="marked_route"`, `none` and the leg still selects by a click, two undos back to `line`; *Add bend here* → one `editor-bend-handle`, dragged 60 px → the drawn leg has a vertex within 0.3 mm of it and the row's metres grow, `Delete` removes it (metres back, both controls still on the course); `A` then `C` → the default corridor, no map colour left in the band beside the edge (`inkAt` "map" = 0, > 0 before), the entry disabled with a corridor, the course's sheet prints one page, a width of 0, a white band of −1 and an opacity of 2 not written (the stored values shown again), a width of 80 written, *Remove* brings the map back, undo the corridor; F14: no purple along the leg's middle inside the corridor (> 0 before and after *Remove*) while the edge is purple, the Style note shown, with the leg selected no `editor-corridor-guide` (its outline instead), deselected exactly one, none in All controls and one again in Course view, a click on the leg (where it is clearest of other sites — every F3 leg click, `legClickPoint`) selects it again, after *Remove* no guide and no note. F16: *Add bend here* stores a smooth bend (`hOut` ≈ (b − a) / 6, `hIn` = −`hOut`), `data-curve="smooth"`, two `editor-bend-grip`, the outline 3 points and the metres unchanged; the upper grip on screen (clear of the action bar) dragged 60 px → one write, the pair still mirrored, the outline > 3 points, the metres grow; the same grip dragged again with Alt → only its handle changes; Alt-click the bend → no handles stored, `data-curve="corner"`, no grips, *Corner* disabled; *Smooth* → two grips again; two undos back to the corner, then to the broken pair; the course's sheet prints one page; Alt held on *Add bend here* → a corner (no handles, no grips, *Smooth* enabled). On a phone a tapped leg shows `editor-leg` read-only with `editor-leg-readonly` and no *Add bend here* |
 | E2E | `e2e/course-editor.spec.ts` "Course editor (new, GL canvas)" (`chromium`) | §1: the editor mounts (never `course-editor-page`), and on an event with no map it mounts over the panel's upload prompt (no viewer); the shell (`C` enabled since F4, `X` since F5); place → move → undo / redo → reload → select on the canvas → delete; create a course, append two controls, add-to-course on the map, reorder + undo, insert on a leg, remove, reload with `?course=` (explicit start / finish rows); deep links, `H`, Escape cascade; the Courses page's `course-edit-link` and the Controls page's `control-edit-link` open the new editor on the course / with the control selected (one `editor-selection-ring`) |
 | E2E | `e2e/course-editor.spec.ts` "Course mode (§4)" (`chromium`) | delete cascade: a control on two courses is deleted from the action bar — the site goes, both structures lose it (the open one's rows, the other through `course.list`), `Ctrl+Z` restores the site and both visits; *Remove from course* drops one visit and keeps the site; inline code edit in the sequence (`editor-seq-code` → 997: the row's `data-control-id` and the site follow, `Ctrl+Z` back; a duplicate code → `editor-error` "already exists"); free order (`editor-order-mode`): the hint, no reorder arrows, the layer draws no legs and labels the circles with their codes, a number drag still writes `course.setControlLabelOffset`; a number drag (the shared hit-test's `number` target): the `course-label` moves, persists over a reload, *Reset label* puts the automatic place back, undo the dragged one; clone (`editor-clone-*`, "A (copy)" prefilled, same rows) and no `editor-toggle-first-start` / `-last-finish` even with a legacy-flag course in the event |
 | E2E | `e2e/course-editor.spec.ts` "Course mode descriptions (§4)" (`chromium`) | the description editor: Escape closes only the dialog (the control stays selected), column C which-of-similar with written titles (`desc-opt-label-0.1N`), a boulder and dimensions with the live preview (`desc-dim-input` → `desc-preview`), saved, reloaded, the summary; *Clear* + save stores none, `Ctrl+Z` writes the saved description back (the control's own description written back after); a control placed on the map is described from the base map (no suggestion offered, a pressed option in `desc-editor`), after a move it stays selected with its action bar and at most one suggestion; the description sheet: "All controls" with every control until a course is picked, then course E's card (event name, course name, the finish row's measured metres, the thick rules); description instructions (E3b): the collapsed block's summary, the finish variant 14.1 (one `course.update`; the sheet's finish row changes, `course.list` has it), a special row with 60 m (a wide row with "60 m"), anchored after a control by its punch code — `courseMap.resolveSheet`'s block has the special after that control and the 14.1 finish —, `Ctrl+Z` puts it after the start again, all persisted over a reload |
@@ -1569,16 +1624,10 @@ whose poll ran meanwhile simply does not conflict (decision log, D10).
 
 ## Pending in this chapter
 
-- **Bézier handles on bends** (§6.7; F16): the layer, the lengths and
-  the readouts draw and measure a curved bend since F13, but no gesture
-  creates or edits a handle, the dashed outline (`editor-leg-outline`)
-  is the straight polyline through the bends, and the `V` bend drag
-  (`tools/bindings.ts`) writes the dragged bend as a corner. F16 brings
-  the grips, the smooth-by-default insert and the flattened outline.
-- **Bend drags on touch** (§6.7, F3): a tablet or phone moves no bend
-  handle (the touch path offers presses to a tool only on object targets,
+- **Bend drags on touch** (§6.7, F3, F16): a tablet or phone moves no bend
+  handle or grip (the touch path offers presses to a tool only on object targets,
   §10); the tablet adds and removes bends from the action bar and the
-  inspector. The selected leg has no highlight beyond the UI outline.
+  inspector and switches a bend corner / smooth from its row. The selected leg has no highlight beyond the UI outline.
 - **The leg's gaps in the Leg section** (08 §5.2 "leg: style, gaps,
   corridor, crossing"): gaps stay the `G` tool's (§6.3); the crossing row
   is F4's (§6.8).

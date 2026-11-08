@@ -30,6 +30,8 @@ export interface LegSectionProps {
   readOnly: boolean;
   onPatch: (patch: LegPatch) => void;
   onFocusBend: (index: number | null) => void;
+  /** The focused bend's **Smooth** / **Corner** (F16; the tablet's Alt-click): one write. */
+  onBendKind: (index: number, kind: "smooth" | "corner") => void;
 }
 
 /** A number field committed on blur (or Enter) when `valid`; otherwise the stored value comes back. */
@@ -77,20 +79,33 @@ export function LegSection(p: LegSectionProps) {
           <p data-testid="editor-leg-bends-empty" className="text-[11px] text-slate-400">{t("legBendsNone")}</p>
         ) : (
           <ul className="space-y-0.5">
-            {bends.map((b, i) => (
-              <li key={i} data-testid="editor-leg-bend" data-index={i} data-x={b.x} data-y={b.y} data-focused={p.focusedBend === i ? "true" : "false"}
-                className={`flex items-center gap-1.5 rounded px-1 ${p.focusedBend === i ? "bg-purple-50" : ""}`}>
+            {bends.map((b, i) => {
+              const curve = b.hIn || b.hOut ? "smooth" : "corner";
+              const focused = p.focusedBend === i;
+              return (
+              <li key={i} data-testid="editor-leg-bend" data-index={i} data-x={b.x} data-y={b.y} data-curve={curve} data-focused={focused ? "true" : "false"}
+                className={`flex items-center gap-1.5 rounded px-1 ${focused ? "bg-purple-50" : ""}`}>
                 <button type="button" className="flex-1 text-left font-mono text-[11px] text-slate-600 cursor-pointer" onClick={() => p.onFocusBend(i)}>
-                  {i + 1}. {b.x.toFixed(1)}, {b.y.toFixed(1)} mm
+                  {i + 1}. {b.x.toFixed(1)}, {b.y.toFixed(1)} mm <span className="text-slate-400">{t(curve === "smooth" ? "legBendSmooth" : "legBendCorner")}</span>
                 </button>
+                {focused && (
+                  <>
+                    <button type="button" data-testid="editor-leg-bend-smooth" disabled={readOnly || curve === "smooth"} onClick={() => p.onBendKind(i, "smooth")}
+                      className={`${BUTTON} border-purple-200 text-purple-700 hover:bg-purple-50`}>{t("legBendSmooth")}</button>
+                    <button type="button" data-testid="editor-leg-bend-corner" disabled={readOnly || curve === "corner"} onClick={() => p.onBendKind(i, "corner")}
+                      className={`${BUTTON} border-purple-200 text-purple-700 hover:bg-purple-50`}>{t("legBendCorner")}</button>
+                  </>
+                )}
                 <button type="button" data-testid="editor-leg-bend-remove" aria-label={t("legBendRemove")} title={t("legBendRemove")} disabled={readOnly}
                   onClick={() => p.onPatch({ bends: bends.filter((_, k) => k !== i) })}
                   className="px-1 text-slate-400 hover:text-red-600 cursor-pointer disabled:opacity-40 disabled:cursor-not-allowed">✕</button>
               </li>
-            ))}
+              );
+            })}
           </ul>
         )}
-        {!readOnly && <p className="text-[10px] text-slate-400">{t("legBendsHint")}</p>}
+        {/* Without bends: how to add one; with bends: the gestures on them (F16): a leg without bends keeps its height. */}
+        {!readOnly && <p data-testid="editor-leg-bends-hint" className="text-[10px] text-slate-400">{t(bends.length === 0 ? "legBendsHint" : "legBendsEditHint")}</p>}
       </div>
 
       <div data-testid="editor-leg-corridor" className="space-y-1">

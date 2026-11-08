@@ -64,7 +64,7 @@ import {
 } from "../../lib/editor/structure-edit";
 import { allVariationDraws, courseDrawOf } from "../../lib/editor/variation-view";
 import { alternativeEndAt, courseViewOrders, displaySequence, effectiveEnds, explicitStructure, insertIndexForLeg, kindOfSites, legForInsert, variationBlocks, type SiteRow } from "../../lib/editor/sequence";
-import { insertBendAt, legPolyline, projectOnPolyline } from "../../lib/editor/bends";
+import { insertBendAt, legPolyline, projectOnPolyline, setBendKind } from "../../lib/editor/bends";
 import { courseActions } from "./ActionBar";
 import { TopBar } from "./TopBar";
 import { ToolRail, type AreaChoice } from "./ToolRail";
@@ -436,15 +436,21 @@ export function EditorPage() {
   const focusBend = useCallback((index: number | null) => {
     setBendFocus(index === null || !selectedLeg ? null : { itemIndex: selectedLeg.itemIndex, index });
   }, [selectedLeg]);
-  const addBend = useCallback(() => {
+  /** *Add bend here* (§6.7, F16): a smooth bend on the leg at the phantom; Alt held on the click, a corner. Focused. */
+  const addBend = useCallback((e?: { altKey?: boolean }) => {
     const p = state.phantom;
     if (!selectedLeg || !p) return;
-    const before = selectedLeg.props.bends ?? [];
-    const bends = insertBendAt(selectedLeg.fromPt, before, selectedLeg.toPt, { x: p.x, y: p.y });
-    const at = bends.findIndex((b, i) => b !== before[i]);
+    const { bends, index } = insertBendAt(selectedLeg.fromPt, selectedLeg.props.bends, selectedLeg.toPt, { x: p.x, y: p.y }, !!e?.altKey);
     writeLeg({ bends });
-    setBendFocus({ itemIndex: selectedLeg.itemIndex, index: at < 0 ? bends.length - 1 : at });
+    setBendFocus({ itemIndex: selectedLeg.itemIndex, index });
   }, [state.phantom, selectedLeg, writeLeg]);
+  /** The bend row's **Smooth** / **Corner** (§6.7, tablets): one write. */
+  const setBendCurve = useCallback((index: number, kind: "smooth" | "corner") => {
+    if (!selectedLeg) return;
+    const before = selectedLeg.props.bends ?? [];
+    const bends = setBendKind(selectedLeg.fromPt, before, selectedLeg.toPt, index, kind);
+    if (bends.some((b, i) => b !== before[i])) writeLeg({ bends });
+  }, [selectedLeg, writeLeg]);
   // ─── Variation authoring (§12; 08 §5.3) ──────────────────
   /** *Create variation here*: on a selected top-level leg in Course view, desktop and tablet. */
   const variationHere = legEditable && state.view === "course" && !!explicit && !!state.phantom && state.phantom.insertAt !== null
@@ -1941,6 +1947,7 @@ export function EditorPage() {
       readOnly={!legEditable}
       onPatch={writeLeg}
       onFocusBend={focusBend}
+      onBendKind={setBendCurve}
     />
   ) : (
     <>

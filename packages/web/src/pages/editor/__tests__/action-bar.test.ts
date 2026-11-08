@@ -1,4 +1,4 @@
-import { describe, it, expect } from "vitest";
+import { describe, it, expect, vi } from "vitest";
 import { courseActions, type ActionContext, type ActionHandlers } from "../ActionBar";
 
 const noop = () => undefined;
@@ -25,6 +25,13 @@ describe("courseActions (the legacy popover's entries, docs/course-editor.md §4
 
   it("a crossing or map-issue point: delete only (§6.8)", () => {
     expect(ids({ selected: sel({ mark: true }), course: "Lång" })).toEqual(["delete"]);
+  });
+
+  it("Add bend here hands the click's Alt to the page: Alt inserts a corner (§6.7, F16)", () => {
+    const addBend = vi.fn();
+    const entry = courseActions({ ...base, phantom: { insertAt: 2 }, course: "Lång", legEdit: true }, { ...on, addBend }, label).find((a) => a.id === "add-bend")!;
+    entry.onClick({ altKey: true });
+    expect(addBend).toHaveBeenCalledWith({ altKey: true });
   });
 
   it("a leg: insert, and add bend where the leg can be edited (§6.7)", () => {

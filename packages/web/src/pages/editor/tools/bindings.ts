@@ -10,7 +10,7 @@ import type { course } from "@oxygen/shared";
 import type { EditorToolBinding, ToolPointer, ToolShape } from "../../../components/MapViewer";
 import type { EditorTarget } from "../../../lib/editor/hit";
 import { circleGapAt, circleGapFromDrag, compassDeg, legFraction, legGapAt, legGapFromDrag, type AngularGap, type FractionGap } from "./gaps";
-import { polylineDistance, polylineSlice } from "../../../lib/editor/bends";
+import { dragBendGrip, legPolyline, moveBend, polylineDistance, polylineSlice, toggleBendSmooth, type Bend } from "../../../lib/editor/bends";
 import { legLengthShape } from "../../../lib/editor/leg-length";
 import { isClosedKind, pointInPolygon, smoothed, step, type PolygonState } from "./polygon";
 import { outlinePoints, vertexRule, type Vertex } from "../../../lib/editor/geometry-edit";
@@ -34,8 +34,10 @@ export type Gesture =
   /** A press at `press` while drawing placed vertex `index` (snapped); a drag past 3 px from the press pulls its handles (§6.4). */
   | { kind: "poly-pull"; index: number; press: Pt; mmPerPx: number; poly: PolygonState; pulled: boolean }
   | { kind: "gap"; from: Pt; to: Pt }
-  /** Bend `index` of the selected leg dragged from `press` (§6.7); `bends` is the live list. */
-  | { kind: "bend"; index: number; press: Pt; mmPerPx: number; bends: Pt[]; moved: boolean }
+  /** Bend `index` of the selected leg dragged from `press` (§6.7); `bends` is the live list; `alt` is the press's (a click with it toggles corner / smooth). */
+  | { kind: "bend"; index: number; press: Pt; mmPerPx: number; bends: Bend[]; moved: boolean; alt: boolean }
+  /** A grip (handle `which`) of bend `index` dragged from `press` by the pointer's offset (§6.7, F16); `base` at the press, `bends` live; `alt` live breaks the pair. */
+  | { kind: "bend-grip"; index: number; which: "in" | "out"; press: Pt; mmPerPx: number; base: readonly Bend[]; bends: Bend[]; moved: boolean }
   | null;
 
 export interface GestureRef { current: Gesture }
@@ -133,13 +135,23 @@ export interface SelectOptions {
 export interface LegBends {
   from: Pt;
   to: Pt;
-  bends: readonly Pt[];
+  /** The stored bends: path vertices with optional handles (F13). */
+  bends: readonly Bend[];
   /** The focused bend (`Delete` removes it). */
   focused: number | null;
-  /** One write per drag, on release. */
-  onBendsChange: (bends: Pt[]) => void;
+  /** One write per gesture (a drag, on release; an Alt-click). */
+  onBendsChange: (bends: Bend[]) => void;
   onBendFocus: (index: number | null) => void;
   snap: (pt: Pt) => Pt;
+}
+
+/** The grip of a bend's handle within reach of `pt` (the first in order); null when none. */
+function bendGripAt(leg: LegBends, pt: Pt, reach: number): { index: number; which: "in" | "out" } | null {
+  for (const [index, b] of leg.bends.entries()) {
+    const grip = gripsOf(b).find((q) => near(q.at, pt, reach));
+    if (grip) return { index, which: grip.which };
+  }
+  return null;
 }
 
 /** The bend handle within reach of `pt`, nearest first; −1 when none. */
@@ -151,8 +163,6 @@ function bendAt(leg: LegBends, pt: Pt, reach: number): number {
   });
   return best;
 }
-
-const round2 = (v: number) => Math.round(v * 100) / 100;
 
 export function selectBinding(o: SelectOptions): EditorToolBinding {
   const g = o.gesture;
@@ -170,21 +180,31 @@ export function selectBinding(o: SelectOptions): EditorToolBinding {
   const gs = g.current;
   const leg = o.leg ?? null;
   if (leg) {
-    const bends = gs?.kind === "bend" ? gs.bends : leg.bends;
-    shapes.push({ kind: "line", points: [leg.from, ...bends, leg.to], dashed: true, color: BLUE, testId: "editor-leg-outline" });
+    // The live list during a bend or grip drag; the outline is the flattened curve the layer draws (F16).
+    const bends = gs?.kind === "bend" || gs?.kind === "bend-grip" ? gs.bends : leg.bends;
+    shapes.push({ kind: "line", points: legPolyline(leg.from, bends, leg.to), dashed: true, color: BLUE, testId: "editor-leg-outline" });
     bends.forEach((b, i) => {
-      const focused = gs?.kind === "bend" ? gs.index === i : leg.focused === i;
+      const focused = gs?.kind === "bend" || gs?.kind === "bend-grip" ? gs.index === i : leg.focused === i;
       shapes.push({ kind: "handle", x: b.x, y: b.y, active: focused, testId: "editor-bend-handle", data: { index: String(i), focused: String(focused) } });
+    });
+    bends.forEach((b, i) => {
+      for (const q of gripsOf(b)) shapes.push({ kind: "grip", x: q.at.x, y: q.at.y, from: b, testId: "editor-bend-grip", data: { index: String(i), which: q.which } });
     });
   }
   if (gs?.kind === "lasso" && gs.points.length > 1) shapes.push({ kind: "line", points: gs.points, closed: true, dashed: true, color: BLUE, fill: "rgba(37,99,235,0.08)", testId: "editor-lasso" });
   return {
     shapes,
     onPointerDown(p: ToolPointer) {
-      // A bend handle of the selected leg first: it sits on the leg, which the viewer would take as a leg click.
+      // A bend handle of the selected leg first, then a grip of one: they sit on or by the leg, which the viewer
+      // would take as a leg click.
       const bend = leg ? bendAt(leg, p.pt, HANDLE_PX * p.mmPerPx) : -1;
       if (leg && bend >= 0) {
-        g.current = { kind: "bend", index: bend, press: p.pt, mmPerPx: p.mmPerPx, bends: [...leg.bends], moved: false };
+        g.current = { kind: "bend", index: bend, press: p.pt, mmPerPx: p.mmPerPx, bends: [...leg.bends], moved: false, alt: !!p.alt };
+        return true;
+      }
+      const grip = leg ? bendGripAt(leg, p.pt, HANDLE_PX * p.mmPerPx) : null;
+      if (leg && grip) {
+        g.current = { kind: "bend-grip", ...grip, press: p.pt, mmPerPx: p.mmPerPx, base: leg.bends, bends: [...leg.bends], moved: false };
         return true;
       }
       const sel = shown(o);
@@ -226,8 +246,12 @@ export function selectBinding(o: SelectOptions): EditorToolBinding {
         // Past 3 px from the press it is a drag; until then a click (a focus).
         if (!cur.moved && near(cur.press, pt, 3 * cur.mmPerPx)) return;
         cur.moved = true;
-        const at = leg.snap(pt);
-        cur.bends = cur.bends.map((b, i) => (i === cur.index ? { x: round2(at.x), y: round2(at.y) } : b));
+        cur.bends = moveBend(cur.bends, cur.index, leg.snap(pt));
+        o.redraw();
+      } else if (cur?.kind === "bend-grip" && leg) {
+        if (!cur.moved && near(cur.press, pt, 3 * cur.mmPerPx)) return;
+        cur.moved = true;
+        cur.bends = gripDragged(cur, pt, mods);
         o.redraw();
       } else if (cur?.kind === "object" || cur?.kind === "grip") {
         const geometry = dragGeometry(cur, pt, mods);
@@ -241,10 +265,19 @@ export function selectBinding(o: SelectOptions): EditorToolBinding {
       if (cur.kind === "bend") {
         o.redraw();
         if (!pt || !leg) return;
-        if (!cur.moved) return leg.onBendFocus(cur.index);
-        const at = leg.snap(pt);
         leg.onBendFocus(cur.index);
-        return leg.onBendsChange(cur.bends.map((b, i) => (i === cur.index ? { x: round2(at.x), y: round2(at.y) } : b)));
+        if (cur.moved) return leg.onBendsChange(moveBend(cur.bends, cur.index, leg.snap(pt)));
+        // A click focuses; with Alt it also toggles the bend corner / smooth (F18's Alt-click, §7).
+        const toggled = cur.alt ? toggleBendSmooth(leg.from, leg.bends, leg.to, cur.index) : null;
+        if (toggled) leg.onBendsChange(toggled);
+        return;
+      }
+      if (cur.kind === "bend-grip") {
+        o.redraw();
+        // A click on a grip does nothing; a drag writes once and focuses its bend.
+        if (!pt || !leg || !cur.moved) return;
+        leg.onBendFocus(cur.index);
+        return leg.onBendsChange(cur.bends);
       }
       if (cur.kind === "shift-click") {
         if (pt) o.onToggleMulti(cur.id);
@@ -262,7 +295,7 @@ export function selectBinding(o: SelectOptions): EditorToolBinding {
     },
     onDoubleClick(p) {
       // On a bend handle: the press's focus already happened; no control is inserted under it (§6.7).
-      if (leg && bendAt(leg, p.pt, HANDLE_PX * p.mmPerPx) >= 0) return;
+      if (leg && (bendAt(leg, p.pt, HANDLE_PX * p.mmPerPx) >= 0 || bendGripAt(leg, p.pt, HANDLE_PX * p.mmPerPx))) return;
       // On the selected object's edge, off its vertices: a smooth vertex there, Alt a corner (§7 "Editing geometry").
       const sel = shown(o);
       const inserted = sel ? insertAtEdge(sel.geometry, vertexRule(sel.kind), p.pt, HANDLE_PX * p.mmPerPx, !!p.alt) : null;
@@ -298,6 +331,14 @@ export function selectBinding(o: SelectOptions): EditorToolBinding {
       },
     },
   };
+}
+
+/** A bend grip's drag at `pt`: the handle moved by the pointer's offset from the press (`dragBendGrip`; Alt and Shift live). */
+function gripDragged(d: Extract<Gesture, { kind: "bend-grip" }>, pt: Pt, mods?: { shift: boolean; alt: boolean }): Bend[] {
+  const b = d.base[d.index];
+  const h = (d.which === "out" ? b.hOut : b.hIn) ?? { x: 0, y: 0 };
+  const vec = { x: h.x + pt.x - d.press.x, y: h.y + pt.y - d.press.y };
+  return dragBendGrip(d.base, d.index, d.which, vec, mods?.alt ?? false, mods?.shift ?? false);
 }
 
 /** The selected object as the page shows it (a draft from the last gesture until the list catches up). */
