@@ -26,6 +26,7 @@ import { makeCaller } from "../helpers/caller.js";
 import { applyEventMap } from "../../event-map.js";
 import { clearEventDocumentCaches } from "../../map-store/event-document.js";
 import { hasTool, qpdfCheck } from "../../render/pdf-golden.js";
+import { Prisma } from "../../generated/prisma/client.js";
 
 const hasQpdf = await hasTool("qpdf");
 const fixture = resolve(__dirname, "../../../../../e2e/test.ocd");
@@ -222,6 +223,42 @@ describe("per-variant pages (course-print.md §4.6)", () => {
     expect(res.statusCode).toBe(200);
     expect(pageLabels(await PDFDocument.load(res.rawPayload))).toEqual(["Long AB", "Long BA", "Short"]);
   }, 60_000);
+
+  it("courseMap.resolveSheet { variantKey }: Layout mode and Class view of a root draw a variant (course-layout.md §1, §6)", async () => {
+    const sheet = (await ctx.db.courseMap.findFirstOrThrow({ where: { eventId: ctx.eventId, course: { seq: long.id } } })).seq;
+    const plain = await caller.courseMap.resolveSheet({ seq: sheet });
+    expect(plain.variantKey).toBeNull();
+    const ba = await caller.courseMap.resolveSheet({ seq: sheet, variantKey: "BA" });
+    expect(ba.variantKey).toBe("BA");
+    expect(ba.courseSeq).toBe(long.id);
+    expect(ba.page.textValues.variant).toBe("BA");
+    expect(ba.block.title).toBe("Long BA");
+    expect(ba.block.rows.filter((r) => r.kind === "control").map((r) => r.code)).toEqual(["31", "33", "31", "32", "34"]);
+    // Every variant and the root's own read share the window.
+    expect(ba.window).toEqual((await caller.courseMap.resolveSheet({ seq: sheet, variantKey: "AB" })).window);
+    const cls = await caller.courseMap.resolveSheet({ classSeq: h21, variantKey: "AB" });
+    expect([cls.variantKey, cls.block.header?.classNames, cls.classView?.className]).toEqual(["AB", "H21", "H21"]);
+    await expect(caller.courseMap.resolveSheet({ seq: sheet, variantKey: "ZZ" })).rejects.toMatchObject({ code: "NOT_FOUND" });
+    // A course without variants ignores the key.
+    const short = (await ctx.db.courseMap.findFirstOrThrow({ where: { eventId: ctx.eventId, course: { seq: shortSeq } } })).seq;
+    expect((await caller.courseMap.resolveSheet({ seq: short, variantKey: "AB" })).variantKey).toBeNull();
+  });
+
+  it("courseMap.list validates a root's sheet per variant: an outside control names its key", async () => {
+    const row = await ctx.db.courseMap.findFirstOrThrow({ where: { eventId: ctx.eventId, course: { seq: long.id } } });
+    expect((await caller.courseMap.list()).find((m) => m.seq === row.seq)?.validation.valid).toBe(true);
+    // 33 is only on the petal B: far away, it leaves the window of both variants (both visit it).
+    const c33 = await ctx.db.control.findFirstOrThrow({ where: { eventId: ctx.eventId, codes: "33" } });
+    await ctx.db.control.update({ where: { id: c33.id }, data: { xpos: 900, ypos: 900 } });
+    await ctx.db.courseMap.update({ where: { id: row.id }, data: { windowCenter: { x: -75, y: 5 } } });
+    try {
+      const issues = (await caller.courseMap.list()).find((m) => m.seq === row.seq)!.validation.issues;
+      expect(issues.filter((i) => i.code === "control_outside_frame").map((i) => i.variantKey)).toEqual(["AB", "BA"]);
+    } finally {
+      await ctx.db.control.update({ where: { id: c33.id }, data: { xpos: -65, ypos: 15 } });
+      await ctx.db.courseMap.update({ where: { id: row.id }, data: { windowCenter: Prisma.DbNull } });
+    }
+  });
 
   it("refuses what it cannot print (400 with the reason)", async () => {
     const cases: [string, RegExp][] = [

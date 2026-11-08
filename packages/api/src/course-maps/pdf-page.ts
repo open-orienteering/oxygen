@@ -329,7 +329,7 @@ function allVariationControls(
  * groups, or for a course split by map exchanges (its parts centre on
  * their own controls, course-layer.md §11).
  */
-function sharedWindowCentre(
+export function sharedWindowCentre(
   structure: unknown,
   ends: { start: LayoutControlSource | null; finish: LayoutControlSource | null } | null,
   allControls: MapRowContext["allControls"],
