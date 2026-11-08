@@ -338,9 +338,22 @@ export):
   spine and every alternative's branch (`course.allVariationStructures`
   — the editor's All-variations view, `course-layer.md` §12.7) in **the
   one purple**: no `tint`, no `allVariations` view option (F7's fixture
-  holds), labels as codes. The block lists every visited control once
-  in first-seen order without sequence numbers (the course is passed as
-  `free_order` to the layout; its structures stay ordered, so legs
+  holds). **Labels** (F15; the user's answer Q4, 2026-11-08): numbers
+  when every visited site has exactly one sequence number across all
+  variants (`course.uniformVariantNumbers`, `course-layer.md` §12.1 —
+  equal forks), else codes (unequal forks, every loop). The numbers go as
+  `viewOptions.labels` (`PageInput.course.viewOptions` gains `labels`;
+  `labelMode` stays `code`), computed in `resolve-sheet.ts`
+  (`allVariationNumbers`: a positioned site that is a control, as the
+  layer numbers it; the editor's All-variations view computes the same,
+  `course-editor.md` §12); `numberHidden` is ignored. The block lists
+  every visited control once, **by number when the labels are set** — each
+  row carries the number the variants share (`BuildDescriptionSheetInput
+  .controls[i].sequence`, `LayoutControlSource.sequence`), two rows
+  (the alternatives' second controls) may share one, listed in first-seen
+  order within a number, the thick rule after every third row counting
+  rows — else in first-seen order without numbers (the course is passed
+  as `free_order` to the layout; its structures stay ordered, so legs
   draw); the name, label and `{variant}` carry the keys joined by `/`
   (`Long AB/BA`; after five, `…`: `allVariationsSuffix`). The length is
   the root's (its first-alternatives path).
@@ -360,7 +373,7 @@ row (`course-layout.md` §1), so Layout mode and Class view draw what
 prints. Decided on the user's standing instruction (2026-11-07), for
 review: `{course}` is the child's name (templates use `{course}`, and the
 runner's map then names her course); copies share one content stream
-rather than being re-written; the all-variations block without numbers;
+rather than being re-written; the all-variations block without numbers (F15: with the shared numbers when the variants number alike);
 the 200-page cap counts composed pages, copies up to 5 000 pages.
 
 ## 5. `resolveSheet`
@@ -839,8 +852,8 @@ E2E tests check page count and size; C7 compared the rasters).
 | `packages/api/src/__tests__/descriptions-pdf.test.ts` (F11) | `buildDescriptionsPdf` yields between pages: 40 pages with the event loop's longest wait under 250 ms (the whole build without the yield); more than 200 pages refused before a page is drawn |
 | `e2e/course-editor.spec.ts` "F11: description sheets" (`chromium`) | Export ▾ → *Description sheets…*: focus inside the dialog and kept there by Tab; every class with a course checked; `k` typed in it arms no tool; *None* disables the download; two classes, two copies, 5 mm → a `…_descriptions.pdf` of two A4 pages; Escape closes the dialog only |
 | `e2e/courses.spec.ts` "Export → Description sheets…" (`chromium`) | the Courses page's export menu opens the same dialog; `fill` → `itest_descriptions.pdf`, one page per checked class |
-| `packages/api/src/__tests__/integration/variant-pages.test.ts` (F8) | §4.6 on a butterfly (AB / BA) with a class of three runners and a plain course: `?courses=<root>` two pages in key order labelled `Long AB` / `Long BA`, the course id the root's and the runners' course the child's, `{variant}`, `{course}`, the block header and its numbering the variant's, one shared window; `?courses=<variant>` one page (`_Long_BA.pdf`, `Info /Title`) and no new sheet; `?variants=` in key order; `?classes=` per variant with the class in the header; `?allVariations=` one page — three structures, no tint, codes, the block once per control without numbers, `_Long_AB_BA.pdf`; `copies=runners&spare=1` → AB × 3, BA × 2 sharing `/Contents`, `qpdf --check`; a class's and a plain course's stacks; the unfiltered export; `autoSheets` makes no sheet for a variant and returns the root's; `courseMap.resolveSheet { variantKey }` (block, `{variant}`, the shared window, Class view, a key without a variant, a plain course) and `courseMap.list`'s per-variant validation; the 400s (unknown key, a non-root, a bare `variants`, two selections, `copies` ≠ runners, `spare` alone or negative, `copies` without a course selection) |
-| `packages/shared/src/print/__tests__/writer.test.ts` "copies a page", `compose.test.ts` "the all-variations page" (F8) | `copyPage`: three pages on one content stream and one resources dictionary, the trim box, the label repeated, one outline item, the bytes about one page's; the all-variations input composes with the plain colour table (no `course-tint:` row) and more course passes than the spine alone |
+| `packages/api/src/__tests__/integration/variant-pages.test.ts` (F8) | §4.6 on a butterfly (AB / BA) with a class of three runners and a plain course: `?courses=<root>` two pages in key order labelled `Long AB` / `Long BA`, the course id the root's and the runners' course the child's, `{variant}`, `{course}`, the block header and its numbering the variant's, one shared window; `?courses=<variant>` one page (`_Long_BA.pdf`, `Info /Title`) and no new sheet; `?variants=` in key order; `?classes=` per variant with the class in the header; `?allVariations=` one page — three structures, no tint, codes, the block once per control without numbers, `_Long_AB_BA.pdf`; F15: a second root with an equal fork — `viewOptions.labels` 1, 2, 2, 3, `labelMode` still `code`, the block rows 1, 2, 2, 3, no tint, no `allVariations`; an unequal fork has neither labels nor row numbers; `copies=runners&spare=1` → AB × 3, BA × 2 sharing `/Contents`, `qpdf --check`; a class's and a plain course's stacks; the unfiltered export; `autoSheets` makes no sheet for a variant and returns the root's; `courseMap.resolveSheet { variantKey }` (block, `{variant}`, the shared window, Class view, a key without a variant, a plain course) and `courseMap.list`'s per-variant validation; the 400s (unknown key, a non-root, a bare `variants`, two selections, `copies` ≠ runners, `spare` alone or negative, `copies` without a course selection) |
+| `packages/shared/src/print/__tests__/writer.test.ts` "copies a page", `compose.test.ts` "the all-variations page" (F8) | `copyPage`: three pages on one content stream and one resources dictionary, the trim box, the label repeated, one outline item, the bytes about one page's; the all-variations input composes with the plain colour table (no `course-tint:` row) and more course passes than the spine alone; F15: `viewOptions.labels` draws the numbers the sequence would, the colour table unchanged |
 | `e2e/course-editor.spec.ts` "F7: variations and loops" (F8 part) | Export ▾ *This course (2 variants)* → two pages per own sheet, *All variations* → one per sheet, *One map per runner* disabled without runners; Layout mode shows Variant ▾ = AB and no *All variations*; BA picked → the mode kept, *This variant BA* → one page per sheet (the suite may hand the course another test's map exchange: two part sheets) |
 | `e2e/courses.spec.ts` "a course with variations lists its variants…" (F8 part) | a variant row's one action (`export-variant-<seq>`, its title) requests `maps.pdf?variants=<root>:B`; the root row's `export-all-variations-<root>` requests `?allVariations=<root>`; the seed's missing base map shows on the error line |
 | `e2e/course-maps.spec.ts` (`chromium`) | the export flows (E-pages: Layout mode's Export ▾ *This sheet*, the Courses page's course PDF and export menu): page count and A4 page size of the single-sheet, course, all-controls and all-maps downloads (05 §7), `application/pdf` and no `X-Print-Pipeline` |
