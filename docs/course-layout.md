@@ -73,6 +73,15 @@ the row mapping `maps.pdf` uses (`sheetInputForMapRow`, `pdf-page.ts`):
   `mapTemplate.previewLayout`). `NOT_FOUND` for an unknown sheet,
   template or course; `PRECONDITION_FAILED` for a sheet without a
   template.
+- `{ seq | classSeq, variantKey? }` (F8; 08 §6's `layout.resolveSheet
+  { …, variantKey? }`, taken as the existing procedure's key): a root's
+  sheet as that variant prints it (`rowForVariant`, `course-print.md`
+  §4.6) — its course, numbering, block and `{variant}`, on the window
+  the variants share; `variantKey` in the answer (null otherwise). A key
+  the sheet's course has no live variant of — any other sheet, or a key
+  the editor's structure has before its write lands — reads the sheet
+  as is, on the same shared window (decided on the user's standing instruction 2026-11-07, for
+  review: no error while the editor is ahead of the server).
 - Returns `scope`, the raw `sheet` (seq, name, kind, course, class,
   `sectionIndex` — the part it prints, F5 —, window centre, overrides,
   objects) and `template` (page settings, objects) the
@@ -82,6 +91,11 @@ the row mapping `maps.pdf` uses (`sheetInputForMapRow`, `pdf-page.ts`):
   hidden), `appearance`, `overprintScale`, `labelMode`, `windows` (this
   sheet's and the course's other sheets', for validation), `controls`,
   the block's row counts and `mapScale`.
+
+`courseMap.list` validates a root's sheet per variant (F8): every
+variant's placed sites against the course's windows, an outside control
+named by its key (`CourseMapValidationIssue.variantKey`), and a NULL
+centre resolves to the shared one (`sharedWindowCentre`).
 
 The editor builds the page request from its snapshot and this read
 (`pages/editor/layout/model.ts` `layoutRequestOf`): objects of both
@@ -509,7 +523,10 @@ mode draws a sheet: the overprint at the class's scale, the page part,
 the map clipped to the frame, the course only. A class opens fitted on
 its page. No sheet for the class's course → `editor-class-no-sheet` and
 the course as in Course view. Another course, Course or All controls
-leaves it. In Layout mode Class view opens the class's sheet.
+leaves it. In Layout mode Class view opens the class's sheet. A class on
+a root (F8) is drawn as one variant (`resolveSheet { classSeq,
+variantKey }`): Variant ▾ picks it, the first key by default
+(`course-editor.md` §12).
 
 **The sheet key** in the top bar's course-info popover (`editor-stats-sheet`,
 `data-key`, `course-editor.md` §2; 08 §5.2 put it in a status bar, P2 moved it):
@@ -526,7 +543,10 @@ entries; `lib/editor/export-menu.ts`), each on an existing route:
 | Entry | Route | First |
 |---|---|---|
 | This sheet (`editor-export-sheet`, Layout mode on a sheet; E-pages) | `maps.pdf?maps=<sheet>` | — (the sheet exists) |
-| This course (`editor-export-course`) | `maps.pdf?courses=<course>` | `autoSheets { courseId }` |
+| This course (`editor-export-course`) | `maps.pdf?courses=<course>` — a root's sheets once per variant (F8; label *This course (n variants)*) | `autoSheets { courseId }` |
+| This variant (`…-variant`; F8, a root only) | `maps.pdf?variants=<root>:<key>` — the view's variant (Variant view's, or the one Class view / Layout mode draw); label *This variant AB · 12* with its assigned runners (`course.variantList.runnerCount`); disabled without a shown key | `autoSheets { courseId: root }` |
+| All variations (`…-allVariations`; F8, a root only) | `maps.pdf?allVariations=<root>` — each own sheet once, every alternative in the one purple, for officials (answer 4) | `autoSheets { courseId: root }` |
+| One map per runner (`…-courseRunners`; F8, a root only) | `maps.pdf?courses=<root>&copies=runners` — each variant page once per assigned runner, in key order; label with the runners in all; disabled with none | `autoSheets { courseId: root }` |
 | This class (`…-class`, Class view only) | `maps.pdf?classes=<class>` | `autoSheets { courseId }` |
 | All courses (`…-all`) | `maps.pdf` (every own sheet and the all-controls sheet) | `autoSheets {}` |
 | All controls (`…-allControls`) | `maps.pdf?allControls=1` | `autoSheets { allControls: true }` (E-pages) |
@@ -540,9 +560,27 @@ Without `courses.edit` nothing is created first (no all-controls sheet:
 the route's "No maps found" on the error line). The Courses page's
 per-course export (`export-course-<course>`) and its export menu's *All
 maps* / *All controls* do the same (`course-maps.md` "Where sheets and
-templates are managed"). This sheet is a phase-1 entry 08 §5.2 does not
-list: the Maps page's *Selected map*, kept so a second sheet prints alone.
-Per-variant pages arrive in F8.
+templates are managed"); a variant's row has `export-variant-<seq>`
+(`?variants=<root>:<key>`) and a root's row `export-all-variations-<root>`
+(F8), each ensuring the root's sheets. This sheet is a phase-1 entry 08
+§5.2 does not list: the Maps page's *Selected map*, kept so a second
+sheet prints alone; on a root's sheet it prints every variant too.
+
+**`maps.pdf`'s selection** (`selectPrintPages`, `course-print.md` §4.6,
+§8): one of `maps=<seq,…>`, `courses=<seq,…>` (a variant's seq prints
+that key on its root's sheets), `classes=<seq,…>`, `setter=1`,
+`variants=<root>:<key,…>` (one root, its live keys; printed in key
+order), `allVariations=<root>`; `allControls=1` beside the unfiltered or
+alone. `copies=runners` (only that value) with `courses`, `classes` or
+`variants`, and `spare=<0–500>` with it. A root's own sheet never prints
+as the root. The unfiltered export skips a sheet a variant was given of
+its own before F8 (it prints on its root's). 08 §5.2's "variants… · loops
+composite" became the four entries above; a loop prints as its variants,
+no separate composite (decided on the user's standing instruction
+2026-11-07, for review). `autoSheets` of a variant is its root's (it
+creates no sheet for a variant); *All courses* ensures roots and plain
+courses only; a root's first window is fitted over every alternative's
+sites (08 §4.6 "fits the course").
 
 **Description sheets…** (F11; 08 §4.6, §5.2 "descriptions") opens a dialog
 (`pages/editor/DescriptionSheetsDialog.tsx`) instead of downloading at
@@ -716,6 +754,8 @@ of the event, course seq (the event's last), sort order, seq.
 | unit (web) | `pages/editor/__tests__/layout-model.test.ts` "a course sheet's part" | `layoutRequestOf` carries `section` for a course sheet, none in template scope |
 | unit (shared) | `packages/shared/src/__tests__/setter-groups.test.ts`, `auto-template.test.ts` "fitScale" | §8: two clusters numbered west → east, the same groups on a second call and on reversed input (40 sites, 4 groups, a partition), n = 1 and n = count, coincident sites never leave a group empty, n clamped; the scale list, the largest scale that holds the extent, a turn before a smaller scale, the margin on every side, 1:15 000 in the closer orientation when nothing fits, an empty extent |
 | unit (web) | `lib/editor/__tests__/setter-maps.test.ts`, `export-menu.test.ts` "setter maps" | §8: the scope by view and course, a scope's sheets by setter number, the next setter wrapping, a setter's Field rows (order, kinds, unknown ids left out, through `fieldRows`); Export ▾ *Setter maps* `?setter=1`, nothing ensured, never disabled |
+| unit (web) | `lib/editor/__tests__/export-menu.test.ts` "of a course with variants" | §7 F8: the entries and their order, *This course* with the count, *This variant* `?variants=` with key and runners, disabled without a shown key or an unknown one, *All variations*, *One map per runner* with the total and disabled at 0, nothing ensured without `courses.edit`, none of them without variants |
+| integration | `packages/api/src/__tests__/integration/variant-pages.test.ts` | §1 `resolveSheet { variantKey }`, `courseMap.list` per variant, §7 the selection (`course-print.md` §9.1 lists it) |
 | integration | `packages/api/src/__tests__/integration/setter-maps.test.ts` | §6, §8: the migration (a setter row with and without a course; `all_controls` with a course still refused); `setterMaps { groups: 2 }` (names, NULL course and centre, numbers, the west group with the map-issue point, the unplaced control in none, A4 at a standard scale, 5 mm cells), regenerate (same groups, new rows), the refusals; a course's setter map (its sites + 702, the event's untouched); `resolveSheet` of a setter sheet (codes, no header, title, 5 mm, the group's sites, one window, centred) and its print input (`allControls` + `setterMarks`, no structure, the 702 site); `courseMap.list` `setter`; `moveToSetter` (both props, both versions, windows and templates kept, the same sheet a no-op, back, the refusals); `recalculateSheet` on the all-controls sheet after a `saveLayout` (centre NULL, no scale override, the block's `x` / `y` gone, a standard-scale key) and on a setter sheet; a course sheet refused; `maps.pdf?setter=1` two pages, `?courses=` and the unfiltered export without them, `setter` + `courses` 400, none → 400 "No setter maps" |
 | E2E | `e2e/course-editor.spec.ts` "F10: setter maps" | §8: view All → Layout mode → *Setter maps* 2 → *Generate* → two rows, two A4 standard-scale sheets, the first open; Setter 2 opened, *Move to next setter* on its first control → in Setter 1 (wrap), undo → back; a moved window → *Recalculate* → centre NULL; Export ▾ *Setter maps* → two A4 pages |
 | E2E | `e2e/field-mode.spec.ts` "Field mode on a desktop" "the setter-map picker…" | `course-editor.md` §9: `layout.setterMaps { groups: 2 }`; the picker lists *None* + two; Setter 1 picked → the list's rows are its controls in the sheet's order, the KPI says *Setter 1*; *None* → the course's list |
@@ -723,9 +763,10 @@ of the event, course seq (the event's last), sort order, seq.
 
 ## Pending in this chapter
 
-- **Per-variant export** — F8 (08 §4.6, §5.2). Map exchange part sheets
-  are done (F5, §6), setter maps (F10, §8); description sheets are
-  done (F11, §7) and print on demand, never as a sheet row.
+- **A per-runner named map** (the runner's name on her map): F8 prints
+  the per-variant stack sized by the assigned runners
+  (`copies=runners`) but no names; a separate feature if wanted. A
+  spare count in the menus (the route takes `spare=`) is not offered.
 - **A fitted description placement** (08 §4.6 "compute … description
   placement"): *Recalculate* (F10, §6, §8) fits scale and orientation and
   puts the block back on the template's spot; a placement that avoids the

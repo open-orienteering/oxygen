@@ -173,6 +173,22 @@ describe("variations (docs/course-editor.md §12, F7)", () => {
     expect([esc.focusGroupId, esc.activeAlternatives, esc.selectedCourseId]).toEqual([null, { v1: "B" }, 1]);
   });
 
+  it("in Class view and Layout mode a key picks the variant drawn, the view and mode kept (F8)", () => {
+    const cls = editorReducer(onCourse, { type: "class", seq: 4 });
+    const ab = editorReducer(cls, { type: "variant", key: "BA" });
+    expect([ab.view, ab.classSeq, ab.variantKey]).toEqual(["class", 4, "BA"]);
+    expect(editorReducer(ab, { type: "variant", key: "BA" })).toBe(ab);
+    expect([editorReducer(ab, { type: "variant", key: null }).view, editorReducer(ab, { type: "variant", key: null }).variantKey]).toEqual(["class", null]);
+    // Another class starts again at the first variant.
+    expect(editorReducer(ab, { type: "class", seq: 5 }).variantKey).toBeNull();
+    const layout = editorReducer(onCourse, { type: "mode", mode: "layout" });
+    const ba = editorReducer(layout, { type: "variant", key: "BA" });
+    expect([ba.mode, ba.view, ba.variantKey]).toEqual(["layout", "course", "BA"]);
+    // Variant view entered in Course mode stays Variant view through Layout mode.
+    const v = editorReducer(editorReducer(onCourse, { type: "variant", key: "AB" }), { type: "mode", mode: "layout" });
+    expect([v.view, v.variantKey]).toEqual(["variant", "AB"]);
+  });
+
   it("a course change resets the variant, the alternatives and the overlay", () => {
     let s = editorReducer(onCourse, { type: "alternative", groupId: "v1", label: "B" });
     s = editorReducer(s, { type: "view", view: "all-variations" });

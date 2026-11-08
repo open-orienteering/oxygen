@@ -189,6 +189,8 @@
   "mapAnchoredObjectsRemoved_other": "{{count}} kartbundna objekt togs bort (de var placerade på en annan tävlings karta).",
   "dismiss": "Stäng",
   "exportCourseMaps": "Kartor (PDF)",
+  "exportVariantMaps": "Karta för variant {{key}} (PDF)",
+  "exportAllVariationsMaps": "Alla varianter (PDF, funktionärer)",
   "exportAllMaps": "Alla kartor (PDF)",
   "exportAllControlsMap": "Alla kontroller (PDF)",
   "exportDescriptionSheets": "Kontrollbeskrivningar… (PDF)",

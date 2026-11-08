@@ -15,6 +15,9 @@ import { DescriptionSheetsDialog } from "./DescriptionSheetsDialog";
 const LABEL = {
   sheet: "exportSheet",
   course: "exportCourse",
+  variant: "exportVariant",
+  allVariations: "exportAllVariations",
+  courseRunners: "exportCourseRunners",
   class: "exportClass",
   all: "exportAll",
   allControls: "exportAllControls",
@@ -90,7 +93,7 @@ export function ExportMenu({ state, onError }: { state: ExportState; onError: (m
               onClick={() => void run(e)}
               className="block w-full px-3 py-1.5 text-left text-xs text-slate-700 hover:bg-purple-50 cursor-pointer disabled:opacity-40 disabled:cursor-default"
             >
-              {t(LABEL[e.id])}
+              {e.id === "course" && e.labelValues ? t("exportCourseVariants", e.labelValues) : t(LABEL[e.id], e.labelValues ?? {})}
             </button>
           ))}
         </div>

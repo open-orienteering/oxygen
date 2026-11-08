@@ -296,6 +296,72 @@ page foreground — the same order).
 all pages' glyphs, one form XObject per distinct glyph part (7xx parts
 and IOF pictograms included), one image XObject per distinct PNG.
 
+**Copies** (F8): a sheet may carry `copies` (`PrintSheet = SheetInput &
+{ copies? }`, absent = 1, 0 = no page). It is composed and written once;
+`PdfWriter.copyPage(page, n − 1)` adds the other pages, each a page
+object that shares the written page's content streams and resources
+(`/Contents`, `/Resources`, `/TrimBox`, `/VP`), so a stack of twelve
+costs one page's bytes plus eleven small page objects. A copy repeats
+the page label and has no outline item (one per composed page).
+`writePage` returns its `PdfWriterPage` for this; `renderCoursePages`'s
+`pageCount` counts the copies, `onPage` fires once per composed sheet.
+
+### 4.6 Variant pages
+
+A **root** (a course with variation groups, `course-layer.md` §12) has
+no page of its own: print is always one variant (08 §5.3). Each of its
+own `kind = 'course'` sheets — the layout the variants share (08 §4.6,
+`course-maps.md` "Forking contract") — prints once per live child
+(`courses.parent_course_id`), in key order (`course.variantList`'s),
+whatever selected the sheet (`courses`, `classes`, `maps`, the unfiltered
+export):
+
+- **`rowForVariant(row, child)`** (`pdf-page.ts`): the row's template,
+  overrides, objects and window centre; the course's name, length,
+  climb, structure (the linear `variantStructure`), `course_controls`
+  (label offsets), ends and description instructions are the child's;
+  its id and classes stay the root's — course objects are scoped to the
+  root, and a class prints its root (`rowForClass` first). So the page
+  label, outline title, block header and `{course}` are `<root> <key>`
+  (`Long AB`), `{variant}` is the key, numbering and legs the
+  variant's.
+- **The shared window**: a stored centre wins; a NULL one centres on
+  every site any alternative visits and the course's ends
+  (`sharedWindowCentre`), so every variant page — and the
+  all-variations page, and the root's own read in the editor and
+  `courseMap.list` — shows the same window. A course split by map
+  exchanges keeps its parts' own centring (§5.2 "Part sheets").
+- **The all-variations page** (`?allVariations=`, answer 4: for
+  officials; the runners' maps are the variant pages):
+  `allVariationsRow(row, keys)` prints each own sheet once with the
+  spine and every alternative's branch (`course.allVariationStructures`
+  — the editor's All-variations view, `course-layer.md` §12.7) in **the
+  one purple**: no `tint`, no `allVariations` view option (F7's fixture
+  holds), labels as codes. The block lists every visited control once
+  in first-seen order without sequence numbers (the course is passed as
+  `free_order` to the layout; its structures stay ordered, so legs
+  draw); the name, label and `{variant}` carry the keys joined by `/`
+  (`Long AB/BA`; after five, `…`: `allVariationsSuffix`). The length is
+  the root's (its first-alternatives path).
+- **Copies for the hand-out** (`&copies=runners[&spare=n]`, answer 3 —
+  variants are pre-set per runner, F6b): each page is repeated once per
+  runner it is for, plus `spare`: a variant page per non-removed runner
+  with `runner.course_id` = the child (the count
+  `course.variantList.runnerCount` shows), a plain course page per runner
+  whose own course, else class course, it is; with `?classes=` only that
+  class's runners. Pages stay in key order, so the stack comes out
+  sorted. A page with no runner and no spare is left out; nothing at all
+  is a 400. A per-runner page with the runner's name is **not** printed
+  (a separate feature if wanted, SLICES F0).
+
+`courseMap.resolveSheet { seq | classSeq, variantKey }` reads the same
+row (`course-layout.md` §1), so Layout mode and Class view draw what
+prints. Decided on the user's standing instruction (2026-11-07), for
+review: `{course}` is the child's name (templates use `{course}`, and the
+runner's map then names her course); copies share one content stream
+rather than being re-written; the all-variations block without numbers;
+the 200-page cap counts composed pages, copies up to 5 000 pages.
+
 ## 5. `resolveSheet`
 
 `packages/api/src/course-maps/resolve-sheet.ts` — the 08 §4.6 boundary
@@ -355,6 +421,18 @@ with `sheet` = `PageInput` minus `map` and `geo`.
   NULL structure gets it too). A stored centre wins as on any sheet. Out
   of range (a part sheet whose exchange was removed) the sheet is the
   whole course.
+- **Variant sheets** (F8, §4.6): a root's sheet as one variant — the
+  row's `course` from the child (`rowForVariant`), so the structure,
+  sites, block and label are the variant's; `variantKey` reaches
+  `textValues.variant`; a NULL window centre is the shared one.
+- **The all-variations sheet** (F8, §4.6): `ResolveSheetInput.allVariations`
+  with the root's stored structure: `course.structure` is an **array**
+  — the spine, then one branch per alternative (ids
+  `<course>:<group>:<label>`), each with the sheet's label offsets, the
+  layout's start / finish completing an implicit spine end, the crossing
+  points any branch runs through among the sites — and the course's
+  controls (`allVariationControls`) every visited control once. No
+  `tint` is set; `viewOptions` has no `allVariations` key.
 - **All-controls sheets**: `structure: null`, every site drawn with
   codes (`viewOptions.allControls`), typed by `kind` (`resolveMapLayout`,
   F4: crossing points as 710, map-issue points as 702, an exchange as a
@@ -608,8 +686,10 @@ D); the PDF golden tier compares the `rgb` page rasterised by
 ## 8. The `maps.pdf` route
 
 `GET /api/maps/:nameId/maps.pdf` (`docs/course-maps.md` API: query
-`maps` / `courses` / `allControls`, `courses.view`, 200-page cap, pages
-ordered by course, `sort_order`, `seq`) prints every event through the
+`maps` / `courses` / `classes` / `allControls` / `setter` / `variants` /
+`allVariations`, `copies` / `spare`; `courses.view`; 200 composed pages
+and 5 000 pages with copies at most; pages ordered by course,
+`sort_order`, `seq`, then variant key) prints every event through the
 composer (`packages/api/src/course-maps/routes.ts`) since E3, the flip
 (`map-pipeline-switch.md`, history note). It reads the `course_maps`,
 `map_templates`, course, control and graphics rows and writes nothing.
@@ -635,7 +715,9 @@ re-import (the review's colour decisions).
 
 ### 8.2 The vector path
 
-1. The rows `findMapRows` selects, each turned into a sheet by
+1. The pages `selectPrintPages` selects (the rows; a root's sheet once
+   per variant or as its all-variations page; each with its copies —
+   §4.6, `course-layout.md` §7 lists the query), each turned into a sheet by
    `sheetForMapRow` (§5) with the event, its controls, its
    `autoOverprintCuts` (`MapRowContext.autoCuts`, §5.2) and the pinned
    document's `getBaseMapInfo` scale and meridian tilt. The pinned
@@ -703,11 +785,14 @@ parameter reaches it.
 
 As before slice C: `Content-Type: application/pdf`,
 `Content-Disposition: attachment; filename="<event>_<map>.pdf"` for one
-page and `"<event>_maps.pdf"` for several, `Cache-Control: no-store`;
+composed page (a variant's `<map>` with its key after it, `Long_BA`; the
+all-variations page's with its keys, `Long_AB_BA`; copies of one page
+still one) and `"<event>_maps.pdf"` for several, `Cache-Control: no-store`;
 404 for an unknown event or no maps, 400 for a bad selection, no pin or
 a composer error (§8.1). The `X-Print-Pipeline` header of slices C–D is
 gone with the switch (E3). `Info /Title` per §7.1 (`<event> · <map>`
-for one page, `<event> maps` for several), `/Author` the organiser.
+for one page — `<event> · Long BA` for a variant — `<event> maps` for
+several), `/Author` the organiser.
 
 ### 8.4 Sanctioned differences from the legacy PDF
 
@@ -753,6 +838,10 @@ E2E tests check page count and size; C7 compared the rasters).
 | `packages/api/src/__tests__/descriptions-pdf.test.ts` (F11) | `buildDescriptionsPdf` yields between pages: 40 pages with the event loop's longest wait under 250 ms (the whole build without the yield); more than 200 pages refused before a page is drawn |
 | `e2e/course-editor.spec.ts` "F11: description sheets" (`chromium`) | Export ▾ → *Description sheets…*: focus inside the dialog and kept there by Tab; every class with a course checked; `k` typed in it arms no tool; *None* disables the download; two classes, two copies, 5 mm → a `…_descriptions.pdf` of two A4 pages; Escape closes the dialog only |
 | `e2e/courses.spec.ts` "Export → Description sheets…" (`chromium`) | the Courses page's export menu opens the same dialog; `fill` → `itest_descriptions.pdf`, one page per checked class |
+| `packages/api/src/__tests__/integration/variant-pages.test.ts` (F8) | §4.6 on a butterfly (AB / BA) with a class of three runners and a plain course: `?courses=<root>` two pages in key order labelled `Long AB` / `Long BA`, the course id the root's and the runners' course the child's, `{variant}`, `{course}`, the block header and its numbering the variant's, one shared window; `?courses=<variant>` one page (`_Long_BA.pdf`, `Info /Title`) and no new sheet; `?variants=` in key order; `?classes=` per variant with the class in the header; `?allVariations=` one page — three structures, no tint, codes, the block once per control without numbers, `_Long_AB_BA.pdf`; `copies=runners&spare=1` → AB × 3, BA × 2 sharing `/Contents`, `qpdf --check`; a class's and a plain course's stacks; the unfiltered export; `autoSheets` makes no sheet for a variant and returns the root's; `courseMap.resolveSheet { variantKey }` (block, `{variant}`, the shared window, Class view, a key without a variant, a plain course) and `courseMap.list`'s per-variant validation; the 400s (unknown key, a non-root, a bare `variants`, two selections, `copies` ≠ runners, `spare` alone or negative, `copies` without a course selection) |
+| `packages/shared/src/print/__tests__/writer.test.ts` "copies a page", `compose.test.ts` "the all-variations page" (F8) | `copyPage`: three pages on one content stream and one resources dictionary, the trim box, the label repeated, one outline item, the bytes about one page's; the all-variations input composes with the plain colour table (no `course-tint:` row) and more course passes than the spine alone |
+| `e2e/course-editor.spec.ts` "F7: variations and loops" (F8 part) | Export ▾ *This course (2 variants)* → two pages per own sheet, *All variations* → one per sheet, *One map per runner* disabled without runners; Layout mode shows Variant ▾ = AB and no *All variations*; BA picked → the mode kept, *This variant BA* → one page per sheet (the suite may hand the course another test's map exchange: two part sheets) |
+| `e2e/courses.spec.ts` "a course with variations lists its variants…" (F8 part) | a variant row's one action (`export-variant-<seq>`, its title) requests `maps.pdf?variants=<root>:B`; the root row's `export-all-variations-<root>` requests `?allVariations=<root>`; the seed's missing base map shows on the error line |
 | `e2e/course-maps.spec.ts` (`chromium`) | the export flows (E-pages: Layout mode's Export ▾ *This sheet*, the Courses page's course PDF and export menu): page count and A4 page size of the single-sheet, course, all-controls and all-maps downloads (05 §7), `application/pdf` and no `X-Print-Pipeline` |
 
 ### 9.2 The PDF golden tier
@@ -1170,13 +1259,24 @@ The tool's own tests (`print-run.test.ts`, `measure-print.test.mjs`,
   and crop marks (the marks layer), CMYK images, the test sheet — a later
   row (decision (2), 2026-10-23).
 - **One window shared by several pages** (05 §5.10): two sheets on the
-  same window (a course and its all-controls sheet, forked variants)
-  re-symbolise and re-emit the map content per page; a shared form
-  XObject of the window's base map comes with per-variant pages (08).
+  same window (a course and its all-controls sheet, a root's variant
+  pages since F8) re-symbolise and re-emit the map content per page. F8
+  did not take the shared form XObject (decided on the user's standing
+  instruction 2026-11-07, for review): `composePage` symbolises document
+  ⊕ course in one stream in colour-stack order (legs under the line art
+  above areas, `stack-order`), so the base map is not one XObject but
+  two halves split at lower purple, and a variant's corridors clip the
+  map passes per page (`W*`, §4.3) — a composer restructuring, not a
+  resource flag. By §11.5 (917 kB per Club-full A4 page, nearly all of
+  it the map stream) a four-variant course is about 3.7 MB against about
+  1.1 MB shared, acceptable for a download; identical **copies** of a
+  page do share one content stream (§4.5), which is where a hand-out
+  stack multiplies.
 - **Vector SVG logos** (05 §5.7 b): a safe SVG subset as form XObjects;
   rasterised at 600 dpi until a club asks.
-- **Several frames per sheet** (map exchange on one sheet, 05 §5.9) and
-  per-variant pages (08): one frame per page in slice C; F5 prints a map
+- **Several frames per sheet** (map exchange on one sheet, 05 §5.9):
+  one frame per page in slice C (a variant's page is one page since F8,
+  §4.6); F5 prints a map
   exchange as one sheet per part (§5.2), so several frames on one sheet
   stay Pending (decided on the user's standing instruction 2026-11-07,
   for review).

@@ -16,7 +16,7 @@
  * Pure; ids are the overlay's (public control ids as strings).
  */
 
-import type { course } from "@oxygen/shared";
+import { course } from "@oxygen/shared";
 
 type Structure = course.WireCourseStructure;
 type Item = Structure["items"][number];
@@ -74,25 +74,8 @@ export function withCourseOverride<O extends { name: string }>(courses: readonly
 /** The branch course's name: unique per group and alternative, never a stored course's. */
 export const branchName = (courseName: string, groupId: string, label: string) => `${courseName}#${groupId}/${label}`;
 
-/** All variations (§12): the spine and one tinted branch per drawn alternative. */
+/** All variations (§12): the spine and one tinted branch per drawn alternative (`course.allVariationStructures`, as F8's print). */
 export function allVariationDraws(name: string, s: Structure): CourseDraw[] {
-  const spine: Control[] = [];
-  const branches: CourseDraw[] = [];
-  s.items.forEach((item, i) => {
-    if (item.kind !== "variation") {
-      const prev = s.items[i - 1];
-      // The leg across a plain group is drawn by its branches; a loop keeps the anchor → next leg.
-      spine.push(prev?.kind === "variation" && !prev.loop ? { ...item, leg: { ...(item.leg ?? {}), style: "none" } } : item);
-      return;
-    }
-    const anchor = s.items[i - 1];
-    const next = s.items[i + 1];
-    if (!anchor || anchor.kind === "variation" || !next || next.kind === "variation") return;
-    for (const alt of item.alternatives) {
-      if (item.loop && alt.items.length === 0) continue;
-      const end: Control = item.loop ? { siteId: anchor.siteId } : next;
-      branches.push(courseDrawOf(branchName(name, item.id, alt.label), [{ siteId: anchor.siteId }, ...alt.items, end], alt.label));
-    }
-  });
-  return [courseDrawOf(name, spine), ...branches];
+  const { spine, branches } = course.allVariationStructures<Control>(s);
+  return [courseDrawOf(name, spine), ...branches.map((b) => courseDrawOf(branchName(name, b.groupId, b.label), b.items, b.label))];
 }

@@ -1322,8 +1322,8 @@ toggle back to Course view):
 - *All variations*: a read-only overlay — no leg clicks, no Leg section,
   no provisional visit, no *Create*. The canvas draws the spine and one
   branch per alternative in distinct purple tints, labels as codes
-  (`course-layer.md` §12.7). Screen only: Export ▾ prints the root (F8
-  prints per variant and an all-variations page in one purple).
+  (`course-layer.md` §12.7). Screen only: Export ▾ prints per variant
+  and an all-variations page in one purple (F8, `course-print.md` §4.6).
 
 **The canvas.** `course.list` carries the root's first alternatives, so
 for a course with groups the page hands the viewer `courseOverride`
@@ -1333,8 +1333,20 @@ legs keyed by drawn neighbours, hidden numbers), in All variations the
 spine and the tinted branches (`allVariationDraws`); `withCourseOverride`
 replaces the overlay of the course's name and adds the branches
 highlighted. The description sheet and the multi-course leg labels leave
-the tinted branches out. Class view and Layout mode draw the sheet as it
-prints (the root) until F8.
+the tinted branches out. **Class view and Layout mode draw a root as one
+variant** (F8), as it prints: `sheetVariant` — the remembered key while
+the structure has it, else the first — is passed to
+`courseMap.resolveSheet { seq | classSeq, variantKey }` (block,
+`{variant}`, the shared window; `course-layout.md` §1) and drawn as the
+variant's path (`courseOverride`, also on Layout mode's viewer props).
+There Variant ▾ (`editor-view-variant`, showing the drawn key) changes
+only the key — the view and mode are kept (the `variant` action sets
+`variantKey` alone in Class view or Layout mode); *All variations* is
+Course mode's and hidden in Layout mode. Variant view entered in Course
+mode stays Variant view in Layout mode. Export ▾'s variant entries
+follow the shown key (`course-layout.md` §7). Decided on the user's
+standing instruction (2026-11-07), for review: the first key by default
+(the canvas always shows something that prints).
 
 **Membership.** A control in any alternative is on the course (not
 faded, *Remove from ‹course›* offered); "also in" counts a variant as its
@@ -1494,9 +1506,9 @@ whose poll ran meanwhile simply does not conflict (decision log, D10).
 | unit (web) | `pages/editor/__tests__/placement.test.ts` "X: the map exchange tool", `rail.test.ts` "railKeyOf", `lib/editor/__tests__/sequence.test.ts` "part headings" | §6.9: `X` armed, numbered and advanced as a control, `K` ↔ `X` keep the chain, not a chain end; the rail lights `X`; the exchange row marked, part 1 before the first row and part 2 after the exchange, none without one |
 | E2E | `e2e/course-editor.spec.ts` "F5: map exchange" | §6.9: `X` after a selected control → the ghost `2 · code`, the chain stays armed, three rows with the exchange second and two part headings, the exchange labelled 2, the on-map 13.5 row; Export ▾ this course → two pages, two own sheets with different windows; Layout mode → part 2's sheet (`data-section` 1) deleted → `EXCHANGE_WITHOUT_SHEET` with *Part 2* |
 | unit (web) | `lib/editor/__tests__/structure-edit.test.ts` "variation groups (F7)" | §12: the displayed path's sequence; a position after a group at the top level (the off-by-group regression); the group's legs insert into it (into, out of, an empty active alternative), the leg into the anchor top-level; ↑ / ↓ keep a row's level; a loop's anchor visit takes no ✕, move or leg, its legs belong to the alternatives, B active first; `removeSite` in every alternative, an all-empty group kept, an unanchored one dissolved; the item after a group keeps its leg, an alternative's first item's leg dropped when its predecessor changes; `setLegProps` by path; `setNumberHidden` in alternatives; `createGroup` / `canCreateGroup` (top-level legs only, `v1`, `v2`); add / remove (two left: dissolve) / rename (blank, taken) / loop; `moveToAlternative` |
-| unit (web) | `lib/editor/__tests__/sequence.test.ts` "variation groups (F7)", `state.test.ts` "variations (F7)" | §12: rows' paths in the explicit structure and their group, a loop's anchor-visit row, the leg's path, `courseViewOrders`, `variationBlocks` after the anchor, `alternativeEndAt`; the reducer's Variant view (needs a key), All variations, the active alternative (to Course view, claims `K`, Escape drops the claim before the course), a course change resets them |
+| unit (web) | `lib/editor/__tests__/sequence.test.ts` "variation groups (F7)", `state.test.ts` "variations (F7)" | §12: rows' paths in the explicit structure and their group, a loop's anchor-visit row, the leg's path, `courseViewOrders`, `variationBlocks` after the anchor, `alternativeEndAt`; the reducer's Variant view (needs a key), All variations, the active alternative (to Course view, claims `K`, Escape drops the claim before the course), a course change resets them; F8 "in Class view and Layout mode a key picks the variant drawn": the key alone changes (view, class and mode kept), null = the first, another class resets it, Variant view kept into Layout mode |
 | unit (web) | `lib/editor/__tests__/variation-view.test.ts`, `checks.test.ts` "structure with a group", `pages/editor/__tests__/action-bar.test.ts` "Create variation here" | §12: `courseDrawOf` (legs by drawn neighbours, the crossing as a string, hidden numbers), `allVariationDraws` (spine with a none leg, a branch per alternative, the shared exit leg, a loop's petals), `withCourseOverride`; the checks' displayed path and `checkGroupsOf`; *Create variation here* after *Add bend here*, only when the page says so |
-| E2E | `e2e/course-editor.spec.ts` "F7: variations and loops" (`chromium`), "F7 on a phone" (`mobile`) | §12: a leg → *Create variation here* → one block with tabs A (pressed) and B, `course.variantList` `A`, `B`; tab B, `K` with nothing selected → the control is B's row; Variant ▾ B numbers it 2, A numbers the anchor's next 2; All variations → the two alternatives' legs in different tints (canvas pixels); `VARIATION_UNBALANCED` listed and locating the anchor; *Loop* → `AB`, `BA`; Export ▾ this course prints; three undos → loop, the control, the group gone. On a phone a group written over tRPC shows its block with `editor-variation-readonly`, ＋ and *Loop* disabled, and tab B switches the rows |
+| E2E | `e2e/course-editor.spec.ts` "F7: variations and loops" (`chromium`), "F7 on a phone" (`mobile`) | §12: a leg → *Create variation here* → one block with tabs A (pressed) and B, `course.variantList` `A`, `B`; tab B, `K` with nothing selected → the control is B's row; Variant ▾ B numbers it 2, A numbers the anchor's next 2; All variations → the two alternatives' legs in different tints (canvas pixels); `VARIATION_UNBALANCED` listed and locating the anchor; *Loop* → `AB`, `BA`; F8: Export ▾ *This course (2 variants)* → two pages, *All variations* → one, *One map per runner* disabled; Layout mode's Variant ▾ shows AB, no *All variations*, BA picked keeps the mode and *This variant BA* prints one page; three undos → loop, the control, the group gone. On a phone a group written over tRPC shows its block with `editor-variation-readonly`, ＋ and *Loop* disabled, and tab B switches the rows |
 
 ## Pending in this chapter
 
@@ -1516,9 +1528,8 @@ whose poll ran meanwhile simply does not conflict (decision log, D10).
   setter's group highlighted goes through the layer request (F7's files).
 - **Variations, beyond F7** (§12): Variant ▾ and All variations are the
   desktop top bar's — the phone's overflow menu offers neither (its block
-  switches the alternative shown). Export ▾'s variant entries, the
-  per-variant and all-variations pages and Class view / Layout mode of a
-  root per variant are F8's. Rows move between alternatives by a drop on
+  switches the alternative shown); without Variant ▾ there, Class view
+  and Layout mode of a root draw its first variant. Rows move between alternatives by a drop on
   a tab (to the end); a drop at a position inside another alternative is
   ↑ / ↓ after it. A course ending `… group, finish` takes an armed `K`
   with nothing selected and no activated alternative into the group (its

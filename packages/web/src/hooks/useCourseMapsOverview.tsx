@@ -120,6 +120,24 @@ export function useCourseMapsOverview(nameId: string, canEdit: boolean) {
       }
       await download(`?courses=${courseId}`);
     });
+  /** One variant of a root, on the root's sheets (F8; course-print.md §4.6): the root's sheets are ensured first. */
+  const exportVariant = (rootId: number, key: string) =>
+    guarded(async () => {
+      if (canEdit) {
+        await utils.client.layout.autoSheets.mutate({ courseId: rootId });
+        await refresh();
+      }
+      await download(`?${new URLSearchParams({ variants: `${rootId}:${key}` })}`);
+    });
+  /** A root's all-variations page for officials (F8; answer 4). */
+  const exportAllVariations = (rootId: number) =>
+    guarded(async () => {
+      if (canEdit) {
+        await utils.client.layout.autoSheets.mutate({ courseId: rootId });
+        await refresh();
+      }
+      await download(`?allVariations=${rootId}`);
+    });
   const exportAll = () =>
     guarded(async () => {
       if (canEdit) {
@@ -180,6 +198,8 @@ export function useCourseMapsOverview(nameId: string, canEdit: boolean) {
     busy,
     apply,
     exportCourse,
+    exportVariant,
+    exportAllVariations,
     exportAll,
     exportAllControls,
     dialog,

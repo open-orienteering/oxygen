@@ -52,6 +52,8 @@ export interface LayoutModeArgs {
   view: EditorView;
   /** Class view's class (seq): its own sheet is the default target. */
   classSeq: number | null;
+  /** A root's variant the sheet is drawn as (F8; `courseMap.resolveSheet { variantKey }`); null otherwise. */
+  variantKey?: string | null;
   /** One write, through the page's pending count and error line; `undefined` when it failed. */
   run: <T>(op: () => Promise<T>) => Promise<T | undefined>;
   record: (undo: () => Promise<unknown>, redo: () => Promise<unknown>) => unknown;
@@ -109,7 +111,9 @@ export function useLayoutMode(a: LayoutModeArgs): LayoutMode {
     return first ? { sheet: first.seq } : null;
   }, [target, sheets.data, a.view, a.course, a.classSeq]);
   const input = resolvedTarget
-    ? "sheet" in resolvedTarget ? { seq: resolvedTarget.sheet } : { templateSeq: resolvedTarget.template, ...(a.course ? { courseSeq: a.course.id } : {}) }
+    ? "sheet" in resolvedTarget
+      ? { seq: resolvedTarget.sheet, ...(a.variantKey ? { variantKey: a.variantKey } : {}) }
+      : { templateSeq: resolvedTarget.template, ...(a.course ? { courseSeq: a.course.id } : {}) }
     : null;
   const key = input ? JSON.stringify(input) : "";
   const query = trpc.courseMap.resolveSheet.useQuery(input ?? { seq: 1 }, { enabled: a.enabled && !!input });

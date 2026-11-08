@@ -13,6 +13,7 @@ function sheet(scope: "sheet" | "template" = "sheet"): EditorSheet {
     sheet: scope === "sheet" ? { seq: 4, name: "A", kind: "course", courseSeq: 2, classSeq: null, version: "5", windowCenter: { x: 30, y: 10 }, overrides: { printScale: 10000, description: { visible: true, x: 140, y: 12, cellSizeMm: 6 } }, objects: [sheetText] } : null,
     template: { seq: 1, name: "A4", paper: "A4", orientation: "portrait", paperWidthMm: null, paperHeightMm: null, printScale: 7500, settings, objects: [templateText], autoKey: "A4-portrait-7500", isExtra: false, version: "3" },
     classView: null,
+    variantKey: null,
     courseSeq: 2,
     document: { description: scope === "sheet" ? { visible: true, x: 140, y: 12, cellSizeMm: 6 } : settings.description } as EditorSheet["document"],
     window,

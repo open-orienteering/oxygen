@@ -97,6 +97,10 @@ export function editorReducer(state: EditorState, action: EditorAction): EditorS
       if (action.seq === null) return state.view === "class" ? { ...state, view: "course", classSeq: null } : state;
       return state.view === "class" && state.classSeq === action.seq ? state : { ...state, view: "class", classSeq: action.seq, variantKey: null, phantom: null };
     case "variant":
+      // F8: Class view and Layout mode draw a root as one variant prints; the key picks it (null = the first), nothing else changes.
+      if ((state.view === "class" || state.mode === "layout") && state.view !== "variant") {
+        return state.variantKey === action.key ? state : { ...state, variantKey: action.key };
+      }
       if (action.key === null) return state.view === "variant" ? { ...state, view: "course", variantKey: null } : state;
       return state.view === "variant" && state.variantKey === action.key ? state : { ...state, view: "variant", variantKey: action.key, classSeq: null, phantom: null };
     case "alternative": {

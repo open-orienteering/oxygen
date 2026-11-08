@@ -170,7 +170,18 @@ test.describe("Courses Page", () => {
       // Nested right under the root's row, with no checkbox and no actions.
       const rootRow = page.getByRole("row").filter({ hasText: name }).first();
       await expect(rootRow.locator("xpath=following-sibling::tr[1]")).toHaveAttribute("data-testid", /course-variant-row-/);
-      await expect(variantRows.nth(0).locator("input, button, a")).toHaveCount(0);
+      // One action, its map on the root's sheet (F8); the root row prints all variations.
+      await expect(variantRows.nth(0).locator("input, button, a")).toHaveCount(1);
+      const variantB = variantRows.nth(1).locator('[data-testid^="export-variant-"]');
+      await expect(variantB).toHaveAttribute("title", "Variant B map (PDF)");
+      const printB = page.waitForRequest((r) => decodeURIComponent(r.url()).includes(`/maps.pdf?variants=${root}:B`));
+      await variantB.click();
+      await printB;
+      const printAll = page.waitForRequest((r) => r.url().includes(`/maps.pdf?allVariations=${root}`));
+      await page.getByTestId(`export-all-variations-${root}`).click();
+      await printAll;
+      // The seed has no base map: the route's answer shows on the error line.
+      await expect(page.getByTestId("course-maps-error")).toBeVisible({ timeout: 15000 });
       // The root's own sequence is its structure's: read-only here.
       await rootRow.getByRole("cell", { name }).click();
       await expect(page.getByTestId("course-variations-hint")).toBeVisible({ timeout: 5000 });

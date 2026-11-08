@@ -4,6 +4,7 @@ import { describe, expect, it } from "vitest";
 import { courseStructureSchema, structureControlItems, type StoredCourseStructure } from "../structure.js";
 import {
   MAX_VARIANTS,
+  allVariationStructures,
   materialiseVariants,
   pathOfOrders,
   variantOrders,
@@ -221,5 +222,36 @@ describe("pathOfOrders and variantOrders (F7, course-editor.md §12)", () => {
   it("works on the wire form (numeric site ids)", () => {
     const wire = { items: [{ siteId: 1 }, { kind: "variation" as const, id: "g", alternatives: [{ label: "A", items: [] }, { label: "B", items: [{ siteId: 2 }] }] }, { siteId: 3 }] };
     expect(pathOfOrders(wire, { g: ["B"] }).items.map((i) => i.siteId)).toEqual([1, 2, 3]);
+  });
+});
+
+describe("allVariationStructures (F8, course-layer.md §12.7)", () => {
+  it("the spine is the top-level items, the leg across a plain group style none; one branch per alternative anchor → controls → next", () => {
+    const s = course([c("S"), c("31"), group("g", [["32", "33"], []]), c("34", { leg: { bends: [{ x: 1, y: 1 }] } }), c("F")]);
+    const { spine, branches } = allVariationStructures(s);
+    expect(ids(spine)).toBe("S 31 34 F");
+    expect(spine[2].leg).toEqual({ bends: [{ x: 1, y: 1 }], style: "none" });
+    expect(branches.map((b) => [b.groupId, b.label, ids(b.items)])).toEqual([
+      ["g", "A", "31 32 33 34"],
+      // An empty plain alternative is the straight leg anchor → next.
+      ["g", "B", "31 34"],
+    ]);
+    // The anchor is a visit only (no leg); the next keeps its leg.
+    expect(branches[0].items[0]).toEqual({ siteId: "31" });
+    expect(branches[0].items[3].leg).toEqual({ bends: [{ x: 1, y: 1 }] });
+  });
+
+  it("a loop keeps the anchor → next leg on the spine; its petals return to the anchor; an empty petal draws nothing", () => {
+    const s = course([c("S"), c("31"), group("b", [["41"], ["42"], []], { loop: true }), c("32"), c("F")]);
+    const { spine, branches } = allVariationStructures(s);
+    expect(ids(spine)).toBe("S 31 32 F");
+    expect(spine[2].leg).toBeUndefined();
+    expect(branches.map((b) => [b.label, ids(b.items)])).toEqual([["A", "31 41 31"], ["B", "31 42 31"]]);
+  });
+
+  it("a course without groups is its spine alone; the wire form works too", () => {
+    expect(allVariationStructures(course([c("S"), c("31"), c("F")]))).toEqual({ spine: [c("S"), c("31"), c("F")], branches: [] });
+    const wire = { items: [{ siteId: 1 }, { kind: "variation" as const, id: "g", alternatives: [{ label: "A", items: [{ siteId: 2 }] }] }, { siteId: 3 }] };
+    expect(allVariationStructures(wire).branches[0].items.map((i) => i.siteId)).toEqual([1, 2, 3]);
   });
 });
