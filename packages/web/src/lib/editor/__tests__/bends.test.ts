@@ -40,3 +40,31 @@ describe("bends (docs/course-editor.md §6.7)", () => {
     expect(polylineSlice(poly, 0.1, 0.2)).toHaveLength(2);
   });
 });
+
+describe("curved bends (course-layer.md §10.1, F13)", () => {
+  // A quarter circle of radius 20 about the origin between straight ends: (30,0) → (20,0) ⌒ (0,20) → (0,30).
+  const K = 0.5522847498 * 20;
+  const QA = { x: 30, y: 0 }, QB = { x: 0, y: 30 };
+  const QUARTER = [{ x: 20, y: 0, hOut: { x: 0, y: K } }, { x: 0, y: 20, hIn: { x: K, y: 0 } }];
+
+  it("the leg is the layer's flattened polyline, anchors kept", () => {
+    const poly = legPolyline(QA, QUARTER, QB);
+    expect(poly.length).toBeGreaterThan(10);
+    expect(poly).toContainEqual({ x: 20, y: 0 });
+    expect(polylineLength(poly)).toBeCloseTo(20 + 10 * Math.PI, 1);
+    // Half way is on the arc, not on the chord.
+    const mid = pointAtFraction(poly, 0.5);
+    expect(Math.hypot(mid.x, mid.y)).toBeCloseTo(20, 2);
+  });
+
+  it("Add bend here on the curve lands between its bends as a corner, the handles kept", () => {
+    const apex = { x: 20 * Math.SQRT1_2, y: 20 * Math.SQRT1_2 };
+    expect(insertBendAt(QA, QUARTER, QB, apex)).toEqual([QUARTER[0], { x: 14.14, y: 14.14 }, QUARTER[1]]);
+    expect(insertBendAt(QA, QUARTER, QB, { x: 25, y: 1 })).toEqual([{ x: 25, y: 1 }, ...QUARTER]);
+  });
+
+  it("moving a bend moves its handles with it; removing keeps the others'", () => {
+    expect(moveBend(QUARTER, 0, { x: 21, y: 1 })).toEqual([{ x: 21, y: 1, hOut: { x: 0, y: K } }, QUARTER[1]]);
+    expect(removeBend(QUARTER, 0)).toEqual([QUARTER[1]]);
+  });
+});

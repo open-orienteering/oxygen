@@ -431,6 +431,15 @@ describe("sequenceLegMeters", () => {
     expect(sequenceLegMeters([{ x: 0, y: 10 }, null, { x: 40, y: 10, bends: [{ x: 0, y: 40 }] }], 10000)).toEqual([null, null, 800]);
   });
 
+  it("measures a curved leg along the curve (F13)", () => {
+    // (30,0) → (20,0) ⌒ quarter circle r 20 ⌒ (0,20) → (0,30): 20 + 10π mm ≈ 514 m at 1:10 000.
+    const K = 0.5522847498 * 20;
+    const bends = [{ x: 20, y: 0, hOut: { x: 0, y: K } }, { x: 0, y: 20, hIn: { x: K, y: 0 } }];
+    expect(sequenceLegMeters([{ x: 30, y: 0 }, { x: 0, y: 30, bends }], 10000)).toEqual([null, Math.round((20 + 10 * Math.PI) * 10)]);
+    // The same bends as corners: 10 + hypot(20, 20) + 10 mm.
+    expect(sequenceLegMeters([{ x: 30, y: 0 }, { x: 0, y: 30, bends: bends.map(({ x, y }) => ({ x, y })) }], 10000)).toEqual([null, Math.round((20 + Math.hypot(20, 20)) * 10)]);
+  });
+
   it("skips unpositioned points and bridges across them", () => {
     const legs = sequenceLegMeters(
       [{ x: 0, y: 10 }, null, { x: 0, y: 20 }],
