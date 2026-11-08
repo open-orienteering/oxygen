@@ -851,7 +851,12 @@ order course takes no leg props. On a re-import `carryLegs` merges: the
 file's props win, the stored ones fill in what the file is silent on
 (an IOF file has no bends, a PPen file no style), so an IOF / PPen round
 trip keeps what the editor authored (decided on the user's standing
-instruction, 2026-11-07, for review).
+instruction, 2026-11-07, for review). Two consequences: a file cannot
+*remove* a crossing point or a marked route (a leg without them is
+indistinguishable from a silent one — a leg loses them in the editor),
+and carried bends are paper-mm points, so a leg whose controls the file
+moves keeps bending through the old points until the setter moves them
+(gaps are fractions and follow the leg).
 
 **Tokens.** One HLC is taken for the `reference.imported` entry before its
 payloads are serialised and stamped on the `courses.version` and

@@ -1890,11 +1890,14 @@ export const courseRouter = router({
         // (course-layer.md §6.3, §10.3; row F9).
         if (pc.type === "CrossingPoint") {
           const existing = existingControls.find((c) => c.kind === "crossing_point" && c.name.toLowerCase() === pc.id.toLowerCase());
+          // WGS84 as for a control: a real pair overwrites, none keeps the stored one (null on create).
+          const hasWgs = !skipPositions && (pc.lat !== 0 || pc.lng !== 0);
           const data = {
             name: pc.id,
             codes: "",
             status: valueToControlStatus(0),
-            ...(skipPositions ? {} : { xpos: pc.mapX, ypos: pc.mapY, lat: pc.lat || pc.lng ? pc.lat : null, lng: pc.lat || pc.lng ? pc.lng : null }),
+            ...(skipPositions ? {} : { xpos: pc.mapX, ypos: pc.mapY }),
+            ...(hasWgs ? { lat: pc.lat, lng: pc.lng } : {}),
             removed: false,
           };
           if (existing) {

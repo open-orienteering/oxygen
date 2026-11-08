@@ -128,7 +128,10 @@ what the export writes, and the same from other tools:
 
 A re-import over an existing course carries the stored leg props the file
 is silent on (bends, gaps) where the leg still runs between the same
-sites; the file's style and crossing win (`carryLegs`).
+sites; the file's style and crossing win where it has them (`carryLegs`)
+— a file cannot remove a stored crossing point or marked route, and a
+carried bend stays where it was if the file moved the leg's controls
+(`docs/course-layer.md` §6.4).
 
 ## Code layout
 

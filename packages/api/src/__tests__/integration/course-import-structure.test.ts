@@ -307,8 +307,13 @@ describe("an IOF file with crossing points, taped routes, a map exchange and a c
     }
   });
 
-  it("a re-import matches the crossing point by name and creates no second one", async () => {
+  it("a re-import matches the crossing point by name, creates no second one and keeps its WGS84 when the file has none", async () => {
+    const cp = await ctx.db.control.findFirstOrThrow({ where: { eventId: ctx.eventId, removed: false, kind: "crossing_point" } });
+    expect([cp.lat, cp.lng]).toEqual([null, null]);
+    await ctx.db.control.update({ where: { id: cp.id }, data: { lat: 59.5, lng: 18.5 } });
     await caller.course.importCourses({ xmlContent: IOF_STRUCTURE });
     expect(await ctx.db.control.count({ where: { eventId: ctx.eventId, removed: false, kind: "crossing_point" } })).toBe(1);
+    const again = await ctx.db.control.findUniqueOrThrow({ where: { id: cp.id } });
+    expect([again.lat, again.lng]).toEqual([59.5, 18.5]);
   });
 });
