@@ -7,6 +7,7 @@ import { OBJECT_TYPE, decodeMapDocument, encodeMapDocument, type MapDocumentInpu
 import { getSymbolLibrary, SYMBOL_LIBRARY_VERSION } from "../../symbol-library/index.js";
 import type { CourseDerivation, CourseStructure } from "../types.js";
 import type { CourseLayerObject } from "../objects.js";
+import type { PathVertex } from "../../course-maps/schema.js";
 
 const S = (id: string, x: number, y: number, over: Partial<CheckSite> = {}): CheckSite => ({
   id, code: id, codes: /^\d+$/.test(id) ? [Number(id)] : [], kind: "control", x, y, description: { d: `1.${id}` }, ...over,
@@ -203,6 +204,16 @@ describe("legs", () => {
     expect(into.map((c) => [c.code, c.leg?.index, c.at])).toEqual([["LEG_CROSSES_OOB", 1, { x: 22.5, y: 2 }], ["LEG_CROSSES_OOB", 2, { x: 21, y: 0 }]]);
     expect(into[0].leg).toEqual({ from: "31", to: "32", index: 1 });
   });
+  it("test the flattened curve (F13): handles that pull the leg through the building report it, the corners alone do not", () => {
+    const items = (bends: PathVertex[]) => course(undefined, { items: ["S1", "31", "32", "33", "F1"].map((siteId) => (siteId === "32" ? { siteId, leg: { bends } } : { siteId })) });
+    const corners = [{ x: 12, y: 3 }, { x: 18, y: 3 }];
+    expect(run({ document, structure: items(corners) }).filter((c) => c.code === "LEG_THROUGH_UNCROSSABLE")).toEqual([]);
+    const curved = run({ document, structure: items([{ x: 12, y: 3, hOut: { x: 6, y: -6 } }, { x: 18, y: 3 }]) }).filter((c) => c.code === "LEG_THROUGH_UNCROSSABLE");
+    expect(curved.map((c) => c.leg?.index)).toEqual([1]);
+    // The hit lies on the curve, below the corners' line.
+    expect(curved[0].at!.y).toBeLessThan(1 + 1e-9);
+    expect(curved[0].at!.x).toBeGreaterThan(14 - 1e-9);
+  });
   describe("a leg through a crossing point (§9.3, §10.3, F4)", () => {
     const through = (x: number, y: number, extra: CheckObstacle[] = []) => {
       const sites = [...SITES, S("P", x, y, { kind: "crossing_point", description: null })];
@@ -284,6 +295,10 @@ describe("variation groups (§9.2 VARIATION_*, F7)", () => {
     const crossed = group([[], []]);
     crossed.alternatives[1].items = [{ siteId: "40", leg: { crossing: { controlId: "P" } } }];
     expect(found(crossed).map((c) => c.code)).toEqual(["VARIATION_UNBALANCED"]);
+    // Along a curve (F13): a handle that loops the leg makes it long; the same bend without one does not.
+    const curved = (bend: PathVertex) => { const g = group([[], []]); g.alternatives[1].items = [{ siteId: "40", leg: { bends: [bend] } }]; return g; };
+    expect(found(curved({ x: 14, y: 1 }))).toEqual([]);
+    expect(found(curved({ x: 14, y: 1, hOut: { x: 0, y: 20 } })).map((c) => c.code)).toEqual(["VARIATION_UNBALANCED"]);
     // The exit leg is every alternative's: its bend lengthens both.
     expect(found(group([[], ["40"]], { exitLeg: { bends: [{ x: 22, y: 12 }] } }))).toEqual([]);
   });

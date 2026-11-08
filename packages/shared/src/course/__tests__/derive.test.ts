@@ -156,6 +156,63 @@ describe("bends and styles (§10.1, F1)", () => {
   });
 });
 
+describe("curved bends (§10.1, F13)", () => {
+  // S (10,10) → 31 (40,10) arched through (25,20): the chord's midpoint (25,10) is 10 mm off the curve.
+  const ARCH = { x: 25, y: 20, hIn: { x: -8, y: 0 }, hOut: { x: 8, y: 0 } };
+
+  it("the leg's points are the flattened curve, anchors verbatim, clipped at both sites", () => {
+    const [leg] = withLeg({ bends: [ARCH] });
+    expect(leg.points.length).toBeGreaterThan(20);
+    expect(leg.points[0]).toEqual({ x: 10, y: 10 });
+    expect(leg.points.at(-1)).toEqual({ x: 40, y: 10 });
+    expect(leg.points).toContainEqual({ x: 25, y: 20 });
+    expect(Math.max(...leg.points.map((p) => p.y))).toBe(20);
+    expect(leg.pieces).toHaveLength(1);
+    expect(dist(leg.pieces[0][0], SITES[0])).toBeCloseTo(M.startRadiusMm + 0.5, 6);
+    expect(dist(leg.pieces[0].at(-1)!, SITES[1])).toBeCloseTo(3, 6);
+    // Measured along the curve: not the chord, not the corners through the same bend.
+    expect(along(leg.points)).toBeGreaterThan(30);
+    expect(Math.abs(along(leg.points) - along([{ x: 10, y: 10 }, ARCH, { x: 40, y: 10 }]))).toBeGreaterThan(0.5);
+  });
+
+  it("a stored gap at the middle sits at the curve's apex, not the chord's midpoint", () => {
+    const [leg] = withLeg({ bends: [ARCH], gaps: [{ from: 0.45, to: 0.55 }] });
+    expect(leg.pieces).toHaveLength(2);
+    const end = leg.pieces[0].at(-1)!, start = leg.pieces[1][0];
+    expect((end.x + start.x) / 2).toBeCloseTo(25, 6);
+    expect(end.y).toBeGreaterThan(19);
+    expect(start.y).toBeGreaterThan(19);
+  });
+
+  it("cuts the curve over a feature at its apex", () => {
+    const [leg] = withLeg({ bends: [ARCH] }, { cutFeatures: [{ x: 25, y: 20.2 }] });
+    expect(leg.gaps).toHaveLength(1);
+    expect(leg.pieces).toHaveLength(2);
+    // The same feature beside the chord's midpoint cuts nothing.
+    expect(withLeg({ bends: [ARCH] }, { cutFeatures: [{ x: 25, y: 10.2 }] })[0].gaps).toEqual([]);
+  });
+
+  it("a crossing joins the curved segment nearest it as a corner, the neighbours keep their handles", () => {
+    const via = { x: 17, y: 17.5 };
+    expect(routedBends({ x: 10, y: 10 }, [ARCH], via, { x: 40, y: 10 })).toEqual([{ x: 17, y: 17.5 }, ARCH]);
+    expect(routedBends({ x: 10, y: 10 }, [ARCH], { x: 33, y: 17.5 }, { x: 40, y: 10 })).toEqual([ARCH, { x: 33, y: 17.5 }]);
+    const P = site("P", "crossing_point", via.x, via.y, "P1");
+    const d = derive({ sites: [...SITES, P], structure: linear(undefined, { items: [{ siteId: "S" }, { siteId: "31", leg: { bends: [ARCH], crossing: { controlId: "P" } } }, { siteId: "32" }] }) });
+    const leg = d.courses[0].legs[0];
+    expect(leg.points).toContainEqual(via);
+    expect(leg.points).toContainEqual({ x: 25, y: 20 });
+    const p = d.sites.find((s) => s.id === "P")!;
+    expect(p.role).toBe("crossing_point");
+    // Turned along the leg there: rising to the east-north-east, neither north–south nor due east.
+    expect(p.angleDeg).toBeGreaterThan(0);
+    expect(p.angleDeg).toBeLessThan(90);
+  });
+
+  it("is deterministic", () => {
+    expect(withLeg({ bends: [ARCH] })).toEqual(withLeg({ bends: [ARCH] }));
+  });
+});
+
 describe("corridors (§10.2, F2)", () => {
   const corridor = { widthM: 60, edge: true, whiteMm: 3, whiteOpacity: 0.4 };
 
