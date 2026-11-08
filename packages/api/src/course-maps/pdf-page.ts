@@ -276,7 +276,7 @@ export function rowForVariant<R extends PrintMapRow>(row: R, child: VariantCours
 
 /** The keys as the all-variations page names them: `AB/BA`, a long list cut after five (`AA/AB/AC/BA/BB/…`). */
 export function allVariationsSuffix(keys: readonly string[]): string {
-  return keys.length <= 6 ? keys.join("/") : `${keys.slice(0, 5).join("/")}/…`;
+  return keys.length <= 5 ? keys.join("/") : `${keys.slice(0, 5).join("/")}/…`;
 }
 
 /**
@@ -377,8 +377,8 @@ export function sheetInputForMapRow(row: PrintMapRow, ctx: MapRowContext): Resol
     : null;
   const all = row.kind === "course" && !!row.allVariations && !!row.course;
   const stored = row.windowCenter && typeof row.windowCenter === "object" ? z.object({ x: z.number(), y: z.number() }).parse(row.windowCenter) : null;
-  // A root's pages share one window (F8): a NULL centre centres on every alternative, not on the page's variant.
-  const shared = !stored && row.course && (row.variantKey !== undefined || all) ? sharedWindowCentre(row.rootStructure ?? row.course.structure, ends, ctx.allControls) : null;
+  // A root's pages share one window (F8): a NULL centre centres on every alternative — its own read too.
+  const shared = !stored && row.course && row.kind === "course" ? sharedWindowCentre(row.rootStructure ?? row.course.structure, ends, ctx.allControls) : null;
   return {
     kind: row.kind,
     template: row.template,

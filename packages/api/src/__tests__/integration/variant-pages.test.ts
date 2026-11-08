@@ -20,7 +20,7 @@ import { PDFArray, PDFDict, PDFDocument, PDFHexString, PDFName } from "pdf-lib";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import type { WireCourseStructure } from "@oxygen/shared";
 import { registerCourseMapRoutes, selectPrintPages } from "../../course-maps/routes.js";
-import { sheetForMapRow } from "../../course-maps/pdf-page.js";
+import { allVariationsSuffix, sheetForMapRow } from "../../course-maps/pdf-page.js";
 import { createTestEvent, disconnect, type TestEventContext } from "../helpers/test-db.js";
 import { makeCaller } from "../helpers/caller.js";
 import { applyEventMap } from "../../event-map.js";
@@ -222,7 +222,16 @@ describe("per-variant pages (course-print.md §4.6)", () => {
     const res = await get("");
     expect(res.statusCode).toBe(200);
     expect(pageLabels(await PDFDocument.load(res.rawPayload))).toEqual(["Long AB", "Long BA", "Short"]);
+    // A root's sheet named by `maps=` prints every variant too: a root has no page of its own.
+    const sheet = (await ctx.db.courseMap.findFirstOrThrow({ where: { eventId: ctx.eventId, course: { seq: long.id } } })).seq;
+    expect(pageLabels(await PDFDocument.load((await get(`?maps=${sheet}`)).rawPayload))).toEqual(["Long AB", "Long BA"]);
   }, 60_000);
+
+  it("the all-variations name lists five keys, then …", () => {
+    expect(allVariationsSuffix(["AB", "BA"])).toBe("AB/BA");
+    expect(allVariationsSuffix(["A", "B", "C", "D", "E"])).toBe("A/B/C/D/E");
+    expect(allVariationsSuffix(["A", "B", "C", "D", "E", "F"])).toBe("A/B/C/D/E/…");
+  });
 
   it("courseMap.resolveSheet { variantKey }: Layout mode and Class view of a root draw a variant (course-layout.md §1, §6)", async () => {
     const sheet = (await ctx.db.courseMap.findFirstOrThrow({ where: { eventId: ctx.eventId, course: { seq: long.id } } })).seq;
@@ -236,6 +245,7 @@ describe("per-variant pages (course-print.md §4.6)", () => {
     expect(ba.block.rows.filter((r) => r.kind === "control").map((r) => r.code)).toEqual(["31", "33", "31", "32", "34"]);
     // Every variant and the root's own read share the window.
     expect(ba.window).toEqual((await caller.courseMap.resolveSheet({ seq: sheet, variantKey: "AB" })).window);
+    expect(plain.window).toEqual(ba.window);
     const cls = await caller.courseMap.resolveSheet({ classSeq: h21, variantKey: "AB" });
     expect([cls.variantKey, cls.block.header?.classNames, cls.classView?.className]).toEqual(["AB", "H21", "H21"]);
     // A key without a live variant (the editor's structure ahead of the write) reads the sheet as is.

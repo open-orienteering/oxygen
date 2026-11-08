@@ -328,7 +328,8 @@ export):
 - **The shared window**: a stored centre wins; a NULL one centres on
   every site any alternative visits and the course's ends
   (`sharedWindowCentre`), so every variant page — and the
-  all-variations page — shows the same window. A course split by map
+  all-variations page, and the root's own read in the editor and
+  `courseMap.list` — shows the same window. A course split by map
   exchanges keeps its parts' own centring (§5.2 "Part sheets").
 - **The all-variations page** (`?allVariations=`, answer 4: for
   officials; the runners' maps are the variant pages):

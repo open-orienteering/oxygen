@@ -80,7 +80,7 @@ the row mapping `maps.pdf` uses (`sheetInputForMapRow`, `pdf-page.ts`):
   the variants share; `variantKey` in the answer (null otherwise). A key
   the sheet's course has no live variant of — any other sheet, or a key
   the editor's structure has before its write lands — reads the sheet
-  as is (decided on the user's standing instruction 2026-11-07, for
+  as is, on the same shared window (decided on the user's standing instruction 2026-11-07, for
   review: no error while the editor is ahead of the server).
 - Returns `scope`, the raw `sheet` (seq, name, kind, course, class,
   `sectionIndex` — the part it prints, F5 —, window centre, overrides,
