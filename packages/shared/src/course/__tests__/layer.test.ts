@@ -340,6 +340,15 @@ describe("corridors (§10.2, F2)", () => {
       expect(circleOf(layer, "S")).toEqual(circleOf(plain, "S"));
     });
 
+    it("a leg with a smooth bend (F16's default) opens the circle too", () => {
+      const layer = withLeg({ corridor, bends: [{ x: 25, y: 13, hIn: { x: -5, y: 0 }, hOut: { x: 5, y: 0 } }] });
+      expect(layer.derivation.courses[0].legs[0].points.length).toBeGreaterThan(10);
+      const arcs = circleOf(layer, "31");
+      expect(arcs).toHaveLength(1);
+      expect(arcs[0].path.closed).toBe(false);
+      expect(layer.derivation.sites.find((x) => x.id === "31")!.cuts).toEqual([]);
+    });
+
     it("edge: false or h ≥ R: the circle stays whole (answers 1 and 3)", () => {
       expect(circleOf(withLeg({ corridor: { ...corridor, edge: false } }), "31")[0].path.closed).toBe(true);
       expect(circleOf(withLeg({ corridor: { ...corridor, widthM: 75 } }), "31")[0].path.closed).toBe(true);

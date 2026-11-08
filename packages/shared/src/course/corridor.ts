@@ -89,9 +89,10 @@ export interface CorridorMouths {
 /** One end of a corridor leg at a site. */
 interface LegEnd {
   siteId: string;
-  /** The site's point (the leg's end) and the next distinct point along the leg, µm. */
+  /** The site's point (the leg's end), µm. */
   c: Pt;
-  next: Pt;
+  /** The leg's distinct points from the site on (`path[0]` is `c`), µm. */
+  path: Pt[];
   half: number;
   white: number;
   edge: boolean;
@@ -186,8 +187,8 @@ function runsOf(courses: readonly DerivedCourse[]): { runs: Run[]; edged: EdgedS
       }
       const distinct = simplify(pts);
       if (distinct.length >= 2) {
-        ends.push({ siteId: leg.from, c: distinct[0], next: distinct[1], half, white, edge: k.edge });
-        ends.push({ siteId: leg.to, c: distinct[distinct.length - 1], next: distinct[distinct.length - 2], half, white, edge: k.edge });
+        ends.push({ siteId: leg.from, c: distinct[0], path: distinct, half, white, edge: k.edge });
+        ends.push({ siteId: leg.to, c: distinct[distinct.length - 1], path: [...distinct].reverse(), half, white, edge: k.edge });
       }
       for (let j = 1; j < pts.length; j++) {
         const a = pts[j - 1], b = pts[j];
@@ -328,32 +329,59 @@ function toRings(p: Pt, rings: readonly FlatRing[], limit: number): number {
   return best;
 }
 
+/** Samples round a circle when finding the arcs inside a leg's corridor (0.5°); each arc's ends are then bisected. */
+const OPENING_SAMPLES = 720;
+
 /**
  * The openings (§10.2, F19): an edged leg with half width h < R at a
- * control opens the circle over θ ± asin(h / R), θ the bearing of its
- * end segment, when that segment reaches the circle (its length at least
- * √(R² − h²)) and a junction — where a side meets the circle — lies on
- * the inside's boundary. A wider corridor at the site covers both
- * junctions and leaves the circle whole.
+ * control opens the circle where it lies inside that leg's own corridor —
+ * the arcs of the circle within h of the leg's polyline, each between two
+ * junctions where the leg's sides cross the circle; on a straight end
+ * segment exactly θ ± asin(h / R), θ the segment's bearing. An arc opens
+ * when one of its junctions lies on the inside's boundary; a wider
+ * corridor at the site covers both and leaves the circle whole.
  */
 function openingsOf(ends: readonly LegEnd[], mouths: ReadonlyMap<string, Mouth>, inside: readonly FlatRing[]): Map<string, AngularGap[]> {
   const out = new Map<string, AngularGap[]>();
   for (const e of ends) {
     const mouth = mouths.get(e.siteId);
     if (!e.edge || !mouth || mouth.site.role !== "control" || !mouth.inInside) continue;
-    const R = mouth.extent, h = e.half;
+    const R = mouth.extent, h = e.half, c = e.c;
     if (!(h > 0 && h < R)) continue;
-    const dx = e.next.x - e.c.x, dy = e.next.y - e.c.y, len = Math.hypot(dx, dy);
-    const along = Math.sqrt(R * R - h * h);
-    if (len < along) continue;
-    const ux = dx / len, uy = dy / len;
-    const junctions = [1, -1].map((side) => ({ x: e.c.x + ux * along - uy * h * side, y: e.c.y + uy * along + ux * h * side }));
-    if (!junctions.some((j) => toRings(j, inside, JUNCTION_TOLERANCE_UM) <= JUNCTION_TOLERANCE_UM)) continue;
-    const theta = (((90 - (Math.atan2(uy, ux) * 180) / Math.PI) % 360) + 360) % 360;
-    const delta = (Math.asin(h / R) * 180) / Math.PI;
-    const list = out.get(e.siteId) ?? [];
-    list.push({ start: theta - delta, end: theta + delta });
-    out.set(e.siteId, list);
+    // The leg's segments that come within h of the circle.
+    const near: [Pt, Pt][] = [];
+    for (let i = 0; i + 1 < e.path.length; i++) if (distToSegment(c, e.path[i], e.path[i + 1]) <= R + h) near.push([e.path[i], e.path[i + 1]]);
+    const at = (a: number): Pt => ({ x: c.x + R * Math.cos(a), y: c.y + R * Math.sin(a) });
+    const inStrip = (a: number) => near.some(([p, q]) => distToSegment(at(a), p, q) < h);
+    const step = (2 * Math.PI) / OPENING_SAMPLES;
+    const flags = Array.from({ length: OPENING_SAMPLES }, (_, k) => inStrip(k * step));
+    const first = flags.indexOf(false);
+    if (first < 0) continue;
+    /** The angle between `a` (whose state is `from`) and `b` where the state changes, to 1e-7 rad. */
+    const bisect = (a: number, b: number, from: boolean) => {
+      for (let i = 0; i < 24; i++) {
+        const m = (a + b) / 2;
+        if (inStrip(m) === from) a = m;
+        else b = m;
+      }
+      return (a + b) / 2;
+    };
+    for (let k = 1; k <= OPENING_SAMPLES; k++) {
+      const i = (first + k) % OPENING_SAMPLES;
+      if (!flags[i] || flags[(i + OPENING_SAMPLES - 1) % OPENING_SAMPLES]) continue;
+      // An arc inside the strip starts at sample i: find where it ends.
+      let j = i;
+      while (flags[(j + 1) % OPENING_SAMPLES]) j++;
+      const a0 = bisect((first + k - 1) * step, (first + k) * step, false);
+      const a1 = bisect((first + k + (j - i)) * step, (first + k + (j - i) + 1) * step, true);
+      if (![a0, a1].some((a) => toRings(at(a), inside, JUNCTION_TOLERANCE_UM) <= JUNCTION_TOLERANCE_UM)) continue;
+      // Math angles (counter-clockwise from +x) a0 → a1 are compass 90 − a1 → 90 − a0.
+      const list = out.get(e.siteId) ?? [];
+      const start = 90 - (a1 * 180) / Math.PI, sweep = ((a1 - a0) * 180) / Math.PI;
+      const s0 = ((start % 360) + 360) % 360;
+      list.push({ start: s0, end: s0 + sweep });
+      out.set(e.siteId, list);
+    }
   }
   return out;
 }
