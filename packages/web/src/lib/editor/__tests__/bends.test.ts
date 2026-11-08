@@ -1,6 +1,7 @@
 import { describe, it, expect } from "vitest";
 import {
-  bendsOfPath, dragBendGrip, insertBendAt, legPath, legPolyline, moveBend, setBendKind, toggleBendSmooth, pointAtFraction, polylineDistance, polylineFraction, polylineLength, polylineSlice, removeBend,
+  roundBend,
+  dragBendGrip, insertBendAt, legPath, legPolyline, moveBend, setBendKind, toggleBendSmooth, pointAtFraction, polylineDistance, polylineFraction, polylineLength, polylineSlice, removeBend,
 } from "../bends";
 
 const A = { x: 0, y: 0 }, B = { x: 20, y: 0 };
@@ -31,11 +32,10 @@ describe("bends (docs/course-editor.md §6.7)", () => {
     expect(insertBendAt(A, [], B, { x: 10, y: 1 }, true)).toEqual({ bends: [{ x: 10, y: 0 }], index: 0 });
   });
 
-  it("the path is [from, ...bends, to] and back; the sites never carry handles, every number at 0.01 mm", () => {
+  it("the path is [from, ...bends, to]; a bend rounds to 0.01 mm, a handle that rounds to nothing dropped", () => {
     const bends = [{ x: 10, y: 5, hOut: { x: 1, y: 0 } }];
     expect(legPath(A, bends, B)).toEqual([A, bends[0], B]);
-    expect(bendsOfPath([{ x: 0, y: 0, hOut: { x: 1, y: 1 } }, { x: 1.234, y: 5.678, hIn: { x: 0.004, y: 0 }, hOut: { x: 1.006, y: -2.001 } }, B]))
-      .toEqual([{ x: 1.23, y: 5.68, hOut: { x: 1.01, y: -2 } }]);
+    expect(roundBend({ x: 1.234, y: 5.678, hIn: { x: 0.004, y: 0 }, hOut: { x: 1.006, y: -2.001 } })).toEqual({ x: 1.23, y: 5.68, hOut: { x: 1.01, y: -2 } });
   });
 
   it("Alt-click toggles a bend between corner and smooth; the Smooth / Corner buttons set it", () => {

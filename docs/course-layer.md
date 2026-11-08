@@ -1388,8 +1388,8 @@ and `bends` real, F2 `corridor`, F4 `crossing` (§10.3).
   (§8.3). `bendSegmentAt(a, bends, b, pt)` → `{ index, t, dist, point }`
   is the bend segment nearest a point by flattened distance (ties to the
   lower index; `t` the segment's own parameter): where a crossing point
-  joins (§3.2) and the editor's *Add bend here* inserts (a corner,
-  `course-editor.md` §6.7). `reverseBends` runs a leg backwards (the
+  joins (§3.2) (the editor's *Add bend here* finds its segment with
+  `nearestEdge` on the vertex path since F16, `course-editor.md` §6.7). `reverseBends` runs a leg backwards (the
   vertices reversed, each one's `hIn` and `hOut` swapped).
 - **Dashes** are laid by `symbolise` along each piece as one path, so a
   dash runs round a bend; every backend draws the slices it returns

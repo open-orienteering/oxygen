@@ -745,10 +745,12 @@ gestures are §7's "Editing geometry" on the open path
 `[from, …bends, to]` (F16, user answer Q2 of feedback 2026-11-08: the
 same convention as every vertex tool, F18 — **smooth by default, Alt
 for sharp**), edited through `geometry-edit.ts` by `lib/editor/bends.ts`
-(`legPath`, `BEND_RULE` = a line's rule: open, curves allowed). The
-sites are the path's fixed ends: they are never dragged here and never
-carry a handle (an open path's ends have no smooth form; `bendsOfPath`
-drops them), and handles exist on bends only (user answer Q1).
+(`legPath`, edited with `closed: false`: an open path, curves allowed).
+The sites are the path's fixed ends: they are never dragged here and
+never carry a handle (an open path's ends have no smooth form, a split
+gives a corner end no handle, and only the bends — the path without its
+two ends — are written back), and handles exist on bends only (user
+answer Q1).
 
 - **Pressing order**: a bend handle, then a grip, within the handle
   reach (7 CSS px), before anything else under it (the leg would be a leg
@@ -824,10 +826,11 @@ polyline. The bend handles and the dashed leg outline are the stored
 bends only (the crossing point is a site, moved as one). A
 `course-leg` mirror item carries its leg's resolved `data-style`.
 A stored bend may carry Bézier handles (F13, `course-layer.md` §10.1):
-the layer draws the curve, and every readout above, the dashed outline
-and *Add bend here* read the shared flattened polyline (`legPolyline`
-= `course.legPolylineOf`), so every editor composition of
-`[from, …bends, to]` is the drawn curve (F16).
+the layer draws the curve, and every readout above and the dashed
+outline read the shared flattened polyline (`legPolyline` =
+`course.legPolylineOf`), so every editor composition of
+`[from, …bends, to]` is the drawn curve (F16); *Add bend here* finds its
+segment on the path itself (`nearestEdge`, the exact cubics).
 
 **Phone** (08 §5.5 "desktop-only by design", §10): a tapped leg shows the
 section in the sheet with every control disabled and the line *Leg

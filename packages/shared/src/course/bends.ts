@@ -90,8 +90,9 @@ export interface BendSegmentHit {
 
 /**
  * The segment of [a, …bends, b] whose flattened path is nearest `pt`
- * (ties to the lowest index): where *Add bend here* and a crossing point
- * join the leg, so it keeps its order of vertices (§10.3).
+ * (ties to the lowest index): where a crossing point joins the leg, so
+ * it keeps its order of vertices (§10.3). (The editor's *Add bend here*
+ * finds its segment on the vertex path, `nearestEdge`, since F16.)
  */
 export function bendSegmentAt(a: MapPoint, bends: readonly PathVertex[] | undefined, b: MapPoint, pt: MapPoint): BendSegmentHit {
   const list = bends ?? [];

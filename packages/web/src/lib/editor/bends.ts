@@ -9,7 +9,7 @@
 
 import { course, type PathVertex } from "@oxygen/shared";
 import {
-  constrain45, dragGrip, hasHandles, insertVertex, nearestEdge, retractHandles, smoothHandles, toggleSmooth, vertexRule, type Vertex,
+  constrain45, dragGrip, hasHandles, insertVertex, nearestEdge, retractHandles, smoothHandles, toggleSmooth, type Vertex,
 } from "./geometry-edit";
 
 export type Pt = { x: number; y: number };
@@ -101,14 +101,12 @@ const roundPt = (p: Pt): Pt => ({ x: round(p.x), y: round(p.y) });
 
 /**
  * The leg as an open vertex path (F16, docs/course-editor.md §6.7, §7
- * "Editing geometry"): `[from, …bends, to]` under a line's rule — open, at
- * least the two sites, curves allowed. The sites are its fixed ends: an
- * open path's ends have no smooth form (`smoothHandles`, `toggleSmooth`),
- * and `bendsOfPath` drops them, so a site never carries a handle
- * (course-layer.md §10.1).
+ * "Editing geometry"): `[from, …bends, to]`, edited open (`closed: false`),
+ * curves allowed. The sites are its fixed ends: an open path's ends have
+ * no smooth form (`smoothHandles`, `toggleSmooth`), a split gives a corner
+ * end no handle, and only the path without its two ends is written back,
+ * so a site never carries a handle (course-layer.md §10.1).
  */
-export const BEND_RULE = vertexRule("oob_line");
-
 export const legPath = (from: Pt, bends: readonly Bend[] | undefined, to: Pt): Vertex[] => [{ x: from.x, y: from.y }, ...(bends ?? []), { x: to.x, y: to.y }];
 
 /** A bend at 0.01 mm: its point and its handles (a handle rounded to nothing is dropped). */
@@ -119,9 +117,6 @@ export function roundBend(v: Vertex): Bend {
   if (hOut && (hOut.x || hOut.y)) out.hOut = hOut;
   return out;
 }
-
-/** The bends of a leg path (`legPath`): the sites dropped, each bend rounded (`roundBend`). */
-export const bendsOfPath = (path: readonly Vertex[]): Bend[] => path.slice(1, -1).map(roundBend);
 
 /**
  * *Add bend here* (§6.7, F16): a bend on the segment of [from, ...bends,
