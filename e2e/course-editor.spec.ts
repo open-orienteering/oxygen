@@ -10,7 +10,7 @@ import { readFile } from "node:fs/promises";
 import { expect, test, type Browser, type Page, type TestInfo } from "@playwright/test";
 import { reseed } from "./helpers/reseed";
 import {
-  allControlsSheet, analysePdf, arm, canvasInCircle, cleanup, clickMap, clickTab, controlRows, coveredBy, desktopContext, drag, dragMm, editorReady,
+  allControlsSheet, analysePdf, arm, canvasInCircle, cleanup, clickMap, clickTab, controlRows, coveredBy, desktopContext, drag, dragHold, dragMm, editorReady,
   emptyPoint, ensureCoursesAndMap, ensureFixtureFromDesktop, freezeExternalPoll, geometryOf, inkAt, inkIn, labelOf, legBetween, legMidpoint, legPieces, nameIdOf, objectRow, plainMapAt,
   openEditor, pageToPaperOf, place, placeOneShot, pressInside, pressOnEdge, printed, probeTemplate, regularCodes, select, selectCompetition,
   selectedCode, selectedPosition, siteCuts, site, sitePoint, sites, toolShapes, toPage, toPaper, trpcCall, viewCentre, viewSettled, newCourse,
@@ -3234,6 +3234,125 @@ test.describe("F3: legs — styles, bends, corridors (docs/course-editor.md §6.
       await cleanup("courseMap.delete", { id: sheet.seq });
       await cleanup("mapTemplate.delete", { id: template.seq });
     }
+  });
+
+  test("F21: a held bend drag redraws the course live — the purple line, then the corridor's band follow the handle; one write on release; undo", async ({ page }) => {
+    const { name, a, b } = await twoControlCourse(page, "F21 live");
+    const courseId = await page.getByTestId("editor-course-picker").inputValue();
+    const scale = await mapScale(page);
+    // Every structure write this page sends: none may go out while the handle is held (§6.7 "Writes").
+    const writes: string[] = [];
+    page.on("request", (r) => { if (r.url().includes("course.setStructure")) writes.push(r.url()); });
+    await selectLeg(page, name, a, b);
+    const added = waitForTrpc(page, "course.setStructure");
+    await page.getByTestId("editor-action-bar").getByTestId("editor-action-add-bend").click();
+    await added;
+    await expect.poll(async () => (await storedBends(courseId)).length, { timeout: 15000 }).toBe(1);
+    await viewSettled(page);
+    const p0 = (await toolShapes(page, "editor-bend-handle"))[0];
+    // The default corridor (F3): 50 m wide, a 5 mm band.
+    const halfMm = (50 * 1000) / scale / 2;
+    const len = Math.hypot(b.mm.x - a.mm.x, b.mm.y - a.mm.y);
+    const u = { x: (b.mm.x - a.mm.x) / len, y: (b.mm.y - a.mm.y) / len };
+    // The perpendicular that points up the screen: the action bar lays out below the phantom.
+    const up = (await toPage(page, { x: p0.x - u.y, y: p0.y + u.x })).y < (await toPage(page, p0)).y ? 1 : -1;
+    const n = { x: -u.y * up, y: u.x * up };
+    const box = (await page.getByTestId("map-viewer").boundingBox())!;
+    const marks = (await sites(page)).map((x) => x.mm);
+    const clearOfSites = (pts: Pt[]) => pts.filter((q) => marks.every((m) => Math.hypot(q.x - m.x, q.y - m.y) > 6));
+    /** Points at `offsets` from `c` along n, `-reach..reach` along u. */
+    const strip = (c: Pt, offsets: readonly number[], reach: number) => {
+      const out: Pt[] = [];
+      for (let t = -reach; t <= reach + 1e-9; t += 0.1) for (const d of offsets) out.push({ x: c.x + u.x * t + n.x * d, y: c.y + u.y * t + n.y * d });
+      return out;
+    };
+    const bandOffsets: number[] = [];
+    for (let d = halfMm + 0.8; d <= halfMm + 4.2; d += 0.2) bandOffsets.push(d);
+    // The chord's band, both sides; the leg's line at the held apex; the band beyond the apex (its outer side, where
+    // the apex is the nearest point of the leg).
+    const chordBand = clearOfSites(strip(p0, [...bandOffsets, ...bandOffsets.map((d) => -d)], 2));
+    expect(chordBand.length, "the chord's band clear of the sites").toBeGreaterThan(0);
+    // The apex at least 2h + 12 mm off the chord (the moved corridor and band clear the chord's band on both sides):
+    // the first such distance whose probes are clear of every site (the course's controls are picked at random).
+    let p1: Pt | null = null;
+    let apexLine: Pt[] = [], apexBand: Pt[] = [];
+    for (let D = 2 * halfMm + 12; D <= 2 * halfMm + 40 && !p1; D += 2) {
+      const at = { x: p0.x + n.x * D, y: p0.y + n.y * D };
+      const line = strip(at, [-0.1, 0, 0.1], 1), bandAt = strip(at, bandOffsets, 2);
+      const onMap = (await toPage(page, at)).y > box.y + 20;
+      if (onMap && clearOfSites(line).length === line.length && clearOfSites(bandAt).length === bandAt.length) {
+        p1 = at;
+        apexLine = line;
+        apexBand = bandAt;
+      }
+    }
+    if (!p1) throw new Error("no apex clear of the sites above the leg");
+    const from = await toPage(page, p0), to = await toPage(page, p1);
+    expect(await inkAt(page, apexLine, "purple"), "no line where the handle goes").toBe(0);
+
+    // A plain leg: held, the layer draws the line through the handle; no write until the release, then one. Read held
+    // (`inkAt(…, true)`): a hidden overlay would send the viewer a mouseleave, its cancel.
+    /** How far the UI handle is from the held apex (the gesture took the press). */
+    const heldAt = async () => { const h = (await toolShapes(page, "editor-bend-handle"))[0]; return h ? Math.hypot(h.x - p1!.x, h.y - p1!.y) : Infinity; };
+    let sent = writes.length;
+    await dragHold(page, from, to);
+    await expect.poll(heldAt, { timeout: 5000 }).toBeLessThan(0.5);
+    await expect.poll(() => inkAt(page, apexLine, "purple", true), { timeout: 15000 }).toBeGreaterThan(0);
+    expect(await heldAt(), "still held").toBeLessThan(0.5);
+    expect(writes.length, "no write while the handle is held").toBe(sent);
+    let released = waitForTrpc(page, "course.setStructure");
+    await page.mouse.up();
+    await released;
+    expect(writes.length, "one write on release").toBe(sent + 1);
+    await expect.poll(async () => Math.hypot((await storedBends(courseId))[0].x - p1.x, (await storedBends(courseId))[0].y - p1.y), { timeout: 15000 }).toBeLessThan(0.5);
+    expect(await inkAt(page, apexLine, "purple"), "the line stays at the written bend").toBeGreaterThan(0);
+    // Undo: the bend back on the chord.
+    await page.keyboard.press("Control+z");
+    await expect.poll(async () => Math.hypot((await storedBends(courseId))[0].x - p0.x, (await storedBends(courseId))[0].y - p0.y), { timeout: 15000 }).toBeLessThan(0.01);
+    await expect.poll(() => inkAt(page, apexLine, "purple"), { timeout: 30000 }).toBe(0);
+
+    // The default corridor on the leg (A, then C): the chord's band white.
+    await page.keyboard.press("a");
+    const cut = waitForTrpc(page, "course.setStructure");
+    await page.keyboard.press("c");
+    await cut;
+    await expect(page.getByTestId("editor-leg-corridor-width")).toHaveValue("50");
+    await expect.poll(() => inkAt(page, chordBand, "map"), { timeout: 30000 }).toBe(0);
+    expect(await inkAt(page, apexBand, "map"), "the fixture map has colour where the band goes").toBeGreaterThan(0);
+
+    // Held: the band follows the handle (white beyond the apex) and the map shows again beside the chord; no write.
+    await viewSettled(page);
+    sent = writes.length;
+    await dragHold(page, await toPage(page, p0), await toPage(page, p1));
+    await expect.poll(heldAt, { timeout: 5000 }).toBeLessThan(0.5);
+    await expect.poll(() => inkAt(page, apexBand, "map", true), { timeout: 30000 }).toBe(0);
+    await expect.poll(() => inkAt(page, chordBand, "map", true), { timeout: 30000 }).toBeGreaterThan(0);
+    expect(await heldAt(), "still held").toBeLessThan(0.5);
+    expect(writes.length, "no write while the handle is held").toBe(sent);
+    released = waitForTrpc(page, "course.setStructure");
+    await page.mouse.up();
+    await released;
+    expect(writes.length, "one write on release").toBe(sent + 1);
+    // Through the write and the list's refetch, the band stays where it was released (no jump back).
+    await expect.poll(async () => Math.hypot((await storedBends(courseId))[0].x - p1.x, (await storedBends(courseId))[0].y - p1.y), { timeout: 15000 }).toBeLessThan(0.5);
+    expect(await inkAt(page, apexBand, "map"), "the band at the written bend").toBe(0);
+    expect(await inkAt(page, chordBand, "map"), "the map beside the chord").toBeGreaterThan(0);
+
+    // Undo restores the chord's band.
+    await page.keyboard.press("Control+z");
+    await expect.poll(() => inkAt(page, chordBand, "map"), { timeout: 30000 }).toBe(0);
+    await expect.poll(async () => Math.hypot((await storedBends(courseId))[0].x - p0.x, (await storedBends(courseId))[0].y - p0.y), { timeout: 15000 }).toBeLessThan(0.01);
+
+    // Escape ends a held drag: the release writes nothing, the bend stays on the chord.
+    await viewSettled(page);
+    sent = writes.length;
+    await dragHold(page, await toPage(page, p0), await toPage(page, p1));
+    await expect.poll(heldAt, { timeout: 5000 }).toBeLessThan(0.5);
+    await page.keyboard.press("Escape");
+    await page.mouse.up();
+    await page.waitForTimeout(1000);
+    expect(writes.length, "no write after Escape").toBe(sent);
+    expect(Math.hypot((await storedBends(courseId))[0].x - p0.x, (await storedBends(courseId))[0].y - p0.y)).toBeLessThan(0.01);
   });
 });
 

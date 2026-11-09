@@ -6,7 +6,7 @@ import {
   type ControlDescription,
   defaultMapAppearance,
 } from "@oxygen/shared";
-import { withCourseOverride, type CourseDraw } from "../lib/editor/variation-view";
+import { withCourseOverride, withLegDraft, type CourseDraw, type LegDraft } from "../lib/editor/variation-view";
 import { actionBarMaxWidth, actionBarPlace } from "../lib/editor/action-bar-place";
 import { descriptionCells, IOF_SYMBOLS } from "../iof-symbols";
 import {
@@ -314,6 +314,11 @@ export interface MapViewerEditorProps {
    * path), the others are drawn beside it, highlighted (All variations' tinted branches).
    */
   courseOverride?: readonly CourseDraw[] | null;
+  /**
+   * The selected leg's live bends while a bend or grip drag is in flight, held after the release until the list
+   * carries them (docs/course-editor.md §6.7, F21): merged after the override, so the layer redraws per move.
+   */
+  legDraft?: LegDraft | null;
 }
 
 /** What a tool gets for a pointer event. */
@@ -481,8 +486,10 @@ export function MapViewer({
   rotationCorrection,
 }: Props) {
   // §12: the editor draws a course with variation groups as it shows it (the displayed path, or All variations).
+  // F21: the leg draft of a bend or grip drag over it (course-layer.md §5).
   const courseOverride = editor?.courseOverride ?? null;
-  const courses: CourseOverlay[] = useMemo(() => withCourseOverride(coursesProp, courseOverride), [coursesProp, courseOverride]);
+  const legDraft = editor?.legDraft ?? null;
+  const courses: CourseOverlay[] = useMemo(() => withLegDraft(withCourseOverride(coursesProp, courseOverride), legDraft), [coursesProp, courseOverride, legDraft]);
   const { nameId } = useParams<{ nameId: string }>();
   const { t } = useTranslation("dashboard");
   const isCoarsePointer = useMediaQuery("(pointer: coarse)");

@@ -141,6 +141,12 @@ export interface LegBends {
   focused: number | null;
   /** One write per gesture (a drag, on release; an Alt-click). */
   onBendsChange: (bends: Bend[]) => void;
+  /**
+   * The live bends of a bend or grip drag, on every move past 3 px (F21: the page hands them to the layer); null when
+   * the drag is cancelled. A committing release reports none: its `onBendsChange` takes over (the page holds the draft
+   * until the list carries the write).
+   */
+  onBendsDraft?: (bends: Bend[] | null) => void;
   onBendFocus: (index: number | null) => void;
   snap: (pt: Pt) => Pt;
 }
@@ -247,11 +253,13 @@ export function selectBinding(o: SelectOptions): EditorToolBinding {
         if (!cur.moved && near(cur.press, pt, 3 * cur.mmPerPx)) return;
         cur.moved = true;
         cur.bends = moveBend(cur.bends, cur.index, leg.snap(pt));
+        leg.onBendsDraft?.(cur.bends);
         o.redraw();
       } else if (cur?.kind === "bend-grip" && leg) {
         if (!cur.moved && near(cur.press, pt, 3 * cur.mmPerPx)) return;
         cur.moved = true;
         cur.bends = gripDragged(cur, pt, mods);
+        leg.onBendsDraft?.(cur.bends);
         o.redraw();
       } else if (cur?.kind === "object" || cur?.kind === "grip") {
         const geometry = dragGeometry(cur, pt, mods);
@@ -264,7 +272,9 @@ export function selectBinding(o: SelectOptions): EditorToolBinding {
       if (!cur) return;
       if (cur.kind === "bend") {
         o.redraw();
-        if (!pt || !leg) return;
+        if (!leg) return;
+        // A cancelled drag drops its draft (F21); a click never made one.
+        if (!pt) return void (cur.moved && leg.onBendsDraft?.(null));
         leg.onBendFocus(cur.index);
         if (cur.moved) return leg.onBendsChange(moveBend(cur.bends, cur.index, leg.snap(pt)));
         // A click focuses; with Alt it also toggles the bend corner / smooth (F18's Alt-click, §7).
@@ -275,7 +285,8 @@ export function selectBinding(o: SelectOptions): EditorToolBinding {
       if (cur.kind === "bend-grip") {
         o.redraw();
         // A click on a grip does nothing; a drag writes once and focuses its bend.
-        if (!pt || !leg || !cur.moved) return;
+        if (!leg || !cur.moved) return;
+        if (!pt) return leg.onBendsDraft?.(null);
         leg.onBendFocus(cur.index);
         return leg.onBendsChange(cur.bends);
       }

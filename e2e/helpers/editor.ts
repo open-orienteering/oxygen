@@ -208,6 +208,13 @@ export async function drag(page: Page, from: Pt, to: Pt): Promise<void> {
   await page.mouse.up();
 }
 
+/** Press at `from` and move to `to` without releasing: a gesture held mid-drag (the caller ends it with `page.mouse.up()`). */
+export async function dragHold(page: Page, from: Pt, to: Pt): Promise<void> {
+  await page.mouse.move(from.x, from.y);
+  await page.mouse.down();
+  await page.mouse.move(to.x, to.y, { steps: 8 });
+}
+
 /** The editor is mounted, the course layer drawn and the sites mirrored. */
 export async function editorReady(page: Page): Promise<Locator> {
   await expect(page.getByTestId("editor-page")).toBeVisible({ timeout: 15_000 });
@@ -269,11 +276,17 @@ export type InkKind = "dark" | "purple" | "map";
  * or null off the canvas. The pixel is the one whose square holds the point — `floor`, not `round`: pixel `i`
  * spans `[i, i + 1)`, so rounding moves up to a pixel off the point, onto a thin stroke's anti-aliased edge
  * (docs/bugfix-e2e-apex-probe-pixel.md).
+ *
+ * `held` (a gesture held mid-drag, F21): the overlays are made transparent instead of hidden. A hidden element is
+ * not hit, so the pointer would leave the viewer and Chromium would send it a `mouseleave` — the viewer's cancel of
+ * the gesture. A transparent one is still hovered.
  */
-async function canvasShot(page: Page): Promise<{ png: { width: number; height: number; data: Buffer }; pixelOf: (p: Pt) => number | null; pxPerMm: number }> {
+async function canvasShot(page: Page, held = false): Promise<{ png: { width: number; height: number; data: Buffer }; pixelOf: (p: Pt) => number | null; pxPerMm: number }> {
   const { PNG } = await import("pngjs");
   const canvas = page.getByTestId("map-vector-layer");
-  const style = "body * { visibility: hidden !important } [data-testid='map-vector-layer'] { visibility: visible !important }";
+  const style = held
+    ? "body *:not(:has([data-testid='map-vector-layer'])):not([data-testid='map-vector-layer']) { opacity: 0 !important }"
+    : "body * { visibility: hidden !important } [data-testid='map-vector-layer'] { visibility: visible !important }";
   const png = PNG.sync.read(await canvas.screenshot({ style }));
   const cb = (await canvas.boundingBox())!;
   const k = png.width / cb.width;
@@ -312,9 +325,12 @@ export async function plainMapAt(page: Page, at: Pt, radiusMm: number): Promise<
   return true;
 }
 
-/** As `inkIn`, at a list of paper points (mm): how many distinct canvas pixels under them are of `kind`. */
-export async function inkAt(page: Page, points: readonly Pt[], kind: InkKind = "dark"): Promise<number> {
-  const { png, pixelOf } = await canvasShot(page);
+/**
+ * As `inkIn`, at a list of paper points (mm): how many distinct canvas pixels under them are of `kind`. `held`: read
+ * while a gesture is held mid-drag without ending it (`canvasShot`).
+ */
+export async function inkAt(page: Page, points: readonly Pt[], kind: InkKind = "dark", held = false): Promise<number> {
+  const { png, pixelOf } = await canvasShot(page, held);
   const seen = new Set<number>();
   let n = 0;
   for (const p of points) {
