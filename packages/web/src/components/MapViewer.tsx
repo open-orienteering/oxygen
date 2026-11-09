@@ -7,6 +7,7 @@ import {
   defaultMapAppearance,
 } from "@oxygen/shared";
 import { withCourseOverride, withLegDraft, type CourseDraw, type LegDraft } from "../lib/editor/variation-view";
+import { actionBarMaxWidth, actionBarPlace } from "../lib/editor/action-bar-place";
 import { descriptionCells, IOF_SYMBOLS } from "../iof-symbols";
 import {
   buildDescriptionSheet,
@@ -739,6 +740,26 @@ export function MapViewer({
     });
     ro.observe(el);
     return () => ro.disconnect();
+  }, []);
+
+  // The action bar's laid-out size, so it is placed inside the clipping viewer (lib/editor/action-bar-place.ts).
+  // Read when it mounts (before paint) and on every resize after; its width is `max-content`, so it does not
+  // depend on where the bar is put.
+  const [barSize, setBarSize] = useState({ w: 0, h: 0 });
+  const barObserverRef = useRef<ResizeObserver | null>(null);
+  const actionBarRef = useCallback((el: HTMLDivElement | null) => {
+    barObserverRef.current?.disconnect();
+    barObserverRef.current = null;
+    if (!el) return;
+    const read = () => {
+      const w = el.offsetWidth, h = el.offsetHeight;
+      setBarSize((s) => (s.w === w && s.h === h ? s : { w, h }));
+    };
+    read();
+    if (typeof ResizeObserver !== "undefined") {
+      barObserverRef.current = new ResizeObserver(read);
+      barObserverRef.current.observe(el);
+    }
   }, []);
 
   // Map rotation: the drawn meridians vertical on screen — the paper view
@@ -2329,16 +2350,20 @@ export function MapViewer({
       const pos = innerToContainer(inner.x, inner.y);
       const bar = editor.actionLayout === "bar";
       if (pos.x > -40 && pos.x < containerSize.w + 40 && pos.y > -20 && pos.y < containerSize.h + 20) {
+        // Centred under the selection, shifted or flipped above it to stay inside the viewer (§2).
+        const placed = bar ? actionBarPlace({ anchor: pos, anchorR, size: barSize, container: containerSize }) : null;
         editorMenu = (
           <div
+            ref={bar ? actionBarRef : undefined}
             data-testid={bar ? "editor-action-bar" : "editor-context-menu"}
+            data-placement={placed ? (placed.above ? "above" : "below") : undefined}
             className="relative flex flex-col gap-0.5 bg-white/95 backdrop-blur-sm rounded-lg border border-slate-200 shadow-lg p-1"
-            style={bar ? {
+            style={placed ? {
               position: "absolute",
-              left: Math.max(8, Math.min(containerSize.w - 8, pos.x)),
-              top: pos.y + anchorR + 10,
-              transform: "translateX(-50%)",
-              maxWidth: Math.max(160, containerSize.w - 16),
+              left: placed.left,
+              top: placed.top,
+              width: "max-content",
+              maxWidth: actionBarMaxWidth(containerSize.w),
               zIndex: 9,
             } : {
               position: "absolute",
@@ -2372,9 +2397,11 @@ export function MapViewer({
               </button>
             )}
             {editor.contextInfo && (
+              // One line, cut with an ellipsis inside the bar; the whole text in the title (the inspector lists it too).
               <div
                 data-testid="editor-context-info"
-                className="text-[11px] text-slate-500 pl-2.5 pr-8 pt-1.5 pb-1 whitespace-nowrap border-b border-slate-100"
+                title={editor.contextInfo}
+                className="text-[11px] text-slate-500 pl-2.5 pr-8 pt-1.5 pb-1 whitespace-nowrap overflow-hidden text-ellipsis border-b border-slate-100"
               >
                 {editor.contextInfo}
               </div>

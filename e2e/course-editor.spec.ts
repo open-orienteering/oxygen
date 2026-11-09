@@ -62,8 +62,8 @@ async function dropSelection(page: Page): Promise<void> {
 
 /**
  * A page point near `from` for a drag target, above it if that is clear: the selection's action bar lays out
- * under the selected control, so a drag that ends above it never ends on the bar (D10 flake: "the action bar
- * covered the map").
+ * under the selected control (above it only near the viewer's bottom, §2), so a drag that ends above it rarely
+ * ends on the bar, and a point the bar covers is skipped (D10 flake: "the action bar covered the map").
  */
 /**
  * Drags control `code`'s number off its automatic place and waits for the write; returns where the label
@@ -3848,6 +3848,81 @@ test.describe("F7: variations and loops (docs/course-editor.md §12)", () => {
     await expect(label(x.id)).toHaveAttribute("data-text", x.code, { timeout: 15000 });
     await expect(label(b.id)).toHaveAttribute("data-text", b.code);
     await expect(label(z.id)).toHaveAttribute("data-text", z.code);
+  });
+});
+
+test.describe("The action bar stays inside the viewer (docs/course-editor.md §2)", () => {
+  desktopOnly();
+
+  test("a long Also-in list on a control left of the middle: the bar is shifted inside the viewer and Add to … works", async ({ page }) => {
+    await openEditor(page);
+    const stamp = Date.now() % 100000;
+    const listed = `Bar edge long course name 14 ${stamp}`;
+    const controls = (await trpcCall<{ id: number; kind: string }[]>("control.list", undefined, false)).filter((c) => c.kind === "control");
+    const made: number[] = [];
+    try {
+      // Fourteen courses through every control: each control's "Also in" names all of them, wider than the viewer
+      // (docs/bugfix-action-bar-off-viewer.md: the F15 flake had thirteen left by earlier tests).
+      for (let i = 1; i <= 14; i++) {
+        const { id } = await trpcCall<{ id: number }>("course.create", { name: `Bar edge long course name ${i} ${stamp}` });
+        made.push(id);
+        await trpcCall("course.setStructure", {
+          courseId: id,
+          structure: { version: 1, id: `bar-${i}`, orderMode: "ordered", items: controls.map((c) => ({ siteId: c.id })) },
+        });
+      }
+      await page.goto(`/${nameIdOf(page)}/course-editor`);
+      await editorReady(page);
+      await newCourse(page, "Bar edge");
+      const viewer = (await page.getByTestId("map-viewer").boundingBox())!;
+      // The leftmost clear control: centred under it, a bar as wide as the viewer began left of the viewer.
+      const codes = await regularCodes(page, 1000);
+      const at = await Promise.all(codes.map((c) => sitePoint(page, c)));
+      const k = at.reduce((best, p, j) => (p.x < at[best].x ? j : best), 0);
+      expect(at[k].x, "a clear control left of the viewer's middle").toBeLessThan(viewer.x + viewer.width / 2 - 50);
+      await select(page, codes[k]);
+
+      const bar = page.getByTestId("editor-action-bar");
+      const info = bar.getByTestId("editor-context-info");
+      await expect(info).toHaveAttribute("title", new RegExp(listed));
+      const box = (await bar.boundingBox())!;
+      expect(box.x, "the bar's left edge").toBeGreaterThanOrEqual(viewer.x);
+      expect(box.x + box.width, "the bar's right edge").toBeLessThanOrEqual(viewer.x + viewer.width);
+      // The list is cut with an ellipsis inside the bar, never drawn past its border.
+      const infoBox = (await info.boundingBox())!;
+      expect(infoBox.x + infoBox.width).toBeLessThanOrEqual(box.x + box.width + 0.5);
+      const add = bar.getByTestId("editor-action-append");
+      const addBox = (await add.boundingBox())!;
+      expect(addBox.x).toBeGreaterThanOrEqual(viewer.x);
+      expect(addBox.x + addBox.width).toBeLessThanOrEqual(viewer.x + viewer.width);
+
+      const saved = waitForTrpc(page, "course.setStructure");
+      await add.click();
+      await saved;
+      await expect(controlRows(page)).toHaveCount(1, { timeout: 15000 });
+      await dropSelection(page);
+
+      // The lowest clear control: the bar goes above it when it does not fit below, never past the viewer's bottom.
+      const rest = await regularCodes(page, 1000, [codes[k]]);
+      const ys = await Promise.all(rest.map((c) => sitePoint(page, c)));
+      const low = ys.reduce((best, p, j) => (p.y > ys[best].y ? j : best), 0);
+      await select(page, rest[low]);
+      const lowBox = (await bar.boundingBox())!;
+      expect(lowBox.y, "the bar's top").toBeGreaterThanOrEqual(viewer.y);
+      expect(lowBox.y + lowBox.height, "the bar's bottom").toBeLessThanOrEqual(viewer.y + viewer.height);
+      if (ys[low].y + 30 + lowBox.height > viewer.y + viewer.height - 8) {
+        await expect(bar).toHaveAttribute("data-placement", "above");
+        expect(lowBox.y + lowBox.height).toBeLessThan(ys[low].y);
+      }
+      const appended = waitForTrpc(page, "course.setStructure");
+      await bar.getByTestId("editor-action-append").click();
+      await appended;
+      await expect(controlRows(page)).toHaveCount(2, { timeout: 15000 });
+      // Nothing scrolled the clipping viewer to reach a button.
+      expect(await page.getByTestId("map-viewer").evaluate((el) => [el.scrollLeft, el.scrollTop])).toEqual([0, 0]);
+    } finally {
+      for (const id of made) await trpcCall("course.delete", { id }).catch(() => undefined);
+    }
   });
 });
 
