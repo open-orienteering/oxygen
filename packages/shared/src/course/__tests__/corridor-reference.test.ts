@@ -18,6 +18,11 @@
  * flattening does not move them. Re-record only for an intended change
  * of the geometry:
  * `UPDATE_CORRIDOR_REFERENCE=1 pnpm --filter @oxygen/shared exec vitest run src/course/__tests__/corridor-reference.test.ts`
+ * Each case also keeps a hash per component (`parts`: inside, band, edges,
+ * openings; F22), so a change says which component it moved. A change
+ * meant for the band alone is re-recorded with
+ * `UPDATE_CORRIDOR_REFERENCE=band`, which fails unless every case's
+ * inside, edges and openings hash is the recorded one.
  */
 
 import { createHash } from "node:crypto";
@@ -118,12 +123,28 @@ function edgeCases(): Case[] {
 
 const CASES: Case[] = [...edgeCases(), ...Array.from({ length: 60 }, (_, i) => caseOf(1000 + i))];
 
-interface Recorded { name: string; sha256: string; inside: number; band: number; edges: number; openings: number }
+/** Per-component SHA-256 (F22): the inside, the band, the edges and the openings each hashed on its own canonical JSON. */
+interface Parts { inside: string; band: string; edges: string; openings: string }
+
+interface Recorded { name: string; sha256: string; parts: Parts; inside: number; band: number; edges: number; openings: number }
 
 /** The geometry as canonical JSON: rings, edges in order, openings by site id. */
 function canonical(g: CorridorGeometry | null): string {
   if (!g) return "null";
-  return JSON.stringify({ inside: g.inside, band: g.band, edges: g.edges, openings: [...g.openings.entries()].sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0)) });
+  return JSON.stringify({ inside: g.inside, band: g.band, edges: g.edges, openings: sortedOpenings(g) });
+}
+
+const sortedOpenings = (g: CorridorGeometry) => [...g.openings.entries()].sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0));
+const sha = (s: string) => createHash("sha256").update(s).digest("hex");
+
+/** Each component's hash: a change to one component's geometry moves its hash and no other's (F22). */
+function parts(g: CorridorGeometry | null): Parts {
+  return {
+    inside: sha(JSON.stringify(g?.inside ?? null)),
+    band: sha(JSON.stringify(g?.band ?? null)),
+    edges: sha(JSON.stringify(g?.edges ?? null)),
+    openings: sha(JSON.stringify(g ? sortedOpenings(g) : null)),
+  };
 }
 
 function record(c: Case): Recorded {
@@ -131,7 +152,8 @@ function record(c: Case): Recorded {
   const count = (rings: readonly { length: number }[] | null | undefined) => (rings ?? []).reduce((s, r) => s + r.length, 0);
   return {
     name: c.name,
-    sha256: createHash("sha256").update(canonical(g)).digest("hex"),
+    sha256: sha(canonical(g)),
+    parts: parts(g),
     inside: count(g?.inside),
     band: count(g?.band),
     edges: (g?.edges ?? []).reduce((s, e) => s + e.points.length, 0),
@@ -142,8 +164,16 @@ function record(c: Case): Recorded {
 describe("corridor geometry reference (F20b): bit-identical to the pre-F20b result", () => {
   if (process.env.UPDATE_CORRIDOR_REFERENCE) {
     it("records the reference", () => {
+      const next = CASES.map(record);
+      if (process.env.UPDATE_CORRIDOR_REFERENCE === "band") {
+        // An intended change of the band alone (F22): the inside, the edges and the openings must stay as recorded.
+        const prev = JSON.parse(readFileSync(FILE, "utf8")) as Recorded[];
+        next.forEach((r, i) => {
+          for (const k of ["inside", "edges", "openings"] as const) expect(`${r.name} ${k} ${r.parts[k]}`).toBe(`${prev[i].name} ${k} ${prev[i].parts[k]}`);
+        });
+      }
       mkdirSync(dirname(FILE), { recursive: true });
-      writeFileSync(FILE, JSON.stringify(CASES.map(record), null, 1) + "\n");
+      writeFileSync(FILE, JSON.stringify(next, null, 1) + "\n");
     });
     return;
   }
