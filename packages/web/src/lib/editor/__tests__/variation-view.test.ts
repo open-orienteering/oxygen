@@ -1,6 +1,6 @@
 import { describe, it, expect } from "vitest";
 import type { course } from "@oxygen/shared";
-import { allVariationDraws, branchName, courseDrawOf, withCourseOverride, withLegDraft } from "../variation-view";
+import { allVariationDraws, branchName, courseDrawOf, shownLegDraftOf, withCourseOverride, withLegDraft, type HeldLegDraft } from "../variation-view";
 
 type S = course.WireCourseStructure;
 type Item = S["items"][number];
@@ -94,5 +94,40 @@ describe("the editor's leg draft (docs/course-editor.md §6.7, F21)", () => {
     const draws = [courseDrawOf("Lång", [{ siteId: 1 }, { siteId: 41 }, { siteId: 9, leg: { corridor } }])];
     const out = withLegDraft(withCourseOverride(overlays, draws), { course: "Lång", key: "41>9", bends: [{ x: 7, y: 7 }] });
     expect(out[0]).toMatchObject({ controls: ["1", "41", "9"], legs: { "41>9": { corridor, bends: [{ x: 7, y: 7 }] } } });
+  });
+});
+
+describe("the shown leg draft (docs/course-editor.md §6.7 \"Live redraw\", F21)", () => {
+  const OLD = [{ x: 1, y: 1 }], NEW = [{ x: 5, y: 5, hIn: { x: -1, y: 0 }, hOut: { x: 1, y: 0 } }], OTHER = [{ x: 9, y: 9 }];
+  const live: HeldLegDraft = { course: "A", key: "31>32", bends: NEW, leg: "7/1/31>32", epoch: 3, phase: "live" };
+  const held: HeldLegDraft = { ...live, phase: "held", from: OLD };
+  const at = (drawn: readonly { x: number; y: number }[] | undefined, over: { epoch?: number; leg?: string | null } = {}) => ({
+    epoch: over.epoch ?? 3, leg: over.leg === undefined ? "7/1/31>32" : over.leg, drawn: (course: string, key: string) => (course === "A" && key === "31>32" ? drawn : undefined),
+  });
+
+  it("a live draft shows while its leg is selected, whatever is drawn", () => {
+    expect(shownLegDraftOf(live, at(OLD))).toBe(live);
+    expect(shownLegDraftOf(live, at(NEW))).toBe(live);
+    expect(shownLegDraftOf(live, at(OLD, { leg: "7/2/32>33" }))).toBeNull();
+    expect(shownLegDraftOf(live, at(OLD, { leg: null }))).toBeNull();
+  });
+
+  it("a held draft shows until the drawn leg carries the written bends, or leaves the ones drawn at the release (pendingMoves)", () => {
+    expect(shownLegDraftOf(held, at(OLD))).toBe(held);
+    expect(shownLegDraftOf(held, at(NEW.map((b) => ({ ...b }))))).toBeNull();
+    // Another write landed: neither the old nor the written bends.
+    expect(shownLegDraftOf(held, at(OTHER))).toBeNull();
+    // A held draft outlives a leg change (the band must not jump back while the list catches up).
+    expect(shownLegDraftOf(held, at(OLD, { leg: null }))).toBe(held);
+    // A leg without bends before: absent and empty alike.
+    const fromNone: HeldLegDraft = { ...held, from: undefined };
+    expect(shownLegDraftOf(fromNone, at([]))).toBe(fromNone);
+    expect(shownLegDraftOf(fromNone, at(undefined))).toBe(fromNone);
+  });
+
+  it("undo / redo (another epoch) end any draft; none shows nothing", () => {
+    expect(shownLegDraftOf(live, at(OLD, { epoch: 4 }))).toBeNull();
+    expect(shownLegDraftOf(held, at(OLD, { epoch: 4 }))).toBeNull();
+    expect(shownLegDraftOf(null, at(OLD))).toBeNull();
   });
 });

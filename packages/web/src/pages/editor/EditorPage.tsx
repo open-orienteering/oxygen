@@ -62,9 +62,9 @@ import {
   addAlternative, appendSite, canCreateGroup, createGroup, displayPath, insertSite, itemAtPath, moveToAlternative, moveVisit, removeAlternative, removeSite, removeVisit,
   renameAlternative, setLegGaps, setLegProps, setLoop, setNumberHidden, setRole, DEFAULT_CORRIDOR, type GroupOrders, type KindOf, type LegPatch,
 } from "../../lib/editor/structure-edit";
-import { allVariationDraws, courseDrawOf, type LegDraft } from "../../lib/editor/variation-view";
+import { allVariationDraws, courseDrawOf, shownLegDraftOf, type HeldLegDraft } from "../../lib/editor/variation-view";
 import { alternativeEndAt, courseViewOrders, displaySequence, effectiveEnds, explicitStructure, insertIndexForLeg, kindOfSites, legForInsert, variationBlocks, type SiteRow } from "../../lib/editor/sequence";
-import { bendsEqual, insertBendAt, legPolyline, projectOnPolyline, setBendKind, type Bend } from "../../lib/editor/bends";
+import { insertBendAt, legPolyline, projectOnPolyline, setBendKind, type Bend } from "../../lib/editor/bends";
 import { courseActions } from "./ActionBar";
 import { TopBar } from "./TopBar";
 import { ToolRail, type AreaChoice } from "./ToolRail";
@@ -105,12 +105,6 @@ function defaultProps(kind: AreaKind): CourseObject["props"] {
 type Notice =
   | { kind: "refresh"; items: string[] | null }
   | { kind: "moved"; controlId: number; mine: Pt; theirs: Pt | null; by?: { name: string; at: string } | null };
-
-/**
- * The selected leg's bend-drag draft as the page keeps it (§6.7, F21): the leg it belongs to, live or held after the
- * release (with the bends drawn under it then), and the undo epoch it was made in.
- */
-type HeldLegDraft = LegDraft & { leg: string; epoch: number } & ({ phase: "live" } | { phase: "held"; from: readonly Bend[] | undefined });
 
 export function EditorPage() {
   const { t } = useTranslation("editor");
@@ -442,7 +436,7 @@ export function EditorPage() {
    * move. `live` during the drag, shown while its leg is selected; `held` from the release, shown until the course drawn
    * under it carries the written bends or leaves the ones it showed at the release (the `pendingMoves` rule), so the
    * band does not jump back while the list catches up. Dropped on a cancelled drag, Escape and a failed write; undo /
-   * redo (`moveEpoch`) end it. `shownLegDraft` (below the course override) applies these rules.
+   * redo (`moveEpoch`) end it. `shownLegDraft` (below the course override) applies these rules (`shownLegDraftOf`).
    */
   const [legDraft, setLegDraft] = useState<HeldLegDraft | null>(null);
   /** The bends the canvas draws for a course's leg without a draft (set below, once the override is known). */
@@ -1482,13 +1476,10 @@ export function EditorPage() {
   }, [courseOverride, courses.data]);
   useEffect(() => { drawnLegBendsRef.current = drawnLegBends; }, [drawnLegBends]);
   /** The leg draft the viewer draws (§6.7, F21): see `legDraft`. */
-  const shownLegDraft = useMemo((): LegDraft | null => {
-    const d = legDraft;
-    if (!d || d.epoch !== moveEpoch) return null;
-    if (d.phase === "live") return d.leg === legIdentity ? d : null;
-    const drawn = drawnLegBends(d.course, d.key);
-    return bendsEqual(drawn, d.bends) || !bendsEqual(drawn, d.from) ? null : d;
-  }, [legDraft, moveEpoch, legIdentity, drawnLegBends]);
+  const shownLegDraft = useMemo(
+    () => shownLegDraftOf(legDraft, { epoch: moveEpoch, leg: legIdentity, drawn: drawnLegBends }),
+    [legDraft, moveEpoch, legIdentity, drawnLegBends],
+  );
 
   // Offline, Field mode views only (§9 "Offline"): a drag snaps back instead of writing.
   const fieldReadOnly = fieldMode && !online;
@@ -1620,6 +1611,11 @@ export function EditorPage() {
         runRedo();
       } else if (e.key === "Escape") {
         setAreaOpen(false);
+        // A bend or grip drag in flight ends here (§6.7): its draft drops, the release then writes nothing.
+        if (gesture.current?.kind === "bend" || gesture.current?.kind === "bend-grip") {
+          gesture.current = null;
+          redraw();
+        }
         setLegDraft((d) => (d?.phase === "live" ? null : d));
         // The cascade first; with nothing left, Esc leaves fullscreen (MapPanel holds the Keyboard Lock).
         if (!escapeHasWork(state) && document.fullscreenElement) void document.exitFullscreen().catch(() => {});
@@ -1700,7 +1696,7 @@ export function EditorPage() {
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
   }, [descControlId, runUndo, runRedo, undoStack, state, handleDelete, deleteControls, deleteObject, selectedObject, focusedVertex, drafts, setDraft, updateObject, setChain, exitTool, finishArea,
-    stepSelection, armPlace, setTool, canGap, fitView, areaOpen, canTonerSaver, startArea, layoutKey, selectedLeg, focusedBend, legEditable, writeLeg, addCorridor, selectionGroup]);
+    stepSelection, armPlace, setTool, canGap, fitView, areaOpen, canTonerSaver, startArea, layoutKey, selectedLeg, focusedBend, legEditable, writeLeg, addCorridor, selectionGroup, redraw]);
 
   // Layout deep links (docs/course-layout.md §4): `?mode=layout` with `sheet=<seq>` or `template=<seq>`.
   const layoutLinkDone = useRef(false);

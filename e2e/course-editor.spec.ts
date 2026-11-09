@@ -3341,6 +3341,18 @@ test.describe("F3: legs — styles, bends, corridors (docs/course-editor.md §6.
     // Undo restores the chord's band.
     await page.keyboard.press("Control+z");
     await expect.poll(() => inkAt(page, chordBand, "map"), { timeout: 30000 }).toBe(0);
+    await expect.poll(async () => Math.hypot((await storedBends(courseId))[0].x - p0.x, (await storedBends(courseId))[0].y - p0.y), { timeout: 15000 }).toBeLessThan(0.01);
+
+    // Escape ends a held drag: the release writes nothing, the bend stays on the chord.
+    await viewSettled(page);
+    sent = writes.length;
+    await dragHold(page, await toPage(page, p0), await toPage(page, p1));
+    await expect.poll(heldAt, { timeout: 5000 }).toBeLessThan(0.5);
+    await page.keyboard.press("Escape");
+    await page.mouse.up();
+    await page.waitForTimeout(1000);
+    expect(writes.length, "no write after Escape").toBe(sent);
+    expect(Math.hypot((await storedBends(courseId))[0].x - p0.x, (await storedBends(courseId))[0].y - p0.y)).toBeLessThan(0.01);
   });
 });
 

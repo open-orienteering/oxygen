@@ -17,6 +17,7 @@
  */
 
 import { course, type PathVertex } from "@oxygen/shared";
+import { bendsEqual } from "./bends";
 
 type Structure = course.WireCourseStructure;
 type Item = Structure["items"][number];
@@ -102,6 +103,28 @@ export function withLegDraft<O extends { name: string; legs?: Record<string, cou
     else delete legs[draft.key];
     return { ...c, legs };
   });
+}
+
+/**
+ * The leg draft as the editor page keeps it (§6.7 "Live redraw", F21): the leg it belongs to (`legIdentity`), the undo
+ * epoch it was made in, and `live` during the drag or `held` from the release, with the bends drawn under it then.
+ */
+export type HeldLegDraft = LegDraft & { leg: string; epoch: number } & ({ phase: "live" } | { phase: "held"; from: readonly PathVertex[] | undefined });
+
+/**
+ * The leg draft the viewer draws (§6.7 "Live redraw"): none from another undo epoch (undo / redo end it); a live one
+ * while its leg is selected; a held one until the drawn leg (`drawn`: the override's own draw, else `course.list`'s)
+ * carries the written bends or leaves the ones drawn at the release — the `pendingMoves` rule, so another write never
+ * pins a stale draft.
+ */
+export function shownLegDraftOf(
+  draft: HeldLegDraft | null,
+  at: { epoch: number; leg: string | null; drawn: (course: string, key: string) => readonly PathVertex[] | undefined },
+): HeldLegDraft | null {
+  if (!draft || draft.epoch !== at.epoch) return null;
+  if (draft.phase === "live") return draft.leg === at.leg ? draft : null;
+  const drawn = at.drawn(draft.course, draft.key);
+  return bendsEqual(drawn, draft.bends) || !bendsEqual(drawn, draft.from) ? null : draft;
 }
 
 /** The branch course's name: unique per group and alternative, never a stored course's. */
