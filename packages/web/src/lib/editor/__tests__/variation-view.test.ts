@@ -61,8 +61,9 @@ describe("the drawn course of a structure with groups (docs/course-editor.md §1
 
 describe("the editor's leg draft (docs/course-editor.md §6.7, F21)", () => {
   const corridor = { widthM: 60, edge: true, whiteMm: 3, whiteOpacity: 1 };
-  const overlays = [
-    { name: "Lång", controls: ["1", "31", "32", "9"], labelOffsets: { 31: { dx: 1, dy: 1 } }, legs: { "31>32": { style: "marked_route" as const, gaps: [{ from: 0.2, to: 0.3 }], corridor, bends: [{ x: 1, y: 1 }] }, "1>31": { style: "none" as const } } },
+  type Overlay = { name: string; controls: string[]; labelOffsets?: Record<string, { dx: number; dy: number }>; legs: Record<string, course.CourseLegProps> };
+  const overlays: Overlay[] = [
+    { name: "Lång", controls: ["1", "31", "32", "9"], labelOffsets: { 31: { dx: 1, dy: 1 } }, legs: { "31>32": { style: "marked_route", gaps: [{ from: 0.2, to: 0.3 }], corridor, bends: [{ x: 1, y: 1 }] }, "1>31": { style: "none" } } },
     { name: "Kort", controls: ["1", "31", "32", "9"], legs: { "31>32": { bends: [{ x: 5, y: 5 }] } } },
   ];
 
@@ -78,7 +79,7 @@ describe("the editor's leg draft (docs/course-editor.md §6.7, F21)", () => {
 
   it("a leg without stored props gets one; an empty draft removes the bends (an empty leg drops out)", () => {
     expect(withLegDraft(overlays, { course: "Lång", key: "32>9", bends: [{ x: 4, y: 4 }] })[0].legs!["32>9"]).toEqual({ bends: [{ x: 4, y: 4 }] });
-    const bare = [{ name: "A", controls: ["1", "2"] }];
+    const bare: { name: string; controls: string[]; legs?: Record<string, course.CourseLegProps> }[] = [{ name: "A", controls: ["1", "2"] }];
     expect(withLegDraft(bare, { course: "A", key: "1>2", bends: [{ x: 4, y: 4 }] })[0]).toEqual({ name: "A", controls: ["1", "2"], legs: { "1>2": { bends: [{ x: 4, y: 4 }] } } });
     expect(withLegDraft(overlays, { course: "Lång", key: "31>32", bends: [] })[0].legs!["31>32"]).toEqual({ style: "marked_route", gaps: [{ from: 0.2, to: 0.3 }], corridor });
     expect(withLegDraft(overlays, { course: "Kort", key: "31>32", bends: [] })[1].legs).toEqual({});
