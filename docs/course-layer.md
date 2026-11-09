@@ -1565,33 +1565,39 @@ all-white corridor map); `edge` draws the boundary in purple.
   sketches, answer 1):
   - the **run's band** ends **flat on the line through the site** across
     the leg — the bearing of its last millimetre (`END_BEARING_UM`: on a
-    flattened curve the chord of its last 1 mm, not a µm segment) — its
-    two outer corners rounded by `whiteMm`. Built as the run's ring at
-    h + w with a flat end through the site, less `cornerWedges`: the
-    ring past the line within h + 2w (a curved run's own sides reach
-    across it) and, per side, the square corner between the line and w
-    before it, out to h + 2w, less the quarter disc of radius w tangent
-    to the line and the side. So the face on the line spans ±h, exactly
-    the inside's width there, and nothing farther than
-    √((h + 2w)² + w²) from the site changes;
-  - the **mouth's grown symbol** is its **near half** (the side the leg
-    comes from): the disc of radius R + w cut on the same line, its face
+    flattened curve the chord of its last 1 mm, not a µm segment) — with
+    **one corner each side**. Where the band reaches past the circle
+    (h + w > R, R the symbol's extent, 0 without a drawn mouth) the
+    corner's radius is r = min(w, h + w − R), the arc about (−r,
+    ±(h + w − r)) in the end's frame (x along the leg towards the site,
+    the line at x = 0), and the mouth adds nothing: the end is the run's
+    band alone, with no bump (user, 2026-11-09, on the sketch: "fix the
+    bump first"). So the face on the line spans ±(h + w − r) ≥ ±R — ±R
+    exactly while w > h + w − R, i.e. h < R — the arc is tangent to the
+    line at its end and lies above the circle near the line (the boundary
+    R + √(r² − (r − ε)²) ≥ √(R² − ε²)), and the circle's near half stays
+    in the white up to the line; beside the circle at the line the white
+    is h + w − R wide. At h ≥ R, r = w: the band's plain corner rounded by
+    `whiteMm` (answer 1). At the default (50 m, 5 mm at 1:15 000: h 1.67,
+    R 2.5) r = 4.17. Built as the run's ring at h + w with a flat end
+    through the site, less `cornerWedges`: the ring past the line within
+    h + 2w (a curved run's own sides reach across it) and, per side, the
+    square corner between the line and r before it, out to h + 2w, less
+    the quarter disc of radius r tangent to the line and the side;
+    nothing farther than √((h + 2w)² + w²) from the site changes;
+  - where the band is **no wider than the circle** (h + w ≤ R), the run's
+    band alone would leave the circle's sides on the map, so the **mouth's
+    grown symbol** wraps it with its **near half** (the side the leg comes
+    from): the disc of radius R + w cut on the same line, its face
     spanning the circle's diameter (±R), each corner the arc tangent to
     the line at ±R and, inside, to the grown disc — radius
-    w(2R + w) / (2(R + w)), between w / 2 and w. "Rounded by `whiteMm`"
-    cannot hold on the disc as well: a corner of radius w tangent to the
-    line and inside the disc exists only for w ≤ R, and its face
-    √(R² − w²) is shorter than R, so the circle would leave the white
-    before the line — and w > R is the editor's default (5 mm, R 2.5 at
-    1:15 000). The face at ±R keeps the whole near half of the circle in
-    the white up to the line, for every w, and never degenerates (a
-    radius min(w, R) leaves a face √|R² − w²|, nothing at w = R). This is
-    the reading of answer 1 (coordinator, 2026-11-09; decision log, F22):
-    the mouth's face spans the circle's diameter on the line, its corners
-    are of radius w(2R + w) / (2(R + w)), and the run's own corners are
-    exactly w — so a wide corridor (h ≥ R), whose band's outline is the
-    run's, is rounded by `whiteMm` as answer 1 says. Skipped as before
-    when the leg's band encloses it (h ≥ R);
+    w(2R + w) / (2(R + w)), between w / 2 and w (decision log, F22: the
+    coordinator's reading of answer 1, kept by the user's fix for this
+    case). The run's own corners (radius w) lie inside it, so the end has
+    one outline. A corner of radius w on the disc exists only for w ≤ R
+    and leaves a face √(R² − w²) < R, so the circle would leave the white
+    before the line. The shape changes at h + w = R: below it the half
+    disc reaches R + w, above it nothing reaches past h + w;
   - **the inside, the edges and the openings are unchanged** (answer 3),
     bit for bit. A wide corridor (h ≥ R) keeps its round end with the
     circle inside it and its edge's closed ring; the half of that round
@@ -2091,7 +2097,7 @@ label.
 | PDF | `packages/shared/src/print/__tests__/write-page.test.ts` "a marked-route leg" | §10.1 print: the route is one extra stroke of dash subpaths at 707's width, in purple after black, no `d` operator |
 | unit | `course/__tests__/corridor-reference.test.ts` (fixture `__fixtures__/corridor-reference.json`) | §10.2 (F20b): 66 cases — h = R, a lone wide leg, a one-point run, a 701 wider than the triangle, edged meeting unedged, a reversal, and 60 seeded courses (straight, bent and cubic legs, widths 2–8 mm, bands 0–5 mm, edged or not, one width or mixed, a turned start, a second course crossing or sharing legs, a passing site, with and without mouths) — recorded before F20b; each case's inside, band, edges and openings as a SHA-256 of their JSON plus counts, compared bit for bit; `UPDATE_CORRIDOR_REFERENCE=1` re-records (only for an intended change). F22: a SHA-256 per component (`parts`: inside, band, edges, openings; added on unchanged geometry first, every combined hash byte-equal), `UPDATE_CORRIDOR_REFERENCE=band` re-records only if every inside, edges and openings hash stays (F22 re-recorded 31 of 66 bands, nothing else; its review fix — a run's own earlier part keeps its band in the cut — moved 4 of those again: the reversal and three seeded loops); "F22: only the band's terminal ends moved": per case the inside, edges and openings equal to `{ terminalEnd: "round" }`, every band outline vertex of either result off the other's outline (> 2 µm) within √((h + 2w)² + w²) or R + w (+ 20 µm) of a terminal end, no new band ring under 0.01 mm², more than 10 and fewer than 66 bands changed |
 | unit | `corridor.test.ts` "the last call's result is kept" | §10.2 (F20b): the same input → the same object; a moved point, a width, a band, the edge, the course id, a leg's index, no mouths, a moved mouth site, its role, a start's turn, an extent each recompute and equal a fresh call; `-0` is not `0`; a site no corridor leg ends at does not count; F22: the terminal end option recomputes (two options in a row, two results) |
-| unit | `corridor.test.ts` "terminal ends (F22)" | §10.2 "Ends": `TERMINAL_END` the default; a lone leg h < R (inside, edges, openings equal to `{ terminalEnd: "round" }`; the map behind each circle where the band was, the near half in the band up to the line, the mouth's corners arcs of radius w(2R + w) / (2(R + w)) about (r, ±R) or the run's own); without mouths a flat face at ±h on the leg's points with corner arcs of radius w about (w, ±h); h ≥ R (round inside end and closed edge kept, no band past the line); the finish (R the 706's, its near half wrapped up to the line); the start unchanged (turned and not, and h ≥ its extent); a run passing behind or over its own terminal end (a hairpin, a figure eight with its end on its first leg, a short last leg turning back at the editor's default 50 m / 5 mm, a short last leg at a right angle) keeps the other legs' band, the end itself still cut; the mouth's near half at w < R, w = R (a finish, R 3, w 3) and w > R (a 1 mm corridor: nothing past the line, the face's ends on the line at ±R and nothing on it beyond, every corner vertex on the arc of radius w(2R + w) / (2(R + w)) about (r, ±R), that arc internally tangent to the R + w disc, simple rings); a run through a control (middle unchanged, both ends cut); never thinner — a width change, a band change, two courses meeting, a reversal on one site id, a turn: band membership on a 0.1 mm grid round the site equal to the pre-F22 band; a corridor passing over a terminal site keeps its band; a curved end (simple rings, the map behind it); two options in a row two results |
+| unit | `corridor.test.ts` "terminal ends (F22)" | §10.2 "Ends": `TERMINAL_END` the default; a lone leg h < R (inside, edges, openings equal to `{ terminalEnd: "round" }`; the map behind each circle where the band was, the near half in the band up to the line, the mouth's corners arcs of radius w(2R + w) / (2(R + w)) about (r, ±R) or the run's own); without mouths a flat face at ±h on the leg's points with corner arcs of radius w about (w, ±h); h ≥ R (round inside end and closed edge kept, no band past the line); the finish (R the 706's, its near half wrapped up to the line); the start unchanged (turned and not, and h ≥ its extent); a run passing behind or over its own terminal end (a hairpin, a figure eight with its end on its first leg, a short last leg turning back at the editor's default 50 m / 5 mm, a short last leg at a right angle) keeps the other legs' band, the end itself still cut; one corner where the band reaches past the circle (user: "fix the bump"; w < R, w = R, w > R at the default 50 m / 5 mm, h ≥ R): nothing past the line, nothing farther from the leg than h + w (no bump), the face's ends at ±(h + w − r), every corner vertex on the arc of radius r = min(w, h + w − R) about (r, ±(h + w − r)), the circle's near half in the white or the inside; h + w ≤ R: the mouth's near half (face ±R, corners of radius w(2R + w) / (2(R + w)) internally tangent to the R + w disc, nothing past R + w, the circle wrapped); a property over h 0.5–4 mm and w 1–8 mm (R 2.5): the arc above the circle near the line (analytic, ε from 0.1 µm to r), the circle's near half wrapped, nothing past h + w (h + w > R) or R + w; a run through a control (middle unchanged, both ends cut); never thinner — a width change, a band change, two courses meeting, a reversal on one site id, a turn: band membership on a 0.1 mm grid round the site equal to the pre-F22 band; a corridor passing over a terminal site keeps its band; a curved end (simple rings, the map behind it); two options in a row two results |
 | unit | `corridor.test.ts` | §10.2 geometry: a straight leg (inside, band, the map beyond, round ends — with `{ terminalEnd: "round" }` since F22, as are F19's band-wrap probes at a lone leg's ends), a bend (no inner notch, round outer join), consecutive corridors joined, mixed widths at a site and two courses crossing, degenerate inputs (out and back, collinear legs, the same leg on two courses) give simple rings, `whiteMm` 0 has no band, edges along edged legs only (closed for a lone leg, none on an unedged course); F19 "mouths and openings": a control's disc in the inside and the band to R + `whiteMm`, h ≥ R equal to the rings without mouths (answer 1), a finish's outer ring, the turned 701 (and unturned), a passing control no mouth, `edge: false` a mouth without opening or edge, the larger `whiteMm` of two legs, the edge two open pieces ending within 30 µm of the junctions, no edge behind the 701 (flat run end), a corridor wider than the 701 at its centroid with its sides carried back to it, the openings `θ ± asin(h/R)` with the junctions on the boundary, a turn and a straight run through a control (two sectors), none where a wider corridor covers the junctions, a curved leg (F16 smooth bend: end segments far shorter than √(R² − h²)) opening both circles about 2 asin(h/R) wide with its junctions on the boundary and the edges ending on them, a bend inside the circle opening where the corridor crosses it |
 | unit | `derive.test.ts` "corridors" | §10.2: `widthM` → paper mm at the document's `mapScale`, `whiteMm` kept; points, gaps, pieces and length unchanged; a `none` leg keeps its corridor |
 | unit | `layer.test.ts` "corridors", "courseDocumentContext" | §10.2: the band one `clip` region of every symbol after the explicit and stored ones (probes inside / in the band / beyond); `symbolise` masks the map's 516 there and no course pass; the edge `705/edge` strokes on the edge line, ref `corridor` (F19: two open pieces from the 701 to 31's opened circle; a 120 m corridor one closed outline); none without `edge`; a `none` leg keeps band and edge; F19 "openings": 31's circle one open arc ending within 30 µm of the junctions, the derivation's sites equal to the plain layer's, the start alike, a smooth-bend leg opening it too, whole with `edge: false` and at h ≥ R, merged with an overlapping stored gap (the cuts still the stored one), kept with auto cuts off, a passing control whole; no band at `whiteMm` 0; §2 `mapScale` from the header on both branches; F14: the `legLine` table, a corridor leg no `leg` object (edge, band, pieces and numbers kept), a `marked_route` one still 707 |

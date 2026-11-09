@@ -526,17 +526,16 @@ describe("terminal ends (F22, course-layer.md §10.2 \"Ends\")", () => {
       expect(inBand(ref, x, y), `${x},${y} before`).toBe(true);
       expect(inBand(g, x, y), `${x},${y}`).toBe(false);
     }
-    // The near half: the band from R to R + w round the circle, away from the line.
-    for (const [x, y] of [[2.5, 4], [1.6, -4.4], [17.5, 4], [18.4, -4.4], [10, 4.5], [10, -2.5], [0.2, 2.8], [19.8, -2.8]]) expect(inBand(g, x, y), `${x},${y}`).toBe(true);
-    // Beyond R + w nothing, as before.
+    // The near half: h + w = 5 reaches past R 2.5, so the band is the run's alone (user, "fix the bump"): to h + w
+    // beside the leg, up to the line beside the circle.
+    for (const [x, y] of [[2.5, 4], [3, -4.6], [17.5, 4], [17, -4.6], [10, 4.5], [10, -2.5], [0.2, 2.8], [19.8, -2.8]]) expect(inBand(g, x, y), `${x},${y}`).toBe(true);
+    // Beyond h + w nothing: no bump of the mouth's grown disc (R + w = 5.5).
     expect(inBand(g, 2.5, 5.2)).toBe(false);
-    // The mouth's half: its face on the line spans ±R, each corner an arc of radius w(2R + w) / (2(R + w)) about (r, ±R);
-    // where the run's own corner (radius w about (w, ±h)) reaches farther, the outline is that one's.
-    const r = (3 * (5 + 3)) / (2 * 5.5);
-    const onArc = (p: { x: number; y: number }, cx: number, cy: number, rad: number) => Math.abs(Math.hypot(p.x - cx, Math.abs(p.y) - cy) - rad) < 6;
-    const corner = g.band!.flatMap((q) => ringPoints(q)).filter((p) => p.x > 5 && p.x < r * 1000 - 5 && Math.abs(p.y) > 2600);
-    expect(corner.filter((p) => onArc(p, r * 1000, 2500, r * 1000)).length).toBeGreaterThan(5);
-    for (const p of corner) expect(onArc(p, r * 1000, 2500, r * 1000) || onArc(p, 3000, 2000, 3000), `${p.x},${p.y}`).toBe(true);
+    expect(inBand(g, 4, -5.2)).toBe(false);
+    // One corner each side, radius min(w, h + w − R) = 2.5 about (2.5, ±2.5): the face on the line spans ±R.
+    const corner = g.band!.flatMap((q) => ringPoints(q)).filter((p) => p.x > 5 && p.x < 2495 && Math.abs(p.y) > 2550);
+    expect(corner.length).toBeGreaterThan(5);
+    for (const p of corner) expect(Math.abs(Math.hypot(p.x - 2500, Math.abs(p.y) - 2500) - 2500), `${p.x},${p.y}`).toBeLessThan(6);
     expectSimple(g.band!);
     expectSimple(g.inside);
   });
@@ -696,33 +695,80 @@ describe("terminal ends (F22, course-layer.md §10.2 \"Ends\")", () => {
     expect(inBand(g, -3 * Math.cos(t), -3 * Math.sin(t))).toBe(false);
   });
 
-  describe("the mouth's near half: face ±R on the line, corners of radius w(2R + w) / (2(R + w)) tangent to the R + w disc", () => {
-    // A 1 mm corridor (h 0.5): the mouth's half is the band's outline at the circle. Site 0 a control (R 2.5), site 1 a
-    // finish (R 3); x measured from each site towards the leg.
-    const cases: [string, number, number, "0" | "1"][] = [["w < R", 2, 2.5, "0"], ["w = R (a finish, R 3, w 3)", 3, 3, "1"], ["w > R (the default band)", 5, 2.5, "0"]];
-    for (const [name, w, R, site] of cases) {
+  /** Band outline vertices near site 0 (x < `within` mm), µm. */
+  const nearEnd = (g: CorridorGeometry, within: number) => g.band!.flatMap((q) => ringPoints(q)).filter((p) => p.x < within * 1000);
+  /** The circle's near half (radius R about site 0, x from 10 µm to R): every point in the white or in the inside. */
+  const expectCircleWrapped = (g: CorridorGeometry, R: number, label: string) => {
+    for (let a = 0; a <= 180; a += 2) {
+      const x = R * Math.sin((a * Math.PI) / 180), y = R * Math.cos((a * Math.PI) / 180);
+      if (x < 0.01) continue;
+      expect(inBand(g, x, y) || inInside(g, x, y), `${label}: circle at ${x.toFixed(3)},${y.toFixed(3)}`).toBe(true);
+    }
+  };
+
+  describe("one corner where the band reaches past the circle (h + w > R; user, 2026-11-09: fix the bump)", () => {
+    // A lone leg from site 0 (a control, R 2.5); x measured from 0 towards the leg. r = min(w, h + w − R), the arc
+    // about (r, ±(h + w − r)): the face on the line spans ±(h + w − r) ≥ ±R; no mouth half, so nothing past h + w.
+    const cases: [string, number, number][] = [["w < R", 1, 2], ["w = R", 1, 2.5], ["w > R (the default: 50 m, 5 mm at 1:15 000)", 5 / 3, 5], ["h ≥ R (r = w)", 3, 2]];
+    for (const [name, h, w] of cases) {
       it(name, () => {
-        const g = corridorGeometry([course("c", LEG, [C(1, w, true)])], mouths(LEG, { "1": "finish" }))!;
+        const R = 2.5, H = h + w, r = Math.min(w, H - R), um = 1000;
+        const g = corridorGeometry([course("c", LEG, [C(2 * h, w, true)])], mouths(LEG))!;
         expectSimple(g.band!);
-        expectSimple(g.inside);
-        const r = (w * (2 * R + w)) / (2 * (R + w)), um = 1000;
-        const local = g.band!.flatMap((q) => ringPoints(q)).map((p) => ({ x: site === "0" ? p.x : 20 * um - p.x, y: p.y }));
-        // Nothing of the band past the line.
-        expect(Math.min(...local.filter((p) => Math.abs(p.y) < (R + w) * um + 100).map((p) => p.x))).toBeGreaterThan(-2);
-        // The face's ends: a band vertex on the line at ±R (the corner's tangent point), none on the line beyond it.
-        for (const side of [1, -1]) expect(Math.min(...local.map((p) => Math.hypot(p.x, p.y - side * R * um)))).toBeLessThan(6);
-        expect(local.filter((p) => Math.abs(p.x) <= 2 && Math.abs(p.y) > R * um + 6)).toEqual([]);
-        // The corners: every outline vertex between the line and r, outside the circle, on the arc about (r, ±R).
-        const corner = local.filter((p) => p.x > 5 && p.x < r * um - 5 && Math.abs(p.y) > R * um + 50);
-        expect(corner.length).toBeGreaterThan(5);
-        for (const p of corner) expect(Math.abs(Math.hypot(p.x - r * um, Math.abs(p.y) - R * um) - r * um), `${p.x},${p.y}`).toBeLessThan(6);
-        // Tangent to the grown disc inside: the corner's centre R + w − r from the site. So near the site (x < R, where
-        // the mouth's half is the outline) nothing of the band lies past R + w.
-        expect(Math.hypot(r, R) + r).toBeCloseTo(R + w, 9);
-        for (const p of local.filter((q) => q.x < R * um)) expect(Math.hypot(p.x, p.y)).toBeLessThan((R + w) * um + 6);
+        const near = nearEnd(g, 10);
+        // Nothing past the line, and no bump: nothing farther from the leg than h + w.
+        expect(Math.min(...near.map((p) => p.x))).toBeGreaterThan(-2);
+        for (const p of near) expect(Math.abs(p.y), `${p.x},${p.y}`).toBeLessThan(H * um + 6);
+        // The face's ends on the line at ±(h + w − r), each the corner's tangent point.
+        for (const side of [1, -1]) expect(Math.min(...near.map((p) => Math.hypot(p.x, p.y - side * (H - r) * um)))).toBeLessThan(6);
+        // The corner: every outline vertex between the line and r, beyond the face, on the arc of radius r.
+        const corner = near.filter((p) => p.x > 5 && p.x < r * um - 5 && Math.abs(p.y) > (H - r) * um + 50);
+        expect(corner.length).toBeGreaterThan(3);
+        for (const p of corner) expect(Math.abs(Math.hypot(p.x - r * um, Math.abs(p.y) - (H - r) * um) - r * um), `${p.x},${p.y}`).toBeLessThan(6);
+        expectCircleWrapped(g, R, name);
       });
     }
   });
+
+  it("h + w ≤ R: the mouth's near half (face ±R, corners of radius w(2R + w) / (2(R + w)) tangent to the R + w disc)", () => {
+    // h 0.5 + w 2 = R 2.5: the band alone would not reach the circle's sides; the mouth's grown half wraps it.
+    const R = 2.5, w = 2, um = 1000, r = (w * (2 * R + w)) / (2 * (R + w));
+    const g = corridorGeometry([course("c", LEG, [C(1, w, true)])], mouths(LEG))!;
+    expectSimple(g.band!);
+    expectSimple(g.inside);
+    const near = nearEnd(g, R);
+    expect(Math.min(...near.map((p) => p.x))).toBeGreaterThan(-2);
+    for (const side of [1, -1]) expect(Math.min(...near.map((p) => Math.hypot(p.x, p.y - side * R * um)))).toBeLessThan(6);
+    expect(near.filter((p) => Math.abs(p.x) <= 2 && Math.abs(p.y) > R * um + 6)).toEqual([]);
+    const corner = near.filter((p) => p.x > 5 && p.x < r * um - 5 && Math.abs(p.y) > R * um + 50);
+    expect(corner.length).toBeGreaterThan(5);
+    for (const p of corner) expect(Math.abs(Math.hypot(p.x - r * um, Math.abs(p.y) - R * um) - r * um), `${p.x},${p.y}`).toBeLessThan(6);
+    // Tangent to the grown disc inside, so nothing past R + w; the run's own corners (radius w) lie within.
+    expect(Math.hypot(r, R) + r).toBeCloseTo(R + w, 9);
+    for (const p of near) expect(Math.hypot(p.x, p.y)).toBeLessThan((R + w) * um + 6);
+    expectCircleWrapped(g, R, "h + w ≤ R");
+  });
+
+  it("property: over h 0.5–4 and w 1–8 (R 2.5), the circle's near half in the white up to the line and one bump at most", () => {
+    const R = 2.5;
+    for (let h = 0.5; h <= 4 + 1e-9; h += 0.5) {
+      for (let w = 1; w <= 8 + 1e-9; w += 1) {
+        const H = h + w, label = `h ${h}, w ${w}`;
+        if (H > R) {
+          // The arc tangent to the line at (0, H − r), r = min(w, H − R): above the circle near the line.
+          const r = Math.min(w, H - R);
+          for (const e of [1e-4, 1e-3, 0.01, 0.1, Math.min(r, R) / 2, Math.min(r, R)]) {
+            expect((H - r) + Math.sqrt(Math.max(0, r * r - (r - e) * (r - e))), `${label}, ε ${e}`).toBeGreaterThanOrEqual(Math.sqrt(Math.max(0, R * R - e * e)) - 1e-12);
+          }
+        }
+        const g = corridorGeometry([course("c", LEG, [C(2 * h, w)])], mouths(LEG))!;
+        expectCircleWrapped(g, R, label);
+        // No bump: nothing farther from the leg than h + w where the band reaches past the circle, R + w where not.
+        const limit = (H > R ? H : R + w) * 1000 + 6;
+        for (const p of nearEnd(g, Math.max(H, R + w))) expect(Math.abs(p.y), `${label}: ${p.x},${p.y}`).toBeLessThan(limit);
+      }
+    }
+  }, 60000);
 
   it("two options in a row give two results, each a fresh call's", () => {
     const courses = [course("c", LEG, [C(4, 3, true)])];
