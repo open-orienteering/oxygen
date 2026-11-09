@@ -1,5 +1,6 @@
 import { describe, it, expect } from "vitest";
 import type { course } from "@oxygen/shared";
+import { withLegDraft } from "../editor/variation-view";
 import { courseLayerRequest, courseObjectsForView, overlayTypeOf, provisionalDrawn, sheetCrossings, sheetExchanges, PROVISIONAL_SITE_ID, type CourseRequestInput, type ProvisionalVisit, type RequestControl } from "../course-layer-request";
 
 const ctl = (id: string, type: RequestControl["type"] = "Control", visible?: boolean): RequestControl => ({ id, code: `c${id}`, type, ...(visible === undefined ? {} : { visible }) });
@@ -108,6 +109,14 @@ describe("courseLayerRequest (docs/course-layer.md §5)", () => {
     }));
     expect(r.sites.find((s) => s.id === "1")!.circleGaps).toBeUndefined();
     expect(structures(r)[0].items.every((i) => i.leg === undefined)).toBe(true);
+  });
+
+  it("the editor's leg draft (F21) reaches the request as that leg's bends, its other props kept", () => {
+    const corridor = { widthM: 60, edge: true, whiteMm: 3, whiteOpacity: 1 };
+    const courses = [{ name: "A", controls: ["S", "1", "2", "F"], highlight: true, legs: { "1>2": { corridor, bends: [{ x: 50, y: 20 }] } } }, { name: "B", controls: ["S", "3", "F"] }];
+    const bends = [{ x: 45, y: 30, hIn: { x: -2, y: 0 }, hOut: { x: 2, y: 0 } }];
+    const r = courseLayerRequest(base({ courses: withLegDraft(courses, { course: "A", key: "1>2", bends }) }));
+    expect(structures(r)[0].items[2].leg).toEqual({ corridor, bends });
   });
 });
 

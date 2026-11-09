@@ -16,7 +16,7 @@
  * Pure; ids are the overlay's (public control ids as strings).
  */
 
-import { course } from "@oxygen/shared";
+import { course, type PathVertex } from "@oxygen/shared";
 
 type Structure = course.WireCourseStructure;
 type Item = Structure["items"][number];
@@ -71,6 +71,37 @@ export function withCourseOverride<O extends { name: string }>(courses: readonly
   const [own, ...extra] = draws;
   const out = courses.map((c) => (c.name === own.name ? { ...c, controls: own.controls, legs: own.legs, hiddenNumbers: own.hiddenNumbers, ...(own.labels ? { labels: own.labels } : {}) } : c));
   return [...out, ...extra.map((d) => ({ ...d, highlight: true as const }))];
+}
+
+/**
+ * A bend or grip drag in flight on the selected leg (docs/course-editor.md §6.7, F21): its live bends, so the layer
+ * redraws the course per move as the write would leave it. Held after the release until `course.list` carries them.
+ */
+export interface LegDraft {
+  /** The overlay's name (the selected course). */
+  course: string;
+  /** The leg's key in the overlay's `legs`: `"<fromId>><toId>"`. */
+  key: string;
+  bends: readonly PathVertex[];
+}
+
+/**
+ * The overlays with the editor's leg draft applied (`MapViewerEditorProps.legDraft`), after the course override: that
+ * leg's `bends` replaced on the course of its name (an empty list removes them; an empty leg drops out), its style,
+ * gaps, corridor and crossing kept. No draft, or no course of that name: the overlays as given.
+ */
+export function withLegDraft<O extends { name: string; legs?: Record<string, course.CourseLegProps> }>(courses: readonly O[], draft: LegDraft | null): O[] {
+  if (!draft || !courses.some((c) => c.name === draft.course)) return courses as O[];
+  return courses.map((c) => {
+    if (c.name !== draft.course) return c;
+    const legs = { ...c.legs };
+    const rest: course.CourseLegProps = { ...legs[draft.key] };
+    delete rest.bends;
+    const leg: course.CourseLegProps = draft.bends.length > 0 ? { ...rest, bends: [...draft.bends] } : rest;
+    if (Object.keys(leg).length > 0) legs[draft.key] = leg;
+    else delete legs[draft.key];
+    return { ...c, legs };
+  });
 }
 
 /** The branch course's name: unique per group and alternative, never a stored course's. */
