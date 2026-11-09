@@ -1,7 +1,7 @@
 /** Corridor geometry (course-layer.md §10.2): insides joined, the band outside them, the edges along edged legs. */
 
 import { describe, expect, it } from "vitest";
-import { corridorGeometry, type CorridorGeometry, type CorridorMouths, type CorridorSite } from "../corridor.js";
+import { corridorGeometry, TERMINAL_END, type CorridorGeometry, type CorridorMouths, type CorridorSite } from "../corridor.js";
 import { pointInRings, polylinesCrossRings, ringArea, type FlatRing } from "../../render/geometry.js";
 import type { DerivedCourse, DerivedLeg } from "../types.js";
 import type { MapPoint } from "../../course-maps/schema.js";
@@ -19,6 +19,8 @@ function course(id: string, pts: MapPoint[][], corridors: (Corridor | undefined)
   return { id, orderMode: "ordered", sequence: [], legs };
 }
 const P = (x: number, y: number): MapPoint => ({ x, y });
+/** The band's end before F22: a lone leg's ends wrapped round (the tests of F2–F19's join). */
+const ROUND = { terminalEnd: "round" } as const;
 
 /** Point probes in mm against the µm rings. */
 const inBand = (g: CorridorGeometry, x: number, y: number) => !!g.band && pointInRings(g.band, x * 1000, y * 1000);
@@ -51,8 +53,8 @@ describe("corridorGeometry", () => {
     expect(corridorGeometry([course("c", [[P(0, 0), P(20, 0)]], [undefined])])).toBeNull();
   });
 
-  it("a straight leg: the map inside, white for whiteMm outside the edge, the map again beyond; round ends", () => {
-    const g = corridorGeometry([course("c", [[P(0, 0), P(20, 0)]], [C(4, 3)])])!;
+  it("a straight leg: the map inside, white for whiteMm outside the edge, the map again beyond; round ends (before F22)", () => {
+    const g = corridorGeometry([course("c", [[P(0, 0), P(20, 0)]], [C(4, 3)])], undefined, ROUND)!;
     // Edge at y = ±2, band to ±5.
     expect(inInside(g, 10, 1.5)).toBe(true);
     expect(inBand(g, 10, 1.5)).toBe(false);
@@ -203,7 +205,8 @@ describe("corridorGeometry", () => {
       const g = corridorGeometry([course("a", legs, legs.map(() => C(6, 3, true))), course("b", legs.slice(0, 10), legs.slice(0, 10).map(() => C(4, 2)))])!;
       expect(performance.now() - t0).toBeLessThan(3000);
       expect(g.inside).toHaveLength(1);
-      expect(g.band!.length).toBeGreaterThan(1);
+      // One ring: the band stops at course a's last site (F22), so it no longer closes round the inside.
+      expect(g.band).toHaveLength(1);
       for (let i = 0; i < 30; i++) expect(inInside(g, i * 20 + 10, 15)).toBe(true);
       expect(inBand(g, 310, 15 + 3 + 1.5)).toBe(true);
       expect(g.edges.length).toBeGreaterThan(0);
@@ -239,9 +242,9 @@ const DELTA = (Math.asin(2 / 2.5) * 180) / Math.PI;
 describe("mouths and openings (F19, course-layer.md §10.2)", () => {
   const LEG = [[P(0, 0), P(20, 0)]];
 
-  it("a narrow corridor's end at a control: the disc joins the inside, the band wraps it at R + whiteMm", () => {
-    const plain = corridorGeometry([course("c", LEG, [C(4, 3)])])!;
-    const g = corridorGeometry([course("c", LEG, [C(4, 3)])], mouths(LEG))!;
+  it("a narrow corridor's end at a control: the disc joins the inside, the band wraps it at R + whiteMm (before F22)", () => {
+    const plain = corridorGeometry([course("c", LEG, [C(4, 3)])], undefined, ROUND)!;
+    const g = corridorGeometry([course("c", LEG, [C(4, 3)])], mouths(LEG), ROUND)!;
     // Past the round end (radius 2) but within R = 2.5: band before F19, the map now.
     expect(inInside(plain, 22.4, 0)).toBe(false);
     expect(inInside(g, 22.4, 0)).toBe(true);
@@ -267,8 +270,8 @@ describe("mouths and openings (F19, course-layer.md §10.2)", () => {
     expect(plain.openings.size).toBe(0);
   });
 
-  it("a finish: its outer ring's disc and the band beyond it; never opened (answer 2)", () => {
-    const g = corridorGeometry([course("c", LEG, [C(4, 3, true)])], mouths(LEG, { "1": "finish" }))!;
+  it("a finish: its outer ring's disc and the band beyond it; never opened (answer 2; before F22)", () => {
+    const g = corridorGeometry([course("c", LEG, [C(4, 3, true)])], mouths(LEG, { "1": "finish" }), ROUND)!;
     expect(inInside(g, 22.9, 0)).toBe(true);
     expect(inBand(g, 23.1, 0)).toBe(true);
     expect(inBand(g, 25.9, 0)).toBe(true);
@@ -482,3 +485,193 @@ describe("the last call's result is kept (F20b, course-layer.md §10.2)", () => 
     expect(corridorGeometry(base(), { ...m, sites: m.sites.map((s) => (s.id === "far" ? { ...s, x: 101 } : s)) })).toBe(a);
   });
 });
+
+describe("terminal ends (F22, course-layer.md §10.2 \"Ends\")", () => {
+  const LEG = [[P(0, 0), P(20, 0)]];
+  /** A leg between named sites (a revisit reuses its site's id). */
+  const legOf = (from: string, to: string, points: MapPoint[], corridor: Corridor): DerivedLeg => ({ from, to, points, style: "line", gaps: [], pieces: [points], corridor });
+  const courseOf = (id: string, legs: DerivedLeg[]): DerivedCourse => ({ id, orderMode: "ordered", sequence: [], legs });
+  const sitesAt = (at: Record<string, MapPoint>, roles: Record<string, CorridorSite["role"]> = {}): CorridorMouths => ({
+    sites: Object.entries(at).map(([id, p]) => ({ id, role: roles[id] ?? "control", x: p.x, y: p.y })), ...EXTENTS,
+  });
+  /** Band membership on a 0.1 mm grid within `radius` of `c`: equal to the reference's, or a list of the points that differ. */
+  const bandDiff = (g: CorridorGeometry, ref: CorridorGeometry, c: MapPoint, radius: number) => {
+    const out: string[] = [];
+    for (let x = -radius; x <= radius; x += 0.1) for (let y = -radius; y <= radius; y += 0.1) {
+      if (Math.hypot(x, y) > radius) continue;
+      if (inBand(g, c.x + x, c.y + y) !== inBand(ref, c.x + x, c.y + y)) out.push(`${(c.x + x).toFixed(1)},${(c.y + y).toFixed(1)}`);
+    }
+    return out;
+  };
+  /** The inside, the edges and the openings equal the pre-F22 result (answer 3). */
+  const expectInsideKept = (g: CorridorGeometry, ref: CorridorGeometry) => {
+    expect(g.inside).toEqual(ref.inside);
+    expect(g.edges).toEqual(ref.edges);
+    expect(g.openings).toEqual(ref.openings);
+  };
+
+  it("TERMINAL_END is the flat end, the default", () => {
+    expect(TERMINAL_END).toBe("flat");
+    const courses = [course("c", LEG, [C(4, 3, true)])];
+    expect(corridorGeometry(courses, mouths(LEG), { terminalEnd: TERMINAL_END })).toEqual(corridorGeometry(courses, mouths(LEG)));
+  });
+
+  it("a lone leg, h < R: the band stops on the line through each centre, the near half still wrapped; inside, edges and openings kept", () => {
+    const courses = [course("c", LEG, [C(4, 3, true)])];
+    const g = corridorGeometry(courses, mouths(LEG))!;
+    const ref = corridorGeometry(courses, mouths(LEG), ROUND)!;
+    expectInsideKept(g, ref);
+    // Behind each circle: the map now, the band before (R + w = 5.5 all round).
+    for (const [x, y] of [[-3, 0], [-4, 2], [-0.3, 4], [23, 0], [24, -2], [20.3, -4]]) {
+      expect(inBand(ref, x, y), `${x},${y} before`).toBe(true);
+      expect(inBand(g, x, y), `${x},${y}`).toBe(false);
+    }
+    // The near half: the band from R to R + w round the circle, away from the line.
+    for (const [x, y] of [[2.5, 4], [1.6, -4.4], [17.5, 4], [18.4, -4.4], [10, 4.5], [10, -2.5], [0.2, 2.8], [19.8, -2.8]]) expect(inBand(g, x, y), `${x},${y}`).toBe(true);
+    // Beyond R + w nothing, as before.
+    expect(inBand(g, 2.5, 5.2)).toBe(false);
+    // The mouth's half: its face on the line spans ±R, each corner an arc of radius w(2R + w) / (2(R + w)) about (r, ±R);
+    // where the run's own corner (radius w about (w, ±h)) reaches farther, the outline is that one's.
+    const r = (3 * (5 + 3)) / (2 * 5.5);
+    const onArc = (p: { x: number; y: number }, cx: number, cy: number, rad: number) => Math.abs(Math.hypot(p.x - cx, Math.abs(p.y) - cy) - rad) < 6;
+    const corner = g.band!.flatMap((q) => ringPoints(q)).filter((p) => p.x > 5 && p.x < r * 1000 - 5 && Math.abs(p.y) > 2600);
+    expect(corner.filter((p) => onArc(p, r * 1000, 2500, r * 1000)).length).toBeGreaterThan(5);
+    for (const p of corner) expect(onArc(p, r * 1000, 2500, r * 1000) || onArc(p, 3000, 2000, 3000), `${p.x},${p.y}`).toBe(true);
+    expectSimple(g.band!);
+    expectSimple(g.inside);
+  });
+
+  it("the corners: the run's band is flat on the line, its corners arcs of radius whiteMm (no mouths: R = 0)", () => {
+    // h 4 + w 3 = 7: the face from −4 to 4 on x = 0, each corner a quarter circle of radius 3 about (3, ±4).
+    const g = corridorGeometry([course("c", LEG, [C(8, 3)])])!;
+    expect(inBand(g, -0.2, 5)).toBe(false);
+    expect(inBand(g, 0.3, 4.5)).toBe(true);
+    expect(inBand(g, 0.3, 6.8)).toBe(false);
+    expect(inBand(g, 3.2, 6.8)).toBe(true);
+    const corner = g.band!.flatMap((r) => ringPoints(r)).filter((p) => p.x < 3000 && Math.abs(p.y) > 4000);
+    expect(corner.length).toBeGreaterThan(5);
+    for (const p of corner) expect(Math.abs(Math.hypot(p.x - 3000, Math.abs(p.y) - 4000) - 3000)).toBeLessThan(6);
+    // The face on x = 0 between the corners: every band vertex at x < 1 µm lies on it (|y| ≤ 4 mm).
+    for (const p of g.band!.flatMap((r) => ringPoints(r)).filter((q) => q.x < 1)) {
+      expect(Math.abs(p.x)).toBeLessThanOrEqual(1);
+      expect(Math.abs(p.y)).toBeLessThanOrEqual(4001);
+    }
+    // The other end alike, mirrored.
+    expect(inBand(g, 20.2, -5)).toBe(false);
+    expect(inBand(g, 19.7, -4.5)).toBe(true);
+    expectSimple(g.band!);
+  });
+
+  it("h ≥ R: the inside's round end and the edge's closed ring stay, the half circle behind the centre on the map (answer 3)", () => {
+    const courses = [course("c", LEG, [C(8, 3, true)])];
+    const g = corridorGeometry(courses, mouths(LEG))!;
+    const ref = corridorGeometry(courses, mouths(LEG), ROUND)!;
+    expectInsideKept(g, ref);
+    expect(g.edges).toHaveLength(1);
+    expect(g.edges[0].closed).toBe(true);
+    // The round end reaches x = −4; the band beyond it before, the map now.
+    expect(inInside(g, -3.9, 0)).toBe(true);
+    expect(inBand(ref, -4.5, 0)).toBe(true);
+    expect(inBand(g, -4.5, 0)).toBe(false);
+    expect(inBand(g, -1, 5)).toBe(false);
+    expect(inBand(g, 1, 5)).toBe(true);
+  });
+
+  it("the finish is a terminal end with R = the 706's outer ring (answer 2)", () => {
+    const courses = [course("c", LEG, [C(4, 3, true)])];
+    const g = corridorGeometry(courses, mouths(LEG, { "1": "finish" }))!;
+    expectInsideKept(g, corridorGeometry(courses, mouths(LEG, { "1": "finish" }), ROUND)!);
+    expect(inInside(g, 22.9, 0)).toBe(true);
+    expect(inBand(g, 23.5, 0)).toBe(false);
+    expect(inBand(g, 18, 4.5)).toBe(true);
+    expect(inBand(g, 16.5, 4.5)).toBe(true);
+    // The near half of the 706 wrapped up to the line (its face spans ±R = ±3 there).
+    expect(inBand(g, 19.9, 3.2)).toBe(true);
+    expect(inBand(g, 19.9, -3.2)).toBe(true);
+    expect(inBand(g, 16, 6.2)).toBe(false);
+  });
+
+  it("the start keeps its geometry: the band frames the whole triangle (answer 2)", () => {
+    for (const angles of [{ "0": -90 }, {}] as Record<string, number>[]) {
+      const courses = [course("c", LEG, [C(4, 3, true)])];
+      const m = mouths(LEG, { "0": "start" }, [], angles);
+      const g = corridorGeometry(courses, m)!;
+      const ref = corridorGeometry(courses, m, ROUND)!;
+      expect(bandDiff(g, ref, P(0, 0), 9)).toEqual([]);
+      // Its other end, a control, is terminal.
+      expect(bandDiff(g, ref, P(20, 0), 9).length).toBeGreaterThan(0);
+    }
+    // A start wider than the triangle (h ≥ its extent, no joined 701, a round end) keeps it too.
+    const wide = [course("c", LEG, [C(8, 3, true)])];
+    const m = mouths(LEG, { "0": "start" });
+    expect(bandDiff(corridorGeometry(wide, m)!, corridorGeometry(wide, m, ROUND)!, P(0, 0), 9)).toEqual([]);
+  });
+
+  it("a run through a control: the middle kept, both outer ends cut", () => {
+    const legs = [[P(0, 0), P(20, 0)], [P(20, 0), P(40, 0)]];
+    const courses = [course("c", legs, [C(4, 3, true), C(4, 3, true)])];
+    const g = corridorGeometry(courses, mouths(legs))!;
+    const ref = corridorGeometry(courses, mouths(legs), ROUND)!;
+    expectInsideKept(g, ref);
+    expect(bandDiff(g, ref, P(20, 0), 8)).toEqual([]);
+    expect(inBand(g, -3, 0)).toBe(false);
+    expect(inBand(g, 43, 0)).toBe(false);
+    expectSimple(g.band!);
+  });
+
+  it("never thinner where corridors continue: a width change, two courses meeting, a reversal, a turn (answer 4)", () => {
+    const A = P(0, 0), B = P(20, 0), Cc = P(20, 20), D = P(40, 0);
+    const cases: [string, DerivedCourse[], CorridorMouths, MapPoint][] = [
+      ["a width change", [courseOf("c", [legOf("a", "b", [A, B], C(4, 3, true)), legOf("b", "d", [B, D], C(3, 2, true))])], sitesAt({ a: A, b: B, d: D }), B],
+      ["a band change", [courseOf("c", [legOf("a", "b", [A, B], C(4, 3, true)), legOf("b", "d", [B, D], C(4, 1, true))])], sitesAt({ a: A, b: B, d: D }), B],
+      ["two courses meeting", [courseOf("x", [legOf("a", "b", [A, B], C(4, 3, true))]), courseOf("y", [legOf("b", "c", [B, Cc], C(4, 3, true))])], sitesAt({ a: A, b: B, c: Cc }), B],
+      ["a reversal", [courseOf("c", [legOf("a", "b", [A, B], C(4, 3, true)), legOf("b", "a", [B, A], C(4, 3, true))])], sitesAt({ a: A, b: B }), A],
+      ["a turn", [courseOf("c", [legOf("a", "b", [A, B], C(4, 3, true)), legOf("b", "c", [B, Cc], C(4, 3, true))])], sitesAt({ a: A, b: B, c: Cc }), B],
+    ];
+    for (const [name, courses, m, site] of cases) {
+      const g = corridorGeometry(courses, m)!;
+      const ref = corridorGeometry(courses, m, ROUND)!;
+      expectInsideKept(g, ref);
+      expect(bandDiff(g, ref, site, 8), name).toEqual([]);
+      expectSimple(g.band!);
+    }
+  });
+
+  it("a corridor passing over a terminal site keeps its band whole", () => {
+    // Course x ends at t (20, 0); course y passes over t, north–south, ending far away.
+    const T = P(20, 0);
+    const passing = courseOf("y", [legOf("n", "s", [P(20, 20), P(20, -20)], C(4, 3, true))]);
+    const courses = [courseOf("x", [legOf("a", "t", [P(0, 0), T], C(4, 3, true))]), passing];
+    const m = sitesAt({ a: P(0, 0), t: T, n: P(20, 20), s: P(20, -20) });
+    const g = corridorGeometry(courses, m)!;
+    const alone = corridorGeometry([passing], m)!;
+    // Every point of the passing corridor's band near t is band or inside here.
+    for (let y = -8; y <= 8; y += 0.25) for (const x of [16.5, 17.5, 22.5, 23.5]) {
+      if (!inBand(alone, x, y)) continue;
+      expect(inBand(g, x, y) || inInside(g, x, y), `${x},${y}`).toBe(true);
+    }
+  });
+
+  it("a curved end: flat across its end segment, simple rings", () => {
+    const curve = legPolylineOf(P(0, 0), [{ x: 20, y: 6, hIn: { x: -40 / 6, y: 0 }, hOut: { x: 40 / 6, y: 0 } }], P(40, 0));
+    const courses = [course("c", [curve], [C(4, 3, true)])];
+    const g = corridorGeometry(courses, mouths([curve]))!;
+    expectInsideKept(g, corridorGeometry(courses, mouths([curve]), ROUND)!);
+    expectSimple(g.band!);
+    expect(g.band!.every((r) => r.length >= 6)).toBe(true);
+    // The curve leaves (0, 0) heading up-right: behind it is the map.
+    const t = Math.atan2(curve[1].y, curve[1].x);
+    expect(inBand(g, -3 * Math.cos(t), -3 * Math.sin(t))).toBe(false);
+  });
+
+  it("two options in a row give two results, each a fresh call's", () => {
+    const courses = [course("c", LEG, [C(4, 3, true)])];
+    const a = corridorGeometry(courses, mouths(LEG));
+    const b = corridorGeometry(courses, mouths(LEG), ROUND);
+    expect(b).not.toBe(a);
+    expect(b!.band).not.toEqual(a!.band);
+    expect(corridorGeometry(courses, mouths(LEG))).toEqual(a);
+  });
+});
+
+const ringPoints = (r: FlatRing) => Array.from({ length: r.length / 2 }, (_, i) => ({ x: r[2 * i], y: r[2 * i + 1] }));
