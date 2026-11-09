@@ -11,7 +11,7 @@ import { expect, test, type Browser, type Page, type TestInfo } from "@playwrigh
 import { reseed } from "./helpers/reseed";
 import {
   allControlsSheet, analysePdf, arm, canvasInCircle, cleanup, clickMap, clickTab, controlRows, coveredBy, desktopContext, drag, dragMm, editorReady,
-  emptyPoint, ensureCoursesAndMap, ensureFixtureFromDesktop, freezeExternalPoll, geometryOf, inkAt, inkIn, labelOf, legBetween, legMidpoint, legPieces, nameIdOf, objectRow,
+  emptyPoint, ensureCoursesAndMap, ensureFixtureFromDesktop, freezeExternalPoll, geometryOf, inkAt, inkIn, labelOf, legBetween, legMidpoint, legPieces, nameIdOf, objectRow, plainMapAt,
   openEditor, pageToPaperOf, place, placeOneShot, pressInside, pressOnEdge, printed, probeTemplate, regularCodes, select, selectCompetition,
   selectedCode, selectedPosition, siteCuts, site, sitePoint, sites, toolShapes, toPage, toPaper, trpcCall, viewCentre, viewSettled, newCourse,
   mapScale, statsRow, type Frame, type Site,
@@ -3851,7 +3851,10 @@ test.describe("F13: Bézier bends (docs/course-layer.md §10.1)", () => {
 
     // One smooth bend off the chord's midpoint by a fraction of the leg, its handles along the chord: an arch through
     // it. The pair, the side and the fraction are chosen so the apex and the chord's midpoint lie in view, 6 mm clear of
-    // every site (legs are clipped at the sites) and of the default start's and finish's legs into the pair.
+    // every site (legs are clipped at the sites) and of the default start's and finish's legs into the pair, and the
+    // apex on plain map: a black or brown line under it sorts above the leg's lower purple and hides it at the one
+    // pixel the probe reads (docs/bugfix-e2e-apex-probe-pixel.md). Which pair passes depends on the editor's first
+    // view and the event's state, so in the full suite it is not always the same one.
     const all = await sites(page);
     const ends = all.filter((s) => s.type !== "Control").map((s) => s.mm);
     const viewer = (await page.getByTestId("map-viewer").boundingBox())!;
@@ -3878,7 +3881,7 @@ test.describe("F13: Bézier bends (docs/course-layer.md §10.1)", () => {
         if (!(await clear(chordMid, sa.mm, sb.mm))) continue;
         for (const k of [0.3, -0.3, 0.2, -0.2]) {
           const apex = { x: chordMid.x - u.y * k * len, y: chordMid.y + u.x * k * len };
-          if (await clear(apex, sa.mm, sb.mm)) {
+          if ((await clear(apex, sa.mm, sb.mm)) && (await plainMapAt(page, apex, 0.5))) {
             pick = { a: sa, b: sb, apex, chordMid, u, len };
             break search;
           }

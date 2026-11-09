@@ -264,8 +264,13 @@ export async function inkIn(page: Page, rect: { minX: number; minY: number; maxX
  */
 export type InkKind = "dark" | "purple" | "map";
 
-/** As `inkIn`, at a list of paper points (mm): how many distinct canvas pixels under them are of `kind`. */
-export async function inkAt(page: Page, points: readonly Pt[], kind: InkKind = "dark"): Promise<number> {
+/**
+ * The GL canvas alone (the overlays hidden) and the byte offset in it of the pixel that contains a paper point (mm),
+ * or null off the canvas. The pixel is the one whose square holds the point — `floor`, not `round`: pixel `i`
+ * spans `[i, i + 1)`, so rounding moves up to a pixel off the point, onto a thin stroke's anti-aliased edge
+ * (docs/bugfix-e2e-apex-probe-pixel.md).
+ */
+async function canvasShot(page: Page): Promise<{ png: { width: number; height: number; data: Buffer }; pixelOf: (p: Pt) => number | null; pxPerMm: number }> {
   const { PNG } = await import("pngjs");
   const canvas = page.getByTestId("map-vector-layer");
   const style = "body * { visibility: hidden !important } [data-testid='map-vector-layer'] { visibility: visible !important }";
@@ -275,14 +280,46 @@ export async function inkAt(page: Page, points: readonly Pt[], kind: InkKind = "
   // The view after the screenshot (taking it may scroll the canvas into view).
   const v = await paperView(page);
   const rot = (v.rotDeg * Math.PI) / 180;
-  const seen = new Set<number>();
-  let n = 0;
-  for (const { x, y } of points) {
+  const pixelOf = ({ x, y }: Pt): number | null => {
     const ix = (x * 1000 - v.centreX) * v.pxPerUm, iy = -(y * 1000 - v.centreY) * v.pxPerUm;
     const q = { x: v.box.x + v.box.width / 2 + ix * Math.cos(rot) - iy * Math.sin(rot), y: v.box.y + v.box.height / 2 + ix * Math.sin(rot) + iy * Math.cos(rot) };
-    const px = Math.round((q.x - cb.x) * k), py = Math.round((q.y - cb.y) * k);
-    if (px < 0 || py < 0 || px >= png.width || py >= png.height) continue;
-    const i = (py * png.width + px) * 4;
+    const px = Math.floor((q.x - cb.x) * k), py = Math.floor((q.y - cb.y) * k);
+    if (px < 0 || py < 0 || px >= png.width || py >= png.height) return null;
+    return (py * png.width + px) * 4;
+  };
+  return { png, pixelOf, pxPerMm: v.pxPerUm * 1000 * k };
+}
+
+/**
+ * Whether the canvas is one plain colour (each channel within 8) everywhere within `radiusMm` of a paper point,
+ * sampled every canvas pixel. A probe that reads lower purple (a leg, a circle) at a point needs plain map under
+ * it: black, the ISOM brown and the blue line rows sort above lower purple (docs/course-layer.md §1), so a map
+ * line crossing the point covers the course there, as it should.
+ */
+export async function plainMapAt(page: Page, at: Pt, radiusMm: number): Promise<boolean> {
+  const { png, pixelOf, pxPerMm } = await canvasShot(page);
+  const step = 1 / pxPerMm;
+  let first: number | null = null;
+  for (let dx = -radiusMm; dx <= radiusMm; dx += step) {
+    for (let dy = -radiusMm; dy <= radiusMm; dy += step) {
+      if (Math.hypot(dx, dy) > radiusMm) continue;
+      const i = pixelOf({ x: at.x + dx, y: at.y + dy });
+      if (i === null) return false;
+      if (first === null) first = i;
+      else if ([0, 1, 2].some((c) => Math.abs(png.data[i + c] - png.data[first! + c]) > 8)) return false;
+    }
+  }
+  return true;
+}
+
+/** As `inkIn`, at a list of paper points (mm): how many distinct canvas pixels under them are of `kind`. */
+export async function inkAt(page: Page, points: readonly Pt[], kind: InkKind = "dark"): Promise<number> {
+  const { png, pixelOf } = await canvasShot(page);
+  const seen = new Set<number>();
+  let n = 0;
+  for (const p of points) {
+    const i = pixelOf(p);
+    if (i === null) continue;
     if (seen.has(i)) continue;
     seen.add(i);
     const r = png.data[i], g = png.data[i + 1], b = png.data[i + 2];
