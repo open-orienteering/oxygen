@@ -714,6 +714,89 @@ describe("V on a selected leg: smooth bends, grips, Alt (docs/course-editor.md �
   });
 });
 
+describe("V on a selected leg: the live draft (docs/course-editor.md §6.7, F21)", () => {
+  const SMOOTH = { x: 20, y: 10, hIn: { x: -2, y: 0 }, hOut: { x: 2, y: 0 } };
+  const legOpts = (over: Partial<NonNullable<Parameters<typeof selectBinding>[0]["leg"]>> = {}) => ({
+    from: { x: 0, y: 0 }, to: { x: 40, y: 0 }, bends: [SMOOTH], focused: null,
+    onBendsChange: vi.fn(), onBendsDraft: vi.fn(), onBendFocus: vi.fn(), snap: (p: { x: number; y: number }) => p, ...over,
+  });
+
+  it("a bend drag reports its bends past 3 px, never before, snapped; the release writes once and reports no draft", () => {
+    const o = selectOpts({ leg: legOpts({ snap: (p) => ({ x: Math.round(p.x), y: Math.round(p.y) }) }) });
+    const b = selectBinding(o);
+    b.onPointerDown!(ptr(20, 10));
+    b.onPointerDrag!({ x: 20.2, y: 10.1 });
+    expect(o.leg!.onBendsDraft).not.toHaveBeenCalled();
+    b.onPointerDrag!({ x: 22.3, y: 14.4 });
+    expect(o.leg!.onBendsDraft).toHaveBeenLastCalledWith([{ ...SMOOTH, x: 22, y: 14 }]);
+    b.onPointerDrag!({ x: 25.4, y: 16.2 });
+    expect(o.leg!.onBendsDraft).toHaveBeenLastCalledWith([{ ...SMOOTH, x: 25, y: 16 }]);
+    expect(o.leg!.onBendsDraft).toHaveBeenCalledTimes(2);
+    b.onPointerUp!({ x: 26, y: 17 });
+    expect(o.leg!.onBendsChange).toHaveBeenCalledTimes(1);
+    expect(o.leg!.onBendsChange).toHaveBeenCalledWith([{ ...SMOOTH, x: 26, y: 17 }]);
+    // The page turns the draft pending on the write; the binding does not clear it.
+    expect(o.leg!.onBendsDraft).toHaveBeenCalledTimes(2);
+  });
+
+  it("a cancelled drag (mouseleave) clears the draft and writes nothing", () => {
+    const o = selectOpts({ leg: legOpts() });
+    const b = selectBinding(o);
+    b.onPointerDown!(ptr(20, 10));
+    b.onPointerDrag!({ x: 25, y: 12 });
+    b.onPointerUp!(null);
+    expect(o.leg!.onBendsDraft).toHaveBeenLastCalledWith(null);
+    expect(o.leg!.onBendsChange).not.toHaveBeenCalled();
+    // A cancelled grip drag the same.
+    b.onPointerDown!(ptr(22, 10));
+    b.onPointerDrag!({ x: 22, y: 14 }, { shift: false, alt: false });
+    b.onPointerUp!(null);
+    expect(o.leg!.onBendsDraft).toHaveBeenLastCalledWith(null);
+    expect(o.leg!.onBendsChange).not.toHaveBeenCalled();
+  });
+
+  it("a click gives no draft; an Alt-click toggles with one write and no draft", () => {
+    const o = selectOpts({ leg: legOpts() });
+    const b = selectBinding(o);
+    b.onPointerDown!(ptr(20, 10));
+    b.onPointerUp!({ x: 20.05, y: 10 });
+    b.onPointerDown!(ptr(20, 10, { alt: true }));
+    b.onPointerUp!({ x: 20, y: 10 });
+    expect(o.leg!.onBendsDraft).not.toHaveBeenCalledWith(expect.any(Array));
+    expect(o.leg!.onBendsChange).toHaveBeenCalledTimes(1);
+    expect(o.leg!.onBendsChange).toHaveBeenCalledWith([{ x: 20, y: 10 }]);
+    // A click on a grip: nothing either.
+    b.onPointerDown!(ptr(18, 10));
+    b.onPointerUp!({ x: 18.05, y: 10 });
+    expect(o.leg!.onBendsDraft).not.toHaveBeenCalledWith(expect.any(Array));
+  });
+
+  it("a grip drag reports its mirrored pair, Alt live (the pair broken), then writes the last once", () => {
+    const o = selectOpts({ leg: legOpts() });
+    const b = selectBinding(o);
+    b.onPointerDown!(ptr(22, 10));
+    b.onPointerDrag!({ x: 22, y: 14 }, { shift: false, alt: false });
+    expect(o.leg!.onBendsDraft).toHaveBeenLastCalledWith([{ x: 20, y: 10, hIn: { x: -2, y: -4 }, hOut: { x: 2, y: 4 } }]);
+    b.onPointerDrag!({ x: 22, y: 14 }, { shift: false, alt: true });
+    expect(o.leg!.onBendsDraft).toHaveBeenLastCalledWith([{ x: 20, y: 10, hIn: { x: -2, y: 0 }, hOut: { x: 2, y: 4 } }]);
+    b.onPointerUp!({ x: 22, y: 14 });
+    expect(o.leg!.onBendsChange).toHaveBeenCalledTimes(1);
+    expect(o.leg!.onBendsChange).toHaveBeenCalledWith([{ x: 20, y: 10, hIn: { x: -2, y: 0 }, hOut: { x: 2, y: 4 } }]);
+  });
+
+  it("without onBendsDraft (an older caller) the gestures work as before", () => {
+    const o = selectOpts({ leg: legOpts({ onBendsDraft: undefined }) });
+    const b = selectBinding(o);
+    b.onPointerDown!(ptr(20, 10));
+    b.onPointerDrag!({ x: 25, y: 12 });
+    b.onPointerUp!(null);
+    b.onPointerDown!(ptr(20, 10));
+    b.onPointerDrag!({ x: 25, y: 12 });
+    b.onPointerUp!({ x: 25, y: 12 });
+    expect(o.leg!.onBendsChange).toHaveBeenCalledWith([{ ...SMOOTH, x: 25, y: 12 }]);
+  });
+});
+
 describe("corridor guides (docs/course-editor.md §6.7, F14)", () => {
   const guides = [
     { course: "A", index: 0, points: [{ x: 0, y: 0 }, { x: 20, y: 0 }] },
