@@ -62,9 +62,9 @@ import {
   addAlternative, appendSite, canCreateGroup, createGroup, displayPath, insertSite, itemAtPath, moveToAlternative, moveVisit, removeAlternative, removeSite, removeVisit,
   renameAlternative, setLegGaps, setLegProps, setLoop, setNumberHidden, setRole, DEFAULT_CORRIDOR, type GroupOrders, type KindOf, type LegPatch,
 } from "../../lib/editor/structure-edit";
-import { allVariationDraws, courseDrawOf } from "../../lib/editor/variation-view";
+import { allVariationDraws, courseDrawOf, type LegDraft } from "../../lib/editor/variation-view";
 import { alternativeEndAt, courseViewOrders, displaySequence, effectiveEnds, explicitStructure, insertIndexForLeg, kindOfSites, legForInsert, variationBlocks, type SiteRow } from "../../lib/editor/sequence";
-import { insertBendAt, legPolyline, projectOnPolyline, setBendKind } from "../../lib/editor/bends";
+import { bendsEqual, insertBendAt, legPolyline, projectOnPolyline, setBendKind, type Bend } from "../../lib/editor/bends";
 import { courseActions } from "./ActionBar";
 import { TopBar } from "./TopBar";
 import { ToolRail, type AreaChoice } from "./ToolRail";
@@ -105,6 +105,12 @@ function defaultProps(kind: AreaKind): CourseObject["props"] {
 type Notice =
   | { kind: "refresh"; items: string[] | null }
   | { kind: "moved"; controlId: number; mine: Pt; theirs: Pt | null; by?: { name: string; at: string } | null };
+
+/**
+ * The selected leg's bend-drag draft as the page keeps it (§6.7, F21): the leg it belongs to, live or held after the
+ * release (with the bends drawn under it then), and the undo epoch it was made in.
+ */
+type HeldLegDraft = LegDraft & { leg: string; epoch: number } & ({ phase: "live" } | { phase: "held"; from: readonly Bend[] | undefined });
 
 export function EditorPage() {
   const { t } = useTranslation("editor");
@@ -423,12 +429,37 @@ export function EditorPage() {
   }, [state.phantom, state.mode, state.view, structure, rows, explicit]);
   /** Leg editing is desktop and tablet; the phone shows the section read-only (08 §5.5). */
   const legEditable = !!selectedLeg && !isMobile;
-  /** One leg edit: a patch of the item's `LegProps`, one `setStructure`, one undo entry. */
-  const writeLeg = useCallback((patch: LegPatch) => {
-    if (!selectedLeg) return;
+  /** One leg edit: a patch of the item's `LegProps`, one `setStructure`, one undo entry. False when nothing was written. */
+  const writeLeg = useCallback((patch: LegPatch): Promise<boolean> => {
+    if (!selectedLeg) return Promise.resolve(false);
     const path = selectedLeg.path;
-    void applyStructure((s) => setLegProps(s, path, patch));
+    return applyStructure((s) => setLegProps(s, path, patch));
   }, [selectedLeg, applyStructure]);
+  /** The selected leg's identity: its course, item and sites (F21: a live draft belongs to one). */
+  const legIdentity = selectedLeg && selectedCourse ? `${selectedCourse.id}/${selectedLeg.itemIndex}/${selectedLeg.from.id}>${selectedLeg.to.id}` : null;
+  /**
+   * The selected leg's live bends while a bend or grip drag is in flight (§6.7, F21): the layer redraws the course per
+   * move. `live` during the drag, shown while its leg is selected; `held` from the release, shown until the course drawn
+   * under it carries the written bends or leaves the ones it showed at the release (the `pendingMoves` rule), so the
+   * band does not jump back while the list catches up. Dropped on a cancelled drag, Escape and a failed write; undo /
+   * redo (`moveEpoch`) end it. `shownLegDraft` (below the course override) applies these rules.
+   */
+  const [legDraft, setLegDraft] = useState<HeldLegDraft | null>(null);
+  /** The bends the canvas draws for a course's leg without a draft (set below, once the override is known). */
+  const drawnLegBendsRef = useRef<(course: string, key: string) => readonly Bend[] | undefined>(() => undefined);
+  const draftLegBends = useCallback((bends: Bend[] | null) => {
+    if (!bends) return setLegDraft((d) => (d?.phase === "live" ? null : d));
+    if (!selectedLeg || !selectedCourse || !legIdentity) return;
+    setLegDraft({ course: selectedCourse.name, key: `${selectedLeg.from.id}>${selectedLeg.to.id}`, bends, leg: legIdentity, phase: "live", epoch: moveEpoch });
+  }, [selectedLeg, selectedCourse, legIdentity, moveEpoch]);
+  /** A bend gesture's one write (a drag's release, an Alt-click): its bends held as a draft until the list has them. */
+  const writeLegBends = useCallback((bends: Bend[]) => {
+    if (!selectedLeg || !selectedCourse || !legIdentity) return;
+    const key = `${selectedLeg.from.id}>${selectedLeg.to.id}`;
+    const draft: HeldLegDraft = { course: selectedCourse.name, key, bends, leg: legIdentity, phase: "held", from: drawnLegBendsRef.current(selectedCourse.name, key), epoch: moveEpoch };
+    setLegDraft(draft);
+    void writeLeg({ bends }).then((ok) => { if (!ok) setLegDraft((d) => (d === draft ? null : d)); });
+  }, [selectedLeg, selectedCourse, legIdentity, writeLeg, moveEpoch]);
   /** The selected leg's focused bend (a click on its handle or row): `Delete` removes it. Keyed by the leg's item. */
   const [bendFocus, setBendFocus] = useState<{ itemIndex: number; index: number } | null>(null);
   const focusedBend = bendFocus && selectedLeg && bendFocus.itemIndex === selectedLeg.itemIndex && bendFocus.index < (selectedLeg.props.bends?.length ?? 0)
@@ -1281,7 +1312,7 @@ export function EditorPage() {
           onLegDoubleClick: insertOnLeg,
           leg: legEditable && selectedLeg ? {
             from: selectedLeg.fromPt, to: selectedLeg.toPt, bends: selectedLeg.props.bends ?? [], focused: focusedBend,
-            onBendsChange: (bends) => writeLeg({ bends }), onBendFocus: focusBend, snap,
+            onBendsChange: writeLegBends, onBendsDraft: draftLegBends, onBendFocus: focusBend, snap,
           } : null,
         });
     }
@@ -1443,6 +1474,22 @@ export function EditorPage() {
     return [courseDrawOf(selectedCourse.name, displayPath(explicit, kindOf, orders).items)];
   }, [hasGroups, selectedCourse, explicit, state.mode, state.view, kindOf, positionedIds, orders, sheetVariant, variants]);
 
+  // F21: the bends drawn under a leg draft — the override's own draw (a course with groups draws from the structure),
+  // else `course.list`'s leg.
+  const drawnLegBends = useCallback((name: string, key: string): readonly Bend[] | undefined => {
+    const own = courseOverride?.[0]?.name === name ? courseOverride[0] : null;
+    return own ? own.legs[key]?.bends : courses.data?.find((c) => c.name === name)?.legs?.[key]?.bends;
+  }, [courseOverride, courses.data]);
+  useEffect(() => { drawnLegBendsRef.current = drawnLegBends; }, [drawnLegBends]);
+  /** The leg draft the viewer draws (§6.7, F21): see `legDraft`. */
+  const shownLegDraft = useMemo((): LegDraft | null => {
+    const d = legDraft;
+    if (!d || d.epoch !== moveEpoch) return null;
+    if (d.phase === "live") return d.leg === legIdentity ? d : null;
+    const drawn = drawnLegBends(d.course, d.key);
+    return bendsEqual(drawn, d.bends) || !bendsEqual(drawn, d.from) ? null : d;
+  }, [legDraft, moveEpoch, legIdentity, drawnLegBends]);
+
   // Offline, Field mode views only (§9 "Offline"): a drag snaps back instead of writing.
   const fieldReadOnly = fieldMode && !online;
   const fieldMoveEnd = useCallback((id: string, pt: Pt) => {
@@ -1495,7 +1542,8 @@ export function EditorPage() {
     markers: courseChecks.markers,
     layout: classLayout,
     courseOverride,
-  }), [classLayout, courseChecks.markers, isMobile, fix, sheetPx, fieldMoveEnd, state.selectedControlId, state.phantom, contextActions, contextInfo, srrBadge, radioOn, suggestions, tc, courseControlIds, toolActive,
+    legDraft: shownLegDraft,
+  }), [shownLegDraft, classLayout, courseChecks.markers, isMobile, fix, sheetPx, fieldMoveEnd, state.selectedControlId, state.phantom, contextActions, contextInfo, srrBadge, radioOn, suggestions, tc, courseControlIds, toolActive,
     courseView, selectedCourse, moveWarnings, moveEpoch, handleMapClick, handleLabelMoveEnd, handleSelect,
     handleDismiss, handleLegClick, shownBinding, snapIndex, snap, draftObjects, draftFast, viewRequest, provisional, courseOverride, state.view]);
 
@@ -1572,6 +1620,7 @@ export function EditorPage() {
         runRedo();
       } else if (e.key === "Escape") {
         setAreaOpen(false);
+        setLegDraft((d) => (d?.phase === "live" ? null : d));
         // The cascade first; with nothing left, Esc leaves fullscreen (MapPanel holds the Keyboard Lock).
         if (!escapeHasWork(state) && document.fullscreenElement) void document.exitFullscreen().catch(() => {});
         else {
