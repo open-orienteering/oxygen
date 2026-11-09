@@ -22,6 +22,11 @@
  * than the circle opens the drawn circle where its sides meet it. The
  * openings are drawn, never cuts: the layer adds them to the circle at
  * draw time only.
+ *
+ * Ends (F22): where a corridor ends — a site with exactly one corridor-leg
+ * end over every course, not a start — the band stops on the line through
+ * the site across the leg, its corners rounded, and wraps only the near
+ * half of the symbol; the inside, the edges and the openings are as before.
  */
 
 import * as polygonClippingModule from "polygon-clipping";
@@ -112,6 +117,8 @@ interface Mouth {
 
 interface Run {
   pts: Pt[];
+  /** Each leg's points (µm), in order: the legs a terminal end's cut leaves alone (F22). */
+  legs: Pt[][];
   /** Half the width, µm. */
   half: number;
   white: number;
@@ -121,7 +128,33 @@ interface Run {
   /** Flat ends instead of round (F19): the run starts / ends at a start whose 701 joins the inside. */
   flatStart?: boolean;
   flatEnd?: boolean;
+  /**
+   * The outer ring's end at a terminal end (F22): flat on the site, its corners rounded by this radius, µm —
+   * whiteMm, or h + whiteMm − R where the band reaches past the end's circle by less (one corner, no bump).
+   */
+  cornerStart?: number;
+  cornerEnd?: number;
 }
+
+/**
+ * How the band ends at a corridor's terminal end (course-layer.md §10.2
+ * "Ends", F22): `"flat"` stops it on the line through the site's centre
+ * across the leg, its outer corners rounded by `whiteMm`, and halves the
+ * mouth's grown symbol; `"round"` wraps the site as before F22 (a round
+ * end at h + whiteMm and the whole grown symbol).
+ */
+export type TerminalEnd = "flat" | "round";
+
+/** The band's end the layer draws (F22, user answer 1: option 3, "flat, corners rounded"). */
+export const TERMINAL_END: TerminalEnd = "flat";
+
+export interface CorridorOptions {
+  /** The band's end at a terminal end; `TERMINAL_END` when absent. */
+  terminalEnd?: TerminalEnd;
+}
+
+/** A ring's end: round (a half disc about the end point) or flat (straight across it). */
+type Cap = "round" | "flat";
 
 interface EdgedSegment {
   a: Pt;
@@ -180,9 +213,10 @@ function runsOf(courses: readonly DerivedCourse[]): { runs: Run[]; edged: EdgedS
       const half = (k.widthMm * 1000) / 2, white = k.whiteMm * 1000;
       if (run && run.half === half && run.white === white) {
         run.pts.push(...pts);
+        run.legs.push(pts);
         run.to = leg.to;
       } else {
-        run = { pts: [...pts], half, white, from: leg.from, to: leg.to };
+        run = { pts: [...pts], legs: [pts], half, white, from: leg.from, to: leg.to };
         runs.push(run);
       }
       const distinct = simplify(pts);
@@ -257,6 +291,28 @@ function mouthRing(mouth: Mouth, w: number): Polygon {
     ring.push([v.x + w * Math.cos(nIn), v.y + w * Math.sin(nIn)]);
     arc(ring, v, w, nIn, sweep);
   }
+  return [integral(ring)];
+}
+
+/**
+ * A disc mouth's symbol grown by `w`, its near half only (F22, a terminal
+ * end): the disc of radius R + w cut on the line through its centre across
+ * `u` (the leg's bearing into the site), the side the leg comes from kept.
+ * Its face on the line spans the circle's diameter (±R), and each corner is
+ * the arc tangent to the line there and, inside, to the grown disc: radius
+ * w(2R + w) / (2(R + w)), between w / 2 and w. So the whole near half of
+ * the symbol stays in the white up to the line, for any w.
+ */
+function halfMouthRing(mouth: Mouth, w: number, u: Pt): Polygon {
+  const c = mouth.c, R = mouth.extent, b = R + w, r = (w * (2 * R + w)) / (2 * b);
+  const t = Math.atan2(u.y, u.x), ux = Math.cos(t), uy = Math.sin(t), nx = -uy, ny = ux;
+  // The corners' centres: r behind the line at ±q (q = R by the choice of r), R + w − r from the site (tangent to the
+  // disc inside); φ their bearing from the site.
+  const q = Math.sqrt(Math.max(0, (b - r) * (b - r) - r * r)), phi = Math.atan2(q, -r);
+  const ring: [number, number][] = [[c.x - nx * q, c.y - ny * q], [c.x + nx * q, c.y + ny * q]];
+  arc(ring, { x: c.x - ux * r + nx * q, y: c.y - uy * r + ny * q }, r, t, phi);
+  arc(ring, c, b, t + phi, 2 * Math.PI - 2 * phi);
+  arc(ring, { x: c.x - ux * r - nx * q, y: c.y - uy * r - ny * q }, r, t - phi, phi);
   return [integral(ring)];
 }
 
@@ -412,9 +468,11 @@ function arc(out: [number, number][], c: Pt, h: number, a0: number, sweep: numbe
  * runs through the vertex itself, so the ring's nonzero winding is the
  * round-joined buffer even where it crosses itself; the union cleans it.
  * A flat end (F19, at a joined 701) runs straight from one side to the
- * other through the site: the triangle, not a round end, closes it.
+ * other through the site: the triangle, not a round end, closes it; so
+ * does the band's at a terminal end (F22), before `cornerWedges` round
+ * its corners.
  */
-function runRing(pts: readonly Pt[], h: number, flatStart = false, flatEnd = false): Polygon {
+function runRing(pts: readonly Pt[], h: number, capStart: Cap = "round", capEnd: Cap = "round"): Polygon {
   const ring: [number, number][] = [];
   if (pts.length < 2) {
     const c = pts[0];
@@ -442,13 +500,100 @@ function runRing(pts: readonly Pt[], h: number, flatStart = false, flatEnd = fal
       }
     }
   };
-  const capAt = (end: Pt, before: Pt) => arc(ring, end, h, dir(before, end) + Math.PI / 2, -Math.PI);
+  const capAt = (end: Pt, before: Pt, cap: Cap) => {
+    if (cap === "round") arc(ring, end, h, dir(before, end) + Math.PI / 2, -Math.PI);
+  };
   side(pts);
-  if (!flatEnd) capAt(pts[pts.length - 1], pts[pts.length - 2]);
+  capAt(pts[pts.length - 1], pts[pts.length - 2], capEnd);
   const back = [...pts].reverse();
   side(back);
-  if (!flatStart) capAt(back[back.length - 1], back[back.length - 2]);
+  capAt(back[back.length - 1], back[back.length - 2], capStart);
   return [integral(ring)];
+}
+
+/** How far back from a terminal end its bearing is taken, µm (F22): a flattened curve's last segments are µm long. */
+const END_BEARING_UM = 1000;
+
+/**
+ * The point an end's bearing is taken from (F22): walking from the end of
+ * `pts` (its last point when `atEnd`, else its first) back along it, the
+ * first point at least `END_BEARING_UM` from the end, or the far end. On a
+ * straight end segment of 1 mm or more, its other end; on a flattened
+ * curve, the chord of its last millimetre, not a rounded µm segment.
+ */
+function bearingFrom(pts: readonly Pt[], atEnd: boolean): Pt {
+  const n = pts.length, end = atEnd ? pts[n - 1] : pts[0];
+  for (let k = 1; k < n; k++) {
+    const p = atEnd ? pts[n - 1 - k] : pts[k];
+    if (Math.hypot(p.x - end.x, p.y - end.y) >= END_BEARING_UM) return p;
+  }
+  return atEnd ? pts[0] : pts[n - 1];
+}
+
+/**
+ * The run's part that keeps its band inside a terminal end's cut (F22,
+ * spec review): every leg of the run but the terminal one — the end's own
+ * leg is the only one cut — and of those only the stretches whose
+ * segments come within reach of the cut: less than h + r behind the end
+ * line (on the end's bearing) somewhere, and within √((h + w)² + w²) + h
+ * of the end (w the cut's `reach`, `cornerWedges`). Each is a polyline whose buffer may enter the cut; a
+ * stretch's own end is the run's site where the end's leg starts (its
+ * round end there is that leg's join, kept) or a point too far behind or
+ * away to reach it. None in the usual case: a run whose earlier legs stay
+ * behind its end's reach, or a lone leg.
+ */
+function bodyNear(run: Run, atEnd: boolean, h: number, r: number, reach: number): Pt[][] {
+  const pts = run.pts, n = pts.length, end = atEnd ? pts[n - 1] : pts[0], from = bearingFrom(pts, atEnd);
+  const len = Math.hypot(end.x - from.x, end.y - from.y);
+  if (run.legs.length < 2 || !len) return [];
+  const ux = (end.x - from.x) / len, uy = (end.y - from.y) / len;
+  const s = (p: Pt) => (p.x - end.x) * ux + (p.y - end.y) * uy;
+  const body = simplify((atEnd ? run.legs.slice(0, -1) : run.legs.slice(1)).flat());
+  const limit = Math.hypot(h + reach, reach) + h + 1;
+  const out: Pt[][] = [];
+  let cur: Pt[] | null = null;
+  for (let k = 0; k + 1 < body.length; k++) {
+    const a = body[k], b = body[k + 1];
+    // Its buffer reaches the cut only from a point less than h + r behind the line (s is linear along it), and near.
+    if (Math.max(s(a), s(b)) <= -(h + r) || distToSegment(end, a, b) > limit) {
+      cur = null;
+      continue;
+    }
+    if (!cur) out.push((cur = [a]));
+    cur.push(b);
+  }
+  return out;
+}
+
+/**
+ * What a flat end at `end` loses (F22): its round end — everything of the
+ * ring at `h` past the end line within h + `reach` (the band's whiteMm) —
+ * and its two corners, rounded by `r` (≤ reach): for each side, the
+ * square corner between the line and r before it, from h − r out to
+ * h + reach, less the quarter disc of radius r tangent to the line and the
+ * side. The reach past h takes in a curved
+ * run's own bulge near its end (its earlier sides stand out past h on the
+ * outside of the curve, and across the line); the corners start r past
+ * the line, so no edge of theirs lies on the ring's own end line (a 1 µm
+ * sliver). Subtracted from the run's flat-ended ring, they leave its end
+ * flat on the line with its corners rounded, however short the end
+ * segment or curved the run; nothing changes farther than
+ * √((h + reach)² + reach²) from the end.
+ */
+function cornerWedges(end: Pt, before: Pt, h: number, r: number, reach: number): Polygon[] {
+  // `before`: the point the end's bearing is taken from (`bearingFrom`).
+  const t = Math.atan2(end.y - before.y, end.x - before.x), ux = Math.cos(t), uy = Math.sin(t), nx = -uy, ny = ux;
+  const at = (s: number, n: number): [number, number] => [end.x + ux * s + nx * n, end.y + uy * s + ny * n];
+  const g = h + reach;
+  const beyond: [number, number][] = [at(0, -g)];
+  arc(beyond, end, g, t - Math.PI / 2, Math.PI);
+  return [[integral(beyond)], ...[1, -1].map((side): Polygon => {
+    const ring: [number, number][] = [at(0, side * (h - r)), at(r, side * (h - r)), at(r, side * g), at(-r, side * g), at(-r, side * h)];
+    // The quarter circle about (−r, ±(h − r)) from the side back to the line.
+    const f = at(-r, side * (h - r));
+    arc(ring, { x: f[0], y: f[1] }, r, t + (side * Math.PI) / 2, (-side * Math.PI) / 2);
+    return [integral(ring)];
+  })];
 }
 
 /** Integer µm, consecutive repeats dropped, closed: polygon-clipping's sweep is stable on it (float arcs crash it). */
@@ -463,15 +608,49 @@ function integral(ring: readonly [number, number][]): [number, number][] {
   return out;
 }
 
-/** The round-joined buffer of every run at its half width plus `extra(run)`, and the `more` polygons, as one union. */
-function buffer(runs: readonly Run[], extra: (r: Run) => number, more: readonly Polygon[] = []): MultiPolygon {
+/**
+ * The round-joined buffer of every run at its half width plus `extra(run)`, and the `more` polygons, as one union;
+ * `outer`: the band's buffer, whose terminal ends are cornered (F22).
+ */
+function buffer(runs: readonly Run[], extra: (r: Run) => number, more: readonly Polygon[] = [], outer = false): MultiPolygon {
   const rings: Polygon[] = [];
   for (const r of runs) {
     const h = r.half + extra(r);
-    if (h > 0) rings.push(runRing(r.pts, h, r.flatStart, r.flatEnd));
+    if (!(h > 0)) continue;
+    const cs = outer ? r.cornerStart : undefined, ce = outer ? r.cornerEnd : undefined;
+    const ring = runRing(r.pts, h, r.flatStart || cs !== undefined ? "flat" : "round", r.flatEnd || ce !== undefined ? "flat" : "round");
+    if (cs === undefined && ce === undefined) {
+      rings.push(ring);
+      continue;
+    }
+    // F22: a terminal end, flat on the site; its corners rounded by whiteMm.
+    const n = r.pts.length;
+    const reach = extra(r);
+    const wS = cs !== undefined ? cornerWedges(r.pts[0], bearingFrom(r.pts, false), h, Math.min(cs, h), reach) : [];
+    const wE = ce !== undefined ? cornerWedges(r.pts[n - 1], bearingFrom(r.pts, true), h, Math.min(ce, h), reach) : [];
+    // The cut is the end's: where the run's own earlier part passes through it (a hairpin, a figure eight), its
+    // buffer is taken out of the cut, so that part keeps its band (review of F22; answer 4, never thinner). The
+    // usual run never comes back near its end and is cut by the wedges themselves. Rounded to integer µm before
+    // the difference (a float subtrahend can crash the sweep); a lone ring per stretch shares the run ring's offsets.
+    const keep = (wedges: Polygon[], atEnd: boolean, corner: number | undefined): Polygon[] => {
+      const body = corner === undefined ? [] : bodyNear(r, atEnd, h, Math.min(corner, h), reach).map((p) => runRing(p, h));
+      return body.length ? wedges.flatMap((w) => integralMp(pc.difference(w, ...body))) : wedges;
+    };
+    rings.push(...pc.difference(ring, ...keep(wS, false, cs), ...keep(wE, true, ce)));
   }
   rings.push(...more);
   return rings.length ? pc.union(rings[0], ...rings.slice(1)) : [];
+}
+
+/** polygon-clipping output rounded to integer µm (`integral`), rings that collapse dropped. */
+function integralMp(mp: MultiPolygon): Polygon[] {
+  const out: Polygon[] = [];
+  for (const poly of mp) {
+    const [outer, ...holes] = poly.map((ring) => integral(ring));
+    // A polygon whose outer ring collapses (fewer than three distinct points) goes with its holes.
+    if (outer && outer.length >= 4) out.push([outer, ...holes.filter((ring) => ring.length >= 4)]);
+  }
+  return out;
 }
 
 /** polygon-clipping rings (closed, float) → flat integer-µm rings, the closing point dropped. */
@@ -656,10 +835,11 @@ const num = (v: number | undefined) => (v === undefined ? "u" : v === 0 && 1 / v
  * Everything `computeCorridorGeometry` reads, as one string: per course
  * its id and per leg its index, and for a corridor leg its ends, width,
  * band, edge and points; the extents and the sites a corridor leg ends
- * at (id, role, position, turn), in the order given.
+ * at (id, role, position, turn), in the order given; the terminal end
+ * (F22).
  */
-function inputKey(courses: readonly DerivedCourse[], mouths: CorridorMouths | undefined): string {
-  const parts: string[] = [];
+function inputKey(courses: readonly DerivedCourse[], mouths: CorridorMouths | undefined, terminalEnd: TerminalEnd): string {
+  const parts: string[] = [`T${terminalEnd}`];
   const ends = new Set<string>();
   for (const c of courses) {
     parts.push(`C${c.id.length}:${c.id}`);
@@ -701,15 +881,28 @@ let last: { key: string; geometry: CorridorGeometry | null } | null = null;
  * they were, and their unions are most of a request's cost. Callers
  * treat the result as read-only.
  */
-export function corridorGeometry(courses: readonly DerivedCourse[], mouths?: CorridorMouths): CorridorGeometry | null {
-  const key = inputKey(courses, mouths);
+export function corridorGeometry(courses: readonly DerivedCourse[], mouths?: CorridorMouths, options?: CorridorOptions): CorridorGeometry | null {
+  const terminalEnd = options?.terminalEnd ?? TERMINAL_END;
+  const key = inputKey(courses, mouths, terminalEnd);
   if (last?.key === key) return last.geometry;
-  const geometry = computeCorridorGeometry(courses, mouths);
+  const geometry = computeCorridorGeometry(courses, mouths, terminalEnd);
   last = { key, geometry };
   return geometry;
 }
 
-function computeCorridorGeometry(courses: readonly DerivedCourse[], mouths?: CorridorMouths): CorridorGeometry | null {
+/**
+ * The sites with exactly one corridor-leg end over every course (F22,
+ * user answer 4): there the band stops. A control inside a run, a change
+ * of width or band, two courses' corridors meeting, a loop or a reversal
+ * each have two or more.
+ */
+function terminalSites(ends: readonly LegEnd[]): Set<string> {
+  const count = new Map<string, number>();
+  for (const e of ends) count.set(e.siteId, (count.get(e.siteId) ?? 0) + 1);
+  return new Set([...count].filter(([, n]) => n === 1).map(([id]) => id));
+}
+
+function computeCorridorGeometry(courses: readonly DerivedCourse[], mouths: CorridorMouths | undefined, terminalEnd: TerminalEnd): CorridorGeometry | null {
   const { runs, edged: edgedRaw, ends } = runsOf(courses);
   if (!runs.length) return null;
   const sites = mouths ? mouthsOf(ends, mouths) : new Map<string, Mouth>();
@@ -749,14 +942,38 @@ function computeCorridorGeometry(courses: readonly DerivedCourse[], mouths?: Cor
   let band: FlatRing[] | null = null;
   const banded = runs.filter((r) => r.white > 0);
   if (banded.length) {
+    // F22: at a terminal end (not a start: answer 2) the band stops on the line through the site, its corners rounded by whiteMm.
+    const terminal = terminalEnd === "flat" ? terminalSites(ends) : new Set<string>();
+    for (const s of sites.values()) if (s.site.role === "start") terminal.delete(s.site.id);
+    // The corner (user, 2026-11-09, "fix the bump"): where the band reaches past the end's circle (h + w > R) it is
+    // the end's only shape — one corner of radius min(w, h + w − R), its face on the line spanning ±R at least, so the
+    // circle's near half stays in the white up to the line; the mouth adds no half (below). Where it does not
+    // (h + w ≤ R), the corner is w and the mouth's half wraps the circle.
+    const cornerAt = (r: Run, id: string) => {
+      const m = sites.get(id), R = m && !m.corners ? m.extent : 0, H = r.half + r.white;
+      return H > R ? Math.min(r.white, H - R) : r.white;
+    };
+    for (const r of banded) {
+      if (r.pts.length < 2) continue;
+      if (terminal.has(r.from) && !r.flatStart) r.cornerStart = cornerAt(r, r.from);
+      if (terminal.has(r.to) && !r.flatEnd) r.cornerEnd = cornerAt(r, r.to);
+    }
     // A mouth's band: its symbol grown by the largest whiteMm of the legs ending there, unless a leg's band there encloses it.
+    // At a terminal end its near half only, the side the leg comes from, and only where the band is no wider than the
+    // circle (F22).
     const more: Polygon[] = [];
     for (const m of sites.values()) {
       const here = ends.filter((e) => e.siteId === m.site.id);
       const white = Math.max(...here.map((e) => e.white));
-      if (white > 0 && !here.some((e) => e.white > 0 && e.half + e.white >= m.extent + white)) more.push(mouthRing(m, white));
+      if (!(white > 0) || here.some((e) => e.white > 0 && e.half + e.white >= m.extent + white)) continue;
+      // The same bearing as the run's cut there: its path from the site on, read back from its far end.
+      // Without a bearing (a degenerate path) the mouth stays whole.
+      const e = here[0], from = bearingFrom(e.path, false), u = { x: e.c.x - from.x, y: e.c.y - from.y };
+      // A terminal end whose band reaches past the circle has no half: the run's one corner wraps it (above).
+      if (terminal.has(m.site.id) && !m.corners && e.half + e.white > m.extent) continue;
+      more.push(terminal.has(m.site.id) && !m.corners && (u.x || u.y) ? halfMouthRing(m, white, u) : mouthRing(m, white));
     }
-    const outer = buffer(banded, (r) => r.white, more);
+    const outer = buffer(banded, (r) => r.white, more, true);
     const rings = flat(pc.difference(outer, insideMp));
     if (rings.length) band = rings;
   }

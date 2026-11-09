@@ -18,6 +18,11 @@
  * flattening does not move them. Re-record only for an intended change
  * of the geometry:
  * `UPDATE_CORRIDOR_REFERENCE=1 pnpm --filter @oxygen/shared exec vitest run src/course/__tests__/corridor-reference.test.ts`
+ * Each case also keeps a hash per component (`parts`: inside, band, edges,
+ * openings; F22), so a change says which component it moved. A change
+ * meant for the band alone is re-recorded with
+ * `UPDATE_CORRIDOR_REFERENCE=band`, which fails unless every case's
+ * inside, edges and openings hash is the recorded one.
  */
 
 import { createHash } from "node:crypto";
@@ -26,6 +31,7 @@ import { dirname } from "node:path";
 import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
 import { corridorGeometry, type CorridorGeometry, type CorridorMouths, type CorridorSite } from "../corridor.js";
+import { ringArea, type FlatRing } from "../../render/geometry.js";
 import type { DerivedCourse, DerivedLeg } from "../types.js";
 import type { MapPoint } from "../../course-maps/schema.js";
 import { seeded } from "./drag-course.js";
@@ -118,12 +124,28 @@ function edgeCases(): Case[] {
 
 const CASES: Case[] = [...edgeCases(), ...Array.from({ length: 60 }, (_, i) => caseOf(1000 + i))];
 
-interface Recorded { name: string; sha256: string; inside: number; band: number; edges: number; openings: number }
+/** Per-component SHA-256 (F22): the inside, the band, the edges and the openings each hashed on its own canonical JSON. */
+interface Parts { inside: string; band: string; edges: string; openings: string }
+
+interface Recorded { name: string; sha256: string; parts: Parts; inside: number; band: number; edges: number; openings: number }
 
 /** The geometry as canonical JSON: rings, edges in order, openings by site id. */
 function canonical(g: CorridorGeometry | null): string {
   if (!g) return "null";
-  return JSON.stringify({ inside: g.inside, band: g.band, edges: g.edges, openings: [...g.openings.entries()].sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0)) });
+  return JSON.stringify({ inside: g.inside, band: g.band, edges: g.edges, openings: sortedOpenings(g) });
+}
+
+const sortedOpenings = (g: CorridorGeometry) => [...g.openings.entries()].sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0));
+const sha = (s: string) => createHash("sha256").update(s).digest("hex");
+
+/** Each component's hash: a change to one component's geometry moves its hash and no other's (F22). */
+function parts(g: CorridorGeometry | null): Parts {
+  return {
+    inside: sha(JSON.stringify(g?.inside ?? null)),
+    band: sha(JSON.stringify(g?.band ?? null)),
+    edges: sha(JSON.stringify(g?.edges ?? null)),
+    openings: sha(JSON.stringify(g ? sortedOpenings(g) : null)),
+  };
 }
 
 function record(c: Case): Recorded {
@@ -131,7 +153,8 @@ function record(c: Case): Recorded {
   const count = (rings: readonly { length: number }[] | null | undefined) => (rings ?? []).reduce((s, r) => s + r.length, 0);
   return {
     name: c.name,
-    sha256: createHash("sha256").update(canonical(g)).digest("hex"),
+    sha256: sha(canonical(g)),
+    parts: parts(g),
     inside: count(g?.inside),
     band: count(g?.band),
     edges: (g?.edges ?? []).reduce((s, e) => s + e.points.length, 0),
@@ -142,8 +165,16 @@ function record(c: Case): Recorded {
 describe("corridor geometry reference (F20b): bit-identical to the pre-F20b result", () => {
   if (process.env.UPDATE_CORRIDOR_REFERENCE) {
     it("records the reference", () => {
+      const next = CASES.map(record);
+      if (process.env.UPDATE_CORRIDOR_REFERENCE === "band") {
+        // An intended change of the band alone (F22): the inside, the edges and the openings must stay as recorded.
+        const prev = JSON.parse(readFileSync(FILE, "utf8")) as Recorded[];
+        next.forEach((r, i) => {
+          for (const k of ["inside", "edges", "openings"] as const) expect(`${r.name} ${k} ${r.parts[k]}`).toBe(`${prev[i].name} ${k} ${prev[i].parts[k]}`);
+        });
+      }
       mkdirSync(dirname(FILE), { recursive: true });
-      writeFileSync(FILE, JSON.stringify(CASES.map(record), null, 1) + "\n");
+      writeFileSync(FILE, JSON.stringify(next, null, 1) + "\n");
     });
     return;
   }
@@ -162,4 +193,99 @@ describe("corridor geometry reference (F20b): bit-identical to the pre-F20b resu
   it.each(CASES.map((c, i) => [c.name, i] as const))("%s", (_, i) => {
     expect(record(CASES[i])).toEqual(ref[i]);
   });
+});
+
+/** Every segment of `rings` bucketed on a 1 mm grid: the distance from a point to the outline, µm, within `limit`. */
+function outline(rings: readonly FlatRing[]): (x: number, y: number, limit: number) => number {
+  const cells = new Map<string, number[][]>();
+  for (const r of rings) {
+    const n = r.length / 2;
+    for (let i = 0; i < n; i++) {
+      const s = [r[2 * i], r[2 * i + 1], r[(2 * i + 2) % r.length], r[(2 * i + 3) % r.length]];
+      for (let cx = Math.floor(Math.min(s[0], s[2]) / 1000); cx <= Math.floor(Math.max(s[0], s[2]) / 1000); cx++) {
+        for (let cy = Math.floor(Math.min(s[1], s[3]) / 1000); cy <= Math.floor(Math.max(s[1], s[3]) / 1000); cy++) {
+          const k = `${cx} ${cy}`;
+          (cells.get(k) ?? cells.set(k, []).get(k)!).push(s);
+        }
+      }
+    }
+  }
+  return (x, y) => {
+    let best = Infinity;
+    for (let cx = Math.floor(x / 1000) - 1; cx <= Math.floor(x / 1000) + 1; cx++) {
+      for (let cy = Math.floor(y / 1000) - 1; cy <= Math.floor(y / 1000) + 1; cy++) {
+        for (const [ax, ay, bx, by] of cells.get(`${cx} ${cy}`) ?? []) {
+          const dx = bx - ax, dy = by - ay, l2 = dx * dx + dy * dy;
+          const t = l2 ? Math.max(0, Math.min(1, ((x - ax) * dx + (y - ay) * dy) / l2)) : 0;
+          best = Math.min(best, Math.hypot(x - ax - t * dx, y - ay - t * dy));
+        }
+      }
+    }
+    return best;
+  };
+}
+
+/**
+ * The terminal ends of a case (course-layer.md §10.2 "Ends", F22): each site with exactly one corridor-leg end over
+ * every course, not a start, and how far its end reaches: the run's cut (corridor.ts `cornerWedges`) within
+ * √((h + 2w)² + w²), the mouth's half within R + w, R the symbol's extent (0 undrawn), µm.
+ */
+function terminalReach(c: Case): { x: number; y: number; reach: number }[] {
+  const ends = new Map<string, { x: number; y: number; reach: number }[]>();
+  const byId = new Map((c.mouths?.sites ?? []).map((s) => [s.id, s] as const));
+  for (const course of c.courses) {
+    for (const leg of course.legs) {
+      if (!leg.corridor || leg.points.length < 2) continue;
+      const um = leg.points.map((p) => `${Math.round(p.x * 1000)} ${Math.round(p.y * 1000)}`);
+      if (um.every((k) => k === um[0])) continue;
+      const h = (leg.corridor.widthMm * 1000) / 2, w = leg.corridor.whiteMm * 1000;
+      for (const [id, p] of [[leg.from, leg.points[0]], [leg.to, leg.points[leg.points.length - 1]]] as const) {
+        const site = byId.get(id);
+        const R = !site || !c.mouths ? 0 : site.role === "control" ? c.mouths.circleUm : site.role === "finish" ? c.mouths.finishUm : site.role === "start" ? c.mouths.startUm : 0;
+        (ends.get(id) ?? ends.set(id, []).get(id)!).push({ x: p.x * 1000, y: p.y * 1000, reach: Math.max(Math.hypot(h + 2 * w, w), R + w) });
+      }
+    }
+  }
+  return [...ends].filter(([id, list]) => list.length === 1 && byId.get(id)?.role !== "start").map(([, [e]]) => e);
+}
+
+describe("F22: only the band's terminal ends moved (course-layer.md §10.2 \"Ends\")", () => {
+  it.each(CASES.map((c, i) => [c.name, i] as const))("%s: inside, edges and openings as before F22; the band changed only near a terminal end", (_, i) => {
+    const c = CASES[i];
+    const before = corridorGeometry(c.courses, c.mouths, { terminalEnd: "round" });
+    const now = corridorGeometry(c.courses, c.mouths);
+    expect(now?.inside).toEqual(before?.inside);
+    expect(now?.edges).toEqual(before?.edges);
+    expect(now?.openings).toEqual(before?.openings);
+    // Every outline vertex of either band off the other's outline (by more than 2 µm) lies within a terminal end's reach.
+    const ends = terminalReach(c);
+    const near = (x: number, y: number) => ends.some((e) => Math.hypot(x - e.x, y - e.y) <= e.reach + 20);
+    for (const [a, b] of [[now?.band, before?.band], [before?.band, now?.band]] as const) {
+      const other = outline(b ?? []);
+      for (const r of a ?? []) {
+        for (let k = 0; k < r.length; k += 2) {
+          if (other(r[k], r[k + 1], 2) <= 2) continue;
+          if (!near(r[k], r[k + 1])) expect.fail(`${c.name}: band vertex ${r[k]},${r[k + 1]} moved, away from every terminal end ${JSON.stringify(ends.map((e) => [Math.round(e.x), Math.round(e.y), Math.round(e.reach), Math.round(Math.hypot(r[k] - e.x, r[k + 1] - e.y))]))} ${JSON.stringify(c.courses.map((co) => co.legs.map((l) => [l.from, l.to, l.corridor?.widthMm, l.corridor?.whiteMm, l.points.length])))} ${JSON.stringify(c.mouths?.sites.map((x) => [x.id, x.role, x.x, x.y]))} ${JSON.stringify(c.courses.flatMap((co) => co.legs.filter((l) => l.corridor).flatMap((l) => [l.points.slice(0, 3), l.points.slice(-3)])).filter((ps) => ps.some((p) => Math.hypot(p.x * 1000 - r[k], p.y * 1000 - r[k + 1]) < 9000)))}`);
+        }
+      }
+    }
+  });
+
+  it("no slivers: every band ring under 0.01 mm² is one the band had before F22", () => {
+    for (const c of CASES) {
+      const before = new Set((corridorGeometry(c.courses, c.mouths, { terminalEnd: "round" })?.band ?? []).map((r) => JSON.stringify(r)));
+      for (const r of corridorGeometry(c.courses, c.mouths)?.band ?? []) {
+        if (Math.abs(ringArea(r)) < 10000) expect(before.has(JSON.stringify(r)), `${c.name}: ${JSON.stringify(r.slice(0, 8))}…`).toBe(true);
+      }
+    }
+  }, 30000);
+
+  it("the cases have terminal ends whose band changed, and ones with none", () => {
+    const changed = CASES.filter((c) => {
+      const before = corridorGeometry(c.courses, c.mouths, { terminalEnd: "round" });
+      return JSON.stringify(corridorGeometry(c.courses, c.mouths)?.band) !== JSON.stringify(before?.band);
+    });
+    expect(changed.length).toBeGreaterThan(10);
+    expect(changed.length).toBeLessThan(CASES.length);
+  }, 30000);
 });
