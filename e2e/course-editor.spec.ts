@@ -3131,6 +3131,19 @@ test.describe("F3: legs — styles, bends, corridors (docs/course-editor.md §6.
       });
     };
     const junctionProbes = [...junctions(ax, bx), ...junctions(bx, ax)];
+    // F22 (course-layer.md §10.2 "Ends"): each control is the corridor's only end there, so the band stops on the line
+    // through its centre; behind it — within the pre-F22 wrap (R + whiteMm), beyond the inside's round end — the map
+    // shows. Kept off the other controls' circles and numbers.
+    const behind: Pt[] = [];
+    for (const [c, toward] of [[ax, bx], [bx, ax]] as const) {
+      const t0 = Math.atan2(c.y - toward.y, c.x - toward.x);
+      for (let d = R + 0.5; d <= R + 4 + 1e-9; d += 0.25) {
+        for (const k of [-1, 0, 1]) behind.push({ x: c.x + d * Math.cos(t0) - k * Math.sin(t0), y: c.y + d * Math.sin(t0) + k * Math.cos(t0) });
+      }
+    }
+    const own = (m: Pt) => [ax, bx].some((c) => Math.hypot(m.x - c.x, m.y - c.y) < 0.01);
+    const behindClear = behind.filter((q) => marks.every((m) => own(m) || Math.hypot(q.x - m.x, q.y - m.y) > 6));
+    expect(behindClear.length).toBeGreaterThan(20);
     const guides = async () => (await toolShapes(page, "editor-corridor-guide")).length;
     const courses = await trpcCall<{ id: number; name: string }[]>("course.list", undefined, false);
     const courseId = courses.find((c) => c.name === name)!.id;
@@ -3141,6 +3154,7 @@ test.describe("F3: legs — styles, bends, corridors (docs/course-editor.md §6.
       await viewSettled(page);
       const mapBefore = await inkAt(page, band, "map");
       expect(mapBefore, "the fixture map has colour beside the leg").toBeGreaterThan(0);
+      expect(await inkAt(page, behindClear, "map"), "the fixture map has colour behind the controls").toBeGreaterThan(0);
       expect(await inkAt(page, centre, "purple"), "the leg's line before the corridor").toBeGreaterThan(0);
       expect(await guides()).toBe(0);
       // F19: before the corridor both circles are whole where the corridor will meet them (and R is right).
@@ -3156,6 +3170,8 @@ test.describe("F3: legs — styles, bends, corridors (docs/course-editor.md §6.
       await expect(page.getByTestId("editor-leg-corridor-white")).toHaveValue("5");
       await expect(page.getByTestId("editor-leg-corridor-edge")).toBeChecked();
       await expect.poll(() => inkAt(page, band, "map"), { timeout: 30000 }).toBe(0);
+      // F22: the band stops at each circle's centre line; the map shows behind it (the band along the middle above).
+      expect(await inkAt(page, behindClear, "map"), "the map behind the corridor's ends").toBeGreaterThan(0);
       await page.keyboard.press("a");
       await expect(page.getByTestId("editor-area-corridor")).toBeDisabled();
       // A again closes the menu (Escape would step the selection back too, §3).
