@@ -1614,7 +1614,9 @@ all-white corridor map); `edge` draws the boundary in purple.
   keeps its join: a last leg shorter than h + w leaves that control's
   round wrap reaching past the end line (the corridor continues there).
   A run whose other legs stay out of the end's reach — the usual case —
-  is cut by the wedges alone. `{ terminalEnd: "round" }`
+  is cut by the wedges alone. The terminal leg's own bends are its own:
+  a leg that bends back within h + 2w of its end (≈ 175 m at the
+  editor's default 50 m / 5 mm at 1:15 000) is cut with it there. `{ terminalEnd: "round" }`
   gives the band before F22 (a round end at h + w and the whole grown
   symbol); the tests compare the two.
 - **Openings** (F19). An edged leg with h < R at a **control** opens
@@ -2263,7 +2265,8 @@ label.
   smooth bend per leg, a 50 m edged corridor with a 5 mm band on every
   leg, 1:15 000, mouths, 3000 cut features; Node, development machine)
   F20b took the request from about 230 to about 180 ms with only
-  bit-identical levers: `polylineLegGaps` 22 → 1.6 ms (the feature
+  bit-identical levers (F22's terminal end adds a few tens of ms on a
+  run's terminal end, decision log, F22): `polylineLegGaps` 22 → 1.6 ms (the feature
   prefilter, §3.4), `openingsOf` 10 → 4 ms (the circle point once per
   sample, segments rejected by bounds), `edgesOf` 16 → 12 ms (candidates
   per ring edge, numeric cells), and the kept result (above) for every
