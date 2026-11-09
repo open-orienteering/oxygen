@@ -1,6 +1,6 @@
 import { describe, it, expect } from "vitest";
 import type { course } from "@oxygen/shared";
-import { allVariationDraws, branchName, courseDrawOf, withCourseOverride } from "../variation-view";
+import { allVariationDraws, branchName, courseDrawOf, shownLegDraftOf, withCourseOverride, withLegDraft, type HeldLegDraft } from "../variation-view";
 
 type S = course.WireCourseStructure;
 type Item = S["items"][number];
@@ -56,5 +56,78 @@ describe("the drawn course of a structure with groups (docs/course-editor.md §1
     const draws = allVariationDraws("B", mk(1, 31, g("b", [[41], [42], []], true), 31, 9));
     expect(draws.map((d) => d.controls.join(" "))).toEqual(["1 31 31 9", "31 41 31", "31 42 31"]);
     expect(draws[0].legs).toEqual({});
+  });
+});
+
+describe("the editor's leg draft (docs/course-editor.md §6.7, F21)", () => {
+  const corridor = { widthM: 60, edge: true, whiteMm: 3, whiteOpacity: 1 };
+  type Overlay = { name: string; controls: string[]; labelOffsets?: Record<string, { dx: number; dy: number }>; legs: Record<string, course.CourseLegProps> };
+  const overlays: Overlay[] = [
+    { name: "Lång", controls: ["1", "31", "32", "9"], labelOffsets: { 31: { dx: 1, dy: 1 } }, legs: { "31>32": { style: "marked_route", gaps: [{ from: 0.2, to: 0.3 }], corridor, bends: [{ x: 1, y: 1 }] }, "1>31": { style: "none" } } },
+    { name: "Kort", controls: ["1", "31", "32", "9"], legs: { "31>32": { bends: [{ x: 5, y: 5 }] } } },
+  ];
+
+  it("patches only that leg's bends on the course of its name: style, gaps, corridor and the other legs and courses kept", () => {
+    const out = withLegDraft(overlays, { course: "Lång", key: "31>32", bends: [{ x: 2, y: 3, hIn: { x: -1, y: 0 }, hOut: { x: 1, y: 0 } }] });
+    expect(out[0].legs!["31>32"]).toEqual({ style: "marked_route", gaps: [{ from: 0.2, to: 0.3 }], corridor, bends: [{ x: 2, y: 3, hIn: { x: -1, y: 0 }, hOut: { x: 1, y: 0 } }] });
+    expect(out[0].legs!["1>31"]).toBe(overlays[0].legs["1>31"]);
+    expect(out[0]).toMatchObject({ controls: overlays[0].controls, labelOffsets: overlays[0].labelOffsets });
+    expect(out[1]).toBe(overlays[1]);
+    // The input is not mutated.
+    expect(overlays[0].legs["31>32"].bends).toEqual([{ x: 1, y: 1 }]);
+  });
+
+  it("a leg without stored props gets one; an empty draft removes the bends (an empty leg drops out)", () => {
+    expect(withLegDraft(overlays, { course: "Lång", key: "32>9", bends: [{ x: 4, y: 4 }] })[0].legs!["32>9"]).toEqual({ bends: [{ x: 4, y: 4 }] });
+    const bare: { name: string; controls: string[]; legs?: Record<string, course.CourseLegProps> }[] = [{ name: "A", controls: ["1", "2"] }];
+    expect(withLegDraft(bare, { course: "A", key: "1>2", bends: [{ x: 4, y: 4 }] })[0]).toEqual({ name: "A", controls: ["1", "2"], legs: { "1>2": { bends: [{ x: 4, y: 4 }] } } });
+    expect(withLegDraft(overlays, { course: "Lång", key: "31>32", bends: [] })[0].legs!["31>32"]).toEqual({ style: "marked_route", gaps: [{ from: 0.2, to: 0.3 }], corridor });
+    expect(withLegDraft(overlays, { course: "Kort", key: "31>32", bends: [] })[1].legs).toEqual({});
+  });
+
+  it("no draft, or a course not drawn: the overlays as given", () => {
+    expect(withLegDraft(overlays, null)).toBe(overlays);
+    expect(withLegDraft(overlays, { course: "Mellan", key: "31>32", bends: [] })).toBe(overlays);
+  });
+
+  it("applies after the override: the displayed path's leg of a course with groups", () => {
+    const draws = [courseDrawOf("Lång", [{ siteId: 1 }, { siteId: 41 }, { siteId: 9, leg: { corridor } }])];
+    const out = withLegDraft(withCourseOverride(overlays, draws), { course: "Lång", key: "41>9", bends: [{ x: 7, y: 7 }] });
+    expect(out[0]).toMatchObject({ controls: ["1", "41", "9"], legs: { "41>9": { corridor, bends: [{ x: 7, y: 7 }] } } });
+  });
+});
+
+describe("the shown leg draft (docs/course-editor.md §6.7 \"Live redraw\", F21)", () => {
+  const OLD = [{ x: 1, y: 1 }], NEW = [{ x: 5, y: 5, hIn: { x: -1, y: 0 }, hOut: { x: 1, y: 0 } }], OTHER = [{ x: 9, y: 9 }];
+  const live: HeldLegDraft = { course: "A", key: "31>32", bends: NEW, leg: "7/1/31>32", epoch: 3, phase: "live" };
+  const held: HeldLegDraft = { ...live, phase: "held", from: OLD };
+  const at = (drawn: readonly { x: number; y: number }[] | undefined, over: { epoch?: number; leg?: string | null } = {}) => ({
+    epoch: over.epoch ?? 3, leg: over.leg === undefined ? "7/1/31>32" : over.leg, drawn: (course: string, key: string) => (course === "A" && key === "31>32" ? drawn : undefined),
+  });
+
+  it("a live draft shows while its leg is selected, whatever is drawn", () => {
+    expect(shownLegDraftOf(live, at(OLD))).toBe(live);
+    expect(shownLegDraftOf(live, at(NEW))).toBe(live);
+    expect(shownLegDraftOf(live, at(OLD, { leg: "7/2/32>33" }))).toBeNull();
+    expect(shownLegDraftOf(live, at(OLD, { leg: null }))).toBeNull();
+  });
+
+  it("a held draft shows until the drawn leg carries the written bends, or leaves the ones drawn at the release (pendingMoves)", () => {
+    expect(shownLegDraftOf(held, at(OLD))).toBe(held);
+    expect(shownLegDraftOf(held, at(NEW.map((b) => ({ ...b }))))).toBeNull();
+    // Another write landed: neither the old nor the written bends.
+    expect(shownLegDraftOf(held, at(OTHER))).toBeNull();
+    // A held draft outlives a leg change (the band must not jump back while the list catches up).
+    expect(shownLegDraftOf(held, at(OLD, { leg: null }))).toBe(held);
+    // A leg without bends before: absent and empty alike.
+    const fromNone: HeldLegDraft = { ...held, from: undefined };
+    expect(shownLegDraftOf(fromNone, at([]))).toBe(fromNone);
+    expect(shownLegDraftOf(fromNone, at(undefined))).toBe(fromNone);
+  });
+
+  it("undo / redo (another epoch) end any draft; none shows nothing", () => {
+    expect(shownLegDraftOf(live, at(OLD, { epoch: 4 }))).toBeNull();
+    expect(shownLegDraftOf(held, at(OLD, { epoch: 4 }))).toBeNull();
+    expect(shownLegDraftOf(null, at(OLD))).toBeNull();
   });
 });

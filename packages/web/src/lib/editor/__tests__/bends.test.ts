@@ -1,6 +1,6 @@
 import { describe, it, expect } from "vitest";
 import {
-  roundBend,
+  roundBend, bendsEqual,
   dragBendGrip, insertBendAt, legPath, legPolyline, moveBend, setBendKind, toggleBendSmooth, pointAtFraction, polylineDistance, polylineFraction, polylineLength, polylineSlice, removeBend,
 } from "../bends";
 
@@ -126,5 +126,21 @@ describe("curved bends (course-layer.md §10.1, F13)", () => {
   it("moving a bend moves its handles with it; removing keeps the others'", () => {
     expect(moveBend(QUARTER, 0, { x: 21, y: 1 })).toEqual([{ x: 21, y: 1, hOut: { x: 0, y: K } }, QUARTER[1]]);
     expect(removeBend(QUARTER, 0)).toEqual([QUARTER[1]]);
+  });
+});
+
+describe("bendsEqual (F21: the leg draft is held until the list carries the written bends)", () => {
+  it("compares points and handles by value; absent and empty are equal", () => {
+    const a = [{ x: 1, y: 2, hIn: { x: -1, y: 0 }, hOut: { x: 1, y: 0 } }, { x: 3, y: 4 }];
+    expect(bendsEqual(a, a.map((b) => ({ ...b })))).toBe(true);
+    expect(bendsEqual(undefined, [])).toBe(true);
+    expect(bendsEqual([], undefined)).toBe(true);
+    expect(bendsEqual(a, a.slice(0, 1))).toBe(false);
+    expect(bendsEqual(a, [{ ...a[0], x: 1.001 }, a[1]])).toBe(false);
+    expect(bendsEqual(a, [{ ...a[0], hOut: { x: 1, y: 0.5 } }, a[1]])).toBe(false);
+    // A handle present on one side only.
+    expect(bendsEqual([{ x: 3, y: 4 }], [{ x: 3, y: 4, hOut: { x: 1, y: 0 } }])).toBe(false);
+    // A zero handle is still a handle (the wire keeps it).
+    expect(bendsEqual([{ x: 3, y: 4 }], [{ x: 3, y: 4, hIn: { x: 0, y: 0 } }])).toBe(false);
   });
 });

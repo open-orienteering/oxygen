@@ -19,6 +19,14 @@ export type Bend = PathVertex;
 /** The leg as drawn: from, its bends' path flattened (5 µm), to — the layer's own polyline. */
 export const legPolyline = (from: Pt, bends: readonly Bend[] | undefined, to: Pt): Pt[] => course.legPolylineOf(from, bends, to);
 
+const pointEqual = (a: Pt | undefined, b: Pt | undefined) => (a === undefined || b === undefined ? a === b : a.x === b.x && a.y === b.y);
+
+/** Two bend lists alike by value (points and handles); absent and empty are alike (F21: a held leg draft meets the list). */
+export function bendsEqual(a: readonly Bend[] | undefined, b: readonly Bend[] | undefined): boolean {
+  const x = a ?? [], y = b ?? [];
+  return x.length === y.length && x.every((p, i) => pointEqual(p, y[i]) && pointEqual(p.hIn, y[i].hIn) && pointEqual(p.hOut, y[i].hOut));
+}
+
 /** The polyline's length (mm). */
 export function polylineLength(points: readonly Pt[]): number {
   let total = 0;
