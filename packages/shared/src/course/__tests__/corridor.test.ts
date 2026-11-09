@@ -652,6 +652,33 @@ describe("terminal ends (F22, course-layer.md §10.2 \"Ends\")", () => {
     }
   });
 
+  it("a run passing behind or over its own terminal end keeps that part's band (never thinner, answer 4)", () => {
+    // Review of F22: the cut is the end's, not the run's — the run's earlier legs keep their band inside its reach.
+    const cases: [string, MapPoint[], [number, number][]][] = [
+      ["a hairpin", [P(0, 0), P(30, 0), P(30, 10), P(8, 10)], [[5, 4], [6, 3.5], [7, 2.5], [9, 3]]],
+      ["a figure eight (its end on its first leg)", [P(0, 0), P(30, 0), P(30, 12), P(15, 0)], [[12, 3.5], [12, -3.5], [10, -4], [13, -3], [9, -4.5]]],
+    ];
+    for (const [name, pts, probes] of cases) {
+      const ids = pts.map((_, i) => `s${i}`);
+      const legs = pts.slice(1).map((p, i) => legOf(ids[i], ids[i + 1], [pts[i], p], C(4, 3, true)));
+      const courses = [courseOf("c", legs)];
+      const m = sitesAt(Object.fromEntries(pts.map((p, i) => [ids[i], p])));
+      const g = corridorGeometry(courses, m)!;
+      const ref = corridorGeometry(courses, m, ROUND)!;
+      expectInsideKept(g, ref);
+      for (const [x, y] of probes) {
+        expect(inBand(ref, x, y), `${name} ${x},${y} before`).toBe(true);
+        expect(inBand(g, x, y), `${name} ${x},${y}`).toBe(true);
+      }
+      // The end itself is still cut: behind the last control, away from the earlier legs, the map.
+      const [a, b] = [pts[pts.length - 2], pts[pts.length - 1]];
+      const len = Math.hypot(b.x - a.x, b.y - a.y), ux = (b.x - a.x) / len, uy = (b.y - a.y) / len;
+      const behind = { x: b.x + ux * 4.5 - uy * 4.5, y: b.y + uy * 4.5 + ux * 4.5 };
+      if (!inBand(corridorGeometry([courseOf("x", legs.slice(0, -1))], m, ROUND)!, behind.x, behind.y)) expect(inBand(g, behind.x, behind.y), `${name} behind`).toBe(false);
+      expectSimple(g.band!);
+    }
+  });
+
   it("a curved end: flat across its end segment, simple rings", () => {
     const curve = legPolylineOf(P(0, 0), [{ x: 20, y: 6, hIn: { x: -40 / 6, y: 0 }, hOut: { x: 40 / 6, y: 0 } }], P(40, 0));
     const courses = [course("c", [curve], [C(4, 3, true)])];

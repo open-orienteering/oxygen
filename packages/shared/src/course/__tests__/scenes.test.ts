@@ -199,6 +199,13 @@ describe("course scenes", () => {
     const back = { x: 6 - 1.5 * Math.cos(Math.atan2(2, 16)) - 2.5 * n.x, y: 6 - 1.5 * Math.sin(Math.atan2(2, 16)) - 2.5 * n.y };
     expect(inBand(back.x, back.y)).toBe(false);
     expect(inBand(6 - 2 * Math.cos(Math.atan2(2, 16)), 6 - 2 * Math.sin(Math.atan2(2, 16)))).toBe(true);
+    // F22 (§10.2 "Ends"): 33 is the corridor's only end there; the band (h 5 + w 2) stops on the line through it.
+    // Behind it, past the inside's round end (5 mm), the map — the band before F22; beside the leg before it, band.
+    const u = { x: -20 / Math.hypot(20, 8), y: 8 / Math.hypot(20, 8) }, v = { x: -u.y, y: u.x };
+    expect(inBand(20 + u.x * 6, 32 + u.y * 6)).toBe(false);
+    expect(inBand(20 + u.x * 1 + v.x * 6, 32 + u.y * 1 + v.y * 6)).toBe(false);
+    expect(inBand(20 - u.x * 3 + v.x * 6, 32 - u.y * 3 + v.y * 6)).toBe(true);
+    expect(inBand(20 - u.x * 3 - v.x * 6, 32 - u.y * 3 - v.y * 6)).toBe(true);
     const masked = (k: number) => (stream.maskIdx?.[k] ?? -1) >= 0;
     const base = stream.passes.map((_, k) => k).filter((k) => stream.objectIdx[k] < scene.courseObjectOffset);
     // 505, 101 and 516 cross the band; the 401 fill under everything meets it too.

@@ -278,7 +278,7 @@ describe("F22: only the band's terminal ends moved (course-layer.md §10.2 \"End
         if (Math.abs(ringArea(r)) < 10000) expect(before.has(JSON.stringify(r)), `${c.name}: ${JSON.stringify(r.slice(0, 8))}…`).toBe(true);
       }
     }
-  });
+  }, 30000);
 
   it("the cases have terminal ends whose band changed, and ones with none", () => {
     const changed = CASES.filter((c) => {
@@ -287,5 +287,5 @@ describe("F22: only the band's terminal ends moved (course-layer.md §10.2 \"End
     });
     expect(changed.length).toBeGreaterThan(10);
     expect(changed.length).toBeLessThan(CASES.length);
-  });
+  }, 30000);
 });

@@ -525,6 +525,44 @@ function bearingFrom(pts: readonly Pt[], atEnd: boolean): Pt {
 }
 
 /**
+ * The run's part that must keep its band inside a terminal end's cut
+ * (F22, review): `pts` from its far end up to the last point J that lies
+ * h + r behind the end line (on the end's bearing) — so the round end of
+ * that part at J stays r behind the line, out of the cut — and of it only
+ * the stretches whose segments come within reach of the cut: less than
+ * h + r behind the line somewhere and within √((h + r)² + r²) + h of the
+ * end. Each is a polyline whose buffer may enter the cut, its own ends
+ * too far behind or away to. None in the usual case (the run never comes back
+ * near its end), or when no point is that far back (the run is all end).
+ */
+function bodyNear(pts: readonly Pt[], atEnd: boolean, h: number, r: number): Pt[][] {
+  const n = pts.length, end = atEnd ? pts[n - 1] : pts[0], from = bearingFrom(pts, atEnd);
+  const len = Math.hypot(end.x - from.x, end.y - from.y);
+  if (!len) return [];
+  const ux = (end.x - from.x) / len, uy = (end.y - from.y) / len;
+  // Walking from the end: k = 0 is the end itself.
+  const at = (k: number) => (atEnd ? pts[n - 1 - k] : pts[k]);
+  const s = (p: Pt) => (p.x - end.x) * ux + (p.y - end.y) * uy;
+  let j = -1;
+  for (let k = 1; k < n && j < 0; k++) if (s(at(k)) <= -(h + r)) j = k;
+  if (j < 0) return [];
+  const limit = Math.hypot(h + r, r) + h + 1;
+  const out: Pt[][] = [];
+  let cur: Pt[] | null = null;
+  for (let k = j; k + 1 < n; k++) {
+    const a = at(k), b = at(k + 1);
+    // Its buffer reaches the cut only from a point less than h + r behind the line (s is linear along it), and near.
+    if (Math.max(s(a), s(b)) <= -(h + r) || distToSegment(end, a, b) > limit) {
+      cur = null;
+      continue;
+    }
+    if (!cur) out.push((cur = [a]));
+    cur.push(b);
+  }
+  return out;
+}
+
+/**
  * What a flat end at `end` loses (F22): its round end — everything of the
  * ring at `h` past the end line within h + r — and its two corners,
  * rounded by `r`: for each side, the square corner between the line and r
@@ -583,14 +621,31 @@ function buffer(runs: readonly Run[], extra: (r: Run) => number, more: readonly 
     }
     // F22: a terminal end, flat on the site; its corners rounded by whiteMm.
     const n = r.pts.length;
-    const wedges = [
-      ...(cs !== undefined ? cornerWedges(r.pts[0], bearingFrom(r.pts, false), h, Math.min(cs, h)) : []),
-      ...(ce !== undefined ? cornerWedges(r.pts[n - 1], bearingFrom(r.pts, true), h, Math.min(ce, h)) : []),
-    ];
-    rings.push(...pc.difference(ring, ...wedges));
+    const wS = cs !== undefined ? cornerWedges(r.pts[0], bearingFrom(r.pts, false), h, Math.min(cs, h)) : [];
+    const wE = ce !== undefined ? cornerWedges(r.pts[n - 1], bearingFrom(r.pts, true), h, Math.min(ce, h)) : [];
+    // The cut is the end's: where the run's own earlier part passes through it (a hairpin, a figure eight), its
+    // buffer is taken out of the cut, so that part keeps its band (review of F22; answer 4, never thinner). The
+    // usual run never comes back near its end and is cut by the wedges themselves. Rounded to integer µm before
+    // the difference (a float subtrahend can crash the sweep); a lone ring per stretch shares the run ring's offsets.
+    const keep = (wedges: Polygon[], atEnd: boolean, corner: number | undefined): Polygon[] => {
+      const body = corner === undefined ? [] : bodyNear(r.pts, atEnd, h, Math.min(corner, h)).map((p) => runRing(p, h));
+      return body.length ? wedges.flatMap((w) => integralMp(pc.difference(w, ...body))) : wedges;
+    };
+    rings.push(...pc.difference(ring, ...keep(wS, false, cs), ...keep(wE, true, ce)));
   }
   rings.push(...more);
   return rings.length ? pc.union(rings[0], ...rings.slice(1)) : [];
+}
+
+/** polygon-clipping output rounded to integer µm (`integral`), rings that collapse dropped. */
+function integralMp(mp: MultiPolygon): Polygon[] {
+  const out: Polygon[] = [];
+  for (const poly of mp) {
+    const [outer, ...holes] = poly.map((ring) => integral(ring));
+    // A polygon whose outer ring collapses (fewer than three distinct points) goes with its holes.
+    if (outer && outer.length >= 4) out.push([outer, ...holes.filter((ring) => ring.length >= 4)]);
+  }
+  return out;
 }
 
 /** polygon-clipping rings (closed, float) → flat integer-µm rings, the closing point dropped. */
@@ -898,8 +953,9 @@ function computeCorridorGeometry(courses: readonly DerivedCourse[], mouths: Corr
       const white = Math.max(...here.map((e) => e.white));
       if (!(white > 0) || here.some((e) => e.white > 0 && e.half + e.white >= m.extent + white)) continue;
       // The same bearing as the run's cut there: its path from the site on, read back from its far end.
-      const e = here[0], from = bearingFrom(e.path, false);
-      more.push(terminal.has(m.site.id) && !m.corners ? halfMouthRing(m, white, { x: e.c.x - from.x, y: e.c.y - from.y }) : mouthRing(m, white));
+      // Without a bearing (a degenerate path) the mouth stays whole.
+      const e = here[0], from = bearingFrom(e.path, false), u = { x: e.c.x - from.x, y: e.c.y - from.y };
+      more.push(terminal.has(m.site.id) && !m.corners && (u.x || u.y) ? halfMouthRing(m, white, u) : mouthRing(m, white));
     }
     const outer = buffer(banded, (r) => r.white, more, true);
     const rings = flat(pc.difference(outer, insideMp));
