@@ -664,6 +664,34 @@ describe("terminal ends (F22, course-layer.md §10.2 \"Ends\")", () => {
     expect(inBand(g, -3 * Math.cos(t), -3 * Math.sin(t))).toBe(false);
   });
 
+  describe("the mouth's near half: face ±R on the line, corners of radius w(2R + w) / (2(R + w)) tangent to the R + w disc", () => {
+    // A 1 mm corridor (h 0.5): the mouth's half is the band's outline at the circle. Site 0 a control (R 2.5), site 1 a
+    // finish (R 3); x measured from each site towards the leg.
+    const cases: [string, number, number, "0" | "1"][] = [["w < R", 2, 2.5, "0"], ["w = R (a finish, R 3, w 3)", 3, 3, "1"], ["w > R (the default band)", 5, 2.5, "0"]];
+    for (const [name, w, R, site] of cases) {
+      it(name, () => {
+        const g = corridorGeometry([course("c", LEG, [C(1, w, true)])], mouths(LEG, { "1": "finish" }))!;
+        expectSimple(g.band!);
+        expectSimple(g.inside);
+        const r = (w * (2 * R + w)) / (2 * (R + w)), um = 1000;
+        const local = g.band!.flatMap((q) => ringPoints(q)).map((p) => ({ x: site === "0" ? p.x : 20 * um - p.x, y: p.y }));
+        // Nothing of the band past the line.
+        expect(Math.min(...local.filter((p) => Math.abs(p.y) < (R + w) * um + 100).map((p) => p.x))).toBeGreaterThan(-2);
+        // The face's ends: a band vertex on the line at ±R (the corner's tangent point), none on the line beyond it.
+        for (const side of [1, -1]) expect(Math.min(...local.map((p) => Math.hypot(p.x, p.y - side * R * um)))).toBeLessThan(6);
+        expect(local.filter((p) => Math.abs(p.x) <= 2 && Math.abs(p.y) > R * um + 6)).toEqual([]);
+        // The corners: every outline vertex between the line and r, outside the circle, on the arc about (r, ±R).
+        const corner = local.filter((p) => p.x > 5 && p.x < r * um - 5 && Math.abs(p.y) > R * um + 50);
+        expect(corner.length).toBeGreaterThan(5);
+        for (const p of corner) expect(Math.abs(Math.hypot(p.x - r * um, Math.abs(p.y) - R * um) - r * um), `${p.x},${p.y}`).toBeLessThan(6);
+        // Tangent to the grown disc inside: the corner's centre R + w − r from the site. So near the site (x < R, where
+        // the mouth's half is the outline) nothing of the band lies past R + w.
+        expect(Math.hypot(r, R) + r).toBeCloseTo(R + w, 9);
+        for (const p of local.filter((q) => q.x < R * um)) expect(Math.hypot(p.x, p.y)).toBeLessThan((R + w) * um + 6);
+      });
+    }
+  });
+
   it("two options in a row give two results, each a fresh call's", () => {
     const courses = [course("c", LEG, [C(4, 3, true)])];
     const a = corridorGeometry(courses, mouths(LEG));
