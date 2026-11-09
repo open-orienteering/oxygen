@@ -22,6 +22,11 @@
  * than the circle opens the drawn circle where its sides meet it. The
  * openings are drawn, never cuts: the layer adds them to the circle at
  * draw time only.
+ *
+ * Ends (F22): where a corridor ends — a site with exactly one corridor-leg
+ * end over every course, not a start — the band stops on the line through
+ * the site across the leg, its corners rounded, and wraps only the near
+ * half of the symbol; the inside, the edges and the openings are as before.
  */
 
 import * as polygonClippingModule from "polygon-clipping";
