@@ -654,13 +654,18 @@ describe("terminal ends (F22, course-layer.md §10.2 \"Ends\")", () => {
 
   it("a run passing behind or over its own terminal end keeps that part's band (never thinner, answer 4)", () => {
     // Review of F22: the cut is the end's, not the run's — the run's earlier legs keep their band inside its reach.
-    const cases: [string, MapPoint[], [number, number][]][] = [
+    const cases: [string, MapPoint[], [number, number][], Corridor?][] = [
       ["a hairpin", [P(0, 0), P(30, 0), P(30, 10), P(8, 10)], [[5, 4], [6, 3.5], [7, 2.5], [9, 3]]],
       ["a figure eight (its end on its first leg)", [P(0, 0), P(30, 0), P(30, 12), P(15, 0)], [[12, 3.5], [12, -3.5], [10, -4], [13, -3], [9, -4.5]]],
+      // Spec re-review: a last leg shorter than h + 2w that turns back — the previous leg's band beside the end kept.
+      // The editor's default at 1:15 000 (50 m, a 5 mm band: h + 2w ≈ 11.7 mm), a 10 mm last leg.
+      ["a short last leg turning back", [P(40, 8), P(20, 0), P(30, 0)], [[33, 1], [32.5, 0.8], [34, 2.5]], C(10 / 3, 5, true)],
+      // A short last leg at a right angle: the previous leg's band within the end's corner kept.
+      ["a short last leg at a right angle", [P(0, 0), P(20, 0), P(20, 6)], [[14, 4.5], [12.5, 3.5], [14, 3.5]]],
     ];
-    for (const [name, pts, probes] of cases) {
+    for (const [name, pts, probes, k = C(4, 3, true)] of cases) {
       const ids = pts.map((_, i) => `s${i}`);
-      const legs = pts.slice(1).map((p, i) => legOf(ids[i], ids[i + 1], [pts[i], p], C(4, 3, true)));
+      const legs = pts.slice(1).map((p, i) => legOf(ids[i], ids[i + 1], [pts[i], p], k));
       const courses = [courseOf("c", legs)];
       const m = sitesAt(Object.fromEntries(pts.map((p, i) => [ids[i], p])));
       const g = corridorGeometry(courses, m)!;
