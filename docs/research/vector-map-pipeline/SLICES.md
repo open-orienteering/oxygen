@@ -25,7 +25,7 @@ involved until a slice's gate (09 §4) has passed and the user decides.
 
 A row is `done` only when all of: spec section written or updated,
 "Pending in this chapter" trimmed, tests per AGENTS.md §4 matrix, a
-decision-log row in [README.md](README.md) naming deviations, PR merged.
+decision-log row in the slice's file under [decisions/](decisions/) (index in [README.md](README.md#decision-log)) naming deviations, PR merged.
 
 Two rows whose **area** columns overlap are never in progress at the
 same time. Verification steps that use fixed ports or shared databases
