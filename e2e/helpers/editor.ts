@@ -353,10 +353,13 @@ export async function inkAt(page: Page, points: readonly Pt[], kind: InkKind = "
  * every pixel in scan order (two captures of the same box compare pixel by pixel). The canvas
  * alone is captured, as in `inkIn`, so the loupe's DOM ring and crosshair do not count.
  */
-export async function canvasInCircle(page: Page, box: { x: number; y: number; width: number; height: number }, inset = 4): Promise<{ purple: number; rgb: number[] }> {
+export async function canvasInCircle(page: Page, box: { x: number; y: number; width: number; height: number }, inset = 4, held = false): Promise<{ purple: number; rgb: number[] }> {
   const { PNG } = await import("pngjs");
   const canvas = page.getByTestId("map-vector-layer");
-  const style = "body * { visibility: hidden !important } [data-testid='map-vector-layer'] { visibility: visible !important }";
+  // `held` (a mouse gesture held mid-drag, F24): the overlays transparent, not hidden — see `canvasShot`.
+  const style = held
+    ? "body *:not(:has([data-testid='map-vector-layer'])):not([data-testid='map-vector-layer']) { opacity: 0 !important }"
+    : "body * { visibility: hidden !important } [data-testid='map-vector-layer'] { visibility: visible !important }";
   const png = PNG.sync.read(await canvas.screenshot({ style }));
   const cb = (await canvas.boundingBox())!;
   const k = png.width / cb.width;

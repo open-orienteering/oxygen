@@ -14,7 +14,7 @@ import {
   emptyPoint, ensureCoursesAndMap, ensureFixtureFromDesktop, freezeExternalPoll, geometryOf, inkAt, inkIn, labelOf, legBetween, legMidpoint, legPieces, nameIdOf, objectRow, plainMapAt,
   openEditor, pageToPaperOf, place, placeOneShot, pressInside, pressOnEdge, printed, probeTemplate, regularCodes, select, selectCompetition,
   selectedCode, selectedPosition, siteCuts, site, sitePoint, sites, toolShapes, toPage, toPaper, trpcCall, viewCentre, viewSettled, newCourse,
-  mapScale, statsRow, type Frame, type Site,
+  mapScale, nextFrames, statsRow, type Frame, type Site,
 } from "./helpers/editor";
 import { migrateLegacySheetObjects } from "./helpers/legacy-objects";
 import { touchDrag, touchEnd, touchMove, touchStart, touchTap } from "./helpers/touch";
@@ -3395,6 +3395,112 @@ test.describe("F3: legs — styles, bends, corridors (docs/course-editor.md §6.
     expect(writes.length, "no write after Escape").toBe(sent);
     expect(await metres(), "the stored metres after Escape").toBe(chordM);
     expect(Math.hypot((await storedBends(courseId))[0].x - p0.x, (await storedBends(courseId))[0].y - p0.y)).toBeLessThan(0.01);
+  });
+
+  // F24 (§10 "Loupe"; user answer 2026-11-10): the D9b loupe on mouse drags — 120 px at ×2.5 about the dragged point,
+  // 16 px above the cursor (below it at the map's top), no stem; gone on release and on the viewer's mouseleave cancel.
+  test("F24: the loupe on mouse drags — a control, a number, a bend; gone on release and cancel; none for a click", async ({ page }) => {
+    const { name, a, b } = await twoControlCourse(page, "F24 loupe");
+    const courseId = await page.getByTestId("editor-course-picker").inputValue();
+    const loupe = page.getByTestId("editor-loupe");
+    const writes: string[] = [];
+    // Every control or course write this page sends (a move is `control.update`).
+    page.on("request", (r) => { if (r.method() === "POST" && /\/trpc\/[^?]*\b(control|course)\./.test(r.url())) writes.push(r.url()); });
+    /** The loupe is the mouse's, 120 px, its bottom 16 px above `cursor` (its top 16 px below at the map's top), centred over it within the box. */
+    const mouseLoupeAt = async (cursor: Pt) => {
+      await expect(loupe).toBeVisible();
+      await expect(loupe).toHaveAttribute("data-pointer", "mouse");
+      await expect(loupe).toHaveAttribute("data-scale", "2.5");
+      await expect(page.getByTestId("editor-touch-handle"), "no stem on a mouse drag").toHaveCount(0);
+      const lb = (await loupe.boundingBox())!;
+      const vb = (await page.getByTestId("map-viewer").boundingBox())!;
+      expect(Math.abs(lb.width - 120)).toBeLessThanOrEqual(1);
+      expect(Math.abs(lb.height - 120)).toBeLessThanOrEqual(1);
+      if (cursor.y - vb.y - 16 - 120 < 0) expect(Math.abs(lb.y - (cursor.y + 16))).toBeLessThanOrEqual(1);
+      else expect(Math.abs(lb.y + lb.height - (cursor.y - 16))).toBeLessThanOrEqual(1);
+      const cx = Math.min(Math.max(cursor.x, vb.x + 64), vb.x + vb.width - 64);
+      expect(Math.abs(lb.x + lb.width / 2 - cx)).toBeLessThanOrEqual(1);
+      return lb;
+    };
+
+    // A control: held, the loupe magnifies the map about it (the canvas in the circle has purple and differs from the
+    // same circle at 1× after the drag); the pointer leaving the viewer cancels the drag — no loupe, no move.
+    await viewSettled(page);
+    const fromA = await toPage(page, a.mm);
+    const toA = await dragTarget(page, fromA, [await toPage(page, b.mm)]);
+    const sent = writes.length;
+    await dragHold(page, fromA, toA);
+    const lb = await mouseLoupeAt(toA);
+    // Read held: transparent overlays, so the pointer stays over the viewer (a hidden one would be its mouseleave).
+    await nextFrames(page);
+    await expect.poll(async () => (await canvasInCircle(page, lb, 4, true)).purple, { timeout: 15000 }).toBeGreaterThan(0);
+    const magnified = await canvasInCircle(page, lb, 4, true);
+    const vb = (await page.getByTestId("map-viewer").boundingBox())!;
+    await page.mouse.move(vb.x + vb.width + 20, toA.y, { steps: 2 });
+    await expect(loupe).toHaveCount(0);
+    await page.mouse.up();
+    await nextFrames(page);
+    const plain = await canvasInCircle(page, lb);
+    expect(plain.rgb.length).toBe(magnified.rgb.length);
+    let differing = 0;
+    for (let i = 0; i < plain.rgb.length; i += 3) {
+      if (Math.abs(plain.rgb[i] - magnified.rgb[i]) + Math.abs(plain.rgb[i + 1] - magnified.rgb[i + 1]) + Math.abs(plain.rgb[i + 2] - magnified.rgb[i + 2]) > 60) differing++;
+    }
+    expect(differing / (plain.rgb.length / 3), "the loupe is the magnified map, not the 1× one").toBeGreaterThan(0.1);
+    await page.waitForTimeout(500);
+    expect(writes.length, "a cancelled control drag writes nothing").toBe(sent);
+    expect((await site(page, a.code)).mm).toEqual(a.mm);
+
+    // A number: held, the loupe; the release writes the offset and takes the loupe away.
+    await viewSettled(page);
+    await expect.poll(async () => (await labelOf(page, b.code)) !== null, { timeout: 15000 }).toBe(true);
+    const fromN = await toPage(page, (await labelOf(page, b.code))!);
+    const toN = { x: fromN.x + (fromN.x < vb.x + vb.width / 2 ? 48 : -48), y: fromN.y + (fromN.y < vb.y + vb.height / 2 ? 24 : -24) };
+    await dragHold(page, fromN, toN);
+    await mouseLoupeAt(toN);
+    const offset = waitForTrpc(page, "course.setControlLabelOffset");
+    await page.mouse.up();
+    await expect(loupe).toHaveCount(0);
+    await offset;
+
+    // A bend of the selected leg (the point the tool's drag places, F23): held, the loupe about the snapped bend under
+    // the cursor; one write on release, then none.
+    await selectLeg(page, name, a, b);
+    const added = waitForTrpc(page, "course.setStructure");
+    await page.getByTestId("editor-action-bar").getByTestId("editor-action-add-bend").click();
+    await added;
+    await expect.poll(async () => (await storedBends(courseId)).length, { timeout: 15000 }).toBe(1);
+    await viewSettled(page);
+    const handle = (await toolShapes(page, "editor-bend-handle"))[0];
+    const fromB = await toPage(page, handle);
+    const pa = await toPage(page, a.mm), pb = await toPage(page, b.mm);
+    const len = Math.hypot(pb.x - pa.x, pb.y - pa.y);
+    let nrm = { x: -(pb.y - pa.y) / len, y: (pb.x - pa.x) / len };
+    if (nrm.y > 0) nrm = { x: -nrm.x, y: -nrm.y };
+    const toB = { x: fromB.x + nrm.x * 60, y: fromB.y + nrm.y * 60 };
+    await dragHold(page, fromB, toB);
+    await mouseLoupeAt(toB);
+    const cursorMm = await toPaper(page, toB);
+    await expect.poll(async () => {
+      const h = (await toolShapes(page, "editor-bend-handle"))[0];
+      return h ? Math.hypot(h.x - cursorMm.x, h.y - cursorMm.y) : Infinity;
+    }, { timeout: 5000 }).toBeLessThan(0.5);
+    const moved = waitForTrpc(page, "course.setStructure");
+    await page.mouse.up();
+    await expect(loupe).toHaveCount(0);
+    await moved;
+    await expect.poll(async () => Math.hypot((await storedBends(courseId))[0].x - cursorMm.x, (await storedBends(courseId))[0].y - cursorMm.y), { timeout: 15000 }).toBeLessThan(0.5);
+
+    // A press without a drag (a click on the handle) shows none.
+    await viewSettled(page);
+    const at = await toPage(page, (await toolShapes(page, "editor-bend-handle"))[0]);
+    await page.mouse.move(at.x, at.y);
+    await page.mouse.down();
+    await page.mouse.move(at.x + 1, at.y);
+    await page.waitForTimeout(300);
+    await expect(loupe).toHaveCount(0);
+    await page.mouse.up();
+    await expect(loupe).toHaveCount(0);
   });
 });
 
