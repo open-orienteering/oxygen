@@ -1434,7 +1434,9 @@ and `bends` real, F2 `corridor`, F4 `crossing` (§10.3).
   leg-length label (`lib/editor/leg-length.ts`) measure along them —
   along the flattened curve (F13: a quarter circle of radius 20 mm
   measures `10π` within 0.02 mm); `style` never changes a length, nor
-  will a corridor (F2).
+  will a corridor (F2). While a bend or grip is dragged the editor's
+  inspector measures the leg draft instead (F25, `course-editor.md` §6.7
+  "Readouts follow the bends"); the stored length changes on the write.
 - **Checks**: `LEG_CROSSES_OOB` / `LEG_THROUGH_UNCROSSABLE` test the bent
   polyline, the flattened curve since F13 (§9.2); `VARIATION_UNBALANCED`
   measures along it.
@@ -1527,7 +1529,9 @@ all-white corridor map); `edge` draws the boundary in purple.
   unchanged. No band (`whiteMm` 0 on every corridor) adds no region.
 - **`whiteOpacity`** is stored and validated (0 … 1) but drawn opaque: a
   clip removes the map wholly. A translucent band needs a paint with
-  alpha over the same rings (`map-rendering.md` §8).
+  alpha over the same rings (`map-rendering.md` §8). The editor shows no
+  field for it until then (F25, `course-editor.md` §6.7): a stored value
+  is kept on every corridor write.
 - **Mouths** (F19, user feedback 2026-11-08 item 6, "the way
   Coursecraft does it"; answers 1–3). Every control, finish or start
   that a corridor leg — edged or not — starts or ends at is a mouth: its
@@ -2261,8 +2265,9 @@ label.
   transaction of about a thousand
   queries (`setStructure` allows it 30 s); a batched child write is the
   lever if real courses get near the cap.
-- **A translucent corridor band** (§10.2): `whiteOpacity` is stored and
-  drawn opaque until the stream carries alpha (`map-rendering.md` §8).
+- **A translucent corridor band** (§10.2, F26 deferred): `whiteOpacity`
+  is stored and drawn opaque until the stream carries alpha
+  (`map-rendering.md` §8); the editor's field returns with it.
 - **Per-request cost on corridor courses** (§10.2). A control drag on a
   corridor course re-derives the corridors on every request (one request
   in flight since F20, `map-rendering.md` §5.2 "Engine"), and so does a
