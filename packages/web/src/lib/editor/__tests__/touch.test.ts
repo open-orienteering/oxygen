@@ -66,4 +66,15 @@ describe("the loupe's place (docs/course-editor.md §10 \"Loupe\")", () => {
     expect(loupePlacement({ x: 3, y: 500 }, box).x).toBe(r + 4);
     expect(loupePlacement({ x: 399, y: 500 }, box).x).toBe(400 - r - 4);
   });
+  // F24: a mouse drag has no lift — the loupe sits 16 px above the cursor, the cursor's point is the dragged one.
+  it("with no lift (a mouse drag): 16 px above the cursor, flipped 16 px below it at the top, clamped sideways", () => {
+    expect(loupePlacement({ x: 200, y: 500 }, box, 0)).toEqual({ x: 200, y: 500 - LOUPE_GAP_PX - r });
+    const y = LOUPE_GAP_PX + 2 * r;
+    expect(loupePlacement({ x: 200, y }, box, 0).y).toBe(y - LOUPE_GAP_PX - r);
+    expect(loupePlacement({ x: 200, y: y - 1 }, box, 0)).toEqual({ x: 200, y: y - 1 + LOUPE_GAP_PX + r });
+    expect(loupePlacement({ x: 3, y: 500 }, box, 0).x).toBe(r + 4);
+    expect(loupePlacement({ x: 399, y: 500 }, box, 0).x).toBe(400 - r - 4);
+    // The touch call is unchanged: the default lift is the handle's.
+    expect(loupePlacement({ x: 200, y: 500 }, box)).toEqual(loupePlacement({ x: 200, y: 500 }, box, HANDLE_LIFT_PX));
+  });
 });
