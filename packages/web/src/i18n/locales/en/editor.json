@@ -361,7 +361,6 @@
   "legCorridorWhite": "White band (mm)",
   "legCorridorOpacity": "White opacity",
   "legCorridorEdge": "Edge line",
-  "legCorridorOpacityHint": "The white band is drawn opaque for now.",
   "exportSetter": "Setter maps (PDF)",
   "layoutSetter": "Setter maps",
   "layoutSetterScopeEvent": "Every placed control of the event",

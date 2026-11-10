@@ -361,7 +361,6 @@
   "legCorridorWhite": "Vitt band (mm)",
   "legCorridorOpacity": "Vithetens opacitet",
   "legCorridorEdge": "Kantlinje",
-  "legCorridorOpacityHint": "Det vita bandet ritas tills vidare helt täckande.",
   "exportSetter": "Utsättarkartor (PDF)",
   "layoutSetter": "Utsättarkartor",
   "layoutSetterScopeEvent": "Alla placerade kontroller i tävlingen",

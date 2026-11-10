@@ -6,12 +6,13 @@
  * explicit for the first save, and the leg → insert-position mapping.
  */
 
-import type { course } from "@oxygen/shared";
+import { course, type PathVertex } from "@oxygen/shared";
 import { effectiveRoleControlId } from "../course-editor";
 import { displayPath, type GroupOrders, type KindOf, type RowPath } from "./structure-edit";
 
 type Pt = { x: number; y: number };
 type Structure = course.WireCourseStructure;
+type Bends = readonly PathVertex[];
 
 export interface SiteRow {
   id: number;
@@ -207,4 +208,27 @@ export function legForInsert(rows: readonly DisplayRow[], insertAt: number): { i
   const from = rows.slice(0, Math.max(0, itemIndex)).reverse().find((r) => r.pt);
   if (itemIndex < 0 || !to?.pt || !from) return null;
   return { itemIndex, path: to.path, from, to };
+}
+
+/**
+ * The points `sequenceLegMeters` measures (§6.7 "Readouts follow the bends", course-layer.md §10.1): each row's point
+ * with the bends of the leg into it, routed through its crossing point (§10.3) when it has one. `legOf(i)` is row i's
+ * leg: its stored bends and its crossing point, resolved. A leg draft (F21's, live or held; F25) replaces the stored
+ * bends of every row whose leg it is (`"<from id>><to id>"`, as the canvas keys it: a loop's repeated leg is one), so
+ * the inspector's metres follow a held bend or grip; the crossing point stays joined. Unpositioned rows are null.
+ */
+export function legMeterInputs(
+  rows: readonly DisplayRow[],
+  legOf: (i: number) => { bends?: Bends; via?: Pt | null } | undefined,
+  draft?: { key: string; bends: Bends } | null,
+): Array<{ x: number; y: number; bends?: Bends } | null> {
+  return rows.map((r, i) => {
+    if (!r.pt) return null;
+    const leg = legOf(i);
+    const prev = rows[i - 1];
+    const own = draft && prev?.pt && draft.key === `${prev.id}>${r.id}` ? draft.bends : leg?.bends;
+    const via = leg?.via;
+    const bends = via && prev?.pt ? course.routedBends(prev.pt, own, via, r.pt) : own;
+    return bends ? { ...r.pt, bends } : r.pt;
+  });
 }

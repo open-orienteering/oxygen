@@ -1,6 +1,6 @@
 import { describe, it, expect } from "vitest";
-import type { course } from "@oxygen/shared";
-import { alternativeEndAt, courseViewOrders, displaySequence, explicitStructure, insertIndexForLeg, legForInsert, partHeadings, variationBlocks, type SiteRow } from "../sequence";
+import { course } from "@oxygen/shared";
+import { alternativeEndAt, courseViewOrders, displaySequence, explicitStructure, insertIndexForLeg, legForInsert, legMeterInputs, partHeadings, variationBlocks, type SiteRow } from "../sequence";
 
 const site = (id: number, status: number, x = id, y = id, code = String(id)): SiteRow => ({ id, code, status, mapX: x, mapY: y });
 // Two starts (1 the default: lowest id), one finish.
@@ -108,5 +108,60 @@ describe("part headings (docs/course-editor.md §6.9)", () => {
 
   it("is empty without an exchange", () => {
     expect(partHeadings(displaySequence(st(31, 32), SITES)).size).toBe(0);
+  });
+});
+
+describe("legMeterInputs (docs/course-editor.md §6.7 \"Readouts follow the bends\", F25)", () => {
+  // S(1) at (1,1), 31 at (31,31), 32 at (32,32), F(9) at (9,9).
+  const rows = displaySequence(st(31, 32), SITES);
+  const bend = (x: number, y: number) => ({ x, y });
+  const stored: Record<number, { bends?: { x: number; y: number }[]; via?: Pt | null }> = { 2: { bends: [bend(40, 20)] } };
+  const legOf = (i: number) => stored[i];
+  type Pt = { x: number; y: number };
+
+  it("without a draft: each row's point with its leg's stored bends", () => {
+    expect(legMeterInputs(rows, legOf)).toEqual([
+      { x: 1, y: 1 }, { x: 31, y: 31 }, { x: 32, y: 32, bends: [bend(40, 20)] }, { x: 9, y: 9 },
+    ]);
+    expect(legMeterInputs(rows, legOf, null)).toEqual(legMeterInputs(rows, legOf));
+  });
+
+  it("a draft replaces the bends of its leg's row only", () => {
+    const out = legMeterInputs(rows, legOf, { key: "31>32", bends: [bend(0, 50)] });
+    expect(out[2]).toEqual({ x: 32, y: 32, bends: [bend(0, 50)] });
+    expect(out[1]).toEqual({ x: 31, y: 31 });
+    expect(out[3]).toEqual({ x: 9, y: 9 });
+  });
+
+  it("a draft of a leg without stored bends gives it the drafted ones", () => {
+    expect(legMeterInputs(rows, legOf, { key: "32>9", bends: [bend(5, 5)] })[3]).toEqual({ x: 9, y: 9, bends: [bend(5, 5)] });
+  });
+
+  it("an unknown key changes nothing", () => {
+    expect(legMeterInputs(rows, legOf, { key: "31>9", bends: [bend(0, 0)] })).toEqual(legMeterInputs(rows, legOf));
+  });
+
+  it("the crossing point stays joined: routed into the drafted bends (course-layer.md §10.3)", () => {
+    const via = bend(31.5, 40);
+    const withVia = (i: number) => (i === 2 ? { bends: [bend(40, 20)], via } : undefined);
+    const drafted = [bend(31.2, 33), bend(31.8, 34)];
+    const out = legMeterInputs(rows, withVia, { key: "31>32", bends: drafted });
+    expect(out[2]).toEqual({ x: 32, y: 32, bends: course.routedBends({ x: 31, y: 31 }, drafted, via, { x: 32, y: 32 }) });
+    expect(out[2]?.bends).toContainEqual(via);
+    // Without a draft, the stored bends routed the same way.
+    expect(legMeterInputs(rows, withVia)[2]?.bends).toEqual(course.routedBends({ x: 31, y: 31 }, [bend(40, 20)], via, { x: 32, y: 32 }));
+  });
+
+  it("an unpositioned row stays null; the row after it gets no draft (its leg starts nowhere)", () => {
+    const r = displaySequence(st(31, 33, 32), SITES);
+    const out = legMeterInputs(r, () => undefined, { key: "33>32", bends: [bend(0, 0)] });
+    expect(out[2]).toBeNull();
+    expect(out[3]).toEqual({ x: 32, y: 32 });
+  });
+
+  it("a key repeated in the sequence (a loop's anchor visits) is substituted at every such row, as the canvas draws it", () => {
+    const r = displaySequence(st(31, 32, 31, 32), SITES);
+    const out = legMeterInputs(r, () => undefined, { key: "31>32", bends: [bend(0, 0)] });
+    expect(out.map((p) => p?.bends ?? null)).toEqual([null, null, [bend(0, 0)], null, [bend(0, 0)], null]);
   });
 });
