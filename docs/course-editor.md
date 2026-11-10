@@ -1713,8 +1713,8 @@ whose poll ran meanwhile simply does not conflict (decision log, D10).
   §10); the tablet adds and removes bends from the action bar and the
   inspector and switches a bend corner / smooth from its row. The selected leg has no highlight beyond the UI outline.
   The leg draft (F21) does not depend on the pointer: a touch drag gets the
-  live redraw when it lands, and the inspector's metres with it (F25). A
-  loupe for the mouse drag is not planned.
+  live redraw when it lands, and the inspector's metres with it (F25). The
+  loupe on mouse drags is row F24 (user answer 2026-11-10).
 - **The leg's gaps in the Leg section** (08 §5.2 "leg: style, gaps,
   corridor, crossing"): gaps stay the `G` tool's (§6.3); the crossing row
   is F4's (§6.8).
