@@ -4228,10 +4228,14 @@ test.describe("F23: bend drags on a tablet (docs/course-editor.md §6.7, §10)",
       const h = (await toolShapes(page, "editor-bend-handle"))[0];
       return Math.hypot(h.x - lifted.x, h.y - lifted.y);
     }, { timeout: 5000 }).toBeLessThan(0.6);
-    // The loupe: its bottom 16 px above the lifted bend, centred over the finger (as field-mode.spec.ts pins it);
-    // nothing written yet (the layer follows the draft, F21).
+    // The loupe: its bottom 16 px above the lifted bend, centred over the finger (as field-mode.spec.ts pins it) —
+    // flipped to 16 px below the finger when that would leave the map box at the top (§10 "Loupe"); nothing
+    // written yet (the layer follows the draft, F21).
     const loupe = (await page.getByTestId("editor-loupe").boundingBox())!;
-    expect(Math.abs(loupe.y + loupe.height - (finger.y - 48 - 16))).toBeLessThanOrEqual(1);
+    const viewer = (await page.getByTestId("map-viewer").boundingBox())!;
+    const flipped = finger.y - 48 - 16 - 120 < viewer.y;
+    if (flipped) expect(Math.abs(loupe.y - (finger.y + 16))).toBeLessThanOrEqual(1);
+    else expect(Math.abs(loupe.y + loupe.height - (finger.y - 48 - 16))).toBeLessThanOrEqual(1);
     expect(Math.abs(loupe.x + loupe.width / 2 - finger.x)).toBeLessThanOrEqual(1);
     expect(writes).toBe(0);
 
