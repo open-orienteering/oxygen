@@ -63,7 +63,7 @@ import {
   renameAlternative, setLegGaps, setLegProps, setLoop, setNumberHidden, setRole, DEFAULT_CORRIDOR, type GroupOrders, type KindOf, type LegPatch,
 } from "../../lib/editor/structure-edit";
 import { allVariationDraws, courseDrawOf, shownLegDraftOf, type HeldLegDraft } from "../../lib/editor/variation-view";
-import { alternativeEndAt, courseViewOrders, displaySequence, effectiveEnds, explicitStructure, insertIndexForLeg, kindOfSites, legForInsert, variationBlocks, type SiteRow } from "../../lib/editor/sequence";
+import { alternativeEndAt, courseViewOrders, displaySequence, effectiveEnds, explicitStructure, insertIndexForLeg, kindOfSites, legForInsert, legMeterInputs, variationBlocks, type SiteRow } from "../../lib/editor/sequence";
 import { insertBendAt, legPolyline, projectOnPolyline, setBendKind, type Bend } from "../../lib/editor/bends";
 import { courseActions } from "./ActionBar";
 import { TopBar } from "./TopBar";
@@ -253,16 +253,6 @@ export function EditorPage() {
   }, [structure, sequenceIds]);
   /** The item a row names (undefined for a loop's anchor visit, §12). */
   const itemOfRow = useCallback((i: number) => (explicit && rows[i] ? itemAtPath(explicit, rows[i].path) : undefined), [explicit, rows]);
-  // Along the stored bends and the crossing point (course-layer.md §10.1, §10.3; docs/course-editor.md §6.7, §6.8).
-  const legMeters = useMemo(() => sequenceLegMeters(rows.map((r, i) => {
-    const item = itemOfRow(i);
-    const leg = item?.leg;
-    const via = crossingPt(leg);
-    const prev = rows[i - 1]?.pt;
-    const bends = via && prev && r.pt ? courseShared.routedBends(prev, leg?.bends, via, r.pt) : leg?.bends;
-    return r.pt && bends ? { ...r.pt, bends } : r.pt;
-  }), mapScale), [rows, itemOfRow, mapScale, crossingPt]);
-  const totalMeters = useMemo(() => legMeters.reduce<number>((sum, m) => sum + (m ?? 0), 0), [legMeters]);
   const inventory = useMemo(
     () => buildInventoryView(seriesAllocation.data ?? [], (controlList.data ?? []).map((c) => c.codes)),
     [seriesAllocation.data, controlList.data],
@@ -1480,6 +1470,14 @@ export function EditorPage() {
     () => shownLegDraftOf(legDraft, { epoch: moveEpoch, leg: legIdentity, drawn: drawnLegBends }),
     [legDraft, moveEpoch, legIdentity, drawnLegBends],
   );
+  // Along the stored bends and the crossing point (course-layer.md §10.1, §10.3; docs/course-editor.md §6.7, §6.8); a
+  // leg draft of this course (F21, live or held) in its leg's place, so the metres follow a held bend or grip (F25).
+  const meterDraft = shownLegDraft && shownLegDraft.course === selectedCourse?.name ? shownLegDraft : null;
+  const legMeters = useMemo(() => sequenceLegMeters(legMeterInputs(rows, (i) => {
+    const leg = itemOfRow(i)?.leg;
+    return { bends: leg?.bends, via: crossingPt(leg) };
+  }, meterDraft), mapScale), [rows, itemOfRow, mapScale, crossingPt, meterDraft]);
+  const totalMeters = useMemo(() => legMeters.reduce<number>((sum, m) => sum + (m ?? 0), 0), [legMeters]);
 
   // Offline, Field mode views only (§9 "Offline"): a drag snaps back instead of writing.
   const fieldReadOnly = fieldMode && !online;
