@@ -1779,7 +1779,9 @@ export function MapViewer({
         setToolDragPos(null);
         const t = e.changedTouches[0];
         // Released where it was drawn (above the finger); a tap at the press (a focus); a cancel writes nothing.
-        const cancelled = e.type === "touchcancel" || hadMultiTouchRef.current || !t;
+        // As the control drag's release: a multi-touch or the 400 ms after one is no drop (the press is never offered
+        // then either, so today this only guards the two branches against drifting apart).
+        const cancelled = e.type === "touchcancel" || hadMultiTouchRef.current || Date.now() < suppressEditorSelectionUntilRef.current || !t;
         const at = !t ? null : toolTouch.moved ? liftedPoint(t.clientX, t.clientY) : { x: toolTouch.startX, y: toolTouch.startY };
         editorToolRef.current?.onPointerUp?.(cancelled || !at ? null : screenToMapMm(at.x, at.y));
         lastTouchRef.current = null;

@@ -4290,5 +4290,24 @@ test.describe("F23: bend drags on a tablet (docs/course-editor.md §6.7, §10)",
     await page.waitForTimeout(500);
     expect(writes).toBe(2);
     expect((await storedBends(courseId))[0]).toEqual(curved);
+
+    // A tap on the handle focuses the bend with no write: undo first (it unfocuses and puts the grip back), then
+    // tap the handle where it is drawn — at the press, not 48 px above it.
+    const undone = waitForTrpc(page, "course.setStructure");
+    await page.keyboard.press("Control+z");
+    await undone;
+    await expect(page.getByTestId("editor-leg-bend").first()).toHaveAttribute("data-focused", "false");
+    await expect.poll(async () => JSON.stringify((await storedBends(courseId))[0]?.[mine]), { timeout: 15000 }).toBe(JSON.stringify(bend1[mine]));
+    await expect.poll(async () => {
+      const h = (await toolShapes(page, "editor-bend-handle"))[0];
+      return h ? Math.hypot(h.x - bend1.x, h.y - bend1.y) : Infinity;
+    }, { timeout: 15000 }).toBeLessThan(0.05);
+    const before = writes;
+    await touchTap(page, await toPage(page, (await toolShapes(page, "editor-bend-handle"))[0]));
+    await expect(page.getByTestId("editor-leg-bend").first()).toHaveAttribute("data-focused", "true");
+    await expect(page.getByTestId("editor-leg")).toBeVisible();
+    await page.waitForTimeout(500);
+    expect(writes).toBe(before);
+    expect((await storedBends(courseId))[0]).toEqual(bend1);
   });
 });
