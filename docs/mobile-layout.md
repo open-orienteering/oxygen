@@ -74,7 +74,7 @@ pans, the bottom sheet with three detents and the action bar in its peek
 row, the floating `+`, and on a coarse pointer: a selected control drags
 at once, an unselected one pans on a drag and moves after a 500 ms long
 press, a dragged control rides 48 px above the finger with a 120 px
-×2.5 loupe above it (drawn by the GL layer), hit tolerance 12 px, two fingers always pan / zoom and cancel a pending press.
+×2.5 loupe above it (drawn by the GL layer), hit tolerance 12 px, two fingers always pan / zoom and cancel a pending press. On a tablet (a coarse pointer with the desktop layout) one finger also drags the selected leg's bend handles and grips the same way, lifted with the loupe; the phone's Leg section stays read-only.
 
 ### Map toolbar buttons
 
@@ -187,4 +187,4 @@ to Google Accounts and the cross-origin OAuth response is rejected by CORS.
 | Toolbar buttons + icons | `packages/web/src/components/ToolbarButton.tsx`, `map-icons.tsx` |
 | Controls page toolbar | `packages/web/src/pages/ControlsPage.tsx` |
 | Shell header | `packages/web/src/pages/CompetitionShell.tsx` |
-| E2E | `e2e/mobile-layout.spec.ts` (the editor's phone layout itself is `e2e/field-mode.spec.ts` and the touch describe of `e2e/course-editor.spec.ts`; E3 deleted the legacy editor's phone tests), `e2e/session-recovery.spec.ts` |
+| E2E | `e2e/mobile-layout.spec.ts` (the editor's phone layout itself is `e2e/field-mode.spec.ts` and the touch describe of `e2e/course-editor.spec.ts`, whose "F23" describe drives a tablet's bend drags; E3 deleted the legacy editor's phone tests), `e2e/session-recovery.spec.ts` |

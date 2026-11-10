@@ -332,6 +332,8 @@ export interface ToolPointer {
   alt?: boolean;
   /** Paper mm per CSS px at the current zoom: for handle tolerances. */
   mmPerPx: number;
+  /** A one-finger press on a coarse pointer (offered only to a tool with `touchPress`, F23): a coarser reach. */
+  touch?: boolean;
 }
 
 /** A UI-layer shape a tool draws, paper mm (the viewer projects it). */
@@ -359,8 +361,16 @@ export interface EditorToolBinding {
   cursor?: string;
   shapes?: readonly ToolShape[];
   onPointerDown?: (p: ToolPointer) => boolean;
-  /** `mods`: the keys held now (Shift constrains, Alt breaks a handle pair, §7). */
-  onPointerDrag?: (pt: { x: number; y: number }, mods?: { shift: boolean; alt: boolean }) => void;
+  /**
+   * One-finger presses on a coarse pointer go to `onPointerDown` (with `touch`) before the viewer's own targets
+   * (F23: V's bend handles and grips on a tablet). A taken press is dragged lifted above the finger with the loupe.
+   */
+  touchPress?: boolean;
+  /**
+   * `mods`: the keys held now (Shift constrains, Alt breaks a handle pair, §7). Returns the point the drag placed,
+   * paper mm (a snapped bend, a grip, a vertex), when it places one: the viewer draws the touch stem and the loupe at it.
+   */
+  onPointerDrag?: (pt: { x: number; y: number }, mods?: { shift: boolean; alt: boolean }) => { x: number; y: number } | void;
   onPointerUp?: (pt: { x: number; y: number } | null) => void;
   /** A click without movement (exclusive tools; a tap on touch). */
   onClick?: (p: ToolPointer) => void;
@@ -665,6 +675,10 @@ export function MapViewer({
   const legDownRef = useRef<{ course: string; index: number; x: number; y: number } | null>(null);
   // A gesture the active tool took on pointer-down (docs/course-editor.md §6).
   const toolDragRef = useRef<{ startX: number; startY: number } | null>(null);
+  /** A one-finger press a `touchPress` tool took (F23): where it landed (client px) and whether it has moved past 3 px. */
+  const toolTouchRef = useRef<{ startX: number; startY: number; moved: boolean } | null>(null);
+  /** The point the tool's drag placed (`onPointerDrag`'s return), paper mm: the touch stem and the loupe follow it. */
+  const [toolDragPos, setToolDragPos] = useState<Pt | null>(null);
   const editorToolRef = useRef<EditorToolBinding | null>(null);
   editorToolRef.current = editor?.tool ?? null;
 
@@ -1508,6 +1522,13 @@ export function MapViewer({
         hadMultiTouchRef.current = true;
         suppressEditorSelectionUntilRef.current = Date.now() + 400;
         stepSiteTouchRef.current({ type: "second-finger" });
+        // A second finger cancels a tool's one-finger drag (F23): no write, its draft dropped.
+        if (toolTouchRef.current) {
+          toolTouchRef.current = null;
+          setToolDragPos(null);
+          setTouchFinger(null);
+          editorToolRef.current?.onPointerUp?.(null);
+        }
         // A first finger may have landed on a control before the second
         // finger joined. That is a map gesture, not a control drag.
         editorDragRef.current = null;
@@ -1557,6 +1578,18 @@ export function MapViewer({
       lastTouchRef.current = { x: t.clientX, y: t.clientY };
       touchStartPosRef.current = { x: t.clientX, y: t.clientY };
       touchOnEditorTargetRef.current = false;
+      // A tool that opts in takes the press before the viewer's targets (F23: the selected leg's bends and grips
+      // sit on or by the leg, which would be a leg click); it declines anything else.
+      const tool = editorToolRef.current;
+      if (!measuring && tool?.touchPress && !tool.exclusive && Date.now() >= suppressEditorSelectionUntilRef.current) {
+        const p = toolPointerRef.current(t.clientX, t.clientY, false);
+        if (p && tool.onPointerDown?.({ ...p, touch: true })) {
+          toolTouchRef.current = { startX: t.clientX, startY: t.clientY, moved: false };
+          touchOnEditorTargetRef.current = true;
+          e.preventDefault();
+          return;
+        }
+      }
       if (!measuring && !editorToolRef.current?.exclusive && armEditorTargetRef.current(t.clientX, t.clientY, true)) {
         touchOnEditorTargetRef.current = true;
         e.preventDefault();
@@ -1570,6 +1603,22 @@ export function MapViewer({
     const onTouchMove = (e: TouchEvent) => {
       if (siteTouchRef.current.kind === "pending" && e.touches.length === 1) {
         stepSiteTouchRef.current({ type: "move", x: e.touches[0].clientX, y: e.touches[0].clientY, t: performance.now() });
+      }
+      const toolTouch = toolTouchRef.current;
+      if (toolTouch && e.touches.length === 1) {
+        e.preventDefault();
+        const t = e.touches[0];
+        // Past 3 px it is a drag, the point lifted above the finger on the stem (§10); until then a tap.
+        if (!toolTouch.moved && Math.abs(t.clientX - toolTouch.startX) + Math.abs(t.clientY - toolTouch.startY) <= 3) return;
+        toolTouch.moved = true;
+        const at = liftedPoint(t.clientX, t.clientY);
+        const pt = screenToMapMm(at.x, at.y);
+        if (!pt) return;
+        const placed = editorToolRef.current?.onPointerDrag?.(pt, { shift: false, alt: false });
+        setToolDragPos(placed ?? null);
+        const rect = el.getBoundingClientRect();
+        setTouchFinger({ x: t.clientX - rect.left, y: t.clientY - rect.top });
+        return;
       }
       const drag = editorDragRef.current;
       if (drag && e.touches.length === 1) {
@@ -1722,6 +1771,23 @@ export function MapViewer({
         editorToolRef.current?.onPinch?.end(e.type !== "touchcancel");
         suppressEditorSelectionUntilRef.current = Date.now() + 400;
         if (e.touches.length === 0) { lastTouchRef.current = null; touchStartPosRef.current = null; hadMultiTouchRef.current = false; }
+        return;
+      }
+      const toolTouch = toolTouchRef.current;
+      if (toolTouch && e.touches.length === 0) {
+        toolTouchRef.current = null;
+        setToolDragPos(null);
+        const t = e.changedTouches[0];
+        // Released where it was drawn (above the finger); a tap at the press (a focus); a cancel writes nothing.
+        // As the control drag's release: a multi-touch or the 400 ms after one is no drop (the press is never offered
+        // then either, so today this only guards the two branches against drifting apart).
+        const cancelled = e.type === "touchcancel" || hadMultiTouchRef.current || Date.now() < suppressEditorSelectionUntilRef.current || !t;
+        const at = !t ? null : toolTouch.moved ? liftedPoint(t.clientX, t.clientY) : { x: toolTouch.startX, y: toolTouch.startY };
+        editorToolRef.current?.onPointerUp?.(cancelled || !at ? null : screenToMapMm(at.x, at.y));
+        lastTouchRef.current = null;
+        touchStartPosRef.current = null;
+        hadMultiTouchRef.current = false;
+        isPanningRef.current = false;
         return;
       }
       const drag = editorDragRef.current;
@@ -2485,13 +2551,15 @@ export function MapViewer({
     }
   }
 
-  // The lifted touch drag's stem (§10): from the finger to the control drawn above it; on the GL
+  // The lifted touch drag's stem (§10): from the finger to the control (or the tool's bend or grip, F23) drawn above it; on the GL
   // canvas the loupe above that (§10 "Loupe"): the layer draws the magnified map into the circle,
   // `editor-loupe` is its ring and the crosshair at the drop point.
   let touchHandle: React.ReactNode = null;
   let glLoupe: VectorLoupe | null = null;
-  if (touchFinger && editorDragPos && editorDragTouch) {
-    const inner = mapMmToScreen(editorDragPos.x, editorDragPos.y);
+  // The lifted point: a control's, or the one a tool's touch drag placed (F23: a bend, a grip).
+  const liftedDrag = editorDragPos && editorDragTouch ? editorDragPos : toolDragPos;
+  if (touchFinger && liftedDrag) {
+    const inner = mapMmToScreen(liftedDrag.x, liftedDrag.y);
     if (inner) {
       const pos = innerToContainer(inner.x, inner.y);
       touchHandle = (
@@ -2503,7 +2571,7 @@ export function MapViewer({
       if (glViewRect) {
         const c = loupePlacement(touchFinger, { width: containerSize.w, height: containerSize.h });
         const r = LOUPE_DIAMETER_PX / 2;
-        glLoupe = { xUm: editorDragPos.x * 1000, yUm: editorDragPos.y * 1000, cx: c.x, cy: c.y, diameterPx: LOUPE_DIAMETER_PX, scale: LOUPE_SCALE };
+        glLoupe = { xUm: liftedDrag.x * 1000, yUm: liftedDrag.y * 1000, cx: c.x, cy: c.y, diameterPx: LOUPE_DIAMETER_PX, scale: LOUPE_SCALE };
         touchHandle = (
           <>
             {touchHandle}

@@ -797,6 +797,98 @@ describe("V on a selected leg: the live draft (docs/course-editor.md §6.7, F21)
   });
 });
 
+describe("V on a selected leg: touch (docs/course-editor.md §6.7, §10; F23)", () => {
+  const SMOOTH = { x: 20, y: 10, hIn: { x: -2, y: 0 }, hOut: { x: 2, y: 0 } };
+  const legOpts = (over: Partial<NonNullable<Parameters<typeof selectBinding>[0]["leg"]>> = {}) => ({
+    from: { x: 0, y: 0 }, to: { x: 40, y: 0 }, bends: [SMOOTH], focused: null,
+    onBendsChange: vi.fn(), onBendsDraft: vi.fn(), onBendFocus: vi.fn(), snap: (p: { x: number; y: number }) => p, ...over,
+  });
+  // 0.1 mm per CSS px: the touch reach is 2 × HANDLE_PX = 14 px = 1.4 mm; the mouse's 7 px = 0.7 mm.
+  const touch = (x: number, y: number, over: Partial<ToolPointer> = {}) => ptr(x, y, { touch: true, ...over });
+
+  it("opts in to one-finger presses only with a selected leg", () => {
+    expect(selectBinding(selectOpts({ leg: legOpts() })).touchPress).toBe(true);
+    expect(selectBinding(selectOpts()).touchPress).toBeFalsy();
+  });
+
+  it("a touch press takes a bend at 10 px and declines it at 16 px; the mouse's reach stays 7 px", () => {
+    const corner = legOpts({ bends: [{ x: 20, y: 10 }] });
+    expect(selectBinding(selectOpts({ leg: corner })).onPointerDown!(touch(21, 10))).toBe(true);
+    const o = selectOpts({ leg: corner });
+    expect(selectBinding(o).onPointerDown!(touch(21.6, 10))).toBe(false);
+    expect(o.gesture.current).toBeNull();
+    expect(selectBinding(selectOpts({ leg: corner })).onPointerDown!(ptr(21, 10))).toBe(false);
+  });
+
+  it("a touch press takes a grip at 10 px (off the bend's reach)", () => {
+    const o = selectOpts({ leg: legOpts({ bends: [{ x: 20, y: 10, hIn: { x: -4, y: 0 }, hOut: { x: 4, y: 0 } }] }) });
+    expect(selectBinding(o).onPointerDown!(touch(24, 11))).toBe(true);
+    expect(o.gesture.current).toMatchObject({ kind: "bend-grip", index: 0, which: "out" });
+  });
+
+  it("a touch press declines everything else: an object, a site, empty map (the viewer's targets and the tap path keep them)", () => {
+    const o = selectOpts({ leg: legOpts(), selected: square(4) });
+    const b = selectBinding(o);
+    expect(b.onPointerDown!(touch(5, 5, { target: { kind: "object", id: 4 } }))).toBe(false);
+    expect(b.onPointerDown!(touch(0, 0))).toBe(false);
+    expect(b.onPointerDown!(touch(5, 5, { target: { kind: "site", id: "31" } }))).toBe(false);
+    expect(o.gesture.current).toBeNull();
+    expect(o.onSelectObject).not.toHaveBeenCalled();
+  });
+
+  it("onPointerDrag returns the placed point: the snapped bend, the dragged grip; nothing within the slop", () => {
+    const o = selectOpts({ leg: legOpts({ snap: (p) => ({ x: Math.round(p.x), y: Math.round(p.y) }) }) });
+    const b = selectBinding(o);
+    b.onPointerDown!(touch(20.5, 10));
+    expect(b.onPointerDrag!({ x: 20.6, y: 10 })).toBeUndefined();
+    expect(b.onPointerDrag!({ x: 23.4, y: 5.2 })).toEqual({ x: 23, y: 5 });
+    b.onPointerUp!({ x: 23.4, y: 5.2 });
+    expect(o.leg!.onBendsChange).toHaveBeenCalledWith([{ ...SMOOTH, x: 23, y: 5 }]);
+
+    const g = selectOpts({ leg: legOpts() });
+    const bg = selectBinding(g);
+    bg.onPointerDown!(touch(22, 10));
+    expect(bg.onPointerDrag!({ x: 22, y: 14 }, { shift: false, alt: false })).toEqual({ x: 22, y: 14 });
+  });
+
+  it("onPointerDrag returns an object's dragged vertex or grip, and nothing for a body drag or a lasso", () => {
+    const sel = square(4);
+    const o = selectOpts({ selected: sel, objects: [sel] });
+    const b = selectBinding(o);
+    b.onPointerDown!(ptr(10, 10));
+    expect(b.onPointerDrag!({ x: 12, y: 13 }, { shift: false, alt: false })).toEqual({ x: 12, y: 13 });
+    b.onPointerUp!(null);
+    b.onPointerDown!(ptr(5, 5, { target: { kind: "object", id: 4 } }));
+    expect(b.onPointerDrag!({ x: 7, y: 7 }, { shift: false, alt: false })).toBeUndefined();
+    b.onPointerUp!(null);
+    b.onPointerDown!(ptr(60, 60, { shift: true }));
+    expect(b.onPointerDrag!({ x: 61, y: 61 })).toBeUndefined();
+    b.onPointerUp!(null);
+
+    const curved = { ...square(5, "oob_line"), geometry: [{ x: 0, y: 0, hOut: { x: 3, y: 0 } }, { x: 10, y: 0 }] } as course.CourseObject;
+    const c = selectOpts({ selected: curved, objects: [curved] });
+    const bc = selectBinding(c);
+    bc.onPointerDown!(ptr(3, 0));
+    expect(c.gesture.current).toMatchObject({ kind: "grip" });
+    expect(bc.onPointerDrag!({ x: 3, y: 2 }, { shift: false, alt: false })).toEqual({ x: 3, y: 2 });
+  });
+
+  it("a tap focuses the bend and writes nothing; a cancel (a second finger) drops the draft with no write", () => {
+    const o = selectOpts({ leg: legOpts() });
+    const b = selectBinding(o);
+    b.onPointerDown!(touch(20.8, 10));
+    b.onPointerUp!({ x: 20.8, y: 10 });
+    expect(o.leg!.onBendFocus).toHaveBeenCalledWith(0);
+    expect(o.leg!.onBendsChange).not.toHaveBeenCalled();
+    b.onPointerDown!(touch(20.8, 10));
+    b.onPointerDrag!({ x: 20, y: 5 });
+    expect(o.leg!.onBendsDraft).toHaveBeenLastCalledWith([{ ...SMOOTH, x: 20, y: 5 }]);
+    b.onPointerUp!(null);
+    expect(o.leg!.onBendsDraft).toHaveBeenLastCalledWith(null);
+    expect(o.leg!.onBendsChange).not.toHaveBeenCalled();
+  });
+});
+
 describe("corridor guides (docs/course-editor.md §6.7, F14)", () => {
   const guides = [
     { course: "A", index: 0, points: [{ x: 0, y: 0 }, { x: 20, y: 0 }] },

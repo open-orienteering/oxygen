@@ -1877,9 +1877,10 @@ dragged (§4.11).
 request in flight (§5.2 "Engine"); the dragged object is not symbolised
 on the main thread.
 
-**Loupe** (D9b; `course-editor.md` §10 "Loupe"). While a control is
-dragged by touch, the viewer hands `VectorMapLayer` a `loupe` (the
-dragged point, the circle `loupePlacement` puts above the handle,
+**Loupe** (D9b; `course-editor.md` §10 "Loupe"). While a control — or,
+on a tablet, a bend or a grip of the selected leg (F23: the point the
+tool's `onPointerDrag` returns) — is dragged by touch, the viewer hands
+`VectorMapLayer` a `loupe` (the dragged point, the circle `loupePlacement` puts above the handle,
 120 CSS px, ×2.5) and draws `editor-loupe` — a ring and a crosshair, no
 fill — over it; the layer draws the magnified map into that circle of
 the canvas in the same frame as the map (§5.4 "Layer", §5.2 "Render
@@ -1902,6 +1903,7 @@ popover beside it; same entries and ids.
 | `lib/editor/__tests__/hit.test.ts` | editor targets over the real worker's index |
 | `e2e/course-editor.spec.ts` | selecting, dragging and leg clicks on the canvas with no SVG targets |
 | `lib/editor/__tests__/touch.test.ts` (loupe) | `loupePlacement`: above the handle, flipped below the finger at the top, kept inside sideways |
+| `e2e/course-editor.spec.ts` "F23: bend drags on a tablet" | the loupe during a tablet's bend and grip drags (the point `onPointerDrag` returns): its bottom 16 px above the lifted bend, gone on lift |
 | `e2e/field-mode.spec.ts` (`mobile`) | the loupe during a long-press drag: 120 px above the handle; the canvas inside it differs from the same circle after release (the 1× map) and has the map's purple; gone on release |
 
 ### 5.3 PDF (shared/print)

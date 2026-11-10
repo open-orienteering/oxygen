@@ -200,19 +200,24 @@ export function selectBinding(o: SelectOptions): EditorToolBinding {
   if (gs?.kind === "lasso" && gs.points.length > 1) shapes.push({ kind: "line", points: gs.points, closed: true, dashed: true, color: BLUE, fill: "rgba(37,99,235,0.08)", testId: "editor-lasso" });
   return {
     shapes,
+    // A tablet's finger drags the selected leg's bends and grips (F23); everything else keeps the viewer's touch rules.
+    touchPress: !!leg,
     onPointerDown(p: ToolPointer) {
       // A bend handle of the selected leg first, then a grip of one: they sit on or by the leg, which the viewer
-      // would take as a leg click.
-      const bend = leg ? bendAt(leg, p.pt, HANDLE_PX * p.mmPerPx) : -1;
+      // would take as a leg click. A finger reaches twice as far (§10, as `onPinch`).
+      const reach = (p.touch ? 2 : 1) * HANDLE_PX * p.mmPerPx;
+      const bend = leg ? bendAt(leg, p.pt, reach) : -1;
       if (leg && bend >= 0) {
         g.current = { kind: "bend", index: bend, press: p.pt, mmPerPx: p.mmPerPx, bends: [...leg.bends], moved: false, alt: !!p.alt };
         return true;
       }
-      const grip = leg ? bendGripAt(leg, p.pt, HANDLE_PX * p.mmPerPx) : null;
+      const grip = leg ? bendGripAt(leg, p.pt, reach) : null;
       if (leg && grip) {
         g.current = { kind: "bend-grip", ...grip, press: p.pt, mmPerPx: p.mmPerPx, base: leg.bends, bends: [...leg.bends], moved: false };
         return true;
       }
+      // A finger elsewhere is the viewer's: its targets, a pan, the tap that selects an object (§10).
+      if (p.touch) return false;
       const sel = shown(o);
       if (sel) {
         // Vertex, grip, then the body or within reach of its edge. A closed area's body is its outline: the hit-test
@@ -255,15 +260,21 @@ export function selectBinding(o: SelectOptions): EditorToolBinding {
         cur.bends = moveBend(cur.bends, cur.index, leg.snap(pt));
         leg.onBendsDraft?.(cur.bends);
         o.redraw();
+        return { x: cur.bends[cur.index].x, y: cur.bends[cur.index].y };
       } else if (cur?.kind === "bend-grip" && leg) {
         if (!cur.moved && near(cur.press, pt, 3 * cur.mmPerPx)) return;
         cur.moved = true;
         cur.bends = gripDragged(cur, pt, mods);
         leg.onBendsDraft?.(cur.bends);
         o.redraw();
+        return gripPoint(cur.bends[cur.index], cur.which);
       } else if (cur?.kind === "object" || cur?.kind === "grip") {
         const geometry = dragGeometry(cur, pt, mods);
         if (geometry) o.onObjectDraft(cur.id, geometry);
+        // The placed point: the dragged vertex or grip (a body drag places none).
+        if (!geometry) return;
+        if (cur.kind === "grip") return gripPoint(geometry[cur.index], cur.which);
+        if (cur.vertex !== null) return { x: geometry[cur.vertex].x, y: geometry[cur.vertex].y };
       }
     },
     onPointerUp(pt) {
@@ -342,6 +353,12 @@ export function selectBinding(o: SelectOptions): EditorToolBinding {
       },
     },
   };
+}
+
+/** Where the grip of handle `which` of vertex `v` lies (the vertex itself without that handle). */
+function gripPoint(v: { x: number; y: number; hIn?: Pt; hOut?: Pt }, which: "in" | "out"): Pt {
+  const h = (which === "out" ? v.hOut : v.hIn) ?? { x: 0, y: 0 };
+  return { x: v.x + h.x, y: v.y + h.y };
 }
 
 /** A bend grip's drag at `pt`: the handle moved by the pointer's offset from the press (`dragBendGrip`; Alt and Shift live). */
