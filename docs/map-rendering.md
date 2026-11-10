@@ -1877,9 +1877,10 @@ dragged (§4.11).
 request in flight (§5.2 "Engine"); the dragged object is not symbolised
 on the main thread.
 
-**Loupe** (D9b; `course-editor.md` §10 "Loupe"). While a control is
-dragged by touch, the viewer hands `VectorMapLayer` a `loupe` (the
-dragged point, the circle `loupePlacement` puts above the handle,
+**Loupe** (D9b; `course-editor.md` §10 "Loupe"). While a control — or,
+on a tablet, a bend or a grip of the selected leg (F23: the point the
+tool's `onPointerDrag` returns) — is dragged by touch, the viewer hands
+`VectorMapLayer` a `loupe` (the dragged point, the circle `loupePlacement` puts above the handle,
 120 CSS px, ×2.5) and draws `editor-loupe` — a ring and a crosshair, no
 fill — over it; the layer draws the magnified map into that circle of
 the canvas in the same frame as the map (§5.4 "Layer", §5.2 "Render

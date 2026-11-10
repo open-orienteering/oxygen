@@ -17,8 +17,8 @@ import {
   mapScale, statsRow, type Frame, type Site,
 } from "./helpers/editor";
 import { migrateLegacySheetObjects } from "./helpers/legacy-objects";
-import { touchDrag, touchTap } from "./helpers/touch";
-import { isTrpcResponse, waitForTrpc } from "./helpers/trpc";
+import { touchDrag, touchEnd, touchMove, touchStart, touchTap } from "./helpers/touch";
+import { isTrpcResponse, trpcProcedures, waitForTrpc } from "./helpers/trpc";
 
 type Pt = { x: number; y: number };
 
@@ -4144,5 +4144,145 @@ test.describe("F13: Bézier bends (docs/course-layer.md §10.1)", () => {
       await cleanup("mapTemplate.delete", { id: template.seq });
       await cleanup("course.delete", { id });
     }
+  });
+});
+
+// F23 (docs/course-editor.md §6.7, §10; user 2026-11-10 answer 1): a tablet — a coarse pointer with the desktop
+// layout — drags the selected leg's bend handle and grip with one finger, lifted above it with the loupe. Its own
+// describe at the end of the file, so the parallel rows' edits above merge cleanly.
+test.describe("F23: bend drags on a tablet (docs/course-editor.md §6.7, §10)", () => {
+  // eslint-disable-next-line no-empty-pattern -- the project's name only
+  test.beforeEach(({}, info) => test.skip(info.project.name !== "chromium", "a tablet in the desktop project (the phone stays read-only)"));
+  test.use({ hasTouch: true, isMobile: true, viewport: { width: 1024, height: 768 } });
+
+  /** The stored bends of the course's one leg with props (a → b), from `course.list`. */
+  async function storedBends(courseId: string): Promise<{ x: number; y: number; hIn?: Pt; hOut?: Pt }[]> {
+    const summary = (await trpcCall<{ id: number; legs?: Record<string, { bends?: { x: number; y: number; hIn?: Pt; hOut?: Pt }[] }> }[]>("course.list", undefined, false))
+      .find((c) => c.id === Number(courseId))!;
+    return Object.values(summary.legs ?? {})[0]?.bends ?? [];
+  }
+
+  /** The point along the leg a → b farthest from every site (a tap there is the leg's, not a faded control's). */
+  async function legTapPoint(page: Page, name: string, a: Site, b: Site): Promise<Pt> {
+    const marks = (await sites(page)).map((x) => x.mm);
+    const clearance = (q: Pt) => Math.min(...marks.map((m) => Math.hypot(q.x - m.x, q.y - m.y)));
+    let best = await legMidpoint(page, name, a.mm, b.mm), bestD = clearance(best);
+    for (const piece of await legBetween(page, name, a.mm, b.mm)) {
+      piece.points.slice(1).forEach((q, i) => {
+        const p0 = piece.points[i];
+        for (let t = 0.05; t < 1; t += 0.05) {
+          const c = { x: p0.x + (q.x - p0.x) * t, y: p0.y + (q.y - p0.y) * t };
+          if (clearance(c) > bestD) { best = c; bestD = clearance(c); }
+        }
+      });
+    }
+    return best;
+  }
+
+  /** One finger from `from` to `to` in `steps` moves, held (no lift). */
+  async function fingerTo(page: Page, from: Pt, to: Pt, steps = 6): Promise<void> {
+    await touchStart(page, [from]);
+    for (let i = 1; i <= steps; i++) await touchMove(page, [{ x: from.x + ((to.x - from.x) * i) / steps, y: from.y + ((to.y - from.y) * i) / steps }]);
+  }
+
+  test("a finger drags the bend lifted 48 px on the stem with the loupe, one write on lift; then a grip, mirrored", async ({ page }) => {
+    await openEditor(page);
+    await expect(page.getByTestId("editor-page")).toHaveAttribute("data-layout", "desktop");
+    expect(await page.evaluate(() => matchMedia("(pointer: coarse)").matches), "a coarse pointer").toBe(true);
+    const name = await newCourse(page, "F23 tablet");
+    const courseId = await page.getByTestId("editor-course-picker").inputValue();
+    const ca = await appendClear(page);
+    const cb = await appendClear(page, [ca]);
+    await expect(controlRows(page)).toHaveCount(2, { timeout: 15000 });
+    const a = await site(page, ca), b = await site(page, cb);
+
+    // A tap on the leg selects it (the viewer's leg target on touch); Add bend here: smooth, two grips.
+    await viewSettled(page);
+    const mid = await legTapPoint(page, name, a, b);
+    await expect(async () => {
+      await dropSelection(page);
+      await touchTap(page, await toPage(page, mid));
+      await expect(page.getByTestId("editor-leg")).toBeVisible({ timeout: 3000 });
+    }).toPass({ timeout: 30000 });
+    await expect(page.getByTestId("editor-leg")).not.toHaveAttribute("data-readonly", "true");
+    const added = waitForTrpc(page, "course.setStructure");
+    await page.getByTestId("editor-action-bar").getByTestId("editor-action-add-bend").click();
+    await added;
+    await expect.poll(async () => (await storedBends(courseId)).length, { timeout: 15000 }).toBe(1);
+    await expect.poll(async () => (await toolShapes(page, "editor-bend-grip")).length, { timeout: 15000 }).toBe(2);
+    const bend0 = (await storedBends(courseId))[0];
+
+    let writes = 0;
+    page.on("request", (r) => { if (trpcProcedures(r.url()).includes("course.setStructure")) writes++; });
+
+    // The finger lands 10 px beside the handle — beyond the mouse's 7 px, within a finger's 14 px — and moves
+    // down-right: the bend rides 48 px above the finger, on the stem, the loupe above it.
+    const handle = await toPage(page, (await toolShapes(page, "editor-bend-handle"))[0]);
+    const press = { x: handle.x + 10, y: handle.y };
+    const finger = { x: press.x + 24, y: press.y + 30 };
+    await fingerTo(page, press, finger);
+    await expect(page.getByTestId("editor-touch-handle")).toBeVisible();
+    await expect(page.getByTestId("editor-loupe")).toBeVisible();
+    const lifted = await toPaper(page, { x: finger.x, y: finger.y - 48 });
+    await expect.poll(async () => {
+      const h = (await toolShapes(page, "editor-bend-handle"))[0];
+      return Math.hypot(h.x - lifted.x, h.y - lifted.y);
+    }, { timeout: 5000 }).toBeLessThan(0.6);
+    // The loupe sits above the lifted bend; nothing written yet (the layer follows the draft, F21).
+    const loupe = (await page.getByTestId("editor-loupe").boundingBox())!;
+    expect(loupe.y + loupe.height).toBeLessThan(finger.y - 48);
+    expect(writes).toBe(0);
+
+    const moved = waitForTrpc(page, "course.setStructure");
+    await touchEnd(page, [finger]);
+    await moved;
+    await expect(page.getByTestId("editor-touch-handle")).toHaveCount(0);
+    await expect(page.getByTestId("editor-loupe")).toHaveCount(0);
+    await expect.poll(async () => {
+      const [s] = await storedBends(courseId);
+      return s ? Math.hypot(s.x - lifted.x, s.y - lifted.y) : Infinity;
+    }, { timeout: 15000 }).toBeLessThan(0.6);
+    const bend1 = (await storedBends(courseId))[0];
+    // The bend moved with its handles (F18): the pair unchanged; one write for the gesture; the bend focused.
+    expect(bend1.hOut).toEqual(bend0.hOut);
+    expect(writes).toBe(1);
+    await expect(page.getByTestId("editor-leg-bend").first()).toHaveAttribute("data-focused", "true");
+
+    // A grip: the finger beside it on the side away from the bend, dragged; the handle moves by the lifted
+    // finger's offset and its pair stays mirrored.
+    await expect.poll(async () => {
+      const h = (await toolShapes(page, "editor-bend-handle"))[0];
+      return h ? Math.hypot(h.x - bend1.x, h.y - bend1.y) : Infinity;
+    }, { timeout: 15000 }).toBeLessThan(0.05);
+    const grips = await toolShapes(page, "editor-bend-grip");
+    const onScreen = await Promise.all(grips.map((g) => toPage(page, g)));
+    const k = onScreen[0].y <= onScreen[1].y ? 0 : 1;
+    const mine = grips[k].data.which === "out" ? "hOut" : "hIn";
+    const other = mine === "hOut" ? "hIn" : "hOut";
+    const centre = await toPage(page, bend1);
+    const away = { x: onScreen[k].x - centre.x, y: onScreen[k].y - centre.y };
+    const d = Math.hypot(away.x, away.y);
+    const gripPress = { x: onScreen[k].x + (away.x / d) * 6, y: onScreen[k].y + (away.y / d) * 6 };
+    const gripFinger = { x: gripPress.x - 20, y: gripPress.y + 20 };
+    const pulled = waitForTrpc(page, "course.setStructure");
+    await fingerTo(page, gripPress, gripFinger);
+    await expect(page.getByTestId("editor-loupe")).toBeVisible();
+    await touchEnd(page, [gripFinger]);
+    await pulled;
+    await expect.poll(async () => JSON.stringify((await storedBends(courseId))[0]?.[mine]), { timeout: 15000 }).not.toBe(JSON.stringify(bend1[mine]));
+    const curved = (await storedBends(courseId))[0];
+    expect(curved[other]).toEqual({ x: -curved[mine]!.x, y: -curved[mine]!.y });
+    expect({ x: curved.x, y: curved.y }).toEqual({ x: bend1.x, y: bend1.y });
+    expect(writes).toBe(2);
+
+    // A second finger cancels a bend drag: no write, the bend where it was.
+    const at = await toPage(page, (await toolShapes(page, "editor-bend-handle"))[0]);
+    await fingerTo(page, at, { x: at.x + 20, y: at.y + 20 });
+    await touchStart(page, [{ x: at.x + 20, y: at.y + 20 }, { x: at.x + 120, y: at.y + 60 }]);
+    await touchEnd(page, [{ x: at.x + 20, y: at.y + 20 }, { x: at.x + 120, y: at.y + 60 }]);
+    await expect(page.getByTestId("editor-loupe")).toHaveCount(0);
+    await page.waitForTimeout(500);
+    expect(writes).toBe(2);
+    expect((await storedBends(courseId))[0]).toEqual(curved);
   });
 });
