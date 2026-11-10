@@ -1903,6 +1903,7 @@ popover beside it; same entries and ids.
 | `lib/editor/__tests__/hit.test.ts` | editor targets over the real worker's index |
 | `e2e/course-editor.spec.ts` | selecting, dragging and leg clicks on the canvas with no SVG targets |
 | `lib/editor/__tests__/touch.test.ts` (loupe) | `loupePlacement`: above the handle, flipped below the finger at the top, kept inside sideways |
+| `e2e/course-editor.spec.ts` "F23: bend drags on a tablet" | the loupe during a tablet's bend and grip drags (the point `onPointerDrag` returns): its bottom 16 px above the lifted bend, gone on lift |
 | `e2e/field-mode.spec.ts` (`mobile`) | the loupe during a long-press drag: 120 px above the handle; the canvas inside it differs from the same circle after release (the 1× map) and has the map's purple; gone on release |
 
 ### 5.3 PDF (shared/print)
