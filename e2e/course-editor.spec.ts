@@ -3218,8 +3218,10 @@ test.describe("F3: legs — styles, bends, corridors (docs/course-editor.md §6.
 
       expect((await printed(page, nameId, `maps=${sheet.seq}`)).pages).toBe(1);
 
+      // F25: no White opacity field until the band can draw translucency (F26).
+      await expect(page.getByTestId("editor-leg-corridor-opacity")).toHaveCount(0);
       // Values outside their ranges are not written: the fields show the stored ones again.
-      for (const [field, bad, stored] of [["width", "0", String(narrowM)], ["white", "-1", "5"], ["opacity", "2", "1"]] as const) {
+      for (const [field, bad, stored] of [["width", "0", String(narrowM)], ["white", "-1", "5"]] as const) {
         await page.getByTestId(`editor-leg-corridor-${field}`).fill(bad);
         await page.getByTestId(`editor-leg-corridor-${field}`).press("Tab");
         await expect(page.getByTestId(`editor-leg-corridor-${field}`)).toHaveValue(stored);
@@ -3230,6 +3232,12 @@ test.describe("F3: legs — styles, bends, corridors (docs/course-editor.md §6.
       await page.getByTestId("editor-leg-corridor-width").press("Enter");
       await widened;
       await expect(page.getByTestId("editor-leg-corridor-width")).toHaveValue("80");
+      // F25: the hidden White opacity rides along on the write (the stored corridor, spread).
+      const courseId = Number(await page.getByTestId("editor-course-picker").inputValue());
+      const storedCorridor = async () => Object.values((await trpcCall<{ id: number; legs?: Record<string, { corridor?: { widthM: number; whiteOpacity: number } }> }[]>("course.list", undefined, false))
+        .find((c) => c.id === courseId)?.legs ?? {})[0]?.corridor;
+      await expect.poll(async () => (await storedCorridor())?.widthM, { timeout: 15000 }).toBe(80);
+      expect((await storedCorridor())?.whiteOpacity).toBe(1);
 
       const removed = waitForTrpc(page, "course.setStructure");
       await page.getByTestId("editor-leg-corridor-remove").click();
@@ -3266,6 +3274,10 @@ test.describe("F3: legs — styles, bends, corridors (docs/course-editor.md §6.
     await expect.poll(async () => (await storedBends(courseId)).length, { timeout: 15000 }).toBe(1);
     await viewSettled(page);
     const p0 = (await toolShapes(page, "editor-bend-handle"))[0];
+    // F25 (§6.7 "Readouts follow the bends"): leg b's metres in the inspector, the bend on the chord.
+    const metres = async () => Number(((await controlRows(page).nth(1).getByTestId("editor-leg-meters").textContent()) ?? "").replace(/[^\d]/g, ""));
+    const chordM = await metres();
+    expect(chordM).toBeGreaterThan(0);
     // The default corridor (F3): 50 m wide, a 5 mm band.
     const halfMm = (50 * 1000) / scale / 2;
     const len = Math.hypot(b.mm.x - a.mm.x, b.mm.y - a.mm.y);
@@ -3303,6 +3315,9 @@ test.describe("F3: legs — styles, bends, corridors (docs/course-editor.md §6.
       }
     }
     if (!p1) throw new Error("no apex clear of the sites above the leg");
+    // F25: a leg through the held apex is at least the two straight pieces long (a curve through p1 is no shorter).
+    const throughApexM = Math.round(((Math.hypot(p1.x - a.mm.x, p1.y - a.mm.y) + Math.hypot(b.mm.x - p1.x, b.mm.y - p1.y)) * scale) / 1000);
+    expect(throughApexM, "the apex lengthens the leg").toBeGreaterThan(chordM + 2);
     const from = await toPage(page, p0), to = await toPage(page, p1);
     expect(await inkAt(page, apexLine, "purple"), "no line where the handle goes").toBe(0);
 
@@ -3316,16 +3331,23 @@ test.describe("F3: legs — styles, bends, corridors (docs/course-editor.md §6.
     await expect.poll(() => inkAt(page, apexLine, "purple", true), { timeout: 15000 }).toBeGreaterThan(0);
     expect(await heldAt(), "still held").toBeLessThan(0.5);
     expect(writes.length, "no write while the handle is held").toBe(sent);
+    // F25: held, the inspector's metres follow the drafted bend, before any write.
+    await expect.poll(metres, { timeout: 5000 }).toBeGreaterThanOrEqual(throughApexM - 1);
+    const heldM = await metres();
+    expect(writes.length, "no write while the handle is held").toBe(sent);
     let released = waitForTrpc(page, "course.setStructure");
     await page.mouse.up();
+    expect(await metres(), "the released metres while the write is in flight").toBe(heldM);
     await released;
     expect(writes.length, "one write on release").toBe(sent + 1);
     await expect.poll(async () => Math.hypot((await storedBends(courseId))[0].x - p1.x, (await storedBends(courseId))[0].y - p1.y), { timeout: 15000 }).toBeLessThan(0.5);
     expect(await inkAt(page, apexLine, "purple"), "the line stays at the written bend").toBeGreaterThan(0);
+    expect(await metres(), "the written bend's metres").toBe(heldM);
     // Undo: the bend back on the chord.
     await page.keyboard.press("Control+z");
     await expect.poll(async () => Math.hypot((await storedBends(courseId))[0].x - p0.x, (await storedBends(courseId))[0].y - p0.y), { timeout: 15000 }).toBeLessThan(0.01);
     await expect.poll(() => inkAt(page, apexLine, "purple"), { timeout: 30000 }).toBe(0);
+    await expect.poll(metres, { timeout: 15000 }).toBe(chordM);
 
     // The default corridor on the leg (A, then C): the chord's band white.
     await page.keyboard.press("a");
@@ -3364,10 +3386,14 @@ test.describe("F3: legs — styles, bends, corridors (docs/course-editor.md §6.
     sent = writes.length;
     await dragHold(page, await toPage(page, p0), await toPage(page, p1));
     await expect.poll(heldAt, { timeout: 5000 }).toBeLessThan(0.5);
+    // F25: the metres follow the held bend, and Escape puts the stored ones back.
+    await expect.poll(metres, { timeout: 5000 }).toBeGreaterThanOrEqual(throughApexM - 1);
     await page.keyboard.press("Escape");
+    await expect.poll(metres, { timeout: 5000 }).toBe(chordM);
     await page.mouse.up();
     await page.waitForTimeout(1000);
     expect(writes.length, "no write after Escape").toBe(sent);
+    expect(await metres(), "the stored metres after Escape").toBe(chordM);
     expect(Math.hypot((await storedBends(courseId))[0].x - p0.x, (await storedBends(courseId))[0].y - p0.y)).toBeLessThan(0.01);
   });
 });
