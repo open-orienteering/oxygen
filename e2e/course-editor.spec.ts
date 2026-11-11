@@ -2319,7 +2319,10 @@ test.describe("P2: the status bar out of the footer", () => {
     await expect.poll(() => statsRow(page, "controls", "count"), { timeout: 15000 }).toBe("1");
     await button.click();
     await expect(popover).toBeVisible();
-    await page.getByTestId("editor-inspector").click({ position: { x: 4, y: 4 } });
+    // The inspector's bottom-right corner: when the top bar wraps (F27's magnifier at 1280 px) the popover hangs
+    // over the inspector's top-left, and a click there would land on the popover.
+    const ib = (await page.getByTestId("editor-inspector").boundingBox())!;
+    await page.getByTestId("editor-inspector").click({ position: { x: ib.width - 4, y: ib.height - 4 } });
     await expect(popover).toHaveCount(0);
 
     // Escape closes the popover and nothing else: an armed tool stays armed (the editor's Escape cascade, §3, is not stepped).
@@ -4644,5 +4647,156 @@ test.describe("F23: bend drags on a tablet (docs/course-editor.md §6.7, §10)",
     await page.waitForTimeout(500);
     expect(writes).toBe(before);
     expect((await storedBends(courseId))[0]).toEqual(bend1);
+  });
+});
+
+// F27 (§6 key table, §10 "Loupe"; user 2026-11-11, feedback-2026-11-11.md): the placement loupe toggle — a top-bar
+// magnifier and `L`. On, with a placing tool armed, the loupe magnifies the point a click would place (the
+// provisional point: a reused site's centre over a control), 16 px above the cursor; a left drag still pans and places
+// nothing, a click still places; gone on leaving the map, on disarm, on toggle off; remembered across a reload.
+test.describe("F27: the placement loupe toggle (docs/course-editor.md §6, §10 \"Loupe\")", () => {
+  desktopOnly();
+
+  test("K armed: on → the loupe at the hover over the point a click places; a drag pans and places nothing; off → none; remembered", async ({ page }) => {
+    await openEditor(page);
+    await newCourse(page, "F27 loupe");
+    const toggle = page.getByTestId("editor-placement-loupe");
+    const loupe = page.getByTestId("editor-loupe");
+    const writes: string[] = [];
+    // Every control or course write (a placement is `control.create` + `course.setStructure`); not the presence heartbeat.
+    page.on("request", (r) => { if (r.method() === "POST" && /\/trpc\/[^?]*\b(control|course)\.(?!presence)/.test(r.url())) writes.push(r.url()); });
+    /** The hover loupe: the mouse's, 120 px, its bottom 16 px above `cursor` (top 16 px below at the map's top), centred over it within the box. */
+    const hoverLoupeAt = async (cursor: Pt) => {
+      await expect(loupe).toBeVisible();
+      await expect(loupe).toHaveAttribute("data-mode", "hover");
+      await expect(loupe).toHaveAttribute("data-pointer", "mouse");
+      await expect(loupe).toHaveAttribute("data-scale", "2.5");
+      const lb = (await loupe.boundingBox())!;
+      const vb = (await page.getByTestId("map-viewer").boundingBox())!;
+      expect(Math.abs(lb.width - 120)).toBeLessThanOrEqual(1);
+      if (cursor.y - vb.y - 16 - 120 < 0) expect(Math.abs(lb.y - (cursor.y + 16))).toBeLessThanOrEqual(1);
+      else expect(Math.abs(lb.y + lb.height - (cursor.y - 16))).toBeLessThanOrEqual(1);
+      const cx = Math.min(Math.max(cursor.x, vb.x + 64), vb.x + vb.width - 64);
+      expect(Math.abs(lb.x + lb.width / 2 - cx)).toBeLessThanOrEqual(1);
+      return lb;
+    };
+    const loupePoint = async (): Promise<Pt> => ({ x: Number(await loupe.getAttribute("data-x")), y: Number(await loupe.getAttribute("data-y")) });
+
+    // Off by default: K armed, a hover shows the ghost and no loupe.
+    await expect(toggle).toHaveAttribute("aria-pressed", "false");
+    await arm(page, "K");
+    const p = await emptyPoint(page);
+    await page.mouse.move(p.x, p.y, { steps: 2 });
+    await expect(page.getByTestId("editor-ghost-label")).toBeAttached({ timeout: 10000 });
+    await expect(loupe).toHaveCount(0);
+
+    // The magnifier turns it on (stored per browser); back over the map the loupe hangs above the cursor.
+    await toggle.click();
+    await expect(toggle).toHaveAttribute("aria-pressed", "true");
+    expect(await page.evaluate(() => localStorage.getItem("oxygen.editor.placementLoupe"))).toBe("true");
+    await expect(page.getByTestId("editor-tool-K")).toHaveAttribute("aria-pressed", "true");
+    await page.mouse.move(p.x, p.y, { steps: 2 });
+    const lb = await hoverLoupeAt(p);
+    // The GL inset: the map magnified (the provisional visit's purple in it) — differs from the same circle at 1×.
+    await nextFrames(page);
+    await expect.poll(async () => (await canvasInCircle(page, lb, 4, true)).purple, { timeout: 15000 }).toBeGreaterThan(0);
+    const magnified = await canvasInCircle(page, lb, 4, true);
+
+    // `L` toggles it: off → gone with the pointer still; the 1× circle differs; on → back at once, no move needed.
+    await page.keyboard.press("l");
+    await expect(toggle).toHaveAttribute("aria-pressed", "false");
+    await expect(loupe).toHaveCount(0);
+    await nextFrames(page);
+    const plain = await canvasInCircle(page, lb, 4, true);
+    expect(plain.rgb.length).toBe(magnified.rgb.length);
+    let differing = 0;
+    for (let i = 0; i < plain.rgb.length; i += 3) {
+      if (Math.abs(plain.rgb[i] - magnified.rgb[i]) + Math.abs(plain.rgb[i + 1] - magnified.rgb[i + 1]) + Math.abs(plain.rgb[i + 2] - magnified.rgb[i + 2]) > 60) differing++;
+    }
+    expect(differing / (plain.rgb.length / 3), "the loupe is the magnified map, not the 1× one").toBeGreaterThan(0.1);
+    await page.keyboard.press("l");
+    await expect(toggle).toHaveAttribute("aria-pressed", "true");
+    await hoverLoupeAt(p);
+
+    // A left drag pans and places nothing (§6.1 "Drag pans"; answer 1); the loupe follows the cursor.
+    const sent = writes.length;
+    const count = (await sites(page)).length;
+    const centre = await viewCentre(page);
+    const to = { x: p.x - 60, y: p.y + 40 };
+    await dragHold(page, p, to);
+    await hoverLoupeAt(to);
+    await page.mouse.up();
+    await expect.poll(async () => JSON.stringify(await viewCentre(page))).not.toBe(JSON.stringify(centre));
+    await page.waitForTimeout(500);
+    expect(writes.length, "a drag with K armed writes nothing").toBe(sent);
+    expect((await sites(page)).length).toBe(count);
+
+    // A click still places (one site), with the loupe on.
+    await viewSettled(page);
+    const placed = await place(page, await emptyPoint(page));
+    expect((await sites(page)).length).toBe(count + 1);
+
+    // Over an existing control the click reuses it: the loupe magnifies the site's centre, not the raw cursor.
+    await viewSettled(page);
+    const [code] = await regularCodes(page, 1, [placed.code]);
+    const sp = await sitePoint(page, code);
+    const off = { x: sp.x + 3, y: sp.y + 2 };
+    await page.mouse.move(off.x, off.y, { steps: 2 });
+    await expect(page.getByTestId("editor-ghost-label")).toHaveText(`Add ${code}`, { timeout: 10000 });
+    await hoverLoupeAt(off);
+    const centreOf = (await site(page, code)).mm;
+    await expect.poll(async () => { const q = await loupePoint(); return Math.hypot(q.x - centreOf.x, q.y - centreOf.y); }).toBeLessThan(0.01);
+    const raw = await toPaper(page, off);
+    expect(Math.hypot(raw.x - centreOf.x, raw.y - centreOf.y), "the cursor is off the centre").toBeGreaterThan(0.1);
+
+    // Gone when the pointer leaves the map.
+    const vb = (await page.getByTestId("map-viewer").boundingBox())!;
+    await page.mouse.move(vb.x + vb.width + 20, off.y, { steps: 2 });
+    await expect(loupe).toHaveCount(0);
+
+    // T (map text) is a placing tool too; V is not (disarmed: no loupe on a hover).
+    await page.keyboard.press("Escape");
+    await arm(page, "T");
+    const q = await emptyPoint(page);
+    await page.mouse.move(q.x, q.y, { steps: 2 });
+    await hoverLoupeAt(q);
+    await page.keyboard.press("Escape");
+    await expect(page.getByTestId("editor-tool-V")).toHaveAttribute("aria-pressed", "true");
+    await page.mouse.move(q.x + 5, q.y + 5, { steps: 2 });
+    await expect(loupe).toHaveCount(0);
+
+    // Remembered: after a reload the toggle is on and K's hover shows the loupe.
+    await page.reload();
+    await editorReady(page);
+    await expect(toggle).toHaveAttribute("aria-pressed", "true");
+    await arm(page, "K");
+    const r = await emptyPoint(page);
+    await page.mouse.move(r.x, r.y, { steps: 2 });
+    await hoverLoupeAt(r);
+    // Off (the button): none on a hover.
+    await toggle.click();
+    await expect(toggle).toHaveAttribute("aria-pressed", "false");
+    await page.mouse.move(r.x + 4, r.y + 4, { steps: 2 });
+    await expect(page.getByTestId("editor-ghost-label")).toBeAttached({ timeout: 10000 });
+    await expect(loupe).toHaveCount(0);
+  });
+
+  test("a mouse drag keeps F24's loupe with the toggle on", async ({ page }) => {
+    await openEditor(page);
+    await newCourse(page, "F27 drag");
+    await page.getByTestId("editor-placement-loupe").click();
+    await expect(page.getByTestId("editor-placement-loupe")).toHaveAttribute("aria-pressed", "true");
+    await viewSettled(page);
+    const [code] = await regularCodes(page, 1);
+    const from = await sitePoint(page, code);
+    const to = await dragTarget(page, from);
+    await dragHold(page, from, to);
+    const loupe = page.getByTestId("editor-loupe");
+    await expect(loupe).toHaveAttribute("data-mode", "drag");
+    await expect(loupe).toHaveAttribute("data-pointer", "mouse");
+    // Escape cancels the drag (F24): the loupe goes, nothing is written.
+    await page.keyboard.press("Escape");
+    await expect(loupe).toHaveCount(0);
+    await page.mouse.up();
   });
 });

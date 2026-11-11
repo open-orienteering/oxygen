@@ -39,7 +39,7 @@
   "noDescription": "Ingen beskrivning",
   "codes": "Koder",
   "alsoIn": "Finns även i",
-  "help": "V välj, S / K / M placera start, kontroller, mål (förblir aktiv: Esc, V, Enter eller högerklick avslutar), A ytor, T text, G glapp på vald ring eller sträcka. Skift-klick eller skift-dra väljer flera kontroller; Tab stegar genom banan, F visar hela, dubbelklick på en sträcka infogar. H döljer andra kontroller, Esc backar, Ctrl+Z / Ctrl+Skift+Z ångra / gör om.",
+  "help": "V välj, S / K / M placera start, kontroller, mål (förblir aktiv: Esc, V, Enter eller högerklick avslutar), A ytor, T text, G glapp på vald ring eller sträcka. Skift-klick eller skift-dra väljer flera kontroller; Tab stegar genom banan, F visar hela, dubbelklick på en sträcka infogar. H döljer andra kontroller, L växlar placeringsluppen, Esc backar, Ctrl+Z / Ctrl+Skift+Z ångra / gör om.",
   "toolStart": "Start (S) — förblir aktiv",
   "toolControl": "Kontroll (K) — förblir aktiv",
   "toolFinish": "Mål (M) — avslutar kedjan",

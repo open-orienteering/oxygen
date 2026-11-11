@@ -88,3 +88,27 @@ export function loupePlacement(
   const x = Math.min(Math.max(at.x, r + LOUPE_INSET_PX), box.width - r - LOUPE_INSET_PX);
   return { x, y };
 }
+
+/** The placement-loupe preference (F27, §10 "Loupe"): `localStorage`, JSON boolean, off by default. */
+export const PLACEMENT_LOUPE_KEY = "oxygen.editor.placementLoupe";
+
+type Pt = { x: number; y: number };
+
+/**
+ * The placement loupe (F27, §10 "Loupe"): with the toggle on and a placing tool armed (`point`, the paper-mm point a
+ * click would place, is set), the loupe magnifies that point and hangs off the cursor (container px), or off the
+ * pin-drop crosshair at the view centre when the touch flow shows one (the crosshair wins: there the Place button
+ * drops its point, a tap does not place). None while a drag is in flight, which keeps F24's loupe.
+ */
+export function placementLoupe(i: {
+  on: boolean;
+  point: Pt | null | undefined;
+  cursor: Pt | null;
+  crosshair: Pt | null;
+  dragging: boolean;
+}): { anchor: Pt; at: Pt; pointer: "mouse" | "touch" } | null {
+  if (!i.on || !i.point || i.dragging) return null;
+  if (i.crosshair) return { anchor: i.crosshair, at: i.point, pointer: "touch" };
+  if (i.cursor) return { anchor: i.cursor, at: i.point, pointer: "mouse" };
+  return null;
+}

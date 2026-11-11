@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 import type { course } from "@oxygen/shared";
 import type { ToolPointer, ToolShape } from "../../../components/MapViewer";
-import { areaBinding, crossingGhost, gapBinding, pickSymbolBinding, placeBinding, scaleAbout, selectBinding, withCorridorGuides, type GestureRef } from "../tools/bindings";
+import { areaBinding, crossingGhost, gapBinding, pickSymbolBinding, placeBinding, scaleAbout, selectBinding, textBinding, withCorridorGuides, type GestureRef } from "../tools/bindings";
 import { railKeyOf } from "../tools/rail";
 
 const ptr = (x: number, y: number, over: Partial<ToolPointer> = {}): ToolPointer => ({ pt: { x, y }, target: null, shift: false, mmPerPx: 0.1, ...over });
@@ -923,5 +923,33 @@ describe("corridor guides (docs/course-editor.md §6.7, F14)", () => {
     expect(withCorridorGuides(null, [])).toBeNull();
     expect(withCorridorGuides(null, guides)!.shapes).toHaveLength(2);
     expect(withCorridorGuides(null, guides)!.onPointerDown).toBeUndefined();
+  });
+});
+
+// F27 (docs/course-editor.md §6, §10 "Loupe"): only the placing tools set `hoverPoint` — the viewer's "a placing tool
+// is armed" — to the point a click would place; every other binding leaves it undefined (no placement loupe).
+describe("hoverPoint: the placing tools' point for the placement loupe (F27)", () => {
+  const ghost = { at: { x: 4, y: 2 }, radiusMm: 2.5, role: "control" as const, label: "Add 47", description: null, legs: [], legLabel: null };
+  it("S / K / M / X / C: the ghost's point (snapped, or a reused site's centre); null without a hover", () => {
+    expect(placeBinding({ ghost, provisionalDrawn: false, onHover: vi.fn(), onPlace: vi.fn(), onExit: vi.fn(), touch: null }).hoverPoint).toEqual({ x: 4, y: 2 });
+    expect(placeBinding({ ghost: null, provisionalDrawn: false, onHover: vi.fn(), onPlace: vi.fn(), onExit: vi.fn(), touch: null }).hoverPoint).toBeNull();
+  });
+  it("T: the page's snapped hover, which its onHover feeds; the click places the same snapped point", () => {
+    const onHover = vi.fn(), onPlace = vi.fn();
+    const snap = (p: { x: number; y: number }) => ({ x: Math.round(p.x), y: Math.round(p.y) });
+    const b = textBinding({ onPlace, onExit: vi.fn(), snap, hover: { x: 3, y: 5 }, onHover });
+    expect(b.hoverPoint).toEqual({ x: 3, y: 5 });
+    b.onHover!(ptr(3.2, 4.9));
+    expect(onHover).toHaveBeenCalled();
+    b.onClick!(ptr(3.2, 4.9));
+    expect(onPlace).toHaveBeenCalledWith({ x: 3, y: 5 });
+    expect(textBinding({ onPlace, onExit: vi.fn(), snap, hover: null, onHover }).hoverPoint).toBeNull();
+  });
+  it("V, the area tool, G and the eyedropper set none", () => {
+    expect("hoverPoint" in selectBinding(selectOpts())).toBe(false);
+    const gesture: GestureRef = { current: null };
+    expect("hoverPoint" in areaBinding({ gesture, poly: { kind: "oob_area", vertices: [] }, hover: { x: 1, y: 1 }, onHover: vi.fn(), onPoly: vi.fn(), onDone: vi.fn(), onCancel: vi.fn(), snap: (p) => p })).toBe(false);
+    expect("hoverPoint" in gapBinding({ gesture, target: { kind: "circle", siteId: 1, centre: { x: 0, y: 0 }, radiusMm: 2.5, gaps: [] }, redraw: vi.fn(), onAdd: vi.fn(), onRemove: vi.fn(), onExit: vi.fn() })).toBe(false);
+    expect("hoverPoint" in pickSymbolBinding({ onPick: vi.fn(), onExit: vi.fn() })).toBe(false);
   });
 });

@@ -257,11 +257,13 @@ export function FieldTopBar({ backTo, courses, selectedCourseId, onSelectCourse,
 }
 
 /** The overflow menu's body: what the desktop top bar holds beside the mode switch. */
-export function OverflowMenu({ view, onView, canUndo, canRedo, onUndo, onRedo, hideOthers, canHideOthers, onToggleHideOthers, cutsEnabled, cutsBusy, onToggleCuts }: {
+export function OverflowMenu({ view, onView, canUndo, canRedo, onUndo, onRedo, hideOthers, canHideOthers, onToggleHideOthers, cutsEnabled, cutsBusy, onToggleCuts, placementLoupe, onTogglePlacementLoupe }: {
   view: EditorView; onView: (v: EditorView) => void;
   canUndo: boolean; canRedo: boolean; onUndo: () => void; onRedo: () => void;
   hideOthers: boolean; canHideOthers: boolean; onToggleHideOthers: () => void;
   cutsEnabled: boolean; cutsBusy: boolean; onToggleCuts: () => void;
+  /** F27: the placement loupe toggle — the loupe above the pin-drop crosshair. */
+  placementLoupe: boolean; onTogglePlacementLoupe: () => void;
 }) {
   const { t } = useTranslation("editor");
   const { t: tc } = useTranslation("courses");
@@ -286,6 +288,7 @@ export function OverflowMenu({ view, onView, canUndo, canRedo, onUndo, onRedo, h
           {item("editor-view-all", t("viewAll"), () => onView("all"), { pressed: view === "all" })}
           {item("editor-hide-others", tc("editor.hideOtherControls"), onToggleHideOthers, { disabled: !canHideOthers, pressed: hideOthers })}
           {item("editor-toggle-cuts", tc("editor.toggleCuts"), onToggleCuts, { disabled: cutsBusy, pressed: cutsEnabled })}
+          {item("editor-placement-loupe", tc("editor.placementLoupe"), onTogglePlacementLoupe, { pressed: placementLoupe })}
         </div>
       )}
     </div>

@@ -73,7 +73,7 @@ import type { CourseInfo } from "../map-gl/engine";
 import { editorHitAt, HIT_TOLERANCE_PX, uiLegsOf, type EditorTarget } from "../lib/editor/hit";
 import { showSelectionRing } from "../lib/editor/state";
 import { escapeCancels } from "../lib/editor/mouse-drag";
-import { COARSE_HIT_TOLERANCE_PX, HANDLE_LIFT_PX, IDLE as SITE_TOUCH_IDLE, LONG_PRESS_MS, LOUPE_DIAMETER_PX, LOUPE_SCALE, liftedPoint, loupePlacement, siteTouch, type SiteTouch, type SiteTouchEvent } from "../lib/editor/touch";
+import { COARSE_HIT_TOLERANCE_PX, HANDLE_LIFT_PX, IDLE as SITE_TOUCH_IDLE, LONG_PRESS_MS, LOUPE_DIAMETER_PX, LOUPE_SCALE, liftedPoint, loupePlacement, placementLoupe, siteTouch, type SiteTouch, type SiteTouchEvent } from "../lib/editor/touch";
 
 /** Persisted compass state: "1"/absent = rotation locked (north up). */
 const ROTATION_LOCK_STORAGE_KEY = "oxygen.map.rotationLock";
@@ -265,6 +265,11 @@ export interface MapViewerEditorProps {
    * before the viewer's own gestures and draws UI-layer shapes.
    */
   tool?: EditorToolBinding | null;
+  /**
+   * The placement loupe toggle (F27, docs/course-editor.md §10 "Loupe"): while a placing tool (`tool.hoverPoint`) is
+   * armed, the loupe magnifies the point a click would place, 16 px above the cursor, or above the pin-drop crosshair.
+   */
+  placementLoupe?: boolean;
   /** Snap a dragged control's centre (§6.2); returns the point unchanged when nothing is near. */
   snap?: ((pt: { x: number; y: number }) => { x: number; y: number }) | null;
   /**
@@ -378,6 +383,12 @@ export interface EditorToolBinding {
   onDoubleClick?: (p: ToolPointer) => void;
   /** Hover without a button (mouse); null when the pointer leaves the map. */
   onHover?: (p: ToolPointer | null) => void;
+  /**
+   * A placing tool's point a click (or Place) would drop now, paper mm: the provisional point, snapped or a reused
+   * site's centre; null without a hover. Set (not undefined) only by the placing tools (S, K, M, X, C, T): with the
+   * placement loupe on (F27, docs/course-editor.md §10 "Loupe") the viewer magnifies it above the cursor / crosshair.
+   */
+  hoverPoint?: { x: number; y: number } | null;
   onContextMenu?: (p: ToolPointer) => void;
   /**
    * Touch (coarse pointer): the pin-drop flow of 08 §5.3 — a fixed centre
@@ -657,6 +668,12 @@ export function MapViewer({
   const [touchFinger, setTouchFinger] = useState<Pt | null>(null);
   /** The cursor under a mouse drag that places a point (container px, F24): the loupe hangs 16 px above it (§10 "Loupe"). */
   const [dragCursor, setDragCursor] = useState<Pt | null>(null);
+  /**
+   * The cursor over the map with a placing tool armed (container px, F27): the placement loupe hangs above it. State only
+   * while the toggle is on; `lastCursorRef` keeps it otherwise, so turning the toggle on shows the loupe at once.
+   */
+  const [hoverCursor, setHoverCursor] = useState<Pt | null>(null);
+  const lastCursorRef = useRef<Pt | null>(null);
   /** The cursor in container px, for `dragCursor`. */
   const cursorInContainer = useCallback((clientX: number, clientY: number): Pt | null => {
     const rect = containerRef.current?.getBoundingClientRect();
@@ -1102,6 +1119,13 @@ export function MapViewer({
     }
   }, [editor?.viewRequest, viewport, controls, fitToControlBounds, rotRad, containerSize.w, containerSize.h]);
 
+  // F27: the placement loupe's cursor — taken from the last move when the toggle turns on or a placing tool is armed,
+  // dropped when either goes (so a stale cursor never hangs a loupe).
+  const placingArmed = editor?.tool?.hoverPoint !== undefined && !!editor?.tool;
+  useEffect(() => {
+    setHoverCursor(editor?.placementLoupe && placingArmed ? lastCursorRef.current : null);
+  }, [editor?.placementLoupe, placingArmed]);
+
   // Touch pin-drop: the ghost follows the view centre (08 §5.3 "Touch").
   useEffect(() => {
     const tool = editor?.tool;
@@ -1364,6 +1388,12 @@ export function MapViewer({
       const p = toolPointerRef.current(e.clientX, e.clientY, e.shiftKey, e.altKey);
       if (p) editor.tool.onHover(p);
     }
+    // F27: the placement loupe follows the cursor, a pan included (the map, and the point under it, move with it).
+    if (editor?.tool && editor.tool.hoverPoint !== undefined) {
+      const c = cursorInContainer(e.clientX, e.clientY);
+      lastCursorRef.current = c;
+      if (editor.placementLoupe) setHoverCursor(c);
+    }
     const labelDrag = editorLabelDragRef.current;
     if (editor && labelDrag) {
       const dx = Math.abs(e.clientX - labelDrag.startX);
@@ -1406,10 +1436,18 @@ export function MapViewer({
       mouseDownPosRef.current = null;
       setToolDragPos(null);
       setDragCursor(null);
+      if (e.type === "mouseleave") {
+        lastCursorRef.current = null;
+        setHoverCursor(null);
+      }
       editorToolRef.current?.onPointerUp?.(e.type === "mouseleave" ? null : screenToMapMm(e.clientX, e.clientY));
       return;
     }
-    if (e.type === "mouseleave") editorToolRef.current?.onHover?.(null);
+    if (e.type === "mouseleave") {
+      editorToolRef.current?.onHover?.(null);
+      lastCursorRef.current = null;
+      setHoverCursor(null);
+    }
     const drag = editorDragRef.current;
     if (editor && drag) {
       if (e.type === "mouseleave") {
@@ -2622,9 +2660,23 @@ export function MapViewer({
       );
     }
   }
-  if (loupeAnchor && loupeAt && glViewRect) {
-    const touch = loupeAnchor === touchFinger;
-    const c = loupePlacement(loupeAnchor, { width: containerSize.w, height: containerSize.h }, touch ? HANDLE_LIFT_PX : 0);
+  const dragLoupe = !!(loupeAnchor && loupeAt);
+  // F27: no drag → the placement loupe, when on: the point a click (or Place) would drop, above the cursor or the crosshair.
+  const hoverLoupe = placementLoupe({
+    on: !!editor?.placementLoupe,
+    point: editor?.tool?.hoverPoint,
+    cursor: hoverCursor,
+    crosshair: editor?.tool?.touch && isCoarsePointer ? { x: containerSize.w / 2, y: containerSize.h / 2 } : null,
+    dragging: dragLoupe,
+  });
+  const loupe = dragLoupe
+    ? { anchor: loupeAnchor!, at: loupeAt!, touch: loupeAnchor === touchFinger, lift: loupeAnchor === touchFinger ? HANDLE_LIFT_PX : 0, mode: "drag" as const }
+    : hoverLoupe
+      ? { anchor: hoverLoupe.anchor, at: hoverLoupe.at, touch: hoverLoupe.pointer === "touch", lift: 0, mode: "hover" as const }
+      : null;
+  if (loupe && glViewRect) {
+    const { touch, at: loupeAt } = loupe;
+    const c = loupePlacement(loupe.anchor, { width: containerSize.w, height: containerSize.h }, loupe.lift);
     const r = LOUPE_DIAMETER_PX / 2;
     glLoupe = { xUm: loupeAt.x * 1000, yUm: loupeAt.y * 1000, cx: c.x, cy: c.y, diameterPx: LOUPE_DIAMETER_PX, scale: LOUPE_SCALE };
     touchHandle = (
@@ -2634,6 +2686,9 @@ export function MapViewer({
           data-testid="editor-loupe"
           data-scale={LOUPE_SCALE}
           data-pointer={touch ? "touch" : "mouse"}
+          data-mode={loupe.mode}
+          data-x={loupeAt.x.toFixed(3)}
+          data-y={loupeAt.y.toFixed(3)}
           aria-hidden
           className="absolute pointer-events-none rounded-full border-2 border-slate-700 shadow-lg"
           style={{ left: c.x - r, top: c.y - r, width: 2 * r, height: 2 * r, zIndex: 9 }}
