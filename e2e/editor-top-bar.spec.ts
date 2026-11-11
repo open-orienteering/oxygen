@@ -8,52 +8,11 @@
 // after F28.
 import { test, expect, type Page } from "@playwright/test";
 import { reseed } from "./helpers/reseed";
-import { editorReady } from "./helpers/editor";
+import { clickTab, editorReady, ensureCoursesAndMap, selectCompetition } from "./helpers/editor";
 import { TIER1_PX, TIER2_PX } from "../packages/web/src/components/top-bar-collapse";
 
 test.beforeAll(reseed);
 test.setTimeout(120_000);
-
-async function selectCompetition(page: Page) {
-  await page.goto("/");
-  await page.getByText("My example tävling").click();
-  await expect(page.getByRole("link", { name: "Dashboard" })).toBeVisible({ timeout: 10000 });
-}
-
-async function clickTab(page: Page, name: string) {
-  const mainTab = page.locator("nav[aria-label='Tabs']").getByRole("link", { name, exact: true });
-  if (await mainTab.isVisible()) {
-    await mainTab.click();
-  } else {
-    await page.getByTestId("more-menu-button").click();
-    await page.getByTestId("more-menu-content").getByRole("link", { name, exact: true }).click();
-  }
-}
-
-/** Courses and controls from `e2e/test.ocd` and the same file as the event map (as `course-editor.spec.ts`). */
-async function ensureCoursesAndMap(page: Page) {
-  await clickTab(page, "Courses");
-  const uploadButton = page.getByRole("button", { name: "Upload map" });
-  const viewer = page.getByTestId("map-viewer");
-  await expect(uploadButton.or(viewer).first()).toBeVisible({ timeout: 60000 });
-  if (!(await uploadButton.isVisible())) return;
-  await expect(page.getByText("3 courses")).toBeVisible({ timeout: 10000 });
-  await page.getByRole("button", { name: "Import courses" }).click();
-  const importChooser = page.waitForEvent("filechooser");
-  await page.getByRole("button", { name: "Browse files" }).click();
-  await (await importChooser).setFiles("e2e/test.ocd");
-  await expect(page.getByText("Courses and Class Assignments")).toBeVisible({ timeout: 20000 });
-  await page.getByRole("button", { name: "Öppen 1" }).click();
-  await page.getByRole("row", { name: /^E / }).getByRole("button", { name: "— Skip —", exact: true }).click();
-  await page.getByTestId("course-import-replace-all").uncheck();
-  await page.getByRole("button", { name: "Import 5 courses" }).click();
-  await expect(page.getByText("Import Complete")).toBeVisible({ timeout: 15000 });
-  await page.getByRole("button", { name: "Done" }).click();
-  const mapChooser = page.waitForEvent("filechooser");
-  await page.getByTestId("map-panel").getByRole("button", { name: "Upload map" }).click();
-  await (await mapChooser).setFiles("e2e/test.ocd");
-  await expect(page.getByTestId("map-viewer")).toBeVisible({ timeout: 60000 });
-}
 
 /** The row's content width, inside its padding: what the container query measures. */
 const toolbarWidth = (page: Page) =>

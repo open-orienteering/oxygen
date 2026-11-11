@@ -4674,10 +4674,13 @@ test.describe("F27: the placement loupe toggle (docs/course-editor.md §6, §10 
       const lb = (await loupe.boundingBox())!;
       const vb = (await page.getByTestId("map-viewer").boundingBox())!;
       expect(Math.abs(lb.width - 120)).toBeLessThanOrEqual(1);
-      if (cursor.y - vb.y - 16 - 120 < 0) expect(Math.abs(lb.y - (cursor.y + 16))).toBeLessThanOrEqual(1);
-      else expect(Math.abs(lb.y + lb.height - (cursor.y - 16))).toBeLessThanOrEqual(1);
+      // 1.5 px: the loupe follows `mousemove`'s clientX / clientY, whole CSS px in Chrome, while `cursor` and the
+      // viewer's box are fractional — up to 1 px apart before the box's own rounding (F29 moved the viewer and met it).
+      const tol = 1.5;
+      if (cursor.y - vb.y - 16 - 120 < 0) expect(Math.abs(lb.y - (cursor.y + 16))).toBeLessThanOrEqual(tol);
+      else expect(Math.abs(lb.y + lb.height - (cursor.y - 16))).toBeLessThanOrEqual(tol);
       const cx = Math.min(Math.max(cursor.x, vb.x + 64), vb.x + vb.width - 64);
-      expect(Math.abs(lb.x + lb.width / 2 - cx)).toBeLessThanOrEqual(1);
+      expect(Math.abs(lb.x + lb.width / 2 - cx)).toBeLessThanOrEqual(tol);
       return lb;
     };
     const loupePoint = async (): Promise<Pt> => ({ x: Number(await loupe.getAttribute("data-x")), y: Number(await loupe.getAttribute("data-y")) });
