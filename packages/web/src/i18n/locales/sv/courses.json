@@ -124,6 +124,8 @@
     "hideOtherControls": "Dölj övriga kontroller",
     "toggleCuts": "Autoklipp",
     "toggleCutsTitle": "Automatiska slits i cirklar och luckor i sträckor över kartdetaljer",
+    "placementLoupe": "Placeringslupp",
+    "placementLoupeTitle": "Placeringslupp: förstora punkten där placeringsverktyget sätter ut (L)",
     "alsoIn": "Även i: {{names}}",
     "affects": "Påverkar: {{names}}",
     "actionAdd": "Lägg till kontroll",

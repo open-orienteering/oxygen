@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { HANDLE_LIFT_PX, IDLE, LONG_PRESS_MS, LOUPE_DIAMETER_PX, LOUPE_GAP_PX, LOUPE_SCALE, TOUCH_SLOP_PX, liftedPoint, loupePlacement, siteTouch, type SiteTouch, type SiteTouchEvent } from "../touch";
+import { HANDLE_LIFT_PX, IDLE, LONG_PRESS_MS, LOUPE_DIAMETER_PX, LOUPE_GAP_PX, LOUPE_SCALE, TOUCH_SLOP_PX, PLACEMENT_LOUPE_KEY, liftedPoint, loupePlacement, placementLoupe, siteTouch, type SiteTouch, type SiteTouchEvent } from "../touch";
 
 function run(events: SiteTouchEvent[]) {
   let s: SiteTouch = IDLE;
@@ -76,5 +76,39 @@ describe("the loupe's place (docs/course-editor.md §10 \"Loupe\")", () => {
     expect(loupePlacement({ x: 399, y: 500 }, box, 0).x).toBe(400 - r - 4);
     // The touch call is unchanged: the default lift is the handle's.
     expect(loupePlacement({ x: 200, y: 500 }, box)).toEqual(loupePlacement({ x: 200, y: 500 }, box, HANDLE_LIFT_PX));
+  });
+});
+
+// F27: the placement loupe toggle — a hover with a placing tool armed (feedback 2026-11-11).
+describe("the placement loupe (docs/course-editor.md §10 \"Loupe\", F27)", () => {
+  const point = { x: 12.5, y: 30 };
+  const cursor = { x: 210, y: 400 };
+  const crosshair = { x: 200, y: 300 };
+  const base = { on: true, point, cursor, crosshair: null, dragging: false };
+
+  it("is stored per browser under oxygen.editor.placementLoupe", () => {
+    expect(PLACEMENT_LOUPE_KEY).toBe("oxygen.editor.placementLoupe");
+  });
+
+  it("off: no loupe", () => {
+    expect(placementLoupe({ ...base, on: false })).toBeNull();
+    expect(placementLoupe({ ...base, on: false, cursor: null, crosshair })).toBeNull();
+  });
+
+  it("on with a cursor: hangs off the cursor, magnifies the point the click would place", () => {
+    expect(placementLoupe(base)).toEqual({ anchor: cursor, at: point, pointer: "mouse" });
+  });
+
+  it("on the pin-drop flow: hangs off the centre crosshair, magnifies the point Place would drop", () => {
+    expect(placementLoupe({ ...base, cursor: null, crosshair })).toEqual({ anchor: crosshair, at: point, pointer: "touch" });
+    // The crosshair is the placement point while it shows: a stray (synthetic) mouse position never moves the loupe off it.
+    expect(placementLoupe({ ...base, crosshair })).toEqual({ anchor: crosshair, at: point, pointer: "touch" });
+  });
+
+  it("no placing tool (no point), no pointer, or a drag in flight (F24's loupe wins): none", () => {
+    expect(placementLoupe({ ...base, point: null })).toBeNull();
+    expect(placementLoupe({ ...base, point: undefined })).toBeNull();
+    expect(placementLoupe({ ...base, cursor: null })).toBeNull();
+    expect(placementLoupe({ ...base, dragging: true })).toBeNull();
   });
 });

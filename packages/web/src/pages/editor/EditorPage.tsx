@@ -35,6 +35,8 @@ import { useCoursePresence } from "../../hooks/useCoursePresence";
 import { clockTime, courseChangedElsewhere } from "../../lib/editor/presence";
 import { PresenceChips } from "./PresenceChips";
 import { useMediaQuery } from "../../hooks/useMediaQuery";
+import { useLocalStorage } from "../../hooks/useLocalStorage";
+import { PLACEMENT_LOUPE_KEY } from "../../lib/editor/touch";
 import { useOnlineStatus } from "../../hooks/useOnlineStatus";
 import { useCapabilities } from "../../context/CapabilitiesContext";
 import { paperFrameOf } from "../../lib/vector-map";
@@ -973,6 +975,9 @@ export function EditorPage() {
   /** The undo entries of placements (`Ctrl+Z` steps the chain back only for one of them). */
   const placementEntries = useRef(new WeakSet<object>());
   const [hover, setHover] = useState<{ pt: Pt; target: ToolPointer["target"] } | null>(null);
+  /** F27: the placement loupe toggle (top-bar magnifier, the phone's overflow, `L`) — a per-browser preference, off by default. */
+  const [placementLoupe, setPlacementLoupe] = useLocalStorage(PLACEMENT_LOUPE_KEY, false);
+  const togglePlacementLoupe = useCallback(() => setPlacementLoupe((v) => !v), [setPlacementLoupe]);
   const onHover = useCallback((p: ToolPointer | null) => {
     setHover((prev) => {
       if (!p) return prev === null ? prev : null;
@@ -1262,7 +1267,7 @@ export function EditorPage() {
           onCancel: exitTool,
         });
       case "text":
-        return textBinding({ onPlace: placeText, onExit: exitTool, snap });
+        return textBinding({ onPlace: placeText, onExit: exitTool, snap, hover: hover?.pt ?? null, onHover });
       case "pick-symbol":
         return pickIndex ? pickSymbolBinding({ onPick: pickAt, onExit: exitTool }) : null;
       case "gap":
@@ -1522,6 +1527,7 @@ export function EditorPage() {
     fullBleed: isMobile,
     ...(selectedCourse && courseView && state.view !== "all-variations" ? { onLegClick: handleLegClick } : {}),
     tool: shownBinding,
+    placementLoupe,
     snap: snapIndex ? snap : null,
     draftObjects,
     draftFast,
@@ -1534,7 +1540,7 @@ export function EditorPage() {
     legDraft: shownLegDraft,
   }), [shownLegDraft, classLayout, courseChecks.markers, isMobile, fix, sheetPx, fieldMoveEnd, state.selectedControlId, state.phantom, contextActions, contextInfo, srrBadge, radioOn, suggestions, tc, courseControlIds, toolActive,
     courseView, selectedCourse, moveWarnings, moveEpoch, handleMapClick, handleLabelMoveEnd, handleSelect,
-    handleDismiss, handleLegClick, shownBinding, snapIndex, snap, draftObjects, draftFast, viewRequest, provisional, courseOverride, state.view]);
+    handleDismiss, handleLegClick, shownBinding, placementLoupe, snapIndex, snap, draftObjects, draftFast, viewRequest, provisional, courseOverride, state.view]);
 
   // Layout mode draws a root's sheet as one variant (F8): its path over the root's first alternatives.
   const layoutEditor = useMemo(
@@ -1652,6 +1658,9 @@ export function EditorPage() {
         if (label) dispatch({ type: "alternative", groupId: selectionGroup.id, label });
       } else if (plain && key === "H") {
         dispatch({ type: "toggle-hide-others" });
+      } else if (plain && key === "L") {
+        // F27: the placement loupe toggle (§6 key table, §10 "Loupe").
+        togglePlacementLoupe();
       } else if (plain && key === "V") {
         exitTool();
       } else if (plain && (key === "S" || key === "K" || key === "M")) {
@@ -1694,7 +1703,7 @@ export function EditorPage() {
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
   }, [descControlId, runUndo, runRedo, undoStack, state, handleDelete, deleteControls, deleteObject, selectedObject, focusedVertex, drafts, setDraft, updateObject, setChain, exitTool, finishArea,
-    stepSelection, armPlace, setTool, canGap, fitView, areaOpen, canTonerSaver, startArea, layoutKey, selectedLeg, focusedBend, legEditable, writeLeg, addCorridor, selectionGroup, redraw]);
+    stepSelection, armPlace, setTool, canGap, fitView, areaOpen, canTonerSaver, startArea, layoutKey, selectedLeg, focusedBend, legEditable, writeLeg, addCorridor, selectionGroup, redraw, togglePlacementLoupe]);
 
   // Layout deep links (docs/course-layout.md §4): `?mode=layout` with `sheet=<seq>` or `template=<seq>`.
   const layoutLinkDone = useRef(false);
@@ -1814,6 +1823,7 @@ export function EditorPage() {
           canUndo={canUndo} canRedo={canRedo} onUndo={runUndo} onRedo={runRedo}
           hideOthers={state.hideOthers} canHideOthers={state.selectedCourseId !== null} onToggleHideOthers={() => dispatch({ type: "toggle-hide-others" })}
           cutsEnabled={cutsEnabled} cutsBusy={setCuts.isPending || cutsQuery.isLoading} onToggleCuts={() => setCuts.mutate({ enabled: !cutsEnabled })}
+          placementLoupe={placementLoupe} onTogglePlacementLoupe={togglePlacementLoupe}
         />
       )}
       presence={<PresenceChips compact others={presence} selectedCourseId={state.selectedCourseId} />}
@@ -1853,6 +1863,8 @@ export function EditorPage() {
       cutsEnabled={cutsEnabled}
       cutsBusy={setCuts.isPending || cutsQuery.isLoading}
       onToggleCuts={() => setCuts.mutate({ enabled: !cutsEnabled })}
+      placementLoupe={placementLoupe}
+      onTogglePlacementLoupe={togglePlacementLoupe}
       presence={<PresenceChips others={presence} selectedCourseId={state.selectedCourseId} />}
       save={save}
       status={status}

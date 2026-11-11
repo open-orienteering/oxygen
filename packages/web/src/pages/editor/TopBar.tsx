@@ -2,7 +2,7 @@
  * The editor's top bar (docs/course-editor.md §2; 08 §5.2): course picker,
  * view picker (Course · All controls · Class, docs/course-layout.md §6),
  * mode switch (Course · Layout · Field), undo / redo, hide other controls,
- * auto cuts, Export ▾ (docs/course-layout.md §7), the map info (a map icon and
+ * auto cuts, the placement loupe toggle (F27, §10 "Loupe"), Export ▾ (docs/course-layout.md §7), the map info (a map icon and
  * its dialog, docs/course-editor.md §2; P6 moved it here from MapPanel's
  * footer), the save indicator and the
  * course-info popover (docs/course-editor.md §2, §3; P2 moved them here from the
@@ -14,7 +14,7 @@
 import { useTranslation } from "react-i18next";
 import { EditorHelp } from "../../components/EditorHelp";
 import { ToolbarButton } from "../../components/ToolbarButton";
-import { IconEyeOff, IconRedo, IconScissors, IconUndo } from "../../components/map-icons";
+import { IconEyeOff, IconLoupe, IconRedo, IconScissors, IconUndo } from "../../components/map-icons";
 import type { ReactNode } from "react";
 import type { EditorMode, EditorView } from "../../lib/editor/state";
 import type { ExportState } from "../../lib/editor/export-menu";
@@ -54,6 +54,9 @@ export interface TopBarProps {
   cutsEnabled: boolean;
   cutsBusy: boolean;
   onToggleCuts: () => void;
+  /** The placement loupe toggle (F27): lit when on; `L` toggles it too. */
+  placementLoupe: boolean;
+  onTogglePlacementLoupe: () => void;
   /** Who else has a course open (`PresenceChips`, D11). */
   presence?: ReactNode;
   /** The autosave state (§3): always in sight. */
@@ -163,6 +166,15 @@ export function TopBar(p: TopBarProps) {
         disabled={p.cutsBusy}
         active={p.cutsEnabled}
         onClick={p.onToggleCuts}
+      />
+      <ToolbarButton
+        testId="editor-placement-loupe"
+        iconOnly
+        icon={<IconLoupe />}
+        label={tc("editor.placementLoupe")}
+        title={tc("editor.placementLoupeTitle")}
+        active={p.placementLoupe}
+        onClick={p.onTogglePlacementLoupe}
       />
       <ExportMenu state={p.exportState} onError={p.onExportError} />
       <MapInfoButton map={p.map} />

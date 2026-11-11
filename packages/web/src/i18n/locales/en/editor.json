@@ -39,7 +39,7 @@
   "noDescription": "No description",
   "codes": "Codes",
   "alsoIn": "Also in",
-  "help": "V select, S / K / M place start, controls, finish (stays armed: Esc, V, Enter or right-click leaves), A areas, T text, G gaps on the selected circle or leg. Shift-click or Shift-drag selects several controls; Tab steps through the course, F fits it, double-click a leg to insert. H hides other controls, Esc steps back, Ctrl+Z / Ctrl+Shift+Z undo / redo.",
+  "help": "V select, S / K / M place start, controls, finish (stays armed: Esc, V, Enter or right-click leaves), A areas, T text, G gaps on the selected circle or leg. Shift-click or Shift-drag selects several controls; Tab steps through the course, F fits it, double-click a leg to insert. H hides other controls, L toggles the placement loupe, Esc steps back, Ctrl+Z / Ctrl+Shift+Z undo / redo.",
   "toolStart": "Start (S) — stays armed",
   "toolControl": "Control (K) — stays armed",
   "toolFinish": "Finish (M) — ends the chain",

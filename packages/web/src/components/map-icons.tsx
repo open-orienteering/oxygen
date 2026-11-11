@@ -143,6 +143,17 @@ export function IconEye({ className, title }: IconProps) {
 }
 
 /** Scissors — automatic circle slits / leg gaps. */
+/** A magnifier (the placement loupe toggle, F27): `IconZoomIn` without the plus. */
+export function IconLoupe({ className, title }: IconProps) {
+  return (
+    <svg {...base} className={className}>
+      {title ? <title>{title}</title> : null}
+      <circle cx="8.5" cy="8.5" r="5.25" />
+      <path d="M12.5 12.5 17 17" />
+    </svg>
+  );
+}
+
 export function IconScissors({ className, title }: IconProps) {
   return (
     <svg {...base} className={className}>

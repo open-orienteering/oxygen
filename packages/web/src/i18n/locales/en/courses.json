@@ -124,6 +124,8 @@
     "hideOtherControls": "Hide other controls",
     "toggleCuts": "Auto slits",
     "toggleCutsTitle": "Automatic circle slits and leg gaps over map features",
+    "placementLoupe": "Placement loupe",
+    "placementLoupeTitle": "Placement loupe: magnify the point a placing tool will drop (L)",
     "alsoIn": "Also in: {{names}}",
     "affects": "Affects: {{names}}",
     "actionAdd": "Add control",

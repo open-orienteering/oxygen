@@ -442,6 +442,8 @@ export function placeBinding(o: PlaceOptions): EditorToolBinding {
     cursor: "crosshair",
     shapes,
     onHover: o.onHover,
+    // F27: the point the click (or Place) would drop — the ghost's, snapped or a reused site's centre — for the placement loupe.
+    hoverPoint: gh?.at ?? null,
     onClick: o.onPlace,
     onContextMenu: () => o.onExit(),
     touch: o.touch ? { ...o.touch, onPlace: o.onPlace, onDone: o.onExit } : null,
@@ -532,8 +534,22 @@ export function areaBinding(o: AreaOptions): EditorToolBinding {
 
 // ─── T: map text ──────────────────────────────────────────
 
-export function textBinding(o: { onPlace: (pt: Pt) => void; onExit: () => void; snap: (pt: Pt) => Pt }): EditorToolBinding {
-  return { exclusive: true, cursor: "text", onClick: (p) => o.onPlace(o.snap(p.pt)), onContextMenu: () => o.onExit() };
+/** `hover`: the page's snapped hover (the point a click places, F27's placement loupe); `onHover` feeds it. */
+export function textBinding(o: {
+  onPlace: (pt: Pt) => void;
+  onExit: () => void;
+  snap: (pt: Pt) => Pt;
+  hover: Pt | null;
+  onHover: (p: ToolPointer | null) => void;
+}): EditorToolBinding {
+  return {
+    exclusive: true,
+    cursor: "text",
+    onHover: o.onHover,
+    hoverPoint: o.hover,
+    onClick: (p) => o.onPlace(o.snap(p.pt)),
+    onContextMenu: () => o.onExit(),
+  };
 }
 
 // ─── The filter region's eyedropper (§6.4) ────────────────
