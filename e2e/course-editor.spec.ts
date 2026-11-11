@@ -14,7 +14,7 @@ import {
   emptyPoint, ensureCoursesAndMap, ensureFixtureFromDesktop, freezeExternalPoll, geometryOf, inkAt, inkIn, labelOf, legBetween, legMidpoint, legPieces, nameIdOf, objectRow, plainMapAt,
   openEditor, pageToPaperOf, place, placeOneShot, pressInside, pressOnEdge, printed, probeTemplate, regularCodes, select, selectCompetition,
   selectedCode, selectedPosition, siteCuts, site, sitePoint, sites, toolShapes, toPage, toPaper, trpcCall, viewCentre, viewSettled, newCourse,
-  mapScale, nextFrames, statsRow, loupeCircleAt, paperToPageOf, sheetBoxes, type Frame, type Site,
+  mapScale, nextFrames, statsRow, loupeCircleAt, paperToPageOf, sheetBoxes, dragEndOnMap, turned, inkedAt, type Frame, type Site,
 } from "./helpers/editor";
 import { migrateLegacySheetObjects } from "./helpers/legacy-objects";
 import { touchDrag, touchEnd, touchMove, touchStart, touchTap } from "./helpers/touch";
@@ -2812,14 +2812,32 @@ test.describe("F11: description sheets (docs/course-print.md §6.4)", () => {
 test.describe("F3: legs — styles, bends, corridors (docs/course-editor.md §6.7)", () => {
   desktopOnly();
 
-  /** A new course of two regular controls clear of each other's legs; the leg a → b is the one under test. */
+  /**
+   * A new course of two regular controls clear of each other's legs; the leg a → b is the one under test. A b whose
+   * leg a → b has no point clear of the course's other legs is undone and another picked: with the start, a, b and
+   * the finish in one row of the fixture's controls, the leg b → finish runs back over a → b and a click on a → b
+   * selects the leg drawn on top (F21 flake: "Leg 72 → Mål 1" took the bend, the metres under test never moved).
+   */
   async function twoControlCourse(page: Page, prefix: string): Promise<{ name: string; a: Site; b: Site }> {
     await openEditor(page);
     const name = await newCourse(page, prefix);
     const a = await appendClear(page);
-    const b = await appendClear(page, [a]);
-    await expect(controlRows(page)).toHaveCount(2, { timeout: 15000 });
-    return { name, a: await site(page, a), b: await site(page, b) };
+    const tried = [a];
+    for (let attempt = 0; attempt < 6; attempt++) {
+      const b = await appendClear(page, tried);
+      await expect(controlRows(page)).toHaveCount(2, { timeout: 15000 });
+      const sa = await site(page, a), sb = await site(page, b);
+      await legMidpoint(page, name, sa.mm, sb.mm); // the leg a → b drawn (the mirror lags the write)
+      // Every leg of the course drawn: from the start, a → b and to the finish.
+      await expect.poll(async () => new Set((await legPieces(page, name)).map((l) => l.leg)).size, { timeout: 15000 }).toBeGreaterThanOrEqual(3);
+      if ((await legClickPoint(page, name, sa, sb)).legClear > 2) return { name, a: sa, b: sb };
+      tried.push(b);
+      const undone = waitForTrpc(page, "course.setStructure");
+      await page.getByTestId("editor-undo").click();
+      await undone;
+      await expect(controlRows(page)).toHaveCount(1, { timeout: 15000 });
+    }
+    throw new Error(`no control b whose leg from ${a} is clear of the course's other legs (tried ${tried.slice(1).join(", ")})`);
   }
 
   /**
@@ -2827,32 +2845,51 @@ test.describe("F3: legs — styles, bends, corridors (docs/course-editor.md §6.
    * F14) hits after the UI layer's off-course controls (§5), so a click at the plain midpoint can select a faded
    * control lying on the leg instead (F14 run: control 79 on the leg's middle).
    */
-  async function legClickPoint(page: Page, name: string, a: Site, b: Site): Promise<Pt> {
+  async function legClickPoint(page: Page, name: string, a: Site, b: Site): Promise<{ at: Pt; legClear: number }> {
     const mid = await legMidpoint(page, name, a.mm, b.mm);
     const marks = (await sites(page)).map((x) => x.mm);
-    const clearance = (q: Pt) => Math.min(...marks.map((m) => Math.hypot(q.x - m.x, q.y - m.y)));
+    const pieces = await legBetween(page, name, a.mm, b.mm);
+    const mine = new Set(pieces.map((l) => l.leg));
+    // The course's other legs: a click as near one of them as a → b may select it (the leg drawn on top wins).
+    const others = (await legPieces(page, name)).filter((l) => !mine.has(l.leg)).map((l) => l.points);
+    const seg = (p: Pt, u: Pt, v: Pt) => {
+      const dx = v.x - u.x, dy = v.y - u.y, l2 = dx * dx + dy * dy;
+      const t = l2 === 0 ? 0 : Math.max(0, Math.min(1, ((p.x - u.x) * dx + (p.y - u.y) * dy) / l2));
+      return Math.hypot(p.x - (u.x + t * dx), p.y - (u.y + t * dy));
+    };
+    const legClearance = (q: Pt) => Math.min(Infinity, ...others.flatMap((poly) => poly.slice(1).map((v, i) => seg(q, poly[i], v))));
+    // Sites in paper mm; another leg within 2 mm counts as a site at 0 (never pick a point it shares).
+    const clearance = (q: Pt) => Math.min(...marks.map((m) => Math.hypot(q.x - m.x, q.y - m.y)), legClearance(q) > 2 ? Infinity : 0);
+    // The middle half of the leg only: Add bend here puts the bend where the leg was clicked, and a smooth bend's
+    // handles are a sixth of the chord (F16), so a bend nearer an end than that has a handle reaching past the control
+    // and the leg's outline is no longer the straight three points (in-order run: a bend at 12 % of 86 → 61).
+    const ab2 = (b.mm.x - a.mm.x) ** 2 + (b.mm.y - a.mm.y) ** 2;
+    const along = (c: Pt) => ((c.x - a.mm.x) * (b.mm.x - a.mm.x) + (c.y - a.mm.y) * (b.mm.y - a.mm.y)) / ab2;
     let best = mid, bestD = clearance(mid);
-    for (const piece of await legBetween(page, name, a.mm, b.mm)) {
+    for (const piece of pieces) {
       piece.points.slice(1).forEach((q, i) => {
         const p0 = piece.points[i];
         for (let t = 0.05; t < 1; t += 0.05) {
           const c = { x: p0.x + (q.x - p0.x) * t, y: p0.y + (q.y - p0.y) * t };
+          if (along(c) < 0.25 || along(c) > 0.75) continue;
           const d = clearance(c);
           if (d > bestD) { best = c; bestD = d; }
         }
       });
     }
-    return best;
+    return { at: best, legClear: legClearance(best) };
   }
 
   /** Click the leg a → b where it is clearest of other sites until the Leg section shows (the hit index lags the mirror by a round trip). */
   async function selectLeg(page: Page, name: string, a: Site, b: Site): Promise<Pt> {
     await viewSettled(page);
-    const mid = await legClickPoint(page, name, a, b);
+    const mid = (await legClickPoint(page, name, a, b)).at;
     await expect(async () => {
       await dropSelection(page);
       await clickMap(page, await toPage(page, mid));
       await expect(page.getByTestId("editor-leg")).toBeVisible({ timeout: 3000 });
+      // The leg under test, not another one drawn over it.
+      await expect(page.getByTestId("editor-leg")).toContainText(`${a.code} → ${b.code}`, { timeout: 1000 });
     }).toPass({ timeout: 30000 });
     return mid;
   }
@@ -2903,15 +2940,17 @@ test.describe("F3: legs — styles, bends, corridors (docs/course-editor.md §6.
     await expect.poll(async () => (await toolShapes(page, "editor-bend-handle")).length, { timeout: 15000 }).toBe(1);
     await expect(page.getByTestId("editor-leg-bend")).toHaveCount(1);
 
-    // Drag it off the leg, perpendicular and upwards on screen (the action bar lays out below the phantom).
+    // Drag it off the leg, perpendicular and upwards on screen (the action bar lays out below the phantom) — or the
+    // nearest direction off the leg whose drag stays on the map (a leg along the viewer's top or the inspector's edge).
     const handle = (await toolShapes(page, "editor-bend-handle"))[0];
     const from = await toPage(page, handle);
     const pa = await toPage(page, a.mm), pb = await toPage(page, b.mm);
     const len = Math.hypot(pb.x - pa.x, pb.y - pa.y);
     let n = { x: -(pb.y - pa.y) / len, y: (pb.x - pa.x) / len };
     if (n.y > 0) n = { x: -n.x, y: -n.y };
+    const off = (v: Pt) => [v, turned(v, 30), turned(v, -30)];
     const moved = waitForTrpc(page, "course.setStructure");
-    await drag(page, from, { x: from.x + n.x * 60, y: from.y + n.y * 60 });
+    await drag(page, from, await dragEndOnMap(page, from, [...off(n), ...off({ x: -n.x, y: -n.y })], 60));
     await moved;
 
     // The handle and the bends list follow the write; the drawn leg has a vertex at the bend.
@@ -2988,8 +3027,13 @@ test.describe("F3: legs — styles, bends, corridors (docs/course-editor.md §6.
     const start = await gripAt();
     const handleAt = await toPage(page, (await toolShapes(page, "editor-bend-handle"))[0]);
     expect(Math.hypot(start.x - handleAt.x, start.y - handleAt.y), "the grip clear of the bend's handle").toBeGreaterThan(16);
+    // Perpendicular, upwards first; else the nearest direction off the leg whose drag stays on the map (a drag that
+    // leaves the viewer — under the inspector, above its top — is the viewer's mouseleave: a cancel, no write).
+    const off = (v: Pt) => [v, turned(v, 30), turned(v, -30)];
+    const across = [...off(n), ...off({ x: -n.x, y: -n.y })];
+    // Its end is where the Alt drag below presses: never on the action bar, which stops a press (past it if need be).
     const pulled = waitForTrpc(page, "course.setStructure");
-    await drag(page, start, { x: start.x + n.x * 60, y: start.y + n.y * 60 });
+    await drag(page, start, await dragEndOnMap(page, start, across, [60, 90, 120], { endOnBar: false }));
     await pulled;
     await expect.poll(async () => JSON.stringify((await storedBends(courseId))[0]?.[mine]), { timeout: 15000 }).not.toBe(JSON.stringify(bend[mine]));
     const curved = (await storedBends(courseId))[0];
@@ -2999,9 +3043,11 @@ test.describe("F3: legs — styles, bends, corridors (docs/course-editor.md §6.
 
     // Alt held on the same grip: only that handle moves, the pair broken.
     const again = await gripAt();
+    expect(await coveredBy(page, again), "the pulled grip on the map, clear of the action bar").toBeNull();
     const broken = waitForTrpc(page, "course.setStructure");
+    const againTo = await dragEndOnMap(page, again, across, 30);
     await page.keyboard.down("Alt");
-    await drag(page, again, { x: again.x + n.x * 30, y: again.y + n.y * 30 });
+    await drag(page, again, againTo);
     await page.keyboard.up("Alt");
     await broken;
     await expect.poll(async () => JSON.stringify((await storedBends(courseId))[0]?.[mine]), { timeout: 15000 }).not.toBe(JSON.stringify(curved[mine]));
@@ -3200,7 +3246,7 @@ test.describe("F3: legs — styles, bends, corridors (docs/course-editor.md §6.
       await dropSelection(page);
       await expect.poll(guides, { timeout: 15000 }).toBe(1);
       expect((await toolShapes(page, "editor-corridor-guide"))[0].data).toMatchObject({ course: name });
-      const mid = await legClickPoint(page, name, a, b);
+      const mid = (await legClickPoint(page, name, a, b)).at;
       await expect(async () => {
         await dropSelection(page);
         await clickMap(page, await toPage(page, mid));
@@ -3298,39 +3344,53 @@ test.describe("F3: legs — styles, bends, corridors (docs/course-editor.md §6.
     for (let d = halfMm + 0.8; d <= halfMm + 4.2; d += 0.2) bandOffsets.push(d);
     // The chord's band, both sides; the leg's line at the held apex; the band beyond the apex (its outer side, where
     // the apex is the nearest point of the leg).
-    const chordBand = clearOfSites(strip(p0, [...bandOffsets, ...bandOffsets.map((d) => -d)], 2));
-    expect(chordBand.length, "the chord's band clear of the sites").toBeGreaterThan(0);
-    // The apex at least 2h + 12 mm off the chord (the moved corridor and band clear the chord's band on both sides):
-    // the first such distance whose probes are clear of every site (the course's controls are picked at random). Held
-    // there, the mouse loupe (F24) covers part of the canvas 16 px above the cursor with the magnified map, so the held
-    // reads probe only what lies clear of it: the line at the apex whole, at least 20 of each band's probes — up the
-    // screen first; down when the loupe would cover the band beyond the apex (it lies above the cursor).
+    // Every band probe keeps only the points with map under them now, before any corridor: the fixture map has white
+    // paper beyond its mapped area (and the GL canvas nothing outside the viewer), where "white once the band is
+    // there" proves nothing (F21 flake: a leg near the map's top, its apex's band on the paper above the map).
+    const chordBand = await inkedAt(page, clearOfSites(strip(p0, [...bandOffsets, ...bandOffsets.map((d) => -d)], 2)), "map");
+    expect(chordBand.length, "the chord's band clear of the sites, on the map").toBeGreaterThanOrEqual(20);
+    // The apex at least 2h + 12 mm off the chord (the moved corridor and band clear the chord's band on both sides), on
+    // the perpendicular through the bend or slid a little along the chord (the handles stay along u, so the leg's
+    // tangent at the apex is u either way): the first candidate whose drag stays on the map and whose probes are clear
+    // of the sites (the course's controls are picked from what earlier tests left). Held there, the mouse loupe (F24)
+    // covers part of the canvas 16 px above the cursor with the magnified map, so the held reads probe only what lies
+    // clear of it: the line at the apex whole, at least 20 of each band's probes — up the screen first; down when the
+    // loupe would cover the band beyond the apex (it lies above the cursor).
     let p1: Pt | null = null;
     let apexLine: Pt[] = [], apexBand: Pt[] = [], chordBandHeld: Pt[] = [];
     const pageOf = await paperToPageOf(page);
-    for (const side of [1, -1]) {
+    const from0 = pageOf(p0);
+    search: for (const side of [1, -1]) {
       const nn = { x: n.x * side, y: n.y * side };
-      for (let D = 2 * halfMm + 12; D <= 2 * halfMm + 60 && !p1; D += 2) {
-        const at = { x: p0.x + nn.x * D, y: p0.y + nn.y * D };
-        const line = strip(at, [-0.1, 0, 0.1], 1);
-        const bandAt: Pt[] = [];
-        for (let t = -2; t <= 2 + 1e-9; t += 0.1) for (const d of bandOffsets) bandAt.push({ x: at.x + u.x * t + nn.x * d, y: at.y + u.y * t + nn.y * d });
-        const atPage = pageOf(at);
-        if (atPage.y < box.y + 20 || atPage.y > box.y + box.height - 20) continue;
-        const lc = await loupeCircleAt(page, atPage);
-        const clearOfLoupe = (pts: Pt[]) => pts.filter((q) => { const pq = pageOf(q); return Math.hypot(pq.x - lc.x, pq.y - lc.y) > lc.r + 3; });
-        const bandClear = clearOfLoupe(bandAt), chordClear = clearOfLoupe(chordBand);
-        if (clearOfSites(line).length === line.length && clearOfSites(bandAt).length === bandAt.length &&
-            clearOfLoupe(line).length === line.length && bandClear.length >= 20 && chordClear.length >= 20) {
+      for (const slide of [0, 3, -3, 6, -6]) {
+        for (let D = 2 * halfMm + 12; D <= 2 * halfMm + 60; D += 2) {
+          const at = { x: p0.x + u.x * slide + nn.x * D, y: p0.y + u.y * slide + nn.y * D };
+          const line = strip(at, [-0.1, 0, 0.1], 1);
+          const bandAt: Pt[] = [];
+          for (let t = -2; t <= 2 + 1e-9; t += 0.1) for (const d of bandOffsets) bandAt.push({ x: at.x + u.x * t + nn.x * d, y: at.y + u.y * t + nn.y * d });
+          const atPage = pageOf(at);
+          if (atPage.x < box.x + 20 || atPage.x > box.x + box.width - 20 || atPage.y < box.y + 20 || atPage.y > box.y + box.height - 20) continue;
+          if (clearOfSites(line).length !== line.length) continue;
+          const lc = await loupeCircleAt(page, atPage);
+          const clearOfLoupe = (pts: Pt[]) => pts.filter((q) => { const pq = pageOf(q); return Math.hypot(pq.x - lc.x, pq.y - lc.y) > lc.r + 3; });
+          const chordClear = clearOfLoupe(chordBand);
+          if (clearOfLoupe(line).length !== line.length || chordClear.length < 20) continue;
+          if (clearOfLoupe(clearOfSites(bandAt)).length < 20) continue;
+          // The drag from the bend to the apex never leaves the viewer (its mouseleave is a cancel).
+          const dir = { x: atPage.x - from0.x, y: atPage.y - from0.y }, dist = Math.hypot(dir.x, dir.y);
+          const end = await dragEndOnMap(page, from0, [{ x: dir.x / dist, y: dir.y / dist }], dist).catch(() => null);
+          if (!end) continue;
+          const bandClear = await inkedAt(page, clearOfLoupe(clearOfSites(bandAt)), "map");
+          if (bandClear.length < 20) continue;
           p1 = at;
           apexLine = line;
           apexBand = bandClear;
           chordBandHeld = chordClear;
+          break search;
         }
       }
-      if (p1) break;
     }
-    if (!p1) throw new Error("no apex clear of the sites and the held loupe");
+    if (!p1) throw new Error("no apex clear of the sites and the held loupe, with map under its band");
     // F25: a leg through the held apex is at least the two straight pieces long (a curve through p1 is no shorter).
     const throughApexM = Math.round(((Math.hypot(p1.x - a.mm.x, p1.y - a.mm.y) + Math.hypot(b.mm.x - p1.x, b.mm.y - p1.y)) * scale) / 1000);
     expect(throughApexM, "the apex lengthens the leg").toBeGreaterThan(chordM + 2);
@@ -3527,7 +3587,10 @@ test.describe("F3: legs — styles, bends, corridors (docs/course-editor.md §6.
     const len = Math.hypot(pb.x - pa.x, pb.y - pa.y);
     let nrm = { x: -(pb.y - pa.y) / len, y: (pb.x - pa.x) / len };
     if (nrm.y > 0) nrm = { x: -nrm.x, y: -nrm.y };
-    const toB = { x: fromB.x + nrm.x * 60, y: fromB.y + nrm.y * 60 };
+    // Off the leg and on the map, its end clear of the action bar: the press without a drag below is at the moved handle,
+    // and the bar stops a press (in-order run: a leg along the bottom row, the bar flipped above it over the handle).
+    const off = (v: Pt) => [v, turned(v, 30), turned(v, -30)];
+    const toB = await dragEndOnMap(page, fromB, [...off(nrm), ...off({ x: -nrm.x, y: -nrm.y })], [60, 90, 120], { endOnBar: false });
     await dragHold(page, fromB, toB);
     await mouseLoupeAt(toB);
     const cursorMm = await toPaper(page, toB);
@@ -3544,6 +3607,7 @@ test.describe("F3: legs — styles, bends, corridors (docs/course-editor.md §6.
     // A press without a drag (a click on the handle) shows none.
     await viewSettled(page);
     const at = await toPage(page, (await toolShapes(page, "editor-bend-handle"))[0]);
+    expect(await coveredBy(page, at), "the moved handle on the map, clear of the action bar").toBeNull();
     await page.mouse.move(at.x, at.y);
     await page.mouse.down();
     await page.mouse.move(at.x + 1, at.y);
@@ -3556,7 +3620,8 @@ test.describe("F3: legs — styles, bends, corridors (docs/course-editor.md §6.
     // the release writes nothing, the stored bend stays.
     const storedBend = (await storedBends(courseId))[0];
     const sentB = writes.length;
-    const toE = { x: at.x - nrm.x * 40, y: at.y - nrm.y * 40 };
+    // Back towards the leg (or any way off it that stays on the map: a drag that leaves the viewer is cancelled).
+    const toE = await dragEndOnMap(page, at, [...off({ x: -nrm.x, y: -nrm.y }), ...off(nrm)], 40);
     await dragHold(page, at, toE);
     await mouseLoupeAt(toE);
     await page.keyboard.press("Escape");
@@ -4346,7 +4411,9 @@ test.describe("F13: Bézier bends (docs/course-layer.md §10.1)", () => {
       const inView = q.x > viewer.x + 60 && q.x < viewer.x + viewer.width - 100 && q.y > viewer.y + 60 && q.y < viewer.y + viewer.height - 120;
       return inView && all.every((s) => Math.hypot(s.mm.x - p.x, s.mm.y - p.y) > 6) && ends.every((e) => segDist(p, e, a) > 3 && segDist(p, b, e) > 3);
     };
-    const codes = await regularCodes(page, 6);
+    // 16 candidates and five arch heights a side: 6 and four left no pair in some full-suite contexts (the controls
+    // clear of the legs drawn when the editor opens depend on the earlier tests' courses).
+    const codes = await regularCodes(page, 16);
     let pick: { a: Site; b: Site; apex: Pt; chordMid: Pt; u: Pt; len: number } | null = null;
     search: for (let i = 0; i < codes.length; i++) {
       for (let j = 0; j < codes.length; j++) {
@@ -4357,7 +4424,7 @@ test.describe("F13: Bézier bends (docs/course-layer.md §10.1)", () => {
         const u = { x: (sb.mm.x - sa.mm.x) / len, y: (sb.mm.y - sa.mm.y) / len };
         const chordMid = { x: (sa.mm.x + sb.mm.x) / 2, y: (sa.mm.y + sb.mm.y) / 2 };
         if (!(await clear(chordMid, sa.mm, sb.mm))) continue;
-        for (const k of [0.3, -0.3, 0.2, -0.2]) {
+        for (const k of [0.3, -0.3, 0.2, -0.2, 0.25, -0.25, 0.35, -0.35, 0.15, -0.15]) {
           const apex = { x: chordMid.x - u.y * k * len, y: chordMid.y + u.x * k * len };
           if ((await clear(apex, sa.mm, sb.mm)) && (await plainMapAt(page, apex, 0.5))) {
             pick = { a: sa, b: sb, apex, chordMid, u, len };

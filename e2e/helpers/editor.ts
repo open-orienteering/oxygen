@@ -353,9 +353,18 @@ export async function plainMapAt(page: Page, at: Pt, radiusMm: number): Promise<
  * while a gesture is held mid-drag without ending it (`canvasShot`).
  */
 export async function inkAt(page: Page, points: readonly Pt[], kind: InkKind = "dark", held = false): Promise<number> {
+  return (await inkedAt(page, points, kind, held)).length;
+}
+
+/**
+ * The points of `points` whose canvas pixel is of `kind`, one per distinct pixel (what `inkAt` counts). A probe
+ * that must turn white later (a corridor's band) keeps only the points that had map under them: the fixture map
+ * has white paper outside its mapped area, where a probe proves nothing (F21 flake).
+ */
+export async function inkedAt(page: Page, points: readonly Pt[], kind: InkKind = "dark", held = false): Promise<Pt[]> {
   const { png, pixelOf } = await canvasShot(page, held);
   const seen = new Set<number>();
-  let n = 0;
+  const out: Pt[] = [];
   for (const p of points) {
     const i = pixelOf(p);
     if (i === null) continue;
@@ -365,9 +374,9 @@ export async function inkAt(page: Page, points: readonly Pt[], kind: InkKind = "
     const purple = r - g > 50 && b - g > 50;
     // `map` leaves out any purple tint, the overprint's anti-aliased edges over white included.
     const tint = r - g > 12 && b - g > 12;
-    if (kind === "dark" ? Math.max(r, g, b) < 110 : kind === "purple" ? purple : !tint && Math.min(r, g, b) < 235) n++;
+    if (kind === "dark" ? Math.max(r, g, b) < 110 : kind === "purple" ? purple : !tint && Math.min(r, g, b) < 235) out.push(p);
   }
-  return n;
+  return out;
 }
 
 /**
@@ -612,6 +621,50 @@ export async function place(page: Page, at: Pt): Promise<Site> {
     return !!added;
   }, { timeout: 15000 }).toBe(true);
   return added!;
+}
+
+/**
+ * The end of a mouse drag of `dist` px from `from` that keeps the whole gesture on the map: along the first of `dirs`
+ * (page unit vectors, in order of preference) whose 8 steps (what `drag` moves through) stay inside the viewer,
+ * `margin` px from its edges, over nothing outside it. The viewer's mouseleave cancels a drag (MapViewer calls the
+ * tool's `onPointerUp(null)`), and the inspector, the tool rail and the top bar lie over the viewer's box but outside
+ * it (F16 flake: an Alt drag of a grip ended under the inspector and wrote nothing). The action bar is inside the
+ * viewer and stops only the press, so a drag may cross it and end on it: a direction whose end is clear of it is
+ * preferred, one ending on it taken only when no other stays on the map (a leg along the viewer's bottom, its bar
+ * flipped above it) — unless `endOnBar` is false, for a drag whose end the next gesture presses (then 10 px around
+ * the end clear too). `dists` in order of
+ * preference, each tried in every direction (a longer drag can clear the bar).
+ */
+export async function dragEndOnMap(
+  page: Page, from: Pt, dirs: readonly Pt[], dists: number | readonly number[], opts: { margin?: number; endOnBar?: boolean } = {},
+): Promise<Pt> {
+  const margin = opts.margin ?? 20;
+  const box = (await page.getByTestId("map-viewer").boundingBox())!;
+  for (const endOnBar of opts.endOnBar === false ? [false] : [false, true]) for (const dist of typeof dists === "number" ? [dists] : dists) {
+    for (const d of dirs) {
+      let ok = true;
+      for (let i = 1; i <= 8 && ok; i++) {
+        const p = { x: from.x + (d.x * dist * i) / 8, y: from.y + (d.y * dist * i) / 8 };
+        const inside = p.x > box.x + margin && p.x < box.x + box.width - margin && p.y > box.y + margin && p.y < box.y + box.height - margin;
+        const cover = inside ? await coveredBy(page, p) : "outside the viewer";
+        ok = cover === null || (cover === "editor-action-bar" && (i < 8 || endOnBar));
+      }
+      // An end the next gesture presses: clear by 10 px all round (the dragged point snaps, F24 run: a handle 2 px
+      // inside the bar's edge after an end 2 px outside it).
+      if (ok && opts.endOnBar === false) {
+        const end = { x: from.x + d.x * dist, y: from.y + d.y * dist };
+        for (const [dx, dy] of [[10, 0], [-10, 0], [0, 10], [0, -10]]) if ((await coveredBy(page, { x: end.x + dx, y: end.y + dy })) !== null) ok = false;
+      }
+      if (ok) return { x: from.x + d.x * dist, y: from.y + d.y * dist };
+    }
+  }
+  throw new Error(`no drag of ${String(dists)} px from (${Math.round(from.x)}, ${Math.round(from.y)}) stays on the map`);
+}
+
+/** Unit vector `v` turned by `deg` degrees (page px, y down). */
+export function turned(v: Pt, deg: number): Pt {
+  const a = (deg * Math.PI) / 180;
+  return { x: v.x * Math.cos(a) - v.y * Math.sin(a), y: v.x * Math.sin(a) + v.y * Math.cos(a) };
 }
 
 /** In `V`: a click on empty map, then *Add control* on the phantom; returns the new control's code (selected). */
