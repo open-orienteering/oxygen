@@ -14,7 +14,7 @@ import {
   emptyPoint, ensureCoursesAndMap, ensureFixtureFromDesktop, freezeExternalPoll, geometryOf, inkAt, inkIn, labelOf, legBetween, legMidpoint, legPieces, nameIdOf, objectRow, plainMapAt,
   openEditor, pageToPaperOf, place, placeOneShot, pressInside, pressOnEdge, printed, probeTemplate, regularCodes, select, selectCompetition,
   selectedCode, selectedPosition, siteCuts, site, sitePoint, sites, toolShapes, toPage, toPaper, trpcCall, viewCentre, viewSettled, newCourse,
-  mapScale, nextFrames, statsRow, type Frame, type Site,
+  mapScale, nextFrames, statsRow, loupeCircleAt, paperToPageOf, type Frame, type Site,
 } from "./helpers/editor";
 import { migrateLegacySheetObjects } from "./helpers/legacy-objects";
 import { touchDrag, touchEnd, touchMove, touchStart, touchTap } from "./helpers/touch";
@@ -3301,20 +3301,36 @@ test.describe("F3: legs — styles, bends, corridors (docs/course-editor.md §6.
     const chordBand = clearOfSites(strip(p0, [...bandOffsets, ...bandOffsets.map((d) => -d)], 2));
     expect(chordBand.length, "the chord's band clear of the sites").toBeGreaterThan(0);
     // The apex at least 2h + 12 mm off the chord (the moved corridor and band clear the chord's band on both sides):
-    // the first such distance whose probes are clear of every site (the course's controls are picked at random).
+    // the first such distance whose probes are clear of every site (the course's controls are picked at random). Held
+    // there, the mouse loupe (F24) covers part of the canvas 16 px above the cursor with the magnified map, so the held
+    // reads probe only what lies clear of it: the line at the apex whole, at least 20 of each band's probes — up the
+    // screen first; down when the loupe would cover the band beyond the apex (it lies above the cursor).
     let p1: Pt | null = null;
-    let apexLine: Pt[] = [], apexBand: Pt[] = [];
-    for (let D = 2 * halfMm + 12; D <= 2 * halfMm + 40 && !p1; D += 2) {
-      const at = { x: p0.x + n.x * D, y: p0.y + n.y * D };
-      const line = strip(at, [-0.1, 0, 0.1], 1), bandAt = strip(at, bandOffsets, 2);
-      const onMap = (await toPage(page, at)).y > box.y + 20;
-      if (onMap && clearOfSites(line).length === line.length && clearOfSites(bandAt).length === bandAt.length) {
-        p1 = at;
-        apexLine = line;
-        apexBand = bandAt;
+    let apexLine: Pt[] = [], apexBand: Pt[] = [], chordBandHeld: Pt[] = [];
+    const pageOf = await paperToPageOf(page);
+    for (const side of [1, -1]) {
+      const nn = { x: n.x * side, y: n.y * side };
+      for (let D = 2 * halfMm + 12; D <= 2 * halfMm + 60 && !p1; D += 2) {
+        const at = { x: p0.x + nn.x * D, y: p0.y + nn.y * D };
+        const line = strip(at, [-0.1, 0, 0.1], 1);
+        const bandAt: Pt[] = [];
+        for (let t = -2; t <= 2 + 1e-9; t += 0.1) for (const d of bandOffsets) bandAt.push({ x: at.x + u.x * t + nn.x * d, y: at.y + u.y * t + nn.y * d });
+        const atPage = pageOf(at);
+        if (atPage.y < box.y + 20 || atPage.y > box.y + box.height - 20) continue;
+        const lc = await loupeCircleAt(page, atPage);
+        const clearOfLoupe = (pts: Pt[]) => pts.filter((q) => { const pq = pageOf(q); return Math.hypot(pq.x - lc.x, pq.y - lc.y) > lc.r + 3; });
+        const bandClear = clearOfLoupe(bandAt), chordClear = clearOfLoupe(chordBand);
+        if (clearOfSites(line).length === line.length && clearOfSites(bandAt).length === bandAt.length &&
+            clearOfLoupe(line).length === line.length && bandClear.length >= 20 && chordClear.length >= 20) {
+          p1 = at;
+          apexLine = line;
+          apexBand = bandClear;
+          chordBandHeld = chordClear;
+        }
       }
+      if (p1) break;
     }
-    if (!p1) throw new Error("no apex clear of the sites above the leg");
+    if (!p1) throw new Error("no apex clear of the sites and the held loupe");
     // F25: a leg through the held apex is at least the two straight pieces long (a curve through p1 is no shorter).
     const throughApexM = Math.round(((Math.hypot(p1.x - a.mm.x, p1.y - a.mm.y) + Math.hypot(b.mm.x - p1.x, b.mm.y - p1.y)) * scale) / 1000);
     expect(throughApexM, "the apex lengthens the leg").toBeGreaterThan(chordM + 2);
@@ -3364,7 +3380,7 @@ test.describe("F3: legs — styles, bends, corridors (docs/course-editor.md §6.
     await dragHold(page, await toPage(page, p0), await toPage(page, p1));
     await expect.poll(heldAt, { timeout: 5000 }).toBeLessThan(0.5);
     await expect.poll(() => inkAt(page, apexBand, "map", true), { timeout: 30000 }).toBe(0);
-    await expect.poll(() => inkAt(page, chordBand, "map", true), { timeout: 30000 }).toBeGreaterThan(0);
+    await expect.poll(() => inkAt(page, chordBandHeld, "map", true), { timeout: 30000 }).toBeGreaterThan(0);
     expect(await heldAt(), "still held").toBeLessThan(0.5);
     expect(writes.length, "no write while the handle is held").toBe(sent);
     released = waitForTrpc(page, "course.setStructure");
@@ -3399,13 +3415,19 @@ test.describe("F3: legs — styles, bends, corridors (docs/course-editor.md §6.
 
   // F24 (§10 "Loupe"; user answer 2026-11-10): the D9b loupe on mouse drags — 120 px at ×2.5 about the dragged point,
   // 16 px above the cursor (below it at the map's top), no stem; gone on release and on the viewer's mouseleave cancel.
-  test("F24: the loupe on mouse drags — a control, a number, a bend; gone on release and cancel; none for a click", async ({ page }) => {
+  test("F24: the loupe on mouse drags — a control, a number, a bend; gone on release, cancel and Escape (which writes nothing); none for a click", async ({ page }) => {
     const { name, a, b } = await twoControlCourse(page, "F24 loupe");
     const courseId = await page.getByTestId("editor-course-picker").inputValue();
     const loupe = page.getByTestId("editor-loupe");
     const writes: string[] = [];
-    // Every control or course write this page sends (a move is `control.update`).
-    page.on("request", (r) => { if (r.method() === "POST" && /\/trpc\/[^?]*\b(control|course)\./.test(r.url())) writes.push(r.url()); });
+    // Every control or course write this page sends (a move is `control.update`); not the presence heartbeat (D11).
+    page.on("request", (r) => { if (r.method() === "POST" && /\/trpc\/[^?]*\b(control|course)\.(?!presence)/.test(r.url())) writes.push(r.url()); });
+    /** Escape's §3 cascade drops the course when nothing else is selected: pick it again. */
+    const repick = async () => {
+      if ((await page.getByTestId("editor-course-picker").inputValue()) !== courseId) await page.getByTestId("editor-course-picker").selectOption(courseId);
+      await expect(controlRows(page)).toHaveCount(2, { timeout: 15000 });
+      await viewSettled(page);
+    };
     /** The loupe is the mouse's, 120 px, its bottom 16 px above `cursor` (its top 16 px below at the map's top), centred over it within the box. */
     const mouseLoupeAt = async (cursor: Pt) => {
       await expect(loupe).toBeVisible();
@@ -3451,13 +3473,41 @@ test.describe("F3: legs — styles, bends, corridors (docs/course-editor.md §6.
     expect(writes.length, "a cancelled control drag writes nothing").toBe(sent);
     expect((await site(page, a.code)).mm).toEqual(a.mm);
 
-    // A number: held, the loupe; the release writes the offset and takes the loupe away.
+    // Escape cancels a control's mouse drag (§3; user 2026-11-11): the loupe goes while the button is still down, the
+    // release writes nothing (no move, no structure write), the control stays where it is stored.
     await viewSettled(page);
+    const toA2 = await dragTarget(page, await toPage(page, a.mm), [await toPage(page, b.mm)]);
+    await dragHold(page, await toPage(page, a.mm), toA2);
+    await mouseLoupeAt(toA2);
+    await page.keyboard.press("Escape");
+    await expect(loupe).toHaveCount(0);
+    await page.mouse.up();
+    await page.waitForTimeout(1000);
+    expect(writes.slice(sent), "Escape: a control drag writes nothing").toEqual([]);
+    expect((await site(page, a.code)).mm).toEqual(a.mm);
+    await repick();
+
+    // A number: held, the loupe; the release writes the offset and takes the loupe away.
     await expect.poll(async () => (await labelOf(page, b.code)) !== null, { timeout: 15000 }).toBe(true);
     const fromN = await toPage(page, (await labelOf(page, b.code))!);
     const toN = { x: fromN.x + (fromN.x < vb.x + vb.width / 2 ? 48 : -48), y: fromN.y + (fromN.y < vb.y + vb.height / 2 ? 24 : -24) };
+    const labelBefore = (await labelOf(page, b.code))!;
+    // Escape cancels it: no loupe while held, no write on release, the number where it was.
     await dragHold(page, fromN, toN);
     await mouseLoupeAt(toN);
+    await page.keyboard.press("Escape");
+    await expect(loupe).toHaveCount(0);
+    await page.mouse.up();
+    await page.waitForTimeout(1000);
+    expect(writes.slice(sent), "Escape: a number drag writes nothing").toEqual([]);
+    await repick();
+    const labelAfter = (await labelOf(page, b.code))!;
+    expect(Math.hypot(labelAfter.x - labelBefore.x, labelAfter.y - labelBefore.y), "the number where it was").toBeLessThan(0.01);
+    // Held again and released: the offset written.
+    const fromN2 = await toPage(page, labelAfter);
+    const toN2 = { x: fromN2.x + toN.x - fromN.x, y: fromN2.y + toN.y - fromN.y };
+    await dragHold(page, fromN2, toN2);
+    await mouseLoupeAt(toN2);
     const offset = waitForTrpc(page, "course.setControlLabelOffset");
     await page.mouse.up();
     await expect(loupe).toHaveCount(0);
@@ -3501,6 +3551,20 @@ test.describe("F3: legs — styles, bends, corridors (docs/course-editor.md §6.
     await expect(loupe).toHaveCount(0);
     await page.mouse.up();
     await expect(loupe).toHaveCount(0);
+
+    // Escape cancels a bend drag too (F21's rule, now the viewer's for every mouse drag): the loupe goes while held,
+    // the release writes nothing, the stored bend stays.
+    const storedBend = (await storedBends(courseId))[0];
+    const sentB = writes.length;
+    const toE = { x: at.x - nrm.x * 40, y: at.y - nrm.y * 40 };
+    await dragHold(page, at, toE);
+    await mouseLoupeAt(toE);
+    await page.keyboard.press("Escape");
+    await expect(loupe).toHaveCount(0);
+    await page.mouse.up();
+    await page.waitForTimeout(1000);
+    expect(writes.slice(sentB), "Escape: a bend drag writes nothing").toEqual([]);
+    expect(Math.hypot((await storedBends(courseId))[0].x - storedBend.x, (await storedBends(courseId))[0].y - storedBend.y)).toBeLessThan(0.01);
   });
 });
 

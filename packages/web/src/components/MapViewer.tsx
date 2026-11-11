@@ -72,6 +72,7 @@ import { outlinePoints, vertexRule } from "../lib/editor/geometry-edit";
 import type { CourseInfo } from "../map-gl/engine";
 import { editorHitAt, HIT_TOLERANCE_PX, uiLegsOf, type EditorTarget } from "../lib/editor/hit";
 import { showSelectionRing } from "../lib/editor/state";
+import { escapeCancels } from "../lib/editor/mouse-drag";
 import { COARSE_HIT_TOLERANCE_PX, HANDLE_LIFT_PX, IDLE as SITE_TOUCH_IDLE, LONG_PRESS_MS, LOUPE_DIAMETER_PX, LOUPE_SCALE, liftedPoint, loupePlacement, siteTouch, type SiteTouch, type SiteTouchEvent } from "../lib/editor/touch";
 
 /** Persisted compass state: "1"/absent = rotation locked (north up). */
@@ -1950,6 +1951,32 @@ export function MapViewer({
     const timer = window.setTimeout(() => setShowTwoFingerHint(false), 2500);
     return () => window.clearTimeout(timer);
   }, [showTwoFingerHint]);
+
+  // Escape cancels a mouse drag in flight (F24, §3; user 2026-11-11): the tool's gesture, a control's or a number's —
+  // nothing written, the loupe gone — before the page's own Escape cascade, which then runs as before (the later
+  // mouseup finds no drag). One `window` listener in the capture phase, registered once and reading the latest handler
+  // from a ref: the page's listener commits a render between the two (a discrete update), and a listener re-registered
+  // by that render's effect would be skipped for this very event.
+  const escapeDragRef = useRef<() => void>(() => {});
+  useEffect(() => {
+    escapeDragRef.current = () => {
+      const which = escapeCancels({ tool: !!toolDragRef.current, control: editorDragRef.current, number: editorLabelDragRef.current });
+      if (which === "tool") {
+        toolDragRef.current = null;
+        isPanningRef.current = false;
+        mouseDownPosRef.current = null;
+        setToolDragPos(null);
+        setDragCursor(null);
+        editorToolRef.current?.onPointerUp?.(null);
+      } else if (which === "control") finishEditorDrag(0, 0, true);
+      else if (which === "number") finishEditorLabelDrag(0, 0, true);
+    };
+  }, [finishEditorDrag, finishEditorLabelDrag]);
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => { if (e.key === "Escape") escapeDragRef.current(); };
+    window.addEventListener("keydown", onKey, true);
+    return () => window.removeEventListener("keydown", onKey, true);
+  }, []);
 
   // Escape / Backspace to cancel / undo measure
   useEffect(() => {

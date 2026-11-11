@@ -39,6 +39,29 @@ export async function toPage(page: Page, mm: Pt): Promise<Pt> {
   return { x: v.box.x + v.box.width / 2 + ix * Math.cos(rot) - iy * Math.sin(rot), y: v.box.y + v.box.height / 2 + ix * Math.sin(rot) + iy * Math.cos(rot) };
 }
 
+/** `toPage` for many points at one view: paper mm → page px, synchronously (the view read once). */
+export async function paperToPageOf(page: Page): Promise<(mm: Pt) => Pt> {
+  const v = await paperView(page);
+  const rot = (v.rotDeg * Math.PI) / 180;
+  return (mm: Pt) => {
+    const ix = (mm.x * 1000 - v.centreX) * v.pxPerUm, iy = -(mm.y * 1000 - v.centreY) * v.pxPerUm;
+    return { x: v.box.x + v.box.width / 2 + ix * Math.cos(rot) - iy * Math.sin(rot), y: v.box.y + v.box.height / 2 + ix * Math.sin(rot) + iy * Math.cos(rot) };
+  };
+}
+
+/**
+ * Where a mouse drag held at `cursor` (page px) puts the loupe (docs/course-editor.md §10 "Loupe", F24): a 120 px
+ * circle 16 px above the cursor, 16 px below it at the map's top, 4 px inside the viewer sideways. The GL canvas draws
+ * the magnified map there, so a held canvas read (`inkAt(…, true)`) must probe outside it.
+ */
+export async function loupeCircleAt(page: Page, cursor: Pt): Promise<{ x: number; y: number; r: number }> {
+  const vb = (await page.getByTestId("map-viewer").boundingBox())!;
+  const r = 60;
+  const x = Math.min(Math.max(cursor.x, vb.x + r + 4), vb.x + vb.width - r - 4);
+  const above = cursor.y - 16 - r;
+  return { x, y: above - r < vb.y ? cursor.y + 16 + r : above, r };
+}
+
 /** Page point → paper mm (the inverse of `toPage`). */
 export async function toPaper(page: Page, p: Pt): Promise<Pt> {
   const v = await paperView(page);
