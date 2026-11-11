@@ -9,7 +9,8 @@
  * - a second finger cancels whatever the first one started (the map pinches).
  *
  * A touch-dragged control is drawn `HANDLE_LIFT_PX` above the finger and
- * dropped where it is drawn; the loupe shows it magnified above that.
+ * dropped where it is drawn; the loupe shows it magnified above that (and,
+ * F24, above the cursor during a mouse drag).
  */
 
 export const LONG_PRESS_MS = 500;
@@ -71,14 +72,19 @@ function fire(s: Extract<SiteTouch, { kind: "pending" }>): { state: SiteTouch; e
 export const liftedPoint = (x: number, y: number): { x: number; y: number } => ({ x, y: y - HANDLE_LIFT_PX });
 
 /**
- * The loupe's centre in the map box's CSS px for a finger at `finger` (box-relative): above the
- * handle, so the 1× control stays visible; below the finger when that would leave the box at the
- * top; kept inside the box sideways.
+ * The loupe's centre in the map box's CSS px for a pointer at `at` (box-relative): `LOUPE_GAP_PX`
+ * above the dragged point, which is `liftPx` above the pointer (a finger's handle, `HANDLE_LIFT_PX`;
+ * 0 for a mouse drag, F24), so the 1× control stays visible; below the pointer when that would leave
+ * the box at the top; kept inside the box sideways.
  */
-export function loupePlacement(finger: { x: number; y: number }, box: { width: number; height: number }): { x: number; y: number } {
+export function loupePlacement(
+  at: { x: number; y: number },
+  box: { width: number; height: number },
+  liftPx: number = HANDLE_LIFT_PX,
+): { x: number; y: number } {
   const r = LOUPE_DIAMETER_PX / 2;
-  const above = finger.y - HANDLE_LIFT_PX - LOUPE_GAP_PX - r;
-  const y = above - r < 0 ? finger.y + LOUPE_GAP_PX + r : above;
-  const x = Math.min(Math.max(finger.x, r + LOUPE_INSET_PX), box.width - r - LOUPE_INSET_PX);
+  const above = at.y - liftPx - LOUPE_GAP_PX - r;
+  const y = above - r < 0 ? at.y + LOUPE_GAP_PX + r : above;
+  const x = Math.min(Math.max(at.x, r + LOUPE_INSET_PX), box.width - r - LOUPE_INSET_PX);
   return { x, y };
 }

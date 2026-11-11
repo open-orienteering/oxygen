@@ -72,7 +72,8 @@ import { outlinePoints, vertexRule } from "../lib/editor/geometry-edit";
 import type { CourseInfo } from "../map-gl/engine";
 import { editorHitAt, HIT_TOLERANCE_PX, uiLegsOf, type EditorTarget } from "../lib/editor/hit";
 import { showSelectionRing } from "../lib/editor/state";
-import { COARSE_HIT_TOLERANCE_PX, IDLE as SITE_TOUCH_IDLE, LONG_PRESS_MS, LOUPE_DIAMETER_PX, LOUPE_SCALE, liftedPoint, loupePlacement, siteTouch, type SiteTouch, type SiteTouchEvent } from "../lib/editor/touch";
+import { escapeCancels } from "../lib/editor/mouse-drag";
+import { COARSE_HIT_TOLERANCE_PX, HANDLE_LIFT_PX, IDLE as SITE_TOUCH_IDLE, LONG_PRESS_MS, LOUPE_DIAMETER_PX, LOUPE_SCALE, liftedPoint, loupePlacement, siteTouch, type SiteTouch, type SiteTouchEvent } from "../lib/editor/touch";
 
 /** Persisted compass state: "1"/absent = rotation locked (north up). */
 const ROTATION_LOCK_STORAGE_KEY = "oxygen.map.rotationLock";
@@ -654,6 +655,13 @@ export function MapViewer({
   const toolPinchRef = useRef<{ dist0: number } | null>(null);
   const longPressTimerRef = useRef<number | null>(null);
   const [touchFinger, setTouchFinger] = useState<Pt | null>(null);
+  /** The cursor under a mouse drag that places a point (container px, F24): the loupe hangs 16 px above it (§10 "Loupe"). */
+  const [dragCursor, setDragCursor] = useState<Pt | null>(null);
+  /** The cursor in container px, for `dragCursor`. */
+  const cursorInContainer = useCallback((clientX: number, clientY: number): Pt | null => {
+    const rect = containerRef.current?.getBoundingClientRect();
+    return rect ? { x: clientX - rect.left, y: clientY - rect.top } : null;
+  }, []);
   // Moves already sent via onMoveEnd but not yet reflected in the
   // `controls` prop (mutation + refetch in flight). Rendering `to`
   // prevents the control snapping back to its stale position. An entry
@@ -1251,6 +1259,7 @@ export function MapViewer({
     isPanningRef.current = false;
     mouseDownPosRef.current = null;
     setEditorDragTouch(false);
+    setDragCursor(null);
     if (cancelled) {
       setEditorDragPos(null);
       return;
@@ -1284,6 +1293,7 @@ export function MapViewer({
     editorLabelDragRef.current = null;
     isPanningRef.current = false;
     mouseDownPosRef.current = null;
+    setDragCursor(null);
     if (cancelled) {
       setEditorLabelDragPos(null);
       return;
@@ -1334,13 +1344,20 @@ export function MapViewer({
         drag.moved = true;
         const raw = screenToMapMm(e.clientX, e.clientY);
         const pt = raw && editor.snap ? editor.snap(raw) : raw;
-        if (pt) setEditorDragPos({ id: drag.id, x: pt.x, y: pt.y });
+        if (pt) {
+          setEditorDragPos({ id: drag.id, x: pt.x, y: pt.y });
+          if (!drag.touch) setDragCursor(cursorInContainer(e.clientX, e.clientY));
+        }
       }
       return;
     }
     if (editor && toolDragRef.current) {
       const pt = screenToMapMm(e.clientX, e.clientY);
-      if (pt) editorToolRef.current?.onPointerDrag?.(pt, { shift: e.shiftKey, alt: e.altKey });
+      if (!pt) return;
+      // The point the drag placed (F23): the loupe magnifies it above the cursor (F24); none for a gesture that places none.
+      const placed = editorToolRef.current?.onPointerDrag?.(pt, { shift: e.shiftKey, alt: e.altKey });
+      setToolDragPos(placed ?? null);
+      setDragCursor(placed ? cursorInContainer(e.clientX, e.clientY) : null);
       return;
     }
     if (editor?.tool?.onHover && !isPanningRef.current && e.buttons === 0) {
@@ -1354,7 +1371,10 @@ export function MapViewer({
       if (labelDrag.moved || dx + dy > 3) {
         labelDrag.moved = true;
         const pt = screenToMapMm(e.clientX, e.clientY);
-        if (pt) setEditorLabelDragPos({ id: labelDrag.id, x: pt.x, y: pt.y });
+        if (pt) {
+          setEditorLabelDragPos({ id: labelDrag.id, x: pt.x, y: pt.y });
+          if (!labelDrag.touch) setDragCursor(cursorInContainer(e.clientX, e.clientY));
+        }
       }
       return;
     }
@@ -1377,13 +1397,15 @@ export function MapViewer({
       const pt = screenToMapMm(e.clientX, e.clientY);
       if (pt) setMeasureCursor(pt);
     }
-  }, [measuring, viewport, rotRad, screenToMapMm, editor, breakLocateFollow]);
+  }, [measuring, viewport, rotRad, screenToMapMm, editor, breakLocateFollow, cursorInContainer]);
 
   const handleMouseUp = useCallback((e: React.MouseEvent) => {
     if (editor && toolDragRef.current) {
       toolDragRef.current = null;
       isPanningRef.current = false;
       mouseDownPosRef.current = null;
+      setToolDragPos(null);
+      setDragCursor(null);
       editorToolRef.current?.onPointerUp?.(e.type === "mouseleave" ? null : screenToMapMm(e.clientX, e.clientY));
       return;
     }
@@ -1929,6 +1951,32 @@ export function MapViewer({
     const timer = window.setTimeout(() => setShowTwoFingerHint(false), 2500);
     return () => window.clearTimeout(timer);
   }, [showTwoFingerHint]);
+
+  // Escape cancels a mouse drag in flight (F24, §3; user 2026-11-11): the tool's gesture, a control's or a number's —
+  // nothing written, the loupe gone — before the page's own Escape cascade, which then runs as before (the later
+  // mouseup finds no drag). One `window` listener in the capture phase, registered once and reading the latest handler
+  // from a ref: the page's listener commits a render between the two (a discrete update), and a listener re-registered
+  // by that render's effect would be skipped for this very event.
+  const escapeDragRef = useRef<() => void>(() => {});
+  useEffect(() => {
+    escapeDragRef.current = () => {
+      const which = escapeCancels({ tool: !!toolDragRef.current, control: editorDragRef.current, number: editorLabelDragRef.current });
+      if (which === "tool") {
+        toolDragRef.current = null;
+        isPanningRef.current = false;
+        mouseDownPosRef.current = null;
+        setToolDragPos(null);
+        setDragCursor(null);
+        editorToolRef.current?.onPointerUp?.(null);
+      } else if (which === "control") finishEditorDrag(0, 0, true);
+      else if (which === "number") finishEditorLabelDrag(0, 0, true);
+    };
+  }, [finishEditorDrag, finishEditorLabelDrag]);
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => { if (e.key === "Escape") escapeDragRef.current(); };
+    window.addEventListener("keydown", onKey, true);
+    return () => window.removeEventListener("keydown", onKey, true);
+  }, []);
 
   // Escape / Backspace to cancel / undo measure
   useEffect(() => {
@@ -2552,12 +2600,16 @@ export function MapViewer({
   }
 
   // The lifted touch drag's stem (§10): from the finger to the control (or the tool's bend or grip, F23) drawn above it; on the GL
-  // canvas the loupe above that (§10 "Loupe"): the layer draws the magnified map into the circle,
-  // `editor-loupe` is its ring and the crosshair at the drop point.
+  // canvas the loupe (§10 "Loupe"): the layer draws the magnified map into the circle, `editor-loupe` is its ring and the
+  // crosshair at the drop point. A touch drag hangs it above the lifted handle; a mouse drag (F24) of a control, a number or
+  // a tool's placed point (a bend, a grip, an object's vertex or grip) 16 px above the cursor, with no stem.
   let touchHandle: React.ReactNode = null;
   let glLoupe: VectorLoupe | null = null;
   // The lifted point: a control's, or the one a tool's touch drag placed (F23: a bend, a grip).
   const liftedDrag = editorDragPos && editorDragTouch ? editorDragPos : toolDragPos;
+  // The pointer the loupe hangs off and the point it magnifies: the finger and the lifted point, or the cursor and the placed one.
+  const loupeAnchor = touchFinger && liftedDrag ? touchFinger : dragCursor;
+  const loupeAt = touchFinger && liftedDrag ? liftedDrag : dragCursor ? (editorDragPos ?? editorLabelDragPos ?? toolDragPos) : null;
   if (touchFinger && liftedDrag) {
     const inner = mapMmToScreen(liftedDrag.x, liftedDrag.y);
     if (inner) {
@@ -2568,29 +2620,31 @@ export function MapViewer({
           <circle cx={touchFinger.x} cy={touchFinger.y} r={12} fill="rgba(124, 58, 237, 0.18)" stroke="#7c3aed" strokeWidth={1.5} />
         </svg>
       );
-      if (glViewRect) {
-        const c = loupePlacement(touchFinger, { width: containerSize.w, height: containerSize.h });
-        const r = LOUPE_DIAMETER_PX / 2;
-        glLoupe = { xUm: liftedDrag.x * 1000, yUm: liftedDrag.y * 1000, cx: c.x, cy: c.y, diameterPx: LOUPE_DIAMETER_PX, scale: LOUPE_SCALE };
-        touchHandle = (
-          <>
-            {touchHandle}
-            <div
-              data-testid="editor-loupe"
-              data-scale={LOUPE_SCALE}
-              aria-hidden
-              className="absolute pointer-events-none rounded-full border-2 border-slate-700 shadow-lg"
-              style={{ left: c.x - r, top: c.y - r, width: 2 * r, height: 2 * r, zIndex: 9 }}
-            >
-              <svg className="absolute inset-0 w-full h-full" viewBox={`0 0 ${2 * r} ${2 * r}`}>
-                <line x1={r - 14} y1={r} x2={r + 14} y2={r} stroke="#0f172a" strokeWidth={1.5} />
-                <line x1={r} y1={r - 14} x2={r} y2={r + 14} stroke="#0f172a" strokeWidth={1.5} />
-              </svg>
-            </div>
-          </>
-        );
-      }
     }
+  }
+  if (loupeAnchor && loupeAt && glViewRect) {
+    const touch = loupeAnchor === touchFinger;
+    const c = loupePlacement(loupeAnchor, { width: containerSize.w, height: containerSize.h }, touch ? HANDLE_LIFT_PX : 0);
+    const r = LOUPE_DIAMETER_PX / 2;
+    glLoupe = { xUm: loupeAt.x * 1000, yUm: loupeAt.y * 1000, cx: c.x, cy: c.y, diameterPx: LOUPE_DIAMETER_PX, scale: LOUPE_SCALE };
+    touchHandle = (
+      <>
+        {touchHandle}
+        <div
+          data-testid="editor-loupe"
+          data-scale={LOUPE_SCALE}
+          data-pointer={touch ? "touch" : "mouse"}
+          aria-hidden
+          className="absolute pointer-events-none rounded-full border-2 border-slate-700 shadow-lg"
+          style={{ left: c.x - r, top: c.y - r, width: 2 * r, height: 2 * r, zIndex: 9 }}
+        >
+          <svg className="absolute inset-0 w-full h-full" viewBox={`0 0 ${2 * r} ${2 * r}`}>
+            <line x1={r - 14} y1={r} x2={r + 14} y2={r} stroke="#0f172a" strokeWidth={1.5} />
+            <line x1={r} y1={r - 14} x2={r} y2={r + 14} stroke="#0f172a" strokeWidth={1.5} />
+          </svg>
+        </div>
+      </>
+    );
   }
 
   // Drag warning chip — "moving this affects other courses". Follows

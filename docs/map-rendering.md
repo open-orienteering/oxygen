@@ -1694,7 +1694,7 @@ decision 2026-10-22) set → `mapBudget="club"`, 150 MB
   is there, or the error with *Try again* (offline and not cached,
   no access, not found, unreadable);
 - needs no map bounds or calibration (a map without a CRS draws without
-  geo inputs); the editor's touch loupe is drawn by the layer (§5.5
+  geo inputs); the editor's loupe is drawn by the layer (§5.5
   "Loupe");
 - needs no ink split: the vector layer draws the course layer in the
   map's own colour order ("Overlay");
@@ -1877,18 +1877,22 @@ dragged (§4.11).
 request in flight (§5.2 "Engine"); the dragged object is not symbolised
 on the main thread.
 
-**Loupe** (D9b; `course-editor.md` §10 "Loupe"). While a control — or,
-on a tablet, a bend or a grip of the selected leg (F23: the point the
-tool's `onPointerDrag` returns) — is dragged by touch, the viewer hands
-`VectorMapLayer` a `loupe` (the dragged point, the circle `loupePlacement` puts above the handle,
-120 CSS px, ×2.5) and draws `editor-loupe` — a ring and a crosshair, no
-fill — over it; the layer draws the magnified map into that circle of
+**Loupe** (D9b, F24; `course-editor.md` §10 "Loupe"). While a control —
+or, on a tablet, a bend or a grip of the selected leg (F23: the point the
+tool's `onPointerDrag` returns) — is dragged by touch, or a control, a
+number, a bend, a grip or an object's vertex or grip is dragged with the
+mouse (F24), the viewer hands `VectorMapLayer` a `loupe` (the dragged
+point; the circle `loupePlacement` puts 16 px above the lifted handle by
+touch, 16 px above the cursor with no lift by mouse; 120 CSS px, ×2.5)
+and draws `editor-loupe` — a ring and a crosshair, no fill,
+`data-pointer` `touch` / `mouse` — over it; the layer draws the magnified map into that circle of
 the canvas in the same frame as the map (§5.4 "Layer", §5.2 "Render
 target"). It shows the resident visible set: what the main view drew,
 the dynamic bucket with the dragged circle included, no detail requested
 for the loupe's footprint (below the zoom gate it is the base parts).
 The UI layer's SVG is above the canvas, so its shapes under the circle
-are not magnified. Mouse drags have none.
+are not magnified. The prop does not depend on the pointer: the mouse
+path only supplies the cursor (container px) and a lift of 0.
 
 **Action bar.** `actionLayout: "bar"` lays the contextual entries out
 horizontally under the selection (`editor-action-bar`) instead of the
@@ -1902,7 +1906,8 @@ popover beside it; same entries and ids.
 | `map-gl/__tests__/worker-course.test.ts`, `engine.test.ts` | the reply's hit index and its way to the host |
 | `lib/editor/__tests__/hit.test.ts` | editor targets over the real worker's index |
 | `e2e/course-editor.spec.ts` | selecting, dragging and leg clicks on the canvas with no SVG targets |
-| `lib/editor/__tests__/touch.test.ts` (loupe) | `loupePlacement`: above the handle, flipped below the finger at the top, kept inside sideways |
+| `lib/editor/__tests__/touch.test.ts` (loupe) | `loupePlacement`: above the handle, flipped below the finger at the top, kept inside sideways; with no lift (F24) above the cursor, flipped and clamped the same way |
+| `e2e/course-editor.spec.ts` "F24: the loupe on mouse drags" | the loupe during a mouse drag of a control (the magnified map: purple, differing from the 1× circle), a number and a bend: `data-pointer="mouse"`, its bottom 16 px above the cursor, no stem; gone on release, on the mouseleave cancel and on Escape (which cancels the drag, nothing written); none for a click; "…object's vertex drag": the loupe during an object's vertex drag |
 | `e2e/course-editor.spec.ts` "F23: bend drags on a tablet" | the loupe during a tablet's bend and grip drags (the point `onPointerDrag` returns): its bottom 16 px above the lifted bend, gone on lift |
 | `e2e/field-mode.spec.ts` (`mobile`) | the loupe during a long-press drag: 120 px above the handle; the canvas inside it differs from the same circle after release (the 1× map) and has the map's purple; gone on release |
 

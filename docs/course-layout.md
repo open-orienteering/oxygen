@@ -196,7 +196,10 @@ white-out outside, see §3),
 `F` fit page, `Tab` / `Shift+Tab` next / previous object, `Delete` the
 selected path's focused vertex (§3), else the selected object (or hides
 the block), `Enter` closes the polygon being drawn (from three vertices),
-`Escape` drops the tool (a polygon being drawn is discarded), then the
+`Escape` first cancels a mouse drag in flight — a move, resize, align
+map or vertex drag ends with nothing written and its preview dropped
+(the viewer's rule, `course-editor.md` §3, F24; user 2026-11-11) — then
+drops the tool (a polygon being drawn is discarded), then the
 selection; `Ctrl+Z` / `Ctrl+Y` undo / redo. The grid toggle
 (`editor-snapping`) moves in 1 mm steps; a polygon's vertices are placed
 on the 1 mm page grid with it.
