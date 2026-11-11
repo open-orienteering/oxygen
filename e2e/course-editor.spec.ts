@@ -3566,6 +3566,63 @@ test.describe("F3: legs — styles, bends, corridors (docs/course-editor.md §6.
     expect(writes.slice(sentB), "Escape: a bend drag writes nothing").toEqual([]);
     expect(Math.hypot((await storedBends(courseId))[0].x - storedBend.x, (await storedBends(courseId))[0].y - storedBend.y)).toBeLessThan(0.01);
   });
+
+  // F24 on a course object (§7 "Editing geometry", §10 "Loupe"): a vertex dragged with the mouse shows the loupe about
+  // the dragged vertex; Escape cancels the drag (§3) — no loupe, no `courseObject.update`, the geometry as stored.
+  test("F24: the loupe on an object's vertex drag; Escape cancels it with no write", async ({ page }) => {
+    await openEditor(page);
+    const sheetToggle = page.getByTestId("map-toggle-descriptions");
+    if (/hide/i.test((await sheetToggle.textContent()) ?? "")) await sheetToggle.click();
+    const clear = await emptyPoint(page, 60);
+    const geometry = await Promise.all([[-35, -35], [35, -35], [35, 35], [-35, 35]].map(([dx, dy]) => toPaper(page, { x: clear.x + dx, y: clear.y + dy })));
+    const { id } = await trpcCall<{ id: number }>("courseObject.create", { kind: "oob_area", geometry, props: {}, scope: { all: true } });
+    try {
+      await page.reload();
+      await editorReady(page);
+      const row = objectRow(page, id);
+      await expect(row).toBeAttached({ timeout: 15000 });
+      const stored = await row.getAttribute("data-geometry");
+      await expect(async () => {
+        await dropSelection(page);
+        await clickMap(page, await pressOnEdge(page, await geometryOf(row)));
+        await expect(page.getByTestId("editor-object")).toHaveAttribute("data-object-id", String(id), { timeout: 2000 });
+      }).toPass({ timeout: 20000 });
+      await expect.poll(async () => (await toolShapes(page, "editor-object-handle")).length, { timeout: 15000 }).toBe(4);
+      await viewSettled(page);
+      const writes: string[] = [];
+      page.on("request", (r) => { if (r.method() === "POST" && r.url().includes("courseObject.update")) writes.push(r.url()); });
+
+      // Held: the loupe (the mouse's, 16 px above the cursor or below it at the map's top), the vertex under the cursor.
+      const vertex = (await toolShapes(page, "editor-object-handle"))[0];
+      const from = await toPage(page, vertex);
+      const centre = await toPage(page, { x: (geometry[0].x + geometry[2].x) / 2, y: (geometry[0].y + geometry[2].y) / 2 });
+      const to = { x: from.x + (centre.x - from.x) * 0.5, y: from.y + (centre.y - from.y) * 0.5 };
+      await dragHold(page, from, to);
+      const loupe = page.getByTestId("editor-loupe");
+      await expect(loupe).toBeVisible();
+      await expect(loupe).toHaveAttribute("data-pointer", "mouse");
+      await expect(page.getByTestId("editor-touch-handle")).toHaveCount(0);
+      const lb = (await loupe.boundingBox())!;
+      const vb = (await page.getByTestId("map-viewer").boundingBox())!;
+      if (to.y - vb.y - 16 - 120 < 0) expect(Math.abs(lb.y - (to.y + 16))).toBeLessThanOrEqual(1);
+      else expect(Math.abs(lb.y + lb.height - (to.y - 16))).toBeLessThanOrEqual(1);
+      const cursorMm = await toPaper(page, to);
+      await expect.poll(async () => {
+        const vs = await toolShapes(page, "editor-object-handle");
+        return Math.min(...vs.map((h) => Math.hypot(h.x - cursorMm.x, h.y - cursorMm.y)));
+      }, { timeout: 5000 }).toBeLessThan(0.5);
+
+      // Escape: gone while the button is down; the release writes nothing, the geometry as stored.
+      await page.keyboard.press("Escape");
+      await expect(loupe).toHaveCount(0);
+      await page.mouse.up();
+      await page.waitForTimeout(1000);
+      expect(writes, "Escape: an object's vertex drag writes nothing").toEqual([]);
+      await expect(row).toHaveAttribute("data-geometry", stored!);
+    } finally {
+      await cleanup("courseObject.delete", { id });
+    }
+  });
 });
 
 // F4 (docs/course-editor.md §6.8): the crossing tool C on a selected leg, the derived 13.3 / 13.4 rows, the map-issue
