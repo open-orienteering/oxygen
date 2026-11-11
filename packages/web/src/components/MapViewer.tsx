@@ -1317,7 +1317,6 @@ export function MapViewer({
     editorLabelDragRef.current = null;
     isPanningRef.current = false;
     mouseDownPosRef.current = null;
-    setDragCursor(null);
     if (cancelled) {
       setEditorLabelDragPos(null);
       return;
@@ -1402,8 +1401,8 @@ export function MapViewer({
         labelDrag.moved = true;
         const pt = screenToMapMm(e.clientX, e.clientY);
         if (pt) {
+          // F30: a number is dragged without the loupe (it is a label, not a point to place); touch neither.
           setEditorLabelDragPos({ id: labelDrag.id, x: pt.x, y: pt.y });
-          if (!labelDrag.touch) setDragCursor(cursorInContainer(e.clientX, e.clientY));
         }
       }
       return;
@@ -2639,7 +2638,7 @@ export function MapViewer({
 
   // The lifted touch drag's stem (§10): from the finger to the control (or the tool's bend or grip, F23) drawn above it; on the GL
   // canvas the loupe (§10 "Loupe"): the layer draws the magnified map into the circle, `editor-loupe` is its ring and the
-  // crosshair at the drop point. A touch drag hangs it above the lifted handle; a mouse drag (F24) of a control, a number or
+  // crosshair at the drop point. A touch drag hangs it above the lifted handle; a mouse drag (F24) of a control or
   // a tool's placed point (a bend, a grip, an object's vertex or grip) 16 px above the cursor, with no stem.
   let touchHandle: React.ReactNode = null;
   let glLoupe: VectorLoupe | null = null;
@@ -2647,7 +2646,7 @@ export function MapViewer({
   const liftedDrag = editorDragPos && editorDragTouch ? editorDragPos : toolDragPos;
   // The pointer the loupe hangs off and the point it magnifies: the finger and the lifted point, or the cursor and the placed one.
   const loupeAnchor = touchFinger && liftedDrag ? touchFinger : dragCursor;
-  const loupeAt = touchFinger && liftedDrag ? liftedDrag : dragCursor ? (editorDragPos ?? editorLabelDragPos ?? toolDragPos) : null;
+  const loupeAt = touchFinger && liftedDrag ? liftedDrag : dragCursor ? (editorDragPos ?? toolDragPos) : null;
   if (touchFinger && liftedDrag) {
     const inner = mapMmToScreen(liftedDrag.x, liftedDrag.y);
     if (inner) {

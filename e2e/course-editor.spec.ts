@@ -3478,7 +3478,7 @@ test.describe("F3: legs — styles, bends, corridors (docs/course-editor.md §6.
 
   // F24 (§10 "Loupe"; user answer 2026-11-10): the D9b loupe on mouse drags — 120 px at ×2.5 about the dragged point,
   // 16 px above the cursor (below it at the map's top), no stem; gone on release and on the viewer's mouseleave cancel.
-  test("F24: the loupe on mouse drags — a control, a number, a bend; gone on release, cancel and Escape (which writes nothing); none for a click", async ({ page }) => {
+  test("F24: the loupe on mouse drags — a control, a bend; none on a number (F30) or a click; gone on release, cancel and Escape (which writes nothing)", async ({ page }) => {
     const { name, a, b } = await twoControlCourse(page, "F24 loupe");
     const courseId = await page.getByTestId("editor-course-picker").inputValue();
     const loupe = page.getByTestId("editor-loupe");
@@ -3550,14 +3550,16 @@ test.describe("F3: legs — styles, bends, corridors (docs/course-editor.md §6.
     expect((await site(page, a.code)).mm).toEqual(a.mm);
     await repick();
 
-    // A number: held, the loupe; the release writes the offset and takes the loupe away.
+    // A number (F30; user 2026-11-11, replacing F24's "a number"): held, no loupe — it is a label, not a point to place;
+    // Escape cancels it with no write; the release writes the offset once.
     await expect.poll(async () => (await labelOf(page, b.code)) !== null, { timeout: 15000 }).toBe(true);
     const fromN = await toPage(page, (await labelOf(page, b.code))!);
     const toN = { x: fromN.x + (fromN.x < vb.x + vb.width / 2 ? 48 : -48), y: fromN.y + (fromN.y < vb.y + vb.height / 2 ? 24 : -24) };
     const labelBefore = (await labelOf(page, b.code))!;
     // Escape cancels it: no loupe while held, no write on release, the number where it was.
     await dragHold(page, fromN, toN);
-    await mouseLoupeAt(toN);
+    await nextFrames(page);
+    await expect(loupe, "no loupe on a number drag").toHaveCount(0);
     await page.keyboard.press("Escape");
     await expect(loupe).toHaveCount(0);
     await page.mouse.up();
@@ -3570,11 +3572,15 @@ test.describe("F3: legs — styles, bends, corridors (docs/course-editor.md §6.
     const fromN2 = await toPage(page, labelAfter);
     const toN2 = { x: fromN2.x + toN.x - fromN.x, y: fromN2.y + toN.y - fromN.y };
     await dragHold(page, fromN2, toN2);
-    await mouseLoupeAt(toN2);
+    await nextFrames(page);
+    await expect(loupe, "no loupe on a number drag").toHaveCount(0);
+    const labelWrites = writes.length;
     const offset = waitForTrpc(page, "course.setControlLabelOffset");
     await page.mouse.up();
-    await expect(loupe).toHaveCount(0);
     await offset;
+    await expect(loupe).toHaveCount(0);
+    await page.waitForTimeout(500);
+    expect(writes.length - labelWrites, "the release sends exactly one write").toBe(1);
 
     // A bend of the selected leg (the point the tool's drag places, F23): held, the loupe about the snapped bend under
     // the cursor; one write on release, then none.
