@@ -74,7 +74,7 @@ pans, the bottom sheet with three detents and the action bar in its peek
 row, the floating `+`, and on a coarse pointer: a selected control drags
 at once, an unselected one pans on a drag and moves after a 500 ms long
 press, a dragged control rides 48 px above the finger with a 120 px
-×2.5 loupe above it (drawn by the GL layer), hit tolerance 12 px, two fingers always pan / zoom and cancel a pending press. On a tablet (a coarse pointer with the desktop layout) one finger also drags the selected leg's bend handles and grips the same way, lifted with the loupe; the phone's Leg section stays read-only.
+×2.5 loupe above it (drawn by the GL layer), hit tolerance 12 px, two fingers always pan / zoom and cancel a pending press. On a tablet (a coarse pointer with the desktop layout) one finger also drags the selected leg's bend handles and grips the same way, lifted with the loupe; the phone's Leg section stays read-only. The placement loupe toggle (the overflow menu's *Placement loupe*, F27; remembered per browser) shows the same loupe 16 px above the pin-drop crosshair while `+` → a placing tool is armed, centred on the point *Place* drops.
 
 ### Map toolbar buttons
 

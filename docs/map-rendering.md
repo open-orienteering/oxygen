@@ -1892,7 +1892,14 @@ the dynamic bucket with the dragged circle included, no detail requested
 for the loupe's footprint (below the zoom gate it is the base parts).
 The UI layer's SVG is above the canvas, so its shapes under the circle
 are not magnified. The prop does not depend on the pointer: the mouse
-path only supplies the cursor (container px) and a lift of 0.
+path only supplies the cursor (container px) and a lift of 0. The
+placement loupe (F27, `course-editor.md` §10 "Loupe") is the same prop
+without a drag: with its toggle on and a placing tool armed, the point is
+the binding's `hoverPoint` (what a click would place) and the circle sits
+16 px above the cursor, or above the pin-drop crosshair at the view
+centre on a coarse pointer (lift 0 both); `editor-loupe` gains
+`data-mode` `hover` / `drag`. While it shows, a hover costs one inset
+render per frame, as a drag does; no worker request.
 
 **Action bar.** `actionLayout: "bar"` lays the contextual entries out
 horizontally under the selection (`editor-action-bar`) instead of the

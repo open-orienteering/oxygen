@@ -271,6 +271,61 @@ test.describe("Field mode on a phone (docs/course-editor.md §9, §10)", () => {
     await expect(page.getByTestId("editor-field-add")).toBeVisible();
   });
 
+  // F27 (§10 "Loupe"; user 2026-11-11): the placement loupe toggle in the overflow — on, the pin-drop flow shows the loupe
+  // 16 px above the centre crosshair, magnifying the point Place would drop; off or Done → none.
+  test("the placement loupe above the pin-drop crosshair: overflow toggle on → loupe, off → none, Done → none", async ({ page }) => {
+    await openEditor(page);
+    const toggleOn = async (on: boolean) => {
+      await page.getByTestId("editor-overflow").click();
+      const item = page.getByTestId("editor-overflow-menu").getByTestId("editor-placement-loupe");
+      await expect(item).toHaveAttribute("aria-pressed", String(!on));
+      await item.click();
+      await expect(page.getByTestId("editor-overflow-menu")).toHaveCount(0);
+    };
+    await toggleOn(true);
+    expect(await page.evaluate(() => localStorage.getItem("oxygen.editor.placementLoupe"))).toBe("true");
+    const loupe = page.getByTestId("editor-loupe");
+    // No placing tool armed: none.
+    await expect(loupe).toHaveCount(0);
+    await page.getByTestId("editor-field-add").click();
+    await page.getByTestId("editor-add-K").click();
+    const crosshair = page.getByTestId("editor-touch-crosshair");
+    await expect(crosshair).toBeVisible();
+    await expect(loupe).toBeVisible();
+    await expect(loupe).toHaveAttribute("data-pointer", "touch");
+    await expect(loupe).toHaveAttribute("data-mode", "hover");
+    const lb = (await loupe.boundingBox())!;
+    const xb = (await crosshair.boundingBox())!;
+    const c = { x: xb.x + xb.width / 2, y: xb.y + xb.height / 2 };
+    expect(Math.abs(lb.width - 120)).toBeLessThanOrEqual(1);
+    expect(Math.abs(lb.y + lb.height - (c.y - 16))).toBeLessThanOrEqual(1);
+    expect(Math.abs(lb.x + lb.width / 2 - c.x)).toBeLessThanOrEqual(1);
+    // Centred on the point Place drops: the crosshair's paper point (snapped, so within a snap reach of it).
+    const at = await toPaper(page, c);
+    const shown = { x: Number(await loupe.getAttribute("data-x")), y: Number(await loupe.getAttribute("data-y")) };
+    expect(Math.hypot(shown.x - at.x, shown.y - at.y)).toBeLessThan(3);
+    await nextFrames(page);
+    const magnified = await canvasInCircle(page, lb);
+    // Off → none; the same circle at 1× differs from the magnified one.
+    await toggleOn(false);
+    await expect(loupe).toHaveCount(0);
+    await expect(crosshair).toBeVisible();
+    await nextFrames(page);
+    const plain = await canvasInCircle(page, lb);
+    expect(plain.rgb.length).toBe(magnified.rgb.length);
+    let differing = 0;
+    for (let i = 0; i < plain.rgb.length; i += 3) {
+      if (Math.abs(plain.rgb[i] - magnified.rgb[i]) + Math.abs(plain.rgb[i + 1] - magnified.rgb[i + 1]) + Math.abs(plain.rgb[i + 2] - magnified.rgb[i + 2]) > 60) differing++;
+    }
+    expect(differing / (plain.rgb.length / 3)).toBeGreaterThan(0.1);
+    // On again → back; Done (the tool disarmed) → none.
+    await toggleOn(true);
+    await expect(loupe).toBeVisible();
+    await page.getByTestId("editor-touch-done").click();
+    await expect(crosshair).toHaveCount(0);
+    await expect(loupe).toHaveCount(0);
+  });
+
   test("a tap on its outline selects an area object; two fingers on its handle ring scale it", async ({ page }) => {
     await openEditor(page);
     // A square of 100 px in the empty paper above the drawn map (clear of every control).

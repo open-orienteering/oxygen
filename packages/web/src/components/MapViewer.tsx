@@ -2687,6 +2687,8 @@ export function MapViewer({
           data-scale={LOUPE_SCALE}
           data-pointer={touch ? "touch" : "mouse"}
           data-mode={loupe.mode}
+          data-x={loupeAt.x.toFixed(3)}
+          data-y={loupeAt.y.toFixed(3)}
           aria-hidden
           className="absolute pointer-events-none rounded-full border-2 border-slate-700 shadow-lg"
           style={{ left: c.x - r, top: c.y - r, width: 2 * r, height: 2 * r, zIndex: 9 }}
