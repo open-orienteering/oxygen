@@ -64,5 +64,22 @@ not involved. This is a plain click with K armed: no drag, no loupe, no touch.
 ## Verification
 
 - The spec file in order, chromium project (the shard-1 context): failed on
-  the first run before the fix, passed after it (see the PR for run counts).
-- The full sharded `pnpm test:e2e`.
+  the first run before the fix. After the fix, F7 passed in 2 of 2 in-order
+  runs; so did F15.
+- The full sharded `pnpm test:e2e` (4 shards): 387 passed and 1 failed. F7 and
+  F15 passed. The one failure was F21's "the fixture map has colour where the
+  band goes", a probe-pixel check in another test. It also failed once in the
+  first in-order run, before this fix, and passed in the other two. It is not
+  addressed here.
+
+## Not fixed here: the same pattern in the F16 grip drag
+
+In one of the in-order runs, "F16: Add bend here is smooth … Alt breaks the
+pair …" timed out waiting for `course.setStructure` after its Alt drag of a
+grip. The leg again lay along the inspector's right edge. The drag goes a fixed
+30 px along the leg's normal (`n`, flipped only to point up), so it ended at
+(332, 489), under the inspector (whose right edge is at x 350). The release
+never reached the viewer and nothing was written. That test needs its own fix:
+pick the side of the normal that points away from the chrome, or check the
+drag's end with `coveredBy`. F3's "a dragged bend handle" (a fixed 60 px drag
+up off the viewer's top) has the same shape.
