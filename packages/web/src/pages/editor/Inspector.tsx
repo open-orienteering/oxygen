@@ -22,7 +22,9 @@ export function InspectorSection({ title, testId, defaultOpen = true, children, 
         <span className="font-medium">{title}</span>
         {aside && <span className="ml-auto truncate max-w-[8rem] text-slate-400">{aside}</span>}
       </button>
-      {open && <div className="min-h-0 flex flex-col">{children}</div>}
+      {/* A squeezed section scrolls its own content: overflow left visible painted it under the next
+          section's header and swallowed clicks there (F28, `docs/course-editor.md` §2). */}
+      {open && <div className="min-h-0 flex flex-col overflow-y-auto">{children}</div>}
     </section>
   );
 }

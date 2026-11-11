@@ -26,7 +26,7 @@ async function box(page: Page, testId: string) {
 
 /** The header's inner row: `w-full` on the editor, `max-w-7xl` elsewhere. */
 async function headerInnerWidth(page: Page) {
-  const b = await page.locator("header > div").first().boundingBox();
+  const b = await page.getByTestId("shell-header-inner").boundingBox();
   if (!b) throw new Error("the header's inner row has no box");
   return b.width;
 }

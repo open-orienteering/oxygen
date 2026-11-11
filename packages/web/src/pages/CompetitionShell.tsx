@@ -420,7 +420,7 @@ function CompetitionShellInner() {
           z-50 and still win. On narrow viewports only the tab row stays
           sticky so the event name row can scroll away. */}
       <header className="relative z-50 bg-white border-b border-slate-200 sm:sticky sm:top-0 sm:z-40">
-        <div className={headerInnerClass}>
+        <div className={headerInnerClass} data-testid="shell-header-inner">
           <div className="relative flex items-center justify-between h-14 min-w-0">
             <div className="flex items-center gap-2 sm:gap-3 min-w-0">
               <button
