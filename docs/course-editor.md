@@ -122,7 +122,15 @@ toolbar) with the footer in P6.
 (`lib/course-editor.ts` — selected course, selected control, phantom with
 an optional insert position) plus mode, view and *hide other controls*.
 Escape steps back: phantom → control → course; with nothing left it
-leaves fullscreen. `H` toggles hide-others (needs a course); a course
+leaves fullscreen. A mouse drag in flight is cancelled first (F24; user
+answer 2026-11-11): the viewer ends it before the cascade — a control or
+a number snaps back and nothing is written (no `control.update`, no
+`course.setControlLabelOffset`, no `setStructure`), a tool's gesture
+gets `onPointerUp(null)` (a bend, grip or object drag drops its draft,
+a lasso selects nothing), and the loupe goes (§10 "Loupe"). The cascade
+then runs as without a drag; the release that follows does nothing
+(`lib/editor/mouse-drag.ts` `escapeCancels`; a touch drag is left
+alone). `H` toggles hide-others (needs a course); a course
 change switches it off with the course.
 
 **One gesture, one write, one undo entry.** `UndoStack(50)` of inverse
@@ -199,8 +207,8 @@ exchange lists its parts (§6.9).
 | `A` → **Corridor on selected leg** (`C`) | `setStructure(setLegProps { corridor })` with the default corridor | `setStructure(prev)` |
 | Insert into course | create + `setStructure(insertSite)` | as Add to ‹course› |
 | click a control | select; action bar: **Add to ‹course›** (append), **Remove from ‹course›** (every visit), **Reset number position**, **Radio** / **Radio off** (SRR swap offer as legacy), **Edit description**, **Delete control**; a start / finish not used by the course offers **Use as start / finish for ‹course›** (`setRole`) | `setStructure(prev)`; radio is not undoable (as legacy) |
-| drag a control | one `control.update { xpos, ypos, autoDescribe: true }` on release; affects-chip "Affects: …" for shared controls; during the drag the layer follows at the worker's rate (`map-rendering.md` §5.2 "Engine", F20) | `control.update` with the old position and description |
-| drag a number | `course.setControlLabelOffset` | the previous offset |
+| drag a control | one `control.update { xpos, ypos, autoDescribe: true }` on release (none after Escape or a mouseleave, §3); affects-chip "Affects: …" for shared controls; during the drag the layer follows at the worker's rate (`map-rendering.md` §5.2 "Engine", F20) | `control.update` with the old position and description |
+| drag a number | `course.setControlLabelOffset` on release (none after Escape or a mouseleave, §3) | the previous offset |
 | Delete / Backspace, **Delete control** | confirm, `control.delete` (the server cascades it out of every structure) | `control.restore` + `setStructure(before)` for every course that held it (read with `course.detail` before the delete) |
 | **Edit description** | modal `ControlDescriptionEditor` → `control.update { description }` | the previous description |
 | after a move of a hand-described control | one *Suggested: …* row in the action bar (`control.suggestDescription`) | the previous description |
@@ -368,7 +376,7 @@ tool's press places a corner (§6.4, F18). `onPointerDrag` returns the
 point the drag placed, paper mm — the snapped bend, a bend's or an
 object's grip, an object's vertex; nothing for a body drag, a lasso or
 within the slop — and the viewer draws the touch stem and the loupe at
-it (F23; F24's mouse loupe reads the same point). A tool that sets
+it (F23), or the mouse loupe above the cursor (F24, §10 "Loupe"). A tool that sets
 `touchPress` is offered one-finger presses on a coarse pointer too,
 before the viewer's own targets, with `touch` set on the pointer (V with
 a selected leg, §6.7 "Tablet"; every other press stays the viewer's
@@ -388,8 +396,9 @@ screen-size Bézier handle on a thin line from its vertex — and text). The too
 | `G` | gaps | on the selected circle or leg (§6.3) |
 | — | snapping | the rail's toggle (§6.2) |
 
-**Escape** drops an active tool first (back to `V`), then a
-multi-selection, then a selected object, then the §3 cascade. `V`
+**Escape** cancels a mouse drag in flight first (§3, F24), then drops
+an active tool (back to `V`), then a multi-selection, then a selected
+object, then the §3 cascade. `V`
 returns to select from any tool; right-click exits an exclusive tool.
 
 ### 6.1 Placement (`S`, `K`, `M`)
@@ -831,8 +840,10 @@ answer Q1).
   §6.2), so the band does not jump back between the write and the
   refetch. A live draft shows only while its leg is selected. A
   cancelled drag (`onPointerUp(null)`, a mouseleave) and a failed write
-  drop it; `Escape` ends the drag itself (its release writes nothing) and
-  drops the draft; undo / redo (and the conflict notice's refresh) end
+  drop it; `Escape` ends the drag itself — the viewer cancels any mouse
+  drag before the page's cascade (§3, F24), the binding's
+  `onPointerUp(null)` — so its release writes nothing, and the page drops
+  the draft; undo / redo (and the conflict notice's refresh) end
   it (`moveEpoch`). An `Alt`-click's write is held the same way. The
   rules are `shownLegDraftOf` (`lib/editor/variation-view.ts`). The
   inspector's metres read the same shown draft (F25, "Readouts follow the
@@ -1361,25 +1372,37 @@ so a tablet gets the touch rules below with the desktop chrome.
 
 Hit tolerance is **12 CSS px** on a coarse pointer (6 with a mouse) — the
 "large hit areas" of 08 §5.5 — on the same `editorHitAt` path (§5).
-**Loupe** (08 §5.5 "Precision"; D9b). While a control — or a bend or a
-grip of the selected leg (F23) — is dragged by touch on the GL canvas,
-a circle (`editor-loupe`, **120 CSS px**) shows
-the map at **×2.5** about the dragged point — the handle, 48 px above the
-finger — oriented as the map; it appears and goes with the stem. It sits
-**16 px above the handle**, so the 1× control stays visible; when that
-would leave the map box at the top it flips to 16 px below the finger;
-its edge is kept 4 px inside the box sideways. The picture is the GL
+**Loupe** (08 §5.5 "Precision"; D9b, F24). While a point is dragged on
+the GL canvas — by touch a control or a bend or grip of the selected leg
+(F23), with the mouse a control, a number, a bend or grip of the selected
+leg, or a course object's vertex or grip (F24) — a circle
+(`editor-loupe`, **120 CSS px**) shows the map at **×2.5** about the
+dragged point, oriented as the map: the snapped control, bend, grip or
+vertex the drag places (`onPointerDrag`'s return for a tool, §6), the
+pointer's point for a number. By touch the point is the handle, 48 px above
+the finger, and the loupe appears and goes with the stem; it sits **16 px
+above the handle**, so the 1× control stays visible. With the mouse there
+is no lift and no stem: the loupe sits **16 px above the cursor**, which
+keeps its crosshair (or the tool's cursor) at 1×. When that would leave the
+map box at the top it flips to 16 px below the finger or the cursor; its
+edge is kept 4 px inside the box sideways (`loupePlacement`, its lift 48 or
+0). The element carries `data-pointer` (`touch` / `mouse`) and takes no
+pointer events. A mouse drag shows it once it has passed the 3 px click
+slop, always — there is no setting (user, 2026-11-10) — and it goes on the
+release, on the viewer's `mouseleave` cancel and on Escape (§3). A gesture
+that places no point shows none: a body drag of an object, a lasso, the
+`G` tool, an area's pulled handles, Layout-mode drags, a number dragged by
+touch. The picture is the GL
 layer's: one more `renderDocument` per frame over the resident visible
 set into an offscreen target, drawn into the circle of the canvas
 (`map-rendering.md` §5.5 "Loupe"); the element is the ring and a
 crosshair at the drop point over it, so the course layer's dragged
-circle (one layer round trip behind the finger) and the crosshair meet
+circle (one layer round trip behind the pointer) and the crosshair meet
 when the reply is in. UI-layer shapes that happen to lie under the
 circle (a check marker, a leg-length label) draw over the loupe at 1×.
-It shows during every touch drag, whatever the zoom: 08 §5.5's "at high
-zoom" is read as the loupe's own magnified view, not a zoom gate. Mouse
-drags get no loupe (the finger is what hides the circle); the nudge pad
-stays the exact tool.
+It shows during every such drag, whatever the zoom: 08 §5.5's "at high
+zoom" is read as the loupe's own magnified view, not a zoom gate. The
+nudge pad stays the exact tool.
 
 These values (500 ms, 10 px, 48 px, 12 px, the loupe's 120 px, ×2.5 and
 16 px, the detent heights) are 08
@@ -1679,7 +1702,7 @@ whose poll ran meanwhile simply does not conflict (decision log, D10).
 | unit (web) | `lib/editor/__tests__/hit.test.ts` "a leg with no line", "a corridor's edge …" | §5, §6.7: a `none` leg has no hit-index piece; `uiLegsOf` hits it from the derivation's pieces, a circle at its end wins, `accept` passes over it; F14: a corridor leg likewise (no hit piece, a UI leg, the edge no target), a `marked_route` one keeps its piece |
 | unit (web) | `pages/editor/__tests__/bindings.test.ts` "V on a selected leg: touch (F23)" | §6.7 "Tablet", §6 (`touchPress`, the placed point): V opts in only with a selected leg; a touch press takes a bend at 10 px and declines it at 16 px (the mouse's 7 px unchanged), takes a grip at 10 px, declines an object, a site and empty map (nothing selected); `onPointerDrag` returns nothing within the slop, then the snapped bend (one write on release there) or the dragged grip, and an object's dragged vertex or grip, nothing for a body drag or a lasso; a tap focuses with no write; a cancel drops the draft with no write |
 | unit (web) | `pages/editor/__tests__/bindings.test.ts` "corridor guides" | §6.7 (F14): one blue dashed `editor-corridor-guide` per corridor leg along its points with `data-course` / `data-leg`, under the tool's shapes; the tool's hooks kept (a press on a guide declines; an armed tool stays exclusive); no guides → the binding unchanged, no binding → the guides alone |
-| E2E | `e2e/course-editor.spec.ts` "F3: legs — styles, bends, corridors" (`chromium`), "F3 on a phone" (`mobile`) | §6.7: a leg made a marked route → its `course-leg` pieces `data-style="marked_route"`, `none` and the leg still selects by a click, two undos back to `line`; *Add bend here* → one `editor-bend-handle`, dragged 60 px → the drawn leg has a vertex within 0.3 mm of it and the row's metres grow, `Delete` removes it (metres back, both controls still on the course); `A` then `C` → the default corridor, no map colour left in the band beside the edge (`inkAt` "map" = 0, > 0 before), F22: map colour behind both controls (within the pre-F22 wrap R + 5 mm, beyond the inside's round end; > 0 before and after — 0 on the pre-F22 band), the entry disabled with a corridor, the course's sheet prints one page, no `editor-leg-corridor-opacity` (F25), a width of 0 and a white band of −1 not written (the stored values shown again), a width of 80 written with the stored `whiteOpacity` 1 kept (F25), *Remove* brings the map back, undo the corridor; F14: no purple along the leg's middle inside the corridor (> 0 before and after *Remove*) while the edge is purple, the Style note shown, with the leg selected no `editor-corridor-guide` (its outline instead), deselected exactly one, none in All controls and one again in Course view, a click on the leg (where it is clearest of other sites — every F3 leg click, `legClickPoint`) selects it again, after *Remove* no guide and no note. F19: R read from the gap tool's target; both circles purple across the opening's middle before the corridor, the corridor narrowed to about 1.2 R (the default 50 m can be as wide as the circle on the fixture map: h ≥ R, the circle whole inside it), then no purple there, purple on the circles' far sides and at all four junctions, a click at the end control's centre selects it (the UI circle, §5), purple across the openings again after *Remove*. F16: *Add bend here* stores a smooth bend (`hOut` ≈ (b − a) / 6, `hIn` = −`hOut`), `data-curve="smooth"`, two `editor-bend-grip`, the outline 3 points and the metres unchanged; the upper grip on screen (clear of the action bar) dragged 60 px → one write, the pair still mirrored, the outline > 3 points, the metres grow; the same grip dragged again with Alt → only its handle changes; Alt-click the bend → no handles stored, `data-curve="corner"`, no grips, *Corner* disabled; *Smooth* → two grips again; two undos back to the corner, then to the broken pair; the course's sheet prints one page; Alt held on *Add bend here* → a corner (no handles, no grips, *Smooth* enabled). F21 (appended): *Add bend here*, the handle held (mouse down, `dragHold`) at least 2h + 12 mm off the chord where the probes clear every site, read held (`inkAt(…, true)`: the overlays transparent, not hidden — a hidden overlay sends the viewer a `mouseleave`, its gesture cancel) → purple at the held apex, row b's `editor-leg-meters` at least the apex's two straight pieces long (F25: a leg through the apex is no shorter), no `course.setStructure` request yet; the release → the same metres while the write is in flight, exactly one request, the stored bend within 0.5 mm of the apex, the line still there, the metres unchanged; undo → the bend back on the chord, no purple at the apex, the chord's metres; the default corridor → the chord's band white, the map at the apex's band; held again → the band beyond the apex white and the map beside the chord, no request; the release → one, the stored bend at the apex and both probes unchanged (no jump back); undo → the chord's band white again; held once more → the apex's metres, and `Escape` → the chord's metres before the release (F25), the release sends no request and the stored bend stays on the chord. On a phone a tapped leg shows `editor-leg` read-only with `editor-leg-readonly` and no *Add bend here* |
+| E2E | `e2e/course-editor.spec.ts` "F3: legs — styles, bends, corridors" (`chromium`), "F3 on a phone" (`mobile`) | §6.7: a leg made a marked route → its `course-leg` pieces `data-style="marked_route"`, `none` and the leg still selects by a click, two undos back to `line`; *Add bend here* → one `editor-bend-handle`, dragged 60 px → the drawn leg has a vertex within 0.3 mm of it and the row's metres grow, `Delete` removes it (metres back, both controls still on the course); `A` then `C` → the default corridor, no map colour left in the band beside the edge (`inkAt` "map" = 0, > 0 before), F22: map colour behind both controls (within the pre-F22 wrap R + 5 mm, beyond the inside's round end; > 0 before and after — 0 on the pre-F22 band), the entry disabled with a corridor, the course's sheet prints one page, no `editor-leg-corridor-opacity` (F25), a width of 0 and a white band of −1 not written (the stored values shown again), a width of 80 written with the stored `whiteOpacity` 1 kept (F25), *Remove* brings the map back, undo the corridor; F14: no purple along the leg's middle inside the corridor (> 0 before and after *Remove*) while the edge is purple, the Style note shown, with the leg selected no `editor-corridor-guide` (its outline instead), deselected exactly one, none in All controls and one again in Course view, a click on the leg (where it is clearest of other sites — every F3 leg click, `legClickPoint`) selects it again, after *Remove* no guide and no note. F19: R read from the gap tool's target; both circles purple across the opening's middle before the corridor, the corridor narrowed to about 1.2 R (the default 50 m can be as wide as the circle on the fixture map: h ≥ R, the circle whole inside it), then no purple there, purple on the circles' far sides and at all four junctions, a click at the end control's centre selects it (the UI circle, §5), purple across the openings again after *Remove*. F16: *Add bend here* stores a smooth bend (`hOut` ≈ (b − a) / 6, `hIn` = −`hOut`), `data-curve="smooth"`, two `editor-bend-grip`, the outline 3 points and the metres unchanged; the upper grip on screen (clear of the action bar) dragged 60 px → one write, the pair still mirrored, the outline > 3 points, the metres grow; the same grip dragged again with Alt → only its handle changes; Alt-click the bend → no handles stored, `data-curve="corner"`, no grips, *Corner* disabled; *Smooth* → two grips again; two undos back to the corner, then to the broken pair; the course's sheet prints one page; Alt held on *Add bend here* → a corner (no handles, no grips, *Smooth* enabled). F21 (appended): *Add bend here*, the handle held (mouse down, `dragHold`) at least 2h + 12 mm off the chord where the probes clear every site, read held (`inkAt(…, true)`: the overlays transparent, not hidden — a hidden overlay sends the viewer a `mouseleave`, its gesture cancel; F24: the held probes lie clear of the mouse loupe's circle, `loupeCircleAt` — the apex up the screen, or down when the loupe would cover the band beyond it, with ≥ 20 probes of each band clear) → purple at the held apex, row b's `editor-leg-meters` at least the apex's two straight pieces long (F25: a leg through the apex is no shorter), no `course.setStructure` request yet; the release → the same metres while the write is in flight, exactly one request, the stored bend within 0.5 mm of the apex, the line still there, the metres unchanged; undo → the bend back on the chord, no purple at the apex, the chord's metres; the default corridor → the chord's band white, the map at the apex's band; held again → the band beyond the apex white and the map beside the chord, no request; the release → one, the stored bend at the apex and both probes unchanged (no jump back); undo → the chord's band white again; held once more → the apex's metres, and `Escape` → the chord's metres before the release (F25), the release sends no request and the stored bend stays on the chord. F24 (§10 "Loupe"): control a held with the mouse (`dragHold`) → `editor-loupe` with `data-pointer="mouse"`, `data-scale` 2.5, 120 px, its bottom 16 px above the cursor (its top 16 px below at the map's top), centred over it within the box (±1 px), no `editor-touch-handle`; the canvas in it (read held) has purple and differs in > 10 % of its pixels from the same circle at 1× after the drag; the pointer leaving the viewer → no loupe, no control or course write (the presence heartbeat aside), the control where it was; held again and `Escape` → no loupe while the button is down, the release writes nothing, the control where it was (§3; the cascade drops the course, picked again); control b's number held → the loupe, `Escape` → none, no write, the number where it was; held again → the loupe, the release → none and one `course.setControlLabelOffset`; *Add bend here*, the handle held 60 px off the leg → the loupe, the UI handle within 0.5 mm of the cursor's paper point, the release → none, one write, the stored bend there; a press on the handle moved 1 px and released → no loupe; the handle held again and `Escape` → no loupe, no write, the stored bend unchanged. On a phone a tapped leg shows `editor-leg` read-only with `editor-leg-readonly` and no *Add bend here* |
 | E2E | `e2e/course-editor.spec.ts` "F23: bend drags on a tablet" (`chromium`, `hasTouch` + `isMobile` at 1024 × 768; skipped on `mobile`) | §6.7 "Tablet", §10: `data-layout="desktop"` with `(pointer: coarse)`; a tapped leg's section editable, *Add bend here*; a finger 10 px beside the handle moved down-right and held → `editor-touch-handle` and `editor-loupe` visible, the UI handle within 0.6 mm of the point 48 px above the finger, the loupe's bottom 16 px above that (or its top 16 px below the finger when it flips at the map's top) and centred over the finger (±1 px), no `course.setStructure` yet; the lift → exactly one, the stored bend within 0.6 mm of the lifted point with its handles unchanged, focused, stem and loupe gone; the upper grip pressed on its far side and dragged → the loupe, one write, its handle changed and the pair mirrored, the bend in place; a bend drag joined by a second finger → no write, the bends unchanged; after an undo (the bend unfocused) a tap on the handle → focused, no write, the bends as before |
 | E2E | `e2e/course-editor.spec.ts` "Course editor (new, GL canvas)" (`chromium`) | §1: the editor mounts (never `course-editor-page`), and on an event with no map it mounts over the panel's upload prompt (no viewer); the shell (`C` enabled since F4, `X` since F5); place → move → undo / redo → reload → select on the canvas → delete; create a course, append two controls, add-to-course on the map, reorder + undo, insert on a leg, remove, reload with `?course=` (explicit start / finish rows); deep links, `H`, Escape cascade; the Courses page's `course-edit-link` and the Controls page's `control-edit-link` open the new editor on the course / with the control selected (one `editor-selection-ring`) |
 | E2E | `e2e/course-editor.spec.ts` "Course mode (§4)" (`chromium`) | delete cascade: a control on two courses is deleted from the action bar — the site goes, both structures lose it (the open one's rows, the other through `course.list`), `Ctrl+Z` restores the site and both visits; *Remove from course* drops one visit and keeps the site; inline code edit in the sequence (`editor-seq-code` → 997: the row's `data-control-id` and the site follow, `Ctrl+Z` back; a duplicate code → `editor-error` "already exists"); free order (`editor-order-mode`): the hint, no reorder arrows, the layer draws no legs and labels the circles with their codes, a number drag still writes `course.setControlLabelOffset`; a number drag (the shared hit-test's `number` target): the `course-label` moves, persists over a reload, *Reset label* puts the automatic place back, undo the dragged one; clone (`editor-clone-*`, "A (copy)" prefilled, same rows) and no `editor-toggle-first-start` / `-last-finish` even with a legacy-flag course in the event |
@@ -1712,7 +1735,8 @@ whose poll ran meanwhile simply does not conflict (decision log, D10).
 | unit (web) | `lib/editor/__tests__/presence.test.ts`, `write-client.test.ts` | §11: `name · course · mode` entries (open course first, "Someone", distinct keys), `courseChangedElsewhere` (moved token, own write, first sight), the own-token set |
 | E2E | `e2e/course-presence.spec.ts` | §11, two browser contexts: B in Field mode shows in A's bar as "‹course› · Field" (here), A in Course mode in B's; a move in A moves the control in B within the poll; A leaving ages out of B's bar (TTL); a control appended in A re-renders B's sequence with `editor-external-change`, none in A |
 | unit (web) | `lib/editor/__tests__/field.test.ts` | §9, §10: the fix through `mapGeo` and back (a SWEREF99 TM frame), accuracy in paper mm, distance at two scales, bearing from paper north with the wrap at north, the list in course order (blank without a fix or a position), the nudge steps (0.1 mm, 1 m at 1:10 000 / 1:15 000, µm rounding), detent heights and snapping, the band offset, the initial mode |
-| unit (web) | `lib/editor/__tests__/touch.test.ts` | §10 gestures: a selected control drags at once; an unselected one: tap selects, drag past the slop pans, long press selects and moves (also when a late move fires it), a second finger cancels; the lift; the loupe's constants and place (above the handle, flipped below the finger at the top, kept inside sideways) |
+| unit (web) | `lib/editor/__tests__/mouse-drag.test.ts` | §3, F24: Escape cancels the tool's mouse gesture, a control's drag or a number's drag (the tool's first: it took the press), nothing without a drag, never a touch drag |
+| unit (web) | `lib/editor/__tests__/touch.test.ts` | §10 gestures: a selected control drags at once; an unselected one: tap selects, drag past the slop pans, long press selects and moves (also when a late move fires it), a second finger cancels; the lift; the loupe's constants and place (above the handle, flipped below the finger at the top, kept inside sideways); F24: with no lift (a mouse drag) 16 px above the cursor, flipped below it at the top, clamped sideways, the touch call unchanged |
 | unit (web) | `map-gl/__tests__/view.test.ts` "loupeView", `engine.test.ts` "the loupe" | §10 "Loupe": the view (the dragged point at the centre, distances × 2.5, the rotation kept); one more draw of the resident visible set into the inset target, composited at the box, no rebuild or worker request (`map-rendering.md` §5.2) |
 | unit (web) | `lib/editor/__tests__/state.test.ts` "showSelectionRing" | §6.1: the selection ring is drawn in `V` and not while an exclusive tool is armed (D12); a control just placed in `V` keeps it — the state has no `placed` flag, a `select` of the selected control is a no-op, Field keeps the selection and Layout drops it (P4) |
 | unit (web) | `lib/__tests__/course-editor.test.ts` | `placed` selects the control and clears the phantom |
@@ -1742,8 +1766,7 @@ whose poll ran meanwhile simply does not conflict (decision log, D10).
 ## Pending in this chapter
 
 - **The selected leg's highlight** (§6.7): the selected leg has no
-  highlight beyond the UI outline. The loupe on mouse drags is row F24
-  (user answer 2026-11-10).
+  highlight beyond the UI outline.
 - **The leg's gaps in the Leg section** (08 §5.2 "leg: style, gaps,
   corridor, crossing"): gaps stay the `G` tool's (§6.3); the crossing row
   is F4's (§6.8).
@@ -1808,8 +1831,6 @@ whose poll ran meanwhile simply does not conflict (decision log, D10).
   (D10) asserts the moved notice and its position, not the actor's name
   (the E2E instance runs without per-user sign-in); the name is unit and
   integration only.
-- **Mouse loupe**: a desktop or tablet mouse drag shows no loupe (§10
-  "Loupe"); the same layer prop from the mouse branch would give one.
 - **One-finger drag of a course object on touch** (its body or a
   vertex): a tap selects it and two fingers scale it (§10); moving it is
   the mouse's, or a later row with the object's own nudge.
