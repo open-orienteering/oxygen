@@ -485,7 +485,9 @@ function MapPanelImpl({
       {toolbar}
       {/* Every toggle here is icon + label from `sm` up and icon-only on
           a phone (ToolbarButton), so the row fits a 390px screen without
-          the buttons overlapping each other. */}
+          the buttons overlapping each other. The row is the `toolbar`
+          container: in the editor the descriptions label also goes when
+          the row is short (F29, top-bar-collapse.ts). */}
       <div className="ml-auto flex items-center gap-1 sm:gap-2 shrink-0">
         {/* In editor mode the page drives filtering through `filterMode`
             and renders its own toggle — a second, internal toggle here

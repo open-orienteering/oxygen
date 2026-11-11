@@ -84,16 +84,17 @@ exit bubble on every pointer move
 **Top bar: icons when the row is short** (F29, feedback-2026-11-11 item 2
 and answer 3). The row is `MapPanel`'s `map-toolbar`, a CSS size container
 (`@container/toolbar`, `container-type: inline-size`); the top bar
-collapses on that row's width, not the viewport's, so the same rule holds
+collapses on that row's content width (inside its padding), not the
+viewport's, so the same rule holds
 in fullscreen, with the shell's container (F28) and in a narrow window. The
 classes are `components/top-bar-collapse.ts` (`TIER1_PX`, `TIER2_PX` and the
 literal Tailwind `@max-[…px]/toolbar:` strings):
 
-| Row width | What shows |
+| Row content width | What shows |
 |---|---|
 | ≥ 1600 px | every label |
 | < 1600 px (tier 1) | the labels of `editor-hide-others`, `editor-toggle-cuts`, `map-toggle-descriptions` (MapPanel's, in the editor only — `labelClassName` is set when the panel has an `editor`, so other pages' map panels keep the `sm` rule alone) and `editor-export` are hidden, and the course picker's *Course* word; the buttons show their icons (Export ▾ is icon + label + ▾ since F29, `IconExport`) |
-| < 1200 px (tier 2) | in addition the mode switch shows its icons alone: `IconModeCourse` (a start triangle, a leg and a control circle), `IconModeLayout` (a sheet with its map frame and title bar), `IconModeField` (a control flag), `components/map-icons.tsx` |
+| < 1170 px (tier 2) | in addition the mode switch shows its icons alone: `IconModeCourse` (a start triangle, a leg and a control circle), `IconModeLayout` (a sheet with its map frame and title bar), `IconModeField` (a control flag), `components/map-icons.tsx` |
 | narrower still | `flex-wrap` on the top bar, the last resort |
 
 The view group (Course · All controls · Class ▾ · Variant ▾ · All
@@ -106,15 +107,16 @@ through `aria-label` (its `<label>` word may be hidden), Export ▾ through
 top bar (§10) and `ToolbarButton`'s own `sm` rule still hides every label.
 
 The thresholds are measured (`e2e/editor-top-bar.spec.ts`, the E2E seed's
-widest row: *Bana 1* with its Class ▾): the full row is 1370 px in English
-and 1398 px in Swedish; a course with variations adds Variant ▾ and All
-variations (about 200 px), so tier 1 starts below 1600 px. Tier 1 saves
-about 385 px (410 px in Swedish), leaving at most about 1190 px with
-variations, so tier 2 starts below 1200 px; it saves about 60 px more.
+widest row: *Bana 1* with its Class ▾): the full row's content is 1346 px
+in English and 1374 px in Swedish; a course with variations adds Variant ▾
+and All variations (about 200 px), so tier 1 starts below 1600 px. Tier 1
+saves about 385 px (410 px in Swedish), leaving at most about 1161 px with
+variations, so tier 2 starts below 1170 px; it saves about 60 px more.
 Presence chips (§11) and long course names (the picker is capped at
 10 rem) can still wrap the row below that. At 1840 × 1090, the user's
-laptop, the row is 1214 px with the shell's `max-w-7xl` (tier 1) and about
-1780 px with F28's wide editor (every label): one row either way.
+laptop, the row's content is 1190 px with the shell's `max-w-7xl` (tier 1)
+and about 1760 px with F28's wide editor (every label): one row either
+way.
 
 **No status bar on the desktop** (P2, feedback 2026-11-06 item 3): the
 status bar under the inspector took room on small laptop screens. Its
@@ -1844,6 +1846,12 @@ whose poll ran meanwhile simply does not conflict (decision log, D10).
 
 ## Pending in this chapter
 
+- **The top bar past tier 2** (§2 "Top bar", F29): below 1170 px of row
+  only the mode words have gone; the view group, presence chips, a save
+  error's words and course names longer than the seed's still wrap the row
+  (`flex-wrap`, the last resort the user chose). The thresholds were
+  measured with the seed's widest course and an estimate for Variant ▾ /
+  All variations, not with a seeded variation group.
 - **The selected leg's highlight** (§6.7): the selected leg has no
   highlight beyond the UI outline.
 - **The leg's gaps in the Leg section** (08 §5.2 "leg: style, gaps,

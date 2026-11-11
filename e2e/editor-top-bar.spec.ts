@@ -55,7 +55,12 @@ async function ensureCoursesAndMap(page: Page) {
   await expect(page.getByTestId("map-viewer")).toBeVisible({ timeout: 60000 });
 }
 
-const toolbarWidth = async (page: Page) => (await page.getByTestId("map-toolbar").boundingBox())!.width;
+/** The row's content width, inside its padding: what the container query measures. */
+const toolbarWidth = (page: Page) =>
+  page.getByTestId("map-toolbar").evaluate((bar) => {
+    const cs = getComputedStyle(bar);
+    return bar.clientWidth - parseFloat(cs.paddingLeft) - parseFloat(cs.paddingRight);
+  });
 
 /** Every shown item of the toolbar row (the top bar's items and MapPanel's own group) on one line. */
 async function expectOneRow(page: Page) {
@@ -155,5 +160,16 @@ test("F29: the top bar fits one row at 1840 × 1090 and collapses by the row's w
     await expectTier(page, tier);
     await expectOneRow(page);
     await expectNames(page);
+    if (tier === 2) {
+      // A collapsed control still works: the icon-only mode button switches, the icon-only Export opens its menu.
+      await page.getByTestId("editor-mode-layout").click();
+      await expect(page.getByTestId("editor-mode-layout")).toHaveAttribute("aria-pressed", "true");
+      await page.getByTestId("editor-mode-course").click();
+      await expect(page.getByTestId("editor-mode-course")).toHaveAttribute("aria-pressed", "true");
+      await page.getByTestId("editor-export").click();
+      await expect(page.getByRole("menu")).toBeVisible();
+      await page.getByTestId("editor-export").click();
+      await expect(page.getByRole("menu")).toHaveCount(0);
+    }
   }
 });

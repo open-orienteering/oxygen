@@ -85,7 +85,7 @@ export function ExportMenu({ state, onError }: { state: ExportState; onError: (m
       >
         {/* Icon + label (F29); the label is the first to go when the top bar's row is short. */}
         <span className="inline-flex shrink-0 [&>svg]:w-4 [&>svg]:h-4"><IconExport /></span>
-        <span className={TOP_BAR_TIER1_HIDE}>{busy ? t("exportBusy") : t("export")}</span>
+        <span data-toolbar-label="" className={TOP_BAR_TIER1_HIDE}>{busy ? t("exportBusy") : t("export")}</span>
         <span aria-hidden="true">▾</span>
       </button>
       {open && (

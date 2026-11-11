@@ -2,7 +2,8 @@
  * The editor's top bar collapses in two tiers when `MapPanel`'s
  * `map-toolbar` row is short (docs/course-editor.md §2 "Top bar", F29).
  * `map-toolbar` is a CSS `@container` (`@container/toolbar`); these are
- * container-query classes on that row's width, not the viewport's.
+ * container-query classes on that row's content width (inside its
+ * padding), not the viewport's.
  *
  * - **Tier 1** (row under `TIER1_PX`): the labels of Hide other controls,
  *   Auto slits, Hide descriptions and Export, and the course picker's
@@ -18,11 +19,11 @@
  * strings literal, so the numbers appear twice.
  */
 export const TIER1_PX = 1600;
-export const TIER2_PX = 1200;
+export const TIER2_PX = 1170;
 
 /** On a label: hidden below tier 1. */
 export const TOP_BAR_TIER1_HIDE = "@max-[1600px]/toolbar:hidden";
 /** On a mode word: hidden below tier 2. */
-export const TOP_BAR_TIER2_HIDE = "@max-[1200px]/toolbar:hidden";
+export const TOP_BAR_TIER2_HIDE = "@max-[1170px]/toolbar:hidden";
 /** On a mode icon: shown (as `inline-flex`) below tier 2 only. */
-export const TOP_BAR_TIER2_SHOW = "hidden @max-[1200px]/toolbar:inline-flex";
+export const TOP_BAR_TIER2_SHOW = "hidden @max-[1170px]/toolbar:inline-flex";

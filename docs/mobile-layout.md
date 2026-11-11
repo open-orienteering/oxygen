@@ -92,10 +92,10 @@ buttons did not fit 390px and **Auto slits** rendered on top of
 
 Above `sm` the course editor's row has a second, width-based rule (F29,
 [course-editor.md](course-editor.md) §2 "Top bar"): `map-toolbar` is a CSS
-container (`@container/toolbar`), and below 1600 px of row the editor's
+container (`@container/toolbar`), and below 1600 px of row (its content width) the editor's
 labels (Hide other controls, Auto slits, Hide descriptions, Export and the
 course picker's *Course* word) are hidden through `ToolbarButton`'s
-`labelClassName`; below 1200 px the Course / Layout / Field switch shows its
+`labelClassName`; below 1170 px the Course / Layout / Field switch shows its
 icons alone. The accessible names stay, as on a phone. Other pages' map
 panels keep the `sm` rule only.
 
