@@ -401,7 +401,11 @@ function CompetitionShellInner() {
     );
   }
 
-  const headerInnerClass = wideContainer
+  // The course editor fills the window at every width (course-editor.md §2,
+  // F28): its route gets the wide container's header and padding, not
+  // `max-w-7xl`, even below the 2200 px two-pane breakpoint.
+  const editorRoute = activeTab === "course-editor";
+  const headerInnerClass = wideContainer || editorRoute
     ? "px-4 sm:px-6 lg:px-8 w-full"
     : "max-w-7xl mx-auto px-4 sm:px-6 lg:px-8";
 
@@ -608,6 +612,7 @@ function CompetitionShellInner() {
             leaf subtree — not the whole route tree. */}
         <PaneContainer
           wideContainer={wideContainer}
+          editorRoute={editorRoute}
           clampedPaneWidth={clampedPaneWidth}
           onCollapse={() => setPaneCollapsed(true)}
           onWidthCommit={setPaneWidth}
@@ -670,6 +675,8 @@ function CompetitionShellInner() {
 
 interface PaneContainerProps {
   wideContainer: boolean;
+  /** The course editor's route: `w-full` and `py-3` at every width (F28). */
+  editorRoute: boolean;
   clampedPaneWidth: number;
   onCollapse: () => void;
   onWidthCommit: (px: number) => void;
@@ -678,6 +685,7 @@ interface PaneContainerProps {
 
 function PaneContainer({
   wideContainer,
+  editorRoute,
   clampedPaneWidth,
   onCollapse,
   onWidthCommit,
@@ -697,7 +705,10 @@ function PaneContainer({
     }
   }, []);
 
-  const containerClass = wideContainer
+  // The editor's height (EditorPage.tsx) subtracts this `py-3`.
+  const containerClass = editorRoute
+    ? "px-4 sm:px-6 lg:px-8 py-3 w-full"
+    : wideContainer
     ? "px-4 sm:px-6 lg:px-8 py-6 w-full"
     : "max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-6";
   const containerStyle: React.CSSProperties = {
