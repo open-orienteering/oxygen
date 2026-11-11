@@ -14,7 +14,7 @@ import {
   emptyPoint, ensureCoursesAndMap, ensureFixtureFromDesktop, freezeExternalPoll, geometryOf, inkAt, inkIn, labelOf, legBetween, legMidpoint, legPieces, nameIdOf, objectRow, plainMapAt,
   openEditor, pageToPaperOf, place, placeOneShot, pressInside, pressOnEdge, printed, probeTemplate, regularCodes, select, selectCompetition,
   selectedCode, selectedPosition, siteCuts, site, sitePoint, sites, toolShapes, toPage, toPaper, trpcCall, viewCentre, viewSettled, newCourse,
-  mapScale, nextFrames, statsRow, loupeCircleAt, paperToPageOf, type Frame, type Site,
+  mapScale, nextFrames, statsRow, loupeCircleAt, paperToPageOf, sheetBoxes, type Frame, type Site,
 } from "./helpers/editor";
 import { migrateLegacySheetObjects } from "./helpers/legacy-objects";
 import { touchDrag, touchEnd, touchMove, touchStart, touchTap } from "./helpers/touch";
@@ -3923,18 +3923,33 @@ test.describe("F7: variations and loops (docs/course-editor.md §12)", () => {
     return sum.map((v) => v / n);
   }
 
-  /** A page point well off the leg a → b (half its length to one side), clear of every site. */
+  /**
+   * A page point well off the leg a → b (half its length to one side) where a click reaches the map: clear of every
+   * site and drawn number, of the editor's chrome (the inspector, the rail, the action bar) and of the description
+   * sheet. The viewer spans the whole editor under its floating panels, so "inside the viewer" is not enough — a point
+   * under the inspector got the K click there and placed nothing (bugfix-f7-offleg-under-inspector.md).
+   */
   async function offLeg(page: Page, a: Site, b: Site): Promise<Pt> {
+    await viewSettled(page);
     const pa = await toPage(page, a.mm), pb = await toPage(page, b.mm);
     const mid = { x: (pa.x + pb.x) / 2, y: (pa.y + pb.y) / 2 };
     const len = Math.hypot(pb.x - pa.x, pb.y - pa.y);
     const n = { x: -(pb.y - pa.y) / len, y: (pb.x - pa.x) / len };
     const viewer = (await page.getByTestId("map-viewer").boundingBox())!;
     const marks = await Promise.all((await sites(page)).map((s) => toPage(page, s.mm)));
-    for (const k of [0.5, -0.5, 0.7, -0.7, 0.35, -0.35]) {
+    const numbers = await Promise.all((await page.getByTestId("course-label").evaluateAll((els) => els.map((el) => ({
+      x: Number(el.getAttribute("data-x")), y: Number(el.getAttribute("data-y")),
+    })))).map((q) => toPage(page, q)));
+    const sheets = await sheetBoxes(page);
+    for (const k of [0.5, -0.5, 0.7, -0.7, 0.35, -0.35, 0.9, -0.9, 0.25, -0.25]) {
       const p = { x: mid.x + n.x * len * k, y: mid.y + n.y * len * k };
       const inside = p.x > viewer.x + 60 && p.x < viewer.x + viewer.width - 100 && p.y > viewer.y + 60 && p.y < viewer.y + viewer.height - 120;
-      if (inside && marks.every((q) => Math.hypot(q.x - p.x, q.y - p.y) > 45)) return p;
+      if (!inside) continue;
+      if (marks.some((q) => Math.hypot(q.x - p.x, q.y - p.y) <= 45)) continue;
+      if (numbers.some((q) => Math.hypot(q.x - p.x, q.y - p.y) <= 30)) continue;
+      if (sheets.some((s) => p.x > s.x - 12 && p.x < s.x + s.width + 12 && p.y > s.y - 12 && p.y < s.y + s.height + 12)) continue;
+      if ((await coveredBy(page, p)) !== null) continue;
+      return p;
     }
     return emptyPoint(page, 40);
   }

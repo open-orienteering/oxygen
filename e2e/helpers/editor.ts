@@ -118,7 +118,7 @@ async function boxes(page: Page, ids: string[]): Promise<{ x: number; y: number;
 }
 
 /** The drawn description sheets: their svg spans the viewer (pointer-events none), so the content's box, in page px. */
-async function sheetBoxes(page: Page): Promise<{ x: number; y: number; width: number; height: number }[]> {
+export async function sheetBoxes(page: Page): Promise<{ x: number; y: number; width: number; height: number }[]> {
   return page.getByTestId("description-sheet").evaluateAll((els) => els.map((el) => {
     const svg = el as SVGSVGElement, at = svg.getBoundingClientRect(), b = svg.getBBox();
     return { x: at.x + b.x, y: at.y + b.y, width: b.width, height: b.height };
@@ -595,8 +595,14 @@ export async function arm(page: Page, key: string): Promise<void> {
   await expect(page.getByTestId(`editor-tool-${key.toUpperCase()}`)).toHaveAttribute("aria-pressed", "true");
 }
 
-/** With a placing tool armed: hover and click at the page point; returns the new site once the mirror has it. */
+/**
+ * With a placing tool armed: hover and click at the page point; returns the new site once the mirror has it.
+ * Fails fast, like `clickMap`, when the editor's chrome covers the point: the click would land there and place
+ * nothing (F7 flake: a point under the inspector timed out waiting for the site).
+ */
 export async function place(page: Page, at: Pt): Promise<Site> {
+  const cover = await coveredBy(page, at);
+  if (cover) throw new Error(`placement point (${Math.round(at.x)}, ${Math.round(at.y)}) is covered by ${cover}`);
   const before = new Set((await sites(page)).map((s) => s.id));
   await page.mouse.move(at.x, at.y);
   await page.mouse.click(at.x, at.y);
