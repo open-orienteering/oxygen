@@ -124,5 +124,12 @@ Run under `scripts/with-verify-lock.sh`, chromium project:
 - Before the fix: F21 alone with `--repeat-each=12` failed 10 of 12.
 - After the fix: F3 bend, F16 and F21 alone with `--repeat-each=8` passed
   24/24.
-- `course-editor.spec.ts` in order, twice, and the full sharded
-  `pnpm test:e2e`: see the PR.
+- The final code:
+  - F3 bend, F16, F21, F24 and F13 alone with `--repeat-each=4`: 20/20.
+  - `course-editor.spec.ts` in order (the shard-1 context), twice: 68/68 both
+    times.
+  - The full sharded `pnpm test:e2e` (4 shards): 387 passed, 0 failed.
+- Before the last fixes, the in-order runs and one full run each had one
+  failure, each fixed above in turn: F16's bend at 12 % (the middle-half rule),
+  F24's press on the bar (`endOnBar: false`, then the 10 px margin) and F13's
+  pair search.
