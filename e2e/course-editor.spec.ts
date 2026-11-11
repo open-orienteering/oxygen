@@ -2319,7 +2319,10 @@ test.describe("P2: the status bar out of the footer", () => {
     await expect.poll(() => statsRow(page, "controls", "count"), { timeout: 15000 }).toBe("1");
     await button.click();
     await expect(popover).toBeVisible();
-    await page.getByTestId("editor-inspector").click({ position: { x: 4, y: 4 } });
+    // The inspector's bottom-right corner: when the top bar wraps (F27's magnifier at 1280 px) the popover hangs
+    // over the inspector's top-left, and a click there would land on the popover.
+    const ib = (await page.getByTestId("editor-inspector").boundingBox())!;
+    await page.getByTestId("editor-inspector").click({ position: { x: ib.width - 4, y: ib.height - 4 } });
     await expect(popover).toHaveCount(0);
 
     // Escape closes the popover and nothing else: an armed tool stays armed (the editor's Escape cascade, §3, is not stepped).
