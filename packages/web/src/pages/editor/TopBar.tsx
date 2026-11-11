@@ -14,7 +14,8 @@
 import { useTranslation } from "react-i18next";
 import { EditorHelp } from "../../components/EditorHelp";
 import { ToolbarButton } from "../../components/ToolbarButton";
-import { IconEyeOff, IconLoupe, IconRedo, IconScissors, IconUndo } from "../../components/map-icons";
+import { IconEyeOff, IconLoupe, IconModeCourse, IconModeField, IconModeLayout, IconRedo, IconScissors, IconUndo } from "../../components/map-icons";
+import { TOP_BAR_TIER1_HIDE, TOP_BAR_TIER2_HIDE, TOP_BAR_TIER2_SHOW } from "../../components/top-bar-collapse";
 import type { ReactNode } from "react";
 import type { EditorMode, EditorView } from "../../lib/editor/state";
 import type { ExportState } from "../../lib/editor/export-menu";
@@ -67,10 +68,10 @@ export interface TopBarProps {
   map: MapInfoInput;
 }
 
-const MODES: { mode: EditorMode; key: "modeCourse" | "modeLayout" | "modeField"; slice?: string }[] = [
-  { mode: "course", key: "modeCourse" },
-  { mode: "layout", key: "modeLayout" },
-  { mode: "field", key: "modeField" },
+const MODES: { mode: EditorMode; key: "modeCourse" | "modeLayout" | "modeField"; icon: ReactNode; slice?: string }[] = [
+  { mode: "course", key: "modeCourse", icon: <IconModeCourse /> },
+  { mode: "layout", key: "modeLayout", icon: <IconModeLayout /> },
+  { mode: "field", key: "modeField", icon: <IconModeField /> },
 ];
 
 export function TopBar(p: TopBarProps) {
@@ -81,9 +82,10 @@ export function TopBar(p: TopBarProps) {
   return (
     <div className="flex items-center gap-1 sm:gap-2 min-w-0 flex-wrap" data-testid="editor-top-bar">
       <label className="flex items-center gap-1 text-xs text-slate-500">
-        <span className="hidden sm:inline">{t("course")}</span>
+        <span className={`hidden sm:inline ${TOP_BAR_TIER1_HIDE}`}>{t("course")}</span>
         <select
           data-testid="editor-course-picker"
+          aria-label={t("course")}
           value={p.selectedCourseId ?? ""}
           onChange={(e) => p.onSelectCourse(e.target.value === "" ? null : Number(e.target.value))}
           className="max-w-[10rem] text-xs border border-slate-200 rounded-md px-1.5 py-1 bg-white"
@@ -139,11 +141,14 @@ export function TopBar(p: TopBarProps) {
             data-testid={`editor-mode-${m.mode}`}
             aria-pressed={p.mode === m.mode}
             disabled={!!m.slice}
-            title={m.slice ? t("modeLater", { slice: m.slice }) : undefined}
-            className={segment(p.mode === m.mode)}
+            title={m.slice ? t("modeLater", { slice: m.slice }) : t(m.key)}
+            aria-label={t(m.key)}
+            className={`inline-flex items-center ${segment(p.mode === m.mode)}`}
             onClick={() => p.onMode(m.mode)}
           >
-            {t(m.key)}
+            {/* Tier 2 (F29): the icon alone when the row is short; the word stays the name and the tooltip. */}
+            <span className={`${TOP_BAR_TIER2_SHOW} shrink-0 [&>svg]:w-4 [&>svg]:h-4`}>{m.icon}</span>
+            <span className={TOP_BAR_TIER2_HIDE}>{t(m.key)}</span>
           </button>
         ))}
       </div>
@@ -154,6 +159,7 @@ export function TopBar(p: TopBarProps) {
         testId="editor-hide-others"
         icon={<IconEyeOff />}
         label={tc("editor.hideOtherControls")}
+        labelClassName={TOP_BAR_TIER1_HIDE}
         disabled={p.selectedCourseId === null}
         active={p.hideOthers}
         onClick={p.onToggleHideOthers}
@@ -163,6 +169,7 @@ export function TopBar(p: TopBarProps) {
         icon={<IconScissors />}
         label={tc("editor.toggleCuts")}
         title={tc("editor.toggleCutsTitle")}
+        labelClassName={TOP_BAR_TIER1_HIDE}
         disabled={p.cutsBusy}
         active={p.cutsEnabled}
         onClick={p.onToggleCuts}

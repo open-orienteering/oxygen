@@ -18,6 +18,7 @@ import { ToolbarButton } from "./ToolbarButton";
 import { ClubMapPicker } from "./ClubMapPicker";
 import { useMapReplace } from "./useMapReplace";
 import { MapImportState } from "./MapImportState";
+import { TOP_BAR_TIER1_HIDE } from "./top-bar-collapse";
 
 /**
  * Public prop surface for `<MapPanel>`. Exported so the shell-owned
@@ -474,7 +475,7 @@ function MapPanelImpl({
   const paneToolbar = renderToolbar ? (
     <div
       data-testid="map-toolbar"
-      className="relative z-10 flex items-center gap-2 sm:gap-3 px-2 sm:px-3 py-1.5 sm:py-2 border-b border-slate-200 flex-shrink-0"
+      className="@container/toolbar relative z-10 flex items-center gap-2 sm:gap-3 px-2 sm:px-3 py-1.5 sm:py-2 border-b border-slate-200 flex-shrink-0"
     >
       {fillContainer && !toolbar && (
         <h2 className="text-sm font-semibold text-slate-500 uppercase tracking-wider">
@@ -502,6 +503,7 @@ function MapPanelImpl({
             testId="map-toggle-descriptions"
             icon={<IconDescriptions />}
             label={showDescriptions ? t("hideDescriptions") : t("descriptions")}
+            labelClassName={editor ? TOP_BAR_TIER1_HIDE : ""}
             active={showDescriptions}
             onClick={() => setShowDescriptions((v) => !v)}
           />

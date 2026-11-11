@@ -90,6 +90,15 @@ buttons get `p-2` and 20px icons — a ~36px touch target — instead of the
 buttons did not fit 390px and **Auto slits** rendered on top of
 **Descriptions**.
 
+Above `sm` the course editor's row has a second, width-based rule (F29,
+[course-editor.md](course-editor.md) §2 "Top bar"): `map-toolbar` is a CSS
+container (`@container/toolbar`), and below 1600 px of row the editor's
+labels (Hide other controls, Auto slits, Hide descriptions, Export and the
+course picker's *Course* word) are hidden through `ToolbarButton`'s
+`labelClassName`; below 1200 px the Course / Layout / Field switch shows its
+icons alone. The accessible names stay, as on a phone. Other pages' map
+panels keep the `sm` rule only.
+
 The selected-control readout keeps the code and SRR/radio badges on phones
 but hides the millimetre position (`hidden sm:inline`).
 
@@ -184,7 +193,7 @@ to Google Accounts and the cross-origin OAuth response is rejected by CORS.
 | Session recovery | `packages/web/src/lib/session-recovery.ts`, `CompetitionShell` |
 | Map height / toolbar / drop zone | `packages/web/src/components/MapPanel.tsx`, `useMapReplace.ts`, `ClubMapPicker.tsx` |
 | Editor map info (desktop) | `packages/web/src/pages/editor/MapInfoDialog.tsx`, `lib/editor/map-info.ts` |
-| Toolbar buttons + icons | `packages/web/src/components/ToolbarButton.tsx`, `map-icons.tsx` |
+| Toolbar buttons + icons | `packages/web/src/components/ToolbarButton.tsx`, `map-icons.tsx`, `top-bar-collapse.ts` (F29) |
 | Controls page toolbar | `packages/web/src/pages/ControlsPage.tsx` |
 | Shell header | `packages/web/src/pages/CompetitionShell.tsx` |
 | E2E | `e2e/mobile-layout.spec.ts` (the editor's phone layout itself is `e2e/field-mode.spec.ts` and the touch describe of `e2e/course-editor.spec.ts`, whose "F23" describe drives a tablet's bend drags; E3 deleted the legacy editor's phone tests), `e2e/session-recovery.spec.ts` |
