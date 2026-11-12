@@ -88,7 +88,7 @@ import { CourseSection, MultiSection, SelectionSection } from "./modes/CourseMod
 import { AddMenu, FieldSection, FieldSelection, FieldTopBar, FixStatus, OfflineNotice, OverflowMenu, type AddChoice } from "./modes/FieldMode";
 import { useFieldFix } from "./useFieldFix";
 import { useLayoutMode } from "./modes/LayoutMode";
-import { editorSearchFor, parseEditorUrl, type EditorUrlState } from "../../lib/editor/url";
+import { checkInbound, editorSearchFor, fetchIfIdle, parseEditorUrl, type EditorUrlState } from "../../lib/editor/url";
 import { useClassView } from "./modes/ClassView";
 
 type Pt = { x: number; y: number };
@@ -1728,34 +1728,37 @@ export function EditorPage() {
   useEffect(() => {
     if (hydration === "course") {
       if (inbound.course === null) return void setHydration("view");
-      if (!courses.data && !courses.isError) return;
-      if (courses.data?.some((c) => c.id === inbound.course)) dispatch({ type: "select-course", id: inbound.course });
+      const known = checkInbound(!!courses.data?.some((c) => c.id === inbound.course), courses);
+      if (known === null) return void fetchIfIdle(courses);
+      if (known) dispatch({ type: "select-course", id: inbound.course });
       setHydration("view");
     } else if (hydration === "view") {
-      const course = state.selectedCourseId;
       const wantsVariant = inbound.variantKey !== null;
-      if (course === null || (inbound.view === "course" && !wantsVariant) || inbound.view === "all") {
+      if (state.selectedCourseId === null || (inbound.view === "course" && !wantsVariant) || inbound.view === "all") {
         if (inbound.view === "all") dispatch({ type: "view", view: "all" });
         return void setHydration("control");
       }
       // Class view checks the class against the course's; a variant (and All variations) the course's structure.
-      if (inbound.view === "class" && !courseClasses.data && !courseClasses.isError) return;
-      const needsStructure = wantsVariant || inbound.view === "all-variations";
-      if (needsStructure && !detailStructure && !detail.isError) return;
-      if (inbound.view === "class" && courseClasses.data?.some((c) => c.seq === inbound.classSeq)) dispatch({ type: "class", seq: inbound.classSeq });
-      if (inbound.view === "all-variations" && variantKeys.length > 0) dispatch({ type: "view", view: "all-variations" });
-      if (wantsVariant && variantKeys.includes(inbound.variantKey!)) dispatch({ type: "variant", key: inbound.variantKey });
+      const classKnown = inbound.view === "class" ? checkInbound(!!courseClasses.data?.some((c) => c.seq === inbound.classSeq), courseClasses) : false;
+      if (classKnown === null) return void fetchIfIdle(courseClasses);
+      const structureFound = !!detailStructure && (inbound.view === "all-variations" ? variantKeys.length > 0 : !wantsVariant || variantKeys.includes(inbound.variantKey!));
+      const structureKnown = wantsVariant || inbound.view === "all-variations" ? checkInbound(structureFound, detail) : false;
+      if (structureKnown === null) return void fetchIfIdle(detail);
+      if (classKnown) dispatch({ type: "class", seq: inbound.classSeq });
+      if (structureKnown && inbound.view === "all-variations") dispatch({ type: "view", view: "all-variations" });
+      if (structureKnown && wantsVariant) dispatch({ type: "variant", key: inbound.variantKey });
       setHydration("control");
     } else if (hydration === "control") {
       if (inbound.control !== null) {
-        if (!controlCoords.data && !controlCoords.isError) return;
-        if (controlCoords.data?.some((c) => c.id === inbound.control)) dispatch({ type: "select", id: inbound.control });
+        const known = checkInbound(!!controlCoords.data?.some((c) => c.id === inbound.control), controlCoords);
+        if (known === null) return void fetchIfIdle(controlCoords);
+        if (known) dispatch({ type: "select", id: inbound.control });
       }
       // An opened sheet or template is checked by Layout itself.
       if (!layoutMode.settled) return;
       setHydration("done");
     }
-  }, [hydration, inbound, courses.data, courses.isError, state.selectedCourseId, courseClasses.data, courseClasses.isError, detailStructure, detail.isError, variantKeys, controlCoords.data, controlCoords.isError, layoutMode.settled]);
+  }, [hydration, inbound, courses, state.selectedCourseId, courseClasses, detailStructure, detail, variantKeys, controlCoords, layoutMode.settled]);
 
   const urlState: EditorUrlState = {
     course: state.selectedCourseId,

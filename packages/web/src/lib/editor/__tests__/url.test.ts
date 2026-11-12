@@ -1,5 +1,5 @@
-import { describe, expect, it } from "vitest";
-import { editorSearchFor, parseEditorUrl, type EditorUrlState } from "../url";
+import { describe, expect, it, vi } from "vitest";
+import { checkInbound, editorSearchFor, fetchIfIdle, parseEditorUrl, type EditorUrlState } from "../url";
 
 // The editor's URL (docs/course-editor.md §1 "URL"; F31).
 const BASE: EditorUrlState = { course: null, mode: null, view: "course", classSeq: null, variantKey: null, layout: null };
@@ -124,5 +124,29 @@ describe("parseEditorUrl", () => {
   it("is what the cleaned URL says: an invalid param is gone from the next write", () => {
     const p = parseEditorUrl("course=2&mode=bogus&view=class&sheet=3&control=x");
     expect(editorSearchFor(strip(p))).toBe("course=2");
+  });
+});
+
+describe("checkInbound (the persisted cache)", () => {
+  const q = (o: Partial<{ isFetchedAfterMount: boolean; isError: boolean; isFetching: boolean }> = {}) =>
+    ({ isFetchedAfterMount: false, isError: false, isFetching: false, refetch: vi.fn(), ...o });
+
+  it("takes a value the cache already has", () => {
+    expect(checkInbound(true, q())).toBe(true);
+  });
+
+  it("rejects a miss only once the query has fetched since mount, or failed", () => {
+    expect(checkInbound(false, q({ isFetchedAfterMount: true }))).toBe(false);
+    expect(checkInbound(false, q({ isError: true }))).toBe(false);
+  });
+
+  it("waits on a miss in cached data, and fetchIfIdle fetches it once", () => {
+    const idle = q();
+    expect(checkInbound(false, idle)).toBeNull();
+    fetchIfIdle(idle);
+    expect(idle.refetch).toHaveBeenCalledTimes(1);
+    const busy = q({ isFetching: true });
+    fetchIfIdle(busy);
+    expect(busy.refetch).not.toHaveBeenCalled();
   });
 });

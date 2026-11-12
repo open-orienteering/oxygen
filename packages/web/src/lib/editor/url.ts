@@ -158,3 +158,30 @@ export function editorSearchFor(s: EditorUrlState, keep?: URLSearchParams | stri
   }
   return q.toString();
 }
+
+/** What `checkInbound` needs of a query (React Query's result). */
+export interface InboundQuery {
+  isFetchedAfterMount: boolean;
+  isError: boolean;
+  isFetching: boolean;
+  refetch: () => unknown;
+}
+
+/**
+ * Whether an inbound param names something in a query's data: `true` when
+ * `found` (the cache may answer), `false` only once the query has fetched
+ * since the page mounted or failed, `null` while that is pending. The cache
+ * is persisted (offline-first) and fresh for a few seconds, so a link to
+ * something created since the last answer — a new sheet, a new course — may
+ * not be in it: the caller fetches (`fetchIfIdle`) and asks again.
+ */
+export function checkInbound(found: boolean, q: InboundQuery): boolean | null {
+  if (found) return true;
+  if (q.isFetchedAfterMount || q.isError) return false;
+  return null;
+}
+
+/** Fetch a query `checkInbound` is waiting on, unless it is already fetching. Call it from an effect. */
+export function fetchIfIdle(q: InboundQuery): void {
+  if (!q.isFetching) void q.refetch();
+}
