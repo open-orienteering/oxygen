@@ -60,3 +60,23 @@ export function weightOf(file) {
   if (typeof w === "number") return w;
   return Object.values(w).reduce((sum, v) => sum + v, 0);
 }
+
+/**
+ * LPT partition of spec files (base names) into `count` shards: heaviest
+ * first, each into the currently lightest shard; ties go to the lower
+ * shard and equal weights keep name order, so the split is a pure function
+ * of the file list. The local runner and every CI matrix job compute the
+ * same split from it, and each CI job runs only its own entry.
+ */
+export function partition(specs, count, weigh = weightOf) {
+  const shards = Array.from({ length: count }, () => ({ files: [], weight: 0 }));
+  const byWeightDesc = [...specs]
+    .sort()
+    .sort((a, b) => weigh(b) - weigh(a));
+  for (const file of byWeightDesc) {
+    const lightest = shards.reduce((min, s) => (s.weight < min.weight ? s : min));
+    lightest.files.push(file);
+    lightest.weight += weigh(file);
+  }
+  return shards;
+}
