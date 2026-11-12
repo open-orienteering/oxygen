@@ -860,8 +860,8 @@ finish) and writing `status` sets `kind`. The migration backfilled
 **The slice-F kinds (F4).** `control.create { kind? }` writes any of the
 six (default from `status`, as before); `status` follows a start /
 finish kind and is otherwise the input's (`ok` when the input said 4 /
-5). Crossing and map-issue points are **code-less** like starts and
-finishes: named `Passeringspunkt N` / `Kartutdelning N` by the server (the
+5). Crossing and map-issue points are **code-less** (unlike starts and
+finishes since F32, below): named `Passeringspunkt N` / `Kartutdelning N` by the server (the
 `Start N` / `Mål N` convention), no autodetected description, and given
 a seq above `MARK_SEQ_BASE` (10 000) so their public id — the seq, having
 no code — never meets a punch code (`uuidsOfPublicIds` resolves codes
@@ -882,6 +882,38 @@ structure naming it (`pruneSiteFromStructure`; the token advances, one
 rewrites from its columns, which carries the legs over); `restore` +
 `setStructure(before)` is the editor's undo. `course.controlCoordinates`
 carries `kind`.
+
+**Starts and finishes take a code (F32; user decision 2026-11-12).** A
+control's public id is its first punch code, else its seq
+(`publicControlId`, `control-id.ts`). A start or finish is a physical
+unit programmed with a code (non-control units use codes below 10: 1 is
+clear, 2 is normally check), so `control.create { status: 4 / 5 }` or
+`{ kind: "start" / "finish" }` **without `codes`** stores the lowest free
+code in 3–10, then 11–30 (`lowestFreeStartCode`); when 3–30 are all held
+it is refused `PRECONDITION_FAILED` `START_FINISH_CODES_EXHAUSTED`,
+nothing written. A code is **free** when it is no numeric part of a live
+row's `codes` and no seq of a live row without a numeric first code (a
+legacy code-less start with seq 3 holds 3); the duplicate check of
+`control.create` / `control.update` refuses a code equal to such a seq
+too (`CONFLICT`). The allocation and the row's write are one transaction
+under a per-event `pg_advisory_xact_lock`, so parallel creates take
+distinct codes. Given `codes`, a start or finish is checked as a control
+is; the code is editable (`control.update { codes }`, clearing it to `""`
+stays allowed — the legacy shape), and `control.update { kind: "start" /
+"finish" }` on a row without a numeric code allocates one the same way.
+The code travels in `control.upserted` with the row. So a new start's
+public id is its code, and the seq-as-id that once met a punch code (a
+start with seq 80 beside control 80, `bugfix-first-leg-from-start.md`)
+is not handed out any more. **Existing code-less starts and finishes are
+left as they are** (no backfill; user decision): they keep the seq
+fallback, and their seq counts as held. **Display:** a start or finish
+is shown by its **name** — `displayCode` (`control-id.ts`): start /
+finish → name, else code, else seq; every other site code → name → seq —
+on map labels and sites (`course.controlCoordinates.code`, the layer's
+`site.code`), sheets, check params and the IOF / Purple Pen export `Id`;
+the code is for ids and punch matching, and the Controls page's code
+column shows it. ROC / online-input punches keep the event's mapping
+table (out of F32's scope).
 
 ### 6.4 Importers and backfill
 
