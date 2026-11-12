@@ -88,6 +88,7 @@ import { CourseSection, MultiSection, SelectionSection } from "./modes/CourseMod
 import { AddMenu, FieldSection, FieldSelection, FieldTopBar, FixStatus, OfflineNotice, OverflowMenu, type AddChoice } from "./modes/FieldMode";
 import { useFieldFix } from "./useFieldFix";
 import { useLayoutMode } from "./modes/LayoutMode";
+import { editorSearchFor, parseEditorUrl, type EditorUrlState } from "../../lib/editor/url";
 import { useClassView } from "./modes/ClassView";
 
 type Pt = { x: number; y: number };
@@ -113,10 +114,12 @@ export function EditorPage() {
   const { t: tc, i18n } = useTranslation("courses");
   const isMobile = useMediaQuery("(max-width: 639px)");
   const utils = trpc.useUtils();
-  const [searchParams] = useSearchParams();
+  const [searchParams, setSearchParams] = useSearchParams();
   const { nameId } = useParams<{ nameId: string }>();
-  // A phone opens in Field mode (§9, §10).
-  const [state, dispatch] = useReducer(editorReducer, isMobile, (phone: boolean) => ({ ...initialEditorState, mode: initialModeFor({ phone }) }));
+  // The URL as the editor opened (§1 "URL"; F31), read once.
+  const [inbound] = useState(() => parseEditorUrl(searchParams));
+  // A phone opens in Field mode (§9, §10); the URL's `mode` wins.
+  const [state, dispatch] = useReducer(editorReducer, isMobile, (phone: boolean) => ({ ...initialEditorState, mode: inbound.mode ?? initialModeFor({ phone }) }));
   const fieldMode = state.mode === "field";
   const online = useOnlineStatus();
   const caps = useCapabilities();
@@ -1705,18 +1708,16 @@ export function EditorPage() {
   }, [descControlId, runUndo, runRedo, undoStack, state, handleDelete, deleteControls, deleteObject, selectedObject, focusedVertex, drafts, setDraft, updateObject, setChain, exitTool, finishArea,
     stepSelection, armPlace, setTool, canGap, fitView, areaOpen, canTonerSaver, startArea, layoutKey, selectedLeg, focusedBend, legEditable, writeLeg, addCorridor, selectionGroup, redraw, togglePlacementLoupe]);
 
-  // Layout deep links (docs/course-layout.md §4): `?mode=layout` with `sheet=<seq>` or `template=<seq>`.
-  const layoutLinkDone = useRef(false);
+  // ─── The URL (docs/course-editor.md §1 "URL"; F31) ─────────
+  // Read once, then taken step by step as the data that checks each param loads: Layout's sheet or template
+  // at once (Layout checks it), the course with the course list, the view with the course's classes or
+  // structure, an inbound `control=` with the controls. What fails a check stays out of the state. Only then
+  // is the URL written, always by `replace` (Back leaves the editor in one step), from the state alone.
+  const [hydration, setHydration] = useState<"course" | "view" | "control" | "done">("course");
   const openLayout = layoutMode.open;
   useEffect(() => {
-    if (layoutLinkDone.current) return;
-    layoutLinkDone.current = true;
-    if (searchParams.get("mode") !== "layout") return;
-    const sheet = parseInt(searchParams.get("sheet") ?? "", 10), template = parseInt(searchParams.get("template") ?? "", 10);
-    if (Number.isFinite(sheet)) openLayout({ sheet });
-    else if (Number.isFinite(template)) openLayout({ template });
-    dispatch({ type: "mode", mode: "layout" });
-  }, [searchParams, openLayout]);
+    if (inbound.mode === "layout" && inbound.layout) openLayout(inbound.layout);
+  }, [inbound, openLayout]);
 
   // A sheet opened without a course selected brings its course (it prints only that course).
   const sheetCourse = layoutMode.sheetCourse;
@@ -1724,18 +1725,51 @@ export function EditorPage() {
     if (state.mode === "layout" && sheetCourse !== null && state.selectedCourseId === null) dispatch({ type: "select-course", id: sheetCourse });
   }, [state.mode, sheetCourse, state.selectedCourseId]);
 
-  const deepLinkDone = useRef(false);
   useEffect(() => {
-    if (deepLinkDone.current) return;
-    const courseParam = searchParams.get("course"), controlParam = searchParams.get("control");
-    if (!courseParam && !controlParam) { deepLinkDone.current = true; return; }
-    if ((courseParam && !courses.data) || (controlParam && !controlCoords.data)) return;
-    deepLinkDone.current = true;
-    const courseId = courseParam ? parseInt(courseParam, 10) : NaN;
-    if (courses.data?.some((c) => c.id === courseId)) dispatch({ type: "select-course", id: courseId });
-    const controlId = controlParam ? parseInt(controlParam, 10) : NaN;
-    if (controlCoords.data?.some((c) => c.id === controlId)) dispatch({ type: "select", id: controlId });
-  }, [searchParams, courses.data, controlCoords.data]);
+    if (hydration === "course") {
+      if (inbound.course === null) return void setHydration("view");
+      if (!courses.data && !courses.isError) return;
+      if (courses.data?.some((c) => c.id === inbound.course)) dispatch({ type: "select-course", id: inbound.course });
+      setHydration("view");
+    } else if (hydration === "view") {
+      const course = state.selectedCourseId;
+      const wantsVariant = inbound.variantKey !== null;
+      if (course === null || (inbound.view === "course" && !wantsVariant) || inbound.view === "all") {
+        if (inbound.view === "all") dispatch({ type: "view", view: "all" });
+        return void setHydration("control");
+      }
+      // Class view checks the class against the course's; a variant (and All variations) the course's structure.
+      if (inbound.view === "class" && !courseClasses.data && !courseClasses.isError) return;
+      const needsStructure = wantsVariant || inbound.view === "all-variations";
+      if (needsStructure && !detailStructure && !detail.isError) return;
+      if (inbound.view === "class" && courseClasses.data?.some((c) => c.seq === inbound.classSeq)) dispatch({ type: "class", seq: inbound.classSeq });
+      if (inbound.view === "all-variations" && variantKeys.length > 0) dispatch({ type: "view", view: "all-variations" });
+      if (wantsVariant && variantKeys.includes(inbound.variantKey!)) dispatch({ type: "variant", key: inbound.variantKey });
+      setHydration("control");
+    } else if (hydration === "control") {
+      if (inbound.control !== null) {
+        if (!controlCoords.data && !controlCoords.isError) return;
+        if (controlCoords.data?.some((c) => c.id === inbound.control)) dispatch({ type: "select", id: inbound.control });
+      }
+      // An opened sheet or template is checked by Layout itself.
+      if (!layoutMode.settled) return;
+      setHydration("done");
+    }
+  }, [hydration, inbound, courses.data, courses.isError, state.selectedCourseId, courseClasses.data, courseClasses.isError, detailStructure, detail.isError, variantKeys, controlCoords.data, controlCoords.isError, layoutMode.settled]);
+
+  const urlState: EditorUrlState = {
+    course: state.selectedCourseId,
+    mode: state.mode,
+    view: state.view,
+    classSeq: state.classSeq,
+    // Variant view's key; in Class view and Layout the drawn variant when it is not the first (F8).
+    variantKey: state.view === "variant" ? state.variantKey : state.variantKey !== null && sheetVariant === state.variantKey ? state.variantKey : null,
+    layout: state.mode === "layout" ? layoutMode.shown : null,
+  };
+  const search = hydration === "done" ? editorSearchFor(urlState, searchParams) : null;
+  useEffect(() => {
+    if (search !== null && search !== searchParams.toString()) setSearchParams(search, { replace: true });
+  }, [search, searchParams, setSearchParams]);
 
   // ─── Course-level writes from the inspector ──────────────
   const versions = writes.versions;
