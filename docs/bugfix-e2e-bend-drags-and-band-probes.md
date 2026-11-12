@@ -33,7 +33,7 @@ a sixth of the neighbours' chord (F16), so the handle reached past control 86:
 the control points are still collinear, but the curve runs back over itself.
 The test assumes a bend more than a sixth from both ends.
 
-### F24 "the loupe on mouse drags — a control, a number, a bend …": no loupe
+### F24 "the loupe on mouse drags — a control, a number, a bend …" (since F30: "… a control, a bend; none on a number …"): no loupe
 
 Its bend part drags the handle 60 px up the leg's normal, presses it again
 without moving (no loupe for a click), then drags it 40 px back. With a leg
