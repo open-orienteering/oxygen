@@ -32,6 +32,7 @@ import type { Gesture } from "../tools/bindings";
 import { step as polygonStep } from "../tools/polygon";
 import { constrainDescription } from "../../../lib/map-layout-editor";
 import { useMediaQuery } from "../../../hooks/useMediaQuery";
+import { checkInbound, fetchIfIdle } from "../../../lib/editor/url";
 import type { EditorView } from "../../../lib/editor/state";
 import { LAYOUT_KEYS, layoutBinding, type LayoutChange, type LayoutGesture, type LayoutSelection, type LayoutTarget, type LayoutTool, type PlaceKind } from "../layout/bindings";
 import { LayoutInspector } from "../layout/LayoutInspector";
@@ -76,6 +77,10 @@ export interface LayoutMode {
   sheetKey: string | null;
   /** The shown sheet (its seq) for Export ▾ "This sheet"; null on a template or without a sheet. */
   sheetSeq: number | null;
+  /** What Layout shows, for the URL's `sheet=` / `template=` (F31); null until it has loaded or with nothing to show. */
+  shown: LayoutTarget | null;
+  /** False while an opened sheet or template is still being checked against the event's (F31). */
+  settled: boolean;
 }
 
 interface WriteTarget { key: string; scope: "sheet" | "template"; sheetSeq: number | null; templateSeq: number }
@@ -88,6 +93,16 @@ export function useLayoutMode(a: LayoutModeArgs): LayoutMode {
   const [target, setTarget] = useState<LayoutTarget | null>(null);
 
   const sheets = trpc.courseMap.list.useQuery(undefined, { enabled: a.enabled });
+  // F31: an opened sheet or template that is not this event's gives way to the default (and leaves the URL);
+  // a miss in the persisted cache waits for a fetch (a sheet made since the last visit, `checkInbound`).
+  const templates = trpc.mapTemplate.list.useQuery(undefined, { enabled: a.enabled && !!target && "template" in target });
+  const targetKnown = !target ? true
+    : "sheet" in target ? checkInbound(!!sheets.data?.some((r) => r.seq === target.sheet), sheets)
+    : checkInbound(!!templates.data?.some((r) => r.seq === target.template), templates);
+  useEffect(() => {
+    if (targetKnown === false) setTarget(null);
+    else if (targetKnown === null && target && a.enabled) fetchIfIdle("sheet" in target ? sheets : templates);
+  }, [targetKnown, target, sheets, templates, a.enabled]);
   const resolvedTarget = useMemo((): LayoutTarget | null => {
     const rows = sheets.data ?? [];
     // An opened course sheet gives way when the top bar picks another course or view All.
@@ -110,7 +125,8 @@ export function useLayoutMode(a: LayoutModeArgs): LayoutMode {
       .sort(byOrder)[0];
     return first ? { sheet: first.seq } : null;
   }, [target, sheets.data, a.view, a.course, a.classSeq]);
-  const input = resolvedTarget
+  // An opened target is resolved only once it is known to be the event's (F31: no request for a stale link's sheet).
+  const input = resolvedTarget && targetKnown === true
     ? "sheet" in resolvedTarget
       ? { seq: resolvedTarget.sheet, ...(a.variantKey ? { variantKey: a.variantKey } : {}) }
       : { templateSeq: resolvedTarget.template, ...(a.course ? { courseSeq: a.course.id } : {}) }
@@ -422,5 +438,8 @@ export function useLayoutMode(a: LayoutModeArgs): LayoutMode {
     </div>
   );
 
-  return { editor, rail, inspector, courseOnly: data?.sheet?.kind === "course", onKey, open, sheetCourse: data?.sheet?.courseSeq ?? null, sheetKey: snap ? sheetKeyOf(snap) : null, sheetSeq: data?.sheet?.seq ?? null };
+  return { editor, rail, inspector, courseOnly: data?.sheet?.kind === "course", onKey, open, sheetCourse: data?.sheet?.courseSeq ?? null, sheetKey: snap ? sheetKeyOf(snap) : null, sheetSeq: data?.sheet?.seq ?? null,
+    // What is being shown, from the target before its resolve lands (no `sheet`-less URL in between).
+    shown: input ? resolvedTarget : null,
+    settled: !a.enabled || targetKnown === true && (!input || !!query.data || query.isError) };
 }

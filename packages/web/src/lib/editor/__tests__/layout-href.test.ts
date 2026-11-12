@@ -5,12 +5,12 @@ import { layoutEditorHref, retiredPageHref } from "../layout-href";
 // the Maps and Map templates pages redirect (E-pages).
 describe("layoutEditorHref", () => {
   it("opens a sheet in Layout mode with its course", () => {
-    expect(layoutEditorHref("my-event", { sheet: 7 }, 3)).toBe("/my-event/course-editor?mode=layout&sheet=7&course=3");
+    expect(layoutEditorHref("my-event", { sheet: 7 }, 3)).toBe("/my-event/course-editor?course=3&mode=layout&sheet=7");
   });
 
   it("opens a template, previewed with a course when one is given", () => {
     expect(layoutEditorHref("my-event", { template: 2 })).toBe("/my-event/course-editor?mode=layout&template=2");
-    expect(layoutEditorHref("my-event", { template: 2 }, 5)).toBe("/my-event/course-editor?mode=layout&template=2&course=5");
+    expect(layoutEditorHref("my-event", { template: 2 }, 5)).toBe("/my-event/course-editor?course=5&mode=layout&template=2");
   });
 
   it("omits a null course (the all-controls sheet) and encodes the event name", () => {

@@ -108,7 +108,9 @@ view draw a part sheet's part as it prints. `courseMap.list` items carry
 ## 2. Layout mode
 
 Entered by the mode switch (`editor-mode-layout`) or a deep link
-(`?mode=layout&sheet=<seq>` / `&template=<seq>`, with `&course=<seq>`; §4).
+(`?course=<seq>&mode=layout&sheet=<seq>` / `&template=<seq>`; §4), and
+its URL keeps `mode=layout` with the shown sheet or template while it is
+open (`course-editor.md` §1 "URL").
 The reducer keeps the selected course and drops the tool, phantom and
 selections of Course mode.
 
@@ -357,6 +359,10 @@ is reached from a sheet's template link, by *New template* or *Bring in*.
 Layout mode is the only editor of a sheet or a template. The retired
 Maps and Map templates pages redirect (`/maps` → the Courses page,
 `/map-templates[?template=]` → Layout mode; `retiredPageHref`, E-pages).
+Layout's shown sheet or template is in the editor's URL (`sheet=` /
+`template=` beside `mode=layout`, F31, `course-editor.md` §1 "URL"), so a
+reload reopens it; a sheet or template that is not the event's gives way
+to Layout's default and leaves the URL.
 The legacy `MapLayoutEditor` was deleted in E4c, its map preview
 `window.png` in E4a (`course-print.md` §10).
 
@@ -749,7 +755,7 @@ of the event, course seq (the event's last), sort order, seq.
 | E2E | `e2e/course-editor.spec.ts` "F11: description sheets", `e2e/courses.spec.ts` "Export → Description sheets…" | the dialog from Export ▾ and from the Courses page's menu → `…_descriptions.pdf` with one A4 page per class (`course-print.md` §9.1) |
 | integration | `packages/api/src/__tests__/integration/auto-templates.test.ts` | the migration's backfill (scoped to one event): keys, decision (3), no sheet moved, no rename; key sync on create / update / duplicate / delete with promotion; `autoSheets` (first sheet, auto template named by key, centred, idempotent; the event's look and a landscape turn; without a course every course); class sheets (scale → auto template at that scale; explicit template + scale → sheet override; cleared → deleted; course change); `classOverrides`; `class.upserted` without the overrides; `resolveSheet { classSeq }` (own sheet, course sheet with the override, `{classes}`); version tokens (`CONFLICT` with the row now, no token = LWW); `maps.pdf?classes=` through the composer (one page per class, `courses` / unfiltered without class sheets, 400s; E3 deleted the legacy variant, whose class-name check read the rsvg SVG) |
 | integration | `auto-templates.test.ts` "the all-controls sheet on demand" | E-pages: `{ courseId }` leaves it alone; `{ allControls: true }` creates it once (named, no course, centre NULL) on the busiest key turned landscape, answers its seq and the template created, runs no course part; a second call creates nothing; a template-less one gets the template; with `courseId` both parts run |
-| unit (web) | `lib/editor/__tests__/layout-href.test.ts` | the Courses page's *Edit layout* link — a sheet with its course, a template with and without a preview course, a null course omitted, the event name encoded; E-pages: `retiredPageHref` (`/maps` → Courses with its query, `/map-templates` → Layout mode on `?template=`, an invalid one ignored) |
+| unit (web) | `lib/editor/__tests__/layout-href.test.ts` | the Courses page's *Edit layout* link — a sheet with its course, a template with and without a preview course, a null course omitted, the event name encoded, in the editor's canonical order (`course=…&mode=layout&sheet=…`, F31); E-pages: `retiredPageHref` (`/maps` → Courses with its query, `/map-templates` → Layout mode on `?template=`, an invalid one ignored) |
 | unit (web) | `lib/editor/__tests__/export-menu.test.ts`, `pages/editor/__tests__/layout-model.test.ts`, `src/__tests__/new-template-form.test.ts`, `lib/__tests__/template-picker.test.ts`, `lib/__tests__/shell-tabs.test.ts`, `lib/structured-search/__tests__/new-anchors.test.ts` | E-pages: This sheet (`maps=`, disabled without a sheet, nothing ensured) and All controls ensuring `{ allControls: true }`; the template name in the snapshot and the template write (`templateWriteOf`); `nextSheetName`; a new template's name defaulting to the key's; the picker's values round-trip, a club template's free name; no Maps / Map templates tab; the course anchors' `template` and `status` |
 | E2E | `e2e/course-maps.spec.ts` "the Courses page and Layout mode (E-pages)" | New template… from a course's picker (the dialog creates and applies it; the auto badge; status not *No map*); Edit layout into Layout mode on the sheet; rename (`courseMap.update`), Add a sheet (opens, the picker lists two), Export ▾ This sheet = one A4 page, Delete; the template's name (`mapTemplate.update`); Save to the club library, Bring in (template scope on a new template, no notice); New template opens an A5 key-named one, Delete returns to the sheet; view All → Create the all-controls sheet (one `all_controls` row, shown). Then the overview: bulk Template on two courses (badges), a club template from the picker's optgroup (free name), the course's PDF (1 page), All controls (1), All maps (≥ 3; every course then has a sheet), `maps.pdf` without a pipeline header, the scroll wrapper; Layout's club section deletes a club template |
 | E2E | `e2e/course-maps.spec.ts` "export a course that has no template yet" | a course without a map exports one A4 page from the Courses page; the auto badge with its key; the route answers `application/pdf`; in Layout mode the template's key badge and its key name; a course without a sheet: *Create sheet* in Layout mode makes and shows it |

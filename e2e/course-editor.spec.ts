@@ -1491,10 +1491,11 @@ test.describe("Course editor layout (docs/course-layout.md)", () => {
       await page.goto(`/${nameId}/maps?course=${courseId}`);
       await expect(page).toHaveURL(new RegExp(`/courses\\?course=${courseId}$`));
       const edit = page.locator("tbody tr").filter({ has: page.getByTestId(`course-template-${courseId}`) }).locator("[data-testid^='edit-course-map-']");
-      await expect(edit).toHaveAttribute("href", new RegExp(`course-editor\\?mode=layout&sheet=\\d+&course=${courseId}$`));
+      await expect(edit).toHaveAttribute("href", new RegExp(`course-editor\\?course=${courseId}&mode=layout&sheet=\\d+$`));
       // The course may hold earlier sheets; this one opens by its own link.
       await page.goto(`/${nameId}/course-editor?mode=layout&sheet=${sheet.seq}&course=${courseId}`);
-      await expect(page).toHaveURL(new RegExp(`course-editor\\?mode=layout&sheet=${sheet.seq}`));
+      // F31: the editor writes its canonical form (docs/course-editor.md §1 "URL").
+      await expect(page).toHaveURL(new RegExp(`course-editor\\?course=${courseId}&mode=layout&sheet=${sheet.seq}$`));
       await editorReady(page);
       await expect(page.getByTestId("editor-mode-layout")).toHaveAttribute("aria-pressed", "true");
       await expect(page.getByTestId("editor-layout-scope")).toHaveAttribute("data-sheet", String(sheet.seq));

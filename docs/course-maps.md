@@ -264,8 +264,9 @@ Layout mode (`course-editor?mode=layout[&template=N]`, `retiredPageHref`).
 Neither has a tab.
 
 **Which editor opens.** Every *Edit layout* opens the course editor's
-Layout mode (`/:nameId/course-editor?mode=layout&sheet=<seq>[&course=<seq>]`
-/ `&template=<seq>`, built by `layoutEditorHref`): the sheet drawn on the
+Layout mode (`/:nameId/course-editor?[course=<seq>&]mode=layout&sheet=<seq>`
+/ `&template=<seq>`, built by `layoutEditorHref` in the editor's own URL
+form, `course-editor.md` §1 "URL"): the sheet drawn on the
 GL canvas through the composer's page layer, every gesture one write and
 one undo entry — [`course-layout.md`](course-layout.md). The legacy
 `MapLayoutEditor` (an SVG paper canvas over a `window.png` raster of the
