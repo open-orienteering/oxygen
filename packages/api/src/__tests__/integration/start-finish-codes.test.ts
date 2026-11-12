@@ -153,3 +153,62 @@ describe("starts and finishes take a code (F32)", () => {
     expect(stored.startName).toBe("Start 1");
   });
 });
+
+const iof = (controls: string, course: string) => `<?xml version="1.0" encoding="UTF-8"?>
+<CourseData xmlns="http://www.orienteering.org/datastandard/3.0" iofVersion="3.0">
+  <RaceCourseData>
+    ${controls}
+    <Course><Name>Iof A</Name><Length>1000</Length><Climb>10</Climb>${course}</Course>
+  </RaceCourseData>
+</CourseData>`;
+
+const IOF_A = iof(
+  `<Control type="Start"><Id>S1</Id><Position lng="11.0" lat="58.0"/></Control>
+    <Control type="Control"><Id>41</Id><Position lng="11.001" lat="58.001"/></Control>
+    <Control type="Finish"><Id>F1</Id><Position lng="11.003" lat="58.003"/></Control>`,
+  `<CourseControl type="Start"><Control>S1</Control></CourseControl>
+      <CourseControl type="Control"><Control>41</Control></CourseControl>
+      <CourseControl type="Finish"><Control>F1</Control></CourseControl>`,
+);
+
+describe("the course import gives a new start or finish a code (F32)", () => {
+  const ends = () =>
+    ctx.db.control.findMany({
+      where: { eventId: ctx.eventId, removed: false, status: { in: ["start", "finish"] } },
+      orderBy: { seq: "asc" },
+      select: { id: true, name: true, codes: true },
+    });
+
+  it("allocates on create and keeps the code on a re-import", async () => {
+    await caller.control.create({ codes: "3" });
+    await caller.course.importCourses({ xmlContent: IOF_A });
+    const first = await ends();
+    expect(first.map((e) => [e.name, e.codes])).toEqual([["Start 1", "4"], ["Mål 1", "5"]]);
+    // Matched by name on a re-import: the same rows, the same codes.
+    await caller.course.importCourses({ xmlContent: IOF_A });
+    expect(await ends()).toEqual(first);
+    // The export keeps the name as the id (user decision 2026-11-12).
+    const coords = await caller.course.controlCoordinates();
+    expect(coords.filter((c) => c.status === 4 || c.status === 5).map((c) => [c.id, c.code])).toEqual(
+      expect.arrayContaining([[4, "Start 1"], [5, "Mål 1"]]),
+    );
+  });
+
+  it("refuses a file control whose code a start holds, nothing written", async () => {
+    await caller.control.create({ status: 4 });
+    const before = await ctx.db.control.count({ where: { eventId: ctx.eventId } });
+    const clash = iof(
+      `<Control type="Start"><Id>S1</Id></Control>
+    <Control type="Control"><Id>3</Id></Control>
+    <Control type="Finish"><Id>F1</Id></Control>`,
+      `<CourseControl type="Start"><Control>S1</Control></CourseControl>
+      <CourseControl type="Control"><Control>3</Control></CourseControl>
+      <CourseControl type="Finish"><Control>F1</Control></CourseControl>`,
+    );
+    await expect(caller.course.importCourses({ xmlContent: clash, skipPositions: true })).rejects.toMatchObject({
+      code: "BAD_REQUEST",
+      message: "Control code 3 is held by Start 1",
+    });
+    expect(await ctx.db.control.count({ where: { eventId: ctx.eventId } })).toBe(before);
+  });
+});

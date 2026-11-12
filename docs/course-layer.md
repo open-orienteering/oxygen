@@ -973,6 +973,17 @@ drifted > 30 m" rule never fired — `bugfix-stale-ocd-course-geometry.md`;
 E6 deleted `isOcdGeometryStaleVsXml`.) **PPen `<gaps>` are not read**
 (no fixture, no research record; Pending).
 
+**Starts and finishes on import (F32).** A start or finish the import
+**creates** takes the lowest free code in 3–30 as `control.create` does
+(§6.3; a file's start / finish id — `S1`, `STA1`, `Start 1` — is a name
+key, never a unit code); one it **matches** (by name, "Start N" / "Mål
+N") keeps the codes it has, a legacy code-less row included. A start or
+finish is keyed by its name only, so a file control never matches it by
+code, and a file `Control` whose code a live start or finish holds is
+refused `BAD_REQUEST` (`Control code <n> is held by <name>`) before
+anything is written; `previewImport` likewise reads no start / finish
+code as an existing control.
+
 **The structure from IOF and Purple Pen files** (row F9;
 `iof-coursedata-export.md` "Importing it back", `ppen-import-export.md`).
 Each item's leg is the file's leg props joined (`importedLegProps`,
@@ -2216,6 +2227,9 @@ label.
 | pass stream + golden | `scenes.test.ts` "course-exchange", `e2e/__golden__/map-gl/course-exchange.png` | §11: part 2 alone — the exchange circle numbered 2, 33 numbered 3, no start, legs 32 → 33 → F |
 | integration | `auto-templates.test.ts` "part sheets of a map exchange (F5)", `course-maps` print | §11 with `course-layout.md` §6: part sheets created (names, `section_index`, one template, NULL centre), class sheets per part, idempotent; `resolveSheet` of each part centred on its controls with the whole block and 13.5, `viewOptions.section` on the part sheet; `maps.pdf?courses=` one page per part; a deleted part sheet recreated by the next `autoSheets`, a removed exchange's part sheet kept |
 | unit (web) | `course-layer-request.test.ts` "map exchange (F5)" | an exchange control is a `map_exchange` site, still on course; a sheet's `section` reaches `viewOptions`; `sheetExchanges` |
+| unit | `packages/api/src/__tests__/control-id.test.ts` | §6.3 (F32): `publicControlId` first code else seq; `displayCode` a control by code → name → seq, a start / finish by its name (also by the legacy `status`), a nameless one by code then seq; `lowestFreeStartCode` from 3 (1 and 2 skipped), the lowest gap, 11 after 3–10, null when 3–30 are held |
+| integration | `packages/api/src/__tests__/integration/start-finish-codes.test.ts` | §6.3 / §6.4 (F32): the regression — the seq counter at 80 beside a control coded 80, a new start takes code 3, ids unique on `control.list` and `controlCoordinates` (`code` "Start 1"), `getById` both ways; 3, 4, a held 5 skipped → 6, 11 after 10, the names; a given code used and duplicate-checked; a legacy code-less start's seq held (not allocated, refused as a code on create and update); 3–30 held → `PRECONDITION_FAILED`, nothing written; four parallel creates → 3–6; the code editable; a kind change to start allocates, a coded control keeps its code; `course.update { startControlId }` and `course.list` by the code; the import allocates on create, keeps the codes on a re-import, refuses a file control whose code a start holds, nothing written |
+| E2E | `e2e/editor-start-finish.spec.ts` | §6.3 (F32): Start 1, Mål 1, Start 2 placed from the action bar take ids 3, 4, 5, found by their names (`data-control-code`); the editor's site ids unique |
 
 ## Where things live
 
