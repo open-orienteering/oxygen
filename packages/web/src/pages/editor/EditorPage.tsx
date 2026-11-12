@@ -2195,8 +2195,10 @@ export function EditorPage() {
 
   return (
     // A phone gets the whole screen (§10: full-bleed canvas, the compact top bar's back leaves the editor).
+    // The desktop takes the window less the shell's chrome (§2, F28): the header's 99 px (the 56 px row,
+    // the 42 px tabs row, the header's 1 px border) and the container's `py-3` (1.5rem).
     <div data-testid="editor-page" data-mode={state.mode} data-layout={isMobile ? "phone" : "desktop"}
-      className={isMobile ? "fixed inset-0 z-[60] bg-white" : "h-[calc(100dvh-8rem)] sm:h-[calc(100dvh-200px)] min-h-[420px]"}>
+      className={isMobile ? "fixed inset-0 z-[60] bg-white" : "h-[calc(100dvh-99px-1.5rem)] min-h-[420px]"}>
       <div className={isMobile ? "h-full overflow-hidden" : "h-full bg-white rounded-xl border border-slate-200 overflow-hidden"}>
         <MapPanel
           fillContainer
