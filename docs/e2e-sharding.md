@@ -36,9 +36,56 @@ reference events — nothing to provision manually.
 | `E2E_SHARDS=2 pnpm test:e2e` | Fewer shards (lower peak CPU/RAM) |
 | `pnpm test:e2e:serial` | Escape hatch: plain `playwright test` — the same 4100/4200/4300 stack as a selective run |
 
+| `E2E_SHARD_TOTAL=6 E2E_SHARD_INDEX=3 pnpm test:e2e` | Only shard 3 of the same split into 6, on stack 3 (`:4103`/`:4203`/`:4303`, db `oxygen_e2e_3`). What each CI matrix job runs; replays one CI shard locally |
+| `pnpm test:e2e --plan` | Prints the split (honours `E2E_SHARDS`, `E2E_SHARD_TOTAL`) and exits; starts nothing |
+
 Any argument that doesn't start with `-` is treated as a file filter and
 triggers the unsharded selective path, so `-g "name"` filters also run
 unsharded.
+
+## CI
+
+GitHub's `ubuntu-latest` runner has 4 vCPU, room for two stacks, and
+standard runners cost nothing on a public repository. So CI does not run
+the shards side by side on one runner: the E2E job in
+`.github/workflows/ci.yml` is a matrix, `e2e-shard`, of one runner per
+shard. Each job sets `E2E_SHARD_TOTAL` (the matrix size,
+`strategy.job-total`) and `E2E_SHARD_INDEX` (its `matrix.shard`) and runs
+`pnpm test:e2e`: every job computes the same LPT split
+(`partition` in `scripts/e2e-weights.mjs`, a pure function of the spec
+files and the weights) and runs its own entry on one stack. A shard with
+no files passes; the runner never hands Playwright an empty file list,
+which would run the whole suite.
+
+- **The check.** A gate job `e2e` keeps the check name the merge flow
+  reads, **E2E tests**. It needs the matrix, runs even when a shard failed
+  (`!cancelled()`) and passes only when every shard did. Shards do not
+  cancel each other (`fail-fast: false`), so one run reports every
+  failure and every flake.
+- **The count.** The shard count is the length of the matrix's `shard`
+  list, `1..N` with no gaps (`scripts/__tests__/e2e-shards.test.mjs`
+  checks it). Six today: about 230 s of tests per shard. Free runners
+  allow 20 concurrent jobs per account and several PRs often run at once,
+  so more shards trade a minute per PR for queueing when PRs pile up; the
+  per-job setup (~45 s) and server start (~20 s) do not shrink with them.
+- **No `needs: unit`.** The shards start at once, beside lint, build and
+  unit tests, instead of after them.
+- **Per job.** Postgres (`docker-compose.test.yml`) starts before the
+  browser install, so its image pull overlaps it, and is waited for
+  healthy just before the tests. The Chromium download is cached
+  (`~/.cache/ms-playwright`, keyed on the Playwright version); on a hit
+  only its OS libraries are installed (`playwright install-deps
+  chromium`). A failing shard uploads its own artifact,
+  `playwright-<run>-<attempt>-shard-<n>` (`playwright-report/shard-<n>`,
+  `test-results/shard-<n>`). Each shard also writes its time and weight to
+  the job's summary page.
+- **Docs-only changes** (`docs/**`, `**/*.md`) run no CI at all
+  (`paths-ignore` on `pull_request` and `push`): such a PR shows no checks.
+
+To rebalance after a CI run, read each shard's time from the job summaries
+and the per-test times from its log (the `list` reporter), and adjust
+`WEIGHTS`; `pnpm test:e2e --plan` with `E2E_SHARDS=6` shows the split the
+matrix will use.
 
 ## How the pieces fit
 
@@ -67,28 +114,39 @@ Specs never hardcode the API origin; they import `API_BASE` from
 ### Projects
 
 Every event reads the vector pipeline since E3 (`docs/map-pipeline-switch.md`,
-history note), so there is one desktop run: project `chromium` runs every
-spec except `field-mode.spec.ts`, and project `mobile` runs `MOBILE_SPECS`
-(`field-mode.spec.ts` and `course-editor.spec.ts`'s touch describe) on a
-Pixel 7 profile. The per-pipeline projects `map-legacy` / `map-vector`
-of slices B–D are gone. A shard runs a file once per project that
-matches it, so the weight table counts every run: a file run by both
-projects (`course-editor.spec.ts`) has a per-project entry,
-`{ chromium: 31, mobile: 4 }`, and its weight is the sum (below).
+history note), so there is one desktop run: project `mobile` runs
+`MOBILE_SPECS` (`field-mode.spec.ts` and `course-editor-phone.spec.ts`,
+the course editor's phone subset) on a Pixel 7 profile, and project
+`chromium` runs every other spec. The per-pipeline projects `map-legacy` /
+`map-vector` of slices B–D are gone. Every file runs in exactly one
+project today. Until the course editor's spec was split for the CI shards
+(below), `course-editor.spec.ts` ran under both, the desktop describes
+skipping on the phone and the touch describe on the desktop; the split
+moved the phone's describes into their own file.
 
 ### File partitioning
 
 The runner assigns spec files to shards with an LPT (longest processing
 time first) heuristic over a static weight table in
-`scripts/e2e-weights.mjs` (`WEIGHTS`, `weightOf`). Weights are rough
-run-time proportions (one unit is about 8 s of a shard); a file run by one
-project has a number, a file run by several has one per project and
-weighs their sum. `scripts/__tests__/e2e-config.test.mjs` (`pnpm
-test:scripts`) loads the config's projects and fails when a file run by
-more than one project is not weighted per project, or when a weight names
-a spec that no longer exists. The per-shard durations printed at the end
-of every run tell you when the table needs rebalancing — edit `WEIGHTS`
-and re-run.
+`scripts/e2e-weights.mjs` (`WEIGHTS`, `weightOf`, `partition`). One unit
+is one second of a CI shard: the file's summed test durations on one
+`ubuntu-latest` runner with one stack, as the CI matrix runs it. A file
+missing from the table weighs `DEFAULT_WEIGHT` (10). A file run by one
+project has a number (or `{ mobile: n }` for the phone's files), a file run
+by several would have one per project and weigh their sum: a shard runs a
+file once per project that matches it. `scripts/__tests__/e2e-config.test.mjs`
+(`pnpm test:scripts`) loads the config's projects and fails when an
+object entry does not name exactly the projects that run its file, or when
+a weight names a spec that no longer exists.
+
+LPT can only balance what it is given: a shard is never shorter than its
+heaviest file. `course-editor.spec.ts` once held all of the editor's
+describes, ~515 s of a ~1,290 s suite on a CI runner, and its shard ran
+533 s while the others ran 114–269 s. It is now seven files of 23–132 s
+along its describes (`docs/course-editor.md` "Tests"), sharing
+`e2e/helpers/course-editor-spec.ts`; each file reseeds once in
+`beforeAll`, as the one file did. Keep any new file under about half a
+shard's share; split it along its describes when it grows past that.
 
 ### Single-process seeding
 

@@ -196,4 +196,4 @@ to Google Accounts and the cross-origin OAuth response is rejected by CORS.
 | Toolbar buttons + icons | `packages/web/src/components/ToolbarButton.tsx`, `map-icons.tsx`, `top-bar-collapse.ts` (F29) |
 | Controls page toolbar | `packages/web/src/pages/ControlsPage.tsx` |
 | Shell header | `packages/web/src/pages/CompetitionShell.tsx` |
-| E2E | `e2e/mobile-layout.spec.ts` (the editor's phone layout itself is `e2e/field-mode.spec.ts` and the touch describe of `e2e/course-editor.spec.ts`, whose "F23" describe drives a tablet's bend drags; E3 deleted the legacy editor's phone tests), `e2e/session-recovery.spec.ts` |
+| E2E | `e2e/mobile-layout.spec.ts` (the editor's phone layout itself is `e2e/field-mode.spec.ts` and `e2e/course-editor-phone.spec.ts` (the editor's phone subset); `e2e/course-editor-legs.spec.ts`'s "F23" describe drives a tablet's bend drags; E3 deleted the legacy editor's phone tests), `e2e/session-recovery.spec.ts` |
