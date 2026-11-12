@@ -145,7 +145,7 @@ describe("per-variant pages (course-print.md §4.6)", () => {
       ["Long BA", "BA", "Long BA", "Long BA"],
     ]);
     // The variant's linear path: S 31 32 31 33 34 F, numbered as it prints.
-    const byId = new Map(c.allControls.map((x) => [x.id, x.codes || x.status]));
+    const byId = new Map(c.allControls.map((x) => [x.id, x.status === "start" || x.status === "finish" ? x.status : x.codes]));
     const path = (s: (typeof sheets)[number]) => (Array.isArray(s.course.structure) ? [] : s.course.structure!.items.map((i) => byId.get(i.siteId)));
     expect(path(sheets[0])).toEqual(["start", "31", "32", "31", "33", "34", "finish"]);
     expect(path(sheets[1])).toEqual(["start", "31", "33", "31", "32", "34", "finish"]);

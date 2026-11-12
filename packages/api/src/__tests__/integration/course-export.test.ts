@@ -78,8 +78,10 @@ describe("buildEventCourseDataXml", () => {
     expect(ids).toContain("31");
     expect(ids).toContain("32");
     expect(ids).not.toContain("33");
-    expect(parsed.controls.find((c) => c.id === "901")!.type).toBe("Start");
-    expect(parsed.controls.find((c) => c.id === "902")!.type).toBe("Finish");
+    // A start / finish is exported by its name although it has a code (F32, course-layer.md §6.3).
+    expect(ids).not.toContain("901");
+    expect(parsed.controls.find((c) => c.id === "Start")!.type).toBe("Start");
+    expect(parsed.controls.find((c) => c.id === "Mål")!.type).toBe("Finish");
     // The fixture is georeferenced, so real WGS84 coordinates come along.
     const c31 = parsed.controls.find((c) => c.id === "31")!;
     expect(c31.mapX).toBe(20);
@@ -89,7 +91,7 @@ describe("buildEventCourseDataXml", () => {
     // course's own controls, mirroring the rendered geometry.
     const courseA = parsed.courses.find((c) => c.name === "Export A")!;
     expect(courseA.controls.map((cc) => cc.controlId)).toEqual([
-      "901", "31", "32", "902",
+      "Start", "31", "32", "Mål",
     ]);
     expect(courseA.controls.map((cc) => cc.type)).toEqual([
       "Start", "Control", "Control", "Finish",
@@ -99,7 +101,7 @@ describe("buildEventCourseDataXml", () => {
     expect(courseA.controls.slice(1).every((cc) => cc.legLength > 0)).toBe(true);
 
     const courseB = parsed.courses.find((c) => c.name === "Export B")!;
-    expect(courseB.controls.map((cc) => cc.controlId)).toEqual(["901", "32", "902"]);
+    expect(courseB.controls.map((cc) => cc.controlId)).toEqual(["Start", "32", "Mål"]);
 
     expect(parsed.classAssignments).toEqual([
       { className: "H21 Export", courseName: "Export A" },
@@ -329,8 +331,8 @@ describe("a forked event with a crossing point and a map exchange (row F9)", () 
       { className: "H21 Fork", courseName: "Fork A" },
       { className: "H21 Fork", courseName: "Fork B" },
     ]);
-    expect(parsed.courses.find((c) => c.name === "Fork A")!.controls.map((cc) => cc.controlId)).toEqual(["901", "41", "80", "902"]);
-    expect(parsed.courses.find((c) => c.name === "Fork B")!.controls.map((cc) => cc.controlId)).toEqual(["901", "42", "80", "902"]);
+    expect(parsed.courses.find((c) => c.name === "Fork A")!.controls.map((cc) => cc.controlId)).toEqual(["Start", "41", "80", "Mål"]);
+    expect(parsed.courses.find((c) => c.name === "Fork B")!.controls.map((cc) => cc.controlId)).toEqual(["Start", "42", "80", "Mål"]);
   });
 
   it("writes the crossing point, the taped route and the exchange marker; no map-issue point", async () => {
