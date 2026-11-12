@@ -17,28 +17,8 @@ export function publicControlId(c: { codes: string; seq: number }): number {
   return firstCode(c.codes) || c.seq;
 }
 
-/** Whether a row is a start or finish: its kind, else the legacy `status` 4 / 5. */
-export function isStartOrFinish(c: { kind?: string | null; status?: string | null }): boolean {
-  return c.kind === "start" || c.kind === "finish" || c.status === "start" || c.status === "finish";
-}
-
-/**
- * The label a site is shown by (docs/course-layer.md §6.3, F32): a start or
- * finish by its name — it has a unit code since F32, but labels, sheets and
- * the IOF / Purple Pen export keep "Start 1" / "Mål 1" — else its first code,
- * else its name, else its seq.
- */
-export function displayCode(c: {
-  codes: string;
-  name: string;
-  seq: number;
-  kind?: string | null;
-  status?: string | null;
-}): string {
-  const first = c.codes.split(";")[0]?.trim() ?? "";
-  if (isStartOrFinish(c)) return c.name || first || String(c.seq);
-  return first || c.name || String(c.seq);
-}
+/** The display rule lives in `@oxygen/shared` (one rule for the API and the web, F32). */
+export { displayCode, isStartOrFinish } from "@oxygen/shared";
 
 /**
  * The code ranges a start or finish takes when created without one

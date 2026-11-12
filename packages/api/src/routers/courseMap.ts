@@ -17,7 +17,7 @@ import { z } from "zod";
 import { Prisma } from "../generated/prisma/client.js";
 import { layoutControlsFromCourseControls, layoutCourseEnds, resolveMapLayout } from "../course-maps/resolve-layout.js";
 import { getBaseMapInfoOrNull } from "../course-maps/map-source.js";
-import { publicControlId } from "../control-id.js";
+import { displayCode, publicControlId } from "../control-id.js";
 import { type MapRowContext, setterControlIds, sharedWindowCentre, sheetInputForMapRow } from "../course-maps/pdf-page.js";
 import { resolveSheet } from "../course-maps/resolve-sheet.js";
 import { classesByCourse, loadCourseObjects, nextObjectVersion } from "../course-objects.js";
@@ -174,7 +174,7 @@ export interface EditorSheet {
  */
 function variantControlsOf(
   structure: unknown,
-  controls: ReadonlyArray<{ id: string; seq: number; codes: string; xpos: number; ypos: number; kind: string }>,
+  controls: ReadonlyArray<{ id: string; seq: number; codes: string; name: string; status: string; xpos: number; ypos: number; kind: string }>,
 ): { key: string; controls: Array<MapPoint & { id: string; code: string }> }[] | null {
   const parsed = structure ? course.courseStructureSchema.safeParse(structure) : null;
   if (!parsed?.success || !course.hasVariations(parsed.data)) return null;
@@ -183,7 +183,7 @@ function variantControlsOf(
     key: v.key,
     controls: [...new Set(v.items.map((i) => i.siteId))].flatMap((id) => {
       const c = byId.get(id);
-      return c && (c.xpos !== 0 || c.ypos !== 0) ? [{ id, code: c.codes.split(";")[0]?.trim() || String(c.seq), x: c.xpos, y: c.ypos }] : [];
+      return c && (c.xpos !== 0 || c.ypos !== 0) ? [{ id, code: displayCode(c), x: c.xpos, y: c.ypos }] : [];
     }),
   }));
 }

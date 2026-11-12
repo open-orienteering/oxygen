@@ -10,7 +10,7 @@
 
 import { course, type ControlDescription } from "@oxygen/shared";
 import type { PrismaClient, Prisma } from "./generated/prisma/client.js";
-import { publicControlId } from "./control-id.js";
+import { displayCode, publicControlId } from "./control-id.js";
 import { loadCourseSequences } from "./course-geometry.js";
 import { classesByCourse, loadCourseObjects, objectsInScope } from "./course-objects.js";
 import { rowKind } from "./course-structure.js";
@@ -43,7 +43,7 @@ export async function courseChecksFor(db: Db, eventId: bigint, courseUuid: strin
   const publicOf = new Map(rows.map((r) => [r.id, publicControlId(r)]));
   const sites: course.CheckSite[] = rows.map((r) => ({
     id: r.id,
-    code: r.codes.split(";")[0]?.trim() || r.name || String(r.seq),
+    code: displayCode(r),
     codes: r.codes.split(";").map((c) => parseInt(c.trim(), 10)).filter((n) => Number.isFinite(n)),
     kind: rowKind(r),
     x: r.xpos,

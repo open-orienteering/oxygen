@@ -37,6 +37,7 @@ import { parseOCDCourseData } from "../ocd-course-parser.js";
 import { isPpenContent, parsePpenCourseData } from "../ppen-course-parser.js";
 import { resolveImportAlignment } from "../course-import-align.js";
 import { MARK_SEQ_BASE, publicControlId } from "./control.js";
+import { displayCode } from "../control-id.js";
 import { courseChecksFor } from "../course-checks.js";
 import { lastWriter, othersPresent, PRESENCE_TTL_MS, touchPresence } from "../course-presence.js";
 import {
@@ -750,7 +751,7 @@ export const courseRouter = router({
         controlIds: z.array(z.number().int()).optional(),
         /**
          * Assign a specific event start/finish control to this course
-         * (public control id, i.e. seq for code-less start/finish rows).
+         * (public control id: its code, or the seq of a legacy code-less row).
          * `null` clears the assignment back to the lowest-seq default;
          * `undefined` leaves it unchanged.
          */
@@ -1361,7 +1362,8 @@ export const courseRouter = router({
           // map→Controls-page click navigation resolve correctly.
           id: publicControlId({ codes: c.codes ?? "", seq: c.seq }),
           name: c.name,
-          code: (c.codes ?? "").split(";")[0] || c.name,
+          // A start / finish by its name (F32, course-layer.md §6.3).
+          code: displayCode(c),
           status: controlStatusToValue(c.status),
           lat,
           lng,
