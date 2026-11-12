@@ -36,7 +36,7 @@ import {
 import { parseOCDCourseData } from "../ocd-course-parser.js";
 import { isPpenContent, parsePpenCourseData } from "../ppen-course-parser.js";
 import { resolveImportAlignment } from "../course-import-align.js";
-import { MARK_SEQ_BASE, allocateStartFinishCode, publicControlId } from "./control.js";
+import { MARK_SEQ_BASE, allocateStartFinishCode, codeHolder, publicControlId } from "./control.js";
 import { displayCode, isStartOrFinish } from "../control-id.js";
 import { courseChecksFor } from "../course-checks.js";
 import { lastWriter, othersPresent, PRESENCE_TTL_MS, touchPresence } from "../course-presence.js";
@@ -1890,6 +1890,7 @@ export const courseRouter = router({
           id: true,
           name: true,
           codes: true,
+          seq: true,
           removed: true,
           kind: true,
           status: true,
@@ -2043,10 +2044,22 @@ export const courseRouter = router({
             data.lat = nextLat;
             data.lng = nextLng;
           }
-          await ctx.db.control.update({
-            where: { id: matched.id },
-            data,
-          });
+          // A removed start / finish the import restores keeps its code
+          // unless a live row has since taken its public id: then it takes
+          // a new one, as on create (F32, course-layer.md §6.4).
+          if (isEnd && matched.removed && (await codeHolder(ctx.db, eventId, publicControlId(matched), matched.id))) {
+            await ctx.db.$transaction(async (tx) =>
+              tx.control.update({
+                where: { id: matched.id },
+                data: { ...data, codes: String(await allocateStartFinishCode(tx, eventId)) },
+              }),
+            );
+          } else {
+            await ctx.db.control.update({
+              where: { id: matched.id },
+              data,
+            });
+          }
           controlIdMap.set(pc.id, matched.id);
           if (matched.removed) controlsCreated++;
           else controlsUpdated++;

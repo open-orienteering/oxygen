@@ -353,7 +353,7 @@ function codesHolding(n: number) {
  * code whose seq is `n` (a legacy code-less start is addressed by its seq).
  * Null when `n` is free.
  */
-async function codeHolder(db: Db, eventId: bigint, n: number, exceptId?: string): Promise<{ bySeq: boolean } | null> {
+export async function codeHolder(db: Db, eventId: bigint, n: number, exceptId?: string): Promise<{ bySeq: boolean } | null> {
   const notSelf = exceptId ? { id: { not: exceptId } } : {};
   const byCode = await db.control.findFirst({
     where: { eventId, removed: false, ...notSelf, OR: codesHolding(n) },

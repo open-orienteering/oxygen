@@ -127,6 +127,15 @@ describe("starts and finishes take a code (F32)", () => {
     await expect(caller.control.update({ id: 9, codes: "31" })).rejects.toMatchObject({ code: "CONFLICT" });
   });
 
+  it("clearing a start's code stays allowed (the legacy shape)", async () => {
+    const s = await caller.control.create({ status: 4 });
+    await caller.control.update({ id: s.id, codes: "" });
+    const row = await ctx.db.control.findFirstOrThrow({ where: { eventId: ctx.eventId, kind: "start" } });
+    expect(row.codes).toBe("");
+    // Addressed by its seq again, which then counts as held.
+    expect((await caller.control.getById({ id: row.seq })).name).toBe("Start 1");
+  });
+
   it("a kind change to start allocates a code for a code-less row", async () => {
     const cp = await caller.control.create({ kind: "crossing_point" });
     expect(cp.id).toBeGreaterThan(10_000);
@@ -192,6 +201,34 @@ describe("the course import gives a new start or finish a code (F32)", () => {
     expect(coords.filter((c) => c.status === 4 || c.status === 5).map((c) => [c.id, c.code])).toEqual(
       expect.arrayContaining([[4, "Start 1"], [5, "Mål 1"]]),
     );
+  });
+
+  it("previewImport counts no start / finish code as an existing control", async () => {
+    await caller.control.create({ status: 4 });
+    const file = iof(
+      `<Control type="Start"><Id>S1</Id></Control>
+    <Control type="Control"><Id>3</Id></Control>
+    <Control type="Control"><Id>41</Id></Control>
+    <Control type="Finish"><Id>F1</Id></Control>`,
+      `<CourseControl type="Start"><Control>S1</Control></CourseControl>
+      <CourseControl type="Control"><Control>41</Control></CourseControl>
+      <CourseControl type="Finish"><Control>F1</Control></CourseControl>`,
+    );
+    const preview = await caller.course.previewImport({ xmlContent: file });
+    expect([preview.newControls, preview.existingControls]).toEqual([2, 0]);
+  });
+
+  it("a removed start the import restores takes a new code when its own is taken", async () => {
+    const s = await caller.control.create({ status: 4 });
+    expect(s.id).toBe(3);
+    await caller.control.delete({ id: 3 });
+    await caller.control.create({ codes: "3" });
+    await caller.course.importCourses({ xmlContent: IOF_A });
+    const start = await ctx.db.control.findFirstOrThrow({ where: { eventId: ctx.eventId, kind: "start", removed: false } });
+    expect(start.name).toBe("Start 1");
+    expect(start.codes).not.toBe("3");
+    const ids = (await caller.control.list()).map((c) => c.id);
+    expect(new Set(ids).size).toBe(ids.length);
   });
 
   it("refuses a file control whose code a start holds, nothing written", async () => {
