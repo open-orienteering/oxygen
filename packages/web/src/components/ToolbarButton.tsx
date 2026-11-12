@@ -31,6 +31,7 @@ export function ToolbarButton({
   iconOnly = false,
   testId,
   className = "",
+  labelClassName = "",
 }: {
   icon: ReactNode;
   label: string;
@@ -46,6 +47,10 @@ export function ToolbarButton({
   iconOnly?: boolean;
   testId?: string;
   className?: string;
+  /** Extra classes on the visible label, e.g. the editor top bar's
+   *  container-query collapse (`TOP_BAR_TIER1`, F29). The label is
+   *  `display: none` when hidden; `aria-label` keeps the name. */
+  labelClassName?: string;
 }) {
   // A toggled button that is briefly disabled (mutation in flight) keeps
   // its "on" colour rather than flashing grey.
@@ -70,7 +75,7 @@ export function ToolbarButton({
       <span className="inline-flex shrink-0 [&>svg]:w-5 [&>svg]:h-5 sm:[&>svg]:w-4 sm:[&>svg]:h-4">
         {icon}
       </span>
-      {!iconOnly && <span className="hidden sm:inline">{label}</span>}
+      {!iconOnly && <span data-toolbar-label="" className={`hidden sm:inline ${labelClassName}`}>{label}</span>}
     </button>
   );
 }

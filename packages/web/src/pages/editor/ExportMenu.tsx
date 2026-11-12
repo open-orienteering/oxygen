@@ -11,6 +11,8 @@ import { trpc } from "../../lib/trpc";
 import { downloadSameOriginFile } from "../../lib/download-api";
 import { exportEntries, type ExportEntry, type ExportState } from "../../lib/editor/export-menu";
 import { DescriptionSheetsDialog } from "./DescriptionSheetsDialog";
+import { IconExport } from "../../components/map-icons";
+import { TOP_BAR_TIER1_HIDE } from "../../components/top-bar-collapse";
 
 const LABEL = {
   sheet: "exportSheet",
@@ -77,9 +79,14 @@ export function ExportMenu({ state, onError }: { state: ExportState; onError: (m
         aria-expanded={open}
         disabled={busy}
         onClick={() => setOpen((v) => !v)}
-        className="px-2 py-1 text-xs rounded-md border border-slate-200 bg-white text-slate-600 hover:bg-slate-50 cursor-pointer disabled:opacity-50 disabled:cursor-default whitespace-nowrap"
+        aria-label={`${busy ? t("exportBusy") : t("export")} ▾`}
+        title={busy ? t("exportBusy") : t("export")}
+        className="inline-flex items-center gap-1.5 px-2 py-1 text-xs rounded-md border border-slate-200 bg-white text-slate-600 hover:bg-slate-50 cursor-pointer disabled:opacity-50 disabled:cursor-default whitespace-nowrap"
       >
-        {busy ? t("exportBusy") : t("export")} ▾
+        {/* Icon + label (F29); the label is the first to go when the top bar's row is short. */}
+        <span className="inline-flex shrink-0 [&>svg]:w-4 [&>svg]:h-4"><IconExport /></span>
+        <span data-toolbar-label="" className={TOP_BAR_TIER1_HIDE}>{busy ? t("exportBusy") : t("export")}</span>
+        <span aria-hidden="true">▾</span>
       </button>
       {open && (
         <div role="menu" className="absolute right-0 z-30 mt-1 min-w-[12rem] rounded-lg border border-slate-200 bg-white py-1 shadow-lg">
