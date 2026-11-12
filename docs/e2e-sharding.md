@@ -64,9 +64,10 @@ which would run the whole suite.
   failure and every flake.
 - **The count.** The shard count is the length of the matrix's `shard`
   list, `1..N` with no gaps (`scripts/__tests__/e2e-shards.test.mjs`
-  checks it). Six today. Free runners allow 20 concurrent jobs per
-  account, and several PRs often run at once, so raise it only when the
-  slowest shard is no longer one big spec file.
+  checks it). Six today: about 230 s of tests per shard. Free runners
+  allow 20 concurrent jobs per account and several PRs often run at once,
+  so more shards trade a minute per PR for queueing when PRs pile up; the
+  per-job setup (~45 s) and server start (~20 s) do not shrink with them.
 - **No `needs: unit`.** The shards start at once, beside lint, build and
   unit tests, instead of after them.
 - **Per job.** Postgres (`docker-compose.test.yml`) starts before the
@@ -113,28 +114,39 @@ Specs never hardcode the API origin; they import `API_BASE` from
 ### Projects
 
 Every event reads the vector pipeline since E3 (`docs/map-pipeline-switch.md`,
-history note), so there is one desktop run: project `chromium` runs every
-spec except `field-mode.spec.ts`, and project `mobile` runs `MOBILE_SPECS`
-(`field-mode.spec.ts` and `course-editor.spec.ts`'s touch describe) on a
-Pixel 7 profile. The per-pipeline projects `map-legacy` / `map-vector`
-of slices B–D are gone. A shard runs a file once per project that
-matches it, so the weight table counts every run: a file run by both
-projects (`course-editor.spec.ts`) has a per-project entry,
-`{ chromium: 31, mobile: 4 }`, and its weight is the sum (below).
+history note), so there is one desktop run: project `mobile` runs
+`MOBILE_SPECS` (`field-mode.spec.ts` and `course-editor-phone.spec.ts`,
+the course editor's phone subset) on a Pixel 7 profile, and project
+`chromium` runs every other spec. The per-pipeline projects `map-legacy` /
+`map-vector` of slices B–D are gone. Every file runs in exactly one
+project today. Until the course editor's spec was split for the CI shards
+(below), `course-editor.spec.ts` ran under both, the desktop describes
+skipping on the phone and the touch describe on the desktop; the split
+moved the phone's describes into their own file.
 
 ### File partitioning
 
 The runner assigns spec files to shards with an LPT (longest processing
 time first) heuristic over a static weight table in
-`scripts/e2e-weights.mjs` (`WEIGHTS`, `weightOf`). Weights are rough
-run-time proportions (one unit is about 8 s of a shard); a file run by one
-project has a number, a file run by several has one per project and
-weighs their sum. `scripts/__tests__/e2e-config.test.mjs` (`pnpm
-test:scripts`) loads the config's projects and fails when a file run by
-more than one project is not weighted per project, or when a weight names
-a spec that no longer exists. The per-shard durations printed at the end
-of every run tell you when the table needs rebalancing — edit `WEIGHTS`
-and re-run.
+`scripts/e2e-weights.mjs` (`WEIGHTS`, `weightOf`, `partition`). One unit
+is one second of a CI shard: the file's summed test durations on one
+`ubuntu-latest` runner with one stack, as the CI matrix runs it. A file
+missing from the table weighs `DEFAULT_WEIGHT` (10). A file run by one
+project has a number (or `{ mobile: n }` for the phone's files), a file run
+by several would have one per project and weigh their sum: a shard runs a
+file once per project that matches it. `scripts/__tests__/e2e-config.test.mjs`
+(`pnpm test:scripts`) loads the config's projects and fails when an
+object entry does not name exactly the projects that run its file, or when
+a weight names a spec that no longer exists.
+
+LPT can only balance what it is given: a shard is never shorter than its
+heaviest file. `course-editor.spec.ts` once held all of the editor's
+describes, ~515 s of a ~1,290 s suite on a CI runner, and its shard ran
+533 s while the others ran 114–269 s. It is now seven files of 23–132 s
+along its describes (`docs/course-editor.md` "Tests"), sharing
+`e2e/helpers/course-editor-spec.ts`; each file reseeds once in
+`beforeAll`, as the one file did. Keep any new file under about half a
+shard's share; split it along its describes when it grows past that.
 
 ### Single-process seeding
 

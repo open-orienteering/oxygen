@@ -18,7 +18,7 @@ const { PDFDocument } = createRequire(resolve(process.cwd(), "packages/api/packa
  * extra badge, print status, Edit layout, the course's and the event's PDFs,
  * bulk apply) and Layout mode's sheet, template and club actions; the
  * retired /maps and /map-templates links redirect. Layout mode's drawing is
- * the Layout describe of `course-editor.spec.ts`.
+ * the Layout describes of `course-editor-layout.spec.ts`.
  *
  * The event map goes through the chunked upload and
  * `course.applyUploadedMap`, as the map panel uploads it: the file is
