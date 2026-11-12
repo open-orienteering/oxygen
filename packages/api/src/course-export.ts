@@ -23,6 +23,7 @@
  * exported.
  */
 
+import { displayCode } from "./control-id.js";
 import type { FastifyInstance } from "fastify";
 import { prisma } from "./db.js";
 import { assertRestAccess } from "./restGuard.js";
@@ -42,11 +43,7 @@ import type { PrismaClient, Prisma } from "./generated/prisma/client.js";
 
 type Db = PrismaClient | Prisma.TransactionClient;
 
-/** First punch code, falling back to name then seq — the display code. */
-function displayCode(c: { codes: string; name: string; seq: number }): string {
-  const first = c.codes.split(";")[0]?.trim();
-  return first || c.name || String(c.seq);
-}
+// `displayCode` (control-id.ts): a start / finish by its name, else first code → name → seq (F32).
 
 /** A site's exported `type`: its kind, else the legacy `status` 4 / 5. */
 function siteType(c: { kind: string; status: string }): ExportControlSite["type"] {

@@ -40,10 +40,73 @@ map panel inside the editor answers the cases without a drawable map
   (`map-import-state`), not tiles.
 - **No WebGL2 / a lost context**: the layer's message (§5.4 "Layer").
 
-Deep links: `?course=<seq>` selects a course, `?control=<code>` a control;
-consumed once when the data loads. `?mode=layout` with `sheet=<seq>` or
-`template=<seq>` opens Layout mode on that sheet or template
-(`course-layout.md` §4).
+**URL** (F31; `feedback-2026-11-11-merge.md` item 4 and answers 1–2).
+The address bar follows the editor's key modes, so a reload or a shared
+link restores them (`lib/editor/url.ts`: `parseEditorUrl`,
+`editorSearchFor`):
+
+| Param | Value | Absent |
+|---|---|---|
+| `course` | the selected course's seq | no course |
+| `mode` | `layout` \| `field`; on a phone also `course` | Course mode (a phone: Field, §10) |
+| `view` | `all` \| `class` \| `variant` \| `all-variations` | Course view |
+| `class` | Class view's class (seq), with `view=class` | — |
+| `variant` | Variant view's key, with `view=variant`; in Class view and Layout the variant drawn when it is not the first (F8) | the first variant |
+| `sheet` / `template` | Layout's shown sheet or template (seq), with `mode=layout` | — |
+| `control` | inbound only: the Controls page's pencil (`?control=<id>`, the control's id) | — |
+
+- **Written by `replace`, never `push`** (answer 1): every change of
+  course, mode, view, class, variant or Layout's sheet replaces the
+  history entry, so Back leaves the editor in one step. The query is
+  written in the table's order with the defaults left out; params the
+  editor does not own are kept. `layoutEditorHref` builds its link with
+  `editorSearchFor`, so it lands already canonical.
+- **Never written** (answer 2): the selection (control, leg, object), the
+  tool, the phantom and the preferences (hide other controls, snapping,
+  the placement loupe). `control=` is read once and gone from the first
+  write.
+- **Read once, checked against the data.** The editor reads the URL when
+  it mounts and takes each param as the data that checks it loads: the
+  course against `course.list`; Class view's class against the course's
+  classes (`layout.classOverrides`); a variant and *All variations*
+  against the course's structure (a course without variations has
+  neither); `control` against the control list; Layout's sheet and
+  template against `courseMap.list` / `mapTemplate.list` (`useLayoutMode`
+  drops an unknown target to its default). The URL is written only once
+  every param is taken or dropped (`hydration` in `EditorPage`). The query
+  cache is persisted (offline-first) and fresh for 5 s, so a value found
+  in it is taken, but a miss counts only after a fetch since the page
+  mounted (or a failed one): a link to a sheet or course made since the
+  last answer is not dropped (`checkInbound`, `fetchIfIdle`); a miss while
+  a fetch is in flight waits for it. Layout applies the same check to every
+  sheet or template it opens, so a create-then-open awaits its list's
+  refetch first (*New extra template*, `KeySections.tsx`). Until the
+  URL has been taken, a late answer (a class or variant after a cache
+  miss) may still set the view over a click made in that moment.
+- **Normalised on landing**, as the reducer has it: `mode=layout` with
+  `view=variant&variant=<key>` is Layout drawn as that variant
+  (`mode=layout&variant=<key>`); a Layout link with a sheet and a variant
+  but no `course` loses the variant (the view is taken before the sheet
+  brings its course — `layoutEditorHref` always sends the course).
+- **Layout's `sheet=` / `template=`** is the target Layout shows — its
+  default when none was opened — written as soon as it is known, before
+  its resolve lands.
+- **An invalid param falls back to its default and leaves the URL**: a
+  value of the wrong shape (`mode=bogus`, `course=abc`), a course,
+  class, variant, sheet or template that is not the event's (a deleted
+  course selects none), a `class` without `view=class`, `view=class`
+  without a class, a `sheet` outside Layout. Nothing reports it.
+- **Mode.** The URL's `mode` wins on every device; with no `mode` a phone
+  opens Field (§10), the desktop Course (`initialModeFor`). `mode=field`
+  is always written, so a link from a phone opens Field on a desktop too.
+  A phone in Course mode writes `mode=course` (Course is not its
+  default), so a reload keeps it; a desktop omits it. `mode=layout` on a
+  phone opens Field and leaves the URL (Layout is a desktop mode, §10).
+- **Inbound links** keep working unchanged: the Courses page's pencil
+  (`?course=<seq>`), the Controls page's (`?control=<id>`), the Courses
+  page's *Edit layout* (`layoutEditorHref`, `course-layout.md` §4) and
+  the retired pages' redirects. The editor rewrites them to their
+  canonical order once taken.
 
 **Modes** (08 §5.1): Course, Layout, Field share one canvas, selection and
 undo history. Course mode is this chapter; **Layout mode** — the sheet as
@@ -251,7 +314,7 @@ exchange lists its parts (§6.9).
 | click empty map | phantom (`editor-phantom`) + action bar: **Add control** / **Add start** / **Add finish** / **Add map-issue point** (§6.8), with a course also **Add to ‹course›** | — |
 | Add control | `control.create { codes, xpos, ypos, autoDescribe }` (code from the club allocation, `editor-alloc-series` overrides the series; SRR codes get radio); the new control is selected with `V`'s ring and the action bar (§6.1, P4) | `control.delete` / redo `control.restore` |
 | Add to ‹course› (phantom) | create + `setStructure(appendSite)` | `setStructure(prev)` + delete / restore + `setStructure(next)` |
-| Add start / finish | code-less `control.create { status: 4 / 5 }` (named "Start N" / "Mål N") | delete / restore |
+| Add start / finish | `control.create { status: 4 / 5 }` without codes: the lowest free unit code in 3–10, then 11–30, is its code and id (F32, `course-layer.md` §6.3); named "Start N" / "Mål N" and shown by that name | delete / restore |
 | **Add map-issue point** (§6.8) | code-less `control.create { kind: "map_issue" }` (named "Kartutdelning N") | delete / restore |
 | `X`, click (§6.9) | `control.create { codes, kind: "map_exchange", … }` + `setStructure(insertSite)` at the insertion point; over an existing exchange only the `setStructure` | as Add to ‹course› |
 | `C` on a selected leg, click (§6.8) | `control.create { kind: "crossing_point" }` + `setStructure(setLegProps { crossing })`; over an existing crossing point only the `setStructure` | as Add to ‹course› |
@@ -1796,6 +1859,7 @@ whose poll ran meanwhile simply does not conflict (decision log, D10).
 | unit (shared) | `packages/shared/src/render/__tests__/hit-test.test.ts` | §5: topmost first, stroke reach = half width + tolerance, even-odd fills, closed-stroke interior on request, glyph discs, text glyph boxes, object filter, distance |
 | unit (web) | `packages/web/src/map-gl/__tests__/worker-course.test.ts`, `engine.test.ts` | the course reply's hit index (local ids, refs `site` / `leg` / `number`, a site found at its centre; null on clear) and its way to the host |
 | unit (web) | `packages/web/src/lib/editor/__tests__/hit.test.ts` | §5 over the real worker: interior and ring, start and finish, legs with course and index, empty map, tolerance, numbers, UI-layer sites under layer objects; closed areas by their outline only (D12): inside an `oob_area` / a white-out → null, its edge → the object, a 709.b border not grabbing the interior, a control and a leg inside a white-out still hit, a line by its stroke, a `UiArea`'s interior → null |
+| unit (web) | `lib/editor/__tests__/url.test.ts` | §1 "URL" (F31): every writable state round-trips through `editorSearchFor` → `parseEditorUrl`; defaults omitted (no course, Course mode, Course view; Class view's and Layout's first variant); the fixed order; a phone writes `mode=course`, `mode=field` is always written; `control` read and never written; foreign params kept; every invalid case dropped and named (non-integer, zero, negative, leading-zero and over-long ids, an unknown mode or view, `class` without Class view and the reverse, Variant view without its key, a key where nothing draws one, `sheet` / `template` outside Layout, both at once); the cleaned URL after a bad inbound; `checkInbound` takes a cached hit, waits on a miss while a fetch is in flight, rejects one only after a fetch since mount or an error, and `fetchIfIdle` fetches once. `field.test.ts` "initial mode": the URL's mode wins on both devices, `layout` on a phone is Field |
 | unit (web) | `lib/editor/__tests__/conflict.test.ts`, `write-client.test.ts` | §3: rebase vs moved vs refresh, unknown base, structure never merged; tokens sent and advanced, one re-send, `EditorConflict`, code re-keying, delete seeding |
 | unit (web) | `lib/editor/__tests__/structure-edit.test.ts`, `sequence.test.ts`, `state.test.ts` | §4: sequence positions, insert / append / remove / move / role, legs dropped on a new predecessor; display sequence, explicit structure, leg → insert position; §3 Escape cascade, hide-others, modes |
 | unit (web) | `pages/editor/__tests__/action-bar.test.ts` | §4: the entries per selection, the legacy ids; a leg: *Add bend here* only where the leg can be edited (§6.7), its click's Alt handed to the page (F16); empty map: *Add map-issue point* with its tooltip key (F14), a crossing / map-issue point: *Delete* only (§6.8) |
@@ -1860,6 +1924,7 @@ whose poll ran meanwhile simply does not conflict (decision log, D10).
 | E2E | `e2e/course-editor.spec.ts` "P2: the status bar out of the footer" (`chromium`) | §2, §3 (P2): no `editor-status` on the desktop; `editor-save-state` inside `editor-top-bar` reaches `saved`; `editor-stats` opens the popover (`aria-expanded`) with the controls (`data-count` 0, then 1 after a `K` placement) and length rows and no `editor-stats-scale` (P6), a second click and an outside click close it, Escape with `K` armed closes it and leaves `K` pressed (a second Escape returns to `V`); at 1280 × 720 with `saved` the words take no room (width ≤ 1 px, the title set), the indicator is ≤ 16 px and the button ≤ 32 px wide; at 1024 × 700 a `control.create` aborted at the network → `data-state="error"` with `editor-save-state-text` visible, non-empty and inside the viewport. The shell test ("mounts the new editor") asserts the indicator and the button visible and no `editor-status`; the Layout / Class view test reads the sheet key from `editor-stats-sheet` |
 | unit (web) | `lib/editor/__tests__/map-info.test.ts` | §2 (P6): the map-info dialog's rows with a loaded document (name · scale · file, then source · content · library · CRS · importer, their `data`), the map's rows only while the document loads or the import runs, no library and no CRS (rows absent, an OOM source named in full), no map (no rows), an unknown size (the date alone), the club picker's KB / MB rule |
 | E2E | `e2e/course-editor.spec.ts` "P6: the map footer out; the map-info dialog" (`chromium`) | §2 (P6): no footer — the viewer reaches `map-panel`'s bottom (< 4 px), no `map-review-link`, *Replace map* or `use-club-map` in the panel; `editor-map-info` follows `editor-export` in document order and opens `editor-map-info-dialog` (`role="dialog"`, `aria-modal`, `aria-expanded`; focus inside it through five Tabs and six Shift+Tabs) with the name (`.ocd`), the scale (`data-scale`, "1:"), the north row, the file (`data-bytes` > 0), the document (`data-source="ocad"`, objects and symbols > 0, importer `ocad-‹n›`), *Review symbols* (`href` `/map-review/‹64 hex›`), *Replace map*, at most one *From club library*; the close button and a backdrop click close it, and the course-info popover has no scale row; *Replace map* opens a single-file chooser with `accept=".ocd"` and changes nothing; the backdrop is the element at the page's corner (it covers the shell's header); Escape with `K` armed closes only the dialog (a letter pressed while open does not switch the tool; the next Escape returns to `V`), and with a control selected keeps the selection and the course; an event with no map: `editor-map-info-none`, no scale, no review, *Upload map*. `e2e/map-review.spec.ts` and `e2e/club-map-library.spec.ts` reach the review link, the north-lines badge and the club picker through the dialog (the picker's Escape closes it before the dialog's; a pick from it closes the picker, keeps the dialog without an error, and its `editor-map-info-file` `data-uploaded` follows the new map row); `e2e/mobile-layout.spec.ts` asserts no `editor-map-info` and no *Replace map* in the phone editor; `e2e/editor-fullscreen.spec.ts` opens the dialog in fullscreen (inside `document.fullscreenElement`), and its Escape keeps fullscreen |
+| E2E | `e2e/editor-url.spec.ts` (`chromium`) | §1 "URL" (F31): from the Courses page, a pick → `?course=`; Class view → `view=class&class=`, Course view drops them; Layout → `mode=layout&sheet=<the course's sheet>`; a reload restores the course, Layout and the sheet, then Class view; Field + All controls → `mode=field&view=all`; `history.length` unchanged by every change and one Back lands on `/courses`; `mode=bogus&view=nope` → Course mode, Course view, only `course=` left; a class not the course's → Course view, `view` / `class` gone; `mode=layout&sheet=99999` → Layout, the sheet gone; a deleted course → no course, `course` gone; `mode=layout&template=<seq>` → template scope, kept over a reload, and *New extra template* there opens the new template and writes `template=<new>` (it stays open: the review's create-then-open case); the Courses page's pencil lands on its course (`course=` only), the Controls page's on its control with `control=` gone; on a Pixel 7 viewport no `mode` → Field and `mode=field`, Course → `mode=course` kept over a reload, `mode=layout&sheet=1` → Field and `mode=field` |
 | E2E | `e2e/editor-space.spec.ts` (`chromium`) | §2 "The editor fills the window" (F28): at 1840 × 1090 `editor-page` is at least the viewport less 64 px wide, its bottom within 16 px of the viewport's and not below it, the page has no vertical scroll (`scrollHeight` ≤ `innerHeight`), the header's inner row (`shell-header-inner`) is as wide; on `/courses` `shell-container` and `shell-header-inner` stay ≤ 1280 px |
 | unit (web) | `lib/__tests__/course-overlay-ids.test.ts` | §6.1 (P5): the overlay ids of a start-only course (the regression) and a finish-only one; a full course with explicit ends; the explicit ends win over the nearest; the legacy fallback to the start nearest the first control and the finish nearest the last; no controls and no explicit end → the event default (lowest id); a stale id or one of the wrong role treated as none; none under `firstAsStart` / `lastAsFinish`; no start or finish in the event; an end already at the head or tail not repeated; an unpositioned first control keeps the explicit start, else the default |
 | E2E | `e2e/course-editor.spec.ts` "P5: the pending leg from a just-placed start" (`chromium`) | §6.1 (P5): on a fresh course the armed `K`'s hover draws a `course-leg` piece from the default start (the inspector's start row) to the cursor; `S` places a start (`course.setStructure`), the start row names it and `K` is pressed; the hover shows `editor-leg-length` "‹n› m" and a `course-leg` piece from the new start's rim to the cursor's; the click adds the control row, and after `Esc` (no label) the leg start → control is still drawn |

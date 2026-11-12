@@ -81,7 +81,7 @@ describe("kinds on control.create / update (§6.3)", () => {
   it("status sync is unchanged: a start turned crossing point leaves status 4", async () => {
     const s = await caller.control.create({ status: 4, xpos: 5, ypos: 5 });
     await caller.control.update({ id: s.id, kind: "crossing_point" });
-    const row = await ctx.db.control.findFirstOrThrow({ where: { eventId: ctx.eventId, seq: s.id } });
+    const row = await rowOf(s.id); // its code since F32
     expect([row.kind, row.status]).toEqual(["crossing_point", "ok"]);
     await caller.control.delete({ id: s.id });
   });

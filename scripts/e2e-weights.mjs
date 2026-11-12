@@ -17,6 +17,7 @@ export const WEIGHTS = {
   // The course editor (D10): every desktop flow under `chromium`; only the touch describe under `mobile`
   // (the desktop describes skip there, the fixture import still runs per test).
   "course-editor.spec.ts": { chromium: 32, mobile: 4 }, // ~240 s + ~35 s single run (D10, E3)
+  "editor-url.spec.ts": 3, // F31: four flows, two reloads each (~30 s)
   "course-presence.spec.ts": 4, // OCAD+map, two contexts, 5 s polls
   // `mobile` project: OCAD+map, 11 Field mode flows (~50s single run).
   "field-mode.spec.ts": { mobile: 5 },

@@ -15,6 +15,7 @@
 import { useMemo, useState, type ReactNode } from "react";
 import { Link } from "react-router-dom";
 import { useTranslation } from "react-i18next";
+import { displayCode } from "@oxygen/shared";
 import { trpc } from "../../../lib/trpc";
 import { NUDGE_FINE_MM, fieldRows, metreStepMm, nudge, type FieldRow, type NudgeDir } from "../../../lib/editor/field";
 import { allSetterSheets, setterRowInputs } from "../../../lib/editor/setter-maps";
@@ -66,7 +67,7 @@ export function FieldSection({ rows, selectedControlId, onSelectRow, onCheck, ca
   const setterRows = useMemo(() => {
     if (!picked?.setter) return null;
     const pts = new Map((coords.data ?? []).map((c) => [c.id, c.mapX !== 0 || c.mapY !== 0 ? { x: c.mapX, y: c.mapY } : null]));
-    const info = new Map((controls.data ?? []).map((c) => [c.id, { code: c.codes.split(";")[0]?.trim() || c.name || String(c.id), kind: c.kind, pt: pts.get(c.id) ?? null }]));
+    const info = new Map((controls.data ?? []).map((c) => [c.id, { code: displayCode({ codes: c.codes, name: c.name, seq: c.id, kind: c.kind }), kind: c.kind, pt: pts.get(c.id) ?? null }]));
     const checked = new Set((controls.data ?? []).filter((c) => c.checkedAt).map((c) => c.id));
     return fieldRows(setterRowInputs(picked.setter.controls, info), fix, mapScale, checked);
   }, [picked, coords.data, controls.data, fix, mapScale]);

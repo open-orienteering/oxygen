@@ -27,6 +27,7 @@ import {
 import { makeCaller } from "../helpers/caller.js";
 import { uploadEventMap } from "../helpers/upload-map.js";
 import { drawnCourse } from "../helpers/course-drawn.js";
+import { publicControlId } from "../../control-id.js";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const FIXTURE = resolve(__dirname, "../../../../../e2e/test.ocd");
@@ -432,7 +433,7 @@ describe("start/finish placement from the editor", () => {
     }
   }
 
-  it("creates code-less start controls with sequential auto-names", async () => {
+  it("creates start controls with sequential auto-names and the lowest free codes (F32)", async () => {
     await clearStartFinish();
     const s1 = await caller.control.create({ status: 4, xpos: 5, ypos: 5 });
     const s2 = await caller.control.create({ status: 4, xpos: 6, ypos: 6 });
@@ -442,10 +443,12 @@ describe("start/finish placement from the editor", () => {
       orderBy: { seq: "asc" },
     });
     expect(rows.map((r) => r.name)).toEqual(["Start 1", "Start 2"]);
-    expect(rows.every((r) => r.codes === "")).toBe(true);
-    // Code-less controls are addressed by seq.
-    expect(s1.id).toBe(rows[0].seq);
-    expect(s2.id).toBe(rows[1].seq);
+    // F32: each takes the lowest free code in 3–30, which is its public id.
+    const codes = rows.map((r) => Number(r.codes));
+    expect(codes.every((n) => n >= 3 && n <= 30)).toBe(true);
+    expect(codes[1]).toBeGreaterThan(codes[0]);
+    expect(s1.id).toBe(codes[0]);
+    expect(s2.id).toBe(codes[1]);
     // Position + WGS84 derivation work like for numbered controls.
     expect(rows[0].xpos).toBe(5);
     expect(rows[0].lat).not.toBeNull();
@@ -456,14 +459,15 @@ describe("start/finish placement from the editor", () => {
     expect(c1?.code).toBe("Start 1");
   });
 
-  it("creates a code-less finish control named Mål N", async () => {
+  it("creates a finish control named Mål N with a code (F32)", async () => {
     const f = await caller.control.create({ status: 5, xpos: 90, ypos: 5 });
     const row = await ctx.db.control.findFirst({
       where: { eventId: ctx.eventId, status: "finish", removed: false },
     });
     expect(row?.name).toBe("Mål 1");
-    expect(row?.codes).toBe("");
-    expect(f.id).toBe(row?.seq);
+    expect(Number(row?.codes)).toBeGreaterThanOrEqual(3);
+    expect(Number(row?.codes)).toBeLessThanOrEqual(30);
+    expect(f.id).toBe(Number(row?.codes));
   });
 
   it("still rejects a normal control without codes", async () => {
@@ -496,10 +500,10 @@ describe("start/finish placement from the editor", () => {
     // Delete every start; geometry must lose the start leg…
     const starts = await ctx.db.control.findMany({
       where: { eventId: ctx.eventId, status: "start", removed: false },
-      select: { seq: true },
+      select: { seq: true, codes: true },
     });
     for (const s of starts) {
-      await caller.control.delete({ id: s.seq });
+      await caller.control.delete({ id: publicControlId(s) });
     }
     const without = await ctx.db.course.findFirst({
       where: { eventId: ctx.eventId, seq: course.id },
@@ -527,10 +531,10 @@ describe("start/finish placement from the editor", () => {
     // "default = lowest-seq start" assertions below are deterministic.
     const leftovers = await ctx.db.control.findMany({
       where: { eventId: ctx.eventId, status: "start", removed: false },
-      select: { seq: true },
+      select: { seq: true, codes: true },
     });
     for (const s of leftovers) {
-      await caller.control.delete({ id: s.seq });
+      await caller.control.delete({ id: publicControlId(s) });
     }
     const sA = await caller.control.create({ status: 4, xpos: 0, ypos: 300 });
     const sB = await caller.control.create({ status: 4, xpos: 60, ypos: 300 });
@@ -548,7 +552,7 @@ describe("start/finish placement from the editor", () => {
     });
 
     const sBRow = await ctx.db.control.findFirst({
-      where: { eventId: ctx.eventId, seq: sB.id },
+      where: { eventId: ctx.eventId, codes: String(sB.id), removed: false },
     });
     const row = await ctx.db.course.findFirst({
       where: { eventId: ctx.eventId, seq: course.id },

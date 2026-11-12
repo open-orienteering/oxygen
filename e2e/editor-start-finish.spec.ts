@@ -6,7 +6,8 @@
  *     not from existing control positions — regression for the "clicking
  *     the map does nothing on a new event" bug).
  *   - Start and finish controls can be placed from the action bar
- *     (code-less rows, auto-named Start N / Mål N).
+ *     (auto-named Start N / Mål N, shown by that name; each takes the
+ *     lowest free unit code in 3–30 as its id — F32, course-layer.md §6.3).
  *   - Multiple starts: a course can be pointed at a specific start.
  */
 import { test, expect, type Page } from "@playwright/test";
@@ -80,6 +81,8 @@ test.describe("editor start/finish on a fresh event", () => {
     // Sequence shows start + control + finish.
     const start1 = await siteId(page, "Start 1");
     const finish1 = await siteId(page, "Mål 1");
+    // F32: a new start / finish takes the lowest free code from 3 (its id).
+    expect([start1, finish1]).toEqual(["3", "4"]);
     const seqRows = page.getByTestId("editor-seq-row");
     await expect(seqRows).toHaveCount(3, { timeout: 15000 });
     await expect(seqRows.nth(0)).toHaveAttribute("data-kind", "start");
@@ -94,6 +97,10 @@ test.describe("editor start/finish on a fresh event", () => {
     await page.getByTestId("editor-action-add-start").click();
     await expect(siteByCode(page, "Start 2")).toBeAttached({ timeout: 15000 });
     const start2 = await siteId(page, "Start 2");
+    expect(start2).toBe("5");
+    // No two sites share an id (the seq-80-beside-control-80 regression).
+    const ids = await page.getByTestId("editor-site").evaluateAll((els) => els.map((e) => e.getAttribute("data-control-id")));
+    expect(new Set(ids).size).toBe(ids.length);
     await page.getByTestId("editor-action-use-as-start").click();
     await expect(seqRows.nth(0)).toHaveAttribute("data-control-id", start2, {
       timeout: 15000,

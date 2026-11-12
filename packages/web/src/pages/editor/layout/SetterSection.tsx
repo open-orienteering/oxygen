@@ -16,6 +16,7 @@
 
 import { useMemo, useState } from "react";
 import { useTranslation } from "react-i18next";
+import { displayCode } from "@oxygen/shared";
 import { trpc } from "../../../lib/trpc";
 import type { VersionBook } from "../../../lib/version-book";
 import type { EditorView } from "../../../lib/editor/state";
@@ -50,7 +51,7 @@ export function SetterSection(p: {
   const open = p.rows.find((r) => r.seq === p.openSheet && r.kind === "setter" && r.setter) ?? null;
   const openScope = useMemo(() => (open ? setterSheetsOf(p.rows, open.courseId) : []), [p.rows, open]);
   const codeOf = useMemo(() => {
-    const m = new Map((controls.data ?? []).map((c) => [c.id, c.codes.split(";")[0]?.trim() || c.name || String(c.id)]));
+    const m = new Map((controls.data ?? []).map((c) => [c.id, displayCode({ codes: c.codes, name: c.name, seq: c.id, kind: c.kind })]));
     return (id: number) => m.get(id) ?? String(id);
   }, [controls.data]);
 
