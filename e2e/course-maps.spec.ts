@@ -151,7 +151,7 @@ test.describe("the Courses page and Layout mode (E-pages)", () => {
     const edit = rowOf(page, courseId).locator("[data-testid^='edit-course-map-']");
     const sheetSeq = Number((await edit.getAttribute("data-testid"))!.replace("edit-course-map-", ""));
     await edit.click();
-    await expect(page).toHaveURL(new RegExp(`course-editor\\?mode=layout&sheet=${sheetSeq}&course=${courseId}`));
+    await expect(page).toHaveURL(new RegExp(`course-editor\\?course=${courseId}&mode=layout&sheet=${sheetSeq}$`));
     await layoutReady(page);
     const scope = page.getByTestId("editor-layout-scope");
     await expect(scope).toHaveAttribute("data-sheet", String(sheetSeq), { timeout: 30_000 });

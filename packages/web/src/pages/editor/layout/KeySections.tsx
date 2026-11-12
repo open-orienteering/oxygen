@@ -71,7 +71,8 @@ export function TemplateKeySection(p: {
     const created = await p.run(async () => {
       const row = await utils.client.mapTemplate.duplicate.mutate({ id: p.template.seq, name });
       if (p.sheetCourse !== null) await utils.client.mapTemplate.applyToCourses.mutate({ templateId: row.seq, courseIds: [p.sheetCourse] });
-      refresh();
+      // Awaited: Layout opens only a template its list holds (F31, docs/course-editor.md §1 "URL").
+      await Promise.all([utils.courseMap.list.invalidate(), utils.courseMap.resolveSheet.invalidate(), utils.mapTemplate.list.invalidate()]);
       return row;
     });
     // A sheet keeps showing (now on the extra template); in template scope the new template opens.
