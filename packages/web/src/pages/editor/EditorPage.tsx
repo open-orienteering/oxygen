@@ -118,8 +118,8 @@ export function EditorPage() {
   const { nameId } = useParams<{ nameId: string }>();
   // The URL as the editor opened (§1 "URL"; F31), read once.
   const [inbound] = useState(() => parseEditorUrl(searchParams));
-  // A phone opens in Field mode (§9, §10); the URL's `mode` wins.
-  const [state, dispatch] = useReducer(editorReducer, isMobile, (phone: boolean) => ({ ...initialEditorState, mode: inbound.mode ?? initialModeFor({ phone }) }));
+  // A phone opens in Field mode (§9, §10); the URL's `mode` wins, but Layout is not a phone mode.
+  const [state, dispatch] = useReducer(editorReducer, isMobile, (phone: boolean) => ({ ...initialEditorState, mode: initialModeFor({ phone, url: inbound.mode }) }));
   const fieldMode = state.mode === "field";
   const online = useOnlineStatus();
   const caps = useCapabilities();
@@ -1762,11 +1762,11 @@ export function EditorPage() {
     mode: state.mode,
     view: state.view,
     classSeq: state.classSeq,
-    // Variant view's key; in Class view and Layout the drawn variant when it is not the first (F8).
+    // Variant view's key; in Class view and Layout the drawn variant (omitted when it is the first, F8).
     variantKey: state.view === "variant" ? state.variantKey : state.variantKey !== null && sheetVariant === state.variantKey ? state.variantKey : null,
     layout: state.mode === "layout" ? layoutMode.shown : null,
   };
-  const search = hydration === "done" ? editorSearchFor(urlState, searchParams) : null;
+  const search = hydration === "done" ? editorSearchFor(urlState, searchParams, { phone: isMobile, firstVariant: variantKeys[0] ?? null }) : null;
   useEffect(() => {
     if (search !== null && search !== searchParams.toString()) setSearchParams(search, { replace: true });
   }, [search, searchParams, setSearchParams]);

@@ -152,21 +152,31 @@ test.describe("Editor URL (F31)", () => {
   });
 });
 
-// A phone: no `mode` opens Field, the URL's mode wins (§1 "URL", §10).
+// A phone: no `mode` opens Field, the URL's mode wins, Layout is not a phone mode (§1 "URL", §10).
 test.describe("Editor URL on a phone (F31)", () => {
   // eslint-disable-next-line @typescript-eslint/no-unused-vars -- the browser type is the project's
   const { defaultBrowserType: _, ...phone } = devices["Pixel 7"];
   test.use(phone);
 
-  test("no mode opens Field and writes it; the URL's Course mode wins", async ({ page, browser }) => {
+  test("no mode opens Field and writes it; the URL's Course mode wins and survives a reload; Layout falls back to Field", async ({ page, browser }) => {
     const nameId = await ensureFixtureFromDesktop(browser, test.info());
     await page.goto(`/${nameId}/course-editor`);
     await editorReady(page);
     await expect(page.getByTestId("editor-mode-field")).toHaveAttribute("aria-pressed", "true");
     await expect.poll(() => query(page)).toBe("mode=field");
 
-    await page.goto(`/${nameId}/course-editor?mode=course`);
+    // Course mode is not the phone's default: it is written, so a reload keeps it.
+    await page.getByTestId("editor-mode-course").click();
+    await expect.poll(() => query(page)).toBe("mode=course");
+    await page.reload();
     await editorReady(page);
     await expect(page.getByTestId("editor-mode-course")).toHaveAttribute("aria-pressed", "true");
+    expect(query(page)).toBe("mode=course");
+
+    // A desktop's Layout link on a phone: Field, and the sheet gone.
+    await page.goto(`/${nameId}/course-editor?mode=layout&sheet=1`);
+    await editorReady(page);
+    await expect(page.getByTestId("editor-mode-field")).toHaveAttribute("aria-pressed", "true");
+    await expect.poll(() => query(page)).toBe("mode=field");
   });
 });

@@ -7,7 +7,8 @@
  * a reload or a shared link restores the state:
  *
  * - `course=<seq>` — the selected course;
- * - `mode=layout|field` — absent is Course (a phone with no `mode` opens Field);
+ * - `mode=layout|field` — absent is Course (a phone with no `mode` opens Field,
+ *   so a phone in Course mode writes `mode=course`; Layout is not a phone mode);
  * - `view=all|class|variant|all-variations` — absent is Course view, with
  *   `class=<seq>` (Class view) and `variant=<key>` (Variant view; also the
  *   variant Class view and Layout draw, F8);
@@ -126,18 +127,27 @@ export function parseEditorUrl(search: URLSearchParams | string): ParsedEditorUr
   return { course, mode, view, classSeq, variantKey, layout, control, invalid };
 }
 
+/** How the page writes: on a phone Course mode is not the default; a variant key that is the first is (F8). */
+export interface EditorSearchOptions {
+  phone?: boolean;
+  /** The selected course's first variant key: Class view's and Layout's default, omitted. */
+  firstVariant?: string | null;
+}
+
 /**
  * The query string for a state (without `?`, empty for the defaults), in a
  * fixed order. `keep` carries params the editor does not own through
  * unchanged; every editor param not in the state is dropped, `control` always.
  */
-export function editorSearchFor(s: EditorUrlState, keep?: URLSearchParams | string): string {
+export function editorSearchFor(s: EditorUrlState, keep?: URLSearchParams | string, opts: EditorSearchOptions = {}): string {
   const q = new URLSearchParams();
   if (s.course !== null) q.set("course", String(s.course));
-  if (s.mode === "layout" || s.mode === "field") q.set("mode", s.mode);
+  if (s.mode === "layout" || s.mode === "field" || (s.mode === "course" && opts.phone)) q.set("mode", s.mode);
   if (s.view !== "course") q.set("view", s.view);
   if (s.view === "class" && s.classSeq !== null) q.set("class", String(s.classSeq));
-  if (s.variantKey !== null && (s.view === "variant" || s.view === "class" || s.mode === "layout")) q.set("variant", s.variantKey);
+  if (s.variantKey !== null && (s.view === "variant" || ((s.view === "class" || s.mode === "layout") && s.variantKey !== opts.firstVariant))) {
+    q.set("variant", s.variantKey);
+  }
   if (s.mode === "layout" && s.layout) {
     if ("sheet" in s.layout) q.set("sheet", String(s.layout.sheet));
     else q.set("template", String(s.layout.template));

@@ -104,4 +104,12 @@ describe("initial mode (§1, §10)", () => {
     expect(initialModeFor({ phone: true })).toBe("field");
     expect(initialModeFor({ phone: false })).toBe("course");
   });
+
+  it("the URL's mode wins on both devices; Layout on a phone is Field (F31)", () => {
+    expect(initialModeFor({ phone: true, url: "course" })).toBe("course");
+    expect(initialModeFor({ phone: false, url: "field" })).toBe("field");
+    expect(initialModeFor({ phone: false, url: "layout" })).toBe("layout");
+    expect(initialModeFor({ phone: true, url: "layout" })).toBe("field");
+    expect(initialModeFor({ phone: true, url: null })).toBe("field");
+  });
 });

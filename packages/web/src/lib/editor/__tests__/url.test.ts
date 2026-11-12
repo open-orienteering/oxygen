@@ -28,6 +28,21 @@ describe("editorSearchFor", () => {
     expect(editorSearchFor(state({ course: 1, mode: "course", layout: { sheet: 4 } }))).toBe("course=1");
   });
 
+  it("on a phone writes Course mode, its initial mode being Field; Field stays written", () => {
+    expect(editorSearchFor(state({ mode: "course" }), undefined, { phone: true })).toBe("mode=course");
+    expect(editorSearchFor(state({ mode: "field" }), undefined, { phone: true })).toBe("mode=field");
+    expect(editorSearchFor(state({ mode: "field" }))).toBe("mode=field");
+    expect(parseEditorUrl("mode=course")).toMatchObject({ mode: "course", invalid: [] });
+  });
+
+  it("omits Class view's and Layout's first variant (the F8 default), never Variant view's", () => {
+    const opts = { firstVariant: "AB" };
+    expect(editorSearchFor(state({ course: 1, view: "class", classSeq: 2, variantKey: "AB" }), undefined, opts)).toBe("course=1&view=class&class=2");
+    expect(editorSearchFor(state({ course: 1, mode: "layout", variantKey: "AB", layout: { sheet: 4 } }), undefined, opts)).toBe("course=1&mode=layout&sheet=4");
+    expect(editorSearchFor(state({ course: 1, view: "class", classSeq: 2, variantKey: "BA" }), undefined, opts)).toBe("course=1&view=class&class=2&variant=BA");
+    expect(editorSearchFor(state({ course: 1, view: "variant", variantKey: "AB" }), undefined, opts)).toBe("course=1&view=variant&variant=AB");
+  });
+
   it("drops control and every other editor param, and keeps params it does not own", () => {
     expect(editorSearchFor(state({ course: 2 }), "control=9&mode=bogus&sheet=3&foo=bar")).toBe("course=2&foo=bar");
   });

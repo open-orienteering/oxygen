@@ -95,8 +95,8 @@ export function useLayoutMode(a: LayoutModeArgs): LayoutMode {
   // F31: an opened sheet or template that is not this event's gives way to the default (and leaves the URL).
   const templates = trpc.mapTemplate.list.useQuery(undefined, { enabled: a.enabled && !!target && "template" in target });
   const targetKnown = !target ? true
-    : "sheet" in target ? (sheets.data ? sheets.data.some((r) => r.seq === target.sheet) : null)
-    : (templates.data ? templates.data.some((r) => r.seq === target.template) : null);
+    : "sheet" in target ? (sheets.data ? sheets.data.some((r) => r.seq === target.sheet) : sheets.isError ? false : null)
+    : (templates.data ? templates.data.some((r) => r.seq === target.template) : templates.isError ? false : null);
   useEffect(() => { if (targetKnown === false) setTarget(null); }, [targetKnown]);
   const resolvedTarget = useMemo((): LayoutTarget | null => {
     const rows = sheets.data ?? [];
