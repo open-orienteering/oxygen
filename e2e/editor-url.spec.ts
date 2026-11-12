@@ -127,6 +127,38 @@ test.describe("Editor URL (F31)", () => {
     await expect(page.getByTestId("editor-course-picker")).toHaveValue("");
   });
 
+  test("a template from the URL reloads; an extra template made there opens and is the URL's", async ({ page }) => {
+    await openEditor(page);
+    const nameId = nameIdOf(page);
+    const template = await probeTemplate("URL template");
+    let extra: number | null = null;
+    try {
+      await page.goto(`/${nameId}/course-editor?mode=layout&template=${template.seq}`);
+      await editorReady(page);
+      const scope = page.getByTestId("editor-layout-scope");
+      await expect(scope).toHaveAttribute("data-template", String(template.seq), { timeout: 30_000 });
+      await expect(scope).toHaveAttribute("data-scope", "template");
+      await expect.poll(() => query(page)).toBe(`mode=layout&template=${template.seq}`);
+      await page.reload();
+      await editorReady(page);
+      await expect(scope).toHaveAttribute("data-template", String(template.seq), { timeout: 30_000 });
+
+      // Template scope: the new template opens (its list refetched first, so Layout's check keeps it).
+      await page.getByTestId("editor-layout-create-extra").click();
+      await expect(scope).not.toHaveAttribute("data-template", String(template.seq), { timeout: 15_000 });
+      await expect(scope).toHaveAttribute("data-scope", "template");
+      extra = Number(await scope.getAttribute("data-template"));
+      expect(extra).toBeGreaterThan(template.seq);
+      await expect.poll(() => query(page)).toBe(`mode=layout&template=${extra}`);
+      // And it stays open.
+      await page.waitForTimeout(1000);
+      await expect(scope).toHaveAttribute("data-template", String(extra));
+    } finally {
+      if (extra) await cleanup("mapTemplate.delete", { id: extra });
+      await cleanup("mapTemplate.delete", { id: template.seq });
+    }
+  });
+
   test("the Courses and Controls pages' links land, and control= is gone once used", async ({ page }) => {
     await openEditor(page);
 

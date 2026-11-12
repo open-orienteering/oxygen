@@ -140,6 +140,10 @@ describe("checkInbound (the persisted cache)", () => {
     expect(checkInbound(false, q({ isError: true }))).toBe(false);
   });
 
+  it("waits on a miss while a fetch is in flight, even after one since mount (a template just created and opened)", () => {
+    expect(checkInbound(false, q({ isFetchedAfterMount: true, isFetching: true }))).toBeNull();
+  });
+
   it("waits on a miss in cached data, and fetchIfIdle fetches it once", () => {
     const idle = q();
     expect(checkInbound(false, idle)).toBeNull();

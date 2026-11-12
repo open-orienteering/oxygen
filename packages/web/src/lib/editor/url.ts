@@ -173,10 +173,13 @@ export interface InboundQuery {
  * since the page mounted or failed, `null` while that is pending. The cache
  * is persisted (offline-first) and fresh for a few seconds, so a link to
  * something created since the last answer — a new sheet, a new course — may
- * not be in it: the caller fetches (`fetchIfIdle`) and asks again.
+ * not be in it: the caller fetches (`fetchIfIdle`) and asks again. A miss
+ * while a fetch is in flight is pending too.
  */
 export function checkInbound(found: boolean, q: InboundQuery): boolean | null {
   if (found) return true;
+  // A fetch in flight may bring it (a template just created and opened, its list invalidated).
+  if (q.isFetching) return null;
   if (q.isFetchedAfterMount || q.isError) return false;
   return null;
 }

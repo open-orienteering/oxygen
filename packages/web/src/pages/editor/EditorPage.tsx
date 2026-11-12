@@ -1749,13 +1749,13 @@ export function EditorPage() {
       if (structureKnown && wantsVariant) dispatch({ type: "variant", key: inbound.variantKey });
       setHydration("control");
     } else if (hydration === "control") {
+      // An opened sheet or template is checked by Layout itself.
+      if (!layoutMode.settled) return;
       if (inbound.control !== null) {
         const known = checkInbound(!!controlCoords.data?.some((c) => c.id === inbound.control), controlCoords);
         if (known === null) return void fetchIfIdle(controlCoords);
         if (known) dispatch({ type: "select", id: inbound.control });
       }
-      // An opened sheet or template is checked by Layout itself.
-      if (!layoutMode.settled) return;
       setHydration("done");
     }
   }, [hydration, inbound, courses, state.selectedCourseId, courseClasses, detailStructure, detail, variantKeys, controlCoords, layoutMode.settled]);

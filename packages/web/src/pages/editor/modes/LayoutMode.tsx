@@ -439,6 +439,7 @@ export function useLayoutMode(a: LayoutModeArgs): LayoutMode {
   );
 
   return { editor, rail, inspector, courseOnly: data?.sheet?.kind === "course", onKey, open, sheetCourse: data?.sheet?.courseSeq ?? null, sheetKey: snap ? sheetKeyOf(snap) : null, sheetSeq: data?.sheet?.seq ?? null,
-    shown: data ? (data.scope === "sheet" && data.sheet ? { sheet: data.sheet.seq } : { template: data.template.seq }) : null,
+    // What is being shown, from the target before its resolve lands (no `sheet`-less URL in between).
+    shown: input ? resolvedTarget : null,
     settled: !a.enabled || targetKnown === true && (!input || !!query.data || query.isError) };
 }

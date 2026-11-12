@@ -77,7 +77,20 @@ link restores them (`lib/editor/url.ts`: `parseEditorUrl`,
   cache is persisted (offline-first) and fresh for 5 s, so a value found
   in it is taken, but a miss counts only after a fetch since the page
   mounted (or a failed one): a link to a sheet or course made since the
-  last answer is not dropped (`checkInbound`, `fetchIfIdle`).
+  last answer is not dropped (`checkInbound`, `fetchIfIdle`); a miss while
+  a fetch is in flight waits for it. Layout applies the same check to every
+  sheet or template it opens, so a create-then-open awaits its list's
+  refetch first (*New extra template*, `KeySections.tsx`). Until the
+  URL has been taken, a late answer (a class or variant after a cache
+  miss) may still set the view over a click made in that moment.
+- **Normalised on landing**, as the reducer has it: `mode=layout` with
+  `view=variant&variant=<key>` is Layout drawn as that variant
+  (`mode=layout&variant=<key>`); a Layout link with a sheet and a variant
+  but no `course` loses the variant (the view is taken before the sheet
+  brings its course — `layoutEditorHref` always sends the course).
+- **Layout's `sheet=` / `template=`** is the target Layout shows — its
+  default when none was opened — written as soon as it is known, before
+  its resolve lands.
 - **An invalid param falls back to its default and leaves the URL**: a
   value of the wrong shape (`mode=bogus`, `course=abc`), a course,
   class, variant, sheet or template that is not the event's (a deleted
