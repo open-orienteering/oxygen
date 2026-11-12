@@ -314,7 +314,7 @@ exchange lists its parts (§6.9).
 | click empty map | phantom (`editor-phantom`) + action bar: **Add control** / **Add start** / **Add finish** / **Add map-issue point** (§6.8), with a course also **Add to ‹course›** | — |
 | Add control | `control.create { codes, xpos, ypos, autoDescribe }` (code from the club allocation, `editor-alloc-series` overrides the series; SRR codes get radio); the new control is selected with `V`'s ring and the action bar (§6.1, P4) | `control.delete` / redo `control.restore` |
 | Add to ‹course› (phantom) | create + `setStructure(appendSite)` | `setStructure(prev)` + delete / restore + `setStructure(next)` |
-| Add start / finish | code-less `control.create { status: 4 / 5 }` (named "Start N" / "Mål N") | delete / restore |
+| Add start / finish | `control.create { status: 4 / 5 }` without codes: the lowest free unit code in 3–10, then 11–30, is its code and id (F32, `course-layer.md` §6.3); named "Start N" / "Mål N" and shown by that name | delete / restore |
 | **Add map-issue point** (§6.8) | code-less `control.create { kind: "map_issue" }` (named "Kartutdelning N") | delete / restore |
 | `X`, click (§6.9) | `control.create { codes, kind: "map_exchange", … }` + `setStructure(insertSite)` at the insertion point; over an existing exchange only the `setStructure` | as Add to ‹course› |
 | `C` on a selected leg, click (§6.8) | `control.create { kind: "crossing_point" }` + `setStructure(setLegProps { crossing })`; over an existing crossing point only the `setStructure` | as Add to ‹course› |

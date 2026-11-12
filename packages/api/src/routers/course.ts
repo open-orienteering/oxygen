@@ -36,7 +36,8 @@ import {
 import { parseOCDCourseData } from "../ocd-course-parser.js";
 import { isPpenContent, parsePpenCourseData } from "../ppen-course-parser.js";
 import { resolveImportAlignment } from "../course-import-align.js";
-import { MARK_SEQ_BASE, publicControlId } from "./control.js";
+import { MARK_SEQ_BASE, allocateStartFinishCode, codeHolder, publicControlId } from "./control.js";
+import { displayCode, isStartOrFinish } from "../control-id.js";
 import { courseChecksFor } from "../course-checks.js";
 import { lastWriter, othersPresent, PRESENCE_TTL_MS, touchPresence } from "../course-presence.js";
 import {
@@ -750,7 +751,7 @@ export const courseRouter = router({
         controlIds: z.array(z.number().int()).optional(),
         /**
          * Assign a specific event start/finish control to this course
-         * (public control id, i.e. seq for code-less start/finish rows).
+         * (public control id: its code, or the seq of a legacy code-less row).
          * `null` clears the assignment back to the lowest-seq default;
          * `undefined` leaves it unchanged.
          */
@@ -1361,7 +1362,8 @@ export const courseRouter = router({
           // map→Controls-page click navigation resolve correctly.
           id: publicControlId({ codes: c.codes ?? "", seq: c.seq }),
           name: c.name,
-          code: (c.codes ?? "").split(";")[0] || c.name,
+          // A start / finish by its name (F32, course-layer.md §6.3).
+          code: displayCode(c),
           status: controlStatusToValue(c.status),
           lat,
           lng,
@@ -1671,12 +1673,14 @@ export const courseRouter = router({
 
       const dbControls = await ctx.db.control.findMany({
         where: { eventId: ctx.event.id, removed: false },
-        select: { id: true, name: true, codes: true },
+        select: { id: true, name: true, codes: true, kind: true, status: true },
       });
       const existingControlIds = new Set(
         dbControls.map((c) => c.name.toLowerCase()).filter(Boolean),
       );
       for (const c of dbControls) {
+        // A start / finish is matched by its name, never by its unit code (F32).
+        if (isStartOrFinish(c)) continue;
         for (const code of (c.codes ?? "").split(";").filter(Boolean)) {
           existingControlIds.add(code.toLowerCase());
         }
@@ -1838,6 +1842,29 @@ export const courseRouter = router({
       let coursesUpdated = 0;
       let classesAssigned = 0;
 
+      // A file control whose code a live start / finish holds would share its
+      // public id (F32, course-layer.md §6.4): refused before anything is written.
+      {
+        const held = new Map<number, string>();
+        const ends = await ctx.db.control.findMany({
+          where: { eventId, removed: false, OR: [{ kind: { in: ["start", "finish"] } }, { status: { in: ["start", "finish"] } }] },
+          select: { name: true, codes: true },
+        });
+        for (const e of ends) {
+          for (const part of e.codes.split(";")) {
+            const n = parseInt(part.trim(), 10);
+            if (Number.isFinite(n) && n > 0) held.set(n, e.name);
+          }
+        }
+        for (const pc of parsed.controls) {
+          if (pc.type !== "Control") continue;
+          const n = parseInt(pc.id, 10);
+          if (String(n) === pc.id.trim() && held.has(n)) {
+            throw new TRPCError({ code: "BAD_REQUEST", message: `Control code ${n} is held by ${held.get(n)}` });
+          }
+        }
+      }
+
       // ── 0. Optional wipe ────────────────────────────────────
       if (input.replaceAll) {
         // Soft-delete existing courses + controls; clear class→course
@@ -1863,13 +1890,18 @@ export const courseRouter = router({
           id: true,
           name: true,
           codes: true,
+          seq: true,
           removed: true,
           kind: true,
+          status: true,
         },
       });
       const controlByKey = new Map<string, (typeof existingControls)[number]>();
       for (const c of existingControls) {
         if (c.name) controlByKey.set(c.name.toLowerCase(), c);
+        // A start / finish is keyed by its name only: its unit code (F32) is
+        // never a file's control id.
+        if (isStartOrFinish(c)) continue;
         for (const code of (c.codes ?? "").split(";").filter(Boolean)) {
           if (!controlByKey.has(code.toLowerCase())) {
             controlByKey.set(code.toLowerCase(), c);
@@ -1928,7 +1960,7 @@ export const courseRouter = router({
         // MeOS-style names for start/finish controls; regular controls
         // store the code in `codes` and have an empty name.
         let name: string;
-        let codes: string;
+        let codes: string; // a control's; a start / finish's is allocated or kept (F32)
         const suffix = pc.id.match(/(\d+)\s*$/)?.[1] ?? "1";
         if (pc.type === "Start") {
           name = parseInt(suffix, 10) > 1 ? `Start ${suffix}` : "Start 1";
@@ -1971,17 +2003,19 @@ export const courseRouter = router({
         //      regular controls whose `codes` we keyed by, and also for
         //      OCD start/finish ids that happen to round-trip.
         //   2. By the synthesized display name (e.g. "Start 1", "Mål 1") —
-        //      this is how start/finish controls survive a re-import,
-        //      because they're stored with name = "Start N"/"Mål N" and
-        //      empty `codes`, so step 1 never finds them on round two.
+        //      this is how start/finish controls survive a re-import:
+        //      they're keyed by name = "Start N"/"Mål N" only (their unit
+        //      code, F32, is not a key), so step 1 never finds them.
         const byKey =
           controlByKey.get(pc.id.toLowerCase()) ??
           (name ? controlByKey.get(name.toLowerCase()) : undefined);
         // A crossing point is never rewritten into a control (its name may equal a code).
         const matched = byKey?.kind === "crossing_point" ? undefined : byKey;
+        const isEnd = pc.type === "Start" || pc.type === "Finish";
         const baseData = {
           name,
-          codes,
+          // A start / finish keeps the code it has; a new one takes one below (F32).
+          ...(isEnd ? {} : { codes }),
           status,
           // A position-less import leaves existing coordinates alone and
           // creates new controls unplaced (0, 0) for the course editor.
@@ -2010,26 +2044,45 @@ export const courseRouter = router({
             data.lat = nextLat;
             data.lng = nextLng;
           }
-          await ctx.db.control.update({
-            where: { id: matched.id },
-            data,
-          });
+          // A removed start / finish the import restores keeps its code
+          // unless a live row has since taken its public id: then it takes
+          // a new one, as on create (F32, course-layer.md §6.4).
+          if (isEnd && matched.removed && (await codeHolder(ctx.db, eventId, publicControlId(matched), matched.id))) {
+            await ctx.db.$transaction(async (tx) =>
+              tx.control.update({
+                where: { id: matched.id },
+                data: { ...data, codes: String(await allocateStartFinishCode(tx, eventId)) },
+              }),
+            );
+          } else {
+            await ctx.db.control.update({
+              where: { id: matched.id },
+              data,
+            });
+          }
           controlIdMap.set(pc.id, matched.id);
           if (matched.removed) controlsCreated++;
           else controlsUpdated++;
         } else {
-          const created = await ctx.db.control.create({
-            data: {
-              eventId,
-              ...baseData,
-              // The exchange marker of an Oxygen IOF export (row F9) makes a
-              // new site a map exchange; an existing site keeps its kind.
-              ...(pc.mapExchange && pc.type === "Control" ? { kind: "map_exchange" as const } : {}),
-              lat: nextLat,
-              lng: nextLng,
-            },
-            select: { id: true },
-          });
+          const data = {
+            eventId,
+            ...baseData,
+            // The exchange marker of an Oxygen IOF export (row F9) makes a
+            // new site a map exchange; an existing site keeps its kind.
+            ...(pc.mapExchange && pc.type === "Control" ? { kind: "map_exchange" as const } : {}),
+            lat: nextLat,
+            lng: nextLng,
+          };
+          // A new start / finish takes the lowest free code in 3–30, as
+          // `control.create` (F32, course-layer.md §6.3 / §6.4).
+          const created = isEnd
+            ? await ctx.db.$transaction(async (tx) =>
+                tx.control.create({
+                  data: { ...data, codes: String(await allocateStartFinishCode(tx, eventId)) },
+                  select: { id: true },
+                }),
+              )
+            : await ctx.db.control.create({ data: { ...data, codes }, select: { id: true } });
           controlIdMap.set(pc.id, created.id);
           controlsCreated++;
         }

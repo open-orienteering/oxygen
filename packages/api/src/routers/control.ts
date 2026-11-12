@@ -1,6 +1,6 @@
 import { createSocket } from "node:dgram";
 import { z } from "zod";
-import { publicControlId } from "../control-id.js";
+import { firstCode, lowestFreeStartCode, publicControlId } from "../control-id.js";
 import { TRPCError } from "@trpc/server";
 import { router, coursesViewProcedure, coursesEditProcedure, coursesEditRaceProcedure, coursesEditOrReviewRaceProcedure, coursesReviewRaceProcedure, raceOperateProcedure, raceOperateRaceProcedure } from "../trpc.js";
 import type { PrismaClient } from "../generated/prisma/client.js";
@@ -334,12 +334,81 @@ function siteKind(row: { kind: string; status: string }): ControlKind {
   return row.status === "start" || row.status === "finish" ? row.status : "control";
 }
 
+/** A Prisma client or an interactive transaction's client. */
+type Db = PrismaClient | PrismaNs.TransactionClient;
+
+/** `codes` filters matching a row that holds `n` as any of its `;`-separated codes. */
+function codesHolding(n: number) {
+  return [
+    { codes: String(n) },
+    { codes: { startsWith: `${n};` } },
+    { codes: { contains: `;${n};` } },
+    { codes: { endsWith: `;${n}` } },
+  ];
+}
+
 /**
- * Kinds created without punch codes (addressed by seq), and their names
- * ("Start N" / "Mål N" as the importers; crossing and map-issue points
- * by the same rule, course-layer.md §6.3).
+ * Who already holds `n` as a public id in the event (course-layer.md §6.3,
+ * F32): a live row with `n` among its codes, or a live row without a numeric
+ * code whose seq is `n` (a legacy code-less start is addressed by its seq).
+ * Null when `n` is free.
  */
-const CODELESS_NAMES: Partial<Record<ControlKind, string>> = {
+export async function codeHolder(db: Db, eventId: bigint, n: number, exceptId?: string): Promise<{ bySeq: boolean } | null> {
+  const notSelf = exceptId ? { id: { not: exceptId } } : {};
+  const byCode = await db.control.findFirst({
+    where: { eventId, removed: false, ...notSelf, OR: codesHolding(n) },
+    select: { id: true },
+  });
+  if (byCode) return { bySeq: false };
+  const bySeq = await db.control.findFirst({ where: { eventId, removed: false, seq: n, ...notSelf }, select: { codes: true } });
+  return bySeq && firstCode(bySeq.codes) === 0 ? { bySeq: true } : null;
+}
+
+/** Refuse a code another live row holds (`CONFLICT`): by its codes or, code-less, by its seq. */
+async function assertCodeFree(db: Db, eventId: bigint, n: number, exceptId?: string): Promise<void> {
+  const holder = await codeHolder(db, eventId, n, exceptId);
+  if (!holder) return;
+  throw new TRPCError({
+    code: "CONFLICT",
+    message: holder.bySeq ? `Control ${n} already exists (seq)` : `Control with code ${n} already exists`,
+  });
+}
+
+/**
+ * The code a start or finish written without one takes (course-layer.md §6.3,
+ * F32): the lowest free in 3–10, then 11–30 — free of every live row's codes
+ * and of the seq of every live row without a numeric code. Call inside the
+ * write's transaction: the per-event advisory lock (released at commit)
+ * serialises allocations, so parallel creates take distinct codes.
+ * `PRECONDITION_FAILED` `START_FINISH_CODES_EXHAUSTED` when 3–30 are held.
+ */
+export async function allocateStartFinishCode(tx: PrismaNs.TransactionClient, eventId: bigint): Promise<number> {
+  await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtext(${`control-codes:${eventId}`}))`;
+  const rows = await tx.control.findMany({ where: { eventId, removed: false }, select: { codes: true, seq: true } });
+  const held = new Set<number>();
+  for (const r of rows) {
+    const parts = r.codes.split(";").map((p) => parseInt(p.trim(), 10)).filter((n) => Number.isFinite(n) && n > 0);
+    if (firstCode(r.codes) === 0) held.add(r.seq);
+    for (const n of parts) held.add(n);
+  }
+  const code = lowestFreeStartCode(held);
+  if (code === null) {
+    throw new TRPCError({
+      code: "PRECONDITION_FAILED",
+      message: "START_FINISH_CODES_EXHAUSTED: codes 3–30 are all in use; give the start or finish a code",
+    });
+  }
+  return code;
+}
+
+/**
+ * Kinds created without a given punch code, and their names ("Start N" /
+ * "Mål N" as the importers; crossing and map-issue points by the same rule,
+ * course-layer.md §6.3). Crossing and map-issue points stay code-less
+ * (addressed by seq, above MARK_SEQ_BASE); a start or finish takes the lowest
+ * free code in 3–30 since F32 (`allocateStartFinishCode`).
+ */
+const AUTO_NAMES: Partial<Record<ControlKind, string>> = {
   start: "Start",
   finish: "Mål",
   crossing_point: "Passeringspunkt",
@@ -650,17 +719,17 @@ export const controlRouter = router({
           name: z.string().optional().default(""),
           /**
            * Punch codes (`;`-separated positive integers). Required for
-           * normal controls; start/finish controls (status 4/5) are
-           * code-less by convention — omit or pass "" and they are
-           * addressed by seq (publicControlId falls back to it).
+           * normal controls; a start / finish (status 4/5) given none takes
+           * the lowest free code in 3–10, then 11–30 (F32, course-layer.md
+           * §6.3); crossing and map-issue points are code-less.
            */
           codes: z.string().optional().default(""),
           status: z.number().int().optional().default(0),
           /**
            * Site kind (docs/course-layer.md §6.3); default from `status`
-           * (4 / 5 → start / finish, else control). Start, finish, crossing
-           * and map-issue points are code-less; `status` follows a start /
-           * finish kind.
+           * (4 / 5 → start / finish, else control). Crossing and map-issue
+           * points are code-less, a start / finish given no code takes one
+           * (F32); `status` follows a start / finish kind.
            */
           kind: z.enum(["control", "start", "finish", "map_exchange", "crossing_point", "map_issue"]).optional(),
           timeAdjust: z.number().int().optional().default(0),
@@ -686,10 +755,10 @@ export const controlRouter = router({
       const statusEnum =
         kind === "start" || kind === "finish" ? kind : fromStatus === "start" || fromStatus === "finish" ? "ok" : fromStatus;
       const isStartFinish = kind === "start" || kind === "finish";
-      const codeless = CODELESS_NAMES[kind] !== undefined;
+      const autoNamed = AUTO_NAMES[kind] !== undefined;
       // Validate codes: each part must be a positive integer.
       const parts = input.codes.split(";").map((p) => p.trim()).filter(Boolean);
-      if (parts.length === 0 && !codeless) {
+      if (parts.length === 0 && !autoNamed) {
         throw new TRPCError({
           code: "BAD_REQUEST",
           message: "Invalid control code: at least one code is required",
@@ -706,28 +775,9 @@ export const controlRouter = router({
         }
         parsed.push(n);
       }
-      // Reject duplicates (codes already used by another control).
-      for (const n of parsed) {
-        const dup = await ctx.db.control.findFirst({
-          where: {
-            eventId: ctx.event.id,
-            removed: false,
-            OR: [
-              { codes: String(n) },
-              { codes: { startsWith: `${n};` } },
-              { codes: { contains: `;${n};` } },
-              { codes: { endsWith: `;${n}` } },
-            ],
-          },
-          select: { id: true },
-        });
-        if (dup) {
-          throw new TRPCError({
-            code: "CONFLICT",
-            message: `Control with code ${n} already exists`,
-          });
-        }
-      }
+      // Reject duplicates: a code another live row holds, by its codes or —
+      // code-less — by its seq (F32, course-layer.md §6.3).
+      for (const n of parsed) await assertCodeFree(ctx.db, ctx.event.id, n);
       // Resolve WGS84 coordinates up-front (outside the transaction — the
       // CRS load may parse the whole map file on a cache miss).
       const hasPosition = input.xpos !== undefined && input.ypos !== undefined;
@@ -738,13 +788,13 @@ export const controlRouter = router({
       // Auto-name code-less rows following the import convention
       // ("Start N" / "Mål N") — courses reference starts by this name.
       let name = input.name;
-      if (!name && codeless) {
+      if (!name && autoNamed) {
         const count = await ctx.db.control.count({
           where: isStartFinish
             ? { eventId: ctx.event.id, status: statusEnum, removed: false }
             : { eventId: ctx.event.id, kind, removed: false },
         });
-        name = `${CODELESS_NAMES[kind]} ${count + 1}`;
+        name = `${AUTO_NAMES[kind]} ${count + 1}`;
       }
 
       let description = input.description as ControlDescription | undefined;
@@ -752,7 +802,7 @@ export const controlRouter = router({
         !description &&
         input.autoDescribe &&
         hasPosition &&
-        !codeless
+        !autoNamed
       ) {
         description =
           (await autoDescribeAt(
@@ -768,16 +818,20 @@ export const controlRouter = router({
         // A code-less crossing / map-issue point is addressed by its seq: one above MARK_SEQ_BASE, so its public
         // id never meets a punch code (course-layer.md §6.3).
         let seq: number | undefined;
-        if (codeless && !isStartFinish && parts.length === 0) {
+        if (autoNamed && !isStartFinish && parts.length === 0) {
           const top = await tx.control.aggregate({ where: { eventId: ctx.event.id, seq: { gt: MARK_SEQ_BASE } }, _max: { seq: true } });
           seq = Math.max(MARK_SEQ_BASE, top._max.seq ?? 0) + 1;
         }
+        // A start / finish given no code takes one (F32): its public id is
+        // then its code, never a seq that may equal another control's code.
+        const codes =
+          isStartFinish && parts.length === 0 ? String(await allocateStartFinishCode(tx, ctx.event.id)) : input.codes;
         const c = await tx.control.create({
           data: {
             eventId: ctx.event.id,
             ...(seq !== undefined ? { seq } : {}),
             name,
-            codes: input.codes,
+            codes,
             status: statusEnum,
             kind,
             timeAdjust: input.timeAdjust,
@@ -879,26 +933,7 @@ export const controlRouter = router({
         for (const p of parts) {
           const n = parseInt(p, 10);
           if (!Number.isFinite(n) || n <= 0) continue;
-          const dup = await ctx.db.control.findFirst({
-            where: {
-              eventId: ctx.event.id,
-              removed: false,
-              id: { not: c.id },
-              OR: [
-                { codes: String(n) },
-                { codes: { startsWith: `${n};` } },
-                { codes: { contains: `;${n};` } },
-                { codes: { endsWith: `;${n}` } },
-              ],
-            },
-            select: { id: true },
-          });
-          if (dup) {
-            throw new TRPCError({
-              code: "CONFLICT",
-              message: `Control with code ${n} already exists`,
-            });
-          }
+          await assertCodeFree(ctx.db, ctx.event.id, n, c.id);
         }
         data.codes = input.codes;
       } else if (input.codes !== undefined) {
@@ -999,6 +1034,15 @@ export const controlRouter = router({
                 ]),
               ]
             : [];
+        // A row that becomes a start / finish without a code takes one (F32).
+        const nextKind = (data.kind as ControlKind | undefined) ?? siteKind(c);
+        if (
+          kindChanged &&
+          (nextKind === "start" || nextKind === "finish") &&
+          firstCode((data.codes as string | undefined) ?? c.codes) === 0
+        ) {
+          data.codes = String(await allocateStartFinishCode(tx, ctx.event.id));
+        }
         await tx.control.update({ where: { id: c.id }, data });
         const v = await emitControlUpserted(tx, ctx.event.id, c.id);
         // A kind change makes `splitStructure` read a stored structure

@@ -63,18 +63,35 @@ read it.
   cursor; after the click and `Esc` the leg start → control stays. Run
   against the old memo, both leg assertions fail while the label passes.
 
-## Found on the way (not fixed here)
+## Found on the way (fixed in F32)
 
 A control's public id is its first punch code, else its `seq`
-(`packages/api/src/control-id.ts`). Starts and finishes are code-less, so
-a start placed with `S` is addressed by its seq, and `control.create`
-does not check that seq against the codes already in use. Once an
-event's seq reaches a punch code (in a full E2E run of
+(`packages/api/src/control-id.ts`). Starts and finishes used to be
+code-less, so a start placed with `S` was addressed by its seq, and
+`control.create` did not check that seq against the codes already in use.
+Once an event's seq reached a punch code (in a full E2E run of
 `course-editor.spec.ts` the new start got seq 80 beside the seed control
-coded 80), two controls share one public id. The web then sees two
-`editor-site`s keyed `80` (React's duplicate-key warning), the course
-reads the start as control 80, and a reuse or a filter can hit the wrong
+coded 80), two controls shared one public id. The web then saw two
+`editor-site`s keyed `80` (React's duplicate-key warning), the course read
+the start as control 80, and a reuse or a filter could hit the wrong
 control. The P5 describe reseeds in its `beforeAll` so it doesn't depend
-on how many controls earlier tests created. A fix belongs to the id space
-(for example, skip seqs that collide with a code, or give starts and
-finishes ids from a range of their own), which is outside P5's area.
+on how many controls earlier tests created.
+
+**Fixed in F32** (`docs/course-layer.md` §6.3 "Starts and finishes take a
+code", decision log `decisions/slice-f.md` 2026-11-12). The fix follows
+the user: a start or finish is a physical unit programmed with a code, so
+it gets one. `control.create` for a start or finish without codes stores
+the lowest free code in 3–10, then 11–30 (1 is clear, 2 normally check),
+and refuses when 3–30 are all used; "free" also excludes the seq of any
+code-less row still addressed by its seq, and the duplicate check refuses
+such a seq as a new code. A kind change to start / finish and the course
+import allocate the same way. The new start's public id is its code, so it
+can no longer meet a control's. Labels, sheets and the IOF / Purple Pen
+export keep showing the start by its name ("Start 1"). No migration:
+existing code-less starts and finishes are left as they are (user
+decision) and keep the seq fallback. Tests:
+`packages/api/src/__tests__/integration/start-finish-codes.test.ts` (the
+seq counter at 80 beside a control coded 80; the new start takes 3 and
+every id is unique), `packages/api/src/__tests__/control-id.test.ts`, and
+ids 3 / 4 / 5 plus unique `editor-site` ids in
+`e2e/editor-start-finish.spec.ts`.

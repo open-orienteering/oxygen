@@ -13,6 +13,7 @@
  * meters = mm × mapScale / 1000.
  */
 
+import { displayCode } from "./control-id.js";
 import { course, symbolLibrary } from "@oxygen/shared";
 import type { PrismaClient, Prisma } from "./generated/prisma/client.js";
 import { loadEventCrs } from "./event-crs.js";
@@ -110,11 +111,7 @@ export function courseLengthM(
 
 type Db = PrismaClient | Prisma.TransactionClient;
 
-/** First punch code, falling back to name then seq — the display code. */
-function displayCode(c: { codes: string; name: string; seq: number }): string {
-  const first = c.codes.split(";")[0]?.trim();
-  return first || c.name || String(c.seq);
-}
+// `displayCode` (control-id.ts): a start / finish by its name, else first code → name → seq (F32).
 
 /** A course's rendered sequence and order mode, as `rebuildCourseLengths` reads it. */
 export interface CourseSequence {

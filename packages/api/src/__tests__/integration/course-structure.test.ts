@@ -169,8 +169,8 @@ describe("course.setStructure", () => {
     // D6: the written course's advisory checks (course-checks.test.ts covers them).
     expect(res.checks).toEqual(await caller.course.checks({ courseId: id }));
     const row = await courseRow(id);
-    const start = await ctx.db.control.findFirstOrThrow({ where: { eventId: ctx.eventId, seq: startSeq } });
-    const finish = await ctx.db.control.findFirstOrThrow({ where: { eventId: ctx.eventId, seq: finishSeq } });
+    const start = await ctx.db.control.findFirstOrThrow({ where: { eventId: ctx.eventId, removed: false, codes: String(startSeq) } });
+    const finish = await ctx.db.control.findFirstOrThrow({ where: { eventId: ctx.eventId, removed: false, codes: String(finishSeq) } });
     expect(row.startName).toBe(start.name);
     expect(row.finishControlId).toBe(finish.id);
     expect(row.version.toString()).toBe(res.version);
@@ -402,7 +402,8 @@ describe("the mirror stays a function of the structure (course-layer.md §6.2)",
     const seq = (await drawnCourse(ctx.db, ctx.eventId, row.id)).features
       .filter((f) => f.properties.symbolType === "start")
       .map((f) => f.properties.code);
-    expect(seq).toEqual(["81"]);
+    // Shown by its name now that it is a start (F32, `displayCode`).
+    expect(seq).toEqual(["Start K"]);
 
     await caller.control.update({ id: site.id, kind: "control" });
     expect((await ccOf(id)).map((cc) => cc.control.codes)).toEqual(["81", "31", "32"]);

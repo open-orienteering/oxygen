@@ -29,7 +29,7 @@ import {
   type MapWindow,
 } from "@oxygen/shared";
 import { z } from "zod";
-import { firstCode } from "../control-id.js";
+import { displayCode, firstCode, isStartOrFinish } from "../control-id.js";
 import { courseSequenceOf, crossingRowsOf, rowKind, type SequenceColumns } from "../course-structure.js";
 
 const objectsSchema = z.array(courseMapObjectSchema);
@@ -255,7 +255,7 @@ function endControl(row: LayoutControlSource | null | undefined, type: "start" |
   if (!row || (row.xpos === 0 && row.ypos === 0)) return null;
   return {
     id: row.id,
-    code: row.codes.split(";")[0]?.trim() || row.name || (type === "start" ? "S" : "F"),
+    code: displayCode({ ...row, seq: null, kind: type }) || (type === "start" ? "S" : "F"),
     type,
     x: row.xpos,
     y: row.ypos,
@@ -290,7 +290,8 @@ export function resolveMapLayout(
         )
       : input.course?.controls ?? [];
   const regularControls = rawControls.map((control) => {
-    const code = control.codes.split(";")[0] || String(control.seq ?? "");
+    // A start / finish by its name (F32, course-layer.md §6.3).
+    const code = isStartOrFinish(control) ? displayCode(control) : control.codes.split(";")[0] || String(control.seq ?? "");
     const type: CourseOverlayControl["type"] =
       everySite ? allControlsType(control) : "control";
     const x = control.xpos;
