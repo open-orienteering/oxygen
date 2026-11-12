@@ -36,9 +36,55 @@ reference events — nothing to provision manually.
 | `E2E_SHARDS=2 pnpm test:e2e` | Fewer shards (lower peak CPU/RAM) |
 | `pnpm test:e2e:serial` | Escape hatch: plain `playwright test` — the same 4100/4200/4300 stack as a selective run |
 
+| `E2E_SHARD_TOTAL=6 E2E_SHARD_INDEX=3 pnpm test:e2e` | Only shard 3 of the same split into 6, on stack 3 (`:4103`/`:4203`/`:4303`, db `oxygen_e2e_3`). What each CI matrix job runs; replays one CI shard locally |
+| `pnpm test:e2e --plan` | Prints the split (honours `E2E_SHARDS`, `E2E_SHARD_TOTAL`) and exits; starts nothing |
+
 Any argument that doesn't start with `-` is treated as a file filter and
 triggers the unsharded selective path, so `-g "name"` filters also run
 unsharded.
+
+## CI
+
+GitHub's `ubuntu-latest` runner has 4 vCPU, room for two stacks, and
+standard runners cost nothing on a public repository. So CI does not run
+the shards side by side on one runner: the E2E job in
+`.github/workflows/ci.yml` is a matrix, `e2e-shard`, of one runner per
+shard. Each job sets `E2E_SHARD_TOTAL` (the matrix size,
+`strategy.job-total`) and `E2E_SHARD_INDEX` (its `matrix.shard`) and runs
+`pnpm test:e2e`: every job computes the same LPT split
+(`partition` in `scripts/e2e-weights.mjs`, a pure function of the spec
+files and the weights) and runs its own entry on one stack. A shard with
+no files passes; the runner never hands Playwright an empty file list,
+which would run the whole suite.
+
+- **The check.** A gate job `e2e` keeps the check name the merge flow
+  reads, **E2E tests**. It needs the matrix, runs even when a shard failed
+  (`!cancelled()`) and passes only when every shard did. Shards do not
+  cancel each other (`fail-fast: false`), so one run reports every
+  failure and every flake.
+- **The count.** The shard count is the length of the matrix's `shard`
+  list, `1..N` with no gaps (`scripts/__tests__/e2e-shards.test.mjs`
+  checks it). Six today. Free runners allow 20 concurrent jobs per
+  account, and several PRs often run at once, so raise it only when the
+  slowest shard is no longer one big spec file.
+- **No `needs: unit`.** The shards start at once, beside lint, build and
+  unit tests, instead of after them.
+- **Per job.** Postgres (`docker-compose.test.yml`) starts before the
+  browser install, so its image pull overlaps it, and is waited for
+  healthy just before the tests. The Chromium download is cached
+  (`~/.cache/ms-playwright`, keyed on the Playwright version); on a hit
+  only its OS libraries are installed (`playwright install-deps
+  chromium`). A failing shard uploads its own artifact,
+  `playwright-<run>-<attempt>-shard-<n>` (`playwright-report/shard-<n>`,
+  `test-results/shard-<n>`). Each shard also writes its time and weight to
+  the job's summary page.
+- **Docs-only changes** (`docs/**`, `**/*.md`) run no CI at all
+  (`paths-ignore` on `pull_request` and `push`): such a PR shows no checks.
+
+To rebalance after a CI run, read each shard's time from the job summaries
+and the per-test times from its log (the `list` reporter), and adjust
+`WEIGHTS`; `pnpm test:e2e --plan` with `E2E_SHARDS=6` shows the split the
+matrix will use.
 
 ## How the pieces fit
 
