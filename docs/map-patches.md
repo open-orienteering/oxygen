@@ -332,10 +332,17 @@ non-critical data (08 §4.8). Each write is one transaction:
    NOTHING`, keyed to the pin), then lock it (`SELECT … FOR UPDATE`).
    Two first writers both end on the one row.
 3. A row keyed to another document than the pin is **dormant** (below):
-   `PRECONDITION_FAILED` `PATCH_STALE`.
+   `PRECONDITION_FAILED` `PATCH_STALE`. The pin is read again under the
+   lock, so a pin that moved since step 1 refuses the write the same
+   way. (A pin that moves after that read and before the commit is not
+   excluded: the pin's writers do not take the patch lock. The write
+   then lands on a row that is dormant from the next read on; nothing
+   is lost. Re-resolution, row G11, re-keys under the lock.)
+   A stored row that does not parse (written by a newer image) is not
+   overwritten: `INTERNAL_SERVER_ERROR` `PATCH_UNREADABLE`.
 4. `applyChange`: `mergePatch(row, change)` (§1.5). `setEnabled`: the new value.
    The stored `ops` + `symbols` JSON is capped at 4 MiB
-   (`MAP_PATCH_MAX_BYTES`, `PAYLOAD_TOO_LARGE`): a patch is kilobytes,
+   (`MAP_PATCH_MAX_BYTES`, `PAYLOAD_TOO_LARGE` `PATCH_TOO_LARGE`): a patch is kilobytes,
    and it travels inside the one JSON checkout snapshot.
 5. A write that changes nothing (the same change again, the toggle at
    its value) writes nothing and keeps the version, so "twice equals
@@ -385,10 +392,15 @@ GET /api/maps/:nameId/patch     → 200 application/json { version, patch }
   `document_hash` is the event's pin (§2: the caller pairs the patch with
   the document; delivery guarantees it). No row, no pin, or a dormant row
   → `{ version: "0", patch: null }`, a 200 — null is the identity (§2.1),
-  so a viewer passes what it receives to `applyPatch` unchanged.
+  so a viewer passes what it receives to `applyPatch` unchanged. A row
+  created by a write that changed nothing (an empty `applyChange`,
+  `setEnabled(true)` on no row) keeps version `"0"` and is delivered as
+  the empty patch it is — also the identity; `"0"` therefore means "no
+  correction to draw", not "no row".
 - **The descriptor**: `course.mapMetadata` gains `patchVersion` (the same
   version, `"0"` when nothing is delivered), so a client holding the
-  document knows when to refetch the patch.
+  document knows when to refetch the patch. It reads the row's
+  `document_hash` and `version` only (`eventPatchVersion`), not the ops.
 - The route revalidates on every use (`no-cache`); the ETag makes an
   unchanged patch a 304.
 - A disabled patch is delivered as it is (`enabled: false`): the toggle
@@ -451,7 +463,7 @@ document only a patch points at, and touches its `last_referenced_at`.
 | Unit (api) | `packages/api/src/__tests__/snapshot-maps.test.ts` | `snapshotPatchOf`: the row with an exact decimal token; nothing without a row or for a dormant one |
 | Unit (api) | `packages/api/src/__tests__/venueForwarder.test.ts` | `mapPatch.applyChange` / `setEnabled` cloud-owned and forwarded, `mapPatch.get` served locally |
 | Unit (api) | `packages/api/src/__tests__/backup.test.ts` | `map_patches` directly after `map_files`; the blob sections' filters include the patch's document and its source |
-| Integration (api) | `packages/api/src/__tests__/integration/map-patches.test.ts` | no patch before a write; `applyChange` creates the row keyed to the pin and merges put / remove (an absent id a no-op) / putSymbols with sorted keys; twice = once and an empty change keep the version; six concurrent first writers on different ids → one row with all six ops; two writers on one id → one of the two states whole; refusals (duplicate id `BAD_REQUEST`, put + remove of one id, `PATCH_DOCUMENT_MISMATCH`, `PATCH_NO_DOCUMENT` for `applyChange` and `setEnabled`); `setEnabled` creates an empty row, advances only on a change, a disabled patch delivered as it is; a dormant row (pin moved) not delivered, `patchVersion` `"0"`, writes `PATCH_STALE`, row untouched, delivered again when the pin returns; the table (defaults, one row per event, `RESTRICT` on the document, cascade with the event, an array in `ops` refused); access (kiosk key and viewer read, cannot write; stranger `FORBIDDEN`; course setter writes); the route 200 with `ETag` / `Cache-Control`, 304, a stale ETag 200, header and `?k=` kiosk key, viewer 200, anonymous and wrong key 401, stranger 403, unknown event 404; `mapMetadata.patchVersion` equals the route's version |
+| Integration (api) | `packages/api/src/__tests__/integration/map-patches.test.ts` | no patch before a write; `applyChange` creates the row keyed to the pin and merges put / remove (an absent id a no-op) / putSymbols with sorted keys; twice = once and an empty change keep the version; six concurrent first writers on different ids → one row with all six ops; two writers on one id → one of the two states whole; refusals (duplicate id `BAD_REQUEST`, put + remove of one id, `PATCH_DOCUMENT_MISMATCH`, `PATCH_NO_DOCUMENT` for `applyChange` and `setEnabled`); `setEnabled` creates an empty row, advances only on a change, a disabled patch delivered as it is; a dormant row (pin moved) not delivered, `patchVersion` `"0"`, writes `PATCH_STALE`, row untouched, delivered again when the pin returns; an unreadable row: no patch delivered, writes `PATCH_UNREADABLE`, row untouched; the table (defaults, one row per event, `RESTRICT` on the document, cascade with the event, an array in `ops` refused); access (kiosk key and viewer read, cannot write; stranger `FORBIDDEN`; course setter writes); the route 200 with `ETag` / `Cache-Control`, 304, a stale ETag 200, header and `?k=` kiosk key, viewer 200, anonymous and wrong key 401, stranger 403, unknown event 404; `mapMetadata.patchVersion` equals the route's version |
 | Integration (api) | `packages/api/src/__tests__/integration/lease.test.ts` | checkout carries the patch row verbatim (id, document, `enabled`, ops, token above 2^53 exact), `maps.patches` counted (0 from an exporter without the map part); the box's `mapPatch.get` and route (kiosk key) serve it with `ETag` = the token |
 | Integration (api) | `packages/api/src/__tests__/integration/backup.test.ts` | the dump's `map_patches` section directly after `map_files` with the event's row; restored into another event with `event_id` rewritten, token and ops exact |
 | Integration (api) | `packages/api/src/__tests__/integration/map-storage-gc.test.ts` | a document only a patch references is kept (dry run too) and touched; `RESTRICT` refuses its delete; collected once the patch is gone and a fresh grace passed |

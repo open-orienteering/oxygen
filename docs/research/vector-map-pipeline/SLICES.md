@@ -800,7 +800,7 @@ answer below settles it; a row's planner may reopen any with a reason):
 - **Ops are keyed states, not a log** (`course-layer.md` §7, answer 1):
   one state per `(target, kind)` — `hide:<sourceIndex>`,
   `modify:<sourceIndex>`, `resymbol:<sourceIndex>`, `add:<uuid>`; editing
-  an added object rewrites its `add` op. `mapPatch.apply { put, remove }`
+  an added object rewrites its `add` op. `mapPatch.apply { put, remove }` (`applyChange` since G3: tRPC reserves `apply`)
   merges per op id under the row lock, so two editors on different objects
   never clobber. One cloud-owned `map_patches` row per event, not
   journaled, in the checkout snapshot, forwarded from a venue.

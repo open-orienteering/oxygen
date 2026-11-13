@@ -111,6 +111,16 @@ export async function eventPatch(db: Db, eventId: bigint): Promise<PatchDelivery
   return deliveredPatch(row, pin);
 }
 
+/**
+ * The delivered patch's version alone (`course.mapMetadata.patchVersion`,
+ * §3.3), for a caller that already holds the pin: no parse of the ops.
+ */
+export async function eventPatchVersion(db: Db, eventId: bigint, pinHash: string | null): Promise<string> {
+  if (!pinHash) return NO_PATCH.version;
+  const row = await db.mapPatch.findUnique({ where: { eventId }, select: { documentHash: true, version: true } });
+  return row && row.documentHash === pinHash ? row.version.toString() : NO_PATCH.version;
+}
+
 // ---- writes -----------------------------------------------------------------
 
 /**
@@ -133,10 +143,12 @@ async function lockPatchRow(tx: Prisma.TransactionClient, eventId: bigint, docum
   await tx.$queryRaw`SELECT 1 FROM "oxygen"."map_patches" WHERE "event_id" = ${eventId} FOR UPDATE`;
   const row = await tx.mapPatch.findUnique({ where: { eventId }, select: ROW_SELECT });
   if (!row) throw new Error(`map_patches row for event ${eventId} vanished under the lock`);
-  if (row.documentHash !== pin) {
+  // The pin again, under the lock: a pin that moved since step 1 makes the row dormant now.
+  const pinNow = await eventDocumentHash(tx, eventId);
+  if (row.documentHash !== pin || pinNow !== pin) {
     throw new TRPCError({
       code: "PRECONDITION_FAILED",
-      message: `PATCH_STALE: the event's corrections are keyed onto ${row.documentHash}, not the event's map ${pin}; they wait for re-resolution`,
+      message: `PATCH_STALE: the event's corrections are keyed onto ${row.documentHash}, not the event's map ${pinNow ?? "(none)"}; they wait for re-resolution`,
     });
   }
   const patch = patchOfRow(row);

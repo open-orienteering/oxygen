@@ -10,12 +10,13 @@
  *   - a dormant row (keyed to another document than the pin): not
  *     delivered, not writable
  *   - mapPatch.setEnabled
+ *   - an unreadable row (a newer image's) is never overwritten
  *   - auth: kiosk key and viewer read, cannot write; a stranger cannot read
  *   - GET /api/maps/:nameId/patch: 200 / 304 / 401 / 403 / 404, ETag = version
  *   - course.mapMetadata.patchVersion
  */
 
-import { describe, it, expect, beforeAll, afterAll } from "vitest";
+import { describe, it, expect, beforeAll, afterAll, vi } from "vitest";
 import { readFileSync } from "fs";
 import { resolve } from "path";
 import { randomBytes } from "crypto";
@@ -233,6 +234,29 @@ describe("a dormant patch (§3.2)", () => {
       await ctx.db.mapFile.update({ where: { id: pin.id }, data: { documentHash } });
     }
     expect((await caller.mapPatch.get()).patch!.ops).toEqual({ "hide:4": hide(4) });
+  });
+});
+
+describe("an unreadable row (§3.2)", () => {
+  it("is not overwritten: writes are PATCH_UNREADABLE, reads deliver no patch", async () => {
+    await resetPatch();
+    // A key that is not its op's id: what a newer image's shape looks like to this one.
+    const bad = { "hide:2": { op: "hide", sourceIndex: 3 } };
+    await ctx.db.mapPatch.create({ data: { eventId: ctx.eventId, documentHash, ops: bad, version: 5n } });
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    try {
+      expect(await caller.mapPatch.get()).toEqual({ version: "0", patch: null });
+      await expect(caller.mapPatch.applyChange({ documentHash, put: [hide(1)] })).rejects.toMatchObject({
+        code: "INTERNAL_SERVER_ERROR",
+        message: expect.stringMatching(/^PATCH_UNREADABLE/),
+      });
+      await expect(caller.mapPatch.setEnabled({ enabled: false })).rejects.toMatchObject({ message: expect.stringMatching(/^PATCH_UNREADABLE/) });
+    } finally {
+      warn.mockRestore();
+    }
+    const row = await ctx.db.mapPatch.findUniqueOrThrow({ where: { eventId: ctx.eventId } });
+    expect(row).toMatchObject({ ops: bad, enabled: true, version: 5n });
+    await resetPatch();
   });
 });
 

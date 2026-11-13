@@ -56,7 +56,7 @@ import {
 import { latestVersionOrRefuse } from "../club-map-library.js";
 import { cutRotationDeg, meridianStalenessFromDetection } from "../map-north.js";
 import { documentNorth, eventPin } from "../map-store/event-document.js";
-import { eventPatch } from "../map-store/patches.js";
+import { eventPatchVersion } from "../map-store/patches.js";
 import { canDownloadEventMap } from "../ocad-export.js";
 import { loadEventCrs } from "../event-crs.js";
 import { rebuildCourseLengths } from "../course-geometry.js";
@@ -1246,7 +1246,7 @@ export const courseRouter = router({
       /** The pinned club map version, null for an event's own upload; the viewer's GPU budget follows it (docs/map-rendering.md §5.4). */
       clubMapVersionId: row.clubMapVersionId,
       /** The delivered patch's token (docs/map-patches.md §3.3); `"0"` when nothing is delivered. Refetch `/api/maps/:nameId/patch` when it changes. */
-      patchVersion: (await eventPatch(ctx.db, ctx.event.id)).version,
+      patchVersion: await eventPatchVersion(ctx.db, ctx.event.id, row.documentHash),
       cutRotationDeg: cutRotationDeg(
         northOffset,
         north?.meridian?.medianTiltDeg ?? null,
