@@ -2,7 +2,8 @@
 
 Normative chapter for 03 §6.3–6.4 (slice B). It covers the IOF colour
 palette as data, the canonical symbol libraries `ISOM2017-2` and
-`ISSprOM2019-2` authored in the `RenderSymbol` IR, the authoring rules,
+`ISSprOM2019-2` authored in the `RenderSymbol` IR — plus `ISSkiOM2019`,
+an overlay library of the ski-O symbols (§12) — the authoring rules,
 how a library entry becomes a plain `RenderSymbol` against a document's
 colour stack, and the tests that keep the library honest. The IR itself
 (`render/symbol.ts`) and its drawing semantics are specified in
@@ -23,6 +24,7 @@ symbol-library/
 ├── ISOM2017-2/           common.ts + landforms, rock, water, vegetation,
 │                         manmade, technical, course, names, index
 ├── ISSprOM2019-2/        same layout
+├── ISSkiOM2019/          common.ts + water, tracks, names, index (overlay, §12)
 └── __tests__/            palette.test.ts, library.test.ts, names.test.ts
 ```
 
@@ -42,11 +44,15 @@ interface PaletteEntry {
 }
 ```
 
-Two editions exist. `iof2024` (43 rows) is Rev 4 of the IOF document and
-is what both libraries declare as their `palette`. `iof2022` is the
+Two editions exist. `iof2024` (44 rows) is Rev 4 of the IOF document
+plus Oxygen's `white-skio` row, and is what every library declares as its
+`palette`. `iof2022` is the
 previous edition for documents that must keep the older ink values: the
 same ids minus `orange-skio`, the pre-2024 brown and green CMYK, black
-area screen 30 % instead of 35 %. Ids are stable between editions so a
+area screen 30 % instead of 35 %. Two cells depart from the IOF table,
+both for ISSkiOM 2019 (§12.3): the `white-skio` row ("White under Ski-O
+tracks", directly below `purple-lower`, ISSkiOM only) and the ISSkiOM
+tick on `green100-area`. Ids are stable between editions so a
 library entry never has to change when a document picks the other
 edition.
 
@@ -70,10 +76,12 @@ A library (`symbolLibrarySchema`):
 ```ts
 {
   id: "ISOM2017-2",
-  spec: "ISOM2017-2" | "ISSprOM2019-2",
+  spec: "ISOM2017-2" | "ISSprOM2019-2" | "ISSkiOM2019" | "ISMTBOM2022",
   revision: "Rev 6 (20 January 2024)",
   referenceScale: 15_000,
   palette: "iof2024",
+  kind: "base" | "overlay",        // default "base"; ISSkiOM2019 is the overlay (§12)
+  scaleRules?: Record<group, { mapScale, factor }[]>,  // the spec's own enlargement table (§12.2)
   entries: LibraryEntry[]
 }
 ```
@@ -96,7 +104,8 @@ An entry (`libraryEntrySchema`) — the 03 §6.4 shape with `render` in
   aliases: { library: string; code: string }[],  // older-spec codes, headings only; library ∈ ALIAS_LIBRARIES (§3, checked in §5)
   render: LibraryRender,           // RenderSymbol minus id/code/name, colours as palette ids
   notes?: string,                  // deviations and tool-dependent choices
-  source: string                   // citation, e.g. "ISOM 2017-2 Rev 6 (…), §3.8"
+  source: string,                  // citation, e.g. "ISOM 2017-2 Rev 6 (…), §3.8"
+  scaleGroup?: string              // its scaleRules row set; required exactly when the library has scaleRules
 }
 ```
 
@@ -129,7 +138,8 @@ per-symbol decisions.
   very high earth bank, `709.b/c` out-of-bounds with solid/dashed
   boundary). A heading entry must precede its variants in the file.
 - **Dimensions come from the spec text and drawings only** (Rev 6 of both
-  documents, §3.8 / §4.8 "precise definitions"). The OpenOrienteering
+  documents, §3.8 / §4.8 "precise definitions"; ISSkiOM 2019 Revision 4,
+  §3.3, for the overlay — §12). The OpenOrienteering
   Mapper symbol sets were used as a cross-check for shapes the spec only
   draws (713 cup, 710 crossing-point flares, 512.1 bridge ends), never
   copied — they are GPL and not in the repository. Where OOM and the Rev 6
@@ -205,7 +215,9 @@ per-symbol decisions.
   rev 5 has the same symbol under the same code — the one exception is
   `105.1`, rev 5's `105 Liten jordvall`, the same symbol before Rev 6
   renumbered it; a heading the translation lacks has no `sv` and is listed
-  in §3.2 — absence is the mark, nothing is invented. The names live in a
+  in §3.2 — absence is the mark, nothing is invented. SOFT has no
+  ISSkiOM translation, so the overlay has no Swedish names and its
+  `SV_SOURCE` is `null` (§12.4). The names live in a
   per-library table (`<library>/names.ts`, keyed by the entry id after the
   library prefix) that `withNamesAndAliases` (`authoring.ts`) attaches to
   the entries, so names and drawings are edited independently; the helper
@@ -245,6 +257,7 @@ per-symbol decisions.
 |---|---|---|---|
 | `ISOM2017-2` | 113 | 152 | 180–200 |
 | `ISSprOM2019-2` | 105 | 141 | 170–190 |
+| `ISSkiOM2019` (overlay) | 16 of ISSkiOM's (§12.1) | 16 | — (03 §2.1: not inventoried) |
 
 Names and aliases (B7):
 
@@ -252,6 +265,7 @@ Names and aliases (B7):
 |---|---|---|---|
 | `ISOM2017-2` | 152 / 152 | — | 97 `ISOM2000` codes on 96 headings |
 | `ISSprOM2019-2` | 138 / 141 | `105.2`, `533`, `715` | none (no ISSOM 2007 table) |
+| `ISSkiOM2019` | 0 / 16 | all (no SOFT translation, §12.4) | none |
 
 The estimate assumed more drawings per heading than the Rev 6 documents
 actually show once the spec's own prose is followed (many "variants" are
@@ -267,6 +281,9 @@ seen only from one side*, `533` *Area with obstacles*, `715` *Continuing
 point after map exchange*. They get `sv` when SOFT publishes a Rev 6
 translation; borrowing the ISOM heading for 715 was considered and not
 done, because the rule is one source per library.
+
+`ISSkiOM2019` has no Swedish names at all: SOFT has published no
+ISSkiOM translation (§12.4). They get `sv` if one appears.
 
 ISOM 2017-2 headings without an ISOM 2000 alias (17): the symbols with
 no ISOM 2000 predecessor in Mapper's table (`105.2`, `114`, `203.2`,
@@ -315,8 +332,10 @@ the document factor (`docs/course-layer.md` §1, §3.1).
 
 Registry functions: `listSymbolLibraries()`, `getSymbolLibrary(id)`,
 `getLibraryEntry("ISOM2017-2:302.b")`, `entriesForCode("ISOM2017-2",
-"302")` (heading first, then variants). Libraries are parsed once and
-cached.
+"302")` (heading first, then variants), `isOverlayLibrary(id)` and
+`libraryFactor(id, mapScale, code?)` (§12.2). Libraries are parsed once
+and cached. `SymbolLibraryId` names all three; the library preview route
+(`map-storage.md` §4.5) serves the overlay's swatches like the others'.
 
 ## 5. Validation
 
@@ -335,9 +354,12 @@ cached.
 | an alias on a variant entry | `aliases are for heading entries only` |
 | a variant's `sv` not `<heading sv>, <qualifier>` / heading without `sv` | `variant name should start with "<heading sv>, "` / `variant has a Swedish name but its heading has none` |
 | point without `orientation` / non-point with one | `point symbols need an orientation` / `orientation is only for point symbols` |
+| a 7xx entry in an overlay library | `an overlay library has no course symbols` |
+| a `scaleRules` row set listing one scale twice / without factor 1 at the reference scale | `scale group "g" lists 1:s twice` / `scale group "g" needs factor 1 at the reference scale 1:s` |
+| an entry without `scaleGroup` on a library with `scaleRules`, or naming a set it lacks / `scaleGroup` on a library without | `entries need a scaleGroup when the library has scaleRules` / `scale group "g" is not in the library's scaleRules` / `scaleGroup needs scaleRules on the library` |
 | `render` does not resolve to a valid `RenderSymbol` | the resolver's / Zod's message |
 
-The registry throws if either shipped library has any problem, so a bad
+The registry throws if any shipped library has any problem, so a bad
 entry fails every consumer at import time rather than at draw time.
 
 ## 6. Tests
@@ -345,27 +367,40 @@ entry fails every consumer at import time rather than at draw time.
 `packages/shared/src/symbol-library/__tests__/` implements 03 §6.4 (a)–(c)
 plus the purple-role and materialisation checks:
 
-- **palette.test.ts** — 43 / 42 rows per edition in Appendix B order,
-  the 2022 overrides (brown, green, black 30 %, olive name), per-spec tick
-  counts (ISOM 29, ISSprOM 33), the §2.4 layering as stack-index
-  inequalities, prefixed stack ids and CMYK → hex.
+- **palette.test.ts** — 44 / 43 rows per edition in Appendix B order
+  plus `white-skio`, the 2022 overrides (brown, green, black 30 %, olive
+  name), per-spec tick counts (ISOM 29, ISSprOM 33, ISSkiOM 20 / 19 in
+  2022, listed in order), the §2.4 layering as stack-index inequalities
+  (and the ISSkiOM order of §12.3), prefixed stack ids and CMYK → hex.
 - **library.test.ts**
-  - (a) both libraries parse, `validateLibrary` is empty, every entry cites
-    `<spec> Rev 6`, heading entries precede variants; a deliberately broken
-    copy produces each `validateLibrary` message.
-  - (b) hand-typed Appendix A heading lists (113 ISOM, 105 ISSprOM) each
-    have a heading entry, and no entry uses a code outside its list.
+  - (a) all three libraries parse, `validateLibrary` is empty, every entry
+    cites its edition (`<spec> Rev 6`, `ISSkiOM 2019 Revision 4`), heading
+    entries precede variants; deliberately broken copies produce each
+    `validateLibrary` message, the overlay and scale-rule ones included.
+  - (b) hand-typed Appendix A heading lists (113 ISOM, 105 ISSprOM) and
+    the 16 ISSkiOM overlay headings typed from the ISSkiOM text each have a
+    heading entry, and no entry uses a code outside its list.
   - (c) hand-typed dimension tables per spec (≈ 70 ISOM and ≈ 60 ISSprOM
     assertions on widths, dash lengths, diameters, grid cells, spacing,
     border shifts, halo colours, minima), including every Rev 6 change
     that differs from the earlier revisions and from OOM, and the B10
     drawing corrections: slope-line ticks to +y, 107's taper, ISOM 111
     north, 509 / 509.1 white-over-black with black ends, 510 / 511 /
-    511.b pylons at corners with 510's ±0.37 mm bar.
+    511.b pylons at corners with 510's ±0.37 mm bar; and a table for every
+    ISSkiOM entry (§12.1: widths, dashes, dots, the white mask, the
+    compulsory edges, 813's bands, 808's cross-hatch, the water / marsh
+    variants).
+  - **the overlay (§12)** — `isOverlayLibrary`, no base heading code and
+    no 7xx, `chooseLibrary` never returns it, the exact palette ids it
+    uses, no names or aliases, the 2022 edition rejected; **`libraryFactor`**
+    — base libraries `referenceScale / mapScale`, ISSkiOM §3.2's table typed
+    by hand per scale group, nearest-by-ratio for unlisted scales, the tie
+    rule, and the throws.
   - (d) purple roles per 03 §2.4 for every 7xx entry; lower entries never
     use `purple-upper` and vice versa; ISOM-only (711–713) and
-    ISSprOM-only (710.1/.2, 714) codes are not cross-listed.
-  - (e) `materialiseLibrary` for both libraries: every colour index is
+    ISSprOM-only (710.1/.2, 714) codes are not cross-listed; the overlay
+    has none.
+  - (e) `materialiseLibrary` for every library: every colour index is
     inside the stack, every entry symbolised against a representative
     object (line with corner + dash point, 20 × 20 mm area at 30°, point at
     45°, text "31") emits at least one pass and no warnings; the 2022
@@ -383,7 +418,8 @@ plus the purple-role and materialisation checks:
   `api/src/__tests__/import-omap.test.ts` states that Mapper's railway
   is `auto` against `ISOM2017-2:509` (A15).
 
-- **names.test.ts** — every heading has `name.sv` except the §3.2 list;
+- **names.test.ts** — every heading has `name.sv` except the §3.2 list
+  (all 16 ISSkiOM headings, whose `sv` source is `null`);
   hand-typed spot tables of SOFT headings (23) and of ISOM 2000 pairs the
   IOF change document states (18), typed from the sources, not from
   `names.ts`; every variant name is `<heading sv>, <qualifier>`; aliases
@@ -408,7 +444,9 @@ plus the purple-role and materialisation checks:
   on a stale index; a determinism check renders one entry of each IR type
   twice and requires identical bytes. A change to an entry *or* to the
   symbolisation stage therefore fails here until the sheet is regenerated
-  — whichever branch merges second regenerates it.
+  — whichever branch merges second regenerates it. The ISSkiOM sheet is
+  `e2e/__golden__/library/ISSkiOM2019/` (16 PNGs) and its index; the
+  determinism check includes 813.2 and 804.2.
 
 The OOM dimension spot check (e) is not implemented; see §10.
 
@@ -423,6 +461,9 @@ The OOM dimension spot check (e) is not implemented; see §10.
 | `aliases` as given | `ISOM2000` only, plain successors only (§3) | Mapper's CRT is the only table; the IOF change document rules out the merges. No ISSOM 2007 table exists on disk. |
 | Appendix B palette as a "versioned table" | Two editions, ids stable, document picks edition | Same intent; the id stability rule is what keeps entries edition-free. |
 | 180–200 / 170–190 entries | 152 / 141 | Counted against Rev 6; §3.1. |
+| One library per specification, every heading covered (03 §6.4); ISSkiOM "not inventoried" (03 §2.1) | `ISSkiOM2019` is an **overlay** of 16 ski headings — §3.3.1's tracks and §3.3.2's water / marsh variants — offered beside a document's own library (§12; slice G answer 9, user scope 2026-11-13) | A ski-O map's base symbols are ISOM 2017-2's; the ski symbols are what a mapper adds, also to a summer map. ISSkiOM's base-symbol deviations and course symbols wait (§10). |
+| ISSkiOM "scales the symbol set and course symbols by different factors — encode as `scaleRules`" (03 §6.6) | `scaleRules` per row set (`track`, `other`) with `scaleGroup` per entry; `libraryFactor(id, mapScale, code?)` (§12.2) | ISSkiOM §3.2 has two symbol columns, and the overlay holds entries of both; its course symbols' sizes are fixed at every scale (Rev 4). |
+| Appendix B as the palette | Plus a `white-skio` row and an ISSkiOM tick on `green100-area` (§12.3; user decisions 2026-11-13) | ISSkiOM's own colour lines name a white under lower purple and green 100 %, which its column of the IOF table lacks. |
 | Railway "black, white" drawn as stated: black dashes, white between, rails | 509 / 509.1 are white 0.25 dashes 1.0 / 1.5 over a black 0.45 band, the white shortened 1.5 mm at each end (§3; B10) | Appendix B sorts white-for-railway above black, so the first edition's black dashes under a white band drew all white inside. The OCAD construction is the only one the palette allows; the black ends follow the spec ("two black dashes"), not OCAD's sets (white end dash). Consequence: OCAD railways built to the spec's widths now match (Sprint's 509.100, white 0.26 in black 0.45: `auto`); club-2026's / club-full's 509.1 (white 0.21 in black 0.35 — the set reads "0.35" as the outer width) stays unmatched, now on width instead of colour; Crop-A / Crop-B's grey 509.0 stays unmatched; Mapper's railway (black dashes over white, Mapper's own colour order) hard-failed on main colour for the 2026.10.3 release alone (`e2e/test.xmap`: `auto` 5 → 4 symbols); the fingerprint now reads both constructions as one (§8.1, A15) and it is `auto` again. |
 | Glyph placement per 03 Appendix C (Mapper dash symbol → `dashPoints`) | 510 / 511 / 511.b pylons at `corners` (B10) | Both importers deliver pylons as corner flags (`map-import.md` §3.3, §4.2); no importer produces dash-point positions for them, so canonically drawn power lines had no poles and the fingerprint missed on placement. |
 | Directional point glyphs: no convention stated (03 §6.2) | Angle 0 = north, slope ticks to +y (§3; B10) | OCAD and Mapper both draw the 101.b / 103.b tick to +y; the first edition used the line-tag convention (−y) and every auto-matched slope line pointed uphill (52–66 % shape difference, `map-rendering.md` §6.4). |
@@ -1068,7 +1109,12 @@ resolves canonical entries through `paletteIndexOfStack(header.colours)`.
   and a variant table to Mapper's sub-numbers, if a club needs either.
 - Library variants for the OCAD template conventions (§8.4) if the auto
   rate needs to rise.
-- `ISMTBOM2022` / `ISSkiOM2019` libraries (palette rows exist).
+- The `ISMTBOM2022` library (palette rows exist).
+- The rest of ISSkiOM 2019 (§12.1 "Left out"): its deviations to ISOM
+  base symbols (75 % open land, vegetation as 406, contours 0.11 mm, the
+  "other symbols" factors applied to the base library on a ski map) and
+  its course-planning symbols with their fixed sizes; Swedish ISSkiOM
+  names if SOFT publishes a translation (§12.4).
 - Swedish names for `ISSprOM2019-2:105.2`, `533`, `715` when SOFT
   publishes a Rev 6 translation of ISSprOM (§3.2).
 - `ISSOM2007` aliases for `ISSprOM2019-2` once an ISSOM 2007 → ISSprOM
