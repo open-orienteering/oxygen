@@ -68,8 +68,11 @@ describe("resampleTrack", () => {
     expect(Array.from(resampleTrack(line([[1, 2], [1, 2]])).x)).toEqual([1, 1]);
   });
 
-  it("rejects a step that is not positive", () => {
+  it("rejects a step that is not positive and finite; smoothTrack a window that is negative or infinite", () => {
     expect(() => resampleTrack(line([[0, 0], [1, 0]]), 0)).toThrow(RangeError);
+    expect(() => resampleTrack(line([[0, 0], [1, 0]]), Infinity)).toThrow(RangeError);
+    expect(() => smoothTrack(line([[0, 0], [1, 0]]), { windowM: Infinity })).toThrow(RangeError);
+    expect(() => smoothTrack(line([[0, 0], [1, 0]]), { windowM: -1 })).toThrow(RangeError);
   });
 });
 

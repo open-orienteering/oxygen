@@ -15,8 +15,8 @@ export class TrackProjectionError extends Error {
   readonly code: TrackProjectionErrorCode;
   /** The point that did not project (`not-projectable`). */
   readonly index?: number;
-  constructor(code: TrackProjectionErrorCode, message: string, index?: number) {
-    super(message);
+  constructor(code: TrackProjectionErrorCode, message: string, index?: number, cause?: unknown) {
+    super(message, cause === undefined ? undefined : { cause });
     this.name = "TrackProjectionError";
     this.code = code;
     if (index !== undefined) this.index = index;
@@ -52,11 +52,11 @@ export function metresPerMm(mapScale: number): number {
 }
 
 /** proj4 throws on non-finite input; that is a point that does not project, like a non-finite result. */
-function attempt<T>(f: () => T | null): T | null {
+function attempt<T>(f: () => T | null): { value: T | null; error?: unknown } {
   try {
-    return f();
-  } catch {
-    return null;
+    return { value: f() };
+  } catch (error) {
+    return { value: null, error };
   }
 }
 
@@ -79,9 +79,9 @@ export function projectTrack(frame: PaperFrame, track: Track, bounds?: PaperBoun
   const x = new Float64Array(n), y = new Float64Array(n);
   let outside = 0;
   for (let i = 0; i < n; i++) {
-    const q = attempt(() => wgs84ToPaper(frame, lat[i] / COORD_SCALE, lng[i] / COORD_SCALE));
+    const { value: q, error } = attempt(() => wgs84ToPaper(frame, lat[i] / COORD_SCALE, lng[i] / COORD_SCALE));
     if (!q || !Number.isFinite(q.x) || !Number.isFinite(q.y)) {
-      throw new TrackProjectionError("not-projectable", `Point ${i} does not project onto the map`, i);
+      throw new TrackProjectionError("not-projectable", `Point ${i} does not project onto the map`, i, error);
     }
     if (bounds && (q.x < bounds.minX || q.x > bounds.maxX || q.y < bounds.minY || q.y > bounds.maxY)) outside++;
     x[i] = q.x / u;
@@ -100,9 +100,9 @@ export function unprojectTrack(frame: PaperFrame, line: ProjectedTrack, name: st
   const u = frame.unitsPerMm;
   const lat = new Array<number>(n), lng = new Array<number>(n);
   for (let i = 0; i < n; i++) {
-    const g = attempt(() => paperToWgs84(frame, line.x[i] * u, line.y[i] * u));
+    const { value: g, error } = attempt(() => paperToWgs84(frame, line.x[i] * u, line.y[i] * u));
     if (!g || !Number.isFinite(g.lat) || !Number.isFinite(g.lng)) {
-      throw new TrackProjectionError("not-projectable", `Point ${i} does not project to WGS 84`, i);
+      throw new TrackProjectionError("not-projectable", `Point ${i} does not project to WGS 84`, i, error);
     }
     lat[i] = quantiseDeg(g.lat);
     lng[i] = quantiseDeg(g.lng);

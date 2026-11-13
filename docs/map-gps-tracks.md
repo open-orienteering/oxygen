@@ -68,22 +68,30 @@ interface Track { name: string | null; points: TrackPoints }
   `trackIndex` (the `trk`'s position among the file's `trk`s) and
   `segmentIndex` (the segment's in its `trk`).
 - **A route is an untimed track.** Each `rte` with at least two valid
-  `rtept`s is one track with `source: "rte"`, `segmentIndex: 0` and a
-  null `time` column whatever the file says; its elevations are kept.
+  `rtept`s is one track with `source: "rte"`, `trackIndex` its position
+  among the file's `rte`s, `segmentIndex: 0` and a null `time` column
+  whatever the file says; its elevations are kept.
 - Tracks and routes are returned in file order.
 - **Waypoints** (`wpt`) are counted in `waypoints` and otherwise
   ignored. `<extensions>` (heart rate, cadence …), `metadata` and every
   other element are ignored.
-- **A valid point** has `lat` and `lon` that parse to finite numbers
-  within [−90, 90] and [−180, 180]. Other points are skipped and
+- **A valid point** has `lat` and `lon` that are plain decimals
+  (optionally signed, optionally with an exponent — not hexadecimal, not
+  `Infinity`) within [−90, 90] and [−180, 180]. `ele` is read the same
+  way. Other points are skipped and
   counted in `skippedPoints`; a segment or route left with fewer than
   two points is dropped and counted in `skippedSegments`. One bad fix
   does not reject a recording.
 - **Time** is ISO 8601 `YYYY-MM-DDThh:mm:ss[.fff][Z|±hh[:mm]]`, read by
   a regular expression into `Date.UTC`. A time without a zone is UTC
   (GPX says so), never local time, so the result does not depend on the
-  machine. Fractions round to the millisecond. An unreadable time is
-  null for that point; so is an unreadable elevation.
+  machine. Fractions round to the millisecond. A date or time that does
+  not exist (31 February, hour 24, second 60) or a zone offset past
+  23:59 is unreadable. An unreadable time is null for that point; so is
+  an unreadable elevation.
+- **The first `ele` and `time` of a point win.** GPX 1.0 allows private
+  elements directly in a point; one whose local name is `ele` or `time`
+  after the GPX one does not override it.
 - No caps: the 200 000-point and 200-track limits are G24's API rules.
 
 ### 2.3 Errors
@@ -98,10 +106,24 @@ interface Track { name: string | null; points: TrackPoints }
 
 ## 3. Geometry
 
-Everything in this section is pure and deterministic: float arithmetic
-in a fixed order, no randomness, inputs never mutated. The same track
-gives the same bytes on every device, which the conversion (§6) and
-averaging (§4) rely on.
+Everything in this section is pure: no randomness, inputs never mutated,
+and the same input gives the same bytes on the same JavaScript engine.
+How far that holds across engines differs by step:
+
+- **Projection (§3.2) is not bit-identical across engines**: it goes
+  through proj4's trigonometry, which engines may round differently in
+  the last bit (as `docs/map-import.md` §6 says of stage 5). What crosses
+  devices is quantised: `unprojectTrack` rounds to 1e-7° (≈ 1 cm), and a
+  converted line (G26) is rounded to the document's integer units
+  (0.01 mm or 0.001 mm on paper), so a last-bit difference changes a
+  stored value only at a rounding tie.
+- **Resampling, smoothing and simplification (§3.3–3.4) are
+  bit-identical across engines**: they use only + − × ÷ and √, which IEEE
+  754 rounds correctly, in a fixed order (no `Math.hypot`, which the
+  language leaves implementation-approximated).
+
+G23 and G26 may rely on the second, and on the first only up to the
+quantisation.
 
 ### 3.1 The projected track
 
@@ -131,7 +153,8 @@ fix: the frame's grid rotation, grid scale factor and the operator's
 - **Outside the map.** `bounds` is the header's bounds in native units;
   points outside them are kept (drawn and converted like the others)
   and counted in `outside`. Without `bounds`, `outside` is 0.
-- **Errors** (`TrackProjectionError`, `code`):
+- **Errors** (`TrackProjectionError`, `code`; proj4's own exception, if
+  it threw, is the `cause`):
   `not-georeferenced` when `mapGeo.epsgOf(frame)` is null — no CRS, no
   paper origin, or an EPSG code proj4 does not know (G25 disables the
   panel with this reason; `isGeoreferenced(frame)` asks first);
@@ -155,7 +178,8 @@ dropped; the line, of arc length L, is divided into
 positions. Both ends are exact, the spacing along the line is at most
 `stepM` ground metres, and positions are computed as `k · L / n`, not by
 repeated addition. A line with fewer than two distinct points comes
-back unchanged. G23 resamples with it.
+back unchanged. G23 resamples with it. A step that is not positive and
+finite is a `RangeError`.
 
 `smoothTrack(line, { stepM = 2, windowM = 10 })` resamples and then
 applies `movingAverage(line, K)` with `K = floor(windowM / 2 / stepM)`
@@ -167,7 +191,8 @@ samples — 2 at the defaults:
   window shrinks **symmetrically** near the ends, so the line does not
   pull back from them and the **ends are pinned** (bit-identical to the
   input's ends);
-- `K < 1` (a window under two steps) leaves the resampled line.
+- `K < 1` (a window under two steps) leaves the resampled line; a
+  negative or infinite window is a `RangeError`.
 
 What this gives: a straight line is a fixed point; independent
 cross-track noise on fixes 2 m apart drops to under two thirds of its
@@ -192,7 +217,8 @@ Douglas–Peucker"; Bézier fitting is later):
   tolerance, so tolerance 0 removes exactly collinear vertices only;
   ties go to the first vertex;
 - iterative over an explicit stack: a 200 000-point track does not
-  overflow the call stack.
+  overflow the call stack; distances are compared squared;
+- a negative tolerance is a `RangeError`.
 
 ### 3.5 Trim and split
 
@@ -227,9 +253,9 @@ Pending (G26, G28).
 
 | File | Proves |
 |------|--------|
-| `gps-track/__tests__/gpx.test.ts` | GPX 1.1 (Garmin-style, extensions, metadata, two segments) and 1.0 (root name, routes, two tracks); one track per segment in file order with `trackIndex` / `segmentIndex`; four tracks from two `trk` × two `trkseg`; a prefixed namespace, BOM and CDATA name; routes untimed; missing time and elevation per point and per column; zoneless and offset times; invalid points and short segments skipped and counted; `malformed` (truncated, mismatched, empty, not XML), `not-gpx` (KML), `no-points` (waypoints only); quantisation; 200 000 points |
-| `gps-track/__tests__/project.test.ts` | The frame read from `e2e/test.xmap` by the importer; its reference point; paper → WGS 84 → paper within 0.002 mm on it and on an OCAD-unit SWEREF99 TM frame; WGS 84 → paper → WGS 84 within 1e-7°; outside points kept and counted; `correctionDeg`; `not-georeferenced` (no CRS, no origin, unknown code) and `not-projectable` with its index |
-| `gps-track/__tests__/geometry.test.ts` | Resample spacing, exact ends, duplicates, degenerate lines; smoothing: straight line fixed, seeded noisy line reduced, corner cut < 1.5 m with the legs unmoved, ends bit-identical, determinism (same bytes), no mutation, the 1-2-3-2-1 kernel and the shrunk window; simplify: tolerance bound at 0.05 / 0.1 / 0.5 mm, subset in order, ends, collinear, tolerance 0, a closed loop, 200 000 points, determinism |
+| `gps-track/__tests__/gpx.test.ts` | GPX 1.1 (Garmin-style, extensions, metadata, two segments) and 1.0 (root name, routes, two tracks); one track per segment in file order with `trackIndex` / `segmentIndex`; four tracks from two `trk` × two `trkseg`; a prefixed namespace, BOM and CDATA name; routes untimed; missing time and elevation per point and per column; zoneless and offset times; invalid points and short segments skipped and counted; `malformed` (truncated, mismatched, empty, not XML), `not-gpx` (KML), `no-points` (waypoints only); a timed route dropped to untimed; the first `time` / `ele` winning over a private element; decimal-only coordinates; impossible dates, hour 24, second 60 and offsets rejected; quantisation; 200 000 points |
+| `gps-track/__tests__/project.test.ts` | The frame read from `e2e/test.xmap` by the importer; its reference point (a hard-coded lat / lng on the zone's central meridian); paper → WGS 84 → paper within 0.002 mm on it and on an OCAD-unit SWEREF99 TM frame; WGS 84 → paper → WGS 84 within 1e-7°; outside points kept and counted; `correctionDeg`; `not-georeferenced` (no CRS, no origin, unknown code) and `not-projectable` with its index and cause, both ways |
+| `gps-track/__tests__/geometry.test.ts` | Resample spacing, exact ends, duplicates, degenerate lines, step and window `RangeError`s; smoothing: straight line fixed, seeded noisy line reduced, corner cut < 1.5 m with the legs unmoved, ends bit-identical, determinism (same bytes), no mutation, the 1-2-3-2-1 kernel and the shrunk window; simplify: tolerance bound at 0.05 / 0.1 / 0.5 mm, subset in order, ends, collinear, tolerance 0, a closed loop, 200 000 points, determinism |
 | `gps-track/__tests__/track.test.ts` | Quantisation; trim `[start, end)` over every column, null columns, no mutation, every `RangeError`; split sharing its point, split-split cutting out a stretch, every `RangeError` |
 
 No integration or E2E test: the module has no API, table or UI until

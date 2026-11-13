@@ -54,11 +54,9 @@ describe("the fixture frame", () => {
 
 describe("projectTrack", () => {
   it("places Mapper's reference point (50, 40) mm — 500 000 / 6 600 000 in UTM 33N — at (50, −40) mm, y up", () => {
-    // Mapper's paper y runs down; the document's runs up (docs/map-import.md §4.2).
-    const t: Track = { name: null, points: { lat: [], lng: [], time: null, ele: null } };
-    const ref = paperToWgs84(xmap, 50 * 1000, -40 * 1000)!;
-    t.points.lat.push(quantiseDeg(ref.lat));
-    t.points.lng.push(quantiseDeg(ref.lng));
+    // Mapper's paper y runs down; the document's runs up (docs/map-import.md §4.2). The ground point,
+    // hard-coded: on the zone's central meridian (15° E) at the latitude of northing 6 600 000.
+    const t: Track = { name: null, points: { lat: [595383491], lng: [150000000], time: null, ele: null } };
     const { track } = projectTrack(xmap, t);
     // 1e-7° ≈ 1 cm on the ground = 0.001 mm on paper at 1:10 000.
     expect(track.x[0]).toBeCloseTo(50, 2);
@@ -130,6 +128,18 @@ describe("errors", () => {
     expect(isGeoreferenced({ ...xmap, georeferencing: { ...g, crs: null } })).toBe(false);
   });
 
+  it("unprojectTrack: not-projectable names the point", () => {
+    const line = projectTrack(xmap, t).track;
+    const bad = { ...line, x: Float64Array.from([...line.x, Number.NaN]), y: Float64Array.from([...line.y, 0]) };
+    try {
+      unprojectTrack(xmap, bad);
+      expect.unreachable();
+    } catch (e) {
+      expect((e as TrackProjectionError).code).toBe("not-projectable");
+      expect((e as TrackProjectionError).index).toBe(2);
+    }
+  });
+
   it("not-projectable names the point instead of dropping it", () => {
     const bad: Track = { name: null, points: { lat: [...t.points.lat, Number.NaN], lng: [...t.points.lng, 0], time: null, ele: null } };
     try {
@@ -139,6 +149,8 @@ describe("errors", () => {
       expect(e).toBeInstanceOf(TrackProjectionError);
       expect((e as TrackProjectionError).code).toBe("not-projectable");
       expect((e as TrackProjectionError).index).toBe(2);
+      // proj4's own error is kept as the cause.
+      expect((e as TrackProjectionError).cause).toBeInstanceOf(Error);
     }
   });
 });

@@ -58,29 +58,39 @@ const ISO_TIME = /^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2}):(\d{2})(?:\.(\d+))?(Z
 /**
  * ISO 8601 date-time → integer epoch ms. A time without a zone is UTC
  * (the GPX schema's), never local time, so the result does not depend on
- * the machine. Null when unreadable.
+ * the machine. Null when unreadable — including a date or time that does
+ * not exist (31 February, hour 24, second 60) or a zone offset past 23:59.
  */
 export function parseGpxTime(text: string): number | null {
   const m = ISO_TIME.exec(text.trim());
   if (!m) return null;
   const [, y, mo, d, h, mi, s, frac, zone] = m;
   const month = Number(mo), day = Number(d), hour = Number(h), minute = Number(mi), second = Number(s);
-  if (month < 1 || month > 12 || day < 1 || day > 31 || hour > 24 || minute > 59 || second > 60) return null;
-  const ms = frac ? Math.round(Number(`0.${frac}`) * 1000) : 0;
-  let t = Date.UTC(Number(y), month - 1, day, hour, minute, second, ms);
+  const year = Number(y);
+  let t = Date.UTC(year, month - 1, day, hour, minute, second);
+  // Date.UTC rolls an impossible field over (31 Feb → 3 Mar); such a time is unreadable.
+  const back = new Date(t);
+  if (back.getUTCFullYear() !== year || back.getUTCMonth() !== month - 1 || back.getUTCDate() !== day || back.getUTCHours() !== hour || back.getUTCMinutes() !== minute || back.getUTCSeconds() !== second) {
+    return null;
+  }
+  t += frac ? Math.round(Number(`0.${frac}`) * 1000) : 0;
   if (zone && zone !== "Z") {
     const sign = zone[0] === "-" ? -1 : 1;
     const digits = zone.slice(1).replace(":", "");
-    const offsetMin = Number(digits.slice(0, 2)) * 60 + (digits.length > 2 ? Number(digits.slice(2)) : 0);
-    t -= sign * offsetMin * 60000;
+    const oh = Number(digits.slice(0, 2)), om = digits.length > 2 ? Number(digits.slice(2)) : 0;
+    if (oh > 23 || om > 59) return null;
+    t -= sign * (oh * 60 + om) * 60000;
   }
   return Number.isFinite(t) ? t : null;
 }
 
+/** A plain decimal (optionally signed, optionally with an exponent) — not `Number()`'s hex, binary or `Infinity`. */
+const DECIMAL = /^[+-]?(?:\d+\.?\d*|\.\d+)(?:[eE][+-]?\d+)?$/;
+
 function finiteOrNull(text: string | undefined): number | null {
   if (text === undefined) return null;
   const s = text.trim();
-  if (s === "") return null;
+  if (!DECIMAL.test(s)) return null;
   const v = Number(s);
   return Number.isFinite(v) ? v : null;
 }
@@ -190,8 +200,9 @@ export function parseGpx(text: string): GpxFile {
         if (capture !== null) {
           const parent = path[path.length - 1];
           if (name === "name" && (parent === "trk" || parent === "rte")) trkName = capture.trim() || null;
-          else if (pt && name === "ele") pt.ele = capture;
-          else if (pt && name === "time") pt.time = capture;
+          // The first `ele` / `time` wins: a private element of the same local name later in the point does not override it.
+          else if (pt && name === "ele") pt.ele ??= capture;
+          else if (pt && name === "time") pt.time ??= capture;
           capture = null;
           return;
         }

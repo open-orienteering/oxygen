@@ -95,6 +95,29 @@ describe("parseGpx: several tracks and segments", () => {
   });
 });
 
+describe("parseGpx: routes and private elements", () => {
+  it("a route's times are dropped whatever the file says", () => {
+    const f = parseGpx(`<gpx><rte><rtept lat="1" lon="1"><time>2026-01-01T00:00:00Z</time></rtept><rtept lat="2" lon="1"><time>2026-01-01T00:00:01Z</time></rtept></rte></gpx>`);
+    expect(f.tracks[0].source).toBe("rte");
+    expect(f.tracks[0].points.time).toBeNull();
+  });
+
+  it("the first time / ele of a point wins over a private element of the same local name", () => {
+    const f = parseGpx(
+      `<gpx xmlns:x="urn:x"><trk><trkseg><trkpt lat="1" lon="1"><ele>5</ele><time>2026-01-01T00:00:00Z</time><x:time>1999-01-01T00:00:00Z</x:time><x:ele>99</x:ele></trkpt><trkpt lat="2" lon="1"/></trkseg></trk></gpx>`,
+    );
+    expect(f.tracks[0].points.time).toEqual([Date.UTC(2026, 0, 1), null]);
+    expect(f.tracks[0].points.ele).toEqual([5, null]);
+  });
+
+  it("coordinates are plain decimals: hex, Infinity and empty values are skipped", () => {
+    const f = parseGpx(`<gpx><trk><trkseg><trkpt lat="0x10" lon="1"/><trkpt lat="Infinity" lon="1"/><trkpt lat="" lon="1"/><trkpt lat="+1.5e1" lon="-.5"/><trkpt lat="16" lon="1"/></trkseg></trk></gpx>`);
+    expect(f.skippedPoints).toBe(3);
+    expect(f.tracks[0].points.lat).toEqual([150000000, 160000000]);
+    expect(f.tracks[0].points.lng).toEqual([-5000000, 10000000]);
+  });
+});
+
 describe("parseGpx: bad points and segments", () => {
   const f = parseGpx(GPX_EMPTY_SEGMENT_AND_BAD_POINT);
 
@@ -152,7 +175,17 @@ describe("parseGpxTime", () => {
     expect(parseGpxTime(s)).toBe(t);
   });
 
-  it.each(["", "yesterday", "2026-01-17", "2026-13-01T00:00:00Z", "2026-01-17 09:12:03Z"])("rejects %j", (s) => {
+  it.each([
+    "",
+    "yesterday",
+    "2026-01-17",
+    "2026-13-01T00:00:00Z",
+    "2026-01-17 09:12:03Z",
+    "2026-02-31T09:12:03Z",
+    "2026-01-17T24:30:00Z",
+    "2026-01-17T09:12:60Z",
+    "2026-01-17T09:12:03+24:00",
+  ])("rejects %j", (s) => {
     expect(parseGpxTime(s)).toBeNull();
   });
 });

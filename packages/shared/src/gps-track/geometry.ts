@@ -2,9 +2,10 @@
  * Resampling, smoothing and simplification of a projected track
  * (docs/map-gps-tracks.md §3.3–3.4). A converted line is a polyline:
  * smoothed, then Douglas–Peucker (SLICES.md slice G, "Decided in this
- * split"). Pure and deterministic: float arithmetic in a fixed order, no
- * randomness, inputs never mutated — the same track gives the same bytes
- * on every device.
+ * split"). Pure and deterministic: only + − × ÷ and √ (correctly
+ * rounded by IEEE 754 — no `Math.hypot`, no trigonometry) in a fixed
+ * order, no randomness, inputs never mutated — the same projected track
+ * gives the same bytes on every engine.
  */
 
 import type { ProjectedTrack } from "./project.js";
@@ -43,12 +44,15 @@ function dedupe(line: ProjectedTrack): { x: number[]; y: number[] } {
  * with fewer than two distinct points comes back unchanged.
  */
 export function resampleTrack(line: ProjectedTrack, stepM: number = DEFAULT_STEP_M): ProjectedTrack {
-  if (!(stepM > 0)) throw new RangeError(`Resampling step must be positive (got ${stepM})`);
+  if (!(stepM > 0) || !Number.isFinite(stepM)) throw new RangeError(`Resampling step must be positive and finite (got ${stepM})`);
   const { x, y } = dedupe(line);
   const m = x.length;
   if (m < 2) return copy(line);
   const s = new Float64Array(m);
-  for (let i = 1; i < m; i++) s[i] = s[i - 1] + Math.hypot(x[i] - x[i - 1], y[i] - y[i - 1]);
+  for (let i = 1; i < m; i++) {
+    const dx = x[i] - x[i - 1], dy = y[i] - y[i - 1];
+    s[i] = s[i - 1] + Math.sqrt(dx * dx + dy * dy);
+  }
   const total = s[m - 1];
   const intervals = Math.max(1, Math.ceil(total / (stepM / line.metresPerMm)));
   const ox = new Float64Array(intervals + 1), oy = new Float64Array(intervals + 1);
@@ -108,7 +112,7 @@ export function movingAverage(line: ProjectedTrack, K: number): ProjectedTrack {
 export function smoothTrack(line: ProjectedTrack, opts: SmoothOptions = {}): ProjectedTrack {
   const stepM = opts.stepM ?? DEFAULT_STEP_M;
   const windowM = opts.windowM ?? DEFAULT_WINDOW_M;
-  if (!(windowM >= 0)) throw new RangeError(`Smoothing window must be zero or more (got ${windowM})`);
+  if (!(windowM >= 0) || !Number.isFinite(windowM)) throw new RangeError(`Smoothing window must be zero or more and finite (got ${windowM})`);
   return movingAverage(resampleTrack(line, stepM), Math.floor(windowM / 2 / stepM));
 }
 
