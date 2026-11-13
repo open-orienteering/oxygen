@@ -355,6 +355,7 @@ describe("applyPatch: issues are reported, not thrown", () => {
     ["an absent patch symbol", { op: "resymbol", sourceIndex: 11, symbol: { patch: "ISOM2017-2:999" } }, "symbol-missing"],
     ["a resymbol of another kind", { op: "resymbol", sourceIndex: 11, symbol: { doc: 2 } }, "kind-mismatch"],
     ["an add whose symbol is of another kind", { op: "add", id: ID_A, type: OBJECT_TYPE.area, symbol: { doc: 0 }, coords: [[0, 0], [1, 0], [1, 1]] }, "kind-mismatch"],
+    ["a patch symbol key that is an Object.prototype name", { op: "resymbol", sourceIndex: 12, symbol: { patch: "constructor" } }, "symbol-missing"],
     ["an add with an absent symbol", { op: "add", id: ID_A, type: OBJECT_TYPE.point, symbol: { patch: "nope" }, coords: [[0, 0]] }, "symbol-missing"],
     ["a point modified to two coordinates", { op: "modify", sourceIndex: 12, coords: [[0, 0], [1, 1]] }, "geometry-invalid"],
     ["a line of one coordinate", { op: "modify", sourceIndex: 11, coords: [[0, 0]] }, "geometry-invalid"],
@@ -373,6 +374,26 @@ describe("applyPatch: issues are reported, not thrown", () => {
       expect(objectCoords(eff, i)).toEqual(objectCoords(doc, i));
       expect(eff.attrs.symbolIdx[i]).toBe(doc.attrs.symbolIdx[i]);
     }
+  });
+
+  it("throws only when ops are applied to an already-effective document (a programming error)", () => {
+    const { document: eff } = applyPatch(makeDoc(), patchOf([{ op: "hide", sourceIndex: 10 }]));
+    expect(applyPatch(eff, null).document).toBe(eff);
+    expect(applyPatch(eff, patchOf([], {}, true)).document).toBe(eff);
+    expect(() => applyPatch(eff, patchOf([{ op: "hide", sourceIndex: 11 }]))).toThrow(/already has a patch/);
+  });
+
+  it("checks a rectangle's symbol kind and accepts any non-empty geometry for it", () => {
+    const rectDoc = decodeMapDocument(encodeMapDocument({
+      header: { ...header, symbols: [...header.symbols, { code: "850", name: "Frame", kind: "rectangle", render: { type: "line", id: "s:850", code: "850", name: "Frame", main: { colour: 0, widthUm: 180 } } }] },
+      objects: [obj({ sourceIndex: 0, symbolIdx: 5, type: OBJECT_TYPE.rectangle, coords: [0, 0, 100, 0, 100, 100, 0, 100] })],
+    }));
+    const { document: eff, issues } = applyPatch(rectDoc, patchOf([
+      { op: "modify", sourceIndex: 0, coords: [[10, 10], [110, 10], [110, 110], [10, 110]] },
+      { op: "resymbol", sourceIndex: 0, symbol: { doc: 0 } },
+    ]));
+    expect(issues).toEqual([{ opId: "resymbol:0", code: "kind-mismatch" }]);
+    expect(bbox(eff, 0)).toEqual([10, 10, 110, 110]);
   });
 
   it("reports patch symbols that overflow the u16 symbol table", () => {

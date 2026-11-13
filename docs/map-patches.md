@@ -73,6 +73,7 @@ interface MapPatch {
   leave gaps). An op never stores an `objectIndex`: for the pinned hash
   it is derived, and after a re-import it is wrong, while `sourceIndex`
   re-resolves a re-import of the same file exactly (02 §7; row G11).
+  It is a u32 below `0xFFFFFFFF`, which marks an added object (§2.2).
 - **A record key must equal the op's id**: `patchOpId(op)` is
   `` `${op.op}:${op.sourceIndex}` `` for the three document-object ops and
   `` `add:${op.id}` `` for an add. A mismatched key is a schema error.
@@ -155,6 +156,17 @@ palette).
 `applyPatch(doc, patch)` → `{ document, issues }`. Pure, deterministic,
 never throws on patch content, and never mutates `doc`.
 
+- **The caller pairs the patch with its document**: `doc` must be the
+  document whose hash is `patch.documentHash`. A decoded document does
+  not know its own hash, so `applyPatch` cannot check it; delivery (row
+  G3) and re-resolution (row G11) guarantee it, and a consumer (G4, G14)
+  applies the patch it received with the document it pins. A patch keyed
+  onto another edition would otherwise apply by `sourceIndex` to the
+  wrong objects.
+- **`doc` is a pinned document, not an effective one**: applying ops to
+  an already-effective document is a programming error and throws (the
+  identity cases of §2.1 still return it as it is).
+
 ### 2.1 Identity
 
 When `patch` is null or undefined, `enabled` is false, or it has no ops,
@@ -225,7 +237,7 @@ other ops still apply. Each issue is `{ opId, code }` with a stable code:
 | Code | When |
 |---|---|
 | `target-missing` | no object of the document has the op's `sourceIndex` |
-| `symbol-missing` | `{ doc: i }` with `i` outside the document's table, or `{ patch: key }` not in `symbols` |
+| `symbol-missing` | `{ doc: i }` with `i` outside the document's table, or `{ patch: key }` not an own key of `symbols` |
 | `kind-mismatch` | the referenced symbol's `kind` is not the object type's (point 1 → `point`, line 2 → `line`, area 3 → `area`, text 4–6 → `text`, rectangle 7 → `rectangle`) |
 | `geometry-invalid` | a point without exactly one coordinate, a line with fewer than two, an area with fewer than three, a text object whose coordinate count changes (its anchor and box are positional) |
 | `symbol-table-full` | the referenced patch symbol did not fit in the u16 symbol table |
@@ -243,6 +255,13 @@ ops that lost their target after the pin moved.
   patch.baseCount` is an added object, `patch.added[i - baseCount]` its
   id); `only` takes effective indices. Patch symbols carry no match, so
   they are drawn from their `render`.
+- **A patch symbol's `hidden`** is honoured like a document symbol's: its
+  objects are skipped and counted in `stats.hidden`.
+- **Cost**: each call indexes all N objects by `sourceIndex` and copies
+  the attribute arrays, and with a modify or an add rebuilds every
+  coordinate array — linear in the document, fine for print and for a
+  patch change, not a per-frame operation; the viewer's incremental path
+  (row G4) re-prepares only the touched buckets.
 - **Every other reader of a document's objects** — the course layer's
   cuts and checks (`course/cuts.ts`, `course/checks.ts`), the snap and
   pick indices (`lib/editor/snap.ts`, `symbol-pick.ts`), the API's event
@@ -270,5 +289,5 @@ ops that lost their target after the pin moved.
 
 | Level | File | Covers |
 |---|---|---|
-| Unit (shared) | `packages/shared/src/map-document/__tests__/patch.test.ts` | schema: each op parses, a key that is not the op's id, a bad UUID, a non-integer or out-of-range coordinate, a text `add`, a patch symbol's `match` dropped, defaults; `patchChangeSchema` refusals; `mergePatch`: put replaces by id, remove, an absent remove, twice = once, two changes in either order deep-equal and the same JSON, input not mutated; `applyPatch`: identity (null, disabled, empty) returns the same document, hide flags the object found by `sourceIndex` (a fixture whose Hilbert order differs from source order), modify (coordinates, flags, bbox, `coordStart` of it and its neighbours, angle, type and text kept), resymbol to `{ doc }` and `{ patch }`, hide + modify + resymbol on one object, add (indices `≥ N` in op-id order, `ADDED_SOURCE_INDEX`, the combined table in key order), every base object unchanged, any insertion order of `ops` and `symbols` gives a deep-equal result, applying twice from the same input equals once, the input untouched, each issue code reported and the other ops still applied |
+| Unit (shared) | `packages/shared/src/map-document/__tests__/patch.test.ts` | schema: each op parses, a key that is not the op's id, a bad UUID, a non-integer or out-of-range coordinate, a text `add`, a patch symbol's `match` dropped, defaults; `patchChangeSchema` refusals; `mergePatch`: put replaces by id, remove, an absent remove, twice = once, two changes in either order deep-equal and the same JSON, input not mutated; `applyPatch`: identity (null, disabled, empty) returns the same document, hide flags the object found by `sourceIndex` (a fixture whose Hilbert order differs from source order), modify (coordinates, flags, bbox, `coordStart` of it and its neighbours, angle, type and text kept), resymbol to `{ doc }` and `{ patch }`, hide + modify + resymbol on one object, add (indices `≥ N` in op-id order, `ADDED_SOURCE_INDEX`, the combined table in key order), every base object unchanged, any insertion order of `ops` and `symbols` gives a deep-equal result, applying twice from the same input equals once, the input untouched, each issue code reported and the other ops still applied (a prototype-name patch key is `symbol-missing`), a rectangle's kind check, ops on an already-effective document throw while identity still returns it |
 | Unit (shared) | `packages/shared/src/map-document/__tests__/render-bridge.test.ts` | over an effective document: a hidden object missing from `objects` and `docIdx` with `stats.patchHidden`, a modified one symbolised at its new place, an added one with a patch symbol symbolised and its `docIdx ≥ baseCount`, `only` with an added index, a patch symbol drawn from its own `render` (not rescaled by `documentFactor`), a disabled patch deep-equal to the unpatched document |

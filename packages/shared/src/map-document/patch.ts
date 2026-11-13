@@ -191,13 +191,16 @@ interface Geometry {
  * result depends on the patch's content, not on the insertion order of its
  * records; `doc` is never mutated. Ops that cannot be applied are skipped
  * and listed in `issues`, never thrown. A null, disabled or op-less patch
- * returns `doc` itself.
+ * returns `doc` itself. `doc` must be the pinned document the patch is
+ * keyed onto (the caller pairs them by hash); applying ops to an effective
+ * document throws.
  */
 export function applyPatch(doc: MapDocument, patch: MapPatch | null | undefined): AppliedPatch {
-  if ((doc as EffectiveDocument).patch) throw new Error("applyPatch: the document already has a patch applied");
   if (!patch || !patch.enabled) return { document: doc, issues: [] };
   const opIds = Object.keys(patch.ops).sort();
   if (opIds.length === 0) return { document: doc, issues: [] };
+  // A programming error, not patch content: patches are applied to the pinned document only (map-patches §2).
+  if ((doc as EffectiveDocument).patch) throw new Error("applyPatch: the document already has a patch applied");
 
   const n = doc.header.objects.count;
   const baseSymbols = doc.header.symbols.length;
@@ -215,7 +218,7 @@ export function applyPatch(doc: MapDocument, patch: MapPatch | null | undefined)
     if ("doc" in ref) idx = ref.doc < baseSymbols ? ref.doc : undefined;
     else {
       idx = patchSymbolIndex.get(ref.patch);
-      if (idx === undefined) return ref.patch in patch.symbols ? "symbol-table-full" : "symbol-missing";
+      if (idx === undefined) return Object.hasOwn(patch.symbols, ref.patch) ? "symbol-table-full" : "symbol-missing";
     }
     if (idx === undefined) return "symbol-missing";
     return symbols[idx].kind === symbolKindOfType(type) ? idx : "kind-mismatch";
