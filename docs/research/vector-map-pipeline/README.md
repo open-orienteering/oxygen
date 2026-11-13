@@ -48,7 +48,7 @@ Spec chapters by slice:
 | C | `course-layer.md`, `course-print.md` | 08 §4.1, 05 |
 | D | `course-editor.md` (rewritten), `course-layout.md` | 08 |
 | E–F | `migrations/2026-vector-map-pipeline.md`, `AGENTS.md` §7/§15 | 09 |
-| G | `map-editing.md` | 08 §4.7, 03 §1 |
+| G | `map-patches.md` (§1–2 written 2026-11-13 by G2: patch model, merge, application) | 08 §4.1, §4.7, 03 §1 |
 
 ## Objectives
 
