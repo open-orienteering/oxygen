@@ -72,12 +72,27 @@ put 3 purple pixels in the probe before anything moved.
 (`course-label`). As the last check before a candidate is accepted, the canvas must
 show no purple on the line. That also covers purple drawn by anything else.
 
+## Cause 3: F16's leg was too short on screen for its grip to clear the bend's handle
+
+Found during the verification runs, after the fixes above (1 of 100 runs). F16 presses
+the grip of a smooth bend. The grip sits a sixth of the chord from the bend, and the test
+first checks that it is more than 16 px from the bend's handle (`the grip clear of the
+bend's handle`). Otherwise the press may take the handle. `twoControlCourse` accepted any
+b that was clear of the course's other legs. In the failing run a → b was 88 px long on
+screen, which put the grip 14.6 px from the handle.
+
+**Fix.** `twoControlCourse(page, prefix, { minChordPx })` treats a b whose leg is shorter
+on screen than `minChordPx` the same way as one whose leg is not clear: it undoes it and
+tries another. F16 asks for 120 px, which puts the grip 20 px from the handle.
+
 ## Verification
 
 - Before: the spec ×5 (50 runs), 1 failure (F21, cause 2). The coordinator's earlier
   ×5 runs had 1–2 failures each (F23, F21, F16).
-- After: the spec `--repeat-each=10` (100 runs), twice under the verify lock, 0 failures
-  both times; then the full sharded E2E once.
+- With the fixes for causes 1 and 2 only: ×10 twice. The first run passed 100/100. The
+  second passed 99/100, failing F16 on cause 3.
+- After all three fixes: the spec `--repeat-each=10` (100 runs), twice under the verify
+  lock, 0 failures both times; then the full sharded E2E once.
 
 ## Not changed: the app's top bar
 

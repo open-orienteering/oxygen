@@ -36,8 +36,10 @@ test.describe("F3: legs — styles, bends, corridors (docs/course-editor.md §6.
    * leg a → b has no point clear of the course's other legs is undone and another picked: with the start, a, b and
    * the finish in one row of the fixture's controls, the leg b → finish runs back over a → b and a click on a → b
    * selects the leg drawn on top (F21 flake: "Leg 72 → Mål 1" took the bend, the metres under test never moved).
+   * `minChordPx`: a b whose leg is shorter on screen is undone too (F16: a smooth bend's grips are a sixth of the
+   * chord from it, and an 88 px leg put them 14.6 px from the bend's handle, docs/bugfix-course-editor-legs-flakes.md).
    */
-  async function twoControlCourse(page: Page, prefix: string): Promise<{ name: string; a: Site; b: Site }> {
+  async function twoControlCourse(page: Page, prefix: string, opts: { minChordPx?: number } = {}): Promise<{ name: string; a: Site; b: Site }> {
     await openEditor(page);
     const name = await newCourse(page, prefix);
     const a = await appendClear(page);
@@ -49,14 +51,16 @@ test.describe("F3: legs — styles, bends, corridors (docs/course-editor.md §6.
       await legMidpoint(page, name, sa.mm, sb.mm); // the leg a → b drawn (the mirror lags the write)
       // Every leg of the course drawn: from the start, a → b and to the finish.
       await expect.poll(async () => new Set((await legPieces(page, name)).map((l) => l.leg)).size, { timeout: 15000 }).toBeGreaterThanOrEqual(3);
-      if ((await legClickPoint(page, name, sa, sb)).legClear > 2) return { name, a: sa, b: sb };
+      const pa = await toPage(page, sa.mm), pb = await toPage(page, sb.mm);
+      const longEnough = Math.hypot(pb.x - pa.x, pb.y - pa.y) >= (opts.minChordPx ?? 0);
+      if (longEnough && (await legClickPoint(page, name, sa, sb)).legClear > 2) return { name, a: sa, b: sb };
       tried.push(b);
       const undone = waitForTrpc(page, "course.setStructure");
       await page.getByTestId("editor-undo").click();
       await undone;
       await expect(controlRows(page)).toHaveCount(1, { timeout: 15000 });
     }
-    throw new Error(`no control b whose leg from ${a} is clear of the course's other legs (tried ${tried.slice(1).join(", ")})`);
+    throw new Error(`no control b whose leg from ${a} is clear of the course's other legs${opts.minChordPx ? ` and ${opts.minChordPx} px long` : ""} (tried ${tried.slice(1).join(", ")})`);
   }
 
   /**
@@ -206,7 +210,8 @@ test.describe("F3: legs — styles, bends, corridors (docs/course-editor.md §6.
   const outlinePoints = async (page: Page) => (await toolShapes(page, "editor-leg-outline"))[0]?.data.points?.split(" ").length ?? 0;
 
   test("F16: Add bend here is smooth (two grips, the leg unchanged); a grip curves it mirrored, Alt breaks the pair; Alt-click a corner; Smooth; undo; one page", async ({ page }) => {
-    const { name, a, b } = await twoControlCourse(page, "F16 smooth");
+    // The grips a sixth of the chord from the bend: at 120 px on screen, 20 px — clear of the handle's press.
+    const { name, a, b } = await twoControlCourse(page, "F16 smooth", { minChordPx: 120 });
     const courseId = await page.getByTestId("editor-course-picker").inputValue();
     const nameId = nameIdOf(page);
     const legRow = () => controlRows(page).nth(1).getByTestId("editor-leg-meters");
