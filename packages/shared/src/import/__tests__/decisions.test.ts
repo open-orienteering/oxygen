@@ -10,7 +10,7 @@ import { attrsSectionRange, decodeMapDocument, encodeMapDocument, objectsPerSymb
 import { parseRenderSymbol } from "../../render/symbol.js";
 import { SYMBOL_LIBRARY_VERSION } from "../../symbol-library/index.js";
 import { identifySourceColours } from "../colour-align.js";
-import { decisionFingerprint, decisionsFromRows, documentFollowsDecisions, documentSymbolFingerprints, libraryIdOfVersion, parseDecisionFingerprint, reviewRows, type ClubDecisionRow } from "../decisions.js";
+import { decisionFingerprint, decisionsFromRows, documentFollowsDecisions, documentLibraryId, documentSymbolFingerprints, libraryIdOfVersion, parseDecisionFingerprint, reviewRows, type ClubDecisionRow } from "../decisions.js";
 import { matchDocument } from "../match-document.js";
 import { symbolIrHash } from "../matcher.js";
 import { colours, input } from "./match-fixture.js";
@@ -134,6 +134,20 @@ describe("documentFollowsDecisions", () => {
   it("follows trivially for a header without a library", () => {
     const h = stored();
     expect(documentFollowsDecisions({ ...h, library: null }, decided(null))).toBe(true);
+  });
+
+  it("follows trivially for a header naming an overlay library (never a document's library, map-symbols.md §12)", () => {
+    const h = stored();
+    expect(documentFollowsDecisions({ ...h, library: { id: "ISSkiOM2019", version: "x" } }, decided(null))).toBe(true);
+  });
+});
+
+describe("documentLibraryId", () => {
+  it("is the stored base library, else the scale's; an overlay id is not a document library (map-symbols.md §12)", () => {
+    expect(documentLibraryId({ library: { id: "ISSprOM2019-2" }, mapScale: 10000 })).toBe("ISSprOM2019-2");
+    expect(documentLibraryId({ library: null, mapScale: 4000 })).toBe("ISSprOM2019-2");
+    expect(documentLibraryId({ library: { id: "ISSkiOM2019" }, mapScale: 10000 })).toBe("ISOM2017-2");
+    expect(documentLibraryId({ library: { id: "nope" }, mapScale: 10000 })).toBe("ISOM2017-2");
   });
 });
 

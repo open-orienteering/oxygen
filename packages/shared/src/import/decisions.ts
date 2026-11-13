@@ -6,11 +6,11 @@
 
 import type { DocumentColour, DocumentSymbol, SymbolMatch } from "../map-document/header.js";
 import { parseRenderSymbol, type RenderSymbol } from "../render/symbol.js";
-import { getSymbolLibrary, isSymbolLibraryId, type SymbolLibraryId } from "../symbol-library/index.js";
+import { getSymbolLibrary, type SymbolLibraryId } from "../symbol-library/index.js";
 import type { PaletteEdition } from "../symbol-library/palette.js";
 import { classifyColour, detectPaletteEdition, formatClass } from "./colour-class.js";
 import { type ClassOfColour, compareFingerprints, type Fingerprint, fingerprintOf } from "./fingerprint.js";
-import { baseCode, chooseLibrary, matchContext, matchSymbol, normaliseCode, type SymbolDecision, symbolIrHash } from "./matcher.js";
+import { baseCode, chooseLibrary, isDocumentLibraryId, matchContext, matchSymbol, normaliseCode, type SymbolDecision, symbolIrHash } from "./matcher.js";
 
 // ---- fingerprints -------------------------------------------------------------
 
@@ -52,10 +52,10 @@ export function documentSymbolFingerprints(header: HeaderLike): (string | null)[
   return header.symbols.map((s) => (isSource(s) && s.render ? decisionFingerprint(header.source.kind, s.code, symbolIrHash(parseRenderSymbol(s.render), classOf)) : null));
 }
 
-/** The library a document's decisions are made against: its own, the scale's for a pre-matcher document. */
+/** The library a document's decisions are made against: its own, the scale's for a pre-matcher document (or a header naming an overlay, which is never a document's library — docs/map-symbols.md §12). */
 export function documentLibraryId(header: { library?: { id: string } | null; mapScale: number }): SymbolLibraryId {
   const stored = header.library?.id;
-  return stored && isSymbolLibraryId(stored) ? stored : chooseLibrary(header.mapScale);
+  return stored && isDocumentLibraryId(stored) ? stored : chooseLibrary(header.mapScale);
 }
 
 // ---- rows → matcher decisions -------------------------------------------------
@@ -113,7 +113,7 @@ function decisionFor(decisions: readonly SymbolDecision[], libraryId: string, co
  */
 export function documentFollowsDecisions(header: HeaderLike & { library?: { id: string } | null }, decisions: readonly SymbolDecision[]): boolean {
   const libraryId = header.library?.id;
-  if (!libraryId || !isSymbolLibraryId(libraryId)) return true;
+  if (!libraryId || !isDocumentLibraryId(libraryId)) return true;
   const entries = new Set(getSymbolLibrary(libraryId).entries.map((e) => e.id));
   const classOf = documentClassOf(header.colours);
   for (const s of header.symbols) {

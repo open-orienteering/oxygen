@@ -15,7 +15,7 @@
 
 import type { SymbolMatch } from "../map-document/header.js";
 import type { RenderSymbol } from "../render/symbol.js";
-import { getSymbolLibrary, SYMBOL_LIBRARY_VERSION, type SymbolLibraryId } from "../symbol-library/index.js";
+import { getSymbolLibrary, isOverlayLibrary, isSymbolLibraryId, SYMBOL_LIBRARY_VERSION, type SymbolLibraryId } from "../symbol-library/index.js";
 import { type PaletteEdition, paletteIndex, paletteStack } from "../symbol-library/palette.js";
 import { type LibraryEntry, resolveEntry, type SymbolLibrary } from "../symbol-library/schema.js";
 import { paletteClass } from "./colour-class.js";
@@ -62,6 +62,11 @@ const hundredOf = (code: string): string => normaliseCode(code).slice(0, 1);
 export function chooseLibrary(mapScale: number, override?: SymbolLibraryId): SymbolLibraryId {
   if (override) return override;
   return mapScale <= 5000 ? "ISSprOM2019-2" : "ISOM2017-2";
+}
+
+/** A registered base library — what a document's `header.library` may name; an overlay never is one (docs/map-symbols.md §12). */
+export function isDocumentLibraryId(id: string): id is SymbolLibraryId {
+  return isSymbolLibraryId(id) && !isOverlayLibrary(id);
 }
 
 const canonicalCache = new Map<string, CanonicalCandidate[]>();
