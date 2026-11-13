@@ -287,6 +287,14 @@ describe("ISSkiOM's rows in every stack (docs/map-symbols.md §9.2, §12.3; answ
     expect(r.areasAboveLowerPurple).toEqual([]);
   });
 
+  it("rows inserted for the overlay take no part in step 5b: the source's conflicts are those it had without them", () => {
+    // e2e/test.ocd's order: white over green, blue line, yellow, black, purple — yellow is the one out of order.
+    const stack = [c(1, "White", [0, 0, 0, 0]), c(2, "Blue", [100, 0, 0, 0]), c(3, "Yellow", [0, 27, 79, 0]), c(4, "Black", [0, 0, 0, 100]), c(5, "Purple", [35, 85, 0, 0])];
+    const r = align(stack);
+    expect(r.inserted).toContain("green100-area");
+    expect(r.conflicts.map((x) => x.colour).sort()).toEqual(["blue100-line", "yellow100"]);
+  });
+
   it("never aliases a ski row to another colour, nor another row to a ski colour", () => {
     // Green 83 % (Ski-O) and green 100 % are one class; a white mask is the same class as every white.
     const r = align(isom.slice(), "ISOM2017-2", "iof2024", ["white-over-yellow"]);
@@ -303,6 +311,15 @@ describe("ISSkiOM's rows in every stack (docs/map-symbols.md §9.2, §12.3; answ
     const r = align(mapper);
     expect(at(r, "orange-skio")).toBeGreaterThan(at(r, "black100"));
     expect(at(r, "green-skio")).toBe(at(r, "purple-upper") - 1);
+  });
+
+  it("keeps the tracks above lower purple where a table keeps a copy of its upper purple at the bottom", () => {
+    const stack = [c(1, "Övre violett för banpåtryck", [35, 85, 0, 0]), c(2, "Gul", [0, 27, 79, 0]), c(3, "Undre violett", [35, 85, 0, 0]), c(4, "Brun", [25, 75, 100, 0]), c(5, "Svart", [0, 0, 0, 100]), c(6, "Övre violett för banpåtryck", [35, 85, 0, 0])];
+    const r = align(stack);
+    const top = r.colours.findIndex((x) => x.sourceNumber === 6);
+    expect(at(r, "green-skio")).toBe(top - 1);
+    expect(at(r, "orange-skio")).toBe(top - 2);
+    expect(r.conflicts.filter((x) => /skio/.test(x.colour))).toEqual([]);
   });
 
   it("in both base specs and both editions; a 2022 stack gets the 2024 orange", () => {

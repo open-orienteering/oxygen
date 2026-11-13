@@ -233,18 +233,20 @@ export function alignColourStack(input: AlignmentInput): AlignmentResult {
 
   // The overlay's rows (docs/map-symbols.md §9.2 step 4, §12.3), after both purples so nothing placed above moves:
   // green 100 % area by steps 3–4 but never above lower purple; the track mask directly below lower purple;
-  // the track inks directly below the lowest colour the palette ranks above them (the upper overprint
-  // colours), orange under green.
+  // the track inks directly below the first colour above lower purple that the palette ranks above them
+  // (the upper overprint colours), else on top; orange under green.
   for (const id of OVERLAY_STACK_IDS) {
     if (positioned.has(id)) continue;
     if (id === "white-skio") insert(id, posOf("purple-lower"));
     else if (SKI_PALETTE_IDS.has(id)) {
+      // Searched from lower purple up: a copy of the upper purple some tables keep at the bottom does not drag the tracks under the map.
       const r = rank.get(id)!;
-      const at = stack.findIndex((slot) => {
-        const ids = slot.kind === "palette" ? [slot.id] : [...(standsFor.get(slot.index) ?? [])];
-        return ids.some((x) => (rank.get(x) ?? -1) > r);
+      const from = posOf("purple-lower") + 1;
+      const above = stack.slice(from).findIndex((slot) => {
+        const ids = slot.kind === "palette" ? [slot.id] : [...(standsFor.get(slot.index) ?? []), infos[slot.index]?.paletteId];
+        return ids.some((x) => x !== undefined && (rank.get(x) ?? -1) > r);
       });
-      insert(id, at < 0 ? stack.length : at);
+      insert(id, above < 0 ? stack.length : from + above);
     } else if (alias(id)) positioned.add(id);
     // An area row: never above lower purple, whatever stray area colour the source keeps on top.
     else insert(id, Math.min(byNeighbour(id), posOf("purple-lower")));
@@ -303,7 +305,10 @@ export function alignColourStack(input: AlignmentInput): AlignmentResult {
   });
 
   // Step 5b: palette ids whose relative order in the stack disagrees with the palette (lower purple is 5a's).
-  const ordered = [...index.entries()].filter(([id]) => rank.has(id) && id !== "purple-lower").sort((a, b) => a[1] - b[1]);
+  // The overlay's rows inserted above are placed by rule, not drawn by the mapper: they take no part, so
+  // they neither are reported nor tip which source colours are (docs/map-symbols.md §9.2 step 5).
+  const overlayInserted = new Set(inserted.filter((id) => (OVERLAY_STACK_IDS as readonly string[]).includes(id) && !input.needed.has(id)));
+  const ordered = [...index.entries()].filter(([id]) => rank.has(id) && id !== "purple-lower" && !overlayInserted.has(id)).sort((a, b) => a[1] - b[1]);
   const ranks = ordered.map(([id]) => rank.get(id)!);
   const keep = longestIncreasingSubsequence(ranks);
   ordered.forEach(([id, pos], i) => {

@@ -193,6 +193,7 @@ describe("skiPaletteIdFor (docs/map-symbols.md §9.1, §12.3)", () => {
     expect(ski("Grön", cmyk(80, 0, 100, 0))).toBeNull(); // green 100 % above black is still green 100 %
     expect(ski("Grön", cmyk(76, 0, 91, 0), true, "iof2022")).toBeNull();
     expect(ski("Orange", cmyk(0, 60, 100, 0))).toEqual({ id: "orange-skio", via: "position" });
+    expect(ski("Orange", cmyk(0, 50, 100, 0))).toBeNull(); // OCAD's template orange is not the Ski-O ink
     expect(ski("Orange", cmyk(0, 60, 100, 0), false)).toBeNull();
     expect(ski("Vit", cmyk(0, 0, 0, 0))).toBeNull();
   });
