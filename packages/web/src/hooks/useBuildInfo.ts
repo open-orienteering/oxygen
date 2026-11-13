@@ -6,6 +6,9 @@ export interface BuildInfo {
   startedAt: string;
   buildId?: string | null;
   deployRef?: string | null;
+  /** `OXYGEN_VERSION` baked into the server's image (`0.7.0`,
+   *  `0.7.0-3-gabc1234`); null on a build without one. */
+  version?: string | null;
 }
 
 /** Runtime provenance for the image currently serving the API. */

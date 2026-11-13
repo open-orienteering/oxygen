@@ -180,9 +180,14 @@ scripts/gcp/deploy.sh --from-source   # Cloud Build this working tree (fallback)
 ```
 
 Migrations run first against the chosen image, then Cloud Run is updated.
-The script records the selected argument as `OXYGEN_DEPLOY_REF`, so the UI
-footer shows `Image: edge`, `Image: v1.2.3`, or the chosen SHA alongside
-the baked commit identity.
+The script records the selected argument as `OXYGEN_DEPLOY_REF`. The UI
+footer shows the version baked into the image (`Oxygen v1.2.3`,
+`Oxygen v1.2.3-4-gabc1234` for a later `main` commit) and the baked commit;
+it adds `Image: edge`, `Image: stable` or the chosen SHA only when the ref is
+not that version's own tag, so `./deploy.sh v1.2.3` shows no `Image:` part
+([releases-and-images.md](releases-and-images.md#the-footer)).
+`--from-source` computes the version locally with `scripts/build-version.mjs`
+(Cloud Build's upload has no `.git`) and passes it as `_BUILD_VERSION`.
 Idle vs event mode on the live service is **preserved** (a deploy during a
 competition will not flip you back to scale-to-zero). Use
 `./event-mode.sh` / `./idle-mode.sh` to change that on purpose.

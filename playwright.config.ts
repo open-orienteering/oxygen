@@ -106,6 +106,9 @@ export default defineConfig({
         OXYGEN_ADMIN_EMAILS: "e2e-admin@oxygen.test",
         OXYGEN_BUILD_ID: "e81729be4f7fd564c47bb2098137403ef6dcb922",
         OXYGEN_DEPLOY_REF: "e2e",
+        // A past-the-tag version, distinct from the web's own baked
+        // `<package version>-dev`, so the footer test sees the server's.
+        OXYGEN_VERSION: "0.7.0-3-ge81729b",
       },
     },
     {

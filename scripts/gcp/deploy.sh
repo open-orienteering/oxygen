@@ -169,11 +169,13 @@ IMAGE_REF=""
 DEPLOY_REF=""
 if [[ "$FROM_SOURCE" -eq 1 ]]; then
   BUILD_ID="$(git -C "$REPO_ROOT" rev-parse --short HEAD 2>/dev/null || echo dev)-$(date +%Y%m%d%H%M%S)"
-  echo "── Building working tree with Cloud Build (BUILD_ID=${BUILD_ID})…"
+  # Cloud Build's upload has no .git, so the version is computed here.
+  BUILD_VERSION="$(node "$REPO_ROOT/scripts/build-version.mjs")"
+  echo "── Building working tree with Cloud Build (BUILD_ID=${BUILD_ID}, version ${BUILD_VERSION})…"
   gcloud builds submit "$REPO_ROOT" \
     --project="$PROJECT_ID" \
     --config="$REPO_ROOT/scripts/gcp/cloudbuild.yaml" \
-    --substitutions="_IMAGE=${IMAGE},_BUILD_ID=${BUILD_ID}"
+    --substitutions="_IMAGE=${IMAGE},_BUILD_ID=${BUILD_ID},_BUILD_VERSION=${BUILD_VERSION}"
   IMAGE_REF="${IMAGE}:latest"
   DEPLOY_REF="source-${BUILD_ID}"
 else

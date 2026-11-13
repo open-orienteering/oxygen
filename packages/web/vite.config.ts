@@ -7,12 +7,16 @@ import { readFileSync } from "node:fs";
 
 // Build version: timestamp at build time, used for cache busting
 const BUILD_VERSION = new Date().toISOString();
-// Application version is deliberately manual: releases update package.json.
-const APP_VERSION = (
+// Application version baked into the bundle: the image build passes
+// OXYGEN_VERSION (scripts/build-version.mjs via the Dockerfile's
+// BUILD_VERSION); any other build is `<package version>-dev`. The footer
+// prefers the server's /api/version answer and falls back to this.
+const PACKAGE_VERSION = (
   JSON.parse(
     readFileSync(path.resolve(import.meta.dirname, "../../package.json"), "utf8"),
   ) as { version: string }
 ).version;
+const APP_VERSION = process.env.OXYGEN_VERSION || `${PACKAGE_VERSION}-dev`;
 
 // https://vite.dev/config/
 export default defineConfig({
