@@ -315,7 +315,8 @@ export const SKI_INK_DISTANCE = 0.08;
 /**
  * Whether a source colour is one of ISSkiOM's own rows (docs/map-symbols.md
  * §9.1): a name that says ski orienteering and the row's hue (green,
- * orange, white); else, for a colour drawn above every black 100 %
+ * orange, white) — a green also at least 70 % and nearer 91/0/83/0 than
+ * the edition's green 100 % rows; else, for a colour drawn above every black 100 %
  * (`aboveBlack`), an orange within `SKI_INK_DISTANCE` of 0/60/100/0, or a
  * green within it of 91/0/83/0 and nearer to it than to the edition's
  * green 100 % rows. A white is the mask by name only. `null` otherwise.
@@ -325,11 +326,14 @@ export function skiPaletteIdFor(entry: Pick<ColourEntry, "name" | "cmyk">, cls: 
   const byHue: Partial<Record<ColourHue, string>> = { green: "green-skio", orange: "orange-skio", white: "white-skio" };
   const id = byHue[cls.hue];
   if (!id) return null;
-  if (nameTokens(entry.name).some((t) => SKI_WORD.test(t))) return { id, via: "name" };
+  // A screened green, or one nearer green 100 % than the Ski-O ink, is not the track green whatever its name ("Grön 100% skidområde", 808's raster).
+  const greens = (edition === "iof2024" ? iof2024Palette : iof2022Palette).filter((p) => /^green100-/.test(p.id));
+  const skiGreen = (d: number) => cls.percent >= 70 && greens.every((g) => d < cmykDistance(entry.cmyk, g.cmyk));
+  const dGreen = cmykDistance(entry.cmyk, SKIO_GREEN);
+  if (nameTokens(entry.name).some((t) => SKI_WORD.test(t))) return id !== "green-skio" || skiGreen(dGreen) ? { id, via: "name" } : null;
   if (!aboveBlack || id === "white-skio") return null;
-  const d = cmykDistance(entry.cmyk, id === "orange-skio" ? SKIO_ORANGE : SKIO_GREEN);
+  const d = id === "orange-skio" ? cmykDistance(entry.cmyk, SKIO_ORANGE) : dGreen;
   if (d > SKI_INK_DISTANCE) return null;
   if (id === "orange-skio") return { id, via: "position" };
-  const greens = (edition === "iof2024" ? iof2024Palette : iof2022Palette).filter((p) => /^green100-/.test(p.id));
-  return greens.every((g) => d < cmykDistance(entry.cmyk, g.cmyk)) ? { id, via: "position" } : null;
+  return skiGreen(d) ? { id, via: "position" } : null;
 }

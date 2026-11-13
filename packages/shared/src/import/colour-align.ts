@@ -235,6 +235,8 @@ export function alignColourStack(input: AlignmentInput): AlignmentResult {
   // green 100 % area by steps 3–4 but never above lower purple; the track mask directly below lower purple;
   // the track inks directly below the first colour above lower purple that the palette ranks above them
   // (the upper overprint colours), else on top; orange under green.
+  // Rows this loop inserts: placed by rule, not drawn by the mapper — step 5b leaves them out.
+  const overlayInserted = new Set<string>();
   for (const id of OVERLAY_STACK_IDS) {
     if (positioned.has(id)) continue;
     if (id === "white-skio") insert(id, posOf("purple-lower"));
@@ -247,9 +249,13 @@ export function alignColourStack(input: AlignmentInput): AlignmentResult {
         return ids.some((x) => x !== undefined && (rank.get(x) ?? -1) > r);
       });
       insert(id, above < 0 ? stack.length : from + above);
-    } else if (alias(id)) positioned.add(id);
+    } else if (alias(id)) {
+      positioned.add(id);
+      continue;
+    }
     // An area row: never above lower purple, whatever stray area colour the source keeps on top.
     else insert(id, Math.min(byNeighbour(id), posOf("purple-lower")));
+    overlayInserted.add(id);
   }
 
   // Build the new stack.
@@ -305,9 +311,8 @@ export function alignColourStack(input: AlignmentInput): AlignmentResult {
   });
 
   // Step 5b: palette ids whose relative order in the stack disagrees with the palette (lower purple is 5a's).
-  // The overlay's rows inserted above are placed by rule, not drawn by the mapper: they take no part, so
-  // they neither are reported nor tip which source colours are (docs/map-symbols.md §9.2 step 5).
-  const overlayInserted = new Set(inserted.filter((id) => (OVERLAY_STACK_IDS as readonly string[]).includes(id) && !input.needed.has(id)));
+  // The overlay's rows inserted above take no part, needed by a match or not: they are placed by rule, not
+  // drawn by the mapper, so they neither are reported nor tip which source colours are (docs/map-symbols.md §9.2 step 5).
   const ordered = [...index.entries()].filter(([id]) => rank.has(id) && id !== "purple-lower" && !overlayInserted.has(id)).sort((a, b) => a[1] - b[1]);
   const ranks = ordered.map(([id]) => rank.get(id)!);
   const keep = longestIncreasingSubsequence(ranks);

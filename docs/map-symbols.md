@@ -1130,7 +1130,9 @@ entries, on any map (`skiPaletteIdFor`, `SKI_PALETTE_IDS`): a name with a
 ski-orienteering token — `ski`, `skio` ("Ski-O"), `skid…` (`skidspår`,
 `skidorientering`), `längdspår…` — and the row's hue is `green-skio`
 (green), `orange-skio` (orange) or `white-skio` (white), wherever the
-colour sits. Without such a name, a colour drawn above every black 100 %
+colour sits; a green must also be at least 70 % and nearer 91/0/83/0
+than the edition's green 100 % rows ("Grön 100% skidområde" at green
+100 % ink is 808's raster green, "Green 50% Ski-O" no track ink). Without such a name, a colour drawn above every black 100 %
 is the Ski-O orange within CMYK distance 0.08 of 0/60/100/0, or the
 Ski-O green within 0.08 of 91/0/83/0 and nearer to it than to the
 edition's green 100 % rows (`via: "position"`); OCAD's template "Orange"
@@ -1233,10 +1235,11 @@ first: otherwise it would be the area green. "Motionsspår" and
    (b) The other palette ids whose relative order disagrees with the
    palette (longest increasing subsequence of palette ranks, lower purple
    left to (a); everything outside it is a `COLOUR_ORDER_CONFLICT` with the
-   pair it contradicts). The overlay's rows inserted above take no part:
-   they are placed by rule, not drawn by the mapper, and must not tip
-   which source colours are reported (a source's own ski colours do
-   take part).
+   pair it contradicts). The overlay's rows inserted above take no part,
+   whether or not an applied match needs them: they are placed by rule,
+   not drawn by the mapper, and must not tip which source colours are
+   reported (a source's own ski colours do take part). A `green100-area`
+   inserted in step 4 because a match needs it takes part as before.
 
    `scripts/measure-import.mjs` prints per map where lower purple sits,
    the area colours above it and the conflict count (`purple` line), and
@@ -1429,7 +1432,10 @@ column does not tick (user decisions 2026-11-13):
   the IOF colour table over the 301.1 drawing** (2026-11-13, before G21
   inserted the row into every stack): on every map the mask is directly
   below lower purple, over the area and road colours and under every
-  line, black and the tracks.
+  line, black and the tracks. A source that keeps its own used mask
+  higher — directly under the track green, as the 301.1 drawing has it —
+  keeps its order and gets a `COLOUR_ORDER_CONFLICT` against lower purple
+  (§9.2 step 5: flag, never reorder).
 - **`green100-area` is ticked for ISSkiOM** — 808's raster is "green
   100 %" since the 2023 erratum; the row already exists in every ISOM and
   ISSprOM stack.

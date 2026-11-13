@@ -295,6 +295,13 @@ describe("ISSkiOM's rows in every stack (docs/map-symbols.md §9.2, §12.3; answ
     expect(r.conflicts.map((x) => x.colour).sort()).toEqual(["blue100-line", "yellow100"]);
   });
 
+  it("… also when an applied track match needs them", () => {
+    const stack = [c(1, "White", [0, 0, 0, 0]), c(2, "Blue", [100, 0, 0, 0]), c(3, "Yellow", [0, 27, 79, 0]), c(4, "Black", [0, 0, 0, 100]), c(5, "Purple", [35, 85, 0, 0])];
+    const r = align(stack, "ISOM2017-2", "iof2024", ["green-skio", "white-skio", "orange-skio", "black100"]);
+    expect(r.inserted).toEqual(expect.arrayContaining(["white-skio", "orange-skio", "green-skio"]));
+    expect(r.conflicts.map((x) => x.colour).sort()).toEqual(["blue100-line", "yellow100"]);
+  });
+
   it("never aliases a ski row to another colour, nor another row to a ski colour", () => {
     // Green 83 % (Ski-O) and green 100 % are one class; a white mask is the same class as every white.
     const r = align(isom.slice(), "ISOM2017-2", "iof2024", ["white-over-yellow"]);

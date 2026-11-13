@@ -176,12 +176,15 @@ describe("skiPaletteIdFor (docs/map-symbols.md §9.1, §12.3)", () => {
     expect(ski("Green for Ski-O", cmyk(91, 0, 83, 0), false)).toEqual({ id: "green-skio", via: "name" });
     expect(ski("Orange for Ski-O", cmyk(0, 60, 100, 0), false)).toEqual({ id: "orange-skio", via: "name" });
     expect(ski("White under Ski-O tracks", cmyk(0, 0, 0, 0), false)).toEqual({ id: "white-skio", via: "name" });
-    expect(ski("Grön för skidspår", cmyk(80, 0, 100, 0), false)).toEqual({ id: "green-skio", via: "name" });
+    expect(ski("Grön för skidspår", cmyk(88, 0, 85, 0), false)).toEqual({ id: "green-skio", via: "name" });
     expect(ski("Vit mask under skidorienteringsspår", cmyk(0, 0, 0, 0), false)).toEqual({ id: "white-skio", via: "name" });
     expect(ski("Längdspår orange", cmyk(0, 60, 100, 0), false)).toEqual({ id: "orange-skio", via: "name" });
   });
 
   it("a ski name on another hue, or a trail word that is not ski, is no ski row", () => {
+    // A ski-named green at green 100 % ink is the area green (808's raster), not the track green.
+    expect(ski("Grön 100% skidområde", cmyk(76, 0, 91, 0), false)).toBeNull();
+    expect(ski("Green 50% Ski-O", cmyk(40, 0, 50, 0), false)).toBeNull();
     expect(ski("Blue for Ski-O", cmyk(100, 0, 0, 0))).toBeNull();
     expect(ski("Motionsspår", cmyk(80, 0, 100, 0))).toBeNull();
     expect(ski("Cykelspår Hellas", cmyk(100, 0, 0, 0))).toBeNull();
