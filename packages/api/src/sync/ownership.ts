@@ -20,6 +20,8 @@ export const CLOUD_OWNED_MUTATION_PREFIXES: readonly string[] = [
   "eventor.",
   "tracks.",
   "liveresults.",
+  // The event's map patch (docs/map-patches.md §3.4; slice G answer 1).
+  "mapPatch.",
 ];
 
 /** Exact cloud-owned mutation paths (event lifecycle is cloud admin). */
