@@ -10,9 +10,8 @@
  * by the caller (`pdf-page.ts`), which loads the pinned document.
  */
 
-import { course, getPaperDimensions } from "@oxygen/shared";
+import { course, getPaperDimensions, type LayoutControlSource, type ResolveMapLayoutInput, type ResolvedMapLayout, resolveMapLayout } from "@oxygen/shared";
 import type { PageInput } from "@oxygen/shared/print";
-import { type LayoutControlSource, type ResolveMapLayoutInput, type ResolvedMapLayout, resolveMapLayout } from "./resolve-layout.js";
 
 export type SheetInput = Omit<PageInput, "map" | "geo">;
 

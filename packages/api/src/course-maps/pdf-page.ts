@@ -10,7 +10,7 @@
  * `graphics` rows stay as uploaded).
  */
 
-import { course, courseMapObjectSchema, courseMapOverridesSchema, mapGeo, setterSheetPropsSchema, windowBoundingBox, type MapWindow } from "@oxygen/shared";
+import { course, courseMapObjectSchema, courseMapOverridesSchema, mapGeo, setterSheetPropsSchema, windowBoundingBox, type MapWindow, type LayoutControlSource, type LayoutTemplateSource, centerOfControls, layoutControlsFromCourseControls, layoutCourseEnds, layoutCrossings } from "@oxygen/shared";
 import { type ColourMode, PdfWriter, composePage, writePage, type PageInput } from "@oxygen/shared/print";
 import { z } from "zod";
 import type { PrismaClient, Prisma } from "../generated/prisma/client.js";
@@ -18,7 +18,6 @@ import { getBlob } from "../map-store/blob-store.js";
 import { type PreparedDocument, WINDOW_OBJECT_MARGIN_MM, objectsNear, prepareDocument } from "../render/window-raster.js";
 import { BUNDLED_FONT_FILES, bundledPdfFaces, loadBundledFonts } from "../render/fonts.js";
 import { type BaseMapInfo, getBaseMapInfo } from "./map-source.js";
-import { type LayoutControlSource, type LayoutTemplateSource, centerOfControls, layoutControlsFromCourseControls, layoutCourseEnds, layoutCrossings } from "./resolve-layout.js";
 import { rowKind } from "../course-structure.js";
 import { type ResolveSheetInput, type SheetInput, allVariationNumbers, resolveSheet } from "./resolve-sheet.js";
 import { objectsInScope, type StoredCourseObject } from "../course-objects.js";

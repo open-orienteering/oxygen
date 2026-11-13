@@ -38,12 +38,12 @@ import {
   type PaperSize,
   type SetterSheetProps,
   type TemplateKeyFields,
+  layoutCourseEnds,
 } from "@oxygen/shared";
 import { Prisma as PrismaNS, type MapTemplate, type Prisma, type PrismaClient } from "../generated/prisma/client.js";
 import { nextObjectVersion } from "../course-objects.js";
 import { publicControlId } from "../control-id.js";
 import { getBaseMapInfoOrNull } from "./map-source.js";
-import { layoutCourseEnds } from "./resolve-layout.js";
 
 type Db = PrismaClient | Prisma.TransactionClient;
 

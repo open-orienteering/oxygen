@@ -12,10 +12,12 @@ import {
   type MapPoint,
   type MapTemplateSettings,
   type MapWindow,
+  layoutControlsFromCourseControls,
+  layoutCourseEnds,
+  resolveMapLayout,
 } from "@oxygen/shared";
 import { z } from "zod";
 import { Prisma } from "../generated/prisma/client.js";
-import { layoutControlsFromCourseControls, layoutCourseEnds, resolveMapLayout } from "../course-maps/resolve-layout.js";
 import { getBaseMapInfoOrNull } from "../course-maps/map-source.js";
 import { displayCode, publicControlId } from "../control-id.js";
 import { type MapRowContext, setterControlIds, sharedWindowCentre, sheetInputForMapRow } from "../course-maps/pdf-page.js";

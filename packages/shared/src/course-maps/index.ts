@@ -11,3 +11,4 @@ export * from "./iof-symbol-meta.js";
 export * from "./auto-template.js";
 export * from "./setter-groups.js";
 export * from "./description-sheet-options.js";
+export * from "./resolve-layout.js";
