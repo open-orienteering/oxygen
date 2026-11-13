@@ -1,6 +1,6 @@
 {
   "name": "oxygen",
-  "version": "0.1.0",
+  "version": "0.7.0",
   "private": true,
   "description": "Oxygen - Lightweight orienteering management",
   "scripts": {
@@ -24,7 +24,8 @@
     "text-atlas:generate": "pnpm --filter @oxygen/web exec tsx scripts/generate-text-atlas.ts",
     "showcase:load": "bash scripts/load-showcase.sh",
     "audit:prod": "node scripts/audit-prod.mjs --audit-level=high",
-    "test:scripts": "node --test scripts/__tests__/*.test.mjs"
+    "test:scripts": "node --test scripts/__tests__/*.test.mjs",
+    "release:version": "node scripts/release-version.mjs"
   },
   "packageManager": "pnpm@10.29.3",
   "engines": {

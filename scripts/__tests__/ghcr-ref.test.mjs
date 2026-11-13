@@ -1,9 +1,12 @@
 import { describe, it } from "node:test";
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
+import { mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import {
+  assertReleaseMatchesPackage,
   DEFAULT_GHCR_IMAGE,
   parseReleaseGitTag,
   resolveImageRef,
@@ -110,5 +113,66 @@ describe("CLI", () => {
     const bad = runCli(["parse-release-tag", "nope"]);
     assert.notEqual(bad.status, 0);
     assert.match(bad.stderr, /vX.Y.Z/);
+  });
+});
+
+describe("assertReleaseMatchesPackage", () => {
+  const four = (version) => ({
+    "package.json": version,
+    "packages/shared/package.json": version,
+    "packages/api/package.json": version,
+    "packages/web/package.json": version,
+  });
+
+  it("accepts a tag equal to every package.json version", () => {
+    assert.doesNotThrow(() => assertReleaseMatchesPackage("v0.7.0", four("0.7.0")));
+  });
+
+  it("names each package.json that differs from the tag", () => {
+    const versions = { ...four("0.7.0"), "packages/web/package.json": "0.1.0" };
+    assert.throws(
+      () => assertReleaseMatchesPackage("v0.7.0", versions),
+      /packages\/web\/package\.json is 0\.1\.0.*pnpm release:version 0\.7\.0/s,
+    );
+    assert.throws(() => assertReleaseMatchesPackage("v0.8.0", four("0.7.0")), /package\.json is 0\.7\.0/);
+  });
+
+  it("rejects a malformed tag before comparing", () => {
+    assert.throws(() => assertReleaseMatchesPackage("0.7.0", four("0.7.0")), /vX.Y.Z/);
+  });
+});
+
+describe("check-release-version CLI", () => {
+  function repoAt(versions) {
+    const root = mkdtempSync(path.join(tmpdir(), "ghcr-ref-"));
+    for (const [file, version] of Object.entries(versions)) {
+      mkdirSync(path.dirname(path.join(root, file)), { recursive: true });
+      writeFileSync(path.join(root, file), JSON.stringify({ name: "x", version }, null, 2));
+    }
+    return root;
+  }
+  const files = [
+    "package.json",
+    "packages/shared/package.json",
+    "packages/api/package.json",
+    "packages/web/package.json",
+  ];
+
+  it("exits 0 when the tag matches the checkout", () => {
+    const root = repoAt(Object.fromEntries(files.map((f) => [f, "1.2.3"])));
+    const res = runCli(["check-release-version", "v1.2.3"], { RELEASE_VERSION_ROOT: root });
+    assert.equal(res.status, 0, res.stderr);
+  });
+
+  it("fails when the tagged commit carries another version", () => {
+    const root = repoAt(Object.fromEntries(files.map((f) => [f, "0.1.0"])));
+    const res = runCli(["check-release-version", "v1.2.3"], { RELEASE_VERSION_ROOT: root });
+    assert.notEqual(res.status, 0);
+    assert.match(res.stderr, /package\.json is 0\.1\.0/);
+  });
+
+  it("checks the repository's own manifests by default", () => {
+    const res = runCli(["check-release-version", "v999.0.0"]);
+    assert.notEqual(res.status, 0);
   });
 });

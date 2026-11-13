@@ -5,7 +5,10 @@
  *   node scripts/ghcr-ref.mjs resolve [tag]
  *   node scripts/ghcr-ref.mjs sha-tag <40-char-commit>
  *   node scripts/ghcr-ref.mjs parse-release-tag vX.Y.Z
+ *   node scripts/ghcr-ref.mjs check-release-version vX.Y.Z
  */
+
+import { readManifestVersions } from "./release-version.mjs";
 
 export const DEFAULT_GHCR_IMAGE = "ghcr.io/open-orienteering/oxygen";
 
@@ -51,6 +54,23 @@ export function parseReleaseGitTag(gitTag) {
   };
 }
 
+/**
+ * The git tag is the version of record: a release tag must name the version
+ * its commit's `package.json` files carry (set by `pnpm release:version`).
+ * `versions` maps each manifest path to its `version`.
+ */
+export function assertReleaseMatchesPackage(gitTag, versions) {
+  const { version } = parseReleaseGitTag(gitTag);
+  const differing = Object.entries(versions).filter(([, v]) => v !== version);
+  if (differing.length > 0) {
+    const list = differing.map(([file, v]) => `${file} is ${v}`).join(", ");
+    throw new Error(
+      `Tag ${gitTag} does not match the tagged commit: ${list}. ` +
+        `The release PR must run \`pnpm release:version ${version}\` before the tag.`,
+    );
+  }
+}
+
 function printJson(value) {
   process.stdout.write(`${JSON.stringify(value)}\n`);
 }
@@ -67,9 +87,17 @@ function main(argv) {
     case "parse-release-tag":
       printJson(parseReleaseGitTag(rest[0] ?? ""));
       return;
+    case "check-release-version":
+      assertReleaseMatchesPackage(
+        rest[0] ?? "",
+        readManifestVersions(process.env.RELEASE_VERSION_ROOT || undefined),
+      );
+      process.stdout.write(`${rest[0]} matches package.json\n`);
+      return;
     default:
       process.stderr.write(
-        "Usage: ghcr-ref.mjs resolve [tag] | sha-tag <sha> | parse-release-tag vX.Y.Z\n",
+        "Usage: ghcr-ref.mjs resolve [tag] | sha-tag <sha> | parse-release-tag vX.Y.Z" +
+          " | check-release-version vX.Y.Z\n",
       );
       process.exit(1);
   }
