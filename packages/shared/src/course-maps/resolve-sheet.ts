@@ -7,11 +7,14 @@
  * read as they are (09 §4 C).
  *
  * The map document's part of the page (`PageInput.map`, `geo`) is added
- * by the caller (`pdf-page.ts`), which loads the pinned document.
+ * by `pageInputFor` (`@oxygen/shared/print`, `course-pages.ts`) from the
+ * prepared document. Pure and isomorphic (docs/course-print.md §1, G13):
+ * the browser resolves the same sheets as the API.
  */
 
-import { course, getPaperDimensions } from "@oxygen/shared";
-import type { PageInput } from "@oxygen/shared/print";
+import * as course from "../course/index.js";
+import type { PageInput } from "../print/page.js";
+import { getPaperDimensions } from "./geometry.js";
 import { type LayoutControlSource, type ResolveMapLayoutInput, type ResolvedMapLayout, resolveMapLayout } from "./resolve-layout.js";
 
 export type SheetInput = Omit<PageInput, "map" | "geo">;

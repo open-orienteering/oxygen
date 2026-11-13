@@ -9,13 +9,12 @@ import { readFileSync } from "node:fs";
 import { monitorEventLoopDelay } from "node:perf_hooks";
 import { resolve } from "node:path";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
-import { course, mapDocument } from "@oxygen/shared";
+import { course, mapDocument, type SheetInput, resolveSheet } from "@oxygen/shared";
 import { importMapToDocument } from "../import/ocad.js";
 import { renderCoursePages } from "../course-maps/pdf-page.js";
 import { printGate, printWorkerCount, renderCoursePagesInWorker, resetPrintWorkers } from "../course-maps/print-worker-host.js";
-import { type SheetInput, resolveSheet } from "../course-maps/resolve-sheet.js";
 import { printSheetFor, syntheticCourse } from "./helpers/print-sheet.js";
-import { prepareDocument, type PreparedDocument } from "../render/window-raster.js";
+import { prepareDocument, type PreparedDocument } from "@oxygen/shared/print";
 
 const fixture = resolve(__dirname, "../../../../e2e/test.ocd");
 

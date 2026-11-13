@@ -13,8 +13,8 @@
 import { parentPort } from "node:worker_threads";
 import { course } from "@oxygen/shared";
 import type { ColourMode } from "@oxygen/shared/print";
-import { prepareDocument } from "../render/window-raster.js";
-import { type PrintGraphic, type PrintSheet, renderCoursePages } from "./pdf-page.js";
+import { prepareDocument, type PrintGraphic, type PrintSheet } from "@oxygen/shared/print";
+import { renderCoursePages } from "./pdf-page.js";
 
 export interface PrintWorkerRequest {
   type: "print";

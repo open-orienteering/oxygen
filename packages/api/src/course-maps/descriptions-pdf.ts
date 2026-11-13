@@ -29,6 +29,11 @@ import {
   WITHDRAWN_STATUSES,
   defaultTemplateSettings,
   getPaperDimensions,
+  type LayoutTemplateSource,
+  layoutControlsFromCourseControls,
+  layoutCourseEnds,
+  layoutCrossings,
+  resolveMapLayout,
 } from "@oxygen/shared";
 import {
   type ColourMode,
@@ -47,7 +52,6 @@ import { assertRestAccess } from "../restGuard.js";
 import { bundledPdfFaces, loadBundledFonts } from "../render/fonts.js";
 import { valueToRunnerStatus } from "../statusConvert.js";
 import { getBaseMapInfoOrNull } from "./map-source.js";
-import { type LayoutTemplateSource, layoutControlsFromCourseControls, layoutCourseEnds, layoutCrossings, resolveMapLayout } from "./resolve-layout.js";
 
 type Db = PrismaClient | Prisma.TransactionClient;
 

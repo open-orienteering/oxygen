@@ -65,8 +65,9 @@ composer's own stream, symbolised in the worker (`map-rendering.md` §5.2
 
 ### What the editor reads
 
-`courseMap.resolveSheet` (`courses.view`) wraps `resolve-sheet.ts` through
-the row mapping `maps.pdf` uses (`sheetInputForMapRow`, `pdf-page.ts`):
+`courseMap.resolveSheet` (`courses.view`) wraps `resolveSheet` through
+the row mapping `maps.pdf` uses (`sheetInputForMapRow`; both in
+`@oxygen/shared`, `course-maps/{resolve-sheet,sheet-rows}.ts` since G13):
 
 - `{ seq }` → a sheet; `{ templateSeq, courseSeq? }` → a template
   previewed with a course (the window centred on the course, as
@@ -522,7 +523,7 @@ reads them. The Courses page's print overview stays per course: class
 sheets are left out of its template and status columns (SLICES "Decided
 in this split").
 
-**Printing a class** (`rowForClass`, `course-maps/pdf-page.ts`, both
+**Printing a class** (`rowForClass`, `@oxygen/shared` `course-maps/sheet-rows.ts`, both
 pipelines): the description header and `{classes}` name that class only;
 a class without its own sheets prints its course's own sheets with the
 override applied — template `sheet_template_id ?? the sheet's`, scale
@@ -686,7 +687,7 @@ template only setter sheets use is never it: their fitted keys are not
 the event's look.
 
 **What a setter sheet draws** (`sheetInputForMapRow` → `setterSheetInput`,
-`course-maps/pdf-page.ts`; `course-print.md` §5.2): the all-controls
+`@oxygen/shared` `course-maps/sheet-rows.ts`; `course-print.md` §5.2): the all-controls
 branch of `resolveMapLayout` (`kind === "setter"` joins it: no layer
 change) over the group's sites only — every site by its kind (702 for a
 map-issue point, 710 for a crossing point, start, finish), labels by code,

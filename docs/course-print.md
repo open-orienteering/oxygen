@@ -13,14 +13,18 @@ Normative for slice C of the vector map pipeline (research:
 > `docs/map-rendering.md` §5.3; this chapter owns everything around it.
 
 Status: **draft** — §1–3 written by C1, §10 by C6 (2026-10-23), §4–7 by
-C2, §8–9 by C3, §11 by C7 (2026-10-24).
+C2, §8–9 by C3, §11 by C7 (2026-10-24); the pipeline moved into
+`@oxygen/shared` by G13 (2026-11-13: §1, §5, §8.2).
 
 ## 1. The print module and its writer
 
 `packages/shared/src/print/` — the PDF backend of the shared stage.
-**Isomorphic**: no Node API (`node:*`, `Buffer`); fonts arrive as bytes,
-randomness (non-deterministic `/ID`) comes from Web Crypto, so the same
-code runs in the API and, later, in a Web Worker (05 §5.11). It is *not*
+**Isomorphic**: no Node API (`node:*`, `Buffer`, `process`,
+`setImmediate`, `worker_threads`); fonts arrive as bytes, SVG logos as
+PNG or through an injected rasteriser, randomness (non-deterministic
+`/ID`) comes from Web Crypto, so the same code runs in the API and, later,
+in a Web Worker (05 §5.11). The rule holds for every file the module and
+the layout half below reach, transitively (`isomorphic.test.ts`, §7.5). It is *not*
 re-exported from the package root (`import { render } from
 "@oxygen/shared"` stays free of the PDF library, which keeps it out of the
 web bundle); it is the package's `@oxygen/shared/print` subpath
@@ -40,9 +44,35 @@ with `main` — with `exports` present Node ignores `main`.
 | `print/description.ts` | the description block and the IOF pictogram glyphs (§6.2) |
 | `print/description-sheet.ts` | description sheets: the block tiled on A4, a page drawn on the writer (§6.4); the options' constants are `course-maps/description-sheet-options.ts` (root export, read by the web dialog too) |
 | `print/geo.ts` | the `/Measure /GEO` viewport (§7.3) |
+| `print/prepared-document.ts` | `prepareDocument` (decode, bridge, cut features; the per-thread cache of the last two keys, §8.2), `objectsNear`, `WINDOW_OBJECT_MARGIN_MM` (G13) |
+| `print/course-pages.ts` | `renderCoursePages` (many sheets → one PDF, §4.5), `pageInputFor`, `documentPaperFrame`, `svgRasterBox` (§6.3), `PrintFonts` / `printFontsFromFaces`, `PrintSheet`, `PrintGraphic` (G13) |
 | `print/__fixtures__/pages.ts` | the page scenes (§7.5) |
 | `print/__fixtures__/description-sheets.ts` | description-sheet blocks and the `descriptions-a4` scene (§6.4, §7.5) |
 | `print/index.ts` | the module's exports |
+
+**The layout half** (G13) is pure as well, but needs no PDF library, so
+it sits in the root export under `course-maps/`: `resolve-layout.ts`
+(`resolveMapLayout`, `layoutCourseEnds`, `layoutCrossings`, …),
+`resolve-sheet.ts` (`resolveSheet`, §5; `PageInput` is a type import) and
+`sheet-rows.ts` (the row → sheet functions: `sheetForMapRow`,
+`sheetInputForMapRow`, `rowForClass`, `rowForVariant`, `allVariationsRow`,
+`sharedWindowCentre`, `setterControlIds`). The pure helpers they read
+moved with them: the sequence rule and the column split
+(`course/sequence.ts`: `courseSequenceOf`, `splitStructure`, `rowKind`,
+`crossingRowsOf`), `firstCode` (`control-display.ts`) and
+`objectsInScope` / `StoredCourseObject` (`course/objects.ts`); the API's
+`course-structure.ts`, `control-id.ts` and `course-objects.ts` re-export
+them. So the browser resolves, composes and writes the same pages as the
+API (05 §5.11; slice G answer 3).
+
+**What stays in the API** (`packages/api/src/course-maps/`): the
+database (`pinnedPrintSource`, `loadPinnedPrintDocument`, the route's
+row loading), the print worker and its host (§8.2), resvg
+(`rasteriseSvgGraphic`, §6.3) and the font files on disk
+(`render/fonts.ts`). `pdf-page.ts` is the Node binding of
+`renderCoursePages` under the same name: the shared function with
+`fonts: bundledPrintFonts()`, `rasteriseSvg` defaulting to resvg and a
+`setImmediate` yield between pages; the worker and the tests call it.
 
 **Writer.** `@cantoo/pdf-lib` (the maintained fork of `pdf-lib`, 05 §6
 B) is used as object model, Flate encoder and cross-reference writer
@@ -205,7 +235,8 @@ stored `filter_region` objects reach the page's clip paths through them),
 `objects` (the template's and the
 sheet's layout objects, all page-anchored since F12), `textValues`, `description` (§6.2, or null), `label`, `geo`
 (§7.3, or null). `resolveSheet` (§5) builds everything but `map` and
-`geo`; `pdf-page.ts` adds them from the pinned document.
+`geo`; `pageInputFor` (`print/course-pages.ts`) adds them from the
+prepared document.
 
 `ComposedPage`: `frameUm`, one `colours` table both layers index,
 `mapLayer { stream, transform }`, `pageLayer { stream }`, `marksLayer:
@@ -292,8 +323,8 @@ page foreground — the same order).
 
 ### 4.5 Many pages
 
-`renderCoursePages` writes every sheet into **one** `PdfWriter`
-(05 §5.10): one font object per face subset at `save()` to the union of
+`renderCoursePages` (`print/course-pages.ts`) writes every sheet into
+**one** `PdfWriter` (05 §5.10): one font object per face subset at `save()` to the union of
 all pages' glyphs, one form XObject per distinct glyph part (7xx parts
 and IOF pictograms included), one image XObject per distinct PNG.
 
@@ -307,6 +338,14 @@ the page label and has no outline item (one per composed page).
 `writePage` returns its `PdfWriterPage` for this; `renderCoursePages`'s
 `pageCount` counts the copies, `onPage` fires once per composed sheet.
 
+**Inputs a host supplies** (G13): `fonts` (`PrintFonts`: the face files
+the writer subsets and the parsed faces the composer measures with, in
+`symbolise`'s order — regular before bold; `printFontsFromFaces` parses
+the files for a host without a font cache), `rasteriseSvg` (optional,
+§6.3) and `yieldToHost` (optional, awaited before each composed sheet;
+absent = no yield). The function reads no file and imports no
+rasteriser.
+
 ### 4.6 Variant pages
 
 A **root** (a course with variation groups, `course-layer.md` §12) has
@@ -317,7 +356,7 @@ own `kind = 'course'` sheets — the layout the variants share (08 §4.6,
 whatever selected the sheet (`courses`, `classes`, `maps`, the unfiltered
 export):
 
-- **`rowForVariant(row, child)`** (`pdf-page.ts`): the row's template,
+- **`rowForVariant(row, child)`** (`course-maps/sheet-rows.ts`): the row's template,
   overrides, objects and window centre; the course's name, length,
   climb, structure (the linear `variantStructure`), `course_controls`
   (label offsets), ends and description instructions are the child's;
@@ -343,7 +382,7 @@ export):
   variants (`course.uniformVariantNumbers`, `course-layer.md` §12.1 —
   equal forks), else codes (unequal forks, every loop with two or more non-empty petals). The numbers go as
   `viewOptions.labels` (`PageInput.course.viewOptions` gains `labels`;
-  `labelMode` stays `code`), computed in `resolve-sheet.ts`
+  `labelMode` stays `code`), computed in `course-maps/resolve-sheet.ts`
   (`allVariationNumbers`: a positioned site that is a control, as the
   layer numbers it; the editor's All-variations view computes the same,
   `course-editor.md` §12); `numberHidden` is ignored. The block lists
@@ -378,7 +417,8 @@ the 200-page cap counts composed pages, copies up to 5 000 pages.
 
 ## 5. `resolveSheet`
 
-`packages/api/src/course-maps/resolve-sheet.ts` — the 08 §4.6 boundary
+`packages/shared/src/course-maps/resolve-sheet.ts` (root export; in the
+API until G13) — the 08 §4.6 boundary
 for slice C: `resolveSheet(input)` calls `resolveMapLayout` (unchanged,
 so the legacy SVG page and this one resolve the same layout; templates
 and `course_maps` rows unchanged, 09 §4 C) and returns `{ layout, sheet }`
@@ -402,7 +442,7 @@ with `sheet` = `PageInput` minus `map` and `geo`.
   `controls` rows. A course sheet's are its start, its `course_controls`
   and its finish; all-controls sheets take every placed control. Since
   E6 nothing comes from `courses.geometry`: the caller resolves the
-  start and finish (`layoutCourseEnds` in `resolve-layout.ts`) by the one
+  start and finish (`layoutCourseEnds` in `course-maps/resolve-layout.ts`) by the one
   sequence rule every course reader uses (`courseSequenceOf`,
   `course-layer.md` §6.2 "Readers"): the stored structure's explicit
   ends, else the columns' (`start_name`, `finish_control_id`, the
@@ -477,14 +517,16 @@ with `sheet` = `PageInput` minus `map` and `geo`.
   leg gaps, while the stored circle and leg gaps still print (the
   screen's rule, `course-layer.md` §3.4, D17).
 
-`pdf-page.ts` adds the map part: `sheetForMapRow(row, { event,
-allControls, mapInfo, courseObjects?, classesByCourse?, autoCuts? })` maps a `course_maps` row (with template and
-course, as `maps.pdf` loads it) to its sheet through `resolveSheet`;
-`loadPinnedPrintDocument(db, eventId)` returns the prepared document,
-`getBaseMapInfo` and the pinned `map_files` row's rotation correction,
-or null on the legacy path; `pageInputFor(doc, sheet, geo)` selects the
-document objects within 20 mm of the window's bounding box (C6's
-`objectsNear`, the legacy crop's padding).
+`sheetForMapRow(row, { event, allControls, mapInfo, courseObjects?,
+classesByCourse?, autoCuts? })` (`course-maps/sheet-rows.ts`) maps a
+`course_maps` row (with template and course, as `maps.pdf` loads it) to
+its sheet through `resolveSheet`. The map part is added per page by
+`pageInputFor(doc, sheet, geo)` (`print/course-pages.ts`): the document
+objects within 20 mm of the window's bounding box (C6's `objectsNear`,
+the legacy crop's padding), the symbols, the document context and the
+cut features. The API's `loadPinnedPrintDocument(db, eventId)`
+(`course-maps/pdf-page.ts`) returns the prepared document,
+`getBaseMapInfo` and the pinned `map_files` row's rotation correction.
 
 ## 6. Page objects, the description block and graphics
 
@@ -536,10 +578,15 @@ skipped with `IMAGE_MISSING`.
 
 **SVG logos** are rasterised in the API at render time (05 §5.7 a), so
 `graphics` rows stay as uploaded: resvg at 600 dpi of the placed size
-(the crop's source size), at most 4096 px per side, text in the
-bundled faces only (no system fonts),
+(the crop's source size), at most 4096 px per side (`svgRasterBox`), text
+in the bundled faces only (no system fonts),
 stretched to the exact pixel box; cached per graphic and size within one
-export. The composer itself never sees SVG — `@oxygen/shared/print`
+export. `renderCoursePages` asks its `rasteriseSvg` input for the PNG
+(the API's binding passes resvg, `rasteriseSvgGraphic`); without one an
+SVG graphic is left out with `SVG_RASTER: … no SVG rasteriser` (and the
+writer's `IMAGE_MISSING`), as when resvg fails — a host that cannot
+rasterise is sent PNGs instead (slice G: "the browser never rasterises
+SVG"). The composer itself never sees SVG — `@oxygen/shared/print`
 stays isomorphic (§1; a test reads the module's imports). Images are
 DeviceRGB in both modes: CMYK conversion of images belongs to the
 offset profile (05 §5.7, §2).
@@ -598,7 +645,7 @@ UI), no base map and no template.
   **In process**, not in the print worker: there is no document to
   decode, and §8.2's other concern — composing and writing on the event
   loop — is met by writing **one page per turn of the loop**
-  (`setImmediate` between pages, as `renderCoursePages` does) under a
+  (`setImmediate` between pages, as the API's `renderCoursePages` binding does) under a
   **render-gate permit** (`renderGate()`, so prints never exceed
   `MAP_RENDER_CONCURRENCY` together). Measured 2026-11-07 (14-row block,
   6 mm, `cmyk`): ~18 ms a page; 200 pages (the cap) in 3.5 s with the
@@ -674,9 +721,12 @@ lines drawn by the library; images DeviceRGB in `cmyk`.
 | `print/__tests__/compose.test.ts` | one colour-sorted map stream with lower purple < black < upper purple; block text / rules / pictograms on appended colours; no block → empty page layer; map ring outer boundary = frame (+1 mm) through `T_map⁻¹` in the toner saver white, page ring = frame + 1 mm, page white-out at upper white; P1: with a 709 area and a course text outside a map toner saver, its ring is the map layer's last pass (the page layer still draws after); placeholders; rotated `T_map`; images in layer space; `CourseStackError`; auto cuts off = the stream without cut features (D17) |
 | `print/__tests__/writer.test.ts` (C8) | a bold text symbol and a regular one embed two font objects, `…+LiberationSans` and `…+LiberationSans-Bold` |
 | `print/__tests__/write-page.test.ts` | operator order (sheet, frame clip, `T_map` `cm`, page `cm`), no `rg` in `cmyk` / no `k` in `rgb`, rotated `cm`, two pages sharing font, glyph forms and image XObject, page labels and outlines, `/Measure /GEO` (SWEREF99 TM corners near 58.6° N 15° E, rotated corners), deterministic bytes, missing image warning, an object far outside the frame absent from the content stream (C13) |
-| `print/__tests__/isomorphic.test.ts` | no Node API, `Buffer`, sharp or resvg in the module |
-| `packages/api/src/__tests__/course-print-sheet.test.ts` | `resolveSheet`: paper / frame / window / tilt, structure and roles, unique sites, label offsets, extras, authored gaps from the structure only (start and finish rows, no GeoJSON, E6), description block / hidden, all-controls, free order, the event's auto cuts off on the view options (D17) |
-| `packages/api/src/__tests__/course-map-layout.test.ts` "course sites", "layoutCourseEnds" (E6) | start, `course_controls` and finish from the rows with straight legs, no `cuts`; an unplaced end not drawn; the ends of a NULL structure from the columns (lowest-seq defaults, `firstAsStart`) and of a stored one from its items |
+| `print/__tests__/isomorphic.test.ts` | no Node API, `Buffer`, `process`, `setImmediate`, `worker_threads`, sharp or resvg in any file the print module or the layout half (`course-maps/{resolve-layout,resolve-sheet,sheet-rows}.ts`) reaches, transitively; the package root reaches neither `print/writer.ts` nor `@cantoo/pdf-lib` (G13) |
+| `print/__tests__/course-pages.test.ts` (G13) | `renderCoursePages` with fonts as input: equal deterministic bytes, copies and `onPage`, `yieldToHost` once per composed sheet, a PNG embedded, an SVG through the injected rasteriser once per size, no rasteriser → `SVG_RASTER` and the PDF still written; `svgRasterBox`; `pageInputFor` |
+| `print/__tests__/prepared-document.test.ts` (G13) | `prepareDocument`: decode once per key, the last two kept, a concurrent decode shared, a failed one forgotten; `objectsNear` by extent plus margin |
+| `packages/shared/src/__tests__/sheet-rows.test.ts` (G13) | `rowForClass` (template and scale), `rowForVariant` (the root's id and classes), the all-variations suffix, `sharedWindowCentre`, a setter sheet's group, `sheetForMapRow` = `resolveSheet` over `sheetInputForMapRow` |
+| `packages/shared/src/__tests__/resolve-sheet.test.ts` (in the API as `course-print-sheet.test.ts` until G13) | `resolveSheet`: paper / frame / window / tilt, structure and roles, unique sites, label offsets, extras, authored gaps from the structure only (start and finish rows, no GeoJSON, E6), description block / hidden, all-controls, free order, the event's auto cuts off on the view options (D17) |
+| `packages/shared/src/__tests__/resolve-layout.test.ts` "course sites", "layoutCourseEnds" (E6; the API's `course-map-layout.test.ts` until G13) | start, `course_controls` and finish from the rows with straight legs, no `cuts`; an unplaced end not drawn; the ends of a NULL structure from the columns (lowest-seq defaults, `firstAsStart`) and of a stored one from its items |
 | `packages/api/src/__tests__/integration/course-maps.test.ts` "creates, duplicates and applies…", "resolveSheet: a template previewed…" (E6; E-pages read both through `resolveSheet`, `previewLayout` gone) | a course with no structure and no GeoJSON resolves start → controls → finish (the event's first start / finish) and its description rows; a template alone resolves centred on the map origin |
 | `packages/api/src/__tests__/integration/course-print.test.ts` | the E2E fixture map pinned on a `vector` event: legacy event → no print document; two sheets → one PDF of two A4 pages, `TrimBox`, labels, outlines, Type0 / CIDFontType2 shared, frame clip and `T_map`, no `rg`, PNG and rasterised SVG logos shared (600 dpi), `/Measure /GEO` of the fixture's georeference, deterministic bytes |
 | `packages/api/src/render/__tests__/page-raster.test.ts` | the page oracle: white outside the frame and the ring, map inside, page box on top; rotated building where `T_map` puts it; block position on A4 |
@@ -719,7 +769,7 @@ The composer is the only path: the rsvg branch (OCAD → SVG →
 | a pin whose colour stack is not aligned (`course.CourseStackError`: no lower / upper purple) | 400 with the error's reason (`{ error: <message> }`) |
 | any other composer error | 400 with its message |
 
-`pinnedPrintSource(db, eventId)` (`pdf-page.ts`;
+`pinnedPrintSource(db, eventId)` (the API's `course-maps/pdf-page.ts`;
 `loadPinnedPrintDocument` is its in-process wrapper) reads
 `getBaseMapInfo` (§10) — the same function the layout procedures read. There is
 no fallback since E3 (decision log "E3, the flip"): an unaligned stack
@@ -732,7 +782,7 @@ re-import (the review's colour decisions).
 1. The pages `selectPrintPages` selects (the rows; a root's sheet once
    per variant or as its all-variations page; each with its copies —
    §4.6, `course-layout.md` §7 lists the query), each turned into a sheet by
-   `sheetForMapRow` (§5) with the event, its controls, its
+   `sheetForMapRow` (§5; `@oxygen/shared`, `course-maps/sheet-rows.ts`) with the event, its controls, its
    `autoOverprintCuts` (`MapRowContext.autoCuts`, §5.2) and the pinned
    document's `getBaseMapInfo` scale and meridian tilt. The pinned
    document is identified, not decoded, on the request thread:
@@ -742,7 +792,8 @@ re-import (the review's colour decisions).
    or club scope), loaded once.
 3. `renderCoursePagesInWorker({ document: { hash, bytes }, rotationCorrectionDeg,
    sheets, graphics, mode: "cmyk", info, onPage })`: the same
-   `renderCoursePages` (one `PdfWriter`, one page per sheet, fonts, glyph
+   `renderCoursePages` (`@oxygen/shared/print`, through the API's binding
+   in `pdf-page.ts`, §1; one `PdfWriter`, one page per sheet, fonts, glyph
    forms and images shared, §4.5) running in a `worker_threads` worker
    (`course-maps/print-worker.ts`, host `print-worker-host.ts`), so
    decoding the document, composing and writing never occupy the API's
@@ -760,7 +811,8 @@ re-import (the review's colour decisions).
      at the end), so bytes cannot stream per page: the response is one
      buffer (§8.3), and "pages streamed back" is progress and warnings.
    - **Prepared once per worker.** The worker keeps `prepareDocument`'s
-     cache (last two hashes). The host remembers which hashes the
+     cache (last two hashes; `print/prepared-document.ts`, module-level,
+     so one per thread — the key is an opaque string). The host remembers which hashes the
      worker instance holds and reads and sends the blob only on a miss;
      a worker that reports it lacks the document (`NeedDocument`) gets it
      on one retry. A replaced worker starts empty.
@@ -1004,7 +1056,7 @@ E4c. The request is a 404 now.
 | Test | Covers |
 |---|---|
 | `packages/api/src/__tests__/integration/course-maps.test.ts` "getBaseMapInfo under a pinned document" | every pinned event carries its document hash and the scale / tilt agree across two events of the file; without a pin "No base map uploaded" and `getBaseMapInfoOrNull` → null |
-| `packages/api/src/render/__tests__/window-raster.test.ts` | `objectsNear` (the print's window crop) |
+| `packages/shared/src/print/__tests__/prepared-document.test.ts` (the API's `render/__tests__/window-raster.test.ts` until G13) | `objectsNear` (the print's window crop), `prepareDocument`'s cache |
 
 ## 11. Corpus numbers
 
@@ -1257,7 +1309,7 @@ The tool's own tests (`print-run.test.ts`, `measure-print.test.mjs`,
   917 kB and Sprint A3 654 kB (§11.5); 05 Appendix B's 0.25 / 0.5 MB
   assumed 6.7× / 1.5× fewer path points than the windows hold and the
   rest is points inside the frame. The object margin of the window (20 mm,
-  `window-raster.ts`) is C12's area; text and hatch lines outside the
+  `print/prepared-document.ts` since G13) is C12's area; text and hatch lines outside the
   frame are still written (`map-rendering.md` §5.3 "Frame culling").
 - **Corpus gate** (§11.3): every page passed since C10, until the tool
   went in E4a. Crop-A's 7 µm hatch offset between PDF and oracle is
@@ -1294,5 +1346,21 @@ The tool's own tests (`print-run.test.ts`, `measure-print.test.mjs`,
   exchange as one sheet per part (§5.2), so several frames on one sheet
   stay Pending (decided on the user's standing instruction 2026-11-07,
   for review).
+- **The print job, the browser's worker and its offline cache** (G15–G17):
+  G13 made the pipeline isomorphic (§1) but nothing outside the API calls
+  it yet; the job descriptor (§8.5), the Web Worker host and byte
+  identity with the server (slice G answer 3) are those rows'.
+- **Locale-dependent sorts on the browser path** (found in G13's
+  review, moved verbatim, not a behaviour change): `resolveMapLayout`
+  sorts an all-controls or setter sheet's sites with
+  `localeCompare(…, undefined, { numeric: true })` — the host's default
+  locale, and a start or finish sorts by its name — and the label
+  placement's tie-break (`control-label-placement.ts`) does the same. A
+  Swedish browser and an en-US server could order such names
+  differently, so the bytes would differ. G16 pins the locale (after
+  checking the server's current order) before its byte-identity test.
+- **Description sheets** (`buildDescriptionsPdf`, §6.4) stay API-only:
+  `course-maps/descriptions-pdf.ts` reads its rows from the database and
+  has its own writer, fonts and yield; no G row needs them in the browser.
 - **Serif and mono faces**: no file ships (`map-rendering.md` §4.10), so
   no PDF font either.

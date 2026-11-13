@@ -18,9 +18,11 @@ import { nextServerHlc } from "./serverClock.js";
 type Db = PrismaClient | Prisma.TransactionClient;
 type Row = { id: string; seq: number; kind: string; geometry: unknown; props: unknown; scope: unknown; z: number; version: bigint };
 
-export type StoredScope = course.CourseObjectScope<string>;
+/** The stored row shape and the scope filter live in the shared course layer since G13 (the print pipeline reads them, docs/course-print.md §1). */
+export type StoredScope = course.StoredScope;
 /** A row as the layer and the snapshot read it: body + UUID scope. */
-export type StoredCourseObject = course.CourseObjectBody & { id: string; seq: number; scope: StoredScope; z: number; version: bigint };
+export type StoredCourseObject = course.StoredCourseObject;
+export const { objectsInScope } = course;
 
 const storedScopeSchema = course.courseObjectScopeSchemaOf(z.string().uuid());
 
@@ -162,10 +164,4 @@ export async function classesByCourse(db: Db, eventId: bigint): Promise<Map<stri
   for (const c of classes) add(c.courseId!, c.id);
   for (const p of pools) add(p.courseId, p.classId);
   return out;
-}
-
-/** The objects drawn with a course (UUID), or with no course (`null`: `all`-scoped only). */
-export function objectsInScope(objects: readonly StoredCourseObject[], courseId: string | null, byCourse: ReadonlyMap<string, string[]>): StoredCourseObject[] {
-  const drawn = courseId === null ? null : { courses: [courseId], classes: byCourse.get(courseId) ?? [] };
-  return objects.filter((o) => course.courseObjectInScope(o.scope, drawn));
 }

@@ -14,13 +14,13 @@ import { PDFArray, PDFDict, PDFDocument, PDFName, PDFNumber, PDFRawStream, PDFRe
 import sharp from "sharp";
 import { Client } from "pg";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
-import { defaultMapAppearance } from "@oxygen/shared";
+import { defaultMapAppearance, sheetForMapRow, type PrintMapRow } from "@oxygen/shared";
 import { applyEventMap } from "../../event-map.js";
 import { clearEventDocumentCaches } from "../../map-store/event-document.js";
-import { loadPinnedPrintDocument, pageInputFor, pinnedPrintSource, renderCoursePages, sheetForMapRow, type PrintMapRow } from "../../course-maps/pdf-page.js";
+import { loadPinnedPrintDocument, pinnedPrintSource, renderCoursePages } from "../../course-maps/pdf-page.js";
+import { pageInputFor, composePage } from "@oxygen/shared/print";
 import { classesByCourse, loadCourseObjects, writeCourseObject } from "../../course-objects.js";
 import { loadBundledFonts } from "../../render/fonts.js";
-import { composePage } from "@oxygen/shared/print";
 import { renderCoursePagesInWorker, resetPrintWorkers } from "../../course-maps/print-worker-host.js";
 import { hasTool, qpdfCheck } from "../../render/pdf-golden.js";
 import { createTestEvent, disconnect, type TestEventContext } from "../helpers/test-db.js";

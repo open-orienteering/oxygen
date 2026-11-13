@@ -6,31 +6,29 @@
  * window it shows, the overlay geometry and the text placeholder values.
  *
  * `courseMap.list`, `resolveSheet` and the print path go through here so a
- * template preview and a saved map page resolve identically.
+ * template preview and a saved map page resolve identically. Pure and
+ * isomorphic (docs/course-print.md §1): the browser resolves the same
+ * sheets as the API (G13).
  */
 
+import { z } from "zod";
+import { displayCode, firstCode, isStartOrFinish } from "../control-display.js";
+import { courseSequenceOf, crossingRowsOf, rowKind, type SequenceColumns } from "../course/sequence.js";
+import { sectionsOf } from "../course/structure.js";
+import type { ControlDescription, CourseDescriptionInstructions } from "../types.js";
+import { type DescriptionRow, type DescriptionSheetHeader, buildDescriptionSheet } from "./description-rows.js";
+import { mapWindowForFrame } from "./geometry.js";
+import type { CourseOverlayControl, CourseOverlayLeg } from "./overlay-types.js";
 import {
-  buildDescriptionSheet,
-  course as courseLib,
-  mapTemplateSettingsSchema,
-  mapWindowForFrame,
-  courseMapObjectSchema,
-  type ControlDescription,
-  type CourseDescriptionInstructions,
   type CourseMapDocument,
   type CourseMapObject,
   type CourseMapOverrides,
-  type CourseOverlayControl,
-  type CourseOverlayLeg,
-  type DescriptionRow,
-  type DescriptionSheetHeader,
   type MapPoint,
-  type MapTextValues,
   type MapWindow,
-} from "@oxygen/shared";
-import { z } from "zod";
-import { displayCode, firstCode, isStartOrFinish } from "../control-id.js";
-import { courseSequenceOf, crossingRowsOf, rowKind, type SequenceColumns } from "../course-structure.js";
+  courseMapObjectSchema,
+  mapTemplateSettingsSchema,
+} from "./schema.js";
+import type { MapTextValues } from "./text.js";
 
 const objectsSchema = z.array(courseMapObjectSchema);
 
@@ -227,7 +225,7 @@ export interface ResolvedMapLayout {
 
 /**
  * The start and finish a course draws (docs/course-print.md §5.2 "Sites"):
- * the one sequence rule (course-structure.ts `courseSequenceOf`) over the
+ * the one sequence rule (`course/sequence.ts` `courseSequenceOf`) over the
  * event's live controls — the stored structure's explicit ends, else the
  * columns', completed by the lowest-seq start / finish unless
  * `firstAsStart` / `lastAsFinish`. A NULL structure reads the columns, as
@@ -418,7 +416,7 @@ export function resolveMapLayout(
   if (input.kind === "course" && input.section !== undefined) {
     const exchange = new Set(rawControls.filter((c) => c.kind === "map_exchange").map((c) => c.id));
     const placed = controls.filter((c) => c.x !== 0 || c.y !== 0);
-    const parts = courseLib.sectionsOf(placed, (c) => c.type === "control" && exchange.has(c.id));
+    const parts = sectionsOf(placed, (c) => c.type === "control" && exchange.has(c.id));
     const part = parts[input.section];
     if (parts.length >= 2 && part) {
       section = input.section;

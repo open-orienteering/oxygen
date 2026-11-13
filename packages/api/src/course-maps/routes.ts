@@ -1,19 +1,12 @@
 import type { FastifyInstance } from "fastify";
-import { courseMapObjectSchema } from "@oxygen/shared";
+import { courseMapObjectSchema, allVariationsRow, allVariationsSuffix, rowForClass, rowForVariant, sheetForMapRow } from "@oxygen/shared";
 import { z } from "zod";
 import { prisma } from "../db.js";
 import type { Prisma } from "../generated/prisma/client.js";
 import { assertRestAccess } from "../restGuard.js";
 import { renderGate } from "../map-render-limits.js";
-import {
-  type PrintGraphic,
-  allVariationsRow,
-  allVariationsSuffix,
-  pinnedPrintSource,
-  rowForClass,
-  rowForVariant,
-  sheetForMapRow,
-} from "./pdf-page.js";
+import { pinnedPrintSource } from "./pdf-page.js";
+import type { PrintGraphic } from "@oxygen/shared/print";
 import { printGate, renderCoursePagesInWorker, resetPrintWorkers } from "./print-worker-host.js";
 import { classesByCourse, loadCourseObjects } from "../course-objects.js";
 
