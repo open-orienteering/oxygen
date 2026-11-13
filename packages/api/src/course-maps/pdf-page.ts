@@ -10,7 +10,7 @@
  * `graphics` rows stay as uploaded).
  */
 
-import { course, courseMapObjectSchema, courseMapOverridesSchema, mapGeo, setterSheetPropsSchema, windowBoundingBox, type MapWindow, type LayoutControlSource, type LayoutTemplateSource, centerOfControls, layoutControlsFromCourseControls, layoutCourseEnds, layoutCrossings } from "@oxygen/shared";
+import { course, courseMapObjectSchema, courseMapOverridesSchema, mapGeo, setterSheetPropsSchema, windowBoundingBox, type MapWindow, type LayoutControlSource, type LayoutTemplateSource, centerOfControls, layoutControlsFromCourseControls, layoutCourseEnds, layoutCrossings, type ResolveSheetInput, type SheetInput, allVariationNumbers, resolveSheet } from "@oxygen/shared";
 import { type ColourMode, PdfWriter, composePage, writePage, type PageInput } from "@oxygen/shared/print";
 import { z } from "zod";
 import type { PrismaClient, Prisma } from "../generated/prisma/client.js";
@@ -19,7 +19,6 @@ import { type PreparedDocument, WINDOW_OBJECT_MARGIN_MM, objectsNear, prepareDoc
 import { BUNDLED_FONT_FILES, bundledPdfFaces, loadBundledFonts } from "../render/fonts.js";
 import { type BaseMapInfo, getBaseMapInfo } from "./map-source.js";
 import { rowKind } from "../course-structure.js";
-import { type ResolveSheetInput, type SheetInput, allVariationNumbers, resolveSheet } from "./resolve-sheet.js";
 import { objectsInScope, type StoredCourseObject } from "../course-objects.js";
 
 type Db = PrismaClient | Prisma.TransactionClient;

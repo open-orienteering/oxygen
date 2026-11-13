@@ -6,7 +6,7 @@
  */
 
 import { describe, expect, it } from "vitest";
-import { defaultMapAppearance } from "@oxygen/shared";
+import { defaultMapAppearance } from "../course-maps/schema.js";
 import { resolveSheet, type ResolveSheetInput } from "../course-maps/resolve-sheet.js";
 
 const template = {
