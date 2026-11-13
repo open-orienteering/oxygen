@@ -63,6 +63,8 @@ export const libraryEntrySchema = z.object({
   /** Where the spec left a detail to the drawing tool and which behaviour was picked (03 §6.4). */
   notes: z.string().optional(),
   source: z.string().min(1),
+  /** Which of the library's `scaleRules` row sets enlarges this entry (docs/map-symbols.md §12.2); only on a library with `scaleRules`. */
+  scaleGroup: z.string().min(1).optional(),
 });
 
 export type LibraryEntry = z.output<typeof libraryEntrySchema>;
@@ -76,6 +78,19 @@ export const symbolLibrarySchema = z.object({
   referenceScale: z.number().int().positive(),
   /** Edition of the colour palette the library was authored against. */
   palette: paletteEditionSchema,
+  /**
+   * `base`: a specification a document is matched against as a whole.
+   * `overlay`: symbols offered and matched on any document beside its own
+   * library, never a document's library (ISSkiOM 2019; docs/map-symbols.md §12).
+   */
+  kind: z.enum(["base", "overlay"]).default("base"),
+  /**
+   * The spec's own enlargement table per row set (03 §6.6), `{ mapScale,
+   * factor }` rows; absent = `referenceScale / mapScale` (docs/map-symbols.md §12.2).
+   */
+  scaleRules: z
+    .record(z.string().min(1), z.array(z.object({ mapScale: z.number().positive(), factor: z.number().positive() })).min(1))
+    .optional(),
   entries: z.array(libraryEntrySchema).min(1),
 });
 
@@ -164,6 +179,16 @@ export function validateLibrary(library: SymbolLibrary): LibraryProblem[] {
   const seen = new Set<string>();
   const headingSv = new Map<string, string | undefined>();
   for (const e of library.entries) if (e.variant === null) headingSv.set(e.code, e.name.sv);
+  for (const [group, rows] of Object.entries(library.scaleRules ?? {})) {
+    const scales = new Set<number>();
+    for (const r of rows) {
+      if (scales.has(r.mapScale)) problems.push({ entryId: library.id, message: `scale group "${group}" lists 1:${r.mapScale} twice` });
+      scales.add(r.mapScale);
+    }
+    if (!rows.some((r) => r.mapScale === library.referenceScale && r.factor === 1)) {
+      problems.push({ entryId: library.id, message: `scale group "${group}" needs factor 1 at the reference scale 1:${library.referenceScale}` });
+    }
+  }
   for (const e of library.entries) {
     const expectedId = `${library.id}:${e.code}${e.variant ? `.${e.variant}` : ""}`;
     if (e.id !== expectedId) problems.push({ entryId: e.id, message: `id should be ${expectedId}` });
@@ -173,6 +198,15 @@ export function validateLibrary(library: SymbolLibrary): LibraryProblem[] {
       if (!index.has(c)) problems.push({ entryId: e.id, message: `palette id "${c}" is not in ${library.palette} for ${library.spec}` });
     }
     const is7xx = e.code.startsWith("7");
+    if (library.kind === "overlay" && is7xx) problems.push({ entryId: e.id, message: "an overlay library has no course symbols" });
+    if (library.scaleRules) {
+      if (e.scaleGroup === undefined) problems.push({ entryId: e.id, message: "entries need a scaleGroup when the library has scaleRules" });
+      else if (!Object.prototype.hasOwnProperty.call(library.scaleRules, e.scaleGroup)) {
+        problems.push({ entryId: e.id, message: `scale group "${e.scaleGroup}" is not in the library's scaleRules` });
+      }
+    } else if (e.scaleGroup !== undefined) {
+      problems.push({ entryId: e.id, message: "scaleGroup needs scaleRules on the library" });
+    }
     if (is7xx && !e.purpleRole) problems.push({ entryId: e.id, message: "course symbols need a purpleRole" });
     if (!is7xx && e.purpleRole) problems.push({ entryId: e.id, message: "purpleRole is only for 7xx" });
     if (e.render.type === "point" && !e.orientation) problems.push({ entryId: e.id, message: "point symbols need an orientation" });
