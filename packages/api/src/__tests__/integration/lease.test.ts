@@ -70,6 +70,8 @@ const DFP = (k: string) => `ocad:999.9:lease${mapSuffix}${k}`;
 const DLIB = "ISOM2017-2@2026.10.1";
 
 const PEER_URL = "http://peer.test";
+const PATCH_VERSION = 2n ** 60n + 12_345n;
+const PATCH_OPS = { "hide:3": { op: "hide", sourceIndex: 3 } };
 
 let ctx: TestEventContext; // node A (this process's node id: "cloud")
 let caller: ReturnType<typeof makeCaller>;
@@ -201,6 +203,10 @@ beforeAll(async () => {
     },
   });
   await dbB.event.update({ where: { id: eventB.id }, data: { kioskKey: KIOSK_KEY } });
+  // The event's map patch on B (docs/map-patches.md §3.4), its token above 2^53.
+  await dbB.mapPatch.create({
+    data: { eventId: eventB.id, documentHash, enabled: false, ops: PATCH_OPS, symbols: {}, version: PATCH_VERSION },
+  });
   // Club decisions on the cloud (fingerprints no real symbol has), and on
   // the venue one stale copy of the same key plus a row the cloud lacks.
   await dbB.clubSymbolDecision.createMany({
@@ -335,7 +341,7 @@ describe("checkout maps: failure and interop", () => {
     }));
     try {
       const res = await caller.lease.checkout({ nameId: CHECKOUT_NAME });
-      expect(res.maps).toEqual({ files: 0, sources: 0, documents: 0, fetchedBytes: 0, skipped: 0, decisions: 0 });
+      expect(res.maps).toEqual({ files: 0, sources: 0, documents: 0, fetchedBytes: 0, skipped: 0, decisions: 0, patches: 0 });
       const local = await ctx.db.event.findUniqueOrThrow({ where: { nameId: CHECKOUT_NAME }, select: { id: true } });
       expect(await ctx.db.mapFile.count({ where: { eventId: local.id } })).toBe(0);
     } finally {
@@ -406,6 +412,7 @@ describe("checkout → write → checkin lifecycle", () => {
       fetchedBytes: mapFixture.length + (await dbB.mapDocument.findUniqueOrThrow({ where: { hash: documentHash } })).sizeBytes,
       skipped: 1,
       decisions: await dbB.clubSymbolDecision.count(),
+      patches: 1,
     });
 
     // Local copy: same UUIDs, same seqs, seq counters carried over.
@@ -460,6 +467,31 @@ describe("checkout → write → checkin lifecycle", () => {
     const files = await ctx.db.mapFile.findMany({ where: { eventId: local.id } });
     expect(files).toHaveLength(1); // the pre-pipeline row stayed behind
     expect(files[0]).toMatchObject({ fileName: "lease.ocd", sourceHash, documentHash, scale: 10000, rotationCorrection: 1.5, clubMapVersionId: null });
+  });
+
+  it("carries the map patch verbatim, its token exact, and serves it on the venue (map-patches.md §3.4)", async () => {
+    const local = await ctx.db.event.findUniqueOrThrow({ where: { nameId: CHECKOUT_NAME }, select: { id: true, nameId: true, zeroTime: true } });
+    const rowB = await dbB.mapPatch.findUniqueOrThrow({ where: { eventId: eventB.id } });
+    const rowA = await ctx.db.mapPatch.findUniqueOrThrow({ where: { eventId: local.id } });
+    expect(rowA).toMatchObject({ id: rowB.id, documentHash, enabled: false, ops: PATCH_OPS, symbols: {}, version: PATCH_VERSION });
+
+    const delivered = { version: PATCH_VERSION.toString(), patch: { documentHash, enabled: false, ops: PATCH_OPS, symbols: {} } };
+    expect(await makeCaller(local).mapPatch.get()).toEqual(delivered);
+    const server: FastifyInstance = Fastify({ logger: false });
+    registerMapDocumentRoutes(server);
+    await server.ready();
+    const previousMode = process.env.AUTH_MODE;
+    process.env.AUTH_MODE = "proxy";
+    try {
+      const res = await server.inject({ method: "GET", url: `/api/maps/${CHECKOUT_NAME}/patch?k=${KIOSK_KEY}` });
+      expect(res.statusCode).toBe(200);
+      expect(res.json()).toEqual(delivered);
+      expect(res.headers.etag).toBe(`"${PATCH_VERSION}"`);
+    } finally {
+      if (previousMode === undefined) delete process.env.AUTH_MODE;
+      else process.env.AUTH_MODE = previousMode;
+      await server.close();
+    }
   });
 
   it("merges the club's symbol decisions: newer decided_at wins, nothing deleted", async () => {

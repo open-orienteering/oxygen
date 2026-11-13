@@ -130,7 +130,7 @@ the pinned document unchanged.
 ### 1.5 Merging
 
 `mergePatch(patch, change)` is the per-op-id merge the server runs under
-the row lock (`mapPatch.apply`, row G3) and a client runs for its
+the row lock (`mapPatch.applyChange`, row G3) and a client runs for its
 optimistic copy:
 
 ```ts
@@ -317,14 +317,14 @@ Migration `20261113120000_map_patches` (additive: a new table).
 | Procedure | Input | Permission | Result |
 |---|---|---|---|
 | `mapPatch.get` | — | `courses.view` or the kiosk key | `{ version, patch }` (§3.3) |
-| `mapPatch.apply` | `{ documentHash } ∧ patchChangeSchema` (`put`, `remove`, `putSymbols`) | `courses.edit` | `{ version, patch }` |
+| `mapPatch.applyChange` | `{ documentHash } ∧ patchChangeSchema` (`put`, `remove`, `putSymbols`) | `courses.edit` | `{ version, patch }` |
 | `mapPatch.setEnabled` | `{ enabled: boolean }` | `courses.edit` | `{ version, patch }` |
 
 Writes are not lease-guarded and not journaled: the patch is cloud-owned
 non-critical data (08 §4.8). Each write is one transaction:
 
 1. Read the event's pin (`map-storage.md` §4.6). No pin →
-   `PRECONDITION_FAILED` `PATCH_NO_DOCUMENT`. For `apply`, a
+   `PRECONDITION_FAILED` `PATCH_NO_DOCUMENT`. For `applyChange`, a
    `documentHash` other than the pin → `PRECONDITION_FAILED`
    `PATCH_DOCUMENT_MISMATCH`: the client's ops are keyed onto another
    document than the one the server would key them onto.
@@ -333,7 +333,7 @@ non-critical data (08 §4.8). Each write is one transaction:
    Two first writers both end on the one row.
 3. A row keyed to another document than the pin is **dormant** (below):
    `PRECONDITION_FAILED` `PATCH_STALE`.
-4. `apply`: `mergePatch(row, change)` (§1.5). `setEnabled`: the new value.
+4. `applyChange`: `mergePatch(row, change)` (§1.5). `setEnabled`: the new value.
    The stored `ops` + `symbols` JSON is capped at 4 MiB
    (`MAP_PATCH_MAX_BYTES`, `PAYLOAD_TOO_LARGE`): a patch is kilobytes,
    and it travels inside the one JSON checkout snapshot.
@@ -342,7 +342,10 @@ non-critical data (08 §4.8). Each write is one transaction:
    once" holds for the token too. Otherwise the row is written with a
    new version.
 
-`apply` takes no `baseVersion`: the merge is per op id, so two editors on
+The merge procedure is `applyChange`, not 08 §6's `apply`: tRPC
+reserves `apply` (with `call`) as a router key.
+
+`applyChange` takes no `baseVersion`: the merge is per op id, so two editors on
 different objects both win, and two on the same op id are
 last-writer-wins (§1.5). Ops are not checked against the document on
 write: an op that cannot be applied is reported at application (§2.3),
@@ -444,3 +447,12 @@ document only a patch points at, and touches its `last_referenced_at`.
 |---|---|---|
 | Unit (shared) | `packages/shared/src/map-document/__tests__/patch.test.ts` | schema: each op parses, a key that is not the op's id, a bad UUID, a non-integer or out-of-range coordinate, a text `add`, a patch symbol's `match` dropped, defaults; `patchChangeSchema` refusals; `mergePatch`: put replaces by id, remove, an absent remove, twice = once, two changes in either order deep-equal and the same JSON, input not mutated; `applyPatch`: identity (null, disabled, empty) returns the same document, hide flags the object found by `sourceIndex` (a fixture whose Hilbert order differs from source order), modify (coordinates, flags, bbox, `coordStart` of it and its neighbours, angle, type and text kept), resymbol to `{ doc }` and `{ patch }`, hide + modify + resymbol on one object, add (indices `≥ N` in op-id order, `ADDED_SOURCE_INDEX`, the combined table in key order), every base object unchanged, any insertion order of `ops` and `symbols` gives a deep-equal result, applying twice from the same input equals once, the input untouched, each issue code reported and the other ops still applied (a prototype-name patch key is `symbol-missing`), a rectangle's kind check, ops on an already-effective document throw while identity still returns it |
 | Unit (shared) | `packages/shared/src/map-document/__tests__/render-bridge.test.ts` | over an effective document: a hidden object missing from `objects` and `docIdx` with `stats.patchHidden`, a modified one symbolised at its new place, an added one with a patch symbol symbolised and its `docIdx ≥ baseCount`, `only` with an added index, a patch symbol drawn from its own `render` (not rescaled by `documentFactor`), a disabled patch deep-equal to the unpatched document |
+| Unit (api) | `packages/api/src/__tests__/map-patches.test.ts` | `patchOfRow` (sorted keys; an unparseable row → null with a warning), `deliveredPatch` (the pin's row with an exact decimal version above 2^53; disabled delivered as it is; no row / no pin / dormant → `{ "0", null }`), `samePatchContent` key-order blind, `assertPatchSize` (`PAYLOAD_TOO_LARGE` past 4 MiB), `patchEtag` |
+| Unit (api) | `packages/api/src/__tests__/snapshot-maps.test.ts` | `snapshotPatchOf`: the row with an exact decimal token; nothing without a row or for a dormant one |
+| Unit (api) | `packages/api/src/__tests__/venueForwarder.test.ts` | `mapPatch.applyChange` / `setEnabled` cloud-owned and forwarded, `mapPatch.get` served locally |
+| Unit (api) | `packages/api/src/__tests__/backup.test.ts` | `map_patches` directly after `map_files`; the blob sections' filters include the patch's document and its source |
+| Integration (api) | `packages/api/src/__tests__/integration/map-patches.test.ts` | no patch before a write; `applyChange` creates the row keyed to the pin and merges put / remove (an absent id a no-op) / putSymbols with sorted keys; twice = once and an empty change keep the version; six concurrent first writers on different ids → one row with all six ops; two writers on one id → one of the two states whole; refusals (duplicate id `BAD_REQUEST`, put + remove of one id, `PATCH_DOCUMENT_MISMATCH`, `PATCH_NO_DOCUMENT` for `applyChange` and `setEnabled`); `setEnabled` creates an empty row, advances only on a change, a disabled patch delivered as it is; a dormant row (pin moved) not delivered, `patchVersion` `"0"`, writes `PATCH_STALE`, row untouched, delivered again when the pin returns; the table (defaults, one row per event, `RESTRICT` on the document, cascade with the event, an array in `ops` refused); access (kiosk key and viewer read, cannot write; stranger `FORBIDDEN`; course setter writes); the route 200 with `ETag` / `Cache-Control`, 304, a stale ETag 200, header and `?k=` kiosk key, viewer 200, anonymous and wrong key 401, stranger 403, unknown event 404; `mapMetadata.patchVersion` equals the route's version |
+| Integration (api) | `packages/api/src/__tests__/integration/lease.test.ts` | checkout carries the patch row verbatim (id, document, `enabled`, ops, token above 2^53 exact), `maps.patches` counted (0 from an exporter without the map part); the box's `mapPatch.get` and route (kiosk key) serve it with `ETag` = the token |
+| Integration (api) | `packages/api/src/__tests__/integration/backup.test.ts` | the dump's `map_patches` section directly after `map_files` with the event's row; restored into another event with `event_id` rewritten, token and ops exact |
+| Integration (api) | `packages/api/src/__tests__/integration/map-storage-gc.test.ts` | a document only a patch references is kept (dry run too) and touched; `RESTRICT` refuses its delete; collected once the patch is gone and a fresh grace passed |
+| E2E | `e2e/map-documents.spec.ts` | after the UI upload: the patch route `{ "0", null }`, `mapPatch.applyChange` over tRPC, the route 200 with the op and the ETag, 304 on revalidation, anonymous 401 |

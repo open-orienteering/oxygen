@@ -68,9 +68,9 @@ describe("shouldForwardToCloud", () => {
   });
 
   it("forwards the map patch's writes and serves its reads locally (map-patches.md §3.4)", () => {
-    expect(isCloudOwnedMutation("mapPatch.apply")).toBe(true);
+    expect(isCloudOwnedMutation("mapPatch.applyChange")).toBe(true);
     expect(isCloudOwnedMutation("mapPatch.setEnabled")).toBe(true);
-    expect(shouldForwardToCloud("POST", "/trpc/mapPatch.apply")).toBe(true);
+    expect(shouldForwardToCloud("POST", "/trpc/mapPatch.applyChange")).toBe(true);
     expect(shouldForwardToCloud("GET", "/trpc/mapPatch.get")).toBe(false);
     // Course objects stay local until G18.
     expect(isCloudOwnedMutation("courseObject.update")).toBe(false);

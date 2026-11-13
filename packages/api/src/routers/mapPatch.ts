@@ -19,7 +19,7 @@ export const mapPatchRouter = router({
   get: kioskOrCoursesViewProcedure.query(({ ctx }): Promise<PatchDelivery> => eventPatch(ctx.db, ctx.event.id)),
 
   /** Merge `put` / `remove` / `putSymbols` per op id (§1.5) into the patch keyed onto `documentHash`, which must be the pin. */
-  apply: coursesEditProcedure
+  applyChange: coursesEditProcedure
     .input(z.object({ documentHash: documentHashSchema }).and(mapDocument.patchChangeSchema))
     .mutation(({ ctx, input }): Promise<PatchDelivery> => {
       const { documentHash, ...change } = input;

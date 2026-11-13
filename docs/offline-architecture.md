@@ -112,6 +112,9 @@ tRPC, never journaled, and **cloud-owned even during a lease**:
 - The venue keeps a **checkout-time copy** of cloud-owned data for local
   reads, refreshed periodically while online. Staleness is acceptable
   because of the boundary rule below.
+- **The event's map patch** (`map_patches`, `docs/map-patches.md` §3.4)
+  is cloud-owned the same way: it travels in the checkout snapshot's
+  `maps` part for the venue's map, and `mapPatch.` writes are forwarded.
 - **Global tables** (`runner_directory`, `club_directory`,
   `eventor_event_meta`, `oxygen_settings`) are cloud-owned by definition —
   they are not event-scoped and never participate in a lease.

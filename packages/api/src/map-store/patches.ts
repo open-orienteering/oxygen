@@ -163,7 +163,7 @@ async function writeIfChanged(tx: Prisma.TransactionClient, eventId: bigint, row
   return { version: version.toString(), patch: next };
 }
 
-/** `mapPatch.apply` (§3.2): merge `change` per op id into the event's patch under the row lock. */
+/** `mapPatch.applyChange` (§3.2): merge `change` per op id into the event's patch under the row lock. */
 export function applyPatchChange(db: PrismaClient, eventId: bigint, documentHash: string, change: mapDocument.PatchChange): Promise<PatchDelivery> {
   return db.$transaction(async (tx) => {
     const { row, patch } = await lockPatchRow(tx, eventId, documentHash);
