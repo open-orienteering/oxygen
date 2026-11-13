@@ -19,7 +19,7 @@ export const water: LibraryEntryInput[] = [
     "310.1", "Marsh (in ski orienteering map)", "A",
     area({ patterns: [pattern(glyph(stroke(C.blue50, 100, [-450, 0, 450, 0]), false), { w: 1150, h: 300 }, { shiftedRows: true, rotate: "never" })] }),
     {
-      notes: "\"The same symbol as Indistinct marsh (310)\" in blue 50 %: ISOM 2017-2 310's dashes 0.9 × 0.1 mm, gap 0.25 mm, rows 0.3 mm (CC) apart, alternate rows shifted; orientated to north.",
+      notes: "\"The same symbol as Indistinct marsh (310)\" in blue 50 %: ISOM 2017-2 310's dashes 0.9 × 0.1 mm, gap 0.25 mm, rows 0.3 mm (CC) apart, alternate rows shifted; orientated to north. The ISSkiOM drawing is unlabelled and visibly finer (about half ISOM's dimensions); the text's \"same symbol\" wins.",
       source: `${EDITION}, §3.3.2, symbol 310.1; dimensions ISOM 2017-2 Rev 6 (IOF Map Commission, 2024), symbol 310`,
     },
   ),

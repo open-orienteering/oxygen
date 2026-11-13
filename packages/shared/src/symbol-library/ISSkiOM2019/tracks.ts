@@ -69,15 +69,15 @@ export const tracks: LibraryEntryInput[] = [
     notes: "Green 100 % cross-hatch (2023 erratum), lines 0.20 mm 0.80 mm (CC) apart at ±45°, fixed to north as drawn; Ski-O green outline 0.13 mm. green100-area is ticked for ISSkiOM by Oxygen (docs/map-symbols.md §12.3).",
   }),
   entry("813.1", "Public snow mobile route", "L", line({
-    main: dashed(G, 330, 1500, 1000, { halo: mask(570, 330, true) }),
-    borders: doubleLine(border(G, 120, 225)),
+    main: dashed(G, 570, 1500, 1000, { halo: mask(810, 570, true) }),
+    borders: doubleLine(border(G, 120, 345)),
   }), {
-    notes: `Ski-O green 0.57 mm: 0.12 mm edges and a 0.33 mm core dashed 1.5 mm green / 1.0 mm white — the white is the mask showing through the core's gaps. ${MASK_NOTE} ${DASH_NOTE}`,
+    notes: `Ski-O green 0.81 mm: 0.12 mm edges and a 0.57 mm core dashed 1.5 mm green / 1.0 mm white — the white is the mask showing through the core's gaps. The "0.57" label marks the core, as 801.2's "0.61" does; the drawing is as wide as 813.2's. ${MASK_NOTE} ${DASH_NOTE}`,
   }),
   entry("813.2", "Public snow mobile route, compulsory to stay on", "L", line({
     main: dashed(O, 330, 1500, 1000, { halo: mask(810, 330, true) }),
     borders: { ...doubleLine(border(O, 120, 225)), extraPairs: [{ left: border(K, 120, 345), right: border(K, 120, 345) }] },
   }), {
-    notes: `Black 0.12, orange 0.12, a 0.33 mm core dashed 1.5 mm orange / 1.0 mm white, orange 0.12, black 0.12: 0.81 mm overall, the five bands the drawing labels (docs/map-symbols.md §12.1). ${MASK_NOTE} ${DASH_NOTE}`,
+    notes: `Black 0.12, orange 0.12, a 0.33 mm core dashed 1.5 mm orange / 1.0 mm white, orange 0.12, black 0.12: 0.81 mm overall, 813.1's width — Rev 4's black edges inside, the white core reduced from 0.57 to 0.33 mm. ${MASK_NOTE} ${DASH_NOTE}`,
   }),
 ];

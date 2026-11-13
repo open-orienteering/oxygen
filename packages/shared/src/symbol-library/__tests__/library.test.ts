@@ -529,9 +529,9 @@ describe("symbol library — dimension table, ISSkiOM 2019 Revision 4 (c)", () =
     expect(A("808").fill).toBeUndefined();
   });
 
-  it("813: snow mobile route, 0.33 core dashed 1.5 / 1.0 over the mask; .1 green 0.57, .2 orange and black 0.81", () => {
-    expect(L("813.1").main).toMatchObject({ colour: G, widthUm: 330, dash: dash(1500, 1000), halo: { colour: W, widthUm: (570 + 300 - 330) / 2, continuous: true } });
-    expect(L("813.1").borders).toMatchObject({ left: { colour: G, widthUm: 120, shiftUm: 225 }, right: { colour: G, widthUm: 120, shiftUm: 225 } });
+  it("813: snow mobile route 0.81 overall, the core dashed 1.5 / 1.0 over the mask; .1 green, core 0.57; .2 black, orange, core 0.33", () => {
+    expect(L("813.1").main).toMatchObject({ colour: G, widthUm: 570, dash: dash(1500, 1000), halo: { colour: W, widthUm: (810 + 300 - 570) / 2, continuous: true } });
+    expect(L("813.1").borders).toMatchObject({ left: { colour: G, widthUm: 120, shiftUm: 345 }, right: { colour: G, widthUm: 120, shiftUm: 345 } });
     expect(L("813.1").borders!.left!.dash).toBeUndefined();
     expect(L("813.2").main).toMatchObject({ colour: O, widthUm: 330, dash: dash(1500, 1000), halo: { colour: W, widthUm: (810 + 300 - 330) / 2, continuous: true } });
     expect(L("813.2").borders).toMatchObject({

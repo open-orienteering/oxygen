@@ -1166,11 +1166,11 @@ The user's scope (2026-11-13): §3.3.1's thirteen track symbols plus
 | `805` | Road covered with snow | L | track | black 700 | `black100` |
 | `807` | Unploughed road | L | track | two black 120 lines 140 apart (380 overall), dashed 3 000 / 500 | `black100` |
 | `808` | Prepared area | A | track | green 100 % cross-hatch: lines 200 wide, 800 (CC), ±45°; Ski-O green outline 130 | `green100-area`, `green-skio` |
-| `813.1` | Public snow mobile route | L | track | green 570: 120 edges, a 330 core dashed 1 500 green / 1 000 white | `green-skio`, `white-skio` |
+| `813.1` | Public snow mobile route | L | track | green 810: 120 edges, a 570 core dashed 1 500 green / 1 000 white | `green-skio`, `white-skio` |
 | `813.2` | Public snow mobile route, compulsory to stay on | L | track | black 120, orange 120, a 330 core dashed 1 500 orange / 1 000 white, orange 120, black 120 (810 overall) | `orange-skio`, `black100`, `white-skio` |
 | `301.1` | Crossable body of water | A | other | blue 50 % with a 100 blue bank line (as ISOM 302) | `blue50-area`, `blue100-line` |
 | `301.2` | Body of water that shall not be crossed | A | other | blue 100 % with a 300 black bank line | `blue100-area`, `black100` |
-| `310.1` | Marsh (in ski orienteering map) | A | other | ISOM 2017-2 310's dashes (900 × 100, gap 250, rows 300 (CC), alternate rows shifted) in blue 50 %, orientated to north | `blue50-area` |
+| `310.1` | Marsh (in ski orienteering map) | A | other | ISOM 2017-2 310's dashes (900 × 100, gap 250, rows 300 (CC), alternate rows shifted) in blue 50 %, orientated to north — the text's "same symbol as 310"; the ISSkiOM drawing is unlabelled and visibly finer | `blue50-area` |
 
 Readings of the text, each in the entry's `notes`:
 
@@ -1189,11 +1189,13 @@ Readings of the text, each in the entry's `notes`:
 - **813.1 / 813.2's white dashes** are where the core's dashes leave a
   gap and the mask shows through: no white row sits above Ski-O green,
   and the colour line names only the white under lower purple.
-- **813.2 is 0.81 mm overall.** Its drawing labels five bands — 0.12,
-  0.12, 0.33, 0.12, 0.12 — and the drawing's band widths are in that
-  proportion; it is the one compulsory state whose overall width differs
-  from its green state (Rev 4 also "reduced the white dashed line to
-  0.33 mm").
+- **813 is 0.81 mm overall in both states.** 813.1's "0.12 / < 0.57 /
+  0.12" labels its green edges and its core, as 801.2's "0.12 / < 0.61 /
+  0.12" does (measured: both 813 drawings are the same width, at the
+  scale on which 801.2 measures 0.85). 813.2 labels five bands — 0.12,
+  0.12, 0.33, 0.12, 0.12 — Rev 4's black edges inside and the white core
+  "reduced to 0.33 mm" from 0.57, so like every compulsory state it keeps
+  its green state's overall width.
 - **Junctions** ("drawn solid", "the beginning of a slow track is drawn
   with a short line") are the mapper's drawing, not the symbol's;
   OCAD's dash fitting (`DASH_NOTE`) starts and ends every dashed section
@@ -1259,7 +1261,11 @@ column does not tick (user decisions 2026-11-13):
   ISSkiOM whites are upper white (above the tracks) and white over
   yellow (below every map colour but yellow). In the ISSkiOM stack the
   mask therefore hides brown, the road and area colours, and is itself
-  under black, blue lines, the tracks and both purples.
+  under black, blue lines, the tracks and both purples. ISSkiOM's 301.1
+  drawing shows a track's mask cutting the blue bank line as well; no
+  position satisfies both that and "under lower purple" (blue lines sort
+  above lower purple), so the text's colour line wins — open for the
+  user before G21 inserts the row into every stack.
 - **`green100-area` is ticked for ISSkiOM** — 808's raster is "green
   100 %" since the 2023 erratum; the row already exists in every ISOM and
   ISSprOM stack.
