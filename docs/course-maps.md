@@ -280,7 +280,7 @@ code (`template_missing`, `map_scale_missing`, `control_outside_frame`,
 `description_outside_page`, `object_outside_page`).
 
 The control-description block is the same sheet the course editor shows on
-the map: `resolve-layout.ts` builds it with the shared `buildDescriptionSheet`
+the map: `resolve-layout.ts` (`@oxygen/shared` `course-maps/`, G13) builds it with the shared `buildDescriptionSheet`
 (three-row IOF header — event / classes / course · length · climb — start row,
 control rows, special-instruction rows, finish row with the measured
 last-control → finish distance) and `print/description.ts`
