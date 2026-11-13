@@ -11,6 +11,34 @@ test.describe("Competition Selection", () => {
     await expect(version).toHaveText(/Build: \d{4}-\d{2}-\d{2} \d{2}:\d{2}/);
     await expect(version).toContainText("Image: e2e");
     await expect(version).toContainText("Commit: e81729b");
+    // The application version is the server's (OXYGEN_VERSION in
+    // playwright.config.ts), not the dev bundle's `<package>-dev`.
+    await expect(page.getByTestId("app-version")).toHaveText(
+      "Oxygen v0.7.0-3-ge81729b · Connected to PostgreSQL",
+    );
+  });
+
+  test("hides Image: when the deploy ref is the version's own tag", async ({ page }) => {
+    // A release deployed by its tag (`deploy.sh v0.7.0`): the footer reads
+    // `Oxygen v0.7.0` and the build line carries no `Image: v0.7.0`.
+    await page.route("**/api/version", (route) =>
+      route.fulfill({
+        json: {
+          startedAt: "2026-11-13T17:14:00.000Z",
+          buildId: "2dd412d0000000000000000000000000000000000",
+          deployRef: "ghcr.io/open-orienteering/oxygen:v0.7.0",
+          version: "0.7.0",
+        },
+      }),
+    );
+    await page.goto("/");
+
+    const version = page.getByTestId("build-version");
+    await expect(version).toContainText("Commit: 2dd412d", { timeout: 10000 });
+    await expect(version).not.toContainText("Image:");
+    await expect(page.getByTestId("app-version")).toHaveText(
+      "Oxygen v0.7.0 · Connected to PostgreSQL",
+    );
   });
 
   test("should list competitions from the database", async ({ page }) => {

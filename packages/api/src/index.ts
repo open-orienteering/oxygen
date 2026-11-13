@@ -91,11 +91,20 @@ async function main() {
   // `sha-…`). Images carry their immutable SHA ref by default; deploy
   // tooling overrides it with the actual tag used for the rollout.
   const DEPLOY_REF = process.env.OXYGEN_DEPLOY_REF || null;
+  // The application version (Dockerfile ARG BUILD_VERSION, computed by
+  // scripts/build-version.mjs): `0.7.0` on a release, `0.7.0-3-gabc1234`
+  // past it. Null on a local build; the web then shows its own baked value.
+  const VERSION = process.env.OXYGEN_VERSION || null;
   server.get("/health", async () => ({ status: "ok", startedAt: SERVER_START }));
   server.get("/api/version", async (_req, reply) =>
     reply
       .header("Cache-Control", "no-store")
-      .send({ startedAt: SERVER_START, buildId: BUILD_ID, deployRef: DEPLOY_REF }),
+      .send({
+        startedAt: SERVER_START,
+        buildId: BUILD_ID,
+        deployRef: DEPLOY_REF,
+        version: VERSION,
+      }),
   );
 
   registerBackupRoute(server);
