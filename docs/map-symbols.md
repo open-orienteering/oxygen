@@ -1081,3 +1081,158 @@ resolves canonical entries through `paletteIndexOfStack(header.colours)`.
   course layer's appearance multipliers (§7).
 - Mapper's 511-coded power line (suggested 510 only) is not normalised
   (A15 scoped to the railway); revisit if a Mapper corpus map shows it.
+
+## 12. ISSkiOM 2019: an overlay library
+
+`ISSkiOM2019` is the third registered library (G20; slice G answer 9).
+It is **not** a third base library: a ski-O map's base symbols stay
+ISOM 2017-2's (or ISSprOM's), and `ISSkiOM2019` holds only what ski
+orienteering adds — the track symbols in every width and state, the
+two ski-only roads, the prepared area, and the ski versions of three water
+and marsh symbols. Its entries are offered and matched on **any**
+document beside the document's own library (G8, G21); a document's
+`header.library` is never the overlay, and `chooseLibrary` never returns
+it.
+
+Source: *ISSkiOM 2019, International Specification for Ski Orienteering
+Maps, Revision 4* (IOF Map Commission, September 2026, valid from
+1 November 2026), fetched from the IOF's mapping page (orienteering.sport)
+on 2026-11-13 and kept under `.local/research/iof-specs/` with the other
+spec texts (never committed). Dimensions are the text's and its
+drawings' only (§3), in µm at the text's reference scale **1:15 000**.
+
+### 12.1 What is in it
+
+The user's scope (2026-11-13): §3.3.1's thirteen track symbols plus
+§3.3.2's three water / marsh variants. Sixteen headings, one entry each
+(no variants):
+
+| Entry | Heading | Type | Scale group | Drawing (µm at 1:15 000) | Palette ids |
+|---|---|---|---|---|---|
+| `801.1` | Very wide track > 3.0 m | L | track | green 850 | `green-skio`, `white-skio` |
+| `801.2` | Very wide track > 3.0 m, compulsory to stay on | L | track | orange 610 inside black 120 edges (850 overall) | `orange-skio`, `black100`, `white-skio` |
+| `802.1` | Wide track 1.5 - 3.0 m | L | track | green 600 | `green-skio`, `white-skio` |
+| `802.2` | Wide track 1.5 - 3.0 m, compulsory to stay on | L | track | orange 360 inside black 120 edges (600) | `orange-skio`, `black100`, `white-skio` |
+| `803.1` | Track 0.8 - 1.2 m | L | track | green 500, dashes 3 000 / gaps 500 | `green-skio`, `white-skio` |
+| `803.2` | Track 0.8 - 1.2 m, compulsory to stay on | L | track | orange 260 inside black 120 edges (500), dashed 3 000 / 500 together | `orange-skio`, `black100`, `white-skio` |
+| `804.1` | Track, slow 0.8 - 1.0 m | L | track | green dots ø 700 every 1 300 (CC) | `green-skio`, `white-skio` |
+| `804.2` | Track, slow 0.8 - 1.0 m, compulsory to stay on | L | track | black dots ø 700 with orange ø 460 inside, every 1 300 (CC) | `orange-skio`, `black100`, `white-skio` |
+| `805` | Road covered with snow | L | track | black 700 | `black100` |
+| `807` | Unploughed road | L | track | two black 120 lines 140 apart (380 overall), dashed 3 000 / 500 | `black100` |
+| `808` | Prepared area | A | track | green 100 % cross-hatch: lines 200 wide, 800 (CC), ±45°; Ski-O green outline 130 | `green100-area`, `green-skio` |
+| `813.1` | Public snow mobile route | L | track | green 570: 120 edges, a 330 core dashed 1 500 green / 1 000 white | `green-skio`, `white-skio` |
+| `813.2` | Public snow mobile route, compulsory to stay on | L | track | black 120, orange 120, a 330 core dashed 1 500 orange / 1 000 white, orange 120, black 120 (810 overall) | `orange-skio`, `black100`, `white-skio` |
+| `301.1` | Crossable body of water | A | other | blue 50 % with a 100 blue bank line (as ISOM 302) | `blue50-area`, `blue100-line` |
+| `301.2` | Body of water that shall not be crossed | A | other | blue 100 % with a 300 black bank line | `blue100-area`, `black100` |
+| `310.1` | Marsh (in ski orienteering map) | A | other | ISOM 2017-2 310's dashes (900 × 100, gap 250, rows 300 (CC), alternate rows shifted) in blue 50 %, orientated to north | `blue50-area` |
+
+Readings of the text, each in the entry's `notes`:
+
+- **The white mask** — "a white mask (0.15 mm on each side) is used
+  under all green and orange track symbols" — is the main stroke's
+  `halo` in `white-skio`, 150 µm beyond the symbol's overall width on each
+  side, `continuous` under dashed tracks (the drawings outline the whole
+  dashed line), and a white disc ø 1 000 under each dot of 804.1 / 804.2
+  (the drawings ring each dot). 805, 807 and 808 are black or area
+  symbols and have none.
+- **"Compulsory to stay on"** (§2.5, Rev 4: "black outline 0.12 mm
+  (inside)"): the orange core is `main`, the black edges are `borders`
+  120 wide whose outer edge is the symbol's overall width, so 801.2,
+  802.2 and 803.2 are exactly as wide as their green states. Dashed
+  borders share the main line's dash phase (`map-rendering.md` §4.4).
+- **813.1 / 813.2's white dashes** are where the core's dashes leave a
+  gap and the mask shows through: no white row sits above Ski-O green,
+  and the colour line names only the white under lower purple.
+- **813.2 is 0.81 mm overall.** Its drawing labels five bands — 0.12,
+  0.12, 0.33, 0.12, 0.12 — and the drawing's band widths are in that
+  proportion; it is the one compulsory state whose overall width differs
+  from its green state (Rev 4 also "reduced the white dashed line to
+  0.33 mm").
+- **Junctions** ("drawn solid", "the beginning of a slow track is drawn
+  with a short line") are the mapper's drawing, not the symbol's;
+  OCAD's dash fitting (`DASH_NOTE`) starts and ends every dashed section
+  with a full dash.
+
+Left out, waiting (§10): ISSkiOM's deviations to ISOM base symbols
+(§3.1: open land at 75 %, all vegetation as 406, 416's dotted line only,
+contours 0.11 mm; §3.3.2's 515 *Impassable wall (barrier)*, which is
+ISOM 2017-2's 515 drawn as specified there), and its course-planning
+symbols (§3.3.3: 701–707, 709, 715, 716, 717, 719, 720.1, 720.2 and 841
+*One-way compulsory*), whose sizes are fixed at every scale — the course
+layer's job.
+
+### 12.2 Scale: `scaleRules` and `libraryFactor`
+
+ISSkiOM §3.2 enlarges the track symbols and the other symbols by
+different factors (03 §6.6, "a per-library table rather than a
+formula"):
+
+| Map scale | Track symbols | Other symbols |
+|---|---|---|
+| 1:15 000 | 1 | 1 |
+| 1:12 500 | 1 | 1.2 |
+| 1:10 000 | 1 | 1.5 |
+| 1:7 500 | 1.33 | 1.5 |
+| 1:5 000 | 1.5 | 1.5 |
+
+The library carries the table as `scaleRules: { track: [...], other:
+[...] }` (`{ mapScale, factor }` rows, the factors as printed — 1.33, not
+4/3) and every entry names its row set in `scaleGroup` (§2). The
+registry exports
+
+```ts
+libraryFactor(libraryId: SymbolLibraryId, mapScale: number, code?: string): number
+```
+
+the enlargement of the library's dimensions on a map at `1:mapScale`,
+unrounded:
+
+- a library without `scaleRules` (ISOM 2017-2, ISSprOM 2019-2):
+  `referenceScale / mapScale` — the same number `course/context.ts`
+  computes today (`ISOM2017-2` at 1:10 000 → 1.5, `ISSprOM2019-2` at
+  1:3 000 → 1.333…); `code` is ignored;
+- a library with `scaleRules`: the row set of the entry with heading
+  `code` (`"803.2"`, `"301.1"`); `code` may be omitted only when the
+  library has one row set; an unknown code throws;
+- a scale the table does not list takes the row whose scale is nearest
+  by ratio (|ln(mapScale / row)|), a tie to the larger denominator — so
+  1:4 000 takes the 1:5 000 row and 1:20 000 the 1:15 000 row;
+- a non-finite or non-positive scale throws.
+
+G8 multiplies it by the document's `symbolScale` when it materialises an
+entry of another library than the document's.
+
+### 12.3 Colours
+
+ISSkiOM's colour line names two colours the IOF colour table's ISSkiOM
+column does not tick (user decisions 2026-11-13):
+
+- **`white-skio`** "White under Ski-O tracks" — a palette row Oxygen
+  adds, directly below `purple-lower` in both editions, ticked for
+  ISSkiOM only. The text says "white (under lower purple)"; the table's
+  ISSkiOM whites are upper white (above the tracks) and white over
+  yellow (below every map colour but yellow). In the ISSkiOM stack the
+  mask therefore hides brown, the road and area colours, and is itself
+  under black, blue lines, the tracks and both purples.
+- **`green100-area` is ticked for ISSkiOM** — 808's raster is "green
+  100 %" since the 2023 erratum; the row already exists in every ISOM and
+  ISSprOM stack.
+
+The ISSkiOM stack is 20 rows in `iof2024` (the table's 18 plus these
+two) and 19 in `iof2022`, which has no `orange-skio` — the five
+compulsory states do not resolve against a 2022 ISSkiOM stack.
+
+**Answer 8 widened** (user 2026-11-13): G21's importer inserts every
+palette row the overlay uses — `green-skio`, `orange-skio`, `white-skio`
+and, for 808, `green100-area` — where a document's stack lacks it, at its
+palette position, so every track state can be drawn on any map; the
+patch still never changes a stack. A 2022-edition document receives
+`orange-skio` with its 2024 CMYK.
+
+### 12.4 Names
+
+No Swedish ISSkiOM text from SOFT was found (2026-11-13: SOFT's ski-O
+pages describe the track model in prose and publish ISOM and ISSprOM
+translations only), so every entry's `name.sv` is absent and
+`symbolLibraryNameSources.ISSkiOM2019.sv` is `null` (answer 11; §3.2).
+No aliases: there is no older-spec table.
