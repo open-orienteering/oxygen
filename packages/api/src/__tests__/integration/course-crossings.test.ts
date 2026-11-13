@@ -17,10 +17,9 @@
  */
 
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
-import { defaultMapAppearance, resolveSheet } from "@oxygen/shared";
+import { defaultMapAppearance, resolveSheet, sheetInputForMapRow, type PrintMapRow } from "@oxygen/shared";
 import { createTestEvent, disconnect, type TestEventContext } from "../helpers/test-db.js";
 import { makeCaller } from "../helpers/caller.js";
-import { sheetInputForMapRow, type PrintMapRow } from "../../course-maps/pdf-page.js";
 import { editorCourseLayer, legDistancesMm, loadCourseSequences } from "../../course-geometry.js";
 
 let ctx: TestEventContext;

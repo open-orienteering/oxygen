@@ -16,14 +16,18 @@ import {
   layoutCourseEnds,
   resolveMapLayout,
   resolveSheet,
+  type MapRowContext,
+  setterControlIds,
+  sharedWindowCentre,
+  sheetInputForMapRow,
+  rowForClass,
+  rowForVariant,
 } from "@oxygen/shared";
 import { z } from "zod";
 import { Prisma } from "../generated/prisma/client.js";
 import { getBaseMapInfoOrNull } from "../course-maps/map-source.js";
 import { displayCode, publicControlId } from "../control-id.js";
-import { type MapRowContext, setterControlIds, sharedWindowCentre, sheetInputForMapRow } from "../course-maps/pdf-page.js";
 import { classesByCourse, loadCourseObjects, nextObjectVersion } from "../course-objects.js";
-import { rowForClass, rowForVariant } from "../course-maps/pdf-page.js";
 import { baseVersionSchema, versionConflict } from "../version-conflict.js";
 import {
   coursesEditProcedure,
