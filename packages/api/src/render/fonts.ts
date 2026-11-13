@@ -7,6 +7,7 @@
 import { readFile } from "node:fs/promises";
 import { fileURLToPath } from "node:url";
 import { render } from "@oxygen/shared";
+import type { PrintFonts } from "@oxygen/shared/print";
 
 interface BundledFace { family: render.FontFamily; bold: boolean; file: string; /** The `name` table's family, as resvg sees it. */ resvgFamily: string }
 
@@ -56,6 +57,12 @@ export function loadBundledFonts(): Promise<render.TrueTypeFont[]> {
 /** The PDF writer's `faces` option: every bundled face's bytes. */
 export async function bundledPdfFaces(): Promise<{ family: render.FontFamily; data: Uint8Array }[]> {
   return Promise.all(BUNDLED_FACE_FILES.map(async (f) => ({ family: f.family, data: new Uint8Array(await readFile(f.path)) })));
+}
+
+/** The shared `renderCoursePages`' `fonts` input (G13): every face's bytes and the faces parsed once per process, in one order. */
+export async function bundledPrintFonts(): Promise<PrintFonts> {
+  const [faces, metrics] = await Promise.all([bundledPdfFaces(), loadBundledFonts()]);
+  return { faces, metrics };
 }
 
 /** Glyph-outline callback for `passStreamToSvg`, over a set of loaded fonts. */

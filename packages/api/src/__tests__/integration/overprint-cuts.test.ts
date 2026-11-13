@@ -29,10 +29,10 @@ import { applyEventMap } from "../../event-map.js";
 import { loadEventCutFeatures } from "../../event-map-objects.js";
 import { legacySizeContext, loadCourseSequences } from "../../course-geometry.js";
 import type { PrismaClient } from "../../generated/prisma/client.js";
-import { loadPinnedPrintDocument, pageInputFor } from "../../course-maps/pdf-page.js";
+import { loadPinnedPrintDocument } from "../../course-maps/pdf-page.js";
+import { pageInputFor, composePage } from "@oxygen/shared/print";
 import { sheetForMapRow, type PrintMapRow, course as courseShared, defaultMapAppearance } from "@oxygen/shared";
 import { loadBundledFonts } from "../../render/fonts.js";
-import { composePage } from "@oxygen/shared/print";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const FIXTURE = resolve(__dirname, "../../../../../e2e/test.ocd");

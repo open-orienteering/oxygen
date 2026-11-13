@@ -17,7 +17,8 @@ import { Worker } from "node:worker_threads";
 import { course } from "@oxygen/shared";
 import { Semaphore, intSetting } from "../map-render-limits.js";
 import { workerBootstrap } from "../worker-bootstrap.js";
-import type { CoursePagesOptions, CoursePagesResult } from "./pdf-page.js";
+import type { CoursePagesOptions } from "./pdf-page.js";
+import type { CoursePagesResult } from "@oxygen/shared/print";
 import type { PrintWorkerMessage, PrintWorkerRequest } from "./print-worker.js";
 
 export const PRINT_WORKER_TIMEOUT_MS = 10 * 60_000;

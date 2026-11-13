@@ -328,7 +328,7 @@ describe("part sheets of a map exchange (course-layout.md ยง6, course-layer.md ย
     // The course layer's view options carry the part: only the print path's `resolveSheet` sets it.
     const row = await t.db.courseMap.findUniqueOrThrow({ where: { id: p2.id }, include: { template: true, course: { include: { classes: { select: { name: true } }, courseControls: { orderBy: { position: "asc" }, include: { control: true } } } } } });
     const { resolveSheet } = await import("@oxygen/shared");
-    const { sheetInputForMapRow } = await import("../../course-maps/pdf-page.js");
+    const { sheetInputForMapRow } = await import("@oxygen/shared");
     const allControls = (await t.db.control.findMany({ where: { eventId: t.eventId, removed: false } })).map((c) => ({ ...c, name: c.name ?? "" }));
     const resolved = resolveSheet(sheetInputForMapRow(row, { event: { name: "E", date: new Date(0) }, allControls, mapInfo: { scale: 10000, meridianTiltDeg: null } }));
     expect(resolved.sheet.course.viewOptions.section).toBe(1);
