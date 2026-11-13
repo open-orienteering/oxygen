@@ -121,6 +121,25 @@ describe("averageTracks: the reference (§4.2)", () => {
   });
 });
 
+describe("averageTracks: orientation (§4.3)", () => {
+  const ref = m([[0, 0], [100, 0]]);
+
+  it("a pass matching equally both ways is orientated by the ends rule: reversed when that brings its ends strictly nearer", () => {
+    // A crossing at x = 30 matches the same samples either way round (its nearest point is the crossing).
+    // Ends 36.1 + 70.7 m given, 31.6 + 72.8 m reversed: reversed.
+    expect(averageTracks([ref, m([[30, -20], [30, 10]])]).reversed).toEqual([false, true]);
+    // Ends 31.6 + 72.8 m given, 36.1 + 70.7 m reversed: kept.
+    expect(averageTracks([ref, m([[30, -10], [30, 20]])]).reversed).toEqual([false, false]);
+  });
+
+  it("evidence wins over the ends rule", () => {
+    // A parallel pass 4 m off, given the other way round and in its canonical direction: matched votes decide.
+    const r = averageTracks([ref, m(densify([[100, 4], [0, 4]], 2))]);
+    expect(r.reversed).toEqual([false, true]);
+    expect(r.singlePass).toEqual([]);
+  });
+});
+
 describe("unitNormals (§4.4)", () => {
   it("is left of travel, one-sided at the ends, the bisector at a corner, and falls back at a hairpin", () => {
     const n = unitNormals(m([[0, 0], [2, 0], [4, 0]]));
@@ -212,6 +231,7 @@ describe("averageTracks: reversal and input order (§4.2)", () => {
         expect(bytes(r.line.y)).toEqual(bytes(base.line.y));
         expect(r.singlePass).toEqual(base.singlePass);
         expect(order[r.reference]).toBe(passes.indexOf(refPass));
+        order.forEach((i, k) => expect(r.reversed[k]).toBe(base.reversed[i] !== Boolean((mask >> k) & 1)));
       }
     }
   });
@@ -297,9 +317,10 @@ describe("averageTracks: loops (§4.3, §4.5)", () => {
 describe("averageTracks: iterations (§4.6)", () => {
   it("the second iteration matches every pass against the first result", () => {
     const passes = [noisyPass(21, 0, 300, 0), noisyPass(22, 0, 300, 1.5)];
-    const one = averageTracks(passes, { iterations: 1 }), two = averageTracks(passes);
+    const one = averageTracks(passes, { iterations: 1 }), two = averageTracks(passes), three = averageTracks(passes, { iterations: 3 });
     expect(bytes(one.line.y)).not.toEqual(bytes(two.line.y));
-    for (const r of [one, two]) for (const { start, end } of r.singlePass) {
+    expect(bytes(two.line.y)).not.toEqual(bytes(three.line.y));
+    for (const r of [one, two, three]) for (const { start, end } of r.singlePass) {
       expect(start).toBeLessThan(end);
       expect(end).toBeLessThanOrEqual(r.line.x.length);
     }

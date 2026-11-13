@@ -30,6 +30,8 @@ export interface AverageResult {
   singlePass: TrackRange[];
   /** Index in the input of the pass chosen as the reference. */
   reference: number;
+  /** Per input pass: whether it was used the other way round from how it was given (§4.2 step 0 and §4.3 together). */
+  reversed: boolean[];
 }
 
 /** A plain polyline in paper mm (no consecutive duplicates once canonical). */
@@ -72,9 +74,9 @@ function compareLists(a: Line, b: Line): number {
 }
 
 /** The pass or its reverse, whichever point list is lexicographically smaller (§4.2 step 0). */
-function canonical(l: Line): Line {
+function canonical(l: Line): { line: Line; flipped: boolean } {
   const r = reversed(l);
-  return compareLists(r, l) < 0 ? r : l;
+  return compareLists(r, l) < 0 ? { line: r, flipped: true } : { line: l, flipped: false };
 }
 
 function lengthOf(l: Line): number {
@@ -230,11 +232,13 @@ export function averageTracks(passes: readonly ProjectedTrack[], opts: AverageOp
   const stepMm = stepM / metresPerMm, gateMm = gateM / metresPerMm;
 
   // §4.2 step 0: canonical direction.
-  const lines = passes.map((p, i) => {
+  const canon = passes.map((p, i) => {
     const d = dedupe(p);
     if (d.x.length < 2) throw new RangeError(`Pass ${i} has fewer than two distinct points`);
     return canonical(d);
   });
+  const lines = canon.map((c) => c.line);
+  const flipped = canon.map((c) => c.flipped);
 
   // §4.2 step 1: the upper median length; of the passes that long, the smallest canonical point list.
   const lengths = lines.map(lengthOf);
@@ -269,6 +273,7 @@ export function averageTracks(passes: readonly ProjectedTrack[], opts: AverageOp
       useBack = swapped < same;
     }
     oriented.push(useBack ? back : line);
+    if (useBack) flipped[i] = !flipped[i];
     firstVotes.push(useBack ? vb : vf);
   });
 
@@ -285,5 +290,5 @@ export function averageTracks(passes: readonly ProjectedTrack[], opts: AverageOp
     result = applyVotes(ref, nrm, votes, counts);
   }
 
-  return { line: { x: result.x, y: result.y, metresPerMm }, singlePass: ranges(counts), reference };
+  return { line: { x: result.x, y: result.y, metresPerMm }, singlePass: ranges(counts), reference, reversed: flipped };
 }

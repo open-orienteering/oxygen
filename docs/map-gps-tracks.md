@@ -261,8 +261,14 @@ interface AverageResult {
   singlePass: TrackRange[]; // point indices of `line`, [start, end), ascending,
                             // disjoint, never touching: samples fewer than two passes voted on
   reference: number;        // index in `passes` of the pass chosen as the reference
+  reversed: boolean[];      // per pass: used the other way round from how it was given
+                            // (§4.2 step 0 and §4.3 together)
 }
 ```
+
+`gpsTrack` exports `averageTracks`, these two types and the defaults
+`DEFAULT_MATCH_DISTANCE_M` (15) and `DEFAULT_ITERATIONS` (2); the step
+default is §3.3's `DEFAULT_STEP_M`.
 
 - **Projected in, projected out.** The passes are tracks projected by
   §3.2 onto one map; the caller stores the result with `unprojectTrack`
@@ -379,7 +385,11 @@ by up to a few decimetres, which the second iteration mostly removes.
 
 Cost is samples × pass points in the worst case (a pass that is absent
 over a long stretch is scanned to its end at every sample there); there
-is no spatial index.
+is no spatial index. Measured with three passes at a fix per metre, one
+covering only the second half: 10 km well under a second, 25 km 0.9 s,
+50 km 3.3 s, 100 km 16 s. Ski-O passes are a few km, but the call is
+synchronous and G24 allows 200 000 points a track, so G27 runs it off
+the main thread or caps the input.
 
 ## 5. Reference layer and editing
 
@@ -396,7 +406,7 @@ Pending (G26, G28).
 | `gps-track/__tests__/gpx.test.ts` | GPX 1.1 (Garmin-style, extensions, metadata, two segments) and 1.0 (root name, routes, two tracks); one track per segment in file order with `trackIndex` / `segmentIndex`; four tracks from two `trk` × two `trkseg`; a prefixed namespace, BOM and CDATA name; routes untimed; missing time and elevation per point and per column; zoneless and offset times; invalid points and short segments skipped and counted; `malformed` (truncated, mismatched, empty, not XML), `not-gpx` (KML), `no-points` (waypoints only); a timed route dropped to untimed; the first `time` / `ele` winning over a private element; decimal-only coordinates; impossible dates, hour 24, second 60 and offsets rejected; quantisation; 200 000 points |
 | `gps-track/__tests__/project.test.ts` | The frame read from `e2e/test.xmap` by the importer; its reference point (a hard-coded lat / lng on the zone's central meridian); paper → WGS 84 → paper within 0.002 mm on it and on an OCAD-unit SWEREF99 TM frame; WGS 84 → paper → WGS 84 within 1e-7°; outside points kept and counted; `correctionDeg`; `not-georeferenced` (no CRS, no origin, unknown code) and `not-projectable` with its index and cause, both ways |
 | `gps-track/__tests__/geometry.test.ts` | Resample spacing, exact ends, duplicates, degenerate lines, step and window `RangeError`s; smoothing: straight line fixed, seeded noisy line reduced, corner cut < 1.5 m with the legs unmoved, ends bit-identical, determinism (same bytes), no mutation, the 1-2-3-2-1 kernel and the shrunk window; simplify: tolerance bound at 0.05 / 0.1 / 0.5 mm, subset in order, ends, collinear, tolerance 0, a closed loop, 200 000 points, determinism |
-| `gps-track/__tests__/average.test.ts` | Every `RangeError`; no mutation, same bytes twice; the upper-median reference for 2, 3 and 4 passes and the tie among passes of the median length; `unitNormals` (left of travel, one-sided ends, corner bisector, hairpin fallback); two parallel passes → the centre line (straight to 1e-9 m, concentric arcs to 2 cm); an outlier within the gate held to the band of the good passes, also as the reference, and one beyond it without a vote; all 6 orders × 8 reversal patterns of three noisy passes → the same bytes, ranges and reference; a pass covering half (either way round) → one range ending within a step of where it begins; a detour → its range, re-matched after; a loop crossing itself, with its second visit nearer, does not cross-match; a closed loop skied the other way round is orientated by its matches; `iterations`; ranges disjoint; the result unprojects index-aligned through the `e2e/test.xmap` frame; three 10 km passes at a fix per metre |
+| `gps-track/__tests__/average.test.ts` | Every `RangeError`; no mutation, same bytes twice; the upper-median reference for 2, 3 and 4 passes and the tie among passes of the median length; `unitNormals` (left of travel, one-sided ends, corner bisector, hairpin fallback); two parallel passes → the centre line (straight to 1e-9 m, concentric arcs to 2 cm); an outlier within the gate held to the band of the good passes, also as the reference, and one beyond it without a vote; all 6 orders × 8 reversal patterns of three noisy passes → the same bytes, ranges and reference; the ends rule on a tie (reversed and kept, through `reversed`) and evidence over it; `reversed` following each input reversal; a pass covering half (either way round) → one range ending within a step of where it begins; a detour → its range, re-matched after; a loop crossing itself, with its second visit nearer, does not cross-match; a closed loop skied the other way round is orientated by its matches; `iterations` 1, 2 and 3 differ; ranges disjoint; the result unprojects index-aligned through the `e2e/test.xmap` frame; three 10 km passes at a fix per metre |
 | `gps-track/__tests__/track.test.ts` | Quantisation; trim `[start, end)` over every column, null columns, no mutation, every `RangeError`; split sharing its point, split-split cutting out a stretch, every `RangeError` |
 
 No integration or E2E test: the module has no API, table or UI until

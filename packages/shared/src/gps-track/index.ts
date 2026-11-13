@@ -3,4 +3,4 @@ export * from "./track.js";
 export * from "./gpx.js";
 export * from "./project.js";
 export * from "./geometry.js";
-export * from "./average.js";
+export { averageTracks, DEFAULT_ITERATIONS, DEFAULT_MATCH_DISTANCE_M, type AverageOptions, type AverageResult } from "./average.js";
