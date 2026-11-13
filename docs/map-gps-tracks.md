@@ -24,7 +24,9 @@ Pending (G24). Tracks are per event, in their own cloud-owned table
 `map_gps_tracks`, one row per track segment, stored in WGS 84 so that a
 re-match or a new map edition does not move them (slice G "Decided in
 this split", answer 10). The row's `points` are the `TrackPoints`
-columns of §2.1 verbatim, and its trim is a `TrackRange` (§3.5).
+columns of §2.1 verbatim, and its trim is a `TrackRange` (§3.5). An
+average (§4) also keeps its `singlePass` ranges (`single_pass`, user
+2026-11-13).
 
 ## 2. GPX
 
@@ -236,10 +238,136 @@ the name kept:
 
 ## 4. Averaging passes
 
-Pending (G23). The method is fixed in `SLICES.md` slice G "Decided in
-this split" ("Averaging"); it works in ground metres (§3.1) on tracks
-projected by §3.2, resamples with `resampleTrack`, and stores its
-result through `unprojectTrack`.
+A mapper skis a track several times; `averageTracks(passes, opts)`
+turns the passes into one line. The method is fixed in `SLICES.md`
+slice G "Decided in this split" ("Averaging"), with four refinements
+the user decided on 2026-11-13 (`decisions/slice-g.md`, G23): a
+canonical direction (§4.2), orientation by matched samples (§4.3), the
+first run within reach and the end rule in matching (§4.5). It is pure
+and uses only + − × ÷ and √ in a fixed order, as §3.3–3.4 do, so the
+same projected passes give the same bytes on every engine; inputs are
+never mutated.
+
+### 4.1 Input and result
+
+```ts
+interface AverageOptions {
+  stepM?: number;        // resampling step, ground metres; default 2
+  maxDistanceM?: number; // the match gate, ground metres; default 15
+  iterations?: number;   // integer ≥ 1; default 2
+}
+interface AverageResult {
+  line: ProjectedTrack;     // the moved samples of the last iteration, about stepM apart
+  singlePass: TrackRange[]; // point indices of `line`, [start, end), ascending,
+                            // disjoint, never touching: samples fewer than two passes voted on
+  reference: number;        // index in `passes` of the pass chosen as the reference
+}
+```
+
+- **Projected in, projected out.** The passes are tracks projected by
+  §3.2 onto one map; the caller stores the result with `unprojectTrack`
+  (§3.2) — WGS 84, untimed, index-aligned — so `singlePass` indexes the
+  stored track's points unchanged, on any map. The ranges are kept with
+  the stored average (G24's `single_pass`, user 2026-11-13); trimming
+  the average shifts them (G27).
+- **Ground metres** (§3.1): gate and step are converted to paper mm by
+  `metresPerMm`, which all passes must share.
+- **The result spans the reference only.** Stretches of other passes
+  beyond its ends are not in it.
+- **`RangeError`**, as in §3.3: fewer than two passes; a pass with fewer
+  than two distinct points; passes with different `metresPerMm`; a step
+  or gate that is not positive and finite; `iterations` not an integer
+  ≥ 1.
+
+### 4.2 Canonical direction and the reference
+
+0. **Canonical direction** (user 2026-11-13). Consecutive duplicate
+   points are dropped (as `resampleTrack` does), and each pass is turned
+   to whichever of its point list and its reverse is lexicographically
+   smaller (x₀, y₀, x₁, y₁, …): the first point is the smaller of the two
+   ends by x, then y; equal ends are decided further in. Reversing any
+   pass or reordering the passes therefore gives bit-identical output.
+   The result's direction is arbitrary but fixed; a stored average is
+   untimed, so its direction carries nothing.
+1. **The reference** is the pass of median length — the sum of the
+   segment lengths in canonical order. The passes are sorted by length,
+   ties by the canonical point list (a shorter list first on a common
+   prefix), and the reference is the one at index `floor(n / 2)`: the
+   **upper median**, so the longer of two. The result spans the
+   reference, so with two passes it spans the one that covers more, and
+   a pass covering half is reported (§4.6) instead of cutting the
+   result to its half.
+
+### 4.3 Orientation of the other passes
+
+2. **By evidence** (user 2026-11-13; the fixed rule alone cannot orient a
+   closed loop, whose ends coincide). Each other pass is matched against
+   the resampled reference (§4.4–4.5) both ways round, and keeps the
+   direction in which more samples get its vote. On a tie it is reversed
+   if that brings its ends strictly nearer the reference's — the fixed
+   rule: `|p₀ − r₀| + |pₙ − rₙ|` against `|pₙ − r₀| + |p₀ − rₙ|` — and
+   otherwise kept. Orientation is decided once, in the first iteration.
+
+A closed loop whose passes start at different places on it is not
+aligned by this (each pass is matched from its own start); split such a
+pass at the reference's start first (§3.5).
+
+### 4.4 Resampling and normals
+
+3. The reference is resampled with `resampleTrack(reference, stepM)`
+   (§3.3). The tangent at an inner sample is the central difference
+   `p[i+1] − p[i−1]`, one-sided at the two ends; a zero central
+   difference (an exact hairpin) falls back to the forward, then the
+   backward difference. It is normalised with √, and the normal is
+   `(−tᵧ, tₓ)`, left of travel with y up. A corner sample therefore gets
+   the bisector.
+
+### 4.5 Matching
+
+4. Each pass is matched as a polyline (segments, not only vertices),
+   unresampled, walking forward from its first point. For each sample
+   `p` in order:
+   - **Monotone.** Candidates are the points of the pass no earlier
+     along it than the previous match of that pass. The first sample
+     starts at the pass's first point; a sample without a match leaves
+     the previous match where it was.
+   - **The first run within reach** (user 2026-11-13). Scanning forward,
+     the candidates are the first run of consecutive segments that each
+     come within `maxDistanceM` (Euclidean) of `p`; the match `q` is the
+     nearest point in that run, ties to the earliest. A later run — the
+     pass's second visit to a crossing, or the end of a closed loop — is
+     not considered, so a loop that passes itself does not cross-match.
+   - **The end rule** (user 2026-11-13). When `q` is the pass's first or
+     last point, it counts only if `|(q − p) · t| ≤ stepM`: a pass that
+     stops does not keep voting with its end point for 15 m past it.
+   - **The vote** is the signed offset along the normal,
+     `(q − p) · n`, so |vote| ≤ 15 m; the match becomes the previous
+     match.
+
+The reference pass is not matched in the first iteration: it votes 0 at
+every sample.
+
+### 4.6 Votes, ranges and the second iteration
+
+5. A sample with **fewer than two votes stays** where it is and is
+   **single-pass**. With two or more it moves along its normal by their
+   median — the votes sorted, the middle one, or the mean of the two
+   middle ones for an even count (so the mean for two passes). In the
+   first iteration the reference's own vote counts, so a sample only the
+   reference votes on stays and is reported, as the fixed method says.
+6. **The second iteration** takes the first one's moved samples as the
+   reference: resampled again (§4.4), new normals, every pass (the
+   first reference included) matched afresh from its start in the
+   orientation of §4.3; the reference line itself does not vote. The
+   reference choice and the orientation are not re-derived.
+   `iterations` repeats this; the default 2 is the fixed method's
+   "repeat once". The result is the last iteration's moved samples (not
+   resampled again), and `singlePass` is the maximal runs of its
+   single-pass samples.
+
+Cost is samples × pass points in the worst case (a pass that is absent
+over a long stretch is scanned to its end at every sample there); there
+is no spatial index.
 
 ## 5. Reference layer and editing
 
@@ -264,7 +392,6 @@ G24 / G25 (AGENTS.md §4, "New algorithm / computation").
 ## 8. Pending in this chapter
 
 - §1 storage, the table and the API (G24).
-- §4 averaging (G23).
 - §5 the reference layer in Map mode and trim / split / average there
   (G25, G27).
 - §6 conversion into `add` ops and snapping ends onto the track network
