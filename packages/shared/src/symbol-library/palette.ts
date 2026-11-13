@@ -34,7 +34,11 @@ const SPR = "ISSprOM2019-2";
 const SKI = "ISSkiOM2019";
 const MTB = "ISMTBOM2022";
 
-/** Printing and Colour Definitions Rev 4 (September 2024), 43 rows, top first. */
+/**
+ * Printing and Colour Definitions Rev 4 (September 2024), 43 rows, top
+ * first, plus Oxygen's `white-skio` (44). Two departures from the table's
+ * ISSkiOM column, both for ISSkiOM 2019 symbols (docs/map-symbols.md §12.3).
+ */
 export const iof2024Palette: readonly PaletteEntry[] = [
   { id: "purple-upper", name: "Upper purple for course overprint", cmyk: pct(35, 85, 0, 0), specs: [ISOM, SPR, SKI, MTB], purpleRole: "upper" },
   { id: "white-upper", name: "Upper white for course overprint", cmyk: pct(0, 0, 0, 0), specs: [SPR, SKI, MTB] },
@@ -50,6 +54,8 @@ export const iof2024Palette: readonly PaletteEntry[] = [
   { id: "darkgreen-hedge", name: "Dark green for hedges in forest", cmyk: pct(100, 0, 80, 30), specs: [ISOM] },
   { id: "brown100-line", name: "Brown 100 % line symbols", cmyk: pct(25, 75, 100, 0), specs: [ISOM] },
   { id: "purple-lower", name: "Lower purple for course overprint", cmyk: pct(35, 85, 0, 0), specs: [ISOM, SPR, SKI, MTB], purpleRole: "lower" },
+  // Not an IOF row: ISSkiOM's track mask, "white (under lower purple)" (docs/map-symbols.md §12.3; user decision 2026-11-13).
+  { id: "white-skio", name: "White under Ski-O tracks", cmyk: pct(0, 0, 0, 0), specs: [SKI] },
   { id: "darkgreen-line", name: "Dark green line symbols", cmyk: pct(100, 0, 80, 30), specs: [SPR] },
   { id: "blue100-pointline", name: "Blue 100 % point and line symbols", cmyk: pct(100, 0, 0, 0), specs: [SPR, MTB] },
   { id: "brown100", name: "Brown 100 %", cmyk: pct(25, 75, 100, 0), specs: [SPR, SKI, MTB] },
@@ -69,7 +75,8 @@ export const iof2024Palette: readonly PaletteEntry[] = [
   { id: "brown30-paved", name: "Brown 30 % for paved area", cmyk: pct(6, 23, 33, 0), specs: [SPR] },
   { id: "olive", name: "Olive green", cmyk: pct(38, 27, 100, 0), specs: [ISOM, SPR, SKI, MTB] },
   { id: "darkgreen-area", name: "Dark green area symbols", cmyk: pct(100, 0, 80, 30), specs: [SPR] },
-  { id: "green100-area", name: "Green 100 % area symbols", cmyk: pct(80, 0, 100, 0), specs: [ISOM, SPR] },
+  // Ticked for ISSkiOM by Oxygen: 808's raster is "green 100 %" (docs/map-symbols.md §12.3; user decision 2026-11-13).
+  { id: "green100-area", name: "Green 100 % area symbols", cmyk: pct(80, 0, 100, 0), specs: [ISOM, SPR, SKI] },
   { id: "green60-area", name: "Green 60 % area symbols", cmyk: pct(48, 0, 60, 0), specs: [ISOM, SPR] },
   { id: "green30-area", name: "Green 30 % area symbols", cmyk: pct(24, 0, 30, 0), specs: [ISOM, SPR, SKI, MTB] },
   { id: "black-area-screen", name: "Black 35 % area symbols", cmyk: pct(0, 0, 0, 35), specs: [ISOM, SPR] },

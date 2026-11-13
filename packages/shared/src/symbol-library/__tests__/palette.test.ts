@@ -3,16 +3,19 @@ import { cmykToHex } from "../../render/symbol.js";
 import { iof2022Palette, iof2024Palette, paletteFor, paletteIndex, paletteStack } from "../palette.js";
 
 describe("IOF colour palette (03 Appendix B)", () => {
-  it("2024 edition has the 43 rows of Printing and Colour Definitions Rev 4, top first", () => {
-    expect(iof2024Palette).toHaveLength(43);
+  it("2024 edition has the 43 rows of Printing and Colour Definitions Rev 4 plus Oxygen's white-skio, top first", () => {
+    expect(iof2024Palette).toHaveLength(44);
     expect(iof2024Palette[0].id).toBe("purple-upper");
     expect(iof2024Palette[13].id).toBe("purple-lower");
-    expect(iof2024Palette[42].id).toBe("yellow50");
-    expect(new Set(iof2024Palette.map((e) => e.id)).size).toBe(43);
+    // ISSkiOM's "white (under lower purple)" track mask (docs/map-symbols.md §12.3): directly below lower purple.
+    expect(iof2024Palette[14]).toMatchObject({ id: "white-skio", name: "White under Ski-O tracks", cmyk: [0, 0, 0, 0], specs: ["ISSkiOM2019"] });
+    expect(iof2024Palette[43].id).toBe("yellow50");
+    expect(new Set(iof2024Palette.map((e) => e.id)).size).toBe(44);
   });
 
   it("2022 edition: same ids minus Ski-O orange, pre-2024 brown/green values, black 30 % screen", () => {
-    expect(iof2022Palette).toHaveLength(42);
+    expect(iof2022Palette).toHaveLength(43);
+    expect(iof2022Palette.find((e) => e.id === "white-skio")).toBeDefined();
     expect(iof2022Palette.find((e) => e.id === "orange-skio")).toBeUndefined();
     const by = (id: string) => iof2022Palette.find((e) => e.id === id)!;
     expect(by("brown100-line").cmyk).toEqual([0, 0.56, 1, 0.18]);
@@ -36,6 +39,32 @@ describe("IOF colour palette (03 Appendix B)", () => {
     expect(spr).toContain("brown100");
     expect(spr).toContain("white-upper");
     expect(spr).not.toContain("brown100-line");
+  });
+
+  it("ISSkiOM: the table's 18 ticks plus white-skio and green100-area (docs/map-symbols.md §12.3)", () => {
+    const ski = paletteFor("iof2024", "ISSkiOM2019").map((e) => e.id);
+    expect(ski).toEqual([
+      "purple-upper", "white-upper", "green-skio", "orange-skio", "black100", "blue100-line", "purple-lower", "white-skio",
+      "brown100", "brown50-road", "black-road-outline", "blue100-area", "blue50-area", "brown50-paved", "olive",
+      "green100-area", "green30-area", "white-over-yellow", "yellow75", "yellow50",
+    ]);
+    expect(paletteFor("iof2022", "ISSkiOM2019")).toHaveLength(19);
+    expect(paletteFor("iof2022", "ISSkiOM2019").map((e) => e.id)).not.toContain("orange-skio");
+    // The two additions are not ticked for the other specs' stacks (G21 inserts them where a ski entry needs them).
+    expect(paletteFor("iof2024", "ISOM2017-2").map((e) => e.id)).not.toContain("white-skio");
+    expect(paletteFor("iof2024", "ISSprOM2019-2").map((e) => e.id)).not.toContain("white-skio");
+  });
+
+  it("ISSkiOM stack order: tracks above black, the mask directly under lower purple, upper purple last", () => {
+    const ski = paletteIndex("iof2024", "ISSkiOM2019");
+    expect(ski.get("purple-upper")).toBe(paletteStack("iof2024", "ISSkiOM2019").length - 1);
+    expect(ski.get("white-upper")!).toBeGreaterThan(ski.get("green-skio")!);
+    expect(ski.get("green-skio")!).toBe(ski.get("orange-skio")! + 1);
+    expect(ski.get("orange-skio")!).toBeGreaterThan(ski.get("black100")!);
+    expect(ski.get("green-skio")!).toBeGreaterThan(ski.get("purple-lower")!);
+    expect(ski.get("white-skio")).toBe(ski.get("purple-lower")! - 1);
+    expect(ski.get("brown100")!).toBeLessThan(ski.get("white-skio")!);
+    expect(ski.get("green100-area")!).toBeLessThan(ski.get("white-skio")!);
   });
 
   it("stack order encodes the upper/lower purple split of 03 §2.4", () => {

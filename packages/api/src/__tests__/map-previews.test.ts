@@ -71,6 +71,12 @@ describe("libraryPreviewPng", () => {
     expect(await libraryPreviewPng("ISOM2017-2", "2000.1.1", "418")).toBeNull();
   });
 
+  it("serves the ISSkiOM overlay's swatches like the others' (docs/map-symbols.md §4, §12)", async () => {
+    const png = await libraryPreviewPng("ISSkiOM2019", V, "813.2");
+    expect(png?.subarray(1, 4).toString()).toBe("PNG");
+    expect(await libraryPreviewPng("ISSkiOM2019", V, "503")).toBeNull();
+  });
+
   it("caches per instance: a second request returns the same buffer", async () => {
     const a = await libraryPreviewPng("ISSprOM2019-2", V, "521");
     const b = await libraryPreviewPng("ISSprOM2019-2", V, "521");

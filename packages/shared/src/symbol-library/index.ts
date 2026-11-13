@@ -8,6 +8,8 @@ import { ALIAS_SOURCE as ISOM_ALIAS_SOURCE, SV_SOURCE as ISOM_SV_SOURCE } from "
 import { isom2017_2 } from "./ISOM2017-2/index.js";
 import { SV_SOURCE as ISSPROM_SV_SOURCE } from "./ISSprOM2019-2/common.js";
 import { issprom2019_2 } from "./ISSprOM2019-2/index.js";
+import { SV_SOURCE as ISSKIOM_SV_SOURCE } from "./ISSkiOM2019/common.js";
+import { isskiom2019 } from "./ISSkiOM2019/index.js";
 import { type PaletteEdition, paletteIndex, paletteStack } from "./palette.js";
 import { type LibraryEntry, type SymbolLibrary, parseSymbolLibrary, resolveEntry } from "./schema.js";
 
@@ -27,14 +29,18 @@ export * from "./schema.js";
  */
 export const SYMBOL_LIBRARY_VERSION = "2026.10.4";
 
-/** Raw authored inputs, before validation (tests and tooling). */
-export const symbolLibraryInputs = { "ISOM2017-2": isom2017_2, "ISSprOM2019-2": issprom2019_2 } as const;
+/**
+ * Raw authored inputs, before validation (tests and tooling). The two base
+ * libraries, then the ISSkiOM overlay (docs/map-symbols.md §12).
+ */
+export const symbolLibraryInputs = { "ISOM2017-2": isom2017_2, "ISSprOM2019-2": issprom2019_2, ISSkiOM2019: isskiom2019 } as const;
 export type SymbolLibraryId = keyof typeof symbolLibraryInputs;
 
-/** Where each library's Swedish names and aliases come from (docs/map-symbols.md §3); `null` = none yet. */
-export const symbolLibraryNameSources: Record<SymbolLibraryId, { sv: string; aliases: string | null }> = {
+/** Where each library's Swedish names and aliases come from (docs/map-symbols.md §3); `null` = none (yet). */
+export const symbolLibraryNameSources: Record<SymbolLibraryId, { sv: string | null; aliases: string | null }> = {
   "ISOM2017-2": { sv: ISOM_SV_SOURCE, aliases: ISOM_ALIAS_SOURCE },
   "ISSprOM2019-2": { sv: ISSPROM_SV_SOURCE, aliases: null },
+  ISSkiOM2019: { sv: ISSKIOM_SV_SOURCE, aliases: null },
 };
 
 export function isSymbolLibraryId(id: string): id is SymbolLibraryId {
@@ -69,6 +75,46 @@ export function getLibraryEntry(entryId: string): LibraryEntry | undefined {
   if (sep < 0) return undefined;
   const lib = all().get(entryId.slice(0, sep) as SymbolLibraryId);
   return lib?.entries.find((e) => e.id === entryId);
+}
+
+/** An overlay library is offered beside a document's own library and is never one (docs/map-symbols.md §12). */
+export function isOverlayLibrary(id: SymbolLibraryId): boolean {
+  return getSymbolLibrary(id).kind === "overlay";
+}
+
+/**
+ * The enlargement of a library's dimensions on a map at `1:mapScale`
+ * (docs/map-symbols.md §12.2; 03 §6.6), unrounded. Without `scaleRules`:
+ * `referenceScale / mapScale`. With them: the row set of the entry whose
+ * heading is `code` (optional when the library has one row set), the row
+ * nearest by ratio for an unlisted scale, a tie to the larger denominator.
+ */
+export function libraryFactor(libraryId: SymbolLibraryId, mapScale: number, code?: string): number {
+  if (!Number.isFinite(mapScale) || mapScale <= 0) throw new Error(`libraryFactor: map scale must be a positive number, got ${mapScale}`);
+  const library = getSymbolLibrary(libraryId);
+  const rules = library.scaleRules;
+  if (!rules) return library.referenceScale / mapScale;
+  let group: string;
+  if (code === undefined) {
+    const groups = Object.keys(rules);
+    if (groups.length !== 1) throw new Error(`libraryFactor: ${libraryId} needs an entry code (scale groups ${groups.join(", ")})`);
+    group = groups[0];
+  } else {
+    const entry = library.entries.find((e) => e.code === code);
+    if (!entry?.scaleGroup) throw new Error(`libraryFactor: ${libraryId} has no entry ${code}`);
+    group = entry.scaleGroup;
+  }
+  let best = rules[group][0];
+  let bestDistance = Infinity;
+  for (const row of rules[group]) {
+    const distance = Math.abs(Math.log(mapScale / row.mapScale));
+    const tie = Math.abs(distance - bestDistance) <= 1e-9;
+    if ((!tie && distance < bestDistance) || (tie && row.mapScale > best.mapScale)) {
+      best = row;
+      bestDistance = Math.min(distance, bestDistance);
+    }
+  }
+  return best.factor;
 }
 
 /** All entries under one spec heading (the heading's drawing first, then variants). */
