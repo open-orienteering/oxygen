@@ -5,6 +5,8 @@
  * embed them (docs/course-print.md §6.3).
  */
 
+import { SVG_RASTER_MAX_PX } from "@oxygen/shared/print";
+
 export const MAX_GRAPHIC_BYTES = 2 * 1024 * 1024;
 
 export type GraphicMime = "image/svg+xml" | "image/png";
@@ -95,4 +97,18 @@ export function validateGraphicUpload(data: Buffer): GraphicMime {
   if (data.subarray(0, 4).equals(PNG_MAGIC)) return "image/png";
   parseSvgGraphic(data);
   return "image/svg+xml";
+}
+
+/**
+ * `print.png`'s `w` / `h` (docs/course-print.md §8.5): integers 1–4096
+ * (`SVG_RASTER_MAX_PX`, the largest box `svgRasterBox` asks). The box, or
+ * the 400 message.
+ */
+export function parseRasterBox(w: string | undefined, h: string | undefined): [number, number] | string {
+  const side = (raw: string | undefined) => (raw !== undefined && /^\d+$/.test(raw) ? Number(raw) : NaN);
+  const box: [number, number] = [side(w), side(h)];
+  if (box.some((v) => !Number.isInteger(v) || v < 1 || v > SVG_RASTER_MAX_PX)) {
+    return `w and h must be integers 1–${SVG_RASTER_MAX_PX} for an SVG graphic`;
+  }
+  return box;
 }
