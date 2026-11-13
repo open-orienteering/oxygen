@@ -41,6 +41,22 @@ test.describe("Competition Selection", () => {
     );
   });
 
+  test("falls back to the bundle's own version when the server has none", async ({ page }) => {
+    // A local build (`pnpm dev`, `docker compose --build`): the API answers
+    // `version: null` and the dev bundle bakes `<package version>-dev`.
+    await page.route("**/api/version", (route) =>
+      route.fulfill({
+        json: { startedAt: "2026-11-13T17:14:00.000Z", buildId: null, deployRef: null, version: null },
+      }),
+    );
+    await page.goto("/");
+
+    await expect(page.getByTestId("app-version")).toHaveText(
+      /^Oxygen v\d+\.\d+\.\d+-dev · Connected to PostgreSQL$/,
+      { timeout: 10000 },
+    );
+  });
+
   test("should list competitions from the database", async ({ page }) => {
     await page.goto("/");
 
