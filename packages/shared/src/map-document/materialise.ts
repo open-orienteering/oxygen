@@ -25,7 +25,7 @@ import {
 import { colourRefs, type LibraryEntry } from "../symbol-library/schema.js";
 import type { MapDocument } from "./codec.js";
 import type { DocumentSymbol, MapDocumentHeader } from "./header.js";
-import { type MapPatch, type PatchSymbol, type PatchSymbolRef, patchSymbolSchema } from "./patch.js";
+import { type EffectiveDocument, type MapPatch, type PatchSymbol, type PatchSymbolRef, patchSymbolSchema } from "./patch.js";
 import { canonicalEntryRender, isAppliedMatch } from "./render-bridge.js";
 
 // ---- materialisation (§11.1) ------------------------------------------------
@@ -145,9 +145,12 @@ interface Bucket {
  * What Map mode can draw with (map-symbols §11.2): the document's source
  * table through its matches, the patch's symbols, and the library entries
  * the document can materialise (disabled with their missing colours when it
- * cannot), grouped by heading. `doc` is the pinned document.
+ * cannot), grouped by heading. `doc` is the pinned document; an effective
+ * document (`applyPatch`'s output) throws.
  */
 export function mapPalette(doc: MapDocument, patch?: MapPatch | null): PaletteGroup[] {
+  // A programming error, as in applyPatch: an effective document's appended patch symbols are not `{ doc }` refs.
+  if ((doc as EffectiveDocument).patch) throw new Error("mapPalette: pass the pinned document, not an effective one");
   const { header } = doc;
   const docLibrary = documentLibraryId(header);
   const index = paletteIndexOfStack(header.colours);

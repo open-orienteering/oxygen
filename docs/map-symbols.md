@@ -474,7 +474,9 @@ plus the purple-role and materialisation checks:
   out, covered entries not repeated, the other base library not offered,
   disabled items with `missing`, patch items (library, overlay and a
   non-library key), every enabled ref applying as an `add` of its kind,
-  determinism, the sprint palette.
+  the order inside a heading (applied match, objects, index; patch items
+  by key between document and library items), `compareSymbolCodes`, an
+  effective document refused, determinism, the sprint palette.
 
 The OOM dimension spot check (e) is not implemented; see §10.
 
@@ -1206,9 +1208,12 @@ type MaterialiseResult =
     its scale (§8.3). The header stores only `documentFactor`; the import
     report's `matching.factor.symbolScale` is the same quotient rounded to
     three decimals, so the two can differ in the fourth;
-  - a header with `library: null` (never matched): `symbolScale` 1, so
-    every entry, of whichever library, takes `libraryFactor(library,
-    mapScale, entry.code)`.
+  - a header with `library: null` (never matched) or naming a library
+    that is not registered: `symbolScale` 1, so every entry, of whichever
+    library, takes `libraryFactor(library, mapScale, entry.code)`.
+
+  `materialiseFactor(header, entry)` is this rule on its own (exported
+  for G9 and the tests).
 - **The symbol**: `code` = the entry's code, `name` = its English name,
   `kind` = the render's type, `origin: "source"`, `hidden: false`, no
   `match`, no `sourceIndex`, and `render` = `resolveEntry(entry, index)`
@@ -1229,7 +1234,7 @@ resolve-and-scale step, shared with `canonicalRender`; it throws
 ### 11.2 `mapPalette`
 
 ```ts
-mapPalette(doc: MapDocument, patch?: MapPatch | null): PaletteGroup[]
+mapPalette(doc: MapDocument, patch?: MapPatch | null): PaletteGroup[]   // doc: the pinned document
 
 interface PaletteGroup {
   id: "library" | "ISSkiOM2019" | "other";
@@ -1258,7 +1263,10 @@ interface PaletteItem {
 
 The document's source table presented through its matches, plus the
 entries it can materialise (03 §1, 08 §4.7), grouped as the course
-editor's symbol list (P3, `course-editor.md` §7 "filter region"):
+editor's symbol list (P3, `course-editor.md` §7 "filter region").
+`doc` is the **pinned** document the patch is keyed onto; an effective
+document (`applyPatch`'s output, whose table already has the patch's
+symbols appended) throws, as `applyPatch` does on one.
 
 - **Document items**: every source symbol that can be drawn — its own
   `render`, or an applied match to a known entry — of kind point, line or
@@ -1267,8 +1275,8 @@ editor's symbol list (P3, `course-editor.md` §7 "filter region"):
   point, line or area, `map-patches.md` §1.2), and symbols drawn by proxy.
   `ref: { doc: index }`; `canonicalId` is the applied match's entry, else
   null.
-- **Patch items**: every symbol of `patch.symbols`, referenced by an op
-  or not, `ref: { patch: key }`, always enabled (it was materialisable
+- **Patch items**: every point, line or area symbol of `patch.symbols`,
+  referenced by an op or not, `ref: { patch: key }`, always enabled (it was materialisable
   when it was put).
 - **Library items**: the point, line and area entries of the document's
   library (`documentLibraryId`) except the **course symbols (7xx)** —
@@ -1285,15 +1293,18 @@ editor's symbol list (P3, `course-editor.md` §7 "filter region"):
 - **Headings**: a document item's heading is its applied match's entry
   code, else its source code's base (`505.1` → `505`); a patch or library
   item's is its entry's code. The heading's name is the library heading
-  entry's (variant `null`), else the first document item's source name.
+  entry's (variant `null`) whenever the heading is one of the library's,
+  matched or not — P3 names an unmatched heading after its source
+  symbol; here the heading also holds the library's own entries — else
+  the first item's name.
 - **Groups**: `library` (headings of the document's library), then
   `ISSkiOM2019` (items of the overlay: its entries, document symbols
   matched to it, patch symbols keyed by it), then `other` (headings outside
   both — club codes, symbols of another library). An empty group is left
   out, so the overlay group is absent on a stack without `green-skio`
   unless the document or the patch already has ski symbols.
-- **Order**: headings by code (numerically where both are numeric,
-  numeric before non-numeric, else by string); within a heading, document
+- **Order**: headings by code (`compareSymbolCodes`: numerically where
+  both are numeric, numeric before non-numeric, else by string); within a heading, document
   items (applied match first, then more objects first, then index), then
   patch items (by key), then library items (heading entry before its
   variants, library order).

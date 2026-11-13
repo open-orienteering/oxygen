@@ -17,7 +17,7 @@ import { getLibraryEntry, libraryFactor, listSymbolLibraries, paletteStack } fro
 import { colourRefs } from "../../symbol-library/schema.js";
 import { decodeMapDocument, encodeMapDocument, type MapDocument, type MapDocumentInput } from "../codec.js";
 import { type DocumentColour, type MapDocumentHeader, OBJECT_TYPE } from "../header.js";
-import { mapPalette, materialiseFactor, materialiseSymbol, type PaletteGroup, type PaletteItem } from "../materialise.js";
+import { compareSymbolCodes, mapPalette, materialiseFactor, materialiseSymbol, type PaletteGroup, type PaletteItem } from "../materialise.js";
 import { applyPatch, mapPatchSchema, mergePatch, patchSymbolSchema, type MapPatch, type PatchOp, type PatchSymbol } from "../patch.js";
 import { canonicalEntryRender, canonicalRender, documentRenderInput } from "../render-bridge.js";
 
@@ -357,6 +357,47 @@ describe("mapPalette", () => {
       expect(issues).toEqual([]);
       expect(put.length).toBe(all.length);
     });
+  });
+
+  it("orders a heading's items: applied matches, then more objects, then index; patch items by key; library items last", () => {
+    // Three source symbols under heading 529: an applied match with no objects, an unmatched one with two, an unmatched one with one.
+    const base = paletteInput();
+    const black = base.header.colours.findIndex((c) => (c as DocumentColour).paletteIds?.includes("black100"));
+    const line = (code: string) => ({ code, name: code, kind: "line" as const, render: { type: "line" as const, id: `s:${code}`, code, name: code, main: { colour: black, widthUm: 150 } } });
+    const matched = { ...line("529.5"), match: { canonicalId: "ISOM2017-2:529", method: "explicit" as const, state: "auto" as const, confidence: 1, reasons: [], reviewed: false, libraryVersion: "x" } };
+    const symbols = [...base.header.symbols, line("529.1"), line("529.2"), matched];
+    const n = base.header.symbols.length;
+    const objects = [...base.objects, ...[n, n, n + 1].map((symbolIdx, k) => ({ symbolIdx, type: OBJECT_TYPE.line, sourceIndex: 100 + k, coords: [0, 0, 10, 10], flags: [0, 0] }))];
+    const d = decode({ ...base, header: { ...base.header, symbols: symbols.filter((s) => s.code !== "529.0") }, objects: objects.map((o) => ({ ...o, symbolIdx: o.symbolIdx > symbols.findIndex((s) => s.code === "529.0") ? o.symbolIdx - 1 : o.symbolIdx })) });
+    const idx = (code: string) => d.header.symbols.findIndex((s) => s.code === code);
+    const sym = ok(d, "ISOM2017-2:206").symbol;
+    const p = mapPatchSchema.parse({ documentHash: "cd".repeat(32), symbols: { "club:529.9": { ...sym, kind: "line", code: "529.9", render: ok(d, "ISOM2017-2:505").symbol.render }, "club:529.8": { ...sym, kind: "line", code: "529.8", render: ok(d, "ISOM2017-2:505").symbol.render } } });
+    const h529 = mapPalette(d, p).find((g) => g.id === "library")!.headings.find((h) => h.code === "529")!;
+    expect(h529.entries.filter((e) => e.source === "document").map((e) => e.ref)).toEqual([{ doc: idx("529.5") }, { doc: idx("529.1") }, { doc: idx("529.2") }]);
+    // Patch symbols whose key is no library entry go to "other" by their code's base; here they share heading 529 there, in key order.
+    const other529 = mapPalette(d, p).find((g) => g.id === "other")!.headings.find((h) => h.code === "529")!;
+    expect(other529.entries.map((e) => e.ref)).toEqual([{ patch: "club:529.8" }, { patch: "club:529.9" }]);
+    // A library-keyed patch item sits after document items and before library items.
+    const target = mapPalette(puit).find((g) => g.id === "library")!.headings.find((h) => h.entries.filter((e) => e.source === "library" && e.enabled).length >= 2)!;
+    const key = target.entries.filter((e) => e.source === "library").at(-1)!.canonicalId!;
+    const p2 = mapPatchSchema.parse({ documentHash: "cd".repeat(32), symbols: { [key]: ok(puit, key).symbol } });
+    const sources = mapPalette(puit, p2).find((g) => g.id === "library")!.headings.find((h) => h.code === target.code)!.entries.map((e) => e.source);
+    expect(sources.filter((x) => x === "patch")).toHaveLength(1);
+    if (sources.includes("document")) expect(sources.indexOf("patch")).toBeGreaterThan(sources.lastIndexOf("document"));
+    expect(sources.indexOf("patch")).toBeLessThan(sources.indexOf("library"));
+  });
+
+  it("compareSymbolCodes: numeric by value, numeric before non-numeric, else by string", () => {
+    expect(["graphic", "529", "101.1", "frame", "101", "99.5"].sort(compareSymbolCodes)).toEqual(["99.5", "101", "101.1", "529", "frame", "graphic"]);
+  });
+
+  it("refuses an effective document (its appended patch symbols are no { doc } refs)", () => {
+    const r = ok(doc, "ISOM2017-2:204");
+    const p = mergePatch(mapPatchSchema.parse({ documentHash: "cd".repeat(32) }), {
+      putSymbols: { [r.key]: r.symbol },
+      put: [{ op: "add", id: "00000000-0000-4000-8000-000000000009", type: OBJECT_TYPE.point, symbol: { patch: r.key }, coords: [[0, 0]] }],
+    });
+    expect(() => mapPalette(applyPatch(doc, p).document)).toThrow(/pinned document/);
   });
 
   it("is deterministic and does not change the document's stack", () => {
