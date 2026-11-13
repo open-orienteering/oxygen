@@ -303,7 +303,7 @@ the `courseSetter` and `eventAdmin` system groups, so a controller gets
 | D8 | **Auto templates, class scale override, export menu.** Migration (09 §5): `map_templates.auto_key` (`<paper>-<orientation>-<scale>`) + `is_extra`; `course_maps.section_index = 0`, `class_id NULL`, `props`; `classes.print_scale`, `sheet_template_id`; consider `course_maps.version` / `map_templates.version` (journal HLC, `CONFLICT` → refresh as `course-editor.md` §3) — D7 left sheet and template writes whole-snapshot LWW (`course-layout.md` §2, decision log D7); a data migration derives `auto_key` for every template and marks duplicates of a key `is_extra` by the rule of open decision (3) — no sheet moved or deleted. `layout.autoSheets { courseId }` ensures the auto template for the course's `(paper, orientation, scale)` and the first sheet fitting the course with a margin (08 §4.6 window defaults); a class with `print_scale` / `sheet_template_id` gets sheet rows keyed by `class_id`; extra templates created explicitly and assigned by drag between "courses in this template / other courses at this scale" in the Layout inspector; **Class view** in Course mode shows the course as the class prints it (08 §5.4). `resolveSheet` / `resolve-layout.ts` take the class override; `maps.pdf` gains `?classes=` on both paths. **Export ▾** in the top bar (08 §5.2, phase-1 entries): this course · this class · all courses · all controls · IOF XML · PPen — the existing routes; variants, setter maps and description sheets arrive in F. Maps page: course rows gain an auto / extra badge (class-override sheets shown in the editor only — decided above). Tests: `auto_key` derivation and duplicate rule (unit), integration auto sheets + class sheet + `maps.pdf?classes=` under both pipelines, `course-maps.spec.ts` (dual-run) gains "export a course that has no template yet" | `docs/course-layout.md` §5 "Templates by key", §6 "Sheets and class overrides", §7 "Export"; `docs/course-maps.md` API (`classes`), data model | 08 §4.4, §4.6, §5.2 (export menu), §5.4 Class view; 09 §4 D, §5 | D7 | one Prisma migration + `schema.prisma`; new `packages/api/src/routers/layout.ts` (or `mapTemplate.ts` / `courseMap.ts` extended), `course-maps/{resolve-layout,resolve-sheet,routes}.ts` (`maps.pdf` selection on both paths), `routers/class.ts` (override fields); `packages/web/src/pages/editor/{TopBar,Inspector}.tsx` + `modes/LayoutMode.tsx` (template section, Class view), `pages/MapsPage.tsx`, `pages/ClassesPage.tsx` (override fields, if shown there), i18n; `packages/api/src/__tests__/integration/course-maps.test.ts`, `e2e/course-maps.spec.ts` | done (PR #101, merged 2026-11-04 as `ab82f39`, after #100; the merge combined the decision-log rows and the features.md paragraphs) |
 | D9 | **Field mode baseline and mobile chrome** (08 §5.5): Field mode as the phone default (exists on desktop too): GPS position + accuracy ring (existing `useGeolocationWatch` through `mapGeo`), the selected course, large hit areas, a **bottom sheet** with three detents (peek: KPIs + selection; half: properties or the control list with distance and bearing from the fix; full) that never covers the selection, check-off (`control.check`, D0), notes; **chrome**: full-bleed canvas, compact top bar (back, course picker, mode, overflow), floating **+** opening the creation tools (D5's armed tools in the pin-drop flow), the action bar as the sheet's peek row (≥ 44 px); **gestures** (extends `mobile-layout.md`): drag moves only a selected object, handle offset above the finger, long-press on an unselected control starts a move, two fingers always pan / zoom and cancel an armed tap (today's 400 ms rule), pinch on an area object's handle ring scales it; **nudge pad** (±0.1 mm / ±1 m, numeric fields); the loupe per the split's decision; breakpoints phone < 640 / tablet 640–1024 / desktop, gesture rules by `pointer: coarse`. Offline: the document is cached (B4); a field move queues through the existing mutation queue if one covers these mutations (planner locates), else Field mode is view + check-off only while offline, stated in the UI. Playwright: new **`mobile` project** (`devices['Pixel 7']`, `MOBILE_SPECS`) and `e2e/field-mode.spec.ts` (GPS via `context.setGeolocation`, detents, long-press move, nudge pad, two-finger cancel, Place / Done) | `docs/course-editor.md` §9 "Field mode", §10 "Phone and tablet"; `docs/mobile-layout.md` "Course editor on touch" (rewritten for the new editor; the legacy section kept until F) | 08 §5.5, §5.1 (6), §5.3 "Touch", §7 (mobile project); 04 §7 "GPS and live positions"; 09 §4 D gate | D4 (D0 for `control.check`; D5 for the + tools — the row ships without them if D5 is not merged) | `packages/web/src/pages/editor/modes/FieldMode.tsx`, new `components/editor/BottomSheet.tsx`, `pages/editor/EditorPage.tsx` (breakpoints), `lib/editor/field.ts` (+ `lib/geo-utils.ts`), `hooks/useGeolocationWatch.ts` (reused), `components/MapViewer.tsx` (touch rules), `i18n`; `playwright.config.ts` (`mobile` project), new `e2e/field-mode.spec.ts`, `e2e/helpers/` | done (PR #95, merged 2026-11-03 as `9a3bc64`; outside the area by coordinator decision 2026-11-03: `pages/editor/tools/bindings.ts` `selectBinding.onPinch`; minimal shared chrome: `TopBar.tsx` MODES line, `state.ts` mode case, `components/MapPanel.tsx` `mapOverlayLayout`; the sharding script's weight for `field-mode.spec.ts`) |
 | D9b | **Loupe on B2's render target** (08 §5.5 "Precision"; decided in D9, decision log 2026-11-03): while a control is touch-dragged, a ~120 px circle above the finger shows the map at ×2.5 about the dragged point — one more `MapGlRenderer.renderDocument(view, { viewMatrix }, target)` per frame into an offscreen `RenderTarget` (with stencil) over the resident visible set, blitted into the circle; the nudge pad stays. Tests: the loupe's view matrix (unit), E2E in the `mobile` project (`editor-loupe` visible during a long-press drag, gone on release) | `docs/course-editor.md` §10 (loupe), Pending trimmed | 08 §5.5; B2 (`map-rendering.md` render targets) | D7 (the files are D7's area), D9 | `packages/web/src/map-gl/{renderer,engine}.ts`, `components/VectorMapLayer.tsx`, `components/MapViewer.tsx` (the loupe element), `e2e/field-mode.spec.ts` | done (PR #100, merged 2026-11-04 as `d79b330`, after #99) |
-| D9c | **Offline queue for Field mode's writes** (08 §5.5 "Offline", §12 "Field-mode conflicts"; decided in D9): a `control.*` outbox in `lib/offline` for `control.update` (moves, nudges) and `control.check`, replayed in order on reconnect with the G1 field-move rule (rebase when only position / description changed on the other side, else "moved by X" for the user), the UI's "viewing only" replaced by a pending-writes count | `docs/course-editor.md` §9 "Offline"; `docs/offline-architecture.md` (a cloud-owned outbox) | 08 §5.5, §12; `offline-architecture.md` | offline-architecture phase 2, D9 | `packages/web/src/lib/offline/`, `pages/editor/EditorPage.tsx` (writes through the queue), `modes/FieldMode.tsx`, `e2e/field-mode.spec.ts` | blocked: offline phase 2 |
+| D9c | **Offline queue for Field mode's writes** (08 §5.5 "Offline", §12 "Field-mode conflicts"; decided in D9): a `control.*` outbox in `lib/offline` for `control.update` (moves, nudges) and `control.check`, replayed in order on reconnect with the G1 field-move rule (rebase when only position / description changed on the other side, else "moved by X" for the user), the UI's "viewing only" replaced by a pending-writes count | `docs/course-editor.md` §9 "Offline"; `docs/offline-architecture.md` (a cloud-owned outbox) | 08 §5.5, §12; `offline-architecture.md` | D9 | `packages/web/src/lib/offline/`, `pages/editor/EditorPage.tsx` (writes through the queue), `modes/FieldMode.tsx`, `e2e/field-mode.spec.ts` | ready (unblocked 2026-11-13, slice G answer 5: the outbox and `events.push` landed with the offline pivot; not with G6 — `EditorPage.tsx`) |
 | D10 | **`course-editor.spec.ts` rewrite, projects, hygiene** (09 §4 D gate; 08 §7 E2E row): every legacy flow on the new canvas — place / drag / persist / delete, build / reorder / undo / redo / persist, delete cascade + remove-from-course, deep links, column C which-of-similar, description editor, autodetect suggestion, all-controls sheet, clone with legacy flags read-only, chrome / Escape cascade / `H`, automatic cuts (slit + gapped leg via the `course-layer` mirror), label drag / reset / undo, inline code edit, free order — plus the D5 placement flow and objects, D6 checks, D7 / D8 layout (auto template, align map, PDF page count), a **conflict** (two browser contexts: the second write gets `CONFLICT`, the UI refreshes and shows the rule), and the `mobile` project running `field-mode.spec.ts` + the editor's touch subset. `course-editor.spec.ts` under `map-vector` only, `course-editor-legacy.spec.ts` under `chromium` (decided above); `MAP_PIPELINE_SPECS` / `MOBILE_SPECS` explicit; the sharding script's weights count the second run; `e2e/helpers/editor.ts` (place, select, arm, drag in paper mm through `data-centre-*` / `data-px-per-um`). `reseed()` in `beforeAll`, idempotent fixture import per test (AGENTS §12) — plus, from the 2026-11-04 feedback rows (D12–D16): the area-press rule (press inside an `oob_area` / toner saver pans, outline press selects, drag inside a selected area pans; helpers `pressInside` / `pressOnEdge`), its touch subset (tap on the outline selects, inside does not), no selection ring while `K` is armed, `editor-layout-tool-O` absent, `P` drawn in clicks, and whatever D13 / D15 deferred (toner saver `c` in the PDF, Alt smooth vertex) | `docs/course-editor.md` "Testing"; `docs/map-pipeline-switch.md` §5 (dual-run and mobile lists), §7 trimmed; `docs/e2e-sharding.md` | 08 §7; 09 §4 D, §8, §10 "Two Playwright projects" | D5, D6, D8, D9, D12–D16 | `e2e/course-editor.spec.ts`, `e2e/course-editor-legacy.spec.ts`, `e2e/field-mode.spec.ts`, new `e2e/helpers/editor.ts`, `playwright.config.ts`, the sharding script under `scripts/`  | done (PR #110, merged 2026-11-05 as `37ecfc2`; four E2E hardenings on top: number drags, clone ordering, the out-of-bounds press, course-presence select) |
 | D11 | **Presence and live refresh** (G1 (c); 08 §12 "Field-mode conflicts"): "who has this course open" — a heartbeat (`course.presence { courseId, mode }`, TTL 30 s) read by the existing 5 s poll, or the SSE channel G1 chooses — shown in the top bar ("Anna · Lång · Field"); others' changes refresh the editor while idle (the `oCourse` / `oControl` counters already invalidate `course` / `control` queries; the editor's structure and token refetch on it) and a control refreshed under a conflict shows "moved by X at T" from `JournalEntry.actorId` / `hlc`; a structure changed under the user's feet re-renders the sequence with a one-line notice, never silently. Tests: integration presence TTL and expiry, E2E two contexts (presence row appears; a move in one context shows in the other within the poll) | `docs/course-editor.md` §11 "Working together"; `docs/course-layer.md` §7 (presence rule); `docs/offline-architecture.md` only if a channel is added | G1; 08 §5.5 "Offline", §12 | G1, D4 | `packages/api/src/routers/course.ts` (`presence`) or new `routers/presence.ts` (+ SSE route in `packages/api/src/` if G1 says so), `packages/web/src/hooks/useExternalChanges.ts` (editor invalidation), `pages/editor/TopBar.tsx`, `lib/editor/conflicts.ts`, i18n, integration + E2E | done (PR #102, merged 2026-11-04 as `748c555`) |
 | D12 | **Areas hit by their outline; no selection ring while a tool is armed** (user feedback 2026-11-04, items 1 and 3; plan in [feedback-2026-11-04.md](feedback-2026-11-04.md)): closed areas (`oob_area`, `whiteout`, `toner_saver`, `filter_region`) are hit only along their outline — the interior is the map, so a press inside pans, also on a selected area (move it by its edge or a vertex); lines by stroke, text by glyphs as today; D5b gestures unchanged. `editor-selection-ring` is not drawn while an exclusive tool is armed (`showSelectionRing`); the placed control stays selected. §10 gains a Pending bullet for Layout on a phone (D-mobile decides). Tests: `hit.test.ts`, `bindings.test.ts`, E2E (drag inside an oob_area pans and leaves it; outline press selects; no ring while `K` is armed); `docs/bugfix-editor-area-press-pans.md` | `docs/course-editor.md` §5, §6.1, §7, §10 | 08 §5.3; [feedback-2026-11-04.md](feedback-2026-11-04.md) | D5b | `packages/web/src/lib/editor/{hit,state}.ts` + tests, `pages/editor/tools/bindings.ts` (`selectBinding` body press) + test, `components/MapViewer.tsx` (`uiAreas`, ring gate), `e2e/course-editor.spec.ts` (two tests), `e2e/field-mode.spec.ts` (the area tap), docs | done (PR #107, merged 2026-11-05 as `67d6437`, after #106; area also covers `e2e/field-mode.spec.ts` (outline tap)) |
@@ -697,6 +697,199 @@ patch layer and Map mode (G), browser-side PDF (G), OCAD course export
 teams — timing; F6b covers individual classes at stage 0 only), alpha in
 the pass stream (`map-rendering.md` §8), a draw-panel option that deals
 variants, per-runner named map pages.
+
+## Slice G — Map mode (08 §8 phase 3) and offline print (09 §4 G)
+
+Split 2026-11-13 by the G0 planner (Fable) from 09 §4 G, §6 (rollback:
+the patch toggle) and §8; 08 §4.1, §4.7, §4.8, §5.2–5.3 (Map mode
+column), §5.5, §6, §7, §8 phase 3; 02 §7, §10; 03 §1; 04 §7; 05 §5.11;
+06 §6; 07 §9, §15. The user's answers are below ("Answers (user
+2026-11-13)"). Row ids start at G2: G1 is the concurrent-editing decision
+gate (slice D). Two tracks with no shared code until G14:
+
+- **Map mode** (G2–G12): an event-scoped patch on the pinned document
+  (hide, modify, add, resymbol), applied before symbolisation so screen,
+  print and the kiosk see one effective document (08 §4.1); the editor's
+  fourth mode with select / nodes / draw / symbol picker; re-resolution
+  when the pin moves; promote to a club map version.
+- **Offline print** (G13–G19): the print pipeline made isomorphic end to
+  end, a print-job descriptor, browser-side PDF in a Web Worker, the job
+  cached for a device with no network, and venue printing through the
+  checkout snapshot.
+
+The slice ships as **one release at the G-gate** (answer 6).
+
+What the code already has (the planner's survey): `@oxygen/shared/print`
+(composer, operators, writer) imports nothing from Node, but
+`renderCoursePages`, `sheetForMapRow`, `resolveSheet`, `resolveMapLayout`,
+`prepareDocument` / `objectsNear` and the font loader live in
+`packages/api/src/course-maps/` and `render/`; SVG logos are rasterised
+by resvg in the API (`course-print.md` §6.3). The print worker's message
+(`{ document, rotationCorrectionDeg, sheets, graphics, mode, info }`) is
+already structured-cloneable (§8.2) — it is the print job. The checkout
+snapshot carries `course_objects` and the `maps` part (files, sources,
+documents, decisions; `map-storage.md` §7.2) but no `course_maps`,
+`map_templates` or `graphics`; `sync/ownership.ts` forwards only
+`club.` / `eventor.` / `tracks.` / `liveresults.` mutations, so layout
+and course-object writes made on a box run locally and never return
+(G18 fixes it). For Map mode: `encodeMapDocument` / `decodeMapDocument`
+and `documentRenderInput { only }` (shared), `hitTest(stream, …)`
+(shared), `geometry-edit.ts` / `geometry-gestures.ts` (Bézier vertex
+editing, F13 / F16 / F18), `symbol-groups.ts` and the swatch route (P3),
+the snap index and `symbol-pick.ts` on the main thread, the shared undo
+stack and `write-client.ts`. Missing, and named in `map-rendering.md` §8:
+object identity across the bridge, hide / replace of a document object,
+highlight through the dynamic bucket, a hit-test request over the
+document stream. `url.ts` knows `mode=layout|field` only. There is no
+`maps.*` permission.
+
+Offline architecture: the phases D9c named were replaced in the July
+2026 pivot; Steps 1–6 of `future-architecture.md` (journal completeness,
+shipping, lease, venue packaging, station resilience) have all landed.
+No G row waits on an offline phase; D9c is unblocked (answer 5).
+
+**Order**
+
+- **Wave 1**: G2 ∥ G13 ∥ V1 ∥ D9c.
+- **Wave 2**: G3 (after G2) ∥ G8 (after G2) ∥ G15 (after G13).
+- **Wave 3**: G4 (after G3) ∥ G16 (after G15) ∥ G18 (after G3) ∥ G14
+  (after G2, G3, G15).
+- **Wave 4**: G5 (after G4) ∥ G17 (after G16) ∥ G19 (after G18).
+- **Wave 5**: G6 (after G5; not with D9c — `EditorPage.tsx`).
+- **Wave 6**: G7 (after G6) ∥ G11 (after G6).
+- **Wave 7**: G9 (after G7, G8).
+- **Wave 8**: G12 (after G9, G11); then G10 (after G12).
+- G-gate. The long pole is G2 → G3 → G4 → G5 → G6 → G7 → G9 → G12. G10
+  is polish and the first row to drop if the slice is shortened; G12 is
+  the largest row and its planner may split it (API half; UI and E2E
+  smoke).
+
+Rows that may never run together (shared files, beyond the Depends
+column): G3 / G18 / G19 (`sync/lease.ts`, `sync/ownership.ts`); G14 /
+G15 (`course-maps/routes.ts`, the print worker); G4 / G5 (`map-gl/`,
+`MapViewer.tsx`); G6 / G7 / G9 / G10 / G12 (`modes/MapMode.tsx`,
+`tools/bindings.ts`); G6 / D9c (`EditorPage.tsx`); G11 / G12
+(`map-store/`); G16 / G17 (`packages/web/src/print/`,
+`export-menu.ts`); F26, if it is ever started, with G4 / G5 / G14
+(`map-gl/`, `print/compose.ts`).
+
+Decided in this split (planner, 2026-11-13, for user review unless an
+answer below settles it; a row's planner may reopen any with a reason):
+
+- **A new chapter `docs/map-patches.md`** holds the patch model,
+  application, storage, re-resolution and promote; Map mode's UI is
+  `course-editor.md` §13; the renderer hooks are `map-rendering.md` §5.2
+  / §5.5.
+- **Ops are keyed states, not a log** (`course-layer.md` §7, answer 1):
+  one state per `(target, kind)` — `hide:<sourceIndex>`,
+  `modify:<sourceIndex>`, `resymbol:<sourceIndex>`, `add:<uuid>`; editing
+  an added object rewrites its `add` op. `mapPatch.apply { put, remove }`
+  merges per op id under the row lock, so two editors on different objects
+  never clobber. One cloud-owned `map_patches` row per event, not
+  journaled, in the checkout snapshot, forwarded from a venue.
+- **The patch toggle** (09 §6) is `map_patches.enabled` per event, read
+  by every consumer; the Map mode inspector's *Apply corrections* box.
+- **Permissions**: `courses.edit` edits the patch (they are the setter's
+  corrections); promote needs what the Club maps page's upload needs.
+- **Map mode is desktop-only** (08 §5.5): the phone's mode switch omits
+  it as it omits Layout.
+- **No text creation and no symbol, colour or template editing** (08
+  §4.7); an existing text moves and hides only.
+- **A canonical symbol whose colours the document's stack lacks is not
+  materialisable**: the palette shows it disabled with the reason; a
+  patch never changes the colour stack.
+- **New-edition tolerance** (06 §6 left it to 08, 08 did not set it): an
+  op re-resolves to the nearest object of the same symbol fingerprint
+  within 0.5 mm on paper, else it is unresolved.
+- **Promote is offered only for a map pinned to a club version**; an
+  event's own upload is first added to the library by the existing
+  action.
+- **Thumbnails and symbol swatches stay the unpatched document's**
+  (`map_previews` is keyed by document hash).
+- **The snapshot stays one JSON body** (07 §15): a patch is kilobytes;
+  graphics travel by the ranged blob procedure the maps part uses.
+- **The browser never rasterises SVG**: the print job carries each logo
+  as the PNG the server rasterised (G15).
+- **The browser composes the PDF whenever the device can** (answer 3):
+  the bytes are identical to the server's (G16's test), so where it is
+  made is invisible; the server composes when the device cannot (no
+  module worker, or a job too large for the device — G16's planner sets
+  the check) and for API callers.
+
+### Answers (user 2026-11-13)
+
+1. **Patch shape and ownership**: the planner's default — keyed-state ops
+   merged on the server per op id, one cloud-owned `map_patches` row per
+   event, not journaled, in the snapshot, venue writes forwarded.
+   `course-layer.md` §7 says so (written 2026-11-13). Deviates from 08
+   §4.7–4.8's ordered `PatchOp[]`.
+2. **A promoted version** keeps its source: `club_map_versions` gains a
+   `patch JSONB`; the import applies it at the store stage, so the
+   document is a function of source, importer, library, decisions and
+   patch, and every re-match re-applies the corrections. Deviates from 08
+   §4.7 "Promote" (encode the effective document without a source).
+3. **Browser-side PDF whenever the device can, if the result is
+   identical** (the user's choice over the planner's "server while it
+   answers"): the device composes by default, byte-identical to the
+   server; the server is the fallback.
+4. **Venue printing**: the box prints from its own copy (sheets,
+   templates and graphics in the snapshot); layout edits stay cloud-owned
+   and are forwarded, with a typed error offline. Deviates from 08 §4.8's
+   "layout and print stay cloud-only during a lease" for print reads.
+5. **D9c unblocked now** (wave 1): its Depends is D9; the sentence in
+   `course-editor.md` §9 was corrected 2026-11-13.
+6. **One release at the G-gate** (the user's choice over two releases).
+7. **V1**: the planner's scheme (`package.json` bumped by the release PR
+   and checked against the tag by `release.yml`, `git describe` past a
+   tag, one version in the footer, `Image:` only when it differs).
+
+Slice H (terrain, research 10) is not next: 10 §9 recommends nothing
+before spike T1 (§7: does the contour graph resolve on the corpus — at
+least 90 % of contour length with a determined sign). T1 can run beside
+any G wave; it is not a row until the user asks for it.
+
+### Done
+
+| Id | Sub-slice | Status |
+|----|-----------|--------|
+| G0 | **Split slice G** (planning only, Fable): the rows below, the two tracks, the waves and seven questions | done 2026-11-13 (answers above) |
+
+### Remaining
+
+| Id | Sub-slice | Spec home | Research | Depends on | Area (files a session may touch) | Status |
+|----|-----------|-----------|----------|------------|----------------------------------|--------|
+| G2 | **Patch model and application (shared).** `patchOpSchema` / `mapPatchSchema` (keyed states, answer 1; `symbols` appended after the document's table); `applyPatch(doc, patch)` → the effective document: hidden objects skipped, modified geometry replaced, added objects appended with `objectIndex ≥ doc.count`, `resymbol` swapped, existing `(hash, objectIndex)` references unchanged; `documentRenderInput` over it; `enabled: false` = identity. Tests: unit — each op, index mapping, idempotence (twice = once), commutativity (any order), an op whose target is absent reported not thrown | new `docs/map-patches.md` §1–2; `map-document-format.md` cross-reference | 08 §4.1, §4.7; 02 §7, §10; 04 §7 "Appending objects" | — | `packages/shared/src/map-document/patch.ts` (new) + `render-bridge.ts`, `index.ts`, tests; docs | ready |
+| G3 | **`map_patches`: table, API, delivery, snapshot, dump, GC.** Migration (08 §4.7 columns + `version` token as `course_objects`, `enabled`); `mapPatch.get` / `mapPatch.apply { put, remove }` / `mapPatch.setEnabled`; the patch reaches whoever may read the event's document (`GET /api/maps/:nameId/patch`, ETag = version, the §4.2 predicate; the event's map descriptor gains `patchVersion`); `mapPatch` in `SNAPSHOT_TABLES` (08 §4.8), `mapPatch.` forwarded from a venue; the per-event dump carries it (07 §10); the GC counts the row as a reference to its document. Tests: integration — apply merges per op, two writers, auth, snapshot round trip (08 §7), dump / restore, GC keeps a patched document | `docs/map-patches.md` §3; `map-storage.md` §7.2, §7.3, §8 | 08 §4.7, §4.8, §6; 07 §9.2, §10; `course-layer.md` §7 | G2 | `packages/api/prisma/` (migration), `routers/mapPatch.ts` (new), `routers/index.ts`, `map-store/{routes,event-document,gc}.ts`, `sync/{lease,ownership}.ts`, dump files, integration tests; docs | blocked: G2 |
+| G4 | **The effective document on screen.** The viewer worker takes `{ document, patch }`: object identity across the bridge (stream `objectIdx` ↔ document `objectIndex`), hide through the range table, replace / append with only the touched buckets re-prepared; a patch change redraws without reloading the document; the course layer's cuts, the snap index, the eyedropper and filter regions read the effective document; viewer, kiosk and editor fetch the patch with the document (`useMapPatch`). Tests: unit (`map-gl`) hide / replace / append ranges; E2E `map-vector-layer.spec.ts` — a hidden object's pixels gone, an added one drawn, the toggle off restores both | `map-rendering.md` §5.2 (trims "object identity across the bridge"); `docs/map-patches.md` §2 | 04 §7; 08 §4.1 | G3 | `packages/web/src/map-gl/`, `lib/{vector-map,map-document-cache}.ts`, `lib/editor/{snap,symbol-pick}.ts`, `components/{VectorMapLayer,MapViewer}.tsx` (patch input only), `e2e/map-vector-layer.spec.ts`; docs | blocked: G3 |
+| G5 | **Hit-test over the document and highlight through the dynamic bucket.** A worker request `hitDocument(x, y, tolerance)` → topmost-first document objects by the symbolised shape (`hitTest`, colour-stack order); the selected object's passes redrawn in a highlight colour in the dynamic bucket; an object under edit is drawn from the dynamic bucket and hidden in its static one. Tests: unit — hit order over fill / stroke / glyph / text; E2E — a click on the fixture's path reports its object, the highlight is in the frame | `map-rendering.md` §5.5 (trims "highlight through the dynamic bucket"), §5.2 "dynamic bucket" | 04 §7 | G4 | `packages/web/src/map-gl/`, `components/MapViewer.tsx` (`MapViewerEditorProps` only), `packages/shared/src/render/hit-test.ts`, tests; docs | blocked: G4 |
+| G6 | **Map mode: the shell, select, hide, move.** `mode=map` (`url.ts`), the mode group's fourth entry (desktop; phone omits), `modes/MapMode.tsx`; `V` selects a map object (click, Tab), the inspector's *Map object* section (symbol number and name, swatch, *Hide* / *Restore*), Delete = hide, a drag moves it (`modify`), `H` hides the course overprint, `F` fits the map; the *Corrections* list (`modes/map/Corrections.tsx`: every op, click to locate, revert) with *Apply corrections* (`enabled`); every gesture one `mapPatch.apply` and one undo entry; course edits locked. Tests: unit bindings; E2E `map-mode.spec.ts` (new) — hide, undo, move, toggle, reload keeps it | `course-editor.md` §13 (new), §2, §4 (test ids) | 08 §5.2, §5.3 (Map mode column), §5.5 | G5 | `packages/web/src/pages/editor/{EditorPage,TopBar,ToolRail,Inspector}.tsx`, `modes/MapMode.tsx` + `modes/map/` (new), `tools/{bindings,rail}.ts`, `lib/editor/{url,write-client}.ts`, locales, `e2e/map-mode.spec.ts`; docs | blocked: G5 |
+| G7 | **Node editing.** The nodes tool on a selected line or area: vertex drag, Bézier handles, insert (double-click), delete, corner / smooth (F18's convention), through `geometry-edit.ts` on the object's coordinates (curve flags, holes kept); node snapping to the snap index; live redraw from the dynamic bucket; one `modify` op per gesture. Tests: unit — coordinate ↔ path-vertex round trip with flags and holes; E2E — drag a node, insert, delete, undo | `course-editor.md` §13 "Nodes" | 08 §4.7 (scope), §5.3 | G6 | `modes/MapMode.tsx`, `modes/map/`, `tools/bindings.ts`, `lib/editor/geometry-edit.ts` (adapter only), `e2e/map-mode.spec.ts`; docs | blocked: G6 |
+| G8 | **Symbol materialisation and the palette (shared).** `materialiseSymbol(doc, canonicalId)` → a source-symbol IR entry with colours aligned to the document's stack (deterministic; not materialisable when a colour is missing, decided above); `mapPalette(doc, patch)` — the document's source table presented through its matches plus the materialisable canonical entries, grouped as P3's list. Tests: unit — every library entry of both specifications materialises on the fixtures or reports the missing colour; same input, same bytes; palette grouping | `map-symbols.md` §11 (new: materialisation and palette) | 03 §1 (scope note), §6.3; 08 §4.7 | G2 | `packages/shared/src/map-document/materialise.ts` (new), `packages/shared/src/symbol-library/` (read; an export if needed), tests; docs | blocked: G2 |
+| G9 | **Draw point / line / area; change symbol.** Map mode's point, line and area tools with the symbol picker (`mapPalette`, swatches), `add` ops with `symbols` materialised on first use; *Change symbol* on a selected object (`resymbol`, same object type only); point rotation where the symbol is orientable. Tests: unit tool reducers; E2E — add a path with a document symbol, add a boulder with a materialised symbol, change a symbol, each in the PDF's page raster | `course-editor.md` §13 "Drawing", "Symbol picker" | 08 §4.7, §5.2; 03 §1 | G7, G8 | `modes/MapMode.tsx`, `modes/map/`, `tools/` (new map tools, `bindings.ts`), `e2e/map-mode.spec.ts`; docs | blocked: G7, G8 |
+| G10 | **Join, split, reverse; holes.** On selected lines: join two ends, split at a node, reverse direction (dash and glyph phase follow); on an area: cut a hole, remove a hole — each a `modify` (join also hides one object). Tests: unit geometry; E2E one of each | `course-editor.md` §13 "Line and area operations" | 08 §4.7 (scope) | G12 | `modes/MapMode.tsx`, `modes/map/`, `tools/bindings.ts`, `e2e/map-mode.spec.ts`; docs | blocked: G12 |
+| G11 | **Re-resolution when the pin moves; unresolved ops.** When an event's `document_hash` changes (finalise, re-match, update to the latest version) its patch is re-keyed onto the new document: same source → by `sourceIndex`, exactly; another edition → by position and symbol (tolerance decided above); what does not resolve stays in the patch flagged `unresolved`, drawn nowhere, listed in *Corrections* to fix or drop. Tests: unit `resolvePatch` (same source, new edition, nothing found); integration — a re-match keeps a hide, a new edition flags it | `docs/map-patches.md` §4; `map-storage.md` §6.4, §6.9; `course-editor.md` §13 "Corrections" | 02 §7; 06 §6; 08 §4.7 | G6 | `packages/shared/src/map-document/patch-resolve.ts` (new), `packages/api/src/map-store/{documents,rematch,event-document}.ts`, `routers/mapPatch.ts`, `modes/map/Corrections.tsx`, tests; docs | blocked: G6 |
+| G12 | **Promote to a club version.** *Save corrections to the club map* (`mapPatch.promote { label }`): a new `club_map_versions` row labelled from the event with the same `source_hash` and the corrections in a new `patch JSONB` column (answer 2), its document imported from the source with the patch applied at the store stage (so every re-match re-applies it), the event repointed to it with an empty patch, the event's remaining references re-resolved (G11). Tests: integration — promote creates the version and empties the patch (08 §7), a re-match of the promoted version keeps the corrections; E2E map-mode smoke — hide an object, add a path, promote (08 §7) | `docs/map-patches.md` §5; `map-storage.md` §2, §6; `map-import.md` (store stage); `course-editor.md` §13 "Promote" | 08 §4.7 "Promote" (deviates, answer 2); 06 §6; 07 §4.2; 09 §6 | G9, G11 | `packages/api/prisma/` (migration), `map-store/{import-worker,jobs,documents}.ts`, `routers/{mapPatch,clubMap}.ts`, `modes/MapMode.tsx` + `modes/map/Promote.tsx`, the Club maps page (version label), tests, `e2e/map-mode.spec.ts`; docs | blocked: G9, G11 |
+| G13 | **The print pipeline in the shared package (no behaviour change).** `renderCoursePages`, `pageInputFor`, the row → sheet functions, `resolveSheet`, `resolveMapLayout`, `prepareDocument` / `objectsNear` move to `@oxygen/shared`; fonts and graphic bytes are inputs, not disk reads; the API keeps the database, the worker host and resvg. Tests: the existing print tests moved with the code; the worker's bytes and the golden tier unchanged; the import-list test (§1) covers the moved modules | `course-print.md` §1, §5, §8.2 (file map) | 05 §5.11; 05 §9 item 8 | — | `packages/api/src/course-maps/{pdf-page,resolve-sheet,resolve-layout,print-worker}.ts`, `render/{window-raster,fonts}.ts`, `packages/shared/src/print/` + `course-maps/`, tests; docs | ready |
+| G14 | **The patch in print, cuts and checks (server).** `maps.pdf`, the page raster and the print job compose the effective document (the worker's cache keyed by hash + patch version); `course.checks` and the server's cut context read it. Tests: integration — a hidden object absent from the PDF, an added one present, `enabled = false` byte-identical to the unpatched PDF | `course-print.md` §4.3, §8.2; `docs/map-patches.md` §2 "Consumers" | 08 §4.1; 05 §5.1 | G2, G3, G15 | `packages/api/src/course-maps/{pdf-page,print-worker,print-worker-host,routes}.ts`, `render/page-raster.ts`, the shared print entry (patch input), tests; docs | blocked: G2, G3, G15 |
+| G15 | **The print job.** `GET /api/maps/:nameId/print-job?<the maps.pdf query>` (`courses.view`, the same selection, order and caps) answers what the print worker gets: document hash, rotation correction, sheets, `info`, graphics by id; `GET /api/graphics/:id/print.png?w=&h=` serves a logo as the PNG the server would embed (SVG rasterised at 600 dpi, §6.3). Tests: integration — composing the job in process (deterministic) gives `maps.pdf`'s bytes; auth; caps | `course-print.md` §8.5 (new); `course-maps.md` API | 05 §5.11 | G13 | `packages/api/src/course-maps/{routes,graphics}.ts`, integration tests; docs | blocked: G13 |
+| G16 | **Browser-side PDF, the default where the device can** (answer 3). A Web Worker (`packages/web/src/print/`) composes a print job with the shared pipeline: the document from the document cache, the PDF faces and the writer lazy-loaded. The Export menu and the Courses page's exports compose on the device when it can and on the server otherwise (the capability check — module worker, the job's size against the device — set by this row's planner and written in the spec); the bytes are the same either way. Tests: unit — the worker's bytes equal the server's for the fixture job (deterministic; the guarantee answer 3 rests on); E2E `course-maps.spec.ts` — the device path downloads a PDF with the server's page count and labels, and the fallback path still works; the lazy chunk's size recorded (07 §15) | `course-print.md` §8.6 (new); `course-layout.md` §7 | 05 §5.11 phase 2, §8; 07 §9.1 | G15 | `packages/web/src/print/` (new), `lib/editor/export-menu.ts`, `pages/editor/ExportMenu.tsx`, `hooks/useCourseMapsOverview.tsx`, `lib/download-api.ts`, font assets, `vite.config.ts` (chunk), `e2e/course-maps.spec.ts`; docs | blocked: G15 |
+| G17 | **Offline print: the job kept on the device.** *Make maps available offline* (and opening Layout mode) stores the event's print jobs, their graphics, the faces and the document in Cache Storage from app code; offline, the exports compose from the stored job and say from when it is; the event's "offline ready" line with `navigator.storage.persisted()` and the document prefetch when an event opens (both Pending in `map-storage.md` §9). Tests: E2E — store, go offline (`context.setOffline`), export a PDF, notice shows the stored time | `course-print.md` §8.6; `map-storage.md` §7.1 (trims the prefetch and indicator items of §9) | 07 §9.1; 05 §5.11 | G16 | `packages/web/src/print/`, `lib/{map-document-cache,editor/export-menu}.ts`, `components/SyncStatusIndicator.tsx`, service-worker routes, locales, `e2e/course-maps.spec.ts`; docs | blocked: G16 |
+| G18 | **Venue printing: sheets, templates and graphics in the checkout snapshot** (answer 4). `SNAPSHOT_TABLES` gains `courseMap` and `mapTemplate`; the event's and the referenced club graphics travel (rows verbatim, bytes by the ranged blob procedure); the box's `maps.pdf`, `descriptions.pdf` and `print-job` answer from its copy; `courseMap.` / `mapTemplate.` / `layout.` / `graphics.` / `courseObject.` mutations are forwarded to the cloud from a venue (typed error offline), so nothing edited on a box is lost at checkin. Tests: integration `lease.test.ts` — checkout carries sheets, templates, graphics; the box prints the cloud's PDF bytes (deterministic); a layout write on the box forwards | `map-storage.md` §7.2; `offline-architecture.md` "Non-critical data" (print reads local, writes cloud); `course-print.md` §8 | 07 §9.2; 08 §4.8 (deviates, answer 4); 09 §4 G | G3 | `packages/api/src/sync/{lease,snapshotMaps,ownership}.ts`, `routers/lease.ts`, integration tests; docs | blocked: G3 |
+| G19 | **A box follows the cloud's map data during a lease.** On the settings cadence, while online, the box re-pulls the cloud-owned map rows: sheets, templates, graphics, course objects, the patch, and a re-imported map's `map_files` row with its new document. Offline it keeps what it has. Tests: integration — a sheet edited and a map re-imported on the cloud reach the box at the next refresh; nothing race-critical is touched | `map-storage.md` §7.2 (trims §9's "refreshing a checked-out box's `map_files` row"); `offline-architecture.md` | 07 §9.2 "Map changes during a lease" | G18 | `packages/api/src/sync/{settingsRefresh,snapshotMaps,lease}.ts`, integration tests; docs | blocked: G18 |
+| G-gate | `map-mode.spec.ts`, `course-maps.spec.ts` and `map-vector-layer.spec.ts` green; the corpus run (09 §8) with an empty patch byte-identical to before; on the club's instance: one real correction (a hidden object, a new path) drawn in the editor, on the kiosk and in the printed PDF, the toggle switched off and on (09 §6), then promoted and the club version re-matched with the correction kept; one event's maps exported on a laptop with the network off; one checked-out box prints with its uplink pulled; release notes naming the toggle and the rollback | 09 §4 G, §6, §8 | — | all G rows | user + club | manual |
+
+Waiting on later slices, not G: print profiles and the test sheet
+(`cmyk-offset`, 05 §5.5 — decision (2), 2026-10-23; with them the print
+profile in the snapshot, 07 §9.2), the translucent corridor band (F26),
+micro insets, climb from contours and OCAD course export (08 phase 4),
+Map mode on touch, text creation, symbol editing, a patched thumbnail,
+the documents-only dump (07 §10), terrain (topic 10).
+
+## General — outside the map pipeline
+
+| Id | Sub-slice | Spec home | Research | Depends on | Area (files a session may touch) | Status |
+|----|-----------|-----------|----------|------------|----------------------------------|--------|
+| V1 | **One version, aligned with the git tag** (user 2026-11-13; answer 7). Today the footer's `v0.1.0` is the root `package.json` (`vite.config.ts` → `__APP_VERSION__`, never bumped), `Image:` is `OXYGEN_DEPLOY_REF` (the Dockerfile's `BUILD_REF`, overridden by `deploy.sh` / the release compose file with the tag the operator chose) and `Commit:` is `OXYGEN_BUILD_ID`; `release.yml` retags an image built before the tag existed, so a tag cannot be baked in at build time. Scheme: the git tag is the version of record; the release PR sets `version` in the four `package.json` files (`pnpm release:version X.Y.Z`, a script) and `release.yml` fails when the tag differs from the tagged commit's `package.json`; `publish.yml` checks out with tags and passes `BUILD_VERSION`: the `package.json` version when it is ahead of the last tag (the release commit, built before its tag), else `git describe --tags --match 'v*'` (`v0.7.0-3-gabc1234`); the Dockerfile bakes it as `OXYGEN_VERSION`, `/api/version` answers it, and the web shows the server's value (its own baked value as fallback; a local build is `<package version>-dev`). Footer: `Oxygen v0.7.0 · Connected to PostgreSQL` / `Build: 2026-11-13 17:14 · Commit: 2dd412d`, with `· Image: <ref>` only when the deploy ref is not that version's tag (`edge`, `sha-…`, `source-…`). Tests: unit — the version rule (ahead of the tag, at the tag, past the tag, no git), `ghcr-ref.mjs` tag / package check, `formatDeployRef` hiding; E2E `competition.spec.ts` footer | `docs/releases-and-images.md` ("Tags", the footer block, "Cut a release"); `docs/deploy-gcp-cloud-run.md`; the release runbook template | — | — | root and package `package.json` (version only), `scripts/` (version script, `ghcr-ref.mjs`), `Dockerfile`, `.github/workflows/{publish,release}.yml`, `scripts/gcp/{deploy.sh,cloudbuild.yaml}`, `docker-compose.release.yml`, `packages/api/src/index.ts`, `packages/web/{vite.config.ts,src/env.d.ts}`, `src/lib/app-update.ts`, `src/hooks/useBuildInfo.ts`, `src/components/BuildInfoLine.tsx`, `src/pages/CompetitionSelector.tsx`, locales, `playwright.config.ts`, `e2e/competition.spec.ts`; docs | ready |
 
 ## Decision gates
 

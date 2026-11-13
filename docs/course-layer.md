@@ -1175,8 +1175,13 @@ journal entry (`course.lastChange`, `control.lastChange`).
 **`map_patches` (slice G, no code).** Patch operations are idempotent and
 commutative: each op is keyed by `(object id, op id)` and sets a state
 (hidden, colour override, …) rather than applying a relative change, so
-applying twice equals once and two devices' patches merge through the
-journal in any order.
+applying twice equals once and two devices' patches merge in any order.
+They merge **on the server per op id** (`mapPatch.apply { put, remove }`
+under the row lock), not through the journal: the patch is one cloud-owned
+`map_patches` row per event, outside the results closure, carried in the
+checkout snapshot and written from a venue box by forwarding to the cloud
+(user 2026-11-13, slice G answer 1; deviates from the ordered `PatchOp[]`
+of research 08 §4.7). The full model is `docs/map-patches.md` (rows G2, G3).
 
 ## 8. Course objects
 

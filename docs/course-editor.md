@@ -1432,8 +1432,9 @@ the selection and the undo history (`editorReducer`'s `mode`).
   need a connection.", the nudge pad, the check toggles and `+` are
   disabled, a drag snaps back without a write. The map keeps drawing from
   the cached document (B4, `map-storage.md` §7.1). A queue for these
-  writes, with the field-move rebase of §3 on replay, is row D9c (after
-  the offline architecture's phase 2).
+  writes, with the field-move rebase of §3 on replay, is row D9c (unblocked
+  2026-11-13: the station outbox and `events.push` it needs landed with
+  the offline pivot, `future-architecture.md` Steps 1–6).
 
 ## 10. Phone and tablet
 

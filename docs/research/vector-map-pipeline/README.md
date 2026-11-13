@@ -125,5 +125,6 @@ The log is split into one file per slice under [`decisions/`](decisions/), so th
 | [`decisions/slice-e.md`](decisions/slice-e.md) | Slice E — full migration |
 | [`decisions/slice-p.md`](decisions/slice-p.md) | Slice P — polish after slice E |
 | [`decisions/slice-f.md`](decisions/slice-f.md) | Slice F — course structure |
+| [`decisions/slice-g.md`](decisions/slice-g.md) | Slice G — Map mode and offline print |
 
 **Adding a row.** Append it to the file of the row's slice (`decisions/slice-<letter>.md`; a new slice starts a new file and gets a line in the table above). A decision that belongs to no slice — a research topic, a gate, a release, a cross-slice bug fix — goes to `decisions/general.md`. Keep the four columns. When a slice's file passes about 120 KB, continue it in `decisions/slice-<letter>-2.md` and list that here.
