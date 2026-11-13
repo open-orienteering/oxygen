@@ -1128,6 +1128,156 @@ resolves canonical entries through `paletteIndexOfStack(header.colours)`.
 - Mapper's 511-coded power line (suggested 510 only) is not normalised
   (A15 scoped to the railway); revisit if a Mapper corpus map shows it.
 
+## 11. Materialisation and the palette (Map mode)
+
+Map mode (`course-editor.md` §13) draws new objects and re-symbols old
+ones with symbols the document's table may not have. A library entry
+placed in a document for that purpose is **materialised**: its colours
+resolved through the document's aligned stack and its dimensions scaled
+to the document, giving a `patchSymbolSchema` entry the event's patch
+stores under the entry's full id (`map-patches.md` §1.3). The **palette**
+is what Map mode offers to draw with. Both live in
+`packages/shared/src/map-document/materialise.ts` and are exported from
+`mapDocument`; both are pure, read only the document's header and
+object table, and never change the colour stack (slice G, "Decided in
+this split": a patch never changes the colour stack).
+
+### 11.1 `materialiseSymbol`
+
+```ts
+materialiseSymbol(doc: Pick<MapDocument, "header">, canonicalId: string): MaterialiseResult
+
+type MaterialiseResult =
+  | { ok: true; key: string; symbol: PatchSymbol; factor: number }
+  | { ok: false; reason: "unknown-entry" }
+  | { ok: false; reason: "missing-colours"; missing: string[] };
+```
+
+- `canonicalId` is a full entry id of **any** registered library
+  (`ISOM2017-2:206`, `ISSprOM2019-2:529`, `ISSkiOM2019:803.2`). An id
+  `getLibraryEntry` does not know is `unknown-entry` — a result, never a
+  throw.
+- **Materialisable** means every palette id of `colourRefs(entry.render)`
+  (§4) is in the stack's palette index (`paletteIndexOfStack`, the index
+  the render bridge resolves canonical matches through, §9). Otherwise the
+  result is `missing-colours` with the absent ids, sorted. There is no
+  same-class substitution: an entry whose `blue100-area` the stack lacks
+  is not drawn in the stack's blue line colour. The stack is never
+  extended (G21's importer adds the overlay's rows to every stack, §12.3).
+- **The factor** the entry is scaled by:
+  - an entry of the **document's library** (`header.library.id`):
+    `header.documentFactor` — the same number `canonicalRender` uses, so
+    a materialised symbol draws exactly as a document symbol auto-matched
+    to the same entry (`map-document-format.md` §8);
+  - an entry of **another library** (the `ISSkiOM2019` overlay; a base
+    library that is not the document's): `libraryFactor(library,
+    mapScale, entry.code) × symbolScale` (§12.2), the entry's code picking
+    ISSkiOM's track or other scale column. **`symbolScale` is derived**,
+    not stored: `documentFactor ÷ libraryFactor(documentLibrary,
+    mapScale)`, unrounded — 1 for a map drawn at its spec's enlargement for
+    its scale (§8.3). The header stores only `documentFactor`; the import
+    report's `matching.factor.symbolScale` is the same quotient rounded to
+    three decimals, so the two can differ in the fourth;
+  - a header with `library: null` (never matched): `symbolScale` 1, so
+    every entry, of whichever library, takes `libraryFactor(library,
+    mapScale, entry.code)`.
+- **The symbol**: `code` = the entry's code, `name` = its English name,
+  `kind` = the render's type, `origin: "source"`, `hidden: false`, no
+  `match`, no `sourceIndex`, and `render` = `resolveEntry(entry, index)`
+  scaled by the factor (`render.id` is the full entry id). `key` is
+  `canonicalId`. It is the `patchSymbolSchema` parse of that value, so
+  the client's put and the server's parsed copy serialise identically.
+- **Deterministic**: the result is a function of the entry, the stack's
+  palette ids, `library`, `documentFactor` and `mapScale`; the same input
+  gives the same JSON, which is what makes two clients materialising the
+  same key on first use put the same state (`map-patches.md` §1.3).
+- Every entry materialises, text and 7xx included; what Map mode offers
+  is the palette's choice (§11.2).
+
+`canonicalEntryRender(entry, index, factor)` is the one
+resolve-and-scale step, shared with `canonicalRender`; it throws
+`UnknownPaletteIdError` on a missing colour.
+
+### 11.2 `mapPalette`
+
+```ts
+mapPalette(doc: MapDocument, patch?: MapPatch | null): PaletteGroup[]
+
+interface PaletteGroup {
+  id: "library" | "ISSkiOM2019" | "other";
+  library: SymbolLibraryId | null;   // the document's library, the overlay, null for "other"
+  headings: PaletteHeading[];
+}
+interface PaletteHeading {
+  code: string;                       // "302", "801.1", or a source base code ("850")
+  name: { en: string; sv?: string };
+  entries: PaletteItem[];             // at least one
+  search: string;                     // lowercased: code, names, every entry's code and names
+}
+interface PaletteItem {
+  kind: "point" | "line" | "area";
+  source: "document" | "patch" | "library";
+  ref: PatchSymbolRef;                // { doc: index } | { patch: full entry id }
+  canonicalId: string | null;         // the entry it is drawn as (the swatch); null = the document symbol's own drawing
+  code: string;
+  name: string;                       // source name, or the entry's English name
+  nameSv?: string;
+  objects: number;                    // objects using it in the document; 0 for patch and library items
+  enabled: boolean;
+  missing?: string[];                 // palette ids, when not enabled
+}
+```
+
+The document's source table presented through its matches, plus the
+entries it can materialise (03 §1, 08 §4.7), grouped as the course
+editor's symbol list (P3, `course-editor.md` §7 "filter region"):
+
+- **Document items**: every source symbol that can be drawn — its own
+  `render`, or an applied match to a known entry — of kind point, line or
+  area, used by objects or not. Not listed: hidden symbols, `missing`
+  and `graphic` ones, text, rectangle and unknown kinds (an `add` is a
+  point, line or area, `map-patches.md` §1.2), and symbols drawn by proxy.
+  `ref: { doc: index }`; `canonicalId` is the applied match's entry, else
+  null.
+- **Patch items**: every symbol of `patch.symbols`, referenced by an op
+  or not, `ref: { patch: key }`, always enabled (it was materialisable
+  when it was put).
+- **Library items**: the point, line and area entries of the document's
+  library (`documentLibraryId`) except the **course symbols (7xx)** —
+  course overprint is the course layer's (08 §4.5); the mapper's own
+  7xx source symbols stay listed as document items (user 2026-11-13) —
+  and, when the stack's palette index has `green-skio`, every entry of
+  `ISSkiOM2019`. `ref: { patch: entryId }`, which Map mode fills by
+  `materialiseSymbol` on first use (row G9). An entry that is not
+  materialisable is listed **disabled** with its `missing` palette ids
+  (slice G, "Decided in this split"). An entry already covered — the
+  applied match of a document item, or a key of `patch.symbols` — is not
+  repeated. The other base library is not offered (an ISSprOM entry on an
+  ISOM map); `materialiseSymbol` accepts it all the same.
+- **Headings**: a document item's heading is its applied match's entry
+  code, else its source code's base (`505.1` → `505`); a patch or library
+  item's is its entry's code. The heading's name is the library heading
+  entry's (variant `null`), else the first document item's source name.
+- **Groups**: `library` (headings of the document's library), then
+  `ISSkiOM2019` (items of the overlay: its entries, document symbols
+  matched to it, patch symbols keyed by it), then `other` (headings outside
+  both — club codes, symbols of another library). An empty group is left
+  out, so the overlay group is absent on a stack without `green-skio`
+  unless the document or the patch already has ski symbols.
+- **Order**: headings by code (numerically where both are numeric,
+  numeric before non-numeric, else by string); within a heading, document
+  items (applied match first, then more objects first, then index), then
+  patch items (by key), then library items (heading entry before its
+  variants, library order).
+- Every enabled item's `ref`, put with its materialised symbol where it
+  is a library item, passes `applyPatch`'s symbol and kind checks for an
+  `add` of its `kind` (`map-patches.md` §2.3).
+
+The palette carries no materialised symbols and no swatches: G9's picker
+draws a swatch from `canonicalId` (the library preview route,
+`map-storage.md` §4.5) or the document symbol's own route, and calls
+`materialiseSymbol` when an item is used.
+
 ## 12. ISSkiOM 2019: an overlay library
 
 `ISSkiOM2019` is the third registered library (G20; slice G answer 9).
@@ -1248,7 +1398,8 @@ unrounded:
 - a non-finite or non-positive scale throws.
 
 G8 multiplies it by the document's `symbolScale` when it materialises an
-entry of another library than the document's.
+entry of another library than the document's (§11.1: `symbolScale` is
+derived as `documentFactor ÷ libraryFactor(documentLibrary, mapScale)`).
 
 ### 12.3 Colours
 
