@@ -705,7 +705,7 @@ the patch toggle) and §8; 08 §4.1, §4.7, §4.8, §5.2–5.3 (Map mode
 column), §5.5, §6, §7, §8 phase 3; 02 §7, §10; 03 §1; 04 §7; 05 §5.11;
 06 §6; 07 §9, §15. The user's answers are below ("Answers (user
 2026-11-13)"). Row ids start at G2: G1 is the concurrent-editing decision
-gate (slice D). Two tracks with no shared code until G14:
+gate (slice D). Three tracks; the first two share no code until G14:
 
 - **Map mode** (G2–G12): an event-scoped patch on the pinned document
   (hide, modify, add, resymbol), applied before symbolisation so screen,
@@ -716,6 +716,12 @@ gate (slice D). Two tracks with no shared code until G14:
   end, a print-job descriptor, browser-side PDF in a Web Worker, the job
   cached for a device with no network, and venue printing through the
   checkout snapshot.
+- **GPS tracks to map objects** (G20–G28; user 2026-11-13, for ski-O):
+  the ISSkiOM 2019 ski symbols in the library and the importer; GPX files
+  imported per event as a reference layer in Map mode, trimmed, split,
+  several passes averaged, then converted into `add` ops with a track
+  symbol, their ends snapped to the network. The converted line is an
+  ordinary correction: screen, kiosk, print, promote.
 
 The slice ships as **one release at the G-gate** (answer 6).
 
@@ -750,15 +756,22 @@ No G row waits on an offline phase; D9c is unblocked (answer 5).
 
 **Order**
 
-- **Wave 1**: G2 ∥ G13 ∥ V1 ∥ D9c.
-- **Wave 2**: G3 (after G2) ∥ G8 (after G2) ∥ G15 (after G13).
+- **Wave 1**: G2 ∥ G13 ∥ V1 ∥ D9c ∥ G20 ∥ G22.
+- **Wave 2**: G3 (after G2) ∥ G8 (after G2, G20) ∥ G15 (after G13) ∥
+  G21 (after G20) ∥ G23 (after G22).
 - **Wave 3**: G4 (after G3) ∥ G16 (after G15) ∥ G18 (after G3) ∥ G14
   (after G2, G3, G15).
-- **Wave 4**: G5 (after G4) ∥ G17 (after G16) ∥ G19 (after G18).
+- **Wave 4**: G5 (after G4) ∥ G17 (after G16) ∥ G19 (after G18) ∥ G24
+  (after G3 and G18).
 - **Wave 5**: G6 (after G5; not with D9c — `EditorPage.tsx`).
 - **Wave 6**: G7 (after G6) ∥ G11 (after G6).
 - **Wave 7**: G9 (after G7, G8).
 - **Wave 8**: G12 (after G9, G11); then G10 (after G12).
+- **Waves 9–12**: G25 (after G10) → G26 (the first usable ski-O flow)
+  → G27 → G28, serial because each mounts in `MapMode.tsx`. None depends
+  on G10 or G12, so the tail may move ahead of promote without
+  re-planning. If the slice is shortened: drop G28, then G27; G10 stays
+  droppable.
 - G-gate. The long pole is G2 → G3 → G4 → G5 → G6 → G7 → G9 → G12. G10
   is polish and the first row to drop if the slice is shortened; G12 is
   the largest row and its planner may split it (API half; UI and E2E
@@ -771,7 +784,11 @@ G15 (`course-maps/routes.ts`, the print worker); G4 / G5 (`map-gl/`,
 `tools/bindings.ts`); G6 / D9c (`EditorPage.tsx`); G11 / G12
 (`map-store/`); G16 / G17 (`packages/web/src/print/`,
 `export-menu.ts`); F26, if it is ever started, with G4 / G5 / G14
-(`map-gl/`, `print/compose.ts`).
+(`map-gl/`, `print/compose.ts`); G20 / G8 (`symbol-library/index.ts`);
+G22 / G23 (`gps-track/`); G24 / G3 / G18 (`sync/ownership.ts`, dump
+files) and G24 / G12 (`prisma/`); G25 / G26 / G27 / G28 with each other
+and with G6 / G7 / G9 / G10 / G12 (`modes/MapMode.tsx`,
+`tools/bindings.ts`).
 
 Decided in this split (planner, 2026-11-13, for user review unless an
 answer below settles it; a row's planner may reopen any with a reason):
@@ -815,6 +832,43 @@ answer below settles it; a row's planner may reopen any with a reason):
   made is invisible; the server composes when the device cannot (no
   module worker, or a job too large for the device — G16's planner sets
   the check) and for API callers.
+- **A new chapter `docs/map-gps-tracks.md`** (storage, GPX, geometry,
+  averaging, editing, conversion); the UI is `course-editor.md` §13 "GPS
+  tracks"; ISSkiOM is `map-symbols.md` §12. The research decides none of
+  this beyond 04 §7 (georeferenced inputs become paper-space overlays)
+  and 03's "ISSkiOM later"; each row records its decisions as new.
+- **GPS tracks are per event, in their own cloud-owned table** (answer
+  10), stored in WGS 84 so a re-match or new edition does not move them;
+  not in the patch, not in the checkout snapshot, kept after conversion
+  until deleted. `routes` (runner routes for replay) and the legacy
+  `tracks` table are not used; the router is `mapTrack.` (`tracks.` is
+  taken).
+- **The GPX is parsed in the browser**; the server stores points, not the
+  file.
+- **Converted lines are polylines** (smoothed, then Douglas–Peucker).
+  Bézier fitting is later.
+- **Averaging** (G23), in ground metres on the projected tracks: (1) the
+  reference is the pass of median length, ties to the lexicographically
+  smallest point list; (2) each other pass is reversed if that brings its
+  ends nearer the reference's; (3) the reference is resampled every 2 m
+  with a unit normal at each sample; (4) for each sample and pass, the
+  nearest point on the pass no earlier along it than the previous
+  sample's match and within 15 m gives that pass's vote, its offset along
+  the normal; (5) the sample moves by the median of the votes (the mean
+  for two passes) — a sample only the reference votes on stays, and its
+  range is reported; (6) repeat once with the result as the reference;
+  store the result in WGS 84.
+- **Junction snap moves only the new line's end** (1.5 mm, track-symbol
+  lines only); it does not split or join the other line. G28 does not
+  depend on G10.
+- **ISSkiOM is an overlay library** (answer 9): ski symbols only, offered
+  on and matched against any document; ISOM 2017-2 stays a ski-O map's
+  base library. A canonical entry of another library than the
+  document's is materialisable, scaled by `libraryFactor` (G8 amended).
+- **The ski-O green is in every stack** (answer 8): the importer inserts
+  `green-skio` at its palette position where a source lacks it (G21), so
+  "a patch never changes the colour stack" holds and a ski track can be
+  drawn on a summer map.
 
 ### Answers (user 2026-11-13)
 
@@ -842,6 +896,21 @@ answer below settles it; a row's planner may reopen any with a reason):
 7. **V1**: the planner's scheme (`package.json` bumped by the release PR
    and checked against the tag by `release.yml`, `git describe` past a
    tag, one version in the footer, `Image:` only when it differs).
+8. **Ski-O green on a map without it**: the importer adds it to every
+   stack (G21); the patch still never changes the colour stack.
+   Deviates from `map-symbols.md` §3 / §9.2 (a palette row ticked for
+   ISSkiOM only is inserted into ISOM and ISSprOM stacks).
+9. **ISSkiOM: the ski-only symbols** as an overlay library on any map
+   (G20), not the whole spec. Deviates from 03 §6.4's one library per
+   specification and the matcher's one library per document.
+10. **GPS tracks per event** (G24), not per club map.
+11. **Swedish names**: the G20 session looks for SOFT's Swedish ISSkiOM
+    text and takes names from it; none if it is not found.
+Before these, the user decided (same day, before the G20–G28 split):
+GPX file import only for now (recording in the app waits, see below);
+ISSkiOM into the library; slice G's order kept; the track tools are
+averaging passes, snapping ends to junctions, trim and split (not
+shifting a whole track).
 
 Slice H (terrain, research 10) is not next: 10 §9 recommends nothing
 before spike T1 (§7: does the contour graph resolve on the corpus — at
@@ -864,7 +933,7 @@ any G wave; it is not a row until the user asks for it.
 | G5 | **Hit-test over the document and highlight through the dynamic bucket.** A worker request `hitDocument(x, y, tolerance)` → topmost-first document objects by the symbolised shape (`hitTest`, colour-stack order); the selected object's passes redrawn in a highlight colour in the dynamic bucket; an object under edit is drawn from the dynamic bucket and hidden in its static one. Tests: unit — hit order over fill / stroke / glyph / text; E2E — a click on the fixture's path reports its object, the highlight is in the frame | `map-rendering.md` §5.5 (trims "highlight through the dynamic bucket"), §5.2 "dynamic bucket" | 04 §7 | G4 | `packages/web/src/map-gl/`, `components/MapViewer.tsx` (`MapViewerEditorProps` only), `packages/shared/src/render/hit-test.ts`, tests; docs | blocked: G4 |
 | G6 | **Map mode: the shell, select, hide, move.** `mode=map` (`url.ts`), the mode group's fourth entry (desktop; phone omits), `modes/MapMode.tsx`; `V` selects a map object (click, Tab), the inspector's *Map object* section (symbol number and name, swatch, *Hide* / *Restore*), Delete = hide, a drag moves it (`modify`), `H` hides the course overprint, `F` fits the map; the *Corrections* list (`modes/map/Corrections.tsx`: every op, click to locate, revert) with *Apply corrections* (`enabled`); every gesture one `mapPatch.apply` and one undo entry; course edits locked. Tests: unit bindings; E2E `map-mode.spec.ts` (new) — hide, undo, move, toggle, reload keeps it | `course-editor.md` §13 (new), §2, §4 (test ids) | 08 §5.2, §5.3 (Map mode column), §5.5 | G5 | `packages/web/src/pages/editor/{EditorPage,TopBar,ToolRail,Inspector}.tsx`, `modes/MapMode.tsx` + `modes/map/` (new), `tools/{bindings,rail}.ts`, `lib/editor/{url,write-client}.ts`, locales, `e2e/map-mode.spec.ts`; docs | blocked: G5 |
 | G7 | **Node editing.** The nodes tool on a selected line or area: vertex drag, Bézier handles, insert (double-click), delete, corner / smooth (F18's convention), through `geometry-edit.ts` on the object's coordinates (curve flags, holes kept); node snapping to the snap index; live redraw from the dynamic bucket; one `modify` op per gesture. Tests: unit — coordinate ↔ path-vertex round trip with flags and holes; E2E — drag a node, insert, delete, undo | `course-editor.md` §13 "Nodes" | 08 §4.7 (scope), §5.3 | G6 | `modes/MapMode.tsx`, `modes/map/`, `tools/bindings.ts`, `lib/editor/geometry-edit.ts` (adapter only), `e2e/map-mode.spec.ts`; docs | blocked: G6 |
-| G8 | **Symbol materialisation and the palette (shared).** `materialiseSymbol(doc, canonicalId)` → a source-symbol IR entry with colours aligned to the document's stack (deterministic; not materialisable when a colour is missing, decided above); `mapPalette(doc, patch)` — the document's source table presented through its matches plus the materialisable canonical entries, grouped as P3's list. Tests: unit — every library entry of both specifications materialises on the fixtures or reports the missing colour; same input, same bytes; palette grouping | `map-symbols.md` §11 (new: materialisation and palette) | 03 §1 (scope note), §6.3; 08 §4.7 | G2 | `packages/shared/src/map-document/materialise.ts` (new), `packages/shared/src/symbol-library/` (read; an export if needed), tests; docs | blocked: G2 |
+| G8 | **Symbol materialisation and the palette (shared).** `materialiseSymbol(doc, canonicalId)` → a source-symbol IR entry with colours aligned to the document's stack (deterministic; not materialisable when a colour is missing, decided above); `mapPalette(doc, patch)` — the document's source table presented through its matches plus the materialisable canonical entries, grouped as P3's list. Tests: unit — every library entry of both specifications materialises on the fixtures or reports the missing colour; same input, same bytes; palette grouping Amended for G20: `materialiseSymbol` takes a full entry id of any library; an entry of another library than the document's is scaled by `libraryFactor(library, mapScale) × symbolScale`; `mapPalette` adds the `ISSkiOM2019` group on every document whose stack has `green-skio`. | `map-symbols.md` §11 (new: materialisation and palette) | 03 §1 (scope note), §6.3; 08 §4.7 | G2, G20 | `packages/shared/src/map-document/materialise.ts` (new), `packages/shared/src/symbol-library/` (read; an export if needed), tests; docs | blocked: G2, G20 |
 | G9 | **Draw point / line / area; change symbol.** Map mode's point, line and area tools with the symbol picker (`mapPalette`, swatches), `add` ops with `symbols` materialised on first use; *Change symbol* on a selected object (`resymbol`, same object type only); point rotation where the symbol is orientable. Tests: unit tool reducers; E2E — add a path with a document symbol, add a boulder with a materialised symbol, change a symbol, each in the PDF's page raster | `course-editor.md` §13 "Drawing", "Symbol picker" | 08 §4.7, §5.2; 03 §1 | G7, G8 | `modes/MapMode.tsx`, `modes/map/`, `tools/` (new map tools, `bindings.ts`), `e2e/map-mode.spec.ts`; docs | blocked: G7, G8 |
 | G10 | **Join, split, reverse; holes.** On selected lines: join two ends, split at a node, reverse direction (dash and glyph phase follow); on an area: cut a hole, remove a hole — each a `modify` (join also hides one object). Tests: unit geometry; E2E one of each | `course-editor.md` §13 "Line and area operations" | 08 §4.7 (scope) | G12 | `modes/MapMode.tsx`, `modes/map/`, `tools/bindings.ts`, `e2e/map-mode.spec.ts`; docs | blocked: G12 |
 | G11 | **Re-resolution when the pin moves; unresolved ops.** When an event's `document_hash` changes (finalise, re-match, update to the latest version) its patch is re-keyed onto the new document: same source → by `sourceIndex`, exactly; another edition → by position and symbol (tolerance decided above); what does not resolve stays in the patch flagged `unresolved`, drawn nowhere, listed in *Corrections* to fix or drop. Tests: unit `resolvePatch` (same source, new edition, nothing found); integration — a re-match keeps a hide, a new edition flags it | `docs/map-patches.md` §4; `map-storage.md` §6.4, §6.9; `course-editor.md` §13 "Corrections" | 02 §7; 06 §6; 08 §4.7 | G6 | `packages/shared/src/map-document/patch-resolve.ts` (new), `packages/api/src/map-store/{documents,rematch,event-document}.ts`, `routers/mapPatch.ts`, `modes/map/Corrections.tsx`, tests; docs | blocked: G6 |
@@ -876,14 +945,29 @@ any G wave; it is not a row until the user asks for it.
 | G17 | **Offline print: the job kept on the device.** *Make maps available offline* (and opening Layout mode) stores the event's print jobs, their graphics, the faces and the document in Cache Storage from app code; offline, the exports compose from the stored job and say from when it is; the event's "offline ready" line with `navigator.storage.persisted()` and the document prefetch when an event opens (both Pending in `map-storage.md` §9). Tests: E2E — store, go offline (`context.setOffline`), export a PDF, notice shows the stored time | `course-print.md` §8.6; `map-storage.md` §7.1 (trims the prefetch and indicator items of §9) | 07 §9.1; 05 §5.11 | G16 | `packages/web/src/print/`, `lib/{map-document-cache,editor/export-menu}.ts`, `components/SyncStatusIndicator.tsx`, service-worker routes, locales, `e2e/course-maps.spec.ts`; docs | blocked: G16 |
 | G18 | **Venue printing: sheets, templates and graphics in the checkout snapshot** (answer 4). `SNAPSHOT_TABLES` gains `courseMap` and `mapTemplate`; the event's and the referenced club graphics travel (rows verbatim, bytes by the ranged blob procedure); the box's `maps.pdf`, `descriptions.pdf` and `print-job` answer from its copy; `courseMap.` / `mapTemplate.` / `layout.` / `graphics.` / `courseObject.` mutations are forwarded to the cloud from a venue (typed error offline), so nothing edited on a box is lost at checkin. Tests: integration `lease.test.ts` — checkout carries sheets, templates, graphics; the box prints the cloud's PDF bytes (deterministic); a layout write on the box forwards | `map-storage.md` §7.2; `offline-architecture.md` "Non-critical data" (print reads local, writes cloud); `course-print.md` §8 | 07 §9.2; 08 §4.8 (deviates, answer 4); 09 §4 G | G3 | `packages/api/src/sync/{lease,snapshotMaps,ownership}.ts`, `routers/lease.ts`, integration tests; docs | blocked: G3 |
 | G19 | **A box follows the cloud's map data during a lease.** On the settings cadence, while online, the box re-pulls the cloud-owned map rows: sheets, templates, graphics, course objects, the patch, and a re-imported map's `map_files` row with its new document. Offline it keeps what it has. Tests: integration — a sheet edited and a map re-imported on the cloud reach the box at the next refresh; nothing race-critical is touched | `map-storage.md` §7.2 (trims §9's "refreshing a checked-out box's `map_files` row"); `offline-architecture.md` | 07 §9.2 "Map changes during a lease" | G18 | `packages/api/src/sync/{settingsRefresh,snapshotMaps,lease}.ts`, integration tests; docs | blocked: G18 |
-| G-gate | `map-mode.spec.ts`, `course-maps.spec.ts` and `map-vector-layer.spec.ts` green; the corpus run (09 §8) with an empty patch byte-identical to before; on the club's instance: one real correction (a hidden object, a new path) drawn in the editor, on the kiosk and in the printed PDF, the toggle switched off and on (09 §6), then promoted and the club version re-matched with the correction kept; one event's maps exported on a laptop with the network off; one checked-out box prints with its uplink pulled; release notes naming the toggle and the rollback | 09 §4 G, §6, §8 | — | all G rows | user + club | manual |
+| G20 | **ISSkiOM 2019 in the symbol library: the ski-O symbols** (answer 9). A third library `ISSkiOM2019` holding what ISSkiOM adds to ISOM 2017-2: the track symbols (every width and state the spec lists) and its other ski-only symbols, authored as the other two were (`authoring.ts` helpers, dimensions from the IOF text only — the session fetches the IOF document, `map-symbols.md` §3 — palette ids, `names.ts`). Swedish names from SOFT's Swedish ISSkiOM text, which the session looks for (answer 11); absent if none is found. Not the whole spec: the base symbols of a ski-O map stay ISOM 2017-2's. The library's own scale rule (03 §6.6 `scaleRules`) exported as `libraryFactor(libraryId, mapScale)`. Tests: `palette.test.ts` tick count for the spec; `library.test.ts` (a)–(e) for the new library (hand-typed heading list and dimension table from the spec text); `names.test.ts`; contact sheet `e2e/__golden__/library/ISSkiOM2019/` and `library-golden.test.ts` | `map-symbols.md` §1, §3 (+ §3.1 counts), §6, new §12 "ISSkiOM 2019: an overlay library"; trims §10 | 03 §2.1 ("not inventoried"), §6.4, §6.6, Appendix B rows 4–5 | — | `packages/shared/src/symbol-library/` (`ISSkiOM2019/` new, `index.ts`, tests), `e2e/__golden__/library/ISSkiOM2019*`, `packages/api/src/render/__tests__/library-golden.test.ts`; docs | ready |
+| G21 | **The importer knows ski-O: track symbols matched, the ski-O green in every stack** (answer 8). (a) Matching: a source symbol with an 8xx code is matched against the `ISSkiOM2019` entries on any document (an overlay candidate set beside the document's library; canonical ids stay full ids, decisions and the review UI unchanged). (b) Colour alignment (stage 7): a source "Green for Ski-O" is identified as `green-skio` (name, else CMYK and position above black); where the source lacks it, it is inserted at its palette position, so every document can carry a ski track. `SYMBOL_LIBRARY_VERSION` bumped; the release's re-match pass picks up every pin. Tests: unit `matcher.test.ts` (8xx → ISSkiOM entry, ISOM codes unaffected), `colour-align` (identified, inserted, order vs black and upper purple, no duplicate); the corpus measure unchanged except the inserted colour; integration — an imported fixture's stack has `green-skio` | `map-symbols.md` §8.2, §9.2, §12; `map-import.md` (stage 7) | 03 §6.3, §6.5; 06 §5 | G20 | `packages/shared/src/import/{matcher,match-document,colour-align,colour-class,decisions}.ts`, tests, `scripts/measure-import.mjs`; docs | blocked: G20 |
+| G22 | **GPX parsing and track geometry (shared, pure).** `parseGpx(text)` over `import/xml.ts`: `trk` / `trkseg` / `trkpt` (lat, lon, `ele`, `time`), `rte` as an untimed track, waypoints counted and ignored, typed errors (not GPX, no points), one track per segment. `projectTrack(frame, track)` → paper mm through `mapGeo.wgs84ToPaper` (typed "not georeferenced" without a CRS; points outside the map's bounds kept and counted). `smoothTrack` (resample by arc length at 2 m on the ground, weighted moving average over 10 m, ends pinned) and `simplifyTrack` (Douglas–Peucker, tolerance in paper mm, default 0.1). `trimTrack(range)` / `splitTrack(index)`. Tests: unit — GPX 1.0 / 1.1, several tracks and segments, missing time, malformed; projection against the fixture frame's round trip; smoothing of a noisy straight line and a corner, determinism; simplify tolerance bound | new `docs/map-gps-tracks.md` §2–3 | 04 §7 "Georeferenced inputs"; 06 §3.2 (GPX templates dropped at import) | — | `packages/shared/src/gps-track/` (new), `packages/shared/src/index.ts` (export), tests; docs | ready |
+| G23 | **Averaging several passes (shared, pure).** `averageTracks(passes, opts)` as "Decided in this split" specifies (reference = median-length pass, passes orientated to it, resampled every 2 m, monotone nearest-point match within 15 m, median of signed normal offsets — mean for two passes —, two iterations); result is a track plus the arc ranges only one pass supports. Tests: unit — two parallel passes → the centre line; three with one outlier → the outlier ignored; a reversed pass, any input order → identical output; a pass covering half → the single-pass range reported; a loop that passes itself does not cross-match | `docs/map-gps-tracks.md` §4 | — (the research has none; new, user 2026-11-13) | G22 | `packages/shared/src/gps-track/`, tests; docs | blocked: G22 |
+| G24 | **`map_gps_tracks`: table and API** (per event, answer 10). Migration: one row per track segment, per event (`event_id` cascade, `id uuid`, `name`, `source_name`, `points JSONB` — lat / lng as 1e-7° integers, time, elevation, columnar —, `trim_start` / `trim_end`, `derived_from uuid[]` for an average, `converted_op text NULL`, `created_by`, `created_at`, `version`). `mapTrack.list` (metadata), `mapTrack.get` (points), `import { tracks[] }` (parsed on the device; caps: 200 000 points a track, 200 tracks an event), `update` (name, trim), `split`, `remove`, `markConverted`; `courses.edit`. Cloud-owned: `mapTrack.` in `CLOUD_OWNED_MUTATION_PREFIXES`, not in the checkout snapshot, not journaled; in the per-event dump (07 §10); never delivered to the viewer or kiosk. Tests: integration — import / list / get, caps, split and trim, auth, cascade with the event, dump / restore | `docs/map-gps-tracks.md` §1; `map-storage.md` §7.2 (not in the snapshot), §7.3 | 07 §10; 08 §4.8 | G3 (and after G18 has merged: `sync/ownership.ts`) | `packages/api/prisma/` (migration), `routers/mapTrack.ts` (new), `routers/index.ts`, `sync/ownership.ts` (one prefix), dump files, integration tests; docs | blocked: G3 |
+| G25 | **GPS tracks in Map mode: import and the reference layer.** A *GPS tracks* panel (`modes/map/tracks/`): import one or many `.gpx` (file picker and drop; parsed in the browser, `mapTrack.import`), the list (name, date, length, points, colour, show / hide, rename, delete, "outside the map", "converted"); visible tracks drawn over the map in paper space as a UI-layer overlay (decimated to the pixel; never printed, never on the kiosk); disabled with the reason on a map without a georeference; a click in the list locates the track. Tests: unit — list state, decimation; E2E `map-gps-tracks.spec.ts` (new) — import a fixture GPX generated from the fixture map's frame, the track is drawn where expected, hide, delete, reload keeps it | `course-editor.md` §13 "GPS tracks"; `docs/map-gps-tracks.md` §5 | 04 §7; 08 §5.2, §5.5 | G6, G22, G24 (queued after G10: `MapMode.tsx`) | `modes/MapMode.tsx` (mount only), `modes/map/tracks/` (new), `tools/{bindings,rail}.ts`, `lib/editor/write-client.ts`, locales, `e2e/map-gps-tracks.spec.ts`, `e2e/fixtures/`; docs | blocked: G6, G22, G24 |
+| G26 | **Convert a track into a map object.** On one or more selected tracks: *Convert to line* — the symbol picker (`mapPalette`, line symbols; the ISSkiOM track group first, last choice remembered), smoothing and simplification controls with a live preview in the chosen symbol (dynamic bucket), then one `add` op per track (line object in document units, symbol materialised on first use as G9 does), one `mapPatch.apply`, one undo entry; the track is marked converted and hidden from the layer (kept; *Show converted* brings it back). From then on it is an ordinary added object (G7 nodes, G9 change symbol, print, kiosk, promote). Tests: unit — track → `add` op (units, symbol, determinism); E2E — convert the fixture track with a ski-track symbol, the line is in the frame and in the PDF's page raster, undo removes it | `course-editor.md` §13 "GPS tracks: convert"; `docs/map-gps-tracks.md` §6 | 08 §4.7; 03 §1 | G9, G21, G25 | `modes/map/tracks/`, `modes/MapMode.tsx` (mount only), `e2e/map-gps-tracks.spec.ts`; docs | blocked: G9, G21, G25 |
+| G27 | **Trim, split and average tracks.** A *Tracks* tool on a selected reference track: drag its end handles along the track (trim, restorable), split at a clicked point (cutting out a break or a wrong turn is split, split, delete); with two or more selected, *Average* makes a new track (G23), stored like an imported one with `derived_from`, its sources hidden; single-pass spans drawn dashed. Each gesture one undo entry. Tests: unit — handle ↔ point index, the tool reducer; E2E — trim, split and delete the middle, average two fixture passes | `course-editor.md` §13 "GPS tracks: editing"; `docs/map-gps-tracks.md` §4–5 | — (new, user 2026-11-13) | G23, G26 | `modes/map/tracks/`, `tools/` (the tracks tool, `bindings.ts`), `e2e/map-gps-tracks.spec.ts`; docs | blocked: G23, G26 |
+| G28 | **Snap a converted track's ends to the track network.** At conversion (and as *Snap ends* on an added line): each end within 1.5 mm on paper of a line object with a track symbol (the effective document, added lines included) is moved onto it — to that line's end vertex when one is within reach (the two then share a vertex; joining them is G10's *Join*), else to the nearest point on the line: an end that overshoots is cut at the crossing, one that falls short is extended straight. The other line is not changed. `nearestOnLines(doc, pt, maxMm, symbolFilter)` beside the snap index (it holds vertices only). On by default, a checkbox in the convert panel. Tests: unit — short, overshoot, end-to-end, nothing in reach, the symbol filter; E2E — a converted fixture track ends on the existing line | `course-editor.md` §6.2, §13 "GPS tracks: junctions"; `docs/map-gps-tracks.md` §6 | 08 §5.3 "Snapping" | G26 | `lib/editor/snap.ts`, `modes/map/tracks/`, `e2e/map-gps-tracks.spec.ts`; docs | blocked: G26 |
+| G-gate | `map-mode.spec.ts`, `course-maps.spec.ts`, `map-vector-layer.spec.ts` and `map-gps-tracks.spec.ts` green; on the club's instance a real ski-O correction from GPX: at least two logged passes of one ski track imported, averaged, a break trimmed out, converted with an ISSkiOM track symbol on the club's ski-O base map, its ends snapped to the existing network, seen in the editor, on the kiosk and in the printed PDF, then promoted and re-matched with the track kept; an imported ISSkiOM-symbolled map's track symbols matched in the review; the corpus run (09 §8) with an empty patch byte-identical to before; on the club's instance: one real correction (a hidden object, a new path) drawn in the editor, on the kiosk and in the printed PDF, the toggle switched off and on (09 §6), then promoted and the club version re-matched with the correction kept; one event's maps exported on a laptop with the network off; one checked-out box prints with its uplink pulled; release notes naming the toggle and the rollback | 09 §4 G, §6, §8 | — | all G rows | user + club | manual |
 
 Waiting on later slices, not G: print profiles and the test sheet
 (`cmyk-offset`, 05 §5.5 — decision (2), 2026-10-23; with them the print
 profile in the snapshot, 07 §9.2), the translucent corridor band (F26),
 micro insets, climb from contours and OCAD course export (08 phase 4),
 Map mode on touch, text creation, symbol editing, a patched thumbnail,
-the documents-only dump (07 §10), terrain (topic 10).
+the documents-only dump (07 §10), terrain (topic 10); recording a GPS
+track in the app (a browser loses its GPS watch when the screen is off,
+so Field mode recording needs a packaged, native-wrapped app), shifting
+or rubber-sheeting a whole track to fit the map, Bézier fitting of
+converted tracks, the rest of ISSkiOM (its base-symbol deviations from
+ISOM, per-scale course symbols) and ISMTBOM 2022, FIT / KML import,
+keeping the original GPX file.
 
 ## General — outside the map pipeline
 
