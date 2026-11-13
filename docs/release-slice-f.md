@@ -66,3 +66,15 @@ start list (F6b); a runner who ran another variant MP on the kiosk and
 accepted at the desk with one click (F6c); a map-exchange course printed
 as two parts; the IOF export opened in Purple Pen or Condes; setter maps
 and description sheets printed for one event.
+
+### Club production, 2026-11-13
+
+v0.7.0 (`main` `2dd412da`, PR #174). The first F12 survey refused: one
+dashed map-anchored path in the template of `261013_Raven` was stroked
+`#fb09e7`, not purple (`coloured_stroke`). On the user's choice it was
+recoloured `#a626ff` on v0.6.1 with a one-off `db-job.sh` script (the
+object by id, inside a transaction that checked the old colour); the
+survey then printed `dry_run OK` (1 object moves, 0 removed). On-demand
+backup `1794588953793` ("before v0.7.0 (F12)"); `./deploy.sh v0.7.0`
+applied the three migrations and serves revision `oxygen-00054-26b`, with
+no errors in its logs. The F-gate (§5) is the user's.
