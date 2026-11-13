@@ -93,7 +93,8 @@ describe("renderCoursePages (shared)", () => {
     const out = await renderCoursePages({ document: doc, sheets, fonts, graphics: new Map([[8, { mime: "image/svg+xml", data: SVG }]]), rasteriseSvg, deterministic: true });
     expect(out.warnings).toEqual([]);
     expect(rasteriseSvg).toHaveBeenCalledTimes(1);
-    expect(rasteriseSvg).toHaveBeenCalledWith(SVG, ...svgRasterBox(20, 10));
+    // The graphic id goes along (G15): a host without the SVG asks its server for that graphic's PNG at the box.
+    expect(rasteriseSvg).toHaveBeenCalledWith(SVG, ...svgRasterBox(20, 10), 8);
   });
 
   it("leaves an SVG graphic out with a warning when the host has no rasteriser; the PDF is still written", async () => {

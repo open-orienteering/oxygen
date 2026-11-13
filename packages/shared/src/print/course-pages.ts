@@ -72,8 +72,13 @@ export interface CoursePagesOptions {
   info?: { title?: string; author?: string; subject?: string };
   /** Text as embedded fonts (default, what the route prints) or as glyph outlines (the corpus run's geometry check, docs/course-print.md §11). */
   text?: "font" | "outline";
-  /** Rasteriser for SVG graphics, to PNG at an exact pixel box. Absent: an SVG graphic is left out with an `SVG_RASTER` warning. */
-  rasteriseSvg?: (svg: Uint8Array, widthPx: number, heightPx: number) => Promise<Uint8Array>;
+  /**
+   * Rasteriser for SVG graphics, to PNG at an exact pixel box; `graphicId`
+   * names the graphic (G15: a host without the SVG asks the server's
+   * `print.png` for it, §8.5). Absent: an SVG graphic is left out with an
+   * `SVG_RASTER` warning.
+   */
+  rasteriseSvg?: (svg: Uint8Array, widthPx: number, heightPx: number, graphicId: number) => Promise<Uint8Array>;
   /** Awaited before each composed sheet: the host's chance to run other work between pages (the API's event loop, §8.2). Absent: no yield. */
   yieldToHost?: () => Promise<void>;
   /** Called after each page is written (the print worker streams these back as progress). */
@@ -165,7 +170,7 @@ export async function renderCoursePages(opts: CoursePagesOptions): Promise<Cours
         if (!png) {
           try {
             if (!rasterise) throw new Error("no SVG rasteriser");
-            png = await rasterise(g.data, w, h);
+            png = await rasterise(g.data, w, h, img.graphicId);
             pngCache.set(key, png);
           } catch (err) {
             pageWarnings.push(`${sheet.label}: SVG_RASTER: graphic ${img.graphicId}: ${err instanceof Error ? err.message : String(err)}`);

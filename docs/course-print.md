@@ -888,6 +888,118 @@ Geometry is not on the list: paper size, frame, window, scale, rotation
 and control positions agreed with the legacy page (the integration and
 E2E tests check page count and size; C7 compared the rasters).
 
+### 8.5 The print job (G15)
+
+The job is what the print worker gets (§8.2 "Messages"), less the bytes,
+as JSON: everything a host needs to compose the same PDF as `maps.pdf`
+(slice G answer 3 — the browser composes whenever the device can, the
+bytes identical to the server's). It is resolved on the server — the
+pages `selectPrintPages` selects, turned into sheets by `sheetForMapRow`
+— so a host composes, it never resolves (`resolveMapLayout`'s
+locale-dependent sort stays on the server; the label placement's
+tie-break is Pending).
+
+```text
+GET /api/maps/:nameId/print-job?<the maps.pdf query>
+GET /api/maps/:nameId/graphics/:id/print.png[?w=&h=]
+```
+
+**`print-job`** takes `maps.pdf`'s query (§8, `course-maps.md` API)
+and answers through the same builder, `buildPrintJob`
+(`course-maps/routes.ts`), which `maps.pdf` composes from: one
+selection, order, copies and set of caps for both routes.
+
+```ts
+interface PrintJob {
+  version: 1;                       // PRINT_JOB_VERSION; a host refuses another
+  document: { hash: string; rotationCorrectionDeg: number };
+  sheets: PrintSheet[];             // SheetInput & { copies? }, plain JSON
+  graphics: { id: number; mime: "image/png" | "image/svg+xml" }[];  // ascending id
+  mode: "cmyk";
+  info: { title: string; author?: string };
+  filename: string;                 // maps.pdf's Content-Disposition name (§8.3)
+}
+```
+
+| Condition | Status | Body |
+|---|---|---|
+| anonymous / signed in without `courses.view` | 401 / 403 | `{ error }` (`assertRestAccess`, as `maps.pdf`) |
+| unknown or removed event | 404 | `{ error: "Event not found" }` |
+| a bad selection, a cap (200 composed pages; 5 000 with copies; `spare` ≤ 500), no pin ("No base map uploaded") | 400 | `{ error }` — `maps.pdf`'s message, word for word |
+| otherwise | 200 | the job; `Content-Type: application/json`, `Cache-Control: no-store` |
+
+- **The document by hash**, never bytes: the host fetches it from
+  `GET /api/map-documents/:hash?event=<nameId>` (`map-storage.md` §4;
+  `courses.view` on the pinning event suffices) or its document cache.
+  The job route does not decode it, so a `CourseStackError` (§8.1)
+  surfaces when the job is composed, not here.
+- **Graphics** are every graphic an image object of a sheet references —
+  the template's and sheet's page objects (`sheet.objects`) and the
+  image course objects in scope (`sheet.course.objects`) — that exists
+  for the event (event or club scope), by id and mime; an unknown id is
+  absent (the writer's `IMAGE_MISSING`). The bytes are fetched from
+  `print.png`. Since G15 `maps.pdf` loads the same set (it read the
+  sheet rows' and templates' objects only, so an `image` course object
+  printed as `IMAGE_MISSING`; `docs/bugfix-course-object-image-print.md`).
+- **No pixel box in the job**: an SVG's box depends on the composed page
+  (the placed rectangle, `scaleRatio` for a map-layer image, the crop;
+  §6.3), so the host composes with the shared `svgRasterBox` and asks
+  `print.png` for that box while composing.
+- **Fonts are not in the job**: the host supplies the three bundled
+  faces (`packages/shared/fonts/`) in the order regular, narrow, bold —
+  `render/fonts.ts`'s `FACES`, the order `bundledPrintFonts` and
+  `printFontsFromFaces(bundledPdfFaces())` give — which is part of the
+  contract (a different order numbers the writer's fonts differently).
+- `mode` is always `cmyk` (§8.2: no query reaches `rgb`); `text`
+  (`font`) and `deterministic` (off) are host options, not job fields.
+- **Byte identity** (user 2026-11-13, G15 question 2) means equal bytes
+  **for equal writer options**: with `deterministic: true` on both sides
+  a composed job equals `maps.pdf`'s bytes. Without it each PDF has its
+  own `CreationDate` and `/ID` (§3.2), as two downloads from the server
+  already do; the job carries no date.
+- **JSON-safe**: the sheets hold no `undefined`-valued key, no
+  non-finite number, no `Map`, `Date` or typed array, so
+  `JSON.parse(body)` composes to the same bytes as the builder's object.
+
+**`print.png`** serves a graphic as the PNG the print worker embeds:
+
+| Graphic | `w`, `h` | Body |
+|---|---|---|
+| SVG | required, integers 1–4096 (`SVG_RASTER_MAX_PX`), else 400 | `rasteriseSvgGraphic(data, w, h)` — resvg at that exact box, the bundled faces only (§6.3) — run in a print worker under `printGate` (§8.2: print CPU stays off the event loop; the request may wait behind a running print, as `maps.pdf` does) |
+| PNG | ignored | the stored bytes |
+
+`courses.view` on the event; the graphic must be the event's or a club
+graphic (`event_id NULL`), as `GET /api/maps/:nameId/graphics/:id`
+(404 otherwise, 400 for a non-positive id). `Content-Type: image/png`,
+`Cache-Control: private, max-age=3600` (graphics rows are created and
+deleted, never updated). The path is event-scoped (user 2026-11-13, G15
+question 1; the SLICES row wrote `/api/graphics/:id/print.png`):
+capabilities are per event, and a venue box answers it from its copy
+unchanged (G18). The browser never rasterises SVG (slice G).
+
+**Composing a job** — `renderPrintJob(job, host)` (`@oxygen/shared/print`,
+`print/print-job.ts`) is the one entry G15's test and G16's Web Worker
+call:
+
+```ts
+interface PrintJobHost {
+  document(hash: string): Promise<Uint8Array> | Uint8Array;  // prepareDocument's loader
+  fonts: PrintFonts;
+  graphic(id: number, box?: [w: number, h: number]): Promise<Uint8Array>;  // print.png
+  deterministic?: boolean;
+  yieldToHost?: () => Promise<void>;
+  onPage?: CoursePagesOptions["onPage"];
+}
+```
+
+It refuses an unknown `version`, prepares the document by its hash
+(`prepareDocument`'s cache), loads every PNG graphic up front and passes
+SVG graphics through `rasteriseSvg`, which since G15 receives the graphic
+id as a fourth argument and asks `host.graphic(id, [w, h])` (the API's
+binding ignores the id). A graphic the host cannot fetch is left out:
+`IMAGE_MISSING` for a PNG, `SVG_RASTER` for an SVG — the PDF is still
+written, as on the server.
+
 ## 9. Tests and CI
 
 ### 9.1 Tests
