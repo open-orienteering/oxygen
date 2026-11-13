@@ -25,6 +25,12 @@ describe("mapped-area mask (map-terrain.md §2.3)", () => {
     expect(maskAt(m, 500, 500)).toBe(false);
   });
 
+  it("draws nothing beyond the grid around the contours' box", () => {
+    // The outline lies 10 mm outside a box it should frame: the grid reaches 5.5 mm, so nothing is mapped.
+    const m = mappedAreaMask([Float64Array.from(rect(0, 0, 60, 40))], { minX: 10, minY: 10, maxX: 50, maxY: 30 });
+    expect(maskAt(m, 30, 20)).toBe(false);
+  });
+
   it("bridges a gap narrower than twice the closing radius", () => {
     const m = mappedAreaMask([Float64Array.from(rect(0, 0, 20, 20)), Float64Array.from(rect(26, 0, 46, 20))], { minX: 0, minY: 0, maxX: 46, maxY: 20 });
     expect(maskAt(m, 23, 10)).toBe(true);
@@ -72,6 +78,14 @@ describe("barrier raster and regions (§2.4–2.5)", () => {
     expect(labelAt(g, 21.5, 20)).toBeLessThanOrEqual(LABEL.chain0);
   });
 
+  it("draws a dangling end onto a cliff within 1.5 mm straight ahead (extended)", () => {
+    const g = build([
+      { sym: S.contour, coords: line(10, 20, 21, 20) },
+      { sym: S.cliff, coords: line(22, 10, 22, 30) },
+    ]);
+    expect(g.chains[0].ends).toEqual(["dangling", "extended"]);
+  });
+
   it("draws cliffs as barriers", () => {
     const g = build(
       [
@@ -81,6 +95,8 @@ describe("barrier raster and regions (§2.4–2.5)", () => {
       [0, 15, 60, 25],
     );
     expect(labelAt(g, 30, 19)).toBe(LABEL.cliff);
+    // Where the contour crosses the cliff, the contour's label wins.
+    expect(labelAt(g, 30, 20)).toBe(LABEL.chain0);
     expect(g.raster.regionCount).toBe(4);
   });
 

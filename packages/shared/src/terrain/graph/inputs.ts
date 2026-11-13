@@ -17,7 +17,7 @@ export function canonicalCode(sym: DocumentSymbol): string {
   const id = sym.match?.canonicalId;
   if (!id) return "";
   const k = id.indexOf(":");
-  return k < 0 ? id : id.slice(k + 1);
+  return k < 0 ? "" : id.slice(k + 1);
 }
 
 const family = (code: string, ...bases: string[]): boolean => bases.some((b) => code === b || code.startsWith(`${b}.`));

@@ -25,7 +25,8 @@ document once, classifies it by its symbol and flattens its geometry (§1.4).
 ### 1.1 Classification
 
 A symbol is classified by its **canonical code**: the part of
-`symbol.match.canonicalId` after the `:` (`ISOM2017-2:101.b` → `101.b`),
+`symbol.match.canonicalId` after the `:` (`ISOM2017-2:101.b` → `101.b`;
+an id without `:` has no code),
 **in any match state** — `auto`, `suggested` (reviewed or not) and
 `unmatched` with a non-null id alike. Terrain is derived, not drawn; a
 suggestion is the matcher's best reading, and T1's verdict was measured on
@@ -66,8 +67,8 @@ plain id often enough that the definition is the reliable reading.
 ### 1.3 Ticks and water
 
 A tick is its object's first coordinate and its rotation
-(`attrs.angle`, 0.1°, counter-clockwise) in radians. A water area keeps all
-its rings (outer first, then holes). Both are carried for §3; H1 uses them
+(`attrs.angle`, 0.1°, counter-clockwise) in radians. A water area keeps its
+rings of three points or more (outer first, then holes). Both are carried for §3; H1 uses them
 only for counts.
 
 ### 1.4 Flattening
@@ -137,7 +138,8 @@ chain; a closed chain's closing gap is not added.
 
 The **snap join** uses a tolerance of 0.15 mm and the continuation rule
 alone. Contours and form lines are snap-joined separately; form lines go
-no further than this step.
+no further than this step, so a form chain's `ends` stay `dangling` as
+built and carry no meaning (§3 reads form chains for their geometry only).
 
 ### 2.2 End classes and gap bridging
 
@@ -240,6 +242,10 @@ the same region on both sides make up half or more of the surviving
 samples — its band leaks around it (a gap the joins did not close); a
 leaky chain has no pairs. Otherwise same-region pairs are dropped.
 
+Region pairs are keyed as `left · 2²² + right`; `chainIncidence` throws a
+`RangeError` when a raster holds 2²² regions or more (the corpus peaks
+near 10⁴).
+
 `regionChains[r]` maps each chain bordering region `r` to side bits
 (`1` the region is left of the chain, `2` right). **Cliff links** are the
 pairs of different regions facing each other across a cliff line (sampled
@@ -291,20 +297,33 @@ decisions, and compares every count with T1's output. Measured 2026-11-13:
 Object counts, raster sizes, bridged gaps, extended ends, form chains and
 component counts equal T1's on every map; crop-a, crop-b, sprint and
 puit-de-laven match T1 in every count (sprint's leaky share is 21.2 % here; T1 reported it as two shares rounded separately, 5.9 + 15.2). On the two club maps the snap
-join finds 6 and 10 more joins than T1 (club-2026: 2654 chains against
-2659, merge ends 686 against 696; club-full: 5617 against 5623, merge ends
-1341 against 1353, one region fewer). The cause is T1's candidate grid:
-it computed a neighbour cell as `⌊(x ± tol) / tol⌋`, which skips a cell
-when an end lies on a multiple of the 0.15 mm tolerance — common, since
-OCAD coordinates sit on a 0.01 mm grid. H1 steps integer cells (§2.1);
-with T1's key restored, club-2026 reproduces T1 in every count. The
-extra joins are valid joins by §2.1's rule.
+join finds more joins than T1, and the counts that follow from a join
+move with it (H1 − T1):
 
-Time for §1–2 on the largest map (club-full, 46 M raster cells): about
-6 s and 0.7 GB peak RSS for the whole process, measured on a 16-core
-machine at load average 26 (T1 measured the same stages at 1.9 s with
-less contention; the identical mask code ran 4× slower here than in T1).
-Region labelling and the raster dominate. H3 sets the height field's cell
+| Count | club-2026 | club-full |
+|---|---|---|
+| snap joins | +6 | +10 |
+| chains | −5 | −6 |
+| closed chains | +1 | +4 |
+| ends: merge | −10 | −12 |
+| ends: cliff | 0 | −4 |
+| ends: dangling | −2 | −4 |
+| regions | 0 | −1 |
+| contour length | +1 mm | 0 |
+
+Every other count is equal. The cause is T1's candidate grid: it computed
+a neighbour cell as `⌊(x ± tol) / tol⌋`, which skips a cell when an end
+lies on a multiple of the 0.15 mm tolerance — common, since OCAD
+coordinates sit on a 0.01 mm grid. H1 steps integer cells (§2.1); with
+T1's key put back in for a trial run, club-2026 reproduced T1 in every
+count. The extra joins are valid joins by §2.1's rule; the merge, cliff
+and dangling ends they remove were the ends those joins connected.
+
+Time for §1–2 on the largest map (club-full, 46 M raster cells): 2.7 s
+to 6.4 s on a 16-core machine shared with other jobs (the slower run at
+load average 26, where T1's identical mask code also ran 4× slower than
+in T1), about 0.7 GB peak RSS for the whole process including the import.
+T1 measured the same stages at 1.9 s. Region labelling and the raster dominate. H3 sets the height field's cell
 and budget (T1: 18 s / 1.5 GB for the whole spike at 0.1 mm).
 
 ## Tests
@@ -313,8 +332,8 @@ and budget (T1: 18 s / 1.5 GB for the whole spike at 0.1 mm).
 |---|---|
 | `terrain/graph/__tests__/inputs.test.ts` | classification by canonical id in any match state, hidden skipped, tagged / untagged cliff and tag side, tick angle (§1.1–1.3) |
 | `terrain/graph/__tests__/flatten.test.ts` | Bézier chords, hole rings, malformed control run (§1.4) |
-| `terrain/graph/__tests__/chains.test.ts` | snap join, continuation rule, gap bridged in ground metres at two scales, three ends at a cliff, a dangling end, a chain cut by the frame (§2.1–2.2) |
-| `terrain/graph/__tests__/raster.test.ts` | mask, nested rings → regions, frame ends close a band, a near-miss end `extended` (§2.3–2.5) |
+| `terrain/graph/__tests__/chains.test.ts` | snap join, continuation rule, tie by end order, no short self-closing, three ends at a cliff, gap bridged in ground metres at two scales, the three look-at cones, merge and cliff ends not bridged, short chains dropped, a dangling end, a chain cut by the frame (§2.1–2.2) |
+| `terrain/graph/__tests__/raster.test.ts` | mask (closing, the 5.5 mm grid), nested rings → regions, frame ends close a band, near-miss ends `extended` onto a chain and a cliff, chains over cliffs, cell budget (§2.3–2.5) |
 | `terrain/graph/__tests__/graph.test.ts` | incidence on nested rings, a leaky chain, cliff links, determinism, no contours (§2.6–2.7) |
 | `terrain/graph/__tests__/synthetic.ts` | the fixture: ISOM symbols with canonical matches and library definitions, geometry in mm, a mapped area around the contours |
 | `.local/h1/counts.mts` (not committed) | T1's corpus counts reproduced (§2.8) |

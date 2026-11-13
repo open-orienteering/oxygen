@@ -11,6 +11,7 @@ const PAIR_MIN_SAMPLES = 3;
 const PAIR_MIN_SHARE = 0.02;
 /** A chain is leaky when same-region pairs make up this share of the counted samples or more. */
 const LEAKY_SHARE = 0.5;
+/** (left, right) packed as left · 2²² + right: exact while regions stay below 2²² (the corpus peaks near 10⁴; the 60 M cell budget keeps it far off). */
 const PAIR_KEY = 4194304;
 
 /** The first region cell beside (x, y) along (nx, ny), skipping `own`; −1 when a barrier or the outside comes first. */
@@ -33,6 +34,7 @@ export interface Incidence {
 
 /** Per chain its (left, right) region pairs and the leaky flag; per region its chains and sides. */
 export function chainIncidence(chains: readonly Chain[], r: RegionRaster): Incidence {
+  if (r.regionCount >= PAIR_KEY) throw new RangeError(`chainIncidence: ${r.regionCount} regions exceed the pair key`);
   const pairs: SidePair[][] = [];
   const leaky = new Uint8Array(chains.length);
   chains.forEach((c, ci) => {

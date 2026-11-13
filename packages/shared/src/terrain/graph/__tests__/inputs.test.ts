@@ -22,6 +22,11 @@ describe("classifyTerrainSymbol (map-terrain.md §1.1)", () => {
     expect(classifyTerrainSymbol(sym(S.suggestedCliff))).toBe("cliff");
   });
 
+  it("reads an unmatched symbol that still carries a canonical id", () => {
+    const s = sym(S.contour);
+    expect(classifyTerrainSymbol({ ...s, match: { ...s.match!, state: "unmatched" } })).toBe("contour");
+  });
+
   it("skips hidden symbols", () => {
     expect(classifyTerrainSymbol(sym(S.hiddenContour))).toBeNull();
   });
@@ -37,6 +42,8 @@ describe("classifyTerrainSymbol (map-terrain.md §1.1)", () => {
   it("strips the library from the canonical id", () => {
     expect(canonicalCode(sym(S.tick))).toBe("101.b");
     expect(canonicalCode(sym(S.sourceOnly))).toBe("");
+    const s = sym(S.contour);
+    expect(canonicalCode({ ...s, match: { ...s.match!, canonicalId: "101" } })).toBe("");
   });
 });
 
