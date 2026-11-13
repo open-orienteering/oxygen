@@ -10,7 +10,10 @@ colour stack, and the tests that keep the library honest. The IR itself
 `docs/map-rendering.md` §4; the OCAD import that produces IR for *source*
 symbols is in `docs/map-import.md` §3.3. Matching imported symbols to
 library entries (03 §6.5–6.6) and aligning the colour stack (03 §6.3) are
-§8–§9; their code lives in `packages/shared/src/import/`.
+§8–§9; their code lives in `packages/shared/src/import/`. Placing a
+library entry in a document for Map mode (materialisation) and the
+palette Map mode draws from are §11; their code is
+`packages/shared/src/map-document/materialise.ts`.
 
 Everything lives in `packages/shared/src/symbol-library/` and is exported
 as `symbolLibrary` from `@oxygen/shared`.
@@ -447,6 +450,31 @@ plus the purple-role and materialisation checks:
   — whichever branch merges second regenerates it. The ISSkiOM sheet is
   `e2e/__golden__/library/ISSkiOM2019/` (16 PNGs) and its index; the
   determinism check includes 813.2 and 804.2.
+
+- **`map-document/__tests__/materialise.test.ts`** (§11) — every entry
+  of all three libraries on six fixtures (the small match fixture, the
+  same ×1.5, an ISSprOM document, the small one with the ski rows
+  appended, `e2e/test.xmap`, `puit-de-laven.omap`) either materialises
+  (a `patchSymbolSchema` parse fixed point, no `match` or `sourceIndex`,
+  every colour index inside the stack) or reports exactly `colourRefs`
+  minus the stack's ids; an unknown id is a result; an own-library entry
+  equals `canonicalRender` of a document symbol auto-matched to it; same
+  input, same JSON, also from a second decode of the same map; the stack
+  untouched; ISSkiOM 801.1 missing `green-skio` / `white-skio` on a plain
+  stack, materialised with the ski rows, 801.2 still missing
+  `orange-skio` without it; the factor table (1:10 000 at 1.5 and at 1 —
+  symbolScale ⅔ —, 1:7 500, 1:5 000, the other base library both ways, a
+  never-matched header); a materialised symbol put in a patch and used by
+  an `add` applies without issue and is drawn from its own render.
+  `mapPalette`: group order and presence (ski group with the stack, with a
+  ski patch symbol), headings in code order with the library heading's
+  names, variants under their heading, document items by match or source
+  base, unused ones kept, hidden / graphic / text / proxy-drawn left out,
+  the mapper's own 7xx kept and the library's 7xx and text entries left
+  out, covered entries not repeated, the other base library not offered,
+  disabled items with `missing`, patch items (library, overlay and a
+  non-library key), every enabled ref applying as an `add` of its kind,
+  determinism, the sprint palette.
 
 The OOM dimension spot check (e) is not implemented; see §10.
 

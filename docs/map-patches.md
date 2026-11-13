@@ -121,6 +121,12 @@ applied match from the library at the document's `documentFactor`, which
 is wrong for an entry of another library (scaled by its own
 `libraryFactor`, G8). A `match` in the input is dropped by the parse.
 
+What fills `symbols` is `materialiseSymbol(doc, entryId)`
+(`map-symbols.md` §11.1): the entry resolved through the document's
+stack and scaled to it, or not materialisable when the stack lacks one of
+its colours. Map mode offers the entries through `mapPalette`
+(`map-symbols.md` §11.2) and materialises one on first use (row G9).
+
 ### 1.4 The toggle
 
 `enabled: false` turns the patch off without losing it (09 §6, the
@@ -275,8 +281,6 @@ ops that lost their target after the pin moved.
   the checkout snapshot, the per-event dump, the GC reference.
 - **The effective document on screen** (row G4): the viewer worker takes
   `{ document, patch }`; the readers named in §2.4 skip hidden objects.
-- **Symbol materialisation and the palette** (row G8): what fills
-  `symbols` (§1.3).
 - **§4 Re-resolution** (row G11): re-keying a patch when the event's pin
   moves (same source by `sourceIndex`; a new edition by position and
   symbol within 0.5 mm), the `unresolved` flag, symbol references
