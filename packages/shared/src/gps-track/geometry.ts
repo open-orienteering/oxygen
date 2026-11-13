@@ -112,13 +112,19 @@ export function smoothTrack(line: ProjectedTrack, opts: SmoothOptions = {}): Pro
   return movingAverage(resampleTrack(line, stepM), Math.floor(windowM / 2 / stepM));
 }
 
-/** Distance from (px, py) to the segment a–b; a point distance when a = b. */
-export function pointSegmentDistance(px: number, py: number, ax: number, ay: number, bx: number, by: number): number {
+/** Squared distance from (px, py) to the segment a–b; a squared point distance when a = b. */
+function pointSegmentDistance2(px: number, py: number, ax: number, ay: number, bx: number, by: number): number {
   const dx = bx - ax, dy = by - ay;
   const len2 = dx * dx + dy * dy;
   let t = len2 > 0 ? ((px - ax) * dx + (py - ay) * dy) / len2 : 0;
   t = t < 0 ? 0 : t > 1 ? 1 : t;
-  return Math.hypot(px - (ax + t * dx), py - (ay + t * dy));
+  const ex = px - (ax + t * dx), ey = py - (ay + t * dy);
+  return ex * ex + ey * ey;
+}
+
+/** Distance from (px, py) to the segment a–b; a point distance when a = b. */
+export function pointSegmentDistance(px: number, py: number, ax: number, ay: number, bx: number, by: number): number {
+  return Math.sqrt(pointSegmentDistance2(px, py, ax, ay, bx, by));
 }
 
 /**
@@ -137,19 +143,20 @@ export function simplifyTrack(line: ProjectedTrack, toleranceMm: number = DEFAUL
   const keep = new Uint8Array(n);
   keep[0] = 1;
   keep[n - 1] = 1;
+  const tol2 = toleranceMm * toleranceMm;
   const stack: number[] = [0, n - 1];
   while (stack.length) {
     const b = stack.pop()!;
     const a = stack.pop()!;
     let worst = -1, at = -1;
     for (let i = a + 1; i < b; i++) {
-      const d = pointSegmentDistance(x[i], y[i], x[a], y[a], x[b], y[b]);
+      const d = pointSegmentDistance2(x[i], y[i], x[a], y[a], x[b], y[b]);
       if (d > worst) {
         worst = d;
         at = i;
       }
     }
-    if (at >= 0 && worst > toleranceMm) {
+    if (at >= 0 && worst > tol2) {
       keep[at] = 1;
       stack.push(a, at, at, b);
     }

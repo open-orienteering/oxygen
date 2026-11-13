@@ -196,7 +196,7 @@ describe("simplifyTrack", () => {
     const a = simplifyTrack(l), b = simplifyTrack(l);
     expect(a.x.length).toBeGreaterThan(2);
     expect(Array.from(a.x)).toEqual(Array.from(b.x));
-  });
+  }, 20_000); // a size test, not a speed budget: generous under a loaded machine
 
   it("rejects a negative tolerance; one or two points come back as they are", () => {
     expect(() => simplifyTrack(line([[0, 0], [1, 0], [2, 0]]), -1)).toThrow(RangeError);

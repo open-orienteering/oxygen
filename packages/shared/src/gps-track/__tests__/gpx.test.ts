@@ -164,7 +164,7 @@ describe("parseGpx: scale", () => {
     const f = parseGpx(`<gpx version="1.1"><trk><trkseg>${pts.join("")}</trkseg></trk></gpx>`);
     expect(f.tracks[0].points.lat).toHaveLength(200_000);
     expect(f.tracks[0].points.lat[199_999]).toBe(quantise(59 + 199_999 * 1e-6));
-  });
+  }, 20_000); // a size test, not a speed budget: generous under a loaded machine
 });
 
 function quantise(deg: number): number {
