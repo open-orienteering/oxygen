@@ -1,7 +1,8 @@
 import { describe, it } from "node:test";
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
-import { readFileSync } from "node:fs";
+import { mkdtempSync, readFileSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { buildVersion, compareVersions } from "../build-version.mjs";
@@ -88,5 +89,57 @@ describe("build plumbing", () => {
     });
     assert.equal(res.status, 0, res.stderr);
     assert.match(res.stdout.trim(), /^\d+\.\d+\.\d+(-\d+-g[0-9a-f]+|-dev)?$/);
+  });
+});
+
+describe("CLI against a real history", () => {
+  const CLI = path.join(path.dirname(fileURLToPath(import.meta.url)), "../build-version.mjs");
+  const gitEnv = {
+    ...process.env,
+    GIT_AUTHOR_NAME: "t",
+    GIT_AUTHOR_EMAIL: "t@example.invalid",
+    GIT_COMMITTER_NAME: "t",
+    GIT_COMMITTER_EMAIL: "t@example.invalid",
+    GIT_CONFIG_GLOBAL: "/dev/null",
+    GIT_CONFIG_NOSYSTEM: "1",
+  };
+  const run = (root) =>
+    spawnSync(process.execPath, [CLI], {
+      encoding: "utf8",
+      env: { ...gitEnv, BUILD_VERSION_ROOT: root },
+    });
+  const git = (root, ...args) => {
+    const res = spawnSync("git", args, { cwd: root, encoding: "utf8", env: gitEnv });
+    assert.equal(res.status, 0, res.stderr);
+    return res.stdout.trim();
+  };
+  const commit = (root, version) => {
+    writeFileSync(path.join(root, "package.json"), JSON.stringify({ version }));
+    git(root, "add", "package.json");
+    git(root, "commit", "-q", "--allow-empty", "-m", version);
+  };
+
+  it("is <package>-dev outside a git repository", () => {
+    const root = mkdtempSync(path.join(tmpdir(), "build-version-nogit-"));
+    writeFileSync(path.join(root, "package.json"), JSON.stringify({ version: "0.7.0" }));
+    const res = run(root);
+    assert.equal(res.status, 0, res.stderr);
+    assert.equal(res.stdout.trim(), "0.7.0-dev");
+  });
+
+  it("follows a release through its tag and past it, ignoring non-release v tags", () => {
+    const root = mkdtempSync(path.join(tmpdir(), "build-version-git-"));
+    git(root, "init", "-q");
+    commit(root, "0.6.0");
+    git(root, "tag", "v0.6.0");
+    commit(root, "0.7.0"); // the release PR's merge commit, before its tag
+    assert.equal(run(root).stdout.trim(), "0.7.0");
+    git(root, "tag", "v0.7.0");
+    assert.equal(run(root).stdout.trim(), "0.7.0");
+    commit(root, "0.7.0");
+    git(root, "tag", "v0.8.0-rc.1");
+    git(root, "tag", "vector-spike");
+    const sha = git(root, "rev-parse", "--short=7", "HEAD");
+    assert.match(run(root).stdout.trim(), new RegExp(`^0\\.7\\.0-1-g${sha}`));
   });
 });

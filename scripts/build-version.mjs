@@ -7,9 +7,10 @@
  * The git tag is the version of record (docs/releases-and-images.md, "Tags").
  * The release commit is built before its tag exists, so its `package.json`
  * — bumped by the release PR — is ahead of the last tag and is the version.
- * Every other commit reports `git describe --tags --match 'v*'`: the tag on
- * the tagged commit, `0.7.0-3-gabc1234` past it. Without git, or without a
- * reachable `v*` tag (a shallow checkout), the build is an unversioned one:
+ * Every other commit reports `git describe` over the release tags
+ * (`DESCRIBE_ARGS`): the tag on the tagged commit, `0.7.0-3-gabc1234` past
+ * it. Without git, or without a reachable release tag (a shallow
+ * checkout), the build is an unversioned one:
  * `<package version>-dev`, the same string a local web build bakes.
  */
 
@@ -20,6 +21,19 @@ import { fileURLToPath } from "node:url";
 
 const SEMVER = /^(\d+)\.(\d+)\.(\d+)$/;
 const DESCRIBE = /^v(\d+\.\d+\.\d+)(-\d+-g[0-9a-f]+)?$/;
+
+/**
+ * `git describe` over release tags only: `v*` alone would also match a
+ * `v0.8.0-rc.1` or `vector-…` tag and turn a published build into `-dev`.
+ */
+export const DESCRIBE_ARGS = [
+  "describe",
+  "--tags",
+  "--match",
+  "v[0-9]*.[0-9]*.[0-9]*",
+  "--exclude",
+  "v*-*",
+];
 
 function parse(version) {
   const match = SEMVER.exec(version);
@@ -39,8 +53,8 @@ export function compareVersions(a, b) {
 
 /**
  * @param {{ packageVersion: string, describe?: string | null }} input
- *   `describe` is the output of `git describe --tags --match 'v*'`; `null`,
- *   absent or `""` when there is no git or no reachable `v*` tag.
+ *   `describe` is the output of `git describe` (`DESCRIBE_ARGS`); `null`,
+ *   absent or `""` when there is no git or no reachable release tag.
  */
 export function buildVersion({ packageVersion, describe = null }) {
   parse(packageVersion);
@@ -60,9 +74,11 @@ function git(args, cwd) {
 }
 
 function main() {
-  const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
+  const root =
+    process.env.BUILD_VERSION_ROOT ||
+    path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
   const { version } = JSON.parse(readFileSync(path.join(root, "package.json"), "utf8"));
-  const describe = git(["describe", "--tags", "--match", "v*"], root);
+  const describe = git(DESCRIBE_ARGS, root);
   process.stdout.write(`${buildVersion({ packageVersion: version, describe })}\n`);
 }
 

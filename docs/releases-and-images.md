@@ -37,10 +37,15 @@ an image reports is decided when it is built, by `scripts/build-version.mjs`
 
 | The built commit | Version |
 | --- | --- |
-| The release commit: `package.json` ahead of the last `v*` tag | `package.json` (`0.8.0`) |
+| The release commit: `package.json` ahead of the last release tag | `package.json` (`0.8.0`) |
 | The tagged commit | the tag (`0.7.0`) |
-| Past the tag | `git describe --tags --match 'v*'` without the `v` (`0.7.0-3-gabc1234`) |
-| No git, or no reachable `v*` tag (a shallow checkout) | `<package.json>-dev` (`0.7.0-dev`) |
+| Past the tag | `git describe` without the `v` (`0.7.0-3-gabc1234`) |
+| No git, or no reachable release tag (a shallow checkout) | `<package.json>-dev` (`0.7.0-dev`) |
+
+`git describe` looks at release tags only (`vX.Y.Z`; `v0.8.0-rc.1` or
+`vector-…` tags are ignored) and runs without `--dirty`: a
+`deploy.sh --from-source` build of an uncommitted tree reports the version
+of its commit, and only its `Image: source-…` part tells it apart.
 
 "Ahead" is a numeric `X.Y.Z` comparison with the tag `git describe` names; a
 `package.json` behind the tag (the history before v0.7.0 carried `0.1.0`)
@@ -119,7 +124,8 @@ Public images need no pull secret on Cloud Run, Fargate, or Compose.
 
 2. Merge it. `main` CI publishes `sha-<commit>` and `edge` from the merge
    commit; that image reports `1.2.3` (its `package.json` is ahead of the
-   last tag).
+   last tag). A merge to `main` without the bump reports the last release
+   past its tag (`1.2.2-5-gabc1234`), and `release.yml` refuses `v1.2.3` on it.
 
 3. Tag the merge commit as soon as its publish is green:
 
