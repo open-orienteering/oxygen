@@ -7,7 +7,7 @@ import { renderGate } from "../map-render-limits.js";
 import { type PinnedPrintSource, pinnedPrintSource } from "./pdf-page.js";
 import { PRINT_JOB_VERSION, type PrintGraphic, type PrintJob, type PrintJobGraphicMime, type PrintSheet } from "@oxygen/shared/print";
 import { printGate, rasteriseSvgInWorker, renderCoursePagesInWorker, resetPrintWorkers } from "./print-worker-host.js";
-import { parseRasterBox } from "./graphics.js";
+import { parseRasterBox, sheetGraphicIds } from "./graphics.js";
 import { classesByCourse, loadCourseObjects } from "../course-objects.js";
 
 type Db = ReturnType<typeof prisma>;
@@ -309,35 +309,24 @@ async function findClassRows(db: Db, eventId: bigint, classSeqs: number[]): Prom
 }
 
 /**
- * Every graphic an image object of a sheet references (docs/course-print.md
- * §8.5): the page objects (template + sheet) and the image course objects
- * in scope. Before G15 only the rows' and templates' objects were read, so
- * an `image` course object printed as `IMAGE_MISSING`.
+ * The graphics by id that exist for the event (event or club scope);
+ * unknown ids are simply absent. Without `withData` the bytes are not read
+ * (`print-job` answers id and mime only) and `data` is empty.
  */
-export function sheetGraphicIds(sheets: readonly PrintSheet[]): number[] {
-  const ids = new Set<number>();
-  for (const sheet of sheets) {
-    for (const object of sheet.objects) if (object.kind === "image") ids.add(object.graphicId);
-    for (const object of sheet.course?.objects ?? []) if (object.kind === "image") ids.add(object.props.graphicId);
-  }
-  return [...ids].sort((a, b) => a - b);
-}
-
-/** The graphics by id that exist for the event (event or club scope); unknown ids are simply absent. */
-async function loadGraphics(db: Db, eventId: bigint, ids: number[]): Promise<Map<number, PrintGraphic>> {
+async function loadGraphics(db: Db, eventId: bigint, ids: number[], withData: boolean): Promise<Map<number, PrintGraphic>> {
   if (ids.length === 0) return new Map();
   const graphics = await db.graphic.findMany({
     where: {
       id: { in: ids.map((id) => BigInt(id)) },
       OR: [{ eventId }, { eventId: null }],
     },
-    select: { id: true, mime: true, data: true },
+    select: { id: true, mime: true, ...(withData ? { data: true } : {}) },
     orderBy: { id: "asc" },
   });
   return new Map(
     graphics.map((graphic) => [
       Number(graphic.id),
-      { mime: graphic.mime, data: new Uint8Array(graphic.data) },
+      { mime: graphic.mime, data: "data" in graphic && graphic.data ? new Uint8Array(graphic.data) : new Uint8Array(0) },
     ]),
   );
 }
@@ -345,6 +334,7 @@ async function loadGraphics(db: Db, eventId: bigint, ids: number[]): Promise<Map
 /** What `maps.pdf` composes and `print-job` answers (docs/course-print.md §8.5): the job, the graphics' bytes and the pinned source. */
 export interface BuiltPrintJob {
   job: PrintJob;
+  /** The job's graphics with their bytes (empty with `graphicBytes: false`). */
   graphics: Map<number, PrintGraphic>;
   source: PinnedPrintSource;
 }
@@ -361,6 +351,7 @@ export async function buildPrintJob(
   db: Db,
   event: { id: bigint; nameId: string; name: string; date: Date; organizerName: string | null; autoOverprintCuts: boolean },
   query: PrintQuery,
+  options: { graphicBytes?: boolean } = {},
 ): Promise<BuiltPrintJob> {
   const pages = await selectPrintPages(db, event.id, query);
   const rows = pages.map((p) => p.row);
@@ -394,7 +385,7 @@ export async function buildPrintJob(
     }),
     ...(copies !== 1 ? { copies } : {}),
   }));
-  const graphics = await loadGraphics(db, event.id, sheetGraphicIds(sheets));
+  const graphics = await loadGraphics(db, event.id, sheetGraphicIds(sheets), options.graphicBytes ?? true);
   // docs/course-print.md §7.1: one page is "<event> · <map>".
   const info = {
     title: rows.length === 1 ? `${event.name} · ${pageName(rows[0])}` : `${event.name} maps`,
@@ -493,7 +484,7 @@ export function registerCourseMapRoutes(
       if (!event || event.removed) {
         return reply.code(404).send({ error: "Event not found" });
       }
-      const { job } = await buildPrintJob(db, event, req.query);
+      const { job } = await buildPrintJob(db, event, req.query, { graphicBytes: false });
       return reply.header("Cache-Control", "no-store").send(job);
     } catch (error) {
       req.log.error(error);

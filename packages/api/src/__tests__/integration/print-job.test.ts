@@ -16,7 +16,7 @@ import { PDFDocument } from "pdf-lib";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { SYSTEM_GROUP_IDS, defaultMapAppearance } from "@oxygen/shared";
 import { type PrintJob, printFontsFromFaces, renderPrintJob, svgRasterBox } from "@oxygen/shared/print";
-import { registerCourseMapRoutes, MAX_COMPOSED_PAGES } from "../../course-maps/routes.js";
+import { buildPrintJob, registerCourseMapRoutes, MAX_COMPOSED_PAGES } from "../../course-maps/routes.js";
 import { rasteriseSvgGraphic } from "../../course-maps/pdf-page.js";
 import { renderCoursePagesInWorker } from "../../course-maps/print-worker-host.js";
 import { registerMapDocumentRoutes, resetDocumentAccessCache } from "../../map-store/routes.js";
@@ -42,6 +42,8 @@ let objectSvgId: number;
 let clubId: number;
 let otherEventGraphicId: number;
 let courseSeq: number;
+let h21Seq: number;
+let a4TemplateId: string;
 let sheetSeqs: number[];
 
 /** `maps.pdf` and every route a host reads, `deterministic` like the host below (equal writer options, §8.5). */
@@ -129,6 +131,7 @@ beforeAll(async () => {
       ],
     },
   });
+  a4TemplateId = template.id;
   const a5 = await db.mapTemplate.create({
     data: { eventId: vec.eventId, name: "A5", paper: "A5", printScale: 10000, settings: { printMarginMm: 3, mapFrame: { x: 5, y: 5, width: 138, height: 200 }, description: { visible: false, x: 0, y: 0, cellSizeMm: 5 }, appearance: defaultMapAppearance } },
   });
@@ -150,6 +153,7 @@ beforeAll(async () => {
 
   const caller = makeCaller(vec.event);
   const h21 = (await caller.class.create({ name: "H21", courseId: blue.seq })).id;
+  h21Seq = h21;
   for (let i = 0; i < 2; i++) await caller.runner.create({ name: `Runner ${i}`, classId: h21 });
 
   server = makeServer();
@@ -187,7 +191,11 @@ describe("GET /api/maps/:nameId/print-job (§8.5)", () => {
     const event = await vec.db.event.findUniqueOrThrow({ where: { id: vec.eventId } });
     expect(job.info.title).toBe(`${event.name} maps`);
     expect(job.filename).toBe(`${vec.nameId}_maps.pdf`);
-    expect(jsonUnsafe(JSON.parse(res.body))).toEqual([]);
+    // The builder's object itself — what maps.pdf composes without a JSON round trip — holds nothing JSON would change.
+    const built = await buildPrintJob(vec.db, event, {}, { graphicBytes: false });
+    expect(jsonUnsafe(built.job)).toEqual([]);
+    expect(JSON.parse(JSON.stringify(built.job))).toEqual(built.job);
+    expect(JSON.parse(res.body)).toEqual(built.job);
   });
 
   it("composed over HTTP, the job writes maps.pdf's exact bytes — PNG as stored, SVG at the composer's box", async () => {
@@ -209,7 +217,7 @@ describe("GET /api/maps/:nameId/print-job (§8.5)", () => {
   }, 120_000);
 
   it("the same selection, order and copies as maps.pdf, byte for byte, for one sheet and for copies=runners&spare", async () => {
-    for (const query of [`?maps=${sheetSeqs[1]}`, `?courses=${courseSeq}&copies=runners&spare=1`, "?allControls=1"]) {
+    for (const query of [`?maps=${sheetSeqs[1]}`, `?courses=${courseSeq}&copies=runners&spare=1`, "?allControls=1", `?classes=${h21Seq}`]) {
       const pdf = await get(pdfUrl(vec.nameId, query));
       expect(pdf.statusCode, query).toBe(200);
       const job = (await get(jobUrl(vec.nameId, query))).json() as PrintJob;
@@ -256,6 +264,48 @@ describe("GET /api/maps/:nameId/print-job (§8.5)", () => {
     expect(res.json()).toEqual({ error: "No base map uploaded" });
     expect((await get(jobUrl(`missing-${suffix}`))).statusCode).toBe(404);
   });
+});
+
+describe("a course with variations: the job of every variant selection is maps.pdf's bytes (§4.6, §8.5)", () => {
+  let rootSeq: number;
+
+  beforeAll(async () => {
+    const caller = makeCaller(vec.event);
+    const site = async (data: Parameters<typeof caller.control.create>[0]) => (await caller.control.create(data)).id;
+    const S = await site({ status: 4, xpos: -95, ypos: -12 });
+    const F = await site({ status: 5, xpos: -50, ypos: -12 });
+    const [a, b, c, d] = [await site({ codes: "41", xpos: -85, ypos: 2 }), await site({ codes: "42", xpos: -75, ypos: 17 }), await site({ codes: "43", xpos: -65, ypos: 17 }), await site({ codes: "44", xpos: -60, ypos: 2 })];
+    rootSeq = (await caller.course.create({ name: "Long" })).id;
+    // A butterfly: variants AB and BA, numbered alike (F15 labels on the all-variations page).
+    await caller.course.setStructure({
+      courseId: rootSeq,
+      structure: {
+        version: 1,
+        id: "x",
+        orderMode: "ordered",
+        items: [
+          { siteId: S }, { siteId: a },
+          { kind: "variation", id: "b", loop: true, alternatives: [{ label: "A", items: [{ siteId: b }] }, { label: "B", items: [{ siteId: c }] }] },
+          { siteId: d }, { siteId: F },
+        ],
+      },
+    });
+    const root = await vec.db.course.findFirstOrThrow({ where: { eventId: vec.eventId, seq: rootSeq } });
+    await vec.db.courseMap.create({ data: { eventId: vec.eventId, name: "Long A4", kind: "course", courseId: root.id, templateId: a4TemplateId, windowCenter: { x: -70, y: 5 } } });
+  }, 60_000);
+
+  it("variants=, allVariations= and courses= of the root", async () => {
+    for (const query of [`?courses=${rootSeq}`, `?variants=${rootSeq}:BA`, `?allVariations=${rootSeq}`]) {
+      const pdf = await get(pdfUrl(vec.nameId, query));
+      expect(pdf.statusCode, `${query} ${pdf.body.slice(0, 200)}`).toBe(200);
+      const job = (await get(jobUrl(vec.nameId, query))).json() as PrintJob;
+      const { out } = await composeOverHttp(vec.nameId, job);
+      expect(Buffer.from(out.bytes).equals(pdf.rawPayload), query).toBe(true);
+    }
+    const all = (await get(jobUrl(vec.nameId, `?courses=${rootSeq}`))).json() as PrintJob;
+    expect(all.sheets.map((s) => s.label)).toEqual(["Long AB", "Long BA"]);
+    expect((await get(jobUrl(vec.nameId, `?allVariations=${rootSeq}`))).json().filename).toBe(`${vec.nameId}_Long_AB_BA.pdf`);
+  }, 180_000);
 });
 
 describe("GET /api/maps/:nameId/graphics/:id/print.png (§8.5)", () => {
