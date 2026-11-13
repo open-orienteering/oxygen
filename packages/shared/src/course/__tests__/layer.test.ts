@@ -1,16 +1,17 @@
 /** `courseLayer()` through `symbolise` with a document (course-layer.md §1, §3). */
 
 import { describe, expect, it } from "vitest";
-import { courseLayer, courseRenderInput } from "../layer.js";
+import { courseLayer, courseRenderInput, legLine } from "../layer.js";
 import { courseDocumentContext } from "../context.js";
-import { layerInput, linear, site, sprintContext } from "./helpers.js";
+import { SITES, layerInput, linear, site, sprintContext } from "./helpers.js";
 import { materialiseLibrary } from "../../symbol-library/index.js";
 import { symbolise } from "../../render/symbolise.js";
 import { makePath } from "../../render/pass-stream.js";
+import { flattenRings, pointInRings } from "../../render/geometry.js";
 import { liberation } from "../../render/__tests__/fonts.js";
 import type { RenderObject } from "../../render/symbolise.js";
-import type { CourseMapObject } from "../../course-maps/schema.js";
 import type { CourseLayerObject } from "../objects.js";
+import type { CourseLegProps } from "../types.js";
 
 /** A tiny ISOM "document": a 516 power line (black) across the first leg, resolved on the palette stack. */
 function isomDocument(): { objects: RenderObject[]; symbols: ReturnType<typeof materialiseLibrary>["symbols"] } {
@@ -84,6 +85,142 @@ describe("courseLayer + courseRenderInput → one symbolise call", () => {
   });
 });
 
+describe("leg styles (§10.1, F1)", () => {
+  const styled = () =>
+    courseLayer(layerInput({
+      structure: linear(undefined, {
+        items: [{ siteId: "S" }, { siteId: "31", leg: { style: "marked_route", bends: [{ x: 25, y: 20 }] } }, { siteId: "32", leg: { style: "none" } }, { siteId: "33" }],
+      }),
+    }));
+
+  it("a marked route draws 707 through its bends: upper purple, dashed, over black", () => {
+    const layer = styled();
+    const route = layer.objects.filter((o) => o.ref.kind === "leg" && o.ref.id === "c1:0");
+    expect(route).toHaveLength(1);
+    expect(layer.symbols[route[0].symbolIdx].id).toContain("707");
+    // The bend is a vertex of the drawn path.
+    const c = route[0].path.coords;
+    expect([...c].some((v, i) => i % 2 === 0 && v === 25000 && c[i + 1] === 20000)).toBe(true);
+    expect(layer.symbols[layer.objects.find((o) => o.ref.kind === "leg" && o.ref.id === "c1:2")!.symbolIdx].id).toContain("705");
+
+    const input = courseRenderInput(isomDocument(), layer);
+    const { stream } = symbolise({ ...input, fonts: fonts() });
+    const routeIdx = layer.objects.indexOf(route[0]) + input.courseObjectOffset;
+    const passes = stream.passes.map((p, k) => ({ p, k })).filter(({ k }) => stream.objectIdx[k] === routeIdx);
+    expect(passes.length).toBeGreaterThan(0);
+    expect(passes.every(({ p }) => colourId(layer, p.colour) === "purple-upper")).toBe(true);
+    const slices = passes.reduce((n, { p }) => n + (p.kind === "stroke" ? (p.slices?.length ?? 1) : 0), 0);
+    expect(slices).toBeGreaterThan(3);
+    const colours = stream.passes.map((p) => colourId(layer, p.colour));
+    expect(Math.min(...passes.map(({ k }) => k))).toBeGreaterThan(colours.lastIndexOf("black100"));
+  });
+
+  it("a none leg draws nothing; its number and the others' are unchanged", () => {
+    const layer = styled();
+    expect(layer.objects.filter((o) => o.ref.kind === "leg" && o.ref.id === "c1:1")).toEqual([]);
+    expect(layer.derivation.courses[0].legs[1].pieces.length).toBeGreaterThan(0);
+    expect(layer.derivation.sites.find((s) => s.id === "32")!.label!.text).toBe("2");
+    expect(layer.objects.filter((o) => o.ref.kind === "number").map((o) => o.text)).toEqual(["1", "2", "3"]);
+  });
+});
+
+describe("variation tints (§12.7, F7)", () => {
+  // The spine S → 31 → 33 → F with a none leg across the group, and the alternatives as tinted branches.
+  const structures = () => [
+    linear(["S", "31", "33", "F"], { id: "c1", items: [{ siteId: "S" }, { siteId: "31" }, { siteId: "33", leg: { style: "none" } }, { siteId: "F" }] }),
+    { ...linear(["31", "32", "33"]), id: "c1:g:A", tint: "A" },
+    { ...linear(["31", "33"]), id: "c1:g:B", tint: "B" },
+  ];
+  const legSymbol = (layer: ReturnType<typeof courseLayer>, id: string) =>
+    layer.symbols[layer.objects.find((o) => o.ref.kind === "leg" && o.ref.id === id)!.symbolIdx];
+
+  it("with allVariations, each tint has its row on top and the tinted courses' legs and own circles use it", () => {
+    const layer = courseLayer(layerInput({ structure: structures(), viewOptions: { allVariations: true } }));
+    const ids = layer.colours.map((c) => c.id);
+    expect(ids.slice(-2)).toEqual(["course-tint:A", "course-tint:B"]);
+    expect(layer.colours.at(-1)!.cmyk).not.toEqual(layer.colours.at(-2)!.cmyk);
+    const a = legSymbol(layer, "c1:g:A:0"), b = legSymbol(layer, "c1:g:B:0");
+    expect(a.type === "line" && colourId(layer, a.main!.colour)).toBe("course-tint:A");
+    expect(b.type === "line" && colourId(layer, b.main!.colour)).toBe("course-tint:B");
+    expect(legSymbol(layer, "c1:0").id).not.toContain("tint");
+    // 32 is visited by A alone: tinted; 31 by the spine too: plain purple.
+    const circleOf = (id: string) => layer.symbols[layer.objects.find((o) => o.ref.kind === "site" && o.ref.id === id)!.symbolIdx];
+    const c32 = circleOf("32");
+    expect(c32.type === "line" && colourId(layer, c32.main!.colour)).toBe("course-tint:A");
+    expect(circleOf("31").id).not.toContain("tint");
+  });
+
+  it("without the option a tint is ignored: the layer equals the untinted structures'", () => {
+    const tinted = courseLayer(layerInput({ structure: structures() }));
+    const plain = courseLayer(layerInput({ structure: structures().map(({ tint: _t, ...s }) => s) }));
+    expect(tinted).toEqual(plain);
+    expect(tinted.colours.some((c) => c.id.startsWith("course-tint:"))).toBe(false);
+  });
+
+  it("the tint rows stay below a toner saver's white", () => {
+    const toner = { id: "t", kind: "toner_saver", geometry: [{ x: 0, y: 0 }, { x: 90, y: 0 }, { x: 90, y: 90 }], props: { marginMm: 5 } } as unknown as CourseLayerObject;
+    const window = [{ x: 0, y: 0 }, { x: 100, y: 0 }, { x: 100, y: 100 }, { x: 0, y: 100 }];
+    const layer = courseLayer(layerInput({ structure: structures(), objects: [toner], viewOptions: { allVariations: true, window } }));
+    expect(layer.colours.map((c) => c.id).slice(-3)).toEqual(["course-tint:A", "course-tint:B", "course:toner-saver-white"]);
+  });
+});
+
+describe("crossings and map-issue points (§10.3, F4)", () => {
+  const P = site("P", "crossing_point", 25, 10);
+  const MI = site("MI", "map_issue", 50, 60);
+  const sites = [site("S", "start", 10, 10), site("31", "control", 40, 10), site("32", "control", 60, 40), P, MI];
+  const layerOf = (crossing: CourseLegProps["crossing"], over: Parameters<typeof layerInput>[0] = {}) =>
+    courseLayer(layerInput({ sites, structure: linear(undefined, { items: [{ siteId: "S" }, { siteId: "31", leg: { crossing } }, { siteId: "32" }] }), ...over }));
+  const siteObjects = (layer: ReturnType<typeof courseLayer>, id: string) => layer.objects.filter((o) => o.ref.kind === "site" && o.ref.id === id);
+  const xs = (o: { path: { coords: ArrayLike<number> } }) => Array.from(o.path.coords).filter((_, i) => i % 2 === 0);
+  const ys = (o: { path: { coords: ArrayLike<number> } }) => Array.from(o.path.coords).filter((_, i) => i % 2 === 1);
+
+  it("ISOM: one 710 line along the leg over the body length, lower purple, under black's top", () => {
+    const layer = layerOf({ controlId: "P" });
+    const [o] = siteObjects(layer, "P");
+    expect(layer.symbols[o.symbolIdx].id).toBe("ISOM2017-2:710");
+    // Due east, 3.0 mm centred on the site.
+    expect(xs(o)).toEqual([23500, 26500]);
+    expect(ys(o)).toEqual([10000, 10000]);
+    const section = siteObjects(layerOf({ controlId: "P", section: true }), "P")[0];
+    expect(xs(section)).toEqual([22000, 28000]);
+    const input = courseRenderInput(isomDocument(), layer);
+    const { stream } = symbolise({ ...input, fonts: fonts() });
+    const k = layer.objects.indexOf(o) + input.courseObjectOffset;
+    const passes = stream.passes.filter((_, j) => stream.objectIdx[j] === k);
+    expect(passes.length).toBeGreaterThan(0);
+    expect(passes.every((p) => colourId(layer, p.colour) === "purple-lower")).toBe(true);
+  });
+
+  it("ISSprOM: 710.1 turned along the leg; a section is two 710.2 lines in upper purple", () => {
+    const sprint = { document: sprintContext() };
+    const [pt] = siteObjects(layerOf({ controlId: "P" }, sprint), "P");
+    const layer = layerOf({ controlId: "P" }, sprint);
+    expect(layer.symbols[pt.symbolIdx].id).toBe("ISSprOM2019-2:710.1");
+    expect(pt.angleDeg).toBeCloseTo(0, 9);
+    const sec = siteObjects(layerOf({ controlId: "P", section: true }, sprint), "P");
+    expect(sec).toHaveLength(2);
+    const secLayer = layerOf({ controlId: "P", section: true }, sprint);
+    expect(sec.every((o) => secLayer.symbols[o.symbolIdx].id === "ISSprOM2019-2:710.2")).toBe(true);
+    expect(ys(sec[0])).toEqual([10750, 10750]);
+    // The second runs the other way, so its ends curve outwards too.
+    expect(ys(sec[1])).toEqual([9250, 9250]);
+    expect(xs(sec[1])).toEqual([28000, 22000]);
+  });
+
+  it("702 only with setter marks; the leg draws through the crossing in one piece", () => {
+    expect(siteObjects(layerOf({ controlId: "P" }), "MI")).toEqual([]);
+    const marked = layerOf({ controlId: "P" }, { viewOptions: { setterMarks: true } });
+    const [mi] = siteObjects(marked, "MI");
+    expect(marked.symbols[mi.symbolIdx].id).toBe("ISOM2017-2:702");
+    expect(mi.angleDeg).toBeUndefined();
+    const legs = marked.objects.filter((o) => o.ref.kind === "leg" && o.ref.id === "c1:0");
+    expect(legs).toHaveLength(1);
+    // No number for a crossing or a map-issue point.
+    expect(marked.objects.filter((o) => o.ref.kind === "number").map((o) => o.ref.id)).toEqual(["31", "32"]);
+  });
+});
+
 describe("filter regions (map-rendering §4.11)", () => {
   const square = [{ x: 20, y: -5 }, { x: 30, y: -5 }, { x: 30, y: 25 }, { x: 20, y: 25 }];
   const hole = [{ x: 24, y: 0 }, { x: 26, y: 0 }, { x: 26, y: 2 }];
@@ -120,50 +257,219 @@ describe("filter regions (map-rendering §4.11)", () => {
   });
 });
 
-describe("layout objects (§3.6)", () => {
-  const rect = (fillMode: "whiteout" | "whiteoutInverted" | "outOfBounds" | "solid", extra: Record<string, unknown> = {}): CourseMapObject =>
-    ({ id: `r-${fillMode}`, anchor: "map", kind: "rectangle", x: 20, y: 20, width: 10, height: 5, fillMode, ...extra }) as CourseMapObject;
+describe("corridors (§10.2, F2)", () => {
+  // S (10, 10) → 31 (40, 10) at 1:15 000: 60 m = 4 mm, the edge at y = 8 / 12, the band to 5 / 15.
+  const corridor = { widthM: 60, edge: true, whiteMm: 3, whiteOpacity: 0.5 };
+  const withLeg = (leg: CourseLegProps, over: Parameters<typeof layerInput>[0] = {}) =>
+    courseLayer(layerInput({ structure: linear(undefined, { items: [{ siteId: "S" }, { siteId: "31", leg }, { siteId: "32" }] }), ...over }));
+  const far = [{ x: 80, y: 80 }, { x: 90, y: 80 }, { x: 90, y: 90 }];
 
-  it("white-out at upper white, 709 hatch, own-colour rows on top, page objects ignored", () => {
-    const objects: CourseMapObject[] = [
-      rect("whiteout"),
-      rect("outOfBounds", { stroke: "#000000", strokeWidthMm: 0.3 }),
-      rect("solid", { fill: "#ff0000" }),
-      { id: "t", anchor: "map", kind: "text", x: 5, y: 5, text: "{course}", fontSizeMm: 3, color: "#0000ff" },
-      { id: "l", anchor: "map", kind: "line", x1: 0, y1: 0, x2: 10, y2: 0, stroke: "#0000ff", strokeWidthMm: 0.5, dash: "dashed" },
-      { id: "p", anchor: "page", kind: "text", x: 5, y: 5, text: "page", fontSizeMm: 3, color: "#000000" },
+  it("the band is one clip region of every symbol, after the explicit and the stored regions", () => {
+    const stored: CourseLayerObject = { id: 4, kind: "filter_region", geometry: far, props: { mode: "hide", symbols: "all" } };
+    const layer = withLeg({ corridor }, { objects: [stored], regions: [{ rings: [far], mode: "hide", symbols: "all" }] });
+    expect(layer.regions.map((r) => r.mode)).toEqual(["hide", "hide", "clip"]);
+    const band = layer.regions.at(-1)!;
+    expect(band.symbols).toBe("all");
+    expect(band.invert).toBeUndefined();
+    const rings = flattenRings(band.path);
+    expect(pointInRings(rings, 25000, 13500)).toBe(true);
+    expect(pointInRings(rings, 25000, 6500)).toBe(true);
+    expect(pointInRings(rings, 25000, 10000)).toBe(false);
+    expect(pointInRings(rings, 25000, 16000)).toBe(false);
+  });
+
+  it("masks the map's 516 across the band and never a course pass", () => {
+    const layer = withLeg({ corridor });
+    const input = courseRenderInput(isomDocument(), layer);
+    const { stream, warnings } = symbolise({ ...input, fonts: fonts() });
+    expect(warnings).toEqual([]);
+    const masked = stream.passes.map((_, k) => stream.maskIdx?.[k] ?? -1);
+    const doc = masked.filter((_, k) => stream.objectIdx[k] < input.courseObjectOffset);
+    expect(doc.length).toBeGreaterThan(0);
+    expect(doc.every((m) => m >= 0)).toBe(true);
+    expect(masked.filter((_, k) => stream.objectIdx[k] >= input.courseObjectOffset).every((m) => m === -1)).toBe(true);
+  });
+
+  it("the edge: 705/edge strokes of the inside, ref kind corridor; none without edge; a `none` leg keeps both", () => {
+    // F19: h 2 < R 2.5, so the edge is two open pieces from the 701 to the opened circle of 31.
+    const layer = withLeg({ corridor });
+    const edges = layer.objects.filter((o) => o.ref.kind === "corridor");
+    expect(edges).toHaveLength(2);
+    // F19: the round-capped 705/edge, not the leg's 705.
+    expect(layer.symbols[edges[0].symbolIdx].id).toBe(`${layer.symbols[layer.objects.find((o) => o.ref.kind === "leg")!.symbolIdx].id}/edge`);
+    for (const e of edges) {
+      expect(e.path.closed).toBe(false);
+      expect(e.ref).toEqual({ kind: "corridor", id: "c1:0" });
+      // Its points lie on the edge: 2 mm from the leg's line, from the 701 to where the side meets 31's circle.
+      const c = e.path.coords;
+      for (let i = 0; i < c.length; i += 2) {
+        expect(Math.abs(Math.abs(c[i + 1] - 10000) - 2000)).toBeLessThan(30);
+        expect(c[i]).toBeLessThan(38530);
+      }
+    }
+    // A corridor as wide as the circle keeps today's closed outline round both ends (answer 1).
+    const wide = withLeg({ corridor: { ...corridor, widthM: 120 } }).objects.filter((o) => o.ref.kind === "corridor");
+    expect(wide.map((o) => o.path.closed)).toEqual([true]);
+    expect(withLeg({ corridor: { ...corridor, edge: false } }).objects.some((o) => o.ref.kind === "corridor")).toBe(false);
+    const none = withLeg({ style: "none", corridor });
+    expect(none.objects.some((o) => o.ref.kind === "leg" && o.ref.id === "c1:0")).toBe(false);
+    expect(none.objects.some((o) => o.ref.kind === "corridor")).toBe(true);
+    expect(none.regions).toHaveLength(1);
+  });
+
+  describe("openings (F19): drawn, not cuts", () => {
+    const circleOf = (layer: ReturnType<typeof courseLayer>, id: string) => layer.objects.filter((o) => o.ref.kind === "site" && o.ref.id === id);
+    const ends = (o: { path: { coords: ArrayLike<number> } }) => {
+      const c = o.path.coords;
+      return [[c[0], c[1]], [c[c.length - 2], c[c.length - 1]]];
+    };
+
+    it("the circle at an edged corridor's end opens between the junctions; the derivation's cuts are unchanged", () => {
+      const layer = withLeg({ corridor });
+      const plain = withLeg({});
+      const arcs = circleOf(layer, "31");
+      expect(arcs).toHaveLength(1);
+      expect(arcs[0].path.closed).toBe(false);
+      // The leg comes from the west: the junctions (40 − 1.5, 10 ± 2).
+      const js = ends(arcs[0]).sort((a, b) => a[1] - b[1]);
+      expect(Math.hypot(js[0][0] - 38500, js[0][1] - 8000)).toBeLessThan(30);
+      expect(Math.hypot(js[1][0] - 38500, js[1][1] - 12000)).toBeLessThan(30);
+      expect(circleOf(plain, "31")[0].path.closed).toBe(true);
+      // Never a cut: the derivation is the plain one's, the start drawn alike.
+      expect(layer.derivation.sites).toEqual(plain.derivation.sites);
+      expect(circleOf(layer, "S")).toEqual(circleOf(plain, "S"));
+    });
+
+    it("a leg with a smooth bend (F16's default) opens the circle too", () => {
+      const layer = withLeg({ corridor, bends: [{ x: 25, y: 13, hIn: { x: -5, y: 0 }, hOut: { x: 5, y: 0 } }] });
+      expect(layer.derivation.courses[0].legs[0].points.length).toBeGreaterThan(10);
+      const arcs = circleOf(layer, "31");
+      expect(arcs).toHaveLength(1);
+      expect(arcs[0].path.closed).toBe(false);
+      expect(layer.derivation.sites.find((x) => x.id === "31")!.cuts).toEqual([]);
+    });
+
+    it("edge: false or h ≥ R: the circle stays whole (answers 1 and 3)", () => {
+      expect(circleOf(withLeg({ corridor: { ...corridor, edge: false } }), "31")[0].path.closed).toBe(true);
+      expect(circleOf(withLeg({ corridor: { ...corridor, widthM: 75 } }), "31")[0].path.closed).toBe(true);
+    });
+
+    it("merges with a stored gap it overlaps, and stays with auto cuts off", () => {
+      const sites = SITES.map((x) => (x.id === "31" ? { ...x, circleGaps: [{ start: 250, end: 290 }] } : x));
+      const merged = withLeg({ corridor }, { sites });
+      expect(circleOf(merged, "31")).toHaveLength(1);
+      expect(merged.derivation.sites.find((x) => x.id === "31")!.cuts).toEqual([{ start: 250, end: 290 }]);
+      const off = withLeg({ corridor }, { viewOptions: { autoCuts: false } });
+      expect(circleOf(off, "31")[0].path.closed).toBe(false);
+    });
+
+    it("a corridor passing a control it does not end at leaves its circle whole", () => {
+      // 99 moved onto S → 31's corridor, beside the leg.
+      const sites = SITES.map((x) => (x.id === "99" ? { ...x, x: 25, y: 11 } : x));
+      const layer = withLeg({ corridor }, { sites, viewOptions: { allControls: true } });
+      expect(circleOf(layer, "99")[0].path.closed).toBe(true);
+    });
+  });
+
+  it("legLine (F14): 705 unless the leg has a corridor, 707 always, none never", () => {
+    expect(legLine({ style: "line" })).toBe("line");
+    expect(legLine({ style: "line", corridor })).toBeNull();
+    expect(legLine({ style: "marked_route" })).toBe("marked_route");
+    expect(legLine({ style: "marked_route", corridor })).toBe("marked_route");
+    expect(legLine({ style: "none" })).toBeNull();
+    expect(legLine({ style: "none", corridor })).toBeNull();
+  });
+
+  it("a corridor leg draws no 705 (F14): no leg object, the edge and band kept, the pieces and numbers unchanged; 707 kept", () => {
+    const layer = withLeg({ corridor });
+    expect(layer.objects.filter((o) => o.ref.kind === "leg").map((o) => o.ref.id)).toEqual(["c1:1"]);
+    expect(layer.objects.filter((o) => o.ref.kind === "corridor")).toHaveLength(2);
+    expect(layer.regions).toHaveLength(1);
+    const plain = withLeg({});
+    expect(layer.derivation.courses[0].legs[0].pieces).toEqual(plain.derivation.courses[0].legs[0].pieces);
+    expect(layer.objects.filter((o) => o.ref.kind === "number").map((o) => [o.text, o.path.coords])).toEqual(
+      plain.objects.filter((o) => o.ref.kind === "number").map((o) => [o.text, o.path.coords]));
+    const route = withLeg({ style: "marked_route", corridor });
+    const drawn = route.objects.filter((o) => o.ref.kind === "leg" && o.ref.id === "c1:0");
+    expect(drawn.length).toBeGreaterThan(0);
+    expect(drawn.every((o) => route.symbols[o.symbolIdx].id.includes("707"))).toBe(true);
+  });
+
+  it("no band without whiteMm; no corridor, nothing new", () => {
+    expect(withLeg({ corridor: { ...corridor, whiteMm: 0 } }).regions).toEqual([]);
+    const plain = withLeg({});
+    expect(plain.regions).toEqual([]);
+    expect(plain.objects).toEqual(courseLayer(layerInput({ structure: linear(undefined, { items: [{ siteId: "S" }, { siteId: "31" }, { siteId: "32" }] }) })).objects);
+  });
+});
+
+describe("course objects as F12 moved layout objects (§3.6 retired, §8.3)", () => {
+  const box = [{ x: 20, y: 20 }, { x: 30, y: 20 }, { x: 30, y: 25 }, { x: 20, y: 25 }];
+  const area = (id: string, kind: "whiteout" | "toner_saver" | "oob_area", props: Record<string, unknown> = {}): CourseLayerObject =>
+    ({ id, kind, geometry: box, props }) as CourseLayerObject;
+  const ref = (id: string) => `course-object:${id}`;
+
+  it("white-out at upper white, 709 / 709.b / 709.c by border, text in its own row on top at paper mm", () => {
+    const objects: CourseLayerObject[] = [
+      area("wo", "whiteout"),
+      area("b", "oob_area", { border: "solid" }),
+      area("c", "oob_area", { border: "dashed" }),
+      { id: "t", kind: "text", geometry: [{ x: 5, y: 5 }], props: { text: "{course}", fontSizeMm: 2, color: "#0000ff" } },
     ];
-    const layer = courseLayer(layerInput({ objects, viewOptions: { textValues: { course: "Lång" }, overprintScale: 1.5 } }));
-    const byRef = (id: string) => layer.objects.filter((o) => o.ref.kind === "object" && o.ref.id === id);
+    const layer = courseLayer(layerInput({ objects, viewOptions: { textValues: { course: "Lång" } } }));
+    const byRef = (id: string) => layer.objects.filter((o) => o.ref.kind === "object" && o.ref.id === ref(id));
     const sym = (id: string) => layer.symbols[byRef(id)[0].symbolIdx];
-    expect(sym("r-whiteout")).toMatchObject({ type: "area", fill: layer.colours.findIndex((c) => c.paletteIds?.includes("white-upper")) });
-    expect(sym("r-outOfBounds").id).toBe("ISOM2017-2:709.b");
-    expect(byRef("r-outOfBounds")).toHaveLength(1);
-    const dashed = courseLayer(layerInput({ objects: [rect("outOfBounds", { stroke: "#a626ff", strokeWidthMm: 0.4, dash: "dashed" })] }));
-    expect(dashed.symbols[dashed.objects.find((o) => o.ref.kind === "object")!.symbolIdx].id).toBe("ISOM2017-2:709.c");
-    const top = layer.colours.slice(-2).map((c) => c.id);
-    expect(top).toEqual(["course-object:#ff0000", "course-object:#0000ff"]);
+    expect(sym("wo")).toMatchObject({ type: "area", fill: layer.colours.findIndex((c) => c.paletteIds?.includes("white-upper")) });
+    expect(sym("b").id).toBe("ISOM2017-2:709.b");
+    expect(byRef("b")).toHaveLength(1);
+    expect(sym("c").id).toBe("ISOM2017-2:709.c");
+    expect(layer.colours.at(-1)!.id).toBe("course-object:#0000ff");
     expect(byRef("t")[0].text).toBe("Lång");
-    // Page mm sizes divided by the print enlargement.
+    // Sizes are paper mm: the migration divided a layout text's page size by the enlargement once.
     expect(sym("t")).toMatchObject({ type: "text", fontSizeUm: 2000 });
-    expect(sym("l")).toMatchObject({ type: "line", main: { widthUm: 333, dash: { dashUm: 1667, gapUm: 833 } } });
-    expect(byRef("p")).toEqual([]);
   });
 
   it("white-out outside: the window ring with the shape as a hole; warned without a window", () => {
     const window = [{ x: 0, y: 0 }, { x: 100, y: 0 }, { x: 100, y: 100 }, { x: 0, y: 100 }];
-    const layer = courseLayer(layerInput({ objects: [rect("whiteoutInverted")], viewOptions: { window } }));
+    const layer = courseLayer(layerInput({ objects: [area("ts", "toner_saver")], viewOptions: { window } }));
     const ring = layer.objects.find((o) => o.ref.kind === "object")!;
     expect(ring.path.coords.length).toBe(16);
     expect(ring.path.flags[4] & 16).toBe(16);
-    const missing = courseLayer(layerInput({ objects: [rect("whiteoutInverted")] }));
+    const missing = courseLayer(layerInput({ objects: [area("ts", "toner_saver")] }));
     expect(missing.objects.filter((o) => o.ref.kind === "object")).toEqual([]);
     expect(missing.warnings.map((w) => w.code)).toEqual(["WINDOW_MISSING"]);
   });
 
-  it("images are returned for the page backends, not as objects", () => {
-    const layer = courseLayer(layerInput({ objects: [{ id: "img", anchor: "map", kind: "image", graphicId: 3, x: 1, y: 2, width: 3, height: 4 }] }));
-    expect(layer.images).toEqual([expect.objectContaining({ rectUm: { x: 1000, y: 2000, width: 3000, height: 4000 } })]);
+  it("a toner saver fills a white row on top of the stack, above upper purple and every object colour (P1); none without one", () => {
+    const window = [{ x: 0, y: 0 }, { x: 100, y: 0 }, { x: 100, y: 100 }, { x: 0, y: 100 }];
+    const text: CourseLayerObject = { id: 6, kind: "text", geometry: [{ x: 5, y: 5 }], props: { text: "x", fontSizeMm: 3, color: "#0000ff" } };
+    const saver: CourseLayerObject = { id: 7, kind: "toner_saver", geometry: [{ x: 10, y: 10 }, { x: 60, y: 10 }, { x: 60, y: 60 }], props: {} };
+    const oob: CourseLayerObject = { id: 8, kind: "oob_area", geometry: [{ x: 70, y: 70 }, { x: 90, y: 70 }, { x: 90, y: 90 }], props: {} };
+    const layer = courseLayer(layerInput({ objects: [text, oob, saver], viewOptions: { window } }));
+    const ring = layer.objects.find((o) => o.path.flags.some((f) => f & 16))!;
+    const fill = layer.symbols[ring.symbolIdx];
+    if (fill.type !== "area") throw new Error("the ring is not an area");
+    const row = fill.fill ?? -1;
+    expect(row).toBe(layer.colours.length - 1);
+    expect(layer.colours[row]).toMatchObject({ id: "course:toner-saver-white", cmyk: [0, 0, 0, 0] });
+    // Symbolised with the document: the ring is the last pass — after the map's black, the course's upper
+    // purple (numbers, the 709 area) and the text's own row.
+    const { stream } = symbolise({ ...courseRenderInput(isomDocument(), layer), fonts: fonts() });
+    const ids = stream.passes.map((p) => colourId(layer, p.colour));
+    expect(ids.at(-1)).toBe("course:toner-saver-white");
+    expect(ids.filter((id) => id === "course:toner-saver-white")).toHaveLength(1);
+    expect(ids).toEqual(expect.arrayContaining(["black100", "purple-upper", "course-object:#0000ff"]));
+    // A plain white-out stays at upper white, and no row is added without a toner saver.
+    const plain = courseLayer(layerInput({ objects: [area("wo", "whiteout")], viewOptions: { window } }));
+    expect(plain.colours.some((c) => c.id === "course:toner-saver-white")).toBe(false);
+    // Nor when the saver is not drawn (no window: the viewer, WINDOW_MISSING).
+    expect(courseLayer(layerInput({ objects: [saver] })).colours.some((c) => c.id === "course:toner-saver-white")).toBe(false);
+  });
+
+  it("image objects are returned for the page backends, not as objects", () => {
+    const img: CourseLayerObject = { id: "img", kind: "image", geometry: [{ x: 4, y: 6 }, { x: 1, y: 2 }], props: { graphicId: 3, crop: { x: 0, y: 0.5, width: 1, height: 0.5 } } };
+    const layer = courseLayer(layerInput({ objects: [img] }));
+    expect(layer.images).toEqual([{ graphicId: 3, crop: { x: 0, y: 0.5, width: 1, height: 0.5 }, rectUm: { x: 1000, y: 2000, width: 3000, height: 4000 } }]);
     expect(layer.objects.some((o) => o.ref.kind === "object")).toBe(false);
   });
 });
@@ -171,9 +477,9 @@ describe("layout objects (§3.6)", () => {
 describe("courseDocumentContext", () => {
   const colours = layerInput().document.colours;
   it("reads the matched library and factor; unmatched documents choose by scale", () => {
-    expect(courseDocumentContext({ colours, library: { id: "ISOM2017-2", version: "x" }, documentFactor: 1.5, mapScale: 10000 })).toMatchObject({ libraryId: "ISOM2017-2", documentFactor: 1.5 });
-    expect(courseDocumentContext({ colours, library: null, documentFactor: 1, mapScale: 10000 })).toMatchObject({ libraryId: "ISOM2017-2", documentFactor: 1.5 });
-    expect(courseDocumentContext({ colours, library: null, documentFactor: 1, mapScale: 4000 })).toMatchObject({ libraryId: "ISSprOM2019-2", documentFactor: 1 });
+    expect(courseDocumentContext({ colours, library: { id: "ISOM2017-2", version: "x" }, documentFactor: 1.5, mapScale: 10000 })).toMatchObject({ libraryId: "ISOM2017-2", documentFactor: 1.5, mapScale: 10000 });
+    expect(courseDocumentContext({ colours, library: null, documentFactor: 1, mapScale: 10000 })).toMatchObject({ libraryId: "ISOM2017-2", documentFactor: 1.5, mapScale: 10000 });
+    expect(courseDocumentContext({ colours, library: null, documentFactor: 1, mapScale: 4000 })).toMatchObject({ libraryId: "ISSprOM2019-2", documentFactor: 1, mapScale: 4000 });
   });
 
   it("a site at the origin is not drawn", () => {

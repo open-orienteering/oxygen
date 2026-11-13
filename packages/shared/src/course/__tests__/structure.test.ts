@@ -6,6 +6,7 @@ import {
   courseStructureWireSchema,
   hasVariations,
   linearStructure,
+  sectionsOf,
   structureControlIds,
   structureDiff,
   structureSiteIssues,
@@ -62,6 +63,21 @@ describe("courseStructureSchema", () => {
     expect(parse(s).success).toBe(true);
   });
 
+  it("takes a bend's handles as offsets (F13, course-layer.md §6.1), stored corners unchanged", () => {
+    const withBends = (bends: unknown) => ({ ...linear(["S", "31", "F"]), items: [{ siteId: "S" }, { siteId: "31", leg: { bends } }, { siteId: "F" }] });
+    const curved = [{ x: 1, y: 2, hIn: { x: -1, y: 0 }, hOut: { x: 1, y: 0 } }, { x: 5, y: 2, hIn: { x: 0, y: 1 } }];
+    const r = parse(withBends(curved));
+    expect(r.success).toBe(true);
+    expect((r.data!.items[1] as { leg: { bends: unknown } }).leg.bends).toEqual(curved);
+    expect(parse(withBends([{ x: 1, y: 2 }])).data).toEqual(withBends([{ x: 1, y: 2 }]));
+    expect(parse(withBends([{ x: 1, y: 2, hOut: { x: Infinity, y: 0 } }])).success).toBe(false);
+    expect(parse(withBends([{ x: 1, y: 2, hIn: { x: 1 } }])).success).toBe(false);
+    expect(courseStructureWireSchema.safeParse({ version: 1, id: "7", orderMode: "ordered", items: [{ siteId: 31 }, { siteId: 32, leg: { bends: curved } }] }).success).toBe(true);
+    // A handle change is a change of the item.
+    const a = withBends([{ x: 1, y: 2 }]) as StoredCourseStructure, b = withBends([{ x: 1, y: 2, hOut: { x: 1, y: 0 } }]) as StoredCourseStructure;
+    expect(structureDiff(a, b)).toEqual(["31"]);
+  });
+
   it("accepts a variation group between two anchors, and a butterfly loop", () => {
     const s = { ...linear([]), items: [{ siteId: "S" }, { siteId: "31" }, variation("v1", [["32"], ["33"]]), { siteId: "34" }, variation("v2", [["35"], ["36"]], { loop: true }), { siteId: "34" }, { siteId: "F" }] };
     expect(parse(s).success).toBe(true);
@@ -79,13 +95,21 @@ describe("courseStructureSchema", () => {
     expect(issueCodes({ ...linear([]), items: [{ siteId: "S" }, variation("v1", [["32"], ["33"]])] })).toContain("VARIATION_UNANCHORED");
   });
 
-  it("rejects duplicate group ids, duplicate labels, fewer than two alternatives and empty alternatives", () => {
+  it("rejects duplicate group ids, duplicate labels and fewer than two alternatives", () => {
     const dupId = { ...linear([]), items: [{ siteId: "S" }, variation("v", [["32"], ["33"]]), { siteId: "34" }, variation("v", [["35"], ["36"]]), { siteId: "F" }] };
     expect(issueCodes(dupId)).toContain("VARIATION_ID_DUPLICATE");
     const dupLabel = { ...linear([]), items: [{ siteId: "S" }, { kind: "variation", id: "v", alternatives: [{ label: "A", items: [{ siteId: "1" }] }, { label: "A", items: [{ siteId: "2" }] }] }, { siteId: "F" }] };
     expect(issueCodes(dupLabel)).toContain("VARIATION_LABEL_DUPLICATE");
     expect(parse({ ...linear([]), items: [{ siteId: "S" }, variation("v", [["32"]]), { siteId: "F" }] }).success).toBe(false);
-    expect(parse({ ...linear([]), items: [{ siteId: "S" }, variation("v", [["32"], []]), { siteId: "F" }] }).success).toBe(false);
+  });
+
+  it("accepts a group of empty alternatives only (F7: *Create variation here* saves A and B empty at once)", () => {
+    expect(parse({ ...linear([]), items: [{ siteId: "S" }, variation("v", [[], []]), { siteId: "F" }] }).success).toBe(true);
+  });
+
+  it("accepts an empty alternative beside a non-empty one (answer 5: a straight leg)", () => {
+    expect(parse({ ...linear([]), items: [{ siteId: "S" }, variation("v", [["32"], []]), { siteId: "F" }] }).success).toBe(true);
+    expect(parse({ ...linear([]), items: [{ siteId: "S" }, variation("v", [[], ["33"], []]), { siteId: "F" }] }).success).toBe(true);
   });
 
   it("rejects out-of-range leg gaps and unknown fields' wrong types", () => {
@@ -109,6 +133,41 @@ describe("structureSiteIssues (rules that need the sites)", () => {
 
   it("is empty for a valid linear course", () => {
     expect(structureSiteIssues(linear(["S", "31", "32", "F"]), kinds)).toEqual([]);
+  });
+
+  describe("slice-F kinds (F4)", () => {
+    const fk = new Map<string, string>([...kinds, ["P", "crossing_point"], ["M", "map_issue"]]);
+    const withLeg = (leg: Record<string, unknown>) =>
+      courseStructureSchema.parse({ ...linear([]), items: [{ siteId: "S" }, { siteId: "31", leg }, { siteId: "F" }] });
+
+    it("refuses a crossing point or a map-issue point as an item, top level or in an alternative", () => {
+      expect(structureSiteIssues(linear(["S", "P", "31", "M", "F"]), fk)).toEqual([
+        { code: "SITE_KIND_NOT_ITEM", siteId: "P" },
+        { code: "SITE_KIND_NOT_ITEM", siteId: "M" },
+      ]);
+      const g = courseStructureSchema.parse({ ...linear([]), items: [{ siteId: "S" }, { siteId: "31" }, variation("v1", [["P"], ["33"]]), { siteId: "32" }, { siteId: "F" }] });
+      expect(structureSiteIssues(g, fk)).toEqual([{ code: "SITE_KIND_NOT_ITEM", siteId: "P" }]);
+    });
+
+    it("accepts a map exchange as an ordinary item", () => {
+      expect(structureSiteIssues(linear(["S", "31", "X", "32", "F"]), fk)).toEqual([]);
+    });
+
+    it("accepts a leg crossing that names a crossing point", () => {
+      expect(structureSiteIssues(withLeg({ crossing: { controlId: "P", section: true } }), fk)).toEqual([]);
+    });
+
+    it("refuses a leg crossing naming another kind (CROSSING_KIND) or an unknown site", () => {
+      expect(structureSiteIssues(withLeg({ crossing: { controlId: "32" } }), fk)).toEqual([{ code: "CROSSING_KIND", siteId: "32" }]);
+      expect(structureSiteIssues(withLeg({ crossing: { controlId: "nope" } }), fk)).toEqual([{ code: "SITE_UNKNOWN", siteId: "nope" }]);
+    });
+
+    it("the wire form names the crossing by public id", () => {
+      const wire = { version: 1, id: "7", orderMode: "ordered", items: [{ siteId: 31 }, { siteId: 32, leg: { crossing: { controlId: 90 } } }] };
+      expect(courseStructureWireSchema.safeParse(wire).success).toBe(true);
+      const bad = { ...wire, items: [{ siteId: 31 }, { siteId: 32, leg: { crossing: { controlId: "90" } } }] };
+      expect(courseStructureWireSchema.safeParse(bad).success).toBe(false);
+    });
   });
 });
 
@@ -152,5 +211,40 @@ describe("structureDiff (the CONFLICT payload's `differing`, course-layer.md §7
 
   it("treats a null side as empty", () => {
     expect(structureDiff(null, linear(["S", "F"]))).toEqual(["F", "S"]);
+  });
+});
+
+describe("sectionsOf (F5, course-layer.md §11)", () => {
+  const parts = (kinds: string[]) => sectionsOf(kinds, (k) => k === "X");
+
+  it("is one part without an exchange", () => {
+    expect(parts(["S", "c", "c", "F"])).toEqual([{ index: 0, from: 0, to: 3 }]);
+    expect(parts([])).toEqual([{ index: 0, from: 0, to: -1 }]);
+  });
+
+  it("splits at an exchange that ends one part and opens the next", () => {
+    expect(parts(["S", "c", "X", "c", "F"])).toEqual([
+      { index: 0, from: 0, to: 2 },
+      { index: 1, from: 2, to: 4 },
+    ]);
+  });
+
+  it("gives two adjacent exchanges a part of their two circles", () => {
+    expect(parts(["S", "X", "X", "F"])).toEqual([
+      { index: 0, from: 0, to: 1 },
+      { index: 1, from: 1, to: 2 },
+      { index: 2, from: 2, to: 3 },
+    ]);
+  });
+
+  it("allows an exchange first or last", () => {
+    expect(parts(["X", "c"])).toEqual([
+      { index: 0, from: 0, to: 0 },
+      { index: 1, from: 0, to: 1 },
+    ]);
+    expect(parts(["c", "X"])).toEqual([
+      { index: 0, from: 0, to: 1 },
+      { index: 1, from: 1, to: 1 },
+    ]);
   });
 });

@@ -5,8 +5,11 @@
  */
 
 export * from "./types.js";
-export { courseLayer, courseRenderInput, type CourseRenderInput } from "./layer.js";
-export { CUT_CODES, CUT_AIR_MM, DEFAULT_FEATURE_RADIUS_MM, circleCuts, legGaps, cutFeaturesOfDocument, cutSymbolRadiusMm, cutContextForScale, pointSymbolRadiusMm, ocadCutSymbolRadiiMm } from "./cuts.js";
+export { courseLayer, courseRenderInput, legLine, type CourseRenderInput } from "./layer.js";
+export { legLengthMm, routedBends } from "./derive.js";
+export { LEG_FLATTEN_TOLERANCE_MM, PPEN_FLATTEN_TOLERANCE_MM, bendSegmentAt, hasCurvedBends, isCurvedSegment, legPolylineOf, reverseBends, type BendSegmentHit } from "./bends.js";
+export { corridorGeometry, type CorridorEdge, type CorridorGeometry } from "./corridor.js";
+export { CUT_CODES, CUT_AIR_MM, DEFAULT_FEATURE_RADIUS_MM, circleCuts, legGaps, polylineLegGaps, cutFeaturesOfDocument, cutSymbolRadiusMm, cutContextForScale, pointSymbolRadiusMm, ocadCutSymbolRadiiMm } from "./cuts.js";
 export { CourseStackError, courseColourStack } from "./colour-stack.js";
 export { courseDocumentContext } from "./context.js";
 export { courseSymbols, type CourseSymbolSet } from "./symbols.js";
@@ -19,13 +22,19 @@ export {
   controlItemSchema,
   variationItemSchema,
   legPropsSchema,
+  legPropsSchemaOf,
+  NON_ITEM_SITE_KINDS,
   hasVariations,
   linearStructure,
   structureControlIds,
   structureControlItems,
   structureDiff,
   structureSiteIssues,
+  sectionsOf,
+  type CourseSection,
   type LegProps,
+  type WireLegProps,
+  wireLegPropsSchema,
   type StoredControlItem,
   type StoredCourseItem,
   type StoredCourseStructure,
@@ -34,13 +43,30 @@ export {
   type WireCourseStructure,
 } from "./structure.js";
 export {
+  MAX_VARIANTS,
+  allVariationStructures,
+  groupOrder,
+  materialiseVariants,
+  pathOfOrders,
+  pruneSiteFromStructure,
+  structureSiteIds,
+  uniformVariantNumbers,
+  variantCount,
+  variantKeyDuplicates,
+  variantOrders,
+  variantStructure,
+  type GroupOrders,
+  type MaterialisedVariant,
+  type PathGroup,
+  type RowPath,
+} from "./variants.js";
+export {
   COURSE_OBJECT_KINDS,
   courseObjectBodySchema,
   courseObjectScopeSchemaOf,
   courseObjectInScope,
   courseObjectRefId,
   filterRegionOf,
-  isCourseObject,
   type CourseLayerObject,
   type CourseObject,
   type CourseObjectBody,
@@ -54,6 +80,7 @@ export {
   SAME_FEATURE_MIN_DISTANCE_M,
   UNCROSSABLE_CODES,
   OOB_CODES,
+  VARIATION_BALANCE_TOLERANCE,
   courseChecks,
   checkObstaclesOfDocument,
   invertedCode,
@@ -63,4 +90,5 @@ export {
   type CheckSite,
   type CheckObstacle,
   type CheckDocument,
+  type CheckVariationGroup,
 } from "./checks.js";

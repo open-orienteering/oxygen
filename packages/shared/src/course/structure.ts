@@ -5,8 +5,8 @@
  * The stored shape is C0's v1 layer input (`CourseStructure`: `version`,
  * `id`, `orderMode`, `items`) with the whole 08 §4.3 item union — control
  * items with `LegProps`, and variation groups — so slice F never reshapes
- * the column. Phase 1 writes control items only: `course.setStructure`
- * refuses a structure with groups. Not stored: `labelOffsets` (one source,
+ * the column. Groups are materialised into child courses (`variants.ts`,
+ * course-layer.md §12). Not stored: `labelOffsets` (one source,
  * `course_controls`; readers fill them in), `extras` and C0's interim
  * file-authored `leg.path` / `pieces` / item `circleGaps` (the slice D split:
  * no `LegProps.path`; authored cuts become `controls.circle_gaps`, D1). Items
@@ -18,29 +18,42 @@
  */
 
 import { z } from "zod";
-import { pointSchema } from "../course-maps/schema.js";
+import { pathVertexSchema } from "../course-maps/schema.js";
 import type { CourseItem, CourseStructure } from "./types.js";
 
 const fractionGapSchema = z
   .object({ from: z.number().min(0).max(1), to: z.number().min(0).max(1) })
   .refine((g) => g.from <= g.to, { message: "gap from > to" });
 
-/** 08 §4.3 `LegProps` (no `path`: bends are for marked routes). */
-export const legPropsSchema = z.strictObject({
-  style: z.enum(["line", "marked_route", "none"]).optional(),
-  gaps: z.array(fractionGapSchema).optional(),
-  corridor: z
-    .object({
-      widthM: z.number().positive(),
-      edge: z.boolean(),
-      whiteMm: z.number().min(0),
-      whiteOpacity: z.number().min(0).max(1),
-    })
-    .optional(),
-  crossing: z.object({ controlId: z.string().min(1), section: z.boolean().optional() }).optional(),
-  bends: z.array(pointSchema).optional(),
-});
+/**
+ * 08 §4.3 `LegProps` over a site-id type (no `path`: bends are for marked
+ * routes). `crossing.controlId` names a `crossing_point` site the leg runs
+ * through (course-layer.md §10.3): a control UUID in the column, a public
+ * id on the wire, like every site reference.
+ */
+export function legPropsSchemaOf<S extends z.ZodType<string | number>>(siteId: S) {
+  return z.strictObject({
+    style: z.enum(["line", "marked_route", "none"]).optional(),
+    gaps: z.array(fractionGapSchema).optional(),
+    corridor: z
+      .object({
+        widthM: z.number().positive(),
+        edge: z.boolean(),
+        whiteMm: z.number().min(0),
+        whiteOpacity: z.number().min(0).max(1),
+      })
+      .optional(),
+    crossing: z.strictObject({ controlId: siteId, section: z.boolean().optional() }).optional(),
+    // Path vertices (F13, course-layer.md §10.1): handles are offsets; the sites stay corners.
+    bends: z.array(pathVertexSchema).optional(),
+  });
+}
+/** The column's `LegProps`. */
+export const legPropsSchema = legPropsSchemaOf(z.string().min(1));
 export type LegProps = z.infer<typeof legPropsSchema>;
+/** The tRPC wire form's `LegProps`: the crossing point by public id. */
+export const wireLegPropsSchema = legPropsSchemaOf(z.number().int());
+export type WireLegProps = z.infer<typeof wireLegPropsSchema>;
 
 function controlItemSchemaOf<S extends z.ZodType<string | number>>(siteId: S) {
   return z.strictObject({
@@ -49,7 +62,7 @@ function controlItemSchemaOf<S extends z.ZodType<string | number>>(siteId: S) {
     /** How the item is drawn; default the site's kind. */
     role: z.enum(["control", "start", "finish"]).optional(),
     /** The leg *into* this item. */
-    leg: legPropsSchema.optional(),
+    leg: legPropsSchemaOf(siteId).optional(),
     /** Hide this visit's number (08 §4.2; mirrored to `course_controls.number_hidden`). */
     numberHidden: z.boolean().optional(),
   });
@@ -59,9 +72,14 @@ function variationItemSchemaOf<S extends z.ZodType<string | number>>(siteId: S) 
   return z.strictObject({
     kind: z.literal("variation"),
     id: z.string().min(1),
-    /** Alternatives hold controls only, so groups never nest. */
+    /**
+     * Alternatives hold controls only, so groups never nest. An alternative
+     * may be empty — a straight leg (answer 5) — and since F7 all of them may
+     * be (*Create variation here* saves A and B empty; the editor warns,
+     * `VARIATION_ALL_EMPTY` in the checks).
+     */
     alternatives: z
-      .array(z.strictObject({ label: z.string().min(1), items: z.array(controlItemSchemaOf(siteId)).min(1) }))
+      .array(z.strictObject({ label: z.string().min(1), items: z.array(controlItemSchemaOf(siteId)) }))
       .min(2),
     /** Butterfly: the alternatives return to the anchor. */
     loop: z.boolean().optional(),
@@ -89,7 +107,7 @@ export function courseStructureSchemaOf<S extends z.ZodType<string | number>>(si
 }
 
 /** What the group rules read of an item, whatever the site-id type. */
-type ItemShape = { kind?: "control" | "variation"; id?: string; alternatives?: { label: string }[] };
+type ItemShape = { kind?: "control" | "variation"; id?: string; alternatives?: { label: string; items: unknown[] }[] };
 
 function variationRules(items: readonly ItemShape[], ctx: z.RefinementCtx): void {
   const ids = new Set<string>();
@@ -131,11 +149,19 @@ export function hasVariations(s: StoredCourseStructure): boolean {
   return s.items.some((item) => item.kind === "variation");
 }
 
-/** A rule that needs the event's sites (08 §4.3): unknown sites, a group spanning a map exchange. */
+/**
+ * A rule that needs the event's sites (08 §4.3): unknown sites, a group
+ * spanning a map exchange, a crossing or map-issue point used as an item
+ * (they are never items, slice F split), a leg crossing naming a site that
+ * is not a crossing point (course-layer.md §6.1, §10.3).
+ */
 export interface StructureSiteIssue {
-  code: "SITE_UNKNOWN" | "VARIATION_CROSSES_EXCHANGE";
+  code: "SITE_UNKNOWN" | "VARIATION_CROSSES_EXCHANGE" | "SITE_KIND_NOT_ITEM" | "CROSSING_KIND";
   siteId: string;
 }
+
+/** Site kinds that are never structure items: referenced by `LegProps.crossing`, or standing alone. */
+export const NON_ITEM_SITE_KINDS: ReadonlySet<string> = new Set(["crossing_point", "map_issue"]);
 
 /** Check a parsed structure against the event's site kinds (`controls.kind` by site id). */
 export function structureSiteIssues(
@@ -143,17 +169,25 @@ export function structureSiteIssues(
   kindById: ReadonlyMap<string, string>,
 ): StructureSiteIssue[] {
   const issues: StructureSiteIssue[] = [];
-  const check = (siteId: string, inGroup: boolean) => {
-    const kind = kindById.get(siteId);
-    if (kind === undefined) issues.push({ code: "SITE_UNKNOWN", siteId });
-    else if (inGroup && kind === "map_exchange") issues.push({ code: "VARIATION_CROSSES_EXCHANGE", siteId });
+  const crossings: string[] = [];
+  const check = (item: StoredControlItem, inGroup: boolean) => {
+    const kind = kindById.get(item.siteId);
+    if (kind === undefined) issues.push({ code: "SITE_UNKNOWN", siteId: item.siteId });
+    else if (NON_ITEM_SITE_KINDS.has(kind)) issues.push({ code: "SITE_KIND_NOT_ITEM", siteId: item.siteId });
+    else if (inGroup && kind === "map_exchange") issues.push({ code: "VARIATION_CROSSES_EXCHANGE", siteId: item.siteId });
+    if (item.leg?.crossing) crossings.push(item.leg.crossing.controlId);
   };
   for (const item of s.items) {
     if (item.kind === "variation") {
-      for (const alt of item.alternatives) for (const c of alt.items) check(c.siteId, true);
+      for (const alt of item.alternatives) for (const c of alt.items) check(c, true);
     } else {
-      check(item.siteId, false);
+      check(item, false);
     }
+  }
+  for (const siteId of crossings) {
+    const kind = kindById.get(siteId);
+    if (kind === undefined) issues.push({ code: "SITE_UNKNOWN", siteId });
+    else if (kind !== "crossing_point") issues.push({ code: "CROSSING_KIND", siteId });
   }
   return issues;
 }
@@ -181,6 +215,33 @@ export function structureControlItems(s: StoredCourseStructure | CourseStructure
     if (item.kind === "variation") out.push(...item.alternatives[0].items);
     else out.push(item);
   }
+  return out;
+}
+
+/**
+ * One part of a course split by its map exchanges (course-layer.md §11;
+ * 08 §4.3 "sections"): the inclusive index range `from … to` into the
+ * sequence. The exchange ends part n and opens part n + 1, so it lies in both.
+ */
+export interface CourseSection {
+  index: number;
+  from: number;
+  to: number;
+}
+
+/**
+ * The parts of a sequence (items, sites, derived entries) split at the
+ * entries `isExchange` names. No exchange → one part covering everything.
+ */
+export function sectionsOf<T>(items: readonly T[], isExchange: (item: T, i: number) => boolean): CourseSection[] {
+  const out: CourseSection[] = [];
+  let from = 0;
+  items.forEach((item, i) => {
+    if (!isExchange(item, i)) return;
+    out.push({ index: out.length, from, to: i });
+    from = i;
+  });
+  out.push({ index: out.length, from, to: items.length - 1 });
   return out;
 }
 

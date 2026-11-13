@@ -93,8 +93,12 @@ describe("kind ↔ status", () => {
     await caller.control.delete({ id: c.id });
   });
 
-  it("refuses the slice-F kinds", async () => {
-    await expect(caller.control.update({ id: 31, kind: "map_exchange" })).rejects.toMatchObject({ code: "PRECONDITION_FAILED" });
+  it("writes the slice-F kinds (F4; course-crossings.test.ts has the rules)", async () => {
+    const c = await caller.control.create({ codes: "91", xpos: 6, ypos: 6 });
+    await caller.control.update({ id: c.id, kind: "map_exchange" });
+    const row = await ctx.db.control.findFirstOrThrow({ where: { eventId: ctx.eventId, codes: "91" } });
+    expect([row.kind, row.status]).toEqual(["map_exchange", "ok"]);
+    await caller.control.delete({ id: c.id });
   });
 
   it("stores circle gaps", async () => {
@@ -165,8 +169,8 @@ describe("course.setStructure", () => {
     // D6: the written course's advisory checks (course-checks.test.ts covers them).
     expect(res.checks).toEqual(await caller.course.checks({ courseId: id }));
     const row = await courseRow(id);
-    const start = await ctx.db.control.findFirstOrThrow({ where: { eventId: ctx.eventId, seq: startSeq } });
-    const finish = await ctx.db.control.findFirstOrThrow({ where: { eventId: ctx.eventId, seq: finishSeq } });
+    const start = await ctx.db.control.findFirstOrThrow({ where: { eventId: ctx.eventId, removed: false, codes: String(startSeq) } });
+    const finish = await ctx.db.control.findFirstOrThrow({ where: { eventId: ctx.eventId, removed: false, codes: String(finishSeq) } });
     expect(row.startName).toBe(start.name);
     expect(row.finishControlId).toBe(finish.id);
     expect(row.version.toString()).toBe(res.version);
@@ -179,6 +183,31 @@ describe("course.setStructure", () => {
     const detail = await caller.course.detail({ id });
     expect(detail.structure.labelOffsets).toEqual({ "33": { dx: 2, dy: -1 } });
     expect(detail.structure.items[2]).toMatchObject({ siteId: 33, leg: { gaps: [{ from: 0.4, to: 0.5 }] } });
+  });
+
+  it("course.list carries every stored leg whole (style, bends, gaps, corridor) by public ids (F2)", async () => {
+    const { id } = await caller.course.create({ name: "Legs whole" });
+    const corridor = { widthM: 60, edge: true, whiteMm: 3, whiteOpacity: 0.5 };
+    await caller.course.setStructure({
+      courseId: id,
+      structure: {
+        version: 1,
+        id: "legs",
+        orderMode: "ordered",
+        items: [
+          { siteId: startSeq },
+          { siteId: 31, leg: { style: "marked_route" } },
+          { siteId: 32, leg: { bends: [{ x: 40, y: 30 }], gaps: [{ from: 0.4, to: 0.5 }], corridor } },
+          { siteId: finishSeq },
+        ],
+      },
+    });
+    const summary = (await caller.course.list()).find((c) => c.id === id)!;
+    expect(summary.legs).toEqual({
+      [`${startSeq}>31`]: { style: "marked_route" },
+      "31>32": { bends: [{ x: 40, y: 30 }], gaps: [{ from: 0.4, to: 0.5 }], corridor },
+    });
+    expect(summary).not.toHaveProperty("legGaps");
   });
 
   it("draws and measures the course as the linear course.update path does", async () => {
@@ -198,23 +227,8 @@ describe("course.setStructure", () => {
     expect([rb.lengthM, rb.lengthSource]).toEqual([ra.lengthM, ra.lengthSource]);
   });
 
-  it("refuses variation groups (slice F) and unknown controls", async () => {
+  it("refuses unknown controls (variation groups are materialised: course-variants.test.ts)", async () => {
     const { id } = await caller.course.create({ name: "Var" });
-    await expect(
-      caller.course.setStructure({
-        courseId: id,
-        structure: {
-          version: 1,
-          id: "v",
-          orderMode: "ordered",
-          items: [
-            { siteId: 31 },
-            { kind: "variation", id: "g", alternatives: [{ label: "A", items: [{ siteId: 32 }] }, { label: "B", items: [{ siteId: 33 }] }] },
-            { siteId: 34 },
-          ],
-        },
-      }),
-    ).rejects.toMatchObject({ code: "PRECONDITION_FAILED" });
     await expect(
       caller.course.setStructure({ courseId: id, structure: { version: 1, id: "v", orderMode: "ordered", items: [{ siteId: 999 }] } }),
     ).rejects.toMatchObject({ code: "NOT_FOUND" });
@@ -388,7 +402,8 @@ describe("the mirror stays a function of the structure (course-layer.md §6.2)",
     const seq = (await drawnCourse(ctx.db, ctx.eventId, row.id)).features
       .filter((f) => f.properties.symbolType === "start")
       .map((f) => f.properties.code);
-    expect(seq).toEqual(["81"]);
+    // Shown by its name now that it is a start (F32, `displayCode`).
+    expect(seq).toEqual(["Start K"]);
 
     await caller.control.update({ id: site.id, kind: "control" });
     expect((await ccOf(id)).map((cc) => cc.control.codes)).toEqual(["81", "31", "32"]);

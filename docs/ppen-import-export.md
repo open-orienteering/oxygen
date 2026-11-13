@@ -91,21 +91,55 @@ and import again.
 |------------|--------|
 | `<control kind="start/normal/finish">` | Control bank. Start/finish get synthesized public ids `STA1`… / `FIN1`…; normal controls use `<code>` |
 | `<control kind="map-issue">` (and other non-punchable kinds) | Skipped from the control bank; course walks still follow their links so the sequence stays intact |
-| `<course kind="normal">` + linked `<course-control>` | Course with ordered controls; leg lengths = map-mm distance × scale / 1000 |
+| `<course kind="normal">` + linked `<course-control>` | Course with ordered controls; leg lengths = map-mm distance along the leg (through its bends) × scale / 1000 |
+| `<leg start-control end-control>` with `<bends><location x y/>…</bends>` | The leg's `LegProps.bends` (paper mm) on every course that runs from that control to that one (row F9; `docs/course-layer.md` §10.1) |
 | Class assignments | None in `.ppen`. Preview falls back to course-name class suggestions ([course-import-class-fallback.md](course-import-class-fallback.md)) |
 | Descriptions, special objects, white-outs, print layout | Ignored |
 
 Geometry is straight-line GeoJSON (`geometrySource: "xml"`), same as IOF
-import.
+import; a `<leg>`'s bends are drawn into the leg feature (`bent: true`),
+so the import alignment re-projects them with the controls, and the
+importer reads them from there (`legBendsOfFeatures`,
+`course-import-structure.ts`). *Import without control positions* drops
+them with the positions. A re-import carries the stored leg props the
+file is silent on (gaps, a marked route) where the leg still runs
+between the same sites; the file's bends win (`carryLegs`).
+
+## What is exported
+
+Every course is a `kind="normal"` course of linked `<course-control>`s.
+A course with variations (`docs/course-layer.md` §12) is written as its
+materialised variants, one `kind="normal"` course each (`<root> <key>`),
+the root itself not — Purple Pen's own variation courses are not written,
+since the parser refuses them (no round trip of the groups). A leg with
+bends gets one `<leg id start-control end-control><bends><location x y/>…`
+per (from, to) control pair — the first course that runs the pair wins —
+in paper mm as the controls. Purple Pen's bends are corners, so a
+**curved** leg (a bend with Bézier handles, `docs/course-layer.md`
+§10.1, F13) is written as its curve flattened at **0.1 mm**
+(`legPolylineOf(…, PPEN_FLATTEN_TOLERANCE_MM)`, the sites left out; user
+answer 2026-11-08 Q3): the points lie within 0.1 mm of the curve, the
+bend vertices among them, and a re-import reads them back as corner
+bends whose leg is within 0.1 mm of the curve and within a metre of its
+length. A leg without handles writes exactly what it did before F13.
+Crossing points (sites and their rows) are
+not written, a map exchange is a normal control, map-issue points are not
+exported (row F9; the IOF file carries all three, see
+[iof-coursedata-export.md](iof-coursedata-export.md)).
 
 ## What is not supported (v1)
 
 - **Relay / variation courses** — a `<course-control>` with more than one
   `<next>` is rejected with an error naming the course.
 - **Score courses** and other non-`kind="normal"` courses — rejected.
-- Round-tripping of control descriptions, number locations, leg gaps,
-  or print-area / appearance settings (export writes sensible defaults
-  so Purple Pen opens the file cleanly).
+- Round-tripping of a curve's handles: an exported curve comes back as
+  corners (above).
+- Round-tripping of control descriptions, number locations, leg gaps
+  (`<leg>`'s `<gaps>`), marked routes (`<leg>`'s `<flagging>`), crossing,
+  map-issue and map-exchange control kinds, or print-area / appearance
+  settings (export writes sensible defaults so Purple Pen opens the file
+  cleanly). The `<leg>` vocabulary beyond `<bends>` was not verified
+  against Purple Pen's source for F9, so only bends are read and written.
 
 ## Implementation
 
@@ -119,9 +153,15 @@ import.
 | Import sniff | `parseCourseFile` in `packages/api/src/routers/course.ts` |
 | UI | `CoursesPage` export dropdown; `CourseImportDialog` accepts `.ppen` |
 
-Unit tests: `ppen-course-parser.test.ts`, `ppen-course-export.test.ts`
-(round-trip), `map-coordinate-transfer.test.ts`,
-`course-import-align.test.ts`. Integration: `ppen-import.test.ts`
-(aligned / transformed / mismatch / `skipPositions`), ppen case in
-`course-export.test.ts`. E2E: `e2e/courses.spec.ts` + fixtures
+Unit tests: `ppen-course-parser.test.ts` (`<leg>` bends onto the right
+row, leg length along them, geometry), `ppen-course-export.test.ts`
+(round-trip; one `<leg>` per bent pair, crossing points skipped; F13: a
+corner leg unchanged, a curved leg's points within 0.1 mm of the curve
+and its round trip as corners within a metre),
+`course-import-structure.test.ts` (`legBendsOfFeatures`),
+`map-coordinate-transfer.test.ts`, `course-import-align.test.ts`.
+Integration: `ppen-import.test.ts` (aligned / transformed / mismatch /
+`skipPositions`), ppen cases in `course-export.test.ts` (a bent course's
+legs equal the stored ones after the round trip; a forked event's
+variants as `kind="normal"` courses with the bend). E2E: `e2e/courses.spec.ts` + fixtures
 `e2e/fixtures/ppen-import.ppen` and `e2e/fixtures/ppen-other-map.ppen`.

@@ -53,6 +53,12 @@ export async function getActiveLease(
   return row;
 }
 
+/** Whether this node may originate race-critical writes for the event (no lease, or it holds it). */
+export async function isRaceWritable(db: PrismaClient, eventId: bigint): Promise<boolean> {
+  const lease = await getActiveLease(db, eventId);
+  return !lease || lease.holderNodeId === nodeId();
+}
+
 /**
  * Throw the typed "checked out" error when this node is not the holder of
  * an active lease. The backbone of `raceProcedure` — see trpc.ts.

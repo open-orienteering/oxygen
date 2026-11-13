@@ -97,6 +97,12 @@ export interface BuildDescriptionSheetInput {
     id: number;
     code: string;
     description?: ControlDescription | null;
+    /**
+     * An explicit A-column number (F15: the all-variations block lists rows
+     * by the number the variants share; two rows may carry the same one).
+     * Wins over the ordinal and over free order's omission.
+     */
+    sequence?: number;
   }>;
   instructions?: CourseDescriptionInstructions | null;
   /**
@@ -110,6 +116,54 @@ export interface BuildDescriptionSheetInput {
    * number on control rows (controls are listed by code only).
    */
   orderMode?: CourseOrderMode;
+  /**
+   * The course's legs through crossing points (`LegProps.crossing`,
+   * course-layer.md §10.3), each anchored after the control the leg leaves
+   * (null: the start). They derive a 13.3 row (13.4 for a section) that
+   * replaces a hand-placed row of the same kind at the same anchor and
+   * keeps its length; other hand-placed rows stay.
+   */
+  crossings?: ReadonlyArray<{ afterControlId: number | null; section: boolean }>;
+  /**
+   * The course's map exchanges (course-layer.md §11), each the public id
+   * of the exchange control. They derive a 13.5 row after it, as the
+   * crossings do (in place of a hand-placed 13.5 at the same anchor).
+   */
+  exchanges?: ReadonlyArray<{ afterControlId: number }>;
+}
+
+type Special = NonNullable<CourseDescriptionInstructions["specials"]>[number];
+
+/**
+ * The stored specials with the derived rows merged in (in place of a
+ * same-kind row at the anchor, else after the anchor's rows): the map
+ * exchanges' 13.5 first, then the crossings' 13.3 / 13.4 (the leg that
+ * leaves the anchor comes after the exchange at it).
+ */
+export function mergeDerivedSpecials(
+  stored: readonly Special[],
+  crossings: BuildDescriptionSheetInput["crossings"] = [],
+  exchanges: BuildDescriptionSheetInput["exchanges"] = [],
+): Special[] {
+  const out: Special[] = stored.map((s) => ({ ...s }));
+  const derived = new Set<Special>();
+  // A row per anchor and kind: the sheet repeats an anchor's rows at every visit of its control.
+  const seen = new Set<string>();
+  const rows = [
+    ...exchanges.map((e) => ({ afterControlId: e.afterControlId as number | null, kind: "13.5" })),
+    ...crossings.map((c) => ({ afterControlId: c.afterControlId, kind: c.section ? "13.4" : "13.3" })),
+  ];
+  for (const c of rows) {
+    const kind = c.kind;
+    if (seen.has(`${c.afterControlId}:${kind}`)) continue;
+    seen.add(`${c.afterControlId}:${kind}`);
+    const same = out.findIndex((s) => !derived.has(s) && s.kind === kind && (s.afterControlId ?? null) === c.afterControlId);
+    const row: Special = { afterControlId: c.afterControlId, kind, ...(same >= 0 && out[same].lengthM !== undefined ? { lengthM: out[same].lengthM } : {}) };
+    if (same >= 0) out[same] = row;
+    else out.push(row);
+    derived.add(row);
+  }
+  return out;
 }
 
 /**
@@ -176,7 +230,7 @@ export function buildDescriptionSheet(
   };
 
   const rows: DescriptionSheetRow[] = [];
-  const specials = input.instructions?.specials ?? [];
+  const specials = mergeDerivedSpecials(input.instructions?.specials ?? [], input.crossings, input.exchanges);
 
   const afterStart = specials.filter((s) => s.afterControlId == null);
   rows.push({
@@ -198,7 +252,7 @@ export function buildDescriptionSheet(
   input.controls.forEach((c, i) => {
     rows.push({
       kind: "control",
-      ...(freeOrder ? {} : { sequence: i + 1 }),
+      ...(c.sequence !== undefined ? { sequence: c.sequence } : freeOrder ? {} : { sequence: i + 1 }),
       code: c.code,
       description: c.description ?? null,
     });

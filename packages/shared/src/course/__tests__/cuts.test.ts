@@ -5,7 +5,7 @@
  */
 
 import { describe, expect, it } from "vitest";
-import { CUT_AIR_MM, CUT_CODES, DEFAULT_FEATURE_RADIUS_MM, circleCuts, cutContextForScale, cutFeaturesOfDocument, cutSymbolRadiusMm, legGaps, ocadCutSymbolRadiiMm } from "../cuts.js";
+import { CUT_AIR_MM, CUT_CODES, DEFAULT_FEATURE_RADIUS_MM, circleCuts, cutContextForScale, cutFeaturesOfDocument, cutSymbolRadiusMm, legGaps, ocadCutSymbolRadiiMm, polylineLegGaps } from "../cuts.js";
 import type { OcadSymbolDefLike } from "../../import/ocad-symbols.js";
 import { OBJECT_TYPE, decodeMapDocument, encodeMapDocument, type MapDocumentInput } from "../../map-document/index.js";
 import { SYMBOL_LIBRARY_VERSION } from "../../symbol-library/index.js";
@@ -103,6 +103,47 @@ describe("legGaps", () => {
   it("never erases most of a leg", () => {
     const many = Array.from({ length: 40 }, (_, i) => f(4 + i * 0.8, 0));
     const gaps = legGaps(A, B, many, R);
+    expect(gaps.reduce((s, g) => s + g.to - g.from, 0)).toBeLessThanOrEqual(0.7);
+  });
+});
+
+describe("polylineLegGaps (bent legs, F1)", () => {
+  // A → bend → B: 20 mm east, then 20 mm north; 40 mm along the bends.
+  const bent = [f(0, 0), f(20, 0), f(20, 20)];
+
+  it("is legGaps for a straight leg", () => {
+    const A = f(0, 0), B = f(40, 0);
+    for (const features of [[f(20, 0.3, 0.2)], [f(18, 0), f(22, 0)], Array.from({ length: 40 }, (_, i) => f(4 + i * 0.8, 0)), [f(1, 0)]]) {
+      expect(polylineLegGaps([A, B], features, R, W)).toEqual(legGaps(A, B, features, R, W));
+    }
+  });
+
+  it("measures its fractions along the bends", () => {
+    const gaps = polylineLegGaps(bent, [f(20, 10, 0.2)], R, W);
+    expect(gaps).toHaveLength(1);
+    expect((gaps[0].from + gaps[0].to) / 2).toBeCloseTo(0.75, 9);
+    expect((gaps[0].to - gaps[0].from) * 40).toBeCloseTo(2 * clearance(0.2), 9);
+  });
+
+  it("opens one gap across the bend for a feature at it", () => {
+    for (const feature of [f(20, 0, 0.2), f(20.2, -0.2, 0.2)]) {
+      const gaps = polylineLegGaps(bent, [feature], R, W);
+      expect(gaps).toHaveLength(1);
+      expect(gaps[0].from).toBeLessThan(0.5);
+      expect(gaps[0].to).toBeGreaterThan(0.5);
+    }
+  });
+
+  it("keeps 1.2 R at the leg's ends only, not at a bend", () => {
+    expect(polylineLegGaps(bent, [f(1, 0)], R, W)).toEqual([]);
+    expect(polylineLegGaps(bent, [f(20, 19)], R, W)).toEqual([]);
+    expect(polylineLegGaps(bent, [f(19, 0)], R, W)).toHaveLength(1);
+    expect(polylineLegGaps(bent, [f(20, 1)], R, W)).toHaveLength(1);
+  });
+
+  it("never erases most of the bent leg", () => {
+    const many = [...Array.from({ length: 22 }, (_, i) => f(3 + i * 0.8, 0)), ...Array.from({ length: 22 }, (_, i) => f(20, 0.8 + i * 0.8))];
+    const gaps = polylineLegGaps(bent, many, R, W);
     expect(gaps.reduce((s, g) => s + g.to - g.from, 0)).toBeLessThanOrEqual(0.7);
   });
 });

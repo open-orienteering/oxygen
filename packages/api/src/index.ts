@@ -18,6 +18,7 @@ import { SYNC_SECRET_HEADER } from "./sync/nodeIdentity.js";
 import { authHeaderName } from "./auth.js";
 import { registerBackupRoute } from "./backup.js";
 import { registerCourseExportRoute } from "./course-export.js";
+import { registerDescriptionsPdfRoute } from "./course-maps/descriptions-pdf.js";
 import { registerMapDocumentRoutes } from "./map-store/routes.js";
 import { registerMapPreviewRoutes } from "./map-store/preview-routes.js";
 import { registerMapSourceRoutes } from "./map-store/source-routes.js";
@@ -99,6 +100,7 @@ async function main() {
 
   registerBackupRoute(server);
   registerCourseExportRoute(server);
+  registerDescriptionsPdfRoute(server);
   registerMapDocumentRoutes(server);
   registerMapPreviewRoutes(server);
   registerMapSourceRoutes(server);

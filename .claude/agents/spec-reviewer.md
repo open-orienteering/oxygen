@@ -20,7 +20,7 @@ every difference recorded".
    a rule holds.
 3. For each acceptance item: met, not met, or met differently. "Met
    differently" is acceptable only if the spec section was updated and a
-   decision-log row in `docs/research/vector-map-pipeline/README.md`
+   decision-log row in `docs/research/vector-map-pipeline/decisions/slice-<letter>.md`
    names the deviation and why.
 4. Check the AGENTS.md §4 test matrix for this change type: are the
    required unit / integration / E2E tests present and do they test the

@@ -14,6 +14,8 @@ export * from "./operators.js";
 export * from "./writer.js";
 export * from "./page.js";
 export * from "./description.js";
+export * from "./description-sheet.js";
 export * from "./geo.js";
 export * from "./compose.js";
 export { pageScene, pageSceneNames, type PageSceneName } from "./__fixtures__/pages.js";
+export { descriptionSheetBlock, descriptionSheetScene } from "./__fixtures__/description-sheets.js";

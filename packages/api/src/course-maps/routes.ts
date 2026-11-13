@@ -2,12 +2,16 @@ import type { FastifyInstance } from "fastify";
 import { courseMapObjectSchema } from "@oxygen/shared";
 import { z } from "zod";
 import { prisma } from "../db.js";
+import type { Prisma } from "../generated/prisma/client.js";
 import { assertRestAccess } from "../restGuard.js";
 import { renderGate } from "../map-render-limits.js";
 import {
   type PrintGraphic,
+  allVariationsRow,
+  allVariationsSuffix,
   pinnedPrintSource,
   rowForClass,
+  rowForVariant,
   sheetForMapRow,
 } from "./pdf-page.js";
 import { printGate, renderCoursePagesInWorker, resetPrintWorkers } from "./print-worker-host.js";
@@ -15,7 +19,7 @@ import { classesByCourse, loadCourseObjects } from "../course-objects.js";
 
 type Db = ReturnType<typeof prisma>;
 
-type MapRow = Awaited<ReturnType<typeof findMapRows>>[number];
+type MapRow = Prisma.CourseMapGetPayload<{ include: typeof mapRowInclude }>;
 
 const mapObjectsSchema = z.array(courseMapObjectSchema);
 
@@ -26,6 +30,12 @@ function parseSeqs(raw: string | undefined): number[] | null {
     throw new Error("Map and course ids must be positive integers");
   }
   return [...new Set(seqs)];
+}
+
+/** A page's name for the file and the title: the sheet's, a variant's key or the all-variations keys after it (F8). */
+function pageName(row: { name: string; variantKey?: string; allVariations?: { keys: string[] } }): string {
+  if (row.allVariations) return `${row.name} ${allVariationsSuffix(row.allVariations.keys)}`;
+  return row.variantKey ? `${row.name} ${row.variantKey}` : row.name;
 }
 
 function safeFilename(value: string): string {
@@ -49,31 +59,203 @@ const mapRowInclude = {
   },
 } as const;
 
+/** `maps.pdf`'s selection query (docs/course-layout.md §7; course-print.md §4.6, §8.2). */
+export interface PrintQuery {
+  maps?: string;
+  courses?: string;
+  classes?: string;
+  allControls?: string;
+  setter?: string;
+  /** `<root seq>:<key,…>`: those variants of one root (F8). */
+  variants?: string;
+  /** `<root seq>`: the root's all-variations page (F8; answer 4). */
+  allVariations?: string;
+  /** `runners`: each page once per runner it is for (F8; course-print.md §4.6). */
+  copies?: string;
+  /** With `copies=runners`: this many more of each page. */
+  spare?: string;
+}
+
+/** A selected row and, for a class's print, the class it prints for (`copies=runners` counts that class only). */
+type SelectedRow = MapRow & { printClassId?: string };
+
+/** One page to compose: the row as it prints, the course its runners run (`copies`), its class, how many. */
+export interface PrintPage {
+  row: SelectedRow;
+  /** The course a runner on this page runs: the variant's child, else the row's course. */
+  runnerCourseId: string | null;
+  copies: number;
+}
+
+/** Pages a single export composes at most (before copies). */
+export const MAX_COMPOSED_PAGES = 200;
+/** Pages a single export writes at most, copies included (F8). */
+export const MAX_PRINTED_PAGES = 5000;
+/** `spare=` at most. */
+export const MAX_SPARE = 500;
+
+function parseVariants(raw: string): { rootSeq: number; keys: string[] } {
+  const m = /^(\d+):(.+)$/.exec(raw.trim());
+  const keys = m ? [...new Set(m[2].split(",").map((k) => k.trim()).filter(Boolean))] : [];
+  if (!m || Number(m[1]) <= 0 || keys.length === 0) throw new Error("variants must be <course>:<key,…>");
+  return { rootSeq: Number(m[1]), keys };
+}
+
+function parseSpare(raw: string | undefined): number {
+  if (raw === undefined) return 0;
+  const n = Number(raw);
+  if (!Number.isInteger(n) || n < 0 || n > MAX_SPARE) throw new Error(`spare must be an integer 0–${MAX_SPARE}`);
+  return n;
+}
+
+/** A root with live variants, by seq; throws for a course that is none. */
+async function rootBySeq(db: Db, eventId: bigint, seq: number) {
+  const root = await db.course.findFirst({
+    where: { eventId, seq, removed: false },
+    select: { id: true, parentCourseId: true, variants: { where: { removed: false }, select: { variantKey: true } } },
+  });
+  if (!root) throw new Error("Course not found");
+  if (root.parentCourseId || root.variants.length === 0) throw new Error("The course has no variations");
+  return root;
+}
+
+/**
+ * The rows `maps.pdf` prints, then each root's sheet as its variants
+ * (course-print.md §4.6, F8): a `kind = 'course'` row of a root with live
+ * children prints once per variant — in key order, `rowForVariant` — or,
+ * for `allVariations`, once as the all-variations page; `?courses=` of a
+ * variant prints that key on its root's sheets. `copies=runners` sizes
+ * each page by the runners it is for (+ `spare`). A root has no page of its
+ * own: print is always one variant (08 §5.3).
+ */
+export async function selectPrintPages(db: Db, eventId: bigint, query: PrintQuery): Promise<PrintPage[]> {
+  const mapSeqs = parseSeqs(query.maps);
+  let courseSeqs = parseSeqs(query.courses);
+  const classSeqs = parseSeqs(query.classes);
+  const variants = query.variants ? parseVariants(query.variants) : null;
+  const allVariationsSeqs = parseSeqs(query.allVariations);
+  const setter = query.setter === "1";
+  if ([mapSeqs, courseSeqs, classSeqs, setter || null, variants, allVariationsSeqs].filter(Boolean).length > 1) {
+    throw new Error("Use one of maps, courses, classes, setter, variants or allVariations");
+  }
+  if (allVariationsSeqs && allVariationsSeqs.length > 1) throw new Error("allVariations takes one course");
+  if (query.copies !== undefined && query.copies !== "runners") throw new Error("copies must be runners");
+  const copies = query.copies === "runners";
+  if (query.spare !== undefined && !copies) throw new Error("spare needs copies=runners");
+  if (copies && !courseSeqs && !classSeqs && !variants) throw new Error("copies=runners needs courses, classes or variants");
+  const spare = parseSpare(query.spare);
+
+  // The variants each root prints (absent = every one); a variant asked for by its seq prints on its root's sheets.
+  const keysOf = new Map<string, Set<string>>();
+  let allVariationsRoot: string | null = null;
+  if (courseSeqs) {
+    const picked = await db.course.findMany({
+      where: { eventId, seq: { in: courseSeqs }, removed: false },
+      select: { id: true, seq: true, parentCourseId: true, variantKey: true, parent: { select: { seq: true } } },
+    });
+    const whole = new Set(picked.filter((c) => !c.parentCourseId).map((c) => c.id));
+    for (const c of picked) {
+      if (!c.parentCourseId || whole.has(c.parentCourseId)) continue;
+      const keys = keysOf.get(c.parentCourseId) ?? new Set<string>();
+      keys.add(c.variantKey ?? "");
+      keysOf.set(c.parentCourseId, keys);
+    }
+    // None found keeps the seqs asked: the request's "not found" below.
+    if (picked.length > 0) courseSeqs = [...new Set(picked.map((c) => c.parent?.seq ?? c.seq))];
+  }
+  if (variants) {
+    const root = await rootBySeq(db, eventId, variants.rootSeq);
+    const live = new Set(root.variants.map((c) => c.variantKey ?? ""));
+    const unknown = variants.keys.filter((k) => !live.has(k));
+    if (unknown.length > 0) throw new Error(`Unknown variant: ${unknown.join(", ")}`);
+    keysOf.set(root.id, new Set(variants.keys));
+    courseSeqs = [variants.rootSeq];
+  }
+  if (allVariationsSeqs) {
+    allVariationsRoot = (await rootBySeq(db, eventId, allVariationsSeqs[0])).id;
+    courseSeqs = allVariationsSeqs;
+  }
+
+  const rows: SelectedRow[] = classSeqs
+    ? await findClassRows(db, eventId, classSeqs)
+    : await findMapRows(db, eventId, { mapSeqs, courseSeqs, setter, allControls: query.allControls === "1" });
+
+  // Each root's live variants, in key order (`course.variantList`'s order), with what a page reads.
+  const rootIds = [...new Set(rows.filter((r) => r.kind === "course" && r.course).map((r) => r.course!.id))];
+  const children = rootIds.length
+    ? await db.course.findMany({
+        where: { parentCourseId: { in: rootIds }, removed: false },
+        include: mapRowInclude.course.include,
+        orderBy: { variantKey: "asc" },
+      })
+    : [];
+  const childrenOf = new Map<string, typeof children>();
+  for (const c of children) childrenOf.set(c.parentCourseId!, [...(childrenOf.get(c.parentCourseId!) ?? []), c]);
+
+  const pages: PrintPage[] = [];
+  for (const row of rows) {
+    const kids = row.kind === "course" && row.course ? childrenOf.get(row.course.id) ?? [] : [];
+    if (kids.length === 0) {
+      pages.push({ row, runnerCourseId: row.course?.id ?? null, copies: 1 });
+      continue;
+    }
+    if (allVariationsRoot === row.course!.id) {
+      pages.push({ row: allVariationsRow(row, kids.map((k) => k.variantKey ?? "")), runnerCourseId: null, copies: 1 });
+      continue;
+    }
+    const keys = keysOf.get(row.course!.id);
+    for (const kid of kids) {
+      if (keys && !keys.has(kid.variantKey ?? "")) continue;
+      pages.push({ row: rowForVariant(row, kid), runnerCourseId: kid.id, copies: 1 });
+    }
+  }
+  if (pages.length > MAX_COMPOSED_PAGES) throw new Error(`A single export is limited to ${MAX_COMPOSED_PAGES} map pages`);
+  if (pages.length === 0) throw new Error("No requested maps found");
+  if (!copies) return pages;
+
+  // copies=runners: a runner runs her own variant (`runner.course_id`, F6b), else her class's course.
+  const [groups, classes] = await Promise.all([
+    db.runner.groupBy({ by: ["courseId", "classId"], where: { eventId, removed: false }, _count: { _all: true } }),
+    db.class.findMany({ where: { eventId, removed: false }, select: { id: true, courseId: true } }),
+  ]);
+  const classCourse = new Map(classes.map((c) => [c.id, c.courseId]));
+  const runnersOf = (courseId: string | null, classId: string | undefined) =>
+    groups
+      .filter((g) => (g.courseId ?? (g.classId ? classCourse.get(g.classId) : null)) === courseId && (!classId || g.classId === classId))
+      .reduce((n, g) => n + g._count._all, 0);
+  const sized = pages.map((p) => ({ ...p, copies: p.runnerCourseId ? runnersOf(p.runnerCourseId, p.row.printClassId) + spare : spare }));
+  const total = sized.reduce((n, p) => n + p.copies, 0);
+  if (total === 0) throw new Error("No runners to print maps for (add spare=n for blank stacks)");
+  if (total > MAX_PRINTED_PAGES) throw new Error(`A single export is limited to ${MAX_PRINTED_PAGES} pages, copies included`);
+  return sized;
+}
+
 async function findMapRows(
   db: Db,
   eventId: bigint,
-  query: { maps?: string; courses?: string; classes?: string; allControls?: string },
+  q: { mapSeqs: number[] | null; courseSeqs: number[] | null; setter: boolean; allControls: boolean },
 ) {
-  const mapSeqs = parseSeqs(query.maps);
-  const courseSeqs = parseSeqs(query.courses);
-  const classSeqs = parseSeqs(query.classes);
-  const includeAllControls = query.allControls === "1";
-  if ([mapSeqs, courseSeqs, classSeqs].filter(Boolean).length > 1) {
-    throw new Error("Use one of maps, courses or classes");
-  }
-  if (classSeqs) return findClassRows(db, eventId, classSeqs);
+  const { mapSeqs, courseSeqs, setter } = q;
+  const includeAllControls = q.allControls;
   const rows = await db.courseMap.findMany({
     where: {
       eventId,
       ...(mapSeqs ? { seq: { in: mapSeqs } } : {}),
-      // A course's own sheets; class sheets print through `classes` or `maps`
-      // (docs/course-layout.md §7).
-      ...(courseSeqs ? { course: { seq: { in: courseSeqs } }, classId: null } : {}),
-      ...(!mapSeqs && !courseSeqs && !includeAllControls
-        ? { classId: null }
-        : includeAllControls && !mapSeqs && !courseSeqs
-          ? { kind: "all_controls" }
-          : {}),
+      // A course's own sheets; class sheets print through `classes` or `maps`,
+      // setter sheets through `setter` or `maps` (docs/course-layout.md §7).
+      ...(courseSeqs ? { course: { seq: { in: courseSeqs } }, classId: null, kind: "course" } : {}),
+      ...(setter
+        ? { kind: "setter" }
+        : !mapSeqs && !courseSeqs && !includeAllControls
+          ? {
+              classId: null,
+              kind: { in: ["course", "all_controls"] },
+              // A variant prints on its root's sheets (F8): a sheet a variant got of its own before F8 is not printed twice.
+              NOT: { course: { is: { parentCourseId: { not: null } } } },
+            }
+          : includeAllControls && !mapSeqs && !courseSeqs
+            ? { kind: "all_controls" }
+            : {}),
     },
     include: mapRowInclude,
     orderBy: [
@@ -81,10 +263,10 @@ async function findMapRows(
       { sortOrder: "asc" },
       { seq: "asc" },
     ],
-    take: 201,
+    take: MAX_COMPOSED_PAGES + 1,
   });
-  if (rows.length > 200) {
-    throw new Error("A single export is limited to 200 map pages");
+  if (rows.length > MAX_COMPOSED_PAGES) {
+    throw new Error(`A single export is limited to ${MAX_COMPOSED_PAGES} map pages`);
   }
   if (
     mapSeqs &&
@@ -94,6 +276,7 @@ async function findMapRows(
   }
   const requested = mapSeqs?.length ?? courseSeqs?.length;
   if (requested && rows.length === 0) throw new Error("No requested maps found");
+  if (setter && rows.length === 0) throw new Error("No setter maps found: generate them in Layout mode (Setter maps)");
   return rows;
 }
 
@@ -101,16 +284,16 @@ async function findMapRows(
  * `?classes=` (docs/course-layout.md §7): per class, in the order asked,
  * its class sheets, else its course's own sheets as the class prints them
  * (`rowForClass`: the class's template and scale, the header naming the
- * class).
+ * class). A class on a root then prints per variant (`selectPrintPages`).
  */
-async function findClassRows(db: Db, eventId: bigint, classSeqs: number[]) {
+async function findClassRows(db: Db, eventId: bigint, classSeqs: number[]): Promise<SelectedRow[]> {
   const classes = await db.class.findMany({
     where: { eventId, seq: { in: classSeqs }, removed: false },
     include: { sheetTemplate: true },
   });
   if (classes.length !== classSeqs.length) throw new Error("One or more requested classes were not found");
   const bySeq = new Map(classes.map((c) => [c.seq, c]));
-  const out = [];
+  const out: SelectedRow[] = [];
   for (const seq of classSeqs) {
     const cls = bySeq.get(seq)!;
     if (!cls.courseId) continue;
@@ -127,9 +310,9 @@ async function findClassRows(db: Db, eventId: bigint, classSeqs: number[]) {
           orderBy: [{ sortOrder: "asc" }, { seq: "asc" }],
         });
     const print = { name: cls.name, printScale: cls.printScale, sheetTemplate: cls.sheetTemplate };
-    out.push(...rows.map((row) => rowForClass(row, print, own.length > 0)));
+    out.push(...rows.map((row) => ({ ...rowForClass(row, print, own.length > 0), printClassId: cls.id })));
   }
-  if (out.length > 200) throw new Error("A single export is limited to 200 map pages");
+  if (out.length > MAX_COMPOSED_PAGES) throw new Error(`A single export is limited to ${MAX_COMPOSED_PAGES} map pages`);
   if (out.length === 0) throw new Error("No requested maps found");
   return out;
 }
@@ -185,12 +368,7 @@ export function registerCourseMapRoutes(
   });
   server.get<{
     Params: { nameId: string };
-    Querystring: {
-      maps?: string;
-      courses?: string;
-      classes?: string;
-      allControls?: string;
-    };
+    Querystring: PrintQuery;
   }>("/api/maps/:nameId/maps.pdf", async (req, reply) => {
     const { nameId } = req.params;
     if (!(await assertRestAccess(req, reply, { nameId, cap: "courses.view" }))) {
@@ -202,10 +380,8 @@ export function registerCourseMapRoutes(
       if (!event || event.removed) {
         return reply.code(404).send({ error: "Event not found" });
       }
-      const rows = await findMapRows(db, event.id, req.query);
-      if (rows.length === 0) {
-        return reply.code(404).send({ error: "No maps found" });
-      }
+      const pages = await selectPrintPages(db, event.id, req.query);
+      const rows = pages.map((p) => p.row);
       const allControls = await db.control.findMany({
         where: { eventId: event.id, removed: false },
         select: {
@@ -223,7 +399,7 @@ export function registerCourseMapRoutes(
       const graphics = await loadGraphics(db, event.id, rows);
       // docs/course-print.md §7.1: one page is "<event> · <map>".
       const info = {
-        title: rows.length === 1 ? `${event.name} · ${rows[0].name}` : `${event.name} maps`,
+        title: rows.length === 1 ? `${event.name} · ${pageName(rows[0])}` : `${event.name} maps`,
         author: event.organizerName || undefined,
       };
       // Every event prints through the composer (docs/course-print.md
@@ -232,8 +408,8 @@ export function registerCourseMapRoutes(
       // reason, like any other composer error. There is no other path.
       const pinned = await pinnedPrintSource(db, event.id);
       const [courseObjects, byCourse] = await Promise.all([loadCourseObjects(db, event.id), classesByCourse(db, event.id)]);
-      const sheets = rows.map((row) =>
-        sheetForMapRow(row, {
+      const sheets = pages.map(({ row, copies }) => ({
+        ...sheetForMapRow(row, {
           event: { name: event.name, date: event.date },
           allControls,
           mapInfo: pinned.info,
@@ -241,7 +417,8 @@ export function registerCourseMapRoutes(
           classesByCourse: byCourse,
           autoCuts: event.autoOverprintCuts,
         }),
-      );
+        ...(copies !== 1 ? { copies } : {}),
+      }));
       // A worker slot, then a permit of the render gate, with no queue
       // cap: a 503 would arrive as a broken download (course-print.md
       // §8.2). Composing runs in the print worker, off the event loop.
@@ -261,7 +438,7 @@ export function registerCourseMapRoutes(
       const body = Buffer.from(out.bytes);
       const filename =
         rows.length === 1
-          ? `${safeFilename(event.nameId)}_${safeFilename(rows[0].name)}.pdf`
+          ? `${safeFilename(event.nameId)}_${safeFilename(pageName(rows[0]))}.pdf`
           : `${safeFilename(event.nameId)}_maps.pdf`;
       return reply
         .header("Content-Type", "application/pdf")

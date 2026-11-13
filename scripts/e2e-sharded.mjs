@@ -18,11 +18,21 @@
  * whose migration drops columns runs on its own copies instead of the
  * databases every other worktree migrates and reuses.
  *
+ * One shard of many (CI): E2E_SHARD_TOTAL=N E2E_SHARD_INDEX=i (1-based)
+ * computes the same LPT split into N shards and runs only shard i, on
+ * stack i (ports 4100/4200/4300 + i, db <prefix>_i). CI's E2E job is a
+ * matrix of N such jobs, one runner each (.github/workflows/ci.yml,
+ * docs/e2e-sharding.md "CI"); any one of them replays locally with the
+ * same two variables.
+ *
  * Usage:
  *   pnpm test:e2e                    # full suite, sharded (default: min(4, cores/2))
  *   pnpm test:e2e e2e/kiosk.spec.ts  # selective run → single plain
  *                                    # playwright process, no sharding
  *   E2E_SHARDS=2 pnpm test:e2e       # fewer shards (lower peak load)
+ *   E2E_SHARD_TOTAL=6 E2E_SHARD_INDEX=3 pnpm test:e2e  # shard 3 of 6 only
+ *   pnpm test:e2e --plan             # print the split and exit, no stack
+ *                                    # (honours E2E_SHARDS / E2E_SHARD_TOTAL)
  *   E2E_DB_PREFIX=oxygen_e5 pnpm test:e2e  # databases oxygen_e5_<i>
  *   pnpm test:e2e:serial             # escape hatch: plain playwright test
  *                                    # (same 4100/4200/4300 default stack as a
@@ -31,12 +41,12 @@
  * Artifacts land in test-results/shard-<i> and playwright-report/shard-<i>.
  */
 import { spawn } from "node:child_process";
-import { readdirSync } from "node:fs";
+import { appendFileSync, readdirSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import readline from "node:readline";
 import { fileURLToPath } from "node:url";
-import { weightOf } from "./e2e-weights.mjs";
+import { partition } from "./e2e-weights.mjs";
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 /**
@@ -51,7 +61,29 @@ const DEFAULT_SHARDS = Math.max(
   1,
   Math.min(4, Math.floor(os.availableParallelism() / 2)),
 );
-const SHARD_COUNT = Math.max(1, Number(process.env.E2E_SHARDS ?? DEFAULT_SHARDS));
+/**
+ * E2E_SHARD_TOTAL + E2E_SHARD_INDEX select one shard of a split (the CI
+ * matrix); both or neither. Otherwise all E2E_SHARDS (or the default)
+ * shards run here, side by side.
+ */
+function intEnv(name) {
+  const raw = process.env[name];
+  if (raw === undefined || raw === "") return undefined;
+  const n = Number(raw);
+  if (!Number.isInteger(n) || n < 1) {
+    console.error(`${name} must be a positive integer, got "${raw}"`);
+    process.exit(2);
+  }
+  return n;
+}
+const SHARD_TOTAL = intEnv("E2E_SHARD_TOTAL");
+const SHARD_INDEX = intEnv("E2E_SHARD_INDEX");
+if ((SHARD_TOTAL === undefined) !== (SHARD_INDEX === undefined) || SHARD_INDEX > SHARD_TOTAL) {
+  console.error("E2E_SHARD_TOTAL and E2E_SHARD_INDEX go together, with 1 <= index <= total");
+  process.exit(2);
+}
+const SHARD_COUNT =
+  SHARD_TOTAL ?? Math.max(1, Number(process.env.E2E_SHARDS ?? DEFAULT_SHARDS));
 const API_PORT_BASE = 4100;
 const WEB_PORT_BASE = 4200;
 const EVENTOR_PORT_BASE = 4300;
@@ -64,7 +96,8 @@ const DB_PREFIX = process.env.E2E_DB_PREFIX ?? "oxygen_e2e";
  * printed after each run.
  */
 
-const args = process.argv.slice(2);
+const PLAN_ONLY = process.argv.includes("--plan");
+const args = process.argv.slice(2).filter((a) => a !== "--plan");
 const hasFileFilter = args.some((a) => !a.startsWith("-"));
 
 function runPlaywright(extraArgs, env, onLine) {
@@ -101,31 +134,32 @@ if (hasFileFilter) {
     .filter((f) => f.endsWith(".spec.ts"))
     .sort();
 
-  // LPT: heaviest files first, each into the currently lightest shard.
-  const shards = Array.from({ length: SHARD_COUNT }, () => ({
-    files: [],
-    weight: 0,
+  // LPT (`partition` in scripts/e2e-weights.mjs): heaviest files first,
+  // each into the currently lightest shard.
+  const shards = partition(specs, SHARD_COUNT).map((s) => ({
+    ...s,
+    files: s.files.map((f) => `e2e/${f}`),
   }));
-  const byWeightDesc = [...specs].sort((a, b) => weightOf(b) - weightOf(a));
-  for (const file of byWeightDesc) {
-    const lightest = shards.reduce((min, s) => (s.weight < min.weight ? s : min));
-    lightest.files.push(`e2e/${file}`);
-    lightest.weight += weightOf(file);
-  }
+  // The shards this process runs: all of them, or the one a CI job owns.
+  const mine = SHARD_INDEX ? [SHARD_INDEX - 1] : shards.map((_, i) => i);
 
   console.log(
-    `Running ${specs.length} spec files across ${SHARD_COUNT} shards (${os.availableParallelism()} cores available):`,
+    SHARD_INDEX
+      ? `Running shard ${SHARD_INDEX} of ${SHARD_COUNT} (${specs.length} spec files in the split, ${os.availableParallelism()} cores available):`
+      : `Running ${specs.length} spec files across ${SHARD_COUNT} shards (${os.availableParallelism()} cores available):`,
   );
   shards.forEach((s, i) => {
+    const runs = mine.includes(i);
     console.log(
-      `  shard ${i + 1} (api :${API_PORT_BASE + i + 1}, web :${WEB_PORT_BASE + i + 1}, eventor :${EVENTOR_PORT_BASE + i + 1}, db ${DB_PREFIX}_${i + 1}, weight ${s.weight}):`,
+      `  shard ${i + 1} (api :${API_PORT_BASE + i + 1}, web :${WEB_PORT_BASE + i + 1}, eventor :${EVENTOR_PORT_BASE + i + 1}, db ${DB_PREFIX}_${i + 1}, weight ${s.weight})${runs || PLAN_ONLY ? ":" : " — another job"}`,
     );
-    for (const f of s.files) console.log(`    ${f}`);
+    if (runs || PLAN_ONLY) for (const f of s.files) console.log(`    ${f}`);
   });
   console.log("");
+  if (PLAN_ONLY) process.exit(0);
 
   const children = [];
-  const results = shards.map(() => ({ code: null, seconds: 0 }));
+  const results = new Map();
   const startedAt = Date.now();
 
   const killAll = () => {
@@ -143,8 +177,15 @@ if (hasFileFilter) {
   });
 
   await Promise.all(
-    shards.map((shard, i) => {
+    mine.map((i) => {
+      const shard = shards[i];
       const n = i + 1;
+      // More shards than files: an empty shard passes. (Playwright given
+      // no file arguments would run the whole suite instead.)
+      if (shard.files.length === 0) {
+        results.set(n, { code: 0, seconds: 0 });
+        return Promise.resolve();
+      }
       const env = {
         E2E_SHARD: String(n),
         E2E_API_PORT: String(API_PORT_BASE + n),
@@ -159,7 +200,7 @@ if (hasFileFilter) {
       children.push(child);
       return new Promise((resolve) => {
         child.on("exit", (code) => {
-          results[i] = { code: code ?? 1, seconds: (Date.now() - t0) / 1000 };
+          results.set(n, { code: code ?? 1, seconds: (Date.now() - t0) / 1000 });
           resolve();
         });
       });
@@ -168,14 +209,19 @@ if (hasFileFilter) {
 
   const totalSeconds = (Date.now() - startedAt) / 1000;
   console.log("\n── Shard summary ──────────────────────────────");
-  results.forEach((r, i) => {
+  const lines = [];
+  for (const [n, r] of [...results].sort((a, b) => a[0] - b[0])) {
     const status = r.code === 0 ? "PASS" : `FAIL (exit ${r.code})`;
-    console.log(
-      `  shard ${i + 1}: ${status} in ${r.seconds.toFixed(0)}s — report: playwright-report/shard-${i + 1}`,
-    );
-  });
+    lines.push(`shard ${n}/${SHARD_COUNT}: ${status} in ${r.seconds.toFixed(0)}s (weight ${shards[n - 1].weight})`);
+    console.log(`  ${lines.at(-1)} — report: playwright-report/shard-${n}`);
+  }
   console.log(`  total wall time: ${totalSeconds.toFixed(0)}s`);
-  const failed = results.filter((r) => r.code !== 0).length;
+  // On GitHub Actions the shard's time also goes on the job's summary
+  // page: the numbers scripts/e2e-weights.mjs is rebalanced from.
+  if (process.env.GITHUB_STEP_SUMMARY) {
+    appendFileSync(process.env.GITHUB_STEP_SUMMARY, lines.map((l) => `- ${l}\n`).join(""));
+  }
+  const failed = [...results.values()].filter((r) => r.code !== 0).length;
   if (failed > 0) {
     console.error(`\n${failed} shard(s) failed.`);
     process.exit(1);

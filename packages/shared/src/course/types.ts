@@ -8,7 +8,7 @@
  * leg — the conventions of the OCD importer and `overprint-cuts.ts`.
  */
 
-import { type MapAppearance, type CourseMapObject, type MapPoint, defaultMapAppearance } from "../course-maps/schema.js";
+import { type MapAppearance, type CourseMapObject, type MapPoint, type PathVertex, defaultMapAppearance } from "../course-maps/schema.js";
 import type { MapTextValues } from "../course-maps/text.js";
 import type { AngularGap, FractionGap } from "../course-maps/overlay-geometry.js";
 import type { DocumentColour } from "../map-document/header.js";
@@ -20,27 +20,75 @@ import type { CourseLayerObject } from "./objects.js";
 
 export type { AngularGap, FractionGap };
 
+/**
+ * A site's kind (`controls.kind`, 08 §4.2). `crossing_point` and
+ * `map_issue` are never items (course-layer.md §10.3); a `map_exchange`
+ * is an item drawn as a control until sections arrive (F5).
+ */
+export type CourseSiteKind = "control" | "start" | "finish" | "crossing_point" | "map_issue" | "map_exchange";
+
+/** How an item is drawn: a control circle, the start triangle or the finish. */
+export type CourseItemRole = "control" | "start" | "finish";
+
 /** A control site: one `controls` row (08 §4.2). */
 export interface CourseSite {
   id: string;
   /** Display code (first punch code, else name / seq). */
   code: string;
-  kind: "control" | "start" | "finish";
+  kind: CourseSiteKind;
   x: number;
   y: number;
   /** `controls.circle_gaps`: authored circle cuts, compass degrees. A non-empty list replaces the automatic cuts (course-layer.md §6.4). */
   circleGaps?: AngularGap[];
 }
 
-/** The stored `LegProps` the layer reads (08 §4.3): authored gaps of the leg *into* an item; they replace the automatic ones. */
+/** How a leg is drawn (course-layer.md §10.1): 705, 707 along it, or no line. */
+export type CourseLegStyle = "line" | "marked_route" | "none";
+
+/**
+ * A corridor along a leg (course-layer.md §10.2, 08 §4.3): the map shows
+ * inside it, a white band lies outside its edge.
+ */
+export interface CourseCorridor {
+  /** Full width on the ground, metres. */
+  widthM: number;
+  /** Draw the corridor's boundary in 705. */
+  edge: boolean;
+  /** Width of the white band outside the edge, paper mm at the base map's scale; 0 = none. */
+  whiteMm: number;
+  /** Stored, drawn opaque until the backends carry alpha (map-rendering.md §8). */
+  whiteOpacity: number;
+}
+
+/**
+ * The stored `LegProps` the layer reads (08 §4.3) of the leg *into* an
+ * item: authored gaps (replacing the automatic ones), style and bends
+ * (§10.1), the corridor (§10.2), the crossing point it runs through (§10.3).
+ */
 export interface CourseLegProps {
+  /** Fractions of the leg's (bent) length. */
   gaps?: FractionGap[];
+  /** Default `line`. */
+  style?: CourseLegStyle;
+  /**
+   * Paper mm: the leg runs from the previous site through these to its own
+   * (§10.1). A segment is a cubic when its start has `hOut` or its end
+   * `hIn` (offsets, F13); the sites are corners.
+   */
+  bends?: PathVertex[];
+  corridor?: CourseCorridor;
+  /**
+   * A `crossing_point` site the leg runs through (§10.3): the site joins
+   * the leg's polyline on its nearest segment and 710 turns along it.
+   * `section`: the section form (ISSprOM 710.2; ISOM's 710 drawn longer).
+   */
+  crossing?: { controlId: string; section?: boolean };
 }
 
 export interface CourseItem {
   siteId: string;
-  /** How the item is drawn; default the site's kind (`firstAsStart` / `lastAsFinish` set it). */
-  role?: CourseSite["kind"];
+  /** How the item is drawn; default the site's kind (`firstAsStart` / `lastAsFinish` set it; an exchange draws as a control). */
+  role?: CourseItemRole;
   leg?: CourseLegProps;
   /** Hide this visit's number (08 §4.2); the site stays an obstacle-free label-less circle. */
   numberHidden?: boolean;
@@ -56,6 +104,11 @@ export interface CourseStructure {
   items: CourseItem[];
   /** Manual number positions: centre = site + offset, paper mm (`course_controls` label offsets). */
   labelOffsets?: Record<string, { dx: number; dy: number }>;
+  /**
+   * A variation alternative drawn in the All-variations view (§12.7): its
+   * label names the tint row. Read only with `viewOptions.allVariations`.
+   */
+  tint?: string;
 }
 
 /** Multipliers of the library dimensions (1 = the spec). */
@@ -76,11 +129,13 @@ export interface CourseViewOptions {
   /** Default `sequence` for one ordered course, else `code`. */
   labelMode?: "sequence" | "code";
   /**
-   * Print enlargement `mapScale / printScale`. Only map-anchored layout
-   * objects read it: their sizes are page mm, so they are divided by it
-   * (the page transform enlarges the whole layer). Default 1.
+   * Explicit label text per control-role site, read before the sequence
+   * number and the code (F15, course-layer.md §12.7): All variations sets it
+   * when every visited site has one number across the variants. Ignores
+   * `numberHidden`; a site it omits keeps its code. Start and finish are
+   * never labelled.
    */
-  overprintScale?: number;
+  labels?: Readonly<Record<string, string>>;
   /**
    * The event's automatic cuts (`Event.autoOverprintCuts`, course-layer.md
    * §3.4). `false`: no automatic circle slits or leg gaps whatever
@@ -92,6 +147,28 @@ export interface CourseViewOptions {
   window?: MapPoint[];
   /** Placeholder values for map-anchored text (`{course}` …). */
   textValues?: MapTextValues;
+  /**
+   * Setter marks (§10.3; 08 §4.2 "renders only in setter views"): draw the
+   * map-issue points (702) and every crossing point, referenced or not.
+   * The editor's Course and All-controls views and the all-controls and
+   * setter sheets set it; a course sheet never does.
+   */
+  setterMarks?: boolean;
+  /**
+   * One part of a course split by map exchanges (§11; 08 §4.6 "section
+   * index"): draw only that part's sites, legs and numbers. Numbers stay
+   * the whole course's (answer 2). Read for a single structure with ≥ 2
+   * parts; out of range, or a one-part course, draws the whole course.
+   */
+  section?: number;
+  /**
+   * The editor's All-variations view (§12.7; 08 §5.3, §12 "Variation
+   * tints"): a structure with a `tint` draws its legs and the circles only
+   * it visits on a tint row (`course-tint:<label>`). Screen only — the
+   * print path never sets it (a compose fixture asserts the plain stream),
+   * and without it a tint is ignored.
+   */
+  allVariations?: boolean;
 }
 
 /** One compact point feature the overprint is cut around, paper mm. */
@@ -109,6 +186,8 @@ export interface CourseDocumentContext {
   libraryId: SymbolLibraryId;
   /** Library reference scale / map scale × symbol scale (03 §6.6). */
   documentFactor: number;
+  /** The base map's scale denominator (`header.mapScale`): ground metres → paper mm for corridors (§10.2). */
+  mapScale: number;
 }
 
 export interface CourseLayerInput {
@@ -116,10 +195,11 @@ export interface CourseLayerInput {
   structure: CourseStructure | readonly CourseStructure[] | null;
   sites: readonly CourseSite[];
   /**
-   * A sheet's layout objects (only `anchor: "map"` ones are drawn) and the
-   * course objects in scope (§8): `filter_region` objects join `regions`.
+   * The course objects in scope (§8), in draw order: `filter_region`
+   * objects join `regions`. A sheet's layout objects are the page layer's
+   * (course-print.md §4.4); map-anchored ones were moved here by F12 (§3.6).
    */
-  objects: readonly (CourseMapObject | CourseLayerObject)[];
+  objects: readonly CourseLayerObject[];
   appearance: CourseAppearance;
   viewOptions: CourseViewOptions;
   document: CourseDocumentContext;
@@ -143,7 +223,8 @@ export interface CourseFilterRegion {
   invert?: boolean;
 }
 
-export type CourseRefKind = "site" | "leg" | "number" | "leader" | "extra" | "object";
+/** `corridor`: a corridor's edge (§10.2), id `<courseId>:<leg index>`. */
+export type CourseRefKind = "site" | "leg" | "number" | "leader" | "extra" | "object" | "corridor";
 
 /** Which input an output object came from (hit-testing and per-object hide in C4). */
 export interface CourseRef {
@@ -156,37 +237,63 @@ export interface CourseRenderObject extends RenderObject {
   ref: CourseRef;
 }
 
+/** How a drawn site is drawn: an item role, 710 or 702 (§10.3). */
+export type DerivedSiteRole = CourseItemRole | "crossing_point" | "map_issue";
+
 export interface DerivedSite {
   id: string;
   code: string;
-  role: CourseSite["kind"];
+  role: DerivedSiteRole;
   x: number;
   y: number;
   /** Effective circle gaps (authored or automatic), compass degrees; controls only. */
   cuts: AngularGap[];
   /** Number centre and leader, paper mm y-up; `collides` when the placer fell back to a colliding box (§3.5). */
   label?: { text: string; x: number; y: number; leader?: { x1: number; y1: number; x2: number; y2: number }; collides?: true };
-  /** 701 rotation, degrees counter-clockwise (apex towards the first control). */
+  /**
+   * 701 rotation, degrees counter-clockwise (apex towards the first
+   * control). A crossing point: the direction of passage, degrees
+   * counter-clockwise from +x (the leg through it; 90 when no leg names it).
+   */
   angleDeg?: number;
+  /** A crossing point drawn in its section form (§10.3). */
+  section?: true;
 }
 
 export interface DerivedLeg {
   from: string;
   to: string;
-  /** Centre-to-centre polyline. */
+  /** Centre-to-centre polyline through the bends. */
   points: MapPoint[];
-  /** Effective gaps (authored or automatic). */
+  /** Resolved style (default `line`). */
+  style: CourseLegStyle;
+  /** Effective gaps (authored or automatic), fractions of the bent length. */
   gaps: FractionGap[];
   /** What is drawn: after gaps and circle clipping. */
   pieces: MapPoint[][];
+  /** The stored corridor resolved to paper mm (§10.2); it follows `points`, never `pieces`. */
+  corridor?: DerivedCorridor;
+  /** The crossing point the leg runs through (§10.3), its site id; one of `points`. */
+  crossing?: string;
+}
+
+/** A leg's corridor on paper (course-layer.md §10.2). */
+export interface DerivedCorridor {
+  /** Full width, paper mm at the base map's scale (`widthM × 1000 / mapScale`). */
+  widthMm: number;
+  /** The white band outside the edge, paper mm. */
+  whiteMm: number;
+  edge: boolean;
 }
 
 export interface DerivedCourse {
   id: string;
   orderMode: CourseStructure["orderMode"];
   /** Positioned items in order: site id + role. */
-  sequence: { siteId: string; role: CourseSite["kind"] }[];
+  sequence: { siteId: string; role: CourseItemRole }[];
   legs: DerivedLeg[];
+  /** Set when `viewOptions.section` drew one part (§11): that part and the course's part count. */
+  section?: { index: number; count: number };
 }
 
 /** The geometry the course-setting rules produce, before symbols (§3). */
@@ -195,8 +302,11 @@ export interface CourseDerivation {
   courses: DerivedCourse[];
 }
 
+/** An `image` object: not in the pass stream, drawn by the page backends from its graphic's bytes. */
 export interface CourseLayerImage {
-  object: Extract<CourseMapObject, { kind: "image" }>;
+  graphicId: number;
+  /** Visible part of the source as fractions, top-left origin; absent = all. */
+  crop?: { x: number; y: number; width: number; height: number };
   /** Paper µm, y-up: lower-left corner and size. */
   rectUm: { x: number; y: number; width: number; height: number };
 }
@@ -214,7 +324,7 @@ export interface CourseLayer {
   remap: number[] | null;
   symbols: RenderSymbol[];
   objects: CourseRenderObject[];
-  /** Map-anchored images: not in the pass stream, drawn by the page backends. */
+  /** `image` course objects: not in the pass stream, drawn by the page backends. */
   images: CourseLayerImage[];
   derivation: CourseDerivation;
   warnings: CourseLayerWarning[];

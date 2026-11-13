@@ -14,9 +14,9 @@ import type { RenderObject } from "../../symbolise.js";
 import { type SymbolLibraryId, materialiseLibrary } from "../../../symbol-library/index.js";
 import type { DocumentColour } from "../../../map-document/header.js";
 import { courseLayer, courseRenderInput } from "../../../course/layer.js";
-import type { CourseLayer, CourseLayerInput, CourseSite, CourseStructure } from "../../../course/types.js";
+import type { CourseDocumentContext, CourseLayer, CourseLayerInput, CourseSite, CourseStructure } from "../../../course/types.js";
 
-export const courseSceneNames = ["course-legs", "course-cuts", "course-objects", "course-sprint", "course-all-controls"] as const;
+export const courseSceneNames = ["course-legs", "course-cuts", "course-objects", "course-sprint", "course-all-controls", "course-leg-styles", "course-corridor", "course-exchange", "course-legs-curved"] as const;
 export type CourseSceneName = (typeof courseSceneNames)[number];
 
 export interface CourseScene {
@@ -50,6 +50,10 @@ export class BaseMap {
     this.lib = materialiseLibrary(library);
     this.colours = this.lib.colours.map((c) => ({ ...c, paletteIds: [c.id.slice(c.id.indexOf(":") + 1)] }));
   }
+  /** The course layer's context: the library at factor 1, so the map is at the library's reference scale. */
+  context(): CourseDocumentContext {
+    return { colours: this.colours, libraryId: this.library, documentFactor: 1, mapScale: this.lib.library.referenceScale };
+  }
   add(code: string, path: RenderPath, angleDeg?: number): this {
     let i = this.at.get(code);
     if (i === undefined) {
@@ -65,7 +69,7 @@ export class BaseMap {
 }
 
 function scene(name: CourseSceneName, base: BaseMap, input: Omit<CourseLayerInput, "document">): CourseScene {
-  const layer = courseLayer({ ...input, document: { colours: base.colours, libraryId: base.library, documentFactor: 1 } });
+  const layer = courseLayer({ ...input, document: base.context() });
   const merged = courseRenderInput(base, layer);
   return { name, library: base.library, colours: layer.colours, symbols: merged.symbols, objects: merged.objects, layer, courseObjectOffset: merged.courseObjectOffset };
 }
@@ -107,7 +111,10 @@ function cuts(): CourseScene {
   return scene("course-cuts", base, { structure, sites, objects: [], appearance: {}, viewOptions: {}, cutFeatures });
 }
 
-/** Layout objects and course objects (marked route, 708, 711): white-out, toner-saver ring, 709 / 709.b, 707, 708, 711, map text. */
+/**
+ * Course objects: 707, 708, 711, and the former map-anchored layout objects as F12 moved them (white-out, toner-saver
+ * ring, 709 / 709.b, text) — the scene is the one they drew before (course-layer.md §3.6).
+ */
 function objects(): CourseScene {
   const base = new BaseMap("ISOM2017-2")
     .add("406", area(0, 0, 50, 0, 50, 40, 0, 40))
@@ -122,11 +129,11 @@ function objects(): CourseScene {
       { id: 1, kind: "marked_route", geometry: [{ x: 4, y: 12 }, { x: 4, y: 28 }], props: {} },
       { id: 2, kind: "oob_line", geometry: [{ x: 10, y: 30 }, { x: 22, y: 34 }], props: {} },
       { id: 3, kind: "oob_line", geometry: [{ x: 28, y: 34 }, { x: 46, y: 36 }], props: { symbol: "711" } },
-      { id: "wo", anchor: "map", kind: "rectangle", x: 14, y: 16, width: 10, height: 10, fillMode: "whiteout" },
-      { id: "oob", anchor: "map", kind: "rectangle", x: 30, y: 14, width: 8, height: 8, fillMode: "outOfBounds" },
-      { id: "oob-b", anchor: "map", kind: "path", points: [{ x: 40, y: 14 }, { x: 48, y: 14 }, { x: 44, y: 22 }], fillMode: "outOfBounds", closed: true, stroke: "#a626ff", strokeWidthMm: 0.2 },
-      { id: "ring", anchor: "map", kind: "path", points: [{ x: 2, y: 2 }, { x: 48, y: 2 }, { x: 48, y: 38 }, { x: 2, y: 38 }], fillMode: "whiteoutInverted", closed: true },
-      { id: "title", anchor: "map", kind: "text", x: 8, y: 31, text: "{course}", fontSizeMm: 3, color: "#1f6fb2" },
+      { id: "wo", kind: "whiteout", geometry: [{ x: 14, y: 16 }, { x: 24, y: 16 }, { x: 24, y: 26 }, { x: 14, y: 26 }], props: {} },
+      { id: "oob", kind: "oob_area", geometry: [{ x: 30, y: 14 }, { x: 38, y: 14 }, { x: 38, y: 22 }, { x: 30, y: 22 }], props: {} },
+      { id: "oob-b", kind: "oob_area", geometry: [{ x: 40, y: 14 }, { x: 48, y: 14 }, { x: 44, y: 22 }], props: { border: "solid" } },
+      { id: "ring", kind: "toner_saver", geometry: [{ x: 2, y: 2 }, { x: 48, y: 2 }, { x: 48, y: 38 }, { x: 2, y: 38 }], props: {} },
+      { id: "title", kind: "text", geometry: [{ x: 8, y: 31 }], props: { text: "{course}", fontSizeMm: 3, color: "#1f6fb2" } },
     ],
   });
 }
@@ -152,12 +159,99 @@ function allControls(): CourseScene {
   return scene("course-all-controls", base, { structure, sites, objects: [], appearance: {}, viewOptions: { allControls: true } });
 }
 
+/** Leg styles and bends (F1): a bent 705 over a black path, a bent 707 marked route over a power line, a `none` leg with a stored gap. */
+function legStyles(): CourseScene {
+  const base = new BaseMap("ISOM2017-2")
+    .add("401", area(0, 0, 50, 0, 50, 36, 0, 36))
+    .add("505", line(0, 13, 50, 19))
+    .add("516", line(33, 0, 35, 36));
+  const sites = [site("S", "start", 6, 4, "S1"), site("31", "control", 24, 6), site("32", "control", 42, 28), site("F", "finish", 10, 30, "F1")];
+  const structure = ordered([], {
+    items: [
+      { siteId: "S" },
+      { siteId: "31", leg: { bends: [{ x: 14, y: 20 }] } },
+      { siteId: "32", leg: { style: "marked_route", bends: [{ x: 40, y: 8 }] } },
+      { siteId: "F", leg: { style: "none", gaps: [{ from: 0.4, to: 0.6 }] } },
+    ],
+  });
+  return scene("course-leg-styles", base, { structure, sites, objects: [], appearance: {}, viewOptions: {} });
+}
+
+/**
+ * Corridors (F2, F19; course-layer.md §10.2): S → 31 → 32 one narrow run, 60 m (4 mm, h 2 < R 2.5) with its edge and
+ * a 3 mm band, bent at (36, 10); 32 → 33 a 150 m corridor without edge (h 5 ≥ R: a change of width at 32); 33 → F
+ * plain. The 701 and every circle the corridors end at are mouths: the map shows inside them and the band wraps
+ * them. The edges end on the triangle and on 31's circle, which opens towards both legs; 32's circle stays whole
+ * (the wide corridor covers the narrow one's junctions there), as does 33's. The band is a clip region: the 505,
+ * 101 and 516 are cut away in it, the course draws over it.
+ */
+function corridor(): CourseScene {
+  const base = new BaseMap("ISOM2017-2")
+    .add("401", area(0, 0, 50, 0, 50, 40, 0, 40))
+    .add("505", line(0, 14, 50, 20))
+    .add("101", line(28, 0, 30, 40))
+    .add("516", line(4, 24, 46, 36));
+  const sites = [site("S", "start", 6, 6, "S1"), site("31", "control", 22, 8), site("32", "control", 40, 24), site("33", "control", 20, 32), site("F", "finish", 6, 30, "F1")];
+  const narrow = { widthM: 60, edge: true, whiteMm: 3, whiteOpacity: 1 };
+  const structure = ordered([], {
+    items: [
+      { siteId: "S" },
+      { siteId: "31", leg: { corridor: narrow } },
+      { siteId: "32", leg: { bends: [{ x: 36, y: 10 }], corridor: narrow } },
+      { siteId: "33", leg: { corridor: { widthM: 150, edge: false, whiteMm: 2, whiteOpacity: 0.5 } } },
+      { siteId: "F" },
+    ],
+  });
+  return scene("course-corridor", base, { structure, sites, objects: [], appearance: {}, viewOptions: {} });
+}
+
+/**
+ * Map exchange (F5, course-layer.md §11): S → 31 → 32 (exchange) → 33 → F drawn as part 2 alone — the
+ * exchange a numbered circle ("2"), no start triangle, legs 32 → 33 → F, 33 numbered "3" (numbering continues).
+ */
+function exchange(): CourseScene {
+  const base = new BaseMap("ISOM2017-2")
+    .add("401", area(0, 0, 50, 0, 50, 36, 0, 36))
+    .add("505", line(0, 18, 50, 22));
+  const sites = [site("S", "start", 6, 6, "S1"), site("31", "control", 22, 8), site("32", "map_exchange", 40, 12, "32"), site("33", "control", 30, 30), site("F", "finish", 8, 28, "F1")];
+  return scene("course-exchange", base, { structure: ordered(["S", "31", "32", "33", "F"]), sites, objects: [], appearance: {}, viewOptions: { section: 1 } });
+}
+
+/**
+ * Curved bends (F13, course-layer.md §10.1): S → 31 straight, 31 → 32 a 705 curved through one smooth bend,
+ * 32 → 33 a curved 707, 33 → F curved through a crossing point joined on its curved segment. The legs stay
+ * polylines in the stream: the curves flattened at 5 µm.
+ */
+function legsCurved(): CourseScene {
+  const base = new BaseMap("ISOM2017-2")
+    .add("401", area(0, 0, 50, 0, 50, 36, 0, 36))
+    .add("505", line(0, 18, 50, 14));
+  const sites = [
+    site("S", "start", 6, 4, "S1"), site("31", "control", 24, 6), site("32", "control", 42, 28), site("33", "control", 24, 30),
+    site("F", "finish", 8, 30, "F1"), site("P", "crossing_point", 21.5, 28, "P1"),
+  ];
+  const structure = ordered([], {
+    items: [
+      { siteId: "S" },
+      { siteId: "31" },
+      { siteId: "32", leg: { bends: [{ x: 40, y: 12, hIn: { x: -2, y: -5 }, hOut: { x: 2, y: 5 } }] } },
+      { siteId: "33", leg: { style: "marked_route", bends: [{ x: 33, y: 33, hIn: { x: 4, y: 0 }, hOut: { x: -4, y: 0 } }] } },
+      { siteId: "F", leg: { bends: [{ x: 16, y: 26, hIn: { x: 4, y: 0 }, hOut: { x: -4, y: 0 } }], crossing: { controlId: "P" } } },
+    ],
+  });
+  return scene("course-legs-curved", base, { structure, sites, objects: [], appearance: {}, viewOptions: {} });
+}
+
 const builders: Record<CourseSceneName, () => CourseScene> = {
   "course-legs": legs,
   "course-cuts": cuts,
   "course-objects": objects,
   "course-sprint": sprint,
   "course-all-controls": allControls,
+  "course-leg-styles": legStyles,
+  "course-corridor": corridor,
+  "course-exchange": exchange,
+  "course-legs-curved": legsCurved,
 };
 
 export function courseScene(name: CourseSceneName): CourseScene {

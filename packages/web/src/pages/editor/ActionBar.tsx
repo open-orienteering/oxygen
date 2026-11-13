@@ -23,6 +23,8 @@ export interface ActionContext {
     radioOn: boolean;
     /** A pending SRR swap offer for this control. */
     swapOffer: boolean;
+    /** A crossing or map-issue point (§6.8): never on a course, no radio, no description. */
+    mark?: boolean;
   } | null;
   /** The selected course's name, or null. */
   course: string | null;
@@ -30,14 +32,24 @@ export interface ActionContext {
   codesReady: boolean;
   /** A write is in flight (delete waits for it). */
   busy: boolean;
+  /** The leg phantom's leg can be edited here (it resolves to an item; not on a phone, §6.7). */
+  legEdit?: boolean;
+  /** The leg phantom's leg can become a variation group (§12: a top-level leg, desktop and tablet). */
+  variationHere?: boolean;
 }
 
 export interface ActionHandlers {
   insert(): void;
+  /** *Add bend here* on a leg (§6.7): a smooth bend; with Alt held on the click, a corner (F16). */
+  addBend(e?: { altKey?: boolean }): void;
+  /** *Create variation here* on a leg (§12). */
+  createVariation?(): void;
   addToCourse(): void;
   add(): void;
   addStart(): void;
   addFinish(): void;
+  /** *Add map-issue point* on empty map (§6.8). */
+  addMapIssue(): void;
   useAsRole(role: "start" | "finish"): void;
   append(): void;
   removeFromCourse(): void;
@@ -56,16 +68,24 @@ export function courseActions(ctx: ActionContext, on: ActionHandlers, label: Act
   if (ctx.phantom) {
     if (ctx.phantom.insertAt !== null && ctx.course) {
       out.push({ id: "insert", label: label("editor.actionInsert"), onClick: on.insert, disabled: !ctx.codesReady });
+      if (ctx.legEdit) out.push({ id: "add-bend", label: label("editor:actionAddBend"), onClick: (e) => on.addBend({ altKey: !!e?.altKey }) });
+      if (ctx.variationHere && on.createVariation) out.push({ id: "create-variation", label: label("editor:actionCreateVariation"), onClick: on.createVariation });
       return out;
     }
     if (ctx.course) out.push({ id: "add-to-course", label: label("editor.actionAddToCourse", { name: ctx.course }), onClick: on.addToCourse, disabled: !ctx.codesReady });
     out.push({ id: "add", label: label("editor.actionAdd"), onClick: on.add, disabled: !ctx.codesReady });
     out.push({ id: "add-start", label: label("editor.actionAddStart"), onClick: on.addStart });
     out.push({ id: "add-finish", label: label("editor.actionAddFinish"), onClick: on.addFinish });
+    out.push({ id: "add-map-issue", label: label("editor:actionAddMapIssue"), title: label("editor:mapIssueHint"), onClick: on.addMapIssue });
     return out;
   }
   const s = ctx.selected;
   if (!s) return out;
+  // A crossing or map-issue point: delete only (its notes stay in the inspector).
+  if (s.mark) {
+    out.push({ id: "delete", label: label("editor.deleteControl"), variant: "danger", onClick: on.delete, disabled: ctx.busy });
+    return out;
+  }
   const startFinish = s.role !== "control";
   if (ctx.course && startFinish && s.otherRole) {
     const role = s.role as "start" | "finish";

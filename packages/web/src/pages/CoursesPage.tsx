@@ -12,17 +12,24 @@ import { CourseImportDialog } from "../components/CourseImportDialog";
 import { MapSlot } from "../components/MapSlot";
 import { StructuredSearchBar } from "../components/structured-search/StructuredSearchBar";
 import { useStructuredSearch } from "../hooks/useStructuredSearch";
-import { createCourseAnchors } from "../lib/structured-search/anchors/course-anchors";
+import { createCourseAnchors, type CourseOverviewFields } from "../lib/structured-search/anchors/course-anchors";
+import { useCapabilities } from "../context/CapabilitiesContext";
+import { layoutEditorHref } from "../lib/editor/layout-href";
+import { parsePick } from "../lib/template-picker";
+import { PrintStatusPill, TemplateBadge, TemplatePicker } from "../components/CourseMapsOverview";
+import { useCourseMapsOverview } from "../hooks/useCourseMapsOverview";
 import { downloadSameOriginFile } from "../lib/download-api";
+import { DescriptionSheetsDialog } from "./editor/DescriptionSheetsDialog";
 import {
   courselessClassNames,
   matchCourselessClass,
 } from "../lib/course-editor";
 import { versionConflictOfError } from "../lib/version-book";
 
-function CourseExportMenu({ nameId }: { nameId: string }) {
+function CourseExportMenu({ nameId, onAllMaps, onAllControls }: { nameId: string; onAllMaps: () => void; onAllControls: () => void }) {
   const { t } = useTranslation("courses");
   const [open, setOpen] = useState(false);
+  const [descriptions, setDescriptions] = useState(false);
   const containerRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
@@ -71,6 +78,35 @@ function CourseExportMenu({ nameId }: { nameId: string }) {
           role="menu"
           className="absolute right-0 z-20 mt-1 min-w-[14rem] rounded-lg border border-slate-200 bg-white py-1 shadow-lg"
         >
+          {/* The map PDFs (E-pages: the Maps page's export). */}
+          <button
+            type="button"
+            role="menuitem"
+            data-testid="course-export-all-maps"
+            onClick={() => { setOpen(false); onAllMaps(); }}
+            className="w-full px-3 py-2 text-left text-sm text-slate-700 hover:bg-blue-50 cursor-pointer"
+          >
+            {t("exportAllMaps")}
+          </button>
+          <button
+            type="button"
+            role="menuitem"
+            data-testid="course-export-all-controls"
+            onClick={() => { setOpen(false); onAllControls(); }}
+            className="w-full px-3 py-2 text-left text-sm text-slate-700 hover:bg-blue-50 cursor-pointer"
+          >
+            {t("exportAllControlsMap")}
+          </button>
+          {/* Description sheets (docs/course-print.md §6.4): the editor's dialog. */}
+          <button
+            type="button"
+            role="menuitem"
+            data-testid="course-export-descriptions"
+            onClick={() => { setOpen(false); setDescriptions(true); }}
+            className="w-full px-3 py-2 text-left text-sm text-slate-700 hover:bg-blue-50 cursor-pointer border-b border-slate-100"
+          >
+            {t("exportDescriptionSheets")}
+          </button>
           <button
             type="button"
             role="menuitem"
@@ -91,7 +127,56 @@ function CourseExportMenu({ nameId }: { nameId: string }) {
           </button>
         </div>
       )}
+      {descriptions && <DescriptionSheetsDialog nameId={nameId} onClose={() => setDescriptions(false)} />}
     </div>
+  );
+}
+
+/** A materialised variant under its root: key, controls, length — read-only; one action, its map on the root's sheets (F8). */
+function VariantRow({ variant, rootName, expanded, onToggle, onExport, exportDisabled }: { variant: CourseSummary; rootName: string; expanded: boolean; onToggle: () => void; onExport: () => void; exportDisabled: boolean }) {
+  const { t } = useTranslation("courses");
+  return (
+    <tr
+      data-testid={`course-variant-row-${variant.id}`}
+      aria-expanded={expanded}
+      onClick={onToggle}
+      className={`cursor-pointer transition-colors ${expanded ? "bg-blue-50 text-slate-700" : "bg-slate-50/60 text-slate-500 hover:bg-slate-100"}`}
+      title={t("variantOf", { key: variant.variantKey ?? "", root: rootName })}
+    >
+      <td className="px-3 py-1.5" />
+      <td className="pl-10 pr-4 py-1.5">
+        <span className="inline-flex items-center gap-1.5">
+          <span aria-hidden className="text-slate-300">↳</span>
+          <span data-testid="course-variant-key" className="px-1.5 py-0.5 rounded text-xs font-semibold bg-purple-50 text-purple-700 tabular-nums">
+            {variant.variantKey}
+          </span>
+          <span className="text-slate-500">{variant.name}</span>
+        </span>
+      </td>
+      <td className="px-4 py-1.5 tabular-nums">{variant.controlCount}</td>
+      <td className="px-4 py-1.5 tabular-nums">
+        {variant.length > 0 ? `${(variant.length / 1000).toFixed(1)} km` : <span className="text-slate-300">—</span>}
+      </td>
+      <td className="px-4 py-1.5 tabular-nums hidden md:table-cell">{variant.numberOfMaps}</td>
+      <td colSpan={2} />
+      <td className="hidden lg:table-cell" />
+      <td className="px-4 py-1.5" onClick={(e) => e.stopPropagation()}>
+        <div className="flex items-center justify-end">
+          <button
+            type="button"
+            data-testid={`export-variant-${variant.id}`}
+            disabled={exportDisabled}
+            onClick={onExport}
+            className="p-1.5 text-slate-400 hover:text-blue-600 hover:bg-blue-50 rounded transition-colors cursor-pointer flex items-center disabled:opacity-40 disabled:cursor-default"
+            title={t("exportVariantMaps", { key: variant.variantKey ?? "" })}
+          >
+            <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4" />
+            </svg>
+          </button>
+        </div>
+      </td>
+    </tr>
   );
 }
 
@@ -103,14 +188,37 @@ export function CoursesPage() {
   const [showImportDialog, setShowImportDialog] = useState(false);
 
   const utils = trpc.useUtils();
+  const canEdit = useCapabilities().has("courses.edit");
+  // The print overview (E-pages): template, status, Edit layout, the course's PDF.
+  const overview = useCourseMapsOverview(nameId ?? "", canEdit);
+  const templateNames = useMemo(() => overview.templates.map((x) => x.name), [overview.templates]);
 
-  const anchors = useMemo(() => createCourseAnchors((key) => t(key as never)), [t]);
-  const { tokens, setTokens, filterItems } = useStructuredSearch<CourseSummary>(
+  const anchors = useMemo(() => createCourseAnchors<CourseRow>((key) => t(key as never), templateNames), [t, templateNames]);
+  const { tokens, setTokens, filterItems } = useStructuredSearch<CourseRow>(
     anchors,
     ["name"],
   );
 
   const courses = trpc.course.list.useQuery();
+  const { info } = overview;
+  // Materialised variants nest under their root, read-only (docs/course-layer.md §12):
+  // the table's rows, filter, sort, selection and count are the roots.
+  const rows = useMemo<CourseRow[]>(
+    () =>
+      (courses.data ?? [])
+        .filter((c) => c.parentCourseId === null)
+        .map((c) => ({ ...c, templateNames: info(c.id).templateNames, printStatus: info(c.id).printStatus })),
+    [courses.data, info],
+  );
+  const variantsOf = useMemo(() => {
+    const out = new Map<number, CourseSummary[]>();
+    for (const c of courses.data ?? []) {
+      if (c.parentCourseId === null) continue;
+      out.set(c.parentCourseId, [...(out.get(c.parentCourseId) ?? []), c]);
+    }
+    for (const list of out.values()) list.sort((a, b) => (a.variantKey ?? "").localeCompare(b.variantKey ?? ""));
+    return out;
+  }, [courses.data]);
 
   const deleteMutation = trpc.course.delete.useMutation({
     onSuccess: () => {
@@ -120,7 +228,7 @@ export function CoursesPage() {
   });
 
   const [bulkValue, setBulkValue] = useState<string>("");
-  const [bulkField, setBulkField] = useState<"numberOfMaps" | "orderMode">(
+  const [bulkField, setBulkField] = useState<"numberOfMaps" | "orderMode" | "template">(
     "numberOfMaps",
   );
 
@@ -134,7 +242,7 @@ export function CoursesPage() {
     setExpandedId(expandedId === id ? undefined : id);
   };
 
-  type Course = NonNullable<typeof courses.data>[number];
+  type Course = CourseRow;
   const comparators = useMemo(() => ({
     name: (a: Course, b: Course) => a.name.localeCompare(b.name),
     controls: (a: Course, b: Course) => a.controlCount - b.controlCount,
@@ -142,8 +250,19 @@ export function CoursesPage() {
     maps: (a: Course, b: Course) => a.numberOfMaps - b.numberOfMaps,
   }), []);
 
-  const filtered = useMemo(() => filterItems(courses.data ?? []), [courses.data, filterItems]);
+  const filtered = useMemo(() => filterItems(rows), [rows, filterItems]);
   const { sorted: items, sort, toggle } = useSort(filtered, { key: "name", dir: "asc" }, comparators);
+
+  // The expanded row's name for the map: a root, or one of the visible roots' variants.
+  const expandedCourseName = useMemo(() => {
+    if (!expandedId) return undefined;
+    for (const c of items) {
+      if (c.id === expandedId) return c.name;
+      const v = variantsOf.get(c.id)?.find((x) => x.id === expandedId);
+      if (v) return v.name;
+    }
+    return undefined;
+  }, [expandedId, items, variantsOf]);
 
   const selection = useTableSelection(items);
 
@@ -164,6 +283,17 @@ export function CoursesPage() {
 
   const handleApplyBulk = () => {
     if (bulkValue === "" || selection.count === 0) return;
+    if (bulkField === "template") {
+      const pick = parsePick(bulkValue);
+      if (!pick) return;
+      void overview.apply(pick, Array.from(selection.selected)).then((done) => {
+        if (done) {
+          selection.clearSelection();
+          setBulkValue("");
+        }
+      });
+      return;
+    }
     const fieldLabel =
       bulkField === "orderMode" ? t("orderMode") : t("maps");
     const displayValue =
@@ -213,7 +343,7 @@ export function CoursesPage() {
           {t("importCourses")}
         </button>
         {(courses.data?.length ?? 0) > 0 && nameId && (
-          <CourseExportMenu nameId={nameId} />
+          <CourseExportMenu nameId={nameId} onAllMaps={() => void overview.exportAll()} onAllControls={() => void overview.exportAllControls()} />
         )}
         <button
           onClick={() => setShowCreateForm(true)}
@@ -231,6 +361,8 @@ export function CoursesPage() {
           {t("courseCount", { count: items.length })}
         </span>
       </div>
+
+      {overview.messages}
 
       {/* Create form */}
       {showCreateForm && (
@@ -292,6 +424,8 @@ export function CoursesPage() {
                   <SortHeader label={t("controls")} active={sort.key === "controls"} direction={sort.dir} onClick={() => toggle("controls")} className="w-24" />
                   <SortHeader label={t("length")} active={sort.key === "length"} direction={sort.dir} onClick={() => toggle("length")} className="w-24" />
                   <SortHeader label={t("maps")} active={sort.key === "maps"} direction={sort.dir} onClick={() => toggle("maps")} className="hidden md:table-cell w-20" />
+                  <th className="px-4 py-2.5 text-left font-medium text-slate-500">{t("template")}</th>
+                  <th className="px-4 py-2.5 text-left font-medium text-slate-500 w-24">{t("printStatus")}</th>
                   <th className="px-4 py-2.5 text-left font-medium text-slate-500 hidden lg:table-cell w-32">{t("options")}</th>
                   <th className="px-4 py-2.5 text-right font-medium text-slate-500 w-24">{t("actions")}</th>
                 </tr>
@@ -300,6 +434,7 @@ export function CoursesPage() {
                 {items.map((c) => (
                   <Fragment key={c.id}>
                     <tr
+                      aria-expanded={expandedId === c.id}
                       className={`transition-colors cursor-pointer ${expandedId === c.id ? "bg-blue-50" : "hover:bg-slate-50"
                         }`}
                       onClick={() => handleToggleExpand(c.id)}
@@ -323,6 +458,14 @@ export function CoursesPage() {
                               {t("orderModeFreeOrderBadge")}
                             </span>
                           )}
+                          {(variantsOf.get(c.id)?.length ?? 0) > 0 && (
+                            <span
+                              data-testid={`course-variant-count-${c.id}`}
+                              className="px-1.5 py-0.5 rounded text-xs font-medium bg-purple-100 text-purple-800"
+                            >
+                              {t("variantCount", { count: variantsOf.get(c.id)!.length })}
+                            </span>
+                          )}
                         </span>
                       </td>
                       <td className="px-4 py-2.5 tabular-nums text-slate-600">
@@ -336,6 +479,28 @@ export function CoursesPage() {
                       </td>
                       <td className="px-4 py-2.5 tabular-nums text-slate-500 hidden md:table-cell">
                         {c.numberOfMaps}
+                      </td>
+                      <td className="px-4 py-2.5 whitespace-nowrap" onClick={(e) => e.stopPropagation()}>
+                        {canEdit ? (
+                          <TemplatePicker
+                            testId={`course-template-${c.id}`}
+                            ariaLabel={t("selectTemplateForCourse", { course: c.name })}
+                            placeholder={t("selectTemplate")}
+                            value={info(c.id).template ? String(info(c.id).template!.seq) : ""}
+                            templates={overview.templates}
+                            club={overview.club}
+                            disabled={overview.busy}
+                            onPick={(pick) => { if (pick) void overview.apply(pick, [c.id]); }}
+                          />
+                        ) : (
+                          <span data-testid={`course-template-${c.id}`} className="text-slate-600">
+                            {info(c.id).template?.name ?? <span className="text-slate-300">{t("noTemplate")}</span>}
+                          </span>
+                        )}
+                        <TemplateBadge template={info(c.id).template} testId={`course-template-badge-${c.id}`} />
+                      </td>
+                      <td className="px-4 py-2.5">
+                        <PrintStatusPill info={info(c.id)} testId={`course-print-status-${c.id}`} />
                       </td>
                       <td className="px-4 py-2.5 hidden lg:table-cell">
                         <div className="flex gap-1.5">
@@ -362,6 +527,44 @@ export function CoursesPage() {
                       </td>
                       <td className="px-4 py-2.5" onClick={(e) => e.stopPropagation()}>
                         <div className="flex items-center justify-end gap-0.5">
+                        {info(c.id).sheetSeq !== null && (
+                          <Link
+                            to={layoutEditorHref(nameId ?? "", { sheet: info(c.id).sheetSeq! }, c.id)}
+                            data-testid={`edit-course-map-${info(c.id).sheetSeq}`}
+                            className="p-1.5 text-slate-400 hover:text-purple-600 hover:bg-purple-50 rounded transition-colors flex items-center"
+                            title={t("editLayout")}
+                          >
+                            <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 5a1 1 0 011-1h14a1 1 0 011 1v14a1 1 0 01-1 1H5a1 1 0 01-1-1V5zm4 4h8m-8 4h5" />
+                            </svg>
+                          </Link>
+                        )}
+                        <button
+                          type="button"
+                          data-testid={`export-course-${c.id}`}
+                          disabled={overview.busy || (!canEdit && info(c.id).sheetSeq === null)}
+                          onClick={() => void overview.exportCourse(c.id)}
+                          className="p-1.5 text-slate-400 hover:text-blue-600 hover:bg-blue-50 rounded transition-colors cursor-pointer flex items-center disabled:opacity-40 disabled:cursor-default"
+                          title={t("exportCourseMaps")}
+                        >
+                          <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4" />
+                          </svg>
+                        </button>
+                        {(variantsOf.get(c.id)?.length ?? 0) > 0 && (
+                          <button
+                            type="button"
+                            data-testid={`export-all-variations-${c.id}`}
+                            disabled={overview.busy || (!canEdit && info(c.id).sheetSeq === null)}
+                            onClick={() => void overview.exportAllVariations(c.id)}
+                            className="p-1.5 text-slate-400 hover:text-purple-600 hover:bg-purple-50 rounded transition-colors cursor-pointer flex items-center disabled:opacity-40 disabled:cursor-default"
+                            title={t("exportAllVariationsMaps")}
+                          >
+                            <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 4v6m0 0a3 3 0 103 3m-3-3a3 3 0 113 3m0 0h6m0 0a3 3 0 103-3m-3 3a3 3 0 113-3m0 0V4" />
+                            </svg>
+                          </button>
+                        )}
                         <Link
                           to={`/${nameId}/course-editor?course=${c.id}`}
                           data-testid="course-edit-link"
@@ -386,11 +589,30 @@ export function CoursesPage() {
                     </tr>
                     {expandedId === c.id && (
                       <tr>
-                        <td colSpan={7} className="p-0">
+                        <td colSpan={9} className="p-0">
                           <CourseInlineDetail courseId={c.id} />
                         </td>
                       </tr>
                     )}
+                    {(variantsOf.get(c.id) ?? []).map((v) => (
+                      <Fragment key={v.id}>
+                        <VariantRow
+                          variant={v}
+                          rootName={c.name}
+                          expanded={expandedId === v.id}
+                          onToggle={() => handleToggleExpand(v.id)}
+                          onExport={() => void overview.exportVariant(c.id, v.variantKey ?? "")}
+                          exportDisabled={overview.busy || (!canEdit && info(c.id).sheetSeq === null)}
+                        />
+                        {expandedId === v.id && (
+                          <tr>
+                            <td colSpan={9} className="p-0">
+                              <CourseInlineDetail courseId={v.id} readOnly rootName={c.name} />
+                            </td>
+                          </tr>
+                        )}
+                      </Fragment>
+                    ))}
                   </Fragment>
                 ))}
               </tbody>
@@ -406,7 +628,7 @@ export function CoursesPage() {
         fitToControls
         highlightCourseName={
           selectedCourseNames.length === 0 && expandedId
-            ? items.find((c) => c.id === expandedId)?.name
+            ? expandedCourseName
             : undefined
         }
         highlightCourseNames={selectedCourseNames.length > 0 ? selectedCourseNames : undefined}
@@ -417,7 +639,7 @@ export function CoursesPage() {
         <select
           value={bulkField}
           onChange={(e) => {
-            setBulkField(e.target.value as "numberOfMaps" | "orderMode");
+            setBulkField(e.target.value as "numberOfMaps" | "orderMode" | "template");
             setBulkValue("");
           }}
           className="px-3 py-1.5 border border-slate-200 rounded-lg text-sm bg-white focus:outline-none focus:ring-2 focus:ring-blue-500 cursor-pointer"
@@ -425,8 +647,19 @@ export function CoursesPage() {
         >
           <option value="numberOfMaps">{t("maps")}</option>
           <option value="orderMode">{t("orderMode")}</option>
+          {canEdit && <option value="template">{t("template")}</option>}
         </select>
-        {bulkField === "orderMode" ? (
+        {bulkField === "template" ? (
+          <TemplatePicker
+            testId="bulk-value-input"
+            placeholder={t("selectTemplate")}
+            value={bulkValue}
+            templates={overview.templates}
+            club={overview.club}
+            disabled={overview.busy}
+            onPick={(_pick, value) => setBulkValue(value)}
+          />
+        ) : bulkField === "orderMode" ? (
           <select
             value={bulkValue}
             onChange={(e) => setBulkValue(e.target.value)}
@@ -450,17 +683,20 @@ export function CoursesPage() {
         )}
         <button
           onClick={handleApplyBulk}
-          disabled={bulkValue === "" || bulkUpdateMutation.isPending}
+          disabled={bulkValue === "" || bulkUpdateMutation.isPending || overview.busy}
           className="px-4 py-1.5 bg-blue-600 text-white text-sm font-medium rounded-lg hover:bg-blue-700 disabled:opacity-50 transition-colors cursor-pointer"
         >
           {bulkUpdateMutation.isPending ? t("applying") : t("apply")}
         </button>
       </BulkActionBar>
+      {overview.dialog}
     </>
   );
 }
 
 // ─── Helpers ─────────────────────────────────────────────────
+
+type CourseRow = CourseSummary & CourseOverviewFields;
 
 function formatLength(meters: number): string {
   if (meters <= 0) return "";
@@ -469,7 +705,12 @@ function formatLength(meters: number): string {
 
 // ─── Inline detail (expanded view) ──────────────────────────
 
-function CourseInlineDetail({ courseId }: { courseId: number }) {
+/**
+ * `readOnly` is a materialised variant (docs/course-layer.md §12.6): its own
+ * sequence and settings are shown, none is editable — the root's structure
+ * writes it (`course.update` refuses with COURSE_IS_VARIANT).
+ */
+function CourseInlineDetail({ courseId, readOnly = false, rootName = "" }: { courseId: number; readOnly?: boolean; rootName?: string }) {
   const { t } = useTranslation("courses");
   const utils = trpc.useUtils();
   const detail = trpc.course.detail.useQuery({ id: courseId });
@@ -514,8 +755,12 @@ function CourseInlineDetail({ courseId }: { courseId: number }) {
   }
 
   const d = detail.data;
+  // A root's sequence and order are its structure's (docs/course-layer.md §12):
+  // `course.update` refuses them, so the fields here are read-only.
+  const hasVariations = d.structure.items.some((i) => i.kind === "variation");
 
   const handleSave = (field: string, value: string | number | boolean) => {
+    if (readOnly) return;
     updateMutation.mutate({ id: courseId, [field]: value, baseVersion: d.version });
   };
 
@@ -528,6 +773,7 @@ function CourseInlineDetail({ courseId }: { courseId: number }) {
   const controlsCodeString = d.controlCodes.map((c) => c.code).join(";");
 
   const handleSaveControlCodes = (value: string) => {
+    if (readOnly) return;
     setControlsError(null);
     const codes = value
       .split(/[;,\s]+/)
@@ -567,6 +813,7 @@ function CourseInlineDetail({ courseId }: { courseId: number }) {
               <input
                 type="text"
                 data-testid="course-detail-name"
+                disabled={readOnly}
                 value={editName ?? d.name}
                 onChange={(e) => setEditName(e.target.value)}
                 onBlur={() => {
@@ -585,6 +832,7 @@ function CourseInlineDetail({ courseId }: { courseId: number }) {
                 </label>
                 <input
                   type="number"
+                  disabled={readOnly}
                   value={editLength ?? String(d.length)}
                   onChange={(e) => setEditLength(e.target.value)}
                   onBlur={() => {
@@ -606,6 +854,7 @@ function CourseInlineDetail({ courseId }: { courseId: number }) {
                 </label>
                 <input
                   type="number"
+                  disabled={readOnly}
                   value={editMaps ?? String(d.numberOfMaps)}
                   onChange={(e) => setEditMaps(e.target.value)}
                   onBlur={() => {
@@ -624,12 +873,14 @@ function CourseInlineDetail({ courseId }: { courseId: number }) {
             </div>
           </div>
 
+          {!readOnly && (
           <div>
             <label className="block text-xs font-medium text-slate-500 mb-1">
               {t("orderMode")}
             </label>
             <select
               data-testid="course-order-mode"
+              disabled={hasVariations}
               value={d.orderMode ?? "ordered"}
               onChange={(e) => handleSave("orderMode", e.target.value)}
               className="w-full sm:w-56 px-3 py-1.5 border border-slate-200 rounded-lg text-sm bg-white focus:outline-none focus:ring-2 focus:ring-blue-500"
@@ -638,6 +889,7 @@ function CourseInlineDetail({ courseId }: { courseId: number }) {
               <option value="free_order">{t("orderModeFreeOrder")}</option>
             </select>
           </div>
+          )}
 
           <div>
             <label className="block text-xs font-medium text-slate-500 mb-1">
@@ -645,6 +897,8 @@ function CourseInlineDetail({ courseId }: { courseId: number }) {
             </label>
             <input
               type="text"
+              data-testid="course-detail-controls"
+              disabled={readOnly || hasVariations}
               value={editControls ?? controlsCodeString}
               onChange={(e) => {
                 setEditControls(e.target.value);
@@ -665,6 +919,14 @@ function CourseInlineDetail({ courseId }: { courseId: number }) {
             />
             {controlsError ? (
               <p className="text-xs text-rose-600 mt-1">{controlsError}</p>
+            ) : readOnly ? (
+              <p className="text-xs text-slate-500 mt-1" data-testid="course-variant-hint">
+                {t("variantSequenceHint", { key: d.variantKey ?? "", root: rootName })}
+              </p>
+            ) : hasVariations ? (
+              <p className="text-xs text-slate-500 mt-1" data-testid="course-variations-hint">
+                {t("variationsSequenceHint")}
+              </p>
             ) : (
               <p className="text-xs text-slate-400 mt-1">
                 {t("controlsHelp")}
@@ -703,7 +965,8 @@ function CourseInlineDetail({ courseId }: { courseId: number }) {
 
         </div>
 
-        {/* Class usage */}
+        {/* Class usage — classes point at the root, so a variant has none of its own */}
+        {!readOnly && (
         <div>
           <h4 className="text-xs font-semibold text-slate-500 uppercase tracking-wider mb-3">
             {t("usedByClasses")}
@@ -728,6 +991,7 @@ function CourseInlineDetail({ courseId }: { courseId: number }) {
             </div>
           )}
         </div>
+        )}
       </div>
     </div>
   );

@@ -39,6 +39,29 @@ export async function toPage(page: Page, mm: Pt): Promise<Pt> {
   return { x: v.box.x + v.box.width / 2 + ix * Math.cos(rot) - iy * Math.sin(rot), y: v.box.y + v.box.height / 2 + ix * Math.sin(rot) + iy * Math.cos(rot) };
 }
 
+/** `toPage` for many points at one view: paper mm → page px, synchronously (the view read once). */
+export async function paperToPageOf(page: Page): Promise<(mm: Pt) => Pt> {
+  const v = await paperView(page);
+  const rot = (v.rotDeg * Math.PI) / 180;
+  return (mm: Pt) => {
+    const ix = (mm.x * 1000 - v.centreX) * v.pxPerUm, iy = -(mm.y * 1000 - v.centreY) * v.pxPerUm;
+    return { x: v.box.x + v.box.width / 2 + ix * Math.cos(rot) - iy * Math.sin(rot), y: v.box.y + v.box.height / 2 + ix * Math.sin(rot) + iy * Math.cos(rot) };
+  };
+}
+
+/**
+ * Where a mouse drag held at `cursor` (page px) puts the loupe (docs/course-editor.md §10 "Loupe", F24): a 120 px
+ * circle 16 px above the cursor, 16 px below it at the map's top, 4 px inside the viewer sideways. The GL canvas draws
+ * the magnified map there, so a held canvas read (`inkAt(…, true)`) must probe outside it.
+ */
+export async function loupeCircleAt(page: Page, cursor: Pt): Promise<{ x: number; y: number; r: number }> {
+  const vb = (await page.getByTestId("map-viewer").boundingBox())!;
+  const r = 60;
+  const x = Math.min(Math.max(cursor.x, vb.x + r + 4), vb.x + vb.width - r - 4);
+  const above = cursor.y - 16 - r;
+  return { x, y: above - r < vb.y ? cursor.y + 16 + r : above, r };
+}
+
 /** Page point → paper mm (the inverse of `toPage`). */
 export async function toPaper(page: Page, p: Pt): Promise<Pt> {
   const v = await paperView(page);
@@ -69,10 +92,11 @@ export async function sitePoint(page: Page, code: string): Promise<Pt> {
 }
 
 /** The leg pieces drawn for a course, paper mm. */
-export async function legPieces(page: Page, course?: string): Promise<{ course: string; leg: number; points: Pt[] }[]> {
+export async function legPieces(page: Page, course?: string): Promise<{ course: string; leg: number; style: string; points: Pt[] }[]> {
   const all = await page.getByTestId("course-leg").evaluateAll((els) => els.map((el) => ({
     course: el.getAttribute("data-course") ?? "",
     leg: Number(el.getAttribute("data-leg")),
+    style: el.getAttribute("data-style") ?? "",
     points: (el.getAttribute("data-points") ?? "").split(" ").filter(Boolean).map((p) => {
       const [x, y] = p.split(",").map(Number);
       return { x, y };
@@ -94,7 +118,7 @@ async function boxes(page: Page, ids: string[]): Promise<{ x: number; y: number;
 }
 
 /** The drawn description sheets: their svg spans the viewer (pointer-events none), so the content's box, in page px. */
-async function sheetBoxes(page: Page): Promise<{ x: number; y: number; width: number; height: number }[]> {
+export async function sheetBoxes(page: Page): Promise<{ x: number; y: number; width: number; height: number }[]> {
   return page.getByTestId("description-sheet").evaluateAll((els) => els.map((el) => {
     const svg = el as SVGSVGElement, at = svg.getBoundingClientRect(), b = svg.getBBox();
     return { x: at.x + b.x, y: at.y + b.y, width: b.width, height: b.height };
@@ -207,6 +231,13 @@ export async function drag(page: Page, from: Pt, to: Pt): Promise<void> {
   await page.mouse.up();
 }
 
+/** Press at `from` and move to `to` without releasing: a gesture held mid-drag (the caller ends it with `page.mouse.up()`). */
+export async function dragHold(page: Page, from: Pt, to: Pt): Promise<void> {
+  await page.mouse.move(from.x, from.y);
+  await page.mouse.down();
+  await page.mouse.move(to.x, to.y, { steps: 8 });
+}
+
 /** The editor is mounted, the course layer drawn and the sites mirrored. */
 export async function editorReady(page: Page): Promise<Locator> {
   await expect(page.getByTestId("editor-page")).toBeVisible({ timeout: 15_000 });
@@ -251,32 +282,101 @@ export async function toolShapes(page: Page, testId: string): Promise<{ x: numbe
  * ink) or purple (the course overprint). The canvas alone is captured (the overlays hidden), as
  * `map-vector-layer.spec.ts` does.
  */
-export async function inkIn(page: Page, rect: { minX: number; minY: number; maxX: number; maxY: number }, kind: "dark" | "purple" = "dark"): Promise<number> {
+export async function inkIn(page: Page, rect: { minX: number; minY: number; maxX: number; maxY: number }, kind: InkKind = "dark"): Promise<number> {
+  const points: Pt[] = [];
+  for (let x = rect.minX; x <= rect.maxX; x += 0.1) for (let y = rect.minY; y <= rect.maxY; y += 0.1) points.push({ x, y });
+  return inkAt(page, points, kind);
+}
+
+/**
+ * `dark`: the map's black ink; `purple`: the course overprint; `map`: any map colour — not white and not
+ * a purple tint (a corridor's white band cuts the whole map away, docs/course-layer.md §10.2).
+ */
+export type InkKind = "dark" | "purple" | "map";
+
+/**
+ * The GL canvas alone (the overlays hidden) and the byte offset in it of the pixel that contains a paper point (mm),
+ * or null off the canvas. The pixel is the one whose square holds the point — `floor`, not `round`: pixel `i`
+ * spans `[i, i + 1)`, so rounding moves up to a pixel off the point, onto a thin stroke's anti-aliased edge
+ * (docs/bugfix-e2e-apex-probe-pixel.md).
+ *
+ * `held` (a gesture held mid-drag, F21): the overlays are made transparent instead of hidden. A hidden element is
+ * not hit, so the pointer would leave the viewer and Chromium would send it a `mouseleave` — the viewer's cancel of
+ * the gesture. A transparent one is still hovered.
+ */
+async function canvasShot(page: Page, held = false): Promise<{ png: { width: number; height: number; data: Buffer }; pixelOf: (p: Pt) => number | null; pxPerMm: number }> {
   const { PNG } = await import("pngjs");
   const canvas = page.getByTestId("map-vector-layer");
-  const style = "body * { visibility: hidden !important } [data-testid='map-vector-layer'] { visibility: visible !important }";
+  const style = held
+    ? "body *:not(:has([data-testid='map-vector-layer'])):not([data-testid='map-vector-layer']) { opacity: 0 !important }"
+    : "body * { visibility: hidden !important } [data-testid='map-vector-layer'] { visibility: visible !important }";
   const png = PNG.sync.read(await canvas.screenshot({ style }));
   const cb = (await canvas.boundingBox())!;
   const k = png.width / cb.width;
   // The view after the screenshot (taking it may scroll the canvas into view).
   const v = await paperView(page);
   const rot = (v.rotDeg * Math.PI) / 180;
-  const seen = new Set<number>();
-  let n = 0;
-  for (let x = rect.minX; x <= rect.maxX; x += 0.1) {
-    for (let y = rect.minY; y <= rect.maxY; y += 0.1) {
-      const ix = (x * 1000 - v.centreX) * v.pxPerUm, iy = -(y * 1000 - v.centreY) * v.pxPerUm;
-      const q = { x: v.box.x + v.box.width / 2 + ix * Math.cos(rot) - iy * Math.sin(rot), y: v.box.y + v.box.height / 2 + ix * Math.sin(rot) + iy * Math.cos(rot) };
-      const px = Math.round((q.x - cb.x) * k), py = Math.round((q.y - cb.y) * k);
-      if (px < 0 || py < 0 || px >= png.width || py >= png.height) continue;
-      const i = (py * png.width + px) * 4;
-      if (seen.has(i)) continue;
-      seen.add(i);
-      const r = png.data[i], g = png.data[i + 1], b = png.data[i + 2];
-      if (kind === "dark" ? Math.max(r, g, b) < 110 : r - g > 50 && b - g > 50) n++;
+  const pixelOf = ({ x, y }: Pt): number | null => {
+    const ix = (x * 1000 - v.centreX) * v.pxPerUm, iy = -(y * 1000 - v.centreY) * v.pxPerUm;
+    const q = { x: v.box.x + v.box.width / 2 + ix * Math.cos(rot) - iy * Math.sin(rot), y: v.box.y + v.box.height / 2 + ix * Math.sin(rot) + iy * Math.cos(rot) };
+    const px = Math.floor((q.x - cb.x) * k), py = Math.floor((q.y - cb.y) * k);
+    if (px < 0 || py < 0 || px >= png.width || py >= png.height) return null;
+    return (py * png.width + px) * 4;
+  };
+  return { png, pixelOf, pxPerMm: v.pxPerUm * 1000 * k };
+}
+
+/**
+ * Whether the canvas is one plain colour (each channel within 8) everywhere within `radiusMm` of a paper point,
+ * sampled every canvas pixel. A probe that reads lower purple (a leg, a circle) at a point needs plain map under
+ * it: black, the ISOM brown and the blue line rows sort above lower purple (docs/course-layer.md §1), so a map
+ * line crossing the point covers the course there, as it should.
+ */
+export async function plainMapAt(page: Page, at: Pt, radiusMm: number): Promise<boolean> {
+  const { png, pixelOf, pxPerMm } = await canvasShot(page);
+  const step = 1 / pxPerMm;
+  let first: number | null = null;
+  for (let dx = -radiusMm; dx <= radiusMm; dx += step) {
+    for (let dy = -radiusMm; dy <= radiusMm; dy += step) {
+      if (Math.hypot(dx, dy) > radiusMm) continue;
+      const i = pixelOf({ x: at.x + dx, y: at.y + dy });
+      if (i === null) return false;
+      if (first === null) first = i;
+      else if ([0, 1, 2].some((c) => Math.abs(png.data[i + c] - png.data[first! + c]) > 8)) return false;
     }
   }
-  return n;
+  return true;
+}
+
+/**
+ * As `inkIn`, at a list of paper points (mm): how many distinct canvas pixels under them are of `kind`. `held`: read
+ * while a gesture is held mid-drag without ending it (`canvasShot`).
+ */
+export async function inkAt(page: Page, points: readonly Pt[], kind: InkKind = "dark", held = false): Promise<number> {
+  return (await inkedAt(page, points, kind, held)).length;
+}
+
+/**
+ * The points of `points` whose canvas pixel is of `kind`, one per distinct pixel (what `inkAt` counts). A probe
+ * that must turn white later (a corridor's band) keeps only the points that had map under them: the fixture map
+ * has white paper outside its mapped area, where a probe proves nothing (F21 flake).
+ */
+export async function inkedAt(page: Page, points: readonly Pt[], kind: InkKind = "dark", held = false): Promise<Pt[]> {
+  const { png, pixelOf } = await canvasShot(page, held);
+  const seen = new Set<number>();
+  const out: Pt[] = [];
+  for (const p of points) {
+    const i = pixelOf(p);
+    if (i === null) continue;
+    if (seen.has(i)) continue;
+    seen.add(i);
+    const r = png.data[i], g = png.data[i + 1], b = png.data[i + 2];
+    const purple = r - g > 50 && b - g > 50;
+    // `map` leaves out any purple tint, the overprint's anti-aliased edges over white included.
+    const tint = r - g > 12 && b - g > 12;
+    if (kind === "dark" ? Math.max(r, g, b) < 110 : kind === "purple" ? purple : !tint && Math.min(r, g, b) < 235) out.push(p);
+  }
+  return out;
 }
 
 /**
@@ -285,10 +385,13 @@ export async function inkIn(page: Page, rect: { minX: number; minY: number; maxX
  * every pixel in scan order (two captures of the same box compare pixel by pixel). The canvas
  * alone is captured, as in `inkIn`, so the loupe's DOM ring and crosshair do not count.
  */
-export async function canvasInCircle(page: Page, box: { x: number; y: number; width: number; height: number }, inset = 4): Promise<{ purple: number; rgb: number[] }> {
+export async function canvasInCircle(page: Page, box: { x: number; y: number; width: number; height: number }, inset = 4, held = false): Promise<{ purple: number; rgb: number[] }> {
   const { PNG } = await import("pngjs");
   const canvas = page.getByTestId("map-vector-layer");
-  const style = "body * { visibility: hidden !important } [data-testid='map-vector-layer'] { visibility: visible !important }";
+  // `held` (a mouse gesture held mid-drag, F24): the overlays transparent, not hidden — see `canvasShot`.
+  const style = held
+    ? "body *:not(:has([data-testid='map-vector-layer'])):not([data-testid='map-vector-layer']) { opacity: 0 !important }"
+    : "body * { visibility: hidden !important } [data-testid='map-vector-layer'] { visibility: visible !important }";
   const png = PNG.sync.read(await canvas.screenshot({ style }));
   const cb = (await canvas.boundingBox())!;
   const k = png.width / cb.width;
@@ -465,14 +568,50 @@ export async function select(page: Page, code: string): Promise<void> {
   }).toPass({ timeout: 20000 });
 }
 
+/**
+ * A value of the top bar's course-info popover (`editor-stats`, docs/course-editor.md §2; P2): opens it with the
+ * button, reads `editor-stats-<row>[data-<attr>]` (null when the row is absent), closes it with the button again —
+ * not Escape, which would step the editor's Escape cascade (§3) or disarm a tool.
+ */
+export async function statsRow(page: Page, row: string, attr: string): Promise<string | null> {
+  const button = page.getByTestId("editor-stats");
+  const popover = page.getByTestId("editor-stats-popover");
+  if ((await popover.count()) === 0) await button.click();
+  await expect(popover).toBeVisible();
+  const el = popover.getByTestId(`editor-stats-${row}`);
+  const value = (await el.count()) ? await el.getAttribute(`data-${attr}`) : null;
+  await button.click();
+  await expect(popover).toHaveCount(0);
+  return value;
+}
+
+/** The map scale's denominator, from the map-info dialog's scale row (docs/course-editor.md §2, P6); Escape closes it. */
+export async function mapScale(page: Page): Promise<number> {
+  await page.getByTestId("editor-map-info").click();
+  const dialog = page.getByTestId("editor-map-info-dialog");
+  const row = dialog.getByTestId("editor-map-info-scale");
+  await expect(row).toHaveAttribute("data-scale", /^\d+$/, { timeout: 15000 });
+  const scale = Number(await row.getAttribute("data-scale"));
+  await page.keyboard.press("Escape");
+  await expect(dialog).toHaveCount(0);
+  expect(scale, "the map-info dialog's scale row").toBeGreaterThan(0);
+  return scale;
+}
+
 /** Arm a tool by its key (`K`, `S`, `G` …): the rail shows it pressed. */
 export async function arm(page: Page, key: string): Promise<void> {
   await page.keyboard.press(key.toLowerCase());
   await expect(page.getByTestId(`editor-tool-${key.toUpperCase()}`)).toHaveAttribute("aria-pressed", "true");
 }
 
-/** With a placing tool armed: hover and click at the page point; returns the new site once the mirror has it. */
+/**
+ * With a placing tool armed: hover and click at the page point; returns the new site once the mirror has it.
+ * Fails fast, like `clickMap`, when the editor's chrome covers the point: the click would land there and place
+ * nothing (F7 flake: a point under the inspector timed out waiting for the site).
+ */
 export async function place(page: Page, at: Pt): Promise<Site> {
+  const cover = await coveredBy(page, at);
+  if (cover) throw new Error(`placement point (${Math.round(at.x)}, ${Math.round(at.y)}) is covered by ${cover}`);
   const before = new Set((await sites(page)).map((s) => s.id));
   await page.mouse.move(at.x, at.y);
   await page.mouse.click(at.x, at.y);
@@ -482,6 +621,50 @@ export async function place(page: Page, at: Pt): Promise<Site> {
     return !!added;
   }, { timeout: 15000 }).toBe(true);
   return added!;
+}
+
+/**
+ * The end of a mouse drag of `dist` px from `from` that keeps the whole gesture on the map: along the first of `dirs`
+ * (page unit vectors, in order of preference) whose 8 steps (what `drag` moves through) stay inside the viewer,
+ * `margin` px from its edges, over nothing outside it. The viewer's mouseleave cancels a drag (MapViewer calls the
+ * tool's `onPointerUp(null)`), and the inspector, the tool rail and the top bar lie over the viewer's box but outside
+ * it (F16 flake: an Alt drag of a grip ended under the inspector and wrote nothing). The action bar is inside the
+ * viewer and stops only the press, so a drag may cross it and end on it: a direction whose end is clear of it is
+ * preferred, one ending on it taken only when no other stays on the map (a leg along the viewer's bottom, its bar
+ * flipped above it) — unless `endOnBar` is false, for a drag whose end the next gesture presses (then 10 px around
+ * the end clear too). `dists` in order of
+ * preference, each tried in every direction (a longer drag can clear the bar).
+ */
+export async function dragEndOnMap(
+  page: Page, from: Pt, dirs: readonly Pt[], dists: number | readonly number[], opts: { margin?: number; endOnBar?: boolean } = {},
+): Promise<Pt> {
+  const margin = opts.margin ?? 20;
+  const box = (await page.getByTestId("map-viewer").boundingBox())!;
+  for (const endOnBar of opts.endOnBar === false ? [false] : [false, true]) for (const dist of typeof dists === "number" ? [dists] : dists) {
+    for (const d of dirs) {
+      let ok = true;
+      for (let i = 1; i <= 8 && ok; i++) {
+        const p = { x: from.x + (d.x * dist * i) / 8, y: from.y + (d.y * dist * i) / 8 };
+        const inside = p.x > box.x + margin && p.x < box.x + box.width - margin && p.y > box.y + margin && p.y < box.y + box.height - margin;
+        const cover = inside ? await coveredBy(page, p) : "outside the viewer";
+        ok = cover === null || (cover === "editor-action-bar" && (i < 8 || endOnBar));
+      }
+      // An end the next gesture presses: clear by 10 px all round (the dragged point snaps, F24 run: a handle 2 px
+      // inside the bar's edge after an end 2 px outside it).
+      if (ok && opts.endOnBar === false) {
+        const end = { x: from.x + d.x * dist, y: from.y + d.y * dist };
+        for (const [dx, dy] of [[10, 0], [-10, 0], [0, 10], [0, -10]]) if ((await coveredBy(page, { x: end.x + dx, y: end.y + dy })) !== null) ok = false;
+      }
+      if (ok) return { x: from.x + d.x * dist, y: from.y + d.y * dist };
+    }
+  }
+  throw new Error(`no drag of ${String(dists)} px from (${Math.round(from.x)}, ${Math.round(from.y)}) stays on the map`);
+}
+
+/** Unit vector `v` turned by `deg` degrees (page px, y down). */
+export function turned(v: Pt, deg: number): Pt {
+  const a = (deg * Math.PI) / 180;
+  return { x: v.x * Math.cos(a) - v.y * Math.sin(a), y: v.x * Math.sin(a) + v.y * Math.cos(a) };
 }
 
 /** In `V`: a click on empty map, then *Add control* on the phantom; returns the new control's code (selected). */
@@ -619,6 +802,8 @@ export interface PrintedPdf {
   curvedFills: number;
   /** Every Bézier `c` operator. */
   curves: number;
+  /** Every stroke (`S`) operator: an object added to the page adds its strokes (tests compare counts). */
+  strokes: number;
 }
 
 /** A print of the event (`/api/maps/<nameId>/maps.pdf?<query>`, e.g. `allControls=1` or `maps=<seq>`), analysed. */
@@ -631,12 +816,13 @@ export async function printed(page: Page, nameId: string, query: string): Promis
 export async function analysePdf(bytes: Buffer): Promise<PrintedPdf> {
   const pdf = await loadPdf(bytes);
   const { width, height } = pdf.getPages()[0].getSize();
-  let hatches = 0, curvedFills = 0, curves = 0;
+  let hatches = 0, curvedFills = 0, curves = 0, strokes = 0;
   const run = /W\* n[^]*?(?:-?[\d.]+ -?[\d.]+ m -?[\d.]+ -?[\d.]+ l ){3,}-?[\d.]+ -?[\d.]+ m -?[\d.]+ -?[\d.]+ l S/g;
   for (const inflated of inflatedStreams(bytes)) {
     hatches += inflated.match(run)?.length ?? 0;
     let curved = false;
     for (const op of inflated.split(/\s+/)) {
+      if (op === "S") strokes++;
       if (op === "c") { curved = true; curves++; }
       else if (op === "f*" || op === "f") {
         if (curved) curvedFills++;
@@ -644,7 +830,7 @@ export async function analysePdf(bytes: Buffer): Promise<PrintedPdf> {
       } else if (op === "S" || op === "n" || op === "B" || op === "B*") curved = false;
     }
   }
-  return { pages: pdf.getPageCount(), sizeMm: [Math.round((width * 25.4) / 72), Math.round((height * 25.4) / 72)], hatches, curvedFills, curves };
+  return { pages: pdf.getPageCount(), sizeMm: [Math.round((width * 25.4) / 72), Math.round((height * 25.4) / 72)], hatches, curvedFills, curves, strokes };
 }
 
 export type Frame = { x: number; y: number; width: number; height: number };
@@ -711,4 +897,18 @@ export async function freezeExternalPoll(page: Page): Promise<void> {
     await route.fulfill({ response: res, json: body });
   });
   await held;
+}
+
+/**
+ * The drawn pieces of course `course`'s leg from `from` to `to` (paper mm, within 8 mm of the sites' centres —
+ * the pieces start and end at the circles' rims), with its style; [] while the mirror does not show it.
+ */
+export async function legBetween(page: Page, course: string, from: Pt, to: Pt): Promise<{ leg: number; style: string; points: Pt[] }[]> {
+  const near = (q: Pt | undefined, s: Pt) => !!q && Math.hypot(q.x - s.x, q.y - s.y) < 8;
+  const pieces = await legPieces(page, course);
+  for (const idx of new Set(pieces.map((l) => l.leg))) {
+    const ps = pieces.filter((l) => l.leg === idx);
+    if (near(ps[0].points[0], from) && near(ps[ps.length - 1].points.at(-1), to)) return ps;
+  }
+  return [];
 }

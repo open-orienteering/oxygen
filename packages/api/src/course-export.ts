@@ -7,16 +7,23 @@
  * writes native CourseScribe XML that Purple Pen opens directly.
  *
  * Document layout lives in `iof-course-export.ts` / `ppen-course-export.ts`
- * (pure); this module maps DB rows onto them. Sequence construction
- * mirrors `loadCourseSequences` in `course-geometry.ts`:
- * `course_controls` holds regular controls only, the start is the event
- * start control matched by `startName` (unless `firstAsStart`) and the
- * finish is `finishControlId` or the event's first finish control
- * (unless `lastAsFinish`). A course with a stored `structure` takes those
- * from it (`splitStructure`, docs/course-layer.md §6) — the columns are its
- * mirror, so the export is the same.
+ * (pure); this module maps DB rows onto them. Each course's sequence and
+ * leg lengths are `loadCourseSequences` / `editorCourseLayer` in
+ * `course-geometry.ts` — the reader `rebuildCourseLengths` writes
+ * `legs` / `length_m` from — so the exported `LegLength`s run along the
+ * legs' bends and through their crossing points and equal the stored ones
+ * (docs/course-controls-and-matching.md "Course length").
+ *
+ * The structure (slice F, row F9; docs/iof-coursedata-export.md): a root
+ * with variants is not exported, its variants are, each with the root's
+ * name as the family, and a class on the root is assigned to each of
+ * them; a leg's crossing point is a `CrossingPoint` row before its end
+ * row, a marked route a `TapedRoute` instruction on its end row; a map
+ * exchange site carries the exchange marker; map-issue points are not
+ * exported.
  */
 
+import { displayCode } from "./control-id.js";
 import type { FastifyInstance } from "fastify";
 import { prisma } from "./db.js";
 import { assertRestAccess } from "./restGuard.js";
@@ -31,24 +38,19 @@ import {
 } from "./iof-course-export.js";
 import { buildPpenXml } from "./ppen-course-export.js";
 import { courseSequenceOf } from "./course-structure.js";
+import { courseLengthM, editorCourseLayer, legDistancesMm, loadCourseSequences } from "./course-geometry.js";
 import type { PrismaClient, Prisma } from "./generated/prisma/client.js";
 
 type Db = PrismaClient | Prisma.TransactionClient;
 
-/** First punch code, falling back to name then seq — the display code. */
-function displayCode(c: { codes: string; name: string; seq: number }): string {
-  const first = c.codes.split(";")[0]?.trim();
-  return first || c.name || String(c.seq);
-}
+// `displayCode` (control-id.ts): a start / finish by its name, else first code → name → seq (F32).
 
-/** Per-leg terrain meters from the stored `legs` string ("1200;900;"). */
-function parseLegs(legs: string): number[] {
-  return legs
-    .split(";")
-    .map((s) => s.trim())
-    .filter((s) => s.length > 0)
-    .map((s) => Number(s))
-    .filter((n) => Number.isFinite(n));
+/** A site's exported `type`: its kind, else the legacy `status` 4 / 5. */
+function siteType(c: { kind: string; status: string }): ExportControlSite["type"] {
+  if (c.kind === "crossing_point") return "CrossingPoint";
+  if (c.kind === "start" || c.status === "start") return "Start";
+  if (c.kind === "finish" || c.status === "finish") return "Finish";
+  return "Control";
 }
 
 export type CourseExportFormat = "iofxml" | "ppen";
@@ -75,7 +77,8 @@ export async function gatherEventCourseExport(
   });
 
   const controls = await db.control.findMany({
-    where: { eventId: event.id, removed: false },
+    // A map-issue point is a setter's note (course-layer.md §10.3): no IOF type, not exported.
+    where: { eventId: event.id, removed: false, kind: { not: "map_issue" } },
     orderBy: { seq: "asc" },
     select: {
       id: true, seq: true, name: true, codes: true, status: true, kind: true,
@@ -100,36 +103,27 @@ export async function gatherEventCourseExport(
     }
     sites.push({
       id,
-      type:
-        c.status === "start" ? "Start" : c.status === "finish" ? "Finish" : "Control",
+      type: siteType(c),
       xMm: c.xpos,
       yMm: c.ypos,
       lat,
       lng,
+      ...(c.kind === "map_exchange" ? { mapExchange: true } : {}),
     });
   }
 
   const starts = controls.filter((c) => c.status === "start");
   const finishes = controls.filter((c) => c.status === "finish");
-  const placedSiteById = new Map<string, ExportControlSite>();
-  for (const site of sites) {
-    if (
-      (site.xMm !== 0 || site.yMm !== 0) &&
-      !placedSiteById.has(site.id)
-    ) {
-      // buildCourseDataXml also resolves duplicate public ids first-wins.
-      placedSiteById.set(site.id, site);
-    }
-  }
 
   const courseRows = await db.course.findMany({
     where: { eventId: event.id, removed: false },
     orderBy: { seq: "asc" },
     select: {
-      id: true, name: true, lengthM: true, climbM: true, legs: true,
+      id: true, name: true, lengthM: true, climbM: true,
       lengthSource: true, orderMode: true,
       firstAsStart: true, lastAsFinish: true, startName: true,
       finishControlId: true, structure: true,
+      parentCourseId: true, variantKey: true,
       courseControls: {
         orderBy: { position: "asc" },
         select: { controlId: true },
@@ -137,71 +131,86 @@ export async function gatherEventCourseExport(
     },
   });
 
-  const courses: ExportCourse[] = [];
-  for (const course of courseRows) {
-    const seq: ExportCourseControl[] = [];
+  // A root with live variants is exported as its variants, in the root's
+  // place and key order, each with the root's name as its family
+  // (course-layer.md §12); a root without any is an ordinary course.
+  type CourseRow = (typeof courseRows)[number];
+  const variantsOf = new Map<string, CourseRow[]>();
+  for (const row of courseRows) {
+    if (!row.parentCourseId) continue;
+    variantsOf.set(row.parentCourseId, [...(variantsOf.get(row.parentCourseId) ?? []), row]);
+  }
+  for (const list of variantsOf.values()) list.sort((a, b) => (a.variantKey ?? "").localeCompare(b.variantKey ?? ""));
+  const exported: Array<{ row: CourseRow; family?: string }> = [];
+  for (const row of courseRows) {
+    if (row.parentCourseId) continue;
+    const variants = variantsOf.get(row.id) ?? [];
+    if (variants.length === 0) exported.push({ row });
+    else for (const v of variants) exported.push({ row: v, family: row.name });
+  }
 
-    // The one sequence rule (course-structure.ts `courseSequenceOf`).
-    const { start, middle, finish, firstAsStart, lastAsFinish } = courseSequenceOf(
+  const sequences = await loadCourseSequences(db, event.id, exported.map((e) => e.row.id));
+
+  const courses: ExportCourse[] = [];
+  for (const { row: course, family } of exported) {
+    const loaded = sequences.get(course.id);
+    const entries = loaded?.seq ?? [];
+    const orderMode = loaded?.orderMode ?? course.orderMode;
+    const ordered = orderMode !== "free_order";
+
+    // The leg lengths `rebuildCourseLengths` stores: the layer's legs,
+    // centre to centre through the bends and the crossing point, between
+    // consecutive positioned entries (course-layer.md §4.1, §10.1, §10.3).
+    const distancesMm = legDistancesMm(editorCourseLayer(course.id, entries, orderMode));
+    const legM = (i: number) => (i >= 0 && i < distancesMm.length && mapScale > 0 ? Math.round((distancesMm[i] * mapScale) / 1000) : undefined);
+
+    const seq: ExportCourseControl[] = [];
+    let positioned = -1;
+    for (const e of entries) {
+      const isPositioned = e.xMm !== 0 || e.yMm !== 0;
+      if (isPositioned) positioned++;
+      const id = idByUuid.get(e.id);
+      if (!id) continue;
+      const legLengthM = isPositioned ? legM(positioned - 1) : undefined;
+      // The crossing point the leg runs through: an unnumbered row before
+      // the leg's end row, the instruction on it, no length of its own (the
+      // end row carries the whole leg).
+      const viaId = ordered && e.via ? idByUuid.get(e.via.id) : undefined;
+      if (viaId) {
+        seq.push({
+          controlId: viaId,
+          type: "CrossingPoint",
+          specialInstruction: e.leg?.crossing?.section ? "MandatoryOutOfBoundsAreaPassage" : "MandatoryCrossingPoint",
+        });
+      }
+      const cc: ExportCourseControl = { controlId: id, type: e.type };
+      if (legLengthM !== undefined) cc.legLengthM = legLengthM;
+      // A marked route (707) along the leg: a taped route as long as the leg.
+      if (ordered && e.leg?.style === "marked_route" && legLengthM) {
+        cc.specialInstruction = "TapedRoute";
+        cc.tapedRouteLengthM = legLengthM;
+      }
+      if (e.leg?.bends?.length) cc.bends = e.leg.bends;
+      seq.push(cc);
+    }
+
+    // Mark the first row as the start and the last as the finish when the
+    // course carries them itself — IOF encodes the role in `@_type`.
+    const { firstAsStart, lastAsFinish } = courseSequenceOf(
       course,
       course.courseControls.map((cc) => cc.controlId),
       { site: (id) => rowByUuid.get(id), starts, finishes },
     );
-
-    if (start) seq.push({ controlId: displayCode(start), type: "Start" });
-
-    for (const controlId of middle) {
-      const id = idByUuid.get(controlId);
-      if (!id) continue;
-      const row = rowByUuid.get(controlId)!;
-      seq.push({
-        controlId: id,
-        type:
-          row.status === "start" ? "Start"
-            : row.status === "finish" ? "Finish"
-              : "Control",
-      });
-    }
-
-    if (finish) seq.push({ controlId: displayCode(finish), type: "Finish" });
-
-    // Mark the first row as the start and the last as the finish when the
-    // course carries them itself — IOF encodes the role in `@_type`.
     if (firstAsStart && seq.length > 0) seq[0].type = "Start";
     if (lastAsFinish && seq.length > 0) seq[seq.length - 1].type = "Finish";
-
-    // `legs` is one entry per leg of the *positioned* sequence, so it only
-    // lines up when nothing was dropped. Attach it when the count matches.
-    const legs = parseLegs(course.legs);
-    if (legs.length === seq.length - 1) {
-      for (let i = 1; i < seq.length; i++) seq[i].legLengthM = legs[i - 1];
-    }
-
-    // Derive every exported leg from the current control coordinates and
-    // current OCAD scale. This makes export resilient to stale `legs` rows
-    // written by older imports. Unplaced controls are skipped exactly as
-    // buildCourseDataXml skips them.
-    let previous: ExportControlSite | null = null;
-    let computedLengthM = 0;
-    for (const cc of seq) {
-      const site = placedSiteById.get(cc.controlId);
-      if (!site) continue;
-      if (previous && mapScale > 0) {
-        const dx = site.xMm - previous.xMm;
-        const dy = site.yMm - previous.yMm;
-        const legLengthM =
-          Math.round((Math.sqrt(dx * dx + dy * dy) * mapScale) / 1000);
-        cc.legLengthM = legLengthM;
-        computedLengthM += legLengthM;
-      }
-      previous = site;
-    }
 
     // Imported OCD/XML courses may carry an intentional published length
     // (detours around forbidden terrain, marked routes, extra distance).
     // Preserve that until the course is edited. Edited courses
-    // (`length_source = 'derived'`) are recomputed defensively at export
-    // time too (course-controls-and-matching.md "Course length").
+    // (`length_source = 'derived'`) take the derived length — the stored
+    // `length_m` formula, rounded once over the legs' millimetres
+    // (course-controls-and-matching.md "Course length").
+    const computedLengthM = ordered && distancesMm.length > 0 ? courseLengthM(distancesMm, mapScale) : 0;
     const lengthM =
       course.lengthSource === "derived" && computedLengthM > 0
         ? computedLengthM
@@ -211,25 +220,32 @@ export async function gatherEventCourseExport(
 
     courses.push({
       name: course.name,
+      ...(family ? { family } : {}),
       lengthM,
       climbM: course.climbM,
-      orderMode: course.orderMode,
+      orderMode,
       controls: seq,
     });
   }
 
-  const courseNameByUuid = new Map(courseRows.map((c) => [c.id, c.name]));
+  // A class on a root runs each of its variants (the class's pool, §12.4).
+  const exportedNamesOf = new Map<string, string[]>();
+  for (const row of courseRows) {
+    if (row.parentCourseId) continue;
+    const variants = variantsOf.get(row.id);
+    exportedNamesOf.set(row.id, variants?.length ? variants.map((v) => v.name) : [row.name]);
+  }
+  for (const row of courseRows) if (row.parentCourseId) exportedNamesOf.set(row.id, [row.name]);
   const classRows = await db.class.findMany({
     where: { eventId: event.id, courseId: { not: null } },
     orderBy: { seq: "asc" },
     select: { name: true, courseId: true },
   });
-  const classAssignments = classRows
-    .map((cls) => ({
-      className: cls.name,
-      courseName: courseNameByUuid.get(cls.courseId!) ?? "",
-    }))
-    .filter((a) => a.className !== "" && a.courseName !== "");
+  const classAssignments = classRows.flatMap((cls) =>
+    cls.name === ""
+      ? []
+      : (exportedNamesOf.get(cls.courseId!) ?? []).map((courseName) => ({ className: cls.name, courseName })),
+  );
 
   return {
     eventName: event.name,

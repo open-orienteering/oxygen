@@ -266,7 +266,7 @@ function rectsOverlap(
  */
 export function placeControlLabels(
   circles: PlacementCircle[],
-  lines: PlacementSeg[],
+  allLines: PlacementSeg[],
   opts: PlacementOpts,
 ): Map<string, PlacedControlLabel> {
   const { radius, labelSize } = opts;
@@ -314,11 +314,6 @@ export function placeControlLabels(
     w: rect.w + 2 * linePad,
     h: rect.h + 2 * linePad,
   });
-  const hitsLine = (rect: PlacedControlLabel): boolean => {
-    const padded = paddedBox(rect);
-    return lines.some((seg) => segRectDist(seg, padded) <= 0);
-  };
-
   // Manual (dragged) positions are obstacles for everyone else and are
   // never re-placed — a number the setter put somewhere stays there.
   const autoLabeled: PlacementCircle[] = [];
@@ -347,6 +342,27 @@ export function placeControlLabels(
     const label = c.label!;
     const estW = label.length * labelSize * CHAR_WIDTH_RATIO;
     const estH = labelSize * LINE_HEIGHT_RATIO;
+
+    // Only the segments within reach of some candidate box can reject it
+    // or cost it (docs/course-layer.md §3.5, F20): every box lies within
+    // radius + gap + the outermost ring + its diagonal of the centre, the
+    // hard test pads it by linePad, the soft cost reaches 0.5·labelSize
+    // beyond it. The rest are skipped, in the original order, so every
+    // test and every sum sees the same segments in the same order and the
+    // result is bit-identical — at a fraction of the cost on a course of
+    // smooth bends (a thousand segments, each circle near a few dozen).
+    // `!(d > reach)` keeps a segment whose distance is NaN for the tests
+    // to judge, as they did before the cull.
+    const reach =
+      radius + gap + RING_EXTRAS[RING_EXTRAS.length - 1] * labelSize +
+      Math.hypot(estW, estH) + 2 * linePad + 0.5 * labelSize + 1e-9;
+    const lines = allLines.filter(
+      (seg) => !(ptSegDist(c.x, c.y, seg.x1, seg.y1, seg.x2, seg.y2) > reach),
+    );
+    const hitsLine = (rect: PlacedControlLabel): boolean => {
+      const padded = paddedBox(rect);
+      return lines.some((seg) => segRectDist(seg, padded) <= 0);
+    };
 
     // Soft cost of a candidate, assuming it already passed the hard
     // collision checks. Shared by ring selection and the last-resort

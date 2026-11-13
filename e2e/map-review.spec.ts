@@ -177,9 +177,10 @@ test.describe("map import review", () => {
     await uploadEventMap(page);
     await expect(page.getByTestId("map-viewer").first()).toBeVisible({ timeout: 60000 });
     await page.goto(`/${nameId}/course-editor`);
-    // The new editor's map-info row carries the link (MapPanel `showMapInfo`).
+    // The editor's map-info dialog carries the link (docs/course-editor.md §2, P6: the top bar's map icon).
     await expect(page.getByTestId("editor-page")).toBeVisible({ timeout: 15000 });
-    const link = page.getByTestId("map-panel").first().getByTestId("map-review-link");
+    await page.getByTestId("editor-map-info").click();
+    const link = page.getByTestId("editor-map-info-dialog").getByTestId("editor-map-info-review");
     await expect(link).toBeVisible({ timeout: 30000 });
     await link.click();
 

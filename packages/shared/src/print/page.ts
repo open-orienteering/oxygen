@@ -43,13 +43,13 @@ export interface PageInput {
     structure: CourseStructure | readonly CourseStructure[] | null;
     sites: readonly CourseSite[];
     appearance: CourseAppearance;
-    viewOptions: Pick<CourseViewOptions, "allControls" | "labelMode" | "overprintScale" | "autoCuts">;
+    viewOptions: Pick<CourseViewOptions, "allControls" | "labelMode" | "autoCuts" | "labels">;
     /** Filter regions over the map window (`map-rendering.md` §4.11). */
     regions?: readonly CourseFilterRegion[];
     /** The event's course objects in scope of this sheet (docs/course-layer.md §8.3), in draw order. */
     objects?: readonly CourseLayerObject[];
   };
-  /** Layout objects of both anchors (template + sheet). */
+  /** Layout objects (template + sheet), all page-anchored: the page layer's. */
   objects: readonly CourseMapObject[];
   textValues: MapTextValues;
   /** The description block, or null when the template hides it. */
@@ -170,10 +170,10 @@ export function frameInMap(t: MapLayerTransform, frameUm: ComposedPage["frameUm"
 }
 
 /**
- * A page-anchored object in y-up page mm, re-anchored as `map` so the
- * course layer's object builder (C0, `layoutObjects`) draws it in page
- * space unchanged: points `y → H − y`, Bézier handles negated in y,
- * rectangles by their lower-left corner.
+ * A page-anchored object in y-up page mm, so the page layer's object
+ * builder (`pageObjects`) draws it in the course layer's y-up convention:
+ * points `y → H − y`, Bézier handles negated in y, rectangles by their
+ * lower-left corner.
  */
 export function flipPageObject(o: CourseMapObject, paperHeightMm: number): CourseMapObject {
   const H = paperHeightMm;
@@ -185,14 +185,14 @@ export function flipPageObject(o: CourseMapObject, paperHeightMm: number): Cours
   });
   switch (o.kind) {
     case "text":
-      return { ...o, anchor: "map", y: H - o.y };
+      return { ...o, y: H - o.y };
     case "line":
-      return { ...o, anchor: "map", y1: H - o.y1, y2: H - o.y2 };
+      return { ...o, y1: H - o.y1, y2: H - o.y2 };
     case "path":
-      return { ...o, anchor: "map", points: o.points.map(v) };
+      return { ...o, points: o.points.map(v) };
     case "rectangle":
     case "image":
-      return { ...o, anchor: "map", y: H - o.y - o.height };
+      return { ...o, y: H - o.y - o.height };
   }
 }
 

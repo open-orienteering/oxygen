@@ -929,6 +929,12 @@ function ReadoutScreen({
             {isDNF && t("didNotFinish")}
             {!isOK && !isMP && !isDNF && (card.status || t("result"))}
           </div>
+          {/* The runner's screen never accepts another variant (F6c): the desk does. */}
+          {isMP && (
+            <p data-testid="kiosk-see-official" className="text-lg text-red-300 mb-1">
+              {t("seeOfficial")}
+            </p>
+          )}
 
           {displayRunningTime > 0 && (
             <>

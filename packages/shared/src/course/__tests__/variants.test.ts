@@ -1,0 +1,319 @@
+/** Variants and their materialisation (course-layer.md §12; 08 §4.3 "Materialisation"). */
+
+import { describe, expect, it } from "vitest";
+import { courseStructureSchema, structureControlItems, type StoredCourseStructure } from "../structure.js";
+import {
+  MAX_VARIANTS,
+  allVariationStructures,
+  materialiseVariants,
+  pathOfOrders,
+  variantOrders,
+  pruneSiteFromStructure,
+  structureSiteIds,
+  uniformVariantNumbers,
+  variantCount,
+  variantKeyDuplicates,
+  variantStructure,
+} from "../variants.js";
+
+type Item = StoredCourseStructure["items"][number];
+const c = (siteId: string, extra: Record<string, unknown> = {}): Item => ({ siteId, ...extra }) as Item;
+const group = (id: string, alts: string[][], extra: { loop?: boolean; labels?: string[] } = {}): Item => ({
+  kind: "variation",
+  id,
+  alternatives: alts.map((ids, i) => ({
+    label: extra.labels?.[i] ?? String.fromCharCode(65 + i),
+    items: ids.map((siteId) => ({ siteId })),
+  })),
+  ...(extra.loop ? { loop: true } : {}),
+});
+const course = (items: Item[]): StoredCourseStructure => ({ version: 1, id: "root", orderMode: "ordered", items });
+const ids = (items: readonly { siteId: string }[]) => items.map((i) => i.siteId).join(" ");
+
+describe("materialiseVariants", () => {
+  it("is empty for a course without groups (no children)", () => {
+    expect(materialiseVariants(course([c("S"), c("31"), c("F")]))).toEqual([]);
+    expect(variantCount(course([c("S"), c("F")]))).toBe(0);
+  });
+
+  it("is the cartesian product over groups in item order, keyed by the groups' letters", () => {
+    const s = course([c("S"), c("31"), group("g1", [["32"], ["33"]]), c("34"), group("g2", [["35"], ["36"], ["37"]]), c("F")]);
+    const vs = materialiseVariants(s);
+    expect(vs.map((v) => v.key)).toEqual(["AA", "AB", "AC", "BA", "BB", "BC"]);
+    expect(variantCount(s)).toBe(6);
+    expect(ids(vs.find((v) => v.key === "BC")!.items)).toBe("S 31 33 34 37 F");
+  });
+
+  it("keeps each alternative's legs and flags (the leg into an alternative's first control leaves the anchor)", () => {
+    const s = course([
+      c("S"),
+      c("31"),
+      { kind: "variation", id: "g", alternatives: [
+        { label: "A", items: [{ siteId: "32", leg: { style: "marked_route" }, numberHidden: true }] },
+        { label: "B", items: [{ siteId: "33" }] },
+      ] } as Item,
+      c("34", { leg: { gaps: [{ from: 0.1, to: 0.2 }] } }),
+      c("F"),
+    ]);
+    const a = materialiseVariants(s).find((v) => v.key === "A")!;
+    expect(a.items[2]).toEqual({ siteId: "32", leg: { style: "marked_route" }, numberHidden: true });
+    expect(a.items[3]).toEqual({ siteId: "34", leg: { gaps: [{ from: 0.1, to: 0.2 }] } });
+  });
+
+  it("a loop yields the permutations of its alternatives, the anchor repeated between them", () => {
+    const s = course([c("S"), c("31"), group("b", [["32"], ["33"]], { loop: true }), c("31"), c("F")]);
+    const vs = materialiseVariants(s);
+    expect(vs.map((v) => v.key)).toEqual(["AB", "BA"]);
+    expect(ids(vs[0].items)).toBe("S 31 32 31 33 31 F");
+    expect(ids(vs[1].items)).toBe("S 31 33 31 32 31 F");
+  });
+
+  it("a loop with three alternatives yields six variants", () => {
+    const s = course([c("S"), c("31"), group("b", [["32"], ["33"], ["34", "35"]], { loop: true }), c("31"), c("F")]);
+    const vs = materialiseVariants(s);
+    expect(vs.map((v) => v.key)).toEqual(["ABC", "ACB", "BAC", "BCA", "CAB", "CBA"]);
+    expect(ids(vs.find((v) => v.key === "CAB")!.items)).toBe("S 31 34 35 31 32 31 33 31 F");
+  });
+
+  it("an empty alternative is a straight leg (answer 5); in a loop it adds no anchor visit", () => {
+    const fork = materialiseVariants(course([c("S"), c("31"), group("g", [["32"], []]), c("34"), c("F")]));
+    expect(fork.map((v) => [v.key, ids(v.items)])).toEqual([["A", "S 31 32 34 F"], ["B", "S 31 34 F"]]);
+    const loop = materialiseVariants(course([c("S"), c("31"), group("b", [["32"], []], { loop: true }), c("31"), c("F")]));
+    expect(loop.map((v) => [v.key, ids(v.items)])).toEqual([["AB", "S 31 32 31 F"], ["BA", "S 31 32 31 F"]]);
+  });
+
+  it("the anchor visit drops the anchor's role and leg but keeps a hidden number", () => {
+    const s = course([c("31", { role: "start", numberHidden: true, leg: { style: "none" } }), group("b", [["32"], ["33"]], { loop: true }), c("31"), c("F")]);
+    expect(materialiseVariants(s)[0].items[2]).toEqual({ siteId: "31", numberHidden: true });
+  });
+
+  it("keys are stable across an edit outside the groups", () => {
+    const a = course([c("S"), c("31"), group("g", [["32"], ["33"]]), c("34"), c("F")]);
+    const b = course([c("S"), c("30"), c("31"), group("g", [["32"], ["33"]]), c("34", { leg: { style: "none" } }), c("F")]);
+    expect(materialiseVariants(a).map((v) => v.key)).toEqual(materialiseVariants(b).map((v) => v.key));
+  });
+
+  it("names multi-letter labels as stored and reports colliding keys", () => {
+    const s = course([c("S"), c("31"), group("g1", [["32"], ["33"]], { labels: ["A", "AB"] }), c("34"), group("g2", [["35"], ["36"]], { labels: ["B", "C"] }), c("F")]);
+    const keys = materialiseVariants(s).map((v) => v.key);
+    expect(keys).toEqual(["AB", "AC", "ABB", "ABC"]);
+    expect(variantKeyDuplicates(keys)).toEqual([]);
+    const dup = course([c("S"), c("31"), group("g1", [["32"], ["33"]], { labels: ["A", "AB"] }), c("34"), group("g2", [["35"], ["36"]], { labels: ["B", "C"] }), c("37"), group("g3", [["38"], ["39"]], { labels: ["C", "BC"] }), c("F")]);
+    expect(variantKeyDuplicates(materialiseVariants(dup).map((v) => v.key))).toEqual(["ABBC"]);
+  });
+
+  it("counts variants without building them (the cap's guard)", () => {
+    const big = course([c("S"), c("31"), group("b", [["32"], ["33"], ["34"], ["35"], ["36"]], { loop: true }), c("31"), c("F")]);
+    expect(variantCount(big)).toBe(120);
+    expect(variantCount(big)).toBeGreaterThan(MAX_VARIANTS);
+  });
+});
+
+describe("variantStructure", () => {
+  const s = course([c("S"), c("31"), group("g", [["32"], ["33"]]), c("34"), group("b", [["35"], ["36"]], { loop: true }), c("34"), c("F")]);
+
+  it("is the linear structure of one variant, equal to the product's row, parsed by the column schema", () => {
+    for (const v of materialiseVariants(s)) {
+      const linear = variantStructure(s, v.key)!;
+      expect(linear.items).toEqual(v.items);
+      expect(linear.items.some((i) => i.kind === "variation")).toBe(false);
+      expect(courseStructureSchema.safeParse(linear).success).toBe(true);
+      expect(structureControlItems(linear)).toEqual(v.items);
+      expect(linear.orderMode).toBe("ordered");
+    }
+  });
+
+  it("is null for an unknown key", () => {
+    expect(variantStructure(s, "ZZ")).toBeNull();
+  });
+});
+
+describe("structureSiteIds", () => {
+  it("lists every site of every alternative once, in order", () => {
+    const s = course([c("S"), c("31"), group("g", [["32"], ["33", "31"]]), c("34"), c("F")]);
+    expect(structureSiteIds(s)).toEqual(["S", "31", "32", "33", "34", "F"]);
+  });
+
+  it("lists the crossing points the legs name (F4), after the items", () => {
+    const s = course([c("S"), { siteId: "31", leg: { crossing: { controlId: "P" } } }, { kind: "variation", id: "g", alternatives: [{ label: "A", items: [{ siteId: "32", leg: { crossing: { controlId: "Q" } } }] }, { label: "B", items: [{ siteId: "33" }] }] }, c("34"), c("F")] as never);
+    expect(structureSiteIds(s)).toEqual(["S", "31", "32", "33", "34", "F", "P", "Q"]);
+  });
+});
+
+describe("pruneSiteFromStructure", () => {
+  it("drops the site from every alternative and the top level, keeping the group", () => {
+    const s = course([c("S"), c("31"), group("g", [["32", "35"], ["33", "35"]]), c("34"), c("F")]);
+    const out = pruneSiteFromStructure(s, "35");
+    expect(out.items[2]).toEqual(group("g", [["32"], ["33"]]));
+    expect(ids(structureControlItems(out))).toBe("S 31 32 34 F");
+  });
+
+  it("keeps a group whose alternatives empty (answer 5; F7: an all-empty group is valid)", () => {
+    const one = pruneSiteFromStructure(course([c("S"), c("31"), group("g", [["32"], ["33"]]), c("34"), c("F")]), "33");
+    expect(one.items[2]).toEqual(group("g", [["32"], []]));
+    const both = pruneSiteFromStructure(course([c("S"), c("31"), group("g", [["32"], ["32"]]), c("34"), c("F")]), "32");
+    expect(both.items[2]).toEqual(group("g", [[], []]));
+    expect(courseStructureSchema.safeParse(both).success).toBe(true);
+  });
+
+  it("dissolves a group left unanchored into its first alternative", () => {
+    const s = pruneSiteFromStructure(course([c("31"), group("g", [["32"], ["33"]]), c("F")]), "31");
+    expect(ids(s.items as { siteId: string }[])).toBe("32 F");
+    expect(courseStructureSchema.safeParse(s).success).toBe(true);
+  });
+
+  it("dissolves the second of two groups left adjacent", () => {
+    const s = pruneSiteFromStructure(course([c("S"), group("g1", [["32"], ["33"]]), c("34"), group("g2", [["35"], ["36"]]), c("F")]), "34");
+    expect(s.items.map((i) => (i.kind === "variation" ? i.id : i.siteId))).toEqual(["S", "g1", "35", "F"]);
+    expect(courseStructureSchema.safeParse(s).success).toBe(true);
+  });
+
+  it("strips a leg crossing naming the site and keeps the rest of the leg (F4)", () => {
+    const s = course([c("S"), { siteId: "31", leg: { bends: [{ x: 1, y: 2 }], crossing: { controlId: "P" } } }, { siteId: "F", leg: { crossing: { controlId: "P" } } }] as never);
+    const out = pruneSiteFromStructure(s, "P");
+    expect(out.items[1]).toEqual({ siteId: "31", leg: { bends: [{ x: 1, y: 2 }] } });
+    expect(out.items[2]).toEqual({ siteId: "F" });
+  });
+
+  it("drops the site's label offset", () => {
+    const s = { ...course([c("S"), c("31"), c("F")]), labelOffsets: { "31": { dx: 1, dy: 2 }, S: { dx: 0, dy: 1 } } };
+    expect(pruneSiteFromStructure(s, "31").labelOffsets).toEqual({ S: { dx: 0, dy: 1 } });
+  });
+});
+
+describe("pathOfOrders and variantOrders (F7, course-editor.md §12)", () => {
+  const s = course([c("S"), c("31"), group("g", [["32", "33"], []]), c("34"), group("b", [["35"], ["36"]], { loop: true }), c("34"), c("F")]);
+
+  it("variantOrders lists every key with its groups' orders, in materialiseVariants' order", () => {
+    const orders = variantOrders(s);
+    expect(orders.map((o) => o.key)).toEqual(materialiseVariants(s).map((v) => v.key));
+    expect(orders[0]).toEqual({ key: "AAB", orders: { g: ["A"], b: ["A", "B"] } });
+    expect(variantOrders(course([c("S"), c("F")]))).toEqual([]);
+  });
+
+  it("the path of a variant's orders is that variant", () => {
+    for (const { key, orders } of variantOrders(s)) {
+      expect(pathOfOrders(s, orders).items).toEqual(materialiseVariants(s).find((v) => v.key === key)!.items);
+    }
+  });
+
+  it("names where each row comes from: a top-level item, an alternative's item, a loop's anchor visit", () => {
+    const { items, paths } = pathOfOrders(s, { g: ["A"], b: ["B", "A"] });
+    expect(ids(items)).toBe("S 31 32 33 34 36 34 35 34 F");
+    expect(paths).toEqual([
+      { itemIndex: 0 }, { itemIndex: 1 },
+      { itemIndex: 2, alt: { label: "A", index: 0 } }, { itemIndex: 2, alt: { label: "A", index: 1 } },
+      { itemIndex: 3 },
+      { itemIndex: 4, alt: { label: "B", index: 0 } }, { itemIndex: 4, anchorVisit: true }, { itemIndex: 4, alt: { label: "A", index: 0 } },
+      { itemIndex: 5 }, { itemIndex: 6 },
+    ]);
+  });
+
+  it("a group missing from the orders shows its first alternative (a loop: every one in stored order); an empty one adds nothing", () => {
+    expect(ids(pathOfOrders(s).items)).toBe("S 31 32 33 34 35 34 36 34 F");
+    expect(ids(pathOfOrders(s, { g: ["B"] }).items)).toBe("S 31 34 35 34 36 34 F");
+    expect(ids(pathOfOrders(s, { g: ["Z"] }).items)).toBe("S 31 32 33 34 35 34 36 34 F");
+  });
+
+  it("an all-empty group materialises identical paths under distinct keys (F7)", () => {
+    const empty = course([c("S"), c("31"), group("g", [[], []]), c("34"), c("F")]);
+    expect(materialiseVariants(empty).map((v) => [v.key, ids(v.items)])).toEqual([["A", "S 31 34 F"], ["B", "S 31 34 F"]]);
+  });
+
+  it("works on the wire form (numeric site ids)", () => {
+    const wire = { items: [{ siteId: 1 }, { kind: "variation" as const, id: "g", alternatives: [{ label: "A", items: [] }, { label: "B", items: [{ siteId: 2 }] }] }, { siteId: 3 }] };
+    expect(pathOfOrders(wire, { g: ["B"] }).items.map((i) => i.siteId)).toEqual([1, 2, 3]);
+  });
+});
+
+describe("allVariationStructures (F8, course-layer.md §12.7)", () => {
+  it("the spine is the top-level items, the leg across a plain group style none; one branch per alternative anchor → controls → next", () => {
+    const s = course([c("S"), c("31"), group("g", [["32", "33"], []]), c("34", { leg: { bends: [{ x: 1, y: 1 }] } }), c("F")]);
+    const { spine, branches } = allVariationStructures(s);
+    expect(ids(spine)).toBe("S 31 34 F");
+    expect(spine[2].leg).toEqual({ bends: [{ x: 1, y: 1 }], style: "none" });
+    expect(branches.map((b) => [b.groupId, b.label, ids(b.items)])).toEqual([
+      ["g", "A", "31 32 33 34"],
+      // An empty plain alternative is the straight leg anchor → next.
+      ["g", "B", "31 34"],
+    ]);
+    // The anchor is a visit only (no leg); the next keeps its leg.
+    expect(branches[0].items[0]).toEqual({ siteId: "31" });
+    expect(branches[0].items[3].leg).toEqual({ bends: [{ x: 1, y: 1 }] });
+  });
+
+  it("a loop keeps the anchor → next leg on the spine; its petals return to the anchor; an empty petal draws nothing", () => {
+    const s = course([c("S"), c("31"), group("b", [["41"], ["42"], []], { loop: true }), c("32"), c("F")]);
+    const { spine, branches } = allVariationStructures(s);
+    expect(ids(spine)).toBe("S 31 32 F");
+    expect(spine[2].leg).toBeUndefined();
+    expect(branches.map((b) => [b.label, ids(b.items)])).toEqual([["A", "31 41 31"], ["B", "31 42 31"]]);
+  });
+
+  it("a course without groups is its spine alone; the wire form works too", () => {
+    expect(allVariationStructures(course([c("S"), c("31"), c("F")]))).toEqual({ spine: [c("S"), c("31"), c("F")], branches: [] });
+    const wire = { items: [{ siteId: 1 }, { kind: "variation" as const, id: "g", alternatives: [{ label: "A", items: [{ siteId: 2 }] }] }, { siteId: 3 }] };
+    expect(allVariationStructures(wire).branches[0].items.map((i) => i.siteId)).toEqual([1, 2, 3]);
+  });
+});
+
+describe("uniformVariantNumbers (F15, course-layer.md §12.7)", () => {
+  // Every site is a numbered control except the start and the finish.
+  const numbered = (item: { siteId: string }) => item.siteId !== "S" && item.siteId !== "F";
+  const nums = (s: StoredCourseStructure) => {
+    const m = uniformVariantNumbers(s, numbered);
+    return m && Object.fromEntries(m);
+  };
+
+  it("an equal fork numbers both alternatives alike: every visited site has one number", () => {
+    expect(nums(course([c("S"), c("31"), group("g", [["32"], ["33"]]), c("34"), c("F")]))).toEqual({ "31": 1, "32": 2, "33": 2, "34": 3 });
+  });
+
+  it("an unequal fork gives null: the control after it is 3 in one variant and 4 in the other", () => {
+    expect(nums(course([c("S"), c("31"), group("g", [["32"], ["33", "35"]]), c("34"), c("F")]))).toBeNull();
+  });
+
+  it("every loop gives null: the anchor is visited again", () => {
+    expect(nums(course([c("S"), c("31"), group("b", [["41"], ["42"]], { loop: true }), c("32"), c("F")]))).toBeNull();
+  });
+
+  it("a loop with one non-empty petal has no repeated anchor: it numbers as a plain fork", () => {
+    expect(nums(course([c("S"), c("31"), group("b", [["41"], []], { loop: true }), c("32"), c("F")]))).toEqual({ "31": 1, "41": 2, "32": 3 });
+  });
+
+  it("two equal groups continue the numbers across both", () => {
+    const s = course([c("S"), c("31"), group("g", [["a"], ["b"]]), c("34"), group("h", [["c"], ["d"]]), c("35"), c("F")]);
+    expect(nums(s)).toEqual({ "31": 1, a: 2, b: 2, "34": 3, c: 4, d: 4, "35": 5 });
+  });
+
+  it("an unequal second group makes the whole course codes", () => {
+    const s = course([c("S"), c("31"), group("g", [["a"], ["b"]]), c("34"), group("h", [["c"], ["d", "e"]]), c("35"), c("F")]);
+    expect(nums(s)).toBeNull();
+  });
+
+  it("a control shared by both alternatives keeps one number only at the same position", () => {
+    expect(nums(course([c("S"), c("31"), group("g", [["x", "z"], ["y", "z"]]), c("34"), c("F")]))).toEqual({ "31": 1, x: 2, y: 2, z: 3, "34": 4 });
+    expect(nums(course([c("S"), c("31"), group("g", [["z"], ["y", "z"]]), c("34"), c("F")]))).toBeNull();
+  });
+
+  it("items the predicate rejects take no number and are not in the map; an exchange counts as a control", () => {
+    const m = uniformVariantNumbers(course([c("S"), c("31"), group("g", [["x"], ["y"]]), c("F")]), (i) => i.siteId !== "S" && i.siteId !== "F" && i.siteId !== "y");
+    expect(m).toEqual(new Map([["31", 1], ["x", 2]]));
+    const ex = course([c("S"), c("31"), c("X", { role: "exchange" }), c("32"), c("F")]);
+    expect(Object.fromEntries(uniformVariantNumbers(ex, (i) => (i as { role?: string }).role !== "start" && numbered(i))!)).toEqual({ "31": 1, X: 2, "32": 3 });
+  });
+
+  it("a course whose groups are all empty gets its plain numbering; a course without groups too", () => {
+    expect(nums(course([c("S"), c("31"), group("g", [[], []]), c("34"), c("F")]))).toEqual({ "31": 1, "34": 2 });
+    expect(nums(course([c("S"), c("31"), c("32"), c("F")]))).toEqual({ "31": 1, "32": 2 });
+  });
+
+  it("a top-level site visited twice has two numbers: codes", () => {
+    expect(nums(course([c("S"), c("31"), c("32"), c("31"), c("F")]))).toBeNull();
+  });
+
+  it("works on the wire form (numeric site ids)", () => {
+    const wire = { items: [{ siteId: 1 }, { siteId: 2 }, { kind: "variation" as const, id: "g", alternatives: [{ label: "A", items: [{ siteId: 3 }] }, { label: "B", items: [{ siteId: 4 }] }] }, { siteId: 5 }] };
+    expect(uniformVariantNumbers(wire, () => true)).toEqual(new Map([[1, 1], [2, 2], [3, 3], [4, 3], [5, 4]]));
+  });
+});

@@ -65,6 +65,36 @@ reader matches by that id: the on-map sheet, Layout mode's block and the
 print (`resolve-layout.ts`, which matched the control's seq until E3b —
 [bugfix-description-special-anchor.md](bugfix-description-special-anchor.md)).
 
+**Derived rows** (F4; `course-layer.md` §10.3). A leg that runs through a
+crossing point (`LegProps.crossing`) derives a **13.3** row (*Mandatory
+crossing point*), **13.4** (*Mandatory passage*) when the crossing is a
+section, after the control the leg leaves (`null`: after the start) —
+`buildDescriptionSheet({ crossings })`, `mergeDerivedSpecials`. A derived
+row **replaces** a stored special of the same kind at the same anchor
+and keeps its `lengthM` (the stored row's only extra; dropping it would
+lose the setter's entry on the first save after F4); stored rows of
+another kind or at another anchor stay; one derived row per anchor and
+kind (the sheet repeats an anchor's rows at each visit of its control).
+Every reader passes the crossings: print and Layout mode's block and the
+description-sheet PDF (`resolve-layout.ts` `LayoutCourseSource.crossings`
+from `layoutCrossings` → `crossingRowsOf` over the stored structure, the
+root's path for a group) and the on-map sheet (`sheetCrossings` over
+`course.list`'s legs). Decided on the user's standing instruction
+2026-11-07, for review.
+
+A **map exchange** (F5; `course-layer.md` §11) derives a **13.5** row
+(*Map exchange*) after the exchange control, by the same rule
+(`buildDescriptionSheet({ exchanges })`: in place of a stored 13.5 at
+that anchor, keeping its `lengthM`; one per anchor). The exchange rows
+merge before the crossing rows, so after an exchange whose outgoing leg
+has a crossing the sheet reads 13.5, then 13.3. Print, Layout mode's
+block and the description-sheet PDF derive them inside
+`resolveMapLayout` from the course's own control rows (`kind =
+'map_exchange'`, the rows' public id — so a course with a NULL structure
+gets them too); the on-map sheet from the overlays' `exchange` flag
+(`sheetExchanges`). Every part's block carries the whole course with
+its 13.5 rows (answer 2).
+
 The course editor edits the value in Course mode's inspector (*Description
 sheet*: finish variant and length, special rows), one `course.update {
 descriptionInstructions, baseVersion }` per change with the course's
@@ -92,6 +122,10 @@ The backfill UPDATE is regression-tested verbatim in
 - **Description sheet** (`MapViewer`): control-row descriptions arrive via
   the control overlays and take precedence; geometry-embedded descriptions
   remain as a legacy fallback only.
+- **Printed descriptions**: the map page's block and the description
+  sheets (`descriptions.pdf`, F11 — the block tiled on A4 per class) read
+  the control rows' `description` through `resolveMapLayout`'s rows
+  (`docs/course-print.md` §6.2, §6.4).
 - **Sync**: the journal's `control.upserted` payload serializes all
   portable columns generically, so descriptions replicate to other nodes
   with no protocol change.

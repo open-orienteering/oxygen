@@ -380,6 +380,13 @@ export interface ClassInfo {
   freeStart?: boolean;
   /** Class runs without timing. */
   noTiming?: boolean;
+  /**
+   * The class's stage-0 variant pool: its variant child courses' seqs in
+   * key order, `[]` for a plain class (docs/course-controls-and-matching.md
+   * "Forked courses and variants"). The offline readout matches a
+   * mispunched run against these (`findMatchingVariants`).
+   */
+  coursePoolIds?: number[];
 }
 
 /** Club summary */
@@ -422,6 +429,7 @@ export interface ClubDetail {
 // reaching into the readout submodule directly.
 import type { ExpectedPosition } from "./readout.js";
 import type { WireCourseStructure } from "./course/structure.js";
+import type { CourseLegProps } from "./course/types.js";
 export type { ExpectedPosition } from "./readout.js";
 
 /** How a course's controls must be visited. */
@@ -450,6 +458,8 @@ export interface CourseInfo {
    * and Multiple-expanded positions all baked in by the server).
    */
   expectedPositions: ExpectedPosition[];
+  /** A variant child course's key (`AC`), null for a root or a plain course. */
+  variantKey?: string | null;
 }
 
 /** Runner summary (list view) */
@@ -461,6 +471,12 @@ export interface RunnerInfo {
   clubName?: string;
   classId: number;
   className?: string;
+  /**
+   * The runner's own course seq — her variant in a class on a root with
+   * variations (docs/course-controls-and-matching.md "Forked courses and
+   * variants"); 0 = the class's course.
+   */
+  courseId?: number;
   startNo: number;
   startTime: number;
   finishTime: number;
@@ -512,6 +528,10 @@ export interface RunnerDetail {
   bib: string;
   entryDate: number; // YYYYMMDD as int
   transferFlags: number;
+  /** The runner's own course seq (her variant); 0 = the class's course. */
+  courseId: number;
+  /** The variant's key when `courseId` is a materialised variant, else null. */
+  variantKey: string | null;
 }
 
 /** Input for creating/updating a runner */
@@ -577,6 +597,8 @@ export interface StartListEntry {
   startTime: number;
   cardNo: number;
   bib: string;
+  /** The runner's variant key (`AC`) when she runs a variant of a forked course. */
+  variantKey?: string;
   hasPunches?: boolean;
   hasStarted?: boolean;
 }
@@ -958,15 +980,34 @@ export interface CourseSummary {
    */
   labelOffsets: Record<string, { dx: number; dy: number }>;
   /**
-   * Authored leg gaps of the stored structure, keyed `"<fromId>><toId>"`
-   * (public control ids), fractions of the leg; the layer's leg input
-   * (docs/course-layer.md §6.4). Absent keys are cut automatically.
+   * The stored structure's legs whole — `style`, `bends`, `gaps`,
+   * `corridor` — keyed `"<fromId>><toId>"` (public control ids); the
+   * layer's leg input (docs/course-layer.md §5, §10). Absent keys are
+   * plain 705 legs cut automatically.
    */
-  legGaps?: Record<string, { from: number; to: number }[]>;
+  legs?: Record<string, CourseLegProps>;
   /** Public ids of the controls whose number every visit hides (`numberHidden`). */
   hiddenNumbers?: number[];
   /** Concurrency token (decimal HLC), sent back as `baseVersion` (docs/course-layer.md §7). */
   version: string;
+  /**
+   * The root course (seq) this course is a materialised variant of, else
+   * null (docs/course-layer.md §12). A variant is an ordinary course for
+   * every reader and read-only for every writer.
+   */
+  parentCourseId: number | null;
+  /** The variant's key (`"AC"`, `"BA"`) when `parentCourseId` is set, else null. */
+  variantKey: string | null;
+}
+
+/** One materialised variant of a root course (`course.variantList`, docs/course-layer.md §12). */
+export interface CourseVariantSummary {
+  variantKey: string;
+  /** The variant's course seq. */
+  courseId: number;
+  lengthM: number;
+  /** Non-removed runners whose course is this variant (every class on the root). */
+  runnerCount: number;
 }
 
 /** Course detail with class usage */
@@ -1042,6 +1083,11 @@ export interface ClassManageDetail extends ClassSummary {
   courseLength: number;
   controlCount: number;
   runners: { id: number; name: string; status: number }[];
+  /**
+   * The class's variant pool (stage 0) with this class's runners per
+   * variant, key order; empty when the class's course has no variations.
+   */
+  variants: { variantKey: string; courseId: number; runnerCount: number }[];
 }
 
 // --------------- Start draw types ---------------

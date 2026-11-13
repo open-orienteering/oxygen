@@ -8,8 +8,9 @@ export function alignedStack(spec: SymbolLibraryId): DocumentColour[] {
   return paletteStack("iof2024", spec).map((c) => ({ ...c, paletteIds: [c.id.slice(c.id.indexOf(":") + 1)] }));
 }
 
-export const isomContext = (documentFactor = 1): CourseDocumentContext => ({ colours: alignedStack("ISOM2017-2"), libraryId: "ISOM2017-2", documentFactor });
-export const sprintContext = (): CourseDocumentContext => ({ colours: alignedStack("ISSprOM2019-2"), libraryId: "ISSprOM2019-2", documentFactor: 1 });
+/** `documentFactor` 1.5 is the 1:10 000 map (15 000 / 10 000). */
+export const isomContext = (documentFactor = 1): CourseDocumentContext => ({ colours: alignedStack("ISOM2017-2"), libraryId: "ISOM2017-2", documentFactor, mapScale: 15000 / documentFactor });
+export const sprintContext = (): CourseDocumentContext => ({ colours: alignedStack("ISSprOM2019-2"), libraryId: "ISSprOM2019-2", documentFactor: 1, mapScale: 4000 });
 
 export const site = (id: string, kind: CourseSite["kind"], x: number, y: number, code = id): CourseSite => ({ id, code, kind, x, y });
 

@@ -131,6 +131,28 @@ export class PdfWriter {
     return new PdfWriterPage(this, page);
   }
 
+  /**
+   * `count` more pages identical to `source` (course-print.md §4.5, F8's
+   * hand-out stacks): each shares its content streams and resources —
+   * the page is written once, the copies cost a page object each. A copy
+   * repeats the page label and has no outline item. Call it after
+   * `source` is drawn.
+   */
+  copyPage(source: PdfWriterPage, count: number): void {
+    if (this.saved) throw new Error("PdfWriter: page added after save()");
+    const src = source.page;
+    const entry = this.pages.find((p) => p.page === src);
+    const { width, height } = src.getSize();
+    for (let i = 0; i < count; i++) {
+      const page = this.doc.addPage([width, height]);
+      for (const key of ["TrimBox", "Contents", "Resources", "VP"]) {
+        const value = src.node.get(PDFName.of(key));
+        if (value) page.node.set(PDFName.of(key), value);
+      }
+      this.pages.push({ page, label: entry?.label });
+    }
+  }
+
   /** @internal */ async imageFor(page: PDFPage, png: Uint8Array): Promise<PdfImage> {
     // Equal bytes → one image XObject per document (05 §5.10).
     let h = 0x811c9dc5;
@@ -336,7 +358,7 @@ export class PdfWriterPage {
 
   constructor(
     private readonly writer: PdfWriter,
-    private readonly page: PDFPage,
+    /** @internal */ readonly page: PDFPage,
   ) {
     this.resources = {
       font: (ref, glyphIds) => writer.fontFor(page, ref, glyphIds),

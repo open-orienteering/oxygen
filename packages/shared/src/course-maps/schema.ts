@@ -37,7 +37,12 @@ export const mapWindowSchema = z.object({
 });
 export type MapWindow = z.infer<typeof mapWindowSchema>;
 
-export const objectAnchorSchema = z.enum(["page", "map"]);
+/**
+ * Every layout object is anchored to the page. Map-anchored objects
+ * (`"map"`) were moved into `course_objects` by F12 (docs/course-layer.md
+ * §3.6); a write naming that anchor is refused.
+ */
+export const objectAnchorSchema = z.literal("page");
 export type MapObjectAnchor = z.infer<typeof objectAnchorSchema>;
 export const mapFontFamilySchema = z.enum([
   "sans",
@@ -258,6 +263,20 @@ export const courseMapOverridesSchema = z.object({
   description: descriptionBlockSchema.partial().optional(),
 });
 export type CourseMapOverrides = z.infer<typeof courseMapOverridesSchema>;
+
+/**
+ * `course_maps.props` of a `kind = 'setter'` sheet (docs/course-layout.md
+ * §8; 08 §4.6): its number among the scope's setter maps (1 …) and the
+ * control sites of its group (`controls.id` uuids).
+ */
+export const setterSheetPropsSchema = z.object({
+  setter: z.number().int().positive(),
+  controlIds: z.array(z.string()),
+});
+export type SetterSheetProps = z.infer<typeof setterSheetPropsSchema>;
+
+/** Cell size of a setter sheet's description block (08 §4.6 "5 mm description cells"), as the row's `overrides.description`. */
+export const SETTER_DESCRIPTION_CELL_MM = 5;
 
 /**
  * ISOM 2017-2 overprint defaults: purple is the sRGB equivalent of the

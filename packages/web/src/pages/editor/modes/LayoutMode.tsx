@@ -7,7 +7,8 @@
  *
  * - Scope: a sheet (`?sheet=`, or the selected course's first sheet; the
  *   class's first sheet in Class view, docs/course-layout.md §6; the
- *   all-controls sheet in view All) edits its own objects, block, print
+ *   all-controls sheet in view All; a setter sheet opened from the *Setter
+ *   maps* section, F10) edits its own objects, block, print
  *   scale and window centre — the template's objects are drawn locked,
  *   with a link to the template; a template (`?template=`) edits the
  *   template, previewed with the selected course.
@@ -31,13 +32,16 @@ import type { Gesture } from "../tools/bindings";
 import { step as polygonStep } from "../tools/polygon";
 import { constrainDescription } from "../../../lib/map-layout-editor";
 import { useMediaQuery } from "../../../hooks/useMediaQuery";
+import { checkInbound, fetchIfIdle } from "../../../lib/editor/url";
 import type { EditorView } from "../../../lib/editor/state";
 import { LAYOUT_KEYS, layoutBinding, type LayoutChange, type LayoutGesture, type LayoutSelection, type LayoutTarget, type LayoutTool, type PlaceKind } from "../layout/bindings";
 import { LayoutInspector } from "../layout/LayoutInspector";
 import { LayoutRail } from "../layout/LayoutRail";
-import { ClassOverridesSection, TemplateKeySection } from "../layout/KeySections";
+import { ClassOverridesSection, ClubTemplatesSection, TemplateKeySection } from "../layout/KeySections";
+import { NoSheetActions, SheetActions, TemplateActions } from "../layout/SheetActions";
+import { SetterSection } from "../layout/SetterSection";
 import { useCapabilities } from "../../../context/CapabilitiesContext";
-import { geometryOf, layoutRequestOf, pathObject, placeObject, scopeObjects, sheetKeyOf, snapshotOf, withEditable, type EditorSheet, type LayoutSnapshot } from "../layout/model";
+import { geometryOf, layoutRequestOf, pathObject, placeObject, scopeObjects, sheetKeyOf, snapshotOf, templateWriteOf, withEditable, type EditorSheet, type LayoutSnapshot } from "../layout/model";
 
 type Pt = { x: number; y: number };
 
@@ -49,6 +53,8 @@ export interface LayoutModeArgs {
   view: EditorView;
   /** Class view's class (seq): its own sheet is the default target. */
   classSeq: number | null;
+  /** A root's variant the sheet is drawn as (F8; `courseMap.resolveSheet { variantKey }`); null otherwise. */
+  variantKey?: string | null;
   /** One write, through the page's pending count and error line; `undefined` when it failed. */
   run: <T>(op: () => Promise<T>) => Promise<T | undefined>;
   record: (undo: () => Promise<unknown>, redo: () => Promise<unknown>) => unknown;
@@ -67,8 +73,14 @@ export interface LayoutMode {
   open: (target: LayoutTarget | null) => void;
   /** The shown sheet's course (its seq), null for the all-controls sheet and a template. */
   sheetCourse: number | null;
-  /** The status bar's sheet key. */
+  /** The sheet key of the top bar's course-info popover (§2; P2). */
   sheetKey: string | null;
+  /** The shown sheet (its seq) for Export ▾ "This sheet"; null on a template or without a sheet. */
+  sheetSeq: number | null;
+  /** What Layout shows, for the URL's `sheet=` / `template=` (F31); null until it has loaded or with nothing to show. */
+  shown: LayoutTarget | null;
+  /** False while an opened sheet or template is still being checked against the event's (F31). */
+  settled: boolean;
 }
 
 interface WriteTarget { key: string; scope: "sheet" | "template"; sheetSeq: number | null; templateSeq: number }
@@ -81,6 +93,16 @@ export function useLayoutMode(a: LayoutModeArgs): LayoutMode {
   const [target, setTarget] = useState<LayoutTarget | null>(null);
 
   const sheets = trpc.courseMap.list.useQuery(undefined, { enabled: a.enabled });
+  // F31: an opened sheet or template that is not this event's gives way to the default (and leaves the URL);
+  // a miss in the persisted cache waits for a fetch (a sheet made since the last visit, `checkInbound`).
+  const templates = trpc.mapTemplate.list.useQuery(undefined, { enabled: a.enabled && !!target && "template" in target });
+  const targetKnown = !target ? true
+    : "sheet" in target ? checkInbound(!!sheets.data?.some((r) => r.seq === target.sheet), sheets)
+    : checkInbound(!!templates.data?.some((r) => r.seq === target.template), templates);
+  useEffect(() => {
+    if (targetKnown === false) setTarget(null);
+    else if (targetKnown === null && target && a.enabled) fetchIfIdle("sheet" in target ? sheets : templates);
+  }, [targetKnown, target, sheets, templates, a.enabled]);
   const resolvedTarget = useMemo((): LayoutTarget | null => {
     const rows = sheets.data ?? [];
     // An opened course sheet gives way when the top bar picks another course or view All.
@@ -103,8 +125,11 @@ export function useLayoutMode(a: LayoutModeArgs): LayoutMode {
       .sort(byOrder)[0];
     return first ? { sheet: first.seq } : null;
   }, [target, sheets.data, a.view, a.course, a.classSeq]);
-  const input = resolvedTarget
-    ? "sheet" in resolvedTarget ? { seq: resolvedTarget.sheet } : { templateSeq: resolvedTarget.template, ...(a.course ? { courseSeq: a.course.id } : {}) }
+  // An opened target is resolved only once it is known to be the event's (F31: no request for a stale link's sheet).
+  const input = resolvedTarget && targetKnown === true
+    ? "sheet" in resolvedTarget
+      ? { seq: resolvedTarget.sheet, ...(a.variantKey ? { variantKey: a.variantKey } : {}) }
+      : { templateSeq: resolvedTarget.template, ...(a.course ? { courseSeq: a.course.id } : {}) }
     : null;
   const key = input ? JSON.stringify(input) : "";
   const query = trpc.courseMap.resolveSheet.useQuery(input ?? { seq: 1 }, { enabled: a.enabled && !!input });
@@ -164,12 +189,7 @@ export function useLayoutMode(a: LayoutModeArgs): LayoutMode {
         });
         versions.seed("sheet", id, r.version);
       } else {
-        const r = await client.mapTemplate.update.mutate({
-          id, paper: s.paper as "A4", orientation: s.orientation as "portrait",
-          ...(s.paper === "custom" ? { paperWidthMm: s.paperWidthMm, paperHeightMm: s.paperHeightMm } : {}),
-          printScale: s.printScale, settings: { ...s.settings, description: s.description }, objects: s.templateObjects,
-          baseVersion: versions.get("template", id),
-        });
+        const r = await client.mapTemplate.update.mutate({ id, ...templateWriteOf(s), baseVersion: versions.get("template", id) });
         versions.seed("template", id, r.version);
       }
     } catch (e) {
@@ -371,6 +391,8 @@ export function useLayoutMode(a: LayoutModeArgs): LayoutMode {
 
   const rail = <LayoutRail tool={tool} onTool={(w) => onTool(w)} canImage={false} snapping={snapping} onSnapping={() => setSnapping((v) => !v)} />;
 
+  const siblings = (sheets.data ?? []).filter((r) => (data?.sheet ? r.courseId === data.sheet.courseSeq && r.kind === data.sheet.kind && (r.class?.seq ?? null) === data.sheet.classSeq : false));
+
   // The sections keep their height (the inspector scrolls) instead of squeezing into each other.
   const inspector = (
     <div className="shrink-0 flex flex-col">
@@ -380,7 +402,7 @@ export function useLayoutMode(a: LayoutModeArgs): LayoutMode {
       snap={snap}
       geometry={geometry}
       courseName={a.course?.name ?? null}
-      sheets={(sheets.data ?? []).filter((r) => (data?.sheet ? r.courseId === data.sheet.courseSeq && r.kind === data.sheet.kind && (r.class?.seq ?? null) === data.sheet.classSeq : false))}
+      sheets={siblings}
       selection={selection}
       selectedObject={selectedObject}
       editable={scoped.editable}
@@ -395,6 +417,13 @@ export function useLayoutMode(a: LayoutModeArgs): LayoutMode {
       onObject={updateObject}
       onDelete={deleteSelected}
       onPlaceImage={(id) => onTool("image", id)}
+      canEdit={canEdit}
+      templateActions={data ? <TemplateActions template={data.template} canEdit={canEdit} run={run} onOpen={open} /> : null}
+      noSheet={<NoSheetActions view={a.view} course={a.course} canEdit={canEdit} run={run} onOpen={open} />}
+      sheetActions={data?.sheet ? (
+        <SheetActions sheet={data.sheet} templateSeq={data.template.seq} siblings={siblings} courseName={a.course?.name ?? null}
+          canEdit={canEdit} versions={versions} run={run} record={record} onOpen={open} />
+      ) : null}
     />
     {data && (
       <TemplateKeySection template={data.template} sheets={sheets.data ?? []} canEdit={canEdit} run={run} record={record} onOpen={open}
@@ -403,8 +432,14 @@ export function useLayoutMode(a: LayoutModeArgs): LayoutMode {
     {data?.sheet?.kind === "course" && data.sheet.courseSeq !== null && (
       <ClassOverridesSection courseSeq={data.sheet.courseSeq} canEdit={canEdit} run={run} record={record} onOpen={open} />
     )}
+    <SetterSection view={a.view} course={a.course} rows={sheets.data ?? []} openSheet={data?.sheet?.seq ?? null}
+      canEdit={canEdit} versions={versions} run={run} record={record} onOpen={open} />
+    {data && <ClubTemplatesSection template={data.template} canEdit={canEdit} run={run} onOpen={open} />}
     </div>
   );
 
-  return { editor, rail, inspector, courseOnly: data?.sheet?.kind === "course", onKey, open, sheetCourse: data?.sheet?.courseSeq ?? null, sheetKey: snap ? sheetKeyOf(snap) : null };
+  return { editor, rail, inspector, courseOnly: data?.sheet?.kind === "course", onKey, open, sheetCourse: data?.sheet?.courseSeq ?? null, sheetKey: snap ? sheetKeyOf(snap) : null, sheetSeq: data?.sheet?.seq ?? null,
+    // What is being shown, from the target before its resolve lands (no `sheet`-less URL in between).
+    shown: input ? resolvedTarget : null,
+    settled: !a.enabled || targetKnown === true && (!input || !!query.data || query.isError) };
 }

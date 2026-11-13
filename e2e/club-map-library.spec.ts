@@ -80,6 +80,34 @@ test.describe("club map library", () => {
       timeout: 30000,
     });
 
+    // With a map in, the course editor's map-info dialog offers the library again (P6, docs/course-editor.md §2):
+    // its picker lists the map; Escape closes the picker, then the dialog.
+    await page.goto(`/${await currentNameId(page)}/course-editor`);
+    await expect(page.getByTestId("editor-page")).toBeVisible({ timeout: 15000 });
+    await page.getByTestId("editor-map-info").click();
+    const dialog = page.getByTestId("editor-map-info-dialog");
+    await expect(dialog.getByTestId("editor-map-info-name")).toBeVisible();
+    await expect(dialog.getByTestId("editor-map-info-review")).toBeVisible();
+    await dialog.getByTestId("editor-map-info-library").click();
+    await expect(page.getByTestId("club-map-picker").getByRole("button", { name: mapName })).toBeVisible();
+    await page.keyboard.press("Escape");
+    await expect(page.getByTestId("club-map-picker")).toHaveCount(0);
+    await expect(dialog).toBeVisible();
+
+    // A pick from the dialog's picker copies the map again: the picker closes, the dialog stays and its rows follow
+    // the new map row (the hook refreshes `course.mapFileInfo` through the query cache), with no error.
+    const fileRow = dialog.getByTestId("editor-map-info-file");
+    const uploadedBefore = await fileRow.getAttribute("data-uploaded");
+    await dialog.getByTestId("editor-map-info-library").click();
+    await page.getByTestId("club-map-picker").getByRole("button", { name: mapName }).click();
+    await expect(page.getByTestId("club-map-picker")).toHaveCount(0, { timeout: 20000 });
+    await expect(fileRow).not.toHaveAttribute("data-uploaded", uploadedBefore!, { timeout: 20000 });
+    await expect(dialog).toBeVisible();
+    await expect(dialog.getByText(/Map upload failed/)).toHaveCount(0);
+    await page.keyboard.press("Escape");
+    await expect(dialog).toHaveCount(0);
+    await expect(page.getByTestId("map-viewer").first()).toBeVisible({ timeout: 30000 });
+
     await page.goto("/settings");
     await expect(page.getByTestId("library-map-name")).toHaveText(mapName);
     await page.getByTestId("library-map-delete").click();
@@ -197,12 +225,13 @@ test.describe("club map library", () => {
     await expect(notice).toBeVisible({ timeout: 30000 });
     await expect(notice).toContainText(/north lines/i);
 
-    // … and a persistent badge in the course editor's map info row.
+    // … and a persistent badge in the course editor's map-info dialog (P6: the top bar's map icon).
     await page.goto(`/${await currentNameId(page)}/course-editor`);
     await expect(page.getByTestId("editor-page")).toBeVisible({
       timeout: 15000,
     });
-    const badge = page.getByTestId("map-panel").first().getByTestId("north-lines-badge");
+    await page.getByTestId("editor-map-info").click();
+    const badge = page.getByTestId("editor-map-info-dialog").getByTestId("north-lines-badge");
     await expect(badge).toBeVisible({ timeout: 30000 });
     await expect(badge).toHaveAttribute("data-north-lines", "stale");
   });

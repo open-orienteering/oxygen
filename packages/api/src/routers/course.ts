@@ -13,6 +13,7 @@ import {
   type ControlDescription,
   type CourseDescriptionInstructions,
   type CourseOrderMode,
+  type CourseVariantSummary,
   type ExpectedPosition,
   COURSE_ORDER_MODES,
   ControlStatus,
@@ -35,7 +36,8 @@ import {
 import { parseOCDCourseData } from "../ocd-course-parser.js";
 import { isPpenContent, parsePpenCourseData } from "../ppen-course-parser.js";
 import { resolveImportAlignment } from "../course-import-align.js";
-import { publicControlId } from "./control.js";
+import { MARK_SEQ_BASE, allocateStartFinishCode, codeHolder, publicControlId } from "./control.js";
+import { displayCode, isStartOrFinish } from "../control-id.js";
 import { courseChecksFor } from "../course-checks.js";
 import { lastWriter, othersPresent, PRESENCE_TTL_MS, touchPresence } from "../course-presence.js";
 import {
@@ -76,9 +78,21 @@ import {
   carryLegs,
   structureFromWire,
   uuidsOfPublicIds,
+  courseLabelOffsets as labelOffsetsWithVariants,
 } from "../course-structure.js";
+import {
+  assertMaterialisable,
+  assertNotVariant,
+  emitVariantSync,
+  mergeSyncs,
+  rootStructureOf,
+  syncVariants,
+  clearRemovedVariants,
+  syncClassPool,
+  type VariantSync,
+} from "../course-variants.js";
 import { baseVersionSchema } from "../version-conflict.js";
-import { collectImportedObjects, legGapsOfFeatures } from "../course-import-structure.js";
+import { collectImportedObjects, importedLegProps, legBendsOfFeatures, legGapsOfFeatures } from "../course-import-structure.js";
 import { nextServerHlc } from "../serverClock.js";
 import { writeImportedObjects } from "../course-import-objects.js";
 
@@ -421,6 +435,10 @@ async function loadCourseDetail(
     descriptionInstructions: instructionsDto(c.descriptionInstructions),
     labelOffsets: courseLabelOffsets(ccs),
     version: c.version.toString(),
+    parentCourseId: c.parentCourseId
+      ? (await db.course.findUnique({ where: { id: c.parentCourseId }, select: { seq: true } }))?.seq ?? null
+      : null,
+    variantKey: c.variantKey,
     ...(await loadWireStructure(db, eventId, c.id).then(({ structure, stored }) => ({
       structure,
       structureStored: stored,
@@ -482,6 +500,8 @@ export const courseRouter = router({
         .map((c) => [c.id, publicControlId(c)] as const),
     );
     const allControls = await ctx.db.control.findMany({ where: { eventId }, select: { id: true, seq: true, codes: true } });
+    // A variant names its root by seq (docs/course-layer.md §12); a live child has a live root.
+    const seqOfCourse = new Map(courses.map((c) => [c.id, c.seq]));
     const publicIdOf = new Map(allControls.map((c) => [c.id, publicControlId({ codes: c.codes ?? "", seq: c.seq })]));
     return courses.map(
       (c): CourseSummary => {
@@ -508,6 +528,8 @@ export const courseRouter = router({
           labelOffsets: offsetsByCourse.get(c.id) ?? {},
           ...layerProps,
           version: c.version.toString(),
+          parentCourseId: c.parentCourseId ? seqOfCourse.get(c.parentCourseId) ?? null : null,
+          variantKey: c.variantKey,
         };
       },
     );
@@ -524,6 +546,36 @@ export const courseRouter = router({
     .query(async ({ ctx, input }) =>
       loadCourseDetail(ctx.db, ctx.event.id, input.id),
     ),
+
+  /**
+   * The live variants of a root course in key order (docs/course-layer.md
+   * §12): `[]` for a course without groups, and for a variant itself.
+   */
+  variantList: kioskOrCoursesViewProcedure
+    .input(z.object({ courseId: z.number().int() }))
+    .query(async ({ ctx, input }): Promise<CourseVariantSummary[]> => {
+      const c = await getCourseBySeq(ctx.db, ctx.event.id, input.courseId);
+      const rows = await ctx.db.course.findMany({
+        where: { parentCourseId: c.id, removed: false },
+        orderBy: { variantKey: "asc" },
+        select: { id: true, seq: true, variantKey: true, lengthM: true },
+      });
+      // Runners per variant, every class on the root (F6b; F8's copies read it).
+      const counts = rows.length
+        ? await ctx.db.runner.groupBy({
+            by: ["courseId"],
+            where: { courseId: { in: rows.map((r) => r.id) }, removed: false },
+            _count: { _all: true },
+          })
+        : [];
+      const byCourse = new Map(counts.map((g) => [g.courseId, g._count._all]));
+      return rows.map((r) => ({
+        variantKey: r.variantKey ?? "",
+        courseId: r.seq,
+        lengthM: r.lengthM,
+        runnerCount: byCourse.get(r.id) ?? 0,
+      }));
+    }),
 
   create: coursesEditRaceProcedure
     .input(
@@ -669,7 +721,16 @@ export const courseRouter = router({
         await rebuildCourseLengths(tx, ctx.event.id, [created.id], {
           updateLength: true,
         });
+        // A root's clone is a root: its variants are materialised under it,
+        // with the source's label offsets (its variants' included, §12). A
+        // variant's clone is a plain course (no parent).
+        const variants = rootStructureOf(structure)
+          ? await syncVariants(tx, ctx.event.id, created.id, {
+              labelOffsets: await labelOffsetsWithVariants(tx, source.id),
+            })
+          : null;
         const version = await emitCourseUpserted(tx, ctx.event.id, created.id);
+        if (variants) await emitVariantSync(tx, ctx.event.id, variants);
         return { ...created, version };
       });
 
@@ -690,7 +751,7 @@ export const courseRouter = router({
         controlIds: z.array(z.number().int()).optional(),
         /**
          * Assign a specific event start/finish control to this course
-         * (public control id, i.e. seq for code-less start/finish rows).
+         * (public control id: its code, or the seq of a legacy code-less row).
          * `null` clears the assignment back to the lowest-seq default;
          * `undefined` leaves it unchanged.
          */
@@ -703,6 +764,25 @@ export const courseRouter = router({
     )
     .mutation(async ({ ctx, input }) => {
       const c = await getCourseBySeq(ctx.db, ctx.event.id, input.id);
+      // A variant is written through its root; a root's sequence through
+      // its structure — every field below that rewrites the structure from
+      // the columns would flatten its groups (docs/course-layer.md §12).
+      assertNotVariant(c);
+      const isRoot = rootStructureOf(c.structure) !== null;
+      if (
+        isRoot &&
+        (input.controlIds !== undefined ||
+          input.startControlId !== undefined ||
+          input.finishControlId !== undefined ||
+          input.orderMode !== undefined ||
+          input.firstAsStart !== undefined ||
+          input.lastAsFinish !== undefined)
+      ) {
+        throw new TRPCError({
+          code: "PRECONDITION_FAILED",
+          message: "ROOT_HAS_VARIATIONS: a course with variations changes its sequence through course.setStructure",
+        });
+      }
       const data: Record<string, unknown> = {};
       if (input.name !== undefined) data.name = input.name;
       if (input.length !== undefined) data.lengthM = input.length;
@@ -844,7 +924,16 @@ export const courseRouter = router({
             updateLength: input.length === undefined,
           });
         }
-        return emitCourseUpserted(tx, ctx.event.id, c.id);
+        // A root's name, climb, maps and instructions reach its variants.
+        const mirrored =
+          input.name !== undefined ||
+          input.climb !== undefined ||
+          input.numberOfMaps !== undefined ||
+          input.descriptionInstructions !== undefined;
+        const variants = isRoot && mirrored ? await syncVariants(tx, ctx.event.id, c.id) : null;
+        const v = await emitCourseUpserted(tx, ctx.event.id, c.id);
+        if (variants) await emitVariantSync(tx, ctx.event.id, variants);
+        return v;
       });
       return { ok: true, version: version.toString() };
     }),
@@ -853,8 +942,10 @@ export const courseRouter = router({
    * Write a course's structure (docs/course-layer.md §6; 08 §6): the column,
    * its mirror (`course_controls`, start / finish, order mode, label offsets
    * when given), the rebuilt geometry and the `course.upserted` entry, in one
-   * transaction. Site ids are public control ids. Phase 1 writes control
-   * items only — a variation group is refused (slice F).
+   * transaction. Site ids are public control ids. A structure with
+   * variation groups makes the course a root: its variants are
+   * materialised into child courses, pools and journal rows in the same
+   * transaction (§12, `syncVariants`).
    */
   setStructure: coursesEditRaceProcedure
     .input(
@@ -866,14 +957,13 @@ export const courseRouter = router({
     )
     .mutation(async ({ ctx, input }) => {
       const c = await getCourseBySeq(ctx.db, ctx.event.id, input.courseId);
-      if (courseShared.hasVariations(input.structure as unknown as courseShared.StoredCourseStructure)) {
-        throw new TRPCError({
-          code: "PRECONDITION_FAILED",
-          message: "Variation groups arrive in slice F",
-        });
-      }
+      assertNotVariant(c);
+      const controlItems = input.structure.items.flatMap((i) => (i.kind === "variation" ? i.alternatives.flatMap((a) => a.items) : [i]));
+      const itemIds = new Set<number>(controlItems.map((x) => x.siteId));
       const publicIds = new Set<number>([
-        ...input.structure.items.flatMap((i) => (i.kind === "variation" ? [] : [i.siteId])),
+        ...itemIds,
+        // The crossing points the legs run through (course-layer.md §10.3) resolve like sites.
+        ...controlItems.flatMap((x) => (x.leg?.crossing ? [x.leg.crossing.controlId] : [])),
         ...Object.keys(input.structure.labelOffsets ?? {}).map(Number),
       ]);
       const uuidByPublic = await uuidsOfPublicIds(ctx.db, ctx.event.id, publicIds);
@@ -889,20 +979,24 @@ export const courseRouter = router({
         where: { id: { in: [...uuidByPublic.values()] } },
         select: { id: true, kind: true, status: true },
       });
-      const unsupported = rows.find((r) => !["control", "start", "finish"].includes(rowKind(r)));
-      if (unsupported) {
+      // The rules that need the sites (§6.1): crossing / map-issue points are never items, a leg's
+      // crossing names a crossing point, a group never spans a map exchange.
+      const issues = courseShared.structureSiteIssues(stored, new Map(rows.map((r) => [r.id, rowKind(r)])));
+      if (issues.length > 0) {
+        const publicOf = new Map([...uuidByPublic].map(([pid, uuid]) => [uuid, pid]));
         throw new TRPCError({
           code: "PRECONDITION_FAILED",
-          message: "Map exchanges, crossing points and map-issue points arrive in slice F",
+          message: `${issues[0].code}: control ${publicOf.get(issues[0].siteId) ?? issues[0].siteId}`,
         });
       }
+      assertMaterialisable(stored);
       const version = await ctx.db.$transaction(async (tx) => {
         await assertCourseVersion(tx, ctx.event.id, c, input.baseVersion);
         await persistStructure(tx, ctx.event.id, stored);
         // Drop description-sheet specials anchored on a control that left.
         const pruned = pruneDescriptionInstructions(
           instructionsDto(c.descriptionInstructions),
-          new Set([...publicIds]),
+          itemIds,
         );
         if (JSON.stringify(pruned) !== JSON.stringify(c.descriptionInstructions)) {
           await tx.course.update({
@@ -910,9 +1004,14 @@ export const courseRouter = router({
             data: { descriptionInstructions: pruned === null ? PrismaNs.DbNull : (pruned as unknown as PrismaNs.InputJsonValue) },
           });
         }
+        // After the prune: the variants copy the root's instructions.
+        const variants = await syncVariants(tx, ctx.event.id, c.id, { labelOffsets: stored.labelOffsets });
         await rebuildCourseLengths(tx, ctx.event.id, [c.id]);
-        return emitCourseUpserted(tx, ctx.event.id, c.id);
-      });
+        const v = await emitCourseUpserted(tx, ctx.event.id, c.id);
+        await emitVariantSync(tx, ctx.event.id, variants);
+        return v;
+        // Up to MAX_VARIANTS children, each a handful of writes and an entry.
+      }, { timeout: 30_000 });
       // The written course's advisory checks (08 §6; docs/course-layer.md §9): nothing blocks the save.
       return { version: version.toString(), checks: await courseChecksFor(ctx.db, ctx.event.id, c.id) };
     }),
@@ -981,13 +1080,20 @@ export const courseRouter = router({
     )
     .mutation(async ({ ctx, input }) => {
       const course = await getCourseBySeq(ctx.db, ctx.event.id, input.id);
+      assertNotVariant(course);
       const controlUuid = await controlSeqToId(
         ctx.db,
         ctx.event.id,
         input.controlId,
       );
+      // A root's variants hold the controls of its other alternatives (§12).
+      const variantRows = await ctx.db.course.findMany({
+        where: { parentCourseId: course.id, removed: false },
+        orderBy: { variantKey: "asc" },
+        select: { id: true },
+      });
       const onCourse = await ctx.db.courseControl.count({
-        where: { courseId: course.id, controlId: controlUuid },
+        where: { courseId: { in: [course.id, ...variantRows.map((r) => r.id)] }, controlId: controlUuid },
       });
       if (onCourse === 0) {
         throw new TRPCError({
@@ -1004,7 +1110,12 @@ export const courseRouter = router({
           where: { courseId: course.id, controlId: controlUuid },
           data,
         });
-        return emitCourseUpserted(tx, ctx.event.id, course.id);
+        const v = await emitCourseUpserted(tx, ctx.event.id, course.id);
+        for (const row of variantRows) {
+          const n = await tx.courseControl.updateMany({ where: { courseId: row.id, controlId: controlUuid }, data });
+          if (n.count > 0) await emitCourseUpserted(tx, ctx.event.id, row.id);
+        }
+        return v;
       });
       return { ok: true as const, version: version.toString() };
     }),
@@ -1023,8 +1134,21 @@ export const courseRouter = router({
     .mutation(async ({ ctx, input }) => {
       const rows = await ctx.db.course.findMany({
         where: { eventId: ctx.event.id, seq: { in: input.ids } },
-        select: { id: true },
+        select: { id: true, parentCourseId: true, structure: true },
       });
+      // As `update` (docs/course-layer.md §12): no variant; no root's
+      // structure rewritten from the columns. The whole call is refused.
+      for (const r of rows) assertNotVariant(r);
+      const roots = rows.filter((r) => rootStructureOf(r.structure) !== null).map((r) => r.id);
+      if (
+        roots.length > 0 &&
+        (input.orderMode !== undefined || input.firstAsStart !== undefined || input.lastAsFinish !== undefined)
+      ) {
+        throw new TRPCError({
+          code: "PRECONDITION_FAILED",
+          message: "ROOT_HAS_VARIATIONS: a course with variations changes its sequence through course.setStructure",
+        });
+      }
       const data: Record<string, unknown> = {};
       if (input.numberOfMaps !== undefined)
         data.numberOfMaps = input.numberOfMaps;
@@ -1057,9 +1181,12 @@ export const courseRouter = router({
             { updateLength: false },
           );
         }
+        const syncs: VariantSync[] = [];
+        for (const id of roots) syncs.push(await syncVariants(tx, ctx.event.id, id));
         for (const r of rows) {
           await emitCourseUpserted(tx, ctx.event.id, r.id);
         }
+        await emitVariantSync(tx, ctx.event.id, mergeSyncs(syncs));
       });
       return { ok: true as const, count: rows.length };
     }),
@@ -1068,13 +1195,17 @@ export const courseRouter = router({
     .input(z.object({ id: z.number().int() }))
     .mutation(async ({ ctx, input }) => {
       const c = await getCourseBySeq(ctx.db, ctx.event.id, input.id);
+      assertNotVariant(c);
       await ctx.db.$transaction(async (tx) => {
         await tx.course.update({
           where: { id: c.id },
           data: { removed: true },
         });
+        // A removed root takes its variants (§12).
+        const variants = await syncVariants(tx, ctx.event.id, c.id);
         // Deletes are upserts with removed: true on the wire.
         await emitCourseUpserted(tx, ctx.event.id, c.id);
+        await emitVariantSync(tx, ctx.event.id, variants);
       });
       return { ok: true };
     }),
@@ -1185,6 +1316,7 @@ export const courseRouter = router({
         ypos: true,
         description: true,
         circleGaps: true,
+        kind: true,
       },
     });
 
@@ -1230,7 +1362,8 @@ export const courseRouter = router({
           // map→Controls-page click navigation resolve correctly.
           id: publicControlId({ codes: c.codes ?? "", seq: c.seq }),
           name: c.name,
-          code: (c.codes ?? "").split(";")[0] || c.name,
+          // A start / finish by its name (F32, course-layer.md §6.3).
+          code: displayCode(c),
           status: controlStatusToValue(c.status),
           lat,
           lng,
@@ -1238,6 +1371,8 @@ export const courseRouter = router({
           mapY: c.ypos,
           description: (c.description as ControlDescription | null) ?? null,
           circleGaps: (c.circleGaps as courseShared.AngularGap[] | null) ?? [],
+          // The site's kind (docs/course-layer.md §6.3): crossing / map-issue points and exchanges are drawn by it.
+          kind: rowKind(c),
         };
       });
   }),
@@ -1538,12 +1673,14 @@ export const courseRouter = router({
 
       const dbControls = await ctx.db.control.findMany({
         where: { eventId: ctx.event.id, removed: false },
-        select: { id: true, name: true, codes: true },
+        select: { id: true, name: true, codes: true, kind: true, status: true },
       });
       const existingControlIds = new Set(
         dbControls.map((c) => c.name.toLowerCase()).filter(Boolean),
       );
       for (const c of dbControls) {
+        // A start / finish is matched by its name, never by its unit code (F32).
+        if (isStartOrFinish(c)) continue;
         for (const code of (c.codes ?? "").split(";").filter(Boolean)) {
           existingControlIds.add(code.toLowerCase());
         }
@@ -1579,6 +1716,9 @@ export const courseRouter = router({
           .map((a) => a.className);
         return {
           name: c.name,
+          // IOF `CourseFamily` (row F9): a variant of another tool's forked
+          // course; it imports as a separate linear course, no group inferred.
+          family: c.family ?? null,
           length: c.length,
           climb: c.climb,
           controlCount,
@@ -1702,6 +1842,29 @@ export const courseRouter = router({
       let coursesUpdated = 0;
       let classesAssigned = 0;
 
+      // A file control whose code a live start / finish holds would share its
+      // public id (F32, course-layer.md §6.4): refused before anything is written.
+      {
+        const held = new Map<number, string>();
+        const ends = await ctx.db.control.findMany({
+          where: { eventId, removed: false, OR: [{ kind: { in: ["start", "finish"] } }, { status: { in: ["start", "finish"] } }] },
+          select: { name: true, codes: true },
+        });
+        for (const e of ends) {
+          for (const part of e.codes.split(";")) {
+            const n = parseInt(part.trim(), 10);
+            if (Number.isFinite(n) && n > 0) held.set(n, e.name);
+          }
+        }
+        for (const pc of parsed.controls) {
+          if (pc.type !== "Control") continue;
+          const n = parseInt(pc.id, 10);
+          if (String(n) === pc.id.trim() && held.has(n)) {
+            throw new TRPCError({ code: "BAD_REQUEST", message: `Control code ${n} is held by ${held.get(n)}` });
+          }
+        }
+      }
+
       // ── 0. Optional wipe ────────────────────────────────────
       if (input.replaceAll) {
         // Soft-delete existing courses + controls; clear class→course
@@ -1727,12 +1890,18 @@ export const courseRouter = router({
           id: true,
           name: true,
           codes: true,
+          seq: true,
           removed: true,
+          kind: true,
+          status: true,
         },
       });
       const controlByKey = new Map<string, (typeof existingControls)[number]>();
       for (const c of existingControls) {
         if (c.name) controlByKey.set(c.name.toLowerCase(), c);
+        // A start / finish is keyed by its name only: its unit code (F32) is
+        // never a file's control id.
+        if (isStartOrFinish(c)) continue;
         for (const code of (c.codes ?? "").split(";").filter(Boolean)) {
           if (!controlByKey.has(code.toLowerCase())) {
             controlByKey.set(code.toLowerCase(), c);
@@ -1742,8 +1911,45 @@ export const courseRouter = router({
 
       /** Map: parsed control id (e.g. "31", "STA1") → PG control UUID. */
       const controlIdMap = new Map<string, string>();
+      /** The parsed ids that are crossing points (row F9): a leg's `crossing` may name only these. */
+      const crossingIds = new Set<string>();
 
       for (const pc of parsed.controls) {
+        // An IOF crossing point is a code-less `crossing_point` site named by
+        // its id ("Passeringspunkt 1" from an Oxygen export), matched on
+        // re-import by name among the crossing points only, and created with a
+        // seq above MARK_SEQ_BASE as `control.create` allocates it
+        // (course-layer.md §6.3, §10.3; row F9).
+        if (pc.type === "CrossingPoint") {
+          const existing = existingControls.find((c) => c.kind === "crossing_point" && c.name.toLowerCase() === pc.id.toLowerCase());
+          // WGS84 as for a control: a real pair overwrites, none keeps the stored one (null on create).
+          const hasWgs = !skipPositions && (pc.lat !== 0 || pc.lng !== 0);
+          const data = {
+            name: pc.id,
+            codes: "",
+            status: valueToControlStatus(0),
+            ...(skipPositions ? {} : { xpos: pc.mapX, ypos: pc.mapY }),
+            ...(hasWgs ? { lat: pc.lat, lng: pc.lng } : {}),
+            removed: false,
+          };
+          if (existing) {
+            await ctx.db.control.update({ where: { id: existing.id }, data });
+            controlIdMap.set(pc.id, existing.id);
+            if (existing.removed) controlsCreated++;
+            else controlsUpdated++;
+          } else {
+            const top = await ctx.db.control.aggregate({ where: { eventId, seq: { gt: MARK_SEQ_BASE } }, _max: { seq: true } });
+            const created = await ctx.db.control.create({
+              data: { eventId, seq: Math.max(MARK_SEQ_BASE, top._max.seq ?? 0) + 1, kind: "crossing_point", ...data },
+              select: { id: true },
+            });
+            controlIdMap.set(pc.id, created.id);
+            controlsCreated++;
+          }
+          crossingIds.add(pc.id);
+          continue;
+        }
+
         const status =
           pc.type === "Start"
             ? valueToControlStatus(4)
@@ -1754,7 +1960,7 @@ export const courseRouter = router({
         // MeOS-style names for start/finish controls; regular controls
         // store the code in `codes` and have an empty name.
         let name: string;
-        let codes: string;
+        let codes: string; // a control's; a start / finish's is allocated or kept (F32)
         const suffix = pc.id.match(/(\d+)\s*$/)?.[1] ?? "1";
         if (pc.type === "Start") {
           name = parseInt(suffix, 10) > 1 ? `Start ${suffix}` : "Start 1";
@@ -1797,15 +2003,19 @@ export const courseRouter = router({
         //      regular controls whose `codes` we keyed by, and also for
         //      OCD start/finish ids that happen to round-trip.
         //   2. By the synthesized display name (e.g. "Start 1", "Mål 1") —
-        //      this is how start/finish controls survive a re-import,
-        //      because they're stored with name = "Start N"/"Mål N" and
-        //      empty `codes`, so step 1 never finds them on round two.
-        const matched =
+        //      this is how start/finish controls survive a re-import:
+        //      they're keyed by name = "Start N"/"Mål N" only (their unit
+        //      code, F32, is not a key), so step 1 never finds them.
+        const byKey =
           controlByKey.get(pc.id.toLowerCase()) ??
           (name ? controlByKey.get(name.toLowerCase()) : undefined);
+        // A crossing point is never rewritten into a control (its name may equal a code).
+        const matched = byKey?.kind === "crossing_point" ? undefined : byKey;
+        const isEnd = pc.type === "Start" || pc.type === "Finish";
         const baseData = {
           name,
-          codes,
+          // A start / finish keeps the code it has; a new one takes one below (F32).
+          ...(isEnd ? {} : { codes }),
           status,
           // A position-less import leaves existing coordinates alone and
           // creates new controls unplaced (0, 0) for the course editor.
@@ -1834,31 +2044,54 @@ export const courseRouter = router({
             data.lat = nextLat;
             data.lng = nextLng;
           }
-          await ctx.db.control.update({
-            where: { id: matched.id },
-            data,
-          });
+          // A removed start / finish the import restores keeps its code
+          // unless a live row has since taken its public id: then it takes
+          // a new one, as on create (F32, course-layer.md §6.4).
+          if (isEnd && matched.removed && (await codeHolder(ctx.db, eventId, publicControlId(matched), matched.id))) {
+            await ctx.db.$transaction(async (tx) =>
+              tx.control.update({
+                where: { id: matched.id },
+                data: { ...data, codes: String(await allocateStartFinishCode(tx, eventId)) },
+              }),
+            );
+          } else {
+            await ctx.db.control.update({
+              where: { id: matched.id },
+              data,
+            });
+          }
           controlIdMap.set(pc.id, matched.id);
           if (matched.removed) controlsCreated++;
           else controlsUpdated++;
         } else {
-          const created = await ctx.db.control.create({
-            data: {
-              eventId,
-              ...baseData,
-              lat: nextLat,
-              lng: nextLng,
-            },
-            select: { id: true },
-          });
+          const data = {
+            eventId,
+            ...baseData,
+            // The exchange marker of an Oxygen IOF export (row F9) makes a
+            // new site a map exchange; an existing site keeps its kind.
+            ...(pc.mapExchange && pc.type === "Control" ? { kind: "map_exchange" as const } : {}),
+            lat: nextLat,
+            lng: nextLng,
+          };
+          // A new start / finish takes the lowest free code in 3–30, as
+          // `control.create` (F32, course-layer.md §6.3 / §6.4).
+          const created = isEnd
+            ? await ctx.db.$transaction(async (tx) =>
+                tx.control.create({
+                  data: { ...data, codes: String(await allocateStartFinishCode(tx, eventId)) },
+                  select: { id: true },
+                }),
+              )
+            : await ctx.db.control.create({ data: { ...data, codes }, select: { id: true } });
           controlIdMap.set(pc.id, created.id);
           controlsCreated++;
         }
       }
 
       // ── 2. Courses ──────────────────────────────────────────
+      // A materialised variant is never an import target: its root is (§12).
       const existingCourses = await ctx.db.course.findMany({
-        where: { eventId },
+        where: { eventId, parentCourseId: null },
         select: { id: true, name: true, removed: true },
       });
       const courseByName = new Map<string, (typeof existingCourses)[number]>();
@@ -1870,6 +2103,8 @@ export const courseRouter = router({
 
       /** Map: parsed course name → PG course UUID. */
       const courseIdMap = new Map<string, string>();
+      /** The variants the import's linear courses dropped (journaled with the entry). */
+      const variantSyncs: VariantSync[] = [];
       /** Parsed control id → position (map mm, as the geometry's), for the leg gaps. */
       const positionOfCode = new Map(parsed.controls.map((c) => [c.id, { x: c.mapX, y: c.mapY }]));
 
@@ -1963,20 +2198,36 @@ export const courseRouter = router({
 
         // The structure, and through it the column mirror: start / finish
         // sites explicit as the file names them, `course_controls`, the
-        // leg gaps the file's 705 pieces leave (course-layer.md §6.4).
+        // leg gaps the file's 705 pieces leave, the bends of a Purple Pen
+        // `<leg>`, an IOF taped route and crossing point (course-layer.md
+        // §6.4; row F9). A free-order course has no legs.
         const gapsByLeg = skipPositions || carryGaps || !geom ? new Map<string, courseShared.FractionGap[]>() : legGapsOfFeatures(geom, (code) => positionOfCode.get(code));
+        const bendsByLeg = skipPositions || !geom ? new Map<string, { x: number; y: number }[]>() : legBendsOfFeatures(geom);
+        const ordered = (pc.orderMode ?? "ordered") === "ordered";
         const items: courseShared.StoredControlItem[] = [];
         let prevCode: string | null = null;
         for (const cc of pc.controls) {
           const siteId = controlIdMap.get(cc.controlId);
-          if (!siteId) continue;
-          const gaps = prevCode === null ? undefined : gapsByLeg.get(`${prevCode}>${cc.controlId}`);
-          items.push({ siteId, ...(gaps ? { leg: { gaps } } : {}) });
+          // A crossing point is never an item (course-layer.md §10.3).
+          if (!siteId || crossingIds.has(cc.controlId)) continue;
+          const key = `${prevCode}>${cc.controlId}`;
+          const crossingSite = cc.crossing && crossingIds.has(cc.crossing.controlId) ? controlIdMap.get(cc.crossing.controlId) : undefined;
+          const leg = prevCode === null || !ordered
+            ? undefined
+            : importedLegProps({
+                gaps: gapsByLeg.get(key),
+                bends: bendsByLeg.get(key),
+                style: cc.style,
+                crossing: crossingSite ? { controlId: crossingSite, section: cc.crossing?.section } : undefined,
+              });
+          items.push({ siteId, ...(leg ? { leg } : {}) });
           prevCode = cc.controlId;
         }
         const linear = courseShared.linearStructure(courseUuid, items, { orderMode: pc.orderMode ?? "ordered" }) as courseShared.StoredCourseStructure;
         // A gap-less re-import: the stored legs where the leg still runs between the same sites.
         await persistStructure(ctx.db, eventId, carryGaps ? carryLegs(prevStructure, linear) : linear);
+        // An imported course is linear: a root's variants go (§12).
+        variantSyncs.push(await syncVariants(ctx.db, eventId, courseUuid));
       }
 
       // The file's course-level lines and areas (707 / 708 / 709 / 711) are
@@ -2019,6 +2270,9 @@ export const courseRouter = router({
               where: { id: cls.id },
               data: { courseId: courseUuid },
             });
+            // The class's variant pool follows its course (§12.4), and its
+            // runners the pool (F6b).
+            variantSyncs.push(await syncClassPool(ctx.db, cls.id));
             classesAssigned++;
           }
         }
@@ -2049,11 +2303,19 @@ export const courseRouter = router({
         where: { eventId, removed: false },
         select: { id: true },
       });
+      // The wipe soft-deleted variants behind `syncVariants`' back: their
+      // runners and pool rows are cleared here (§12.5).
+      variantSyncs.push(await clearRemovedVariants(ctx.db, eventId));
+      const variantSync = mergeSyncs(variantSyncs);
       const activeCourses = await ctx.db.course.findMany({
         where: { eventId, removed: false },
+        // Roots before their variants: a peer applies the parent row first.
+        orderBy: [{ parentCourseId: { sort: "asc", nulls: "first" } }, { seq: "asc" }],
         select: { id: true },
       });
-      const touchedClassIds = new Set<string>();
+      const activeIds = new Set(activeCourses.map((c) => c.id));
+      const droppedVariants = variantSync.childIds.filter((id) => !activeIds.has(id));
+      const touchedClassIds = new Set<string>(variantSync.classIds);
       if (input.classMapping) {
         const assigned = await ctx.db.class.findMany({
           where: { eventId, removed: false, courseId: { not: null } },
@@ -2071,13 +2333,16 @@ export const courseRouter = router({
             activeControls.map((c) => controlUpsertPayload(ctx.db, c.id)),
           ),
           courses: await Promise.all(
-            activeCourses.map((c) => courseUpsertPayload(ctx.db, c.id)),
+            [...activeCourses.map((c) => c.id), ...droppedVariants].map((id) => courseUpsertPayload(ctx.db, id)),
           ),
           classes: await Promise.all(
             [...touchedClassIds].map((id) => classUpsertPayload(ctx.db, id)),
           ),
         },
       });
+      // The runners whose variant the import dropped or dealt (the courses
+      // and pools travel in the entry above).
+      await emitVariantSync(ctx.db, eventId, { childIds: [], classIds: [], runners: variantSync.runners });
 
       return {
         controlsCreated,

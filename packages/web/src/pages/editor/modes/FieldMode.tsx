@@ -12,10 +12,13 @@
  * - `OfflineNotice` — offline, Field mode views only (§9 "Offline").
  */
 
-import { useState, type ReactNode } from "react";
+import { useMemo, useState, type ReactNode } from "react";
 import { Link } from "react-router-dom";
 import { useTranslation } from "react-i18next";
-import { NUDGE_FINE_MM, metreStepMm, nudge, type FieldRow, type NudgeDir } from "../../../lib/editor/field";
+import { displayCode } from "@oxygen/shared";
+import { trpc } from "../../../lib/trpc";
+import { NUDGE_FINE_MM, fieldRows, metreStepMm, nudge, type FieldRow, type NudgeDir } from "../../../lib/editor/field";
+import { allSetterSheets, setterRowInputs } from "../../../lib/editor/setter-maps";
 import type { EditorMode, EditorView } from "../../../lib/editor/state";
 import { AREA_CHOICES, type AreaChoice } from "../tools/rail";
 
@@ -35,19 +38,77 @@ export function FixStatus({ accuracyM, error, watching }: { accuracyM: number | 
 
 const ROW = "min-h-11 w-full flex items-center gap-2 px-2.5 text-left";
 
-/** The control list (§9): course order, distance and bearing from the fix, check-off. */
-export function FieldSection({ rows, selectedControlId, onSelectRow, onCheck, canCheck, hasCourse }: {
+/**
+ * The control list (§9): course order, distance and bearing from the fix,
+ * check-off. Above it the setter-map picker (F10; 08 §5.5 "the selected
+ * course or setter map"): with a setter map picked the list is that
+ * setter's controls in the sheet's code order — the same rows, distances
+ * and check-offs — with its own "Setter n · k/m checked" line; *None* is
+ * the course's list. The pick is this list's; the course stays selected.
+ */
+export function FieldSection({ rows, selectedControlId, onSelectRow, onCheck, canCheck, hasCourse, fix = null, mapScale = null }: {
   rows: FieldRow[];
   selectedControlId: number | null;
   onSelectRow: (id: number) => void;
   onCheck: ((id: number, checked: boolean) => void) | null;
   canCheck: boolean;
   hasCourse: boolean;
+  /** The fix on paper and the map's scale, for a setter's rows (the course's come computed). */
+  fix?: Pt | null;
+  mapScale?: number | null;
 }) {
   const { t } = useTranslation("editor");
-  if (!hasCourse) return <p className="px-2.5 py-2 text-slate-400" data-testid="editor-field-no-course">{t("fieldNoCourse")}</p>;
+  const maps = trpc.courseMap.list.useQuery(undefined, { staleTime: 30_000 });
+  const controls = trpc.control.list.useQuery();
+  const coords = trpc.course.controlCoordinates.useQuery(undefined, { staleTime: Number.POSITIVE_INFINITY });
+  const [setterSeq, setSetterSeq] = useState<number | null>(null);
+  const setters = useMemo(() => allSetterSheets(maps.data ?? []), [maps.data]);
+  const picked = setters.find((s) => s.seq === setterSeq) ?? null;
+  const setterRows = useMemo(() => {
+    if (!picked?.setter) return null;
+    const pts = new Map((coords.data ?? []).map((c) => [c.id, c.mapX !== 0 || c.mapY !== 0 ? { x: c.mapX, y: c.mapY } : null]));
+    const info = new Map((controls.data ?? []).map((c) => [c.id, { code: displayCode({ codes: c.codes, name: c.name, seq: c.id, kind: c.kind }), kind: c.kind, pt: pts.get(c.id) ?? null }]));
+    const checked = new Set((controls.data ?? []).filter((c) => c.checkedAt).map((c) => c.id));
+    return fieldRows(setterRowInputs(picked.setter.controls, info), fix, mapScale, checked);
+  }, [picked, coords.data, controls.data, fix, mapScale]);
+  const picker = setters.length > 0 && (
+    <div className="px-2.5 py-1 flex items-center gap-2">
+      <label className="flex items-center gap-1.5 text-slate-500 min-w-0">
+        {t("fieldSetterPicker")}
+        <select data-testid="editor-field-setter-picker" value={picked?.seq ?? ""}
+          onChange={(e) => setSetterSeq(e.target.value === "" ? null : Number(e.target.value))}
+          className="min-w-0 max-w-[10rem] min-h-9 text-xs border border-slate-200 rounded-md px-1.5 bg-white">
+          <option value="">{t("fieldSetterNone")}</option>
+          {setters.map((s) => <option key={s.seq} value={s.seq}>{s.name}</option>)}
+        </select>
+      </label>
+      {picked?.setter && setterRows && (
+        <span data-testid="editor-field-setter-kpi" className="ml-auto shrink-0 text-emerald-700">
+          {t("fieldSetterKpi", { n: picked.setter.index, checked: setterRows.filter((r) => r.kind === "control" && r.checked).length, count: setterRows.filter((r) => r.kind === "control").length })}
+        </span>
+      )}
+    </div>
+  );
+  if (!setterRows && !hasCourse) return <>{picker}<p className="px-2.5 py-2 text-slate-400" data-testid="editor-field-no-course">{t("fieldNoCourse")}</p></>;
   return (
-    <ul data-testid="editor-field-list" className="divide-y divide-slate-100">
+    <>
+    {picker}
+    <FieldList rows={setterRows ?? rows} selectedControlId={selectedControlId} onSelectRow={onSelectRow} onCheck={onCheck} canCheck={canCheck} setter={picked?.seq ?? null} />
+    </>
+  );
+}
+
+function FieldList({ rows, selectedControlId, onSelectRow, onCheck, canCheck, setter }: {
+  rows: FieldRow[];
+  selectedControlId: number | null;
+  onSelectRow: (id: number) => void;
+  onCheck: ((id: number, checked: boolean) => void) | null;
+  canCheck: boolean;
+  setter: number | null;
+}) {
+  const { t } = useTranslation("editor");
+  return (
+    <ul data-testid="editor-field-list" data-setter={setter ?? ""} className="divide-y divide-slate-100">
       {rows.map((r, i) => (
         <li key={`${r.id}-${i}`} data-testid="editor-field-row" data-control-id={r.id} data-kind={r.kind}
           data-distance-m={r.distanceM ?? ""} data-bearing-deg={r.bearingDeg ?? ""} data-checked={r.checked ? "true" : "false"}
@@ -197,11 +258,13 @@ export function FieldTopBar({ backTo, courses, selectedCourseId, onSelectCourse,
 }
 
 /** The overflow menu's body: what the desktop top bar holds beside the mode switch. */
-export function OverflowMenu({ view, onView, canUndo, canRedo, onUndo, onRedo, hideOthers, canHideOthers, onToggleHideOthers, cutsEnabled, cutsBusy, onToggleCuts }: {
+export function OverflowMenu({ view, onView, canUndo, canRedo, onUndo, onRedo, hideOthers, canHideOthers, onToggleHideOthers, cutsEnabled, cutsBusy, onToggleCuts, placementLoupe, onTogglePlacementLoupe }: {
   view: EditorView; onView: (v: EditorView) => void;
   canUndo: boolean; canRedo: boolean; onUndo: () => void; onRedo: () => void;
   hideOthers: boolean; canHideOthers: boolean; onToggleHideOthers: () => void;
   cutsEnabled: boolean; cutsBusy: boolean; onToggleCuts: () => void;
+  /** F27: the placement loupe toggle — the loupe above the pin-drop crosshair. */
+  placementLoupe: boolean; onTogglePlacementLoupe: () => void;
 }) {
   const { t } = useTranslation("editor");
   const { t: tc } = useTranslation("courses");
@@ -226,6 +289,7 @@ export function OverflowMenu({ view, onView, canUndo, canRedo, onUndo, onRedo, h
           {item("editor-view-all", t("viewAll"), () => onView("all"), { pressed: view === "all" })}
           {item("editor-hide-others", tc("editor.hideOtherControls"), onToggleHideOthers, { disabled: !canHideOthers, pressed: hideOthers })}
           {item("editor-toggle-cuts", tc("editor.toggleCuts"), onToggleCuts, { disabled: cutsBusy, pressed: cutsEnabled })}
+          {item("editor-placement-loupe", tc("editor.placementLoupe"), onTogglePlacementLoupe, { pressed: placementLoupe })}
         </div>
       )}
     </div>

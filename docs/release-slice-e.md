@@ -253,6 +253,23 @@ gcloud run jobs execute "${SERVICE}-migrate" --project="$PROJECT_ID" --region="$
 ./deploy.sh v0.6.1     # redeploys the migrate job with its usual command
 ```
 
+### Club production, 2026-11-07
+
+v0.6.0 (`2b24b1c`, PR #127) deployed as revision `oxygen-00052-ms4`: both
+migrations applied; the survey on v0.6.0 showed all 14 live events
+`vector`, the `map.*` flags gone (before the flip only
+`map.editor.vector = true` was set), every must-be-zero list empty. No
+hand-set tile env vars on the revision. E-gate checked by the user.
+
+v0.6.1 (`b76a508`, PRs #128 and #133) deployed as revision
+`oxygen-00053-bzl` after the on-demand backup `1794051819217` ("before
+v0.6.1 (E5 drops)"). The first `main` build at E5 alone (`4d9b791`, #128)
+pushed a healthy image but failed the publish job's showcase smoke: the
+fixture at E5 still inserted the dropped columns. #133 brought in E-demo
+(#122, scripts / fixture / docs only), which regenerated it; v0.6.1 is
+tagged on that merge. After the deploy: the dropped tables and columns
+are gone, all 14 live events keep their document, the database is 325 MB.
+
 ### 2.3 Smoke
 
 - An event's map draws (dashboard, course editor desktop and phone).

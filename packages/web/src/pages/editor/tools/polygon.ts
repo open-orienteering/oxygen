@@ -1,14 +1,16 @@
 /**
  * The area tools' drawing flow (docs/course-editor.md §6.4; 08 §5.3
  * "Area tools"): click per vertex, drag a vertex to adjust before closing,
- * close by double-click or a click on the first vertex, `Esc` cancels; a
- * click-drag makes a curve vertex with symmetric handles (`pull-handles`).
+ * close by double-click or a click on the first vertex, `Esc` cancels.
  * Line kinds (out-of-bounds line, marked route) finish by double-click or
- * `Enter` instead of closing. Alt at the press (`smooth`) places a smooth
- * vertex whose handles follow its neighbours (`smoothHandles`), settled
- * after every step; the flag is drawing state only and `done` carries
- * stored vertices without it. Pure: the page creates the object when
- * `step` reports `done`.
+ * `Enter` instead of closing. Smooth by default, Alt for sharp (F18): a
+ * placed vertex is smooth, its handles following its neighbours
+ * (`smoothHandles`), settled after every step and wrapped at close (an open
+ * end is a corner); Alt at the press (`corner`) places a corner; a
+ * click-drag pulls symmetric handles by hand (`pull-handles`, `pulled`).
+ * The flags are drawing state only and `done` carries stored vertices
+ * without them; kinds without curves (a filter region) are polygons. Pure:
+ * the page creates the object when `step` reports `done`.
  */
 
 import { constrain45, smoothHandles, symmetricHandles, vertexRule, type Vertex } from "../../../lib/editor/geometry-edit";
@@ -22,8 +24,11 @@ export type AreaKind = "oob_area" | "oob_line" | "whiteout" | "filter_region" | 
 export const isClosedKind = (k: AreaKind): boolean => k !== "oob_line" && k !== "marked_route";
 export const minVertices = (k: AreaKind): number => (isClosedKind(k) ? 3 : 2);
 
-/** A vertex while drawing: a stored `Vertex` plus the drawing-only smooth flag (never stored). */
-export type DrawVertex = Vertex & { smooth?: true };
+/**
+ * A vertex while drawing: a stored `Vertex` plus the drawing-only flags (never stored) — `corner` (Alt at the
+ * press), `pulled` (its handles pulled by a click-drag). Neither: smooth.
+ */
+export type DrawVertex = Vertex & { corner?: true; pulled?: true };
 
 export interface PolygonState {
   kind: AreaKind;
@@ -33,33 +38,37 @@ export interface PolygonState {
 export type PolygonEvent =
   | {
     type: "click"; pt: Pt; /** The click is within the snap distance of the first vertex. */ onFirst: boolean;
-    /** Alt held: the vertex placed (or, closing, the first vertex) is smooth; kinds without curves ignore it. */ smooth?: boolean;
+    /** Alt held: the vertex placed (or, closing, the first vertex) is a corner; kinds without curves ignore it. */ corner?: boolean;
   }
-  | { type: "double-click"; pt: Pt; /** Alt held: the double-click's vertex is smooth. */ smooth?: boolean }
+  | { type: "double-click"; pt: Pt; /** Alt held: the double-click's vertex is a corner. */ corner?: boolean }
   | { type: "move-vertex"; index: number; pt: Pt }
-  /** Click-drag: symmetric handles on vertex `index` — `hOut` = `vec`, `hIn` its negation; `shift` turns it to 45°. */
+  /**
+   * Click-drag: symmetric handles on vertex `index` — `hOut` = `vec`, `hIn` its negation; `shift` turns it to 45°. A
+   * zero `vec` (the drag back within 3 px) returns the vertex to its press's kind.
+   */
   | { type: "pull-handles"; index: number; vec: Pt; shift: boolean }
   | { type: "enter" };
 
 export type PolygonStep = { state: PolygonState; done: Vertex[] | null };
 
 /**
- * Every flagged vertex's handles recomputed from its current neighbours
- * (`smoothHandles`), the flags kept; `closed` wraps the ends. The preview
+ * Every smooth vertex's handles (neither `corner` nor `pulled`) recomputed
+ * from its current neighbours (`smoothHandles`); `closed` wraps the ends.
+ * A kind without curves (`curves` false) is returned as it is. The preview
  * calls it with the hover point appended.
  */
-export function smoothed(vertices: readonly DrawVertex[], closed: boolean): DrawVertex[] {
+export function smoothed(vertices: readonly DrawVertex[], closed: boolean, curves = true): DrawVertex[] {
+  if (!curves) return [...vertices];
   let out: DrawVertex[] = [...vertices];
   vertices.forEach((v, i) => {
-    if (!v.smooth) return;
+    if (v.corner || v.pulled) return;
     out = smoothHandles(out, i, closed);
-    out[i] = { ...out[i], smooth: true };
   });
   return out;
 }
 
-/** The stored vertex: the drawing-only flag dropped. */
-const stored = ({ smooth: _smooth, ...v }: DrawVertex): Vertex => v;
+/** The stored vertex: the drawing-only flags dropped. */
+const stored = ({ corner: _corner, pulled: _pulled, ...v }: DrawVertex): Vertex => v;
 
 /**
  * One step. `done` is the finished geometry when the flow closes (or a
@@ -70,22 +79,25 @@ const stored = ({ smooth: _smooth, ...v }: DrawVertex): Vertex => v;
 export function step(s: PolygonState, e: PolygonEvent): PolygonStep {
   const n = s.vertices.length;
   const curves = vertexRule(s.kind).curves;
-  const drawing = (vertices: DrawVertex[]): PolygonStep => ({ state: { ...s, vertices: smoothed(vertices, false) }, done: null });
-  const finish = (vertices: readonly DrawVertex[]): Vertex[] => smoothed(vertices, isClosedKind(s.kind)).map(stored);
-  const placed = (pt: Pt, smooth?: boolean): DrawVertex => (smooth && curves ? { x: pt.x, y: pt.y, smooth: true } : { x: pt.x, y: pt.y });
+  const drawing = (vertices: DrawVertex[]): PolygonStep => ({ state: { ...s, vertices: smoothed(vertices, false, curves) }, done: null });
+  const finish = (vertices: readonly DrawVertex[]): Vertex[] => smoothed(vertices, isClosedKind(s.kind), curves).map(stored);
+  const placed = (pt: Pt, corner?: boolean): DrawVertex => (corner && curves ? { x: pt.x, y: pt.y, corner: true } : { x: pt.x, y: pt.y });
   switch (e.type) {
     case "click": {
       if (e.onFirst && isClosedKind(s.kind) && n >= 3) {
-        const vertices = e.smooth && curves ? s.vertices.map((v, i): DrawVertex => (i === 0 ? { ...v, smooth: true } : v)) : s.vertices;
+        // Alt on the closing click makes the first vertex a corner (a pulled one keeps its handles).
+        const vertices = e.corner && curves
+          ? s.vertices.map((v, i): DrawVertex => (i === 0 && !v.pulled ? { x: v.x, y: v.y, corner: true } : v))
+          : s.vertices;
         return { state: s, done: finish(vertices) };
       }
       const last = s.vertices[n - 1];
       if (last && Math.hypot(last.x - e.pt.x, last.y - e.pt.y) < 1e-6) return { state: s, done: null };
-      return drawing([...s.vertices, placed(e.pt, e.smooth)]);
+      return drawing([...s.vertices, placed(e.pt, e.corner)]);
     }
     case "double-click": {
       const last = s.vertices[n - 1];
-      const vertices = last && Math.hypot(last.x - e.pt.x, last.y - e.pt.y) < 1e-6 ? s.vertices : smoothed([...s.vertices, placed(e.pt, e.smooth)], false);
+      const vertices = last && Math.hypot(last.x - e.pt.x, last.y - e.pt.y) < 1e-6 ? s.vertices : smoothed([...s.vertices, placed(e.pt, e.corner)], false, curves);
       return { state: { ...s, vertices }, done: vertices.length >= minVertices(s.kind) ? finish(vertices) : null };
     }
     case "enter":
@@ -99,9 +111,16 @@ export function step(s: PolygonState, e: PolygonEvent): PolygonStep {
     case "pull-handles": {
       // A filter region is a polygon (the schema refuses handles).
       if (e.index < 0 || e.index >= n || !curves) return { state: s, done: null };
-      // The manual pull wins: the vertex is no longer smooth, its pulled handles stay.
-      const vertices = s.vertices.map((v, i) => (i === e.index ? stored(v) : v));
-      return drawing(symmetricHandles(vertices, e.index, e.shift ? constrain45(e.vec) : e.vec));
+      // The manual pull wins: the pulled handles stay until the drag comes back to zero, which returns the vertex to
+      // its press's kind (smooth, or a corner with Alt; corner kept through the pull).
+      const vec = e.shift ? constrain45(e.vec) : e.vec;
+      const pulled = Math.hypot(vec.x, vec.y) > 1e-9;
+      const corner = s.vertices[e.index].corner;
+      const vertices = symmetricHandles(s.vertices, e.index, vec).map((v, i): DrawVertex => {
+        if (i !== e.index) return v;
+        return { ...v, ...(corner ? { corner } : {}), ...(pulled ? { pulled: true as const } : {}) };
+      });
+      return drawing(vertices);
     }
   }
 }

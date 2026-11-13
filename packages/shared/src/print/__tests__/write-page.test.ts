@@ -69,6 +69,111 @@ describe("writePage", () => {
     expect(ops).toMatch(/\/G\d+ Do/);
   });
 
+  it("a marked-route leg (707, F1) prints as dashes: one subpath per dash, no d operator, in the map layer after black", async () => {
+    const base = pageScene("page-ring");
+    const items = [{ siteId: "S" }, { siteId: "31" }, { siteId: "32", leg: { style: "marked_route" as const, bends: [{ x: 10, y: 0 }] } }, { siteId: "F" }];
+    const routed: PageInput = { ...base, course: { ...base.course, structure: { version: 1, id: "c", orderMode: "ordered", items } } };
+    const mapOps = (ops: string) => ops.slice(ops.indexOf(" cm", ops.indexOf(" re W n")), ops.lastIndexOf("0.014173228 0 0 0.014173228 0 0 cm"));
+    const plain = mapOps(content(await PDFDocument.load(await build([base])), 0)).split("\n");
+    const ops = mapOps(content(await PDFDocument.load(await build([routed])), 0)).split("\n");
+    const subpaths = (l: string) => l.match(/ m /g)?.length ?? 0;
+    const dashedIn = (lines: string[]) => lines.filter((l) => subpaths(l) >= 3 && l.endsWith(" S Q"));
+    // The map's own dashed lines (505, 106) are in both; the route is the one more.
+    const route = dashedIn(ops).filter((l) => !plain.includes(l));
+    expect(route).toHaveLength(1);
+    expect(ops.join("\n")).not.toMatch(/\] [\d.]+ d\b/);
+    const at = ops.indexOf(route[0]);
+    // 707's 0.35 mm in the map layer's 5 µm unit; purple (the circles' colour), drawn after black.
+    expect(ops.slice(0, at).reverse().find((l) => / w( |$)/.test(l))).toMatch(/^70 w/);
+    const colour = ops.slice(0, at).reverse().find((l) => / K$/.test(l));
+    expect(colour).toBe(ops.find((l) => / K$/.test(l)));
+    expect(ops.lastIndexOf("0 0 0 1 K")).toBeLessThan(at);
+    expect(ops.lastIndexOf("0 0 0 1 K")).toBeGreaterThan(ops.indexOf(colour!));
+  });
+
+  it("a corridor leg (F2, F14: no 705 along it): the band a W* clip round the map passes only, never a course pass; the edge a closed 705 stroke", async () => {
+    const base = pageScene("page-ring");
+    const corridor = { widthM: 120, edge: true, whiteMm: 4, whiteOpacity: 1 };
+    const items = [{ siteId: "S" }, { siteId: "31" }, { siteId: "32", leg: { corridor } }, { siteId: "F" }];
+    const withCorridor: PageInput = { ...base, course: { ...base.course, structure: { version: 1, id: "c", orderMode: "ordered", items } } };
+    const mapOps = (ops: string) => ops.slice(ops.indexOf(" cm", ops.indexOf(" re W n")), ops.lastIndexOf("0.014173228 0 0 0.014173228 0 0 cm"));
+    const plain = mapOps(content(await PDFDocument.load(await build([base])), 0)).split("\n");
+    const ops = mapOps(content(await PDFDocument.load(await build([withCorridor])), 0)).split("\n");
+    expect(plain.some((l) => l.endsWith("W* n"))).toBe(false);
+    // The band: each mask a `q <frame + band rings> W* n … Q` block — the frame, the band's outer ring and its hole.
+    const clips = ops.filter((l) => l.endsWith("W* n"));
+    expect(clips.length).toBeGreaterThan(0);
+    for (const c of clips) expect(c.match(/ m /g)?.length ?? 0).toBeGreaterThanOrEqual(3);
+    // Course strokes (the circles' and legs' purple, 705's 70 w in 5 µm units) are never inside a clip block.
+    const purple = ops.find((l) => / K$/.test(l))!;
+    let inClip = false, colour = "", masked = 0, unmasked = 0;
+    ops.forEach((l, i) => {
+      if (l.endsWith("W* n") && ops[i - 1] === "q") inClip = true;
+      else if (l === "Q" && inClip) inClip = false;
+      if (/ K$/.test(l)) colour = l;
+      if (/ S Q$/.test(l) || / S$/.test(l)) {
+        if (inClip) masked++;
+        if (colour === purple) expect(inClip, `a purple stroke inside the band's clip: ${l.slice(0, 60)}`).toBe(false);
+        if (colour === purple) unmasked++;
+      }
+    });
+    expect(masked).toBeGreaterThan(0);
+    expect(unmasked).toBeGreaterThan(0);
+    // The edge: one more closed stroke than the plain page, in the circles' purple at 705's width.
+    const edges = ops.filter((l) => !plain.includes(l) && l.endsWith(" h S Q"));
+    expect(edges).toHaveLength(1);
+    const at = ops.indexOf(edges[0]);
+    expect(ops.slice(0, at).reverse().find((l) => / K$/.test(l))).toBe(purple);
+    expect(ops.slice(0, at).reverse().find((l) => / w( |$)/.test(l))).toMatch(/^70 w/);
+    // F14: no 705 along the corridor leg — one open purple stroke fewer than the plain page (31 → 32 gone).
+    const openPurple = (lines: string[]) => {
+      let c = "", n = 0;
+      for (const l of lines) {
+        if (/ K$/.test(l)) c = l;
+        if ((/ S Q$/.test(l) || / S$/.test(l)) && !/ h S( Q)?$/.test(l) && c === purple) n++;
+      }
+      return n;
+    };
+    expect(openPurple(plain)).toBeGreaterThan(0);
+    expect(openPurple(ops)).toBe(openPurple(plain) - 1);
+  });
+
+  it("a narrow edged corridor (F19): round-capped open edge pieces ending on the opened circles; the circles drawn open", async () => {
+    // 40 m at 1:10 000 = 4 mm: h 2 < R 3.75, so 31 and 32 open towards the leg and the edge ends on them.
+    const base = pageScene("page-ring");
+    const corridor = { widthM: 40, edge: true, whiteMm: 4, whiteOpacity: 1 };
+    const items = [{ siteId: "S" }, { siteId: "31" }, { siteId: "32", leg: { corridor } }, { siteId: "F" }];
+    const withCorridor: PageInput = { ...base, course: { ...base.course, structure: { version: 1, id: "c", orderMode: "ordered", items } } };
+    const mapOps = (ops: string) => ops.slice(ops.indexOf(" cm", ops.indexOf(" re W n")), ops.lastIndexOf("0.014173228 0 0 0.014173228 0 0 cm"));
+    const plain = mapOps(content(await PDFDocument.load(await build([base])), 0)).split("\n");
+    const ops = mapOps(content(await PDFDocument.load(await build([withCorridor])), 0)).split("\n");
+    const purple = ops.find((l) => / K$/.test(l))!;
+    /** Purple strokes by kind, with the line cap in force at each. */
+    const strokes = (lines: string[]) => {
+      let c = "", cap = "0";
+      const out: { line: string; closed: boolean; cap: string }[] = [];
+      for (const l of lines) {
+        if (/ K$/.test(l)) c = l;
+        const j = / (\d) J( |$)/.exec(` ${l}`);
+        if (j) cap = j[1];
+        if ((/ S Q$/.test(l) || / S$/.test(l)) && c === purple) out.push({ line: l, closed: / h S( Q)?$/.test(l), cap });
+      }
+      return out;
+    };
+    const before = strokes(plain), after = strokes(ops);
+    expect(before.filter((x) => x.closed).length).toBeGreaterThanOrEqual(2);
+    // 31 and 32 are no longer closed circles: each one open arc.
+    expect(after.filter((x) => x.closed).length).toBe(before.filter((x) => x.closed).length - 2);
+    // The edge: two open pieces, round-capped (1 J), at 705's 70 w; no closed edge.
+    const edges = after.filter((x) => !x.closed && !plain.includes(x.line) && x.cap === "1");
+    expect(edges).toHaveLength(2);
+    for (const e of edges) expect(ops.slice(0, ops.indexOf(e.line)).reverse().find((l) => / w( |$)/.test(l))).toMatch(/^70 w/);
+    // Open purple: the 31 → 32 line gone (F14), the two edge pieces and the two opened circles added.
+    expect(after.filter((x) => !x.closed).length).toBe(before.filter((x) => !x.closed).length - 1 + 2 + 2);
+    // The circles keep their flat caps.
+    expect(after.filter((x) => !x.closed && x.cap !== "1").length).toBe(before.filter((x) => !x.closed).length - 1 + 2);
+  });
+
   it("cmyk writes no rg, rgb no k", async () => {
     const cmyk = content(await PDFDocument.load(await build([pageScene("page-ring")], "cmyk")), 0);
     const rgb = content(await PDFDocument.load(await build([pageScene("page-ring")], "rgb")), 0);

@@ -1,9 +1,17 @@
 name: CI
 
+# A change that touches only docs (docs/**, any *.md) runs no CI at all: none
+# of the jobs below reads them. docs/e2e-sharding.md "CI".
 on:
   pull_request:
+    paths-ignore:
+      - "docs/**"
+      - "**/*.md"
   push:
     branches: [main]
+    paths-ignore:
+      - "docs/**"
+      - "**/*.md"
   workflow_dispatch:
 
 concurrency:
@@ -64,11 +72,23 @@ jobs:
         run: sudo apt-get update && sudo apt-get install -y --no-install-recommends qpdf poppler-utils
       - run: pnpm test:integration
 
-  e2e:
-    name: E2E tests
+  # The serial E2E suite split across runners (docs/e2e-sharding.md "CI"):
+  # each matrix job is one isolated stack running one shard of the same LPT
+  # split (scripts/e2e-sharded.mjs, E2E_SHARD_TOTAL / E2E_SHARD_INDEX). It
+  # does not wait for `unit`: the shards start at once, beside lint and unit.
+  # The shard count is the length of the `shard` list (1..N, no gaps;
+  # scripts/__tests__/e2e-shards.test.mjs): E2E_SHARD_TOTAL is the job total.
+  e2e-shard:
+    name: E2E shard ${{ matrix.shard }}/${{ strategy.job-total }}
     runs-on: ubuntu-latest
-    needs: unit
-    timeout-minutes: 45
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: [1, 2, 3, 4, 5, 6]
+    env:
+      E2E_SHARD_TOTAL: ${{ strategy.job-total }}
+      E2E_SHARD_INDEX: ${{ matrix.shard }}
     steps:
       - uses: actions/checkout@v5
       - uses: pnpm/action-setup@v6
@@ -79,21 +99,54 @@ jobs:
       - run: pnpm install --frozen-lockfile
       - name: Generate Prisma client
         run: DATABASE_URL="$PRISMA_GENERATE_DATABASE_URL" pnpm db:generate
-      - name: Install Playwright Chromium
-        run: pnpm exec playwright install chromium --with-deps
+      # Start Postgres early: its image pull and health wait overlap the
+      # browser install below instead of following it (`--wait` comes last).
       - name: Start test Postgres
+        run: docker compose -f docker-compose.test.yml up -d
+      # The Chromium download is cached per Playwright version; on a hit only
+      # the OS libraries it needs are installed (apt, not cacheable here).
+      - name: Playwright version
+        id: playwright
+        run: echo "version=$(pnpm exec playwright --version | awk '{print $2}')" >> "$GITHUB_OUTPUT"
+      - name: Cache Playwright browsers
+        id: playwright-cache
+        uses: actions/cache@v5
+        with:
+          path: ~/.cache/ms-playwright
+          key: playwright-${{ runner.os }}-${{ steps.playwright.outputs.version }}-chromium
+      - name: Install Playwright Chromium
+        if: steps.playwright-cache.outputs.cache-hit != 'true'
+        run: pnpm exec playwright install chromium --with-deps
+      - name: Install Playwright OS dependencies
+        if: steps.playwright-cache.outputs.cache-hit == 'true'
+        run: pnpm exec playwright install-deps chromium
+      - name: Wait for test Postgres
         run: docker compose -f docker-compose.test.yml up -d --wait
-      - name: Run Playwright suite
+      - name: Run Playwright shard
         run: pnpm test:e2e
       - name: Upload Playwright artifacts
         if: failure()
         uses: actions/upload-artifact@v6
         with:
-          name: playwright-${{ github.run_id }}
+          name: playwright-${{ github.run_id }}-${{ github.run_attempt }}-shard-${{ matrix.shard }}
           path: |
             playwright-report
             test-results
           if-no-files-found: ignore
+
+  # The one E2E check the merge flow reads ("E2E tests"): green only when
+  # every shard passed. Runs even when a shard failed, so the check reports
+  # failure instead of staying skipped.
+  e2e:
+    name: E2E tests
+    if: ${{ !cancelled() }}
+    needs: e2e-shard
+    runs-on: ubuntu-latest
+    steps:
+      - name: Every shard passed
+        run: |
+          echo "e2e-shard: ${{ needs.e2e-shard.result }}"
+          test "${{ needs.e2e-shard.result }}" = success
 
   publish:
     name: Publish GHCR image

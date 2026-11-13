@@ -6,16 +6,17 @@ import { E2E_API_PORT, E2E_EVENTOR_PORT, E2E_WEB_PORT } from "./e2e/helpers/port
  * history note): every spec runs once, in `chromium`, except the phone's.
  *
  * Specs for the phone (docs/course-editor.md §10; 08 §7): project `mobile`
- * runs them on `devices["Pixel 7"]` (touch, coarse pointer, 412 px).
- * `course-editor.spec.ts` runs in `chromium` too and is here for its touch
- * describe; its desktop describes skip on a phone (`isMobile`).
- * `field-mode.spec.ts` runs in `mobile` only; its desktop describe sets its
- * own device. A file run by more than one project has a per-project weight
- * in `scripts/e2e-weights.mjs` (`scripts/__tests__/e2e-config.test.mjs`).
+ * runs them, and only them, on `devices["Pixel 7"]` (touch, coarse pointer,
+ * 412 px); project `chromium` runs every other spec. `course-editor-phone.spec.ts`
+ * is the course editor's phone subset (the editor's desktop flows are the
+ * other `course-editor*.spec.ts`); `field-mode.spec.ts`'s desktop describe
+ * sets its own device. A file run by more than one project would need a
+ * per-project weight in `scripts/e2e-weights.mjs`
+ * (`scripts/__tests__/e2e-config.test.mjs`).
  */
 export const MOBILE_SPECS = [
   "**/field-mode.spec.ts",
-  "**/course-editor.spec.ts",
+  "**/course-editor-phone.spec.ts",
 ];
 
 /**
@@ -67,7 +68,7 @@ export default defineConfig({
   projects: [
     {
       name: "chromium",
-      testIgnore: ["**/field-mode.spec.ts"],
+      testIgnore: MOBILE_SPECS,
       use: { ...devices["Desktop Chrome"] },
     },
     {

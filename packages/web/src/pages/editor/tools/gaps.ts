@@ -3,9 +3,13 @@
  * control circle's rim opens a gap in `controls.circle_gaps` (compass
  * degrees: 0° = +y, clockwise, the gap sweeping clockwise from `start` to
  * `end`), a drag along a leg one in the leg's `LegProps.gaps` (fractions
- * 0..1 of the centre-to-centre leg) — the conventions of
- * docs/course-layer.md §2. A click on a gap removes it. Pure geometry.
+ * 0..1 of the bent length: the polyline from the previous site through the
+ * leg's bends, docs/course-layer.md §10.1; user 2026-11-07, F3 Q1 A) — the
+ * conventions of docs/course-layer.md §2. A click on a gap removes it. Pure
+ * geometry.
  */
+
+import { polylineFraction, polylineLength } from "../../../lib/editor/bends";
 
 type Pt = { x: number; y: number };
 export type AngularGap = { start: number; end: number };
@@ -68,16 +72,15 @@ export function circleGapAt(gaps: readonly AngularGap[], deg: number): number {
   return gaps.findIndex((g) => inArc(norm(deg), g));
 }
 
-/** Fraction of `pt` projected on the leg a → b (clamped 0..1). */
-export function legFraction(a: Pt, b: Pt, pt: Pt): number {
-  const dx = b.x - a.x, dy = b.y - a.y, l2 = dx * dx + dy * dy;
-  return l2 === 0 ? 0 : Math.max(0, Math.min(1, ((pt.x - a.x) * dx + (pt.y - a.y) * dy) / l2));
+/** Fraction of the bent length at the leg polyline's nearest point to `pt` (0..1). */
+export function legFraction(points: readonly Pt[], pt: Pt): number {
+  return polylineFraction(points, pt);
 }
 
-/** The gap a drag along the leg a → b opens; null below the minimum. */
-export function legGapFromDrag(a: Pt, b: Pt, from: Pt, to: Pt): FractionGap | null {
-  const f0 = legFraction(a, b, from), f1 = legFraction(a, b, to);
-  const len = Math.hypot(b.x - a.x, b.y - a.y);
+/** The gap a drag along the leg polyline opens; null below the minimum. */
+export function legGapFromDrag(points: readonly Pt[], from: Pt, to: Pt): FractionGap | null {
+  const f0 = legFraction(points, from), f1 = legFraction(points, to);
+  const len = polylineLength(points);
   if (len === 0 || Math.abs(f1 - f0) * len < MIN_LEG_GAP_MM) return null;
   return { from: round(Math.min(f0, f1), 0.0001), to: round(Math.max(f0, f1), 0.0001) };
 }

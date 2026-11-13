@@ -13,12 +13,16 @@ import {
   computeStatus,
   computePosition,
   computeMatchScore,
+  findMatchingVariants,
+  type OtherVariantMatch,
+  type VariantCandidate,
   type ParsedPunch,
   type ControlMatch,
   type ClassRunnerForPosition,
   type PositionResult,
   PUNCH_START,
   PUNCH_FINISH,
+  RunnerStatus,
 } from "@oxygen/shared";
 
 export interface LocalReadoutResult {
@@ -64,11 +68,9 @@ export function computeLocalReadout(
   const runner = runners.find((r: RunnerItem) => r.id === runnerId);
   if (!runner) return null;
 
-  // Find class and course
+  // Find class and course: the runner's own (her variant) before the class's
   const cls = dashboard.classes?.find((c: ClassItem) => c.id === runner.classId);
-  const course = cls?.courseId
-    ? dashboard.courses?.find((c: CourseItem) => c.id === cls.courseId)
-    : null;
+  const course = courseOf(runner, cls, dashboard);
 
   // No-op for the manual-finish path (no card data → no matching). Kept
   // here only so future telemetry can report course length etc.
@@ -156,7 +158,12 @@ export interface CardReadoutInput {
 export function computeCardReadout(
   input: CardReadoutInput,
   queryClient: QueryClient,
-): (LocalReadoutResult & { matchScore: number; punchesRelevant: boolean }) | null {
+): (LocalReadoutResult & {
+  matchScore: number;
+  punchesRelevant: boolean;
+  /** The other pooled variants the punches validate fully against (F6c); on MP only. */
+  otherVariantMatches: OtherVariantMatch[];
+}) | null {
   const dashboard = findCachedQuery<DashboardData>(queryClient, "competition.dashboard");
   const runners = findCachedQuery<RunnerListData>(queryClient, "runner.list");
 
@@ -166,11 +173,9 @@ export function computeCardReadout(
   const runner = runners.find((r: RunnerItem) => r.cardNo === input.cardNo);
   if (!runner) return null;
 
-  // Find class and course
+  // Find class and course: the runner's own (her variant) before the class's
   const cls = dashboard.classes?.find((c: ClassItem) => c.id === runner.classId);
-  const course = cls?.courseId
-    ? dashboard.courses?.find((c: CourseItem) => c.id === cls.courseId)
-    : null;
+  const course = courseOf(runner, cls, dashboard);
   // Use the server-resolved per-position descriptors. Status-aware:
   // multi-code controls, Bad/Optional/BadNoTiming skipping, NoTiming /
   // BadNoTiming leg deductions are all baked into this shape.
@@ -212,6 +217,25 @@ export function computeCardReadout(
     transferFlags: runner.transferFlags ?? 0,
     currentStatus: runner.status,
   });
+
+  // Red exit (F6c): on MP in a pooled class, the other variants the
+  // punches validate fully against — the server's helper, the same rule.
+  const poolIds = cls?.coursePoolIds ?? [];
+  const candidates: VariantCandidate[] =
+    status === RunnerStatus.MissingPunch && poolIds.length >= 2
+      ? poolIds
+          .filter((id) => id !== course?.id)
+          .map((id) => dashboard.courses?.find((c: CourseItem) => c.id === id))
+          .filter((c): c is CourseItem => !!c)
+          .map((c) => ({
+            courseId: c.id,
+            variantKey: c.variantKey ?? "",
+            courseName: c.name,
+            orderMode: c.orderMode,
+            expectedPositions: c.expectedPositions ?? [],
+          }))
+      : [];
+  const otherVariantMatches = findMatchingVariants(allPunches, candidates, { fallbackStartTime });
 
   // Compute match score
   const matchedCount = matches.filter((m) => m.status === "ok").length;
@@ -260,6 +284,7 @@ export function computeCardReadout(
     classResults,
     matchScore,
     punchesRelevant,
+    otherVariantMatches,
   };
 }
 
@@ -273,6 +298,21 @@ export function lookupRunnerByCard(
 ): RunnerItem | undefined {
   const runners = findCachedQuery<RunnerListData>(queryClient, "runner.list");
   return runners?.find((r: RunnerItem) => r.cardNo === cardNo);
+}
+
+/**
+ * The course a runner is matched against: her own (`runner.courseId`, a
+ * variant of a forked course — docs/course-controls-and-matching.md
+ * "Forked courses and variants") before her class's, as the server's
+ * `performReadout` does.
+ */
+export function courseOf(
+  runner: Pick<RunnerItem, "courseId">,
+  cls: Pick<ClassItem, "courseId"> | undefined,
+  dashboard: Pick<DashboardData, "courses">,
+): CourseItem | null {
+  const id = runner.courseId || cls?.courseId;
+  return id ? (dashboard.courses?.find((c: CourseItem) => c.id === id) ?? null) : null;
 }
 
 // ─── Cache access helpers ───────────────────────────────────
@@ -292,7 +332,7 @@ function findCachedQuery<T>(queryClient: QueryClient, key: string): T | undefine
 
 // ─── Cached data type shapes (matching tRPC query responses) ──
 
-interface DashboardData {
+export interface DashboardData {
   competition?: { name: string; date?: string; eventorEventId?: number };
   organizer?: { eventorId?: number };
   classes?: ClassItem[];
@@ -300,15 +340,17 @@ interface DashboardData {
   totalControls?: number;
 }
 
-interface ClassItem {
+export interface ClassItem {
   id: number;
   name: string;
   courseId?: number;
   maxTime?: number;
   noTiming?: number;
+  /** The class's variant pool (course seqs, key order); absent / [] = none (F6c). */
+  coursePoolIds?: number[];
 }
 
-interface CourseItem {
+export interface CourseItem {
   id: number;
   name: string;
   length: number;
@@ -323,9 +365,11 @@ interface CourseItem {
    * deductions, Multiple expansion).
    */
   expectedPositions: import("@oxygen/shared").ExpectedPosition[];
+  /** A variant child's key; null / absent for a root or a plain course. */
+  variantKey?: string | null;
 }
 
-interface RunnerItem {
+export interface RunnerItem {
   id: number;
   name: string;
   cardNo: number;
@@ -334,6 +378,8 @@ interface RunnerItem {
   clubId?: number;
   className?: string;
   classId?: number;
+  /** The runner's own course seq (her variant); 0 / absent = the class's. */
+  courseId?: number;
   status: number;
   startTime: number;
   finishTime: number;

@@ -4,13 +4,11 @@ import {
   courseMapObjectSchema,
   courseMapOverridesSchema,
   mapTemplateSettingsSchema,
+  setterSheetPropsSchema,
   validateCourseMap,
   type CourseMapDocument,
   type CourseMapObject,
   type CourseMapOverrides,
-  type CourseOverlayLeg,
-  type DescriptionRow,
-  type DescriptionSheetHeader,
   type MapPoint,
   type MapTemplateSettings,
   type MapWindow,
@@ -19,10 +17,11 @@ import { z } from "zod";
 import { Prisma } from "../generated/prisma/client.js";
 import { layoutControlsFromCourseControls, layoutCourseEnds, resolveMapLayout } from "../course-maps/resolve-layout.js";
 import { getBaseMapInfoOrNull } from "../course-maps/map-source.js";
-import { type MapRowContext, sheetInputForMapRow } from "../course-maps/pdf-page.js";
+import { displayCode, publicControlId } from "../control-id.js";
+import { type MapRowContext, setterControlIds, sharedWindowCentre, sheetInputForMapRow } from "../course-maps/pdf-page.js";
 import { resolveSheet } from "../course-maps/resolve-sheet.js";
 import { classesByCourse, loadCourseObjects, nextObjectVersion } from "../course-objects.js";
-import { rowForClass } from "../course-maps/pdf-page.js";
+import { rowForClass, rowForVariant } from "../course-maps/pdf-page.js";
 import { baseVersionSchema, versionConflict } from "../version-conflict.js";
 import {
   coursesEditProcedure,
@@ -48,10 +47,14 @@ export interface CourseMapListItem {
   overrides: CourseMapOverrides;
   objects: CourseMapObject[];
   sortOrder: number;
+  /** The part of a course split by map exchanges the sheet prints (`section_index`, course-layer.md §11). */
+  sectionIndex: number;
   /** Concurrency token (docs/course-layout.md §2), a decimal HLC. */
   version: string;
   /** The class whose override the sheet prints (docs/course-layout.md §6); null for a course's own sheet. */
   class: { seq: number; name: string } | null;
+  /** A setter sheet's number and its group's placed controls (public ids) in code order (docs/course-layout.md §8); null for other kinds. */
+  setter: SetterOfSheet | null;
   course: {
     seq: number;
     name: string;
@@ -65,20 +68,6 @@ export interface CourseMapListItem {
     autoKey: string | null;
     isExtra: boolean;
   } | null;
-  controls: Array<
-    MapPoint & {
-      id: string;
-      code: string;
-      type: "start" | "control" | "finish";
-      cuts?: Array<{ start: number; end: number }>;
-    }
-  >;
-  legs: CourseOverlayLeg[];
-  /** How control numbers are labelled on the overprint. */
-  labelMode: "sequence" | "code";
-  descriptionRows: DescriptionRow[];
-  /** IOF 3-row header for course maps; null → single title row. */
-  descriptionHeader: DescriptionSheetHeader | null;
   resolved: { document: CourseMapDocument; window: MapWindow } | null;
   validation: {
     valid: boolean;
@@ -89,6 +78,22 @@ export interface CourseMapListItem {
       objectId?: string;
       variantKey?: string;
     }>;
+  };
+}
+
+/** A setter sheet's number and its group's drawn controls (public control ids, in the block's code order). */
+export interface SetterOfSheet {
+  index: number;
+  controls: number[];
+}
+
+/** The setter part of a row (`props`, `layout.controls` in code order); null unless `kind = 'setter'`. */
+function setterOf(row: { kind: string; props: unknown }, drawn: ReadonlyArray<{ id: string }>, seqById: ReadonlyMap<string, number>): SetterOfSheet | null {
+  if (row.kind !== "setter") return null;
+  const props = setterSheetPropsSchema.safeParse(row.props);
+  return {
+    index: props.success ? props.data.setter : 0,
+    controls: drawn.flatMap((c) => (seqById.has(c.id) ? [seqById.get(c.id)!] : [])),
   };
 }
 
@@ -109,6 +114,10 @@ export interface EditorSheet {
     courseSeq: number | null;
     /** The class of a class sheet (docs/course-layout.md §6). */
     classSeq: number | null;
+    /** The part of the course it prints (`section_index`, course-layer.md §11). */
+    sectionIndex: number;
+    /** A setter sheet's number and group (§8); null for other kinds. */
+    setter: SetterOfSheet | null;
     version: string;
     windowCenter: MapPoint | null;
     overrides: CourseMapOverrides;
@@ -133,16 +142,21 @@ export interface EditorSheet {
    * is the class's own sheet or its course's sheet with the override applied.
    */
   classView: { classSeq: number; className: string; printScale: number | null; ownSheet: boolean } | null;
+  /**
+   * The variant drawn (F8; course-print.md §4.6): a root's sheet read with
+   * `variantKey` is that variant's page — its course, numbering, block and
+   * `{variant}`; null for any other read.
+   */
+  variantKey: string | null;
   /** The previewed course in template scope, the sheet's course in sheet scope. */
   courseSeq: number | null;
   document: CourseMapDocument;
   window: MapWindow;
-  /** The page part of the composer's input: paper, frame, window, objects of both anchors, text values, the description block. */
+  /** The page part of the composer's input: paper, frame, window, the (page-anchored) layout objects, text values, the description block. */
   page: Omit<course.PageLayerInput, "context" | "paper"> & { paper: { widthMm: number; heightMm: number } };
   /** The description block's content whether shown or not (the editor toggles it): rows, header, title. */
   block: Pick<NonNullable<course.PageLayerInput["description"]>, "rows" | "header" | "title">;
   appearance: course.CourseAppearance;
-  overprintScale: number;
   labelMode: "sequence" | "code";
   /** Windows of every sheet of the same course (validation: a control must lie in one of them). */
   windows: MapWindow[];
@@ -153,16 +167,44 @@ export interface EditorSheet {
   mapScale: number | null;
 }
 
+/**
+ * A root's variants as the map validation reads them (F8; `validateCourseMap`
+ * names an outside control by its key): each variant's placed sites; null
+ * for a course without groups (its own controls are the one variant).
+ */
+function variantControlsOf(
+  structure: unknown,
+  controls: ReadonlyArray<{ id: string; seq: number; codes: string; name: string; status: string; xpos: number; ypos: number; kind: string }>,
+): { key: string; controls: Array<MapPoint & { id: string; code: string }> }[] | null {
+  const parsed = structure ? course.courseStructureSchema.safeParse(structure) : null;
+  if (!parsed?.success || !course.hasVariations(parsed.data)) return null;
+  const byId = new Map(controls.map((c) => [c.id, c]));
+  return course.materialiseVariants(parsed.data).map((v) => ({
+    key: v.key,
+    controls: [...new Set(v.items.map((i) => i.siteId))].flatMap((id) => {
+      const c = byId.get(id);
+      return c && (c.xpos !== 0 || c.ypos !== 0) ? [{ id, code: displayCode(c), x: c.xpos, y: c.ypos }] : [];
+    }),
+  }));
+}
+
 function json(value: unknown): Prisma.InputJsonValue {
   return value as Prisma.InputJsonValue;
 }
+
+type ParsedMap<T> = Omit<T, "version" | "windowCenter" | "overrides" | "objects"> & {
+  version: string;
+  windowCenter: MapPoint | null;
+  overrides: CourseMapOverrides;
+  objects: CourseMapObject[];
+};
 
 function parseMap<T extends {
   windowCenter: unknown;
   overrides: unknown;
   objects: unknown;
   version: bigint;
-}>(row: T) {
+}>(row: T): ParsedMap<T> {
   return {
     ...row,
     version: row.version.toString(),
@@ -183,6 +225,7 @@ function editorSheet(
     template: { seq: number; name: string; paper: string; orientation: string; paperWidthMm: number | null; paperHeightMm: number | null; printScale: number; settings: unknown; objects: unknown; autoKey: string | null; isExtra: boolean; version: bigint };
     courseSeq: number | null;
     classView?: EditorSheet["classView"];
+    variantKey?: string | null;
     windows: MapWindow[];
     mapScale: number | null;
   },
@@ -206,13 +249,13 @@ function editorSheet(
       version: t.version.toString(),
     },
     classView: rest.classView ?? null,
+    variantKey: rest.variantKey ?? null,
     courseSeq: rest.courseSeq,
     document: layout.document,
     window: layout.window,
     page: { paper: sheet.paper, frame: sheet.frame, window: sheet.window, objects: sheet.objects, textValues: sheet.textValues, description: sheet.description },
     block: { rows: layout.descriptionRows, header: layout.descriptionHeader, title: sheet.label },
     appearance: sheet.course.appearance,
-    overprintScale: layout.overprintScale,
     labelMode: layout.labelMode,
     windows: rest.windows,
     controls: layout.controls.map((c) => ({ id: c.id, code: c.code, x: c.x, y: c.y })),
@@ -274,6 +317,9 @@ export const courseMapRouter = router({
 
     const parsed = rows.map(parseMap);
     const windowsByCourse = new Map<string, MapWindow[]>();
+    const seqById = new Map(controlsForAll.map((c) => [c.id, publicControlId(c)]));
+    const windowsKey = (row: { kind: string; seq: number; courseId: string | null; classId: string | null }) =>
+      row.kind === "setter" ? `setter:${row.seq}` : `${row.courseId ?? "all_controls"}:${row.classId ?? ""}`;
 
     const data = parsed.map((row) => {
       if (!row.template) {
@@ -290,22 +336,23 @@ export const courseMapRouter = router({
           },
         };
       }
+      // A setter sheet (§8) lists its group's sites only and draws no course.
+      const group = row.kind === "setter" ? setterControlIds(row.props) : null;
+      // A root's sheet is shared by its variants (F8): a NULL centre centres on every alternative, as it prints.
+      const ends = row.course && !group ? layoutCourseEnds(row.course, row.course.courseControls.map((cc) => cc.control.id), controlsForAll) : null;
+      const shared = !row.windowCenter && row.kind === "course" && row.course ? sharedWindowCentre(row.course.structure, ends, controlsForAll) : null;
       const layout = resolveMapLayout({
         kind: row.kind,
         template: row.template,
         overrides: row.overrides,
         objects: row.objects,
-        course: row.course
+        course: row.course && !group
           ? {
               name: row.course.name,
               lengthM: row.course.lengthM,
               climbM: row.course.climbM,
               orderMode: row.course.orderMode,
-              ...layoutCourseEnds(
-                row.course,
-                row.course.courseControls.map((cc) => cc.control.id),
-                controlsForAll,
-              ),
+              ...ends,
               classes: row.course.classes,
               controls: layoutControlsFromCourseControls(
                 row.course.courseControls,
@@ -313,15 +360,16 @@ export const courseMapRouter = router({
               descriptionInstructions: row.course.descriptionInstructions,
             }
           : null,
-        allControls: controlsForAll,
+        allControls: group ? controlsForAll.filter((c) => group.has(c.id)) : controlsForAll,
         ...(eventRow ? { event: eventRow } : {}),
-        windowCenter: row.windowCenter,
+        windowCenter: row.windowCenter ?? shared,
         mapScale: mapInfo?.scale ?? null,
         meridianTiltDeg: mapInfo?.meridianTiltDeg ?? null,
         mapName: row.name,
+        ...(row.kind === "course" ? { section: row.sectionIndex } : {}),
       });
-      // A class's sheets are validated among themselves (another scale).
-      const key = `${row.courseId ?? "all_controls"}:${row.classId ?? ""}`;
+      // A class's sheets are validated among themselves (another scale); a setter sheet alone (its controls are its group's).
+      const key = windowsKey(row);
       const windows = windowsByCourse.get(key);
       if (windows) windows.push(layout.window);
       else windowsByCourse.set(key, [layout.window]);
@@ -329,10 +377,9 @@ export const courseMapRouter = router({
         ...row,
         resolved: { document: layout.document, window: layout.window },
         controls: layout.controls,
-        legs: layout.legs,
-        labelMode: layout.labelMode,
-        descriptionRows: layout.descriptionRows,
-        descriptionHeader: layout.descriptionHeader,
+        descriptionRowCount: layout.descriptionRows.length,
+        descriptionHeaderRows: layout.descriptionHeader ? 3 : 1,
+        variants: row.kind === "course" && row.course ? variantControlsOf(row.course.structure, controlsForAll) : null,
         validation: { valid: true, issues: [] },
       };
     });
@@ -344,20 +391,13 @@ export const courseMapRouter = router({
               document: row.resolved.document,
               mapScale: mapInfo?.scale ?? null,
               window: row.resolved.window,
-              windows: windowsByCourse.get(`${row.courseId ?? "all_controls"}:${row.classId ?? ""}`),
-              variants: [{ key: "", controls: row.controls }],
-              descriptionRowCount: row.descriptionRows.length,
-              descriptionHeaderRows: row.descriptionHeader ? 3 : 1,
+              windows: windowsByCourse.get(windowsKey(row)),
+              // A root's sheet: every variant's controls, named by key (F8).
+              variants: row.variants ?? [{ key: "", controls: row.controls }],
+              descriptionRowCount: row.descriptionRowCount,
+              descriptionHeaderRows: row.descriptionHeaderRows,
             })
           : row.validation;
-      const controls = "controls" in row ? row.controls : [];
-      const legs = "legs" in row ? row.legs : [];
-      const labelMode =
-        "labelMode" in row ? row.labelMode : ("sequence" as const);
-      const descriptionRows =
-        "descriptionRows" in row ? row.descriptionRows : [];
-      const descriptionHeader =
-        "descriptionHeader" in row ? row.descriptionHeader : null;
       const resolved = "resolved" in row ? row.resolved : null;
       return {
         id: row.id,
@@ -370,8 +410,10 @@ export const courseMapRouter = router({
         overrides: row.overrides,
         objects: row.objects,
         sortOrder: row.sortOrder,
+        sectionIndex: row.sectionIndex,
         version: row.version,
         class: row.class ? { seq: row.class.seq, name: row.class.name } : null,
+        setter: setterOf(row, "controls" in row ? row.controls : [], seqById),
         course: row.course
           ? {
               seq: row.course.seq,
@@ -384,11 +426,6 @@ export const courseMapRouter = router({
         template: row.template
           ? { seq: row.template.seq, name: row.template.name, autoKey: row.template.autoKey, isExtra: row.template.isExtra }
           : null,
-        controls,
-        legs,
-        labelMode,
-        descriptionRows,
-        descriptionHeader,
         resolved,
         validation,
       };
@@ -398,16 +435,16 @@ export const courseMapRouter = router({
   /**
    * Layout mode's read (docs/course-layout.md §1; research 08 §4.6
    * `resolveSheet`): `{ seq }` a sheet, `{ templateSeq, courseSeq? }` a
-   * template previewed with a course (as `mapTemplate.previewLayout`),
+   * template previewed with a course (or alone, centred on the map origin),
    * `{ classSeq }` Class view (§6): the class's first sheet, else its
    * course's first sheet as the class prints it (`rowForClass`).
    */
   resolveSheet: coursesViewProcedure
     .input(
       z.union([
-        z.object({ seq: z.number().int().positive() }),
+        z.object({ seq: z.number().int().positive(), variantKey: z.string().min(1).max(64).optional() }),
         z.object({ templateSeq: z.number().int().positive(), courseSeq: z.number().int().positive().optional() }),
-        z.object({ classSeq: z.number().int().positive() }),
+        z.object({ classSeq: z.number().int().positive(), variantKey: z.string().min(1).max(64).optional() }),
       ]),
     )
     .query(async ({ ctx, input }): Promise<EditorSheet> => {
@@ -465,15 +502,26 @@ export const courseMapRouter = router({
         }
         if (!row) notFound();
         if (!row.template) throw new TRPCError({ code: "PRECONDITION_FAILED", message: "No map template is assigned" });
-        const resolved = resolveSheet(sheetInputForMapRow(row, rowCtx));
+        // A root's sheet as one variant prints it (course-print.md §4.6, F8). A key the sheet's course has no live
+        // variant of (any other sheet, or one the editor's structure has before the write lands) reads the sheet as is.
+        const child =
+          input.variantKey && row.kind === "course" && row.course
+            ? await ctx.db.course.findFirst({ where: { parentCourseId: row.course.id, variantKey: input.variantKey, removed: false }, include: courseInclude })
+            : null;
+        const variantKey = child ? input.variantKey! : null;
+        const sheetRow = child ? rowForVariant(row, child) : row;
+        // The course's other sheets as this variant prints them (the shared window, `rowForVariant`).
+        const variantOf = child && row.course ? { variantKey: child.variantKey ?? "", rootStructure: row.course.structure } : {};
+        const resolved = resolveSheet(sheetInputForMapRow(sheetRow, rowCtx));
         // Windows of the same set's other sheets (the course's, or the class's), for the "outside every sheet" check.
-        const siblings = await ctx.db.courseMap.findMany({
+        // A setter sheet stands alone: its controls are its group's (§8).
+        const siblings = row.kind === "setter" ? [] : await ctx.db.courseMap.findMany({
           where: { eventId: ctx.event.id, kind: row.kind, courseId: row.courseId, classId: row.classId, seq: { not: row.seq }, templateId: { not: null } },
           include: { template: true },
         });
         const windows = [
           resolved.layout.window,
-          ...siblings.map((s) => resolveMapLayout(sheetInputForMapRow(print && !row.classId ? rowForClass({ ...s, course: row.course }, print, false) : { ...s, course: row.course }, rowCtx)).window),
+          ...siblings.map((s) => resolveMapLayout(sheetInputForMapRow(print && !row.classId ? rowForClass({ ...s, ...variantOf, course: sheetRow.course }, print, false) : { ...s, ...variantOf, course: sheetRow.course }, rowCtx)).window),
         ];
         const parsed = parseMap(row);
         return editorSheet("sheet", resolved, {
@@ -483,6 +531,8 @@ export const courseMapRouter = router({
             kind: row.kind,
             courseSeq: row.course?.seq ?? null,
             classSeq: row.class?.seq ?? null,
+            sectionIndex: row.sectionIndex,
+            setter: setterOf(row, resolved.layout.controls, new Map(allControls.map((c) => [c.id, publicControlId(c)]))),
             version: parsed.version,
             windowCenter: parsed.windowCenter,
             overrides: parsed.overrides,
@@ -491,6 +541,7 @@ export const courseMapRouter = router({
           template: row.template,
           courseSeq: row.course?.seq ?? null,
           classView,
+          variantKey,
           windows,
           mapScale: mapInfo?.scale ?? null,
         });
@@ -633,6 +684,8 @@ export const courseMapRouter = router({
           overrides: courseMapOverridesSchema,
           objects: objectsSchema,
           sortOrder: z.number().int().min(0),
+          /** The sheet's `version` the client edits from (docs/course-layout.md §2); omitted: last writer wins. */
+          baseVersion: baseVersionSchema,
         })
         .partial()
         .required({ id: true }),
@@ -656,6 +709,7 @@ export const courseMapRouter = router({
       }
       const {
         id: _publicId,
+        baseVersion,
         windowCenter,
         overrides,
         objects,
@@ -663,8 +717,16 @@ export const courseMapRouter = router({
         ...fields
       } = input;
       void _publicId;
-      return parseMap(
-        await ctx.db.courseMap.update({
+      return ctx.db.$transaction(async (tx) => {
+        const rows = await tx.$queryRaw<{ version: bigint }[]>`
+          SELECT "version" FROM "oxygen"."course_maps" WHERE "id" = ${existing.id}::uuid FOR UPDATE`;
+        const now = rows[0]?.version;
+        if (baseVersion !== undefined && now !== undefined && now !== BigInt(baseVersion)) {
+          const current = await tx.courseMap.findUniqueOrThrow({ where: { id: existing.id } });
+          throw versionConflict({ kind: "sheet", id: existing.seq, version: now.toString(), current: parseMap(current), differing: null });
+        }
+        return parseMap(
+        await tx.courseMap.update({
           where: { id: existing.id },
           data: {
             ...fields,
@@ -682,7 +744,8 @@ export const courseMapRouter = router({
             version: nextObjectVersion(),
           },
         }),
-      );
+        );
+      });
     }),
 
   saveLayout: coursesEditProcedure
@@ -693,8 +756,6 @@ export const courseMapRouter = router({
         printScale: z.number().int().positive().max(100_000),
         description: mapTemplateSettingsSchema.shape.description,
         objects: objectsSchema,
-        /** The template's objects; omitted, the template is not written (Layout mode's sheet scope, docs/course-layout.md §2). */
-        templateObjects: objectsSchema.optional(),
         /** The sheet's `version` the client edits from (docs/course-layout.md §2); omitted: last writer wins. */
         baseVersion: baseVersionSchema.optional(),
       }),
@@ -702,7 +763,6 @@ export const courseMapRouter = router({
     .mutation(async ({ ctx, input }) => {
       const map = await ctx.db.courseMap.findFirst({
         where: { eventId: ctx.event.id, seq: input.id },
-        include: { template: true },
       });
       if (!map) notFound();
       const overrides = courseMapOverridesSchema.parse(map.overrides);
@@ -728,12 +788,6 @@ export const courseMapRouter = router({
             version,
           },
         });
-        if (map.template && input.templateObjects) {
-          await tx.mapTemplate.update({
-            where: { id: map.template.id },
-            data: { objects: json(input.templateObjects), version: nextObjectVersion() },
-          });
-        }
       });
       return { ok: true as const, version: version.toString() };
     }),

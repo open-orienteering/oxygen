@@ -27,6 +27,7 @@ import {
 import { makeCaller } from "../helpers/caller.js";
 import { uploadEventMap } from "../helpers/upload-map.js";
 import { drawnCourse } from "../helpers/course-drawn.js";
+import { publicControlId } from "../../control-id.js";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const FIXTURE = resolve(__dirname, "../../../../../e2e/test.ocd");
@@ -150,6 +151,82 @@ describe("course geometry regeneration", () => {
       Math.round((50 * mapScale) / 1000),
     );
     expect(row?.legs).toMatch(/^\d+(;\d+)*;$/);
+  });
+
+  it("course.setStructure with bends measures the legs along them; style never changes a length (F1)", async () => {
+    await caller.control.create({ codes: "171", xpos: 10, ypos: 10 });
+    await caller.control.create({ codes: "172", xpos: 40, ypos: 10 });
+    await caller.control.create({ codes: "173", xpos: 40, ypos: 50 });
+    const straight = await caller.course.create({ name: "Bends-straight" });
+    const bent = await caller.course.create({ name: "Bends-bent" });
+    await caller.course.setStructure({
+      courseId: straight.id,
+      structure: { version: 1, id: "s", orderMode: "ordered", items: [{ siteId: 171 }, { siteId: 172 }, { siteId: 173 }] },
+    });
+    await caller.course.setStructure({
+      courseId: bent.id,
+      structure: {
+        version: 1,
+        id: "b",
+        orderMode: "ordered",
+        // 171 → (10, 50) → 172: 40 + 50 mm instead of 30; 172 → 173 drawn as nothing, still 40 mm.
+        items: [{ siteId: 171 }, { siteId: 172, leg: { style: "marked_route", bends: [{ x: 10, y: 50 }] } }, { siteId: 173, leg: { style: "none" } }],
+      },
+    });
+    const rowOf = (seq: number) => ctx.db.course.findFirstOrThrow({ where: { eventId: ctx.eventId, seq } });
+    const s = await rowOf(straight.id);
+    const b = await rowOf(bent.id);
+    const m = (mm: number) => Math.round((mm * mapScale) / 1000);
+    const sl = s.legs!.split(";").filter(Boolean).map(Number);
+    const bl = b.legs!.split(";").filter(Boolean).map(Number);
+    expect(bl).toHaveLength(sl.length);
+    const i = sl.indexOf(m(30));
+    expect(i).toBeGreaterThanOrEqual(0);
+    expect(sl[i + 1]).toBe(m(40));
+    expect(bl[i]).toBe(m(90));
+    expect(bl[i + 1]).toBe(m(40));
+    expect(b.lengthM! - s.lengthM!).toBeGreaterThanOrEqual(m(60) - 1);
+    expect(b.lengthM! - s.lengthM!).toBeLessThanOrEqual(m(60) + 1);
+    expect(b.lengthSource).toBe("derived");
+
+    // A pair the course runs twice: each visit's own leg (the first bent, the second straight).
+    const twice = await caller.course.create({ name: "Bends-twice" });
+    await caller.course.setStructure({
+      courseId: twice.id,
+      structure: {
+        version: 1,
+        id: "t",
+        orderMode: "ordered",
+        items: [{ siteId: 171 }, { siteId: 172, leg: { bends: [{ x: 10, y: 50 }] } }, { siteId: 171 }, { siteId: 172 }],
+      },
+    });
+    const tl = (await rowOf(twice.id)).legs!.split(";").filter(Boolean).map(Number);
+    const k = tl.indexOf(m(90));
+    expect(k).toBeGreaterThanOrEqual(0);
+    expect(tl.slice(k, k + 3)).toEqual([m(90), m(30), m(30)]);
+  });
+
+  it("course.setStructure with handles stores them and measures the leg along the curve (F13)", async () => {
+    // 176 (40,10) → (30,10) ⌒ quarter circle r 20 ⌒ (10,30) → 177 (10,40): 20 + 10π mm; as corners 20 + √800.
+    await caller.control.create({ codes: "176", xpos: 40, ypos: 10 });
+    await caller.control.create({ codes: "177", xpos: 10, ypos: 40 });
+    const K = 11.045694996;
+    const curvedBends = [{ x: 30, y: 10, hOut: { x: 0, y: K } }, { x: 10, y: 30, hIn: { x: K, y: 0 } }];
+    const set = async (name: string, bends: Array<{ x: number; y: number }>) => {
+      const { id } = await caller.course.create({ name });
+      await caller.course.setStructure({ courseId: id, structure: { version: 1, id: name, orderMode: "ordered", items: [{ siteId: 176 }, { siteId: 177, leg: { bends } }] } });
+      return id;
+    };
+    const curved = await set("Curved", curvedBends);
+    const corners = await set("Corners", curvedBends.map(({ x, y }) => ({ x, y })));
+    const rowOf = (seq: number) => ctx.db.course.findFirstOrThrow({ where: { eventId: ctx.eventId, seq } });
+    const m = (mm: number) => Math.round((mm * mapScale) / 1000);
+    const legsOf = async (seq: number) => (await rowOf(seq)).legs!.split(";").filter(Boolean).map(Number);
+    expect(await legsOf(curved)).toEqual([m(20 + 10 * Math.PI)]);
+    expect(await legsOf(corners)).toEqual([m(20 + Math.sqrt(800))]);
+    // The handles are stored and read back whole.
+    const summary = (await caller.course.list()).find((c) => c.id === curved)!;
+    expect(summary.legs).toEqual({ "176>177": { bends: curvedBends } });
   });
 
   it("moving a control rebuilds the geometry of courses that use it", async () => {
@@ -356,7 +433,7 @@ describe("start/finish placement from the editor", () => {
     }
   }
 
-  it("creates code-less start controls with sequential auto-names", async () => {
+  it("creates start controls with sequential auto-names and the lowest free codes (F32)", async () => {
     await clearStartFinish();
     const s1 = await caller.control.create({ status: 4, xpos: 5, ypos: 5 });
     const s2 = await caller.control.create({ status: 4, xpos: 6, ypos: 6 });
@@ -366,10 +443,12 @@ describe("start/finish placement from the editor", () => {
       orderBy: { seq: "asc" },
     });
     expect(rows.map((r) => r.name)).toEqual(["Start 1", "Start 2"]);
-    expect(rows.every((r) => r.codes === "")).toBe(true);
-    // Code-less controls are addressed by seq.
-    expect(s1.id).toBe(rows[0].seq);
-    expect(s2.id).toBe(rows[1].seq);
+    // F32: each takes the lowest free code in 3–30, which is its public id.
+    const codes = rows.map((r) => Number(r.codes));
+    expect(codes.every((n) => n >= 3 && n <= 30)).toBe(true);
+    expect(codes[1]).toBeGreaterThan(codes[0]);
+    expect(s1.id).toBe(codes[0]);
+    expect(s2.id).toBe(codes[1]);
     // Position + WGS84 derivation work like for numbered controls.
     expect(rows[0].xpos).toBe(5);
     expect(rows[0].lat).not.toBeNull();
@@ -380,14 +459,15 @@ describe("start/finish placement from the editor", () => {
     expect(c1?.code).toBe("Start 1");
   });
 
-  it("creates a code-less finish control named Mål N", async () => {
+  it("creates a finish control named Mål N with a code (F32)", async () => {
     const f = await caller.control.create({ status: 5, xpos: 90, ypos: 5 });
     const row = await ctx.db.control.findFirst({
       where: { eventId: ctx.eventId, status: "finish", removed: false },
     });
     expect(row?.name).toBe("Mål 1");
-    expect(row?.codes).toBe("");
-    expect(f.id).toBe(row?.seq);
+    expect(Number(row?.codes)).toBeGreaterThanOrEqual(3);
+    expect(Number(row?.codes)).toBeLessThanOrEqual(30);
+    expect(f.id).toBe(Number(row?.codes));
   });
 
   it("still rejects a normal control without codes", async () => {
@@ -420,10 +500,10 @@ describe("start/finish placement from the editor", () => {
     // Delete every start; geometry must lose the start leg…
     const starts = await ctx.db.control.findMany({
       where: { eventId: ctx.eventId, status: "start", removed: false },
-      select: { seq: true },
+      select: { seq: true, codes: true },
     });
     for (const s of starts) {
-      await caller.control.delete({ id: s.seq });
+      await caller.control.delete({ id: publicControlId(s) });
     }
     const without = await ctx.db.course.findFirst({
       where: { eventId: ctx.eventId, seq: course.id },
@@ -451,10 +531,10 @@ describe("start/finish placement from the editor", () => {
     // "default = lowest-seq start" assertions below are deterministic.
     const leftovers = await ctx.db.control.findMany({
       where: { eventId: ctx.eventId, status: "start", removed: false },
-      select: { seq: true },
+      select: { seq: true, codes: true },
     });
     for (const s of leftovers) {
-      await caller.control.delete({ id: s.seq });
+      await caller.control.delete({ id: publicControlId(s) });
     }
     const sA = await caller.control.create({ status: 4, xpos: 0, ypos: 300 });
     const sB = await caller.control.create({ status: 4, xpos: 60, ypos: 300 });
@@ -472,7 +552,7 @@ describe("start/finish placement from the editor", () => {
     });
 
     const sBRow = await ctx.db.control.findFirst({
-      where: { eventId: ctx.eventId, seq: sB.id },
+      where: { eventId: ctx.eventId, codes: String(sB.id), removed: false },
     });
     const row = await ctx.db.course.findFirst({
       where: { eventId: ctx.eventId, seq: course.id },

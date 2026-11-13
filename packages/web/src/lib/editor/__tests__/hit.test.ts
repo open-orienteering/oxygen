@@ -1,10 +1,14 @@
 import { describe, it, expect } from "vitest";
 import { createMapGlWorker, type CourseReply, type WorkerReply } from "../../../map-gl/worker";
 import { documentBytes, fontBytes, latin, request } from "../../../map-gl/__tests__/course-fixture";
-import { editorHitAt, HIT_TOLERANCE_PX } from "../hit";
+import { editorHitAt, HIT_TOLERANCE_PX, uiLegsOf } from "../hit";
 
 /** The fixture course (S 10,10 → 31 40,10 → 32 60,40 → F 10,40) through the real worker. */
 function hitIndex(over: Parameters<typeof request>[0] = {}): NonNullable<CourseReply["hit"]> {
+  return courseReply(over).hit!;
+}
+
+function courseReply(over: Parameters<typeof request>[0] = {}): CourseReply {
   const sent: WorkerReply[] = [];
   const w = createMapGlWorker((msg) => sent.push(msg), (fn) => fn(), 0);
   w.handle({
@@ -15,7 +19,7 @@ function hitIndex(over: Parameters<typeof request>[0] = {}): NonNullable<CourseR
     courseLayer: true,
   });
   w.handle({ type: "course", generation: 1, input: request(over) });
-  return (sent[sent.length - 1] as CourseReply).hit!;
+  return sent[sent.length - 1] as CourseReply;
 }
 
 describe("editorHitAt (docs/course-editor.md §5)", () => {
@@ -142,6 +146,52 @@ describe("editorHitAt (docs/course-editor.md §5)", () => {
     const gapped = hitIndex({ sites: base.sites.map((x) => (x.id === "31" ? { ...x, circleGaps: [{ start: 40, end: 100 }] } : x)) });
     expect(editorHitAt(gapped, { x: 40, y: 10 }, 0.1)).toBeNull();
     expect(editorHitAt(gapped, { x: 40, y: 10 }, 0.1, [{ id: "31", x: 40, y: 10, radiusMm: 2.5 }])).toEqual({ kind: "site", id: "31" });
+  });
+
+  it("a corridor's edge is no target (course-layer.md §10.2); its leg is a UI leg (F14); its band reaches the static buckets' filter", () => {
+    // Leg 0 (S → 31, y = 10) with a 60 m corridor at 1:15 000: the edge at y = 12, the band to 15.
+    const corridor = { widthM: 60, edge: true, whiteMm: 3, whiteOpacity: 1 };
+    const structure = { version: 1 as const, id: "c1", orderMode: "ordered" as const, items: [{ siteId: "S" }, { siteId: "31", leg: { corridor } }, { siteId: "32" }, { siteId: "F" }] };
+    const reply = courseReply({ structure });
+    expect(reply.hit!.refs.some((r) => r.kind === "corridor")).toBe(true);
+    expect(editorHitAt(reply.hit!, { x: 20, y: 12 }, 0.5)).toBeNull();
+    // F14: the corridor leg draws no 705, so no hit piece — it hits from the derivation (uiLegsOf), the edge still never.
+    expect(reply.hit!.refs.some((r) => r.kind === "leg" && r.id === "c1:0")).toBe(false);
+    expect(editorHitAt(reply.hit!, { x: 20, y: 10.1 }, 0.5)).toBeNull();
+    const uiLegs = uiLegsOf(reply.derivation!.courses);
+    expect(uiLegs.map((l) => [l.courseId, l.index])).toEqual([["c1", 0]]);
+    expect(editorHitAt(reply.hit!, { x: 20, y: 10.1 }, 0.5, [], [], undefined, uiLegs)).toEqual({ kind: "leg", courseId: "c1", index: 0 });
+    expect(editorHitAt(reply.hit!, { x: 20, y: 12 }, 0.5, [], [], undefined, uiLegs)).toBeNull();
+    // F19: h 2 < R 2.5, so 31's circle opens towards S — drawn open arcs, never a cut: its centre hits only through
+    // the UI-layer circle (as a gapped one, §5), its far rim through the arc, its opening not at all.
+    expect(reply.derivation!.sites.find((x) => x.id === "31")!.cuts).toEqual([]);
+    expect(editorHitAt(reply.hit!, { x: 40, y: 10 }, 0.5, [], [], undefined, uiLegs)).toBeNull();
+    const ui31 = [{ id: "31", x: 40, y: 10, radiusMm: 2.5 }];
+    expect(editorHitAt(reply.hit!, { x: 40, y: 10 }, 0.5, ui31, [], undefined, uiLegs)).toEqual({ kind: "site", id: "31" });
+    expect(editorHitAt(reply.hit!, { x: 42.5, y: 10 }, 0.1)).toEqual({ kind: "site", id: "31" });
+    expect(editorHitAt(reply.hit!, { x: 37.5, y: 10 }, 0.1)).toBeNull();
+    // A marked route inside a corridor keeps its 707 piece and is no UI leg.
+    const routed = courseReply({ structure: { ...structure, items: [{ siteId: "S" }, { siteId: "31", leg: { corridor, style: "marked_route" as const } }, { siteId: "32" }, { siteId: "F" }] } });
+    expect(uiLegsOf(routed.derivation!.courses)).toEqual([]);
+    expect(editorHitAt(routed.hit!, { x: 20, y: 10.1 }, 0.5)).toEqual({ kind: "leg", courseId: "c1", index: 0 });
+    // The document's black line crosses the band: masked in the static buckets.
+    expect(reply.filter).not.toBeNull();
+    expect(reply.filter!.masks.length).toBeGreaterThan(0);
+    expect(courseReply().filter).toBeNull();
+  });
+
+  it("a leg with no line (`none`) has no hit piece; it hits from the derivation's pieces, under circles (§6.7)", () => {
+    const structure = { version: 1 as const, id: "c1", orderMode: "ordered" as const, items: [{ siteId: "S" }, { siteId: "31" }, { siteId: "32", leg: { style: "none" as const } }, { siteId: "F" }] };
+    const reply = courseReply({ structure });
+    expect(reply.hit!.refs.some((r) => r.kind === "leg" && r.id === "c1:1")).toBe(false);
+    expect(editorHitAt(reply.hit!, { x: 50, y: 25 }, 0.5)).toBeNull();
+    const uiLegs = uiLegsOf(reply.derivation!.courses);
+    expect(uiLegs.map((l) => [l.courseId, l.index])).toEqual([["c1", 1]]);
+    expect(editorHitAt(reply.hit!, { x: 50, y: 25 }, 0.5, [], [], undefined, uiLegs)).toEqual({ kind: "leg", courseId: "c1", index: 1 });
+    expect(editorHitAt(reply.hit!, { x: 52, y: 25 }, 0.5, [], [], undefined, uiLegs)).toBeNull();
+    // The circle at its end still wins, and `accept` passes over it.
+    expect(editorHitAt(reply.hit!, { x: 59, y: 39 }, 0.5, [], [], undefined, uiLegs)).toEqual({ kind: "site", id: "32" });
+    expect(editorHitAt(reply.hit!, { x: 50, y: 25 }, 0.5, [], [], (t) => t.kind === "site", uiLegs)).toBeNull();
   });
 
   it("names a screen tolerance", () => {

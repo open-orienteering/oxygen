@@ -6,11 +6,14 @@
 
 import { describe, expect, it } from "vitest";
 import { CourseStackError } from "../../course/colour-stack.js";
+import type { CourseLayerObject } from "../../course/objects.js";
 import { pathRings } from "../../render/path.js";
 import { liberation } from "../../render/__tests__/fonts.js";
 import { pageScene } from "../__fixtures__/pages.js";
 import { RING_BLEED_UM, composePage } from "../compose.js";
-import { frameInMap } from "../page.js";
+import { frameInMap, type PageInput } from "../page.js";
+import type { CourseStructure } from "../../course/types.js";
+import { allVariationStructures } from "../../course/variants.js";
 
 const fonts = () => [liberation().sans, liberation().narrow];
 const idOf = (colours: { paletteIds?: string[]; id: string }[], paletteId: string) => colours.findIndex((c) => c.paletteIds?.includes(paletteId));
@@ -62,10 +65,11 @@ describe("composePage", () => {
     expect(page.pageLayer.stream.passes).toEqual([]);
   });
 
-  it("white-out outside: the map ring's outer boundary is the frame (+1 mm under the clip) through T_map⁻¹; the page white-out is upper white", () => {
+  it("white-out outside: the map ring's outer boundary is the frame (+1 mm under the clip) through T_map⁻¹, in the toner saver's white; the page white-out is upper white", () => {
     const page = composePage(pageScene("page-ring"), fonts());
     const whiteUpper = idOf(page.colours, "white-upper");
-    const ring = page.mapLayer.stream.passes.find((p) => p.kind === "fill" && p.colour === whiteUpper && pathRings(p.path).length === 2);
+    const toner = page.colours.findIndex((c) => c.id === "course:toner-saver-white");
+    const ring = page.mapLayer.stream.passes.find((p) => p.kind === "fill" && p.colour === toner && pathRings(p.path).length === 2);
     expect(ring).toBeDefined();
     const f = page.frameUm, d = RING_BLEED_UM;
     const outer = frameInMap(page.mapLayer.transform, { x: f.x - d, y: f.y - d, width: f.width + 2 * d, height: f.height + 2 * d });
@@ -76,6 +80,29 @@ describe("composePage", () => {
     expect(pageFill).toBeDefined();
     // The page white-out at (84, 62) 32 × 24 page mm, y-up: lower-left (84, 90 − 86).
     expect(Array.from(pageFill!.kind === "fill" ? pageFill!.path.coords.slice(0, 2) : [])).toEqual([84000, 4000]);
+  });
+
+  it("a map toner saver covers the map layer's text and 709 areas outside it: its ring is the last map pass, the page layer after (P1)", () => {
+    const base = pageScene("page-ring");
+    const outside: CourseLayerObject[] = [
+      { id: 9, kind: "oob_area" as const, geometry: [{ x: 42, y: 30 }, { x: 55, y: 30 }, { x: 55, y: 45 }], props: {} },
+      { id: 10, kind: "text" as const, geometry: [{ x: -55, y: 40 }], props: { text: "Ingen passage", fontSizeMm: 3 } },
+      { id: 11, kind: "text" as const, geometry: [{ x: 45, y: -40 }], props: { text: "{course}", fontSizeMm: 4, color: "#1f6fb2" } },
+    ];
+    const page = composePage({ ...base, course: { ...base.course, objects: [...(base.course.objects ?? []), ...outside] } }, fonts());
+    expect(page.warnings).toEqual([]);
+    const passes = page.mapLayer.stream.passes;
+    const toner = page.colours.findIndex((c) => c.id === "course:toner-saver-white");
+    const last = passes.at(-1)!;
+    if (last.kind !== "fill") throw new Error("the last map pass is not a fill");
+    expect(last.colour).toBe(toner);
+    expect(pathRings(last.path)).toHaveLength(2);
+    expect(passes.filter((p) => p.colour === toner)).toHaveLength(1);
+    const upper = idOf(page.colours, "purple-upper");
+    expect(passes.some((p) => p.kind === "hatch" && p.colour === upper)).toBe(true);
+    expect(passes.filter((p) => p.kind === "text").length).toBeGreaterThan(0);
+    // The page layer is its own stream, written after the map layer (writePage), so the page box stays.
+    expect(page.pageLayer.stream.passes.some((p) => p.kind === "fill")).toBe(true);
   });
 
   it("a page-anchored white-out outside rings the frame grown by 1 mm", () => {
@@ -99,16 +126,14 @@ describe("composePage", () => {
     expect(page.mapLayer.stream.passes.some((p) => p.kind === "text")).toBe(true);
   });
 
-  it("images: map- and page-anchored image objects become page images in their layer's space", () => {
+  it("images: an image course object and a page-anchored image object become page images in their layer's space", () => {
     const base = pageScene("page-ring");
+    const mapLogo: CourseLayerObject = { id: "map-logo", kind: "image", geometry: [{ x: -5, y: -1 }, { x: 5, y: -5 }], props: { graphicId: 8, crop: { x: 0.5, y: 0, width: 0.5, height: 1 } } };
     const page = composePage(
       {
         ...base,
-        objects: [
-          ...base.objects,
-          { id: "logo", anchor: "page", kind: "image", graphicId: 7, x: 10, y: 10, width: 20, height: 10 },
-          { id: "map-logo", anchor: "map", kind: "image", graphicId: 8, x: -5, y: -5, width: 10, height: 4, crop: { x: 0.5, y: 0, width: 0.5, height: 1 } },
-        ],
+        course: { ...base.course, objects: [...(base.course.objects ?? []), mapLogo] },
+        objects: [...base.objects, { id: "logo", anchor: "page", kind: "image", graphicId: 7, x: 10, y: 10, width: 20, height: 10 }],
       },
       fonts(),
     );
@@ -127,6 +152,55 @@ describe("composePage", () => {
     expect(on).not.toEqual(plain);
     const off = composePage({ ...cut, course: { ...cut.course, viewOptions: { ...cut.course.viewOptions, autoCuts: false } } }, fonts()).mapLayer.stream;
     expect(off).toEqual(plain);
+  });
+
+  it("variation tints never print (F7; 08 §12): a tinted structure composes as the plain one, no tint row", () => {
+    const base = pageScene("page-ring");
+    const spine = base.course.structure as CourseStructure;
+    const branch: CourseStructure = { ...spine, id: "course:g:B", items: spine.items.slice(1, 3) };
+    const plain = composePage({ ...base, course: { ...base.course, structure: [spine, branch] } }, fonts());
+    const tinted = composePage({ ...base, course: { ...base.course, structure: [spine, { ...branch, tint: "B" }] } }, fonts());
+    expect(tinted.colours.some((c) => c.id.startsWith("course-tint:"))).toBe(false);
+    expect(tinted.mapLayer.stream).toEqual(plain.mapLayer.stream);
+    // The page's view options cannot name the All-variations view.
+    // @ts-expect-error allVariations is not a print option (PageInput.course.viewOptions)
+    const options: PageInput["course"]["viewOptions"] = { allVariations: true };
+    expect(options).toBeDefined();
+  });
+
+  it("the all-variations page (F8; answer 4): spine and branches in the one purple — the plain colour table, no tint row, codes", () => {
+    const base = pageScene("page-sprint-a4");
+    const root = {
+      items: [
+        { siteId: "S" }, { siteId: "31" },
+        { kind: "variation" as const, id: "g", alternatives: [{ label: "A", items: [{ siteId: "32" }] }, { label: "B", items: [{ siteId: "33" }] }] },
+        { siteId: "34" }, { siteId: "F" },
+      ],
+    };
+    const { spine, branches } = allVariationStructures(root);
+    const ordered = (id: string, items: CourseStructure["items"]): CourseStructure => ({ version: 1, id, orderMode: "ordered", items });
+    const structure = [ordered("course", spine), ...branches.map((b) => ordered(`course:${b.groupId}:${b.label}`, b.items))];
+    const viewOptions = { ...base.course.viewOptions, labelMode: "code" as const };
+    const all = composePage({ ...base, course: { ...base.course, structure, viewOptions } }, fonts());
+    const spineOnly = composePage({ ...base, course: { ...base.course, structure: structure[0], viewOptions } }, fonts());
+    expect(all.colours.some((c) => c.id.startsWith("course-tint:"))).toBe(false);
+    expect(all.colours).toEqual(spineOnly.colours);
+    // The branches are drawn: more course passes than the spine alone.
+    expect(all.mapLayer.stream.passes.length).toBeGreaterThan(spineOnly.mapLayer.stream.passes.length);
+  });
+
+  it("the all-variations page labels (F15): viewOptions.labels draws the numbers the sequence would, the colour table unchanged", () => {
+    const base = pageScene("page-sprint-a4");
+    const structure = base.course.structure as CourseStructure;
+    const sites = structure.items.map((i) => i.siteId);
+    const labels = Object.fromEntries(sites.filter((id) => id !== "S" && id !== "F").map((id, i) => [id, String(i + 1)]));
+    const code = { ...base.course.viewOptions, labelMode: "code" as const };
+    const sequence = composePage({ ...base, course: { ...base.course, viewOptions: { ...base.course.viewOptions, labelMode: "sequence" } } }, fonts());
+    const codes = composePage({ ...base, course: { ...base.course, viewOptions: code } }, fonts());
+    const labelled = composePage({ ...base, course: { ...base.course, viewOptions: { ...code, labels } } }, fonts());
+    expect(codes.mapLayer.stream).not.toEqual(sequence.mapLayer.stream);
+    expect(labelled.mapLayer.stream).toEqual(sequence.mapLayer.stream);
+    expect(labelled.colours).toEqual(codes.colours);
   });
 
   it("an unaligned document stack is a CourseStackError", () => {

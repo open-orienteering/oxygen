@@ -12,6 +12,7 @@
  */
 
 import { XMLBuilder } from "fast-xml-parser";
+import { course as courseShared } from "@oxygen/shared";
 import type {
   CourseDataExport,
   ExportControlSite,
@@ -34,9 +35,18 @@ export interface PpenExportInput extends CourseDataExport {
  *
  * Every *placed* control is exported. Course controls referring to
  * unplaced controls are dropped, matching the IOF exporter.
+ *
+ * The course structure (row F9; docs/ppen-import-export.md): a variant is
+ * an ordinary `kind="normal"` course (Purple Pen's own variations are not
+ * written — the parser refuses them); a bent leg is a `<leg>` with
+ * `<bends>`; crossing points are not written (sites nor rows), a map
+ * exchange is a normal control. Purple Pen's bends are corners: a curved
+ * leg (a bend with handles, F13) is written as its curve flattened at
+ * 0.1 mm (user answer 2026-11-08 Q3), so a round trip keeps its shape and
+ * length within that and comes back as corners.
  */
 export function buildPpenXml(input: PpenExportInput): string {
-  const placed = input.controls.filter((c) => c.xMm !== 0 || c.yMm !== 0);
+  const placed = input.controls.filter((c) => (c.xMm !== 0 || c.yMm !== 0) && c.type !== "CrossingPoint");
   const byId = new Map<string, ExportControlSite>();
   for (const c of placed) if (!byId.has(c.id)) byId.set(c.id, c);
   const sites = [...byId.values()];
@@ -92,10 +102,26 @@ export function buildPpenXml(input: PpenExportInput): string {
 
   const courseNodes: Record<string, unknown>[] = [];
   const courseControlNodes: Record<string, unknown>[] = [];
+  /** `<leg>` bends by "<start control>><end control>" (internal ids): one per pair, first course wins. */
+  const legBends = new Map<string, ReadonlyArray<{ x: number; y: number }>>();
   let order = 1;
 
   for (const course of input.courses) {
-    const seq = course.controls.filter((cc) => byId.has(cc.controlId));
+    const seq = course.controls.filter((cc) => cc.type !== "CrossingPoint" && byId.has(cc.controlId));
+    for (let i = 1; i < seq.length; i++) {
+      const bends = seq[i].bends;
+      if (!bends?.length) continue;
+      const key = `${controlInternalId.get(seq[i - 1].controlId)!}>${controlInternalId.get(seq[i].controlId)!}`;
+      if (legBends.has(key)) continue;
+      if (!courseShared.hasCurvedBends(bends)) {
+        legBends.set(key, bends);
+        continue;
+      }
+      // A curve: its flattened polyline's inner points, the sites excluded.
+      const a = byId.get(seq[i - 1].controlId)!, b = byId.get(seq[i].controlId)!;
+      const flat = courseShared.legPolylineOf({ x: a.xMm, y: a.yMm }, bends, { x: b.xMm, y: b.yMm }, courseShared.PPEN_FLATTEN_TOLERANCE_MM);
+      legBends.set(key, flat.slice(1, -1));
+    }
     if (seq.length === 0) continue;
 
     const courseId = nextId++;
@@ -189,6 +215,16 @@ export function buildPpenXml(input: PpenExportInput): string {
   if (controlNodes.length > 0) root.control = controlNodes;
   if (courseNodes.length > 0) root.course = courseNodes;
   if (courseControlNodes.length > 0) root["course-control"] = courseControlNodes;
+  const legNodes = [...legBends].map(([key, bends]) => {
+    const [start, end] = key.split(">");
+    return {
+      "@_id": nextId++,
+      "@_start-control": start,
+      "@_end-control": end,
+      bends: { location: bends.map((b) => ({ "@_x": round(b.x, 6), "@_y": round(b.y, 6) })) },
+    };
+  });
+  if (legNodes.length > 0) root.leg = legNodes;
 
   const builder = new XMLBuilder({
     ignoreAttributes: false,

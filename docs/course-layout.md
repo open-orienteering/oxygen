@@ -34,11 +34,11 @@ the grid; drags move in whole millimetres), `pageBounds`.
 | Part | Drawn by | As in the PDF |
 |---|---|---|
 | Base map | static buckets | the map layer's document part |
-| Course, course objects, map-anchored layout objects | the dynamic bucket (`courseLayerRequest` with `layout`: the sheet's layout objects first, the template's appearance, `viewOptions { overprintScale, window, textValues }` — what `composePage` passes) | the map layer's course part |
-| Page-anchored objects, the description block | the **page part**: `course.pageLayer` (extracted from `composePage`, the same stream) through `T_map⁻¹` into paper mm (`pageStreamInMap`), its colour indices offset past every map colour so it draws after the map — the PDF's page layer after the map layer | the page layer |
+| Course, course objects | the dynamic bucket (`courseLayerRequest` with `layout`: the course objects in view, the template's appearance, `viewOptions { window, textValues }` — what `composePage` passes; a former map-anchored layout object is a course object since F12, `course-layer.md` §3.6) | the map layer's course part |
+| Layout objects (all page-anchored), the description block | the **page part**: `course.pageLayer` (extracted from `composePage`, the same stream) through `T_map⁻¹` into paper mm (`pageStreamInMap`), its colour indices offset past every map colour so it draws after the map — the PDF's page layer after the map layer | the page layer |
 | Map clip | the renderer scissors every map colour to the frame (`pageClip`) | the frame clip |
 | Paper edge, printable margin (dashed red), frame (purple, solid when selected), grey surround | UI layer (`editor-layout-paper` / `-printable` / `-frame`) | — |
-| Images (page and map anchored) | UI layer (`editor-layout-image`, an SVG `<image>` of `/api/maps/<event>/graphics/<id>`) | embedded PNG |
+| Images (page objects; `image` course objects are not previewed, Pending "GL-drawn images") | UI layer (`editor-layout-image`, an SVG `<image>` of `/api/maps/<event>/graphics/<id>`) | embedded PNG |
 
 The label mode is the viewer's own rule (sequence numbers for one ordered
 course, codes for the all-controls sheet), which agrees with
@@ -73,24 +73,44 @@ the row mapping `maps.pdf` uses (`sheetInputForMapRow`, `pdf-page.ts`):
   `mapTemplate.previewLayout`). `NOT_FOUND` for an unknown sheet,
   template or course; `PRECONDITION_FAILED` for a sheet without a
   template.
-- Returns `scope`, the raw `sheet` (seq, name, kind, course, window
-  centre, overrides, objects) and `template` (page settings, objects) the
+- `{ seq | classSeq, variantKey? }` (F8; 08 §6's `layout.resolveSheet
+  { …, variantKey? }`, taken as the existing procedure's key): a root's
+  sheet as that variant prints it (`rowForVariant`, `course-print.md`
+  §4.6) — its course, numbering, block and `{variant}`, on the window
+  the variants share; `variantKey` in the answer (null otherwise). A key
+  the sheet's course has no live variant of — any other sheet, or a key
+  the editor's structure has before its write lands — reads the sheet
+  as is, on the same shared window (decided on the user's standing instruction 2026-11-07, for
+  review: no error while the editor is ahead of the server).
+- Returns `scope`, the raw `sheet` (seq, name, kind, course, class,
+  `sectionIndex` — the part it prints, F5 —, window centre, overrides,
+  objects) and `template` (page settings, objects) the
   editor writes back, the resolved `document` and `window`, `page` (the
-  composer's page input: paper, frame, window, objects of both anchors,
+  composer's page input: paper, frame, window, the layout objects,
   text values, the block), `block` (rows, header, title, also when
-  hidden), `appearance`, `overprintScale`, `labelMode`, `windows` (this
+  hidden), `appearance`, `labelMode`, `windows` (this
   sheet's and the course's other sheets', for validation), `controls`,
   the block's row counts and `mapScale`.
+
+`courseMap.list` validates a root's sheet per variant (F8): every
+variant's placed sites against the course's windows, an outside control
+named by its key (`CourseMapValidationIssue.variantKey`), and a NULL
+centre resolves to the shared one (`sharedWindowCentre`).
 
 The editor builds the page request from its snapshot and this read
 (`pages/editor/layout/model.ts` `layoutRequestOf`): objects of both
 scopes, the scale's text value at the snapshot's print scale, the block
-where the snapshot puts it.
+where the snapshot puts it, and a course sheet's part (`section`, from
+`sheet.sectionIndex`; `course-layer.md` §11) — so Layout mode and Class
+view draw a part sheet's part as it prints. `courseMap.list` items carry
+`sectionIndex` too, and their `resolved.window` is the part's.
 
 ## 2. Layout mode
 
 Entered by the mode switch (`editor-mode-layout`) or a deep link
-(`?mode=layout&sheet=<seq>` / `&template=<seq>`, with `&course=<seq>`; §4).
+(`?course=<seq>&mode=layout&sheet=<seq>` / `&template=<seq>`; §4), and
+its URL keeps `mode=layout` with the shown sheet or template while it is
+open (`course-editor.md` §1 "URL").
 The reducer keeps the selected course and drops the tool, phantom and
 selections of Course mode.
 
@@ -99,8 +119,13 @@ selections of Course mode.
 - *Sheet* (`courseMap.saveLayout`): the course's first own sheet (by
   `sortOrder`, `seq`; a class's sheets are not a course's, §6) unless one
   was opened; in Class view the class's first sheet, else the course's;
-  view *All controls* shows the all-controls sheet; a course without a sheet shows "assign a template
-  on the Maps page" (`editor-layout-no-sheet`). An opened course sheet
+  view *All controls* shows the all-controls sheet. Without a sheet
+  (`editor-layout-no-sheet`) the inspector offers *Create sheet*
+  (`editor-layout-create-sheet`, `layout.autoSheets { courseId }`, which
+  also gives a template-less sheet its template, §6), and in view *All
+  controls* *Create the all-controls sheet*
+  (`editor-layout-create-all-controls`, `autoSheets { allControls: true }`;
+  it opens). An opened course sheet
   gives way to the default when the top bar picks another course or view
   *All controls*. A course sheet draws only
   its course (`filterMode: "course"`), as it prints. The top bar's course
@@ -108,15 +133,36 @@ selections of Course mode.
   (`editor-layout-sheet-picker`) chooses among the course's sheets.
   Editable: the sheet's objects, the block (visible, cell size,
   position), the print scale override and the window centre; a sheet
-  write leaves the template's objects alone (`saveLayout` without
-  `templateObjects`, which nothing sends since E4c). The
-  template's objects are drawn **locked**, with the link
-  `editor-layout-edit-template`.
+  write never touches the template (`saveLayout` writes the sheet only).
+  The template's objects are drawn **locked**, with the link
+  `editor-layout-edit-template`. The sheet's actions
+  (`editor-layout-sheet-actions`, `courses.edit`; E-pages, the Maps
+  page's): its **name** (`editor-layout-sheet-name`, `courseMap.update
+  { id, name, baseVersion }`, one undo entry); **Add a sheet**
+  (`editor-layout-add-sheet`, a course's own sheet only: `courseMap.create`
+  on the same template, named `<course> 2`, `<course> 3`, … —
+  `nextSheetName` — and opened); **Delete this sheet**
+  (`editor-layout-delete-sheet`, confirmed; back to the default sheet). A
+  class sheet has the name only (it follows its class's override, §6).
+  **Recalculate** (`editor-layout-recalculate`, F10) on the all-controls
+  sheet and a setter sheet refits it (`layout.recalculateSheet`, §6, §8).
+  Create, delete and recalculate are not undo entries, as the editor's
+  course create (`course-editor.md` §3). A setter sheet (F10, §8) opens
+  from the *Setter maps* section and stays open when the top bar picks
+  another course or view; the inspector's picker lists its scope's
+  setter sheets.
 - *Template* (`mapTemplate.update`): previewed with the top bar's course.
-  Editable: paper, orientation, print scale, margin (the frame keeps its
-  distance to the margin; the template table instead resets a frame to the
-  default for the new margin), appearance (circle, line, number,
-  purple), the block's defaults and the template's objects. No align
+  Editable: the name (`editor-layout-template-name`, in the snapshot:
+  written with the rest, one undo entry), paper, orientation, print scale,
+  margin (the frame keeps its distance to the margin), appearance (circle,
+  line, number, purple), the block's defaults and the template's objects.
+  **New template** (`editor-layout-new-template`: paper A3/A4/A5,
+  orientation, scale, margin, the name defaulting to the key's —
+  `NewTemplateForm`; `mapTemplate.create`, then it opens) and **Delete this
+  template** (`editor-layout-delete-template`, confirmed; its sheets keep
+  their layout without a template — `ON DELETE SET NULL` — and the view
+  returns to the course's sheet, which is then the no-sheet state) are not
+  undo entries. No align
   (a template stores no window). On a coarse pointer the inspector says
   template editing is optimised for desktop (08 §5.5); window moves on a
   sheet work by touch (the binding's drag).
@@ -127,21 +173,23 @@ so the course layer's targets are off, and the keys are Layout's own.
 **Writes.** One gesture is one whole-snapshot write and one undo entry on
 the editor's shared stack, whose undo writes back the snapshot it
 replaced (`course-editor.md` §3); numeric fields commit on blur / Enter;
-there is no debounce. The status bar's save state is the editor's.
+there is no debounce. The save state is the editor's (the top bar's save
+indicator, `course-editor.md` §2).
 
 **Version tokens** (D8). `course_maps.version` and `map_templates.version`
 are the G1 token for rows that are not journaled: an HLC minted by the
 node clock on every write (`reorder` included), as `course_objects` (`course-layer.md` §8.4).
-`courseMap.saveLayout` and `mapTemplate.update` take an optional
-`baseVersion`; the row is locked (`FOR UPDATE`) and a stale token is tRPC
+`courseMap.saveLayout`, `courseMap.update` (E-pages: the sheet's name)
+and `mapTemplate.update` take an optional `baseVersion`; the row is locked (`FOR UPDATE`) and a stale token is tRPC
 `CONFLICT` with `VersionConflictData { kind: "sheet" | "template", id
 (seq), version, current (the row now), differing: null }`. Layout mode
 sends the newest token it has seen (`VersionBook`: the read's, raised by
 every write result — `saveLayout` answers `{ ok, version }`) and shows a
 conflict as the editor's refresh notice: the read is refetched and the
 user redoes the gesture — two whole snapshots are never merged. Without
-`baseVersion` a write is last-writer-wins, as the Maps / Map templates
-pages still send it (until E-pages folds them into Layout mode).
+`baseVersion` a write is last-writer-wins; every Layout write sends one
+(the Courses page's `applyToCourses` and the class overrides are not
+token-guarded row writes).
 
 **Keys** (08 §5.3 Layout column): `V` select, `H` header, `T` text, `D`
 description block, `W` white-out, `L` line, `R` rectangle, `P` polygon
@@ -150,7 +198,10 @@ white-out outside, see §3),
 `F` fit page, `Tab` / `Shift+Tab` next / previous object, `Delete` the
 selected path's focused vertex (§3), else the selected object (or hides
 the block), `Enter` closes the polygon being drawn (from three vertices),
-`Escape` drops the tool (a polygon being drawn is discarded), then the
+`Escape` first cancels a mouse drag in flight — a move, resize, align
+map or vertex drag ends with nothing written and its preview dropped
+(the viewer's rule, `course-editor.md` §3, F24; user 2026-11-11) — then
+drops the tool (a polygon being drawn is discarded), then the
 selection; `Ctrl+Z` / `Ctrl+Y` undo / redo. The grid toggle
 (`editor-snapping`) moves in 1 mm steps; a polygon's vertices are placed
 on the 1 mm page grid with it.
@@ -159,12 +210,27 @@ on the 1 mm page grid with it.
 (`editor-layout-sheet`, `editor-layout-scope` with `data-scope`,
 `data-sheet`, `data-template`), the selection's properties
 (`editor-layout-selected`: text, size, align, colour; fill mode, line
-colour, width; the anchor), the scope's objects (`editor-layout-object-row`)
+colour, width), the scope's objects (`editor-layout-object-row`)
 with the validation issues (`editor-layout-issue`, `validate.ts`'s codes,
 computed live from the snapshot), the graphics library
-(`editor-layout-graphics`: place, upload).
+(`editor-layout-graphics`: place, upload); then the template's key (§5),
+the classes (§6) and **Club templates** (`editor-layout-club`, collapsed;
+E-pages): the club library's rows (`editor-layout-club-row-<id>`) with
+*Bring in* (`…-club-import-<id>`: `mapTemplate.loadFromClub` under a free
+name, `base (2)`, …; it opens; the template loads whole — every layout
+object is page-anchored since F12, `course-maps.md` "Base-map changes
+and club templates") and delete (`…-club-delete-<id>`, confirmed), and *Save this
+template to the club library* (`editor-layout-save-to-club`, a name
+prompt). The library is shared between events: none of these is an undo
+entry.
 
 ## 3. Page objects
+
+Layout mode creates and edits **page-anchored objects only**: since F12
+(`course-layer.md` §3.6) the layout schema's anchor is the literal
+`"page"`, there is no anchor to choose or show, and what was anchored to
+the map is a course object — drawn in Layout mode with the course,
+edited in Course mode (`course-editor.md` §7).
 
 The rail (`layout/LayoutRail.tsx`, `editor-layout-rail`,
 `editor-layout-tool-<key>`) arms a tool; a click places at the page point
@@ -187,9 +253,11 @@ editor (decision log D7; that editor was deleted in E4c).
 
 **`P` draws a polygon** (D16) with the course editor's area flow
 (`course-editor.md` §6.4: `areaBinding` / `step` in `tools/polygon.ts`,
-`AreaKind` `layout_path`, closed, three or more vertices, curves): click
-= corner, click-drag = curve vertex (symmetric handles, `Shift` 45°),
-`Alt` at the press = smooth vertex, a placed vertex dragged to adjust it,
+`AreaKind` `layout_path`, closed, three or more vertices, curves) and its
+convention, **smooth by default, Alt for sharp** (F18): a click places a
+smooth vertex (handles from its neighbours, `smoothHandles`, wrapped at
+the close), `Alt` at the press a corner, click-drag pulls symmetric
+handles by hand (`Shift` 45°), a placed vertex dragged to adjust it,
 closed by a click on the first vertex, a double-click or `Enter`; `Esc` or
 a right-click discards it. A drag pans no more while `P` is armed (the
 tool takes every press, as in Course mode). The flow runs in the
@@ -207,8 +275,8 @@ black, 0.35 mm, `fillMode: "none"` — in **one** snapshot write
 (`saveLayout` / `mapTemplate.update`) and one undo entry; the new path is
 selected and `V` is armed again. The fixed trapezoid `P` used to place
 is gone. `L`, `R`, `W`, `H`, `T`, `I`, `D` keep click placement. On
-touch the flow is the course editor's (taps place corners, no curve
-vertices); Layout itself stays off the phone mode switch (`course-editor.md` §10 and Pending, "Layout on a phone").
+touch the flow is the course editor's (taps place smooth vertices, no
+corners or pulled handles); Layout itself stays off the phone mode switch (`course-editor.md` §10 and Pending, "Layout on a phone").
 
 **No tool for white-out outside** (D14). D7 added an `O` tool that placed
 a closed path with `fillMode: "whiteoutInverted"` (white everywhere in
@@ -219,8 +287,15 @@ and the keys; the **fill mode stays** in the inspector's fill select
 (`layoutFill_whiteoutInverted`, "White-out outside"), so an object that
 has it (legacy templates, earlier D7 sheets) stays editable and a `P`
 polygon can still be turned into one, for template-level ink saving on
-an all-controls or class sheet. Rendering, print and the schema are
-untouched; no stored object is changed.
+an all-controls or class sheet. A map-anchored one became a course
+`toner_saver` in F12 (`course-layer.md` §3.6): like a toner saver drawn
+in Course mode it covers everything the map layer draws outside its
+shape — map text, 709 areas, the course — on the canvas and in the PDF
+alike, its white the map layer's top row (P1). A white-out outside of
+any size — a page-anchored shape or a toner saver — may cross the frame
+from any side or lie beyond it: it hides only what is outside its shape,
+on the canvas as in the PDF (P7, `docs/bugfix-whiteout-layout.md`). A
+plain white-out is a single ring and was never affected.
 
 With `V`: a click selects an object of the scope, topmost first
 (`layoutObjectAt`): text, rectangles and images **by their bounds**;
@@ -239,9 +314,8 @@ it deselects.
 **A selected path** (closed or open — `L` lines are open paths) takes
 the course editor's geometry gestures (`course-editor.md` §7 "Editing
 geometry"; `lib/editor/geometry-gestures.ts`, shared with `V` in Course
-mode) in **page mm**: a map-anchored path (legacy templates) is mapped
-onto the page and back (`pagePoints` / `nativePoints`, handles as
-offsets). It is drawn as its outline along the curves
+mode) in **page mm**, the space it is stored in (every layout object is
+page-anchored since F12). It is drawn as its outline along the curves
 (`editor-layout-selection`), a handle per vertex (`editor-layout-handle`,
 `data-index`, the focused one `data-focused`) and a grip per Bézier
 handle (`editor-layout-grip`, `data-which`). Pressing order vertex →
@@ -251,10 +325,10 @@ grip → edge:
 |---|---|
 | drag a vertex | moves it, its handles with it; the vertex kept on the printable area; with the grid on the offset goes in whole millimetres |
 | click a vertex | focuses it (no write); `Delete` removes it (`deleteVertex`, down to 3 vertices closed, 2 open; at the minimum nothing) |
-| `Alt`-drag a vertex | symmetric handles (`Shift`: 45° on the page) |
+| drag a vertex with `Alt` held | moves it like a plain drag, snapped and clamped the same (F18: no handles pulled) |
 | drag a grip | the handle moves by the pointer's offset, a mirrored / smooth pair kept; `Alt` held (live) breaks it |
-| `Alt`-click a vertex with handles | retracts them |
-| double-click on an edge, off the vertices | inserts a vertex there (`insertVertex`; a curve is split so it keeps its shape), focused |
+| `Alt`-click a vertex | switches it corner / smooth (`toggleSmooth`: handles retracted, or smooth handles from its neighbours in page mm); an open path's end corner: nothing |
+| double-click on an edge, off the vertices | inserts a **smooth** vertex there (`insertAtEdge`: on a straight edge collinear `smoothHandles`, on a curve the split that keeps its shape), focused; with `Alt` a corner |
 | drag the edge | moves the whole path (`translateMapObject` / `constrainMapObject`, as any object) |
 
 Each drag is one write and one undo entry, previewed live; a click
@@ -276,17 +350,25 @@ centre, and undo writes the old one. The stored centre is the record
 the legacy editor kept (it moved the terrain under a fixed sheet; the
 record is the same). With nothing selected a drag pans.
 
-**Entry points.** The Maps page's *Edit layout* (`edit-course-map-<seq>`,
-the all-controls row) and the Map templates page's
-(`edit-template-layout-<seq>`) navigate to the editor's Layout mode
-(`layoutEditorHref`, `lib/editor/layout-href.ts`) for every event since
-E3; it is the only editor of a sheet or a template. The legacy
-`MapLayoutEditor` was deleted in E4c, its map preview `window.png` in
-E4a (`course-print.md` §10).
+**Entry points.** The Courses page's *Edit layout*
+(`edit-course-map-<seq>`, the course's first own sheet that has a
+template, as Layout's default) navigates to the
+editor's Layout mode (`layoutEditorHref`, `lib/editor/layout-href.ts`);
+the all-controls sheet is view *All controls* in Layout mode; a template
+is reached from a sheet's template link, by *New template* or *Bring in*.
+Layout mode is the only editor of a sheet or a template. The retired
+Maps and Map templates pages redirect (`/maps` → the Courses page,
+`/map-templates[?template=]` → Layout mode; `retiredPageHref`, E-pages).
+Layout's shown sheet or template is in the editor's URL (`sheet=` /
+`template=` beside `mode=layout`, F31, `course-editor.md` §1 "URL"), so a
+reload reopens it; a sheet or template that is not the event's gives way
+to Layout's default and leaves the URL.
+The legacy `MapLayoutEditor` was deleted in E4c, its map preview
+`window.png` in E4a (`course-print.md` §10).
 
 **What stays in `course-maps.md`:** the data model (templates, sheets,
-overrides), coordinate spaces, validation codes, the Maps and Map
-templates pages' tables and club templates.
+overrides), coordinate spaces, validation codes, the Courses page's print
+overview ("Where sheets and templates are managed") and club templates.
 
 ## 5. Templates by key
 
@@ -315,9 +397,9 @@ with the most sheets (`course_maps` rows), ties to the oldest
 **Migration** (`20261103120000_auto_templates`, 09 §5): every existing
 template gets its key, and per key decision (3) marks all but one
 `is_extra`. No sheet is moved or deleted and **no template is renamed**:
-templates keep their names and the key is shown as a badge (Map templates
-page `map-template-key-<seq>`, Maps page `course-template-badge-<course>`,
-the Layout inspector).
+templates keep their names and the key is shown as a badge (the Courses
+page's `course-template-badge-<course>`, the Layout inspector's
+`editor-layout-template-badge`).
 
 **Created when needed.** `ensureAutoTemplate` returns a key's auto
 template, creating it named after the key (`A4 portrait 1:10000`; a
@@ -325,9 +407,11 @@ taken name gets ` (2)`, …). A new one takes its seed's margin and
 appearance, and — when the seed has the same paper and orientation (a
 class at another scale) — its frame, block and objects too; otherwise the
 frame inside the margin and the block top right
-(`defaultTemplateSettings`, as the Map templates page creates one).
+(`defaultTemplateSettings`).
 
-**Extra templates** are created explicitly: the Layout inspector's
+**Extra templates** are created explicitly. *New template* (§2, and
+"New template…" in the Courses page's picker) makes its key's auto
+template unless the key has one, then an extra — the key rule above. The Layout inspector's
 *Create extra template* (`editor-layout-create-extra`) copies the shown
 template (`mapTemplate.duplicate`, which makes a copy its key's extra) as
 `<name> (extra)` and, in a course sheet, moves the sheet's course to it.
@@ -344,9 +428,10 @@ and one undo entry.
 
 ## 6. Sheets and class overrides
 
-**Sheet rows** (`course_maps`, 08 §4.6) gain `section_index` (0; map
-exchange writes more in F), `class_id` (a class sheet, below; `ON DELETE
-CASCADE`) and `props` (setter maps, F). A course's **own** sheets have
+**Sheet rows** (`course_maps`, 08 §4.6) gain `section_index` (the part
+of a course split by map exchanges the sheet prints, `course-layer.md`
+§11; 0 for every sheet of a one-part course), `class_id` (a class sheet, below; `ON DELETE
+CASCADE`) and `props` (a setter sheet's group, §8). A course's **own** sheets have
 `class_id` NULL.
 
 **`layout.autoSheets { courseId? }`** (`courses.edit`; 08 §6), idempotent,
@@ -367,10 +452,29 @@ in one transaction (60 s timeout); without `courseId` every course of the event:
    margin" (08 §4.6).
    A concurrent first export of the same key does not fail: the insert
    is `ON CONFLICT DO NOTHING` and the key's auto template is read back.
+   **Part sheets** (F5; 08 §4.6 "auto-created from the structure"): a
+   course split by map exchanges (`course-layer.md` §11; the parts are
+   its placed exchange sites plus one, `partCountOf` over the course
+   mirror) has one own sheet per part. A part without an own sheet of its
+   `section_index` gets one on the course's template — the parts share
+   it, fitted on the whole course; only the window differs — named
+   `<course> · part n` (part 1 the course's name; the server writes no
+   localised name, as *All controls*), window centre NULL (centred on
+   the part's controls, `course-print.md` §5.2), `sort_order` after the
+   course's other sheets. A part sheet the setter deleted comes back on
+   the next `autoSheets` (Export ▾ runs it), never by itself. A sheet of
+   a part that no longer exists (the exchange removed) is **kept**: no
+   automation deletes a layout the setter may have edited, and it prints
+   the whole course (its `section` is out of range) until the setter
+   deletes it. *Add a sheet* (E-pages) and `courseMap.create` write
+   `section_index` 0. (Decided on the user's standing instruction
+   2026-11-07, for review.)
 2. *Class sheets.* Every class of the course with `print_scale` or
    `sheet_template_id` gets sheet rows keyed by `class_id`: one per course
-   sheet (name `<sheet> · <class>`; window centre, objects, block and
-   sort order copied). Its template is `sheet_template_id`, else the auto
+   sheet (name `<sheet> · <class>`; window centre, objects, block, sort
+   order and `section_index` copied) when the class has none; when it
+   has some, one per course sheet of a part the class has no sheet of
+   (F5: a new exchange gives every overriding class its part sheet). Its template is `sheet_template_id`, else the auto
    template of the course template's paper and orientation at the class's
    scale (created from the course template). With both set and the scales
    different, the sheet's `overrides.printScale` is the class's. Existing
@@ -378,6 +482,29 @@ in one transaction (60 s timeout); without `courseId` every course of the event:
    class sheet whose class no longer overrides, or runs another course, is
    deleted. Two classes sharing a course and an override each get their
    own rows.
+
+**The all-controls sheet** (`autoSheets { allControls: true }`; E-pages):
+the event's one `kind = 'all_controls'` sheet (named *All controls*,
+window centre NULL — centred on the controls), created on demand on the
+auto template of the key that fits every placed control of the event:
+step 1's rule — the busiest template's paper, orientation and scale,
+`fitOrientation` turning it when only the other orientation holds them. A
+sheet without a template gets that template; an existing one is answered
+(`allControlsSheet`). With `courseId` too both parts run; `{}` leaves it
+alone. **Recalculate** (F10, `layout.recalculateSheet { sheet }`; 08 §4.6
+"can be recalculated; moved items stay fixed until recalculated") refits
+it to every placed control of the event, keeping its paper: the auto
+template of the orientation and standard scale `fitScale` picks (§8,
+its current orientation preferred, its template seeding the look), the
+window centre back to NULL, `overrides.printScale` dropped (a Layout
+save writes one) and the block's position back to the template's
+(`overrides.description` keeps `visible` and the cell size, loses `x` /
+`y`). A placement of the block that avoids the controls is not computed
+(Pending). It is
+a setter view (F4, `course-layer.md` §10.3): it draws every crossing
+point and the map-issue points (702), on screen in Layout mode and in
+print; a course or class sheet draws only the crossing points its legs
+run through.
 
 **Class overrides** (`classes.print_scale`, `classes.sheet_template_id`
 `ON DELETE SET NULL`; 08 §4.4) are written by `layout.setClassOverride
@@ -391,8 +518,9 @@ The Layout inspector's *Classes* section (`editor-layout-classes`,
 the sheet's course — scale (`…-class-scale-<seq>`, blank = none),
 template (`…-class-template-<seq>`, *Auto* = none) — one undo entry each;
 *Open* shows the class's sheet. `layout.classOverrides { courseId }`
-reads them. The Maps page stays per course: class sheets are left out of
-its rows (SLICES "Decided in this split").
+reads them. The Courses page's print overview stays per course: class
+sheets are left out of its template and status columns (SLICES "Decided
+in this split").
 
 **Printing a class** (`rowForClass`, `course-maps/pdf-page.ts`, both
 pipelines): the description header and `{classes}` name that class only;
@@ -411,11 +539,17 @@ mode draws a sheet: the overprint at the class's scale, the page part,
 the map clipped to the frame, the course only. A class opens fitted on
 its page. No sheet for the class's course → `editor-class-no-sheet` and
 the course as in Course view. Another course, Course or All controls
-leaves it. In Layout mode Class view opens the class's sheet.
+leaves it. In Layout mode Class view opens the class's sheet. A class on
+a root (F8) is drawn as one variant (`resolveSheet { classSeq,
+variantKey }`): Variant ▾ picks it, the first key by default
+(`course-editor.md` §12).
 
-**The sheet key** in the status bar (`editor-status-sheet`, 08 §5.2):
+**The sheet key** in the top bar's course-info popover (`editor-stats-sheet`,
+`data-key`, `course-editor.md` §2; 08 §5.2 put it in a status bar, P2 moved it):
 `1:<scale> <paper> <orientation>` of the shown sheet, in Layout mode and
-Class view, in place of the map scale.
+Class view. The map's own scale is not in the popover since P6: it is the
+map-info dialog's (`course-editor.md` §2); the phone's peek line shows it
+when no sheet is shown.
 
 ## 7. Export
 
@@ -424,62 +558,243 @@ entries; `lib/editor/export-menu.ts`), each on an existing route:
 
 | Entry | Route | First |
 |---|---|---|
-| This course (`editor-export-course`) | `maps.pdf?courses=<course>` | `autoSheets { courseId }` |
+| This sheet (`editor-export-sheet`, Layout mode on a sheet; E-pages) | `maps.pdf?maps=<sheet>` | — (the sheet exists) |
+| This course (`editor-export-course`) | `maps.pdf?courses=<course>` — a root's sheets once per variant (F8; label *This course (n variants)*) | `autoSheets { courseId }` |
+| This variant (`…-variant`; F8, a root only) | `maps.pdf?variants=<root>:<key>` — the view's variant (Variant view's, or the one Class view / Layout mode draw); label *This variant AB · 12* with its assigned runners (`course.variantList.runnerCount`); disabled without a shown key | `autoSheets { courseId: root }` |
+| All variations (`…-allVariations`; F8, a root only) | `maps.pdf?allVariations=<root>` — each own sheet once, every alternative in the one purple, for officials (answer 4) | `autoSheets { courseId: root }` |
+| One map per runner (`…-courseRunners`; F8, a root only) | `maps.pdf?courses=<root>&copies=runners` — each variant page once per assigned runner, in key order; label with the runners in all; disabled with none | `autoSheets { courseId: root }` |
 | This class (`…-class`, Class view only) | `maps.pdf?classes=<class>` | `autoSheets { courseId }` |
 | All courses (`…-all`) | `maps.pdf` (every own sheet and the all-controls sheet) | `autoSheets {}` |
-| All controls (`…-allControls`) | `maps.pdf?allControls=1` | — (no sheet: the route's "No maps found") |
+| All controls (`…-allControls`) | `maps.pdf?allControls=1` | `autoSheets { allControls: true }` (E-pages) |
+| Setter maps (`…-setter`; F10) | `maps.pdf?setter=1` (every setter sheet of the event, §8) | — (generating needs a group count: Layout mode's *Setter maps*; none → the route's "No setter maps found" on the error line) |
+| Description sheets… (`…-descriptions`; F11) | opens the dialog (`editor-descriptions-dialog`), then `descriptions.pdf?classes=<seq,…>&copies=&cell=` (`course-print.md` §6.4) | — (no sheet row) |
 | IOF XML (`…-iofxml`), Purple Pen (`…-ppen`) | `/api/export/course-data?format=` | — |
 
 So a course without a template exports: its first sheet is made on the
-auto template of its key. Without `courses.edit` nothing is created first.
-The Maps page's per-course export (`export-course-<course>`) does the
-same for a course without a map. Variants, setter maps and description
-sheets arrive in F.
+auto template of its key; so does an event without an all-controls sheet.
+Without `courses.edit` nothing is created first (no all-controls sheet:
+the route's "No maps found" on the error line). The Courses page's
+per-course export (`export-course-<course>`) and its export menu's *All
+maps* / *All controls* do the same (`course-maps.md` "Where sheets and
+templates are managed"); a variant's row has `export-variant-<seq>`
+(`?variants=<root>:<key>`) and a root's row `export-all-variations-<root>`
+(F8), each ensuring the root's sheets. This sheet is a phase-1 entry 08
+§5.2 does not list: the Maps page's *Selected map*, kept so a second
+sheet prints alone; on a root's sheet it prints every variant too.
+
+**`maps.pdf`'s selection** (`selectPrintPages`, `course-print.md` §4.6,
+§8): one of `maps=<seq,…>`, `courses=<seq,…>` (a variant's seq prints
+that key on its root's sheets), `classes=<seq,…>`, `setter=1`,
+`variants=<root>:<key,…>` (one root, its live keys; printed in key
+order), `allVariations=<root>`; `allControls=1` beside the unfiltered or
+alone. `copies=runners` (only that value) with `courses`, `classes` or
+`variants`, and `spare=<0–500>` with it. A root's own sheet never prints
+as the root. The unfiltered export skips a sheet a variant was given of
+its own before F8 (it prints on its root's). 08 §5.2's "variants… · loops
+composite" became the four entries above; a loop prints as its variants,
+no separate composite (decided on the user's standing instruction
+2026-11-07, for review). `autoSheets` of a variant is its root's (it
+creates no sheet for a variant); *All courses* ensures roots and plain
+courses only; a root's first window is fitted over every alternative's
+sites (08 §4.6 "fits the course").
+
+**Description sheets…** (F11; 08 §4.6, §5.2 "descriptions") opens a dialog
+(`pages/editor/DescriptionSheetsDialog.tsx`) instead of downloading at
+once: classes (`editor-descriptions-class-<seq>`, every class with a
+course checked; *All* / *None*), copies (`-copies-count` runners +
+vacancies, `-copies-fill` one full sheet, `-copies-n` with a number
+1–500), cell size (`-cell`, 5 / 6 / 7 mm, default 6) → *Download PDF*
+(`-download`; disabled with no class or an invalid number), which
+downloads `descriptionSheetsUrl(…)` — always explicit `classes=`, in class
+order — and closes; a route error shows on the dialog's error line
+(`-error`). It is a modal like the map-info dialog: no keydown reaches
+the editor's shortcuts while it is open, Escape closes only it. The
+Courses page's export menu has the same entry
+(`course-export-descriptions`) opening the same dialog. Nothing is
+created first: the sheets print on demand (`course-print.md` §6.4).
 
 **`maps.pdf?classes=<seq,…>`** (`course-maps.md` API): per class, in the
 order asked, its class sheets, else its course's own sheets as the class
-prints them (§6); exclusive with `maps` / `courses` (400). `?courses=`
-and the unfiltered export print the courses' own sheets only; a class
-sheet prints through `classes` or `maps`.
+prints them (§6); exclusive with `maps` / `courses` / `setter` (400). `?courses=`
+and the unfiltered export print the courses' own sheets only (the
+unfiltered one also the all-controls sheet); a class
+sheet prints through `classes` or `maps`, a setter sheet through
+`setter` or `maps` (F10). A course split by map
+exchanges prints one page per part (its part sheets in `sort_order`,
+F5); *This course* creates the missing part sheets first.
+
+## 8. Setter maps
+
+F10 (08 §4.6 "Setter maps", §5.5, §6 `layout.setterMaps`). A setter map
+is the page a control setter takes out: the controls of one area, at a
+scale that holds them on A4. There is no Setter view in the top bar
+(slice F split, since P2 / P6): a setter map is a **sheet** (Layout mode
+shows it as any sheet) and a **Field-mode pick** (`course-editor.md` §9).
+Unless stated, what follows was decided on the user's standing
+instruction (2026-11-07), for review (README decision log, "F10").
+
+**Rows.** `course_maps.kind = 'setter'` (migration
+`20261108150000_course_maps_setter_kind`), `course_id` NULL for the
+event's setter maps or the course's for a course's, `class_id` NULL,
+`section_index` 0, `props` = `setterSheetPropsSchema` `{ setter: n,
+controlIds: [controls.id …] }` (`course-maps/schema.ts`), `overrides =
+{ description: { cellSizeMm: 5 } }` (`SETTER_DESCRIPTION_CELL_MM`, 08
+"5 mm description cells"), window centre NULL. Written by
+`layout.setterMaps` only: `courseMap.create` takes no `setter` kind.
+
+**`layout.setterMaps { courseId?, groups }`** (`courses.edit`, one
+transaction, 60 s): `groups` 1 … 20 (`MAX_SETTER_GROUPS`) and at most the
+scope's placed sites (else `BAD_REQUEST`; no placed site →
+`PRECONDITION_FAILED`; an unknown course → `NOT_FOUND`).
+
+1. *The scope's sites* (`setterScopeSites`), placed ones only: without
+   `courseId` every site of the event; with it the course's start,
+   controls and finish (the one sequence rule, `layoutCourseEnds`) and the
+   crossing points its legs run through — and in both scopes the event's
+   map-issue points (702 belongs to no course; it is what a setter fixes on
+   the way).
+2. *The groups* (`groupSites`, `packages/shared/src/course-maps/setter-groups.ts`):
+   k-means on paper coordinates (map mm), deterministic — the sites in
+   `seq` order, seeds by farthest-first traversal from the lowest-seq site
+   (ties: lower seq), Lloyd iterations (≤ 100; a site tied between two
+   centroids stays; an emptied group takes the site farthest from its
+   centroid among groups of two or more), groups numbered west → east by
+   centroid x (then north first), each group's sites in `seq` order. The
+   same input always gives the same groups and numbers.
+3. *The sheets*: the scope's setter rows are **deleted** and one row per
+   group is written — *Regenerate* replaces them (their own edits are
+   lost; the UI confirms). Each is on the A4 auto template of the key
+   fitted to its group (`fitScale` below; the event's busiest template's
+   orientation preferred and its margin and look seeded,
+   `ensureAutoTemplate`), named `Setter n` (the event's) or
+   `<course> · Setter n` (English, as *All controls*), `sort_order` after
+   the scope's other sheets.
+
+The answer: `{ sheets: [{ seq, setter, controls: [public control id …] }],
+createdTemplates }`.
+
+**The fit** (`fitScale`, `course-maps/auto-template.ts`; 08 §4.6 "compute
+scale, orientation … to fit everything on A4"): of
+`STANDARD_PRINT_SCALES` = 1:4 000, 5 000, 7 500, 10 000, 15 000, largest
+map first, the first scale at which one orientation (the preferred
+first) holds the sites' extent at print scale plus `COURSE_FIT_MARGIN_MM`
+= 6 mm on every side inside the printable area (§6's `fitOrientation`
+rule at each scale); none → 1:15 000 in the orientation that comes
+closer. The map's scale is the base map's (1:10 000 without one). The
+busiest template (§6, decision (3)) no longer counts setter sheets, and a
+template only setter sheets use is never it: their fitted keys are not
+the event's look.
+
+**What a setter sheet draws** (`sheetInputForMapRow` → `setterSheetInput`,
+`course-maps/pdf-page.ts`; `course-print.md` §5.2): the all-controls
+branch of `resolveMapLayout` (`kind === "setter"` joins it: no layer
+change) over the group's sites only — every site by its kind (702 for a
+map-issue point, 710 for a crossing point, start, finish), labels by code,
+`viewOptions { allControls: true, setterMarks: true }`, no course
+structure (a course's setter map draws no legs), the `all`-scoped course
+objects; the description block lists the group's control rows in code
+order, no IOF header, titled with the row's name, at 5 mm. `courseMap.list`
+and `courseMap.resolveSheet` answer `setter { index, controls }` (public
+control ids in the block's code order; null for other kinds), and a
+setter sheet is validated against its own window only (its controls are
+its group's: no sibling windows).
+
+**Move to next setter** (`layout.moveToSetter { controlId, sheet }`; 08
+"a manual 'move to next setter' click"): the control (public id) leaves
+the setter sheet of `sheet`'s scope that holds it and joins `sheet`; both
+rows get a new version and their windows stay (08 "moved items stay fixed
+until recalculated"); the same sheet is a no-op, a control in none of the
+scope's setter maps `BAD_REQUEST`, a sheet that is not a setter's
+`NOT_FOUND`. The client picks *next* (`nextSetterSheet`,
+`lib/editor/setter-maps.ts`): the following sheet in setter order, the
+last one's next the first. One undo entry (undo moves it back to its
+sheet); the versions it answers are seeded for both rows.
+
+**Recalculate** a setter sheet (`layout.recalculateSheet`, §6): refitted
+to its group as the all-controls sheet is to every control — template,
+window centre NULL, no scale override, the block on the template's spot.
+
+**Layout mode's *Setter maps* section** (`editor-layout-setter`,
+`pages/editor/layout/SetterSection.tsx`, after *Classes*, shown with or
+without a sheet): the scope (`editor-layout-setter-scope`: every placed
+control of the event in view *All controls* or without a course, else
+the top bar's course — `setterScopeOf`), the number of setters
+(`editor-layout-setter-groups`, default the scope's count or 2),
+*Generate* / *Regenerate* (`editor-layout-setter-generate`, a confirm
+when it replaces; the first new sheet opens; not an undo entry), the
+scope's sheets (`editor-layout-setter-row`, `data-setter`, `data-sheet`:
+"Setter n · k controls", a click opens it); with a setter sheet open its
+controls in code order (`editor-layout-setter-control`,
+`data-control-id`) each with **Move to next setter**
+(`editor-layout-setter-move`; disabled with one sheet). On the canvas
+Layout mode draws the view's controls over a setter sheet (the editor's
+own layer request, F7's files); print, the block and the lists are the
+group's (Pending).
+
+**Export ▾ → Setter maps** (§7, `maps.pdf?setter=1`): every setter sheet
+of the event, course seq (the event's last), sort order, seq.
 
 ## Tests
 
 | Layer | Where | What |
 |---|---|---|
-| unit (shared) | `packages/shared/src/course/__tests__/page-layer.test.ts` | the page layer is the composer's (stream, colours, transform, images); only page-anchored objects; through `T_map⁻¹` a text sits at `pagePointToMap` of its page position; widths scale by `1 / scaleRatio` |
+| unit (shared) | `packages/shared/src/course/__tests__/page-layer.test.ts` | the page layer is the composer's (stream, colours, transform, images); no layout objects and no block draw nothing; through `T_map⁻¹` a text sits at `pagePointToMap` of its page position; widths scale by `1 / scaleRatio` |
 | unit (shared) | `packages/shared/src/print/__tests__/page.test.ts` | `inverseMapLayerTransform` round-trips (0°, 25°) |
 | unit (shared) | `print/__tests__/compose.test.ts`, `write-page.test.ts`; `packages/api/src/render/__tests__/pdf-golden.test.ts` | unchanged after the extraction |
-| unit (web) | `packages/web/src/map-gl/__tests__/worker-course.test.ts` | the page part: none without a page; its colours after every map colour, the table repeated; the page white-out at the stack's upper white; a text in paper µm; the frame ring; the block |
+| unit (web) | `packages/web/src/map-gl/__tests__/worker-course.test.ts` | the page part: none without a page; its colours after every map colour, the table repeated; the page white-out at the stack's upper white; a text in paper µm; the frame ring; the block; P7: a page-anchored white-out outside crossing the frame's left edge covers the frame outside its shape and not its inside |
 | unit (web) | `map-gl/__tests__/engine.test.ts`, `view.test.ts` | the page part uploaded as `P`, drawn after the course part, `pageClip` passed, both released on clear; `scissorOfRing` |
-| unit (web) | `lib/__tests__/course-layer-request.test.ts` | `layout`: the page passed through, layout objects before course objects, appearance, overprint, window, text values |
-| unit (web) | `lib/editor/__tests__/layout.test.ts` | page-view maths: the window, page ↔ view round trips (rotated), y flip, sheet shapes, page bounds, hit-testing (D16: a closed path by its outline, not inside — an object under it reachable; a curved edge along its curve, not its chord; an open path without a closing edge), handles, the block's rectangle, align, page offset, grid; `pagePoints` / `nativePoints` of a map-anchored path (handles as offsets, rotated); `pathFromView` (handles mapped through the rotated, y-flipped window; a vertex outside clamped) |
-| unit (web) | `pages/editor/__tests__/layout-bindings.test.ts`, `layout-model.test.ts`, `lib/editor/__tests__/state.test.ts` | the binding (exclusive, shapes, select / move / snap / resize / locked / align / block / place); the snapshot per scope, geometry, the request, placement per kind; the mode case; the rail's keys have no `O`, the inspector keeps the white-out outside fill mode; D16 `P`: the flow armed over the sheet, a press places a vertex (on the page grid with snapping), the closing click hands one page path (handles mapped, clamped), right-click cancels; `pathObject`'s defaults; a selected path: its outline / handles / grips (focused active), a vertex drag (snapped offset, clamped, one write), Alt-drag handles in page mm, Alt-click retract, a grip drag mirrored and Alt-broken, a click focuses, a double-click inserts and focuses, the edge moves the path, a press inside pans, a map-anchored path edited on the page and stored in paper mm |
-| unit (web) | `lib/editor/__tests__/geometry-gestures.test.ts`, `pages/editor/__tests__/bindings.test.ts`, `polygon.test.ts` | D16's extraction: pressing order, a drag in the caller's units, Alt-drag / Alt-click, focus (none for fixed kinds), cancel, insert, the shapes with the caller's ids; `selectBinding`'s cases unchanged; `layout_path` is a closed, curved kind of three |
-| integration | `packages/api/src/__tests__/integration/course-maps.test.ts` "resolveSheet" | a sheet (window centre, page, text values, block, template / sheet split, overprint, sibling windows), `saveLayout` without `templateObjects` leaves the template, `PRECONDITION_FAILED` without a template; a template with and without a course; `NOT_FOUND` |
+| unit (web) | `lib/__tests__/course-layer-request.test.ts` | `layout`: the page passed through, the course objects only (F12), appearance, window, text values |
+| unit (web) | `lib/editor/__tests__/layout.test.ts` | page-view maths: the window, page ↔ view round trips (rotated), y flip, sheet shapes, page bounds, hit-testing (D16: a closed path by its outline, not inside — an object under it reachable; a curved edge along its curve, not its chord; an open path without a closing edge), handles, the block's rectangle, align, page offset, grid; `pathFromView` (handles mapped through the rotated, y-flipped window; a vertex outside clamped) |
+| unit (web) | `pages/editor/__tests__/layout-bindings.test.ts`, `layout-model.test.ts`, `lib/editor/__tests__/state.test.ts` | the binding (exclusive, shapes, select / move / snap / resize / locked / align / block / place); the snapshot per scope, geometry, the request, placement per kind; the mode case; the rail's keys have no `O`, the inspector keeps the white-out outside fill mode; D16 `P`: the flow armed over the sheet, a press places a vertex (on the page grid with snapping), the closing click hands one page path (handles mapped, clamped; plain clicks smooth with the wrap, no flag stored, F18), right-click cancels; `pathObject`'s defaults; a selected path: its outline / handles / grips (focused active), a vertex drag (snapped offset, clamped, one write), Alt-drag moves the vertex (snapped, F18), Alt-click toggles corner / smooth in page mm, a grip drag mirrored and Alt-broken, a click focuses, a double-click inserts a smooth vertex (Alt: a corner) and focuses, the edge moves the path, a press inside pans |
+| unit (web) | `lib/editor/__tests__/geometry-gestures.test.ts`, `pages/editor/__tests__/bindings.test.ts`, `polygon.test.ts` | D16's extraction: pressing order, a drag in the caller's units, Alt-drag moves and Alt-click toggles (F18), focus (none for fixed kinds), cancel, insert (smooth, Alt a corner, a filter region a corner; on a curve the split, Alt retracting the new vertex), the shapes with the caller's ids; `selectBinding`'s cases unchanged; `layout_path` is a closed, curved kind of three |
+| integration | `packages/api/src/__tests__/integration/course-maps.test.ts` "resolveSheet" | a sheet (window centre, page, text values, block, template / sheet split, overprint, sibling windows), `saveLayout` never writes the template, `PRECONDITION_FAILED` without a template; a template with and without a course (alone: the window is the frame centred on the map origin, the text values — `previewLayout`'s former case); `NOT_FOUND` |
+| integration | `course-maps.test.ts` "update: CONFLICT on a stale baseVersion…", "creates, duplicates and applies…", "supports several maps…" | E-pages: `courseMap.update` refuses a stale token with `CONFLICT` (`kind: "sheet"`, the version now), LWW without; the list answers `resolved` and `validation` without the overlay fields (the rows and controls read through `resolveSheet`); `saveLayout` leaves the template's objects |
 | unit (shared) | `packages/shared/src/__tests__/auto-template.test.ts` | the key (standard, custom paper), the key's name, decision (3) (most sheets, oldest, seq), `fitOrientation` (preferred kept, turned, ratio, the margin, neither fits), `defaultTemplateSettings` |
 | unit (web) | `lib/editor/__tests__/export-menu.test.ts`, `template-key.test.ts`, `state.test.ts`, `pages/editor/__tests__/layout-model.test.ts` | Export ▾ entries, routes and what is ensured first; courses in a template / at its key, the move-out target, extra names; Class view in the reducer; the sheet key |
+| unit (web) | `lib/editor/__tests__/export-menu.test.ts` "description sheets…", "descriptionSheetsUrl" | F11: the entry opens the dialog, ensures nothing and is never disabled; the URL names the classes, copies mode and cell (and `gap` when given) |
+| E2E | `e2e/course-editor-layout.spec.ts` "F11: description sheets", `e2e/courses.spec.ts` "Export → Description sheets…" | the dialog from Export ▾ and from the Courses page's menu → `…_descriptions.pdf` with one A4 page per class (`course-print.md` §9.1) |
 | integration | `packages/api/src/__tests__/integration/auto-templates.test.ts` | the migration's backfill (scoped to one event): keys, decision (3), no sheet moved, no rename; key sync on create / update / duplicate / delete with promotion; `autoSheets` (first sheet, auto template named by key, centred, idempotent; the event's look and a landscape turn; without a course every course); class sheets (scale → auto template at that scale; explicit template + scale → sheet override; cleared → deleted; course change); `classOverrides`; `class.upserted` without the overrides; `resolveSheet { classSeq }` (own sheet, course sheet with the override, `{classes}`); version tokens (`CONFLICT` with the row now, no token = LWW); `maps.pdf?classes=` through the composer (one page per class, `courses` / unfiltered without class sheets, 400s; E3 deleted the legacy variant, whose class-name check read the rsvg SVG) |
-| unit (web) | `lib/editor/__tests__/layout-href.test.ts` | E4c: the Maps / Map templates pages' *Edit layout* link — a sheet with its course, a template with and without a preview course, a null course omitted, the event name encoded |
-| E2E | `e2e/course-maps.spec.ts` "export a course that has no template yet" | a course without a map exports one A4 page from the Maps page; the auto badge; the route answers `application/pdf`; the template named by key with its key badge |
-| E2E | `e2e/course-editor.spec.ts` "Course editor auto templates" | Export ▾ → this course creates the sheet and prints one page; the auto badge and the sheet key; a class scale makes a class sheet; Class view shows `1:15000`; this class exports; Create extra template moves the course, its row moves it back, undo moves it again |
-| E2E | `e2e/course-editor.spec.ts` "Course editor layout" "graphics: upload an SVG…" | E3 (ported from `course-maps.spec.ts`'s legacy layout editor): the Graphics section uploads an SVG (`graphics.upload`), its Place button arms the image tool, a click on the page places it (one `saveLayout`, an `image` row in the list and in `courseMap.get`); selected from the list and deleted, gone from both |
-| E2E | `e2e/course-editor.spec.ts` "Course editor layout" "P draws a polygon…" | D16: `P`, two clicks, a click-drag and a click, closed on the first vertex → one `saveLayout`; `courseMap.get` has a closed path of 4 points whose dragged vertex has `hOut` down-right on the page and `hIn` opposite; the path selected, `V` armed, 4 handles and 2 grips; a double-click on the top edge → 5 points and a focused handle, `Delete` → 4; `Escape` discards a polygon being drawn (no write, `V` armed), `Enter` closes one of three clicks (one write); the sheet's `maps.pdf?maps=` draws more `c` operators than before |
-| E2E | `e2e/course-editor.spec.ts` "Course editor layout" | from the Maps page into Layout mode on the sheet; the sheet shapes; `H` places a header, the inspector makes it a long 10 mm text, and ink appears where the page layer draws it; the frame selected and dragged → `courseMap.get`'s centre moved by the drag; undo restores it; the `maps.pdf?maps=` route answers one A4 page; the template link opens template scope, an orientation change writes `mapTemplate.update`; the Map templates page's *Edit template layout* opens template scope |
+| integration | `auto-templates.test.ts` "the all-controls sheet on demand" | E-pages: `{ courseId }` leaves it alone; `{ allControls: true }` creates it once (named, no course, centre NULL) on the busiest key turned landscape, answers its seq and the template created, runs no course part; a second call creates nothing; a template-less one gets the template; with `courseId` both parts run |
+| unit (web) | `lib/editor/__tests__/layout-href.test.ts` | the Courses page's *Edit layout* link — a sheet with its course, a template with and without a preview course, a null course omitted, the event name encoded, in the editor's canonical order (`course=…&mode=layout&sheet=…`, F31); E-pages: `retiredPageHref` (`/maps` → Courses with its query, `/map-templates` → Layout mode on `?template=`, an invalid one ignored) |
+| unit (web) | `lib/editor/__tests__/export-menu.test.ts`, `pages/editor/__tests__/layout-model.test.ts`, `src/__tests__/new-template-form.test.ts`, `lib/__tests__/template-picker.test.ts`, `lib/__tests__/shell-tabs.test.ts`, `lib/structured-search/__tests__/new-anchors.test.ts` | E-pages: This sheet (`maps=`, disabled without a sheet, nothing ensured) and All controls ensuring `{ allControls: true }`; the template name in the snapshot and the template write (`templateWriteOf`); `nextSheetName`; a new template's name defaulting to the key's; the picker's values round-trip, a club template's free name; no Maps / Map templates tab; the course anchors' `template` and `status` |
+| E2E | `e2e/course-maps.spec.ts` "the Courses page and Layout mode (E-pages)" | New template… from a course's picker (the dialog creates and applies it; the auto badge; status not *No map*); Edit layout into Layout mode on the sheet; rename (`courseMap.update`), Add a sheet (opens, the picker lists two), Export ▾ This sheet = one A4 page, Delete; the template's name (`mapTemplate.update`); Save to the club library, Bring in (template scope on a new template, no notice); New template opens an A5 key-named one, Delete returns to the sheet; view All → Create the all-controls sheet (one `all_controls` row, shown). Then the overview: bulk Template on two courses (badges), a club template from the picker's optgroup (free name), the course's PDF (1 page), All controls (1), All maps (≥ 3; every course then has a sheet), `maps.pdf` without a pipeline header, the scroll wrapper; Layout's club section deletes a club template |
+| E2E | `e2e/course-maps.spec.ts` "export a course that has no template yet" | a course without a map exports one A4 page from the Courses page; the auto badge with its key; the route answers `application/pdf`; in Layout mode the template's key badge and its key name; a course without a sheet: *Create sheet* in Layout mode makes and shows it |
+| E2E | `e2e/course-maps.spec.ts` "the retired Maps and Map templates pages redirect…" | E-pages: `/maps?course=1` → `/courses?course=1`, `/map-templates` → Layout mode; neither tab is shown |
+| E2E | `e2e/course-editor-layout.spec.ts` "Course editor auto templates" | Export ▾ → this course creates the sheet and prints one page; the auto badge and the sheet key; a class scale makes a class sheet; Class view shows `1:15000`; this class exports; Create extra template moves the course, its row moves it back, undo moves it again |
+| E2E | `e2e/course-editor-layout.spec.ts` "Course editor layout" "graphics: upload an SVG…" | E3 (ported from `course-maps.spec.ts`'s legacy layout editor): the Graphics section uploads an SVG (`graphics.upload`), its Place button arms the image tool, a click on the page places it (one `saveLayout`, an `image` row in the list and in `courseMap.get`); selected from the list and deleted, gone from both |
+| E2E | `e2e/course-editor-layout.spec.ts` "Course editor layout" "P draws a polygon…" | D16, F18: `P`, two Alt-clicks (corners), a click-drag and a plain click, closed on the first vertex → one `saveLayout`; `courseMap.get` has a closed path of 4 points whose dragged vertex has `hOut` down-right on the page and `hIn` opposite, the plain click's vertex smooth handles, the Alt-clicks' none; the path selected, `V` armed, 4 handles and 4 grips; a double-click on the top edge → 5 points and a focused handle, `Delete` → 4; `Escape` discards a polygon being drawn (no write, `V` armed), `Enter` closes one of three clicks (one write); the sheet's `maps.pdf?maps=` draws more `c` operators than before |
+| E2E | `e2e/course-editor-layout.spec.ts` "Course editor layout" | from the Courses page (the `/maps?course=` redirect, the row's *Edit layout* link into Layout mode) to the sheet; the sheet shapes; `H` places a header, the inspector makes it a long 10 mm text, and ink appears where the page layer draws it; the frame selected and dragged → `courseMap.get`'s centre moved by the drag; undo restores it; the `maps.pdf?maps=` route answers one A4 page; the template link opens template scope, an orientation change writes `mapTemplate.update`; an old `/map-templates?template=` link opens template scope |
+| E2E | `e2e/course-editor-placing.spec.ts` "P1: …" "Layout mode: a toner saver hides…" | P1: on a probe course sheet in Layout mode a 709 `oob_area` (`courseObject.create`) shows purple on the canvas (`inkIn`); with a `toner_saver` elsewhere on the map, no purple pixels are left inside the 709 square (638 purple pixels with the ring at upper white) |
+| E2E | `e2e/course-editor-layout.spec.ts` "P7: a white-out outside crossing the frame…" | P7: two 709 squares, one inside every shape, one outside: a toner saver whose first vertex is left of the frame, then one across the frame's bottom with its first vertex inside — the inside square keeps its purple, the outside one shows none; a page-anchored white-out outside rectangle dragged with `V` past the frame's bottom, then past its left edge (one `saveLayout` each) — the same after each |
+| integration | `auto-templates.test.ts` "part sheets of a map exchange (F5)" | §6 part sheets: an exchange gives the course two own sheets (names, `section_index` 0 / 1, one template, centre NULL, sort order) and the overriding class its part-2 sheet; idempotent; `courseMap.list` `sectionIndex`; `resolveSheet` of each part centred on its controls, the block whole with 13.5; `maps.pdf?courses=` two pages; a deleted part sheet recreated by the next call; the exchange removed → nothing deleted |
+| unit (web) | `pages/editor/__tests__/layout-model.test.ts` "a course sheet's part" | `layoutRequestOf` carries `section` for a course sheet, none in template scope |
+| unit (shared) | `packages/shared/src/__tests__/setter-groups.test.ts`, `auto-template.test.ts` "fitScale" | §8: two clusters numbered west → east, the same groups on a second call and on reversed input (40 sites, 4 groups, a partition), n = 1 and n = count, coincident sites never leave a group empty, n clamped; the scale list, the largest scale that holds the extent, a turn before a smaller scale, the margin on every side, 1:15 000 in the closer orientation when nothing fits, an empty extent |
+| unit (web) | `lib/editor/__tests__/setter-maps.test.ts`, `export-menu.test.ts` "setter maps" | §8: the scope by view and course, a scope's sheets by setter number, the next setter wrapping, a setter's Field rows (order, kinds, unknown ids left out, through `fieldRows`); Export ▾ *Setter maps* `?setter=1`, nothing ensured, never disabled |
+| unit (web) | `lib/editor/__tests__/export-menu.test.ts` "of a course with variants" | §7 F8: the entries and their order, *This course* with the count, *This variant* `?variants=` with key and runners, disabled without a shown key or an unknown one, *All variations*, *One map per runner* with the total and disabled at 0, nothing ensured without `courses.edit`, none of them without variants |
+| integration | `packages/api/src/__tests__/integration/variant-pages.test.ts` | §1 `resolveSheet { variantKey }`, `courseMap.list` per variant, §7 the selection (`course-print.md` §9.1 lists it) |
+| integration | `packages/api/src/__tests__/integration/setter-maps.test.ts` | §6, §8: the migration (a setter row with and without a course; `all_controls` with a course still refused); `setterMaps { groups: 2 }` (names, NULL course and centre, numbers, the west group with the map-issue point, the unplaced control in none, A4 at a standard scale, 5 mm cells), regenerate (same groups, new rows), the refusals; a course's setter map (its sites + 702, the event's untouched); `resolveSheet` of a setter sheet (codes, no header, title, 5 mm, the group's sites, one window, centred) and its print input (`allControls` + `setterMarks`, no structure, the 702 site); `courseMap.list` `setter`; `moveToSetter` (both props, both versions, windows and templates kept, the same sheet a no-op, back, the refusals); `recalculateSheet` on the all-controls sheet after a `saveLayout` (centre NULL, no scale override, the block's `x` / `y` gone, a standard-scale key) and on a setter sheet; a course sheet refused; `maps.pdf?setter=1` two pages, `?courses=` and the unfiltered export without them, `setter` + `courses` 400, none → 400 "No setter maps" |
+| E2E | `e2e/course-editor-layout.spec.ts` "F10: setter maps" | §8: view All → Layout mode → *Setter maps* 2 → *Generate* → two rows, two A4 standard-scale sheets, the first open; Setter 2 opened, *Move to next setter* on its first control → in Setter 1 (wrap), undo → back; a moved window → *Recalculate* → centre NULL; Export ▾ *Setter maps* → two A4 pages |
+| E2E | `e2e/field-mode.spec.ts` "Field mode on a desktop" "the setter-map picker…" | `course-editor.md` §9: `layout.setterMaps { groups: 2 }`; the picker lists *None* + two; Setter 1 picked → the list's rows are its controls in the sheet's order, the KPI says *Setter 1*; *None* → the course's list |
+| E2E | `e2e/course-editor-status.spec.ts` "F5: map exchange" | Export ▾ this course on a course with an exchange → two pages, two own sheets with different window centres; Layout mode's picker lists part 2 (`data-section` 1); deleting it raises `EXCHANGE_WITHOUT_SHEET` in Course mode |
 
 ## Pending in this chapter
 
-- **Map exchange sections** (`section_index > 0`, auto-created from the
-  structure), **setter maps** (`kind = 'setter'`, `props.controlIds`),
-  **description sheets** and per-variant export — F (08 §4.6, §5.2).
-- **The all-controls sheet's recalculated scale / orientation** (08 §4.6
-  "computed to fit everything on A4"): `autoSheets` makes course sheets
-  only; the all-controls sheet is made on the Maps page as before.
-- **Class sub-rows on the Maps page**: not planned (decided in the split);
-  ClassesPage shows no override fields.
+- **A per-runner named map** (the runner's name on her map): F8 prints
+  the per-variant stack sized by the assigned runners
+  (`copies=runners`) but no names; a separate feature if wanted. A
+  spare count in the menus (the route takes `spare=`) is not offered.
+- **A fitted description placement** (08 §4.6 "compute … description
+  placement"): *Recalculate* (F10, §6, §8) fits scale and orientation and
+  puts the block back on the template's spot; a placement that avoids the
+  controls is not computed. The all-controls sheet's *creation* still
+  takes the busiest key's scale (only *Recalculate* fits one).
+- **A setter sheet on the canvas** (F10, §8): Layout mode draws the
+  view's controls over a setter sheet, not only its group — the editor's
+  layer request is F7's files (`course-layer-request.ts`, `MapPanel`,
+  `MapViewer`); print and the lists are the group's.
+- **Class sub-rows on the Courses page's overview**: not planned (decided
+  in the split); ClassesPage shows no override fields.
 - **Print-preview toggle** (05 §5.12): waits for print profiles.
-- **Version token from the Maps / Map templates pages** (§2): their
-  row writes (`courseMap.update`, `mapTemplate.update`) go without
-  `baseVersion` (LWW) until E-pages folds the pages into Layout mode.
 - **Canvas editing beyond move / resize and the path gestures**:
   multi-select, frame handles, edge snapping, rotation (§3).
 - **Rectangles by outline?** Layout closed paths hit by outline (D16);

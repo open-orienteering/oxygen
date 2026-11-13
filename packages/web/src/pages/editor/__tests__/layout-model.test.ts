@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { defaultMapAppearance } from "@oxygen/shared";
-import { FILL_MODES, geometryOf, layoutRequestOf, pathObject, placeObject, scopeObjects, sheetKeyOf, snapshotOf, withEditable, type EditorSheet } from "../layout/model";
+import { FILL_MODES, geometryOf, layoutRequestOf, nextSheetName, pathObject, templateWriteOf, placeObject, scopeObjects, sheetKeyOf, snapshotOf, withEditable, type EditorSheet } from "../layout/model";
 
 const settings = { printMarginMm: 3, mapFrame: { x: 10, y: 10, width: 190, height: 277 }, description: { visible: false, x: 150, y: 12, cellSizeMm: 6 }, appearance: defaultMapAppearance };
 const sheetText = { id: "s", kind: "text" as const, anchor: "page" as const, x: 20, y: 30, text: "{course}", fontSizeMm: 4, color: "#000000" };
@@ -13,6 +13,7 @@ function sheet(scope: "sheet" | "template" = "sheet"): EditorSheet {
     sheet: scope === "sheet" ? { seq: 4, name: "A", kind: "course", courseSeq: 2, classSeq: null, version: "5", windowCenter: { x: 30, y: 10 }, overrides: { printScale: 10000, description: { visible: true, x: 140, y: 12, cellSizeMm: 6 } }, objects: [sheetText] } : null,
     template: { seq: 1, name: "A4", paper: "A4", orientation: "portrait", paperWidthMm: null, paperHeightMm: null, printScale: 7500, settings, objects: [templateText], autoKey: "A4-portrait-7500", isExtra: false, version: "3" },
     classView: null,
+    variantKey: null,
     courseSeq: 2,
     document: { description: scope === "sheet" ? { visible: true, x: 140, y: 12, cellSizeMm: 6 } : settings.description } as EditorSheet["document"],
     window,
@@ -46,6 +47,17 @@ describe("Layout model (docs/course-layout.md §2)", () => {
     expect(withEditable(s, snap, []).templateObjects).toEqual([]);
   });
 
+  it("template scope: the name is part of the snapshot and of the template write (E-pages)", () => {
+    const s = sheet("template");
+    const snap = snapshotOf(s);
+    expect(snap.templateName).toBe("A4");
+    const write = templateWriteOf({ ...snap, templateName: "Sprint A4" });
+    expect(write).toMatchObject({ name: "Sprint A4", paper: "A4", orientation: "portrait", printScale: 7500, objects: [templateText] });
+    expect(write.settings.description).toEqual(snap.description);
+    expect(write).not.toHaveProperty("paperWidthMm");
+    expect(templateWriteOf({ ...snap, paper: "custom", paperWidthMm: 200, paperHeightMm: 300 })).toMatchObject({ paperWidthMm: 200, paperHeightMm: 300 });
+  });
+
   it("geometry: A4 portrait, the printable margin, the window at the print scale", () => {
     const g = geometryOf(sheet(), snapshotOf(sheet()));
     expect(g.paper).toEqual({ widthMm: 210, heightMm: 297 });
@@ -54,17 +66,25 @@ describe("Layout model (docs/course-layout.md §2)", () => {
     expect(g.window.minX + g.window.width / 2).toBeCloseTo(30, 9);
   });
 
-  it("the layout request: both scopes' objects, the scale's text value and overprint, the block where the snapshot puts it", () => {
+  it("the layout request: both scopes' objects, the scale's text value, the block where the snapshot puts it", () => {
     const s = sheet();
     const snap = { ...snapshotOf(s), printScale: 5000, description: { visible: true, x: 100, y: 20, cellSizeMm: 7 } };
     const r = layoutRequestOf(s, snap, geometryOf(s, snap));
     expect(r.page.objects).toEqual([templateText, sheetText]);
     expect(r.page.textValues).toMatchObject({ course: "A", scale: "1:5000" });
-    expect(r.overprintScale).toBeCloseTo(3, 9);
+    expect(r).not.toHaveProperty("overprintScale");
     expect(r.page.description).toMatchObject({ x: 100, y: 20, cellSizeMm: 7, title: "A" });
     expect(r.page.description!.rows).toHaveLength(1);
     expect(layoutRequestOf(s, { ...snap, description: { ...snap.description, visible: false } }, geometryOf(s, snap)).page.description).toBeNull();
     expect(r.appearance).toEqual({ circle: 1, line: 1, number: 1 });
+  });
+
+  it("a course sheet's part reaches the layer request (course-layer.md §11, F5); a template has none", () => {
+    const s = sheet();
+    const part = { ...s, sheet: { ...s.sheet!, sectionIndex: 1 } };
+    expect(layoutRequestOf(part, snapshotOf(part), geometryOf(part, snapshotOf(part))).section).toBe(1);
+    const tpl = sheet("template");
+    expect(layoutRequestOf(tpl, snapshotOf(tpl), geometryOf(tpl, snapshotOf(tpl))).section).toBeUndefined();
   });
 
   it("the white-out-outside fill mode stays in the inspector although the O tool is gone (D14)", () => {
@@ -87,5 +107,14 @@ describe("Layout model (docs/course-layout.md §2)", () => {
     const o = pathObject(points, { x: 3, y: 3, width: 204, height: 291 });
     expect(o).toMatchObject({ kind: "path", anchor: "page", closed: true, points, stroke: "#000000", strokeWidthMm: 0.35, fillMode: "none" });
     expect(o.id).toMatch(/^[0-9a-f-]{36}$/);
+  });
+});
+
+describe("nextSheetName (E-pages: Add a sheet)", () => {
+  it("numbers after the course's sheets and skips taken names", () => {
+    expect(nextSheetName("Blue", ["Blue"])).toBe("Blue 2");
+    expect(nextSheetName("Blue", ["Blue", "Blue 2"])).toBe("Blue 3");
+    expect(nextSheetName("Blue", ["Blue", "Blue 3"])).toBe("Blue 4");
+    expect(nextSheetName("Blue", [])).toBe("Blue 2");
   });
 });

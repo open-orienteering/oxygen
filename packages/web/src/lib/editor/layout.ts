@@ -105,18 +105,8 @@ function segmentDistance(p: Pt, a: Pt, b: Pt): number {
   return Math.hypot(p.x - (a.x + t * dx), p.y - (a.y + t * dy));
 }
 
-/** A path's vertices on the page (page mm): a map-anchored path's through the window, handles as offsets. */
-export function pagePoints(o: Extract<CourseMapObject, { kind: "path" }>, g: Pick<SheetGeometry, "frame" | "window">): Vertex[] {
-  return o.anchor === "page" ? o.points : mapVertices(o.points, (q) => toPage(q, g));
-}
-
 /** What a Layout path allows: a closed one is the polygon (`P`, three or more vertices), an open one a line (two or more); both curve. */
 export const pathRule = (o: Extract<CourseMapObject, { kind: "path" }>) => vertexRule(o.closed ? "layout_path" : "oob_line");
-
-/** Page points back in the path's own space (page mm, or paper mm for a map-anchored path). */
-export function nativePoints(o: Extract<CourseMapObject, { kind: "path" }>, points: readonly Vertex[], g: Pick<SheetGeometry, "frame" | "window">): Vertex[] {
-  return o.anchor === "page" ? [...points] : mapVertices(points, (q) => toView(q, g));
-}
 
 /**
  * A path drawn in the viewer's paper mm (the course editor's area flow,
@@ -135,21 +125,19 @@ export function pathFromView(vertices: readonly Vertex[], g: Pick<SheetGeometry,
  * docs/course-layout.md §3), so a press inside one reaches what is under
  * it, or pans. −1 for none.
  */
-export function layoutObjectAt(p: Pt, objects: readonly CourseMapObject[], g: Pick<SheetGeometry, "frame" | "window">, tolMm: number): number {
+export function layoutObjectAt(p: Pt, objects: readonly CourseMapObject[], tolMm: number): number {
   for (let i = objects.length - 1; i >= 0; i--) {
     const o = objects[i];
     if (o.kind === "line") {
-      const page = (q: Pt) => (o.anchor === "page" ? q : toPage(q, g));
-      if (segmentDistance(p, page({ x: o.x1, y: o.y1 }), page({ x: o.x2, y: o.y2 })) <= tolMm) return i;
+      if (segmentDistance(p, { x: o.x1, y: o.y1 }, { x: o.x2, y: o.y2 }) <= tolMm) return i;
       continue;
     }
     if (o.kind === "path") {
-      const edge = nearestEdge(pagePoints(o, g), o.closed, p);
+      const edge = nearestEdge(o.points, o.closed, p);
       if (edge && edge.dist <= tolMm) return i;
       continue;
     }
-    const b = courseMapObjectPageBounds(o, g.frame, g.window);
-    if (b && inRect(p, b, tolMm)) return i;
+    if (inRect(p, courseMapObjectPageBounds(o), tolMm)) return i;
   }
   return -1;
 }
@@ -158,12 +146,10 @@ export function layoutObjectAt(p: Pt, objects: readonly CourseMapObject[], g: Pi
  * An object's resize handles on the page (`resizeMapObject`'s handle names). A path has none here: its vertices
  * and grips are the geometry gestures' (`geometry-gestures.ts`, D16).
  */
-export function objectHandles(o: CourseMapObject, g: Pick<SheetGeometry, "frame" | "window">): { handle: ResizeHandle; at: Pt }[] {
-  const page = (q: Pt) => (o.anchor === "page" ? q : toPage(q, g));
-  if (o.kind === "line") return [{ handle: "start", at: page({ x: o.x1, y: o.y1 }) }, { handle: "end", at: page({ x: o.x2, y: o.y2 }) }];
+export function objectHandles(o: CourseMapObject): { handle: ResizeHandle; at: Pt }[] {
+  if (o.kind === "line") return [{ handle: "start", at: { x: o.x1, y: o.y1 } }, { handle: "end", at: { x: o.x2, y: o.y2 } }];
   if (o.kind === "path") return [];
-  const b = courseMapObjectPageBounds(o, g.frame, g.window);
-  if (!b) return [];
+  const b = courseMapObjectPageBounds(o);
   return [
     { handle: "nw", at: { x: b.x, y: b.y } }, { handle: "ne", at: { x: b.x + b.width, y: b.y } },
     { handle: "sw", at: { x: b.x, y: b.y + b.height } }, { handle: "se", at: { x: b.x + b.width, y: b.y + b.height } },

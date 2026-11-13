@@ -107,4 +107,6 @@ export function bandCentreOffsetPx(sheetPx: number): Pt {
 }
 
 /** The editor opens in Field mode on a phone (< 640 px), in Course mode otherwise (08 §5.5). */
-export const initialModeFor = (o: { phone: boolean }): EditorMode => (o.phone ? "field" : "course");
+/** The mode the editor opens in: the URL's (F31, docs/course-editor.md §1 "URL") — but Layout is not a phone mode — else the device's. */
+export const initialModeFor = (o: { phone: boolean; url?: EditorMode | null }): EditorMode =>
+  o.url && !(o.phone && o.url === "layout") ? o.url : o.phone ? "field" : "course";

@@ -10,7 +10,7 @@
 
 import { course, type ControlDescription } from "@oxygen/shared";
 import type { PrismaClient, Prisma } from "./generated/prisma/client.js";
-import { publicControlId } from "./control-id.js";
+import { displayCode, publicControlId } from "./control-id.js";
 import { loadCourseSequences } from "./course-geometry.js";
 import { classesByCourse, loadCourseObjects, objectsInScope } from "./course-objects.js";
 import { rowKind } from "./course-structure.js";
@@ -43,7 +43,7 @@ export async function courseChecksFor(db: Db, eventId: bigint, courseUuid: strin
   const publicOf = new Map(rows.map((r) => [r.id, publicControlId(r)]));
   const sites: course.CheckSite[] = rows.map((r) => ({
     id: r.id,
-    code: r.codes.split(";")[0]?.trim() || r.name || String(r.seq),
+    code: displayCode(r),
     codes: r.codes.split(";").map((c) => parseInt(c.trim(), 10)).filter((n) => Number.isFinite(n)),
     kind: rowKind(r),
     x: r.xpos,
@@ -54,7 +54,13 @@ export async function courseChecksFor(db: Db, eventId: bigint, courseUuid: strin
     version: 1,
     id: courseUuid,
     orderMode: sequence.orderMode,
-    items: sequence.seq.map((s) => ({ siteId: s.id, role: ROLE[s.type] })),
+    // The leg as drawn (§9.3): through its bends (§10.1) and its crossing point (§10.3).
+    items: sequence.seq.map((s) => {
+      const leg: course.CourseLegProps = {};
+      if (s.leg?.bends?.length) leg.bends = s.leg.bends;
+      if (s.via) leg.crossing = { controlId: s.via.id };
+      return { siteId: s.id, role: ROLE[s.type], ...(Object.keys(leg).length ? { leg } : {}) };
+    }),
   };
   const [crs, document, objects, byCourse] = await Promise.all([
     loadEventCrs(db, eventId),

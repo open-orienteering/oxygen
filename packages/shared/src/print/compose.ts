@@ -23,7 +23,7 @@ import { type ColourMode, colourOperator, pageColour } from "./colour.js";
 import { geoViewport } from "./geo.js";
 import { type Matrix, UM_TO_PT, cmOperator, fmtMm, mapLayerOperators } from "./operators.js";
 import { type ComposedPage, type PageImage, type PageInput, type PageWarning, frameRectUm, mapLayerTransform } from "./page.js";
-import type { PdfWriter } from "./writer.js";
+import type { PdfWriter, PdfWriterPage } from "./writer.js";
 
 export { RING_BLEED_UM };
 
@@ -37,7 +37,7 @@ export function composePage(input: PageInput, fonts: FontMetrics[]): ComposedPag
   const layer = courseLayer({
     structure: input.course.structure,
     sites: input.course.sites,
-    objects: [...input.objects, ...(input.course.objects ?? [])],
+    objects: input.course.objects ?? [],
     appearance: input.course.appearance,
     viewOptions: { ...input.course.viewOptions, window: mapLayerWindow(input), textValues: input.textValues },
     document: input.map.context,
@@ -54,7 +54,7 @@ export function composePage(input: PageInput, fonts: FontMetrics[]): ComposedPag
   warnings.push(...page.warnings);
 
   const images: PageImage[] = [
-    ...layer.images.map((i) => ({ layer: "map" as const, graphicId: i.object.graphicId, rectUm: i.rectUm, ...(i.object.crop ? { crop: i.object.crop } : {}) })),
+    ...layer.images.map((i) => ({ layer: "map" as const, ...i })),
     ...page.images,
   ];
 
@@ -104,7 +104,7 @@ export interface WritePageOptions {
  * q <µm → pt> cm 4 M <passes> <page images> Q   page layer
  * ```
  */
-export async function writePage(writer: PdfWriter, page: ComposedPage, opts: WritePageOptions): Promise<{ warnings: string[] }> {
+export async function writePage(writer: PdfWriter, page: ComposedPage, opts: WritePageOptions): Promise<{ warnings: string[]; page: PdfWriterPage }> {
   const warnings: string[] = [];
   const W = page.paper.widthMm * (72 / 25.4), Hp = page.paper.heightMm * (72 / 25.4);
   const wp = writer.addPage({ widthPt: W, heightPt: Hp, label: page.label, outlineTitle: page.label });
@@ -143,5 +143,5 @@ export async function writePage(writer: PdfWriter, page: ComposedPage, opts: Wri
   ];
   wp.addContent(ops.join("\n"));
   if (page.geo) wp.setGeoViewports([page.geo]);
-  return { warnings };
+  return { warnings, page: wp };
 }

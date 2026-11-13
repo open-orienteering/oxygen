@@ -226,6 +226,37 @@ describe("reference mutations → *.upserted", () => {
     expect(p.fields.codes).toBe("93");
     expect(p.fields.removed).toBe(true);
   });
+
+  it("course.setStructure with a group journals every variant, the pools and the runners whose variant vanished (F6)", async () => {
+    const ids: number[] = [];
+    for (const code of ["94", "95", "96", "97"]) ids.push((await caller.control.create({ codes: code })).id);
+    const root = await caller.course.create({ name: "Forked" });
+    const cls = await caller.class.create({ name: "Forked class", courseId: root.id });
+    const items = (alts: number[][]) => [
+      { siteId: ids[0] },
+      { kind: "variation" as const, id: "g", alternatives: alts.map((a, i) => ({ label: "AB"[i], items: a.map((siteId) => ({ siteId })) })) },
+      { siteId: ids[3] },
+    ];
+    await caller.course.setStructure({ courseId: root.id, structure: { version: 1, id: "f", orderMode: "ordered", items: items([[ids[1]], [ids[2]]]) } });
+    const rootRow = await ctx.db.course.findFirstOrThrow({ where: { eventId: ctx.eventId, seq: root.id } });
+    const kids = await ctx.db.course.findMany({ where: { parentCourseId: rootRow.id }, orderBy: { variantKey: "asc" } });
+    const pool = (await latestEntry("class.upserted"))!.payload as { seq: number; coursePools: { stage: number; courseId: string }[] };
+    expect(pool.seq).toBe(cls.id);
+    expect(pool.coursePools.map((p) => p.courseId).sort()).toEqual(kids.map((k) => k.id).sort());
+    const childEntry = (await latestEntry("course.upserted"))!.payload as { id: string; fields: Record<string, unknown> };
+    expect(childEntry.id).toBe(kids[1].id);
+    expect(childEntry.fields).toMatchObject({ parentCourseId: rootRow.id, variantKey: "B", name: "Forked B" });
+
+    const r = await ctx.db.runner.create({
+      data: { eventId: ctx.eventId, name: "Forked runner", courseId: kids[1].id, cardNo: 7200001 },
+      select: { seq: true },
+    });
+    await caller.course.setStructure({ courseId: root.id, structure: { version: 1, id: "f", orderMode: "ordered", items: items([[ids[1]], [ids[1], ids[2]]]) } });
+    // The keys stay, nothing vanished: no runner entry yet.
+    expect(((await latestEntry("runner.updated"))?.payload as { runnerId?: number } | undefined)?.runnerId).not.toBe(r.seq);
+    await caller.course.setStructure({ courseId: root.id, structure: { version: 1, id: "f", orderMode: "ordered", items: [{ siteId: ids[0] }, { siteId: ids[3] }] } });
+    expect((await latestEntry("runner.updated"))!.payload).toEqual({ cardNo: 7200001, runnerId: r.seq, fields: { courseId: null } });
+  });
 });
 
 describe("runner CRUD journaling", () => {
@@ -403,5 +434,103 @@ describe("draw.execute → start.adjusted", () => {
       expect(cards).toContain(p.cardNo);
       expect(p.startTime).toBeGreaterThanOrEqual(360000);
     }
+  });
+});
+
+describe("runners' variants (F6b) → runner.registered.courseId / runner.updated { courseId }", () => {
+  it("create carries the dealt seq; distributeVariants journals one runner.updated per changed runner", async () => {
+    const ids: number[] = [];
+    for (const code of ["81", "82", "83", "84"]) ids.push((await caller.control.create({ codes: code })).id);
+    const root = await caller.course.create({ name: "Dealt" });
+    await caller.course.setStructure({
+      courseId: root.id,
+      structure: {
+        version: 1,
+        id: "d",
+        orderMode: "ordered",
+        items: [
+          { siteId: ids[0] },
+          { kind: "variation", id: "g", alternatives: [{ label: "A", items: [{ siteId: ids[1] }] }, { label: "B", items: [{ siteId: ids[2] }] }] },
+          { siteId: ids[3] },
+        ],
+      },
+    });
+    const [a, b] = await caller.course.variantList({ courseId: root.id });
+    const cls = await caller.class.create({ name: "Dealt class", courseId: root.id });
+    // Created late-first, so the start-order deal changes both.
+    const late = await caller.runner.create({ name: "Late", classId: cls.id, startTime: 361200, cardNo: 7400002 });
+    expect((await latestEntry("runner.registered"))!.payload).toMatchObject({ seq: late.id, courseId: a.courseId });
+    const early = await caller.runner.create({ name: "Early", classId: cls.id, startTime: 360000, cardNo: 7400001 });
+    expect((await latestEntry("runner.registered"))!.payload).toMatchObject({ seq: early.id, courseId: b.courseId });
+
+    const head = (await ctx.db.journalEntry.findFirst({
+      where: { eventId: ctx.eventId },
+      orderBy: { hlc: "desc" },
+      select: { hlc: true },
+    }))!.hlc;
+    const res = await caller.class.distributeVariants({ classId: cls.id, mode: "startOrder", onlyUnassigned: false });
+    expect(res.changed).toBe(2);
+    const entries = await ctx.db.journalEntry.findMany({
+      where: { eventId: ctx.eventId, hlc: { gt: head } },
+      orderBy: { hlc: "asc" },
+    });
+    expect(entries.map((e) => e.type)).toEqual(["runner.updated", "runner.updated"]);
+    const bySeq = new Map(entries.map((e) => [(e.payload as { runnerId: number }).runnerId, e.payload]));
+    expect(bySeq.get(early.id)).toEqual({ cardNo: 7400001, runnerId: early.id, fields: { courseId: a.courseId } });
+    expect(bySeq.get(late.id)).toEqual({ cardNo: 7400002, runnerId: late.id, fields: { courseId: b.courseId } });
+  });
+});
+
+describe("cardReadout.acceptVariant (F6c) → runner.updated { courseId, variantAccepted } + result.applied", () => {
+  it("journals the variant switch then the applied result, in one call", async () => {
+    const ids: number[] = [];
+    for (const code of ["85", "86", "87", "88"]) ids.push((await caller.control.create({ codes: code })).id);
+    const root = await caller.course.create({ name: "Red exit" });
+    await caller.course.setStructure({
+      courseId: root.id,
+      structure: {
+        version: 1,
+        id: "r",
+        orderMode: "ordered",
+        items: [
+          { siteId: ids[0] },
+          { kind: "variation", id: "g", alternatives: [{ label: "A", items: [{ siteId: ids[1] }] }, { label: "B", items: [{ siteId: ids[2] }] }] },
+          { siteId: ids[3] },
+        ],
+      },
+    });
+    const [a, b] = await caller.course.variantList({ courseId: root.id });
+    const cls = await caller.class.create({ name: "Red exit class", courseId: root.id });
+    const r = await caller.runner.create({ name: "Wrong fork", classId: cls.id, cardNo: 7400101, courseId: a.courseId });
+    await caller.cardReadout.storeReadout({
+      cardNo: 7400101,
+      cardType: "SI Card 9",
+      startTime: 360000,
+      finishTime: 390000,
+      punches: [
+        { controlCode: 85, time: 366000 },
+        { controlCode: 87, time: 372000 },
+        { controlCode: 88, time: 378000 },
+      ],
+    });
+    const head = (await ctx.db.journalEntry.findFirst({
+      where: { eventId: ctx.eventId },
+      orderBy: { hlc: "desc" },
+      select: { hlc: true },
+    }))!.hlc;
+    await caller.cardReadout.acceptVariant({ runnerId: r.id, courseId: b.courseId });
+    const entries = await ctx.db.journalEntry.findMany({
+      where: { eventId: ctx.eventId, hlc: { gt: head } },
+      orderBy: { hlc: "asc" },
+    });
+    expect(entries.map((e) => e.type)).toEqual(["runner.updated", "result.applied"]);
+    expect(entries[0].payload).toEqual({
+      cardNo: 7400101,
+      runnerId: r.id,
+      fields: { courseId: b.courseId, variantAccepted: true },
+    });
+    expect(entries[1].payload).toMatchObject({ cardNo: 7400101, runnerId: r.id, status: 1 });
+    const p = entries[1].payload as { finishTime: number; startTime: number };
+    expect(p.finishTime - p.startTime).toBe(30000);
   });
 });

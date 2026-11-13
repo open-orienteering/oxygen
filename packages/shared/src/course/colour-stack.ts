@@ -50,6 +50,40 @@ export function hexToCmyk(hex: string): [number, number, number, number] {
 }
 
 /**
+ * The All-variations view's purple tints (§12.7; 08 §5.3), one per
+ * alternative label in first-use order, cycling: distinct on screen, never
+ * printed (the print path cannot set `viewOptions.allVariations`).
+ */
+export const VARIATION_TINTS: readonly (readonly [number, number, number, number])[] = [
+  [0.1, 0.9, 0, 0],
+  [0.75, 0.75, 0, 0],
+  [0, 0.55, 0, 0],
+  [0.5, 1, 0, 0.3],
+  [0.45, 0.45, 0, 0],
+  [0.2, 1, 0, 0.45],
+];
+
+/** Rows `course-tint:<label>` for the alternatives' labels, appended on top in first-use order. */
+export function withTintColours(colours: readonly DocumentColour[], labels: readonly string[]): { colours: DocumentColour[]; indexOf: (label: string) => number } {
+  const out = [...colours];
+  const at = new Map<string, number>();
+  for (const label of labels) {
+    if (at.has(label)) continue;
+    const cmyk = VARIATION_TINTS[at.size % VARIATION_TINTS.length];
+    at.set(label, out.length);
+    out.push({ id: `course-tint:${label}`, name: `Variation ${label}`, cmyk: [...cmyk] as [number, number, number, number] });
+  }
+  return {
+    colours: out,
+    indexOf: (label) => {
+      const i = at.get(label);
+      if (i === undefined) throw new Error(`tint ${label} was not registered`);
+      return i;
+    },
+  };
+}
+
+/**
  * Rows for the colours of hex-coloured layout objects, appended on top in
  * first-use order: legacy print draws those objects after everything else.
  */

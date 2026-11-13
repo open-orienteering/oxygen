@@ -2,15 +2,15 @@
  * The tool rail (docs/course-editor.md §2, §6; 08 §5.2): `V` select / move,
  * the armed creation tools `S` / `K` / `M`, `A` areas (a menu of kinds),
  * `T` map text, `G` gaps on the selected circle or leg, and the snapping
- * toggle. Map exchange `X` and crossing point `C` are shown disabled
- * until slice F. Every tool has its key; the page owns the keyboard.
+ * toggle, `X` the map exchange (§6.9) and `C` the crossing point (§6.8).
+ * Every tool has its key; the page owns the keyboard.
  */
 
 import { useLayoutEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { useTranslation } from "react-i18next";
 import type { EditorTool } from "../../lib/editor/state";
-import { AREA_CHOICES, AREA_KEYS, railKeyOf, type AreaChoice, type RailTool } from "./tools/rail";
+import { AREA_CHOICES, AREA_KEYS, CORRIDOR_KEY, railKeyOf, type AreaChoice, type RailTool } from "./tools/rail";
 
 export type { AreaChoice } from "./tools/rail";
 
@@ -26,6 +26,9 @@ export interface ToolRailProps {
   canGap: boolean;
   /** The toner saver needs a course with positioned sites. */
   canTonerSaver: boolean;
+  /** *Corridor on selected leg* (§6.7): a leg is selected and has no corridor yet. */
+  canCorridor: boolean;
+  onCorridor: () => void;
   snapping: boolean;
   onSnapping: () => void;
 }
@@ -66,20 +69,14 @@ export function ToolRail(p: ToolRailProps) {
       {key}
     </button>
   );
-  const later = (key: "X" | "C", name: string) => (
-    <button key={key} type="button" data-testid={`editor-tool-${key}`} disabled title={t("toolLater", { tool: name })} aria-label={t("toolLater", { tool: name })}
-      className={`${BTN} text-slate-400 opacity-40 cursor-not-allowed`}>
-      {key}
-    </button>
-  );
   return (
     <div data-testid="editor-tool-rail" className="pointer-events-auto relative flex flex-col gap-1 bg-white/95 backdrop-blur-sm border border-slate-200 rounded-lg shadow-sm p-1 self-start">
       {button("V", t("toolSelect"), () => p.onTool("V"))}
       {button("S", t("toolStart"), () => p.onTool("S"))}
       {button("K", t("toolControl"), () => p.onTool("K"))}
       {button("M", t("toolFinish"), () => p.onTool("M"))}
-      {later("X", t("toolExchange"))}
-      {later("C", t("toolCrossing"))}
+      {button("X", t("toolExchange"), () => p.onTool("X"))}
+      {button("C", t("toolCrossing"), () => p.onTool("C"))}
       {button("A", t("toolArea"), () => p.onAreaOpen(!areaOpen))}
       {button("T", t("toolText"), () => p.onTool("T"))}
       {button("G", t("toolGap"), () => p.onTool("G"), !p.canGap)}
@@ -100,6 +97,13 @@ export function ToolRail(p: ToolRailProps) {
               <span>{t(`kind_${kind}`)}</span>
             </button>
           ))}
+          <div className="h-px bg-slate-200 my-1" />
+          <button type="button" role="menuitem" data-testid="editor-area-corridor" disabled={!p.canCorridor}
+            onClick={() => { p.onAreaOpen(false); p.onCorridor(); }}
+            className="w-full flex items-center gap-2 text-left px-2.5 py-1.5 hover:bg-purple-50 disabled:opacity-40 disabled:cursor-not-allowed cursor-pointer">
+            <kbd className="w-4 text-center font-mono text-[10px] text-slate-400 border border-slate-200 rounded">{CORRIDOR_KEY}</kbd>
+            <span>{t("corridorOnLeg")}</span>
+          </button>
         </div>,
         document.body,
       )}

@@ -68,5 +68,14 @@
   "presetsDialogTitle": "Add classes from club presets",
   "alreadyAdded": "Already added",
   "presetsResult": "{{created}} added, {{skipped}} skipped",
-  "selectAllPresets": "Select all"
+  "selectAllPresets": "Select all",
+  "variants": "Variants",
+  "variantRunners_one": "{{count}} runner",
+  "variantRunners_other": "{{count}} runners",
+  "distributeVariants": "Distribute variants…",
+  "distributeStartOrder": "In start order",
+  "distributeRandom": "Random",
+  "distributeOnlyUnassigned": "Only runners without a variant",
+  "distributeConfirm": "Re-deal the variants of every runner in this class? Runners who have already raced keep theirs.",
+  "variantsDistributed": "{{changed}} runners changed, {{skipped}} who have raced kept theirs"
 }

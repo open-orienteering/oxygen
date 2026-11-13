@@ -43,6 +43,25 @@ describe("buildDescriptionSheet", () => {
     });
   });
 
+  it("an explicit sequence wins over the ordinal and over free order's omission (F15: the all-variations block)", () => {
+    const input = {
+      eventName: "E", classNames: [], courseName: "Fork", lengthM: 0, climbM: 0,
+      controls: [
+        { id: 31, code: "31", sequence: 1 },
+        { id: 32, code: "32", sequence: 2 },
+        { id: 33, code: "33", sequence: 2 },
+        { id: 34, code: "34", sequence: 3 },
+      ],
+    };
+    for (const orderMode of ["ordered", "free_order"] as const) {
+      const rows = buildDescriptionSheet({ ...input, orderMode }).rows.filter((r) => r.kind === "control");
+      expect(rows.map((r) => r.sequence)).toEqual([1, 2, 2, 3]);
+    }
+    // A control without one keeps the old rule.
+    const mixed = buildDescriptionSheet({ ...input, controls: [{ id: 31, code: "31" }, { id: 32, code: "32", sequence: 7 }] });
+    expect(mixed.rows.filter((r) => r.kind === "control").map((r) => r.sequence)).toEqual([1, 7]);
+  });
+
   it("free_order omits sequence numbers on control rows", () => {
     const sheet = buildDescriptionSheet({
       eventName: "E",
@@ -173,6 +192,66 @@ describe("buildDescriptionSheet", () => {
       true,  // 8 — above finish
       false, // finish (bottom border)
     ]);
+  });
+});
+
+describe("derived crossing rows (F4; control-descriptions §Course-level instructions)", () => {
+  const base = {
+    eventName: "E", classNames: [], courseName: "A", lengthM: 0, climbM: 0,
+    controls: [{ id: 31, code: "31" }, { id: 32, code: "32" }],
+  };
+  const specials = (sheet: ReturnType<typeof buildDescriptionSheet>) =>
+    sheet.rows.map((r) => (r.kind === "special" ? `${r.symbolKey}${r.lengthM !== undefined ? `:${r.lengthM}` : ""}` : r.kind === "control" ? r.code : r.kind));
+
+  it("13.3 after the preceding control, 13.4 for a section, after the start when the leg leaves it", () => {
+    const sheet = buildDescriptionSheet({ ...base, crossings: [{ afterControlId: 31, section: false }, { afterControlId: null, section: true }] });
+    expect(specials(sheet)).toEqual(["start", "13.4", "31", "13.3", "32", "finish"]);
+  });
+
+  it("replaces a hand-placed row of the same kind at the same anchor and inherits its length", () => {
+    const sheet = buildDescriptionSheet({
+      ...base,
+      instructions: { specials: [{ afterControlId: 31, kind: "13.1", lengthM: 40 }, { afterControlId: 31, kind: "13.3", lengthM: 120 }] },
+      crossings: [{ afterControlId: 31, section: false }],
+    });
+    expect(specials(sheet)).toEqual(["start", "31", "13.1:40", "13.3:120", "32", "finish"]);
+  });
+
+  it("keeps a hand-placed 13.3 at another anchor and one of another kind at the same anchor", () => {
+    const sheet = buildDescriptionSheet({
+      ...base,
+      instructions: { specials: [{ afterControlId: 32, kind: "13.3" }, { afterControlId: 31, kind: "13.4" }] },
+      crossings: [{ afterControlId: 31, section: false }],
+    });
+    expect(specials(sheet)).toEqual(["start", "31", "13.4", "13.3", "32", "13.3", "finish"]);
+  });
+
+  it("drops a crossing whose anchor is not on the sheet, as hand-placed rows", () => {
+    expect(specials(buildDescriptionSheet({ ...base, crossings: [{ afterControlId: 99, section: false }] }))).toEqual(["start", "31", "32", "finish"]);
+  });
+});
+
+describe("derived map-exchange rows (13.5, F5)", () => {
+  const base = {
+    eventName: "E", classNames: [], courseName: "A", lengthM: 0, climbM: 0,
+    controls: [{ id: 31, code: "31" }, { id: 32, code: "32" }, { id: 33, code: "33" }],
+  };
+  const specials = (sheet: ReturnType<typeof buildDescriptionSheet>) =>
+    sheet.rows.map((r) => (r.kind === "special" ? `${r.symbolKey}${r.lengthM !== undefined ? `:${r.lengthM}` : ""}` : r.kind === "control" ? r.code : r.kind));
+
+  it("13.5 after the exchange control, before a crossing row of the leg that leaves it", () => {
+    expect(specials(buildDescriptionSheet({ ...base, exchanges: [{ afterControlId: 32 }] }))).toEqual(["start", "31", "32", "13.5", "33", "finish"]);
+    expect(specials(buildDescriptionSheet({ ...base, exchanges: [{ afterControlId: 32 }], crossings: [{ afterControlId: 32, section: false }] })))
+      .toEqual(["start", "31", "32", "13.5", "13.3", "33", "finish"]);
+  });
+
+  it("replaces a hand-placed 13.5 at the anchor keeping its length; one elsewhere stays; one row per anchor", () => {
+    const sheet = buildDescriptionSheet({
+      ...base,
+      instructions: { specials: [{ afterControlId: 32, kind: "13.5", lengthM: 50 }, { afterControlId: 31, kind: "13.5" }] },
+      exchanges: [{ afterControlId: 32 }, { afterControlId: 32 }],
+    });
+    expect(specials(sheet)).toEqual(["start", "31", "13.5", "32", "13.5:50", "33", "finish"]);
   });
 });
 

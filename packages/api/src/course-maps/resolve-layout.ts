@@ -5,12 +5,13 @@
  * the event's full control set) into the resolved print document, the map
  * window it shows, the overlay geometry and the text placeholder values.
  *
- * `courseMap.list` and `mapTemplate.previewLayout` both go through here so a
+ * `courseMap.list`, `resolveSheet` and the print path go through here so a
  * template preview and a saved map page resolve identically.
  */
 
 import {
   buildDescriptionSheet,
+  course as courseLib,
   mapTemplateSettingsSchema,
   mapWindowForFrame,
   courseMapObjectSchema,
@@ -28,8 +29,8 @@ import {
   type MapWindow,
 } from "@oxygen/shared";
 import { z } from "zod";
-import { firstCode } from "../control-id.js";
-import { courseSequenceOf, type SequenceColumns } from "../course-structure.js";
+import { displayCode, firstCode, isStartOrFinish } from "../control-id.js";
+import { courseSequenceOf, crossingRowsOf, rowKind, type SequenceColumns } from "../course-structure.js";
 
 const objectsSchema = z.array(courseMapObjectSchema);
 
@@ -51,6 +52,8 @@ export interface LayoutControlSource {
   labelOffset?: { dx: number; dy: number };
   /** `controls.circle_gaps` JSONB: authored circle cuts (course-layer.md §6.4). */
   circleGaps?: unknown;
+  /** The block row's A-column number, set by the all-variations page (F15, course-print.md §4.6); absent = the ordinal rule. */
+  sequence?: number;
 }
 
 /** Map template row — `settings` / `objects` are raw JSONB. */
@@ -82,6 +85,33 @@ export interface LayoutCourseSource {
   controls: LayoutControlSource[];
   /** `courses.description_instructions` JSONB (specials + finish variant). */
   descriptionInstructions?: unknown;
+  /**
+   * The legs through crossing points (`crossingRowsOf`, course-layer.md
+   * §10.3): the block derives its 13.3 / 13.4 rows from them.
+   */
+  crossings?: ReadonlyArray<{ afterControlId: number | null; section: boolean }>;
+}
+
+/** A course's `crossings` from its stored structure over the event's controls (public ids: first code, else seq). */
+export function layoutCrossings(structure: unknown, allControls: readonly LayoutControlSource[]): { afterControlId: number | null; section: boolean }[] {
+  const byId = new Map(allControls.map((c) => [c.id, c]));
+  return crossingRowsOf(
+    structure,
+    (uuid) => {
+      const c = byId.get(uuid);
+      return c ? firstCode(c.codes) || (c.seq ?? undefined) : undefined;
+    },
+    (uuid) => {
+      const c = byId.get(uuid);
+      return !!c && rowKind({ kind: c.kind ?? "control", status: c.status ?? "" }) === "start";
+    },
+  );
+}
+
+/** An all-controls sheet's drawn type of a site (course-layer.md §10.3): by kind, else the legacy status; an exchange is a control. */
+function allControlsType(c: LayoutControlSource): CourseOverlayControl["type"] {
+  const kind = rowKind({ kind: c.kind ?? "control", status: c.status ?? "" });
+  return kind === "start" || kind === "finish" || kind === "crossing_point" || kind === "map_issue" ? kind : "control";
 }
 
 /** Loose reader for the instructions JSONB — anything malformed → null. */
@@ -129,7 +159,7 @@ export function layoutControlsFromCourseControls(
 }
 
 export interface ResolveMapLayoutInput {
-  /** `"course"` or `"all_controls"`; anything else resolves without overlay. */
+  /** `"course"`, `"all_controls"` or `"setter"` (its group in `allControls`, F10); anything else resolves without overlay. */
   kind: string;
   template: LayoutTemplateSource;
   overrides?: CourseMapOverrides;
@@ -156,6 +186,18 @@ export interface ResolveMapLayoutInput {
   event?: { name: string; date: Date };
   /** Value for the `{map}` placeholder. */
   mapName?: string;
+  /**
+   * The sheet's part of a course split by map exchanges
+   * (`course_maps.section_index`, course-layer.md §11). A NULL window
+   * centre then centres on that part's controls; out of range, or a
+   * one-part course, is the whole course.
+   */
+  section?: number;
+  /**
+   * The `{variant}` placeholder (course-print.md §4.6, F8): a variant
+   * page's key, the all-variations page's keys; absent = "".
+   */
+  variantKey?: string;
 }
 
 export interface ResolvedMapLayout {
@@ -179,12 +221,8 @@ export interface ResolvedMapLayout {
    */
   descriptionHeader: DescriptionSheetHeader | null;
   textValues: MapTextValues;
-  /**
-   * ISOM overprint enlargement `mapScale / printScale` (1 when the base
-   * map scale is unknown). A 1:15000 map printed at 1:7500 doubles the
-   * control circles, numbers and line widths along with the terrain.
-   */
-  overprintScale: number;
+  /** The part drawn (`input.section`) when the course has ≥ 2 parts and it is in range; the layer's `viewOptions.section`. */
+  section?: number;
 }
 
 /**
@@ -217,7 +255,7 @@ function endControl(row: LayoutControlSource | null | undefined, type: "start" |
   if (!row || (row.xpos === 0 && row.ypos === 0)) return null;
   return {
     id: row.id,
-    code: row.codes.split(";")[0]?.trim() || row.name || (type === "start" ? "S" : "F"),
+    code: displayCode({ ...row, seq: null, kind: type }) || (type === "start" ? "S" : "F"),
     type,
     x: row.xpos,
     y: row.ypos,
@@ -242,20 +280,20 @@ export function resolveMapLayout(
   const overrides = input.overrides ?? {};
   const frame = overrides.mapFrame ?? settings.mapFrame;
   const printScale = overrides.printScale ?? input.template.printScale;
+  // The all-controls sheet and a setter sheet (F10: its group, filtered by the caller) list sites, not a course.
+  const everySite = input.kind === "all_controls" || input.kind === "setter";
 
   const rawControls =
-    input.kind === "all_controls"
+    everySite
       ? (input.allControls ?? []).filter(
           (control) => control.xpos !== 0 || control.ypos !== 0,
         )
       : input.course?.controls ?? [];
   const regularControls = rawControls.map((control) => {
-    const code = control.codes.split(";")[0] || String(control.seq ?? "");
+    // A start / finish by its name (F32, course-layer.md §6.3).
+    const code = isStartOrFinish(control) ? displayCode(control) : control.codes.split(";")[0] || String(control.seq ?? "");
     const type: CourseOverlayControl["type"] =
-      input.kind === "all_controls" &&
-      (control.status === "start" || control.status === "finish")
-        ? control.status
-        : "control";
+      everySite ? allControlsType(control) : "control";
     const x = control.xpos;
     const y = control.ypos;
     return {
@@ -275,7 +313,7 @@ export function resolveMapLayout(
         : {}),
     };
   });
-  if (input.kind === "all_controls") {
+  if (everySite) {
     regularControls.sort((a, b) =>
       a.code.localeCompare(b.code, undefined, { numeric: true }),
     );
@@ -327,10 +365,17 @@ export function resolveMapLayout(
           id: source ? firstCode(source.codes) || (source.seq ?? index + 1) : index + 1,
           code: control.code,
           description: (control.description ?? null) as ControlDescription | null,
+          ...(source?.sequence !== undefined ? { sequence: source.sequence } : {}),
         };
       }),
       instructions: readInstructions(input.course.descriptionInstructions),
       finishLengthM,
+      ...(input.course.crossings?.length ? { crossings: input.course.crossings } : {}),
+      // §11: a 13.5 row after each map exchange of the course's controls, by the rows' public id.
+      exchanges: controlRows.flatMap((control, index) => {
+        const source = rawControls[regularControls.indexOf(control)];
+        return source?.kind === "map_exchange" ? [{ afterControlId: firstCode(source.codes) || (source.seq ?? index + 1) }] : [];
+      }),
     });
     descriptionHeader = sheet.header;
     descriptionRows = sheet.rows.map((row) => ({
@@ -365,11 +410,24 @@ export function resolveMapLayout(
   }
 
   const labelMode: "sequence" | "code" =
-    input.kind === "all_controls" || freeOrder ? "code" : "sequence";
+    everySite || freeOrder ? "code" : "sequence";
 
+  // One part of a course split by map exchanges (course-layer.md §11): its controls centre the window.
+  let section: number | undefined;
+  let centred = controls;
+  if (input.kind === "course" && input.section !== undefined) {
+    const exchange = new Set(rawControls.filter((c) => c.kind === "map_exchange").map((c) => c.id));
+    const placed = controls.filter((c) => c.x !== 0 || c.y !== 0);
+    const parts = courseLib.sectionsOf(placed, (c) => c.type === "control" && exchange.has(c.id));
+    const part = parts[input.section];
+    if (parts.length >= 2 && part) {
+      section = input.section;
+      centred = placed.slice(part.from, part.to + 1);
+    }
+  }
   const center =
     input.windowCenter ??
-    centerOfControls(controls) ?? {
+    centerOfControls(centred) ?? {
       x: 0,
       y: 0,
     };
@@ -412,12 +470,12 @@ export function resolveMapLayout(
     labelMode,
     descriptionRows,
     descriptionHeader,
-    overprintScale: (input.mapScale ?? printScale) / printScale,
+    ...(section !== undefined ? { section } : {}),
     textValues: {
       event: input.event?.name ?? "",
       course: course?.name ?? "",
       map: input.mapName ?? "",
-      variant: "",
+      variant: input.variantKey ?? "",
       classes: course?.classes?.map((entry) => entry.name).join(", ") ?? "",
       scale: `1:${printScale}`,
       length: course ? `${course.lengthM} m` : "",

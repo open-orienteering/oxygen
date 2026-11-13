@@ -12,7 +12,7 @@
 
 import { course, getPaperDimensions } from "@oxygen/shared";
 import type { PageInput } from "@oxygen/shared/print";
-import { type ResolveMapLayoutInput, type ResolvedMapLayout, resolveMapLayout } from "./resolve-layout.js";
+import { type LayoutControlSource, type ResolveMapLayoutInput, type ResolvedMapLayout, resolveMapLayout } from "./resolve-layout.js";
 
 export type SheetInput = Omit<PageInput, "map" | "geo">;
 
@@ -33,6 +33,15 @@ export interface ResolveSheetInput extends ResolveMapLayoutInput {
    * automatic slits or gaps; stored gaps still apply. Absent = on.
    */
   autoCuts?: boolean;
+  /**
+   * The all-variations page (course-print.md §4.6, F8; answer 4): a root's
+   * `structure` drawn as the spine and every alternative's branch, in the
+   * one purple (no tint), with codes — or, when the variants number alike,
+   * the numbers (F15: `viewOptions.labels`). `course.controls` are then every
+   * visited control (`allVariationsRow`) and the course `free_order`, so
+   * the block lists each once (by number when the variants number alike).
+   */
+  allVariations?: boolean;
 }
 
 export interface ResolvedSheet {
@@ -41,14 +50,15 @@ export interface ResolvedSheet {
 }
 
 /**
- * The authored leg gaps of the stored structure, by index into the layout's
- * controls. The layout's controls are the course's start and finish rows
- * and its `course_controls`; a start the layout does not draw (unplaced,
- * or `firstAsStart`) shifts the two sequences, so they are aligned on the
+ * The stored legs of the structure (`LegProps`: gaps, style, bends, …;
+ * course-layer.md §10.1), by index into the layout's controls. The
+ * layout's controls are the course's start and finish rows and its
+ * `course_controls`; a start the layout does not draw (unplaced, or
+ * `firstAsStart`) shifts the two sequences, so they are aligned on the
  * first site they share.
  */
-function legGapsByIndex(layout: ResolvedMapLayout, stored: course.StoredCourseStructure | null): Map<number, course.FractionGap[]> {
-  const out = new Map<number, course.FractionGap[]>();
+function legPropsByIndex(layout: ResolvedMapLayout, stored: course.StoredCourseStructure | null): Map<number, course.LegProps> {
+  const out = new Map<number, course.LegProps>();
   if (!stored) return out;
   const items = course.structureControlItems(stored);
   const ids = layout.controls.map((c) => c.id);
@@ -57,7 +67,7 @@ function legGapsByIndex(layout: ResolvedMapLayout, stored: course.StoredCourseSt
   const offset = ids.indexOf(items[anchor].siteId) - anchor;
   items.forEach((item, j) => {
     const i = j + offset;
-    if (j > 0 && i > 0 && i < ids.length && item.leg?.gaps?.length) out.set(i, item.leg.gaps);
+    if (j > 0 && i > 0 && i < ids.length && item.leg && Object.keys(item.leg).length > 0) out.set(i, item.leg);
   });
   return out;
 }
@@ -72,6 +82,8 @@ export function courseInputOfLayout(
     /** `controls.circle_gaps` by control id. */
     circleGaps?: ReadonlyMap<string, course.AngularGap[]>;
     courseId?: string;
+    /** The event's crossing points by control id (§10.3): a course sheet draws those its legs run through. */
+    crossingSites?: ReadonlyMap<string, LayoutControlSource>;
   },
 ): Pick<PageInput["course"], "structure" | "sites"> {
   const sites: course.CourseSite[] = [];
@@ -85,11 +97,23 @@ export function courseInputOfLayout(
   if (opts.kind !== "course") return { structure: null, sites };
 
   const parsed = opts.structure ? course.courseStructureSchema.safeParse(opts.structure) : null;
-  const gaps = legGapsByIndex(layout, parsed?.success ? parsed.data : null);
+  // The crossing points the legs run through (§10.3) are the sheet's sites too; others are not drawn.
+  if (parsed?.success) {
+    for (const item of course.structureControlItems(parsed.data)) {
+      const id = item.leg?.crossing?.controlId;
+      const c = id && !seen.has(id) ? opts.crossingSites?.get(id) : undefined;
+      if (!c || (c.xpos === 0 && c.ypos === 0)) continue;
+      seen.add(c.id);
+      sites.push({ id: c.id, code: c.name || String(c.seq ?? ""), kind: "crossing_point", x: c.xpos, y: c.ypos });
+    }
+  }
+  const legs = legPropsByIndex(layout, parsed?.success ? parsed.data : null);
   const items: course.CourseItem[] = layout.controls.map((c, i) => {
-    const item: course.CourseItem = { siteId: c.id, role: c.type };
-    const legGaps = gaps.get(i);
-    if (legGaps) item.leg = { gaps: legGaps };
+    // A course sheet's controls are its items: start, controls, finish.
+    const item: course.CourseItem = { siteId: c.id, role: c.type === "start" || c.type === "finish" ? c.type : "control" };
+    // The whole stored leg: gaps, style, bends (F1), corridor (F2), crossing (F4).
+    const leg = legs.get(i);
+    if (leg) item.leg = leg;
     return item;
   });
   const labelOffsets: Record<string, { dx: number; dy: number }> = {};
@@ -106,6 +130,81 @@ export function courseInputOfLayout(
       ...(Object.keys(labelOffsets).length ? { labelOffsets } : {}),
     },
   };
+}
+
+/**
+ * The all-variations page's structures (course-print.md §4.6): the root's
+ * spine and one branch per alternative (`course.allVariationStructures`,
+ * the editor's All-variations view without its tints), the layout's start
+ * and finish completing the spine when the stored structure leaves them
+ * implicit. Every structure carries the sheet's label offsets; the
+ * crossing points any branch runs through are added to `sites`.
+ */
+function allVariationsInput(
+  layout: ResolvedMapLayout,
+  stored: course.StoredCourseStructure,
+  sites: course.CourseSite[],
+  courseId: string,
+  crossingSites: ReadonlyMap<string, LayoutControlSource>,
+): course.CourseStructure[] {
+  const { spine, branches } = course.allVariationStructures(stored);
+  const first = layout.controls[0];
+  const last = layout.controls[layout.controls.length - 1];
+  if (first?.type === "start" && spine[0]?.siteId !== first.id) spine.unshift({ siteId: first.id });
+  if (last?.type === "finish" && spine[spine.length - 1]?.siteId !== last.id) spine.push({ siteId: last.id });
+  const seen = new Set(sites.map((s) => s.id));
+  const items = (list: readonly course.StoredControlItem[]): course.CourseItem[] =>
+    list.map((c) => {
+      const crossing = c.leg?.crossing?.controlId;
+      const site = crossing && !seen.has(crossing) ? crossingSites.get(crossing) : undefined;
+      if (site && (site.xpos !== 0 || site.ypos !== 0)) {
+        seen.add(site.id);
+        sites.push({ id: site.id, code: site.name || String(site.seq ?? ""), kind: "crossing_point", x: site.xpos, y: site.ypos });
+      }
+      const item: course.CourseItem = { siteId: c.siteId };
+      if (c.leg && Object.keys(c.leg).length > 0) item.leg = c.leg;
+      if (c.numberHidden) item.numberHidden = true;
+      return item;
+    });
+  const labelOffsets: Record<string, { dx: number; dy: number }> = {};
+  for (const c of layout.controls) {
+    if (c.labelPosition) labelOffsets[c.id] = { dx: c.labelPosition.x - c.x, dy: c.labelPosition.y - c.y };
+  }
+  const shape = (id: string, list: readonly course.StoredControlItem[]): course.CourseStructure => ({
+    version: 1,
+    id,
+    orderMode: stored.orderMode,
+    items: items(list),
+    ...(Object.keys(labelOffsets).length ? { labelOffsets } : {}),
+  });
+  return [shape(courseId, spine), ...branches.map((b) => shape(`${courseId}:${b.groupId}:${b.label}`, b.items))];
+}
+
+/**
+ * What `allVariationNumbers` reads of a site: its kind (the layer's:
+ * `control`, `map_exchange`, `start`, …) and whether it has a position.
+ */
+export interface NumberedSite {
+  kind: string;
+  positioned: boolean;
+}
+
+/**
+ * The all-variations page's numbers (course-print.md §4.6, F15;
+ * course-layer.md §12.7): `course.uniformVariantNumbers` over the numbered
+ * items — a positioned site that is a control (a map exchange is one; the
+ * start, finish, crossing and map-issue points are not) — as the layer's
+ * `viewOptions.labels` (site id → text), or null when the variants number
+ * unalike (codes). The editor's All-variations view computes the same.
+ */
+export function allVariationNumbers(stored: course.StoredCourseStructure, siteOf: (id: string) => NumberedSite | undefined): Record<string, string> | null {
+  const numbers = course.uniformVariantNumbers(stored, (item) => {
+    const site = siteOf(item.siteId);
+    if (!site?.positioned) return false;
+    const role = item.role ?? (site.kind === "start" || site.kind === "finish" ? site.kind : "control");
+    return role === "control" && site.kind !== "crossing_point" && site.kind !== "map_issue";
+  });
+  return numbers && numbers.size > 0 ? Object.fromEntries([...numbers].map(([id, n]) => [id, String(n)])) : null;
 }
 
 function circleGapsOf(controls: readonly { id: string; circleGaps?: unknown }[]): Map<string, course.AngularGap[]> {
@@ -127,13 +226,31 @@ export function resolveSheet(input: ResolveSheetInput): ResolvedSheet {
     document.orientation,
     document.paper === "custom" ? { width: document.paperWidthMm!, height: document.paperHeightMm! } : undefined,
   );
-  const { structure, sites } = courseInputOfLayout(layout, {
+  const crossingSites = new Map((input.allControls ?? []).filter((c) => c.kind === "crossing_point").map((c) => [c.id, c]));
+  const own = courseInputOfLayout(layout, {
     kind: input.kind,
     orderMode: input.course?.orderMode,
     structure: input.structure,
     circleGaps: circleGapsOf([...(input.course?.controls ?? []), ...(input.allControls ?? [])]),
     courseId: input.courseId,
+    crossingSites,
   });
+  // A mutable copy: the all-variations page adds the crossing points its branches run through.
+  const sites = [...own.sites];
+  let structure: PageInput["course"]["structure"] = own.structure;
+  let labels: Record<string, string> | null = null;
+  if (input.allVariations && input.kind === "course") {
+    const parsed = input.structure ? course.courseStructureSchema.safeParse(input.structure) : null;
+    if (parsed?.success && course.hasVariations(parsed.data)) {
+      structure = allVariationsInput(layout, parsed.data, sites, input.courseId ?? "course", crossingSites);
+      // F15: numbers when the variants number alike, else codes.
+      const byId = new Map(sites.map((s) => [s.id, s]));
+      labels = allVariationNumbers(parsed.data, (id) => {
+        const s = byId.get(id);
+        return s && { kind: s.kind, positioned: s.x !== 0 || s.y !== 0 };
+      });
+    }
+  }
   const title = input.course?.name ?? input.mapName ?? "";
   const sheet: SheetInput = {
     paper: { widthMm: paper.width, heightMm: paper.height },
@@ -144,10 +261,14 @@ export function resolveSheet(input: ResolveSheetInput): ResolvedSheet {
       sites,
       appearance: course.appearanceFromTemplate(document.appearance),
       viewOptions: {
-        allControls: input.kind === "all_controls",
+        allControls: input.kind === "all_controls" || input.kind === "setter",
+        // §10.3: the all-controls and setter sheets (F10) are setter views (702, their crossing points); a course sheet never is.
+        ...(input.kind === "all_controls" || input.kind === "setter" ? { setterMarks: true } : {}),
         labelMode: layout.labelMode,
-        overprintScale: layout.overprintScale,
+        ...(labels ? { labels } : {}),
         ...(input.autoCuts === false ? { autoCuts: false } : {}),
+        // §11: a part sheet draws its part; numbers and the block stay the whole course's.
+        ...(layout.section !== undefined ? { section: layout.section } : {}),
       },
       ...(input.courseObjects?.length ? { objects: input.courseObjects } : {}),
     },

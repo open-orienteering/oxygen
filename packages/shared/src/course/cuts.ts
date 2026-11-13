@@ -129,6 +129,75 @@ export function legGaps(a: Pick<CutFeature, "x" | "y">, b: Pick<CutFeature, "x" 
   return kept.map(([from, to]) => ({ from, to }));
 }
 
+/**
+ * Gaps for a bent leg `points[0] → … → points[n-1]` (F1): each segment
+ * opens the stretch of itself within a feature's clearance, stretches
+ * that meet at a bend merge; the 1.2 R end keep applies at the leg's two
+ * ends only, the minimum and the cap to the whole leg. Fractions of the
+ * bent length. A two-point leg is exactly `legGaps`.
+ */
+export function polylineLegGaps(points: readonly Pick<CutFeature, "x" | "y">[], features: readonly CutFeature[], radiusMm = LEGACY_RADIUS_MM, lineWidthMm = LEGACY_LINE_MM): FractionGap[] {
+  if (points.length < 2) return [];
+  if (points.length === 2) return legGaps(points[0], points[1], features, radiusMm, lineWidthMm);
+  const endKeep = LEG_END_KEEP * radiusMm;
+  const starts = [0];
+  for (let i = 1; i < points.length; i++) starts.push(starts[i - 1] + Math.hypot(points[i].x - points[i - 1].x, points[i].y - points[i - 1].y));
+  const len = starts[starts.length - 1];
+  if (len < 2 * endKeep + MIN_LEG_GAP_MM) return [];
+  // F20b: only the features within reach of the leg, in their order. A feature passes the tests below only within
+  // its clearance c of the segment's line and c past its ends, so within c·√2 of its bounds on each axis; 2c
+  // leaves room for rounding. Skipping the rest changes nothing: same intervals, same order.
+  let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
+  for (const p of points) {
+    if (p.x < minX) minX = p.x;
+    if (p.x > maxX) maxX = p.x;
+    if (p.y < minY) minY = p.y;
+    if (p.y > maxY) maxY = p.y;
+  }
+  const near: { f: CutFeature; c: number }[] = [];
+  for (const f of features) {
+    const c = clearanceOf(f, lineWidthMm), m = 2 * c;
+    if (f.x < minX - m || f.x > maxX + m || f.y < minY - m || f.y > maxY + m) continue;
+    near.push({ f, c });
+  }
+  // Absolute intervals along the leg, mm.
+  const raw: Array<[number, number]> = [];
+  for (let i = 1; i < points.length; i++) {
+    const a = points[i - 1], b = points[i];
+    const dx = b.x - a.x, dy = b.y - a.y;
+    const L = Math.hypot(dx, dy);
+    if (L === 0) continue;
+    const sx0 = Math.min(a.x, b.x), sx1 = Math.max(a.x, b.x), sy0 = Math.min(a.y, b.y), sy1 = Math.max(a.y, b.y);
+    for (const { f, c } of near) {
+      const m = 2 * c;
+      if (f.x < sx0 - m || f.x > sx1 + m || f.y < sy0 - m || f.y > sy1 + m) continue;
+      const along = ((f.x - a.x) * dx + (f.y - a.y) * dy) / L;
+      if (along < -c || along > L + c) continue;
+      const off = Math.abs((f.x - a.x) * dy - (f.y - a.y) * dx) / L;
+      if (off >= c) continue;
+      const half = Math.sqrt(c * c - off * off);
+      const lo = Math.max(along - half, 0), hi = Math.min(along + half, L);
+      if (hi > lo) raw.push([starts[i - 1] + lo, starts[i - 1] + hi]);
+    }
+  }
+  const clamped = raw.map(([lo, hi]): [number, number] => [Math.max(lo, endKeep), Math.min(hi, len - endKeep)]).filter(([lo, hi]) => hi > lo);
+  clamped.sort((p, q) => p[0] - q[0]);
+  const merged: Array<[number, number]> = [];
+  for (const g of clamped) {
+    const last = merged[merged.length - 1];
+    if (last && g[0] <= last[1]) last[1] = Math.max(last[1], g[1]);
+    else merged.push([g[0], g[1]]);
+  }
+  let kept = merged.filter(([lo, hi]) => hi - lo >= MIN_LEG_GAP_MM);
+  const total = () => kept.reduce((sum, [lo, hi]) => sum + (hi - lo), 0);
+  while (kept.length > 0 && total() > MAX_TOTAL_LEG_GAP * len) {
+    let smallest = 0;
+    for (let i = 1; i < kept.length; i++) if (kept[i][1] - kept[i][0] < kept[smallest][1] - kept[smallest][0]) smallest = i;
+    kept = kept.filter((_, i) => i !== smallest);
+  }
+  return kept.map(([from, to]) => ({ from: from / len, to: to / len }));
+}
+
 /** Farthest ink of a point symbol (library or render IR) from its origin, mm; 0 for other kinds. */
 export function pointSymbolRadiusMm(render: LibraryEntry["render"] | RenderSymbol | null | undefined): number {
   if (!render || render.type !== "point") return 0;

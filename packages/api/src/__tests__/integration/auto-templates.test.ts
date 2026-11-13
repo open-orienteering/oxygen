@@ -265,6 +265,149 @@ describe("autoSheets and class overrides (course-layout.md §6)", () => {
   });
 });
 
+describe("part sheets of a map exchange (course-layout.md §6, course-layer.md §11, F5)", () => {
+  let t: TestEventContext;
+  let caller: ReturnType<typeof makeCaller>;
+  let course: { id: string; seq: number };
+  let exchange: { id: string };
+  let h21: { id: string; seq: number };
+  const pdfUrl = (q: string) => `/api/maps/${t.nameId}/maps.pdf${q}`;
+  const own = () => t.db.courseMap.findMany({ where: { courseId: course.id, classId: null }, orderBy: [{ sortOrder: "asc" }, { seq: "asc" }] });
+  const centreX = (w: { minX: number; width: number }) => w.minX + w.width / 2;
+
+  beforeAll(async () => {
+    t = await createTestEvent("part_sheets");
+    caller = makeCaller(t.event);
+    const bytes = Buffer.concat([readFileSync(fixture), Buffer.from(`parts-${randomBytes(4).toString("hex")}`)]);
+    await applyEventMap(t.db, t.eventId, "test.ocd", bytes);
+    clearEventDocumentCaches();
+    const mk = (codes: string, xpos: number, ypos: number) => t.db.control.create({ data: { eventId: t.eventId, codes, xpos, ypos } });
+    const a = await mk("41", -40, 0);
+    exchange = await mk("42", 0, 5);
+    const b = await mk("43", 40, 10);
+    course = await t.db.course.create({
+      data: { eventId: t.eventId, name: "Blå", lengthM: 3000, climbM: 20, courseControls: { create: [a, exchange, b].map((c, i) => ({ position: i + 1, controlId: c.id })) } },
+    });
+    h21 = await t.db.class.create({ data: { eventId: t.eventId, name: "H21", courseId: course.id } });
+    // One part: one own sheet, and H21's class sheet.
+    await caller.layout.autoSheets({ courseId: course.seq });
+    await caller.layout.setClassOverride({ classId: h21.seq, printScale: 10000 });
+    expect(await own()).toHaveLength(1);
+  }, 90_000);
+  afterAll(async () => {
+    await t?.cleanup();
+  });
+
+  it("an exchange gives the course one own sheet per part on its template, and the overriding class a sheet per part; idempotent", async () => {
+    await t.db.control.update({ where: { id: exchange.id }, data: { kind: "map_exchange" } });
+    const r = await caller.layout.autoSheets({ courseId: course.seq });
+    expect(r.createdSheets).toHaveLength(2);
+    const sheets = await own();
+    expect(sheets.map((s) => [s.name, s.sectionIndex, s.windowCenter])).toEqual([["Blå", 0, null], ["Blå · part 2", 1, null]]);
+    expect(new Set(sheets.map((s) => s.templateId)).size).toBe(1);
+    expect(sheets[1].sortOrder).toBeGreaterThan(sheets[0].sortOrder);
+    const classSheets = await t.db.courseMap.findMany({ where: { classId: h21.id }, orderBy: { sectionIndex: "asc" } });
+    expect(classSheets.map((s) => s.sectionIndex)).toEqual([0, 1]);
+    expect(classSheets[1].name).toBe("Blå · part 2 · H21");
+    expect((await caller.layout.autoSheets({ courseId: course.seq })).createdSheets).toEqual([]);
+    const list = await caller.courseMap.list();
+    expect(list.filter((m) => m.courseId === course.seq && !m.class).map((m) => m.sectionIndex)).toEqual([0, 1]);
+  });
+
+  it("resolveSheet of a part sheet draws that part, centred on its controls; the block carries the whole course and the 13.5 row", async () => {
+    const [p1, p2] = await own();
+    const one = await caller.courseMap.resolveSheet({ seq: p1.seq });
+    const two = await caller.courseMap.resolveSheet({ seq: p2.seq });
+    expect(two.sheet?.sectionIndex).toBe(1);
+    // Part 1: 41 (-40) … 42 (0) → centre x −20; part 2: 42 (0) … 43 (40) → +20.
+    expect(centreX(one.window)).toBeCloseTo(-20, 3);
+    expect(centreX(two.window)).toBeCloseTo(20, 3);
+    for (const sheet of [one, two]) {
+      expect(sheet.block.rows.map((r) => (r.kind === "special" ? r.symbolKey : r.kind === "control" ? r.code : r.kind))).toEqual(["start", "41", "42", "13.5", "43", "finish"]);
+    }
+    // The course layer's view options carry the part: only the print path's `resolveSheet` sets it.
+    const row = await t.db.courseMap.findUniqueOrThrow({ where: { id: p2.id }, include: { template: true, course: { include: { classes: { select: { name: true } }, courseControls: { orderBy: { position: "asc" }, include: { control: true } } } } } });
+    const { resolveSheet } = await import("../../course-maps/resolve-sheet.js");
+    const { sheetInputForMapRow } = await import("../../course-maps/pdf-page.js");
+    const allControls = (await t.db.control.findMany({ where: { eventId: t.eventId, removed: false } })).map((c) => ({ ...c, name: c.name ?? "" }));
+    const resolved = resolveSheet(sheetInputForMapRow(row, { event: { name: "E", date: new Date(0) }, allControls, mapInfo: { scale: 10000, meridianTiltDeg: null } }));
+    expect(resolved.sheet.course.viewOptions.section).toBe(1);
+  });
+
+  it("maps.pdf?courses= prints one page per part", async () => {
+    clearEventDocumentCaches();
+    const res = await server.inject({ method: "GET", url: pdfUrl(`?courses=${course.seq}`) });
+    expect(res.statusCode).toBe(200);
+    expect((await PDFDocument.load(res.rawPayload)).getPageCount()).toBe(2);
+  }, 60_000);
+
+  it("a deleted part sheet comes back on the next autoSheets only; removing the exchange keeps the part sheet", async () => {
+    const [, p2] = await own();
+    await caller.courseMap.delete({ id: p2.seq });
+    expect(await own()).toHaveLength(1);
+    const r = await caller.layout.autoSheets({ courseId: course.seq });
+    expect(r.createdSheets).toHaveLength(1);
+    expect((await own()).map((s) => s.sectionIndex)).toEqual([0, 1]);
+    await t.db.control.update({ where: { id: exchange.id }, data: { kind: "control" } });
+    expect((await caller.layout.autoSheets({ courseId: course.seq })).createdSheets).toEqual([]);
+    expect(await own()).toHaveLength(2);
+  });
+});
+
+describe("the all-controls sheet on demand (course-layout.md §6, E-pages)", () => {
+  let t: TestEventContext;
+  let caller: ReturnType<typeof makeCaller>;
+  let course: { id: string; seq: number };
+
+  beforeAll(async () => {
+    t = await createTestEvent("all_controls_sheet");
+    caller = makeCaller(t.event);
+    await t.db.mapFile.create({ data: { eventId: t.eventId, fileName: "test.ocd", scale: 7500 } });
+    clearEventDocumentCaches();
+    course = await seedCourse(t, "Blå");
+    // A second course 252 mm wide at the map's scale: the event's controls only fit landscape.
+    await seedCourse(t, "Lång", 4.2);
+  });
+  afterAll(async () => {
+    await t?.cleanup();
+  });
+
+  it("{ courseId } leaves the all-controls sheet alone", async () => {
+    const r = await caller.layout.autoSheets({ courseId: course.seq });
+    expect(r.allControlsSheet).toBeNull();
+    expect(await t.db.courseMap.count({ where: { eventId: t.eventId, kind: "all_controls" } })).toBe(0);
+  });
+
+  it("{ allControls: true } creates the sheet once on the busiest template's key, turned to fit every control; idempotent", async () => {
+    const portrait = (await caller.mapTemplate.list())[0];
+    expect(portrait.orientation).toBe("portrait");
+    const r = await caller.layout.autoSheets({ allControls: true });
+    expect(r.allControlsSheet).not.toBeNull();
+    expect(r.createdSheets).toEqual([r.allControlsSheet]);
+    // Only the all-controls part ran: no course sheets answered.
+    expect(r.courseSheets).toEqual([]);
+    const sheet = await t.db.courseMap.findFirstOrThrow({ where: { eventId: t.eventId, kind: "all_controls" }, include: { template: true } });
+    expect(sheet).toMatchObject({ seq: r.allControlsSheet, name: "All controls", courseId: null, classId: null, windowCenter: null });
+    expect(sheet.template).toMatchObject({ paper: "A4", orientation: "landscape", printScale: portrait.printScale, autoKey: `A4-landscape-${portrait.printScale}`, isExtra: false });
+    expect(r.createdTemplates).toEqual([sheet.template!.seq]);
+
+    const again = await caller.layout.autoSheets({ allControls: true });
+    expect(again).toMatchObject({ allControlsSheet: r.allControlsSheet, createdSheets: [], createdTemplates: [] });
+    const listed = await caller.courseMap.list();
+    expect(listed.filter((m) => m.kind === "all_controls")).toHaveLength(1);
+  });
+
+  it("an all-controls sheet without a template gets one; with { courseId } both parts run", async () => {
+    await t.db.courseMap.updateMany({ where: { eventId: t.eventId, kind: "all_controls" }, data: { templateId: null } });
+    const r = await caller.layout.autoSheets({ courseId: course.seq, allControls: true });
+    expect(r.createdSheets).toEqual([]);
+    expect(r.courseSheets).toHaveLength(1);
+    const sheet = await t.db.courseMap.findFirstOrThrow({ where: { eventId: t.eventId, kind: "all_controls" }, include: { template: true } });
+    expect(sheet.seq).toBe(r.allControlsSheet);
+    expect(sheet.template?.orientation).toBe("landscape");
+  });
+});
+
 describe("sheet and template version tokens (course-layout.md §2)", () => {
   let t: TestEventContext;
   let caller: ReturnType<typeof makeCaller>;

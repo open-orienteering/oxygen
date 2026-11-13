@@ -14,6 +14,7 @@ import {
   courseLengthM,
   type GeometrySeqControl,
 } from "../course-geometry.js";
+import type { course } from "@oxygen/shared";
 
 const seq = (
   entries: Array<[string, GeometrySeqControl["type"], number, number]>,
@@ -115,6 +116,48 @@ describe("legDistancesMm (from the course layer, E6)", () => {
         expect(courseLengthM(dist(f), scale)).toBe(courseLengthM(reference(f), scale));
       }
     }
+  });
+});
+
+describe("legs along their bends (F1, course-layer.md §4.1, §10.1)", () => {
+  const bent = (leg: GeometrySeqControl["leg"]): GeometrySeqControl[] => [
+    { id: "s", code: "S1", type: "Start", xMm: 10, yMm: 10 },
+    { id: "a", code: "31", type: "Control", xMm: 40, yMm: 10, leg },
+    { id: "f", code: "F1", type: "Finish", xMm: 40, yMm: 50 },
+  ];
+
+  it("measures a leg through its bends; style and corridor never change it", () => {
+    expect(legDistancesMm(editorCourseLayer("c1", bent(undefined)))).toEqual([30, 40]);
+    // (10,10) → (10,50) → (40,10): 40 + 50.
+    expect(legDistancesMm(editorCourseLayer("c1", bent({ bends: [{ x: 10, y: 50 }] })))).toEqual([90, 40]);
+    for (const style of ["line", "marked_route", "none"] as const) {
+      expect(legDistancesMm(editorCourseLayer("c1", bent({ style, bends: [{ x: 10, y: 50 }] })))).toEqual([90, 40]);
+    }
+    expect(legDistancesMm(editorCourseLayer("c1", bent({ corridor: { widthM: 50, edge: true, whiteMm: 1, whiteOpacity: 1 } })))).toEqual([30, 40]);
+    expect(courseLengthM(legDistancesMm(editorCourseLayer("c1", bent({ bends: [{ x: 10, y: 50 }] }))), 10000)).toBe(1300);
+  });
+
+  it("measures a leg through its crossing point (F4, §10.3)", () => {
+    const s = bent(undefined);
+    // (10,10) → (10,50) → (40,10): the crossing point is the corner.
+    s[1].via = { id: "p", xMm: 10, yMm: 50 };
+    expect(legDistancesMm(editorCourseLayer("c1", s))).toEqual([90, 40]);
+  });
+});
+
+describe("curved legs (F13, course-layer.md §4.1, §10.1)", () => {
+  // (40,10) → (30,10) ⌒ quarter circle r 20 about (10,10) ⌒ (10,30) → (10,40): 20 + 10π mm.
+  const K = 0.5522847498 * 20;
+  const curvedSeq = (bends: course.CourseLegProps["bends"]): GeometrySeqControl[] => [
+    { id: "s", code: "S1", type: "Start", xMm: 40, yMm: 10 },
+    { id: "a", code: "31", type: "Control", xMm: 10, yMm: 40, leg: { bends } },
+  ];
+
+  it("measures a curved leg along the curve; the same bends as corners along the corners", () => {
+    const [curved] = legDistancesMm(editorCourseLayer("c1", curvedSeq([{ x: 30, y: 10, hOut: { x: 0, y: K } }, { x: 10, y: 30, hIn: { x: K, y: 0 } }])));
+    expect(Math.abs(curved - (20 + 10 * Math.PI))).toBeLessThan(0.02);
+    expect(legDistancesMm(editorCourseLayer("c1", curvedSeq([{ x: 30, y: 10 }, { x: 10, y: 30 }])))).toEqual([20 + Math.sqrt(800)]);
+    expect(courseLengthM([curved], 10000)).toBe(Math.round((20 + 10 * Math.PI) * 10));
   });
 });
 

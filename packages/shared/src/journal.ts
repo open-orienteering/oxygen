@@ -164,6 +164,14 @@ export interface RunnerRegisteredPayload {
   eventorClubId?: number;
   cardNo: number | null;
   startTime?: number;
+  /**
+   * The runner's own course seq (her variant, F6b), present on
+   * server-emitted entries: a number, or null for "the class's". A peer
+   * inserts it as given and never re-picks (the single-allocator rule);
+   * an entry without the key (a station registration) is dealt one by the
+   * writing node, which journals its pick as a `runner.updated`.
+   */
+  courseId?: number | null;
 }
 
 /**
@@ -173,6 +181,10 @@ export interface RunnerRegisteredPayload {
  * it through the same `runner.update` logic without any seq↔UUID guesswork.
  * `cardNo` is the runner's card at emit time (pre-edit) so `(eventId, cardNo)`
  * resolution finds the same row on the peer; `runnerId` (`seq`) is the fallback.
+ * `fields.variantAccepted: true` beside `fields.courseId` marks a red-exit
+ * accept (`cardReadout.acceptVariant`, F6c) — informational, ignored on
+ * replay (`buildRunnerUpdateData`); the `result.applied` that follows it
+ * carries the new status.
  */
 export interface RunnerUpdatedPayload {
   cardNo: number | null;

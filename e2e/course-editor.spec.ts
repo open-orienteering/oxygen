@@ -1,101 +1,24 @@
-// The course editor on the GL canvas (docs/course-editor.md "Tests"), mounted for every event
-// since E3 (docs/course-editor.md §1). It runs under the `chromium` project (desktop) and the
-// `mobile` project (Pixel 7): the desktop describes skip on a phone and the touch describe at the
-// end skips on a desktop.
+// The editor's core (docs/course-editor.md §1–§4, §12): the GL canvas, Course mode and its descriptions, automatic
+// cuts, the checks, the action bar's place, and variation authoring (F7).
+// Split from the editor's one spec file along its describes (docs/e2e-sharding.md "CI"); the
+// helpers they share are `helpers/course-editor-spec.ts`. It runs under the `chromium` project (desktop) only.
 //
 // Hygiene (AGENTS §12): `reseed()` once in `beforeAll`, the fixture import idempotent per test
 // (`openEditor` → `ensureCoursesAndMap`), courses a test creates carry a prefix and go with the
 // next reseed, controls / objects / sheets it creates are deleted in `finally` (`cleanup`).
-import { readFile } from "node:fs/promises";
-import { expect, test, type Browser, type Page, type TestInfo } from "@playwright/test";
-import { reseed } from "./helpers/reseed";
-import {
-  allControlsSheet, analysePdf, arm, cleanup, clickMap, clickTab, controlRows, coveredBy, desktopContext, drag, dragMm, editorReady,
-  emptyPoint, ensureCoursesAndMap, ensureFixtureFromDesktop, freezeExternalPoll, geometryOf, inkIn, labelOf, legMidpoint, legPieces, nameIdOf, objectRow,
-  openEditor, pageToPaperOf, place, placeOneShot, pressInside, pressOnEdge, printed, probeTemplate, regularCodes, select, selectCompetition,
-  selectedCode, selectedPosition, siteCuts, site, sitePoint, sites, toolShapes, toPage, toPaper, trpcCall, viewCentre, viewSettled, newCourse,
-  type Frame,
-} from "./helpers/editor";
-import { touchDrag, touchTap } from "./helpers/touch";
-import { isTrpcResponse, waitForTrpc } from "./helpers/trpc";
 
-type Pt = { x: number; y: number };
+import { readFile } from "node:fs/promises";
+import { expect, test, type Page } from "@playwright/test";
+import { reseed } from "./helpers/reseed";
+import { analysePdf, arm, canvasInCircle, cleanup, clickMap, clickTab, controlRows, coveredBy, drag, editorReady, emptyPoint, ensureCoursesAndMap, labelOf, legMidpoint, legPieces, nameIdOf, openEditor, place, placeOneShot, probeTemplate, regularCodes, select, selectCompetition, selectedCode, selectedPosition, siteCuts, site, sitePoint, sites, toolShapes, toPage, toPaper, trpcCall, viewCentre, viewSettled, newCourse, mapScale, statsRow, sheetBoxes, type Site } from "./helpers/editor";
+import { waitForTrpc } from "./helpers/trpc";
+import { type Pt, desktopOnly, courseIdByName, act, appendClear, dropSelection, dragNumber, dragTarget } from "./helpers/course-editor-spec";
 
 test.beforeAll(async () => {
   await reseed();
 });
 
 test.setTimeout(120_000);
-
-/** The desktop flows: skipped on the phone (it opens in Field mode with no rail or inspector, §10). */
-const desktopOnly = () => test.skip(({ isMobile }) => !!isMobile, "desktop flow (the phone's subset is the touch describe)");
-
-/** Every option's `value` of the course picker by its label. */
-async function courseIdByName(page: Page, name: string): Promise<string> {
-  const option = page.getByTestId("editor-course-picker").locator("option", { hasText: new RegExp(`^${name}$`) });
-  return (await option.getAttribute("value"))!;
-}
-
-/** Select a site, then the action bar's `editor-action-<id>`; waits for the write. */
-async function act(page: Page, code: string, action: string, procedure: string): Promise<void> {
-  await select(page, code);
-  const saved = waitForTrpc(page, procedure);
-  await page.getByTestId("editor-action-bar").getByTestId(`editor-action-${action}`).click();
-  await saved;
-}
-
-/** Append a regular control picked now, clear of the drawn legs and of `exclude`; returns its code. */
-async function appendClear(page: Page, exclude: string[] = []): Promise<string> {
-  const [code] = await regularCodes(page, 1, exclude);
-  expect(code, "a regular control clear of the drawn legs").toBeTruthy();
-  await act(page, code, "append", "course.setStructure");
-  await dropSelection(page);
-  return code;
-}
-
-/** Drop the selection's action bar (Escape only when there is one: with nothing selected, Escape drops the course). */
-async function dropSelection(page: Page): Promise<void> {
-  if ((await page.getByTestId("editor-action-bar").count()) > 0) await page.keyboard.press("Escape");
-  await expect(page.getByTestId("editor-action-bar")).toHaveCount(0);
-}
-
-/**
- * A page point near `from` for a drag target, above it if that is clear: the selection's action bar lays out
- * under the selected control, so a drag that ends above it never ends on the bar (D10 flake: "the action bar
- * covered the map").
- */
-/**
- * Drags control `code`'s number off its automatic place and waits for the write; returns where the label
- * was before. Read once the view has stopped (the editor fits after a course is picked), and dragged
- * towards the viewer's middle so the drop never lands off the map or under the toolbar.
- */
-async function dragNumber(page: Page, code: string): Promise<Pt> {
-  await viewSettled(page);
-  await expect.poll(async () => (await labelOf(page, code)) !== null, { timeout: 15000 }).toBe(true);
-  const label = (await labelOf(page, code))!;
-  const from = await toPage(page, label);
-  const box = (await page.getByTestId("map-viewer").boundingBox())!;
-  const to = { x: from.x + (from.x < box.x + box.width / 2 ? 48 : -48), y: from.y + (from.y < box.y + box.height / 2 ? 24 : -24) };
-  const saved = waitForTrpc(page, "course.setControlLabelOffset");
-  await drag(page, from, to);
-  await saved;
-  return label;
-}
-
-async function dragTarget(page: Page, from: Pt, avoid: Pt[] = [], clearPx = 45): Promise<Pt> {
-  const viewer = (await page.getByTestId("map-viewer").boundingBox())!;
-  const marks = [...(await Promise.all((await sites(page)).map((s) => toPage(page, s.mm)))), ...avoid];
-  // Above first (the action bar lays out below), then sideways; then any empty point (D10: a crowded view).
-  const offsets = [-80, -110, -140].flatMap((dy) => [0, 60, -60].map((dx) => [dx, dy])).concat([[90, 0], [-90, 0], [120, -40], [-120, -40]]);
-  for (const [dx, dy] of offsets) {
-    const p = { x: from.x + dx, y: from.y + dy };
-    if (p.y < viewer.y + 40 || p.y > viewer.y + viewer.height - 40 || p.x < viewer.x + 40 || p.x > viewer.x + viewer.width - 90) continue;
-    if (marks.some((q) => Math.hypot(q.x - p.x, q.y - p.y) < clearPx && Math.hypot(q.x - from.x, q.y - from.y) > 1)) continue;
-    if (await coveredBy(page, p)) continue;
-    return p;
-  }
-  return emptyPoint(page, 40, [from, ...avoid]);
-}
 
 test.describe("Course editor (new, GL canvas)", () => {
   desktopOnly();
@@ -106,16 +29,17 @@ test.describe("Course editor (new, GL canvas)", () => {
     await clickTab(page, "Course Editor");
     await editorReady(page);
     await expect(page.getByTestId("course-editor-page")).toHaveCount(0);
-    // The shell: top bar, tool rail, inspector, status bar; Layout (D7) and Field (D9) enterable.
-    for (const id of ["editor-top-bar", "editor-tool-rail", "editor-inspector", "editor-status"]) await expect(page.getByTestId(id)).toBeVisible();
+    // The shell: top bar (with the save indicator and the course-info button, P2), tool rail, inspector; no status
+    // bar on the desktop; Layout (D7) and Field (D9) enterable.
+    for (const id of ["editor-top-bar", "editor-tool-rail", "editor-inspector", "editor-save-state", "editor-stats"]) await expect(page.getByTestId(id)).toBeVisible();
+    await expect(page.getByTestId("editor-status")).toHaveCount(0);
     await expect(page.getByTestId("editor-mode-course")).toHaveAttribute("aria-pressed", "true");
     await expect(page.getByTestId("editor-mode-layout")).toBeEnabled();
     await expect(page.getByTestId("editor-mode-field")).toBeEnabled();
     // No SVG hit targets: the viewer hit-tests the layer's shapes.
     await expect(page.getByTestId("editor-control-hit")).toHaveCount(0);
-    // The rail (§6): exchange and crossing wait for slice F.
-    for (const key of ["V", "S", "K", "M", "A", "T"]) await expect(page.getByTestId(`editor-tool-${key}`)).toBeEnabled();
-    for (const key of ["X", "C"]) await expect(page.getByTestId(`editor-tool-${key}`)).toBeDisabled();
+    // The rail (§6): every placement tool, the crossing point (F4) and the map exchange (F5) included.
+    for (const key of ["V", "S", "K", "M", "X", "C", "A", "T"]) await expect(page.getByTestId(`editor-tool-${key}`)).toBeEnabled();
   });
 
   test("an event with no map mounts the editor over the upload prompt", async ({ page }) => {
@@ -761,991 +685,12 @@ test.describe("Automatic cuts (course-layer.md §3.4)", () => {
   });
 });
 
-// docs/course-editor.md §6–§7 (D5, D12–D16): the tools.
-test.describe("tools", () => {
-  desktopOnly();
-
-  test("ten controls in ten clicks with the armed K tool; Ctrl+Z steps back; Esc returns to V", async ({ page }) => {
-    await openEditor(page);
-    await newCourse(page, "D5 K");
-    const before = (await sites(page)).length;
-
-    await arm(page, "K");
-    // The ghost: true-size circle, the next number and code; the pending leg from the start, its length in the status bar.
-    const first = await emptyPoint(page, 40);
-    await page.mouse.move(first.x, first.y);
-    await expect(page.getByTestId("editor-ghost")).toBeAttached({ timeout: 10000 });
-    await expect(page.getByTestId("editor-ghost-label")).toHaveText(/^1 · \d+$/);
-    // The layer draws the pending leg (§6.1); the UI layer only labels it, with the status bar's metres.
-    await expect(page.getByTestId("editor-pending-leg")).toHaveCount(0);
-    await expect(page.getByTestId("editor-pending-leg-length")).toHaveText(/\d+ m/);
-    const metres = (await page.getByTestId("editor-pending-leg-length").textContent())!.match(/(\d+) m/)![1];
-    await expect(page.getByTestId("editor-leg-length")).toHaveText(`${metres} m`);
-
-    const spots = [first];
-    for (let i = 1; i < 10; i++) spots.push(await emptyPoint(page, 30, spots));
-    for (const p of spots) {
-      await page.mouse.move(p.x, p.y);
-      await page.mouse.click(p.x, p.y);
-      // No action bar while armed, and no selection ring beside the placed circle (§6.1, D12): the purple is the mark.
-      await expect(page.getByTestId("editor-action-bar")).toHaveCount(0);
-      await expect(page.getByTestId("editor-selection-ring")).toHaveCount(0);
-    }
-    // The last placed control is still the selection (the inspector shows it), only its ring is not drawn.
-    await expect(selectedCode(page)).toBeVisible();
-    await expect(page.getByTestId("editor-selection-ring")).toHaveCount(0);
-    await expect(controlRows(page)).toHaveCount(10, { timeout: 30000 });
-    await expect.poll(async () => (await sites(page)).length, { timeout: 15000 }).toBe(before + 10);
-    await expect(page.getByTestId("editor-tool-K")).toHaveAttribute("aria-pressed", "true");
-    // The ghost reads the next number (on empty map; over a control it reads "Add ‹code›").
-    const next = await emptyPoint(page, 40, spots);
-    await page.mouse.move(next.x, next.y);
-    await expect(page.getByTestId("editor-ghost-label")).toHaveText(/^11 · /, { timeout: 10000 });
-
-    // Ctrl+Z while armed: the last placement goes, the tool stays armed.
-    await page.keyboard.press("Control+z");
-    await expect(controlRows(page)).toHaveCount(9, { timeout: 15000 });
-    await expect(page.getByTestId("editor-tool-K")).toHaveAttribute("aria-pressed", "true");
-
-    await page.keyboard.press("Escape");
-    await expect(page.getByTestId("editor-tool-V")).toHaveAttribute("aria-pressed", "true");
-    await expect(page.getByTestId("editor-ghost")).toHaveCount(0);
-    // In V the selected control has its ring again.
-    await clickMap(page, spots[0]);
-    await expect(page.getByTestId("editor-selection-ring")).toHaveCount(1, { timeout: 10000 });
-  });
-
-  test("the armed tool's pending legs are drawn by the layer to the cursor; a drag labels both legs", async ({ page }) => {
-    await openEditor(page);
-    const name = await newCourse(page, "D5a pending");
-    await arm(page, "K");
-    const spots: Pt[] = [];
-    for (let i = 0; i < 3; i++) {
-      const p = await emptyPoint(page, 60, spots);
-      spots.push(p);
-      await page.mouse.move(p.x, p.y);
-      await expect(page.getByTestId("editor-ghost-label")).toHaveText(new RegExp(`^${i + 1} · `), { timeout: 10000 });
-      await page.mouse.click(p.x, p.y);
-      await expect(controlRows(page)).toHaveCount(i + 1, { timeout: 15000 });
-    }
-
-    /** A drawn leg piece of the course ending at the rim of a circle around the page point (a circle is ~13 px here). */
-    const legEndsNear = async (p: Pt) => {
-      for (const l of await legPieces(page, name)) {
-        for (const q of [l.points[0], l.points.at(-1)!]) {
-          const at = await toPage(page, q);
-          if (Math.hypot(at.x - p.x, at.y - p.y) < 25) return true;
-        }
-      }
-      return false;
-    };
-    for (const pass of [0, 1]) {
-      const p = await emptyPoint(page, 60, spots);
-      spots.push(p);
-      expect(await legEndsNear(p)).toBe(false);
-      await page.mouse.move(p.x, p.y);
-      await expect(page.getByTestId("editor-ghost")).toBeAttached({ timeout: 10000 });
-      // The leg into the cursor is a `course-leg` piece of the course: the layer's, with its slits (one round trip per hover).
-      await expect.poll(() => legEndsNear(p), { timeout: 15000, message: `pass ${pass}` }).toBe(true);
-      await expect(page.getByTestId("editor-pending-leg")).toHaveCount(0);
-      const metres = (await page.getByTestId("editor-pending-leg-length").textContent())!.match(/(\d+) m/)![1];
-      await expect(page.getByTestId("editor-leg-length")).toHaveText(`${metres} m`);
-    }
-
-    // Back to V: no provisional visit, no label; a drag of the middle control labels its two legs.
-    await page.keyboard.press("Escape");
-    await expect(page.getByTestId("editor-ghost")).toHaveCount(0);
-    await expect(page.getByTestId("editor-leg-length")).toHaveCount(0);
-    // Drop the placed control's selection: its action bar must not be where the drag goes.
-    await dropSelection(page);
-    const middle = (await controlRows(page).nth(1).getAttribute("data-control-id"))!;
-    const from = await toPage(page, (await sites(page)).find((x) => x.id === middle)!.mm);
-    const to = await dragTarget(page, from, spots);
-    await page.mouse.move(from.x, from.y);
-    await page.mouse.down();
-    await page.mouse.move(to.x, to.y, { steps: 8 });
-    await expect(page.getByTestId("editor-leg-length")).toHaveCount(2);
-    await expect(page.getByTestId("editor-leg-length").first()).toHaveText(/^\d+ m$/);
-    await page.mouse.up();
-    await expect(page.getByTestId("editor-leg-length")).toHaveCount(0);
-  });
-
-  test("an armed click on an existing control reuses the site", async ({ page }) => {
-    await openEditor(page);
-    await newCourse(page, "D5 reuse");
-    const before = (await sites(page)).length;
-    await page.getByTestId("editor-tool-K").click();
-    const picked: string[] = [];
-    for (let i = 0; i < 2; i++) {
-      // Picked now, clear of the legs drawn so far (the course's legs win the hit over a control under them).
-      const [code] = await regularCodes(page, 1, picked);
-      picked.push(code);
-      const p = await sitePoint(page, code);
-      await page.mouse.move(p.x, p.y);
-      await expect(page.getByTestId("editor-ghost-label")).toHaveText(`Add ${code}`, { timeout: 10000 });
-      const saved = waitForTrpc(page, "course.setStructure");
-      await page.mouse.click(p.x, p.y);
-      await saved;
-    }
-    const [a, b] = picked;
-    await expect(controlRows(page)).toHaveCount(2, { timeout: 15000 });
-    await expect(controlRows(page).nth(0)).toHaveAttribute("data-control-id", a);
-    await expect(controlRows(page).nth(1)).toHaveAttribute("data-control-id", b);
-    expect((await sites(page)).length).toBe(before);
-  });
-
-  test("Shift-click selects several controls for one add-to-course; notes are written from the inspector", async ({ page }) => {
-    await openEditor(page);
-    await newCourse(page, "D5 multi");
-    const [a, ...rest] = await regularCodes(page, 6);
-    await select(page, a);
-    // The selection's action bar sits next to the selected control and may cover a neighbour: Shift-click
-    // the first two candidates that are clear of the chrome at click time (a user would pan; the test picks).
-    const picked: string[] = [];
-    for (const code of rest) {
-      if (picked.length === 2) break;
-      const p = await sitePoint(page, code);
-      if (await coveredBy(page, p)) continue;
-      await page.keyboard.down("Shift");
-      try { await clickMap(page, p); } finally { await page.keyboard.up("Shift"); }
-      picked.push(code);
-      await expect(page.getByTestId("editor-multi-ring")).toHaveCount(picked.length + 1, { timeout: 10000 });
-    }
-    expect(picked, "two Shift-clickable controls clear of the action bar").toHaveLength(2);
-    const [, c] = picked;
-    await expect(page.getByTestId("editor-multi")).toHaveAttribute("data-count", "3", { timeout: 10000 });
-    await expect(page.getByTestId("editor-multi-ring")).toHaveCount(3);
-    const saved = waitForTrpc(page, "course.setStructure");
-    await page.getByTestId("editor-bulk-add-to-course").click();
-    await saved;
-    await expect(controlRows(page)).toHaveCount(3, { timeout: 15000 });
-    await expect(controlRows(page).nth(2)).toHaveAttribute("data-control-id", c);
-    // One undo entry for the three.
-    await page.keyboard.press("Control+z");
-    await expect(controlRows(page)).toHaveCount(0, { timeout: 15000 });
-
-    // A site's notes (courses.review) from the selection inspector.
-    await page.keyboard.press("Escape");
-    await select(page, a);
-    const note = `checked ${Date.now() % 1000}`;
-    const updated = waitForTrpc(page, "control.update");
-    await page.getByTestId("editor-selected-notes").fill(note);
-    await page.getByTestId("editor-selected-notes").blur();
-    await updated;
-    await page.reload();
-    await editorReady(page);
-    await select(page, a);
-    await expect(page.getByTestId("editor-selected-notes")).toHaveValue(note, { timeout: 10000 });
-  });
-
-  test("stored gaps and a hidden number are what the layer draws", async ({ page }) => {
-    await openEditor(page);
-    const name = await newCourse(page, "D5 drawn");
-    await arm(page, "K");
-    const picked: string[] = [];
-    for (let i = 0; i < 2; i++) {
-      const [code] = await regularCodes(page, 1, picked);
-      picked.push(code);
-      const p = await sitePoint(page, code);
-      await page.mouse.move(p.x, p.y);
-      // The hover's hit-test is in (the ghost offers the site): the click reuses it instead of placing a new one.
-      await expect(page.getByTestId("editor-ghost-label")).toHaveText(`Add ${code}`, { timeout: 10000 });
-      const saved = waitForTrpc(page, "course.setStructure");
-      await page.mouse.click(p.x, p.y);
-      await saved;
-    }
-    const [a, b] = picked;
-    await expect(controlRows(page)).toHaveCount(2, { timeout: 15000 });
-    // Escape drops the tool, then the placed control's selection (its action bar may cover the leg).
-    await page.keyboard.press("Escape");
-    await expect(page.getByTestId("editor-tool-V")).toHaveAttribute("aria-pressed", "true");
-    await dropSelection(page);
-    const A = (await site(page, a)).mm, B = (await site(page, b)).mm;
-
-    // A leg gap: G on the leg a → b, a drag from 35 % to 55 % of it; the drawn leg is cut there.
-    await expect.poll(async () => (await legPieces(page, name)).length, { timeout: 15000 }).toBeGreaterThan(0);
-    const at = (f: number) => ({ x: A.x + (B.x - A.x) * f, y: A.y + (B.y - A.y) * f });
-    const mid = await legMidpoint(page, name, A, B);
-    // The leg must be the hit (an Insert on the phantom), not empty map, before G takes it (D10 flake: the click
-    // landed before the hit index had the leg, G armed on a plain phantom, and the drag wrote nothing).
-    await expect(async () => {
-      await dropSelection(page);
-      await clickMap(page, await toPage(page, mid));
-      await expect(page.getByTestId("editor-action-bar").getByTestId("editor-action-insert")).toBeVisible({ timeout: 3000 });
-    }).toPass({ timeout: 30000 });
-    await page.keyboard.press("g");
-    await expect(page.getByTestId("editor-tool-layer").getByTestId("editor-gap-target")).toHaveAttribute("data-kind", "leg");
-    const legSaved = waitForTrpc(page, "course.setStructure");
-    await dragMm(page, at(0.35), at(0.55));
-    await legSaved;
-    const near = (p: Pt, q: Pt) => Math.hypot(p.x - q.x, p.y - q.y) < 0.3;
-    const covered = async (f: number) => {
-      const q = at(f);
-      return (await legPieces(page, name)).some((l) => l.points.some((p, i) => {
-        if (i === 0) return false;
-        const o = l.points[i - 1];
-        const t = ((q.x - o.x) * (p.x - o.x) + (q.y - o.y) * (p.y - o.y)) / ((p.x - o.x) ** 2 + (p.y - o.y) ** 2 || 1);
-        return t >= 0 && t <= 1 && near(q, { x: o.x + (p.x - o.x) * t, y: o.y + (p.y - o.y) * t });
-      }));
-    };
-    await expect.poll(() => covered(0.45), { timeout: 15000 }).toBe(false);
-    expect(await covered(0.75)).toBe(true);
-    await page.keyboard.press("Escape");
-
-    // A circle gap: G on control a, a rim drag from 40° to 100°; the drawn circle's cuts cover 70°.
-    await select(page, a);
-    await page.keyboard.press("g");
-    const [target] = await toolShapes(page, "editor-gap-target");
-    const r = Number(target.data.r);
-    const rim = (deg: number) => ({ x: target.x + r * Math.sin((deg * Math.PI) / 180), y: target.y + r * Math.cos((deg * Math.PI) / 180) });
-    const circleSaved = waitForTrpc(page, "control.update");
-    await dragMm(page, rim(40), rim(100));
-    await circleSaved;
-    await expect.poll(async () => (await siteCuts(page, a)).some((g) => ((70 - g.start + 360) % 360) <= ((g.end - g.start + 360) % 360)), { timeout: 15000 }).toBe(true);
-    await page.keyboard.press("Escape");
-
-    // A hidden number: the layer draws control a without its number on this course.
-    await expect(page.locator(`[data-testid="course-label"][data-site-id="${a}"]`)).toHaveCount(1);
-    await select(page, a);
-    const hidden = waitForTrpc(page, "course.setStructure");
-    // A DOM click: a tall Selection section (a control on several courses) overflows under the Checks header,
-    // which then takes the pointer — an inspector layout issue reported as a follow-up, not what this test checks.
-    await page.getByTestId("editor-number-hidden").dispatchEvent("click");
-    await expect(page.getByTestId("editor-number-hidden")).toBeChecked();
-    await hidden;
-    await expect(page.locator(`[data-testid="course-label"][data-site-id="${a}"]`)).toHaveCount(0, { timeout: 15000 });
-    await expect(page.locator(`[data-testid="course-label"][data-site-id="${b}"]`)).toHaveCount(1);
-  });
-
-  test("G: a drag along the rim opens a circle gap, stored on the site", async ({ page }) => {
-    await openEditor(page);
-    const [code] = await regularCodes(page, 1);
-    await select(page, code);
-    // G: no action bar while a tool is active, so nothing covers the rim.
-    await page.keyboard.press("g");
-    await expect(page.getByTestId("editor-action-bar")).toHaveCount(0);
-    const [target] = await toolShapes(page, "editor-gap-target");
-    expect(target).toBeDefined();
-    const r = Number(target.data.r);
-    const rim = (deg: number) => ({ x: target.x + r * Math.sin((deg * Math.PI) / 180), y: target.y + r * Math.cos((deg * Math.PI) / 180) });
-    const saved = waitForTrpc(page, "control.update");
-    await dragMm(page, rim(40), rim(100));
-    await saved;
-    const covers = async () => (await toolShapes(page, "editor-gap")).some((g) => {
-      const start = Number(g.data.start), end = Number(g.data.end);
-      return ((70 - start + 360) % 360) <= ((end - start + 360) % 360);
-    });
-    await expect.poll(covers, { timeout: 15000 }).toBe(true);
-
-    // Stored: after a reload the gap is the site's.
-    await page.reload();
-    await editorReady(page);
-    await select(page, code);
-    await page.keyboard.press("g");
-    await expect.poll(covers, { timeout: 15000 }).toBe(true);
-
-    // Reset gaps: the stored list goes (an empty list is automatic again, §6.3).
-    const reset = waitForTrpc(page, "control.update");
-    await page.getByTestId("editor-gap-reset").click();
-    await reset;
-    await expect(page.getByTestId("editor-gap-reset")).toHaveCount(0, { timeout: 15000 });
-  });
-
-  test("A: an out-of-bounds area drawn vertex by vertex is stored and selected", async ({ page }) => {
-    await openEditor(page);
-    const nameId = nameIdOf(page);
-    await page.getByTestId("editor-tool-A").click();
-    await page.getByTestId("editor-area-oob_area").click();
-    // The triangle's inside (where it is clicked again later) is the clear point, not its first corner.
-    const clear = await emptyPoint(page, 40);
-    const a = { x: clear.x - 30, y: clear.y - 15 };
-    const corners = [a, { x: a.x + 60, y: a.y }, { x: a.x + 60, y: a.y + 40 }];
-    // A patch inside the triangle (page px → paper mm), probed for purple before and after.
-    const [p0, p1] = await Promise.all([toPaper(page, { x: a.x + 35, y: a.y + 3 }), toPaper(page, { x: a.x + 55, y: a.y + 15 })]);
-    const inner = { minX: Math.min(p0.x, p1.x), maxX: Math.max(p0.x, p1.x), minY: Math.min(p0.y, p1.y), maxY: Math.max(p0.y, p1.y) };
-    const purpleBefore = await inkIn(page, inner, "purple");
-    for (const p of corners) await page.mouse.click(p.x, p.y);
-    await expect(page.getByTestId("editor-polygon-vertex")).toHaveCount(3);
-    const created = waitForTrpc(page, "courseObject.create");
-    await page.mouse.click(a.x, a.y); // the first vertex closes
-    await created;
-    await expect(page.getByTestId("editor-object")).toHaveAttribute("data-object-kind", "oob_area", { timeout: 15000 });
-    await expect(page.getByTestId("editor-tool-V")).toHaveAttribute("aria-pressed", "true");
-    const id = (await page.getByTestId("editor-object").getAttribute("data-object-id"))!;
-    await expect(objectRow(page, id)).toHaveCount(1);
-
-    try {
-      // On screen: the hatch's purple inside the area (the GL canvas), none there before it existed.
-      await expect.poll(() => inkIn(page, inner, "purple"), { timeout: 30000 }).toBeGreaterThan(purpleBefore + 5);
-
-      // Printed: the all-controls sheet (an `all`-scoped object) carries the 709 hatch — present with it, absent parked.
-      // The page raster itself is `course-print.test.ts` "course objects on the page" (docs/course-editor.md Tests).
-      const { drop } = await allControlsSheet();
-      try {
-        const withArea = await printed(page, nameId, "allControls=1");
-        expect(withArea.pages).toBe(1);
-        expect(withArea.hatches, "hatch strokes with the area").toBeGreaterThan(0);
-        // The dangerous area (hatch 710, course-layer.md §3.1): 709's stripes crossed — one more hatch pass.
-        await trpcCall("courseObject.update", { id: Number(id), props: { hatch: "710" } });
-        const crossed = await printed(page, nameId, "allControls=1");
-        expect(crossed.pages).toBe(1);
-        expect(crossed.hatches, "the 710 cross-hatch prints both diagonals").toBe(withArea.hatches + 1);
-        await trpcCall("courseObject.update", { id: Number(id), props: {} });
-        await trpcCall("courseObject.update", { id: Number(id), scope: { courses: [], classes: [] } });
-        const without = await printed(page, nameId, "allControls=1");
-        expect(without.pages).toBe(1);
-        expect(without.hatches, "the area's hatch is gone when it is parked").toBeLessThan(withArea.hatches);
-        await trpcCall("courseObject.update", { id: Number(id), scope: { all: true } });
-      } finally {
-        await drop();
-      }
-      await page.reload();
-      await editorReady(page);
-      await page.getByTestId("editor-object-row").first().waitFor({ state: "attached" });
-      // Select it again on the canvas (a click on its outline — inside, the map is the map, §7), once the layer
-      // draws it and its hit index has it.
-      await expect.poll(() => inkIn(page, inner, "purple"), { timeout: 30000 }).toBeGreaterThan(purpleBefore + 5);
-      // The reloaded view need not be the one it was drawn in: the edge midpoint from the stored geometry.
-      const onEdge = await pressOnEdge(page, await geometryOf(objectRow(page, id)));
-      await expect(async () => {
-        await page.keyboard.press("Escape"); // a missed attempt's selection or phantom (its action bar) goes first
-        await clickMap(page, onEdge);
-        await expect(page.getByTestId("editor-object")).toHaveAttribute("data-object-id", id, { timeout: 2000 });
-      }).toPass({ timeout: 20000 });
-      // Its hatch and border from the inspector, then delete it (Delete key) and undo.
-      const row = objectRow(page, id);
-      const hatched = waitForTrpc(page, "courseObject.update");
-      await page.getByTestId("editor-prop-hatch").selectOption("710");
-      await hatched;
-      await expect(row).toHaveAttribute("data-props", '{"hatch":"710"}', { timeout: 15000 });
-      const updated = waitForTrpc(page, "courseObject.update");
-      await page.getByTestId("editor-prop-border").selectOption("dashed");
-      await updated;
-      await expect.poll(async () => JSON.parse((await row.getAttribute("data-props")) ?? "{}"), { timeout: 15000 }).toEqual({ hatch: "710", border: "dashed" });
-      await page.getByTestId("editor-object-delete").click();
-      await expect(objectRow(page, id)).toHaveCount(0, { timeout: 15000 });
-      await page.keyboard.press("Control+z");
-      await expect(page.locator('[data-testid="editor-object-row"][data-object-kind="oob_area"]')).not.toHaveCount(0, { timeout: 15000 });
-    } finally {
-      for (const row of await trpcCall<{ id: number; kind: string }[]>("courseObject.list", undefined, false).catch(() => [])) {
-        if (row.kind === "oob_area") await cleanup("courseObject.delete", { id: row.id });
-      }
-    }
-  });
-
-  test("a press inside an out-of-bounds area pans the map; its outline selects and moves it (§7)", async ({ page }) => {
-    // docs/bugfix-editor-area-press-pans.md: an area (the toner saver covers every control) swallowed every press.
-    await openEditor(page);
-    // The description sheet (with no course picked, all controls') covers half the view and the shard's earlier
-    // tests leave extra controls: hide it (view state, not saved) so a 60 px clear point exists.
-    const sheetToggle = page.getByTestId("map-toggle-descriptions");
-    if (/hide/i.test((await sheetToggle.textContent()) ?? "")) await sheetToggle.click();
-    // A 70 px square around a clear point (no site within 60 px of its centre, no leg within 20 px).
-    const clear = await emptyPoint(page, 60);
-    const geometry = await Promise.all([[-35, -35], [35, -35], [35, 35], [-35, 35]].map(([dx, dy]) => toPaper(page, { x: clear.x + dx, y: clear.y + dy })));
-    const inner = {
-      minX: Math.min(geometry[0].x, geometry[2].x) + 1, maxX: Math.max(geometry[0].x, geometry[2].x) - 1,
-      minY: Math.min(geometry[0].y, geometry[2].y) + 1, maxY: Math.max(geometry[0].y, geometry[2].y) - 1,
-    };
-    const purpleBefore = await inkIn(page, inner, "purple");
-    const { id } = await trpcCall<{ id: number }>("courseObject.create", { kind: "oob_area", geometry, props: {}, scope: { all: true } });
-    try {
-      await page.reload();
-      await editorReady(page);
-      const row = objectRow(page, id);
-      await expect(row).toBeAttached({ timeout: 15000 });
-      const stored = await row.getAttribute("data-geometry");
-      // Drawn (its 709 hatch), so the hit index has it.
-      await expect.poll(() => inkIn(page, inner, "purple"), { timeout: 30000 }).toBeGreaterThan(purpleBefore + 5);
-
-      // Unselected: a drag starting inside it moves the view and leaves the area alone.
-      await pressInside(page, await geometryOf(row));
-      await expect(row).toHaveAttribute("data-geometry", stored!);
-      await expect(page.getByTestId("editor-object")).toHaveCount(0);
-
-      // A press on its outline selects it (four vertex handles).
-      await expect(async () => {
-        await dropSelection(page); // a missed attempt's selection or phantom (its action bar) goes first
-        await clickMap(page, await pressOnEdge(page, await geometryOf(row)));
-        await expect(page.getByTestId("editor-object")).toHaveAttribute("data-object-id", String(id), { timeout: 2000 });
-      }).toPass({ timeout: 20000 });
-      await expect(page.getByTestId("editor-object-handle")).toHaveCount(4);
-
-      // Selected: a drag inside still pans; the selection stays.
-      await pressInside(page, await geometryOf(row));
-      await expect(row).toHaveAttribute("data-geometry", stored!);
-      await expect(page.getByTestId("editor-object")).toHaveAttribute("data-object-id", String(id));
-
-      // Its edge moves it: one write, every vertex translated by the drag.
-      const edge = await pressOnEdge(page, await geometryOf(row));
-      const [e0, e1] = await Promise.all([toPaper(page, edge), toPaper(page, { x: edge.x, y: edge.y + 30 })]);
-      const moved = waitForTrpc(page, "courseObject.update");
-      await drag(page, edge, { x: edge.x, y: edge.y + 30 });
-      await moved;
-      await expect.poll(async () => (await row.getAttribute("data-geometry")) !== stored, { timeout: 15000 }).toBe(true);
-      const now = await geometryOf(row);
-      stored!.split(" ").map((q) => ({ x: Number(q.split(",")[0]), y: Number(q.split(",")[1]) })).forEach((v, i) => {
-        expect(now[i].x - v.x).toBeCloseTo(e1.x - e0.x, 0);
-        expect(now[i].y - v.y).toBeCloseTo(e1.y - e0.y, 0);
-      });
-
-      // A click inside is a map click: the area is deselected.
-      await clickMap(page, await toPage(page, { x: (now[0].x + now[2].x) / 2, y: (now[0].y + now[2].y) / 2 }));
-      await expect(page.getByTestId("editor-object")).toHaveCount(0);
-    } finally {
-      await cleanup("courseObject.delete", { id });
-    }
-  });
-
-  test("A: a curved white-out in three clicks and one drag prints a Bézier; a vertex inserted on an edge and deleted", async ({ page }) => {
-    await openEditor(page);
-    const nameId = nameIdOf(page);
-    const { drop } = await allControlsSheet();
-    try {
-      const before = await printed(page, nameId, "allControls=1");
-      await page.getByTestId("editor-tool-A").click();
-      await page.getByTestId("editor-area-whiteout").click();
-      const clear = await emptyPoint(page, 40);
-      const a = { x: clear.x - 30, y: clear.y - 15 }, b = { x: a.x + 60, y: a.y }, c = { x: a.x + 60, y: a.y + 40 };
-      await page.mouse.click(a.x, a.y);
-      await page.mouse.click(b.x, b.y);
-      // Click-drag: a curve vertex at c, its handles pulled out along the drag (docs/course-editor.md §6.4).
-      const pullTo = { x: c.x - 25, y: c.y + 10 };
-      await drag(page, c, pullTo);
-      await expect(page.getByTestId("editor-polygon-vertex")).toHaveCount(3);
-      await expect(page.getByTestId("editor-polygon-grip")).toHaveCount(2);
-      const created = waitForTrpc(page, "courseObject.create");
-      await page.mouse.click(a.x, a.y); // the first vertex closes
-      await created;
-      await expect(page.getByTestId("editor-object")).toHaveAttribute("data-object-kind", "whiteout", { timeout: 15000 });
-      const id = (await page.getByTestId("editor-object").getAttribute("data-object-id"))!;
-      const row = objectRow(page, id);
-      const stored = async () => JSON.parse((await row.getAttribute("data-geometry-json")) ?? "[]") as { x: number; y: number; hIn?: Pt; hOut?: Pt }[];
-      await expect(row).toHaveCount(1, { timeout: 15000 });
-      const g = await stored();
-      expect(g).toHaveLength(3);
-      // hOut = the drag vector on paper, hIn its negation.
-      const [c0, c1] = await Promise.all([toPaper(page, c), toPaper(page, pullTo)]);
-      expect(g[2].hOut!.x).toBeCloseTo(c1.x - c0.x, 0);
-      expect(g[2].hOut!.y).toBeCloseTo(c1.y - c0.y, 0);
-      expect(g[2].hIn).toEqual({ x: -g[2].hOut!.x, y: -g[2].hOut!.y });
-      // The selection outline follows the curve: 8 samples on each of the two curved segments.
-      await expect(page.getByTestId("editor-object-grip")).toHaveCount(2);
-      const outline = page.getByTestId("editor-tool-layer").locator(`[data-testid="editor-object-outline"][data-object-id="${id}"]`);
-      expect(((await outline.getAttribute("data-points")) ?? "").split(" ")).toHaveLength(2 + 8 + 8);
-
-      // Printed: the page stream carries the white-out as one more fill with Bézier `c` segments.
-      const after = await printed(page, nameId, "allControls=1");
-      expect(after.pages).toBe(1);
-      expect(after.curvedFills, "the curved white-out's fill").toBe(before.curvedFills + 1);
-
-      // Insert: a double-click on the straight edge a → b (§7 "Editing geometry").
-      const handles = page.getByTestId("editor-tool-layer").getByTestId("editor-object-handle");
-      await expect(handles).toHaveCount(3);
-      const mid = { x: (a.x + b.x) / 2, y: (a.y + b.y) / 2 };
-      const inserted = waitForTrpc(page, "courseObject.update");
-      await page.mouse.dblclick(mid.x, mid.y);
-      await inserted;
-      await expect(handles).toHaveCount(4);
-      await expect.poll(async () => (await stored()).length, { timeout: 15000 }).toBe(4);
-      const added = (await stored())[1];
-      const [ma, mb] = await Promise.all([toPaper(page, a), toPaper(page, b)]);
-      expect(added.x).toBeCloseTo((ma.x + mb.x) / 2, 0);
-      expect(added.y).toBeCloseTo((ma.y + mb.y) / 2, 0);
-      expect(added.hIn ?? added.hOut).toBeUndefined();
-
-      // Delete: click the new vertex (focused), Delete removes it; undo brings it back.
-      const at = await toPage(page, added);
-      await page.mouse.click(at.x, at.y);
-      await expect(page.getByTestId("editor-tool-layer").locator('[data-testid="editor-object-handle"][data-focused="true"]')).toHaveCount(1);
-      const removed = waitForTrpc(page, "courseObject.update");
-      await page.keyboard.press("Delete");
-      await removed;
-      await expect(handles).toHaveCount(3);
-      await expect.poll(async () => (await stored()).length, { timeout: 15000 }).toBe(3);
-      await expect(row).toHaveCount(1); // the vertex went, not the object
-      const undone = waitForTrpc(page, "courseObject.update");
-      await page.keyboard.press("Control+z");
-      await undone;
-      await expect.poll(async () => (await stored()).length, { timeout: 15000 }).toBe(4);
-
-      // Alt-drag on the corner b pulls two more grips; Alt-click retracts them.
-      const bAt = await toPage(page, (await stored())[2]);
-      const pulled = waitForTrpc(page, "courseObject.update");
-      await page.keyboard.down("Alt");
-      await drag(page, bAt, { x: bAt.x + 20, y: bAt.y + 20 });
-      await page.keyboard.up("Alt");
-      await pulled;
-      await expect(page.getByTestId("editor-object-grip")).toHaveCount(4);
-      await expect.poll(async () => (await stored())[2].hOut !== undefined, { timeout: 15000 }).toBe(true);
-      const retracted = waitForTrpc(page, "courseObject.update");
-      await page.keyboard.down("Alt");
-      await page.mouse.click(bAt.x, bAt.y);
-      await page.keyboard.up("Alt");
-      await retracted;
-      await expect(page.getByTestId("editor-object-grip")).toHaveCount(2);
-
-      await page.getByTestId("editor-object-delete").click();
-      await expect(row).toHaveCount(0, { timeout: 15000 });
-    } finally {
-      await drop();
-    }
-  });
-
-  test("A: Alt at the second of three clicks places a smooth vertex, its handles a sixth of its neighbours' chord; one undo removes it", async ({ page }) => {
-    await openEditor(page);
-    await page.getByTestId("editor-tool-A").click();
-    await page.getByTestId("editor-area-whiteout").click();
-    const clear = await emptyPoint(page, 40);
-    const a = { x: clear.x - 30, y: clear.y - 15 }, b = { x: a.x + 60, y: a.y }, c = { x: a.x + 60, y: a.y + 40 };
-    await page.mouse.click(a.x, a.y);
-    // Alt held at the press: a smooth vertex (docs/course-editor.md §6.4); no next vertex yet, so no handles in the state.
-    await page.keyboard.down("Alt");
-    await page.mouse.click(b.x, b.y);
-    await page.keyboard.up("Alt");
-    await expect(page.getByTestId("editor-polygon-vertex")).toHaveCount(2);
-    await expect(page.getByTestId("editor-polygon-grip")).toHaveCount(0);
-    // The next vertex lands: b's handles follow its neighbours.
-    await page.mouse.click(c.x, c.y);
-    await expect(page.getByTestId("editor-polygon-grip")).toHaveCount(2);
-    const created = waitForTrpc(page, "courseObject.create");
-    await page.mouse.click(a.x, a.y); // the first vertex closes
-    await created;
-    await expect(page.getByTestId("editor-object")).toHaveAttribute("data-object-kind", "whiteout", { timeout: 15000 });
-    const id = (await page.getByTestId("editor-object").getAttribute("data-object-id"))!;
-    const row = objectRow(page, id);
-    await expect(row).toHaveCount(1, { timeout: 15000 });
-    const g = JSON.parse((await row.getAttribute("data-geometry-json")) ?? "[]") as { x: number; y: number; hIn?: Pt; hOut?: Pt; smooth?: boolean }[];
-    expect(g).toHaveLength(3);
-    // Uniform Catmull-Rom: hOut = (g2 − g0) / 6, hIn its negation; the corners keep none; no drawing flag stored.
-    expect(g[1].hOut!.x).toBeCloseTo((g[2].x - g[0].x) / 6, 3);
-    expect(g[1].hOut!.y).toBeCloseTo((g[2].y - g[0].y) / 6, 3);
-    expect(g[1].hIn).toEqual({ x: -g[1].hOut!.x, y: -g[1].hOut!.y });
-    expect(g[0].hIn ?? g[0].hOut ?? g[2].hIn ?? g[2].hOut).toBeUndefined();
-    expect(g.some((v) => "smooth" in v)).toBe(false);
-    // The chord on screen agrees (paper mm of the clicks).
-    const [pa, pc] = await Promise.all([toPaper(page, a), toPaper(page, c)]);
-    expect(g[1].hOut!.x).toBeCloseTo((pc.x - pa.x) / 6, 0);
-    expect(g[1].hOut!.y).toBeCloseTo((pc.y - pa.y) / 6, 0);
-    await expect(page.getByTestId("editor-object-grip")).toHaveCount(2);
-    // One create, one undo entry: Ctrl+Z removes the whole object.
-    await page.keyboard.press("Control+z");
-    await expect(row).toHaveCount(0, { timeout: 15000 });
-  });
-
-  test("a filter region hides the path under it live", async ({ page }) => {
-    await openEditor(page);
-    // e2e/test.ocd: a 505 path runs along y ≈ −4 mm (the fixture's symbol index 3).
-    const band = { minX: -8, minY: -6, maxX: 8, maxY: -2 };
-    const before = await inkIn(page, band);
-    expect(before, "path ink before the region").toBeGreaterThan(5);
-    // The `A` chord (§6.4): `A` opens the menu as a portal above the inspector, `F` picks the filter region.
-    await page.keyboard.press("a");
-    const menu = page.getByTestId("editor-area-menu");
-    await expect(menu).toBeVisible();
-    const menuBox = (await menu.boundingBox())!;
-    const onTop = await page.evaluate(({ x, y }) => document.elementFromPoint(x, y)?.closest('[data-testid="editor-area-menu"]') !== null, { x: menuBox.x + 8, y: menuBox.y + 8 });
-    expect(onTop, "the area menu is not covered by the inspector").toBe(true);
-    await page.keyboard.press("f");
-    await expect(menu).toHaveCount(0);
-    await expect(page.getByTestId("editor-tool-A")).toHaveAttribute("aria-pressed", "true");
-    for (const p of [{ x: -12, y: -9 }, { x: 12, y: -9 }, { x: 12, y: 1 }, { x: -12, y: 1 }]) {
-      const q = await toPage(page, p);
-      await page.mouse.click(q.x, q.y);
-    }
-    const created = waitForTrpc(page, "courseObject.create");
-    const firstVertex = await toPage(page, { x: -12, y: -9 });
-    await page.mouse.click(firstVertex.x, firstVertex.y);
-    await created;
-    await expect(page.getByTestId("editor-object")).toHaveAttribute("data-object-kind", "filter_region", { timeout: 15000 });
-    const id = (await page.getByTestId("editor-object").getAttribute("data-object-id"))!;
-    try {
-      // "By symbols" is a write of its own: wait for it, else the row's refetch from it lands after the checkbox's
-      // write and unchecks the box under Playwright's `check()` (D10 flake "checkbox state").
-      const bySymbols = waitForTrpc(page, "courseObject.update");
-      await page.getByTestId("editor-filter-by").selectOption("symbols");
-      await bySymbols;
-      await expect(objectRow(page, id)).toHaveAttribute("data-props", /"symbols":\[\]/, { timeout: 15000 });
-      await page.getByTestId("editor-filter-search").fill("505");
-      // Listed by the source code (no applied match in the fixture): symbol index 3, "505.0 Path". A fixture change fails here.
-      const path505 = page.getByTestId("editor-filter-symbol-505.0");
-      await expect(path505.locator("xpath=..")).toContainText("Path");
-      const updated = waitForTrpc(page, "courseObject.update");
-      await path505.click();
-      await updated;
-      await expect(path505).toBeChecked({ timeout: 15000 });
-      await expect.poll(() => inkIn(page, band), { timeout: 30000 }).toBeLessThan(before / 3);
-      // Delete it: the path is back.
-      await page.getByTestId("editor-object-delete").click();
-      await expect.poll(() => inkIn(page, band), { timeout: 30000 }).toBeGreaterThan(before / 2);
-    } finally {
-      await cleanup("courseObject.delete", { id: Number(id) });
-    }
-  });
-
-  test("A then S: the toner saver is the smooth offset hull of the course at 25 mm, handles stored, its curves in the course's print", async ({ page }) => {
-    await openEditor(page);
-    const nameId = nameIdOf(page);
-    await newCourse(page, "D13 toner");
-    const courseId = Number(await page.getByTestId("editor-course-picker").inputValue());
-    await arm(page, "K");
-    const spots: Pt[] = [];
-    for (let i = 0; i < 3; i++) {
-      const p = await emptyPoint(page, 60, spots);
-      spots.push(p);
-      await place(page, p);
-      await expect(controlRows(page)).toHaveCount(i + 1, { timeout: 15000 });
-    }
-    await page.keyboard.press("Escape");
-    await expect(page.getByTestId("editor-tool-V")).toHaveAttribute("aria-pressed", "true");
-    // The course's sheet before the toner saver (course-layout.md §5): its printed curves are the base map's.
-    const template = await probeTemplate("Toner probe");
-    const sheet = await trpcCall<{ seq: number }>("courseMap.create", { kind: "course", courseId, templateId: template.seq, overrides: {}, objects: [] });
-    let id = "";
-    try {
-      const before = await printed(page, nameId, `maps=${sheet.seq}`);
-
-      const created = waitForTrpc(page, "courseObject.create");
-      await page.keyboard.press("a");
-      await page.keyboard.press("s");
-      await created;
-      await expect(page.getByTestId("editor-object")).toHaveAttribute("data-object-kind", "toner_saver", { timeout: 15000 });
-      id = (await page.getByTestId("editor-object").getAttribute("data-object-id"))!;
-      const row = objectRow(page, id);
-      await expect(row).toHaveCount(1, { timeout: 15000 });
-      expect(JSON.parse((await row.getAttribute("data-props")) ?? "{}")).toMatchObject({ marginMm: 25 });
-      const g = JSON.parse((await row.getAttribute("data-geometry-json")) ?? "[]") as { x: number; y: number; hIn?: unknown; hOut?: Pt }[];
-      expect(g.filter((v) => v.hOut).length, "Bézier arcs, not an octagon").toBeGreaterThanOrEqual(3);
-      // Three sites: three arcs of one or two pieces, three straight offset edges.
-      expect(g.length).toBeGreaterThanOrEqual(6);
-      await expect(page.getByTestId("editor-prop-margin")).toHaveValue("25");
-      // The selected outline samples every curved segment.
-      const outline = page.getByTestId("editor-tool-layer").locator(`[data-testid="editor-object-outline"][data-object-id="${id}"]`);
-      expect(((await outline.getAttribute("data-points")) ?? "").split(" ").length).toBeGreaterThan(g.length);
-
-      // Printed (D13's deferred item): the course's page carries the hull's arcs as Bézier `c` segments — at least
-      // one per stored curved vertex more than without it.
-      const after = await printed(page, nameId, `maps=${sheet.seq}`);
-      expect(after.pages).toBe(1);
-      expect(after.curves - before.curves, "the toner saver's arcs in the course's maps.pdf").toBeGreaterThanOrEqual(g.filter((v) => v.hOut).length);
-    } finally {
-      if (id) await cleanup("courseObject.delete", { id: Number(id) });
-      await cleanup("courseMap.delete", { id: sheet.seq });
-      await cleanup("mapTemplate.delete", { id: template.seq });
-    }
-  });
-});
-
-test.describe("Course editor layout (docs/course-layout.md)", () => {
-  desktopOnly();
-  const frame: Frame = { x: 10, y: 40, width: 190, height: 247 };
-
-  /** A template with `frame` and a sheet on it for the first imported course, as the Maps page would make them. */
-  async function sheetFixture(name: string): Promise<{ template: { seq: number }; sheet: { seq: number }; drop: () => Promise<void> }> {
-    const courses = await trpcCall<{ id: number }[]>("course.list", undefined, false);
-    expect(courses.length).toBeGreaterThan(0);
-    const template = await probeTemplate(name, frame, 5);
-    const sheet = await trpcCall<{ seq: number }>("courseMap.create", { kind: "course", courseId: courses[0].id, templateId: template.seq, overrides: {}, objects: [] });
-    return {
-      template, sheet,
-      drop: async () => {
-        await cleanup("courseMap.delete", { id: sheet.seq });
-        await cleanup("mapTemplate.delete", { id: template.seq });
-      },
-    };
-  }
-
-  test("a sheet from the Maps page: page text drawn as printed, align map saves the window centre, undo, one A4 page", async ({ page }) => {
-    await openEditor(page);
-    const nameId = nameIdOf(page);
-    const { template, sheet, drop } = await sheetFixture("Layout");
-    try {
-      await page.goto(`/${nameId}/maps`);
-      await page.getByTestId(`edit-course-map-${sheet.seq}`).click();
-      await expect(page).toHaveURL(new RegExp(`course-editor\\?mode=layout&sheet=${sheet.seq}`));
-      await editorReady(page);
-      await expect(page.getByTestId("editor-mode-layout")).toHaveAttribute("aria-pressed", "true");
-      await expect(page.getByTestId("editor-layout-scope")).toHaveAttribute("data-sheet", String(sheet.seq));
-      for (const id of ["editor-layout-paper", "editor-layout-printable", "editor-layout-frame"]) {
-        await expect(page.getByTestId("editor-tool-layer").getByTestId(id)).toBeAttached();
-      }
-      // Course mode's tools are not here: Layout's rail replaces the rail. No ellipse tool (D16: `O` dropped).
-      await expect(page.getByTestId("editor-tool-rail")).toHaveCount(0);
-      await expect(page.getByTestId("editor-layout-rail")).toBeVisible();
-      await expect(page.getByTestId("editor-layout-tool-P")).toBeVisible();
-      await expect(page.getByTestId("editor-layout-tool-O")).toHaveCount(0);
-
-      // H: a header text at page (20, 20) mm, above the frame: ink where the page layer draws it.
-      const toPaperMm = await pageToPaperOf(page, frame);
-      const textRect = (() => {
-        const a = toPaperMm({ x: 22, y: 12 }), b = toPaperMm({ x: 110, y: 21 });
-        return { minX: Math.min(a.x, b.x), maxX: Math.max(a.x, b.x), minY: Math.min(a.y, b.y), maxY: Math.max(a.y, b.y) };
-      })();
-      const inkBefore = await inkIn(page, textRect);
-      await page.getByTestId("editor-layout-tool-H").click();
-      const placed = waitForTrpc(page, "courseMap.saveLayout");
-      await clickMap(page, await toPage(page, toPaperMm({ x: 20, y: 20 })));
-      await placed;
-      await expect(page.getByTestId("editor-layout-object-row")).toHaveCount(1);
-      // A long text, large: what the inspector writes, drawn by the page layer.
-      for (const [id, value] of [["editor-layout-text", "LAYOUT PAGE TEXT"], ["editor-layout-font-size", "10"]] as const) {
-        const saved = waitForTrpc(page, "courseMap.saveLayout");
-        await page.getByTestId(id).fill(value);
-        await page.getByTestId(id).press("Enter");
-        await saved;
-      }
-      await expect.poll(() => inkIn(page, textRect), { timeout: 15_000 }).toBeGreaterThan(inkBefore + 20);
-
-      // Select the frame (a click inside it on nothing), then drag it: align map.
-      const inside = await toPage(page, toPaperMm({ x: 105, y: 160 }));
-      await page.keyboard.press("Escape");
-      await clickMap(page, inside);
-      await expect(page.getByTestId("editor-layout-selected")).toHaveAttribute("data-kind", "frame");
-      const state = page.getByTestId("editor-layout-state");
-      const [cx, cy] = (await state.getAttribute("data-centre"))!.split(",").map(Number);
-      const to = { x: inside.x + 60, y: inside.y + 40 };
-      const [a, b] = [await toPaper(page, inside), await toPaper(page, to)];
-      const saved = waitForTrpc(page, "courseMap.saveLayout");
-      await drag(page, inside, to);
-      await saved;
-      const stored = await trpcCall<{ windowCenter: Pt }>("courseMap.get", { seq: sheet.seq }, false);
-      expect(stored.windowCenter.x).toBeCloseTo(cx + (b.x - a.x), 0);
-      expect(stored.windowCenter.y).toBeCloseTo(cy + (b.y - a.y), 0);
-      expect(Math.hypot(stored.windowCenter.x - cx, stored.windowCenter.y - cy)).toBeGreaterThan(2);
-
-      // Undo writes the previous centre back.
-      const undone = waitForTrpc(page, "courseMap.saveLayout");
-      await page.keyboard.press("Control+z");
-      await undone;
-      await expect.poll(async () => (await trpcCall<{ windowCenter: Pt }>("courseMap.get", { seq: sheet.seq }, false)).windowCenter.x).toBeCloseTo(cx, 3);
-
-      // The sheet prints as one page of the template's paper.
-      const pdf = await printed(page, nameId, `maps=${sheet.seq}`);
-      expect(pdf.pages).toBe(1);
-      expect(pdf.sizeMm).toEqual([210, 297]);
-
-      // The template link: template scope edits the template's objects; the sheet's text is not among them.
-      await page.getByTestId("editor-layout-edit-template").click();
-      await expect(page.getByTestId("editor-layout-scope")).toHaveAttribute("data-scope", "template");
-      await expect(page.getByTestId("editor-layout-object-row")).toHaveCount(0);
-      await expect(page.getByTestId("editor-layout-paper-size")).toHaveValue("A4");
-      // A template write: orientation through mapTemplate.update.
-      const updated = waitForTrpc(page, "mapTemplate.update");
-      await page.getByTestId("editor-layout-orientation").selectOption("landscape");
-      await updated;
-      const templates = await trpcCall<{ seq: number; orientation: string }[]>("mapTemplate.list", undefined, false);
-      expect(templates.find((t) => t.seq === template.seq)?.orientation).toBe("landscape");
-
-      // The Map templates page's Edit template layout opens the same template scope.
-      await page.goto(`/${nameId}/map-templates`);
-      await page.getByTestId(`edit-template-layout-${template.seq}`).click();
-      await expect(page).toHaveURL(new RegExp(`course-editor\\?mode=layout&template=${template.seq}`));
-      await expect(page.getByTestId("editor-layout-scope")).toHaveAttribute("data-scope", "template", { timeout: 30_000 });
-      await expect(page.getByTestId("editor-layout-scope")).toHaveAttribute("data-template", String(template.seq));
-    } finally {
-      await drop();
-    }
-  });
-
-  test("graphics: upload an SVG, place it on the sheet, it is listed and deleted", async ({ page }) => {
-    await openEditor(page);
-    const nameId = nameIdOf(page);
-    const { sheet, drop } = await sheetFixture("Layout graphic");
-    const images = async () =>
-      (await trpcCall<{ objects: { kind: string; graphicId?: number }[] }>("courseMap.get", { seq: sheet.seq }, false)).objects.filter((o) => o.kind === "image");
-    try {
-      await page.goto(`/${nameId}/course-editor?mode=layout&sheet=${sheet.seq}`);
-      await editorReady(page);
-      await expect(page.getByTestId("editor-layout-scope")).toHaveAttribute("data-sheet", String(sheet.seq));
-
-      // Upload into the Graphics section; its Place button arms the image tool.
-      await page.getByTestId("editor-layout-graphics-toggle").click();
-      const uploaded = waitForTrpc(page, "graphics.upload");
-      await page.getByTestId("editor-layout-graphic-upload").setInputFiles({
-        name: "e2e-logo.svg",
-        mimeType: "image/svg+xml",
-        buffer: Buffer.from('<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 10 10"><circle cx="5" cy="5" r="4" fill="#336699"/></svg>'),
-      });
-      await uploaded;
-      const placeButton = page.locator('[data-testid^="editor-layout-graphic-place-"]').last();
-      await expect(placeButton).toBeVisible();
-      await placeButton.click();
-      await expect(placeButton).toHaveAttribute("aria-pressed", "true");
-
-      // A click on the page above the frame places it: one write, listed as an image row.
-      const toPaperMm = await pageToPaperOf(page, frame);
-      const placed = waitForTrpc(page, "courseMap.saveLayout");
-      await clickMap(page, await toPage(page, toPaperMm({ x: 150, y: 20 })));
-      await placed;
-      const row = page.locator('[data-testid="editor-layout-object-row"][data-kind="image"]');
-      await expect(row).toHaveCount(1);
-      expect(await images()).toHaveLength(1);
-
-      // Selected from the list and deleted: gone from the list and from the sheet.
-      await row.click();
-      await expect(page.getByTestId("editor-layout-selected")).toHaveAttribute("data-kind", "object");
-      const deleted = waitForTrpc(page, "courseMap.saveLayout");
-      await page.getByTestId("editor-layout-delete").click();
-      await deleted;
-      await expect(row).toHaveCount(0);
-      await expect.poll(async () => (await images()).length).toBe(0);
-    } finally {
-      await drop();
-    }
-  });
-
-  test("P draws a polygon in clicks and a click-drag; its edge takes a vertex by double-click, Delete takes it out; the print has its curve", async ({ page }) => {
-    await openEditor(page);
-    const nameId = nameIdOf(page);
-    const { sheet, drop } = await sheetFixture("Layout polygon");
-    type Stored = { objects: { kind: string; closed?: boolean; points?: { x: number; y: number; hIn?: Pt; hOut?: Pt }[] }[] };
-    const stored = async () => (await trpcCall<Stored>("courseMap.get", { seq: sheet.seq }, false)).objects;
-    try {
-      const curvesBefore = (await printed(page, nameId, `maps=${sheet.seq}`)).curves;
-
-      await page.goto(`/${nameId}/course-editor?mode=layout&sheet=${sheet.seq}`);
-      await editorReady(page);
-      await expect(page.getByTestId("editor-layout-scope")).toHaveAttribute("data-sheet", String(sheet.seq));
-      const toPaperMm = await pageToPaperOf(page, frame);
-      const at = async (x: number, y: number) => toPage(page, toPaperMm({ x, y }));
-
-      // P: corners by clicks, a curve vertex by a click-drag, closed by a click on the first vertex — one write.
-      await page.getByTestId("editor-layout-tool-P").click();
-      await expect(page.getByTestId("editor-layout-tool-P")).toHaveAttribute("aria-pressed", "true");
-      await clickMap(page, await at(40, 60));
-      await clickMap(page, await at(90, 60));
-      await drag(page, await at(90, 110), await at(100, 120));
-      await clickMap(page, await at(40, 110));
-      await expect(page.getByTestId("editor-tool-layer").getByTestId("editor-polygon-vertex")).toHaveCount(4);
-      const drawn = waitForTrpc(page, "courseMap.saveLayout");
-      await clickMap(page, await at(40, 60));
-      await drawn;
-      const [path] = await stored();
-      expect(path).toMatchObject({ kind: "path", closed: true });
-      expect(path.points).toHaveLength(4);
-      expect(Math.abs(path.points![0].x - 40) + Math.abs(path.points![0].y - 60)).toBeLessThan(2);
-      // The pull's handle on the page: down and to the right, as dragged.
-      expect(path.points![2].hOut!.x).toBeGreaterThan(5);
-      expect(path.points![2].hOut!.y).toBeGreaterThan(5);
-      expect(path.points![2].hIn!.x).toBeLessThan(-5);
-      // Selected, back in V, with the course editor's handles and grips.
-      await expect(page.getByTestId("editor-layout-selected")).toHaveAttribute("data-kind", "object");
-      await expect(page.getByTestId("editor-layout-tool-V")).toHaveAttribute("aria-pressed", "true");
-      await expect(page.getByTestId("editor-tool-layer").getByTestId("editor-layout-handle")).toHaveCount(4);
-      await expect(page.getByTestId("editor-tool-layer").getByTestId("editor-layout-grip")).toHaveCount(2);
-
-      // A double-click on the straight top edge: a vertex there, focused; Delete removes it again.
-      const mid = await at(65, 60);
-      const inserted = waitForTrpc(page, "courseMap.saveLayout");
-      await page.mouse.dblclick(mid.x, mid.y);
-      await inserted;
-      await expect.poll(async () => (await stored())[0].points?.length).toBe(5);
-      await expect(page.getByTestId("editor-tool-layer").locator('[data-testid="editor-layout-handle"][data-focused="true"]')).toHaveCount(1);
-      const removed = waitForTrpc(page, "courseMap.saveLayout");
-      await page.keyboard.press("Delete");
-      await removed;
-      await expect.poll(async () => (await stored())[0].points?.length).toBe(4);
-      await expect(page.getByTestId("editor-layout-object-row")).toHaveCount(1);
-
-      // Escape discards a polygon being drawn (no write); Enter closes one from three vertices.
-      await page.getByTestId("editor-layout-tool-P").click();
-      await clickMap(page, await at(120, 60));
-      await clickMap(page, await at(160, 60));
-      await expect(page.getByTestId("editor-tool-layer").getByTestId("editor-polygon-vertex")).toHaveCount(2);
-      await page.keyboard.press("Escape");
-      await expect(page.getByTestId("editor-layout-tool-V")).toHaveAttribute("aria-pressed", "true");
-      await expect(page.getByTestId("editor-tool-layer").getByTestId("editor-polygon-vertex")).toHaveCount(0);
-      await page.getByTestId("editor-layout-tool-P").click();
-      for (const [x, y] of [[120, 60], [160, 60], [140, 100]]) await clickMap(page, await at(x, y));
-      const entered = waitForTrpc(page, "courseMap.saveLayout");
-      await page.keyboard.press("Enter");
-      await entered;
-      await expect.poll(async () => (await stored()).map((o) => o.points?.length)).toEqual([4, 3]);
-
-      // The curve prints as a Bézier (`c`) on the sheet's page.
-      expect((await printed(page, nameId, `maps=${sheet.seq}`)).curves).toBeGreaterThan(curvesBefore);
-    } finally {
-      await drop();
-    }
-  });
-});
-
-test.describe("Course editor auto templates (docs/course-layout.md §5–§7)", () => {
-  desktopOnly();
-
-  test("Export ▾ makes a course's first sheet; a class scale gets a class sheet and Class view; an extra template and a move back", async ({ page }) => {
-    await openEditor(page);
-    // A course with classes and no sheet yet.
-    const courses = await trpcCall<{ id: number; name: string }[]>("course.list", undefined, false);
-    const sheets = await trpcCall<{ courseId: number | null }[]>("courseMap.list", undefined, false);
-    let course: { id: number; name: string } | null = null;
-    let cls: { seq: number; name: string } | null = null;
-    for (const c of courses) {
-      if (sheets.some((s) => s.courseId === c.id)) continue;
-      const classes = await trpcCall<{ seq: number; name: string }[]>("layout.classOverrides", { courseId: c.id }, false);
-      if (classes.length) { course = c; cls = classes[0]; break; }
-    }
-    expect(course, "a course with classes and no sheet").not.toBeNull();
-    await page.getByTestId("editor-course-picker").selectOption(String(course!.id));
-
-    // Export ▾ → this course: the sheet is created first, then one page prints.
-    await page.getByTestId("editor-export").click();
-    const [download] = await Promise.all([page.waitForEvent("download"), page.getByTestId("editor-export-course").click()]);
-    expect((await analysePdf(await readFile((await download.path())!))).pages).toBe(1);
-    const own = (await trpcCall<{ seq: number; courseId: number | null; class: unknown }[]>("courseMap.list", undefined, false))
-      .filter((s) => s.courseId === course!.id && s.class === null);
-    expect(own).toHaveLength(1);
-
-    // Layout mode: the sheet's template is its key's auto template.
-    await page.getByTestId("editor-mode-layout").click();
-    await expect(page.getByTestId("editor-layout-scope")).toHaveAttribute("data-sheet", String(own[0].seq), { timeout: 30_000 });
-    const badge = page.getByTestId("editor-layout-template-badge");
-    await expect(badge).toHaveAttribute("data-extra", "false");
-    await expect(badge).toHaveAttribute("data-auto-key", /^A4-(portrait|landscape)-\d+$/);
-    await expect(page.getByTestId("editor-status-sheet")).toHaveAttribute("data-key", /^1:\d+ A4 /);
-
-    // A class prints at 1:15000: its class sheet appears.
-    const overridden = waitForTrpc(page, "layout.setClassOverride");
-    await page.getByTestId(`editor-layout-class-scale-${cls!.seq}`).fill("15000");
-    await page.getByTestId(`editor-layout-class-scale-${cls!.seq}`).press("Enter");
-    await overridden;
-    await expect(page.getByTestId(`editor-layout-class-${cls!.seq}`)).toHaveAttribute("data-sheets", "1");
-
-    // Class view in Course mode: the course as the class prints it.
-    await page.getByTestId("editor-mode-course").click();
-    await page.getByTestId("editor-view-class").selectOption(String(cls!.seq));
-    await expect(page.getByTestId("editor-status-sheet")).toHaveAttribute("data-key", /^1:15000 A4 /, { timeout: 15_000 });
-    await page.getByTestId("editor-export").click();
-    const [classDownload] = await Promise.all([page.waitForEvent("download"), page.getByTestId("editor-export-class").click()]);
-    expect(classDownload.suggestedFilename()).toMatch(/\.pdf$/);
-
-    // Back in Course view, Layout: an extra template takes the course; its row moves it back to the auto template.
-    await page.getByTestId("editor-view-course").click();
-    await page.getByTestId("editor-mode-layout").click();
-    await expect(page.getByTestId("editor-layout-scope")).toHaveAttribute("data-sheet", String(own[0].seq), { timeout: 30_000 });
-    const duplicated = waitForTrpc(page, "mapTemplate.applyToCourses");
-    await page.getByTestId("editor-layout-create-extra").click();
-    await duplicated;
-    await expect(badge).toHaveAttribute("data-extra", "true", { timeout: 15_000 });
-    const moved = waitForTrpc(page, "mapTemplate.applyToCourses");
-    await page.getByTestId(`editor-layout-template-move-${course!.id}`).click();
-    await moved;
-    await expect(badge).toHaveAttribute("data-extra", "false", { timeout: 15_000 });
-    // Undo moves it to the extra template again (one gesture, one entry).
-    const undone = waitForTrpc(page, "mapTemplate.applyToCourses");
-    await page.keyboard.press("Control+z");
-    await undone;
-    await expect(badge).toHaveAttribute("data-extra", "true", { timeout: 15_000 });
-  });
-});
-
 test.describe("Course editor checks", () => {
   desktopOnly();
 
-  test("two controls 20 m apart: a marker, a row that locates them, the status-bar count", async ({ page }) => {
+  test("two controls 20 m apart: a marker, a row that locates them, the count on the course-info button", async ({ page }) => {
     await openEditor(page);
-    const kpis = await page.getByTestId("editor-status-kpis").textContent();
-    const scale = Number(/1:([\d\s ]+)/.exec(kpis ?? "")?.[1].replace(/[\s ]/g, ""));
+    const scale = await mapScale(page);
     expect(scale).toBeGreaterThan(0);
     const spot = await toPaper(page, await emptyPoint(page, 40));
     const dMm = 20_000 / scale;
@@ -1766,7 +711,10 @@ test.describe("Course editor checks", () => {
       await expect(row).toContainText("20 m");
       await expect(page.locator('[data-testid="editor-check-marker"][data-code="CONTROL_TOO_CLOSE"][data-site="251"]')).toBeAttached();
       await expect(page.locator('[data-testid="editor-check-marker"][data-code="CONTROL_TOO_CLOSE"][data-site="252"]')).toBeAttached();
-      expect(Number(await page.getByTestId("editor-status-checks").getAttribute("data-count"))).toBeGreaterThan(0);
+      // The count is the course-info button's badge (P2) and a row of its popover.
+      const badge = Number(await page.getByTestId("editor-stats-badge").getAttribute("data-count"));
+      expect(badge).toBeGreaterThan(0);
+      expect(Number(await statsRow(page, "checks", "count"))).toBe(badge);
 
       // Click-to-locate: selects the first site and centres the view on the pair's midpoint.
       await row.click();
@@ -1779,308 +727,311 @@ test.describe("Course editor checks", () => {
   });
 });
 
-// docs/course-editor.md §3 "Conflicts", §11; course-layout.md §2 (D8's sheet / template tokens). Two browser contexts
-// on one event: B writes, A's next write carries the token from before B's and the server answers CONFLICT.
-// A's change poll is held still (`freezeExternalPoll`): D11's live refresh would otherwise re-seed A's token within
-// 5 s and turn the stale write into a race (a test mechanism, not a product rule — decision log, D10).
-test.describe("conflicts (two contexts)", () => {
+// F7 (docs/course-editor.md §12): variation authoring. Its own describe, after F3–F5's (F10 shares this file).
+test.describe("F7: variations and loops (docs/course-editor.md §12)", () => {
   desktopOnly();
 
-  async function second(browser: Browser, info: TestInfo, path: string): Promise<{ page: Page; close: () => Promise<void> }> {
-    const { ctx, page } = await desktopContext(browser, info);
-    await selectCompetition(page);
-    await page.goto(path);
-    await editorReady(page);
-    return { page, close: () => ctx.close() };
-  }
-
-  /** A control as stored: its paper position (`course.controlCoordinates`) and its description (`control.getById`). */
-  async function storedControl(code: string): Promise<{ xpos: number; ypos: number; description: { d?: string } | null }> {
-    const at = (await trpcCall<{ id: number; mapX: number; mapY: number }[]>("course.controlCoordinates", undefined, false)).find((c) => c.id === Number(code))!;
-    const { description } = await trpcCall<{ description: { d?: string } | null }>("control.getById", { id: Number(code) }, false);
-    return { xpos: at.mapX, ypos: at.mapY, description };
-  }
-
-  test("a structure written elsewhere: the stale append is refused, the rows reload, the notice names the change", async ({ page, browser }, info) => {
-    await openEditor(page);
-    await newCourse(page, "D10 conflict");
-    const courseId = await page.getByTestId("editor-course-picker").inputValue();
-    const [x, y] = await regularCodes(page, 2);
-    await freezeExternalPoll(page);
-    const b = await second(browser, info, `/${nameIdOf(page)}/course-editor?course=${courseId}`);
-    try {
-      await act(b.page, y, "append", "course.setStructure");
-      await expect(controlRows(b.page)).toHaveCount(1, { timeout: 15000 });
-
-      // A appends X on the structure it last saw: refused, never merged (§3) — the notice, then the reload shows B's.
-      const responses: number[] = [];
-      page.on("response", (r) => { if (isTrpcResponse(r, "course.setStructure")) responses.push(r.status()); });
-      await select(page, x);
-      await page.getByTestId("editor-action-bar").getByTestId("editor-action-append").click();
-      const notice = page.getByTestId("editor-conflict");
-      await expect(notice).toHaveAttribute("data-kind", "refresh", { timeout: 15000 });
-      await expect(notice).toContainText(/Changed elsewhere/);
-      expect(responses).toHaveLength(1); // no silent re-send of a structure
-      await expect(controlRows(page)).toHaveCount(1, { timeout: 15000 });
-      await expect(controlRows(page).nth(0)).toHaveAttribute("data-control-id", y);
-      await page.getByTestId("editor-conflict-dismiss").click();
-      await expect(notice).toHaveCount(0);
-
-      // Redone on the reloaded structure, it lands after B's (X again, or another control when B's leg now runs
-      // over X and wins its click).
-      const [redo] = await regularCodes(page, 1, [y]);
-      await act(page, redo, "append", "course.setStructure");
-      await expect(controlRows(page)).toHaveCount(2, { timeout: 15000 });
-      await expect(controlRows(page).nth(1)).toHaveAttribute("data-control-id", redo);
-      await expect(page.getByTestId("editor-conflict")).toHaveCount(0);
-    } finally {
-      await b.close();
+  /**
+   * The leg's drawn colour around a paper point: the mean of the canvas pixels in the purple-to-blue family
+   * (blue well above green — the tints; the map's yellows, oranges and greens are left out).
+   */
+  async function colourAt(page: Page, mm: Pt): Promise<number[]> {
+    const p = await toPage(page, mm);
+    const { rgb } = await canvasInCircle(page, { x: p.x - 6, y: p.y - 6, width: 12, height: 12 }, 0);
+    const sum = [0, 0, 0];
+    let n = 0;
+    for (let i = 0; i < rgb.length; i += 3) {
+      const [r, g, b] = [rgb[i], rgb[i + 1], rgb[i + 2]];
+      if (b - g < 80) continue;
+      sum[0] += r; sum[1] += g; sum[2] += b; n++;
     }
-  });
+    expect(n, "tinted pixels at the leg").toBeGreaterThan(0);
+    return sum.map((v) => v / n);
+  }
 
-  test("a control moved elsewhere: a description edit rebases silently; a second move offers Keep mine, which wins", async ({ page, browser }, info) => {
+  /**
+   * A page point well off the leg a → b (half its length to one side) where a click reaches the map: clear of every
+   * site and drawn number, of the editor's chrome (the inspector, the rail, the action bar) and of the description
+   * sheet. The viewer spans the whole editor under its floating panels, so "inside the viewer" is not enough — a point
+   * under the inspector got the K click there and placed nothing (bugfix-f7-offleg-under-inspector.md).
+   */
+  async function offLeg(page: Page, a: Site, b: Site): Promise<Pt> {
+    await viewSettled(page);
+    const pa = await toPage(page, a.mm), pb = await toPage(page, b.mm);
+    const mid = { x: (pa.x + pb.x) / 2, y: (pa.y + pb.y) / 2 };
+    const len = Math.hypot(pb.x - pa.x, pb.y - pa.y);
+    const n = { x: -(pb.y - pa.y) / len, y: (pb.x - pa.x) / len };
+    const viewer = (await page.getByTestId("map-viewer").boundingBox())!;
+    const marks = await Promise.all((await sites(page)).map((s) => toPage(page, s.mm)));
+    const numbers = await Promise.all((await page.getByTestId("course-label").evaluateAll((els) => els.map((el) => ({
+      x: Number(el.getAttribute("data-x")), y: Number(el.getAttribute("data-y")),
+    })))).map((q) => toPage(page, q)));
+    const sheets = await sheetBoxes(page);
+    for (const k of [0.5, -0.5, 0.7, -0.7, 0.35, -0.35, 0.9, -0.9, 0.25, -0.25]) {
+      const p = { x: mid.x + n.x * len * k, y: mid.y + n.y * len * k };
+      const inside = p.x > viewer.x + 60 && p.x < viewer.x + viewer.width - 100 && p.y > viewer.y + 60 && p.y < viewer.y + viewer.height - 120;
+      if (!inside) continue;
+      if (marks.some((q) => Math.hypot(q.x - p.x, q.y - p.y) <= 45)) continue;
+      if (numbers.some((q) => Math.hypot(q.x - p.x, q.y - p.y) <= 30)) continue;
+      if (sheets.some((s) => p.x > s.x - 12 && p.x < s.x + s.width + 12 && p.y > s.y - 12 && p.y < s.y + s.height + 12)) continue;
+      if ((await coveredBy(page, p)) !== null) continue;
+      return p;
+    }
+    return emptyPoint(page, 40);
+  }
+
+  test("Create variation here, a control into B, Variant and All-variations views, the unbalanced check, Loop, export, undo", async ({ page }) => {
     await openEditor(page);
-    const [code] = await regularCodes(page, 1);
-    const original = await storedControl(code);
-    await freezeExternalPoll(page);
-    const b = await second(browser, info, `/${nameIdOf(page)}/course-editor`);
-    try {
-      // B writes the description (a field a move does not touch): column D a boulder only.
-      await select(b.page, code);
-      const described = waitForTrpc(b.page, "control.update");
-      await b.page.getByTestId("editor-action-bar").getByTestId("editor-action-description").click();
-      await expect(b.page.getByTestId("desc-editor")).toBeVisible();
-      if (await b.page.getByTestId("desc-clear").isEnabled()) await b.page.getByTestId("desc-clear").click();
-      await b.page.getByTestId("desc-editor").getByTestId("desc-section-d").getByTestId("desc-opt-2.4").click();
-      await b.page.getByTestId("desc-save").click();
-      await described;
+    const name = await newCourse(page, "F7 variation");
+    const codeA = await appendClear(page);
+    const codeB = await appendClear(page, [codeA]);
+    await expect(controlRows(page)).toHaveCount(2, { timeout: 15000 });
+    const a = await site(page, codeA), b = await site(page, codeB);
+    const courseId = (await trpcCall<{ id: number; name: string }[]>("course.list", undefined, false)).find((c) => c.name === name)!.id;
+    const keys = async () => (await trpcCall<{ variantKey: string }[]>("course.variantList", { courseId }, false)).map((v) => v.variantKey);
 
-      // A moves it from the token before B's write: CONFLICT, re-sent once with the server's token, no notice.
-      const statuses: number[] = [];
-      page.on("response", (r) => { if (isTrpcResponse(r, "control.update")) statuses.push(r.status()); });
-      const from = await sitePoint(page, code);
-      const to = await dragTarget(page, from);
-      const settled = page.waitForResponse((r) => isTrpcResponse(r, "control.update") && r.status() === 200);
-      await drag(page, from, to);
-      await settled;
-      expect(statuses[0], "the first write is refused").toBe(409);
-      await expect(page.getByTestId("editor-conflict")).toHaveCount(0);
-      const afterA = await storedControl(code);
-      expect(Math.hypot(afterA.xpos - original.xpos, afterA.ypos - original.ypos)).toBeGreaterThan(1);
-      expect(afterA.description?.d, "B's description (a boulder, 2.004) survives A's move").toBe("2.004");
-
-      // B sees A's move within its (live) poll, then moves it again.
-      await expect.poll(async () => {
-        const s = await site(b.page, code);
-        return Math.hypot(s.mm.x - afterA.xpos, s.mm.y - afterA.ypos);
-      }, { timeout: 20000 }).toBeLessThan(0.01);
-      await dropSelection(b.page);
-      const bFrom = await sitePoint(b.page, code);
-      const bMoved = waitForTrpc(b.page, "control.update");
-      await drag(b.page, bFrom, await dragTarget(b.page, bFrom));
-      await bMoved;
-      const afterB = await storedControl(code);
-      expect(Math.hypot(afterB.xpos - afterA.xpos, afterB.ypos - afterA.ypos)).toBeGreaterThan(1);
-
-      // A moves it once more, still on its own token: both moved it — the notice with B's position, Keep mine / theirs.
+    // The leg a → b, then Create variation here: one write, A and B empty (answer 5), the leg still drawn straight.
+    await viewSettled(page);
+    const mid = await legMidpoint(page, name, a.mm, b.mm);
+    await expect(async () => {
       await dropSelection(page);
-      const aFrom = await sitePoint(page, code);
-      // Not where B dropped it (the same view picks the same target): Keep mine must be told apart from theirs.
-      const aTo = await dragTarget(page, aFrom, [await toPage(page, { x: afterB.xpos, y: afterB.ypos })]);
-      await drag(page, aFrom, aTo);
-      const notice = page.getByTestId("editor-conflict");
-      await expect(notice).toHaveAttribute("data-kind", "moved", { timeout: 15000 });
-      await expect(notice).toContainText(`${afterB.xpos.toFixed(1)}`);
-      await expect(page.getByTestId("editor-conflict-keep-mine")).toBeVisible();
-      const kept = waitForTrpc(page, "control.update");
-      await page.getByTestId("editor-conflict-keep-mine").click();
-      await kept;
-      await expect(notice).toHaveCount(0, { timeout: 15000 });
-      const final = await storedControl(code);
-      expect(Math.hypot(final.xpos - afterB.xpos, final.ypos - afterB.ypos), "A's position won").toBeGreaterThan(1);
-      await expect.poll(async () => {
-        const s = await site(page, code);
-        return Math.hypot(s.mm.x - final.xpos, s.mm.y - final.ypos);
-      }, { timeout: 15000 }).toBeLessThan(0.01);
-    } finally {
-      await b.close();
-      await cleanup("control.update", { id: Number(code), xpos: original.xpos, ypos: original.ypos, description: original.description ?? null });
-    }
+      await clickMap(page, await toPage(page, mid));
+      await expect(page.getByTestId("editor-action-create-variation")).toBeVisible({ timeout: 3000 });
+    }).toPass({ timeout: 30000 });
+    const created = waitForTrpc(page, "course.setStructure");
+    await page.getByTestId("editor-action-bar").getByTestId("editor-action-create-variation").click();
+    await created;
+    const block = page.getByTestId("editor-variation");
+    await expect(block).toHaveCount(1, { timeout: 15000 });
+    await expect(block.getByTestId("editor-variation-tab-A")).toHaveAttribute("aria-pressed", "true");
+    await expect(block.getByTestId("editor-variation-tab-B")).toBeVisible();
+    await expect.poll(keys, { timeout: 15000 }).toEqual(["A", "B"]);
+    await expect.poll(async () => (await legPieces(page, name)).length, { timeout: 15000 }).toBeGreaterThan(0);
+
+    // Tab B, then K with nothing selected: the control goes into B (§12).
+    const offPt = await offLeg(page, a, b);
+    await block.getByTestId("editor-variation-tab-B").click();
+    await expect(block.getByTestId("editor-variation-tab-B")).toHaveAttribute("aria-pressed", "true");
+    await arm(page, "K");
+    const placed = waitForTrpc(page, "course.setStructure");
+    const x = await place(page, offPt);
+    await placed;
+    await page.keyboard.press("v");
+    await expect(page.locator('[data-testid="editor-seq-row"][data-alternative="B"]')).toHaveCount(1, { timeout: 15000 });
+    await expect(page.locator('[data-testid="editor-seq-row"][data-alternative="B"]')).toHaveAttribute("data-control-id", x.id);
+    await expect(controlRows(page)).toHaveCount(3);
+
+    // Variant ▾ B: the variant's numbering (a 1, x 2, b 3); A: x is on no leg of it.
+    await page.getByTestId("editor-view-variant").selectOption("B");
+    await expect(page.getByTestId("editor-view-variant")).toHaveValue("B");
+    await expect(page.locator(`[data-testid="course-label"][data-site-id="${x.id}"]`)).toHaveAttribute("data-text", "2", { timeout: 15000 });
+    await page.getByTestId("editor-view-variant").selectOption("A");
+    await expect(page.locator(`[data-testid="course-label"][data-site-id="${b.id}"]`)).toHaveAttribute("data-text", "2", { timeout: 15000 });
+
+    // All variations: every alternative drawn, each in its own tint (screen only).
+    await page.getByTestId("editor-view-all-variations").click();
+    await expect(page.getByTestId("editor-view-all-variations")).toHaveAttribute("aria-pressed", "true");
+    const branchA = `${name}#v1/A`, branchB = `${name}#v1/B`;
+    await expect.poll(async () => (await legPieces(page, branchB)).length, { timeout: 15000 }).toBeGreaterThan(0);
+    await viewSettled(page);
+    const tintA = await colourAt(page, await legMidpoint(page, branchA, a.mm, b.mm));
+    const tintB = await colourAt(page, await legMidpoint(page, branchB, a.mm, x.mm));
+    expect(Math.hypot(tintA[0] - tintB[0], tintA[1] - tintB[1], tintA[2] - tintB[2]), `tints ${tintA} / ${tintB}`).toBeGreaterThan(40);
+
+    // Back in Course view: A straight against B through x — the unbalanced check, which locates at the anchor.
+    await page.getByTestId("editor-view-course").click();
+    await page.getByTestId("editor-checks-toggle").click();
+    const row = page.locator('[data-testid="editor-check-row"][data-code="VARIATION_UNBALANCED"]');
+    await expect(row).toBeVisible({ timeout: 20000 });
+    await expect(row).toContainText("A and B");
+    await row.click();
+    await expect(selectedCode(page)).toHaveText(codeA, { timeout: 10000 });
+    await dropSelection(page);
+
+    // Loop: the butterfly's variants are the visiting orders.
+    const looped = waitForTrpc(page, "course.setStructure");
+    // The box shows the stored flag, so it flips once the write lands: a click, not `check()`.
+    await page.getByTestId("editor-variation-loop").click();
+    await looped;
+    await expect(page.getByTestId("editor-variation-loop")).toBeChecked({ timeout: 15000 });
+    await expect.poll(keys, { timeout: 15000 }).toEqual(["AB", "BA"]);
+
+    // F8 (course-print.md §4.6): Export ▾ this course prints one page per variant, AB and BA; All variations one page.
+    const exported = async (entry: string) => {
+      await page.getByTestId("editor-export").click();
+      const [download] = await Promise.all([page.waitForEvent("download"), page.getByTestId(`editor-export-${entry}`).click()]);
+      return analysePdf(await readFile((await download.path())!));
+    };
+    await page.getByTestId("editor-export").click();
+    await expect(page.getByTestId("editor-export-course")).toContainText("2 variants");
+    // No runner is assigned yet: no hand-out stack to print.
+    await expect(page.getByTestId("editor-export-courseRunners")).toBeDisabled();
+    await page.keyboard.press("Escape");
+    // One page per own sheet and variant: a reused control may be another test's map exchange (two part sheets).
+    const printed = await exported("course");
+    type Listed = { courseId: number | null; class: unknown; kind: string };
+    const sheets = (await trpcCall<Listed[]>("courseMap.list", undefined, false)).filter((s) => s.courseId === courseId && s.class === null && s.kind === "course").length;
+    expect(sheets).toBeGreaterThanOrEqual(1);
+    expect(printed.pages).toBe(2 * sheets);
+    expect((await exported("allVariations")).pages).toBe(sheets);
+
+    // Layout mode draws the sheet as one variant (the first key); Variant ▾ picks another, the mode kept.
+    await page.getByTestId("editor-mode-layout").click();
+    await expect(page.getByTestId("editor-layout-scope")).toHaveAttribute("data-sheet", /\d+/, { timeout: 30_000 });
+    await expect(page.getByTestId("editor-view-variant")).toHaveValue("AB");
+    await expect(page.getByTestId("editor-view-all-variations")).toHaveCount(0);
+    const read = waitForTrpc(page, "courseMap.resolveSheet");
+    await page.getByTestId("editor-view-variant").selectOption("BA");
+    await read;
+    await expect(page.getByTestId("editor-view-variant")).toHaveValue("BA");
+    await expect(page.getByTestId("editor-mode-layout")).toHaveAttribute("aria-pressed", "true");
+    await page.getByTestId("editor-export").click();
+    await expect(page.getByTestId("editor-export-variant")).toContainText("BA");
+    await page.keyboard.press("Escape");
+    expect((await exported("variant")).pages).toBe(sheets);
+    await page.getByTestId("editor-mode-course").click();
+    await expect(page.getByTestId("editor-mode-course")).toHaveAttribute("aria-pressed", "true");
+
+    // Undo: the loop, the placement, the group — each one entry; the course is plain again.
+    await page.evaluate(() => (document.activeElement as HTMLElement | null)?.blur());
+    await page.keyboard.press("Control+z");
+    await expect.poll(keys, { timeout: 15000 }).toEqual(["A", "B"]);
+    await page.keyboard.press("Control+z");
+    await expect(page.locator('[data-testid="editor-seq-row"][data-alternative="B"]')).toHaveCount(0, { timeout: 15000 });
+    await expect(page.getByTestId("editor-variation")).toHaveCount(1);
+    await page.keyboard.press("Control+z");
+    await expect(page.getByTestId("editor-variation")).toHaveCount(0, { timeout: 15000 });
+    await expect.poll(keys, { timeout: 15000 }).toEqual([]);
+    await expect(controlRows(page)).toHaveCount(2);
   });
 
-  test("a sheet and a template saved elsewhere: the stale align map and orientation are refused, the other's state shows", async ({ page, browser }, info) => {
-    const frame: Frame = { x: 10, y: 40, width: 190, height: 247 };
+  test("F15: All variations numbers the sites when the variants number alike, codes when a fork is unequal (course-layer.md §12.7)", async ({ page }) => {
     await openEditor(page);
-    const courses = await trpcCall<{ id: number }[]>("course.list", undefined, false);
-    const template = await probeTemplate("Conflict", frame, 5);
-    const sheet = await trpcCall<{ seq: number }>("courseMap.create", { kind: "course", courseId: courses[0].id, templateId: template.seq, overrides: {}, objects: [] });
-    const path = `/${nameIdOf(page)}/course-editor?mode=layout&sheet=${sheet.seq}`;
-    await page.goto(path);
-    await editorReady(page);
-    await expect(page.getByTestId("editor-layout-scope")).toHaveAttribute("data-sheet", String(sheet.seq));
-    const b = await second(browser, info, path);
-    try {
-      /** Select the frame (a click inside it on nothing) and drag it by `by` px: align map, one `courseMap.saveLayout`. */
-      const alignMap = async (p: Page, by: Pt) => {
-        const toPaperMm = await pageToPaperOf(p, frame);
-        const inside = await toPage(p, toPaperMm({ x: 105, y: 160 }));
-        await clickMap(p, inside);
-        await expect(p.getByTestId("editor-layout-selected")).toHaveAttribute("data-kind", "frame");
-        await drag(p, inside, { x: inside.x + by.x, y: inside.y + by.y });
-      };
-      const centreOf = async (p: Page) => (await p.getByTestId("editor-layout-state").getAttribute("data-centre"))!.split(",").map(Number);
+    const name = await newCourse(page, "F15 numbers");
+    const codeA = await appendClear(page);
+    const codeB = await appendClear(page, [codeA]);
+    await expect(controlRows(page)).toHaveCount(2, { timeout: 15000 });
+    const a = await site(page, codeA), b = await site(page, codeB);
+    await viewSettled(page);
+    const mid = await legMidpoint(page, name, a.mm, b.mm);
+    await expect(async () => {
+      await dropSelection(page);
+      await clickMap(page, await toPage(page, mid));
+      await expect(page.getByTestId("editor-action-create-variation")).toBeVisible({ timeout: 3000 });
+    }).toPass({ timeout: 30000 });
+    const created = waitForTrpc(page, "course.setStructure");
+    await page.getByTestId("editor-action-bar").getByTestId("editor-action-create-variation").click();
+    await created;
+    const block = page.getByTestId("editor-variation");
+    await expect(block).toHaveCount(1, { timeout: 15000 });
 
-      // B aligns the map first.
-      const bSaved = waitForTrpc(b.page, "courseMap.saveLayout");
-      await alignMap(b.page, { x: 60, y: 40 });
-      await bSaved;
-      const theirs = (await trpcCall<{ windowCenter: Pt }>("courseMap.get", { seq: sheet.seq }, false)).windowCenter;
+    /** A control into the alternative `tab` (K with nothing selected: it goes into the shown alternative, §12). */
+    const into = async (tab: "A" | "B") => {
+      await block.getByTestId(`editor-variation-tab-${tab}`).click();
+      await expect(block.getByTestId(`editor-variation-tab-${tab}`)).toHaveAttribute("aria-pressed", "true");
+      await dropSelection(page);
+      await arm(page, "K");
+      const placed = waitForTrpc(page, "course.setStructure");
+      const c = await place(page, await offLeg(page, a, b));
+      await placed;
+      await page.keyboard.press("v");
+      return c;
+    };
+    const label = (id: string) => page.locator(`[data-testid="course-label"][data-site-id="${id}"]`);
+    const x = await into("B");
+    const y = await into("A");
+    await expect(page.locator('[data-testid="editor-seq-row"][data-alternative="A"]')).toHaveCount(1, { timeout: 15000 });
 
-      // A, on the sheet's old token: refused; the notice; the sheet reloads with B's centre, nothing of A's written.
-      await alignMap(page, { x: -50, y: 30 });
-      const notice = page.getByTestId("editor-conflict");
-      await expect(notice).toHaveAttribute("data-kind", "refresh", { timeout: 15000 });
-      await expect.poll(async () => {
-        const [x, y] = await centreOf(page);
-        return Math.hypot(x - theirs.x, y - theirs.y);
-      }, { timeout: 15000 }).toBeLessThan(0.01);
-      const kept = (await trpcCall<{ windowCenter: Pt }>("courseMap.get", { seq: sheet.seq }, false)).windowCenter;
-      expect(kept).toEqual(theirs);
-      await page.getByTestId("editor-conflict-dismiss").click();
+    // a 1, x and y 2 (the alternatives number alike), b 3.
+    await page.getByTestId("editor-view-all-variations").click();
+    await expect(page.getByTestId("editor-view-all-variations")).toHaveAttribute("aria-pressed", "true");
+    await expect(label(x.id)).toHaveAttribute("data-text", "2", { timeout: 15000 });
+    await expect(label(y.id)).toHaveAttribute("data-text", "2");
+    await expect(label(a.id)).toHaveAttribute("data-text", "1");
+    await expect(label(b.id)).toHaveAttribute("data-text", "3");
 
-      // The template: both open its scope; B turns it landscape, then A (its token from before) writes the paper
-      // size — refused too, the whole snapshot is never merged (course-layout.md §2).
-      await page.getByTestId("editor-layout-edit-template").click();
-      await expect(page.getByTestId("editor-layout-scope")).toHaveAttribute("data-scope", "template");
-      await b.page.getByTestId("editor-layout-edit-template").click();
-      await expect(b.page.getByTestId("editor-layout-scope")).toHaveAttribute("data-scope", "template");
-      const bTemplate = waitForTrpc(b.page, "mapTemplate.update");
-      await b.page.getByTestId("editor-layout-orientation").selectOption("landscape");
-      await bTemplate;
-      await expect(page.getByTestId("editor-layout-orientation")).toHaveValue("portrait");
-      await page.getByTestId("editor-layout-paper-size").selectOption("A3");
-      await expect(notice).toHaveAttribute("data-kind", "refresh", { timeout: 15000 });
-      const stored = (await trpcCall<{ seq: number; orientation: string; paper: string }[]>("mapTemplate.list", undefined, false)).find((t) => t.seq === template.seq)!;
-      expect(stored).toMatchObject({ orientation: "landscape", paper: "A4" });
-      await expect(page.getByTestId("editor-layout-orientation")).toHaveValue("landscape", { timeout: 15000 });
-    } finally {
-      await b.close();
-      await cleanup("courseMap.delete", { id: sheet.seq });
-      await cleanup("mapTemplate.delete", { id: template.seq });
-    }
+    // A second control into B: the variants number unalike (b is 3 or 4), so codes again.
+    await page.getByTestId("editor-view-course").click();
+    const z = await into("B");
+    await expect(page.locator('[data-testid="editor-seq-row"][data-alternative="B"]')).toHaveCount(2, { timeout: 15000 });
+    await page.getByTestId("editor-view-all-variations").click();
+    await expect(label(x.id)).toHaveAttribute("data-text", x.code, { timeout: 15000 });
+    await expect(label(b.id)).toHaveAttribute("data-text", b.code);
+    await expect(label(z.id)).toHaveAttribute("data-text", z.code);
   });
 });
 
-// docs/course-editor.md §10: the editor's touch subset in Course mode, run by the `mobile` project (Pixel 7). Field
-// mode's own phone flows — the sheet, the long-press move and loupe, the area outline tap and pinch — are
-// `field-mode.spec.ts`; the area-press rule's touch half (a tap on the outline selects, inside does not) is there.
-test.describe("touch (mobile project; docs/course-editor.md §10)", () => {
-  test.skip(({ isMobile }) => !isMobile, "the phone's subset (the desktop flows are above)");
-  let nameId = "";
+test.describe("The action bar stays inside the viewer (docs/course-editor.md §2)", () => {
+  desktopOnly();
 
-  test.beforeEach(async ({ browser }, info) => {
-    // The import dialog is a desktop flow: the fixture from a desktop context, idempotent.
-    nameId = await ensureFixtureFromDesktop(browser, info);
-  });
-
-  async function courseMode(page: Page): Promise<string> {
-    await page.goto(`/${nameId}/course-editor`);
-    await editorReady(page);
-    await expect(page.getByTestId("editor-page")).toHaveAttribute("data-layout", "phone");
-    await page.getByTestId("editor-mode-course").click();
-    await expect(page.getByTestId("editor-mode-course")).toHaveAttribute("aria-pressed", "true");
-    const name = `D10 touch ${Date.now() % 100000}`;
-    const { id } = await trpcCall<{ id: number }>("course.create", { name });
-    await page.reload();
-    await editorReady(page);
-    await page.getByTestId("editor-mode-course").click();
-    await page.getByTestId("editor-course-picker").selectOption(String(id));
-    await expect(page.locator('[data-testid="editor-seq-row"][data-kind="start"]')).toBeAttached({ timeout: 15000 });
-    return name;
-  }
-
-  /** A regular control in the band above the sheet, clear of its neighbours. */
-  async function visibleControl(page: Page, exclude: string[] = []): Promise<{ code: string; at: Pt }> {
-    const viewer = (await page.getByTestId("map-viewer").boundingBox())!;
-    const sheet = (await page.getByTestId("editor-sheet").boundingBox())!;
-    const all = await sites(page);
-    for (const s of all) {
-      if (s.type !== "Control" || !/^\d+$/.test(s.code) || exclude.includes(s.code)) continue;
-      const at = await toPage(page, s.mm);
-      if (at.x < viewer.x + 60 || at.x > viewer.x + viewer.width - 60 || at.y < viewer.y + 110 || at.y > sheet.y - 90) continue;
-      const others = await Promise.all(all.filter((o) => o.id !== s.id).map((o) => toPage(page, o.mm)));
-      if (others.some((o) => Math.hypot(o.x - at.x, o.y - at.y) < 50)) continue;
-      return { code: s.code, at };
-    }
-    throw new Error("no clear control in view");
-  }
-
-  test("Course mode on a phone: a tap selects, the peek row appends, one finger moves the selected control, the overflow undoes", async ({ page }) => {
-    await courseMode(page);
-    const c = await visibleControl(page);
-    const start = (await site(page, c.code)).mm;
+  test("a long Also-in list on a control left of the middle: the bar is shifted inside the viewer and Add to … works", async ({ page }) => {
+    await openEditor(page);
+    const stamp = Date.now() % 100000;
+    const listed = `Bar edge long course name 14 ${stamp}`;
+    const controls = (await trpcCall<{ id: number; kind: string }[]>("control.list", undefined, false)).filter((c) => c.kind === "control");
+    const made: number[] = [];
     try {
-      await touchTap(page, c.at);
-      await expect(page.getByTestId("editor-sheet-selection")).toContainText(c.code, { timeout: 10000 });
-      // The action bar is the sheet's peek row (§10): ≥ 44 px targets, nothing at the selection on the map.
-      const append = page.getByTestId("editor-sheet").getByTestId("editor-action-append");
-      await expect(append).toBeVisible();
-      expect((await append.boundingBox())!.height).toBeGreaterThanOrEqual(44);
-      // The one action bar is the sheet's (`actionLayout: "host"`): the viewer draws none at the selection.
-      await expect(page.getByTestId("editor-action-bar")).toHaveCount(1);
-      await expect(page.getByTestId("editor-sheet").getByTestId("editor-action-bar")).toHaveCount(1);
-      const appended = waitForTrpc(page, "course.setStructure");
-      await append.click();
-      await appended;
+      // Fourteen courses through every control: each control's "Also in" names all of them, wider than the viewer
+      // (docs/bugfix-action-bar-off-viewer.md: the F15 flake had thirteen left by earlier tests).
+      for (let i = 1; i <= 14; i++) {
+        const { id } = await trpcCall<{ id: number }>("course.create", { name: `Bar edge long course name ${i} ${stamp}` });
+        made.push(id);
+        await trpcCall("course.setStructure", {
+          courseId: id,
+          structure: { version: 1, id: `bar-${i}`, orderMode: "ordered", items: controls.map((c) => ({ siteId: c.id })) },
+        });
+      }
+      await page.goto(`/${nameIdOf(page)}/course-editor`);
+      await editorReady(page);
+      await newCourse(page, "Bar edge");
+      const viewer = (await page.getByTestId("map-viewer").boundingBox())!;
+      // The leftmost clear control: centred under it, a bar as wide as the viewer began left of the viewer.
+      const codes = await regularCodes(page, 1000);
+      const at = await Promise.all(codes.map((c) => sitePoint(page, c)));
+      const k = at.reduce((best, p, j) => (p.x < at[best].x ? j : best), 0);
+      expect(at[k].x, "a clear control left of the viewer's middle").toBeLessThan(viewer.x + viewer.width / 2 - 50);
+      await select(page, codes[k]);
+
+      const bar = page.getByTestId("editor-action-bar");
+      const info = bar.getByTestId("editor-context-info");
+      await expect(info).toHaveAttribute("title", new RegExp(listed));
+      const box = (await bar.boundingBox())!;
+      expect(box.x, "the bar's left edge").toBeGreaterThanOrEqual(viewer.x);
+      expect(box.x + box.width, "the bar's right edge").toBeLessThanOrEqual(viewer.x + viewer.width);
+      // The list is cut with an ellipsis inside the bar, never drawn past its border.
+      const infoBox = (await info.boundingBox())!;
+      expect(infoBox.x + infoBox.width).toBeLessThanOrEqual(box.x + box.width + 0.5);
+      const add = bar.getByTestId("editor-action-append");
+      const addBox = (await add.boundingBox())!;
+      expect(addBox.x).toBeGreaterThanOrEqual(viewer.x);
+      expect(addBox.x + addBox.width).toBeLessThanOrEqual(viewer.x + viewer.width);
+
+      const saved = waitForTrpc(page, "course.setStructure");
+      await add.click();
+      await saved;
       await expect(controlRows(page)).toHaveCount(1, { timeout: 15000 });
-      await expect(controlRows(page).nth(0)).toHaveAttribute("data-control-id", c.code);
+      await dropSelection(page);
 
-      // One finger on the selected control drags it at once (no long press), drawn above the finger.
-      const moved = waitForTrpc(page, "control.update");
-      await touchDrag(page, c.at, { x: c.at.x + 30, y: c.at.y - 20 }, { steps: 6 });
-      await moved;
-      await expect.poll(async () => {
-        const now = (await site(page, c.code)).mm;
-        return Math.hypot(now.x - start.x, now.y - start.y);
-      }, { timeout: 15000 }).toBeGreaterThan(0.5);
-
-      // The overflow's undo puts it back.
-      await page.getByTestId("editor-overflow").click();
-      const undone = waitForTrpc(page, "control.update");
-      await page.getByTestId("editor-overflow-menu").getByTestId("editor-undo").click();
-      await undone;
-      await expect.poll(async () => {
-        const now = (await site(page, c.code)).mm;
-        return Math.hypot(now.x - start.x, now.y - start.y);
-      }, { timeout: 15000 }).toBeLessThan(0.01);
+      // The lowest clear control: the bar goes above it when it does not fit below, never past the viewer's bottom.
+      const rest = await regularCodes(page, 1000, [codes[k]]);
+      const ys = await Promise.all(rest.map((c) => sitePoint(page, c)));
+      const low = ys.reduce((best, p, j) => (p.y > ys[best].y ? j : best), 0);
+      await select(page, rest[low]);
+      const lowBox = (await bar.boundingBox())!;
+      expect(lowBox.y, "the bar's top").toBeGreaterThanOrEqual(viewer.y);
+      expect(lowBox.y + lowBox.height, "the bar's bottom").toBeLessThanOrEqual(viewer.y + viewer.height);
+      if (ys[low].y + 30 + lowBox.height > viewer.y + viewer.height - 8) {
+        await expect(bar).toHaveAttribute("data-placement", "above");
+        expect(lowBox.y + lowBox.height).toBeLessThan(ys[low].y);
+      }
+      const appended = waitForTrpc(page, "course.setStructure");
+      await bar.getByTestId("editor-action-append").click();
+      await appended;
+      await expect(controlRows(page)).toHaveCount(2, { timeout: 15000 });
+      // Nothing scrolled the clipping viewer to reach a button.
+      expect(await page.getByTestId("map-viewer").evaluate((el) => [el.scrollLeft, el.scrollTop])).toEqual([0, 0]);
     } finally {
-      await cleanup("control.update", { id: Number(c.code), xpos: start.x, ypos: start.y });
-    }
-  });
-
-  test("the pin-drop K flow in Course mode appends a placed control to the course and the layer draws its leg", async ({ page }) => {
-    const name = await courseMode(page);
-    const before = new Set((await sites(page)).map((s) => s.code));
-    await page.getByTestId("editor-field-add").click();
-    await page.getByTestId("editor-add-K").click();
-    await expect(page.getByTestId("editor-touch-bar")).toBeVisible();
-    const placed = waitForTrpc(page, "course.setStructure");
-    await page.getByTestId("editor-touch-place").click();
-    await placed;
-    await page.getByTestId("editor-touch-done").click();
-    await expect(page.getByTestId("editor-touch-bar")).toHaveCount(0);
-    await expect(controlRows(page)).toHaveCount(1, { timeout: 15000 });
-    const code = (await controlRows(page).nth(0).getAttribute("data-control-id"))!;
-    expect(before.has(code)).toBe(false);
-    try {
-      // The start → control leg ends at the new circle's rim.
-      const mm = (await site(page, code)).mm;
-      await expect.poll(async () => (await legPieces(page, name)).some((l) => {
-        const end = l.points.at(-1)!;
-        return Math.hypot(end.x - mm.x, end.y - mm.y) < 4;
-      }), { timeout: 15000 }).toBe(true);
-    } finally {
-      await cleanup("control.delete", { id: Number(code) });
+      for (const id of made) await trpcCall("course.delete", { id }).catch(() => undefined);
     }
   });
 });

@@ -857,10 +857,12 @@ event maps (06 §5.1):
   document has `suggested` matches. The count is `clubMap.list[].review`
   `{suggested, reviewed}`, read from the document's import report
   (`report.matching.symbols`) — the one field B6 adds to the API.
-- The course editor's map info row (`MapPanel` with `showMapInfo`):
+- The course editor's map-info dialog (the top bar's map icon,
+  `editor-map-info` → `editor-map-info-review`; P6 moved it there from
+  `MapPanel`'s map-info footer, [course-editor.md](course-editor.md) §2):
   **Review symbols** when `course.mapMetadata().documentHash` is set.
-  Never on the kiosk or the dashboard map, which mount `MapPanel` without
-  that row.
+  Never on the kiosk or the dashboard map: `MapPanel` itself carries no
+  review link.
 
 **Header.** Map name, library `id · release`, and where the document
 stands: *in use* (it is the club version's / the event's pinned

@@ -41,9 +41,16 @@ export interface GoldenScene {
 }
 
 export function goldenScene(name: GoldenSceneName, fonts: FontMetrics[]): GoldenScene {
-  if (isLibrarySceneName(name) || isCourseSceneName(name)) {
-    const scene = isLibrarySceneName(name) ? libraryScene(name) : courseScene(name);
+  if (isLibrarySceneName(name)) {
+    const scene = libraryScene(name);
     const { stream } = symbolise({ objects: scene.objects, symbols: scene.symbols, fonts });
+    const hex = scene.colours.map((c) => cmykToHex(c.cmyk));
+    return { name, stream, colour: (i) => hex[i] ?? "#ff00ff" };
+  }
+  if (isCourseSceneName(name)) {
+    // The layer's regions (a corridor's band, course-layer.md §10.2) act on the base map only.
+    const scene = courseScene(name);
+    const { stream } = symbolise({ objects: scene.objects, symbols: scene.symbols, fonts, regions: scene.layer.regions, regionObjectLimit: scene.courseObjectOffset });
     const hex = scene.colours.map((c) => cmykToHex(c.cmyk));
     return { name, stream, colour: (i) => hex[i] ?? "#ff00ff" };
   }

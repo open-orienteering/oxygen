@@ -38,8 +38,10 @@ with `main` — with `exports` present Node ignores `main`.
 | `print/page.ts` | the page model (§4): `PageInput`, `ComposedPage`, `T_map`, `flipPageObject`, `transformPassStream` |
 | `print/compose.ts` | `composePage`, `writePage` (§4, §6.3) |
 | `print/description.ts` | the description block and the IOF pictogram glyphs (§6.2) |
+| `print/description-sheet.ts` | description sheets: the block tiled on A4, a page drawn on the writer (§6.4); the options' constants are `course-maps/description-sheet-options.ts` (root export, read by the web dialog too) |
 | `print/geo.ts` | the `/Measure /GEO` viewport (§7.3) |
 | `print/__fixtures__/pages.ts` | the page scenes (§7.5) |
+| `print/__fixtures__/description-sheets.ts` | description-sheet blocks and the `descriptions-a4` scene (§6.4, §7.5) |
 | `print/index.ts` | the module's exports |
 
 **Writer.** `@cantoo/pdf-lib` (the maintained fork of `pdf-lib`, 05 §6
@@ -200,8 +202,8 @@ appearance, view options, filter regions, and the event's course objects
 in scope of the sheet — `objects`, `docs/course-layer.md` §8.3 — the
 course layer's input without the document, `docs/course-layer.md` §2;
 stored `filter_region` objects reach the page's clip paths through them),
-`objects` (layout objects of both
-anchors), `textValues`, `description` (§6.2, or null), `label`, `geo`
+`objects` (the template's and the
+sheet's layout objects, all page-anchored since F12), `textValues`, `description` (§6.2, or null), `label`, `geo`
 (§7.3, or null). `resolveSheet` (§5) builds everything but `map` and
 `geo`; `pdf-page.ts` adds them from the pinned document.
 
@@ -230,12 +232,13 @@ Base-map scale and meridian tilt come from `getBaseMapInfo` only (§10).
 1. `courseLayer({ …input.course, objects, viewOptions: { …, window,
    textValues }, document: map.context, cutFeatures })`. `window` is the
    frame mapped back through `T_map⁻¹`, grown by 1 mm
-   (`RING_BLEED_UM`), as the outer ring of a map-anchored white-out
+   (`RING_BLEED_UM`), as the outer ring of a toner saver's white-out
    outside: the clip trims it, and no anti-aliased seam of map ink is left
    where a ring edge and the clip edge coincide.
 2. `courseRenderInput(map, layer)` → one `symbolise` call: lower purple
-   under the line art, map-anchored white-outs at upper white, upper
-   purple and the layout objects' colours on top — the stack's order, no
+   under the line art, white-out course objects at upper white, upper
+   purple and the course objects' colours on top, a toner saver's white
+   above them all (`course-layer.md` §3.6, P1) — the stack's order, no
    sandwich, nothing drawn twice. The layer's filter regions go into the
    same call (`regions`, `regionObjectLimit`; `map-rendering.md` §4.11):
    hidden objects leave the stream, clipped passes carry masks that the
@@ -262,9 +265,10 @@ course layer so the web worker has it without the PDF writer) builds it;
 `composePage` calls it, and the editor's Layout mode draws the same
 stream (`course-layout.md` §1).
 
-Page-anchored objects are flipped to y-up page mm, re-anchored as `map`
-and drawn by the course layer's own object builder (`layoutObjects`, C0)
-with `overprintScale: 1` and the frame, grown by the same 1 mm
+Layout objects (all page-anchored) are flipped to y-up page mm
+(`flipPageObject`) and drawn by the course layer's object builder in its
+page form (`pageObjects`, `objects.ts`; F12 split it from the course
+objects' `courseObjects`) with the frame, grown by the same 1 mm
 (`RING_BLEED_UM`), as the white-out-outside ring (legacy: the ring against
 the map frame; the extra millimetre is white on the white sheet and keeps
 the ring's outer edge off the frame clip's edge, so no map ink seam shows
@@ -275,7 +279,8 @@ page layer to the printable area, but legacy never clipped to
 `printMarginMm` (it only warns, `validate.ts`), and slice C keeps that.
 
 **Colour table.** The page layer shares the map layer's table: the
-course layer's completed stack (`layer.colours`, upper white included),
+course layer's completed stack (`layer.colours`, upper white included,
+ending with the toner saver white when the map layer draws one),
 then `#ffffff` and the block's ink when a block is drawn, then the hex
 colours of page objects in first-use order (`withObjectColours`). So a
 page white-out prints in the stack's upper white, a page 709 in its upper
@@ -292,6 +297,85 @@ page foreground — the same order).
 all pages' glyphs, one form XObject per distinct glyph part (7xx parts
 and IOF pictograms included), one image XObject per distinct PNG.
 
+**Copies** (F8): a sheet may carry `copies` (`PrintSheet = SheetInput &
+{ copies? }`, absent = 1, 0 = no page). It is composed and written once;
+`PdfWriter.copyPage(page, n − 1)` adds the other pages, each a page
+object that shares the written page's content streams and resources
+(`/Contents`, `/Resources`, `/TrimBox`, `/VP`), so a stack of twelve
+costs one page's bytes plus eleven small page objects. A copy repeats
+the page label and has no outline item (one per composed page).
+`writePage` returns its `PdfWriterPage` for this; `renderCoursePages`'s
+`pageCount` counts the copies, `onPage` fires once per composed sheet.
+
+### 4.6 Variant pages
+
+A **root** (a course with variation groups, `course-layer.md` §12) has
+no page of its own: print is always one variant (08 §5.3). Each of its
+own `kind = 'course'` sheets — the layout the variants share (08 §4.6,
+`course-maps.md` "Forking contract") — prints once per live child
+(`courses.parent_course_id`), in key order (`course.variantList`'s),
+whatever selected the sheet (`courses`, `classes`, `maps`, the unfiltered
+export):
+
+- **`rowForVariant(row, child)`** (`pdf-page.ts`): the row's template,
+  overrides, objects and window centre; the course's name, length,
+  climb, structure (the linear `variantStructure`), `course_controls`
+  (label offsets), ends and description instructions are the child's;
+  its id and classes stay the root's — course objects are scoped to the
+  root, and a class prints its root (`rowForClass` first). So the page
+  label, outline title, block header and `{course}` are `<root> <key>`
+  (`Long AB`), `{variant}` is the key, numbering and legs the
+  variant's.
+- **The shared window**: a stored centre wins; a NULL one centres on
+  every site any alternative visits and the course's ends
+  (`sharedWindowCentre`), so every variant page — and the
+  all-variations page, and the root's own read in the editor and
+  `courseMap.list` — shows the same window. A course split by map
+  exchanges keeps its parts' own centring (§5.2 "Part sheets").
+- **The all-variations page** (`?allVariations=`, answer 4: for
+  officials; the runners' maps are the variant pages):
+  `allVariationsRow(row, keys)` prints each own sheet once with the
+  spine and every alternative's branch (`course.allVariationStructures`
+  — the editor's All-variations view, `course-layer.md` §12.7) in **the
+  one purple**: no `tint`, no `allVariations` view option (F7's fixture
+  holds). **Labels** (F15; the user's answer Q4, 2026-11-08): numbers
+  when every visited site has exactly one sequence number across all
+  variants (`course.uniformVariantNumbers`, `course-layer.md` §12.1 —
+  equal forks), else codes (unequal forks, every loop with two or more non-empty petals). The numbers go as
+  `viewOptions.labels` (`PageInput.course.viewOptions` gains `labels`;
+  `labelMode` stays `code`), computed in `resolve-sheet.ts`
+  (`allVariationNumbers`: a positioned site that is a control, as the
+  layer numbers it; the editor's All-variations view computes the same,
+  `course-editor.md` §12); `numberHidden` is ignored. The block lists
+  every visited control once, **by number when the labels are set** — each
+  row carries the number the variants share (`BuildDescriptionSheetInput
+  .controls[i].sequence`, `LayoutControlSource.sequence`), two rows
+  (the alternatives' second controls) may share one, listed in first-seen
+  order within a number, the thick rule after every third row counting
+  rows, a control without a number (unplaced) last — else in first-seen order without numbers (the course is passed
+  as `free_order` to the layout; its structures stay ordered, so legs
+  draw); the name, label and `{variant}` carry the keys joined by `/`
+  (`Long AB/BA`; after five, `…`: `allVariationsSuffix`). The length is
+  the root's (its first-alternatives path).
+- **Copies for the hand-out** (`&copies=runners[&spare=n]`, answer 3 —
+  variants are pre-set per runner, F6b): each page is repeated once per
+  runner it is for, plus `spare`: a variant page per non-removed runner
+  with `runner.course_id` = the child (the count
+  `course.variantList.runnerCount` shows), a plain course page per runner
+  whose own course, else class course, it is; with `?classes=` only that
+  class's runners. Pages stay in key order, so the stack comes out
+  sorted. A page with no runner and no spare is left out; nothing at all
+  is a 400. A per-runner page with the runner's name is **not** printed
+  (a separate feature if wanted, SLICES F0).
+
+`courseMap.resolveSheet { seq | classSeq, variantKey }` reads the same
+row (`course-layout.md` §1), so Layout mode and Class view draw what
+prints. Decided on the user's standing instruction (2026-11-07), for
+review: `{course}` is the child's name (templates use `{course}`, and the
+runner's map then names her course); copies share one content stream
+rather than being re-written; the all-variations block without numbers (F15: with the shared numbers when the variants number alike);
+the 200-page cap counts composed pages, copies up to 5 000 pages.
+
 ## 5. `resolveSheet`
 
 `packages/api/src/course-maps/resolve-sheet.ts` — the 08 §4.6 boundary
@@ -307,7 +391,7 @@ with `sheet` = `PageInput` minus `map` and `geo`.
 | `paper` | `getPaperDimensions(paper, orientation, custom)` |
 | `frame`, `window` | `document.mapFrame`, `layout.window` (`mapScale` and `meridianTiltDeg` from `getBaseMapInfo`) |
 | `course.appearance` | `appearanceFromTemplate(document.appearance)` — multipliers of the library sizes (`docs/course-layer.md` §2) |
-| `course.viewOptions` | `allControls` = `kind === "all_controls"`, `labelMode`, `overprintScale` from the layout; `autoCuts: false` when the event's **Auto cuts** toggle is off (`ResolveSheetInput.autoCuts` from `MapRowContext.autoCuts`; no key when on — `docs/course-layer.md` §3.4, D17) |
+| `course.viewOptions` | `allControls` = `kind` is `"all_controls"` or `"setter"` (F10), `setterMarks` likewise (F4: the map-issue points and every crossing point among the sheet's sites, `course-layer.md` §10.3), `labelMode` from the layout; `autoCuts: false` when the event's **Auto cuts** toggle is off (`ResolveSheetInput.autoCuts` from `MapRowContext.autoCuts`; no key when on — `docs/course-layer.md` §3.4, D17); `section` = the row's `section_index` when the course has ≥ 2 parts and it is in range (`layout.section`, F5 — `course-layer.md` §11; no key otherwise, so a one-part course's stream is unchanged) |
 | `objects`, `textValues` | `document.objects` (template + sheet), `layout.textValues` |
 | `description` | `document.description` position and cell size, `layout.descriptionRows` / `descriptionHeader`, title = course name, else map name; null when the template hides the block |
 | `label` | course name, else map name (page label and outline title, §7.2) |
@@ -326,24 +410,66 @@ with `sheet` = `PageInput` minus `map` and `geo`.
   the event's lowest-seq start / finish unless `first_as_start` /
   `last_as_finish`; an unplaced (0, 0) start or finish is not drawn.
   `maps.pdf`, `courseMap.resolveSheet` and `courseMap.list` pass the
-  event's live controls with `name` and `kind` for it,
-  `mapTemplate.previewLayout` the live start and finish rows (all the
-  rule looks up: a structure's ends are its first and last items). The layout's `legs` (the `courseMap.list` /
-  `previewLayout` wire) are straight centre-to-centre lines between the
+  event's live controls with `name` and `kind` for it (all the
+  rule looks up: a structure's ends are its first and last items). The layout's `legs` (`resolveMapLayout`'s;
+  no wire answers them since E-pages) are straight centre-to-centre lines between the
   drawn controls, none under free order; the page draws the course
   layer's own legs. `CourseOverlayControl.cuts` is no longer filled.
 - **Course sheets**: a v1 structure with one item per layout control in
-  order, `role` = its type; `labelOffsets` = stored label position −
-  site. The course-level lines and areas are course objects (`course-layer.md`
+  order, `role` = its type, each item's whole stored leg (F1–F4);
+  `labelOffsets` = stored label position − site. The **crossing points**
+  the stored legs run through join the sites (F4, `course-layer.md`
+  §10.3: `courseInputOfLayout` reads them from `ResolveSheetInput.allControls`;
+  no other crossing or map-issue point is drawn), and the block derives
+  their 13.3 / 13.4 rows (`LayoutCourseSource.crossings`). The course-level lines and areas are course objects (`course-layer.md`
   §8), no longer read from the geometry. Free order is carried as `orderMode`.
+- **Part sheets** (F5, `course-layer.md` §11): `PrintMapRow.sectionIndex`
+  (`course_maps.section_index`) reaches `resolveMapLayout { section }`.
+  On a course of ≥ 2 parts with the section in range, a NULL window
+  centre centres on **that part's** placed controls (the exchange
+  included, `sectionsOf` over the layout's controls typed by the
+  sites' `kind`) and the sheet's `viewOptions.section` draws the part;
+  the description block, its header and `{controls}` stay the whole
+  course's (answer 2) and carry a **13.5** row after each exchange
+  control (derived from the course's own control rows' `kind`, so a
+  NULL structure gets it too). A stored centre wins as on any sheet. Out
+  of range (a part sheet whose exchange was removed) the sheet is the
+  whole course.
+- **Variant sheets** (F8, §4.6): a root's sheet as one variant — the
+  row's `course` from the child (`rowForVariant`), so the structure,
+  sites, block and label are the variant's; `variantKey` reaches
+  `textValues.variant`; a NULL window centre is the shared one.
+- **The all-variations sheet** (F8, §4.6): `ResolveSheetInput.allVariations`
+  with the root's stored structure: `course.structure` is an **array**
+  — the spine, then one branch per alternative (ids
+  `<course>:<group>:<label>`), each with the sheet's label offsets, the
+  layout's start / finish completing an implicit spine end, the crossing
+  points any branch runs through among the sites — and the course's
+  controls (`allVariationControls`) every visited control once. No
+  `tint` is set; `viewOptions` has no `allVariations` key.
 - **All-controls sheets**: `structure: null`, every site drawn with
-  codes (`viewOptions.allControls`).
+  codes (`viewOptions.allControls`), typed by `kind` (`resolveMapLayout`,
+  F4: crossing points as 710, map-issue points as 702, an exchange as a
+  control); the block lists the controls only.
+- **Setter sheets** (F10, `course-layout.md` §8): `kind = 'setter'` joins
+  the all-controls branch of `resolveMapLayout` (no layer change) with
+  `ResolveSheetInput.allControls` = the group only — `sheetInputForMapRow`
+  filters `ctx.allControls` by `props.controlIds` (`setterSheetInput`,
+  `PrintMapRow.props`) and passes no course (a course's setter map draws no
+  legs), the `all`-scoped course objects and the row's name as title. So:
+  `structure: null`, the group's sites typed by `kind` (702 / 710), codes,
+  setter marks, the block the group's control rows in code order with no
+  header, at the row's 5 mm cells (`overrides.description.cellSizeMm`).
 - **Authored geometry** comes from the stored structure and the controls
   (D1 retired deviation (e), which read the `ocd` GeoJSON): circle gaps
-  from `controls.circle_gaps`, leg gaps from the structure's
-  `LegProps.gaps` (`courses.structure`; aligned to the layout's controls
-  on the first site both name, so a start the layout does not draw
-  shifts nothing), an empty one meaning the automatic cuts. Every course gets legs and
+  from `controls.circle_gaps`, legs from the structure's `LegProps` —
+  the item's whole stored leg: gaps, style and bends since F1, its
+  corridor since F2 (`course-layer.md` §10.1, §10.2; `courses.structure`; aligned to the layout's
+  controls on the first site both name, so a start the layout does not
+  draw shifts nothing), an empty gap list meaning the automatic cuts. A
+  `marked_route` leg prints 707's dashes as one subpath per dash
+  (§4.3); a corridor's band is a clip region over the map passes (a
+  `W*` clip, §4.3), its edge a lower-purple 705 stroke. Every course gets legs and
   automatic cuts from the course layer, with cut features from the
   pinned document (`cutFeaturesOfDocument`, §3.4 there) — unless the
   event's **Auto cuts** toggle is off: then the sheet carries
@@ -364,12 +490,12 @@ document objects within 20 mm of the window's bounding box (C6's
 
 ### 6.1 Page-anchored objects
 
-All `course-maps` schema kinds, as on the map (`docs/course-layer.md`
-§3.6) but in page mm: text with placeholders, lines and paths (dashes as
+All `course-maps` schema kinds (`docs/course-layer.md` §3.6) in page mm:
+text with placeholders, lines and paths (dashes as
 legacy print draws them), rectangles, `solid` fills, `whiteout`,
 `whiteoutInverted` (ring against the frame + 1 mm, §4.4), `outOfBounds` (709 / 709.b /
-709.c from the library), images (§6.3). Sizes are page mm and never
-divided by `overprintScale`. User colours print through the inverse
+709.c from the library), images (§6.3). Sizes are page mm as stored.
+User colours print through the inverse
 naive conversion in `cmyk` and as the hex in `rgb` (§2).
 
 ### 6.2 Description block
@@ -399,9 +525,9 @@ formula for formula, as objects for the shared stage:
 
 ### 6.3 Graphics
 
-Image objects become `PageImage`s in their layer's space (map-anchored:
-paper µm under `T_map`, so they turn with a rotated window; page-anchored:
-page µm). The composer takes PNG bytes per graphic id; `writePage`
+Image objects become `PageImage`s in their layer's space (an `image`
+course object: paper µm under `T_map`, so it turns with a rotated window;
+a page-anchored layout object: page µm). The composer takes PNG bytes per graphic id; `writePage`
 embeds each distinct PNG once (`/Subtype /Image`, `Im<n>` in first-use
 order) and draws it `q [<rect> re W n] <w 0 0 h x y> cm /Imn Do Q`,
 stretched to the rectangle like the legacy `preserveAspectRatio="none"`,
@@ -417,6 +543,77 @@ export. The composer itself never sees SVG — `@oxygen/shared/print`
 stays isomorphic (§1; a test reads the module's imports). Images are
 DeviceRGB in both modes: CMYK conversion of images belongs to the
 offset profile (05 §5.7, §2).
+
+### 6.4 Description sheets
+
+Control descriptions printed on their own, many to a sheet, to cut apart
+and hand out at the start (08 §1 Organiser row, §3 "print sheets by
+participant count", §4.6 "Control-description sheets"; F11). Printed on
+demand from the request's options: no `course_maps` row (the slice F
+split's decision, 08 §4.8 — a row would hold three fields and need a list
+UI), no base map and no template.
+
+**Route.** `GET /api/maps/:nameId/descriptions.pdf` (`courses.view`;
+`packages/api/src/course-maps/descriptions-pdf.ts`):
+
+| Parameter | Values | Default |
+|---|---|---|
+| `classes` | class seqs, comma-separated, printed in the order given | — |
+| `courses` | course seqs, comma-separated; exclusive with `classes` (400) | — |
+| (neither) | every class with a course, in class order (`sort_index`, then seq) | |
+| `copies` | `count` · `fill` · a number 1–500 | `count` |
+| `cell` | `5` · `6` · `7` (mm) | `6` |
+| `gap` | mm between blocks, 0–30 | `5` |
+
+- **One block per class** (or per course with `courses=`). The block is
+  the map page's (§6.2): rows and header from `resolveMapLayout` — the
+  function every sheet resolves through (§5) — on a stand-in A4
+  template, so start, controls, special rows, the finish and its
+  measured length (with a base map; else the instructions' length only)
+  are the sheet's by construction. The header names the class
+  (`classes=`, as a class prints its map, `course-layout.md` §6) or every
+  class of the course (`courses=`). A class without a course is skipped.
+- **Copies.** `count` = the class's runners (not removed, not withdrawn:
+  `class.list`'s count) + its `vacant_count`; a course's = the sum over its
+  classes; at least 1, so a class with nobody yet still prints a proof.
+  `fill` = as many as one sheet holds; a number = that many.
+- **Tiling** (`tileDescriptionSheets`, `print/description-sheet.ts`; pure):
+  A4 portrait, a 10 mm margin; the block `8 × cell` wide and
+  `cell × (rows + 3)` high (`descriptionBlockSize`); columns =
+  `⌊(190 + gap) / (8·cell + gap)⌋`, rows likewise over 277 mm. Blocks are
+  placed row-major from the top-left. **Classes never share a page**: a
+  class's copies run onto as many pages as they need, the next class
+  starts a new page, so every page has one label. A 14-row block (12
+  controls) fits 4 × 3 at 5 mm, 3 × 2 at 6 and 7 mm (gap 5). A block
+  taller than the usable page is a 400 `DESCRIPTION_TOO_TALL` naming the
+  class and the cell size (a 40-control course at 7 mm).
+- **Pages.** `composeDescriptionPage` puts every block of a page through
+  `descriptionBlock()` and one `symbolise` (page µm, y-up; white and the
+  ink as the page's colours, as `pageLayer` adds the block's);
+  `writeDescriptionPage` writes the white sheet and the stream under
+  µm → pt — `writePage`'s page-layer lines without a frame or map layer
+  (§4.3–4.4). All pages go through one `PdfWriter`, so a pictogram is one
+  form XObject and each face one font for the document (§1, 05 §5.10).
+  `/PageLabels` and the outline carry the class (or course) name (§7.2).
+  **In process**, not in the print worker: there is no document to
+  decode, and §8.2's other concern — composing and writing on the event
+  loop — is met by writing **one page per turn of the loop**
+  (`setImmediate` between pages, as `renderCoursePages` does) under a
+  **render-gate permit** (`renderGate()`, so prints never exceed
+  `MAP_RENDER_CONCURRENCY` together). Measured 2026-11-07 (14-row block,
+  6 mm, `cmyk`): ~18 ms a page; 200 pages (the cap) in 3.5 s with the
+  event loop's longest wait 32 ms, the save included.
+- **Response** as `maps.pdf` (§8.3): `application/pdf`,
+  `attachment; filename="<event>_descriptions.pdf"`, `no-store`, `cmyk`,
+  real dates (the builder takes `deterministic` for tests, §3.2);
+  `Info /Title` `<event> descriptions`, `/Author` the organiser. 400 for
+  a bad parameter, an unknown class or course, a block too tall, or more
+  than 200 pages (the `maps.pdf` cap, counted before drawing); 404 "Event
+  not found" / "Unknown event"; 404 `{ error: "No descriptions" }` when
+  nothing selected has a course.
+- **UI**: Export ▾ *Description sheets…* in the editor and the Courses
+  page's export menu open one dialog (`course-layout.md` §7). `gap` is the
+  route's only (the dialog uses the default).
 
 ## 7. Boxes, metadata and geospatial
 
@@ -463,7 +660,7 @@ map's (§8.4 `library-symbols`, `stack-order`) and the two differences
 of decision (3): spec-sized 7xx
 symbols, the 701 turned to the first control, 709 from the library and
 start / finish clearance (C0); Liberation Sans in the block (the legacy font stack lists
-DejaVu Sans first); map-anchored images, control numbers and map text
+DejaVu Sans first); image and text course objects and control numbers
 turn with a rotated window (legacy drew the overprint upright in page
 space); imported `marked_route` / `restricted_line` / `forbidden_route`
 lines drawn by the library; images DeviceRGB in `cmyk`.
@@ -474,23 +671,28 @@ lines drawn by the library; images DeviceRGB in `cmyk`.
 |---|---|
 | `print/__tests__/page.test.ts` | `T_map` against `mapToPage` (0°, ±rotation), inverse, frame in map space, `flipPageObject`, `transformPassStream` (slices kept, widths / taper / glyph instances / text scaled and turned, hatch lines on the transformed lines) |
 | `print/__tests__/description.test.ts` | every `IOF_SYMBOLS` key converts; 2.4 one fill, 1.10 one disc, 0.3 two strokes + disc, Bézier flags; block size and position, border, thick / thin rules, header sizes and weight, F text 0.34 × cell, pictograms centred at 0.8 × cell, one symbol per key |
-| `print/__tests__/compose.test.ts` | one colour-sorted map stream with lower purple < black < upper purple; block text / rules / pictograms on appended colours; no block → empty page layer; map ring outer boundary = frame (+1 mm) through `T_map⁻¹`, page ring = frame + 1 mm, page white-out at upper white; placeholders; rotated `T_map`; images in layer space; `CourseStackError`; auto cuts off = the stream without cut features (D17) |
+| `print/__tests__/compose.test.ts` | one colour-sorted map stream with lower purple < black < upper purple; block text / rules / pictograms on appended colours; no block → empty page layer; map ring outer boundary = frame (+1 mm) through `T_map⁻¹` in the toner saver white, page ring = frame + 1 mm, page white-out at upper white; P1: with a 709 area and a course text outside a map toner saver, its ring is the map layer's last pass (the page layer still draws after); placeholders; rotated `T_map`; images in layer space; `CourseStackError`; auto cuts off = the stream without cut features (D17) |
 | `print/__tests__/writer.test.ts` (C8) | a bold text symbol and a regular one embed two font objects, `…+LiberationSans` and `…+LiberationSans-Bold` |
 | `print/__tests__/write-page.test.ts` | operator order (sheet, frame clip, `T_map` `cm`, page `cm`), no `rg` in `cmyk` / no `k` in `rgb`, rotated `cm`, two pages sharing font, glyph forms and image XObject, page labels and outlines, `/Measure /GEO` (SWEREF99 TM corners near 58.6° N 15° E, rotated corners), deterministic bytes, missing image warning, an object far outside the frame absent from the content stream (C13) |
 | `print/__tests__/isomorphic.test.ts` | no Node API, `Buffer`, sharp or resvg in the module |
 | `packages/api/src/__tests__/course-print-sheet.test.ts` | `resolveSheet`: paper / frame / window / tilt, structure and roles, unique sites, label offsets, extras, authored gaps from the structure only (start and finish rows, no GeoJSON, E6), description block / hidden, all-controls, free order, the event's auto cuts off on the view options (D17) |
 | `packages/api/src/__tests__/course-map-layout.test.ts` "course sites", "layoutCourseEnds" (E6) | start, `course_controls` and finish from the rows with straight legs, no `cuts`; an unplaced end not drawn; the ends of a NULL structure from the columns (lowest-seq defaults, `firstAsStart`) and of a stored one from its items |
-| `packages/api/src/__tests__/integration/course-maps.test.ts` "creates, duplicates and applies…", "previews a template layout…" (E6) | a course with no structure and no GeoJSON lists and previews start → controls → finish (the event's first start / finish), straight legs |
+| `packages/api/src/__tests__/integration/course-maps.test.ts` "creates, duplicates and applies…", "resolveSheet: a template previewed…" (E6; E-pages read both through `resolveSheet`, `previewLayout` gone) | a course with no structure and no GeoJSON resolves start → controls → finish (the event's first start / finish) and its description rows; a template alone resolves centred on the map origin |
 | `packages/api/src/__tests__/integration/course-print.test.ts` | the E2E fixture map pinned on a `vector` event: legacy event → no print document; two sheets → one PDF of two A4 pages, `TrimBox`, labels, outlines, Type0 / CIDFontType2 shared, frame clip and `T_map`, no `rg`, PNG and rasterised SVG logos shared (600 dpi), `/Measure /GEO` of the fixture's georeference, deterministic bytes |
 | `packages/api/src/render/__tests__/page-raster.test.ts` | the page oracle: white outside the frame and the ring, map inside, page box on top; rotated building where `T_map` puts it; block position on A4 |
-| `packages/api/src/render/__tests__/golden-files.test.ts` | `page-sprint-a4`, `page-ring`, `page-rotated` match the page oracle |
+| `packages/api/src/render/__tests__/golden-files.test.ts` | `page-sprint-a4`, `page-ring`, `page-rotated` match the page oracle; `descriptions-a4` matches the description-sheet oracle (F11) |
+| `print/__tests__/description-sheet.test.ts` (F11) | §6.4: a 14-row block 4 × 3 / 3 × 2 / 3 × 2 per page at 5 / 6 / 7 mm; placement inside the margin; `count` (runners + vacancies, at least 1), a number, `fill`; 13 copies at 5 mm → two pages of one class; classes in order, never sharing a page; the gap only between blocks (0 / 20 / 30 mm); `DESCRIPTION_TOO_TALL`; the writer: one A4 page per tiled page labelled by class, one outline item each, the white sheet first, no `rg` in `cmyk` / no `k` in `rgb`, the XObject set the same for one page and three, deterministic bytes |
 
 The page goldens (`e2e/__golden__/map-gl/page-*.png`, 05 §7 tier 3) are
 the page oracle (`render/page-raster.ts`): the map layer moved through
 `T_map` into page µm (`transformPassStream`) and rasterised over the
 frame alone — the frame clip is the raster's extent — composited with the
 page layer on white paper, at 10 px/mm, supersampled 2× (an A4 sheet at
-the scene goldens' 4× would be a ~400 MB intermediate). The WebGL2
+the scene goldens' 4× would be a ~400 MB intermediate). The
+description-sheet golden (`descriptions-a4.png`, F11:
+`descriptionSheetScene()`, one class at 6 mm cells, `fill` → 3 × 4
+blocks) is the same oracle with no map layer
+(`rasteriseDescriptionPage`). The WebGL2
 golden spec does not draw pages (the viewer has no page view until slice
 D); the PDF golden tier compares the `rgb` page rasterised by
 `pdftocairo` against them (§9.2).
@@ -498,8 +700,10 @@ D); the PDF golden tier compares the `rgb` page rasterised by
 ## 8. The `maps.pdf` route
 
 `GET /api/maps/:nameId/maps.pdf` (`docs/course-maps.md` API: query
-`maps` / `courses` / `allControls`, `courses.view`, 200-page cap, pages
-ordered by course, `sort_order`, `seq`) prints every event through the
+`maps` / `courses` / `classes` / `allControls` / `setter` / `variants` /
+`allVariations`, `copies` / `spare`; `courses.view`; 200 composed pages
+and 5 000 pages with copies at most; pages ordered by course,
+`sort_order`, `seq`, then variant key) prints every event through the
 composer (`packages/api/src/course-maps/routes.ts`) since E3, the flip
 (`map-pipeline-switch.md`, history note). It reads the `course_maps`,
 `map_templates`, course, control and graphics rows and writes nothing.
@@ -525,7 +729,9 @@ re-import (the review's colour decisions).
 
 ### 8.2 The vector path
 
-1. The rows `findMapRows` selects, each turned into a sheet by
+1. The pages `selectPrintPages` selects (the rows; a root's sheet once
+   per variant or as its all-variations page; each with its copies —
+   §4.6, `course-layout.md` §7 lists the query), each turned into a sheet by
    `sheetForMapRow` (§5) with the event, its controls, its
    `autoOverprintCuts` (`MapRowContext.autoCuts`, §5.2) and the pinned
    document's `getBaseMapInfo` scale and meridian tilt. The pinned
@@ -593,11 +799,14 @@ parameter reaches it.
 
 As before slice C: `Content-Type: application/pdf`,
 `Content-Disposition: attachment; filename="<event>_<map>.pdf"` for one
-page and `"<event>_maps.pdf"` for several, `Cache-Control: no-store`;
+composed page (a variant's `<map>` with its key after it, `Long_BA`; the
+all-variations page's with its keys, `Long_AB_BA`; copies of one page
+still one) and `"<event>_maps.pdf"` for several, `Cache-Control: no-store`;
 404 for an unknown event or no maps, 400 for a bad selection, no pin or
 a composer error (§8.1). The `X-Print-Pipeline` header of slices C–D is
 gone with the switch (E3). `Info /Title` per §7.1 (`<event> · <map>`
-for one page, `<event> maps` for several), `/Author` the organiser.
+for one page — `<event> · Long BA` for a variant — `<event> maps` for
+several), `/Author` the organiser.
 
 ### 8.4 Sanctioned differences from the legacy PDF
 
@@ -619,7 +828,7 @@ the user when every event moved to the composer (v0.6.0).
 | `library-course-lines` | 709 out-of-bounds boundary and imported `marked_route` / `restricted_line` / `forbidden_route` lines drawn by the library | C0, C2 |
 | `start-finish-clearance` | legs cut at the start / finish symbols' own outlines | C0 |
 | `size-aware-cuts` | automatic circle and leg cuts from the pinned document with clearance = feature radius + line width / 2 + 0.25 mm | user, 2026-10-24 (C5 question) |
-| `rotated-overprint` | on a rotated window, map-anchored images, control numbers and map text turn with the map (legacy drew the overprint upright in page space) | C2, §7.4 |
+| `rotated-overprint` | on a rotated window, image and text course objects (map-anchored layout objects until F12) and control numbers turn with the map (legacy drew the overprint upright in page space) | C2, §7.4 |
 | `image-rgb` | images stay DeviceRGB in `cmyk` (CMYK images are the profiles row) | C2, §7.4 |
 | `library-symbols`, `stack-order` | the base map as the GL viewer draws it: matched symbols drawn by the library, every `map-rendering.md` §6.4 code, and the document's own colour order — where a map draws an area colour above lower purple (`COLOUR_AREA_ABOVE_LOWER_PURPLE`) or a 100 % line colour under it, legs follow that order (until `ocad-16`, C14, the inserted lower purple also went under every area on `e2e/test.ocd` and the club maps) | 2026-10-23 slice C split; C6 |
 
@@ -639,7 +848,15 @@ E2E tests check page count and size; C7 compared the rasters).
 | `packages/api/src/__tests__/print-worker.test.ts` | the worker on `e2e/test.ocd`: bytes equal in-process; the blob read and sent once per worker; `page` order; an error keeps the worker usable; `CourseStackError` re-created (a document with palette ids stripped); a reset rejects the request in flight and the next call recovers; the main thread's event-loop delay stays under 25 ms (or half a page) during a 10-page A3 print; `PRINT_WORKERS` parsing |
 | `packages/api/src/__tests__/worker-bootstrap.test.ts` | the shared bootstrap: `.js` imported as is, `.ts` through tsx |
 | `packages/api/src/render/__tests__/pdf-golden.test.ts` | the PDF golden tier, §9.2, and `qpdf --check` on every file it writes; `boxDown`; the swatch read-back |
-| `e2e/course-maps.spec.ts` (`chromium`) | the export flows of the maps page: page count and A4 page size of the single-map, course and all-controls downloads (05 §7), `application/pdf` and no `X-Print-Pipeline` |
+| `packages/api/src/__tests__/integration/descriptions-pdf.test.ts` (F11) | §6.4 on an event without a base map: `selectDescriptionBlocks` — classes in the order asked, count = runners (a removed and a withdrawn one left out) + vacancies, the header naming the class, the map page's rows (start, controls, the special after its control, finish); `courses=` one block per course, its classes in the header, the count their sum; neither = every class with a course in class order, a courseless class skipped. The route: one A4 page per class labelled by class, headers, file name, `Info /Title`, `qpdf --check`; 13 copies → two pages of one class; `fill` at 5 mm; 400s (both selections, bad ids, copies 0 / 501 / text, cell 8, gap −1 / 31, unknown class / course, 231 pages > 200); 404 "No descriptions" (a courseless class, an event without courses), an unknown event |
+| `packages/api/src/__tests__/descriptions-pdf.test.ts` (F11) | `buildDescriptionsPdf` yields between pages: 40 pages with the event loop's longest wait under 250 ms (the whole build without the yield); more than 200 pages refused before a page is drawn |
+| `e2e/course-editor-layout.spec.ts` "F11: description sheets" (`chromium`) | Export ▾ → *Description sheets…*: focus inside the dialog and kept there by Tab; every class with a course checked; `k` typed in it arms no tool; *None* disables the download; two classes, two copies, 5 mm → a `…_descriptions.pdf` of two A4 pages; Escape closes the dialog only |
+| `e2e/courses.spec.ts` "Export → Description sheets…" (`chromium`) | the Courses page's export menu opens the same dialog; `fill` → `itest_descriptions.pdf`, one page per checked class |
+| `packages/api/src/__tests__/integration/variant-pages.test.ts` (F8) | §4.6 on a butterfly (AB / BA) with a class of three runners and a plain course: `?courses=<root>` two pages in key order labelled `Long AB` / `Long BA`, the course id the root's and the runners' course the child's, `{variant}`, `{course}`, the block header and its numbering the variant's, one shared window; `?courses=<variant>` one page (`_Long_BA.pdf`, `Info /Title`) and no new sheet; `?variants=` in key order; `?classes=` per variant with the class in the header; `?allVariations=` one page — three structures, no tint, codes, the block once per control without numbers, `_Long_AB_BA.pdf`; F15: a second root with an equal fork — `viewOptions.labels` 1, 2, 2, 3, `labelMode` still `code`, the block rows 1, 2, 2, 3, no tint, no `allVariations`; an unequal fork has neither labels nor row numbers; `copies=runners&spare=1` → AB × 3, BA × 2 sharing `/Contents`, `qpdf --check`; a class's and a plain course's stacks; the unfiltered export; `autoSheets` makes no sheet for a variant and returns the root's; `courseMap.resolveSheet { variantKey }` (block, `{variant}`, the shared window, Class view, a key without a variant, a plain course) and `courseMap.list`'s per-variant validation; the 400s (unknown key, a non-root, a bare `variants`, two selections, `copies` ≠ runners, `spare` alone or negative, `copies` without a course selection) |
+| `packages/shared/src/print/__tests__/writer.test.ts` "copies a page", `compose.test.ts` "the all-variations page" (F8) | `copyPage`: three pages on one content stream and one resources dictionary, the trim box, the label repeated, one outline item, the bytes about one page's; the all-variations input composes with the plain colour table (no `course-tint:` row) and more course passes than the spine alone; F15: `viewOptions.labels` draws the numbers the sequence would, the colour table unchanged |
+| `e2e/course-editor.spec.ts` "F7: variations and loops" (F8 part) | Export ▾ *This course (2 variants)* → two pages per own sheet, *All variations* → one per sheet, *One map per runner* disabled without runners; Layout mode shows Variant ▾ = AB and no *All variations*; BA picked → the mode kept, *This variant BA* → one page per sheet (the suite may hand the course another test's map exchange: two part sheets) |
+| `e2e/courses.spec.ts` "a course with variations lists its variants…" (F8 part) | a variant row's one action (`export-variant-<seq>`, its title) requests `maps.pdf?variants=<root>:B`; the root row's `export-all-variations-<root>` requests `?allVariations=<root>`; the seed's missing base map shows on the error line |
+| `e2e/course-maps.spec.ts` (`chromium`) | the export flows (E-pages: Layout mode's Export ▾ *This sheet*, the Courses page's course PDF and export menu): page count and A4 page size of the single-sheet, course, all-controls and all-maps downloads (05 §7), `application/pdf` and no `X-Print-Pipeline` |
 
 ### 9.2 The PDF golden tier
 
@@ -717,6 +934,13 @@ the glyph renderer alone, largest on the small text of `lib-text` and
 text is a few short strings): the page scenes are held to **0.5 %
 with embedded fonts**, in both modes — the text tier applies to scenes
 only.
+
+The **description sheet** (`descriptions-a4`, F11) is mostly text —
+twelve blocks of headers, numbers and codes — so it is held like the
+text scenes: embedded fonts to the 2.5 % text budget in both modes, the
+`rgb` page written again with text as outlines and held to 0.5 %.
+Measured at introduction (2026-11-07, poppler 22.02): `rgb` 0.459 %,
+`cmyk` 0.439 %, outlines 0.023 %.
 
 ### 9.3 `qpdf --check`
 
@@ -1049,12 +1273,26 @@ The tool's own tests (`print-run.test.ts`, `measure-print.test.mjs`,
   and crop marks (the marks layer), CMYK images, the test sheet — a later
   row (decision (2), 2026-10-23).
 - **One window shared by several pages** (05 §5.10): two sheets on the
-  same window (a course and its all-controls sheet, forked variants)
-  re-symbolise and re-emit the map content per page; a shared form
-  XObject of the window's base map comes with per-variant pages (08).
+  same window (a course and its all-controls sheet, a root's variant
+  pages since F8) re-symbolise and re-emit the map content per page. F8
+  did not take the shared form XObject (decided on the user's standing
+  instruction 2026-11-07, for review): `composePage` symbolises document
+  ⊕ course in one stream in colour-stack order (legs under the line art
+  above areas, `stack-order`), so the base map is not one XObject but
+  two halves split at lower purple, and a variant's corridors clip the
+  map passes per page (`W*`, §4.3) — a composer restructuring, not a
+  resource flag. By §11.5 (917 kB per Club-full A4 page, nearly all of
+  it the map stream) a four-variant course is about 3.7 MB against about
+  1.1 MB shared, acceptable for a download; identical **copies** of a
+  page do share one content stream (§4.5), which is where a hand-out
+  stack multiplies.
 - **Vector SVG logos** (05 §5.7 b): a safe SVG subset as form XObjects;
   rasterised at 600 dpi until a club asks.
-- **Several frames per sheet** (map exchange on one sheet, 05 §5.9) and
-  per-variant pages (08): one frame per page in slice C.
+- **Several frames per sheet** (map exchange on one sheet, 05 §5.9):
+  one frame per page in slice C (a variant's page is one page since F8,
+  §4.6); F5 prints a map
+  exchange as one sheet per part (§5.2), so several frames on one sheet
+  stay Pending (decided on the user's standing instruction 2026-11-07,
+  for review).
 - **Serif and mono faces**: no file ships (`map-rendering.md` §4.10), so
   no PDF font either.

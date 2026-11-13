@@ -716,7 +716,10 @@ the later rings) and re-indexes colours onto the completed stack
 (`PageInput.course.regions`). Stored regions are `filter_region` course
 objects (`docs/course-layer.md` §8): the layer appends each one in
 `objects` to the explicit `regions`, so the viewer's request and the
-print route carry them as objects.
+print route carry them as objects. A corridor's white band is a
+**generated** region the layer appends after those
+(`docs/course-layer.md` §10.2): `clip`, `symbols: "all"`, the band's
+rings — the map cut away there, the course drawn over it.
 
 ## 5. Backends
 
@@ -832,7 +835,7 @@ Backend decisions only — nothing here moves a dash or a glyph:
 
 | Pass | Becomes | How |
 |---|---|---|
-| fill | fill-arena vertices + triangle indices | rings flattened (10 µm); **even-odd earcut**: rings grouped by containment depth (`triangulateEvenOdd`) — a ring inside an even number of others is an outer boundary, one inside an odd number a hole of its innermost container, so a "hole" ring outside every other ring is filled and separate contours are separate polygons, exactly §3.1's rule. Rings that cross are earcut's failure mode and drawn as earcut decides (the reference raster is the oracle) |
+| fill | fill-arena vertices + triangle indices | rings flattened (10 µm); **even-odd earcut**: rings grouped by containment depth (`triangulateEvenOdd`) — a ring inside an even number of others is an outer boundary, one inside an odd number a hole of its innermost container, so a "hole" ring outside every other ring is filled and separate contours are separate polygons, exactly §3.1's rule. A ring that crosses (or touches) a **convex** ring is resolved first (P7; the white-out outside's window quad and its shape). **Two rings** — every white-out outside, one pass per shape — are triangulated exactly without earcut holes (`convexPairTriangles`): the convex ring outside the shape is earcut of a box round both with the shape as a hole that touches nothing, each triangle clipped to the convex ring; the shape outside it is the shape's earcut triangles, each cut by the convex ring's edges (convex against convex, no bridges, no inset). **More rings**: the crossing ring is replaced by its parts inside and outside the convex ring (each line clip cut into simple rings at its crossings), a part inside equal to the whole convex ring toggling it out, and containment is probed at a boundary point of each ring that lies on no other ring instead of its first vertex; the parts inside touch the convex ring, which earcut may drop at fractional coordinates — best effort, no producer emits it. The crossing test returns at once when every vertex of the other ring lies strictly inside the convex ring, and otherwise filters that ring's edges against the convex ring's bounds first (a 5 000-vertex ring round 100 convex 32-vertex holes: 7.6 ms against 6.4 ms before P7; a 64-vertex hull inside its window: 13.5 µs against 12.4 µs). Without a crossing the rings are triangulated as before. Two non-convex rings that cross are earcut's failure mode and drawn as earcut decides (the reference raster is the oracle) |
 | stroke | stroke-arena vertices + indices | each slice (or ring) flattened from its Bézier sub-range, then an **indexed strip** (`extrudeStrip`): per vertex the centre-line point and an offset direction; the shader multiplies by the half width |
 | glyph | an instance per placement into the mesh atlas | the `GlyphMesh` in glyph-local µm at ¼ tolerance, fills triangulated even-odd, strokes as strips expanded to triangles; instance `x, y, cos, sin, scale` as in the stream plus the mesh's atlas `base, count, radius` |
 | glyph with `clip` | instances + the clip area triangulated even-odd | drawn through the stencil (Drawing, below) |
@@ -980,7 +983,7 @@ growth factor).
 | `load` | document bytes + `DocumentRenderOptions` (or, dev only, render objects + symbols, or a symbolised stream), font files, the text atlas pages (JSON, in the renderer's page order), optional first view (a view, or "fit into w × h"), gate flag | `loaded`: summary (bounds, origin, grid, detail cells, the first view resolved, stage times, bytes, text: pages, glyphs resolved, glyphs missing), mesh atlas, every cell's base part, the large part — then, without a further request, the first view's detail parts unless it is below the gate |
 | `prepare` | bucket ids, most urgent first | replaces the queue; one `part` per id |
 | `course` | a generation number and the course layer's input without the document (`CourseLayerRequest`: structure, sites, objects, appearance, view options, filter regions, `fastFilter`), or `null` | `course`: the generation, the dynamic bucket's part (or `null`), the stack to draw with, the derivation and symbol sizes, warnings, the mesh atlas when it grew, and the filter over the static buckets (or `null`) — "Dynamic bucket" and "Filter regions" below |
-| — | | `error` on a failed load |
+| — | | `error` on a failed load; on a `course` request whose derivation throws, with that request's generation (F20b) |
 
 Every typed array goes back as a transferable. The worker decodes,
 bridges (`documentRenderInput`), symbolises, builds the atlas, assigns
@@ -1043,7 +1046,9 @@ the symbolised stream with layer-local object ids (before the offset)
 and each object's `ref`, which the editor hit-tests on the main thread
 (§5.5). `input: null` clears; a load
 without course support answers `part: null`, `hit: null` and `COURSE_UNAVAILABLE`.
-The worker answers a request at once, between prepare slices.
+The worker answers a request at once, between prepare slices. A request
+whose derivation throws answers `error` (F20) carrying the request's
+`generation` (F20b), so the engine ends that request — and only it.
 
 **Page part** (D7, `course-layout.md` §1). A request with `page` (the
 sheet's paper height, frame, window, layout objects, text values and
@@ -1062,10 +1067,20 @@ resident, fixed bytes) and passes `pageClip { fromColour, ringUm }` to the
 renderer, which scissors every colour below `fromColour` to the frame's
 screen box (exact while the page is upright, which Layout mode keeps).
 
-**Engine.** `MapGlEngine.setCourse(input | null)` posts the request with
-a new generation (one made before the load waits for it and is sent
-right after the load message); a reply whose generation is not the
-latest is dropped. The current reply's part is uploaded under key `C` —
+**Engine.** `MapGlEngine.setCourse(input | null)` keeps **one request in
+flight** (F20, `docs/bugfix-course-drag-redraw.md`): with none, it posts
+the input with a new generation; during one it records the input — the
+latest call wins, `null` included — and posts it when the reply is in, so
+a drag re-derives at the worker's rate, every reply of a posted request is
+drawn and no input a newer one replaced is ever derived. One made before
+the load waits for it and is sent right after the load message; a `load`
+during a request posts the current input at once with a new generation,
+and a reply whose generation is not the latest posted is dropped. A
+course `error` (with a generation, F20b) ends the request in flight when
+the generations match — the recorded input goes — and is otherwise stale
+and ignored; it never touches a load in flight. An `error` without a
+generation (a failed load, a real worker's `onerror`) rejects the load in
+flight and ends the request in flight, as before F20b. The current reply's part is uploaded under key `C` —
 through `GpuArena.put` like any part, so a grow re-uploads it with the
 rest and nothing goes through `copyBufferSubData`
 (`docs/bugfix-adreno-arena-grow.md`) — and the previous one released;
@@ -1083,7 +1098,13 @@ else the load's.
 **Cost.** A dragged control re-symbolises the whole layer (tens of
 objects): the 04 §7 budget of < 1 ms is the symbolisation's; the reply
 is one worker round trip, one part upload and one visible-set rebuild.
-Main-thread symbolisation for the drag is pending (§8).
+The derivation is the larger part since F13: on 25 controls with one
+smooth bend per leg it was ~400 ms, 376 of them the number placer's, and
+with a request per pointer move a second of drag queued ~24 s of worker
+time. F20 culls the placer (`course-layer.md` §3.5; ~70 ms for the whole
+derivation on the budget fixture) and keeps one request in flight; the
+corridor and cut-feature cost per request is F20b's (`course-layer.md`
+§10.2 Pending). Main-thread symbolisation for the drag is pending (§8).
 
 #### Filter regions (D3)
 
@@ -1491,7 +1512,7 @@ published on `window.__mapGlDoc` for Playwright.
 
 | Test | Covers |
 |---|---|
-| `map-gl/__tests__/strip.test.ts` | strip coverage = S1 extrusion away from edges for every cap × join × open/closed; 2 vertices per point on straight lines and flattened arcs; mitre limit; short-segment fallback; dots; dash slices with caps; ≥ 3× fewer bytes on a contour; even-odd earcut (hole order and winding, outside "hole", nested island) |
+| `map-gl/__tests__/strip.test.ts` | strip coverage = S1 extrusion away from edges for every cap × join × open/closed; 2 vertices per point on straight lines and flattened arcs; mitre limit; short-segment fallback; dots; dash slices with caps; ≥ 3× fewer bytes on a contour; even-odd earcut (hole order and winding, outside "hole", nested island); P7: rings crossing a convex ring — the shape's first vertex outside on the left, crossing the bottom with it inside, a band beyond both sides, a non-convex L over a rotated window's corner, a hole touching the outer's edge, a shape covering the window whole, one wholly outside (area and point coverage); a U and an E whose arms cross one edge, at fractional offsets and turns, and two nested non-convex rings covering the window (a grid parity oracle) |
 | `map-gl/__tests__/buckets.test.ts` | assignment (centre, straddling, large by either dimension incl. stroke width), passes of an object together in stream order, `passBounds` (turned text: √2 em round each origin, B8); visible cells (margin, clamp, nearest first, rotation); zoom gate at 04's reference zooms; range table colour-major, contiguous, complete, layers, origin-relative positions and hatch offset, stroke packing; visible set (one draw per colour across buckets, rebasing, union of parts, hidden objects, instances by size class); clip groups (merge, separation, hidden); mesh atlas packing; LRU eviction |
 | `map-gl/__tests__/arena.test.ts` | free list: first fit, exact accounting, coalescing, growth |
 | `map-gl/__tests__/worker-protocol.test.ts` | `loaded` contents and transfer list; `prepare` queue replacement and slicing; first-view queue and the gate; base + detail + large covers every kind; load errors |
@@ -1507,8 +1528,8 @@ published on `window.__mapGlDoc` for Playwright.
 | `e2e/map-gl-golden.spec.ts` | the per-pass path against the reference raster; the **MSDF text tier**: `text-with-halo`, `lib-text`, `lib-halos` through the arena path (§6.2); the **filter-region arena tier** (D3, §6.2) |
 | `e2e/map-gl-doc.spec.ts` (text) | arena = per-pass compare also on `e2e/test.xmap` (text, MSDF vs outlines) within 0.5 %; its text resolves on the Latin page with nothing missing |
 | `e2e/map-vector-layer.spec.ts` (text) | the viewer requests the Latin page and not the Cyrillic one |
-| `map-gl/__tests__/worker-course.test.ts` | dynamic bucket: static parts on the completed stack (upper white below upper purple, rows above it +1 with their CMYK), the document's stack without `courseLayer`, an unaligned stack unsupported and unchanged; a course request → one `all` part at `COURSE_BUCKET` on the completed stack (lower-purple strokes, text instances, glyph meshes in the grown atlas, earlier meshes in place, object ids after the document's, everything transferable); no atlas when nothing was added; lower purple drawn under black in one visible set; `null` and unsupported replies; a white-out at upper white above black |
-| `map-gl/__tests__/engine.test.ts` (dynamic bucket) | `setCourse` uploads `C`, drawn below the zoom gate too, rebuilt at once, `onCourse` / `onChange`, `engine.colours` = the reply's; an overtaken reply dropped; `null` releases; a request before the load waits for it; course bytes fixed |
+| `map-gl/__tests__/worker-course.test.ts` | dynamic bucket: static parts on the completed stack (upper white below upper purple, rows above it +1 with their CMYK), the document's stack without `courseLayer`, an unaligned stack unsupported and unchanged; a course request → one `all` part at `COURSE_BUCKET` on the completed stack (lower-purple strokes, text instances, glyph meshes in the grown atlas, earlier meshes in place, object ids after the document's, everything transferable); no atlas when nothing was added; lower purple drawn under black in one visible set; `null` and unsupported replies; a white-out at upper white above black; a toner saver's white the last colour drawn, after the document's top row and upper purple (P1); a request whose derivation throws answers `error` with its generation (F20b) and the next is answered (F20) |
+| `map-gl/__tests__/engine.test.ts` (dynamic bucket) | `setCourse` uploads `C`, drawn below the zoom gate too, rebuilt at once, `onCourse` / `onChange`, `engine.colours` = the reply's; one request in flight (F20): of three calls during one request the first and the last are posted, both replies drawn in order, the middle never sent; `null` recorded and posted like any input, releasing `C`; the inputs before the load → one request with the last, right after the load message; a `load` during a request re-posts at once with a new generation and the older reply is dropped; a worker `error` ends the request and the recorded input goes; F20b: a course `error` of an overtaken generation ends nothing and leaves the load in flight standing, the matching one ends the request (its late reply dropped, the waiting input drawn), one of an older generation leaves the request in flight; course bytes fixed |
 | `map-gl/__tests__/buckets.test.ts` (filter regions) | per colour the unmasked draw then one per mask, the same indices regrouped, `layers` in draw order, hidden objects win over masks, no `filter` without entries; instance draws and clip groups split by mask |
 | `map-gl/__tests__/worker-course.test.ts` (filter regions) | a `hide` region hides the document object meeting it, exact and `fastFilter` alike, never a course object; a far region hides nothing; a clip region by document colour → `(object, colour, mask)` on the completed stack and the region's triangles origin-relative; the course part stays unmasked in the visible set; no regions / `null` → no filter |
 | `map-gl/__tests__/worker-protocol.test.ts` (filter regions) | a `stream` source with masks → `loaded.filter`, one entry per (object, colour), transferable; none without masks |
@@ -1673,7 +1694,7 @@ decision 2026-10-22) set → `mapBudget="club"`, 150 MB
   is there, or the error with *Try again* (offline and not cached,
   no access, not found, unreadable);
 - needs no map bounds or calibration (a map without a CRS draws without
-  geo inputs); the editor's touch loupe is drawn by the layer (§5.5
+  geo inputs); the editor's loupe is drawn by the layer (§5.5
   "Loupe");
 - needs no ink split: the vector layer draws the course layer in the
   map's own colour order ("Overlay");
@@ -1691,7 +1712,8 @@ hands it to the engine's dynamic bucket (§5.2 "Dynamic bucket"), so the
 7xx symbols sort into the document's stack — lower purple (701, 703,
 705, 706, 708) under black, brown and blue line art, white-outs
 at upper white above the map's ink, upper purple (704, 707, 709,
-711) on top. What the layer draws and what it does not:
+711) on top, and a toner saver's white above everything of the map
+layer (`course-layer.md` §3.6, P1). What the layer draws and what it does not:
 
 | GL course layer (dynamic bucket) | SVG UI layer (React, screen widths) |
 |---|---|
@@ -1717,9 +1739,10 @@ for one ordered course with the sheet or the editor and `code` otherwise,
 []` (no layout objects reach the viewer) and `appearance: {}` — the
 library's sizes × the document factor (`course-layer.md` "Decisions":
 ISOM at 1:7 500 draws 5 mm-radius circles where the SVG drew 2.5 mm).
-`course.courseGeometries` is no longer an input (D1): authored leg gaps,
-hidden numbers and circle cuts come from the stored structure and the
-controls (`course.list` `legGaps` / `hiddenNumbers`, `controlCoordinates`
+`course.courseGeometries` is no longer an input (D1): the stored legs
+(gaps, style, bends, corridor — F2), hidden numbers and circle cuts come
+from the stored structure and the controls (`course.list` `legs` /
+`hiddenNumbers`, `controlCoordinates`
 `circleGaps`; `course-layer.md` §5, §6.4), and 707 / 708 / 709 / 711 are
 course objects. The worker cuts the rest from the document's own
 features (`cutFeaturesOfDocument`, extracted once per load) — unless the
@@ -1734,8 +1757,9 @@ follows through it.
 derivation (sites, number positions, legs), the symbol sizes in paper mm
 and the hit index (§5.5); the UI layer sizes its status, selection and
 completion rings by those sizes, and the editor's targets are the hit
-index's (§5.5 "Editor targets"). A move or a label drag is a new request
-per pointer move — the layer re-derives and the reply redraws.
+index's (§5.5 "Editor targets"). A move or a label drag is a new input
+per pointer move; the engine keeps one request in flight (§5.2 "Engine"),
+so the layer re-derives at the worker's rate and every reply redraws.
 
 **Fallback.** A document whose stack has no lower and upper purple
 (`LoadSummary.courseLayer.supported === false`, `CourseStackError`) draws
@@ -1791,7 +1815,7 @@ mounts it only with a pinned document.
 | `e2e/map-vector-layer.spec.ts` | the pinned document by hash (no query, `x-event-id`), canvas ready and drawn, container-sized, `data-*` attributes; wheel zoom keeps the paper point under the cursor (< 0.5 px); a GPS fix → follow centres it and the marker is at the viewer's centre; **lower purple under black**: a leg made across a black path on white paper (two controls through the API) is black at the crossing and lower purple 2 mm to either side, zoomed to ≥ 0.02 px/µm, with no SVG control label (fails with the course drawn on the top row); **without WebGL2** `data-status="webgl"`, the message; **a lost context** remounts once (`data-attempt` 1, ready again), a second shows the message; **no pin** (`map_files.document_hash` cleared): `map-import-state` `review` with the review link, no viewer; **an unaligned stack** (a palette-stripped copy of the document pinned by `e2e/helpers/stackless-document-cli.ts`): the layer draws, `data-course-layer="none"`, `map-course-layer-unsupported` shown, no `course-layer` mirror and no SVG `control-label`; in the editor a click on a control selects nothing (no hit index) |
 | `lib/__tests__/course-layer-request.test.ts` | sites from visible positioned controls with kinds; highlighted courses as items (by flag or name, one or several, none → `null`); all-controls when a drawn site is on no course; sequence numbers only for one ordered course with the sheet or editor; single-course label offsets, pending ones winning; positions as given; faded controls left out; an imported course's preclipped legs → pieces, its cuts → circle gaps, extras; generated legs: bent path kept, automatic gaps and cuts not read, a leg count that does not match ignored |
 | `e2e/map-control-circles.spec.ts`, `e2e/map-multicourse.spec.ts` | code labels of the selected course (the GL layer's `course-label` mirror), sequence numbers for one course with descriptions, codes for several; pills and the sheet SVG text; `data-course-layer="gl"` |
-| `e2e/map-viewer-gestures.spec.ts`, `mobile-layout.spec.ts`, `course-editor.spec.ts`, `wide-screen-map-pane.spec.ts`, `webserial.spec.ts`, `kiosk*.spec.ts` | the paper view's gestures, measure, event switching (vector layer ready) and the readout map, once in `chromium` (E3: no per-pipeline projects) |
+| `e2e/map-viewer-gestures.spec.ts`, `mobile-layout.spec.ts`, `course-editor*.spec.ts`, `wide-screen-map-pane.spec.ts`, `webserial.spec.ts`, `kiosk*.spec.ts` | the paper view's gestures, measure, event switching (vector layer ready) and the readout map, once in `chromium` (E3: no per-pipeline projects) |
 
 ### 5.5 Editor
 
@@ -1831,6 +1855,11 @@ it. This is the only hit-testing: the SVG hit targets and the
 mirrors every editor site as a hidden `editor-site` (paper mm) for
 tests. Without the course layer (§5.4 "Fallback") there is no hit
 index and no target. The hit index is the course part only.
+The filter region's eyedropper (P3, `course-editor.md` §5 / §6.4) is the
+one hit-test over the map document: on the main thread, over the few
+objects whose stored box holds the click, symbolised for the purpose
+(`documentRenderInput { only }`, no fonts) — topmost hit wins, nothing
+goes to the worker.
 Snapping (D5, `course-editor.md` §6.2) does not hit-test the document's
 stream: point centres and vertices are geometry, read once per document
 into a main-thread grid (`lib/editor/snap.ts`); a worker request over the
@@ -1844,20 +1873,33 @@ overlay) in `editor-tool-layer` — circles, lines, handles, text and (D7)
 objects in the layer request, with `fastFilter` while a filter region is
 dragged (§4.11).
 
-**Drag.** Unchanged from §5.4 "Overlay": a per-move layer request; the
-dragged object is not symbolised on the main thread.
+**Drag.** Unchanged from §5.4 "Overlay": a layer input per move, one
+request in flight (§5.2 "Engine"); the dragged object is not symbolised
+on the main thread.
 
-**Loupe** (D9b; `course-editor.md` §10 "Loupe"). While a control is
-dragged by touch, the viewer hands `VectorMapLayer` a `loupe` (the
-dragged point, the circle `loupePlacement` puts above the handle,
-120 CSS px, ×2.5) and draws `editor-loupe` — a ring and a crosshair, no
-fill — over it; the layer draws the magnified map into that circle of
+**Loupe** (D9b, F24; `course-editor.md` §10 "Loupe"). While a control —
+or, on a tablet, a bend or a grip of the selected leg (F23: the point the
+tool's `onPointerDrag` returns) — is dragged by touch, or a control, a
+bend, a grip or an object's vertex or grip is dragged with the
+mouse (F24; a number is dragged with none, F30), the viewer hands `VectorMapLayer` a `loupe` (the dragged
+point; the circle `loupePlacement` puts 16 px above the lifted handle by
+touch, 16 px above the cursor with no lift by mouse; 120 CSS px, ×2.5)
+and draws `editor-loupe` — a ring and a crosshair, no fill,
+`data-pointer` `touch` / `mouse` — over it; the layer draws the magnified map into that circle of
 the canvas in the same frame as the map (§5.4 "Layer", §5.2 "Render
 target"). It shows the resident visible set: what the main view drew,
 the dynamic bucket with the dragged circle included, no detail requested
 for the loupe's footprint (below the zoom gate it is the base parts).
 The UI layer's SVG is above the canvas, so its shapes under the circle
-are not magnified. Mouse drags have none.
+are not magnified. The prop does not depend on the pointer: the mouse
+path only supplies the cursor (container px) and a lift of 0. The
+placement loupe (F27, `course-editor.md` §10 "Loupe") is the same prop
+without a drag: with its toggle on and a placing tool armed, the point is
+the binding's `hoverPoint` (what a click would place) and the circle sits
+16 px above the cursor, or above the pin-drop crosshair at the view
+centre on a coarse pointer (lift 0 both); `editor-loupe` gains
+`data-mode` `hover` / `drag`. While it shows, a hover costs one inset
+render per frame, as a drag does; no worker request.
 
 **Action bar.** `actionLayout: "bar"` lays the contextual entries out
 horizontally under the selection (`editor-action-bar`) instead of the
@@ -1871,7 +1913,9 @@ popover beside it; same entries and ids.
 | `map-gl/__tests__/worker-course.test.ts`, `engine.test.ts` | the reply's hit index and its way to the host |
 | `lib/editor/__tests__/hit.test.ts` | editor targets over the real worker's index |
 | `e2e/course-editor.spec.ts` | selecting, dragging and leg clicks on the canvas with no SVG targets |
-| `lib/editor/__tests__/touch.test.ts` (loupe) | `loupePlacement`: above the handle, flipped below the finger at the top, kept inside sideways |
+| `lib/editor/__tests__/touch.test.ts` (loupe) | `loupePlacement`: above the handle, flipped below the finger at the top, kept inside sideways; with no lift (F24) above the cursor, flipped and clamped the same way |
+| `e2e/course-editor-legs.spec.ts` "F24: the loupe on mouse drags" | the loupe during a mouse drag of a control (the magnified map: purple, differing from the 1× circle) and a bend (F30: none on a number): `data-pointer="mouse"`, its bottom 16 px above the cursor, no stem; gone on release, on the mouseleave cancel and on Escape (which cancels the drag, nothing written); none for a click; "…object's vertex drag": the loupe during an object's vertex drag |
+| `e2e/course-editor-legs.spec.ts` "F23: bend drags on a tablet" | the loupe during a tablet's bend and grip drags (the point `onPointerDrag` returns): its bottom 16 px above the lifted bend, gone on lift |
 | `e2e/field-mode.spec.ts` (`mobile`) | the loupe during a long-press drag: 120 px above the handle; the canvas inside it differs from the same circle after release (the 1× map) and has the map's purple; gone on release |
 
 ### 5.3 PDF (shared/print)
@@ -2060,8 +2104,8 @@ with the oracle, never with each other.
 **Golden scenes** are the six contract fixtures (§6.3), the
 `pilot-scene` (`__fixtures__/pilot-scene.ts`: one object per pilot
 symbol, hand-placed), the twelve library fixtures (`lib-*`, §6.3,
-coloured from the library's palette through `cmykToHex`) and the five
-course scenes (`course-*`, §6.3, C0: a library base map and
+coloured from the library's palette through `cmykToHex`) and the six
+course scenes (`course-*`, §6.3, C0 and F1: a library base map and
 `courseLayer()` merged into one stream, coloured from the completed
 stack). The three **page scenes** (`page-*`, C2,
 `docs/course-print.md` §7.5) are separate: a composed page drawn by the
@@ -2307,9 +2351,11 @@ WebGL2 per-pass path against the golden, measured at introduction
 |---|---|---|
 | `course-legs` | ISOM 401, 505, 101, 306, 516 under S → 31 → 32 → 33 → F | lower purple under black, brown and blue line art, above yellow; start turned to 31; sequence numbers in upper purple above the ink |
 | `course-cuts` | ISOM 204 on a rim and on a leg, 109 on a rim, 201; an authored gap and authored leg pieces on 33; a manual number position | automatic cuts from the features, authored gap and pieces kept, number at its offset, cut circles as open arcs |
-| `course-objects` | ISOM 406, 505, 106; white-out rectangle, toner-saver ring, 709 rectangle, 709.b triangle, 707 / 708 / 711 extras, a map text in its own colour with `{course}` | white-outs at upper white above all ink and below upper purple; 709 / 707 / 711 upper, 708 lower; the text's row on top of the stack |
+| `course-objects` | ISOM 406, 505, 106; white-out rectangle, toner-saver ring, 709 rectangle, 709.b triangle, 707 / 708 / 711 extras, a map text in its own colour with `{course}` | the white-out at upper white above all ink and below upper purple, the toner-saver ring in its own white row on top of the stack (P1: the 709.b border past its edge is covered); 709 / 707 / 711 upper, 708 lower; the text's row on top of the stack |
 | `course-sprint` | ISSprOM 401, two 521 buildings; `numberStyle: "knockout"` | 6 mm circles; upper-white halo under upper-purple numbers, above the buildings' black |
 | `course-all-controls` | ISOM 403, 304; all controls with a free-order course | every site drawn, codes, no legs, start north |
+| `course-leg-styles` | ISOM 401, 505, 516; S → 31 a bent 705, 31 → 32 a bent 707 marked route over the 516, 32 → F `style: "none"` with a stored gap (F1, `course-layer.md` §10.1) | the 705 piece runs through its bend; the route in upper purple, dashed, after black; nothing for the `none` leg, which keeps its pieces; numbers unchanged |
+| `course-corridor` | ISOM 401, 505, 101, 516; S → 31 → 32 one 60 m run (4 mm, h 2 < R 2.5) with its `edge` and a 3 mm band, bent at (36, 10); 32 → 33 a 150 m corridor without edge with a 2 mm band; 33 → F plain (F2, re-shaped in F19, `course-layer.md` §10.2) | the band one generated `clip` region: every base pass masked, no course pass; clear inside every corridor (at the bend, at the change of width at 32) and inside the mouths (31's circle across, the 701's back corner), the band round them, nothing behind the 701's base; at 33, the corridor's only terminal end, the band stops on the line through its centre with rounded corners and the map shows behind it (F22, `course-layer.md` §10.2 "Ends"); the edge lower purple `705/edge` along S → 31 → 32 only, over the 401; 31's circle opened towards both legs (two arcs), 32 and 33 whole (the wide corridor covers the junctions; h ≥ R), no cut in the derivation; no 705 along the three corridor legs, 33 → F the only leg line (F14). Drawn on the default GL path (the arena path's MSAA edge steps exceed `ARENA_FILTER_MAX_RATIO` on this many edges: 2.0 %, D3's filter scenes cover the arena masks) |
 
 The **filter scenes** (D3, 04 §8 row "Filter regions", §4.11) draw one
 ISOM base map — a 407 area (0–60 × 0–40 mm), 101 contours (a straight
@@ -2336,7 +2382,7 @@ The **page scenes** (C2, `@oxygen/shared/print` `pageScene`,
 | Scene | Page | Asserted |
 |---|---|---|
 | `page-sprint-a4` | A4 portrait, ISSprOM map 1:4 000 printed at 1:3 000, six-site course, IOF header block with pictograms, page title | map layer under `T_map` (×4/3) clipped to the frame; block geometry and pictograms; page text on top |
-| `page-ring` | 120 × 90 mm, ISOM 1:10 000; map-anchored white-out outside, page white-out box over the frame edge, page text and dashed line | white margin and ring, map inside the ring, page objects above the map |
+| `page-ring` | 120 × 90 mm, ISOM 1:10 000; a toner saver course object (a map-anchored white-out outside until F12), page white-out box over the frame edge, page text and dashed line | white margin and ring, map inside the ring, page objects above the map |
 | `page-rotated` | 120 × 90 mm, ISOM, window rotated 20° clockwise; map text | map, course and text turned together, corners outside the frame white |
 
 Not in the table: 04 §8 row 10 (minimum sizes) is a screen-backend rule
@@ -2551,7 +2597,7 @@ what became of it:
 | `packages/web/src/map-gl/buckets.ts` | cells, large bucket, per-part preparation and range table, visible set, clip groups, zoom gate, LRU |
 | `packages/web/src/map-gl/arena.ts` | vertex arenas: free list, growth by copy |
 | `packages/web/src/map-gl/worker.ts`, `worker-entry.ts` | the worker's message handler and its binding |
-| `packages/web/src/map-gl/engine.ts` | main-thread controller: worker transport, residency, visible-set rebuilds |
+| `packages/web/src/map-gl/engine.ts` | main-thread controller: worker transport, residency, visible-set rebuilds, the one course request in flight (F20) |
 | `packages/web/src/map-gl/view.ts` | the arena path's model → clip matrix, `RenderTarget`, `loupeView` |
 | `packages/web/src/map-gl/renderer.ts` | WebGL2 backend, GPU stage (arena programs and draw loop; per-pass path, stencil, supersampling; the loupe's inset target and circle composite; GPU timer) |
 | `packages/web/src/pages/dev/MapGlFixturePage.tsx` | dev-only golden page `/dev/map-gl` |
@@ -2575,12 +2621,13 @@ The shared module is exported as a namespace: `import { render } from
 
 ## 8. Pending in this chapter
 
-- **§4.11 filter regions in the viewer and the print route.** The stage,
-  the three backends and the worker protocol take regions; nothing sends
-  them yet. They reach `VectorMapLayer` / `course-layer-request.ts` and
-  the print route's `PageInput.course.regions` with D2's stored
-  `course_objects` (`filter_region` kind; D2), and the editor's drag sends
-  `fastFilter` (D5).
+- **Alpha: a translucent corridor band** (`docs/course-layer.md` §10.2,
+  F2). `LegProps.corridor.whiteOpacity` is stored but drawn opaque: the
+  band is a clip region, which removes the map wholly. A band below 1
+  needs a fill with alpha over the same rings — a pass colour opacity the
+  stream, the three backends and the PDF (`ca` / an ExtGState) do not
+  carry yet — drawn above every map colour and below the course.
+
 - **§5.2 filter-region limits.** All masks share one stencil bit, so
   overlapping regions of different masks are fine (each masked step marks
   only its own); nothing is capped. A stroke counts as meeting a region
@@ -2617,7 +2664,8 @@ The shared module is exported as a namespace: `import { render } from
   open: D5 kept its selection, multi-selection and object outlines in the
   UI layer (`map-gl` was outside its area); Map mode (slice G) needs both.
 - **§5.2 dynamic bucket: main-thread symbolisation.** A drag re-derives
-  the layer in the worker (one round trip per pointer move). If D's
+  the layer in the worker (one request in flight, the latest input next —
+  F20). If D's
   editor needs lower latency, the dragged object is symbolised on the
   main thread and only it is replaced.
 - **§5.4 layout objects in the viewer** — resolved by D7 for Layout

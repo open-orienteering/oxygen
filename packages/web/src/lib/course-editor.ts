@@ -10,7 +10,7 @@
  * keyboard and gesture handling on the page trivially unit-testable.
  */
 
-import type { SeriesAllocationEntry } from "@oxygen/shared";
+import { course, type PathVertex, type SeriesAllocationEntry } from "@oxygen/shared";
 
 export type { SeriesAllocationEntry } from "@oxygen/shared";
 
@@ -277,7 +277,8 @@ export function effectiveRoleControlId(
  * `course-geometry.ts`: paper mm × mapScale / 1000, with unpositioned
  * controls (`null`) skipped so a single unplaced control doesn't break
  * the chain — the next positioned control measures from the last
- * positioned one.
+ * positioned one. A point's `bends` are the leg into it (course-layer.md
+ * §10.1): that leg is measured along them.
  *
  * @returns one entry per input point: the leg distance INTO that point
  *   (meters, rounded), or `null` for the first point, unpositioned
@@ -285,7 +286,7 @@ export function effectiveRoleControlId(
  *   is unknown.
  */
 export function sequenceLegMeters(
-  points: Array<{ x: number; y: number } | null>,
+  points: Array<{ x: number; y: number; bends?: readonly PathVertex[] } | null>,
   mapScale: number | null,
 ): Array<number | null> {
   const out: Array<number | null> = new Array(points.length).fill(null);
@@ -295,9 +296,9 @@ export function sequenceLegMeters(
     const p = points[i];
     if (!p) continue;
     if (prev) {
-      const dx = p.x - prev.x;
-      const dy = p.y - prev.y;
-      out[i] = Math.round((Math.sqrt(dx * dx + dy * dy) * mapScale) / 1000);
+      // Along the leg's bends, curves flattened (course-layer.md §10.1, F13); straight, the centre-to-centre distance.
+      const mm = course.legLengthMm(course.legPolylineOf(prev, p.bends, { x: p.x, y: p.y }));
+      out[i] = Math.round((mm * mapScale) / 1000);
     }
     prev = p;
   }

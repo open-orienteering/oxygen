@@ -142,6 +142,17 @@ export function IconEye({ className, title }: IconProps) {
   );
 }
 
+/** A magnifier (the placement loupe toggle, F27): `IconZoomIn` without the plus. */
+export function IconLoupe({ className, title }: IconProps) {
+  return (
+    <svg {...base} className={className}>
+      {title ? <title>{title}</title> : null}
+      <circle cx="8.5" cy="8.5" r="5.25" />
+      <path d="M12.5 12.5 17 17" />
+    </svg>
+  );
+}
+
 /** Scissors — automatic circle slits / leg gaps. */
 export function IconScissors({ className, title }: IconProps) {
   return (
@@ -172,6 +183,75 @@ export function IconProgress({ className, title }: IconProps) {
       {title ? <title>{title}</title> : null}
       <circle cx="10" cy="10" r="7" />
       <path d="m6.75 10.25 2.25 2.25 4.25-4.75" />
+    </svg>
+  );
+}
+
+/** Three rising bars — the course editor's course-info popover (count, length, climb, the sheet). */
+export function IconStats({ className, title }: IconProps) {
+  return (
+    <svg {...base} className={className}>
+      {title ? <title>{title}</title> : null}
+      <path d="M5 16V11M10 16V7M15 16V4" />
+      <path d="M3 16.5h14" />
+    </svg>
+  );
+}
+
+/** A folded map, three panels — the course editor's map-info dialog (name, scale, north lines, replace). */
+export function IconMap({ className, title }: IconProps) {
+  return (
+    <svg {...base} className={className}>
+      {title ? <title>{title}</title> : null}
+      <path d="M2.75 5.25 7.25 3.5l5.5 2 4.5-1.75v11L12.75 16.5l-5.5-2-4.5 1.75z" />
+      <path d="M7.25 3.5v11M12.75 5.5v11" />
+    </svg>
+  );
+}
+
+/** A start triangle, a leg and a control circle — the editor's Course mode (F29). */
+export function IconModeCourse({ className, title }: IconProps) {
+  return (
+    <svg {...base} className={className}>
+      {title ? <title>{title}</title> : null}
+      <path d="M5.5 3.25 9.25 9.75h-7.5z" />
+      <path d="M7.6 10.9 11.4 13.6" />
+      <circle cx="14" cy="14.75" r="3" />
+    </svg>
+  );
+}
+
+/** A printed sheet with its map frame and a title bar — the editor's Layout mode (F29). */
+export function IconModeLayout({ className, title }: IconProps) {
+  return (
+    <svg {...base} className={className}>
+      {title ? <title>{title}</title> : null}
+      <rect x="4" y="2.75" width="12" height="14.5" rx="1.25" />
+      <path d="M6.5 5.5h4" />
+      <rect x="6.5" y="8" width="7" height="6.5" rx="0.5" />
+    </svg>
+  );
+}
+
+/** A control flag on its stake — the editor's Field mode (F29). */
+export function IconModeField({ className, title }: IconProps) {
+  return (
+    <svg {...base} className={className}>
+      {title ? <title>{title}</title> : null}
+      <path d="M5.5 17.5V2.75" />
+      <rect x="5.5" y="3.5" width="10" height="7.5" />
+      <path d="M5.5 11 15.5 3.5" />
+    </svg>
+  );
+}
+
+/** An arrow out of a tray — the editor's Export ▾ (F29). */
+export function IconExport({ className, title }: IconProps) {
+  return (
+    <svg {...base} className={className}>
+      {title ? <title>{title}</title> : null}
+      <path d="M10 12.5V3M6.5 6.5 10 3l3.5 3.5" />
+      <path d="M3.5 11.5v4a1.5 1.5 0 0 0 1.5 1.5h10a1.5 1.5 0 0 0 1.5-1.5v-4" />
     </svg>
   );
 }

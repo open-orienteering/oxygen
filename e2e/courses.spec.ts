@@ -2,6 +2,7 @@ import { test, expect } from "@playwright/test";
 import { readFileSync } from "node:fs";
 import { reseed } from "./helpers/reseed";
 import { uploadEventMap } from "./helpers/map-upload";
+import { analysePdf } from "./helpers/editor";
 
 test.beforeAll(reseed);
 
@@ -127,6 +128,98 @@ test.describe("Courses Page", () => {
     expect(removed.ok()).toBe(true);
   });
 
+  test("a course with variations lists its variants under it, read-only (course-layer.md §12)", async ({ page }) => {
+    const headers = { "x-competition-id": "itest" };
+    const post = async (path: string, data: unknown) => {
+      const res = await page.request.post(`/trpc/${path}`, { headers, data });
+      expect(res.ok(), `${path}: ${await res.text()}`).toBe(true);
+      return (await res.json()).result.data;
+    };
+    const codes = [181, 182, 183, 184];
+    const controls: number[] = [];
+    for (const [i, code] of codes.entries()) {
+      controls.push((await post("control.create", { codes: String(code), xpos: 20 + i * 10, ypos: 20 })).id as number);
+    }
+    const name = `E2E Fork ${Date.now()}`;
+    const root = (await post("course.create", { name })).id as number;
+    await post("course.setStructure", {
+      courseId: root,
+      structure: {
+        version: 1,
+        id: "fork",
+        orderMode: "ordered",
+        items: [
+          { siteId: 181 },
+          { kind: "variation", id: "g", alternatives: [{ label: "A", items: [{ siteId: 182 }] }, { label: "B", items: [{ siteId: 183 }] }] },
+          { siteId: 184 },
+        ],
+      },
+    });
+
+    try {
+      await selectCompetition(page);
+      await clickTab(page, "Courses");
+      // The heading counts roots only: the seed's three and this one.
+      await expect(page.getByText("4 courses")).toBeVisible({ timeout: 10000 });
+      await expect(page.getByTestId(`course-variant-count-${root}`)).toHaveText("2 variants");
+      const variantRows = page.locator('[data-testid^="course-variant-row-"]');
+      await expect(variantRows).toHaveCount(2);
+      await expect(variantRows.nth(0)).toContainText(`${name} A`);
+      await expect(variantRows.nth(1)).toContainText(`${name} B`);
+      await expect(variantRows.nth(1).getByTestId("course-variant-key")).toHaveText("B");
+      // Nested right under the root's row, with no checkbox and no actions.
+      const rootRow = page.getByRole("row").filter({ hasText: name }).first();
+      await expect(rootRow.locator("xpath=following-sibling::tr[1]")).toHaveAttribute("data-testid", /course-variant-row-/);
+      // One action, its map on the root's sheet (F8); the root row prints all variations.
+      await expect(variantRows.nth(0).locator("input, button, a")).toHaveCount(1);
+      const variantB = variantRows.nth(1).locator('[data-testid^="export-variant-"]');
+      await expect(variantB).toHaveAttribute("title", "Variant B map (PDF)");
+      const printB = page.waitForRequest((r) => decodeURIComponent(r.url()).includes(`/maps.pdf?variants=${root}:B`));
+      await variantB.click();
+      await printB;
+      const printAll = page.waitForRequest((r) => r.url().includes(`/maps.pdf?allVariations=${root}`));
+      await page.getByTestId(`export-all-variations-${root}`).click();
+      await printAll;
+      // The seed has no base map: the route's answer shows on the error line.
+      await expect(page.getByTestId("course-maps-error")).toBeVisible({ timeout: 15000 });
+      // The root's own sequence is its structure's: read-only here.
+      await rootRow.getByRole("cell", { name }).click();
+      await expect(page.getByTestId("course-variations-hint")).toBeVisible({ timeout: 5000 });
+      await expect(page.getByTestId("course-detail-controls")).toBeDisabled();
+      await expect(page.getByTestId("course-order-mode")).toBeDisabled();
+      await expect(rootRow).toHaveAttribute("aria-expanded", "true");
+
+      // A variant's row expands like the root's (F17): same ?course= param, one open
+      // row, its own sequence read-only; the root's detail closes.
+      const variantSeq = Number((await variantRows.nth(1).getAttribute("data-testid"))!.replace("course-variant-row-", ""));
+      await variantRows.nth(1).getByText(`${name} B`).click();
+      await expect(page).toHaveURL(new RegExp(`course=${variantSeq}(&|$)`));
+      await expect(variantRows.nth(1)).toHaveAttribute("aria-expanded", "true");
+      await expect(rootRow).toHaveAttribute("aria-expanded", "false");
+      await expect(variantRows.nth(0)).toHaveAttribute("aria-expanded", "false");
+      await expect(page.getByTestId("course-detail-controls")).toHaveValue("181;183;184");
+      await expect(page.getByTestId("course-detail-controls")).toBeDisabled();
+      await expect(page.getByTestId("course-detail-name")).toBeDisabled();
+      await expect(page.getByTestId("course-variant-hint")).toBeVisible();
+      await expect(page.getByTestId("course-variations-hint")).toHaveCount(0);
+      await expect(page.getByTestId("course-order-mode")).toHaveCount(0);
+      await expect(variantRows.nth(1).locator("input, button, a")).toHaveCount(1);
+      // Deep link: the variant's detail reopens from the URL.
+      await page.goto(`/itest/courses?course=${variantSeq}`);
+      await expect(page.getByTestId("course-detail-controls")).toHaveValue("181;183;184", { timeout: 10000 });
+      await expect(variantRows.nth(1)).toHaveAttribute("aria-expanded", "true");
+      // Clicking it again closes it.
+      await variantRows.nth(1).getByText(`${name} B`).click();
+      await expect(page.getByTestId("course-detail-controls")).toHaveCount(0);
+    } finally {
+      await post("course.delete", { id: root });
+      for (const id of controls) await post("control.delete", { id });
+    }
+    await page.reload();
+    await expect(page.getByText("3 courses")).toBeVisible({ timeout: 10000 });
+    await expect(page.locator('[data-testid^="course-variant-row-"]')).toHaveCount(0);
+  });
+
   test("should create a free-order course with badge and persisted mode", async ({
     page,
   }) => {
@@ -224,6 +317,28 @@ test.describe("Courses Page", () => {
     // The seed assigns classes to courses, so assignments come along.
     expect(xml).toContain("<ClassCourseAssignment>");
     expect(xml).toContain("<CourseName>Bana 2</CourseName>");
+  });
+
+  test("Export → Description sheets…: the dialog with every class that has a course, one page per class (course-print.md §6.4)", async ({ page }) => {
+    await selectCompetition(page);
+    await clickTab(page, "Courses");
+    await expect(page.getByText("3 courses")).toBeVisible({ timeout: 10000 });
+
+    await page.getByTestId("course-export-menu").click();
+    await page.getByTestId("course-export-descriptions").click();
+    const dialog = page.getByTestId("editor-descriptions-dialog");
+    await expect(dialog).toBeVisible();
+    const boxes = dialog.locator('input[type="checkbox"]');
+    await expect(boxes.first()).toBeChecked();
+    const classes = await boxes.count();
+    expect(classes).toBeGreaterThan(0);
+    await dialog.getByTestId("editor-descriptions-copies-fill").check();
+
+    const [download] = await Promise.all([page.waitForEvent("download"), dialog.getByTestId("editor-descriptions-download").click()]);
+    expect(download.suggestedFilename()).toBe("itest_descriptions.pdf");
+    const pdf = await analysePdf(readFileSync((await download.path())!));
+    expect(pdf.pages).toBe(classes);
+    await expect(dialog).toHaveCount(0);
   });
 
   test("should export all courses as Purple Pen .ppen", async ({ page }) => {

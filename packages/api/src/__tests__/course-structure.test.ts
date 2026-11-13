@@ -1,7 +1,7 @@
 /** The structure ↔ columns mirror (docs/course-layer.md §6.2). */
 
 import { describe, expect, it } from "vitest";
-import { splitStructure, structureFromColumns, structureToWire, structureFromWire } from "../course-structure.js";
+import { carryLegs, crossingRowsOf, layerPropsOfStored, splitStructure, structureFromColumns, structureToWire, structureFromWire } from "../course-structure.js";
 
 const KIND: Record<string, string> = { S1: "start", S2: "start", a: "control", b: "control", F1: "finish" };
 const kindOf = (id: string) => KIND[id];
@@ -78,5 +78,113 @@ describe("wire form (public control ids)", () => {
     expect(wire.items.map((i) => ("siteId" in i ? i.siteId : null))).toEqual([1, 31, 2]);
     expect(wire.labelOffsets).toEqual({ "31": { dx: 1, dy: 2 } });
     expect(structureFromWire(wire, (id) => uuid.get(id)!)).toEqual(stored);
+  });
+
+  it("maps a leg's crossing point like a site, in alternatives too (F4)", () => {
+    const ids = new Map([...publicId, ["P", 90]]);
+    const back = new Map([...ids].map(([k, v]) => [v, k]));
+    const stored = {
+      version: 1 as const, id: "c", orderMode: "ordered" as const,
+      items: [
+        { siteId: "S1" },
+        { siteId: "a", leg: { bends: [{ x: 1, y: 1 }], crossing: { controlId: "P", section: true } } },
+        { kind: "variation" as const, id: "g", alternatives: [{ label: "A", items: [{ siteId: "a", leg: { crossing: { controlId: "P" } } }] }, { label: "B", items: [] }] },
+        { siteId: "F1" },
+      ],
+    };
+    const wire = structureToWire(stored, (id) => ids.get(id)!);
+    const item = wire.items[1] as { leg: { crossing: { controlId: number } } };
+    expect(item.leg.crossing).toEqual({ controlId: 90, section: true });
+    const alt = (wire.items[2] as { alternatives: { items: { leg?: { crossing: { controlId: number } } }[] }[] }).alternatives[0].items[0];
+    expect(alt.leg!.crossing.controlId).toBe(90);
+    expect(structureFromWire(wire, (id) => back.get(id)!)).toEqual(stored);
+  });
+});
+
+describe("crossingRowsOf (the derived 13.3 / 13.4 rows, F4)", () => {
+  const publicId = new Map([["S1", 1], ["a", 31], ["b", 32], ["F1", 2]]);
+  const of = (items: unknown[]) =>
+    crossingRowsOf({ version: 1, id: "c", orderMode: "ordered", items }, (id) => publicId.get(id), (id) => KIND[id] === "start");
+
+  it("anchors each leg's row after the item it leaves, null after the start", () => {
+    expect(
+      of([
+        { siteId: "S1" },
+        { siteId: "a", leg: { crossing: { controlId: "P" } } },
+        { siteId: "b", leg: { crossing: { controlId: "P", section: true } } },
+        { siteId: "F1" },
+      ]),
+    ).toEqual([{ afterControlId: null, section: false }, { afterControlId: 31, section: true }]);
+  });
+
+  it("is empty for a NULL column or a course without crossings", () => {
+    expect(crossingRowsOf(null, () => 1)).toEqual([]);
+    expect(of([{ siteId: "S1" }, { siteId: "a" }])).toEqual([]);
+  });
+});
+
+describe("layerPropsOfStored (the viewer's leg input, course-layer.md §5)", () => {
+  const publicId = new Map([["S1", 1], ["a", 31], ["b", 32], ["F1", 2]]);
+  const of = (items: unknown[]) => layerPropsOfStored({ version: 1, id: "c", orderMode: "ordered", items }, (id) => publicId.get(id));
+  const corridor = { widthM: 60, edge: true, whiteMm: 3, whiteOpacity: 0.5 };
+
+  it("carries each stored leg whole, keyed by the public ids of its ends", () => {
+    const out = of([
+      { siteId: "S1" },
+      { siteId: "a", leg: { style: "marked_route", gaps: [{ from: 0.1, to: 0.2 }] } },
+      { siteId: "b", leg: { bends: [{ x: 1, y: 2 }], corridor } },
+      { siteId: "F1", numberHidden: true },
+    ]);
+    expect(out.legs).toEqual({
+      "1>31": { style: "marked_route", gaps: [{ from: 0.1, to: 0.2 }] },
+      "31>32": { bends: [{ x: 1, y: 2 }], corridor },
+    });
+    expect(out.hiddenNumbers).toEqual([2]);
+    expect(out).not.toHaveProperty("legGaps");
+  });
+
+  it("carries the crossing as the site's public id (F4, §10.3), drops an unknown one, omits a leg left empty", () => {
+    const out = of([
+      { siteId: "S1" },
+      { siteId: "a", leg: { crossing: { controlId: "P", section: true } } },
+      { siteId: "b", leg: { style: "none", crossing: { controlId: "gone" } } },
+      { siteId: "F1", leg: {} },
+    ]);
+    const withP = layerPropsOfStored(
+      { version: 1, id: "c", orderMode: "ordered", items: [{ siteId: "S1" }, { siteId: "a", leg: { crossing: { controlId: "P", section: true } } }] },
+      (id) => (id === "P" ? 90 : publicId.get(id)),
+    );
+    expect(withP.legs).toEqual({ "1>31": { crossing: { controlId: "90", section: true } } });
+    expect(out.legs).toEqual({ "31>32": { style: "none" } });
+  });
+
+  it("has no legs for a NULL or invalid column", () => {
+    expect(layerPropsOfStored(null, () => 1)).toEqual({ legs: {}, hiddenNumbers: [] });
+    expect(layerPropsOfStored({ version: 9 }, () => 1)).toEqual({ legs: {}, hiddenNumbers: [] });
+  });
+});
+
+describe("carryLegs", () => {
+  const linear = (legs: Array<[string, object?]>) => ({
+    version: 1 as const,
+    id: "c",
+    orderMode: "ordered" as const,
+    items: legs.map(([siteId, leg]) => ({ siteId, ...(leg ? { leg } : {}) })),
+  });
+
+  it("carries a leg to an item that still follows the same site", () => {
+    const prev = linear([["S1"], ["a", { gaps: [{ from: 0.2, to: 0.4 }] }], ["F1"]]);
+    expect(carryLegs(prev, linear([["S1"], ["a"], ["F1"]])).items[1]).toEqual({ siteId: "a", leg: { gaps: [{ from: 0.2, to: 0.4 }] } });
+    // A different predecessor is a different leg.
+    expect(carryLegs(prev, linear([["S1"], ["b"], ["a"], ["F1"]])).items[2]).toEqual({ siteId: "a" });
+  });
+
+  it("keeps the rewritten item's own props over the carried ones (an import's bends / style, row F9)", () => {
+    const prev = linear([["S1"], ["a", { gaps: [{ from: 0.2, to: 0.4 }], style: "marked_route", bends: [{ x: 1, y: 1 }] }]]);
+    const next = linear([["S1"], ["a", { bends: [{ x: 5, y: 5 }] }]]);
+    expect(carryLegs(prev, next).items[1]).toEqual({
+      siteId: "a",
+      leg: { gaps: [{ from: 0.2, to: 0.4 }], style: "marked_route", bends: [{ x: 5, y: 5 }] },
+    });
   });
 });

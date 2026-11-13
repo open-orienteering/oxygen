@@ -4,6 +4,9 @@
  * the course-level lines and areas as course-object bodies. Pure; the
  * importer reads the parser's import-time GeoJSON shape (what
  * `courses.geometry` of an `ocd` row held until E5 dropped the column).
+ * Since F9 also the legs' bends (a Purple Pen `<leg>`, drawn into the leg
+ * feature so the import alignment moves them) and the leg an item gets
+ * from all of the file's leg properties (`importedLegProps`).
  */
 
 import type { course } from "@oxygen/shared";
@@ -64,6 +67,46 @@ export function legGapsOfFeatures(geometry: GeoJSONFeatureCollection, positionOf
     if (gaps.length > 0) out.set(key, gaps);
   }
   return out;
+}
+
+/**
+ * The bends of a course geometry's bent legs, keyed `"<fromCode>><toCode>"`:
+ * the inner vertices of a leg feature the parser marked `bent` (Purple
+ * Pen's `<leg>`, `buildStraightLineGeometry`). An OCD bundle's pre-clipped
+ * pieces are not read (their bends stay Pending, course-layer.md §6.4).
+ * The first leg of a pair wins. Imported bends are corners: no file read
+ * here carries a handle (F13, course-layer.md §10.1).
+ */
+export function legBendsOfFeatures(geometry: GeoJSONFeatureCollection): Map<string, P[]> {
+  const out = new Map<string, P[]>();
+  for (const f of geometry.features) {
+    const p = f.properties as { symbolType?: string; from?: string; to?: string; bent?: boolean; preclipped?: boolean } | null;
+    if (p?.symbolType !== "leg" || !p.bent || p.preclipped || !p.from || !p.to || f.geometry.type !== "LineString") continue;
+    const key = `${p.from}>${p.to}`;
+    const inner = (f.geometry.coordinates as [number, number][]).slice(1, -1);
+    if (inner.length > 0 && !out.has(key)) out.set(key, inner.map(([x, y]) => ({ x, y })));
+  }
+  return out;
+}
+
+/**
+ * The leg an imported item carries (course-layer.md §6.4 "Importers"): the
+ * file's gaps (OCD), bends (Purple Pen), marked route and crossing point
+ * (IOF `TapedRoute` / `CrossingPoint`, the crossing by its site's UUID).
+ * Undefined when the file says nothing about the leg.
+ */
+export function importedLegProps(input: {
+  gaps?: FractionGap[];
+  bends?: P[];
+  style?: "marked_route";
+  crossing?: { controlId: string; section?: boolean };
+}): course.LegProps | undefined {
+  const leg: course.LegProps = {};
+  if (input.gaps?.length) leg.gaps = input.gaps;
+  if (input.bends?.length) leg.bends = input.bends;
+  if (input.style) leg.style = input.style;
+  if (input.crossing) leg.crossing = { controlId: input.crossing.controlId, ...(input.crossing.section ? { section: true } : {}) };
+  return Object.keys(leg).length > 0 ? leg : undefined;
 }
 
 export interface ImportedObject {

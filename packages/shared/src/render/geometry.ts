@@ -24,7 +24,8 @@ import {
 /** Flattened ring: x,y pairs, not repeating the first point at the end. */
 export type FlatRing = number[];
 
-function flattenSegment(s: Segment, toleranceUm: number, out: number[]): void {
+/** Appends one segment flattened at `toleranceUm` (its end point included, its start not): a cubic gives `pieces` points at t = k / pieces. */
+export function flattenSegment(s: Segment, toleranceUm: number, out: number[]): void {
   if (s.kind === "line") {
     out.push(s.x1, s.y1);
     return;

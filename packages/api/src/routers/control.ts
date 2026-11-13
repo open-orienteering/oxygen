@@ -1,6 +1,6 @@
 import { createSocket } from "node:dgram";
 import { z } from "zod";
-import { publicControlId } from "../control-id.js";
+import { firstCode, lowestFreeStartCode, publicControlId } from "../control-id.js";
 import { TRPCError } from "@trpc/server";
 import { router, coursesViewProcedure, coursesEditProcedure, coursesEditRaceProcedure, coursesEditOrReviewRaceProcedure, coursesReviewRaceProcedure, raceOperateProcedure, raceOperateRaceProcedure } from "../trpc.js";
 import type { PrismaClient } from "../generated/prisma/client.js";
@@ -28,11 +28,15 @@ import { loadEventMapObjects } from "../event-map-objects.js";
 import { describeAt, descriptionsEqual, suggestDescriptions } from "../description-autodetect.js";
 import { mapMmToWgs84 } from "../map-projection.js";
 import { rebuildCourseLengths } from "../course-geometry.js";
+import { course as courseShared } from "@oxygen/shared";
 import {
   coursesNamingInStructure,
+  persistStructure,
+  siteUseInStructures,
   remirrorStoredStructures,
   rewriteStructureFromColumns,
 } from "../course-structure.js";
+import { emitVariantSync, mergeSyncs, rootStructureOf, syncVariants, type VariantSync } from "../course-variants.js";
 import {
   baseVersionSchema,
   basePayload,
@@ -330,8 +334,128 @@ function siteKind(row: { kind: string; status: string }): ControlKind {
   return row.status === "start" || row.status === "finish" ? row.status : "control";
 }
 
-/** Phase-1 site kinds; the rest of the `control_kind` enum is written from slice F. */
-const PHASE1_KINDS: readonly ControlKind[] = ["control", "start", "finish"];
+/** A Prisma client or an interactive transaction's client. */
+type Db = PrismaClient | PrismaNs.TransactionClient;
+
+/** `codes` filters matching a row that holds `n` as any of its `;`-separated codes. */
+function codesHolding(n: number) {
+  return [
+    { codes: String(n) },
+    { codes: { startsWith: `${n};` } },
+    { codes: { contains: `;${n};` } },
+    { codes: { endsWith: `;${n}` } },
+  ];
+}
+
+/**
+ * Who already holds `n` as a public id in the event (course-layer.md §6.3,
+ * F32): a live row with `n` among its codes, or a live row without a numeric
+ * code whose seq is `n` (a legacy code-less start is addressed by its seq).
+ * Null when `n` is free.
+ */
+export async function codeHolder(db: Db, eventId: bigint, n: number, exceptId?: string): Promise<{ bySeq: boolean } | null> {
+  const notSelf = exceptId ? { id: { not: exceptId } } : {};
+  const byCode = await db.control.findFirst({
+    where: { eventId, removed: false, ...notSelf, OR: codesHolding(n) },
+    select: { id: true },
+  });
+  if (byCode) return { bySeq: false };
+  const bySeq = await db.control.findFirst({ where: { eventId, removed: false, seq: n, ...notSelf }, select: { codes: true } });
+  return bySeq && firstCode(bySeq.codes) === 0 ? { bySeq: true } : null;
+}
+
+/** Refuse a code another live row holds (`CONFLICT`): by its codes or, code-less, by its seq. */
+async function assertCodeFree(db: Db, eventId: bigint, n: number, exceptId?: string): Promise<void> {
+  const holder = await codeHolder(db, eventId, n, exceptId);
+  if (!holder) return;
+  throw new TRPCError({
+    code: "CONFLICT",
+    message: holder.bySeq ? `Control ${n} already exists (seq)` : `Control with code ${n} already exists`,
+  });
+}
+
+/**
+ * The code a start or finish written without one takes (course-layer.md §6.3,
+ * F32): the lowest free in 3–10, then 11–30 — free of every live row's codes
+ * and of the seq of every live row without a numeric code. Call inside the
+ * write's transaction: the per-event advisory lock (released at commit)
+ * serialises allocations, so parallel creates take distinct codes.
+ * `PRECONDITION_FAILED` `START_FINISH_CODES_EXHAUSTED` when 3–30 are held.
+ */
+export async function allocateStartFinishCode(tx: PrismaNs.TransactionClient, eventId: bigint): Promise<number> {
+  await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtext(${`control-codes:${eventId}`}))`;
+  const rows = await tx.control.findMany({ where: { eventId, removed: false }, select: { codes: true, seq: true } });
+  const held = new Set<number>();
+  for (const r of rows) {
+    const parts = r.codes.split(";").map((p) => parseInt(p.trim(), 10)).filter((n) => Number.isFinite(n) && n > 0);
+    if (firstCode(r.codes) === 0) held.add(r.seq);
+    for (const n of parts) held.add(n);
+  }
+  const code = lowestFreeStartCode(held);
+  if (code === null) {
+    throw new TRPCError({
+      code: "PRECONDITION_FAILED",
+      message: "START_FINISH_CODES_EXHAUSTED: codes 3–30 are all in use; give the start or finish a code",
+    });
+  }
+  return code;
+}
+
+/**
+ * Kinds created without a given punch code, and their names ("Start N" /
+ * "Mål N" as the importers; crossing and map-issue points by the same rule,
+ * course-layer.md §6.3). Crossing and map-issue points stay code-less
+ * (addressed by seq, above MARK_SEQ_BASE); a start or finish takes the lowest
+ * free code in 3–30 since F32 (`allocateStartFinishCode`).
+ */
+const AUTO_NAMES: Partial<Record<ControlKind, string>> = {
+  start: "Start",
+  finish: "Mål",
+  crossing_point: "Passeringspunkt",
+  map_issue: "Kartutdelning",
+};
+
+/**
+ * Code-less crossing and map-issue points take a seq above this (course-layer.md
+ * §6.3): their public id (`publicControlId`, the seq without a code) stays clear
+ * of every punch code (SI codes end at 1023), where an allocated seq would meet
+ * one (`uuidsOfPublicIds` resolves codes first).
+ */
+export const MARK_SEQ_BASE = 10_000;
+
+/** Kinds that are never structure items (the slice-F split; course-layer.md §10.3). */
+const NON_ITEM_KINDS: ReadonlySet<ControlKind> = new Set(["crossing_point", "map_issue"]);
+
+/**
+ * A kind change that would leave a stored structure invalid is refused, not
+ * pruned (course-layer.md §6.3): a site that is an item cannot become a
+ * crossing or map-issue point (`SITE_KIND_NOT_ITEM`), a crossing point a
+ * leg runs through cannot become another kind (`CROSSING_KIND`), a site in
+ * a variation's alternative cannot become a map exchange
+ * (`VARIATION_CROSSES_EXCHANGE`).
+ */
+async function assertKindChangeAllowed(
+  tx: PrismaNs.TransactionClient,
+  eventId: bigint,
+  c: { id: string; name: string; status: string; kind: string },
+  kind: ControlKind,
+): Promise<void> {
+  const current = siteKind(c);
+  if (kind === current) return;
+  const use = await siteUseInStructures(tx, eventId, c.id);
+  if (NON_ITEM_KINDS.has(kind)) {
+    const columns = await courseIdsUsingControl(tx, eventId, c);
+    if (use.asItem.length > 0 || columns.length > 0) {
+      throw new TRPCError({ code: "PRECONDITION_FAILED", message: "SITE_KIND_NOT_ITEM: the control is on a course" });
+    }
+  }
+  if (current === "crossing_point" && use.asCrossing.length > 0) {
+    throw new TRPCError({ code: "PRECONDITION_FAILED", message: "CROSSING_KIND: a leg runs through the crossing point" });
+  }
+  if (kind === "map_exchange" && use.inGroup.length > 0) {
+    throw new TRPCError({ code: "PRECONDITION_FAILED", message: "VARIATION_CROSSES_EXCHANGE: the control is in a variation" });
+  }
+}
 
 /**
  * `kind` and `status` 4 / 5 kept in sync for one release (08 §4.8): the
@@ -595,12 +719,19 @@ export const controlRouter = router({
           name: z.string().optional().default(""),
           /**
            * Punch codes (`;`-separated positive integers). Required for
-           * normal controls; start/finish controls (status 4/5) are
-           * code-less by convention — omit or pass "" and they are
-           * addressed by seq (publicControlId falls back to it).
+           * normal controls; a start / finish (status 4/5) given none takes
+           * the lowest free code in 3–10, then 11–30 (F32, course-layer.md
+           * §6.3); crossing and map-issue points are code-less.
            */
           codes: z.string().optional().default(""),
           status: z.number().int().optional().default(0),
+          /**
+           * Site kind (docs/course-layer.md §6.3); default from `status`
+           * (4 / 5 → start / finish, else control). Crossing and map-issue
+           * points are code-less, a start / finish given no code takes one
+           * (F32); `status` follows a start / finish kind.
+           */
+          kind: z.enum(["control", "start", "finish", "map_exchange", "crossing_point", "map_issue"]).optional(),
           timeAdjust: z.number().int().optional().default(0),
           minTime: z.number().int().optional().default(0),
           /** Map position in paper mm (course editor). Both or neither. */
@@ -618,11 +749,16 @@ export const controlRouter = router({
         }),
     )
     .mutation(async ({ ctx, input }) => {
-      const statusEnum = valueToControlStatus(input.status);
-      const isStartFinish = statusEnum === "start" || statusEnum === "finish";
+      const fromStatus = valueToControlStatus(input.status);
+      const kind: ControlKind = input.kind ?? (fromStatus === "start" || fromStatus === "finish" ? fromStatus : "control");
+      // `status` 4 / 5 kept in sync with the kind for one release (08 §4.8).
+      const statusEnum =
+        kind === "start" || kind === "finish" ? kind : fromStatus === "start" || fromStatus === "finish" ? "ok" : fromStatus;
+      const isStartFinish = kind === "start" || kind === "finish";
+      const autoNamed = AUTO_NAMES[kind] !== undefined;
       // Validate codes: each part must be a positive integer.
       const parts = input.codes.split(";").map((p) => p.trim()).filter(Boolean);
-      if (parts.length === 0 && !isStartFinish) {
+      if (parts.length === 0 && !autoNamed) {
         throw new TRPCError({
           code: "BAD_REQUEST",
           message: "Invalid control code: at least one code is required",
@@ -639,28 +775,9 @@ export const controlRouter = router({
         }
         parsed.push(n);
       }
-      // Reject duplicates (codes already used by another control).
-      for (const n of parsed) {
-        const dup = await ctx.db.control.findFirst({
-          where: {
-            eventId: ctx.event.id,
-            removed: false,
-            OR: [
-              { codes: String(n) },
-              { codes: { startsWith: `${n};` } },
-              { codes: { contains: `;${n};` } },
-              { codes: { endsWith: `;${n}` } },
-            ],
-          },
-          select: { id: true },
-        });
-        if (dup) {
-          throw new TRPCError({
-            code: "CONFLICT",
-            message: `Control with code ${n} already exists`,
-          });
-        }
-      }
+      // Reject duplicates: a code another live row holds, by its codes or —
+      // code-less — by its seq (F32, course-layer.md §6.3).
+      for (const n of parsed) await assertCodeFree(ctx.db, ctx.event.id, n);
       // Resolve WGS84 coordinates up-front (outside the transaction — the
       // CRS load may parse the whole map file on a cache miss).
       const hasPosition = input.xpos !== undefined && input.ypos !== undefined;
@@ -668,14 +785,16 @@ export const controlRouter = router({
         ? await positionToWgs84(ctx.db, ctx.event.id, input.xpos!, input.ypos!)
         : null;
 
-      // Auto-name start/finish rows following the import convention
+      // Auto-name code-less rows following the import convention
       // ("Start N" / "Mål N") — courses reference starts by this name.
       let name = input.name;
-      if (!name && isStartFinish) {
+      if (!name && autoNamed) {
         const count = await ctx.db.control.count({
-          where: { eventId: ctx.event.id, status: statusEnum, removed: false },
+          where: isStartFinish
+            ? { eventId: ctx.event.id, status: statusEnum, removed: false }
+            : { eventId: ctx.event.id, kind, removed: false },
         });
-        name = `${statusEnum === "start" ? "Start" : "Mål"} ${count + 1}`;
+        name = `${AUTO_NAMES[kind]} ${count + 1}`;
       }
 
       let description = input.description as ControlDescription | undefined;
@@ -683,7 +802,7 @@ export const controlRouter = router({
         !description &&
         input.autoDescribe &&
         hasPosition &&
-        !isStartFinish
+        !autoNamed
       ) {
         description =
           (await autoDescribeAt(
@@ -696,13 +815,25 @@ export const controlRouter = router({
 
       // Table write + control.upserted journal entry commit together.
       const created = await ctx.db.$transaction(async (tx) => {
+        // A code-less crossing / map-issue point is addressed by its seq: one above MARK_SEQ_BASE, so its public
+        // id never meets a punch code (course-layer.md §6.3).
+        let seq: number | undefined;
+        if (autoNamed && !isStartFinish && parts.length === 0) {
+          const top = await tx.control.aggregate({ where: { eventId: ctx.event.id, seq: { gt: MARK_SEQ_BASE } }, _max: { seq: true } });
+          seq = Math.max(MARK_SEQ_BASE, top._max.seq ?? 0) + 1;
+        }
+        // A start / finish given no code takes one (F32): its public id is
+        // then its code, never a seq that may equal another control's code.
+        const codes =
+          isStartFinish && parts.length === 0 ? String(await allocateStartFinishCode(tx, ctx.event.id)) : input.codes;
         const c = await tx.control.create({
           data: {
             eventId: ctx.event.id,
+            ...(seq !== undefined ? { seq } : {}),
             name,
-            codes: input.codes,
+            codes,
             status: statusEnum,
-            kind: isStartFinish ? statusEnum : "control",
+            kind,
             timeAdjust: input.timeAdjust,
             minTime: input.minTime,
             ...(hasPosition
@@ -765,7 +896,11 @@ export const controlRouter = router({
            * position. Hand-edited descriptions are left alone.
            */
           autoDescribe: z.boolean().optional(),
-          /** Site kind (docs/course-layer.md §6); `status` 4 / 5 follows it. Phase 1: control, start, finish. */
+          /**
+           * Site kind (docs/course-layer.md §6.3); `status` 4 / 5 follows it.
+           * A change that would leave a stored structure invalid is refused
+           * (`assertKindChangeAllowed`).
+           */
           kind: z.enum(["control", "start", "finish", "map_exchange", "crossing_point", "map_issue"]).optional(),
           /** Manual circle gaps, compass degrees. */
           circleGaps: z
@@ -790,12 +925,6 @@ export const controlRouter = router({
       if (notes !== undefined && !caps.has("courses.review")) {
         throw new TRPCError({ code: "FORBIDDEN", message: "Missing capability courses.review" });
       }
-      if (input.kind !== undefined && !PHASE1_KINDS.includes(input.kind)) {
-        throw new TRPCError({
-          code: "PRECONDITION_FAILED",
-          message: "Map exchanges, crossing points and map-issue points arrive in slice F",
-        });
-      }
       const c = await getControlByCode(ctx.db, ctx.event.id, input.id);
       const data: Record<string, unknown> = {};
       if (input.name !== undefined) data.name = input.name;
@@ -804,26 +933,7 @@ export const controlRouter = router({
         for (const p of parts) {
           const n = parseInt(p, 10);
           if (!Number.isFinite(n) || n <= 0) continue;
-          const dup = await ctx.db.control.findFirst({
-            where: {
-              eventId: ctx.event.id,
-              removed: false,
-              id: { not: c.id },
-              OR: [
-                { codes: String(n) },
-                { codes: { startsWith: `${n};` } },
-                { codes: { contains: `;${n};` } },
-                { codes: { endsWith: `;${n}` } },
-              ],
-            },
-            select: { id: true },
-          });
-          if (dup) {
-            throw new TRPCError({
-              code: "CONFLICT",
-              message: `Control with code ${n} already exists`,
-            });
-          }
+          await assertCodeFree(ctx.db, ctx.event.id, n, c.id);
         }
         data.codes = input.codes;
       } else if (input.codes !== undefined) {
@@ -912,6 +1022,7 @@ export const controlRouter = router({
           }
         }
         const kindChanged = data.kind !== undefined && data.kind !== siteKind(c);
+        if (kindChanged) await assertKindChangeAllowed(tx, ctx.event.id, c, data.kind as ControlKind);
         // Courses that depend on the control, computed before the write (a
         // start / finish default is the lowest live seq of the old world).
         const dependent =
@@ -923,6 +1034,15 @@ export const controlRouter = router({
                 ]),
               ]
             : [];
+        // A row that becomes a start / finish without a code takes one (F32).
+        const nextKind = (data.kind as ControlKind | undefined) ?? siteKind(c);
+        if (
+          kindChanged &&
+          (nextKind === "start" || nextKind === "finish") &&
+          firstCode((data.codes as string | undefined) ?? c.codes) === 0
+        ) {
+          data.codes = String(await allocateStartFinishCode(tx, ctx.event.id));
+        }
         await tx.control.update({ where: { id: c.id }, data });
         const v = await emitControlUpserted(tx, ctx.event.id, c.id);
         // A kind change makes `splitStructure` read a stored structure
@@ -999,13 +1119,42 @@ export const controlRouter = router({
         await tx.courseControl.deleteMany({ where: { controlId: c.id } });
         // The courses that named it lose an item: their structure is
         // rewritten (and their token advances); the rest only reference it
-        // as an implicit start / finish and get new geometry alone.
+        // as an implicit start / finish and get new geometry alone. A root
+        // loses it from every alternative, groups kept, and re-materialises
+        // its variants, which are written by that alone (course-layer.md §12).
+        const syncs: VariantSync[] = [];
         for (const courseId of visited) {
-          await rewriteStructureFromColumns(tx, ctx.event.id, courseId);
+          const row = await tx.course.findUniqueOrThrow({
+            where: { id: courseId },
+            select: { structure: true, orderMode: true, parentCourseId: true },
+          });
+          if (row.parentCourseId) continue;
+          const root = rootStructureOf(row.structure);
+          if (root) {
+            await persistStructure(
+              tx,
+              ctx.event.id,
+              courseShared.pruneSiteFromStructure({ ...root, id: courseId, orderMode: row.orderMode }, c.id),
+            );
+            syncs.push(await syncVariants(tx, ctx.event.id, courseId));
+          } else {
+            await rewriteStructureFromColumns(tx, ctx.event.id, courseId);
+            // The rewrite carries the legs over; a leg through the deleted crossing point loses it (§10.3).
+            const after = await tx.course.findUniqueOrThrow({ where: { id: courseId }, select: { structure: true } });
+            const parsed = courseShared.courseStructureSchema.safeParse(after.structure);
+            if (parsed.success) {
+              const pruned = courseShared.pruneSiteFromStructure(parsed.data, c.id);
+              if (JSON.stringify(pruned) !== JSON.stringify(parsed.data)) {
+                await tx.course.update({ where: { id: courseId }, data: { structure: pruned as unknown as PrismaNs.InputJsonValue } });
+              }
+            }
+          }
         }
+        const variantSync = mergeSyncs(syncs);
+        const variantIds = new Set(variantSync.childIds);
         // Deletes are upserts with removed: true on the wire.
         await emitControlUpserted(tx, ctx.event.id, c.id);
-        const affected = [...new Set([...courseIds, ...visited])];
+        const affected = [...new Set([...courseIds, ...visited])].filter((id) => !variantIds.has(id));
         await rebuildCourseLengths(tx, ctx.event.id, affected);
         const versions: { id: number; version: string }[] = [];
         for (const courseId of affected) {
@@ -1015,6 +1164,7 @@ export const controlRouter = router({
             versions.push({ id: row.seq, version: v.toString() });
           }
         }
+        await emitVariantSync(tx, ctx.event.id, variantSync);
         return versions;
       });
       // The courses whose token advanced, so an editor can keep sending

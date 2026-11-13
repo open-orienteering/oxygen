@@ -138,3 +138,21 @@ describe("documentRenderInput — text layout (map-rendering §4.9, map-document
     expect(src).toMatchObject({ fontFamily: "liberation-sans-narrow", shadow: { colour: 1 }, frame: { colour: 1 } });
   });
 });
+
+describe("documentRenderInput — a subset of objects (`only`, the editor's eyedropper, map-rendering §5.5)", () => {
+  it("maps every render object back to its document object (`docIdx`), skipping what it drops", () => {
+    const d = doc();
+    const input = documentRenderInput(d, { unmatched: "drop" });
+    expect(input.docIdx).toHaveLength(input.objects.length);
+    input.docIdx.forEach((di, i) => expect(input.objects[i].symbolIdx).toBe(d.attrs.symbolIdx[di]));
+  });
+
+  it("`only` symbolises just the listed objects; symbol indices stay the document's", () => {
+    const d = doc();
+    const road = [...d.attrs.symbolIdx].indexOf(1), text = [...d.attrs.symbolIdx].indexOf(3);
+    const input = documentRenderInput(d, { only: [text, road] });
+    expect(input.docIdx).toEqual([road, text]);
+    expect(input.objects.map((o) => o.symbolIdx)).toEqual([1, 3]);
+    expect(input.symbols).toHaveLength(documentRenderInput(d).symbols.length);
+  });
+});

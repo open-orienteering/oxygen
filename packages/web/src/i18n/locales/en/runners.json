@@ -125,5 +125,6 @@
   "cardReturned": "Card returned",
   "flagOC": "Out of competition",
   "flagNT": "No timing",
-  "flagPayBefore": "Pay before result"
+  "flagPayBefore": "Pay before result",
+  "variant": "Variant"
 }

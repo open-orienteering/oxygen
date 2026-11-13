@@ -12,7 +12,7 @@ import { readFile } from "node:fs/promises";
 import { render } from "@oxygen/shared";
 import { pageSceneNames } from "@oxygen/shared/print";
 import { goldenDir, renderGoldenPng } from "../golden.js";
-import { renderPageGoldenPng } from "../page-raster.js";
+import { DESCRIPTION_GOLDEN, renderDescriptionGoldenPng, renderPageGoldenPng } from "../page-raster.js";
 import { diffImages } from "../reference-raster.js";
 
 async function decode(png: Buffer): Promise<{ width: number; height: number; pixels: Uint8Array }> {
@@ -48,6 +48,10 @@ describe("golden PNGs", () => {
       "course-objects",
       "course-sprint",
       "course-all-controls",
+      "course-leg-styles",
+      "course-corridor",
+      "course-exchange",
+      "course-legs-curved",
       "filter-clip-brown",
       "filter-hide-505",
       "filter-moved",
@@ -79,6 +83,14 @@ describe("golden PNGs", () => {
       expect(d.differing, `golden ${name}.png is stale — run pnpm --filter @oxygen/api golden:render`).toBe(0);
     }, 60_000);
   }
+
+  it(`${DESCRIPTION_GOLDEN}.png matches the current description-sheet oracle`, async () => {
+    const committed = await decode(await readFile(new URL(`${DESCRIPTION_GOLDEN}.png`, goldenDir)));
+    const current = await decode(await renderDescriptionGoldenPng());
+    expect({ width: committed.width, height: committed.height }).toEqual({ width: current.width, height: current.height });
+    const d = diffImages(committed, current, 1);
+    expect(d.differing, `golden ${DESCRIPTION_GOLDEN}.png is stale — run pnpm --filter @oxygen/api golden:render`).toBe(0);
+  }, 60_000);
 
   it("golden frames are whole pixels", async () => {
     const fonts = await (await import("../golden.js")).goldenFonts();

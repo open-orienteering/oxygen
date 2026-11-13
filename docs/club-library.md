@@ -89,7 +89,9 @@ own file. That flag gates:
 
 ### Copy-on-use
 
-On an event map panel, **From club library** copies the chosen entry's latest
+On an event map panel with no map yet (its drop zone), or from the course
+editor's map-info dialog (the top bar's map icon, [course-editor.md](course-editor.md)
+§2; P6 replaced the map footer), **From club library** copies the chosen entry's latest
 version (its original file, by hash, and the series' rotation correction) into that
 event's `map_files` row and runs the same pipeline as a direct upload
 (`applyEventMap`): replace the previous map row, run the import job (a

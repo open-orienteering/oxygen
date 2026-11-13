@@ -12,8 +12,12 @@ import type { PlacementState } from "../../pages/editor/tools/placement";
 import type { AreaKind, PolygonState } from "../../pages/editor/tools/polygon";
 
 export type EditorMode = "course" | "layout" | "field";
-/** `class`: Class view (docs/course-layout.md §6; 08 §5.4) — the course as `classSeq` prints it. */
-export type EditorView = "course" | "all" | "class";
+/**
+ * `class`: Class view (docs/course-layout.md §6; 08 §5.4) — the course as `classSeq` prints it.
+ * `variant`: one variant of a course with variations, `variantKey` (docs/course-editor.md §12; 08 §5.4).
+ * `all-variations`: every alternative at once in screen-only tints (§12; 08 §5.3), read-only.
+ */
+export type EditorView = "course" | "all" | "class" | "variant" | "all-variations";
 
 /** The tool rail's tools (08 §5.2): `V`, the armed `S` / `K` / `M`, `A` areas, `T` text, `G` gaps. */
 export type EditorTool =
@@ -22,13 +26,21 @@ export type EditorTool =
   | { kind: "area"; poly: PolygonState }
   | { kind: "text" }
   /** Gaps on the selected circle, or on the leg into control-sequence position `legInsertAt` (the clicked leg). */
-  | { kind: "gap"; legInsertAt: number | null };
+  | { kind: "gap"; legInsertAt: number | null }
+  /** The filter region's eyedropper (§6.4): a click adds the symbol under it to the selected region. */
+  | { kind: "pick-symbol" };
 
 export interface EditorState extends CourseEditorState {
   mode: EditorMode;
   view: EditorView;
   /** Class view's class (its seq); null in the other views. */
   classSeq: number | null;
+  /** Variant view's key (`AC`); null in the other views. */
+  variantKey: string | null;
+  /** Course view's displayed alternative per group id (§12; default the first). */
+  activeAlternatives: Record<string, string>;
+  /** The group whose alternative was activated last (tab or `1–9`): an armed `K` with nothing selected inserts into it. */
+  focusGroupId: string | null;
   hideOthers: boolean;
   tool: EditorTool;
   /** Controls selected together (Shift-click, lasso), in selection order; empty or ≥ 2. */
@@ -44,6 +56,10 @@ export type EditorAction =
   | { type: "view"; view: EditorView }
   /** Class view of a class of the selected course; null leaves it for Course view. */
   | { type: "class"; seq: number | null }
+  /** Variant view of a key of the selected course; null leaves it for Course view. */
+  | { type: "variant"; key: string | null }
+  /** Show (and activate) an alternative of a group in Course view (§12: a tab, `1–9`). */
+  | { type: "alternative"; groupId: string; label: string }
   | { type: "toggle-hide-others" }
   | { type: "tool"; tool: EditorTool }
   | { type: "chain"; chain: PlacementState }
@@ -56,7 +72,7 @@ export type EditorAction =
 const SELECT: EditorTool = { kind: "select" };
 
 export const initialEditorState: EditorState = {
-  ...initialCourseEditorState, mode: "course", view: "course", classSeq: null, hideOthers: false, tool: SELECT, multi: [], selectedObjectId: null, snapping: false,
+  ...initialCourseEditorState, mode: "course", view: "course", classSeq: null, variantKey: null, activeAlternatives: {}, focusGroupId: null, hideOthers: false, tool: SELECT, multi: [], selectedObjectId: null, snapping: false,
 };
 
 /** A new area tool of `kind`. */
@@ -67,17 +83,39 @@ export function editorReducer(state: EditorState, action: EditorAction): EditorS
     case "mode":
       // Course and Field (§9) keep the selection. Layout mode locks course edits (08 §5.4): the course stays
       // selected, a tool, a phantom and the selections of Course mode are dropped.
+      // The eyedropper is Course mode's (a filter region is edited there): any mode change drops it.
       if (action.mode === state.mode) return state;
       return action.mode === "layout"
         ? { ...state, mode: "layout", tool: SELECT, phantom: null, selectedControlId: null, multi: [], selectedObjectId: null }
-        : { ...state, mode: action.mode };
+        : { ...state, mode: action.mode, ...(state.tool.kind === "pick-symbol" ? { tool: SELECT } : {}) };
     case "view":
-      // Class view needs a class (the "class" action); the other views drop it.
+      // Class view needs a class (the "class" action), Variant view a key (the "variant" action); the other views drop them.
       if (action.view === "class") return state.classSeq === null ? state : { ...state, view: "class", phantom: null };
-      return state.view === action.view ? state : { ...state, view: action.view, classSeq: null, phantom: null };
+      if (action.view === "variant") return state.variantKey === null ? state : { ...state, view: "variant", phantom: null };
+      return state.view === action.view ? state : { ...state, view: action.view, classSeq: null, variantKey: null, phantom: null };
     case "class":
       if (action.seq === null) return state.view === "class" ? { ...state, view: "course", classSeq: null } : state;
-      return state.view === "class" && state.classSeq === action.seq ? state : { ...state, view: "class", classSeq: action.seq, phantom: null };
+      return state.view === "class" && state.classSeq === action.seq ? state : { ...state, view: "class", classSeq: action.seq, variantKey: null, phantom: null };
+    case "variant":
+      // F8: Class view and Layout mode draw a root as one variant prints; the key picks it (null = the first), nothing else changes.
+      if ((state.view === "class" || state.mode === "layout") && state.view !== "variant") {
+        return state.variantKey === action.key ? state : { ...state, variantKey: action.key };
+      }
+      if (action.key === null) return state.view === "variant" ? { ...state, view: "course", variantKey: null } : state;
+      return state.view === "variant" && state.variantKey === action.key ? state : { ...state, view: "variant", variantKey: action.key, classSeq: null, phantom: null };
+    case "alternative": {
+      // §12: the alternative is shown in Course view (a variant or the overlay gives way to it) and is where `K` goes.
+      const same = state.activeAlternatives[action.groupId] === action.label && state.focusGroupId === action.groupId && state.view === "course";
+      if (same) return state;
+      const toCourse = state.view === "variant" || state.view === "all-variations";
+      return {
+        ...state,
+        activeAlternatives: { ...state.activeAlternatives, [action.groupId]: action.label },
+        focusGroupId: action.groupId,
+        phantom: null,
+        ...(toCourse ? { view: "course" as const, variantKey: null } : {}),
+      };
+    }
     case "toggle-hide-others":
       // Hiding needs a selected course to mean anything (as `H` in the legacy editor).
       return state.selectedCourseId === null ? state : { ...state, hideOthers: !state.hideOthers };
@@ -104,6 +142,8 @@ export function editorReducer(state: EditorState, action: EditorAction): EditorS
       if (state.tool.kind !== "select") return { ...state, tool: SELECT };
       if (state.multi.length > 0) return { ...state, multi: [] };
       if (state.selectedObjectId !== null) return { ...state, selectedObjectId: null };
+      // Before the course is dropped: the activated alternative's claim on `K` (§12); the alternative stays displayed.
+      if (state.focusGroupId !== null && state.phantom === null && state.selectedControlId === null) return { ...state, focusGroupId: null };
       return legacy(state, action);
     default:
       return legacy(state, action);
@@ -126,8 +166,11 @@ function legacy(state: EditorState, action: CourseEditorAction): EditorState {
     ...next,
     // Hiding belongs to the course it was switched on for: a course change switches it off.
     hideOthers: next.selectedCourseId !== state.selectedCourseId ? false : state.hideOthers,
-    // A class runs one course: another course ends Class view.
+    // A class runs one course: another course ends Class view; its variants and alternatives are its own (§12).
     ...(next.selectedCourseId !== state.selectedCourseId && state.view === "class" ? { view: "course" as const, classSeq: null } : {}),
+    ...(next.selectedCourseId !== state.selectedCourseId
+      ? { variantKey: null, activeAlternatives: {}, focusGroupId: null, ...(state.view === "variant" || state.view === "all-variations" ? { view: "course" as const } : {}) }
+      : {}),
     ...(clears ? { multi: [], selectedObjectId: null } : {}),
   };
 }
@@ -135,7 +178,7 @@ function legacy(state: EditorState, action: CourseEditorAction): EditorState {
 /** Whether Escape has anything left to dismiss (else it leaves fullscreen). */
 export function escapeHasWork(s: EditorState): boolean {
   return s.tool.kind !== "select" || s.multi.length > 0 || s.selectedObjectId !== null
-    || s.phantom !== null || s.selectedControlId !== null || s.selectedCourseId !== null;
+    || s.phantom !== null || s.selectedControlId !== null || s.selectedCourseId !== null || s.focusGroupId !== null;
 }
 
 /**

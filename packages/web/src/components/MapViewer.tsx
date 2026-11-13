@@ -6,6 +6,8 @@ import {
   type ControlDescription,
   defaultMapAppearance,
 } from "@oxygen/shared";
+import { withCourseOverride, withLegDraft, type CourseDraw, type LegDraft } from "../lib/editor/variation-view";
+import { actionBarMaxWidth, actionBarPlace } from "../lib/editor/action-bar-place";
 import { descriptionCells, IOF_SYMBOLS } from "../iof-symbols";
 import {
   buildDescriptionSheet,
@@ -64,13 +66,14 @@ import {
   pillHalfWidth,
 } from "../lib/course-leg-labels";
 import { useMediaQuery } from "../hooks/useMediaQuery";
-import { courseLayerRequest, PROVISIONAL_SITE_ID, type LayoutRequest, type ProvisionalVisit } from "../lib/course-layer-request";
+import { courseLayerRequest, PROVISIONAL_SITE_ID, sheetCrossings, sheetExchanges, type LayoutRequest, type ProvisionalVisit } from "../lib/course-layer-request";
 import { dragLegShapes } from "../lib/editor/leg-length";
 import { outlinePoints, vertexRule } from "../lib/editor/geometry-edit";
 import type { CourseInfo } from "../map-gl/engine";
-import { editorHitAt, HIT_TOLERANCE_PX, type EditorTarget } from "../lib/editor/hit";
+import { editorHitAt, HIT_TOLERANCE_PX, uiLegsOf, type EditorTarget } from "../lib/editor/hit";
 import { showSelectionRing } from "../lib/editor/state";
-import { COARSE_HIT_TOLERANCE_PX, IDLE as SITE_TOUCH_IDLE, LONG_PRESS_MS, LOUPE_DIAMETER_PX, LOUPE_SCALE, liftedPoint, loupePlacement, siteTouch, type SiteTouch, type SiteTouchEvent } from "../lib/editor/touch";
+import { escapeCancels } from "../lib/editor/mouse-drag";
+import { COARSE_HIT_TOLERANCE_PX, HANDLE_LIFT_PX, IDLE as SITE_TOUCH_IDLE, LONG_PRESS_MS, LOUPE_DIAMETER_PX, LOUPE_SCALE, liftedPoint, loupePlacement, placementLoupe, siteTouch, type SiteTouch, type SiteTouchEvent } from "../lib/editor/touch";
 
 /** Persisted compass state: "1"/absent = rotation locked (north up). */
 const ROTATION_LOCK_STORAGE_KEY = "oxygen.map.rotationLock";
@@ -84,7 +87,10 @@ export interface ControlOverlay {
   y: number; // map position y (mm on map)
   lat: number;
   lng: number;
-  type: "Start" | "Control" | "Finish";
+  /** How the site draws; crossing and map-issue points are never items (course-layer.md §10.3). */
+  type: "Start" | "Control" | "Finish" | "Crossing" | "MapIssue";
+  /** A `Control` that is a map exchange (course-layer.md §11). */
+  exchange?: boolean;
   highlight?: boolean;
   visible?: boolean;
   punchCount?: number;
@@ -121,10 +127,14 @@ export interface CourseOverlay {
    * (punch codes) alike.
    */
   labelOffsets?: Record<string, { dx: number; dy: number }>;
-  /** Authored leg gaps of the stored structure, keyed `"<fromId>><toId>"` (course-layer.md §6.4). */
-  legGaps?: Record<string, { from: number; to: number }[]>;
+  /** The stored structure's legs whole (style, bends, gaps, corridor), keyed `"<fromId>><toId>"` (course-layer.md §5, §10). */
+  legs?: Record<string, import("@oxygen/shared").course.CourseLegProps>;
   /** Ids of the controls whose number every visit hides. */
   hiddenNumbers?: number[];
+  /** The editor's All-variations view (docs/course-editor.md §12): an alternative drawn in its tint (course-layer.md §12.7). */
+  tint?: string;
+  /** All variations (F15): explicit label text per control id when the variants number alike. */
+  labels?: Record<string, string>;
 }
 
 /**
@@ -178,10 +188,13 @@ export interface EditorContextAction {
   /** Stable id — rendered as `data-testid="editor-action-<id>"`. */
   id: string;
   label: string;
-  onClick: () => void;
+  /** The click (a mouse event's `altKey`: *Add bend here* with Alt inserts a corner, course-editor.md §6.7). */
+  onClick: (e?: { altKey?: boolean }) => void;
   variant?: "default" | "danger";
   /** Greyed out and inert — e.g. while an earlier edit is still saving. */
   disabled?: boolean;
+  /** A tooltip: what the entry does where its label does not say it (the map-issue point, course-editor.md §6.8). */
+  title?: string;
 }
 
 /**
@@ -221,6 +234,8 @@ export interface MapViewerEditorProps {
   courseControlIds?: ReadonlySet<string>;
   /** Fade regular controls not in `courseControlIds` (course selected). */
   fadeNonCourse?: boolean;
+  /** Setter marks (course-layer.md §10.3): the Course and All-controls views draw 702 and every crossing point. */
+  setterMarks?: boolean;
   /** Pre-formatted warning per control id, shown as a chip during drag. */
   moveWarnings?: ReadonlyMap<string, string>;
   /**
@@ -250,6 +265,11 @@ export interface MapViewerEditorProps {
    * before the viewer's own gestures and draws UI-layer shapes.
    */
   tool?: EditorToolBinding | null;
+  /**
+   * The placement loupe toggle (F27, docs/course-editor.md §10 "Loupe"): while a placing tool (`tool.hoverPoint`) is
+   * armed, the loupe magnifies the point a click would place, 16 px above the cursor, or above the pin-drop crosshair.
+   */
+  placementLoupe?: boolean;
   /** Snap a dragged control's centre (§6.2); returns the point unchanged when nothing is near. */
   snap?: ((pt: { x: number; y: number }) => { x: number; y: number }) | null;
   /**
@@ -294,6 +314,17 @@ export interface MapViewerEditorProps {
   fullBleed?: boolean;
   /** Check markers (docs/course-editor.md §8): UI-layer shapes, never hit targets. */
   markers?: readonly ToolShape[];
+  /**
+   * A course with variation groups as the editor shows it (docs/course-editor.md §12): the first
+   * entry replaces the overlay of the same name (controls, legs, hidden numbers — the displayed
+   * path), the others are drawn beside it, highlighted (All variations' tinted branches).
+   */
+  courseOverride?: readonly CourseDraw[] | null;
+  /**
+   * The selected leg's live bends while a bend or grip drag is in flight, held after the release until the list
+   * carries them (docs/course-editor.md §6.7, F21): merged after the override, so the layer redraws per move.
+   */
+  legDraft?: LegDraft | null;
 }
 
 /** What a tool gets for a pointer event. */
@@ -307,6 +338,8 @@ export interface ToolPointer {
   alt?: boolean;
   /** Paper mm per CSS px at the current zoom: for handle tolerances. */
   mmPerPx: number;
+  /** A one-finger press on a coarse pointer (offered only to a tool with `touchPress`, F23): a coarser reach. */
+  touch?: boolean;
 }
 
 /** A UI-layer shape a tool draws, paper mm (the viewer projects it). */
@@ -334,14 +367,28 @@ export interface EditorToolBinding {
   cursor?: string;
   shapes?: readonly ToolShape[];
   onPointerDown?: (p: ToolPointer) => boolean;
-  /** `mods`: the keys held now (Shift constrains, Alt breaks a handle pair, §7). */
-  onPointerDrag?: (pt: { x: number; y: number }, mods?: { shift: boolean; alt: boolean }) => void;
+  /**
+   * One-finger presses on a coarse pointer go to `onPointerDown` (with `touch`) before the viewer's own targets
+   * (F23: V's bend handles and grips on a tablet). A taken press is dragged lifted above the finger with the loupe.
+   */
+  touchPress?: boolean;
+  /**
+   * `mods`: the keys held now (Shift constrains, Alt breaks a handle pair, §7). Returns the point the drag placed,
+   * paper mm (a snapped bend, a grip, a vertex), when it places one: the viewer draws the touch stem and the loupe at it.
+   */
+  onPointerDrag?: (pt: { x: number; y: number }, mods?: { shift: boolean; alt: boolean }) => { x: number; y: number } | void;
   onPointerUp?: (pt: { x: number; y: number } | null) => void;
   /** A click without movement (exclusive tools; a tap on touch). */
   onClick?: (p: ToolPointer) => void;
   onDoubleClick?: (p: ToolPointer) => void;
   /** Hover without a button (mouse); null when the pointer leaves the map. */
   onHover?: (p: ToolPointer | null) => void;
+  /**
+   * A placing tool's point a click (or Place) would drop now, paper mm: the provisional point, snapped or a reused
+   * site's centre; null without a hover. Set (not undefined) only by the placing tools (S, K, M, X, C, T): with the
+   * placement loupe on (F27, docs/course-editor.md §10 "Loupe") the viewer magnifies it above the cursor / crosshair.
+   */
+  hoverPoint?: { x: number; y: number } | null;
   onContextMenu?: (p: ToolPointer) => void;
   /**
    * Touch (coarse pointer): the pin-drop flow of 08 §5.3 — a fixed centre
@@ -437,7 +484,7 @@ export function MapViewer({
   northOffset,
   cutRotationDeg,
   controls = [],
-  courses = [],
+  courses: coursesProp = [],
   courseObjects,
   autoCuts = true,
   highlightControlId,
@@ -460,6 +507,11 @@ export function MapViewer({
   mapBudget = "event",
   rotationCorrection,
 }: Props) {
+  // §12: the editor draws a course with variation groups as it shows it (the displayed path, or All variations).
+  // F21: the leg draft of a bend or grip drag over it (course-layer.md §5).
+  const courseOverride = editor?.courseOverride ?? null;
+  const legDraft = editor?.legDraft ?? null;
+  const courses: CourseOverlay[] = useMemo(() => withLegDraft(withCourseOverride(coursesProp, courseOverride), legDraft), [coursesProp, courseOverride, legDraft]);
   const { nameId } = useParams<{ nameId: string }>();
   const { t } = useTranslation("dashboard");
   const isCoarsePointer = useMediaQuery("(pointer: coarse)");
@@ -614,6 +666,19 @@ export function MapViewer({
   const toolPinchRef = useRef<{ dist0: number } | null>(null);
   const longPressTimerRef = useRef<number | null>(null);
   const [touchFinger, setTouchFinger] = useState<Pt | null>(null);
+  /** The cursor under a mouse drag that places a point (container px, F24): the loupe hangs 16 px above it (§10 "Loupe"). */
+  const [dragCursor, setDragCursor] = useState<Pt | null>(null);
+  /**
+   * The cursor over the map with a placing tool armed (container px, F27): the placement loupe hangs above it. State only
+   * while the toggle is on; `lastCursorRef` keeps it otherwise, so turning the toggle on shows the loupe at once.
+   */
+  const [hoverCursor, setHoverCursor] = useState<Pt | null>(null);
+  const lastCursorRef = useRef<Pt | null>(null);
+  /** The cursor in container px, for `dragCursor`. */
+  const cursorInContainer = useCallback((clientX: number, clientY: number): Pt | null => {
+    const rect = containerRef.current?.getBoundingClientRect();
+    return rect ? { x: clientX - rect.left, y: clientY - rect.top } : null;
+  }, []);
   // Moves already sent via onMoveEnd but not yet reflected in the
   // `controls` prop (mutation + refetch in flight). Rendering `to`
   // prevents the control snapping back to its stale position. An entry
@@ -635,6 +700,10 @@ export function MapViewer({
   const legDownRef = useRef<{ course: string; index: number; x: number; y: number } | null>(null);
   // A gesture the active tool took on pointer-down (docs/course-editor.md §6).
   const toolDragRef = useRef<{ startX: number; startY: number } | null>(null);
+  /** A one-finger press a `touchPress` tool took (F23): where it landed (client px) and whether it has moved past 3 px. */
+  const toolTouchRef = useRef<{ startX: number; startY: number; moved: boolean } | null>(null);
+  /** The point the tool's drag placed (`onPointerDrag`'s return), paper mm: the touch stem and the loupe follow it. */
+  const [toolDragPos, setToolDragPos] = useState<Pt | null>(null);
   const editorToolRef = useRef<EditorToolBinding | null>(null);
   editorToolRef.current = editor?.tool ?? null;
 
@@ -712,6 +781,26 @@ export function MapViewer({
     return () => ro.disconnect();
   }, []);
 
+  // The action bar's laid-out size, so it is placed inside the clipping viewer (lib/editor/action-bar-place.ts).
+  // Read when it mounts (before paint) and on every resize after; its width is `max-content`, so it does not
+  // depend on where the bar is put.
+  const [barSize, setBarSize] = useState({ w: 0, h: 0 });
+  const barObserverRef = useRef<ResizeObserver | null>(null);
+  const actionBarRef = useCallback((el: HTMLDivElement | null) => {
+    barObserverRef.current?.disconnect();
+    barObserverRef.current = null;
+    if (!el) return;
+    const read = () => {
+      const w = el.offsetWidth, h = el.offsetHeight;
+      setBarSize((s) => (s.w === w && s.h === h ? s : { w, h }));
+    };
+    read();
+    if (typeof ResizeObserver !== "undefined") {
+      barObserverRef.current = new ResizeObserver(read);
+      barObserverRef.current.observe(el);
+    }
+  }, []);
+
   // Map rotation: the drawn meridians vertical on screen — the paper view
   // is paper-north-up, so by the meridian tilt only (see viewportRotationDeg).
   const rotDeg = viewportRotationDeg(northOffset, cutRotationDeg, userBearing);
@@ -770,6 +859,7 @@ export function MapViewer({
   // The request reads these of the editor only: the editor object itself changes with every tool hover.
   const editorOn = !!editor;
   const editorFade = editor?.fadeNonCourse ?? false;
+  const editorSetterMarks = editor?.setterMarks ?? false;
   const editorCourseIds = editor?.courseControlIds;
   const editorDraftFast = editor?.draftFast ?? false;
   const editorProvisional = editor?.provisional ?? null;
@@ -807,9 +897,11 @@ export function MapViewer({
       provisional: editorProvisional,
       layout: editorLayout,
       autoCuts,
+      // Layout mode draws the sheet as it prints: setter marks on the all-controls sheet only (§10.3).
+      setterMarks: editorLayout ? !highlightCourseName && courses.every((c) => !c.highlight) : editorSetterMarks,
     });
     return editorDraftFast ? { ...request, fastFilter: true } : request;
-  }, [glCourse, controls, controlMm, editorOn, editorFade, editorCourseIds, editorDraftFast, editorProvisional, editorLayout, pendingMoves, editorDragPos, showDescriptions,
+  }, [glCourse, controls, controlMm, editorOn, editorFade, editorSetterMarks, editorCourseIds, editorDraftFast, editorProvisional, editorLayout, pendingMoves, editorDragPos, showDescriptions,
       courses, highlightCourseName, drawnObjects, editorLabelDragPos, pendingLabelMoves, autoCuts]);
   /** A dragged control's leg lengths (§6.1), from the positions the request draws. */
   const dragLegLabels = useMemo(() => {
@@ -818,7 +910,7 @@ export function MapViewer({
     const structures: readonly Structure[] = !st ? [] : Array.isArray(st) ? st : [st as Structure];
     if (!editorOn || !editorDragPos || !courseRequest || structures.length !== 1) return [];
     const pos = new Map(courseRequest.sites.map((x) => [x.id, { x: x.x, y: x.y }] as const));
-    return dragLegShapes(structures[0].items.map((i) => i.siteId), pos, editorDragPos.id, mapScale);
+    return dragLegShapes(structures[0].items.map((i) => i.siteId), pos, editorDragPos.id, mapScale, structures[0].items.map((i) => i.leg?.bends));
   }, [editorOn, editorDragPos, courseRequest, mapScale]);
 
   // ─── Editor hit-test on the shared stage (docs/course-editor.md §5) ──
@@ -829,6 +921,8 @@ export function MapViewer({
     () => (editor ? drawnObjects.filter((o) => vertexRule(o.kind).closed).map((o) => ({ id: o.id, ring: outlinePoints(o.geometry, true) })) : []),
     [editor, drawnObjects],
   );
+  // `style: "none"` legs have no layer object, so no hit piece: they hit from the derivation (§6.7).
+  const uiLegs = useMemo(() => (editor ? uiLegsOf(courseInfo?.derivation?.courses) : []), [editor, courseInfo]);
   /** The editor target under a client point, `null` for empty map; `undefined` without a hit index (no editor, no course layer). */
   const resolveEditorTarget = (clientX: number, clientY: number): EditorTarget | null | undefined => {
     if (!sharedHit || !editor) return undefined;
@@ -837,19 +931,20 @@ export function MapViewer({
     if (!pt || !edge) return null;
     const tol = Math.hypot(edge.x - pt.x, edge.y - pt.y);
     // The faded off-course controls are drawn by the UI layer, not the layer: plain circles. The layer's own
-    // controls too, below its shapes: a circle with gaps is drawn as open arcs, whose interior does not hit.
+    // controls too, below its shapes: a circle with gaps — or opened by a corridor (F19, never a cut) — is drawn as
+    // open arcs, whose interior does not hit.
     const radiusMm = courseInfo?.metrics?.circleRadiusMm ?? 3;
     const uiSites = [
       ...(editor.fadeNonCourse
         ? controls.filter((c) => c.type === "Control" && !editor.courseControlIds?.has(c.id) && (c.x !== 0 || c.y !== 0))
           .map((c) => ({ id: c.id, x: c.x, y: c.y, radiusMm }))
         : []),
-      ...(courseInfo?.derivation?.sites ?? []).filter((d) => d.role === "control" && d.cuts.length > 0)
+      ...(courseInfo?.derivation?.sites ?? []).filter((d) => d.role === "control")
         .map((d) => ({ id: d.id, x: d.x, y: d.y, radiusMm })),
     ];
     // An armed placement draws its own visit: only real sites are targets (a reuse), never the cursor's circle or legs.
     const accept = editor.provisional ? (t: EditorTarget) => t.kind === "site" && t.id !== PROVISIONAL_SITE_ID : undefined;
-    return editorHitAt(courseInfo?.hit ?? null, pt, tol, uiSites, uiAreas, accept);
+    return editorHitAt(courseInfo?.hit ?? null, pt, tol, uiSites, uiAreas, accept, uiLegs);
   };
   const resolveEditorTargetRef = useRef(resolveEditorTarget);
   resolveEditorTargetRef.current = resolveEditorTarget;
@@ -1024,6 +1119,13 @@ export function MapViewer({
     }
   }, [editor?.viewRequest, viewport, controls, fitToControlBounds, rotRad, containerSize.w, containerSize.h]);
 
+  // F27: the placement loupe's cursor — taken from the last move when the toggle turns on or a placing tool is armed,
+  // dropped when either goes (so a stale cursor never hangs a loupe).
+  const placingArmed = editor?.tool?.hoverPoint !== undefined && !!editor?.tool;
+  useEffect(() => {
+    setHoverCursor(editor?.placementLoupe && placingArmed ? lastCursorRef.current : null);
+  }, [editor?.placementLoupe, placingArmed]);
+
   // Touch pin-drop: the ghost follows the view centre (08 §5.3 "Touch").
   useEffect(() => {
     const tool = editor?.tool;
@@ -1181,6 +1283,7 @@ export function MapViewer({
     isPanningRef.current = false;
     mouseDownPosRef.current = null;
     setEditorDragTouch(false);
+    setDragCursor(null);
     if (cancelled) {
       setEditorDragPos(null);
       return;
@@ -1264,18 +1367,31 @@ export function MapViewer({
         drag.moved = true;
         const raw = screenToMapMm(e.clientX, e.clientY);
         const pt = raw && editor.snap ? editor.snap(raw) : raw;
-        if (pt) setEditorDragPos({ id: drag.id, x: pt.x, y: pt.y });
+        if (pt) {
+          setEditorDragPos({ id: drag.id, x: pt.x, y: pt.y });
+          if (!drag.touch) setDragCursor(cursorInContainer(e.clientX, e.clientY));
+        }
       }
       return;
     }
     if (editor && toolDragRef.current) {
       const pt = screenToMapMm(e.clientX, e.clientY);
-      if (pt) editorToolRef.current?.onPointerDrag?.(pt, { shift: e.shiftKey, alt: e.altKey });
+      if (!pt) return;
+      // The point the drag placed (F23): the loupe magnifies it above the cursor (F24); none for a gesture that places none.
+      const placed = editorToolRef.current?.onPointerDrag?.(pt, { shift: e.shiftKey, alt: e.altKey });
+      setToolDragPos(placed ?? null);
+      setDragCursor(placed ? cursorInContainer(e.clientX, e.clientY) : null);
       return;
     }
     if (editor?.tool?.onHover && !isPanningRef.current && e.buttons === 0) {
       const p = toolPointerRef.current(e.clientX, e.clientY, e.shiftKey, e.altKey);
       if (p) editor.tool.onHover(p);
+    }
+    // F27: the placement loupe follows the cursor, a pan included (the map, and the point under it, move with it).
+    if (editor?.tool && editor.tool.hoverPoint !== undefined) {
+      const c = cursorInContainer(e.clientX, e.clientY);
+      lastCursorRef.current = c;
+      if (editor.placementLoupe) setHoverCursor(c);
     }
     const labelDrag = editorLabelDragRef.current;
     if (editor && labelDrag) {
@@ -1284,7 +1400,10 @@ export function MapViewer({
       if (labelDrag.moved || dx + dy > 3) {
         labelDrag.moved = true;
         const pt = screenToMapMm(e.clientX, e.clientY);
-        if (pt) setEditorLabelDragPos({ id: labelDrag.id, x: pt.x, y: pt.y });
+        if (pt) {
+          // F30: a number is dragged without the loupe (it is a label, not a point to place); touch neither.
+          setEditorLabelDragPos({ id: labelDrag.id, x: pt.x, y: pt.y });
+        }
       }
       return;
     }
@@ -1307,17 +1426,27 @@ export function MapViewer({
       const pt = screenToMapMm(e.clientX, e.clientY);
       if (pt) setMeasureCursor(pt);
     }
-  }, [measuring, viewport, rotRad, screenToMapMm, editor, breakLocateFollow]);
+  }, [measuring, viewport, rotRad, screenToMapMm, editor, breakLocateFollow, cursorInContainer]);
 
   const handleMouseUp = useCallback((e: React.MouseEvent) => {
     if (editor && toolDragRef.current) {
       toolDragRef.current = null;
       isPanningRef.current = false;
       mouseDownPosRef.current = null;
+      setToolDragPos(null);
+      setDragCursor(null);
+      if (e.type === "mouseleave") {
+        lastCursorRef.current = null;
+        setHoverCursor(null);
+      }
       editorToolRef.current?.onPointerUp?.(e.type === "mouseleave" ? null : screenToMapMm(e.clientX, e.clientY));
       return;
     }
-    if (e.type === "mouseleave") editorToolRef.current?.onHover?.(null);
+    if (e.type === "mouseleave") {
+      editorToolRef.current?.onHover?.(null);
+      lastCursorRef.current = null;
+      setHoverCursor(null);
+    }
     const drag = editorDragRef.current;
     if (editor && drag) {
       if (e.type === "mouseleave") {
@@ -1452,6 +1581,13 @@ export function MapViewer({
         hadMultiTouchRef.current = true;
         suppressEditorSelectionUntilRef.current = Date.now() + 400;
         stepSiteTouchRef.current({ type: "second-finger" });
+        // A second finger cancels a tool's one-finger drag (F23): no write, its draft dropped.
+        if (toolTouchRef.current) {
+          toolTouchRef.current = null;
+          setToolDragPos(null);
+          setTouchFinger(null);
+          editorToolRef.current?.onPointerUp?.(null);
+        }
         // A first finger may have landed on a control before the second
         // finger joined. That is a map gesture, not a control drag.
         editorDragRef.current = null;
@@ -1501,6 +1637,18 @@ export function MapViewer({
       lastTouchRef.current = { x: t.clientX, y: t.clientY };
       touchStartPosRef.current = { x: t.clientX, y: t.clientY };
       touchOnEditorTargetRef.current = false;
+      // A tool that opts in takes the press before the viewer's targets (F23: the selected leg's bends and grips
+      // sit on or by the leg, which would be a leg click); it declines anything else.
+      const tool = editorToolRef.current;
+      if (!measuring && tool?.touchPress && !tool.exclusive && Date.now() >= suppressEditorSelectionUntilRef.current) {
+        const p = toolPointerRef.current(t.clientX, t.clientY, false);
+        if (p && tool.onPointerDown?.({ ...p, touch: true })) {
+          toolTouchRef.current = { startX: t.clientX, startY: t.clientY, moved: false };
+          touchOnEditorTargetRef.current = true;
+          e.preventDefault();
+          return;
+        }
+      }
       if (!measuring && !editorToolRef.current?.exclusive && armEditorTargetRef.current(t.clientX, t.clientY, true)) {
         touchOnEditorTargetRef.current = true;
         e.preventDefault();
@@ -1514,6 +1662,22 @@ export function MapViewer({
     const onTouchMove = (e: TouchEvent) => {
       if (siteTouchRef.current.kind === "pending" && e.touches.length === 1) {
         stepSiteTouchRef.current({ type: "move", x: e.touches[0].clientX, y: e.touches[0].clientY, t: performance.now() });
+      }
+      const toolTouch = toolTouchRef.current;
+      if (toolTouch && e.touches.length === 1) {
+        e.preventDefault();
+        const t = e.touches[0];
+        // Past 3 px it is a drag, the point lifted above the finger on the stem (§10); until then a tap.
+        if (!toolTouch.moved && Math.abs(t.clientX - toolTouch.startX) + Math.abs(t.clientY - toolTouch.startY) <= 3) return;
+        toolTouch.moved = true;
+        const at = liftedPoint(t.clientX, t.clientY);
+        const pt = screenToMapMm(at.x, at.y);
+        if (!pt) return;
+        const placed = editorToolRef.current?.onPointerDrag?.(pt, { shift: false, alt: false });
+        setToolDragPos(placed ?? null);
+        const rect = el.getBoundingClientRect();
+        setTouchFinger({ x: t.clientX - rect.left, y: t.clientY - rect.top });
+        return;
       }
       const drag = editorDragRef.current;
       if (drag && e.touches.length === 1) {
@@ -1668,6 +1832,23 @@ export function MapViewer({
         if (e.touches.length === 0) { lastTouchRef.current = null; touchStartPosRef.current = null; hadMultiTouchRef.current = false; }
         return;
       }
+      const toolTouch = toolTouchRef.current;
+      if (toolTouch && e.touches.length === 0) {
+        toolTouchRef.current = null;
+        setToolDragPos(null);
+        const t = e.changedTouches[0];
+        // Released where it was drawn (above the finger); a tap at the press (a focus); a cancel writes nothing.
+        // As the control drag's release: a multi-touch or the 400 ms after one is no drop (the press is never offered
+        // then either, so today this only guards the two branches against drifting apart).
+        const cancelled = e.type === "touchcancel" || hadMultiTouchRef.current || Date.now() < suppressEditorSelectionUntilRef.current || !t;
+        const at = !t ? null : toolTouch.moved ? liftedPoint(t.clientX, t.clientY) : { x: toolTouch.startX, y: toolTouch.startY };
+        editorToolRef.current?.onPointerUp?.(cancelled || !at ? null : screenToMapMm(at.x, at.y));
+        lastTouchRef.current = null;
+        touchStartPosRef.current = null;
+        hadMultiTouchRef.current = false;
+        isPanningRef.current = false;
+        return;
+      }
       const drag = editorDragRef.current;
       if (drag && e.changedTouches.length > 0 && e.touches.length === 0) {
         if (
@@ -1808,6 +1989,32 @@ export function MapViewer({
     return () => window.clearTimeout(timer);
   }, [showTwoFingerHint]);
 
+  // Escape cancels a mouse drag in flight (F24, §3; user 2026-11-11): the tool's gesture, a control's or a number's —
+  // nothing written, the loupe gone — before the page's own Escape cascade, which then runs as before (the later
+  // mouseup finds no drag). One `window` listener in the capture phase, registered once and reading the latest handler
+  // from a ref: the page's listener commits a render between the two (a discrete update), and a listener re-registered
+  // by that render's effect would be skipped for this very event.
+  const escapeDragRef = useRef<() => void>(() => {});
+  useEffect(() => {
+    escapeDragRef.current = () => {
+      const which = escapeCancels({ tool: !!toolDragRef.current, control: editorDragRef.current, number: editorLabelDragRef.current });
+      if (which === "tool") {
+        toolDragRef.current = null;
+        isPanningRef.current = false;
+        mouseDownPosRef.current = null;
+        setToolDragPos(null);
+        setDragCursor(null);
+        editorToolRef.current?.onPointerUp?.(null);
+      } else if (which === "control") finishEditorDrag(0, 0, true);
+      else if (which === "number") finishEditorLabelDrag(0, 0, true);
+    };
+  }, [finishEditorDrag, finishEditorLabelDrag]);
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => { if (e.key === "Escape") escapeDragRef.current(); };
+    window.addEventListener("keydown", onKey, true);
+    return () => window.removeEventListener("keydown", onKey, true);
+  }, []);
+
   // Escape / Backspace to cancel / undo measure
   useEffect(() => {
     if (!measuring) return;
@@ -1890,7 +2097,8 @@ export function MapViewer({
 
     // Highlighted courses drive the multi-course leg labels below.
     const highlightedCourses = courses.filter(
-      (c) => c.highlight || c.name === highlightCourseName,
+      // All variations' tinted branches (docs/course-editor.md §12) are the selected course's: no per-leg class labels.
+      (c) => (c.highlight || c.name === highlightCourseName) && !c.tint,
     );
     // With more than one course on screen it's hard to tell which lines
     // belong to what — label each leg with the classes that run it.
@@ -2149,7 +2357,8 @@ export function MapViewer({
   const descriptionSheet = useMemo(() => {
     if (!showDescriptions || containerSize.w === 0 || containerSize.h === 0) return null;
     const activeCourses = courses.filter(
-      (c) => c.highlight || c.name === highlightCourseName,
+      // The sheet is the selected course's, not All variations' branches (docs/course-editor.md §12).
+      (c) => (c.highlight || c.name === highlightCourseName) && !c.tint,
     );
     // Without an active course `descriptionsAllControls` lists every
     // positioned control; otherwise there is no sheet.
@@ -2292,16 +2501,20 @@ export function MapViewer({
       const pos = innerToContainer(inner.x, inner.y);
       const bar = editor.actionLayout === "bar";
       if (pos.x > -40 && pos.x < containerSize.w + 40 && pos.y > -20 && pos.y < containerSize.h + 20) {
+        // Centred under the selection, shifted or flipped above it to stay inside the viewer (§2).
+        const placed = bar ? actionBarPlace({ anchor: pos, anchorR, size: barSize, container: containerSize }) : null;
         editorMenu = (
           <div
+            ref={bar ? actionBarRef : undefined}
             data-testid={bar ? "editor-action-bar" : "editor-context-menu"}
+            data-placement={placed ? (placed.above ? "above" : "below") : undefined}
             className="relative flex flex-col gap-0.5 bg-white/95 backdrop-blur-sm rounded-lg border border-slate-200 shadow-lg p-1"
-            style={bar ? {
+            style={placed ? {
               position: "absolute",
-              left: Math.max(8, Math.min(containerSize.w - 8, pos.x)),
-              top: pos.y + anchorR + 10,
-              transform: "translateX(-50%)",
-              maxWidth: Math.max(160, containerSize.w - 16),
+              left: placed.left,
+              top: placed.top,
+              width: "max-content",
+              maxWidth: actionBarMaxWidth(containerSize.w),
               zIndex: 9,
             } : {
               position: "absolute",
@@ -2335,9 +2548,11 @@ export function MapViewer({
               </button>
             )}
             {editor.contextInfo && (
+              // One line, cut with an ellipsis inside the bar; the whole text in the title (the inspector lists it too).
               <div
                 data-testid="editor-context-info"
-                className="text-[11px] text-slate-500 pl-2.5 pr-8 pt-1.5 pb-1 whitespace-nowrap border-b border-slate-100"
+                title={editor.contextInfo}
+                className="text-[11px] text-slate-500 pl-2.5 pr-8 pt-1.5 pb-1 whitespace-nowrap overflow-hidden text-ellipsis border-b border-slate-100"
               >
                 {editor.contextInfo}
               </div>
@@ -2402,6 +2617,7 @@ export function MapViewer({
                 <button
                   key={a.id}
                   data-testid={`editor-action-${a.id}`}
+                  title={a.title}
                   onClick={a.onClick}
                   disabled={a.disabled}
                   className={`text-xs text-left ${bar ? "px-2.5" : "pl-2.5 pr-8"} py-1.5 rounded-md whitespace-nowrap transition-colors cursor-pointer disabled:opacity-40 disabled:cursor-default ${
@@ -2420,13 +2636,19 @@ export function MapViewer({
     }
   }
 
-  // The lifted touch drag's stem (§10): from the finger to the control drawn above it; on the GL
-  // canvas the loupe above that (§10 "Loupe"): the layer draws the magnified map into the circle,
-  // `editor-loupe` is its ring and the crosshair at the drop point.
+  // The lifted touch drag's stem (§10): from the finger to the control (or the tool's bend or grip, F23) drawn above it; on the GL
+  // canvas the loupe (§10 "Loupe"): the layer draws the magnified map into the circle, `editor-loupe` is its ring and the
+  // crosshair at the drop point. A touch drag hangs it above the lifted handle; a mouse drag (F24) of a control or
+  // a tool's placed point (a bend, a grip, an object's vertex or grip) 16 px above the cursor, with no stem.
   let touchHandle: React.ReactNode = null;
   let glLoupe: VectorLoupe | null = null;
-  if (touchFinger && editorDragPos && editorDragTouch) {
-    const inner = mapMmToScreen(editorDragPos.x, editorDragPos.y);
+  // The lifted point: a control's, or the one a tool's touch drag placed (F23: a bend, a grip).
+  const liftedDrag = editorDragPos && editorDragTouch ? editorDragPos : toolDragPos;
+  // The pointer the loupe hangs off and the point it magnifies: the finger and the lifted point, or the cursor and the placed one.
+  const loupeAnchor = touchFinger && liftedDrag ? touchFinger : dragCursor;
+  const loupeAt = touchFinger && liftedDrag ? liftedDrag : dragCursor ? (editorDragPos ?? toolDragPos) : null;
+  if (touchFinger && liftedDrag) {
+    const inner = mapMmToScreen(liftedDrag.x, liftedDrag.y);
     if (inner) {
       const pos = innerToContainer(inner.x, inner.y);
       touchHandle = (
@@ -2435,29 +2657,48 @@ export function MapViewer({
           <circle cx={touchFinger.x} cy={touchFinger.y} r={12} fill="rgba(124, 58, 237, 0.18)" stroke="#7c3aed" strokeWidth={1.5} />
         </svg>
       );
-      if (glViewRect) {
-        const c = loupePlacement(touchFinger, { width: containerSize.w, height: containerSize.h });
-        const r = LOUPE_DIAMETER_PX / 2;
-        glLoupe = { xUm: editorDragPos.x * 1000, yUm: editorDragPos.y * 1000, cx: c.x, cy: c.y, diameterPx: LOUPE_DIAMETER_PX, scale: LOUPE_SCALE };
-        touchHandle = (
-          <>
-            {touchHandle}
-            <div
-              data-testid="editor-loupe"
-              data-scale={LOUPE_SCALE}
-              aria-hidden
-              className="absolute pointer-events-none rounded-full border-2 border-slate-700 shadow-lg"
-              style={{ left: c.x - r, top: c.y - r, width: 2 * r, height: 2 * r, zIndex: 9 }}
-            >
-              <svg className="absolute inset-0 w-full h-full" viewBox={`0 0 ${2 * r} ${2 * r}`}>
-                <line x1={r - 14} y1={r} x2={r + 14} y2={r} stroke="#0f172a" strokeWidth={1.5} />
-                <line x1={r} y1={r - 14} x2={r} y2={r + 14} stroke="#0f172a" strokeWidth={1.5} />
-              </svg>
-            </div>
-          </>
-        );
-      }
     }
+  }
+  const dragLoupe = !!(loupeAnchor && loupeAt);
+  // F27: no drag → the placement loupe, when on: the point a click (or Place) would drop, above the cursor or the crosshair.
+  const hoverLoupe = placementLoupe({
+    on: !!editor?.placementLoupe,
+    point: editor?.tool?.hoverPoint,
+    cursor: hoverCursor,
+    crosshair: editor?.tool?.touch && isCoarsePointer ? { x: containerSize.w / 2, y: containerSize.h / 2 } : null,
+    dragging: dragLoupe,
+  });
+  const loupe = dragLoupe
+    ? { anchor: loupeAnchor!, at: loupeAt!, touch: loupeAnchor === touchFinger, lift: loupeAnchor === touchFinger ? HANDLE_LIFT_PX : 0, mode: "drag" as const }
+    : hoverLoupe
+      ? { anchor: hoverLoupe.anchor, at: hoverLoupe.at, touch: hoverLoupe.pointer === "touch", lift: 0, mode: "hover" as const }
+      : null;
+  if (loupe && glViewRect) {
+    const { touch, at: loupeAt } = loupe;
+    const c = loupePlacement(loupe.anchor, { width: containerSize.w, height: containerSize.h }, loupe.lift);
+    const r = LOUPE_DIAMETER_PX / 2;
+    glLoupe = { xUm: loupeAt.x * 1000, yUm: loupeAt.y * 1000, cx: c.x, cy: c.y, diameterPx: LOUPE_DIAMETER_PX, scale: LOUPE_SCALE };
+    touchHandle = (
+      <>
+        {touchHandle}
+        <div
+          data-testid="editor-loupe"
+          data-scale={LOUPE_SCALE}
+          data-pointer={touch ? "touch" : "mouse"}
+          data-mode={loupe.mode}
+          data-x={loupeAt.x.toFixed(3)}
+          data-y={loupeAt.y.toFixed(3)}
+          aria-hidden
+          className="absolute pointer-events-none rounded-full border-2 border-slate-700 shadow-lg"
+          style={{ left: c.x - r, top: c.y - r, width: 2 * r, height: 2 * r, zIndex: 9 }}
+        >
+          <svg className="absolute inset-0 w-full h-full" viewBox={`0 0 ${2 * r} ${2 * r}`}>
+            <line x1={r - 14} y1={r} x2={r + 14} y2={r} stroke="#0f172a" strokeWidth={1.5} />
+            <line x1={r} y1={r - 14} x2={r} y2={r + 14} stroke="#0f172a" strokeWidth={1.5} />
+          </svg>
+        </div>
+      </>
+    );
   }
 
   // Drag warning chip — "moving this affects other courses". Follows
@@ -2694,6 +2935,7 @@ export function MapViewer({
         <ul data-testid="course-layer" hidden>
           {courseInfo.derivation.sites.map((ds) => (
             <li key={`s-${ds.id}`} data-testid="course-site" data-site-id={ds.id} data-role={ds.role} data-x={ds.x} data-y={ds.y}
+              data-angle={ds.angleDeg} data-section={ds.section ? "true" : undefined}
               data-cuts={ds.cuts.map((g) => `${g.start}-${g.end}`).join(" ")}>
               {ds.label && (
                 <span data-testid="course-label" data-site-id={ds.id} data-text={ds.label.text} data-x={ds.label.x} data-y={ds.label.y}>
@@ -2703,7 +2945,7 @@ export function MapViewer({
             </li>
           ))}
           {courseInfo.derivation.courses.flatMap((dc) => dc.legs.flatMap((leg, i) => leg.pieces.map((piece, k) => (
-            <li key={`l-${dc.id}-${i}-${k}`} data-testid="course-leg" data-course={dc.id} data-leg={i}
+            <li key={`l-${dc.id}-${i}-${k}`} data-testid="course-leg" data-course={dc.id} data-leg={i} data-style={leg.style}
               data-points={piece.map((q) => `${q.x},${q.y}`).join(" ")} />
           ))))}
         </ul>
@@ -2911,7 +3153,7 @@ function renderDescriptionSheet(
   cw: number,
   ch: number,
   /** The highlighted courses. 1 → sequence card; >1 → code-sorted union. */
-  activeCourses?: Array<Pick<CourseOverlay, "name" | "controls" | "classNames" | "lengthM" | "climbM" | "orderMode" | "descriptionInstructions">>,
+  activeCourses?: Array<Pick<CourseOverlay, "name" | "controls" | "classNames" | "lengthM" | "climbM" | "orderMode" | "descriptionInstructions" | "legs">>,
   /** All control overlays — resolve id → code / type / description. */
   controlOverlays?: ControlOverlay[],
   /** List every positioned control from the overlays instead of a course card (no course active). */
@@ -3023,6 +3265,8 @@ function renderDescriptionSheet(
       })),
       instructions: single.descriptionInstructions ?? null,
       finishLengthM,
+      crossings: sheetCrossings(single, controlOverlays),
+      exchanges: sheetExchanges(single, controlOverlays),
     });
     sheetHeader = sheet.header;
     headerRows = 3;
@@ -3285,6 +3529,7 @@ function renderDescriptionRows(
         // Special / finish: symbol drawn across the full width with optional length.
         elements.push(
           <svg key={`desc-wide-${n}`} x={sheetX + 2} y={ry + 2}
+            data-testid="desc-row-wide" data-symbol-key={key}
             width={sheetW - 4} height={cellSize - 4}
             viewBox="-800 -100 1600 200"
             preserveAspectRatio="xMidYMid meet"

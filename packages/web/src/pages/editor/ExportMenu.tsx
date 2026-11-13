@@ -2,7 +2,7 @@
  * Export ▾ in the editor's top bar (docs/course-layout.md §7; 08 §5.2):
  * `lib/editor/export-menu.ts` lists the entries; a map entry ensures the
  * sheets first (`layout.autoSheets`), then the file downloads from its
- * route.
+ * route; *Description sheets…* opens its dialog (course-print.md §6.4).
  */
 
 import { useEffect, useRef, useState } from "react";
@@ -10,12 +10,21 @@ import { useTranslation } from "react-i18next";
 import { trpc } from "../../lib/trpc";
 import { downloadSameOriginFile } from "../../lib/download-api";
 import { exportEntries, type ExportEntry, type ExportState } from "../../lib/editor/export-menu";
+import { DescriptionSheetsDialog } from "./DescriptionSheetsDialog";
+import { IconExport } from "../../components/map-icons";
+import { TOP_BAR_TIER1_HIDE } from "../../components/top-bar-collapse";
 
 const LABEL = {
+  sheet: "exportSheet",
   course: "exportCourse",
+  variant: "exportVariant",
+  allVariations: "exportAllVariations",
+  courseRunners: "exportCourseRunners",
   class: "exportClass",
   all: "exportAll",
   allControls: "exportAllControls",
+  setter: "exportSetter",
+  descriptions: "exportDescriptions",
   iofxml: "exportIofXml",
   ppen: "exportPpen",
 } as const;
@@ -25,6 +34,7 @@ export function ExportMenu({ state, onError }: { state: ExportState; onError: (m
   const utils = trpc.useUtils();
   const [open, setOpen] = useState(false);
   const [busy, setBusy] = useState(false);
+  const [descriptions, setDescriptions] = useState(false);
   const box = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
@@ -38,6 +48,10 @@ export function ExportMenu({ state, onError }: { state: ExportState; onError: (m
 
   const run = async (e: ExportEntry) => {
     setOpen(false);
+    if (e.dialog === "descriptions") {
+      setDescriptions(true);
+      return;
+    }
     setBusy(true);
     try {
       if (e.ensure) {
@@ -65,9 +79,14 @@ export function ExportMenu({ state, onError }: { state: ExportState; onError: (m
         aria-expanded={open}
         disabled={busy}
         onClick={() => setOpen((v) => !v)}
-        className="px-2 py-1 text-xs rounded-md border border-slate-200 bg-white text-slate-600 hover:bg-slate-50 cursor-pointer disabled:opacity-50 disabled:cursor-default whitespace-nowrap"
+        aria-label={`${busy ? t("exportBusy") : t("export")} ▾`}
+        title={busy ? t("exportBusy") : t("export")}
+        className="inline-flex items-center gap-1.5 px-2 py-1 text-xs rounded-md border border-slate-200 bg-white text-slate-600 hover:bg-slate-50 cursor-pointer disabled:opacity-50 disabled:cursor-default whitespace-nowrap"
       >
-        {busy ? t("exportBusy") : t("export")} ▾
+        {/* Icon + label (F29); the label is the first to go when the top bar's row is short. */}
+        <span className="inline-flex shrink-0 [&>svg]:w-4 [&>svg]:h-4"><IconExport /></span>
+        <span data-toolbar-label="" className={TOP_BAR_TIER1_HIDE}>{busy ? t("exportBusy") : t("export")}</span>
+        <span aria-hidden="true">▾</span>
       </button>
       {open && (
         <div role="menu" className="absolute right-0 z-30 mt-1 min-w-[12rem] rounded-lg border border-slate-200 bg-white py-1 shadow-lg">
@@ -81,11 +100,12 @@ export function ExportMenu({ state, onError }: { state: ExportState; onError: (m
               onClick={() => void run(e)}
               className="block w-full px-3 py-1.5 text-left text-xs text-slate-700 hover:bg-purple-50 cursor-pointer disabled:opacity-40 disabled:cursor-default"
             >
-              {t(LABEL[e.id])}
+              {e.id === "course" && e.labelValues ? t("exportCourseVariants", e.labelValues) : t(LABEL[e.id], e.labelValues ?? {})}
             </button>
           ))}
         </div>
       )}
+      {descriptions && <DescriptionSheetsDialog nameId={state.nameId} onClose={() => setDescriptions(false)} />}
     </div>
   );
 }

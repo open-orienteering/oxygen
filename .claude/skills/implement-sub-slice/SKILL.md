@@ -72,7 +72,10 @@ checkout after merge, and the PR says so.
 
 - Write or update the spec section named in the row; trim the chapter's
   "Pending in this chapter"; extend its "Tests" table.
-- Add a decision-log row to `docs/research/vector-map-pipeline/README.md`
+- Add a decision-log row to the slice's file
+  `docs/research/vector-map-pipeline/decisions/slice-<letter>.md` (indexed from
+  `docs/research/vector-map-pipeline/README.md`; rows that belong to no slice go
+  to `decisions/general.md`)
   in the existing shape (date, topic, decision, rationale), naming every
   deviation from the research decision and what forced it.
 - Update `docs/features.md` only if something is user-visible.

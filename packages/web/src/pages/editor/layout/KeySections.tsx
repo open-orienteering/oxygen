@@ -12,12 +12,18 @@
  *   print overrides (scale, template); a change is `layout.setClassOverride`,
  *   which also brings the class sheets in line; *Open* shows a class sheet.
  *
- * Each write goes through the page's `run` and is one undo entry.
+ * - **Club templates** (`editor-layout-club`, collapsed; E-pages): the club
+ *   library — *Bring in* copies one into the event and opens it, *Delete*
+ *   removes it from the library; *Save this template to the club library*.
+ *   These are not undo entries (the library is shared between events).
+ *
+ * Each write of the first two goes through the page's `run` and is one undo entry.
  */
 
 import { useState, type DragEvent } from "react";
 import { useTranslation } from "react-i18next";
 import { trpc } from "../../../lib/trpc";
+import { freeTemplateName } from "../../../lib/template-picker";
 import { extraTemplateName, moveOutTarget, templateCourses, type KeyCourse, type SheetRow } from "../../../lib/editor/template-key";
 import { InspectorSection } from "../Inspector";
 import type { LayoutTarget } from "./bindings";
@@ -65,7 +71,8 @@ export function TemplateKeySection(p: {
     const created = await p.run(async () => {
       const row = await utils.client.mapTemplate.duplicate.mutate({ id: p.template.seq, name });
       if (p.sheetCourse !== null) await utils.client.mapTemplate.applyToCourses.mutate({ templateId: row.seq, courseIds: [p.sheetCourse] });
-      refresh();
+      // Awaited: Layout opens only a template its list holds (F31, docs/course-editor.md §1 "URL").
+      await Promise.all([utils.courseMap.list.invalidate(), utils.courseMap.resolveSheet.invalidate(), utils.mapTemplate.list.invalidate()]);
       return row;
     });
     // A sheet keeps showing (now on the extra template); in template scope the new template opens.
@@ -206,6 +213,89 @@ export function ClassOverridesSection(p: {
             </div>
           );
         })}
+      </div>
+    </InspectorSection>
+  );
+}
+
+export function ClubTemplatesSection(p: {
+  /** The shown template (Save to club). */
+  template: { seq: number; name: string };
+  canEdit: boolean;
+  run: Run;
+  onOpen: (t: LayoutTarget | null) => void;
+}) {
+  const { t } = useTranslation("editor");
+  const utils = trpc.useUtils();
+  const club = trpc.mapTemplate.listClub.useQuery();
+  const templates = trpc.mapTemplate.list.useQuery();
+  const [notice, setNotice] = useState<string | null>(null);
+  const rows = club.data ?? [];
+
+  const bringIn = async (row: (typeof rows)[number]) => {
+    const name = freeTemplateName(row.name, (templates.data ?? []).map((x) => x.name));
+    const r = await p.run(async () => {
+      const out = await utils.client.mapTemplate.loadFromClub.mutate({ clubTemplateId: row.id, name });
+      await utils.mapTemplate.list.invalidate();
+      return out;
+    });
+    if (!r) return;
+    setNotice(null);
+    p.onOpen({ template: r.template.seq });
+  };
+  const remove = async (row: (typeof rows)[number]) => {
+    if (!window.confirm(t("layoutClubDeleteConfirm", { name: row.name }))) return;
+    await p.run(async () => {
+      await utils.client.mapTemplate.deleteClub.mutate({ id: row.id });
+      await utils.mapTemplate.listClub.invalidate();
+      return true;
+    });
+  };
+  const save = async () => {
+    const name = window.prompt(t("layoutClubName"), p.template.name)?.trim();
+    if (!name) return;
+    const done = await p.run(async () => {
+      await utils.client.mapTemplate.saveToClub.mutate({ templateId: p.template.seq, name });
+      await utils.mapTemplate.listClub.invalidate();
+      return true;
+    });
+    if (done) setNotice(t("layoutClubSaved"));
+  };
+
+  return (
+    <InspectorSection title={t("layoutClub")} testId="editor-layout-club" defaultOpen={false} aside={rows.length ? String(rows.length) : undefined}>
+      <div className="px-2.5 pb-2 space-y-1">
+        {notice && (
+          <p data-testid="editor-layout-club-notice" className="flex items-start gap-1 text-[11px] text-amber-700">
+            <span className="flex-1">{notice}</span>
+            <button type="button" onClick={() => setNotice(null)} className="text-slate-400 hover:text-slate-600 cursor-pointer" aria-label={t("dismiss")}>×</button>
+          </p>
+        )}
+        {rows.length === 0 && <p className="text-[11px] text-slate-400">{t("layoutClubNone")}</p>}
+        <ul className="space-y-0.5">
+          {rows.map((row) => (
+            <li key={String(row.id)} data-testid={`editor-layout-club-row-${String(row.id)}`} className="flex items-center gap-1.5 text-[11px] text-slate-600">
+              <span className="truncate flex-1" title={row.printScale ? `${row.paper ?? ""} ${row.orientation ?? ""} 1:${row.printScale}` : undefined}>{row.name}</span>
+              {p.canEdit && (
+                <>
+                  <button type="button" data-testid={`editor-layout-club-import-${String(row.id)}`} title={t("layoutClubImportTitle", { name: row.name })}
+                    onClick={() => void bringIn(row)} className="text-purple-700 hover:underline cursor-pointer">
+                    {t("layoutClubImport")}
+                  </button>
+                  <button type="button" data-testid={`editor-layout-club-delete-${String(row.id)}`} aria-label={t("layoutClubDelete", { name: row.name })}
+                    title={t("layoutClubDelete", { name: row.name })} onClick={() => void remove(row)} className="text-slate-400 hover:text-red-600 cursor-pointer">
+                    ×
+                  </button>
+                </>
+              )}
+            </li>
+          ))}
+        </ul>
+        {p.canEdit && (
+          <button type="button" data-testid="editor-layout-save-to-club" onClick={() => void save()} className="text-[11px] text-purple-700 hover:underline cursor-pointer">
+            {t("layoutClubSave")}
+          </button>
+        )}
       </div>
     </InspectorSection>
   );

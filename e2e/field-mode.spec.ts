@@ -8,7 +8,7 @@
 // (`ensureFixtureFromDesktop`, shared with the editor spec).
 import { devices, expect, test, type BrowserContext, type Page } from "@playwright/test";
 import { reseed } from "./helpers/reseed";
-import { canvasInCircle, editorReady, ensureFixtureFromDesktop, nextFrames, site, sites, toPage, toPaper } from "./helpers/editor";
+import { canvasInCircle, editorReady, ensureFixtureFromDesktop, nextFrames, site, sites, toPage, toPaper, trpcCall } from "./helpers/editor";
 import { touchDrag, touchEnd, touchMove, touchStart, touchTap } from "./helpers/touch";
 
 type Pt = { x: number; y: number };
@@ -77,7 +77,10 @@ test.describe("Field mode on a phone (docs/course-editor.md §9, §10)", () => {
     await expect(page.getByTestId("editor-mode-field")).toHaveAttribute("aria-pressed", "true");
     await expect(page.getByTestId("editor-field-top-bar")).toBeVisible();
     await expect(sheet(page)).toHaveAttribute("data-detent", "peek");
-    for (const id of ["editor-tool-rail", "editor-inspector", "editor-top-bar"]) await expect(page.getByTestId(id)).toHaveCount(0);
+    for (const id of ["editor-tool-rail", "editor-inspector", "editor-top-bar", "editor-stats"]) await expect(page.getByTestId(id)).toHaveCount(0);
+    // The phone keeps its peek line (P2 moved only the desktop status bar into the top bar): KPIs and the save state.
+    await expect(sheet(page).getByTestId("editor-status")).toBeVisible();
+    await expect(sheet(page).getByTestId("editor-save-state")).toHaveAttribute("data-state", "saved", { timeout: 15000 });
     // Full-bleed: the editor covers the screen, the app's header is under it.
     const box = (await page.getByTestId("editor-page").boundingBox())!;
     const vp = page.viewportSize()!;
@@ -268,6 +271,61 @@ test.describe("Field mode on a phone (docs/course-editor.md §9, §10)", () => {
     await expect(page.getByTestId("editor-field-add")).toBeVisible();
   });
 
+  // F27 (§10 "Loupe"; user 2026-11-11): the placement loupe toggle in the overflow — on, the pin-drop flow shows the loupe
+  // 16 px above the centre crosshair, magnifying the point Place would drop; off or Done → none.
+  test("the placement loupe above the pin-drop crosshair: overflow toggle on → loupe, off → none, Done → none", async ({ page }) => {
+    await openEditor(page);
+    const toggleOn = async (on: boolean) => {
+      await page.getByTestId("editor-overflow").click();
+      const item = page.getByTestId("editor-overflow-menu").getByTestId("editor-placement-loupe");
+      await expect(item).toHaveAttribute("aria-pressed", String(!on));
+      await item.click();
+      await expect(page.getByTestId("editor-overflow-menu")).toHaveCount(0);
+    };
+    await toggleOn(true);
+    expect(await page.evaluate(() => localStorage.getItem("oxygen.editor.placementLoupe"))).toBe("true");
+    const loupe = page.getByTestId("editor-loupe");
+    // No placing tool armed: none.
+    await expect(loupe).toHaveCount(0);
+    await page.getByTestId("editor-field-add").click();
+    await page.getByTestId("editor-add-K").click();
+    const crosshair = page.getByTestId("editor-touch-crosshair");
+    await expect(crosshair).toBeVisible();
+    await expect(loupe).toBeVisible();
+    await expect(loupe).toHaveAttribute("data-pointer", "touch");
+    await expect(loupe).toHaveAttribute("data-mode", "hover");
+    const lb = (await loupe.boundingBox())!;
+    const xb = (await crosshair.boundingBox())!;
+    const c = { x: xb.x + xb.width / 2, y: xb.y + xb.height / 2 };
+    expect(Math.abs(lb.width - 120)).toBeLessThanOrEqual(1);
+    expect(Math.abs(lb.y + lb.height - (c.y - 16))).toBeLessThanOrEqual(1);
+    expect(Math.abs(lb.x + lb.width / 2 - c.x)).toBeLessThanOrEqual(1);
+    // Centred on the point Place drops: the crosshair's paper point (snapped, so within a snap reach of it).
+    const at = await toPaper(page, c);
+    const shown = { x: Number(await loupe.getAttribute("data-x")), y: Number(await loupe.getAttribute("data-y")) };
+    expect(Math.hypot(shown.x - at.x, shown.y - at.y)).toBeLessThan(3);
+    await nextFrames(page);
+    const magnified = await canvasInCircle(page, lb);
+    // Off → none; the same circle at 1× differs from the magnified one.
+    await toggleOn(false);
+    await expect(loupe).toHaveCount(0);
+    await expect(crosshair).toBeVisible();
+    await nextFrames(page);
+    const plain = await canvasInCircle(page, lb);
+    expect(plain.rgb.length).toBe(magnified.rgb.length);
+    let differing = 0;
+    for (let i = 0; i < plain.rgb.length; i += 3) {
+      if (Math.abs(plain.rgb[i] - magnified.rgb[i]) + Math.abs(plain.rgb[i + 1] - magnified.rgb[i + 1]) + Math.abs(plain.rgb[i + 2] - magnified.rgb[i + 2]) > 60) differing++;
+    }
+    expect(differing / (plain.rgb.length / 3)).toBeGreaterThan(0.1);
+    // On again → back; Done (the tool disarmed) → none.
+    await toggleOn(true);
+    await expect(loupe).toBeVisible();
+    await page.getByTestId("editor-touch-done").click();
+    await expect(crosshair).toHaveCount(0);
+    await expect(loupe).toHaveCount(0);
+  });
+
   test("a tap on its outline selects an area object; two fingers on its handle ring scale it", async ({ page }) => {
     await openEditor(page);
     // A square of 100 px in the empty paper above the drawn map (clear of every control).
@@ -380,5 +438,31 @@ test.describe("Field mode on a desktop (docs/course-editor.md §9)", () => {
     await page.getByTestId("editor-mode-course").click();
     await expect(page.getByTestId("editor-tool-rail")).toBeVisible();
     await expect(page.getByTestId("my-location-marker")).toHaveCount(0);
+  });
+
+  // F10 (docs/course-editor.md §9; 08 §5.5 "the selected course or setter map").
+  test("the setter-map picker lists the setter maps; picked, the list is the setter's controls in code order", async ({ page }) => {
+    type Listed = { seq: number; name: string; kind: string; setter: { index: number; controls: number[] } | null };
+    await trpcCall("layout.setterMaps", { groups: 2 });
+    try {
+      const setters = (await trpcCall<Listed[]>("courseMap.list", undefined, false)).filter((s) => s.kind === "setter").sort((a, b) => a.setter!.index - b.setter!.index);
+      expect(setters).toHaveLength(2);
+      await openEditor(page);
+      await page.getByTestId("editor-mode-field").click();
+      const picker = page.getByTestId("editor-field-setter-picker");
+      await expect(picker.locator("option")).toHaveCount(3, { timeout: 15000 });
+      await picker.selectOption(String(setters[0].seq));
+      const list = page.getByTestId("editor-field-list");
+      await expect(list).toHaveAttribute("data-setter", String(setters[0].seq));
+      const rows = list.getByTestId("editor-field-row");
+      await expect(rows).toHaveCount(setters[0].setter!.controls.length, { timeout: 15000 });
+      expect((await rows.evaluateAll((els) => els.map((e) => Number(e.getAttribute("data-control-id")))))).toEqual(setters[0].setter!.controls);
+      await expect(page.getByTestId("editor-field-setter-kpi")).toContainText("Setter 1");
+      // None: the course's list again (or the "pick a course" line without one).
+      await picker.selectOption("");
+      await expect(page.locator('[data-testid="editor-field-list"]:not([data-setter=""])')).toHaveCount(0);
+    } finally {
+      for (const s of (await trpcCall<Listed[]>("courseMap.list", undefined, false)).filter((m) => m.kind === "setter")) await trpcCall("courseMap.delete", { id: s.seq });
+    }
   });
 });

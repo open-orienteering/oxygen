@@ -7,8 +7,9 @@
 
 import { useState } from "react";
 import { useTranslation } from "react-i18next";
-import { iofSymbolName } from "@oxygen/shared";
-import type { DisplayRow } from "../../../lib/editor/sequence";
+import { iofSymbolName, type ControlKind } from "@oxygen/shared";
+import { partHeadings, type DisplayRow, type VariationBlockInfo } from "../../../lib/editor/sequence";
+import { VariationBlock, type VariationHandlers } from "./VariationBlock";
 import { FINISH_OPTIONS, SPECIAL_OPTIONS } from "../../../lib/control-description-options";
 import {
   addSpecial,
@@ -40,6 +41,9 @@ export interface CourseSectionProps {
   instructions: Instructions;
   /** One gesture's next value: one `course.update { descriptionInstructions }`, one undo entry (§4). */
   onInstructions: (next: Instructions) => void;
+  /** The course's variation groups (§12), each shown after its anchor's row. */
+  blocks?: VariationBlockInfo[];
+  variation?: VariationHandlers;
 }
 
 export function CourseSection(p: CourseSectionProps) {
@@ -51,6 +55,8 @@ export function CourseSection(p: CourseSectionProps) {
   const [dragFrom, setDragFrom] = useState<number | null>(null);
   const ordered = p.course?.orderMode !== "free_order";
   const controls = p.rows.filter((r) => r.kind === "control").length;
+  // §6.9: a course split by map exchanges lists its parts.
+  const parts = partHeadings(p.rows);
 
   const create = () => {
     const name = newName.trim();
@@ -92,23 +98,38 @@ export function CourseSection(p: CourseSectionProps) {
             {p.rows.map((row, i) => {
               const legM = p.legMeters[i];
               const isControl = row.kind === "control";
+              // §12: a loop's repeated anchor visit is no item — no drag, no ↑ / ↓, no ✕.
+              const movable = isControl && !row.path.anchorVisit;
               const selected = row.id === p.selectedControlId;
-              return (
+              const part = parts.get(i);
+              const blocks = p.variation ? (p.blocks ?? []).filter((b) => b.afterRow === i) : [];
+              return [
+                part !== undefined && (
+                  <li key={`part-${part}`} data-testid="editor-seq-part" data-part={part}
+                    title={part > 1 ? te("seqPartHint", { part: part - 1 }) : undefined}
+                    className="px-2.5 pt-1.5 pb-0.5 text-[10px] font-semibold uppercase tracking-wide text-purple-700">
+                    {te("seqPart", { part })}
+                  </li>
+                ),
                 <li
                   key={`${row.kind}-${row.id}-${i}`}
                   data-testid="editor-seq-row"
                   data-kind={row.kind}
+                  data-exchange={row.exchange ? "true" : undefined}
                   data-control-id={row.id}
-                  draggable={isControl && ordered}
-                  title={isControl && ordered ? te("dragToReorder") : undefined}
+                  data-group={row.group?.id}
+                  data-alternative={row.group?.label ?? undefined}
+                  data-anchor-visit={row.path.anchorVisit ? "true" : undefined}
+                  draggable={movable && ordered}
+                  title={movable && ordered ? te("dragToReorder") : undefined}
                   onDragStart={() => setDragFrom(row.seqIndex)}
-                  onDragOver={(e) => { if (isControl && dragFrom !== null) e.preventDefault(); }}
+                  onDragOver={(e) => { if (movable && dragFrom !== null) e.preventDefault(); }}
                   onDrop={() => {
-                    if (dragFrom !== null && isControl && dragFrom !== row.seqIndex) p.onMove(dragFrom, row.seqIndex);
+                    if (dragFrom !== null && movable && dragFrom !== row.seqIndex) p.onMove(dragFrom, row.seqIndex);
                     setDragFrom(null);
                   }}
                   onDragEnd={() => setDragFrom(null)}
-                  className={`group flex items-center gap-1.5 px-2.5 py-0.5 ${selected ? "bg-purple-50" : "hover:bg-slate-50"}`}
+                  className={`group flex items-center gap-1.5 ${row.group ? "pl-6 pr-2.5 border-l-2 border-purple-200 ml-2.5" : "px-2.5"} py-0.5 ${selected ? "bg-purple-50" : "hover:bg-slate-50"}`}
                 >
                   <button type="button" data-testid="editor-seq-select" onClick={() => p.onSelectRow(row.id)}
                     className="w-5 text-right text-slate-400 tabular-nums cursor-pointer hover:text-purple-700">
@@ -142,7 +163,7 @@ export function CourseSection(p: CourseSectionProps) {
                     <span data-testid="editor-radio-badge" className="px-1 rounded-full text-[9px] bg-sky-100 text-sky-800">{t("editor.radioBadge")}</span>
                   )}
                   {ordered && legM != null && <span className="ml-auto text-slate-400 tabular-nums" data-testid="editor-leg-meters">{legM} m</span>}
-                  {isControl && (
+                  {movable && (
                     <span className={`flex gap-0.5 ${ordered && legM != null ? "" : "ml-auto"} opacity-60 group-hover:opacity-100`}>
                       {ordered && (
                         <>
@@ -156,8 +177,11 @@ export function CourseSection(p: CourseSectionProps) {
                         onClick={() => p.onRemove(row.seqIndex)} className="px-0.5 text-red-500 cursor-pointer">✕</button>
                     </span>
                   )}
-                </li>
-              );
+                </li>,
+                ...blocks.map((b) => (
+                  <VariationBlock key={`variation-${b.id}`} block={b} on={p.variation!} dragFrom={dragFrom} onDropped={() => setDragFrom(null)} />
+                )),
+              ];
             })}
           </ol>
           <div className="px-2.5 py-1 border-t border-slate-100 text-slate-500 flex gap-2" data-testid="editor-course-total">
@@ -332,6 +356,12 @@ export interface SelectionSectionProps {
   selected: {
     code: string;
     role: "start" | "finish" | "control";
+    /** The site's kind (08 §4.2); default the role. */
+    kind?: ControlKind;
+    /** On a course (an item, or its start / finish): it cannot become a crossing or map-issue point (§6.6). */
+    onCourse?: boolean;
+    /** A crossing point some leg runs through: its kind stays (§6.6). */
+    routed?: boolean;
     x: number;
     y: number;
     description: string | null;
@@ -341,13 +371,17 @@ export interface SelectionSectionProps {
     /** On the selected course: whether its number is hidden there (`numberHidden`); null when not on it. */
     numberHidden: boolean | null;
   } | null;
-  /** Site kind (08 §4.2); the slice-F kinds are listed disabled. */
-  onKind?: (kind: "control" | "start" | "finish") => void;
+  /** Site kind (08 §4.2): all six (F4); the ones the site's courses forbid are disabled. */
+  onKind?: (kind: ControlKind) => void;
   onNotes?: (notes: string) => void;
   onNumberHidden?: (hidden: boolean) => void;
 }
 
-const SLICE_F_KINDS = ["map_exchange", "crossing_point", "map_issue"] as const;
+const KINDS: readonly ControlKind[] = ["control", "start", "finish", "map_exchange", "crossing_point", "map_issue"];
+const KIND_LABEL: Record<ControlKind, "kindControl" | "kindStart" | "kindFinish" | "kind_map_exchange" | "kind_crossing_point" | "kind_map_issue"> = {
+  control: "kindControl", start: "kindStart", finish: "kindFinish",
+  map_exchange: "kind_map_exchange", crossing_point: "kind_crossing_point", map_issue: "kind_map_issue",
+};
 
 export function SelectionSection({ selected, onKind, onNotes, onNumberHidden }: SelectionSectionProps) {
   const { t } = useTranslation("editor");
@@ -367,13 +401,17 @@ export function SelectionSection({ selected, onKind, onNotes, onNumberHidden }: 
       </dd>
       <dt className="text-slate-400">{t("kind")}</dt>
       <dd>
-        <select data-testid="editor-selected-kind" value={selected.role} disabled={!onKind}
-          onChange={(e) => onKind?.(e.target.value as "control" | "start" | "finish")}
+        <select data-testid="editor-selected-kind" value={selected.kind ?? selected.role} disabled={!onKind}
+          onChange={(e) => onKind?.(e.target.value as ControlKind)}
           className="w-full px-1 py-0.5 border border-slate-200 rounded bg-white text-xs">
-          <option value="control">{t("kindControl")}</option>
-          <option value="start">{t("kindStart")}</option>
-          <option value="finish">{t("kindFinish")}</option>
-          {SLICE_F_KINDS.map((k) => <option key={k} value={k} disabled>{t(`kind_${k}`)} — {t("sliceF")}</option>)}
+          {KINDS.map((k) => {
+            const current = (selected.kind ?? selected.role) === k;
+            const noItem = (k === "crossing_point" || k === "map_issue") && !!selected.onCourse;
+            const kept = !!selected.routed && k !== "crossing_point";
+            const why = noItem ? t("kindOnCourse") : kept ? t("kindRouted") : undefined;
+            // F14: the map-issue point says what it is (§6.6, §6.8); a disabled reason wins.
+            return <option key={k} value={k} disabled={!current && (noItem || kept)} title={why ?? (k === "map_issue" ? t("mapIssueHint") : undefined)}>{t(KIND_LABEL[k])}{!current && why ? ` — ${why}` : ""}</option>;
+          })}
         </select>
       </dd>
       <dt className="text-slate-400 sr-only">x / y</dt>

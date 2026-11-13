@@ -1,6 +1,7 @@
 import { describe, it, expect } from "vitest";
 import type { course } from "@oxygen/shared";
-import { courseLayerRequest, courseObjectsForView, PROVISIONAL_SITE_ID, type CourseRequestInput, type ProvisionalVisit, type RequestControl } from "../course-layer-request";
+import { withLegDraft } from "../editor/variation-view";
+import { courseLayerRequest, courseObjectsForView, overlayTypeOf, provisionalDrawn, sheetCrossings, sheetExchanges, PROVISIONAL_SITE_ID, type CourseRequestInput, type ProvisionalVisit, type RequestControl } from "../course-layer-request";
 
 const ctl = (id: string, type: RequestControl["type"] = "Control", visible?: boolean): RequestControl => ({ id, code: `c${id}`, type, ...(visible === undefined ? {} : { visible }) });
 const CONTROLS = [ctl("S", "Start"), ctl("1"), ctl("2"), ctl("3"), ctl("F", "Finish")];
@@ -82,27 +83,40 @@ describe("courseLayerRequest (docs/course-layer.md §5)", () => {
     expect(r.viewOptions.allControls).toBeUndefined();
   });
 
-  it("the structure's authored leg gaps and hidden numbers, the controls' circle cuts; nothing else is read", () => {
+  it("the structure's stored legs whole and hidden numbers, the controls' circle cuts; nothing else is read", () => {
     const cuts = [{ start: 10, end: 40 }];
-    const gaps = [{ from: 0.4, to: 0.6 }];
+    const leg = {
+      style: "marked_route" as const,
+      gaps: [{ from: 0.4, to: 0.6 }],
+      bends: [{ x: 15, y: 25 }],
+      corridor: { widthM: 60, edge: true, whiteMm: 3, whiteOpacity: 1 },
+    };
     const r = courseLayerRequest(base({
       controls: CONTROLS.map((c) => (c.id === "1" ? { ...c, circleGaps: cuts } : c)),
-      courses: [{ name: "A", controls: ["S", "1", "2", "F"], highlight: true, legGaps: { "1>2": gaps, "9>2": [{ from: 0.1, to: 0.2 }] }, hiddenNumbers: [2] }],
+      courses: [{ name: "A", controls: ["S", "1", "2", "F"], highlight: true, legs: { "1>2": leg, "9>2": { gaps: [{ from: 0.1, to: 0.2 }] }, "2>F": { style: "none" } }, hiddenNumbers: [2] }],
     }));
     expect(r.sites.find((s) => s.id === "1")!.circleGaps).toEqual(cuts);
     expect(r.sites.find((s) => s.id === "2")!.circleGaps).toBeUndefined();
     const a = structures(r)[0];
-    expect(a.items.map((i) => i.leg)).toEqual([undefined, undefined, { gaps }, undefined]);
+    expect(a.items.map((i) => i.leg)).toEqual([undefined, undefined, leg, { style: "none" }]);
     expect(a.items.map((i) => i.numberHidden)).toEqual([undefined, undefined, true, undefined]);
   });
 
-  it("an empty gap list stays out of the request (the layer cuts automatically)", () => {
+  it("an empty leg stays out of the request (a plain 705 leg, cut automatically)", () => {
     const r = courseLayerRequest(base({
       controls: CONTROLS.map((c) => (c.id === "1" ? { ...c, circleGaps: [] } : c)),
-      courses: [{ name: "A", controls: ["S", "1", "2", "F"], highlight: true, legGaps: { "1>2": [] } }],
+      courses: [{ name: "A", controls: ["S", "1", "2", "F"], highlight: true, legs: { "1>2": {} } }],
     }));
     expect(r.sites.find((s) => s.id === "1")!.circleGaps).toBeUndefined();
     expect(structures(r)[0].items.every((i) => i.leg === undefined)).toBe(true);
+  });
+
+  it("the editor's leg draft (F21) reaches the request as that leg's bends, its other props kept", () => {
+    const corridor = { widthM: 60, edge: true, whiteMm: 3, whiteOpacity: 1 };
+    const courses = [{ name: "A", controls: ["S", "1", "2", "F"], highlight: true, legs: { "1>2": { corridor, bends: [{ x: 50, y: 20 }] } } }, { name: "B", controls: ["S", "3", "F"] }];
+    const bends = [{ x: 45, y: 30, hIn: { x: -2, y: 0 }, hOut: { x: 2, y: 0 } }];
+    const r = courseLayerRequest(base({ courses: withLegDraft(courses, { course: "A", key: "1>2", bends }) }));
+    expect(structures(r)[0].items[2].leg).toEqual({ corridor, bends });
   });
 });
 
@@ -147,13 +161,23 @@ describe("the editor's provisional visit (docs/course-editor.md §6.1)", () => {
     expect(r.sites.map((s) => s.id)).toEqual(["S", "1", "2", "3", "F"]);
   });
 
-  it("the leg the visit splits loses its stored gaps; the others keep theirs", () => {
-    const gaps = [{ from: 0.4, to: 0.6 }];
+  it("provisionalDrawn: the layer adds a site for a visit, none for a reuse or without one (the UI-layer ghost circle is its negation, P4)", () => {
+    expect(provisionalDrawn(null)).toBe(false);
+    expect(provisionalDrawn(undefined)).toBe(false);
+    expect(provisionalDrawn(visit({ insertAt: 1 }))).toBe(true);
+    expect(provisionalDrawn(visit({ insertAt: 1, reuseId: "3" }))).toBe(false);
+    for (const v of [visit({ insertAt: 1 }), visit({ insertAt: 1, reuseId: "3" })]) {
+      expect(courseLayerRequest(base({ provisional: v })).sites.some((s) => s.id === P)).toBe(provisionalDrawn(v));
+    }
+  });
+
+  it("the leg the visit splits loses its stored leg (style, bends, corridor too); the others keep theirs", () => {
+    const leg = { gaps: [{ from: 0.4, to: 0.6 }], style: "marked_route" as const, bends: [{ x: 15, y: 25 }] };
     const r = courseLayerRequest(base({
-      courses: [{ name: "A", controls: ["S", "1", "2", "F"], highlight: true, legGaps: { "1>2": gaps, "2>F": gaps } }],
+      courses: [{ name: "A", controls: ["S", "1", "2", "F"], highlight: true, legs: { "1>2": leg, "2>F": leg } }],
       provisional: visit({ insertAt: 1 }),
     }));
-    expect(structures(r)[0].items.map((i) => i.leg)).toEqual([undefined, undefined, undefined, undefined, { gaps }]);
+    expect(structures(r)[0].items.map((i) => i.leg)).toEqual([undefined, undefined, undefined, undefined, leg]);
   });
 
   it("ignored without exactly one highlighted course", () => {
@@ -197,27 +221,24 @@ describe("course objects (docs/course-layer.md §8.2, §8.3)", () => {
 describe("Layout mode's sheet (docs/course-layout.md §1)", () => {
   const frame = { x: 10, y: 10, width: 190, height: 277 };
   const window = { minX: -65, minY: -128.5, width: 190, height: 277 };
-  const mapText = { id: "n", kind: "text" as const, anchor: "map" as const, x: 0, y: 0, text: "N", fontSizeMm: 5, color: "#000000" };
   const pageText = { id: "t", kind: "text" as const, anchor: "page" as const, x: 20, y: 20, text: "{course}", fontSizeMm: 5, color: "#000000" };
   const layout = {
-    page: { paper: { heightMm: 297 }, frame, window, objects: [mapText, pageText], textValues: { course: "A" }, description: null },
+    page: { paper: { heightMm: 297 }, frame, window, objects: [pageText], textValues: { course: "A" }, description: null },
     appearance: { circle: 1.2 },
-    overprintScale: 1.5,
   };
 
-  it("passes the page through and draws layout objects, appearance and print view options in the course layer, as the composer does", () => {
+  it("passes the page through and draws the course objects, appearance and print view options in the course layer, as the composer does", () => {
     const oob = { id: 7, kind: "oob_area", geometry: [{ x: 0, y: 0 }, { x: 5, y: 0 }, { x: 5, y: 5 }], props: {}, scope: { all: true }, z: 0, version: "1", inCourses: null } as course.CourseObject;
     const r = courseLayerRequest(base({ layout, courseObjects: [oob] }));
     expect(r.page).toBe(layout.page);
     expect(r.appearance).toEqual({ circle: 1.2 });
-    expect(r.viewOptions.overprintScale).toBe(1.5);
     expect(r.viewOptions.textValues).toEqual({ course: "A" });
     // The frame grown by the composer's bleed, in paper mm.
     const xs = r.viewOptions.window!.map((p) => p.x);
     expect(Math.min(...xs)).toBeCloseTo(-66, 6);
     expect(Math.max(...xs)).toBeCloseTo(126, 6);
-    // Layout objects first (both anchors; the layer draws the map-anchored ones), then the course objects.
-    expect(r.objects.map((o) => o.id)).toEqual(["n", "t", 7]);
+    // The course layer takes the course objects only; the sheet's layout objects are the page part's (F12).
+    expect(r.objects.map((o) => o.id)).toEqual([7]);
   });
 
   it("without a sheet: Course mode's request, no page", () => {
@@ -225,5 +246,85 @@ describe("Layout mode's sheet (docs/course-layout.md §1)", () => {
     expect(r.page).toBeUndefined();
     expect(r.appearance).toEqual({});
     expect(r.viewOptions.window).toBeUndefined();
+  });
+});
+
+describe("crossing and map-issue points (docs/course-layer.md §10.3, F4)", () => {
+  // 3 is off course A and hidden, as the editor hides it: only the marks are off the course.
+  const marks = [...CONTROLS.filter((c) => c.id !== "3"), ctl("3", "Control", false), ctl("P", "Crossing"), ctl("M", "MapIssue")];
+  const pos = new Map([...POS, ["P", { x: 50, y: 25 }], ["M", { x: 70, y: 70 }]]);
+
+  it("types a site by its kind, else the wire status; an exchange is a control", () => {
+    expect(overlayTypeOf({ status: 0, kind: "crossing_point" })).toBe("Crossing");
+    expect(overlayTypeOf({ status: 0, kind: "map_issue" })).toBe("MapIssue");
+    expect(overlayTypeOf({ status: 0, kind: "map_exchange" })).toBe("Control");
+    expect(overlayTypeOf({ status: 4, kind: "start" })).toBe("Start");
+    expect(overlayTypeOf({ status: 5 })).toBe("Finish");
+    expect(overlayTypeOf({ status: 0 })).toBe("Control");
+  });
+
+  it("their sites never make the view all-controls; setter marks and the legs' crossing pass through", () => {
+    const legs = { "1>2": { crossing: { controlId: "P" } } };
+    const r = courseLayerRequest(base({ controls: marks, positions: pos, courses: [{ name: "A", controls: ["S", "1", "2", "F"], highlight: true, legs }], setterMarks: true }));
+    expect(r.sites.filter((x) => x.id === "P" || x.id === "M").map((x) => x.kind)).toEqual(["crossing_point", "map_issue"]);
+    expect(r.viewOptions.allControls).toBeUndefined();
+    expect(r.viewOptions.setterMarks).toBe(true);
+    expect(structures(r)[0].items[2].leg).toEqual({ crossing: { controlId: "P" } });
+    expect(courseLayerRequest(base({ controls: marks, positions: pos })).viewOptions.setterMarks).toBeUndefined();
+  });
+
+  it("sheetCrossings: a row per leg through a crossing, after the control it leaves (its code), null after the start", () => {
+    const overlays = [{ id: "S", code: "S1", type: "Start" as const }, { id: "31", code: "31", type: "Control" as const }, { id: "32", code: "32", type: "Control" as const }];
+    const legs = { "S>31": { crossing: { controlId: "P" } }, "31>32": { crossing: { controlId: "P", section: true } } };
+    expect(sheetCrossings({ controls: ["S", "31", "32"], legs }, overlays)).toEqual([{ afterControlId: null, section: false }, { afterControlId: 31, section: true }]);
+    expect(sheetCrossings({ controls: ["S", "31", "32"], legs, orderMode: "free_order" }, overlays)).toEqual([]);
+  });
+});
+
+describe("map exchange (docs/course-layer.md §11, F5)", () => {
+  // 3 is off course A and hidden, as the editor hides it.
+  const withX = [...CONTROLS.filter((c) => c.id !== "2" && c.id !== "3"), { ...ctl("2"), exchange: true }, ctl("3", "Control", false)];
+  const layout = {
+    page: { paper: { heightMm: 297 }, frame: { x: 10, y: 10, width: 190, height: 277 }, window: { minX: 0, minY: 0, width: 190, height: 277 }, objects: [], description: null },
+    appearance: {},
+    overprintScale: 1,
+  };
+
+  it("an exchange site is a map_exchange in the layer, still on course", () => {
+    const r = courseLayerRequest(base({ controls: withX }));
+    expect(r.sites.find((s) => s.id === "2")!.kind).toBe("map_exchange");
+    expect(r.viewOptions.allControls).toBeUndefined();
+  });
+
+  it("a sheet's section reaches the view options; none without one", () => {
+    expect(courseLayerRequest(base({ controls: withX, layout: { ...layout, section: 1 } })).viewOptions.section).toBe(1);
+    expect(courseLayerRequest(base({ controls: withX, layout })).viewOptions.section).toBeUndefined();
+  });
+
+  it("sheetExchanges: a row after each exchange visit, by its code", () => {
+    const overlays = [{ id: "S", code: "S1" }, { id: "31", code: "31" }, { id: "40", code: "40", exchange: true }, { id: "32", code: "32" }];
+    expect(sheetExchanges({ controls: ["S", "31", "40", "32"] }, overlays)).toEqual([{ afterControlId: 40 }]);
+    expect(sheetExchanges({ controls: ["S", "31"] }, overlays)).toEqual([]);
+  });
+});
+
+describe("variation tints (docs/course-layer.md §12.7, F7)", () => {
+  it("a tinted course carries its tint and turns on allVariations; labels are codes with several courses", () => {
+    const r = courseLayerRequest(base({
+      courses: [{ name: "A", controls: ["S", "1", "F"], highlight: true }, { name: "A#v1/B", controls: ["1", "2", "F"], highlight: true, tint: "B" }],
+    }));
+    expect(structures(r).map((s) => s.tint)).toEqual([undefined, "B"]);
+    expect(r.viewOptions).toMatchObject({ allVariations: true, labelMode: "code" });
+  });
+
+  it("a labels map on the spine becomes viewOptions.labels (F15); a draw without one adds none", () => {
+    const courses = [{ name: "A", controls: ["S", "1", "F"], highlight: true, labels: { "1": "1", "2": "2" } }, { name: "A#v1/B", controls: ["1", "2", "F"], highlight: true, tint: "B" }];
+    const r = courseLayerRequest(base({ courses }));
+    expect(r.viewOptions).toMatchObject({ allVariations: true, labelMode: "code", labels: { "1": "1", "2": "2" } });
+    expect(courseLayerRequest(base({ courses: courses.map(({ labels: _l, ...c }) => c) })).viewOptions.labels).toBeUndefined();
+  });
+
+  it("no tint, no allVariations (every other view, and print)", () => {
+    expect(courseLayerRequest(base()).viewOptions.allVariations).toBeUndefined();
   });
 });

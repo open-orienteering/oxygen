@@ -21,7 +21,7 @@ import type { PassStream } from "../render/pass-stream.js";
 import type { RenderSymbol } from "../render/symbol.js";
 import { symbolise } from "../render/symbolise.js";
 import { courseColourStack, withObjectColours } from "./colour-stack.js";
-import { layoutObjects, objectColours } from "./objects.js";
+import { pageObjectColours, pageObjects } from "./objects.js";
 import { courseSymbols } from "./symbols.js";
 import type { CourseDocumentContext } from "./types.js";
 
@@ -39,7 +39,7 @@ export interface PageLayerInput {
   /** The map frame, page mm y-down (the template's convention). */
   frame: MapRect;
   window: MapWindow;
-  /** Layout objects of both anchors; only the page-anchored ones are drawn here. */
+  /** The template's and the sheet's layout objects (all page-anchored). */
   objects: readonly CourseMapObject[];
   textValues?: MapTextValues;
   description: DescriptionBlockInput | null;
@@ -73,9 +73,9 @@ export function pageLayer(input: PageLayerInput, mapColours: readonly DocumentCo
   const warnings: PageWarning[] = [];
 
   // Page-anchored objects, flipped to y-up page mm, through the course layer's object builder.
-  const pageObjects = input.objects.filter((o) => o.anchor === "page").map((o) => flipPageObject(o, H));
+  const flipped = input.objects.map((o) => flipPageObject(o, H));
   const ink = input.description?.colour ?? "#000000";
-  const palette = withObjectColours([...mapColours], [...(input.description ? ["#ffffff", ink] : []), ...objectColours(pageObjects)]);
+  const palette = withObjectColours([...mapColours], [...(input.description ? ["#ffffff", ink] : []), ...pageObjectColours(flipped)]);
   // White-out and 709 on the page in the map's own entries, at the size they print on the map.
   const stackIndex = courseColourStack([...mapColours]).index;
   const set = courseSymbols(
@@ -92,7 +92,7 @@ export function pageLayer(input: PageLayerInput, mapColours: readonly DocumentCo
     { x: (fr.x + fr.width) / 1000, y: (fr.y + fr.height) / 1000 },
     { x: fr.x / 1000, y: (fr.y + fr.height) / 1000 },
   ];
-  const built = layoutObjects(pageObjects, set, pageSymbols, palette.indexOf, { overprintScale: 1, window: frameRing, textValues: input.textValues }, stackIndex.get("purple-upper")!);
+  const built = pageObjects(flipped, set, pageSymbols, palette.indexOf, { window: frameRing, textValues: input.textValues });
   for (const w of built.warnings) warnings.push({ code: w.code, message: w.message });
   const render = built.objects.map(({ ref: _ref, ...o }) => o);
   if (input.description) {
@@ -104,7 +104,7 @@ export function pageLayer(input: PageLayerInput, mapColours: readonly DocumentCo
   const page = symbolise({ objects: render, symbols: pageSymbols, fonts });
   for (const w of page.warnings) warnings.push({ code: w.code, message: `page layer: ${w.message}` });
 
-  const images: PageImage[] = built.images.map((i) => ({ layer: "page" as const, graphicId: i.object.graphicId, rectUm: i.rectUm, ...(i.object.crop ? { crop: i.object.crop } : {}) }));
+  const images: PageImage[] = built.images.map((i) => ({ layer: "page" as const, ...i }));
   return { stream: page.stream, colours: palette.colours, transform, frameUm, frameRing: frameInMap(transform, frameUm), images, warnings };
 }
 
@@ -119,8 +119,8 @@ export function pageStreamInMap(layer: Pick<PageLayer, "stream" | "transform">):
 
 /**
  * The map layer's `viewOptions.window` of a sheet (what `composePage`
- * passes): the frame grown by `RING_BLEED_UM`, in paper mm, so a
- * map-anchored white-out outside reaches past the frame's clip.
+ * passes): the frame grown by `RING_BLEED_UM`, in paper mm, so a toner
+ * saver's white-out outside reaches past the frame's clip.
  */
 export function mapLayerWindow(input: Pick<PageLayerInput, "paper" | "frame" | "window">): MapPoint[] {
   const t = mapLayerTransform(input.frame, input.window, input.paper.heightMm);

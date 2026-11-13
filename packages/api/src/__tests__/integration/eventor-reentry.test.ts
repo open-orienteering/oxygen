@@ -376,4 +376,61 @@ describe("eventor.sync re-entry status reset", () => {
       await ctx.cleanup();
     }
   });
+
+  it("deals a variant to a new entry in a class on a forked course (F6b)", async () => {
+    const ctx = await createTestEvent("evr-variants");
+    try {
+      await ctx.db.event.update({
+        where: { id: ctx.eventId },
+        data: { eventorEventId: BigInt(EVENTOR_EVENT_ID), eventorEnv: "test" },
+      });
+      const caller = makeCaller(ctx.event);
+      const S = (await caller.control.create({ status: 4, xpos: 10, ypos: 10 })).id;
+      const F = (await caller.control.create({ status: 5, xpos: 90, ypos: 10 })).id;
+      const sites: number[] = [];
+      for (const [code, x] of [[31, 20], [32, 30], [33, 40]] as const) {
+        sites.push((await caller.control.create({ codes: String(code), xpos: x, ypos: 20 })).id);
+      }
+      const { id: root } = await caller.course.create({ name: "Forked" });
+      await caller.course.setStructure({
+        courseId: root,
+        structure: {
+          version: 1,
+          id: "x",
+          orderMode: "ordered",
+          items: [
+            { siteId: S },
+            { siteId: sites[0] },
+            {
+              kind: "variation",
+              id: "g",
+              alternatives: [
+                { label: "A", items: [{ siteId: sites[1] }] },
+                { label: "B", items: [{ siteId: sites[2] }] },
+              ],
+            },
+            { siteId: F },
+          ],
+        },
+      });
+      const { id: classSeq } = await caller.class.create({ name: "H21", courseId: root });
+      await ctx.db.class.updateMany({ where: { eventId: ctx.eventId, seq: classSeq }, data: { eventorId: BigInt(CLASS_BASE) } });
+
+      vi.mocked(fetchEventClasses).mockResolvedValue([makeClass(CLASS_BASE, "H21")]);
+      vi.mocked(fetchEntries).mockResolvedValue([
+        makeEntry(CLASS_BASE, PERSON_BASE + 10, "New One", 700_101, "H21"),
+        makeEntry(CLASS_BASE, PERSON_BASE + 11, "New Two", 700_102, "H21"),
+      ]);
+      vi.mocked(fetchResults).mockResolvedValue([]);
+      await caller.eventor.sync();
+
+      const runners = await ctx.db.runner.findMany({
+        where: { eventId: ctx.eventId, removed: false },
+        select: { course: { select: { variantKey: true } } },
+      });
+      expect(runners.map((r) => r.course?.variantKey).sort()).toEqual(["A", "B"]);
+    } finally {
+      await ctx.cleanup();
+    }
+  });
 });

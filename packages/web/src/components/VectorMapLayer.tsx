@@ -200,7 +200,8 @@ export function VectorMapLayer({ doc, view, width, height, budget, zIndex = 1, c
     };
   }, [doc, budget, attempt, requestDraw]);
 
-  // Every course change is one worker request; its reply asks for the redraw (`onChange`).
+  // Every course change goes to the engine, which keeps one worker request in flight (latest wins);
+  // each reply it draws asks for the redraw (`onChange`).
   useEffect(() => {
     engineRef.current?.setCourse(course);
   }, [course]);

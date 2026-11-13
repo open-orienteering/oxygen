@@ -163,11 +163,6 @@ describe("resolveMapLayout orientation", () => {
     // compensated — NOT north_offset, whose true-north component applies
     // only to the tile pipeline's mercator-warped rasters.
     expect(layout.window.rotationDeg).toBe(-3.3);
-    // ISOM overprint enlargement follows the print enlargement.
-    expect(layout.overprintScale).toBeCloseTo(
-      15_000 / layout.document.printScale,
-      10,
-    );
   });
 
   it("omits rotation for negligible or missing tilts", () => {

@@ -201,4 +201,80 @@ test.describe("Classes Page", () => {
     // Wait for the forked badge to disappear after unchecking
     await expect(expandedPanel.getByText(/Forked/)).not.toBeVisible({ timeout: 5000 });
   });
+
+  test("runners in a class on a forked course carry pre-set variants (F6b)", async ({ page }) => {
+    const headers = { "x-competition-id": "itest" };
+    const post = async (path: string, data: unknown) => {
+      const res = await page.request.post(`/trpc/${path}`, { headers, data });
+      expect(res.ok(), `${path}: ${await res.text()}`).toBe(true);
+      return (await res.json()).result.data;
+    };
+    const stamp = Date.now();
+    const controls: number[] = [];
+    for (const [i, code] of [191, 192, 193, 194].entries()) {
+      controls.push((await post("control.create", { codes: String(code), xpos: 20 + i * 10, ypos: 20 })).id as number);
+    }
+    const root = (await post("course.create", { name: `E2E Variants ${stamp}` })).id as number;
+    await post("course.setStructure", {
+      courseId: root,
+      structure: {
+        version: 1,
+        id: "fork",
+        orderMode: "ordered",
+        items: [
+          { siteId: 191 },
+          { kind: "variation", id: "g", alternatives: [{ label: "A", items: [{ siteId: 192 }] }, { label: "B", items: [{ siteId: 193 }] }] },
+          { siteId: 194 },
+        ],
+      },
+    });
+    const className = `E2E V ${stamp}`;
+    const classId = (await post("class.create", { name: className, courseId: root })).id as number;
+    // Created out of start order: the creation-time picks (A, B, A) are not
+    // the start-order deal (A, B, A over 10:00, 10:02, 10:04).
+    const names = [`Vera First ${stamp}`, `Vera Second ${stamp}`, `Vera Third ${stamp}`];
+    const runners: number[] = [];
+    for (const i of [0, 2, 1]) {
+      runners[i] = (await post("runner.create", { name: names[i], classId, startTime: 360000 + i * 1200 })).id as number;
+    }
+
+    const variantOf = (name: string) =>
+      page.getByRole("row").filter({ hasText: name }).getByTestId("start-list-variant");
+
+    try {
+      // Every runner has a variant from the moment she is entered.
+      await page.goto(`/itest/classes?classId=${classId}`);
+      await expect(page.getByTestId("class-variants")).toBeVisible({ timeout: 15000 });
+      await expect(page.getByTestId("class-variant-A-count")).toHaveText("2 runners");
+      await expect(page.getByTestId("class-variant-B-count")).toHaveText("1 runner");
+
+      // Distribute in start order over every runner (confirmed).
+      await page.getByTestId("distribute-only-unassigned").uncheck();
+      page.once("dialog", (d) => d.accept());
+      await page.getByTestId("distribute-variants").click();
+      await expect(page.getByTestId("distribute-result")).toContainText("runners changed", { timeout: 10000 });
+
+      await page.goto("/itest/startlist");
+      await expect(variantOf(names[0])).toHaveText("A", { timeout: 15000 });
+      await expect(variantOf(names[1])).toHaveText("B");
+      await expect(variantOf(names[2])).toHaveText("A");
+
+      // The desk changes one runner's variant by hand.
+      await page.goto(`/itest/runners?q=${encodeURIComponent(names[1])}`);
+      await page.getByRole("cell", { name: names[1] }).click();
+      const select = page.getByTestId("runner-variant");
+      await expect(select).toBeVisible({ timeout: 10000 });
+      await expect(select.locator("option:checked")).toHaveText("B");
+      await select.selectOption({ label: "A" });
+      await expect(select.locator("option:checked")).toHaveText("A");
+
+      await page.goto("/itest/startlist");
+      await expect(variantOf(names[1])).toHaveText("A", { timeout: 15000 });
+    } finally {
+      for (const id of runners) await post("runner.delete", { id });
+      await post("class.delete", { id: classId });
+      await post("course.delete", { id: root });
+      for (const id of controls) await post("control.delete", { id });
+    }
+  });
 });

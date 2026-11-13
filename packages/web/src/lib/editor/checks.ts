@@ -45,18 +45,62 @@ export function checkSitesOf(
   });
 }
 
-/** The (explicit) wire structure in the layer's form; a variation group is skipped (slice F). */
-export function checkStructureOf(courseId: number, s: Structure): course.CourseStructure {
+type Control = Extract<Structure["items"][number], { siteId: number }>;
+
+/** What the leg checks read of a leg: the bends (§10.1) and the crossing point (§10.3), its id as the layer's string. */
+function checkLeg(l: Control["leg"]): course.CourseLegProps | undefined {
+  const leg: course.CourseLegProps = {};
+  if (l?.bends?.length) leg.bends = l.bends;
+  if (l?.crossing) leg.crossing = { controlId: String(l.crossing.controlId), ...(l.crossing.section ? { section: true } : {}) };
+  return Object.keys(leg).length ? leg : undefined;
+}
+
+/**
+ * The (explicit) wire structure in the layer's form: the displayed path
+ * (docs/course-editor.md §12; `orders` as the view shows the groups,
+ * default their first alternatives), so the leg checks follow what is drawn.
+ */
+export function checkStructureOf(courseId: number, s: Structure, orders?: course.GroupOrders): course.CourseStructure {
   return {
     version: 1,
     id: String(courseId),
     orderMode: s.orderMode,
-    items: s.items.flatMap((i) => (i.kind === "variation" ? [] : [{
-      siteId: String(i.siteId),
-      ...(i.role ? { role: i.role as course.CourseSite["kind"] } : {}),
-      ...(i.numberHidden ? { numberHidden: true } : {}),
-    }])),
+    items: course.pathOfOrders<Control>(s, orders).items.map((i) => {
+      const leg = checkLeg(i.leg);
+      return {
+        siteId: String(i.siteId),
+        ...(i.role ? { role: i.role } : {}),
+        ...(i.numberHidden ? { numberHidden: true } : {}),
+        ...(leg ? { leg } : {}),
+      };
+    }),
   };
+}
+
+/** The (explicit) structure's variation groups as `VARIATION_*` reads them (course-layer.md §9.2). */
+export function checkGroupsOf(s: Structure): course.CheckVariationGroup[] {
+  const out: course.CheckVariationGroup[] = [];
+  s.items.forEach((item, i) => {
+    if (item.kind !== "variation") return;
+    const anchor = s.items[i - 1], next = s.items[i + 1];
+    if (!anchor || anchor.kind === "variation" || !next || next.kind === "variation") return;
+    const exitLeg = checkLeg(next.leg);
+    out.push({
+      id: item.id,
+      anchor: String(anchor.siteId),
+      next: String(next.siteId),
+      loop: !!item.loop,
+      alternatives: item.alternatives.map((a) => ({
+        label: a.label,
+        items: a.items.map((c) => {
+          const leg = checkLeg(c.leg);
+          return { siteId: String(c.siteId), ...(leg ? { leg } : {}) };
+        }),
+      })),
+      ...(exitLeg ? { exitLeg } : {}),
+    });
+  });
+  return out;
 }
 
 const documents = new Map<string, course.CheckDocument>();

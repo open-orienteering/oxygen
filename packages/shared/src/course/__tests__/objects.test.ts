@@ -2,7 +2,7 @@
 
 import { describe, expect, it } from "vitest";
 import { courseLayer } from "../layer.js";
-import { courseObjectBodySchema, courseObjectInScope, courseObjectScopeSchemaOf, isCourseObject, type CourseLayerObject } from "../objects.js";
+import { courseObjectBodySchema, courseObjectInScope, courseObjectScopeSchemaOf, type CourseLayerObject } from "../objects.js";
 import { COORD_FLAG } from "../../render/pass-stream.js";
 import { layerInput } from "./helpers.js";
 import { z } from "zod";
@@ -79,11 +79,6 @@ describe("course objects in the layer (§8.3)", () => {
   };
   const symbolId = (layer: ReturnType<typeof courseLayer>, i: number) => layer.symbols[i].id;
 
-  it("is told apart from a sheet's layout object", () => {
-    expect(isCourseObject(obj({ kind: "whiteout", geometry: SQUARE, props: {} }))).toBe(true);
-    expect(isCourseObject({ id: "a", anchor: "map", kind: "text", x: 0, y: 0, text: "t", fontSizeMm: 2, color: "#000000" })).toBe(false);
-  });
-
   it("oob_area → 709 / 709.b / 709.c by border, the dangerous area's cross-hatch with hatch 710; oob_line → 708 / 711; marked_route → 707; whiteout → upper white", () => {
     const cases: [CourseLayerObject, string][] = [
       [obj({ kind: "oob_area", geometry: SQUARE, props: {} }), ":709"],
@@ -130,7 +125,7 @@ describe("course objects in the layer (§8.3)", () => {
   it("image → layer.images from two corners; toner saver needs the window; inset_frame and filter_region draw no object", () => {
     const img = draw([obj({ kind: "image", geometry: [{ x: 10, y: 8 }, { x: 2, y: 4 }], props: { graphicId: 9 } })]);
     expect(img.own).toHaveLength(0);
-    expect(img.layer.images).toEqual([{ object: expect.objectContaining({ graphicId: 9, id: "course-object:1" }), rectUm: { x: 2000, y: 4000, width: 8000, height: 4000 } }]);
+    expect(img.layer.images).toEqual([{ graphicId: 9, rectUm: { x: 2000, y: 4000, width: 8000, height: 4000 } }]);
 
     const toner = obj({ kind: "toner_saver", geometry: SQUARE, props: {} });
     expect(draw([toner]).own).toHaveLength(0);

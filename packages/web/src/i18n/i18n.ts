@@ -22,7 +22,6 @@ import enTracks from "./locales/en/tracks.json";
 import enTrends from "./locales/en/trends.json";
 import enAuth from "./locales/en/auth.json";
 import enLibrary from "./locales/en/library.json";
-import enMaps from "./locales/en/maps.json";
 import enMapReview from "./locales/en/mapReview.json";
 import enEditor from "./locales/en/editor.json";
 
@@ -47,7 +46,6 @@ import svTracks from "./locales/sv/tracks.json";
 import svTrends from "./locales/sv/trends.json";
 import svAuth from "./locales/sv/auth.json";
 import svLibrary from "./locales/sv/library.json";
-import svMaps from "./locales/sv/maps.json";
 import svMapReview from "./locales/sv/mapReview.json";
 import svEditor from "./locales/sv/editor.json";
 
@@ -76,7 +74,6 @@ export const resources = {
     trends: enTrends,
     auth: enAuth,
     library: enLibrary,
-    maps: enMaps,
     mapReview: enMapReview,
     editor: enEditor,
   },
@@ -102,7 +99,6 @@ export const resources = {
     trends: svTrends,
     auth: svAuth,
     library: svLibrary,
-    maps: svMaps,
     mapReview: svMapReview,
     editor: svEditor,
   },

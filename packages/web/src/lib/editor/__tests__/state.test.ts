@@ -9,6 +9,18 @@ describe("showSelectionRing (docs/course-editor.md §6.1)", () => {
     expect(showSelectionRing({ tool: { exclusive: false } })).toBe(true);
     expect(showSelectionRing({ tool: { exclusive: true } })).toBe(false);
   });
+
+  it("the ring is V's: a control just placed in V keeps it, with the action bar (P4 reverts P1)", () => {
+    const placed = editorReducer(initialEditorState, { type: "placed", id: 7 });
+    expect(placed.selectedControlId).toBe(7);
+    expect(placed).not.toHaveProperty("placed");
+    expect(showSelectionRing({ tool: null })).toBe(true);
+    // Selecting the control already selected, with no phantom, is a no-op.
+    expect(editorReducer(placed, { type: "select", id: 7 })).toBe(placed);
+    // Field keeps the selection; Layout drops it.
+    expect(editorReducer(placed, { type: "mode", mode: "field" }).selectedControlId).toBe(7);
+    expect(editorReducer(placed, { type: "mode", mode: "layout" }).selectedControlId).toBeNull();
+  });
 });
 
 describe("editorReducer (docs/course-editor.md §3)", () => {
@@ -125,5 +137,62 @@ describe("editorReducer (docs/course-editor.md §3)", () => {
     s = editorReducer(s, { type: "polygon", poly: { kind: "whiteout", vertices: [{ x: 1, y: 2 }] } });
     expect(s.tool).toEqual({ kind: "area", poly: { kind: "whiteout", vertices: [{ x: 1, y: 2 }] } });
     expect(editorReducer(s, { type: "toggle-snapping" }).snapping).toBe(true);
+  });
+
+  it("the eyedropper (pick-symbol, §6.4) is a tool: Escape drops it first, any mode change drops it", () => {
+    let s = editorReducer(initialEditorState, { type: "select-object", id: 7 });
+    s = editorReducer(s, { type: "tool", tool: { kind: "pick-symbol" } });
+    expect(escapeHasWork(s)).toBe(true);
+    const esc = editorReducer(s, { type: "escape" });
+    expect([esc.tool.kind, esc.selectedObjectId]).toEqual(["select", 7]);
+    for (const mode of ["field", "layout"] as const) expect(editorReducer(s, { type: "mode", mode }).tool.kind).toBe("select");
+    expect(editorReducer(s, { type: "mode", mode: "course" }).tool.kind).toBe("pick-symbol");
+  });
+});
+
+describe("variations (docs/course-editor.md §12, F7)", () => {
+  const onCourse = editorReducer(initialEditorState, { type: "select-course", id: 1 });
+
+  it("Variant view needs a key; other views drop it", () => {
+    expect(editorReducer(onCourse, { type: "view", view: "variant" })).toBe(onCourse);
+    const v = editorReducer({ ...onCourse, phantom: { x: 1, y: 2, insertAt: 0 } }, { type: "variant", key: "AB" });
+    expect([v.view, v.variantKey, v.phantom]).toEqual(["variant", "AB", null]);
+    expect(editorReducer(v, { type: "variant", key: "AB" })).toBe(v);
+    expect([editorReducer(v, { type: "variant", key: null }).view, editorReducer(v, { type: "variant", key: null }).variantKey]).toEqual(["course", null]);
+    const all = editorReducer(v, { type: "view", view: "all-variations" });
+    expect([all.view, all.variantKey]).toEqual(["all-variations", null]);
+  });
+
+  it("an alternative is activated per group, shown in Course view and claims K until Escape", () => {
+    const v = editorReducer(onCourse, { type: "variant", key: "AB" });
+    const a = editorReducer({ ...v, phantom: { x: 1, y: 2, insertAt: 0 } }, { type: "alternative", groupId: "v1", label: "B" });
+    expect([a.view, a.variantKey, a.activeAlternatives, a.focusGroupId, a.phantom]).toEqual(["course", null, { v1: "B" }, "v1", null]);
+    expect(editorReducer(a, { type: "alternative", groupId: "v1", label: "B" })).toBe(a);
+    expect(escapeHasWork({ ...a, selectedCourseId: null })).toBe(true);
+    const esc = editorReducer(a, { type: "escape" });
+    expect([esc.focusGroupId, esc.activeAlternatives, esc.selectedCourseId]).toEqual([null, { v1: "B" }, 1]);
+  });
+
+  it("in Class view and Layout mode a key picks the variant drawn, the view and mode kept (F8)", () => {
+    const cls = editorReducer(onCourse, { type: "class", seq: 4 });
+    const ab = editorReducer(cls, { type: "variant", key: "BA" });
+    expect([ab.view, ab.classSeq, ab.variantKey]).toEqual(["class", 4, "BA"]);
+    expect(editorReducer(ab, { type: "variant", key: "BA" })).toBe(ab);
+    expect([editorReducer(ab, { type: "variant", key: null }).view, editorReducer(ab, { type: "variant", key: null }).variantKey]).toEqual(["class", null]);
+    // Another class starts again at the first variant.
+    expect(editorReducer(ab, { type: "class", seq: 5 }).variantKey).toBeNull();
+    const layout = editorReducer(onCourse, { type: "mode", mode: "layout" });
+    const ba = editorReducer(layout, { type: "variant", key: "BA" });
+    expect([ba.mode, ba.view, ba.variantKey]).toEqual(["layout", "course", "BA"]);
+    // Variant view entered in Course mode stays Variant view through Layout mode.
+    const v = editorReducer(editorReducer(onCourse, { type: "variant", key: "AB" }), { type: "mode", mode: "layout" });
+    expect([v.view, v.variantKey]).toEqual(["variant", "AB"]);
+  });
+
+  it("a course change resets the variant, the alternatives and the overlay", () => {
+    let s = editorReducer(onCourse, { type: "alternative", groupId: "v1", label: "B" });
+    s = editorReducer(s, { type: "view", view: "all-variations" });
+    s = editorReducer(s, { type: "select-course", id: 2 });
+    expect([s.view, s.variantKey, s.activeAlternatives, s.focusGroupId]).toEqual(["course", null, {}, null]);
   });
 });

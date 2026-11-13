@@ -74,7 +74,7 @@ pans, the bottom sheet with three detents and the action bar in its peek
 row, the floating `+`, and on a coarse pointer: a selected control drags
 at once, an unselected one pans on a drag and moves after a 500 ms long
 press, a dragged control rides 48 px above the finger with a 120 px
-×2.5 loupe above it (drawn by the GL layer), hit tolerance 12 px, two fingers always pan / zoom and cancel a pending press.
+×2.5 loupe above it (drawn by the GL layer), hit tolerance 12 px, two fingers always pan / zoom and cancel a pending press. On a tablet (a coarse pointer with the desktop layout) one finger also drags the selected leg's bend handles and grips the same way, lifted with the loupe; the phone's Leg section stays read-only. The placement loupe toggle (the overflow menu's *Placement loupe*, F27; remembered per browser) shows the same loupe 16 px above the pin-drop crosshair while `+` → a placing tool is armed, centred on the point *Place* drops.
 
 ### Map toolbar buttons
 
@@ -90,14 +90,23 @@ buttons get `p-2` and 20px icons — a ~36px touch target — instead of the
 buttons did not fit 390px and **Auto slits** rendered on top of
 **Descriptions**.
 
+Above `sm` the course editor's row has a second, width-based rule (F29,
+[course-editor.md](course-editor.md) §2 "Top bar"): `map-toolbar` is a CSS
+container (`@container/toolbar`), and below 1600 px of row (its content width) the editor's
+labels (Hide other controls, Auto slits, Hide descriptions, Export and the
+course picker's *Course* word) are hidden through `ToolbarButton`'s
+`labelClassName`; below 1170 px the Course / Layout / Field switch shows its
+icons alone. The accessible names stay, as on a phone. Other pages' map
+panels keep the `sm` rule only.
+
 The selected-control readout keeps the code and SRR/radio badges on phones
 but hides the millimetre position (`hidden sm:inline`).
 
 The **North lines under course purple** checkbox and the colour-stack
 profile select are gone (E4a): the course layer sorts into the map
 document's own colour stack ([course-layer.md](course-layer.md) §1), so
-neither the editor's map footer nor the club-library map card carries a
-colour-stack control.
+neither the editor's map-info dialog (the map footer's successor since
+P6) nor the club-library map card carries a colour-stack control.
 
 ### Map layout / template editor header
 
@@ -129,9 +138,14 @@ Below the `sm` breakpoint (~640px):
 
 ## Map chrome
 
-- The map footer (file name, **Replace map**, **From club library**) is hidden
-  on all pages except the **Course Editor**, via `MapPanel`'s `showMapInfo` prop.
-  Uploading a map on an event with no map still uses the drop zone on every page.
+- No map footer on any page (P6): `MapPanel`'s `showMapInfo` row (file name,
+  north lines, **Review symbols**, **Replace map**, **From club library**) is gone
+  with the prop. On the desktop course editor all of it, with the map scale, is
+  the map-info dialog behind the top bar's map icon
+  ([course-editor.md](course-editor.md) §2); the phone editor has no map icon
+  (its peek line keeps the scale, §10; a phone entry is pending). Uploading a map
+  on an event with no map still uses the drop zone on every page
+  (`components/useMapReplace.ts`, shared with the dialog).
 - Inline maps on narrow viewports use
   `height: min(<caller px>, calc(100dvh - 8rem))` so the map nearly fills the
   screen; one-finger page scroll over the map reaches content above.
@@ -177,8 +191,9 @@ to Google Accounts and the cross-origin OAuth response is rejected by CORS.
 | Map gestures | `packages/web/src/components/MapViewer.tsx` |
 | GPS locate | `packages/web/src/lib/locate-mode.ts`, `useGeolocationWatch` |
 | Session recovery | `packages/web/src/lib/session-recovery.ts`, `CompetitionShell` |
-| Map footer / height / toolbar | `packages/web/src/components/MapPanel.tsx` |
-| Toolbar buttons + icons | `packages/web/src/components/ToolbarButton.tsx`, `map-icons.tsx` |
+| Map height / toolbar / drop zone | `packages/web/src/components/MapPanel.tsx`, `useMapReplace.ts`, `ClubMapPicker.tsx` |
+| Editor map info (desktop) | `packages/web/src/pages/editor/MapInfoDialog.tsx`, `lib/editor/map-info.ts` |
+| Toolbar buttons + icons | `packages/web/src/components/ToolbarButton.tsx`, `map-icons.tsx`, `top-bar-collapse.ts` (F29) |
 | Controls page toolbar | `packages/web/src/pages/ControlsPage.tsx` |
 | Shell header | `packages/web/src/pages/CompetitionShell.tsx` |
-| E2E | `e2e/mobile-layout.spec.ts` (the editor's phone layout itself is `e2e/field-mode.spec.ts` and the touch describe of `e2e/course-editor.spec.ts`; E3 deleted the legacy editor's phone tests), `e2e/session-recovery.spec.ts` |
+| E2E | `e2e/mobile-layout.spec.ts` (the editor's phone layout itself is `e2e/field-mode.spec.ts` and `e2e/course-editor-phone.spec.ts` (the editor's phone subset); `e2e/course-editor-legs.spec.ts`'s "F23" describe drives a tablet's bend drags; E3 deleted the legacy editor's phone tests), `e2e/session-recovery.spec.ts` |

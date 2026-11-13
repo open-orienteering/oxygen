@@ -256,3 +256,64 @@ describe("an OCD bundle with authored geometry", () => {
     expect(items[1].leg).toEqual({ gaps: [{ from: 0.3, to: 0.5 }] });
   });
 });
+
+/** An IOF file with the slice-F structure (row F9; docs/iof-coursedata-export.md "Importing it back"). */
+const IOF_STRUCTURE = `<?xml version="1.0" encoding="UTF-8"?>
+<CourseData xmlns="http://www.orienteering.org/datastandard/3.0" xmlns:ox="urn:oxygen:iof:extensions" iofVersion="3.0">
+  <RaceCourseData>
+    <Map><Scale>10000</Scale></Map>
+    <Control type="Start"><Id>S9</Id><MapPosition x="0" y="5" unit="mm"/></Control>
+    <Control type="Control"><Id>91</Id><MapPosition x="20" y="5" unit="mm"/></Control>
+    <Control type="Control"><Id>92</Id><MapPosition x="20" y="25" unit="mm"/></Control>
+    <Control type="Control"><Id>95</Id><MapPosition x="40" y="5" unit="mm"/><Extensions><ox:MapExchange>true</ox:MapExchange></Extensions></Control>
+    <Control type="CrossingPoint"><Id>Passeringspunkt 1</Id><MapPosition x="50" y="15" unit="mm"/></Control>
+    <Control type="Finish"><Id>F9</Id><MapPosition x="60" y="5" unit="mm"/></Control>
+    ${["A", "B"].map((key) => `<Course><Name>Gaffel ${key}</Name><CourseFamily>Gaffel</CourseFamily>
+      <CourseControl type="Start"><Control>S9</Control></CourseControl>
+      <CourseControl type="Control"><Control>${key === "A" ? "91" : "92"}</Control></CourseControl>
+      <CourseControl type="Control"><Control>95</Control></CourseControl>
+      <CourseControl type="CrossingPoint" specialInstruction="MandatoryOutOfBoundsAreaPassage"><Control>Passeringspunkt 1</Control></CourseControl>
+      <CourseControl type="Finish" specialInstruction="TapedRoute" tapedRouteLength="200"><Control>F9</Control><LegLength>200</LegLength></CourseControl>
+    </Course>`).join("\n    ")}
+  </RaceCourseData>
+</CourseData>`;
+
+describe("an IOF file with crossing points, taped routes, a map exchange and a course family (row F9)", () => {
+  it("previews the family; imports the variants as separate linear courses with the crossing site, the leg props and the exchange kind", async () => {
+    const preview = await caller.course.previewImport({ xmlContent: IOF_STRUCTURE });
+    expect(preview.courses.filter((c) => c.name.startsWith("Gaffel")).map((c) => [c.name, c.family])).toEqual([["Gaffel A", "Gaffel"], ["Gaffel B", "Gaffel"]]);
+    // The crossing point is no punch control.
+    expect(preview.totalControls).toBe(3);
+
+    await caller.course.importCourses({ xmlContent: IOF_STRUCTURE });
+    const rows = (await courses()).filter((c) => c.name.startsWith("Gaffel"));
+    // No group is inferred: two linear courses, no root.
+    expect(rows.map((r) => [r.name, r.parentCourseId])).toEqual([["Gaffel A", null], ["Gaffel B", null]]);
+    expect(await ctx.db.course.count({ where: { eventId: ctx.eventId, removed: false, name: "Gaffel" } })).toBe(0);
+
+    const cp = await ctx.db.control.findFirstOrThrow({ where: { eventId: ctx.eventId, removed: false, kind: "crossing_point" } });
+    expect([cp.name, cp.codes, cp.status, cp.xpos, cp.ypos]).toEqual(["Passeringspunkt 1", "", "ok", 50, 15]);
+    expect(cp.seq).toBeGreaterThan(10_000);
+    const exchange = await ctx.db.control.findFirstOrThrow({ where: { eventId: ctx.eventId, removed: false, codes: "95" } });
+    expect(exchange.kind).toBe("map_exchange");
+
+    for (const row of rows) {
+      const items = (row.structure as { items: { siteId: string; leg?: unknown }[] }).items;
+      // The crossing point is not an item; the finish's leg runs through it, a marked route.
+      expect(items).toHaveLength(4);
+      expect(items.some((i) => i.siteId === cp.id)).toBe(false);
+      expect(items[3].leg).toEqual({ style: "marked_route", crossing: { controlId: cp.id, section: true } });
+      expect(items[1].leg).toBeUndefined();
+    }
+  });
+
+  it("a re-import matches the crossing point by name, creates no second one and keeps its WGS84 when the file has none", async () => {
+    const cp = await ctx.db.control.findFirstOrThrow({ where: { eventId: ctx.eventId, removed: false, kind: "crossing_point" } });
+    expect([cp.lat, cp.lng]).toEqual([null, null]);
+    await ctx.db.control.update({ where: { id: cp.id }, data: { lat: 59.5, lng: 18.5 } });
+    await caller.course.importCourses({ xmlContent: IOF_STRUCTURE });
+    expect(await ctx.db.control.count({ where: { eventId: ctx.eventId, removed: false, kind: "crossing_point" } })).toBe(1);
+    const again = await ctx.db.control.findUniqueOrThrow({ where: { id: cp.id } });
+    expect([again.lat, again.lng]).toEqual([59.5, 18.5]);
+  });
+});
