@@ -294,3 +294,37 @@ export function detectPaletteEdition(colours: readonly Pick<ColourEntry, "name" 
   }
   return v2022 > v2024 ? "iof2022" : "iof2024";
 }
+
+// ---- ISSkiOM's own rows (docs/map-symbols.md §9.1, §12.3) ----------------------
+
+/** The palette rows only ISSkiOM ticks: identified by their own rules, never aliased to or from another colour. */
+export const SKI_PALETTE_IDS: ReadonlySet<string> = new Set(["white-skio", "orange-skio", "green-skio"]);
+
+/** Whole tokens that name ski orienteering ("Green for Ski-O", "Grön för skidspår", "Vit under skidorienteringsspår"). */
+const SKI_WORD = /^(ski|skio|skiorienteering|skid\p{L}*|längdspår\p{L}*)$/u;
+
+const SKIO_GREEN: Cmyk = [0.91, 0, 0.83, 0];
+/** CMYK distance inside which an unnamed green is the Ski-O green (it is 0.20 from green 100 %). */
+export const SKI_GREEN_DISTANCE = 0.08;
+
+/**
+ * Whether a source colour is one of ISSkiOM's own rows (docs/map-symbols.md
+ * §9.1): a name that says ski orienteering and the row's hue (green,
+ * orange, white); else, for a colour drawn above every black 100 %
+ * (`aboveBlack`), an orange ink, or a green within `SKI_GREEN_DISTANCE` of
+ * 91/0/83/0 and nearer to it than to the edition's green 100 % rows. A
+ * white is the mask by name only. `null` otherwise.
+ */
+export function skiPaletteIdFor(entry: Pick<ColourEntry, "name" | "cmyk">, cls: ColourClass | null, aboveBlack: boolean, edition: PaletteEdition): { id: string; via: "name" | "position" } | null {
+  if (!cls) return null;
+  const byHue: Partial<Record<ColourHue, string>> = { green: "green-skio", orange: "orange-skio", white: "white-skio" };
+  const id = byHue[cls.hue];
+  if (!id) return null;
+  if (nameTokens(entry.name).some((t) => SKI_WORD.test(t))) return { id, via: "name" };
+  if (!aboveBlack || id === "white-skio") return null;
+  if (id === "orange-skio") return { id, via: "position" };
+  const d = cmykDistance(entry.cmyk, SKIO_GREEN);
+  if (d > SKI_GREEN_DISTANCE) return null;
+  const greens = (edition === "iof2024" ? iof2024Palette : iof2022Palette).filter((p) => /^green100-/.test(p.id));
+  return greens.every((g) => d < cmykDistance(entry.cmyk, g.cmyk)) ? { id, via: "position" } : null;
+}

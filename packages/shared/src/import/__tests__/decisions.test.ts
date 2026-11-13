@@ -138,7 +138,7 @@ describe("documentFollowsDecisions", () => {
 
   it("follows trivially for a header naming an overlay library (never a document's library, map-symbols.md §12)", () => {
     const h = stored();
-    expect(documentFollowsDecisions({ ...h, library: { id: "ISSkiOM2019", version: "x" } }, decided(null))).toBe(true);
+    expect(documentFollowsDecisions({ ...h, library: { id: "ISSkiOM2019" } }, decided(null))).toBe(true);
   });
 });
 

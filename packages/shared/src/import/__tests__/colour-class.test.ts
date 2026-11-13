@@ -8,7 +8,7 @@
 import { describe, expect, it } from "vitest";
 import { paletteFor } from "../../symbol-library/palette.js";
 import {
-  classifyCmyk, classifyColour, detectPaletteEdition, formatClass, hueFromName, nameKind, paletteClass, paletteEntryFor, percentFromName, sameClass,
+  classifyCmyk, classifyColour, detectPaletteEdition, formatClass, hueFromName, nameKind, paletteClass, paletteEntryFor, percentFromName, sameClass, skiPaletteIdFor,
 } from "../colour-class.js";
 
 const cmyk = (c: number, m: number, y: number, k: number): [number, number, number, number] => [c / 100, m / 100, y / 100, k / 100];
@@ -165,5 +165,35 @@ describe("detectPaletteEdition", () => {
     expect(detectPaletteEdition([{ name: "Brun", cmyk: cmyk(0, 56, 100, 18) }, { name: "Grön", cmyk: cmyk(76, 0, 91, 0) }])).toBe("iof2022");
     expect(detectPaletteEdition([{ name: "Brun", cmyk: cmyk(25, 75, 100, 0) }, { name: "Grön", cmyk: cmyk(80, 0, 100, 0) }])).toBe("iof2024");
     expect(detectPaletteEdition([{ name: "Svart", cmyk: cmyk(0, 0, 0, 100) }])).toBe("iof2024");
+  });
+});
+
+describe("skiPaletteIdFor (docs/map-symbols.md §9.1, §12.3)", () => {
+  const ski = (name: string, ink: [number, number, number, number], aboveBlack = true, edition: "iof2024" | "iof2022" = "iof2024") =>
+    skiPaletteIdFor({ name, cmyk: ink }, classifyColour({ name, cmyk: ink }).class, aboveBlack, edition);
+
+  it("identifies the ski rows by a name that says ski orienteering and the row's hue, wherever they sit", () => {
+    expect(ski("Green for Ski-O", cmyk(91, 0, 83, 0), false)).toEqual({ id: "green-skio", via: "name" });
+    expect(ski("Orange for Ski-O", cmyk(0, 60, 100, 0), false)).toEqual({ id: "orange-skio", via: "name" });
+    expect(ski("White under Ski-O tracks", cmyk(0, 0, 0, 0), false)).toEqual({ id: "white-skio", via: "name" });
+    expect(ski("Grön för skidspår", cmyk(80, 0, 100, 0), false)).toEqual({ id: "green-skio", via: "name" });
+    expect(ski("Vit mask under skidorienteringsspår", cmyk(0, 0, 0, 0), false)).toEqual({ id: "white-skio", via: "name" });
+    expect(ski("Längdspår orange", cmyk(0, 60, 100, 0), false)).toEqual({ id: "orange-skio", via: "name" });
+  });
+
+  it("a ski name on another hue, or a trail word that is not ski, is no ski row", () => {
+    expect(ski("Blue for Ski-O", cmyk(100, 0, 0, 0))).toBeNull();
+    expect(ski("Motionsspår", cmyk(80, 0, 100, 0))).toBeNull();
+    expect(ski("Cykelspår Hellas", cmyk(100, 0, 0, 0))).toBeNull();
+  });
+
+  it("without the name: the Ski-O inks above every black 100 %; the white mask never", () => {
+    expect(ski("Grön", cmyk(91, 0, 83, 0))).toEqual({ id: "green-skio", via: "position" });
+    expect(ski("Grön", cmyk(91, 0, 83, 0), false)).toBeNull();
+    expect(ski("Grön", cmyk(80, 0, 100, 0))).toBeNull(); // green 100 % above black is still green 100 %
+    expect(ski("Grön", cmyk(76, 0, 91, 0), true, "iof2022")).toBeNull();
+    expect(ski("Orange", cmyk(0, 60, 100, 0))).toEqual({ id: "orange-skio", via: "position" });
+    expect(ski("Orange", cmyk(0, 60, 100, 0), false)).toBeNull();
+    expect(ski("Vit", cmyk(0, 0, 0, 0))).toBeNull();
   });
 });

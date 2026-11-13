@@ -68,7 +68,9 @@ describe("matchDocument", () => {
     // The fixture's yellow is used by no object: lower purple goes directly below the brown line colour.
     const lower = paletteIndexOfStack(h.colours).get("purple-lower")!;
     expect(h.colours[lower + 1].sourceNumber).toBe(3);
-    expect(h.colours[lower - 1].sourceNumber).toBe(4);
+    // The track mask sits directly below it (docs/map-symbols.md §12.3), then the source's own colours.
+    expect(h.colours[lower - 1].paletteIds).toEqual(["white-skio"]);
+    expect(h.colours.slice(0, lower).reverse().find((x) => x.sourceNumber !== undefined)?.sourceNumber).toBe(4);
     expect(res.colourStack.areasAboveLowerPurple).toEqual([]);
     const base = input();
     const green = { id: "src:6", name: "Grön 30% - Ytobjekt", cmyk: [0.24, 0, 0.27, 0] as [number, number, number, number], sourceNumber: 6 };
