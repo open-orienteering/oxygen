@@ -60,7 +60,8 @@ describe("print module is isomorphic", () => {
 
   it.each(pipelineFiles)("%s imports no Node API, Buffer, sharp or resvg", (file: string) => {
     const src = readFileSync(resolve(srcDir, file), "utf8");
-    expect(src).not.toMatch(/from\s+["'](node:|fs|path|url|crypto|sharp|@resvg|worker_threads)/);
+    // Static, side-effect and dynamic imports, and require.
+    expect(src).not.toMatch(/(?:from|import|require)\s*\(?\s*["'](node:|fs|path|url|crypto|sharp|@resvg|worker_threads)/);
     expect(src).not.toMatch(/\bBuffer\b|\bprocess\.|\bsetImmediate\b/);
   });
 });

@@ -7,7 +7,7 @@
  * (`print-worker.test.ts`, `integration/course-print.test.ts`).
  */
 
-import { PDFDocument } from "@cantoo/pdf-lib";
+import { PDFDocument, PDFName, PDFRawStream } from "@cantoo/pdf-lib";
 import { beforeAll, describe, expect, it, vi } from "vitest";
 import { defaultMapAppearance } from "../../course-maps/schema.js";
 import { resolveSheet, type SheetInput } from "../../course-maps/resolve-sheet.js";
@@ -46,6 +46,12 @@ function sheet(label: string, objects: SheetInput["objects"] = []): SheetInput {
   return { ...out, objects: [...out.objects, ...objects] };
 }
 
+/** The image XObjects a PDF holds. */
+async function imageCount(bytes: Uint8Array): Promise<number> {
+  const pdf = await PDFDocument.load(bytes);
+  return pdf.context.enumerateIndirectObjects().filter(([, o]) => o instanceof PDFRawStream && o.dict.get(PDFName.of("Subtype")) === PDFName.of("Image")).length;
+}
+
 const logo = (graphicId: number) => ({ id: `logo${graphicId}`, anchor: "page" as const, kind: "image" as const, graphicId, x: 10, y: 10, width: 20, height: 10 });
 
 beforeAll(async () => {
@@ -77,6 +83,8 @@ describe("renderCoursePages (shared)", () => {
   it("embeds a PNG graphic as given", async () => {
     const out = await renderCoursePages({ document: doc, sheets: [sheet("A", [logo(7)])], fonts, graphics: new Map([[7, { mime: "image/png", data: PNG }]]), deterministic: true });
     expect(out.warnings).toEqual([]);
+    // The image and, for this RGBA PNG, its soft mask.
+    expect(await imageCount(out.bytes)).toBeGreaterThan(0);
   });
 
   it("rasterises an SVG graphic through the injected rasteriser, once per size", async () => {
@@ -93,7 +101,9 @@ describe("renderCoursePages (shared)", () => {
     expect(out.pageCount).toBe(1);
     // As when resvg fails on the server: the composer's warning, then the writer's for the image it lacks.
     expect(out.warnings[0]).toBe("A: SVG_RASTER: graphic 8: no SVG rasteriser");
-    expect(out.warnings.slice(1).every((w) => w.startsWith("A: ") && /IMAGE_MISSING|graphic 8/.test(w))).toBe(true);
+    expect(out.warnings).toHaveLength(2);
+    expect(out.warnings[1]).toMatch(/^A: .*IMAGE_MISSING/);
+    expect(await imageCount(out.bytes)).toBe(0);
   });
 });
 

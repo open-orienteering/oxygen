@@ -1350,6 +1350,15 @@ The tool's own tests (`print-run.test.ts`, `measure-print.test.mjs`,
   G13 made the pipeline isomorphic (§1) but nothing outside the API calls
   it yet; the job descriptor (§8.5), the Web Worker host and byte
   identity with the server (slice G answer 3) are those rows'.
+- **Locale-dependent sorts on the browser path** (found in G13's
+  review, moved verbatim, not a behaviour change): `resolveMapLayout`
+  sorts an all-controls or setter sheet's sites with
+  `localeCompare(…, undefined, { numeric: true })` — the host's default
+  locale, and a start or finish sorts by its name — and the label
+  placement's tie-break (`control-label-placement.ts`) does the same. A
+  Swedish browser and an en-US server could order such names
+  differently, so the bytes would differ. G16 pins the locale (after
+  checking the server's current order) before its byte-identity test.
 - **Description sheets** (`buildDescriptionsPdf`, §6.4) stay API-only:
   `course-maps/descriptions-pdf.ts` reads its rows from the database and
   has its own writer, fonts and yield; no G row needs them in the browser.
