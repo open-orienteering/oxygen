@@ -1,7 +1,7 @@
 # GPS tracks
 
 Status: **draft** — chapter of the vector map pipeline specification,
-started by sub-slice G22. GPS tracks are new scope for slice G (user,
+started by sub-slice G22; §4 by G23. GPS tracks are new scope for slice G (user,
 2026-11-13, `docs/research/vector-map-pipeline/SLICES.md` "Slice G",
 rows G20–G28): the research decides none of it beyond 04 §7
 ("Georeferenced inputs" become paper-space overlays) and 06 §3.2 (a
@@ -290,13 +290,14 @@ interface AverageResult {
    The result's direction is arbitrary but fixed; a stored average is
    untimed, so its direction carries nothing.
 1. **The reference** is the pass of median length — the sum of the
-   segment lengths in canonical order. The passes are sorted by length,
-   ties by the canonical point list (a shorter list first on a common
-   prefix), and the reference is the one at index `floor(n / 2)`: the
-   **upper median**, so the longer of two. The result spans the
-   reference, so with two passes it spans the one that covers more, and
-   a pass covering half is reported (§4.6) instead of cutting the
-   result to its half.
+   segment lengths in canonical order. The median length is the one at
+   index `floor(n / 2)` of the lengths sorted ascending: the **upper
+   median**, so the longer of two. Of the passes of exactly that length,
+   the reference is the one with the lexicographically smallest
+   canonical point list (a shorter list first on a common prefix). The
+   result spans the reference, so with two passes it spans the one that
+   covers more, and a pass covering half is reported (§4.6) instead of
+   cutting the result to its half.
 
 ### 4.3 Orientation of the other passes
 
@@ -349,12 +350,14 @@ every sample.
 
 ### 4.6 Votes, ranges and the second iteration
 
-5. A sample with **fewer than two votes stays** where it is and is
-   **single-pass**. With two or more it moves along its normal by their
-   median — the votes sorted, the middle one, or the mean of the two
-   middle ones for an even count (so the mean for two passes). In the
-   first iteration the reference's own vote counts, so a sample only the
-   reference votes on stays and is reported, as the fixed method says.
+5. A sample moves along its normal by the **median of its votes** —
+   the votes sorted, the middle one, or the mean of the two middle ones
+   for an even count (so the mean for two passes). A sample with **fewer
+   than two votes is single-pass**; one with none stays where it is. In
+   the first iteration the reference's own vote, 0, counts, so a sample
+   only the reference votes on stays and is reported, as the fixed
+   method says; in later iterations a lone vote moves the sample onto
+   the one pass that covers it.
 6. **The second iteration** takes the first one's moved samples as the
    reference: resampled again (§4.4), new normals, every pass (the
    first reference included) matched afresh from its start in the
@@ -364,6 +367,15 @@ every sample.
    "repeat once". The result is the last iteration's moved samples (not
    resampled again), and `singlePass` is the maximal runs of its
    single-pass samples.
+
+**Where a pass leaves the others** (a detour, a wrong turn) at an
+angle, its departing stretch stays within 15 m of the line for up to
+15 m and votes there by its nearest points: with two passes the line
+bulges toward it over that stretch, and the single-pass range starts
+where the pass is out of reach. With three or more passes the median
+rejects it. Moving along a sample's normal by a normal offset lands on
+a pass exactly only where the two are parallel; on a slope it overshoots
+by up to a few decimetres, which the second iteration mostly removes.
 
 Cost is samples × pass points in the worst case (a pass that is absent
 over a long stretch is scanned to its end at every sample there); there
@@ -384,10 +396,11 @@ Pending (G26, G28).
 | `gps-track/__tests__/gpx.test.ts` | GPX 1.1 (Garmin-style, extensions, metadata, two segments) and 1.0 (root name, routes, two tracks); one track per segment in file order with `trackIndex` / `segmentIndex`; four tracks from two `trk` × two `trkseg`; a prefixed namespace, BOM and CDATA name; routes untimed; missing time and elevation per point and per column; zoneless and offset times; invalid points and short segments skipped and counted; `malformed` (truncated, mismatched, empty, not XML), `not-gpx` (KML), `no-points` (waypoints only); a timed route dropped to untimed; the first `time` / `ele` winning over a private element; decimal-only coordinates; impossible dates, hour 24, second 60 and offsets rejected; quantisation; 200 000 points |
 | `gps-track/__tests__/project.test.ts` | The frame read from `e2e/test.xmap` by the importer; its reference point (a hard-coded lat / lng on the zone's central meridian); paper → WGS 84 → paper within 0.002 mm on it and on an OCAD-unit SWEREF99 TM frame; WGS 84 → paper → WGS 84 within 1e-7°; outside points kept and counted; `correctionDeg`; `not-georeferenced` (no CRS, no origin, unknown code) and `not-projectable` with its index and cause, both ways |
 | `gps-track/__tests__/geometry.test.ts` | Resample spacing, exact ends, duplicates, degenerate lines, step and window `RangeError`s; smoothing: straight line fixed, seeded noisy line reduced, corner cut < 1.5 m with the legs unmoved, ends bit-identical, determinism (same bytes), no mutation, the 1-2-3-2-1 kernel and the shrunk window; simplify: tolerance bound at 0.05 / 0.1 / 0.5 mm, subset in order, ends, collinear, tolerance 0, a closed loop, 200 000 points, determinism |
+| `gps-track/__tests__/average.test.ts` | Every `RangeError`; no mutation, same bytes twice; the upper-median reference for 2, 3 and 4 passes and the tie among passes of the median length; `unitNormals` (left of travel, one-sided ends, corner bisector, hairpin fallback); two parallel passes → the centre line (straight to 1e-9 m, concentric arcs to 2 cm); an outlier within the gate held to the band of the good passes, also as the reference, and one beyond it without a vote; all 6 orders × 8 reversal patterns of three noisy passes → the same bytes, ranges and reference; a pass covering half (either way round) → one range ending within a step of where it begins; a detour → its range, re-matched after; a loop crossing itself, with its second visit nearer, does not cross-match; a closed loop skied the other way round is orientated by its matches; `iterations`; ranges disjoint; the result unprojects index-aligned through the `e2e/test.xmap` frame; three 10 km passes at a fix per metre |
 | `gps-track/__tests__/track.test.ts` | Quantisation; trim `[start, end)` over every column, null columns, no mutation, every `RangeError`; split sharing its point, split-split cutting out a stretch, every `RangeError` |
 
 No integration or E2E test: the module has no API, table or UI until
-G24 / G25 (AGENTS.md §4, "New algorithm / computation").
+G24 / G25 / G27 (AGENTS.md §4, "New algorithm / computation").
 
 ## 8. Pending in this chapter
 
