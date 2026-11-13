@@ -26,8 +26,11 @@ export * from "./schema.js";
  * 101.b / 103.b slope ticks to +y, 107 taper, 510 / 511 / 511.b pylons at
  * corners (510 bars ±0.37 mm), ISOM 111 orientated to north. 2026.10.4:
  * ISOM 704 control numbers upper purple (user decision 2026-10-24).
+ * 2026.11.1: the ISSkiOM 2019 overlay (G20) matched on every document and
+ * its palette rows in every stack (G21), so every stored document is
+ * re-matched at the release.
  */
-export const SYMBOL_LIBRARY_VERSION = "2026.10.4";
+export const SYMBOL_LIBRARY_VERSION = "2026.11.1";
 
 /**
  * Raw authored inputs, before validation (tests and tooling). The two base

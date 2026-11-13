@@ -6,7 +6,7 @@ const t = (key: string, opts?: Record<string, unknown>) => (opts ? `${key}:${JSO
 const day = (iso: string) => iso.slice(0, 10);
 
 const header: MapInfoHeader = {
-  format: { version: 1, importer: "ocad-16" },
+  format: { version: 1, importer: "ocad-17" },
   source: { kind: "ocad", version: "12.0.4", hash: "a".repeat(64), bytes: 2_500_000 },
   library: { id: "isom-2017-2", version: "1.4" },
   georeferencing: { crs: { authority: "EPSG", code: 3006, name: "SWEREF99 TM" }, paperOrigin: null, gridRotationDeg: 0, gridScaleFactor: 1 },
@@ -38,7 +38,7 @@ describe("the map-info dialog's rows (docs/course-editor.md §2, P6)", () => {
     expect(info.document[1].text).toBe(`mapInfoObjects:{"count":1234} · mapInfoSymbols:{"count":2} · mapInfoColours:{"count":3}`);
     expect(info.document[2].text).toBe("isom-2017-2 · 1.4");
     expect(info.document[3]).toMatchObject({ text: "EPSG:3006 · SWEREF99 TM", data: { crs: "EPSG:3006" } });
-    expect(info.document[4].text).toBe("ocad-16");
+    expect(info.document[4].text).toBe("ocad-17");
     expect(info.documentData).toEqual({ source: "ocad", objects: "1234", symbols: "2", colours: "3" });
   });
 
