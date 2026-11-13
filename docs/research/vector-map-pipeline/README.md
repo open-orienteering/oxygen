@@ -49,6 +49,7 @@ Spec chapters by slice:
 | D | `course-editor.md` (rewritten), `course-layout.md` | 08 |
 | E–F | `migrations/2026-vector-map-pipeline.md`, `AGENTS.md` §7/§15 | 09 |
 | G | `map-editing.md` | 08 §4.7, 03 §1 |
+| H | `map-terrain.md` (§1–2 contour graph written 2026-11-13 by H1; §3 solve H2, §4–5 height field H3, §6–7 DEM H9–H10) | 10 |
 
 ## Objectives
 

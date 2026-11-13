@@ -73,8 +73,9 @@ export function joinEnds(input: readonly Chain[], tol: number, compatible: Compa
     for (const which of [0, 1] as const) if (c.ends[which] === "dangling") ends.push({ chain: ci, which, e: polylineEnd(c.pts, which) });
   });
   const cellOf = (v: number) => Math.floor(v / tol);
-  const cellKey = (cx: number, cy: number) => `${cx},${cy}`;
-  const grid = new Map<string, number[]>();
+  /** Integer cells: a float key computed from `x ± tol` can skip a neighbour where ends sit on multiples of `tol`. */
+  const cellKey = (cx: number, cy: number) => (cx + 1048576) * 2097152 + (cy + 1048576);
+  const grid = new Map<number, number[]>();
   ends.forEach((en, i) => {
     const k = cellKey(cellOf(en.e.x), cellOf(en.e.y));
     const l = grid.get(k);

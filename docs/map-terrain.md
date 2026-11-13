@@ -191,15 +191,17 @@ measured with them.
 
 The mapped area is where the map says something about the terrain. Every
 part in `extentParts` is drawn into a grid of **0.5 mm** cells over the
-contour chains' bounding box padded by 4 mm + 3 cells; the drawn cells
-are closed with radius **4 mm** (3-4 chamfer distance: dilate, fill
-everything not reachable from the grid border, erode). `maskAt(mask, x, y)`
-is true inside. The mask is coarse on purpose: it says where the frame of
-the mapped terrain is, not where each line ends.
+contour pieces' bounding box padded by 4 mm + 3 cells (5.5 mm); what lies
+beyond that grid is not drawn, so the mapped area never reaches more than
+5.5 mm past the outermost contour. The drawn cells are closed with radius
+**4 mm** (3-4 chamfer distance: dilate, fill everything not reachable from
+the grid border, erode). `maskAt(mask, x, y)` is true inside. The mask is
+coarse on purpose: it says where the frame of the mapped terrain is, not
+where each line ends.
 
 ### 2.4 Barrier raster
 
-The graph raster covers the contour chains' bounding box padded by 2 mm,
+The graph raster covers the contour pieces' bounding box padded by 2 mm,
 with square cells of `max(cellMm, √(area / maxCells))` (defaults 0.1 mm
 and 60 M cells). Each cell holds an `Int32` label:
 
@@ -272,7 +274,38 @@ the clock or a random source. `stats` carries counts only (no timings).
 
 ### 2.8 Measured on the corpus
 
-To be filled by H1's corpus run.
+H1's corpus check (a `.local/` script, not committed: the corpus is real
+club maps) builds the graph of the five corpus maps and the CC0 demo map
+(`docs/screenshots/fixtures/puit-de-laven.omap`), imported with no stored
+decisions, and compares every count with T1's output. Measured 2026-11-13:
+
+| Map | chains | closed | snap joins | bridged | extended | form chains | ends frame / merge / cliff / dangling | regions | components | leaky % of length |
+|---|---|---|---|---|---|---|---|---|---|---|
+| crop-a | 294 | 221 | 75 | 1 | 2 | 412 | 107 / 25 / 6 / 6 | 516 | 1 | 0.5 |
+| crop-b | 212 | 174 | 43 | 0 | 4 | 352 | 55 / 10 / 2 / 5 | 469 | 1 | 0.5 |
+| club-2026 | 2654 | 1823 | 1246 | 99 | 88 | 3593 | 429 / 686 / 240 / 219 | 4306 | 8 | 5.4 |
+| club-full | 5617 | 3999 | 2263 | 148 | 194 | 7555 | 368 / 1341 / 778 / 555 | 10495 | 27 | 10.0 |
+| sprint | 124 | 81 | 1 | 40 | 4 | 162 | 64 / 4 / 0 / 14 | 305 | 1 | 21.2 |
+| puit-de-laven | 181 | 108 | 2 | 1 | 1 | 0 | 138 / 0 / 0 / 7 | 490 | 1 | 4.0 |
+
+Object counts, raster sizes, bridged gaps, extended ends, form chains and
+component counts equal T1's on every map; crop-a, crop-b, sprint and
+puit-de-laven match T1 in every count (sprint's leaky share is 21.2 % here; T1 reported it as two shares rounded separately, 5.9 + 15.2). On the two club maps the snap
+join finds 6 and 10 more joins than T1 (club-2026: 2654 chains against
+2659, merge ends 686 against 696; club-full: 5617 against 5623, merge ends
+1341 against 1353, one region fewer). The cause is T1's candidate grid:
+it computed a neighbour cell as `⌊(x ± tol) / tol⌋`, which skips a cell
+when an end lies on a multiple of the 0.15 mm tolerance — common, since
+OCAD coordinates sit on a 0.01 mm grid. H1 steps integer cells (§2.1);
+with T1's key restored, club-2026 reproduces T1 in every count. The
+extra joins are valid joins by §2.1's rule.
+
+Time for §1–2 on the largest map (club-full, 46 M raster cells): about
+6 s and 0.7 GB peak RSS for the whole process, measured on a 16-core
+machine at load average 26 (T1 measured the same stages at 1.9 s with
+less contention; the identical mask code ran 4× slower here than in T1).
+Region labelling and the raster dominate. H3 sets the height field's cell
+and budget (T1: 18 s / 1.5 GB for the whole spike at 0.1 mm).
 
 ## Tests
 
@@ -283,6 +316,7 @@ To be filled by H1's corpus run.
 | `terrain/graph/__tests__/chains.test.ts` | snap join, continuation rule, gap bridged in ground metres at two scales, three ends at a cliff, a dangling end, a chain cut by the frame (§2.1–2.2) |
 | `terrain/graph/__tests__/raster.test.ts` | mask, nested rings → regions, frame ends close a band, a near-miss end `extended` (§2.3–2.5) |
 | `terrain/graph/__tests__/graph.test.ts` | incidence on nested rings, a leaky chain, cliff links, determinism, no contours (§2.6–2.7) |
+| `terrain/graph/__tests__/synthetic.ts` | the fixture: ISOM symbols with canonical matches and library definitions, geometry in mm, a mapped area around the contours |
 | `.local/h1/counts.mts` (not committed) | T1's corpus counts reproduced (§2.8) |
 
 ## Pending in this chapter
