@@ -1,11 +1,6 @@
 /** Public control ids (the id space every control-facing endpoint uses). */
 
-/** Extract the first numeric code from a control's `codes` string. */
-export function firstCode(codes: string): number {
-  const head = codes.split(";")[0]?.trim();
-  const n = parseInt(head ?? "", 10);
-  return Number.isNaN(n) ? 0 : n;
-}
+import { firstCode } from "@oxygen/shared";
 
 /**
  * User-facing id for a control: first code, falling back to seq.
@@ -17,8 +12,8 @@ export function publicControlId(c: { codes: string; seq: number }): number {
   return firstCode(c.codes) || c.seq;
 }
 
-/** The display rule lives in `@oxygen/shared` (one rule for the API and the web, F32). */
-export { displayCode, isStartOrFinish } from "@oxygen/shared";
+/** The display rule and `firstCode` live in `@oxygen/shared` (one rule for the API and the web, F32; the print pipeline, G13). */
+export { displayCode, firstCode, isStartOrFinish } from "@oxygen/shared";
 
 /**
  * The code ranges a start or finish takes when created without one
