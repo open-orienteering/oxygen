@@ -9,13 +9,19 @@
 
 import { expect, test, type Page } from "@playwright/test";
 import { reseed } from "./helpers/reseed";
-import { canvasInCircle, cleanup, clickMap, controlRows, coveredBy, drag, dragHold, editorReady, emptyPoint, geometryOf, inkAt, labelOf, legBetween, legMidpoint, legPieces, nameIdOf, objectRow, plainMapAt, openEditor, pressOnEdge, printed, probeTemplate, regularCodes, select, site, sites, toolShapes, toPage, toPaper, trpcCall, viewSettled, newCourse, mapScale, nextFrames, loupeCircleAt, paperToPageOf, dragEndOnMap, turned, inkedAt, type Site } from "./helpers/editor";
+import { canvasInCircle, cleanup, clickMap, controlRows, coveredBy, drag, dragHold, editorReady, emptyPoint, geometryOf, inkAt, labelOf, legBetween, legMidpoint, legPieces, nameIdOf, objectRow, plainMapAt, openEditor, pressOnEdge, printed, probeTemplate, regularCodes, select, site, sites, toolShapes, toPage, toPaper, trpcCall, viewSettled, newCourse, mapScale, nextFrames, loupeCircleAt, paperToPageOf, dragEndOnMap, turned, inkedAt, hideOthersPresence, type Site } from "./helpers/editor";
 import { touchEnd, touchMove, touchStart, touchTap } from "./helpers/touch";
 import { trpcProcedures, waitForTrpc } from "./helpers/trpc";
 import { type Pt, desktopOnly, appendClear, dropSelection, dragTarget } from "./helpers/course-editor-spec";
 
 test.beforeAll(async () => {
   await reseed();
+});
+
+// No presence chips: the rows earlier tests' pages leave for 30 s wrap the top bar to a second row mid-test and move
+// the map viewer 36 px under computed page points (docs/bugfix-course-editor-legs-flakes.md).
+test.beforeEach(async ({ page }) => {
+  await hideOthersPresence(page);
 });
 
 test.setTimeout(120_000);
@@ -569,6 +575,20 @@ test.describe("F3: legs — styles, bends, corridors (docs/course-editor.md §6.
     // covers part of the canvas 16 px above the cursor with the magnified map, so the held reads probe only what lies
     // clear of it: the line at the apex whole, at least 20 of each band's probes — up the screen first; down when the
     // loupe would cover the band beyond the apex (it lies above the cursor).
+    // The apex's line is probed for purple that is not there before the drag and is after it, so it keeps clear of the
+    // course's other purple: its other legs (start → a, b → finish) and its drawn numbers, and on the canvas of any
+    // purple at all (F21 flake: a near-vertical a → b, the apex beside it on the leg start → a, 3 purple pixels).
+    const legOf = new Set((await legBetween(page, name, a.mm, b.mm)).map((l) => l.leg));
+    const otherLegs = (await legPieces(page, name)).filter((l) => !legOf.has(l.leg)).map((l) => l.points);
+    const numbers = await page.getByTestId("course-label").evaluateAll((els) => els.map((el) => ({ x: Number(el.getAttribute("data-x")), y: Number(el.getAttribute("data-y")) })));
+    const segDist = (p: Pt, v: Pt, w: Pt) => {
+      const dx = w.x - v.x, dy = w.y - v.y, l2 = dx * dx + dy * dy;
+      const t = l2 === 0 ? 0 : Math.max(0, Math.min(1, ((p.x - v.x) * dx + (p.y - v.y) * dy) / l2));
+      return Math.hypot(p.x - (v.x + t * dx), p.y - (v.y + t * dy));
+    };
+    const clearOfCourse = (pts: Pt[]) => pts.every((q) =>
+      otherLegs.every((poly) => poly.slice(1).every((w, i) => segDist(q, poly[i], w) > 1.5))
+      && numbers.every((m) => Math.hypot(q.x - m.x, q.y - m.y) > 5));
     let p1: Pt | null = null;
     let apexLine: Pt[] = [], apexBand: Pt[] = [], chordBandHeld: Pt[] = [];
     const pageOf = await paperToPageOf(page);
@@ -583,7 +603,7 @@ test.describe("F3: legs — styles, bends, corridors (docs/course-editor.md §6.
           for (let t = -2; t <= 2 + 1e-9; t += 0.1) for (const d of bandOffsets) bandAt.push({ x: at.x + u.x * t + nn.x * d, y: at.y + u.y * t + nn.y * d });
           const atPage = pageOf(at);
           if (atPage.x < box.x + 20 || atPage.x > box.x + box.width - 20 || atPage.y < box.y + 20 || atPage.y > box.y + box.height - 20) continue;
-          if (clearOfSites(line).length !== line.length) continue;
+          if (clearOfSites(line).length !== line.length || !clearOfCourse(line)) continue;
           const lc = await loupeCircleAt(page, atPage);
           const clearOfLoupe = (pts: Pt[]) => pts.filter((q) => { const pq = pageOf(q); return Math.hypot(pq.x - lc.x, pq.y - lc.y) > lc.r + 3; });
           const chordClear = clearOfLoupe(chordBand);
@@ -593,6 +613,7 @@ test.describe("F3: legs — styles, bends, corridors (docs/course-editor.md §6.
           const dir = { x: atPage.x - from0.x, y: atPage.y - from0.y }, dist = Math.hypot(dir.x, dir.y);
           const end = await dragEndOnMap(page, from0, [{ x: dir.x / dist, y: dir.y / dist }], dist).catch(() => null);
           if (!end) continue;
+          if ((await inkAt(page, line, "purple")) > 0) continue;
           const bandClear = await inkedAt(page, clearOfLoupe(clearOfSites(bandAt)), "map");
           if (bandClear.length < 20) continue;
           p1 = at;
@@ -603,7 +624,7 @@ test.describe("F3: legs — styles, bends, corridors (docs/course-editor.md §6.
         }
       }
     }
-    if (!p1) throw new Error("no apex clear of the sites and the held loupe, with map under its band");
+    if (!p1) throw new Error("no apex clear of the sites, the course's other purple and the held loupe, with map under its band");
     // F25: a leg through the held apex is at least the two straight pieces long (a curve through p1 is no shorter).
     const throughApexM = Math.round(((Math.hypot(p1.x - a.mm.x, p1.y - a.mm.y) + Math.hypot(b.mm.x - p1.x, b.mm.y - p1.y)) * scale) / 1000);
     expect(throughApexM, "the apex lengthens the leg").toBeGreaterThan(chordM + 2);
