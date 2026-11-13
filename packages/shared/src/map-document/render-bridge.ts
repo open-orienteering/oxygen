@@ -17,6 +17,7 @@ import { resolveEntry } from "../symbol-library/schema.js";
 import { paletteIndexOfStack } from "../import/colour-align.js";
 import { type DocumentSymbol, OBJECT_TYPE } from "./header.js";
 import type { MapDocument } from "./codec.js";
+import type { EffectiveDocument } from "./patch.js";
 
 export interface DocumentRenderOptions {
   /** What to do with objects whose symbol has no `render`: draw a proxy, or drop. Default `proxy`. */
@@ -46,6 +47,8 @@ export interface DocumentRenderInput {
   docIdx: number[];
   stats: {
     total: number; rendered: number; proxied: number; hidden: number; dropped: number; coordinates: number;
+    /** Objects a patch hides (map-patches §2.4); `hidden` counts the objects of hidden symbols. */
+    patchHidden: number;
     /** Symbols drawn from a canonical entry rather than their source definition. */
     canonicalSymbols: number;
     /** Applied matches whose entry or colours could not be resolved (library changed); drawn from source. */
@@ -97,14 +100,15 @@ const kindOfType = (type: number): RenderSymbol["type"] | undefined =>
 export const textLayoutOfType = (type: number): RenderObject["textLayout"] =>
   type === OBJECT_TYPE.formattedText ? "box" : type === OBJECT_TYPE.lineText ? "path" : undefined;
 
-export function documentRenderInput(doc: MapDocument, opts: DocumentRenderOptions = {}): DocumentRenderInput {
+/** `doc` may be an effective document (`applyPatch`, map-patches §2.4): its patch-hidden objects are skipped. */
+export function documentRenderInput(doc: EffectiveDocument, opts: DocumentRenderOptions = {}): DocumentRenderInput {
   const unmatched = opts.unmatched ?? "proxy";
   const canonical = opts.canonical ?? true;
   const unitUm = 1000 / doc.header.unitsPerMm;
   const symbols: RenderSymbol[] = [];
   const proxyIdx: Partial<Record<RenderSymbol["type"], number>> = {};
   const proxies = proxySymbols(opts.proxyColours);
-  const stats = { total: doc.header.objects.count, rendered: 0, proxied: 0, hidden: 0, dropped: 0, coordinates: 0, canonicalSymbols: 0, canonicalMissing: 0 };
+  const stats = { total: doc.header.objects.count, rendered: 0, proxied: 0, hidden: 0, patchHidden: 0, dropped: 0, coordinates: 0, canonicalSymbols: 0, canonicalMissing: 0 };
   // Symbol i of the document maps to symbols[i]; placeholders keep indices aligned.
   const placeholder = proxies[0];
   const index = canonical ? paletteIndexOfStack(doc.header.colours) : undefined;
@@ -128,6 +132,10 @@ export function documentRenderInput(doc: MapDocument, opts: DocumentRenderOption
   const count = order ? order.length : doc.header.objects.count;
   for (let k = 0; k < count; k++) {
     const i = order ? order[k] : k;
+    if (doc.hidden?.[i]) {
+      stats.patchHidden++;
+      continue;
+    }
     const symIdx = doc.attrs.symbolIdx[i];
     const sym = doc.header.symbols[symIdx];
     if (!sym) {
