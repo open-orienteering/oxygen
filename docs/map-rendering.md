@@ -2176,9 +2176,11 @@ popover beside it; same entries and ids.
 The 3D drawing side of research topic 10 §5 step 2 (H5): a height field
 (`docs/map-terrain.md` §5) drawn as a mesh under a perspective camera,
 textured and lit. H6 makes the map the texture and runs this on the
-renderer's context; H7 puts it in the viewer. Everything lives in
-`packages/web/src/map-gl/terrain/`; nothing here edits `renderer.ts`,
-`engine.ts` or `worker.ts`.
+renderer's context; H7 puts it in the viewer. The terrain side lives in
+`packages/web/src/map-gl/terrain/`; H6 joins it to the arena path through
+`renderer.ts` (the drape target, the terrain program on the renderer's
+context), `engine.ts` (the 3D frame: footprint, cells, settling, budget)
+and `worker.ts` (the field's CPU preparation).
 
 #### Decided with the user (2026-11-14)
 
@@ -2196,6 +2198,33 @@ renderer's context; H7 puts it in the viewer. Everything lives in
 2. **Vertical exaggeration is a draw parameter with no default here.**
    The dev page and the E2E pass it explicitly; the viewer's default and
    range are H7's (§5.4 "3D mode").
+
+#### Decided with the user (H6, 2026-11-14)
+
+3. **Two drape layers, near and far.** One orthographic texture has one
+   texel density, and a tilted camera needs several times more at the
+   near edge of the screen than at the far edge (≈ 3.4× at pitch 60).
+   The `far` layer covers the whole footprint at the density the cap
+   allows; a `near` layer covers the part of the footprint where `far`
+   falls below 0.7× of what the screen needs, at the near density. At
+   pitch 0 (and wherever `far` is dense enough) there is only `far`.
+   `TerrainFrame` takes `drapes[]` (1–2), the first whose uv is inside
+   wins. Rendering the map through the perspective matrix every frame was
+   rejected: it needs a per-vertex screen density (§8 "perspective
+   cameras") and contradicts "re-rendered when the camera settles".
+4. **The drape is clipped to the mesh.** The height field covers the
+   contours' bounding box + 2 mm (`map-terrain.md` §2.4, §5), so sheet
+   parts outside it — a title, a legend, a margin beyond the field — are
+   not drawn in 3D. Whether the mesh gets a flat apron to the document's
+   bounds is H7's call, on real maps (§8).
+5. **The cap is inside the residency budget.** The height and normal
+   textures and the drape layers count against the existing budget
+   (30 MB event maps, 150 MB club maps; `budgetBytes()`); the drape
+   layers together may take at most a third of it (10 / 50 MB, mip chain
+   included) and at most 4096 texels per side. On a phone at an event
+   map that is ≈ 1.9 M drape texels against a 2.6 M-pixel canvas (0.85×
+   linear at pitch 0). Revisited only if the measurements or the H-gate
+   show it.
 
 #### Input
 
