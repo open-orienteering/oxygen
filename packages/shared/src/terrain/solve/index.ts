@@ -6,7 +6,7 @@
 
 export * from "./types.js";
 export { EVIDENCE_RULES, chainArea, cliffEvidence, evidenceContext, formTickEvidence, gatherEvidence, lakeEvidence, tickDirection, tickEvidence, topEvidence, type EvidenceContext } from "./evidence.js";
-export { LevelUnion, SUSPECT_TIER, TIER, buildForest, forestEdges, type Forest, type ForestEdge, type ForestInput } from "./levels.js";
+export { LevelUnion, SUSPECT_TIER, TIER, buildForest, edgeKey, forestEdges, linkKey, type Forest, type ForestEdge, type ForestInput } from "./levels.js";
 export { PROBE_RULES, cliffBornePairs, cliffLinkSides, leakyRegions, type CliffLinkSides } from "./probe.js";
 export { applyEvidence, chainRegions, signState, slopeFix, type SignState } from "./sign.js";
 export { bandRule, closedHillRule, closureRule } from "./heuristics.js";
