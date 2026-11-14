@@ -19,7 +19,7 @@ import { test, expect, type Locator, type Page, type Request } from "@playwright
 import { PNG } from "pngjs";
 import { reseed } from "./helpers/reseed";
 import { uploadEventMap, waitForStableMapPanel } from "./helpers/map-upload";
-import { pinStacklessDocument, unpinEventMap } from "./helpers/event-map-pin";
+import { mapObjectsAt, pinStacklessDocument, unpinEventMap } from "./helpers/event-map-pin";
 import { API_BASE as API } from "./helpers/api-base";
 import { EDITOR_EVENT, selectedCode, sites, toPage, viewSettled } from "./helpers/editor";
 
@@ -437,6 +437,81 @@ test.describe("vector map layer", () => {
     }, { timeout: 30_000, message: "purple on the bent leg" }).toBe(true);
     const chord = (await snapshot(viewer, canvas)).rgb(spot!);
     expect(chord && isYellow(chord), `yellow at the straight chord's midpoint: ${JSON.stringify(chord)}`).toBe(true);
+  });
+
+  // docs/map-rendering.md §5.2 "Patch" (row G4): the event's patch reaches the layer beside the document and a
+  // change redraws without reloading it — a hidden object's pixels go, an added object is drawn, the toggle off
+  // restores both.
+  test("the event's patch: a hidden object's pixels go, an added one is drawn, the toggle off restores both", async ({ page }) => {
+    test.setTimeout(180_000);
+    const api = async <T,>(path: string, data: unknown): Promise<T> => {
+      const res = await page.request.post(`${API}/trpc/${path}`, { headers: { "content-type": "application/json", "x-event-id": "itest" }, data });
+      expect(res.ok(), await res.text()).toBe(true);
+      return ((await res.json()) as { result: { data: T } }).result.data;
+    };
+    await openEvent(page);
+    await viewerWithMap(page);
+    const { viewer, canvas } = await openCourses(page);
+    const documentHash = (await canvas.getAttribute("data-document-hash"))!;
+    await expect(canvas).toHaveAttribute("data-patch-version", "0");
+
+    // 1. A black line on white paper (as the lower-purple test), and the objects drawn there.
+    const fit = await snapshot(viewer, canvas);
+    const spot = findSpot(fit, isInk, (p) => {
+      const at = (dx: number, dy: number) => fit.rgb({ x: p.x + dx, y: p.y + dy });
+      const white = [-3, -2.5, -2, 2, 2.5, 3].every((dy) => { const c = at(0, dy); return c && isWhite(c); });
+      const sides = [-1.5, 1.5].every((dx) => [-1, -0.75, -0.5, -0.25, 0, 0.25, 0.5, 0.75, 1].some((dy) => { const c = at(dx, dy); return c && isInk(c); }));
+      return !!(white && sides);
+    }, true);
+    expect(spot, "a black line on white paper").toBeDefined();
+    const near = mapObjectsAt("itest", spot!.x, spot!.y, 0.6);
+    const lines = near.objects.filter((o) => o.type === 2);
+    expect(lines.length, JSON.stringify(near)).toBeGreaterThan(0);
+    const hide = near.objects.filter((o) => o.type !== 3);
+    const added = { x: spot!.x, y: spot!.y + 2.5 };
+
+    await zoomOn(page, viewer, canvas, spot!);
+    const before = await snapshot(viewer, canvas);
+    const inkAt = (shot: typeof before, p: Pt) => [-0.1, 0, 0.1].some((dy) => { const c = shot.rgb({ x: p.x, y: p.y + dy }); return !!c && isDark(c); });
+    const whiteAt = (shot: typeof before, p: Pt) => [-0.1, 0, 0.1].every((dy) => { const c = shot.rgb({ x: p.x, y: p.y + dy }); return !!c && isWhite(c); });
+    expect(inkAt(before, spot!), "ink at the line before the patch").toBe(true);
+    expect(whiteAt(before, added), "white paper where the object will be added").toBe(true);
+
+    // 2. The patch: hide the objects at the spot, add a 2 mm line of the same symbol 2.5 mm above it.
+    const documentRequests: string[] = [];
+    page.on("request", (req) => { if (/^\/api\/map-documents\/[0-9a-f]{64}$/.test(new URL(req.url()).pathname)) documentRequests.push(req.url()); });
+    const u = near.unitsPerMm;
+    const addId = "01900000-0000-7000-8000-00000000a4a4";
+    const ops = [
+      ...hide.map((o) => ({ op: "hide", sourceIndex: o.sourceIndex })),
+      { op: "add", id: addId, type: 2, symbol: { doc: lines[0].symbolIdx }, coords: [[Math.round((added.x - 1) * u), Math.round(added.y * u)], [Math.round((added.x + 1) * u), Math.round(added.y * u)]] },
+    ];
+    const written = await api<{ version: string }>("mapPatch.applyChange", { documentHash, put: ops });
+    const attempt = await canvas.getAttribute("data-attempt");
+    // No live channel: the viewer revalidates the patch when the page regains focus.
+    await page.evaluate(() => window.dispatchEvent(new Event("focus")));
+    await expect(canvas).toHaveAttribute("data-patch-version", written.version, { timeout: 30_000 });
+    await expect.poll(async () => {
+      const shot = await snapshot(viewer, canvas);
+      return { hidden: whiteAt(shot, spot!), added: inkAt(shot, added) };
+    }, { timeout: 30_000 }).toEqual({ hidden: true, added: true });
+    // Redrawn without reloading: the same canvas, no new document request.
+    expect(await canvas.getAttribute("data-attempt")).toBe(attempt);
+    expect(documentRequests).toEqual([]);
+
+    // 3. The toggle off: the pinned document again, both restored.
+    const off = await api<{ version: string }>("mapPatch.setEnabled", { enabled: false });
+    await page.evaluate(() => window.dispatchEvent(new Event("focus")));
+    await expect(canvas).toHaveAttribute("data-patch-version", off.version, { timeout: 30_000 });
+    await expect.poll(async () => {
+      const shot = await snapshot(viewer, canvas);
+      return { line: inkAt(shot, spot!), paper: whiteAt(shot, added) };
+    }, { timeout: 30_000 }).toEqual({ line: true, paper: true });
+    expect(documentRequests).toEqual([]);
+
+    // Clean up for the specs after this one.
+    await api("mapPatch.applyChange", { documentHash, remove: ops.map((o) => (o.op === "add" ? `add:${addId}` : `hide:${(o as { sourceIndex: number }).sourceIndex}`)) });
+    await api("mapPatch.setEnabled", { enabled: true });
   });
 
   test("without WebGL2 the layer shows its message", async ({ page }) => {

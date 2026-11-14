@@ -416,8 +416,10 @@ shared stage (04 §7; `map-rendering.md` §5.5), not SVG hit targets:
   is Map mode's (slice G).
 - The filter region's **eyedropper** (§6.4) asks the *document* which
   symbol is under a click, also on the main thread
-  (`lib/editor/symbol-pick.ts`, built once per document hash like the
-  snap index): the objects whose stored box, grown by the tolerance,
+  (`lib/editor/symbol-pick.ts`, built once per document hash and patch
+  version like the snap index, over the effective document — G4: hidden
+  objects are not picked or counted, an object of a patch symbol is not
+  picked by symbol): the objects whose stored box, grown by the tolerance,
   holds the point are symbolised with the shared stage
   (`documentRenderInput(doc, { only })`, `map-document-format.md` §8;
   `render.symbolise` without fonts) and hit-tested with
@@ -633,8 +635,11 @@ object's centre or line / area vertex** of the map document within
 **0.5 mm** on paper (`lib/editor/snap.ts`, `SNAP_MM`). The candidates are
 document geometry — a point object's coordinate and the on-curve vertices
 of lines and areas; Bézier control points, texts and hidden symbols do
-not snap — read once per document hash into a 2 mm grid, on the main
-thread (the document bytes are the viewer's `useMapDocument` copy). The
+not snap — read once per document hash (and patch version) into a 2 mm
+grid, on the main thread (the document bytes are the viewer's
+`useMapDocument` copy). The grid is of the effective document (G4,
+`map-patches.md` §2.4): objects the event's patch hides do not snap,
+modified and added ones snap where it puts them. The
 viewer applies `editor.snap` to its control drags; the tools snap their
 own points.
 
