@@ -31,6 +31,12 @@ export interface TerrainHit {
  * draws it.
  */
 export function surfaceZ(mesh: TerrainMesh, x: number, y: number, exaggeration: number): number | null {
+  const h = surfaceHeight(mesh, x, y);
+  return h === null ? null : (h - mesh.zMin) * mesh.unitUm * exaggeration;
+}
+
+/** The level-0 surface at model (x, y) in int16 height units (fractional), or null outside the outer cell centres. */
+export function surfaceHeight(mesh: TerrainMesh, x: number, y: number): number | null {
   const W = mesh.width, H = mesh.height;
   if (W < 2 || H < 2) return null;
   const gx = (x - mesh.x0Um) / mesh.cellUm, gy = (y - mesh.y0Um) / mesh.cellUm;
@@ -38,8 +44,7 @@ export function surfaceZ(mesh: TerrainMesh, x: number, y: number, exaggeration: 
   const ix = Math.min(Math.floor(gx), W - 2), iy = Math.min(Math.floor(gy), H - 2);
   const fx = gx - ix, fy = gy - iy, h = mesh.heights, i = iy * W + ix;
   const za = h[i], zb = h[i + 1], zc = h[i + W + 1], zd = h[i + W];
-  const z = fx >= fy ? za + fx * (zb - za) + fy * (zc - zb) : za + fy * (zd - za) + fx * (zc - zd);
-  return (z - mesh.zMin) * mesh.unitUm * exaggeration;
+  return fx >= fy ? za + fx * (zb - za) + fy * (zc - zb) : za + fy * (zd - za) + fx * (zc - zd);
 }
 
 /** The first hit of the ray on the surface, or null. */
@@ -93,14 +98,17 @@ export function pickTerrain(mesh: TerrainMesh, field: HeightField, ray: Ray, exa
     if (next === t1) break;
   }
   if (hitT === null) return null;
-  const mx = ox + dx * hitT, my = oy + dy * hitT, mz = surfaceZ(mesh, mx, my, exaggeration) ?? oz + dz * hitT;
+  const mx = ox + dx * hitT, my = oy + dy * hitT;
+  const h = surfaceHeight(mesh, mx, my) ?? mesh.zMin;
+  const mz = (h - mesh.zMin) * mesh.unitUm * exaggeration;
   const x = (mx + mesh.originUm.x) / 1000, y = (my + mesh.originUm.y) / 1000;
   const cell = fieldCell(field, { x, y });
   return {
     x,
     y,
     model: [mx, my, mz],
-    heightM: (mz / (mesh.unitUm * exaggeration)) * field.header.zScaleM + mesh.zBaseM,
+    // from the height units, so exaggeration 0 (a flat drape) still reports metres
+    heightM: (h - mesh.zMin) * field.header.zScaleM + mesh.zBaseM,
     data: cell >= 0 && field.z[cell] !== HEIGHT_NO_DATA,
     t: hitT,
   };

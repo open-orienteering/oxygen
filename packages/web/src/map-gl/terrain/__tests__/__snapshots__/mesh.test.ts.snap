@@ -2,8 +2,47 @@
 
 exports[`level of detail (§5.6) > keeps a 4096² field within 600 000 triangles at 1920 × 1080 (overview, 60° tilt, close-up) 1`] = `
 {
-  "closeUp": 324352,
-  "overview": 247904,
-  "tilt60": 336576,
+  "closeUp": {
+    "chunks": 63,
+    "culled": 4033,
+    "perLevel": [
+      28,
+      35,
+      0,
+      0,
+      0,
+      0,
+      0,
+    ],
+    "triangles": 324352,
+  },
+  "overview": {
+    "chunks": 4096,
+    "culled": 0,
+    "perLevel": [
+      0,
+      0,
+      0,
+      0,
+      3740,
+      356,
+      0,
+    ],
+    "triangles": 247904,
+  },
+  "tilt60": {
+    "chunks": 3063,
+    "culled": 1033,
+    "perLevel": [
+      0,
+      0,
+      0,
+      1098,
+      1965,
+      0,
+      0,
+    ],
+    "triangles": 336576,
+  },
 }
 `;

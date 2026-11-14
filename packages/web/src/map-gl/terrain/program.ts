@@ -11,11 +11,16 @@
  *   fragment shader applies the exaggeration (`shade.ts`).
  * - The drape is any texture with the model → clip matrix it was rendered
  *   with: `uv = (drapeMatrix · (x, y, 0, 1)).xy / w · ½ + ½`. Outside
- *   [0, 1] the background is drawn. H6 passes the map rendered into a
+ *   [0, 1] the background colour stands in for the drape, shaded like
+ *   it (it is ground, only unmapped). H6 passes the map rendered into a
  *   framebuffer texture; the dev page passes a checker.
- * - It runs on the caller's context and leaves the state the arena path
- *   expects: depth test off, no program, vertex array, framebuffer or
- *   texture of its own bound, `TEXTURE0` active, unpack alignment 4.
+ * - It runs on the caller's context. It sets what it draws with (blend,
+ *   face culling, scissor and stencil off, all colour channels written,
+ *   depth test `LEQUAL`) and leaves the state the arena path expects:
+ *   depth test off and `depthFunc(LESS)`, no program, vertex array,
+ *   framebuffer or texture of its own bound, `TEXTURE0` active, unpack
+ *   alignment 4. The viewport, the clear colour and depth and
+ *   `depthMask(true)` stay as drawn; the arena path sets its own.
  */
 
 import { heightNormals, type HeightField } from "@oxygen/shared/src/terrain/field/read.js";
@@ -189,6 +194,12 @@ export class TerrainRenderer {
 
     gl.bindFramebuffer(gl.FRAMEBUFFER, target.framebuffer);
     gl.viewport(0, 0, target.width, target.height);
+    // state the arena path may leave set (blend after a 2D render, a scissor, the stencil)
+    gl.disable(gl.BLEND);
+    gl.disable(gl.CULL_FACE);
+    gl.disable(gl.SCISSOR_TEST);
+    gl.disable(gl.STENCIL_TEST);
+    gl.colorMask(true, true, true, true);
     gl.enable(gl.DEPTH_TEST);
     gl.depthFunc(gl.LEQUAL);
     gl.depthMask(true);
@@ -249,6 +260,7 @@ export class TerrainRenderer {
     }
     gl.useProgram(null);
     gl.disable(gl.DEPTH_TEST);
+    gl.depthFunc(gl.LESS);
     gl.bindFramebuffer(gl.FRAMEBUFFER, null);
     return { ...sel.stats, draws, matrix };
   }

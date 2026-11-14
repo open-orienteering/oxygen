@@ -127,7 +127,11 @@ describe("level of detail (§5.6)", () => {
       const l = chunkLevel(d, 200, 1000, 8);
       expect(l).toBeGreaterThanOrEqual(prev);
       expect(l).toBeLessThan(LEVELS);
-      if (l > 0 && l < LEVELS - 1) expect(((1 << l) * 200 * 1000) / d).toBeLessThanOrEqual(8);
+      // the coarsest such level: one level coarser would exceed lodPx
+      if (l > 0 && l < LEVELS - 1) {
+        expect(((1 << l) * 200 * 1000) / d).toBeLessThanOrEqual(8);
+        expect(((1 << (l + 1)) * 200 * 1000) / d).toBeGreaterThan(8);
+      }
       prev = l;
     }
     expect(prev).toBe(LEVELS - 1);
@@ -164,22 +168,32 @@ describe("level of detail (§5.6)", () => {
     const f = noiseField(4 * CHUNK + 1, 3 * CHUNK + 1, 11, 60);
     const m = buildTerrainMesh(f);
     const at = (gx: number, gy: number) => m.heights[gy * m.width + gx];
-    for (let la = 0; la < LEVELS; la++)
-      for (let lb = la + 1; lb < LEVELS; lb++)
-        for (let cy = 0; cy < m.chunksY; cy++)
-          for (let cx = 0; cx + 1 < m.chunksX; cx++) {
-            // fine chunk A left of coarse chunk B, sharing the column gx
-            const A = m.chunks[cy * m.chunksX + cx], B = m.chunks[cy * m.chunksX + cx + 1];
-            const gx = B.ix0, s = 1 << lb;
-            for (let j = 0; j <= CHUNK; j += 1 << la) {
-              const gy = A.iy0 + j;
-              const k = Math.floor(j / s) * s, f0 = (j - k) / s;
-              const hc = f0 === 0 ? at(gx, A.iy0 + k) : at(gx, A.iy0 + k) * (1 - f0) + at(gx, A.iy0 + Math.min(k + s, CHUNK)) * f0;
-              const hf = at(gx, gy);
-              if (hf >= hc) expect(A.zMin).toBeLessThanOrEqual(hc);
-              else expect(B.zMin).toBeLessThanOrEqual(hf);
-            }
+    /** An edge drawn at stride s: the polyline through every s-th of its heights, at position k. */
+    const edge = (hs: number[], s: number, k: number) => {
+      const k0 = Math.floor(k / s) * s, t = (k - k0) / s;
+      return t === 0 ? hs[k0] : hs[k0] * (1 - t) + hs[Math.min(k0 + s, CHUNK)] * t;
+    };
+    // every shared edge: east neighbours (a column) and north neighbours (a row)
+    const pairs: [number, number, number[]][] = [];
+    for (let cy = 0; cy < m.chunksY; cy++)
+      for (let cx = 0; cx < m.chunksX; cx++) {
+        const a = cy * m.chunksX + cx, c = m.chunks[a];
+        if (cx + 1 < m.chunksX) pairs.push([a, a + 1, Array.from({ length: CHUNK + 1 }, (_, k) => at(c.ix0 + CHUNK, c.iy0 + k))]);
+        if (cy + 1 < m.chunksY) pairs.push([a, a + m.chunksX, Array.from({ length: CHUNK + 1 }, (_, k) => at(c.ix0 + k, c.iy0 + CHUNK))]);
+      }
+    expect(pairs.length).toBe(17);
+    for (const [a, b, hs] of pairs)
+      for (let la = 0; la < LEVELS; la++)
+        for (let lb = 0; lb < LEVELS; lb++) {
+          if (la === lb) continue;
+          const A = m.chunks[a], B = m.chunks[b];
+          for (let k = 0; k <= CHUNK; k++) {
+            const ha = edge(hs, 1 << la, k), hb = edge(hs, 1 << lb, k);
+            // the higher edge's skirt reaches the lower one
+            if (ha >= hb) expect(A.zMin).toBeLessThanOrEqual(hb);
+            else expect(B.zMin).toBeLessThanOrEqual(ha);
           }
+        }
   });
 
   it("keeps a 4096² field within 600 000 triangles at 1920 × 1080 (overview, 60° tilt, close-up)", () => {
@@ -195,10 +209,10 @@ describe("level of detail (§5.6)", () => {
       tilt60: { ...cam, pitchDeg: 60, distanceUm: distanceForPxPerUm(cam, fit * 2) },
       closeUp: { ...cam, pitchDeg: 45, distanceUm: distanceForPxPerUm(cam, 4 / m.cellUm) },
     };
-    const measured: Record<string, number> = {};
+    const measured: Record<string, object> = {};
     for (const [name, c] of Object.entries(cams)) {
       const sel = selectChunks(m, cameraFrame(c, box), { exaggeration: 2 });
-      measured[name] = sel.stats.triangles;
+      measured[name] = { ...sel.stats };
       expect(sel.stats.triangles).toBeLessThanOrEqual(600_000);
       expect(sel.stats.perLevel.filter((n) => n > 0).length).toBeLessThanOrEqual(LEVELS);
     }

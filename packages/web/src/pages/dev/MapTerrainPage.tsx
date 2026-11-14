@@ -6,7 +6,7 @@
  * stats, `project(xMm, yMm)` → canvas px of the surface point, `pick(px,
  * py)` and the last click's pick. Not routed in production builds.
  *
- * `?field=cone|slope|noise&n=<W>x<H>&texture=checker|grey|white&pitch=&bearing=&e=&lod=auto|0…6&zoom=&w=&h=&bg=<hex>&bench=1`
+ * `?field=cone|slope|noise&n=<W>x<H>&texture=checker|grey|white&drape=half&pitch=&bearing=&e=&lod=auto|0…6&zoom=&w=&h=&bg=<hex>&bench=1`
  */
 
 import { useEffect, useRef, useState } from "react";
@@ -109,7 +109,10 @@ export function MapTerrainPage() {
       gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
       gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
       gl.bindTexture(gl.TEXTURE_2D, null);
-      const drapeMatrix = viewMatrix({ centreX: centre.x, centreY: centre.y, pxPerUm: texW / wUm, widthPx: texW, heightPx: (texW / wUm) * hUm }, origin.x, origin.y);
+      // drape=half: the texture squeezed onto the field's west half, the rest outside the drape
+      const half = params.get("drape") === "half";
+      const drapeW = half ? wUm / 2 : wUm;
+      const drapeMatrix = viewMatrix({ centreX: x0 * 1000 + drapeW / 2, centreY: centre.y, pxPerUm: texW / drapeW, widthPx: texW, heightPx: (texW / drapeW) * hUm }, origin.x, origin.y);
 
       const camera: TerrainCamera = {
         target: { x: centre.x - origin.x, y: centre.y - origin.y, z: 0 },

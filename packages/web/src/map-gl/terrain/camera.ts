@@ -68,8 +68,10 @@ export function distanceForPxPerUm(cam: Pick<TerrainCamera, "heightPx" | "fovYDe
 }
 
 /**
- * The camera's eye, basis, clip planes and matrix. Near and far enclose
- * `bounds` (the drawn field) when given, with near ≥ far / 10⁴ for a
+ * The camera's eye, basis, clip planes and matrix. Near and far are the
+ * smallest and largest depth along the view direction over `bounds` (the
+ * drawn field) when given — not Euclidean distance, which would put an
+ * off-axis point in front of the near plane — with near ≥ far / 10⁴ for a
  * 24-bit depth buffer; otherwise they are 1 % and 100× the distance.
  */
 export function cameraFrame(cam: TerrainCamera, bounds?: Box3): CameraFrame {
@@ -89,8 +91,17 @@ export function cameraFrame(cam: TerrainCamera, bounds?: Box3): CameraFrame {
   const eye: Vec3 = [t.x - forward[0] * d, t.y - forward[1] * d, t.z - forward[2] * d];
   let near = d * 0.01, far = d * 100;
   if (bounds) {
-    far = Math.sqrt(boxDistanceSq(bounds, eye, true)) * 1.01;
-    near = Math.max(Math.sqrt(boxDistanceSq(bounds, eye, false)) * 0.99, far / 1e4);
+    // depth along the view direction: linear, so its extremes over the box are at corners
+    let lo = Infinity, hi = -Infinity;
+    for (const x of [bounds.minX, bounds.maxX])
+      for (const y of [bounds.minY, bounds.maxY])
+        for (const z of [bounds.minZ, bounds.maxZ]) {
+          const depth = (x - eye[0]) * forward[0] + (y - eye[1]) * forward[1] + (z - eye[2]) * forward[2];
+          lo = Math.min(lo, depth);
+          hi = Math.max(hi, depth);
+        }
+    far = hi > 0 ? hi * 1.01 : d * 100;
+    near = Math.max(lo * 0.99, far / 1e4);
     if (!(far > near)) far = near * 2;
   }
   const fov = (cam.fovYDeg ?? DEFAULT_FOV_Y_DEG) * RAD;
@@ -103,9 +114,9 @@ export function terrainCamera(cam: TerrainCamera, bounds?: Box3): Float32Array {
   return new Float32Array(cameraFrame(cam, bounds).matrix);
 }
 
-/** Squared distance from p to the box: the nearest point (0 inside), or with `farthest` the farthest corner. */
-export function boxDistanceSq(bx: Box3, p: Vec3, farthest = false): number {
-  const axis = (v: number, lo: number, hi: number) => (farthest ? Math.max(Math.abs(v - lo), Math.abs(v - hi)) : v < lo ? lo - v : v > hi ? v - hi : 0);
+/** Squared distance from p to the nearest point of the box (0 inside). */
+export function boxDistanceSq(bx: Box3, p: Vec3): number {
+  const axis = (v: number, lo: number, hi: number) => (v < lo ? lo - v : v > hi ? v - hi : 0);
   const dx = axis(p[0], bx.minX, bx.maxX), dy = axis(p[1], bx.minY, bx.maxY), dz = axis(p[2], bx.minZ, bx.maxZ);
   return dx * dx + dy * dy + dz * dz;
 }
