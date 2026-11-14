@@ -10,7 +10,7 @@ import type { DocumentColour } from "../../map-document/header.js";
 
 export type ColourRow = readonly [sourceNumber: number, name: string, c: number, m: number, y: number, k: number];
 
-export const toColours = (rows: readonly ColourRow[]): DocumentColour[] =>
+export const toColours = (rows: readonly (ColourRow | ColourRowUsed)[]): DocumentColour[] =>
   rows.map(([n, name, c, m, y, k]) => ({ id: `src:${n}`, name, cmyk: [c / 100, m / 100, y / 100, k / 100], sourceNumber: n }));
 
 /** Ny_karta_test (67 colours): the mapper's own upper purple, no lower; "Green 100% + 50% Black Area Feature" at the bottom of the area block. */
