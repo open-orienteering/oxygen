@@ -113,8 +113,8 @@ version (string) }`.
   `[trim_start, index + 1)`, right `[0, trim_end − index)`, so both stay
   restorable; `single_pass` divided by `splitRanges` (§3.5); `name`,
   `source_name`, `derived_from`, `converted_op`, `created_by` and
-  `created_at` kept (the parts stay in the original's place in the
-  list); a fresh version each. With `ids`, a repeat after success (the
+  `created_at` (exact) kept, so the parts stay with their import in the
+  list, ordered there by id; a fresh version each. With `ids`, a repeat after success (the
   original gone, both ids present) answers the two rows.
 - **Remove** deletes the event's rows among `ids`; unknown ids are
   ignored, so twice is once.

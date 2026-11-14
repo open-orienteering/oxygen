@@ -75,6 +75,18 @@ describe("shouldForwardToCloud", () => {
     expect(shouldForwardToCloud("GET", "/trpc/mapPatch.get")).toBe(false);
   });
 
+  it("forwards the GPS tracks' writes; reads are not forwarded (map-gps-tracks.md §1.3)", () => {
+    for (const m of ["import", "update", "split", "remove", "markConverted"]) {
+      expect(isCloudOwnedMutation(`mapTrack.${m}`)).toBe(true);
+      expect(shouldForwardToCloud("POST", `/trpc/mapTrack.${m}`)).toBe(true);
+    }
+    expect(shouldForwardToCloud("GET", "/trpc/mapTrack.list")).toBe(false);
+    expect(shouldForwardToCloud("GET", "/trpc/mapTrack.get?input=%7B%7D")).toBe(false);
+    // `tracks.` (the replay router) and `mapTrack.` do not shadow each other.
+    expect(isCloudOwnedMutation("mapTracks.import")).toBe(false);
+    expect(isCloudOwnedMutation("tracks.import")).toBe(true);
+  });
+
   it.each([
     ["courseMap", "saveLayout", "list"],
     ["mapTemplate", "update", "list"],
