@@ -198,3 +198,33 @@ function defaultStorage(): CacheStorageLike | null {
 
 /** The page's store (one per tab). */
 export const offlinePrintStore: OfflinePrintStore = createOfflinePrintStore();
+
+// ─── A run's progress, for the buttons and the sync panel (no print chunk needed) ───
+
+export interface OfflinePrintProgress {
+  done: number;
+  total: number;
+}
+
+const progress = new Map<string, OfflinePrintProgress>();
+const listeners = new Set<() => void>();
+
+/** The event's running store step, null when none runs. */
+export function offlinePrintProgress(nameId: string): OfflinePrintProgress | null {
+  return progress.get(nameId) ?? null;
+}
+
+/** Sets (null: ends) the event's progress and tells every listener; also called when a run ends, so readers re-read the manifest. */
+export function setOfflinePrintProgress(nameId: string, p: OfflinePrintProgress | null): void {
+  if (p) progress.set(nameId, p);
+  else progress.delete(nameId);
+  for (const l of [...listeners]) l();
+}
+
+/** Calls `fn` on any event's progress change or run end. */
+export function subscribeOfflinePrint(fn: () => void): () => void {
+  listeners.add(fn);
+  return () => {
+    listeners.delete(fn);
+  };
+}
