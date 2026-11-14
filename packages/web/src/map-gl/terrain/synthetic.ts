@@ -103,7 +103,7 @@ export function seededRandom(seed: number): () => number {
  * to 0 over the outer eighth so the field's border lies on z = 0 (the
  * dev page's crack check counts background inside the border's outline).
  */
-export function noiseField(width = 300, height = 200, seed = 7, amplitudeM = 40): HeightField {
+export function noiseField(width = 300, height = 200, seed = 7, amplitudeM = 40, opts: SyntheticOptions = {}): HeightField {
   const rand = seededRandom(seed);
   const octaves = [24, 9, 4].map((cells) => {
     const gw = Math.ceil(width / cells) + 2, gh = Math.ceil(height / cells) + 2;
@@ -121,8 +121,19 @@ export function noiseField(width = 300, height = 200, seed = 7, amplitudeM = 40)
     width,
     height,
     (cx, cy) => amplitudeM * (0.6 * value(octaves[0], cx, cy) + 0.3 * value(octaves[1], cx, cy) + 0.1 * value(octaves[2], cx, cy)) * taper(cx, width) * taper(cy, height),
-    { cellMm: 0.2, groundMPerMm: 15 },
+    { cellMm: 0.2, groundMPerMm: 15, ...opts },
   );
+}
+
+/**
+ * The bench's field over a document (`/dev/map-gl-doc?terrain=1`, §5.6 "Measurements (H6)"): seeded
+ * noise over `boundsMm` at 0.2 mm cells, coarser where that would pass `maxSide` cells per side
+ * (the §4.0 cap). Frame time does not depend on real heights.
+ */
+export function noiseFieldOver(boundsMm: { minX: number; minY: number; maxX: number; maxY: number }, maxSide = 4096, groundMPerMm = 15): HeightField {
+  const w = boundsMm.maxX - boundsMm.minX, h = boundsMm.maxY - boundsMm.minY;
+  const cellMm = Math.max(0.2, w / maxSide, h / maxSide);
+  return noiseField(Math.max(2, Math.ceil(w / cellMm)), Math.max(2, Math.ceil(h / cellMm)), 7, 40, { cellMm, x0: boundsMm.minX, y0: boundsMm.minY, groundMPerMm });
 }
 
 /**

@@ -22,7 +22,9 @@
  * hatch tint), `url=`, `bench=1`, `compare=1` (also draw the stream through the per-pass golden path into
  * a second canvas and publish the pixel difference; with `target=fbo` the arena path draws into an
  * offscreen framebuffer), `pick=1` (a click hit-tests the document and highlights the top hit through the
- * edit part, docs/map-rendering.md §5.5 "Document objects"). Not routed in production builds.
+ * edit part, docs/map-rendering.md §5.5 "Document objects"), `terrain=1` (H6: "Bench" runs the 3D
+ * scenarios instead — a seeded noise field over the document, the engine's drape and mesh; §5.6
+ * "Measurements (H6)"; `pitch=` default 60, `e=` default 2). Not routed in production builds.
  */
 
 import { useCallback, useEffect, useRef, useState } from "react";
@@ -31,7 +33,9 @@ import { Buffer } from "buffer";
 import { mapDocument, mapImport, render } from "@oxygen/shared";
 import { prepareStream } from "../../map-gl/prepare";
 import { MapGlRenderer, hexToRgb, type FrameStats, type View } from "../../map-gl/renderer";
-import { MapGlEngine, inlineTransport, workerTransport, type EditInfo, type EngineStats, type Transport } from "../../map-gl/engine";
+import { DRAPE_SETTLE_MS, MapGlEngine, inlineTransport, workerTransport, type EditInfo, type EngineStats, type TerrainStats, type Transport } from "../../map-gl/engine";
+import { distanceForPxPerUm, type TerrainCamera } from "../../map-gl/terrain/camera";
+import { noiseFieldOver } from "../../map-gl/terrain/synthetic";
 import type { DocumentHit, LoadSummary } from "../../map-gl/worker";
 import { fitView } from "../../map-gl/buckets";
 import { textAtlasPagesFor } from "../../map-gl/text-atlas";
@@ -140,6 +144,39 @@ interface BenchReport extends ScenarioReport {
   paper1x?: ScenarioReport;
 }
 
+/** One 3D scenario (`terrain=1`): mesh-only frames and the frames that re-rendered the drape, apart. */
+interface TerrainScenarioReport {
+  frames: number;
+  seconds: number;
+  fps: number;
+  frameMs: { avg: number; p95: number; max: number };
+  /** Mesh-only frames: `renderTerrain`'s JS time, the GPU timer where there is one. */
+  meshCpuMs: Summary;
+  meshGpuMs?: Summary;
+  maxMeshDraws: number;
+  maxTriangles: number;
+  /** Frames that rendered the drape: JS time, and wall time synced by a one-pixel read (GPU included). */
+  drapeRenders: number;
+  drapeCpuMs?: Summary;
+  drapeWallMs?: Summary;
+  maxDrapeDraws: number;
+  maxDrapeTiles: number;
+  layers: TerrainStats["layers"];
+  maxResidentBytes: number;
+  drapeBytes: number;
+  scratchBytes: number;
+}
+
+interface TerrainBenchReport {
+  field: { width: number; height: number; cellMm: number; fieldBytes: number; prepareMs?: TerrainStats["prepareMs"]; uploadMs?: number; setTerrainMs: number };
+  pitch: number;
+  exaggeration: number;
+  /** The fit view, orbiting 360°. */
+  orbit: TerrainScenarioReport;
+  /** 1× paper over the densest cell, orbiting 360°. */
+  close: TerrainScenarioReport;
+}
+
 interface CompareReport {
   /** Where the arena path drew: the canvas, or an offscreen framebuffer (`target=fbo`). */
   target: "canvas" | "fbo";
@@ -151,7 +188,7 @@ interface CompareReport {
 
 declare global {
   interface Window {
-    __mapGlDoc?: { load?: LoadReport; bench?: BenchReport; compare?: CompareReport; error?: string; documentBytes?: Uint8Array; pick?: PickReport };
+    __mapGlDoc?: { load?: LoadReport; bench?: BenchReport; terrainBench?: TerrainBenchReport; compare?: CompareReport; error?: string; documentBytes?: Uint8Array; pick?: PickReport };
     /** `pick=1`: the client point (CSS px) of every line object's first segment mid-point in the current view. */
     __mapGlDocLines?: () => { sourceIndex: number; code: string; x: number; y: number }[];
   }
@@ -274,6 +311,9 @@ export function MapGlDocPage() {
   const kindsParam = params.get("kinds");
   const lod = params.get("lod") !== "0";
   const pick = params.get("pick") === "1";
+  const terrain = params.get("terrain") === "1";
+  const terrainPitch = Number(params.get("pitch") ?? 60);
+  const terrainE = Number(params.get("e") ?? 2);
 
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const compareRef = useRef<HTMLCanvasElement>(null);
@@ -297,6 +337,7 @@ export function MapGlDocPage() {
   const [message, setMessage] = useState("");
   const [load, setLoad] = useState<LoadReport | null>(null);
   const [bench, setBench] = useState<BenchReport | null>(null);
+  const [terrainBench, setTerrainBench] = useState<TerrainBenchReport | null>(null);
   const [frame, setFrame] = useState<FrameStats | null>(null);
   const [engineStats, setEngineStats] = useState<EngineStats | null>(null);
   const [benchRunning, setBenchRunning] = useState(false);
@@ -635,10 +676,105 @@ export function MapGlDocPage() {
     [draw],
   );
 
+  /**
+   * A 3D scenario: 240 frames orbiting `base`'s centre at `terrainPitch`, the camera at `base`'s
+   * scale; every 60 frames the camera holds still past `DRAPE_SETTLE_MS` and the next frame (the
+   * same camera, as the settle timer's redraw) re-renders the drape.
+   */
+  const runTerrainScenario = useCallback(
+    async (base: View): Promise<TerrainScenarioReport> => {
+      const engine = engineRef.current!, renderer = rendererRef.current!, s = engine.summary!;
+      const frames = 240;
+      const meshCpu: number[] = [], meshGpu: number[] = [], drapeCpu: number[] = [], drapeWall: number[] = [], dt: number[] = [];
+      let maxMeshDraws = 0, maxTriangles = 0, maxDrapeDraws = 0, maxDrapeTiles = 0, maxResident = 0, renders = 0, skipGpu = 0;
+      const probe = new Uint8Array(4);
+      const opts = { colour: colourRef.current };
+      const camera = (u: number): TerrainCamera => {
+        const c: TerrainCamera = { target: { x: base.centreX - s.originX, y: base.centreY - s.originY, z: 0 }, distanceUm: 0, bearingDeg: 360 * u, pitchDeg: terrainPitch, widthPx: base.widthPx, heightPx: base.heightPx };
+        c.distanceUm = distanceForPxPerUm(c, base.pxPerUm);
+        return c;
+      };
+      const frame = (cam: TerrainCamera) => {
+        const t0 = performance.now();
+        const st = engine.renderTerrain({ camera: cam, exaggeration: terrainE }, opts);
+        if (st.drape) {
+          renderer.gl.readPixels(0, 0, 1, 1, renderer.gl.RGBA, renderer.gl.UNSIGNED_BYTE, probe);
+          drapeWall.push(performance.now() - t0);
+          drapeCpu.push(st.drape.cpuMs);
+          maxDrapeDraws = Math.max(maxDrapeDraws, st.drape.drawCalls);
+          maxDrapeTiles = Math.max(maxDrapeTiles, st.drape.tiles);
+          renders++;
+          skipGpu = 3; // the timer reads lag: the next results may be the drape's tiles
+        } else {
+          meshCpu.push(st.cpuMs);
+          if (st.mesh?.gpuMs !== undefined && skipGpu-- <= 0) meshGpu.push(st.mesh.gpuMs);
+        }
+        if (st.mesh) {
+          maxMeshDraws = Math.max(maxMeshDraws, st.mesh.draws);
+          maxTriangles = Math.max(maxTriangles, st.mesh.triangles);
+        }
+        maxResident = Math.max(maxResident, engine.stats().residentBytes);
+      };
+      const t0 = performance.now();
+      let last = t0;
+      for (let i = 0; i < frames; i++) {
+        await nextFrame();
+        const now = performance.now();
+        if (i > 0) dt.push(now - last);
+        last = now;
+        const u = i / frames;
+        if (i > 0 && i % 60 === 0) {
+          await new Promise((res) => setTimeout(res, DRAPE_SETTLE_MS + 50));
+          frame(camera((i - 1) / frames));
+          last = performance.now();
+        }
+        frame(camera(u));
+      }
+      const seconds = (performance.now() - t0) / 1000;
+      const t = engine.stats().terrain!;
+      return {
+        frames, seconds: r(seconds), fps: r(frames / seconds), frameMs: { ...summarise(dt) },
+        meshCpuMs: summarise(meshCpu), ...(meshGpu.length ? { meshGpuMs: summarise(meshGpu) } : {}), maxMeshDraws, maxTriangles,
+        drapeRenders: renders, ...(drapeCpu.length ? { drapeCpuMs: summarise(drapeCpu), drapeWallMs: summarise(drapeWall) } : {}), maxDrapeDraws, maxDrapeTiles,
+        layers: t.layers, maxResidentBytes: maxResident, drapeBytes: t.drapeBytes, scratchBytes: t.scratchBytes,
+      };
+    },
+    [terrainPitch, terrainE],
+  );
+
+  const runTerrainBench = useCallback(async () => {
+    const engine = engineRef.current, fit = fitRef.current, dense = denseRef.current, s = engine?.summary;
+    if (!engine || !fit || !dense || !s?.bounds) return;
+    setBenchRunning(true);
+    const b = s.bounds;
+    const field = noiseFieldOver({ minX: b.minX / 1000, minY: b.minY / 1000, maxX: b.maxX / 1000, maxY: b.maxY / 1000 });
+    const t0 = performance.now();
+    await engine.setTerrain(field);
+    const setTerrainMs = performance.now() - t0;
+    const t = engine.stats().terrain!;
+    const orbit = await runTerrainScenario(fit);
+    await engine.whenComplete();
+    const close = await runTerrainScenario(dense);
+    const report: TerrainBenchReport = {
+      field: { width: field.header.width, height: field.header.height, cellMm: field.header.cellMm, fieldBytes: t.fieldBytes, prepareMs: t.prepareMs, uploadMs: t.uploadMs, setTerrainMs: r(setTerrainMs) },
+      pitch: terrainPitch, exaggeration: terrainE, orbit, close,
+    };
+    await engine.setTerrain(null);
+    setTerrainBench(report);
+    window.__mapGlDoc = { ...(window.__mapGlDoc ?? {}), terrainBench: report };
+    viewRef.current = { ...fit };
+    requestDraw();
+    setBenchRunning(false);
+  }, [runTerrainScenario, requestDraw, terrainPitch, terrainE]);
+
   const runBench = useCallback(async () => {
     const fit = fitRef.current;
     const dense = denseRef.current;
     if (!fit || !dense || !viewRef.current) return;
+    if (terrain) {
+      await runTerrainBench();
+      return;
+    }
     setBenchRunning(true);
     // Zoom in to 4× and back while panning across a third of the document.
     const fitReport = await runScenario((u) => {
@@ -654,7 +790,7 @@ export function MapGlDocPage() {
     viewRef.current = { ...fit };
     requestDraw();
     setBenchRunning(false);
-  }, [runScenario, requestDraw]);
+  }, [runScenario, requestDraw, terrain, runTerrainBench]);
 
   // ?url= autoload
   useEffect(() => {
@@ -674,8 +810,11 @@ export function MapGlDocPage() {
   }, [url, loadDocument]);
 
   useEffect(() => {
-    if (status === "ready" && autoBench && !bench && !benchRunning) void runBench();
-  }, [status, autoBench, bench, benchRunning, runBench]);
+    if (!(status === "ready" && autoBench && !bench && !terrainBench && !benchRunning)) return;
+    // on a task of its own: the bench sets state as it goes
+    const id = setTimeout(() => void runBench(), 0);
+    return () => clearTimeout(id);
+  }, [status, autoBench, bench, terrainBench, benchRunning, runBench]);
 
   // Resize + gestures.
   useEffect(() => {
@@ -901,6 +1040,23 @@ export function MapGlDocPage() {
                   )}
                 </span>
               )}
+              {terrainBench && (
+                <span data-testid="map-gl-doc-terrain-bench-result">
+                  {(["orbit", "close"] as const).map((k) => {
+                    const t = terrainBench[k];
+                    return (
+                      <span key={k}>
+                        bench 3D {k}: {t.fps} fps · mesh cpu p50 {t.meshCpuMs.p50} p95 {t.meshCpuMs.p95}
+                        {t.meshGpuMs && <> · gpu p50 {t.meshGpuMs.p50} p95 {t.meshGpuMs.p95}</>} · draws max {t.maxMeshDraws} · {t.maxTriangles} triangles · drape ×{t.drapeRenders}
+                        {t.drapeWallMs && <> wall p50 {t.drapeWallMs.p50} max {t.drapeWallMs.max} ms ({t.maxDrapeDraws} draws, {t.maxDrapeTiles} tiles)</>} · layers{" "}
+                        {t.layers.map((l) => `${l.role} ${l.widthPx}×${l.heightPx} @${Math.round(l.ratio * 100)} %`).join(", ")} · drape {mb(t.drapeBytes)} · resident max {mb(t.maxResidentBytes)}
+                        <br />
+                      </span>
+                    );
+                  })}
+                  field {terrainBench.field.width}×{terrainBench.field.height} @{terrainBench.field.cellMm} mm · {mb(terrainBench.field.fieldBytes)} · prepare {JSON.stringify(terrainBench.field.prepareMs)} · upload {terrainBench.field.uploadMs?.toFixed(1)} ms
+                </span>
+              )}
             </div>
           </>
         )}
@@ -910,7 +1066,7 @@ export function MapGlDocPage() {
         className="flex-1 w-full touch-none bg-white"
         data-testid="map-gl-doc-canvas"
         data-ready={status === "ready" ? "true" : undefined}
-        data-bench={bench ? "done" : undefined}
+        data-bench={bench || terrainBench ? "done" : undefined}
       />
       {compare && <canvas ref={compareRef} className="hidden" data-testid="map-gl-doc-compare" />}
     </div>

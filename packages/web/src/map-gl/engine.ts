@@ -130,6 +130,8 @@ export interface TerrainStats {
   lastDrapeTiles: number;
   /** The worker's preparation of the field, ms. */
   prepareMs?: { fill: number; normals: number };
+  /** `setField` on this thread (the mesh's assembly and the two texture uploads), ms. */
+  uploadMs?: number;
 }
 
 /** What `renderTerrain` takes: the camera and how the mesh is drawn (the drape is the engine's). */
@@ -214,6 +216,7 @@ export class MapGlEngine {
   private terrainGeneration = 0;
   private terrainWaiter: { generation: number; resolve: (m: TerrainMesh | null) => void; reject: (e: Error) => void } | undefined;
   private terrainPrepareMs: TerrainStats["prepareMs"];
+  private terrainUploadMs: number | undefined;
   /** The drape layers last rendered (priority order) and the views they were selected for. */
   private drapeLayersDrawn: DrapeLayer[] = [];
   private drapeKey = "";
@@ -881,7 +884,9 @@ export class MapGlEngine {
     try {
       const origin = this.summary ? { x: this.summary.originX, y: this.summary.originY } : { x: 0, y: 0 };
       this.renderer.releaseDrapes();
+      const t0 = performance.now();
       this.mesh = this.renderer.terrain.setField(this.field, origin, { terrain: m.terrain, normals: m.normals });
+      this.terrainUploadMs = performance.now() - t0;
       this.terrainPrepareMs = m.ms;
       this.drapeLayersDrawn = [];
       this.drapeKey = "";
@@ -1028,6 +1033,7 @@ export class MapGlEngine {
       lastDrapeDraws: this.drapeSt.lastDraws,
       lastDrapeTiles: this.drapeSt.lastTiles,
       prepareMs: this.terrainPrepareMs,
+      uploadMs: this.terrainUploadMs,
     };
   }
 
