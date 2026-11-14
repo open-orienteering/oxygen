@@ -48,7 +48,12 @@ reference events — nothing to provision manually.
 Any argument that doesn't start with `-` is treated as a file filter and
 triggers the unsharded selective path, so `-g "name"` filters also run
 unsharded. A full run without `E2E_SHARD_INDEX` runs the preview stack
-after the shards; its result is in the summary and in the exit code.
+after the shards; its result is in the summary and in the exit code, and
+flags given to the full run (a `--grep`) reach the preview stack too, so
+one that matches no preview test fails it as it would fail a shard. For
+choosing the stack, a value after `-g` / `--grep` / `--project` (and
+Playwright's other value flags) is not a file: `pnpm test:e2e --preview
+-g "store"` runs the preview stack.
 
 ## CI
 

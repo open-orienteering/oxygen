@@ -114,8 +114,14 @@ const DB_PREFIX = process.env.E2E_DB_PREFIX ?? "oxygen_e2e";
 const PLAN_ONLY = process.argv.includes("--plan");
 const PREVIEW_ONLY = process.argv.includes("--preview");
 const args = process.argv.slice(2).filter((a) => a !== "--plan" && a !== "--preview");
-const fileArgs = args.filter((a) => !a.startsWith("-"));
-const hasFileFilter = fileArgs.length > 0;
+// Any argument not starting with `-` makes a run selective (unsharded) —
+// so `-g "name"` runs unsharded too (docs/e2e-sharding.md "Commands").
+const hasFileFilter = args.some((a) => !a.startsWith("-"));
+
+/** Playwright flags whose value is the next argument: that value is not a file. */
+const VALUE_FLAGS = new Set(["-g", "--grep", "--grep-invert", "--project", "-j", "--workers", "--retries", "--repeat-each", "--reporter", "--timeout", "--max-failures"]);
+/** The spec files named on the command line (flag values skipped). */
+const fileArgs = args.filter((a, i) => !a.startsWith("-") && !VALUE_FLAGS.has(args[i - 1]));
 
 // One Playwright process runs one stack: the dev server's specs or the
 // preview build's, never both.
@@ -128,7 +134,7 @@ if (PREVIEW_ONLY && previewFiles.length < fileArgs.length) {
   console.error("--preview runs the preview stack: its file arguments must be preview specs (*.preview.spec.ts).");
   process.exit(2);
 }
-const runPreview = PREVIEW_ONLY || (hasFileFilter && previewFiles.length === fileArgs.length);
+const runPreview = PREVIEW_ONLY || (fileArgs.length > 0 && previewFiles.length === fileArgs.length);
 
 function runPlaywright(extraArgs, env, onLine) {
   const child = spawn("pnpm", ["exec", "playwright", "test", ...extraArgs], {
@@ -154,7 +160,8 @@ function previewEnv() {
     E2E_DB_NAME: process.env.E2E_DB_NAME ?? DB_PREFIX,
   };
 }
-const PREVIEW_LABEL = `preview (api :${API_PORT_BASE}, web :${PREVIEW_PORT} vite preview, eventor :${EVENTOR_PORT_BASE}, db ${DB_PREFIX})`;
+const PREVIEW_LABEL = (({ E2E_API_PORT, E2E_PREVIEW_PORT, E2E_EVENTOR_PORT, E2E_DB_NAME }) =>
+  `preview (api :${E2E_API_PORT}, web :${E2E_PREVIEW_PORT} vite preview, eventor :${E2E_EVENTOR_PORT}, db ${E2E_DB_NAME})`)(previewEnv());
 
 if (runPreview) {
   // The preview stack only (`--preview`, or preview specs named): one

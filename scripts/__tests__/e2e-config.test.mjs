@@ -159,7 +159,7 @@ test("preview mode: the web server builds the production bundle and serves it wi
   const out = execFileSync(
     "pnpm",
     ["exec", "tsx", "-e", `import c from "./playwright.config.ts"; console.log(JSON.stringify(c.webServer.map((w) => w.command)));`],
-    { cwd: ROOT, env: { ...process.env, E2E_PREVIEW: "1" }, encoding: "utf8" },
+    { cwd: ROOT, env: { ...Object.fromEntries(Object.entries(process.env).filter(([k]) => !STRIPPED.includes(k))), E2E_PREVIEW: "1" }, encoding: "utf8" },
   );
   const web = JSON.parse(out.trim().split("\n").pop())[2];
   assert.match(web, /vite build/);

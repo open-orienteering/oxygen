@@ -17,7 +17,7 @@ const SPECS = ALL_SPECS.filter((f) => !isPreviewSpec(f));
 /** Run the sharded runner with `--plan` (prints the split, starts nothing). */
 function plan(env, extra = []) {
   const base = { ...process.env };
-  for (const k of ["E2E_SHARDS", "E2E_SHARD_TOTAL", "E2E_SHARD_INDEX"]) delete base[k];
+  for (const k of ["E2E_SHARDS", "E2E_SHARD_TOTAL", "E2E_SHARD_INDEX", "E2E_API_PORT", "E2E_EVENTOR_PORT", "E2E_PREVIEW_PORT", "E2E_DB_NAME", "E2E_DB_PREFIX"]) delete base[k];
   return spawnSync(process.execPath, [RUNNER, "--plan", ...extra], {
     cwd: ROOT,
     env: { ...base, ...env },
@@ -159,6 +159,20 @@ test("a selective run may not mix preview and dev-server specs; --preview with a
   assert.match(mixed.stderr, /preview/);
   const wrong = plan({}, ["--preview", "e2e/offline.spec.ts"]);
   assert.equal(wrong.status, 2);
+});
+
+test("--preview with a grep: the flag's value is not a file", () => {
+  for (const extra of [["--preview", "-g", "store, reload"], ["--preview", "--grep", "offline"], ["e2e/offline-print.preview.spec.ts", "-g", "offline"]]) {
+    const r = plan({}, extra);
+    assert.equal(r.status, 0, `${extra.join(" ")}: ${r.stderr}`);
+    assert.match(r.stdout, /^Running the preview stack/m);
+  }
+});
+
+test("the preview stack's line names the ports and database it is given", () => {
+  const r = plan({ E2E_API_PORT: "4105", E2E_PREVIEW_PORT: "4410", E2E_DB_NAME: "oxygen_e2e_x" }, ["--preview"]);
+  assert.equal(r.status, 0, r.stderr);
+  assert.match(r.stdout, /api :4105, web :4410 vite preview, eventor :4300, db oxygen_e2e_x/);
 });
 
 test("ci.yml: the e2e-preview job runs the preview stack and the E2E gate needs it", () => {
