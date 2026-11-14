@@ -204,15 +204,22 @@ function purpleIn(png: PNG, at?: [number, number], k = 4): number {
 
 test.describe("the map as the drape (map-rendering.md §5.6, H6)", () => {
   test("at pitch 0 over flat ground the 3D frame is the 2D frame (the hand-over)", async ({ page }) => {
-    await open(page, "doc=course&field=flat&pitch=0&bearing=25&e=1");
-    const c = await page.evaluate(() => (window as unknown as { __mapTerrainDoc: DocApi }).__mapTerrainDoc.compare2d());
+    const compare = () => page.evaluate(() => (window as unknown as { __mapTerrainDoc: DocApi }).__mapTerrainDoc.compare2d());
+    await open(page, "doc=course&field=flat&pitch=0&bearing=0&e=1");
+    let c = await compare();
     expect(c.pixels).toBe(800 * 600);
-    // the drape's texels on the pixels: the same picture, to rounding
-    expect(c.over).toBe(0);
-    expect(c.maxDiff).toBeLessThanOrEqual(2);
+    // North up, the drape's texels lie on the pixels: the same picture. On a GPU it is exact (max 1
+    // level); SwiftShader resolves the canvas's and a framebuffer's 4× MSAA a little differently, so
+    // antialiased edge pixels may differ by a few levels — half a texel off would cost 100+ on every edge.
+    expect(c.maxDiff).toBeLessThanOrEqual(10);
+    expect(c.over / c.pixels).toBeLessThan(0.005);
     const t = await terrainStats(page);
     expect(t.layers).toHaveLength(1);
     expect(t.layers[0].ratio).toBeCloseTo(1, 6);
+    // turned, the texel grid is turned against the pixels: a bilinear resample, edges only
+    await open(page, "doc=course&field=flat&pitch=0&bearing=25&e=1");
+    c = await compare();
+    expect(c.over / c.pixels).toBeLessThan(0.01);
   });
 
   test("tilted over a cone: the course and the map draped, the paper shaded by the slope", async ({ page }) => {
