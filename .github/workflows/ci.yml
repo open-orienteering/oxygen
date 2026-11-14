@@ -134,19 +134,71 @@ jobs:
             test-results
           if-no-files-found: ignore
 
+  # The preview stack (G29, docs/e2e-sharding.md "The preview stack"): the
+  # production bundle under `vite preview` on :4400 with its service worker,
+  # beside the shards, so the E2E wall time does not grow. The web server
+  # command builds the bundle (`vite build`, a few seconds); type checking
+  # is the unit job's.
+  e2e-preview:
+    name: E2E preview build
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v5
+      - uses: pnpm/action-setup@v6
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 20
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - name: Generate Prisma client
+        run: DATABASE_URL="$PRISMA_GENERATE_DATABASE_URL" pnpm db:generate
+      - name: Start test Postgres
+        run: docker compose -f docker-compose.test.yml up -d
+      - name: Playwright version
+        id: playwright
+        run: echo "version=$(pnpm exec playwright --version | awk '{print $2}')" >> "$GITHUB_OUTPUT"
+      - name: Cache Playwright browsers
+        id: playwright-cache
+        uses: actions/cache@v5
+        with:
+          path: ~/.cache/ms-playwright
+          key: playwright-${{ runner.os }}-${{ steps.playwright.outputs.version }}-chromium
+      - name: Install Playwright Chromium
+        if: steps.playwright-cache.outputs.cache-hit != 'true'
+        run: pnpm exec playwright install chromium --with-deps
+      - name: Install Playwright OS dependencies
+        if: steps.playwright-cache.outputs.cache-hit == 'true'
+        run: pnpm exec playwright install-deps chromium
+      - name: Wait for test Postgres
+        run: docker compose -f docker-compose.test.yml up -d --wait
+      - name: Run the preview stack
+        run: pnpm test:e2e --preview
+      - name: Upload Playwright artifacts
+        if: failure()
+        uses: actions/upload-artifact@v6
+        with:
+          name: playwright-${{ github.run_id }}-${{ github.run_attempt }}-preview
+          path: |
+            playwright-report
+            test-results
+          if-no-files-found: ignore
+
   # The one E2E check the merge flow reads ("E2E tests"): green only when
-  # every shard passed. Runs even when a shard failed, so the check reports
-  # failure instead of staying skipped.
+  # every shard and the preview stack passed. Runs even when one failed, so
+  # the check reports failure instead of staying skipped.
   e2e:
     name: E2E tests
     if: ${{ !cancelled() }}
-    needs: e2e-shard
+    needs: [e2e-shard, e2e-preview]
     runs-on: ubuntu-latest
     steps:
-      - name: Every shard passed
+      - name: Every shard and the preview stack passed
         run: |
           echo "e2e-shard: ${{ needs.e2e-shard.result }}"
+          echo "e2e-preview: ${{ needs.e2e-preview.result }}"
           test "${{ needs.e2e-shard.result }}" = success
+          test "${{ needs.e2e-preview.result }}" = success
 
   publish:
     name: Publish GHCR image
