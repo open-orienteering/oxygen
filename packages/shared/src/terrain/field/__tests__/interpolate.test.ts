@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { cellIndex, LABEL } from "../../graph/index.js";
 import { S, line, ring } from "../../graph/__tests__/synthetic.js";
-import { HEIGHT_NO_DATA, bandSources, buildHeightField, encodeHeightField, fieldCell, geodesicDistance, isConfident, sampleHeight, type HeightField } from "../index.js";
+import { HEIGHT_NO_DATA, bandSources, boxBlur, buildHeightField, fieldGrid, encodeHeightField, fieldCell, geodesicDistance, isConfident, sampleHeight, type HeightField } from "../index.js";
 import { graphOf, levelsAt, regionAt } from "./levels.js";
 
 /** Height in intervals at (x, y). */
@@ -161,5 +161,58 @@ describe("the field grid (map-terrain.md §4.6)", () => {
     expect(f.header.width * f.header.height).toBeLessThanOrEqual(cells / 2);
     const side = buildHeightField(g, coneLevels(g), { maxSide: 100 });
     expect(Math.max(side.header.width, side.header.height)).toBeLessThanOrEqual(100);
+  });
+
+  it("refuses a budget below one cell", () => {
+    expect(() => fieldGrid({ cellMm: 0.1, width: 10, height: 10 }, { maxCells: 0 })).toThrow(RangeError);
+    expect(() => fieldGrid({ cellMm: 0.1, width: 10, height: 10 }, { maxSide: 0.5 })).toThrow(RangeError);
+  });
+});
+
+describe("edge rules (map-terrain.md §4.2, 4.6–4.8)", () => {
+  it("seeds a leaky chain as a form line on both sides", () => {
+    // the open line's band runs around it (map-terrain.md §2.6): it says nothing about up or down
+    const g = graphOf([{ sym: S.contour, coords: ring(30, 20, 5) }, { sym: S.contour, coords: line(40, 30, 50, 30) }]);
+    const leakyChain = g.chains.findIndex((c) => !c.closed);
+    expect(g.leaky[leakyChain]).toBe(1);
+    const lv = levelsAt(g, [[30, 20, 1], [45, 25, 0]]);
+    lv.side[leakyChain] = 1; // even a decided side is ignored on a leaky chain
+    const s = bandSources(g, lv);
+    const near = (cells: Int32Array) => [...cells].filter((i) => {
+      const x = g.raster.x0 + ((i % g.raster.width) + 0.5) * g.raster.cellMm, y = g.raster.y0 + (Math.floor(i / g.raster.width) + 0.5) * g.raster.cellMm;
+      return x > 42 && x < 48 && Math.abs(y - 30) < 0.5;
+    }).length;
+    expect(near(s.form)).toBeGreaterThan(50);
+    expect(near(s.low) + near(s.up)).toBe(0);
+    expect(Math.abs(intervals(buildHeightField(g, lv), 45, 30.3) - 0.5)).toBeLessThan(0.15);
+  });
+
+  it("does not count undecided or conflicted chains as good for confidence", () => {
+    const g = graphOf(SLOPE, SLOPE_AREA);
+    const lv = slopeLevels(g);
+    const at = (y: number) => g.chains.findIndex((c) => Math.abs(c.pts[1] - y) < 1e-6);
+    lv.side[at(10)] = 0; // the floors still differ, so the chain still bounds the bands; it is just not good evidence
+    lv.conflict[at(40)] = 0.6;
+    const f = buildHeightField(g, lv);
+    const conf = (y: number) => isConfident(f, fieldCell(f, { x: 30, y }));
+    expect([conf(9), conf(25), conf(41)]).toEqual([false, true, false]);
+    expect(Math.abs(intervals(f, 30, 15) - 1.5)).toBeLessThan(0.1); // the heights do not change
+  });
+
+  it("clamps heights beyond ±512 intervals", () => {
+    const g = graphOf(SLOPE, SLOPE_AREA);
+    const f = buildHeightField(g, levelsAt(g, [[30, 9, 0], [30, 15, 600], [30, 25, 601], [30, 35, 602], [30, 41, 603]]));
+    expect(f.header.zMax).toBe(32767);
+    expect(f.z[fieldCell(f, { x: 30, y: 41 })]).toBe(32767);
+  });
+
+  it("blurs over data cells only and keeps no-data out", () => {
+    const N = NaN;
+    const src = Float32Array.from([1, 2, 3, 4, N, 6, 7, 8, 100]);
+    const noData = Uint8Array.from([0, 0, 0, 0, 0, 0, 0, 0, 1]);
+    const out = boxBlur(src, noData, 3, 3, 1);
+    expect(out[4]).toBeCloseTo((1 + 2 + 3 + 4 + 6 + 7 + 8) / 7, 6); // the hole filled from its data neighbours, not the no-data 100
+    expect(out[0]).toBeCloseTo((1 + 2 + 4) / 3, 6);
+    expect(Number.isNaN(out[8])).toBe(true);
   });
 });

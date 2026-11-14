@@ -39,6 +39,7 @@ export interface FieldGrid {
 /** §4.6: the smallest whole multiple of the graph cell at or above the target that keeps within the budget. */
 export function fieldGrid(r: Pick<RegionRaster, "cellMm" | "width" | "height">, opts: HeightFieldOptions = {}): FieldGrid {
   const target = opts.cellMm ?? FIELD_RULES.cellMm, maxCells = opts.maxCells ?? FIELD_RULES.maxCells, maxSide = opts.maxSide ?? FIELD_RULES.maxSide;
+  if (!(maxCells >= 1) || !(maxSide >= 1)) throw new RangeError(`fieldGrid: budget of ${maxCells} cells, ${maxSide} per side`);
   let k = Math.max(1, Math.ceil(target / r.cellMm - 1e-9));
   const size = (k: number) => [Math.ceil(r.width / k), Math.ceil(r.height / k)];
   for (;;) {
@@ -58,14 +59,14 @@ export function boxBlur(src: Float32Array, noData: Uint8Array, W: number, H: num
       const xi = x + rad, xo = x - rad - 1;
       if (xi < W) {
         const v = src[row + xi];
-        if (!Number.isNaN(v)) {
+        if (!noData[row + xi] && !Number.isNaN(v)) {
           s += v;
           n++;
         }
       }
       if (xo >= 0) {
         const v = src[row + xo];
-        if (!Number.isNaN(v)) {
+        if (!noData[row + xo] && !Number.isNaN(v)) {
           s -= v;
           n--;
         }

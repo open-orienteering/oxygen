@@ -23,7 +23,9 @@ function checkPlanes(f: HeightField): void {
 
 export function encodeHeightField(f: HeightField): Uint8Array {
   checkPlanes(f);
-  const json = new TextEncoder().encode(JSON.stringify(heightFieldHeaderSchema.parse(f.header)));
+  const parsed = heightFieldHeaderSchema.safeParse(f.header);
+  if (!parsed.success) throw new HeightFieldFormatError(`bad height field header: ${parsed.error.message}`);
+  const json = new TextEncoder().encode(JSON.stringify(parsed.data));
   const headerBytes = (json.byteLength + 3) & ~3;
   const zAt = PREAMBLE_BYTES + headerBytes;
   const out = new Uint8Array(zAt + f.z.length * 2 + f.confident.length);
@@ -45,6 +47,7 @@ export function decodeHeightField(bytes: Uint8Array): HeightField {
   const version = dv.getUint32(4, true);
   if (version !== HEIGHT_FIELD_CONTAINER_VERSION) throw new HeightFieldFormatError(`unsupported height field version ${version} (reader supports ${HEIGHT_FIELD_CONTAINER_VERSION})`);
   const headerBytes = dv.getUint32(8, true);
+  if (headerBytes & 3) throw new HeightFieldFormatError(`height field header length ${headerBytes} is not a multiple of 4`);
   if (PREAMBLE_BYTES + headerBytes > bytes.byteLength) throw new HeightFieldFormatError("height field length: truncated header");
   let jsonEnd = PREAMBLE_BYTES + headerBytes;
   while (jsonEnd > PREAMBLE_BYTES && bytes[jsonEnd - 1] === 0) jsonEnd--;

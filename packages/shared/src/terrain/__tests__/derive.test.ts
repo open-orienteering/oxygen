@@ -2,11 +2,13 @@ import { describe, expect, it } from "vitest";
 import type { MapDocument } from "../../map-document/index.js";
 import { S, line, mapped, ring, syntheticDoc } from "../graph/__tests__/synthetic.js";
 import { tick } from "../solve/__tests__/fixtures.js";
-import { HEIGHT_NO_DATA, decodeHeightField, encodeHeightField, sampleHeight } from "../field/index.js";
+import { HEIGHT_NO_DATA, TERRAIN_VERSION, decodeHeightField, encodeHeightField, sampleHeight } from "../field/index.js";
 import { contourIntervalM, deriveTerrain } from "../index.js";
 
 // A hill of four rings around (30, 30) with a slope tick on the outer ring pointing out (downhill).
 const HILL = mapped([...[5, 10, 15, 20].map((r) => ({ sym: S.contour, coords: ring(30, 30, r, 96) })), tick(50, 30, 1, 0)]);
+/** `deriveTerrain(HILL)` encoded, as of TERRAIN_VERSION 1. */
+const GOLDEN = { version: 1, bytes: 103054, fnv1a: "837fc7a6" };
 const withLibrary = (d: MapDocument, id: string): MapDocument => ({ ...d, header: { ...d.header, library: d.header.library && { ...d.header.library, id } } });
 
 describe("deriveTerrain (map-terrain.md §5.5)", () => {
@@ -52,5 +54,12 @@ describe("deriveTerrain (map-terrain.md §5.5)", () => {
 
   it("is deterministic to the byte", () => {
     expect(encodeHeightField(deriveTerrain(syntheticDoc(HILL))!.field)).toEqual(encodeHeightField(decodeHeightField(encodeHeightField(deriveTerrain(syntheticDoc(HILL))!.field))));
+  });
+
+  it("derives the same bytes as when TERRAIN_VERSION was last set (changed? bump TERRAIN_VERSION, map-terrain.md §5.5)", () => {
+    const bytes = encodeHeightField(deriveTerrain(syntheticDoc(HILL))!.field);
+    let h = 0x811c9dc5;
+    for (const b of bytes) h = Math.imul(h ^ b, 0x01000193) >>> 0;
+    expect({ version: TERRAIN_VERSION, bytes: bytes.byteLength, fnv1a: h.toString(16) }).toEqual(GOLDEN);
   });
 });

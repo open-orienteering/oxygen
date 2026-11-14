@@ -83,4 +83,21 @@ describe("height field codec (map-terrain.md §5.2)", () => {
     expect(() => encodeHeightField({ ...f, z: new Int16Array(3) })).toThrow(/cells/);
     expect(() => encodeHeightField({ ...f, confident: new Uint8Array(1) })).toThrow(/confidence/);
   });
+
+  it("throws its own error on a header the schema rejects, both ways, and on an unaligned header length", () => {
+    const f = field();
+    expect(() => encodeHeightField({ ...f, header: { ...f.header, intervalM: -1 } })).toThrow(/bad height field header/);
+    const json = new TextEncoder().encode(JSON.stringify({ ...f.header, version: 0 }));
+    const n = (json.byteLength + 3) & ~3;
+    const bad = new Uint8Array(12 + n + 15 * 2 + 2);
+    bad.set(new TextEncoder().encode("OXHF"));
+    const dv = new DataView(bad.buffer);
+    dv.setUint32(4, 1, true);
+    dv.setUint32(8, n, true);
+    bad.set(json, 12);
+    expect(() => decodeHeightField(bad)).toThrow(HeightFieldFormatError);
+    const odd = encodeHeightField(f).slice();
+    new DataView(odd.buffer).setUint32(8, new DataView(odd.buffer).getUint32(8, true) - 1, true);
+    expect(() => decodeHeightField(odd)).toThrow(/multiple of 4/);
+  });
 });
