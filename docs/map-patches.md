@@ -420,7 +420,9 @@ decimal string, carried only when its document is among the snapshot's
 documents, and inserted on the box after the documents (the `RESTRICT`
 FK). It is not in `SNAPSHOT_TABLES`: those rows are inserted before the
 `maps` part, and their BigInt columns cross the HTTP snapshot as JSON
-numbers. The box's route and `mapPatch.get` answer from its copy.
+numbers (the layout rows' tokens travel exactly beside them in
+`versions` since G18, `map-storage.md` §7.2). The box's route and
+`mapPatch.get` answer from its copy.
 
 `mapPatch.` mutations are cloud-owned (`sync/ownership.ts`): a venue box
 forwards them to the cloud, and answers the typed `PRECONDITION_FAILED`
