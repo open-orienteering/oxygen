@@ -441,6 +441,25 @@ plus the purple-role and materialisation checks:
   stack, `ocad-17`, `@2026.11.1`); `map-rematch-cli.test.ts` (a pre-G21
   document is stale); `scripts/__tests__/measure-import.test.mjs` (the
   `ski-o` line).
+- **Course purples placed by rule (C15)** — `import/__tests__/colour-align.test.ts`
+  "course purples placed by rule" on Nackareservatet 2023's colour table
+  (`club-colour-tables.ts`: names, CMYK, order and usage only): lower
+  purple inserted between "Brun gc-vägar nära hus" and "Brown 100% - Line
+  Feature" with only the stray text mask above it, the top "Violett"
+  reused as upper purple, the other five source purples displaced in
+  source order (`position` ×4, `duplicate` ×1) with their CMYK and no
+  palette ids or role, one row per purple id, no purple conflict, one
+  ink, the ski rows against the placed rows; a sprint and a forest table
+  whose purples are right keep `ocad-17`'s stack row for row; the ski
+  rows against an inserted lower purple with a displaced upper copy
+  between it and the top; an inserted pair takes the map's most used
+  purple ink; Vinterserien's shape re-expected (§9.2 step 5a);
+  `match-document.test.ts` (a displaced purple in `colourStack`, the
+  mapper's purple line still drawn in it); `report.test.ts`
+  (`purplesDisplaced` optional, roles checked);
+  `scripts/__tests__/measure-import.test.mjs` (the `purple` line with
+  `upper at … (source)`); `api/…/import-ocad.test.ts` unchanged on
+  `e2e/test.ocd`.
 - **`import/__tests__/fingerprint.test.ts`** — C9: cap / join classes (bevel = miter, square = flat), round vs flat same width and colour = 0.903 and above `auto`, each field once, `null` without a main stroke, 201.b vs a flat 0.35 stroke; `matcher.test.ts` — a source round no-tag 201 takes 201.b at 1.0, a flat one scores ≤ 0.91 and never auto-matches the tagged 201. Also — OCAD's railway (white
   dashes over a black band) and OCAD's power line (corner symbol) score
   `auto` against 509 / 510; `render/__tests__/library-fixtures.test.ts`
