@@ -19,7 +19,7 @@ import { Semaphore, intSetting } from "../map-render-limits.js";
 import { workerBootstrap } from "../worker-bootstrap.js";
 import type { CoursePagesOptions } from "./pdf-page.js";
 import type { CoursePagesResult } from "@oxygen/shared/print";
-import type { PrintWorkerMessage, PrintWorkerRequest } from "./print-worker.js";
+import type { PrintWorkerMessage, PrintWorkerRasterRequest, PrintWorkerRequest } from "./print-worker.js";
 
 export const PRINT_WORKER_TIMEOUT_MS = 10 * 60_000;
 const MAX_WORKERS = 4;
@@ -109,6 +109,7 @@ async function send(slot: Slot, opts: WorkerPrintOptions, withBytes: boolean): P
       if (m.id !== id) return;
       if (m.type === "page") opts.onPage?.({ index: m.index, label: m.label, warnings: m.warnings });
       else if (m.type === "done") finish(() => resolve({ bytes: m.bytes, pageCount: m.pageCount, warnings: m.warnings }));
+      else if (m.type !== "error") return;
       else if (m.code === "NeedDocument") finish(() => resolve("need-document"));
       else finish(() => reject(m.code === "CourseStackError" ? new course.CourseStackError(m.message) : new Error(m.message)));
     };
@@ -143,6 +144,47 @@ export async function renderCoursePagesInWorker(opts: WorkerPrintOptions): Promi
     if (out === "need-document") throw new Error("print worker did not accept the document");
     remember(slot, opts.document.hash);
     return out;
+  } finally {
+    slot.busy = false;
+  }
+}
+
+/**
+ * An SVG logo as `print.png` serves it (docs/course-print.md §8.5): the
+ * worker's `rasteriseSvgGraphic`, byte-equal to what a print embeds for
+ * that box, so resvg never runs on the event loop. Callers hold
+ * `printGate`; the request queues behind the worker's print in flight.
+ */
+export async function rasteriseSvgInWorker(svg: Uint8Array, width: number, height: number, timeoutMs = PRINT_WORKER_TIMEOUT_MS): Promise<Uint8Array> {
+  ensureSlots();
+  const slot = slots.find((s) => !s.busy) ?? slots[0];
+  slot.busy = true;
+  try {
+    const worker = slot.worker ?? startWorker(slot);
+    const id = nextId++;
+    const req: PrintWorkerRasterRequest = { type: "raster", id, svg: new Uint8Array(svg), width, height };
+    return await new Promise<Uint8Array>((resolve, reject) => {
+      const timer = setTimeout(() => {
+        finish(() => reject(new Error(`raster exceeded ${timeoutMs} ms`)));
+        void worker.terminate();
+      }, timeoutMs);
+      const onMessage = (m: PrintWorkerMessage) => {
+        if (m.id !== id) return;
+        if (m.type === "png") finish(() => resolve(m.bytes));
+        else if (m.type === "error") finish(() => reject(new Error(m.message)));
+      };
+      const finish = (fn: () => void) => {
+        clearTimeout(timer);
+        worker.off("message", onMessage);
+        slot.fail = null;
+        worker.unref();
+        fn();
+      };
+      slot.fail = (err) => finish(() => reject(err));
+      worker.on("message", onMessage);
+      worker.ref();
+      worker.postMessage(req, [req.svg.buffer as ArrayBuffer]);
+    });
   } finally {
     slot.busy = false;
   }
