@@ -67,12 +67,14 @@ export interface DescriptionSheetPage {
 
 /** A block that does not fit the usable page at this cell size. */
 export class DescriptionTooTallError extends Error {
-  constructor(
-    readonly label: string,
-    readonly cellSizeMm: number,
-  ) {
+  readonly label: string;
+  readonly cellSizeMm: number;
+
+  constructor(label: string, cellSizeMm: number) {
     super(`DESCRIPTION_TOO_TALL: the description of ${label} does not fit an A4 page at ${cellSizeMm} mm cells`);
     this.name = "DescriptionTooTallError";
+    this.label = label;
+    this.cellSizeMm = cellSizeMm;
   }
 }
 

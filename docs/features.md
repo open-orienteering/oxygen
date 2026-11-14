@@ -109,6 +109,10 @@ controls, or the complete event as vector PDF, printed straight from the
 event's map document: print-ready CMYK, the course drawn with the map's own
 symbols in IOF layer order, no conversion step. A map whose colours cannot
 take the course layer is refused with the reason rather than printed wrong.
+The PDF is put together in the browser whenever the device can — the
+same file, byte for byte in content, as the server would make — so a
+large export no longer waits on the server; a phone with little memory,
+or a very large export, is printed by the server as before.
 See
 [course-maps.md](course-maps.md) and [course-print.md](course-print.md).
 

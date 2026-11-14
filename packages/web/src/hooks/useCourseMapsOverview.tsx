@@ -10,7 +10,7 @@
 import { useCallback, useMemo, useState, type ReactNode } from "react";
 import { useTranslation } from "react-i18next";
 import { trpc } from "../lib/trpc";
-import { downloadSameOriginFile } from "../lib/download-api";
+import { downloadMapsPdf } from "../lib/download-api";
 import { freeTemplateName, type TemplatePick } from "../lib/template-picker";
 import type { CoursePrintStatus } from "../lib/structured-search/anchors/course-anchors";
 import { NewTemplateForm } from "../components/NewTemplateForm";
@@ -107,7 +107,8 @@ export function useCourseMapsOverview(nameId: string, canEdit: boolean) {
     return done === true;
   };
 
-  const download = (query: string) => downloadSameOriginFile(`/api/maps/${encodeURIComponent(nameId)}/maps.pdf${query}`);
+  // maps.pdf, composed on the device when it can, else by the server (course-print.md §8.6).
+  const download = (query: string) => downloadMapsPdf(nameId, query);
 
   /** One course's maps; with courses.edit a course without a sheet gets one on its key's auto template first (docs/course-layout.md §6, §7). */
   const exportCourse = (courseId: number) =>
