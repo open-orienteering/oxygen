@@ -32,16 +32,30 @@ export function isCloudUnreachable(err: unknown): boolean {
 }
 
 /**
+ * A request that got no response (no network, the box gone): no tRPC
+ * `data`, and a `TypeError` from `fetch` itself or as the client error's
+ * cause, or the browser knows it is offline.
+ */
+export function isNetworkFailure(err: unknown): boolean {
+  if (!err || typeof err !== "object") return false;
+  if ((err as { data?: unknown }).data) return false;
+  if (err instanceof TypeError || (err as { cause?: unknown }).cause instanceof TypeError) return true;
+  return typeof navigator !== "undefined" && navigator.onLine === false;
+}
+
+/**
  * An export's ensure step (`layout.autoSheets`, docs/course-layout.md §7)
- * is best effort when the venue's cloud is unreachable: the box then prints
- * the sheets of its checkout copy (row G18). Answers the step's result, or
- * null when it was skipped; any other failure still throws.
+ * is best effort when the venue's cloud is unreachable — the box then
+ * prints the sheets of its checkout copy (row G18) — and when the request
+ * got no response, so the export prints the device's stored job (G17,
+ * course-print.md §8.6 "Offline"). Answers the step's result, or null when
+ * it was skipped; any other failure still throws.
  */
 export async function ensureSheetsBestEffort<T>(ensure: () => Promise<T>): Promise<T | null> {
   try {
     return await ensure();
   } catch (err) {
-    if (isCloudUnreachable(err)) return null;
+    if (isCloudUnreachable(err) || isNetworkFailure(err)) return null;
     throw err;
   }
 }

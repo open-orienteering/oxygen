@@ -119,5 +119,18 @@
   "timeAgo_monthAgo": "1 månad sedan",
   "timeAgo_monthsAgo": "{{count}} månader sedan",
   "timeAgo_yearAgo": "1 år sedan",
-  "timeAgo_yearsAgo": "{{count}} år sedan"
+  "timeAgo_yearsAgo": "{{count}} år sedan",
+  "offlineMaps": "Kartor på den här enheten",
+  "offlineMapsDocumentStored": "Kartan finns på den här enheten",
+  "offlineMapsDocumentNone": "Kartan finns inte på den här enheten",
+  "offlineMapsPrintStored": "Utskrift sparad {{time}} ({{count}} exporter)",
+  "offlineMapsPrintPartial": "Utskrift delvis sparad {{time}}",
+  "offlineMapsPrintNone": "Utskrift inte sparad",
+  "offlineMapsPrintUnsupported": "Utskrift utan nät kräver en enhet som kan skapa PDF-filer",
+  "offlineMapsPersisted": "Lagring: behålls av webbläsaren",
+  "offlineMapsNotPersisted": "Lagring: kan rensas av webbläsaren",
+  "offlineMapsStore": "Gör kartorna tillgängliga offline",
+  "offlineMapsStoring": "Sparar kartor… {{done}}/{{total}}",
+  "offlineMapsPartialError": "Nätet försvann medan kartorna sparades; vissa exporter är inte sparade.",
+  "offlineMapsFailed": "Kartorna kunde inte sparas på den här enheten."
 }

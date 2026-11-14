@@ -39,15 +39,22 @@ export async function downloadSameOriginFile(url: string): Promise<void> {
   saveBlob(blob, filename);
 }
 
+/** What a download says beyond its file: composed from the device's stored job (G17), when it was stored (ISO). */
+export interface DownloadOutcome {
+  storedAt?: string;
+}
+
 /**
  * `maps.pdf<query>` of event `nameId`, composed on this device when it can
- * and by the server otherwise (docs/course-print.md §8.6, G16). The client
- * and, through it, the print worker load on first use.
+ * and by the server otherwise (docs/course-print.md §8.6, G16); with no
+ * network from the job stored on the device (§8.6 "Offline", G17). The
+ * client and, through it, the print worker load on first use.
  */
-export async function downloadMapsPdf(nameId: string, query: string): Promise<void> {
+export async function downloadMapsPdf(nameId: string, query: string): Promise<DownloadOutcome> {
   const { printMapsPdf } = await import("../print/client");
-  const { blob, filename } = await printMapsPdf(nameId, query);
+  const { blob, filename, storedAt } = await printMapsPdf(nameId, query);
   saveBlob(blob, filename);
+  return storedAt ? { storedAt } : {};
 }
 
 /** `/api/maps/<nameId>/maps.pdf[?query]`: the routes `downloadExport` composes on the device. */
@@ -60,7 +67,9 @@ export function mapsPdfTarget(url: string): [nameId: string, query: string] | nu
 }
 
 /** An export's download (Export ▾, `course-layout.md` §7): `maps.pdf` through `downloadMapsPdf`, any other file as it is. */
-export function downloadExport(url: string): Promise<void> {
+export async function downloadExport(url: string): Promise<DownloadOutcome> {
   const target = mapsPdfTarget(url);
-  return target ? downloadMapsPdf(...target) : downloadSameOriginFile(url);
+  if (target) return downloadMapsPdf(...target);
+  await downloadSameOriginFile(url);
+  return {};
 }

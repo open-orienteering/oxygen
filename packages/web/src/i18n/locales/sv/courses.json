@@ -202,5 +202,15 @@
   "noTemplate": "Ingen mall",
   "status_ready": "Klar",
   "status_issues": "Behöver åtgärdas",
-  "status_noMap": "Ingen karta"
+  "status_noMap": "Ingen karta",
+  "exportOffline": "Gör kartorna tillgängliga offline",
+  "exportOfflineStoring": "Sparar kartor… {{done}}/{{total}}",
+  "exportOfflineStored": "Kartorna finns på enheten: {{count}} exporter, {{time}}",
+  "exportOfflinePartial": "Nätet försvann medan kartorna sparades; vissa exporter är inte sparade.",
+  "exportOfflineUnsupported": "Den här enheten kan inte skapa PDF-filer och kan därför inte skriva ut offline.",
+  "exportOfflineNotOnline": "Kartorna kan bara sparas med nätanslutning.",
+  "exportPrintedStored": "Utskriven offline från kartorna sparade {{time}}",
+  "exportNotStored": "Den här exporten finns inte på enheten. Gör kartorna tillgängliga offline medan du är ansluten.",
+  "exportTooLarge": "Den här exporten är för stor för enheten offline. Exportera per bana.",
+  "exportOfflineFailed": "De sparade kartorna kunde inte skrivas ut på den här enheten."
 }

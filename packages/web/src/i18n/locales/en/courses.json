@@ -202,5 +202,15 @@
   "noTemplate": "No template",
   "status_ready": "Ready",
   "status_issues": "Needs attention",
-  "status_noMap": "No map"
+  "status_noMap": "No map",
+  "exportOffline": "Make maps available offline",
+  "exportOfflineStoring": "Storing maps… {{done}}/{{total}}",
+  "exportOfflineStored": "Maps stored on this device: {{count}} exports, {{time}}",
+  "exportOfflinePartial": "The network went while storing; some exports are not stored.",
+  "exportOfflineUnsupported": "This device cannot compose PDFs, so it cannot print offline.",
+  "exportOfflineNotOnline": "Storing the maps needs the network.",
+  "exportPrintedStored": "Printed offline from the maps stored on {{time}}",
+  "exportNotStored": "This export is not stored on this device. Make maps available offline while online.",
+  "exportTooLarge": "This export is too large for this device offline. Export per course.",
+  "exportOfflineFailed": "The stored maps could not be printed on this device."
 }
