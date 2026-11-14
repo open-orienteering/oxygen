@@ -35,7 +35,7 @@ export function useCourseMapsOverview(nameId: string, canEdit: boolean) {
   const { t, i18n } = useTranslation("courses");
   const utils = trpc.useUtils();
   /** What the last export or store said beyond its file (G17). */
-  const [notice, setNotice] = useState<string | null>(null);
+  const [notice, setNotice] = useState<{ text: string; storedAt?: string } | null>(null);
   const storeMapsOffline = useStoreMapsOffline(nameId, canEdit);
   const offlineProgress = useOfflinePrintProgress(nameId);
   const maps = trpc.courseMap.list.useQuery();
@@ -122,7 +122,7 @@ export function useCourseMapsOverview(nameId: string, canEdit: boolean) {
   // Offline from the job stored on the device (G17): the notice says when it was stored.
   const download = async (query: string) => {
     const out = await downloadMapsPdf(nameId, query);
-    if (out.storedAt) setNotice(t("exportPrintedStored", { time: formatStoredAt(out.storedAt, i18n.language) }));
+    if (out.storedAt) setNotice({ text: t("exportPrintedStored", { time: formatStoredAt(out.storedAt, i18n.language) }), storedAt: out.storedAt });
   };
 
   /**
@@ -152,7 +152,7 @@ export function useCourseMapsOverview(nameId: string, canEdit: boolean) {
       if (r.status === "unsupported") throw new Error(t("exportOfflineUnsupported"));
       if (r.status === "offline") throw new Error(t("exportOfflineNotOnline"));
       if (r.status === "partial") throw new Error(t("exportOfflinePartial"));
-      if (r.manifest) setNotice(t("exportOfflineStored", { count: r.manifest.queries.length, time: formatStoredAt(r.manifest.storedAt, i18n.language) }));
+      if (r.manifest) setNotice({ text: t("exportOfflineStored", { count: r.manifest.queries.length, time: formatStoredAt(r.manifest.storedAt, i18n.language) }) });
       await refresh();
     });
 
@@ -184,8 +184,8 @@ export function useCourseMapsOverview(nameId: string, canEdit: boolean) {
         </div>
       )}
       {notice && !error && (
-        <div role="status" data-testid="course-maps-notice" className="mb-4 flex items-start gap-2 rounded-lg border border-emerald-200 bg-emerald-50 px-4 py-3 text-sm text-emerald-800">
-          <span className="flex-1">{notice}</span>
+        <div role="status" data-testid="course-maps-notice" data-stored-at={notice.storedAt ?? ""} className="mb-4 flex items-start gap-2 rounded-lg border border-emerald-200 bg-emerald-50 px-4 py-3 text-sm text-emerald-800">
+          <span className="flex-1">{notice.text}</span>
           <button type="button" onClick={() => setNotice(null)} className="cursor-pointer text-emerald-500 hover:text-emerald-700">{t("dismiss")}</button>
         </div>
       )}

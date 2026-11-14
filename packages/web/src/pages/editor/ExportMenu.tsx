@@ -42,7 +42,7 @@ export function ExportMenu({ state, onError }: { state: ExportState; onError: (m
   const [busy, setBusy] = useState(false);
   const [descriptions, setDescriptions] = useState(false);
   /** What the last export or store said beyond its file (G17): printed from the stored job, or what was stored. */
-  const [notice, setNotice] = useState<string | null>(null);
+  const [notice, setNotice] = useState<{ text: string; storedAt?: string } | null>(null);
   const storeOffline = useStoreMapsOffline(state.nameId, state.canEdit);
   const progress = useOfflinePrintProgress(state.nameId);
   const box = useRef<HTMLDivElement>(null);
@@ -60,7 +60,7 @@ export function ExportMenu({ state, onError }: { state: ExportState; onError: (m
       if (r.status === "unsupported") onError(t("exportOfflineUnsupported"));
       else if (r.status === "offline") onError(t("exportOfflineNotOnline"));
       else if (r.status === "partial") onError(t("exportOfflinePartial"));
-      else if (r.manifest) setNotice(t("exportOfflineStored", { count: r.manifest.queries.length, time: formatStoredAt(r.manifest.storedAt, i18n.language) }));
+      else if (r.manifest) setNotice({ text: t("exportOfflineStored", { count: r.manifest.queries.length, time: formatStoredAt(r.manifest.storedAt, i18n.language) }) });
     } catch (err) {
       onError(message(err));
     } finally {
@@ -99,7 +99,7 @@ export function ExportMenu({ state, onError }: { state: ExportState; onError: (m
       }
       // maps.pdf composes on the device when it can (course-print.md §8.6), offline from its stored job; other files download as they are.
       const out = await downloadExport(e.url);
-      if (out.storedAt) setNotice(t("exportPrintedStored", { time: formatStoredAt(out.storedAt, i18n.language) }));
+      if (out.storedAt) setNotice({ text: t("exportPrintedStored", { time: formatStoredAt(out.storedAt, i18n.language) }), storedAt: out.storedAt });
     } catch (err) {
       onError(message(err));
     } finally {
@@ -146,9 +146,9 @@ export function ExportMenu({ state, onError }: { state: ExportState; onError: (m
         </div>
       )}
       {notice && (
-        <div role="status" data-testid="editor-export-notice"
+        <div role="status" data-testid="editor-export-notice" data-stored-at={notice.storedAt ?? ""}
           className="absolute right-0 z-30 mt-1 w-64 rounded-lg border border-emerald-200 bg-emerald-50 px-3 py-2 text-xs text-emerald-800 shadow">
-          <span>{notice}</span>
+          <span>{notice.text}</span>
           <button type="button" onClick={() => setNotice(null)} className="ml-2 cursor-pointer text-emerald-500 hover:text-emerald-700">{t("dismiss")}</button>
         </div>
       )}
