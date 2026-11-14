@@ -92,7 +92,8 @@ tries another. F16 asks for 120 px, which puts the grip 20 px from the handle.
 - With the fixes for causes 1 and 2 only: ×10 twice. The first run passed 100/100. The
   second passed 99/100, failing F16 on cause 3.
 - After all three fixes: the spec `--repeat-each=10` (100 runs), twice under the verify
-  lock, 0 failures both times; then the full sharded E2E once.
+  lock: 100/100 both times. Then the full sharded E2E (4 shards): 399 passed, 2 skipped,
+  0 failed.
 
 ## Not changed: the app's top bar
 
