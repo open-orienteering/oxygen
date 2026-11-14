@@ -18,7 +18,8 @@
  *   → patch    { generation, patch, detail }   ← patched { generation, patch state, touched buckets' parts, edit? } (§5.2 "Patch")
  *   → hit      { id, x, y, toleranceUm }   ← hit { id, hits } (§5.5 "Document objects")
  *   → edit     { generation, input }   ← edit { generation, part, hidden, selected, … } (§5.5 "Document objects")
- *   ← error    { message } (load failures, the queue stops; a course, patch, hit or edit request that throws)
+ *   → terrain  { generation, header, z }   ← terrain { generation, prepared mesh, normals } (§5.6 "Worker"; needs no load)
+ *   ← error    { message } (load failures, the queue stops; a course, patch, hit, edit or terrain request that throws)
  *
  * Range-table object ids are the effective document's `objectIndex`
  * (§5.2 "Object identity"); the course layer's start at
@@ -26,6 +27,8 @@
  */
 
 import { course, mapDocument, render } from "@oxygen/shared";
+import { heightNormals, type HeightField } from "@oxygen/shared/src/terrain/field/read.js";
+import { prepareTerrain, type PreparedTerrain } from "./terrain/mesh.js";
 import { MeshAtlasBuilder, type AtlasMesh, type MeshAtlas } from "./mesh-atlas.js";
 import { buildTextGlyphs, haloEm, textGlyphKey, type TextAtlasPage } from "./text-atlas.js";
 import { triangulateEvenOdd } from "./prepare.js";
@@ -202,7 +205,29 @@ export interface EditReply extends EditState {
   generation: number;
 }
 
-export type WorkerRequest = LoadRequest | PrepareRequest | CourseRequest | PatchRequest | HitRequest | EditRequest;
+/**
+ * A height field's CPU preparation for the terrain mesh (§5.6 "Worker"): the no-data fill, the
+ * chunks' ranges and the normals, off the main thread. Independent of the loaded document.
+ */
+export interface TerrainRequest {
+  type: "terrain";
+  /** Echoed in the reply; the engine keeps only the latest. */
+  generation: number;
+  header: HeightField["header"];
+  /** The field's int16 grid (a copy: the caller keeps the field for the pick). */
+  z: Int16Array;
+}
+
+export interface TerrainReply {
+  type: "terrain";
+  generation: number;
+  terrain: PreparedTerrain;
+  /** `heightNormals(field, 1)`. */
+  normals: Int8Array;
+  ms: { fill: number; normals: number };
+}
+
+export type WorkerRequest = LoadRequest | PrepareRequest | CourseRequest | PatchRequest | HitRequest | EditRequest | TerrainRequest;
 
 /** The dynamic bucket's id (never a cell or the large bucket). */
 export const COURSE_BUCKET = -2;
@@ -326,6 +351,8 @@ export interface ErrorReply {
   hit?: number;
   /** Set when an `edit` request threw: its generation. */
   edit?: number;
+  /** Set when a `terrain` request threw: its generation. */
+  terrain?: number;
 }
 
 /**
@@ -392,7 +419,7 @@ export interface CourseReply {
   page: { colourBase: number; frameRingUm: [number, number][] } | null;
 }
 
-export type WorkerReply = LoadedReply | PartReply | ErrorReply | CourseReply | PatchedReply | HitReply | EditReply;
+export type WorkerReply = LoadedReply | PartReply | ErrorReply | CourseReply | PatchedReply | HitReply | EditReply | TerrainReply;
 
 export type Post = (msg: WorkerReply, transfer: ArrayBuffer[]) => void;
 
@@ -588,6 +615,15 @@ export function createMapGlWorker(post: Post, schedule: (fn: () => void) => void
           post(hitReply(state, msg), []);
         } catch (e) {
           post({ type: "error", message: e instanceof Error ? e.message : String(e), hit: msg.id }, []);
+        }
+        return;
+      }
+      if (msg.type === "terrain") {
+        try {
+          const { reply, transfer } = terrainReply(msg);
+          post(reply, transfer);
+        } catch (e) {
+          post({ type: "error", message: e instanceof Error ? e.message : String(e), terrain: msg.generation }, []);
         }
         return;
       }
@@ -1255,6 +1291,22 @@ function drawnPasses(state: State, i: number): { stream: render.PassStream; pass
  * edit part's id `object`; strokes, glyphs and text as they are (halos left out), a fill or hatch
  * as a `HIGHLIGHT_OUTLINE_UM` outline of its area, a pattern-clipped glyph pass as its clip's.
  */
+/** The terrain request's work: `prepareTerrain` and `heightNormals` on the field (confidence not needed). */
+export function terrainReply(msg: TerrainRequest): { reply: TerrainReply; transfer: ArrayBuffer[] } {
+  const { width, height } = msg.header;
+  if (msg.z.length !== width * height) throw new Error(`terrain: ${msg.z.length} heights for ${width} × ${height} cells`);
+  const field: HeightField = { header: msg.header, z: msg.z, confident: new Uint8Array(0) };
+  const t0 = performance.now();
+  const terrain = prepareTerrain(field);
+  const t1 = performance.now();
+  const normals = heightNormals(field, 1);
+  const t2 = performance.now();
+  return {
+    reply: { type: "terrain", generation: msg.generation, terrain, normals, ms: { fill: t1 - t0, normals: t2 - t1 } },
+    transfer: [terrain.heights.buffer as ArrayBuffer, normals.buffer as ArrayBuffer],
+  };
+}
+
 export function highlightPasses(stream: render.PassStream, passes: readonly number[], textGlyph: Map<number, TextPassGlyphs>, object: number): { stream: render.PassStream; textGlyph: Map<number, TextPassGlyphs> } {
   const out: render.Pass[] = [];
   const glyphs = new Map<number, TextPassGlyphs>();

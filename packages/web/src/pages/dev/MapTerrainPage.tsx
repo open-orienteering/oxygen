@@ -123,7 +123,7 @@ export function MapTerrainPage() {
         heightPx: h,
       };
       camera.distanceUm = distanceForPxPerUm(camera, Math.min(w / wUm, h / hUm) * 0.9 * num(params.get("zoom"), 1));
-      const frame = { camera, exaggeration: e, texture: texture!, drapeMatrix, background: hexRgb(params.get("bg") ?? "ffffff"), level };
+      const frame = { camera, exaggeration: e, drapes: [{ texture: texture!, matrix: drapeMatrix }], background: hexRgb(params.get("bg") ?? "ffffff"), level };
       const target = { framebuffer: null, width: w, height: h };
       let stats: TerrainPageApi["stats"] = renderer.draw(frame, target);
       if (params.get("bench") === "1") {

@@ -95,9 +95,22 @@ export function meshHeights(field: HeightField): Int16Array {
   return out;
 }
 
-/** The mesh of a field in the model space relative to `originUm` (paper µm). */
-export function buildTerrainMesh(field: HeightField, originUm: { x: number; y: number } = { x: 0, y: 0 }): TerrainMesh {
-  const h = field.header, W = h.width, H = h.height;
+/**
+ * The mesh's CPU work, independent of the model origin (docs/map-rendering.md
+ * §5.6 "Worker"): the no-data fill, the height range and the chunks' ranges.
+ * The map worker runs it (with `heightNormals`) so `setField` does not.
+ */
+export interface PreparedTerrain {
+  heights: Int16Array;
+  zMin: number;
+  zMax: number;
+  chunksX: number;
+  chunksY: number;
+  chunks: TerrainChunk[];
+}
+
+export function prepareTerrain(field: HeightField): PreparedTerrain {
+  const W = field.header.width, H = field.header.height;
   const heights = meshHeights(field);
   let zMin = 32767, zMax = -32767;
   for (const v of heights) {
@@ -119,22 +132,33 @@ export function buildTerrainMesh(field: HeightField, originUm: { x: number; y: n
         }
       chunks.push({ ix0, iy0, zMin: lo, zMax: hi });
     }
+  return { heights, zMin, zMax, chunksX, chunksY, chunks };
+}
+
+/** The mesh from its prepared part in the model space relative to `originUm` (paper µm). */
+export function assembleTerrainMesh(header: HeightField["header"], p: PreparedTerrain, originUm: { x: number; y: number } = { x: 0, y: 0 }): TerrainMesh {
+  const h = header;
   return {
-    width: W,
-    height: H,
+    width: h.width,
+    height: h.height,
     x0Um: (h.x0 + h.cellMm / 2) * 1000 - originUm.x,
     y0Um: (h.y0 + h.cellMm / 2) * 1000 - originUm.y,
     cellUm: h.cellMm * 1000,
     originUm,
-    heights,
-    zMin,
-    zMax,
+    heights: p.heights,
+    zMin: p.zMin,
+    zMax: p.zMax,
     unitUm: zUnitUm(h, 1),
-    zBaseM: zMin * h.zScaleM + h.zOffsetM,
-    chunksX,
-    chunksY,
-    chunks,
+    zBaseM: p.zMin * h.zScaleM + h.zOffsetM,
+    chunksX: p.chunksX,
+    chunksY: p.chunksY,
+    chunks: p.chunks,
   };
+}
+
+/** The mesh of a field in the model space relative to `originUm` (paper µm). */
+export function buildTerrainMesh(field: HeightField, originUm: { x: number; y: number } = { x: 0, y: 0 }): TerrainMesh {
+  return assembleTerrainMesh(field.header, prepareTerrain(field), originUm);
 }
 
 /** A chunk's box in model µm at an exaggeration. */
