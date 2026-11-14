@@ -18,8 +18,12 @@ pnpm test:e2e
          ├── shard 1: playwright test <files>  → vite :4201 → api :4101 → db oxygen_e2e_1 (+ eventor stub :4301)
          ├── shard 2: playwright test <files>  → vite :4202 → api :4102 → db oxygen_e2e_2 (+ eventor stub :4302)
          ├── shard 3: playwright test <files>  → vite :4203 → api :4103 → db oxygen_e2e_3 (+ eventor stub :4303)
-         └── shard 4: playwright test <files>  → vite :4204 → api :4104 → db oxygen_e2e_4 (+ eventor stub :4304)
+         ├── shard 4: playwright test <files>  → vite :4204 → api :4104 → db oxygen_e2e_4 (+ eventor stub :4304)
+         └── then the preview stack: playwright test (E2E_PREVIEW=1) → vite preview :4400 → api :4100 → db oxygen_e2e (+ eventor stub :4300)
 ```
+
+The preview stack (below) runs the specs that need the production bundle
+and its service worker; it runs after the shards, not beside them.
 
 All shard databases live in the existing `postgres-oxygen-test` container
 on `:5433` (`pnpm test:db:up`). Each shard's `global-setup` creates its
@@ -37,11 +41,14 @@ reference events — nothing to provision manually.
 | `pnpm test:e2e:serial` | Escape hatch: plain `playwright test` — the same 4100/4200/4300 stack as a selective run |
 
 | `E2E_SHARD_TOTAL=6 E2E_SHARD_INDEX=3 pnpm test:e2e` | Only shard 3 of the same split into 6, on stack 3 (`:4103`/`:4203`/`:4303`, db `oxygen_e2e_3`). What each CI matrix job runs; replays one CI shard locally |
-| `pnpm test:e2e --plan` | Prints the split (honours `E2E_SHARDS`, `E2E_SHARD_TOTAL`) and exits; starts nothing |
+| `pnpm test:e2e --plan` | Prints the split (honours `E2E_SHARDS`, `E2E_SHARD_TOTAL`) and the preview stack's line, and exits; starts nothing |
+| `pnpm test:e2e --preview` | The preview stack only (below): `vite build` + `vite preview` on :4400, API :4100, eventor stub :4300, db `oxygen_e2e`, project `preview`. What CI's `e2e-preview` job runs |
+| `pnpm test:e2e e2e/offline-print.preview.spec.ts` | The same, for the named preview specs. A selective run that names preview and dev-server specs together exits 2: they need different stacks |
 
 Any argument that doesn't start with `-` is treated as a file filter and
 triggers the unsharded selective path, so `-g "name"` filters also run
-unsharded.
+unsharded. A full run without `E2E_SHARD_INDEX` runs the preview stack
+after the shards; its result is in the summary and in the exit code.
 
 ## CI
 
@@ -79,6 +86,13 @@ which would run the whole suite.
   `playwright-<run>-<attempt>-shard-<n>` (`playwright-report/shard-<n>`,
   `test-results/shard-<n>`). Each shard also writes its time and weight to
   the job's summary page.
+- **The preview stack** runs in a job of its own, `e2e-preview` ("E2E
+  preview build", `pnpm test:e2e --preview`), beside the shards, with
+  the same setup steps. The gate `e2e` needs it as well as the matrix
+  and passes only when both did. It adds no wall time: the bundle build
+  is a few seconds of its web server's start, and the smoke takes under
+  a minute. A matrix job (`E2E_SHARD_INDEX` set) never runs the preview
+  stack. Its artifact is `playwright-<run>-<attempt>-preview`.
 - **Docs-only changes** (`docs/**`, `**/*.md`) run no CI at all
   (`paths-ignore` on `pull_request` and `push`): such a PR shows no checks.
 
@@ -91,7 +105,7 @@ matrix will use.
 
 ### Env-var plumbing
 
-`playwright.config.ts` reads five variables (all optional). The port
+`playwright.config.ts` reads seven variables (all optional). The port
 defaults live in `e2e/helpers/ports.ts` — the sharded runner's 4100 / 4200
 / 4300 bases without a shard suffix, so a run that sets nothing is a
 selective stack of its own:
@@ -103,6 +117,8 @@ selective stack of its own:
 | `E2E_EVENTOR_PORT` | `4300` | Eventor stub port + the API's `EVENTOR_API_BASE_URL` |
 | `E2E_DB_NAME` | `oxygen_e2e` | Database on `:5433` (global-setup + reseed too) |
 | `E2E_SHARD` | unset | Artifact dirs: `test-results/shard-<n>`, `playwright-report/shard-<n>` |
+| `E2E_PREVIEW` | unset | `1`: the preview stack — project `preview` only, the web server `vite build` + `vite preview`, artifact dirs `test-results/preview`, `playwright-report/preview` |
+| `E2E_PREVIEW_PORT` | `4400` | The preview stack's web port + `baseURL` (with `E2E_PREVIEW=1`) |
 
 The Vite dev server accepts `WEB_PORT` (deliberately *not* `PORT`, which
 `pnpm dev` uses for the API) and `API_PROXY_PORT` for the `/trpc` + `/api`
@@ -111,13 +127,53 @@ proxy target — both passed by the Playwright webServer config.
 Specs never hardcode the API origin; they import `API_BASE` from
 `e2e/helpers/api-base.ts`, which derives it from `E2E_API_PORT`.
 
+### The preview stack
+
+The suite runs on the Vite dev server, which registers no service
+worker and serves the source, not the bundle. So the production chunks
+and the service worker's routes are not reached there.
+`E2E_PREVIEW=1` (G29) swaps the dev server for the production bundle
+and runs project `preview`.
+
+- **Command.** The web server is `vite build`, then `vite preview --port
+  <E2E_PREVIEW_PORT>`. The build is the bundle only; type checking is
+  `pnpm build`'s.
+- **Proxy and service worker.** `vite preview` takes `server.proxy`,
+  `host` and `strictPort` from `packages/web/vite.config.ts`, which has
+  no `preview` block. The port does not carry over, hence `--port`. So
+  `/trpc` and `/api` reach the E2E API, and the service worker
+  registers on `127.0.0.1`, a secure context.
+- **Ports and database.** API :4100, eventor stub :4300 and db
+  `oxygen_e2e` are the default stack's. The shards use 4101 and up, so
+  a full run can follow them with the preview stack. The web port is
+  4400, its own.
+- **Projects.** The `preview` project matches `PREVIEW_SPECS`
+  (`**/*.preview.spec.ts`) and only them. Without `E2E_PREVIEW` those
+  files are in no project, because `chromium` ignores them. The suffix
+  is the one rule the config shares with the runner (`isPreviewSpec` in
+  `scripts/e2e-weights.mjs`). Preview specs are in no shard and carry
+  no weight.
+- **Specs.** One today, `e2e/offline-print.preview.spec.ts`: offline
+  print from the production bundle (`course-print.md` §8.6 "Offline",
+  "The preview-build smoke"). A spec here waits for
+  `navigator.serviceWorker.ready` and reloads before it relies on a
+  route. With `registerType: "prompt"` the service worker claims no
+  client, so the first page is not controlled.
+- **Offline.** Playwright applies `context.setOffline` and the context's
+  extra headers to the service worker's own fetches, so offline holds
+  inside it too. The smoke checks this with a `.ttf` that is not cached.
+
+It is a smoke, not a second suite: a spec belongs here only when the
+production bundle or the service worker is what it tests.
+
 ### Projects
 
 Every event reads the vector pipeline since E3 (`docs/map-pipeline-switch.md`,
 history note), so there is one desktop run: project `mobile` runs
 `MOBILE_SPECS` (`field-mode.spec.ts` and `course-editor-phone.spec.ts`,
 the course editor's phone subset) on a Pixel 7 profile, and project
-`chromium` runs every other spec. The per-pipeline projects `map-legacy` /
+`chromium` runs every other spec but the preview stack's
+(`*.preview.spec.ts`, project `preview`, above). The per-pipeline projects `map-legacy` /
 `map-vector` of slices B–D are gone. Every file runs in exactly one
 project today. Until the course editor's spec was split for the CI shards
 (below), `course-editor.spec.ts` ran under both, the desktop describes
@@ -187,6 +243,7 @@ heartbeat it verifies is unchanged.
 |-------|-----|-----|--------------|----------|
 | Selective run / `test:e2e:serial` (no suffix) | 4100 | 4200 | 4300 | `oxygen_e2e` |
 | Shard `n` | 410`n` | 420`n` | 430`n` | `oxygen_e2e_<n>` |
+| Preview stack (`E2E_PREVIEW=1`) | 4100 | 4400 (`vite preview`) | 4300 | `oxygen_e2e` |
 
 These ports deliberately avoid the dev servers (3002/5173) and the Docker
 stack (3001/8080), so any E2E run can go while `pnpm dev` is up.
