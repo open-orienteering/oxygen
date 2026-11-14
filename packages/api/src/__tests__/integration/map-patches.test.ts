@@ -224,8 +224,9 @@ describe("a dormant patch (§3.2)", () => {
     try {
       expect(await caller.mapPatch.get()).toEqual({ version: "0", patch: null });
       expect((await caller.course.mapMetadata())?.patchVersion).toBe("0");
-      for (const write of [caller.mapPatch.applyChange({ documentHash: OTHER_HASH, put: [hide(5)] }), caller.mapPatch.setEnabled({ enabled: false })]) {
-        await expect(write).rejects.toMatchObject({ code: "PRECONDITION_FAILED", message: expect.stringMatching(/^PATCH_STALE/) });
+      // Each write is started inside the loop: a promise created early would reject unhandled.
+      for (const write of [() => caller.mapPatch.applyChange({ documentHash: OTHER_HASH, put: [hide(5)] }), () => caller.mapPatch.setEnabled({ enabled: false })]) {
+        await expect(write()).rejects.toMatchObject({ code: "PRECONDITION_FAILED", message: expect.stringMatching(/^PATCH_STALE/) });
       }
       const row = await ctx.db.mapPatch.findUniqueOrThrow({ where: { eventId: ctx.eventId } });
       expect(row.documentHash).toBe(documentHash);
