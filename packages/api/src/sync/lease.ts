@@ -135,7 +135,9 @@ export async function releaseLease(
  * `eventId` is rewritten to the importing node's local event id.
  * Readout-backup staging rows stay behind — they are server-local,
  * re-creatable, and not part of the results closure. The
- * event's map rows travel separately as `maps` (docs/map-storage.md §7.2).
+ * event's map rows travel separately as `maps` (docs/map-storage.md §7.2),
+ * the map patch with them (docs/map-patches.md §3.4: its FK needs the
+ * documents, and its token must not cross the JSON body as a number).
  * Course objects are cloud-owned like the sheets but travel here, since the
  * kiosk map at the venue draws them (docs/course-layer.md §8).
  */

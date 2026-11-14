@@ -7,6 +7,9 @@
  * 4 MiB slices through `lease.exportBlob` and checks size and SHA-256
  * before inserting: sources reach tens of MB, above Cloud Run's 32 MiB
  * response ceiling, so the bytes cannot ride inside the one JSON body.
+ *
+ * The event's map patch (docs/map-patches.md §3.4) rides here too, as
+ * `patch`: it is inserted after the documents its `RESTRICT` FK needs.
  */
 
 import { createHash } from "node:crypto";
@@ -75,9 +78,34 @@ export interface SnapshotMaps {
   skipped: number;
   /** The whole `club_symbol_decisions` table (club-level, map-symbols.md §8.5). */
   decisions?: SnapshotDecision[];
+  /**
+   * The event's `map_patches` row (docs/map-patches.md §3.4), when its
+   * document is among `documents`. Absent from an exporter that predates
+   * it, and for an event without a patch or with a dormant one.
+   */
+  patch?: SnapshotMapPatch;
+}
+
+/** A `map_patches` row on the wire: the token as a decimal string (an HLC exceeds 2^53; the snapshot is JSON). */
+export interface SnapshotMapPatch {
+  id: string;
+  documentHash: string;
+  enabled: boolean;
+  ops: unknown;
+  symbols: unknown;
+  version: string;
 }
 
 // ---- pure helpers -----------------------------------------------------------
+
+/** The patch row as the snapshot carries it: only when its document travels too (its FK target on the box). */
+export function snapshotPatchOf(
+  row: { id: string; documentHash: string; enabled: boolean; ops: unknown; symbols: unknown; version: bigint } | null,
+  documentHashes: readonly string[],
+): SnapshotMapPatch | null {
+  if (!row || !documentHashes.includes(row.documentHash)) return null;
+  return { id: row.id, documentHash: row.documentHash, enabled: row.enabled, ops: row.ops, symbols: row.symbols, version: row.version.toString() };
+}
 
 /** Sorted, distinct hashes the event's pins reference, each document's own source included. */
 export function pinnedHashes(
@@ -184,7 +212,12 @@ export async function exportSnapshotMaps(db: Db, eventId: bigint): Promise<Snaps
     select: { fingerprint: true, libraryVersion: true, canonicalId: true, decidedAt: true },
     orderBy: [{ fingerprint: "asc" }, { libraryVersion: "asc" }],
   });
-  return { files, sources, documents, skipped, decisions };
+  const patchRow = await db.mapPatch.findUnique({
+    where: { eventId },
+    select: { id: true, documentHash: true, enabled: true, ops: true, symbols: true, version: true },
+  });
+  const patch = snapshotPatchOf(patchRow, documents.map((d) => d.hash));
+  return { files, sources, documents, skipped, decisions, ...(patch ? { patch } : {}) };
 }
 
 /** Whether the event's `map_files` reference the blob — the `lease.exportBlob` gate. */
@@ -247,7 +280,7 @@ export async function fetchSnapshotBlobs(db: Db, maps: SnapshotMaps, fetchSlice:
 }
 
 /**
- * Insert the blobs and the event's `map_files` rows inside the snapshot
+ * Insert the blobs, the event's `map_files` rows and its patch inside the snapshot
  * transaction, after the event row. `club_map_version_id` stays NULL: the
  * venue has no club library. Every row's source must be on this node
  * (fetched above or held already).
@@ -257,7 +290,7 @@ export async function importSnapshotMaps(
   eventId: bigint,
   maps: SnapshotMaps,
   blobs: SnapshotBlobs,
-): Promise<{ files: number; sources: number; documents: number; decisions: number }> {
+): Promise<{ files: number; sources: number; documents: number; decisions: number; patches: number }> {
   const newSources = maps.sources.filter((s) => blobs.sources.has(s.fileHash));
   if (newSources.length > 0) {
     await tx.mapSource.createMany({
@@ -301,7 +334,28 @@ export async function importSnapshotMaps(
     await tx.mapFile.create({ data: row as never });
   }
   for (const d of maps.decisions ?? []) await mergeDecision(tx, d);
-  return { files: maps.files.length, sources: maps.sources.length, documents: maps.documents.length, decisions: maps.decisions?.length ?? 0 };
+  // The patch after its document (RESTRICT FK); verbatim, token included.
+  if (maps.patch) {
+    const p = maps.patch;
+    await tx.mapPatch.create({
+      data: {
+        id: p.id,
+        eventId,
+        documentHash: p.documentHash,
+        enabled: p.enabled,
+        ops: p.ops as Prisma.InputJsonValue,
+        symbols: p.symbols as Prisma.InputJsonValue,
+        version: BigInt(p.version),
+      },
+    });
+  }
+  return {
+    files: maps.files.length,
+    sources: maps.sources.length,
+    documents: maps.documents.length,
+    decisions: maps.decisions?.length ?? 0,
+    patches: maps.patch ? 1 : 0,
+  };
 }
 
 /**

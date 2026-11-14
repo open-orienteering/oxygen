@@ -1,7 +1,7 @@
 # GPS tracks
 
 Status: **draft** — chapter of the vector map pipeline specification,
-started by sub-slice G22. GPS tracks are new scope for slice G (user,
+started by sub-slice G22; §4 by G23. GPS tracks are new scope for slice G (user,
 2026-11-13, `docs/research/vector-map-pipeline/SLICES.md` "Slice G",
 rows G20–G28): the research decides none of it beyond 04 §7
 ("Georeferenced inputs" become paper-space overlays) and 06 §3.2 (a
@@ -24,7 +24,9 @@ Pending (G24). Tracks are per event, in their own cloud-owned table
 `map_gps_tracks`, one row per track segment, stored in WGS 84 so that a
 re-match or a new map edition does not move them (slice G "Decided in
 this split", answer 10). The row's `points` are the `TrackPoints`
-columns of §2.1 verbatim, and its trim is a `TrackRange` (§3.5).
+columns of §2.1 verbatim, and its trim is a `TrackRange` (§3.5). An
+average (§4) also keeps its `singlePass` ranges (`single_pass`, user
+2026-11-13).
 
 ## 2. GPX
 
@@ -236,10 +238,158 @@ the name kept:
 
 ## 4. Averaging passes
 
-Pending (G23). The method is fixed in `SLICES.md` slice G "Decided in
-this split" ("Averaging"); it works in ground metres (§3.1) on tracks
-projected by §3.2, resamples with `resampleTrack`, and stores its
-result through `unprojectTrack`.
+A mapper skis a track several times; `averageTracks(passes, opts)`
+turns the passes into one line. The method is fixed in `SLICES.md`
+slice G "Decided in this split" ("Averaging"), with four refinements
+the user decided on 2026-11-13 (`decisions/slice-g.md`, G23): a
+canonical direction (§4.2), orientation by matched samples (§4.3), the
+first run within reach and the end rule in matching (§4.5). It is pure
+and uses only + − × ÷ and √ in a fixed order, as §3.3–3.4 do, so the
+same projected passes give the same bytes on every engine; inputs are
+never mutated.
+
+### 4.1 Input and result
+
+```ts
+interface AverageOptions {
+  stepM?: number;        // resampling step, ground metres; default 2
+  maxDistanceM?: number; // the match gate, ground metres; default 15
+  iterations?: number;   // integer ≥ 1; default 2
+}
+interface AverageResult {
+  line: ProjectedTrack;     // the moved samples of the last iteration, about stepM apart
+  singlePass: TrackRange[]; // point indices of `line`, [start, end), ascending,
+                            // disjoint, never touching: samples fewer than two passes voted on
+  reference: number;        // index in `passes` of the pass chosen as the reference
+  reversed: boolean[];      // per pass: used the other way round from how it was given
+                            // (§4.2 step 0 and §4.3 together)
+}
+```
+
+`gpsTrack` exports `averageTracks`, these two types and the defaults
+`DEFAULT_MATCH_DISTANCE_M` (15) and `DEFAULT_ITERATIONS` (2); the step
+default is §3.3's `DEFAULT_STEP_M`.
+
+- **Projected in, projected out.** The passes are tracks projected by
+  §3.2 onto one map; the caller stores the result with `unprojectTrack`
+  (§3.2) — WGS 84, untimed, index-aligned — so `singlePass` indexes the
+  stored track's points unchanged, on any map. The ranges are kept with
+  the stored average (G24's `single_pass`, user 2026-11-13); trimming
+  the average shifts them (G27).
+- **Ground metres** (§3.1): gate and step are converted to paper mm by
+  `metresPerMm`, which all passes must share.
+- **The result spans the reference only.** Stretches of other passes
+  beyond its ends are not in it.
+- **`RangeError`**, as in §3.3: fewer than two passes; a pass with fewer
+  than two distinct points; passes with different `metresPerMm`; a step
+  or gate that is not positive and finite; `iterations` not an integer
+  ≥ 1.
+
+### 4.2 Canonical direction and the reference
+
+0. **Canonical direction** (user 2026-11-13). Consecutive duplicate
+   points are dropped (as `resampleTrack` does), and each pass is turned
+   to whichever of its point list and its reverse is lexicographically
+   smaller (x₀, y₀, x₁, y₁, …): the first point is the smaller of the two
+   ends by x, then y; equal ends are decided further in. Reversing any
+   pass or reordering the passes therefore gives bit-identical output.
+   The result's direction is arbitrary but fixed; a stored average is
+   untimed, so its direction carries nothing.
+1. **The reference** is the pass of median length — the sum of the
+   segment lengths in canonical order. The median length is the one at
+   index `floor(n / 2)` of the lengths sorted ascending: the **upper
+   median**, so the longer of two. Of the passes of exactly that length,
+   the reference is the one with the lexicographically smallest
+   canonical point list (a shorter list first on a common prefix). The
+   result spans the reference, so with two passes it spans the one that
+   covers more, and a pass covering half is reported (§4.6) instead of
+   cutting the result to its half.
+
+### 4.3 Orientation of the other passes
+
+2. **By evidence** (user 2026-11-13; the fixed rule alone cannot orient a
+   closed loop, whose ends coincide). Each other pass is matched against
+   the resampled reference (§4.4–4.5) both ways round, and keeps the
+   direction in which more samples get its vote. On a tie it is reversed
+   if that brings its ends strictly nearer the reference's — the fixed
+   rule: `|p₀ − r₀| + |pₙ − rₙ|` against `|pₙ − r₀| + |p₀ − rₙ|` — and
+   otherwise kept. Orientation is decided once, in the first iteration.
+
+A closed loop whose passes start at different places on it is not
+aligned by this (each pass is matched from its own start); split such a
+pass at the reference's start first (§3.5).
+
+### 4.4 Resampling and normals
+
+3. The reference is resampled with `resampleTrack(reference, stepM)`
+   (§3.3). The tangent at an inner sample is the central difference
+   `p[i+1] − p[i−1]`, one-sided at the two ends; a zero central
+   difference (an exact hairpin) falls back to the forward, then the
+   backward difference. It is normalised with √, and the normal is
+   `(−tᵧ, tₓ)`, left of travel with y up. A corner sample therefore gets
+   the bisector.
+
+### 4.5 Matching
+
+4. Each pass is matched as a polyline (segments, not only vertices),
+   unresampled, walking forward from its first point. For each sample
+   `p` in order:
+   - **Monotone.** Candidates are the points of the pass no earlier
+     along it than the previous match of that pass. The first sample
+     starts at the pass's first point; a sample without a match leaves
+     the previous match where it was.
+   - **The first run within reach** (user 2026-11-13). Scanning forward,
+     the candidates are the first run of consecutive segments that each
+     come within `maxDistanceM` (Euclidean) of `p`; the match `q` is the
+     nearest point in that run, ties to the earliest. A later run — the
+     pass's second visit to a crossing, or the end of a closed loop — is
+     not considered, so a loop that passes itself does not cross-match.
+   - **The end rule** (user 2026-11-13). When `q` is the pass's first or
+     last point, it counts only if `|(q − p) · t| ≤ stepM`: a pass that
+     stops does not keep voting with its end point for 15 m past it.
+   - **The vote** is the signed offset along the normal,
+     `(q − p) · n`, so |vote| ≤ 15 m; the match becomes the previous
+     match.
+
+The reference pass is not matched in the first iteration: it votes 0 at
+every sample.
+
+### 4.6 Votes, ranges and the second iteration
+
+5. A sample moves along its normal by the **median of its votes** —
+   the votes sorted, the middle one, or the mean of the two middle ones
+   for an even count (so the mean for two passes). A sample with **fewer
+   than two votes is single-pass**; one with none stays where it is. In
+   the first iteration the reference's own vote, 0, counts, so a sample
+   only the reference votes on stays and is reported, as the fixed
+   method says; in later iterations a lone vote moves the sample onto
+   the one pass that covers it.
+6. **The second iteration** takes the first one's moved samples as the
+   reference: resampled again (§4.4), new normals, every pass (the
+   first reference included) matched afresh from its start in the
+   orientation of §4.3; the reference line itself does not vote. The
+   reference choice and the orientation are not re-derived.
+   `iterations` repeats this; the default 2 is the fixed method's
+   "repeat once". The result is the last iteration's moved samples (not
+   resampled again), and `singlePass` is the maximal runs of its
+   single-pass samples.
+
+**Where a pass leaves the others** (a detour, a wrong turn) at an
+angle, its departing stretch stays within 15 m of the line for up to
+15 m and votes there by its nearest points: with two passes the line
+bulges toward it over that stretch, and the single-pass range starts
+where the pass is out of reach. With three or more passes the median
+rejects it. Moving along a sample's normal by a normal offset lands on
+a pass exactly only where the two are parallel; on a slope it overshoots
+by up to a few decimetres, which the second iteration mostly removes.
+
+Cost is samples × pass points in the worst case (a pass that is absent
+over a long stretch is scanned to its end at every sample there); there
+is no spatial index. Measured with three passes at a fix per metre, one
+covering only the second half: 10 km well under a second, 25 km 0.9 s,
+50 km 3.3 s, 100 km 16 s. Ski-O passes are a few km, but the call is
+synchronous and G24 allows 200 000 points a track, so G27 runs it off
+the main thread or caps the input.
 
 ## 5. Reference layer and editing
 
@@ -256,15 +406,15 @@ Pending (G26, G28).
 | `gps-track/__tests__/gpx.test.ts` | GPX 1.1 (Garmin-style, extensions, metadata, two segments) and 1.0 (root name, routes, two tracks); one track per segment in file order with `trackIndex` / `segmentIndex`; four tracks from two `trk` × two `trkseg`; a prefixed namespace, BOM and CDATA name; routes untimed; missing time and elevation per point and per column; zoneless and offset times; invalid points and short segments skipped and counted; `malformed` (truncated, mismatched, empty, not XML), `not-gpx` (KML), `no-points` (waypoints only); a timed route dropped to untimed; the first `time` / `ele` winning over a private element; decimal-only coordinates; impossible dates, hour 24, second 60 and offsets rejected; quantisation; 200 000 points |
 | `gps-track/__tests__/project.test.ts` | The frame read from `e2e/test.xmap` by the importer; its reference point (a hard-coded lat / lng on the zone's central meridian); paper → WGS 84 → paper within 0.002 mm on it and on an OCAD-unit SWEREF99 TM frame; WGS 84 → paper → WGS 84 within 1e-7°; outside points kept and counted; `correctionDeg`; `not-georeferenced` (no CRS, no origin, unknown code) and `not-projectable` with its index and cause, both ways |
 | `gps-track/__tests__/geometry.test.ts` | Resample spacing, exact ends, duplicates, degenerate lines, step and window `RangeError`s; smoothing: straight line fixed, seeded noisy line reduced, corner cut < 1.5 m with the legs unmoved, ends bit-identical, determinism (same bytes), no mutation, the 1-2-3-2-1 kernel and the shrunk window; simplify: tolerance bound at 0.05 / 0.1 / 0.5 mm, subset in order, ends, collinear, tolerance 0, a closed loop, 200 000 points, determinism |
+| `gps-track/__tests__/average.test.ts` | Every `RangeError`; no mutation, same bytes twice; the upper-median reference for 2, 3 and 4 passes and the tie among passes of the median length; `unitNormals` (left of travel, one-sided ends, corner bisector, hairpin fallback); two parallel passes → the centre line (straight to 1e-9 m, concentric arcs to 2 cm); an outlier within the gate held to the band of the good passes, also as the reference, and one beyond it without a vote; all 6 orders × 8 reversal patterns of three noisy passes → the same bytes, ranges and reference; the ends rule on a tie (reversed and kept, through `reversed`) and evidence over it; `reversed` following each input reversal; a pass covering half (either way round) → one range ending within a step of where it begins; a detour → its range, re-matched after; a loop crossing itself, with its second visit nearer, does not cross-match; a closed loop skied the other way round is orientated by its matches; `iterations` 1, 2 and 3 differ; ranges disjoint; the result unprojects index-aligned through the `e2e/test.xmap` frame; three 10 km passes at a fix per metre |
 | `gps-track/__tests__/track.test.ts` | Quantisation; trim `[start, end)` over every column, null columns, no mutation, every `RangeError`; split sharing its point, split-split cutting out a stretch, every `RangeError` |
 
 No integration or E2E test: the module has no API, table or UI until
-G24 / G25 (AGENTS.md §4, "New algorithm / computation").
+G24 / G25 / G27 (AGENTS.md §4, "New algorithm / computation").
 
 ## 8. Pending in this chapter
 
 - §1 storage, the table and the API (G24).
-- §4 averaging (G23).
 - §5 the reference layer in Map mode and trim / split / average there
   (G25, G27).
 - §6 conversion into `add` ops and snapping ends onto the track network

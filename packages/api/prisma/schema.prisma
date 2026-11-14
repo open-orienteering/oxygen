@@ -209,6 +209,7 @@ model Event {
   mapTemplates       MapTemplate[]
   courseMaps         CourseMap[]
   courseObjects      CourseObject[]
+  mapPatch           MapPatch?
   coursePresence     CoursePresence[]
   graphics           Graphic[]
   tracks             Track[]
@@ -1305,9 +1306,37 @@ model MapDocument {
   mapFiles MapFile[]
   versions ClubMapVersion[]
   jobs     MapImportJob[]
+  patches  MapPatch[]
 
   @@index([sourceHash])
   @@map("map_documents")
+  @@schema("oxygen")
+}
+
+/// An event's corrections to its pinned map document (docs/map-patches.md
+/// §3; slice G answer 1): keyed-state ops merged on the server per op id,
+/// one row per event, cloud-owned, not journaled. Travels in the checkout
+/// snapshot's `maps` part and the per-event dump; a GC reference.
+model MapPatch {
+  id           String   @id @default(dbgenerated("uuidv7()")) @db.Uuid
+  eventId      BigInt   @unique @map("event_id")
+  /// The document the ops are keyed onto; a row keyed to another document than the pin is dormant (§3.2).
+  documentHash String   @map("document_hash")
+  enabled      Boolean  @default(true)
+  /// Record keyed by op id (docs/map-patches.md §1.2).
+  ops          Json     @default("{}")
+  /// Record keyed by the library entry id a symbol was materialised from (§1.3).
+  symbols      Json     @default("{}")
+  /// Token (docs/course-layer.md §7): an HLC minted on every write that changes the row.
+  version      BigInt   @default(0)
+  createdAt    DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt    DateTime @default(now()) @updatedAt @map("updated_at") @db.Timestamptz(6)
+
+  event    Event       @relation(fields: [eventId], references: [id], onDelete: Cascade)
+  document MapDocument @relation(fields: [documentHash], references: [hash], onDelete: Restrict)
+
+  @@index([documentHash])
+  @@map("map_patches")
   @@schema("oxygen")
 }
 

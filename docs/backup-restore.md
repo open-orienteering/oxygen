@@ -80,8 +80,9 @@ NEW_ID=$(psql "$DATABASE_URL" -tAc "SELECT id FROM oxygen.events WHERE name_id =
 #    CSV files.
 psql "$DATABASE_URL" -v event_id=$NEW_ID -f <repo>/packages/api/scripts/restore-map-blobs.sql
 
-# 6. Every other section: rewrite the dump's event_id references from the
-#    original id to NEW_ID, then re-import it (there is no committed
+# 6. Every other section (map_patches included, after step 5: its
+#    document must exist): rewrite the dump's event_id references from
+#    the original id to NEW_ID, then re-import it (there is no committed
 #    helper for these yet):
 psql "$DATABASE_URL" -c "\copy oxygen.<table> FROM '<table>.csv' WITH (FORMAT csv, HEADER true)"
 ```

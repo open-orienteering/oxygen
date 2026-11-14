@@ -38,6 +38,11 @@ describe("planDecisionWrites", async () => {
     if (graphic >= 0) expect(() => planDecisionWrites(header, [{ symbolIdx: graphic, unmatch: true }])).toThrow(DecisionInputError);
     expect(() => planDecisionWrites(header, [{ symbolIdx: ring, accept: "ISSprOM2019-2:703" }])).toThrow(/not an entry of ISOM2017-2/);
     expect(() => planDecisionWrites(header, [{ symbolIdx: ring, accept: "ISOM2017-2:999" }])).toThrow(DecisionInputError);
+    expect(() => planDecisionWrites(header, [{ symbolIdx: ring, accept: "ISSkiOM2019:999" }])).toThrow(DecisionInputError);
+  });
+
+  it("accepts an overlay library's entry, stored under the document library's release (docs/map-symbols.md §8.5, §12)", () => {
+    expect(planDecisionWrites(header, [{ symbolIdx: ring, accept: "ISSkiOM2019:801.1" }])).toEqual([{ op: "set", fingerprint: fp, libraryVersion: V, canonicalId: "ISSkiOM2019:801.1" }]);
   });
 
   it("validates the decide input shape (06 §5.1)", () => {

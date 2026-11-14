@@ -13,7 +13,7 @@
 
 import { paletteIndexOfStack } from "../import/colour-align.js";
 import { documentLibraryId } from "../import/decisions.js";
-import { baseCode } from "../import/matcher.js";
+import { baseCode, entryFactor, isDocumentLibraryId } from "../import/matcher.js";
 import {
   entriesForCode,
   getLibraryEntry,
@@ -39,19 +39,18 @@ export type MaterialiseResult =
 const libraryOfEntry = (entry: Pick<LibraryEntry, "id">): string => entry.id.slice(0, entry.id.indexOf(":"));
 
 /**
- * The factor `entry` is scaled by on a document (map-symbols §11.1): the
- * document's own library at `documentFactor`; another library at
- * `libraryFactor(library, mapScale, code) × symbolScale`, with
- * `symbolScale = documentFactor ÷ libraryFactor(documentLibrary, mapScale)`
- * (1 when the document was never matched).
+ * The factor `entry` is scaled by on a document (map-symbols §11.1):
+ * `entryFactor` (the document's own library at `documentFactor`; any other
+ * library at `libraryFactor(library, mapScale, code) × symbolScale`), or —
+ * for a header never matched or naming an unregistered or overlay library —
+ * the entry's own `libraryFactor` (symbolScale 1).
  */
 export function materialiseFactor(header: Pick<MapDocumentHeader, "library" | "documentFactor" | "mapScale">, entry: LibraryEntry): number {
-  const library = libraryOfEntry(entry);
   const own = header.library?.id;
-  if (own === library) return header.documentFactor;
+  if (own && isDocumentLibraryId(own)) return entryFactor({ libraryId: own, documentFactor: header.documentFactor, mapScale: header.mapScale }, entry.id);
+  const library = libraryOfEntry(entry);
   if (!isSymbolLibraryId(library)) throw new Error(`materialiseFactor: unknown library ${library}`);
-  const symbolScale = own && isSymbolLibraryId(own) ? header.documentFactor / libraryFactor(own, header.mapScale) : 1;
-  return libraryFactor(library, header.mapScale, entry.code) * symbolScale;
+  return libraryFactor(library, header.mapScale, entry.code);
 }
 
 /** The palette ids `entry` uses that the stack's index lacks, sorted. */

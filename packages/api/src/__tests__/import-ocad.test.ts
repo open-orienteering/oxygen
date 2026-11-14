@@ -132,7 +132,8 @@ describe("importOcadToDocument", () => {
     // The source has a single purple: it becomes lower purple and upper purple is inserted; palette ids are recorded.
     const purples = doc.header.colours.filter((c) => c.purpleRole);
     expect(purples.map((c) => c.purpleRole).sort()).toEqual(["lower", "upper"]);
-    expect(result.colourStack.inserted).toEqual(["purple-lower"]);
+    // ISSkiOM's rows are in every stack (docs/map-symbols.md §12.3); the fixture has no green 100 % either.
+    expect(result.colourStack.inserted).toEqual(["purple-lower", "green100-area", "white-skio", "orange-skio", "green-skio"]);
     expect(doc.header.colours.find((c) => c.name === "Black")!.paletteIds).toContain("black100");
     // Auto matches are drawn canonically by the bridge.
     const input = mapDocument.documentRenderInput(doc);
@@ -141,7 +142,11 @@ describe("importOcadToDocument", () => {
     // The fixture stacks its blue line colour below yellow: the inserted lower purple goes above the yellow and the blue
     // left under it is reported (docs/map-symbols.md §9.2 steps 4–5).
     const lower = doc.header.colours.findIndex((c) => c.paletteIds?.includes("purple-lower"));
-    expect(doc.header.colours[lower - 1].name).toBe("Yellow");
+    expect(doc.header.colours[lower - 1].paletteIds).toEqual(["white-skio"]);
+    expect(doc.header.colours.slice(0, lower).reverse().find((c) => c.sourceNumber !== undefined)!.name).toBe("Yellow");
+    // The track inks directly below upper purple, orange under green.
+    const ids = doc.header.colours.map((c) => c.paletteIds?.[0]);
+    expect(ids.slice(-3)).toEqual(["orange-skio", "green-skio", "purple-upper"]);
     expect(result.colourStack.conflicts).toContainEqual({ colour: "blue100-line", reason: 'source places "Blue" below purple-lower; the palette has the reverse order' });
     expect(result.warnings.map((w) => w.code)).toContain("COLOUR_ORDER_CONFLICT");
   });

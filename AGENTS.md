@@ -135,7 +135,9 @@ shaped the original layout was retired in May 2026
 - **Content-addressed map store** (`map_sources`, `map_documents`,
   `map_previews`) is keyed by SHA-256 hash; the club map series
   (`club_maps`, `club_map_versions`) and the import plumbing
-  (`map_uploads`, `map_import_jobs`) use UUIDs (`docs/map-storage.md` §2).
+  (`map_uploads`, `map_import_jobs`) use UUIDs (`docs/map-storage.md` §2),
+  as does an event's map patch (`map_patches`, one row per event,
+  `docs/map-patches.md` §3.1).
 - **Top-level entity** (`events`) uses `BIGSERIAL` — there is no offline-
   authored event.
 - **Global directories** (`runner_directory`, `club_directory`,

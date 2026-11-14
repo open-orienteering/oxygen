@@ -61,7 +61,9 @@ export type DecisionWrite =
 /**
  * Turn review decisions on a document into row writes, or throw
  * `DecisionInputError`. The library is the document's own (the scale's
- * for a pre-matcher document); an accepted id must be one of its entries.
+ * for a pre-matcher document); an accepted id must be one of its entries
+ * or an overlay library's (docs/map-symbols.md §8.5, §12), and is stored
+ * under the document library's release like any other.
  * A later decision on the same fingerprint in one list wins.
  */
 export function planDecisionWrites(header: Pick<mapDocument.MapDocumentHeader, "source" | "colours" | "symbols" | "mapScale" | "library">, decisions: readonly ReviewDecision[]): DecisionWrite[] {
@@ -75,8 +77,7 @@ export function planDecisionWrites(header: Pick<mapDocument.MapDocumentHeader, "
     const fingerprint = fingerprints[d.symbolIdx];
     if (!fingerprint) throw new DecisionInputError(`symbol ${symbol.code} (${d.symbolIdx}) is not a reviewable source symbol`);
     if ("accept" in d) {
-      const entry = symbolLibrary.getLibraryEntry(d.accept);
-      if (!entry || !d.accept.startsWith(`${libraryId}:`)) throw new DecisionInputError(`${d.accept} is not an entry of ${libraryId}`);
+      if (!mapImport.isDocumentEntryId(libraryId, d.accept)) throw new DecisionInputError(`${d.accept} is not an entry of ${libraryId} or of an overlay library`);
       writes.set(fingerprint, { op: "set", fingerprint, libraryVersion, canonicalId: d.accept });
     } else if ("unmatch" in d) {
       writes.set(fingerprint, { op: "set", fingerprint, libraryVersion, canonicalId: null });

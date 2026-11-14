@@ -6,14 +6,14 @@ import { readFileSync } from "node:fs";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
-import { paletteIndexOfStack } from "../../import/colour-align.js";
+import { OVERLAY_STACK_IDS, paletteIndexOfStack } from "../../import/colour-align.js";
 import { input } from "../../import/__tests__/match-fixture.js";
 import { matchDocument } from "../../import/match-document.js";
 import { readOmap } from "../../import/omap-reader.js";
 import { omapToDocumentInput } from "../../import/omap-source.js";
 import type { LineSymbol } from "../../render/symbol.js";
 import { renderColourRefs } from "../../render/transform.js";
-import { getLibraryEntry, libraryFactor, listSymbolLibraries, paletteStack } from "../../symbol-library/index.js";
+import { getLibraryEntry, libraryFactor, listSymbolLibraries } from "../../symbol-library/index.js";
 import { colourRefs } from "../../symbol-library/schema.js";
 import { decodeMapDocument, encodeMapDocument, type MapDocument, type MapDocumentInput } from "../codec.js";
 import { type DocumentColour, type MapDocumentHeader, OBJECT_TYPE } from "../header.js";
@@ -30,18 +30,23 @@ const omapDoc = (path: string, name: string): MapDocument => {
   return decode(matchDocument(raw).input);
 };
 
-/** The ski rows G21 will insert, appended here with their palette ids (order is irrelevant to materialisation). */
-const SKI_ROWS = ["green-skio", "white-skio", "orange-skio"];
-const skiRows = (ids: string[] = SKI_ROWS): DocumentColour[] =>
-  paletteStack("iof2024", "ISSkiOM2019")
-    .filter((c) => ids.includes(c.id.slice(c.id.indexOf(":") + 1)))
-    .map((c) => ({ ...c, paletteIds: [c.id.slice(c.id.indexOf(":") + 1)] }));
-const withSki = (i: MapDocumentInput, ids?: string[]): MapDocumentInput => ({
+/**
+ * Since G21 every aligned stack carries the overlay rows (`OVERLAY_STACK_IDS`). `withSki(i, keep)` keeps
+ * only the `keep` ones: the other overlay ids are taken off the rows alignment inserted (no
+ * `sourceNumber`), which is what a document stored before G21 looks like to the palette index.
+ */
+const withSki = (i: MapDocumentInput, keep: readonly string[] = OVERLAY_STACK_IDS): MapDocumentInput => ({
   ...i,
-  header: { ...i.header, colours: [...(i.header.colours as DocumentColour[]), ...skiRows(ids)] },
+  header: {
+    ...i.header,
+    colours: (i.header.colours as DocumentColour[]).map((c) =>
+      c.sourceNumber === undefined && c.paletteIds ? { ...c, paletteIds: c.paletteIds.filter((id) => !(OVERLAY_STACK_IDS as readonly string[]).includes(id) || keep.includes(id)) } : c,
+    ),
+  },
 });
 
-const small = decode(matchDocument(input()).input);
+/** The small fixture as stored before G21: no ski rows. */
+const small = decode(withSki(matchDocument(input()).input, []));
 const enlarged = decode(matchDocument(input({ factor: 1.5 })).input);
 const sprint = decode(matchDocument(input(), { library: "ISSprOM2019-2" }).input);
 const smallSki = decode(withSki(matchDocument(input()).input));
@@ -52,7 +57,7 @@ const FIXTURES: [string, MapDocument][] = [
   ["small", small],
   ["small ×1.5", enlarged],
   ["sprint", sprint],
-  ["small + ski rows", smallSki],
+  ["small, G21 stack", smallSki],
   ["test.xmap", xmap],
   ["puit-de-laven", puit],
 ];
@@ -137,10 +142,12 @@ describe("materialiseSymbol", () => {
   describe("an ISSkiOM entry", () => {
     it("is not materialisable on a stack without green-skio and names the missing rows", () => {
       expect(materialiseSymbol(small, "ISSkiOM2019:801.1")).toEqual({ ok: false, reason: "missing-colours", missing: ["green-skio", "white-skio"] });
-      expect(materialiseSymbol(xmap, "ISSkiOM2019:808")).toMatchObject({ ok: false, missing: expect.arrayContaining(["green-skio"]) });
+      // Imported today (G21), every stack has the ski rows: the same entries materialise on a real map.
+      expect(materialiseSymbol(xmap, "ISSkiOM2019:801.1").ok).toBe(true);
+      expect(materialiseSymbol(xmap, "ISSkiOM2019:808").ok).toBe(true);
     });
 
-    it("materialises once the stack has the ski rows; a compulsory state needs orange-skio too", () => {
+    it("materialises on a stack with the ski rows; a compulsory state needs orange-skio too", () => {
       const r = ok(smallSki, "ISSkiOM2019:801.1");
       expect(r.symbol.kind).toBe("line");
       const greenOnly = decode(withSki(matchDocument(input()).input, ["green-skio", "white-skio"]));
@@ -152,8 +159,8 @@ describe("materialiseSymbol", () => {
   });
 
   describe("the factor (map-symbols §11.1, §12.2)", () => {
-    /** A real ISOM stack (blue rows for 301.x / 310.1) with the ski rows appended. */
-    const skiStack = [...puit.header.colours, ...skiRows()];
+    /** A real ISOM stack (blue rows for 301.x / 310.1, the ski rows since G21). */
+    const skiStack = puit.header.colours;
     const header = (h: Partial<MapDocumentHeader>): Pick<MapDocument, "header"> => ({ header: { ...puit.header, colours: skiStack, ...h } });
     const width = (doc: Pick<MapDocument, "header">, id: string) => (ok(doc, id).symbol.render as LineSymbol).main!.widthUm;
     const index = paletteIndexOfStack(skiStack);
@@ -228,7 +235,7 @@ function paletteInput(ski = false): MapDocumentInput {
     { code: "703.0", name: "Egen kontroll", kind: "point" as const, render: { type: "point" as const, id: "s:703", code: "703", name: "c", glyph: { rotatable: false, parts: [{ kind: "disc" as const, colour: black, diameterUm: 300 }] } } },
   ];
   const i = { ...base, header: { ...base.header, symbols: [...base.header.symbols, ...extra] } };
-  return ski ? withSki(i) : i;
+  return withSki(i, ski ? OVERLAY_STACK_IDS : []);
 }
 
 const flat = (groups: PaletteGroup[]): (PaletteItem & { group: string; heading: string })[] =>
@@ -244,7 +251,8 @@ describe("mapPalette", () => {
   it("groups: the document's library, then the ski overlay when the stack has green-skio, then other", () => {
     expect(groups.map((g) => [g.id, g.library])).toEqual([["library", "ISOM2017-2"], ["other", null]]);
     expect(mapPalette(docSki).map((g) => [g.id, g.library])).toEqual([["library", "ISOM2017-2"], ["ISSkiOM2019", "ISSkiOM2019"], ["other", null]]);
-    expect(mapPalette(xmap).some((g) => g.id === "ISSkiOM2019")).toBe(false);
+    // Imported today (G21), a real map has the ski rows and so the group.
+    expect(mapPalette(xmap).some((g) => g.id === "ISSkiOM2019")).toBe(true);
   });
 
   it("headings in code order, each non-empty, with the library heading's names and a search text", () => {
@@ -318,7 +326,7 @@ describe("mapPalette", () => {
     // The small stack has no blue and no green 100 %: the water / marsh variants and 808 are disabled, every track line is drawable.
     for (const e of flat([ski])) expect(e.enabled, e.canonicalId!).toBe(materialiseSymbol(docSki, e.canonicalId!).ok);
     for (const e of flat([ski])) if (/^8(0[1-47]|13)/.test(e.code)) expect(e.enabled, e.canonicalId!).toBe(true);
-    const noOrange = mapPalette(decode(withSki(paletteInput(), ["green-skio", "white-skio"]))).find((g) => g.id === "ISSkiOM2019")!;
+    const noOrange = mapPalette(decode(withSki(paletteInput(true), ["green-skio", "white-skio"]))).find((g) => g.id === "ISSkiOM2019")!;
     expect(flat([noOrange]).find((e) => e.canonicalId === "ISSkiOM2019:801.2")).toMatchObject({ enabled: false, missing: ["orange-skio"] });
     expect(flat([noOrange]).find((e) => e.canonicalId === "ISSkiOM2019:801.1")).toMatchObject({ enabled: true });
   });
@@ -409,6 +417,7 @@ describe("mapPalette", () => {
   it("a sprint document's palette is ISSprOM's", () => {
     const g = mapPalette(sprint);
     expect(g[0]).toMatchObject({ id: "library", library: "ISSprOM2019-2" });
-    expect(flat(g).filter((e) => e.source === "library").every((e) => e.canonicalId!.startsWith("ISSprOM2019-2:"))).toBe(true);
+    expect(flat(g).filter((e) => e.source === "library" && e.group === "library").every((e) => e.canonicalId!.startsWith("ISSprOM2019-2:"))).toBe(true);
+    expect(flat(g).filter((e) => e.source === "library").every((e) => /^(ISSprOM2019-2|ISSkiOM2019):/.test(e.canonicalId!))).toBe(true);
   });
 });
