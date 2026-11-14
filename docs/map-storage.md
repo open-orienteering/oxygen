@@ -1089,8 +1089,9 @@ mutations on a box are forwarded to the cloud, and offline answer the
 typed 412 (`docs/offline-architecture.md` "Non-critical data"), so
 nothing edited on a box is lost at checkin. Their reads (`courseMap.list`,
 `resolveSheet`, `courseObject.list`, the print routes) answer from the
-box's copy, which is the checkout's until a box follows the cloud's map
-rows (row G19).
+box's copy, which follows the cloud's (row G19, "Following the cloud
+during a lease" below): within the refresh interval, and at once for a
+write the box forwarded itself.
 
 **Not carried.** `map_files` rows without a `source_hash` (only a
 soft-deleted event's since E5, and a soft-deleted event is not checked
@@ -1107,8 +1108,104 @@ among `documents`; a dormant patch (keyed to another document than the
 pin) stays behind. The box inserts it verbatim after the `map_files`
 rows (its document is there by then; `RESTRICT`), and its route
 `GET /api/maps/:nameId/patch` and `mapPatch.get` answer from that copy.
-`mapPatch.` writes on a box are forwarded to the cloud; the copy is the
-checkout's until a box follows the cloud's map rows (row G19).
+`mapPatch.` writes on a box are forwarded to the cloud; the copy then
+follows the cloud's patch like the other map rows (below).
+
+**Following the cloud during a lease** (row G19; 07 §9.2 "Map changes
+during a lease", extended — see the decision log). While a box holds an
+event's lease and the cloud answers, it makes its copy of the event's
+cloud-owned map rows equal to what a fresh checkout would hold:
+
+- **When.** On the settings cadence (`SYNC_SETTINGS_REFRESH_MS`, default
+  5 min, `docs/offline-architecture.md` "The lease"), right after the
+  settings refresh, for every event whose active lease this node holds;
+  and once right after the box's forwarder gets a 2xx from the cloud for
+  a forwarded `courseMap.`, `mapTemplate.`, `layout.`, `graphics.`,
+  `courseObject.` or `mapPatch.` mutation, before it replies (bounded:
+  after 10 s the reply goes out and the refresh finishes behind it). So a
+  box editor's refetch reads its own write with the cloud's token, and
+  its next write of the row is not a `CONFLICT`. Refreshes of one event
+  run one at a time on a node (a second waits for the first).
+- **What travels.** A peer query, `peerProcedure` (shared secret),
+  event-scoped by `x-event-id`:
+
+  ```
+  lease.exportMapRows → {
+    maps,            // the snapshot's `maps` part without `decisions`
+    tables: { mapTemplate, courseMap, courseObject },   // rows verbatim
+    versions,        // exact tokens of those rows, as in the snapshot
+    graphics,        // the snapshot's `graphics` part
+    classOverrides: [{ id, printScale, sheetTemplateId }]
+  }
+  ```
+
+  Each part is built by the same exporter as the checkout's, so the copy
+  a refresh leaves is the copy a re-checkout would import. Bytes come
+  through `lease.exportBlob` as at checkout. `classOverrides` are the two
+  cloud-owned layout columns of every class of the event
+  (`docs/course-layout.md` §6, `referenceJournal.ts`
+  `CLASS_LAYOUT_FIELDS`: stripped from `class.upserted`, written by
+  `layout.setClassOverride` on the cloud).
+- **Fetch, then one transaction.** The box fetches every map blob it does
+  not hold and every graphic it does not hold under that id with the same
+  owner (event or club) and SHA-256, each checked for size and hash,
+  before it opens one transaction. Any failure — the cloud unreachable, a
+  cloud that predates `exportMapRows`, a blob missing or not matching —
+  writes nothing, and the box keeps what it has (offline it keeps serving
+  the copy it holds, 07 §9.2). The settings refresh and the map refresh
+  fail independently; each failure is one warning per event and cycle.
+- **Apply, in FK order.** (1) Blobs, append-only as at checkout. (2) The
+  event's `map_files` rows, replaced as a set (delete and create, venue
+  NULLs as at checkout) when they differ from the cloud's as a multiset
+  — compared without `id`, `event_id`, `club_map_version_id`; nothing
+  references a `map_files` id. (3) The patch: upserted by `event_id`
+  verbatim, token exact, when the export carries it; deleted when it
+  does not (none on the cloud, or dormant after the pin moved — the
+  box's route then answers `{ version: "0", patch: null }`, as for a
+  dormant row, `docs/map-patches.md` §3.2). (4) Graphics: the event's
+  and the travelling club graphics upserted under the cloud's id; the
+  event's graphics the export lacks deleted; a club graphic never
+  deleted; the id sequence moved past the largest id. (5) Templates,
+  (6) the classes' `print_scale` / `sheet_template_id`, (7) sheets,
+  (8) course objects, each mirrored by id: rows the cloud lacks deleted,
+  new rows created, changed rows updated in place (never delete and
+  reinsert: a template delete would null the classes' and sheets'
+  references). A template whose name changes is first renamed to its own
+  UUID, as `UNIQUE (event_id, name)` is not deferrable. A reference to a
+  template the export lacks becomes NULL, as at checkout. A sheet whose
+  `course_id` or `class_id` is not on the box (the box owns courses and
+  classes during the lease) is skipped and counted, and the next refresh
+  tries again. (9) The `event_seqs` counters of `map_templates`,
+  `course_maps` and `course_objects` are raised to past the largest
+  `seq`, so a row the box itself creates later does not collide.
+- **What counts as changed.** A layout row is written only when its
+  content — every column but `event_id`, `updated_at` and `version`,
+  compared as canonical JSON — or its exact token differs; never by
+  `updated_at` alone (the box's trigger rewrites it on update) nor by
+  token alone (`courseObject.reorder` moves `z` without a token). A
+  graphic is written when its owner, name, mime, hash or times differ;
+  a class only when one of its two columns differs. An unchanged cloud
+  means no write on the box.
+- **The mirror is exact.** Rows deleted on the cloud are deleted on the
+  box, including rows the box wrote itself outside the forwarder: a
+  course object `course.importCourses` wrote on the box, or a map
+  uploaded on the box (map uploads are cloud-owned,
+  `docs/offline-architecture.md` "Non-critical data", but not forwarded)
+  lasts until the next refresh (Pending, §9).
+- **Not touched.** Every race-critical table (`controls`, `courses`,
+  `course_controls`, `classes` but its two layout columns,
+  `class_course_pools`, `runners`, `teams`, `cards`, `card_readouts`,
+  `punches`, `control_units`), the journal and its sync state, the event
+  row (the settings refresh's), the `event_seqs` counters of journaled
+  tables, and `club_symbol_decisions` (checkout only: the box re-matches
+  as of its checkout). The class columns emit no journal entry (they are
+  not in `class.upserted`). The box does not run the pin's control
+  lat/lng sync (§6.4) when its pin moves: controls are the box's during
+  the lease (Pending, §9).
+- **Interop.** A cloud that predates `exportMapRows` answers an unknown
+  procedure: the refresh logs and the box keeps its copy, as before G19.
+  A cloud that predates a part of it is as at checkout (an exporter
+  without `graphics` carries none — the box then keeps its graphics).
 
 `lease.checkout` returns, next to `imported` (which now counts
 `mapTemplate` and `courseMap` too),
@@ -1127,9 +1224,9 @@ the event's map pipeline: it was pinned on upload for `legacy` events too
 (09 §3: the switch gated reads, never imports), so a box checked out
 before E3 already holds what the viewer reads. The retired per-event
 switch (`events.map_pipeline`, `docs/map-pipeline-switch.md`) was dropped
-in E5. What does not reach it is a *new* document: a map re-imported on the
-cloud during the lease is not refreshed on the box (Pending, §9); the box
-keeps serving the snapshot's document.
+in E5. A *new* document — a map re-imported on the cloud during the
+lease — reaches the box with its source at the next refresh (row G19,
+above); offline the box keeps serving the document it holds.
 
 Checkin carries nothing map-related back: documents are immutable and
 the venue never writes them.
@@ -1320,20 +1417,14 @@ now); a prefetch of the event's document when an event opens (07 §9.1
 an "offline ready" indicator with `navigator.storage.persisted()`; the
 service-worker routes are not exercised by E2E (the suite runs the Vite
 dev server, which registers no service worker) — they were checked in the
-built `sw.js`; refreshing a checked-out box's `map_files` row and document when
-the map is re-imported on the cloud during the lease (07 §9.2, §7.2), and
-with them the layout rows and graphics: until G19 a write forwarded from a
-box (or a sheet `layout.autoSheets` creates on the cloud) does not show on
-the box, which keeps printing the checkout's copy (so an export's
-sheet-ensuring step does not yet reach the box's `maps.pdf`); an editor
-on the box then reads the box's stale row and token, so its next write of
-that row is a `CONFLICT` on the cloud that a refresh does not clear, and
-a graphic uploaded from a box has a cloud id with no row on the box
-(`IMAGE_MISSING` there) — until G19, layout is edited on the cloud
-during a lease and the box prints;
-`course.importCourses` run on a box still writes its `course_objects`
-locally, where checkin does not carry them (a course import at the venue
-is not a G18 case);
+built `sw.js`; `course.importCourses` run on a box still writes its
+`course_objects` locally, and a map uploaded on a box still pins it
+locally — since G19 both last only until the next refresh (§7.2, the
+mirror is exact; forwarding the import's object part and the upload is
+a row of its own); the box's positioned controls keep the old frame's
+lat/lng when a refresh moves its pin (the pin-time sync, §6.4, is not run
+on the box: controls are its own during the lease); `club_symbol_decisions`
+reach a box at checkout only;
 the documents-only dump variant for non-admin event managers (07 §10,
 §15 — not restorable while a document needs its source row, §7.3); the
 web's map pickers offering Mapper files (`.omap` / `.xmap`) — the server

@@ -1306,8 +1306,9 @@ Writes are not lease-guarded: objects are cloud-owned non-critical data
 (08 §4.8), like the sheets. Since G18 `courseObject.` mutations on a
 venue box are forwarded to the cloud (typed 412 offline,
 `offline-architecture.md` "Non-critical data"); before, they ran on the
-box and were lost at checkin. The box keeps its snapshot's copy until the
-next checkout (or row G19).
+box and were lost at checkin. The box's copy follows the cloud's (row
+G19, `map-storage.md` §7.2 "Following the cloud during a lease"): at the
+settings cadence and right after a forwarded write.
 
 **Token** (§7). Objects are not journaled, so their token is not a
 journal entry's HLC: every `create` / `update` mints one from the node's

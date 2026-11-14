@@ -486,8 +486,11 @@ numbers (the layout rows' tokens travel exactly beside them in
 
 `mapPatch.` mutations are cloud-owned (`sync/ownership.ts`): a venue box
 forwards them to the cloud, and answers the typed `PRECONDITION_FAILED`
-("requires connectivity") offline. The box's own copy stays the
-checkout's until a box follows the cloud's map rows (row G19).
+("requires connectivity") offline. The box's copy follows the cloud's
+(row G19, `map-storage.md` §7.2 "Following the cloud during a lease"):
+on the settings cadence and right after a forwarded `mapPatch.` write,
+upserted verbatim with its exact token, or deleted when the cloud has
+none or its patch is dormant. Offline the box keeps the copy it holds.
 
 ### 3.5 Per-event dump
 
@@ -506,9 +509,6 @@ document only a patch points at, and touches its `last_referenced_at`.
 
 ## Pending in this chapter
 
-- **A box follows the cloud's patch during a lease** (row G19): a
-  forwarded write reaches the cloud, but the box serves the checkout's
-  copy until then (§3.4).
 - **An offline copy of the patch** (G4, decided overnight for review).
   The document is CacheFirst in the service worker; the patch route is
   not cached, so a device that starts offline (Field mode) draws the

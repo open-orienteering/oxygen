@@ -122,8 +122,13 @@ tRPC, never journaled, and **cloud-owned even during a lease**:
   §8.7): **print reads local, writes go to the cloud**. `courseMap.`,
   `mapTemplate.`, `layout.`, `graphics.` and `courseObject.` mutations are
   forwarded; offline they answer the typed error, so nothing edited on a
-  box is lost at checkin. Until G19 the box does not see the cloud's
-  later edits.
+  box is lost at checkin. The box follows the cloud's copy (row G19,
+  `docs/map-storage.md` §7.2 "Following the cloud during a lease"): on
+  the settings cadence it mirrors the event's map files and documents,
+  the patch, sheets, templates, course objects, graphics and the classes'
+  print overrides, and it refreshes once more right after a layout or
+  patch write it forwarded, so an editor on the box reads its own write.
+  Offline it keeps what it has.
 - **Batches.** The forwarder forwards a tRPC batch only when every
   procedure in it is cloud-owned. A batch that mixes cloud-owned and
   local mutations is refused whole with the typed error (`data.reason:
@@ -228,7 +233,9 @@ early keeps the ordering honest.
 > forwarder for cloud-owned mutations, and the shell badge + EventPage
 > panel. The venue additionally refreshes its copy of cloud-owned event
 > settings on a slow cadence while a lease is held
-> (`SYNC_SETTINGS_REFRESH_MS`, default 5 min; closure fields excluded).
+> (`SYNC_SETTINGS_REFRESH_MS`, default 5 min; closure fields excluded),
+> and on the same cadence its copy of the event's cloud-owned map rows
+> (`lease.exportMapRows`, row G19, `docs/map-storage.md` §7.2).
 
 One row per checked-out event: `event_lease (event_id, holder_node_id,
 acquired_at, released_at, forced)`.
