@@ -1301,6 +1301,41 @@ sampler, and compares with T2. Measured 2026-11-14:
 - Time on the largest map (club-full, 5617 chains): `anchorLevels` 0.9 s
   after loading (the 1 m grid and import take 10 s, outside H9).
 
+## 7. The DEM: providers, fetch and the artifacts
+
+H10 fetches a digital elevation model for a document on the server, by
+HTTP range from a cloud-optimised GeoTIFF, resamples it onto the
+document's paper grid and derives two artifacts per provider: the
+**ground** field (the DEM itself on H3's field grid) and the **anchored
+contour field** (§4.9: the contours re-derived with §6's per-chain
+heights). Storage, the job and the route are `docs/map-storage.md` §4.7.
+
+### 7.0 Decided with the user (2026-11-14)
+
+1. **The §4.9 seam is H10's.** The row's area is widened to
+   `packages/shared/src/terrain/{field/,index.ts}`; one PR, the seam its
+   first step. The `contours` field's bytes and `TERRAIN_VERSION` do not
+   change.
+2. **The document's own frame, with a misalignment gate.** The DEM is
+   fetched and sampled through the document's georeference with no
+   operator correction (`correctionDeg` 0). When an anchor-grade DEM
+   accepts less than half of the contour length it covers (§6.4; T2: 90–
+   99.9 % when aligned), nothing is written and the job ends
+   `unavailable: misaligned`. A pin with a `rotation_correction ≠ 0`
+   reports the DEM as unavailable. A per-pin DEM is later.
+3. **Rows and job.** `map_heightfields` is unchanged: provider and
+   resolution are encoded in `source` (`ground.lantmateriet-2m`,
+   `contours.lantmateriet-2m`, `ground.glo30-30m`, `contours.glo30-30m`),
+   two rows per provider. Licence and attribution travel in the field
+   header's `provider` block. One new table, `map_dem_jobs`, holds the
+   job's state. Raw tiles are not cached: the derived rows are the cache.
+4. **Fetching is opt-in.** No DEM is fetched unless `MAP_DEM_PROVIDERS`
+   names the providers; `scripts/gcp/deploy.sh` sets
+   `lantmateriet,glo30` when the Geotorget secret exists. GLO-30 serves a
+   document wherever Lantmäteriet has no coverage or is not enabled —
+   a Swedish map on an instance without the credential included (widens
+   answer 13's "outside LM coverage"; its reduced role is unchanged).
+
 ## Tests
 
 | Test | Covers |
