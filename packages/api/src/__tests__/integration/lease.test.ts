@@ -1012,6 +1012,7 @@ describe("a box follows the cloud's map rows during a lease (G19)", () => {
     // A sheet the box creates later takes a seq past the cloud's.
     const counter = await ctx.db.eventSeq.findUniqueOrThrow({ where: { eventId_tableName: { eventId: box.id, tableName: "course_maps" } } });
     expect(counter.nextSeq).toBeGreaterThan(newSheet.seq);
+    expect(counter.nextSeq).toBeGreaterThan(straySheet.seq); // a skipped sheet's seq is reserved too
     // Nothing race-critical moved.
     expect(await raceDigest()).toBe(digest);
 
