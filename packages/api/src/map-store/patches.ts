@@ -12,7 +12,8 @@
 
 import { TRPCError } from "@trpc/server";
 import { encodeHlc, mapDocument } from "@oxygen/shared";
-import { type PrintPatch, livePrintPatch } from "@oxygen/shared/print";
+// A value import only: a print type in this module's signatures would pull the PDF writer into the web build through the router's .d.ts.
+import { livePrintPatch } from "@oxygen/shared/print";
 import type { Prisma, PrismaClient } from "../generated/prisma/client.js";
 import { nextServerHlc } from "../serverClock.js";
 import { eventDocumentHash } from "./event-document.js";
@@ -132,7 +133,7 @@ export async function eventPatchVersion(db: Db, eventId: bigint, pinHash: string
  * Read with the hash the caller already holds, so the patch is never
  * paired with another document than the one it prints.
  */
-export async function eventPrintPatch(db: Db, eventId: bigint, pinHash: string | null): Promise<PrintPatch | null> {
+export async function eventPrintPatch(db: Db, eventId: bigint, pinHash: string | null): Promise<{ version: string; patch: mapDocument.MapPatch } | null> {
   const { version, patch } = await eventPatchOnPin(db, eventId, pinHash);
   return patch && pinHash ? livePrintPatch(pinHash, { version, patch }) : null;
 }
