@@ -12,6 +12,7 @@ import { type PrintFonts, renderCoursePages, svgRasterBox } from "../course-page
 import { PRINT_JOB_VERSION, type PrintJob, type PrintJobHost, renderPrintJob } from "../print-job.js";
 import { prepareDocument } from "../prepared-document.js";
 import { bundledFontsForTest, printDocumentBytes } from "./print-document.js";
+import { FIXTURE_PNG, fixtureGraphics, fixturePrintJob } from "./print-job-fixture.js";
 
 /** A 1 × 1 PNG. */
 const PNG = Uint8Array.from(atob("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg=="), (c) => c.charCodeAt(0));
@@ -114,5 +115,55 @@ describe("renderPrintJob (§8.5)", () => {
     expect(document).toHaveBeenCalledTimes(1);
     expect(document).toHaveBeenCalledWith(hash);
     await expect(renderPrintJob({ ...j, version: 2 } as unknown as PrintJob, host())).rejects.toThrow("Unsupported print job version 2");
+  });
+});
+
+describe("the fixture job (§8.6, G16)", () => {
+  it("holds every sheet kind maps.pdf composes: course with copies, a map exchange's two parts, all controls, setter", () => {
+    const j = fixturePrintJob();
+    expect(j.sheets.map((s) => [s.label, s.course.viewOptions?.allControls ?? false, s.copies ?? 1])).toEqual([
+      ["Blue", false, 3],
+      ["Blue", false, 1],
+      ["All controls", true, 1],
+      ["Setter 1", true, 1],
+    ]);
+    expect(j.sheets[3].course.sites.map((s) => s.id)).toEqual(["C", "D", "E"]);
+    // The two parts of the exchange: one course drawn as its sections, each window centred on its part.
+    const section = (i: number) => (j.sheets[i].course.viewOptions as { section?: number } | undefined)?.section;
+    expect([section(0), section(1)]).toEqual([0, 1]);
+    expect(j.sheets[1].window).not.toEqual(j.sheets[0].window);
+    // The all-controls sheet orders Å1 before Z1 (`compareLabels`; Swedish would not).
+    const codes = j.sheets[2].course.sites.map((s) => s.code);
+    expect(codes.indexOf("Å1")).toBeLessThan(codes.indexOf("Z1"));
+    expect(j.graphics).toEqual([{ id: 7, mime: "image/png" }, { id: 8, mime: "image/svg+xml" }, { id: 9, mime: "image/svg+xml" }]);
+    expect(JSON.parse(JSON.stringify(j))).toEqual(j);
+  });
+
+  it("composes to renderCoursePages' bytes; the SVG page object and the map-layer SVG asked at their boxes", async () => {
+    const j = fixturePrintJob();
+    const asked: unknown[][] = [];
+    const graphic = async (id: number, box?: [number, number]) => {
+      asked.push(box ? [id, box] : [id]);
+      return FIXTURE_PNG;
+    };
+    const out = await renderPrintJob(j, host({ document: () => printDocumentBytes(), graphic }));
+    expect(out.warnings).toEqual([]);
+    expect(out.pageCount).toBe(6);
+    expect(asked[0]).toEqual([7]);
+    expect(asked.filter((a) => a[0] === 8)).toEqual([[8, svgRasterBox(20, 10)]]);
+    expect(asked.filter((a) => a[0] === 9).length).toBeGreaterThanOrEqual(1);
+
+    const document = await prepareDocument(j.document.hash, printDocumentBytes);
+    const direct = await renderCoursePages({
+      document,
+      sheets: j.sheets,
+      fonts,
+      graphics: new Map([...fixtureGraphics].map(([id, g]) => [id, { mime: g.mime, data: g.data }])),
+      rasteriseSvg: async () => FIXTURE_PNG,
+      mode: "cmyk",
+      info: j.info,
+      deterministic: true,
+    });
+    expect(out.bytes).toEqual(direct.bytes);
   });
 });
