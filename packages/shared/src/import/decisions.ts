@@ -6,11 +6,11 @@
 
 import type { DocumentColour, DocumentSymbol, SymbolMatch } from "../map-document/header.js";
 import { parseRenderSymbol, type RenderSymbol } from "../render/symbol.js";
-import { getSymbolLibrary, isSymbolLibraryId, type SymbolLibraryId } from "../symbol-library/index.js";
+import { getLibraryEntry, isOverlayLibrary, isSymbolLibraryId, type SymbolLibraryId } from "../symbol-library/index.js";
 import type { PaletteEdition } from "../symbol-library/palette.js";
 import { classifyColour, detectPaletteEdition, formatClass } from "./colour-class.js";
 import { type ClassOfColour, compareFingerprints, type Fingerprint, fingerprintOf } from "./fingerprint.js";
-import { baseCode, chooseLibrary, matchContext, matchSymbol, normaliseCode, type SymbolDecision, symbolIrHash } from "./matcher.js";
+import { baseCode, candidateFactor, chooseLibrary, isDocumentLibraryId, matchContext, matchSymbol, normaliseCode, type SymbolDecision, symbolIrHash } from "./matcher.js";
 
 // ---- fingerprints -------------------------------------------------------------
 
@@ -52,10 +52,21 @@ export function documentSymbolFingerprints(header: HeaderLike): (string | null)[
   return header.symbols.map((s) => (isSource(s) && s.render ? decisionFingerprint(header.source.kind, s.code, symbolIrHash(parseRenderSymbol(s.render), classOf)) : null));
 }
 
-/** The library a document's decisions are made against: its own, the scale's for a pre-matcher document. */
+/** The library a document's decisions are made against: its own, the scale's for a pre-matcher document (or a header naming an overlay, which is never a document's library — docs/map-symbols.md §12). */
 export function documentLibraryId(header: { library?: { id: string } | null; mapScale: number }): SymbolLibraryId {
   const stored = header.library?.id;
-  return stored && isSymbolLibraryId(stored) ? stored : chooseLibrary(header.mapScale);
+  return stored && isDocumentLibraryId(stored) ? stored : chooseLibrary(header.mapScale);
+}
+
+/**
+ * Whether `canonicalId` is an entry a decision on a document of
+ * `libraryId` may name: one of that library's, or an overlay library's
+ * (docs/map-symbols.md §8.5, §12; map-import.md §2.2).
+ */
+export function isDocumentEntryId(libraryId: SymbolLibraryId, canonicalId: string): boolean {
+  const lib = canonicalId.slice(0, Math.max(0, canonicalId.indexOf(":")));
+  if (lib !== libraryId && !(isSymbolLibraryId(lib) && isOverlayLibrary(lib))) return false;
+  return getLibraryEntry(canonicalId) !== undefined;
 }
 
 // ---- rows → matcher decisions -------------------------------------------------
@@ -113,13 +124,12 @@ function decisionFor(decisions: readonly SymbolDecision[], libraryId: string, co
  */
 export function documentFollowsDecisions(header: HeaderLike & { library?: { id: string } | null }, decisions: readonly SymbolDecision[]): boolean {
   const libraryId = header.library?.id;
-  if (!libraryId || !isSymbolLibraryId(libraryId)) return true;
-  const entries = new Set(getSymbolLibrary(libraryId).entries.map((e) => e.id));
+  if (!libraryId || !isDocumentLibraryId(libraryId)) return true;
   const classOf = documentClassOf(header.colours);
   for (const s of header.symbols) {
     if (!isSource(s) || !s.render) continue;
     const d = decisionFor(decisions, libraryId, s.code, symbolIrHash(parseRenderSymbol(s.render), classOf));
-    const expected = d && (d.canonicalId === null || entries.has(d.canonicalId)) ? d.canonicalId : undefined;
+    const expected = d && (d.canonicalId === null || isDocumentEntryId(libraryId, d.canonicalId)) ? d.canonicalId : undefined;
     const actual = s.match?.method === "explicit" ? s.match.canonicalId : undefined;
     if (expected !== actual) return false;
   }
@@ -182,9 +192,9 @@ export function reviewRows(header: ReviewHeaderLike, objectsPerSymbol: readonly 
   const libraryId = documentLibraryId(header);
   const edition = opts.edition ?? detectPaletteEdition(header.colours);
   const classOf = documentClassOf(header.colours);
-  const ctx = matchContext(libraryId, edition, header.documentFactor ?? 1, classOf);
-  const bases = new Set(ctx.canon.map((c) => c.base));
-  const canonById = new Map(ctx.canon.map((c) => [c.entry.id, c]));
+  const ctx = matchContext(libraryId, edition, header.documentFactor ?? 1, classOf, undefined, header.mapScale);
+  const bases = new Set([...ctx.canon, ...ctx.overlay].map((c) => c.base));
+  const canonById = new Map([...ctx.canon, ...ctx.overlay].map((c) => [c.entry.id, c]));
   const rows: ReviewRow[] = [];
   header.symbols.forEach((s, symbolIdx) => {
     if (!isSource(s)) return;
@@ -211,8 +221,10 @@ export function reviewRows(header: ReviewHeaderLike, objectsPerSymbol: readonly 
           const cand = canonById.get(alt.canonicalId);
           if (!cand || candidates.some((c) => c.canonicalId === alt.canonicalId)) continue;
           // The same shape as the matcher's own reasons: a head line, then the feature notes.
-          const cmp = compareFingerprints(fp, cand.fp, ctx.factor);
-          const head = `${alt.canonicalId} ${cmp.hardFail ? "hard fail" : cmp.score.toFixed(2)}${ctx.factor !== 1 ? ` at ×${ctx.factor}` : ""}`;
+          const f = candidateFactor(ctx, cand);
+          const shown = cand.overlay ? Math.round(f * 1000) / 1000 : f;
+          const cmp = compareFingerprints(fp, cand.fp, f);
+          const head = `${alt.canonicalId} ${cmp.hardFail ? "hard fail" : cmp.score.toFixed(2)}${shown !== 1 ? ` at ×${shown}` : ""}`;
           candidates.push({ canonicalId: alt.canonicalId, confidence: alt.confidence, reasons: [head, ...cmp.reasons.slice(0, 6)] });
         }
       }

@@ -15,7 +15,7 @@
 
 import type { SymbolMatch } from "../map-document/header.js";
 import type { RenderSymbol } from "../render/symbol.js";
-import { getSymbolLibrary, SYMBOL_LIBRARY_VERSION, type SymbolLibraryId } from "../symbol-library/index.js";
+import { getLibraryEntry, getSymbolLibrary, isOverlayLibrary, isSymbolLibraryId, libraryFactor, listSymbolLibraries, SYMBOL_LIBRARY_VERSION, type SymbolLibraryId } from "../symbol-library/index.js";
 import { type PaletteEdition, paletteIndex, paletteStack } from "../symbol-library/palette.js";
 import { type LibraryEntry, resolveEntry, type SymbolLibrary } from "../symbol-library/schema.js";
 import { paletteClass } from "./colour-class.js";
@@ -46,6 +46,8 @@ export interface CanonicalCandidate {
   fp: Fingerprint;
   /** Description-stage tokens: `name.en` ∪ `name.sv`, both through `SV_EN` (docs/map-symbols.md §8.2 row 5). */
   tokens: Set<string>;
+  /** An entry of an overlay library, offered beside the document's own (docs/map-symbols.md §8.2, §12). */
+  overlay: boolean;
 }
 
 /** `"101.0"` → `"101"`, `"505.1"` → `"505.1"`, anything else unchanged. */
@@ -64,6 +66,11 @@ export function chooseLibrary(mapScale: number, override?: SymbolLibraryId): Sym
   return mapScale <= 5000 ? "ISSprOM2019-2" : "ISOM2017-2";
 }
 
+/** A registered base library — what a document's `header.library` may name; an overlay never is one (docs/map-symbols.md §12). */
+export function isDocumentLibraryId(id: string): id is SymbolLibraryId {
+  return isSymbolLibraryId(id) && !isOverlayLibrary(id);
+}
+
 const canonicalCache = new Map<string, CanonicalCandidate[]>();
 
 /** Library entries resolved against their own palette and fingerprinted with palette colour classes. */
@@ -78,11 +85,33 @@ export function canonicalCandidates(library: SymbolLibrary, edition: PaletteEdit
       const render = resolveEntry(entry, index);
       const tokens = descriptionTokens(entry.name.en);
       if (entry.name.sv) for (const t of descriptionTokens(entry.name.sv)) tokens.add(t);
-      return { entry, code: entry.code, base: baseCode(entry.code), hundred: hundredOf(entry.code), fp: fingerprintOf(render, classOf), tokens };
+      return { entry, code: entry.code, base: baseCode(entry.code), hundred: hundredOf(entry.code), fp: fingerprintOf(render, classOf), tokens, overlay: library.kind === "overlay" };
     });
     canonicalCache.set(key, list);
   }
   return list;
+}
+
+/**
+ * The enlargement a library entry is scored and drawn at on a document
+ * (docs/map-symbols.md §8.2 "What is drawn", §12.2): the document factor
+ * for an entry of the document's own library (or any base library); for an
+ * overlay entry, `libraryFactor(overlay, mapScale, code) × symbolScale`
+ * with `symbolScale = documentFactor / libraryFactor(document library,
+ * mapScale)`, unrounded — a map drawn larger than its spec draws its tracks
+ * larger by the same ratio.
+ */
+export function entryFactor(doc: { libraryId: SymbolLibraryId; documentFactor: number; mapScale: number }, entryId: string): number {
+  const libraryId = entryId.slice(0, Math.max(0, entryId.indexOf(":")));
+  if (libraryId === doc.libraryId || !isSymbolLibraryId(libraryId) || !isOverlayLibrary(libraryId)) return doc.documentFactor;
+  const entry = getLibraryEntry(entryId);
+  if (!entry) return doc.documentFactor;
+  return libraryFactor(libraryId, doc.mapScale, entry.code) * (doc.documentFactor / libraryFactor(doc.libraryId, doc.mapScale));
+}
+
+/** Every overlay library's candidates, fingerprinted on the overlay's own palette in 2024 (the 2022 ISSkiOM stack lacks `orange-skio`, §12.3). */
+export function overlayCandidates(): CanonicalCandidate[] {
+  return listSymbolLibraries().filter((l) => l.kind === "overlay").flatMap((l) => canonicalCandidates(l, "iof2024"));
 }
 
 export interface SourceSymbolLike {
@@ -231,7 +260,12 @@ export interface MatchContext {
   libraryId: SymbolLibraryId;
   edition: PaletteEdition;
   canon: readonly CanonicalCandidate[];
+  /** Overlay candidates (docs/map-symbols.md §8.2 "Overlay candidates"); empty without a map scale. */
+  overlay: readonly CanonicalCandidate[];
+  /** The document factor: what the document library's candidates are scored at. */
   factor: number;
+  /** Per overlay entry id, the factor it is scored at (`entryFactor`). */
+  overlayFactors: ReadonlyMap<string, number>;
   classOf: ClassOfColour;
   decisions?: readonly SymbolDecision[];
 }
@@ -244,17 +278,27 @@ export interface MatchOutcome {
   unknownDecision?: string;
 }
 
-interface Scored { cand: CanonicalCandidate; cmp: Comparison }
+interface Scored { cand: CanonicalCandidate; cmp: Comparison; factor: number }
 
-function scoreAll(fp: Fingerprint, pool: readonly CanonicalCandidate[], factor: number): Scored[] {
+/** The factor a candidate is scored at: the document factor, or the overlay entry's own (`entryFactor`). */
+export function candidateFactor(ctx: Pick<MatchContext, "factor" | "overlayFactors">, cand: CanonicalCandidate): number {
+  return cand.overlay ? ctx.overlayFactors.get(cand.entry.id) ?? ctx.factor : ctx.factor;
+}
+
+/** Best first; on a tie the document's own library before an overlay, then by id. */
+function scoreAll(fp: Fingerprint, pool: readonly CanonicalCandidate[], factorOf: number | ((c: CanonicalCandidate) => number)): Scored[] {
   return pool
-    .map((cand) => ({ cand, cmp: compareFingerprints(fp, cand.fp, factor) }))
-    .sort((a, b) => b.cmp.score - a.cmp.score || a.cand.entry.id.localeCompare(b.cand.entry.id));
+    .map((cand) => {
+      const factor = typeof factorOf === "number" ? factorOf : factorOf(cand);
+      return { cand, cmp: compareFingerprints(fp, cand.fp, factor), factor };
+    })
+    .sort((a, b) => b.cmp.score - a.cmp.score || Number(a.cand.overlay) - Number(b.cand.overlay) || a.cand.entry.id.localeCompare(b.cand.entry.id));
 }
 
 const libraryVersion = (ctx: MatchContext) => `${ctx.library.id}@${SYMBOL_LIBRARY_VERSION}`;
 
-function describe(best: Scored, factor: number): string[] {
+function describe(best: Scored): string[] {
+  const factor = best.cand.overlay ? round3(best.factor) : best.factor;
   const head = `${best.cand.entry.id} ${best.cmp.hardFail ? "hard fail" : best.cmp.score.toFixed(2)}${factor !== 1 ? ` at ×${factor}` : ""}`;
   return [head, ...best.cmp.reasons.slice(0, 6)];
 }
@@ -284,7 +328,7 @@ export function matchSymbol(sym: SourceSymbolLike, ctx: MatchContext): MatchOutc
       if (d.canonicalId === null) {
         return { match: { canonicalId: null, method: "explicit", state: "unmatched", confidence: 1, reasons: ["kept as source by decision"], reviewed: true, libraryVersion: version } };
       }
-      const entry = ctx.canon.find((c) => c.entry.id === d.canonicalId);
+      const entry = ctx.canon.find((c) => c.entry.id === d.canonicalId) ?? ctx.overlay.find((c) => c.entry.id === d.canonicalId);
       if (entry) {
         return { match: { canonicalId: entry.entry.id, method: "explicit", state: "auto", confidence: 1, reasons: ["by decision"], reviewed: true, libraryVersion: version } };
       }
@@ -299,27 +343,31 @@ export function matchSymbol(sym: SourceSymbolLike, ctx: MatchContext): MatchOutc
 }
 
 function matchGeometric(sym: SourceSymbolLike, code: string, fp: Fingerprint, ctx: MatchContext, version: string, none: (r: string[]) => SymbolMatch): MatchOutcome {
-  const { canon, factor } = ctx;
+  const { factor } = ctx;
   const base = baseCode(code);
+  const factorOf = (c: CanonicalCandidate) => candidateFactor(ctx, c);
+  // Overlay entries (docs/map-symbols.md §8.2): an exact-code candidate for every source; in the family,
+  // geometry and description pools only for an 8xx source — never through the hundred-group fallback.
+  const canon = hundredOf(code) === "8" ? [...ctx.canon, ...ctx.overlay] : ctx.canon;
   const sameType = canon.filter((c) => c.fp.type === fp.type);
 
   // 2 code + geometry
-  const exact = canon.filter((c) => c.code === code);
-  const exactScored = scoreAll(fp, exact, factor);
+  const exact = [...ctx.canon, ...ctx.overlay].filter((c) => c.code === code);
+  const exactScored = scoreAll(fp, exact, factorOf);
   if (exactScored[0] && exactScored[0].cmp.score >= MATCH_THRESHOLDS.auto) {
     const best = exactScored[0];
-    return { match: { canonicalId: best.cand.entry.id, method: "code+geometry", state: "auto", confidence: best.cmp.score, reasons: describe(best, factor), reviewed: false, libraryVersion: version, alternatives: alternatives(exactScored, best.cand) } };
+    return { match: { canonicalId: best.cand.entry.id, method: "code+geometry", state: "auto", confidence: best.cmp.score, reasons: describe(best), reviewed: false, libraryVersion: version, alternatives: alternatives(exactScored, best.cand) } };
   }
 
   // 3 family + geometry
   let family = canon.filter((c) => c.base === base);
-  if (family.length === 0) family = canon.filter((c) => c.hundred === hundredOf(code));
-  const familyScored = scoreAll(fp, family, factor);
+  if (family.length === 0) family = ctx.canon.filter((c) => c.hundred === hundredOf(code));
+  const familyScored = scoreAll(fp, family, factorOf);
   const famBest = familyScored[0];
   if (famBest && famBest.cmp.score >= MATCH_THRESHOLDS.suggest) {
     const state = famBest.cmp.score >= MATCH_THRESHOLDS.auto ? "auto" : "suggested";
     const method = exact.includes(famBest.cand) ? "code+geometry" : "family+geometry";
-    return { match: { canonicalId: famBest.cand.entry.id, method, state, confidence: famBest.cmp.score, reasons: describe(famBest, factor), reviewed: false, libraryVersion: version, alternatives: alternatives(familyScored, famBest.cand) } };
+    return { match: { canonicalId: famBest.cand.entry.id, method, state, confidence: famBest.cmp.score, reasons: describe(famBest), reviewed: false, libraryVersion: version, alternatives: alternatives(familyScored, famBest.cand) } };
   }
 
   // A symbol numbered into a known family but of another IR kind — "521.3
@@ -331,29 +379,31 @@ function matchGeometric(sym: SourceSymbolLike, code: string, fp: Fingerprint, ct
   const familyKinds = new Set(family.map((c) => c.fp.type));
   if (family.length && !familyKinds.has(fp.type) && VARIANT_NAME.test(sym.name)) {
     const lead = `${fp.type} variant of ${[...familyKinds].join("/")} symbol ${base} (minimum-size, single-element or outline); drawn from source`;
-    return { match: { ...none([lead, ...(famBest ? describe(famBest, factor) : [])]), method: "variant" } };
+    return { match: { ...none([lead, ...(famBest ? describe(famBest) : [])]), method: "variant" } };
   }
 
   // 4 geometry only — same hundred group first, then description overlap, then id, as tie-breaks
   const srcTokens = descriptionTokens(sym.name);
   const overlap = (c: CanonicalCandidate) => [...c.tokens].filter((t) => srcTokens.has(t)).length;
-  const geoScored = scoreAll(fp, sameType, factor).sort((a, b) =>
+  const geoScored = scoreAll(fp, sameType, factorOf).sort((a, b) =>
     b.cmp.score - a.cmp.score
+    || Number(a.cand.overlay) - Number(b.cand.overlay)
     || Number(b.cand.hundred === hundredOf(code)) - Number(a.cand.hundred === hundredOf(code))
     || overlap(b.cand) - overlap(a.cand)
     || a.cand.entry.id.localeCompare(b.cand.entry.id));
   const geoBest = geoScored[0];
   // Cap / join only choose between variants (map-symbols §8.1, C9); a geometry-only suggestion is not withheld for them.
   if (geoBest && geoBest.cmp.score / geoBest.cmp.capJoin >= MATCH_THRESHOLDS.strict - 1e-9) {
-    return { match: { canonicalId: geoBest.cand.entry.id, method: "geometry", state: "suggested", confidence: geoBest.cmp.score, reasons: describe(geoBest, factor), reviewed: false, libraryVersion: version, alternatives: alternatives(geoScored, geoBest.cand) } };
+    return { match: { canonicalId: geoBest.cand.entry.id, method: "geometry", state: "suggested", confidence: geoBest.cmp.score, reasons: describe(geoBest), reviewed: false, libraryVersion: version, alternatives: alternatives(geoScored, geoBest.cand) } };
   }
 
-  // 03 §6.6 anomaly: an exact-code line that matches only at another factor.
+  // 03 §6.6 anomaly: an exact-code line that matches only at another factor (the document library's entries only: the overlay has its own table, §12.2).
   let scaleAnomaly: MatchOutcome["scaleAnomaly"];
-  if (exact.length && fp.type === "line") {
+  const exactOwn = exact.filter((c) => !c.overlay);
+  if (exactOwn.length && fp.type === "line") {
     for (const f of FACTOR_SNAP) {
       if (f === factor) continue;
-      const alt = scoreAll(fp, exact, f)[0];
+      const alt = scoreAll(fp, exactOwn, f)[0];
       if (alt && alt.cmp.score >= MATCH_THRESHOLDS.auto) { scaleAnomaly = { factor: f, canonicalId: alt.cand.entry.id }; break; }
     }
   }
@@ -372,7 +422,7 @@ function matchGeometric(sym: SourceSymbolLike, code: string, fp: Fingerprint, ct
   const reasonsFor = (lead: string[]): string[] => {
     const r = [...lead];
     const why = famBest ?? geoBest ?? exactScored[0];
-    if (why) r.push(...describe(why, factor));
+    if (why) r.push(...describe(why));
     if (scaleAnomaly) r.push(`matches ${scaleAnomaly.canonicalId} at ×${scaleAnomaly.factor} (document factor ×${factor})`);
     return r;
   };
@@ -393,9 +443,16 @@ function matchGeometric(sym: SourceSymbolLike, code: string, fp: Fingerprint, ct
   return out;
 }
 
-export function matchContext(libraryId: SymbolLibraryId, edition: PaletteEdition, factor: number, classOf: ClassOfColour, decisions?: readonly SymbolDecision[]): MatchContext {
+/**
+ * The matcher's context for one document. With `mapScale` the overlay
+ * libraries' entries are candidates too, each scored at its `entryFactor`
+ * (docs/map-symbols.md §8.2, §12); without it the document's library alone.
+ */
+export function matchContext(libraryId: SymbolLibraryId, edition: PaletteEdition, factor: number, classOf: ClassOfColour, decisions?: readonly SymbolDecision[], mapScale?: number): MatchContext {
   const library = getSymbolLibrary(libraryId);
-  const ctx: MatchContext = { library, libraryId, edition, canon: canonicalCandidates(library, edition), factor, classOf };
+  const overlay = mapScale !== undefined && mapScale > 0 && Number.isFinite(mapScale) ? overlayCandidates() : [];
+  const overlayFactors = new Map(overlay.map((c) => [c.entry.id, entryFactor({ libraryId, documentFactor: factor, mapScale: mapScale! }, c.entry.id)]));
+  const ctx: MatchContext = { library, libraryId, edition, canon: canonicalCandidates(library, edition), overlay, factor, overlayFactors, classOf };
   if (decisions) ctx.decisions = decisions;
   return ctx;
 }

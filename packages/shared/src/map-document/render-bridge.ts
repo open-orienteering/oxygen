@@ -15,6 +15,7 @@ import { scaleRenderSymbol } from "../render/transform.js";
 import { getLibraryEntry } from "../symbol-library/index.js";
 import { resolveEntry } from "../symbol-library/schema.js";
 import { paletteIndexOfStack } from "../import/colour-align.js";
+import { entryFactor, isDocumentLibraryId } from "../import/matcher.js";
 import { type DocumentSymbol, OBJECT_TYPE } from "./header.js";
 import type { MapDocument } from "./codec.js";
 import type { EffectiveDocument } from "./patch.js";
@@ -64,7 +65,8 @@ export function isAppliedMatch(match: DocumentSymbol["match"]): match is NonNull
 /**
  * The canonical `RenderSymbol` for a matched document symbol: the library
  * entry resolved through the aligned colour stack and scaled by the
- * document factor (03 §6.6). `undefined` when the match is not applied or
+ * document factor (03 §6.6) — an overlay entry by its `entryFactor`
+ * (docs/map-symbols.md §12.2). `undefined` when the match is not applied or
  * cannot be resolved against the current library.
  */
 export function canonicalRender(doc: Pick<MapDocument, "header">, sym: DocumentSymbol, index = paletteIndexOfStack(doc.header.colours)): RenderSymbol | undefined {
@@ -72,7 +74,10 @@ export function canonicalRender(doc: Pick<MapDocument, "header">, sym: DocumentS
   const entry = getLibraryEntry(sym.match.canonicalId);
   if (!entry) return undefined;
   try {
-    const canonical = scaleRenderSymbol(resolveEntry(entry, index), doc.header.documentFactor);
+    const { library, documentFactor, mapScale } = doc.header;
+    // An overlay entry at its own table's factor × the document's symbol scale (docs/map-symbols.md §12.2).
+    const factor = library && isDocumentLibraryId(library.id) ? entryFactor({ libraryId: library.id, documentFactor, mapScale }, entry.id) : documentFactor;
+    const canonical = scaleRenderSymbol(resolveEntry(entry, index), factor);
     return canonical.type === "text" && sym.render?.type === "text" ? withSourceTextLayout(canonical, sym.render) : canonical;
   } catch {
     return undefined;

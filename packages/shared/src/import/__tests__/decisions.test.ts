@@ -10,7 +10,7 @@ import { attrsSectionRange, decodeMapDocument, encodeMapDocument, objectsPerSymb
 import { parseRenderSymbol } from "../../render/symbol.js";
 import { SYMBOL_LIBRARY_VERSION } from "../../symbol-library/index.js";
 import { identifySourceColours } from "../colour-align.js";
-import { decisionFingerprint, decisionsFromRows, documentFollowsDecisions, documentSymbolFingerprints, libraryIdOfVersion, parseDecisionFingerprint, reviewRows, type ClubDecisionRow } from "../decisions.js";
+import { decisionFingerprint, decisionsFromRows, documentFollowsDecisions, documentLibraryId, documentSymbolFingerprints, isDocumentEntryId, libraryIdOfVersion, parseDecisionFingerprint, reviewRows, type ClubDecisionRow } from "../decisions.js";
 import { matchDocument } from "../match-document.js";
 import { symbolIrHash } from "../matcher.js";
 import { colours, input } from "./match-fixture.js";
@@ -135,6 +135,31 @@ describe("documentFollowsDecisions", () => {
     const h = stored();
     expect(documentFollowsDecisions({ ...h, library: null }, decided(null))).toBe(true);
   });
+
+  it("a decision naming an overlay entry applies, and the document made with it follows it (docs/map-symbols.md §8.5, §12)", () => {
+    const overlay = decided("ISSkiOM2019:808");
+    expect(documentFollowsDecisions(stored(), overlay)).toBe(false);
+    const made = stored({ decisions: overlay });
+    expect(made.symbols[3].match).toMatchObject({ canonicalId: "ISSkiOM2019:808", method: "explicit", reviewed: true });
+    expect(documentFollowsDecisions(made, overlay)).toBe(true);
+    expect(isDocumentEntryId("ISOM2017-2", "ISSkiOM2019:808")).toBe(true);
+    expect(isDocumentEntryId("ISOM2017-2", "ISSkiOM2019:999")).toBe(false);
+    expect(isDocumentEntryId("ISOM2017-2", "ISSprOM2019-2:521.1")).toBe(false);
+  });
+
+  it("follows trivially for a header naming an overlay library (never a document's library, map-symbols.md §12)", () => {
+    const h = stored();
+    expect(documentFollowsDecisions({ ...h, library: { id: "ISSkiOM2019" } }, decided(null))).toBe(true);
+  });
+});
+
+describe("documentLibraryId", () => {
+  it("is the stored base library, else the scale's; an overlay id is not a document library (map-symbols.md §12)", () => {
+    expect(documentLibraryId({ library: { id: "ISSprOM2019-2" }, mapScale: 10000 })).toBe("ISSprOM2019-2");
+    expect(documentLibraryId({ library: null, mapScale: 4000 })).toBe("ISSprOM2019-2");
+    expect(documentLibraryId({ library: { id: "ISSkiOM2019" }, mapScale: 10000 })).toBe("ISOM2017-2");
+    expect(documentLibraryId({ library: { id: "nope" }, mapScale: 10000 })).toBe("ISOM2017-2");
+  });
 });
 
 describe("reviewRows", () => {
@@ -171,6 +196,11 @@ describe("reviewRows", () => {
 
   it("flags club symbols, and render-less rows have no fingerprint or candidates", () => {
     expect(row("900.0").flags).toContain("club-symbol");
+    // An ISSkiOM heading is a spec symbol on any map (docs/map-symbols.md §12), a number without one is the club's.
+    const h = { ...header, symbols: header.symbols.map((s, i) => (i === 0 ? { ...s, code: "801.1" } : i === 2 ? { ...s, code: "821.0" } : s)) };
+    const rs = reviewRows(h, counts);
+    expect(rs[0].flags).not.toContain("club-symbol");
+    expect(rs[2].flags).toContain("club-symbol");
     expect(row("401.0")).toMatchObject({ fingerprint: null, candidates: [], colourClass: "unclassified" });
   });
 

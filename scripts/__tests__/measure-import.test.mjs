@@ -67,11 +67,23 @@ describe("measure-import.mjs", () => {
   it("reports lower purple's place in the aligned stack per map", () => {
     const out = path.join(dir, "purple.json");
     const r = run(ocd, xmap, "--out", out);
-    assert.match(r.stdout, /^ {2}purple {5}lower at 3 of 6 \(inserted\) {2}areas above 0 {2}conflicts \d+$/m);
-    assert.match(r.stdout, /^ {2}purple {5}lower at 3 of 8 \(inserted\) {2}areas above 0 {2}conflicts \d+$/m);
+    // G21: green 100 % and the track mask below lower purple, the track inks above it (docs/map-symbols.md §12.3).
+    assert.match(r.stdout, /^ {2}purple {5}lower at 5 of 10 \(inserted\) {2}areas above 0 {2}conflicts \d+$/m);
+    assert.match(r.stdout, /^ {2}purple {5}lower at 4 of 11 \(inserted\) {2}areas above 0 {2}conflicts \d+$/m);
     const maps = JSON.parse(readFileSync(out, "utf8")).maps;
-    assert.deepEqual(maps["test.ocd"].lowerPurple, { index: 3, colours: 6, inserted: true, areasAbove: [], conflicts: maps["test.ocd"].lowerPurple.conflicts });
+    assert.deepEqual(maps["test.ocd"].lowerPurple, { index: 5, colours: 10, inserted: true, areasAbove: [], conflicts: maps["test.ocd"].lowerPurple.conflicts });
     assert.ok(maps["test.ocd"].lowerPurple.conflicts > 0); // the fixture's blue line colour sits under its yellow
+  });
+
+  // G21 (docs/map-symbols.md §12.3): the overlay's palette rows in every stack, and where each comes from.
+  it("reports the ISSkiOM rows per map", () => {
+    const out = path.join(dir, "ski.json");
+    const r = run(ocd, "--out", out);
+    assert.match(r.stdout, /^ {2}ski-o {6}green100-area inserted at \d+ {2}white-skio inserted at \d+ {2}orange-skio inserted at \d+ {2}green-skio inserted at \d+$/m);
+    const ski = JSON.parse(readFileSync(out, "utf8")).maps["test.ocd"].skiO;
+    const purple = JSON.parse(readFileSync(out, "utf8")).maps["test.ocd"].lowerPurple;
+    assert.equal(ski["white-skio"].index, purple.index - 1);
+    assert.equal(ski["green-skio"].index, purple.colours - 2);
   });
 
   it("fails on unsupported-primitive warnings and lists them", () => {

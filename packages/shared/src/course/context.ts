@@ -1,6 +1,6 @@
 import type { MapDocumentHeader } from "../map-document/header.js";
-import { chooseLibrary } from "../import/matcher.js";
-import { getSymbolLibrary, isSymbolLibraryId } from "../symbol-library/index.js";
+import { chooseLibrary, isDocumentLibraryId } from "../import/matcher.js";
+import { getSymbolLibrary } from "../symbol-library/index.js";
 import type { CourseDocumentContext } from "./types.js";
 
 /**
@@ -11,7 +11,7 @@ import type { CourseDocumentContext } from "./types.js";
  * reference scale / map scale.
  */
 export function courseDocumentContext(header: Pick<MapDocumentHeader, "library" | "documentFactor" | "mapScale"> & { colours: CourseDocumentContext["colours"] }): CourseDocumentContext {
-  if (header.library && isSymbolLibraryId(header.library.id)) {
+  if (header.library && isDocumentLibraryId(header.library.id)) {
     return { colours: header.colours, libraryId: header.library.id, documentFactor: header.documentFactor, mapScale: header.mapScale };
   }
   const libraryId = chooseLibrary(header.mapScale);
