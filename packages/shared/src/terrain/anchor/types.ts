@@ -5,6 +5,10 @@
  * left of the chain's drawing direction, −1 right, 0 no statement (§3).
  */
 
+import type { ExternalSide, TerrainSolution } from "../solve/types.js";
+
+export { NO_LEVEL } from "../solve/types.js";
+
 /** DEM height in metres at a paper position (mm); NaN = no data (§6.1). */
 export type DemSampler = (xMm: number, yMm: number) => number;
 
@@ -87,9 +91,6 @@ export type AnchorStatus = (typeof ANCHOR_STATUS)[keyof typeof ANCHOR_STATUS];
 /** Where an anchored height came from (§6.8). */
 export const HEIGHT_SOURCE = { none: 0, dem: 1, neighbours: 2, component: 3 } as const;
 
-/** No level; the same value as §3's. */
-export const NO_LEVEL = -2147483648;
-
 /** Per-chain DEM statistics (§6.2–6.3). */
 export interface ChainDemStats {
   /** Samples taken, valid heights among them. */
@@ -128,12 +129,6 @@ export interface ChainAnchors {
   ladderLevel: Int32Array;
   /** median − phase − I · level; NaN unlabelled. */
   residual: Float64Array;
-}
-
-/** §3's ExternalSide, structurally. */
-export interface ExternalSideOut {
-  source: string;
-  side: Int8Array;
 }
 
 export interface Ladder {
@@ -179,19 +174,15 @@ export interface DemAnchor {
   /** Anchor grade, or coarse promoted (§6.0 answer 1). */
   levelsAllowed: boolean;
   chains: ChainAnchors;
-  external: ExternalSideOut;
+  /** §3's external side: pass as `solveTerrain(graph, { external })` (§3.2, §6.3). */
+  external: ExternalSide;
   ladders: Ladder[];
   areas: LadderArea[];
   report: AnchorReport;
 }
 
-/** The fields of §3's TerrainSolution that §6.8 reads. */
-export interface SolvedLevels {
-  side: Int8Array;
-  chainLevel: Int32Array;
-  chainStep: Uint8Array;
-  regionComponent: Int32Array;
-}
+/** The fields of §3's TerrainSolution that §6.8 reads (a whole solution will do). */
+export type SolvedLevels = Pick<TerrainSolution, "side" | "chainLevel" | "chainStep" | "regionComponent">;
 
 export interface AnchoredHeights {
   /** Metres; NaN = none. */
