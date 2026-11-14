@@ -1240,13 +1240,14 @@ sheets are byte-equal to the cloud's, its `print-job` equal and every
 `print.png` equal (`venue-print.test.ts`); the event's local id on the box
 differs and appears in none of them.
 
-What the box prints is the checkout's copy. A sheet or template edited on
-the cloud during the lease, or written from the box (those writes are
-forwarded to the cloud, `offline-architecture.md` "Non-critical data"),
-reaches the box with row G19; until then an editor on the box works on
-the stale copy, so a second write of the same sheet or template is a
-`CONFLICT` on the cloud, and layout is edited on the cloud during a lease
-(`map-storage.md` §9). An export's sheet-ensuring step
+What the box prints is its copy, which follows the cloud's (row G19,
+`map-storage.md` §7.2 "Following the cloud during a lease"): a sheet or
+template edited on the cloud during the lease reaches the box at the
+next settings refresh, and one written from the box (those writes are
+forwarded to the cloud, `offline-architecture.md` "Non-critical data")
+reaches it before the forwarded write's reply, so an editor on the box
+reads its own write and its token. Layout can be edited on the box while
+the cloud answers. An export's sheet-ensuring step
 (`layout.autoSheets`, `course-layout.md` §7) is such a write: on a box
 whose cloud is unreachable the web skips it (the forwarder's
 `CLOUD_UNREACHABLE` refusal) and downloads from the copy, so a course

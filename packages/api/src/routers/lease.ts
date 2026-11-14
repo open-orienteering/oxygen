@@ -3,8 +3,8 @@
  *
  * Two audiences:
  *   - **Node-to-node** (peerProcedure, shared-secret): `acquire`, `release`,
- *     `exportSnapshot`, `exportSettings`, `exportBlob` — the cloud-side
- *     surface a venue's checkout/checkin drives.
+ *     `exportSnapshot`, `exportSettings`, `exportBlob`, `exportMapRows` —
+ *     the cloud-side surface a venue's checkout/checkin and refreshes drive.
  *   - **Operator** (public/eventProcedure): `status` for the shell badge,
  *     `checkout`/`checkin` on the venue box, `forceTakeover` on the node
  *     that needs control back after a venue box died.
@@ -37,6 +37,7 @@ import {
   fetchSnapshotBlobs,
 } from "../sync/snapshotMaps.js";
 import { exportPeerBlobSlice, fetchSnapshotGraphics } from "../sync/snapshotGraphics.js";
+import { exportMapRows } from "../sync/mapRefresh.js";
 import {
   nodeId,
   nodeRole,
@@ -120,6 +121,13 @@ export const leaseRouter = router({
   exportBlob: peerProcedure
     .input(exportBlobInput)
     .query(async ({ ctx, input }) => exportPeerBlobSlice(ctx.db, ctx.event.id, input)),
+
+  /**
+   * The event's cloud-owned map rows without bytes — the source of a box's
+   * map refresh during a lease (row G19, docs/map-storage.md §7.2
+   * "Following the cloud during a lease"). Bytes follow through `exportBlob`.
+   */
+  exportMapRows: peerProcedure.query(async ({ ctx }) => exportMapRows(ctx.db, ctx.event.id)),
 
   // ─── Operator surface ─────────────────────────────────────
 

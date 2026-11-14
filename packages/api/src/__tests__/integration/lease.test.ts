@@ -18,6 +18,12 @@
  * pre-pipeline row is skipped, bytes that do not match their hash fail
  * the checkout and release the peer lease, an exporter without the map
  * part still checks out, and a re-checkout fetches nothing.
+ *
+ * G19 (docs/map-storage.md §7.2 "Following the cloud during a lease"): a
+ * box mirrors the cloud's sheets, templates, objects, graphics, class
+ * print overrides, map files and patch on refresh — a sheet edited and a
+ * map re-imported on the cloud reach it, offline it keeps its copy, and
+ * nothing race-critical is touched.
  */
 
 import { describe, it, expect, beforeAll, afterAll } from "vitest";
@@ -47,8 +53,10 @@ import {
 } from "../../sync/lease.js";
 import {
   _setPeerTransportFactory,
+  refreshAllSettingsOnce,
   type PeerTransport,
 } from "../../sync/shipper.js";
+import { canonicalJson, exportMapRows, refreshCloudOwnedMaps, refreshWrites } from "../../sync/mapRefresh.js";
 import { refreshCloudOwnedSettings } from "../../sync/settingsRefresh.js";
 import {
   ingestJournalEntries,
@@ -58,7 +66,7 @@ import type { EventRef } from "../../db.js";
 import { importAndStoreOcad } from "../../map-store/documents.js";
 import { exportBlobSlice } from "../../sync/snapshotMaps.js";
 import { exportGraphicSlice, exportPeerBlobSlice } from "../../sync/snapshotGraphics.js";
-import { registerVenueForwarder } from "../../sync/venueForwarder.js";
+import { refreshAfterForward, registerVenueForwarder } from "../../sync/venueForwarder.js";
 import { registerMapDocumentRoutes, resetDocumentAccessCache } from "../../map-store/routes.js";
 
 const FIXTURE = resolve(__dirname, "../../../../../e2e/test.ocd");
@@ -131,6 +139,7 @@ function leasePeerToB(): LeasePeer {
         where: { id: eventB.id },
       })) as unknown as Record<string, unknown>,
     exportBlob: async (_nameId, input) => exportPeerBlobSlice(dbB, eventB.id, input),
+    exportMapRows: async () => exportMapRows(dbB, eventB.id),
   };
 }
 
@@ -139,6 +148,7 @@ function jsonLeasePeerToB(): LeasePeer {
   return {
     ...leasePeerToB(),
     exportSnapshot: async () => JSON.parse(JSON.stringify(await exportEventSnapshot(dbB, eventB))),
+    exportMapRows: async () => JSON.parse(JSON.stringify(await exportMapRows(dbB, eventB.id))),
   };
 }
 
@@ -842,6 +852,402 @@ describe("checkout → write → checkin lifecycle", () => {
       expect(Buffer.from(club.data).equals(CLUB_PNG)).toBe(true);
     } finally {
       await undoCheckout();
+    }
+  });
+});
+
+describe("a box follows the cloud's map rows during a lease (G19)", () => {
+  // docs/map-storage.md §7.2 "Following the cloud during a lease".
+  const SHEET_VERSION_2 = SHEET_VERSION + 1n; // rounds like SHEET_VERSION over JSON
+  const TEMPLATE_VERSION_2 = TEMPLATE_VERSION + 1n;
+  const NEW_SHEET_VERSION = 2n ** 60n + 404n;
+  const NEW_SVG = Buffer.from(`<svg xmlns="http://www.w3.org/2000/svg"><!--new-${mapSuffix}--></svg>`);
+  let box: EventRef;
+  let reimport: { sourceHash: string; documentHash: string; bytes: Buffer };
+  const cleanup: Array<() => Promise<unknown>> = [];
+
+  const refresh = (peer: LeasePeer = jsonLeasePeerToB()) => refreshCloudOwnedMaps(ctx.db, box, peer);
+  const sheetOnB = () => dbB.courseMap.findUniqueOrThrow({ where: { id: sheetBId } });
+  const sheetOnBox = () => ctx.db.courseMap.findUniqueOrThrow({ where: { id: sheetBId } });
+  const boxFiles = () => ctx.db.mapFile.findMany({ where: { eventId: box.id } });
+
+  /** Every race-critical row of the box's event, less the classes' two cloud-owned layout columns. */
+  async function raceDigest(): Promise<string> {
+    const eventId = box.id;
+    const db = ctx.db;
+    const parts: unknown[][] = await Promise.all([
+      db.control.findMany({ where: { eventId } }),
+      db.course.findMany({ where: { eventId } }),
+      db.courseControl.findMany({ where: { course: { eventId } } }),
+      db.class.findMany({ where: { eventId }, omit: { printScale: true, sheetTemplateId: true, updatedAt: true } }),
+      db.classCoursePool.findMany({ where: { class: { eventId } } }),
+      db.runner.findMany({ where: { eventId } }),
+      db.team.findMany({ where: { eventId } }),
+      db.card.findMany({ where: { eventId } }),
+      db.cardReadout.findMany({ where: { eventId } }),
+      db.punch.findMany({ where: { eventId } }),
+      db.controlUnit.findMany({ where: { eventId } }),
+      db.journalEntry.findMany({ where: { eventId } }),
+      db.journalSyncState.findMany({ where: { eventId } }),
+      db.eventSeq.findMany({ where: { eventId, tableName: { notIn: ["map_templates", "course_maps", "course_objects"] } } }),
+      db.event.findMany({ where: { id: eventId }, select: { zeroTime: true, date: true, finishReceiptMessage: true } }),
+    ]);
+    return parts.map((rows) => rows.map(canonicalJson).sort().join("\n")).join("\n--\n");
+  }
+
+  beforeAll(async () => {
+    _setLeasePeerFactory(() => jsonLeasePeerToB());
+    try {
+      await caller.lease.checkout({ nameId: CHECKOUT_NAME });
+    } finally {
+      _setLeasePeerFactory(() => leasePeerToB());
+    }
+    box = await ctx.db.event.findUniqueOrThrow({ where: { nameId: CHECKOUT_NAME }, select: { id: true, nameId: true, zeroTime: true } });
+    const bytes = Buffer.concat([readFileSync(FIXTURE), Buffer.from(`lease-reimport-${mapSuffix}`)]);
+    const stored = await importAndStoreOcad(dbB, bytes, "lease2.ocd");
+    reimport = { sourceHash: stored.sourceHash, documentHash: stored.documentHash, bytes };
+  }, 60_000);
+
+  afterAll(async () => {
+    for (const undo of cleanup.reverse()) await undo();
+    await undoCheckout();
+    for (const db of [ctx.db, dbB] as const) {
+      await db.mapDocument.deleteMany({ where: { sourceHash: reimport.sourceHash } });
+      await db.mapSource.deleteMany({ where: { fileHash: reimport.sourceHash } });
+    }
+  }, 60_000);
+
+  it("an unchanged cloud: nothing written, nothing fetched", async () => {
+    const before = { sheet: await sheetOnBox(), files: await boxFiles() };
+    const res = await refresh();
+    expect(res).not.toBeNull();
+    expect(refreshWrites(res!)).toBe(0);
+    expect(res!.fetchedBytes).toBe(0);
+    expect((await sheetOnBox()).updatedAt).toEqual(before.sheet.updatedAt);
+    expect((await boxFiles()).map((f) => f.id)).toEqual(before.files.map((f) => f.id));
+  });
+
+  it("does nothing on a node that is not the holder, and asks the cloud nothing", async () => {
+    let asked = false;
+    const peer: LeasePeer = {
+      ...leasePeerToB(),
+      exportMapRows: async () => {
+        asked = true;
+        return exportMapRows(dbB, eventB.id);
+      },
+    };
+    expect(await refreshCloudOwnedMaps(ctx.db, ctx.event, peer)).toBeNull();
+    expect(asked).toBe(false);
+  });
+
+  it("lease.exportMapRows answers behind the shared secret", async () => {
+    await expect(makeCaller(box).lease.exportMapRows()).rejects.toMatchObject({ code: "UNAUTHORIZED" });
+    const rows = await makeCaller(box, { syncSecret: "test-sync-secret" }).lease.exportMapRows();
+    expect(rows.maps.files).toHaveLength(1);
+    expect(rows.maps.decisions).toBeUndefined();
+    expect(rows.tables.courseMap.map((r) => r.id)).toEqual([sheetBId]);
+    expect(rows.versions.courseMap).toEqual({ [sheetBId]: SHEET_VERSION.toString() });
+    expect(rows.classOverrides).toEqual([expect.objectContaining({ printScale: 7500, sheetTemplateId: templateBId })]);
+    expect(rows.graphics?.map((g) => g.id)).toEqual([eventGraphicId, clubGraphicId].sort((a, b) => Number(a - b)).map(String));
+  });
+
+  it("layout edited on the cloud reaches the box at the next refresh, tokens exact, nothing race-critical touched", async () => {
+    const digest = await raceDigest();
+    const sheetBefore = await sheetOnB();
+    const objectBefore = await dbB.courseObject.findUniqueOrThrow({ where: { id: objectBId } });
+    const classB = await dbB.class.findFirstOrThrow({ where: { eventId: eventB.id, sheetTemplateId: templateBId } });
+    const courseB = await dbB.course.findFirstOrThrow({ where: { eventId: eventB.id } });
+    // On the cloud: a sheet edited, a template renamed, an object reordered
+    // (z without a token), a class print scale changed, a sheet created
+    // drawing a club graphic nothing drew before, an event graphic uploaded,
+    // and a sheet for a course the box does not have.
+    await dbB.courseMap.update({ where: { id: sheetBId }, data: { overrides: { scale: 7500 }, version: SHEET_VERSION_2 } });
+    await dbB.mapTemplate.update({ where: { id: templateBId }, data: { name: "A4 liggande", version: TEMPLATE_VERSION_2 } });
+    await dbB.courseObject.update({ where: { id: objectBId }, data: { z: objectBefore.z + 5 } });
+    await dbB.class.update({ where: { id: classB.id }, data: { printScale: 5000 } });
+    const newSheet = await dbB.courseMap.create({
+      data: {
+        eventId: eventB.id,
+        name: "Extra",
+        courseId: courseB.id,
+        objects: [{ id: "img", anchor: "page", kind: "image", graphicId: Number(unreferencedClubGraphicId), x: 0, y: 0, width: 5, height: 5 }],
+        version: NEW_SHEET_VERSION,
+      },
+    });
+    const newGraphic = await dbB.graphic.create({ data: { eventId: eventB.id, name: "new.svg", mime: "image/svg+xml", data: NEW_SVG, sizeBytes: NEW_SVG.length } });
+    const strayCourse = await dbB.course.create({ data: { eventId: eventB.id, name: "Only on the cloud" } });
+    const straySheet = await dbB.courseMap.create({ data: { eventId: eventB.id, name: "Stray", courseId: strayCourse.id } });
+    cleanup.push(async () => {
+      await dbB.courseMap.update({ where: { id: sheetBId }, data: { overrides: sheetBefore.overrides as object, version: SHEET_VERSION } });
+      await dbB.mapTemplate.update({ where: { id: templateBId }, data: { name: "A4", version: TEMPLATE_VERSION } });
+      await dbB.courseObject.update({ where: { id: objectBId }, data: { z: objectBefore.z } });
+      await dbB.class.update({ where: { id: classB.id }, data: { printScale: 7500 } });
+      await dbB.courseMap.deleteMany({ where: { id: { in: [newSheet.id, straySheet.id] } } });
+      await dbB.course.deleteMany({ where: { id: strayCourse.id } });
+      await dbB.graphic.deleteMany({ where: { id: newGraphic.id } });
+    });
+
+    const res = await refresh();
+    expect(res).toMatchObject({
+      templates: { created: 0, updated: 1, deleted: 0 },
+      classes: 1,
+      sheets: { created: 1, updated: 1, deleted: 0, skipped: 1 },
+      objects: { created: 0, updated: 1, deleted: 0 },
+      graphics: { written: 2, updated: 0, deleted: 0 },
+      fetchedBytes: NEW_SVG.length + CLUB_PNG.length,
+      mapFiles: 0,
+      patch: "unchanged",
+    });
+
+    const sheet = await sheetOnBox();
+    expect(sheet.overrides).toEqual({ scale: 7500 });
+    expect(sheet.version).toBe(SHEET_VERSION_2);
+    expect(await ctx.db.mapTemplate.findUniqueOrThrow({ where: { id: templateBId } })).toMatchObject({ name: "A4 liggande", version: TEMPLATE_VERSION_2 });
+    expect((await ctx.db.courseObject.findUniqueOrThrow({ where: { id: objectBId } })).z).toBe(objectBefore.z + 5);
+    expect(await ctx.db.class.findUniqueOrThrow({ where: { id: classB.id } })).toMatchObject({ printScale: 5000, sheetTemplateId: templateBId });
+    expect(await ctx.db.courseMap.findUnique({ where: { id: newSheet.id } })).toMatchObject({ seq: newSheet.seq, version: NEW_SHEET_VERSION });
+    expect(await ctx.db.courseMap.findUnique({ where: { id: straySheet.id } })).toBeNull();
+    expect(Buffer.from((await ctx.db.graphic.findUniqueOrThrow({ where: { id: newGraphic.id } })).data).equals(NEW_SVG)).toBe(true);
+    expect(await ctx.db.graphic.findUniqueOrThrow({ where: { id: unreferencedClubGraphicId } })).toMatchObject({ eventId: null });
+    // A sheet the box creates later takes a seq past the cloud's.
+    const counter = await ctx.db.eventSeq.findUniqueOrThrow({ where: { eventId_tableName: { eventId: box.id, tableName: "course_maps" } } });
+    expect(counter.nextSeq).toBeGreaterThan(newSheet.seq);
+    expect(counter.nextSeq).toBeGreaterThan(straySheet.seq); // a skipped sheet's seq is reserved too
+    // Nothing race-critical moved.
+    expect(await raceDigest()).toBe(digest);
+
+    // A second refresh: nothing to write, nothing to fetch.
+    const again = await refresh();
+    expect(refreshWrites(again!)).toBe(0);
+    expect(again!.fetchedBytes).toBe(0);
+    expect(again!.sheets.skipped).toBe(1);
+  });
+
+  it("rows deleted on the cloud are deleted on the box; a club graphic stays", async () => {
+    const extra = await dbB.courseMap.findFirstOrThrow({ where: { eventId: eventB.id, name: "Extra" } });
+    const newGraphic = await dbB.graphic.findFirstOrThrow({ where: { eventId: eventB.id, name: "new.svg" } });
+    await dbB.courseMap.delete({ where: { id: extra.id } });
+    await dbB.graphic.delete({ where: { id: newGraphic.id } });
+    const res = await refresh();
+    expect(res).toMatchObject({ sheets: { deleted: 1 }, graphics: { deleted: 1 } });
+    expect(await ctx.db.courseMap.findUnique({ where: { id: extra.id } })).toBeNull();
+    expect(await ctx.db.graphic.findUnique({ where: { id: newGraphic.id } })).toBeNull();
+    expect(await ctx.db.graphic.findUnique({ where: { id: unreferencedClubGraphicId } })).not.toBeNull();
+  });
+
+  it("templates: a key change that promotes an extra and a name swap apply in any seq order; a delete nulls the box's references", async () => {
+    const KEY = `k-${mapSuffix}`;
+    // On the cloud: extra X (lower seq) and auto Y of one key.
+    const x = await dbB.mapTemplate.create({ data: { eventId: eventB.id, name: `Swap1-${mapSuffix}`, printScale: 10000, autoKey: KEY, isExtra: true } });
+    const y = await dbB.mapTemplate.create({ data: { eventId: eventB.id, name: `Swap2-${mapSuffix}`, printScale: 15000, autoKey: KEY, isExtra: false } });
+    const courseOnB = await dbB.course.findFirstOrThrow({ where: { eventId: eventB.id, name: "Blå" } });
+    const sheetOnX = await dbB.courseMap.create({ data: { eventId: eventB.id, name: "On X", courseId: courseOnB.id, templateId: x.id } });
+    cleanup.push(async () => {
+      await dbB.courseMap.deleteMany({ where: { id: sheetOnX.id } });
+      await dbB.mapTemplate.deleteMany({ where: { id: { in: [x.id, y.id] } } });
+    });
+    expect(x.seq).toBeLessThan(y.seq);
+    await refresh();
+    expect(await ctx.db.mapTemplate.findUniqueOrThrow({ where: { id: y.id } })).toMatchObject({ autoKey: KEY, isExtra: false });
+
+    // One cloud edit moves Y to another key and promotes X; the names swap too.
+    await dbB.mapTemplate.update({ where: { id: y.id }, data: { name: `tmp-${mapSuffix}`, autoKey: `${KEY}-other` } });
+    await dbB.mapTemplate.update({ where: { id: x.id }, data: { name: `Swap2-${mapSuffix}`, isExtra: false } });
+    await dbB.mapTemplate.update({ where: { id: y.id }, data: { name: `Swap1-${mapSuffix}` } });
+    const res = await refresh();
+    expect(res!.templates).toEqual({ created: 0, updated: 2, deleted: 0 });
+    expect(await ctx.db.mapTemplate.findUniqueOrThrow({ where: { id: x.id } })).toMatchObject({ name: `Swap2-${mapSuffix}`, autoKey: KEY, isExtra: false });
+    expect(await ctx.db.mapTemplate.findUniqueOrThrow({ where: { id: y.id } })).toMatchObject({ name: `Swap1-${mapSuffix}`, autoKey: `${KEY}-other`, isExtra: false });
+
+    // A template deleted on the cloud: gone on the box, the sheet that used it on NULL.
+    await dbB.mapTemplate.delete({ where: { id: x.id } });
+    const del = await refresh();
+    expect(del!.templates.deleted).toBe(1);
+    expect(await ctx.db.mapTemplate.findUnique({ where: { id: x.id } })).toBeNull();
+    expect((await ctx.db.courseMap.findUniqueOrThrow({ where: { id: sheetOnX.id } })).templateId).toBeNull();
+  });
+
+  it("graphics: a rename on the cloud updates the box, new bytes under the same id are fetched", async () => {
+    const original = await dbB.graphic.findUniqueOrThrow({ where: { id: eventGraphicId } });
+    cleanup.push(() => dbB.graphic.update({ where: { id: eventGraphicId }, data: { name: original.name, data: original.data, sizeBytes: original.sizeBytes } }));
+    await dbB.graphic.update({ where: { id: eventGraphicId }, data: { name: "renamed.svg" } });
+    const renamed = await refresh();
+    expect(renamed).toMatchObject({ graphics: { written: 0, updated: 1, deleted: 0 }, fetchedBytes: 0 });
+    expect((await ctx.db.graphic.findUniqueOrThrow({ where: { id: eventGraphicId } })).name).toBe("renamed.svg");
+    await dbB.graphic.update({ where: { id: eventGraphicId }, data: { data: NEW_SVG, sizeBytes: NEW_SVG.length } });
+    const replaced = await refresh();
+    expect(replaced).toMatchObject({ graphics: { written: 1 }, fetchedBytes: NEW_SVG.length });
+    expect(Buffer.from((await ctx.db.graphic.findUniqueOrThrow({ where: { id: eventGraphicId } })).data).equals(NEW_SVG)).toBe(true);
+    await dbB.graphic.update({ where: { id: eventGraphicId }, data: { name: original.name, data: original.data, sizeBytes: original.sizeBytes } });
+    await refresh();
+  });
+
+  it("the mirror is exact: a course object and a map file the box wrote itself go at the next refresh", async () => {
+    const local = await ctx.db.courseObject.create({
+      data: { eventId: box.id, kind: "text", geometry: [{ x: 0, y: 0 }], props: { text: "box" }, scope: { all: true }, source: "import" },
+    });
+    // A box-local object takes a seq past the cloud's.
+    const cloudMax = (await dbB.courseObject.aggregate({ where: { eventId: eventB.id }, _max: { seq: true } }))._max.seq ?? 0;
+    expect(local.seq).toBeGreaterThan(cloudMax);
+    await ctx.db.mapFile.create({ data: { eventId: box.id, fileName: "box-upload.ocd", sourceHash, documentHash } });
+    const res = await refresh();
+    expect(res).toMatchObject({ objects: { deleted: 1 }, mapFiles: 3 });
+    expect(await ctx.db.courseObject.findUnique({ where: { id: local.id } })).toBeNull();
+    expect((await boxFiles()).map((f) => f.fileName)).toEqual(["lease.ocd"]);
+  });
+
+  it("two refreshes of one event at once both settle, the second after the first", async () => {
+    await dbB.courseMap.update({ where: { id: sheetBId }, data: { name: "Concurrent" } });
+    cleanup.push(() => dbB.courseMap.update({ where: { id: sheetBId }, data: { name: "Blå karta" } }));
+    const [a, b] = await Promise.all([refresh(), refresh()]);
+    expect(a!.sheets.updated + b!.sheets.updated).toBe(1);
+    expect((await sheetOnBox()).name).toBe("Concurrent");
+  });
+
+  it("offline, or with bytes that do not match, nothing is written and the box keeps its copy", async () => {
+    const pin = await dbB.mapFile.findFirstOrThrow({ where: { eventId: eventB.id, sourceHash } });
+    await dbB.mapFile.update({ where: { id: pin.id }, data: { sourceHash: reimport.sourceHash, documentHash: reimport.documentHash } });
+    cleanup.push(() => dbB.mapFile.update({ where: { id: pin.id }, data: { sourceHash, documentHash } }));
+    await dbB.courseMap.update({ where: { id: sheetBId }, data: { name: "Offline edit" } });
+    cleanup.push(() => dbB.courseMap.update({ where: { id: sheetBId }, data: { name: "Blå karta" } }));
+    const digest = await raceDigest();
+    const before = { files: await boxFiles(), sheet: await sheetOnBox() };
+
+    const offline: LeasePeer = { ...jsonLeasePeerToB(), exportMapRows: async () => Promise.reject(new Error("fetch failed")) };
+    await expect(refresh(offline)).rejects.toThrow("fetch failed");
+    const tampered: LeasePeer = {
+      ...jsonLeasePeerToB(),
+      exportBlob: async (nameId, input) => {
+        const slice = await leasePeerToB().exportBlob(nameId, input);
+        const bytes = Buffer.from(slice.base64, "base64");
+        bytes[0] ^= 0xff;
+        return { ...slice, base64: bytes.toString("base64") };
+      },
+    };
+    await expect(refresh(tampered)).rejects.toMatchObject({ code: "PRECONDITION_FAILED" });
+
+    expect(await boxFiles()).toEqual(before.files);
+    expect(await sheetOnBox()).toEqual(before.sheet);
+    expect(await ctx.db.mapSource.findUnique({ where: { fileHash: reimport.sourceHash } })).toBeNull();
+    expect(await ctx.db.mapDocument.findUnique({ where: { hash: reimport.documentHash } })).toBeNull();
+    expect(await raceDigest()).toBe(digest);
+  });
+
+  it("a map re-imported on the cloud reaches the box: new source and document, the pin, the document route; the dormant patch goes", async () => {
+    const digest = await raceDigest();
+    const res = await refresh();
+    expect(res).toMatchObject({ mapFiles: 2, patch: "deleted" });
+    const docB = await dbB.mapDocument.findUniqueOrThrow({ where: { hash: reimport.documentHash } });
+    expect(res!.fetchedBytes).toBe(reimport.bytes.length + docB.sizeBytes);
+    const files = await boxFiles();
+    expect(files).toHaveLength(1);
+    expect(files[0]).toMatchObject({ fileName: "lease.ocd", sourceHash: reimport.sourceHash, documentHash: reimport.documentHash, clubMapVersionId: null });
+    expect(Buffer.from((await ctx.db.mapSource.findUniqueOrThrow({ where: { fileHash: reimport.sourceHash } })).bytes).equals(reimport.bytes)).toBe(true);
+    expect(sha256((await ctx.db.mapDocument.findUniqueOrThrow({ where: { hash: reimport.documentHash } })).bytes)).toBe(reimport.documentHash);
+    // The sheet's name edit came with it, and the box has no patch for the new pin.
+    expect((await sheetOnBox()).name).toBe("Offline edit");
+    expect(await ctx.db.mapPatch.findUnique({ where: { eventId: box.id } })).toBeNull();
+    expect(await raceDigest()).toBe(digest);
+
+    const server: FastifyInstance = Fastify({ logger: false });
+    registerMapDocumentRoutes(server);
+    await server.ready();
+    const previousMode = process.env.AUTH_MODE;
+    process.env.AUTH_MODE = "proxy";
+    resetDocumentAccessCache();
+    try {
+      const url = `/api/map-documents/${reimport.documentHash}?event=${CHECKOUT_NAME}&k=${KIOSK_KEY}`;
+      const kiosk = await server.inject({ method: "GET", url, headers: { "accept-encoding": "identity" } });
+      expect(kiosk.statusCode).toBe(200);
+      expect(sha256(kiosk.rawPayload)).toBe(reimport.documentHash);
+    } finally {
+      if (previousMode === undefined) delete process.env.AUTH_MODE;
+      else process.env.AUTH_MODE = previousMode;
+      resetDocumentAccessCache();
+      await server.close();
+    }
+
+    // The pin moved back: the old document's patch returns verbatim, token exact; nothing fetched.
+    await dbB.mapFile.updateMany({ where: { eventId: eventB.id, sourceHash: reimport.sourceHash }, data: { sourceHash, documentHash } });
+    const back = await refresh();
+    expect(back).toMatchObject({ mapFiles: 2, patch: "written", fetchedBytes: 0 });
+    expect(await ctx.db.mapPatch.findUniqueOrThrow({ where: { eventId: box.id } })).toMatchObject({ documentHash, version: PATCH_VERSION, ops: PATCH_OPS });
+  });
+
+  it("runs on the settings cadence beside the settings refresh, and the two fail independently", async () => {
+    _setLeasePeerFactory(() => jsonLeasePeerToB());
+    try {
+      await dbB.courseMap.update({ where: { id: sheetBId }, data: { name: "Cadence" } });
+      await dbB.event.update({ where: { id: eventB.id }, data: { finishReceiptMessage: "Cadence!" } });
+      await refreshAllSettingsOnce(ctx.db, PEER_URL, "test-sync-secret");
+      expect((await sheetOnBox()).name).toBe("Cadence");
+      expect((await ctx.db.event.findUniqueOrThrow({ where: { id: box.id } })).finishReceiptMessage).toBe("Cadence!");
+
+      // A cloud that predates exportMapRows: settings still follow, the map copy stays.
+      _setLeasePeerFactory(() => ({ ...jsonLeasePeerToB(), exportMapRows: async () => Promise.reject(new Error("No procedure found")) }));
+      await dbB.courseMap.update({ where: { id: sheetBId }, data: { name: "Not yet" } });
+      await dbB.event.update({ where: { id: eventB.id }, data: { finishReceiptMessage: "Still!" } });
+      await refreshAllSettingsOnce(ctx.db, PEER_URL, "test-sync-secret");
+      expect((await sheetOnBox()).name).toBe("Cadence");
+      expect((await ctx.db.event.findUniqueOrThrow({ where: { id: box.id } })).finishReceiptMessage).toBe("Still!");
+    } finally {
+      _setLeasePeerFactory(() => leasePeerToB());
+      await dbB.event.update({ where: { id: eventB.id }, data: { finishReceiptMessage: "" } });
+    }
+  });
+
+  it("a forwarded layout write is on the box, with the cloud's token, when its reply arrives", async () => {
+    const TOKEN_3 = SHEET_VERSION + 3n;
+    // A stub cloud that executes the write on B, as the real cloud would.
+    const cloud = Fastify({ logger: false });
+    cloud.post("/trpc/*", async () => {
+      await dbB.courseMap.update({ where: { id: sheetBId }, data: { name: "Forwarded", version: TOKEN_3 } });
+      return { result: { data: { version: TOKEN_3.toString() } } };
+    });
+    const address = await cloud.listen({ port: 0, host: "127.0.0.1" });
+    const previous = { role: process.env.NODE_ROLE, peer: process.env.SYNC_PEER_URL };
+    process.env.NODE_ROLE = "venue";
+    process.env.SYNC_PEER_URL = address;
+    const venue = Fastify({ logger: false });
+    _setLeasePeerFactory(() => jsonLeasePeerToB());
+    try {
+      registerVenueForwarder(venue);
+      venue.post("/trpc/*", async () => ({ result: { data: "local" } }));
+      await venue.ready();
+      // The header the web's tRPC clients send (\`x-event-id\` is the peers').
+      const headers = { "content-type": "application/json", "x-competition-id": CHECKOUT_NAME };
+      const reply = await venue.inject({ method: "POST", url: "/trpc/courseMap.update", headers, payload: { seq: 1, name: "Forwarded" } });
+      expect(reply.statusCode).toBe(200);
+      expect(await sheetOnBox()).toMatchObject({ name: "Forwarded", version: TOKEN_3 });
+    } finally {
+      _setLeasePeerFactory(() => leasePeerToB());
+      if (previous.role === undefined) delete process.env.NODE_ROLE;
+      else process.env.NODE_ROLE = previous.role;
+      process.env.SYNC_PEER_URL = previous.peer ?? PEER_URL;
+      await venue.close();
+      await cloud.close();
+    }
+  });
+
+  it("a slow refresh after a forwarded write holds the reply only for the bound", async () => {
+    let release!: () => void;
+    const gate = new Promise<void>((r) => (release = r));
+    _setLeasePeerFactory(() => ({
+      ...jsonLeasePeerToB(),
+      exportMapRows: async () => {
+        await gate;
+        return exportMapRows(dbB, eventB.id);
+      },
+    }));
+    try {
+      const started = Date.now();
+      await refreshAfterForward(CHECKOUT_NAME, PEER_URL, 50);
+      expect(Date.now() - started).toBeLessThan(2_000);
+    } finally {
+      release();
+      _setLeasePeerFactory(() => leasePeerToB());
+      // Refreshes of one event queue: this one returns after the held one finished.
+      await refresh();
     }
   });
 });
