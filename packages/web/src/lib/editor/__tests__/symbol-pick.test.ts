@@ -71,4 +71,34 @@ describe("the eyedropper's pick (docs/course-editor.md §6.4)", () => {
   it("empty map picks nothing", () => {
     expect(index.symbolAt({ x: 100, y: 100 }, 0.5)).toBeNull();
   });
+
+  describe("over the effective document (map-patches §2.4)", () => {
+    const ADD = "00000000-0000-7000-8000-000000000001";
+    const ADD2 = "00000000-0000-7000-8000-000000000002";
+    const patched = mapDocument.applyPatch(doc(), {
+      documentHash: "ab".repeat(32), enabled: true,
+      symbols: { "ISOM2017-2:506": { code: "506", name: "Path", kind: "line", origin: "source", hidden: false, render: line("506", BLACK, 250).render } },
+      ops: {
+        // The black line at y = 20 hidden; the one at y = 10 moved to y = 15.
+        "hide:1": { op: "hide", sourceIndex: 1 },
+        "modify:2": { op: "modify", sourceIndex: 2, coords: [[0, 1500], [4000, 1500]] },
+        [`add:${ADD}`]: { op: "add", id: ADD, type: T.line, symbol: { doc: 1 }, coords: [[0, 3500], [4000, 3500]] },
+        [`add:${ADD2}`]: { op: "add", id: ADD2, type: T.line, symbol: { patch: "ISOM2017-2:506" }, coords: [[5000, 0], [5000, 4000]] },
+      },
+    }).document;
+    const eff = pickIndexOf(patched);
+
+    it("a hidden object is not picked or counted; a modified one is picked where it now is", () => {
+      expect(eff.symbolAt({ x: 10, y: 20 }, 0.3)?.symbolIdx).toBe(0);
+      expect(eff.symbolAt({ x: 10, y: 10 }, 0.3)?.symbolIdx).toBe(0);
+      expect(eff.symbolAt({ x: 10, y: 15 }, 0.3)).toEqual({ symbolIdx: 1, colour: BLACK });
+    });
+
+    it("an added object of a document symbol is picked and counted; one of a patch symbol is neither", () => {
+      expect(eff.symbolAt({ x: 10, y: 35 }, 0.3)).toEqual({ symbolIdx: 1, colour: BLACK });
+      expect(eff.symbolAt({ x: 50, y: 20 }, 0.3)).toBeNull();
+      // Per document symbol only: the hidden line drops out, the added one counts.
+      expect([...eff.objectsPerSymbol]).toEqual([1, 2, 1, 1, 1]);
+    });
+  });
 });

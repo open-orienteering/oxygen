@@ -2,7 +2,8 @@
  * What the vector base layer reads from a map document's header
  * (docs/map-rendering.md §5.4 "Layer"): the paper frame for `mapGeo`,
  * the drawn extent in paper mm, the colour of each stack position, the
- * proxy colours for unmatched symbols and the GPU budget.
+ * proxy colours for unmatched symbols and the GPU budget — and the
+ * event's patch paired with the document it is keyed onto.
  */
 
 import { render, type mapDocument, type mapGeo } from "@oxygen/shared";
@@ -51,4 +52,13 @@ export type MapBudget = "event" | "club";
 /** Resident GPU budget by provenance (docs/map-rendering.md §5.2 "Arena and buckets"). */
 export function budgetBytes(budget: MapBudget): number {
   return budget === "club" ? CLUB_BUDGET_BYTES : EVENT_BUDGET_BYTES;
+}
+
+/**
+ * The patch the layer draws over the document `hash` (docs/map-patches.md §2: the caller pairs
+ * them): the delivered patch when it is keyed onto this document, else none.
+ */
+export function patchForDocument(hash: string, delivery: { patch: mapDocument.MapPatch | null } | null | undefined): mapDocument.MapPatch | null {
+  const p = delivery?.patch;
+  return p && p.documentHash === hash ? p : null;
 }

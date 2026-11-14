@@ -1,12 +1,19 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
 import { mapDocument } from "@oxygen/shared";
 import {
+  getMapPatch,
   loadMapDocument,
+  loadMapPatch,
   MAP_DOCUMENT_PATH_RE,
   MapDocumentError,
   MEMORY_ENTRIES,
+  NO_PATCH,
+  parseMapPatchDelivery,
   requestPersistentStorage,
   resetMapDocumentCache,
+  resetMapPatches,
+  setMapPatch,
+  subscribeMapPatch,
 } from "../map-document-cache";
 
 const HASH = "ab".repeat(32);
@@ -106,5 +113,60 @@ describe("map document cache", () => {
   it("tolerates a browser without the storage API", async () => {
     vi.stubGlobal("navigator", { onLine: true });
     expect(await requestPersistentStorage()).toBe(false);
+  });
+});
+
+describe("the event's patch (docs/map-patches.md §3.3)", () => {
+  beforeEach(() => resetMapPatches());
+  afterEach(() => vi.unstubAllGlobals());
+
+  const patch = { documentHash: HASH, enabled: true, ops: { "hide:3": { op: "hide", sourceIndex: 3 } }, symbols: {} };
+  const json = (body: unknown, init: ResponseInit = {}) => new Response(JSON.stringify(body), { status: 200, headers: { "content-type": "application/json", etag: '"7"' }, ...init });
+
+  it("asks the event's route with the kiosk key as a header, and keeps the delivery for the session", async () => {
+    const fetchImpl = vi.fn(async () => json({ version: "7", patch }));
+    const d = await loadMapPatch("itest", { kioskKey: "k1", fetchImpl });
+    const [url, init] = fetchImpl.mock.calls[0] as unknown as [string, RequestInit];
+    expect(url).toBe("/api/maps/itest/patch");
+    expect(init.headers).toEqual({ "x-kiosk-key": "k1" });
+    expect(d).toEqual({ version: "7", patch });
+    expect(getMapPatch("itest")).toEqual(d);
+  });
+
+  it("revalidates with If-None-Match: a 304 keeps the copy, a 200 replaces it and tells subscribers", async () => {
+    await loadMapPatch("itest", { kioskKey: null, fetchImpl: async () => json({ version: "7", patch }) });
+    const seen = vi.fn();
+    const off = subscribeMapPatch("itest", seen);
+    const notModified = vi.fn(async () => new Response(null, { status: 304 }));
+    expect(await loadMapPatch("itest", { kioskKey: null, fetchImpl: notModified })).toEqual({ version: "7", patch });
+    expect((notModified.mock.calls[0] as unknown as [string, RequestInit])[1].headers).toEqual({ "if-none-match": '"7"' });
+    expect(seen).not.toHaveBeenCalled();
+    await loadMapPatch("itest", { kioskKey: null, fetchImpl: async () => json({ version: "8", patch: { ...patch, enabled: false } }) });
+    expect(seen).toHaveBeenCalledTimes(1);
+    expect(getMapPatch("itest")?.patch?.enabled).toBe(false);
+    off();
+    setMapPatch("itest", NO_PATCH);
+    expect(seen).toHaveBeenCalledTimes(1);
+  });
+
+  it("no row is the identity; a failure keeps the session's copy, else no patch; never rejects", async () => {
+    expect(await loadMapPatch("a", { kioskKey: null, fetchImpl: async () => json({ version: "0", patch: null }) })).toEqual(NO_PATCH);
+    expect(await loadMapPatch("b", { kioskKey: null, fetchImpl: async () => { throw new TypeError("offline"); } })).toEqual(NO_PATCH);
+    expect(getMapPatch("b")).toBeUndefined();
+    await loadMapPatch("c", { kioskKey: null, fetchImpl: async () => json({ version: "7", patch }) });
+    expect(await loadMapPatch("c", { kioskKey: null, fetchImpl: async () => new Response("", { status: 500 }) })).toEqual({ version: "7", patch });
+  });
+
+  it("one request per event at a time", async () => {
+    const fetchImpl = vi.fn(async () => json({ version: "7", patch }));
+    await Promise.all([loadMapPatch("itest", { kioskKey: null, fetchImpl }), loadMapPatch("itest", { kioskKey: null, fetchImpl })]);
+    expect(fetchImpl).toHaveBeenCalledTimes(1);
+  });
+
+  it("an unparseable patch is no patch, with its version kept", () => {
+    vi.spyOn(console, "warn").mockImplementation(() => undefined);
+    expect(parseMapPatchDelivery({ version: "5", patch: { documentHash: "nope" } })).toEqual({ version: "5", patch: null });
+    expect(parseMapPatchDelivery({ patch: null })).toBeNull();
+    expect(parseMapPatchDelivery({ version: "5", patch })).toEqual({ version: "5", patch });
   });
 });
