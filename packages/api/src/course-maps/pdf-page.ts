@@ -12,11 +12,13 @@ import {
   type CoursePagesOptions as SharedCoursePagesOptions,
   type CoursePagesResult,
   type PreparedDocument,
+  type PrintPatch,
   renderCoursePages as renderSharedCoursePages,
   prepareDocument,
 } from "@oxygen/shared/print";
 import type { PrismaClient, Prisma } from "../generated/prisma/client.js";
 import { getBlob } from "../map-store/blob-store.js";
+import { eventPrintPatch } from "../map-store/patches.js";
 import { BUNDLED_FONT_FILES, bundledPrintFonts } from "../render/fonts.js";
 import { type BaseMapInfo, getBaseMapInfo } from "./map-source.js";
 
@@ -58,21 +60,28 @@ export interface PinnedPrintSource {
   rotationCorrectionDeg: number;
   /** The `map_documents` blob (throws when it is missing). */
   bytes: () => Promise<Uint8Array>;
+  /** The event's patch on this document, or null when it changes nothing (`eventPrintPatch`; G14). */
+  patch: PrintPatch | null;
 }
 
 /**
- * The event's pinned document for printing, not yet decoded. Throws "No
- * base map uploaded" without a pin (`getBaseMapInfo`). The route hands
- * this to the print worker, which decodes it on its own thread
- * (docs/course-print.md §8.2).
+ * The event's pinned document for printing, not yet decoded, with the
+ * event's patch on it (the effective document, docs/map-patches.md §2;
+ * G14). Throws "No base map uploaded" without a pin (`getBaseMapInfo`).
+ * The route hands this to the print worker, which decodes and patches it
+ * on its own thread (docs/course-print.md §8.2).
  */
 export async function pinnedPrintSource(db: Db, eventId: bigint): Promise<PinnedPrintSource> {
   const info = await getBaseMapInfo(db, eventId);
   const { hash } = info.document;
-  const row = await db.mapFile.findFirst({ where: { eventId, documentHash: hash }, orderBy: { uploadedAt: "desc" }, select: { rotationCorrection: true } });
+  const [row, patch] = await Promise.all([
+    db.mapFile.findFirst({ where: { eventId, documentHash: hash }, orderBy: { uploadedAt: "desc" }, select: { rotationCorrection: true } }),
+    eventPrintPatch(db, eventId, hash),
+  ]);
   return {
     info,
     hash,
+    patch,
     rotationCorrectionDeg: row?.rotationCorrection ?? 0,
     bytes: async () => {
       const bytes = await getBlob(db, "map_documents", hash);
@@ -88,9 +97,9 @@ export interface PinnedPrintDocument {
   rotationCorrectionDeg: number;
 }
 
-/** `pinnedPrintSource` decoded in this thread (corpus run, in-process tests). */
+/** `pinnedPrintSource` decoded and patched in this thread (corpus run, in-process tests). */
 export async function loadPinnedPrintDocument(db: Db, eventId: bigint): Promise<PinnedPrintDocument> {
   const source = await pinnedPrintSource(db, eventId);
-  const document = await prepareDocument(source.hash, source.bytes);
+  const document = await prepareDocument(source.hash, source.bytes, source.patch);
   return { info: source.info, document, rotationCorrectionDeg: source.rotationCorrectionDeg };
 }

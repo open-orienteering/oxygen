@@ -1,10 +1,10 @@
 /**
  * Worker-thread body for `maps.pdf` composing (docs/course-print.md §8.2).
  * One long-lived worker per host slot: it decodes the pinned document once
- * per hash (`prepareDocument`'s per-thread cache) and answers print
- * requests strictly one at a time. Messages:
+ * per hash + patch version (`prepareDocument`'s per-thread cache; G14) and
+ * answers print requests strictly one at a time. Messages:
  *
- *   ← { type: "print", id, hash, bytes?, sheets, graphics, … }
+ *   ← { type: "print", id, hash, patch?, bytes?, sheets, graphics, … }
  *   → { type: "page", id, index, label, warnings }     after each page
  *   → { type: "done", id, bytes, pageCount, warnings } bytes transferred
  *   ← { type: "raster", id, svg, width, height }       an SVG logo for `print.png` (§8.5)
@@ -15,14 +15,16 @@
 import { parentPort } from "node:worker_threads";
 import { course } from "@oxygen/shared";
 import type { ColourMode } from "@oxygen/shared/print";
-import { prepareDocument, type PrintGraphic, type PrintSheet } from "@oxygen/shared/print";
+import { prepareDocument, type PrintGraphic, type PrintPatch, type PrintSheet } from "@oxygen/shared/print";
 import { rasteriseSvgGraphic, renderCoursePages } from "./pdf-page.js";
 
 export interface PrintWorkerRequest {
   type: "print";
   id: number;
   hash: string;
-  /** The document blob; absent when the host believes this worker already holds `hash`. */
+  /** The event's patch on `hash`, sent with every print (it is kilobytes); null or absent = none (G14). */
+  patch?: PrintPatch | null;
+  /** The document blob; absent when the host believes this worker already holds `hash` + the patch version. */
   bytes?: Uint8Array;
   sheets: PrintSheet[];
   graphics: Array<[number, PrintGraphic]>;
@@ -60,7 +62,7 @@ if (port) {
       const document = await prepareDocument(req.hash, () => {
         if (!req.bytes) throw new NeedDocument();
         return req.bytes;
-      });
+      }, req.patch);
       const out = await renderCoursePages({
         document,
         sheets: req.sheets,

@@ -14,7 +14,7 @@ import { importMapToDocument } from "../import/ocad.js";
 import { rasteriseSvgGraphic, renderCoursePages } from "../course-maps/pdf-page.js";
 import { printGate, printWorkerCount, rasteriseSvgInWorker, renderCoursePagesInWorker, resetPrintWorkers } from "../course-maps/print-worker-host.js";
 import { printSheetFor, syntheticCourse } from "./helpers/print-sheet.js";
-import { prepareDocument, type PreparedDocument } from "@oxygen/shared/print";
+import { prepareDocument, type PreparedDocument, type PrintPatch } from "@oxygen/shared/print";
 
 const fixture = resolve(__dirname, "../../../../e2e/test.ocd");
 
@@ -82,6 +82,41 @@ describe("print worker", () => {
     await renderCoursePagesInWorker({ document: { hash, bytes: read }, sheets: [sheets[0]], deterministic: true });
     expect(read).toHaveBeenCalledTimes(2);
   }, 120_000);
+
+  it("prints the effective document: keyed by hash + patch version, the worker's bytes equal the in-process ones (G14)", async () => {
+    await resetPrintWorkers();
+    const sourceIndices = [...mapDocument.decodeMapDocument(bytes).attrs.sourceIndex];
+    const hideOf = (version: string, every: number): PrintPatch => ({
+      version,
+      patch: mapDocument.mapPatchSchema.parse({
+        documentHash: hash,
+        ops: Object.fromEntries(sourceIndices.filter((_, i) => i % every === 0).map((s) => [`hide:${s}`, { op: "hide", sourceIndex: s }])),
+      }),
+    });
+    const v1 = hideOf("101", 2);
+    const v2 = hideOf("102", 3);
+    const read = vi.fn(async () => bytes);
+    const one = [sheets[0]];
+
+    const plain = await renderCoursePagesInWorker({ document: { hash, bytes: read }, sheets: one, deterministic: true });
+    const a = await renderCoursePagesInWorker({ document: { hash, bytes: read, patch: v1 }, sheets: one, deterministic: true });
+    expect(read).toHaveBeenCalledTimes(2);
+    const local = await renderCoursePages({ document: await prepareDocument(hash, () => bytes, v1), sheets: one, deterministic: true });
+    expect(Buffer.from(a.bytes).equals(Buffer.from(local.bytes))).toBe(true);
+    expect(Buffer.from(a.bytes).equals(Buffer.from(plain.bytes))).toBe(false);
+
+    // The same version is held; a new one is prepared again and shows.
+    const again = await renderCoursePagesInWorker({ document: { hash, bytes: read, patch: v1 }, sheets: one, deterministic: true });
+    expect(read).toHaveBeenCalledTimes(2);
+    expect(Buffer.from(again.bytes).equals(Buffer.from(a.bytes))).toBe(true);
+    const b = await renderCoursePagesInWorker({ document: { hash, bytes: read, patch: v2 }, sheets: one, deterministic: true });
+    expect(read).toHaveBeenCalledTimes(3);
+    expect(Buffer.from(b.bytes).equals(Buffer.from(a.bytes))).toBe(false);
+
+    // A disabled patch is the unpatched document, byte for byte.
+    const off = await renderCoursePagesInWorker({ document: { hash, bytes: read, patch: { ...v2, patch: { ...v2.patch, enabled: false } } }, sheets: one, deterministic: true });
+    expect(Buffer.from(off.bytes).equals(Buffer.from(plain.bytes))).toBe(true);
+  }, 180_000);
 
   it("surfaces a worker error with its message", async () => {
     await expect(renderCoursePagesInWorker({ document: { hash: "bad", bytes: async () => new Uint8Array([1, 2, 3]) }, sheets, deterministic: true })).rejects.toBeInstanceOf(Error);
