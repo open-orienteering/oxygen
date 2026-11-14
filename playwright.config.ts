@@ -1,5 +1,5 @@
 import { defineConfig, devices } from "@playwright/test";
-import { E2E_API_PORT, E2E_EVENTOR_PORT, E2E_WEB_PORT } from "./e2e/helpers/ports";
+import { E2E_API_PORT, E2E_EVENTOR_PORT, E2E_PREVIEW_PORT, E2E_WEB_PORT } from "./e2e/helpers/ports";
 
 /**
  * Every event reads the vector pipeline since E3 (docs/map-pipeline-switch.md,
@@ -20,6 +20,18 @@ export const MOBILE_SPECS = [
 ];
 
 /**
+ * Specs for the production bundle (G29; docs/e2e-sharding.md "The preview
+ * stack"; course-print.md §8.6 "Delivery"): `E2E_PREVIEW=1` swaps the
+ * Vite dev server for `vite build` + `vite preview` on `E2E_PREVIEW_PORT`
+ * (4400), where the service worker registers, and project `preview` runs
+ * these files and only these. Without it they are in no project: the dev
+ * server registers no service worker. The suffix is the one rule the
+ * runner (`scripts/e2e-weights.mjs` `isPreviewSpec`) shares with this file.
+ */
+export const PREVIEW_SPECS = ["**/*.preview.spec.ts"];
+const PREVIEW = process.env.E2E_PREVIEW === "1";
+
+/**
  * The stack is parameterized so the sharded runner
  * (`scripts/e2e-sharded.mjs`) can launch N fully isolated stacks in
  * parallel — each with its own Postgres database, API server, and Vite
@@ -30,10 +42,11 @@ export const MOBILE_SPECS = [
  * it always tests the code of the checkout it is run from.
  */
 const API_PORT = E2E_API_PORT;
-const WEB_PORT = E2E_WEB_PORT;
+const WEB_PORT = PREVIEW ? E2E_PREVIEW_PORT : E2E_WEB_PORT;
 const EVENTOR_PORT = E2E_EVENTOR_PORT;
 const DB_NAME = process.env.E2E_DB_NAME ?? "oxygen_e2e";
-// Shard label (e.g. "1") — used to keep per-shard artifact dirs apart.
+// Shard label (e.g. "1") — used to keep per-shard artifact dirs apart (the
+// preview stack's are `preview`).
 const SHARD = process.env.E2E_SHARD;
 
 const DATABASE_URL = `postgresql://oxygen:oxygen@localhost:5433/${DB_NAME}?schema=oxygen`;
@@ -46,9 +59,9 @@ export default defineConfig({
   workers: 1,
   forbidOnly: !!process.env.CI,
   retries: process.env.CI ? 2 : 0,
-  outputDir: SHARD ? `test-results/shard-${SHARD}` : "test-results",
+  outputDir: PREVIEW ? "test-results/preview" : SHARD ? `test-results/shard-${SHARD}` : "test-results",
   reporter: [
-    ["html", { open: "never", outputFolder: SHARD ? `playwright-report/shard-${SHARD}` : "playwright-report" }],
+    ["html", { open: "never", outputFolder: PREVIEW ? "playwright-report/preview" : SHARD ? `playwright-report/shard-${SHARD}` : "playwright-report" }],
     ["list"],
   ],
 
@@ -65,18 +78,26 @@ export default defineConfig({
     },
   },
 
-  projects: [
-    {
-      name: "chromium",
-      testIgnore: MOBILE_SPECS,
-      use: { ...devices["Desktop Chrome"] },
-    },
-    {
-      name: "mobile",
-      testMatch: MOBILE_SPECS,
-      use: { ...devices["Pixel 7"] },
-    },
-  ],
+  projects: PREVIEW
+    ? [
+        {
+          name: "preview",
+          testMatch: PREVIEW_SPECS,
+          use: { ...devices["Desktop Chrome"] },
+        },
+      ]
+    : [
+        {
+          name: "chromium",
+          testIgnore: [...MOBILE_SPECS, ...PREVIEW_SPECS],
+          use: { ...devices["Desktop Chrome"] },
+        },
+        {
+          name: "mobile",
+          testMatch: MOBILE_SPECS,
+          use: { ...devices["Pixel 7"] },
+        },
+      ],
 
   /* Start the servers before the tests. `reuseExistingServer` is false for
    * all three on purpose: a run must never attach to a server it did not
@@ -119,14 +140,30 @@ export default defineConfig({
         EVENTOR_STUB_PORT: String(EVENTOR_PORT),
       },
     },
-    {
-      command: "pnpm --filter @oxygen/web dev",
-      port: WEB_PORT,
-      reuseExistingServer: false,
-      env: {
-        WEB_PORT: String(WEB_PORT),
-        API_PROXY_PORT: String(API_PORT),
-      },
-    },
+    PREVIEW
+      ? {
+          // The production bundle (G29): `vite build` (the bundle only — type
+          // checking is `pnpm build`'s), then `vite preview`, which takes
+          // `server.proxy`, `host` and `strictPort` from vite.config.ts (the
+          // port does not carry over, hence `--port`). The service worker
+          // registers here, unlike on the dev server.
+          command: `pnpm --filter @oxygen/web exec vite build && pnpm --filter @oxygen/web exec vite preview --port ${WEB_PORT}`,
+          port: WEB_PORT,
+          reuseExistingServer: false,
+          timeout: 180_000,
+          env: {
+            WEB_PORT: String(WEB_PORT),
+            API_PROXY_PORT: String(API_PORT),
+          },
+        }
+      : {
+          command: "pnpm --filter @oxygen/web dev",
+          port: WEB_PORT,
+          reuseExistingServer: false,
+          env: {
+            WEB_PORT: String(WEB_PORT),
+            API_PROXY_PORT: String(API_PORT),
+          },
+        },
   ],
 });
