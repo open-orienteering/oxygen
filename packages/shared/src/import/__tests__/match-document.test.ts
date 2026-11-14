@@ -86,6 +86,43 @@ describe("matchDocument", () => {
     expect(r.input.header.colours[lowerR + 1].sourceNumber).toBe(3);
   });
 
+  it("a source purple off its ruled place is displaced: reported, and its objects still drawn in it (C15)", () => {
+    const base = input();
+    const n = base.header.colours.length;
+    // The mapper's upper purple with a green area drawn over it: not where the course's upper purple belongs.
+    const purple = { id: "src:7", name: "Övre violett för banpåtryck", cmyk: [0.1, 0.9, 0.1, 0] as [number, number, number, number], sourceNumber: 7 };
+    const green = { id: "src:6", name: "Grön 30% - Ytobjekt", cmyk: [0.24, 0, 0.27, 0] as [number, number, number, number], sourceNumber: 6 };
+    const sym = base.header.symbols.length;
+    const withPurple: typeof base = {
+      header: {
+        ...base.header,
+        colours: [...base.header.colours, purple, green],
+        symbols: [
+          ...base.header.symbols,
+          { code: "999.0", name: "Lila linje", kind: "line", render: { type: "line", id: "src:999", code: "999", name: "Lila linje", main: { colour: n, widthUm: 300 } } },
+          { code: "406.0", name: "Grön", kind: "area", render: { type: "area", id: "src:406", code: "406", name: "Grön", fill: n + 1 } },
+        ],
+      },
+      objects: [
+        ...base.objects,
+        { symbolIdx: sym, type: OBJECT_TYPE.line, sourceIndex: 9, coords: [0, 0, 100, 0], flags: [0, 0] },
+        { symbolIdx: sym + 1, type: OBJECT_TYPE.area, sourceIndex: 10, coords: [0, 0, 100, 0, 100, 100], flags: [0, 0, 0] },
+      ],
+    };
+    const r = matchDocument(withPurple);
+    const hc = r.input.header.colours;
+    expect(r.colourStack.purplesDisplaced).toEqual([{ name: "Övre violett för banpåtryck", sourceNumber: 7, role: "upper", why: "position" }]);
+    expect(r.colourStack.inserted).toEqual(expect.arrayContaining(["purple-lower", "purple-upper"]));
+    // The mapper's purple line still points at the mapper's purple, which is no longer the course purple.
+    const line = r.input.header.symbols[sym].render as LineSymbol;
+    expect(hc[line.main!.colour]).toMatchObject({ sourceNumber: 7, cmyk: purple.cmyk });
+    expect(hc[line.main!.colour].paletteIds).toBeUndefined();
+    expect(hc[line.main!.colour].purpleRole).toBeUndefined();
+    const index = paletteIndexOfStack(hc);
+    expect(index.get("purple-upper")).toBe(hc.length - 1);
+    expect(hc[index.get("purple-upper")!].cmyk).toEqual(purple.cmyk);
+  });
+
   it("reports the non-IOF colour that symbols use and the unmatched symbols as warnings", () => {
     expect(res.colourStack.unclassified).toEqual([{ sourceNumber: 1, name: "T-bana" }]);
     const codes = h.warnings!.map((w) => w.code);

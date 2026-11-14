@@ -55,10 +55,13 @@ Decided by the user 2026-10-31 (decision log, SLICES C14):
 - **Report, never follow** (§9.2 step 5a): an *above* colour left below
   lower purple, or a *below* colour above it, is `COLOUR_ORDER_CONFLICT`;
   an area colour above it is the new `COLOUR_AREA_ABOVE_LOWER_PURPLE`
-  (`colourStack.areasAboveLowerPurple`). A map's own lower purple keeps
-  its place and gets the same checks (Vinterserien, `crop-a.ocd`, has its
+  (`colourStack.areasAboveLowerPurple`). A map's own lower purple kept
+  its place and got the same checks (Vinterserien, `crop-a.ocd`, has its
   named lower purple above its upper one: the upper purple and the 100 %
-  line / point colours under it are reported).
+  line / point colours under it were reported). **Superseded by C15**
+  (`docs/bugfix-course-purples-under-map.md`): since `ocad-18` both course
+  purples are placed by rule on every import, and a source purple that
+  does not stand there stays in place as an ordinary colour.
 - **Class** (`nameKind` in `colour-class.ts`, §9.1): a name saying area
   (`area`, `yta`, `ytobjekt`, `fill`, `screen`, …) never maps to a line or
   point entry, and one saying line or point (`linjeobjekt`, `punktobjekt`,
