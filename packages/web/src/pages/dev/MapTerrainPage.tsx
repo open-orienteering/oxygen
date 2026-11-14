@@ -16,10 +16,8 @@ import { viewMatrix } from "../../map-gl/view";
 import { distanceForPxPerUm, projectToScreen, screenRay, type TerrainCamera } from "../../map-gl/terrain/camera";
 import { pickTerrain, surfaceZ, type TerrainHit } from "../../map-gl/terrain/pick";
 import { TerrainRenderer, type TerrainDrawStats } from "../../map-gl/terrain/program";
-import { coneField, noiseField, slopeField } from "../../map-gl/terrain/synthetic";
+import { CHECKER, coneField, noiseField, slopeField } from "../../map-gl/terrain/synthetic";
 
-/** The checker's two colours and square size on paper. */
-export const CHECKER = { a: [0xe8, 0xd8, 0xa0], b: [0x3a, 0x6e, 0xa5], squareMm: 2 } as const;
 const GREY = [0x80, 0x80, 0x80], WHITE = [0xff, 0xff, 0xff];
 
 interface TerrainPageApi {

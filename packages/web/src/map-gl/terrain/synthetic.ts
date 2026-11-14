@@ -78,6 +78,9 @@ export function coneField(): HeightField {
 /** The cone's centre in paper mm. */
 export const coneCentreMm = (): { x: number; y: number } => ({ x: CONE.x0 + ((CONE.width - 1) / 2 + 0.5) * CONE.cellMm, y: CONE.y0 + ((CONE.height - 1) / 2 + 0.5) * CONE.cellMm });
 
+/** The dev page's checker drape: two colours, square edge on paper; `a` where ⌊x / 2⌋ + ⌊y / 2⌋ is even. */
+export const CHECKER = { a: [0xe8, 0xd8, 0xa0], b: [0x3a, 0x6e, 0xa5], squareMm: 2 } as const;
+
 /** A plane rising 1 : 4 eastwards, 128 × 96 cells. */
 export function slopeField(): HeightField {
   return fieldFromGrid(128, 96, (cx) => cx * 3 * 0.25, { cellMm: 0.2, groundMPerMm: 15 });

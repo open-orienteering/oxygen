@@ -72,7 +72,8 @@ export function pickTerrain(mesh: TerrainMesh, field: HeightField, ray: Ray, exa
   // half a cell in plan per step; one step when the ray is vertical
   const dxy = Math.hypot(dx, dy);
   const step = dxy > 1e-12 ? mesh.cellUm / 2 / dxy : t1 - t0;
-  let prev = t0, g = above(t0);
+  let prev = t0;
+  const g = above(t0);
   let hitT: number | null = null;
   if (g !== null && g <= 0) hitT = t0;
   for (let t = t0; hitT === null && t < t1; ) {

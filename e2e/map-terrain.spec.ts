@@ -19,7 +19,7 @@ const GREY = 128;
 const FACING = GREY * (Math.sin(TH) + Math.cos(TH)); // 155.2
 const AWAY = GREY * (Math.cos(TH) - Math.sin(TH)); // 93.1
 const TOLERANCE = 10;
-/** The checker's colours (`MapTerrainPage.tsx` `CHECKER`), 2 mm squares, a where ⌊x/2⌋ + ⌊y/2⌋ is even. */
+/** The checker's colours (`map-gl/terrain/synthetic.ts` `CHECKER`), 2 mm squares, a where ⌊x/2⌋ + ⌊y/2⌋ is even. */
 const CHECKER_A = [0xe8, 0xd8, 0xa0], CHECKER_B = [0x3a, 0x6e, 0xa5];
 
 type Api = {
