@@ -1651,11 +1651,16 @@ mentions is pending (§9).
 
 A Maintenance card for the re-match pass (§6.9 is CLI-only); a Settings →
 Maintenance card for the GC (§8.4: status of the last run, dry run, run
-now); the service-worker routes are not exercised by E2E (the suite
-runs the Vite dev server, which registers no service worker) — they were
-checked in the built `sw.js`; G17's app-code copy (§7.1) is what the E2E
-exercises, and a preview-build smoke is a row before the G-gate
-(`course-print.md` Pending); `course.importCourses` run on a box still writes its
+now); of the service-worker routes, `map-documents` and `map-fonts`
+(and `print-worker`, `course-print.md` §8.6) are exercised only by the
+preview-build smoke (G29, `e2e/offline-print.preview.spec.ts`, §10):
+an offline export after a reload, the document and faces answered from
+the service worker's caches. The rest of the suite runs the Vite dev server,
+which registers no service worker, so there G17's app-code copy (§7.1)
+is what is exercised. Not exercised end to end: the `trpc-api` and
+`api-misc` routes, offline navigation (`navigateFallback`), and a viewer
+opened offline from `map-documents` (the smoke prints, it does not draw
+the map); `course.importCourses` run on a box still writes its
 `course_objects` locally, and a map uploaded on a box still pins it
 locally — since G19 both last only until the next refresh (§7.2, the
 mirror is exact; forwarding the import's object part and the upload is
@@ -1699,6 +1704,7 @@ gate (H7). Each lands with its own section here and its own tests.
 | Unit (web) | `packages/web/src/lib/__tests__/map-document-cache.test.ts` | §7.1: route regex (documents, not previews), URL without query and the two headers, one request per hash and the same bytes, bounded memory, 401/403/404/5xx/offline/unreadable → kinds and not cached, `storage.persist()` once and absent |
 | Unit (web) | `packages/web/src/lib/__tests__/map-document-cache.test.ts` (G17) | §7.1 "App-code copy", "Prefetch", "Offline ready": a fetched document put into `map-documents` under the hash URL, once; read back when the request fails without a response or answers non-200 while offline, else `offline`; a 403 online stays `unauthorised`; prefetch stores without decoding, once per hash, not when stored, skipped offline and with `saveData`, retried after a failure; `storagePersisted` and its absence |
 | E2E | `e2e/course-maps.spec.ts` "offline print: the job kept on the device" (G17) | opening the event stores its document in `map-documents` before any map is shown (the dev server has no service worker: the app-code copy); the sync panel's *Maps on this device* lines after *Make maps available offline* |
+| E2E (preview build) | `e2e/offline-print.preview.spec.ts` (G29; project `preview`, `docs/e2e-sharding.md` "The preview stack") | §7.1 "Service worker" on the production bundle: on a controlled page *Make maps available offline* leaves the document in `map-documents` and the three faces in `map-fonts`; after a reload and `context.setOffline(true)` the reloaded page's document and face requests are answered by the service worker (`fromServiceWorker`, 200) without it fetching them from the network (`request.serviceWorker()`), the offline export prints with them, and an uncached `.ttf` is refused |
 | E2E | `e2e/map-vector-layer.spec.ts` | §7.1 through the viewer: the pinned document by hash, no query, `x-event-id` |
 | Unit (web) | `packages/web/src/__tests__/map-upload.test.ts` | a small file is one chunk (no base64 path, E5), init → chunks → finalise call order and progress, per-chunk retry on 5xx, no retry on 4xx, `x-event-id` only for event uploads |
 | Unit (api) | `packages/api/src/__tests__/map-previews.test.ts` | preview request parsing (`:idx`, `.png`, library code, hash), ETags and `If-None-Match`, library preview of an entry and a variant, 404 for unknown code / other version, per-instance cache hit |

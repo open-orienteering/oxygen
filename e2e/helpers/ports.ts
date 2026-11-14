@@ -16,8 +16,17 @@ export const E2E_DEFAULT_API_PORT = 4100;
 export const E2E_DEFAULT_WEB_PORT = 4200;
 export const E2E_DEFAULT_EVENTOR_PORT = 4300;
 
+/**
+ * The preview stack's web port (G29, docs/e2e-sharding.md "The preview
+ * stack"): the production bundle under `vite preview`, with its service
+ * worker, beside the default stack's API (4100) and Eventor stub (4300).
+ * 4400 is clear of the shards' 4101–4306, the dev servers and Docker.
+ */
+export const E2E_DEFAULT_PREVIEW_PORT = 4400;
+
 export const E2E_API_PORT = Number(process.env.E2E_API_PORT ?? E2E_DEFAULT_API_PORT);
 export const E2E_WEB_PORT = Number(process.env.E2E_WEB_PORT ?? E2E_DEFAULT_WEB_PORT);
 export const E2E_EVENTOR_PORT = Number(
   process.env.E2E_EVENTOR_PORT ?? E2E_DEFAULT_EVENTOR_PORT,
 );
+export const E2E_PREVIEW_PORT = Number(process.env.E2E_PREVIEW_PORT ?? E2E_DEFAULT_PREVIEW_PORT);
