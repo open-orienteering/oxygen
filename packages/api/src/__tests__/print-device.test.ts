@@ -17,7 +17,8 @@ import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
 import { afterAll, describe, expect, it } from "vitest";
 import { resetPreparedDocuments } from "@oxygen/shared/print";
-import { FIXTURE_HASH, fixtureGraphics, fixturePrintJob, printDocumentBytes } from "../../../shared/src/print/__tests__/print-job-fixture.js";
+import { FIXTURE_HASH, fixtureGraphics, fixturePatchedPrintJob, fixturePrintJob, printDocumentBytes } from "../../../shared/src/print/__tests__/print-job-fixture.js";
+import type { PrintJob } from "@oxygen/shared/print";
 import { createPrintWorker } from "../../../web/src/print/worker.js";
 import type { PrintWorkerResponse } from "../../../web/src/print/protocol.js";
 import { rasteriseSvgGraphic } from "../course-maps/pdf-page.js";
@@ -28,9 +29,8 @@ const face = (file: string): ArrayBuffer => new Uint8Array(readFileSync(resolve(
 const own = (b: Uint8Array): ArrayBuffer => b.slice().buffer as ArrayBuffer;
 
 /** The browser's worker, its main side answering as `print/client.ts` does: the document by hash, `print.png` per graphic and box. */
-async function composeOnDevice(): Promise<{ bytes: Uint8Array; pageCount: number; warnings: string[] }> {
+async function composeOnDevice(job: PrintJob = fixturePrintJob()): Promise<{ bytes: Uint8Array; pageCount: number; warnings: string[] }> {
   resetPreparedDocuments();
-  const job = fixturePrintJob();
   return new Promise((done, fail) => {
     const worker = createPrintWorker((msg: PrintWorkerResponse) => {
       if (msg.type === "need") {
@@ -81,5 +81,25 @@ describe("the device's PDF is the server's (§8.6)", () => {
     expect(device.pageCount).toBe(server.pageCount);
     expect(device.pageCount).toBe(6);
     expect(Buffer.from(device.bytes).equals(Buffer.from(server.bytes))).toBe(true);
+  }, 120_000);
+
+  it("with the event's patch in the job (G14), the device's bytes are the server's, and not the unpatched ones", async () => {
+    const job = fixturePatchedPrintJob();
+    const server = await renderCoursePagesInWorker({
+      document: { hash: job.document.hash, bytes: async () => printDocumentBytes(), patch: job.document.patch },
+      rotationCorrectionDeg: job.document.rotationCorrectionDeg,
+      sheets: job.sheets,
+      graphics: new Map([...fixtureGraphics].map(([id, g]) => [id, { mime: g.mime, data: g.data }])),
+      mode: job.mode,
+      info: job.info,
+      deterministic: true,
+    });
+    const device = await composeOnDevice(job);
+    expect(server.warnings).toEqual([]);
+    expect(device.warnings).toEqual(server.warnings);
+    expect(device.pageCount).toBe(server.pageCount);
+    expect(Buffer.from(device.bytes).equals(Buffer.from(server.bytes))).toBe(true);
+    const unpatched = await composeOnDevice();
+    expect(Buffer.from(unpatched.bytes).equals(Buffer.from(device.bytes))).toBe(false);
   }, 120_000);
 });

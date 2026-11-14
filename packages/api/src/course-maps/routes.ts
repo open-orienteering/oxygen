@@ -342,8 +342,8 @@ export interface BuiltPrintJob {
 /**
  * The print job for `maps.pdf`'s query (docs/course-print.md §8.2 steps
  * 1–2, §8.5): the selected pages as sheets in print order with their
- * copies, the pinned document by hash, the graphics the sheets reference,
- * `info` and the download name. Both routes build through this, so one
+ * copies, the pinned document by hash with the event's patch on it (G14),
+ * the graphics the sheets reference, `info` and the download name. Both routes build through this, so one
  * selection, order and set of caps holds for both. Throws (a 400) for a
  * bad selection, a cap, or no pin.
  */
@@ -397,7 +397,7 @@ export async function buildPrintJob(
       : `${safeFilename(event.nameId)}_maps.pdf`;
   const job: PrintJob = {
     version: PRINT_JOB_VERSION,
-    document: { hash: source.hash, rotationCorrectionDeg: source.rotationCorrectionDeg },
+    document: { hash: source.hash, rotationCorrectionDeg: source.rotationCorrectionDeg, patch: source.patch },
     sheets,
     graphics: [...graphics].map(([id, g]) => ({ id, mime: g.mime as PrintJobGraphicMime })),
     mode: "cmyk",
@@ -441,7 +441,7 @@ export function registerCourseMapRoutes(
       // §8.2). Composing runs in the print worker, off the event loop.
       const out = await printGate(() => renderGate().run(() =>
         renderVectorPages({
-          document: { hash: job.document.hash, bytes: source.bytes },
+          document: { hash: job.document.hash, bytes: source.bytes, patch: job.document.patch },
           rotationCorrectionDeg: job.document.rotationCorrectionDeg,
           sheets: job.sheets,
           graphics,
@@ -452,6 +452,8 @@ export function registerCourseMapRoutes(
           },
         }),
       ));
+      // Patch ops that were skipped (docs/map-patches.md §2.3) belong to no page.
+      for (const warning of out.warnings) if (warning.startsWith("PATCH_ISSUE:")) req.log.warn({ nameId }, `maps.pdf: ${warning}`);
       const body = Buffer.from(out.bytes);
       const filename = job.filename;
       return reply

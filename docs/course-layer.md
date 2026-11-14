@@ -347,7 +347,10 @@ as today). `r` is the farthest ink of the symbol **the document draws**
 factor) of an applied match, else the document's own render; the library
 entry × document factor only when there is neither. The source is the
 event's pinned document, whatever its pipeline (§4.2; the slice-C split
-tied it to `vector`, slice E1 made it every event's).
+tied it to `vector`, slice E1 made it every event's), as the **effective
+document** (`docs/map-patches.md` §2; G14): an object the event's patch
+hides is no feature, an added one is (a patch symbol's code and own
+render decide, as an unmatched symbol's).
 
 **The event's toggle** (`Event.autoOverprintCuts`, written by
 `course.setOverprintCuts`, read by `course.getOverprintCuts`; the
@@ -588,7 +591,7 @@ before its `course.upserted`:
 
 | Event | Source | Radii |
 |---|---|---|
-| a pinned document (`map_files.document_hash` of the latest row), whatever `map_pipeline` (`map-storage.md` §4.6) | `cutFeaturesOfDocument` of the pinned document, memoised per hash | what the document draws (§3.4) |
+| a pinned document (`map_files.document_hash` of the latest row), whatever `map_pipeline` (`map-storage.md` §4.6) | `cutFeaturesOfDocument` of the effective document (the pin with the event's patch, G14), memoised per hash + patch version | what the document draws (§3.4) |
 | no map, no pin yet, or a missing / unreadable document | — | no cuts |
 
 Slice E1 removed the OCAD source (the parse of the latest upload with
@@ -1395,7 +1398,9 @@ terrain. Course-scoped codes run over the course's items only.
 `checkObstaclesOfDocument(doc)` reads a pinned document as
 `cutFeaturesOfDocument` does (§3.4): a symbol's code is its applied
 match's canonical code, else its source code; hidden symbols are
-skipped. It keeps line and area objects of the `UNCROSSABLE_CODES`
+skipped, and so are objects the event's patch hides — `course.checks`
+reads the effective document (`docs/map-patches.md` §2.4; G14), so an
+added uncrossable or out-of-bounds object is an obstacle. It keeps line and area objects of the `UNCROSSABLE_CODES`
 (kind `uncrossable`) and of 708 / 709 (kind `oob`) as polylines of their
 on-curve vertices (Bézier handles skipped; an area's outer ring only,
 holes ignored — the approximation snapping makes, `course-editor.md`

@@ -10,6 +10,7 @@ import {
   MAP_PATCH_MAX_BYTES,
   assertPatchSize,
   deliveredPatch,
+  eventPrintPatch,
   patchEtag,
   patchOfRow,
   samePatchContent,
@@ -58,6 +59,25 @@ describe("deliveredPatch", () => {
     expect(deliveredPatch(null, HASH_A)).toEqual(none);
     expect(deliveredPatch(row(), null)).toEqual(none);
     expect(deliveredPatch(row(), HASH_B)).toEqual(none);
+  });
+});
+
+describe("eventPrintPatch (G14: the patch print, cuts and checks apply)", () => {
+  const db = (r: ReturnType<typeof row> | null) => ({ mapPatch: { findUnique: vi.fn(async () => r) } }) as unknown as Parameters<typeof eventPrintPatch>[0];
+
+  it("is the delivered patch with its version when it changes the document", async () => {
+    const p = await eventPrintPatch(db(row({ ops: { "hide:1": hide(1) }, version: 9n })), 1n, HASH_A);
+    expect(p?.version).toBe("9");
+    expect(p?.patch.ops).toEqual({ "hide:1": hide(1) });
+  });
+
+  it("is null when it changes nothing: no pin, no row, dormant, disabled or op-less (map-patches §2.1, §3.3)", async () => {
+    const live = row({ ops: { "hide:1": hide(1) } });
+    expect(await eventPrintPatch(db(live), 1n, null)).toBeNull();
+    expect(await eventPrintPatch(db(null), 1n, HASH_A)).toBeNull();
+    expect(await eventPrintPatch(db(live), 1n, HASH_B)).toBeNull();
+    expect(await eventPrintPatch(db({ ...live, enabled: false }), 1n, HASH_A)).toBeNull();
+    expect(await eventPrintPatch(db(row()), 1n, HASH_A)).toBeNull();
   });
 });
 

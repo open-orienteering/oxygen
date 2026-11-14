@@ -33,6 +33,7 @@ import { loadPinnedPrintDocument } from "../../course-maps/pdf-page.js";
 import { pageInputFor, composePage } from "@oxygen/shared/print";
 import { sheetForMapRow, type PrintMapRow, course as courseShared, defaultMapAppearance } from "@oxygen/shared";
 import { loadBundledFonts } from "../../render/fonts.js";
+import { decodedDocument, eventDocumentHash } from "../../map-store/event-document.js";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const FIXTURE = resolve(__dirname, "../../../../../e2e/test.ocd");
@@ -126,6 +127,48 @@ describe("automatic overprint cuts of the event's courses", () => {
     expect(gaps).toHaveLength(1);
     expect(gaps[0].from).toBeLessThan(0.5);
     expect(gaps[0].to).toBeGreaterThan(0.5);
+  });
+
+  it("cuts around the effective document: a boulder the patch hides cuts nothing, an added one cuts (G14; map-patches §2.4)", async () => {
+    await caller.control.create({ codes: "191", xpos: 60, ypos: 42 });
+    await caller.control.create({ codes: "192", xpos: 76, ypos: 42 });
+    await caller.control.create({ codes: "193", xpos: 60, ypos: 70 });
+    await caller.control.create({ codes: "194", xpos: 76, ypos: 70 });
+    const course = await caller.course.create({ name: "Cuts-Patched", controlIds: [191, 192, 193, 194] });
+    const hash = (await eventDocumentHash(ctx.db, ctx.eventId))!;
+    const doc = (await decodedDocument(ctx.db, hash))!;
+    const u = doc.header.unitsPerMm;
+    // The boulder at (68, 42) mm.
+    const i = [...doc.attrs.sourceIndex.keys()].find((k) => {
+      const at = doc.coordStart[k] * 2;
+      return doc.attrs.type[k] === 1 && Math.hypot(doc.coords[at] / u - 68, doc.coords[at + 1] / u - 42) < 0.5;
+    })!;
+    expect(i).toBeDefined();
+    const hide = { op: "hide" as const, sourceIndex: doc.attrs.sourceIndex[i] };
+    const id = "00000000-0000-4000-8000-0000000000d4";
+    const add = { op: "add" as const, id, type: 1 as const, symbol: { doc: doc.attrs.symbolIdx[i] }, coords: [[68 * u, 70 * u] as [number, number]] };
+
+    let drawn = await cutsOf(course.id);
+    expect(drawn.leg("191", "192")).toHaveLength(1);
+    expect(drawn.leg("193", "194")).toEqual([]);
+
+    await caller.mapPatch.applyChange({ documentHash: hash, put: [hide, add] });
+    drawn = await cutsOf(course.id);
+    expect(drawn.leg("191", "192")).toEqual([]);
+    expect(drawn.leg("193", "194")).toHaveLength(1);
+    // The print's cut context is the same effective document.
+    const printed = (await loadPinnedPrintDocument(ctx.db, ctx.eventId)).document.cutFeatures;
+    expect(printed.some((f) => Math.hypot(f.x - 68, f.y - 42) < 0.5)).toBe(false);
+    expect(printed.some((f) => Math.hypot(f.x - 68, f.y - 70) < 0.5)).toBe(true);
+
+    await caller.mapPatch.setEnabled({ enabled: false });
+    drawn = await cutsOf(course.id);
+    expect(drawn.leg("191", "192")).toHaveLength(1);
+    expect(drawn.leg("193", "194")).toEqual([]);
+
+    await caller.mapPatch.setEnabled({ enabled: true });
+    await caller.mapPatch.applyChange({ documentHash: hash, remove: [`hide:${hide.sourceIndex}`, `add:${id}`] });
+    expect((await cutsOf(course.id)).leg("191", "192")).toHaveLength(1);
   });
 
   it("recomputes cuts when a control moves", async () => {

@@ -3,7 +3,7 @@
 import { describe, expect, it } from "vitest";
 import { COURSE_CHECK_CODES, OOB_CODES, UNCROSSABLE_CODES, checkObstaclesOfDocument, courseChecks, invertedCode, type CheckObstacle, type CheckSite, type CheckVariationGroup, type CourseChecksInput } from "../checks.js";
 import { COORD_FLAG } from "../../render/pass-stream.js";
-import { OBJECT_TYPE, decodeMapDocument, encodeMapDocument, type MapDocumentInput } from "../../map-document/index.js";
+import { OBJECT_TYPE, applyPatch, decodeMapDocument, encodeMapDocument, mapPatchSchema, type MapDocumentInput } from "../../map-document/index.js";
 import { getSymbolLibrary, SYMBOL_LIBRARY_VERSION } from "../../symbol-library/index.js";
 import type { CourseDerivation, CourseStructure } from "../types.js";
 import type { CourseLayerObject } from "../objects.js";
@@ -370,6 +370,29 @@ describe("checkObstaclesOfDocument", () => {
       { kind: "uncrossable", code: "515.0", closed: false, points: [{ x: 0, y: 0 }, { x: 2, y: 0 }] },
       { kind: "uncrossable", code: "521.0", closed: true, points: [{ x: 0, y: 0 }, { x: 10, y: 0 }, { x: 10, y: 10 }] },
       { kind: "oob", code: "709.0", closed: true, points: [{ x: 0, y: 0 }, { x: 1, y: 0 }, { x: 1, y: 1 }] },
+    ]);
+  });
+
+  it("reads the effective document: a hidden obstacle is gone, an added one counts (docs/map-patches.md §2.4)", () => {
+    const doc = decodeMapDocument(encodeMapDocument({
+      header,
+      objects: [
+        { ...obj(2, OBJECT_TYPE.area, [0, 0, 100, 0, 100, 100]), sourceIndex: 3 },
+        { ...obj(0, OBJECT_TYPE.area, [0, 0, 1000, 0, 1000, 1000]), sourceIndex: 4 },
+      ],
+    }));
+    const patch = mapPatchSchema.parse({
+      documentHash: "ab".repeat(32),
+      ops: {
+        "hide:4": { op: "hide", sourceIndex: 4 },
+        "add:00000000-0000-4000-8000-000000000001": { op: "add", id: "00000000-0000-4000-8000-000000000001", type: OBJECT_TYPE.line, symbol: { doc: 1 }, coords: [[0, 500], [800, 500]] },
+      },
+    });
+    const { document, issues } = applyPatch(doc, patch);
+    expect(issues).toEqual([]);
+    expect(checkObstaclesOfDocument(document).obstacles).toEqual([
+      { kind: "oob", code: "709.0", closed: true, points: [{ x: 0, y: 0 }, { x: 1, y: 0 }, { x: 1, y: 1 }] },
+      { kind: "uncrossable", code: "515", closed: false, points: [{ x: 0, y: 5 }, { x: 8, y: 5 }] },
     ]);
   });
 

@@ -10,7 +10,8 @@
  * the snapshot as the box (the import replaces the event) and prints
  * again. The graphics' bytes come through the same fetch and checks as a
  * checkout's; the map blobs are held already, as on a box that checked the
- * event out before.
+ * event out before. The event has a patch (G14), which the box prints from
+ * the snapshot's `maps.patch`.
  */
 
 import { randomBytes } from "node:crypto";
@@ -27,6 +28,7 @@ import { buildDescriptionsPdf, parseDescriptionsQuery, selectDescriptionBlocks }
 import { applyEventMap } from "../../event-map.js";
 import { clearEventDocumentCaches } from "../../map-store/event-document.js";
 import { writeCourseObject } from "../../course-objects.js";
+import { applyPatchChange } from "../../map-store/patches.js";
 import { exportEventSnapshot, importEventSnapshot, type EventSnapshot } from "../../sync/lease.js";
 import { fetchSnapshotBlobs } from "../../sync/snapshotMaps.js";
 import { fetchSnapshotGraphics } from "../../sync/snapshotGraphics.js";
@@ -76,8 +78,10 @@ async function printAll(nameId: string): Promise<Prints> {
 beforeAll(async () => {
   vec = await createTestEvent("venue_print");
   const bytes = Buffer.concat([readFileSync(fixture), Buffer.from(`venue-print-${suffix}`)]);
-  await applyEventMap(vec.db, vec.eventId, "test.ocd", bytes);
+  const applied = await applyEventMap(vec.db, vec.eventId, "test.ocd", bytes);
   clearEventDocumentCaches();
+  // The event's patch (G14) prints too; on the box it is the snapshot's `maps.patch`.
+  await applyPatchChange(vec.db, vec.eventId, applied.documentHash!, { put: [{ op: "hide", sourceIndex: 3 }] });
 
   const db = vec.db;
   const PNG = await sharp({ create: { width: 4, height: 2, channels: 4, background: "#00a000" } }).png().toBuffer();
@@ -133,6 +137,7 @@ describe("printing on a venue box from its checkout copy (course-print.md §8.7)
     const cloud = await printAll(vec.nameId);
     expect(cloud.job.graphics.map((g) => g.id)).toContain(clubId);
     expect(cloud.job.graphics).toHaveLength(3);
+    expect(Object.keys(cloud.job.document.patch?.patch.ops ?? {})).toEqual(["hide:3"]);
 
     // The checkout: the snapshot as HTTP delivers it, the graphics' bytes from the cloud's rows.
     const snapshot = JSON.parse(JSON.stringify(await exportEventSnapshot(vec.db, vec.event))) as EventSnapshot;

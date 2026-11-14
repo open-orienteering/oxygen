@@ -18,7 +18,9 @@
 import { defaultMapAppearance } from "../../course-maps/schema.js";
 import { type MapRowContext, type PrintMapRow, sheetForMapRow } from "../../course-maps/sheet-rows.js";
 import type { StoredCourseObject } from "../../course/objects.js";
+import { mapPatchSchema } from "../../map-document/patch.js";
 import { PRINT_JOB_VERSION, type PrintJob } from "../print-job.js";
+import type { PrintPatch } from "../prepared-document.js";
 
 export { printDocumentBytes, bundledFontsForTest } from "./print-document.js";
 
@@ -124,7 +126,7 @@ export function fixturePrintJob(): PrintJob {
   ];
   return {
     version: PRINT_JOB_VERSION,
-    document: { hash: FIXTURE_HASH, rotationCorrectionDeg: 0 },
+    document: { hash: FIXTURE_HASH, rotationCorrectionDeg: 0, patch: null },
     // JSON-safe as the route answers it (§8.5).
     sheets: JSON.parse(JSON.stringify(sheets)) as PrintJob["sheets"],
     graphics: [...fixtureGraphics].map(([id, g]) => ({ id, mime: g.mime })),
@@ -132,4 +134,31 @@ export function fixturePrintJob(): PrintJob {
     info: { title: "Fixture maps" },
     filename: "Fixture_maps.pdf",
   };
+}
+
+/**
+ * The event's patch on the fixture document (G14): the boulder (source
+ * index 1) hidden, a boulder added near control B and the far path moved
+ * into the window — what `maps.pdf` and the device both apply.
+ */
+export function fixturePrintPatch(): PrintPatch {
+  return {
+    version: "4242",
+    patch: mapPatchSchema.parse({
+      documentHash: FIXTURE_HASH,
+      ops: {
+        "hide:1": { op: "hide", sourceIndex: 1 },
+        "modify:2": { op: "modify", sourceIndex: 2, coords: [[-2000, 1500], [-1000, 1500]] },
+        "add:00000000-0000-4000-8000-0000000000f1": {
+          op: "add", id: "00000000-0000-4000-8000-0000000000f1", type: 1, symbol: { doc: 1 }, coords: [[1200, -800]],
+        },
+      },
+    }),
+  };
+}
+
+/** The fixture job with the event's patch inline (G14). */
+export function fixturePatchedPrintJob(): PrintJob {
+  const job = fixturePrintJob();
+  return { ...job, document: { ...job.document, patch: fixturePrintPatch() } };
 }
