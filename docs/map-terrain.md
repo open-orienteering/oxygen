@@ -8,7 +8,7 @@ record: `docs/research/vector-map-pipeline/10-terrain.md` (with spike T1,
 `decisions/slice-h.md`. Slice H.
 
 Implementation: `packages/shared/src/terrain/` — pure TypeScript, no Node
-APIs, no randomness. `terrain/graph/` is §1–2 (H1). Consumers import by
+APIs, no randomness. `terrain/graph/` is §1–2 (H1); `terrain/anchor/` is §6 (H9). Consumers import by
 subpath, `@oxygen/shared/src/terrain/graph/index.js`; the package's root
 `index.ts` does not re-export it.
 
@@ -325,6 +325,240 @@ load average 26, where T1's identical mask code also ran 4× slower than
 in T1), about 0.7 GB peak RSS for the whole process including the import.
 T1 measured the same stages at 1.9 s. Region labelling and the raster dominate. H3 sets the height field's cell
 and budget (T1: 18 s / 1.5 GB for the whole spike at 0.1 mm).
+
+## 6. The DEM anchor
+
+`anchorLevels(graph, sampleDem, opts)` (`terrain/anchor/`, H9) reads a
+digital elevation model along every chain of §2: the chain's height, the
+DEM's statement of its uphill side (handed to §3 as the external side),
+the contour ladder it belongs to and, where that ladder is clear, an
+integer level. `anchoredHeights(graph, anchor, solved)` runs after §3's
+solve and gives a height to the chains the DEM could not anchor. Both are
+pure; the provider, the fetch and the paper → projected transform are
+§7's (H10).
+
+### 6.0 Decided with the user (2026-11-14)
+
+1. **Grade is declared by the caller.** `grade: "anchor"` (Lantmäteriet's
+   1 m model) or `"coarse"` (GLO-30, answer 13). A coarse DEM's side uses
+   T2's GLO-30 parameters (§6.3) and enters §3 as the external side like
+   an anchor-grade one (T2: 99.2 % sign agreement with Lantmäteriet). A
+   coarse DEM gets per-chain heights and levels only when its own interval
+   concentration R(I) ≥ 0.6 (§6.5; puit-de-laven 0.774); below that it
+   gives one offset per component and a drift bound (§6.8).
+2. **The interval is reported, never changed.** `intervalM` is an input
+   (answer 8's assumed 5 m / 2.5 m); the report carries R at I and I/2,
+   globally and within each ladder, and `intervalSuspect` (§6.5). This
+   narrows answer 8's "H9 measures it": a scan would pick 2.5 m on both
+   full club maps, whose two ladders sit half an interval apart. The
+   per-map override stays later.
+3. **A ladder area is spatial**, and the corpus target is read per area:
+   on club-2026, ≥ 94 % of snapped index-contour length lies on its
+   area's modal residue (mod 5), **and** snapped index length is ≥ 80 % of
+   covered index length, so the target cannot be met by snapping less. If
+   one connected area still holds two residues in separate blocks, areas
+   are split by index residue and §6.7 says so.
+4. **The DEM's side decides** against a tick, cliff or lake (§3.0 answer 1,
+   which supersedes answer 14's "reported, not overridden"); H9 emits the
+   side under answer 14's thresholds, unchanged.
+
+### 6.1 Inputs
+
+```ts
+/** DEM height in metres at a paper position (mm, x right, y up); NaN = no data. */
+type DemSampler = (xMm: number, yMm: number) => number;
+interface AnchorOptions {
+  intervalM: number;           // the assumed interval (answer 8)
+  source: string;              // e.g. "lantmateriet-1m"; the external side's source
+  grade: "anchor" | "coarse";  // §6.0 answer 1
+  demCellM: number;            // ground cell of the model behind sampleDem
+}
+```
+
+The sampler is in paper millimetres: the chapter's unit; §7 composes the
+paper → projected transform and the provider's grid. Ground distances
+below convert through `graph.inputs.groundMPerMm`.
+
+### 6.2 Chain statistics
+
+Each chain is sampled every 2 m on the ground (`2 / groundMPerMm` mm),
+H1's walk (§2.6: first sample half a step in, a closed chain's closing
+segment included). At each sample the DEM height is read; **coverage**
+is valid (non-NaN) samples over all samples. Over the valid heights: the
+**median** and the **half-IQR** (`(q75 − q25) / 2`), quantiles linearly
+interpolated between order statistics. A chain with coverage < 0.9 is
+**uncovered**.
+
+### 6.3 The DEM side
+
+At each sample the left and right probes sit at ±`offset` along the
+normal (left = `(−ty, tx)` of the drawing direction) and read the
+**smoothed** model; a sample counts when both probes are valid. Over the
+counted differences `left − right`: `sideMedian` and `sideAgree`, the
+share of differences with the median's sign. The side is
+`sign(sideMedian)` (+1: uphill left, §3's convention) when the chain is
+covered, `|sideMedian| ≥ min` and `sideAgree ≥ 0.65`; else 0.
+
+| Grade | offset | smoothing | min |
+|---|---|---|---|
+| anchor | 8 m | 5 m box mean | 0.4 m |
+| coarse | 20 m | none | 0.5 m |
+
+The 5 m box mean is computed by H9 from point samples: an n × n stencil
+at `demCellM` spacing along the paper axes, `n = 2·round((5 / demCellM −
+1) / 2) + 1` clamped to 1…5 (5 × 5 at 1 m, 3 × 3 at 2 m); any NaN in the
+stencil makes the probe NaN. The side is emitted for every chain that
+passes this test, accepted by §6.4 or not; `anchor.external` is §3's
+`ExternalSide` (`{ source, side: Int8Array }`).
+
+### 6.4 Acceptance and height
+
+A covered chain is **accepted** at half-IQR ≤ 0.3 I; else it is
+**spread-failed** and §6.8 gives its height. An accepted chain's height
+is its **unsnapped median** (answer 12), also when it is snapped (§6.7);
+per-chain absolute heights replace the header's single offset. Under a
+coarse grade that is not promoted (§6.0 answer 1) an accepted chain has
+no per-chain height (status `coarse`).
+
+Statuses: `uncovered`, `spreadFailed`, `unsnapped` ("DEM, unsnapped"),
+`snapped`, `coarse`.
+
+### 6.5 Interval concentration
+
+**Contributors** are covered chains with half-IQR ≤ 0.25 I (anchor;
+0.5 I coarse) and ground length ≥ 60 m. For a trial interval J,
+`R(J) = |Σ w·e^{2πi·m/J}| / Σ w` over contributors (w the chain's length,
+m its median) and the phase `arg(…)·J / 2π mod J`. The report carries
+R(I), R(I/2), the global phase at I, the number of contributors, and per
+ladder (§6.6) R(I) over its members. **Promotion**: a coarse DEM is
+promoted when R(I) ≥ 0.6. **`intervalSuspect`** is set when R(I/2) ≥ 0.6
+and less than half of the contributors' length is labelled by §6.6's
+vote — two phases half an interval apart mixed everywhere, which is what
+a true interval of I/2 looks like (two ladders in separate places are
+labelled, so a two-ladder map is not suspect).
+
+### 6.6 Ladders: candidates, evidence and the vote
+
+The phase is estimated per neighbourhood, never per map (answer 12), as
+discrete ladders and a vote — not T2's windowed circular mean, which
+mixes two ladders at their border and splits a ladder whose phase is near
+0 / I between two levels (decision log).
+
+1. **Candidates.** A length-weighted circular density of `m mod I` over
+   the contributors (100 bins, wrapped Gaussian σ = 0.06 I). Local maxima
+   in descending density; one is kept when the contributors' length
+   within ±0.15 I is ≥ 4 % of the total and it lies ≥ 0.2 I from every
+   kept one; at most 4. A kept ladder's phase is the circular mean of the
+   contributors within ±0.15 I of its peak, in [0, I). No ladder: every
+   accepted chain is unsnapped.
+2. **Members.** A contributor belongs to the nearest ladder within 0.2 I
+   (circular distance); its **deviation** is `m − phase` wrapped to
+   (−I/2, I/2].
+3. **Evidence grid.** 100 m ground cells over the graph's raster extent;
+   per cell and ladder, the member length passing through the cell (the
+   §6.2 samples, each its step length) and the length-weighted deviation.
+   Summed-area tables make every window O(1).
+4. **Vote per chain.** With f_c the chain's share of its length in cell
+   c, `E_l(r) = Σ_c f_c · Σ_{window(c, r)} (evidence_l − own_l)` — the
+   chain's own contribution removed, so its residual is tested against
+   its neighbours only. The window's half-width r grows from 1 cell
+   (300 m) to 5 (1.1 km) until `T(r) = Σ_l E_l(r) ≥ 1500 m`; r = 5 if it
+   never does. The chain is **labelled** with the winning ladder when
+   `T ≥ 300 m` and the winner's share `E_l / T ≥ 0.6`; else unlabelled.
+
+### 6.7 Local phase, areas, levels
+
+- **Local phase**: the winning ladder's phase plus the mean deviation of
+  its members in the winning window (own removed, same weights). It
+  follows slow drift and never wraps.
+- **Ladder areas**: every cell is labelled by the same vote centred on
+  the cell, with all evidence; cells of one ladder form areas by
+  4-connection; an area whose own ladder evidence is under 1500 m is
+  dissolved (its cells unlabelled). A chain's area is the area holding
+  most of its length; −1 when none.
+- **Level**: `ladderLevel = round((median − localPhase) / I)` and
+  `residual = median − localPhase − I · ladderLevel`. An accepted,
+  labelled chain is **snapped** when `|residual| ≤ 0.3 I` and levels are
+  allowed (anchor grade, or coarse promoted); else unsnapped.
+  `ladderLevel` is absolute (`localPhase + I · ladderLevel` is the snapped
+  height in metres), named apart from §3's relative `chainLevel`;
+  `NO_LEVEL` (−2³¹) unless snapped.
+
+### 6.8 After the solve: anchored heights
+
+`anchoredHeights(graph, anchor, solved)` reads §3's per-chain `side`,
+`chainLevel` and `chainStep` and per-region `regionComponent`. A chain's
+component is that of the left region of its first side pair; chains
+without pairs or without a level (`NO_LEVEL`) have none.
+
+- **Accepted chains** keep the DEM median (source `dem`).
+- **Component offset**: the length-weighted median of `h_j − I · L_j`
+  over the component's accepted chains with a level.
+- **A chain the DEM did not anchor** (spread-failed, or uncovered) with a
+  level: its band neighbours are the chains sharing a region with it
+  (`pairs`, `regionChains`); breadth-first to depth 3, the first depth
+  with accepted chains of the same component gives candidates
+  `h_j + I · (L_u − L_j)`; the height is their length-weighted median,
+  clamped into [max h_j of neighbours with L_j < L_u, min h_j of
+  neighbours with L_j > L_u] (source `neighbours`). It is **bounded**
+  when the clamp moved it or the candidates spread over more than I/2.
+  With no accepted chain within 3 bands: the component offset plus
+  `I · L_u` (source `component`). With no accepted chain in the
+  component: no height (source `none`, NaN). This borrows §3's step for
+  the chains the DEM left out only; band-neighbour step propagation from
+  DEM differences is not built (T2: worse).
+- **Coarse, not promoted**: no chain has a per-chain height; the
+  component offset is taken over covered chains with half-IQR ≤ 0.5 I,
+  every chain with a level gets `offset + I · L_u` (source `component`),
+  and the **drift bound**: where the chain's median lies more than 1.5 I
+  from that height, the height moves by `I · round(residual / I)`
+  (counted `driftShifted`) — the DEM keeps §3's levels within ±1 interval
+  of it (answer 13). The result is flagged `coarse` (a 30 m surface
+  model).
+
+```ts
+interface AnchoredHeights {
+  height: Float64Array;          // metres; NaN = none
+  source: Uint8Array;            // HEIGHT_SOURCE: none 0, dem 1, neighbours 2, component 3
+  bounded: Uint8Array;
+  componentOffset: Map<number, number>;  // component root region → metres
+  coarse: boolean;
+  report: { share: { dem; neighbours; component; none: number }; bounded: number;
+            driftShifted: number; drift: Record<string, number> };
+}
+```
+
+`report.drift` is the length share of accepted chains by
+`round((h_j − offset − I · L_j) / I)`: §3's level drift against the DEM,
+in intervals.
+
+### 6.9 The report
+
+```ts
+interface AnchorReport {
+  source: string; grade: "anchor" | "coarse"; intervalM: number;
+  levelsAllowed: boolean; intervalSuspect: boolean;
+  coverage: number;                                 // covered share of contour length
+  interval: { contributors: number; rAtI: number; rAtHalfI: number; phaseM: number };
+  ladders: { phaseM: number; lengthShare: number; rAtI: number }[];
+  areas: { ladder: number; lengthShare: number; indexResidue: number | null; indexOnResidue: number | null }[];
+  share: { sideDecided; accepted; snapped; unsnapped; spreadFailed; uncovered; unlabelled: number };
+  index: { lengthMm: number; snappedShare: number; onOneResiduePerArea: number | null };
+  alongContour: { halfIqrP50: number; halfIqrP90: number };   // metres, length-weighted
+}
+```
+
+Shares are of contour length (`index.*` of covered index length). An
+area's index residue is the modal `ladderLevel mod 5` of its snapped
+index chains, by length; `onOneResiduePerArea` sums every area's modal
+length over the snapped index length in areas (§6.0 answer 3).
+
+### 6.10 Measured on the corpus
+
+Pending: the `.local/h9/` corpus script (T2's tiles, nothing committed)
+compares T2's aggregates (spread-accepted share, half-IQR p50, R(I) and
+R(I/2), sign agreement) and the §6.0 answer 3 target, and freezes §6.6's
+starting constants.
 
 ## Tests
 
