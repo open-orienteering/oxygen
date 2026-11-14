@@ -304,7 +304,7 @@ describe("a course with variations: the job of every variant selection is maps.p
     }
     const all = (await get(jobUrl(vec.nameId, `?courses=${rootSeq}`))).json() as PrintJob;
     expect(all.sheets.map((s) => s.label)).toEqual(["Long AB", "Long BA"]);
-    expect((await get(jobUrl(vec.nameId, `?allVariations=${rootSeq}`))).json().filename).toBe(`${vec.nameId}_Long_AB_BA.pdf`);
+    expect((await get(jobUrl(vec.nameId, `?allVariations=${rootSeq}`))).json().filename).toBe(`${vec.nameId}_Long_A4_AB_BA.pdf`);
   }, 180_000);
 });
 
