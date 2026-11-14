@@ -2171,6 +2171,32 @@ popover beside it; same entries and ids.
 | `e2e/course-editor-legs.spec.ts` "F23: bend drags on a tablet" | the loupe during a tablet's bend and grip drags (the point `onPointerDrag` returns): its bottom 16 px above the lifted bend, gone on lift |
 | `e2e/field-mode.spec.ts` (`mobile`) | the loupe during a long-press drag: 120 px above the handle; the canvas inside it differs from the same circle after release (the 1× map) and has the map's purple; gone on release |
 
+### 5.6 Terrain (web)
+
+The 3D drawing side of research topic 10 §5 step 2 (H5): a height field
+(`docs/map-terrain.md` §5) drawn as a mesh under a perspective camera,
+textured and lit. H6 makes the map the texture and runs this on the
+renderer's context; H7 puts it in the viewer. Everything lives in
+`packages/web/src/map-gl/terrain/`; nothing here edits `renderer.ts`,
+`engine.ts` or `worker.ts`.
+
+#### Decided with the user (2026-11-14)
+
+1. **Shading: flat ground is exactly 1, both ways** (10 §8's open
+   lighting question). The light comes from the north-west, 45° up, as in
+   T1's hillshade: in paper space (x right, y up, z up) the direction to
+   the light is `l = (−½, ½, √½)`. With `n` the unit normal at the
+   drawn exaggeration, `s = max(0, n·l) / l.z` and
+   `shade = clamp(s, 0.4, 1.25)`; the drawn colour is
+   `min(1, colour · shade)` per channel, no tint. Flat terrain, the
+   sheet's margin and the legend keep the 2D and printed colours exactly;
+   slopes away from the light darken, slopes towards it brighten (white
+   cannot). The light is fixed in paper space, not the camera's, so
+   relief reads the same from every bearing.
+2. **Vertical exaggeration is a draw parameter with no default here.**
+   The dev page and the E2E pass it explicitly; the viewer's default and
+   range are H7's (§5.4 "3D mode").
+
 ### 5.3 PDF (shared/print)
 
 `packages/shared/src/print/operators.ts` (C1, 2026-10-23):
