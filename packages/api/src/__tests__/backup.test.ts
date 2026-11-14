@@ -22,6 +22,12 @@ describe("BACKUP_TABLES", () => {
     expect(i("map_patches")).toBe(i("map_files") + 1);
   });
 
+  it("carries the GPS tracks after the map patch, filtered by event (map-gps-tracks.md §1.3)", () => {
+    const i = (t: string) => BACKUP_TABLES.indexOf(t as (typeof BACKUP_TABLES)[number]);
+    expect(i("map_gps_tracks")).toBe(i("map_patches") + 1);
+    expect(buildBackupScript(42n)).toContain("\\copy (SELECT * FROM oxygen.map_gps_tracks WHERE event_id = 42) TO STDOUT");
+  });
+
   it("does not carry previews (a cache) or the global tile cache", () => {
     expect(BACKUP_TABLES).not.toContain("map_previews");
     expect(BACKUP_TABLES).not.toContain("map_tiles");

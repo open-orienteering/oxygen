@@ -27,6 +27,7 @@ import { runRematch } from "../../map-store/rematch.js";
 const FIXTURE = resolve(__dirname, "../../../../../e2e/test.ocd");
 const RESTORE_SCRIPT = resolve(__dirname, "../../../scripts/restore-map-blobs.sql");
 const LEGACY_RESTORE_SCRIPT = resolve(__dirname, "../../../scripts/restore-legacy-map-files.sql");
+const TRACKS_RESTORE_SCRIPT = resolve(__dirname, "../../../scripts/restore-map-gps-tracks.sql");
 const suffix = randomBytes(4).toString("hex");
 const sha256 = (b: Uint8Array) => createHash("sha256").update(b).digest("hex");
 
@@ -43,6 +44,9 @@ let uploaderId: string;
 let originalFile: Record<string, unknown>;
 let courseObjectId: string;
 let patchRow: { id: string; version: bigint; ops: unknown };
+/** The event's GPS tracks (map-gps-tracks.md §1.3): a recorded one by the uploader, an average. */
+let trackRows: Record<string, unknown>[];
+const TRACK_POINTS = { lat: [596000000, 596000090, 596000180], lng: [180000000, 180000070, 180000140], time: [1768035600000, null, 1768035602000], ele: null };
 const PATCH_OPS = { "hide:3": { op: "hide", sourceIndex: 3 }, "modify:4": { op: "modify", sourceIndex: 4, coords: [[1, 2], [3, 4, 1]], angle: 900 } };
 // Fingerprints no real symbol has: decisions are instance-global and keyed
 // by symbol geometry, so a real one would change other suites' imports.
@@ -102,6 +106,22 @@ beforeAll(async () => {
     select: { id: true, version: true, ops: true },
   });
 
+  trackRows = [
+    await source.db.mapGpsTrack.create({
+      data: {
+        eventId: source.eventId, name: "Loop, \"east\"", sourceName: "loop.gpx", points: TRACK_POINTS, pointCount: 3,
+        recordedAt: new Date(1768035600000), trimStart: 0, trimEnd: 3, createdBy: uploader.id, version: 2n ** 60n + 11n,
+      },
+    }),
+    await source.db.mapGpsTrack.create({
+      data: {
+        eventId: source.eventId, name: null, sourceName: "", points: { ...TRACK_POINTS, time: null }, pointCount: 3, trimStart: 1, trimEnd: 3,
+        derivedFrom: ["0190a0a0-0000-7000-8000-0000000000a1", "0190a0a0-0000-7000-8000-0000000000a2"],
+        singlePass: [{ start: 0, end: 2 }], convertedOp: "add:0190a0a0-0000-7000-8000-0000000000a3", version: 2n ** 60n + 12n,
+      },
+    }),
+  ] as unknown as Record<string, unknown>[];
+
   server = Fastify({ logger: false });
   registerBackupRoute(server);
   await server.ready();
@@ -159,6 +179,14 @@ describe("per-event dump", () => {
     const rows = splitBackupSections(dump).get("map_patches")!.trim().split("\n");
     expect(rows).toHaveLength(2);
     expect(rows[1].startsWith(`${patchRow.id},${source.eventId},${documentHash},f,`)).toBe(true);
+  });
+
+  it("carries the event's GPS tracks after the map patch (map-gps-tracks.md §1.3)", () => {
+    const order = [...splitBackupSections(dump).keys()];
+    expect(order.indexOf("map_gps_tracks")).toBe(order.indexOf("map_patches") + 1);
+    const rows = splitBackupSections(dump).get("map_gps_tracks")!.trim().split("\n");
+    expect(rows).toHaveLength(3); // header + two rows (the name's comma and quotes are CSV-quoted)
+    expect(rows.slice(1).map((r) => r.slice(0, 36)).sort()).toEqual(trackRows.map((r) => r.id as string).sort());
   });
 
   it("omits previews", () => {
@@ -266,6 +294,41 @@ describe("restore-map-blobs.sql", () => {
 
   it("loads the blobs alone without an event id", () => {
     expect(() => psqlRestore(sectionsDir)).not.toThrow();
+  });
+});
+
+describe("restore-map-gps-tracks.sql", () => {
+  // Runs after restore-map-blobs.sql's suite: the source event (and with it
+  // its tracks) and the uploader are gone.
+  let at: string;
+  beforeAll(() => {
+    at = join(dir, "gps-tracks");
+    mkdirSync(at);
+    writeFileSync(join(at, "map_gps_tracks.csv"), splitBackupSections(dump).get("map_gps_tracks")!);
+  });
+
+  it("restores the tracks into the event exactly; a missing importer becomes NULL", async () => {
+    expect(await target.db.mapGpsTrack.count({ where: { id: { in: trackRows.map((r) => r.id as string) } } })).toBe(0);
+    psqlRestore(at, target.eventId, TRACKS_RESTORE_SCRIPT);
+    const restored = await target.db.mapGpsTrack.findMany({ where: { eventId: target.eventId }, orderBy: { version: "asc" } });
+    expect(restored).toEqual(trackRows.map((r) => ({ ...r, eventId: target.eventId, createdBy: null })));
+    expect(restored[0].points).toEqual(TRACK_POINTS);
+    expect(restored[1].version).toBe(2n ** 60n + 12n);
+  });
+
+  it("is a no-op the second time", async () => {
+    psqlRestore(at, target.eventId, TRACKS_RESTORE_SCRIPT);
+    expect(await target.db.mapGpsTrack.count({ where: { eventId: target.eventId } })).toBe(2);
+  });
+
+  it("keeps the importer when that user exists", async () => {
+    await target.db.mapGpsTrack.deleteMany({ where: { eventId: target.eventId } });
+    const kept = await target.db.user.create({ data: { email: `kept@backup-${suffix}.example`, displayName: "Kept", active: true } });
+    const csv = splitBackupSections(dump).get("map_gps_tracks")!.replaceAll(uploaderId, kept.id);
+    writeFileSync(join(at, "map_gps_tracks.csv"), csv);
+    psqlRestore(at, target.eventId, TRACKS_RESTORE_SCRIPT);
+    const row = await target.db.mapGpsTrack.findUniqueOrThrow({ where: { id: trackRows[0].id as string } });
+    expect(row.createdBy).toBe(kept.id);
   });
 });
 

@@ -129,7 +129,9 @@ function parseDatabaseUrl(): PgConnectionParams {
  * and its fingerprints are not derivable in SQL). `map_previews` are a
  * cache and stay out. The event's `map_patches` row follows `map_files`;
  * the blob sections also carry its document and that document's source,
- * so a dormant patch (docs/map-patches.md §3.5) restores too.
+ * so a dormant patch (docs/map-patches.md §3.5) restores too. The
+ * event's GPS tracks follow it (docs/map-gps-tracks.md §1.3), restored by
+ * `scripts/restore-map-gps-tracks.sql`.
  */
 export const BACKUP_TABLES = [
   "events",
@@ -151,6 +153,7 @@ export const BACKUP_TABLES = [
   "club_symbol_decisions",
   "map_files",
   "map_patches",
+  "map_gps_tracks",
   "tracks",
   "routes",
   "event_seqs",
