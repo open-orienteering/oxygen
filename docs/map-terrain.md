@@ -1024,6 +1024,9 @@ sampler, and compares with T2. Measured 2026-11-14:
 - §3: 10 §2.1's depressions, spot heights and text labels are not
   evidence (the split's order leaves them out).
 - §4–5 The height field: interpolation, format, sampling, `deriveTerrain` (H3).
-- §6: per-chain anchored heights into the height field (H3 / H10).
+- §6: the anchored field — `anchoredHeights` gives the per-chain absolute
+  heights (§6.8); seeding the height field with them is §4.9 (H3's
+  chapter, `terrain/field/`), not in H9's row; H10 re-derives the field
+  when a DEM arrives.
 - §7 DEM providers, the paper → projected sampler (H10).
 - Storage of the derived artifact is `map-storage.md` (H4).
