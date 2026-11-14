@@ -921,7 +921,9 @@ worker handle revalidation of an `immutable` response). §4.2 decides
 access exactly as for any other caller — on the request that fills the
 cache: a device keeps a document it has cached after its access is
 revoked, until the entry expires or is evicted (inherent in 07 §9.1's
-CacheFirst).
+CacheFirst). The request goes through `venueAwareFetch` (G17), so a
+venue session reads the document from the box's copy (§7.2), as it reads
+every other route; the cache key stays the same-origin hash URL.
 
 **In memory.** One request per hash per session: concurrent callers share
 it and get the same `ArrayBuffer`; the last four documents are kept
@@ -957,6 +959,42 @@ cached on first use rather than precached, so a device that never opens
 a vector map does not download them. The
 regex is `MAP_DOCUMENT_PATH_RE`; Workbox stringifies the route function,
 so `vite.config.ts` repeats it as a literal.
+
+**App-code copy** (G17). The service worker caches a document only on a
+page it controls and for a same-origin request, so the app keeps its own
+copy in the same cache: after a 200 the document is put into
+`map-documents` under `mapDocumentUrl(hash)` unless it is there already,
+and a request that fails without a response (or a non-200 while
+`navigator.onLine === false`) reads it back from there
+(`ignoreVary`: the route sends `Vary: Accept-Encoding`) before it is
+classified `offline`. A first visit, the dev server and a document read
+from a venue box are kept that way. Workbox's expiration learns such an
+entry on its first CacheFirst hit (`cachedResponseWillBeUsed`), so the
+20-entry cap applies to it from then on. Same cache and key: no second
+copy, no IndexedDB.
+
+**Prefetch** (07 §9.1 "Prefetch"; G17). When an event page opens
+(`useEventOfflineMaps`, mounted by the sync indicator, which every event
+page shows) and `course.mapMetadata.documentHash` is set,
+`prefetchMapDocument(hash, nameId)` makes the one request unless the
+document is in `map-documents` already: stored, not decoded, not kept in
+memory. Once per hash per session; skipped offline and when the browser
+asks to save data (`navigator.connection.saveData`). So a device that has
+opened the event has its map, before any map was shown.
+
+**Offline ready** (07 §9.1 "Pinning"; G17). The sync panel's *Maps on
+this device* block (`offline-maps`), for a user with `courses.view` on
+an event with a map:
+
+| Line | Shows |
+|---|---|
+| `offline-maps-document` | *Map stored on this device* / *Map not stored on this device* (`isMapDocumentStored(hash)`: in memory or in `map-documents`) |
+| `offline-maps-print` | *Print stored {{time}} ({{count}} exports)*, *Print partly stored {{time}}* (`complete: false`), *Print not stored*, or *Printing offline needs a device that can compose PDFs* (`deviceLimit` 0) — the manifest of `course-print.md` §8.6 "Offline" |
+| `offline-maps-persisted` | *Storage: kept by the browser* / *Storage: may be cleared by the browser* (`navigator.storage.persisted()`; absent API: the second) |
+
+and **Make maps available offline** (`offline-maps-store`), which runs
+the print store step with its progress on the button
+(`course-print.md` §8.6 "Offline").
 
 **Pinning.** After the first document loads, the app calls
 `navigator.storage.persist()` once per session (absent API or a refusal
@@ -1315,12 +1353,11 @@ mentions is pending (§9).
 
 A Maintenance card for the re-match pass (§6.9 is CLI-only); a Settings →
 Maintenance card for the GC (§8.4: status of the last run, dry run, run
-now); a prefetch of the event's document when an event opens (07 §9.1
-"Prefetch"; today the document is fetched when a map is first shown) and
-an "offline ready" indicator with `navigator.storage.persisted()`; the
-service-worker routes are not exercised by E2E (the suite runs the Vite
-dev server, which registers no service worker) — they were checked in the
-built `sw.js`; refreshing a checked-out box's `map_files` row and document when
+now); the service-worker routes are not exercised by E2E (the suite
+runs the Vite dev server, which registers no service worker) — they were
+checked in the built `sw.js`; G17's app-code copy (§7.1) is what the E2E
+exercises, and a preview-build smoke is a row before the G-gate
+(`course-print.md` Pending); refreshing a checked-out box's `map_files` row and document when
 the map is re-imported on the cloud during the lease (07 §9.2, §7.2), and
 with them the layout rows and graphics: until G19 a write forwarded from a
 box (or a sheet `layout.autoSheets` creates on the cloud) does not show on
