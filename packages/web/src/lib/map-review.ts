@@ -123,9 +123,11 @@ export interface TerrainLike {
 }
 
 /** The review's one terrain line: an i18n key under `terrain.` and its values. */
-export function terrainLine(terrain: TerrainLike | null | undefined): { key: string; values: Record<string, number> } {
+export type TerrainLineKey = "terrain.ready3d" | "terrain.readyFlat" | "terrain.none" | "terrain.over-cap" | "terrain.pending";
+
+export function terrainLine(terrain: TerrainLike | null | undefined): { key: TerrainLineKey; values: { percent?: number; min?: number } } {
   if (!terrain) return { key: "terrain.pending", values: {} };
-  if (terrain.state !== "ready" || !terrain.report) return { key: `terrain.${terrain.state === "ready" ? "pending" : terrain.state}`, values: {} };
+  if (terrain.state !== "ready" || !terrain.report) return { key: terrain.state === "ready" ? "terrain.pending" : `terrain.${terrain.state}`, values: {} };
   const decided = terrain.report.share.decided;
   // Floor, so 79.6 % does not read as the 80 % the gate needs.
   const percent = Math.floor(decided * 100);
