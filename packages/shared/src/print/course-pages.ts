@@ -145,6 +145,8 @@ export async function renderCoursePages(opts: CoursePagesOptions): Promise<Cours
   const fonts = opts.fonts.metrics;
   const writer = await PdfWriter.create({ faces: opts.fonts.faces, deterministic: opts.deterministic, info: opts.info, text: opts.text });
   warnings.push(...writer.warnings);
+  // Patch ops that were skipped (docs/map-patches.md §2.3): the PDF is still written.
+  for (const issue of opts.document.patchIssues) warnings.push(`PATCH_ISSUE: ${issue.opId}: ${issue.code}`);
   const geo = documentPaperFrame(opts.document, opts.rotationCorrectionDeg);
   const rasterise = opts.rasteriseSvg;
   const pngCache = new Map<string, Uint8Array>();

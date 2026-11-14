@@ -383,10 +383,12 @@ test.describe("auto templates (docs/course-layout.md §5–§7)", () => {
     // G15: the print job of the same query (course-print.md §8.5) — a sheet per page, the pinned document by hash, maps.pdf's file name.
     const jobRes = await page.request.get(`/api/maps/itest/print-job?courses=${courseId}`);
     expect(jobRes.ok()).toBe(true);
-    const job = (await jobRes.json()) as { version: number; document: { hash: string }; sheets: { copies?: number }[]; mode: string; filename: string };
-    expect(job.version).toBe(1);
+    type Job = { version: number; document: { hash: string; patch: { version: string; patch: { ops: Record<string, unknown> } } | null }; sheets: { copies?: number }[]; mode: string; filename: string };
+    const job = (await jobRes.json()) as Job;
+    expect(job.version).toBe(2);
     expect(job.mode).toBe("cmyk");
     expect(job.document.hash).toMatch(/^[0-9a-f]{64}$/);
+    expect(job.document.patch).toBeNull();
     expect(job.sheets.reduce((n, s) => n + (s.copies ?? 1), 0)).toBe((await PDFDocument.load(await printed.body())).getPageCount());
     expect(printed.headers()["content-disposition"]).toContain(`filename="${job.filename}"`);
     // G16: the device's PDF is maps.pdf, object for object, under maps.pdf's file name.
@@ -421,6 +423,23 @@ test.describe("auto templates (docs/course-layout.md §5–§7)", () => {
     const printedLogos = await page.request.get(`/api/maps/itest/maps.pdf?courses=${courseId}`);
     expect(printedLogos.ok()).toBe(true);
     await expectSamePdf(withLogos, await printedLogos.body());
+    // G14: the event's patch travels in the job at its version, the device composes it to maps.pdf's PDF; an op-less patch is none again.
+    const trpcHeaders = { "x-competition-id": "itest", "x-forwarded-email": "e2e-admin@oxygen.test" };
+    const hide = await page.request.post("/trpc/mapPatch.applyChange", { headers: trpcHeaders, data: { documentHash: job.document.hash, put: [{ op: "hide", sourceIndex: 0 }] } });
+    expect(hide.ok(), await hide.text()).toBe(true);
+    const written = (await hide.json()).result.data as { version: string };
+    const patchedJob = (await (await page.request.get(`/api/maps/itest/print-job?courses=${courseId}`)).json()) as Job;
+    expect(patchedJob.document.patch?.version).toBe(written.version);
+    expect(Object.keys(patchedJob.document.patch!.patch.ops)).toEqual(["hide:0"]);
+    requests.length = 0;
+    const patchedExport = await download(page, () => page.getByTestId(`export-course-${courseId}`).click());
+    expect(requests.filter((r) => r.includes("/maps.pdf"))).toEqual([]);
+    const patchedPdf = await page.request.get(`/api/maps/itest/maps.pdf?courses=${courseId}`);
+    expect(patchedPdf.ok()).toBe(true);
+    await expectSamePdf(patchedExport, await patchedPdf.body());
+    const undo = await page.request.post("/trpc/mapPatch.applyChange", { headers: trpcHeaders, data: { documentHash: job.document.hash, remove: ["hide:0"] } });
+    expect(undo.ok(), await undo.text()).toBe(true);
+    expect(((await (await page.request.get(`/api/maps/itest/print-job?courses=${courseId}`)).json()) as Job).document.patch).toBeNull();
 
     // The template is named after its key and shows the key as a badge in Layout mode.
     await rowOf(page, courseId).locator("[data-testid^='edit-course-map-']").click();

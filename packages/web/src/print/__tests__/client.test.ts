@@ -126,7 +126,7 @@ describe("printMapsPdf (§8.6)", () => {
     const tooBig = deps({ job: big, device: { worker: true, deviceMemory: 4, coarsePointer: false } });
     expect((await printMapsPdf("ev", "", tooBig.d)).host).toBe("server");
     expect(tooBig.requests).toEqual(["/api/maps/ev/print-job", "/api/maps/ev/maps.pdf"]);
-    const v2 = deps({ job: { ...fixturePrintJob(), version: 2 } as unknown as PrintJob });
+    const v2 = deps({ job: { ...fixturePrintJob(), version: 1 } as unknown as PrintJob });
     expect((await printMapsPdf("ev", "", v2.d)).host).toBe("server");
     expect(v2.d.document).not.toHaveBeenCalled();
   });

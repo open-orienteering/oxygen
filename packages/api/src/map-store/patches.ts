@@ -12,6 +12,8 @@
 
 import { TRPCError } from "@trpc/server";
 import { encodeHlc, mapDocument } from "@oxygen/shared";
+// A value import only: a print type in this module's signatures would pull the PDF writer into the web build through the router's .d.ts.
+import { livePrintPatch } from "@oxygen/shared/print";
 import type { Prisma, PrismaClient } from "../generated/prisma/client.js";
 import { nextServerHlc } from "../serverClock.js";
 import { eventDocumentHash } from "./event-document.js";
@@ -119,6 +121,28 @@ export async function eventPatchVersion(db: Db, eventId: bigint, pinHash: string
   if (!pinHash) return NO_PATCH.version;
   const row = await db.mapPatch.findUnique({ where: { eventId }, select: { documentHash: true, version: true } });
   return row && row.documentHash === pinHash ? row.version.toString() : NO_PATCH.version;
+}
+
+/**
+ * The patch the server's consumers apply to the pin `pinHash` (G14:
+ * print, the cut context, `course.checks`, the event map objects;
+ * docs/map-patches.md §2.4): the delivered patch with its version, or null
+ * when it changes nothing — no pin, no row, a dormant row, disabled or
+ * op-less. Null means the pinned document unchanged, so an unpatched or
+ * disabled event prints byte-identical to one without corrections (§2.1).
+ * Read with the hash the caller already holds, so the patch is never
+ * paired with another document than the one it prints.
+ */
+export async function eventPrintPatch(db: Db, eventId: bigint, pinHash: string | null): Promise<{ version: string; patch: mapDocument.MapPatch } | null> {
+  const { version, patch } = await eventPatchOnPin(db, eventId, pinHash);
+  return patch && pinHash ? livePrintPatch(pinHash, { version, patch }) : null;
+}
+
+/** The delivered patch (§3.3) for a pin the caller already holds: the row only when it is keyed to `pinHash`. */
+export async function eventPatchOnPin(db: Db, eventId: bigint, pinHash: string | null): Promise<PatchDelivery> {
+  if (!pinHash) return NO_PATCH;
+  const row = await db.mapPatch.findUnique({ where: { eventId }, select: ROW_SELECT });
+  return deliveredPatch(row, pinHash);
 }
 
 // ---- writes -----------------------------------------------------------------
