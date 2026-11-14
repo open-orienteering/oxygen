@@ -155,7 +155,7 @@ describe("a patch change (§5.2 \"Patch\")", () => {
     const h = loaded();
     const meshes = h.reply.atlas.meshes;
     const big = discSym("ISOM2017-2:205", 1200);
-    const r = patch(h, patchOf([{ op: "resymbol", sourceIndex: 4, symbol: { patch: "ISOM2017-2:205" } }], { "ISOM2017-2:205": { ...big, origin: "source", hidden: false } }));
+    const r = patch(h, patchOf([{ op: "resymbol", sourceIndex: 4, symbol: { patch: "ISOM2017-2:205" } }], { "ISOM2017-2:205": mapDocument.patchSymbolSchema.parse(big) }));
     expect(r.touched).toEqual([cell(3)]);
     expect(r.atlas).toBeDefined();
     expect(r.atlas!.meshes.length).toBe(meshes.length + 1);

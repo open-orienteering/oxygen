@@ -77,7 +77,7 @@ describe("the eyedropper's pick (docs/course-editor.md §6.4)", () => {
     const ADD2 = "00000000-0000-7000-8000-000000000002";
     const patched = mapDocument.applyPatch(doc(), {
       documentHash: "ab".repeat(32), enabled: true,
-      symbols: { "ISOM2017-2:506": { code: "506", name: "Path", kind: "line", origin: "source", hidden: false, render: line("506", BLACK, 250).render } },
+      symbols: { "ISOM2017-2:506": mapDocument.patchSymbolSchema.parse({ code: "506", name: "Path", kind: "line", render: line("506", BLACK, 250).render }) },
       ops: {
         // The black line at y = 20 hidden; the one at y = 10 moved to y = 15.
         "hide:1": { op: "hide", sourceIndex: 1 },

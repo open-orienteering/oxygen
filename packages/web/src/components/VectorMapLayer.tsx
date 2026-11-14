@@ -9,6 +9,10 @@
  * "Loupe"): the resident map once more, magnified, into a circle of the
  * canvas.
  *
+ * With `patch` set it draws the effective document (§5.2 "Patch",
+ * docs/map-patches.md §2): the patch goes with the load, and a change is
+ * sent to the engine without reloading the document.
+ *
  * The canvas is not rotated by CSS: the viewport rotation is part of the
  * GL view (`glView`), so nothing is resampled. The engine and its worker
  * live as long as the layer; `view` changes only redraw (one per frame).
@@ -24,7 +28,7 @@ import { useTranslation } from "react-i18next";
 import type { ViewRect } from "../map-gl/buckets";
 import { MapGlEngine, workerTransport, type CourseInfo } from "../map-gl/engine";
 import type { CourseLayerRequest } from "../map-gl/worker";
-import type { render } from "@oxygen/shared";
+import type { mapDocument, render } from "@oxygen/shared";
 import { MapGlRenderer } from "../map-gl/renderer";
 import { loupeView } from "../map-gl/view";
 import type { LoadedMapDocument } from "../lib/map-document-cache";
@@ -61,9 +65,13 @@ interface Props {
   onCourseSupport?: (supported: boolean) => void;
   /** Draw the editor's loupe this frame (§5.5 "Loupe"); `null` none. */
   loupe?: VectorLoupe | null;
+  /** The event's patch over `doc` (already paired by hash, `patchForDocument`); `null` none. */
+  patch?: mapDocument.MapPatch | null;
+  /** Its delivery version: the canvas's `data-patch-version` once drawn. */
+  patchVersion?: string;
 }
 
-export function VectorMapLayer({ doc, view, width, height, budget, zIndex = 1, course = null, onCourse, onCourseSupport, loupe = null }: Props) {
+export function VectorMapLayer({ doc, view, width, height, budget, zIndex = 1, course = null, onCourse, onCourseSupport, loupe = null, patch = null, patchVersion = "0" }: Props) {
   const { t } = useTranslation("dashboard");
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const engineRef = useRef<MapGlEngine | null>(null);
@@ -83,6 +91,10 @@ export function VectorMapLayer({ doc, view, width, height, budget, zIndex = 1, c
 
   const courseRef = useRef(course);
   courseRef.current = course;
+  const patchRef = useRef({ patch, version: patchVersion });
+  patchRef.current = { patch, version: patchVersion };
+  /** The patch version the canvas shows (`data-patch-version`): set once the engine drew it. */
+  const [drawnPatch, setDrawnPatch] = useState<string | null>(null);
   const onCourseRef = useRef(onCourse);
   onCourseRef.current = onCourse;
   const onCourseSupportRef = useRef(onCourseSupport);
@@ -146,6 +158,10 @@ export function VectorMapLayer({ doc, view, width, height, budget, zIndex = 1, c
     engine.onCourse = (info) => onCourseRef.current?.(info);
     // Sent right after the load reaches the worker.
     engine.setCourse(courseRef.current);
+    // The patch goes with the load (§5.2 "Patch").
+    const first = patchRef.current;
+    setDrawnPatch(null);
+    engine.setPatch(first.patch).then(() => { if (engineRef.current === engine) setDrawnPatch(first.version); }, () => undefined);
     let cancelled = false;
     setStatus("loading");
     (async () => {
@@ -206,6 +222,15 @@ export function VectorMapLayer({ doc, view, width, height, budget, zIndex = 1, c
     engineRef.current?.setCourse(course);
   }, [course]);
 
+  // A patch change redraws without reloading (§5.2 "Patch"): the engine re-prepares the touched buckets.
+  useEffect(() => {
+    const engine = engineRef.current;
+    if (!engine) return;
+    engine.setPatch(patch).then(() => { if (engineRef.current === engine) setDrawnPatch(patchVersion); }, (err: unknown) => {
+      console.warn("[vector-map] patch failed:", err);
+    });
+  }, [patch, patchVersion]);
+
   // Every view change is one redraw; detail requests and evictions follow from `setView`.
   useEffect(() => {
     if (view) requestDraw();
@@ -225,6 +250,7 @@ export function VectorMapLayer({ doc, view, width, height, budget, zIndex = 1, c
         data-testid="map-vector-layer"
         data-attempt={attempt}
         data-document-hash={doc.hash}
+        data-patch-version={drawnPatch ?? undefined}
         data-status={status}
         data-ready={status === "complete" ? "true" : "false"}
         style={{ position: "absolute", left: 0, top: 0, width, height, zIndex, pointerEvents: "none" }}
