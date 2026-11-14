@@ -239,7 +239,11 @@ export function applyTokens(rows: ReadonlyArray<Record<string, unknown>>, tokens
 
 // ---- exporter (cloud) -------------------------------------------------------
 
-export async function exportSnapshotMaps(db: Db, eventId: bigint): Promise<SnapshotMaps> {
+/**
+ * The event's map part. `decisions: false` leaves the club's decisions out
+ * (the refresh during a lease carries none, docs/map-storage.md §7.2).
+ */
+export async function exportSnapshotMaps(db: Db, eventId: bigint, opts: { decisions?: boolean } = {}): Promise<SnapshotMaps> {
   const rows = await db.mapFile.findMany({
     where: { eventId },
     orderBy: { uploadedAt: "asc" },
@@ -267,16 +271,19 @@ export async function exportSnapshotMaps(db: Db, eventId: bigint): Promise<Snaps
     select: { fileHash: true, kind: true, sizeBytes: true, fileName: true },
     orderBy: { fileHash: "asc" },
   });
-  const decisions = await db.clubSymbolDecision.findMany({
-    select: { fingerprint: true, libraryVersion: true, canonicalId: true, decidedAt: true },
-    orderBy: [{ fingerprint: "asc" }, { libraryVersion: "asc" }],
-  });
+  const decisions =
+    opts.decisions === false
+      ? undefined
+      : await db.clubSymbolDecision.findMany({
+          select: { fingerprint: true, libraryVersion: true, canonicalId: true, decidedAt: true },
+          orderBy: [{ fingerprint: "asc" }, { libraryVersion: "asc" }],
+        });
   const patchRow = await db.mapPatch.findUnique({
     where: { eventId },
     select: { id: true, documentHash: true, enabled: true, ops: true, symbols: true, version: true },
   });
   const patch = snapshotPatchOf(patchRow, documents.map((d) => d.hash));
-  return { files, sources, documents, skipped, decisions, ...(patch ? { patch } : {}) };
+  return { files, sources, documents, skipped, ...(decisions ? { decisions } : {}), ...(patch ? { patch } : {}) };
 }
 
 /** Whether the event's `map_files` reference the blob — the `lease.exportBlob` gate. */
@@ -350,6 +357,22 @@ export async function importSnapshotMaps(
   maps: SnapshotMaps,
   blobs: SnapshotBlobs,
 ): Promise<{ files: number; sources: number; documents: number; decisions: number; patches: number }> {
+  await insertSnapshotBlobs(tx, maps, blobs);
+  await createSnapshotMapFiles(tx, eventId, maps.files, blobs);
+  for (const d of maps.decisions ?? []) await mergeDecision(tx, d);
+  // The patch after its document (RESTRICT FK); verbatim, token included.
+  if (maps.patch) await createSnapshotPatch(tx, eventId, maps.patch);
+  return {
+    files: maps.files.length,
+    sources: maps.sources.length,
+    documents: maps.documents.length,
+    decisions: maps.decisions?.length ?? 0,
+    patches: maps.patch ? 1 : 0,
+  };
+}
+
+/** The fetched blobs, append-only: a blob the node holds is neither fetched nor rewritten. */
+export async function insertSnapshotBlobs(tx: Prisma.TransactionClient, maps: SnapshotMaps, blobs: SnapshotBlobs): Promise<void> {
   const newSources = maps.sources.filter((s) => blobs.sources.has(s.fileHash));
   if (newSources.length > 0) {
     await tx.mapSource.createMany({
@@ -381,7 +404,16 @@ export async function importSnapshotMaps(
       skipDuplicates: true,
     });
   }
-  for (const f of maps.files) {
+}
+
+/** The event's `map_files` rows with the venue NULLs; each row's source must be on this node. */
+export async function createSnapshotMapFiles(
+  tx: Prisma.TransactionClient,
+  eventId: bigint,
+  files: readonly Record<string, unknown>[],
+  blobs: SnapshotBlobs,
+): Promise<void> {
+  for (const f of files) {
     const sourceHash = String(f.sourceHash);
     if (!blobs.sources.has(sourceHash) && (await getBlobSize(tx, "map_sources", sourceHash)) === null) {
       throw new TRPCError({ code: "PRECONDITION_FAILED", message: `Checkout: map source ${sourceHash} is missing on this node.` });
@@ -390,29 +422,21 @@ export async function importSnapshotMaps(
     const row: Record<string, unknown> = { ...withoutDroppedFields("mapFile", f), eventId, clubMapVersionId: null };
     await tx.mapFile.create({ data: withDbNulls(row, NULLABLE_JSON_FILE_FIELDS) as never });
   }
-  for (const d of maps.decisions ?? []) await mergeDecision(tx, d);
-  // The patch after its document (RESTRICT FK); verbatim, token included.
-  if (maps.patch) {
-    const p = maps.patch;
-    await tx.mapPatch.create({
-      data: {
-        id: p.id,
-        eventId,
-        documentHash: p.documentHash,
-        enabled: p.enabled,
-        ops: p.ops as Prisma.InputJsonValue,
-        symbols: p.symbols as Prisma.InputJsonValue,
-        version: BigInt(p.version),
-      },
-    });
-  }
-  return {
-    files: maps.files.length,
-    sources: maps.sources.length,
-    documents: maps.documents.length,
-    decisions: maps.decisions?.length ?? 0,
-    patches: maps.patch ? 1 : 0,
-  };
+}
+
+/** The patch row verbatim, its token exact; its document must be on this node (RESTRICT). */
+export async function createSnapshotPatch(tx: Prisma.TransactionClient, eventId: bigint, p: SnapshotMapPatch): Promise<void> {
+  await tx.mapPatch.create({
+    data: {
+      id: p.id,
+      eventId,
+      documentHash: p.documentHash,
+      enabled: p.enabled,
+      ops: p.ops as Prisma.InputJsonValue,
+      symbols: p.symbols as Prisma.InputJsonValue,
+      version: BigInt(p.version),
+    },
+  });
 }
 
 /**

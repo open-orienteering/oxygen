@@ -52,6 +52,7 @@ import {
 import { makeSyncHeaders } from "./googleIdToken.js";
 import { makeLeasePeer } from "./lease.js";
 import { refreshCloudOwnedSettings } from "./settingsRefresh.js";
+import { refreshCloudOwnedMaps } from "./mapRefresh.js";
 
 const PUSH_BATCH = 200;
 const PULL_BATCH = 200;
@@ -293,9 +294,11 @@ export async function shipAllOnce(
 }
 
 /**
- * Slow-cadence pass: refresh the local copy of cloud-owned event settings
- * for events this node holds a lease on. Piggybacks on the shipper timer
- * with its own throttle (default 5 min).
+ * Slow-cadence pass: refresh the local copy of cloud-owned event settings,
+ * then of the event's cloud-owned map rows (row G19,
+ * docs/map-storage.md §7.2), for events this node holds a lease on. The
+ * two fail independently. Piggybacks on the shipper timer with its own
+ * throttle (default 5 min).
  */
 export async function refreshAllSettingsOnce(
   db: PrismaClient,
@@ -313,6 +316,15 @@ export async function refreshAllSettingsOnce(
     } catch (err) {
       console.warn(
         `[shipper] ${ev.nameId}: settings refresh failed:`,
+        err instanceof Error ? err.message : String(err),
+      );
+    }
+    try {
+      await refreshCloudOwnedMaps(db, ev, peer);
+    } catch (err) {
+      // Offline, or a cloud that predates `exportMapRows`: the box keeps its copy.
+      console.warn(
+        `[shipper] ${ev.nameId}: map refresh failed:`,
         err instanceof Error ? err.message : String(err),
       );
     }

@@ -15,14 +15,23 @@
  * mixes cloud-owned and local procedures is refused the same way
  * (`MIXED_BATCH`) and nothing in it runs (row G18).
  *
+ * After the cloud accepts a forwarded layout or patch write, the box
+ * refreshes its copy of the event's map rows before it replies (row G19,
+ * docs/map-storage.md §7.2), so the page's refetch reads its own write
+ * with the cloud's token. The wait is bounded; the refresh finishes behind
+ * the reply when it takes longer.
+ *
  * Registered as a Fastify preHandler only when `NODE_ROLE=venue` and a peer
  * is configured, so the cloud and single-node deployments never pay for it.
  */
 
 import type { FastifyInstance, FastifyRequest } from "fastify";
 import { isCloudOwnedMutation } from "./ownership.js";
-import { nodeRole, syncPeerUrl } from "./nodeIdentity.js";
+import { nodeRole, syncPeerUrl, syncSharedSecret } from "./nodeIdentity.js";
 import { authHeaderName } from "../auth.js";
+import { prisma } from "../db.js";
+import { makeLeasePeer } from "./lease.js";
+import { refreshCloudOwnedMaps } from "./mapRefresh.js";
 
 /** Parse the procedure paths out of a tRPC request URL (batched or not). */
 export function trpcProcedurePaths(url: string): string[] {
@@ -54,6 +63,54 @@ export function isMixedCloudBatch(method: string, url: string): boolean {
   if (method !== "POST") return false;
   const paths = trpcProcedurePaths(url);
   return paths.some(isCloudOwnedMutation) && !paths.every(isCloudOwnedMutation);
+}
+
+/** The forwarded writes after which the box refreshes the event's map rows (row G19). */
+export const MAP_REFRESH_PREFIXES: readonly string[] = [
+  "mapPatch.",
+  "courseMap.",
+  "mapTemplate.",
+  "layout.",
+  "graphics.",
+  "courseObject.",
+];
+
+/** Whether a forwarded call wrote a map row the box mirrors. */
+export function refreshesMapRows(paths: readonly string[]): boolean {
+  return paths.some((p) => MAP_REFRESH_PREFIXES.some((prefix) => p.startsWith(prefix)));
+}
+
+/** How long a forwarded write's reply waits for the refresh that follows it. */
+export const FORWARD_REFRESH_WAIT_MS = 10_000;
+
+/**
+ * Refresh the event's map rows after a forwarded write (row G19), waiting
+ * at most `waitMs`. Never throws: a failed refresh leaves the box on its
+ * copy until the cadence's next one.
+ */
+export async function refreshAfterForward(nameId: string, peerUrl: string, waitMs = FORWARD_REFRESH_WAIT_MS): Promise<void> {
+  const secret = syncSharedSecret();
+  if (!secret) return;
+  try {
+    const db = prisma();
+    const event = await db.event.findFirst({ where: { nameId }, select: { id: true, nameId: true, zeroTime: true } });
+    if (!event) return;
+    const work = refreshCloudOwnedMaps(db, event, makeLeasePeer(peerUrl, secret)).then(
+      () => {},
+      (err: unknown) => {
+        console.warn(`[venue-forwarder] ${nameId}: map refresh after a forwarded write failed:`, err instanceof Error ? err.message : String(err));
+      },
+    );
+    let timer: NodeJS.Timeout | undefined;
+    const bound = new Promise<void>((resolve) => {
+      timer = setTimeout(resolve, waitMs);
+      timer.unref();
+    });
+    await Promise.race([work, bound]);
+    clearTimeout(timer);
+  } catch (err) {
+    console.warn(`[venue-forwarder] ${nameId}: map refresh after a forwarded write failed:`, err instanceof Error ? err.message : String(err));
+  }
 }
 
 /** Why a cloud-owned call failed on a venue: the cloud is unreachable, or the batch mixed it with local calls. */
@@ -117,6 +174,10 @@ export function registerVenueForwarder(server: FastifyInstance): void {
         body: JSON.stringify(req.body),
       });
       const text = await upstream.text();
+      const nameId = req.headers["x-event-id"];
+      if (upstream.ok && nameId && refreshesMapRows(paths)) {
+        await refreshAfterForward(String(nameId), peerUrl);
+      }
       void reply
         .code(upstream.status)
         .header(

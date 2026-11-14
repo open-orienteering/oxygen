@@ -187,20 +187,39 @@ export async function exportPeerBlobSlice(db: Db, eventId: bigint, input: Export
 // ---- importer (venue) -------------------------------------------------------
 
 /**
+ * Whether the node holds graphic `g` under its id with the same owner and
+ * bytes: a club graphic as a club graphic; an event graphic only when
+ * `heldEventId` names the local event that owns it (a refresh during a
+ * lease, docs/map-storage.md §7.2 — at checkout the import's event delete
+ * cascades the event's graphics, so they are always fetched).
+ */
+export function holdsGraphic(
+  g: Pick<SnapshotGraphic, "club" | "sha256">,
+  held: { eventId: bigint | null; data: Uint8Array } | null,
+  heldEventId?: bigint,
+): boolean {
+  if (!held || sha256(held.data) !== g.sha256) return false;
+  if (g.club) return held.eventId === null;
+  return heldEventId !== undefined && held.eventId === heldEventId;
+}
+
+/**
  * Fetch the graphics' bytes before the import transaction. The event's
- * graphics are always fetched (the import's event delete cascades them); a
- * club graphic is skipped when the box holds that id with the same hash.
+ * graphics are fetched unless `heldEventId` is given and the node holds
+ * them (`holdsGraphic`); a club graphic is skipped when the box holds that
+ * id with the same hash.
  */
 export async function fetchSnapshotGraphics(
   db: Db,
   graphics: readonly SnapshotGraphic[],
   fetchSlice: GraphicSliceFetcher,
+  opts: { heldEventId?: bigint } = {},
 ): Promise<SnapshotGraphicBlobs> {
   const out: SnapshotGraphicBlobs = { bytes: new Map(), fetchedBytes: 0 };
   for (const g of graphics) {
-    if (g.club) {
+    if (g.club || opts.heldEventId !== undefined) {
       const held = await db.graphic.findUnique({ where: { id: BigInt(g.id) }, select: { eventId: true, data: true } });
-      if (held && held.eventId === null && sha256(held.data) === g.sha256) continue;
+      if (holdsGraphic(g, held, opts.heldEventId)) continue;
     }
     out.bytes.set(g.id, await fetchGraphic(g, fetchSlice));
     out.fetchedBytes += g.sizeBytes;
@@ -250,4 +269,43 @@ export async function importSnapshotGraphics(
     await tx.$queryRaw`SELECT setval(pg_get_serial_sequence('oxygen.graphics', 'id'), GREATEST((SELECT MAX(id) FROM oxygen.graphics), 1))`;
   }
   return written;
+}
+
+export interface GraphicMirrorCounts {
+  written: number;
+  updated: number;
+  deleted: number;
+}
+
+/**
+ * Make a live event's graphics equal to the export's (the refresh during a
+ * lease, docs/map-storage.md §7.2), inside its transaction: a graphic whose
+ * bytes were fetched is replaced under the cloud's id; one held with the
+ * same bytes gets the cloud's name and mime when they differ; the event's
+ * graphics the export lacks are deleted; a club graphic is never deleted.
+ * Nothing references a graphic by FK (the layout JSON names it by number).
+ */
+export async function mirrorSnapshotGraphics(
+  tx: Prisma.TransactionClient,
+  eventId: bigint,
+  graphics: readonly SnapshotGraphic[],
+  blobs: SnapshotGraphicBlobs,
+): Promise<GraphicMirrorCounts> {
+  const counts: GraphicMirrorCounts = { written: 0, updated: 0, deleted: 0 };
+  const fetched = graphics.filter((g) => blobs.bytes.has(g.id));
+  if (fetched.length > 0) counts.written = await importSnapshotGraphics(tx, eventId, fetched, blobs);
+  for (const g of graphics) {
+    if (blobs.bytes.has(g.id)) continue;
+    const held = await tx.graphic.findUnique({ where: { id: BigInt(g.id) }, select: { name: true, mime: true } });
+    if (!held) {
+      throw new TRPCError({ code: "PRECONDITION_FAILED", message: `Refresh: graphic ${g.id} is missing on this node.` });
+    }
+    if (held.name !== g.name || held.mime !== g.mime) {
+      await tx.graphic.update({ where: { id: BigInt(g.id) }, data: { name: g.name, mime: g.mime } });
+      counts.updated++;
+    }
+  }
+  const keep = graphics.filter((g) => !g.club).map((g) => BigInt(g.id));
+  counts.deleted = (await tx.graphic.deleteMany({ where: { eventId, id: { notIn: keep } } })).count;
+  return counts;
 }

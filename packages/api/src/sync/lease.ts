@@ -41,6 +41,7 @@ import {
   type SnapshotGraphicBlobs,
 } from "./snapshotGraphics.js";
 import { withoutDroppedFields } from "./dropped-columns.js";
+import type { MapRows } from "./mapRefresh.js";
 
 // ─── Active lease + write guard ─────────────────────────────
 
@@ -176,11 +177,11 @@ const SNAPSHOT_TABLES = [
 type SnapshotTable = (typeof SNAPSHOT_TABLES)[number];
 
 /** The cloud-owned layout tables whose tokens travel exactly in `versions`. */
-const TOKEN_TABLES = ["courseObject", "courseMap", "mapTemplate"] as const;
-type TokenTable = (typeof TOKEN_TABLES)[number];
+export const TOKEN_TABLES = ["courseObject", "courseMap", "mapTemplate"] as const;
+export type TokenTable = (typeof TOKEN_TABLES)[number];
 
 /** `course_maps` columns typed `Json?` (schema.prisma). */
-const NULLABLE_JSON_SHEET_FIELDS = ["windowCenter"] as const;
+export const NULLABLE_JSON_SHEET_FIELDS = ["windowCenter"] as const;
 
 /**
  * Rows of a snapshot table as the importer inserts them: exact tokens, a
@@ -412,6 +413,8 @@ export interface LeasePeer {
   exportSettings(nameId: string): Promise<Record<string, unknown>>;
   /** One slice of a map blob the event pins (docs/map-storage.md §7.2). */
   exportBlob(nameId: string, input: ExportBlobInput): Promise<ExportBlobResult>;
+  /** The event's cloud-owned map rows without bytes — the map-refresh source (row G19). */
+  exportMapRows(nameId: string): Promise<MapRows>;
 }
 
 export function httpLeasePeer(baseUrl: string, secret: string): LeasePeer {
@@ -454,6 +457,9 @@ export function httpLeasePeer(baseUrl: string, secret: string): LeasePeer {
     },
     async exportBlob(nameId, input) {
       return clientFor(nameId).lease.exportBlob.query(input);
+    },
+    async exportMapRows(nameId) {
+      return (await clientFor(nameId).lease.exportMapRows.query()) as MapRows;
     },
   };
 }
