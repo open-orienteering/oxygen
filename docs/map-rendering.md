@@ -2171,6 +2171,239 @@ popover beside it; same entries and ids.
 | `e2e/course-editor-legs.spec.ts` "F23: bend drags on a tablet" | the loupe during a tablet's bend and grip drags (the point `onPointerDrag` returns): its bottom 16 px above the lifted bend, gone on lift |
 | `e2e/field-mode.spec.ts` (`mobile`) | the loupe during a long-press drag: 120 px above the handle; the canvas inside it differs from the same circle after release (the 1× map) and has the map's purple; gone on release |
 
+### 5.6 Terrain (web)
+
+The 3D drawing side of research topic 10 §5 step 2 (H5): a height field
+(`docs/map-terrain.md` §5) drawn as a mesh under a perspective camera,
+textured and lit. H6 makes the map the texture and runs this on the
+renderer's context; H7 puts it in the viewer. Everything lives in
+`packages/web/src/map-gl/terrain/`; nothing here edits `renderer.ts`,
+`engine.ts` or `worker.ts`.
+
+#### Decided with the user (2026-11-14)
+
+1. **Shading: flat ground is exactly 1, both ways** (10 §8's open
+   lighting question). The light comes from the north-west, 45° up, as in
+   T1's hillshade: in paper space (x right, y up, z up) the direction to
+   the light is `l = (−½, ½, √½)`. With `n` the unit normal at the
+   drawn exaggeration, `s = max(0, n·l) / l.z` and
+   `shade = clamp(s, 0.4, 1.25)`; the drawn colour is
+   `min(1, colour · shade)` per channel, no tint. Flat terrain, the
+   sheet's margin and the legend keep the 2D and printed colours exactly;
+   slopes away from the light darken, slopes towards it brighten (white
+   cannot). The light is fixed in paper space, not the camera's, so
+   relief reads the same from every bearing.
+2. **Vertical exaggeration is a draw parameter with no default here.**
+   The dev page and the E2E pass it explicitly; the viewer's default and
+   range are H7's (§5.4 "3D mode").
+
+#### Input
+
+A `HeightField` (`docs/map-terrain.md` §5.1), imported from the field's
+client entry `@oxygen/shared/src/terrain/field/read.js` (types, codec,
+`sampleHeight`, `heightNormals` — not the derivation, so the web bundle
+carries none of `graph/` or `solve/`; `map-terrain.md` §5.4 "Client
+entry").
+
+#### Units
+
+Model space is the arenas' (§5.2 "Projection"): origin-relative paper µm,
+x right, y up — and z up in the same µm, so the texture H6 renders with
+the 2D `viewMatrix` lands on the mesh through that matrix alone. For
+cell (ix, iy) and int16 height h:
+
+```
+x = (x0 + (ix + ½) · cellMm) · 1000 − originX      (likewise y)
+z = (h − zMin) · unitUm · exaggeration
+unitUm = zScaleM · 1000 / groundMPerMm              (metres → paper µm through the map scale)
+```
+
+The lowest drawn height sits at z = 0 for both datums (`zBaseM = zMin ·
+zScaleM + zOffsetM` is the metres there), which keeps z small in float32
+for an absolute field. Metres reach the GPU only through `unitUm`.
+
+#### Camera (`camera.ts`, `mat4.ts`)
+
+`TerrainCamera { target {x, y, z} (model µm), distanceUm, bearingDeg,
+pitchDeg, fovYDeg = 35, widthPx, heightPx }` → `terrainCamera(cam,
+bounds?)`: one column-major model → clip `Float32Array(16)`, composed in
+float64 (`mat4.ts`) and converted once, as `viewMatrix` is (10 §6 point
+1). An orbit: the eye is `distanceUm` from the target, opposite the view
+direction.
+
+- `pitchDeg` 0 looks straight down; it is clamped to [0, 85].
+- `bearingDeg` turns the view as `View.rotationDeg` does
+  (counter-clockwise on screen); at pitch > 0 the camera looks along the
+  ground direction that is screen-up at pitch 0.
+- **2D ↔ 3D hand-over**: at pitch 0 and `distanceUm = focalPx / pxPerUm`
+  (`distanceForPxPerUm`, `focalPx = (heightPx / 2) / tan(fovY / 2)`) the
+  target's z plane is drawn exactly as `viewMatrix` draws it with
+  `rotationDeg = bearingDeg` (tested to 1e-6 in clip space).
+- Near and far enclose `bounds` (the mesh's box at the drawn
+  exaggeration) by depth along the view direction: far at the box's
+  largest depth, near at its smallest (both at corners — depth is
+  linear), no closer than far / 10⁴ (a 24-bit depth buffer). Euclidean
+  distance to the box would not do: an off-axis point at distance D lies
+  at depth D · cos φ, in front of such a near plane (spec review).
+- `cameraFrame` also returns the eye, the camera's basis and `focalPx`;
+  `screenRay(cam, px, py)` is the ray through a canvas pixel (y down),
+  the inverse of the projection; `projectToScreen(m, …)` the forward map.
+
+#### Mesh and level of detail (`mesh.ts`)
+
+The vertices are the field's cell centres; the mesh spans the outer
+centres (the half-cell rim, 0.1 mm at 0.2 mm cells, is not drawn).
+
+- **Chunks** of `CHUNK` = 64 × 64 quads tile the grid from (0, 0); an
+  edge chunk that runs past the grid clamps its vertices to the last
+  column / row, so its outer quads collapse to degenerate triangles.
+- **One vertex grid for all chunks**: 65 × 65 vertices of three bytes
+  (i, j, skirt = 0) plus a ring of 256 skirt vertices (skirt = 1) on the
+  border. Each chunk is an instance `(ix0, iy0, zMin)`.
+- **Levels** 0 … 6: level l takes every 2^l-th vertex, (64 / 2^l)² quads
+  as triangles (a, b, c), (a, c, d) counter-clockwise from the lower-left,
+  plus 4 · 64 / 2^l skirt quads; level 6 is one quad. All levels' indices
+  sit in one `Uint16` buffer.
+- **Choice of level**: `chunkLevel(d) = clamp(⌊log2(lodPx · d / (focalPx
+  · cellUm))⌋, 0, 6)` with d the eye's distance to the chunk's box — the
+  coarsest level whose quad edge, at the chunk's nearest point, is at
+  most `lodPx` = 8 screen px. Level 0 at the eye, monotone in distance,
+  independent of bearing. Geometry this coarse is enough because the
+  lighting comes per pixel from the full-resolution normal map, and the
+  drape is a texture.
+- **Cracks**: each chunk hangs a skirt from its border down to its own
+  lowest height. Where a coarse edge (a straight line between every
+  2^l-th border height) and a fine edge differ, the higher of the two
+  has a skirt reaching the lower: both edges' heights are border heights
+  of both chunks, so each chunk's `zMin` lies below the other's edge
+  (tested on a noise field for every pair of levels).
+- **Culling**: a chunk is dropped when its box (xy extent × its height
+  range at the exaggeration) lies wholly outside one clip plane.
+- **Draws**: one `drawElementsInstanced` per level in use — at most 7 per
+  frame, against 04 §9's 300 for the whole frame.
+
+#### No-data
+
+No-data cells are drawn, at the height of the nearest data cell
+(breadth-first over four neighbours, `meshHeights`; all at `zMin` when
+nothing has data): the sheet's margin, the legend and the area outside
+the mapped area are part of the drape, and holes or walls at the mapped
+area's edge would be artefacts. The field itself is not changed; the pick
+reports such a point with `data: false`.
+
+#### Pick (`pick.ts`)
+
+`pickTerrain(mesh, field, ray, exaggeration)` → `{ x, y }` paper mm, the
+model point, `heightM` (exaggeration removed), `data` and the ray
+distance, or null on a miss. A CPU march over the level-0 triangles the
+mesh draws (`surfaceZ`), clipped to the mesh's box, in steps of half a
+cell in plan, the first crossing refined by bisection; a vertical ray is
+one step. It runs without the GPU, so H7's gestures and H8's lines use it
+as the tests do. Where `data` is true, `heightM` agrees with
+`sampleHeight` within one height unit (the triangles and §5.3's bilinear
+differ by less inside a quad).
+
+#### Shading (`shade.ts`)
+
+Decision 1 above, written once in TypeScript (`shade`, `shadeColour`) and
+emitted into the fragment shader from the same constants (`SHADE_GLSL`).
+Normals are `heightNormals(field, 1)`, uploaded once; the shader applies
+the exaggeration as `normalize(n.xy · e, n.z)`, which is
+`heightNormals(field, e)` — so changing the exaggeration (H7's control)
+costs no upload.
+
+#### Drawing (`program.ts`)
+
+```ts
+class TerrainRenderer {
+  constructor(gl: WebGL2RenderingContext);        // the caller's context
+  setField(field: HeightField, originUm: { x; y }): TerrainMesh;
+  get mesh(): TerrainMesh | null;
+  draw(frame: TerrainFrame, target: RenderTarget): TerrainDrawStats | null;
+  dispose(): void;
+}
+interface TerrainFrame {
+  camera: TerrainCamera; exaggeration: number;
+  texture: WebGLTexture; drapeMatrix: Float32Array;   // the drape and the model → clip matrix it was rendered with
+  background: [r, g, b]; lodPx?: number; level?: number;
+}
+```
+
+- `setField` uploads the filled int16 grid as an `R16I` texture (read
+  with `texelFetch` in the vertex shader — `map-terrain.md` §5.1's "as it
+  is"; 4096 per side is the phone texture limit §4.0 answer 3 sized the
+  grid to) and the normals as `RGB8_SNORM`, linear. A field over
+  `MAX_TEXTURE_SIZE` throws.
+- `draw` clears `target` (colour to `background`, depth to 1), draws with
+  depth test `LEQUAL`, and samples the drape at `uv = (drapeMatrix · (x,
+  y, 0, 1)).xy / w · ½ + ½`. Outside [0, 1] the `background` colour
+  stands in for the drape and is **shaded like it** — it is ground the
+  texture does not cover (H6's footprint texture ends before the field
+  does), and an unlit patch would read as a hole. The colour is
+  `min(1, colour · shade)`, opaque.
+- It sets what it draws with — blend, face culling, scissor and stencil
+  off, every colour channel written — since the arena path leaves blend
+  on after a 2D frame.
+- **The seam for H6**: the drape is any texture plus the matrix it was
+  drawn with, so the map rendered into a framebuffer texture with the 2D
+  `viewMatrix` over the camera's footprint drops in for the dev page's
+  checker unchanged. The renderer takes a context, not a canvas, and
+  leaves it as the arena path expects: depth test off and
+  `depthFunc(LESS)`, no program, vertex array, framebuffer or texture of
+  its own bound, `TEXTURE0` active, unpack alignment 4. The viewport,
+  clear colour, clear depth and `depthMask(true)` stay as drawn; the
+  arena path sets its own each frame. It imports only `RenderTarget` from
+  `view.ts`; nothing in `renderer.ts`, `engine.ts` or `worker.ts` knows of
+  it yet.
+
+#### Dev page
+
+`/dev/map-terrain?field=cone|slope|noise[&n=<W>x<H>]&texture=checker|grey|white[&drape=half]&pitch=&bearing=&e=&lod=auto|0…6&zoom=&w=&h=&bg=<hex>[&bench=1]`
+(`pages/dev/MapTerrainPage.tsx`, routed only when `import.meta.env.DEV`)
+builds a synthetic field (`map-gl/terrain/synthetic.ts`: a 1 : 4 cone
+45 m high on flat ground with a no-data margin, a plane, seeded value
+noise tapered to 0 at the border), round-trips it through the `OXHF`
+codec, and draws it with a checker (`CHECKER`, 2 mm squares), flat grey
+or white drape over the field's paper extent (`drape=half`: its west
+half only, the rest in the background colour), the camera fitted to the
+field at `zoom` 1. The canvas (`data-testid="map-terrain-canvas"`,
+`preserveDrawingBuffer`) gets `data-ready`; a click picks and sets
+`data-pick`. `window.__mapTerrain` publishes the draw stats, `project(xMm,
+yMm)` (canvas px of the surface point) and `pick(px, py)` / `lastPick`.
+`bench=1` draws 60 frames, each synced by a one-pixel read, and reports
+the p50 / p95.
+
+#### Measurements (H5)
+
+A 4096 × 4096 field (the §4.0 cap) at 1920 × 1080, exaggeration 2
+(`mesh.test.ts`, snapshot):
+
+| Camera | Triangles | Chunks drawn / culled | Chunks per level 0–6 | Draws |
+|---|---|---|---|---|
+| overview, pitch 0, field fitted | 247 904 | 4096 / 0 | 0/0/0/0/3740/356/0 | 2 |
+| 60° tilt, 2× | 336 576 | 3063 / 1033 | 0/0/0/1098/1965/0/0 | 2 |
+| close-up, 45°, 4 px per cell | 324 352 | 63 / 4033 | 28/35/0/0/0/0/0 | 2 |
+
+The table is the unit test's sinusoid (pinned by its snapshot). The dev
+page's noise field at the same size and cameras: 98 304, 330 624 and
+346 624 triangles. CPU per frame, chunk selection on the 4096 chunks: 0.66 ms p50 / 1.0 ms p95
+(Node, laptop). `setField` on 16 M cells: the mesh (no-data fill, chunk
+ranges) 0.26 s; `heightNormals` 1.9 s — main-thread work H6 moves (§8).
+Headless Chromium draws in software (SwiftShader), 64–200 ms a frame
+here; GPU frame times are H6's, on the bench harness with the map
+texture.
+
+#### Tests
+
+| Test | Covers |
+|---|---|
+| `packages/shared/src/terrain/field/__tests__/read.test.ts` | the client entry reaches no derivation module; the read side exported |
+| `map-gl/terrain/__tests__/camera.test.ts` | `mat4` (multiply, invert, perspective depth and field of view); the target → clip origin at any bearing and pitch; one `Float32Array(16)`; pitch 0 = `viewMatrix` with `rotationDeg = bearingDeg` to 1e-6; a raised point projected higher and depth monotone in distance at pitch > 0; bearing 90 looks east; near / far enclose the bounds within 10⁴; sub-pixel precision 585 mm from the origin in float32 arithmetic; `screenRay` inverts the projection |
+| `map-gl/terrain/__tests__/mesh.test.ts` | chunk geometry: 65² + 256 vertices, every quad covered exactly once at every level, counter-clockwise, index counts, 4 · 64 / 2^l skirt quads; `meshHeights` fills from the nearest data cell without changing the field, all no-data flat at 0; vertex placement in origin-relative µm and `zUnitUm`; a partial edge chunk clamped; `chunkLevel` (0 at the eye, monotone, capped, quad edge ≤ lodPx); culling and a straddling chunk kept, the same levels at another bearing, mixed levels when tilted; skirts close every crack between any two levels on a noise field; the 4096² budget (≤ 600 000 triangles, the numbers above as a snapshot) |
+| `map-gl/terrain/__tests__/pick.test.ts` | the analytic cone met within half a cell at pitch 0, 60 (exaggeration 1, 3) and grazing; surface point → project → `screenRay` → pick within half a cell; `heightM` = `sampleHeight` within one unit at two exaggerations; `data` false on the margin; misses |
+| `map-gl/terrain/__tests__/shade.test.ts` | flat = 1; sin θ + cos θ facing the light, cos θ − sin θ away, cos θ across; the clamps; exaggeration in the shader = `heightNormals(field, e)`; the colour product; the GLSL's constants |
+| `e2e/map-terrain.spec.ts` | on the dev page in headless Chromium: the lit cone top-down with a grey drape — facing flank, far flank and flat ground at §5.6's analytic values ± 10 levels, ≤ 7 draws; the checker at pitch 60 — two adjacent squares on flat ground in their own colours, the apex projected above its foot; a south-flank point at pitch 60 at its slope's shade for e = 2 and e = 1 (the mesh lifted by the R16I heights and the exaggeration applied in the shader — a flat mesh or an ignored e would show another value); with `drape=half`, the background colour beyond the drape, flat at full strength and on the far flank shaded; no background pixel inside the noise field's projected outline at mixed levels, and auto LOD within 2 % of level 0; a click picks the point under the cursor within 0.2 mm |
+
 ### 5.3 PDF (shared/print)
 
 `packages/shared/src/print/operators.ts` (C1, 2026-10-23):
@@ -2856,6 +3089,8 @@ what became of it:
 | `packages/web/src/map-gl/renderer.ts` | WebGL2 backend, GPU stage (arena programs and draw loop; per-pass path, stencil, supersampling; the loupe's inset target and circle composite; GPU timer) |
 | `packages/web/src/pages/dev/MapGlFixturePage.tsx` | dev-only golden page `/dev/map-gl` |
 | `packages/web/src/pages/dev/MapGlDocPage.tsx` | dev-only whole-document page `/dev/map-gl-doc` (load report, bench) |
+| `packages/web/src/map-gl/terrain/` | the terrain (§5.6): `camera.ts` + `mat4.ts` (perspective orbit camera, rays), `mesh.ts` (chunked grid, levels, skirts, culling, no-data fill), `pick.ts`, `shade.ts`, `program.ts` (`TerrainRenderer`), `synthetic.ts` (dev and test fields) |
+| `packages/web/src/pages/dev/MapTerrainPage.tsx`, `e2e/map-terrain.spec.ts` | dev-only terrain page `/dev/map-terrain` and its browser test |
 | `e2e/__golden__/map-gl/`, `e2e/map-gl-golden.spec.ts` | committed goldens and the browser comparison |
 | `e2e/map-gl-doc.spec.ts` | whole-document pipeline on `e2e/test.ocd`: arena path, worker, eviction, arena = per-pass path |
 | `scripts/measure-gl.mjs` | corpus measurements through `/dev/map-gl-doc` (§5.2 Measurements) |
@@ -2990,6 +3225,24 @@ The shared module is exported as a namespace: `import { render } from
   still needed are cell selection from the camera's footprint instead of
   the `View` rectangle, and a per-vertex screen density for the
   screen-only rules instead of the one `pxPerUm`.
+- **§5.6 the map as the drape** (H6): the dev page drapes a checker. The
+  map rendered into a framebuffer texture over the camera's ground
+  footprint, the footprint → view, re-rendering when the camera settles,
+  and the frame time and memory on the bench harness (desktop and the
+  phone profile, against 04 §9) are H6's. So is where `setField`'s work
+  runs: on a 4096² field the no-data fill and chunk ranges take 0.26 s and
+  `heightNormals` 1.9 s on the main thread — the worker, or normals from
+  the height texture on the GPU. The height and normal textures of a
+  4 M-cell field take 20 MB of GPU memory, not yet counted against the
+  residency budget.
+- **§5.6 in the viewer** (H7): `useHeightField`, the 2D / 3D switch, the
+  gestures, the exaggeration control and its default; GPS lines on the
+  terrain (H8).
+- **§5.6 level-of-detail popping.** A chunk changes level in one frame
+  (no geomorphing), and coarse levels point-sample the heights at their
+  vertices rather than filtering them; with the normal map carrying the
+  light, neither showed on the dev page's noise field (auto LOD within
+  2 % of full detail), but a real field under a moving camera may.
 - **§5.2 zoom-banded flattening tolerance** (S1 §4.1): not built; strips
   and the gate meet the memory budgets without it.
 - **§5.2 earcut deviation check** (04 §6.1): polygons earcut gets wrong
