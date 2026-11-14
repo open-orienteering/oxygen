@@ -106,39 +106,52 @@ export function bandSources(g: ContourGraph, lv: FieldLevels): BandSources {
 export function geodesicDistance(r: RegionRaster, seeds: Int32Array): Uint16Array {
   const W = r.width, N = W * r.height, labels = r.labels, FAR = SURFACE_RULES.far;
   const dist = new Uint16Array(N).fill(FAR);
-  const buckets = [new CellList(), new CellList(), new CellList(), new CellList()];
+  // four buckets (steps are 2 and 3, so bucket d & 3 receives nothing while it is drained)
+  const q: Int32Array[] = [new Int32Array(1024), new Int32Array(1024), new Int32Array(1024), new Int32Array(1024)];
+  const qn = new Int32Array(4);
   let pending = 0;
+  const push = (j: number, nd: number) => {
+    const b = nd & 3;
+    let a = q[b];
+    if (qn[b] === a.length) {
+      const g = new Int32Array(a.length * 2);
+      g.set(a);
+      q[b] = a = g;
+    }
+    a[qn[b]++] = j;
+    pending++;
+  };
   for (const s of seeds)
     if (dist[s] !== 0) {
       dist[s] = 0;
-      buckets[0].push(s);
-      pending++;
+      push(s, 0);
     }
   for (let d = 0; pending > 0 && d < FAR; d++) {
-    const b = buckets[d & 3];
-    const items = b.a, n = b.n;
+    const b = d & 3, items = q[b], n = qn[b];
     pending -= n;
-    // steps are 2 and 3, so nothing is pushed onto bucket d & 3 while it is drained
+    const n2 = d + 2, n3 = d + 3;
     for (let k = 0; k < n; k++) {
       const i = items[k];
       if (dist[i] !== d) continue;
       const reg = labels[i], x = i % W;
-      for (let dy = -1; dy <= 1; dy++)
-        for (let dx = -1; dx <= 1; dx++) {
-          if (dx === 0 && dy === 0) continue;
-          const nx = x + dx;
-          if (nx < 0 || nx >= W) continue;
-          const j = i + dy * W + dx;
-          if (j < 0 || j >= N || labels[j] !== reg) continue;
-          const nd = d + (dx !== 0 && dy !== 0 ? 3 : 2);
-          if (nd < dist[j] && nd < FAR) {
-            dist[j] = nd;
-            buckets[nd & 3].push(j);
-            pending++;
-          }
-        }
+      const left = x > 0, right = x < W - 1, down = i >= W, up = i + W < N;
+      let j: number;
+      if (left) {
+        j = i - 1;
+        if (labels[j] === reg && n2 < dist[j]) { dist[j] = n2; push(j, n2); }
+        if (down) { j = i - W - 1; if (labels[j] === reg && n3 < dist[j]) { dist[j] = n3; push(j, n3); } }
+        if (up) { j = i + W - 1; if (labels[j] === reg && n3 < dist[j]) { dist[j] = n3; push(j, n3); } }
+      }
+      if (right) {
+        j = i + 1;
+        if (labels[j] === reg && n2 < dist[j]) { dist[j] = n2; push(j, n2); }
+        if (down) { j = i - W + 1; if (labels[j] === reg && n3 < dist[j]) { dist[j] = n3; push(j, n3); } }
+        if (up) { j = i + W + 1; if (labels[j] === reg && n3 < dist[j]) { dist[j] = n3; push(j, n3); } }
+      }
+      if (down) { j = i - W; if (labels[j] === reg && n2 < dist[j]) { dist[j] = n2; push(j, n2); } }
+      if (up) { j = i + W; if (labels[j] === reg && n2 < dist[j]) { dist[j] = n2; push(j, n2); } }
     }
-    b.n = 0;
+    qn[b] = 0;
   }
   return dist;
 }
