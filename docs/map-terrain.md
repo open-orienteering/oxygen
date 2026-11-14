@@ -8,9 +8,11 @@ record: `docs/research/vector-map-pipeline/10-terrain.md` (with spike T1,
 `decisions/slice-h.md`. Slice H.
 
 Implementation: `packages/shared/src/terrain/` — pure TypeScript, no Node
-APIs, no randomness. `terrain/graph/` is §1–2 (H1). Consumers import by
-subpath, `@oxygen/shared/src/terrain/graph/index.js`; the package's root
-`index.ts` does not re-export it.
+APIs, no randomness. `terrain/graph/` is §1–2 (H1), `terrain/solve/` is
+§3 (H2). Consumers import by subpath,
+`@oxygen/shared/src/terrain/graph/index.js` and
+`@oxygen/shared/src/terrain/solve/index.js`; the package's root `index.ts`
+re-exports neither.
 
 Units throughout: **paper millimetres, x right, y up** (the document's
 native units divided by `header.unitsPerMm`). Distances that describe the
@@ -326,6 +328,359 @@ in T1), about 0.7 GB peak RSS for the whole process including the import.
 T1 measured the same stages at 1.9 s. Region labelling and the raster dominate. H3 sets the height field's cell
 and budget (T1: 18 s / 1.5 GB for the whole spike at 0.1 mm).
 
+## 3. The solve: uphill side and levels
+
+`solveTerrain(graph, opts?)` (`terrain/solve/`, H2; import
+`@oxygen/shared/src/terrain/solve/index.js`) decides for every chain of
+§2 which side is uphill and gives every region a level: an integer
+number of contour intervals, 0 the lowest region of its connected set. It
+reads only the `ContourGraph` and does not change it; the interval in
+metres is H3's (header) and H9's (measured). Sides: `+1` uphill is left
+of the chain's drawing direction, `−1` right, `0` undecided.
+
+### 3.0 Decided with the user (2026-11-14)
+
+1. **External (DEM) side against the map's evidence**: when an external
+   side (H9: the DEM) and a tick, tagged cliff or lake speak about the same
+   chain and disagree, **the external side decides**; the disagreement is
+   counted per class in the report (`external.disagreements`). H9 takes
+   the chain's height from the DEM median, so a sign against it would
+   contradict the chain's own heights.
+2. **Strict and decided**: closure is flagged (answer 15) and a decision
+   propagated from a flagged chain is flagged too, so strict shares are
+   lower than T1's. The report carries both `share.strict` and
+   `share.decided` (strict + flagged, conflict length removed); the corpus
+   comparison with T1 is made on T1's definition, recomputed by the
+   `.local` script; **the 3D gate of answer 7 (80 %) reads
+   `share.decided`**.
+3. **Index consistency without a DEM**: the report's figure is the share
+   of neighbouring index-contour pairs (by graph distance) whose levels sit
+   on one residue mod 5, with T1's one-residue share of the largest
+   component beside it. The map alone cannot tell a drifted block from a
+   second contour ladder; the row's target (≥ 90 % on one residue per
+   ladder area) is checked by the `.local` corpus script on ladder areas
+   taken from the DEM's phase (T2), not by the solve.
+4. **The ≥ 90 % index target moves to H9** (user, 2026-11-14, after a
+   corpus run): from the map alone H2 puts 85.5 % of club-2026's main
+   index ladder on one residue and 57–65 % of its three small ones
+   (final run, §3.9; 87.5 / 56–61 % when the question was put); with
+   perfect (DEM) signs the same solve reaches 85.5 % and 49–65 %. The
+   limit is the band graph — bands that leak around a gap span two
+   levels (§3.3) — not the signs. H2 lands with leak-aware tiers and
+   trial-checked index repair; H9 carries the index target with the DEM.
+   Splitting multi-level bands in the graph is a pending item.
+5. **A ladder area, for the index target, is an index phase**: the
+   index contours whose DEM median falls on one peak of the median mod
+   25 m (5 intervals) holding ≥ 8 % of the index length. club-2026's index
+   contours lie on four such phases (about 23, 21, 19 and 0 m), which T2's 5 m contour phase cannot
+   separate; the 5 m figure is reported beside it.
+
+### 3.1 Evidence
+
+Each evidence item says which side of one chain is uphill, with a weight.
+The classes and the order in which they are applied are the split's
+(SLICES "Decided in this split"); the external side comes first (answer 14).
+
+| Class | Source | Weight | Rule |
+|---|---|---|---|
+| `dem` | `opts.external` (H9) | 1 | one item per chain with a non-zero side |
+| `tick` | slope tick `101.b` | 4 | on the chain within 0.3 mm; the tick points downhill (the glyph's +y turned counter-clockwise by the object's angle, §1.3); dropped when `|sin|` between tick and chain < 0.5 |
+| `cliff` | tagged cliff (§1.2) | 1.5 | tags point downhill. A cliff whose midpoint lies within 0.5 mm of a chain speaks about that chain (dropped at `|sin|` 0.7 or below); otherwise it speaks about the chains on both sides by ray (0.5 … 4 mm); cliffs shorter than 0.3 mm end to end are skipped |
+| `lake` | water area (§1.3) | 1.5 | rays every 0.5 mm along the outer ring, outwards, 0.2 … 10 mm; a chain hit by ≥ 4 rays and ≥ 20 % of them lies above the lake; rings under 2 mm² skipped |
+| `top` | an innermost closed chain | 2 | a closed, non-leaky chain whose inside region borders no other chain and does not touch the outside is a top: uphill inside |
+| `formTick` | slope tick `103.b` on an open form line | 1.5 | on a form line within 0.3 mm; by ray from the tick, 0.25 … 8 mm both ways; ticks on closed form lines are skipped |
+
+A **ray** marches through the region raster in half cells to the first
+chain cell; it stops at the outside, and is dropped when no segment of
+that chain lies within 3 cells + 0.2 mm of the hit or when it grazes the
+chain (`|sin|` < 0.3). From a known downhill direction the chain met downhill
+is seen from its uphill side and the chain met uphill from its downhill
+side; both rays are dropped when they meet the same chain, and a ray is
+dropped when it crosses a form line first (tested from 0.3 mm beyond the
+ray's start, past the tick's own line) (it then describes a detail,
+not the band). T1's constants, unchanged; T1's per-map tick-direction
+detection and its automatic cliff-convention flip are not kept (they
+never fired on the corpus).
+
+### 3.2 Staged signs
+
+Evidence is applied in **stages**; a stage only touches chains still
+undecided. In a stage the signed weights are summed per chain; the sign
+of the sum decides and the chain's class is the strongest contributor on
+the winning side (ties to the class earlier in the table). A chain whose
+weights cancel exactly stays undecided for that stage. A chain decided in
+a stage with items on both sides counts in `evidence.conflictingChains`.
+
+1. `dem` (when `opts.external` is given);
+2. `tick`, `cliff`, `lake`, `top` together;
+3. `formTick` — only where stages 1–2 and what follows them left a chain
+   open;
+4. the flagged heuristics of §3.4.
+
+After every stage the solve **settles**: two-contour slope propagation,
+then index repair (§3.5) and closure (§3.4) in turn, until nothing
+changes (at most 60 rounds). **Slope propagation**: in a region bordered
+by exactly two chains one is its lower and the other its upper boundary,
+so a decided chain decides the other.
+
+Every decided chain has a **root**: itself for direct evidence and the
+heuristics, the root of the chain it was propagated from for slope
+propagation. A chain is **flagged** when its root's class is flagged
+(closure, band-drain, band-upper, closed-hill — answer 15); index repair
+lifts the flag of a group it confirms or flips (§3.5).
+
+With an external side, a tick, cliff or lake that disagrees with it on
+the same chain sets a bit in `externalDisagrees` (tick 1, cliff 2,
+lake 4); the external side decides (§3.0, 1).
+
+### 3.3 Levels
+
+Region levels come from a **weighted union-find with offsets**: every
+edge says `level(a) − level(b) = d`.
+
+| Edge | `a`, `b` | `d` |
+|---|---|---|
+| pair of a decided chain | uphill, downhill region | 1, or the step index repair set |
+| cliff link (§2.6) | second, first region | 0 (assumed), or the step index repair set |
+| pair of an undecided chain | left, right region | 0 |
+
+Edges are taken in **trust tiers**, and within a tier by most samples
+first (ties by edge key). A pair is weak (tier 3) whatever its chain's
+flag; tiers 1 and 2 hold the other pairs of decided chains:
+
+| Tier | Edges |
+|---|---|
+| 1 strict | pairs of unflagged chains |
+| 2 flagged | pairs of flagged chains |
+| 3 weak pair | pairs along a cliff (≥ 50 % of the pair's samples within 0.5 mm of a cliff line) or beside a band that spans two levels |
+| 4 | cliff links with a step set by index repair |
+| 5 | other cliff links (weak links) |
+| 6 | pairs of undecided chains (weak links) |
+
+A band **spans two levels** when a chain sees it on both of its sides at
+`max(3, 2 %)` of its samples (§2.6's pair rule applied to the
+same-region pairs, leaky chains and partial leaks alike): the band runs
+around the chain, so it joins the bands of two levels into one region.
+Its pairs are weak, so levels reach the regions around it by other paths
+first. On club-2026 this alone moved the index contours of T2's main 5 m
+ladder from 66 % to 78 % on one residue, the share of length on its true
+level from 62 % to 71 % and the drift RMS from 2.05 to 1.16 intervals
+(§3.9).
+
+An edge whose regions are already joined **closes a cycle** with the
+difference `d′` the levels already give:
+
+- decided chain: `d′ = d` consistent; `d′ ≥ 1` otherwise **multi-step**
+  (`chainStep = d′`: contours merged into this one, e.g. along a cliff);
+  `d′ ≤ 0` a **conflict** (`conflict` += the pair's share of the chain's
+  samples);
+- cliff link: `cliffStep = d′`, source `implied`.
+
+A tree edge of tier 5 or 6 is a **weak link**: it keeps the surface
+continuous but says nothing about the step. `regionComponent` is the
+union over tiers 1–4. The forest's tree edges are read as a tree rooted,
+in each connected set, at the **root block**: the tier-1 block with most
+regions (ties to the block whose root region has the lowest index),
+visited breadth first. `regionWeak` marks regions whose component is not
+the root block's. Levels are normalised so that
+the lowest region of each connected set is 0. A chain's **level** is the
+higher floor of the two sides of its pair with most samples (the highest
+contour level it stands for); `NO_LEVEL` without pairs.
+
+### 3.4 Flagged heuristics
+
+Every decision here is flagged and is its own root.
+
+- **Closure** (in every settle): an undecided chain whose strongest
+  pair's two regions are already levelled in one component takes the
+  sign of their difference (when it is not 0). It runs in T1's place,
+  between the strict stages; run after the band rules it was 63 % true
+  on club-2026, here 79 %.
+- **Band-drain**: in a region bordered by three chains or more that does
+  not touch the outside, whose known chains (at least two) are all upper
+  boundaries and which has one unknown chain, that chain is its lower
+  boundary.
+- **Band-upper**: in a region bordered by three chains or more with a
+  known lower boundary, the unknown chains are upper boundaries.
+- **Closed-hill**: the last default — an undecided closed, non-leaky
+  chain is a hill.
+
+They run in rounds (band-drain, else band-upper, else closed-hill; one
+rule per round, at most 200 rounds), each followed by a settle.
+`opts.heuristics: false` leaves those chains undecided.
+
+### 3.5 Index repair
+
+Every fifth contour is an index contour, so two index contours' levels
+should differ by a multiple of five. Index repair turns that into steps
+and signs (`opts.indexRepair`, default on).
+
+- **Neighbours**: each index chain with pairs takes its up to 4 nearest
+  other index chains, by bands crossed: breadth first over chain pairs
+  and cliff links from the chain's own regions (ring 0) to ring 12; an
+  index chain bordering a region of ring `d` is `d` bands away; ties by
+  chain. Each neighbour pair
+  weighs `min(length i, length j)`.
+- **Votes**: the level forest of §3.3 is read as a tree. A neighbour
+  pair in one connected set whose tree path crosses a **suspect edge**
+  (tier ≥ 2) votes on it for the shift (mod 5) of the edge's far side
+  that would put the pair on one residue. A chain's place in the tree is
+  the region whose floor is its level.
+- **Proposals**: an edge whose modal shift holds ≥ 80 % of its vote
+  weight proposes one change, by tier: a weak pair takes the step
+  `k ∈ 1 … 5` that gives the shift; a cliff link the step that gives it
+  within `0 … 4` towards the untagged side when the cliff is tagged
+  (tags point downhill), else within `−2 … 2`; an undecided chain the
+  sign whose step `±1` gives it (class `index`, strict); a flagged
+  group — its root and every chain with that root — is **flipped** when
+  the shift is not 0 (class `index` on the root, `corrected` on the
+  group) and **confirmed** when it is 0 (its flag lifted). Flips are
+  proposed only in the last settle, after the heuristics.
+- **Trial**: each proposal is applied on its own and kept only when the
+  weight of neighbour pairs on one residue rises (a confirmation: does
+  not fall) and the conflict length does not grow; otherwise it is
+  undone. Proposals are taken in tree order from the root blocks; the
+  votes of one pass are collected once, so a later proposal of the same
+  pass may already be satisfied and is then undone. One pass runs per
+  settle round (§3.2, at most 60).
+
+Strict chains are never flipped (T2: tick, cliff and lake 99.8–100 %
+true, top 98 %). A drifted block and a second contour ladder look the
+same from the map alone (§3.0, 3); repair only ever moves a suspect edge
+and only keeps a change the index contours agree with, so a ladder
+border inside strictly chained contours is left as it is. H1's band
+graph limits what repair can reach (§3.0, 4).
+
+Measured against hard index anchors (index pairs joined first at the
+rounded counted step): they put 97 / 99 % of club-2026's index contours
+on one residue per 5 m ladder but broke the levels around them (drift
+RMS 1.7 → 3.1 intervals on club-2026, 5.9 on crop-b) and were dropped.
+
+### 3.6 The report and the components
+
+`TerrainReport` is plain JSON; shares are fractions of contour length.
+
+| Field | Meaning |
+|---|---|
+| `share.strict`, `share.flagged` | decided chains, by their flag |
+| `share.decided` | strict + flagged, conflict length removed — **the 3D gate reads this** (answer 7, §3.0) |
+| `share.undecided`, `share.leakyUndecided`, `share.leakySigned` | undecided non-leaky and leaky chains; leaky chains that evidence decided |
+| `share.conflict`, `share.multiStep` | conflict length (a chain whose conflict share exceeds ½ counts whole, else by its share); length of chains with `chainStep` > 1 |
+| `byClass` | length by deciding class, `conflict`, `none`, `leaky` |
+| `evidence` | items per class, `conflictingChains` |
+| `external` | source, chains, length share decided by it, disagreements per class; null without |
+| `levels` | components, largest component's share and levels, multi-step chains, weak regions |
+| `index` | index length, neighbour pairs, `consistency` (weight share of neighbour pairs in one connected set on one residue), `modalShare` (T1's figure: the largest component's index length on its modal residue), and repair counts summed over all passes: steps set, groups flipped (and their length), groups confirmed, chains decided, and `unresolved` — attempts that found no agreeing vote, no legal step or failed their trial (a standing edge counts once per pass) |
+| `chains`, `lengthMm` | chain count and total contour length (0 for no chains) |
+| `components` | the 8 largest: length share, confidence, levels, index consistency |
+
+A **component** (`TerrainComponent`, in `TerrainSolution.components`,
+largest first) is a set of regions joined by tiers 1–4 with its decided
+chains: `id` (its root region), `regions`, `lengthMm` (decided chains),
+`confidence` = (strict length − conflict length) / length,
+`flaggedShare`, `minLevel` / `maxLevel` (over its regions),
+`indexLengthMm`, `indexConsistency` (neighbour pairs whose first chain is
+in it; null without).
+
+### 3.7 Interface
+
+```ts
+type EvidenceClass = "dem" | "tick" | "cliff" | "lake" | "top" | "formTick";
+type SignClass = EvidenceClass | "slope" | "index" | "closure" | "bandDrain" | "bandUpper" | "closedHill";
+const SIGN_CLASSES: readonly ["none", "dem", "tick", …];        // signClass indexes this
+interface SideEvidence { chain: number; side: 1 | -1; weight: number }
+type EvidenceSet = Record<Exclude<EvidenceClass, "dem">, SideEvidence[]>;
+interface ExternalSide { source: string; side: Int8Array }      // per chain, H9
+interface SolveOptions { evidence?: EvidenceSet; external?: ExternalSide; heuristics?: boolean; indexRepair?: boolean }
+interface TerrainSolution {
+  side: Int8Array; signClass: Uint8Array; flagged: Uint8Array; root: Int32Array; corrected: Uint8Array;
+  chainLevel: Int32Array; chainStep: Uint8Array; conflict: Float32Array; externalDisagrees: Uint8Array;
+  regionLevel: Int32Array; regionComponent: Int32Array; regionWeak: Uint8Array;
+  cliffStep: Int32Array; cliffStepSource: Uint8Array;            // per graph.cliffLinks entry: implied / index / assumed
+  components: TerrainComponent[]; report: TerrainReport;
+}
+function gatherEvidence(graph: ContourGraph): EvidenceSet;
+function solveTerrain(graph: ContourGraph, opts?: SolveOptions): TerrainSolution;
+```
+
+The building blocks (`buildForest`, `slopeFix`, `repairPass`,
+`indexNeighbours`, the probes) are exported for tests and for H3 / H9.
+
+### 3.8 Determinism
+
+The same graph and options give the same solution field for field: edges
+are sorted with key tie-breaks, regions and chains are visited in index
+order, maps iterate in insertion order, and nothing reads the clock or a
+random source. The graph is not mutated.
+
+### 3.9 Measured on the corpus
+
+A `.local/` script (not committed) solves the five corpus maps and
+compares the result with ground truth from Lantmäteriet's 1 m model,
+sampled on H1's chains the way T2 did (a chain's side: median of
+left − right at ±8 m on the 5 m-smoothed model, decided at ≥ 0.4 m, ≥ 65 %
+agreement and ≥ 90 % coverage; its height: the median along it). Shares
+of contour length, 2026-11-14:
+
+| Map | strict (T1 def.) | T1 | strict | flagged | decided | true sign | T1 true | solve ms |
+|---|---|---|---|---|---|---|---|---|
+| crop-a | 94.3 | 94.8 | 90.6 | 8.6 | 99.2 | 99.4 | 99–99.5 | 90 |
+| crop-b | 94.2 | 95.3 | 97.5 | 2.0 | 96.9 | 99.4 | 99–99.5 | 58 |
+| club-2026 | 86.5 | 87.0 | 82.8 | 14.3 | 94.1 | 96.4 | 96.6 | 604 |
+| club-full | 85.0 | 85.4 | 83.2 | 12.8 | 92.7 | 96.8 | 96.3 | 1642 |
+| sprint | 81.9 | 81.9 | 85.5 | 8.5 | 90.3 | 99.0 | 99–99.5 | 32 |
+
+"strict (T1 def.)" counts T1's strict classes (tick … closure) whatever
+they descend from, conflict length removed (§3.0, 2); T1's figures were
+measured on T1's graph (H1 has 6 / 10 more snap joins on the club maps,
+§2.8). True sign per class on club-2026 (in brackets the class's share
+of contour length among the chains the DEM decides too, conflict length
+included — so they sum to more than "decided"; "slope from a flagged
+root" is apart from "slope"): cliff 99.9 (29.3), tick 100 (20.8), top 98.3 (15.1), slope
+98.7 (9.0), closure 78.7 (6.0), band-upper 78.2 (5.8), lake 100 (3.4),
+form tick 91.9 (2.7), band-drain 100 (1.8), slope from a flagged root
+80.5 (0.5), index 70.6 (0.3); on club-full: cliff 99.5, top 97.3, slope
+96.6, tick 99.1, band-upper 85.0, closure 79.2, form tick 94.6,
+band-drain 98.8, lake 100, index 100. T1's hold-out (one evidence class
+against the others) is not repeated: the DEM truth replaces it.
+
+**Index contours on one residue**, per index ladder (§3.0, 5; each
+ladder's index length in mm), per component:
+
+| Map | H2 | H2 without index repair | H2 with the DEM side | T1 (per map, 5 m) |
+|---|---|---|---|---|
+| crop-a | 100 (1208) | 98.4 | 100 | 100 |
+| crop-b | 93.2 (1170) | 93.2 | 93.2 | — |
+| club-2026 | 85.5 (4049) / 64.8 (594) / 61.5 (958) / 56.5 (436) | 85.5 / 57.3 / 56.6 / 49.3 | 85.5 / 48.7 / 64.7 / 59.0 | 62.8 |
+| club-full | 35.8 (6686) / 46.6 (5117) / 70.3 (686) / 71.4 (1993) | 43.9 / 49.2 / 60.1 / 72.0 | 38.7 / 49.4 / 78.5 / 84.9 | 30 |
+
+On T2's two 5 m ladders club-2026 reads 84.3 / 52.9 %. The DEM's own
+levels put only 88.5 / 50.5 % of club-2026's index contours on one
+residue per 5 m ladder, which is why the target is read per index phase.
+
+**Level drift** (intervals): each tight chain's DEM level on its 5 m
+ladder against the solve's, one offset per (component, ladder); share of
+compared length exactly right, off by 1, 2, ≥ 3, and the RMS:
+
+| Map | exact | 1 | 2 | ≥ 3 | RMS | without repair: exact / RMS | T1 (T2) |
+|---|---|---|---|---|---|---|---|
+| crop-a | 99.4 | 0.6 | 0 | 0 | 0.08 | 99.1 / 0.13 | |
+| crop-b | 91.6 | 6.9 | 1.5 | 0 | 0.36 | 91.6 / 0.36 | |
+| club-2026 | 74.4 | 8.3 | 7.9 | 9.4 | 1.20 | 75.1 / 0.96 | block-wise ±1–3 |
+| club-full | 36.6 | 20.8 | 13.7 | 28.9 | 2.80 | 38.6 / 3.04 | block-wise ±6–8 |
+| sprint | 61.6 | 36.9 | 1.5 | 0 | 0.65 | 61.6 / 0.65 | |
+
+The baseline before H2's changes (T1's solve on H1's graph, closure
+flagged, no leak tiers) was 61.8 % exact / RMS 2.05 on club-2026 and
+41.7 % / 2.23 on club-full. Index repair's net effect on the corpus is
+small and of mixed sign: club-2026's small ladders gain 5–8 points but
+its drift RMS rises from 0.96 to 1.20 (exact 75.1 → 74.4 %); club-full's
+largest ladder loses 8 points while its RMS falls from 3.04 to 2.80; club-full's drift stays block-wise even
+with the DEM's signs (43 % exact), the graph limit of §3.0, 4.
+
+Time: the solve takes 1.6 s on club-full (5617 chains, 10 495 regions)
+on top of §2's graph, on a shared 16-core machine.
+
 ## Tests
 
 | Test | Covers |
@@ -337,10 +692,22 @@ and budget (T1: 18 s / 1.5 GB for the whole spike at 0.1 mm).
 | `terrain/graph/__tests__/graph.test.ts` | incidence on nested rings, a leaky chain, cliff links, determinism, no contours (§2.6–2.7) |
 | `terrain/graph/__tests__/synthetic.ts` | the fixture: ISOM symbols with canonical matches and library definitions, geometry in mm, a mapped area around the contours |
 | `.local/h1/counts.mts` (not committed) | T1's corpus counts reproduced (§2.8) |
+| `terrain/solve/__tests__/evidence.test.ts` | tick direction and side, grazing and off-chain ticks dropped, tops by orientation and not around another chain, a tagged cliff between contours and on a contour, lakes and the 2 mm² floor, form ticks on open lines, dropped on closed lines and across another form line (§3.1) |
+| `terrain/solve/__tests__/levels.test.ts` | union-find offsets, a ladder levelled from 0, multi-step on a cycle, conflict share, weak pairs after strict ones, pairs beside a two-level band weak, tier order, weak links and their components, a step set by index repair, no level without pairs (§3.3) |
+| `terrain/solve/__tests__/solve.test.ts` | slope propagation and roots, evidence both ways by weight, the external side first, over a tick (disagreement reported) and over closure, band-upper flagged and inherited, heuristics off, band-drain, closed-hill, cliff-borne pairs and two-level bands, determinism and no mutation, report shares, leaky-signed (§3.2–3.4, 3.6, 3.8) |
+| `terrain/solve/__tests__/index-repair.test.ts` | a cliff hiding two contours recovered from the index contours (step 2, source `index`), the zero default without repair or without an index contour above; an undecided chain decided by the index contours; a proposal undone by its trial; a flipped flagged group corrected, a strictly decided nest left alone (§3.5) |
+| `terrain/solve/__tests__/fixtures.ts` | the graph fixture with chain lookup, ticks, arcs |
+| `.local/h2/{truth,measure,ladders}.mts` (not committed) | the corpus run against Lantmäteriet's 1 m model (§3.9) |
 
 ## Pending in this chapter
 
-- §3 The solve: evidence, uphill side, levels, `TerrainReport` (H2).
+- §3: bands that span two levels are only demoted in the level forest,
+  not split; splitting them (H1's raster) is what would lift the levels
+  further (§3.0, 4). No row yet.
+- §3: the index target (≥ 90 % per index ladder) is H9's, with the DEM
+  (§3.0, 4).
+- §3: 10 §2.1's depressions, spot heights and text labels are not
+  evidence (the split's order leaves them out).
 - §4–5 The height field: interpolation, format, sampling, `deriveTerrain` (H3).
 - §6 The DEM anchor (H9); §7 DEM providers (H10).
 - Storage of the derived artifact is `map-storage.md` (H4).
