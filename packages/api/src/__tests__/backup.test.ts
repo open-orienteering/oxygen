@@ -32,6 +32,8 @@ describe("BACKUP_TABLES", () => {
     expect(BACKUP_TABLES).not.toContain("map_previews");
     // The height field is cache too: a restore derives its own (map-storage.md §4.7).
     expect(BACKUP_TABLES).not.toContain("map_heightfields");
+    // So is the DEM job's state: a restore fetches its own (map-storage.md §4.7).
+    expect(BACKUP_TABLES).not.toContain("map_dem_jobs");
     expect(BACKUP_TABLES).not.toContain("map_tiles");
     // Dropped with the raster pipeline (E5).
     expect(BACKUP_TABLES).not.toContain("rendered_maps");

@@ -16,7 +16,10 @@ export const HILL: Obj[] = mapped([...[5, 10, 15, 20].map((r) => ({ sym: S.conto
 /** A mapped area without contours. */
 export const FLAT: Obj[] = mapped([], [0, 0, 10, 10]);
 
-export function encodeTerrainDoc(objects: Obj[], salt: string, sourceHash = "00".repeat(32)): Uint8Array {
+/** A georeference for `encodeTerrainDoc`: SWEREF 99 TM with the paper origin at (e, n), unrotated (the DEM tests, docs/map-terrain.md §7). */
+export const sweref99 = (e: number, n: number): mapDocument.MapDocumentHeader["georeferencing"] => ({ crs: { authority: "EPSG", code: 3006, name: "SWEREF99 TM" }, paperOrigin: { x: e, y: n }, gridRotationDeg: 0 });
+
+export function encodeTerrainDoc(objects: Obj[], salt: string, sourceHash = "00".repeat(32), georeferencing?: mapDocument.MapDocumentHeader["georeferencing"]): Uint8Array {
   const input: mapDocument.MapObjectInput[] = objects.map((o, i) => ({
     symbolIdx: o.sym,
     type: o.type ?? (SYMBOLS[o.sym].kind === "point" ? mapDocument.OBJECT_TYPE.point : SYMBOLS[o.sym].kind === "area" ? mapDocument.OBJECT_TYPE.area : mapDocument.OBJECT_TYPE.line),
@@ -32,7 +35,7 @@ export function encodeTerrainDoc(objects: Obj[], salt: string, sourceHash = "00"
       unitsPerMm: 100,
       mapScale: 15000,
       library: { id: "ISOM2017-2", version: symbolLibrary.SYMBOL_LIBRARY_VERSION },
-      georeferencing: { crs: null, paperOrigin: { x: 0, y: 0 }, gridRotationDeg: 0 },
+      georeferencing: georeferencing ?? { crs: null, paperOrigin: { x: 0, y: 0 }, gridRotationDeg: 0 },
       colours: lib.colours,
       symbols: SYMBOLS,
     },

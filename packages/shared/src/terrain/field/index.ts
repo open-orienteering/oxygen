@@ -10,3 +10,4 @@
 export * from "./read.js";
 export * from "./interpolate.js";
 export * from "./build.js";
+export * from "./ground.js";

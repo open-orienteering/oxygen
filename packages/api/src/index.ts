@@ -25,6 +25,9 @@ import { registerMapHeightfieldRoutes } from "./map-store/heightfield-routes.js"
 import { registerMapSourceRoutes } from "./map-store/source-routes.js";
 import { registerMapUploadRoutes } from "./map-store/upload-routes.js";
 import { startImportJobEngine } from "./map-store/jobs.js";
+import { demProvidersFromEnv } from "./map-store/dem-providers.js";
+import { setDemProviders } from "./map-store/dem-registry.js";
+import { startDemJobEngine } from "./map-store/dem-jobs.js";
 import { registerCourseMapRoutes } from "./course-maps/routes.js";
 import { registerStaticServe } from "./staticServe.js";
 import "dotenv/config";
@@ -117,6 +120,9 @@ async function main() {
   registerMapSourceRoutes(server);
   registerMapUploadRoutes(server);
   startImportJobEngine(prisma());
+  // DEM fetch is opt-in (docs/map-terrain.md §7.0 answer 4): MAP_DEM_PROVIDERS names the providers.
+  setDemProviders(demProvidersFromEnv(process.env, (url, init) => fetch(url, init)));
+  startDemJobEngine(prisma());
   registerCourseMapRoutes(server);
 
   // Single-container deployments (Cloud Run) serve the web bundle from the

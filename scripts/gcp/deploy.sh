@@ -33,6 +33,8 @@ if [[ "${1:-}" == "-h" || "${1:-}" == "--help" ]]; then
 fi
 
 source ./env.sh
+# The Geotorget secret's name (env.sh.example); an older env.sh without it gets the default.
+DEM_SECRET="${DEM_SECRET:-oxygen-geotorget-credentials}"
 
 REPO_ROOT="$(git -C ../.. rev-parse --show-toplevel)"
 GHCR_IMAGE="${GHCR_IMAGE:-ghcr.io/open-orienteering/oxygen}"
@@ -141,6 +143,25 @@ run_cloud_run_deploy() {
     echo "   will be able to open /admin/users. See env.sh.example." >&2
   fi
 
+  # Height data (docs/deploy-gcp-cloud-run.md "Height data"; docs/map-terrain.md §7):
+  # the instance's one Geotorget account, referenced by secret name only. With the
+  # secret the instance fetches Lantmäteriet's model and GLO-30 where it has none;
+  # without it no DEM is fetched, unless env.sh sets MAP_DEM_PROVIDERS (e.g. glo30).
+  local dem_secrets="" dem_env="" dem_providers="${MAP_DEM_PROVIDERS:-}"
+  if gcloud secrets describe "$DEM_SECRET" --project="$PROJECT_ID" >/dev/null 2>&1; then
+    dem_secrets=",MAP_DEM_LANTMATERIET_AUTH=${DEM_SECRET}:latest"
+    dem_providers="${dem_providers:-lantmateriet,glo30}"
+  elif [[ "$dem_providers" == *lantmateriet* ]]; then
+    echo "!! MAP_DEM_PROVIDERS names lantmateriet but the secret ${DEM_SECRET} does not exist;" >&2
+    echo "   Lantmäteriet stays off. See docs/deploy-gcp-cloud-run.md \"Height data\"." >&2
+  fi
+  if [[ -n "$dem_providers" ]]; then
+    dem_env=";MAP_DEM_PROVIDERS=${dem_providers}"
+    echo "── DEM providers: ${dem_providers}"
+  else
+    echo "── DEM fetch off (no ${DEM_SECRET} secret, MAP_DEM_PROVIDERS unset)"
+  fi
+
   echo "── Deploying ${image_ref} to Cloud Run (min-instances=${MIN_INSTANCES}, cpu-throttling=${CPU_THROTTLING})…"
   gcloud run deploy "$SERVICE" \
     --project="$PROJECT_ID" \
@@ -148,8 +169,8 @@ run_cloud_run_deploy() {
     --image="$image_ref" \
     --service-account="oxygen-run@${PROJECT_ID}.iam.gserviceaccount.com" \
     --add-cloudsql-instances="$SQL_CONNECTION" \
-    --set-secrets="DATABASE_URL=oxygen-database-url:latest" \
-    --set-env-vars="^;^NODE_OPTIONS=--max-old-space-size=3328;DATABASE_POOL_MAX=8;MAP_RENDER_CONCURRENCY=3;AUTH_MODE=proxy;AUTH_HEADER=x-goog-authenticated-user-email;AUTH_AUTO_PROVISION=member;OXYGEN_ADMIN_EMAILS=${OXYGEN_ADMIN_EMAILS:-};OXYGEN_DEPLOY_REF=${DEPLOY_REF}" \
+    --set-secrets="DATABASE_URL=oxygen-database-url:latest${dem_secrets}" \
+    --set-env-vars="^;^NODE_OPTIONS=--max-old-space-size=3328;DATABASE_POOL_MAX=8;MAP_RENDER_CONCURRENCY=3;AUTH_MODE=proxy;AUTH_HEADER=x-goog-authenticated-user-email;AUTH_AUTO_PROVISION=member;OXYGEN_ADMIN_EMAILS=${OXYGEN_ADMIN_EMAILS:-};OXYGEN_DEPLOY_REF=${DEPLOY_REF}${dem_env}" \
     --memory=4Gi \
     --cpu=2 \
     --timeout=300 \

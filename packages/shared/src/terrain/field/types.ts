@@ -13,11 +13,36 @@ export const HEIGHT_NO_DATA = -32768;
 /** Height units per contour interval (§4.0 answer 1). */
 export const Z_PER_INTERVAL = 64;
 
+/**
+ * A DEM-based field's `source` (§7.0 answer 3): `ground.<provider>` is the
+ * DEM resampled onto the field grid, `contours.<provider>` the contours
+ * re-derived with the DEM's per-chain heights (§4.9). `<provider>` is the
+ * provider id and its resolution, e.g. `lantmateriet-2m`.
+ */
+export const DEM_FIELD_SOURCE_RE = /^(ground|contours)\.[a-z0-9][a-z0-9-]{0,47}$/;
+
+/** Where a DEM-based field's heights come from (§7.1); travels with the bytes, as CC BY asks (answer 16). */
+export const heightFieldProviderSchema = z.object({
+  /** Provider and resolution, e.g. `lantmateriet-2m`. */
+  id: z.string().min(1).max(48),
+  /** Ground cell of the model read, metres. */
+  resolutionM: z.number().positive(),
+  /** §6.0 answer 1. */
+  grade: z.enum(["anchor", "coarse"]),
+  /** e.g. `CC BY 4.0`. */
+  licence: z.string().min(1).max(200),
+  /** The notice shown with the field, e.g. `© Lantmäteriet`. */
+  attribution: z.string().min(1).max(400),
+  /** The model's vertical datum, e.g. `RH 2000`, `EGM2008`. */
+  verticalDatum: z.string().min(1).max(40),
+});
+export type HeightFieldProvider = z.output<typeof heightFieldProviderSchema>;
+
 export const heightFieldHeaderSchema = z.object({
   /** `TERRAIN_VERSION` of the code that derived the field. */
   version: z.number().int().min(1),
-  /** What the heights come from; H10 adds DEM sources. */
-  source: z.enum(["contours"]),
+  /** What the heights come from: `contours` (§5.5), or a DEM source (`DEM_FIELD_SOURCE_RE`, §7). */
+  source: z.union([z.literal("contours"), z.string().regex(DEM_FIELD_SOURCE_RE)]),
   /** Cell edge, paper mm; the grid's lower-left corner `(x0, y0)`; y up, row-major from the lower-left (§2's `Grid`). */
   cellMm: z.number().positive(),
   x0: z.number(),
@@ -37,6 +62,8 @@ export const heightFieldHeaderSchema = z.object({
   /** Smallest and largest value over data cells; both 0 when no cell has data. */
   zMin: z.number().int().min(-32767).max(32767),
   zMax: z.number().int().min(-32767).max(32767),
+  /** A DEM-based field's provider (§7.1); absent on `contours`. */
+  provider: heightFieldProviderSchema.optional(),
 });
 export type HeightFieldHeader = z.output<typeof heightFieldHeaderSchema>;
 
