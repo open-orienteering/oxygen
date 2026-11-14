@@ -916,7 +916,28 @@ from the imported document (no stored decisions), and writes a hillshade
 for inspection. Measured 2026-11-14 on a 16-core machine shared with other
 sessions:
 
-MEASURE_TABLE
+| Map | graph cells (0.1 mm) | field | cell | encoded | data / confident | graph s | solve s | field s | total s | peak RSS |
+|---|---|---|---|---|---|---|---|---|---|---|
+| crop-a | 1.4 M | 696 × 511 | 0.2 mm (3 m) | 0.76 MB | 94 % / 96 % | 0.1 | 0.1 | 0.3 | 0.5 | 191 MB |
+| crop-b | 1.1 M | 464 × 610 | 0.2 mm (3 m) | 0.6 MB | 81 % / 98 % | 0.1 | 0.1 | 0.2 | 0.4 | 186 MB |
+| club-2026 | 13.9 M | 1570 × 2211 | 0.2 mm (3 m) | 7.38 MB | 85 % / 89 % | 0.7 | 0.7 | 3.3 | 4.8 | 442 MB |
+| club-full | 46.4 M | 2355 × 1231 | 0.4 mm (6 m) | 6.16 MB | 72 % / 94 % | 1.9 | 2.0 | 11.1 | 15.0 | 984 MB |
+| sprint | 11.8 M | 2068 × 1423 | 0.2 mm (0.8 m) | 6.25 MB | 55 % / 96 % | 0.4 | 0.1 | 1.5 | 1.9 | 351 MB |
+| puit-de-laven | 4.0 M | 986 × 1014 | 0.2 mm (2 m) | 2.12 MB | 92 % / 81 % | 0.2 | 0.1 | 0.7 | 1.1 | 247 MB |
+
+"data" is the share of field cells inside the mapped area, "confident"
+the share of those with the confidence bit (§4.7). Times are from the
+decoded document (import excluded); peak RSS is the whole process,
+about 130–160 MB of it the runtime and the decoded document.
+
+**Against T1** (18 s / 1.5 GB for the whole spike on club-full at
+0.1 mm): club-full now takes 15.0 s and 0.98 GB for graph, solve and
+field, and stores a 2355 × 1231 field at 0.4 mm (6 m), 6.2 MB, the only
+corpus map the budget coarsens. The field stage is 74 % of the time,
+almost all of it the three geodesic passes over the 0.1 mm raster
+(46 M cells); club-2026 and the sprint keep 0.2 mm (3 m and 0.8 m). The
+same run with the load average near 15 (other sessions' tests) took
+20 s. The 0.2 mm cell and the 4 M / 4096 budget are kept (§4.0, 3).
 
 
 ## Tests
