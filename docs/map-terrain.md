@@ -889,6 +889,12 @@ cell (x right, y up, z up): central differences in ground metres
 zero slope on an axis with no data neighbour; (0, 0, 127) in no-data
 cells. Computed on demand, not stored.
 
+**Client entry.** A client that reads a stored field imports
+`@oxygen/shared/src/terrain/field/read.js` — the types, the codec,
+§5.3 and §5.4 — never `field/index.js`, which adds the derivation
+(`build`, `interpolate` and through them `graph/` and `solve/`). The web
+draws the field through it (`map-rendering.md` §5.6).
+
 ### 5.5 `deriveTerrain(doc)`
 
 ```ts
@@ -1312,6 +1318,7 @@ sampler, and compares with T2. Measured 2026-11-14:
 | `.local/h2/{truth,measure,ladders}.mts` (not committed) | the corpus run against Lantmäteriet's 1 m model (§3.9) |
 | `terrain/field/__tests__/codec.test.ts` | round trip, magic and layout, determinism, unaligned input, bad magic / version / length, an unaligned header length, a header the schema rejects (both ways), planes against the header (§5.2) |
 | `terrain/field/__tests__/sample.test.ts` | bilinear exact on a plane, clamping, offset, null outside and in no-data, renormalising at a no-data border, confidence (§5.3) |
+| `terrain/field/__tests__/read.test.ts` | the client entry `read.js` reaches only types, codec, sample and normals (its import graph walked), and exports the read side without `buildHeightField` (§5.4 "Client entry") |
 | `terrain/field/__tests__/normals.test.ts` | a plane's analytic normal, exaggeration, flat and no-data cells, one-sided beside no-data (§5.4) |
 | `terrain/field/__tests__/interpolate.test.ts` | sources by side, geodesic distance inside a region; a slope and a cone within 0.1 interval, a top and a pit, a form line at ½, a multi-step drop, a chain level on both sides, a leaky chain as a form line, no-data, confidence (weak, flagged, undecided, conflicted), the ±32 767 clamp, the blur over data cells only, determinism; the field grid, its budget and a budget below one cell (§4) |
 | `terrain/field/__tests__/levels.ts` | hand-written levels standing in for §3 |
