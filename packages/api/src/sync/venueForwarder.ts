@@ -80,6 +80,13 @@ export function refreshesMapRows(paths: readonly string[]): boolean {
   return paths.some((p) => MAP_REFRESH_PREFIXES.some((prefix) => p.startsWith(prefix)));
 }
 
+/** The event a request names: `x-event-id`, or `x-competition-id`, which the web sends (`trpc.ts` reads both). */
+export function requestEventName(headers: Record<string, string | string[] | undefined>): string | null {
+  const raw = headers["x-event-id"] ?? headers["x-competition-id"];
+  const v = Array.isArray(raw) ? raw[0] : raw;
+  return v ? v : null;
+}
+
 /** How long a forwarded write's reply waits for the refresh that follows it. */
 export const FORWARD_REFRESH_WAIT_MS = 10_000;
 
@@ -174,9 +181,9 @@ export function registerVenueForwarder(server: FastifyInstance): void {
         body: JSON.stringify(req.body),
       });
       const text = await upstream.text();
-      const nameId = req.headers["x-event-id"];
+      const nameId = requestEventName(req.headers);
       if (upstream.ok && nameId && refreshesMapRows(paths)) {
-        await refreshAfterForward(String(nameId), peerUrl);
+        await refreshAfterForward(nameId, peerUrl);
       }
       void reply
         .code(upstream.status)

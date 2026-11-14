@@ -217,20 +217,33 @@ function samePatch(
 
 // ---- exporter (cloud) -------------------------------------------------------
 
-/** `lease.exportMapRows`: the parts a checkout would carry for the event's cloud-owned map rows. */
-export async function exportMapRows(db: PrismaClient | Prisma.TransactionClient, eventId: bigint): Promise<MapRows> {
-  const [mapTemplate, courseMap, courseObject, classOverrides] = await Promise.all([
-    db.mapTemplate.findMany({ where: { eventId }, orderBy: { seq: "asc" } }),
-    db.courseMap.findMany({ where: { eventId }, orderBy: { seq: "asc" } }),
-    db.courseObject.findMany({ where: { eventId }, orderBy: { seq: "asc" } }),
-    db.class.findMany({ where: { eventId }, select: { id: true, printScale: true, sheetTemplateId: true }, orderBy: { seq: "asc" } }),
-  ]);
+/**
+ * `lease.exportMapRows`: the parts a checkout would carry for the event's
+ * cloud-owned map rows, read in one repeatable-read transaction so a sheet
+ * never arrives without the template it names.
+ */
+export async function exportMapRows(db: PrismaClient, eventId: bigint): Promise<MapRows> {
+  return db.$transaction((tx) => readMapRows(tx, eventId), {
+    isolationLevel: Prisma.TransactionIsolationLevel.RepeatableRead,
+    timeout: 60_000,
+  });
+}
+
+async function readMapRows(tx: Prisma.TransactionClient, eventId: bigint): Promise<MapRows> {
+  const mapTemplate = await tx.mapTemplate.findMany({ where: { eventId }, orderBy: { seq: "asc" } });
+  const courseMap = await tx.courseMap.findMany({ where: { eventId }, orderBy: { seq: "asc" } });
+  const courseObject = await tx.courseObject.findMany({ where: { eventId }, orderBy: { seq: "asc" } });
+  const classOverrides = await tx.class.findMany({
+    where: { eventId },
+    select: { id: true, printScale: true, sheetTemplateId: true },
+    orderBy: { seq: "asc" },
+  });
   const tables = { mapTemplate, courseMap, courseObject } as unknown as Record<LayoutTable, Row[]>;
   return {
-    maps: await exportSnapshotMaps(db, eventId, { decisions: false }),
+    maps: await exportSnapshotMaps(tx, eventId, { decisions: false }),
     tables,
     versions: Object.fromEntries(TOKEN_TABLES.map((t) => [t, tokenMapOf(tables[t])])),
-    graphics: await exportSnapshotGraphics(db, eventId),
+    graphics: await exportSnapshotGraphics(tx, eventId),
     classOverrides,
   };
 }
@@ -262,12 +275,15 @@ function updateData(r: Row): Row {
 /**
  * Mirror one layout table by id: deletes, then updates in place, then
  * creates (never delete and reinsert: a template delete nulls the classes'
- * and sheets' references). `prepare` normalises a cloud row for this box.
+ * and sheets' references), then the table's `event_seqs` counter raised
+ * past the largest seq of the export's rows (skipped ones included) and
+ * the box's. `prepare` normalises a cloud row for this box.
  */
 async function mirrorLayoutTable(
   tx: Prisma.TransactionClient,
   eventId: bigint,
   table: LayoutTable,
+  cloudRows: readonly Row[],
   plan: MirrorPlan,
   prepare: (r: Row) => Row,
   beforeUpdates?: (updates: readonly Row[]) => Promise<void>,
@@ -277,12 +293,14 @@ async function mirrorLayoutTable(
   if (beforeUpdates) await beforeUpdates(plan.updates);
   for (const u of plan.updates) await d.update({ where: { id: String(u.id) }, data: updateData(prepare(u)) });
   for (const c of plan.creates) await d.create({ data: { ...prepare(c), eventId } });
-  if (plan.creates.length > 0) {
-    // A row the box creates later must not take a seq a mirrored row holds.
+  const cloudMax = cloudRows.reduce((m, r) => (typeof r.seq === "number" && r.seq > m ? r.seq : m), 0);
+  if (cloudMax > 0) {
+    // A row the box creates later must not take a seq a cloud row holds.
+    // No write when the counter is already past it.
     const name = SEQ_TABLE_NAMES[table];
     await tx.$executeRaw`
       INSERT INTO oxygen.event_seqs (event_id, table_name, next_seq)
-      SELECT ${eventId}, ${name}, COALESCE(MAX(seq), 0) + 1 FROM oxygen.${Prisma.raw(name)} WHERE event_id = ${eventId}
+      SELECT ${eventId}, ${name}, GREATEST(${cloudMax}::int, COALESCE(MAX(seq), 0)) + 1 FROM oxygen.${Prisma.raw(name)} WHERE event_id = ${eventId}
       ON CONFLICT (event_id, table_name) DO UPDATE SET next_seq = EXCLUDED.next_seq
         WHERE oxygen.event_seqs.next_seq < EXCLUDED.next_seq`;
   }
@@ -334,16 +352,20 @@ export async function applyMapRows(
     ? await mirrorSnapshotGraphics(tx, eventId, rows.graphics, graphicBlobs)
     : { written: 0, updated: 0, deleted: 0 };
 
-  // (5) Templates. A renamed one goes through its UUID first: the
-  // `(event_id, name)` unique is not deferrable.
+  // (5) Templates. `UNIQUE (event_id, name)` and the one-auto-per-key
+  // index are not deferrable, and one cloud edit can move two rows (a key
+  // change promotes an extra): an updated template whose name, key or
+  // extra flag changes is first parked under its UUID as an extra, then
+  // every update writes the cloud's values.
   const cloudTemplates = applyTokens(rows.tables.mapTemplate ?? [], rows.versions.mapTemplate);
   const templateIds = new Set(cloudTemplates.map((r) => String(r.id)));
   const localTemplates = await layoutDelegate(tx, "mapTemplate").findMany({ where: { eventId } });
-  const localTemplateNames = new Map(localTemplates.map((r) => [String(r.id), r.name]));
-  const templates = await mirrorLayoutTable(tx, eventId, "mapTemplate", planMirror(localTemplates, cloudTemplates), (r) => r, async (updates) => {
+  const localTemplateById = new Map(localTemplates.map((r) => [String(r.id), r]));
+  const templates = await mirrorLayoutTable(tx, eventId, "mapTemplate", cloudTemplates, planMirror(localTemplates, cloudTemplates), (r) => r, async (updates) => {
     for (const u of updates) {
-      if (localTemplateNames.get(String(u.id)) !== u.name) {
-        await tx.mapTemplate.update({ where: { id: String(u.id) }, data: { name: String(u.id) } });
+      const l = localTemplateById.get(String(u.id));
+      if (l && (l.name !== u.name || (l.autoKey ?? null) !== (u.autoKey ?? null) || l.isExtra !== u.isExtra)) {
+        await tx.mapTemplate.update({ where: { id: String(u.id) }, data: { name: String(u.id), isExtra: true } });
       }
     }
   });
@@ -378,6 +400,7 @@ export async function applyMapRows(
     tx,
     eventId,
     "courseMap",
+    cloudSheets,
     { deletes: sheetPlan.deletes, creates: sheetPlan.creates.filter(placeable), updates: sheetPlan.updates.filter(placeable) },
     (r) => withDbNulls(r, NULLABLE_JSON_SHEET_FIELDS),
   );
@@ -388,6 +411,7 @@ export async function applyMapRows(
     tx,
     eventId,
     "courseObject",
+    cloudObjects,
     planMirror(await layoutDelegate(tx, "courseObject").findMany({ where: { eventId } }), cloudObjects),
     (r) => r,
   );
@@ -433,11 +457,13 @@ export async function refreshCloudOwnedMaps(
   event: EventRef,
   peer: LeasePeer,
 ): Promise<MapRefreshResult | null> {
-  const lease = await getActiveLease(db, event.id);
-  if (!lease || lease.holderNodeId !== nodeId()) return null;
+  const holds = async () => (await getActiveLease(db, event.id))?.holderNodeId === nodeId();
+  if (!(await holds())) return null;
   return oneAtATime(event.id, async () => {
+    // A refresh queued behind another runs only while the lease is still here.
+    if (!(await holds())) return null;
     const rows = await peer.exportMapRows(event.nameId);
-    if (!rows || !rows.maps || !rows.tables || !Array.isArray(rows.classOverrides)) {
+    if (!rows || !rows.maps || !rows.tables || !rows.versions || !Array.isArray(rows.classOverrides)) {
       throw new TRPCError({ code: "PRECONDITION_FAILED", message: "Refresh: the peer's map rows are malformed." });
     }
     const blobs = await fetchSnapshotBlobs(db, rows.maps, (table, hash, start, length) =>

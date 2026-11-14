@@ -1121,11 +1121,15 @@ cloud-owned map rows equal to what a fresh checkout would hold:
   settings refresh, for every event whose active lease this node holds;
   and once right after the box's forwarder gets a 2xx from the cloud for
   a forwarded `courseMap.`, `mapTemplate.`, `layout.`, `graphics.`,
-  `courseObject.` or `mapPatch.` mutation, before it replies (bounded:
+  `courseObject.` or `mapPatch.` mutation (the event named by
+  `x-event-id` or the web's `x-competition-id`), before it replies (bounded:
   after 10 s the reply goes out and the refresh finishes behind it). So a
   box editor's refetch reads its own write with the cloud's token, and
   its next write of the row is not a `CONFLICT`. Refreshes of one event
-  run one at a time on a node (a second waits for the first).
+  run one at a time on a node (a second waits for the first, and runs
+  only if the lease is still held then). The cloud reads the export in
+  one repeatable-read transaction, so a sheet never arrives without the
+  template it names.
 - **What travels.** A peer query, `peerProcedure` (shared secret),
   event-scoped by `x-event-id`:
 
@@ -1170,20 +1174,28 @@ cloud-owned map rows equal to what a fresh checkout would hold:
   (8) course objects, each mirrored by id: rows the cloud lacks deleted,
   new rows created, changed rows updated in place (never delete and
   reinsert: a template delete would null the classes' and sheets'
-  references). A template whose name changes is first renamed to its own
-  UUID, as `UNIQUE (event_id, name)` is not deferrable. A reference to a
+  references). `UNIQUE (event_id, name)` and the one-auto-template-per-key
+  index (`map_templates_one_auto_per_key`) are not deferrable, and one
+  cloud edit can move two rows (a key change promotes an extra,
+  `course-layout.md` §5): an updated template whose name, `auto_key` or
+  `is_extra` changes is first parked under its own UUID as an extra, then
+  every update writes the cloud's values. A reference to a
   template the export lacks becomes NULL, as at checkout. A sheet whose
   `course_id` or `class_id` is not on the box (the box owns courses and
   classes during the lease) is skipped and counted, and the next refresh
   tries again. (9) The `event_seqs` counters of `map_templates`,
-  `course_maps` and `course_objects` are raised to past the largest
-  `seq`, so a row the box itself creates later does not collide.
+  `course_maps` and `course_objects` are raised past the largest `seq` of
+  the export's rows (skipped sheets included) and the box's, so a row the
+  box itself creates later does not collide; a counter already past it is
+  not written.
 - **What counts as changed.** A layout row is written only when its
   content — every column but `event_id`, `updated_at` and `version`,
   compared as canonical JSON — or its exact token differs; never by
   `updated_at` alone (the box's trigger rewrites it on update) nor by
   token alone (`courseObject.reorder` moves `z` without a token). A
-  graphic is written when its owner, name, mime, hash or times differ;
+  graphic is written when its owner or hash differs (bytes fetched,
+  the row replaced as at checkout) or its name or mime does (updated in
+  place; its `updated_at` is then the box's);
   a class only when one of its two columns differs. An unchanged cloud
   means no write on the box.
 - **The mirror is exact.** Rows deleted on the cloud are deleted on the

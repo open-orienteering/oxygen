@@ -65,13 +65,18 @@ background: [`offline-architecture.md`](offline-architecture.md).
    imported document), so the box holds it locally. A map whose import
    failed has no document: upload it again (or run
    `pnpm map:rematch --event <name_id>` on the cloud) before checking
-   out, or the box gets no map. A map re-uploaded on the cloud during the
-   lease does not reach the box. The snapshot also carries the print
+   out, or the box gets no map. The snapshot also carries the print
    layout — sheets, templates, course objects and their logos — so the
    box prints maps and description sheets itself, with or without
-   internet. Make the sheets you need (**Export ▾** or Layout mode)
-   before checking out: sheets and templates edited on the cloud during
-   the lease do not reach the box yet.
+   internet. While the box is online it follows the cloud: a map
+   re-uploaded there, and sheets, templates or logos edited there, reach
+   the box within the settings refresh interval (`SYNC_SETTINGS_REFRESH_MS`,
+   5 minutes by default), and an edit made on the box (forwarded to the
+   cloud) shows on the box at once. Offline the box keeps printing what
+   it has, so make the sheets you need (**Export ▾** or Layout mode)
+   while it is online. A course object imported with **Import courses**
+   on the box, or a map uploaded on the box, is replaced by the cloud's
+   at the next refresh — do those on the cloud.
 2. The shell shows the green **Venue mode** badge. From this moment the
    cloud rejects race-critical writes for this event with "checked out to
    `<node>`".

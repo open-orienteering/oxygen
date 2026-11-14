@@ -17,7 +17,7 @@ import {
   type MapRefreshResult,
 } from "../sync/mapRefresh.js";
 import { holdsGraphic } from "../sync/snapshotGraphics.js";
-import { refreshesMapRows } from "../sync/venueForwarder.js";
+import { refreshesMapRows, requestEventName } from "../sync/venueForwarder.js";
 import { applyTokens } from "../sync/snapshotMaps.js";
 
 const TOKEN = 2n ** 60n + 7n;
@@ -151,6 +151,14 @@ describe("helpers", () => {
     expect(holdsGraphic({ club: false, sha256 }, { eventId: null, data }, 5n)).toBe(false);
     expect(holdsGraphic({ club: false, sha256: "0".repeat(64) }, { eventId: 5n, data }, 5n)).toBe(false);
     expect(holdsGraphic({ club: true, sha256 }, null)).toBe(false);
+  });
+
+  it("requestEventName: x-event-id, else the web's x-competition-id, first of a repeated header", () => {
+    expect(requestEventName({ "x-event-id": "a", "x-competition-id": "b" })).toBe("a");
+    expect(requestEventName({ "x-competition-id": "b" })).toBe("b");
+    expect(requestEventName({ "x-competition-id": ["c", "d"] })).toBe("c");
+    expect(requestEventName({ "x-event-id": "" })).toBeNull();
+    expect(requestEventName({})).toBeNull();
   });
 
   it("refreshesMapRows: layout and patch writes refresh, others do not", () => {

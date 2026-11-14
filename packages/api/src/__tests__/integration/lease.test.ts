@@ -1034,6 +1034,74 @@ describe("a box follows the cloud's map rows during a lease (G19)", () => {
     expect(await ctx.db.graphic.findUnique({ where: { id: unreferencedClubGraphicId } })).not.toBeNull();
   });
 
+  it("templates: a key change that promotes an extra and a name swap apply in any seq order; a delete nulls the box's references", async () => {
+    const KEY = `k-${mapSuffix}`;
+    // On the cloud: extra X (lower seq) and auto Y of one key.
+    const x = await dbB.mapTemplate.create({ data: { eventId: eventB.id, name: `Swap1-${mapSuffix}`, printScale: 10000, autoKey: KEY, isExtra: true } });
+    const y = await dbB.mapTemplate.create({ data: { eventId: eventB.id, name: `Swap2-${mapSuffix}`, printScale: 15000, autoKey: KEY, isExtra: false } });
+    const sheetOnX = await dbB.courseMap.create({ data: { eventId: eventB.id, name: "On X", templateId: x.id } });
+    cleanup.push(async () => {
+      await dbB.courseMap.deleteMany({ where: { id: sheetOnX.id } });
+      await dbB.mapTemplate.deleteMany({ where: { id: { in: [x.id, y.id] } } });
+    });
+    expect(x.seq).toBeLessThan(y.seq);
+    await refresh();
+    expect(await ctx.db.mapTemplate.findUniqueOrThrow({ where: { id: y.id } })).toMatchObject({ autoKey: KEY, isExtra: false });
+
+    // One cloud edit moves Y to another key and promotes X; the names swap too.
+    await dbB.mapTemplate.update({ where: { id: y.id }, data: { name: `tmp-${mapSuffix}`, autoKey: `${KEY}-other` } });
+    await dbB.mapTemplate.update({ where: { id: x.id }, data: { name: `Swap2-${mapSuffix}`, isExtra: false } });
+    await dbB.mapTemplate.update({ where: { id: y.id }, data: { name: `Swap1-${mapSuffix}` } });
+    const res = await refresh();
+    expect(res!.templates).toEqual({ created: 0, updated: 2, deleted: 0 });
+    expect(await ctx.db.mapTemplate.findUniqueOrThrow({ where: { id: x.id } })).toMatchObject({ name: `Swap2-${mapSuffix}`, autoKey: KEY, isExtra: false });
+    expect(await ctx.db.mapTemplate.findUniqueOrThrow({ where: { id: y.id } })).toMatchObject({ name: `Swap1-${mapSuffix}`, autoKey: `${KEY}-other`, isExtra: false });
+
+    // A template deleted on the cloud: gone on the box, the sheet that used it on NULL.
+    await dbB.mapTemplate.delete({ where: { id: x.id } });
+    const del = await refresh();
+    expect(del!.templates.deleted).toBe(1);
+    expect(await ctx.db.mapTemplate.findUnique({ where: { id: x.id } })).toBeNull();
+    expect((await ctx.db.courseMap.findUniqueOrThrow({ where: { id: sheetOnX.id } })).templateId).toBeNull();
+  });
+
+  it("graphics: a rename on the cloud updates the box, new bytes under the same id are fetched", async () => {
+    const original = await dbB.graphic.findUniqueOrThrow({ where: { id: eventGraphicId } });
+    cleanup.push(() => dbB.graphic.update({ where: { id: eventGraphicId }, data: { name: original.name, data: original.data, sizeBytes: original.sizeBytes } }));
+    await dbB.graphic.update({ where: { id: eventGraphicId }, data: { name: "renamed.svg" } });
+    const renamed = await refresh();
+    expect(renamed).toMatchObject({ graphics: { written: 0, updated: 1, deleted: 0 }, fetchedBytes: 0 });
+    expect((await ctx.db.graphic.findUniqueOrThrow({ where: { id: eventGraphicId } })).name).toBe("renamed.svg");
+    await dbB.graphic.update({ where: { id: eventGraphicId }, data: { data: NEW_SVG, sizeBytes: NEW_SVG.length } });
+    const replaced = await refresh();
+    expect(replaced).toMatchObject({ graphics: { written: 1 }, fetchedBytes: NEW_SVG.length });
+    expect(Buffer.from((await ctx.db.graphic.findUniqueOrThrow({ where: { id: eventGraphicId } })).data).equals(NEW_SVG)).toBe(true);
+    await dbB.graphic.update({ where: { id: eventGraphicId }, data: { name: original.name, data: original.data, sizeBytes: original.sizeBytes } });
+    await refresh();
+  });
+
+  it("the mirror is exact: a course object and a map file the box wrote itself go at the next refresh", async () => {
+    const local = await ctx.db.courseObject.create({
+      data: { eventId: box.id, kind: "text", geometry: [{ x: 0, y: 0 }], props: { text: "box" }, scope: { all: true }, source: "import" },
+    });
+    // A box-local object takes a seq past the cloud's.
+    const cloudMax = (await dbB.courseObject.aggregate({ where: { eventId: eventB.id }, _max: { seq: true } }))._max.seq ?? 0;
+    expect(local.seq).toBeGreaterThan(cloudMax);
+    await ctx.db.mapFile.create({ data: { eventId: box.id, fileName: "box-upload.ocd", sourceHash, documentHash } });
+    const res = await refresh();
+    expect(res).toMatchObject({ objects: { deleted: 1 }, mapFiles: 3 });
+    expect(await ctx.db.courseObject.findUnique({ where: { id: local.id } })).toBeNull();
+    expect((await boxFiles()).map((f) => f.fileName)).toEqual(["lease.ocd"]);
+  });
+
+  it("two refreshes of one event at once both settle, the second after the first", async () => {
+    await dbB.courseMap.update({ where: { id: sheetBId }, data: { name: "Concurrent" } });
+    cleanup.push(() => dbB.courseMap.update({ where: { id: sheetBId }, data: { name: "Blå karta" } }));
+    const [a, b] = await Promise.all([refresh(), refresh()]);
+    expect(a!.sheets.updated + b!.sheets.updated).toBe(1);
+    expect((await sheetOnBox()).name).toBe("Concurrent");
+  });
+
   it("offline, or with bytes that do not match, nothing is written and the box keeps its copy", async () => {
     const pin = await dbB.mapFile.findFirstOrThrow({ where: { eventId: eventB.id, sourceHash } });
     await dbB.mapFile.update({ where: { id: pin.id }, data: { sourceHash: reimport.sourceHash, documentHash: reimport.documentHash } });
@@ -1144,7 +1212,8 @@ describe("a box follows the cloud's map rows during a lease (G19)", () => {
       registerVenueForwarder(venue);
       venue.post("/trpc/*", async () => ({ result: { data: "local" } }));
       await venue.ready();
-      const headers = { "content-type": "application/json", "x-event-id": CHECKOUT_NAME };
+      // The header the web's tRPC clients send (\`x-event-id\` is the peers').
+      const headers = { "content-type": "application/json", "x-competition-id": CHECKOUT_NAME };
       const reply = await venue.inject({ method: "POST", url: "/trpc/courseMap.update", headers, payload: { seq: 1, name: "Forwarded" } });
       expect(reply.statusCode).toBe(200);
       expect(await sheetOnBox()).toMatchObject({ name: "Forwarded", version: TOKEN_3 });
