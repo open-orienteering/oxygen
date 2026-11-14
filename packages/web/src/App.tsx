@@ -24,6 +24,10 @@ const MapGlFixturePage = import.meta.env.DEV
 const MapGlDocPage = import.meta.env.DEV
   ? lazy(() => import("./pages/dev/MapGlDocPage").then(m => ({ default: m.MapGlDocPage })))
   : null;
+// Dev-only: the terrain mesh, camera and shading on a synthetic field (docs/map-rendering.md §5.6).
+const MapTerrainPage = import.meta.env.DEV
+  ? lazy(() => import("./pages/dev/MapTerrainPage").then(m => ({ default: m.MapTerrainPage })))
+  : null;
 
 const PUBLIC_SURFACE = /^\/[^/]+\/(kiosk|start-screen)(\/|$)/;
 
@@ -86,6 +90,7 @@ export default function App() {
             />
             {MapGlFixturePage && <Route path="/dev/map-gl" element={<MapGlFixturePage />} />}
             {MapGlDocPage && <Route path="/dev/map-gl-doc" element={<MapGlDocPage />} />}
+            {MapTerrainPage && <Route path="/dev/map-terrain" element={<MapTerrainPage />} />}
             {/* Kiosk route — outside CompetitionShell (fullscreen, no admin UI) */}
             <Route path="/:nameId/kiosk" element={<KioskPage />} />
             <Route path="/:nameId/start-screen" element={<StartScreenPage />} />

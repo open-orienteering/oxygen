@@ -69,8 +69,16 @@ export function meshHeights(field: HeightField): Int16Array {
   const out = Int16Array.from(field.z);
   const queue = new Int32Array(W * H);
   let head = 0, tail = 0;
-  for (let i = 0; i < W * H; i++) if (out[i] !== HEIGHT_NO_DATA) queue[tail++] = i;
-  if (tail === 0) return out.fill(field.header.zMin);
+  const ND = HEIGHT_NO_DATA;
+  let any = false;
+  // seeds: data cells beside a no-data cell (an inner data cell never reaches one first)
+  for (let i = 0; i < W * H; i++) {
+    if (out[i] === ND) continue;
+    any = true;
+    const cx = i % W;
+    if ((cx > 0 && out[i - 1] === ND) || (cx < W - 1 && out[i + 1] === ND) || (i >= W && out[i - W] === ND) || (i < W * (H - 1) && out[i + W] === ND)) queue[tail++] = i;
+  }
+  if (!any) return out.fill(field.header.zMin);
   while (head < tail) {
     const i = queue[head++], cx = i % W, v = out[i];
     const visit = (j: number) => {
@@ -254,10 +262,19 @@ export function boxInFrustum(m: ArrayLike<number>, b: Box3): boolean {
   return out === 0;
 }
 
+export interface SelectionStats {
+  /** Chunks drawn and culled. */
+  chunks: number;
+  culled: number;
+  triangles: number;
+  /** Chunks per level. */
+  perLevel: number[];
+}
+
 export interface ChunkSelection {
   /** Per level: (ix0, iy0, skirt height) per drawn chunk. */
   instances: Float32Array[];
-  stats: { chunks: number; culled: number; triangles: number; perLevel: number[] };
+  stats: SelectionStats;
 }
 
 export interface SelectOptions {
