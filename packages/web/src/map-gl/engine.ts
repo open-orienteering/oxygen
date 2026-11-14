@@ -7,6 +7,7 @@
  *
  *   setView(view)  → which cells are drawn; request missing detail; evict
  *   setCourse(req) → the dynamic bucket: the course layer, re-symbolised in the worker (§5.2 "Dynamic bucket")
+ *   setPatch(p)    → the effective document: hidden ids, the touched buckets re-prepared (§5.2 "Patch")
  *   render(opts)   → rebuild the visible set if the drawn set changed; draw
  *
  * B4's `VectorMapLayer` drives the same two calls from its viewport.
@@ -16,12 +17,12 @@ import {
   aboveZoomGate, BucketLru, buildVisibleSet, CLUB_BUDGET_BYTES, DRAW_MARGIN_CELLS, filterEntryKey, PREFETCH_MARGIN_CELLS, visibleCells,
   type PreparedPart, type ResidentPart, type ViewRect, type VisibleFilter,
 } from "./buckets.js";
-import type { render as R } from "@oxygen/shared";
+import type { mapDocument, render as R } from "@oxygen/shared";
 import type { DocumentRenderOptions, FrameStats, InsetBox, MapGlRenderer, TextAtlasImage } from "./renderer.js";
 import type { RenderTarget } from "./view.js";
 import {
   createMapGlWorker, messageChannelScheduler,
-  type CourseLayerRequest, type CourseReply, type FilterReply, type LoadRequest, type LoadSummary, type WorkerReply, type WorkerRequest,
+  type CourseLayerRequest, type CourseReply, type FilterReply, type LoadRequest, type LoadSummary, type PatchedReply, type PatchState, type WorkerReply, type WorkerRequest,
 } from "./worker.js";
 
 /** Message transport to the worker: a real Web Worker, or the same handler inline. */
@@ -97,6 +98,11 @@ export interface EngineStats {
  */
 export const ARRIVAL_REBUILD_MS = 150;
 
+interface PatchWaiter {
+  resolve: (s: PatchState) => void;
+  reject: (e: Error) => void;
+}
+
 const BASE = (id: number) => `b${id}`;
 const DETAIL = (id: number) => `d${id}`;
 const LARGE = "L";
@@ -158,6 +164,19 @@ export class MapGlEngine {
   private courseWaiting = false;
   private loadPosted = false;
   private atlasBytes = 0;
+  /** The patch to draw (`undefined`: never set; sent with a document load). */
+  private patch: mapDocument.MapPatch | null | undefined;
+  /** Objects the patch hides (effective `objectIndex`), joined with `setHidden`'s for the visible set. */
+  private patchHidden: ReadonlySet<number> = new Set();
+  private patchGeneration = 0;
+  /** As the course: one patch request in flight, the latest input waiting for its reply. */
+  private patchInFlight: number | undefined;
+  private patchWaiting = false;
+  private patchWaiters: PatchWaiter[] = [];
+  private inFlightWaiters: PatchWaiter[] = [];
+  private loadPatchWaiters: PatchWaiter[] = [];
+  /** What the worker drew of the patch last (the load's or the latest reply's). */
+  patchState: PatchState | undefined;
   /** Called when something arrived that changes the picture (a detail part for a drawn cell, a course layer). */
   onChange: (() => void) | undefined;
   /**
@@ -188,6 +207,11 @@ export class MapGlEngine {
     this.renderer.setTextAtlas(textAtlas ?? []);
     const msg: LoadRequest = { type: "load", ...rest, gate: this.opts.gate, prefetchMarginCells: this.opts.prefetchMarginCells };
     if (textAtlas?.length) msg.textAtlas = textAtlas.map((t) => t.page);
+    // The patch goes with the document (§5.2 "Patch"): the first frame is the effective document.
+    if (msg.source.kind === "document" && this.patch !== undefined) msg.source = { ...msg.source, patch: this.patch };
+    this.loadPatchWaiters.push(...this.patchWaiters);
+    this.patchWaiters = [];
+    this.patchWaiting = false;
     return new Promise((resolve, reject) => {
       this.loadWaiter = { resolve, reject };
       this.transport.post(msg, transfer);
@@ -225,6 +249,85 @@ export class MapGlEngine {
     if (this.courseWaiting) this.postCourse();
   }
 
+  /**
+   * Draws the document with `patch` applied (§5.2 "Patch"; `null` none): no reload — the worker
+   * hides through the range table and re-prepares only the buckets the change touches. Before the
+   * load it goes with the load message. As `setCourse`, one request is in flight at a time and the
+   * latest input waits for its reply. Resolves with what the worker drew of the patch once a reply
+   * covering this input is applied; rejects if that request failed.
+   */
+  setPatch(patch: mapDocument.MapPatch | null): Promise<PatchState> {
+    this.patch = patch;
+    return new Promise((resolve, reject) => {
+      this.patchWaiters.push({ resolve, reject });
+      if (!this.loadPosted) return;
+      if (this.patchInFlight !== undefined) this.patchWaiting = true;
+      else this.postPatch();
+    });
+  }
+
+  private postPatch(): void {
+    this.patchWaiting = false;
+    this.patchInFlight = ++this.patchGeneration;
+    this.inFlightWaiters.push(...this.patchWaiters);
+    this.patchWaiters = [];
+    this.transport.post({ type: "patch", generation: this.patchInFlight, patch: this.patch ?? null, detail: [...this.detail.keys()] }, []);
+  }
+
+  private patchDone(): void {
+    this.patchInFlight = undefined;
+    if (this.patchWaiting) this.postPatch();
+  }
+
+  /**
+   * A patch reply (§5.2 "Patch"): the touched buckets' parts replaced — a touched cell's resident
+   * detail swapped for the fresh one in the same reply, or dropped and asked for again — and the
+   * hidden set taken. Replies are deltas, so each is applied in order. The course is asked again:
+   * its cuts and filter read the effective document.
+   */
+  private acceptPatched(m: PatchedReply): void {
+    const s = this.summary;
+    if (!s) return;
+    if (m.atlas) {
+      this.renderer.setAtlas(m.atlas);
+      this.atlasBytes = m.atlas.data.byteLength;
+    }
+    for (const id of m.touched) {
+      if (id === s.largeId) continue;
+      if (this.base.delete(id)) this.renderer.releasePart(BASE(id));
+      if (this.detail.delete(id)) {
+        this.renderer.releasePart(DETAIL(id));
+        this.lru.remove(id);
+      }
+    }
+    for (const p of m.base) this.base.set(p.bucket, this.renderer.uploadPart(BASE(p.bucket), p));
+    for (const p of m.detail) {
+      this.detail.set(p.bucket, this.renderer.uploadPart(DETAIL(p.bucket), p));
+      this.lru.add(p.bucket, p.gpuBytes);
+      this.pending.delete(p.bucket);
+    }
+    if (m.large !== undefined) {
+      this.renderer.releasePart(LARGE);
+      this.large = m.large ? this.renderer.uploadPart(LARGE, m.large) : undefined;
+    }
+    this.detailCells = new Set(m.detailCells);
+    this.summary = { ...s, detailCells: m.detailCells, bytes: { ...s.bytes, base: m.bytes.base, large: m.bytes.large, atlas: this.atlasBytes } };
+    this.patchHidden = new Set(m.patch.hidden);
+    this.patchState = m.patch;
+    this.updateFixedBytes();
+    this.dirty = true;
+    this.arrivalOnly = false;
+    // A touched cell whose detail is not resident now is asked for again.
+    this.lastRequest = "\u0000";
+    if (this.view) this.setView(this.view);
+    else this.evict();
+    if (this.courseInput && s.courseLayer?.supported) this.setCourse(this.courseInput);
+    const ws = this.inFlightWaiters;
+    this.inFlightWaiters = [];
+    for (const w of ws) w.resolve(m.patch);
+    this.onChange?.();
+  }
+
   /** The stack to draw with: the course reply's (layout-object rows on top) once one arrived, else the load's. */
   get colours(): R.ColourStack {
     return this.courseColours ?? this.summary?.colourStack ?? [];
@@ -259,6 +362,22 @@ export class MapGlEngine {
   }
 
   private receive(m: WorkerReply): void {
+    if (m.type === "error" && m.patch !== undefined) {
+      // A patch request that threw ends that request only (as a course error, F20b).
+      if (m.patch === this.patchInFlight) {
+        const ws = this.inFlightWaiters;
+        this.inFlightWaiters = [];
+        for (const w of ws) w.reject(new Error(m.message));
+        this.patchDone();
+      }
+      return;
+    }
+    if (m.type === "patched") {
+      if (m.generation !== this.patchInFlight) return;
+      this.acceptPatched(m);
+      this.patchDone();
+      return;
+    }
     if (m.type === "error") {
       // A course request that threw names its generation (F20b): it ends that request only — a stale one
       // (overtaken by a load's re-send) ends nothing — and never a load in flight.
@@ -268,6 +387,7 @@ export class MapGlEngine {
       }
       this.loadWaiter?.reject(new Error(m.message));
       this.loadWaiter = undefined;
+      for (const w of this.loadPatchWaiters.splice(0)) w.reject(new Error(m.message));
       // A worker error without a generation (`onerror`, a failed load) may be the course request's own:
       // never leave the waiting input stuck behind a reply that will not come. A late reply is then stale.
       if (this.courseInFlight !== undefined) this.courseDone();
@@ -296,6 +416,12 @@ export class MapGlEngine {
       // `setDocument` dropped every part; a course request posted after the load replies after this.
       this.course = undefined;
       this.filter = engineFilter(m.filter ?? null);
+      this.patchHidden = new Set(s.patch?.hidden ?? []);
+      this.patchState = s.patch;
+      for (const w of this.loadPatchWaiters.splice(0)) {
+        if (s.patch) w.resolve(s.patch);
+        else w.reject(new Error("a patch needs a document source"));
+      }
       this.atlasBytes = s.bytes.atlas;
       this.updateFixedBytes();
       this.dirty = true;
@@ -364,7 +490,7 @@ export class MapGlEngine {
     this.checkComplete();
   }
 
-  /** Hides objects (stream object indices): their ranges are skipped in the visible set (04 §7). */
+  /** Hides objects (effective `objectIndex`, §5.2 "Object identity"): their ranges are skipped in the visible set (04 §7). */
   setHidden(objects: ReadonlySet<number>): void {
     this.hidden = objects;
     this.dirty = true;
@@ -435,7 +561,8 @@ export class MapGlEngine {
       // The page's colours sort after every map colour: the page layer draws over the map, as in the PDF.
       if (this.page) parts.push(this.page);
       const f = this.filter;
-      const hidden = f && f.hidden.size ? new Set([...this.hidden, ...f.hidden]) : this.hidden;
+      const extra = [...(f?.hidden ?? []), ...this.patchHidden];
+      const hidden = extra.length ? new Set([...this.hidden, ...extra]) : this.hidden;
       const vs = buildVisibleSet(parts, hidden, f?.visible);
       this.st.lastBuildMs = performance.now() - t0;
       this.renderer.setVisibleSet(vs);

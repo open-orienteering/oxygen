@@ -10,6 +10,7 @@ import { loupeView, type RenderTarget } from "../view";
 import { parseTextAtlasPage } from "../text-atlas";
 import type { MeshAtlas } from "../mesh-atlas";
 import { documentBytes, indexOf, request } from "./course-fixture";
+import { CELL_UM as PATCH_CELL_UM, cell, documentBytes as patchDocumentBytes, index, moveLine1, patchOf } from "./patch-fixture";
 
 const fontsDir = resolve(import.meta.dirname, "../../../../shared/fonts");
 const fontBytes = () => {
@@ -96,7 +97,7 @@ class FakeRenderer {
 function manualTransport() {
   const tasks: (() => void)[] = [];
   const posted: WorkerRequest[] = [];
-  const t: Transport & { flush(): void; posted: WorkerRequest[] } = {
+  const t: Transport & { flush(): void; step(n: number): void; posted: WorkerRequest[] } = {
     posted,
     onMessage: undefined,
     terminate: () => undefined,
@@ -106,6 +107,10 @@ function manualTransport() {
     },
     flush: () => {
       for (let guard = 0; tasks.length && guard < 10_000; guard++) tasks.shift()!();
+    },
+    /** Runs the next `n` tasks only (a message handled, a prepare slice, a reply delivered). */
+    step: (n) => {
+      for (let i = 0; i < n && tasks.length; i++) tasks.shift()!();
     },
   };
   const handler = createMapGlWorker((msg: WorkerReply) => tasks.push(() => t.onMessage?.(msg)), (fn) => tasks.push(fn), 1e9);
@@ -498,3 +503,125 @@ describe("MapGlEngine dynamic bucket (docs/map-rendering.md §5.2 Dynamic bucket
   });
 });
 
+describe("MapGlEngine patch (docs/map-rendering.md §5.2 \"Patch\")", () => {
+  /** All five cells of the patch fixture in view, above the gate. */
+  const whole: ViewRect = { centreX: 25_000, centreY: 5_000, pxPerUm: 0.02, widthPx: 1500, heightPx: 600 };
+  const patchLoad = () => ({ source: { kind: "document" as const, bytes: patchDocumentBytes(), options: { unmatched: "proxy" as const } }, fonts: [], cellUm: PATCH_CELL_UM });
+  async function patchEngine(before?: ReturnType<typeof patchOf> | null) {
+    const renderer = new FakeRenderer();
+    const transport = manualTransport();
+    const engine = new MapGlEngine(renderer as unknown as MapGlRenderer, transport, { budgetBytes: 1 << 30 });
+    let changes = 0;
+    engine.onChange = () => changes++;
+    const early = before !== undefined ? engine.setPatch(before) : undefined;
+    const p = engine.load(patchLoad());
+    transport.flush();
+    const summary = await p;
+    engine.setView(whole);
+    transport.flush();
+    engine.render({ colour: () => [0, 0, 0] });
+    return { renderer, transport, engine, summary, early, changes: () => changes };
+  }
+  const strokes = (r: FakeRenderer) => r.visibleSets.at(-1)!.stroke.indices.length;
+  const fills = (r: FakeRenderer) => r.visibleSets.at(-1)!.fill.indices.length;
+  const loads = (t: { posted: WorkerRequest[] }) => t.posted.filter((m) => m.type === "load").length;
+  const patches = (t: { posted: WorkerRequest[] }) => t.posted.filter((m) => m.type === "patch") as Extract<WorkerRequest, { type: "patch" }>[];
+
+  it("a patch before the load goes with it: the first frame hides the object", async () => {
+    const plain = await patchEngine();
+    const { transport, renderer, early, engine } = await patchEngine(patchOf([{ op: "hide", sourceIndex: 3 }]));
+    const load = transport.posted.find((m) => m.type === "load")!;
+    expect(load.type === "load" && load.source.kind === "document" && load.source.patch?.ops["hide:3"]).toBeTruthy();
+    expect(Array.from((await early!).hidden)).toEqual([index(3)]);
+    expect(engine.patchState?.hidden.length).toBe(1);
+    expect(fills(renderer)).toBeLessThan(fills(plain.renderer));
+    expect(patches(transport)).toHaveLength(0);
+  });
+
+  it("a change redraws without reloading: hide skips the object's ranges, the toggle off restores the same visible set", async () => {
+    const { engine, transport, renderer, changes } = await patchEngine();
+    const before = { strokes: strokes(renderer), fills: fills(renderer) };
+    const c0 = changes();
+    const done = engine.setPatch(patchOf([{ op: "hide", sourceIndex: 2 }, { op: "hide", sourceIndex: 3 }]));
+    transport.flush();
+    expect(Array.from((await done).hidden).sort()).toEqual([index(2), index(3)].sort());
+    expect(changes()).toBeGreaterThan(c0);
+    engine.render({ colour: () => [0, 0, 0] });
+    expect(strokes(renderer)).toBeLessThan(before.strokes);
+    expect(fills(renderer)).toBeLessThan(before.fills);
+    const off = engine.setPatch(null);
+    transport.flush();
+    await off;
+    engine.render({ colour: () => [0, 0, 0] });
+    expect({ strokes: strokes(renderer), fills: fills(renderer) }).toEqual(before);
+    expect(loads(transport)).toBe(1);
+  });
+
+  it("a touched cell's resident detail is swapped in the same reply; a cell that left the detail set is released", async () => {
+    const { engine, transport, renderer } = await patchEngine();
+    const old0 = renderer.parts.get(`d${cell(0)}`)!;
+    expect(old0).toBeDefined();
+    engine.setPatch(patchOf([moveLine1(7)]));
+    const req = patches(transport).at(-1)!;
+    expect(req.detail.sort()).toEqual([0, 1, 3]); // the cells with detail, all resident
+    transport.flush();
+    const new0 = renderer.parts.get(`d${cell(0)}`)!;
+    expect(new0).not.toBe(old0);
+    expect(new Float32Array(new0.stroke!.verts)[0]).not.toBe(new Float32Array(old0.stroke!.verts)[0]);
+    // Into cell 1: cell 0 has no detail any more and nothing is asked for it.
+    engine.setPatch(patchOf([moveLine1(15.5)]));
+    transport.flush();
+    expect(renderer.parts.has(`d${cell(0)}`)).toBe(false);
+    expect(prepares(transport).at(-1)!.ids).not.toContain(cell(0));
+    expect(engine.stats().pending).toBe(0);
+    expect(loads(transport)).toBe(1);
+  });
+
+  it("a touched cell's detail that arrived after the request was sent is dropped and asked for again", async () => {
+    const renderer = new FakeRenderer();
+    const transport = manualTransport();
+    const engine = new MapGlEngine(renderer as unknown as MapGlRenderer, transport, { budgetBytes: 1 << 30 });
+    const p = engine.load(patchLoad());
+    transport.flush();
+    await p;
+    // The view's detail is prepared (the worker's slice runs) but not yet delivered when the patch is posted.
+    engine.setView(whole);
+    transport.step(2);
+    engine.setPatch(patchOf([moveLine1(7)]));
+    expect(patches(transport).at(-1)!.detail).toEqual([]);
+    const asked = prepares(transport).length;
+    const uploads: PreparedPart[] = [];
+    const upload = renderer.uploadPart.bind(renderer);
+    renderer.uploadPart = (key, part) => {
+      if (key === `d${cell(0)}`) uploads.push(part);
+      return upload(key, part);
+    };
+    transport.flush();
+    // The old part arrived first and was dropped by the reply; the cell was asked for again and came back new.
+    expect(prepares(transport).length).toBeGreaterThan(asked);
+    expect(prepares(transport).at(-1)!.ids).toContain(cell(0));
+    expect(uploads.map((u) => Math.round(new Float32Array(u.stroke!.verts)[0] + engine.summary!.originX))).toEqual([5000, 7000]);
+    expect(renderer.parts.get(`d${cell(0)}`)).toBe(uploads[1]);
+  });
+
+  it("one request in flight, the latest input next; a failed one rejects only its own callers", async () => {
+    const { engine, transport } = await patchEngine();
+    const before = patches(transport).length;
+    const a = engine.setPatch(patchOf([{ op: "hide", sourceIndex: 1 }]));
+    const b = engine.setPatch(patchOf([{ op: "hide", sourceIndex: 2 }]));
+    const c = engine.setPatch(patchOf([{ op: "hide", sourceIndex: 3 }]));
+    expect(patches(transport)).toHaveLength(before + 1);
+    transport.flush();
+    expect(patches(transport)).toHaveLength(before + 2);
+    expect(Array.from((await a).hidden)).toEqual([index(1)]);
+    expect(Array.from((await b).hidden)).toEqual([index(3)]);
+    expect(Array.from((await c).hidden)).toEqual([index(3)]);
+    // The worker throws on a request it cannot apply (a patch op object it cannot read): only that promise rejects.
+    const bad = engine.setPatch({ ...patchOf([]), ops: { "hide:1": null } } as unknown as ReturnType<typeof patchOf>);
+    transport.flush();
+    await expect(bad).rejects.toThrow();
+    const ok = engine.setPatch(null);
+    transport.flush();
+    expect((await ok).hidden.length).toBe(0);
+  });
+});
