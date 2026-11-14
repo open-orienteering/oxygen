@@ -494,6 +494,155 @@ the local corpus (`.local/corpus`, five club / sprint maps up to 37 MB,
 never committed; `OXYGEN_CORPUS_DIR` overrides) runs when present — all
 five equal on 2026-11-05.
 
+### 4.7 Height field
+
+Research 10 §4, 07 §6.1; row H4. The terrain a document's contours imply
+(`docs/map-terrain.md` §1–5): derived from the document alone, stored
+as a row beside it, served immutably by hash like the previews (§4.5).
+`packages/api/src/map-store/heightfield.ts` (rows, the derive),
+`heightfield-worker.ts` (the worker body) and `heightfield-routes.ts`
+(the route).
+
+```
+GET /api/map-documents/:hash/height.bin?v=<TERRAIN_VERSION>     the OXHF field (map-terrain §5.1)
+```
+
+**Decided with the user (2026-11-14).**
+
+1. **The terrain version is in the URL** (`?v=`), so `immutable` names
+   one content: a `TERRAIN_VERSION` bump changes the URL, and a request
+   for another version than the current one is 404 — the library
+   route's precedent (§4.5). A DEM-based source (H10) adds its own query
+   parameter; `contours` is the only source today.
+2. **The terrain report lives on the height-field row**, not in the
+   document row (`map_documents` is append-only, §1, and the report
+   changes with `TERRAIN_VERSION`). A document without contours gets a
+   row without bytes, so it is not re-derived on every request. The
+   report reaches the event's descriptor (`course.mapMetadata.terrain`)
+   and the import review (`mapImport.review.terrain`).
+3. **The cell cap is the graph's own 60 M-cell budget and refuses
+   nothing by default.** The stored field is `deriveTerrain(doc)` with
+   the defaults (map-terrain §5.5), so a cap cannot coarsen it, only
+   refuse the document; the graph raster already grows its cell to stay
+   under 60 M (map-terrain §2.4), which bounds the derive's memory
+   (measured below). `MAP_HEIGHTFIELD_MAX_CELLS` lowers it per instance
+   (a small venue box); a document whose estimate is over it is
+   `over-cap`.
+
+**Rows.** `map_heightfields`, migration `20261114130000_map_heightfields`:
+
+| Column | |
+|---|---|
+| `document_hash` | `→ map_documents CASCADE`; part of the key |
+| `source` | `TEXT`, part of the key: `contours` (this section); free text so a DEM-based source (H10) needs no migration |
+| `version` | `INT`, part of the key: `TERRAIN_VERSION` (map-terrain §5.5); the container version stays inside the bytes |
+| `bytes` | `BYTEA STORAGE EXTERNAL`, nullable: `encodeHeightField(field)`, uncompressed; null when the document has no contours |
+| `size_bytes` | `INT`, nullable with `bytes` |
+| `header` | `JSONB`, nullable with `bytes`: the field's `HeightFieldHeader` (map-terrain §5.1) |
+| `report` | `JSONB`, nullable with `bytes`: the `TerrainReport` (map-terrain §3.6), camelCase as stored |
+| `created_at` | |
+
+A `CHECK` holds `bytes`, `size_bytes`, `header` and `report` null
+together. A row is written once with `createMany … skipDuplicates` and
+never updated, like the previews; it cascades with its document and is
+cache — deleting it only costs a derive. Reading it is not a reference
+(no `last_referenced_at` bump). The `contours` row is always
+`deriveTerrain(doc)` with no options (map-terrain §5.5), so the key names
+one field and two instances deriving the same key write the same bytes.
+
+| Writer | When |
+|---|---|
+| import stage 10 (`derive`, §6.1) | after the thumbnail, in a worker run and in the dedup short-cut of `startImportJob`; a failure is logged and never fails the job |
+| the route | on the first request that finds no row (documents stored before H4, a failed or skipped derive) |
+
+**The derive.** `getOrDeriveHeightfield(db, hash)`: the row if there is
+one; otherwise the cap check, then the document's bytes into a
+`worker_threads` worker of its own (`heightfield-worker.ts`, launched
+through `workerBootstrap` like the import and print workers, §6.3):
+decode, `deriveTerrain(doc)`, `encodeHeightField`; the encoded bytes,
+header and report come back and the worker is terminated. Not in the
+import worker: the dedup short-cut and the route have no import worker,
+and the import's and the derive's peaks never stack inside a job (the
+import worker is gone before stage 10). One derive runs at a time per
+instance; concurrent requests for one key share one derive; a derive
+over 240 s (under Cloud Run's 300 s request timeout) is terminated and
+counts as failed. A failure writes nothing and is remembered in-process
+for 10 minutes, so a document whose derive fails is not re-derived on
+every request.
+
+**The cap check** reads the stored header summary (§3), no blob: the
+graph raster covers the contours' box plus 2 mm on each side at 0.1 mm
+(map-terrain §2.4), so `(w + 4 mm) · (h + 4 mm) / 0.01 mm²` over
+`header.bounds` is an upper bound, clamped to the 60 M budget. Over
+`MAP_HEIGHTFIELD_MAX_CELLS` (default 60 M, so never) is `over-cap`,
+logged, nothing written. A summary without bounds is not refused.
+
+**Memory, measured.** A `.local/` script (not committed: the corpus is
+real club maps) runs `deriveTerrain` on each corpus map's decoded
+document, one map per process, and reads the process's peak RSS above
+the decoded document. 2026-11-14, 16-core machine:
+
+| Map | graph cells | added peak | time | field |
+|---|---|---|---|---|
+| crop-a | 1.4 M | 63 MB | 0.5 s | 0.76 MB |
+| crop-b | 1.1 M | 51 MB | 0.4 s | 0.60 MB |
+| sprint | 11.8 M | 225 MB | 2.2 s | 6.25 MB |
+| club-2026 | 13.9 M | 331 MB | 5.6 s | 7.38 MB |
+| club-full | 46.4 M | 840 MB | 19.1 s | 6.16 MB |
+| club-full, graph budget 30 M (for scale) | 30 M | 501 MB | 12.1 s | 7.09 MB |
+| club-full, graph budget 16 M (for scale) | 16 M | 410 MB | 8.2 s | 3.78 MB |
+
+On club-full the added peak grows about 14 B per graph cell above a
+~190 MB floor, so a document at the 60 M budget adds about 1.1 GB. On
+the Cloud Run sizing (4 GiB, `deploy-gcp-cloud-run.md`) one derive
+beside the worst recorded print (Club-full, 2.6 GB for the whole
+process) is about 3.7 GB, under the limit;
+the import worker never overlaps the job's own derive, but a lazy derive
+from the route can overlap another import or a print. The V8 heap flag
+does not bound it: the rasters are typed arrays, outside the heap.
+
+**Descriptor.** `course.mapMetadata.terrain` (§4.6) and
+`mapImport.review.terrain` (§6.8) read the row only — neither waits for
+a derive:
+
+| `state` | When | `url` | `decided` / `report` |
+|---|---|---|---|
+| `ready` | a row with bytes | the route, `?v=` current | `report.share.decided` / the report |
+| `none` | a row without bytes: no contours | null | null |
+| `over-cap` | no row, the estimate is over the cap | null | null |
+| `pending` | no row otherwise: not derived yet, deriving, or a failed derive | the route (fetching it derives) | null |
+
+`mapMetadata.terrain` is `{ state, source: "contours", version, url,
+decided }`; it is null when the event has no pin. The review's carries
+the whole report and the field's `width`, `height` and `cellMm`
+instead of `decided`. The 3D gate (`decided` ≥ 0.8, answer 7) is the
+viewer's (H7); the review shows one terrain line (`docs/map-symbols.md`
+§8.7).
+
+**Contract.** Same order as §4.1: validate, authorise, then existence.
+
+| Condition | Status |
+|---|---|
+| `:hash` not 64 hex; `v` absent or not a positive integer | 400 `{error}` |
+| §4.2 predicate fails | 401 anonymous / 403 signed in |
+| no such document | 404 `{error}` |
+| `v` ≠ `TERRAIN_VERSION` | 404 `{error, reason: "version"}` |
+| no contours (a row without bytes) | 404 `{error, reason: "no-contours"}` |
+| over the cap | 404 `{error, reason: "over-cap"}` |
+| the derive failed or timed out (now or in the last 10 minutes) | 503 `{error}` |
+| `If-None-Match` matches the `ETag` | 304 |
+| otherwise | 200, the encoded field; `br` / `gzip` / identity by `Accept-Encoding` (§4.1's negotiation, computed asynchronously off the event loop) |
+
+Headers on 2xx / 304: `Content-Type: application/vnd.oxygen.heightfield`,
+`Cache-Control: private, max-age=31536000, immutable`,
+`ETag: "<hash>/height/contours/<version>"`, `Vary: Accept-Encoding`. No
+`Range`. Authorisation is §4.2 through `requireDocumentAccess`, as for
+the previews, all four clauses and the 60 s positive cache included.
+
+**Not carried.** The field is not in the venue checkout snapshot (§7.2)
+or the per-event dump (§7.3): a box or a restore derives its own on the
+first request (the slice H split).
+
 ## 5. Chunked upload: `/api/map-uploads`
 
 07 §7. Browsers upload map files in slices so a 100 MB OCAD file survives
@@ -585,7 +734,7 @@ kickImportJobs: one loop per instance
   → worker thread: parse → normalise → match → encode (stage + progress written at each boundary,
   → store: storeImportedDocument (§3)                 heartbeat every 10 s while it runs)
   → applyJobResult: pins (§6.4)
-  → derive: thumbnail row (§4.5); a failure is logged, never fails the job
+  → derive: thumbnail row (§4.5), then the height-field row (§4.7); a failure of either is logged, never fails the job
   → done | failed(error)
 ```
 
