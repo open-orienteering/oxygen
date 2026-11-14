@@ -226,6 +226,20 @@ export class TerrainRenderer {
     return mesh;
   }
 
+  /** The same field in another model space (a new document's origin): no upload. */
+  setOrigin(originUm: { x: number; y: number }): TerrainMesh {
+    const m = this.terrain, f = this.field;
+    if (!m || !f) throw new Error("setField first");
+    this.terrain = assembleTerrainMesh(f.header, m, originUm);
+    return this.terrain;
+  }
+
+  /** Drops the field and its textures (the program stays). */
+  clearField(): void {
+    this.deleteTextures();
+    this.terrain = this.field = null;
+  }
+
   /** Draws one frame into `target` (clearing it); nothing when no field is set. */
   draw(frame: TerrainFrame, target: RenderTarget): TerrainDrawStats | null {
     const gl = this.gl, mesh = this.terrain, field = this.field;

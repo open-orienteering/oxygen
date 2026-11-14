@@ -10,6 +10,16 @@ import { loupeView, type RenderTarget } from "../view";
 import { parseTextAtlasPage } from "../text-atlas";
 import type { MeshAtlas } from "../mesh-atlas";
 import { documentBytes, indexOf, request } from "./course-fixture";
+import { vi } from "vitest";
+import type { HeightField } from "@oxygen/shared/src/terrain/field/read.js";
+import { DRAPE_SETTLE_MS } from "../engine";
+import { drapeTextureBytes } from "../renderer";
+import { assembleTerrainMesh, type TerrainMesh } from "../terrain/mesh";
+import type { PreparedField, TerrainFrame } from "../terrain/program";
+import { DRAPE_TEXEL_BYTES } from "../terrain/footprint";
+import { distanceForPxPerUm, type TerrainCamera } from "../terrain/camera";
+import { fieldFromGrid } from "../terrain/synthetic";
+import { viewMatrix as twoDMatrix } from "../view";
 import { CELL_UM as PATCH_CELL_UM, cell, discSym, documentBytes as patchDocumentBytes, index, moveLine1, patchOf } from "./patch-fixture";
 
 const fontsDir = resolve(import.meta.dirname, "../../../../shared/fonts");
@@ -90,6 +100,54 @@ class FakeRenderer {
   }
   get documentBytes() {
     return { arenas: 0, arenasUsed: 0, atlas: 0, text: 0, visibleSet: 0, total: 0 };
+  }
+  // ---- terrain (§5.6 "Engine API") ----
+  /** Every renderer call of a 3D frame, in order. */
+  log: string[] = [];
+  fields: { header: HeightField["header"]; origin: { x: number; y: number }; prepared: unknown }[] = [];
+  drapeRenders: { slot: number; view: ViewRect; opts: DocumentRenderOptions }[] = [];
+  terrainFrames: TerrainFrame[] = [];
+  drapeSizes: ({ w: number; h: number } | undefined)[] = [];
+  private fieldNow: HeightField | null = null;
+  private meshNow: TerrainMesh | null = null;
+  readonly maxTextureSize = 4096;
+  readonly terrain = {
+    setField: (field: HeightField, origin: { x: number; y: number }, prepared?: PreparedField) => {
+      this.fields.push({ header: field.header, origin, prepared });
+      this.fieldNow = field;
+      this.meshNow = assembleTerrainMesh(field.header, prepared!.terrain, origin);
+      return this.meshNow;
+    },
+    setOrigin: (origin: { x: number; y: number }) => {
+      this.meshNow = assembleTerrainMesh(this.fieldNow!.header, this.meshNow!, origin);
+      return this.meshNow;
+    },
+    clearField: () => {
+      this.log.push("clearField");
+      this.fieldNow = this.meshNow = null;
+    },
+  };
+  renderDrape(slot: number, view: ViewRect, opts: DocumentRenderOptions) {
+    this.log.push(`drape${slot}`);
+    this.drapeRenders.push({ slot, view, opts });
+    this.drapeSizes[slot] = { w: view.widthPx, h: view.heightPx };
+    return { drawCalls: 3, tiles: 1, cpuMs: 0 };
+  }
+  drape(slot: number) {
+    return this.drapeSizes[slot] ? ({ slot } as unknown as WebGLTexture) : undefined;
+  }
+  releaseDrapes(from = 0) {
+    this.log.push(`release${from}`);
+    this.drapeSizes.length = Math.min(this.drapeSizes.length, from);
+  }
+  get drapeBytes() {
+    return this.drapeSizes.reduce((n, d) => n + (d ? drapeTextureBytes(d.w, d.h) : 0), 0);
+  }
+  readonly drapeScratchBytes = 0;
+  drawTerrain(frame: TerrainFrame) {
+    this.log.push("mesh");
+    this.terrainFrames.push(frame);
+    return { chunks: 1, culled: 0, triangles: 2, perLevel: [1, 0, 0, 0, 0, 0, 0], draws: 1, matrix: new Float32Array(16), drawCalls: 1, cpuMs: 0 };
   }
 }
 
@@ -820,5 +878,179 @@ describe("MapGlEngine document objects (docs/map-rendering.md §5.5 \"Document o
     await done;
     expect(infos.length).toBe(n + 1);
     expect(engine.editState).toEqual({ selected: [-1], highlighted: 0, issues: [] });
+  });
+});
+
+describe("MapGlEngine terrain (docs/map-rendering.md §5.6 \"Engine API\", \"Settling\")", () => {
+  /** A 2 mm field over the 5 × 5 block of cells, a gentle dome. */
+  const field = () => fieldFromGrid(126, 126, (cx, cy) => 20 - Math.hypot(cx - 63, cy - 63) * 0.2, { cellMm: 2 });
+  const opts = { colour: () => [0, 0, 0] as [number, number, number], background: [1, 1, 1] as [number, number, number] };
+
+  async function withTerrain(budget = 1 << 30) {
+    const h = await loaded(budget);
+    const p = h.engine.setTerrain(field());
+    h.transport.flush();
+    const mesh = (await p)!;
+    const cam = (x: number, y: number, over: Partial<TerrainCamera> = {}, pxPerUm = 0.02): TerrainCamera => {
+      const c: TerrainCamera = { target: { x: x - h.summary.originX, y: y - h.summary.originY, z: 0 }, distanceUm: 0, bearingDeg: 0, pitchDeg: 0, widthPx: 500, heightPx: 500, ...over };
+      c.distanceUm = distanceForPxPerUm(c, pxPerUm);
+      return c;
+    };
+    return { ...h, mesh, cam };
+  }
+
+  it("prepares the field in the worker and uploads it in the document's model space", async () => {
+    const { renderer, transport, mesh, summary, engine } = await withTerrain();
+    expect(transport.posted.filter((m) => m.type === "terrain")).toHaveLength(1);
+    expect(renderer.fields).toHaveLength(1);
+    expect(renderer.fields[0].origin).toEqual({ x: summary.originX, y: summary.originY });
+    expect(renderer.fields[0].prepared).toMatchObject({ terrain: { chunksX: 2 }, normals: expect.any(Int8Array) });
+    expect(engine.terrainMesh).toBe(mesh);
+    // the caller's field keeps its heights (the request sent a copy)
+    expect(engine.terrainField!.z.length).toBe(126 * 126);
+  });
+
+  it("renders the map into the drape first, then the mesh through the layer's matrix", async () => {
+    const { engine, renderer, cam, summary } = await withTerrain();
+    const st = engine.renderTerrain({ camera: cam(125_000, 125_000, { bearingDeg: 30 }), exaggeration: 2 }, opts);
+    expect(renderer.log.filter((l) => !l.startsWith("release"))).toEqual(["drape0", "mesh"]);
+    expect(st.drape).toMatchObject({ layers: 1, drawCalls: 3 });
+    const v = renderer.drapeRenders[0].view;
+    // the 2D view at pitch 0 (the hand-over), turned by the bearing
+    expect(v.pxPerUm).toBeCloseTo(0.02, 9);
+    expect(v.rotationDeg).toBe(30);
+    expect(v.centreX).toBeCloseTo(125_000, 3);
+    const f = renderer.terrainFrames[0];
+    expect(f.exaggeration).toBe(2);
+    expect(f.background).toEqual([1, 1, 1]);
+    expect(f.drapes).toHaveLength(1);
+    expect([...f.drapes[0].matrix]).toEqual([...twoDMatrix(v, summary.originX, summary.originY)]);
+  });
+
+  it("draws only the mesh while the camera moves and re-renders the drape once it settled", async () => {
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "performance"] });
+    try {
+      const { engine, renderer, cam } = await withTerrain();
+      let changes = 0;
+      engine.onChange = () => changes++;
+      engine.renderTerrain({ camera: cam(125_000, 125_000), exaggeration: 1 }, opts);
+      for (let i = 1; i <= 5; i++) {
+        vi.advanceTimersByTime(16);
+        engine.renderTerrain({ camera: cam(125_000 + i * 2000, 125_000, { pitchDeg: i * 5 }), exaggeration: 1 }, opts);
+      }
+      expect(renderer.drapeRenders).toHaveLength(1);
+      expect(renderer.terrainFrames).toHaveLength(6);
+      expect(changes).toBe(0);
+      vi.advanceTimersByTime(DRAPE_SETTLE_MS);
+      expect(changes).toBe(1); // the settle timer asks the host for a frame
+      engine.renderTerrain({ camera: cam(135_000, 125_000, { pitchDeg: 25 }), exaggeration: 1 }, opts);
+      expect(renderer.drapeRenders).toHaveLength(2);
+      // a tilted camera's footprint reaches further ahead than behind its target
+      const v = renderer.drapeRenders[1].view;
+      expect(v.centreY).toBeGreaterThan(125_000);
+      // the same settled camera does not render again
+      vi.advanceTimersByTime(DRAPE_SETTLE_MS);
+      engine.renderTerrain({ camera: cam(135_000, 125_000, { pitchDeg: 25 }), exaggeration: 1 }, opts);
+      expect(renderer.drapeRenders).toHaveLength(2);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("re-renders the drape at once when the content changes, over the layers it has", async () => {
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "performance"] });
+    try {
+      const { engine, renderer, cam } = await withTerrain();
+      engine.renderTerrain({ camera: cam(125_000, 125_000), exaggeration: 1 }, opts);
+      vi.advanceTimersByTime(16);
+      engine.renderTerrain({ camera: cam(140_000, 125_000), exaggeration: 1 }, opts);
+      expect(renderer.drapeRenders).toHaveLength(1);
+      engine.setHidden(new Set([3]));
+      vi.advanceTimersByTime(16);
+      engine.renderTerrain({ camera: cam(141_000, 125_000), exaggeration: 1 }, opts);
+      expect(renderer.drapeRenders).toHaveLength(2);
+      expect(renderer.drapeRenders[1].view).toEqual(renderer.drapeRenders[0].view);
+      // so does the host's invalidation (e.g. other colours)
+      engine.invalidateDrape();
+      engine.renderTerrain({ camera: cam(141_000, 125_000), exaggeration: 1 }, opts);
+      expect(renderer.drapeRenders).toHaveLength(3);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("requests and draws the drape layers' cells, gated per layer", async () => {
+    const { engine, renderer, transport, cam } = await withTerrain();
+    engine.renderTerrain({ camera: cam(125_000, 125_000), exaggeration: 1 }, opts);
+    // 500 px at 0.02 px/µm (+ margin) = 27.5 mm about the centre cell; the draw margin adds a ring
+    expect([...prepares(transport).at(-1)!.ids].sort((a, b) => a - b)).toHaveLength(9);
+    transport.flush();
+    let st = engine.stats();
+    expect(st.drawnDetail).toBe(9);
+    // the arrivals re-render the drape (coalesced, as 2D rebuilds)
+    engine.renderTerrain({ camera: cam(125_000, 125_000), exaggeration: 1 }, opts);
+    expect(renderer.drapeRenders.length).toBeGreaterThanOrEqual(2);
+    const vs = renderer.visibleSets.at(-1)!;
+    expect(vs.stroke.draws.length).toBeGreaterThan(0);
+    // far out: below the zoom gate, base parts only and the queue cancelled
+    const n = prepares(transport).length;
+    engine.setTerrain(field());
+    transport.flush();
+    await Promise.resolve();
+    engine.renderTerrain({ camera: cam(125_000, 125_000, {}, 1e-4), exaggeration: 1 }, opts);
+    st = engine.stats();
+    expect(st.gated).toBe(true);
+    expect(prepares(transport).length).toBe(n + 1);
+    expect(prepares(transport).at(-1)!.ids).toEqual([]);
+  });
+
+  it("counts the field and the drape in the budget, the drape at most a third", async () => {
+    const budget = 2 * 1024 * 1024;
+    const { engine, renderer, cam } = await withTerrain(budget);
+    engine.renderTerrain({ camera: cam(125_000, 125_000, { widthPx: 1600, heightPx: 1200 }), exaggeration: 1 }, opts);
+    const t = engine.stats().terrain!;
+    expect(t.fieldBytes).toBe(126 * 126 * 5);
+    expect(t.drapeBytes).toBe(renderer.drapeBytes);
+    expect(t.drapeBytes).toBeGreaterThan(0);
+    const texels = t.layers.reduce((n, l) => n + l.widthPx * l.heightPx, 0);
+    expect(texels).toBeLessThanOrEqual(budget / 3 / DRAPE_TEXEL_BYTES);
+    expect(t.layers[0].ratio).toBeLessThan(1); // the cap bit: coarser than the screen
+    expect(engine.stats().residentBytes).toBeGreaterThanOrEqual(t.fieldBytes + t.drapeBytes);
+  });
+
+  it("drops the field and the drape with setTerrain(null); a 2D render draws the 2D view again", async () => {
+    const { engine, renderer, cam } = await withTerrain();
+    engine.renderTerrain({ camera: cam(125_000, 125_000), exaggeration: 1 }, opts);
+    await engine.setTerrain(null);
+    expect(renderer.log).toContain("clearField");
+    expect(renderer.drapeBytes).toBe(0);
+    expect(engine.stats().terrain).toBeUndefined();
+    expect(engine.renderTerrain({ camera: cam(125_000, 125_000), exaggeration: 1 }, opts).mesh).toBeNull();
+    engine.setView(cellView(0, 0));
+    engine.render(opts);
+    expect(engine.stats().drawnCells).toBe(4); // the corner cell and its ring, clamped to the grid
+  });
+
+  it("returns to the 2D view's cells on a 2D render after a 3D frame", async () => {
+    const { engine, cam, transport, renderer } = await withTerrain();
+    engine.setView(cellView(4, 4));
+    transport.flush();
+    engine.renderTerrain({ camera: cam(25_000, 25_000), exaggeration: 1 }, opts);
+    expect(engine.stats().drawnCells).toBe(4);
+    const before = renderer.visibleSets.length;
+    engine.render(opts);
+    // the 2D view's cells around (4, 4) again, rebuilt, their detail resident from the 2D request
+    expect(engine.stats().drawnCells).toBe(4);
+    expect(engine.stats().drawnDetail).toBe(4);
+    expect(renderer.visibleSets.length).toBe(before + 1);
+  });
+
+  it("rejects a setTerrain overtaken by a later one", async () => {
+    const { engine, transport } = await loaded(1 << 30);
+    const a = engine.setTerrain(field());
+    const b = engine.setTerrain(field());
+    transport.flush();
+    await expect(a).rejects.toThrow(/superseded/);
+    await expect(b).resolves.toBeTruthy();
   });
 });
