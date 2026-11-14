@@ -1,12 +1,12 @@
 import { describe, expect, it } from "vitest";
-import { descriptionSheetsUrl, exportEntries } from "../export-menu";
+import { descriptionSheetsUrl, exportEntries, offlineMapQueries } from "../export-menu";
 
 const base = { nameId: "my event", courseSeq: 3, classSeq: null, sheetSeq: null, canEdit: true };
 
 describe("exportEntries (course-layout.md §7)", () => {
   it("lists the phase-1 entries on the existing routes", () => {
     const e = exportEntries(base);
-    expect(e.map((x) => x.id)).toEqual(["sheet", "course", "class", "all", "allControls", "setter", "descriptions", "iofxml", "ppen"]);
+    expect(e.map((x) => x.id)).toEqual(["sheet", "course", "class", "all", "allControls", "setter", "offline", "descriptions", "iofxml", "ppen"]);
     const by = Object.fromEntries(e.map((x) => [x.id, x]));
     expect(by.course.url).toBe("/api/maps/my%20event/maps.pdf?courses=3");
     expect(by.all.url).toBe("/api/maps/my%20event/maps.pdf");
@@ -64,7 +64,7 @@ describe("exportEntries of a course with variants (F8; course-layout.md §7)", (
 
   it("this course names its variants and prints them all; this variant, all variations and one map per runner follow it", () => {
     const e = exportEntries({ ...base, variants, variantKey: "BA" });
-    expect(e.map((x) => x.id)).toEqual(["sheet", "course", "variant", "allVariations", "courseRunners", "class", "all", "allControls", "setter", "descriptions", "iofxml", "ppen"]);
+    expect(e.map((x) => x.id)).toEqual(["sheet", "course", "variant", "allVariations", "courseRunners", "class", "all", "allControls", "setter", "offline", "descriptions", "iofxml", "ppen"]);
     const by = Object.fromEntries(e.map((x) => [x.id, x]));
     expect(by.course).toMatchObject({ url: "/api/maps/my%20event/maps.pdf?courses=3", labelValues: { count: 2 } });
     expect(by.variant).toMatchObject({ url: "/api/maps/my%20event/maps.pdf?variants=3%3ABA", ensure: { courseId: 3 }, disabled: false, labelValues: { key: "BA", count: 11 } });
@@ -95,5 +95,45 @@ describe("descriptionSheetsUrl", () => {
     expect(descriptionSheetsUrl("my event", { classSeqs: [4, 2], copies: "count", cell: 6 })).toBe("/api/maps/my%20event/descriptions.pdf?classes=4%2C2&copies=count&cell=6");
     expect(descriptionSheetsUrl("e", { classSeqs: [1], copies: "fill", cell: 5 })).toBe("/api/maps/e/descriptions.pdf?classes=1&copies=fill&cell=5");
     expect(descriptionSheetsUrl("e", { classSeqs: [1], copies: 12, cell: 7, gap: 3 })).toBe("/api/maps/e/descriptions.pdf?classes=1&copies=12&cell=7&gap=3");
+  });
+});
+
+describe("offlineMapQueries (course-print.md §8.6 \"Offline\", G17)", () => {
+  it("the offline entry is an action, not a download", () => {
+    const by = Object.fromEntries(exportEntries(base).map((x) => [x.id, x]));
+    expect(by.offline).toMatchObject({ action: "offline", ensure: null, disabled: false });
+  });
+
+  it("every map export the menu and the Courses page can issue, normalised and once", () => {
+    const q = offlineMapQueries({
+      nameId: "my event",
+      courses: [{ seq: 1, parentSeq: null }, { seq: 2, parentSeq: null }, { seq: 5, parentSeq: 2 }],
+      variants: new Map([[2, [{ key: "A", runnerCount: 3 }, { key: "B", runnerCount: 0 }]]]),
+      classes: [{ seq: 9, courseSeq: 1 }, { seq: 10, courseSeq: null }],
+      sheetSeqs: [4, 6],
+    });
+    expect(q).toEqual([
+      "",
+      "?allControls=1",
+      "?setter=1",
+      "?courses=1",
+      "?courses=2",
+      "?allVariations=2",
+      "?copies=runners&courses=2",
+      `?${new URLSearchParams({ variants: "2:A" })}`,
+      `?${new URLSearchParams({ variants: "2:B" })}`,
+      "?classes=9",
+      "?classes=10",
+      "?maps=4",
+      "?maps=6",
+    ]);
+    // A variant course prints through its root (no ?courses=5); no descriptions, IOF XML or Purple Pen.
+    expect(q.some((x) => x.includes("courses=5") || x.includes("format="))).toBe(false);
+  });
+
+  it("a root without assigned runners has no per-runner export", () => {
+    const q = offlineMapQueries({ nameId: "e", courses: [{ seq: 2, parentSeq: null }], variants: new Map([[2, [{ key: "A", runnerCount: 0 }]]]), classes: [], sheetSeqs: [] });
+    expect(q).not.toContain("?copies=runners&courses=2");
+    expect(q).toContain("?allVariations=2");
   });
 });

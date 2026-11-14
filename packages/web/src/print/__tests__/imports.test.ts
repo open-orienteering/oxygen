@@ -34,7 +34,7 @@ describe("the print module's imports", () => {
 });
 
 describe("mapsPdfTarget", () => {
-  it("is [nameId, query] for every map entry of Export ▾ and null for descriptions, IOF XML and Purple Pen", () => {
+  it("is [nameId, query] for every map entry of Export ▾ and null for the offline action, descriptions, IOF XML and Purple Pen", () => {
     const entries = exportEntries({ nameId: "ev 1", courseSeq: 3, classSeq: 4, sheetSeq: 5, canEdit: true, variants: [{ key: "AB", runnerCount: 2 }], variantKey: "AB" });
     const targets = Object.fromEntries(entries.map((e) => [e.id, mapsPdfTarget(e.url)]));
     expect(targets).toEqual({
@@ -47,6 +47,7 @@ describe("mapsPdfTarget", () => {
       all: ["ev 1", ""],
       allControls: ["ev 1", "?allControls=1"],
       setter: ["ev 1", "?setter=1"],
+      offline: null,
       descriptions: null,
       iofxml: null,
       ppen: null,
