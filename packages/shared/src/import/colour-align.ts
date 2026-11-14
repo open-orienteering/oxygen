@@ -233,7 +233,7 @@ export function alignColourStack(input: AlignmentInput): AlignmentResult {
   const lowerRank = rank.get("purple-lower")!;
   const sideOf = (s: Slot): Side => {
     if (s.kind === "palette") return paletteSide(s.id, rank, lowerRank);
-    if (!counts(s.index)) return null;
+    if (!counts(s.index) || isCandidate(s.index)) return null; // a purple candidate takes no side, whatever its name says
     const id = sidedId(s.index);
     if (id) return paletteSide(id, rank, lowerRank);
     return nameKind(colours[s.index].name) === "area" ? "below-area" : null;
@@ -271,7 +271,10 @@ export function alignColourStack(input: AlignmentInput): AlignmentResult {
     else if (id === "purple-lower") {
       // Lower purple's ruled place is the C14 gap; a candidate is reused only when its own gap scores the same.
       const sides = stack.map(sideOf);
-      const { at, keys } = lowerPurpleGaps(sides);
+      const gaps = lowerPurpleGaps(sides);
+      const { keys } = gaps;
+      // Never above a reused upper purple (a table with nothing that steers lower purple puts it on top).
+      const at = upperReused === undefined ? gaps.at : Math.min(gaps.at, stack.findIndex((s) => s.kind === "source" && s.index === upperReused));
       const same = (g: number) => keys[g].every((v, j) => v === keys[at][j]);
       for (const i of candidates.lower) if (same(stack.findIndex((s) => s.kind === "source" && s.index === i))) qualified.lower.add(i);
       const reused = pick([...qualified.lower], "lower");

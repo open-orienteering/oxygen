@@ -1261,6 +1261,10 @@ first: otherwise it would be the area green. "Motionsspår" and
    - otherwise a row is **inserted** at the ruled position (lower: the
      ruled gap; upper: on top), with `purpleRole` and the map's purple
      CMYK (C9 below);
+   - a candidate takes no side in any of this, whatever its name says (a
+     "Violett - Ytobjekt" is not an area colour);
+   - lower purple is never placed above a reused upper purple (on a table
+     with no used colour that steers it, it goes directly below it);
    - every other candidate is **displaced**: it keeps its index, `id`,
      `sourceNumber`, name and CMYK as an ordinary source colour — no
      `purpleRole`, no `paletteIds` — so the map objects drawn in it are
@@ -1303,12 +1307,12 @@ first: otherwise it would be the area green. "Motionsspår" and
    after both purples, so nothing placed so far moves: every stack
    carries `OVERLAY_STACK_IDS` — `green100-area`, `white-skio`,
    `orange-skio`, `green-skio` — once, whether or not a match needs them.
-   Where the source lacks one:
+   Every rule below is measured from the *placed* purple rows (C15): a
+   displaced candidate neither anchors nor stops them. Where the source
+   lacks one:
    - `green100-area` aliases or is inserted as above (steps 3–4), but
      never above lower purple (a stray area colour on top of a table does
      not take it there);
-   Every rule here is measured from the *placed* purple rows (C15): a
-   displaced candidate neither anchors nor stops them.
    - `white-skio` goes **directly below lower purple** — the ISSkiOM
      text's "white (under lower purple)", which the user chose over the
      301.1 drawing (2026-11-13, §12.3);

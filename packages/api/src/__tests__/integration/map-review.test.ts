@@ -115,6 +115,8 @@ describe("mapImport.review", () => {
     expect(total).toBeLessThanOrEqual(header.objects.count);
     expect(total).toBeGreaterThan(0);
     expect(r.stack.colours).toEqual(header.colours);
+    // The report's colour-stack summary, incl. the source purples the course purples displaced (C15; none on this fixture).
+    expect(r.stack.alignment).toMatchObject({ source: expect.any(Number), purplesDisplaced: [] });
     expect(r.report).toMatchObject({ matching: { library: { id: "ISOM2017-2" } } });
   }, 30_000);
 

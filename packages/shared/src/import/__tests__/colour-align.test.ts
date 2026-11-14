@@ -476,6 +476,47 @@ describe("course purples placed by rule (C15; docs/map-symbols.md §9.2 step 4)"
     expect(r.index.get("orange-skio")!).toBeGreaterThan(sourceAt(r, 6));
   });
 
+  describe("edge cases (spec review)", () => {
+    const run = (stack: DocumentColour[], usage?: number[]) => alignColourStack({ colours: stack, infos: identifySourceColours(stack, "ISOM2017-2", "iof2024"), spec: "ISOM2017-2", edition: "iof2024", needed: new Set(), usage });
+    const gul = c(1, "Gul", [0, 27, 79, 0]), brun = c(3, "Brun 100%", [25, 75, 100, 0]), svart = c(4, "Svart", [0, 0, 0, 100]);
+
+    it("a purple candidate whose name says area takes no side: neither steers lower purple nor is reported as an area", () => {
+      const reused = run([gul, brun, svart, c(5, "Övre violett - Ytobjekt", [35, 85, 0, 0])], [5, 5, 5, 1]);
+      expect(reused.colours[reused.index.get("purple-upper")!].sourceNumber).toBe(5);
+      expect(reused.areasAboveLowerPurple).toEqual([]);
+      const displaced = run([c(0, "Undre violett - Ytobjekt", [35, 85, 0, 0]), gul, brun, svart, c(5, "Övre violett", [35, 85, 0, 0])], [1, 5, 5, 5, 1]);
+      expect(displaced.purplesDisplaced).toEqual([{ name: "Undre violett - Ytobjekt", sourceNumber: 0, role: "lower", why: "position" }]);
+      expect(displaced.areasAboveLowerPurple).toEqual([]);
+      expect(sourceNear(displaced, displaced.index.get("purple-lower")!, -1)?.sourceNumber).toBe(1);
+    });
+
+    it("an unused candidate at the ruled place is reused: the test is its position", () => {
+      const r = run([gul, c(2, "Undre violett", [35, 85, 0, 0]), brun, svart, c(5, "Övre violett", [35, 85, 0, 0])], [5, 0, 5, 5, 0]);
+      expect(r.purplesDisplaced).toEqual([]);
+      expect(r.colours[r.index.get("purple-lower")!].sourceNumber).toBe(2);
+      expect(r.colours[r.index.get("purple-upper")!].sourceNumber).toBe(5);
+    });
+
+    it("several candidates at the ruled place: the most used, ties to the highest for upper and the lowest for lower; the rest are duplicates", () => {
+      const a = c(5, "Övre violett", [35, 85, 0, 0]), b = c(6, "Övre violett", [35, 85, 0, 0]);
+      const tie = run([gul, brun, svart, a, b], [5, 5, 5, 2, 2]);
+      expect(tie.colours[tie.index.get("purple-upper")!].sourceNumber).toBe(6);
+      expect(tie.purplesDisplaced).toEqual([{ name: "Övre violett", sourceNumber: 5, role: "upper", why: "duplicate" }]);
+      const used = run([gul, brun, svart, a, b], [5, 5, 5, 3, 2]);
+      expect(used.colours[used.index.get("purple-upper")!].sourceNumber).toBe(5);
+      expect(used.purplesDisplaced).toEqual([{ name: "Övre violett", sourceNumber: 6, role: "upper", why: "duplicate" }]);
+      const lowers = run([gul, c(10, "Undre violett", [35, 85, 0, 0]), c(11, "Undre violett", [35, 85, 0, 0]), brun, svart, a], [5, 2, 2, 5, 5, 1]);
+      expect(lowers.colours[lowers.index.get("purple-lower")!].sourceNumber).toBe(10);
+      expect(lowers.purplesDisplaced).toEqual([{ name: "Undre violett", sourceNumber: 11, role: "lower", why: "duplicate" }]);
+    });
+
+    it("lower purple never lands above a reused upper purple, even on a table with nothing that steers it", () => {
+      const r = run([c(1, "Övre violett", [35, 85, 0, 0]), c(2, "T-bana", [90, 32, 0, 0])], [4, 0]);
+      expect(r.colours[r.index.get("purple-upper")!].sourceNumber).toBe(1);
+      expect(r.index.get("purple-lower")!).toBeLessThan(r.index.get("purple-upper")!);
+    });
+  });
+
   it("an inserted pair takes the map's most used purple ink, not the palette's", () => {
     const stack = [c(1, "Övre violett", [10, 90, 10, 0]), c(2, "Gul", [0, 27, 79, 0]), c(3, "Svart", [0, 0, 0, 100]), c(4, "Gul över platta", [0, 27, 79, 0])];
     const r = alignColourStack({ colours: stack, infos: identifySourceColours(stack, "ISOM2017-2", "iof2024"), spec: "ISOM2017-2", edition: "iof2024", needed: new Set(), usage: [5, 10, 10, 1] });
