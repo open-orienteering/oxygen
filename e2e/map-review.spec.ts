@@ -194,6 +194,9 @@ test.describe("map import review", () => {
     await expectLoaded(source);
     // The matcher's output is what the event uses: nothing to finalise.
     await expect(page.getByTestId("review-finalise")).toHaveCount(0);
+    // test.ocd has no contours: the terrain line says so (map-storage.md §4.7).
+    await expect(page.getByTestId("review-terrain")).toHaveAttribute("data-terrain-state", "none");
+    await expect(page.getByTestId("review-terrain")).toContainText(/no contours/);
     await page.getByTestId("review-back").click();
     await expect(page).toHaveURL(new RegExp(`/${nameId}/course-editor$`));
   });

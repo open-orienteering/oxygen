@@ -39,14 +39,15 @@ on `map_files` and `club_map_versions` for the GC and the source route),
 `20261019150000_club_symbol_decisions` and, dropping the legacy
 pipeline's storage, `20261107120000_vector_map_pipeline_drops` (E5,
 v0.6.1; `docs/migrations/2026-vector-map-pipeline.md`), and
-`20261113120000_map_patches` (row G3) and `20261114120000_map_gps_tracks`
-(row G24). All in schema `oxygen`.
+`20261113120000_map_patches` (row G3), `20261114120000_map_gps_tracks`
+(row G24) and `20261114130000_map_heightfields` (row H4). All in schema `oxygen`.
 
 | Table | Key | Columns | Notes |
 |---|---|---|---|
 | `map_sources` | `file_hash CHAR(64)` | `kind` (`ocad`/`omap`), `bytes BYTEA`, `size_bytes`, `file_name`, `uploaded_by → users SET NULL`, `created_at` | the uploaded file; `bytes` is `STORAGE EXTERNAL` |
 | `map_documents` | `hash CHAR(64)` | `bytes BYTEA`, `size_bytes`, `format_version`, `importer_version`, `library_version`, `source_hash → map_sources RESTRICT`, `header JSONB`, `report JSONB`, `created_at`, `last_referenced_at` | the encoded document; `header` is the summary (§3), `report` the import report |
 | `map_previews` | `(document_hash, kind, key)` | `png BYTEA`, `created_at` | `document_hash → map_documents CASCADE`; thumbnails and symbol swatches, pure cache (§4.5) |
+| `map_heightfields` | `(document_hash, source, version)` | `bytes BYTEA` (`STORAGE EXTERNAL`), `size_bytes`, `header JSONB`, `report JSONB` — null together for a document without contours — `created_at` | `document_hash → map_documents CASCADE`; the terrain a document's contours imply and its report, pure cache (§4.7) |
 | `club_maps` | `id UUID` | `name`, `colour_profile`, `colour_overrides JSONB`, `north_lines_below`, `rotation_correction`, `created_by`, timestamps | a club's map as a series (06 §8) |
 | `club_map_versions` | `id UUID` | `club_map_id → club_maps CASCADE`, `seq`, `label`, `source_hash RESTRICT`, `document_hash RESTRICT`, `uploaded_by`, `uploaded_at`; `UNIQUE(club_map_id, seq)` | one edition; `uploadedAt` ordering, `seq` for display |
 | `map_files` (+) | — | `source_hash RESTRICT`, `document_hash RESTRICT`, `club_map_version_id → club_map_versions SET NULL` | the event's pins. `document_hash` is null until the import pins (or when it failed); `source_hash` is set on every live event's row (the E5 migration's guard) and null only on a soft-deleted event's row that never had a source — a file name without bytes. Since E5 the row holds no bytes (`file_data`, `file_hash`, `render_key` and the colour-stack columns are dropped) |
@@ -67,7 +68,7 @@ the bytes (compact binary that gains little) so `substring(bytes FROM … FOR �
 reads only the chunks a range request needs instead of inflating the row.
 
 Prisma models: `MapSource`, `MapDocument`, `MapPreview`, `ClubMap`,
-`ClubMapVersion`, `MapUpload`, `MapUploadChunk`, `MapImportJob`, `ClubSymbolDecision`, `MapPatch`;
+`ClubMapVersion`, `MapUpload`, `MapUploadChunk`, `MapImportJob`, `ClubSymbolDecision`, `MapPatch`, `MapHeightfield`;
 `MapFile.sourceHash / documentHash / clubMapVersionId`; `ClubMapFile.clubMapId`.
 
 ## 3. Store stage (import stage 9)
@@ -450,8 +451,9 @@ the row's quick-access columns as stored (the pin writes them, §6.4 —
 no lazy OCAD backfill), `rotationCorrection`, `uploadedAt`,
 `documentHash` (null until the pin: the viewer's "no document" case),
 `clubMapVersionId`, `patchVersion` (the token of the patch delivered
-with that document, `"0"` when none is, `docs/map-patches.md` §3.3) and
-the north fields above. The legacy raster's
+with that document, `"0"` when none is, `docs/map-patches.md` §3.3),
+`terrain` (the pinned document's height field, §4.7 "Descriptor"; null
+until the pin) and the north fields above. The legacy raster's
 fields — `renderKey` and the colour stack's `colorProfile`,
 `colorOverrides`, `northLinesBelow`, `resolvedProfile`, `resolvedBy` —
 went with the raster in E4a (their last reader, `MapViewer`'s
@@ -493,6 +495,158 @@ document's rule, not a reader difference. The E2E fixture runs in CI;
 the local corpus (`.local/corpus`, five club / sprint maps up to 37 MB,
 never committed; `OXYGEN_CORPUS_DIR` overrides) runs when present — all
 five equal on 2026-11-05.
+
+### 4.7 Height field
+
+Research 10 §4, 07 §6.1; row H4. The terrain a document's contours imply
+(`docs/map-terrain.md` §1–5): derived from the document alone, stored
+as a row beside it, served immutably by hash like the previews (§4.5).
+`packages/api/src/map-store/heightfield.ts` (rows, the derive),
+`heightfield-worker.ts` (the worker body) and `heightfield-routes.ts`
+(the route).
+
+```
+GET /api/map-documents/:hash/height.bin?v=<TERRAIN_VERSION>     the OXHF field (map-terrain §5.1)
+```
+
+**Decided with the user (2026-11-14).**
+
+1. **The terrain version is in the URL** (`?v=`), so `immutable` names
+   one content: a `TERRAIN_VERSION` bump changes the URL, and a request
+   for another version than the current one is 404 — the library
+   route's precedent (§4.5). A DEM-based source (H10) adds its own query
+   parameter; `contours` is the only source today.
+2. **The terrain report lives on the height-field row**, not in the
+   document row (`map_documents` is append-only, §1, and the report
+   changes with `TERRAIN_VERSION`). A document without contours gets a
+   row without bytes, so it is not re-derived on every request. The
+   report reaches the event's descriptor (`course.mapMetadata.terrain`)
+   and the import review (`mapImport.review.terrain`).
+3. **The cell cap is the graph's own 60 M-cell budget and refuses
+   nothing by default.** The stored field is `deriveTerrain(doc)` with
+   the defaults (map-terrain §5.5), so a cap cannot coarsen it, only
+   refuse the document; the graph raster already grows its cell to stay
+   under 60 M (map-terrain §2.4), which bounds the derive's memory
+   (measured below). `MAP_HEIGHTFIELD_MAX_CELLS` lowers it per instance
+   (a small venue box); a document whose estimate is over it is
+   `over-cap`.
+
+**Rows.** `map_heightfields`, migration `20261114130000_map_heightfields`:
+
+| Column | |
+|---|---|
+| `document_hash` | `→ map_documents CASCADE`; part of the key |
+| `source` | `TEXT`, part of the key: `contours` (this section); free text so a DEM-based source (H10) needs no migration |
+| `version` | `INT`, part of the key: `TERRAIN_VERSION` (map-terrain §5.5); the container version stays inside the bytes |
+| `bytes` | `BYTEA STORAGE EXTERNAL`, nullable: `encodeHeightField(field)`, uncompressed; null when the document has no contours |
+| `size_bytes` | `INT`, nullable with `bytes` |
+| `header` | `JSONB`, nullable with `bytes`: the field's `HeightFieldHeader` (map-terrain §5.1) |
+| `report` | `JSONB`, nullable with `bytes`: the `TerrainReport` (map-terrain §3.6), camelCase as stored |
+| `created_at` | |
+
+A `CHECK` holds `bytes`, `size_bytes`, `header` and `report` null
+together. A row is written once with `createMany … skipDuplicates` and
+never updated, like the previews; it cascades with its document and is
+cache — deleting it only costs a derive. Reading it is not a reference
+(no `last_referenced_at` bump). The `contours` row is always
+`deriveTerrain(doc)` with no options (map-terrain §5.5), so the key names
+one field and two instances deriving the same key write the same bytes.
+
+| Writer | When |
+|---|---|
+| import stage 10 (`derive`, §6.1) | after the thumbnail, in a worker run and in the dedup short-cut of `startImportJob`; a failure is logged and never fails the job |
+| the route | on the first request that finds no row (documents stored before H4, a failed or skipped derive) |
+
+**The derive.** `getOrDeriveHeightfield(db, hash)`: the row if there is
+one; otherwise the cap check, then the document's bytes into a
+`worker_threads` worker of its own (`heightfield-worker.ts`, launched
+through `workerBootstrap` like the import and print workers, §6.3):
+decode, `deriveTerrain(doc)`, `encodeHeightField`; the encoded bytes,
+header and report come back and the worker is terminated. Not in the
+import worker: the dedup short-cut and the route have no import worker,
+and the import's and the derive's peaks never stack inside a job (the
+import worker is gone before stage 10). One derive runs at a time per
+instance; concurrent requests for one key share one derive; a derive
+over 240 s (under Cloud Run's 300 s request timeout) is terminated and
+counts as failed. The 240 s bound is the worker's: a request queued
+behind another derive waits for it first, so on an instance deriving
+two large maps at once a lazy request can outlast a 300 s proxy timeout
+(the client retries; the first derive's row then serves it). A failure writes nothing and is remembered in-process
+for 10 minutes, so a document whose derive fails is not re-derived on
+every request.
+
+**The cap check** reads the stored header summary (§3), no blob: the
+graph raster covers the contours' box plus 2 mm on each side at 0.1 mm
+(map-terrain §2.4), so `(w + 4 mm) · (h + 4 mm) / 0.01 mm²` over
+`header.bounds` is an upper bound, clamped to the 60 M budget. Over
+`MAP_HEIGHTFIELD_MAX_CELLS` (default 60 M, so never) is `over-cap`,
+logged, nothing written. A summary without bounds is not refused.
+
+**Memory, measured.** A `.local/` script (not committed: the corpus is
+real club maps) runs `deriveTerrain` on each corpus map's decoded
+document, one map per process, and reads the process's peak RSS above
+the decoded document. 2026-11-14, 16-core machine:
+
+| Map | graph cells | added peak | time | field |
+|---|---|---|---|---|
+| crop-a | 1.4 M | 63 MB | 0.5 s | 0.76 MB |
+| crop-b | 1.1 M | 51 MB | 0.4 s | 0.60 MB |
+| sprint | 11.8 M | 225 MB | 2.2 s | 6.25 MB |
+| club-2026 | 13.9 M | 331 MB | 5.6 s | 7.38 MB |
+| club-full | 46.4 M | 840 MB | 19.1 s | 6.16 MB |
+| club-full, graph budget 30 M (for scale) | 30 M | 501 MB | 12.1 s | 7.09 MB |
+| club-full, graph budget 16 M (for scale) | 16 M | 410 MB | 8.2 s | 3.78 MB |
+
+On club-full the added peak grows about 14 B per graph cell above a
+~190 MB floor, so a document at the 60 M budget adds about 1.1 GB. On
+the Cloud Run sizing (4 GiB, `deploy-gcp-cloud-run.md`) one derive
+beside the worst recorded print (Club-full, 2.6 GB for the whole
+process) is about 3.7 GB, under the limit;
+the import worker never overlaps the job's own derive, but a lazy derive
+from the route can overlap another import or a print. The V8 heap flag
+does not bound it: the rasters are typed arrays, outside the heap.
+
+**Descriptor.** `course.mapMetadata.terrain` (§4.6) and
+`mapImport.review.terrain` (§6.8) read the row only — neither waits for
+a derive:
+
+| `state` | When | `url` | `decided` / `report` |
+|---|---|---|---|
+| `ready` | a row with bytes | the route, `?v=` current | `report.share.decided` / the report |
+| `none` | a row without bytes: no contours | null | null |
+| `over-cap` | no row, the estimate is over the cap | null | null |
+| `pending` | no row otherwise: not derived yet, deriving, or a failed derive | the route (fetching it derives) | null |
+
+`mapMetadata.terrain` is `{ state, source: "contours", version, url,
+decided }`; it is null when the event has no pin. The review's carries
+the whole report and the field's `width`, `height` and `cellMm`
+instead of `decided`. The 3D gate (`decided` ≥ 0.8, answer 7) is the
+viewer's (H7); the review shows one terrain line (`docs/map-symbols.md`
+§8.7).
+
+**Contract.** Same order as §4.1: validate, authorise, then existence.
+
+| Condition | Status |
+|---|---|
+| `:hash` not 64 hex; `v` absent or not a positive integer | 400 `{error}` |
+| §4.2 predicate fails | 401 anonymous / 403 signed in |
+| no such document | 404 `{error}` |
+| `v` ≠ `TERRAIN_VERSION` | 404 `{error, reason: "version"}` |
+| no contours (a row without bytes) | 404 `{error, reason: "no-contours"}` |
+| over the cap | 404 `{error, reason: "over-cap"}` |
+| the derive failed or timed out (now or in the last 10 minutes) | 503 `{error}` |
+| `If-None-Match` matches the `ETag` (checked after the version, before the row is read: the ETag names immutable content only a 200 handed out) | 304 |
+| otherwise | 200, the encoded field; `br` / `gzip` / identity by `Accept-Encoding` (§4.1's negotiation, computed asynchronously off the event loop) |
+
+Headers on 2xx / 304: `Content-Type: application/vnd.oxygen.heightfield`,
+`Cache-Control: private, max-age=31536000, immutable`,
+`ETag: "<hash>/height/contours/<version>"`, `Vary: Accept-Encoding`. No
+`Range`. Authorisation is §4.2 through `requireDocumentAccess`, as for
+the previews, all four clauses and the 60 s positive cache included.
+
+**Not carried.** The field is not in the venue checkout snapshot (§7.2)
+or the per-event dump (§7.3): a box or a restore derives its own on the
+first request (the slice H split).
 
 ## 5. Chunked upload: `/api/map-uploads`
 
@@ -575,7 +729,8 @@ startImportJob(db, {sourceHash, eventId? | clubMapId?, startedBy?, holdMs?})
   │
   ├─ a map_documents row exists for (sourceHash, importer ∈ {ocad-12, omap-6}, library *@<current SYMBOL_LIBRARY_VERSION>)
   │   that follows `decisions` (newest first)
-  │     → touchDocument, insert state=done with that document_hash, applyJobResult, derive, return   (06 §8 dedup, no worker)
+  │     → touchDocument, insert state=done with that document_hash, applyJobResult, thumbnail (§4.5), return;
+  │       the height field (§4.7) is started, not awaited                                   (06 §8 dedup, no import worker)
   │
   └─ insert state=queued → kickImportJobs → hold ≤ holdMs for the result → return the row
 
@@ -585,7 +740,7 @@ kickImportJobs: one loop per instance
   → worker thread: parse → normalise → match → encode (stage + progress written at each boundary,
   → store: storeImportedDocument (§3)                 heartbeat every 10 s while it runs)
   → applyJobResult: pins (§6.4)
-  → derive: thumbnail row (§4.5); a failure is logged, never fails the job
+  → derive: thumbnail row (§4.5), then the height-field row (§4.7); a failure of either is logged, never fails the job
   → done | failed(error)
 ```
 
@@ -622,7 +777,14 @@ before pinning it, so a GC run racing the pin sees a fresh
 `last_referenced_at` and skips the row (§8.2).
 
 `stage` ∈ `parse 0.1 → normalise 0.4 → match 0.55 → encode 0.7 → store 0.9 → derive 0.95 → done 1`;
-`progress` is that fixed ladder, not a byte count. Every progress and
+`progress` is that fixed ladder, not a byte count. The `derive` stage
+holds the job until the height field is stored (seconds; club-full
+about 19 s, §4.7), so a large map's upload response may come back
+`running` where it used to be `done`; the heartbeat keeps running. The
+dedup short-cut is not bounded by `holdMs` (it runs inside the request),
+so it does not wait for the height field: for a document stored before
+H4, or one whose derive failed, the derive is started and the request
+returns; the row lands shortly after, or the route derives it. Every progress and
 terminal write is guarded by `claimed_by = INSTANCE_ID`, so an instance
 whose job was re-claimed after a stall cannot overwrite the new owner's
 state. Re-runs are deterministic (`docs/map-import.md` §6): a re-claimed
@@ -657,6 +819,11 @@ loader does not reach `worker_threads` on Node 20 — and from `dist/` it
 imports the `.js` body directly (`worker-bootstrap.ts`, shared with the
 print worker, `course-print.md` §8.2). The worker is terminated as soon as it
 settles.
+
+The height field (§4.7) is derived in a worker of its own,
+`heightfield-worker.ts`, started the same way by `heightfield.ts` for
+stage 10, the dedup short-cut and the route alike — not inside the
+import worker, which has already been terminated when stage 10 runs.
 
 ### 6.4 Pins (`applyJobResult`)
 
@@ -832,7 +999,7 @@ and accepting the defaults is a no-op (06 §5.1) — and the review round
 runs *after* it, on any stored document:
 
 ```
-mapImport.review   { documentHash }               rows + stack + report        (docs/map-import.md §2.2)
+mapImport.review   { documentHash }               rows + stack + report + terrain (docs/map-import.md §2.2; terrain §4.7)
 mapImport.decide   { documentHash, decisions }    club_symbol_decisions writes (packages/api/src/map-store/decisions.ts)
                                                   → startImportJob { sourceHash, startedBy } — no target
                                                   → the reviewed document, stored, unpinned
@@ -1139,7 +1306,8 @@ write the box forwarded itself.
 **Not carried.** `map_files` rows without a `source_hash` (only a
 soft-deleted event's since E5, and a soft-deleted event is not checked
 out; the result still counts them as `skipped` for older nodes);
-`map_previews` (a cache; §4.5 renders on a miss);
+`map_previews` (a cache; §4.5 renders on a miss); `map_heightfields`
+(a cache; the box derives its own on the first request, §4.7);
 `club_maps` / `club_map_versions`; `map_import_jobs`, uploads; the club
 template library (`club_map_templates`; `mapTemplate.listClub` is empty on
 a box) and club graphics no layout row references; the event's GPS tracks
@@ -1301,7 +1469,7 @@ more `\copy` sections, before `map_files` (the blobs in FK order):
 | `club_symbol_decisions` | all (club-level; a restored event's re-match, §6.9, reads them) |
 
 All columns, `bytes` as Postgres `\x` hex in the CSV. `map_previews`
-are omitted (cache). The `map_files` section holds no bytes since E5 —
+and `map_heightfields` are omitted (caches; §4.5, §4.7). The `map_files` section holds no bytes since E5 —
 only the pins; the blob sections carry the file.
 
 The event's `course_objects` rows (`docs/course-layer.md` §8.5) are a
@@ -1385,12 +1553,18 @@ deletes only what no row points at. `packages/api/src/map-store/gc.ts`.
   club map pointing at it is deleted.
 - `map_previews` cascade with their document. They are not truncated by
   age (07 §5 allows it; nothing needs the space yet).
+- `map_heightfields` cascade with their document too, and are not a
+  reference. Rows of a superseded `TERRAIN_VERSION` (`source =
+  'contours' AND version < TERRAIN_VERSION`) are deleted by pass 4
+  (§8.2): after a bump nothing reads them (the URL names the version,
+  §4.7), and each is up to ~8 MB. `<`, not `<>`: an older image's run
+  during a rollout leaves the newer image's rows alone.
 
 ### 8.2 A run
 
 ```
 runStorageGc(db, { now?, graceDays?, dryRun?, shouldStop? })
-  → { graceDays, dryRun, stopped, touched, documents: hash[], sources: hash[], skipped, uploads, jobs }
+  → { graceDays, dryRun, stopped, touched, documents: hash[], sources: hash[], skipped, heightfields, uploads, jobs }
 ```
 
 1. **Touch** — `UPDATE map_documents SET last_referenced_at = now()` for
@@ -1413,7 +1587,10 @@ runStorageGc(db, { now?, graceDays?, dryRun?, shouldStop? })
    caught and counted as `skipped`; the run carries on. `map_previews` go with the row.
 3. **Sources** — the same over `map_sources`, after the documents so a
    source freed by pass 2 goes in the same run.
-4. **Uploads and jobs** — `sweepImportHousekeeping` (§6.6).
+4. **Height fields** — one `DELETE` of the superseded-version rows
+   (§8.1); a dry run counts them. `heightfields` is the count, in the
+   summary line and the stored `last_result`.
+5. **Uploads and jobs** — `sweepImportHousekeeping` (§6.6).
 
 07 §5 sketched one `DELETE … WHERE NOT EXISTS` per pass. One statement
 per row is used instead: an interrupted run (deploy, lost lease) leaves
@@ -1459,7 +1636,7 @@ row (`stopAll`); a stopped run stores its `last_result` (with
 every delete re-checks its conditions.
 
 The per-instance engine tick (§6.2) keeps running the housekeeping sweep
-every 60 s; the GC's pass 4 is the same idempotent sweep.
+every 60 s; the GC's pass 5 is the same idempotent sweep.
 
 ### 8.4 Running it by hand
 
@@ -1497,8 +1674,9 @@ web's map pickers offering Mapper files (`.omap` / `.xmap`) — the server
 takes them since E5 (§5.1); the series' colour-stack columns
 (`club_maps.colour_profile`, `colour_overrides`, `north_lines_below`)
 and `map_files.north_detection`, which nothing writes or reads since E5
-(kept: E5 drops only what its row names). Each lands with its own
-section here and its own tests.
+(kept: E5 drops only what its row names); §4.7's DEM-based height
+field (another `source`, H10) and the client's fetch, cache and 3D
+gate (H7). Each lands with its own section here and its own tests.
 
 ## 10. Tests
 
@@ -1532,6 +1710,12 @@ section here and its own tests.
 | Unit (api) | `packages/api/src/__tests__/map-previews.test.ts` | preview request parsing (`:idx`, `.png`, library code, hash), ETags and `If-None-Match`, library preview of an entry and a variant, 404 for unknown code / other version, per-instance cache hit |
 | Unit (api) | `packages/api/src/render/__tests__/previews.test.ts` | swatch pixel probes (418 at 3×, 505 dash on the dash point and gaps, 403 fill, 704 text ink, neutral swatch), library entry PNG size, thumbnail long edge 512 px, object cap |
 | Integration (api) | `packages/api/src/__tests__/integration/map-previews.test.ts` | stage 10 thumbnail row after `applyEventMap`, dedup short-cut re-derives, failed derive non-fatal, over-cap decided from the header summary; thumbnail and symbol routes 400/401/403/404/200/304, kiosk key and `?event=`, render on miss, row written once, every fixture symbol 200 and one past the end 404, `render: null` 404, previews never bump `last_referenced_at`; library route 400/401/200/304/404 incl. variant and other version; auth off |
+| Unit (api) | `packages/api/src/__tests__/map-heightfield.test.ts` | §4.7: `?v=` parsing, URL and ETag, the cell estimate from a header summary (units per mm, pad, clamp to the budget, unusable bounds), the cap and `MAP_HEIGHTFIELD_MAX_CELLS`; the worker equals the in-process derive on the shared terrain tests' hill, `none` without contours, rejects garbage, terminated at the timeout; over a stub db: one derive then the row, concurrent callers share one derive, derives one at a time, a row without bytes for no contours, a failure writes nothing and is not retried, over the cap no blob read, missing document |
+| Integration (api) | `packages/api/src/__tests__/integration/map-heightfields.test.ts` | §4.7: importing the CC0 demo `.omap` writes the field equal to the in-process derive (bytes, header, report) and the job ends `done`; `test.ocd` gets a row without bytes; the dedup short-cut re-derives a deleted row; a failed derive and an over-cap document write nothing; route 400 (hash, `v`) / 401 / 403 before existence, 200 with headers, br / gzip round trip, 304, kiosk key and `?event=`, the uploader's own job, a club version, auth off, not a reference; lazy derive on a miss writes once and two concurrent requests derive once; 404 `no-contours` / `version` / `over-cap`, unknown document; 503 for a failed derive, remembered, nothing stored; `course.mapMetadata.terrain` ready / none / pending (never derives), `mapImport.review.terrain` with report and field size, over-cap; the GC sweeps a superseded version, keeps current and newer, dry run counts; the null-together CHECK; the row cascades with its document |
+| Unit (api) | `packages/api/src/__tests__/backup.test.ts` (H4) | `map_heightfields` not in the dump |
+| Unit (web) | `packages/web/src/lib/__tests__/map-review.test.ts` (H4) | `terrainLine`: the decided share floored against the 80 % gate, the other states |
+| E2E | `e2e/map-documents.spec.ts` (H4) | the demo `.omap` through the chunked route → `mapMetadata.terrain` ready with decided > 80 % → `height.bin` 200 (`OXHF`, headers), 304, anonymous 401, another version 404 |
+| E2E | `e2e/map-review.spec.ts` (H4) | the event map's review shows the terrain line "no contours" for `test.ocd` |
 | E2E | `e2e/club-map-library.spec.ts` | UI upload → card keyed by the series UUID with the document thumbnail → rename → **From club library** renders the event map → delete leaves the event's map; an unparseable upload is listed as "Import failed", without download, and disabled in the event picker; north-lines badge |
 | E2E | `e2e/map-documents.spec.ts` | UI upload on `itest` → `documentHash` → route 200/304/206, own import job admits the uploader through a non-pinning event, anonymous 401 → thumbnail and symbol swatch 200 / 401 anonymous, library swatch by the header's library and version → source route streams `test.ocd` back (200, `no-store`, attachment), anonymous 401 → dev page `?url=` loads it natively → `latestForEvent` done with report; chunked route (chunks out of order) → `applyUploadedMap` → `mapMetadata`; the same source → `clubMap.addFromSource` → `mapImport.status` done |
 | E2E | `e2e/map-review.spec.ts` | the review round from the UI (`docs/map-symbols.md` §8.7): club card "to review" count from `clubMap.list[].review` → route keyed by the document hash → usage order, source and library swatches load → keep 850.1 as drawn → `decide` job → new document not in use → `finalise` moves the card thumbnail and count → CRT download carries `# keep 850.1` → CRT upload dry-run preview, then recorded → reset both rows → the matcher's own document hash again, finalised back; event map from the course editor, document swatches with `?event=`, nothing to finalise. `reseed()` wipes `club_symbol_decisions` on both sides |
@@ -1591,6 +1775,10 @@ section here and its own tests.
 | `packages/api/src/routers/course.ts` / `clubMap.ts` | `applyUploadedMap`, `useClubMap` version pin, `downloadMap` / `mapFileInfo` from `map_sources`; `createClubMap`, `addFromSource` |
 | `packages/api/prisma/migrations/20261107120000_vector_map_pipeline_drops/` | E5: the guard, then the legacy pipeline's tables and columns dropped |
 | `packages/api/prisma/migrations/20261113120000_map_patches/` | `map_patches` (row G3) |
+| `packages/api/prisma/migrations/20261114130000_map_heightfields/` | `map_heightfields` (row H4) |
+| `packages/api/src/map-store/heightfield.ts` | §4.7: rows, `getOrDeriveHeightfield` (cap, queue, in-flight sharing, failure memo), the worker launcher, `deriveDocumentHeightfield` (stage 10), `terrainDescriptor` / `terrainReview` |
+| `packages/api/src/map-store/heightfield-worker.ts` | worker-thread body: decode, `deriveTerrain`, `encodeHeightField` |
+| `packages/api/src/map-store/heightfield-routes.ts` | `GET /api/map-documents/:hash/height.bin` |
 | `packages/api/prisma/migrations/20261114120000_map_gps_tracks/` | `map_gps_tracks` (row G24) |
 | `packages/api/src/gps-tracks.ts` / `routers/mapTrack.ts` | GPS track storage and `mapTrack.*` (`docs/map-gps-tracks.md` §1) |
 | `packages/api/src/map-store/patches.ts` / `routers/mapPatch.ts` | the patch store, delivery rule and writes; `mapPatch.get` / `applyChange` / `setEnabled`; the route is in `routes.ts` (`docs/map-patches.md` §3) |

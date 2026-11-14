@@ -1064,7 +1064,11 @@ event maps (06 §5.1):
 stands: *in use* (it is the club version's / the event's pinned
 document), *not used yet* with **Use this version** (`finalise`), and
 *not up to date* when `review.current` is false (the current library,
-importer or club decisions would import the source differently). Summary
+importer or club decisions would import the source differently). One
+terrain line from `review.terrain` (`docs/map-storage.md` §4.7): the
+share of contour length with a decided uphill side and whether it reaches
+the 80 % the 3D view needs (floored, so 79.6 % never reads as 80), or
+*no contours*, *too large for this server*, *not derived yet*. Summary
 chips count rows by outcome.
 
 **Rows.** One per `ReviewRow`, ordered by `objects` (most used first,

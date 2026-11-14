@@ -18,7 +18,7 @@ implemented and marks what is still pending.
  7 align        colour stack alignment (03 §6.3)                          shared     done (docs/map-symbols.md §9); ISSkiOM's palette rows in every stack (§9.2 step 4, §12.3)
  8 encode       02 codec → bytes; sha256 → documentHash                   shared     done
  9 store        map_sources + map_documents rows, event pin, report      api        done, as an import job in a worker thread (docs/map-storage.md §3, §6)
-10 derive       thumbnail (map_previews)                                  api        done, inside the job after the pins (docs/map-storage.md §4.5, §6.1)
+10 derive       thumbnail (map_previews), height field (map_heightfields)   api        done, inside the job after the pins (docs/map-storage.md §4.5, §4.7, §6.1)
 ```
 
 Stages 3–8 are pure functions over bytes with no Node APIs
@@ -29,14 +29,16 @@ loader in `packages/api/src/import/ocad.ts`; the OMAP reader itself is
 shared code (no XML library — `packages/shared/src/import/xml.ts`), so
 a Mapper file needs no Node-side dependency at all.
 
-Stage 10 writes the thumbnail only. 06 §4.1's "metadata columns from
+Stage 10 writes the thumbnail, then the height field — the terrain the
+document's contours imply and its report, derived in a worker of its own
+(`docs/map-storage.md` §4.7, `docs/map-terrain.md` §5.5). 06 §4.1's "metadata columns from
 the header" are the stage-9 `map_documents.header` summary
 (`docs/map-storage.md` §3): scale, bounds, georeferencing, colours and
 counts are already there. The `map_files` quick-access columns (`scale`,
 `bounds`, `north_offset`, `calibration`) are written by the pin from the
 document's header and its stage-5 report (§3.8, `docs/map-storage.md`
 §6.4). A failed derive is logged and the job still ends `done`: previews
-are cache.
+and the height field are cache.
 
 ## 2. Entry points
 
@@ -895,6 +897,7 @@ document hash is identical on two machines.
 | Unit + integration (api) | `map-crt.test.ts`, `integration/map-crt.test.ts` (see `docs/map-storage.md` §10) | `exportCrt` / `importCrt`: file name, plan on the fixture, decide's cap, the procedures end to end |
 | Unit + integration + E2E (api, web) | see `docs/map-storage.md` §10 | stages 1 and 9: chunked upload route, import jobs, store, dedup, pins, report row, delivery route |
 | Unit + integration + E2E (api) | see `docs/map-storage.md` §10 (previews rows) | stage 10: thumbnail row written by the job and by the dedup short-cut, non-fatal failure, object cap |
+| Unit + integration + E2E (api) | see `docs/map-storage.md` §10 (height-field rows) | stage 10: height-field row written by the job and by the dedup short-cut, a row without bytes without contours, non-fatal failure, cap |
 | Script (scripts) | `scripts/__tests__/ocad-fixture.test.mjs` (`pnpm test:scripts`) | the OCAD fixture writer: `e2e/test.ocd` byte-identical on regeneration, its framed text and rectangle read back by the reader; the symbol-types file (`buildSymbolTypesOcad`, also the fork's `test/data/symbol-types.ocd`) read back field by field — text framing, line text, rectangles with radius and grid; the stale-border file (`buildStaleBorderOcad`: an area whose border is itself, one whose border is missing) read back; the rotated-points file (`buildRotatedPointsOcad`, C10): each symbol's rotatable flag and each object's angle read back — the same file is drawn against the legacy in `packages/api/src/render/__tests__/parity.test.ts` (`docs/map-rendering.md` §6.4) |
 | Reader (fork) | `open-orienteering/ocad2geojson` `test/reader.test.js`, `test/svg.test.js` (`npm test`) | text framing on the real `fences.ocd` (902.1: mode 2, colour 12, width 10) and every new field on `symbol-types.ocd`; `ocadToSvg` reads but does not draw line-text and rectangle objects |
 | Script (scripts) | `scripts/__tests__/measure-import.test.mjs` (`pnpm test:scripts`) | `scripts/measure-import.mjs` over the two fixtures: hashes written and found again in a second process, a changed hash fails as a determinism failure, the Mapper fixture's four unsupported-primitive codes fail the run and print their per-emission detail, a stale area-border reference is reported per symbol (`~`) without failing the run, lower and upper purple's place per map (`source` / `inserted`, with the displaced source purples — C15), the `ski-o` line (the four overlay rows inserted into `test.ocd`, the mask directly below lower purple, the track inks directly below upper purple), usage errors exit 2 |

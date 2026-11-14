@@ -913,8 +913,10 @@ function deriveTerrain(doc: MapDocument, opts?: DeriveTerrainOptions): { field: 
 assumed one (answer 8): 2.5 m when the document's library id starts with
 `ISSprOM`, else 5 m. The field is built whatever the report says: the 3D
 gate (`report.share.decided` ≥ 80 %, answer 7) is the viewer's (H7). The
-report travels beside the field, not inside its bytes (H4 stores it in
-the document's descriptor).
+report travels beside the field, not inside its bytes: H4 stores it on
+the height-field row and hands it out through the event's descriptor
+(`course.mapMetadata.terrain`) and the import review
+(`docs/map-storage.md` §4.7).
 
 The graph keeps H1's budget (0.1 mm, 60 M cells): H2's shares were
 measured on it, and the field's own budget bounds what is stored.
@@ -1350,4 +1352,3 @@ sampler, and compares with T2. Measured 2026-11-14:
   area (H9 delivers the per-chain heights); no row holds it yet — H10
   re-derives the field when a DEM arrives.
 - §7 DEM providers, the paper → projected sampler (H10).
-- Storage of the derived artifact is `map-storage.md` (H4).

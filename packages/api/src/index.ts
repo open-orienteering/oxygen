@@ -21,6 +21,7 @@ import { registerCourseExportRoute } from "./course-export.js";
 import { registerDescriptionsPdfRoute } from "./course-maps/descriptions-pdf.js";
 import { registerMapDocumentRoutes } from "./map-store/routes.js";
 import { registerMapPreviewRoutes } from "./map-store/preview-routes.js";
+import { registerMapHeightfieldRoutes } from "./map-store/heightfield-routes.js";
 import { registerMapSourceRoutes } from "./map-store/source-routes.js";
 import { registerMapUploadRoutes } from "./map-store/upload-routes.js";
 import { startImportJobEngine } from "./map-store/jobs.js";
@@ -112,6 +113,7 @@ async function main() {
   registerDescriptionsPdfRoute(server);
   registerMapDocumentRoutes(server);
   registerMapPreviewRoutes(server);
+  registerMapHeightfieldRoutes(server);
   registerMapSourceRoutes(server);
   registerMapUploadRoutes(server);
   startImportJobEngine(prisma());
