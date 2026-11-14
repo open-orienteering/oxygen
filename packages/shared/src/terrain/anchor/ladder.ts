@@ -97,11 +97,15 @@ export interface LadderVote {
   /** Per chain: ladder area; −1 none. */
   area: Int32Array;
   areas: VoteArea[];
+  /** The evidence grid, its cells' areas, and every chain's ground metres per cell. */
+  grid: CellGrid;
+  cellArea: Int32Array;
+  chainCells: Map<number, number>[];
   /** Length of the contributors labelled, over the contributors' length (§6.5 intervalSuspect). */
   labelledContributorShare: number;
 }
 
-interface CellGrid {
+export interface CellGrid {
   x0: number;
   y0: number;
   cellMm: number;
@@ -156,6 +160,9 @@ export function ladderVote(input: VoteInput): LadderVote {
     phase: new Float64Array(n).fill(NaN),
     area: new Int32Array(n).fill(-1),
     areas: [],
+    grid: { x0: 0, y0: 0, cellMm: 1, width: 0, height: 0 },
+    cellArea: new Int32Array(0),
+    chainCells: chains.map(() => new Map<number, number>()),
     labelledContributorShare: 0,
   });
 
@@ -185,6 +192,9 @@ export function ladderVote(input: VoteInput): LadderVote {
   for (let i = 0; i < n; i++) if (contributor[i]) weight[i] = lengthM[i];
   const phases = candidateLadders(median, weight, I);
   const out = empty();
+  out.grid = grid;
+  out.chainCells = cells;
+  out.cellArea = new Int32Array(W * H).fill(-1);
   if (!phases.length) return out;
   const K = phases.length;
   const dev = new Float64Array(n);
@@ -276,48 +286,20 @@ export function ladderVote(input: VoteInput): LadderVote {
 
   // Ladder areas (§6.7): every cell voted with all evidence, 4-connected per ladder.
   const cellLabel = new Int32Array(W * H).fill(-1);
-  for (let cy = 0; cy < H; cy++) {
-    for (let cx = 0; cx < W; cx++) {
-      let T = 0;
-      for (let r = V.minRadius; r <= V.maxRadius; r++) {
-        T = 0;
-        for (let l = 0; l < K; l++) {
-          E[l] = windowSum(evS[l], W, H, cx, cy, r);
-          T += E[l];
-        }
-        if (T >= V.enoughM) break;
-      }
-      let win = 0;
-      for (let l = 1; l < K; l++) if (E[l] > E[win]) win = l;
-      if (T >= V.minEvidenceM && E[win] / T >= V.winShare) cellLabel[cy * W + cx] = win;
-    }
+  for (let k = 0; k < W * H; k++) {
+    const cx = k % W, cy = (k - cx) / W;
+    cellLabel[k] = cellVote(evS, W, H, cx, cy, E);
   }
-  const cellArea = new Int32Array(W * H).fill(-1);
-  const stack: number[] = [];
-  let next = 0;
-  const raw: VoteArea[] = [];
-  for (let k0 = 0; k0 < W * H; k0++) {
-    const l = cellLabel[k0];
-    if (l < 0 || cellArea[k0] >= 0) continue;
-    const id = next++;
-    const a: VoteArea = { ladder: l, cells: 0, evidenceM: 0 };
-    cellArea[k0] = id;
-    stack.push(k0);
-    while (stack.length) {
-      const k = stack.pop()!;
-      a.cells++;
-      a.evidenceM += ev[l][k];
-      const cx = k % W, cy = (k - cx) / W;
-      for (const [nx, ny] of [[cx - 1, cy], [cx + 1, cy], [cx, cy - 1], [cx, cy + 1]]) {
-        if (nx < 0 || ny < 0 || nx >= W || ny >= H) continue;
-        const k2 = ny * W + nx;
-        if (cellLabel[k2] === l && cellArea[k2] < 0) {
-          cellArea[k2] = id;
-          stack.push(k2);
-        }
-      }
-    }
-    raw.push(a);
+  const comp = components(cellLabel, W, H);
+  const cellArea = comp.id;
+  const raw: VoteArea[] = Array.from({ length: comp.count }, () => ({ ladder: -1, cells: 0, evidenceM: 0 }));
+  for (let k = 0; k < W * H; k++) {
+    const c = cellArea[k];
+    if (c < 0) continue;
+    const l = cellLabel[k];
+    raw[c].ladder = l;
+    raw[c].cells++;
+    raw[c].evidenceM += ev[l][k];
   }
   // Dissolve thin areas and renumber the rest in order.
   const remap = new Int32Array(raw.length).fill(-1);
@@ -328,10 +310,16 @@ export function ladderVote(input: VoteInput): LadderVote {
     }
   });
   for (let k = 0; k < W * H; k++) if (cellArea[k] >= 0) cellArea[k] = remap[cellArea[k]];
+  out.cellArea = cellArea;
+  out.area = chainAreas(cells, cellArea);
+  return out;
+}
 
-  // A chain's area: the one holding most of its length.
+/** A chain's area: the one holding most of its length; −1 none (§6.7). */
+function chainAreas(cells: Map<number, number>[], cellArea: Int32Array): Int32Array {
+  const area = new Int32Array(cells.length).fill(-1);
   const byArea = new Map<number, number>();
-  for (let i = 0; i < n; i++) {
+  for (let i = 0; i < cells.length; i++) {
     byArea.clear();
     for (const [k, m] of cells[i]) {
       const a = cellArea[k];
@@ -344,7 +332,116 @@ export function ladderVote(input: VoteInput): LadderVote {
         bm = m;
       }
     }
-    out.area[i] = best;
+    area[i] = best;
   }
-  return out;
+  return area;
+}
+
+/** Adaptive-window vote over `K` summed-area tables centred on one cell: the winner, or −1 (§6.6 step 4 rules). */
+function cellVote(sats: Float64Array[], W: number, H: number, cx: number, cy: number, E: Float64Array): number {
+  const K = sats.length;
+  let T = 0;
+  for (let r = V.minRadius; r <= V.maxRadius; r++) {
+    T = 0;
+    for (let l = 0; l < K; l++) {
+      E[l] = windowSum(sats[l], W, H, cx, cy, r);
+      T += E[l];
+    }
+    if (T >= V.enoughM) break;
+  }
+  let win = 0;
+  for (let l = 1; l < K; l++) if (E[l] > E[win]) win = l;
+  return T >= V.minEvidenceM && E[win] / T >= V.winShare ? win : -1;
+}
+
+/** 4-connected components of equal non-negative `label` (row-major from the lower-left); −1 elsewhere. */
+function components(label: Int32Array, W: number, H: number): { id: Int32Array; count: number } {
+  const id = new Int32Array(W * H).fill(-1);
+  const stack: number[] = [];
+  let count = 0;
+  for (let k0 = 0; k0 < W * H; k0++) {
+    if (label[k0] < 0 || id[k0] >= 0) continue;
+    const l = label[k0];
+    id[k0] = count;
+    stack.push(k0);
+    while (stack.length) {
+      const k = stack.pop()!;
+      const cx = k % W, cy = (k - cx) / W;
+      for (const [nx, ny] of [[cx - 1, cy], [cx + 1, cy], [cx, cy - 1], [cx, cy + 1]]) {
+        if (nx < 0 || ny < 0 || nx >= W || ny >= H) continue;
+        const k2 = ny * W + nx;
+        if (label[k2] === l && id[k2] < 0) {
+          id[k2] = count;
+          stack.push(k2);
+        }
+      }
+    }
+    count++;
+  }
+  return { id, count };
+}
+
+/**
+ * §6.7: ladder areas split by index residue. Within each area every cell
+ * votes among the residues of the snapped index chains of that area (the
+ * same adaptive window); the cells of one area and one residue (or of no
+ * residue) form sub-areas by 4-connection; a sub-area with less own-ladder
+ * evidence than the area minimum is dissolved.
+ */
+export function splitAreasByResidue(vote: LadderVote, residue: Int32Array, residues: number): { areas: VoteArea[]; area: Int32Array; cellArea: Int32Array } {
+  const { width: W, height: H } = vote.grid;
+  const A = vote.areas.length;
+  const cellRes = new Int32Array(W * H).fill(-1);
+  const E = new Float64Array(residues);
+  for (let a = 0; a < A; a++) {
+    const ev = Array.from({ length: residues }, () => new Float64Array(W * H));
+    let any = false;
+    for (let i = 0; i < residue.length; i++) {
+      if (residue[i] < 0 || vote.area[i] !== a) continue;
+      for (const [k, m] of vote.chainCells[i]) {
+        if (vote.cellArea[k] !== a) continue;
+        ev[residue[i]][k] += m;
+        any = true;
+      }
+    }
+    if (!any) continue;
+    const sats = ev.map((v) => summedArea(v, W, H));
+    for (let k = 0; k < W * H; k++) {
+      if (vote.cellArea[k] !== a) continue;
+      const cx = k % W, cy = (k - cx) / W;
+      cellRes[k] = cellVote(sats, W, H, cx, cy, E);
+    }
+  }
+  // Label (area, residue) with residue −1 as its own value.
+  const label = new Int32Array(W * H).fill(-1);
+  for (let k = 0; k < W * H; k++) if (vote.cellArea[k] >= 0) label[k] = vote.cellArea[k] * (residues + 1) + cellRes[k] + 1;
+  const comp = components(label, W, H);
+  const raw: VoteArea[] = Array.from({ length: comp.count }, () => ({ ladder: -1, cells: 0, evidenceM: 0 }));
+  // Own-ladder evidence per cell, from the chains labelled with the area's ladder.
+  const ladderEv = new Float64Array(W * H);
+  for (let i = 0; i < vote.member.length; i++) {
+    if (vote.member[i] < 0) continue;
+    for (const [k, m] of vote.chainCells[i]) {
+      const a = vote.cellArea[k];
+      if (a >= 0 && vote.areas[a].ladder === vote.member[i]) ladderEv[k] += m;
+    }
+  }
+  for (let k = 0; k < W * H; k++) {
+    const c = comp.id[k];
+    if (c < 0) continue;
+    raw[c].ladder = vote.areas[vote.cellArea[k]].ladder;
+    raw[c].cells++;
+    raw[c].evidenceM += ladderEv[k];
+  }
+  const remap = new Int32Array(comp.count).fill(-1);
+  const areas: VoteArea[] = [];
+  raw.forEach((a, i) => {
+    if (a.evidenceM >= ANCHOR_RULES.areaMinM) {
+      remap[i] = areas.length;
+      areas.push(a);
+    }
+  });
+  const cellArea = new Int32Array(W * H).fill(-1);
+  for (let k = 0; k < W * H; k++) if (comp.id[k] >= 0) cellArea[k] = remap[comp.id[k]];
+  return { areas, area: chainAreas(vote.chainCells, cellArea), cellArea };
 }

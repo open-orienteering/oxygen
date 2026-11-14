@@ -167,7 +167,8 @@ export interface AnchorReport {
   ladders: { phaseM: number; lengthShare: number; rAtI: number }[];
   areas: { ladder: number; lengthShare: number; indexResidue: number | null; indexOnResidue: number | null }[];
   share: { sideDecided: number; accepted: number; snapped: number; unsnapped: number; spreadFailed: number; uncovered: number; unlabelled: number };
-  index: { lengthMm: number; snappedShare: number; onOneResiduePerArea: number | null };
+  /** Snapped index length over covered index length; in areas over snapped; on the area's modal residue over in areas. */
+  index: { lengthMm: number; snappedShare: number; inAreasShare: number; onOneResiduePerArea: number | null };
   alongContour: { halfIqrP50: number; halfIqrP90: number };
 }
 

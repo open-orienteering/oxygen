@@ -4,7 +4,7 @@
 
 import type { ContourGraph } from "../graph/types.js";
 import { concentration, mod } from "./interval.js";
-import { ladderVote } from "./ladder.js";
+import { ladderVote, splitAreasByResidue } from "./ladder.js";
 import { chainDemStats, smoothedSampler } from "./sample.js";
 import { ANCHOR_RULES, ANCHOR_STATUS, NO_LEVEL, type AnchorOptions, type AnchorReport, type ChainAnchors, type DemAnchor, type DemSampler, type LadderArea } from "./types.js";
 
@@ -101,7 +101,6 @@ export function anchorLevels(graph: ContourGraph, sampleDem: DemSampler, opts: A
   });
   for (let i = 0; i < n; i++) {
     c.ladder[i] = vote.label[i];
-    c.area[i] = vote.area[i];
     c.phase[i] = vote.phase[i];
     const accepted = c.status[i] === ANCHOR_STATUS.unsnapped;
     if (!accepted) continue;
@@ -119,9 +118,16 @@ export function anchorLevels(graph: ContourGraph, sampleDem: DemSampler, opts: A
     }
   }
 
+  // §6.7: ladder areas split by the index residue of their snapped index chains.
+  const E5 = ANCHOR_RULES.indexEvery;
+  const residue = new Int32Array(n).fill(-1);
+  for (let i = 0; i < n; i++) if (graph.chains[i].index && c.status[i] === ANCHOR_STATUS.snapped) residue[i] = mod(c.ladderLevel[i], E5);
+  const split = splitAreasByResidue(vote, residue, E5);
+  c.area.set(split.area);
+
   // §6.9: areas with their index residue, and the report.
-  const areas: LadderArea[] = vote.areas.map((a) => ({ ladder: a.ladder, cells: a.cells, lengthMm: 0, indexResidue: null, indexOnResidue: null }));
-  const residueLen = areas.map(() => new Float64Array(ANCHOR_RULES.indexEvery));
+  const areas: LadderArea[] = split.areas.map((a) => ({ ladder: a.ladder, cells: a.cells, lengthMm: 0, indexResidue: null, indexOnResidue: null }));
+  const residueLen = areas.map(() => new Float64Array(E5));
   let total = 0, coveredLen = 0, idxCovered = 0, idxSnapped = 0, idxInAreas = 0, idxModal = 0;
   const share = { sideDecided: 0, accepted: 0, snapped: 0, unsnapped: 0, spreadFailed: 0, uncovered: 0, unlabelled: 0 };
   for (let i = 0; i < n; i++) {
@@ -143,7 +149,7 @@ export function anchorLevels(graph: ContourGraph, sampleDem: DemSampler, opts: A
       idxCovered += l;
       if (st === ANCHOR_STATUS.snapped) {
         idxSnapped += l;
-        if (c.area[i] >= 0) residueLen[c.area[i]][mod(c.ladderLevel[i], ANCHOR_RULES.indexEvery)] += l;
+        if (c.area[i] >= 0) residueLen[c.area[i]][residue[i]] += l;
       }
     }
   }
@@ -178,7 +184,7 @@ export function anchorLevels(graph: ContourGraph, sampleDem: DemSampler, opts: A
     ladders: ladders.map((l) => ({ phaseM: l.phaseM, lengthShare: frac(l.lengthMm * g, contribLen * g), rAtI: l.rAtI })),
     areas: areas.map((a) => ({ ladder: a.ladder, lengthShare: frac(a.lengthMm, total), indexResidue: a.indexResidue, indexOnResidue: a.indexOnResidue })),
     share,
-    index: { lengthMm: idxCovered, snappedShare: frac(idxSnapped, idxCovered), onOneResiduePerArea: idxInAreas > 0 ? idxModal / idxInAreas : null },
+    index: { lengthMm: idxCovered, snappedShare: frac(idxSnapped, idxCovered), inAreasShare: frac(idxInAreas, idxSnapped), onOneResiduePerArea: idxInAreas > 0 ? idxModal / idxInAreas : null },
     alongContour: { halfIqrP50: weightedQuantile(c.halfIqr, coveredW, 0.5), halfIqrP90: weightedQuantile(c.halfIqr, coveredW, 0.9) },
   };
 

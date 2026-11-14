@@ -19,13 +19,15 @@ interface HillSpec {
   levels: number[];
   /** The cone's top, metres. */
   top: number;
+  /** Index contours at k ≡ indexAt mod 5 (default 0). */
+  indexAt?: number;
 }
 
 /** Rings at the DEM's own iso-lines of a cone: the mapper drew the ground exactly. */
 function hillObjects(h: HillSpec): Obj[] {
   return h.levels.map((k) => {
     const r = (h.top - (h.phase + I * k)) / (SLOPE * G);
-    return { sym: k % 5 === 0 ? S.index : S.contour, coords: ring(h.cx, h.cy, r, 96) };
+    return { sym: k % 5 === (h.indexAt ?? 0) ? S.index : S.contour, coords: ring(h.cx, h.cy, r, 96) };
   });
 }
 
@@ -122,6 +124,21 @@ describe("anchorLevels (§6.4, §6.7, §6.9)", () => {
     }
     expect(a.report.index.onOneResiduePerArea).toBeCloseTo(1);
     expect(a.report.interval.rAtI).toBeLessThan(0.6);
+  });
+
+  it("splits one ladder's area where the map's index contours change residue", () => {
+    // Two hills on one ladder, 1.1 km apart (one connected area), with index contours on different levels.
+    const hillB: HillSpec = { cx: 73, cy: 0, phase: 2.6, levels: [0, 1, 2, 3, 4, 5, 6, 7, 8, 9], top: 2.6 + 50, indexAt: 1 };
+    const g = graphOf([...hillObjects(hillA), ...hillObjects(hillB)]);
+    const a = anchorLevels(g, coneDem([hillA, hillB]), LM);
+    expect(a.ladders).toHaveLength(1);
+    expect(a.report.areas).toHaveLength(2);
+    expect(a.report.areas.map((x) => x.indexResidue).sort()).toEqual([0, 1]);
+    expect(a.report.index.onOneResiduePerArea).toBeCloseTo(1);
+    expect(a.report.index.inAreasShare).toBeCloseTo(1);
+    const onB = (i: number) => g.chains[i].pts[0] > 36;
+    const areaA = a.chains.area[g.chains.findIndex((_, i) => !onB(i))];
+    for (let i = 0; i < g.chains.length; i++) expect(a.chains.area[i] === areaA).toBe(!onB(i));
   });
 
   it("a coarse model with a clear ladder is promoted", () => {
