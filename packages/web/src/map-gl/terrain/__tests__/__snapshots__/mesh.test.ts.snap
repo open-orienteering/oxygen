@@ -1,0 +1,9 @@
+// Vitest Snapshot v1, https://vitest.dev/guide/snapshot.html
+
+exports[`level of detail (§5.6) > keeps a 4096² field within 600 000 triangles at 1920 × 1080 (overview, 60° tilt, close-up) 1`] = `
+{
+  "closeUp": 324352,
+  "overview": 247904,
+  "tilt60": 336576,
+}
+`;
