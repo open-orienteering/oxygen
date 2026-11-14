@@ -1999,6 +1999,94 @@ object drawn with a patch symbol is not picked by symbol — a filter
 region stores document symbol indices (§4.11) and a patch symbol's index
 moves with the patch — so a click on it picks what is under it (§8).
 
+**Document objects** (G5; 04 §7 "Editing and overlay hooks"). Map mode
+(slice G, `course-editor.md` §13) selects and edits objects of the map
+document itself. Three pieces, all in the viewer's worker and engine:
+
+- **Hit-test over the document.** `MapGlEngine.hitDocument(x, y,
+  toleranceUm)` (paper µm) posts `hit { id, x, y, toleranceUm }`; the
+  worker answers `hit { id, hits, ms }` — the **effective document's**
+  objects under the point, topmost first, by the symbolised shape.
+  Candidates are the passes of the point's grid cell and its eight
+  neighbours (an object's reach is within one cell of its centre's cell,
+  §5.2 "Assignment") and of the large bucket — the bucket grid stands in
+  for 04 §7's R-tree — from both sources of the effective document: the
+  pinned stream without the objects the patch changed or hides, and the
+  patch's own stream. `render.hitTestStreams` tests them exactly
+  (the table above) and orders them as the GL backend draws: colour,
+  kind (§3.6), the patch's stream over the pinned one, then stream order.
+  `closedStrokeInterior` is off: a contour ring is not grabbed by its
+  inside. A `DocumentHit` is `{ objectIndex, ref, symbol, type, colour,
+  distanceUm }`: the effective `objectIndex` (valid for the patch drawn
+  now), a stable `ref` — `{ source: sourceIndex }` or `{ added: id }`
+  (`map-patches.md` §1.2; `null` for the dev `objects` / `stream`
+  sources) — the drawn symbol as a `PatchSymbolRef`, the object type and
+  the colour of the topmost pass that hit. A patch-hidden object is never
+  hit; a modified one only where the patch draws it. The engine drops hits
+  on objects it does not draw (`setHidden`'s, a filter region's, an object
+  under edit's static copy); masked objects still hit. Before the load it
+  resolves `[]`; a request that throws answers `error { hit: id }` and
+  rejects that call only. Several may be in flight.
+- **Highlight through the dynamic bucket.** `MapGlEngine.setEdit({
+  selected, draft? } | null)` posts `edit { generation, input }`. The
+  worker copies each selected object's passes from the stream that draws
+  it (the pinned stream, the patch's, or the draft's below) into the
+  **edit part** — `EDIT_BUCKET` (−4), one `all` part, its range-table ids
+  from `EDIT_OBJECT_BASE` (0x6000_0000, above the course's and the
+  page's) — in the reserved colour `HIGHLIGHT_COLOUR` (0xFFFF). The
+  engine resolves that index to its highlight colour (`EngineOptions.
+  highlight`, default `#2563eb`, the editor's selection blue), so it sorts
+  after every map, course and page colour and draws on top of everything,
+  unclipped by a page frame. Strokes, glyphs and text are redrawn as
+  they are (text halos are left out); **a fill or hatch is drawn as a
+  150 µm outline** (`HIGHLIGHT_OUTLINE_UM`) of its area, and a
+  pattern-clipped glyph pass as the outline of its clip — the stream has
+  no alpha (§8 "Alpha"), and a flooded area would hide what is selected
+  inside it (user decision 2026-11-14; deviation from 04 §7's "passes
+  redrawn in a highlight colour"). Selecting re-symbolises and
+  re-prepares nothing static: the copies keep their tessellation input,
+  the static parts are untouched.
+- **An object under edit.** `draft { ops, symbols? }` are patch ops
+  (`map-patches.md` §1.1: modify, resymbol, add, hide) the host is
+  editing and has not written. The worker merges them over the drawn
+  patch (`mergePatch`), applies the result to the pinned document and
+  bridges and symbolises the draft's targets alone (`documentRenderInput
+  { only }`, the load's options and colour remap; glyph meshes join the
+  atlas by content, text resolves against the loaded pages). Their passes
+  join the edit part **in their own colours**, so they are drawn in colour
+  order with the static buckets (04 §7 "Dynamic bucket"); each target's
+  static copy — its index in the drawn effective document; none for a new
+  add — is in the reply's `hidden`, which the engine joins to the hidden
+  set: skipped through the range table, nothing re-prepared. A selected
+  object the draft draws is highlighted from the draft's passes.
+  `applyPatch`'s issues for the merged patch are reported.
+
+**Edit replies.** `edit { generation, part, hidden, selected, issues,
+atlas?, ms }`: `selected[k]` is the effective index of `selected[k]` in
+the drawn document, −1 when it is not drawn there (hidden, absent, or a
+draft's add). The engine keeps one edit request in flight and the latest
+input next, as `setCourse` (F20), re-posts the input after a `load`,
+uploads the part under key `E` — after the course and before the page,
+always resident, drawn at every zoom, never evicted, its bytes fixed —
+rebuilds the visible set at once and calls `onEdit` with the state. The
+worker keeps the last edit input: a `patched` reply carries `edit`, the
+edit state recomputed against the new effective document, applied in the
+same step, so no frame shows a highlight or a hidden id of the previous
+patch. `null` clears. A request that throws answers `error { edit:
+generation }`, ends that request only and leaves the part drawn as it
+was. Committing is the host's: it keeps the draft until `setPatch`
+resolves with the written patch, then clears it — the object moves to
+its static bucket without a frame missing it (04 §7 "on commit").
+
+**In the viewer.** `MapViewerEditorProps.mapObjects { selected?, draft?,
+onHitTest? }` reaches `VectorMapLayer`'s `edit`: `onHitTest` hands the
+page `hit(pt, toleranceMm)` (paper mm in, `DocumentHit`s out) once the
+layer has loaded and `null` when it goes — the request is asynchronous,
+so it cannot ride `ToolPointer.target`, and Map mode's tools decide when
+to ask (click, drag start, Tab; user decision 2026-11-14). The canvas
+carries `data-selected-objects` (the selected refs drawn). Without
+`mapObjects` nothing is posted.
+
 **Tools.** `MapViewerEditorProps.tool` (D5, `course-editor.md` §6): the
 viewer offers pointer-down to the active tool first, routes clicks of an
 exclusive tool to it, and draws its `ToolShape`s (paper mm → the rotated
