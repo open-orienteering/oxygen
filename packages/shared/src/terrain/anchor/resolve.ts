@@ -31,11 +31,13 @@ export function anchoredHeights(graph: ContourGraph, anchor: DemAnchor, solved: 
   const comp = new Int32Array(n).fill(-1);
   for (let i = 0; i < n; i++) {
     const p = graph.pairs[i];
-    if (!p.length || solved.chainLevel[i] === NO_LEVEL || solved.chainStep[i] === 0) continue;
+    // §3 left the chain undecided (no side, step 0) or gave it no level: no component (§6.8).
+    if (!p.length || solved.chainLevel[i] === NO_LEVEL || solved.side[i] === 0 || solved.chainStep[i] === 0) continue;
     const r = solved.regionComponent[p[0].left];
     if (r > 0) comp[i] = r;
   }
   const L = solved.chainLevel;
+  const coarseTight = (i: number) => c.status[i] !== ANCHOR_STATUS.uncovered && c.halfIqr[i] <= ANCHOR_RULES.contributorHalfIqr.coarse * I;
   const accepted = (i: number) => (c.status[i] === ANCHOR_STATUS.unsnapped || c.status[i] === ANCHOR_STATUS.snapped) && Number.isFinite(c.height[i]);
 
   // Component offsets: the length-weighted median of h − I·L.
@@ -44,7 +46,7 @@ export function anchoredHeights(graph: ContourGraph, anchor: DemAnchor, solved: 
     if (comp[i] < 0) continue;
     let h: number;
     if (coarse) {
-      if (c.status[i] === ANCHOR_STATUS.uncovered || !(c.halfIqr[i] <= ANCHOR_RULES.contributorHalfIqr.coarse * I)) continue;
+      if (!coarseTight(i)) continue;
       h = c.median[i];
     } else {
       if (!accepted(i)) continue;
@@ -139,7 +141,7 @@ export function anchoredHeights(graph: ContourGraph, anchor: DemAnchor, solved: 
     if (bounded[i]) boundedLen += len[i];
     const off = comp[i] >= 0 ? componentOffset.get(comp[i]) : undefined;
     if (off === undefined) continue;
-    const h = coarse ? (c.status[i] !== ANCHOR_STATUS.uncovered ? c.median[i] : NaN) : accepted(i) ? c.height[i] : NaN;
+    const h = coarse ? (coarseTight(i) ? c.median[i] : NaN) : accepted(i) ? c.height[i] : NaN;
     if (!Number.isFinite(h)) continue;
     const k = Math.round((h - off - I * L[i]) / I) + 0;
     driftLen.set(k, (driftLen.get(k) ?? 0) + len[i]);

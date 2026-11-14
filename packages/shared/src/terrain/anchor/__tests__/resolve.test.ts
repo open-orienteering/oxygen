@@ -86,6 +86,41 @@ describe("anchoredHeights (§6.8)", () => {
     expect(h.report.bounded).toBeGreaterThan(0);
   });
 
+  it("clamps a height between its anchored neighbours", () => {
+    const { g, k } = hill();
+    const five = k.indexOf(5);
+    const a = fail(anchorLevels(g, dem, LM), [five]);
+    // §3: ring 4 at 1, ring 5 at 4, ring 6 at 5 — candidates h4 + 3I and h6 − I; the longer ring 4 wins the median, above h6.
+    const h = anchoredHeights(g, a, solved(g, (i) => (k[i] === 5 ? 4 : k[i] >= 6 ? k[i] - 1 : k[i] - 3)));
+    expect(h.bounded[five]).toBe(1);
+    expect(h.height[five]).toBeCloseTo(a.chains.median[k.indexOf(6)], 9);
+  });
+
+  it("finds anchored chains at exactly three bands", () => {
+    const { g, k } = hill();
+    const a = fail(anchorLevels(g, dem, LM), [3, 4, 5, 6, 7].map((v) => k.indexOf(v)));
+    const h = anchoredHeights(g, a, solved(g, (i) => k[i] - 3));
+    const five = k.indexOf(5);
+    expect(h.source[five]).toBe(HEIGHT_SOURCE.neighbours);
+    expect(h.height[five]).toBeCloseTo(PHASE + 5 * I, 1);
+  });
+
+  it("gives a chain §3 left undecided no component: no height from §3, no part in the offset", () => {
+    const { g, k } = hill();
+    const five = k.indexOf(5);
+    const a = fail(anchorLevels(g, dem, LM), [five]);
+    const s = solved(g, (i) => k[i] - 3);
+    s.side[five] = 0;
+    s.chainStep[five] = 0;
+    const h = anchoredHeights(g, a, s);
+    expect(h.source[five]).toBe(HEIGHT_SOURCE.none);
+    // Accepted and undecided: the DEM height is kept, but it is not in the drift report.
+    const a2 = anchorLevels(g, dem, LM);
+    const h2 = anchoredHeights(g, a2, s);
+    expect(h2.source[five]).toBe(HEIGHT_SOURCE.dem);
+    expect(Object.values(h2.report.drift).reduce((p, q) => p + q, 0)).toBeCloseTo(1);
+  });
+
   it("searches up to three bands for anchored chains", () => {
     const { g, k } = hill();
     const a = fail(anchorLevels(g, dem, LM), [4, 5, 6].map((v) => k.indexOf(v)));

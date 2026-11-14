@@ -133,6 +133,30 @@ describe("the ladder vote (§6.6–6.7)", () => {
     expect(v.area[11]).toBe(-1);
   });
 
+  it("labels a chain exactly when its winner holds 0.6 of the window's evidence", () => {
+    // Alternate rings on ladders 2.6 and 0.1: the windows hold both.
+    const a = hill(0, 0, 2.6, 12);
+    a.median = a.median.map((m, i) => (i % 2 ? m - 2.5 : m));
+    const { result: v } = vote([a]);
+    expect(v.ladders).toHaveLength(2);
+    let unlabelled = 0;
+    for (let i = 0; i < 12; i++) {
+      expect(v.evidenceM[i]).toBeGreaterThanOrEqual(300);
+      expect(v.label[i] >= 0).toBe(v.share[i] >= 0.6);
+      if (v.label[i] < 0) unlabelled++;
+    }
+    expect(unlabelled).toBeGreaterThan(0);
+  });
+
+  it("needs 300 m of evidence in the widest window", () => {
+    // One short contributor 1 km from the hill: the hill's evidence reaches it, a lone 30 m chain's does not reach the hill's far side.
+    const lone: Hill = { chains: [{ pts: ring(1.05 * KM, 0, 0.3, 16), closed: true }], median: [2.6], level: [0] };
+    const a = hill(0, 0, 2.6, 1); // one ring of 50 m radius: 314 m of contour
+    const { result: v } = vote([a, lone]);
+    expect(v.evidenceM[1]).toBeLessThan(300);
+    expect(v.label[1]).toBe(-1);
+  });
+
   it("keeps a ladder at the wrap on continuous levels", () => {
     const a = hill(0, 0, 4.95, 10, 0, 0.12, 9);
     const { median, result: v } = vote([a]);

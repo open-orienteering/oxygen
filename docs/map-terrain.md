@@ -722,8 +722,8 @@ pure; the provider, the fetch and the paper → projected transform are
    index phase (§3.0, 4–5) is measured on H9's snapped levels within each
    (index phase × contour ladder of §6.6), because a level counts from its
    own ladder's phase and one index phase can hold index contours of two
-   contour ladders (club-2026's phase at about 18 m: 72.8 % across both
-   ladders, 100 % within each). H9's own acceptance stays answer 3's
+   contour ladders (club-2026's phase at 18.25 m — §3.0's "about 19 m" —
+   72.8 % across both ladders, 100 % within each). H9's own acceptance stays answer 3's
    spatial target. §6.10 reports both readings and the literal per-phase
    figure.
 
@@ -758,7 +758,9 @@ interpolated between order statistics. A chain with coverage < 0.9 is
 
 At each sample the left and right probes sit at ±`offset` along the
 normal (left = `(−ty, tx)` of the drawing direction) and read the
-**smoothed** model; a sample counts when both probes are valid. Over the
+**smoothed** model; a valid sample (§6.2) counts when both its probes
+are valid. There is no minimum number of counted samples beyond the
+chain's coverage. Over the
 counted differences `left − right`: `sideMedian` and `sideAgree`, the
 share of differences with the median's sign. The side is
 `sign(sideMedian)` (+1: uphill left, §3's convention) when the chain is
@@ -850,7 +852,9 @@ mixes two ladders at their border and splits a ladder whose phase is near
   thresholds as the chain vote, no own removal), else no residue; the
   cells of one area and one residue (or of none) form sub-areas by
   4-connection; a sub-area with under 1500 m of the area ladder's member
-  evidence is dissolved. These sub-areas are the **ladder areas** of the
+  evidence is dissolved. A chain belongs to the area holding most of its
+  length whatever its own vote label; the residue vote does not require
+  the label to equal the area's ladder. These sub-areas are the **ladder areas** of the
   report and of `chains.area`.
 - **Level**: `ladderLevel = round((median − localPhase) / I)` and
   `residual = median − localPhase − I · ladderLevel`. An accepted,
@@ -865,7 +869,9 @@ mixes two ladders at their border and splits a ladder whose phase is near
 `anchoredHeights(graph, anchor, solved)` reads §3's per-chain `side`,
 `chainLevel` and `chainStep` and per-region `regionComponent`. A chain's
 component is that of the left region of its first side pair; chains
-without pairs or without a level (`NO_LEVEL`) have none.
+without pairs, without a level (`NO_LEVEL`), or left undecided by §3
+(side 0 or step 0) have none — such a chain keeps its DEM height when
+accepted but takes no part in offsets, candidates or the drift report.
 
 - **Accepted chains** keep the DEM median (source `dem`).
 - **Component offset**: the length-weighted median of `h_j − I · L_j`
@@ -877,7 +883,9 @@ without pairs or without a level (`NO_LEVEL`) have none.
   `h_j + I · (L_u − L_j)`; the height is their length-weighted median,
   clamped into [max h_j of neighbours with L_j < L_u, min h_j of
   neighbours with L_j > L_u] (source `neighbours`). It is **bounded**
-  when the clamp moved it or the candidates spread over more than I/2.
+  when the clamp moved it or the candidates spread over more than I/2;
+  when the lower bound lies above the upper (§3's levels contradict the
+  DEM's order), it is bounded and left unclamped.
   With no accepted chain within 3 bands: the component offset plus
   `I · L_u` (source `component`). With no accepted chain in the
   component: no height (source `none`, NaN). This borrows §3's step for
@@ -886,8 +894,8 @@ without pairs or without a level (`NO_LEVEL`) have none.
 - **Coarse, not promoted**: no chain has a per-chain height; the
   component offset is taken over covered chains with half-IQR ≤ 0.5 I,
   every chain with a level gets `offset + I · L_u` (source `component`),
-  and the **drift bound**: where the chain's median lies more than 1.5 I
-  from that height, the height moves by `I · round(residual / I)`
+  and the **drift bound**: where a covered chain's median lies more than
+  1.5 I from that height, the height moves by `I · round(residual / I)`
   (counted `driftShifted`) — the DEM keeps §3's levels within ±1 interval
   of it (answer 13). The result is flagged `coarse` (a 30 m surface
   model).
@@ -904,7 +912,8 @@ interface AnchoredHeights {
 }
 ```
 
-`report.drift` is the length share of accepted chains by
+`report.drift` is the length share of accepted chains with a component
+(coarse: the chains the offset is taken over) by
 `round((h_j − offset − I · L_j) / I)`: §3's level drift against the DEM,
 in intervals.
 
@@ -924,8 +933,11 @@ interface AnchorReport {
 }
 ```
 
-Shares are of contour length. `index.snappedShare` is snapped over
-covered index length, `inAreasShare` snapped index length in an area over
+Shares are of contour length, except `ladders[].lengthShare` (member
+length over the contributors' length) and `index.*`. `share.unsnapped`
+includes the `coarse` status (accepted, no height); `share.unlabelled` is
+the accepted chains without a vote label. `index.lengthMm` is covered
+index length; `index.snappedShare` is snapped over covered index length, `inAreasShare` snapped index length in an area over
 all snapped index length. An area's index residue is the modal
 `ladderLevel mod 5` of its snapped index chains, by length;
 `onOneResiduePerArea` sums every area's modal length over the snapped
@@ -983,6 +995,25 @@ sampler, and compares with T2. Measured 2026-11-14:
   levels reach the target wherever they are snapped; the off-residue
   length across ladders is the other contour ladder's index contours
   (66 mm, 54 mm, 91 mm, 21 mm of club-2026's four phases).
+- **Anchored heights (§6.8)** after §3's solve with the DEM side
+  (`solveTerrain(graph, { external })`), share of contour length by
+  source, bounded, §3's level drift against the DEM (share of accepted
+  length at 0 / ±1 interval), and §3's `external.disagreements`:
+
+  | Map | dem | neighbours | none | bounded | drift 0 / ±1 | disagreements tick / cliff / lake | ms |
+  |---|---|---|---|---|---|---|---|
+  | crop-a | 99.9 | 0.1 | 0 | 0.1 | 99.9 / 0.2 | 0 / 0 / 0 | 3 |
+  | crop-b | 99.9 | 0.1 | 0 | 0.1 | 91.8 / 6.8 | 0 / 1 / 0 | 1 |
+  | club-2026 | 95.0 | 4.7 | 0.3 | 4.2 | 69.3 / 21.0 | 0 / 5 / 0 | 13 |
+  | club-full | 96.6 | 2.9 | 0.6 | 2.5 | 28.8 / 32.4 | 1 / 10 / 1 | 16 |
+  | sprint (I = 2.5 m) | 90.5 | 8.5 | 1.0 | 8.5 | 60.5 / 39.3 | 0 / 0 / 0 | 0 |
+
+  No chain falls back to the component offset (every unanchored chain
+  with a level has an accepted chain within 3 bands). Most chains taken
+  from neighbours are bounded: §3's levels drift block-wise against the
+  DEM (§3.9), so candidates from neighbours on either side of a drift
+  step disagree by more than I/2 and the clamp holds the chain between
+  them.
 - §6.6's starting constants are kept: the vote met the target as first
   specified, so no variant (smaller fixed windows, a graph neighbourhood,
   smoothing of the cell field) was needed.
@@ -1009,12 +1040,12 @@ sampler, and compares with T2. Measured 2026-11-14:
 | `terrain/anchor/__tests__/sample.test.ts` | quantiles, median and half-IQR on a cone and a plane, 2 m spacing at two scales, coverage and no data, a closed chain's closing segment, the box stencil and NaN in it (§6.2–6.3) |
 | `terrain/anchor/__tests__/side.test.ts` | hill and pit sides, the 0.4 m and 65 % thresholds, an uncovered chain, the coarse grade's ±20 m and 0.5 m (§6.3) |
 | `terrain/anchor/__tests__/interval.test.ts` | R at I and I/2 for one and two ladders, phase, weights, noise, circular deviation (§6.5) |
-| `terrain/anchor/__tests__/ladder.test.ts` | candidates (one, two, the wrap, under 4 %, noise), the vote per hill and at a border, own evidence removed, the growing window and an unlabelled chain, continuous levels at the wrap, determinism (§6.6–6.7) |
-| `terrain/anchor/__tests__/anchor.test.ts` | through H1's graph: a shifted ladder snapped, the external side, noise, spread-failed and uncovered chains, two ladders per area, the residue split, coarse promoted and not, no ladder, a suspect interval, determinism (§6.4, §6.7, §6.9) |
-| `terrain/anchor/__tests__/resolve.test.ts` | DEM heights kept, a spread-failed chain from its neighbours, bounded, the 3-band search, the component offset, no height, the drift report, the coarse offset and drift bound, determinism (§6.8) |
+| `terrain/anchor/__tests__/ladder.test.ts` | candidates (one, two, the wrap, under 4 %, noise), the vote per hill and at a border, own evidence removed, the 0.6 share and the 300 m floor, the growing window and an unlabelled chain, continuous levels at the wrap, determinism (§6.6–6.7) |
+| `terrain/anchor/__tests__/anchor.test.ts` | through H1's graph: a shifted ladder snapped, the external side, noise, an accepted chain off its ladder unsnapped, spread-failed and uncovered chains, two ladders per area, the residue split, coarse promoted and not, no ladder, a suspect interval, determinism (§6.4, §6.7, §6.9) |
+| `terrain/anchor/__tests__/resolve.test.ts` | DEM heights kept, a spread-failed chain from its neighbours, bounded by spread and by the clamp, neighbours at exactly 3 bands, the 3-band search, a chain §3 left undecided, the component offset, no height, the drift report, the coarse offset and drift bound, determinism (§6.8) |
 | `terrain/anchor/__tests__/anchor-solve.test.ts` | with §3's `solveTerrain`: a wrong tick against the DEM — the DEM side decides, the disagreement counted; `anchoredHeights` on a real solution (§3.0 answer 1, §6.3, §6.8) |
 | `terrain/anchor/__tests__/synthetic-dem.ts` | analytic DEMs (cone, pit, plane), rings, a seeded generator |
-| `.local/h9/anchor.mts`, `side.mts` (not committed) | T2's corpus aggregates and side reproduced, the §6.0 answer 3 target, §3.0's index target per index phase (§6.10) |
+| `.local/h9/anchor.mts`, `side.mts`, `heights.mts` (not committed) | T2's corpus aggregates and side reproduced, the §6.0 answer 3 target, §3.0's index target per index phase, anchored heights after the solve (§6.10) |
 
 ## Pending in this chapter
 

@@ -100,6 +100,20 @@ describe("anchorLevels (§6.4, §6.7, §6.9)", () => {
     expect(a.report.share.spreadFailed).toBeGreaterThan(0);
   });
 
+  it("keeps an accepted chain off its ladder (|residual| > 0.3 I) as DEM, unsnapped", () => {
+    // A ring at its own iso-line 2 m above level 4: tight, but 2 m from the ladder.
+    const off = { sym: S.contour, coords: ring(0, 0, (hillA.top - (hillA.phase + I * 4 + 2)) / (SLOPE * G), 96) };
+    const g = graphOf([...hillObjects({ ...hillA, levels: [0, 1, 2, 3, 5, 6, 7, 8, 9] }), off]);
+    const a = anchorLevels(g, coneDem([hillA]), LM);
+    const i = g.chains.findIndex((c) => Math.abs(c.lengthMm - 2 * Math.PI * ((hillA.top - (hillA.phase + I * 4 + 2)) / (SLOPE * G))) < 0.5);
+    expect(i).toBeGreaterThanOrEqual(0);
+    expect(a.chains.ladder[i]).toBeGreaterThanOrEqual(0);
+    expect(Math.abs(a.chains.residual[i])).toBeGreaterThan(0.3 * I);
+    expect(a.chains.status[i]).toBe(ANCHOR_STATUS.unsnapped);
+    expect(a.chains.height[i]).toBe(a.chains.median[i]);
+    expect(a.chains.ladderLevel[i]).toBe(NO_LEVEL);
+  });
+
   it("marks chains outside the DEM uncovered", () => {
     const g = graphOf(hillObjects(hillA));
     const base = coneDem([hillA]);
