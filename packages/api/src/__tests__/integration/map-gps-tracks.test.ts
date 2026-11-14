@@ -387,7 +387,7 @@ describe("ownership (§1.3)", () => {
     const text = JSON.stringify(snapshot, (_k, v: unknown) => (typeof v === "bigint" ? v.toString() : v));
     expect(text).not.toContain(t.id);
     expect(text).not.toContain(`snap-${suffix}`);
-    expect(text).not.toMatch(/gps_?tracks?/i);
+    expect(Object.keys(snapshot.tables).filter((k) => /gps/i.test(k))).toEqual([]);
   });
 
   it("journals nothing", async () => {

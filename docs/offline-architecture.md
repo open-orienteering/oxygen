@@ -115,6 +115,11 @@ tRPC, never journaled, and **cloud-owned even during a lease**:
 - **The event's map patch** (`map_patches`, `docs/map-patches.md` §3.4)
   is cloud-owned the same way: it travels in the checkout snapshot's
   `maps` part for the venue's map, and `mapPatch.` writes are forwarded.
+- **The event's GPS tracks** (`map_gps_tracks`, `docs/map-gps-tracks.md`
+  §1.3) are cloud-owned and not journaled, and they are **not** in the
+  checkout snapshot: `mapTrack.` writes are forwarded, and a box's
+  `mapTrack.list` answers empty during a lease (mapping is not a venue
+  task; user 2026-11-13).
 - **Layout and print data** (row G18, slice G answer 4): sheets
   (`course_maps`), templates, course objects and the graphics they draw
   travel in the checkout snapshot (`docs/map-storage.md` §7.2), so the box
