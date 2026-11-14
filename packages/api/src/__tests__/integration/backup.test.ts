@@ -8,7 +8,8 @@
  * merges by key, the newer `decided_at` winning. The `map_files` section
  * of a dump written before v0.6.1 (bytes in `file_data`) restores through
  * `restore-legacy-map-files.sql`, and the re-match imports what has no
- * document (E5).
+ * document (E5). The event's `map_patches` row (docs/map-patches.md §3.5)
+ * is a plain section after `map_files`, restored with `event_id` rewritten.
  */
 
 import { describe, it, expect, beforeAll, afterAll } from "vitest";
@@ -41,6 +42,8 @@ let dump: string;
 let uploaderId: string;
 let originalFile: Record<string, unknown>;
 let courseObjectId: string;
+let patchRow: { id: string; version: bigint; ops: unknown };
+const PATCH_OPS = { "hide:3": { op: "hide", sourceIndex: 3 }, "modify:4": { op: "modify", sourceIndex: 4, coords: [[1, 2], [3, 4, 1]], angle: 900 } };
 // Fingerprints no real symbol has: decisions are instance-global and keyed
 // by symbol geometry, so a real one would change other suites' imports.
 const FP = (k: string) => `ocad:999.9:bk${suffix}${k}`;
@@ -94,6 +97,11 @@ beforeAll(async () => {
     data: { eventId: source.eventId, kind: "oob_area", geometry: [{ x: 1, y: 1 }, { x: 5, y: 1 }, { x: 5, y: 5 }], scope: { all: true } },
   })).id;
 
+  patchRow = await source.db.mapPatch.create({
+    data: { eventId: source.eventId, documentHash, enabled: false, ops: PATCH_OPS, version: 2n ** 60n + 7n },
+    select: { id: true, version: true, ops: true },
+  });
+
   server = Fastify({ logger: false });
   registerBackupRoute(server);
   await server.ready();
@@ -143,6 +151,14 @@ describe("per-event dump", () => {
     const rows = splitBackupSections(dump).get("course_objects")!.trim().split("\n");
     expect(rows).toHaveLength(2);
     expect(rows[1].startsWith(`${courseObjectId},`)).toBe(true);
+  });
+
+  it("carries the event's map patch directly after map_files (map-patches.md §3.5)", () => {
+    const order = [...splitBackupSections(dump).keys()];
+    expect(order.indexOf("map_patches")).toBe(order.indexOf("map_files") + 1);
+    const rows = splitBackupSections(dump).get("map_patches")!.trim().split("\n");
+    expect(rows).toHaveLength(2);
+    expect(rows[1].startsWith(`${patchRow.id},${source.eventId},${documentHash},f,`)).toBe(true);
   });
 
   it("omits previews", () => {
@@ -217,6 +233,26 @@ describe("restore-map-blobs.sql", () => {
     expect(byKey[FP("lost")]).toMatchObject({ canonicalId: "dump-lost", decidedBy: null, decidedAt: T0 });
     expect(byKey[FP("newer")]).toMatchObject({ canonicalId: "live-newer" });
     expect(byKey[FP("older")]).toMatchObject({ canonicalId: "dump-older", decidedAt: T0 });
+  });
+
+  it("restores the map patch with event_id rewritten (the generic step), token and states exact", async () => {
+    const at = join(sectionsDir, "patches");
+    mkdirSync(at);
+    writeFileSync(join(at, "map_patches.csv"), splitBackupSections(dump).get("map_patches")!);
+    writeFileSync(
+      join(at, "load.sql"),
+      [
+        "\\set ON_ERROR_STOP on",
+        "CREATE TEMP TABLE p (LIKE oxygen.map_patches);",
+        "\\copy p FROM 'map_patches.csv' WITH (FORMAT csv, HEADER true)",
+        "UPDATE p SET event_id = :event_id;",
+        "INSERT INTO oxygen.map_patches SELECT * FROM p;",
+      ].join("\n"),
+    );
+    psqlRestore(at, target.eventId, join(at, "load.sql"));
+    const row = await target.db.mapPatch.findUniqueOrThrow({ where: { eventId: target.eventId } });
+    expect(row).toMatchObject({ id: patchRow.id, documentHash, enabled: false, version: patchRow.version });
+    expect(row.ops).toEqual(PATCH_OPS);
   });
 
   it("is a no-op the second time", async () => {

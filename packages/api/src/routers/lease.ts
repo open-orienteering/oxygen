@@ -185,6 +185,7 @@ export const leaseRouter = router({
             fetchedBytes: blobs?.fetchedBytes ?? 0,
             skipped: snapshot.maps?.skipped ?? 0,
             decisions: snapshot.maps?.decisions?.length ?? 0,
+            patches: snapshot.maps?.patch ? 1 : 0,
           },
         };
       } catch (err) {

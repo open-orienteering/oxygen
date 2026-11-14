@@ -13,7 +13,8 @@ import { API_BASE } from "./helpers/api-base";
  * so the GL dev page can load it straight from the API; the original file
  * streams back from `/api/map-sources/:hash` to an event manager. The
  * second test drives the chunked upload route and the import job status
- * end to end.
+ * end to end. The third delivers the event's map patch beside its
+ * document (docs/map-patches.md §3.3).
  */
 
 const EVENT = "itest";
@@ -170,5 +171,42 @@ test.describe("Map documents", () => {
     expect((await status.json())?.result?.data).toMatchObject({ state: "done", documentHash: result.documentHash, clubMapId: created.id });
     const removed = await request.post(`${API_BASE}/trpc/clubMap.remove`, { data: { id: created.id } });
     expect(removed.ok()).toBe(true);
+  });
+
+  test("the event's map patch is delivered beside its document, revalidated by its version", async ({ request }) => {
+    // Pin a document: one chunk, then apply by hash.
+    const file = readFileSync("e2e/test.ocd");
+    const init = await request.post(`${API_BASE}/api/map-uploads`, { headers: HEADERS, data: { fileName: "patched.ocd", bytes: file.byteLength, chunkBytes: file.byteLength } });
+    expect(init.status()).toBe(201);
+    const { uploadId } = (await init.json()) as { uploadId: string };
+    const put = await request.put(`${API_BASE}/api/map-uploads/${uploadId}/chunks/0`, { headers: { ...HEADERS, "content-type": "application/octet-stream" }, data: file });
+    expect(put.status()).toBe(204);
+    const { fileHash } = (await (await request.post(`${API_BASE}/api/map-uploads/${uploadId}/finalise`, { headers: HEADERS })).json()) as { fileHash: string };
+    const applied = await request.post(`${API_BASE}/trpc/course.applyUploadedMap`, { headers: HEADERS, data: { fileHash, fileName: "patched.ocd" } });
+    const documentHash = (await applied.json())?.result?.data?.documentHash as string;
+    expect(documentHash).toMatch(/^[0-9a-f]{64}$/);
+
+    const url = `${API_BASE}/api/maps/${EVENT}/patch`;
+    const empty = await request.get(url, { headers: HEADERS });
+    expect(empty.status()).toBe(200);
+    expect(await empty.json()).toEqual({ version: "0", patch: null });
+
+    const change = await request.post(`${API_BASE}/trpc/mapPatch.applyChange`, { headers: HEADERS, data: { documentHash, put: [{ op: "hide", sourceIndex: 0 }] } });
+    expect(change.ok()).toBe(true);
+    const written = (await change.json())?.result?.data as { version: string; patch: { ops: Record<string, unknown> } };
+    expect(BigInt(written.version)).toBeGreaterThan(0n);
+
+    const res = await request.get(url, { headers: HEADERS });
+    expect(res.status()).toBe(200);
+    expect(res.headers()["etag"]).toBe(`"${written.version}"`);
+    expect(res.headers()["cache-control"]).toBe("private, no-cache");
+    expect(await res.json()).toEqual({ version: written.version, patch: { documentHash, enabled: true, ops: { "hide:0": { op: "hide", sourceIndex: 0 } }, symbols: {} } });
+    const notModified = await request.get(url, { headers: { ...HEADERS, "if-none-match": `"${written.version}"` } });
+    expect(notModified.status()).toBe(304);
+
+    // The descriptor names the same version; anonymous callers are refused.
+    const meta = await request.get(`${API_BASE}/trpc/course.mapMetadata`, { headers: HEADERS });
+    expect((await meta.json())?.result?.data?.patchVersion).toBe(written.version);
+    expect((await request.get(url, { headers: { ...HEADERS, "x-forwarded-email": "" } })).status()).toBe(401);
   });
 });

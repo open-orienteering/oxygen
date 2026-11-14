@@ -88,7 +88,7 @@ export const mapPatchSchema = z
 export type MapPatch = z.output<typeof mapPatchSchema>;
 export type MapPatchInput = z.input<typeof mapPatchSchema>;
 
-/** `mapPatch.apply`'s body (row G3) and the client's optimistic change (map-patches §1.5). */
+/** `mapPatch.applyChange`'s body (row G3) and the client's optimistic change (map-patches §1.5). */
 export const patchChangeSchema = z
   .object({
     put: z.array(patchOpSchema).default([]),

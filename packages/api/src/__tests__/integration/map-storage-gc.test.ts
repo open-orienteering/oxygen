@@ -144,6 +144,33 @@ describe("runStorageGc", () => {
     expect((await runStorageGc(ctx.db)).documents).toContain(doc);
   });
 
+  it("keeps an old document referenced only by a map patch and touches it (map-patches.md §3.6)", async () => {
+    const { src, doc } = await orphanPair();
+    // A dormant patch: the event's pin names no document, the patch still keys onto `doc`.
+    const patch = await ctx.db.mapPatch.create({ data: { eventId: ctx.eventId, documentHash: doc, ops: { "hide:1": { op: "hide", sourceIndex: 1 } } } });
+    const dry = await runStorageGc(ctx.db, { dryRun: true });
+    expect(dry.documents).not.toContain(doc);
+    const result = await runStorageGc(ctx.db);
+    expect(result.documents).not.toContain(doc);
+    expect(result.sources).not.toContain(src);
+    expect(await docExists(doc)).toBe(true);
+    const row = await ctx.db.mapDocument.findUniqueOrThrow({ where: { hash: doc }, select: { lastReferencedAt: true } });
+    expect(Date.now() - row.lastReferencedAt.getTime()).toBeLessThan(60_000);
+    // RESTRICT is the belt.
+    let err: unknown = null;
+    try {
+      await deleteBlob(ctx.db, "map_documents", doc);
+    } catch (e) {
+      err = e;
+    }
+    expect(isForeignKeyViolation(err)).toBe(true);
+
+    // Once the patch is gone and a fresh grace has passed, the document goes.
+    await ctx.db.mapPatch.delete({ where: { id: patch.id } });
+    await ctx.db.mapDocument.update({ where: { hash: doc }, data: { lastReferencedAt: new Date(Date.now() - 31 * DAY) } });
+    expect((await runStorageGc(ctx.db)).documents).toContain(doc);
+  });
+
   it("keeps an old document referenced by a club map version", async () => {
     const { src, doc } = await orphanPair();
     const clubMap = await ctx.db.clubMap.create({ data: { name: `GC club ${suffix}` } });

@@ -1174,11 +1174,11 @@ client did not write earns a one-line notice. "Moved by X at T" reads
 `actorId` and the physical part of `hlc` of the row's last `*.upserted`
 journal entry (`course.lastChange`, `control.lastChange`).
 
-**`map_patches` (slice G, no code).** Patch operations are idempotent and
+**`map_patches` (slice G; `docs/map-patches.md` §3).** Patch operations are idempotent and
 commutative: each op is keyed by `(object id, op id)` and sets a state
 (hidden, colour override, …) rather than applying a relative change, so
 applying twice equals once and two devices' patches merge in any order.
-They merge **on the server per op id** (`mapPatch.apply { put, remove }`
+They merge **on the server per op id** (`mapPatch.applyChange { put, remove }`
 under the row lock), not through the journal: the patch is one cloud-owned
 `map_patches` row per event, outside the results closure, carried in the
 checkout snapshot and written from a venue box by forwarding to the cloud

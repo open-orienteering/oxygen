@@ -12,6 +12,7 @@ import {
   fetchBlob,
   partitionMapFiles,
   pinnedHashes,
+  snapshotPatchOf,
   verifyBlob,
   type BlobSliceFetcher,
 } from "../sync/snapshotMaps.js";
@@ -36,6 +37,19 @@ describe("pinnedHashes", () => {
 
   it("is empty for an event without pins", () => {
     expect(pinnedHashes([], [])).toEqual({ sources: [], documents: [] });
+  });
+});
+
+describe("snapshotPatchOf (docs/map-patches.md §3.4)", () => {
+  const row = { id: "0190a0a0-0000-7000-8000-000000000001", documentHash: H("a"), enabled: false, ops: { "hide:1": { op: "hide", sourceIndex: 1 } }, symbols: {}, version: 2n ** 62n + 3n };
+
+  it("carries the row with its token as an exact decimal string", () => {
+    expect(snapshotPatchOf(row, [H("a"), H("b")])).toEqual({ ...row, version: "4611686018427387907" });
+  });
+
+  it("carries nothing without a row, or when its document does not travel (a dormant patch)", () => {
+    expect(snapshotPatchOf(null, [H("a")])).toBeNull();
+    expect(snapshotPatchOf(row, [H("b")])).toBeNull();
   });
 });
 
