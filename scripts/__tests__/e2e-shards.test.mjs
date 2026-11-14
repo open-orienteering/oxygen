@@ -4,19 +4,21 @@ import { readdirSync, readFileSync } from "node:fs";
 import path from "node:path";
 import test from "node:test";
 import { fileURLToPath } from "node:url";
-import { partition, weightOf } from "../e2e-weights.mjs";
+import { isPreviewSpec, partition, weightOf } from "../e2e-weights.mjs";
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../..");
 const RUNNER = path.join(ROOT, "scripts", "e2e-sharded.mjs");
-const SPECS = readdirSync(path.join(ROOT, "e2e"))
+const ALL_SPECS = readdirSync(path.join(ROOT, "e2e"))
   .filter((f) => f.endsWith(".spec.ts"))
   .sort();
+/** The specs the shards split: every spec but the preview stack's (G29). */
+const SPECS = ALL_SPECS.filter((f) => !isPreviewSpec(f));
 
 /** Run the sharded runner with `--plan` (prints the split, starts nothing). */
-function plan(env) {
+function plan(env, extra = []) {
   const base = { ...process.env };
   for (const k of ["E2E_SHARDS", "E2E_SHARD_TOTAL", "E2E_SHARD_INDEX"]) delete base[k];
-  return spawnSync(process.execPath, [RUNNER, "--plan"], {
+  return spawnSync(process.execPath, [RUNNER, "--plan", ...extra], {
     cwd: ROOT,
     env: { ...base, ...env },
     encoding: "utf8",
@@ -32,6 +34,8 @@ function parsePlan(stdout) {
     if (header) {
       current = Number(header[1]);
       shards.set(current, []);
+    } else if (/^ {2}\S/.test(line)) {
+      current = null; // another header (the preview stack's): its files are no shard's
     } else if (current !== null && /^ {4}e2e\//.test(line)) {
       shards.get(current).push(line.trim());
     }
@@ -116,4 +120,55 @@ test("ci.yml: the E2E matrix lists shards 1..N and passes the job total and its 
   assert.match(job, /^ {6}E2E_SHARD_INDEX: \$\{\{ matrix\.shard \}\}$/m);
   // The gate keeps the check name the merge flow reads.
   assert.match(ci, /\n {2}e2e:\n {4}name: E2E tests\n/);
+});
+
+// G29: the preview stack (docs/e2e-sharding.md "The preview stack").
+test("isPreviewSpec: the .preview.spec.ts suffix, and there is at least one", () => {
+  assert.equal(isPreviewSpec("offline-print.preview.spec.ts"), true);
+  assert.equal(isPreviewSpec("e2e/offline-print.preview.spec.ts"), true);
+  assert.equal(isPreviewSpec("offline.spec.ts"), false);
+  assert.equal(isPreviewSpec("preview.ts"), false);
+  assert.ok(ALL_SPECS.some(isPreviewSpec), "a preview spec in e2e/");
+});
+
+test("--plan: no preview spec in any shard; a full local run lists the preview stack after the shards", () => {
+  const full = plan({ E2E_SHARDS: "3" });
+  assert.equal(full.status, 0, full.stderr);
+  const listed = [...parsePlan(full.stdout).values()].flat();
+  assert.deepEqual(listed.sort(), SPECS.map((f) => `e2e/${f}`).sort());
+  assert.match(full.stdout, /^ {2}preview \(api :4100, web :4400 vite preview, eventor :4300, db oxygen_e2e\), after the shards:$/m);
+  for (const f of ALL_SPECS.filter(isPreviewSpec)) assert.ok(full.stdout.includes(`\n    e2e/${f}\n`), f);
+});
+
+test("--plan with E2E_SHARD_INDEX: one matrix job never runs the preview stack (CI's e2e-preview job does)", () => {
+  const one = plan({ E2E_SHARD_TOTAL: "6", E2E_SHARD_INDEX: "1" });
+  assert.equal(one.status, 0, one.stderr);
+  assert.doesNotMatch(one.stdout, /preview/);
+});
+
+test("--plan --preview: the preview stack only", () => {
+  const r = plan({}, ["--preview"]);
+  assert.equal(r.status, 0, r.stderr);
+  assert.match(r.stdout, /^Running the preview stack/m);
+  assert.equal(parsePlan(r.stdout).size, 0);
+});
+
+test("a selective run may not mix preview and dev-server specs; --preview with a dev-server spec is refused", () => {
+  const mixed = plan({}, ["e2e/offline-print.preview.spec.ts", "e2e/offline.spec.ts"]);
+  assert.equal(mixed.status, 2);
+  assert.match(mixed.stderr, /preview/);
+  const wrong = plan({}, ["--preview", "e2e/offline.spec.ts"]);
+  assert.equal(wrong.status, 2);
+});
+
+test("ci.yml: the e2e-preview job runs the preview stack and the E2E gate needs it", () => {
+  const ci = readFileSync(path.join(ROOT, ".github", "workflows", "ci.yml"), "utf8");
+  const job = ci.slice(ci.indexOf("\n  e2e-preview:\n"), ci.indexOf("\n  e2e:\n"));
+  assert.ok(ci.includes("\n  e2e-preview:\n") && job.length > 0, "e2e-preview job before the gate");
+  assert.match(job, /^ {8}run: pnpm test:e2e --preview$/m);
+  assert.doesNotMatch(job, /E2E_SHARD_(TOTAL|INDEX)/);
+  const gate = ci.slice(ci.indexOf("\n  e2e:\n"), ci.indexOf("\n  publish:\n"));
+  assert.match(gate, /^ {4}needs: \[e2e-shard, e2e-preview\]$/m);
+  assert.match(gate, /needs\.e2e-shard\.result/);
+  assert.match(gate, /needs\.e2e-preview\.result/);
 });

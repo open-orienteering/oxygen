@@ -38,7 +38,20 @@
  *                                    # (same 4100/4200/4300 default stack as a
  *                                    # selective run, never the dev servers)
  *
- * Artifacts land in test-results/shard-<i> and playwright-report/shard-<i>.
+ * The preview stack (G29, docs/e2e-sharding.md "The preview stack"): the
+ * production bundle under `vite preview` on :4400, with its service worker,
+ * beside the default stack's API :4100, Eventor stub :4300 and db <prefix>.
+ * Its specs (`*.preview.spec.ts`) are in no shard; Playwright runs them as
+ * project `preview` with E2E_PREVIEW=1.
+ *
+ *   pnpm test:e2e --preview          # the preview stack only (CI's e2e-preview job)
+ *   pnpm test:e2e e2e/offline-print.preview.spec.ts  # the same, one file
+ *   pnpm test:e2e                    # a full local run: the shards, then
+ *                                    # the preview stack (a matrix job,
+ *                                    # E2E_SHARD_INDEX, runs its shard only)
+ *
+ * Artifacts land in test-results/shard-<i> and playwright-report/shard-<i>
+ * (the preview stack's in test-results/preview, playwright-report/preview).
  */
 import { spawn } from "node:child_process";
 import { appendFileSync, readdirSync } from "node:fs";
@@ -46,7 +59,7 @@ import os from "node:os";
 import path from "node:path";
 import readline from "node:readline";
 import { fileURLToPath } from "node:url";
-import { partition } from "./e2e-weights.mjs";
+import { isPreviewSpec, partition } from "./e2e-weights.mjs";
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 /**
@@ -87,6 +100,8 @@ const SHARD_COUNT =
 const API_PORT_BASE = 4100;
 const WEB_PORT_BASE = 4200;
 const EVENTOR_PORT_BASE = 4300;
+/** The preview stack's web port (e2e/helpers/ports.ts E2E_DEFAULT_PREVIEW_PORT). */
+const PREVIEW_PORT = 4400;
 const DB_PREFIX = process.env.E2E_DB_PREFIX ?? "oxygen_e2e";
 
 /**
@@ -97,8 +112,23 @@ const DB_PREFIX = process.env.E2E_DB_PREFIX ?? "oxygen_e2e";
  */
 
 const PLAN_ONLY = process.argv.includes("--plan");
-const args = process.argv.slice(2).filter((a) => a !== "--plan");
-const hasFileFilter = args.some((a) => !a.startsWith("-"));
+const PREVIEW_ONLY = process.argv.includes("--preview");
+const args = process.argv.slice(2).filter((a) => a !== "--plan" && a !== "--preview");
+const fileArgs = args.filter((a) => !a.startsWith("-"));
+const hasFileFilter = fileArgs.length > 0;
+
+// One Playwright process runs one stack: the dev server's specs or the
+// preview build's, never both.
+const previewFiles = fileArgs.filter(isPreviewSpec);
+if (previewFiles.length > 0 && previewFiles.length < fileArgs.length) {
+  console.error("A selective run takes preview specs (*.preview.spec.ts) or dev-server specs, not both: they run on different stacks.");
+  process.exit(2);
+}
+if (PREVIEW_ONLY && previewFiles.length < fileArgs.length) {
+  console.error("--preview runs the preview stack: its file arguments must be preview specs (*.preview.spec.ts).");
+  process.exit(2);
+}
+const runPreview = PREVIEW_ONLY || (hasFileFilter && previewFiles.length === fileArgs.length);
 
 function runPlaywright(extraArgs, env, onLine) {
   const child = spawn("pnpm", ["exec", "playwright", "test", ...extraArgs], {
@@ -114,7 +144,27 @@ function runPlaywright(extraArgs, env, onLine) {
   return child;
 }
 
-if (hasFileFilter) {
+/** The preview stack's env: the default stack's API, stub and db, `vite preview` on PREVIEW_PORT. */
+function previewEnv() {
+  return {
+    E2E_PREVIEW: "1",
+    E2E_API_PORT: process.env.E2E_API_PORT ?? String(API_PORT_BASE),
+    E2E_EVENTOR_PORT: process.env.E2E_EVENTOR_PORT ?? String(EVENTOR_PORT_BASE),
+    E2E_PREVIEW_PORT: process.env.E2E_PREVIEW_PORT ?? String(PREVIEW_PORT),
+    E2E_DB_NAME: process.env.E2E_DB_NAME ?? DB_PREFIX,
+  };
+}
+const PREVIEW_LABEL = `preview (api :${API_PORT_BASE}, web :${PREVIEW_PORT} vite preview, eventor :${EVENTOR_PORT_BASE}, db ${DB_PREFIX})`;
+
+if (runPreview) {
+  // The preview stack only (`--preview`, or preview specs named): one
+  // Playwright process, project `preview`; with no file named it runs
+  // every preview spec (the project's testMatch).
+  console.log(`Running the preview stack: ${PREVIEW_LABEL}`);
+  if (PLAN_ONLY) process.exit(0);
+  const child = runPlaywright(args, previewEnv());
+  child.on("exit", (code) => process.exit(code ?? 1));
+} else if (hasFileFilter) {
   // Selective run: a single plain Playwright process, on the unsuffixed
   // bases (API_PORT_BASE + 0 / WEB_PORT_BASE + 0, the same values as the
   // defaults in e2e/helpers/ports.ts) and DB, so it never touches a running
@@ -130,9 +180,14 @@ if (hasFileFilter) {
   child.on("exit", (code) => process.exit(code ?? 1));
 } else {
   // Full run: partition all spec files across N shards.
-  const specs = readdirSync(path.join(ROOT, "e2e"))
+  const all = readdirSync(path.join(ROOT, "e2e"))
     .filter((f) => f.endsWith(".spec.ts"))
     .sort();
+  // The preview stack's specs are in no shard (G29): they need the build.
+  const specs = all.filter((f) => !isPreviewSpec(f));
+  const previewSpecs = all.filter(isPreviewSpec).map((f) => `e2e/${f}`);
+  // A matrix job runs its shard only; CI's e2e-preview job runs the preview stack.
+  const withPreview = !SHARD_INDEX && previewSpecs.length > 0;
 
   // LPT (`partition` in scripts/e2e-weights.mjs): heaviest files first,
   // each into the currently lightest shard.
@@ -155,6 +210,10 @@ if (hasFileFilter) {
     );
     if (runs || PLAN_ONLY) for (const f of s.files) console.log(`    ${f}`);
   });
+  if (withPreview) {
+    console.log(`  ${PREVIEW_LABEL}, after the shards:`);
+    for (const f of previewSpecs) console.log(`    ${f}`);
+  }
   console.log("");
   if (PLAN_ONLY) process.exit(0);
 
@@ -207,6 +266,20 @@ if (hasFileFilter) {
     }),
   );
 
+  // The preview stack after the shards, not beside them: the shard count
+  // is sized to the cores, and one more stack would crowd every timing.
+  let preview = null;
+  if (withPreview) {
+    const t0 = Date.now();
+    const child = runPlaywright([...args, ...previewSpecs], previewEnv(), (line) => {
+      console.log(`[preview] ${line}`);
+    });
+    children.push(child);
+    preview = await new Promise((resolve) => {
+      child.on("exit", (code) => resolve({ code: code ?? 1, seconds: (Date.now() - t0) / 1000 }));
+    });
+  }
+
   const totalSeconds = (Date.now() - startedAt) / 1000;
   console.log("\n── Shard summary ──────────────────────────────");
   const lines = [];
@@ -215,6 +288,11 @@ if (hasFileFilter) {
     lines.push(`shard ${n}/${SHARD_COUNT}: ${status} in ${r.seconds.toFixed(0)}s (weight ${shards[n - 1].weight})`);
     console.log(`  ${lines.at(-1)} — report: playwright-report/shard-${n}`);
   }
+  if (preview) {
+    const status = preview.code === 0 ? "PASS" : `FAIL (exit ${preview.code})`;
+    lines.push(`preview: ${status} in ${preview.seconds.toFixed(0)}s`);
+    console.log(`  ${lines.at(-1)} — report: playwright-report/preview`);
+  }
   console.log(`  total wall time: ${totalSeconds.toFixed(0)}s`);
   // On GitHub Actions the shard's time also goes on the job's summary
   // page: the numbers scripts/e2e-weights.mjs is rebalanced from.
@@ -222,8 +300,9 @@ if (hasFileFilter) {
     appendFileSync(process.env.GITHUB_STEP_SUMMARY, lines.map((l) => `- ${l}\n`).join(""));
   }
   const failed = [...results.values()].filter((r) => r.code !== 0).length;
-  if (failed > 0) {
-    console.error(`\n${failed} shard(s) failed.`);
+  const previewFailed = preview !== null && preview.code !== 0;
+  if (failed > 0 || previewFailed) {
+    console.error(`\n${failed} shard(s) failed${previewFailed ? "; the preview stack failed" : ""}.`);
     process.exit(1);
   }
   process.exit(0);
