@@ -248,6 +248,19 @@ export function loadMapPatch(nameId: string, opts: FetchOptions = {}): Promise<M
   return p;
 }
 
+/**
+ * The session's copy when it is `version` (or no version is wanted), else a fetch. A fetch that
+ * joined a request already in flight — started before the change — and still answers another
+ * version is made once more, so a `patchVersion` change is never lost to a revalidation.
+ */
+export async function refreshMapPatch(nameId: string, version?: string | null, opts: FetchOptions = {}): Promise<MapPatchDelivery> {
+  const held = getMapPatch(nameId);
+  if (held && (version == null || version === held.version)) return held;
+  const joined = !!patches.get(nameId)?.inflight;
+  const d = await loadMapPatch(nameId, opts);
+  return joined && version != null && d.version !== version ? loadMapPatch(nameId, opts) : d;
+}
+
 /** For tests: forget every event's patch. */
 export function resetMapPatches(): void {
   patches.clear();
@@ -263,9 +276,7 @@ export function useMapPatch(nameId: string | null | undefined, version?: string 
   const subscribe = useCallback((fn: () => void) => (nameId ? subscribeMapPatch(nameId, fn) : () => undefined), [nameId]);
   const delivery = useSyncExternalStore(subscribe, () => (nameId ? getMapPatch(nameId) : undefined)) ?? NO_PATCH;
   useEffect(() => {
-    if (!nameId) return;
-    const held = getMapPatch(nameId);
-    if (!held || (version != null && version !== held.version)) void loadMapPatch(nameId);
+    if (nameId) void refreshMapPatch(nameId, version);
   }, [nameId, version]);
   useEffect(() => {
     if (!nameId || typeof window === "undefined") return;

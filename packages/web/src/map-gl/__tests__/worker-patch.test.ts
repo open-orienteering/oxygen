@@ -224,6 +224,19 @@ describe("a patch change (§5.2 \"Patch\")", () => {
     expect(withPatch.summary.queued).toEqual([]);
   });
 
+  it("a request whose symbolisation throws answers error and leaves the worker as the engine has it", () => {
+    const h = loaded();
+    expect(patch(h, patchOf([moveLine1(7)])).touched).toEqual([cell(0)]);
+    // A patch symbol whose drawing the symboliser cannot read (no schema in the worker: a programming error upstream).
+    const broken = { ...discSym("X:1", 500), origin: "source", hidden: false, render: { type: "point", id: "x", code: "x", name: "x", glyph: null, orientation: "north" } } as unknown as mapDocument.PatchSymbol;
+    const before = h.sent.length;
+    h.w.handle({ type: "patch", generation: 900, patch: patchOf([moveLine1(7), { op: "add", id: ADD1, type: T.point, symbol: { patch: "X:1" }, coords: [[3200, 500]] }], { "X:1": broken }), detail: [0, 1, 3] });
+    expect(h.sent[before].msg).toMatchObject({ type: "error", patch: 900 });
+    // The same content as the last reply touches nothing; the toggle off touches what that reply drew.
+    expect(patch(h, patchOf([moveLine1(7)])).touched).toEqual([]);
+    expect(patch(h, null).touched).toEqual([cell(0)]);
+  });
+
   it("a request before any load answers error with its generation", () => {
     const h = harness();
     h.w.handle({ type: "patch", generation: 41, patch: null, detail: [] });
@@ -273,5 +286,26 @@ describe("the course layer reads the effective document (§5.2 \"Patch\")", () =
     expect(at(22, 28)).toEqual([]);
     expect(at(67, 73)).toEqual([courseIndex(0)]);
     expect(at(87, 93)).toEqual([3]); // the added object: N = 3 (two lines and the boulder)
+  });
+
+  it("clip regions over the pinned and the patch's objects: the document's masks first, the patch's after, each with its own triangles", () => {
+    const h = harness();
+    h.w.handle(courseLoad());
+    const { originX } = (h.sent[0].msg as LoadedReply).summary;
+    patch(h, patchOf([{ op: "modify", sourceIndex: 0, coords: [[7000, 0], [7000, 2000]] }]), []);
+    const box = (x0: number, x1: number, y0: number, y1: number) => ({ rings: [[{ x: x0, y: y0 }, { x: x1, y: y0 }, { x: x1, y: y1 }, { x: x0, y: y1 }]], mode: "clip" as const, symbols: "all" as const });
+    // Over the black line's old place, its new place, and the top-row line (source 1, y = 60 mm).
+    const f = ask(h, request({ regions: [box(22, 28, 5, 15), box(67, 73, 5, 15), box(40, 50, 55, 65)] })).filter!;
+    const xRange = (m: number) => {
+      const { offset, count } = f.masks[m];
+      const xs = Array.from(f.indices.slice(offset, offset + count), (i) => f.positions[2 * i] + originX);
+      return [Math.min(...xs), Math.max(...xs)];
+    };
+    const byObject = new Map<number, number>();
+    for (let i = 0; i < f.entries.length; i += 3) byObject.set(f.entries[i], f.entries[i + 2]);
+    expect([...byObject.keys()].sort((a, b) => a - b)).toEqual([courseIndex(0), courseIndex(1)].sort((a, b) => a - b));
+    expect(xRange(byObject.get(courseIndex(1))!)).toEqual([40_000, 50_000]);
+    expect(xRange(byObject.get(courseIndex(0))!)).toEqual([67_000, 73_000]);
+    expect(byObject.get(courseIndex(0))!).toBeGreaterThan(byObject.get(courseIndex(1))!);
   });
 });

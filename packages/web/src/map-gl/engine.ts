@@ -391,6 +391,11 @@ export class MapGlEngine {
       // A worker error without a generation (`onerror`, a failed load) may be the course request's own:
       // never leave the waiting input stuck behind a reply that will not come. A late reply is then stale.
       if (this.courseInFlight !== undefined) this.courseDone();
+      // The same for a patch request in flight: its callers hear the failure, the waiting input goes.
+      if (this.patchInFlight !== undefined) {
+        for (const w of this.inFlightWaiters.splice(0)) w.reject(new Error(m.message));
+        this.patchDone();
+      }
       return;
     }
     if (m.type === "course") {

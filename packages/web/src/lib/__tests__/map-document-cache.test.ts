@@ -9,6 +9,7 @@ import {
   MEMORY_ENTRIES,
   NO_PATCH,
   parseMapPatchDelivery,
+  refreshMapPatch,
   requestPersistentStorage,
   resetMapDocumentCache,
   resetMapPatches,
@@ -155,6 +156,19 @@ describe("the event's patch (docs/map-patches.md §3.3)", () => {
     expect(getMapPatch("b")).toBeUndefined();
     await loadMapPatch("c", { kioskKey: null, fetchImpl: async () => json({ version: "7", patch }) });
     expect(await loadMapPatch("c", { kioskKey: null, fetchImpl: async () => new Response("", { status: 500 }) })).toEqual({ version: "7", patch });
+  });
+
+  it("a wanted version joining a stale in-flight request asks once more; a held one asks nothing", async () => {
+    let n = 0;
+    const fetchImpl = vi.fn(async () => json({ version: String(7 + n++), patch }));
+    const stale = loadMapPatch("itest", { kioskKey: null, fetchImpl });
+    const fresh = refreshMapPatch("itest", "8", { kioskKey: null, fetchImpl });
+    expect((await stale).version).toBe("7");
+    expect((await fresh).version).toBe("8");
+    expect(fetchImpl).toHaveBeenCalledTimes(2);
+    expect(await refreshMapPatch("itest", "8", { kioskKey: null, fetchImpl })).toEqual({ version: "8", patch });
+    expect(await refreshMapPatch("itest", undefined, { kioskKey: null, fetchImpl })).toEqual({ version: "8", patch });
+    expect(fetchImpl).toHaveBeenCalledTimes(2);
   });
 
   it("one request per event at a time", async () => {

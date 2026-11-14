@@ -1,7 +1,7 @@
 import { describe, it, expect } from "vitest";
 import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
-import { render } from "@oxygen/shared";
+import { mapDocument, render } from "@oxygen/shared";
 import { MapGlEngine, type Transport } from "../engine";
 import { createMapGlWorker, type WorkerReply, type WorkerRequest } from "../worker";
 import { CELL_UM, type PreparedPart, type ResidentPart, type VisibleSet, type ViewRect } from "../buckets";
@@ -10,7 +10,7 @@ import { loupeView, type RenderTarget } from "../view";
 import { parseTextAtlasPage } from "../text-atlas";
 import type { MeshAtlas } from "../mesh-atlas";
 import { documentBytes, indexOf, request } from "./course-fixture";
-import { CELL_UM as PATCH_CELL_UM, cell, documentBytes as patchDocumentBytes, index, moveLine1, patchOf } from "./patch-fixture";
+import { CELL_UM as PATCH_CELL_UM, cell, discSym, documentBytes as patchDocumentBytes, index, moveLine1, patchOf } from "./patch-fixture";
 
 const fontsDir = resolve(import.meta.dirname, "../../../../shared/fonts");
 const fontBytes = () => {
@@ -602,6 +602,50 @@ describe("MapGlEngine patch (docs/map-rendering.md §5.2 \"Patch\")", () => {
     expect(prepares(transport).at(-1)!.ids).toContain(cell(0));
     expect(uploads.map((u) => Math.round(new Float32Array(u.stroke!.verts)[0] + engine.summary!.originX))).toEqual([5000, 7000]);
     expect(renderer.parts.get(`d${cell(0)}`)).toBe(uploads[1]);
+  });
+
+  it("a reply grows the atlas, replaces the large part and its bytes", async () => {
+    const { engine, transport, renderer } = await patchEngine();
+    const atlases = renderer.atlases.length;
+    engine.setPatch(patchOf([
+      { op: "resymbol", sourceIndex: 4, symbol: { patch: "K:1" } },
+      { op: "add", id: "00000000-0000-7000-8000-0000000000aa", type: 2, symbol: { doc: 0 }, coords: [[500, 5000], [900, 5000]] },
+    ], { "K:1": mapDocument.patchSymbolSchema.parse(discSym("K:1", 1500)) }));
+    transport.flush();
+    expect(renderer.atlases.length).toBe(atlases + 1);
+    expect(renderer.parts.has("L")).toBe(true);
+    expect(engine.summary!.bytes.large).toBe(renderer.parts.get("L")!.gpuBytes);
+    engine.setPatch(null);
+    transport.flush();
+    expect(renderer.parts.has("L")).toBe(false);
+    expect(engine.summary!.bytes.large).toBe(0);
+  });
+
+  it("a reply re-posts the course: its cuts and filter read the effective document", async () => {
+    const renderer = new FakeRenderer();
+    const transport = manualTransport();
+    const engine = new MapGlEngine(renderer as unknown as MapGlRenderer, transport, { budgetBytes: 1 << 30 });
+    const p = engine.load({ source: { kind: "document", bytes: documentBytes(), options: { unmatched: "proxy" } }, fonts: [{ family: "liberation-sans", bytes: fontBytes() }], courseLayer: true });
+    transport.flush();
+    await p;
+    engine.setCourse(request());
+    transport.flush();
+    const courses = transport.posted.filter((m) => m.type === "course").length;
+    engine.setPatch(patchOf([{ op: "hide", sourceIndex: 0 }]));
+    transport.flush();
+    expect(transport.posted.filter((m) => m.type === "course").length).toBe(courses + 1);
+  });
+
+  it("a worker error without a generation ends the patch request in flight; the next input is sent", async () => {
+    const { engine, transport } = await patchEngine();
+    const a = engine.setPatch(patchOf([{ op: "hide", sourceIndex: 1 }]));
+    const b = engine.setPatch(patchOf([{ op: "hide", sourceIndex: 2 }]));
+    const posted = patches(transport).length;
+    transport.onMessage!({ type: "error", message: "worker failed" });
+    await expect(a).rejects.toThrow("worker failed");
+    expect(patches(transport)).toHaveLength(posted + 1);
+    transport.flush();
+    expect(Array.from((await b).hidden)).toEqual([index(2)]);
   });
 
   it("one request in flight, the latest input next; a failed one rejects only its own callers", async () => {

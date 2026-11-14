@@ -487,31 +487,33 @@ test.describe("vector map layer", () => {
       { op: "add", id: addId, type: 2, symbol: { doc: lines[0].symbolIdx }, coords: [[Math.round((added.x - 1) * u), Math.round(added.y * u)], [Math.round((added.x + 1) * u), Math.round(added.y * u)]] },
     ];
     const written = await api<{ version: string }>("mapPatch.applyChange", { documentHash, put: ops });
-    const attempt = await canvas.getAttribute("data-attempt");
-    // No live channel: the viewer revalidates the patch when the page regains focus.
-    await page.evaluate(() => window.dispatchEvent(new Event("focus")));
-    await expect(canvas).toHaveAttribute("data-patch-version", written.version, { timeout: 30_000 });
-    await expect.poll(async () => {
-      const shot = await snapshot(viewer, canvas);
-      return { hidden: whiteAt(shot, spot!), added: inkAt(shot, added) };
-    }, { timeout: 30_000 }).toEqual({ hidden: true, added: true });
-    // Redrawn without reloading: the same canvas, no new document request.
-    expect(await canvas.getAttribute("data-attempt")).toBe(attempt);
-    expect(documentRequests).toEqual([]);
+    try {
+      const attempt = await canvas.getAttribute("data-attempt");
+      // No live channel: the viewer revalidates the patch when the page regains focus.
+      await page.evaluate(() => window.dispatchEvent(new Event("focus")));
+      await expect(canvas).toHaveAttribute("data-patch-version", written.version, { timeout: 30_000 });
+      await expect.poll(async () => {
+        const shot = await snapshot(viewer, canvas);
+        return { hidden: whiteAt(shot, spot!), added: inkAt(shot, added) };
+      }, { timeout: 30_000 }).toEqual({ hidden: true, added: true });
+      // Redrawn without reloading: the same canvas, no new document request.
+      expect(await canvas.getAttribute("data-attempt")).toBe(attempt);
+      expect(documentRequests).toEqual([]);
 
-    // 3. The toggle off: the pinned document again, both restored.
-    const off = await api<{ version: string }>("mapPatch.setEnabled", { enabled: false });
-    await page.evaluate(() => window.dispatchEvent(new Event("focus")));
-    await expect(canvas).toHaveAttribute("data-patch-version", off.version, { timeout: 30_000 });
-    await expect.poll(async () => {
-      const shot = await snapshot(viewer, canvas);
-      return { line: inkAt(shot, spot!), paper: whiteAt(shot, added) };
-    }, { timeout: 30_000 }).toEqual({ line: true, paper: true });
-    expect(documentRequests).toEqual([]);
-
-    // Clean up for the specs after this one.
-    await api("mapPatch.applyChange", { documentHash, remove: ops.map((o) => (o.op === "add" ? `add:${addId}` : `hide:${(o as { sourceIndex: number }).sourceIndex}`)) });
-    await api("mapPatch.setEnabled", { enabled: true });
+      // 3. The toggle off: the pinned document again, both restored.
+      const off = await api<{ version: string }>("mapPatch.setEnabled", { enabled: false });
+      await page.evaluate(() => window.dispatchEvent(new Event("focus")));
+      await expect(canvas).toHaveAttribute("data-patch-version", off.version, { timeout: 30_000 });
+      await expect.poll(async () => {
+        const shot = await snapshot(viewer, canvas);
+        return { line: inkAt(shot, spot!), paper: whiteAt(shot, added) };
+      }, { timeout: 30_000 }).toEqual({ line: true, paper: true });
+      expect(documentRequests).toEqual([]);
+    } finally {
+      // Clean up for the specs after this one, also when an assertion failed.
+      await api("mapPatch.applyChange", { documentHash, remove: ops.map((o) => (o.op === "add" ? `add:${addId}` : `hide:${(o as { sourceIndex: number }).sourceIndex}`)) });
+      await api("mapPatch.setEnabled", { enabled: true });
+    }
   });
 
   test("without WebGL2 the layer shows its message", async ({ page }) => {

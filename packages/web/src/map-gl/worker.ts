@@ -728,10 +728,11 @@ function applyOverlay(state: State, patch: mapDocument.MapPatch | null): { state
     for (const w of sym.warnings) warnings[w.code] = (warnings[w.code] ?? 0) + 1;
 
     // Glyph meshes join the atlas by content (a re-symbolisation's glyph ids are its own).
-    const size = state.atlas.size;
     const glyphMesh = new Map<string, number>();
     for (const m of stream.glyphTable) glyphMesh.set(`${m.glyphId}/${m.partIdx}`, state.atlas.glyph(m, state.glyphTol, `c/${meshKey(m)}`));
-    if (state.atlas.size > size) {
+    // Against the meshes last sent, not the size before this call: a request that failed after
+    // growing the atlas left meshes the main thread has not seen.
+    if (state.atlas.size > state.meshes.length) {
       grown = state.atlas.build();
       state.meshes = grown.meshes;
       state.ctx.meshes = grown.meshes;
@@ -778,7 +779,8 @@ function applyOverlay(state: State, patch: mapDocument.MapPatch | null): { state
   for (const [b, s] of now) if (was.get(b) !== s) touched.add(b);
   state.overlay = next;
   const patchState: PatchState = next?.state ?? { hidden: new Uint32Array(0), changed: 0, added: 0, issues };
-  if (state.course) {
+  // Recomputed unless the document is drawn as pinned now and was before (the load computed them).
+  if (state.course && (eff !== pd.doc || before)) {
     state.course.cutFeatures = course.cutFeaturesOfDocument(eff);
     patchState.cutFeatures = state.course.cutFeatures.length;
   }
@@ -801,6 +803,27 @@ function objectSignature(eff: mapDocument.EffectiveDocument, patch: mapDocument.
 /** A patch change (§5.2 "Patch"): the overlay replaced, the touched buckets re-prepared. */
 function patchReply(state: State | undefined, msg: PatchRequest): { reply: PatchedReply; transfer: ArrayBuffer[] } {
   if (!state) throw new Error("no document loaded");
+  // A request that throws leaves the worker as the engine still has it: the next change is diffed
+  // against the overlay the engine drew, and an atlas grown here goes with the next reply.
+  const saved = {
+    overlay: state.overlay, cutFeatures: state.course?.cutFeatures, meshes: state.meshes,
+    baseBytes: new Map(state.baseBytes), detailCells: new Set(state.detailCells), largeBytes: state.largeBytes,
+  };
+  try {
+    return patchReplyOf(state, msg);
+  } catch (e) {
+    state.overlay = saved.overlay;
+    if (state.course && saved.cutFeatures) state.course.cutFeatures = saved.cutFeatures;
+    state.meshes = saved.meshes;
+    state.ctx.meshes = saved.meshes;
+    state.baseBytes = saved.baseBytes;
+    state.detailCells = saved.detailCells;
+    state.largeBytes = saved.largeBytes;
+    throw e;
+  }
+}
+
+function patchReplyOf(state: State, msg: PatchRequest): { reply: PatchedReply; transfer: ArrayBuffer[] } {
   const t0 = performance.now();
   const applied = applyOverlay(state, msg.patch);
   const { largeId } = state.assignment;
@@ -937,7 +960,6 @@ function courseReply(state: State | undefined, msg: CourseRequest): { reply: Cou
     page = { colourBase: base, frameRingUm: pl.frameRing.map((p) => [p.x * 1000, p.y * 1000] as [number, number]) };
   }
 
-  const before = state.atlas.size;
   const meshesOf = (s: render.PassStream, prefix: string) => {
     const out = new Map<string, number>();
     for (const m of s.glyphTable) out.set(`${m.glyphId}/${m.partIdx}`, state.atlas.glyph(m, state.glyphTol, `${prefix}/${meshKey(m)}`));
@@ -945,7 +967,7 @@ function courseReply(state: State | undefined, msg: CourseRequest): { reply: Cou
   };
   const glyphMesh = meshesOf(stream, "c");
   const pageGlyphMesh = pageStream ? meshesOf(pageStream, "c") : undefined;
-  const grown = state.atlas.size > before ? state.atlas.build() : undefined;
+  const grown = state.atlas.size > state.meshes.length ? state.atlas.build() : undefined;
   if (grown) {
     state.meshes = grown.meshes;
     state.ctx.meshes = grown.meshes;

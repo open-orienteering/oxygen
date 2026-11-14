@@ -427,7 +427,9 @@ GET /api/maps/:nameId/patch     → 200 application/json { version, patch }
   `subscribeMapPatch`), and asks again when `mapMetadata.patchVersion`
   differs from it and when the page regains focus, becomes visible or
   comes back online — there is no live channel, since the patch is not
-  journaled. One request per event at a time; a failure keeps the
+  journaled. One request per event at a time; a version change that
+  joined a request already in flight and still got the old version asks
+  once more (`refreshMapPatch`); a failure keeps the
   session's copy, else none (never an error to the viewer); a body whose
   `patch` does not parse is no patch, with a warning. The viewer pairs the
   delivery with its document by hash (`patchForDocument`) and does not
@@ -474,7 +476,8 @@ document only a patch points at, and touches its `last_referenced_at`.
   not cached, so a device that starts offline (Field mode) draws the
   pinned document. A NetworkFirst runtime route (`vite.config.ts`) or an
   IndexedDB copy is a follow-up row (G17 or its own).
-- **Patch symbols in the eyedropper** (G4, `map-rendering.md` §8): a
+- **Patch symbols in the eyedropper** (G4, decided overnight for review;
+  `map-rendering.md` §8): a
   filter region cannot select an object drawn with a patch symbol by
   symbol until the region props carry a stable symbol key.
 - **Symbol materialisation and the palette** (row G8): what fills
