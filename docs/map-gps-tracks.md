@@ -20,13 +20,136 @@ and editing (§5) and conversion into map objects (§6).
 
 ## 1. Storage
 
-Pending (G24). Tracks are per event, in their own cloud-owned table
-`map_gps_tracks`, one row per track segment, stored in WGS 84 so that a
-re-match or a new map edition does not move them (slice G "Decided in
-this split", answer 10). The row's `points` are the `TrackPoints`
-columns of §2.1 verbatim, and its trim is a `TrackRange` (§3.5). An
-average (§4) also keeps its `singlePass` ranges (`single_pass`, user
-2026-11-13).
+Tracks are per event, in their own cloud-owned table `map_gps_tracks`,
+one row per track segment, stored in WGS 84 so that a re-match or a new
+map edition does not move them (slice G "Decided in this split", answer
+10). The row's `points` are the `TrackPoints` columns of §2.1 verbatim,
+and its trim is a `TrackRange` (§3.5). An average (§4) also keeps its
+`singlePass` ranges (`single_pass`, user 2026-11-13). Written by row
+G24: migration `20261114120000_map_gps_tracks`, the store
+`packages/api/src/gps-tracks.ts`, the router `mapTrack`
+(`packages/api/src/routers/mapTrack.ts`).
+
+### 1.1 The table
+
+| Column | Type | Meaning |
+|---|---|---|
+| `id` | `UUID` PK, default `uuidv7()` | client-mintable on `import` and `split` (AGENTS.md §7) |
+| `event_id` | `BIGINT` → `events` `ON DELETE CASCADE` | the event the track belongs to |
+| `name` | `TEXT NULL` | `Track.name` (§2.1); null when the GPX names none |
+| `source_name` | `TEXT NOT NULL DEFAULT ''` | the file it came from; `''` for an average |
+| `points` | `JSONB NOT NULL` (an object) | `TrackPoints` verbatim (§2.1) |
+| `point_count` | `INTEGER NOT NULL` | `points.lat.length`, set by the server (user 2026-11-13) |
+| `recorded_at` | `TIMESTAMPTZ(3) NULL` | the first non-null `time`; null when untimed (user 2026-11-13) |
+| `trim_start`, `trim_end` | `INTEGER NOT NULL` | the trim `[start, end)` (§3.5); `0` / `point_count` when untrimmed |
+| `derived_from` | `UUID[] NOT NULL DEFAULT '{}'` | an average's passes (provenance only: no FK, not cleaned on remove) |
+| `single_pass` | `JSONB NULL` (an array) | an average's single-pass ranges (§4.1), `[{ start, end }]` indices of the stored points; null for a recorded track |
+| `converted_op` | `TEXT NULL` | the patch `add` op the track was converted into (G26), `add:<uuid>` |
+| `created_by` | `UUID NULL` → `users` `ON DELETE SET NULL` | the importing user; null with auth off |
+| `created_at` | `TIMESTAMPTZ(6)` | import time; the list order (`created_at`, `id`) |
+| `version` | `BIGINT` | token: an HLC minted at insert and on every write that changes the row, as `map_patches` (`course-layer.md` §7); a decimal string on the wire |
+
+CHECKs: `points` is a JSON object, `single_pass` null or an array,
+`0 ≤ trim_start`, `trim_end − trim_start ≥ 2`, `trim_end ≤ point_count`.
+Index `(event_id, created_at, id)`. No `updated_at`: the token carries
+the write.
+
+`point_count` and `recorded_at` are derived columns the row did not
+name (user 2026-11-13): `list` answers metadata without reading
+`points` (a 200 000-point timed track is about 8 MB of JSON), and the
+trim CHECK needs the count. Length in metres is not stored: it is
+ground metres on the projected track (§3.1), computed on the device.
+
+### 1.2 The API
+
+Every procedure is `coursesEditProcedure` — reads too, so tracks are
+never delivered to a viewer (`courses.view`) or a kiosk key. Every query
+is scoped to the event of the call (`x-event-id`); another event's id is
+`NOT_FOUND`. Metadata (`TrackMeta`): `{ id, name, sourceName,
+pointCount, recordedAt (epoch ms | null), trim: { start, end },
+derivedFrom, singlePass | null, convertedOp, createdBy, createdAt (ISO),
+version (string) }`.
+
+| Procedure | Input | Answer |
+|---|---|---|
+| `mapTrack.list` | — | `{ tracks: TrackMeta[] }` in list order; never reads `points` |
+| `mapTrack.get` | `{ id }` | `TrackMeta & { points }` |
+| `mapTrack.import` | `{ tracks: [{ id?, name, sourceName, points, derivedFrom?, singlePass? }] }` (1–200) | `{ tracks: TrackMeta[] }` in input order |
+| `mapTrack.update` | `{ id, name?, trim? }` (one at least) | `TrackMeta` |
+| `mapTrack.split` | `{ id, index, ids?: [uuid, uuid] }` | `{ tracks: [TrackMeta, TrackMeta] }` |
+| `mapTrack.remove` | `{ ids }` (1–200) | `{ removed }` |
+| `mapTrack.markConverted` | `{ marks: [{ id, opId: string \| null }] }` (1–200) | `{ tracks: TrackMeta[] }` |
+
+- **Parsed on the device.** The server never parses GPX and never
+  projects; it validates `points` against §2.1 and refuses, never
+  re-rounds: `lat` / `lng` equal-length integer arrays (|lat| ≤ 90°,
+  |lng| ≤ 180° in 1e-7°), at least two points; `time` null or that
+  length of null / non-negative safe integers; `ele` null or that length
+  of null / finite numbers equal to their `quantiseEle`. A column of only
+  nulls is stored as null (§2.1). `singlePass` must be integer ranges,
+  `0 ≤ start < end ≤ n`, ascending, disjoint and never touching (§4.1).
+- **Caps** (§2.2 leaves them to this API): 200 000 points a track, 200
+  tracks an event (counted under a per-event transaction lock, so two
+  imports cannot both pass it; `split` counts too), and 500 000 points
+  a call, so one request stays well under Cloud Run's 32 MiB: a device
+  sends a large import as several calls. A refused import writes nothing.
+- **Import** is one transaction, rows inserted in input order (so
+  server-minted ids keep file order). A supplied `id` already in the
+  event is skipped and answered as stored — a retried venue forward is a
+  no-op, and an undo can re-import a removed track under its id; one in
+  another event is `CONFLICT`. `derivedFrom` (2–200 distinct ids) and
+  `singlePass` come together (an average, G27) or not at all.
+- **Update** sets the name and the trim (§3.5's rule against
+  `point_count`). It never touches `points` or `single_pass`: the
+  ranges index the stored points, and shifting them for the trimmed view
+  is G27's (§4.1). A write that changes nothing keeps the version. No
+  `baseVersion`: `points` never change under one id, so only name, trim
+  and `converted_op` can race, last writer wins (as `mapPatch`).
+- **Split** at a stored-point `index` that leaves two visible points on
+  each side (`trim_start + 1 ≤ index ≤ trim_end − 2`) **replaces the row
+  with two** in one transaction (a stale client gets `NOT_FOUND`, not
+  half a track): points from `splitTrack` (§3.5) on the full stored
+  points, so both parts share the split point; trims carried, left
+  `[trim_start, index + 1)`, right `[0, trim_end − index)`, so both stay
+  restorable; `single_pass` divided by `splitRanges` (§3.5); `name`,
+  `source_name`, `derived_from`, `converted_op`, `created_by` and
+  `created_at` kept (the parts stay in the original's place in the
+  list); a fresh version each. With `ids`, a repeat after success (the
+  original gone, both ids present) answers the two rows.
+- **Remove** deletes the event's rows among `ids`; unknown ids are
+  ignored, so twice is once.
+- **Mark converted** sets or clears (G26's undo) `converted_op`; every id
+  must exist in the event, else `NOT_FOUND` and nothing is written. The
+  op is not checked against the patch.
+
+Errors carry their code as the message prefix, as `PATCH_*` do:
+
+| Code | tRPC code | When |
+|---|---|---|
+| `TRACK_POINTS_INVALID` | `BAD_REQUEST` | a points or `singlePass` rule fails, or `derivedFrom` / `singlePass` come alone |
+| `TRACK_TOO_MANY_POINTS` | `PAYLOAD_TOO_LARGE` | a track has more than 200 000 points |
+| `TRACK_REQUEST_TOO_LARGE` | `PAYLOAD_TOO_LARGE` | a call holds more than 500 000 points |
+| `TRACK_LIMIT` | `PRECONDITION_FAILED` | the event would hold more than 200 tracks |
+| `TRACK_ID_TAKEN` | `CONFLICT` | a supplied id belongs to another event |
+| `TRACK_NOT_FOUND` | `NOT_FOUND` | no such track in the event |
+| `TRACK_TRIM_INVALID` | `BAD_REQUEST` | a trim outside §3.5's rule |
+| `TRACK_SPLIT_INVALID` | `BAD_REQUEST` | a split index without two visible points each side |
+
+### 1.3 Ownership, venue and backups
+
+- **Cloud-owned, not journaled**: `"mapTrack."` is in
+  `CLOUD_OWNED_MUTATION_PREFIXES` (`packages/shared/src/cloud-ownership.ts`),
+  so a venue box forwards the mutations; no mutation writes a journal
+  entry. Tracks are not results (08 §4.8's non-critical data).
+- **Not in the checkout snapshot** (`map-storage.md` §7.2): a box holds
+  no tracks. Reads are not forwarded, so on a box `list` answers empty
+  during a lease; G25 disables the panel on a venue node with the
+  reason (user 2026-11-13: mapping is not a venue task).
+- **In the per-event dump** (`map-storage.md` §7.3; 07 §10): a
+  `map_gps_tracks` section after `map_patches`, all columns, restored
+  by `packages/api/scripts/restore-map-gps-tracks.sql -v event_id=<id>`
+  with `event_id` rewritten, `created_by` kept only when that user
+  exists, `ON CONFLICT (id) DO NOTHING` (twice is once).
 
 ## 2. GPX
 
@@ -235,6 +358,11 @@ the name kept:
   the split point is in both parts, so they touch, and cutting out a
   break or a wrong turn is split, split, delete the middle. `index` must
   be `1 … n − 2` (two points on each side), else `RangeError`.
+- `splitRanges(ranges, index)` divides index ranges (an average's
+  `singlePass`) as `splitTrack` divides the points: the left part keeps
+  `[start, min(end, index + 1))`, the right `[max(start, index) − index,
+  end − index)`, each only where non-empty, so a range covering the
+  split point is in both (G24's `split`).
 
 ## 4. Averaging passes
 
