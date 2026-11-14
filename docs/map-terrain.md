@@ -822,7 +822,11 @@ chain joins float independently. `datum` is `relative`, `zOffsetM` 0.
 Sources then carry each anchored chain's height instead of floor or
 floor + 1; the passes and weights are the same, and the field is written
 with `datum: "absolute"` and its own `source` (§4.0 answer 2). Not built
-in H3.
+in H3. It changes `terrain/field/`: the distance passes then carry the
+nearest seed's height as well as its distance, `bandHeights` reads those
+instead of floor and floor + 1, `buildHeightField` takes the source,
+datum and offset, and the header schema's `source` enum gains the DEM
+value.
 
 ## 5. The height field
 
@@ -907,6 +911,16 @@ the document's descriptor).
 
 The graph keeps H1's budget (0.1 mm, 60 M cells): H2's shares were
 measured on it, and the field's own budget bounds what is stored.
+
+**The stored field is derived with the defaults** (user, 2026-11-14):
+the `contours` artifact H4 keys on `(document hash, source, version)`
+is always `deriveTerrain(doc)` with no options, so the key names one
+field. The options are for tests, the corpus script and H9: a field
+built with a DEM (its side passed to the solve, or its heights, §4.9) is
+H9's re-derived field and carries its own `source` value, never
+`contours`. `TERRAIN_VERSION` is bumped whenever §1–5 change the bytes
+`deriveTerrain(doc)` gives; a golden test on a synthetic hill
+(`terrain/__tests__/derive.test.ts`) fails when they change.
 
 ### 5.6 Measured on the corpus
 
