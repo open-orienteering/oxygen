@@ -18,7 +18,6 @@
 import type { PrismaClient } from "../generated/prisma/client.js";
 import { getSetting, prisma, setSetting } from "../db.js";
 import { sweepImportHousekeeping } from "./jobs.js";
-import { HEIGHTFIELD_SOURCE } from "./heightfield.js";
 import { TERRAIN_VERSION } from "@oxygen/shared/src/terrain/field/types.js";
 
 export const GC_GRACE_DAYS = 30;
@@ -217,19 +216,18 @@ export async function runStorageGc(db: PrismaClient, opts: StorageGcOptions = {}
     }
   }
 
-  // 4. Height fields of a superseded terrain version (§4.7): cache nothing reads.
-  // `<`, not `<>`: an older image's run during a rollout leaves the newer rows alone.
+  // 4. Height fields and DEM jobs of a superseded terrain version (§4.7): cache nothing reads, every
+  // source (contours and the DEM's, docs/map-terrain.md §7). `<`, not `<>`: an older image's run
+  // during a rollout leaves the newer rows alone.
   if (await shouldStop()) return finishStopped(result);
   if (dryRun) {
-    const rows = await db.$queryRawUnsafe<{ n: number }[]>(
-      `SELECT count(*)::int AS n FROM oxygen.map_heightfields WHERE source = $1 AND version < $2`,
-      HEIGHTFIELD_SOURCE,
-      TERRAIN_VERSION,
-    );
+    const rows = await db.$queryRawUnsafe<{ n: number }[]>(`SELECT count(*)::int AS n FROM oxygen.map_heightfields WHERE version < $1`, TERRAIN_VERSION);
     result.heightfields = rows[0]?.n ?? 0;
   } else {
-    result.heightfields = await db.$executeRawUnsafe(`DELETE FROM oxygen.map_heightfields WHERE source = $1 AND version < $2`, HEIGHTFIELD_SOURCE, TERRAIN_VERSION);
+    result.heightfields = await db.$executeRawUnsafe(`DELETE FROM oxygen.map_heightfields WHERE version < $1`, TERRAIN_VERSION);
+    const demJobs = await db.$executeRawUnsafe(`DELETE FROM oxygen.map_dem_jobs WHERE version < $1`, TERRAIN_VERSION);
     if (result.heightfields > 0) console.log(`[map-gc] deleted ${result.heightfields} height field(s) older than terrain version ${TERRAIN_VERSION}`);
+    if (demJobs > 0) console.log(`[map-gc] deleted ${demJobs} DEM job(s) older than terrain version ${TERRAIN_VERSION}`);
   }
 
   // 5. Expired uploads and job rows (§6.6).

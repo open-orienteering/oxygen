@@ -9,8 +9,6 @@
  * yields the same hashes and the content-addressed inserts are no-ops.
  */
 
-import { hostname } from "node:os";
-import { randomUUID } from "node:crypto";
 import { Worker } from "node:worker_threads";
 import { workerBootstrap } from "../worker-bootstrap.js";
 import { mapImport, symbolLibrary } from "@oxygen/shared";
@@ -20,6 +18,8 @@ import { IMPORTER_VERSIONS, type ImportStage, type MapSourceKind } from "../impo
 import { storeImportedDocument, touchDocument } from "./documents.js";
 import { deriveDocumentPreviews } from "./previews.js";
 import { deriveDocumentHeightfield } from "./heightfield.js";
+import { enqueueDocumentDem } from "./dem-jobs.js";
+import { INSTANCE_ID } from "./instance.js";
 import { writePinnedMapFileColumns } from "./event-document.js";
 import { synchronizePositionedControlCoordinates } from "../event-crs.js";
 import type { ImportWorkerData, ImportWorkerMessage } from "./import-worker.js";
@@ -42,7 +42,7 @@ export const UPLOAD_TTL_MS = 24 * 3_600_000;
 export const JOB_TTL_MS = 7 * 24 * 3_600_000;
 
 /** Stable per-process identity written to `claimed_by`. */
-export const INSTANCE_ID = process.env.NODE_ID ?? `${hostname()}:${process.pid}:${randomUUID().slice(0, 8)}`;
+export { INSTANCE_ID };
 
 export interface ImportJobRow {
   id: string;
@@ -251,10 +251,15 @@ async function execute(db: Db, job: ImportJobRow): Promise<void> {
   }
 }
 
-/** Import stage 10 (docs/map-storage.md §6.1): the thumbnail (§4.5), then the height field (§4.7). Never throws. */
+/**
+ * Import stage 10 (docs/map-storage.md §6.1): the thumbnail (§4.5), then
+ * the height field (§4.7), then the DEM job is queued, not awaited
+ * (§4.7 "The DEM job"; a no-op without enabled providers). Never throws.
+ */
 export async function deriveDocumentArtifacts(db: Db, hash: string): Promise<void> {
   await deriveDocumentPreviews(db, hash);
   await deriveDocumentHeightfield(db, hash);
+  void enqueueDocumentDem(db, hash);
 }
 
 /**
@@ -349,6 +354,7 @@ export async function startImportJob(db: Db, input: StartImportJobInput): Promis
     // before H4 does not hold this request for a derive (docs/map-storage.md §6.1).
     await deriveDocumentPreviews(db, existing.hash);
     void deriveDocumentHeightfield(db, existing.hash);
+    void enqueueDocumentDem(db, existing.hash);
     return row;
   }
 

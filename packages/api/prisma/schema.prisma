@@ -1306,6 +1306,7 @@ model MapDocument {
   source   MapSource        @relation(fields: [sourceHash], references: [fileHash], onDelete: Restrict)
   previews MapPreview[]
   heightfields MapHeightfield[]
+  demJobs      MapDemJob[]
   mapFiles MapFile[]
   versions ClubMapVersion[]
   jobs     MapImportJob[]
@@ -1413,6 +1414,34 @@ model MapHeightfield {
 
   @@id([documentHash, source, version])
   @@map("map_heightfields")
+  @@schema("oxygen")
+}
+
+/// DEM fetch jobs (docs/map-storage.md §4.7, docs/map-terrain.md §7): the
+/// background fetch and derive of a document's `ground.<provider>` and
+/// `contours.<provider>` height fields. Cascades with the document.
+model MapDemJob {
+  documentHash  String    @map("document_hash")
+  /// Provider id and resolution, e.g. 'lantmateriet-2m'.
+  provider      String
+  /// TERRAIN_VERSION.
+  version       Int
+  /// queued | running | done | unavailable | failed
+  state         String
+  reason        String?
+  error         String?
+  attempts      Int       @default(0)
+  nextAttemptAt DateTime? @map("next_attempt_at") @db.Timestamptz(6)
+  claimedBy     String?   @map("claimed_by")
+  heartbeatAt   DateTime? @map("heartbeat_at") @db.Timestamptz(6)
+  createdAt     DateTime  @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt     DateTime  @default(now()) @updatedAt @map("updated_at") @db.Timestamptz(6)
+
+  document MapDocument @relation(fields: [documentHash], references: [hash], onDelete: Cascade)
+
+  @@id([documentHash, provider, version])
+  @@index([state, nextAttemptAt], map: "map_dem_jobs_runnable_idx")
+  @@map("map_dem_jobs")
   @@schema("oxygen")
 }
 
