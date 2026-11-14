@@ -349,6 +349,40 @@ test.describe("auto templates (docs/course-layout.md §5–§7)", () => {
   });
 });
 
+test.describe("export on a venue box whose cloud is unreachable (G18, course-print.md §8.7)", () => {
+  test.beforeAll(seedBaseMap);
+
+  test("the sheet-ensuring step is skipped: a course with a sheet prints, one without says so", async ({ page }) => {
+    test.setTimeout(120_000);
+    page.setDefaultTimeout(15_000);
+    await selectEvent(page);
+    await openTab(page, "Courses");
+    const [withSheet, without] = await courseIds(page);
+    // Online: the export makes the course's sheet.
+    await expectA4Pages(await download(page, () => page.getByTestId(`export-course-${withSheet}`).click()), 1);
+
+    // The box's forwarder answers a cloud-owned write with its typed refusal (venueForwarder.ts).
+    let refused = 0;
+    await page.route("**/trpc/layout.autoSheets*", async (route) => {
+      refused++;
+      const error = {
+        message: "This action requires connectivity to the cloud (cloud-owned data is not editable at an offline venue).",
+        code: -32603,
+        data: { code: "PRECONDITION_FAILED", httpStatus: 412, path: "layout.autoSheets", reason: "CLOUD_UNREACHABLE" },
+      };
+      await route.fulfill({ status: 412, contentType: "application/json", body: JSON.stringify(route.request().url().includes("batch=1") ? [{ error }] : { error }) });
+    });
+    await expectA4Pages(await download(page, () => page.getByTestId(`export-course-${withSheet}`).click()), 1);
+    expect(refused).toBe(1);
+    await expect(page.getByTestId("course-maps-error")).toHaveCount(0);
+
+    // No sheet on the copy: maps.pdf's own answer, not the connectivity error.
+    await page.getByTestId(`export-course-${without}`).click();
+    await expect(page.getByTestId("course-maps-error")).toContainText("No requested maps found");
+    expect(refused).toBe(2);
+  });
+});
+
 test("the retired Maps and Map templates pages redirect, their query kept", async ({ page }) => {
   await selectEvent(page);
   await page.goto("/itest/maps?course=1");

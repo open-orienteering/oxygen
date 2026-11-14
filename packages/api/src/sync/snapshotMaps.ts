@@ -218,11 +218,22 @@ export function tokenMapOf(rows: ReadonlyArray<Record<string, unknown>>): Record
   return out;
 }
 
-/** Each row with its exact token from `tokens`; a row the map lacks (an old exporter) keeps what it carries. */
+const MAX_INT8 = 2n ** 63n - 1n;
+
+/**
+ * Each row with its exact token from `tokens`; a row the map lacks (an old
+ * exporter) keeps what it carries. A token that is not a non-negative
+ * `bigint` column value fails the checkout with the typed error.
+ */
 export function applyTokens(rows: ReadonlyArray<Record<string, unknown>>, tokens: Record<string, string> | undefined): Record<string, unknown>[] {
   return rows.map((r) => {
     const t = tokens && typeof r.id === "string" ? tokens[r.id] : undefined;
-    return t !== undefined && /^[0-9]{1,20}$/.test(t) ? { ...r, version: BigInt(t) } : { ...r };
+    if (t === undefined) return { ...r };
+    const v = typeof t === "string" && /^[0-9]{1,19}$/.test(t) ? BigInt(t) : null;
+    if (v === null || v > MAX_INT8) {
+      throw new TRPCError({ code: "PRECONDITION_FAILED", message: `Checkout: row ${String(r.id)} arrived with token ${String(t)}.` });
+    }
+    return { ...r, version: v };
   });
 }
 

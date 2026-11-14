@@ -169,11 +169,14 @@ describe("tokens beside the rows (map-storage.md §7.2)", () => {
     expect(BigInt(wire.rows[0].version as number)).not.toBe(big); // rounded on the wire
     expect(applyTokens(wire.rows, wire.tokens)[0].version).toBe(big);
   });
-  it("applyTokens leaves a row the map lacks, every row without a map, and a malformed token", () => {
+  it("applyTokens leaves a row the map lacks and every row without a map", () => {
     const rows = [{ id: "a", version: 5 }, { id: "b", version: 6 }];
     expect(applyTokens(rows, { a: "9" })).toEqual([{ id: "a", version: 9n }, { id: "b", version: 6 }]);
     expect(applyTokens(rows, undefined)).toEqual(rows);
-    expect(applyTokens(rows, { a: "-1" })[0].version).toBe(5);
+    expect(applyTokens(rows, { a: (2n ** 63n - 1n).toString() })[0].version).toBe(2n ** 63n - 1n);
+  });
+  it.each(["-1", "1.5", "", (2n ** 63n).toString(), "9".repeat(20)])("applyTokens refuses the token %j with the typed error", (t) => {
+    expect(() => applyTokens([{ id: "a", version: 5 }], { a: t })).toThrow(/arrived with token/);
   });
 });
 

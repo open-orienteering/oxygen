@@ -1300,8 +1300,11 @@ type `course.CourseObject = { id: seq, kind, geometry, props, scope, z, version,
 | `reorder { ids }` | `courses.edit` | `z` = the position in `ids`; takes and advances no token |
 
 Writes are not lease-guarded: objects are cloud-owned non-critical data
-(08 §4.8), like the sheets; a venue holding a checkout keeps its
-snapshot's copy until the next checkout.
+(08 §4.8), like the sheets. Since G18 `courseObject.` mutations on a
+venue box are forwarded to the cloud (typed 412 offline,
+`offline-architecture.md` "Non-critical data"); before, they ran on the
+box and were lost at checkin. The box keeps its snapshot's copy until the
+next checkout (or row G19).
 
 **Token** (§7). Objects are not journaled, so their token is not a
 journal entry's HLC: every `create` / `update` mints one from the node's
@@ -1317,7 +1320,9 @@ the structure rule: refresh and redo.
 
 `course_objects` rows travel in the checkout snapshot
 (`SNAPSHOT_TABLES`, rows verbatim with their UUIDs, `seq`, scope UUIDs
-and token; `map-storage.md` §7.2) and in the per-event dump after
+and token — exact since G18 through the snapshot's `versions`, where the
+row's own `version` crosses HTTP as a rounded JSON number;
+`map-storage.md` §7.2) and in the per-event dump after
 `class_course_pools` (`BACKUP_TABLES`; `map-storage.md` §7.3) — the
 venue's kiosk map draws them (08 §4.8; 07 §9.2).
 
