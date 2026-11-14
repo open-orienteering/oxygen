@@ -1223,6 +1223,41 @@ dev server pre-bundles the PDF library (`optimizeDeps.include`): its
 scanner does not follow `new Worker(new URL(…))`, and discovering it on
 the first export would reload the page.
 
+### 8.7 On a venue box (G18)
+
+Slice G answer 4: a venue box that checked the event out prints from its
+own copy, so printing works with the uplink down. `maps.pdf`,
+`print-job`, `graphics/:id`, `graphics/:id/print.png` and
+`descriptions.pdf` need no change for it: every row they read — the
+pinned document and its patch (G14; `map-patches.md` §3.4, carried with
+its exact token), controls, courses, classes, runners, templates, sheets,
+course objects and graphics — is on the box after a checkout
+(`map-storage.md` §7.2: the layout rows verbatim with their exact tokens,
+the event's graphics and the club graphics its layout rows draw under the
+cloud's ids), and none of them calls the cloud or writes. With equal
+writer options (`deterministic`) the box's `maps.pdf` and description
+sheets are byte-equal to the cloud's, its `print-job` equal and every
+`print.png` equal (`venue-print.test.ts`); the event's local id on the box
+differs and appears in none of them.
+
+What the box prints is the checkout's copy. A sheet or template edited on
+the cloud during the lease, or written from the box (those writes are
+forwarded to the cloud, `offline-architecture.md` "Non-critical data"),
+reaches the box with row G19; until then an editor on the box works on
+the stale copy, so a second write of the same sheet or template is a
+`CONFLICT` on the cloud, and layout is edited on the cloud during a lease
+(`map-storage.md` §9). An export's sheet-ensuring step
+(`layout.autoSheets`, `course-layout.md` §7) is such a write: on a box
+whose cloud is unreachable the web skips it (the forwarder's
+`CLOUD_UNREACHABLE` refusal) and downloads from the copy, so a course
+with a sheet prints; a course without one answers "No requested maps
+found", as on the cloud before the step existed.
+
+A device that composes (§8.6) reads the job and `print.png` through
+`venueAwareFetch`, so on a venue session they come from the box's copy
+too, and the device's PDF equals the box's `maps.pdf`; if the device
+cannot read the document, it falls back to the box's `maps.pdf`.
+
 ## 9. Tests and CI
 
 ### 9.1 Tests
@@ -1236,6 +1271,8 @@ the first export would reload the page.
 | `packages/api/src/__tests__/print-worker.test.ts` | the worker on `e2e/test.ocd`: bytes equal in-process; with a patch (G14): equal to the in-process bytes over the patched document and unlike the unpatched ones, the blob read once per hash + version and again for a new version (which shows), a disabled patch the unpatched bytes; a `raster` request equals the in-process `rasteriseSvgGraphic` at the exact box (G15); the blob read and sent once per worker; `page` order; an error keeps the worker usable; `CourseStackError` re-created (a document with palette ids stripped); a reset rejects the request in flight and the next call recovers; the main thread's event-loop delay stays under 25 ms (or half a page) during a 10-page A3 print; `PRINT_WORKERS` parsing |
 | `packages/api/src/__tests__/integration/print-job.test.ts` (G15) | §8.5: the job's shape (version, document hash and rotation, sheets in print order, graphics ascending with the image course object's and without another event's, `cmyk`, `info`, file name), JSON-safe, `no-store`; `buildPrintJob`'s in-memory job holds no `undefined`, non-finite number, `Map`, `Date` or typed array and equals its JSON round trip and the route's body; composed over HTTP through `renderPrintJob` (document from `/api/map-documents/:hash`, graphics from `print.png`, the bundled faces) it equals `maps.pdf`'s bytes (both `deterministic`) for every sheet, one sheet, `allControls`, `classes`, `copies=runners&spare=1`, and on a butterfly root `courses`, `variants` and `allVariations` (labels `Long AB` / `Long BA`, `_Long_A4_AB_BA.pdf`), the SVG fetched at `svgRasterBox`'s box and only the foreign graphic `IMAGE_MISSING`; the caps and selection 400s word for word `maps.pdf`'s (201 sheets, `spare=501`, `spare` alone, two selections, unknown map, `copies=all`); no pin 400, unknown event 404; `print.png`: SVG = `rasteriseSvgGraphic` at w × h, PNG as stored, the `w`/`h` 400s, club graphic 200, another event's / unknown 404, bad id 400; 401 / 403 / 200 under `AUTH_MODE=proxy` on the job and `print.png` |
 | `packages/api/src/__tests__/course-map-graphics.test.ts` (G15 part) | `parseRasterBox`: integers 1–4096 both sides, every other form the 400 message; `sheetGraphicIds`: page objects' and image course objects' graphics once each, ascending (the regression of `docs/bugfix-course-object-image-print.md`) |
+| `packages/api/src/__tests__/integration/venue-print.test.ts` (G18) | §8.7: one node prints as the cloud (the event's patch hiding one object, G14; a template with an event PNG and a club PNG, an image course object with an event SVG, a course sheet, an all-controls sheet, a class on the template), takes its own checkout snapshot through JSON, loses the club graphic, imports the snapshot as the box (graphics fetched by id and checked) and prints again: `print-job` equal, every `print.png` equal, `maps.pdf` and the description sheets byte-equal |
+| `e2e/course-maps.spec.ts` "export on a venue box whose cloud is unreachable" (G18) | §8.7 in the browser: with `layout.autoSheets` answering the forwarder's `CLOUD_UNREACHABLE` 412, the Courses page's course export skips the step and downloads (a course with a sheet: one A4 page, no error shown); a course without one shows maps.pdf's "No requested maps found" |
 | `packages/shared/src/print/__tests__/print-job.test.ts` (G15, G14) | `renderPrintJob` equals `renderCoursePages` for the same inputs (copies, a PNG and an SVG; the PNG fetched once without a box, the SVG once per box by id); a JSON round trip gives equal bytes; an unfetchable graphic gives `SVG_RASTER` / `IMAGE_MISSING` and a PDF; the document read once per hash; version 1 refused; with a patch (G14): `renderCoursePages`' bytes over the patched prepared document and not the unpatched ones, a JSON round trip equal, a disabled patch the unpatched bytes, a skipped op a `PATCH_ISSUE` warning and still a PDF |
 | `packages/shared/src/print/__tests__/prepared-document.test.ts` (G13, G14) | decode, render input, header and cut features; one read per key, the third key evicts the oldest, a failed decode forgotten; with a patch: a hidden boulder neither drawn nor a cut feature, an added one both; one entry per version and a null, disabled or op-less patch the unpatched entry; a patch keyed onto another document not applied; `preparedDocumentKey`; a skipped op in `patchIssues`; `objectsNear` |
 | `e2e/course-maps.spec.ts` "export a course that has no template yet" (G15, G14 part) | `print-job?courses=` of the exported course: version 2, `cmyk`, a document hash, no patch, as many pages (with copies) as the same query's `maps.pdf`, its file name; after `mapPatch.applyChange` (a hide) the job carries the patch at the write's version, the device's export (no `maps.pdf` request) equals the patched `maps.pdf` object for object, and removing the op makes the patch null again |
@@ -1706,7 +1743,10 @@ The tool's own tests (`print-run.test.ts`, `measure-print.test.mjs`,
   `print.png` go through `venueAwareFetch`, the document through
   `loadMapDocument`'s plain `fetch`, as the viewer's does. Content
   addressed, and a failure falls back to `maps.pdf`, so a venue session
-  stays correct; G17 / G18 decide whether a box serves it.
+  stays correct. A box serves the document from its copy (`map-storage.md`
+  §7.2; §8.7); routing the device's document fetch to it, so a
+  cloud-served PWA composes on the device with the uplink down instead of
+  falling back to the box's `maps.pdf`, is G17's (G18 left it).
 - **Device limits are estimates** (§8.6 "Capability", G16): 8 / 24 / 64
   A4-equivalents by `navigator.deviceMemory` (8 / 24 by pointer where it
   is undefined), derived from §11.5's sizes; replaced by measurements on

@@ -371,6 +371,7 @@ Oxygen is a Progressive Web App designed to work during internet outages — fro
 - **Event-based mutation queue** — all finish recordings, registrations, and edits are stored locally and drained to the server when connectivity returns. A visible banner tells you how many events are queued.
 - **Local result computation** — the finish station runs the same course matching, status rules, and position ranking as the server, so it can print a valid receipt from cached data even while the network is down.
 - **Clock-skew warning** — every queued mutation is stamped with a hybrid logical clock, and each sync compares this device's clock to the server's. If they differ by more than 30 seconds a persistent banner warns that times recorded here may be inaccurate.
+- **Printing on a venue box** — an event checked out to a venue box brings its course-map sheets, templates, course objects and logos along, so the box prints course maps and description sheets itself, the same bytes as the cloud, even with no internet. During a lease that layout is edited on the cloud; an edit made on the box is forwarded to the cloud (it needs internet), so nothing edited there is lost at checkin. See [venue-runbook.md](venue-runbook.md) and [course-print.md](course-print.md) §8.7.
 
 See [offline-architecture.md](offline-architecture.md) for the technical details and [future-architecture.md](future-architecture.md) for the post-MeOS vision with event sourcing — its **Phase 1** (HLC-stamped journal, one-card-per-event invariant, idempotent ingestion) landed in June 2026.
 

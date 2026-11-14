@@ -514,6 +514,9 @@ which runs `autoSheets` for the class's course in the same transaction —
 not by `class.update` (`manageRace`): they are layout data. They are
 cloud-owned and **not journaled**: `class.upserted` leaves both columns
 out (`referenceJournal.ts`), since a peer may not hold the template row.
+A venue checkout carries them with the class rows and the templates
+(G18, `map-storage.md` §7.2; NULL when the exporter sent no templates),
+and `layout.` writes on a box are forwarded to the cloud.
 The Layout inspector's *Classes* section (`editor-layout-classes`,
 `editor-layout-class-<seq>` with `data-sheets`) edits them per class of
 the sheet's course — scale (`…-class-scale-<seq>`, blank = none),

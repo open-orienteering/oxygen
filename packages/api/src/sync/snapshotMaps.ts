@@ -25,12 +25,29 @@ type Db = PrismaClient | Prisma.TransactionClient;
 /** Largest slice `lease.exportBlob` returns: the source route's slice. */
 export const EXPORT_BLOB_MAX_BYTES = SOURCE_SLICE_BYTES;
 
-export const exportBlobInput = z.object({
-  table: z.enum(["map_sources", "map_documents"]),
-  hash: z.string().regex(/^[0-9a-f]{64}$/),
+const sliceBounds = {
   start: z.number().int().min(0),
   length: z.number().int().min(1).max(EXPORT_BLOB_MAX_BYTES),
+};
+
+/** A map blob by its content address. */
+export const mapBlobInput = z.object({
+  table: z.enum(["map_sources", "map_documents"]),
+  hash: z.string().regex(/^[0-9a-f]{64}$/),
+  ...sliceBounds,
 });
+export type MapBlobInput = z.infer<typeof mapBlobInput>;
+
+/** A `graphics` row by its id, decimal (ids travel verbatim, docs/map-storage.md §7.2). */
+export const graphicBlobInput = z.object({
+  table: z.literal("graphics"),
+  id: z.string().regex(/^[1-9][0-9]{0,17}$/),
+  ...sliceBounds,
+});
+export type GraphicBlobInput = z.infer<typeof graphicBlobInput>;
+
+/** `lease.exportBlob`'s input: a map blob by hash, or a graphic by id. */
+export const exportBlobInput = z.union([mapBlobInput, graphicBlobInput]);
 export type ExportBlobInput = z.infer<typeof exportBlobInput>;
 
 export interface ExportBlobResult {
@@ -178,6 +195,48 @@ export async function fetchBlob(table: BlobTable, hash: string, sizeBytes: numbe
   return whole;
 }
 
+/** A JSON null arrives as null; Prisma wants the DbNull sentinel for a nullable Json column. */
+export function withDbNulls(row: Record<string, unknown>, fields: readonly string[]): Record<string, unknown> {
+  const out: Record<string, unknown> = { ...row };
+  for (const k of fields) if (out[k] === null) out[k] = Prisma.DbNull;
+  return out;
+}
+
+/**
+ * Concurrency tokens by row id, as decimal strings. An HLC exceeds 2^53
+ * and the snapshot crosses HTTP as JSON, where a BigInt becomes a rounded
+ * number (`bigint-json.ts`), so the tokens of the cloud-owned layout rows
+ * travel beside the rows (docs/map-storage.md §7.2).
+ */
+export function tokenMapOf(rows: ReadonlyArray<Record<string, unknown>>): Record<string, string> {
+  const out: Record<string, string> = {};
+  for (const r of rows) {
+    const v = r.version;
+    if (typeof r.id !== "string") continue;
+    if (typeof v === "bigint" || (typeof v === "number" && Number.isSafeInteger(v))) out[r.id] = BigInt(v).toString();
+  }
+  return out;
+}
+
+const MAX_INT8 = 2n ** 63n - 1n;
+
+/**
+ * Each row with its exact token from `tokens`; a row the map lacks (an old
+ * exporter) keeps what it carries. A token that is not a non-negative
+ * `bigint` column value fails the checkout with the typed error.
+ */
+export function applyTokens(rows: ReadonlyArray<Record<string, unknown>>, tokens: Record<string, string> | undefined): Record<string, unknown>[] {
+  return rows.map((r) => {
+    const t = tokens && typeof r.id === "string" ? tokens[r.id] : undefined;
+    if (t === undefined) return { ...r };
+    const v = typeof t === "string" && /^[0-9]{1,19}$/.test(t) ? BigInt(t) : null;
+    if (v === null || v > MAX_INT8) {
+      throw new TRPCError({ code: "PRECONDITION_FAILED", message: `Checkout: row ${String(r.id)} arrived with token ${String(t)}.` });
+    }
+    return { ...r, version: v };
+  });
+}
+
 // ---- exporter (cloud) -------------------------------------------------------
 
 export async function exportSnapshotMaps(db: Db, eventId: bigint): Promise<SnapshotMaps> {
@@ -232,7 +291,7 @@ export async function eventReferencesBlob(db: Db, eventId: bigint, table: BlobTa
 }
 
 /** `lease.exportBlob`: one slice of a blob the event pins. */
-export async function exportBlobSlice(db: Db, eventId: bigint, input: ExportBlobInput): Promise<ExportBlobResult> {
+export async function exportBlobSlice(db: Db, eventId: bigint, input: MapBlobInput): Promise<ExportBlobResult> {
   const sizeBytes = (await eventReferencesBlob(db, eventId, input.table, input.hash))
     ? await getBlobSize(db, input.table, input.hash)
     : null;
@@ -329,9 +388,7 @@ export async function importSnapshotMaps(
     }
     // A v0.6.0 exporter still sends the columns E5 dropped.
     const row: Record<string, unknown> = { ...withoutDroppedFields("mapFile", f), eventId, clubMapVersionId: null };
-    // A JSON null arrives as null; Prisma wants the DbNull sentinel for a nullable Json column.
-    for (const k of NULLABLE_JSON_FILE_FIELDS) if (row[k] === null) row[k] = Prisma.DbNull;
-    await tx.mapFile.create({ data: row as never });
+    await tx.mapFile.create({ data: withDbNulls(row, NULLABLE_JSON_FILE_FIELDS) as never });
   }
   for (const d of maps.decisions ?? []) await mergeDecision(tx, d);
   // The patch after its document (RESTRICT FK); verbatim, token included.

@@ -3,6 +3,7 @@ import { createTRPCClient, httpBatchLink } from "@trpc/client";
 import type { AppRouter } from "@oxygen/api";
 import { rejectHtmlApiResponse } from "./html-api-response";
 import { venueAwareFetch } from "./node-discovery";
+import { cloudOwnedApart } from "./trpc-links";
 
 export const trpc = createTRPCReact<AppRouter>();
 
@@ -63,12 +64,15 @@ export function eventScopedTrpcFetch(
 
 export const trpcVanillaClient = createTRPCClient<AppRouter>({
   links: [
-    httpBatchLink({
-      url: getApiUrl(),
-      // Outbox drains follow the active node too — a station on venue
-      // Wi-Fi drains into the venue box, not across the WAN.
-      fetch: eventScopedTrpcFetch,
-      headers: getCompetitionHeader,
-    }),
+    // Cloud-owned mutations batch apart: a venue refuses a mixed batch (row G18).
+    cloudOwnedApart<AppRouter>(() =>
+      httpBatchLink({
+        url: getApiUrl(),
+        // Outbox drains follow the active node too — a station on venue
+        // Wi-Fi drains into the venue box, not across the WAN.
+        fetch: eventScopedTrpcFetch,
+        headers: getCompetitionHeader,
+      }),
+    ),
   ],
 });

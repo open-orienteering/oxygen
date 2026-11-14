@@ -7,6 +7,7 @@ import { describe, it, expect } from "vitest";
 import {
   trpcProcedurePaths,
   shouldForwardToCloud,
+  isMixedCloudBatch,
   connectivityErrorBody,
 } from "../sync/venueForwarder.js";
 import { isCloudOwnedMutation } from "../sync/ownership.js";
@@ -60,7 +61,7 @@ describe("shouldForwardToCloud", () => {
     expect(shouldForwardToCloud("GET", "/trpc/club.list")).toBe(false);
     // Race-critical mutations execute locally on the venue.
     expect(shouldForwardToCloud("POST", "/trpc/runner.update")).toBe(false);
-    // A mixed batch executes locally — never split.
+    // A mixed batch is never forwarded (it is refused, below).
     expect(
       shouldForwardToCloud("POST", "/trpc/club.update,runner.update?batch=1"),
     ).toBe(false);
@@ -72,18 +73,50 @@ describe("shouldForwardToCloud", () => {
     expect(isCloudOwnedMutation("mapPatch.setEnabled")).toBe(true);
     expect(shouldForwardToCloud("POST", "/trpc/mapPatch.applyChange")).toBe(true);
     expect(shouldForwardToCloud("GET", "/trpc/mapPatch.get")).toBe(false);
-    // Course objects stay local until G18.
-    expect(isCloudOwnedMutation("courseObject.update")).toBe(false);
+  });
+
+  it.each([
+    ["courseMap", "saveLayout", "list"],
+    ["mapTemplate", "update", "list"],
+    ["layout", "autoSheets", "classOverrides"],
+    ["graphics", "upload", "list"],
+    ["courseObject", "update", "list"],
+  ])("forwards %s.%s and serves %s locally (G18, map-storage.md §7.2)", (router, mutation, query) => {
+    expect(isCloudOwnedMutation(`${router}.${mutation}`)).toBe(true);
+    expect(shouldForwardToCloud("POST", `/trpc/${router}.${mutation}`)).toBe(true);
+    expect(shouldForwardToCloud("GET", `/trpc/${router}.${query}`)).toBe(false);
+  });
+
+  it("keeps course and class writes local: `course.` is not `courseMap.` / `courseObject.`", () => {
+    expect(isCloudOwnedMutation("course.update")).toBe(false);
+    expect(isCloudOwnedMutation("course.presence")).toBe(false);
+    expect(isCloudOwnedMutation("class.update")).toBe(false);
+  });
+});
+
+describe("isMixedCloudBatch", () => {
+  it("is a POSTed batch with cloud-owned and local procedures", () => {
+    expect(isMixedCloudBatch("POST", "/trpc/course.presence,courseObject.update?batch=1")).toBe(true);
+    expect(isMixedCloudBatch("POST", "/trpc/courseObject.update,courseMap.saveLayout?batch=1")).toBe(false);
+    expect(isMixedCloudBatch("POST", "/trpc/runner.update,course.presence?batch=1")).toBe(false);
+    expect(isMixedCloudBatch("GET", "/trpc/courseMap.list,course.list?batch=1")).toBe(false);
+    expect(isMixedCloudBatch("POST", "/health")).toBe(false);
   });
 });
 
 describe("connectivityErrorBody", () => {
-  it("shapes a tRPC error envelope, batched and unbatched", () => {
+  it("shapes a tRPC error envelope, batched and unbatched, with the reason", () => {
     const single = connectivityErrorBody(["club.update"], false) as {
-      error: { data: { code: string; path: string } };
+      error: { data: { code: string; path: string; reason: string } };
     };
     expect(single.error.data.code).toBe("PRECONDITION_FAILED");
     expect(single.error.data.path).toBe("club.update");
+    expect(single.error.data.reason).toBe("CLOUD_UNREACHABLE");
+    const mixed = connectivityErrorBody(["course.presence", "courseObject.update"], true, "MIXED_BATCH") as Array<{
+      error: { message: string; data: { reason: string } };
+    }>;
+    expect(mixed.map((m) => m.error.data.reason)).toEqual(["MIXED_BATCH", "MIXED_BATCH"]);
+    expect(mixed[0].error.message).toMatch(/nothing was run/);
 
     const batched = connectivityErrorBody(
       ["club.update", "club.create"],

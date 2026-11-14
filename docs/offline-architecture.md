@@ -115,6 +115,26 @@ tRPC, never journaled, and **cloud-owned even during a lease**:
 - **The event's map patch** (`map_patches`, `docs/map-patches.md` §3.4)
   is cloud-owned the same way: it travels in the checkout snapshot's
   `maps` part for the venue's map, and `mapPatch.` writes are forwarded.
+- **Layout and print data** (row G18, slice G answer 4): sheets
+  (`course_maps`), templates, course objects and the graphics they draw
+  travel in the checkout snapshot (`docs/map-storage.md` §7.2), so the box
+  prints from its copy with the uplink down (`docs/course-print.md`
+  §8.7): **print reads local, writes go to the cloud**. `courseMap.`,
+  `mapTemplate.`, `layout.`, `graphics.` and `courseObject.` mutations are
+  forwarded; offline they answer the typed error, so nothing edited on a
+  box is lost at checkin. Until G19 the box does not see the cloud's
+  later edits.
+- **Batches.** The forwarder forwards a tRPC batch only when every
+  procedure in it is cloud-owned. A batch that mixes cloud-owned and
+  local mutations is refused whole with the typed error (`data.reason:
+  "MIXED_BATCH"`; nothing runs), since running it locally would write the
+  cloud-owned part on the box — before G18 it ran locally. The web since
+  G18 never produces one (a tab on an older bundle can, and is refused):
+  both of its tRPC clients send cloud-owned mutations
+  through a batch link of their own (`packages/web/src/lib/trpc-links.ts`;
+  the list is `@oxygen/shared`'s `cloud-ownership.ts`). The offline error
+  carries `data.reason: "CLOUD_UNREACHABLE"`, which the export menu reads
+  to skip its sheet-ensuring step and print the box's copy.
 - **Global tables** (`runner_directory`, `club_directory`,
   `eventor_event_meta`, `oxygen_settings`) are cloud-owned by definition —
   they are not event-scoped and never participate in a lease.

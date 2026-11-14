@@ -14,8 +14,12 @@ import {
   pinnedHashes,
   snapshotPatchOf,
   verifyBlob,
+  tokenMapOf,
+  applyTokens,
+  withDbNulls,
   type BlobSliceFetcher,
 } from "../sync/snapshotMaps.js";
+import { Prisma } from "../generated/prisma/client.js";
 import { withoutDroppedFields } from "../sync/dropped-columns.js";
 
 const sha = (b: Uint8Array) => createHash("sha256").update(b).digest("hex");
@@ -145,5 +149,60 @@ describe("fetchBlob", () => {
       sizeBytes: bytes.length,
     });
     await expect(fetchBlob("map_sources", hash, bytes.length, fetcher)).rejects.toThrow(/slice/);
+  });
+});
+
+describe("tokens beside the rows (map-storage.md §7.2)", () => {
+  const big = 2n ** 60n + 7n;
+  it("tokenMapOf keeps each row's token as an exact decimal string", () => {
+    expect(tokenMapOf([{ id: "a", version: big }, { id: "b", version: 0n }, { id: "c", version: 12 }])).toEqual({ a: big.toString(), b: "0", c: "12" });
+  });
+  it("tokenMapOf skips a row without a string id, or with an unsafe number", () => {
+    expect(tokenMapOf([{ id: 1, version: 1n }, { id: "x", version: 2 ** 60 }, { id: "y" }])).toEqual({});
+  });
+  it("survives the JSON round trip that rounds the rows' own tokens", () => {
+    const rows = [{ id: "a", version: big }];
+    const wire = JSON.parse(JSON.stringify({ rows: rows.map((r) => ({ ...r, version: Number(r.version) })), tokens: tokenMapOf(rows) })) as {
+      rows: Array<Record<string, unknown>>;
+      tokens: Record<string, string>;
+    };
+    expect(BigInt(wire.rows[0].version as number)).not.toBe(big); // rounded on the wire
+    expect(applyTokens(wire.rows, wire.tokens)[0].version).toBe(big);
+  });
+  it("applyTokens leaves a row the map lacks and every row without a map", () => {
+    const rows = [{ id: "a", version: 5 }, { id: "b", version: 6 }];
+    expect(applyTokens(rows, { a: "9" })).toEqual([{ id: "a", version: 9n }, { id: "b", version: 6 }]);
+    expect(applyTokens(rows, undefined)).toEqual(rows);
+    expect(applyTokens(rows, { a: (2n ** 63n - 1n).toString() })[0].version).toBe(2n ** 63n - 1n);
+  });
+  it.each(["-1", "1.5", "", (2n ** 63n).toString(), "9".repeat(20)])("applyTokens refuses the token %j with the typed error", (t) => {
+    expect(() => applyTokens([{ id: "a", version: 5 }], { a: t })).toThrow(/arrived with token/);
+  });
+});
+
+describe("withDbNulls", () => {
+  it("replaces JSON nulls of the named fields only", () => {
+    const out = withDbNulls({ a: null, b: null, c: { x: 1 } }, ["a", "c"]);
+    expect(out.a).toBe(Prisma.DbNull);
+    expect(out.b).toBeNull();
+    expect(out.c).toEqual({ x: 1 });
+  });
+});
+
+describe("exportBlobInput for graphics", () => {
+  const ok = { table: "graphics", id: "42", start: 0, length: 1024 };
+  it("accepts a graphic by decimal id", () => {
+    expect(exportBlobInput.parse(ok)).toEqual(ok);
+  });
+  it.each([
+    ["a hash instead of an id", { id: undefined, hash: H("a") }],
+    ["a zero id", { id: "0" }],
+    ["a non-decimal id", { id: "1e3" }],
+    ["more than 4 MiB", { length: EXPORT_BLOB_MAX_BYTES + 1 }],
+  ])("refuses %s", (_label, patch) => {
+    expect(exportBlobInput.safeParse({ ...ok, ...patch }).success).toBe(false);
+  });
+  it("refuses a map table keyed by id", () => {
+    expect(exportBlobInput.safeParse({ ...ok, table: "map_sources" }).success).toBe(false);
   });
 });
