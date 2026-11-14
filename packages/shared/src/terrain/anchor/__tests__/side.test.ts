@@ -6,7 +6,7 @@ import { cone, line, pit, ring } from "./synthetic-dem.js";
 const G = 15;
 const A = ANCHOR_RULES.side.anchor;
 const C = ANCHOR_RULES.side.coarse;
-const stats = (pts: Float64Array, closed: boolean, dem: DemSampler, rule = A) =>
+const stats = (pts: Float64Array, closed: boolean, dem: DemSampler, rule: { offsetM: number; smoothM: number; minM: number } = A) =>
   chainDemStats(pts, closed, dem, smoothedSampler(dem, 1, G, rule.smoothM), G, rule);
 
 /** Rises `slope` per ground metre along +y where `up(x)`, falls where not: left of a +x line is +y. */
