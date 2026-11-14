@@ -1305,6 +1305,7 @@ model MapDocument {
 
   source   MapSource        @relation(fields: [sourceHash], references: [fileHash], onDelete: Restrict)
   previews MapPreview[]
+  heightfields MapHeightfield[]
   mapFiles MapFile[]
   versions ClubMapVersion[]
   jobs     MapImportJob[]
@@ -1386,6 +1387,32 @@ model MapPreview {
 
   @@id([documentHash, kind, key])
   @@map("map_previews")
+  @@schema("oxygen")
+}
+
+/// The terrain a document's contours imply (docs/map-storage.md §4.7;
+/// docs/map-terrain.md §5): cache keyed by (document, source, terrain
+/// version), written once, never updated, cascading with the document.
+/// `bytes`, `sizeBytes`, `header` and `report` are null together: a row
+/// without bytes records a document without contours.
+model MapHeightfield {
+  documentHash String   @map("document_hash")
+  /// 'contours'; a DEM-based source (H10) takes its own value.
+  source       String
+  /// TERRAIN_VERSION.
+  version      Int
+  bytes        Bytes?
+  sizeBytes    Int?     @map("size_bytes")
+  /// HeightFieldHeader (docs/map-terrain.md §5.1).
+  header       Json?
+  /// TerrainReport (docs/map-terrain.md §3.6).
+  report       Json?
+  createdAt    DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+
+  document MapDocument @relation(fields: [documentHash], references: [hash], onDelete: Cascade)
+
+  @@id([documentHash, source, version])
+  @@map("map_heightfields")
   @@schema("oxygen")
 }
 

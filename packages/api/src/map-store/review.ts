@@ -11,6 +11,7 @@ import { loadClubDecisions, planDecisionWrites, storedDocumentFollowsDecisions, 
 import { applyJobResult, startImportJob, type ImportJobRow } from "./jobs.js";
 import { readDocumentHead, readObjectsPerSymbol } from "./previews.js";
 import { staleReason } from "./rematch.js";
+import { terrainReview, type TerrainReview } from "./heightfield.js";
 
 type Db = PrismaClient | Prisma.TransactionClient;
 
@@ -34,6 +35,8 @@ export interface ReviewPayload {
   })[];
   stack: { colours: mapDocument.MapDocumentHeader["colours"]; alignment: unknown };
   report: Prisma.JsonValue;
+  /** The height-field row's state and terrain report (docs/map-storage.md §4.7); never waits for a derive. */
+  terrain: TerrainReview;
 }
 
 /** Whether a stored document is what its source imports to now (also the re-match pass's test, §6.9). */
@@ -67,6 +70,7 @@ export async function buildReview(db: Db, hash: string): Promise<ReviewPayload |
     })),
     stack: { colours: header.colours, alignment: report?.colourStack ?? null },
     report: doc.report,
+    terrain: await terrainReview(db, hash),
   };
 }
 

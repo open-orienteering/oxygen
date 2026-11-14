@@ -107,5 +107,12 @@
     "confirm": "Spara besluten",
     "cancel": "Avbryt",
     "nothingApplied": "Inget sparades."
+  },
+  "terrain": {
+    "ready3d": "Terräng: {{percent}} % av höjdkurvorna har känd uppförssida — tillräckligt för 3D.",
+    "readyFlat": "Terräng: {{percent}} % av höjdkurvorna har känd uppförssida — 3D kräver {{min}} %.",
+    "none": "Terräng: kartan har inga höjdkurvor, så ingen 3D.",
+    "over-cap": "Terräng: kartan är för stor för att den här servern ska kunna beräkna terrängen.",
+    "pending": "Terräng: inte beräknad än."
   }
 }

@@ -1,5 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
+  terrainLine,
+  TERRAIN_3D_MIN_DECIDED,
   candidateIsCurrent,
   jobProgressPercent,
   isJobPending,
@@ -135,5 +137,22 @@ describe("job progress", () => {
     expect(jobProgressPercent(0.55)).toBe(55);
     expect(jobProgressPercent(1.2)).toBe(100);
     expect(jobProgressPercent(-1)).toBe(0);
+  });
+});
+
+describe("terrainLine (map-storage.md §4.7)", () => {
+  const ready = (decided: number) => ({ state: "ready" as const, report: { share: { decided } } });
+  it("reads the decided share against the 80 % gate, floored", () => {
+    expect(TERRAIN_3D_MIN_DECIDED).toBe(0.8);
+    expect(terrainLine(ready(0.941))).toEqual({ key: "terrain.ready3d", values: { percent: 94, min: 80 } });
+    expect(terrainLine(ready(0.8))).toEqual({ key: "terrain.ready3d", values: { percent: 80, min: 80 } });
+    expect(terrainLine(ready(0.7996))).toEqual({ key: "terrain.readyFlat", values: { percent: 79, min: 80 } });
+  });
+  it("names the other states", () => {
+    expect(terrainLine({ state: "none", report: null }).key).toBe("terrain.none");
+    expect(terrainLine({ state: "over-cap", report: null }).key).toBe("terrain.over-cap");
+    expect(terrainLine({ state: "pending", report: null }).key).toBe("terrain.pending");
+    expect(terrainLine({ state: "ready", report: null }).key).toBe("terrain.pending");
+    expect(terrainLine(undefined).key).toBe("terrain.pending");
   });
 });

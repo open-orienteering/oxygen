@@ -57,6 +57,7 @@ import { latestVersionOrRefuse } from "../club-map-library.js";
 import { cutRotationDeg, meridianStalenessFromDetection } from "../map-north.js";
 import { documentNorth, eventPin } from "../map-store/event-document.js";
 import { eventPatchVersion } from "../map-store/patches.js";
+import { terrainDescriptor } from "../map-store/heightfield.js";
 import { canDownloadEventMap } from "../ocad-export.js";
 import { loadEventCrs } from "../event-crs.js";
 import { rebuildCourseLengths } from "../course-geometry.js";
@@ -1247,6 +1248,8 @@ export const courseRouter = router({
       clubMapVersionId: row.clubMapVersionId,
       /** The delivered patch's token (docs/map-patches.md §3.3); `"0"` when nothing is delivered. Refetch `/api/maps/:nameId/patch` when it changes. */
       patchVersion: await eventPatchVersion(ctx.db, ctx.event.id, row.documentHash),
+      /** The pinned document's height field (docs/map-storage.md §4.7): state, `url` to fetch (fetching a `pending` one derives it), `decided` for the 3D gate; null until the pin. */
+      terrain: row.documentHash ? await terrainDescriptor(ctx.db, row.documentHash) : null,
       cutRotationDeg: cutRotationDeg(
         northOffset,
         north?.meridian?.medianTiltDeg ?? null,
