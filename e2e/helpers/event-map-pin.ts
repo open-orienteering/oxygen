@@ -42,6 +42,26 @@ export async function unpinEventMap(nameId: string): Promise<() => Promise<void>
     });
 }
 
+/** An object of the pinned document near a paper point (`map-objects-at-cli.ts`). */
+export interface MapObjectNear {
+  sourceIndex: number;
+  symbolIdx: number;
+  type: number;
+  distanceMm: number;
+}
+
+/**
+ * The point, line and area objects of the event's pinned document within `radiusMm` of a paper
+ * point, nearest first (`map-objects-at-cli.ts`), and the document's units per mm.
+ */
+export function mapObjectsAt(nameId: string, xMm: number, yMm: number, radiusMm: number): { unitsPerMm: number; objects: MapObjectNear[] } {
+  const out = execFileSync("pnpm", ["exec", "tsx", "e2e/helpers/map-objects-at-cli.ts", nameId, String(xMm), String(yMm), String(radiusMm)], {
+    encoding: "utf8",
+    env: { ...process.env, DATABASE_URL: E2E_DATABASE_URL },
+  });
+  return JSON.parse(out.trim().split("\n").pop()!) as { unitsPerMm: number; objects: MapObjectNear[] };
+}
+
 /**
  * Pin a copy of the event's document whose colour stack is not aligned
  * (`CourseStackError`, `stackless-document-cli.ts`). Returns a function that

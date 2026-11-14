@@ -422,7 +422,36 @@ class RangeBuilder {
  * order (so colour-major); `layer` picks the kinds: `base` fills and
  * hatches, `detail` the rest, `all` both (the large bucket).
  */
-export function prepareBucketPart(stream: render.PassStream, bucket: number, passes: number[], layer: PartLayer, ctx: PrepareContext): PreparedPart {
+export function prepareBucketPart(stream: render.PassStream, bucket: number, passes: readonly number[], layer: PartLayer, ctx: PrepareContext): PreparedPart {
+  return prepareBucketPartFrom([{ stream, passes, glyphMesh: ctx.glyphMesh, textGlyph: ctx.textGlyph }], bucket, layer, ctx);
+}
+
+/**
+ * Passes of one stream that go into a part, with that stream's own glyph-mesh and text lookups
+ * (`PrepareContext.glyphMesh`, `textGlyph`).
+ */
+export interface PartSource {
+  stream: render.PassStream;
+  /** Pass indices in stream order (colour-major). */
+  passes: readonly number[];
+  glyphMesh: Map<string, number>;
+  textGlyph: Map<number, TextPassGlyphs>;
+}
+
+/** Whether any of the sources' passes is of a kind `layer` takes. */
+export function sourcesHaveLayer(sources: readonly PartSource[], layer: PartLayer): boolean {
+  if (layer === "all") return sources.some((s) => s.passes.length > 0);
+  const base = layer === "base";
+  return sources.some((s) => s.passes.some((pi) => BASE_KINDS.has(s.stream.passes[pi].kind) === base));
+}
+
+/**
+ * One part from several streams (docs/map-rendering.md §5.2 "Patch"): the pinned document's
+ * passes of a bucket and the patch's re-symbolised objects in it. The sources' passes are merged
+ * by colour — earlier sources first within a colour — so the range table stays colour-major; the
+ * range-table object ids are the streams' own `objectIdx`.
+ */
+export function prepareBucketPartFrom(sources: readonly PartSource[], bucket: number, layer: PartLayer, ctx: Pick<PrepareContext, "toleranceUm" | "originX" | "originY" | "meshes">): PreparedPart {
   const t0 = performance.now();
   const tol = ctx.toleranceUm;
   const ox = ctx.originX, oy = ctx.originY;
@@ -441,11 +470,16 @@ export function prepareBucketPart(stream: render.PassStream, bucket: number, pas
     g.objects.push({ object, count: data.length / INSTANCE_FLOATS });
   };
 
-  for (const pi of passes) {
-    const pass = stream.passes[pi];
+  const one = sources.length === 1 ? sources[0] : undefined;
+  const merged = one ? undefined : mergeByColour(sources);
+  const total = one ? one.passes.length : merged!.pass.length;
+  for (let k = 0; k < total; k++) {
+    const src = one ?? sources[merged!.source[k]];
+    const pi = one ? one.passes[k] : merged!.pass[k];
+    const pass = src.stream.passes[pi];
     if (layer === "base" && !BASE_KINDS.has(pass.kind)) continue;
     if (layer === "detail" && BASE_KINDS.has(pass.kind)) continue;
-    const object = stream.objectIdx[pi];
+    const object = src.stream.objectIdx[pi];
     switch (pass.kind) {
       case "fill": {
         const { positions, indices } = triangulateEvenOdd(render.flattenRings(pass.path, tol));
@@ -486,7 +520,7 @@ export function prepareBucketPart(stream: render.PassStream, bucket: number, pas
         break;
       }
       case "glyph": {
-        const mi = ctx.glyphMesh.get(`${pass.glyphId}/${pass.partIdx}`);
+        const mi = src.glyphMesh.get(`${pass.glyphId}/${pass.partIdx}`);
         if (mi === undefined) break;
         const m = ctx.meshes[mi];
         const data: number[] = [];
@@ -514,7 +548,7 @@ export function prepareBucketPart(stream: render.PassStream, bucket: number, pas
         break;
       }
       case "text": {
-        const t = ctx.textGlyph.get(pi);
+        const t = src.textGlyph.get(pi);
         if (!t) break;
         // One quad instance per glyph: x, y, cos, sin, em size, atlas entry, halo (em), 0;
         // grouped by atlas page (one texture per draw).
@@ -567,6 +601,67 @@ export function prepareBucketPart(stream: render.PassStream, bucket: number, pas
     (part.stroke?.vertexCount ?? 0) * STROKE_VERTEX_BYTES;
   part.ms = performance.now() - t0;
   return part;
+}
+
+/** The sources' passes in colour order, earlier sources first within a colour (a stable merge). */
+function mergeByColour(sources: readonly PartSource[]): { source: number[]; pass: number[] } {
+  const source: number[] = [], pass: number[] = [];
+  const at = sources.map(() => 0);
+  for (;;) {
+    let best = -1, colour = Infinity;
+    for (let k = 0; k < sources.length; k++) {
+      const s = sources[k];
+      if (at[k] >= s.passes.length) continue;
+      const c = s.stream.passes[s.passes[at[k]]].colour;
+      if (c < colour) { colour = c; best = k; }
+    }
+    if (best < 0) return { source, pass };
+    source.push(best);
+    pass.push(sources[best].passes[at[best]++]);
+  }
+}
+
+/**
+ * Assigns a stream's objects to an existing grid (docs/map-rendering.md §5.2 "Patch"): the cell
+ * of the centre of their symbolised bounds, or the large bucket when larger than `largeCells`
+ * cells or centred outside the grid (the grid is the load's). Objects are keyed by the stream's
+ * `objectIdx`, whatever their range.
+ */
+export function assignToGrid(
+  stream: render.PassStream,
+  meshRadius: (glyphId: number, partIdx: number) => number,
+  grid: Grid,
+  largeId: number,
+  largeCells = LARGE_CELLS,
+): { objectBucket: Map<number, number>; bucketPasses: Map<number, number[]> } {
+  const bounds = new Map<number, [number, number, number, number]>();
+  stream.passes.forEach((p, i) => {
+    const b = passBounds(p, meshRadius);
+    if (!b) return;
+    const o = stream.objectIdx[i];
+    const ob = bounds.get(o);
+    if (!ob) bounds.set(o, [b.minX, b.minY, b.maxX, b.maxY]);
+    else {
+      ob[0] = Math.min(ob[0], b.minX); ob[1] = Math.min(ob[1], b.minY);
+      ob[2] = Math.max(ob[2], b.maxX); ob[3] = Math.max(ob[3], b.maxY);
+    }
+  });
+  const largeUm = largeCells * grid.cellUm;
+  const objectBucket = new Map<number, number>();
+  for (const [o, [x0, y0, x1, y1]] of bounds) {
+    const col = Math.floor((x0 + x1) / 2 / grid.cellUm), row = Math.floor((y0 + y1) / 2 / grid.cellUm);
+    const inside = col >= grid.minCol && col < grid.minCol + grid.cols && row >= grid.minRow && row < grid.minRow + grid.rows;
+    objectBucket.set(o, x1 - x0 > largeUm || y1 - y0 > largeUm || !inside ? largeId : cellId(grid, col, row));
+  }
+  const bucketPasses = new Map<number, number[]>();
+  for (let i = 0; i < stream.passes.length; i++) {
+    const b = objectBucket.get(stream.objectIdx[i]);
+    if (b === undefined) continue;
+    let arr = bucketPasses.get(b);
+    if (!arr) bucketPasses.set(b, (arr = []));
+    arr.push(i);
+  }
+  return { objectBucket, bucketPasses };
 }
 
 /** All typed-array buffers of a part, for `postMessage` transfer. */

@@ -35,8 +35,8 @@ import {
   viewportRotationDeg,
   zoomAt,
 } from "../lib/map-viewport";
-import { useMapDocument } from "../lib/map-document-cache";
-import { boundsMm, paperFrameOf, type MapBudget } from "../lib/vector-map";
+import { useMapDocument, useMapPatch } from "../lib/map-document-cache";
+import { boundsMm, paperFrameOf, patchForDocument, type MapBudget } from "../lib/vector-map";
 import { rotatedBoundingBox } from "../lib/map-rotation";
 import {
   shouldSuppressSyntheticMouse,
@@ -454,6 +454,11 @@ interface Props {
   mapBudget?: MapBudget;
   /** Operator rotation correction (`map_files.rotation_correction`), degrees, for the paper frame. */
   rotationCorrection?: number | null;
+  /**
+   * The event's patch version (`mapMetadata.patchVersion`, docs/map-patches.md §3.3): a change
+   * refetches the patch the layer draws over the document.
+   */
+  patchVersion?: string | null;
 }
 
 // ─── Helpers ────────────────────────────────────────────────
@@ -506,6 +511,7 @@ export function MapViewer({
   documentHash,
   mapBudget = "event",
   rotationCorrection,
+  patchVersion,
 }: Props) {
   // §12: the editor draws a course with variation groups as it shows it (the displayed path, or All variations).
   // F21: the leg draft of a bend or grip drag over it (course-layer.md §5).
@@ -522,6 +528,10 @@ export function MapViewer({
   // (docs/map-rendering.md §5.4).
   const { state: docState, retry: retryDocument } = useMapDocument(documentHash, nameId ?? null);
   const mapDoc = docState.status === "ready" ? docState.doc : null;
+  // The event's patch, paired with this document (docs/map-patches.md §2, §3.3): the layer draws
+  // the effective document and does not wait for it.
+  const patchDelivery = useMapPatch(nameId ?? null, patchVersion);
+  const mapPatch = useMemo(() => patchForDocument(documentHash, patchDelivery), [documentHash, patchDelivery]);
   const paperFrame = useMemo(
     () => (mapDoc ? paperFrameOf(mapDoc.header, rotationCorrection) : null),
     [mapDoc, rotationCorrection],
@@ -2816,6 +2826,8 @@ export function MapViewer({
           onCourse={setCourseInfo}
           onCourseSupport={setCourseSupport}
           loupe={glLoupe}
+          patch={mapPatch}
+          patchVersion={mapPatch ? patchDelivery.version : "0"}
         />
       )}
       {/* Rotated UI layer (the overlay SVG) — the meridians vertical, as the canvas's view matrix */}

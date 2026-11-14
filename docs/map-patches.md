@@ -268,18 +268,33 @@ ops that lost their target after the pin moved.
   coordinate array — linear in the document, fine for print and for a
   patch change, not a per-frame operation; the viewer's incremental path
   (row G4) re-prepares only the touched buckets.
-- **Every other reader of a document's objects** skips `hidden[i]`:
-  - the course layer's cut features and check obstacles
-    (`cutFeaturesOfDocument`, `checkObstaclesOfDocument`; G14) take an
-    `EffectiveDocument`. An added object counts like a document object:
-    a patch symbol carries no match, so its `code` (the library entry's)
-    decides, and its own `render` gives a cut feature's radius;
-  - the API's event map objects (`slimObjectsOfDocument`; G14);
-  - the snap and pick indices (`lib/editor/snap.ts`, `symbol-pick.ts`)
-    when they start receiving an effective document (row G4).
+- **The viewer** (row G4, `map-rendering.md` §5.2 "Object identity and
+  the patch"): the worker takes `{ document, patch }`. Its range tables
+  key on the effective `objectIndex`; a hidden object is skipped through
+  the range table (ids only, nothing re-prepared); modified, resymbolled
+  and added objects are symbolised on their own and only the buckets
+  whose content changed are re-prepared. A patch change redraws without
+  reloading the document. Viewer, kiosk and editor all draw the
+  effective document.
+- **The course layer's cuts** (`course/cuts.ts` `cutFeaturesOfDocument`,
+  G4) skip `hidden[i]` and read modified objects where they are; the
+  viewer's worker recomputes them with every patch change. **Filter
+  regions** act on the effective document in the viewer (G4).
+- **The snap and pick indices** (`lib/editor/snap.ts`, `symbol-pick.ts`,
+  G4) are built from the effective document: hidden objects neither snap
+  nor are picked or counted, modified and added ones are where the patch
+  puts them. An object drawn with a patch symbol is not picked by symbol
+  (a filter region stores document symbol indices; Pending).
+- **The course checks and the API's event map objects** (G14):
+  `checkObstaclesOfDocument` and `slimObjectsOfDocument` take an
+  `EffectiveDocument` and skip `hidden[i]`. An added object counts like
+  a document object, here and in the cuts: a patch symbol carries no
+  match, so its `code` (the library entry's) decides, and its own
+  `render` gives a cut feature's radius.
 - **Print and the server's derivations** (G14) read the effective
   document:
-  - `maps.pdf`, the print worker and the print job compose it
+  - `maps.pdf`, the server's print worker, the print job and the
+    device's print worker (G16, `course-print.md` §8.6) compose it
     (`course-print.md` §4.3, §8.2, §8.5): `prepareDocument(hash, bytes,
     patch)` applies the patch, its cache keyed by hash + patch version;
     the job carries the patch inline (version 2). A skipped op is a
@@ -441,6 +456,21 @@ GET /api/maps/:nameId/patch     → 200 application/json { version, patch }
   (`livePrintPatch`: enabled, at least one op, keyed onto the hash) or
   null — print's input (`course-print.md` §8.2). A venue box applies its
   own copy of the row (§3.4) the same way.
+- **The web client** (row G4; `lib/map-document-cache.ts`): `useMapPatch(nameId,
+  patchVersion)` asks the route with the kiosk key as a header (never in
+  the query) and `If-None-Match` with the session's version, keeps the
+  delivery per event for the session (`getMapPatch`, `setMapPatch`,
+  `subscribeMapPatch`), and asks again when `mapMetadata.patchVersion`
+  differs from it and when the page regains focus, becomes visible or
+  comes back online — there is no live channel, since the patch is not
+  journaled. One request per event at a time; a version change that
+  joined a request already in flight and still got the old version asks
+  once more (`refreshMapPatch`); a failure keeps the
+  session's copy, else none (never an error to the viewer); a body whose
+  `patch` does not parse is no patch, with a warning. The viewer pairs the
+  delivery with its document by hash (`patchForDocument`) and does not
+  wait for it. The route is not in Cache Storage: a device that starts
+  offline draws the pinned document (Pending).
 
 ### 3.4 Venue
 
@@ -477,8 +507,15 @@ document only a patch points at, and touches its `last_referenced_at`.
 - **A box follows the cloud's patch during a lease** (row G19): a
   forwarded write reaches the cloud, but the box serves the checkout's
   copy until then (§3.4).
-- **The effective document on screen** (row G4): the viewer worker takes
-  `{ document, patch }`; the readers named in §2.4 skip hidden objects.
+- **An offline copy of the patch** (G4, decided overnight for review).
+  The document is CacheFirst in the service worker; the patch route is
+  not cached, so a device that starts offline (Field mode) draws the
+  pinned document. A NetworkFirst runtime route (`vite.config.ts`) or an
+  IndexedDB copy is a follow-up row (G17 or its own).
+- **Patch symbols in the eyedropper** (G4, decided overnight for review;
+  `map-rendering.md` §8): a
+  filter region cannot select an object drawn with a patch symbol by
+  symbol until the region props carry a stable symbol key.
 - **§4 Re-resolution** (row G11): re-keying a patch when the event's pin
   moves (same source by `sourceIndex`; a new edition by position and
   symbol within 0.5 mm), the `unresolved` flag, symbol references
@@ -507,5 +544,11 @@ document only a patch points at, and touches its `last_referenced_at`.
 | Unit (api) | `packages/api/src/__tests__/print-worker.test.ts` (G14 part) | `course-print.md` §9.1: the worker keyed by hash + patch version |
 | Integration (api) | `packages/api/src/__tests__/integration/print-patch.test.ts` (G14) | a hidden object absent from `maps.pdf` (the pixels that change lie in its box), an added one present, `enabled = false` byte-identical to the unpatched PDF and job, a change shows on the same worker, the job with a patch over HTTP equals `maps.pdf` (`course-print.md` §9.1) |
 | Integration (api) | `packages/api/src/__tests__/integration/overprint-cuts.test.ts`, `course-checks.test.ts` (G14 part) | through `mapPatch.applyChange`: the boulder hidden → a leg over it has no gap, an added boulder gaps another leg, the print's `cutFeatures` likewise, disabled → the pinned document's cuts; the building hidden → no `LEG_THROUGH_UNCROSSABLE`, an added building across the leg → the check at its edge, disabled → the pinned building's |
-| E2E | `e2e/course-maps.spec.ts` (G14 part) | the print job carries no patch, then the patch at the write's version after a hide, then none after the op is removed |
+| E2E | `e2e/course-maps.spec.ts` (G14 part) | the print job carries no patch, then the patch at the write's version after a hide, and the device's export equals the patched `maps.pdf`; none after the op is removed |
+| Unit (api, web) | `packages/api/src/__tests__/print-device.test.ts`, `packages/web/src/print/__tests__/worker.test.ts` (G14 part) | the device's print worker applies the job's patch: the server worker's bytes, `renderPrintJob`'s in process (`course-print.md` §9.1) |
 | E2E | `e2e/map-documents.spec.ts` | after the UI upload: the patch route `{ "0", null }`, `mapPatch.applyChange` over tRPC, the route 200 with the op and the ETag, 304 on revalidation, anonymous 401 |
+| Unit (shared) | `packages/shared/src/course/__tests__/cuts.test.ts` | G4: over an effective document a hidden boulder gives no cut feature, a modified one is at its new place |
+| Unit (web) | `packages/web/src/map-gl/__tests__/worker-patch.test.ts`, `buckets.test.ts`, `engine.test.ts` | G4: the effective document in the viewer's worker and engine (`map-rendering.md` §5.2 Tests) |
+| Unit (web) | `packages/web/src/lib/__tests__/map-document-cache.test.ts`, `vector-map.test.ts` | G4: the client's fetch, ETag revalidation, session store and failure rules; the pairing by hash |
+| Unit (web) | `packages/web/src/lib/editor/__tests__/snap.test.ts`, `symbol-pick.test.ts` | G4: snapping and the eyedropper over the effective document |
+| E2E | `e2e/map-vector-layer.spec.ts` | G4: a hidden object's pixels gone and an added one drawn after a change, with no reload; the toggle off restores both |

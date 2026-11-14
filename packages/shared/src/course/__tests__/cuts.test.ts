@@ -261,6 +261,19 @@ describe("cutFeaturesOfDocument", () => {
     ]);
   });
 
+  it("reads the effective document: a hidden boulder gives no feature, a modified one is at its new place (map-patches §2.4)", () => {
+    const doc = decodeMapDocument(encodeMapDocument({
+      header,
+      objects: [{ ...obj(0, OBJECT_TYPE.point, [1000, 2000]), sourceIndex: 7 }, { ...obj(1, OBJECT_TYPE.point, [-500, 250]), sourceIndex: 8 }],
+    }));
+    const hash = "ab".repeat(32);
+    const eff = applyPatch(doc, {
+      documentHash: hash, enabled: true, symbols: {},
+      ops: { "hide:8": { op: "hide", sourceIndex: 8 }, "modify:7": { op: "modify", sourceIndex: 7, coords: [[3000, 4000]] } },
+    }).document;
+    expect(cutFeaturesOfDocument(eff)).toEqual([f(30, 40, 0.2)]);
+  });
+
   it("is today's CUT_SYMBOLS set", () => {
     expect([...CUT_CODES].sort()).toEqual([109, 110, 203, 204, 205, 207]);
   });

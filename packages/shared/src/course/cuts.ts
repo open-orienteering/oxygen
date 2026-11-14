@@ -237,8 +237,9 @@ export function cutContextForScale(mapScale: number): { libraryId: SymbolLibrary
  * whose applied match — or, unmatched, whose source code — is in
  * `CUT_CODES`, each with the radius of the symbol the document draws (the
  * canonical render, else its own; the library entry × document factor
- * when it has neither). Paper mm. Reads an effective document
- * (docs/map-patches.md §2.4): objects the patch hides are skipped.
+ * when it has neither). Paper mm. `doc` may be an effective document
+ * (map-patches §2.4): objects a patch hides give no feature, modified ones
+ * are where the patch puts them.
  */
 export function cutFeaturesOfDocument(doc: EffectiveDocument): CutFeature[] {
   const ctx = courseDocumentContext(doc.header);
@@ -253,8 +254,9 @@ export function cutFeaturesOfDocument(doc: EffectiveDocument): CutFeature[] {
   const perMm = doc.header.unitsPerMm;
   const out: CutFeature[] = [];
   for (let i = 0; i < doc.header.objects.count; i++) {
+    if (doc.hidden?.[i]) continue;
     const r = radii[doc.attrs.symbolIdx[i]];
-    if (doc.attrs.type[i] !== OBJECT_TYPE.point || r === null || doc.hidden?.[i]) continue;
+    if (doc.attrs.type[i] !== OBJECT_TYPE.point || r === null) continue;
     const k = doc.coordStart[i] * 2;
     out.push({ x: doc.coords[k] / perMm, y: doc.coords[k + 1] / perMm, r });
   }
