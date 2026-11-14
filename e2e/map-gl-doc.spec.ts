@@ -324,14 +324,24 @@ test.describe("WebGL2 map backend — whole document", () => {
     await expect(canvas).toHaveAttribute("data-ready", "true", { timeout: 30_000 });
 
     const lines = () => page.evaluate(() => (window as unknown as DocWindow).__mapGlDocLines!());
-    // The fixture's first Path (505): at its first segment's mid-point it is the topmost object, over an area.
-    const pathOf = async () => (await lines()).find((l) => l.code.startsWith("505"))!;
-    let path = await pathOf();
-    expect(path, JSON.stringify(await lines())).toBeDefined();
+    // The canvas runs below the viewport: only points on screen can be clicked.
+    const viewport = page.viewportSize()!;
+    const onScreen = async (p: { x: number; y: number }) => {
+      const box = (await canvas.boundingBox())!;
+      return p.x > box.x + 20 && p.x < Math.min(viewport.width, box.x + box.width) - 20 && p.y > box.y + 20 && p.y < Math.min(viewport.height, box.y + box.height) - 20;
+    };
+    // A Path (505) of the fixture on screen: at its first segment's mid-point it is the topmost object, over an area.
+    const all = await lines();
+    let path: (typeof all)[number] | undefined;
+    for (const l of all) if (!path && l.code.startsWith("505") && (await onScreen(l))) path = l;
+    expect(path, JSON.stringify(all)).toBeDefined();
+    const source = path!.sourceIndex;
+    const pathOf = async () => (await lines()).find((l) => l.sourceIndex === source)!;
     // Zoom in on it (the wheel keeps the point under the cursor).
-    await page.mouse.move(path.x, path.y);
+    await page.mouse.move(path!.x, path!.y);
     for (let i = 0; i < 3; i++) await page.mouse.wheel(0, -500);
     path = await pathOf();
+    expect(await onScreen(path)).toBe(true);
 
     // The highlight blue (#2563eb) near a client point, from the drawing buffer (preserveDrawingBuffer).
     const blueNear = async (p: { x: number; y: number }, radiusPx: number) => {
@@ -365,12 +375,13 @@ test.describe("WebGL2 map backend — whole document", () => {
     expect(await blueNear(path, 8), "the highlight around the clicked path").toBeGreaterThan(10);
 
     // A click on another line moves the highlight there: the path's blue goes.
-    const other = (await lines()).find((l) => l.sourceIndex !== path.sourceIndex && Math.hypot(l.x - path.x, l.y - path.y) > 80 && l.x > 0 && l.y > 0)!;
-    const box = (await canvas.boundingBox())!;
-    const spot = other && other.x < box.x + box.width && other.y < box.y + box.height ? other : { x: box.x + box.width - 20, y: box.y + box.height - 20, sourceIndex: -1 };
+    let spot: { x: number; y: number } | undefined;
+    for (const l of await lines()) if (!spot && l.sourceIndex !== source && Math.hypot(l.x - path.x, l.y - path.y) > 80 && (await onScreen(l))) spot = l;
+    // No other line on screen: a point well away from the path.
+    spot ??= { x: path.x, y: path.y > viewport.height / 2 ? path.y - 150 : path.y + 150 };
     await page.mouse.click(spot.x, spot.y);
     const second = await pickReport(2);
-    expect(second.hits[0]?.ref).not.toEqual({ source: path.sourceIndex });
+    expect(second.hits[0]?.ref).not.toEqual({ source });
     await expect.poll(() => blueNear(path, 8)).toBe(0);
   });
 });
