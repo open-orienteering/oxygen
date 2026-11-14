@@ -12,7 +12,7 @@
 
 import type { AngularGap, FractionGap } from "../course-maps/overlay-geometry.js";
 import { OBJECT_TYPE } from "../map-document/header.js";
-import type { MapDocument } from "../map-document/codec.js";
+import type { EffectiveDocument } from "../map-document/patch.js";
 import { canonicalRender, isAppliedMatch } from "../map-document/render-bridge.js";
 import { type OcadSymbolDefLike, ocadSymbolToRender } from "../import/ocad-symbols.js";
 import type { RenderSymbol } from "../render/symbol.js";
@@ -237,9 +237,10 @@ export function cutContextForScale(mapScale: number): { libraryId: SymbolLibrary
  * whose applied match — or, unmatched, whose source code — is in
  * `CUT_CODES`, each with the radius of the symbol the document draws (the
  * canonical render, else its own; the library entry × document factor
- * when it has neither). Paper mm.
+ * when it has neither). Paper mm. Reads an effective document
+ * (docs/map-patches.md §2.4): objects the patch hides are skipped.
  */
-export function cutFeaturesOfDocument(doc: MapDocument): CutFeature[] {
+export function cutFeaturesOfDocument(doc: EffectiveDocument): CutFeature[] {
   const ctx = courseDocumentContext(doc.header);
   const radii = doc.header.symbols.map((s): number | null => {
     if (s.hidden) return null;
@@ -253,7 +254,7 @@ export function cutFeaturesOfDocument(doc: MapDocument): CutFeature[] {
   const out: CutFeature[] = [];
   for (let i = 0; i < doc.header.objects.count; i++) {
     const r = radii[doc.attrs.symbolIdx[i]];
-    if (doc.attrs.type[i] !== OBJECT_TYPE.point || r === null) continue;
+    if (doc.attrs.type[i] !== OBJECT_TYPE.point || r === null || doc.hidden?.[i]) continue;
     const k = doc.coordStart[i] * 2;
     out.push({ x: doc.coords[k] / perMm, y: doc.coords[k + 1] / perMm, r });
   }

@@ -7,7 +7,7 @@
 import { describe, expect, it } from "vitest";
 import { CUT_AIR_MM, CUT_CODES, DEFAULT_FEATURE_RADIUS_MM, circleCuts, cutContextForScale, cutFeaturesOfDocument, cutSymbolRadiusMm, legGaps, ocadCutSymbolRadiiMm, polylineLegGaps } from "../cuts.js";
 import type { OcadSymbolDefLike } from "../../import/ocad-symbols.js";
-import { OBJECT_TYPE, decodeMapDocument, encodeMapDocument, type MapDocumentInput } from "../../map-document/index.js";
+import { OBJECT_TYPE, applyPatch, decodeMapDocument, encodeMapDocument, mapPatchSchema, type MapDocumentInput } from "../../map-document/index.js";
 import { SYMBOL_LIBRARY_VERSION } from "../../symbol-library/index.js";
 
 const R = 2.5;
@@ -231,6 +231,34 @@ describe("cutFeaturesOfDocument", () => {
   it("falls back to the library entry × the document factor", () => {
     const doc = decodeMapDocument(encodeMapDocument({ header: { ...header, mapScale: 10000 }, objects: [obj(0, OBJECT_TYPE.point, [1000, 2000])] }));
     expect(cutFeaturesOfDocument(doc)).toEqual([f(10, 20, 0.2 * 1.5)]);
+  });
+
+  it("reads the effective document: a hidden object is no feature, an added one is (docs/map-patches.md §2.4)", () => {
+    const doc = decodeMapDocument(encodeMapDocument({
+      header,
+      objects: [
+        { ...obj(1, OBJECT_TYPE.point, [-500, 250]), sourceIndex: 7 },
+        { ...obj(0, OBJECT_TYPE.point, [1000, 2000]), sourceIndex: 8 },
+      ],
+    }));
+    const boulder = { type: "point" as const, id: "ISOM2017-2:204", code: "204", name: "Boulder", glyph: { parts: [{ kind: "disc" as const, colour: 0, diameterUm: 600 }], rotatable: false }, orientation: "north" as const };
+    const patch = mapPatchSchema.parse({
+      documentHash: "ab".repeat(32),
+      ops: {
+        "hide:7": { op: "hide", sourceIndex: 7 },
+        "add:00000000-0000-4000-8000-000000000001": { op: "add", id: "00000000-0000-4000-8000-000000000001", type: OBJECT_TYPE.point, symbol: { doc: 1 }, coords: [[3000, 4000]] },
+        "add:00000000-0000-4000-8000-000000000002": { op: "add", id: "00000000-0000-4000-8000-000000000002", type: OBJECT_TYPE.point, symbol: { patch: "ISOM2017-2:204" }, coords: [[5000, 0]] },
+      },
+      symbols: { "ISOM2017-2:204": { code: "204", name: "Boulder", kind: "point", render: boulder } },
+    });
+    const { document, issues } = applyPatch(doc, patch);
+    expect(issues).toEqual([]);
+    const byX = (a: { x: number }, b: { x: number }) => a.x - b.x;
+    expect(cutFeaturesOfDocument(document).sort(byX)).toEqual([
+      f(10, 20, 0.2),
+      f(30, 40, cutSymbolRadiusMm("ISOM2017-2", "203")),
+      f(50, 0, 0.3),
+    ]);
   });
 
   it("is today's CUT_SYMBOLS set", () => {
