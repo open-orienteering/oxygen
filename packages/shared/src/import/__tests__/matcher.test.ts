@@ -289,6 +289,12 @@ describe("overlay candidates: ISSkiOM 2019 beside the document's library (docs/m
     // A map drawn 1.2× its spec size (symbolScale 1.2) draws its tracks 1.2× too.
     expect(entryFactor({ ...doc, documentFactor: 1.8 }, "ISSkiOM2019:801.1")).toBeCloseTo(1.2, 9);
     expect(entryFactor({ libraryId: "ISSprOM2019-2", documentFactor: 1, mapScale: 4000 }, "ISSkiOM2019:803.1")).toBe(1.5);
+    // The other base library (Map mode materialising, G8): its own reference scale × symbolScale.
+    expect(entryFactor(doc, "ISSprOM2019-2:529")).toBeCloseTo(4000 / 10000, 12);
+    expect(entryFactor({ ...doc, documentFactor: 1.8 }, "ISSprOM2019-2:529")).toBeCloseTo((4000 / 10000) * 1.2, 12);
+    // An unknown id falls back to the document factor.
+    expect(entryFactor(doc, "ISOM2017-2:999")).toBe(1.5);
+    expect(entryFactor(doc, "nope")).toBe(1.5);
   });
 
   it("an 8xx track drawn to spec is auto-matched to its ISSkiOM entry, at the overlay's factor", () => {

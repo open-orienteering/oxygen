@@ -94,16 +94,17 @@ export function canonicalCandidates(library: SymbolLibrary, edition: PaletteEdit
 
 /**
  * The enlargement a library entry is scored and drawn at on a document
- * (docs/map-symbols.md §8.2 "What is drawn", §12.2): the document factor
- * for an entry of the document's own library (or any base library); for an
- * overlay entry, `libraryFactor(overlay, mapScale, code) × symbolScale`
- * with `symbolScale = documentFactor / libraryFactor(document library,
- * mapScale)`, unrounded — a map drawn larger than its spec draws its tracks
- * larger by the same ratio.
+ * (docs/map-symbols.md §8.2 "What is drawn", §11.1, §12.2): the document
+ * factor for an entry of the document's own library (or an unknown id);
+ * for an entry of any other library — an overlay, or the other base
+ * library when Map mode materialises one (G8) — `libraryFactor(library,
+ * mapScale, code) × symbolScale` with `symbolScale = documentFactor /
+ * libraryFactor(document library, mapScale)`, unrounded — a map drawn
+ * larger than its spec draws its tracks larger by the same ratio.
  */
 export function entryFactor(doc: { libraryId: SymbolLibraryId; documentFactor: number; mapScale: number }, entryId: string): number {
   const libraryId = entryId.slice(0, Math.max(0, entryId.indexOf(":")));
-  if (libraryId === doc.libraryId || !isSymbolLibraryId(libraryId) || !isOverlayLibrary(libraryId)) return doc.documentFactor;
+  if (libraryId === doc.libraryId || !isSymbolLibraryId(libraryId)) return doc.documentFactor;
   const entry = getLibraryEntry(entryId);
   if (!entry) return doc.documentFactor;
   return libraryFactor(libraryId, doc.mapScale, entry.code) * (doc.documentFactor / libraryFactor(doc.libraryId, doc.mapScale));
