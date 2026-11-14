@@ -68,10 +68,12 @@ describe("measure-import.mjs", () => {
     const out = path.join(dir, "purple.json");
     const r = run(ocd, xmap, "--out", out);
     // G21: green 100 % and the track mask below lower purple, the track inks above it (docs/map-symbols.md §12.3).
-    assert.match(r.stdout, /^ {2}purple {5}lower at 5 of 10 \(inserted\) {2}areas above 0 {2}conflicts \d+$/m);
-    assert.match(r.stdout, /^ {2}purple {5}lower at 4 of 11 \(inserted\) {2}areas above 0 {2}conflicts \d+$/m);
+    // C15: both course purples placed by rule; each fixture's own upper purple is on top and reused, nothing displaced.
+    assert.match(r.stdout, /^ {2}purple {5}lower at 5 of 10 \(inserted\) {2}upper at 9 \(source\) {2}areas above 0 {2}conflicts \d+$/m);
+    assert.match(r.stdout, /^ {2}purple {5}lower at 4 of 11 \(inserted\) {2}upper at 10 \(source\) {2}areas above 0 {2}conflicts \d+$/m);
     const maps = JSON.parse(readFileSync(out, "utf8")).maps;
-    assert.deepEqual(maps["test.ocd"].lowerPurple, { index: 5, colours: 10, inserted: true, areasAbove: [], conflicts: maps["test.ocd"].lowerPurple.conflicts });
+    assert.deepEqual(maps["test.ocd"].lowerPurple, { index: 5, colours: 10, inserted: true, displaced: [], areasAbove: [], conflicts: maps["test.ocd"].lowerPurple.conflicts });
+    assert.deepEqual(maps["test.ocd"].upperPurple, { index: 9, inserted: false, displaced: [] });
     assert.ok(maps["test.ocd"].lowerPurple.conflicts > 0); // the fixture's blue line colour sits under its yellow
   });
 
