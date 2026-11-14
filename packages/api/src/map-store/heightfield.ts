@@ -15,11 +15,12 @@
 import { Worker } from "node:worker_threads";
 // Leaf modules only: this file is in the router's type graph, which the web compiles too.
 import { RASTER_RULES } from "@oxygen/shared/src/terrain/graph/raster.js";
-import { TERRAIN_VERSION, type HeightFieldHeader } from "@oxygen/shared/src/terrain/field/types.js";
+import { DEM_FIELD_SOURCE_RE, TERRAIN_VERSION, type HeightFieldHeader, type HeightFieldProvider } from "@oxygen/shared/src/terrain/field/types.js";
 import type { TerrainReport } from "@oxygen/shared/src/terrain/solve/types.js";
 import type { Prisma, PrismaClient } from "../generated/prisma/client.js";
 import { workerBootstrap } from "../worker-bootstrap.js";
 import { getBlob } from "./blob-store.js";
+import { demProviders } from "./dem-registry.js";
 
 type Db = PrismaClient | Prisma.TransactionClient;
 
@@ -44,7 +45,21 @@ export function heightfieldMaxCells(env: string | undefined = process.env.MAP_HE
 
 // ---- pure helpers -------------------------------------------------------------
 
-export const heightfieldUrl = (hash: string, version: number = TERRAIN_VERSION): string => `/api/map-documents/${hash}/height.bin?v=${version}`;
+export const heightfieldUrl = (hash: string, version: number = TERRAIN_VERSION, source: string = HEIGHTFIELD_SOURCE): string =>
+  `/api/map-documents/${hash}/height.bin?v=${version}${source === HEIGHTFIELD_SOURCE ? "" : `&source=${source}`}`;
+
+/**
+ * `?source=` (§4.7 "Contract"): absent or `contours` → `contours`; a DEM
+ * source (`ground.<provider>`, `contours.<provider>`) as it is; anything
+ * else null (400).
+ */
+export function parseHeightfieldSource(raw: unknown): string | null {
+  if (raw === undefined || raw === HEIGHTFIELD_SOURCE) return HEIGHTFIELD_SOURCE;
+  return typeof raw === "string" && DEM_FIELD_SOURCE_RE.test(raw) ? raw : null;
+}
+
+/** The provider id of a DEM source (`ground.lantmateriet-2m` → `lantmateriet-2m`); null for `contours`. */
+export const demSourceProvider = (source: string): string | null => (source === HEIGHTFIELD_SOURCE ? null : source.slice(source.indexOf(".") + 1));
 
 export const heightfieldEtag = (hash: string, version: number = TERRAIN_VERSION, source: string = HEIGHTFIELD_SOURCE): string => `"${hash}/height/${source}/${version}"`;
 
@@ -189,6 +204,10 @@ const inFlight = new Map<string, Promise<HeightfieldResult>>();
 const failedUntil = new Map<string, number>();
 /** One derive at a time per instance bounds the memory (§4.7, measured ~1.1 GB at the budget). */
 let queue: Promise<unknown> = Promise.resolve();
+/** The instance's one derive queue: the contour field's and the DEM job's (§4.7). */
+export function serialisedDerive<T>(fn: () => Promise<T>): Promise<T> {
+  return serialised(fn);
+}
 function serialised<T>(fn: () => Promise<T>): Promise<T> {
   const run = queue.then(fn, fn);
   queue = run.catch(() => undefined);
@@ -279,6 +298,52 @@ export async function deriveDocumentHeightfield(db: Db, hash: string, opts: Deri
 
 export type TerrainState = "ready" | "none" | "over-cap" | "pending";
 
+export type DemState = "ready" | "pending" | "unavailable" | "failed" | "disabled";
+
+/**
+ * The DEM block (§4.7 "Descriptor"; docs/map-terrain.md §7): the first
+ * enabled provider that covers the document, its licence and attribution
+ * (answer 16), and the two fields' routes. `pending` carries the routes —
+ * fetching one queues the job; `unavailable` and `failed` carry the reason.
+ */
+export interface DemDescriptor {
+  state: DemState;
+  /** unavailable: no-georeference | no-coverage | no-contours | over-cap | misaligned | rotation-corrected; failed: auth | http | format | timeout | derive. */
+  reason: string | null;
+  provider: HeightFieldProvider | null;
+  ground: { url: string } | null;
+  anchored: { url: string; decided: number | null } | null;
+}
+
+export interface TerrainOptions {
+  /** The pin's `rotation_correction`: a corrected pin gets no DEM (docs/map-terrain.md §7.0 answer 2). */
+  rotationCorrection?: number | null;
+}
+
+export async function demDescriptor(db: Db, hash: string, opts: TerrainOptions = {}): Promise<DemDescriptor> {
+  const list = demProviders();
+  const none = (state: DemState, reason: string | null, provider: HeightFieldProvider | null = null): DemDescriptor => ({ state, reason, provider, ground: null, anchored: null });
+  if (list.length === 0) return none("disabled", null);
+  if (opts.rotationCorrection) return none("unavailable", "rotation-corrected");
+  const jobs = await db.mapDemJob.findMany({
+    where: { documentHash: hash, version: TERRAIN_VERSION, provider: { in: list.map((p) => p.info.id) } },
+    select: { provider: true, state: true, reason: true },
+  });
+  for (const p of list) {
+    const id = p.info.id, job = jobs.find((j) => j.provider === id);
+    const urls = { ground: { url: heightfieldUrl(hash, TERRAIN_VERSION, `ground.${id}`) }, anchoredUrl: heightfieldUrl(hash, TERRAIN_VERSION, `contours.${id}`) };
+    if (!job || job.state === "queued" || job.state === "running") return { state: "pending", reason: null, provider: p.info, ground: urls.ground, anchored: { url: urls.anchoredUrl, decided: null } };
+    if (job.state === "unavailable" && job.reason === "no-coverage") continue;
+    if (job.state === "done") {
+      const row = await db.mapHeightfield.findUnique({ where: { documentHash_source_version: { documentHash: hash, source: `contours.${id}`, version: TERRAIN_VERSION } }, select: { report: true } });
+      const decided = (row?.report as { share?: { decided?: unknown } } | null)?.share?.decided;
+      return { state: "ready", reason: null, provider: p.info, ground: urls.ground, anchored: { url: urls.anchoredUrl, decided: typeof decided === "number" ? decided : null } };
+    }
+    return none(job.state === "failed" ? "failed" : "unavailable", job.reason, p.info);
+  }
+  return none("unavailable", "no-coverage");
+}
+
 export interface TerrainDescriptor {
   state: TerrainState;
   source: typeof HEIGHTFIELD_SOURCE;
@@ -287,6 +352,8 @@ export interface TerrainDescriptor {
   url: string | null;
   /** `report.share.decided` (the 3D gate's input, answer 7); null unless ready. */
   decided: number | null;
+  /** The DEM's fields (docs/map-terrain.md §7). */
+  dem: DemDescriptor;
 }
 
 export interface TerrainReview {
@@ -296,6 +363,7 @@ export interface TerrainReview {
   url: string | null;
   report: TerrainReport | null;
   field: { width: number; height: number; cellMm: number } | null;
+  dem: DemDescriptor;
 }
 
 /**
@@ -303,8 +371,8 @@ export interface TerrainReview {
  * never waits for a derive. `header` is the document's stored summary,
  * read for the over-cap check when there is no row.
  */
-export async function terrainReview(db: Db, hash: string, documentSummary?: unknown): Promise<TerrainReview> {
-  const base = { source: HEIGHTFIELD_SOURCE, version: TERRAIN_VERSION } as const;
+export async function terrainReview(db: Db, hash: string, documentSummary?: unknown, opts: TerrainOptions = {}): Promise<TerrainReview> {
+  const base = { source: HEIGHTFIELD_SOURCE, version: TERRAIN_VERSION, dem: await demDescriptor(db, hash, opts) } as const;
   const row = await rowState(db, hash);
   if (row?.hasBytes) {
     const h = row.header as HeightFieldHeader;
@@ -317,8 +385,8 @@ export async function terrainReview(db: Db, hash: string, documentSummary?: unkn
 }
 
 /** `course.mapMetadata.terrain`: the review's block without the report. */
-export async function terrainDescriptor(db: Db, hash: string, documentSummary?: unknown): Promise<TerrainDescriptor> {
-  const r = await terrainReview(db, hash, documentSummary);
+export async function terrainDescriptor(db: Db, hash: string, documentSummary?: unknown, opts: TerrainOptions = {}): Promise<TerrainDescriptor> {
+  const r = await terrainReview(db, hash, documentSummary, opts);
   const decided = r.report?.share?.decided;
-  return { state: r.state, source: r.source, version: r.version, url: r.url, decided: typeof decided === "number" ? decided : null };
+  return { state: r.state, source: r.source, version: r.version, url: r.url, decided: typeof decided === "number" ? decided : null, dem: r.dem };
 }

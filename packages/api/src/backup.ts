@@ -127,7 +127,7 @@ function parseDatabaseUrl(): PgConnectionParams {
  * (docs/map-storage.md §7.3). `club_symbol_decisions` is club-level state
  * a restored event's re-match reads; it travels whole (no event column,
  * and its fingerprints are not derivable in SQL). `map_previews` and
- * `map_heightfields` (docs/map-storage.md §4.7) are
+ * `map_heightfields` with `map_dem_jobs` (docs/map-storage.md §4.7) are
  * caches and stay out. The event's `map_patches` row follows `map_files`;
  * the blob sections also carry its document and that document's source,
  * so a dormant patch (docs/map-patches.md §3.5) restores too. The

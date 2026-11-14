@@ -5,8 +5,8 @@
 
 import type { ContourGraph, RegionRaster } from "../graph/types.js";
 import { LABEL } from "../graph/types.js";
-import { bandHeights, bandSources, type FieldLevels } from "./interpolate.js";
-import { HEIGHT_NO_DATA, TERRAIN_VERSION, Z_PER_INTERVAL, confidenceBytes, type HeightField } from "./types.js";
+import { bandHeights, bandSources, type AnchoredSources, type FieldLevels } from "./interpolate.js";
+import { HEIGHT_NO_DATA, TERRAIN_VERSION, Z_PER_INTERVAL, confidenceBytes, type HeightField, type HeightFieldHeader, type HeightFieldProvider } from "./types.js";
 
 export const FIELD_RULES = {
   /** Target field cell, paper mm (§4.0 answer 3). */
@@ -26,6 +26,26 @@ export interface HeightFieldOptions {
   cellMm?: number;
   maxCells?: number;
   maxSide?: number;
+  /** §4.9: build the anchored (absolute) field from per-chain heights. */
+  anchored?: AnchoredFieldInput;
+}
+
+/** §4.9: per-chain heights (§6.8) and what the field is called. Per-chain heights never enter the format (§4.0 answer 2). */
+export interface AnchoredFieldInput {
+  /** Per chain, metres above the DEM's datum; NaN = no height (the chain seeds nothing). */
+  chainHeightsM: Float64Array;
+  /** Per chain, 1 = good evidence for the confidence bit (§4.7); absent = the relative rule. */
+  chainConfident?: Uint8Array;
+  /** The header's `source`, e.g. `contours.lantmateriet-2m` (§7.0 answer 3). */
+  source: HeightFieldHeader["source"];
+  provider?: HeightFieldProvider;
+}
+
+/** §4.9: the offset of an anchored field, the whole interval at or below its lowest chain height; 0 without one. */
+export function anchoredOffsetM(chainHeightsM: ArrayLike<number>, intervalM: number): number {
+  let min = Infinity;
+  for (let i = 0; i < chainHeightsM.length; i++) if (chainHeightsM[i] < min) min = chainHeightsM[i];
+  return Number.isFinite(min) ? intervalM * Math.floor(min / intervalM) : 0;
 }
 
 export interface FieldGrid {
@@ -129,14 +149,24 @@ export function buildHeightField(g: ContourGraph, lv: FieldLevels, opts: HeightF
   const r = g.raster, labels = r.labels, W = r.width;
   const grid = fieldGrid(r, opts);
   const { k, width: FW, height: FH } = grid, FN = FW * FH;
-  const src = bandSources(g, lv);
+  const intervalM = opts.intervalM ?? FIELD_RULES.intervalM;
+  const anchored = opts.anchored;
+  if (anchored && anchored.chainHeightsM.length !== g.chains.length) throw new RangeError(`buildHeightField: ${anchored.chainHeightsM.length} chain heights for ${g.chains.length} chains`);
+  const zOffsetM = anchored ? anchoredOffsetM(anchored.chainHeightsM, intervalM) : 0;
+  let anchoredSources: AnchoredSources | undefined;
+  if (anchored) {
+    const chainZ = new Float64Array(g.chains.length);
+    for (let ci = 0; ci < chainZ.length; ci++) chainZ[ci] = (anchored.chainHeightsM[ci] - zOffsetM) / intervalM;
+    anchoredSources = { chainZ, chainGood: anchored.chainConfident };
+  }
+  const src = bandSources(g, lv, anchoredSources);
 
-  // §4.7 confidence per region
+  // §4.7 confidence per region; an anchored field's levels come from the DEM, so a weak region is not held against it
   const NR = r.regionCount + 1;
   const regionConfident = new Uint8Array(NR);
   for (let reg = 1; reg < NR; reg++) {
     const n = src.boundSamples[reg];
-    regionConfident[reg] = !lv.regionWeak[reg] && n > 0 && 2 * src.goodSamples[reg] >= n ? 1 : 0;
+    regionConfident[reg] = (anchored || !lv.regionWeak[reg]) && n > 0 && 2 * src.goodSamples[reg] >= n ? 1 : 0;
   }
 
   // §4.6 resample: the mean of a field cell's region cells; barriers are holes
@@ -185,11 +215,9 @@ export function buildHeightField(g: ContourGraph, lv: FieldLevels, opts: HeightF
     if (confYes[fc] > confNo[fc]) confident[fc >> 3] |= 1 << (fc & 7);
   }
   if (zMin > zMax) zMin = zMax = 0;
-  const intervalM = opts.intervalM ?? FIELD_RULES.intervalM;
-  return {
-    header: {
+  const header: HeightFieldHeader = {
       version: TERRAIN_VERSION,
-      source: "contours",
+      source: anchored ? anchored.source : "contours",
       cellMm: grid.cellMm,
       x0: r.x0,
       y0: r.y0,
@@ -198,12 +226,11 @@ export function buildHeightField(g: ContourGraph, lv: FieldLevels, opts: HeightF
       groundMPerMm: g.inputs.groundMPerMm,
       intervalM,
       zScaleM: intervalM / Z_PER_INTERVAL,
-      zOffsetM: 0,
-      datum: "relative",
+      zOffsetM,
+      datum: anchored ? "absolute" : "relative",
       zMin,
       zMax,
-    },
-    z,
-    confident,
   };
+  if (anchored?.provider) header.provider = anchored.provider;
+  return { header, z, confident };
 }

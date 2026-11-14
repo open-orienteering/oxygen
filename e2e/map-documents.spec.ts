@@ -242,5 +242,15 @@ test.describe("Map documents", () => {
     expect(notModified.status()).toBe(304);
     expect((await request.get(`${API_BASE}${terrain.url}`, { headers: { ...HEADERS, "x-forwarded-email": "" } })).status()).toBe(401);
     expect((await request.get(`${API_BASE}/api/map-documents/${hash}/height.bin?v=${terrain.version + 1}`, { headers: HEADERS })).status()).toBe(404);
+
+    // The DEM (docs/map-terrain.md §7): fetching is opt-in and the E2E stack enables no provider.
+    expect((terrain as unknown as { dem: unknown }).dem).toEqual({ state: "disabled", reason: null, provider: null, ground: null, anchored: null });
+    const dem = await request.get(`${API_BASE}${terrain.url}&source=ground.glo30-30m`, { headers: HEADERS });
+    expect(dem.status()).toBe(404);
+    expect(await dem.json()).toMatchObject({ reason: "source" });
+    expect((await request.get(`${API_BASE}${terrain.url}&source=dem.nonsense`, { headers: HEADERS })).status()).toBe(400);
+    const named = await request.get(`${API_BASE}${terrain.url}&source=contours`, { headers: HEADERS });
+    expect(named.status()).toBe(200);
+    expect(named.headers()["etag"]).toBe(`"${hash}/height/contours/${terrain.version}"`);
   });
 });
