@@ -12,7 +12,7 @@ import { readFileSync } from "fs";
 import { resolve } from "path";
 import { createHash, randomBytes } from "crypto";
 import Fastify, { type FastifyInstance } from "fastify";
-import { SYSTEM_GROUP_IDS } from "@oxygen/shared";
+import { mapDocument, SYSTEM_GROUP_IDS, symbolLibrary } from "@oxygen/shared";
 import { createTestEvent, disconnect, type TestEventContext } from "../helpers/test-db.js";
 import { makeCaller } from "../helpers/caller.js";
 import { grantSystemGroup } from "../../permissions.js";
@@ -130,7 +130,21 @@ describe("import jobs from applyEventMap", () => {
     const source = await ctx.db.mapSource.findUniqueOrThrow({ where: { fileHash: fixtureHash }, select: { kind: true, fileName: true, uploadedBy: true } });
     expect(source).toEqual({ kind: "ocad", fileName: "test.ocd", uploadedBy: setter.id });
     const doc = await ctx.db.mapDocument.findUniqueOrThrow({ where: { hash: documentHash }, select: { report: true, lastReferencedAt: true } });
-    expect(doc.report).toMatchObject({ importer: "ocad-16", source: { fileName: "test.ocd", fileHash: fixtureHash }, counts: { objects: expect.any(Number) }, matching: { library: { id: "ISOM2017-2" } }, colourStack: { source: expect.any(Number) } });
+    expect(doc.report).toMatchObject({ importer: "ocad-17", source: { fileName: "test.ocd", fileHash: fixtureHash }, counts: { objects: expect.any(Number) }, matching: { library: { id: "ISOM2017-2" } }, colourStack: { source: expect.any(Number) } });
+  }, 60_000);
+
+  // G21 (docs/map-symbols.md §12.3): the stored document's stack carries ISSkiOM's rows, so a ski track can be drawn on it.
+  it("stores a document whose colour stack has the overlay's four rows in their places", async () => {
+    const stored = await ctx.db.mapDocument.findUniqueOrThrow({ where: { hash: documentHash }, select: { bytes: true, importerVersion: true, libraryVersion: true } });
+    expect(stored.importerVersion).toBe("ocad-17");
+    expect(stored.libraryVersion).toBe(`ISOM2017-2@${symbolLibrary.SYMBOL_LIBRARY_VERSION}`);
+    const { colours } = mapDocument.readMapDocumentHeader(new Uint8Array(stored.bytes)).header;
+    const at = (id: string) => colours.findIndex((c) => c.paletteIds?.includes(id));
+    for (const id of ["green100-area", "white-skio", "orange-skio", "green-skio"]) expect(colours.filter((c) => c.paletteIds?.includes(id)), id).toHaveLength(1);
+    expect(at("white-skio")).toBe(at("purple-lower") - 1);
+    expect(at("green100-area")).toBeLessThan(at("purple-lower"));
+    expect([at("orange-skio"), at("green-skio"), at("purple-upper")]).toEqual([at("purple-upper") - 2, at("purple-upper") - 1, colours.length - 1]);
+    expect(at("orange-skio")).toBeGreaterThan(at("black100"));
   }, 60_000);
 
   it("re-uploading bytes already imported by this importer records a done job without running the worker", async () => {
@@ -225,7 +239,7 @@ describe("import jobs from applyEventMap", () => {
     expect(job.state).toBe("done");
     expect(job.documentHash).toBeTruthy();
     const doc = await ctx.db.mapDocument.findUniqueOrThrow({ where: { hash: job.documentHash! }, select: { importerVersion: true, header: true, report: true } });
-    expect(doc.importerVersion).toBe("omap-9");
+    expect(doc.importerVersion).toBe("omap-10");
     // The stored report carries the per-emission warning detail (docs/map-import.md §3.6).
     expect((doc.report as { warningDetails?: { code: string; symbolIdx?: number }[] }).warningDetails).toEqual(
       expect.arrayContaining([expect.objectContaining({ code: "MISSING_SYMBOL", symbolIdx: expect.any(Number) })]),

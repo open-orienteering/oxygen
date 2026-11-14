@@ -9,9 +9,11 @@
  * boundary rule — nothing cloud-owned feeds result computation).
  *
  * When the venue has no internet the forward fails with a tRPC-shaped
- * PRECONDITION_FAILED ("requires connectivity") — venue-side users offline
- * mid-race have no business editing Eventor settings; this is the cheap
- * path by design.
+ * PRECONDITION_FAILED ("requires connectivity", `data.reason`
+ * `CLOUD_UNREACHABLE`) — venue-side users offline mid-race have no business
+ * editing Eventor settings; this is the cheap path by design. A batch that
+ * mixes cloud-owned and local procedures is refused the same way
+ * (`MIXED_BATCH`) and nothing in it runs (row G18).
  *
  * Registered as a Fastify preHandler only when `NODE_ROLE=venue` and a peer
  * is configured, so the cloud and single-node deployments never pay for it.
@@ -34,8 +36,8 @@ export function trpcProcedurePaths(url: string): string[] {
 /**
  * Forwarding decision for one request. Only POSTs (mutations) forward, and
  * only when EVERY procedure in the (possibly batched) call is cloud-owned —
- * a mixed batch would need a split/merge of the upstream response, and the
- * web client never produces one (batches are per-feature-page).
+ * a mixed batch would need a split/merge of the upstream response; the web
+ * sends cloud-owned mutations in a batch of their own (`trpc-links.ts`).
  */
 export function shouldForwardToCloud(method: string, url: string): boolean {
   if (method !== "POST") return false;
@@ -43,17 +45,38 @@ export function shouldForwardToCloud(method: string, url: string): boolean {
   return paths.length > 0 && paths.every(isCloudOwnedMutation);
 }
 
-/** tRPC-shaped error body so the web client surfaces a typed failure. */
+/**
+ * A POSTed batch that mixes cloud-owned and local procedures. Run locally,
+ * its cloud-owned writes would land on the box and be lost at checkin
+ * (row G18), so the forwarder refuses it whole instead (nothing runs).
+ */
+export function isMixedCloudBatch(method: string, url: string): boolean {
+  if (method !== "POST") return false;
+  const paths = trpcProcedurePaths(url);
+  return paths.some(isCloudOwnedMutation) && !paths.every(isCloudOwnedMutation);
+}
+
+/** Why a cloud-owned call failed on a venue: the cloud is unreachable, or the batch mixed it with local calls. */
+export type VenueRefusalReason = "CLOUD_UNREACHABLE" | "MIXED_BATCH";
+
+const REFUSAL_MESSAGES: Record<VenueRefusalReason, string> = {
+  CLOUD_UNREACHABLE:
+    "This action requires connectivity to the cloud (cloud-owned data is not editable at an offline venue).",
+  MIXED_BATCH:
+    "A cloud-owned change was batched with local calls; nothing was run. Retry the action.",
+};
+
+/** tRPC-shaped error body so the web client surfaces a typed failure (`data.reason` tells the two cases apart). */
 export function connectivityErrorBody(
   paths: string[],
   batched: boolean,
+  reason: VenueRefusalReason = "CLOUD_UNREACHABLE",
 ): unknown {
   const one = (path: string) => ({
     error: {
-      message:
-        "This action requires connectivity to the cloud (cloud-owned data is not editable at an offline venue).",
+      message: REFUSAL_MESSAGES[reason],
       code: -32603,
-      data: { code: "PRECONDITION_FAILED", httpStatus: 412, path },
+      data: { code: "PRECONDITION_FAILED", httpStatus: 412, path, reason },
     },
   });
   return batched ? paths.map(one) : one(paths[0] ?? "");
@@ -64,6 +87,11 @@ export function registerVenueForwarder(server: FastifyInstance): void {
   if (nodeRole() !== "venue" || !peerUrl) return;
 
   server.addHook("preHandler", async (req: FastifyRequest, reply) => {
+    if (isMixedCloudBatch(req.method, req.url)) {
+      const paths = trpcProcedurePaths(req.url);
+      void reply.code(412).send(connectivityErrorBody(paths, req.url.includes("batch=1"), "MIXED_BATCH"));
+      return reply;
+    }
     if (!shouldForwardToCloud(req.method, req.url)) return;
 
     const paths = trpcProcedurePaths(req.url);

@@ -12,7 +12,7 @@ import { createRequire } from "node:module";
 import { resolve } from "node:path";
 import { devices, expect, type Browser, type BrowserContext, type Locator, type Page, type TestInfo } from "@playwright/test";
 import { API_BASE as API } from "./api-base";
-import { waitForTrpc } from "./trpc";
+import { trpcProcedures, waitForTrpc } from "./trpc";
 
 type Pt = { x: number; y: number };
 
@@ -897,6 +897,31 @@ export async function freezeExternalPoll(page: Page): Promise<void> {
     await route.fulfill({ response: res, json: body });
   });
   await held;
+}
+
+/**
+ * Hide other editors' presence from a page: every answer to the editor's `course.presence` heartbeat (alone or in a
+ * batch) comes back with `others: []`, so the top bar shows no presence chips. Call it before the page opens the
+ * editor (a route applies to the requests sent after it).
+ *
+ * Every test's page heartbeats while its course is open, and its row stays live for the server's 30 s TTL after the
+ * page closes, so the next tests' pages show "e2e-admin · ‹course› · Course" chips that appear and vanish on the 5 s
+ * heartbeat. The top bar wraps (`flex-wrap`): a chip row that does not fit beside the toolbar adds a second row of
+ * 36 px and pushes the map viewer down by as much, mid-test. A page point computed from the viewer's box before the
+ * shift (`toPage`) and pressed after it lands 36 px off the handle or leg it aimed at, and a box read after it is 36 px
+ * off a position computed before (docs/bugfix-course-editor-legs-flakes.md). For a spec that does not test presence.
+ */
+export async function hideOthersPresence(page: Page): Promise<void> {
+  type Slot = { result?: { data?: { others?: unknown[] } } } | null;
+  const strip = (slot: Slot): Slot => (slot?.result?.data ? { ...slot, result: { ...slot.result, data: { ...slot.result.data, others: [] } } } : slot);
+  await page.route((url) => trpcProcedures(url.href).includes("course.presence"), async (route) => {
+    const res = await route.fetch();
+    const at = trpcProcedures(route.request().url()).indexOf("course.presence");
+    const body = (await res.json().catch(() => undefined)) as Slot | Slot[] | undefined;
+    if (body === undefined) return route.fulfill({ response: res });
+    if (Array.isArray(body)) body[at] = strip(body[at]);
+    await route.fulfill({ response: res, json: Array.isArray(body) ? body : strip(body) });
+  });
 }
 
 /**

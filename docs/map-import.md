@@ -14,8 +14,8 @@ implemented and marks what is still pending.
  3 parse        reader → source model                                     api/shared done (OCAD via the ocad2geojson fork; OMAP via the shared XML reader, §4)
  4 normalise    source model → objects, symbols, colours, georef, warnings shared     done (OCAD §3; OMAP §4; symbol IR §3.3 / §4.3)
  5 analyse      bounds, north, fonts, feature usage                       shared     bounds, georeference, north (§3.8); fonts and feature usage pending
- 6 match        03 §6.5 staged matcher → SymbolMatch[]                    shared     done (docs/map-symbols.md §8); club decisions as stage 1 (§8.5)
- 7 align        colour stack alignment (03 §6.3)                          shared     done (docs/map-symbols.md §9)
+ 6 match        03 §6.5 staged matcher → SymbolMatch[]                    shared     done (docs/map-symbols.md §8); club decisions as stage 1 (§8.5); ISSkiOM overlay candidates on every document (§8.2, §12)
+ 7 align        colour stack alignment (03 §6.3)                          shared     done (docs/map-symbols.md §9); ISSkiOM's palette rows in every stack (§9.2 step 4, §12.3)
  8 encode       02 codec → bytes; sha256 → documentHash                   shared     done
  9 store        map_sources + map_documents rows, event pin, report      api        done, as an import job in a worker thread (docs/map-storage.md §3, §6)
 10 derive       thumbnail (map_previews)                                  api        done, inside the job after the pins (docs/map-storage.md §4.5, §6.1)
@@ -151,7 +151,10 @@ type ReviewDecision = { symbolIdx; accept: canonicalId } | { symbolIdx; unmatch:
   `stack.alignment` the report's `colourStack` summary.
 - `decide` validates every decision against the document (index exists,
   a source symbol with a render, an accepted id is an entry of the
-  document's library — `BAD_REQUEST` otherwise), writes the club rows
+  document's library or of an overlay library — `mapImport.isDocumentEntryId`,
+  `docs/map-symbols.md` §8.5, §12 — `BAD_REQUEST` otherwise; an overlay
+  id is stored under the document library's release like any other),
+  writes the club rows
   (`accept` / `unmatch` upsert under the current release, `reset` deletes
   the fingerprint's rows of that library) and starts an import job for
   the document's source **without a target**. The job snapshots the new
@@ -806,7 +809,7 @@ non-contiguous priorities). The rest are shared with §3.6–3.7.
 
 ## 5. Header provenance
 
-`format.importer` is `"ocad-16"` for OCAD sources (`OCAD_IMPORTER_VERSION`;
+`format.importer` is `"ocad-17"` for OCAD sources (`OCAD_IMPORTER_VERSION`;
 `ocad-1` had `render: null` for every source symbol, `ocad-2` carried the
 upload name in the header, `ocad-3` had no matcher, `ocad-4` stored
 ScalePar `d` as `declinationDeg`, ignored `e` and had no
@@ -823,12 +826,12 @@ reference as `SYMBOL_FEATURE_DROPPED` and kept no per-symbol warning detail
 — §3.3, §3.6, A14, `ocad-10` dropped text shadows, vertical text alignment,
 rectangle corner radii and framing lines narrower than the main line,
 shortened pointed lines instead of tapering them and reported a rectangle
-grid as `SYMBOL_FEATURE_DROPPED`, `ocad-11` is the A13 importer that reads them — §3.3, A13; `ocad-11` also fingerprinted Mapper's inverted railway as unmatched, `ocad-12` reads it as 509's construction — `docs/map-symbols.md` §8.1, A15; `ocad-12` had no tab stops or rectangle frame and warned line text, `ocad-13` is the B8 importer — §3.3; `ocad-14` fingerprints the main stroke's cap / join — `docs/map-symbols.md` §8.1, C9; `ocad-14` drew north-oriented point symbols north-up even where their objects carry an angle, `ocad-15` turns them — §3.3, C10; `ocad-15` anchored an inserted lower purple under the first line or point colour, so one dark-green colour at the bottom of the area block put it under every area, and mapped an "area"-named dark green to the hedge line colour — `docs/map-symbols.md` §9, C14) and `"omap-9"`
+grid as `SYMBOL_FEATURE_DROPPED`, `ocad-11` is the A13 importer that reads them — §3.3, A13; `ocad-11` also fingerprinted Mapper's inverted railway as unmatched, `ocad-12` reads it as 509's construction — `docs/map-symbols.md` §8.1, A15; `ocad-12` had no tab stops or rectangle frame and warned line text, `ocad-13` is the B8 importer — §3.3; `ocad-14` fingerprints the main stroke's cap / join — `docs/map-symbols.md` §8.1, C9; `ocad-14` drew north-oriented point symbols north-up even where their objects carry an angle, `ocad-15` turns them — §3.3, C10; `ocad-15` anchored an inserted lower purple under the first line or point colour, so one dark-green colour at the bottom of the area block put it under every area, and mapped an "area"-named dark green to the hedge line colour — `docs/map-symbols.md` §9, C14; `ocad-16` had no ISSkiOM overlay — no overlay candidates in stage 6, none of the overlay's palette rows inserted in stage 7 — `docs/map-symbols.md` §8.2, §9.2, §12, G21) and `"omap-10"`
 for Mapper sources (`OMAP_IMPORTER_VERSION`; `omap-1` stored `paperOrigin`
 unrounded, `omap-2` is `ocad-7`'s matcher, `omap-3` reported stale
 combined-part references as `SYMBOL_FEATURE_DROPPED` and kept no
 per-symbol detail, `omap-4` drew pointed caps untapered and dropped shadow
-framing and a combined symbol's second border pair — §4.3, A13, `omap-5` is the A13 importer, `omap-6` is `ocad-12`'s matcher, A15; `omap-6` kept a box text's anchor only and had no tab stops, `omap-7` is the B8 importer — §4.2, §4.3; `omap-8` is `ocad-14`'s matcher, C9; `omap-9` is `ocad-16`'s colour alignment, C14). A header `warnings` change alone bumps the
+framing and a combined symbol's second border pair — §4.3, A13, `omap-5` is the A13 importer, `omap-6` is `ocad-12`'s matcher, A15; `omap-6` kept a box text's anchor only and had no tab stops, `omap-7` is the B8 importer — §4.2, §4.3; `omap-8` is `ocad-14`'s matcher, C9; `omap-9` is `ocad-16`'s colour alignment, C14; `omap-10` is `ocad-17`'s matcher and alignment, G21). A header `warnings` change alone bumps the
 version — `ocad-6` did — while the report-only `warningDetails` would not.
 Documents of either earlier version have no `georeference` / `north` in
 their report; the dedup only reuses current-version documents, so the
@@ -893,7 +896,7 @@ document hash is identical on two machines.
 | Unit + integration + E2E (api) | see `docs/map-storage.md` §10 (previews rows) | stage 10: thumbnail row written by the job and by the dedup short-cut, non-fatal failure, object cap |
 | Script (scripts) | `scripts/__tests__/ocad-fixture.test.mjs` (`pnpm test:scripts`) | the OCAD fixture writer: `e2e/test.ocd` byte-identical on regeneration, its framed text and rectangle read back by the reader; the symbol-types file (`buildSymbolTypesOcad`, also the fork's `test/data/symbol-types.ocd`) read back field by field — text framing, line text, rectangles with radius and grid; the stale-border file (`buildStaleBorderOcad`: an area whose border is itself, one whose border is missing) read back; the rotated-points file (`buildRotatedPointsOcad`, C10): each symbol's rotatable flag and each object's angle read back — the same file is drawn against the legacy in `packages/api/src/render/__tests__/parity.test.ts` (`docs/map-rendering.md` §6.4) |
 | Reader (fork) | `open-orienteering/ocad2geojson` `test/reader.test.js`, `test/svg.test.js` (`npm test`) | text framing on the real `fences.ocd` (902.1: mode 2, colour 12, width 10) and every new field on `symbol-types.ocd`; `ocadToSvg` reads but does not draw line-text and rectangle objects |
-| Script (scripts) | `scripts/__tests__/measure-import.test.mjs` (`pnpm test:scripts`) | `scripts/measure-import.mjs` over the two fixtures: hashes written and found again in a second process, a changed hash fails as a determinism failure, the Mapper fixture's four unsupported-primitive codes fail the run and print their per-emission detail, a stale area-border reference is reported per symbol (`~`) without failing the run, usage errors exit 2 |
+| Script (scripts) | `scripts/__tests__/measure-import.test.mjs` (`pnpm test:scripts`) | `scripts/measure-import.mjs` over the two fixtures: hashes written and found again in a second process, a changed hash fails as a determinism failure, the Mapper fixture's four unsupported-primitive codes fail the run and print their per-emission detail, a stale area-border reference is reported per symbol (`~`) without failing the run, lower purple's place per map, the `ski-o` line (the four overlay rows inserted into `test.ocd`, the mask directly below lower purple, the track inks directly below upper purple), usage errors exit 2 |
 
 **S0 corpus check** (09 §7: the whole corpus and every OMAP construct in
 the sample set, deterministically). `scripts/measure-import.mjs` runs
@@ -901,8 +904,11 @@ every `.ocd` / `.omap` / `.xmap` in the given directories through the
 import worker's path (`importMapToDocument` with no decisions, then
 `buildImportReport`) and prints per map the document hash,
 `format.importer`, library version, counts, the warning-code histogram,
-symbol and object matching outcomes and the report's `georeference` /
-`north` fields (§3.8). It exits non-zero on an import error, on any
+symbol and object matching outcomes, where lower purple sits in the
+aligned stack (`purple` line, `docs/map-symbols.md` §9.2), where each of
+the ISSkiOM overlay's palette rows comes from (`ski-o` line: `inserted`,
+`aliased` or the source's own colour, with its index; §12.3) and the
+report's `georeference` / `north` fields (§3.8). It exits non-zero on an import error, on any
 *unsupported-primitive* warning — a source construct the document drops or
 approximates — and, with `--previous`, on any document hash that differs
 from that run's. Which codes those are is the classification below

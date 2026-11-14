@@ -174,10 +174,11 @@ test.describe("Courses Page", () => {
       await expect(variantRows.nth(0).locator("input, button, a")).toHaveCount(1);
       const variantB = variantRows.nth(1).locator('[data-testid^="export-variant-"]');
       await expect(variantB).toHaveAttribute("title", "Variant B map (PDF)");
-      const printB = page.waitForRequest((r) => decodeURIComponent(r.url()).includes(`/maps.pdf?variants=${root}:B`));
+      // G16: the device asks the print job of maps.pdf's query (course-print.md §8.6); either route carries the selection.
+      const printB = page.waitForRequest((r) => /\/(maps\.pdf|print-job)\?/.test(r.url()) && decodeURIComponent(r.url()).includes(`?variants=${root}:B`));
       await variantB.click();
       await printB;
-      const printAll = page.waitForRequest((r) => r.url().includes(`/maps.pdf?allVariations=${root}`));
+      const printAll = page.waitForRequest((r) => /\/(maps\.pdf|print-job)\?/.test(r.url()) && r.url().includes(`?allVariations=${root}`));
       await page.getByTestId(`export-all-variations-${root}`).click();
       await printAll;
       // The seed has no base map: the route's answer shows on the error line.

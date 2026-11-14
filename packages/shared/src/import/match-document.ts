@@ -10,7 +10,7 @@ import type { MapDocumentInput } from "../map-document/codec.js";
 import type { DocumentSymbolInput, DocumentWarning } from "../map-document/header.js";
 import { parseRenderSymbol, type RenderSymbol } from "../render/symbol.js";
 import { remapRenderColours, renderColourRefs } from "../render/transform.js";
-import { getSymbolLibrary, SYMBOL_LIBRARY_VERSION, type SymbolLibraryId } from "../symbol-library/index.js";
+import { getLibraryEntry, getSymbolLibrary, SYMBOL_LIBRARY_VERSION, type SymbolLibraryId } from "../symbol-library/index.js";
 import type { PaletteEdition } from "../symbol-library/palette.js";
 import { colourRefs } from "../symbol-library/schema.js";
 import { alignColourStack, identifySourceColours } from "./colour-align.js";
@@ -86,7 +86,8 @@ export function matchDocument(input: MapDocumentInput, opts: MatchDocumentOption
   const factor = detectDocumentFactor(sources.filter((_, i) => (symbols[i].origin ?? "source") === "source"), canon, classOf, header.mapScale, library.referenceScale, opts.factor);
   // Decisions name entries of one library; those of the other one do not apply here (docs/map-symbols.md §8.5).
   const decisions = opts.decisions?.filter((d) => d.libraryId === undefined || d.libraryId === libraryId);
-  const ctx = matchContext(libraryId, edition, factor.factor, classOf, decisions);
+  // With the map scale the overlay libraries are candidates too (docs/map-symbols.md §8.2, §12).
+  const ctx = matchContext(libraryId, edition, factor.factor, classOf, decisions, header.mapScale);
 
   const summary: MatchingSummary = {
     library: { id: library.id, version: SYMBOL_LIBRARY_VERSION },
@@ -126,7 +127,7 @@ export function matchDocument(input: MapDocumentInput, opts: MatchDocumentOption
     }
     if (outcome.unknownDecision) warn("DECISION_UNKNOWN_ENTRY", `decision names ${outcome.unknownDecision}`);
     if (m.state === "auto" && m.canonicalId) {
-      const entry = library.entries.find((e) => e.id === m.canonicalId);
+      const entry = getLibraryEntry(m.canonicalId);
       if (entry) for (const id of colourRefs(entry.render)) needed.add(id);
     }
     return { ...s, match: m };

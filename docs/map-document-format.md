@@ -307,7 +307,9 @@ text (type 5), `path` for line text (type 6), absent otherwise
 (`map-rendering.md` §4.9). Symbol resolution per object: for a symbol whose `match` is
 applied (`state: "auto"`, or `reviewed` with a `canonicalId`) the library
 entry resolved through the stack's `paletteIds` and scaled by
-`documentFactor` (`canonical: false` turns this off and draws every
+`documentFactor` — an overlay library's entry (ISSkiOM, `docs/map-symbols.md`
+§12) by `entryFactor`, its own scale table × the document's symbol scale
+(§12.2) — (`canonical: false` turns this off and draws every
 symbol from source); otherwise the symbol's `render` when it exists and
 its kind agrees with the object type; otherwise a proxy per kind
 (`unmatched: "proxy"`, the S1 envelope) or nothing (`unmatched: "drop"`).

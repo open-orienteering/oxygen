@@ -15,6 +15,7 @@ import { createTestEvent, disconnect, type TestEventContext } from "../helpers/t
 import { makeCaller } from "../helpers/caller.js";
 import { uploadEventMap } from "../helpers/upload-map.js";
 import { applyEventMap } from "../../event-map.js";
+import { decodedDocument, eventDocumentHash } from "../../map-store/event-document.js";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const FIXTURE = resolve(__dirname, "../../../../../e2e/test.ocd");
@@ -106,6 +107,37 @@ describe("course.checks", () => {
     expect(codesOf(await caller.course.checks({ courseId }))).toContain("LEG_THROUGH_UNCROSSABLE");
     await caller.course.delete({ id });
     await caller.control.delete({ id: p.id });
+  });
+
+  it("reads the effective document: a building the patch hides is no obstacle, an added wall is (G14; map-patches §2.4)", async () => {
+    const hash = (await eventDocumentHash(vec.db, vec.eventId))!;
+    const doc = (await decodedDocument(vec.db, hash))!;
+    const u = doc.header.unitsPerMm;
+    const codeOf = (s: (typeof doc.header.symbols)[number]) => s.match?.canonicalId?.split(":")[1] ?? s.code;
+    // Every 521 building whose box spans the leg 101 → 102 at y = 42 mm, x 44–62.
+    const buildings = [...doc.attrs.sourceIndex.keys()].filter((k) => {
+      if (!codeOf(doc.header.symbols[doc.attrs.symbolIdx[k]]).startsWith("521")) return false;
+      const [minX, minY, maxX, maxY] = doc.bboxes.subarray(k * 4, k * 4 + 4);
+      return minY / u <= 42 && maxY / u >= 42 && maxX / u >= 44 && minX / u <= 62;
+    });
+    expect(buildings.length).toBeGreaterThan(0);
+    const hides = buildings.map((k) => ({ op: "hide" as const, sourceIndex: doc.attrs.sourceIndex[k] }));
+
+    await caller.mapPatch.applyChange({ documentHash: hash, put: hides });
+    expect(codesOf(await caller.course.checks({ courseId }))).not.toContain("LEG_THROUGH_UNCROSSABLE");
+
+    // A building of the same symbol, added across the leg at x 52–54.
+    const id = "00000000-0000-4000-8000-0000000000e5";
+    const ring = [[52, 40], [54, 40], [54, 44], [52, 44]].map(([x, y]) => [x * u, y * u] as [number, number]);
+    await caller.mapPatch.applyChange({ documentHash: hash, put: [{ op: "add", id, type: 3, symbol: { doc: doc.attrs.symbolIdx[buildings[0]] }, coords: ring }] });
+    const leg = (await caller.course.checks({ courseId })).find((c) => c.code === "LEG_THROUGH_UNCROSSABLE");
+    expect(leg?.at.x).toBeCloseTo(52, 1);
+
+    // Disabled: the pinned document's building again.
+    await caller.mapPatch.setEnabled({ enabled: false });
+    expect((await caller.course.checks({ courseId })).find((c) => c.code === "LEG_THROUGH_UNCROSSABLE")?.at.x).toBeCloseTo(48, 1);
+    await caller.mapPatch.setEnabled({ enabled: true });
+    await caller.mapPatch.applyChange({ documentHash: hash, remove: [...hides.map((h) => `hide:${h.sourceIndex}`), `add:${id}`] });
   });
 
   it("setStructure returns the same list and saves regardless", async () => {

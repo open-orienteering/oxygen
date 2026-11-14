@@ -10,7 +10,8 @@
 import { useCallback, useMemo, useState, type ReactNode } from "react";
 import { useTranslation } from "react-i18next";
 import { trpc } from "../lib/trpc";
-import { downloadSameOriginFile } from "../lib/download-api";
+import { downloadMapsPdf } from "../lib/download-api";
+import { ensureSheetsBestEffort } from "../lib/trpc-links";
 import { freeTemplateName, type TemplatePick } from "../lib/template-picker";
 import type { CoursePrintStatus } from "../lib/structured-search/anchors/course-anchors";
 import { NewTemplateForm } from "../components/NewTemplateForm";
@@ -107,51 +108,29 @@ export function useCourseMapsOverview(nameId: string, canEdit: boolean) {
     return done === true;
   };
 
-  const download = (query: string) => downloadSameOriginFile(`/api/maps/${encodeURIComponent(nameId)}/maps.pdf${query}`);
+  // maps.pdf, composed on the device when it can, else by the server (course-print.md §8.6).
+  const download = (query: string) => downloadMapsPdf(nameId, query);
 
-  /** One course's maps; with courses.edit a course without a sheet gets one on its key's auto template first (docs/course-layout.md §6, §7). */
-  const exportCourse = (courseId: number) =>
+  /**
+   * With courses.edit, the sheets are ensured before a download
+   * (docs/course-layout.md §6, §7); skipped on an offline venue box, which
+   * prints its copy's sheets (row G18).
+   */
+  const ensureThenDownload = (ensure: { courseId?: number; allControls?: boolean }, query: string) =>
     guarded(async () => {
-      if (canEdit) {
-        await utils.client.layout.autoSheets.mutate({ courseId });
-        await refresh();
-      }
-      await download(`?courses=${courseId}`);
+      if (canEdit && (await ensureSheetsBestEffort(() => utils.client.layout.autoSheets.mutate(ensure)))) await refresh();
+      await download(query);
     });
+
+  /** One course's maps; a course without a sheet gets one on its key's auto template first. */
+  const exportCourse = (courseId: number) => ensureThenDownload({ courseId }, `?courses=${courseId}`);
   /** One variant of a root, on the root's sheets (F8; course-print.md §4.6): the root's sheets are ensured first. */
   const exportVariant = (rootId: number, key: string) =>
-    guarded(async () => {
-      if (canEdit) {
-        await utils.client.layout.autoSheets.mutate({ courseId: rootId });
-        await refresh();
-      }
-      await download(`?${new URLSearchParams({ variants: `${rootId}:${key}` })}`);
-    });
+    ensureThenDownload({ courseId: rootId }, `?${new URLSearchParams({ variants: `${rootId}:${key}` })}`);
   /** A root's all-variations page for officials (F8; answer 4). */
-  const exportAllVariations = (rootId: number) =>
-    guarded(async () => {
-      if (canEdit) {
-        await utils.client.layout.autoSheets.mutate({ courseId: rootId });
-        await refresh();
-      }
-      await download(`?allVariations=${rootId}`);
-    });
-  const exportAll = () =>
-    guarded(async () => {
-      if (canEdit) {
-        await utils.client.layout.autoSheets.mutate({});
-        await refresh();
-      }
-      await download("");
-    });
-  const exportAllControls = () =>
-    guarded(async () => {
-      if (canEdit) {
-        await utils.client.layout.autoSheets.mutate({ allControls: true });
-        await refresh();
-      }
-      await download("?allControls=1");
-    });
+  const exportAllVariations = (rootId: number) => ensureThenDownload({ courseId: rootId }, `?allVariations=${rootId}`);
+  const exportAll = () => ensureThenDownload({}, "");
+  const exportAllControls = () => ensureThenDownload({ allControls: true }, "?allControls=1");
 
   const dialog: ReactNode = newFor ? (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/40 p-4" onClick={() => setNewFor(null)}>

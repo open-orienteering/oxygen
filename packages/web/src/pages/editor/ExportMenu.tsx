@@ -8,7 +8,8 @@
 import { useEffect, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { trpc } from "../../lib/trpc";
-import { downloadSameOriginFile } from "../../lib/download-api";
+import { downloadExport } from "../../lib/download-api";
+import { ensureSheetsBestEffort } from "../../lib/trpc-links";
 import { exportEntries, type ExportEntry, type ExportState } from "../../lib/editor/export-menu";
 import { DescriptionSheetsDialog } from "./DescriptionSheetsDialog";
 import { IconExport } from "../../components/map-icons";
@@ -55,14 +56,17 @@ export function ExportMenu({ state, onError }: { state: ExportState; onError: (m
     setBusy(true);
     try {
       if (e.ensure) {
-        const r = await utils.client.layout.autoSheets.mutate(e.ensure);
-        if (r.createdSheets.length || r.createdTemplates.length) {
+        const ensure = e.ensure;
+        // Skipped on an offline venue box: it prints its copy's sheets (row G18).
+        const r = await ensureSheetsBestEffort(() => utils.client.layout.autoSheets.mutate(ensure));
+        if (r && (r.createdSheets.length || r.createdTemplates.length)) {
           void utils.courseMap.list.invalidate();
           void utils.mapTemplate.list.invalidate();
           void utils.layout.classOverrides.invalidate();
         }
       }
-      await downloadSameOriginFile(e.url);
+      // maps.pdf composes on the device when it can (course-print.md §8.6); other files download as they are.
+      await downloadExport(e.url);
     } catch (err) {
       onError(err instanceof Error ? err.message : String(err));
     } finally {

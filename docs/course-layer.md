@@ -347,7 +347,10 @@ as today). `r` is the farthest ink of the symbol **the document draws**
 factor) of an applied match, else the document's own render; the library
 entry × document factor only when there is neither. The source is the
 event's pinned document, whatever its pipeline (§4.2; the slice-C split
-tied it to `vector`, slice E1 made it every event's).
+tied it to `vector`, slice E1 made it every event's), as the **effective
+document** (`docs/map-patches.md` §2; G14): an object the event's patch
+hides is no feature, an added one is (a patch symbol's code and own
+render decide, as an unmatched symbol's).
 
 **The event's toggle** (`Event.autoOverprintCuts`, written by
 `course.setOverprintCuts`, read by `course.getOverprintCuts`; the
@@ -588,7 +591,7 @@ before its `course.upserted`:
 
 | Event | Source | Radii |
 |---|---|---|
-| a pinned document (`map_files.document_hash` of the latest row), whatever `map_pipeline` (`map-storage.md` §4.6) | `cutFeaturesOfDocument` of the pinned document, memoised per hash | what the document draws (§3.4) |
+| a pinned document (`map_files.document_hash` of the latest row), whatever `map_pipeline` (`map-storage.md` §4.6) | `cutFeaturesOfDocument` of the effective document (the pin with the event's patch, G14), memoised per hash + patch version | what the document draws (§3.4) |
 | no map, no pin yet, or a missing / unreadable document | — | no cuts |
 
 Slice E1 removed the OCAD source (the parse of the latest upload with
@@ -1174,11 +1177,11 @@ client did not write earns a one-line notice. "Moved by X at T" reads
 `actorId` and the physical part of `hlc` of the row's last `*.upserted`
 journal entry (`course.lastChange`, `control.lastChange`).
 
-**`map_patches` (slice G, no code).** Patch operations are idempotent and
+**`map_patches` (slice G; `docs/map-patches.md` §3).** Patch operations are idempotent and
 commutative: each op is keyed by `(object id, op id)` and sets a state
 (hidden, colour override, …) rather than applying a relative change, so
 applying twice equals once and two devices' patches merge in any order.
-They merge **on the server per op id** (`mapPatch.apply { put, remove }`
+They merge **on the server per op id** (`mapPatch.applyChange { put, remove }`
 under the row lock), not through the journal: the patch is one cloud-owned
 `map_patches` row per event, outside the results closure, carried in the
 checkout snapshot and written from a venue box by forwarding to the cloud
@@ -1300,8 +1303,11 @@ type `course.CourseObject = { id: seq, kind, geometry, props, scope, z, version,
 | `reorder { ids }` | `courses.edit` | `z` = the position in `ids`; takes and advances no token |
 
 Writes are not lease-guarded: objects are cloud-owned non-critical data
-(08 §4.8), like the sheets; a venue holding a checkout keeps its
-snapshot's copy until the next checkout.
+(08 §4.8), like the sheets. Since G18 `courseObject.` mutations on a
+venue box are forwarded to the cloud (typed 412 offline,
+`offline-architecture.md` "Non-critical data"); before, they ran on the
+box and were lost at checkin. The box keeps its snapshot's copy until the
+next checkout (or row G19).
 
 **Token** (§7). Objects are not journaled, so their token is not a
 journal entry's HLC: every `create` / `update` mints one from the node's
@@ -1317,7 +1323,9 @@ the structure rule: refresh and redo.
 
 `course_objects` rows travel in the checkout snapshot
 (`SNAPSHOT_TABLES`, rows verbatim with their UUIDs, `seq`, scope UUIDs
-and token; `map-storage.md` §7.2) and in the per-event dump after
+and token — exact since G18 through the snapshot's `versions`, where the
+row's own `version` crosses HTTP as a rounded JSON number;
+`map-storage.md` §7.2) and in the per-event dump after
 `class_course_pools` (`BACKUP_TABLES`; `map-storage.md` §7.3) — the
 venue's kiosk map draws them (08 §4.8; 07 §9.2).
 
@@ -1390,7 +1398,9 @@ terrain. Course-scoped codes run over the course's items only.
 `checkObstaclesOfDocument(doc)` reads a pinned document as
 `cutFeaturesOfDocument` does (§3.4): a symbol's code is its applied
 match's canonical code, else its source code; hidden symbols are
-skipped. It keeps line and area objects of the `UNCROSSABLE_CODES`
+skipped, and so are objects the event's patch hides — `course.checks`
+reads the effective document (`docs/map-patches.md` §2.4; G14), so an
+added uncrossable or out-of-bounds object is an obstacle. It keeps line and area objects of the `UNCROSSABLE_CODES`
 (kind `uncrossable`) and of 708 / 709 (kind `oob`) as polylines of their
 on-curve vertices (Bézier handles skipped; an area's outer ring only,
 holes ignored — the approximation snapping makes, `course-editor.md`

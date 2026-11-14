@@ -1,20 +1,18 @@
 import type { FastifyInstance } from "fastify";
-import { courseMapObjectSchema, allVariationsRow, allVariationsSuffix, rowForClass, rowForVariant, sheetForMapRow } from "@oxygen/shared";
-import { z } from "zod";
+import { allVariationsRow, allVariationsSuffix, rowForClass, rowForVariant, sheetForMapRow } from "@oxygen/shared";
 import { prisma } from "../db.js";
 import type { Prisma } from "../generated/prisma/client.js";
 import { assertRestAccess } from "../restGuard.js";
 import { renderGate } from "../map-render-limits.js";
-import { pinnedPrintSource } from "./pdf-page.js";
-import type { PrintGraphic } from "@oxygen/shared/print";
-import { printGate, renderCoursePagesInWorker, resetPrintWorkers } from "./print-worker-host.js";
+import { type PinnedPrintSource, pinnedPrintSource } from "./pdf-page.js";
+import { PRINT_JOB_VERSION, type PrintGraphic, type PrintJob, type PrintJobGraphicMime, type PrintSheet } from "@oxygen/shared/print";
+import { printGate, rasteriseSvgInWorker, renderCoursePagesInWorker, resetPrintWorkers } from "./print-worker-host.js";
+import { parseRasterBox, sheetGraphicIds } from "./graphics.js";
 import { classesByCourse, loadCourseObjects } from "../course-objects.js";
 
 type Db = ReturnType<typeof prisma>;
 
 type MapRow = Prisma.CourseMapGetPayload<{ include: typeof mapRowInclude }>;
-
-const mapObjectsSchema = z.array(courseMapObjectSchema);
 
 function parseSeqs(raw: string | undefined): number[] | null {
   if (!raw) return null;
@@ -311,38 +309,102 @@ async function findClassRows(db: Db, eventId: bigint, classSeqs: number[]): Prom
 }
 
 /**
- * Every graphic referenced by the maps being exported (event or club
- * scope), by id. Loaded once per request; unknown ids are simply absent.
+ * The graphics by id that exist for the event (event or club scope);
+ * unknown ids are simply absent. Without `withData` the bytes are not read
+ * (`print-job` answers id and mime only) and `data` is empty.
  */
-async function loadGraphics(
-  db: Db,
-  eventId: bigint,
-  rows: MapRow[],
-): Promise<Map<number, PrintGraphic>> {
-  const ids = new Set<bigint>();
-  for (const row of rows) {
-    for (const source of [row.objects, row.template?.objects]) {
-      const objects = mapObjectsSchema.safeParse(source ?? []);
-      if (!objects.success) continue;
-      for (const object of objects.data) {
-        if (object.kind === "image") ids.add(BigInt(object.graphicId));
-      }
-    }
-  }
-  if (ids.size === 0) return new Map();
+async function loadGraphics(db: Db, eventId: bigint, ids: number[], withData: boolean): Promise<Map<number, PrintGraphic>> {
+  if (ids.length === 0) return new Map();
   const graphics = await db.graphic.findMany({
     where: {
-      id: { in: [...ids] },
+      id: { in: ids.map((id) => BigInt(id)) },
       OR: [{ eventId }, { eventId: null }],
     },
-    select: { id: true, mime: true, data: true },
+    select: { id: true, mime: true, ...(withData ? { data: true } : {}) },
+    orderBy: { id: "asc" },
   });
   return new Map(
     graphics.map((graphic) => [
       Number(graphic.id),
-      { mime: graphic.mime, data: new Uint8Array(graphic.data) },
+      { mime: graphic.mime, data: "data" in graphic && graphic.data ? new Uint8Array(graphic.data) : new Uint8Array(0) },
     ]),
   );
+}
+
+/** What `maps.pdf` composes and `print-job` answers (docs/course-print.md §8.5): the job, the graphics' bytes and the pinned source. */
+export interface BuiltPrintJob {
+  job: PrintJob;
+  /** The job's graphics with their bytes (empty with `graphicBytes: false`). */
+  graphics: Map<number, PrintGraphic>;
+  source: PinnedPrintSource;
+}
+
+/**
+ * The print job for `maps.pdf`'s query (docs/course-print.md §8.2 steps
+ * 1–2, §8.5): the selected pages as sheets in print order with their
+ * copies, the pinned document by hash with the event's patch on it (G14),
+ * the graphics the sheets reference, `info` and the download name. Both routes build through this, so one
+ * selection, order and set of caps holds for both. Throws (a 400) for a
+ * bad selection, a cap, or no pin.
+ */
+export async function buildPrintJob(
+  db: Db,
+  event: { id: bigint; nameId: string; name: string; date: Date; organizerName: string | null; autoOverprintCuts: boolean },
+  query: PrintQuery,
+  options: { graphicBytes?: boolean } = {},
+): Promise<BuiltPrintJob> {
+  const pages = await selectPrintPages(db, event.id, query);
+  const rows = pages.map((p) => p.row);
+  const allControls = await db.control.findMany({
+    where: { eventId: event.id, removed: false },
+    select: {
+      id: true,
+      seq: true,
+      codes: true,
+      name: true,
+      status: true,
+      kind: true,
+      xpos: true,
+      ypos: true,
+      description: true,
+    },
+  });
+  // Every event prints through the composer (docs/course-print.md §8.1).
+  // No pin is a 400 "No base map uploaded"; a document whose colour stack
+  // is not aligned (`CourseStackError`) surfaces when the job is composed.
+  const source = await pinnedPrintSource(db, event.id);
+  const [courseObjects, byCourse] = await Promise.all([loadCourseObjects(db, event.id), classesByCourse(db, event.id)]);
+  const sheets: PrintSheet[] = pages.map(({ row, copies }) => ({
+    ...sheetForMapRow(row, {
+      event: { name: event.name, date: event.date },
+      allControls,
+      mapInfo: source.info,
+      courseObjects,
+      classesByCourse: byCourse,
+      autoCuts: event.autoOverprintCuts,
+    }),
+    ...(copies !== 1 ? { copies } : {}),
+  }));
+  const graphics = await loadGraphics(db, event.id, sheetGraphicIds(sheets), options.graphicBytes ?? true);
+  // docs/course-print.md §7.1: one page is "<event> · <map>".
+  const info = {
+    title: rows.length === 1 ? `${event.name} · ${pageName(rows[0])}` : `${event.name} maps`,
+    ...(event.organizerName ? { author: event.organizerName } : {}),
+  };
+  const filename =
+    rows.length === 1
+      ? `${safeFilename(event.nameId)}_${safeFilename(pageName(rows[0]))}.pdf`
+      : `${safeFilename(event.nameId)}_maps.pdf`;
+  const job: PrintJob = {
+    version: PRINT_JOB_VERSION,
+    document: { hash: source.hash, rotationCorrectionDeg: source.rotationCorrectionDeg, patch: source.patch },
+    sheets,
+    graphics: [...graphics].map(([id, g]) => ({ id, mime: g.mime as PrintJobGraphicMime })),
+    mode: "cmyk",
+    info,
+    filename,
+  };
+  return { job, graphics, source };
 }
 
 export function registerCourseMapRoutes(
@@ -373,66 +435,27 @@ export function registerCourseMapRoutes(
       if (!event || event.removed) {
         return reply.code(404).send({ error: "Event not found" });
       }
-      const pages = await selectPrintPages(db, event.id, req.query);
-      const rows = pages.map((p) => p.row);
-      const allControls = await db.control.findMany({
-        where: { eventId: event.id, removed: false },
-        select: {
-          id: true,
-          seq: true,
-          codes: true,
-          name: true,
-          status: true,
-          kind: true,
-          xpos: true,
-          ypos: true,
-          description: true,
-        },
-      });
-      const graphics = await loadGraphics(db, event.id, rows);
-      // docs/course-print.md §7.1: one page is "<event> · <map>".
-      const info = {
-        title: rows.length === 1 ? `${event.name} · ${pageName(rows[0])}` : `${event.name} maps`,
-        author: event.organizerName || undefined,
-      };
-      // Every event prints through the composer (docs/course-print.md
-      // §8.1). No pin is a 400 "No base map uploaded"; a document whose
-      // colour stack is not aligned (`CourseStackError`) is a 400 with the
-      // reason, like any other composer error. There is no other path.
-      const pinned = await pinnedPrintSource(db, event.id);
-      const [courseObjects, byCourse] = await Promise.all([loadCourseObjects(db, event.id), classesByCourse(db, event.id)]);
-      const sheets = pages.map(({ row, copies }) => ({
-        ...sheetForMapRow(row, {
-          event: { name: event.name, date: event.date },
-          allControls,
-          mapInfo: pinned.info,
-          courseObjects,
-          classesByCourse: byCourse,
-          autoCuts: event.autoOverprintCuts,
-        }),
-        ...(copies !== 1 ? { copies } : {}),
-      }));
+      const { job, graphics, source } = await buildPrintJob(db, event, req.query);
       // A worker slot, then a permit of the render gate, with no queue
       // cap: a 503 would arrive as a broken download (course-print.md
       // §8.2). Composing runs in the print worker, off the event loop.
       const out = await printGate(() => renderGate().run(() =>
         renderVectorPages({
-          document: { hash: pinned.hash, bytes: pinned.bytes },
-          rotationCorrectionDeg: pinned.rotationCorrectionDeg,
-          sheets,
+          document: { hash: job.document.hash, bytes: source.bytes, patch: job.document.patch },
+          rotationCorrectionDeg: job.document.rotationCorrectionDeg,
+          sheets: job.sheets,
           graphics,
-          mode: "cmyk",
-          info,
+          mode: job.mode,
+          info: job.info,
           onPage: (page) => {
             for (const warning of page.warnings) req.log.warn({ nameId }, `maps.pdf: ${warning}`);
           },
         }),
       ));
+      // Patch ops that were skipped (docs/map-patches.md §2.3) belong to no page.
+      for (const warning of out.warnings) if (warning.startsWith("PATCH_ISSUE:")) req.log.warn({ nameId }, `maps.pdf: ${warning}`);
       const body = Buffer.from(out.bytes);
-      const filename =
-        rows.length === 1
-          ? `${safeFilename(event.nameId)}_${safeFilename(pageName(rows[0]))}.pdf`
-          : `${safeFilename(event.nameId)}_maps.pdf`;
+      const filename = job.filename;
       return reply
         .header("Content-Type", "application/pdf")
         .header("Content-Disposition", `attachment; filename="${filename}"`)
@@ -442,6 +465,33 @@ export function registerCourseMapRoutes(
       req.log.error(error);
       return reply.code(400).send({
         error: error instanceof Error ? error.message : "Could not render maps",
+      });
+    }
+  });
+
+  // The print job (docs/course-print.md §8.5, G15): what maps.pdf composes,
+  // as JSON, for a host that composes it itself (the browser, slice G
+  // answer 3). Same query, selection, order, caps and 400s as maps.pdf.
+  server.get<{
+    Params: { nameId: string };
+    Querystring: PrintQuery;
+  }>("/api/maps/:nameId/print-job", async (req, reply) => {
+    const { nameId } = req.params;
+    if (!(await assertRestAccess(req, reply, { nameId, cap: "courses.view" }))) {
+      return;
+    }
+    try {
+      const db = prisma();
+      const event = await db.event.findUnique({ where: { nameId } });
+      if (!event || event.removed) {
+        return reply.code(404).send({ error: "Event not found" });
+      }
+      const { job } = await buildPrintJob(db, event, req.query, { graphicBytes: false });
+      return reply.header("Cache-Control", "no-store").send(job);
+    } catch (error) {
+      req.log.error(error);
+      return reply.code(400).send({
+        error: error instanceof Error ? error.message : "Could not build the print job",
       });
     }
   });
@@ -471,5 +521,45 @@ export function registerCourseMapRoutes(
       .header("Content-Type", graphic.mime)
       .header("Cache-Control", "private, max-age=3600")
       .send(Buffer.from(graphic.data));
+  });
+
+  // A graphic as the PNG a print embeds (docs/course-print.md §8.5): an
+  // SVG rasterised by resvg at w × h in a print worker, a PNG as stored.
+  // The browser never rasterises SVG (slice G).
+  server.get<{
+    Params: { nameId: string; id: string };
+    Querystring: { w?: string; h?: string };
+  }>("/api/maps/:nameId/graphics/:id/print.png", async (req, reply) => {
+    const { nameId } = req.params;
+    const event = await assertRestAccess(req, reply, { nameId, cap: "courses.view" });
+    if (!event) return;
+    const id = Number(req.params.id);
+    if (!Number.isInteger(id) || id <= 0) {
+      return reply.code(400).send({ error: "Invalid graphic id" });
+    }
+    const graphic = await prisma().graphic.findFirst({
+      where: { id: BigInt(id), OR: [{ eventId: event.id }, { eventId: null }] },
+      select: { mime: true, data: true },
+    });
+    if (!graphic) {
+      return reply.code(404).send({ error: "Graphic not found" });
+    }
+    let png: Uint8Array;
+    if (graphic.mime === "image/svg+xml") {
+      const box = parseRasterBox(req.query.w, req.query.h);
+      if (typeof box === "string") return reply.code(400).send({ error: box });
+      try {
+        png = await printGate(() => rasteriseSvgInWorker(new Uint8Array(graphic.data), box[0], box[1]));
+      } catch (error) {
+        req.log.error(error);
+        return reply.code(400).send({ error: error instanceof Error ? error.message : "Could not rasterise the graphic" });
+      }
+    } else {
+      png = new Uint8Array(graphic.data);
+    }
+    return reply
+      .header("Content-Type", "image/png")
+      .header("Cache-Control", "private, max-age=3600")
+      .send(Buffer.from(png));
   });
 }

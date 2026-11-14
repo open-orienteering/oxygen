@@ -4,3 +4,4 @@ export * from "./codec.js";
 export * from "./projection.js";
 export * from "./render-bridge.js";
 export * from "./patch.js";
+export * from "./materialise.js";

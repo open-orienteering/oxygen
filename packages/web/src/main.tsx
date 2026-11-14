@@ -5,6 +5,7 @@ import { QueryClient } from "@tanstack/react-query";
 import { PersistQueryClientProvider } from "@tanstack/react-query-persist-client";
 import { httpBatchLink } from "@trpc/client";
 import { eventScopedTrpcFetch, trpc } from "./lib/trpc";
+import { cloudOwnedApart } from "./lib/trpc-links";
 import { createIdbPersister } from "./lib/offline/persister";
 import { startNodeDiscovery } from "./lib/node-discovery";
 import { dropLegacyCaches } from "./lib/legacy-caches";
@@ -41,7 +42,8 @@ startNodeDiscovery();
 
 const trpcClient = trpc.createClient({
   links: [
-    httpBatchLink({
+    // Cloud-owned mutations batch apart: a venue refuses a mixed batch (row G18).
+    cloudOwnedApart(() => httpBatchLink({
       url: API_URL,
       // Rewrites onto the active venue node when one is up; pass-through
       // otherwise.
@@ -61,7 +63,7 @@ const trpcClient = trpc.createClient({
         if (kioskKey) headers["x-kiosk-key"] = kioskKey;
         return headers;
       },
-    }),
+    })),
   ],
 });
 

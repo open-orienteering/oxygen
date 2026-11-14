@@ -7,7 +7,8 @@
  * blob. Each deletion is its own autocommit statement that re-checks its
  * conditions, so a reference created mid-run turns that row into a no-op,
  * an interrupted run leaves a consistent state, and the next run picks up
- * the rest. `RESTRICT` on `map_files` / `club_map_versions` is the belt.
+ * the rest. `RESTRICT` on `map_files` / `club_map_versions` / `map_patches`
+ * is the belt.
  *
  * A leader-lease singleton (docs/background-jobs-lease.md): the
  * supervisor's reconcile calls `maybeStartStorageGc`, which runs at most
@@ -112,12 +113,14 @@ export interface StorageGcResult {
 const DOCUMENT_UNREFERENCED = `
       NOT EXISTS (SELECT 1 FROM oxygen.map_files f WHERE f.document_hash = d.hash)
   AND NOT EXISTS (SELECT 1 FROM oxygen.club_map_versions v WHERE v.document_hash = d.hash)
-  AND NOT EXISTS (SELECT 1 FROM oxygen.map_import_jobs j WHERE j.document_hash = d.hash)`;
+  AND NOT EXISTS (SELECT 1 FROM oxygen.map_import_jobs j WHERE j.document_hash = d.hash)
+  AND NOT EXISTS (SELECT 1 FROM oxygen.map_patches p WHERE p.document_hash = d.hash)`;
 
 const DOCUMENT_REFERENCED = `
       EXISTS (SELECT 1 FROM oxygen.map_files f WHERE f.document_hash = d.hash)
    OR EXISTS (SELECT 1 FROM oxygen.club_map_versions v WHERE v.document_hash = d.hash)
-   OR EXISTS (SELECT 1 FROM oxygen.map_import_jobs j WHERE j.document_hash = d.hash)`;
+   OR EXISTS (SELECT 1 FROM oxygen.map_import_jobs j WHERE j.document_hash = d.hash)
+   OR EXISTS (SELECT 1 FROM oxygen.map_patches p WHERE p.document_hash = d.hash)`;
 
 /** `$ignore` lists documents to treat as already gone (a dry run's document candidates). */
 const SOURCE_UNREFERENCED = (ignore: string) => `

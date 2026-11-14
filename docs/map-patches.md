@@ -121,6 +121,12 @@ applied match from the library at the document's `documentFactor`, which
 is wrong for an entry of another library (scaled by its own
 `libraryFactor`, G8). A `match` in the input is dropped by the parse.
 
+What fills `symbols` is `materialiseSymbol(doc, entryId)`
+(`map-symbols.md` §11.1): the entry resolved through the document's
+stack and scaled to it, or not materialisable when the stack lacks one of
+its colours. Map mode offers the entries through `mapPalette`
+(`map-symbols.md` §11.2) and materialises one on first use (row G9).
+
 ### 1.4 The toggle
 
 `enabled: false` turns the patch off without losing it (09 §6, the
@@ -130,7 +136,7 @@ the pinned document unchanged.
 ### 1.5 Merging
 
 `mergePatch(patch, change)` is the per-op-id merge the server runs under
-the row lock (`mapPatch.apply`, row G3) and a client runs for its
+the row lock (`mapPatch.applyChange`, row G3) and a client runs for its
 optimistic copy:
 
 ```ts
@@ -262,28 +268,262 @@ ops that lost their target after the pin moved.
   coordinate array — linear in the document, fine for print and for a
   patch change, not a per-frame operation; the viewer's incremental path
   (row G4) re-prepares only the touched buckets.
-- **Every other reader of a document's objects** — the course layer's
-  cuts and checks (`course/cuts.ts`, `course/checks.ts`), the snap and
-  pick indices (`lib/editor/snap.ts`, `symbol-pick.ts`), the API's event
-  map objects — must skip `hidden[i]` when it starts receiving an
-  effective document (rows G4, G14).
+- **The viewer** (row G4, `map-rendering.md` §5.2 "Object identity and
+  the patch"): the worker takes `{ document, patch }`. Its range tables
+  key on the effective `objectIndex`; a hidden object is skipped through
+  the range table (ids only, nothing re-prepared); modified, resymbolled
+  and added objects are symbolised on their own and only the buckets
+  whose content changed are re-prepared. A patch change redraws without
+  reloading the document. Viewer, kiosk and editor all draw the
+  effective document.
+- **The course layer's cuts** (`course/cuts.ts` `cutFeaturesOfDocument`,
+  G4) skip `hidden[i]` and read modified objects where they are; the
+  viewer's worker recomputes them with every patch change. **Filter
+  regions** act on the effective document in the viewer (G4).
+- **The snap and pick indices** (`lib/editor/snap.ts`, `symbol-pick.ts`,
+  G4) are built from the effective document: hidden objects neither snap
+  nor are picked or counted, modified and added ones are where the patch
+  puts them. An object drawn with a patch symbol is not picked by symbol
+  (a filter region stores document symbol indices; Pending).
+- **The course checks and the API's event map objects** (G14):
+  `checkObstaclesOfDocument` and `slimObjectsOfDocument` take an
+  `EffectiveDocument` and skip `hidden[i]`. An added object counts like
+  a document object, here and in the cuts: a patch symbol carries no
+  match, so its `code` (the library entry's) decides, and its own
+  `render` gives a cut feature's radius.
+- **Print and the server's derivations** (G14) read the effective
+  document:
+  - `maps.pdf`, the server's print worker, the print job and the
+    device's print worker (G16, `course-print.md` §8.6) compose it
+    (`course-print.md` §4.3, §8.2, §8.5): `prepareDocument(hash, bytes,
+    patch)` applies the patch, its cache keyed by hash + patch version;
+    the job carries the patch inline (version 2). A skipped op is a
+    `PATCH_ISSUE` warning in the log; the PDF is still served.
+  - `course.checks`' obstacles, the server's cut features
+    (`loadEventCutFeatures`) and the event map objects (description
+    autodetect, `control.suggestDescription`, `DESCRIPTION_STALE`) are
+    derived from the effective document, memoised per hash + patch
+    version (`event-map-objects.ts`, `map-storage.md` §4.6).
+  - The page raster (`render/page-raster.ts`) needed no change: it draws
+    a composed page and decodes nothing, so a page composed from the
+    effective document is drawn as such. It is the oracle the golden
+    tier compares against, not a print path.
+  - Document previews (`render/previews.ts`) stay unpatched: they are
+    per document hash, not per event (§2.2).
+
+## 3. Storage and delivery
+
+Row G3. One cloud-owned row per event, merged on the server per op id,
+not journaled (slice G answer 1, `course-layer.md` §7). Implementation:
+`packages/api/src/map-store/patches.ts` (storage and the delivery rule),
+`routers/mapPatch.ts` (procedures), `map-store/routes.ts` (the REST
+route).
+
+### 3.1 Table
+
+```sql
+CREATE TABLE oxygen.map_patches (
+  id             UUID PRIMARY KEY DEFAULT uuidv7(),
+  event_id       BIGINT NOT NULL UNIQUE REFERENCES oxygen.events(id) ON DELETE CASCADE,
+  document_hash  TEXT NOT NULL REFERENCES oxygen.map_documents(hash) ON DELETE RESTRICT,
+  enabled        BOOLEAN NOT NULL DEFAULT true,          -- §1.4
+  ops            JSONB NOT NULL DEFAULT '{}',            -- record keyed by op id (§1.2)
+  symbols        JSONB NOT NULL DEFAULT '{}',            -- record keyed by library entry id (§1.3)
+  version        BIGINT NOT NULL DEFAULT 0,              -- the token
+  created_at     TIMESTAMPTZ NOT NULL DEFAULT now(),
+  updated_at     TIMESTAMPTZ NOT NULL DEFAULT now(),     -- trigger
+  CHECK (jsonb_typeof(ops) = 'object'), CHECK (jsonb_typeof(symbols) = 'object')
+);
+CREATE INDEX ON oxygen.map_patches (document_hash);
+```
+
+Migration `20261113120000_map_patches` (additive: a new table).
+
+- **One row per event** (`UNIQUE (event_id)`). 08 §4.7 had
+  `UNIQUE (event_id, document_hash)`; with keyed states and re-resolution
+  re-keying the row in place (§4, row G11) a second row per document has
+  no reader.
+- **`document_hash`** is the document the ops are keyed onto. `RESTRICT`
+  and the storage GC's reference (`map-storage.md` §8.1) keep that
+  document while the row exists, even after the event's pin moved.
+- **`version`** is the row's token, as `course_objects.version`
+  (`course-layer.md` §7, §8.4): an HLC minted on every write that changes
+  the row, `0` for a row never written. On the wire, a decimal string.
+  It is the delivery's ETag, `course.mapMetadata.patchVersion` and the
+  second half of the print cache's key and of the server derivations'
+  memo (`<hash>:<version>`, G14; `course-print.md` §8.2).
+- The JSON columns hold the shared schema's shapes as on the wire
+  (`mapPatchSchema`), keys in sorted order (`mergePatch`). A row that does
+  not parse (written by a newer image) reads as no patch, with a warning.
+
+### 3.2 Writes
+
+| Procedure | Input | Permission | Result |
+|---|---|---|---|
+| `mapPatch.get` | — | `courses.view` or the kiosk key | `{ version, patch }` (§3.3) |
+| `mapPatch.applyChange` | `{ documentHash } ∧ patchChangeSchema` (`put`, `remove`, `putSymbols`) | `courses.edit` | `{ version, patch }` |
+| `mapPatch.setEnabled` | `{ enabled: boolean }` | `courses.edit` | `{ version, patch }` |
+
+Writes are not lease-guarded and not journaled: the patch is cloud-owned
+non-critical data (08 §4.8). Each write is one transaction:
+
+1. Read the event's pin (`map-storage.md` §4.6). No pin →
+   `PRECONDITION_FAILED` `PATCH_NO_DOCUMENT`. For `applyChange`, a
+   `documentHash` other than the pin → `PRECONDITION_FAILED`
+   `PATCH_DOCUMENT_MISMATCH`: the client's ops are keyed onto another
+   document than the one the server would key them onto.
+2. Create the row if there is none (`INSERT … ON CONFLICT (event_id) DO
+   NOTHING`, keyed to the pin), then lock it (`SELECT … FOR UPDATE`).
+   Two first writers both end on the one row.
+3. A row keyed to another document than the pin is **dormant** (below):
+   `PRECONDITION_FAILED` `PATCH_STALE`. The pin is read again under the
+   lock, so a pin that moved since step 1 refuses the write the same
+   way. (A pin that moves after that read and before the commit is not
+   excluded: the pin's writers do not take the patch lock. The write
+   then lands on a row that is dormant from the next read on; nothing
+   is lost. Re-resolution, row G11, re-keys under the lock.)
+   A stored row that does not parse (written by a newer image) is not
+   overwritten: `INTERNAL_SERVER_ERROR` `PATCH_UNREADABLE`.
+4. `applyChange`: `mergePatch(row, change)` (§1.5). `setEnabled`: the new value.
+   The stored `ops` + `symbols` JSON is capped at 4 MiB
+   (`MAP_PATCH_MAX_BYTES`, `PAYLOAD_TOO_LARGE` `PATCH_TOO_LARGE`): a patch is kilobytes,
+   and it travels inside the one JSON checkout snapshot.
+5. A write that changes nothing (the same change again, the toggle at
+   its value) writes nothing and keeps the version, so "twice equals
+   once" holds for the token too. Otherwise the row is written with a
+   new version.
+
+The merge procedure is `applyChange`, not 08 §6's `apply`: tRPC
+reserves `apply` (with `call`) as a router key.
+
+`applyChange` takes no `baseVersion`: the merge is per op id, so two editors on
+different objects both win, and two on the same op id are
+last-writer-wins (§1.5). Ops are not checked against the document on
+write: an op that cannot be applied is reported at application (§2.3),
+and one that lost its target after a pin move must stay stored for
+re-resolution. `setEnabled` with no row creates an empty one keyed to the
+pin.
+
+The errors carry their code as the message prefix (`PATCH_STALE: …`), as
+the course-object refusals do.
+
+**A dormant patch** (user 2026-11-13, G3 question): until re-resolution
+lands (§4, row G11), a re-import, re-match, `finalise` or new upload that
+moves the event's pin leaves the row keyed to the old document. Such a
+row is kept (with its document, by `RESTRICT` and the GC reference), not
+delivered (§3.3: `patch: null`, version `"0"`) and not writable
+(`PATCH_STALE`). Nothing is lost; Map mode cannot edit that event until
+G11 re-keys the row onto the new pin, which replaces the refusal. The
+alternatives — re-key to the new pin with empty ops (discards the
+corrections), or a row per document (`UNIQUE (event_id, document_hash)`,
+contradicts answer 1) — were declined.
+
+### 3.3 Delivery
+
+The patch reaches whoever may read the event's document through the
+event (`map-storage.md` §4.2's event clause): auth off, the event's kiosk
+key, or `courses.view`.
+
+```
+GET /api/maps/:nameId/patch     → 200 application/json { version, patch }
+                                  ETag: "<version>"   Cache-Control: private, no-cache
+                                  304 on If-None-Match; 404 unknown event; 401 / 403
+```
+
+`mapPatch.get` answers the same body over tRPC.
+
+- **Paired with its document**: `patch` is the row only when the row's
+  `document_hash` is the event's pin (§2: the caller pairs the patch with
+  the document; delivery guarantees it). No row, no pin, or a dormant row
+  → `{ version: "0", patch: null }`, a 200 — null is the identity (§2.1),
+  so a viewer passes what it receives to `applyPatch` unchanged. A row
+  created by a write that changed nothing (an empty `applyChange`,
+  `setEnabled(true)` on no row) keeps version `"0"` and is delivered as
+  the empty patch it is — also the identity; `"0"` therefore means "no
+  correction to draw", not "no row".
+- **The descriptor**: `course.mapMetadata` gains `patchVersion` (the same
+  version, `"0"` when nothing is delivered), so a client holding the
+  document knows when to refetch the patch. It reads the row's
+  `document_hash` and `version` only (`eventPatchVersion`), not the ops.
+- The route revalidates on every use (`no-cache`); the ETag makes an
+  unchanged patch a 304.
+- A disabled patch is delivered as it is (`enabled: false`): the toggle
+  is the consumer's to read, and Map mode shows the ops it keeps.
+- **Server consumers** (G14) read the patch with the pin they already
+  hold, never through a second read of the pin: `eventPatchOnPin(db,
+  eventId, hash)` is the delivery rule for that hash, and
+  `eventPrintPatch` narrows it to the patch that changes the document
+  (`livePrintPatch`: enabled, at least one op, keyed onto the hash) or
+  null — print's input (`course-print.md` §8.2). A venue box applies its
+  own copy of the row (§3.4) the same way.
+- **The web client** (row G4; `lib/map-document-cache.ts`): `useMapPatch(nameId,
+  patchVersion)` asks the route with the kiosk key as a header (never in
+  the query) and `If-None-Match` with the session's version, keeps the
+  delivery per event for the session (`getMapPatch`, `setMapPatch`,
+  `subscribeMapPatch`), and asks again when `mapMetadata.patchVersion`
+  differs from it and when the page regains focus, becomes visible or
+  comes back online — there is no live channel, since the patch is not
+  journaled. One request per event at a time; a version change that
+  joined a request already in flight and still got the old version asks
+  once more (`refreshMapPatch`); a failure keeps the
+  session's copy, else none (never an error to the viewer); a body whose
+  `patch` does not parse is no patch, with a warning. The viewer pairs the
+  delivery with its document by hash (`patchForDocument`) and does not
+  wait for it. The route is not in Cache Storage: a device that starts
+  offline draws the pinned document (Pending).
+
+### 3.4 Venue
+
+The patch travels in the checkout snapshot's `maps` part
+(`map-storage.md` §7.2) as `maps.patch`: the row with its token as a
+decimal string, carried only when its document is among the snapshot's
+documents, and inserted on the box after the documents (the `RESTRICT`
+FK). It is not in `SNAPSHOT_TABLES`: those rows are inserted before the
+`maps` part, and their BigInt columns cross the HTTP snapshot as JSON
+numbers (the layout rows' tokens travel exactly beside them in
+`versions` since G18, `map-storage.md` §7.2). The box's route and
+`mapPatch.get` answer from its copy.
+
+`mapPatch.` mutations are cloud-owned (`sync/ownership.ts`): a venue box
+forwards them to the cloud, and answers the typed `PRECONDITION_FAILED`
+("requires connectivity") offline. The box's own copy stays the
+checkout's until a box follows the cloud's map rows (row G19).
+
+### 3.5 Per-event dump
+
+`GET /api/backup/event` carries a `map_patches` section directly after
+`map_files` (all columns; a plain event-scoped section, restored with
+`event_id` rewritten as the others, `docs/backup-restore.md`). The
+`map_documents` and `map_sources` sections also carry the patch's
+document and its source, so a dormant patch restores too.
+
+### 3.6 Garbage collection
+
+A `map_patches` row is a reference to its document
+(`map-storage.md` §8.1): the collector neither deletes nor ages a
+document only a patch points at, and touches its `last_referenced_at`.
+`RESTRICT` is the belt.
 
 ## Pending in this chapter
 
-- **§3 Storage and delivery** (row G3): the `map_patches` table,
-  `mapPatch.get` / `apply` / `setEnabled`, delivery with the document,
-  the checkout snapshot, the per-event dump, the GC reference.
-- **The effective document on screen** (row G4): the viewer worker takes
-  `{ document, patch }`; the readers named in §2.4 skip hidden objects.
-- **Symbol materialisation and the palette** (row G8): what fills
-  `symbols` (§1.3).
+- **A box follows the cloud's patch during a lease** (row G19): a
+  forwarded write reaches the cloud, but the box serves the checkout's
+  copy until then (§3.4).
+- **An offline copy of the patch** (G4, decided overnight for review).
+  The document is CacheFirst in the service worker; the patch route is
+  not cached, so a device that starts offline (Field mode) draws the
+  pinned document. A NetworkFirst runtime route (`vite.config.ts`) or an
+  IndexedDB copy is a follow-up row (G17 or its own).
+- **Patch symbols in the eyedropper** (G4, decided overnight for review;
+  `map-rendering.md` §8): a
+  filter region cannot select an object drawn with a patch symbol by
+  symbol until the region props carry a stable symbol key.
 - **§4 Re-resolution** (row G11): re-keying a patch when the event's pin
   moves (same source by `sourceIndex`; a new edition by position and
   symbol within 0.5 mm), the `unresolved` flag, symbol references
-  `{ doc }` re-keyed with it.
+  `{ doc }` re-keyed with it; it wakes a dormant row (§3.2).
 - **§5 Promote** (row G12): the patch applied at the import's store
   stage for a club version.
-- **Print, cuts and checks** (row G14).
 
 ## Tests
 
@@ -291,3 +531,26 @@ ops that lost their target after the pin moved.
 |---|---|---|
 | Unit (shared) | `packages/shared/src/map-document/__tests__/patch.test.ts` | schema: each op parses, a key that is not the op's id, a bad UUID, a non-integer or out-of-range coordinate, a text `add`, a patch symbol's `match` dropped, defaults; `patchChangeSchema` refusals; `mergePatch`: put replaces by id, remove, an absent remove, twice = once, two changes in either order deep-equal and the same JSON, input not mutated; `applyPatch`: identity (null, disabled, empty) returns the same document, hide flags the object found by `sourceIndex` (a fixture whose Hilbert order differs from source order), modify (coordinates, flags, bbox, `coordStart` of it and its neighbours, angle, type and text kept), resymbol to `{ doc }` and `{ patch }`, hide + modify + resymbol on one object, add (indices `≥ N` in op-id order, `ADDED_SOURCE_INDEX`, the combined table in key order), every base object unchanged, any insertion order of `ops` and `symbols` gives a deep-equal result, applying twice from the same input equals once, the input untouched, each issue code reported and the other ops still applied (a prototype-name patch key is `symbol-missing`), a rectangle's kind check, ops on an already-effective document throw while identity still returns it |
 | Unit (shared) | `packages/shared/src/map-document/__tests__/render-bridge.test.ts` | over an effective document: a hidden object missing from `objects` and `docIdx` with `stats.patchHidden`, a modified one symbolised at its new place, an added one with a patch symbol symbolised and its `docIdx ≥ baseCount`, `only` with an added index, a patch symbol drawn from its own `render` (not rescaled by `documentFactor`), a disabled patch deep-equal to the unpatched document |
+| Unit (api) | `packages/api/src/__tests__/map-patches.test.ts` | `patchOfRow` (sorted keys; an unparseable row → null with a warning), `deliveredPatch` (the pin's row with an exact decimal version above 2^53; disabled delivered as it is; no row / no pin / dormant → `{ "0", null }`), `samePatchContent` key-order blind, `assertPatchSize` (`PAYLOAD_TOO_LARGE` past 4 MiB), `patchEtag` |
+| Unit (api) | `packages/api/src/__tests__/snapshot-maps.test.ts` | `snapshotPatchOf`: the row with an exact decimal token; nothing without a row or for a dormant one |
+| Unit (api) | `packages/api/src/__tests__/venueForwarder.test.ts` | `mapPatch.applyChange` / `setEnabled` cloud-owned and forwarded, `mapPatch.get` served locally |
+| Unit (api) | `packages/api/src/__tests__/backup.test.ts` | `map_patches` directly after `map_files`; the blob sections' filters include the patch's document and its source |
+| Integration (api) | `packages/api/src/__tests__/integration/map-patches.test.ts` | no patch before a write; `applyChange` creates the row keyed to the pin and merges put / remove (an absent id a no-op) / putSymbols with sorted keys; twice = once and an empty change keep the version; six concurrent first writers on different ids → one row with all six ops; two writers on one id → one of the two states whole; refusals (duplicate id `BAD_REQUEST`, put + remove of one id, `PATCH_DOCUMENT_MISMATCH`, `PATCH_NO_DOCUMENT` for `applyChange` and `setEnabled`); `setEnabled` creates an empty row, advances only on a change, a disabled patch delivered as it is; a dormant row (pin moved) not delivered, `patchVersion` `"0"`, writes `PATCH_STALE`, row untouched, delivered again when the pin returns; an unreadable row: no patch delivered, writes `PATCH_UNREADABLE`, row untouched; the table (defaults, one row per event, `RESTRICT` on the document, cascade with the event, an array in `ops` refused); access (kiosk key and viewer read, cannot write; stranger `FORBIDDEN`; course setter writes); the route 200 with `ETag` / `Cache-Control`, 304, a stale ETag 200, header and `?k=` kiosk key, viewer 200, anonymous and wrong key 401, stranger 403, unknown event 404; `mapMetadata.patchVersion` equals the route's version |
+| Integration (api) | `packages/api/src/__tests__/integration/lease.test.ts` | checkout carries the patch row verbatim (id, document, `enabled`, ops, token above 2^53 exact), `maps.patches` counted (0 from an exporter without the map part); the box's `mapPatch.get` and route (kiosk key) serve it with `ETag` = the token |
+| Integration (api) | `packages/api/src/__tests__/integration/backup.test.ts` | the dump's `map_patches` section directly after `map_files` with the event's row; restored into another event with `event_id` rewritten, token and ops exact |
+| Integration (api) | `packages/api/src/__tests__/integration/map-storage-gc.test.ts` | a document only a patch references is kept (dry run too) and touched; `RESTRICT` refuses its delete; collected once the patch is gone and a fresh grace passed |
+| Unit (shared) | `packages/shared/src/course/__tests__/cuts.test.ts`, `checks.test.ts` (G14) | over an effective document: a hidden cut feature / obstacle is skipped; an added point of a document symbol and one of a patch symbol (radius from its own render) are cut features; an added line of a wall symbol is an obstacle |
+| Unit (shared) | `packages/shared/src/print/__tests__/prepared-document.test.ts`, `print-job.test.ts` (G14) | `course-print.md` §9.1: the prepared document and the job with a patch |
+| Unit (api) | `packages/api/src/__tests__/map-patches.test.ts` (G14 part) | `eventPrintPatch`: the delivered patch with its version when it has ops; null without a pin, without a row, dormant, disabled, op-less |
+| Unit (api) | `packages/api/src/__tests__/event-document.test.ts`, `event-map-objects.test.ts` (G14 part) | the server derivations over a stub db with a patch row: a hidden cut feature drops out of cuts and objects, an added one is a cut feature, a disabled and a dormant patch give the unpatched answer, each version answered fresh; `slimObjectsOfDocument` skips a hidden object and keeps an added one |
+| Unit (api) | `packages/api/src/__tests__/print-worker.test.ts` (G14 part) | `course-print.md` §9.1: the worker keyed by hash + patch version |
+| Integration (api) | `packages/api/src/__tests__/integration/print-patch.test.ts` (G14) | a hidden object absent from `maps.pdf` (the pixels that change lie in its box), an added one present, `enabled = false` byte-identical to the unpatched PDF and job, a change shows on the same worker, the job with a patch over HTTP equals `maps.pdf` (`course-print.md` §9.1) |
+| Integration (api) | `packages/api/src/__tests__/integration/overprint-cuts.test.ts`, `course-checks.test.ts` (G14 part) | through `mapPatch.applyChange`: the boulder hidden → a leg over it has no gap, an added boulder gaps another leg, the print's `cutFeatures` likewise, disabled → the pinned document's cuts; the building hidden → no `LEG_THROUGH_UNCROSSABLE`, an added building across the leg → the check at its edge, disabled → the pinned building's |
+| E2E | `e2e/course-maps.spec.ts` (G14 part) | the print job carries no patch, then the patch at the write's version after a hide, and the device's export equals the patched `maps.pdf`; none after the op is removed |
+| Unit (api, web) | `packages/api/src/__tests__/print-device.test.ts`, `packages/web/src/print/__tests__/worker.test.ts` (G14 part) | the device's print worker applies the job's patch: the server worker's bytes, `renderPrintJob`'s in process (`course-print.md` §9.1) |
+| E2E | `e2e/map-documents.spec.ts` | after the UI upload: the patch route `{ "0", null }`, `mapPatch.applyChange` over tRPC, the route 200 with the op and the ETag, 304 on revalidation, anonymous 401 |
+| Unit (shared) | `packages/shared/src/course/__tests__/cuts.test.ts` | G4: over an effective document a hidden boulder gives no cut feature, a modified one is at its new place |
+| Unit (web) | `packages/web/src/map-gl/__tests__/worker-patch.test.ts`, `buckets.test.ts`, `engine.test.ts` | G4: the effective document in the viewer's worker and engine (`map-rendering.md` §5.2 Tests) |
+| Unit (web) | `packages/web/src/lib/__tests__/map-document-cache.test.ts`, `vector-map.test.ts` | G4: the client's fetch, ETag revalidation, session store and failure rules; the pairing by hash |
+| Unit (web) | `packages/web/src/lib/editor/__tests__/snap.test.ts`, `symbol-pick.test.ts` | G4: snapping and the eyedropper over the effective document |
+| E2E | `e2e/map-vector-layer.spec.ts` | G4: a hidden object's pixels gone and an added one drawn after a change, with no reload; the toggle off restores both |

@@ -11,8 +11,8 @@
  */
 
 import type { DocumentColour, DocumentSymbol, SymbolMatch } from "../map-document/header.js";
-import { getLibraryEntry, SYMBOL_LIBRARY_VERSION } from "../symbol-library/index.js";
-import { documentLibraryId, documentSymbolFingerprints, parseDecisionFingerprint } from "./decisions.js";
+import { SYMBOL_LIBRARY_VERSION } from "../symbol-library/index.js";
+import { documentLibraryId, documentSymbolFingerprints, isDocumentEntryId, parseDecisionFingerprint } from "./decisions.js";
 import { normaliseCode, type SymbolDecision } from "./matcher.js";
 import type { ImportWarning } from "./report.js";
 
@@ -186,7 +186,7 @@ const MESSAGE_LINES = 5;
 /**
  * Resolve a parsed CRT against a stored document (docs/map-symbols.md
  * §8.6): sources by fingerprint, else by normalised code; targets in the
- * document's library; the later line for a symbol wins.
+ * document's library or an overlay library; the later line for a symbol wins.
  */
 export function resolveCrt(file: CrtFile, header: CrtDocumentLike): CrtResolution {
   const libraryId = documentLibraryId(header);
@@ -230,7 +230,8 @@ export function resolveCrt(file: CrtFile, header: CrtDocumentLike): CrtResolutio
     let canonicalId: string | null = null;
     if (st.kind === "rule") {
       canonicalId = st.target.includes(":") ? st.target : `${libraryId}:${st.target}`;
-      if (!canonicalId.startsWith(`${libraryId}:`) || !getLibraryEntry(canonicalId)) {
+      // The document's library or an overlay's (docs/map-symbols.md §8.6, §12).
+      if (!isDocumentEntryId(libraryId, canonicalId)) {
         skipped.push({ line: st.line, code: "CRT_TARGET_UNKNOWN", message: clip(st.target) });
         continue;
       }

@@ -931,7 +931,9 @@ table of entries `(colour, group, object, start, count)`: colour-major
 (the stream's order), one entry per run of an object's indices — or
 instances, where `group` is the atlas size class (glyphs) or the text
 atlas page (text). Entries of one colour
-are contiguous, so a colour of a part is one span.
+are contiguous, so a colour of a part is one span. `object` is the
+document's effective `objectIndex` ("Object identity and the patch"
+below); the course part's start at `COURSE_OBJECT_BASE`.
 
 **Visible set (04 §6.8 point 2).** `buildVisibleSet(parts, hidden)`
 concatenates the drawn parts' spans per (colour, kind) into one index
@@ -942,8 +944,8 @@ present + size classes + text pages + 3 per clip group — independent of how ma
 when the drawn cell set or the gate state changes, when detail of a
 drawn cell arrives (coalesced, `ARRIVAL_REBUILD_MS`), and when the
 hidden set changes; never while zooming within the same cells. Hidden
-objects (`engine.setHidden`, stream `objectIdx`) are skipped entry by
-entry. With a filter (`buildVisibleSet(parts, hidden, filter)`, "Filter
+objects (`engine.setHidden`, effective `objectIndex`; a patch's hidden
+objects and a filter's join them) are skipped entry by entry. With a filter (`buildVisibleSet(parts, hidden, filter)`, "Filter
 regions" below) an entry goes to the draw of its mask: per colour the
 unmasked draw first, then one per mask, masks ascending — every kind in
 that order, which `VisibleSet.layers` lists as the draw loop's
@@ -980,10 +982,11 @@ growth factor).
 
 | Message | Payload | Reply |
 |---|---|---|
-| `load` | document bytes + `DocumentRenderOptions` (or, dev only, render objects + symbols, or a symbolised stream), font files, the text atlas pages (JSON, in the renderer's page order), optional first view (a view, or "fit into w × h"), gate flag | `loaded`: summary (bounds, origin, grid, detail cells, the first view resolved, stage times, bytes, text: pages, glyphs resolved, glyphs missing), mesh atlas, every cell's base part, the large part — then, without a further request, the first view's detail parts unless it is below the gate |
+| `load` | document bytes + `DocumentRenderOptions` + the event's patch (or, dev only, render objects + symbols, or a symbolised stream), font files, the text atlas pages (JSON, in the renderer's page order), optional first view (a view, or "fit into w × h"), gate flag | `loaded`: summary (bounds, origin, grid, detail cells, the first view resolved, stage times, bytes, text: pages, glyphs resolved, glyphs missing), mesh atlas, every cell's base part, the large part — then, without a further request, the first view's detail parts unless it is below the gate |
 | `prepare` | bucket ids, most urgent first | replaces the queue; one `part` per id |
+| `patch` | a generation number, the patch (or `null`) and the cells whose detail the engine holds | `patched`: the generation, the patch state (hidden ids, issues), the touched buckets' fresh parts, the detail cells, the bytes, the mesh atlas when it grew — "Object identity and the patch" below |
 | `course` | a generation number and the course layer's input without the document (`CourseLayerRequest`: structure, sites, objects, appearance, view options, filter regions, `fastFilter`), or `null` | `course`: the generation, the dynamic bucket's part (or `null`), the stack to draw with, the derivation and symbol sizes, warnings, the mesh atlas when it grew, and the filter over the static buckets (or `null`) — "Dynamic bucket" and "Filter regions" below |
-| — | | `error` on a failed load; on a `course` request whose derivation throws, with that request's generation (F20b) |
+| — | | `error` on a failed load; on a `course` request whose derivation throws, with that request's generation (F20b); on a `patch` request that throws, with `patch` = its generation |
 
 Every typed array goes back as a transferable. The worker decodes,
 bridges (`documentRenderInput`), symbolises, builds the atlas, assigns
@@ -1020,18 +1023,20 @@ own without `courseLayer`) and `LoadSummary.courseLayer` says whether a
 course can be drawn: `{ supported: true, cutFeatures }`, or — a stack
 without both purples, `CourseStackError` — `{ supported: false, reason }`
 with the document drawn on its own stack, unchanged. The same load
-extracts the automatic-cut features once (`cutFeaturesOfDocument`,
-`course-layer.md` §3.4) and keeps the decoded context, the parsed fonts,
-the text pages and the mesh atlas builder for the course requests.
+extracts the automatic-cut features (`cutFeaturesOfDocument`,
+`course-layer.md` §3.4) of the effective document — again with every
+patch change ("Object identity and the patch") — and keeps the decoded
+context, the parsed fonts, the text pages and the mesh atlas builder for
+the course requests.
 
 **A course request.** `course { generation, input }` runs, in the worker,
 `courseLayer({ ...input, document, cutFeatures })`, `symbolise` on the
 layer's objects and symbols alone (its symbols already index the
 completed stack) and `prepareBucketPart(…, COURSE_BUCKET, every pass,
 "all")` — one part with every kind, bucket id `COURSE_BUCKET` (−2).
-Its range-table object ids continue after the document's stream objects
-(`courseRenderInput`'s `courseObjectOffset`), so `setHidden` can address
-document and course objects in one set. Glyph parts (701, 706) join the
+Its range-table object ids start at `COURSE_OBJECT_BASE` (2³⁰; "Object
+identity and the patch"), so `setHidden` can address document and course
+objects in one set and a patch's added objects never shift them. Glyph parts (701, 706) join the
 **same mesh atlas**, keyed by their geometry (the course stream's glyph
 ids are local to each run); growth is append-only, so the reply carries
 the whole atlas only when a mesh was added and every resident instance
@@ -1116,9 +1121,13 @@ selects (04 §7: "nothing is re-tessellated when the region moves").
 **Worker.** A `course` request's `regions` (paper mm, document colours)
 go through `courseLayer()` like the rest of the input; the worker then
 runs `render.filterStream(stream, layer.regions, { fast: fastFilter,
-objectBounds })` on the **document stream it loaded** — the course part
-is never filtered — with the objects' symbolised bounds computed once on
-the first filter request and kept. The reply's `filter` (`FilterReply`)
+objectBounds })` on the **effective document** — the document stream it
+loaded, whose results for the objects a patch changed are dropped, and
+the patch's own stream ("Object identity and the patch"), the two
+replies concatenated (the patch's masks after the document's) — so a
+moved object is filtered where it is now and an added one is filtered
+too. The course part is never filtered. The objects' symbolised bounds
+are computed once per stream on the first filter request and kept. The reply's `filter` (`FilterReply`)
 carries the hidden object ids, the masked range-table entries as
 `(object, colour, mask)` triples (a mask is a function of the pair,
 §4.11), and each mask's region triangles: every region flattened at the
@@ -1155,6 +1164,101 @@ in the parity bit and moves it into `REGION_BIT` under the region's
 cover (union over regions), adds `REGION_BIT` to every stencil test of
 the item (fill and hatch covers, instanced covers, strokes, pattern
 clips), and clears the bit after the item.
+
+#### Object identity and the patch (G4)
+
+**Object identity.** For a document source the range tables' `object`
+is the document's own **effective `objectIndex`** (`map-patches.md`
+§2.2). The bridge keeps only drawn objects (objects of hidden symbols,
+dropped and textless ones are left out), so the worker rewrites the
+symbolised stream's `objectIdx` — an index into the bridge's object
+list — through `documentRenderInput`'s `docIdx`. `setHidden`, a filter
+reply's `hidden` and `entries`, and a patch's hidden ids all speak these
+ids; objects a patch adds are `N …` (from the pinned count up). The
+course part's ids start at `COURSE_OBJECT_BASE` = 2³⁰ and the page
+part's after the course's, so a patch that adds objects never shifts
+them. The dev `objects` and `stream` sources keep the stream's ids.
+
+**The patch.** The viewer draws the event's patch over the pinned
+document (`map-patches.md` §2) — hide, modify, resymbol, add — without
+reloading the document:
+
+- **In.** The `load` message's document source takes `patch`
+  (`MapPatch | null`), so the first frame is the effective document. A
+  change is a `patch { generation, patch, detail }` message, `detail`
+  being the cells whose detail part the engine holds. The caller pairs
+  the patch with the document by hash (`patchForDocument`, §5.4 "Host");
+  the worker applies it to the pinned document it decoded
+  (`applyPatch`), **always from the pinned state**: a patch is a set of
+  keyed states (`map-patches.md` §1.1), so what is drawn is a function of
+  its content, not of the changes before it. A null, disabled or empty
+  patch is the document itself (§2.1).
+- **Hide is ids only.** The reply's `patch.hidden` (effective indices)
+  joins `setHidden`'s and the filter's in the engine; nothing is
+  re-prepared (04 §7: hiding is skipping ranges). A hidden object that is
+  also modified stays hidden, and its modify re-prepares nothing.
+- **Modify, resymbol, add.** The *changed* set is the objects the applied
+  modify and resymbol ops target (unless hidden) and every added object.
+  The worker bridges and symbolises the changed set alone
+  (`documentRenderInput { only }`, the load's options and colour remap),
+  its ids rewritten through `docIdx`; its glyph meshes join the mesh atlas
+  by content (`c/<geometry>`, as the course's), its text resolves against
+  the loaded pages. Each changed object goes to the load's grid by the
+  centre of its symbolised bounds (`assignToGrid`); one larger than
+  `LARGE_CELLS`, or centred outside the grid (the grid is the load's and
+  its cell ids are fixed), goes to the large bucket. A bucket's part is
+  then its pinned passes **without the changed objects'**, merged by
+  colour with the patch's passes in it (`prepareBucketPartFrom`: two
+  sources, the pinned one first within a colour; ink of one colour is
+  opaque, so the pixels are those of one symbolisation of the effective
+  document). One id per object: a replaced object is drawn again under
+  its own index, never as a hidden one plus a copy.
+- **Touched buckets.** Per bucket the overlay keeps a signature: the
+  pinned objects the bucket loses and, for each object it gains, its
+  index, its ops' states and — for a patch symbol — the symbol. A change
+  re-prepares only the buckets whose signature differs from the previous
+  overlay's: a second change elsewhere leaves the first's cells alone,
+  and the toggle off touches the cells the patch had touched and gives
+  back parts deep-equal to the unpatched load's.
+- **Reply.** `patched { generation, patch, touched, base, detail,
+  large?, detailCells, bytes, atlas?, ms }`: every touched cell's fresh base
+  part (a touched cell absent from `base` has none now), the fresh
+  detail parts of the touched cells the request said the engine holds,
+  the large part when touched (`null`: empty now), every cell's detail
+  membership now, the base and large bytes, and the whole atlas when it
+  grew (append-only, so resident instances keep their `base`). `patch` is
+  `PatchState { hidden, changed, added, issues, cutFeatures? }`;
+  `applyPatch`'s issues are reported, never thrown. A request that
+  throws answers `error { patch: generation }` and leaves the worker as
+  the engine still has it: the overlay, the cut features and the byte
+  counts are put back, so the next change is diffed against the last
+  reply, and an atlas the failed request grew goes with the next reply
+  (growth is measured against the meshes last sent). A worker error
+  without a generation (`onerror`) ends the engine's patch request in
+  flight too, rejecting its callers, and the waiting input is sent. The `prepare` queue goes
+  on with the new content: every part is prepared from the current
+  overlay.
+- **Engine.** `setPatch(patch | null)`: before the load the patch goes
+  with the load message; after it, one request is in flight and the
+  latest input waits, as with `setCourse`. It resolves with the
+  `PatchState` once a reply covering its input is applied. A reply
+  releases each touched cell's resident parts and uploads the fresh ones
+  in the same step, so a cell's line art never blinks; replaces `L` when
+  touched; takes `detailCells`, the bytes and the hidden ids; rebuilds
+  the visible set at once; and re-sends the view's want list — a touched
+  cell whose detail was in transit when the request went (prepared before
+  the change) is dropped and asked for again. It re-posts the course
+  input, since the cuts and the filter read the effective document. No
+  `load`, no new context, no document request.
+- **Readers.** With a course layer the cut features are recomputed from
+  the effective document (`cutFeaturesOfDocument` skips hidden objects
+  and reads modified ones where they are); filter regions act on the
+  effective document ("Filter regions").
+- **Cost.** A change costs one `applyPatch` (linear in the document,
+  `map-patches.md` §2.4), a bridge and symbolisation of the changed
+  objects only, and the preparation of the touched buckets. A changed
+  object that lands in the large bucket re-prepares the whole large
+  bucket; that cost is not measured on Club-full (§8).
 
 #### Text atlas (B3)
 
@@ -1536,6 +1640,9 @@ published on `window.__mapGlDoc` for Playwright.
 | `map-gl/__tests__/engine.test.ts` (loupe) | `renderInset`: one more `renderDocument` with the loupe view into the inset target, the page clip forwarded, `compositeInset` at the box; no rebuild, no worker message; nothing before the load; `releaseInset` forwarded |
 | `map-gl/__tests__/engine.test.ts` (filter regions) | a clip region masks the black line's draw, a hide region removes it, the reply's hidden ids join `setHidden`'s, `null` clears mask and hidden set |
 | `map-gl/__tests__/prepare.test.ts` (filter regions) | every item of a masked pass carries one fan per region, shared by the passes of one mask |
+| `map-gl/__tests__/worker-patch.test.ts` (G4) | object identity: range-table ids are the `objectIndex`, though the bridge drops an object of a hidden symbol; a load without a patch, with `null`, a disabled or an empty patch → the identity state and the same parts; hide → ids only, nothing touched; modify within a cell → that cell only, the object under its own id at its new place, the queue preparing the new content; a move across cells → both touched, the old cell out of the detail set; add → id N in its cell; add outside the grid → the large bucket, `null` once removed; resymbol to a patch symbol with a new glyph → the atlas grown, earlier meshes in place, the instance on the new mesh; hide + modify → hidden wins, nothing touched; a second change elsewhere → its cell only, the toggle off → parts deep-equal to the unpatched load's; detail only for the held cells; issues reported; transferables; a patch with the load drawn from the first frame; a request before the load → `error { patch }`; a request whose symbolisation throws → `error`, the next change diffed against the last reply; `worker-patch-failure.test.ts`: a request that throws while preparing puts the overlay, bytes and cut features back, the atlas it grew goes with the next reply; with a course layer: cut features skip a hidden boulder, course ids from `COURSE_OBJECT_BASE`, a hide region acts where a moved object is now and on an added one, clip regions over pinned and patch objects → the document's masks first, the patch's after, each with its own triangles |
+| `map-gl/__tests__/buckets.test.ts` (G4) | `prepareBucketPartFrom`: two streams merged by colour into one colour-major range table, the first source first within a colour, each source's own glyph meshes; left-out passes absent; one source = `prepareBucketPart`; `sourcesHaveLayer`; `assignToGrid`: the load's grid by centre, outside it or large → the large bucket |
+| `map-gl/__tests__/engine.test.ts` (G4) | `setPatch` before the load goes with it and the first frame hides the object; a change posts `patch`, never `load`, hide skips the object's ranges and the toggle off restores the same visible set; a touched cell's resident detail swapped in the same reply, a cell that left the detail set released and not asked for; a touched cell's detail in transit when the request went dropped and asked again (old part, then the new one); one request in flight, the latest next, a failed one rejecting only its callers; a worker `error` without a generation ends the request in flight and the waiting input is sent; a reply's atlas reaches the renderer, `L` replaced and cleared with its bytes; a reply re-posts the course |
 | `e2e/map-gl-golden.spec.ts` (filter regions) | the four `filter-*` scenes on the per-pass path at the contract budget, and through the arena path at `ARENA_FILTER_MAX_RATIO` with pixel probes on both sides of each region (§6.2) |
 
 ### 5.4 Viewer
@@ -1655,7 +1762,10 @@ session) and the text atlas pages the document's strings need (§5.2
 `engine.load` with the document bytes (a copy: the
 original stays with the cache), `{ unmatched: "proxy", proxyColours }`
 (the stack's darkest colour for lines, points and text, its lightest
-non-white for areas) and the current view as `firstView`. Every view
+non-white for areas), the event's patch (`patch` prop, §5.2 "Object
+identity and the patch") and the current view as `firstView`. A change of
+`patch` goes to `engine.setPatch` without remounting the canvas or
+reloading the document. Every view
 change and every `engine.onChange` asks for one redraw on the next
 animation frame (`setView` then `render`; a canvas resize happens in the
 same frame). With the `loupe` prop (`VectorLoupe`: the point in paper µm,
@@ -1667,7 +1777,8 @@ each `header.colours[i].cmyk`. Unmount disposes the engine (terminating
 the worker) and the renderer.
 
 The canvas carries `data-testid="map-vector-layer"`,
-`data-document-hash`, `data-status` (`loading` → `drawn` → `complete`;
+`data-document-hash`, `data-patch-version` (the patch version last drawn,
+`"0"` for none; absent until the load), `data-status` (`loading` → `drawn` → `complete`;
 `error`, `webgl`) and `data-ready="true"` once the first view's detail is
 resident (`engine.whenComplete()`). A failed load shows a message with
 *Try again*; a browser without WebGL2 (the renderer fails to construct)
@@ -1693,6 +1804,21 @@ decision 2026-10-22) set → `mapBudget="club"`, 150 MB
   `docs/map-storage.md` §7.1) and shows *Loading map…* until the header
   is there, or the error with *Try again* (offline and not cached,
   no access, not found, unreadable);
+- fetches the event's patch beside it (G4; `useMapPatch(nameId,
+  patchVersion)`, `lib/map-document-cache.ts`): `GET
+  /api/maps/:nameId/patch` (`map-patches.md` §3.3) with the kiosk key as
+  a header, revalidated with `If-None-Match`, kept per event for the
+  session; asked again when `mapMetadata.patchVersion` (`MapPanel`'s
+  `patchVersion` prop) differs from the session's copy and when the page
+  regains focus, becomes visible or comes back online — there is no live
+  channel. The layer gets the patch paired with its document
+  (`patchForDocument`: none when `documentHash` is another document's)
+  and does not wait for it: until it answers, the document is drawn as
+  pinned. A failed fetch keeps the session's copy, else none; an
+  unparseable patch is none, with a warning. `setMapPatch` replaces the
+  copy for every viewer of the event (G6's optimistic write). Viewer,
+  kiosk and editor all mount `MapViewer` through `MapPanel`, so all three
+  draw the effective document;
 - needs no map bounds or calibration (a map without a CRS draws without
   geo inputs); the editor's loupe is drawn by the layer (§5.5
   "Loupe");
@@ -1810,9 +1936,9 @@ mounts it only with a pinned document.
 | `lib/__tests__/map-viewport.test.ts` | centre, y flip, mm round trip, WGS 84 through `mapGeo` (1e-6 mm), no CRS, wheel and pinch anchors, clamp, pan, GPS centre, fit, scale, Mercator-equivalent zoom; rotation by the meridian tilt; a +3° tilted meridian vertical on the overlay and through `viewMatrix`; overlay = GL canvas < 0.5 px on 200 random views (rotation, DPR) |
 | `lib/__tests__/legacy-caches.test.ts` | the retired `map-tiles` Cache Storage is deleted on start; no Cache Storage, a refused delete |
 | `lib/__tests__/map-import-view.test.ts` | `mapImportView`: pending while loading / queued / running, review for a done job with a document, failed, unknown without a job or a document |
-| `lib/__tests__/map-document-cache.test.ts` | route regex (documents, not previews); URL without query, `x-event-id` / `x-kiosk-key` headers; one request shared, same bytes; bounded memory; 401/403/404/5xx → kinds, failures not cached; offline; unreadable bytes; `storage.persist()` once, absent API |
-| `lib/__tests__/vector-map.test.ts` | paper frame with correction, bounds in mm, stack colours, proxy colours, budgets |
-| `e2e/map-vector-layer.spec.ts` | the pinned document by hash (no query, `x-event-id`), canvas ready and drawn, container-sized, `data-*` attributes; wheel zoom keeps the paper point under the cursor (< 0.5 px); a GPS fix → follow centres it and the marker is at the viewer's centre; **lower purple under black**: a leg made across a black path on white paper (two controls through the API) is black at the crossing and lower purple 2 mm to either side, zoomed to ≥ 0.02 px/µm, with no SVG control label (fails with the course drawn on the top row); **without WebGL2** `data-status="webgl"`, the message; **a lost context** remounts once (`data-attempt` 1, ready again), a second shows the message; **no pin** (`map_files.document_hash` cleared): `map-import-state` `review` with the review link, no viewer; **an unaligned stack** (a palette-stripped copy of the document pinned by `e2e/helpers/stackless-document-cli.ts`): the layer draws, `data-course-layer="none"`, `map-course-layer-unsupported` shown, no `course-layer` mirror and no SVG `control-label`; in the editor a click on a control selects nothing (no hit index) |
+| `lib/__tests__/map-document-cache.test.ts` | route regex (documents, not previews); URL without query, `x-event-id` / `x-kiosk-key` headers; one request shared, same bytes; bounded memory; 401/403/404/5xx → kinds, failures not cached; offline; unreadable bytes; `storage.persist()` once, absent API; the patch (G4): the event's route with the kiosk key, kept for the session, `If-None-Match` revalidation (304 keeps the copy, a 200 replaces it and tells subscribers), no row = `NO_PATCH`, a failure keeps the copy else none and never rejects, one request per event, a wanted version joining a stale in-flight request asks once more (`refreshMapPatch`), an unparseable patch is none |
+| `lib/__tests__/vector-map.test.ts` | paper frame with correction, bounds in mm, stack colours, proxy colours, budgets; `patchForDocument` pairs by hash |
+| `e2e/map-vector-layer.spec.ts` | the pinned document by hash (no query, `x-event-id`), canvas ready and drawn, container-sized, `data-*` attributes; **the event's patch** (G4): on a black line on white paper, `mapPatch.applyChange` hides the objects there (`e2e/helpers/map-objects-at-cli.ts`) and adds a 2 mm line of the same symbol 2.5 mm off — after a `focus` the canvas's `data-patch-version` is the new version, the line's pixels are white and the added one is ink, with no new document request and the same `data-attempt`; `setEnabled(false)` restores both; wheel zoom keeps the paper point under the cursor (< 0.5 px); a GPS fix → follow centres it and the marker is at the viewer's centre; **lower purple under black**: a leg made across a black path on white paper (two controls through the API) is black at the crossing and lower purple 2 mm to either side, zoomed to ≥ 0.02 px/µm, with no SVG control label (fails with the course drawn on the top row); **without WebGL2** `data-status="webgl"`, the message; **a lost context** remounts once (`data-attempt` 1, ready again), a second shows the message; **no pin** (`map_files.document_hash` cleared): `map-import-state` `review` with the review link, no viewer; **an unaligned stack** (a palette-stripped copy of the document pinned by `e2e/helpers/stackless-document-cli.ts`): the layer draws, `data-course-layer="none"`, `map-course-layer-unsupported` shown, no `course-layer` mirror and no SVG `control-label`; in the editor a click on a control selects nothing (no hit index) |
 | `lib/__tests__/course-layer-request.test.ts` | sites from visible positioned controls with kinds; highlighted courses as items (by flag or name, one or several, none → `null`); all-controls when a drawn site is on no course; sequence numbers only for one ordered course with the sheet or editor; single-course label offsets, pending ones winning; positions as given; faded controls left out; an imported course's preclipped legs → pieces, its cuts → circle gaps, extras; generated legs: bent path kept, automatic gaps and cuts not read, a leg count that does not match ignored |
 | `e2e/map-control-circles.spec.ts`, `e2e/map-multicourse.spec.ts` | code labels of the selected course (the GL layer's `course-label` mirror), sequence numbers for one course with descriptions, codes for several; pills and the sheet SVG text; `data-course-layer="gl"` |
 | `e2e/map-viewer-gestures.spec.ts`, `mobile-layout.spec.ts`, `course-editor*.spec.ts`, `wide-screen-map-pane.spec.ts`, `webserial.spec.ts`, `kiosk*.spec.ts` | the paper view's gestures, measure, event switching (vector layer ready) and the readout map, once in `chromium` (E3: no per-pipeline projects) |
@@ -1864,6 +1990,14 @@ Snapping (D5, `course-editor.md` §6.2) does not hit-test the document's
 stream: point centres and vertices are geometry, read once per document
 into a main-thread grid (`lib/editor/snap.ts`); a worker request over the
 document stream is Map mode's (slice G).
+Both main-thread indices are of the **effective document** (G4,
+`map-patches.md` §2.4): `snapIndexForDocument(hash, bytes, patch)` and
+`pickIndexForDocument(…)` apply the event's patch (`useMapPatch`), kept
+per hash and patch version. Hidden objects neither snap nor are picked
+or counted; modified and added objects are where the patch puts them. An
+object drawn with a patch symbol is not picked by symbol — a filter
+region stores document symbol indices (§4.11) and a patch symbol's index
+moves with the patch — so a click on it picks what is under it (§8).
 
 **Tools.** `MapViewerEditorProps.tool` (D5, `course-editor.md` §6): the
 viewer offers pointer-down to the active tool first, routes clicks of an
@@ -1912,6 +2046,7 @@ popover beside it; same entries and ids.
 | `packages/shared/src/render/__tests__/hit-test.test.ts` | the table above: order, reach, even-odd, interior on request, glyph discs, text boxes, object filter, distance |
 | `map-gl/__tests__/worker-course.test.ts`, `engine.test.ts` | the reply's hit index and its way to the host |
 | `lib/editor/__tests__/hit.test.ts` | editor targets over the real worker's index |
+| `lib/editor/__tests__/snap.test.ts`, `symbol-pick.test.ts` (G4) | over the effective document: a hidden object neither snaps nor is picked or counted; a modified or added one snaps and is picked where the patch puts it; an added object of a patch symbol is neither picked nor counted |
 | `e2e/course-editor.spec.ts` | selecting, dragging and leg clicks on the canvas with no SVG targets |
 | `lib/editor/__tests__/touch.test.ts` (loupe) | `loupePlacement`: above the handle, flipped below the finger at the top, kept inside sideways; with no lift (F24) above the cursor, flipped and clamped the same way |
 | `e2e/course-editor-legs.spec.ts` "F24: the loupe on mouse drags" | the loupe during a mouse drag of a control (the magnified map: purple, differing from the 1× circle) and a bend (F30: none on a number): `data-pointer="mouse"`, its bottom 16 px above the cursor, no stem; gone on release, on the mouseleave cancel and on Escape (which cancels the drag, nothing written); none for a click; "…object's vertex drag": the loupe during an object's vertex drag |
@@ -2652,11 +2787,23 @@ The shared module is exported as a namespace: `import { render } from
 - **§5.2 bucket preparation on dense cells.** p95 over the 04 §9 budget
   on club-density cells (measurements); the shared flattening and earcut
   dominate what is left.
-- **§5.2 object identity across the bridge.** The range table keys on
-  the stream's `objectIdx` — an index into the bridge's filtered object
-  list; hiding a *document* object needs the bridge to expose that
-  mapping. The viewer (B4) hides nothing; the first consumer is the
-  editor's hide / replace (slice D).
+- **§5.2 the patch's large-bucket cost** (G4). A changed object that
+  lands in the large bucket — larger than two cells, or centred outside
+  the load's grid — re-prepares the whole large bucket. Its time on
+  Club-full is not measured; if it is over the 04 §9 budget, such objects
+  get a bucket of their own.
+- **§5.5 the snap and pick indices per patch version** (G4). A new patch
+  version decodes the document again and rebuilds the index on the main
+  thread (once per hash before G4); nothing writes a patch before G6,
+  whose per-gesture versions will want the decoded document kept per
+  hash. The worker's `sourceIndex` map is built on the first patch.
+- **§5.5 patch symbols in the eyedropper** (G4; decided overnight on the
+  user's standing instruction, 2026-11-13, for review). An object drawn with a
+  patch symbol is not picked by symbol: a filter region stores document
+  symbol indices and a patch symbol's index `S + k` moves when another
+  patch symbol is added. Needs a stable symbol key in the region props
+  (a `course_objects` change); regions by `all` or by colour act on such
+  objects already. No patch symbol exists before G8 / G9.
 - **§5.5 highlight through the dynamic bucket.** Hit-testing landed in
   D4 (§5.5); the selection is still marked by the SVG ring. 04 §7's
   highlight — the selected object's passes redrawn in a highlight colour

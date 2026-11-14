@@ -38,8 +38,8 @@ Migrations `20261016190000_map_documents_storage`,
 on `map_files` and `club_map_versions` for the GC and the source route),
 `20261019150000_club_symbol_decisions` and, dropping the legacy
 pipeline's storage, `20261107120000_vector_map_pipeline_drops` (E5,
-v0.6.1; `docs/migrations/2026-vector-map-pipeline.md`). All in schema
-`oxygen`.
+v0.6.1; `docs/migrations/2026-vector-map-pipeline.md`), and
+`20261113120000_map_patches` (row G3). All in schema `oxygen`.
 
 | Table | Key | Columns | Notes |
 |---|---|---|---|
@@ -52,6 +52,7 @@ v0.6.1; `docs/migrations/2026-vector-map-pipeline.md`). All in schema
 | `map_uploads` | `id UUID` | `event_id → events CASCADE` (nullable), `file_name`, `kind`, `declared_bytes`, `chunk_bytes`, `uploaded_by SET NULL`, `created_at`, `finalised_hash → map_sources SET NULL` | one chunked upload in flight (§5); `kind` is set from the first chunk |
 | `map_upload_chunks` | `(upload_id, n)` | `bytes BYTEA` | `upload_id → map_uploads CASCADE`; `STORAGE EXTERNAL`; deleted at finalise |
 | `club_symbol_decisions` | `(fingerprint, library_version)` | `canonical_id` (NULL = keep as source), `decided_by → users SET NULL`, `decided_at` | a reviewed symbol outcome reused across documents (`docs/map-symbols.md` §8.5); written only by `mapImport.decide` (§6.8), read when a job is inserted (§6.1); no event or series column — the instance is one club's |
+| `map_patches` | `id UUID` | `event_id → events CASCADE` (`UNIQUE`), `document_hash → map_documents RESTRICT`, `enabled`, `ops JSONB`, `symbols JSONB`, `version BIGINT`, timestamps | an event's corrections to its pinned document (`docs/map-patches.md` §3.1); a GC reference (§8.1) |
 | `map_import_jobs` | `id UUID` | `event_id CASCADE` / `club_map_id CASCADE` (the target, either nullable), `source_hash → map_sources CASCADE`, `decisions JSONB` (the decision snapshot, §6.1), `state`, `stage`, `progress REAL`, `claimed_by`, `heartbeat_at`, `document_hash → map_documents SET NULL`, `error`, `started_by → users SET NULL`, timestamps | one import run (§6); indexed on `(state, heartbeat_at)` for the claim query and on each target; `started_by` is the user whose request started it (null for the re-match and the retired backfill), read by §4.2 |
 
 The legacy library table `club_map_files` (linked to its series by
@@ -64,7 +65,7 @@ the bytes (compact binary that gains little) so `substring(bytes FROM … FOR �
 reads only the chunks a range request needs instead of inflating the row.
 
 Prisma models: `MapSource`, `MapDocument`, `MapPreview`, `ClubMap`,
-`ClubMapVersion`, `MapUpload`, `MapUploadChunk`, `MapImportJob`, `ClubSymbolDecision`;
+`ClubMapVersion`, `MapUpload`, `MapUploadChunk`, `MapImportJob`, `ClubSymbolDecision`, `MapPatch`;
 `MapFile.sourceHash / documentHash / clubMapVersionId`; `ClubMapFile.clubMapId`.
 
 ## 3. Store stage (import stage 9)
@@ -422,7 +423,7 @@ no cuts, no obstacles, no north. It never falls back to an OCAD parse.
 | Reader | Answer from the document | No pin |
 |---|---|---|
 | `loadEventCrs` (`event-crs.ts`): course lengths (`rebuildCourseLengths`), IOF / Purple Pen export, `controlCoordinates`, `control.create` / `update` lat/lng, `course.checks` scale, course import, the pin's lat/lng sync | `mapGeo.PaperFrame` from `map_documents.header` (`unitsPerMm`, `mapScale`, `georeferencing`) with `correctionDeg = map_files.rotation_correction`. A frame whose CRS proj4 cannot project still carries `mapScale` (lengths); its WGS 84 conversions answer null | null |
-| `loadEventMapObjects` (`event-map-objects.ts`): description autodetect, `control.suggestDescription`, `DESCRIPTION_STALE` | point / line / area objects of non-hidden symbols whose code — the applied match's canonical code, else the source code — is in `ISOM_DESCRIPTION_MAP`, as `SlimMapObject` (1/100 mm whatever `unitsPerMm`, `sym` = `204.1` → 204001, Béziers flattened in 8 steps, an area's outer ring) | null |
+| `loadEventMapObjects` (`event-map-objects.ts`): description autodetect, `control.suggestDescription`, `DESCRIPTION_STALE` | over the effective document (below): point / line / area objects, not hidden by the patch, of non-hidden symbols whose code — the applied match's canonical code, else the source code — is in `ISOM_DESCRIPTION_MAP`, as `SlimMapObject` (1/100 mm whatever `unitsPerMm`, `sym` = `204.1` → 204001, Béziers flattened in 8 steps, an area's outer ring) | null |
 | `loadEventCutFeatures` | `course.cutFeaturesOfDocument` (`course-layer.md` §3.4) | null: no automatic cuts |
 | `loadEventCheckDocument` | `course.checkObstaclesOfDocument` (`course-layer.md` §9.3) | null |
 | north: `course.mapMetadata` (`meridianStalenessDeg`, `cutRotationDeg`), `clubMap.list` (`northDetection`, `meridianStalenessDeg`) | `map_documents.report.north` (`detectDocumentNorth`, written at import); staleness re-evaluated for today by `meridianStalenessFromDetection` | null |
@@ -431,11 +432,23 @@ no cuts, no obstacles, no north. It never falls back to an OCAD parse.
 | `resolveImportAlignment` (`course-import-align.ts`) | the club map a Purple Pen file names is the series whose latest version's label, else its source file name, matches (`matchClubVersion`); re-projection through that version's document frame with `club_maps.rotation_correction` | `unknown` / judged on the event calibration, as before |
 | `course.setMapRotation`, `clubMap.setRotation` | `course.setMapRotation`: the `map_files` quick-access columns recomputed by `documentMapFileColumns` under the new correction — the pin's function (§6.4): `mapFileMetadataFor`, the source fallback for `crs: null`, tilt 0 without a report `north`, scale only when nothing projects. `clubMap.setRotation` stores `club_maps.rotation_correction` only (the list derives the rest, row above) | only the correction is stored; the pin recomputes the columns |
 
+The three `loadEvent…` derivations read the **effective document** (G14,
+`map-patches.md` §2.4): the decoded pin (`decodedDocument`, an LRU per
+hash) with the event's patch applied (`eventPatchOnPin`, §3.3 there),
+memoised per **hash + patch version** — a hit costs the pin and the
+`map_patches.version` column; a miss reads the patch, applies it and
+derives. A disabled, op-less or dormant patch gives the pinned
+document's answer, and so does a row keyed
+to the pin that does not parse — memoised under the version looked up,
+so it is derived once, not on every call.
+
 **`course.mapMetadata`.** Answers non-null for every `map_files` row:
 the row's quick-access columns as stored (the pin writes them, §6.4 —
 no lazy OCAD backfill), `rotationCorrection`, `uploadedAt`,
 `documentHash` (null until the pin: the viewer's "no document" case),
-`clubMapVersionId` and the north fields above. The legacy raster's
+`clubMapVersionId`, `patchVersion` (the token of the patch delivered
+with that document, `"0"` when none is, `docs/map-patches.md` §3.3) and
+the north fields above. The legacy raster's
 fields — `renderKey` and the colour stack's `colorProfile`,
 `colorOverrides`, `northLinesBelow`, `resolvedProfile`, `resolvedBy` —
 went with the raster in E4a (their last reader, `MapViewer`'s
@@ -960,12 +973,39 @@ and the blobs they pin, so the box answers `/api/map-documents/:hash` for
 its kiosk and stations from its own tables, under the unchanged §4.2
 predicate evaluated against its own event copy.
 
-**Course objects.** `course_objects` (`docs/course-layer.md` §8) travel
-with the event's tables (`SNAPSHOT_TABLES`, rows verbatim: UUIDs, `seq`,
-scope UUIDs, token) although they are cloud-owned and not journaled — the
-kiosk map draws them (08 §4.8). They carry no bytes; a logo object's
-graphic is a `graphics` row, which does not travel (the venue draws no
-logos).
+**Layout rows** (row G18; slice G answer 4, which deviates from 08 §4.8
+and from 07 §9.2's "graphics and templates not in the snapshot"). The box
+prints from its copy (`docs/course-print.md` §8.7), so `map_templates`,
+`course_maps` and `course_objects` (`docs/course-layer.md` §8) travel with
+the event's tables (`SNAPSHOT_TABLES`, rows verbatim: UUIDs, `seq`, FKs,
+scope UUIDs, JSON, token) although they are cloud-owned and not journaled.
+Insert order: templates before classes (`classes.sheet_template_id`),
+sheets after courses, classes and templates. On import a class's
+`sheet_template_id` or a sheet's `template_id` naming a template the
+snapshot does not carry (an exporter that predates G18) becomes NULL —
+before G18 a class with a print override made the checkout fail on that FK.
+A sheet's JSON-null `window_center` is written as SQL NULL.
+
+**Tokens** (`docs/course-layout.md` §2, `course-layer.md` §8.5). The
+rows' `version` is an HLC above 2^53, and the snapshot crosses HTTP as
+JSON, where a BigInt becomes a rounded number (`bigint-json.ts`); a box
+editor would then send a rounded `baseVersion` to the cloud and get
+`CONFLICT`. The exact tokens travel beside the rows as decimal strings,
+`versions: { courseObject, courseMap, mapTemplate: { [id]: "…" } }`, and
+the importer writes them over the rounded ones. The rows keep their
+`version` field, so an importer that predates `versions` still accepts
+them (rounded, as before); a row the map lacks keeps what it carries.
+
+**Graphics.** The snapshot's optional `graphics` part carries every
+`graphics` row of the event and every club graphic (`event_id` NULL) that
+one of the event's layout rows references — an image object's `graphicId`
+in a template's or sheet's `objects`, or a course object's
+`props.graphicId`. A club graphic nothing references stays behind. Each
+entry is `{ id, club, name, mime, sizeBytes, sha256, createdAt,
+updatedAt }`, without bytes; `id` is the cloud's (decimal), since the JSON
+references graphics by number, and `sha256` is computed by the exporter
+(the table has no hash column). The bytes come through `lease.exportBlob`
+by id (below).
 
 **What travels.** The snapshot gains an optional `maps` part:
 
@@ -981,12 +1021,16 @@ already hold through a ranged peer procedure:
 
 ```
 lease.exportBlob { table: "map_sources" | "map_documents", hash, start, length ≤ 4 MiB }
+               | { table: "graphics", id, start, length ≤ 4 MiB }
   → { base64, sizeBytes }        peerProcedure (shared secret), event-scoped by x-event-id
 ```
 
 It answers `NOT_FOUND` unless the context event's `map_files` reference
 the hash: as `source_hash` or `document_hash`, or (sources) as the
-`source_hash` of a document they pin. The slices are §4.4's
+`source_hash` of a document they pin. A graphic it answers only when it
+is the context event's own, or a club graphic one of the event's layout
+rows references (the `graphics` part's rule); graphics are at most 2 MiB,
+so one slice. The slices are §4.4's
 (`SOURCE_SLICE_BYTES`, 4 MiB), read with `getBlob` ranges (§4.3); the
 venue assembles them and checks `size === size_bytes` and
 `sha256(bytes) === hash` before inserting. 07 §9.2 put the bytes base64
@@ -1023,24 +1067,60 @@ venue copy:
   box re-match like the cloud would. The box does not write decisions
   (`mapImport.decide` is cloud-owned and forwarded during a lease).
 
-A blob that is missing on the peer, or whose hash or size does not match,
-fails the checkout; the existing rollback releases the peer lease, and
-the event is not checked out. A re-checkout replaces the `map_files`
-rows with the event (cascade) and leaves the blobs alone.
+- graphics (`sync/snapshotGraphics.ts`) are fetched before the
+  transaction like the blobs: the event's always (the import's event
+  delete cascades them), a club graphic only when the box does not hold
+  that id with the same SHA-256. Each is checked for size and hash, then
+  inserted after the event row under the cloud's id, `event_id` the local
+  event's or NULL. A local row in a travelling id's place (one a box
+  uploaded outside a checkout) is replaced: the box's `graphics` mirror
+  the cloud by id. The id sequence is then set to the largest id, so a
+  graphic uploaded on the box later takes an id past the cloud's.
+
+A blob or graphic that is missing on the peer, or whose hash or size does
+not match, fails the checkout; the existing rollback releases the peer
+lease, and the event is not checked out. A re-checkout replaces the
+`map_files` rows, the layout rows and the event's graphics with the event
+(cascade) and leaves the blobs and held club graphics alone.
+
+**Writes during a lease.** Layout and print data stay cloud-owned:
+`courseMap.`, `mapTemplate.`, `layout.`, `graphics.` and `courseObject.`
+mutations on a box are forwarded to the cloud, and offline answer the
+typed 412 (`docs/offline-architecture.md` "Non-critical data"), so
+nothing edited on a box is lost at checkin. Their reads (`courseMap.list`,
+`resolveSheet`, `courseObject.list`, the print routes) answer from the
+box's copy, which is the checkout's until a box follows the cloud's map
+rows (row G19).
 
 **Not carried.** `map_files` rows without a `source_hash` (only a
 soft-deleted event's since E5, and a soft-deleted event is not checked
 out; the result still counts them as `skipped` for older nodes);
 `map_previews` (a cache; §4.5 renders on a miss);
-`club_maps` / `club_map_versions`; `map_import_jobs`, uploads; graphics,
-templates and print (cloud-owned during a lease, 07 §9.2).
+`club_maps` / `club_map_versions`; `map_import_jobs`, uploads; the club
+template library (`club_map_templates`; `mapTemplate.listClub` is empty on
+a box) and club graphics no layout row references.
 
-`lease.checkout` returns, next to `imported`,
-`maps: { files, sources, documents, fetchedBytes, skipped, decisions }`.
+**Map patch** (`docs/map-patches.md` §3.4). The event's `map_patches`
+row travels as `maps.patch` — all columns, the token as a decimal string
+(an HLC exceeds 2^53 and the snapshot is JSON) — when its document is
+among `documents`; a dormant patch (keyed to another document than the
+pin) stays behind. The box inserts it verbatim after the `map_files`
+rows (its document is there by then; `RESTRICT`), and its route
+`GET /api/maps/:nameId/patch` and `mapPatch.get` answer from that copy.
+`mapPatch.` writes on a box are forwarded to the cloud; the copy is the
+checkout's until a box follows the cloud's map rows (row G19).
 
-Both directions interoperate with a node that predates the part: an old
-exporter sends no `maps` (the box gets no map, as before); an old
-importer ignores it.
+`lease.checkout` returns, next to `imported` (which now counts
+`mapTemplate` and `courseMap` too),
+`maps: { files, sources, documents, fetchedBytes, skipped, decisions, patches }`
+and `graphics: { rows, fetchedBytes }`.
+
+Both directions interoperate with a node that predates a part: an old
+exporter sends no `maps` (the box gets no map, as before), and none of
+`tables.mapTemplate`, `tables.courseMap`, `versions` or `graphics` (the
+box gets no sheets, templates or graphics, and its classes no print
+template); an old importer ignores all of them. An old importer still
+fails on a class with a print template, as it did before G18.
 
 **Coexistence (09 §10).** The document travels from slice A on whatever
 the event's map pipeline: it was pinned on upload for `legacy` events too
@@ -1070,7 +1150,12 @@ are omitted (cache). The `map_files` section holds no bytes since E5 —
 only the pins; the blob sections carry the file.
 
 The event's `course_objects` rows (`docs/course-layer.md` §8.5) are a
-plain event-scoped section after `class_course_pools`.
+plain event-scoped section after `class_course_pools`. Its
+`map_patches` row (`docs/map-patches.md` §3.5) is one directly after
+`map_files`, restored with `event_id` rewritten like the other plain
+sections; the `map_documents` and `map_sources` sections also carry the
+patch's document and that document's source, so a dormant patch (keyed
+to a document the event no longer pins) restores too.
 
 **Restore is idempotent on hash.** `packages/api/scripts/restore-map-blobs.sql`
 loads both sections through temp tables with
@@ -1119,10 +1204,10 @@ deletes only what no row points at. `packages/api/src/map-store/gc.ts`.
 
 | Table | Collectable when | References checked (`NOT EXISTS`) | Age rule |
 |---|---|---|---|
-| `map_documents` | no reference and old enough | `map_files.document_hash`, `club_map_versions.document_hash`, `map_import_jobs.document_hash` | `last_referenced_at < now − grace` |
+| `map_documents` | no reference and old enough | `map_files.document_hash`, `club_map_versions.document_hash`, `map_import_jobs.document_hash`, `map_patches.document_hash` | `last_referenced_at < now − grace` |
 | `map_sources` | no reference and old enough | `map_documents.source_hash`, `club_map_versions.source_hash`, `map_files.source_hash`, `map_import_jobs.source_hash` | `created_at < now − grace` |
 
-- `map_files` and `club_map_versions` reference with `RESTRICT`, so a
+- `map_files`, `club_map_versions` and `map_patches` reference with `RESTRICT`, so a
   `DELETE` of a blob they still point at fails — the belt. The job
   references are not `RESTRICT` (`document_hash` is `SET NULL`,
   `source_hash` `CASCADE`), so for them the `NOT EXISTS` is the only
@@ -1150,8 +1235,8 @@ runStorageGc(db, { now?, graceDays?, dryRun?, shouldStop? })
 ```
 
 1. **Touch** — `UPDATE map_documents SET last_referenced_at = now()` for
-   every document a `map_files`, `club_map_versions` or
-   `map_import_jobs` row still references. `touchDocument` is only called
+   every document a `map_files`, `club_map_versions`, `map_import_jobs`
+   or `map_patches` row still references. `touchDocument` is only called
    when a reference is created, so without this a document referenced
    for two years and dereferenced yesterday (event purged, club map
    removed) would be collected on the next run. With it, the grace runs
@@ -1236,7 +1321,19 @@ an "offline ready" indicator with `navigator.storage.persisted()`; the
 service-worker routes are not exercised by E2E (the suite runs the Vite
 dev server, which registers no service worker) — they were checked in the
 built `sw.js`; refreshing a checked-out box's `map_files` row and document when
-the map is re-imported on the cloud during the lease (07 §9.2, §7.2);
+the map is re-imported on the cloud during the lease (07 §9.2, §7.2), and
+with them the layout rows and graphics: until G19 a write forwarded from a
+box (or a sheet `layout.autoSheets` creates on the cloud) does not show on
+the box, which keeps printing the checkout's copy (so an export's
+sheet-ensuring step does not yet reach the box's `maps.pdf`); an editor
+on the box then reads the box's stale row and token, so its next write of
+that row is a `CONFLICT` on the cloud that a refresh does not clear, and
+a graphic uploaded from a box has a cloud id with no row on the box
+(`IMAGE_MISSING` there) — until G19, layout is edited on the cloud
+during a lease and the box prints;
+`course.importCourses` run on a box still writes its `course_objects`
+locally, where checkin does not carry them (a course import at the venue
+is not a G18 case);
 the documents-only dump variant for non-admin event managers (07 §10,
 §15 — not restorable while a document needs its source row, §7.3); the
 web's map pickers offering Mapper files (`.omap` / `.xmap`) — the server
@@ -1253,15 +1350,15 @@ section here and its own tests.
 | Unit (api) | `packages/api/src/__tests__/map-document-route.test.ts` | `parseRangeHeader` (forms, clamping, suffix, multi → ignored, unsatisfiable), `negotiateEncoding` (q-values, wildcard, refusal), `authoriseDocumentAccess` matrix over stub queries (including the own-job clause), `documentHeaderSummary` |
 | Unit (api) | `packages/api/src/__tests__/map-source-route.test.ts` | `sliceRanges` (empty, exact multiple, remainder, bad size), `contentDisposition` (ASCII fallback, RFC 5987 escapes), `authoriseSourceAccess` matrix: auth off, event manager vs `courses.view`, club-library copy admin-only, kiosk key never, club uploader / admin / stranger / anonymous |
 | Unit (api) | `packages/api/src/__tests__/map-storage-gc.test.ts` | `gcCutoff`, `parseGraceDays` (default, override, rejects), `isGcDue` (never ran, 23 h / 24 h, in progress < 1 h, crashed > 1 h), `isForeignKeyViolation` (the Prisma 7 / adapter-pg `23001` shape, `23503`, unrelated errors) |
-| Integration (api) | `packages/api/src/__tests__/integration/map-storage-gc.test.ts` | old unreferenced document + previews + source deleted; young rows kept by `last_referenced_at` / `created_at`; grace honoured; pinned document kept and touched, then waits a fresh grace after dereference; club version and job references keep documents; a job-only reference keeps a source and its job; a finalised upload does not; idempotent second run; dry run lists (source as if document gone) and changes nothing; references and touches made after selection skip the row; stop between rows and finish on the next run; the real `RESTRICT` error is recognised; housekeeping pass; schedule writes `started_at` / `finished_at` / `last_result`, not due within a day, waits on a recent start, grace override; `mapStorage.gcRun` admin-only, dry run |
+| Integration (api) | `packages/api/src/__tests__/integration/map-storage-gc.test.ts` | old unreferenced document + previews + source deleted; young rows kept by `last_referenced_at` / `created_at`; grace honoured; pinned document kept and touched, then waits a fresh grace after dereference; club version, job and map-patch references keep documents (a patch-only reference touched, `RESTRICT` recognised, collected after the patch is gone and a fresh grace); a job-only reference keeps a source and its job; a finalised upload does not; idempotent second run; dry run lists (source as if document gone) and changes nothing; references and touches made after selection skip the row; stop between rows and finish on the next run; the real `RESTRICT` error is recognised; housekeeping pass; schedule writes `started_at` / `finished_at` / `last_result`, not due within a day, waits on a recent start, grace override; `mapStorage.gcRun` admin-only, dry run |
 | Integration (api) | `packages/api/src/__tests__/integration/map-sources.test.ts` | route 400 / 401 / 403 / 404 / 200; event manager streams the upload under the event's file name, chunked, no `Content-Length`, `no-store`; `?event=`; anonymous with kiosk key 401, course setter / stranger / manager of another event 403; club-library copy admin-only; club uploader / admin under the source's name; auth off; a 33 MiB source byte-exact; `streamBlob` slice sizes and a source that changed mid-stream |
 | Integration (api) | `packages/api/src/__tests__/integration/map-documents.test.ts` | store + dedup under another name, source/hash mismatch refused, `RESTRICT` on a pinned document, blob reads whole/range, `applyEventMap` pins + `mapMetadata`, route 400/401/403/404/200 with headers, `?event=` + kiosk key, brotli/gzip round trip, 304, 206/416/multi-range, club-version visibility, own import job (done → 200, other user 403, failed → 403), auth off |
 | Unit (api) | `packages/api/src/__tests__/map-import-jobs.test.ts` | `isClaimable` matrix, `stageProgress` monotonic, worker import produces the same hashes and `libraryVersion` as the inline importer with stages `parse → normalise → match → encode`, worker rejects garbage, upload validators (`validateUploadInit`, `expectedChunkSize`, `sniffMapKind`, `missingChunks`, `assembleChunks`) |
 | Integration (api) | `packages/api/src/__tests__/integration/map-import-jobs.test.ts` | `applyEventMap` job done + pins + report, dedup under another name, garbage / OMAP failures, `holdMs: 0` queued then finished by the engine, stale reclaim vs live job, `mapImport.status` auth (stranger 403, course setter ok) + `latestForEvent`, `started_by` recorded by `applyEventMap` / `applyUploadedMap` / `addFromSource` and null for a dedup without a user, dedup hit touches the document, housekeeping sweep (finalised uploads included), chunked club upload → series (`rotation_correction` 0) + version 1, `useClubMap` pin by UUID, rename / rotation on the series, unknown id `NOT_FOUND`, `addFromSource` dedup, `remove` deletes the series — pins `NULL`, document and source kept, second remove `NOT_FOUND`, a Mapper source as an event map (`applyUploadedMap`) and a club map (`addFromSource`) (E5), upload routes 401/403/404/400/413/201, out-of-order and repeated chunks, 415, 409 missing, finalise dedup + idempotency, 409 after finalise, `applyUploadedMap` under the upload's name, `applyJobResult` idempotent; pin writes the quick-access columns equal to `parseOcadMapMetadata`, recomputes them with a row's `rotation_correction` (11°) idempotently, report carries `georeference` / `north`, the Mapper job's stored report carries `warningDetails` (the `MISSING_SYMBOL` stub with its symbol index), a no-CRS document (`CRS_UNRESOLVED`) gets the columns through the source fallback, equal to the oracle (`helpers/ocad-oracle.ts` `parseOcadMapMetadata`, the upload's parse until E5) |
 | Integration (api) | `packages/api/src/__tests__/integration/vector-map-pipeline-drops.test.ts` | the E5 migration on a scratch database built to the migration before it: a live event's unsourced `map_files` row → the guard fails and nothing is dropped; an unlinked `club_map_files` row → fails; only a soft-deleted event's unsourced row → passes, every named table / column / type gone (`information_schema`), `length_source` and `north_detection` kept, the tombstone row kept without bytes |
-| Unit (api) | `packages/api/src/__tests__/map-symbol-decisions.test.ts` | `parseDecisionSnapshot` (malformed column → no decisions), `planDecisionWrites` (accept / unmatch under the current release, reset per library, last decision wins, unknown index / non-source / foreign-library / unknown entry rejected), decide input schema, the worker applying a decision snapshot with the same bytes as inline and a different hash than without |
+| Unit (api) | `packages/api/src/__tests__/map-symbol-decisions.test.ts` | `parseDecisionSnapshot` (malformed column → no decisions), `planDecisionWrites` (accept / unmatch under the current release, reset per library, last decision wins, unknown index / non-source / foreign-library / unknown entry rejected; an ISSkiOM overlay entry accepted under the document library's release, G21 — `map-symbols.md` §8.5), decide input schema, the worker applying a decision snapshot with the same bytes as inline and a different hash than without |
 | Unit (api) | `packages/api/src/__tests__/map-document-route.test.ts` (edit mode) | `EDIT_ACCESS`: `courses.view` not enough, `courses.edit` admits, kiosk key never, club and own-job clauses unchanged |
-| Integration (api) | `packages/api/src/__tests__/integration/map-review.test.ts` | `review` rows on the fixture (702 suggested 703 with candidates, swatch URLs, colour class, counts, stack, report), predicate (stranger 403, anonymous 401, kiosk key with and without a user, wrong key 401, 404, bad hash); `decide` writes the row, snapshots it on the job, makes a new unpinned document drawn canonically, own-job review, old document no longer `current`, determinism, validation 400, stranger / kiosk 403; the decision applied to a second file of the same symbols; dedup to the decided document; `finalise` on the event (pins, `mapMetadata`, idempotent, other source 412, no capability 403, no event 400) and on a club version (in place, seq / label kept, event pin unchanged, 412, unknown club map 404); club target anonymous 401; `reset` back to the matcher's document |
+| Integration (api) | `packages/api/src/__tests__/integration/map-review.test.ts` | `review` rows on the fixture (702 suggested 703 with candidates, swatch URLs, colour class, counts, stack, report), predicate (stranger 403, anonymous 401, kiosk key with and without a user, wrong key 401, 404, bad hash); `decide` writes the row, snapshots it on the job, makes a new unpinned document drawn canonically, own-job review, old document no longer `current`, determinism, validation 400, stranger / kiosk 403; the decision applied to a second file of the same symbols; dedup to the decided document; `finalise` on the event (pins, `mapMetadata`, idempotent, other source 412, no capability 403, no event 400) and on a club version (in place, seq / label kept, event pin unchanged, 412, unknown club map 404); club target anonymous 401; `reset` back to the matcher's document; `decide` with an ISSkiOM overlay entry (G21): the row under the document library's release, the job's document draws the explicit overlay match and is `current`, reset returns to the matcher's document |
 | Unit (api) | `packages/api/src/__tests__/map-crt.test.ts` | `crtFileName` (Mapper's `SOURCE-TARGET.crt`), the 1 MiB limit, `planCrtImport` on the `e2e/test.ocd` header (a decision, an unchanged variant line, a reported target; the full table round trip records nothing), decide's 5 000 cap |
 | Integration (api) | `packages/api/src/__tests__/integration/map-crt.test.ts` | `exportCrt` header only before any decision, the four auto matches on `includeMatches` (three until A12 added the framed 603 text to the fixture), a decision with its `# fp` from both documents of the source, predicate (stranger 403, anonymous 401, kiosk key reads, 404, bad hash); `importCrt` of the export after a `reset` writes the same row and yields the same document as `decide` (unpinned), `# keep` recorded and exported, dry run writes nothing, unappliable lines reported with no row and no job, the full-table round trip records nothing; stranger / anonymous / kiosk refused, 404, over 1 MiB 400 |
 | Unit (api) | `packages/api/src/__tests__/map-rematch-cli.test.ts` | `staleReason` matrix, CLI flags (parsing, either spelling, bad values), plan / item / summary lines |
@@ -1278,9 +1375,13 @@ section here and its own tests.
 | E2E | `e2e/club-map-library.spec.ts` | UI upload → card keyed by the series UUID with the document thumbnail → rename → **From club library** renders the event map → delete leaves the event's map; an unparseable upload is listed as "Import failed", without download, and disabled in the event picker; north-lines badge |
 | E2E | `e2e/map-documents.spec.ts` | UI upload on `itest` → `documentHash` → route 200/304/206, own import job admits the uploader through a non-pinning event, anonymous 401 → thumbnail and symbol swatch 200 / 401 anonymous, library swatch by the header's library and version → source route streams `test.ocd` back (200, `no-store`, attachment), anonymous 401 → dev page `?url=` loads it natively → `latestForEvent` done with report; chunked route (chunks out of order) → `applyUploadedMap` → `mapMetadata`; the same source → `clubMap.addFromSource` → `mapImport.status` done |
 | E2E | `e2e/map-review.spec.ts` | the review round from the UI (`docs/map-symbols.md` §8.7): club card "to review" count from `clubMap.list[].review` → route keyed by the document hash → usage order, source and library swatches load → keep 850.1 as drawn → `decide` job → new document not in use → `finalise` moves the card thumbnail and count → CRT download carries `# keep 850.1` → CRT upload dry-run preview, then recorded → reset both rows → the matcher's own document hash again, finalised back; event map from the course editor, document swatches with `?event=`, nothing to finalise. `reseed()` wipes `club_symbol_decisions` on both sides |
-| Unit (api) | `packages/api/src/__tests__/snapshot-maps.test.ts` | `pinnedHashes` (dedup, each document's own source), `partitionMapFiles` (sourceless rows skipped, local identity dropped), `withoutDroppedFields` (a v0.6.0 exporter's map file / event / course fields stripped), `exportBlobInput` bounds (table, hash, start, 4 MiB), `verifyBlob` size and hash, `fetchBlob` slice order, peer hash / size mismatch, short slice |
+| Unit (api) | `packages/api/src/__tests__/snapshot-maps.test.ts` | `pinnedHashes` (dedup, each document's own source), `partitionMapFiles` (sourceless rows skipped, local identity dropped), `withoutDroppedFields` (a v0.6.0 exporter's map file / event / course fields stripped), `exportBlobInput` bounds (table, hash, start, 4 MiB; a graphic by decimal id, not by hash, not a map table by id), `verifyBlob` size and hash, `fetchBlob` slice order, peer hash / size mismatch, short slice; `tokenMapOf` / `applyTokens` (exact decimal tokens through a JSON round trip that rounds the rows', a row the map lacks, no map; a malformed or out-of-int8 token refused with the typed error), `withDbNulls` |
+| Unit (api) | `packages/api/src/__tests__/snapshot-graphics.test.ts` | `referencedGraphicIds` (templates' and sheets' image objects, course objects' `props.graphicId`, sorted and distinct; malformed JSON ignored), `verifyGraphic` size and hash, `fetchGraphic` one slice, peer size mismatch, short slice |
 | Unit (api) | `packages/api/src/__tests__/backup.test.ts` | dump table order (blobs before `map_files`, decisions present, no previews / tiles / `rendered_maps`), one `\copy` per table, blob filters by the event's pins, decisions unfiltered, `splitBackupSections` |
-| Integration (api) | `packages/api/src/__tests__/integration/lease.test.ts` | checkout carries file + source + document (bytes, header, pin, view overrides, venue-local NULLs, a sourceless row skipped, counts); document route on the venue 401 anonymous / 200 with the kiosk key; tampered bytes fail the checkout, release the peer lease and store nothing; exporter without `maps`; `exportBlob` refuses other events' blobs and a start past the end; re-checkout fetches nothing and keeps the blob rows; `lease.exportBlob` through the router (no / wrong secret 401, 4 MiB bound); club decisions merged (newer cloud row wins over a stale venue copy, venue-only row kept, `decided_by` NULL) |
+| Integration (api) | `packages/api/src/__tests__/integration/lease.test.ts` | checkout carries file + source + document (bytes, header, pin, view overrides, venue-local NULLs, a sourceless row skipped, counts); document route on the venue 401 anonymous / 200 with the kiosk key; tampered bytes fail the checkout, release the peer lease and store nothing; exporter without `maps`; `exportBlob` refuses other events' blobs and a start past the end; re-checkout fetches nothing and keeps the blob rows; `lease.exportBlob` through the router (no / wrong secret 401, 4 MiB bound); club decisions merged (newer cloud row wins over a stale venue copy, venue-only row kept, `decided_by` NULL); G18: the lifecycle's checkout through a JSON round trip carries the template, the sheet (`window_center` NULL), the course object and the class's print template verbatim with tokens above 2^53 exact; the event's graphic and the club graphic a course object draws byte-exact under the cloud's ids, an unreferenced club graphic left behind, a later box upload takes a larger id; an exporter without templates, sheets, `versions` or `graphics` checks out with the class's print template NULL; tampered graphic bytes fail the checkout and release the peer lease; `exportBlob` for graphics refuses another event's graphic, an unreferenced club graphic and an unknown id, slices a club graphic, a start past the end 400; re-checkout fetches the event's graphic again and not the held club graphic; a local graphic in a travelling id's place is replaced; forwarding on a venue box against a stub cloud: `courseMap.` / `layout.` / `courseObject.` writes reach the cloud with body, `x-event-id` and the user header, a race-critical write runs locally, offline the typed 412 `CLOUD_UNREACHABLE`, a mixed batch 412 `MIXED_BATCH` with nothing run |
+| Integration (api) | `packages/api/src/__tests__/integration/venue-print.test.ts` | G18, `course-print.md` §8.7: one node prints as the cloud (with a patch, G14), imports its own snapshot through JSON as the box (club graphic deleted first, map blobs held) and prints again: `print-job` equal, every `print.png` equal, `maps.pdf` and the description sheets byte-equal (`deterministic`) |
+| Unit (api) | `packages/api/src/__tests__/venueForwarder.test.ts` | G18 prefixes: each of `courseMap.` / `mapTemplate.` / `layout.` / `graphics.` / `courseObject.` forwards its mutation and serves its query locally; `course.` and `class.` stay local; `isMixedCloudBatch`; the refusal body's `reason` |
+| Unit (web) | `packages/web/src/lib/__tests__/trpc-links.test.ts` | G18: `isCloudOwnedOp`; `cloudOwnedApart` sends cloud-owned mutations through their own link and queries / local mutations through the other; `ensureSheetsBestEffort` skips on `CLOUD_UNREACHABLE` only |
 | Integration (api) | `packages/api/src/__tests__/integration/backup.test.ts` | dump completes with exactly the event's source and document as `\x` hex before `map_files`, no previews; event and blobs deleted → `restore-map-blobs.sql` restores byte-exact into another event (`uploaded_by` of a missing user NULL, grace restarted), second run a no-op, tampered bytes refused with nothing written, blobs alone without an event id; every `map_files` column restored; decisions in the dump, restore brings back a lost row and keeps the newer of two; `restore-legacy-map-files.sql` (E5): refuses a v0.6.1 section and a row whose `file_data` does not match its `source_hash`, makes a pre-vector row's bytes a source and pins it (idempotent), `map:rematch` then imports it; a v0.6.0-shaped row keeps its document when held for that source, else none |
 | Unit (api) | `packages/api/src/__tests__/event-document.test.ts` | §4.6 over a stub db holding an in-memory import of `e2e/test.ocd`: no map / no pin → null with no blob read; frame from the header with the row's correction; control lat/lng equal the legacy CRS's within 1e-8°; header read once per hash; `CRS_UNRESOLVED` → the source's ScalePar (read once per source), scale-only frame when the source finds none, never read for a resolved header; objects / cuts / obstacles null without a pin or blob, decoded once per hash; `documentMapFileColumns` = the pin's columns, with the fallback, scale only; `reportNorth` |
 | Unit (api) | `packages/api/src/__tests__/event-map-objects.test.ts` | `ocadSymbolNumber`; `slimObjectsOfDocument`: kept / dropped symbols and object types, hidden, graphic, applied-match code, outer ring, Bézier flattening, unit scaling |
@@ -1327,13 +1428,18 @@ section here and its own tests.
 | `packages/api/src/event-map.ts` | `applyEventMap` writes the source row (when given bytes) and the event's pin row, starts the event job, re-derives derived course legs |
 | `packages/api/src/routers/course.ts` / `clubMap.ts` | `applyUploadedMap`, `useClubMap` version pin, `downloadMap` / `mapFileInfo` from `map_sources`; `createClubMap`, `addFromSource` |
 | `packages/api/prisma/migrations/20261107120000_vector_map_pipeline_drops/` | E5: the guard, then the legacy pipeline's tables and columns dropped |
+| `packages/api/prisma/migrations/20261113120000_map_patches/` | `map_patches` (row G3) |
+| `packages/api/src/map-store/patches.ts` / `routers/mapPatch.ts` | the patch store, delivery rule and writes; `mapPatch.get` / `applyChange` / `setEnabled`; the route is in `routes.ts` (`docs/map-patches.md` §3) |
 | `packages/api/scripts/restore-map-blobs.sql` / `restore-legacy-map-files.sql` | dump restore: blobs, decisions and a v0.6.1 `map_files` section / a pre-v0.6.1 `map_files` section (§7.3) |
 | `packages/api/src/sync/dropped-columns.ts` | the fields E5 dropped, stripped from a v0.6.0 exporter's snapshot rows (§7.2) |
 | `packages/web/src/lib/map-upload.ts` | client chunked uploader |
 | `packages/web/src/lib/map-document-cache.ts` | the viewer's document loader, `MAP_DOCUMENT_PATH_RE`, `requestPersistentStorage`, `useMapDocument` (§7.1) |
 | `packages/web/vite.config.ts` | service-worker routes `map-documents`, `map-fonts` (§7.1) |
 | `packages/web/src/lib/legacy-caches.ts` | deletes the retired `map-tiles` Cache Storage on start (§7.1) |
-| `packages/api/src/sync/snapshotMaps.ts` | checkout snapshot map part: export, `exportBlobSlice`, `fetchSnapshotBlobs`, `importSnapshotMaps` |
+| `packages/api/src/sync/snapshotMaps.ts` | checkout snapshot map part: export, `exportBlobSlice`, `fetchSnapshotBlobs`, `importSnapshotMaps`; `exportBlobInput` (map blob or graphic), `tokenMapOf` / `applyTokens`, `withDbNulls` |
+| `packages/api/src/sync/snapshotGraphics.ts` | checkout snapshot graphics part (G18): `referencedGraphicIds`, `exportSnapshotGraphics`, `exportGraphicSlice` / `exportPeerBlobSlice` (the `lease.exportBlob` dispatcher), `fetchSnapshotGraphics`, `importSnapshotGraphics` |
+| `packages/api/src/sync/lease.ts` | `SNAPSHOT_TABLES` (layout rows since G18), `versions`, the import's template-reference and token handling |
+| `packages/shared/src/cloud-ownership.ts` | the cloud-owned mutation list (moved from `api/src/sync/ownership.ts` in G18, which re-exports it); `packages/web/src/lib/trpc-links.ts` batches them apart |
 | `packages/api/src/sync/lease.ts` / `routers/lease.ts` | `EventSnapshot.maps`, `LeasePeer.exportBlob`, `lease.exportBlob`, checkout `maps` counts |
 | `packages/api/src/backup.ts` | `BACKUP_TABLES`, `buildBackupScript`, `splitBackupSections` |
 | `packages/api/scripts/restore-map-blobs.sql` | idempotent restore of the dump's map sections |

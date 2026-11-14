@@ -248,3 +248,22 @@ describe("mapImport.finalise", () => {
     expect((await caller(setter).mapImport.review({ documentHash: docA })).current).toBe(true);
   }, 60_000);
 });
+
+// G21 (docs/map-symbols.md §8.5, §12): a decision may name an ISSkiOM overlay entry on an ISOM map.
+describe("mapImport.decide with an overlay entry", () => {
+  it("stores it under the document library's release and produces a current document drawing the overlay entry", async () => {
+    const res = await caller(setter).mapImport.decide({ documentHash: docA, decisions: [{ symbolIdx: ring, accept: "ISSkiOM2019:808" }] });
+    expect(res.job).toMatchObject({ state: "done", sourceHash: hashA });
+    const docO = res.job.documentHash!;
+    expect(docO).not.toBe(docA);
+    const row = await ctx.db.clubSymbolDecision.findUniqueOrThrow({ where: { fingerprint_libraryVersion: { fingerprint: ringFp, libraryVersion: V } } });
+    expect(row.canonicalId).toBe("ISSkiOM2019:808");
+    const header = await headerOf(docO);
+    expect(header.library?.id).toBe("ISOM2017-2");
+    expect(header.symbols[ring].match).toMatchObject({ canonicalId: "ISSkiOM2019:808", method: "explicit", reviewed: true });
+    // documentFollowsDecisions holds, so the document is current, not stale forever.
+    expect((await caller(setter, false).mapImport.review({ documentHash: docO })).current).toBe(true);
+    const reset = await caller(setter).mapImport.decide({ documentHash: docO, decisions: [{ symbolIdx: ring, reset: true }] });
+    expect(reset.job).toMatchObject({ state: "done", documentHash: docA });
+  }, 90_000);
+});

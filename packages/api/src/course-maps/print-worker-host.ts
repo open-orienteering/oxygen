@@ -18,8 +18,8 @@ import { course } from "@oxygen/shared";
 import { Semaphore, intSetting } from "../map-render-limits.js";
 import { workerBootstrap } from "../worker-bootstrap.js";
 import type { CoursePagesOptions } from "./pdf-page.js";
-import type { CoursePagesResult } from "@oxygen/shared/print";
-import type { PrintWorkerMessage, PrintWorkerRequest } from "./print-worker.js";
+import { type CoursePagesResult, type PrintPatch, preparedDocumentKey } from "@oxygen/shared/print";
+import type { PrintWorkerMessage, PrintWorkerRasterRequest, PrintWorkerRequest } from "./print-worker.js";
 
 export const PRINT_WORKER_TIMEOUT_MS = 10 * 60_000;
 const MAX_WORKERS = 4;
@@ -29,14 +29,15 @@ export function printWorkerCount(): number {
 }
 
 export interface WorkerPrintOptions extends Omit<CoursePagesOptions, "document" | "rasteriseSvg"> {
-  document: { hash: string; bytes: () => Promise<Uint8Array> };
+  /** The pinned document and the event's patch on it (G14); a null or absent patch prints the document unchanged. */
+  document: { hash: string; bytes: () => Promise<Uint8Array>; patch?: PrintPatch | null };
   timeoutMs?: number;
 }
 
 interface Slot {
   worker: Worker | null;
-  /** Hashes this worker instance has been sent (it keeps the last two). */
-  hashes: string[];
+  /** `preparedDocumentKey`s (hash + patch version) this worker instance has prepared (it keeps the last two). */
+  keys: string[];
   busy: boolean;
   /** Settles the in-flight request when the worker dies. */
   fail: ((err: Error) => void) | null;
@@ -49,7 +50,7 @@ let nextId = 1;
 function ensureSlots(): void {
   const n = printWorkerCount();
   if (slots.length === n && gate) return;
-  slots = Array.from({ length: n }, () => ({ worker: null, hashes: [], busy: false, fail: null }));
+  slots = Array.from({ length: n }, () => ({ worker: null, keys: [], busy: false, fail: null }));
   gate = new Semaphore(n);
 }
 
@@ -65,7 +66,7 @@ function startWorker(slot: Slot): Worker {
   const drop = (err: Error) => {
     if (slot.worker !== worker) return;
     slot.worker = null;
-    slot.hashes = [];
+    slot.keys = [];
     const fail = slot.fail;
     slot.fail = null;
     fail?.(err);
@@ -73,12 +74,12 @@ function startWorker(slot: Slot): Worker {
   worker.on("error", (err) => drop(err instanceof Error ? err : new Error(String(err))));
   worker.on("exit", (code) => drop(new Error(`print worker exited with code ${code}`)));
   slot.worker = worker;
-  slot.hashes = [];
+  slot.keys = [];
   return worker;
 }
 
-function remember(slot: Slot, hash: string): void {
-  slot.hashes = [...slot.hashes.filter((h) => h !== hash), hash].slice(-2);
+function remember(slot: Slot, key: string): void {
+  slot.keys = [...slot.keys.filter((k) => k !== key), key].slice(-2);
 }
 
 async function send(slot: Slot, opts: WorkerPrintOptions, withBytes: boolean): Promise<CoursePagesResult | "need-document"> {
@@ -90,6 +91,7 @@ async function send(slot: Slot, opts: WorkerPrintOptions, withBytes: boolean): P
     type: "print",
     id,
     hash,
+    patch: opts.document.patch ?? null,
     ...(bytes ? { bytes } : {}),
     sheets: opts.sheets,
     graphics: [...(opts.graphics ?? new Map())],
@@ -109,6 +111,7 @@ async function send(slot: Slot, opts: WorkerPrintOptions, withBytes: boolean): P
       if (m.id !== id) return;
       if (m.type === "page") opts.onPage?.({ index: m.index, label: m.label, warnings: m.warnings });
       else if (m.type === "done") finish(() => resolve({ bytes: m.bytes, pageCount: m.pageCount, warnings: m.warnings }));
+      else if (m.type !== "error") return;
       else if (m.code === "NeedDocument") finish(() => resolve("need-document"));
       else finish(() => reject(m.code === "CourseStackError" ? new course.CourseStackError(m.message) : new Error(m.message)));
     };
@@ -129,7 +132,8 @@ async function send(slot: Slot, opts: WorkerPrintOptions, withBytes: boolean): P
 
 /**
  * Compose `opts.sheets` in a worker. The document blob is read and sent
- * only when the chosen worker has not prepared this hash yet. Callers hold
+ * only when the chosen worker has not prepared this hash + patch version
+ * yet (`preparedDocumentKey`; G14). Callers hold
  * `printGate`. A `CourseStackError` in the worker is rethrown as one here.
  */
 export async function renderCoursePagesInWorker(opts: WorkerPrintOptions): Promise<CoursePagesResult> {
@@ -137,12 +141,54 @@ export async function renderCoursePagesInWorker(opts: WorkerPrintOptions): Promi
   const slot = slots.find((s) => !s.busy) ?? slots[0];
   slot.busy = true;
   try {
-    const known = slot.worker !== null && slot.hashes.includes(opts.document.hash);
+    const key = preparedDocumentKey(opts.document.hash, opts.document.patch);
+    const known = slot.worker !== null && slot.keys.includes(key);
     let out = await send(slot, opts, !known);
     if (out === "need-document") out = await send(slot, opts, true);
     if (out === "need-document") throw new Error("print worker did not accept the document");
-    remember(slot, opts.document.hash);
+    remember(slot, key);
     return out;
+  } finally {
+    slot.busy = false;
+  }
+}
+
+/**
+ * An SVG logo as `print.png` serves it (docs/course-print.md §8.5): the
+ * worker's `rasteriseSvgGraphic`, byte-equal to what a print embeds for
+ * that box, so resvg never runs on the event loop. Callers hold
+ * `printGate`; the request queues behind the worker's print in flight.
+ */
+export async function rasteriseSvgInWorker(svg: Uint8Array, width: number, height: number, timeoutMs = PRINT_WORKER_TIMEOUT_MS): Promise<Uint8Array> {
+  ensureSlots();
+  const slot = slots.find((s) => !s.busy) ?? slots[0];
+  slot.busy = true;
+  try {
+    const worker = slot.worker ?? startWorker(slot);
+    const id = nextId++;
+    const req: PrintWorkerRasterRequest = { type: "raster", id, svg: new Uint8Array(svg), width, height };
+    return await new Promise<Uint8Array>((resolve, reject) => {
+      const timer = setTimeout(() => {
+        finish(() => reject(new Error(`raster exceeded ${timeoutMs} ms`)));
+        void worker.terminate();
+      }, timeoutMs);
+      const onMessage = (m: PrintWorkerMessage) => {
+        if (m.id !== id) return;
+        if (m.type === "png") finish(() => resolve(m.bytes));
+        else if (m.type === "error") finish(() => reject(new Error(m.message)));
+      };
+      const finish = (fn: () => void) => {
+        clearTimeout(timer);
+        worker.off("message", onMessage);
+        slot.fail = null;
+        worker.unref();
+        fn();
+      };
+      slot.fail = (err) => finish(() => reject(err));
+      worker.on("message", onMessage);
+      worker.ref();
+      worker.postMessage(req, [req.svg.buffer as ArrayBuffer]);
+    });
   } finally {
     slot.busy = false;
   }

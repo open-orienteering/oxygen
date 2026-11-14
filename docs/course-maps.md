@@ -199,10 +199,17 @@ GET /api/maps/:nameId/maps.pdf
     ?allVariations=3     (the root's all-variations page, F8)
     &copies=runners[&spare=n]   (each page once per runner it is for, F8)
 
+GET /api/maps/:nameId/print-job?<the maps.pdf query>   (the job maps.pdf composes, JSON; G15; version 2 carries the event's patch, G14)
 GET /api/maps/:nameId/graphics/:id
+GET /api/maps/:nameId/graphics/:id/print.png[?w=&h=]   (the PNG a print embeds; SVG needs w, h; G15)
 ```
 
-Both require `courses.view`. The legacy layout editor's map preview,
+All require `courses.view`. `print-job` has `maps.pdf`'s selection,
+order, caps and 400s; a host composes it with `renderPrintJob`
+(`@oxygen/shared/print`) to `maps.pdf`'s bytes (`course-print.md` §8.5). The web app's exports call `print-job` and compose
+on the device whenever it can, falling back to `maps.pdf`
+(`course-print.md` §8.6, G16); `maps.pdf` stays for API callers and
+devices that cannot. The legacy layout editor's map preview,
 `GET /api/maps/:nameId/window.png`, went in E4a and the editor itself
 (`MapLayoutEditor`) in E4c (`course-print.md` §10). E-pages removed the
 three API shapes that had no caller after it: `mapTemplate.previewLayout`

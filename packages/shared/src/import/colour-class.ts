@@ -294,3 +294,46 @@ export function detectPaletteEdition(colours: readonly Pick<ColourEntry, "name" 
   }
   return v2022 > v2024 ? "iof2022" : "iof2024";
 }
+
+// ---- ISSkiOM's own rows (docs/map-symbols.md §9.1, §12.3) ----------------------
+
+/** The palette rows only ISSkiOM ticks: identified by their own rules, never aliased to or from another colour. */
+export const SKI_PALETTE_IDS: ReadonlySet<string> = new Set(["white-skio", "orange-skio", "green-skio"]);
+
+/** Whole tokens that name ski orienteering ("Green for Ski-O", "Grön för skidspår", "Vit under skidorienteringsspår"). */
+const SKI_WORD = /^(ski|skio|skiorienteering|skid\p{L}*|längdspår\p{L}*)$/u;
+
+const SKIO_GREEN: Cmyk = [0.91, 0, 0.83, 0];
+const SKIO_ORANGE: Cmyk = [0, 0.6, 1, 0];
+/**
+ * CMYK distance inside which an unnamed colour is the Ski-O green or orange
+ * (the green is 0.20 from green 100 %; OCAD's template "Orange" 0/50/100/0
+ * is 0.10 from the Ski-O orange and is not it).
+ */
+export const SKI_INK_DISTANCE = 0.08;
+
+/**
+ * Whether a source colour is one of ISSkiOM's own rows (docs/map-symbols.md
+ * §9.1): a name that says ski orienteering and the row's hue (green,
+ * orange, white) — a green also at least 70 % and nearer 91/0/83/0 than
+ * the edition's green 100 % rows; else, for a colour drawn above every black 100 %
+ * (`aboveBlack`), an orange within `SKI_INK_DISTANCE` of 0/60/100/0, or a
+ * green within it of 91/0/83/0 and nearer to it than to the edition's
+ * green 100 % rows. A white is the mask by name only. `null` otherwise.
+ */
+export function skiPaletteIdFor(entry: Pick<ColourEntry, "name" | "cmyk">, cls: ColourClass | null, aboveBlack: boolean, edition: PaletteEdition): { id: string; via: "name" | "position" } | null {
+  if (!cls) return null;
+  const byHue: Partial<Record<ColourHue, string>> = { green: "green-skio", orange: "orange-skio", white: "white-skio" };
+  const id = byHue[cls.hue];
+  if (!id) return null;
+  // A screened green, or one nearer green 100 % than the Ski-O ink, is not the track green whatever its name ("Grön 100% skidområde", 808's raster).
+  const greens = (edition === "iof2024" ? iof2024Palette : iof2022Palette).filter((p) => /^green100-/.test(p.id));
+  const skiGreen = (d: number) => cls.percent >= 70 && greens.every((g) => d < cmykDistance(entry.cmyk, g.cmyk));
+  const dGreen = cmykDistance(entry.cmyk, SKIO_GREEN);
+  if (nameTokens(entry.name).some((t) => SKI_WORD.test(t))) return id !== "green-skio" || skiGreen(dGreen) ? { id, via: "name" } : null;
+  if (!aboveBlack || id === "white-skio") return null;
+  const d = id === "orange-skio" ? cmykDistance(entry.cmyk, SKIO_ORANGE) : dGreen;
+  if (d > SKI_INK_DISTANCE) return null;
+  if (id === "orange-skio") return { id, via: "position" };
+  return skiGreen(d) ? { id, via: "position" } : null;
+}
