@@ -7,6 +7,8 @@
  *   ← { type: "print", id, hash, bytes?, sheets, graphics, … }
  *   → { type: "page", id, index, label, warnings }     after each page
  *   → { type: "done", id, bytes, pageCount, warnings } bytes transferred
+ *   ← { type: "raster", id, svg, width, height }       an SVG logo for `print.png` (§8.5)
+ *   → { type: "png", id, bytes }                       bytes transferred
  *   → { type: "error", id, message, code? }
  */
 
@@ -14,7 +16,7 @@ import { parentPort } from "node:worker_threads";
 import { course } from "@oxygen/shared";
 import type { ColourMode } from "@oxygen/shared/print";
 import { prepareDocument, type PrintGraphic, type PrintSheet } from "@oxygen/shared/print";
-import { renderCoursePages } from "./pdf-page.js";
+import { rasteriseSvgGraphic, renderCoursePages } from "./pdf-page.js";
 
 export interface PrintWorkerRequest {
   type: "print";
@@ -31,9 +33,19 @@ export interface PrintWorkerRequest {
   info?: { title?: string; author?: string; subject?: string };
 }
 
+/** `print.png` (docs/course-print.md §8.5): resvg off the event loop, as the print itself. */
+export interface PrintWorkerRasterRequest {
+  type: "raster";
+  id: number;
+  svg: Uint8Array;
+  width: number;
+  height: number;
+}
+
 export type PrintWorkerMessage =
   | { type: "page"; id: number; index: number; label: string; warnings: string[] }
   | { type: "done"; id: number; bytes: Uint8Array; pageCount: number; warnings: string[] }
+  | { type: "png"; id: number; bytes: Uint8Array }
   | { type: "error"; id: number; message: string; code?: "CourseStackError" | "NeedDocument" };
 
 class NeedDocument extends Error {}
@@ -69,7 +81,18 @@ if (port) {
     }
   };
 
-  port.on("message", (req: PrintWorkerRequest) => {
+  const raster = async (req: PrintWorkerRasterRequest): Promise<void> => {
+    try {
+      const png = await rasteriseSvgGraphic(req.svg, req.width, req.height);
+      const bytes = png.byteOffset === 0 && png.byteLength === png.buffer.byteLength ? png : png.slice();
+      post({ type: "png", id: req.id, bytes }, [bytes.buffer as ArrayBuffer]);
+    } catch (err) {
+      post({ type: "error", id: req.id, message: err instanceof Error ? err.message : String(err) });
+    }
+  };
+
+  port.on("message", (req: PrintWorkerRequest | PrintWorkerRasterRequest) => {
     if (req.type === "print") queue = queue.then(() => handle(req));
+    else if (req.type === "raster") queue = queue.then(() => raster(req));
   });
 }

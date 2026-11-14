@@ -1,8 +1,11 @@
 /** Graphic uploads (docs/course-maps.md, graphics): type, size and SVG safety. */
 import { describe, expect, it } from "vitest";
+import type { PrintSheet } from "@oxygen/shared/print";
 import {
   validateGraphicUpload,
   MAX_GRAPHIC_BYTES,
+  parseRasterBox,
+  sheetGraphicIds,
 } from "../course-maps/graphics.js";
 
 describe("graphic upload validation", () => {
@@ -61,5 +64,30 @@ describe("graphic upload validation", () => {
       `<svg xmlns="http://www.w3.org/2000/svg" width="24" height="12"><rect width="24" height="12"/></svg>`,
     );
     expect(validateGraphicUpload(svg)).toBe("image/svg+xml");
+  });
+});
+
+describe("print.png's box (docs/course-print.md §8.5)", () => {
+  it("takes integers 1–4096 for both sides, else the 400 message", () => {
+    expect(parseRasterBox("473", "236")).toEqual([473, 236]);
+    expect(parseRasterBox("1", "4096")).toEqual([1, 4096]);
+    for (const [w, h] of [[undefined, undefined], ["10", undefined], ["0", "10"], ["4097", "10"], ["1.5", "2"], ["-3", "2"], ["ten", "2"], ["", "2"], ["1e3", "2"]] as const) {
+      expect(parseRasterBox(w, h)).toBe("w and h must be integers 1–4096 for an SVG graphic");
+    }
+  });
+});
+
+describe("the graphics a print needs (docs/course-print.md §8.5)", () => {
+  // Regression: an image course object's graphic was not loaded (docs/bugfix-course-object-image-print.md).
+  it("collects page objects' and image course objects' graphics, once each, ascending", () => {
+    const sheet = (objects: unknown[], courseObjects?: unknown[]) =>
+      ({ objects, course: courseObjects ? { objects: courseObjects } : {} }) as unknown as PrintSheet;
+    const sheets = [
+      sheet([{ kind: "image", graphicId: 9 }, { kind: "text" }], [{ kind: "image", props: { graphicId: 4 } }, { kind: "whiteout", props: {} }]),
+      sheet([{ kind: "image", graphicId: 4 }]),
+      sheet([], [{ kind: "image", props: { graphicId: 12, crop: { x: 0, y: 0, width: 1, height: 1 } } }]),
+    ];
+    expect(sheetGraphicIds(sheets)).toEqual([4, 9, 12]);
+    expect(sheetGraphicIds([sheet([])])).toEqual([]);
   });
 });

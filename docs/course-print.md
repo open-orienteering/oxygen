@@ -14,7 +14,8 @@ Normative for slice C of the vector map pipeline (research:
 
 Status: **draft** — §1–3 written by C1, §10 by C6 (2026-10-23), §4–7 by
 C2, §8–9 by C3, §11 by C7 (2026-10-24); the pipeline moved into
-`@oxygen/shared` by G13 (2026-11-13: §1, §5, §8.2).
+`@oxygen/shared` by G13 (2026-11-13: §1, §5, §8.2); the print job, §8.5,
+by G15 (2026-11-13).
 
 ## 1. The print module and its writer
 
@@ -46,6 +47,7 @@ with `main` — with `exports` present Node ignores `main`.
 | `print/geo.ts` | the `/Measure /GEO` viewport (§7.3) |
 | `print/prepared-document.ts` | `prepareDocument` (decode, bridge, cut features; the per-thread cache of the last two keys, §8.2), `objectsNear`, `WINDOW_OBJECT_MARGIN_MM` (G13) |
 | `print/course-pages.ts` | `renderCoursePages` (many sheets → one PDF, §4.5), `pageInputFor`, `documentPaperFrame`, `svgRasterBox` (§6.3), `PrintFonts` / `printFontsFromFaces`, `PrintSheet`, `PrintGraphic` (G13) |
+| `print/print-job.ts` | `PrintJob`, `PRINT_JOB_VERSION`, `renderPrintJob(job, host)` — a job composed on any host (§8.5, G15) |
 | `print/__fixtures__/pages.ts` | the page scenes (§7.5) |
 | `print/__fixtures__/description-sheets.ts` | description-sheet blocks and the `descriptions-a4` scene (§6.4, §7.5) |
 | `print/index.ts` | the module's exports |
@@ -582,7 +584,9 @@ skipped with `IMAGE_MISSING`.
 in the bundled faces only (no system fonts),
 stretched to the exact pixel box; cached per graphic and size within one
 export. `renderCoursePages` asks its `rasteriseSvg` input for the PNG
-(the API's binding passes resvg, `rasteriseSvgGraphic`); without one an
+(the API's binding passes resvg, `rasteriseSvgGraphic`; since G15 it also
+receives the graphic id, which `renderPrintJob` uses to ask the server's
+`print.png` for that box, §8.5); without one an
 SVG graphic is left out with `SVG_RASTER: … no SVG rasteriser` (and the
 writer's `IMAGE_MISSING`), as when resvg fails — a host that cannot
 rasterise is sent PNGs instead (slice G: "the browser never rasterises
@@ -779,7 +783,8 @@ re-import (the review's colour decisions).
 
 ### 8.2 The vector path
 
-1. The pages `selectPrintPages` selects (the rows; a root's sheet once
+1. **The job** (`buildPrintJob`, §8.5 — the builder `print-job` answers
+   from too): the pages `selectPrintPages` selects (the rows; a root's sheet once
    per variant or as its all-variations page; each with its copies —
    §4.6, `course-layout.md` §7 lists the query), each turned into a sheet by
    `sheetForMapRow` (§5; `@oxygen/shared`, `course-maps/sheet-rows.ts`) with the event, its controls, its
@@ -788,8 +793,9 @@ re-import (the review's colour decisions).
    document is identified, not decoded, on the request thread:
    `pinnedPrintSource` gives its hash, `rotationCorrectionDeg` and a
    `bytes()` reader of the `map_documents` blob.
-2. Graphics referenced by any row's or template's image objects (event
-   or club scope), loaded once.
+2. Graphics referenced by any sheet's image objects — page objects and
+   image course objects in scope (§8.5; the course objects' since G15) —
+   that exist for the event (event or club scope), loaded once.
 3. `renderCoursePagesInWorker({ document: { hash, bytes }, rotationCorrectionDeg,
    sheets, graphics, mode: "cmyk", info, onPage })`: the same
    `renderCoursePages` (`@oxygen/shared/print`, through the API's binding
@@ -810,6 +816,10 @@ re-import (the review's colour decisions).
      writer is pdf-lib's whole-document `save()` (xref and object streams
      at the end), so bytes cannot stream per page: the response is one
      buffer (§8.3), and "pages streamed back" is progress and warnings.
+     Host → worker `raster { svg, width, height }` → `png` with the bytes
+     transferred, or `error` (G15): `print.png`'s SVG rasterising
+     (`rasteriseSvgInWorker`, under `printGate`, §8.5), queued behind the
+     worker's print in flight.
    - **Prepared once per worker.** The worker keeps `prepareDocument`'s
      cache (last two hashes; `print/prepared-document.ts`, module-level,
      so one per thread — the key is an opaque string). The host remembers which hashes the
@@ -888,6 +898,123 @@ Geometry is not on the list: paper size, frame, window, scale, rotation
 and control positions agreed with the legacy page (the integration and
 E2E tests check page count and size; C7 compared the rasters).
 
+### 8.5 The print job (G15)
+
+The job is what the print worker gets (§8.2 "Messages"), less the bytes,
+as JSON: everything a host needs to compose the same PDF as `maps.pdf`
+(slice G answer 3 — the browser composes whenever the device can, the
+bytes identical to the server's). It is resolved on the server — the
+pages `selectPrintPages` selects, turned into sheets by `sheetForMapRow`
+— so a host composes, it never resolves (`resolveMapLayout`'s
+locale-dependent sort stays on the server; the label placement's
+tie-break is Pending).
+
+```text
+GET /api/maps/:nameId/print-job?<the maps.pdf query>
+GET /api/maps/:nameId/graphics/:id/print.png[?w=&h=]
+```
+
+**`print-job`** takes `maps.pdf`'s query (§8, `course-maps.md` API)
+and answers through the same builder, `buildPrintJob`
+(`course-maps/routes.ts`), which `maps.pdf` composes from: one
+selection, order, copies and set of caps for both routes.
+
+```ts
+interface PrintJob {
+  version: 1;                       // PRINT_JOB_VERSION; a host refuses another
+  document: { hash: string; rotationCorrectionDeg: number };
+  sheets: PrintSheet[];             // SheetInput & { copies? }, plain JSON
+  graphics: { id: number; mime: "image/png" | "image/svg+xml" }[];  // ascending id
+  mode: "cmyk";
+  info: { title: string; author?: string };
+  filename: string;                 // maps.pdf's Content-Disposition name (§8.3)
+}
+```
+
+| Condition | Status | Body |
+|---|---|---|
+| anonymous / signed in without `courses.view` | 401 / 403 | `{ error }` (`assertRestAccess`, as `maps.pdf`) |
+| unknown or removed event | 404 | `{ error: "Unknown event" }` (`assertRestAccess`, before the capability) |
+| a bad selection, a cap (200 composed pages; 5 000 with copies; `spare` ≤ 500), no pin ("No base map uploaded") | 400 | `{ error }` — `maps.pdf`'s message, word for word |
+| otherwise | 200 | the job; `Content-Type: application/json`, `Cache-Control: no-store` |
+
+- **The document by hash**, never bytes: the host fetches it from
+  `GET /api/map-documents/:hash?event=<nameId>` (`map-storage.md` §4;
+  `courses.view` on the pinning event suffices) or its document cache.
+  The job route does not decode it, so a `CourseStackError` (§8.1)
+  surfaces when the job is composed, not here.
+- **Graphics** are every graphic an image object of a sheet references —
+  the template's and sheet's page objects (`sheet.objects`) and the
+  image course objects in scope (`sheet.course.objects`) — that exists
+  for the event (event or club scope), by id and mime; an unknown id is
+  absent (the writer's `IMAGE_MISSING`). The bytes are fetched from
+  `print.png`. Since G15 `maps.pdf` loads the same set (it read the
+  sheet rows' and templates' objects only, so an `image` course object
+  printed as `IMAGE_MISSING`; `docs/bugfix-course-object-image-print.md`).
+- **No pixel box in the job**: an SVG's box depends on the composed page
+  (the placed rectangle, `scaleRatio` for a map-layer image, the crop;
+  §6.3), so the host composes with the shared `svgRasterBox` and asks
+  `print.png` for that box while composing.
+- **Fonts are not in the job**: the host supplies the three bundled
+  faces (`packages/shared/fonts/`) in the order regular, narrow, bold —
+  `render/fonts.ts`'s `FACES`, the order `bundledPrintFonts` and
+  `printFontsFromFaces(bundledPdfFaces())` give — which is part of the
+  contract (a different order numbers the writer's fonts differently).
+- `mode` is always `cmyk` (§8.2: no query reaches `rgb`); `text`
+  (`font`) and `deterministic` (off) are host options, not job fields.
+- **Byte identity** (user 2026-11-13, G15 question 2) means equal bytes
+  **for equal writer options**: with `deterministic: true` on both sides
+  a composed job equals `maps.pdf`'s bytes. Without it each PDF has its
+  own `CreationDate` and `/ID` (§3.2), as two downloads from the server
+  already do; the job carries no date.
+- **JSON-safe**: the sheets hold no `undefined`-valued key, no
+  non-finite number, no `Map`, `Date` or typed array, so
+  `JSON.parse(body)` composes to the same bytes as the builder's object.
+
+**`print.png`** serves a graphic as the PNG the print worker embeds:
+
+| Graphic | `w`, `h` | Body |
+|---|---|---|
+| SVG | required, integers 1–4096 (`SVG_RASTER_MAX_PX`), else 400 | `rasteriseSvgGraphic(data, w, h)` — resvg at that exact box, the bundled faces only (§6.3) — run in a print worker under `printGate` (§8.2: print CPU stays off the event loop; the request may wait behind a running print, as `maps.pdf` does) |
+| PNG | ignored | the stored bytes |
+| SVG resvg cannot read, a worker that dies, the 10 min timeout | — | 400 `{ error }` with the message (`maps.pdf`'s convention, §8.1) |
+
+`courses.view` on the event; the graphic must be the event's or a club
+graphic (`event_id NULL`), as `GET /api/maps/:nameId/graphics/:id`
+(404 otherwise, 400 for a non-positive id). `Content-Type: image/png`,
+`Cache-Control: private, max-age=3600` (graphics rows are created and
+deleted, never updated). The job route reads the graphics' id and mime
+only, not their bytes. `print.png` takes a worker slot (`printGate`) but
+not a render permit: a 4096 × 4096 raster is about 64 MB of RGBA in the
+worker, bounded by `PRINT_WORKERS` as a print is; G16, which asks once
+per SVG and box, revisits it if devices ask many at once. The path is event-scoped (user 2026-11-13, G15
+question 1; the SLICES row wrote `/api/graphics/:id/print.png`):
+capabilities are per event, and a venue box answers it from its copy
+unchanged (G18). The browser never rasterises SVG (slice G).
+
+**Composing a job** — `renderPrintJob(job, host)` (`@oxygen/shared/print`,
+`print/print-job.ts`) is the one entry G15's test and G16's Web Worker
+call:
+
+```ts
+interface PrintJobHost {
+  document(hash: string): Promise<Uint8Array> | Uint8Array;  // prepareDocument's loader
+  fonts: PrintFonts;
+  graphic(id: number, box?: [w: number, h: number]): Promise<Uint8Array>;  // print.png
+  deterministic?: boolean;
+  yieldToHost?: () => Promise<void>;
+  onPage?: CoursePagesOptions["onPage"];
+}
+```
+
+It refuses an unknown `version`, prepares the document by its hash
+(`prepareDocument`'s cache), loads every PNG graphic up front and passes
+SVG graphics through `rasteriseSvg`, which since G15 receives the graphic
+id as a fourth argument and asks `host.graphic(id, [w, h])` (the API's
+binding ignores the id). A graphic the host cannot fetch is left out:
+`IMAGE_MISSING` for a PNG, `SVG_RASTER` for an SVG — the PDF is still
+written, as on the server.
+
 ## 9. Tests and CI
 
 ### 9.1 Tests
@@ -897,7 +1024,11 @@ E2E tests check page count and size; C7 compared the rasters).
 | `packages/api/src/__tests__/integration/course-maps.test.ts` "maps.pdf through the composer", "course map REST rendering" | a pinned event → one composed PDF, pages at each template's paper (A4, A5), no `X-Print-Pipeline`, `Info` title for one and several pages, file names; selection errors unchanged; `qpdf --check` clean; without a pin 400 "No base map uploaded"; an injected `CourseStackError` is a 400 with its reason; any other injected error is a 400 (the route has no other path, no `converter` option); the second event of the file (pinned too) prints composed pages per course, the all-controls map and a placed graphic; `window.png` is a 404 |
 | `packages/api/src/__tests__/integration/course-maps.test.ts` "a readout-path request is answered…" | 150 extra pages in one print while `race.recentActivity` is polled every 10 ms: every probe is answered within 500 ms and more than three were answered before the PDF finished; the PDF has all pages. A smoke test of the route wiring — the event-loop bound itself is `print-worker.test.ts`'s |
 | `packages/api/src/__tests__/integration/course-print.test.ts` | §7.5's row, plus `qpdf --check` of both colour modes; the worker's bytes equal the in-process bytes (`deterministic: true`) and `onPage` fires once per sheet |
-| `packages/api/src/__tests__/print-worker.test.ts` | the worker on `e2e/test.ocd`: bytes equal in-process; the blob read and sent once per worker; `page` order; an error keeps the worker usable; `CourseStackError` re-created (a document with palette ids stripped); a reset rejects the request in flight and the next call recovers; the main thread's event-loop delay stays under 25 ms (or half a page) during a 10-page A3 print; `PRINT_WORKERS` parsing |
+| `packages/api/src/__tests__/print-worker.test.ts` | the worker on `e2e/test.ocd`: bytes equal in-process; a `raster` request equals the in-process `rasteriseSvgGraphic` at the exact box (G15); the blob read and sent once per worker; `page` order; an error keeps the worker usable; `CourseStackError` re-created (a document with palette ids stripped); a reset rejects the request in flight and the next call recovers; the main thread's event-loop delay stays under 25 ms (or half a page) during a 10-page A3 print; `PRINT_WORKERS` parsing |
+| `packages/api/src/__tests__/integration/print-job.test.ts` (G15) | §8.5: the job's shape (version, document hash and rotation, sheets in print order, graphics ascending with the image course object's and without another event's, `cmyk`, `info`, file name), JSON-safe, `no-store`; `buildPrintJob`'s in-memory job holds no `undefined`, non-finite number, `Map`, `Date` or typed array and equals its JSON round trip and the route's body; composed over HTTP through `renderPrintJob` (document from `/api/map-documents/:hash`, graphics from `print.png`, the bundled faces) it equals `maps.pdf`'s bytes (both `deterministic`) for every sheet, one sheet, `allControls`, `classes`, `copies=runners&spare=1`, and on a butterfly root `courses`, `variants` and `allVariations` (labels `Long AB` / `Long BA`, `_Long_A4_AB_BA.pdf`), the SVG fetched at `svgRasterBox`'s box and only the foreign graphic `IMAGE_MISSING`; the caps and selection 400s word for word `maps.pdf`'s (201 sheets, `spare=501`, `spare` alone, two selections, unknown map, `copies=all`); no pin 400, unknown event 404; `print.png`: SVG = `rasteriseSvgGraphic` at w × h, PNG as stored, the `w`/`h` 400s, club graphic 200, another event's / unknown 404, bad id 400; 401 / 403 / 200 under `AUTH_MODE=proxy` on the job and `print.png` |
+| `packages/api/src/__tests__/course-map-graphics.test.ts` (G15 part) | `parseRasterBox`: integers 1–4096 both sides, every other form the 400 message; `sheetGraphicIds`: page objects' and image course objects' graphics once each, ascending (the regression of `docs/bugfix-course-object-image-print.md`) |
+| `packages/shared/src/print/__tests__/print-job.test.ts` (G15) | `renderPrintJob` equals `renderCoursePages` for the same inputs (copies, a PNG and an SVG; the PNG fetched once without a box, the SVG once per box by id); a JSON round trip gives equal bytes; an unfetchable graphic gives `SVG_RASTER` / `IMAGE_MISSING` and a PDF; the document read once per hash; another version refused |
+| `e2e/course-maps.spec.ts` "export a course that has no template yet" (G15 part) | `print-job?courses=` of the exported course: version 1, `cmyk`, a document hash, as many pages (with copies) as the same query's `maps.pdf`, its file name |
 | `packages/api/src/__tests__/worker-bootstrap.test.ts` | the shared bootstrap: `.js` imported as is, `.ts` through tsx |
 | `packages/api/src/render/__tests__/pdf-golden.test.ts` | the PDF golden tier, §9.2, and `qpdf --check` on every file it writes; `boxDown`; the swatch read-back |
 | `packages/api/src/__tests__/integration/descriptions-pdf.test.ts` (F11) | §6.4 on an event without a base map: `selectDescriptionBlocks` — classes in the order asked, count = runners (a removed and a withdrawn one left out) + vacancies, the header naming the class, the map page's rows (start, controls, the special after its control, finish); `courses=` one block per course, its classes in the header, the count their sum; neither = every class with a course in class order, a courseless class skipped. The route: one A4 page per class labelled by class, headers, file name, `Info /Title`, `qpdf --check`; 13 copies → two pages of one class; `fill` at 5 mm; 400s (both selections, bad ids, copies 0 / 501 / text, cell 8, gap −1 / 31, unknown class / course, 231 pages > 200); 404 "No descriptions" (a courseless class, an event without courses), an unknown event |
@@ -1346,10 +1477,15 @@ The tool's own tests (`print-run.test.ts`, `measure-print.test.mjs`,
   exchange as one sheet per part (§5.2), so several frames on one sheet
   stay Pending (decided on the user's standing instruction 2026-11-07,
   for review).
-- **The print job, the browser's worker and its offline cache** (G15–G17):
-  G13 made the pipeline isomorphic (§1) but nothing outside the API calls
-  it yet; the job descriptor (§8.5), the Web Worker host and byte
-  identity with the server (slice G answer 3) are those rows'.
+- **The browser's worker and its offline cache** (G16–G17): G13 made the
+  pipeline isomorphic (§1) and G15 serves the job (§8.5) and composes it
+  in process to `maps.pdf`'s bytes; the Web Worker host, the capability
+  check and the device's byte-identity test (slice G answer 3) are G16's,
+  storing jobs and their graphics' PNGs (the boxes learned by composing
+  once) G17's. G15's byte-identity loop covers every selection but
+  `setter` and a map exchange's part sheets (`section`); G16's fixture
+  job adds them, and the first E2E that fetches `print.png` (G16's device
+  path) is that route's.
 - **Locale-dependent sorts on the browser path** (found in G13's
   review, moved verbatim, not a behaviour change): `resolveMapLayout`
   sorts an all-controls or setter sheet's sites with
