@@ -28,8 +28,10 @@ describe("BACKUP_TABLES", () => {
     expect(buildBackupScript(42n)).toContain("\\copy (SELECT * FROM oxygen.map_gps_tracks WHERE event_id = 42) TO STDOUT");
   });
 
-  it("does not carry previews (a cache) or the global tile cache", () => {
+  it("does not carry previews or height fields (caches) or the global tile cache", () => {
     expect(BACKUP_TABLES).not.toContain("map_previews");
+    // The height field is cache too: a restore derives its own (map-storage.md §4.7).
+    expect(BACKUP_TABLES).not.toContain("map_heightfields");
     expect(BACKUP_TABLES).not.toContain("map_tiles");
     // Dropped with the raster pipeline (E5).
     expect(BACKUP_TABLES).not.toContain("rendered_maps");

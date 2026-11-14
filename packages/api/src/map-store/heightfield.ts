@@ -13,13 +13,13 @@
  */
 
 import { Worker } from "node:worker_threads";
-import { RASTER_RULES } from "@oxygen/shared/src/terrain/graph/index.js";
-import { TERRAIN_VERSION, type HeightFieldHeader } from "@oxygen/shared/src/terrain/field/index.js";
-import type { TerrainReport } from "@oxygen/shared/src/terrain/solve/index.js";
+// Leaf modules only: this file is in the router's type graph, which the web compiles too.
+import { RASTER_RULES } from "@oxygen/shared/src/terrain/graph/raster.js";
+import { TERRAIN_VERSION, type HeightFieldHeader } from "@oxygen/shared/src/terrain/field/types.js";
+import type { TerrainReport } from "@oxygen/shared/src/terrain/solve/types.js";
 import type { Prisma, PrismaClient } from "../generated/prisma/client.js";
 import { workerBootstrap } from "../worker-bootstrap.js";
 import { getBlob } from "./blob-store.js";
-import type { HeightfieldWorkerData, HeightfieldWorkerMessage } from "./heightfield-worker.js";
 
 type Db = PrismaClient | Prisma.TransactionClient;
 
@@ -84,6 +84,17 @@ export function isOverCap(summary: unknown, maxCells: number = heightfieldMaxCel
 }
 
 // ---- worker -------------------------------------------------------------------
+
+export interface HeightfieldWorkerData {
+  /** The encoded map document. */
+  bytes: Uint8Array;
+}
+
+/** `heightfield-worker.ts` → host. */
+export type HeightfieldWorkerMessage =
+  | { type: "done"; bytes: Uint8Array; header: HeightFieldHeader; report: TerrainReport }
+  | { type: "none" }
+  | { type: "error"; message: string };
 
 export type DerivedHeightfield =
   | { kind: "field"; bytes: Uint8Array; header: HeightFieldHeader; report: TerrainReport }

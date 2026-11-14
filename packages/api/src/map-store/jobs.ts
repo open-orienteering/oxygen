@@ -19,6 +19,7 @@ import type { Prisma, PrismaClient } from "../generated/prisma/client.js";
 import { IMPORTER_VERSIONS, type ImportStage, type MapSourceKind } from "../import/ocad.js";
 import { storeImportedDocument, touchDocument } from "./documents.js";
 import { deriveDocumentPreviews } from "./previews.js";
+import { deriveDocumentHeightfield } from "./heightfield.js";
 import { writePinnedMapFileColumns } from "./event-document.js";
 import { synchronizePositionedControlCoordinates } from "../event-crs.js";
 import type { ImportWorkerData, ImportWorkerMessage } from "./import-worker.js";
@@ -231,9 +232,9 @@ async function execute(db: Db, job: ImportJobRow): Promise<void> {
     // An existing row may be old and unreferenced: touch it before pinning so a racing GC skips it (§8.2).
     if (stored.deduplicated) await touchDocument(db, stored.documentHash);
     await applyJobResult(db, { ...job, documentHash: stored.documentHash });
-    // Stage 10: previews are cache, so a failure is logged inside and never fails the job.
+    // Stage 10: previews and the height field are cache, so a failure is logged inside and never fails the job.
     await progress(db, job.id, "derive");
-    await deriveDocumentPreviews(db, stored.documentHash);
+    await deriveDocumentArtifacts(db, stored.documentHash);
     await db.mapImportJob.updateMany({
       where: { id: job.id, claimedBy: INSTANCE_ID },
       data: { state: "done", stage: "done", progress: 1, documentHash: stored.documentHash, heartbeatAt: new Date() },
@@ -248,6 +249,12 @@ async function execute(db: Db, job: ImportJobRow): Promise<void> {
     const row = await db.mapImportJob.findUnique({ where: { id: job.id }, select: JOB_SELECT }).catch(() => null);
     if (row) notify(asRow(row));
   }
+}
+
+/** Import stage 10 (docs/map-storage.md §6.1): the thumbnail (§4.5), then the height field (§4.7). Never throws. */
+export async function deriveDocumentArtifacts(db: Db, hash: string): Promise<void> {
+  await deriveDocumentPreviews(db, hash);
+  await deriveDocumentHeightfield(db, hash);
 }
 
 /**
@@ -338,7 +345,7 @@ export async function startImportJob(db: Db, input: StartImportJobInput): Promis
       select: JOB_SELECT,
     }));
     await applyJobResult(db, row);
-    await deriveDocumentPreviews(db, existing.hash);
+    await deriveDocumentArtifacts(db, existing.hash);
     return row;
   }
 

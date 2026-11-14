@@ -12,18 +12,8 @@
 import { parentPort, workerData } from "node:worker_threads";
 import { mapDocument } from "@oxygen/shared";
 import { deriveTerrain } from "@oxygen/shared/src/terrain/index.js";
-import { encodeHeightField, type HeightFieldHeader } from "@oxygen/shared/src/terrain/field/index.js";
-import type { TerrainReport } from "@oxygen/shared/src/terrain/solve/index.js";
-
-export interface HeightfieldWorkerData {
-  /** The encoded map document. */
-  bytes: Uint8Array;
-}
-
-export type HeightfieldWorkerMessage =
-  | { type: "done"; bytes: Uint8Array; header: HeightFieldHeader; report: TerrainReport }
-  | { type: "none" }
-  | { type: "error"; message: string };
+import { encodeHeightField } from "@oxygen/shared/src/terrain/field/index.js";
+import type { HeightfieldWorkerData, HeightfieldWorkerMessage } from "./heightfield.js";
 
 /** The derive itself, apart from the thread plumbing (also the unit tests' oracle). */
 export function deriveHeightfieldBytes(bytes: Uint8Array): Exclude<HeightfieldWorkerMessage, { type: "error" }> {

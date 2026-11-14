@@ -18,6 +18,8 @@
 import type { PrismaClient } from "../generated/prisma/client.js";
 import { getSetting, prisma, setSetting } from "../db.js";
 import { sweepImportHousekeeping } from "./jobs.js";
+import { HEIGHTFIELD_SOURCE } from "./heightfield.js";
+import { TERRAIN_VERSION } from "@oxygen/shared/src/terrain/field/types.js";
 
 export const GC_GRACE_DAYS = 30;
 /** A day between runs, measured from the last finish. */
@@ -105,6 +107,8 @@ export interface StorageGcResult {
   sources: string[];
   /** Candidates that gained a reference before their delete ran. */
   skipped: number;
+  /** Height-field rows of a superseded terrain version deleted (or, on a dry run, collectable) — §4.7. */
+  heightfields: number;
   /** Rows removed by the housekeeping pass. */
   uploads: number;
   jobs: number;
@@ -139,7 +143,7 @@ export async function runStorageGc(db: PrismaClient, opts: StorageGcOptions = {}
   const dryRun = opts.dryRun === true;
   const shouldStop = opts.shouldStop ?? (() => false);
   const cutoff = gcCutoff(now, graceDays);
-  const result: StorageGcResult = { graceDays, dryRun, stopped: false, touched: 0, documents: [], sources: [], skipped: 0, uploads: 0, jobs: 0 };
+  const result: StorageGcResult = { graceDays, dryRun, stopped: false, touched: 0, documents: [], sources: [], skipped: 0, heightfields: 0, uploads: 0, jobs: 0 };
 
   // 1. Touch: the grace runs from the last pass that saw a reference.
   if (!dryRun) {
@@ -213,7 +217,22 @@ export async function runStorageGc(db: PrismaClient, opts: StorageGcOptions = {}
     }
   }
 
-  // 4. Expired uploads and job rows (§6.6).
+  // 4. Height fields of a superseded terrain version (§4.7): cache nothing reads.
+  // `<`, not `<>`: an older image's run during a rollout leaves the newer rows alone.
+  if (await shouldStop()) return finishStopped(result);
+  if (dryRun) {
+    const rows = await db.$queryRawUnsafe<{ n: number }[]>(
+      `SELECT count(*)::int AS n FROM oxygen.map_heightfields WHERE source = $1 AND version < $2`,
+      HEIGHTFIELD_SOURCE,
+      TERRAIN_VERSION,
+    );
+    result.heightfields = rows[0]?.n ?? 0;
+  } else {
+    result.heightfields = await db.$executeRawUnsafe(`DELETE FROM oxygen.map_heightfields WHERE source = $1 AND version < $2`, HEIGHTFIELD_SOURCE, TERRAIN_VERSION);
+    if (result.heightfields > 0) console.log(`[map-gc] deleted ${result.heightfields} height field(s) older than terrain version ${TERRAIN_VERSION}`);
+  }
+
+  // 5. Expired uploads and job rows (§6.6).
   if (!dryRun) {
     if (await shouldStop()) return finishStopped(result);
     const swept = await sweepImportHousekeeping(db, now);
@@ -232,7 +251,7 @@ function finishStopped(result: StorageGcResult): StorageGcResult {
 }
 
 function summaryLine(r: StorageGcResult): string {
-  return `grace ${r.graceDays} d, touched ${r.touched}, documents ${r.documents.length}, sources ${r.sources.length}, skipped ${r.skipped}, uploads ${r.uploads}, jobs ${r.jobs}`;
+  return `grace ${r.graceDays} d, touched ${r.touched}, documents ${r.documents.length}, sources ${r.sources.length}, skipped ${r.skipped}, heightfields ${r.heightfields}, uploads ${r.uploads}, jobs ${r.jobs}`;
 }
 
 /** What the schedule stores in `settings`: counts, not hashes. */
@@ -245,6 +264,7 @@ export function storedSummary(r: StorageGcResult, finishedAt: Date): Record<stri
     documents: r.documents.length,
     sources: r.sources.length,
     skipped: r.skipped,
+    heightfields: r.heightfields,
     uploads: r.uploads,
     jobs: r.jobs,
   };

@@ -107,5 +107,12 @@
     "confirm": "Record decisions",
     "cancel": "Cancel",
     "nothingApplied": "Nothing was recorded."
+  },
+  "terrain": {
+    "ready3d": "Terrain: {{percent}} % of the contours have a known uphill side — enough for 3D.",
+    "readyFlat": "Terrain: {{percent}} % of the contours have a known uphill side — 3D needs {{min}} %.",
+    "none": "Terrain: the map has no contours, so no 3D.",
+    "over-cap": "Terrain: the map is too large for this server to derive its terrain.",
+    "pending": "Terrain: not derived yet."
   }
 }
