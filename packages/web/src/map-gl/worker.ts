@@ -12,10 +12,15 @@
  * `worker-entry.ts` binds it to `self`.
  *
  * Protocol (docs/map-rendering.md §5.2 "Worker"):
- *   → load     { source: document bytes | objects + symbols, fonts, text atlas pages }   ← loaded { summary, atlas, grid, base parts, large part }
+ *   → load     { source: document bytes (+ patch) | objects + symbols, fonts, text atlas pages }   ← loaded { summary, atlas, grid, base parts, large part }
  *   → prepare  { ids }   replaces the queue; ← part { part } per id, nearest first
  *   → course   { generation, input }   ← course { generation, part, colours, derivation, filter, … } (§5.2 "Dynamic bucket", "Filter regions")
- *   ← error    { message } (load failures, the queue stops; a course request that throws)
+ *   → patch    { generation, patch, detail }   ← patched { generation, patch state, touched buckets' parts } (§5.2 "Patch")
+ *   ← error    { message } (load failures, the queue stops; a course or patch request that throws)
+ *
+ * Range-table object ids are the effective document's `objectIndex`
+ * (§5.2 "Object identity"); the course layer's start at
+ * `COURSE_OBJECT_BASE`.
  */
 
 import { course, mapDocument, render } from "@oxygen/shared";
@@ -23,15 +28,19 @@ import { MeshAtlasBuilder, type AtlasMesh, type MeshAtlas } from "./mesh-atlas.j
 import { buildTextGlyphs, haloEm, textGlyphKey, type TextAtlasPage } from "./text-atlas.js";
 import { triangulateEvenOdd } from "./prepare.js";
 import {
-  aboveZoomGate, assignBuckets, fitView, partTransferables, prepareBucketPart, PREFETCH_MARGIN_CELLS, visibleCells,
-  type Assignment, type Grid, type PrepareContext, type PreparedPart, type TextPassGlyphs, type ViewRect,
+  aboveZoomGate, assignBuckets, assignToGrid, fitView, LARGE_CELLS, partTransferables, prepareBucketPart, prepareBucketPartFrom, PREFETCH_MARGIN_CELLS, sourcesHaveLayer, visibleCells,
+  type Assignment, type Grid, type PartLayer, type PartSource, type PrepareContext, type PreparedPart, type TextPassGlyphs, type ViewRect,
 } from "./buckets.js";
 
 /** Flattening tolerance, paper µm (OCAD's own resolution). */
 export const TOLERANCE_UM = 10;
 
 export type LoadSource =
-  | { kind: "document"; bytes: ArrayBuffer; options: mapDocument.DocumentRenderOptions }
+  | {
+    kind: "document"; bytes: ArrayBuffer; options: mapDocument.DocumentRenderOptions;
+    /** The event's patch over this document (§5.2 "Patch"); the caller pairs it by hash (map-patches §2). */
+    patch?: mapDocument.MapPatch | null;
+  }
   /** Dev-only S1 reader path: objects already converted on the main thread. */
   | { kind: "objects"; objects: render.RenderObject[]; symbols: render.RenderSymbol[] }
   /** Dev-only: an already symbolised stream (the golden scenes through the arena path, `MapGlFixturePage`). */
@@ -99,12 +108,45 @@ export interface CourseRequest {
   input: CourseLayerRequest | null;
 }
 
-export type WorkerRequest = LoadRequest | PrepareRequest | CourseRequest;
+/**
+ * A patch change (§5.2 "Patch"): the effective document is redrawn without reloading the
+ * document. The worker applies `patch` to the pinned document it holds; `null` (or a disabled
+ * or empty patch) is the document itself.
+ */
+export interface PatchRequest {
+  type: "patch";
+  /** Echoed in the reply. */
+  generation: number;
+  patch: mapDocument.MapPatch | null;
+  /** Cells whose detail part the engine holds: a touched one comes back prepared in the reply. */
+  detail: number[];
+}
+
+export type WorkerRequest = LoadRequest | PrepareRequest | CourseRequest | PatchRequest;
 
 /** The dynamic bucket's id (never a cell or the large bucket). */
 export const COURSE_BUCKET = -2;
 /** The page part's id (Layout mode, docs/course-layout.md §1). */
 export const PAGE_BUCKET = -3;
+/**
+ * The course part's first range-table object id (§5.2 "Object identity"): document objects are
+ * their effective `objectIndex`, which a patch's added objects extend, so the course's ids start
+ * far above any document's.
+ */
+export const COURSE_OBJECT_BASE = 0x4000_0000;
+
+/** What the worker drew of a patch: the objects it hides (range-table ids) and the ops it skipped. */
+export interface PatchState {
+  /** Effective `objectIndex`es the patch hides: skipped in the visible set (map-patches §2.2). */
+  hidden: Uint32Array;
+  /** Pinned objects re-symbolised (modified or resymbolled, not hidden) and objects added. */
+  changed: number;
+  added: number;
+  /** `applyPatch`'s issues (map-patches §2.3): reported, never thrown. */
+  issues: mapDocument.PatchIssue[];
+  /** With a course layer: the automatic-cut features of the effective document. */
+  cutFeatures?: number;
+}
 
 /** Course symbol dimensions on paper, mm: what the UI layer sizes its hit targets and rings by. */
 export interface CourseMetrics {
@@ -149,6 +191,8 @@ export interface LoadSummary {
   colourStack?: render.ColourStack;
   /** With `courseLayer`: whether `course` requests can be drawn (an unaligned stack cannot), and the cut features found. */
   courseLayer?: { supported: true; cutFeatures: number } | { supported: false; reason: string };
+  /** A document source: the patch drawn with it (none: the identity state). */
+  patch?: PatchState;
 }
 
 /**
@@ -185,6 +229,32 @@ export interface ErrorReply {
   message: string;
   /** Set when a `course` request threw: that request's generation (F20b). A failed load, or `onerror`, has none. */
   generation?: number;
+  /** Set when a `patch` request threw: that request's generation. */
+  patch?: number;
+}
+
+/**
+ * A patch change applied (§5.2 "Patch"): the buckets whose content changed, re-prepared. A touched
+ * cell absent from `base` has no base part now; one absent from `detail` has none prepared (the
+ * engine drops what it holds and asks again if the cell still has detail).
+ */
+export interface PatchedReply {
+  type: "patched";
+  generation: number;
+  patch: PatchState;
+  /** Bucket ids whose parts changed (cells and possibly the large bucket). */
+  touched: number[];
+  base: PreparedPart[];
+  /** Detail parts of the touched cells the request said the engine holds. */
+  detail: PreparedPart[];
+  /** The large bucket when it is touched (`null`: it is empty now); absent when untouched. */
+  large?: PreparedPart | null;
+  /** Every cell with a detail layer now. */
+  detailCells: number[];
+  bytes: { base: number; large: number };
+  /** The whole mesh atlas, only when the patch added meshes (earlier meshes keep their `base`). */
+  atlas?: MeshAtlas;
+  ms: number;
 }
 
 /**
@@ -225,11 +295,12 @@ export interface CourseReply {
   page: { colourBase: number; frameRingUm: [number, number][] } | null;
 }
 
-export type WorkerReply = LoadedReply | PartReply | ErrorReply | CourseReply;
+export type WorkerReply = LoadedReply | PartReply | ErrorReply | CourseReply | PatchedReply;
 
 export type Post = (msg: WorkerReply, transfer: ArrayBuffer[]) => void;
 
 interface State {
+  /** The pinned document's stream; `objectIdx` is the document's `objectIndex` (document source). */
   stream: render.PassStream;
   assignment: Assignment;
   ctx: PrepareContext;
@@ -239,6 +310,52 @@ interface State {
   colourStack: render.ColourStack;
   /** Symbolised bounds per document object, computed on the first filter request. */
   objectBounds?: Map<number, render.Bounds>;
+  fonts: render.FontMetrics[];
+  textAtlas: TextAtlasPage[] | undefined;
+  atlas: MeshAtlasBuilder;
+  /** The atlas's meshes as last sent to the main thread. */
+  meshes: AtlasMesh[];
+  glyphTol: number;
+  largeCells: number;
+  /** A document source: what a patch is applied to. */
+  document?: PinnedDocument;
+  /** Cells with a detail layer now; base part bytes per cell and the large part's. */
+  detailCells: Set<number>;
+  baseBytes: Map<number, number>;
+  largeBytes: number;
+  /** The patch drawn now (§5.2 "Patch"); absent: the pinned document as it is. */
+  overlay?: Overlay;
+}
+
+interface PinnedDocument {
+  doc: mapDocument.MapDocument;
+  options: mapDocument.DocumentRenderOptions;
+  /** The course-completed stack's re-indexing of the bridged symbols (`courseLayer`). */
+  remap?: ArrayLike<number>;
+  /** `sourceIndex` → `objectIndex`, built on the first patch. */
+  bySource?: Map<number, number>;
+}
+
+/**
+ * A patch's overlay on the pinned document's stream (§5.2 "Patch"): the objects it hides (ids
+ * only), and the objects it changes or adds, symbolised on their own and assigned to the load's
+ * grid. A bucket's part is its pinned passes without the changed objects', merged by colour with
+ * the overlay's passes in it.
+ */
+interface Overlay {
+  state: PatchState;
+  /** Pinned objects whose passes the overlay replaces (modified or resymbolled, not hidden). */
+  changed: Set<number>;
+  /** Per bucket: its pinned objects that are in `changed`. */
+  lost: Map<number, Set<number>>;
+  stream: render.PassStream;
+  glyphMesh: Map<string, number>;
+  textGlyph: Map<number, TextPassGlyphs>;
+  bucketPasses: Map<number, number[]>;
+  /** Per bucket: what the overlay takes from and adds to it; a bucket is touched when this changes. */
+  signature: Map<number, string>;
+  objectBounds?: Map<number, render.Bounds>;
+  warnings: Record<string, number>;
 }
 
 /**
@@ -279,15 +396,9 @@ const filterTransferables = (f: FilterReply): ArrayBuffer[] => [f.hidden.buffer,
 
 interface CourseState {
   document: course.CourseDocumentContext;
+  /** Of the effective document (§5.2 "Patch"): recomputed with every patch change. */
   cutFeatures: course.CutFeature[];
   stackIndex: ReadonlyMap<string, number>;
-  /** Stream objects of the document: the course part's object ids start here (`courseObjectOffset`). */
-  objectOffset: number;
-  fonts: render.FontMetrics[];
-  textAtlas: TextAtlasPage[] | undefined;
-  atlas: MeshAtlasBuilder;
-  /** The atlas's meshes as last sent to the main thread. */
-  meshes: AtlasMesh[];
 }
 
 /** Queued detail parts are prepared in slices of about this long, then the worker yields so a newer request can overtake. */
@@ -317,11 +428,8 @@ export function createMapGlWorker(post: Post, schedule: (fn: () => void) => void
     do {
       const id = queue.shift();
       if (id === undefined) break;
-      const passes = state.assignment.bucketPasses.get(id);
-      if (passes && id !== state.assignment.largeId) {
-        const part = prepareBucketPart(state.stream, id, passes, "detail", state.ctx);
-        post({ type: "part", part }, partTransferables(part));
-      }
+      const part = id !== state.assignment.largeId ? partFor(state, id, "detail") : null;
+      if (part) post({ type: "part", part }, partTransferables(part));
     } while (queue.length && performance.now() - t0 < sliceMs);
     if (queue.length) {
       pumping = true;
@@ -360,6 +468,17 @@ export function createMapGlWorker(post: Post, schedule: (fn: () => void) => void
         }
         return;
       }
+      if (msg.type === "patch") {
+        // Like a course request: answered at once, between prepare slices; the queue goes on with
+        // the new content (`partFor` reads the overlay).
+        try {
+          const { reply, transfer } = patchReply(state, msg);
+          post(reply, transfer);
+        } catch (e) {
+          post({ type: "error", message: e instanceof Error ? e.message : String(e), patch: msg.generation }, []);
+        }
+        return;
+      }
       queue = msg.ids.slice();
       if (!pumping && queue.length) {
         pumping = true;
@@ -378,25 +497,32 @@ function load(msg: LoadRequest): { reply: LoadedReply; transfer: ArrayBuffer[]; 
   const fonts = msg.fonts.map((f) => render.parseTrueType(f.bytes, f.family));
   const t0 = performance.now();
   let objects: render.RenderObject[] = [], symbols: render.RenderSymbol[] = [];
+  let docIdx: number[] | undefined;
   let bridge: mapDocument.DocumentRenderInput["stats"] | undefined;
   let tDecode = t0;
   let colourStack: render.ColourStack = [];
   let courseSupport: LoadSummary["courseLayer"];
-  let courseDoc: { document: course.CourseDocumentContext; cutFeatures: course.CutFeature[]; stackIndex: ReadonlyMap<string, number> } | undefined;
+  let courseDoc: CourseState | undefined;
+  let pinned: PinnedDocument | undefined;
   if (msg.source.kind === "document") {
     const doc = mapDocument.decodeMapDocument(new Uint8Array(msg.source.bytes));
     tDecode = performance.now();
     const input = mapDocument.documentRenderInput(doc, msg.source.options);
     objects = input.objects;
     symbols = input.symbols;
+    docIdx = input.docIdx;
     bridge = input.stats;
     colourStack = doc.header.colours;
+    pinned = { doc, options: msg.source.options };
     if (msg.courseLayer) {
       // The static buckets are keyed on the stack the course layer draws with, course shown or not:
       // it is a function of the document alone, so showing a course re-prepares nothing (§5.2 "Dynamic bucket").
       try {
         const stack = course.courseColourStack(doc.header.colours);
-        if (stack.remap) symbols = symbols.map((s) => render.remapRenderColours(s, stack.remap!));
+        if (stack.remap) {
+          symbols = symbols.map((s) => render.remapRenderColours(s, stack.remap!));
+          pinned.remap = stack.remap;
+        }
         colourStack = stack.colours;
         const cutFeatures = course.cutFeaturesOfDocument(doc);
         courseDoc = { document: course.courseDocumentContext(doc.header), cutFeatures, stackIndex: stack.index };
@@ -411,7 +537,11 @@ function load(msg: LoadRequest): { reply: LoadedReply; transfer: ArrayBuffer[]; 
     symbols = msg.source.symbols;
   }
   const tBridge = performance.now();
-  const { stream, warnings } = msg.source.kind === "stream" ? { stream: msg.source.stream, warnings: [] } : render.symbolise({ objects, symbols, fonts });
+  const symbolised = msg.source.kind === "stream" ? { stream: msg.source.stream, warnings: [] } : render.symbolise({ objects, symbols, fonts });
+  const { warnings } = symbolised;
+  // Object identity across the bridge (§5.2 "Object identity"): the stream's ids index the bridge's
+  // filtered object list; a document's range tables key on the document's own `objectIndex`.
+  const stream = docIdx ? withObjectIds(symbolised.stream, docIdx) : symbolised.stream;
   const tSym = performance.now();
 
   // Mesh atlas: every glyph part. Text: every glyph resolved against the text atlas pages.
@@ -422,36 +552,57 @@ function load(msg: LoadRequest): { reply: LoadedReply; transfer: ArrayBuffer[]; 
   const textWarn: Record<string, number> = {};
   const textStats = { pages: (msg.textAtlas ?? []).map((p) => p.page), glyphs: 0, missing: 0 };
   const textGlyph = resolveText(stream, fonts, msg.textAtlas, textWarn, textStats);
-  const built = atlas.build();
+  let built = atlas.build();
   const tAtlas = performance.now();
 
   const meshRadius = (glyphId: number, partIdx: number) => {
     const mi = glyphMesh.get(`${glyphId}/${partIdx}`);
     return mi === undefined ? 0 : built.meshes[mi].radius;
   };
-  const assignment = assignBuckets(stream, meshRadius, { cellUm: msg.cellUm, largeCells: msg.largeCells });
+  const largeCells = msg.largeCells ?? LARGE_CELLS;
+  const assignment = assignBuckets(stream, meshRadius, { cellUm: msg.cellUm, largeCells });
   const { grid, largeId } = assignment;
   const tAssign = performance.now();
 
   const originX = (grid.minCol + grid.cols / 2) * grid.cellUm;
   const originY = (grid.minRow + grid.rows / 2) * grid.cellUm;
   const ctx: PrepareContext = { toleranceUm: tol, originX, originY, meshes: built.meshes, glyphMesh, textGlyph };
+  const state: State = {
+    stream, assignment, ctx, colourStack, fonts, textAtlas: msg.textAtlas, atlas, meshes: built.meshes, glyphTol, largeCells,
+    detailCells: new Set(), baseBytes: new Map(), largeBytes: 0,
+    ...(courseDoc ? { course: courseDoc } : {}),
+    ...(pinned ? { document: pinned } : {}),
+  };
+
+  // A patch that comes with the load is drawn from the first frame: the overlay is computed
+  // before the parts, so each is prepared once.
+  let patchState: PatchState | undefined;
+  if (pinned) {
+    const applied = applyOverlay(state, msg.source.kind === "document" ? msg.source.patch ?? null : null);
+    patchState = applied.state;
+    if (applied.grown) built = applied.grown;
+    for (const [code, n] of Object.entries(state.overlay?.warnings ?? {})) textWarn[code] = (textWarn[code] ?? 0) + n;
+  }
 
   const base: PreparedPart[] = [];
   const detailCells: number[] = [];
-  const isBase = (k: render.PassKind) => k === "fill" || k === "hatch";
-  for (const [id, passes] of [...assignment.bucketPasses.entries()].sort((a, b) => a[0] - b[0])) {
+  for (const id of bucketIds(state)) {
     if (id === largeId) continue;
-    if (passes.some((pi) => isBase(stream.passes[pi].kind))) base.push(prepareBucketPart(stream, id, passes, "base", ctx));
-    if (passes.some((pi) => !isBase(stream.passes[pi].kind))) detailCells.push(id);
+    const part = partFor(state, id, "base");
+    if (part) {
+      base.push(part);
+      state.baseBytes.set(id, part.gpuBytes);
+    }
+    if (sourcesHaveLayer(partSources(state, id), "detail")) detailCells.push(id);
   }
+  state.detailCells = new Set(detailCells);
   const tBase = performance.now();
   let densestCell = -1, densest = 0;
   for (const [id, passes] of assignment.bucketPasses) {
     if (id !== largeId && passes.length > densest) { densest = passes.length; densestCell = id; }
   }
-  const largePasses = assignment.bucketPasses.get(largeId);
-  const large = largePasses ? prepareBucketPart(stream, largeId, largePasses, "all", ctx) : undefined;
+  const large = partFor(state, largeId, "all") ?? undefined;
+  state.largeBytes = large?.gpuBytes ?? 0;
   const tLarge = performance.now();
 
   const passKinds: Record<string, number> = {};
@@ -468,9 +619,8 @@ function load(msg: LoadRequest): { reply: LoadedReply; transfer: ArrayBuffer[]; 
   const bounds = render.passStreamBounds(stream);
   const fv = msg.firstView;
   const view = fv ? (fv.kind === "view" ? fv.view : fitView(bounds, fv.widthPx, fv.heightPx, fv.fill)) : undefined;
-  const detail = new Set(detailCells);
   const queued = view && (msg.gate === false || aboveZoomGate(view.pxPerUm))
-    ? visibleCells(view, grid, msg.prefetchMarginCells ?? PREFETCH_MARGIN_CELLS).filter((id) => detail.has(id))
+    ? visibleCells(view, grid, msg.prefetchMarginCells ?? PREFETCH_MARGIN_CELLS).filter((id) => state.detailCells.has(id))
     : [];
   const summary: LoadSummary = {
     bounds,
@@ -490,26 +640,265 @@ function load(msg: LoadRequest): { reply: LoadedReply; transfer: ArrayBuffer[]; 
     },
     bytes: { base: base.reduce((n, p) => n + p.gpuBytes, 0), large: large?.gpuBytes ?? 0, atlas: built.data.byteLength },
     ...(msg.source.kind === "document" ? { colourStack } : {}),
-    ...(msg.courseLayer ? { courseLayer: courseSupport ?? { supported: false, reason: "a course layer needs a document source" } } : {}),
-  };
-  const courseState: CourseState | undefined = courseDoc && {
-    ...courseDoc, objectOffset: objects.length, fonts, textAtlas: msg.textAtlas, atlas, meshes: built.meshes,
+    ...(msg.courseLayer ? { courseLayer: courseSupport && courseSupport.supported ? { supported: true as const, cutFeatures: state.course!.cutFeatures.length } : courseSupport ?? { supported: false, reason: "a course layer needs a document source" } } : {}),
+    ...(patchState ? { patch: patchState } : {}),
   };
   const transfer: ArrayBuffer[] = [built.data.buffer as ArrayBuffer];
   for (const p of base) transfer.push(...partTransferables(p));
   if (large) transfer.push(...partTransferables(large));
+  if (patchState) transfer.push(patchState.hidden.buffer as ArrayBuffer);
   const filter = stream.masks?.length && stream.maskIdx ? filterReply(stream, [], stream.maskIdx, stream.masks, ctx) : undefined;
   if (filter) transfer.push(...filterTransferables(filter));
-  return { reply: { type: "loaded", summary, atlas: built, base, large, ...(filter ? { filter } : {}) }, transfer, next: { stream, assignment, ctx, colourStack, ...(courseState ? { course: courseState } : {}) } };
+  return { reply: { type: "loaded", summary, atlas: built, base, large, ...(filter ? { filter } : {}) }, transfer, next: state };
+}
+
+/** A stream whose object ids are `ids[objectIdx]`. */
+function withObjectIds(stream: render.PassStream, ids: ArrayLike<number>): render.PassStream {
+  const objectIdx = new Uint32Array(stream.objectIdx.length);
+  for (let i = 0; i < objectIdx.length; i++) objectIdx[i] = ids[stream.objectIdx[i]];
+  return { ...stream, objectIdx };
+}
+
+// ---- the patch (§5.2 "Patch") ------------------------------------------------
+
+/** Every bucket with passes: the pinned stream's and the overlay's, ascending. */
+function bucketIds(state: State): number[] {
+  const ids = new Set(state.assignment.bucketPasses.keys());
+  for (const id of state.overlay?.bucketPasses.keys() ?? []) ids.add(id);
+  return [...ids].sort((a, b) => a - b);
+}
+
+/** What a bucket's parts are prepared from: its pinned passes less the changed objects', then the overlay's. */
+function partSources(state: State, id: number): PartSource[] {
+  const out: PartSource[] = [];
+  const pinned = state.assignment.bucketPasses.get(id);
+  const ov = state.overlay;
+  if (pinned) {
+    const lost = ov?.lost.get(id);
+    const passes = lost ? pinned.filter((pi) => !lost.has(state.stream.objectIdx[pi])) : pinned;
+    out.push({ stream: state.stream, passes, glyphMesh: state.ctx.glyphMesh, textGlyph: state.ctx.textGlyph });
+  }
+  const own = ov?.bucketPasses.get(id);
+  if (ov && own) out.push({ stream: ov.stream, passes: own, glyphMesh: ov.glyphMesh, textGlyph: ov.textGlyph });
+  return out;
+}
+
+/** One layer of one bucket of the effective document; null when it has nothing of that layer. */
+function partFor(state: State, id: number, layer: PartLayer): PreparedPart | null {
+  const sources = partSources(state, id);
+  if (!sourcesHaveLayer(sources, layer)) return null;
+  return prepareBucketPartFrom(sources, id, layer, state.ctx);
+}
+
+/**
+ * Applies `patch` to the pinned document and replaces the overlay (§5.2 "Patch"). Always from the
+ * pinned state — a patch is a set of keyed states, so the overlay is a function of its content —
+ * and the touched buckets are those whose signature changed. Grows the mesh atlas for the
+ * overlay's glyphs and, with a course layer, recomputes the cut features.
+ */
+function applyOverlay(state: State, patch: mapDocument.MapPatch | null): { state: PatchState; touched: Set<number>; grown?: MeshAtlas } {
+  const pd = state.document;
+  if (!pd) throw new Error("a patch needs a document source");
+  const before = state.overlay;
+  const { document: eff, issues } = mapDocument.applyPatch(pd.doc, patch);
+  let grown: MeshAtlas | undefined;
+  let next: Overlay | undefined;
+  if (eff !== pd.doc) {
+    const n = pd.doc.header.objects.count;
+    const total = eff.header.objects.count;
+    const hidden: number[] = [];
+    for (let i = 0; i < n; i++) if (eff.hidden?.[i]) hidden.push(i);
+    // Changed: the targets of the modify and resymbol ops that applied, unless hidden (hidden wins); and every added object.
+    pd.bySource ??= new Map(Array.from(pd.doc.attrs.sourceIndex, (s, i) => [s, i]));
+    const skipped = new Set(issues.map((x) => x.opId));
+    const changed = new Set<number>();
+    for (const [id, op] of Object.entries(patch!.ops)) {
+      if ((op.op !== "modify" && op.op !== "resymbol") || skipped.has(id)) continue;
+      const i = pd.bySource.get(op.sourceIndex);
+      if (i !== undefined && !eff.hidden?.[i]) changed.add(i);
+    }
+    for (let i = n; i < total; i++) changed.add(i);
+
+    // The changed objects symbolised on their own, ids rewritten to the effective objectIndex.
+    const input = mapDocument.documentRenderInput(eff, { ...pd.options, only: [...changed] });
+    const symbols = pd.remap ? input.symbols.map((s) => render.remapRenderColours(s, pd.remap!)) : input.symbols;
+    const sym = render.symbolise({ objects: input.objects, symbols, fonts: state.fonts });
+    const stream = withObjectIds(sym.stream, input.docIdx);
+    const warnings: Record<string, number> = {};
+    for (const w of sym.warnings) warnings[w.code] = (warnings[w.code] ?? 0) + 1;
+
+    // Glyph meshes join the atlas by content (a re-symbolisation's glyph ids are its own).
+    const size = state.atlas.size;
+    const glyphMesh = new Map<string, number>();
+    for (const m of stream.glyphTable) glyphMesh.set(`${m.glyphId}/${m.partIdx}`, state.atlas.glyph(m, state.glyphTol, `c/${meshKey(m)}`));
+    if (state.atlas.size > size) {
+      grown = state.atlas.build();
+      state.meshes = grown.meshes;
+      state.ctx.meshes = grown.meshes;
+    }
+    const textGlyph = resolveText(stream, state.fonts, state.textAtlas, warnings, { glyphs: 0, missing: 0 });
+    const meshRadius = (g: number, p: number) => {
+      const mi = glyphMesh.get(`${g}/${p}`);
+      return mi === undefined ? 0 : state.meshes[mi].radius;
+    };
+    const { grid, largeId, objectBucket: pinnedBucket } = state.assignment;
+    const { objectBucket, bucketPasses } = assignToGrid(stream, meshRadius, grid, largeId, state.largeCells);
+
+    // Per bucket: the pinned objects it loses and what it gains, by content.
+    const lost = new Map<number, Set<number>>();
+    for (const i of changed) {
+      const b = i < pinnedBucket.length ? pinnedBucket[i] : -1;
+      if (b < 0) continue;
+      let set = lost.get(b);
+      if (!set) lost.set(b, (set = new Set()));
+      set.add(i);
+    }
+    const gained = new Map<number, number[]>();
+    for (const [o, b] of objectBucket) {
+      let arr = gained.get(b);
+      if (!arr) gained.set(b, (arr = []));
+      arr.push(o);
+    }
+    const signature = new Map<number, string>();
+    for (const b of new Set([...lost.keys(), ...gained.keys()])) {
+      const out = [...(lost.get(b) ?? [])].sort((x, y) => x - y);
+      const inn = (gained.get(b) ?? []).sort((x, y) => x - y).map((o) => objectSignature(eff, patch!, o));
+      signature.set(b, JSON.stringify([out, inn]));
+    }
+    next = {
+      state: { hidden: Uint32Array.from(hidden), changed: changed.size - (total - n), added: total - n, issues },
+      changed, lost, stream, glyphMesh, textGlyph, bucketPasses, signature, warnings,
+    };
+  }
+
+  const touched = new Set<number>();
+  const was = before?.signature ?? new Map<number, string>();
+  const now = next?.signature ?? new Map<number, string>();
+  for (const [b, s] of was) if (now.get(b) !== s) touched.add(b);
+  for (const [b, s] of now) if (was.get(b) !== s) touched.add(b);
+  state.overlay = next;
+  const patchState: PatchState = next?.state ?? { hidden: new Uint32Array(0), changed: 0, added: 0, issues };
+  if (state.course) {
+    state.course.cutFeatures = course.cutFeaturesOfDocument(eff);
+    patchState.cutFeatures = state.course.cutFeatures.length;
+  }
+  return { state: patchState, touched, ...(grown ? { grown } : {}) };
+}
+
+/** What an object of the overlay is drawn from: its index, its ops' states and, for a patch symbol, the symbol. */
+function objectSignature(eff: mapDocument.EffectiveDocument, patch: mapDocument.MapPatch, o: number): string {
+  const p = eff.patch!;
+  let ops: unknown[];
+  if (o >= p.baseCount) ops = [patch.ops[`add:${p.added[o - p.baseCount]}`]];
+  else {
+    const s = eff.attrs.sourceIndex[o];
+    ops = [patch.ops[`modify:${s}`] ?? null, patch.ops[`resymbol:${s}`] ?? null];
+  }
+  const si = eff.attrs.symbolIdx[o];
+  return JSON.stringify([o, ops, si >= p.baseSymbols ? eff.header.symbols[si] : si]);
+}
+
+/** A patch change (§5.2 "Patch"): the overlay replaced, the touched buckets re-prepared. */
+function patchReply(state: State | undefined, msg: PatchRequest): { reply: PatchedReply; transfer: ArrayBuffer[] } {
+  if (!state) throw new Error("no document loaded");
+  const t0 = performance.now();
+  const applied = applyOverlay(state, msg.patch);
+  const { largeId } = state.assignment;
+  const held = new Set(msg.detail);
+  const base: PreparedPart[] = [];
+  const detail: PreparedPart[] = [];
+  let large: PreparedPart | null | undefined;
+  for (const id of [...applied.touched].sort((a, b) => a - b)) {
+    if (id === largeId) {
+      large = partFor(state, id, "all");
+      state.largeBytes = large?.gpuBytes ?? 0;
+      continue;
+    }
+    const b = partFor(state, id, "base");
+    if (b) {
+      base.push(b);
+      state.baseBytes.set(id, b.gpuBytes);
+    } else state.baseBytes.delete(id);
+    if (sourcesHaveLayer(partSources(state, id), "detail")) {
+      state.detailCells.add(id);
+      if (held.has(id)) detail.push(partFor(state, id, "detail")!);
+    } else state.detailCells.delete(id);
+  }
+  let baseTotal = 0;
+  for (const n of state.baseBytes.values()) baseTotal += n;
+  const reply: PatchedReply = {
+    type: "patched", generation: msg.generation, patch: applied.state, touched: [...applied.touched].sort((a, b) => a - b),
+    base, detail, ...(large !== undefined ? { large } : {}),
+    detailCells: [...state.detailCells].sort((a, b) => a - b),
+    bytes: { base: baseTotal, large: state.largeBytes },
+    ...(applied.grown ? { atlas: applied.grown } : {}),
+    ms: performance.now() - t0,
+  };
+  const transfer: ArrayBuffer[] = [applied.state.hidden.buffer as ArrayBuffer];
+  for (const p of [...base, ...detail]) transfer.push(...partTransferables(p));
+  if (large) transfer.push(...partTransferables(large));
+  if (applied.grown) transfer.push(applied.grown.data.buffer as ArrayBuffer);
+  return { reply, transfer };
+}
+
+/**
+ * Filter regions over the effective document (§5.2 "Filter regions", "Patch"): the pinned stream
+ * without the changed objects' results, and the overlay's stream, so a moved object is filtered
+ * where it is now and an added one is filtered too.
+ */
+function effectiveFilter(state: State, regions: render.FilterRegion[], fast: boolean, warnings: Record<string, number>): FilterReply {
+  const count = (ws: readonly { code: string }[]) => { for (const w of ws) warnings[w.code] = (warnings[w.code] ?? 0) + 1; };
+  state.objectBounds ??= render.objectBounds(state.stream);
+  const f = render.filterStream(state.stream, regions, { fast, objectBounds: state.objectBounds });
+  count(f.warnings);
+  const ov = state.overlay;
+  if (!ov?.stream.passes.length) {
+    const hidden = ov ? f.hidden.filter((o) => !ov.changed.has(o)) : f.hidden;
+    return dropObjects(filterReply(state.stream, hidden, f.maskIdx, f.masks, state.ctx), ov?.changed);
+  }
+  ov.objectBounds ??= render.objectBounds(ov.stream);
+  const g = render.filterStream(ov.stream, regions, { fast, objectBounds: ov.objectBounds });
+  const a = dropObjects(filterReply(state.stream, f.hidden.filter((o) => !ov.changed.has(o)), f.maskIdx, f.masks, state.ctx), ov.changed);
+  const b = filterReply(ov.stream, g.hidden, g.maskIdx, g.masks, state.ctx);
+  return concatFilters(a, b);
+}
+
+/** A filter reply without the entries of `objects`. */
+function dropObjects(f: FilterReply, objects: ReadonlySet<number> | undefined): FilterReply {
+  if (!objects?.size) return f;
+  const keep: number[] = [];
+  for (let i = 0; i < f.entries.length; i += 3) if (!objects.has(f.entries[i])) keep.push(f.entries[i], f.entries[i + 1], f.entries[i + 2]);
+  return { ...f, entries: Uint32Array.from(keep) };
+}
+
+/** Two filter replies as one: the second's masks after the first's. */
+function concatFilters(a: FilterReply, b: FilterReply): FilterReply {
+  const entries = new Uint32Array(a.entries.length + b.entries.length);
+  entries.set(a.entries);
+  for (let i = 0; i < b.entries.length; i += 3) {
+    entries[a.entries.length + i] = b.entries[i];
+    entries[a.entries.length + i + 1] = b.entries[i + 1];
+    entries[a.entries.length + i + 2] = b.entries[i + 2] + a.masks.length;
+  }
+  const positions = new Float32Array(a.positions.length + b.positions.length);
+  positions.set(a.positions);
+  positions.set(b.positions, a.positions.length);
+  const vertexBase = a.positions.length / 2;
+  const indices = new Uint32Array(a.indices.length + b.indices.length);
+  indices.set(a.indices);
+  for (let i = 0; i < b.indices.length; i++) indices[a.indices.length + i] = b.indices[i] + vertexBase;
+  const hidden = new Uint32Array(a.hidden.length + b.hidden.length);
+  hidden.set(a.hidden);
+  hidden.set(b.hidden, a.hidden.length);
+  return { hidden, entries, positions, indices, masks: [...a.masks, ...b.masks.map((m) => ({ offset: m.offset + a.indices.length, count: m.count }))] };
 }
 
 /**
  * The dynamic bucket (§5.2 "Dynamic bucket"; 04 §7): the course layer
  * symbolised on its own — its symbols already index the completed stack
  * the static parts were built on — and prepared as one `all` part. Object
- * ids continue after the document's (`courseRenderInput`'s
- * `courseObjectOffset`), glyph meshes join the atlas by content, numbers
- * resolve against the loaded text pages.
+ * ids start at `COURSE_OBJECT_BASE` (§5.2 "Object identity"), glyph meshes
+ * join the atlas by content, numbers resolve against the loaded text pages.
  */
 function courseReply(state: State | undefined, msg: CourseRequest): { reply: CourseReply; transfer: ArrayBuffer[] } {
   const empty = (colours: render.ColourStack, warnings: Record<string, number> = {}): { reply: CourseReply; transfer: ArrayBuffer[] } => ({
@@ -523,9 +912,9 @@ function courseReply(state: State | undefined, msg: CourseRequest): { reply: Cou
   const { fastFilter, page: pageInput, ...input } = msg.input;
   const layer = course.courseLayer({ ...input, document: cs.document, cutFeatures: cs.cutFeatures });
   const set = course.courseSymbols(cs.document, cs.stackIndex, msg.input.appearance);
-  const sym = render.symbolise({ objects: layer.objects.map(({ ref: _ref, ...o }) => o), symbols: layer.symbols, fonts: cs.fonts });
+  const sym = render.symbolise({ objects: layer.objects.map(({ ref: _ref, ...o }) => o), symbols: layer.symbols, fonts: state.fonts });
   const objectIdx = new Uint32Array(sym.stream.objectIdx.length);
-  for (let i = 0; i < objectIdx.length; i++) objectIdx[i] = sym.stream.objectIdx[i] + cs.objectOffset;
+  for (let i = 0; i < objectIdx.length; i++) objectIdx[i] = sym.stream.objectIdx[i] + COURSE_OBJECT_BASE;
   const stream: render.PassStream = { ...sym.stream, objectIdx };
 
   const warnings: Record<string, number> = {};
@@ -536,11 +925,11 @@ function courseReply(state: State | undefined, msg: CourseRequest): { reply: Cou
   let colours: render.ColourStack = layer.colours;
   let page: CourseReply["page"] = null;
   if (pageInput) {
-    const pl = course.pageLayer({ ...pageInput, context: cs.document }, layer.colours, cs.fonts);
+    const pl = course.pageLayer({ ...pageInput, context: cs.document }, layer.colours, state.fonts);
     for (const w of pl.warnings) warnings[w.code] = (warnings[w.code] ?? 0) + 1;
     const base = pl.colours.length;
     const inMap = course.pageStreamInMap(pl);
-    const pageObjectOffset = cs.objectOffset + layer.objects.length;
+    const pageObjectOffset = COURSE_OBJECT_BASE + layer.objects.length;
     const ids = new Uint32Array(inMap.objectIdx.length);
     for (let i = 0; i < ids.length; i++) ids[i] = inMap.objectIdx[i] + pageObjectOffset;
     pageStream = { ...inMap, objectIdx: ids, passes: inMap.passes.map((p) => ({ ...p, colour: p.colour + base })) };
@@ -548,35 +937,32 @@ function courseReply(state: State | undefined, msg: CourseRequest): { reply: Cou
     page = { colourBase: base, frameRingUm: pl.frameRing.map((p) => [p.x * 1000, p.y * 1000] as [number, number]) };
   }
 
-  const before = cs.atlas.size;
-  const tol = state.ctx.toleranceUm;
+  const before = state.atlas.size;
   const meshesOf = (s: render.PassStream, prefix: string) => {
     const out = new Map<string, number>();
-    for (const m of s.glyphTable) out.set(`${m.glyphId}/${m.partIdx}`, cs.atlas.glyph(m, Math.max(0.5, tol / 4), `${prefix}/${meshKey(m)}`));
+    for (const m of s.glyphTable) out.set(`${m.glyphId}/${m.partIdx}`, state.atlas.glyph(m, state.glyphTol, `${prefix}/${meshKey(m)}`));
     return out;
   };
   const glyphMesh = meshesOf(stream, "c");
   const pageGlyphMesh = pageStream ? meshesOf(pageStream, "c") : undefined;
-  const grown = cs.atlas.size > before ? cs.atlas.build() : undefined;
-  if (grown) cs.meshes = grown.meshes;
+  const grown = state.atlas.size > before ? state.atlas.build() : undefined;
+  if (grown) {
+    state.meshes = grown.meshes;
+    state.ctx.meshes = grown.meshes;
+  }
 
   const prepared = (s: render.PassStream, bucket: number, mesh: Map<string, number>) => {
-    const textGlyph = resolveText(s, cs.fonts, cs.textAtlas, warnings, { glyphs: 0, missing: 0 });
-    const ctx: PrepareContext = { ...state.ctx, meshes: cs.meshes, glyphMesh: mesh, textGlyph };
+    const textGlyph = resolveText(s, state.fonts, state.textAtlas, warnings, { glyphs: 0, missing: 0 });
+    const ctx: PrepareContext = { ...state.ctx, meshes: state.meshes, glyphMesh: mesh, textGlyph };
     const passes = s.passes.map((_, i) => i);
     return passes.length ? prepareBucketPart(s, bucket, passes, "all", ctx) : null;
   };
   const part = prepared(stream, COURSE_BUCKET, glyphMesh);
   const pagePart = pageStream && pageGlyphMesh ? prepared(pageStream, PAGE_BUCKET, pageGlyphMesh) : null;
 
-  // Filter regions act on the document's stream only (the course part is never filtered, §4.11).
-  let filter: FilterReply | null = null;
-  if (layer.regions.length) {
-    state.objectBounds ??= render.objectBounds(state.stream);
-    const f = render.filterStream(state.stream, layer.regions, { fast: !!fastFilter, objectBounds: state.objectBounds });
-    for (const w of f.warnings) warnings[w.code] = (warnings[w.code] ?? 0) + 1;
-    filter = filterReply(state.stream, f.hidden, f.maskIdx, f.masks, state.ctx);
-  }
+  // Filter regions act on the document's objects only (the course part is never filtered, §4.11) —
+  // the effective document's (§5.2 "Patch").
+  const filter = layer.regions.length ? effectiveFilter(state, layer.regions, !!fastFilter, warnings) : null;
 
   const um = (v: number) => v / 1000;
   const reply: CourseReply = {
