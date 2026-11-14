@@ -17,7 +17,8 @@ C2, §8–9 by C3, §11 by C7 (2026-10-24); the pipeline moved into
 `@oxygen/shared` by G13 (2026-11-13: §1, §5, §8.2); the print job, §8.5,
 by G15 (2026-11-13); composing on the device, §8.6, by G16 (2026-11-14);
 the event's map patch in print by G14 (2026-11-14: §4.3, §8.2, §8.5,
-§8.6).
+§8.6); the preview-build smoke of offline print by G29 (2026-11-14:
+§8.6 "Offline", §9.1).
 
 ## 1. The print module and its writer
 
@@ -1211,7 +1212,9 @@ downloads in Chromium with `maps.pdf` of the same
 query object for object — every indirect object but `Info`, the
 cross-reference and the object streams (the date and `/ID`). The E2E runs
 the Vite **dev server** (`playwright.config.ts`): an unbundled module
-worker with the pre-bundled PDF library, not the production chunk.
+worker with the pre-bundled PDF library, not the production chunk. The
+production chunk is composed end to end by the preview-build smoke
+(G29; "Offline", last paragraph).
 
 **Delivery** (05 §5.11 phase 2 "lazy-loaded and service-worker cached").
 The worker is its own chunk (`assets/print-worker-entry-<hash>.js`), out
@@ -1344,11 +1347,52 @@ Identity (above) is unchanged: the stored job is the server's job, with
 its patch inline (§8.5, G14), composed by the same worker with the same
 faces, document and `print.png` bytes.
 
-In the E2E (dev server, no service worker) the module worker cannot be
-restarted offline, so the test exports within `PRINT_WORKER_IDLE_MS` of
-the store; in a production build the chunk and the faces come from the
-service worker's `print-worker` and `map-fonts` caches after a reload
-(not tested end to end: Pending).
+In the dev-server E2E (`course-maps.spec.ts`, no service worker) the
+module worker cannot be restarted offline, so the test exports within
+`PRINT_WORKER_IDLE_MS` of the store. In a production build the chunk and
+the faces come from the service worker's `print-worker` and `map-fonts`
+caches after a reload, and the document from `map-documents`.
+
+**The preview-build smoke** (G29; `e2e/offline-print.preview.spec.ts`,
+project `preview`: `vite build` + `vite preview` on :4400 with the
+service worker registered, `docs/e2e-sharding.md` "The preview stack").
+On the production bundle it checks what the dev server cannot reach:
+
+1. The service worker installs on the first load, and the next load is
+   controlled (`registerType: "prompt"` claims no client).
+2. `globIgnores`: the precache holds the bundle and no
+   `print-worker-entry-<hash>.js`; `print-worker` is empty.
+3. *Make maps available offline* (the Courses page) puts the built chunk
+   in `print-worker`, the three faces in `map-fonts`, the document in
+   `map-documents`, and the course's job and the manifest in
+   `offline-print`.
+4. A reload drops everything held in memory. Then
+   `context.setOffline(true)`: a `.ttf` the service worker has not
+   cached is refused, so the offline state reaches the service worker.
+5. The course's export downloads, composed from the stored job by the
+   built worker. That worker is the IIFE chunk, constructed with
+   `{ type: "module" }` (Delivery, above), started with no network: its
+   chunk is asked offline and answered by the service worker
+   (`response.fromServiceWorker()`). The reloaded page reads the faces
+   and the document while it loads, still online, and keeps them in
+   memory for the export. They too are answered by the service worker,
+   and since the reload it has fetched none of them, nor the chunk, from
+   the network (its own requests, `request.serviceWorker()`): they come
+   from its caches. The one face it does try the network for is the
+   uncached probe's. The same detection sees it fetch the chunk and the
+   faces while storing, so it is not blind.
+6. The notice shows the manifest's time, no `maps.pdf` is asked, and the
+   PDF equals `maps.pdf` of the same query object for object.
+
+With the `print-worker` cache deleted before going offline, the export
+does not download. So the chunk comes from that cache, not from the
+browser's HTTP cache. Checked by hand at G29; not part of the suite.
+
+The smoke does not cover:
+- offline navigation (the `navigateFallback` shell);
+- the `trpc-api` and `api-misc` routes;
+- the update prompt;
+- graphics (`print.png`), which the dev-server E2E stores.
 
 ### 8.7 On a venue box (G18)
 
@@ -1407,12 +1451,13 @@ back to the box's `maps.pdf`.
 | `packages/shared/src/print/__tests__/print-job.test.ts` (G15, G14) | `renderPrintJob` equals `renderCoursePages` for the same inputs (copies, a PNG and an SVG; the PNG fetched once without a box, the SVG once per box by id); a JSON round trip gives equal bytes; an unfetchable graphic gives `SVG_RASTER` / `IMAGE_MISSING` and a PDF; the document read once per hash; version 1 refused; with a patch (G14): `renderCoursePages`' bytes over the patched prepared document and not the unpatched ones, a JSON round trip equal, a disabled patch the unpatched bytes, a skipped op a `PATCH_ISSUE` warning and still a PDF |
 | `packages/shared/src/print/__tests__/prepared-document.test.ts` (G13, G14) | decode, render input, header and cut features; one read per key, the third key evicts the oldest, a failed decode forgotten; with a patch: a hidden boulder neither drawn nor a cut feature, an added one both; one entry per version and a null, disabled or op-less patch the unpatched entry; a patch keyed onto another document not applied; `preparedDocumentKey`; a skipped op in `patchIssues`; `objectsNear` |
 | `e2e/course-maps.spec.ts` "export a course that has no template yet" (G15, G14 part) | `print-job?courses=` of the exported course: version 2, `cmyk`, a document hash, no patch, as many pages (with copies) as the same query's `maps.pdf`, its file name; after `mapPatch.applyChange` (a hide) the job carries the patch at the write's version, the device's export (no `maps.pdf` request) equals the patched `maps.pdf` object for object, and removing the op makes the patch null again |
-| `e2e/course-maps.spec.ts` "export a course that has no template yet" (G16 part), "the server prints when the device cannot" | §8.6 in Chromium: the Courses page's course export asks `print-job` and not `maps.pdf`, is saved under the job's file name and equals `maps.pdf` of the same query object for object (all but `Info`, the cross-reference and object streams); again with a PNG and an SVG on the sheet — `print.png` asked for the PNG without a box and for the SVG with `w`, `h` (the first E2E on `print.png`); `navigator.deviceMemory` 0.5 → `maps.pdf` asked, no job, one A4 page downloaded. Runs the Vite dev server: the production chunk is not exercised (Pending) |
+| `e2e/course-maps.spec.ts` "export a course that has no template yet" (G16 part), "the server prints when the device cannot" | §8.6 in Chromium: the Courses page's course export asks `print-job` and not `maps.pdf`, is saved under the job's file name and equals `maps.pdf` of the same query object for object (all but `Info`, the cross-reference and object streams); again with a PNG and an SVG on the sheet — `print.png` asked for the PNG without a box and for the SVG with `w`, `h` (the first E2E on `print.png`); `navigator.deviceMemory` 0.5 → `maps.pdf` asked, no job, one A4 page downloaded. Runs the Vite dev server: the production chunk is `offline-print.preview.spec.ts`'s (G29) |
 | `packages/api/src/__tests__/print-device.test.ts` (G16, G14) | G14: the fixture job with a patch (a hide, a modify, an add) composes on the device to the server worker's bytes, which differ from the unpatched job's. §8.6: the browser's print worker (`web/src/print/worker.ts`, driven as its main thread drives it, graphics as `print.png` serves them) and the server's print worker compose the fixture job to equal bytes (`deterministic`) — the guarantee slice G answer 3 rests on |
 | `packages/web/src/print/__tests__/worker.test.ts` (G16, G14) | G14: a job with a patch composes to `renderPrintJob`'s patched bytes, unlike the unpatched job's, the document asked again for the new key. The worker's handler: the fixture job → `renderPrintJob`'s bytes in process, pages in order; the document asked once across two jobs, a PNG once without a box, each SVG once per box; an unfetchable graphic → `SVG_RASTER` / `IMAGE_MISSING` and a PDF; an unreadable document and version 2 → `error`, the worker still usable; compose before `init` refused |
 | `packages/web/src/print/__tests__/client.test.ts`, `capability.test.ts`, `imports.test.ts` (G16) | `printMapsPdf`: the device path (the job, the document by hash through the event, `print.png` per graphic, the job's file name, no `maps.pdf`), the worker kept and the document asked once across exports; `maps.pdf` without a `Worker` or under 2 GiB (no job asked), above the limit, for version 2, when the worker fails to start, when the document cannot be read (the worker terminated); a worker that goes silent (watchdog) and a 2xx body that is not a job → `maps.pdf`, the next export unaffected; a job 400 is the export's error with no `maps.pdf` request; `DEVICE_PRINT_JOB_VERSION` = `PRINT_JOB_VERSION`. `deviceLimit`'s table and `printCost` (copies free, 0 copies none, A3 = 2). Only `print/worker.ts` imports `@oxygen/shared/print` at runtime; `mapsPdfTarget` of every Export ▾ entry |
 | `packages/web/src/print/__tests__/client.test.ts` "offline" (G17), `offline-store.test.ts`, `offline-prepare.test.ts`; `lib/editor/__tests__/export-menu.test.ts`; `lib/__tests__/trpc-links.test.ts` | §8.6 "Offline": composing to store keeps every `print.png` the composer asks (the PNG without a box, each SVG at its box); with no network the stored job composes with its stored graphics (no `IMAGE_MISSING` / `SVG_RASTER`), carries its `storedAt`, asks no `maps.pdf`, and is the size of the online export; a query not stored `notStored`, above the limit `tooLarge`, no `Worker` `unsupported` (no request), a document that cannot be read `failed`; an HTTP error never replaced; online write-through only for a stored event, the manifest's time kept. The store: query normalisation, keys, job and stored time round trip, graphics, manifest, `retain`, five events kept, no Cache Storage. The step: every query's job, PNGs once, the one SVG sheet under four queries composed once, document and faces, the manifest; an HTTP error skipped and listed, no SVG → the worker warmed; the network going mid-run → partial, earlier entries kept; a re-run deletes entries outside the set; `unsupported` / `offline` with no request; the silent run skips within 30 min and never ensures; a second caller joins; progress until the end; `boxLearningJobs` (distinct sheets, copies 1, chunks within the limit). `offlineMapQueries` over courses, a root's variants, classes and sheets (normalised, once, no variant course, no per-runner export without runners); the offline entry an action; `ensureSheetsBestEffort` skips on a network failure |
 | `e2e/course-maps.spec.ts` "offline print: the job kept on the device" (G17) | §8.6 "Offline" in Chromium: with an SVG and a PNG on the course's sheet, the Courses page's *Make maps available offline* stores the jobs of `?courses=`, the unfiltered, `?allControls=1` and `?maps=` queries, the PNG's `print.png` and the SVG's at a box, and the manifest; the sync panel shows the document stored and *Print stored* with its time; `context.setOffline(true)`, the course's export downloads (the ensure step skipped), the notice says *Printed offline from the maps stored on…* with the manifest's time, no `maps.pdf` asked, and the PDF equals `maps.pdf` of the same query object for object; with that job deleted from the store the export's error line says it is not stored on this device. Dev server: the module worker started by the store is the one that composes (§8.6 "Offline", last paragraph) |
+| `e2e/offline-print.preview.spec.ts` "store, reload, go offline, export…" (G29; project `preview`, `docs/e2e-sharding.md` "The preview stack") | §8.6 "Delivery" and "Offline" on the production bundle (`vite build` + `vite preview`, service worker registered): the second load controlled; the precache without `print-worker-entry-<hash>.js` (`globIgnores`) and `print-worker` empty; *Make maps available offline* puts the chunk in `print-worker`, the three faces in `map-fonts`, the document in `map-documents`, the job and manifest in `offline-print`; after a reload and `context.setOffline(true)` an uncached `.ttf` is refused, and the course's export composes the stored job in the built worker (the IIFE chunk with `{ type: "module" }`), its chunk asked offline and the faces and document since the reload all answered by the service worker, which fetched none of them from the network after the reload (its own requests: only the probe's); the notice's time is the manifest's, no `maps.pdf` is asked, the PDF equals `maps.pdf` object for object |
 | `packages/shared/src/print/__tests__/print-job.test.ts` "the fixture job" (G16), `src/__tests__/collate.test.ts` | the fixture job's sheets (course × 3, two parts, all controls with Å1 before Z1, setter), graphics and JSON round trip; composed through `renderPrintJob` = `renderCoursePages`, the SVGs asked at their boxes. `compareLabels`: a fixed list in its literal order, equal to the en-US numeric order and not to the Swedish |
 | `packages/api/src/__tests__/worker-bootstrap.test.ts` | the shared bootstrap: `.js` imported as is, `.ts` through tsx |
 | `packages/api/src/render/__tests__/pdf-golden.test.ts` | the PDF golden tier, §9.2, and `qpdf --check` on every file it writes; `boxDown`; the swatch read-back |
@@ -1862,16 +1907,6 @@ The tool's own tests (`print-run.test.ts`, `measure-print.test.mjs`,
   exchange as one sheet per part (§5.2), so several frames on one sheet
   stay Pending (decided on the user's standing instruction 2026-11-07,
   for review).
-- **The production print worker is checked by build inspection only**
-  (§8.6 "Delivery", G16; "Offline", G17): the E2E runs the dev server,
-  which registers no service worker, so the minified
-  `print-worker-entry-<hash>.js`, its `{ type: "module" }` construction
-  in the built format, the `print-worker` and `map-fonts` routes, the
-  `globIgnores` entry and offline printing after a reload have no
-  automated test. G17 did not add the preview-build smoke (the user's
-  answer, 2026-11-14): a SLICES row of its own, required before the
-  G-gate (a Playwright project on `vite build` + `vite preview` with the
-  service worker).
 - **Device limits are estimates** (§8.6 "Capability", G16): 8 / 24 / 64
   A4-equivalents by `navigator.deviceMemory` (8 / 24 by pointer where it
   is undefined), derived from §11.5's sizes; replaced by measurements on
