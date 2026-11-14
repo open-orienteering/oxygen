@@ -121,7 +121,7 @@ export interface TerrainStats {
   drapeBytes: number;
   /** The tile target (not in the budget, as the canvas's own buffers are not). */
   scratchBytes: number;
-  /** The drape layers drawn, priority order; `ratio` = texel density / what the screen needs at the layer's nearest point. */
+  /** The drape layers drawn, priority order; `ratio` = texel density / the layer's need (`DrapeLayer.needPxPerUm`: the nearest point's for the near or only layer, the split depth's for the far one). */
   layers: { role: DrapeLayer["role"]; widthPx: number; heightPx: number; pxPerUm: number; ratio: number }[];
   drapeRenders: number;
   /** The last drape re-render: visible-set rebuild + tiles + mip chains, ms; its draws and tiles. */
@@ -218,8 +218,10 @@ export class MapGlEngine {
   private gated = false;
   /** Which frame the drawn set was selected for: the 2D view, or the drape layers. */
   private selection: "2d" | "3d" = "2d";
-  /** The height field (§5.6): kept for H7's pick; its mesh is uploaded when the worker's preparation is in. */
+  /** The height field drawn (§5.6), the pair of `mesh`: kept for H7's pick. */
   private field: HeightField | null = null;
+  /** The field of the `setTerrain` in flight: becomes `field` with its mesh, so the two always match. */
+  private pendingField: HeightField | null = null;
   private mesh: TerrainMesh | null = null;
   private terrainGeneration = 0;
   private terrainWaiter: { generation: number; resolve: (m: TerrainMesh | null) => void; reject: (e: Error) => void } | undefined;
@@ -841,7 +843,7 @@ export class MapGlEngine {
     return this.mesh;
   }
 
-  /** The field set last (null: none). */
+  /** The field `terrainMesh` was built from (null: none); a `setTerrain` in flight replaces both when its mesh is in. */
   get terrainField(): HeightField | null {
     return this.field;
   }
@@ -855,8 +857,9 @@ export class MapGlEngine {
     this.terrainWaiter?.reject(new Error("superseded by a later setTerrain"));
     this.terrainWaiter = undefined;
     const generation = ++this.terrainGeneration;
-    this.field = field;
+    this.pendingField = field;
     if (!field) {
+      this.field = null;
       this.dropTerrain();
       return Promise.resolve(null);
     }
@@ -886,7 +889,8 @@ export class MapGlEngine {
   private acceptTerrain(m: TerrainReply | (WorkerReply & { type: "error" })): void {
     const w = this.terrainWaiter;
     const generation = m.type === "terrain" ? m.generation : m.terrain;
-    if (!w || generation !== w.generation || !this.field) return;
+    const field = this.pendingField;
+    if (!w || generation !== w.generation || !field) return;
     this.terrainWaiter = undefined;
     if (m.type === "error") {
       w.reject(new Error(m.message));
@@ -896,7 +900,8 @@ export class MapGlEngine {
       const origin = this.summary ? { x: this.summary.originX, y: this.summary.originY } : { x: 0, y: 0 };
       this.renderer.releaseDrapes();
       const t0 = performance.now();
-      this.mesh = this.renderer.terrain.setField(this.field, origin, { terrain: m.terrain, normals: m.normals });
+      this.mesh = this.renderer.terrain.setField(field, origin, { terrain: m.terrain, normals: m.normals });
+      this.field = field;
       this.terrainUploadMs = performance.now() - t0;
       this.terrainPrepareMs = m.ms;
       this.drapeLayersDrawn = [];
@@ -950,11 +955,12 @@ export class MapGlEngine {
         this.onChange?.();
       }, DRAPE_SETTLE_MS);
     }
-    const first = this.selection !== "3d" || !this.drapeLayersDrawn.length;
+    // `drapeKey` is "" until layers are selected for this field and document ("none" when the camera sees no mesh).
+    const first = this.selection !== "3d" || this.drapeKey === "";
     let layers = this.drapeLayersDrawn;
     if (first || t0 - this.lastMoveAt >= DRAPE_SETTLE_MS) {
       const next = drapeLayers(cam, meshBox(mesh, e), mesh.originUm, this.drapeLimits());
-      const key = next.map((l) => viewKey(l.view)).join(";");
+      const key = next.map((l) => viewKey(l.view)).join(";") || "none";
       if (first || key !== this.drapeKey) {
         layers = next;
         this.drapeKey = key;

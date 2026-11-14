@@ -86,6 +86,7 @@ interface DocWindow {
 
 interface TerrainScenario {
   frames: number;
+  seconds: number;
   meshCpuMs: { p50: number; p95: number };
   maxMeshDraws: number;
   drapeRenders: number;
@@ -184,9 +185,11 @@ test.describe("WebGL2 map backend — whole document", () => {
     expect(t.field.prepareMs).toBeDefined(); // prepared in the worker
     for (const sc of [t.orbit, t.close]) {
       expect(sc.frames).toBe(240);
-      // the first frame, then once after each of the three pauses: never while the camera turns
+      // the first frame and once after each of the three pauses, plus detail arrivals at most every
+      // DRAPE_ARRIVAL_MS (500 ms) while they stream: never once per frame as the camera turns
       expect(sc.drapeRenders).toBeGreaterThanOrEqual(1);
-      expect(sc.drapeRenders).toBeLessThanOrEqual(4 + 2); // + detail arrivals at the close-up
+      expect(sc.drapeRenders).toBeLessThanOrEqual(4 + Math.ceil((sc.seconds * 1000) / 500));
+      expect(sc.drapeRenders).toBeLessThan(sc.frames / 4);
       expect(sc.maxMeshDraws).toBeGreaterThan(0);
       expect(sc.maxMeshDraws).toBeLessThanOrEqual(7);
       expect(sc.layers.length).toBeGreaterThan(0);

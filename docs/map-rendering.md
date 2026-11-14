@@ -2451,11 +2451,16 @@ role: "near" | "far", view: ViewRect, needPxPerUm }`, priority order:
   (`distanceForPxPerUm`'s inverse).
 - **Cap** (decision 5): the density is lowered until the layer's sides
   are at most `limits.maxSide` and its texels at most `limits.maxPixels`.
-  Sides are rounded up to the screen's parity, so at pitch 0 the texel
-  centres fall on the pixel centres.
+  The rectangle's edges are snapped outward to the screen's pixel grid
+  at pitch 0 (`u = u_t + (k − width / 2) / ρ` about the target, k
+  whole), so at pitch 0 the texel centres fall on the pixel centres —
+  also where the field's edge clips the layer off the screen's centre
+  (review finding; H7 hands over on maps whose sheet passes the field).
+  A size loop under the texel allowance is bounded: snapping keeps at
+  least a texel a side.
 - **The 2D ↔ 3D hand-over**: at pitch 0 with the budget's room the one
-  layer *is* the 2D view, grown by the margin (same centre, `pxPerUm`
-  and rotation), so the 3D frame over flat ground equals the 2D frame —
+  layer *is* the 2D view, grown by the margin and snapped to its pixel
+  grid (centre within a texel, same `pxPerUm` and rotation), so the 3D frame over flat ground equals the 2D frame —
   exactly on a GPU (max 1 level, north up), to the MSAA resolve's
   rounding in SwiftShader (E2E). Turned, the texel grid is turned
   against the pixels and the frame is a bilinear resample of the 2D one
@@ -2521,7 +2526,9 @@ shows changes** — never per camera frame:
   (§5.6 "Drawing").
 - Once the camera has been still for 150 ms, the layers are re-selected
   for the footprint; if any view differs, the drawn cells are the
-  layers' (below) and the drape is stale.
+  layers' (below) and the drape is stale. The first 3D frame after a
+  field, a load or a 2D frame selects at once; a camera that sees none
+  of the mesh selects no layer once, not every frame.
 - Whatever makes the 2D visible set dirty — a course or edit reply, a
   patch, `setHidden`, a filter — rebuilds it and makes the drape stale
   at once, over the layers it has: a course drag does not wait for the
@@ -2564,7 +2571,8 @@ engine.stats().terrain  // fieldBytes, drapeBytes, scratchBytes, layers (role, s
 ```
 
 - `setTerrain` posts the field to the worker (a copy of the grid; the
-  engine keeps the field for the pick), uploads the reply in the
+  engine keeps the field for the pick, and `terrainField` turns to it
+  only with its mesh, so the pair always matches), uploads the reply in the
   document's model space (the arenas' origin; a later `load` moves the
   mesh with `setOrigin`) and resolves with the mesh; a later call
   rejects one in flight; `null` drops the textures and the drape and
@@ -2718,7 +2726,7 @@ Mesh frames (p50 / p95 ms) and drape re-renders:
 | `map-gl/terrain/__tests__/shade.test.ts` | flat = 1; sin θ + cos θ facing the light, cos θ − sin θ away, cos θ across; the clamps; exaggeration in the shader = `heightNormals(field, e)`; the colour product; the GLSL's constants |
 | `map-gl/terrain/__tests__/footprint.test.ts` (H6) | footprint → view: the screen rectangle at pitch 0, the analytic trapezoid tilted, every on-screen surface point of 40 random cameras inside the footprint and a layer, the box clip, empty when looking away; the pitch-0 layer is the 2D view grown by the margin (same pixel offsets, screen parity) at any bearing; limits never exceeded over 60 random cameras; split by need on a wide depth range — each layer at its need when the cap allows, the far one at the split depth's, fewer texels than one layer, the near one inside the far one and over the ground beyond the screen's bottom edge, every on-screen ground point at least at its need; both scaled together under the cap; one layer on a narrow depth range and at pitch 0 when capped; a tiny texel allowance terminates; at pitch 0 the texels lie on the pixels even where the screen crosses the field's edge; tiles partition the layer and draw every texel where its matrix puts it |
 | `map-gl/__tests__/worker-terrain.test.ts` (H6) | the `terrain` request's prepared mesh and normals equal `buildTerrainMesh` and `heightNormals` on a cone and a noise field, without a document; the two arrays transferred; an error names its generation |
-| `map-gl/__tests__/engine.test.ts` "terrain" (H6) | the field prepared in the worker and uploaded at the document's origin; drape before mesh, the layer's matrix = `viewMatrix` of its view, the hand-over view at pitch 0; mesh only while the camera moves, the settle timer's `onChange`, one re-render after it and none for the same camera; a content change and `invalidateDrape` re-render at once over the same layers; the layers' cells requested and drawn, detail arrivals re-render, gated per layer; the field and drape in `residentBytes`, the drape ≤ ⅓ of a small budget; `setTerrain(null)` drops both; a 2D render after a 3D frame draws the 2D view's cells; a superseded `setTerrain` rejects |
+| `map-gl/__tests__/engine.test.ts` "terrain" (H6) | the field prepared in the worker and uploaded at the document's origin; drape before mesh, the layer's matrix = `viewMatrix` of its view, the hand-over view at pitch 0; mesh only while the camera moves, the settle timer's `onChange`, one re-render after it and none for the same camera; a content change and `invalidateDrape` re-render at once over the same layers; the layers' cells requested and drawn, detail arrivals re-render, gated per layer; the field and drape in `residentBytes`, the drape ≤ ⅓ of a small budget; `setTerrain(null)` drops both; a 2D render after a 3D frame draws the 2D view's cells; a superseded `setTerrain` rejects; arrivals held to `DRAPE_ARRIVAL_MS` and the last at once; a near layer above the gate and a far one below (detail drawn and requested for the near one's cells only, `whenComplete` on them); a load moves the mesh to the new origin and re-selects; a worker failure rejects and keeps the field and mesh; `dispose` rejects a request in flight; a camera that sees no mesh renders no drape |
 | `e2e/map-terrain.spec.ts` | on the dev page in headless Chromium: the lit cone top-down with a grey drape — facing flank, far flank and flat ground at §5.6's analytic values ± 10 levels, ≤ 7 draws; the checker at pitch 60 — two adjacent squares on flat ground in their own colours, the apex projected above its foot; a south-flank point at pitch 60 at its slope's shade for e = 2 and e = 1 (the mesh lifted by the R16I heights and the exaggeration applied in the shader — a flat mesh or an ignored e would show another value); with `drape=half`, the background colour beyond the drape, flat at full strength and on the far flank shaded; no background pixel inside the noise field's projected outline at mixed levels, and auto LOD within 2 % of level 0; a click picks the point under the cursor within 0.2 mm. H6 (`doc=course`): at pitch 0 over flat ground the 3D frame equals `engine.render`'s 2D frame (north up: max 10 levels, < 0.5 % over 2 — SwiftShader's MSAA resolve; turned 25°: < 1 % over 2); tilted 60° over the cone, the leg 31–32 purple on the flank, the map's black line, paper white on the south flank at §5.6's shade for its slope, ≤ 7 draws; moved to control 32 the old drape does not reach (no purple) and no re-render happens until the camera settles, then the course is there; close and tilted, a near layer and a coarser far one (> 1.5×), each at its need, the course from the near one, texels within a third of the budget, and a 2 MB budget's third respected |
 | `e2e/map-gl-doc.spec.ts` "terrain=1" (H6) | the 3D bench on `e2e/test.ocd` at the event budget: the field prepared in the worker, 240 frames per scenario, drape re-renders only at the start and after the pauses, ≤ 7 mesh draws, drape ≤ 10 MB |
 

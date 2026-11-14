@@ -1286,11 +1286,6 @@ function drawnPasses(state: State, i: number): { stream: render.PassStream; pass
   return passes.length ? { stream: state.stream, passes, glyphMesh: state.ctx.glyphMesh, textGlyph: state.ctx.textGlyph } : undefined;
 }
 
-/**
- * The highlight of one object's passes (§5.5 "Document objects"): in `HIGHLIGHT_COLOUR` under the
- * edit part's id `object`; strokes, glyphs and text as they are (halos left out), a fill or hatch
- * as a `HIGHLIGHT_OUTLINE_UM` outline of its area, a pattern-clipped glyph pass as its clip's.
- */
 /** The terrain request's work: `prepareTerrain` and `heightNormals` on the field (confidence not needed). */
 export function terrainReply(msg: TerrainRequest): { reply: TerrainReply; transfer: ArrayBuffer[] } {
   const { width, height } = msg.header;
@@ -1307,6 +1302,11 @@ export function terrainReply(msg: TerrainRequest): { reply: TerrainReply; transf
   };
 }
 
+/**
+ * The highlight of one object's passes (§5.5 "Document objects"): in `HIGHLIGHT_COLOUR` under the
+ * edit part's id `object`; strokes, glyphs and text as they are (halos left out), a fill or hatch
+ * as a `HIGHLIGHT_OUTLINE_UM` outline of its area, a pattern-clipped glyph pass as its clip's.
+ */
 export function highlightPasses(stream: render.PassStream, passes: readonly number[], textGlyph: Map<number, TextPassGlyphs>, object: number): { stream: render.PassStream; textGlyph: Map<number, TextPassGlyphs> } {
   const out: render.Pass[] = [];
   const glyphs = new Map<number, TextPassGlyphs>();

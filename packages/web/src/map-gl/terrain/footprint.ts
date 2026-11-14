@@ -156,23 +156,28 @@ interface UvRect {
   v1: number;
 }
 
-/** A layer's view: the rectangle at the highest density ≤ `need` its texel limits allow. */
-function layerView(r: UvRect, need: number, maxSide: number, maxPixels: number, bearingDeg: number, originUm: { x: number; y: number }, screen: { w: number; h: number }): ViewRect {
+/**
+ * A layer's view: the rectangle at the highest density ≤ `need` its texel limits allow, its texel
+ * edges on the screen's pixel grid at pitch 0 — the grid `anchor` (the camera target's u, v and the
+ * screen's size) defines, `u = u_t + (k − width / 2) / ρ` — so the 2D ↔ 3D hand-over samples texel
+ * centres even where the field's edge clipped the rectangle off the screen's centre.
+ */
+function layerView(r: UvRect, need: number, maxSide: number, maxPixels: number, bearingDeg: number, originUm: { x: number; y: number }, anchor: { u: number; v: number; w: number; h: number }): ViewRect {
   const ew = Math.max(r.u1 - r.u0, 1), eh = Math.max(r.v1 - r.v0, 1);
   let rho = Math.min(need, (maxSide - 2) / ew, (maxSide - 2) / eh, Math.sqrt(Math.max(maxPixels, 1) / ((ew + 2 / need) * (eh + 2 / need))));
-  // Sides of the screen's parity: at pitch 0 the texel centres then fall on the pixel centres.
-  const side = (e: number, s: number) => {
-    const n = Math.max(1, Math.ceil(e * rho));
-    return (n - s) % 2 ? n + 1 : n;
+  const snap = (lo: number, hi: number, at: number, screen: number) => {
+    const a0 = Math.floor((lo - at) * rho + screen / 2), a1 = Math.max(a0 + 1, Math.ceil((hi - at) * rho + screen / 2));
+    return { n: a1 - a0, mid: at + ((a0 + a1) / 2 - screen / 2) / rho };
   };
-  let w = side(ew, screen.w), h = side(eh, screen.h);
-  while (w * h > maxPixels && rho > 0) {
-    rho *= 0.99;
-    w = side(ew, screen.w);
-    h = side(eh, screen.h);
+  let su = snap(r.u0, r.u1, anchor.u, anchor.w), sv = snap(r.v0, r.v1, anchor.v, anchor.h);
+  // Bounded: snapping keeps at least one texel a side, so a tiny allowance cannot be met exactly.
+  for (let i = 0; i < 400 && su.n * sv.n > maxPixels; i++) {
+    rho *= 0.97;
+    su = snap(r.u0, r.u1, anchor.u, anchor.w);
+    sv = snap(r.v0, r.v1, anchor.v, anchor.h);
   }
-  const [cx, cy] = bearingFrame(bearingDeg).toXy([(r.u0 + r.u1) / 2, (r.v0 + r.v1) / 2]);
-  return { centreX: cx + originUm.x, centreY: cy + originUm.y, pxPerUm: rho, widthPx: w, heightPx: h, rotationDeg: bearingDeg };
+  const [cx, cy] = bearingFrame(bearingDeg).toXy([su.mid, sv.mid]);
+  return { centreX: cx + originUm.x, centreY: cy + originUm.y, pxPerUm: rho, widthPx: su.n, heightPx: sv.n, rotationDeg: bearingDeg };
 }
 
 /**
@@ -203,8 +208,9 @@ export function drapeLayers(cam: TerrainCamera, box: Box3, originUm: { x: number
     };
   };
   const all = rectOf(poly);
-  const screen = { w: cam.widthPx, h: cam.heightPx };
-  const make = (r: UvRect, density: number, pixels: number) => layerView(r, density, limits.maxSide, pixels, cam.bearingDeg, originUm, screen);
+  const [tu, tv] = frame.toUv([cam.target.x, cam.target.y]);
+  const anchor = { u: tu, v: tv, w: cam.widthPx, h: cam.heightPx };
+  const make = (r: UvRect, density: number, pixels: number) => layerView(r, density, limits.maxSide, pixels, cam.bearingDeg, originUm, anchor);
   const depths = poly.map(depth);
   const dMin = Math.max(Math.min(...depths), floor), dMax = Math.max(...depths);
   const one = (): DrapeLayer[] => [{ role: "far", view: make(all, need, limits.maxPixels), needPxPerUm: need }];

@@ -13,6 +13,7 @@ import { documentBytes, indexOf, request } from "./course-fixture";
 import { vi } from "vitest";
 import type { HeightField } from "@oxygen/shared/src/terrain/field/read.js";
 import { DRAPE_ARRIVAL_MS, DRAPE_SETTLE_MS } from "../engine";
+import { aboveZoomGate } from "../buckets";
 import { drapeTextureBytes } from "../renderer";
 import { assembleTerrainMesh, type TerrainMesh } from "../terrain/mesh";
 import type { PreparedField, TerrainFrame } from "../terrain/program";
@@ -1071,6 +1072,61 @@ describe("MapGlEngine terrain (docs/map-rendering.md §5.6 \"Engine API\", \"Set
     expect(engine.stats().drawnCells).toBe(4);
     expect(engine.stats().drawnDetail).toBe(4);
     expect(renderer.visibleSets.length).toBe(before + 1);
+  });
+
+  it("gates each layer by its own density: the near layer's detail drawn and requested, the far one's not", async () => {
+    const { engine, transport, cam } = await withTerrain();
+    // a small canvas low over the field: near above the zoom gate, far below it
+    engine.renderTerrain({ camera: cam(126_000, 66_000, { pitchDeg: 70, widthPx: 150, heightPx: 150 }, 0.0012), exaggeration: 1 }, opts);
+    const t = engine.stats().terrain!;
+    expect(t.layers.map((l) => [l.role, aboveZoomGate(l.pxPerUm)])).toEqual([["near", true], ["far", false]]);
+    transport.flush();
+    const st = engine.stats();
+    expect(st.gated).toBe(false);
+    expect(st.drawnDetail).toBeGreaterThan(0);
+    expect(st.drawnDetail).toBeLessThan(st.drawnCells);
+    expect(prepares(transport).at(-1)!.ids.length).toBeLessThan(st.drawnCells);
+    // and whenComplete waits for the near layer's detail only
+    await engine.whenComplete();
+  });
+
+  it("moves the mesh to a new document's origin and re-selects the drape after a load", async () => {
+    const { engine, renderer, transport, cam } = await withTerrain();
+    engine.renderTerrain({ camera: cam(125_000, 125_000), exaggeration: 1 }, opts);
+    const n = renderer.drapeRenders.length;
+    const p = engine.load({ source: { kind: "objects", objects: objects().map((o) => ({ ...o, path: { ...o.path, coords: Int32Array.from(o.path.coords, (v) => v + 40_000) } })), symbols: render.pilotSymbols }, fonts: [{ family: "liberation-sans", bytes: fontBytes() }] });
+    transport.flush();
+    const s2 = await p;
+    expect(engine.terrainMesh!.originUm).toEqual({ x: s2.originX, y: s2.originY });
+    engine.renderTerrain({ camera: cam(125_000, 125_000), exaggeration: 1 }, opts);
+    expect(renderer.drapeRenders.length).toBe(n + 1);
+  });
+
+  it("rejects a setTerrain the worker fails, keeping the field and mesh it had", async () => {
+    const { engine, transport, mesh } = await withTerrain();
+    const bad = field();
+    bad.z = new Int16Array(5);
+    const p = engine.setTerrain(bad);
+    transport.flush();
+    await expect(p).rejects.toThrow(/heights for/);
+    expect(engine.terrainMesh).toBe(mesh);
+    expect(engine.terrainField!.z.length).toBe(126 * 126);
+  });
+
+  it("rejects a setTerrain in flight on dispose", async () => {
+    const { engine } = await loaded(1 << 30);
+    const p = engine.setTerrain(field());
+    engine.dispose();
+    await expect(p).rejects.toThrow(/disposed/);
+  });
+
+  it("does not count re-renders for a camera that sees no mesh", async () => {
+    const { engine, renderer, cam } = await withTerrain();
+    const away = cam(125_000, -2_000_000, { pitchDeg: 60, bearingDeg: 180 });
+    for (let i = 0; i < 3; i++) engine.renderTerrain({ camera: away, exaggeration: 1 }, opts);
+    expect(engine.stats().terrain!.layers).toEqual([]);
+    expect(renderer.drapeRenders).toHaveLength(0);
+    expect(engine.stats().terrain!.drapeRenders).toBeLessThanOrEqual(1);
   });
 
   it("rejects a setTerrain overtaken by a later one", async () => {

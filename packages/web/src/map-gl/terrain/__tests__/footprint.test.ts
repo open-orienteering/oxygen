@@ -113,20 +113,19 @@ describe("drapeLayers (map-rendering.md §5.6 \"Drape layers\")", () => {
       expect(layers[0].role).toBe("far");
       expect(v.pxPerUm).toBeCloseTo(0.01, 12);
       expect(v.rotationDeg).toBe(bearingDeg);
-      expect(v.centreX - ORIGIN.x).toBeCloseTo(12_000, 3);
-      expect(v.centreY - ORIGIN.y).toBeCloseTo(-4_000, 3);
-      // the grown extent, rounded up to the screen's parity (texel centres on pixel centres)
-      expect(v.widthPx - 1000 * (1 + 2 * DRAPE_MARGIN)).toBeGreaterThanOrEqual(0);
+      // the centre within a texel of the target (snapped to the pixel grid)
+      expect(Math.hypot(v.centreX - ORIGIN.x - 12_000, v.centreY - ORIGIN.y + 4_000)).toBeLessThanOrEqual(Math.SQRT2 / 0.01);
+      // the grown extent, snapped outward to the screen's pixel grid
+      expect(v.widthPx - 1000 * (1 + 2 * DRAPE_MARGIN)).toBeGreaterThanOrEqual(-1e-6);
       expect(v.widthPx - 1000 * (1 + 2 * DRAPE_MARGIN)).toBeLessThanOrEqual(2);
       expect(v.heightPx - 600 * (1 + 2 * DRAPE_MARGIN)).toBeLessThanOrEqual(2);
-      expect((v.widthPx - 1000) % 2).toBe(0);
-      expect((v.heightPx - 600) % 2).toBe(0);
-      // A target-plane point lands the same number of pixels from the centre in both.
+      // A target-plane point is a whole number of texels from where it is in screen pixels.
       const view2d = { centreX: 12_000 + ORIGIN.x, centreY: -4_000 + ORIGIN.y, pxPerUm: 0.01, widthPx: 1000, heightPx: 600, rotationDeg: bearingDeg };
+      const whole = (n: number) => Math.abs(n - Math.round(n));
       for (const [x, y] of [[30_000, 10_000], [-20_000, -25_000]]) {
         const [ax, ay] = layerClip(v, x, y), [bx, by] = layerClip(view2d, x, y);
-        expect((ax * v.widthPx) / 2).toBeCloseTo((bx * 1000) / 2, 4);
-        expect((ay * v.heightPx) / 2).toBeCloseTo((by * 600) / 2, 4);
+        expect(whole(((ax + 1) * v.widthPx) / 2 - ((bx + 1) * 1000) / 2)).toBeLessThan(1e-3);
+        expect(whole(((ay + 1) * v.heightPx) / 2 - ((by + 1) * 600) / 2)).toBeLessThan(1e-3);
       }
     }
   });
@@ -208,6 +207,33 @@ describe("drapeLayers (map-rendering.md §5.6 \"Drape layers\")", () => {
     const layers = drapeLayers(camera({ target: { x: 0, y: 0, z: 0 }, pitchDeg: 10 }), box, ORIGIN, roomy);
     expect(layers).toHaveLength(1);
     expect(DRAPE_SPLIT_RATIO).toBe(2);
+  });
+
+  it("puts the texels on the pixels at pitch 0 where the field's edge clips the layer off the screen's centre", () => {
+    // the field ends 10 000 µm east of the target: the rectangle is clipped there, asymmetrically
+    const box: Box3 = { minX: -60_000, maxX: 22_000, minY: -40_000, maxY: 30_000, minZ: 0, maxZ: 0 };
+    for (const bearingDeg of [0, 90]) {
+      const cam = camera({ bearingDeg, widthPx: 1280, heightPx: 800 }, 0.02);
+      const [{ view }] = drapeLayers(cam, box, ORIGIN, roomy);
+      const view2d = { centreX: 12_000 + ORIGIN.x, centreY: -4_000 + ORIGIN.y, pxPerUm: 0.02, widthPx: 1280, heightPx: 800, rotationDeg: bearingDeg };
+      // a screen pixel's centre is a texel's centre: its texel coordinate has fraction ½
+      for (const [px, py] of [[100.5, 200.5], [640.5, 400.5], [900.5, 50.5]]) {
+        const m = viewMatrix(view2d, ORIGIN.x, ORIGIN.y);
+        const a = m[0], b = m[4], c = m[1], d = m[5], det = a * d - b * c;
+        const cx = (px / 1280) * 2 - 1 - m[12], cy = (py / 800) * 2 - 1 - m[13];
+        const x = (d * cx - b * cy) / det, y = (a * cy - c * cx) / det;
+        const [lx, ly] = layerClip(view, x, y);
+        const tx = ((lx + 1) / 2) * view.widthPx, ty = ((ly + 1) / 2) * view.heightPx;
+        expect(Math.abs((tx % 1) - 0.5)).toBeLessThan(1e-3);
+        expect(Math.abs((ty % 1) - 0.5)).toBeLessThan(1e-3);
+      }
+    }
+  });
+
+  it("terminates at a tiny texel allowance", () => {
+    const layers = drapeLayers(camera({ pitchDeg: 60 }), big, ORIGIN, { maxSide: 4096, maxPixels: 3 });
+    expect(layers.length).toBeGreaterThan(0);
+    for (const { view } of layers) expect(view.widthPx * view.heightPx).toBeLessThanOrEqual(4);
   });
 
   it("keeps one layer at pitch 0 even when capped", () => {
