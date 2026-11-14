@@ -10,7 +10,9 @@
  * 2. The stored set: `offlineMapQueries` over the event's courses,
  *    variants, classes and sheets.
  * 3. Each query's job, four at a time; an HTTP error is `skipped`, a
- *    network failure ends the run (`complete: false`).
+ *    network failure ends the run (`complete: false`; so does a graphic
+ *    the server refuses). Any other failure is an `OfflinePrepareError`,
+ *    after the manifest of what was stored.
  * 4. The document; 5. the faces (and their files into `map-fonts`).
  * 6. PNG graphics once; SVG boxes learned by composing the distinct sheets
  *    that draw an SVG, in jobs within the device's limit.
@@ -171,18 +173,47 @@ export function boxLearningJobs(jobs: readonly PrintJob[], limit: number): Print
 
 class NetworkGone extends Error {}
 
-/** One run per event per tab: a second caller joins it. */
-const running = new Map<string, Promise<PrepareResult>>();
+/**
+ * The store step failed for another reason than the network (Cache Storage
+ * refused a write, the lists or the document were refused): the callers
+ * show a translated message; the cause goes to the console.
+ */
+export class OfflinePrepareError extends Error {
+  constructor(cause: unknown) {
+    super(cause instanceof Error ? cause.message : String(cause));
+    this.name = "OfflinePrepareError";
+  }
+}
+
+/** A failure without a response (a `fetch` `TypeError`, the document cache's `offline` kind) is the network going. */
+function networkGone(err: unknown): boolean {
+  if (err instanceof NetworkGone || err instanceof TypeError) return true;
+  return !!err && typeof err === "object" && (err as { name?: unknown; kind?: unknown }).name === "MapDocumentError" && (err as { kind?: unknown }).kind === "offline";
+}
+
+interface Running {
+  promise: Promise<PrepareResult>;
+  auto: boolean;
+}
+
+/**
+ * One run per event per tab. A second caller joins a run in flight —
+ * except an explicit action that finds a silent run (Layout mode): it waits
+ * for that run and then makes its own (the ensure step, no throttle).
+ */
+const running = new Map<string, Running>();
 
 export function prepareOfflinePrint(nameId: string, opts: PrepareOptions = {}, deps: PrepareDeps = defaultPrepareDeps): Promise<PrepareResult> {
   const hit = running.get(nameId);
-  if (hit) return hit;
-  const p = run(nameId, opts, deps).finally(() => {
-    running.delete(nameId);
+  if (hit && (opts.auto || !hit.auto)) return hit.promise;
+  const auto = !!opts.auto;
+  const after = hit ? hit.promise.catch(() => undefined) : Promise.resolve();
+  const promise = after.then(() => run(nameId, opts, deps)).finally(() => {
+    if (running.get(nameId)?.promise === promise) running.delete(nameId);
     setOfflinePrintProgress(nameId, null);
   });
-  running.set(nameId, p);
-  return p;
+  running.set(nameId, { promise, auto });
+  return promise;
 }
 
 async function run(nameId: string, opts: PrepareOptions, deps: PrepareDeps): Promise<PrepareResult> {
@@ -193,9 +224,7 @@ async function run(nameId: string, opts: PrepareOptions, deps: PrepareDeps): Pro
   if (opts.auto && prior?.complete && deps.now().getTime() - Date.parse(prior.storedAt) < OFFLINE_PRINT_REFRESH_MS) {
     return { status: "fresh", manifest: prior };
   }
-  if (!opts.auto && opts.ensure) await opts.ensure();
 
-  const queries = offlineMapQueries(await deps.lists(nameId));
   const storedAt = deps.now().toISOString();
   // Every key this run writes, so the event's other entries can go.
   const kept = new Set<string>();
@@ -206,16 +235,34 @@ async function run(nameId: string, opts: PrepareOptions, deps: PrepareDeps): Pro
       await deps.store.putGraphic(url, bytes);
     },
   };
-  let done = 0;
-  // Progress: the jobs, then the PNGs and compose chunks once known.
-  let total = queries.length + 1;
-  const tick = () => setOfflinePrintProgress(nameId, { done: ++done, total });
-  setOfflinePrintProgress(nameId, { done, total });
-
   const jobs: { query: string; job: PrintJob }[] = [];
   const skipped: OfflineSkip[] = [];
+  /** `print.png` requests answered with an HTTP error: the export would print without them. */
+  const missingGraphics: OfflineSkip[] = [];
+  let done = 0;
+  let total = 1;
+  const tick = () => setOfflinePrintProgress(nameId, { done: ++done, total });
   let complete = true;
+  let failure: unknown = null;
+
+  /** A graphic request of this run: a thrown fetch is the network going, an HTTP error a missing graphic. */
+  const graphicFetch = async (url: string): Promise<Response> => {
+    let res: Response;
+    try {
+      res = await deps.fetch(url);
+    } catch (err) {
+      throw new NetworkGone(err instanceof Error ? err.message : String(err));
+    }
+    if (!res.ok) missingGraphics.push({ query: url, status: res.status, message: (await res.clone().text().catch(() => "")).slice(0, 200) });
+    return res;
+  };
+
   try {
+    if (!opts.auto && opts.ensure) await opts.ensure();
+    const queries = offlineMapQueries(await deps.lists(nameId));
+    // Progress: the jobs, then the PNGs and compose chunks once known.
+    total = queries.length + 1;
+    setOfflinePrintProgress(nameId, { done, total });
     let next = 0;
     const worker = async () => {
       while (next < queries.length) {
@@ -253,27 +300,37 @@ async function run(nameId: string, opts: PrepareOptions, deps: PrepareDeps): Pro
     total += pngs.size + learn.length;
     for (const id of pngs) {
       const url = graphicUrl(nameId, id);
-      let res: Response;
-      try {
-        res = await deps.fetch(url);
-      } catch (err) {
-        throw new NetworkGone(err instanceof Error ? err.message : String(err));
-      }
+      const res = await graphicFetch(url);
       if (res.ok) await store.putGraphic(url, await res.arrayBuffer());
       tick();
     }
-    const printDeps: PrintClientDeps = { ...deps.print, store };
+    // The compose's print.png requests go through the same accounting (an SVG box that failed is not stored).
+    const net: { gone: NetworkGone | null } = { gone: null };
+    const printDeps: PrintClientDeps = {
+      ...deps.print,
+      store,
+      fetch: (url) =>
+        graphicFetch(url).catch((err: unknown) => {
+          if (err instanceof NetworkGone) net.gone = err;
+          throw err;
+        }),
+    };
     for (const job of learn) {
       await deps.compose(nameId, job, printDeps);
+      if (net.gone) throw net.gone;
       tick();
     }
     // The worker's chunk reaches the service worker's cache when the worker starts.
     if (learn.length === 0) await deps.warm(printDeps);
     tick();
   } catch (err) {
-    if (!(err instanceof NetworkGone)) throw err;
-    console.warn("offline print: the network went while storing; the event is partly stored", err);
     complete = false;
+    if (networkGone(err)) console.warn("offline print: the network went while storing; the event is partly stored", err);
+    else failure = err;
+  }
+  if (missingGraphics.length > 0) {
+    complete = false;
+    console.warn("offline print: graphics that could not be stored", missingGraphics);
   }
 
   const manifest: OfflinePrintManifest = {
@@ -281,13 +338,24 @@ async function run(nameId: string, opts: PrepareOptions, deps: PrepareDeps): Pro
     documentHash: jobs[0]?.job.document.hash ?? prior?.documentHash ?? null,
     jobVersion: DEVICE_PRINT_JOB_VERSION,
     queries: jobs.map((j) => normaliseQuery(j.query)),
-    skipped,
+    skipped: [...skipped, ...missingGraphics],
     complete,
   };
-  await deps.store.writeManifest(nameId, manifest);
-  // A partial run keeps what an earlier run stored.
-  if (complete) await deps.store.retain(nameId, kept);
-  await deps.store.pruneEvents();
+  // Written on every end once a job is stored, so the stored jobs are always under a manifest (the panel, write-through, pruning).
+  if (jobs.length > 0 || !failure) {
+    try {
+      await deps.store.writeManifest(nameId, manifest);
+      // A partial run keeps what an earlier run stored.
+      if (complete) await deps.store.retain(nameId, kept);
+      await deps.store.pruneEvents();
+    } catch (err) {
+      failure ??= err;
+    }
+  }
+  if (failure) {
+    console.warn("offline print: storing failed", failure);
+    throw new OfflinePrepareError(failure);
+  }
   return { status: complete ? "stored" : "partial", manifest };
 }
 

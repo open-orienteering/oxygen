@@ -11,7 +11,7 @@ import { trpc } from "../../lib/trpc";
 import { downloadExport } from "../../lib/download-api";
 import { ensureSheetsBestEffort } from "../../lib/trpc-links";
 import { exportEntries, type ExportEntry, type ExportState } from "../../lib/editor/export-menu";
-import { formatStoredAt, offlinePrintErrorCode, useOfflinePrintProgress, useStoreMapsOffline } from "../../hooks/useOfflineMaps";
+import { formatStoredAt, isOfflinePrepareError, offlinePrintErrorCode, useOfflinePrintProgress, useStoreMapsOffline } from "../../hooks/useOfflineMaps";
 import { DescriptionSheetsDialog } from "./DescriptionSheetsDialog";
 import { IconExport } from "../../components/map-icons";
 import { TOP_BAR_TIER1_HIDE } from "../../components/top-bar-collapse";
@@ -40,6 +40,8 @@ export function ExportMenu({ state, onError }: { state: ExportState; onError: (m
   const utils = trpc.useUtils();
   const [open, setOpen] = useState(false);
   const [busy, setBusy] = useState(false);
+  /** This menu started the store step: only then does the button show its progress (the silent run shows only in the sync panel). */
+  const [storing, setStoring] = useState(false);
   const [descriptions, setDescriptions] = useState(false);
   /** What the last export or store said beyond its file (G17): printed from the stored job, or what was stored. */
   const [notice, setNotice] = useState<{ text: string; storedAt?: string } | null>(null);
@@ -49,12 +51,15 @@ export function ExportMenu({ state, onError }: { state: ExportState; onError: (m
 
   const message = (err: unknown): string => {
     const code = offlinePrintErrorCode(err);
-    return code ? t(OFFLINE_ERROR[code]) : err instanceof Error ? err.message : String(err);
+    if (code) return t(OFFLINE_ERROR[code]);
+    if (isOfflinePrepareError(err)) return t("exportOfflineStoreFailed");
+    return err instanceof Error ? err.message : String(err);
   };
 
   /** *Make maps available offline* (G17): the store step, its progress on the button. */
   const store = async () => {
     setBusy(true);
+    setStoring(true);
     try {
       const r = await storeOffline();
       if (r.status === "unsupported") onError(t("exportOfflineUnsupported"));
@@ -65,6 +70,7 @@ export function ExportMenu({ state, onError }: { state: ExportState; onError: (m
       onError(message(err));
     } finally {
       setBusy(false);
+      setStoring(false);
     }
   };
 
@@ -107,8 +113,8 @@ export function ExportMenu({ state, onError }: { state: ExportState; onError: (m
     }
   };
 
-  // The silent run (Layout mode) shows only in the sync panel: the progress is the explicit action's.
-  const label = busy && progress ? t("exportOfflineStoring", { done: progress.done, total: progress.total }) : busy ? t("exportBusy") : t("export");
+  // The silent run (Layout mode) shows only in the sync panel: the progress is this menu's own run's.
+  const label = storing && progress ? t("exportOfflineStoring", { done: progress.done, total: progress.total }) : busy ? t("exportBusy") : t("export");
 
   return (
     <div ref={box} className="relative">

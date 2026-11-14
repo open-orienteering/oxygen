@@ -19,7 +19,7 @@ import {
   setVenueCandidates,
 } from "../lib/node-discovery";
 import { BuildInfoLine } from "./BuildInfoLine";
-import { formatStoredAt, offlinePrintErrorCode, useEventOfflineMaps, useStoreMapsOffline, type EventOfflineMaps } from "../hooks/useOfflineMaps";
+import { formatStoredAt, isOfflinePrepareError, useEventOfflineMaps, useStoreMapsOffline, type EventOfflineMaps } from "../hooks/useOfflineMaps";
 import { useCapabilities } from "../context/CapabilitiesContext";
 
 interface CachedQueryInfo {
@@ -120,8 +120,10 @@ function OfflineMapsBlock({ nameId, maps }: { nameId: string; maps: EventOffline
     try {
       const r = await store();
       if (r.status === "partial") setError(t("offlineMapsPartialError"));
+      else if (r.status === "offline") setError(t("offlineMapsNotOnline"));
+      else if (r.status === "unsupported") setError(t("offlineMapsPrintUnsupported"));
     } catch (err) {
-      setError(offlinePrintErrorCode(err) ? t("offlineMapsFailed") : err instanceof Error ? err.message : String(err));
+      setError(isOfflinePrepareError(err) ? t("offlineMapsFailed") : err instanceof Error ? err.message : String(err));
     }
   };
   return (

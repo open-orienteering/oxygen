@@ -975,7 +975,9 @@ copy, no IndexedDB.
 
 **Prefetch** (07 §9.1 "Prefetch"; G17). When an event page opens
 (`useEventOfflineMaps`, mounted by the sync indicator, which every event
-page shows) and `course.mapMetadata.documentHash` is set,
+page shows) for a user with `courses.view` (the capability
+`course.mapMetadata` asks outside a kiosk; a kiosk page has no sync
+indicator) and `course.mapMetadata.documentHash` is set,
 `prefetchMapDocument(hash, nameId)` makes the one request unless the
 document is in `map-documents` already: stored, not decoded, not kept in
 memory. Once per hash per session; skipped offline and when the browser

@@ -30,6 +30,11 @@ export function offlinePrintErrorCode(err: unknown): OfflinePrintErrorCode | nul
   return code === "notStored" || code === "tooLarge" || code === "unsupported" || code === "failed" ? code : null;
 }
 
+/** The store step failed for another reason than the network (`OfflinePrepareError`): a translated message, the cause on the console. */
+export function isOfflinePrepareError(err: unknown): boolean {
+  return !!err && typeof err === "object" && (err as { name?: unknown }).name === "OfflinePrepareError";
+}
+
 /** A stored time (ISO) as the user's date and time. */
 export function formatStoredAt(iso: string, language: string): string {
   const d = new Date(iso);

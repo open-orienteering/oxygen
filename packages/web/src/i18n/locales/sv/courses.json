@@ -212,5 +212,6 @@
   "exportPrintedStored": "Utskriven offline från kartorna sparade {{time}}",
   "exportNotStored": "Den här exporten finns inte på enheten. Gör kartorna tillgängliga offline medan du är ansluten.",
   "exportTooLarge": "Den här exporten är för stor för enheten offline. Exportera per bana.",
-  "exportOfflineFailed": "De sparade kartorna kunde inte skrivas ut på den här enheten."
+  "exportOfflineFailed": "De sparade kartorna kunde inte skrivas ut på den här enheten.",
+  "exportOfflineStoreFailed": "Kartorna kunde inte sparas på den här enheten."
 }

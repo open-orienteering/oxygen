@@ -409,5 +409,6 @@
   "exportPrintedStored": "Printed offline from the maps stored on {{time}}",
   "exportNotStored": "This export is not stored on this device. Make maps available offline while online.",
   "exportTooLarge": "This export is too large for this device offline. Export per course.",
-  "exportOfflineFailed": "The stored maps could not be printed on this device."
+  "exportOfflineFailed": "The stored maps could not be printed on this device.",
+  "exportOfflineStoreFailed": "The maps could not be stored on this device."
 }

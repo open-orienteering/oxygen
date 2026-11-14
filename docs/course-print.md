@@ -1218,7 +1218,8 @@ The worker is its own chunk (`assets/print-worker-entry-<hash>.js`), out
 of the precache (`globIgnores`) and kept by a `CacheFirst` runtime route
 (`print-worker`, `vite.config.ts`) after the first export, so devices
 that never print do not download it (the `map-fonts` precedent); storing
-an event for offline (below) starts the worker, which puts it there. The client is a separate 3.3 kB chunk (1.6 kB gzip).
+an event for offline (below) starts the worker, which puts it there. The client is a separate chunk: 3.3 kB (1.6 kB gzip) at G16, 4.2 kB
+(1.9 kB gzip) since G17, beside the store step's 4.8 kB (2.2 kB gzip).
 Sizes at G16 (`pnpm --filter @oxygen/web build`, 07 §15): the worker
 1 128 kB raw, 409 kB gzip; the faces 390 kB, shared with the viewer. The
 dev server pre-bundles the PDF library (`optimizeDeps.include`): its
@@ -1235,7 +1236,9 @@ from the stored job, and says when it was stored.
 Export ▾'s `editor-export-offline`, the Courses page's export menu
 (`course-export-offline`) and the sync panel's Maps block
 (`offline-maps-store`, `map-storage.md` §7.1) — and, silently, when
-Layout mode opens. One run per event per tab (a second caller joins it);
+Layout mode opens. One run per event per tab: a second caller joins it,
+except an explicit action that finds the silent run in flight, which
+waits for it and then makes its own (with step 1, unthrottled);
 `deviceLimit` 0 stores nothing (the step answers `unsupported`: this
 device cannot compose). In order:
 
@@ -1256,7 +1259,9 @@ device cannot compose). In order:
 3. Each query's job (`GET print-job<query>`, four at a time). A 2xx job
    is stored; an HTTP error (e.g. 400 "No requested maps found" for an
    event without setter sheets) is listed in the manifest's `skipped`; a
-   network failure ends the run (`complete: false`).
+   failure without a response — here or in steps 4–6 (the document
+   `offline`, a face or a `print.png` request) — ends the run
+   (`complete: false`).
 4. The document: `loadMapDocument(hash, { eventId })`, kept in
    `map-documents` (`map-storage.md` §7.1 "App-code copy").
 5. The faces: `loadMapFonts()`, and their files added to `map-fonts`.
@@ -1266,17 +1271,27 @@ device cannot compose). In order:
    draw an SVG graphic (a sheet without its `copies`, the same sheet
    under several queries once) are composed in jobs of at most
    `deviceLimit` A4-equivalents through the export queue, and every
-   `print.png?w=&h=` the worker asks is stored. The PDF is dropped.
+   `print.png?w=&h=` the worker asks is stored. The PDF is dropped. A
+   `print.png` the server answers with an HTTP error is listed in
+   `skipped` (its request as the `query`) and leaves the run partial, so
+   the panel never says *stored* for a PDF that would print without a
+   logo.
    Composing, or `warmPrintWorker()` where nothing needs it, starts the
    print worker, so on a page the service worker controls its chunk is in
    `print-worker` (Delivery, above).
-7. The manifest, last.
+7. The manifest, last — written whenever a job was stored, also when the
+   run ends early, so the stored jobs are always under one. Any other
+   failure (Cache Storage refuses a write, the lists or the document are
+   refused) is an `OfflinePrepareError` after that manifest: the callers
+   show *The maps could not be stored on this device*, the cause goes to
+   the console.
 
 The silent run (Layout mode) starts `LAYOUT_OFFLINE_DELAY_MS` (5 s)
 after the mode opens, cancelled if it closes first; it creates no sheet,
 runs only online, and only when the event's manifest is older than
 `OFFLINE_PRINT_REFRESH_MS` (30 min), absent or partial; it reports
-nothing but the sync panel's line. A job the server answers in another
+nothing but the sync panel's line (a surface shows the progress only of
+a run it started). A job the server answers in another
 version is skipped like an HTTP error. A run the network cut short
 (`complete: false`) keeps what earlier runs stored. The explicit action
 says *Maps stored on this device: {{count}} exports, {{time}}* in the same

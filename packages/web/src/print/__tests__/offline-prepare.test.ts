@@ -8,7 +8,7 @@ import { FIXTURE_PNG, fixturePrintJob, printDocumentBytes } from "../../../../sh
 import { printCost } from "../capability";
 import { composeToStore, type PrintClientDeps, printMapsPdf, resetPrintClient, type WorkerLike } from "../client";
 import type { OfflineQueryInput } from "../../lib/editor/export-menu";
-import { boxLearningJobs, type PrepareDeps, prepareOfflinePrint, resetOfflinePrepare } from "../offline-prepare";
+import { boxLearningJobs, OfflinePrepareError, type PrepareDeps, prepareOfflinePrint, resetOfflinePrepare } from "../offline-prepare";
 import { createOfflinePrintStore, graphicUrl, jobKey, offlinePrintProgress, subscribeOfflinePrint } from "../offline-store";
 import type { PrintFace, PrintWorkerRequest, PrintWorkerResponse } from "../protocol";
 import { createPrintWorker } from "../worker";
@@ -42,7 +42,7 @@ const LISTS: OfflineQueryInput = {
 
 const json = (body: unknown, status = 200) => new Response(JSON.stringify(body), { status, headers: { "content-type": "application/json" } });
 
-function setup(over: { lists?: OfflineQueryInput; job?: (query: string) => Response | PrintJob; network?: boolean; deviceMemory?: number; now?: Date } = {}) {
+function setup(over: { lists?: OfflineQueryInput; job?: (query: string) => Response | PrintJob; graphic?: (url: string) => Response | null; network?: boolean; deviceMemory?: number; now?: Date } = {}) {
   const caches = new MemoryCaches();
   const store = createOfflinePrintStore(() => caches);
   const requests: string[] = [];
@@ -55,7 +55,11 @@ function setup(over: { lists?: OfflineQueryInput; job?: (query: string) => Respo
       const j = over.job ? over.job(q) : fixturePrintJob();
       return j instanceof Response ? j : json(j);
     }
-    if (url.includes("/print.png")) return new Response(FIXTURE_PNG.slice(), { status: 200 });
+    if (url.includes("/print.png")) {
+      const r = over.graphic?.(url);
+      if (r === null) throw new TypeError("Failed to fetch");
+      return r ?? new Response(FIXTURE_PNG.slice(), { status: 200 });
+    }
     return new Response("", { status: 404 });
   });
   const print: PrintClientDeps = {
@@ -151,6 +155,66 @@ describe("prepareOfflinePrint (§8.6 \"Offline\")", () => {
     expect(r.manifest!.complete).toBe(false);
     expect(await s.store.getJob("ev", "?courses=3")).not.toBeNull();
     expect(s.caches.get("offline-print").paths()).toContain(graphicUrl("ev", 7));
+  });
+
+  it("a graphic the server refuses, or the network dropping during the SVG compose, leaves the run partial and the earlier copy kept", async () => {
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    const s = setup();
+    await prepareOfflinePrint("ev", {}, s.deps);
+    const svgKey = s.caches.get("offline-print").paths().find((p) => /\/graphics\/8\/print\.png\?w=/.test(p))!;
+    // The PNG answered 404.
+    const png404 = setup({ graphic: (url) => (url.endsWith("/graphics/7/print.png") ? new Response("gone", { status: 404 }) : undefined as unknown as Response) });
+    png404.deps.store = s.store;
+    const a = await prepareOfflinePrint("ev", {}, png404.deps);
+    expect(a.status).toBe("partial");
+    expect(a.manifest!.skipped).toContainEqual({ query: graphicUrl("ev", 7), status: 404, message: "gone" });
+    expect(s.caches.get("offline-print").paths()).toContain(graphicUrl("ev", 7));
+    // The SVG's box request with no network.
+    resetPrintClient();
+    resetPreparedDocuments();
+    const svgDown = setup({ graphic: (url) => (url.includes("/graphics/8/") ? null : undefined as unknown as Response) });
+    svgDown.deps.store = s.store;
+    const b = await prepareOfflinePrint("ev", {}, svgDown.deps);
+    expect(b.status).toBe("partial");
+    expect(b.manifest!.complete).toBe(false);
+    expect(s.caches.get("offline-print").paths()).toContain(svgKey);
+    warn.mockRestore();
+  });
+
+  it("the document going with the network ends the run partial, under a manifest", async () => {
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    const s = setup();
+    s.deps.document = async () => { throw Object.assign(new Error("not cached"), { name: "MapDocumentError", kind: "offline" }); };
+    const r = await prepareOfflinePrint("ev", {}, s.deps);
+    expect(r.status).toBe("partial");
+    expect(await s.store.readManifest("ev")).toMatchObject({ complete: false });
+    expect(r.manifest!.queries.length).toBe(4);
+    warn.mockRestore();
+  });
+
+  it("any other failure is an OfflinePrepareError, after the manifest of what was stored", async () => {
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    const s = setup();
+    s.deps.faces = async () => { throw new Error("font liberation-sans: 500"); };
+    await expect(prepareOfflinePrint("ev", {}, s.deps)).rejects.toBeInstanceOf(OfflinePrepareError);
+    expect(await s.store.readManifest("ev")).toMatchObject({ complete: false });
+    const refused = setup();
+    refused.deps.lists = async () => { throw Object.assign(new Error("FORBIDDEN"), { data: { code: "FORBIDDEN" } }); };
+    await expect(prepareOfflinePrint("ev", {}, refused.deps)).rejects.toMatchObject({ name: "OfflinePrepareError" });
+    expect(await refused.store.readManifest("ev")).toBeNull();
+    warn.mockRestore();
+  });
+
+  it("an explicit action that finds a silent run waits for it and runs its own, with the ensure step", async () => {
+    const s = setup();
+    const ensure = vi.fn(async () => {});
+    const silent = prepareOfflinePrint("ev", { auto: true }, s.deps);
+    const explicit = prepareOfflinePrint("ev", { ensure }, s.deps);
+    expect(explicit).not.toBe(silent);
+    expect(prepareOfflinePrint("ev", { auto: true }, s.deps)).toBe(explicit);
+    await silent;
+    expect((await explicit).status).toBe("stored");
+    expect(ensure).toHaveBeenCalledTimes(1);
   });
 
   it("a re-run deletes the event's entries outside the new set", async () => {

@@ -15,7 +15,7 @@ import { ensureSheetsBestEffort } from "../lib/trpc-links";
 import { freeTemplateName, type TemplatePick } from "../lib/template-picker";
 import type { CoursePrintStatus } from "../lib/structured-search/anchors/course-anchors";
 import { NewTemplateForm } from "../components/NewTemplateForm";
-import { formatStoredAt, offlinePrintErrorCode, useOfflinePrintProgress, useStoreMapsOffline } from "./useOfflineMaps";
+import { formatStoredAt, isOfflinePrepareError, offlinePrintErrorCode, useOfflinePrintProgress, useStoreMapsOffline } from "./useOfflineMaps";
 
 /** An `OfflinePrintError`'s message (G17, course-print.md §8.6 "Offline"). */
 const OFFLINE_ERROR = { notStored: "exportNotStored", tooLarge: "exportTooLarge", unsupported: "exportOfflineUnsupported", failed: "exportOfflineFailed" } as const;
@@ -38,6 +38,8 @@ export function useCourseMapsOverview(nameId: string, canEdit: boolean) {
   const [notice, setNotice] = useState<{ text: string; storedAt?: string } | null>(null);
   const storeMapsOffline = useStoreMapsOffline(nameId, canEdit);
   const offlineProgress = useOfflinePrintProgress(nameId);
+  /** This page started the store step (its progress shows on the export button; the silent run's does not). */
+  const [storing, setStoring] = useState(false);
   const maps = trpc.courseMap.list.useQuery();
   const templates = trpc.mapTemplate.list.useQuery();
   const club = trpc.mapTemplate.listClub.useQuery(undefined, { enabled: canEdit });
@@ -84,7 +86,7 @@ export function useCourseMapsOverview(nameId: string, canEdit: boolean) {
       return await op();
     } catch (cause) {
       const code = offlinePrintErrorCode(cause);
-      setError(code ? t(OFFLINE_ERROR[code]) : cause instanceof Error ? cause.message : t("downloadFailed"));
+      setError(code ? t(OFFLINE_ERROR[code]) : isOfflinePrepareError(cause) ? t("exportOfflineStoreFailed") : cause instanceof Error ? cause.message : t("downloadFailed"));
       return undefined;
     } finally {
       setBusy(false);
@@ -148,7 +150,8 @@ export function useCourseMapsOverview(nameId: string, canEdit: boolean) {
   /** *Make maps available offline* (G17, course-print.md §8.6 "Offline"): every map export of the event on this device. */
   const storeOffline = () =>
     guarded(async () => {
-      const r = await storeMapsOffline();
+      setStoring(true);
+      const r = await storeMapsOffline().finally(() => setStoring(false));
       if (r.status === "unsupported") throw new Error(t("exportOfflineUnsupported"));
       if (r.status === "offline") throw new Error(t("exportOfflineNotOnline"));
       if (r.status === "partial") throw new Error(t("exportOfflinePartial"));
@@ -205,7 +208,7 @@ export function useCourseMapsOverview(nameId: string, canEdit: boolean) {
     exportAllControls,
     storeOffline,
     /** The explicit action's progress (null when no run). */
-    offlineProgress: busy ? offlineProgress : null,
+    offlineProgress: storing ? offlineProgress : null,
     dialog,
     messages,
   };
