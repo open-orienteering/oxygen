@@ -28,6 +28,9 @@ const FONT_FILES: [render.FontFamily, string][] = [
   ["liberation-sans", liberationSansBoldUrl],
 ];
 
+/** The faces' asset URLs (G17 adds them to the service worker's `map-fonts` cache for offline print). */
+export const MAP_FONT_URLS: readonly string[] = FONT_FILES.map(([, url]) => url);
+
 let fonts: Promise<MapFontBytes[]> | undefined;
 
 /** The font bytes; each caller that transfers them to a worker passes copies. A failed load is retried on the next call. */

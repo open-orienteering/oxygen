@@ -116,6 +116,16 @@ or a very large export, is printed by the server as before.
 See
 [course-maps.md](course-maps.md) and [course-print.md](course-print.md).
 
+**Print the maps with no network.** *Make maps available offline* (Export
+▾, the Courses page's export menu, or the sync panel) stores every map
+export of the event on the device — the print jobs, their logos, the fonts
+and the map — and opening Layout mode refreshes them quietly. With no
+network, Export ▾ and the Courses page's exports still make the PDF, from
+the stored maps, and say when they were stored. The sync panel's *Maps on
+this device* shows whether the map and the print jobs are stored and
+whether the browser keeps the storage; opening an event stores its map in
+the background, so a device that has opened the event shows it offline.
+
 **Description sheets.** Export ▾ in the course editor and the Courses page's
 export menu offer **Description sheets…**: pick the classes, how many copies
 (the class's entries plus its vacancies, one full sheet, or a number) and the

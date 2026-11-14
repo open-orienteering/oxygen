@@ -8,7 +8,7 @@ import { describe, expect, it } from "vitest";
 import { createTRPCUntypedClient, type TRPCLink } from "@trpc/client";
 import type { AnyTRPCRouter } from "@trpc/server";
 import { observable } from "@trpc/server/observable";
-import { cloudOwnedApart, ensureSheetsBestEffort, isCloudOwnedOp, isCloudUnreachable } from "../trpc-links";
+import { cloudOwnedApart, ensureSheetsBestEffort, isCloudOwnedOp, isCloudUnreachable, isNetworkFailure } from "../trpc-links";
 
 describe("isCloudOwnedOp", () => {
   it("is a mutation on a cloud-owned path", () => {
@@ -62,6 +62,18 @@ describe("ensureSheetsBestEffort", () => {
     expect(
       await ensureSheetsBestEffort(async () => {
         throw unreachable;
+      }),
+    ).toBeNull();
+  });
+
+  it("skips the step on a network failure: no response (G17, offline print)", async () => {
+    const noResponse = Object.assign(new Error("Failed to fetch"), { cause: new TypeError("Failed to fetch") });
+    expect(isNetworkFailure(noResponse)).toBe(true);
+    expect(isNetworkFailure(new TypeError("Failed to fetch"))).toBe(true);
+    expect(isNetworkFailure(forbidden)).toBe(false);
+    expect(
+      await ensureSheetsBestEffort(async () => {
+        throw noResponse;
       }),
     ).toBeNull();
   });

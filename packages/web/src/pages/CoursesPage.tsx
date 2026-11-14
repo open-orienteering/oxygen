@@ -26,7 +26,14 @@ import {
 } from "../lib/course-editor";
 import { versionConflictOfError } from "../lib/version-book";
 
-function CourseExportMenu({ nameId, onAllMaps, onAllControls }: { nameId: string; onAllMaps: () => void; onAllControls: () => void }) {
+function CourseExportMenu({ nameId, onAllMaps, onAllControls, onOffline, offlineProgress }: {
+  nameId: string;
+  onAllMaps: () => void;
+  onAllControls: () => void;
+  /** *Make maps available offline* (G17). */
+  onOffline: () => void;
+  offlineProgress: { done: number; total: number } | null;
+}) {
   const { t } = useTranslation("courses");
   const [open, setOpen] = useState(false);
   const [descriptions, setDescriptions] = useState(false);
@@ -68,7 +75,7 @@ function CourseExportMenu({ nameId, onAllMaps, onAllControls }: { nameId: string
         <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
           <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4" />
         </svg>
-        {t("exportCourses")}
+        {offlineProgress ? t("exportOfflineStoring", offlineProgress) : t("exportCourses")}
         <svg className="w-3.5 h-3.5 opacity-70" fill="none" viewBox="0 0 24 24" stroke="currentColor">
           <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" />
         </svg>
@@ -96,6 +103,16 @@ function CourseExportMenu({ nameId, onAllMaps, onAllControls }: { nameId: string
             className="w-full px-3 py-2 text-left text-sm text-slate-700 hover:bg-blue-50 cursor-pointer"
           >
             {t("exportAllControlsMap")}
+          </button>
+          {/* Every map export of the event on this device (G17, course-print.md §8.6 "Offline"). */}
+          <button
+            type="button"
+            role="menuitem"
+            data-testid="course-export-offline"
+            onClick={() => { setOpen(false); onOffline(); }}
+            className="w-full px-3 py-2 text-left text-sm text-slate-700 hover:bg-blue-50 cursor-pointer"
+          >
+            {t("exportOffline")}
           </button>
           {/* Description sheets (docs/course-print.md §6.4): the editor's dialog. */}
           <button
@@ -343,7 +360,8 @@ export function CoursesPage() {
           {t("importCourses")}
         </button>
         {(courses.data?.length ?? 0) > 0 && nameId && (
-          <CourseExportMenu nameId={nameId} onAllMaps={() => void overview.exportAll()} onAllControls={() => void overview.exportAllControls()} />
+          <CourseExportMenu nameId={nameId} onAllMaps={() => void overview.exportAll()} onAllControls={() => void overview.exportAllControls()}
+            onOffline={() => void overview.storeOffline()} offlineProgress={overview.offlineProgress} />
         )}
         <button
           onClick={() => setShowCreateForm(true)}

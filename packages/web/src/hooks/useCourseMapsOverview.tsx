@@ -15,6 +15,10 @@ import { ensureSheetsBestEffort } from "../lib/trpc-links";
 import { freeTemplateName, type TemplatePick } from "../lib/template-picker";
 import type { CoursePrintStatus } from "../lib/structured-search/anchors/course-anchors";
 import { NewTemplateForm } from "../components/NewTemplateForm";
+import { formatStoredAt, isOfflinePrepareError, offlinePrintErrorCode, useOfflinePrintProgress, useStoreMapsOffline } from "./useOfflineMaps";
+
+/** An `OfflinePrintError`'s message (G17, course-print.md §8.6 "Offline"). */
+const OFFLINE_ERROR = { notStored: "exportNotStored", tooLarge: "exportTooLarge", unsupported: "exportOfflineUnsupported", failed: "exportOfflineFailed" } as const;
 
 export interface CourseSheetInfo {
   /** The course's first own sheet with a template (Edit layout). */
@@ -28,8 +32,14 @@ export interface CourseSheetInfo {
 const NO_SHEETS: CourseSheetInfo = { sheetSeq: null, template: null, templateNames: [], printStatus: "noMap", issueCount: 0 };
 
 export function useCourseMapsOverview(nameId: string, canEdit: boolean) {
-  const { t } = useTranslation("courses");
+  const { t, i18n } = useTranslation("courses");
   const utils = trpc.useUtils();
+  /** What the last export or store said beyond its file (G17). */
+  const [notice, setNotice] = useState<{ text: string; storedAt?: string } | null>(null);
+  const storeMapsOffline = useStoreMapsOffline(nameId, canEdit);
+  const offlineProgress = useOfflinePrintProgress(nameId);
+  /** This page started the store step (its progress shows on the export button; the silent run's does not). */
+  const [storing, setStoring] = useState(false);
   const maps = trpc.courseMap.list.useQuery();
   const templates = trpc.mapTemplate.list.useQuery();
   const club = trpc.mapTemplate.listClub.useQuery(undefined, { enabled: canEdit });
@@ -71,10 +81,12 @@ export function useCourseMapsOverview(nameId: string, canEdit: boolean) {
   const guarded = async <T,>(op: () => Promise<T>): Promise<T | undefined> => {
     setBusy(true);
     setError(null);
+    setNotice(null);
     try {
       return await op();
     } catch (cause) {
-      setError(cause instanceof Error ? cause.message : t("downloadFailed"));
+      const code = offlinePrintErrorCode(cause);
+      setError(code ? t(OFFLINE_ERROR[code]) : isOfflinePrepareError(cause) ? t("exportOfflineStoreFailed") : cause instanceof Error ? cause.message : t("downloadFailed"));
       return undefined;
     } finally {
       setBusy(false);
@@ -109,7 +121,11 @@ export function useCourseMapsOverview(nameId: string, canEdit: boolean) {
   };
 
   // maps.pdf, composed on the device when it can, else by the server (course-print.md §8.6).
-  const download = (query: string) => downloadMapsPdf(nameId, query);
+  // Offline from the job stored on the device (G17): the notice says when it was stored.
+  const download = async (query: string) => {
+    const out = await downloadMapsPdf(nameId, query);
+    if (out.storedAt) setNotice({ text: t("exportPrintedStored", { time: formatStoredAt(out.storedAt, i18n.language) }), storedAt: out.storedAt });
+  };
 
   /**
    * With courses.edit, the sheets are ensured before a download
@@ -131,6 +147,17 @@ export function useCourseMapsOverview(nameId: string, canEdit: boolean) {
   const exportAllVariations = (rootId: number) => ensureThenDownload({ courseId: rootId }, `?allVariations=${rootId}`);
   const exportAll = () => ensureThenDownload({}, "");
   const exportAllControls = () => ensureThenDownload({ allControls: true }, "?allControls=1");
+  /** *Make maps available offline* (G17, course-print.md §8.6 "Offline"): every map export of the event on this device. */
+  const storeOffline = () =>
+    guarded(async () => {
+      setStoring(true);
+      const r = await storeMapsOffline().finally(() => setStoring(false));
+      if (r.status === "unsupported") throw new Error(t("exportOfflineUnsupported"));
+      if (r.status === "offline") throw new Error(t("exportOfflineNotOnline"));
+      if (r.status === "partial") throw new Error(t("exportOfflinePartial"));
+      if (r.manifest) setNotice({ text: t("exportOfflineStored", { count: r.manifest.queries.length, time: formatStoredAt(r.manifest.storedAt, i18n.language) }) });
+      await refresh();
+    });
 
   const dialog: ReactNode = newFor ? (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/40 p-4" onClick={() => setNewFor(null)}>
@@ -159,6 +186,12 @@ export function useCourseMapsOverview(nameId: string, canEdit: boolean) {
           <button type="button" onClick={() => setError(null)} className="cursor-pointer text-red-400 hover:text-red-600">{t("dismiss")}</button>
         </div>
       )}
+      {notice && !error && (
+        <div role="status" data-testid="course-maps-notice" data-stored-at={notice.storedAt ?? ""} className="mb-4 flex items-start gap-2 rounded-lg border border-emerald-200 bg-emerald-50 px-4 py-3 text-sm text-emerald-800">
+          <span className="flex-1">{notice.text}</span>
+          <button type="button" onClick={() => setNotice(null)} className="cursor-pointer text-emerald-500 hover:text-emerald-700">{t("dismiss")}</button>
+        </div>
+      )}
     </>
   );
 
@@ -173,6 +206,9 @@ export function useCourseMapsOverview(nameId: string, canEdit: boolean) {
     exportAllVariations,
     exportAll,
     exportAllControls,
+    storeOffline,
+    /** The explicit action's progress (null when no run). */
+    offlineProgress: storing ? offlineProgress : null,
     dialog,
     messages,
   };

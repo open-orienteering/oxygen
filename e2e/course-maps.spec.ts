@@ -510,6 +510,104 @@ test.describe("export on a venue box whose cloud is unreachable (G18, course-pri
   });
 });
 
+/** The paths Cache Storage `name` holds on the page. */
+async function cachedPaths(page: Page, name: string): Promise<string[]> {
+  return page.evaluate(async (n) => {
+    const c = await caches.open(n);
+    return (await c.keys()).map((r) => {
+      const u = new URL(r.url);
+      return u.pathname + u.search;
+    });
+  }, name);
+}
+
+test.describe("offline print: the job kept on the device (G17, course-print.md §8.6 \"Offline\")", () => {
+  test.beforeAll(seedBaseMap);
+
+  test("store, go offline, export a PDF: the notice shows the stored time", async ({ page, context }) => {
+    test.setTimeout(180_000);
+    page.setDefaultTimeout(15_000);
+    await selectEvent(page);
+    await openTab(page, "Courses");
+    const [courseId] = await courseIds(page);
+
+    // map-storage.md §7.1 "Prefetch": opening the event stored its document before any map was shown.
+    const meta = (await (await page.request.get("/trpc/course.mapMetadata", { headers: { "x-competition-id": "itest" } })).json()) as { result: { data: { documentHash: string } } };
+    const hash = meta.result.data.documentHash;
+    expect(hash).toMatch(/^[0-9a-f]{64}$/);
+    await expect.poll(() => cachedPaths(page, "map-documents"), { timeout: 30_000 }).toContain(`/api/map-documents/${hash}`);
+
+    // An SVG and a PNG on the course's sheet, so the store learns an SVG box by composing (§8.6 "Offline" step 6).
+    const headers = { "x-competition-id": "itest", "x-forwarded-email": "e2e-admin@oxygen.test", "content-type": "application/json" };
+    const trpc = async <T,>(path: string, input: unknown): Promise<T> => {
+      const res = await fetch(`${API_BASE}/trpc/${path}`, { method: "POST", headers, body: JSON.stringify(input) });
+      expect(res.ok, await res.clone().text()).toBe(true);
+      return ((await res.json()) as { result: { data: T } }).result.data;
+    };
+    await trpc("layout.autoSheets", { courseId });
+    const svg = '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 20 10"><rect width="20" height="10" fill="#06c"/></svg>';
+    const png = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==";
+    const svgId = (await trpc<{ id: number }>("graphics.upload", { name: "g17-logo.svg", fileDataBase64: Buffer.from(svg).toString("base64") })).id;
+    const pngId = (await trpc<{ id: number }>("graphics.upload", { name: "g17-logo.png", fileDataBase64: png })).id;
+    const sheets = (await (await page.request.get("/trpc/courseMap.list", { headers: { "x-competition-id": "itest" } })).json()) as { result: { data: { seq: number; courseId: number | null; kind: string }[] } };
+    const sheetSeq = sheets.result.data.find((m) => m.kind === "course" && m.courseId === courseId)!.seq;
+    await trpc("courseMap.update", {
+      id: sheetSeq,
+      objects: [
+        { id: "g17-svg", anchor: "page", kind: "image", graphicId: svgId, x: 12, y: 12, width: 30, height: 15 },
+        { id: "g17-png", anchor: "page", kind: "image", graphicId: pngId, x: 50, y: 12, width: 10, height: 10 },
+      ],
+    });
+
+    // Make maps available offline (the Courses page's export menu): every export's job, its graphics, the document.
+    await page.getByTestId("course-export-menu").click();
+    await page.getByTestId("course-export-offline").click();
+    await expect(page.getByTestId("course-maps-notice")).toContainText("Maps stored on this device", { timeout: 90_000 });
+    const stored = await cachedPaths(page, "offline-print");
+    expect(stored).toContain(`/api/maps/itest/print-job?courses=${courseId}`);
+    expect(stored).toContain("/api/maps/itest/print-job");
+    expect(stored).toContain("/api/maps/itest/print-job?allControls=1");
+    expect(stored).toContain(`/api/maps/itest/print-job?maps=${sheetSeq}`);
+    expect(stored).toContain(`/api/maps/itest/graphics/${pngId}/print.png`);
+    expect(stored.some((p) => new RegExp(`^/api/maps/itest/graphics/${svgId}/print\\.png\\?w=\\d+&h=\\d+$`).test(p))).toBe(true);
+    expect(stored).toContain("/offline-print/itest");
+
+    // The sync panel's Maps block (map-storage.md §7.1 "Offline ready").
+    await page.getByTestId("sync-status-button").click();
+    await expect(page.getByTestId("offline-maps-document")).toHaveAttribute("data-stored", "true");
+    const storedAt = await page.getByTestId("offline-maps-print").getAttribute("data-stored-at");
+    expect(storedAt).toMatch(/^\d{4}-\d\d-\d\dT/);
+    await expect(page.getByTestId("offline-maps-print")).toContainText("Print stored");
+    await expect(page.getByTestId("offline-maps-persisted")).toHaveAttribute("data-persisted", /^(true|false)$/);
+    await page.keyboard.press("Escape");
+    await page.mouse.click(5, 5);
+
+    // No network: the course's export composes the stored job (2a); maps.pdf is not asked; the notice says when.
+    const requests = apiRequests(page);
+    await context.setOffline(true);
+    let offline: Download;
+    try {
+      offline = await download(page, () => page.getByTestId(`export-course-${courseId}`).click());
+      await expect(page.getByTestId("course-maps-notice")).toContainText("Printed offline from the maps stored on");
+      await expect(page.getByTestId("course-maps-notice")).toHaveAttribute("data-stored-at", storedAt!);
+      await expect(page.getByTestId("course-maps-error")).toHaveCount(0);
+      // An export whose job is not on the device says so (2a, `notStored`), still without asking maps.pdf.
+      await page.evaluate(async (key) => (await caches.open("offline-print")).delete(key), `/api/maps/itest/print-job?courses=${courseId}`);
+      await page.getByTestId(`export-course-${courseId}`).click();
+      await expect(page.getByTestId("course-maps-error")).toContainText("not stored on this device");
+      expect(requests.filter((r) => r.includes("/maps.pdf"))).toEqual([]);
+    } finally {
+      await context.setOffline(false);
+    }
+    // What was printed offline is maps.pdf of the stored event, object for object (§8.6 "What identity rests on").
+    await expectA4Pages(offline, 1);
+    const printed = await page.request.get(`/api/maps/itest/maps.pdf?courses=${courseId}`);
+    expect(printed.ok()).toBe(true);
+    expect(offline.suggestedFilename()).toBe(/filename="([^"]+)"/.exec(printed.headers()["content-disposition"] ?? "")![1]);
+    await expectSamePdf(offline, await printed.body());
+  });
+});
+
 test("the retired Maps and Map templates pages redirect, their query kept", async ({ page }) => {
   await selectEvent(page);
   await page.goto("/itest/maps?course=1");

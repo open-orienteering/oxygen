@@ -571,6 +571,7 @@ entries; `lib/editor/export-menu.ts`), each on an existing route:
 | All courses (`…-all`) | `maps.pdf` (every own sheet and the all-controls sheet) | `autoSheets {}` |
 | All controls (`…-allControls`) | `maps.pdf?allControls=1` | `autoSheets { allControls: true }` (E-pages) |
 | Setter maps (`…-setter`; F10) | `maps.pdf?setter=1` (every setter sheet of the event, §8) | — (generating needs a group count: Layout mode's *Setter maps*; none → the route's "No setter maps found" on the error line) |
+| Make maps available offline (`…-offline`; G17) | no download: stores every map export of the event on this device (`course-print.md` §8.6 "Offline"); the button shows the progress | `autoSheets {}` and `{ allControls: true }` |
 | Description sheets… (`…-descriptions`; F11) | opens the dialog (`editor-descriptions-dialog`), then `descriptions.pdf?classes=<seq,…>&copies=&cell=` (`course-print.md` §6.4) | — (no sheet row) |
 | IOF XML (`…-iofxml`), Purple Pen (`…-ppen`) | `/api/export/course-data?format=` | — |
 
@@ -595,6 +596,18 @@ and composes the PDF itself when the device can, else downloads
 `maps.pdf`. Selection, order, caps, file name and the error line are the
 route's either way (a job error is `maps.pdf`'s message). Description
 sheets, IOF XML and Purple Pen are always the server's.
+
+**Offline** (G17; `course-print.md` §8.6 "Offline"): *Make maps available
+offline* — here, in the Courses page's export menu
+(`course-export-offline`) and in the sync panel — stores the event's
+print jobs, their graphics, the faces and the document on the device;
+opening Layout mode refreshes them silently (at most every 30 min, no
+sheet created). With no network a map entry composes from the stored
+job: the `autoSheets` step is skipped, the PDF downloads, and the notice
+under Export ▾ (`editor-export-notice`; on the Courses page
+`course-maps-notice`) says *Printed offline from the maps stored on
+{{time}}*. An export that was not stored says so (*not stored on this
+device*) on the error line.
 
 **`maps.pdf`'s selection** (`selectPrintPages`, `course-print.md` §4.6,
 §8): one of `maps=<seq,…>`, `courses=<seq,…>` (a variant's seq prints

@@ -1,9 +1,12 @@
 /**
  * Map documents for the viewer (docs/map-storage.md §7.1): one
- * `GET /api/map-documents/:hash` per hash, the bytes kept in memory for
- * the session. Cache Storage (the service worker's CacheFirst
- * `map-documents` route, `vite.config.ts`) is the persistent copy; there
- * is no IndexedDB copy (07 §9.1).
+ * `GET /api/map-documents/:hash` per hash (through `venueAwareFetch`, so
+ * a venue session reads the box's copy), the bytes kept in memory for the
+ * session. Cache Storage `map-documents` is the persistent copy: the
+ * service worker's CacheFirst route (`vite.config.ts`) fills it on a page
+ * it controls, and the app puts a document there itself and reads it back
+ * when the network fails (G17, "App-code copy"), so a page no service
+ * worker controls keeps it too. There is no IndexedDB copy (07 §9.1).
  *
  * The request carries the event and kiosk key as headers, never in the
  * query, so the URL — and with it the service worker's cache key — is
@@ -17,11 +20,26 @@
 import { useCallback, useEffect, useState, useSyncExternalStore } from "react";
 import { mapDocument } from "@oxygen/shared";
 import { kioskKeyFromUrl } from "./kiosk-key";
+import { venueAwareFetch } from "./node-discovery";
 
 /** The document route without previews (`/thumbnail.png`, `/symbols/…`); `vite.config.ts` repeats it. */
 export const MAP_DOCUMENT_PATH_RE = /^\/api\/map-documents\/[0-9a-f]{64}$/;
 
 export const mapDocumentUrl = (hash: string): string => `/api/map-documents/${hash}`;
+
+/** The service worker's document cache (`vite.config.ts`), shared with the app-code copy. */
+export const MAP_DOCUMENTS_CACHE = "map-documents";
+
+/** The subset of Cache Storage the app-code copy uses (tests pass a memory one). */
+export interface DocumentCacheStorage {
+  open(name: string): Promise<{
+    match(key: string, opts?: CacheQueryOptions): Promise<Response | undefined>;
+    put(key: string, res: Response): Promise<void>;
+  }>;
+}
+
+const pageCaches = (): DocumentCacheStorage | null =>
+  typeof caches !== "undefined" ? (caches as unknown as DocumentCacheStorage) : null;
 
 export type MapDocumentErrorKind = "unauthorised" | "missing" | "offline" | "failed";
 
@@ -46,7 +64,33 @@ export interface FetchOptions {
   eventId?: string | null;
   /** Kiosk key (`x-kiosk-key`); default: the page URL's `?k=`. */
   kioskKey?: string | null;
-  fetchImpl?: typeof fetch;
+  /** Default `venueAwareFetch`. */
+  fetchImpl?: (url: string, init?: RequestInit) => Promise<Response>;
+  /** Default the page's `caches` (null: none). */
+  cacheStorage?: DocumentCacheStorage | null;
+}
+
+/** The stored copy's response, null on a miss or where Cache Storage is unavailable. */
+async function storedDocument(hash: string, storage: DocumentCacheStorage | null): Promise<Response | null> {
+  if (!storage) return null;
+  try {
+    // The route sends `Vary: Accept-Encoding`; the request headers differ (the event), the bytes do not.
+    return (await (await storage.open(MAP_DOCUMENTS_CACHE)).match(mapDocumentUrl(hash), { ignoreVary: true })) ?? null;
+  } catch {
+    return null;
+  }
+}
+
+/** Puts `bytes` under the hash URL unless a copy is there (the service worker's, on a page it controls). */
+async function keepDocument(hash: string, bytes: ArrayBuffer, storage: DocumentCacheStorage | null): Promise<void> {
+  if (!storage) return;
+  try {
+    const cache = await storage.open(MAP_DOCUMENTS_CACHE);
+    if (await cache.match(mapDocumentUrl(hash), { ignoreVary: true })) return;
+    await cache.put(mapDocumentUrl(hash), new Response(bytes.slice(0), { status: 200, headers: { "content-type": "application/octet-stream" } }));
+  } catch (err) {
+    console.warn("[map-document] not kept in Cache Storage:", err);
+  }
 }
 
 /** Documents kept decoded-header + bytes in memory; older ones are dropped (Cache Storage still has them). */
@@ -72,21 +116,37 @@ export function loadMapDocument(hash: string, opts: FetchOptions = {}): Promise<
   return p;
 }
 
-async function fetchDocument(hash: string, opts: FetchOptions): Promise<LoadedMapDocument> {
+function documentHeaders(opts: FetchOptions): Record<string, string> {
   const headers: Record<string, string> = {};
   if (opts.eventId) headers["x-event-id"] = opts.eventId;
   const kioskKey = opts.kioskKey !== undefined ? opts.kioskKey : kioskKeyFromUrl();
   if (kioskKey) headers["x-kiosk-key"] = kioskKey;
-  const f = opts.fetchImpl ?? fetch;
+  return headers;
+}
+
+async function fetchDocument(hash: string, opts: FetchOptions): Promise<LoadedMapDocument> {
+  const headers = documentHeaders(opts);
+  const f = opts.fetchImpl ?? venueAwareFetch;
+  const storage = opts.cacheStorage !== undefined ? opts.cacheStorage : pageCaches();
   let res: Response;
+  let fromNetwork = true;
   try {
     res = await f(mapDocumentUrl(hash), { headers });
   } catch (err) {
-    throw new MapDocumentError(isOffline() ? "offline" : "failed", err instanceof Error ? err.message : String(err));
+    // No response: the stored copy, else 07 §9.1's eviction detection.
+    const stored = await storedDocument(hash, storage);
+    if (!stored) throw new MapDocumentError(isOffline() ? "offline" : "failed", err instanceof Error ? err.message : String(err));
+    res = stored;
+    fromNetwork = false;
   }
   if (res.status === 401 || res.status === 403) throw new MapDocumentError("unauthorised", `map document ${res.status}`);
   if (res.status === 404) throw new MapDocumentError("missing", "map document not found");
-  if (!res.ok) throw new MapDocumentError(isOffline() ? "offline" : "failed", `map document ${res.status}`);
+  if (!res.ok) {
+    const stored = isOffline() ? await storedDocument(hash, storage) : null;
+    if (!stored) throw new MapDocumentError(isOffline() ? "offline" : "failed", `map document ${res.status}`);
+    res = stored;
+    fromNetwork = false;
+  }
   const bytes = await res.arrayBuffer();
   let header: mapDocument.MapDocumentHeader;
   try {
@@ -94,8 +154,61 @@ async function fetchDocument(hash: string, opts: FetchOptions): Promise<LoadedMa
   } catch (err) {
     throw new MapDocumentError("failed", `unreadable map document: ${err instanceof Error ? err.message : String(err)}`);
   }
+  if (fromNetwork) await keepDocument(hash, bytes, storage);
   void requestPersistentStorage();
   return { hash, bytes, header };
+}
+
+const prefetched = new Map<string, Promise<boolean>>();
+
+/**
+ * Warms the device's copy of an event's document (map-storage.md §7.1
+ * "Prefetch", 07 §9.1): one request unless it is in memory or in
+ * `map-documents`; stored, not decoded, not kept in memory. Once per hash
+ * per session; skipped offline and when the browser asks to save data.
+ * Resolves whether the document is stored afterwards; never rejects.
+ */
+export function prefetchMapDocument(hash: string, eventId: string, opts: Omit<FetchOptions, "eventId"> = {}): Promise<boolean> {
+  let p = prefetched.get(hash);
+  if (p) return p;
+  p = (async () => {
+    const storage = opts.cacheStorage !== undefined ? opts.cacheStorage : pageCaches();
+    if (loaded.has(hash) || (await storedDocument(hash, storage))) return true;
+    if (isOffline() || saveData()) return false;
+    try {
+      const res = await (opts.fetchImpl ?? venueAwareFetch)(mapDocumentUrl(hash), { headers: documentHeaders({ ...opts, eventId }) });
+      if (res.status !== 200) return false;
+      await keepDocument(hash, await res.arrayBuffer(), storage);
+      void requestPersistentStorage();
+      return (await storedDocument(hash, storage)) !== null;
+    } catch {
+      return false;
+    }
+  })();
+  prefetched.set(hash, p);
+  // A failed prefetch may be retried on the next event page.
+  void p.then((ok) => { if (!ok && prefetched.get(hash) === p) prefetched.delete(hash); });
+  return p;
+}
+
+/** Whether the document is on this device: in memory or in `map-documents` (the offline-ready line). */
+export async function isMapDocumentStored(hash: string, storage: DocumentCacheStorage | null = pageCaches()): Promise<boolean> {
+  return loaded.has(hash) || (await storedDocument(hash, storage)) !== null;
+}
+
+function saveData(): boolean {
+  const c = typeof navigator !== "undefined" ? (navigator as Navigator & { connection?: { saveData?: boolean } }).connection : undefined;
+  return c?.saveData === true;
+}
+
+/** `navigator.storage.persisted()` (07 §9.1 "Pinning"); false where the API is missing. */
+export async function storagePersisted(): Promise<boolean> {
+  try {
+    const storage = typeof navigator !== "undefined" ? navigator.storage : undefined;
+    return storage?.persisted ? await storage.persisted() : false;
+  } catch {
+    return false;
+  }
 }
 
 function isOffline(): boolean {
@@ -105,6 +218,7 @@ function isOffline(): boolean {
 /** For tests: forget every loaded document and the persist request. */
 export function resetMapDocumentCache(): void {
   loaded.clear();
+  prefetched.clear();
   persistRequested = undefined;
 }
 

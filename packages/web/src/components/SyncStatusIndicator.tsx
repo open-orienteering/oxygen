@@ -19,6 +19,8 @@ import {
   setVenueCandidates,
 } from "../lib/node-discovery";
 import { BuildInfoLine } from "./BuildInfoLine";
+import { formatStoredAt, isOfflinePrepareError, useEventOfflineMaps, useStoreMapsOffline, type EventOfflineMaps } from "../hooks/useOfflineMaps";
+import { useCapabilities } from "../context/CapabilitiesContext";
 
 interface CachedQueryInfo {
   label: string;
@@ -95,6 +97,63 @@ function getCachedQueries(queryClient: ReturnType<typeof useQueryClient>): Cache
   return [...byKey.values()].sort((a, b) => a.label.localeCompare(b.label));
 }
 
+/**
+ * Maps on this device (docs/map-storage.md §7.1 "Offline ready", G17): the
+ * document, the stored print jobs and whether the browser keeps the
+ * storage, and *Make maps available offline*.
+ */
+function OfflineMapsBlock({ nameId, maps }: { nameId: string; maps: EventOfflineMaps }) {
+  const { t, i18n } = useTranslation("common");
+  const canEdit = useCapabilities().has("courses.edit");
+  const store = useStoreMapsOffline(nameId, canEdit);
+  const [error, setError] = useState<string | null>(null);
+  const m = maps.manifest;
+  const print = maps.unsupported
+    ? t("offlineMapsPrintUnsupported")
+    : !m
+      ? t("offlineMapsPrintNone")
+      : m.complete
+        ? t("offlineMapsPrintStored", { time: formatStoredAt(m.storedAt, i18n.language), count: m.queries.length })
+        : t("offlineMapsPrintPartial", { time: formatStoredAt(m.storedAt, i18n.language) });
+  const run = async () => {
+    setError(null);
+    try {
+      const r = await store();
+      if (r.status === "partial") setError(t("offlineMapsPartialError"));
+      else if (r.status === "offline") setError(t("offlineMapsNotOnline"));
+      else if (r.status === "unsupported") setError(t("offlineMapsPrintUnsupported"));
+    } catch (err) {
+      setError(isOfflinePrepareError(err) ? t("offlineMapsFailed") : err instanceof Error ? err.message : String(err));
+    }
+  };
+  return (
+    <div data-testid="offline-maps" className="px-4 py-3 border-b border-slate-100">
+      <div className="text-xs font-semibold text-slate-500 uppercase tracking-wider mb-2">{t("offlineMaps")}</div>
+      <div className="space-y-1 text-xs text-slate-700">
+        <div data-testid="offline-maps-document" data-stored={maps.documentStored ? "true" : "false"}>
+          {maps.documentStored ? t("offlineMapsDocumentStored") : t("offlineMapsDocumentNone")}
+        </div>
+        <div data-testid="offline-maps-print" data-stored-at={m?.storedAt ?? ""}>{print}</div>
+        <div data-testid="offline-maps-persisted" data-persisted={maps.persisted ? "true" : "false"}>
+          {maps.persisted ? t("offlineMapsPersisted") : t("offlineMapsNotPersisted")}
+        </div>
+      </div>
+      {!maps.unsupported && (
+        <button
+          type="button"
+          data-testid="offline-maps-store"
+          disabled={maps.progress !== null}
+          onClick={(e) => { e.stopPropagation(); void run(); }}
+          className="mt-2 px-3 py-1.5 text-xs font-medium rounded-lg border border-blue-200 text-blue-700 hover:bg-blue-50 disabled:opacity-50 cursor-pointer disabled:cursor-default"
+        >
+          {maps.progress ? t("offlineMapsStoring", { done: maps.progress.done, total: maps.progress.total }) : t("offlineMapsStore")}
+        </button>
+      )}
+      {error && <div role="alert" className="mt-1 text-xs text-red-600">{error}</div>}
+    </div>
+  );
+}
+
 export function SyncStatusIndicator({ competitionId }: { competitionId?: string }) {
   const { t } = useTranslation("common");
   const isOnline = useOnlineStatus();
@@ -108,6 +167,8 @@ export function SyncStatusIndicator({ competitionId }: { competitionId?: string 
   const resilienceMode = useOfflineProjectionEnabled();
   const activeNode = useActiveNode();
   const [venueUrls, setVenueUrls] = useState(getVenueCandidatesRaw);
+  // Prefetches the event's document on every event page; the block's lines re-read when the panel opens (G17).
+  const offlineMaps = useEventOfflineMaps(competitionId, showPanel);
 
   // Refresh cache info when panel is open
   useEffect(() => {
@@ -217,6 +278,8 @@ export function SyncStatusIndicator({ competitionId }: { competitionId?: string 
                 </div>
               )}
             </div>
+
+            {competitionId && offlineMaps.shown && <OfflineMapsBlock nameId={competitionId} maps={offlineMaps} />}
 
             {/* Pending Events */}
             {pendingCount > 0 && (

@@ -1103,7 +1103,8 @@ it loads on the first export):
    says nothing for `PRINT_WORKER_SILENCE_MS` (60 s) while this thread
    owes it nothing (a watchdog re-armed on every `need`, `page` and reply,
    paused while the main thread fetches) — → `maps.pdf` once; its response
-   or error is what the user gets. The reason goes to the console.
+   or error is what the user gets. The reason goes to the console. (A
+   job from the device's store, step 2a below, never falls back.)
 
 Exports run one at a time per tab (a queue in `printMapsPdf`).
 
@@ -1150,8 +1151,9 @@ review: `decisions/slice-g.md` G16.)
 
 The main thread owns every request: the document through
 `loadMapDocument(hash, { eventId })` (`lib/map-document-cache.ts`; a copy
-is transferred, the cache keeps its bytes; the service worker's
-`map-documents` cache is the persistent copy, `map-storage.md` §7.1), each
+is transferred, the cache keeps its bytes; Cache Storage's
+`map-documents` is the persistent copy and, since G17, the request goes
+through `venueAwareFetch` like the job's, `map-storage.md` §7.1), each
 graphic through `venueAwareFetch` of `print.png` — a PNG once without a
 box, an SVG once per box the composer asks (§8.5) — and the faces through
 `loadMapFonts()` (`lib/map-fonts.ts`): the files of
@@ -1215,13 +1217,138 @@ worker with the pre-bundled PDF library, not the production chunk.
 The worker is its own chunk (`assets/print-worker-entry-<hash>.js`), out
 of the precache (`globIgnores`) and kept by a `CacheFirst` runtime route
 (`print-worker`, `vite.config.ts`) after the first export, so devices
-that never print do not download it (the `map-fonts` precedent); G17
-fetches it for offline use. The client is a separate 3.3 kB chunk (1.6 kB gzip).
+that never print do not download it (the `map-fonts` precedent); storing
+an event for offline (below) starts the worker, which puts it there. The client is a separate chunk: 3.3 kB (1.6 kB gzip) at G16, 4.2 kB
+(1.9 kB gzip) since G17, beside the store step's 4.8 kB (2.2 kB gzip).
 Sizes at G16 (`pnpm --filter @oxygen/web build`, 07 §15): the worker
 1 128 kB raw, 409 kB gzip; the faces 390 kB, shared with the viewer. The
 dev server pre-bundles the PDF library (`optimizeDeps.include`): its
 scanner does not follow `new Worker(new URL(…))`, and discovering it on
 the first export would reload the page.
+
+**Offline: the job kept on the device** (G17; 05 §5.11 phase 2 "print
+the maps in the forest when the venue has no network"). A device that
+stored an event's print jobs composes its map exports with no network,
+from the stored job, and says when it was stored.
+
+*Storing* (`prepareOfflinePrint(nameId, { auto })`,
+`print/offline-prepare.ts`). Run by **Make maps available offline** —
+Export ▾'s `editor-export-offline`, the Courses page's export menu
+(`course-export-offline`) and the sync panel's Maps block
+(`offline-maps-store`, `map-storage.md` §7.1) — and, silently, when
+Layout mode opens. One run per event per tab: a second caller joins it,
+except an explicit action that finds the silent run in flight, which
+waits for it and then makes its own (with step 1, unthrottled);
+`deviceLimit` 0 stores nothing (the step answers `unsupported`: this
+device cannot compose). In order:
+
+1. Explicit action with `courses.edit` only: the sheets are ensured as
+   *All courses* and *All controls* do (`layout.autoSheets {}`, then
+   `{ allControls: true }`, best effort as in §8.7), so the stored jobs
+   print what an export would.
+2. **The stored set** (`offlineMapQueries`, `lib/editor/export-menu.ts`):
+   every `maps.pdf` query Export ▾ and the Courses page can issue for
+   the event (the user's answer, 2026-11-14): `exportEntries`
+   (`course-layout.md` §7) run over each course — a root with its
+   variants and their runners from `course.variantList` — each class and
+   each sheet of `courseMap.list`; the map entries that are not disabled,
+   deduplicated by normalised query. So *This sheet*, *This course*, each
+   variant, *All variations*, *One map per runner*, *This class*, *All
+   courses*, *All controls* and *Setter maps* all compose offline, and
+   the set cannot drift from the menu.
+3. Each query's job (`GET print-job<query>`, four at a time). A 2xx job
+   is stored; an HTTP error (e.g. 400 "No requested maps found" for an
+   event without setter sheets) is listed in the manifest's `skipped`; a
+   failure without a response — here or in steps 4–6 (the document
+   `offline`, a face or a `print.png` request) — ends the run
+   (`complete: false`).
+4. The document: `loadMapDocument(hash, { eventId })`, kept in
+   `map-documents` (`map-storage.md` §7.1 "App-code copy").
+5. The faces: `loadMapFonts()`, and their files added to `map-fonts`.
+6. The graphics. A PNG's `print.png` (no box) once per graphic. An SVG's
+   box depends on the composed page (§8.5 "No pixel box in the job"), so
+   the boxes are **learned by composing once**: the distinct sheets that
+   draw an SVG graphic (a sheet without its `copies`, the same sheet
+   under several queries once) are composed in jobs of at most
+   `deviceLimit` A4-equivalents through the export queue, and every
+   `print.png?w=&h=` the worker asks is stored. The PDF is dropped. A
+   `print.png` the server answers with an HTTP error is listed in
+   `skipped` (its request as the `query`) and leaves the run partial, so
+   the panel never says *stored* for a PDF that would print without a
+   logo.
+   Composing, or `warmPrintWorker()` where nothing needs it, starts the
+   print worker, so on a page the service worker controls its chunk is in
+   `print-worker` (Delivery, above).
+7. The manifest, last — written whenever a job was stored, also when the
+   run ends early, so the stored jobs are always under one. Any other
+   failure (Cache Storage refuses a write, the lists or the document are
+   refused) is an `OfflinePrepareError` after that manifest: the callers
+   show *The maps could not be stored on this device*, the cause goes to
+   the console.
+
+The silent run (Layout mode) starts `LAYOUT_OFFLINE_DELAY_MS` (5 s)
+after the mode opens, cancelled if it closes first; it creates no sheet,
+runs only online, and only when the event's manifest is older than
+`OFFLINE_PRINT_REFRESH_MS` (30 min), absent or partial; it reports
+nothing but the sync panel's line (a surface shows the progress only of
+a run it started). A job the server answers in another
+version is skipped like an HTTP error. A run the network cut short
+(`complete: false`) keeps what earlier runs stored. The explicit action
+says *Maps stored on this device: {{count}} exports, {{time}}* in the same
+notice as an offline export.
+
+*Store* (`print/offline-store.ts`; Cache Storage `offline-print`,
+written by app code only — no service-worker route, so it works on a
+page no service worker controls, which includes the dev server):
+
+| Key (same origin) | Body |
+|---|---|
+| `/api/maps/<nameId>/print-job?<query>` — the query normalised (`normaliseQuery`: parameters sorted by name, then value) | the job as served (JSON), header `x-oxygen-stored-at` (ISO time) |
+| `/api/maps/<nameId>/graphics/<id>/print.png[?w=&h=]` | the PNG as served |
+| `/offline-print/<nameId>` | the manifest `{ storedAt, documentHash, jobVersion, queries, skipped, complete }` |
+
+A run replaces the event's entries and deletes those outside its new
+set; the five events stored most recently are kept
+(`OFFLINE_PRINT_EVENTS`), an older event's entries are deleted. No
+IndexedDB copy (07 §9.1).
+
+*Exporting* (Path, above, gains):
+
+- **2a.** The `print-job` request rejects (no response: no network, the
+  box gone) → the stored job of the event and normalised query; none →
+  `OfflinePrintError("notStored")`. An HTTP answer is never replaced by
+  a stored job: a 4xx / 5xx stays the export's error.
+- **2b.** A stored job composes as in steps 3–4, with the stored
+  `print.png` answers (a miss is answered `error`: the writer's
+  `IMAGE_MISSING` / `SVG_RASTER`, §8.5) and the document through
+  `loadMapDocument` (memory, then `map-documents`). Another version
+  (`notStored`), a job above the limit (`tooLarge`: export per course)
+  or any failure (`failed`) is an `OfflinePrintError` — no `maps.pdf`
+  request is made, the network has just failed. `deviceLimit` 0 with
+  the network gone is `unsupported`.
+- **2c.** Online, for an event that has a manifest, the job and every
+  `print.png` an export fetches are written through, so the store follows
+  the event between runs; the manifest's time is unchanged.
+
+The result carries the job's `storedAt`. Export ▾ shows it as
+`editor-export-notice` and the Courses page as `course-maps-notice`:
+"Printed offline from the maps stored on {{time}}" (the date and time in
+the user's language). `OfflinePrintError` codes are translated by the
+caller; the client stays free of i18n. The export's `layout.autoSheets`
+step is skipped on a network failure (`ensureSheetsBestEffort`, as for a
+box's `CLOUD_UNREACHABLE`, §8.7), so the ensuring entries print offline.
+
+What is printed offline is the event **as stored**: a sheet, template or
+course edited since prints as it was; the notice's time says how old.
+Identity (above) is unchanged: the stored job is the server's job, with
+its patch inline (§8.5, G14), composed by the same worker with the same
+faces, document and `print.png` bytes.
+
+In the E2E (dev server, no service worker) the module worker cannot be
+restarted offline, so the test exports within `PRINT_WORKER_IDLE_MS` of
+the store; in a production build the chunk and the faces come from the
+service worker's `print-worker` and `map-fonts` caches after a reload
+(not tested end to end: Pending).
 
 ### 8.7 On a venue box (G18)
 
@@ -1256,8 +1383,11 @@ found", as on the cloud before the step existed.
 
 A device that composes (§8.6) reads the job and `print.png` through
 `venueAwareFetch`, so on a venue session they come from the box's copy
-too, and the device's PDF equals the box's `maps.pdf`; if the device
-cannot read the document, it falls back to the box's `maps.pdf`.
+too, and the device's PDF equals the box's `maps.pdf`. Since G17 the
+document comes from the box as well (`venueAwareFetch`, `map-storage.md`
+§7.1), so a cloud-served PWA on a venue session composes on the device
+with the uplink down; if the device cannot read the document, it falls
+back to the box's `maps.pdf`.
 
 ## 9. Tests and CI
 
@@ -1281,6 +1411,8 @@ cannot read the document, it falls back to the box's `maps.pdf`.
 | `packages/api/src/__tests__/print-device.test.ts` (G16, G14) | G14: the fixture job with a patch (a hide, a modify, an add) composes on the device to the server worker's bytes, which differ from the unpatched job's. §8.6: the browser's print worker (`web/src/print/worker.ts`, driven as its main thread drives it, graphics as `print.png` serves them) and the server's print worker compose the fixture job to equal bytes (`deterministic`) — the guarantee slice G answer 3 rests on |
 | `packages/web/src/print/__tests__/worker.test.ts` (G16, G14) | G14: a job with a patch composes to `renderPrintJob`'s patched bytes, unlike the unpatched job's, the document asked again for the new key. The worker's handler: the fixture job → `renderPrintJob`'s bytes in process, pages in order; the document asked once across two jobs, a PNG once without a box, each SVG once per box; an unfetchable graphic → `SVG_RASTER` / `IMAGE_MISSING` and a PDF; an unreadable document and version 2 → `error`, the worker still usable; compose before `init` refused |
 | `packages/web/src/print/__tests__/client.test.ts`, `capability.test.ts`, `imports.test.ts` (G16) | `printMapsPdf`: the device path (the job, the document by hash through the event, `print.png` per graphic, the job's file name, no `maps.pdf`), the worker kept and the document asked once across exports; `maps.pdf` without a `Worker` or under 2 GiB (no job asked), above the limit, for version 2, when the worker fails to start, when the document cannot be read (the worker terminated); a worker that goes silent (watchdog) and a 2xx body that is not a job → `maps.pdf`, the next export unaffected; a job 400 is the export's error with no `maps.pdf` request; `DEVICE_PRINT_JOB_VERSION` = `PRINT_JOB_VERSION`. `deviceLimit`'s table and `printCost` (copies free, 0 copies none, A3 = 2). Only `print/worker.ts` imports `@oxygen/shared/print` at runtime; `mapsPdfTarget` of every Export ▾ entry |
+| `packages/web/src/print/__tests__/client.test.ts` "offline" (G17), `offline-store.test.ts`, `offline-prepare.test.ts`; `lib/editor/__tests__/export-menu.test.ts`; `lib/__tests__/trpc-links.test.ts` | §8.6 "Offline": composing to store keeps every `print.png` the composer asks (the PNG without a box, each SVG at its box); with no network the stored job composes with its stored graphics (no `IMAGE_MISSING` / `SVG_RASTER`), carries its `storedAt`, asks no `maps.pdf`, and is the size of the online export; a query not stored `notStored`, above the limit `tooLarge`, no `Worker` `unsupported` (no request), a document that cannot be read `failed`; an HTTP error never replaced; online write-through only for a stored event, the manifest's time kept. The store: query normalisation, keys, job and stored time round trip, graphics, manifest, `retain`, five events kept, no Cache Storage. The step: every query's job, PNGs once, the one SVG sheet under four queries composed once, document and faces, the manifest; an HTTP error skipped and listed, no SVG → the worker warmed; the network going mid-run → partial, earlier entries kept; a re-run deletes entries outside the set; `unsupported` / `offline` with no request; the silent run skips within 30 min and never ensures; a second caller joins; progress until the end; `boxLearningJobs` (distinct sheets, copies 1, chunks within the limit). `offlineMapQueries` over courses, a root's variants, classes and sheets (normalised, once, no variant course, no per-runner export without runners); the offline entry an action; `ensureSheetsBestEffort` skips on a network failure |
+| `e2e/course-maps.spec.ts` "offline print: the job kept on the device" (G17) | §8.6 "Offline" in Chromium: with an SVG and a PNG on the course's sheet, the Courses page's *Make maps available offline* stores the jobs of `?courses=`, the unfiltered, `?allControls=1` and `?maps=` queries, the PNG's `print.png` and the SVG's at a box, and the manifest; the sync panel shows the document stored and *Print stored* with its time; `context.setOffline(true)`, the course's export downloads (the ensure step skipped), the notice says *Printed offline from the maps stored on…* with the manifest's time, no `maps.pdf` asked, and the PDF equals `maps.pdf` of the same query object for object; with that job deleted from the store the export's error line says it is not stored on this device. Dev server: the module worker started by the store is the one that composes (§8.6 "Offline", last paragraph) |
 | `packages/shared/src/print/__tests__/print-job.test.ts` "the fixture job" (G16), `src/__tests__/collate.test.ts` | the fixture job's sheets (course × 3, two parts, all controls with Å1 before Z1, setter), graphics and JSON round trip; composed through `renderPrintJob` = `renderCoursePages`, the SVGs asked at their boxes. `compareLabels`: a fixed list in its literal order, equal to the en-US numeric order and not to the Swedish |
 | `packages/api/src/__tests__/worker-bootstrap.test.ts` | the shared bootstrap: `.js` imported as is, `.ts` through tsx |
 | `packages/api/src/render/__tests__/pdf-golden.test.ts` | the PDF golden tier, §9.2, and `qpdf --check` on every file it writes; `boxDown`; the swatch read-back |
@@ -1730,24 +1862,16 @@ The tool's own tests (`print-run.test.ts`, `measure-print.test.mjs`,
   exchange as one sheet per part (§5.2), so several frames on one sheet
   stay Pending (decided on the user's standing instruction 2026-11-07,
   for review).
-- **The job kept on the device** (G17): storing jobs and their graphics'
-  PNGs (the boxes learned by composing once), the faces, the document and
-  the print worker's chunk for offline composing (§8.6 composes online
-  only).
 - **The production print worker is checked by build inspection only**
-  (§8.6 "Delivery", G16): the E2E runs the dev server, so the minified
+  (§8.6 "Delivery", G16; "Offline", G17): the E2E runs the dev server,
+  which registers no service worker, so the minified
   `print-worker-entry-<hash>.js`, its `{ type: "module" }` construction
-  in the built format, the `print-worker` runtime route and its
-  `globIgnores` entry have no automated test; G17, which must fetch that
-  chunk for offline use, is the natural place for a preview-build smoke.
-- **The document outside venue routing** (§8.6, G16): the job and
-  `print.png` go through `venueAwareFetch`, the document through
-  `loadMapDocument`'s plain `fetch`, as the viewer's does. Content
-  addressed, and a failure falls back to `maps.pdf`, so a venue session
-  stays correct. A box serves the document from its copy (`map-storage.md`
-  §7.2; §8.7); routing the device's document fetch to it, so a
-  cloud-served PWA composes on the device with the uplink down instead of
-  falling back to the box's `maps.pdf`, is G17's (G18 left it).
+  in the built format, the `print-worker` and `map-fonts` routes, the
+  `globIgnores` entry and offline printing after a reload have no
+  automated test. G17 did not add the preview-build smoke (the user's
+  answer, 2026-11-14): a SLICES row of its own, required before the
+  G-gate (a Playwright project on `vite build` + `vite preview` with the
+  service worker).
 - **Device limits are estimates** (§8.6 "Capability", G16): 8 / 24 / 64
   A4-equivalents by `navigator.deviceMemory` (8 / 24 by pointer where it
   is undefined), derived from §11.5's sizes; replaced by measurements on

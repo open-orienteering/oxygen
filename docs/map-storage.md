@@ -924,7 +924,9 @@ worker handle revalidation of an `immutable` response). §4.2 decides
 access exactly as for any other caller — on the request that fills the
 cache: a device keeps a document it has cached after its access is
 revoked, until the entry expires or is evicted (inherent in 07 §9.1's
-CacheFirst).
+CacheFirst). The request goes through `venueAwareFetch` (G17), so a
+venue session reads the document from the box's copy (§7.2), as it reads
+every other route; the cache key stays the same-origin hash URL.
 
 **In memory.** One request per hash per session: concurrent callers share
 it and get the same `ArrayBuffer`; the last four documents are kept
@@ -960,6 +962,44 @@ cached on first use rather than precached, so a device that never opens
 a vector map does not download them. The
 regex is `MAP_DOCUMENT_PATH_RE`; Workbox stringifies the route function,
 so `vite.config.ts` repeats it as a literal.
+
+**App-code copy** (G17). The service worker caches a document only on a
+page it controls and for a same-origin request, so the app keeps its own
+copy in the same cache: after a 200 the document is put into
+`map-documents` under `mapDocumentUrl(hash)` unless it is there already,
+and a request that fails without a response (or a non-200 while
+`navigator.onLine === false`) reads it back from there
+(`ignoreVary`: the route sends `Vary: Accept-Encoding`) before it is
+classified `offline`. A first visit, the dev server and a document read
+from a venue box are kept that way. Workbox's expiration learns such an
+entry on its first CacheFirst hit (`cachedResponseWillBeUsed`), so the
+20-entry cap applies to it from then on. Same cache and key: no second
+copy, no IndexedDB.
+
+**Prefetch** (07 §9.1 "Prefetch"; G17). When an event page opens
+(`useEventOfflineMaps`, mounted by the sync indicator, which every event
+page shows) for a user with `courses.view` (the capability
+`course.mapMetadata` asks outside a kiosk; a kiosk page has no sync
+indicator) and `course.mapMetadata.documentHash` is set,
+`prefetchMapDocument(hash, nameId)` makes the one request unless the
+document is in `map-documents` already: stored, not decoded, not kept in
+memory. Once per hash per session; skipped offline and when the browser
+asks to save data (`navigator.connection.saveData`). So a device that has
+opened the event has its map, before any map was shown.
+
+**Offline ready** (07 §9.1 "Pinning"; G17). The sync panel's *Maps on
+this device* block (`offline-maps`), for a user with `courses.view` on
+an event with a map:
+
+| Line | Shows |
+|---|---|
+| `offline-maps-document` | *Map stored on this device* / *Map not stored on this device* (`isMapDocumentStored(hash)`: in memory or in `map-documents`) |
+| `offline-maps-print` | *Print stored {{time}} ({{count}} exports)*, *Print partly stored {{time}}* (`complete: false`), *Print not stored*, or *Printing offline needs a device that can compose PDFs* (`deviceLimit` 0) — the manifest of `course-print.md` §8.6 "Offline" |
+| `offline-maps-persisted` | *Storage: kept by the browser* / *Storage: may be cleared by the browser* (`navigator.storage.persisted()`; absent API: the second) |
+
+and **Make maps available offline** (`offline-maps-store`), which runs
+the print store step with its progress on the button
+(`course-print.md` §8.6 "Offline").
 
 **Pinning.** After the first document loads, the app calls
 `navigator.storage.persist()` once per session (absent API or a refusal
@@ -1434,12 +1474,11 @@ mentions is pending (§9).
 
 A Maintenance card for the re-match pass (§6.9 is CLI-only); a Settings →
 Maintenance card for the GC (§8.4: status of the last run, dry run, run
-now); a prefetch of the event's document when an event opens (07 §9.1
-"Prefetch"; today the document is fetched when a map is first shown) and
-an "offline ready" indicator with `navigator.storage.persisted()`; the
-service-worker routes are not exercised by E2E (the suite runs the Vite
-dev server, which registers no service worker) — they were checked in the
-built `sw.js`; `course.importCourses` run on a box still writes its
+now); the service-worker routes are not exercised by E2E (the suite
+runs the Vite dev server, which registers no service worker) — they were
+checked in the built `sw.js`; G17's app-code copy (§7.1) is what the E2E
+exercises, and a preview-build smoke is a row before the G-gate
+(`course-print.md` Pending); `course.importCourses` run on a box still writes its
 `course_objects` locally, and a map uploaded on a box still pins it
 locally — since G19 both last only until the next refresh (§7.2, the
 mirror is exact; forwarding the import's object part and the upload is
@@ -1480,6 +1519,8 @@ section here and its own tests.
 | Unit (api) | `packages/api/src/__tests__/club-map-library.test.ts` | `projectClubMapRow` (series settings, version label → source name fallback, header scale → legacy scale, legacy raster metadata, version-less row with its job and the job's source and no preview URL, nulls, job dropped once a version exists), `canRemoveClubMap` / `canDownloadClubMapVersion` matrices, `latestVersionOrRefuse` → `PRECONDITION_FAILED`; `review` counts from the import report's `matching.symbols`, null without a matched document |
 | Integration (api) | `packages/api/src/__tests__/integration/club-maps.test.ts` | chunked upload keyed by the series UUID, list carries version / hashes / thumbnail URL / source facts, staleness from the version's report, rename, download by version source; a version-less series lists no north and no preview URL; an unimportable upload (OCAD magic, garbage after) listed with a failed job and no preview URL, its bytes kept as the source, `download` / `useClubMap` `PRECONDITION_FAILED`; unknown id `NOT_FOUND`, malformed `BAD_REQUEST`; remove stranger `FORBIDDEN`, creator ok, versions cascade; `setRotation` on the series → event copy (columns from the pin, `length_source` stays `derived`); an event upload keeps ScalePar (columns equal to the oracle); an unpinned row answers with no document and no north; `course.downloadMap` returns the source's bytes; download stranger `FORBIDDEN`; club-library copy and backup gates; the listed `review` equals the version document's report counts |
 | Unit (web) | `packages/web/src/lib/__tests__/map-document-cache.test.ts` | §7.1: route regex (documents, not previews), URL without query and the two headers, one request per hash and the same bytes, bounded memory, 401/403/404/5xx/offline/unreadable → kinds and not cached, `storage.persist()` once and absent |
+| Unit (web) | `packages/web/src/lib/__tests__/map-document-cache.test.ts` (G17) | §7.1 "App-code copy", "Prefetch", "Offline ready": a fetched document put into `map-documents` under the hash URL, once; read back when the request fails without a response or answers non-200 while offline, else `offline`; a 403 online stays `unauthorised`; prefetch stores without decoding, once per hash, not when stored, skipped offline and with `saveData`, retried after a failure; `storagePersisted` and its absence |
+| E2E | `e2e/course-maps.spec.ts` "offline print: the job kept on the device" (G17) | opening the event stores its document in `map-documents` before any map is shown (the dev server has no service worker: the app-code copy); the sync panel's *Maps on this device* lines after *Make maps available offline* |
 | E2E | `e2e/map-vector-layer.spec.ts` | §7.1 through the viewer: the pinned document by hash, no query, `x-event-id` |
 | Unit (web) | `packages/web/src/__tests__/map-upload.test.ts` | a small file is one chunk (no base64 path, E5), init → chunks → finalise call order and progress, per-chunk retry on 5xx, no retry on 4xx, `x-event-id` only for event uploads |
 | Unit (api) | `packages/api/src/__tests__/map-previews.test.ts` | preview request parsing (`:idx`, `.png`, library code, hash), ETags and `If-None-Match`, library preview of an entry and a variant, 404 for unknown code / other version, per-instance cache hit |

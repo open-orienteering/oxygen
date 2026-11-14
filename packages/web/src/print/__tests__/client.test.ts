@@ -12,7 +12,9 @@ import { resolve } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { PRINT_JOB_VERSION, type PrintJob, resetPreparedDocuments } from "@oxygen/shared/print";
 import { FIXTURE_PNG, fixturePrintJob, printDocumentBytes } from "../../../../shared/src/print/__tests__/print-job-fixture";
-import { DEVICE_PRINT_JOB_VERSION, type PrintClientDeps, type WorkerLike, printMapsPdf, resetPrintClient } from "../client";
+import { DEVICE_PRINT_JOB_VERSION, OfflinePrintError, type PrintClientDeps, type WorkerLike, composeToStore, printMapsPdf, resetPrintClient } from "../client";
+import { createOfflinePrintStore, graphicUrl, jobKey } from "../offline-store";
+import { MemoryCaches } from "./memory-caches";
 import type { DeviceEnv } from "../capability";
 import type { PrintFace, PrintWorkerRequest, PrintWorkerResponse } from "../protocol";
 import { createPrintWorker } from "../worker";
@@ -55,20 +57,24 @@ class BrokenWorker implements WorkerLike {
 const json = (body: unknown, status = 200) => new Response(JSON.stringify(body), { status, headers: { "content-type": "application/json" } });
 const serverPdf = { blob: new Blob(["%PDF-server"], { type: "application/pdf" }), filename: "server.pdf" };
 
-function deps(over: Partial<Omit<PrintClientDeps, "env">> & { job?: PrintJob | Response; device?: DeviceEnv } = {}) {
+function deps(over: Partial<Omit<PrintClientDeps, "env">> & { job?: PrintJob | Response; device?: DeviceEnv; network?: boolean; caches?: MemoryCaches } = {}) {
   const requests: string[] = [];
   const workers: WorkerLike[] = [];
-  const { job = fixturePrintJob(), device = { worker: true, deviceMemory: 8, coarsePointer: false }, ...rest } = over;
+  const { job = fixturePrintJob(), device = { worker: true, deviceMemory: 8, coarsePointer: false }, network = true, caches = new MemoryCaches(), ...rest } = over;
   const d: PrintClientDeps = {
     env: () => device,
+    store: createOfflinePrintStore(() => caches),
+    online: () => network,
     fetch: vi.fn(async (url: string) => {
       requests.push(url);
+      if (!network) throw new TypeError("Failed to fetch");
       if (url.includes("/print-job")) return job instanceof Response ? job : json(job);
       if (url.includes("/print.png")) return new Response(FIXTURE_PNG.slice(), { status: 200 });
       return new Response("", { status: 404 });
     }),
     server: vi.fn(async (url: string) => {
       requests.push(url);
+      if (!network) throw new TypeError("Failed to fetch");
       return serverPdf;
     }),
     document: vi.fn(async () => printDocumentBytes().slice().buffer as ArrayBuffer),
@@ -168,5 +174,105 @@ describe("printMapsPdf (§8.6)", () => {
 
   it("composes the version the shared pipeline writes", () => {
     expect(DEVICE_PRINT_JOB_VERSION).toBe(PRINT_JOB_VERSION);
+  });
+});
+
+describe("printMapsPdf offline (§8.6 \"Offline\", G17)", () => {
+  /** The store step's work for `?courses=3`: the job, and its graphics learned by composing once. */
+  async function storeFixture(caches: MemoryCaches, storedAt = "2026-11-14T09:30:00.000Z") {
+    const { d } = deps({ caches });
+    await d.store.putJob("ev", "?courses=3", fixturePrintJob(), storedAt);
+    await composeToStore("ev", fixturePrintJob(), d);
+    await d.store.writeManifest("ev", { storedAt, documentHash: fixturePrintJob().document.hash, jobVersion: 2, queries: ["?courses=3"], skipped: [], complete: true });
+    resetPrintClient();
+    return d;
+  }
+
+  it("composing to store keeps every print.png the composer asks: the PNG without a box, each SVG at its box", async () => {
+    const caches = new MemoryCaches();
+    await storeFixture(caches);
+    const paths = caches.get("offline-print").paths();
+    expect(paths).toContain(graphicUrl("ev", 7));
+    expect(paths.some((p) => /\/graphics\/8\/print\.png\?w=\d+&h=\d+$/.test(p))).toBe(true);
+  });
+
+  it("with no network composes the stored job and its stored graphics, says when it was stored, and asks no maps.pdf", async () => {
+    const caches = new MemoryCaches();
+    await storeFixture(caches);
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    const { d, requests } = deps({ caches, network: false });
+    const out = await printMapsPdf("ev", "?courses=3", d);
+    expect(out).toMatchObject({ host: "device", filename: "Fixture_maps.pdf", storedAt: "2026-11-14T09:30:00.000Z" });
+    expect(new TextDecoder().decode(new Uint8Array(await out.blob.arrayBuffer()).slice(0, 5))).toBe("%PDF-");
+    // The job was asked once (it failed); every graphic came from the store.
+    expect(requests).toEqual(["/api/maps/ev/print-job?courses=3"]);
+    expect(warn.mock.calls.flat().join(" ")).not.toMatch(/IMAGE_MISSING|SVG_RASTER/);
+    warn.mockRestore();
+  });
+
+  it("the device's stored job prints the same bytes as the online export (deterministic aside)", async () => {
+    const caches = new MemoryCaches();
+    await storeFixture(caches);
+    const online = deps();
+    const a = await printMapsPdf("ev", "?courses=3", online.d);
+    resetPrintClient();
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    const b = await printMapsPdf("ev", "?courses=3", deps({ caches, network: false }).d);
+    warn.mockRestore();
+    // Same size: only CreationDate and /ID differ between two compositions (§3.2).
+    expect(b.blob.size).toBe(a.blob.size);
+  });
+
+  it("a query that was not stored, a stored job above the limit, and a device that cannot compose are typed errors", async () => {
+    const caches = new MemoryCaches();
+    await storeFixture(caches);
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    const miss = deps({ caches, network: false });
+    await expect(printMapsPdf("ev", "?courses=4", miss.d)).rejects.toMatchObject({ code: "notStored" });
+    expect(miss.requests.filter((r) => r.includes("maps.pdf"))).toEqual([]);
+    const big = { ...fixturePrintJob(), sheets: Array.from({ length: 30 }, () => ({ ...fixturePrintJob().sheets[0], paper: { widthMm: 210, heightMm: 297 } })) };
+    await miss.d.store.putJob("ev", "", big, "t");
+    await expect(printMapsPdf("ev", "", deps({ caches, network: false, device: { worker: true, deviceMemory: 4, coarsePointer: false } }).d)).rejects.toMatchObject({ code: "tooLarge" });
+    const weak = deps({ caches, network: false, device: { worker: false, deviceMemory: 8, coarsePointer: false } });
+    const err = await printMapsPdf("ev", "?courses=3", weak.d).catch((e: unknown) => e);
+    expect(err).toBeInstanceOf(OfflinePrintError);
+    expect((err as OfflinePrintError).code).toBe("unsupported");
+    expect(weak.requests).toEqual([]);
+    warn.mockRestore();
+  });
+
+  it("a stored job that cannot be composed is 'failed', with no maps.pdf request", async () => {
+    const caches = new MemoryCaches();
+    await storeFixture(caches);
+    // The worker's prepared document (in process here) would spare the read.
+    resetPreparedDocuments();
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    const { d, requests } = deps({ caches, network: false, document: async () => { throw new Error("map document offline"); } });
+    await expect(printMapsPdf("ev", "?courses=3", d)).rejects.toMatchObject({ code: "failed" });
+    expect(requests.filter((r) => r.includes("maps.pdf"))).toEqual([]);
+    warn.mockRestore();
+  });
+
+  it("an HTTP error is never replaced by the stored job", async () => {
+    const caches = new MemoryCaches();
+    await storeFixture(caches);
+    const { d } = deps({ caches, job: new Response("No requested maps found", { status: 400 }) });
+    await expect(printMapsPdf("ev", "?courses=3", d)).rejects.toThrow("No requested maps found");
+  });
+
+  it("online, a stored event's job and graphics are written through; an event not stored is left alone", async () => {
+    const caches = new MemoryCaches();
+    await storeFixture(caches, "2026-11-14T08:00:00.000Z");
+    const { d } = deps({ caches });
+    await printMapsPdf("ev", "?courses=3&copies=runners", d);
+    const fresh = await d.store.getJob("ev", "?copies=runners&courses=3");
+    expect(fresh?.storedAt).not.toBe("");
+    expect(fresh!.storedAt > "2026-11-14T08:00:00.000Z").toBe(true);
+    // The manifest's time is the run's, not the write-through's.
+    expect((await d.store.readManifest("ev"))?.storedAt).toBe("2026-11-14T08:00:00.000Z");
+    const other = deps({ caches });
+    await printMapsPdf("ev2", "?courses=3", other.d);
+    expect(caches.get("offline-print").paths().some((p) => p.startsWith("/api/maps/ev2/"))).toBe(false);
+    expect(jobKey("ev", "?copies=runners&courses=3")).toBe("/api/maps/ev/print-job?copies=runners&courses=3");
   });
 });
