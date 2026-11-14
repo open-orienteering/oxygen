@@ -349,6 +349,195 @@ band graph (§2) and the solve's levels (§3) into a height per cell.
    cells per side** (a phone's texture limit). Interpolation still runs
    on the graph raster (0.1 mm by default).
 
+### 4.1 Method and input
+
+The surface is the raster alternative of 10 §2.2 in T1's band form: inside
+each region (a band between chains, §2.5) a cell's height lies between
+the band's lower and upper chains, weighted by its **geodesic distance**
+to each inside the region. It is the surface T1 drew and the user
+accepted (answer 2), with T1's formulas and constants; 10 §2.2's TIN with
+medial-axis points is not built.
+
+The input is the graph (§2) and the solve's levels, read through
+`FieldLevels`, a structural subset of §3's solution:
+
+```ts
+interface FieldLevels {
+  regionLevel: Int32Array;  // per region: floor in intervals, 0 the lowest of its connected set
+  regionWeak: Uint8Array;   // per region: reached only through a zero-step weak link
+  side: Int8Array;          // per chain: +1 uphill left, −1 right, 0 undecided
+  flagged: Uint8Array;      // per chain: decided by a flagged heuristic
+  conflict: Float32Array;   // per chain: share of samples contradicting the levels
+}
+```
+
+Heights are in intervals until §4.8. The work runs on the graph raster
+(§2.4: 0.1 mm by default), so the field covers the raster's extent: the
+contour pieces' box padded by 2 mm.
+
+### 4.2 Sources
+
+A region's **floor** is `regionLevel`; the region spans floor to
+floor + 1. Each chain is walked at one cell length and probed left and
+right as in §2.6 (first region cell within 1–3 cells along the normal,
+skipping the chain's own cells). With `d = floor(left) − floor(right)`
+(the chain's `side` when a side is unseen; 0 for a leaky chain):
+
+| Cell | Kind | Height |
+|---|---|---|
+| on the high side (`d ≠ 0`) | LOW: the region's lower bound | its floor |
+| on the low side (`d ≠ 0`) | UP: the region's upper bound | its floor + 1 |
+| either side when `d = 0` | FORM | its floor + ½ |
+
+A multi-step chain (§3) therefore carries its whole drop in its own
+cells; a cliff link needs no sources, since the floors on its two sides
+already differ by the link's step. Every form-line chain (§2.1) seeds
+FORM in each region cell it crosses: a form line lies half an interval
+above the contour below (10 §2.1 step 4), closed or not, ticked or not.
+
+### 4.3 Geodesic distance
+
+`geodesicDistance(raster, seeds)`: one pass per kind, from all its seeds
+at once, 8-connected and confined to the seed's region
+(`labels[j] = labels[i]`), steps 2 orthogonal and 3 diagonal (half-cell
+units), as `Uint16` saturating at 65 535 (unreachable; 3.3 m on paper at
+0.1 mm). Dial's algorithm on four typed-array buckets, in cell order.
+
+### 4.4 Height in a band
+
+With `w = 1 / (d + 1)` per kind (0 when unreachable), where at least two
+kinds reach a cell and one of them is LOW or UP:
+
+```
+frac = (w_up + ½ · w_form) / (w_low + w_up + w_form)
+height = floor + frac
+```
+
+Between a lower and an upper chain with no form line this is close to
+linear in distance.
+
+### 4.5 Tops, pits and empty regions
+
+| Region reaches | `frac` | Shape |
+|---|---|---|
+| LOW only (a top, or the uphill band at the frame) | `½ · min(1, R / 20 m) · d_low / d_max` | a dome up to half an interval |
+| UP only (a pit, or the lowest band) | `1 − ½ · min(1, R / 20 m) · d_up / d_max` | a bowl down to half an interval |
+| FORM only, or nothing | ½ | flat |
+
+`d_max` is the region's largest distance of that kind and `R` that
+distance on the ground. Knolls and depressions (point symbols) are not
+read.
+
+### 4.6 Field grid, resampling, smoothing
+
+The field cell is `k` graph cells, `k` the smallest integer with
+`k · cellMm ≥ 0.2 mm` such that the field has at most 4 M cells and at
+most 4096 per side (§4.0 answer 3); the field grid starts at the
+raster's corner `(x0, y0)` and has `⌈width / k⌉ × ⌈height / k⌉` cells.
+
+1. A field cell is **no-data** when more than half its graph cells lie
+   outside the mapped area (label −1).
+2. Its height is the mean of its region cells; barrier cells (chains,
+   cliffs) are holes.
+3. Two passes of a normalised box blur of radius
+   `max(1, round(4 m / field cell on the ground))` average over data
+   cells only, filling holes; no-data cells stay out of it.
+4. A hole still empty after the blur takes the mean of its data
+   neighbours, outwards (0 where nothing reaches).
+
+T1 blurred the 0.1 mm raster; the field blurs after resampling, at the
+same ground radius, for a fraction of the memory.
+
+### 4.7 Confidence
+
+A region is **confident** when it is not weak, it has LOW or UP sources,
+and at least half of those seed samples come from **good** chains:
+decided (`side ≠ 0`), not flagged, not leaky, conflict ≤ 0.5. A field
+cell's bit is set when more of its region cells lie in confident regions
+than not (clear on a tie, and with no region cells).
+
+### 4.8 Quantisation
+
+`z = round(height · 64)`, clamped to ±32 767; −32 768 is no-data. Height
+0 is the floor of the lowest region of each connected set (§3); sets no
+chain joins float independently. `datum` is `relative`, `zOffsetM` 0.
+
+### 4.9 With a DEM anchor (H9, pending)
+
+Sources then carry each anchored chain's height instead of floor or
+floor + 1; the passes and weights are the same, and the field is written
+with `datum: "absolute"` and its own `source` (§4.0 answer 2). Not built
+in H3.
+
+## 5. The height field
+
+### 5.1 `HeightField`
+
+```ts
+interface HeightFieldHeader {
+  version: number;          // TERRAIN_VERSION (1), bumped when §1–5 change the field a document derives
+  source: "contours";       // H10 adds DEM sources
+  cellMm: number; x0: number; y0: number; width: number; height: number;  // §2's Grid, y up
+  groundMPerMm: number;
+  intervalM: number;        // 5, or 2.5 for ISSprOM (answer 8)
+  zScaleM: number;          // metres per unit: intervalM / 64
+  zOffsetM: number;         // metres = z · zScaleM + zOffsetM
+  datum: "relative" | "absolute";
+  zMin: number; zMax: number; // over data cells; both 0 without data
+}
+interface HeightField { header: HeightFieldHeader; z: Int16Array; confident: Uint8Array }
+```
+
+Values sit at cell centres, row-major from the lower-left. `confident`
+is bit-packed, `⌈width · height / 8⌉` bytes, cell `i` at bit `i % 8` of
+byte `i >> 3` (`isConfident`): a separate plane, so the int16 grid
+uploads to the GPU as it is.
+
+### 5.2 Bytes
+
+`encodeHeightField(field)` / `decodeHeightField(bytes)`, little-endian:
+
+| Offset | Content |
+|---|---|
+| 0 | magic `OXHF` |
+| 4 | u32 container version, 1 |
+| 8 | u32 header byte length `n` (a multiple of 4) |
+| 12 | the header as UTF-8 JSON, zero-padded to `n` |
+| 12 + n | `width · height` int16 |
+| then | the confidence plane |
+
+The length must match exactly. Decoding throws `HeightFieldFormatError`
+on a bad magic, an unknown container version, a header the schema
+rejects, or a length that does not match; encoding throws when the planes
+do not match the header. No compression: the transport's (H4). The same
+field gives the same bytes.
+
+### 5.3 Sampling
+
+`sampleHeight(field, { x, y })` → metres or `null`: bilinear over the
+four nearest cell centres, clamped at the outer centres; `null` outside
+the grid or when the containing cell is no-data; no-data neighbours are
+dropped and the remaining weights renormalised.
+`sampleConfident(field, p)` reads the containing cell's bit (false
+outside).
+
+### 5.4 Normals
+
+`heightNormals(field, exaggeration = 1)` → `Int8Array`, three snorm8 per
+cell (x right, y up, z up): central differences in ground metres
+(`cellMm · groundMPerMm`), one-sided beside no-data and at the edge, a
+zero slope on an axis with no data neighbour; (0, 0, 127) in no-data
+cells. Computed on demand, not stored.
+
+### 5.5 `deriveTerrain(doc)` (pending: after H2)
+
+H1 → H2 → §4 with the budgets above; `null` without contours, else the
+field and the solve's report. The interval is 2.5 m when the document's
+library is ISSprOM, else 5 m.
+
+### 5.6 Measured on the corpus (pending: after H2)
+
+
 ## Tests
 
 | Test | Covers |
@@ -359,11 +548,16 @@ band graph (§2) and the solve's levels (§3) into a height per cell.
 | `terrain/graph/__tests__/raster.test.ts` | mask (closing, the 5.5 mm grid), nested rings → regions, frame ends close a band, near-miss ends `extended` onto a chain and a cliff, chains over cliffs, cell budget (§2.3–2.5) |
 | `terrain/graph/__tests__/graph.test.ts` | incidence on nested rings, a leaky chain, cliff links, determinism, no contours (§2.6–2.7) |
 | `terrain/graph/__tests__/synthetic.ts` | the fixture: ISOM symbols with canonical matches and library definitions, geometry in mm, a mapped area around the contours |
+| `terrain/field/__tests__/codec.test.ts` | round trip, magic and layout, determinism, unaligned input, bad magic / version / length, planes against the header (§5.2) |
+| `terrain/field/__tests__/sample.test.ts` | bilinear exact on a plane, clamping, offset, null outside and in no-data, renormalising at a no-data border, confidence (§5.3) |
+| `terrain/field/__tests__/normals.test.ts` | a plane's analytic normal, exaggeration, flat and no-data cells, one-sided beside no-data (§5.4) |
+| `terrain/field/__tests__/interpolate.test.ts` | sources by side, geodesic distance inside a region; a slope and a cone within 0.1 interval, a top and a pit, a form line at ½, a multi-step drop, a chain level on both sides, no-data, confidence, determinism; the field grid and its budget (§4) |
+| `terrain/field/__tests__/levels.ts` | hand-written levels standing in for §3 |
 | `.local/h1/counts.mts` (not committed) | T1's corpus counts reproduced (§2.8) |
 
 ## Pending in this chapter
 
 - §3 The solve: evidence, uphill side, levels, `TerrainReport` (H2).
-- §4–5 The height field: interpolation, format, sampling, `deriveTerrain` (H3).
+- §5.5 `deriveTerrain` and §5.6 the corpus measurements (H3, after H2).
 - §6 The DEM anchor (H9); §7 DEM providers (H10).
 - Storage of the derived artifact is `map-storage.md` (H4).
