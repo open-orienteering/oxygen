@@ -987,7 +987,7 @@ growth factor).
 | `patch` | a generation number, the patch (or `null`) and the cells whose detail the engine holds | `patched`: the generation, the patch state (hidden ids, issues), the touched buckets' fresh parts, the detail cells, the bytes, the mesh atlas when it grew — "Object identity and the patch" below |
 | `course` | a generation number and the course layer's input without the document (`CourseLayerRequest`: structure, sites, objects, appearance, view options, filter regions, `fastFilter`), or `null` | `course`: the generation, the dynamic bucket's part (or `null`), the stack to draw with, the derivation and symbol sizes, warnings, the mesh atlas when it grew, and the filter over the static buckets (or `null`) — "Dynamic bucket" and "Filter regions" below |
 | `hit` (G5) | an id, a paper point (µm) and a tolerance | `hit`: the id and the effective document's objects under the point, topmost first (`DocumentHit`s) — §5.5 "Document objects" |
-| `edit` (G5) | a generation number and the edit input (selected refs, a draft of patch ops), or `null` | `edit`: the generation, the edit part (`EDIT_BUCKET`, or `null`), the static copies to hide, the selected refs' indices, the draft's issues, the mesh atlas when it grew — §5.5 "Document objects"; a `patched` reply carries the same state as `edit` while an input is held |
+| `edit` (G5) | a generation number and the edit input (selected refs, a draft of patch ops), or `null` | `edit`: the generation, the edit part (`EDIT_BUCKET`, or `null`), the static copies to hide, the selected refs' indices and the count drawn highlighted, the draft's issues, the mesh atlas when it grew — §5.5 "Document objects"; a `patched` reply carries the same state as `edit` while an input is held |
 | — | | `error` on a failed load; on a `course` request whose derivation throws, with that request's generation (F20b); on a `patch` request that throws, with `patch` = its generation; on a `hit` with `hit` = its id; on an `edit` with `edit` = its generation |
 
 Every typed array goes back as a transferable. The worker decodes,
@@ -2028,8 +2028,10 @@ document itself. Three pieces, all in the viewer's worker and engine:
   for 04 §7's R-tree — from both sources of the effective document: the
   pinned stream without the objects the patch changed or hides, and the
   patch's own stream. `render.hitTestStreams` tests them exactly
-  (the table above) and orders them as the GL backend draws: colour,
-  kind (§3.6), the patch's stream over the pinned one, then stream order.
+  (the table above) and orders them by colour, kind (§3.6), the patch's
+  stream over the pinned one, then stream order — the GL backend's order
+  up to its part order within one (colour, kind), which does not show
+  (ink of one colour is opaque).
   `closedStrokeInterior` is off: a contour ring is not grabbed by its
   inside. A `DocumentHit` is `{ objectIndex, ref, symbol, type, colour,
   distanceUm }`: the effective `objectIndex` (valid for the patch drawn
@@ -2041,7 +2043,8 @@ document itself. Three pieces, all in the viewer's worker and engine:
   on objects it does not draw (`setHidden`'s, a filter region's, an object
   under edit's static copy); masked objects still hit. Before the load it
   resolves `[]`; a request that throws answers `error { hit: id }` and
-  rejects that call only. Several may be in flight.
+  rejects that call only; one in flight when the engine is disposed is
+  rejected. Several may be in flight.
 - **Highlight through the dynamic bucket.** `MapGlEngine.setEdit({
   selected, draft? } | null)` posts `edit { generation, input }`. The
   worker copies each selected object's passes from the stream that draws
@@ -2073,13 +2076,16 @@ document itself. Three pieces, all in the viewer's worker and engine:
   static copy — its index in the drawn effective document; none for a new
   add — is in the reply's `hidden`, which the engine joins to the hidden
   set: skipped through the range table, nothing re-prepared. A selected
-  object the draft draws is highlighted from the draft's passes.
+  object the draft draws is highlighted from the draft's passes. The
+  draft's copy is drawn under an edit-part id, so `setHidden` and filter
+  regions, which address the static id, do not reach it (§8).
   `applyPatch`'s issues for the merged patch are reported.
 
-**Edit replies.** `edit { generation, part, hidden, selected, issues,
-atlas?, ms }`: `selected[k]` is the effective index of `selected[k]` in
-the drawn document, −1 when it is not drawn there (hidden, absent, or a
-draft's add). The engine keeps one edit request in flight and the latest
+**Edit replies.** `edit { generation, part, hidden, selected,
+highlighted, issues, atlas?, ms }`: `selected[k]` is the effective index
+of `selected[k]` in the drawn document, −1 when it is not drawn there
+(hidden, absent, or a draft's add); `highlighted` counts the selected refs
+drawn highlighted (a draft's add included). The engine keeps one edit request in flight and the latest
 input next, as `setCourse` (F20), re-posts the input after a `load`,
 uploads the part under key `E` — after the course and before the page,
 always resident, drawn at every zoom, never evicted, its bytes fixed —
@@ -2087,7 +2093,9 @@ rebuilds the visible set at once and calls `onEdit` with the state. The
 worker keeps the last edit input: a `patched` reply carries `edit`, the
 edit state recomputed against the new effective document, applied in the
 same step, so no frame shows a highlight or a hidden id of the previous
-patch. `null` clears. A request that throws answers `error { edit:
+patch; if recomputing it throws, the reply carries an empty edit state
+(nothing highlighted, nothing hidden) and the patch is drawn. `null`
+clears. A request that throws answers `error { edit:
 generation }`, ends that request only and leaves the part drawn as it
 was. Committing is the host's: it keeps the draft until `setPatch`
 resolves with the written patch, then clears it — the object moves to
@@ -2096,10 +2104,13 @@ its static bucket without a frame missing it (04 §7 "on commit").
 **In the viewer.** `MapViewerEditorProps.mapObjects { selected?, draft?,
 onHitTest? }` reaches `VectorMapLayer`'s `edit`: `onHitTest` hands the
 page `hit(pt, toleranceMm)` (paper mm in, `DocumentHit`s out) once the
-layer has loaded and `null` when it goes — the request is asynchronous,
+layer has loaded — or when `mapObjects` arrives after that — and `null`
+to that callback when it is replaced, the layer reloads or unmounts — the
+request is asynchronous,
 so it cannot ride `ToolPointer.target`, and Map mode's tools decide when
 to ask (click, drag start, Tab; user decision 2026-11-14). The canvas
-carries `data-selected-objects` (the selected refs drawn). Without
+carries `data-selected-objects`: the latest edit state's `highlighted`
+count. Without
 `mapObjects` nothing is posted.
 
 **Tools.** `MapViewerEditorProps.tool` (D5, `course-editor.md` §6): the
@@ -2149,7 +2160,7 @@ popover beside it; same entries and ids.
 | `packages/shared/src/render/__tests__/hit-test.test.ts` | the table above: order, reach, even-odd, interior on request, glyph discs, text boxes, object filter, distance; G5: hit order over fill / stroke / glyph / text by the colour stack whatever the kinds, kind order within one colour, a pass subset, turned text in its turned box, `hitTestStreams` (colour, kind, then the patch's stream over the pinned one; each source's own passes and objects) |
 | `map-gl/__tests__/worker-hit.test.ts` (G5) | `hit` over the effective document: index, ref, symbol, type, colour; reach and tolerance; an object of a hidden symbol not hit; topmost first across the pinned and the patch's stream (an added line over an area); a patch-hidden object never hit, a moved one only at its new place, the toggle off; an object centred in the neighbour cell and one in the large bucket; a request before the load → `error { hit }` |
 | `map-gl/__tests__/worker-edit.test.ts` (G5) | the edit part at `EDIT_BUCKET`: a selected line's strokes in `HIGHLIGHT_COLOUR` under edit-part ids; an area as its outline (no fill); a point's glyphs; several refs with an unknown and a patch-hidden one (−1); `null` / empty clear; an added object by its id; `highlightPasses` (text kept, halo dropped, fill and clipped pattern as outlines); a modify draft at its new place in its own colour with its static copy hidden; a new add with none; a selected draft object highlighted where the draft draws it; a draft over the drawn patch's add, a hide draft; the draft's own issues; a draft glyph grows the atlas; a patch change carries the edit state; a request before the load → `error { edit }`, the next answered |
-| `map-gl/__tests__/engine.test.ts` (document objects, G5) | `hitDocument`: the worker's hits, `[]` before the load, hits on `setHidden`'s objects and on an object under edit dropped, several in flight by id, a worker error rejects them; `setEdit`: `E` uploaded and drawn, the highlight index resolved to `EngineOptions.highlight`, bytes fixed, `null` releases it; a draft's static copy skipped, nothing re-prepared; one request in flight, the latest next, an input before the load right after it; an edit error ends that request only, the part kept; a patch reply's edit state applied in the same step |
+| `map-gl/__tests__/engine.test.ts` (document objects, G5) | `hitDocument`: the worker's hits, `[]` before the load, hits on `setHidden`'s objects, on a hide region's (filter regions test) and on an object under edit dropped, several in flight by id, a worker error and `dispose` reject them; `setEdit`: `E` uploaded and drawn, the highlight index resolved to `EngineOptions.highlight`, bytes fixed, `null` releases it; a draft's static copy skipped, nothing re-prepared; one request in flight, the latest next, an input before the load right after it; an edit error ends that request only, the part kept; a patch reply's edit state applied in the same step |
 | `e2e/map-gl-doc.spec.ts` "a click on the fixture's path reports its object…" (G5) | `/dev/map-gl-doc?pick=1` on `e2e/test.ocd`: a click on the first Path (505) reports it on top (source index, symbol code) with the area under it; the edit part selects it and the frame has the highlight blue round it, none before; a click elsewhere moves the highlight and the path's blue goes |
 | `map-gl/__tests__/worker-course.test.ts`, `engine.test.ts` | the reply's hit index and its way to the host |
 | `lib/editor/__tests__/hit.test.ts` | editor targets over the real worker's index |
@@ -2918,6 +2929,12 @@ The shared module is exported as a namespace: `import { render } from
   change) and symbolises the draft's targets — not 04 §7's "< 1 ms" for a
   single object. Neither is measured on Club-full; Map mode's drags (G6,
   G7) will say whether a draft needs the targets alone re-applied.
+- **§5.5 an object under edit and the hidden set** (G5). A draft's copy
+  is drawn under an edit-part id, so `setHidden` and a filter region's
+  `hide` or mask, which address the object's static id, leave it drawn
+  and unmasked while it is edited. Map mode (G6) edits with course
+  overprint and filter regions off; if a host needs both, the worker maps
+  the edit part's ids back to their targets for the visible set.
 - **§5.5 course objects in the edit part.** The highlight is of document
   objects; the course editor's selection rings and object outlines stay
   in the UI layer (`course-editor.md` Pending).

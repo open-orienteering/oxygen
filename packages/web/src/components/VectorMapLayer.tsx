@@ -128,8 +128,6 @@ export function VectorMapLayer({ doc, view, width, height, budget, zIndex = 1, c
   editRef.current = edit;
   /** Whether an edit input reached the engine (a null after one clears it; none before posts nothing). */
   const editSentRef = useRef(false);
-  const onHitTestRef = useRef(mapObjects?.onHitTest);
-  onHitTestRef.current = mapObjects?.onHitTest;
   /** Selected refs drawn highlighted (`data-selected-objects`). */
   const [highlighted, setHighlighted] = useState<number | null>(null);
   // The stack the engine draws with (the course-completed one, §5.2 "Dynamic bucket"), as RGB per index.
@@ -232,7 +230,6 @@ export function VectorMapLayer({ doc, view, width, height, budget, zIndex = 1, c
       });
       if (cancelled) return;
       loadedRef.current = true;
-      onHitTestRef.current?.((pt, toleranceMm) => engine.hitDocument(pt.x * 1000, pt.y * 1000, toleranceMm * 1000));
       setStatus("drawn");
       requestDraw();
       await engine.whenComplete();
@@ -248,7 +245,6 @@ export function VectorMapLayer({ doc, view, width, height, budget, zIndex = 1, c
       if (frameRef.current !== null) cancelAnimationFrame(frameRef.current);
       frameRef.current = null;
       engineRef.current = null;
-      if (loadedRef.current) onHitTestRef.current?.(null);
       loadedRef.current = false;
       engine.dispose();
       renderer.dispose();
@@ -268,6 +264,17 @@ export function VectorMapLayer({ doc, view, width, height, budget, zIndex = 1, c
     engine.setEdit(edit);
     editSentRef.current = !!edit;
   }, [edit]);
+
+  // The hit-test goes to the page once the layer has loaded — also when `mapObjects` arrives later —
+  // and `null` to a callback that goes, or when the layer reloads or unmounts.
+  const onHitTest = mapObjects?.onHitTest ?? null;
+  const hitReady = status === "drawn" || status === "complete";
+  useEffect(() => {
+    const engine = engineRef.current;
+    if (!onHitTest || !hitReady || !engine) return;
+    onHitTest((pt, toleranceMm) => engine.hitDocument(pt.x * 1000, pt.y * 1000, toleranceMm * 1000));
+    return () => onHitTest(null);
+  }, [onHitTest, hitReady]);
 
   // A patch change redraws without reloading (§5.2 "Patch"): the engine re-prepares the touched buckets.
   useEffect(() => {

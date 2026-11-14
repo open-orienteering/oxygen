@@ -747,6 +747,9 @@ export class MapGlEngine {
 
   dispose(): void {
     if (this.holdTimer) clearTimeout(this.holdTimer);
+    // A hit-test in flight is never answered now: its caller hears so.
+    for (const w of this.hits.values()) w.reject(new Error("map engine disposed"));
+    this.hits.clear();
     this.transport.terminate();
   }
 }

@@ -984,7 +984,15 @@ function patchReplyOf(state: State, msg: PatchRequest): { reply: PatchedReply; t
   let baseTotal = 0;
   for (const n of state.baseBytes.values()) baseTotal += n;
   // The edit part against the new effective document, in the same reply (§5.5 "Document objects").
-  const edit = state.edit ? editStateOf(state, state.edit) : undefined;
+  // A held input that fails here costs the edit part, not the patch: the reply clears it.
+  let edit: EditState | undefined;
+  if (state.edit) {
+    try {
+      edit = editStateOf(state, state.edit);
+    } catch {
+      edit = { ...editStateOf(state, null), selected: state.edit.selected.map(() => -1) };
+    }
+  }
   // The edit's atlas, built after the patch's, holds every mesh: the one sent.
   const atlas = edit?.atlas ?? applied.grown;
   if (edit) delete edit.atlas;

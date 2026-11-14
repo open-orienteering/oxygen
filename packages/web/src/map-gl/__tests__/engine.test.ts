@@ -397,9 +397,17 @@ describe("MapGlEngine dynamic bucket (docs/map-rendering.md §5.2 Dynamic bucket
     expect(blackDraws(clipped).map((d) => d.mask)).toEqual([0]);
     expect(clipped.filter?.masks).toHaveLength(1);
 
+    const hitLine = async () => {
+      const h = engine.hitDocument(25_000, 10_000, 0);
+      transport.flush();
+      return (await h).map((x) => x.ref);
+    };
+    expect(await hitLine()).toEqual([{ source: 0 }]);
     engine.setCourse(request({ regions: [{ rings: [square], mode: "hide", symbols: "all" }] }));
     transport.flush();
     expect(blackDraws(draw())).toEqual([]);
+    // What a hide region removes is not hit either (§5.5 "Document objects").
+    expect(await hitLine()).toEqual([]);
     engine.setHidden(new Set([1]));
     expect(draw().stroke.draws.filter((d) => d.colour !== black && d.mask === undefined).length).toBeGreaterThan(0);
 
@@ -725,6 +733,10 @@ describe("MapGlEngine document objects (docs/map-rendering.md §5.5 \"Document o
     const c = engine.hitDocument(5000, 5000, 0);
     transport.onMessage?.({ type: "error", message: "worker died" });
     await expect(c).rejects.toThrow("worker died");
+    // One in flight when the engine goes is settled too.
+    const d = engine.hitDocument(5000, 5000, 0);
+    engine.dispose();
+    await expect(d).rejects.toThrow("disposed");
   });
 
   it("setEdit uploads E, draws it in every visible set with the highlight colour resolved, its bytes fixed", async () => {
