@@ -4,9 +4,9 @@
  */
 
 import type { ContourGraph } from "../graph/types.js";
-import { gatherEvidence } from "./evidence.js";
+import { EVIDENCE_RULES, gatherEvidence } from "./evidence.js";
 import { bandRule, closedHillRule, closureRule } from "./heuristics.js";
-import { INDEX_RULES, indexNeighbours, repairCounts, repairPass, type RepairContext } from "./index-repair.js";
+import { indexNeighbours, repairCounts, repairPass, type RepairContext } from "./index-repair.js";
 import { buildForest, type ForestInput } from "./levels.js";
 import { cliffBornePairs, cliffLinkSides, leakyRegions } from "./probe.js";
 import { terrainReport } from "./report.js";
@@ -62,7 +62,7 @@ export function solveTerrain(g: ContourGraph, opts: SolveOptions = {}): TerrainS
   let externalList: SideEvidence[] = [];
   if (opts.external) {
     const ext = opts.external.side;
-    externalList = [...ext].flatMap((v, chain) => (v ? [{ chain, side: (v > 0 ? 1 : -1) as 1 | -1, weight: 1 }] : []));
+    externalList = [...ext].flatMap((v, chain) => (v ? [{ chain, side: (v > 0 ? 1 : -1) as 1 | -1, weight: EVIDENCE_RULES.weight.dem }] : []));
     const bit = { tick: 1, cliff: 2, lake: 4 } as const;
     for (const k of ["tick", "cliff", "lake"] as const) for (const e of evidence[k]) if (ext[e.chain] && ext[e.chain] !== e.side) externalDisagrees[e.chain] |= bit[k];
     applyEvidence(s, [["dem", externalList]]);

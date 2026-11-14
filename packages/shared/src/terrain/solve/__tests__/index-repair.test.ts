@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { CLASS, CLIFF_STEP_SOURCE, solveTerrain } from "../index.js";
-import { S, arc, build, line, regionAt, tick, type Obj } from "./fixtures.js";
+import { S, arc, build, line, regionAt, ring, tick, type Obj } from "./fixtures.js";
 
 const mod5 = (v: number) => ((v % 5) + 5) % 5;
 
@@ -79,6 +79,60 @@ function depressionNest(withTickInside: boolean): Obj[] {
   if (withTickInside) objs.push(tick(16, 50, -1, 0));
   return objs;
 }
+
+describe("index counting and the trial (§3.5)", () => {
+  /**
+   * Index contours at y = 5 and y = 20 (five levels apart). The contour at
+   * y = 14 has no evidence, and a knoll in each band beside it stops slope
+   * propagation: only the index contours can tell its side.
+   */
+  const UNDECIDED: Obj[] = [
+    { sym: S.index, coords: line(0, 5, 60, 5) },
+    { sym: S.contour, coords: line(0, 8, 60, 8) },
+    { sym: S.contour, coords: line(0, 11, 60, 11) },
+    { sym: S.contour, coords: line(0, 14, 60, 14) },
+    { sym: S.contour, coords: line(0, 17, 60, 17) },
+    { sym: S.index, coords: line(0, 20, 60, 20) },
+    { sym: S.contour, coords: ring(30, 12.5, 0.8) },
+    { sym: S.contour, coords: ring(30, 15.5, 0.8) },
+    tick(20, 8, 0, -1),
+    tick(20, 20, 0, -1),
+  ];
+
+  it("decides an undecided chain between two blocks by the index contours", () => {
+    const { g, chain } = build(UNDECIDED, [0, 0, 60, 24]);
+    const sol = solveTerrain(g);
+    expect(sol.signClass[chain(3)]).toBe(CLASS.index);
+    expect(sol.side[chain(3)]).toBe(1);
+    expect(sol.flagged[chain(3)]).toBe(0);
+    expect(sol.chainLevel[chain(5)] - sol.chainLevel[chain(0)]).toBe(5);
+    expect(sol.report.index.decidedChains).toBe(1);
+    // without repair the band rule decides it, flagged
+    expect(solveTerrain(g, { indexRepair: false }).signClass[chain(3)]).toBe(CLASS.bandUpper);
+  });
+
+  it("undoes a proposal its trial does not confirm", () => {
+    // two cliffs in series between the index contours, each hiding one contour; both links get the
+    // same vote, the first step set satisfies the pair and the second is tried and undone
+    const objects: Obj[] = [
+      { sym: S.index, coords: line(0, 5, 60, 5) },
+      { sym: S.contour, coords: line(0, 8, 60, 8) },
+      { sym: S.contour, coords: line(0, 11, 60, 11) },
+      { sym: S.cliffTagged, coords: line(-5, 14, 65, 14) },
+      { sym: S.contour, coords: line(0, 17, 60, 17) },
+      { sym: S.cliffTagged, coords: line(-5, 20, 65, 20) },
+      { sym: S.index, coords: line(0, 23, 60, 23) },
+      tick(20, 8, 0, -1),
+    ];
+    const { g, chain } = build(objects, [0, 0, 60, 27]);
+    expect(g.cliffLinks.length).toBe(2);
+    const sol = solveTerrain(g);
+    expect(sol.chainLevel[chain(6)] - sol.chainLevel[chain(0)]).toBe(5);
+    expect(sol.report.index.stepsSet).toBe(1);
+    expect(sol.report.index.unresolved).toBeGreaterThan(0);
+    expect([...sol.cliffStepSource].sort()).toEqual([CLIFF_STEP_SOURCE.assumed, CLIFF_STEP_SOURCE.index].sort());
+  });
+});
 
 describe("index contours correct a flipped subtree (§3.5)", () => {
   it("flips a flagged group whose index contours sit off the residue", () => {

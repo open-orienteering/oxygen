@@ -5,7 +5,7 @@
 import type { ContourGraph } from "../graph/types.js";
 import { indexConsistency, type IndexPair, type RepairCounts } from "./index-repair.js";
 import type { Forest } from "./levels.js";
-import { NO_LEVEL, SIGN_CLASSES, type EvidenceClass, type EvidenceSet, type TerrainComponent, type TerrainReport, type TerrainSolution } from "./types.js";
+import { CLASS, NO_LEVEL, SIGN_CLASSES, type EvidenceClass, type EvidenceSet, type TerrainComponent, type TerrainReport, type TerrainSolution } from "./types.js";
 
 /** Components listed in the report. */
 const REPORT_COMPONENTS = 8;
@@ -24,7 +24,8 @@ const mod5 = (v: number) => ((v % 5) + 5) % 5;
 export function terrainReport(g: ContourGraph, sol: Omit<TerrainSolution, "components" | "report">, f: Forest, x: ReportInput): { components: TerrainComponent[]; report: TerrainReport } {
   const NC = g.chains.length;
   const len = g.chains.map((c) => c.lengthMm);
-  const total = len.reduce((a, b) => a + b, 0) || 1;
+  const lengthMm = len.reduce((a, b) => a + b, 0);
+  const total = lengthMm || 1;
   let strict = 0, flagged = 0, undecided = 0, leakyUndecided = 0, leakySigned = 0, conflict = 0, multiStep = 0, multiStepChains = 0;
   const byClass: Record<string, number> = {};
   const add = (k: string, v: number) => {
@@ -114,7 +115,7 @@ export function terrainReport(g: ContourGraph, sol: Omit<TerrainSolution, "compo
     if (b & 4) disagreements.lake++;
   }
   let externalLen = 0;
-  if (x.externalSource) for (let c = 0; c < NC; c++) if (sol.signClass[c] === 1) externalLen += len[c];
+  if (x.externalSource) for (let c = 0; c < NC; c++) if (sol.signClass[c] === CLASS.dem) externalLen += len[c];
   const evidenceCounts = {
     dem: x.externalChains,
     tick: x.evidence.tick.length,
@@ -127,7 +128,7 @@ export function terrainReport(g: ContourGraph, sol: Omit<TerrainSolution, "compo
   for (let r = 1; r < sol.regionWeak.length; r++) weakRegions += sol.regionWeak[r];
   const report: TerrainReport = {
     chains: NC,
-    lengthMm: total,
+    lengthMm,
     share: {
       strict: strict / total,
       flagged: flagged / total,

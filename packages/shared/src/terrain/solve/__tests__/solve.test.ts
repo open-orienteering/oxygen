@@ -111,6 +111,16 @@ describe("flagged heuristics (§3.4)", () => {
     expect(sol.report.share.undecided).toBeGreaterThan(0);
   });
 
+  it("drains a closed band through its one unknown chain (band-drain)", () => {
+    // inside a ring with no evidence of its own, two knolls (tops): the band between them and the ring
+    // lies below both, so it drains through the ring, which is its lower boundary
+    const { g, chain } = build([{ sym: S.contour, coords: ring(30, 30, 15) }, { sym: S.contour, coords: ring(24, 30, 3) }, { sym: S.contour, coords: ring(36, 30, 3) }]);
+    const sol = solveTerrain(g);
+    expect(sol.signClass[chain(0)]).toBe(CLASS.bandDrain);
+    expect(sol.side[chain(0)]).toBe(1);
+    expect(sol.flagged[chain(0)]).toBe(1);
+  });
+
   it("takes an undecided closed contour for a hill as the last default", () => {
     // two rings, nothing else: the inner is a top; the outer borders the frame band and its top
     const { g, chain } = build([{ sym: S.contour, coords: ring(30, 30, 10) }, { sym: S.contour, coords: ring(30, 30, 5) }]);

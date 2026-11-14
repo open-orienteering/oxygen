@@ -19,12 +19,10 @@ import { CLASS, NO_LEVEL } from "./types.js";
 export const INDEX_RULES = {
   /** Neighbours per index chain, nearest first by bands crossed. */
   neighbours: 4,
-  /** Farthest neighbour, in bands. */
+  /** Breadth-first rings searched beyond the chain's own regions (ring 0). */
   maxBands: 12,
   /** Share of the vote weight the modal shift needs. */
   mode: 0.8,
-  /** Repair passes. */
-  passes: 8,
 } as const;
 
 const mod5 = (v: number) => ((v % 5) + 5) % 5;

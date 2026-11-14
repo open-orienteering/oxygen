@@ -23,6 +23,12 @@ export const EVIDENCE_RULES = {
   cliffMinCross: 0.7,
   /** A ray grazing a chain at |sin| below this is dropped. */
   rayMinCross: 0.3,
+  /** A ray's hit counts when a segment of the hit chain lies within 3 cells + this, mm. */
+  rayHitMm: 0.2,
+  /** The form-line crossing test starts this far beyond the ray's start, mm (past the tick's own line). */
+  formSkipMm: 0.3,
+  /** A form-line tick belongs to a form line within this distance, mm. */
+  formTickOnLineMm: 0.3,
   /** Rays from a form-line tick: 0.25 … 8 mm; from a tagged cliff off any contour: 0.5 … 4 mm. */
   formTickRayMm: [0.25, 8] as const,
   cliffRayMm: [0.5, 4] as const,
@@ -89,7 +95,7 @@ function ray(ctx: EvidenceContext, x: number, y: number, dx: number, dy: number,
     if (v === LABEL.outside) return null;
     if (v <= LABEL.chain0) {
       const id = LABEL.chain0 - v;
-      const n = ctx.chainIndex.nearest(px, py, 3 * r.cellMm + 0.2, id);
+      const n = ctx.chainIndex.nearest(px, py, 3 * r.cellMm + EVIDENCE_RULES.rayHitMm, id);
       if (!n) return null;
       const cross = n.tx * -dy - n.ty * -dx;
       if (Math.abs(cross) < EVIDENCE_RULES.rayMinCross) return null;
@@ -118,8 +124,8 @@ function directional(ctx: EvidenceContext, out: SideEvidence[], x: number, y: nu
   let down = ray(ctx, x, y, dx, dy, start, max);
   let up = ray(ctx, x, y, -dx, -dy, start, max);
   if (down && up && down.chain === up.chain) return;
-  if (down && crossesForm(ctx, x, y, dx, dy, start + 0.3, down.dist)) down = null;
-  if (up && crossesForm(ctx, x, y, -dx, -dy, start + 0.3, up.dist)) up = null;
+  if (down && crossesForm(ctx, x, y, dx, dy, start + EVIDENCE_RULES.formSkipMm, down.dist)) down = null;
+  if (up && crossesForm(ctx, x, y, -dx, -dy, start + EVIDENCE_RULES.formSkipMm, up.dist)) up = null;
   if (down) out.push({ chain: down.chain, side: down.fromLeft ? 1 : -1, weight });
   if (up) out.push({ chain: up.chain, side: up.fromLeft ? -1 : 1, weight });
 }
@@ -145,7 +151,7 @@ export function formTickEvidence(ctx: EvidenceContext): SideEvidence[] {
   ctx.g.formChains.forEach((c, i) => formIndex.addPolyline(c.pts, i, c.closed));
   const [a, b] = EVIDENCE_RULES.formTickRayMm;
   for (const t of ctx.g.inputs.formTicks) {
-    const n = formIndex.nearest(t.x, t.y, EVIDENCE_RULES.tickOnChainMm);
+    const n = formIndex.nearest(t.x, t.y, EVIDENCE_RULES.formTickOnLineMm);
     if (!n || ctx.g.formChains[n.id].closed) continue;
     const [dx, dy] = tickDirection(t.angleRad);
     directional(ctx, out, t.x, t.y, dx, dy, a, b, EVIDENCE_RULES.weight.formTick);
