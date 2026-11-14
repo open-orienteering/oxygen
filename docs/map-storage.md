@@ -39,7 +39,8 @@ on `map_files` and `club_map_versions` for the GC and the source route),
 `20261019150000_club_symbol_decisions` and, dropping the legacy
 pipeline's storage, `20261107120000_vector_map_pipeline_drops` (E5,
 v0.6.1; `docs/migrations/2026-vector-map-pipeline.md`), and
-`20261113120000_map_patches` (row G3). All in schema `oxygen`.
+`20261113120000_map_patches` (row G3) and `20261114120000_map_gps_tracks`
+(row G24). All in schema `oxygen`.
 
 | Table | Key | Columns | Notes |
 |---|---|---|---|
@@ -53,6 +54,7 @@ v0.6.1; `docs/migrations/2026-vector-map-pipeline.md`), and
 | `map_upload_chunks` | `(upload_id, n)` | `bytes BYTEA` | `upload_id → map_uploads CASCADE`; `STORAGE EXTERNAL`; deleted at finalise |
 | `club_symbol_decisions` | `(fingerprint, library_version)` | `canonical_id` (NULL = keep as source), `decided_by → users SET NULL`, `decided_at` | a reviewed symbol outcome reused across documents (`docs/map-symbols.md` §8.5); written only by `mapImport.decide` (§6.8), read when a job is inserted (§6.1); no event or series column — the instance is one club's |
 | `map_patches` | `id UUID` | `event_id → events CASCADE` (`UNIQUE`), `document_hash → map_documents RESTRICT`, `enabled`, `ops JSONB`, `symbols JSONB`, `version BIGINT`, timestamps | an event's corrections to its pinned document (`docs/map-patches.md` §3.1); a GC reference (§8.1) |
+| `map_gps_tracks` | `id UUID` | `event_id → events CASCADE`, `name`, `source_name`, `points JSONB`, `point_count`, `recorded_at`, `trim_start` / `trim_end`, `derived_from UUID[]`, `single_pass JSONB`, `converted_op`, `created_by → users SET NULL`, `created_at`, `version BIGINT` | an event's GPS tracks in WGS 84 (`docs/map-gps-tracks.md` §1.1); no blob reference |
 | `map_import_jobs` | `id UUID` | `event_id CASCADE` / `club_map_id CASCADE` (the target, either nullable), `source_hash → map_sources CASCADE`, `decisions JSONB` (the decision snapshot, §6.1), `state`, `stage`, `progress REAL`, `claimed_by`, `heartbeat_at`, `document_hash → map_documents SET NULL`, `error`, `started_by → users SET NULL`, timestamps | one import run (§6); indexed on `(state, heartbeat_at)` for the claim query and on each target; `started_by` is the user whose request started it (null for the re-match and the retired backfill), read by §4.2 |
 
 The legacy library table `club_map_files` (linked to its series by
@@ -1099,7 +1101,10 @@ out; the result still counts them as `skipped` for older nodes);
 `map_previews` (a cache; §4.5 renders on a miss);
 `club_maps` / `club_map_versions`; `map_import_jobs`, uploads; the club
 template library (`club_map_templates`; `mapTemplate.listClub` is empty on
-a box) and club graphics no layout row references.
+a box) and club graphics no layout row references; the event's GPS tracks
+(`map_gps_tracks`, `docs/map-gps-tracks.md` §1.3: a box holds none, its
+`mapTrack.list` is empty during a lease, and `mapTrack.` writes are
+forwarded).
 
 **Map patch** (`docs/map-patches.md` §3.4). The event's `map_patches`
 row travels as `maps.patch` — all columns, the token as a decimal string
@@ -1156,7 +1161,11 @@ plain event-scoped section after `class_course_pools`. Its
 `map_files`, restored with `event_id` rewritten like the other plain
 sections; the `map_documents` and `map_sources` sections also carry the
 patch's document and that document's source, so a dormant patch (keyed
-to a document the event no longer pins) restores too.
+to a document the event no longer pins) restores too. Its GPS tracks
+(`docs/map-gps-tracks.md` §1.3) are a `map_gps_tracks` section directly
+after `map_patches`, restored by `packages/api/scripts/restore-map-gps-tracks.sql
+-v event_id=<id>`: `event_id` rewritten, `created_by` kept only when that
+user exists, `ON CONFLICT (id) DO NOTHING`.
 
 **Restore is idempotent on hash.** `packages/api/scripts/restore-map-blobs.sql`
 loads both sections through temp tables with
@@ -1430,8 +1439,11 @@ section here and its own tests.
 | `packages/api/src/routers/course.ts` / `clubMap.ts` | `applyUploadedMap`, `useClubMap` version pin, `downloadMap` / `mapFileInfo` from `map_sources`; `createClubMap`, `addFromSource` |
 | `packages/api/prisma/migrations/20261107120000_vector_map_pipeline_drops/` | E5: the guard, then the legacy pipeline's tables and columns dropped |
 | `packages/api/prisma/migrations/20261113120000_map_patches/` | `map_patches` (row G3) |
+| `packages/api/prisma/migrations/20261114120000_map_gps_tracks/` | `map_gps_tracks` (row G24) |
+| `packages/api/src/gps-tracks.ts` / `routers/mapTrack.ts` | GPS track storage and `mapTrack.*` (`docs/map-gps-tracks.md` §1) |
 | `packages/api/src/map-store/patches.ts` / `routers/mapPatch.ts` | the patch store, delivery rule and writes; `mapPatch.get` / `applyChange` / `setEnabled`; the route is in `routes.ts` (`docs/map-patches.md` §3) |
 | `packages/api/scripts/restore-map-blobs.sql` / `restore-legacy-map-files.sql` | dump restore: blobs, decisions and a v0.6.1 `map_files` section / a pre-v0.6.1 `map_files` section (§7.3) |
+| `packages/api/scripts/restore-map-gps-tracks.sql` | dump restore: the `map_gps_tracks` section (§7.3) |
 | `packages/api/src/sync/dropped-columns.ts` | the fields E5 dropped, stripped from a v0.6.0 exporter's snapshot rows (§7.2) |
 | `packages/web/src/lib/map-upload.ts` | client chunked uploader |
 | `packages/web/src/lib/map-document-cache.ts` | the viewer's document loader, `MAP_DOCUMENT_PATH_RE`, `requestPersistentStorage`, `useMapDocument` (§7.1) |

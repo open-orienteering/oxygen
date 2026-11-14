@@ -29,6 +29,7 @@ import { mapTemplateRouter } from "./mapTemplate.js";
 import { courseMapRouter } from "./courseMap.js";
 import { courseObjectRouter } from "./courseObject.js";
 import { mapPatchRouter } from "./mapPatch.js";
+import { mapTrackRouter } from "./mapTrack.js";
 import { layoutRouter } from "./layout.js";
 import { graphicsRouter } from "./graphics.js";
 
@@ -69,6 +70,7 @@ export const appRouter = router({
   courseMap: courseMapRouter,
   courseObject: courseObjectRouter,
   mapPatch: mapPatchRouter,
+  mapTrack: mapTrackRouter,
   layout: layoutRouter,
   graphics: graphicsRouter,
 });

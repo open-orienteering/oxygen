@@ -1,6 +1,6 @@
 /** Trim and split on the stored track (docs/map-gps-tracks.md §3.5). */
 import { describe, expect, it } from "vitest";
-import { quantiseDeg, quantiseEle, splitTrack, trackLength, trimTrack, type Track } from "../track.js";
+import { quantiseDeg, quantiseEle, splitRanges, splitTrack, trackLength, trimTrack, type Track } from "../track.js";
 
 function track(n: number, timed = true): Track {
   const r = Array.from({ length: n }, (_, i) => i);
@@ -83,5 +83,39 @@ describe("splitTrack", () => {
   it("needs three points", () => {
     expect(() => splitTrack(track(2), 1)).toThrow(RangeError);
     expect(splitTrack(track(3), 1).map(trackLength)).toEqual([2, 2]);
+  });
+});
+
+describe("splitRanges", () => {
+  it("divides ranges as splitTrack divides points: before, after, straddling", () => {
+    // 10 points split at 4: left points 0..4 (5), right points 4..9 (6, re-indexed from 0).
+    const [left, right] = splitRanges([{ start: 0, end: 2 }, { start: 3, end: 6 }, { start: 7, end: 10 }], 4);
+    expect(left).toEqual([{ start: 0, end: 2 }, { start: 3, end: 5 }]);
+    expect(right).toEqual([{ start: 0, end: 2 }, { start: 3, end: 6 }]);
+  });
+
+  it("puts a range of the split point alone in both parts", () => {
+    expect(splitRanges([{ start: 4, end: 5 }], 4)).toEqual([[{ start: 4, end: 5 }], [{ start: 0, end: 1 }]]);
+  });
+
+  it("drops a range ending at the split point from the right, and one starting after it from the left", () => {
+    expect(splitRanges([{ start: 1, end: 4 }, { start: 5, end: 8 }], 4)).toEqual([[{ start: 1, end: 4 }], [{ start: 1, end: 4 }]]);
+  });
+
+  it("matches splitTrack's index sets point by point", () => {
+    const ranges = [{ start: 0, end: 3 }, { start: 5, end: 7 }, { start: 8, end: 12 }];
+    const inRanges = (rs: { start: number; end: number }[], i: number) => rs.some((r) => i >= r.start && i < r.end);
+    for (let index = 1; index <= 10; index++) {
+      const [l, r] = splitRanges(ranges, index);
+      for (let i = 0; i <= index; i++) expect(inRanges(l, i)).toBe(inRanges(ranges, i));
+      for (let i = index; i < 12; i++) expect(inRanges(r, i - index)).toBe(inRanges(ranges, i));
+    }
+  });
+
+  it("handles no ranges and does not mutate", () => {
+    expect(splitRanges([], 3)).toEqual([[], []]);
+    const ranges = [{ start: 2, end: 6 }];
+    splitRanges(ranges, 3);
+    expect(ranges).toEqual([{ start: 2, end: 6 }]);
   });
 });

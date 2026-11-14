@@ -84,3 +84,21 @@ export function splitTrack<T extends Track>(track: T, index: number): [T, T] {
     { ...track, points: sliceColumns(track.points, index, n) },
   ];
 }
+
+/**
+ * Divide index ranges (an average's `singlePass`, §4.1) as `splitTrack`
+ * divides the points at `index`: the left part keeps `[start,
+ * min(end, index + 1))`, the right `[max(start, index) − index,
+ * end − index)`, each only where non-empty (docs/map-gps-tracks.md §3.5).
+ */
+export function splitRanges(ranges: readonly TrackRange[], index: number): [TrackRange[], TrackRange[]] {
+  const left: TrackRange[] = [];
+  const right: TrackRange[] = [];
+  for (const { start, end } of ranges) {
+    const le = Math.min(end, index + 1);
+    if (start < le) left.push({ start, end: le });
+    const rs = Math.max(start, index);
+    if (rs < end) right.push({ start: rs - index, end: end - index });
+  }
+  return [left, right];
+}

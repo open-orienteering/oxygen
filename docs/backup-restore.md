@@ -4,7 +4,7 @@ Oxygen ships with a one-click backup of the currently selected event, exposed on
 
 ## What gets backed up
 
-A single event — its rows in these tables of the `oxygen` schema, in this order: `events`, `controls`, `courses`, `course_controls`, `classes`, `class_course_pools`, `course_objects`, `runners`, `teams`, `cards`, `card_readouts`, `punches`, `control_units`, `event_log`, `map_sources`, `map_documents`, `club_symbol_decisions`, `map_files`, `tracks`, `routes`, `event_seqs`. (`rendered_maps` was dropped in v0.6.1; older dumps carry a section for it, which a restore skips.)
+A single event — its rows in these tables of the `oxygen` schema, in this order: `events`, `controls`, `courses`, `course_controls`, `classes`, `class_course_pools`, `course_objects`, `runners`, `teams`, `cards`, `card_readouts`, `punches`, `control_units`, `event_log`, `map_sources`, `map_documents`, `club_symbol_decisions`, `map_files`, `map_patches`, `map_gps_tracks`, `tracks`, `routes`, `event_seqs`. (`rendered_maps` was dropped in v0.6.1; older dumps carry a section for it, which a restore skips.)
 
 Most are filtered to the event's id. `map_sources` and `map_documents` are not event-scoped: they hold the content-addressed map blobs, shared by every event and club map that pins the same bytes ([map-storage.md](map-storage.md) §1). The dump carries the rows this event's `map_files` pin, by hash — the source file and the imported document — ahead of `map_files`, so the sections restore in foreign-key order ([map-storage.md](map-storage.md) §7.3). `club_symbol_decisions` — the club's reviewed symbol outcomes, which a re-match of the restored map reads ([map-symbols.md](map-symbols.md) §8.5) — is instance-global and travels whole. `bytea` columns appear as Postgres `\x` hex in the CSV.
 
@@ -80,6 +80,13 @@ NEW_ID=$(psql "$DATABASE_URL" -tAc "SELECT id FROM oxygen.events WHERE name_id =
 #    CSV files.
 psql "$DATABASE_URL" -v event_id=$NEW_ID -f <repo>/packages/api/scripts/restore-map-blobs.sql
 
+# 5b. The GPS tracks (a dump written before G24 has no such section):
+#     event_id rewritten, created_by kept only when that user exists.
+#     A track whose id this database already holds (e.g. the original
+#     event still exists here) is skipped, so restoring a copy beside its
+#     original restores no tracks.
+psql "$DATABASE_URL" -v event_id=$NEW_ID -f <repo>/packages/api/scripts/restore-map-gps-tracks.sql
+
 # 6. Every other section (map_patches included, after step 5: its
 #    document must exist): rewrite the dump's event_id references from
 #    the original id to NEW_ID, then re-import it (there is no committed
@@ -121,5 +128,6 @@ The PostgreSQL password (when set) is passed to `psql` via the `PGPASSWORD` envi
 - API: `packages/api/src/backup.ts` — Fastify route handler, header construction, `psql \copy` spawning.
 - Web: the `DatabaseBackup` component in `packages/web/src/pages/EventPage.tsx`.
 - Docker: the `api` stage of `Dockerfile` installs `postgresql-client` so `psql` is on `PATH` in production.
+- GPS tracks restore: `packages/api/scripts/restore-map-gps-tracks.sql` (`docs/map-gps-tracks.md` §1.3).
 - Map restore: `packages/api/scripts/restore-map-blobs.sql`; `packages/api/scripts/restore-legacy-map-files.sql` for the `map_files` section of a dump written before v0.6.1.
 - Tests: `packages/api/src/__tests__/backup.test.ts` (script order and filters, section splitting), `packages/api/src/__tests__/integration/backup.test.ts` (dump → lose the event and its blobs → restore into another event; byte-exact, idempotent, tampered bytes refused; a pre-v0.6.1 `map_files` section through the legacy script, then the re-match), `e2e/backup.spec.ts` (UI download, map sections by hash).

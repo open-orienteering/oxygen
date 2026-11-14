@@ -27,6 +27,9 @@ export const CLOUD_OWNED_MUTATION_PREFIXES: readonly string[] = [
   "layout.",
   "graphics.",
   "courseObject.",
+  // The event's GPS tracks (docs/map-gps-tracks.md §1.3; row G24): not
+  // journaled, not in the checkout snapshot.
+  "mapTrack.",
 ];
 
 /** Exact cloud-owned mutation paths (event lifecycle is cloud admin). */

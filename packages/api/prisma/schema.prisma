@@ -210,6 +210,7 @@ model Event {
   courseMaps         CourseMap[]
   courseObjects      CourseObject[]
   mapPatch           MapPatch?
+  mapGpsTracks       MapGpsTrack[]
   coursePresence     CoursePresence[]
   graphics           Graphic[]
   tracks             Track[]
@@ -288,6 +289,7 @@ model User {
 
   @@map("users")
   @@schema("oxygen")
+  mapGpsTracks         MapGpsTrack[]
 }
 
 model PermissionGroup {
@@ -1337,6 +1339,36 @@ model MapPatch {
 
   @@index([documentHash])
   @@map("map_patches")
+  @@schema("oxygen")
+}
+
+/// GPS tracks per event (docs/map-gps-tracks.md §1; row G24): WGS 84, cloud-owned, not journaled, not in the snapshot.
+model MapGpsTrack {
+  id          String    @id @default(dbgenerated("uuidv7()")) @db.Uuid
+  eventId     BigInt    @map("event_id")
+  name        String?
+  sourceName  String    @default("") @map("source_name")
+  /// TrackPoints { lat, lng, time, ele } verbatim (§2.1).
+  points      Json
+  pointCount  Int       @map("point_count")
+  recordedAt  DateTime? @map("recorded_at") @db.Timestamptz(3)
+  trimStart   Int       @default(0) @map("trim_start")
+  trimEnd     Int       @map("trim_end")
+  /// An average's passes: provenance only, no FK.
+  derivedFrom String[]  @default([]) @map("derived_from") @db.Uuid
+  /// An average's single-pass ranges [{ start, end }] (§4.1).
+  singlePass  Json?     @map("single_pass")
+  convertedOp String?   @map("converted_op")
+  createdBy   String?   @map("created_by") @db.Uuid
+  createdAt   DateTime  @default(now()) @map("created_at") @db.Timestamptz(6)
+  /// Token (docs/course-layer.md §7): an HLC minted on every write that changes the row.
+  version     BigInt    @default(0)
+
+  event   Event @relation(fields: [eventId], references: [id], onDelete: Cascade)
+  creator User? @relation(fields: [createdBy], references: [id], onDelete: SetNull)
+
+  @@index([eventId, createdAt, id])
+  @@map("map_gps_tracks")
   @@schema("oxygen")
 }
 
