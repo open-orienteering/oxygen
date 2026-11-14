@@ -9,10 +9,13 @@ record: `docs/research/vector-map-pipeline/10-terrain.md` (with spike T1,
 
 Implementation: `packages/shared/src/terrain/` — pure TypeScript, no Node
 APIs, no randomness. `terrain/graph/` is §1–2 (H1), `terrain/solve/` is
-§3 (H2). Consumers import by subpath,
-`@oxygen/shared/src/terrain/graph/index.js` and
-`@oxygen/shared/src/terrain/solve/index.js`; the package's root `index.ts`
-re-exports neither.
+§3 (H2), `terrain/field/` is §4–5 and `terrain/index.ts` is
+`deriveTerrain` (§5.5, H3). Consumers import by subpath,
+`@oxygen/shared/src/terrain/graph/index.js`,
+`@oxygen/shared/src/terrain/solve/index.js`,
+`@oxygen/shared/src/terrain/field/index.js` and
+`@oxygen/shared/src/terrain/index.js`; the package's root `index.ts`
+re-exports none of them.
 
 Units throughout: **paper millimetres, x right, y up** (the document's
 native units divided by `header.unitsPerMm`). Distances that describe the
@@ -712,18 +715,16 @@ to each inside the region. It is the surface T1 drew and the user
 accepted (answer 2), with T1's formulas and constants; 10 §2.2's TIN with
 medial-axis points is not built.
 
-The input is the graph (§2) and the solve's levels, read through
-`FieldLevels`, a structural subset of §3's solution:
+The input is the graph (§2) and the parts of the solution (§3.7) the
+surface reads:
 
 ```ts
-interface FieldLevels {
-  regionLevel: Int32Array;  // per region: floor in intervals, 0 the lowest of its connected set
-  regionWeak: Uint8Array;   // per region: reached only through a zero-step weak link
-  side: Int8Array;          // per chain: +1 uphill left, −1 right, 0 undecided
-  flagged: Uint8Array;      // per chain: decided by a flagged heuristic
-  conflict: Float32Array;   // per chain: share of samples contradicting the levels
-}
+type FieldLevels = Pick<TerrainSolution, "regionLevel" | "regionWeak" | "side" | "flagged" | "conflict">;
 ```
+
+`regionLevel` is each region's floor in intervals (§3.3), `side` +1 / −1
+/ 0, `flagged`, `conflict` and `regionWeak` feed the confidence bit
+(§4.7).
 
 Heights are in intervals until §4.8. The work runs on the graph raster
 (§2.4: 0.1 mm by default), so the field covers the raster's extent: the
@@ -883,13 +884,39 @@ cell (x right, y up, z up): central differences in ground metres
 zero slope on an axis with no data neighbour; (0, 0, 127) in no-data
 cells. Computed on demand, not stored.
 
-### 5.5 `deriveTerrain(doc)` (pending: after H2)
+### 5.5 `deriveTerrain(doc)`
 
-H1 → H2 → §4 with the budgets above; `null` without contours, else the
-field and the solve's report. The interval is 2.5 m when the document's
-library is ISSprOM, else 5 m.
+```ts
+interface DeriveTerrainOptions {
+  intervalM?: number;                           // default contourIntervalM(doc.header)
+  graph?: ContourGraphOptions;                  // §2.4: 0.1 mm, 60 M cells
+  solve?: SolveOptions;                         // §3.7; H9's external side enters here
+  field?: Omit<HeightFieldOptions, "intervalM">; // §4.6: 0.2 mm, 4 M cells, 4096 per side
+}
+function contourIntervalM(header: Pick<MapDocumentHeader, "library">): number;
+function deriveTerrain(doc: MapDocument, opts?: DeriveTerrainOptions): { field: HeightField; report: TerrainReport } | null;
+```
 
-### 5.6 Measured on the corpus (pending: after H2)
+`buildContourGraph` (§2) → `solveTerrain` (§3) → `buildHeightField`
+(§4); `null` when the document has no contours. The interval is the
+assumed one (answer 8): 2.5 m when the document's library id starts with
+`ISSprOM`, else 5 m. The field is built whatever the report says: the 3D
+gate (`report.share.decided` ≥ 80 %, answer 7) is the viewer's (H7). The
+report travels beside the field, not inside its bytes (H4 stores it in
+the document's descriptor).
+
+The graph keeps H1's budget (0.1 mm, 60 M cells): H2's shares were
+measured on it, and the field's own budget bounds what is stored.
+
+### 5.6 Measured on the corpus
+
+A `.local/` script (not committed: the corpus is real club maps) runs the
+three stages on each corpus map and the CC0 demo map, one map per process,
+from the imported document (no stored decisions), and writes a hillshade
+for inspection. Measured 2026-11-14 on a 16-core machine shared with other
+sessions:
+
+MEASURE_TABLE
 
 
 ## Tests
@@ -902,11 +929,6 @@ library is ISSprOM, else 5 m.
 | `terrain/graph/__tests__/raster.test.ts` | mask (closing, the 5.5 mm grid), nested rings → regions, frame ends close a band, near-miss ends `extended` onto a chain and a cliff, chains over cliffs, cell budget (§2.3–2.5) |
 | `terrain/graph/__tests__/graph.test.ts` | incidence on nested rings, a leaky chain, cliff links, determinism, no contours (§2.6–2.7) |
 | `terrain/graph/__tests__/synthetic.ts` | the fixture: ISOM symbols with canonical matches and library definitions, geometry in mm, a mapped area around the contours |
-| `terrain/field/__tests__/codec.test.ts` | round trip, magic and layout, determinism, unaligned input, bad magic / version / length, planes against the header (§5.2) |
-| `terrain/field/__tests__/sample.test.ts` | bilinear exact on a plane, clamping, offset, null outside and in no-data, renormalising at a no-data border, confidence (§5.3) |
-| `terrain/field/__tests__/normals.test.ts` | a plane's analytic normal, exaggeration, flat and no-data cells, one-sided beside no-data (§5.4) |
-| `terrain/field/__tests__/interpolate.test.ts` | sources by side, geodesic distance inside a region; a slope and a cone within 0.1 interval, a top and a pit, a form line at ½, a multi-step drop, a chain level on both sides, no-data, confidence, determinism; the field grid and its budget (§4) |
-| `terrain/field/__tests__/levels.ts` | hand-written levels standing in for §3 |
 | `.local/h1/counts.mts` (not committed) | T1's corpus counts reproduced (§2.8) |
 | `terrain/solve/__tests__/evidence.test.ts` | tick direction and side, grazing and off-chain ticks dropped, tops by orientation and not around another chain, a tagged cliff between contours and on a contour, lakes and the 2 mm² floor, form ticks on open lines, dropped on closed lines and across another form line (§3.1) |
 | `terrain/solve/__tests__/levels.test.ts` | union-find offsets, a ladder levelled from 0, multi-step on a cycle, conflict share, weak pairs after strict ones, pairs beside a two-level band weak, tier order, weak links and their components, a step set by index repair, no level without pairs (§3.3) |
@@ -914,6 +936,13 @@ library is ISSprOM, else 5 m.
 | `terrain/solve/__tests__/index-repair.test.ts` | a cliff hiding two contours recovered from the index contours (step 2, source `index`), the zero default without repair or without an index contour above; an undecided chain decided by the index contours; a proposal undone by its trial; a flipped flagged group corrected, a strictly decided nest left alone (§3.5) |
 | `terrain/solve/__tests__/fixtures.ts` | the graph fixture with chain lookup, ticks, arcs |
 | `.local/h2/{truth,measure,ladders}.mts` (not committed) | the corpus run against Lantmäteriet's 1 m model (§3.9) |
+| `terrain/field/__tests__/codec.test.ts` | round trip, magic and layout, determinism, unaligned input, bad magic / version / length, planes against the header (§5.2) |
+| `terrain/field/__tests__/sample.test.ts` | bilinear exact on a plane, clamping, offset, null outside and in no-data, renormalising at a no-data border, confidence (§5.3) |
+| `terrain/field/__tests__/normals.test.ts` | a plane's analytic normal, exaggeration, flat and no-data cells, one-sided beside no-data (§5.4) |
+| `terrain/field/__tests__/interpolate.test.ts` | sources by side, geodesic distance inside a region; a slope and a cone within 0.1 interval, a top and a pit, a form line at ½, a multi-step drop, a chain level on both sides, no-data, confidence, determinism; the field grid and its budget (§4) |
+| `terrain/field/__tests__/levels.ts` | hand-written levels standing in for §3 |
+| `terrain/__tests__/derive.test.ts` | a hill derived end to end (graph, solve, field), null without contours, the interval (5 m, 2.5 m on ISSprOM, an override), the field budget, the solve's options passed through, determinism (§5.5) |
+| `.local/h3/corpus.mts` (not committed) | time, peak RSS, field size and a hillshade per corpus map (§5.6) |
 
 ## Pending in this chapter
 
@@ -924,6 +953,10 @@ library is ISSprOM, else 5 m.
   (§3.0, 4).
 - §3: 10 §2.1's depressions, spot heights and text labels are not
   evidence (the split's order leaves them out).
-- §5.5 `deriveTerrain` and §5.6 the corpus measurements (H3, after H2).
+- §4: the surface does not read knolls, depressions or spot heights, and
+  the band weighting leaves a slight kink at each contour (visible as
+  faint terraces in flat ground); a TIN with medial-axis points (10 §2.2)
+  is the alternative if that matters. No row.
+- §4.9: the anchored (absolute) field from H9's per-chain heights (H9).
 - §6 The DEM anchor (H9); §7 DEM providers (H10).
 - Storage of the derived artifact is `map-storage.md` (H4).
