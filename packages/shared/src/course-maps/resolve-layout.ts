@@ -29,6 +29,7 @@ import {
   mapTemplateSettingsSchema,
 } from "./schema.js";
 import type { MapTextValues } from "./text.js";
+import { compareLabels } from "./collate.js";
 
 const objectsSchema = z.array(courseMapObjectSchema);
 
@@ -312,9 +313,7 @@ export function resolveMapLayout(
     };
   });
   if (everySite) {
-    regularControls.sort((a, b) =>
-      a.code.localeCompare(b.code, undefined, { numeric: true }),
-    );
+    regularControls.sort((a, b) => compareLabels(a.code, b.code));
   }
   const start = input.kind === "course" ? endControl(input.course?.start, "start") : null;
   const finish = input.kind === "course" ? endControl(input.course?.finish, "finish") : null;
