@@ -133,10 +133,15 @@ export async function eventPatchVersion(db: Db, eventId: bigint, pinHash: string
  * paired with another document than the one it prints.
  */
 export async function eventPrintPatch(db: Db, eventId: bigint, pinHash: string | null): Promise<PrintPatch | null> {
-  if (!pinHash) return null;
+  const { version, patch } = await eventPatchOnPin(db, eventId, pinHash);
+  return patch && pinHash ? livePrintPatch(pinHash, { version, patch }) : null;
+}
+
+/** The delivered patch (§3.3) for a pin the caller already holds: the row only when it is keyed to `pinHash`. */
+export async function eventPatchOnPin(db: Db, eventId: bigint, pinHash: string | null): Promise<PatchDelivery> {
+  if (!pinHash) return NO_PATCH;
   const row = await db.mapPatch.findUnique({ where: { eventId }, select: ROW_SELECT });
-  const { version, patch } = deliveredPatch(row, pinHash);
-  return patch ? livePrintPatch(pinHash, { version, patch }) : null;
+  return deliveredPatch(row, pinHash);
 }
 
 // ---- writes -----------------------------------------------------------------

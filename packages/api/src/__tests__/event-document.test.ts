@@ -10,7 +10,7 @@
 import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
 import { beforeAll, beforeEach, describe, expect, it } from "vitest";
-import { mapGeo } from "@oxygen/shared";
+import { course, mapDocument, mapGeo } from "@oxygen/shared";
 import { loadEventCrs } from "../event-crs.js";
 import { loadEventCheckDocument, loadEventCutFeatures, loadEventMapObjects } from "../event-map-objects.js";
 import { frameFromOcadCrs, mapMmToWgs84, type OcadCrs } from "../map-projection.js";
@@ -143,6 +143,41 @@ describe("document derivations", () => {
     expect(objects?.length).toBeGreaterThan(0);
     expect(await loadEventCutFeatures(db, EVENT)).not.toBeNull();
     expect((await loadEventCheckDocument(db, EVENT))?.libraryId).toBeTruthy();
+  });
+
+  it("read the effective document: a hide, then an add, then a disabled patch, each answered fresh (G14; map-patches §2.4)", async () => {
+    const stub = documentDbStub([doc], {}, { documentHash: doc.hash, sourceHash: doc.sourceHash });
+    const decoded = mapDocument.decodeMapDocument(doc.bytes);
+    const plainCuts = (await loadEventCutFeatures(stub.db, EVENT))!;
+    const plainObjects = (await loadEventMapObjects(stub.db, EVENT))!;
+    expect(plainCuts.length).toBeGreaterThan(0);
+    // A cut feature of the fixture, hidden by the patch.
+    const cuts = course.cutFeaturesOfDocument(decoded);
+    const perMm = decoded.header.unitsPerMm;
+    const i = [...decoded.attrs.sourceIndex.keys()].find((k) => {
+      const at = decoded.coordStart[k] * 2;
+      return decoded.attrs.type[k] === mapDocument.OBJECT_TYPE.point && cuts.some((f) => f.x === decoded.coords[at] / perMm && f.y === decoded.coords[at + 1] / perMm);
+    })!;
+    const src = decoded.attrs.sourceIndex[i];
+    const row = (version: bigint, ops: Record<string, unknown>, enabled = true) => ({ documentHash: doc.hash, enabled, ops, symbols: {}, version });
+    stub.setPatch(row(5n, { [`hide:${src}`]: { op: "hide", sourceIndex: src } }));
+    expect((await loadEventCutFeatures(stub.db, EVENT))!.length).toBe(plainCuts.length - 1);
+    expect((await loadEventMapObjects(stub.db, EVENT))!.length).toBe(plainObjects.length - 1);
+
+    const id = "00000000-0000-4000-8000-0000000000b2";
+    stub.setPatch(row(6n, {
+      [`hide:${src}`]: { op: "hide", sourceIndex: src },
+      [`add:${id}`]: { op: "add", id, type: mapDocument.OBJECT_TYPE.point, symbol: { doc: decoded.attrs.symbolIdx[i] }, coords: [[0, 0]] },
+    }));
+    const withAdd = (await loadEventCutFeatures(stub.db, EVENT))!;
+    expect(withAdd.length).toBe(plainCuts.length);
+    expect(withAdd.some((f) => f.x === 0 && f.y === 0)).toBe(true);
+
+    stub.setPatch(row(7n, { [`hide:${src}`]: { op: "hide", sourceIndex: src } }, false));
+    expect(await loadEventCutFeatures(stub.db, EVENT)).toEqual(plainCuts);
+    // A dormant row (keyed onto another document) is not applied.
+    stub.setPatch({ ...row(8n, { [`hide:${src}`]: { op: "hide", sourceIndex: src } }), documentHash: "d".repeat(64) });
+    expect(await loadEventCutFeatures(stub.db, EVENT)).toEqual(plainCuts);
   });
 
   it("decode a document once per hash", async () => {

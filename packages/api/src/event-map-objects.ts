@@ -1,17 +1,21 @@
 /**
  * The pinned map document's terrain objects, cut features and check
- * obstacles (docs/map-storage.md §4.6).
+ * obstacles (docs/map-storage.md §4.6), read from the effective document:
+ * the pin with the event's patch applied (docs/map-patches.md §2.4; G14),
+ * so a hidden object is no candidate, cut feature or obstacle and an added
+ * one is.
  *
  * The description autodetect needs to ask "what map features are within a
  * few millimetres of this point?". This module slims the document's
- * objects for that search, memoised per document hash (content-addressed,
- * so never stale).
+ * objects for that search, memoised per document hash and patch version
+ * (both change on every edit, so never stale).
  *
  * Only objects whose symbol has an entry in `ISOM_DESCRIPTION_MAP` are
  * kept, which drops contours, course overprint and text objects — the
  * bulk of a club map — so the retained set stays small. The symbol code is
  * the applied match's canonical code, else the source code, and hidden
- * symbols are skipped: the rule the cut features and check obstacles
+ * symbols and objects the patch hides are skipped: the rule the cut
+ * features and check obstacles
  * follow (docs/course-layer.md §3.4, §9.3).
  *
  * Coordinates are OCAD-style 1/100 mm paper units whatever the document's
@@ -28,6 +32,7 @@ import { course, isomDescriptionFor, mapDocument, render } from "@oxygen/shared"
 import type { Prisma, PrismaClient } from "./generated/prisma/client.js";
 import { LruCache } from "./course-maps/lru-cache.js";
 import { decodedDocument, eventDocumentHash } from "./map-store/event-document.js";
+import { eventPatchOnPin, eventPatchVersion } from "./map-store/patches.js";
 
 type Db = PrismaClient | Prisma.TransactionClient;
 
@@ -120,8 +125,8 @@ function flattenObject(doc: mapDocument.MapDocument, i: number, objType: SlimObj
   return out;
 }
 
-/** The searchable point / line / area objects of a decoded document. */
-export function slimObjectsOfDocument(doc: mapDocument.MapDocument): SlimMapObject[] {
+/** The searchable point / line / area objects of a decoded (effective) document. */
+export function slimObjectsOfDocument(doc: mapDocument.EffectiveDocument): SlimMapObject[] {
   const syms = doc.header.symbols.map((s): number | null => {
     if (s.hidden) return null;
     const sym = ocadSymbolNumber(effectiveCode(s));
@@ -131,7 +136,7 @@ export function slimObjectsOfDocument(doc: mapDocument.MapDocument): SlimMapObje
   const out: SlimMapObject[] = [];
   for (let i = 0; i < doc.attrs.symbolIdx.length; i++) {
     const objType = doc.attrs.type[i];
-    if (objType !== 1 && objType !== 2 && objType !== 3) continue;
+    if ((objType !== 1 && objType !== 2 && objType !== 3) || doc.hidden?.[i]) continue;
     const sym = syms[doc.attrs.symbolIdx[i]];
     if (sym === null || sym === undefined) continue;
     const coordinates = flattenObject(doc, i, objType, scale);
@@ -148,19 +153,31 @@ export function slimObjectsOfDocument(doc: mapDocument.MapDocument): SlimMapObje
   return out;
 }
 
-/** Memoise one derivation of the pinned document per hash. */
-function perDocument<T>(derive: (doc: mapDocument.MapDocument) => T, what: string) {
+/** The memo key: the hash alone without a delivered patch, else hash and patch version. */
+const derivationKey = (hash: string, version: string) => (version === "0" ? hash : `${hash}:${version}`);
+
+/**
+ * Memoise one derivation of the effective document (the pin with the
+ * event's patch, docs/map-patches.md §2.4) per hash + patch version. A
+ * hit costs the pin and the version column; a miss reads the patch and
+ * applies it to the decoded pin (`applyPatch` is linear; a disabled or
+ * op-less patch returns the pin itself).
+ */
+function perDocument<T>(derive: (doc: mapDocument.EffectiveDocument) => T, what: string) {
   const memo = new LruCache<T>(MAX_CACHED_DOCUMENTS);
   return async (db: Db, eventId: bigint): Promise<T | null> => {
     const hash = await eventDocumentHash(db, eventId);
     if (!hash) return null;
-    const cached = memo.get(hash);
+    const cached = memo.get(derivationKey(hash, await eventPatchVersion(db, eventId, hash)));
     if (cached !== undefined) return cached;
-    const doc = await decodedDocument(db, hash);
+    const [doc, delivered] = await Promise.all([decodedDocument(db, hash), eventPatchOnPin(db, eventId, hash)]);
     if (!doc) return null;
     try {
-      const value = derive(doc);
-      memo.set(hash, value);
+      const { document, issues } = mapDocument.applyPatch(doc, delivered.patch);
+      if (issues.length) console.warn(`[event-map-objects] document ${hash}: ${issues.length} patch op(s) skipped:`, issues.map((x) => `${x.opId}: ${x.code}`).join(", "));
+      const value = derive(document);
+      // Under the version actually read: a write between the two reads is answered at the next call.
+      memo.set(derivationKey(hash, delivered.version), value);
       return value;
     } catch (err) {
       console.warn(`[event-map-objects] document ${hash}: no ${what}:`, err);
