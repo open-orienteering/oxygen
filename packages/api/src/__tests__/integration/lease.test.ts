@@ -1039,7 +1039,8 @@ describe("a box follows the cloud's map rows during a lease (G19)", () => {
     // On the cloud: extra X (lower seq) and auto Y of one key.
     const x = await dbB.mapTemplate.create({ data: { eventId: eventB.id, name: `Swap1-${mapSuffix}`, printScale: 10000, autoKey: KEY, isExtra: true } });
     const y = await dbB.mapTemplate.create({ data: { eventId: eventB.id, name: `Swap2-${mapSuffix}`, printScale: 15000, autoKey: KEY, isExtra: false } });
-    const sheetOnX = await dbB.courseMap.create({ data: { eventId: eventB.id, name: "On X", templateId: x.id } });
+    const courseOnB = await dbB.course.findFirstOrThrow({ where: { eventId: eventB.id, name: "Blå" } });
+    const sheetOnX = await dbB.courseMap.create({ data: { eventId: eventB.id, name: "On X", courseId: courseOnB.id, templateId: x.id } });
     cleanup.push(async () => {
       await dbB.courseMap.deleteMany({ where: { id: sheetOnX.id } });
       await dbB.mapTemplate.deleteMany({ where: { id: { in: [x.id, y.id] } } });
