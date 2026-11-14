@@ -717,6 +717,15 @@ pure; the provider, the fetch and the paper → projected transform are
 4. **The DEM's side decides** against a tick, cliff or lake (§3.0 answer 1,
    which supersedes answer 14's "reported, not overridden"); H9 emits the
    side under answer 14's thresholds, unchanged.
+5. **§3.0's moved index target is read per index phase and contour
+   ladder** (user, 2026-11-14, after H2 merged into H9): H2's ≥ 90 % per
+   index phase (§3.0, 4–5) is measured on H9's snapped levels within each
+   (index phase × contour ladder of §6.6), because a level counts from its
+   own ladder's phase and one index phase can hold index contours of two
+   contour ladders (club-2026's phase at about 18 m: 72.8 % across both
+   ladders, 100 % within each). H9's own acceptance stays answer 3's
+   spatial target. §6.10 reports both readings and the literal per-phase
+   figure.
 
 ### 6.1 Inputs
 
@@ -950,6 +959,30 @@ sampler, and compares with T2. Measured 2026-11-14:
   index contours in one 1 km block one level below their area). T2's
   1.1 km circular mean snapped 64.1 % of club-2026's length and 73.3 % of
   its index length; the vote snaps 76.7 % and 85.0 %.
+- **§3.0's index target per index phase** (H2's phases: peaks of the
+  index contours' DEM median mod 25 m holding ≥ 8 % of tight index
+  length, ±1.5 m), on H9's snapped levels — share of snapped index length
+  on one residue across contour ladders / within each contour ladder
+  (§6.0 answer 5), and the share of the phase's index length snapped:
+
+  | Map | phase m (index km) | snapped % | on one residue % | per contour ladder % |
+  |---|---|---|---|---|
+  | club-2026 | 23.25 (65.3) | 91.2 | 98.3 | 100 |
+  | club-2026 | 20.25 (15.4) | 79.1 | 100 | 100 |
+  | club-2026 | 18.25 (7.1) | 70.4 | 72.8 | 100 |
+  | club-2026 | 0.25 (6.6) | 92.0 | 94.8 | 100 |
+  | club-full | 24.25 (103.3) | 89.3 | 98.9 | 100 |
+  | club-full | 22.25 (78.9) | 93.7 | 100 | 100 |
+  | club-full | 1.25 (10.3) | 84.6 | 100 | 100 |
+  | club-full | 19.75 (35.8) | 57.1 | 100 | 100 |
+  | crop-a | 0.25 (18.3) | 100 | 100 | 100 |
+  | crop-b | 24.75 (17.9) | 99.3 | 100 | 100 |
+
+  Against §3.9 (H2's map-only levels, per component: club-2026 85.5 /
+  64.8 / 61.5 / 56.5 %, club-full 35.8 / 46.6 / 70.3 / 71.4 %) the DEM's
+  levels reach the target wherever they are snapped; the off-residue
+  length across ladders is the other contour ladder's index contours
+  (66 mm, 54 mm, 91 mm, 21 mm of club-2026's four phases).
 - §6.6's starting constants are kept: the vote met the target as first
   specified, so no variant (smaller fixed windows, a graph neighbourhood,
   smoothing of the cell field) was needed.
@@ -979,23 +1012,18 @@ sampler, and compares with T2. Measured 2026-11-14:
 | `terrain/anchor/__tests__/ladder.test.ts` | candidates (one, two, the wrap, under 4 %, noise), the vote per hill and at a border, own evidence removed, the growing window and an unlabelled chain, continuous levels at the wrap, determinism (§6.6–6.7) |
 | `terrain/anchor/__tests__/anchor.test.ts` | through H1's graph: a shifted ladder snapped, the external side, noise, spread-failed and uncovered chains, two ladders per area, the residue split, coarse promoted and not, no ladder, a suspect interval, determinism (§6.4, §6.7, §6.9) |
 | `terrain/anchor/__tests__/resolve.test.ts` | DEM heights kept, a spread-failed chain from its neighbours, bounded, the 3-band search, the component offset, no height, the drift report, the coarse offset and drift bound, determinism (§6.8) |
+| `terrain/anchor/__tests__/anchor-solve.test.ts` | with §3's `solveTerrain`: a wrong tick against the DEM — the DEM side decides, the disagreement counted; `anchoredHeights` on a real solution (§3.0 answer 1, §6.3, §6.8) |
 | `terrain/anchor/__tests__/synthetic-dem.ts` | analytic DEMs (cone, pit, plane), rings, a seeded generator |
-| `.local/h9/anchor.mts`, `side.mts` (not committed) | T2's corpus aggregates and side reproduced, the §6.0 answer 3 target (§6.10) |
+| `.local/h9/anchor.mts`, `side.mts` (not committed) | T2's corpus aggregates and side reproduced, the §6.0 answer 3 target, §3.0's index target per index phase (§6.10) |
 
 ## Pending in this chapter
 
 - §3: bands that span two levels are only demoted in the level forest,
   not split; splitting them (H1's raster) is what would lift the levels
   further (§3.0, 4). No row yet.
-- §3: the index target (≥ 90 % per index ladder) is H9's, with the DEM
-  (§3.0, 4).
 - §3: 10 §2.1's depressions, spot heights and text labels are not
   evidence (the split's order leaves them out).
 - §4–5 The height field: interpolation, format, sampling, `deriveTerrain` (H3).
-- §6: H9 runs against local mirrors of §3's `ExternalSide` and
-  `TerrainSolution` fields until H2 has merged; then the mirrors are
-  replaced by §3's exports and a solve-with-DEM test is added (a tick
-  against the DEM: the DEM decides, the disagreement counted).
 - §6: per-chain anchored heights into the height field (H3 / H10).
 - §7 DEM providers, the paper → projected sampler (H10).
 - Storage of the derived artifact is `map-storage.md` (H4).
