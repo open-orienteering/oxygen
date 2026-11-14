@@ -128,7 +128,10 @@ export const hostOf = (url: string): string => {
 class HeaderReader {
   private blocks = new Map<number, Uint8Array>();
   private fetched = 0;
-  constructor(private src: CogSource) {}
+  private readonly src: CogSource;
+  constructor(src: CogSource) {
+    this.src = src;
+  }
 
   private async block(n: number): Promise<Uint8Array> {
     let b = this.blocks.get(n);
