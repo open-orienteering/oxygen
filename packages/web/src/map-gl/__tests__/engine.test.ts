@@ -12,7 +12,7 @@ import type { MeshAtlas } from "../mesh-atlas";
 import { documentBytes, indexOf, request } from "./course-fixture";
 import { vi } from "vitest";
 import type { HeightField } from "@oxygen/shared/src/terrain/field/read.js";
-import { DRAPE_SETTLE_MS } from "../engine";
+import { DRAPE_ARRIVAL_MS, DRAPE_SETTLE_MS } from "../engine";
 import { drapeTextureBytes } from "../renderer";
 import { assembleTerrainMesh, type TerrainMesh } from "../terrain/mesh";
 import type { PreparedField, TerrainFrame } from "../terrain/program";
@@ -1002,6 +1002,34 @@ describe("MapGlEngine terrain (docs/map-rendering.md §5.6 \"Engine API\", \"Set
     expect(st.gated).toBe(true);
     expect(prepares(transport).length).toBe(n + 1);
     expect(prepares(transport).at(-1)!.ids).toEqual([]);
+  });
+
+  it("re-renders the drape for arrivals at most every DRAPE_ARRIVAL_MS while detail streams in, and at once for the last", async () => {
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "performance"] });
+    try {
+      const { engine, renderer, transport, cam } = await withTerrain();
+      let changes = 0;
+      engine.onChange = () => changes++;
+      engine.renderTerrain({ camera: cam(125_000, 125_000), exaggeration: 1 }, opts);
+      expect(renderer.drapeRenders).toHaveLength(1);
+      transport.step(2); // the prepare request handled, the slice run: nine part replies queued
+      transport.step(3); // three arrive
+      vi.advanceTimersByTime(200);
+      engine.renderTerrain({ camera: cam(125_000, 125_000), exaggeration: 1 }, opts);
+      expect(renderer.drapeRenders).toHaveLength(1); // held
+      expect(renderer.terrainFrames).toHaveLength(2); // the mesh still drawn
+      const before = changes;
+      vi.advanceTimersByTime(DRAPE_ARRIVAL_MS);
+      expect(changes).toBeGreaterThan(before); // the hold's timer asks for a frame
+      engine.renderTerrain({ camera: cam(125_000, 125_000), exaggeration: 1 }, opts);
+      expect(renderer.drapeRenders).toHaveLength(2);
+      transport.flush(); // the rest: complete
+      vi.advanceTimersByTime(16);
+      engine.renderTerrain({ camera: cam(125_000, 125_000), exaggeration: 1 }, opts);
+      expect(renderer.drapeRenders).toHaveLength(3);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("counts the field and the drape in the budget, the drape at most a third", async () => {

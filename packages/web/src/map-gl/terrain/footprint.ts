@@ -15,8 +15,9 @@
  *   with `rotationDeg = bearingDeg`; its density is what the nearest
  *   footprint point needs (`focalPx / depth`, depth on the target's z
  *   plane: exactly the 2D `pxPerUm` at pitch 0), lowered to fit the
- *   limits. Where the cap leaves the far layer below `DRAPE_NEAR_RATIO`
- *   of what the screen needs, a near layer covers that part (decision 3).
+ *   limits. Where the footprint's depth range is wide, a near layer covers
+ *   the ground up to a depth D at that density and the far layer the whole
+ *   footprint at `focalPx / D`, D minimising the texels (decision 3).
  * - `drapeTiles(view, tile)`: sub-views partitioning a layer's texture,
  *   each drawn through the renderer's tile-sized MSAA target.
  *
@@ -29,8 +30,10 @@ import type { Vec3 } from "./mat4.js";
 
 /** Growth of a layer's rectangle per side, as a share of its extent: small moves stay covered. */
 export const DRAPE_MARGIN = 0.05;
-/** A near layer is added where the far layer's density is below this share of the screen's need. */
-export const DRAPE_NEAR_RATIO = 0.7;
+/** The footprint's far / near depth above which the drape is split into a near and a far layer. */
+export const DRAPE_SPLIT_RATIO = 2;
+/** Split depths tried between the near and the far depth (geometric steps). */
+const SPLIT_STEPS = 12;
 /** Texels per side of a drape layer (decision 5); lowered to `MAX_TEXTURE_SIZE` where smaller. */
 export const DRAPE_MAX_SIDE = 4096;
 /** Side of the MSAA target a layer is rendered through, tile by tile. */
@@ -51,7 +54,10 @@ export interface DrapeLayer {
   role: "near" | "far";
   /** Paper µm; `rotationDeg` = the camera's bearing. */
   view: ViewRect;
-  /** Device px per µm the screen needs at the layer's nearest footprint point. */
+  /**
+   * Device px per µm the screen needs where the layer is drawn: at the footprint's nearest point for
+   * the near (or only) layer, at the split depth for the far one.
+   */
   needPxPerUm: number;
 }
 
@@ -197,20 +203,31 @@ export function drapeLayers(cam: TerrainCamera, box: Box3, originUm: { x: number
     };
   };
   const all = rectOf(poly);
-  const make = (r: UvRect, pixels: number) => layerView(r, need, limits.maxSide, pixels, cam.bearingDeg, originUm, { w: cam.widthPx, h: cam.heightPx });
-  const one = make(all, limits.maxPixels);
-  if (one.pxPerUm >= DRAPE_NEAR_RATIO * need) return [{ role: "far", view: one, needPxPerUm: need }];
-  // The cap bites: far takes half the texels, near the rest over the ground far is too coarse for.
-  const far = make(all, limits.maxPixels / 2);
-  const nearDepth = (DRAPE_NEAR_RATIO * f.focalPx) / far.pxPerUm;
-  const nearPoly = clip2(poly, (p) => nearDepth - depth(p));
-  if (nearPoly.length < 3) return [{ role: "far", view: one, needPxPerUm: need }];
-  const near = make(rectOf(nearPoly), limits.maxPixels - far.widthPx * far.heightPx);
-  // Two layers only pay when the near one is denser than one layer over everything (not at pitch 0).
-  if (!(near.pxPerUm > one.pxPerUm * 1.05)) return [{ role: "far", view: one, needPxPerUm: need }];
+  const screen = { w: cam.widthPx, h: cam.heightPx };
+  const make = (r: UvRect, density: number, pixels: number) => layerView(r, density, limits.maxSide, pixels, cam.bearingDeg, originUm, screen);
+  const depths = poly.map(depth);
+  const dMin = Math.max(Math.min(...depths), floor), dMax = Math.max(...depths);
+  const one = (): DrapeLayer[] => [{ role: "far", view: make(all, need, limits.maxPixels), needPxPerUm: need }];
+  if (!(dMax / dMin > DRAPE_SPLIT_RATIO)) return one();
+  // Split by need: near up to depth D at the nearest point's density, far over everything at f / D.
+  const area = (r: UvRect) => Math.max(r.u1 - r.u0, 1) * Math.max(r.v1 - r.v0, 1);
+  let best: { d: number; near: UvRect; texels: number } | undefined;
+  for (let k = 1; k < SPLIT_STEPS; k++) {
+    const d = dMin * (dMax / dMin) ** (k / SPLIT_STEPS);
+    const nearPoly = clip2(poly, (p) => d - depth(p));
+    if (nearPoly.length < 3) continue;
+    const near = rectOf(nearPoly);
+    const texels = area(near) * need * need + area(all) * (f.focalPx / d) ** 2;
+    if (!best || texels < best.texels) best = { d, near, texels };
+  }
+  if (!best || best.texels >= area(all) * need * need) return one();
+  const farNeed = f.focalPx / best.d;
+  // Over the cap, both densities come down together; each layer gets its share of the texels.
+  const scale = Math.min(1, Math.sqrt(limits.maxPixels / best.texels));
+  const nearShare = (area(best.near) * need * need) / best.texels;
   return [
-    { role: "near", view: near, needPxPerUm: need },
-    { role: "far", view: far, needPxPerUm: need },
+    { role: "near", view: make(best.near, need * scale, limits.maxPixels * nearShare), needPxPerUm: need },
+    { role: "far", view: make(all, farNeed * scale, limits.maxPixels * (1 - nearShare)), needPxPerUm: farNeed },
   ];
 }
 

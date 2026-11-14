@@ -165,6 +165,14 @@ export const ARRIVAL_REBUILD_MS = 150;
  */
 export const DRAPE_SETTLE_MS = 150;
 
+/**
+ * While detail streams in, arrivals alone re-render the drape at most every `DRAPE_ARRIVAL_MS`, or
+ * `DRAPE_ARRIVAL_FACTOR` × the last re-render's JS time where that is longer; the last arrival always
+ * does (§5.6 "Settling"). A club map's drape takes 100–250 ms to render on a laptop.
+ */
+export const DRAPE_ARRIVAL_MS = 500;
+export const DRAPE_ARRIVAL_FACTOR = 4;
+
 /** The drape layers' share of the residency budget (§5.6 decision 5). */
 export const DRAPE_BUDGET_SHARE = 1 / 3;
 
@@ -225,6 +233,8 @@ export class MapGlEngine {
   private lastMoveAt = -Infinity;
   private settleTimer: ReturnType<typeof setTimeout> | undefined;
   private drapeSt = { renders: 0, lastMs: 0, lastDraws: 0, lastTiles: 0 };
+  private lastDrapeAt = -Infinity;
+  private arrivalTimer: ReturnType<typeof setTimeout> | undefined;
   private dirty = true;
   /** Dirty only because detail arrived (may wait for ARRIVAL_REBUILD_MS). */
   private arrivalOnly = false;
@@ -866,7 +876,8 @@ export class MapGlEngine {
     this.drapeStale = true;
     this.terrainPrepareMs = undefined;
     if (this.settleTimer) clearTimeout(this.settleTimer);
-    this.settleTimer = undefined;
+    if (this.arrivalTimer) clearTimeout(this.arrivalTimer);
+    this.settleTimer = this.arrivalTimer = undefined;
     this.updateFixedBytes();
     this.evict();
     if (this.selection !== "2d" && this.view) this.setView(this.view);
@@ -954,7 +965,15 @@ export class MapGlEngine {
     }
     let drape: TerrainFrameStats["drape"];
     const hopts = this.withHighlight(opts);
-    if (this.rebuild(t0)) this.drapeStale = true;
+    // Arrivals alone, more detail still to come: re-render at a rate the drape's cost allows.
+    const wait = Math.max(DRAPE_ARRIVAL_MS, DRAPE_ARRIVAL_FACTOR * this.drapeSt.lastMs) - (t0 - this.lastDrapeAt);
+    const holdArrivals = !this.drapeStale && this.dirty && this.arrivalOnly && !this.isComplete() && wait > 0;
+    if (holdArrivals) {
+      this.arrivalTimer ??= setTimeout(() => {
+        this.arrivalTimer = undefined;
+        this.onChange?.();
+      }, wait);
+    } else if (this.rebuild(t0)) this.drapeStale = true;
     if (this.drapeStale && !(this.dirty && this.arrivalOnly)) {
       const d = { drawCalls: 0, tiles: 0, cpuMs: 0, layers: layers.length };
       layers.forEach((l, i) => {
@@ -967,6 +986,7 @@ export class MapGlEngine {
       drape = d;
       this.drapeLayersDrawn = layers;
       this.drapeStale = false;
+      this.lastDrapeAt = performance.now();
       this.drapeSt = { renders: this.drapeSt.renders + 1, lastMs: d.cpuMs, lastDraws: d.drawCalls, lastTiles: d.tiles };
       this.updateFixedBytes();
       this.evict();
@@ -1040,6 +1060,7 @@ export class MapGlEngine {
   dispose(): void {
     if (this.holdTimer) clearTimeout(this.holdTimer);
     if (this.settleTimer) clearTimeout(this.settleTimer);
+    if (this.arrivalTimer) clearTimeout(this.arrivalTimer);
     this.terrainWaiter?.reject(new Error("map engine disposed"));
     this.terrainWaiter = undefined;
     // A hit-test in flight is never answered now: its caller hears so.

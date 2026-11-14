@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 import { viewMatrix } from "../../view";
 import { cameraFrame, distanceForPxPerUm, type Box3, type TerrainCamera } from "../camera";
 import { transform } from "../mat4";
-import { DRAPE_MARGIN, DRAPE_NEAR_RATIO, drapeLayers, drapeTexels, drapeTiles, groundFootprint, type Pt } from "../footprint";
+import { DRAPE_MARGIN, DRAPE_SPLIT_RATIO, drapeLayers, drapeTexels, drapeTiles, groundFootprint, type Pt } from "../footprint";
 import { seededRandom } from "../synthetic";
 
 const ORIGIN = { x: 1_000_000, y: -200_000 };
@@ -148,15 +148,22 @@ describe("drapeLayers (map-rendering.md §5.6 \"Drape layers\")", () => {
     }
   });
 
-  it("adds a denser near layer over the near ground when the cap bites", () => {
+  it("splits a wide depth range by need: a near layer at the nearest point's density, the far one at the split depth's", () => {
     const box: Box3 = { minX: -400_000, maxX: 400_000, minY: -300_000, maxY: 300_000, minZ: 0, maxZ: 20_000 };
     const cam = camera({ target: { x: 0, y: 0, z: 0 }, pitchDeg: 60, widthPx: 1081, heightPx: 2402 }, 0.05);
-    const layers = drapeLayers(cam, box, ORIGIN, { maxSide: 4096, maxPixels: 4096 * 4096 });
+    const layers = drapeLayers(cam, box, ORIGIN, roomy);
     expect(layers.map((l) => l.role)).toEqual(["near", "far"]);
     const [near, far] = layers;
-    expect(near.view.pxPerUm).toBeGreaterThan(far.view.pxPerUm);
-    expect(far.view.pxPerUm).toBeLessThan(DRAPE_NEAR_RATIO * far.needPxPerUm);
-    // The near layer lies within the far one (both contain the near footprint).
+    // the cap does not bite: each layer is at its need
+    expect(near.view.pxPerUm).toBeCloseTo(near.needPxPerUm, 9);
+    expect(far.view.pxPerUm).toBeCloseTo(far.needPxPerUm, 9);
+    expect(far.needPxPerUm).toBeLessThan(near.needPxPerUm);
+    // fewer texels than one layer over everything at the nearest point's density
+    const one = drapeLayers({ ...cam, pitchDeg: 0 }, box, ORIGIN, roomy);
+    expect(one).toHaveLength(1);
+    const single = (far.view.widthPx / far.view.pxPerUm) * (far.view.heightPx / far.view.pxPerUm) * near.needPxPerUm ** 2;
+    expect(drapeTexels(layers.map((l) => l.view))).toBeLessThan(single / 2);
+    // The near layer lies within the far one.
     const [cx, cy] = layerClip(far.view, near.view.centreX - ORIGIN.x, near.view.centreY - ORIGIN.y);
     expect(Math.abs(cx)).toBeLessThan(1);
     expect(Math.abs(cy)).toBeLessThan(1);
@@ -167,6 +174,40 @@ describe("drapeLayers (map-rendering.md §5.6 \"Drape layers\")", () => {
     const [nx, ny] = layerClip(near.view, 0, nearY);
     expect(Math.abs(nx)).toBeLessThan(1);
     expect(Math.abs(ny)).toBeLessThan(1);
+    // Every on-screen ground point is drawn at least at the density the screen needs there.
+    const m = f.matrix;
+    for (let i = 0; i <= 20; i++)
+      for (let j = 0; j <= 20; j++) {
+        const x = box.minX + ((box.maxX - box.minX) * i) / 20, y = box.minY + ((box.maxY - box.minY) * j) / 20;
+        const [qx, qy, , w] = transform(m, x, y, 0);
+        if (w <= 0 || Math.abs(qx) > w || Math.abs(qy) > w) continue;
+        const depth = (x - f.eye[0]) * f.forward[0] + (y - f.eye[1]) * f.forward[1] - f.eye[2] * f.forward[2];
+        const layer = layers.find(({ view }) => {
+          const [lx, ly] = layerClip(view, x, y);
+          return Math.abs(lx) <= 1 && Math.abs(ly) <= 1;
+        })!;
+        expect(layer.view.pxPerUm).toBeGreaterThanOrEqual((f.focalPx / depth) * (1 - 1e-9));
+      }
+  });
+
+  it("scales both layers down together under the cap", () => {
+    const box: Box3 = { minX: -400_000, maxX: 400_000, minY: -300_000, maxY: 300_000, minZ: 0, maxZ: 20_000 };
+    const cam = camera({ target: { x: 0, y: 0, z: 0 }, pitchDeg: 60, widthPx: 1081, heightPx: 2402 }, 0.05);
+    const free = drapeLayers(cam, box, ORIGIN, roomy);
+    const capped = drapeLayers(cam, box, ORIGIN, { maxSide: 4096, maxPixels: 2e6 });
+    expect(capped.map((l) => l.role)).toEqual(["near", "far"]);
+    expect(drapeTexels(capped.map((l) => l.view))).toBeLessThanOrEqual(2e6);
+    const ratio = (l: (typeof capped)[number]) => l.view.pxPerUm / l.needPxPerUm;
+    expect(ratio(capped[0])).toBeLessThan(1);
+    expect(ratio(capped[0])).toBeCloseTo(ratio(capped[1]), 1);
+    expect(capped[1].needPxPerUm).toBeCloseTo(free[1].needPxPerUm, 12);
+  });
+
+  it("keeps one layer when the depth range is narrow", () => {
+    const box: Box3 = { minX: -400_000, maxX: 400_000, minY: -300_000, maxY: 300_000, minZ: 0, maxZ: 0 };
+    const layers = drapeLayers(camera({ target: { x: 0, y: 0, z: 0 }, pitchDeg: 10 }), box, ORIGIN, roomy);
+    expect(layers).toHaveLength(1);
+    expect(DRAPE_SPLIT_RATIO).toBe(2);
   });
 
   it("keeps one layer at pitch 0 even when capped", () => {

@@ -179,7 +179,7 @@ const DOC = { cone: { x: 35, y: 25, radiusMm: 22, heightM: 45, groundMPerMm: 15 
 
 type DocApi = {
   frame: { mesh: { draws: number; matrix: Float32Array } | null } | null;
-  engineStats: () => { terrain?: { drapeRenders: number; drapeBytes: number; fieldBytes: number; layers: { role: string; widthPx: number; heightPx: number; ratio: number }[] } };
+  engineStats: () => { terrain?: { drapeRenders: number; drapeBytes: number; fieldBytes: number; layers: { role: string; widthPx: number; heightPx: number; pxPerUm: number; ratio: number }[] } };
   project: (x: number, y: number) => [number, number] | null;
   setCamera: (c: { xMm?: number; yMm?: number; pitch?: number; bearing?: number; zoom?: number }) => void;
   compare2d: () => { maxDiff: number; over: number; pixels: number };
@@ -262,14 +262,15 @@ test.describe("the map as the drape (map-rendering.md §5.6, H6)", () => {
     await expect.poll(async () => purpleIn(await pixels(page)), { timeout: 5_000 }).toBeGreaterThan(200);
   });
 
-  test("the cap: a near layer over the near ground when one texture is too coarse, and the budget's third never exceeded", async ({ page }) => {
+  test("split by need: a near layer over the near ground, a coarser far one, and the budget's third never exceeded", async ({ page }) => {
     // close to the cone and tilted: the screen's bottom edge needs far more texels than its top
     const query = "doc=course&field=cone&pitch=60&bearing=0&e=2&zoom=6&x=46&y=19";
     await open(page, query);
     let t = await terrainStats(page);
     expect(t.layers.map((l) => l.role)).toEqual(["near", "far"]);
-    expect(t.layers[1].ratio).toBeLessThan(0.7);
-    expect(t.layers[0].ratio).toBeGreaterThan(t.layers[1].ratio);
+    expect(t.layers[0].pxPerUm).toBeGreaterThan(t.layers[1].pxPerUm * 1.5);
+    // the club budget's third is room enough here: each at what its ground needs
+    for (const l of t.layers) expect(l.ratio).toBeCloseTo(1, 6);
     const texels = (layers: { widthPx: number; heightPx: number }[]) => layers.reduce((n, l) => n + l.widthPx * l.heightPx, 0);
     expect(texels(t.layers)).toBeLessThanOrEqual((150 * 1024 * 1024) / 3 / (16 / 3));
     // the leg from 31 to 32 at the camera's target, drawn from the near layer
