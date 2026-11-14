@@ -114,6 +114,13 @@ describe("demProvidersFromEnv (§7.0 answer 4)", () => {
     expect(demProvidersFromEnv({ MAP_DEM_PROVIDERS: "lantmateriet", MAP_DEM_LANTMATERIET_AUTH: CRED, MAP_DEM_LANTMATERIET_RESOLUTION_M: "1" }, f).map((p) => p.info.id)).toEqual(["lantmateriet-1m"]);
   });
 
+  it("trims the newline a secret typed at the prompt ends in", async () => {
+    const server = fakeRangeServer({ [`${STAC}/search?collections=dtm-cog&bbox=18%2C59.3%2C18.1%2C59.35&limit=100`]: json({ features: [] }) });
+    const [lm] = demProvidersFromEnv({ MAP_DEM_PROVIDERS: "lantmateriet", MAP_DEM_LANTMATERIET_AUTH: `${CRED}\n` }, server.fetch);
+    await lm.locate(BOX);
+    expect(server.requests[0].authorization).toBe(`Basic ${Buffer.from(CRED).toString("base64")}`);
+  });
+
   it("leaves Lantmäteriet off without a credential of the right form, and never prints it", () => {
     const warnings: string[] = [];
     const warn = (m: string) => warnings.push(m);

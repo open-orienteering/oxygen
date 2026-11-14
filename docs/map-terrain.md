@@ -10,7 +10,10 @@ record: `docs/research/vector-map-pipeline/10-terrain.md` (with spike T1,
 Implementation: `packages/shared/src/terrain/` — pure TypeScript, no Node
 APIs, no randomness. `terrain/graph/` is §1–2 (H1), `terrain/solve/` is
 §3 (H2), `terrain/field/` is §4–5 and `terrain/index.ts` is
-`deriveTerrain` (§5.5, H3), `terrain/anchor/` is §6 (H9). Consumers
+`deriveTerrain` (§5.5, H3), `terrain/anchor/` is §6 (H9); §4.9, the
+ground field (§7.4) and `deriveAnchoredTerrain` (§5.5) are H10's. §7's
+fetch, reader and job are the API's (`packages/api/src/map-store/dem*.ts`,
+H10). Consumers
 import by subpath, `@oxygen/shared/src/terrain/graph/index.js`,
 `@oxygen/shared/src/terrain/solve/index.js`,
 `@oxygen/shared/src/terrain/field/index.js`,
@@ -818,16 +821,49 @@ than not (clear on a tie, and with no region cells).
 0 is the floor of the lowest region of each connected set (§3); sets no
 chain joins float independently. `datum` is `relative`, `zOffsetM` 0.
 
-### 4.9 With a DEM anchor (pending)
+### 4.9 With a DEM anchor
 
-Sources then carry each anchored chain's height instead of floor or
-floor + 1; the passes and weights are the same, and the field is written
-with `datum: "absolute"` and its own `source` (§4.0 answer 2). Not built
-in H3. It changes `terrain/field/`: the distance passes then carry the
-nearest seed's height as well as its distance, `bandHeights` reads those
-instead of floor and floor + 1, `buildHeightField` takes the source,
-datum and offset, and the header schema's `source` enum gains the DEM
-value.
+Built in H10 (§7.0 answer 1). `buildHeightField(graph, levels, { anchored })`
+with
+
+```ts
+interface AnchoredFieldInput {
+  chainHeightsM: Float64Array;   // per chain, metres above the DEM's datum; NaN = none
+  chainConfident?: Uint8Array;   // per chain, good evidence for §4.7; absent = §4.7's rule
+  source: string;                // `contours.<provider>` (§7.0 answer 3)
+  provider?: HeightFieldProvider; // §5.1
+}
+```
+
+writes the field from per-chain absolute heights (§6.8) instead of floor
+and floor + 1; the passes and weights are §4.3–4.5's.
+
+- **Offset.** `zOffsetM` is the whole interval at or below the lowest
+  chain height (`anchoredOffsetM`); heights count in intervals above it,
+  so §4.8's quantisation is unchanged (±512 intervals of relief).
+- **Sources.** §4.2's walk decides LOW, UP and FORM by the floors as
+  before; each seed carries its chain's height as an int16 in 1/64
+  interval above the offset. A chain without a height seeds nothing. A
+  form line takes its band's floor + ½, the floor being the mean height
+  of the band's LOW seeds (else its UP seeds less one interval); a band
+  with neither has no form seeds.
+- **Distance.** `geodesicNearest(raster, seeds, values)` is §4.3's pass
+  carrying the nearest seed's value (the first seed to reach a cell wins
+  a tie): three passes, three extra int16 planes over the graph raster.
+- **Height.** Where two kinds reach a cell and one is LOW or UP: the
+  weighted mean `(w_low·h_low + w_up·h_up + w_form·h_form) / Σw` of the
+  nearest seeds' heights — §4.4's formula when the heights are floor,
+  floor + 1 and floor + ½. A top: `h_low + ½ · min(1, R / 20 m) · d_low /
+  d_max`; a pit the mirror from `h_up`; form only: `h_form`; nothing:
+  the band's floor + ½, else no height (a hole the blur fills).
+- **Confidence.** §4.7 with `chainConfident` in place of "good", and a
+  weak region not held against it (its levels come from the DEM).
+- **Header.** `datum: "absolute"`, the `source` and `provider` given.
+  Per-chain heights never enter the format (§4.0 answer 2).
+
+On a regular ladder this is the relative field shifted by the anchored
+offset to within the quantisation (test). The extra planes add 6 B per
+graph cell over §4's (club-full: 46 M cells, ~280 MB; §7.7).
 
 ## 5. The height field
 
@@ -835,8 +871,8 @@ value.
 
 ```ts
 interface HeightFieldHeader {
-  version: number;          // TERRAIN_VERSION (1), bumped when §1–5 change the field a document derives
-  source: "contours";       // H10 adds DEM sources
+  version: number;          // TERRAIN_VERSION (1), bumped when §1–7 change the field a document derives
+  source: "contours" | string; // or a DEM source matching DEM_FIELD_SOURCE_RE (§7.0 answer 3)
   cellMm: number; x0: number; y0: number; width: number; height: number;  // §2's Grid, y up
   groundMPerMm: number;
   intervalM: number;        // 5, or 2.5 for ISSprOM (answer 8)
@@ -844,9 +880,23 @@ interface HeightFieldHeader {
   zOffsetM: number;         // metres = z · zScaleM + zOffsetM
   datum: "relative" | "absolute";
   zMin: number; zMax: number; // over data cells; both 0 without data
+  provider?: HeightFieldProvider; // a DEM-based field's (§7.1); absent on `contours`
+}
+interface HeightFieldProvider {
+  id: string;               // provider and resolution: "lantmateriet-2m", "glo30-30m"
+  resolutionM: number; grade: "anchor" | "coarse";
+  licence: string;          // "CC BY 4.0"
+  attribution: string;      // "© Lantmäteriet" — shown with the surface (answer 16)
+  verticalDatum: string;    // "RH 2000", "EGM2008"
 }
 interface HeightField { header: HeightFieldHeader; z: Int16Array; confident: Uint8Array }
 ```
+
+`DEM_FIELD_SOURCE_RE` is `^(ground|contours)\.[a-z0-9][a-z0-9-]{0,47}$`:
+`ground.<provider>` is the DEM itself on the field grid (§7.4),
+`contours.<provider>` the anchored contour field (§4.9). The schema
+rejects any other source. An optional block absent on `contours` leaves
+its bytes and `TERRAIN_VERSION` unchanged (the golden test).
 
 Values sit at cell centres, row-major from the lower-left. `confident`
 is bit-packed, `⌈width · height / 8⌉` bytes, cell `i` at bit `i % 8` of
@@ -909,7 +959,23 @@ function deriveTerrain(doc: MapDocument, opts?: DeriveTerrainOptions): { field: 
 ```
 
 `buildContourGraph` (§2) → `solveTerrain` (§3) → `buildHeightField`
-(§4); `null` when the document has no contours. The interval is the
+(§4); `null` when the document has no contours.
+
+```ts
+interface AnchoredDem { sample: DemSampler; grade: "anchor" | "coarse"; demCellM: number; providerId: string; provider?: HeightFieldProvider }
+function deriveAnchoredTerrain(doc: MapDocument, dem: AnchoredDem, opts?: DeriveTerrainOptions):
+  (DerivedTerrain & { anchor: AnchorReport; heights: AnchoredHeights["report"]; acceptedOfCovered: number }) | null;
+```
+
+§7.5's derive: the graph, `anchorLevels` (§6), `solveTerrain` with the
+DEM's side as `external`, `anchoredHeights` (§6.8), then §4.9's field
+with source `contours.<providerId>`. A chain the DEM gave no height but
+§3 a level takes the median component offset plus `I · level`, without
+confidence; one with neither seeds nothing. Confidence follows
+`chainConfident` (a DEM height, or a neighbours' height not bounded) for
+an anchor-grade model, §4.7's rule for a coarse one. `acceptedOfCovered`
+(accepted over covered contour length, §6.4) is the misalignment gate's
+input (§7.0 answer 2). The interval is the
 assumed one (answer 8): 2.5 m when the document's library id starts with
 `ISSprOM`, else 5 m. The field is built whatever the report says: the 3D
 gate (`report.share.decided` ≥ 80 %, answer 7) is the viewer's (H7). The
@@ -1336,6 +1402,193 @@ heights). Storage, the job and the route are `docs/map-storage.md` §4.7.
    a Swedish map on an instance without the credential included (widens
    answer 13's "outside LM coverage"; its reduced role is unchanged).
 
+### 7.1 Providers
+
+`packages/api/src/map-store/dem-providers.ts`. In this order; the first
+whose job does not end `no-coverage` serves the document
+(`docs/map-storage.md` §4.7 "The DEM").
+
+| | Lantmäteriet (anchor grade) | Copernicus GLO-30 (coarse) |
+|---|---|---|
+| Id | `lantmateriet-2m` (`-1m` with `MAP_DEM_LANTMATERIET_RESOLUTION_M=1`) | `glo30-30m` |
+| Locate | STAC `https://api.lantmateriet.se/stac-hojd/v1/search?collections=dtm-cog&bbox=w,s,e,n` (WGS 84), `next` links followed (10 pages at most); per item the asset whose type is a cloud-optimised GeoTIFF, else the `data` role's GeoTIFF | computed: one tile per 1° cell, `copernicus-dem-30m.s3.amazonaws.com/Copernicus_DSM_COG_10_<N|S>dd_00_<E|W>ddd_00_DEM/….tif` by its south-west corner |
+| Tiles | 10 km COGs, SWEREF 99 TM (EPSG:3006), 1 m with overviews 2, 4, … m, PixelIsArea, nodata −9999 | 1° COGs, WGS 84, 1″ × 1–2″ (PixelIsPoint), no nodata; a missing tile (sea) is no data, not a failure |
+| Read at | the 2 m overview (answer 17; §7.6) | full resolution |
+| Auth | Basic, the instance's one Geotorget account (answer 5): `MAP_DEM_LANTMATERIET_AUTH` = `user:password` from the instance's secret store (`docs/deploy-gcp-cloud-run.md` "Height data") | none |
+| Vertical datum | RH 2000 | EGM2008 (no conversion: sub-metre here, and the coarse model's offsets are per component anyway) |
+| Licence | **CC BY 4.0** | the Copernicus DEM licence (free, with attribution) |
+| Attribution | **© Lantmäteriet** | © DLR e.V. 2010–2014 and © Airbus Defence and Space GmbH 2014–2018, provided under COPERNICUS by the European Union and ESA |
+
+**Licence correction** (answer 16): research 10 §3 says Lantmäteriet's
+grid is open data under CC0; its height data is CC BY 4.0 and needs the
+attribution. The licence and the attribution are in the header's
+`provider` block of both stored fields (§5.1), so they travel with the
+bytes, and in the descriptor (`docs/map-storage.md` §4.7); the viewer
+shows the attribution with the surface (H11).
+
+**Fetching is opt-in** (§7.0 answer 4). `MAP_DEM_PROVIDERS` is a comma
+list of `lantmateriet`, `glo30`; empty or unset is none, so tests, the E2E
+stack and a venue box reach no external host. Lantmäteriet named without
+a credential of the form `user:password` stays off with a warning.
+
+**The credential's reach.** It is sent as `Authorization: Basic` only
+over https to `lantmateriet.se` and its subdomains. Redirects are
+followed by hand (five at most): a hop to another host goes without the
+header, a hop to plain http is refused. It never appears in a log, an
+error column or a row; a stored error has any `Basic …` value masked.
+
+### 7.2 Reading the COG
+
+`packages/api/src/map-store/dem-cog.ts`. A window of one level of a COG,
+read by HTTP range through an injected fetch (tests serve the recorded
+fixture; no test opens a socket).
+
+- **Profile.** Classic little-endian TIFF, one float32 sample, tiled,
+  DEFLATE (8 or 32946) or none, predictor 3 (floating point) or none,
+  overviews as further IFDs (`NewSubfileType` bit 0; masks skipped).
+  Anything else — BigTIFF, big-endian, other compression, strips — is a
+  `format` failure. T2's tiles of both providers have this profile; the
+  reader matched `geotiff` exactly on them (decision log, H10).
+- **Georeference.** `ModelPixelScale`, `ModelTiepoint`, the geokeys'
+  projected (3072) or geographic (2048) EPSG code and raster type; a
+  PixelIsPoint tiepoint is moved half a pixel to the area corner, and an
+  overview's pixel is the full resolution's times `full width / its
+  width` (GDAL's convention). `GDAL_NODATA` and NaN read as no data.
+- **Level.** The coarsest whose pixel is at most the provider's target
+  (`chooseLevel`): 2 m for `lantmateriet-2m`.
+- **Bytes.** The header in 64 KiB blocks (at most 4 MiB, else "not a
+  COG"); the window's tiles in runs of adjacent byte ranges, one request
+  per run (up to 16 MiB); every request carries `Range` and must answer
+  206 — a 200 is a server without range support and fails (`http`), so a
+  ~400 MB tile is never pulled whole. 30 s per request. Inflate runs in
+  libuv's pool.
+- **Caps.** 16 tiles per document; 64 M window cells (256 MB of float32)
+  over all tiles: either is `over-cap`.
+
+### 7.3 The extent and the paper sampler
+
+`packages/api/src/map-store/dem.ts`. Through `mapGeo` only (10 §3), in
+the document's own frame (`documentPaperFrame(db, hash, 0)`, §7.0
+answer 2).
+
+- **Extent.** The stored header summary's bounds (native units → mm),
+  padded by the graph raster's 2 mm (§2.4) and 30 m of ground (§6.3's
+  probes and stencil): the contours' box is inside it, so no graph is
+  built before the fetch. Its WGS 84 box (edges sampled, eight points
+  each) locates the tiles; its box in each tile's CRS, one pixel wider,
+  is the window. Not the paper bounds of 10 §3: a margin beyond them.
+- **Paper → raster CRS.** `mm · unitsPerMm` → `paperToProjected` (grid
+  rotation, scale factor) → proj4 when the tile's CRS is not the
+  document's.
+- **Paper grid.** In the worker, the windows are resampled onto a
+  paper-aligned grid over the extent at the model's ground cell (at most
+  10 m; coarser if it would exceed 64 M cells): each cell centre's
+  raster-CRS position is exact at lattice nodes ≤ 250 m apart and
+  bilinear between (within 0.05 m on a 600 m map in WGS 84, test), then
+  bilinear in whichever window holds it. `DemSampler` (§6.1) is bilinear
+  on this grid, no-data aware. Per-sample proj4 would be ~15 M calls on
+  club-full.
+
+The anchor (§6) samples this grid at the model's own resolution — not
+the field grid: 10 §3's "resampled onto the same paper-space grid" holds
+for the stored ground field only.
+
+### 7.4 The ground field
+
+`buildGroundField(sample, { grid, source, provider })`
+(`terrain/field/ground.ts`): one value per cell of the `contours`
+field's grid (`cellMm`, `x0`, `y0`, `width`, `height` equal, so both
+sources line up cell for cell and the renderer sees one shape, 10 §3) —
+the sampler at the cell centre where the cell spans at most 1.5 model
+cells, else the mean of n × n samples (n = ⌈cell / model cell⌉ ≤ 8) so
+club-full's 6 m cell does not alias a 2 m model. No-data where more than
+half the samples are; not masked to the mapped area. `zScaleM` is
+`intervalM / 64` as for the contours (no renderer change), `zOffsetM`
+the whole interval at or below the lowest value, `datum: "absolute"`.
+The confidence plane is all set for an anchor-grade model and all clear
+for a coarse one (answer 13: a 30 m surface model). Source
+`ground.<provider>`.
+
+### 7.5 The anchored field and the gate
+
+In a worker of its own (`dem-worker.ts`): the paper grid (§7.3),
+`deriveAnchoredTerrain(doc, dem)` (§5.5), then:
+
+| Result | When |
+|---|---|
+| `no-contours` | `deriveAnchoredTerrain` is null |
+| `no-coverage` | no chain is covered (`anchor.coverage = 0`) |
+| `misaligned` | anchor grade and `acceptedOfCovered < 0.5` (§7.0 answer 2) |
+| done | the ground field on the anchored field's grid, both encoded |
+
+A coarse model has no misalignment gate: its spread is wide by nature
+(T2), and its heights are offsets on §3's levels (§6.8). Both fields are
+keyed by `TERRAIN_VERSION`, whose bump rule now covers §4.9, §6 and §7:
+a change to what a document's DEM rows hold bumps it, and the next
+request re-fetches.
+
+### 7.6 The live check (pending the operator's run)
+
+Answer 17 adopts the 2 m overview "once it has confirmed the anchor
+spread holds at 2 m and that the download service serves HTTP range
+requests". That is a check against the live service with a real
+credential, which no session makes: `pnpm --filter @oxygen/api
+dem:live-check -- --map <club map>` (`packages/api/scripts/dem-live-check.ts`,
+logic in `map-store/dem-live-check.ts`, tested against the fixture),
+run by the operator with their own `MAP_DEM_LANTMATERIET_AUTH`. It
+locates the map's tiles, sends one `Range` request through any
+redirect, reads the tile profile, and runs `anchorLevels` at 1 m and
+2 m. It prints aggregates only and writes nothing. **Pass**: 206 with
+`Content-Range`; the credential reached Lantmäteriet's hosts only; the
+profile reads and has a 2 m level; at 2 m the accepted share of covered
+length is within 2 points of 1 m's and the half-IQR median ≤ 0.3 I. On
+a fail the instance sets `MAP_DEM_LANTMATERIET_RESOLUTION_M=1` (75 MB
+for club-2026 instead of 22 MB) and the result is recorded here. **Not
+run yet** (2026-11-14): the 2 m default ships on T2's evidence and this
+check is pending; H10 is done without it (the coordinator's brief).
+
+### 7.7 Measured on the corpus
+
+A `.local/` script (not committed: real club maps and a licensed DEM)
+runs the job's path on each corpus map without a network: T2's two
+Lantmäteriet tiles (`m657_67`, `m657_68`, the user's download) served by
+a file-backed range fetch behind a fake STAC, `fetchDemMosaic`, then
+`deriveDemFields` in-process, one map per process. "added" is the peak
+RSS above the process with both tiles loaded. 2026-11-14, 16-core
+machine shared with other sessions:
+
+| Map | read at | window cells | range read | requests | fetch s | derive s | added peak | field | accepted % (T2, 1 m) | decided % | DEM heights % |
+|---|---|---|---|---|---|---|---|---|---|---|---|
+| crop-a | 2 m | 1.0 M | 4.4 MB | 10 | 0.1 | 1.1 | 23 MB | 696 × 511, 0.2 mm | 99.9 (99.9) | 100 | 99.9 |
+| crop-a | 1 m | 4.0 M | 12.1 MB | 26 | 0.3 | 3.4 | 25 MB | same | 99.9 | 100 | 99.9 |
+| crop-b | 2 m | 1.5 M | 7.7 MB | 18 | 0.2 | 1.2 | 24 MB | 464 × 610, 0.2 mm | 99.9 (99.9) | 97.6 | 99.9 |
+| crop-b | 1 m | 6.1 M | 16.7 MB | 38 | 0.4 | 3.7 | 24 MB | same | 99.9 | 97.6 | 99.9 |
+| club-2026 | 2 m | 8.4 M | 32.0 MB | 58 | 0.6 | 11.7 | 198 MB | 1570 × 2211, 0.2 mm | 95.1 (94.9) | 97.4 | 95.1 |
+| club-2026 | 1 m | 33.6 M | 90.8 MB | 170 | 1.8 | 33.2 | 396 MB | same | 95.0 | 97.4 | 95.0 |
+| club-full | 2 m | 35.6 M | 76.0 MB | 152 | 1.6 | 41.4 | 1010 MB | 2355 × 1231, 0.4 mm | 96.7 (96.6) | 97.2 | 96.7 |
+| club-full | 1 m | 142 M | — | — | — | — | — | `over-cap` (64 M window cells) | — | — | — |
+| sprint | 2 m | 0.9 M | 5.3 MB | 11 | 0.1 | 3.3 | 35 MB | 2068 × 1423, 0.2 mm | 90.5 (90.5) | 94.3 | 90.5 |
+| sprint | 1 m | 3.4 M | 15.1 MB | 27 | 0.3 | 4.3 | 58 MB | same | 90.5 | 94.3 | 90.5 |
+
+- **The spread holds at 2 m on the corpus**: the accepted share of
+  covered contour length at the tiles' own 2 m overview equals the 1 m
+  model's within 0.1 point on every map (and T2's 1 m figures). That is
+  the first half of answer 17's condition, measured offline on the same
+  COGs; range support, the redirect and the STAC assets' profile remain
+  for §7.6's live run.
+- **Bytes**: 2 m reads about a third of 1 m's (club-2026 32 MB against
+  91 MB; answer 17 estimated 22 / 75 MB for the bare extent — this one
+  carries §7.3's 30 m margin and whole 512-pixel tiles).
+- **club-full needs the 2 m overview**: at 1 m its window is 142 M cells,
+  over the 64 M cap; a fail of §7.6 would leave such maps without a DEM
+  unless the cap is raised with the instance's memory.
+- **Memory and time**: the derive's added peak is the contour derive's
+  (H4: 840 MB on club-full) plus §4.9's three planes and the paper grid;
+  41 s on club-full, under the worker's 240 s. The window cells move to
+  the worker (transferred). One derive of either kind runs at a time per
+  instance (`docs/map-storage.md` §4.7), so on the 4 GiB Cloud Run
+  instance the DEM derive's ~1.0 GB does not stack with the contours'.
+
 ## Tests
 
 | Test | Covers |
@@ -1370,6 +1623,15 @@ heights). Storage, the job and the route are `docs/map-storage.md` §4.7.
 | `terrain/anchor/__tests__/anchor-solve.test.ts` | with §3's `solveTerrain`: a wrong tick against the DEM — the DEM side decides, the disagreement counted; `anchoredHeights` on a real solution (§3.0 answer 1, §6.3, §6.8) |
 | `terrain/anchor/__tests__/synthetic-dem.ts` | analytic DEMs (cone, pit, plane), rings, a seeded generator |
 | `.local/h9/anchor.mts`, `side.mts`, `heights.mts` (not committed) | T2's corpus aggregates and side reproduced, the §6.0 answer 3 target, §3.0's index target per index phase, anchored heights after the solve (§6.10) |
+| `terrain/field/__tests__/anchored.test.ts` | `geodesicNearest` carries the nearest seed's value at `geodesicDistance`'s distances, refuses mismatched values; the anchored cone at absolute heights, `datum` absolute, the offset a whole interval below; the relative field shifted on a regular ladder; a chain off its ladder bends the surface there only; a chain without a height seeds nothing; confidence from `chainConfident`; determinism and round trip, no chain heights in the bytes; mismatched heights refused; `anchoredOffsetM`; the header's DEM sources and provider block accepted and rejected; the ground field on a given grid, the box mean over a fine model, coarse unconfident, no-data only where the DEM has none (§4.9, §5.1, §7.4) |
+| `terrain/__tests__/derive-anchored.test.ts` | `deriveAnchoredTerrain` on the hill with an analytic cone: absolute heights, provider, the relative field's grid, `acceptedOfCovered` high aligned and under ½ off-centre, coarse grade, null without contours, determinism (§5.5, §7.5) |
+| `packages/api/src/__tests__/map-dem-cog.test.ts` | §7.2 against the synthetic COG: georeference and pyramid, PixelIsPoint and a geographic CRS without nodata, `chooseLevel`, BigTIFF / big-endian / garbage as `format`, a server ignoring `Range` and 401 / 403 / 503, a 2 m window by range in one run per tile row, every level with and without DEFLATE and predictor, nodata, a box beside the raster, `over-cap`, a cut-short tile |
+| `packages/api/src/__tests__/map-dem-providers.test.ts` | §7.1: the STAC search (box, Basic auth, `next` links, the COG asset, duplicates), no-coverage, 401 / 403 / 429 / 502 / not JSON without the secret in the message, 1 m; the asset choice; the credential's hosts, redirects kept / dropped / refused; GLO-30 tile names in every quadrant, the 1° tiles, no credential, the tile cap; `demProvidersFromEnv` opt-in, order, the credential's form, warnings without the secret |
+| `packages/api/src/__tests__/map-dem.test.ts` | §7.3: the extent's padding and WGS 84 box, null without CRS / origin / known code / bounds; the projection with and without proj4, a rotated box; the paper grid exact through rotation and scale factor, within 0.6 mm of height (0.06 m of position) through a WGS 84 window, two windows, the cell budget; `fetchDemMosaic` over two tiles at 2 m with Range and auth on every tile request, no-coverage, GLO-30's missing tile skipped and Lantmäteriet's failing, the mosaic cap |
+| `packages/api/src/__tests__/map-dem-worker.test.ts` | §7.4–7.5 on the recorded fixture: both fields on the `contours` grid with the provider block, heights against the cone, the reports; the worker thread gives the same bytes; `misaligned`, `no-contours`; GLO-30 coarse and unconfident |
+| `packages/api/src/__tests__/map-dem-live-check.test.ts` | §7.6 against the recorded fixture: the pass, a server without range support, the spread rule both ways, the credential's reach; no secret in the report |
+| `packages/api/src/__tests__/helpers/{synthetic-cog.ts,dem-fixture.ts}` | the recorded fixture: a COG writer (classic TIFF, DEFLATE, predictor 3, overviews) from analytic surfaces, a fake range server; a Lantmäteriet tile with a cone under the test hill, a GLO-30 piece, a fake STAC with switchable failures — no real DEM bytes, no socket |
+| `.local/h10/dem-mem.mts` (not committed) | §7.7: the job's path on the corpus with T2's tiles — window, bytes, requests, time, added peak, accepted share at 2 m and 1 m |
 
 ## Pending in this chapter
 
@@ -1382,8 +1644,13 @@ heights). Storage, the job and the route are `docs/map-storage.md` §4.7.
   the band weighting leaves a slight kink at each contour (visible as
   faint terraces in flat ground); a TIN with medial-axis points (10 §2.2)
   is the alternative if that matters. No row.
-- §4.9: the anchored (absolute) field from §6.8's per-chain heights
-  (`anchoredHeights`). It changes `terrain/field/`, outside H9's row and
-  area (H9 delivers the per-chain heights); no row holds it yet — H10
-  re-derives the field when a DEM arrives.
-- §7 DEM providers, the paper → projected sampler (H10).
+- §7.6: the live check against Lantmäteriet's service (range requests
+  through the redirect, the STAC assets' profile) is pending the
+  operator's run with their own credential; the 2 m default ships on
+  §7.7's offline evidence. Record its result in §7.6.
+- §7: a DEM for a rotation-corrected pin (a per-pin DEM, §7.0 answer 2)
+  and for a document without contours (no field grid to resample onto);
+  other national 1 m models (answer 13); blending the two surfaces
+  (10 §3, later); a geoid conversion for GLO-30's EGM2008 heights.
+- §7: the viewer's choice of surface and the attribution shown with it
+  (H11).

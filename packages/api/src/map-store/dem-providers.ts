@@ -205,11 +205,12 @@ export function demProvidersFromEnv(env: NodeJS.ProcessEnv, fetch: RangeFetch, w
   for (const n of names) if (n !== "lantmateriet" && n !== "glo30") warn(`ignoring unknown DEM provider ${JSON.stringify(n)} in MAP_DEM_PROVIDERS`);
   const out: DemProvider[] = [];
   if (names.includes("lantmateriet")) {
-    const cred = env.MAP_DEM_LANTMATERIET_AUTH ?? "";
+    // trimmed: a secret typed at `gcloud secrets create --data-file=-` ends in a newline
+    const cred = (env.MAP_DEM_LANTMATERIET_AUTH ?? "").trim();
     const res = env.MAP_DEM_LANTMATERIET_RESOLUTION_M;
     const resolutionM = res === "1" ? 1 : 2;
     if (res !== undefined && res !== "" && res !== "1" && res !== "2") warn(`MAP_DEM_LANTMATERIET_RESOLUTION_M must be 1 or 2; reading 2`);
-    if (/^[^:]+:.+$/s.test(cred)) out.push(lantmaterietProvider({ fetch, credential: cred, resolutionM }));
+    if (/^[^:\s]+:\S.*$/s.test(cred)) out.push(lantmaterietProvider({ fetch, credential: cred, resolutionM }));
     else warn(cred === "" ? "Lantmäteriet is named in MAP_DEM_PROVIDERS but MAP_DEM_LANTMATERIET_AUTH is not set; it is off" : "MAP_DEM_LANTMATERIET_AUTH is not of the form user:password; Lantmäteriet is off");
   }
   if (names.includes("glo30")) out.push(glo30Provider({ fetch }));

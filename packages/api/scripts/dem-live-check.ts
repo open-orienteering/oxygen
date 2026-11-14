@@ -20,7 +20,7 @@ import { runLiveCheck } from "../src/map-store/dem-live-check.js";
 const args = process.argv.slice(2);
 const at = args.indexOf("--map");
 const path = at >= 0 ? args[at + 1] : undefined;
-const credential = process.env.MAP_DEM_LANTMATERIET_AUTH ?? "";
+const credential = (process.env.MAP_DEM_LANTMATERIET_AUTH ?? "").trim();
 if (!path || !/^[^:]+:.+$/s.test(credential)) {
   console.error("usage: MAP_DEM_LANTMATERIET_AUTH=user:password dem-live-check --map <club-map.ocd|.omap>");
   process.exit(2);

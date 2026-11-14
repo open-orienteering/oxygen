@@ -40,14 +40,15 @@ on `map_files` and `club_map_versions` for the GC and the source route),
 pipeline's storage, `20261107120000_vector_map_pipeline_drops` (E5,
 v0.6.1; `docs/migrations/2026-vector-map-pipeline.md`), and
 `20261113120000_map_patches` (row G3), `20261114120000_map_gps_tracks`
-(row G24) and `20261114130000_map_heightfields` (row H4). All in schema `oxygen`.
+(row G24), `20261114130000_map_heightfields` (row H4) and `20261115120000_map_dem_jobs` (row H10). All in schema `oxygen`.
 
 | Table | Key | Columns | Notes |
 |---|---|---|---|
 | `map_sources` | `file_hash CHAR(64)` | `kind` (`ocad`/`omap`), `bytes BYTEA`, `size_bytes`, `file_name`, `uploaded_by → users SET NULL`, `created_at` | the uploaded file; `bytes` is `STORAGE EXTERNAL` |
 | `map_documents` | `hash CHAR(64)` | `bytes BYTEA`, `size_bytes`, `format_version`, `importer_version`, `library_version`, `source_hash → map_sources RESTRICT`, `header JSONB`, `report JSONB`, `created_at`, `last_referenced_at` | the encoded document; `header` is the summary (§3), `report` the import report |
 | `map_previews` | `(document_hash, kind, key)` | `png BYTEA`, `created_at` | `document_hash → map_documents CASCADE`; thumbnails and symbol swatches, pure cache (§4.5) |
-| `map_heightfields` | `(document_hash, source, version)` | `bytes BYTEA` (`STORAGE EXTERNAL`), `size_bytes`, `header JSONB`, `report JSONB` — null together for a document without contours — `created_at` | `document_hash → map_documents CASCADE`; the terrain a document's contours imply and its report, pure cache (§4.7) |
+| `map_heightfields` | `(document_hash, source, version)` | `bytes BYTEA` (`STORAGE EXTERNAL`), `size_bytes`, `header JSONB`, `report JSONB` — null together for a document without contours — `created_at` | `document_hash → map_documents CASCADE`; the terrain a document's contours imply and its report, and the DEM's two fields (`ground.<provider>`, `contours.<provider>`), pure cache (§4.7) |
+| `map_dem_jobs` | `(document_hash, provider, version)` | `state`, `reason`, `error`, `attempts`, `next_attempt_at`, `claimed_by`, `heartbeat_at`, `created_at`, `updated_at` | `document_hash → map_documents CASCADE`; the DEM job's state (§4.7 "The DEM") |
 | `club_maps` | `id UUID` | `name`, `colour_profile`, `colour_overrides JSONB`, `north_lines_below`, `rotation_correction`, `created_by`, timestamps | a club's map as a series (06 §8) |
 | `club_map_versions` | `id UUID` | `club_map_id → club_maps CASCADE`, `seq`, `label`, `source_hash RESTRICT`, `document_hash RESTRICT`, `uploaded_by`, `uploaded_at`; `UNIQUE(club_map_id, seq)` | one edition; `uploadedAt` ordering, `seq` for display |
 | `map_files` (+) | — | `source_hash RESTRICT`, `document_hash RESTRICT`, `club_map_version_id → club_map_versions SET NULL` | the event's pins. `document_hash` is null until the import pins (or when it failed); `source_hash` is set on every live event's row (the E5 migration's guard) and null only on a soft-deleted event's row that never had a source — a file name without bytes. Since E5 the row holds no bytes (`file_data`, `file_hash`, `render_key` and the colour-stack columns are dropped) |
@@ -514,8 +515,8 @@ GET /api/map-documents/:hash/height.bin?v=<TERRAIN_VERSION>     the OXHF field (
 1. **The terrain version is in the URL** (`?v=`), so `immutable` names
    one content: a `TERRAIN_VERSION` bump changes the URL, and a request
    for another version than the current one is 404 — the library
-   route's precedent (§4.5). A DEM-based source (H10) adds its own query
-   parameter; `contours` is the only source today.
+   route's precedent (§4.5). A DEM-based source adds `?source=` (H10,
+   "The DEM" below); without it the route serves `contours`.
 2. **The terrain report lives on the height-field row**, not in the
    document row (`map_documents` is append-only, §1, and the report
    changes with `TERRAIN_VERSION`). A document without contours gets a
@@ -536,7 +537,7 @@ GET /api/map-documents/:hash/height.bin?v=<TERRAIN_VERSION>     the OXHF field (
 | Column | |
 |---|---|
 | `document_hash` | `→ map_documents CASCADE`; part of the key |
-| `source` | `TEXT`, part of the key: `contours` (this section); free text so a DEM-based source (H10) needs no migration |
+| `source` | `TEXT`, part of the key: `contours` (this section), or a DEM source `ground.<provider>` / `contours.<provider>` ("The DEM" below; free text, so H10 needed no change to this table) |
 | `version` | `INT`, part of the key: `TERRAIN_VERSION` (map-terrain §5.5); the container version stays inside the bytes |
 | `bytes` | `BYTEA STORAGE EXTERNAL`, nullable: `encodeHeightField(field)`, uncompressed; null when the document has no contours |
 | `size_bytes` | `INT`, nullable with `bytes` |
@@ -646,7 +647,112 @@ the previews, all four clauses and the 60 s positive cache included.
 
 **Not carried.** The field is not in the venue checkout snapshot (§7.2)
 or the per-event dump (§7.3): a box or a restore derives its own on the
-first request (the slice H split).
+first request (the slice H split). Nor are the DEM rows or `map_dem_jobs`:
+a box or a restore fetches its own, where its instance enables a provider.
+
+#### The DEM (H10)
+
+Research 10 §3–4; row H10; `docs/map-terrain.md` §7. A digital elevation
+model fetched for the document on the server, in the background, and
+derived into two more `map_heightfields` rows per provider. Decided with
+the user 2026-11-14 (map-terrain §7.0): the document's own frame with a
+misalignment gate; provider and resolution in `source`; one job table;
+fetching opt-in.
+
+| `source` | Content |
+|---|---|
+| `ground.<provider>` | the DEM resampled onto the `contours` field's grid (map-terrain §7.4); `report` = `{ dem: { provider, tiles, tilesRead, dataShare, fetchedAt } }` |
+| `contours.<provider>` | the contour field re-derived with the DEM's per-chain heights (map-terrain §4.9, §7.5), `datum: "absolute"`; `report` = the `TerrainReport` at the top level (so `share.decided` reads as for `contours`) plus `anchor` (the `AnchorReport`, map-terrain §6.9) and `heights` (§6.8's report) |
+
+`<provider>` is the provider and the resolution read: `lantmateriet-2m`
+(or `lantmateriet-1m`, `MAP_DEM_LANTMATERIET_RESOLUTION_M=1`) and
+`glo30-30m`. Research 10 §4's key `(document hash, provider, resolution)`
+is this `source` with `version = TERRAIN_VERSION` in H4's key. Both rows
+carry the provider's licence, attribution and vertical datum in the
+header's `provider` block (map-terrain §5.1), so they travel with the
+bytes. Both are written together, once, with `createMany …
+skipDuplicates`, never updated, cascade with the document, and are cache:
+deleting them costs a fetch. Raw tiles are not stored (§7.0 answer 3).
+
+**The job.** `map_dem_jobs`, migration `20261115120000_map_dem_jobs`, one
+row per `(document_hash, provider, version)`; `packages/api/src/map-store/dem-jobs.ts`:
+
+| `state` | `reason` | Meaning |
+|---|---|---|
+| `queued` | — | waiting for the engine |
+| `running` | — | claimed by `claimed_by`, heartbeat every 10 s; re-claimed after 60 s of silence |
+| `done` | — | both rows written |
+| `unavailable` | `no-georeference` (no CRS proj4 knows, no paper origin, no usable bounds), `no-coverage` (the provider has no tile there, or no contour chain is covered), `no-contours`, `over-cap` (H4's cap, or more than 16 tiles or 64 M window cells), `misaligned` (an anchor-grade DEM accepts under half of the contour length it covers, map-terrain §7.0 answer 2) | final; nothing written |
+| `failed` | `auth` (401 / 403), `http` (another status, no range support, a refused redirect), `format` (a TIFF the reader does not read), `timeout` (30 s per request, 240 s per derive, 10 min per job), `derive` (anything else) | retried from `next_attempt_at`: 1 min, 10 min, 1 h, 6 h after attempts 1–4 (`auth` never under 1 h); after the fifth attempt `next_attempt_at` is null and it is final |
+
+`CHECK`s hold the state to the five values, `reason` non-null exactly on
+`unavailable` and `failed`, and `error` (the message, never the
+credential) to 2000 characters. An instance without enabled providers
+never claims a job; a job of a provider not enabled on this instance is
+left for one that has it.
+
+| Trigger | |
+|---|---|
+| import stage 10 (§6.1) and the dedup short-cut | after the `contours` field, `enqueueDocumentDem` — not awaited, never fails the import |
+| the route | a request for a DEM source with no row and no job queues that provider's job |
+| a `no-coverage` ending | queues the next enabled provider (Lantmäteriet → GLO-30) |
+| the 60 s tick (`startDemJobEngine`) | resumes queued, due and stale jobs |
+
+`enqueueDocumentDem(db, hash)` queues the first enabled provider whose
+job has not ended `no-coverage`. The engine claims atomically
+(`updateMany` on a still-claimable row, like §6.2), then runs the job on
+the height field's derive queue (`serialisedDerive`), so one derive of
+either kind runs at a time per instance. A job: the cap check on the
+stored summary; `documentPaperFrame(db, hash, 0)` (§4.6, the source
+fallback included); the extent (map-terrain §7.3); the provider's tiles
+read by range on the main thread (§7.2); then a worker of its own
+(`dem-worker.ts`) builds the paper grid, `deriveAnchoredTerrain` and the
+ground field, and returns both encoded; the window buffers are
+transferred, not copied.
+
+**Memory, measured** (map-terrain §7.7, the corpus with T2's local
+tiles): added peak 23–35 MB on the crops and the sprint, 198 MB on
+club-2026, 1010 MB on club-full (41 s), at the 2 m overview — the order
+of the contour derive's (840 MB on club-full) and serialised with it, so
+the 4 GiB sizing (`deploy-gcp-cloud-run.md`) holds. The windows read
+(up to 64 M cells, 256 MB, refused above) are on the main thread until
+they are transferred to the worker.
+
+**Descriptor.** `course.mapMetadata.terrain` and `mapImport.review.terrain`
+gain `dem` (their other fields unchanged); it reads the job and row
+tables only, never waits:
+
+| `dem.state` | When | `provider` | `ground` / `anchored` |
+|---|---|---|---|
+| `disabled` | no provider enabled on this instance | null | null |
+| `unavailable`, `reason: "rotation-corrected"` | the event's pin has a `rotation_correction ≠ 0` (descriptor only; map-terrain §7.0 answer 2) | null | null |
+| `pending` | the first enabled provider not ended `no-coverage` has no job yet, or it is queued or running | its `HeightFieldProvider` | the routes; `anchored.decided` null — fetching one queues the job |
+| `ready` | that job is `done` | its `HeightFieldProvider` (licence, attribution) | the routes; `anchored.decided` = the anchored row's `share.decided` |
+| `failed` / `unavailable` | that job ended so | its `HeightFieldProvider` | null; `reason` |
+| `unavailable`, `reason: "no-coverage"` | every enabled provider ended `no-coverage` | null | null |
+
+`dem` is `{ state, reason, provider, ground: { url } | null, anchored:
+{ url, decided } | null }`. Showing the attribution with the drawn
+surface is the viewer's (H11).
+
+**Contract** with `?source=` (`packages/api/src/map-store/heightfield-routes.ts`).
+`source` absent or `contours` is the table above, unchanged. In order:
+
+| Condition | Status |
+|---|---|
+| `source` neither `contours` nor `ground.<id>` / `contours.<id>` (`^(ground|contours)\.[a-z0-9][a-z0-9-]{0,47}$`) | 400 `{error}`, with the hash and `v` checks |
+| §4.2 predicate fails | 401 / 403 |
+| no such document; `v` not current | 404 as above |
+| the source's provider is not enabled on this instance | 404 `{error, reason: "source"}` |
+| `If-None-Match` matches `"<hash>/height/<source>/<version>"` | 304 |
+| the row exists | 200, as above |
+| no job (it is queued now), or queued / running | 503 `{error, reason: "pending"}`, `Retry-After: 15` |
+| `done` without its row | the job is queued again; 503 pending |
+| `unavailable` | 404 `{error, reason}` |
+| `failed`, retried | 503 `{error, reason}`, `Retry-After` until `next_attempt_at` (at most 6 h) |
+| `failed`, final | 404 `{error, reason}` |
+
+The headers on 2xx / 304 are as above with the source in the `ETag`.
 
 ## 5. Chunked upload: `/api/map-uploads`
 
@@ -740,7 +846,8 @@ kickImportJobs: one loop per instance
   → worker thread: parse → normalise → match → encode (stage + progress written at each boundary,
   → store: storeImportedDocument (§3)                 heartbeat every 10 s while it runs)
   → applyJobResult: pins (§6.4)
-  → derive: thumbnail row (§4.5), then the height-field row (§4.7); a failure of either is logged, never fails the job
+  → derive: thumbnail row (§4.5), then the height-field row (§4.7); a failure of either is logged, never fails the job;
+            then the DEM job is queued, not awaited (§4.7 "The DEM"; a no-op without enabled providers)
   → done | failed(error)
 ```
 
@@ -1553,12 +1660,13 @@ deletes only what no row points at. `packages/api/src/map-store/gc.ts`.
   club map pointing at it is deleted.
 - `map_previews` cascade with their document. They are not truncated by
   age (07 §5 allows it; nothing needs the space yet).
-- `map_heightfields` cascade with their document too, and are not a
-  reference. Rows of a superseded `TERRAIN_VERSION` (`source =
-  'contours' AND version < TERRAIN_VERSION`) are deleted by pass 4
-  (§8.2): after a bump nothing reads them (the URL names the version,
-  §4.7), and each is up to ~8 MB. `<`, not `<>`: an older image's run
-  during a rollout leaves the newer image's rows alone.
+- `map_heightfields` and `map_dem_jobs` cascade with their document too,
+  and are not a reference. Rows of a superseded `TERRAIN_VERSION`
+  (`version < TERRAIN_VERSION`, every source — `contours` and the DEM's,
+  §4.7 — and the DEM jobs) are deleted by pass 4 (§8.2): after a bump
+  nothing reads them (the URL names the version, §4.7), and each field is
+  up to ~8 MB; a bump re-fetches the DEM lazily. `<`, not `<>`: an older
+  image's run during a rollout leaves the newer image's rows alone.
 
 ### 8.2 A run
 
@@ -1587,9 +1695,10 @@ runStorageGc(db, { now?, graceDays?, dryRun?, shouldStop? })
    caught and counted as `skipped`; the run carries on. `map_previews` go with the row.
 3. **Sources** — the same over `map_sources`, after the documents so a
    source freed by pass 2 goes in the same run.
-4. **Height fields** — one `DELETE` of the superseded-version rows
-   (§8.1); a dry run counts them. `heightfields` is the count, in the
-   summary line and the stored `last_result`.
+4. **Height fields** — one `DELETE` of the superseded-version rows of
+   every source and one of the superseded DEM jobs (§8.1); a dry run
+   counts the rows. `heightfields` is the count of rows, in the summary
+   line and the stored `last_result`; the DEM jobs deleted are logged.
 5. **Uploads and jobs** — `sweepImportHousekeeping` (§6.6).
 
 07 §5 sketched one `DELETE … WHERE NOT EXISTS` per pass. One statement
@@ -1674,9 +1783,13 @@ web's map pickers offering Mapper files (`.omap` / `.xmap`) — the server
 takes them since E5 (§5.1); the series' colour-stack columns
 (`club_maps.colour_profile`, `colour_overrides`, `north_lines_below`)
 and `map_files.north_detection`, which nothing writes or reads since E5
-(kept: E5 drops only what its row names); §4.7's DEM-based height
-field (another `source`, H10) and the client's fetch, cache and 3D
-gate (H7). Each lands with its own section here and its own tests.
+(kept: E5 drops only what its row names); the client's fetch, cache and
+3D gate (H7) and the DEM surface's choice and attribution in the viewer
+(H11); §4.7's DEM for a rotation-corrected pin (a per-pin DEM) and for a
+document without contours (no field grid to resample onto); a DEM
+backfill for documents stored before a provider was enabled (their job is
+queued by the first request for a DEM source, which the descriptor's
+`pending` invites, or by a re-import). Each lands with its own section here and its own tests.
 
 ## 10. Tests
 
@@ -1712,9 +1825,12 @@ gate (H7). Each lands with its own section here and its own tests.
 | Integration (api) | `packages/api/src/__tests__/integration/map-previews.test.ts` | stage 10 thumbnail row after `applyEventMap`, dedup short-cut re-derives, failed derive non-fatal, over-cap decided from the header summary; thumbnail and symbol routes 400/401/403/404/200/304, kiosk key and `?event=`, render on miss, row written once, every fixture symbol 200 and one past the end 404, `render: null` 404, previews never bump `last_referenced_at`; library route 400/401/200/304/404 incl. variant and other version; auth off |
 | Unit (api) | `packages/api/src/__tests__/map-heightfield.test.ts` | §4.7: `?v=` parsing, URL and ETag, the cell estimate from a header summary (units per mm, pad, clamp to the budget, unusable bounds), the cap and `MAP_HEIGHTFIELD_MAX_CELLS`; the worker equals the in-process derive on the shared terrain tests' hill, `none` without contours, rejects garbage, terminated at the timeout; over a stub db: one derive then the row, concurrent callers share one derive, derives one at a time, a row without bytes for no contours, a failure writes nothing and is not retried, over the cap no blob read, missing document |
 | Integration (api) | `packages/api/src/__tests__/integration/map-heightfields.test.ts` | §4.7: importing the CC0 demo `.omap` writes the field equal to the in-process derive (bytes, header, report) and the job ends `done`; `test.ocd` gets a row without bytes; the dedup short-cut re-derives a deleted row; a failed derive and an over-cap document write nothing; route 400 (hash, `v`) / 401 / 403 before existence, 200 with headers, br / gzip round trip, 304, kiosk key and `?event=`, the uploader's own job, a club version, auth off, not a reference; lazy derive on a miss writes once and two concurrent requests derive once; 404 `no-contours` / `version` / `over-cap`, unknown document; 503 for a failed derive, remembered, nothing stored; `course.mapMetadata.terrain` ready / none / pending (never derives), `mapImport.review.terrain` with report and field size, over-cap; the GC sweeps a superseded version, keeps current and newer, dry run counts; the null-together CHECK; the row cascades with its document |
-| Unit (api) | `packages/api/src/__tests__/backup.test.ts` (H4) | `map_heightfields` not in the dump |
+| Unit (api) | `packages/api/src/__tests__/backup.test.ts` (H4, H10) | `map_heightfields` and `map_dem_jobs` not in the dump |
+| Unit (api) | `packages/api/src/__tests__/snapshot-maps.test.ts` (H10) | the blob export refuses `map_dem_jobs` like `map_heightfields` |
+| Unit (api) | `packages/api/src/__tests__/map-dem-jobs.test.ts` | §4.7 "The DEM": the back-off (1 min, 10 min, 1 h, 6 h, final after five; `auth` ≥ 1 h), what is claimable, the stored error capped and without a Basic credential; `?source=` parsing, the provider of a source, the URL with and without it |
+| Integration (api) | `packages/api/src/__tests__/integration/map-dem.test.ts` | §4.7 "The DEM", against the recorded DEM fixture (no network): stage 10 queues the job, which fetches by range with the credential on Lantmäteriet only and writes both rows on the `contours` grid, heights against the analytic cone, licence and attribution in the headers, the reports; the descriptor and review `dem` ready / pending / failed / unavailable / disabled / rotation-corrected; the route 200 / 304 / ETag per source, `contours` unchanged, 400 / 401 / 403 / 404 `source` / `version` in order; Lantmäteriet's no-coverage falls to GLO-30, GLO-30 alone without Lantmäteriet; unavailable `no-georeference` / `no-contours` / `misaligned` / `over-cap` write nothing and answer 404 with the reason; a refused credential fails `auth` with a retry ≥ 1 h and no secret stored, 503 with `Retry-After`; a transient failure retried when due, final after the fifth attempt (404); a route miss queues the job (503 pending, then 200); a stale running job re-claimed; the table's CHECKs; the GC's version pass over every source and the jobs; the cascade |
 | Unit (web) | `packages/web/src/lib/__tests__/map-review.test.ts` (H4) | `terrainLine`: the decided share floored against the 80 % gate, the other states |
-| E2E | `e2e/map-documents.spec.ts` (H4) | the demo `.omap` through the chunked route → `mapMetadata.terrain` ready with decided > 80 % → `height.bin` 200 (`OXHF`, headers), 304, anonymous 401, another version 404 |
+| E2E | `e2e/map-documents.spec.ts` (H4, H10) | the demo `.omap` through the chunked route → `mapMetadata.terrain` ready with decided > 80 % → `height.bin` 200 (`OXHF`, headers), 304, anonymous 401, another version 404; with no DEM provider enabled `terrain.dem` is `disabled`, a DEM source 404 `source`, a malformed one 400, `source=contours` the same field |
 | E2E | `e2e/map-review.spec.ts` (H4) | the event map's review shows the terrain line "no contours" for `test.ocd` |
 | E2E | `e2e/club-map-library.spec.ts` | UI upload → card keyed by the series UUID with the document thumbnail → rename → **From club library** renders the event map → delete leaves the event's map; an unparseable upload is listed as "Import failed", without download, and disabled in the event picker; north-lines badge |
 | E2E | `e2e/map-documents.spec.ts` | UI upload on `itest` → `documentHash` → route 200/304/206, own import job admits the uploader through a non-pinning event, anonymous 401 → thumbnail and symbol swatch 200 / 401 anonymous, library swatch by the header's library and version → source route streams `test.ocd` back (200, `no-store`, attachment), anonymous 401 → dev page `?url=` loads it natively → `latestForEvent` done with report; chunked route (chunks out of order) → `applyUploadedMap` → `mapMetadata`; the same source → `clubMap.addFromSource` → `mapImport.status` done |
@@ -1776,9 +1892,15 @@ gate (H7). Each lands with its own section here and its own tests.
 | `packages/api/prisma/migrations/20261107120000_vector_map_pipeline_drops/` | E5: the guard, then the legacy pipeline's tables and columns dropped |
 | `packages/api/prisma/migrations/20261113120000_map_patches/` | `map_patches` (row G3) |
 | `packages/api/prisma/migrations/20261114130000_map_heightfields/` | `map_heightfields` (row H4) |
-| `packages/api/src/map-store/heightfield.ts` | §4.7: rows, `getOrDeriveHeightfield` (cap, queue, in-flight sharing, failure memo), the worker launcher, `deriveDocumentHeightfield` (stage 10), `terrainDescriptor` / `terrainReview` |
+| `packages/api/src/map-store/heightfield.ts` | §4.7: rows, `getOrDeriveHeightfield` (cap, queue, in-flight sharing, failure memo), the worker launcher, `deriveDocumentHeightfield` (stage 10), `terrainDescriptor` / `terrainReview` with `demDescriptor` (H10), `serialisedDerive` (the one derive queue), `parseHeightfieldSource` |
 | `packages/api/src/map-store/heightfield-worker.ts` | worker-thread body: decode, `deriveTerrain`, `encodeHeightField` |
-| `packages/api/src/map-store/heightfield-routes.ts` | `GET /api/map-documents/:hash/height.bin` |
+| `packages/api/src/map-store/heightfield-routes.ts` | `GET /api/map-documents/:hash/height.bin`, `?source=` (H10) |
+| `packages/api/prisma/migrations/20261115120000_map_dem_jobs/` | `map_dem_jobs` (row H10) |
+| `packages/api/src/map-store/dem-jobs.ts` | §4.7 "The DEM": the job table's engine (enqueue, claim, heartbeat, retries, the fallback), the worker launcher, `startDemJobEngine` |
+| `packages/api/src/map-store/dem-worker.ts` | worker-thread body: paper grid, `deriveAnchoredTerrain`, the ground field, both encoded, the misalignment gate |
+| `packages/api/src/map-store/dem-registry.ts` | the instance's enabled providers (`setDemProviders`, set at startup from `MAP_DEM_PROVIDERS`) |
+| `packages/api/src/map-store/{dem.ts,dem-cog.ts,dem-providers.ts,dem-live-check.ts}` | `docs/map-terrain.md` §7: extent and sampler, the COG reader, the providers, the live check |
+| `packages/api/src/map-store/instance.ts` | `INSTANCE_ID`, the import and DEM jobs' `claimed_by` |
 | `packages/api/prisma/migrations/20261114120000_map_gps_tracks/` | `map_gps_tracks` (row G24) |
 | `packages/api/src/gps-tracks.ts` / `routers/mapTrack.ts` | GPS track storage and `mapTrack.*` (`docs/map-gps-tracks.md` §1) |
 | `packages/api/src/map-store/patches.ts` / `routers/mapPatch.ts` | the patch store, delivery rule and writes; `mapPatch.get` / `applyChange` / `setEnabled`; the route is in `routes.ts` (`docs/map-patches.md` §3) |
