@@ -13,7 +13,7 @@ import { remapRenderColours, renderColourRefs } from "../render/transform.js";
 import { getLibraryEntry, getSymbolLibrary, SYMBOL_LIBRARY_VERSION, type SymbolLibraryId } from "../symbol-library/index.js";
 import type { PaletteEdition } from "../symbol-library/palette.js";
 import { colourRefs } from "../symbol-library/schema.js";
-import { alignColourStack, identifySourceColours } from "./colour-align.js";
+import { alignColourStack, identifySourceColours, type PurpleDisplaced } from "./colour-align.js";
 import { detectPaletteEdition, formatClass } from "./colour-class.js";
 import { canonicalCandidates, chooseLibrary, detectDocumentFactor, type FactorDetection, MATCH_THRESHOLDS, matchContext, matchSymbol, type SymbolDecision } from "./matcher.js";
 
@@ -49,6 +49,8 @@ export interface ColourStackSummary {
   unclassified: { sourceNumber?: number; name: string }[];
   /** Used area colours drawn above lower purple (docs/map-symbols.md §9.2 step 5). */
   areasAboveLowerPurple: { name: string; sourceNumber?: number; paletteId?: string }[];
+  /** Source purples left in place as ordinary colours because they do not stand where the course purple goes (§9.2 step 4, C15). */
+  purplesDisplaced: PurpleDisplaced[];
 }
 
 export interface MatchDocumentResult {
@@ -161,7 +163,7 @@ export function matchDocument(input: MapDocumentInput, opts: MatchDocumentOption
   return {
     input: out,
     matching: summary,
-    colourStack: { source: colours.length, inserted: aligned.inserted, aliased: aligned.aliased, conflicts: aligned.conflicts, unclassified, areasAboveLowerPurple: aligned.areasAboveLowerPurple },
+    colourStack: { source: colours.length, inserted: aligned.inserted, aliased: aligned.aliased, conflicts: aligned.conflicts, unclassified, areasAboveLowerPurple: aligned.areasAboveLowerPurple, purplesDisplaced: aligned.purplesDisplaced },
     warnings: [...warnings.values()],
   };
 }
