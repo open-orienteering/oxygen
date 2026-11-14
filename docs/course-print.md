@@ -1153,7 +1153,7 @@ The worker is its own chunk (`assets/print-worker-entry-<hash>.js`), out
 of the precache (`globIgnores`) and kept by a `CacheFirst` runtime route
 (`print-worker`, `vite.config.ts`) after the first export, so devices
 that never print do not download it (the `map-fonts` precedent); G17
-fetches it for offline use. The client is a separate 3.0 kB chunk.
+fetches it for offline use. The client is a separate 3.3 kB chunk (1.6 kB gzip).
 Sizes at G16 (`pnpm --filter @oxygen/web build`, 07 §15): the worker
 1 128 kB raw, 409 kB gzip; the faces 390 kB, shared with the viewer. The
 dev server pre-bundles the PDF library (`optimizeDeps.include`): its
