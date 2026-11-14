@@ -356,6 +356,19 @@ the `ContourGraph`; the interval in metres is H3's (header) and H9's
    second contour ladder; the row's target (≥ 90 % on one residue per
    ladder area) is checked by the `.local` corpus script on ladder areas
    taken from the DEM's phase (T2), not by the solve.
+4. **The ≥ 90 % index target moves to H9** (user, 2026-11-14, after the
+   corpus run of §3.9): from the map alone H2 reaches 87.5 % on
+   club-2026's main index ladder and 56–61 % on its three small ones;
+   with perfect (DEM) signs the same solve reaches 91 % and 44–65 %. The
+   limit is the band graph — bands that leak around a gap span two
+   levels (§3.3) — not the signs. H2 lands with leak-aware tiers and
+   trial-checked index repair; H9 carries the index target with the DEM.
+   Splitting multi-level bands in the graph is a pending item.
+5. **A ladder area, for the index target, is an index phase**: the
+   index contours whose DEM median falls on one peak of the median mod
+   25 m (5 intervals) holding ≥ 8 % of the index length. club-2026's index
+   contours lie on three such phases, which T2's 5 m contour phase cannot
+   separate; the 5 m figure is reported beside it.
 
 ## Tests
 
