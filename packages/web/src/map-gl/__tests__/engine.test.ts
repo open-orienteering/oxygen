@@ -669,3 +669,144 @@ describe("MapGlEngine patch (docs/map-rendering.md §5.2 \"Patch\")", () => {
     expect((await ok).hidden.length).toBe(0);
   });
 });
+
+describe("MapGlEngine document objects (docs/map-rendering.md §5.5 \"Document objects\")", () => {
+  const whole: ViewRect = { centreX: 25_000, centreY: 5_000, pxPerUm: 0.02, widthPx: 1500, heightPx: 600 };
+  async function editEngine(opts: { highlight?: [number, number, number]; edit?: Parameters<MapGlEngine["setEdit"]>[0] } = {}) {
+    const renderer = new FakeRenderer();
+    const transport = manualTransport();
+    const engine = new MapGlEngine(renderer as unknown as MapGlRenderer, transport, { budgetBytes: 1 << 30, ...(opts.highlight ? { highlight: opts.highlight } : {}) });
+    const infos: unknown[] = [];
+    let changes = 0;
+    engine.onEdit = (i) => infos.push(i);
+    engine.onChange = () => changes++;
+    if (opts.edit !== undefined) engine.setEdit(opts.edit);
+    const p = engine.load({ source: { kind: "document", bytes: patchDocumentBytes(), options: { unmatched: "proxy" } }, fonts: [], cellUm: PATCH_CELL_UM });
+    transport.flush();
+    await p;
+    engine.setView(whole);
+    transport.flush();
+    engine.render({ colour: () => [0, 0, 0] });
+    return { renderer, transport, engine, infos, changes: () => changes };
+  }
+  const edits = (t: { posted: WorkerRequest[] }) => t.posted.filter((m) => m.type === "edit") as Extract<WorkerRequest, { type: "edit" }>[];
+  const strokes = (r: FakeRenderer) => r.visibleSets.at(-1)!.stroke.indices.length;
+  const drawnColours = (r: FakeRenderer) => r.visibleSets.at(-1)!.stroke.draws.map((d) => d.colour);
+
+  it("hitDocument: the worker's hits, topmost first; before the load []", async () => {
+    const bare = new MapGlEngine(new FakeRenderer() as unknown as MapGlRenderer, manualTransport());
+    expect(await bare.hitDocument(0, 0, 0)).toEqual([]);
+    const { engine, transport } = await editEngine();
+    const h = engine.hitDocument(5000, 5000, 0);
+    transport.flush();
+    expect((await h).map((x) => x.ref)).toEqual([{ source: 1 }]);
+  });
+
+  it("hitDocument drops objects the engine does not draw: setHidden's and an object under edit's static copy", async () => {
+    const { engine, transport } = await editEngine();
+    engine.setHidden(new Set([index(1)]));
+    const a = engine.hitDocument(5000, 5000, 0);
+    transport.flush();
+    expect(await a).toEqual([]);
+    engine.setHidden(new Set());
+    engine.setEdit({ selected: [], draft: { ops: [moveLine1(7)] } });
+    transport.flush();
+    const b = engine.hitDocument(5000, 5000, 0);
+    transport.flush();
+    expect(await b).toEqual([]);
+  });
+
+  it("several hit-tests in flight are answered by id; a worker error rejects them", async () => {
+    const { engine, transport } = await editEngine();
+    const a = engine.hitDocument(5000, 5000, 0), b = engine.hitDocument(25_000, 5000, 0);
+    transport.flush();
+    expect((await a)[0].ref).toEqual({ source: 1 });
+    expect((await b)[0].ref).toEqual({ source: 3 });
+    const c = engine.hitDocument(5000, 5000, 0);
+    transport.onMessage?.({ type: "error", message: "worker died" });
+    await expect(c).rejects.toThrow("worker died");
+  });
+
+  it("setEdit uploads E, draws it in every visible set with the highlight colour resolved, its bytes fixed", async () => {
+    const { engine, transport, renderer, infos } = await editEngine({ highlight: [0.1, 0.2, 0.3] });
+    const before = strokes(renderer);
+    engine.setEdit({ selected: [{ source: 1 }] });
+    transport.flush();
+    expect(renderer.parts.has("E")).toBe(true);
+    expect(infos.at(-1)).toEqual({ selected: [index(1)], highlighted: 1, issues: [] });
+    engine.render({ colour: () => [0, 0, 0] });
+    expect(strokes(renderer)).toBeGreaterThan(before);
+    expect(drawnColours(renderer).at(-1)).toBe(0xffff);
+    const opts = renderer.renderOpts.at(-1)!;
+    expect(opts.colour(0xffff)).toEqual([0.1, 0.2, 0.3]);
+    expect(opts.colour(1)).toEqual([0, 0, 0]);
+    expect(engine.stats().residentBytes).toBeGreaterThan(0);
+    engine.setEdit(null);
+    transport.flush();
+    expect(renderer.parts.has("E")).toBe(false);
+    engine.render({ colour: () => [0, 0, 0] });
+    expect(strokes(renderer)).toBe(before);
+  });
+
+  it("a draft hides its target's static copy through the range table and draws it from E", async () => {
+    const { engine, transport, renderer } = await editEngine();
+    const plain = renderer.visibleSets.at(-1)!;
+    engine.setEdit({ selected: [], draft: { ops: [moveLine1(7)] } });
+    transport.flush();
+    engine.render({ colour: () => [0, 0, 0] });
+    // Same stroke count (the line drawn once, from E), nothing re-prepared: no patch, no load.
+    expect(strokes(renderer)).toBe(plain.stroke.indices.length);
+    expect(transport.posted.filter((m) => m.type === "patch" || m.type === "load")).toHaveLength(1);
+    expect(engine.editState?.selected).toEqual([]);
+  });
+
+  it("one edit request in flight, the latest input next; an input before the load goes right after it", async () => {
+    const early = await editEngine({ edit: { selected: [{ source: 3 }] } });
+    const kinds = early.transport.posted.map((m) => m.type);
+    expect(kinds.indexOf("edit")).toBe(kinds.indexOf("load") + 1);
+    expect(early.engine.editState?.selected).toEqual([index(3)]);
+
+    const { engine, transport } = await editEngine();
+    const n = edits(transport).length;
+    engine.setEdit({ selected: [{ source: 1 }] });
+    engine.setEdit({ selected: [{ source: 2 }] });
+    engine.setEdit({ selected: [{ source: 4 }] });
+    expect(edits(transport)).toHaveLength(n + 1);
+    transport.flush();
+    expect(edits(transport)).toHaveLength(n + 2);
+    expect(edits(transport).at(-1)!.input?.selected).toEqual([{ source: 4 }]);
+    expect(engine.editState?.selected).toEqual([index(4)]);
+  });
+
+  it("an edit error ends that request only; the part stays as it was", async () => {
+    const { engine, transport, renderer } = await editEngine();
+    engine.setEdit({ selected: [{ source: 1 }] });
+    transport.flush();
+    const shown = renderer.parts.get("E");
+    engine.setEdit({ selected: [{ source: 2 }] });
+    const g = edits(transport).at(-1)!.generation;
+    engine.setEdit({ selected: [{ source: 4 }] });
+    const n = edits(transport).length;
+    // The answer to the one in flight is an error: it ends that request, the waiting input is posted.
+    transport.onMessage?.({ type: "error", message: "x", edit: g });
+    expect(edits(transport)).toHaveLength(n + 1);
+    expect(edits(transport).at(-1)!.input?.selected).toEqual([{ source: 4 }]);
+    expect(renderer.parts.get("E")).toBe(shown);
+    // An error of a generation no longer in flight ends nothing.
+    transport.onMessage?.({ type: "error", message: "x", edit: g });
+    transport.flush();
+    expect(engine.editState?.selected).toEqual([index(4)]);
+  });
+
+  it("a patch reply carries the edit state: hidden ids and part replaced in the same step", async () => {
+    const { engine, transport, infos } = await editEngine();
+    engine.setEdit({ selected: [{ source: 1 }] });
+    transport.flush();
+    const n = infos.length;
+    const done = engine.setPatch(patchOf([{ op: "hide", sourceIndex: 1 }]));
+    transport.flush();
+    await done;
+    expect(infos.length).toBe(n + 1);
+    expect(engine.editState).toEqual({ selected: [-1], highlighted: 0, issues: [] });
+  });
+});

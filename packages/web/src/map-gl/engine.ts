@@ -8,6 +8,8 @@
  *   setView(view)  → which cells are drawn; request missing detail; evict
  *   setCourse(req) → the dynamic bucket: the course layer, re-symbolised in the worker (§5.2 "Dynamic bucket")
  *   setPatch(p)    → the effective document: hidden ids, the touched buckets re-prepared (§5.2 "Patch")
+ *   hitDocument(…) → the document's objects under a paper point (§5.5 "Document objects")
+ *   setEdit(input) → the edit part: the selection highlighted, a draft drawn, its static copies hidden
  *   render(opts)   → rebuild the visible set if the drawn set changed; draw
  *
  * B4's `VectorMapLayer` drives the same two calls from its viewport.
@@ -22,7 +24,8 @@ import type { DocumentRenderOptions, FrameStats, InsetBox, MapGlRenderer, TextAt
 import type { RenderTarget } from "./view.js";
 import {
   createMapGlWorker, messageChannelScheduler,
-  type CourseLayerRequest, type CourseReply, type FilterReply, type LoadRequest, type LoadSummary, type PatchedReply, type PatchState, type WorkerReply, type WorkerRequest,
+  HIGHLIGHT_COLOUR,
+  type CourseLayerRequest, type CourseReply, type DocumentHit, type EditInput, type EditState, type FilterReply, type LoadRequest, type LoadSummary, type PatchedReply, type PatchState, type WorkerReply, type WorkerRequest,
 } from "./worker.js";
 
 /** Message transport to the worker: a real Web Worker, or the same handler inline. */
@@ -68,7 +71,15 @@ export interface EngineOptions {
   /** Apply the zoom gate (default true); false prepares detail at every zoom (measurement only). */
   gate?: boolean;
   prefetchMarginCells?: number;
+  /** RGB (0–1) of the selection highlight (§5.5 "Document objects"). Default `#2563eb`, the editor's selection blue. */
+  highlight?: [number, number, number];
 }
+
+/** The selection highlight's default: `#2563eb`. */
+export const DEFAULT_HIGHLIGHT: [number, number, number] = [0x25 / 255, 0x63 / 255, 0xeb / 255];
+
+/** What an edit reply tells the host: which selected refs are drawn and the draft's issues. */
+export type EditInfo = Pick<EditState, "selected" | "highlighted" | "issues">;
 
 export interface EngineStats {
   /** Cells meeting the view + draw margin. */
@@ -108,6 +119,7 @@ const DETAIL = (id: number) => `d${id}`;
 const LARGE = "L";
 const COURSE = "C";
 const PAGE = "P";
+const EDIT = "E";
 
 /** A worker filter reply as the visible set takes it. */
 function engineFilter(f: FilterReply | null): { hidden: ReadonlySet<number>; visible: VisibleFilter } | undefined {
@@ -175,6 +187,19 @@ export class MapGlEngine {
   private patchWaiters: PatchWaiter[] = [];
   private inFlightWaiters: PatchWaiter[] = [];
   private loadPatchWaiters: PatchWaiter[] = [];
+  /** The edit part (§5.5 "Document objects"), and the static copies its draft hides. */
+  private edit: ResidentPart | undefined;
+  private editHidden: ReadonlySet<number> = new Set();
+  private editInput: EditInput | null | undefined;
+  private editGeneration = 0;
+  private editInFlight: number | undefined;
+  private editWaiting = false;
+  private hitId = 0;
+  private hits = new Map<number, { resolve: (h: DocumentHit[]) => void; reject: (e: Error) => void }>();
+  /** The latest edit state drawn. */
+  editState: EditInfo | undefined;
+  /** Called with each edit state the engine draws (an edit reply, or a patch reply's). */
+  onEdit: ((info: EditInfo) => void) | undefined;
   /** What the worker drew of the patch last (the load's or the latest reply's). */
   patchState: PatchState | undefined;
   /** Called when something arrived that changes the picture (a detail part for a drawn cell, a course layer). */
@@ -189,7 +214,10 @@ export class MapGlEngine {
   constructor(renderer: MapGlRenderer, transport: Transport, opts: EngineOptions = {}) {
     this.renderer = renderer;
     this.transport = transport;
-    this.opts = { budgetBytes: opts.budgetBytes ?? CLUB_BUDGET_BYTES, gate: opts.gate ?? true, prefetchMarginCells: opts.prefetchMarginCells ?? PREFETCH_MARGIN_CELLS };
+    this.opts = {
+      budgetBytes: opts.budgetBytes ?? CLUB_BUDGET_BYTES, gate: opts.gate ?? true, prefetchMarginCells: opts.prefetchMarginCells ?? PREFETCH_MARGIN_CELLS,
+      highlight: opts.highlight ?? DEFAULT_HIGHLIGHT,
+    };
     this.lru = new BucketLru(this.opts.budgetBytes);
     transport.onMessage = (m) => this.receive(m);
   }
@@ -219,7 +247,70 @@ export class MapGlEngine {
       this.courseColours = undefined;
       // Sent at once, in flight or not: a reply to a request before this load answers the old document and is dropped.
       if (this.courseInput !== undefined) this.postCourse();
+      if (this.editInput !== undefined) this.postEdit();
     });
+  }
+
+  /**
+   * The effective document's objects under a paper point (µm), topmost first (§5.5 "Document
+   * objects"); hits on objects the engine does not draw (`setHidden`'s, a filter region's, the
+   * static copy of an object under edit) are dropped. Several may be in flight; before the load it
+   * resolves `[]`, and a request the worker fails rejects only its own promise.
+   */
+  hitDocument(xUm: number, yUm: number, toleranceUm: number): Promise<DocumentHit[]> {
+    if (!this.loadPosted) return Promise.resolve([]);
+    const id = ++this.hitId;
+    return new Promise((resolve, reject) => {
+      this.hits.set(id, { resolve, reject });
+      this.transport.post({ type: "hit", id, x: xUm, y: yUm, toleranceUm }, []);
+    });
+  }
+
+  /**
+   * Draws (or with `null` clears) the edit part (§5.5 "Document objects"): the selected objects
+   * in the highlight colour, a draft in its own colours with its targets' static copies hidden.
+   * As `setCourse`: one request in flight, the latest input next, posted after the load.
+   */
+  setEdit(input: EditInput | null): void {
+    this.editInput = input;
+    if (!this.loadPosted) return;
+    if (this.editInFlight !== undefined) this.editWaiting = true;
+    else this.postEdit();
+  }
+
+  private postEdit(): void {
+    this.editWaiting = false;
+    this.editInFlight = ++this.editGeneration;
+    this.transport.post({ type: "edit", generation: this.editInFlight, input: this.editInput ?? null }, []);
+  }
+
+  private editDone(): void {
+    this.editInFlight = undefined;
+    if (this.editWaiting) this.postEdit();
+  }
+
+  /** An edit state (an edit reply's, or a patch reply's): the part replaced, its hidden ids taken. */
+  private acceptEdit(e: EditState): void {
+    if (e.atlas) {
+      this.renderer.setAtlas(e.atlas);
+      this.atlasBytes = e.atlas.data.byteLength;
+    }
+    this.renderer.releasePart(EDIT);
+    this.edit = e.part ? this.renderer.uploadPart(EDIT, e.part) : undefined;
+    this.editHidden = new Set(e.hidden);
+    this.editState = { selected: e.selected, highlighted: e.highlighted, issues: e.issues };
+    this.updateFixedBytes();
+    this.dirty = true;
+    this.arrivalOnly = false;
+    this.evict();
+    this.onEdit?.(this.editState);
+  }
+
+  /** The render options with the highlight's reserved colour index resolved. */
+  private withHighlight(opts: DocumentRenderOptions): DocumentRenderOptions {
+    const hl = this.opts.highlight;
+    const colour = opts.colour;
+    return { ...opts, colour: (i) => (i === HIGHLIGHT_COLOUR ? hl : colour(i)), ...(this.pageClip ? { pageClip: this.pageClip } : {}) };
   }
 
   /**
@@ -314,6 +405,8 @@ export class MapGlEngine {
     this.summary = { ...s, detailCells: m.detailCells, bytes: { ...s.bytes, base: m.bytes.base, large: m.bytes.large, atlas: this.atlasBytes } };
     this.patchHidden = new Set(m.patch.hidden);
     this.patchState = m.patch;
+    // The edit part against the new effective document, in the same step (§5.5 "Document objects").
+    if (m.edit) this.acceptEdit(m.edit);
     this.updateFixedBytes();
     this.dirty = true;
     this.arrivalOnly = false;
@@ -357,11 +450,34 @@ export class MapGlEngine {
   private updateFixedBytes(): void {
     const s = this.summary;
     if (!s) return;
-    this.fixedBytes = s.bytes.base + s.bytes.large + this.atlasBytes + this.renderer.textAtlasBytes + (this.course?.part.gpuBytes ?? 0) + (this.page?.part.gpuBytes ?? 0);
+    this.fixedBytes = s.bytes.base + s.bytes.large + this.atlasBytes + this.renderer.textAtlasBytes + (this.course?.part.gpuBytes ?? 0) + (this.page?.part.gpuBytes ?? 0) + (this.edit?.part.gpuBytes ?? 0);
     this.lru.fixedBytes = this.fixedBytes;
   }
 
   private receive(m: WorkerReply): void {
+    if (m.type === "hit" || (m.type === "error" && m.hit !== undefined)) {
+      const id = m.type === "hit" ? m.id : m.hit!;
+      const w = this.hits.get(id);
+      this.hits.delete(id);
+      if (m.type === "error") w?.reject(new Error(m.message));
+      else if (w) {
+        // What is not drawn is not hit.
+        const f = this.filter?.hidden;
+        w.resolve(m.hits.filter((h) => !this.hidden.has(h.objectIndex) && !f?.has(h.objectIndex) && !this.editHidden.has(h.objectIndex)));
+      }
+      return;
+    }
+    if (m.type === "edit" || (m.type === "error" && m.edit !== undefined)) {
+      const g = m.type === "edit" ? m.generation : m.edit!;
+      // Not the one in flight: overtaken by a load's re-send, or ended by an error.
+      if (g !== this.editInFlight) return;
+      if (m.type === "edit" && this.summary) {
+        this.acceptEdit(m);
+        this.onChange?.();
+      }
+      this.editDone();
+      return;
+    }
     if (m.type === "error" && m.patch !== undefined) {
       // A patch request that threw ends that request only (as a course error, F20b).
       if (m.patch === this.patchInFlight) {
@@ -396,6 +512,10 @@ export class MapGlEngine {
         for (const w of this.inFlightWaiters.splice(0)) w.reject(new Error(m.message));
         this.patchDone();
       }
+      // And for the edit request and the hit-tests in flight.
+      if (this.editInFlight !== undefined) this.editDone();
+      for (const w of this.hits.values()) w.reject(new Error(m.message));
+      this.hits.clear();
       return;
     }
     if (m.type === "course") {
@@ -418,8 +538,10 @@ export class MapGlEngine {
       for (const p of m.base) this.base.set(p.bucket, this.renderer.uploadPart(BASE(p.bucket), p));
       this.large = m.large ? this.renderer.uploadPart(LARGE, m.large) : undefined;
       this.detailCells = new Set(s.detailCells);
-      // `setDocument` dropped every part; a course request posted after the load replies after this.
+      // `setDocument` dropped every part; a course or edit request posted after the load replies after this.
       this.course = undefined;
+      this.edit = undefined;
+      this.editHidden = new Set();
       this.filter = engineFilter(m.filter ?? null);
       this.patchHidden = new Set(s.patch?.hidden ?? []);
       this.patchState = s.patch;
@@ -563,10 +685,12 @@ export class MapGlEngine {
       if (this.large) parts.push(this.large);
       // Last: within a colour the course draws over the map's own objects of that colour.
       if (this.course) parts.push(this.course);
+      // The edit part: a draft in colour order over the course; the highlight's reserved colour sorts last.
+      if (this.edit) parts.push(this.edit);
       // The page's colours sort after every map colour: the page layer draws over the map, as in the PDF.
       if (this.page) parts.push(this.page);
       const f = this.filter;
-      const extra = [...(f?.hidden ?? []), ...this.patchHidden];
+      const extra = [...(f?.hidden ?? []), ...this.patchHidden, ...this.editHidden];
       const hidden = extra.length ? new Set([...this.hidden, ...extra]) : this.hidden;
       const vs = buildVisibleSet(parts, hidden, f?.visible);
       this.st.lastBuildMs = performance.now() - t0;
@@ -578,7 +702,7 @@ export class MapGlEngine {
       this.st.rebuilds++;
       this.st.lastRebuildMs = performance.now() - t0;
     }
-    const stats = this.renderer.renderDocument(view, this.pageClip ? { ...opts, pageClip: this.pageClip } : opts, target);
+    const stats = this.renderer.renderDocument(view, this.withHighlight(opts), target);
     stats.cpuMs = performance.now() - t0;
     return stats;
   }
@@ -593,7 +717,7 @@ export class MapGlEngine {
     if (!this.view || !this.summary) return { drawCalls: 0, cpuMs: 0 };
     const t0 = performance.now();
     const target = this.renderer.insetTarget(box.size);
-    const stats = this.renderer.renderDocument(view, this.pageClip ? { ...opts, pageClip: this.pageClip } : opts, target);
+    const stats = this.renderer.renderDocument(view, this.withHighlight(opts), target);
     this.renderer.compositeInset(box);
     stats.cpuMs = performance.now() - t0;
     return stats;
