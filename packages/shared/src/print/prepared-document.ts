@@ -1,11 +1,14 @@
 /**
  * The pinned map document prepared for printing (docs/course-print.md
- * §8.2): decoded, bridged to render input, with its cut features, and
- * the objects near a window. Isomorphic (§1; G13): the API's print worker
- * and, later, the browser's keep one cache per thread.
+ * §8.2): decoded, the event's patch applied (the effective document,
+ * docs/map-patches.md §2; G14), bridged to render input, with its cut
+ * features, and the objects near a window. Isomorphic (§1; G13): the API's
+ * print worker and, later, the browser's keep one cache per thread, keyed
+ * by hash + patch version.
  */
 
 import { decodeMapDocument } from "../map-document/codec.js";
+import { type MapPatch, type PatchIssue, applyPatch } from "../map-document/patch.js";
 import type { DocumentColour, MapDocumentHeader } from "../map-document/header.js";
 import { type DocumentRenderInput, documentRenderInput } from "../map-document/render-bridge.js";
 import { cutFeaturesOfDocument } from "../course/cuts.js";
@@ -45,33 +48,75 @@ export function objectsNear(objects: readonly RenderObject[], bbox: MapWindow, m
 export interface PreparedDocument {
   colours: DocumentColour[];
   input: DocumentRenderInput;
-  /** The header (course layer context and georeferencing for the page composer, C2). */
+  /** The effective header (course layer context and georeferencing for the page composer, C2). */
   header: MapDocumentHeader;
   /** Point features automatic overprint cuts go around (`cutFeaturesOfDocument`, docs/course-layer.md §3.4). */
   cutFeatures: CutFeature[];
+  /** Patch ops that could not be applied and were skipped (docs/map-patches.md §2.3). */
+  patchIssues: PatchIssue[];
+}
+
+/**
+ * The event's patch as print carries it (docs/course-print.md §8.5): the
+ * `map_patches` row's content and its version, the cache key's second half.
+ */
+export interface PrintPatch {
+  /** `map_patches.version`, a decimal string (docs/map-patches.md §3.1). */
+  version: string;
+  patch: MapPatch;
+}
+
+/**
+ * The patch print applies to `hash`, or null when it changes nothing:
+ * disabled, without ops, or keyed onto another document (docs/map-patches.md
+ * §2.1, §3.3). Null prints the pinned document unchanged, byte for byte.
+ */
+export function livePrintPatch(hash: string, p: PrintPatch | null | undefined): PrintPatch | null {
+  if (!p || !p.patch.enabled || p.patch.documentHash !== hash) return null;
+  return Object.keys(p.patch.ops).length > 0 ? p : null;
+}
+
+/** The prepared cache's key: the hash alone without a live patch, else hash and patch version. */
+export function preparedDocumentKey(hash: string, p: PrintPatch | null | undefined): string {
+  const live = livePrintPatch(hash, p);
+  return live ? `${hash}:${live.version}` : hash;
 }
 
 const prepared = new Map<string, Promise<PreparedDocument>>();
 const PREPARED_MAX = 2;
 
 /**
- * Decoded + bridged document, kept for the last two hashes: the sheets
- * of one print share one decode through the in-flight promise.
+ * Decoded + patched + bridged document, kept for the last two keys
+ * (`preparedDocumentKey`): the sheets of one print share one decode
+ * through the in-flight promise. A new patch version reads and decodes
+ * the document again.
  */
-export function prepareDocument(hash: string, bytes: () => Promise<Uint8Array> | Uint8Array): Promise<PreparedDocument> {
-  const hit = prepared.get(hash);
+export function prepareDocument(
+  hash: string,
+  bytes: () => Promise<Uint8Array> | Uint8Array,
+  patch?: PrintPatch | null,
+): Promise<PreparedDocument> {
+  const live = livePrintPatch(hash, patch);
+  const key = preparedDocumentKey(hash, live);
+  const hit = prepared.get(key);
   if (hit) {
-    prepared.delete(hash);
-    prepared.set(hash, hit);
+    prepared.delete(key);
+    prepared.set(key, hit);
     return hit;
   }
   const entry = (async (): Promise<PreparedDocument> => {
-    const doc = decodeMapDocument(await bytes());
-    return { colours: doc.header.colours, input: documentRenderInput(doc), header: doc.header, cutFeatures: cutFeaturesOfDocument(doc) };
+    const { document: doc, issues } = applyPatch(decodeMapDocument(await bytes()), live?.patch);
+    return {
+      colours: doc.header.colours,
+      input: documentRenderInput(doc),
+      header: doc.header,
+      cutFeatures: cutFeaturesOfDocument(doc),
+      patchIssues: issues,
+    };
   })();
-  prepared.set(hash, entry);
+  prepared.set(key, entry);
   entry.catch(() => {
-    if (prepared.get(hash) === entry) prepared.delete(hash);
+    if (prepared.get(key) === entry) prepared.delete(key);
   });
   while (prepared.size > PREPARED_MAX) prepared.delete(prepared.keys().next().value as string);
   return entry;

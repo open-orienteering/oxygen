@@ -15,17 +15,22 @@
 
 import type { ColourMode } from "./colour.js";
 import { type CoursePagesOptions, type CoursePagesResult, type PrintFonts, type PrintGraphic, type PrintSheet, renderCoursePages } from "./course-pages.js";
-import { prepareDocument } from "./prepared-document.js";
+import { type PrintPatch, prepareDocument } from "./prepared-document.js";
 
-/** The job format a host composes; another version is refused (G14 adds the patch). */
-export const PRINT_JOB_VERSION = 1;
+/** The job format a host composes; another version is refused. 2 (G14): the document carries the event's patch. */
+export const PRINT_JOB_VERSION = 2;
 
 export type PrintJobGraphicMime = "image/png" | "image/svg+xml";
 
 export interface PrintJob {
   version: typeof PRINT_JOB_VERSION;
-  /** The pinned document by hash (`GET /api/map-documents/:hash`) and its `map_files.rotation_correction`. */
-  document: { hash: string; rotationCorrectionDeg: number };
+  /**
+   * The pinned document by hash (`GET /api/map-documents/:hash`), its
+   * `map_files.rotation_correction`, and the event's patch printed on top
+   * of it (docs/map-patches.md §2): null when there is none, or it is
+   * disabled, op-less or dormant (G14).
+   */
+  document: { hash: string; rotationCorrectionDeg: number; patch: PrintPatch | null };
   /** The resolved sheets, in print order, each with its copies (§4.5). */
   sheets: PrintSheet[];
   /** Every graphic a sheet's image objects reference that exists, ascending id. */
@@ -38,7 +43,7 @@ export interface PrintJob {
 }
 
 export interface PrintJobHost {
-  /** The document's bytes (`prepareDocument`'s loader; not called when this thread holds the hash). */
+  /** The document's bytes (`prepareDocument`'s loader; not called when this thread holds the hash and patch version). */
   document(hash: string): Promise<Uint8Array> | Uint8Array;
   /** The bundled faces in the order regular, narrow, bold (§8.5). */
   fonts: PrintFonts;
@@ -58,7 +63,7 @@ export interface PrintJobHost {
  */
 export async function renderPrintJob(job: PrintJob, host: PrintJobHost): Promise<CoursePagesResult> {
   if (job.version !== PRINT_JOB_VERSION) throw new Error(`Unsupported print job version ${String(job.version)}`);
-  const document = await prepareDocument(job.document.hash, () => host.document(job.document.hash));
+  const document = await prepareDocument(job.document.hash, () => host.document(job.document.hash), job.document.patch);
   const graphics = new Map<number, PrintGraphic>();
   const empty = new Uint8Array(0);
   await Promise.all(

@@ -10,7 +10,8 @@ import { defaultMapAppearance } from "../../course-maps/schema.js";
 import { resolveSheet, type SheetInput } from "../../course-maps/resolve-sheet.js";
 import { type PrintFonts, renderCoursePages, svgRasterBox } from "../course-pages.js";
 import { PRINT_JOB_VERSION, type PrintJob, type PrintJobHost, renderPrintJob } from "../print-job.js";
-import { prepareDocument } from "../prepared-document.js";
+import { type PrintPatch, prepareDocument } from "../prepared-document.js";
+import { mapPatchSchema } from "../../map-document/index.js";
 import { bundledFontsForTest, printDocumentBytes } from "./print-document.js";
 
 /** A 1 × 1 PNG. */
@@ -46,7 +47,7 @@ function sheet(label: string, objects: SheetInput["objects"] = []): SheetInput {
 const logo = (graphicId: number, x = 10) => ({ id: `logo${graphicId}`, anchor: "page" as const, kind: "image" as const, graphicId, x, y: 10, width: 20, height: 10 });
 
 function job(sheets: PrintJob["sheets"], graphics: PrintJob["graphics"] = []): PrintJob {
-  return { version: PRINT_JOB_VERSION, document: { hash: HASH, rotationCorrectionDeg: 0 }, sheets, graphics, mode: "cmyk", info: { title: "Test maps" }, filename: "test_maps.pdf" };
+  return { version: PRINT_JOB_VERSION, document: { hash: HASH, rotationCorrectionDeg: 0, patch: null }, sheets, graphics, mode: "cmyk", info: { title: "Test maps" }, filename: "test_maps.pdf" };
 }
 
 function host(over: Partial<PrintJobHost> = {}): PrintJobHost {
@@ -108,11 +109,49 @@ describe("renderPrintJob (§8.5)", () => {
   it("reads the document once per hash and refuses another job version", async () => {
     const document = vi.fn(() => printDocumentBytes());
     const hash = `${HASH}-once`;
-    const j = { ...job([sheet("A")]), document: { hash, rotationCorrectionDeg: 0 } };
+    const j = { ...job([sheet("A")]), document: { hash, rotationCorrectionDeg: 0, patch: null } };
     await renderPrintJob(j, host({ document }));
     await renderPrintJob(j, host({ document }));
     expect(document).toHaveBeenCalledTimes(1);
     expect(document).toHaveBeenCalledWith(hash);
-    await expect(renderPrintJob({ ...j, version: 2 } as unknown as PrintJob, host())).rejects.toThrow("Unsupported print job version 2");
+    // Version 1 carried no patch: a host that composed it would drop the event's corrections (G14).
+    expect(PRINT_JOB_VERSION).toBe(2);
+    await expect(renderPrintJob({ ...j, version: 1 } as unknown as PrintJob, host())).rejects.toThrow("Unsupported print job version 1");
+  });
+});
+
+describe("renderPrintJob with the event's patch (§8.5; docs/map-patches.md §2, G14)", () => {
+  const PATCHED = "cd".repeat(32);
+  const patch = (ops: Record<string, unknown>, version = "42"): PrintPatch => ({ version, patch: mapPatchSchema.parse({ documentHash: PATCHED, ops }) });
+  const hideBoulder = patch({ "hide:1": { op: "hide", sourceIndex: 1 } });
+  const patchedJob = (p: PrintPatch | null): PrintJob => ({ ...job([sheet("A")]), document: { hash: PATCHED, rotationCorrectionDeg: 0, patch: p } });
+
+  it("composes the effective document: renderCoursePages' bytes over the patched document, not the unpatched ones", async () => {
+    const out = await renderPrintJob(patchedJob(hideBoulder), host());
+    const direct = await renderCoursePages({
+      document: await prepareDocument(PATCHED, printDocumentBytes, hideBoulder),
+      sheets: [sheet("A")],
+      fonts,
+      mode: "cmyk",
+      info: { title: "Test maps" },
+      deterministic: true,
+    });
+    expect(out.bytes).toEqual(direct.bytes);
+    expect((await renderPrintJob(patchedJob(null), host())).bytes).not.toEqual(out.bytes);
+  });
+
+  it("survives a JSON round trip, and a disabled patch gives the unpatched bytes", async () => {
+    const j = patchedJob(hideBoulder);
+    const a = await renderPrintJob(j, host());
+    const b = await renderPrintJob(JSON.parse(JSON.stringify(j)) as PrintJob, host());
+    expect(b.bytes).toEqual(a.bytes);
+    const off = { ...hideBoulder, patch: { ...hideBoulder.patch, enabled: false } };
+    expect((await renderPrintJob(patchedJob(off), host())).bytes).toEqual((await renderPrintJob(patchedJob(null), host())).bytes);
+  });
+
+  it("reports an op it could not apply as a warning and still writes the PDF (map-patches §2.3)", async () => {
+    const out = await renderPrintJob(patchedJob(patch({ "hide:99": { op: "hide", sourceIndex: 99 } }, "43")), host());
+    expect(out.pageCount).toBe(1);
+    expect(out.warnings).toEqual(["PATCH_ISSUE: hide:99: target-missing"]);
   });
 });
