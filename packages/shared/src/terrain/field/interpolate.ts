@@ -7,23 +7,10 @@
 import { walkPolyline } from "../graph/flatten.js";
 import { cellIndex } from "../graph/raster.js";
 import { LABEL, type ContourGraph, type RegionRaster } from "../graph/types.js";
+import type { TerrainSolution } from "../solve/types.js";
 
-/**
- * The solve's output that the surface reads (§3). A structural subset of
- * the solve's `TerrainSolution`.
- */
-export interface FieldLevels {
-  /** Per region (index 0 unused): floor level in intervals, 0 the lowest region of its connected set. */
-  regionLevel: Int32Array;
-  /** Per region: 1 when its level was reached only through a zero-step weak link. */
-  regionWeak: Uint8Array;
-  /** Per chain: +1 uphill is left, −1 right, 0 undecided. */
-  side: Int8Array;
-  /** Per chain: 1 when the side rests on a flagged heuristic. */
-  flagged: Uint8Array;
-  /** Per chain: share of its samples on pairs contradicting the levels. */
-  conflict: Float32Array;
-}
+/** The solve's output that the surface reads (§3.7). */
+export type FieldLevels = Pick<TerrainSolution, "regionLevel" | "regionWeak" | "side" | "flagged" | "conflict">;
 
 export const SURFACE_RULES = {
   /** A top or pit rises (sinks) by half an interval over this ground distance from its contour, less in a smaller region. */
