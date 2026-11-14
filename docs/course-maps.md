@@ -199,7 +199,7 @@ GET /api/maps/:nameId/maps.pdf
     ?allVariations=3     (the root's all-variations page, F8)
     &copies=runners[&spare=n]   (each page once per runner it is for, F8)
 
-GET /api/maps/:nameId/print-job?<the maps.pdf query>   (the job maps.pdf composes, JSON; G15)
+GET /api/maps/:nameId/print-job?<the maps.pdf query>   (the job maps.pdf composes, JSON; G15; version 2 carries the event's patch, G14)
 GET /api/maps/:nameId/graphics/:id
 GET /api/maps/:nameId/graphics/:id/print.png[?w=&h=]   (the PNG a print embeds; SVG needs w, h; G15)
 ```
