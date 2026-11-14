@@ -13,7 +13,10 @@
  */
 
 import { type PrintFonts, printFontsFromFaces, renderPrintJob } from "@oxygen/shared/print";
-import type { PrintWorkerRequest, PrintWorkerResponse } from "./protocol";
+import type { PrintWorkerNeed, PrintWorkerRequest, PrintWorkerResponse } from "./protocol";
+
+/** A request to the main thread before it is numbered. */
+type NeedBody = PrintWorkerNeed extends infer N ? (N extends unknown ? Omit<N, "reqId"> : never) : never;
 
 type Post = (msg: PrintWorkerResponse, transfer?: Transferable[]) => void;
 
@@ -30,11 +33,11 @@ export function createPrintWorker(post: Post) {
   /** One job at a time, in arrival order (the client queues too). */
   let queue: Promise<void> = Promise.resolve();
 
-  const ask = (msg: Omit<Extract<PrintWorkerResponse, { type: "need" }>, "reqId">): Promise<Uint8Array> =>
+  const ask = (msg: NeedBody): Promise<Uint8Array> =>
     new Promise((resolve, reject) => {
       const reqId = nextReq++;
       pending.set(reqId, { resolve, reject });
-      post({ ...msg, reqId } as PrintWorkerResponse);
+      post({ ...msg, reqId } as PrintWorkerNeed);
     });
 
   async function compose(id: number, msg: Extract<PrintWorkerRequest, { type: "compose" }>): Promise<void> {
