@@ -13,7 +13,7 @@ import type { RenderSymbol, TextSymbol } from "../render/symbol.js";
 import type { RenderObject } from "../render/symbolise.js";
 import { scaleRenderSymbol } from "../render/transform.js";
 import { getLibraryEntry } from "../symbol-library/index.js";
-import { resolveEntry } from "../symbol-library/schema.js";
+import { type LibraryEntry, resolveEntry } from "../symbol-library/schema.js";
 import { paletteIndexOfStack } from "../import/colour-align.js";
 import { entryFactor, isDocumentLibraryId } from "../import/matcher.js";
 import { type DocumentSymbol, OBJECT_TYPE } from "./header.js";
@@ -77,11 +77,21 @@ export function canonicalRender(doc: Pick<MapDocument, "header">, sym: DocumentS
     const { library, documentFactor, mapScale } = doc.header;
     // An overlay entry at its own table's factor × the document's symbol scale (docs/map-symbols.md §12.2).
     const factor = library && isDocumentLibraryId(library.id) ? entryFactor({ libraryId: library.id, documentFactor, mapScale }, entry.id) : documentFactor;
-    const canonical = scaleRenderSymbol(resolveEntry(entry, index), factor);
+    const canonical = canonicalEntryRender(entry, index, factor);
     return canonical.type === "text" && sym.render?.type === "text" ? withSourceTextLayout(canonical, sym.render) : canonical;
   } catch {
     return undefined;
   }
+}
+
+/**
+ * The resolve-and-scale step every canonical drawing goes through
+ * (`canonicalRender`, `materialiseSymbol` — map-symbols §11.1): the entry's
+ * palette ids → stack indices, then its dimensions × `factor`. Throws
+ * `UnknownPaletteIdError` when the stack lacks a colour.
+ */
+export function canonicalEntryRender(entry: LibraryEntry, index: ReadonlyMap<string, number>, factor: number): RenderSymbol {
+  return scaleRenderSymbol(resolveEntry(entry, index), factor);
 }
 
 /** Layout fields a canonically drawn text symbol keeps from its source (map-document-format §8). */

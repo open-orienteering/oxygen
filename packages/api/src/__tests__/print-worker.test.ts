@@ -11,8 +11,8 @@ import { resolve } from "node:path";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import { course, mapDocument, type SheetInput, resolveSheet } from "@oxygen/shared";
 import { importMapToDocument } from "../import/ocad.js";
-import { renderCoursePages } from "../course-maps/pdf-page.js";
-import { printGate, printWorkerCount, renderCoursePagesInWorker, resetPrintWorkers } from "../course-maps/print-worker-host.js";
+import { rasteriseSvgGraphic, renderCoursePages } from "../course-maps/pdf-page.js";
+import { printGate, printWorkerCount, rasteriseSvgInWorker, renderCoursePagesInWorker, resetPrintWorkers } from "../course-maps/print-worker-host.js";
 import { printSheetFor, syntheticCourse } from "./helpers/print-sheet.js";
 import { prepareDocument, type PreparedDocument } from "@oxygen/shared/print";
 
@@ -133,6 +133,18 @@ describe("print worker", () => {
     // In-process, one page stalls the loop for its whole compose + write.
     expect(maxMs).toBeLessThan(Math.max(25, perPageMs / 2));
   }, 180_000);
+
+  it("rasterises an SVG logo as the in-process resvg does, at the exact box (print.png, §8.5)", async () => {
+    const svg = new TextEncoder().encode('<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 20 10"><rect width="20" height="10" fill="#c00"/><text x="2" y="8" font-size="6">Ox</text></svg>');
+    const local = await rasteriseSvgGraphic(svg, 473, 236);
+    const remote = await rasteriseSvgInWorker(svg, 473, 236);
+    expect(Buffer.from(remote).equals(Buffer.from(local))).toBe(true);
+    expect(Buffer.from(remote).readUInt32BE(16)).toBe(473);
+    expect(Buffer.from(remote).readUInt32BE(20)).toBe(236);
+    // The caller's bytes are not transferred away.
+    expect(svg.byteLength).toBeGreaterThan(0);
+    await expect(rasteriseSvgInWorker(new TextEncoder().encode("not svg"), 10, 10)).rejects.toThrow();
+  });
 
   it("sizes the pool from PRINT_WORKERS", () => {
     const prev = process.env.PRINT_WORKERS;

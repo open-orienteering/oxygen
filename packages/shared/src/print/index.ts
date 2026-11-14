@@ -19,5 +19,6 @@ export * from "./geo.js";
 export * from "./compose.js";
 export * from "./prepared-document.js";
 export * from "./course-pages.js";
+export * from "./print-job.js";
 export { pageScene, pageSceneNames, type PageSceneName } from "./__fixtures__/pages.js";
 export { descriptionSheetBlock, descriptionSheetScene } from "./__fixtures__/description-sheets.js";

@@ -321,6 +321,15 @@ test.describe("auto templates (docs/course-layout.md §5–§7)", () => {
     const printed = await page.request.get(`/api/maps/itest/maps.pdf?courses=${courseId}`);
     expect(printed.ok()).toBe(true);
     expect(printed.headers()["content-type"]).toContain("application/pdf");
+    // G15: the print job of the same query (course-print.md §8.5) — a sheet per page, the pinned document by hash, maps.pdf's file name.
+    const jobRes = await page.request.get(`/api/maps/itest/print-job?courses=${courseId}`);
+    expect(jobRes.ok()).toBe(true);
+    const job = (await jobRes.json()) as { version: number; document: { hash: string }; sheets: { copies?: number }[]; mode: string; filename: string };
+    expect(job.version).toBe(1);
+    expect(job.mode).toBe("cmyk");
+    expect(job.document.hash).toMatch(/^[0-9a-f]{64}$/);
+    expect(job.sheets.reduce((n, s) => n + (s.copies ?? 1), 0)).toBe((await PDFDocument.load(await printed.body())).getPageCount());
+    expect(printed.headers()["content-disposition"]).toContain(`filename="${job.filename}"`);
 
     // The template is named after its key and shows the key as a badge in Layout mode.
     await rowOf(page, courseId).locator("[data-testid^='edit-course-map-']").click();
