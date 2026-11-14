@@ -151,14 +151,19 @@ interface UvRect {
 }
 
 /** A layer's view: the rectangle at the highest density ≤ `need` its texel limits allow. */
-function layerView(r: UvRect, need: number, maxSide: number, maxPixels: number, bearingDeg: number, originUm: { x: number; y: number }): ViewRect {
+function layerView(r: UvRect, need: number, maxSide: number, maxPixels: number, bearingDeg: number, originUm: { x: number; y: number }, screen: { w: number; h: number }): ViewRect {
   const ew = Math.max(r.u1 - r.u0, 1), eh = Math.max(r.v1 - r.v0, 1);
-  let rho = Math.min(need, (maxSide - 1) / ew, (maxSide - 1) / eh, Math.sqrt(Math.max(maxPixels, 1) / (ew * eh)));
-  let w = Math.max(1, Math.ceil(ew * rho)), h = Math.max(1, Math.ceil(eh * rho));
+  let rho = Math.min(need, (maxSide - 2) / ew, (maxSide - 2) / eh, Math.sqrt(Math.max(maxPixels, 1) / ((ew + 2 / need) * (eh + 2 / need))));
+  // Sides of the screen's parity: at pitch 0 the texel centres then fall on the pixel centres.
+  const side = (e: number, s: number) => {
+    const n = Math.max(1, Math.ceil(e * rho));
+    return (n - s) % 2 ? n + 1 : n;
+  };
+  let w = side(ew, screen.w), h = side(eh, screen.h);
   while (w * h > maxPixels && rho > 0) {
     rho *= 0.99;
-    w = Math.max(1, Math.ceil(ew * rho));
-    h = Math.max(1, Math.ceil(eh * rho));
+    w = side(ew, screen.w);
+    h = side(eh, screen.h);
   }
   const [cx, cy] = bearingFrame(bearingDeg).toXy([(r.u0 + r.u1) / 2, (r.v0 + r.v1) / 2]);
   return { centreX: cx + originUm.x, centreY: cy + originUm.y, pxPerUm: rho, widthPx: w, heightPx: h, rotationDeg: bearingDeg };
@@ -192,7 +197,7 @@ export function drapeLayers(cam: TerrainCamera, box: Box3, originUm: { x: number
     };
   };
   const all = rectOf(poly);
-  const make = (r: UvRect, pixels: number) => layerView(r, need, limits.maxSide, pixels, cam.bearingDeg, originUm);
+  const make = (r: UvRect, pixels: number) => layerView(r, need, limits.maxSide, pixels, cam.bearingDeg, originUm, { w: cam.widthPx, h: cam.heightPx });
   const one = make(all, limits.maxPixels);
   if (one.pxPerUm >= DRAPE_NEAR_RATIO * need) return [{ role: "far", view: one, needPxPerUm: need }];
   // The cap bites: far takes half the texels, near the rest over the ground far is too coarse for.

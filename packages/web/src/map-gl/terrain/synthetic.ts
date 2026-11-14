@@ -124,3 +124,25 @@ export function noiseField(width = 300, height = 200, seed = 7, amplitudeM = 40)
     { cellMm: 0.2, groundMPerMm: 15 },
   );
 }
+
+/**
+ * The field under the dev page's draped course (`doc=course`, §5.6 "Dev page"): 500 × 400 cells
+ * of 0.2 mm from paper (−10, −10) mm — the course document's 80 × 60 mm sheet and a 10 mm rim, so
+ * the whole sheet is on the mesh — at 1 : 15 000, flat or with a cone of `DOC_CONE.heightM` at
+ * `DOC_CONE` (radius in mm), no no-data.
+ */
+export const DOC_CONE = { x: 35, y: 25, radiusMm: 22, heightM: 45, groundMPerMm: 15 } as const;
+
+export function docField(kind: "cone" | "flat"): HeightField {
+  const c = DOC_CONE;
+  return fieldFromGrid(
+    500,
+    400,
+    (cx, cy) => {
+      if (kind === "flat") return 0;
+      const r = Math.hypot(-10 + (cx + 0.5) * 0.2 - c.x, -10 + (cy + 0.5) * 0.2 - c.y);
+      return Math.max(0, c.heightM * (1 - r / c.radiusMm));
+    },
+    { cellMm: 0.2, x0: -10, y0: -10, groundMPerMm: c.groundMPerMm },
+  );
+}

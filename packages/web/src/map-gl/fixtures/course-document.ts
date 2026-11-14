@@ -1,0 +1,57 @@
+/**
+ * A small aligned ISOM document and a course request (browser-safe): the dynamic-bucket tests
+ * (§5.2 "Dynamic bucket") and the terrain dev page's draped course (§5.6 "Dev page") both use it.
+ */
+
+import { course, mapDocument, symbolLibrary } from "@oxygen/shared";
+import type { CourseLayerRequest } from "../worker.js";
+
+/** The ISOM palette as an aligned stack: no upper white (ISOM has none), lower and upper purple. */
+export function isomStack(): mapDocument.DocumentColour[] {
+  return symbolLibrary.paletteStack("iof2024", "ISOM2017-2").map((c) => ({ ...c, paletteIds: [c.id.slice(c.id.indexOf(":") + 1)] }));
+}
+
+export const indexOf = (stack: readonly { id: string }[], id: string) => stack.findIndex((c) => c.id === `iof2024:${id}`);
+
+/**
+ * A document: one black line (below upper purple: keeps its index) and one line in the stack's top
+ * row (above it: moves up one when upper white is inserted). 100 units per mm. `boulder`: a 204
+ * point (a cut feature, course-layer.md §3.4) at that paper-mm position.
+ */
+export function documentBytes(colours = isomStack(), opts: { boulder?: { x: number; y: number } } = {}): ArrayBuffer {
+  const black = indexOf(colours, "black100");
+  const top = colours.length - 1;
+  const line = (code: string, colour: number) => ({ code, name: code, kind: "line" as const, render: { type: "line" as const, id: code, code, name: code, main: { colour, widthUm: 300 } } });
+  const u8 = mapDocument.encodeMapDocument({
+    header: {
+      format: { version: 1, importer: "test-1" },
+      source: { kind: "ocad", version: "2018.8.3", hash: "00".repeat(32), bytes: 1 },
+      unitsPerMm: 100,
+      mapScale: 15000,
+      library: { id: "ISOM2017-2", version: "1" },
+      georeferencing: { crs: null, paperOrigin: null },
+      colours,
+      symbols: [line("516.0", black), line("999.0", top), ...(opts.boulder ? [{ code: "204.0", name: "Boulder", kind: "point" as const, render: null }] : [])],
+    },
+    objects: [
+      // A black line across the first leg (x = 25 mm), and a top-row line elsewhere.
+      { symbolIdx: 0, type: mapDocument.OBJECT_TYPE.line, sourceIndex: 0, coords: [2500, 0, 2500, 2000], flags: [0, 0] },
+      { symbolIdx: 1, type: mapDocument.OBJECT_TYPE.line, sourceIndex: 1, coords: [0, 6000, 8000, 6000], flags: [0, 0] },
+      ...(opts.boulder
+        ? [{ symbolIdx: 2, type: mapDocument.OBJECT_TYPE.point, sourceIndex: 2, coords: [Math.round(opts.boulder.x * 100), Math.round(opts.boulder.y * 100)], flags: [0] }]
+        : []),
+    ],
+  });
+  return u8.buffer.slice(u8.byteOffset, u8.byteOffset + u8.byteLength) as ArrayBuffer;
+}
+
+const site = (id: string, kind: course.CourseSite["kind"], x: number, y: number): course.CourseSite => ({ id, code: id, kind, x, y });
+export const request = (over: Partial<CourseLayerRequest> = {}): CourseLayerRequest => ({
+  structure: { version: 1, id: "c1", orderMode: "ordered", items: ["S", "31", "32", "F"].map((siteId) => ({ siteId })) },
+  sites: [site("S", "start", 10, 10), site("31", "control", 40, 10), site("32", "control", 60, 40), site("F", "finish", 10, 40)],
+  objects: [],
+  appearance: {},
+  viewOptions: { labelMode: "sequence" },
+  ...over,
+});
+

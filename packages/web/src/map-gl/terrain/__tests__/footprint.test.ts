@@ -115,9 +115,12 @@ describe("drapeLayers (map-rendering.md §5.6 \"Drape layers\")", () => {
       expect(v.rotationDeg).toBe(bearingDeg);
       expect(v.centreX - ORIGIN.x).toBeCloseTo(12_000, 3);
       expect(v.centreY - ORIGIN.y).toBeCloseTo(-4_000, 3);
-      // ceil of the grown extent: one texel of rounding at most
-      expect(Math.abs(v.widthPx - 1000 * (1 + 2 * DRAPE_MARGIN))).toBeLessThanOrEqual(1);
-      expect(Math.abs(v.heightPx - 600 * (1 + 2 * DRAPE_MARGIN))).toBeLessThanOrEqual(1);
+      // the grown extent, rounded up to the screen's parity (texel centres on pixel centres)
+      expect(v.widthPx - 1000 * (1 + 2 * DRAPE_MARGIN)).toBeGreaterThanOrEqual(0);
+      expect(v.widthPx - 1000 * (1 + 2 * DRAPE_MARGIN)).toBeLessThanOrEqual(2);
+      expect(v.heightPx - 600 * (1 + 2 * DRAPE_MARGIN)).toBeLessThanOrEqual(2);
+      expect((v.widthPx - 1000) % 2).toBe(0);
+      expect((v.heightPx - 600) % 2).toBe(0);
       // A target-plane point lands the same number of pixels from the centre in both.
       const view2d = { centreX: 12_000 + ORIGIN.x, centreY: -4_000 + ORIGIN.y, pxPerUm: 0.01, widthPx: 1000, heightPx: 600, rotationDeg: bearingDeg };
       for (const [x, y] of [[30_000, 10_000], [-20_000, -25_000]]) {
