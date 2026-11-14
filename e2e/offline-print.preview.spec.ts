@@ -44,6 +44,14 @@ test.describe("offline print from the production bundle (G29)", () => {
     await page.reload();
     expect(await page.evaluate(() => navigator.serviceWorker.controller?.scriptURL ?? null)).toMatch(/\/sw\.js$/);
 
+    // The service worker's own network fetches (Playwright reports them on the context,
+    // `request.serviceWorker()` set): a CacheFirst hit makes none.
+    const swFetched: string[] = [];
+    context.on("request", (r) => {
+      if (r.serviceWorker()) swFetched.push(new URL(r.url()).pathname);
+    });
+    const fetchedBySw = (re: RegExp, from: number) => swFetched.slice(from).filter((p) => re.test(p));
+
     // `globIgnores` (§8.6 "Delivery"): the bundle is precached, the print worker is not.
     const precache = (await cachedPaths(page, /^workbox-precache/)).map((p) => p.split("?")[0]);
     expect(precache.some((p) => /^\/assets\/index-[\w-]+\.js$/.test(p))).toBe(true);
@@ -77,13 +85,17 @@ test.describe("offline print from the production bundle (G29)", () => {
       return ((await res!.json()) as { storedAt: string }).storedAt;
     });
     expect(storedAt).toMatch(/^\d{4}-\d\d-\d\dT/);
+    // Detection works: storing, the service worker fetched the chunk and the faces itself (a miss).
+    expect(fetchedBySw(WORKER_CHUNK, 0), "the worker chunk fetched by the service worker").toHaveLength(1);
+    expect(new Set(fetchedBySw(FACE, 0)).size, "the faces fetched by the service worker").toBe(3);
 
     // What the new page receives, and whether the service worker answered it.
     const responses: Response[] = [];
     const requested: string[] = [];
     page.on("request", (r) => requested.push(new URL(r.url()).pathname));
     page.on("response", (r) => responses.push(r));
-    const answered = (re: RegExp) => responses.filter((r) => re.test(new URL(r.url()).pathname));
+    const answered = (re: RegExp, from = 0) => responses.slice(from).filter((r) => re.test(new URL(r.url()).pathname));
+    const swFrom = swFetched.length;
 
     // A new page: nothing of the store's run is left in memory — no worker, no document,
     // no faces. Still controlled (a reload keeps the service worker).
@@ -92,6 +104,7 @@ test.describe("offline print from the production bundle (G29)", () => {
     expect(await page.evaluate(() => navigator.serviceWorker.controller !== null)).toBe(true);
 
     await context.setOffline(true);
+    const offlineFrom = responses.length;
     let offline: Download;
     try {
       // Offline holds inside the service worker too: a face it has not cached does not load.
@@ -112,9 +125,13 @@ test.describe("offline print from the production bundle (G29)", () => {
       await expect(page.getByTestId("course-maps-error")).toHaveCount(0);
       expect(requested.filter((p) => p.endsWith("/maps.pdf"))).toEqual([]);
 
-      const chunk = answered(WORKER_CHUNK);
-      expect(chunk.length, "the worker chunk was requested").toBeGreaterThan(0);
+      // The worker starts only for the export, so its chunk is asked with the network gone.
+      const chunk = answered(WORKER_CHUNK, offlineFrom);
+      expect(chunk.length, "the worker chunk was requested offline").toBeGreaterThan(0);
       for (const r of chunk) expect(r.fromServiceWorker(), r.url()).toBe(true);
+      // The faces and the document may be read once the page loads (online) and kept in
+      // memory for the export: answered by the service worker since the reload, and — the
+      // service worker fetching none of them — from its caches.
       const faceResponses = answered(FACE);
       expect(new Set(faceResponses.map((r) => new URL(r.url()).pathname)).size).toBe(3);
       for (const r of faceResponses) {
@@ -127,6 +144,10 @@ test.describe("offline print from the production bundle (G29)", () => {
         expect(r.fromServiceWorker(), r.url()).toBe(true);
         expect(r.status(), r.url()).toBe(200);
       }
+      expect(fetchedBySw(WORKER_CHUNK, swFrom)).toEqual([]);
+      // The one face it went to the network for is the probe's, which it had not cached.
+      expect(fetchedBySw(FACE, swFrom)).toEqual(["/assets/no-such-face-g29.ttf"]);
+      expect(fetchedBySw(/^\/api\/map-documents\//, swFrom)).toEqual([]);
     } finally {
       await context.setOffline(false);
     }
