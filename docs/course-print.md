@@ -853,7 +853,13 @@ re-import (the review's colour decisions).
      unpatched entry if it is still held. The host remembers which keys
      the worker instance holds and reads and sends the blob only on a
      miss; a worker that reports it lacks the document (`NeedDocument`)
-     gets it on one retry. A replaced worker starts empty.
+     gets it on one retry. A replaced worker starts empty. The key
+     carries no event: two events on one document share an entry when
+     their patch versions are equal, which is exact because a version
+     is an HLC minted by the cloud's clock on every write that changes a
+     row (`map-patches.md` §3.1) — two rows never share one unless one
+     is a copy of the other (a venue box's checkout, a restored dump),
+     and a copy carries the token with its ops.
    - **Pool.** Workers start on first use, are `unref`'d while idle and
      replaced after an exit. `PRINT_WORKERS` (default `1`, at most `4`)
      sets how many prints compose at once; each worker holds a decoded

@@ -426,6 +426,11 @@ no cuts, no obstacles, no north. It never falls back to an OCAD parse.
 | `loadEventMapObjects` (`event-map-objects.ts`): description autodetect, `control.suggestDescription`, `DESCRIPTION_STALE` | over the effective document (below): point / line / area objects, not hidden by the patch, of non-hidden symbols whose code — the applied match's canonical code, else the source code — is in `ISOM_DESCRIPTION_MAP`, as `SlimMapObject` (1/100 mm whatever `unitsPerMm`, `sym` = `204.1` → 204001, Béziers flattened in 8 steps, an area's outer ring) | null |
 | `loadEventCutFeatures` | `course.cutFeaturesOfDocument` (`course-layer.md` §3.4) | null: no automatic cuts |
 | `loadEventCheckDocument` | `course.checkObstaclesOfDocument` (`course-layer.md` §9.3) | null |
+| north: `course.mapMetadata` (`meridianStalenessDeg`, `cutRotationDeg`), `clubMap.list` (`northDetection`, `meridianStalenessDeg`) | `map_documents.report.north` (`detectDocumentNorth`, written at import); staleness re-evaluated for today by `meridianStalenessFromDetection` | null |
+| `clubMap.list` `bounds`, `northOffset` | `mapFileMetadataFor(header, report.north.meridian tilt, club_maps.rotation_correction)` of the latest version's document | null (no version) |
+| `getBaseMapInfo` (`course-maps/map-source.ts`) | `scale` = `header.mapScale`, `meridianTiltDeg` = `report.north.meridian.medianTiltDeg` (0 without one), `version` = the document hash; `document` = `{hash}`, always (`course-print.md` §10) | throws "No base map uploaded" (`getBaseMapInfoOrNull` → null); a pin naming a missing `map_documents` row throws "Pinned map document is missing" |
+| `resolveImportAlignment` (`course-import-align.ts`) | the club map a Purple Pen file names is the series whose latest version's label, else its source file name, matches (`matchClubVersion`); re-projection through that version's document frame with `club_maps.rotation_correction` | `unknown` / judged on the event calibration, as before |
+| `course.setMapRotation`, `clubMap.setRotation` | `course.setMapRotation`: the `map_files` quick-access columns recomputed by `documentMapFileColumns` under the new correction — the pin's function (§6.4): `mapFileMetadataFor`, the source fallback for `crs: null`, tilt 0 without a report `north`, scale only when nothing projects. `clubMap.setRotation` stores `club_maps.rotation_correction` only (the list derives the rest, row above) | only the correction is stored; the pin recomputes the columns |
 
 The three `loadEvent…` derivations read the **effective document** (G14,
 `map-patches.md` §2.4): the decoded pin (`decodedDocument`, an LRU per
@@ -433,12 +438,9 @@ hash) with the event's patch applied (`eventPatchOnPin`, §3.3 there),
 memoised per **hash + patch version** — a hit costs the pin and the
 `map_patches.version` column; a miss reads the patch, applies it and
 derives. A disabled, op-less or dormant patch gives the pinned
-document's answer.
-| north: `course.mapMetadata` (`meridianStalenessDeg`, `cutRotationDeg`), `clubMap.list` (`northDetection`, `meridianStalenessDeg`) | `map_documents.report.north` (`detectDocumentNorth`, written at import); staleness re-evaluated for today by `meridianStalenessFromDetection` | null |
-| `clubMap.list` `bounds`, `northOffset` | `mapFileMetadataFor(header, report.north.meridian tilt, club_maps.rotation_correction)` of the latest version's document | null (no version) |
-| `getBaseMapInfo` (`course-maps/map-source.ts`) | `scale` = `header.mapScale`, `meridianTiltDeg` = `report.north.meridian.medianTiltDeg` (0 without one), `version` = the document hash; `document` = `{hash}`, always (`course-print.md` §10) | throws "No base map uploaded" (`getBaseMapInfoOrNull` → null); a pin naming a missing `map_documents` row throws "Pinned map document is missing" |
-| `resolveImportAlignment` (`course-import-align.ts`) | the club map a Purple Pen file names is the series whose latest version's label, else its source file name, matches (`matchClubVersion`); re-projection through that version's document frame with `club_maps.rotation_correction` | `unknown` / judged on the event calibration, as before |
-| `course.setMapRotation`, `clubMap.setRotation` | `course.setMapRotation`: the `map_files` quick-access columns recomputed by `documentMapFileColumns` under the new correction — the pin's function (§6.4): `mapFileMetadataFor`, the source fallback for `crs: null`, tilt 0 without a report `north`, scale only when nothing projects. `clubMap.setRotation` stores `club_maps.rotation_correction` only (the list derives the rest, row above) | only the correction is stored; the pin recomputes the columns |
+document's answer, and so does a row keyed
+to the pin that does not parse — memoised under the version looked up,
+so it is derived once, not on every call.
 
 **`course.mapMetadata`.** Answers non-null for every `map_files` row:
 the row's quick-access columns as stored (the pin writes them, §6.4 —

@@ -9,7 +9,7 @@
 
 import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
-import { beforeAll, beforeEach, describe, expect, it } from "vitest";
+import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { course, mapDocument, mapGeo } from "@oxygen/shared";
 import { loadEventCrs } from "../event-crs.js";
 import { loadEventCheckDocument, loadEventCutFeatures, loadEventMapObjects } from "../event-map-objects.js";
@@ -178,6 +178,22 @@ describe("document derivations", () => {
     // A dormant row (keyed onto another document) is not applied.
     stub.setPatch({ ...row(8n, { [`hide:${src}`]: { op: "hide", sourceIndex: src } }), documentHash: "d".repeat(64) });
     expect(await loadEventCutFeatures(stub.db, EVENT)).toEqual(plainCuts);
+  });
+
+  it("derive once for a row keyed to the pin that does not parse (the unpatched answer, memoised)", async () => {
+    const stub = documentDbStub([doc], {}, { documentHash: doc.hash, sourceHash: doc.sourceHash });
+    const plain = await loadEventCutFeatures(stub.db, EVENT);
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    try {
+      stub.setPatch({ documentHash: doc.hash, enabled: true, ops: [], symbols: {}, version: 11n });
+      expect(await loadEventCutFeatures(stub.db, EVENT)).toEqual(plain);
+      const reads = stub.reads.mapPatch;
+      expect(await loadEventCutFeatures(stub.db, EVENT)).toEqual(plain);
+      // The second call is a hit: only the version column was read.
+      expect(stub.reads.mapPatch).toBe(reads + 1);
+    } finally {
+      warn.mockRestore();
+    }
   });
 
   it("decode a document once per hash", async () => {

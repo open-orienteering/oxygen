@@ -168,7 +168,8 @@ function perDocument<T>(derive: (doc: mapDocument.EffectiveDocument) => T, what:
   return async (db: Db, eventId: bigint): Promise<T | null> => {
     const hash = await eventDocumentHash(db, eventId);
     if (!hash) return null;
-    const cached = memo.get(derivationKey(hash, await eventPatchVersion(db, eventId, hash)));
+    const lookedUp = derivationKey(hash, await eventPatchVersion(db, eventId, hash));
+    const cached = memo.get(lookedUp);
     if (cached !== undefined) return cached;
     const [doc, delivered] = await Promise.all([decodedDocument(db, hash), eventPatchOnPin(db, eventId, hash)]);
     if (!doc) return null;
@@ -178,6 +179,9 @@ function perDocument<T>(derive: (doc: mapDocument.EffectiveDocument) => T, what:
       const value = derive(document);
       // Under the version actually read: a write between the two reads is answered at the next call.
       memo.set(derivationKey(hash, delivered.version), value);
+      // A row keyed to the pin that does not parse is delivered as no patch (version "0") while its version
+      // column is not 0: remember the unpatched answer under the key looked up too, or it never hits.
+      if (!delivered.patch) memo.set(lookedUp, value);
       return value;
     } catch (err) {
       console.warn(`[event-map-objects] document ${hash}: no ${what}:`, err);
