@@ -2640,6 +2640,67 @@ Headless Chromium draws in software (SwiftShader), 64–200 ms a frame
 here; GPU frame times are H6's, on the bench harness with the map
 texture.
 
+#### Measurements (H6)
+
+`scripts/measure-gl.mjs --terrain --modes=source` on the corpus through
+`/dev/map-gl-doc?terrain=1` (2026-11-14): headed Chromium on the laptop's
+iGPU (Intel ADL GT2, Mesa); desktop 1280 × 800 at DPR 1, and the phone
+profile 412 × 915 at DPR 2.625 with the main thread CPU-throttled 4×
+(the worker is not throttled; the GPU is the laptop's — a real phone is
+the H-gate's). The field is seeded noise over the map's bounds at 0.2 mm
+(the 4096-cell cap coarsens Club-full's to 0.23 mm), exaggeration 2,
+pitch 60. Each scenario is 240 frames orbiting 360°, holding still past
+`DRAPE_SETTLE_MS` every 60 frames: **orbit** at the fit view, **close**
+at 1× paper over the densest cell. Mesh frames and drape re-renders are
+reported apart (a re-render's wall time is synced by a one-pixel read).
+Club budget (150 MB; the drape's third is 50 MB).
+
+The field (once per map): the worker's preparation (fill + normals) and
+the main thread's upload.
+
+| Map | Field | Textures | Worker fill + normals | Upload, desktop / phone |
+|---|---|---|---|---|
+| Sprint | 2127 × 1946 | 19.7 MB | 57 + 224 ms | 21 / 43 ms |
+| Crop-B | 756 × 703 | 2.5 MB | 12 + 26 ms | 5 / 8 ms |
+| Club-2026 | 1642 × 2196 | 17.2 MB | 48 + 192 ms | 8 / 16 ms |
+| Club-full | 4096 × 2153 | 42.1 MB | 95 + 451 ms | 23 / 92 ms |
+
+Mesh frames (p50 / p95 ms) and drape re-renders:
+
+| Map, scenario | Mesh CPU desktop / phone | Mesh GPU desktop / phone | Draws | Re-renders | Re-render wall p50 / max, desktop / phone | Layers (desktop / phone) | Drape MB d / p | Resident max MB d / p |
+|---|---|---|---|---|---|---|---|---|
+| Sprint orbit | 0.8/1.5 · 1.0/1.9 | 1.9/2.5 · 2.8/3.7 | 2 | 4 | 40/56 · 44/78 | far / far | 5.8 / 7.0 | 33 / 34 |
+| Sprint close | 0.9/1.6 · 1.5/2.2 | 2.3/3.4 · 4.0/8.1 | 3 | 3 | 66/77 · 75/78 | near + far / near + far | 14.5 / 48.1 | 47 / 77 |
+| Crop-B orbit | 0.5/0.9 · 0.8/1.3 | 1.9/2.2 · 2.5/3.4 | 2 | 4 | 17/22 · 19/31 | far / far | 5.6 / 7.1 | 15 / 16 |
+| Crop-B close | 0.4/0.6 · 0.6/1.0 | 1.0/1.2 · 4.1/5.3 | 2 | 3 | 11/14 · 23/25 | far / far | 2.6 / 16.4 | 15 / 26 |
+| Club-2026 orbit | 0.6/0.9 · 1.2/1.9 | 1.4/3.0 · 2.6/4.5 | 2 | 4 | 43/43 · 57/66 | far / far | 3.1 / 10.0 | 56 / 64 |
+| Club-2026 close | 0.8/1.4 · 1.4/2.1 | 2.2/3.7 · 2.9/6.3 | 3 | 3 | 75/131 · 93/105 | near + far / near + far | 11.7 / 37.5 | 65 / 94 |
+| Club-full orbit | 1.2/1.8 · 1.6/2.5 | 1.9/3.8 · 1.4/2.8 | 2 | 4 | 107/158 · 69/108 | near + far / far | 8.1 / 4.1 | 125 / 121 |
+| Club-full close | 1.5/2.4 · 2.4/3.3 | 3.1/4.9 · 2.9/6.6 | 3 | 62 / 63 | 193/225 · 299/336 | near + far @100 % / @86 % | 31.4 / 50.0 | **156 / 155** |
+
+- **Mesh frames are inside 04 §9** everywhere: CPU ≤ 3.3 ms p95, GPU
+  ≤ 8.1 ms p95 (the phone profile's Sprint close-up, 437 k triangles at
+  2.6 M pixels), ≤ 3 draws, and frame p95 ≤ 17.4 ms — 60 fps — on every
+  run but Club-full's close-up.
+- **A drape re-render is a hitch** of 11–131 ms on desktop and 19–105 ms
+  on the phone profile for the event maps and Club-2026 (6–12 tiles,
+  50–840 draws), once per settle. It is not a frame for the ≤ 300 draws
+  rule ("Budget").
+- **Club-full's close-up streams the whole map**: tilted at 1× paper the
+  camera sees the map to the horizon; split by need, the far layer is at
+  0.3–0.5× paper, above the zoom gate, so the whole map's detail is
+  requested. While it streams, arrivals re-render the drape
+  (`DRAPE_ARRIVAL_MS`, 62–63 times in the run, 193–336 ms each), the frame
+  p95 is 259 ms (desktop) / 488 ms (phone), and residency peaks at
+  155–156 MB against 150 (the field's 42 MB and the drape's 31–50 MB are
+  fixed bytes; drawn detail is protected; the engine reports over budget).
+  Before the split (decision 3 as first decided) it was 120 re-renders,
+  280 ms p95 and 166 MB, with one 3874 × 2536 layer. §8 has the remedy.
+- The phone profile's close-ups take more texels (2.6 M canvas pixels):
+  Club-full's is capped at 86 % of its need.
+- The tile target is 36 MB (19 MB for Crop-B's single 692-texel tile
+  side), not in the budget.
+
 #### Tests
 
 | Test | Covers |
@@ -3472,21 +3533,36 @@ The shared module is exported as a namespace: `import { render } from
   the arena = per-pass pixel comparison relies on both paths using MSAA
   alone; the B-gate's parity check against tiles (§6.4) is where it is
   judged.
-- **§5.2 perspective cameras** (terrain draping, research topic 10):
-  the projection is already one matrix and the target any framebuffer;
-  still needed are cell selection from the camera's footprint instead of
-  the `View` rectangle, and a per-vertex screen density for the
-  screen-only rules instead of the one `pxPerUm`.
-- **§5.6 the map as the drape** (H6): the dev page drapes a checker. The
-  map rendered into a framebuffer texture over the camera's ground
-  footprint, the footprint → view, re-rendering when the camera settles,
-  and the frame time and memory on the bench harness (desktop and the
-  phone profile, against 04 §9) are H6's. So is where `setField`'s work
-  runs: on a 4096² field the no-data fill and chunk ranges take 0.26 s and
-  `heightNormals` 1.9 s on the main thread — the worker, or normals from
-  the height texture on the GPU. The height and normal textures of a
-  4 M-cell field take 20 MB of GPU memory, not yet counted against the
-  residency budget.
+- **§5.2 perspective cameras — the vectors themselves** (research topic
+  10 §5's alternative): H6 drapes orthographic textures (§5.6 "Drape
+  layers"), so cell selection already follows the camera's footprint.
+  Drawing the vectors through the perspective matrix would still need a
+  per-vertex screen density for the screen-only rules instead of the one
+  `pxPerUm`; nothing plans it.
+- **§5.6 the sheet outside the field** (H6, decision 4): the mesh spans
+  the height field (the contours' bounding box + 2 mm), so a title,
+  legend or margin beyond it is not drawn in 3D. A flat apron to the
+  document's bounds is H7's call on real maps.
+- **§5.6 a drape re-render is one hitch** (H6): every layer is rendered
+  in the frame the camera settles in (tiles, mips) — "Measurements (H6)"
+  has its time per map. Spreading the tiles over frames, or keeping the
+  old drape until the new one is complete, is the remedy if the H-gate's
+  phone shows the hitch.
+- **§5.6 Club-full tilted close up** (H6, "Measurements (H6)"): the far
+  layer sees the whole map above the zoom gate, so its detail streams for
+  seconds while arrivals re-render the drape (frame p95 259 / 488 ms,
+  desktop / phone profile) and residency passes the club budget by
+  ~6 MB. Remedies, none built: a drape-only zoom gate higher than 2D's
+  for the far layer, rendering a re-render's tiles over several frames,
+  or keeping the far layer's detail out of the protected set.
+- **§5.6 the tile target is outside the budget** (H6): 36 MB while a drape
+  exists (4× MSAA colour + depth/stencil at 1024², and its resolve
+  texture), freed with the last drape; like the canvas's own MSAA
+  buffers and the loupe's target it is not counted.
+- **§5.6 `heightNormals` in the worker** (H6): the field's preparation is
+  off the main thread now, but still 0.2–0.6 s of worker time on a
+  corpus map ("Measurements (H6)"), during which the worker prepares no
+  cells.
 - **§5.6 in the viewer** (H7): `useHeightField`, the 2D / 3D switch, the
   gestures, the exaggeration control and its default; GPS lines on the
   terrain (H8).
