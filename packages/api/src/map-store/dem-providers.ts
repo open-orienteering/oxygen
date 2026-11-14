@@ -151,9 +151,11 @@ export function lantmaterietProvider(opts: { fetch: RangeFetch; credential: stri
         const link = body.links?.find((l) => l.rel === "next" && typeof l.href === "string" && (l.method === undefined || l.method === "GET"));
         next = link ? new URL(link.href as string, next).toString() : null;
       }
-      if (tiles.length === 0) return "no-coverage";
-      if (tiles.length > DEM_MAX_TILES) throw new DemFetchError("over-cap", `the extent needs ${tiles.length} tiles, over the cap of ${DEM_MAX_TILES}`);
-      return dedupe(tiles);
+      if (next) throw new DemFetchError("over-cap", `the STAC search has more than ${LANTMATERIET.maxPages} pages of tiles`);
+      const unique = dedupe(tiles);
+      if (unique.length === 0) return "no-coverage";
+      if (unique.length > DEM_MAX_TILES) throw new DemFetchError("over-cap", `the extent needs ${unique.length} tiles, over the cap of ${DEM_MAX_TILES}`);
+      return unique;
     },
   };
 }

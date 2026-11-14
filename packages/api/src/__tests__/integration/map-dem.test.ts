@@ -23,7 +23,7 @@ import { createTestEvent, type TestEventContext } from "../helpers/test-db.js";
 import { FLAT, HILL, encodeTerrainDoc, sweref99 } from "../helpers/terrain-doc.js";
 import { CONE_TOP, GLO_ORIGIN, LM_ORIGIN, TEST_CREDENTIAL, demFixture, type DemFixture } from "../helpers/dem-fixture.js";
 import { deriveDocumentArtifacts } from "../../map-store/jobs.js";
-import { configureDemEngine, enqueueDocumentDem, getDemJob, kickDemJobs } from "../../map-store/dem-jobs.js";
+import { configureDemEngine, DEM_JOB_RULES, enqueueDocumentDem, getDemJob, kickDemJobs, requeueAuthFailures } from "../../map-store/dem-jobs.js";
 import { deriveDemFields } from "../../map-store/dem-worker.js";
 import { setDemProviders } from "../../map-store/dem-registry.js";
 import { readHeightfield, resetHeightfieldState, terrainDescriptor, terrainReview } from "../../map-store/heightfield.js";
@@ -263,6 +263,11 @@ describe("states (map-storage.md §4.7 \"The DEM job\")", () => {
     expect(Number(res.headers["retry-after"])).toBeGreaterThan(15);
     expect(res.json()).toMatchObject({ reason: "auth" });
     expect((await terrainDescriptor(ctx.db, hash)).dem).toMatchObject({ state: "failed", reason: "auth" });
+
+    // the operator fixes the secret; the new revision's start queues the job again
+    fx.mode.stac = "ok";
+    expect(await requeueAuthFailures(ctx.db)).toBeGreaterThanOrEqual(1);
+    expect((await settle(hash))[0]).toMatchObject({ state: "done", attempts: 1 });
   });
 
   it("retries a transient failure when due, then succeeds; stops after the last attempt", async () => {
@@ -282,6 +287,12 @@ describe("states (map-storage.md §4.7 \"The DEM job\")", () => {
     const [final] = await settle(last);
     expect(final).toMatchObject({ state: "failed", reason: "http", attempts: 5, nextAttemptAt: null });
     expect((await get(url(last, `ground.${LM}`), signedIn)).statusCode).toBe(404);
+    // a request does not revive it; an import of the document does
+    await enqueueDocumentDem(ctx.db, last);
+    expect((await getDemJob(ctx.db, last, LM))!.state).toBe("failed");
+    fx.mode.stac = "ok";
+    await deriveDocumentArtifacts(ctx.db, last);
+    expect((await settle(last))[0]).toMatchObject({ state: "done", attempts: 1 });
   });
 
   it("a route miss queues the job and answers 503 pending until the rows are there", async () => {
@@ -293,6 +304,33 @@ describe("states (map-storage.md §4.7 \"The DEM job\")", () => {
     expect(res.json()).toMatchObject({ reason: "pending" });
     await settle(hash);
     expect((await get(url(hash, `ground.${LM}`), signedIn)).statusCode).toBe(200);
+  });
+
+  it("re-queues a done job whose rows went, from the route", async () => {
+    const hash = await insertDoc(HILL, "rows-gone", sweref99(LM_ORIGIN.e, LM_ORIGIN.n));
+    await enqueueDocumentDem(ctx.db, hash);
+    await settle(hash);
+    await ctx.db.mapHeightfield.deleteMany({ where: { documentHash: hash, source: { not: "contours" } } });
+    const res = await get(url(hash, `ground.${LM}`), signedIn);
+    expect(res.statusCode).toBe(503);
+    expect(res.json()).toMatchObject({ reason: "pending" });
+    expect((await settle(hash))[0]).toMatchObject({ state: "done" });
+    expect((await get(url(hash, `ground.${LM}`), signedIn)).statusCode).toBe(200);
+  });
+
+  it("the review's dem block follows the job like the descriptor's", async () => {
+    const hash = await insertDoc(HILL, "review", sweref99(LM_ORIGIN.e + 225, LM_ORIGIN.n));
+    expect((await terrainReview(ctx.db, hash)).dem).toMatchObject({ state: "pending", provider: { id: LM } });
+    await enqueueDocumentDem(ctx.db, hash);
+    await settle(hash);
+    expect((await terrainReview(ctx.db, hash)).dem).toMatchObject({ state: "unavailable", reason: "misaligned" });
+  });
+
+  it("fails for good a running job that went stale on its last attempt, instead of re-claiming it", async () => {
+    const hash = await insertDoc(HILL, "crashy", sweref99(LM_ORIGIN.e, LM_ORIGIN.n));
+    await ctx.db.mapDemJob.create({ data: { documentHash: hash, provider: LM, version: TERRAIN_VERSION, state: "running", attempts: DEM_JOB_RULES.maxAttempts, claimedBy: "gone:1", heartbeatAt: new Date(Date.now() - 120_000) } });
+    await kickDemJobs(ctx.db);
+    expect(await getDemJob(ctx.db, hash, LM)).toMatchObject({ state: "failed", reason: "derive", attempts: DEM_JOB_RULES.maxAttempts, nextAttemptAt: null });
   });
 
   it("re-claims a running job whose heartbeat went stale", async () => {

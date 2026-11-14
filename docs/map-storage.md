@@ -685,6 +685,18 @@ row per `(document_hash, provider, version)`; `packages/api/src/map-store/dem-jo
 | `unavailable` | `no-georeference` (no CRS proj4 knows, no paper origin, no usable bounds), `no-coverage` (the provider has no tile there, or no contour chain is covered), `no-contours`, `over-cap` (H4's cap, or more than 16 tiles or 64 M window cells), `misaligned` (an anchor-grade DEM accepts under half of the contour length it covers, map-terrain §7.0 answer 2) | final; nothing written |
 | `failed` | `auth` (401 / 403), `http` (another status, no range support, a refused redirect), `format` (a TIFF the reader does not read), `timeout` (30 s per request, 240 s per derive, 10 min per job), `derive` (anything else) | retried from `next_attempt_at`: 1 min, 10 min, 1 h, 6 h after attempts 1–4 (`auth` never under 1 h); after the fifth attempt `next_attempt_at` is null and it is final |
 
+**Recovery.** A job that failed for good is queued again from its first
+attempt by an import of its document (stage 10 and the dedup short-cut,
+`enqueueDocumentDem(…, { requeueFinal: true })`), not by a request.
+Jobs that failed on `auth` — waiting or final — are queued again when the
+engine starts (`requeueAuthFailures`): a fixed secret reaches an instance
+only through a new revision or restart. A `running` job that goes stale
+on its last attempt (it took its instance down each time, never reaching
+its own failure path) is not re-claimed but marked `failed: derive`,
+final. The heartbeat runs from the claim, so a job waiting behind another
+derive in the queue is not taken as stale; past the 10-minute timeout no
+derive is started.
+
 `CHECK`s hold the state to the five values, `reason` non-null exactly on
 `unavailable` and `failed`, and `error` (the message, never the
 credential) to 2000 characters. An instance without enabled providers
@@ -725,7 +737,7 @@ tables only, never waits:
 | `dem.state` | When | `provider` | `ground` / `anchored` |
 |---|---|---|---|
 | `disabled` | no provider enabled on this instance | null | null |
-| `unavailable`, `reason: "rotation-corrected"` | the event's pin has a `rotation_correction ≠ 0` (descriptor only; map-terrain §7.0 answer 2) | null | null |
+| `unavailable`, `reason: "rotation-corrected"` | the event's pin has a `rotation_correction ≠ 0` (`course.mapMetadata.terrain` only, map-terrain §7.0 answer 2; the import review describes the document, whatever any pin's correction) | null | null |
 | `pending` | the first enabled provider not ended `no-coverage` has no job yet, or it is queued or running | its `HeightFieldProvider` | the routes; `anchored.decided` null — fetching one queues the job |
 | `ready` | that job is `done` | its `HeightFieldProvider` (licence, attribution) | the routes; `anchored.decided` = the anchored row's `share.decided` |
 | `failed` / `unavailable` | that job ended so | its `HeightFieldProvider` | null; `reason` |
@@ -1828,7 +1840,7 @@ queued by the first request for a DEM source, which the descriptor's
 | Unit (api) | `packages/api/src/__tests__/backup.test.ts` (H4, H10) | `map_heightfields` and `map_dem_jobs` not in the dump |
 | Unit (api) | `packages/api/src/__tests__/snapshot-maps.test.ts` (H10) | the blob export refuses `map_dem_jobs` like `map_heightfields` |
 | Unit (api) | `packages/api/src/__tests__/map-dem-jobs.test.ts` | §4.7 "The DEM": the back-off (1 min, 10 min, 1 h, 6 h, final after five; `auth` ≥ 1 h), what is claimable, the stored error capped and without a Basic credential; `?source=` parsing, the provider of a source, the URL with and without it |
-| Integration (api) | `packages/api/src/__tests__/integration/map-dem.test.ts` | §4.7 "The DEM", against the recorded DEM fixture (no network): stage 10 queues the job, which fetches by range with the credential on Lantmäteriet only and writes both rows on the `contours` grid, heights against the analytic cone, licence and attribution in the headers, the reports; the descriptor and review `dem` ready / pending / failed / unavailable / disabled / rotation-corrected; the route 200 / 304 / ETag per source, `contours` unchanged, 400 / 401 / 403 / 404 `source` / `version` in order; Lantmäteriet's no-coverage falls to GLO-30, GLO-30 alone without Lantmäteriet; unavailable `no-georeference` / `no-contours` / `misaligned` / `over-cap` write nothing and answer 404 with the reason; a refused credential fails `auth` with a retry ≥ 1 h and no secret stored, 503 with `Retry-After`; a transient failure retried when due, final after the fifth attempt (404); a route miss queues the job (503 pending, then 200); a stale running job re-claimed; the table's CHECKs; the GC's version pass over every source and the jobs; the cascade |
+| Integration (api) | `packages/api/src/__tests__/integration/map-dem.test.ts` | §4.7 "The DEM", against the recorded DEM fixture (no network): stage 10 queues the job, which fetches by range with the credential on Lantmäteriet only and writes both rows on the `contours` grid, heights against the analytic cone, licence and attribution in the headers, the reports; the descriptor's `dem` ready / pending / failed / unavailable / disabled / rotation-corrected, the review's ready / pending / unavailable; the route 200 / 304 / ETag per source, `contours` unchanged, 400 / 401 / 403 / 404 `source` / `version` in order; Lantmäteriet's no-coverage falls to GLO-30, GLO-30 alone without Lantmäteriet; unavailable `no-georeference` / `no-contours` / `misaligned` / `over-cap` write nothing and answer 404 with the reason; a refused credential fails `auth` with a retry ≥ 1 h and no secret stored, 503 with `Retry-After`; requeued at startup after the secret is fixed; a transient failure retried when due, final after the fifth attempt (404), not revived by a request, revived by an import; a route miss queues the job (503 pending, then 200); a done job whose rows went re-queued by the route; a stale running job re-claimed, and failed for good at its last attempt; the table's CHECKs; the GC's version pass over every source and the jobs; the cascade |
 | Unit (web) | `packages/web/src/lib/__tests__/map-review.test.ts` (H4) | `terrainLine`: the decided share floored against the 80 % gate, the other states |
 | E2E | `e2e/map-documents.spec.ts` (H4, H10) | the demo `.omap` through the chunked route → `mapMetadata.terrain` ready with decided > 80 % → `height.bin` 200 (`OXHF`, headers), 304, anonymous 401, another version 404; with no DEM provider enabled `terrain.dem` is `disabled`, a DEM source 404 `source`, a malformed one 400, `source=contours` the same field |
 | E2E | `e2e/map-review.spec.ts` (H4) | the event map's review shows the terrain line "no contours" for `test.ocd` |

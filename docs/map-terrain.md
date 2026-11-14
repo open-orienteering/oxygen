@@ -1423,8 +1423,10 @@ whose job does not end `no-coverage` serves the document
 grid is open data under CC0; its height data is CC BY 4.0 and needs the
 attribution. The licence and the attribution are in the header's
 `provider` block of both stored fields (§5.1), so they travel with the
-bytes, and in the descriptor (`docs/map-storage.md` §4.7); the viewer
-shows the attribution with the surface (H11).
+bytes, and in the descriptor (`docs/map-storage.md` §4.7). **Showing**
+it to the user (answer 16's "shows") is the viewer's, with the DEM
+surface: H11's row carries it, since H10 changes no client. Nothing draws
+a DEM surface before H11.
 
 **Fetching is opt-in** (§7.0 answer 4). `MAP_DEM_PROVIDERS` is a comma
 list of `lantmateriet`, `glo30`; empty or unset is none, so tests, the E2E
@@ -1535,7 +1537,8 @@ requests". That is a check against the live service with a real
 credential, which no session makes: `pnpm --filter @oxygen/api
 dem:live-check -- --map <club map>` (`packages/api/scripts/dem-live-check.ts`,
 logic in `map-store/dem-live-check.ts`, tested against the fixture),
-run by the operator with their own `MAP_DEM_LANTMATERIET_AUTH`. It
+run by the operator with their own `MAP_DEM_LANTMATERIET_AUTH`, on a
+map under the 1 m window cap (club-2026's size, not club-full's, §7.7). It
 locates the map's tiles, sends one `Range` request through any
 redirect, reads the tile profile, and runs `anchorLevels` at 1 m and
 2 m. It prints aggregates only and writes nothing. **Pass**: 206 with

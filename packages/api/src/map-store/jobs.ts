@@ -259,7 +259,7 @@ async function execute(db: Db, job: ImportJobRow): Promise<void> {
 export async function deriveDocumentArtifacts(db: Db, hash: string): Promise<void> {
   await deriveDocumentPreviews(db, hash);
   await deriveDocumentHeightfield(db, hash);
-  void enqueueDocumentDem(db, hash);
+  void enqueueDocumentDem(db, hash, undefined, { requeueFinal: true });
 }
 
 /**
@@ -354,7 +354,7 @@ export async function startImportJob(db: Db, input: StartImportJobInput): Promis
     // before H4 does not hold this request for a derive (docs/map-storage.md §6.1).
     await deriveDocumentPreviews(db, existing.hash);
     void deriveDocumentHeightfield(db, existing.hash);
-    void enqueueDocumentDem(db, existing.hash);
+    void enqueueDocumentDem(db, existing.hash, undefined, { requeueFinal: true });
     return row;
   }
 

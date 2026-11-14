@@ -341,8 +341,9 @@ GLO-30 (open, no account) serves where Lantmäteriet has no coverage.
    in `env.sh` overrides the providers (`glo30` alone for an instance
    outside Sweden, which needs no secret).
 4. Once, with your own credential on your own machine, run the live
-   check (docs/map-terrain.md §7.6) against one club map and record the
-   result there:
+   check (docs/map-terrain.md §7.6) against one club map of ordinary size
+   (a few km across, like the corpus's club-2026: it measures at 1 m too,
+   and the largest map is over the 1 m cap) and record the result there:
 
    ```bash
    pnpm --filter @oxygen/api dem:live-check -- --map /path/to/club-map.ocd
@@ -357,7 +358,9 @@ GLO-30 (open, no account) serves where Lantmäteriet has no coverage.
 
 The fetch runs in the background after an import and is retried on
 failure (docs/map-storage.md §4.7 "The DEM"); a refused credential shows
-as `failed: auth` in the map's terrain descriptor and is retried hourly.
+as `failed: auth` in the map's terrain descriptor; it is retried after an
+hour, three times, then left until the next deploy or restart, which
+queues every such map again — so after fixing the secret, redeploy.
 Memory: one DEM derive adds about 1 GB on the largest corpus map, the
 order of the contour derive, and the two never run at once on an
 instance.

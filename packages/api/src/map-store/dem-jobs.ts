@@ -131,15 +131,21 @@ export async function getDemJob(db: Db, hash: string, provider: string, version:
 /**
  * Queue the document's DEM: `providerId`'s job, or the first enabled
  * provider whose job has not ended `no-coverage`. No-op without enabled
- * providers or when that job exists. Kicks the engine; never throws.
+ * providers or when that job exists — except that `requeueFinal` (an
+ * import of the document, §4.7) queues a job that failed for good again
+ * from its first attempt. Kicks the engine; never throws.
  */
-export async function enqueueDocumentDem(db: Db, hash: string, providerId?: string): Promise<void> {
+export async function enqueueDocumentDem(db: Db, hash: string, providerId?: string, opts: { requeueFinal?: boolean } = {}): Promise<void> {
   try {
     const list = providerId ? [demProviderById(providerId)].filter((p): p is DemProvider => p !== null) : demProviders();
     for (const p of list) {
       const job = await getDemJob(db, hash, p.info.id);
       if (!job) {
         await db.mapDemJob.createMany({ data: [{ documentHash: hash, provider: p.info.id, version: TERRAIN_VERSION, state: "queued" }], skipDuplicates: true });
+        break;
+      }
+      if (opts.requeueFinal && job.state === "failed" && job.nextAttemptAt === null) {
+        await db.mapDemJob.updateMany({ where: { documentHash: hash, provider: p.info.id, version: TERRAIN_VERSION, state: "failed", nextAttemptAt: null }, data: { state: "queued", reason: null, error: null, attempts: 0, updatedAt: new Date() } });
         break;
       }
       if (!(job.state === "unavailable" && job.reason === "no-coverage")) break;
@@ -165,7 +171,13 @@ export function kickDemJobs(db: Db): Promise<void> {
       tried.add(`${next.documentHash}/${next.provider}`);
       const provider = demProviderById(next.provider);
       if (!provider || !(await claim(db, next))) continue;
-      await serialisedDerive(() => execute(db, next.documentHash, provider));
+      // the heartbeat runs from the claim, so a job waiting behind another derive is not taken as stale
+      const heartbeat = startHeartbeat(db, next.documentHash, provider.info.id);
+      try {
+        await serialisedDerive(() => execute(db, next.documentHash, provider));
+      } finally {
+        clearInterval(heartbeat);
+      }
     }
   })()
     .catch((err: unknown) => console.error("[map-dem] engine:", err))
@@ -175,8 +187,30 @@ export function kickDemJobs(db: Db): Promise<void> {
   return running;
 }
 
+function startHeartbeat(db: Db, hash: string, provider: string): NodeJS.Timeout {
+  const t = setInterval(() => {
+    void db.mapDemJob.updateMany({ where: { documentHash: hash, provider, version: TERRAIN_VERSION, claimedBy: INSTANCE_ID, state: "running" }, data: { heartbeatAt: new Date() } }).catch(() => undefined);
+  }, DEM_JOB_RULES.heartbeatMs);
+  t.unref();
+  return t;
+}
+
+/**
+ * A running job went stale after its last attempt: it took its instance
+ * down every time (it never reached its own failure path), so it fails
+ * for good instead of being re-claimed after each restart (§4.7).
+ */
+async function failExhausted(db: Db, stale: Date): Promise<void> {
+  const { count } = await db.mapDemJob.updateMany({
+    where: { version: TERRAIN_VERSION, state: "running", attempts: { gte: DEM_JOB_RULES.maxAttempts }, OR: [{ heartbeatAt: null }, { heartbeatAt: { lt: stale } }] },
+    data: { state: "failed", reason: "derive", error: `the job stopped its instance on each of ${DEM_JOB_RULES.maxAttempts} attempts`, nextAttemptAt: null, updatedAt: new Date() },
+  });
+  if (count > 0) console.error(`[map-dem] ${count} job(s) failed for good after ${DEM_JOB_RULES.maxAttempts} attempts that never finished`);
+}
+
 async function nextClaimable(db: Db, tried: Set<string>): Promise<{ documentHash: string; provider: string } | null> {
   const now = new Date(), stale = new Date(now.getTime() - DEM_JOB_RULES.staleMs);
+  await failExhausted(db, stale);
   const rows = await db.mapDemJob.findMany({
     where: {
       version: TERRAIN_VERSION,
@@ -203,7 +237,7 @@ async function claim(db: Db, key: { documentHash: string; provider: string }): P
       OR: [
         { state: "queued", OR: [{ nextAttemptAt: null }, { nextAttemptAt: { lte: now } }] },
         { state: "failed", nextAttemptAt: { lte: now } },
-        { state: "running", OR: [{ heartbeatAt: null }, { heartbeatAt: { lt: stale } }] },
+        { state: "running", attempts: { lt: DEM_JOB_RULES.maxAttempts }, OR: [{ heartbeatAt: null }, { heartbeatAt: { lt: stale } }] },
       ],
     },
     data: { state: "running", reason: null, claimedBy: INSTANCE_ID, heartbeatAt: now, attempts: { increment: 1 }, updatedAt: now },
@@ -213,7 +247,7 @@ async function claim(db: Db, key: { documentHash: string; provider: string }): P
 
 type Outcome = { kind: "done"; derived: Extract<DemDerived, { type: "done" }>; tiles: number; tilesRead: number } | { kind: "unavailable"; reason: DemUnavailableReason };
 
-async function run(db: Db, hash: string, provider: DemProvider): Promise<Outcome | null> {
+async function run(db: Db, hash: string, provider: DemProvider, signal: { timedOut: boolean }): Promise<Outcome | null> {
   const doc = await db.mapDocument.findUnique({ where: { hash }, select: { header: true } });
   if (!doc) return null;
   if (isOverCap(doc.header)) return { kind: "unavailable", reason: "over-cap" };
@@ -228,8 +262,10 @@ async function run(db: Db, hash: string, provider: DemProvider): Promise<Outcome
     throw err;
   }
   if (mosaic === "no-coverage") return { kind: "unavailable", reason: "no-coverage" };
+  // past the job's timeout the queue slot is released: start no derive outside it
+  if (signal.timedOut) return null;
   const bytes = await getBlob(db, "map_documents", hash);
-  if (!bytes) return null;
+  if (!bytes || signal.timedOut) return null;
   const derived = await (engineOptions.derive ?? deriveDemInWorker)({ bytes: new Uint8Array(bytes.buffer, bytes.byteOffset, bytes.byteLength), frame, paper: extent.paper, windows: mosaic.windows, provider: provider.info });
   if (derived.type === "unavailable") return { kind: "unavailable", reason: derived.reason };
   return { kind: "done", derived, tiles: mosaic.tiles, tilesRead: mosaic.tilesRead };
@@ -255,17 +291,17 @@ async function mark(db: Db, hash: string, provider: string, data: Prisma.MapDemJ
 
 async function execute(db: Db, hash: string, provider: DemProvider): Promise<void> {
   const id = provider.info.id;
-  const heartbeat = setInterval(() => {
-    void db.mapDemJob.updateMany({ where: { documentHash: hash, provider: id, version: TERRAIN_VERSION, claimedBy: INSTANCE_ID, state: "running" }, data: { heartbeatAt: new Date() } }).catch(() => undefined);
-  }, DEM_JOB_RULES.heartbeatMs);
-  heartbeat.unref();
   const started = Date.now();
+  const signal = { timedOut: false };
   let timer: NodeJS.Timeout | undefined;
   try {
     const timeout = new Promise<never>((_, reject) => {
-      timer = setTimeout(() => reject(new DemFetchError("timeout", `the DEM job exceeded ${DEM_JOB_RULES.timeoutMs} ms`)), DEM_JOB_RULES.timeoutMs);
+      timer = setTimeout(() => {
+        signal.timedOut = true;
+        reject(new DemFetchError("timeout", `the DEM job exceeded ${DEM_JOB_RULES.timeoutMs} ms`));
+      }, DEM_JOB_RULES.timeoutMs);
     });
-    const out = await Promise.race([run(db, hash, provider), timeout]);
+    const out = await Promise.race([run(db, hash, provider, signal), timeout]);
     if (out === null) return; // the document went away (its job row with it)
     if (out.kind === "unavailable") {
       await mark(db, hash, id, { state: "unavailable", reason: out.reason, error: null, nextAttemptAt: null });
@@ -286,7 +322,25 @@ async function execute(db: Db, hash: string, provider: DemProvider): Promise<voi
     await mark(db, hash, id, { state: "failed", reason, error: text, nextAttemptAt: retry }).catch((e: unknown) => console.error(`[map-dem] marking ${hash} ${id} failed:`, e));
   } finally {
     clearTimeout(timer);
-    clearInterval(heartbeat);
+  }
+}
+
+/**
+ * At startup: jobs that failed on a refused credential are queued again
+ * from their first attempt. A changed secret reaches an instance only
+ * through a new revision or restart, so this is when a fixed credential
+ * can first succeed (§4.7). Never throws.
+ */
+export async function requeueAuthFailures(db: Db): Promise<number> {
+  const lm = demProviders().filter((p) => p.name === "lantmateriet").map((p) => p.info.id);
+  if (lm.length === 0) return 0;
+  try {
+    const { count } = await db.mapDemJob.updateMany({ where: { version: TERRAIN_VERSION, provider: { in: lm }, state: "failed", reason: "auth" }, data: { state: "queued", reason: null, error: null, attempts: 0, nextAttemptAt: null, updatedAt: new Date() } });
+    if (count > 0) console.log(`[map-dem] queued ${count} job(s) that had failed on the credential again`);
+    return count;
+  } catch (err: unknown) {
+    console.error("[map-dem] requeue auth failures:", err instanceof Error ? err.message : err);
+    return 0;
   }
 }
 
@@ -295,6 +349,7 @@ let ticker: NodeJS.Timeout | null = null;
 /** The 60 s tick: resumes queued, due and stale jobs nobody kicked. */
 export function startDemJobEngine(db: Db, intervalMs: number = DEM_JOB_RULES.staleMs): void {
   if (ticker || demProviders().length === 0) return;
+  void requeueAuthFailures(db);
   ticker = setInterval(() => void kickDemJobs(db), intervalMs);
   ticker.unref();
   setTimeout(() => void kickDemJobs(db), 7_000).unref();

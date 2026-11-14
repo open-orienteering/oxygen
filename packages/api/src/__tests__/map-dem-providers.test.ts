@@ -39,6 +39,15 @@ describe("Lantmäteriet's STAC (map-terrain.md §7.1)", () => {
     await expect(lantmaterietProvider({ fetch: bad.fetch, credential: CRED }).locate(BOX)).rejects.toMatchObject({ reason: "format" });
   });
 
+  it("counts the tile cap after duplicates, and refuses an endless page chain", async () => {
+    const q = `${STAC}/search?collections=dtm-cog&bbox=18%2C59.3%2C18.1%2C59.35&limit=100`;
+    const same = Array.from({ length: 20 }, () => item("a", "https://dl.lantmateriet.se/hojd/a.tif"));
+    const dup = fakeRangeServer({ [q]: json({ features: same, links: [] }) });
+    expect(await lantmaterietProvider({ fetch: dup.fetch, credential: CRED }).locate(BOX)).toEqual([{ url: "https://dl.lantmateriet.se/hojd/a.tif" }]);
+    const loop = fakeRangeServer({ [q]: json({ features: [item("a", "https://dl.lantmateriet.se/hojd/a.tif")], links: [{ rel: "next", href: q }] }) });
+    await expect(lantmaterietProvider({ fetch: loop.fetch, credential: CRED }).locate(BOX)).rejects.toMatchObject({ reason: "over-cap" });
+  });
+
   it("reads the 1 m model when told to", () => {
     const p = lantmaterietProvider({ fetch: fakeRangeServer({}).fetch, credential: CRED, resolutionM: 1 });
     expect(p.info.id).toBe("lantmateriet-1m");
