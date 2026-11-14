@@ -73,6 +73,14 @@ describe("importReportSchema warningDetails", () => {
     expect(importReportSchema.safeParse(detailed).success).toBe(true);
   });
 
+  it("accepts a colour stack with and without the displaced purples (absent before ocad-18 / omap-11)", () => {
+    const stack = { source: 3, inserted: ["purple-lower"], aliased: [], conflicts: [], unclassified: [], areasAboveLowerPurple: [] };
+    expect(importReportSchema.safeParse({ ...base, colourStack: stack }).success).toBe(true);
+    const displaced = { ...stack, purplesDisplaced: [{ name: "Violett", sourceNumber: 1153, role: "lower", why: "position" }, { name: "Upper Purple for Course Overprint", role: "upper", why: "duplicate" }] };
+    expect(importReportSchema.parse({ ...base, colourStack: displaced }).colourStack?.purplesDisplaced).toHaveLength(2);
+    expect(importReportSchema.safeParse({ ...base, colourStack: { ...stack, purplesDisplaced: [{ name: "Violett", role: "middle", why: "position" }] } }).success).toBe(false);
+  });
+
   it("rejects an entry without a message or with a negative symbol index", () => {
     expect(importWarningDetailSchema.safeParse({ code: "X" }).success).toBe(false);
     expect(importWarningDetailSchema.safeParse({ code: "X", message: "m", symbolIdx: -1 }).success).toBe(false);

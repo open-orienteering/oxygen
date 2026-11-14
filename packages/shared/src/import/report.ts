@@ -150,6 +150,8 @@ export const importReportSchema = z.object({
       unclassified: z.array(z.object({ sourceNumber: z.number().int().optional(), name: z.string() })),
       /** Absent before `ocad-16` / `omap-9`. */
       areasAboveLowerPurple: z.array(z.object({ name: z.string(), sourceNumber: z.number().int().optional(), paletteId: z.string().optional() })).optional(),
+      /** Absent before `ocad-18` / `omap-11` (docs/map-symbols.md §9.2 step 4, C15). */
+      purplesDisplaced: z.array(z.object({ name: z.string(), sourceNumber: z.number().int().optional(), role: z.enum(["lower", "upper"]), why: z.enum(["position", "duplicate"]) })).optional(),
     })
     .optional(),
   /** Stage 5 (docs/map-import.md §3.8): the header's georeference projected to WGS 84. Absent before `ocad-5` / `omap-2`. */

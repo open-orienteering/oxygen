@@ -4,9 +4,10 @@
  * directories through the same code path as the API's import worker
  * (`importMapToDocument` + `buildImportReport`, no decisions) and prints,
  * per map, the document hash, `format.importer`, library version, counts,
- * the warning-code histogram, matching outcomes, where lower purple sits
- * in the aligned colour stack (docs/map-symbols.md §9.2: index, area
- * colours above it, order conflicts), where the ISSkiOM overlay's palette
+ * the warning-code histogram, matching outcomes, where lower and upper
+ * purple sit in the aligned colour stack (docs/map-symbols.md §9.2: index,
+ * source or inserted, the source purples displaced, area colours above lower
+ * purple, order conflicts), where the ISSkiOM overlay's palette
  * rows come from (§12.3: inserted, aliased or the source's own colour)
  * and the stage-5 `georeference` /
  * `north` report fields (docs/map-import.md §3.8).
@@ -159,7 +160,10 @@ function printMap(m) {
   console.log(`             objects auto ${mo.auto} / suggested ${mo.suggested} / variant ${mo.variant} / none ${mo.unmatched}`);
   console.log(`             ${m.matching.library} ${m.matching.edition}, factor ×${m.matching.factor} by ${m.matching.factorMethod}`);
   const p = m.lowerPurple;
-  console.log(`  purple     lower at ${p.index} of ${p.colours} (${p.inserted ? "inserted" : "source"})  areas above ${p.areasAbove.length}${p.areasAbove.length ? ` (${p.areasAbove.map((a) => `"${a}"`).join(", ")})` : ""}  conflicts ${p.conflicts}`);
+  const u = m.upperPurple;
+  // C15: a placed row is the source's own purple or inserted; candidates it displaced are named.
+  const how = (x) => `${x.inserted ? "inserted" : "source"}${x.displaced.length ? `, displaced: ${x.displaced.map((n) => `"${n}"`).join(", ")}` : ""}`;
+  console.log(`  purple     lower at ${p.index} of ${p.colours} (${how(p)})  upper at ${u.index} (${how(u)})  areas above ${p.areasAbove.length}${p.areasAbove.length ? ` (${p.areasAbove.map((a) => `"${a}"`).join(", ")})` : ""}  conflicts ${p.conflicts}`);
   if (m.skiO) console.log(`  ski-o      ${Object.entries(m.skiO).map(([id, s]) => `${id} ${s.how} at ${s.index}`).join("  ")}`);
   const hist = Object.entries(m.warnings);
   console.log(`  warnings   ${hist.length ? hist.map(([k, v]) => `${k} ${v}`).join(", ") : "none"}`);
@@ -234,8 +238,14 @@ async function main() {
             index: header.colours.findIndex((c) => c.paletteIds?.includes("purple-lower")),
             colours: header.colours.length,
             inserted: report.colourStack?.inserted.includes("purple-lower") ?? false,
+            displaced: (report.colourStack?.purplesDisplaced ?? []).filter((d) => d.role === "lower").map((d) => d.name),
             areasAbove: (report.colourStack?.areasAboveLowerPurple ?? []).map((a) => a.name),
             conflicts: report.colourStack?.conflicts.length ?? 0,
+          },
+          upperPurple: {
+            index: header.colours.findIndex((c) => c.paletteIds?.includes("purple-upper")),
+            inserted: report.colourStack?.inserted.includes("purple-upper") ?? false,
+            displaced: (report.colourStack?.purplesDisplaced ?? []).filter((d) => d.role === "upper").map((d) => d.name),
           },
           // The overlay's rows (docs/map-symbols.md §12.3): where each one in the aligned stack comes from.
           skiO: Object.fromEntries(mapImport.OVERLAY_STACK_IDS.map((id) => {

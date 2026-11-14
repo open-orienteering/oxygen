@@ -441,6 +441,25 @@ plus the purple-role and materialisation checks:
   stack, `ocad-17`, `@2026.11.1`); `map-rematch-cli.test.ts` (a pre-G21
   document is stale); `scripts/__tests__/measure-import.test.mjs` (the
   `ski-o` line).
+- **Course purples placed by rule (C15)** — `import/__tests__/colour-align.test.ts`
+  "course purples placed by rule" on Nackareservatet 2023's colour table
+  (`club-colour-tables.ts`: names, CMYK, order and usage only): lower
+  purple inserted between "Brun gc-vägar nära hus" and "Brown 100% - Line
+  Feature" with only the stray text mask above it, the top "Violett"
+  reused as upper purple, the other five source purples displaced in
+  source order (`position` ×4, `duplicate` ×1) with their CMYK and no
+  palette ids or role, one row per purple id, no purple conflict, one
+  ink, the ski rows against the placed rows; a sprint and a forest table
+  whose purples are right keep `ocad-17`'s stack row for row; the ski
+  rows against an inserted lower purple with a displaced upper copy
+  between it and the top; an inserted pair takes the map's most used
+  purple ink; Vinterserien's shape re-expected (§9.2 step 5a);
+  `match-document.test.ts` (a displaced purple in `colourStack`, the
+  mapper's purple line still drawn in it); `report.test.ts`
+  (`purplesDisplaced` optional, roles checked);
+  `scripts/__tests__/measure-import.test.mjs` (the `purple` line with
+  `upper at … (source)`); `api/…/import-ocad.test.ts` unchanged on
+  `e2e/test.ocd`.
 - **`import/__tests__/fingerprint.test.ts`** — C9: cap / join classes (bevel = miter, square = flat), round vs flat same width and colour = 0.903 and above `auto`, each field once, `null` without a main stroke, 201.b vs a flat 0.35 stroke; `matcher.test.ts` — a source round no-tag 201 takes 201.b at 1.0, a flat one scores ≤ 0.91 and never auto-matches the tagged 201. Also — OCAD's railway (white
   dashes over a black band) and OCAD's power line (corner symbol) score
   `auto` against 509 / 510; `render/__tests__/library-fixtures.test.ts`
@@ -1184,7 +1203,9 @@ first: otherwise it would be the area green. "Motionsspår" and
 2. **Identify**: one source colour per palette id — the most used by
    objects, ties to the lowest; ISSkiOM's rows first (§9.1). Full purples take their role from the
    name, else from position: above every black 100 % → `purple-upper`,
-   else `purple-lower`.
+   else `purple-lower`. A purple identified this way is only a
+   *candidate* for that role: which row carries the course purple is
+   decided by position in step 4 (C15), not here.
 3. **Alias**: a palette id that applied matches need but the source lacks,
    when the source has a colour of the same class → that colour stands for
    both (`black-road-outline` on a source with one black;
@@ -1220,6 +1241,50 @@ first: otherwise it would be the area green. "Motionsspår" and
    colour, else on top. The source order is never changed; what stays on
    the wrong side is step 5's.
 
+   **Course purples are placed by rule** (C15, user decision 2026-11-14).
+   A map file holds no course, so where a source purple sits says nothing
+   about where the course belongs; Testkarta (Nackareservatet 2023,
+   Club-full in the corpus) keeps its only lower-purple candidate,
+   "Violett", under 28 used area colours, and step 2 had taken the upper
+   candidate at index 0. On every import:
+   - the **lower-purple position** is always the gap above, computed over
+     the source stack with every purple candidate (step 2, either role)
+     taking no side;
+   - the **upper-purple position** is always above every used colour;
+   - a source candidate of that role is **reused** only when it already
+     stands at the ruled position — lower: its own gap scores the same
+     (misplaced, areas above, *below* colours above) as the ruled gap;
+     upper: no used colour other than a purple candidate stands above
+     it. Several qualify → the most used, ties to the lowest for lower and
+     to the highest for upper. An unused candidate may be reused: the test
+     is its position;
+   - otherwise a row is **inserted** at the ruled position (lower: the
+     ruled gap; upper: on top), with `purpleRole` and the map's purple
+     CMYK (C9 below);
+   - a candidate takes no side in any of this, whatever its name says (a
+     "Violett - Ytobjekt" is not an area colour);
+   - lower purple is never placed above a reused upper purple (on a table
+     with no used colour that steers it, it goes directly below it);
+   - every other candidate is **displaced**: it keeps its index, `id`,
+     `sourceNumber`, name and CMYK as an ordinary source colour — no
+     `purpleRole`, no `paletteIds` — so the map objects drawn in it are
+     drawn as before, and the source order still never changes. Each is
+     listed in `colourStack.purplesDisplaced` as `{ name, sourceNumber,
+     role, why }`, in source order: `why` is `"position"` when it does
+     not stand at the ruled place, `"duplicate"` when it does but another
+     candidate was reused.
+
+   Exactly one row carries `purple-lower` and one `purple-upper`. A table
+   whose purples already stand right keeps them (a sprint table with
+   "Undre violett" directly above its brown 100 % and "Övre violett" on
+   top), and its stack is the one `ocad-17` built.
+   On Club-full the lower purple is inserted between the area block
+   (with the road infill on it) and "Brown 100% - Line Feature", the top
+   "Violett" is reused as upper purple, and the other five candidates
+   stay where the mapper put them. Before C15 a candidate *was* the
+   course purple wherever it stood (03 §6.3 step 4; the deviation is in
+   `decisions/slice-c.md`).
+
    Before C14 the anchor was "directly below the first source colour the
    palette puts above lower purple". OCAD-made maps keep the mapper's
    dark-green colour at the bottom of the area block and §9.1 read it as
@@ -1232,14 +1297,19 @@ first: otherwise it would be the area green. "Motionsspår" and
    own purple of the other role when it has one (the course overprint is
    one ink: Ny_karta_test's `src:2` "Upper Purple for Course Overprint"
    10/90/10/0 gives the inserted lower purple 10/90/10/0, not 35/85/0/0);
-   the palette CMYK only when the map has no purple at all. Purples are
-   still never aliased.
+   the palette CMYK only when the map has no purple at all. Since C15 an
+   inserted purple takes the CMYK of the reused purple of the other role,
+   else of the most used purple candidate of either role (ties to the
+   highest index) — the same ink for both when both are inserted. Purples
+   are still never aliased.
 
    **The overlay's rows** (G21; slice G answer 8 as widened, §12.3) come
    after both purples, so nothing placed so far moves: every stack
    carries `OVERLAY_STACK_IDS` — `green100-area`, `white-skio`,
    `orange-skio`, `green-skio` — once, whether or not a match needs them.
-   Where the source lacks one:
+   Every rule below is measured from the *placed* purple rows (C15): a
+   displaced candidate neither anchors nor stops them. Where the source
+   lacks one:
    - `green100-area` aliases or is inserted as above (steps 3–4), but
      never above lower purple (a stray area colour on top of a table does
      not take it there);
@@ -1261,9 +1331,12 @@ first: otherwise it would be the area green. "Motionsspår" and
    places "Blå" below purple-lower; …`); an *area* colour above it is
    `COLOUR_AREA_ABOVE_LOWER_PURPLE` — it hides the course overprint —
    listed in `colourStack.areasAboveLowerPurple` (name, source number,
-   palette id). This holds for a map's own lower purple too: Vinterserien's
-   named lower purple drawn above its upper purple keeps its place and
-   reports the upper purple and every 100 % line colour under it.
+   palette id). Both are measured against the placed lower purple, so
+   they remain only where no gap is clean; a displaced candidate takes no
+   side and raises neither. Before C15, Vinterserien's named lower purple
+   drawn above its upper purple kept its place and reported the upper
+   purple and every 100 % line colour under it; now both candidates are
+   displaced and the course purples placed by rule.
    (b) The other palette ids whose relative order disagrees with the
    palette (longest increasing subsequence of palette ranks, lower purple
    left to (a); everything outside it is a `COLOUR_ORDER_CONFLICT` with the
@@ -1273,8 +1346,10 @@ first: otherwise it would be the area green. "Motionsspår" and
    reported (a source's own ski colours do take part). A `green100-area`
    inserted in step 4 because a match needs it takes part as before.
 
-   `scripts/measure-import.mjs` prints per map where lower purple sits,
-   the area colours above it and the conflict count (`purple` line), and
+   `scripts/measure-import.mjs` prints per map where lower and upper
+   purple sit and whether each is the `source` candidate or `inserted`
+   (with the displaced candidates' names), the area colours above lower
+   purple and the conflict count (`purple` line), and
    where each overlay row comes from (`ski-o` line: `inserted`, `aliased`
    or `source "<name>"`, with its index). The
    map review page has no colour-stack panel; the report's
@@ -1282,7 +1357,8 @@ first: otherwise it would be the area green. "Motionsspår" and
    lists.
 
 Output: `header.colours` with `paletteIds[]` and `purpleRole` on every
-entry that stands for a palette colour, and the source symbols' IR
+entry that stands for a palette colour (a displaced purple has neither),
+and the source symbols' IR
 remapped to the new indices (`remapRenderColours`). The render bridge
 resolves canonical entries through `paletteIndexOfStack(header.colours)`.
 
