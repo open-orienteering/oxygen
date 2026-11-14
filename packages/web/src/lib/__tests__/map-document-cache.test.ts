@@ -2,6 +2,7 @@ import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
 import { mapDocument } from "@oxygen/shared";
 import {
   getMapPatch,
+  isMapDocumentStored,
   loadMapDocument,
   loadMapPatch,
   MAP_DOCUMENT_PATH_RE,
@@ -9,13 +10,16 @@ import {
   MEMORY_ENTRIES,
   NO_PATCH,
   parseMapPatchDelivery,
+  prefetchMapDocument,
   refreshMapPatch,
   requestPersistentStorage,
   resetMapDocumentCache,
   resetMapPatches,
   setMapPatch,
+  storagePersisted,
   subscribeMapPatch,
 } from "../map-document-cache";
+import { MemoryCaches } from "../../print/__tests__/memory-caches";
 
 const HASH = "ab".repeat(32);
 
@@ -182,5 +186,79 @@ describe("the event's patch (docs/map-patches.md §3.3)", () => {
     expect(parseMapPatchDelivery({ version: "5", patch: { documentHash: "nope" } })).toEqual({ version: "5", patch: null });
     expect(parseMapPatchDelivery({ patch: null })).toBeNull();
     expect(parseMapPatchDelivery({ version: "5", patch })).toEqual({ version: "5", patch });
+  });
+});
+
+describe("the app-code copy, prefetch and offline ready (map-storage.md §7.1, G17)", () => {
+  beforeEach(() => resetMapDocumentCache());
+  afterEach(() => vi.unstubAllGlobals());
+
+  it("keeps a document it fetched in map-documents under the hash URL, once", async () => {
+    const cacheStorage = new MemoryCaches();
+    const fetchImpl = vi.fn(async () => ok());
+    await loadMapDocument(HASH, { eventId: "ev", fetchImpl, cacheStorage, kioskKey: null });
+    expect(cacheStorage.get("map-documents").paths()).toEqual([`/api/map-documents/${HASH}`]);
+    const put = vi.spyOn(cacheStorage.get("map-documents"), "put");
+    resetMapDocumentCache();
+    await loadMapDocument(HASH, { eventId: "ev", fetchImpl, cacheStorage, kioskKey: null });
+    expect(put).not.toHaveBeenCalled();
+  });
+
+  it("reads the stored copy back when the request fails without a response, else it is offline", async () => {
+    const cacheStorage = new MemoryCaches();
+    await loadMapDocument(HASH, { eventId: "ev", fetchImpl: async () => ok(), cacheStorage, kioskKey: null });
+    resetMapDocumentCache();
+    vi.stubGlobal("navigator", { onLine: false });
+    const down = async (): Promise<Response> => { throw new TypeError("Failed to fetch"); };
+    const doc = await loadMapDocument(HASH, { eventId: "ev", fetchImpl: down, cacheStorage, kioskKey: null });
+    expect(doc.header.mapScale).toBe(10000);
+    const other = "cd".repeat(32);
+    await expect(loadMapDocument(other, { eventId: "ev", fetchImpl: down, cacheStorage, kioskKey: null })).rejects.toMatchObject({ kind: "offline" });
+  });
+
+  it("a non-200 while offline reads the stored copy too; a 403 online is still unauthorised", async () => {
+    const cacheStorage = new MemoryCaches();
+    await loadMapDocument(HASH, { fetchImpl: async () => ok(), cacheStorage, kioskKey: null });
+    resetMapDocumentCache();
+    vi.stubGlobal("navigator", { onLine: false });
+    const doc = await loadMapDocument(HASH, { fetchImpl: async () => new Response("", { status: 503 }), cacheStorage, kioskKey: null });
+    expect(doc.hash).toBe(HASH);
+    vi.unstubAllGlobals();
+    resetMapDocumentCache();
+    await expect(loadMapDocument(HASH, { fetchImpl: async () => new Response("", { status: 403 }), cacheStorage, kioskKey: null })).rejects.toMatchObject({ kind: "unauthorised" });
+  });
+
+  it("prefetch stores the document without decoding it, once per hash, and not when it is stored already", async () => {
+    const cacheStorage = new MemoryCaches();
+    const fetchImpl = vi.fn(async (_url: string, _init?: RequestInit) => ok());
+    expect(await isMapDocumentStored(HASH, cacheStorage)).toBe(false);
+    expect(await prefetchMapDocument(HASH, "ev", { fetchImpl, cacheStorage, kioskKey: null })).toBe(true);
+    expect(await prefetchMapDocument(HASH, "ev", { fetchImpl, cacheStorage, kioskKey: null })).toBe(true);
+    expect(fetchImpl).toHaveBeenCalledTimes(1);
+    expect(fetchImpl.mock.calls[0]![1]!.headers).toEqual({ "x-event-id": "ev" });
+    expect(await isMapDocumentStored(HASH, cacheStorage)).toBe(true);
+    resetMapDocumentCache();
+    expect(await prefetchMapDocument(HASH, "ev", { fetchImpl, cacheStorage, kioskKey: null })).toBe(true);
+    expect(fetchImpl).toHaveBeenCalledTimes(1);
+  });
+
+  it("prefetch is skipped offline and when the browser saves data, and a failure is retried later", async () => {
+    const cacheStorage = new MemoryCaches();
+    const fetchImpl = vi.fn(async () => ok());
+    vi.stubGlobal("navigator", { onLine: false });
+    expect(await prefetchMapDocument(HASH, "ev", { fetchImpl, cacheStorage, kioskKey: null })).toBe(false);
+    vi.stubGlobal("navigator", { onLine: true, connection: { saveData: true } });
+    expect(await prefetchMapDocument(HASH, "ev", { fetchImpl, cacheStorage, kioskKey: null })).toBe(false);
+    expect(fetchImpl).not.toHaveBeenCalled();
+    vi.stubGlobal("navigator", { onLine: true });
+    expect(await prefetchMapDocument(HASH, "ev", { fetchImpl: async () => new Response("", { status: 500 }), cacheStorage, kioskKey: null })).toBe(false);
+    expect(await prefetchMapDocument(HASH, "ev", { fetchImpl, cacheStorage, kioskKey: null })).toBe(true);
+  });
+
+  it("storagePersisted answers navigator.storage.persisted(), false without the API", async () => {
+    vi.stubGlobal("navigator", { storage: { persisted: async () => true } });
+    expect(await storagePersisted()).toBe(true);
+    vi.stubGlobal("navigator", {});
+    expect(await storagePersisted()).toBe(false);
   });
 });
