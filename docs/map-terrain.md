@@ -326,6 +326,29 @@ in T1), about 0.7 GB peak RSS for the whole process including the import.
 T1 measured the same stages at 1.9 s. Region labelling and the raster dominate. H3 sets the height field's cell
 and budget (T1: 18 s / 1.5 GB for the whole spike at 0.1 mm).
 
+## 4. The surface
+
+`buildHeightField(graph, levels, opts?)` (`terrain/field/`, H3) turns the
+band graph (§2) and the solve's levels (§3) into a height per cell.
+
+### 4.0 Decided with the user (2026-11-14)
+
+1. **Height unit: 1/64 of a contour interval** (7.8 cm at 5 m, range
+   ±512 intervals), not the 1/8 interval of the slice H split: 0.625 m
+   steps terrace a gentle slope on 3 m cells and band the hill shading.
+   The header carries the scale in metres (`zScaleM`), so no reader
+   assumes it.
+2. **An anchored field is a re-derived field with absolute cells**, not a
+   relative field plus an offset. The header carries `zOffsetM` and
+   `datum: "relative" | "absolute"`; with H9's per-chain DEM heights
+   (T2 answer 12) the interpolation is run again from those heights and
+   written as its own field (§4.9). Per-chain heights never enter the
+   format.
+3. **Cell budget**: the field cell is 0.2 mm where it fits; it grows by
+   whole multiples of the graph cell to stay within **4 M cells and 4096
+   cells per side** (a phone's texture limit). Interpolation still runs
+   on the graph raster (0.1 mm by default).
+
 ## Tests
 
 | Test | Covers |
