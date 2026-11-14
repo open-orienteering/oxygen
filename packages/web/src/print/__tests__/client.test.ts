@@ -142,6 +142,24 @@ describe("printMapsPdf (§8.6)", () => {
     warn.mockRestore();
   });
 
+  it("the server prints when the worker goes silent, and the next export still runs", async () => {
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    class SilentWorker extends BrokenWorker {
+      override postMessage(): void {}
+    }
+    const silent = deps({ createWorker: () => new SilentWorker(), silenceMs: 30 });
+    expect((await printMapsPdf("ev", "", silent.d)).host).toBe("server");
+    const next = deps();
+    expect((await printMapsPdf("ev", "", next.d)).host).toBe("device");
+    warn.mockRestore();
+  });
+
+  it("the server prints when a 2xx print-job answer is not a job", async () => {
+    const { d, requests } = deps({ job: new Response("<html>login</html>", { status: 200 }) });
+    expect((await printMapsPdf("ev", "?courses=1", d)).host).toBe("server");
+    expect(requests).toEqual(["/api/maps/ev/print-job?courses=1", "/api/maps/ev/maps.pdf?courses=1"]);
+  });
+
   it("a job HTTP error is the export's error, maps.pdf's message, and maps.pdf is not asked", async () => {
     const { d, requests } = deps({ job: new Response('{"error":"No maps found"}', { status: 400 }) });
     await expect(printMapsPdf("ev", "?setter=1", d)).rejects.toThrow('{"error":"No maps found"}');

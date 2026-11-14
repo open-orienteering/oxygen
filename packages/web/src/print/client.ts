@@ -30,6 +30,12 @@ import type { PrintFace, PrintWorkerNeed, PrintWorkerRequest, PrintWorkerRespons
 export const DEVICE_PRINT_JOB_VERSION = 1;
 /** An idle print worker is terminated after this long (its decoded document is large). */
 export const PRINT_WORKER_IDLE_MS = 60_000;
+/**
+ * A worker that says nothing this long while this thread owes it nothing
+ * (no page, no request, no result) is taken as dead: the job falls back to
+ * the server (step 5). A page takes seconds at most (§11.5).
+ */
+export const PRINT_WORKER_SILENCE_MS = 60_000;
 
 export interface PrintedPdf {
   blob: Blob;
@@ -56,6 +62,8 @@ export interface PrintClientDeps {
   /** The bundled faces in the order regular, narrow, bold (§8.5). */
   faces: () => Promise<PrintFace[]>;
   createWorker: () => WorkerLike;
+  /** `PRINT_WORKER_SILENCE_MS` unless given (tests). */
+  silenceMs?: number;
 }
 
 async function textOf(res: Response): Promise<string> {
@@ -114,7 +122,23 @@ async function composeOnDevice(nameId: string, job: PrintJob, deps: PrintClientD
   const w = await startWorker(deps);
   const id = nextId++;
   try {
-    return await new Promise<ArrayBuffer>((resolve, reject) => {
+    return await new Promise<ArrayBuffer>((resolve, rejectJob) => {
+      // The watchdog runs while the worker owes the next message, paused while this thread fetches for it.
+      let watchdog: ReturnType<typeof setTimeout> | null = null;
+      let fetching = 0;
+      const silence = deps.silenceMs ?? PRINT_WORKER_SILENCE_MS;
+      const quiet = () => {
+        if (watchdog) clearTimeout(watchdog);
+        watchdog = null;
+      };
+      const arm = () => {
+        quiet();
+        if (fetching === 0) watchdog = setTimeout(() => reject(new Error(`print worker: silent for ${silence} ms`)), silence);
+      };
+      const reject = (err: Error) => {
+        quiet();
+        rejectJob(err);
+      };
       const answer = async (need: PrintWorkerNeed): Promise<ArrayBuffer> => {
         if (need.what === "document") return (await deps.document(need.hash, nameId)).slice(0);
         const res = await deps.fetch(graphicUrl(nameId, need.graphicId, need.box));
@@ -130,18 +154,28 @@ async function composeOnDevice(nameId: string, job: PrintJob, deps: PrintClientD
         if (msg.id !== id) return;
         switch (msg.type) {
           case "need":
+            fetching++;
+            arm();
             answer(msg).then(
-              (bytes) => w.postMessage({ type: "reply", reqId: msg.reqId, bytes }, [bytes]),
+              (bytes) => {
+                fetching--;
+                w.postMessage({ type: "reply", reqId: msg.reqId, bytes }, [bytes]);
+                arm();
+              },
               (err: unknown) => {
+                fetching--;
                 // A document the device cannot read fails the job; a graphic is the writer's warning, as on the server.
                 if (msg.what === "document") reject(err instanceof Error ? err : new Error(String(err)));
                 w.postMessage({ type: "reply", reqId: msg.reqId, error: err instanceof Error ? err.message : String(err) });
+                arm();
               },
             );
             return;
           case "page":
+            arm();
             return;
           case "done":
+            quiet();
             for (const warning of msg.warnings) console.warn(`maps.pdf (device): ${warning}`);
             resolve(msg.bytes);
             return;
@@ -151,6 +185,7 @@ async function composeOnDevice(nameId: string, job: PrintJob, deps: PrintClientD
         }
       };
       w.postMessage({ type: "compose", id, job });
+      arm();
     });
   } catch (err) {
     // A failed worker is not reused: the next export starts a fresh one.
@@ -172,7 +207,9 @@ async function print(nameId: string, query: string, deps: PrintClientDeps): Prom
   if (limit <= 0) return server();
   const res = await deps.fetch(`${route}/print-job${query}`);
   if (!res.ok) throw new Error((await textOf(res)) || `Download failed (${res.status})`);
-  const job = (await res.json()) as PrintJob;
+  // A 2xx that is not a job (a proxy's login page, a cut body) is not the export's error: the server prints.
+  const job = (await res.json().catch(() => null)) as PrintJob | null;
+  if (!job || typeof job !== "object" || !Array.isArray(job.sheets)) return server();
   if (job.version !== DEVICE_PRINT_JOB_VERSION || printCost(job) > limit) return server();
   let bytes: ArrayBuffer;
   try {

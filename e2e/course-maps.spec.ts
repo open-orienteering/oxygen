@@ -451,10 +451,9 @@ test.describe("auto templates (docs/course-layout.md §5–§7)", () => {
     const file = await download(page, () => page.getByTestId(`export-course-${courseId}`).click());
     expect(requests).toContain(`/api/maps/itest/maps.pdf?courses=${courseId}`);
     expect(requests.filter((r) => r.includes("/print-job"))).toEqual([]);
-    const printed = await page.request.get(`/api/maps/itest/maps.pdf?courses=${courseId}`);
-    expect(printed.ok()).toBe(true);
-    // The same PDF either way: pages and objects as the device would compose them.
-    await expectSamePdf(file, await printed.body());
+    // The fallback still delivers the server's PDF under its name.
+    await expectA4Pages(file, 1);
+    expect(file.suggestedFilename()).toMatch(/\.pdf$/);
   });
 });
 

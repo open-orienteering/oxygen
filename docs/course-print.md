@@ -1035,15 +1035,18 @@ it loads on the first export):
 2. `GET /api/maps/:nameId/print-job<query>` through `venueAwareFetch`. A
    non-2xx is the export's error — its body is `maps.pdf`'s message, word
    for word (§8.5) — and no second request is made.
-3. A `version` other than the client's (`DEVICE_PRINT_JOB_VERSION`, kept
+3. A 2xx body that is not a job (a proxy's login page, a cut body), a
+   `version` other than the client's (`DEVICE_PRINT_JOB_VERSION`, kept
    equal to `PRINT_JOB_VERSION` by `client.test.ts`), or `printCost(job)`
    above the limit → `maps.pdf`.
 4. The print worker composes the job; the PDF is saved under
    `job.filename` (`maps.pdf`'s `Content-Disposition` name).
 5. Any failure after the job arrived — the worker does not start or dies,
-   the document cannot be read, the worker answers `error` — → `maps.pdf`
-   once; its response or error is what the user gets. The reason goes to
-   the console.
+   the document cannot be read, the worker answers `error`, or the worker
+   says nothing for `PRINT_WORKER_SILENCE_MS` (60 s) while this thread
+   owes it nothing (a watchdog re-armed on every `need`, `page` and reply,
+   paused while the main thread fetches) — → `maps.pdf` once; its response
+   or error is what the user gets. The reason goes to the console.
 
 Exports run one at a time per tab (a queue in `printMapsPdf`).
 
@@ -1118,6 +1121,10 @@ downloads from the server already differ (§3.2).
   `Intl.Collator("en", { numeric: true })`) for `resolveMapLayout`'s site
   order and the label placement's tie-break; no host locale. It equals the
   server's previous default (en-US), so pinning it moved no server bytes.
+  The locale is pinned, the collation data is not: each engine ships its
+  own ICU / CLDR release, so two labels whose root-collation order changed
+  between releases could still sort apart (labels are codes and control
+  names; none is known). Same class as the arithmetic below (Pending).
 - *Arithmetic*: the composer's transcendental `Math` calls (`sin`,
   `cos`, `atan2`, …; proj4's for `/Measure /GEO`) are not specified to the
   last bit, and Node 20 and Chromium differ by one ulp on a few percent of
@@ -1135,9 +1142,11 @@ resvg) on the fixture job (`print/__tests__/print-job-fixture.ts`: a course
 sheet with copies, a map exchange's two part sheets, the all-controls and
 a setter sheet, a rotated window, a PNG and two SVGs) — equal bytes, both
 `deterministic`; and `e2e/course-maps.spec.ts` compares the PDF the app
-downloads in Chromium, through Vite's bundle, with `maps.pdf` of the same
+downloads in Chromium with `maps.pdf` of the same
 query object for object — every indirect object but `Info`, the
-cross-reference and the object streams (the date and `/ID`).
+cross-reference and the object streams (the date and `/ID`). The E2E runs
+the Vite **dev server** (`playwright.config.ts`): an unbundled module
+worker with the pre-bundled PDF library, not the production chunk.
 
 **Delivery** (05 §5.11 phase 2 "lazy-loaded and service-worker cached").
 The worker is its own chunk (`assets/print-worker-entry-<hash>.js`), out
@@ -1165,10 +1174,10 @@ the first export would reload the page.
 | `packages/api/src/__tests__/course-map-graphics.test.ts` (G15 part) | `parseRasterBox`: integers 1–4096 both sides, every other form the 400 message; `sheetGraphicIds`: page objects' and image course objects' graphics once each, ascending (the regression of `docs/bugfix-course-object-image-print.md`) |
 | `packages/shared/src/print/__tests__/print-job.test.ts` (G15) | `renderPrintJob` equals `renderCoursePages` for the same inputs (copies, a PNG and an SVG; the PNG fetched once without a box, the SVG once per box by id); a JSON round trip gives equal bytes; an unfetchable graphic gives `SVG_RASTER` / `IMAGE_MISSING` and a PDF; the document read once per hash; another version refused |
 | `e2e/course-maps.spec.ts` "export a course that has no template yet" (G15 part) | `print-job?courses=` of the exported course: version 1, `cmyk`, a document hash, as many pages (with copies) as the same query's `maps.pdf`, its file name |
-| `e2e/course-maps.spec.ts` "export a course that has no template yet" (G16 part), "the server prints when the device cannot" | §8.6 in Chromium: the Courses page's course export asks `print-job` and not `maps.pdf`, is saved under the job's file name and equals `maps.pdf` of the same query object for object (all but `Info`, the cross-reference and object streams); again with a PNG and an SVG on the sheet — `print.png` asked for the PNG without a box and for the SVG with `w`, `h` (the first E2E on `print.png`); `navigator.deviceMemory` 0.5 → `maps.pdf` asked, no job, the same PDF |
+| `e2e/course-maps.spec.ts` "export a course that has no template yet" (G16 part), "the server prints when the device cannot" | §8.6 in Chromium: the Courses page's course export asks `print-job` and not `maps.pdf`, is saved under the job's file name and equals `maps.pdf` of the same query object for object (all but `Info`, the cross-reference and object streams); again with a PNG and an SVG on the sheet — `print.png` asked for the PNG without a box and for the SVG with `w`, `h` (the first E2E on `print.png`); `navigator.deviceMemory` 0.5 → `maps.pdf` asked, no job, one A4 page downloaded. Runs the Vite dev server: the production chunk is not exercised (Pending) |
 | `packages/api/src/__tests__/print-device.test.ts` (G16) | §8.6: the browser's print worker (`web/src/print/worker.ts`, driven as its main thread drives it, graphics as `print.png` serves them) and the server's print worker compose the fixture job to equal bytes (`deterministic`) — the guarantee slice G answer 3 rests on |
 | `packages/web/src/print/__tests__/worker.test.ts` (G16) | the worker's handler: the fixture job → `renderPrintJob`'s bytes in process, pages in order; the document asked once across two jobs, a PNG once without a box, each SVG once per box; an unfetchable graphic → `SVG_RASTER` / `IMAGE_MISSING` and a PDF; an unreadable document and version 2 → `error`, the worker still usable; compose before `init` refused |
-| `packages/web/src/print/__tests__/client.test.ts`, `capability.test.ts`, `imports.test.ts` (G16) | `printMapsPdf`: the device path (the job, the document by hash through the event, `print.png` per graphic, the job's file name, no `maps.pdf`), the worker kept and the document asked once across exports; `maps.pdf` without a `Worker` or under 2 GiB (no job asked), above the limit, for version 2, when the worker fails to start, when the document cannot be read (the worker terminated); a job 400 is the export's error with no `maps.pdf` request; `DEVICE_PRINT_JOB_VERSION` = `PRINT_JOB_VERSION`. `deviceLimit`'s table and `printCost` (copies free, 0 copies none, A3 = 2). Only `print/worker.ts` imports `@oxygen/shared/print` at runtime; `mapsPdfTarget` of every Export ▾ entry |
+| `packages/web/src/print/__tests__/client.test.ts`, `capability.test.ts`, `imports.test.ts` (G16) | `printMapsPdf`: the device path (the job, the document by hash through the event, `print.png` per graphic, the job's file name, no `maps.pdf`), the worker kept and the document asked once across exports; `maps.pdf` without a `Worker` or under 2 GiB (no job asked), above the limit, for version 2, when the worker fails to start, when the document cannot be read (the worker terminated); a worker that goes silent (watchdog) and a 2xx body that is not a job → `maps.pdf`, the next export unaffected; a job 400 is the export's error with no `maps.pdf` request; `DEVICE_PRINT_JOB_VERSION` = `PRINT_JOB_VERSION`. `deviceLimit`'s table and `printCost` (copies free, 0 copies none, A3 = 2). Only `print/worker.ts` imports `@oxygen/shared/print` at runtime; `mapsPdfTarget` of every Export ▾ entry |
 | `packages/shared/src/print/__tests__/print-job.test.ts` "the fixture job" (G16), `src/__tests__/collate.test.ts` | the fixture job's sheets (course × 3, two parts, all controls with Å1 before Z1, setter), graphics and JSON round trip; composed through `renderPrintJob` = `renderCoursePages`, the SVGs asked at their boxes. `compareLabels`: a fixed list in its literal order, equal to the en-US numeric order and not to the Swedish |
 | `packages/api/src/__tests__/worker-bootstrap.test.ts` | the shared bootstrap: `.js` imported as is, `.ts` through tsx |
 | `packages/api/src/render/__tests__/pdf-golden.test.ts` | the PDF golden tier, §9.2, and `qpdf --check` on every file it writes; `boxDown`; the swatch read-back |
@@ -1622,6 +1631,17 @@ The tool's own tests (`print-run.test.ts`, `measure-print.test.mjs`,
   PNGs (the boxes learned by composing once), the faces, the document and
   the print worker's chunk for offline composing (§8.6 composes online
   only).
+- **The production print worker is checked by build inspection only**
+  (§8.6 "Delivery", G16): the E2E runs the dev server, so the minified
+  `print-worker-entry-<hash>.js`, its `{ type: "module" }` construction
+  in the built format, the `print-worker` runtime route and its
+  `globIgnores` entry have no automated test; G17, which must fetch that
+  chunk for offline use, is the natural place for a preview-build smoke.
+- **The document outside venue routing** (§8.6, G16): the job and
+  `print.png` go through `venueAwareFetch`, the document through
+  `loadMapDocument`'s plain `fetch`, as the viewer's does. Content
+  addressed, and a failure falls back to `maps.pdf`, so a venue session
+  stays correct; G17 / G18 decide whether a box serves it.
 - **Device limits are estimates** (§8.6 "Capability", G16): 8 / 24 / 64
   A4-equivalents by `navigator.deviceMemory` (8 / 24 by pointer where it
   is undefined), derived from §11.5's sizes; replaced by measurements on
@@ -1629,7 +1649,8 @@ The tool's own tests (`print-run.test.ts`, `measure-print.test.mjs`,
 - **Engine-independent arithmetic** (§8.6 "What identity rests on",
   G16): the composer's transcendental `Math` calls and proj4's are not
   bit-identical across engines (Node 20 and Chromium differ by one ulp on
-  a few percent of inputs). The device PDF is tested equal to the
+  a few percent of inputs), nor is `Intl.Collator`'s data (each engine's
+  ICU release). The device PDF is tested equal to the
   server's in Node and, object for object, in Chromium for the E2E
   fixtures; a difference elsewhere would be a last written digit. Making
   it exact — a shared `Math` built from `+ − × ÷` and `sqrt` for every
