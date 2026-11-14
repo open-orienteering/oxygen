@@ -454,7 +454,7 @@ mixes two ladders at their border and splits a ladder whose phase is near
 2. **Members.** A contributor belongs to the nearest ladder within 0.2 I
    (circular distance); its **deviation** is `m − phase` wrapped to
    (−I/2, I/2].
-3. **Evidence grid.** 100 m ground cells over the graph's raster extent;
+3. **Evidence grid.** 100 m ground cells over the chains' bounding box;
    per cell and ladder, the member length passing through the cell (the
    §6.2 samples, each its step length) and the length-weighted deviation.
    Summed-area tables make every window O(1).
