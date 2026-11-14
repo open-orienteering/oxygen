@@ -8,9 +8,11 @@ record: `docs/research/vector-map-pipeline/10-terrain.md` (with spike T1,
 `decisions/slice-h.md`. Slice H.
 
 Implementation: `packages/shared/src/terrain/` — pure TypeScript, no Node
-APIs, no randomness. `terrain/graph/` is §1–2 (H1). Consumers import by
-subpath, `@oxygen/shared/src/terrain/graph/index.js`; the package's root
-`index.ts` does not re-export it.
+APIs, no randomness. `terrain/graph/` is §1–2 (H1), `terrain/solve/` is
+§3 (H2). Consumers import by subpath,
+`@oxygen/shared/src/terrain/graph/index.js` and
+`@oxygen/shared/src/terrain/solve/index.js`; the package's root `index.ts`
+re-exports neither.
 
 Units throughout: **paper millimetres, x right, y up** (the document's
 native units divided by `header.unitsPerMm`). Distances that describe the
