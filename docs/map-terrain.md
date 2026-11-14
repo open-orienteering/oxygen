@@ -326,6 +326,37 @@ in T1), about 0.7 GB peak RSS for the whole process including the import.
 T1 measured the same stages at 1.9 s. Region labelling and the raster dominate. H3 sets the height field's cell
 and budget (T1: 18 s / 1.5 GB for the whole spike at 0.1 mm).
 
+## 3. The solve: uphill side and levels
+
+`solveTerrain(graph, opts?)` (`terrain/solve/`, H2) decides for every
+chain of §2 which side is uphill and gives every region a level: an
+integer number of contour intervals, 0 the lowest region. It reads only
+the `ContourGraph`; the interval in metres is H3's (header) and H9's
+(measured).
+
+### 3.0 Decided with the user (2026-11-14)
+
+1. **External (DEM) side against the map's evidence**: when an external
+   side (H9: the DEM) and a tick, tagged cliff or lake speak about the same
+   chain and disagree, **the external side decides**; the disagreement is
+   counted per class in the report (`external.disagreements`). H9 takes
+   the chain's height from the DEM median, so a sign against it would
+   contradict the chain's own heights.
+2. **Strict and decided**: closure is flagged (answer 15) and a decision
+   propagated from a flagged chain is flagged too, so strict shares are
+   lower than T1's. The report carries both `share.strict` and
+   `share.decided` (strict + flagged, conflict length removed); the corpus
+   comparison with T1 is made on T1's definition, recomputed by the
+   `.local` script; **the 3D gate of answer 7 (80 %) reads
+   `share.decided`**.
+3. **Index consistency without a DEM**: the report's figure is the share
+   of neighbouring index-contour pairs (by graph distance) whose levels sit
+   on one residue mod 5, with T1's one-residue share of the largest
+   component beside it. The map alone cannot tell a drifted block from a
+   second contour ladder; the row's target (≥ 90 % on one residue per
+   ladder area) is checked by the `.local` corpus script on ladder areas
+   taken from the DEM's phase (T2), not by the solve.
+
 ## Tests
 
 | Test | Covers |
