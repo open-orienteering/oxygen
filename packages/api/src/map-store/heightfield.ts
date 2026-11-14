@@ -267,6 +267,8 @@ function asResult(row: HeightfieldRow): HeightfieldResult {
  */
 export async function deriveDocumentHeightfield(db: Db, hash: string, opts: DeriveOptions = {}): Promise<void> {
   try {
+    // Existence without the bytes: a stored row costs no ~8 MB read here.
+    if (await rowState(db, hash)) return;
     await getOrDeriveHeightfield(db, hash, opts);
   } catch (err: unknown) {
     console.error(`[map-heightfield] derive ${hash} failed:`, err instanceof Error ? err.message : err);

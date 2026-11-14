@@ -87,6 +87,8 @@ describe("exportBlobInput", () => {
   });
   it.each([
     ["an unknown table", { table: "map_previews" }],
+    // A cache the box derives itself (map-storage.md §4.7, §7.2).
+    ["the height-field table", { table: "map_heightfields" }],
     ["a non-hex hash", { hash: "Z".repeat(64) }],
     ["a short hash", { hash: "ab" }],
     ["a negative start", { start: -1 }],

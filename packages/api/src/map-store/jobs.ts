@@ -345,7 +345,10 @@ export async function startImportJob(db: Db, input: StartImportJobInput): Promis
       select: JOB_SELECT,
     }));
     await applyJobResult(db, row);
-    await deriveDocumentArtifacts(db, existing.hash);
+    // The thumbnail is awaited as before; the height field is not, so a document stored
+    // before H4 does not hold this request for a derive (docs/map-storage.md §6.1).
+    await deriveDocumentPreviews(db, existing.hash);
+    void deriveDocumentHeightfield(db, existing.hash);
     return row;
   }
 

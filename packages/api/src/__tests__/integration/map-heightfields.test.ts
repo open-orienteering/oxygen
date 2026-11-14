@@ -166,7 +166,8 @@ describe("stage 10 derive", () => {
     await ctx.db.mapHeightfield.deleteMany({ where: { documentHash: ocdHash } });
     const job = await startImportJob(other.db, { sourceHash: ocdSource, eventId: other.eventId });
     expect(job.state).toBe("done");
-    expect(await readHeightfield(ctx.db, ocdHash)).toEqual({ bytes: null, header: null, report: null });
+    // The short-cut does not wait for the height field (§6.1): it lands shortly after.
+    await expect.poll(() => readHeightfield(ctx.db, ocdHash), { timeout: 30_000 }).toEqual({ bytes: null, header: null, report: null });
   });
 
   it("a failed derive is logged, writes nothing and does not throw", async () => {

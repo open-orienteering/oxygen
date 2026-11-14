@@ -568,7 +568,10 @@ and the import's and the derive's peaks never stack inside a job (the
 import worker is gone before stage 10). One derive runs at a time per
 instance; concurrent requests for one key share one derive; a derive
 over 240 s (under Cloud Run's 300 s request timeout) is terminated and
-counts as failed. A failure writes nothing and is remembered in-process
+counts as failed. The 240 s bound is the worker's: a request queued
+behind another derive waits for it first, so on an instance deriving
+two large maps at once a lazy request can outlast a 300 s proxy timeout
+(the client retries; the first derive's row then serves it). A failure writes nothing and is remembered in-process
 for 10 minutes, so a document whose derive fails is not re-derived on
 every request.
 
@@ -726,7 +729,8 @@ startImportJob(db, {sourceHash, eventId? | clubMapId?, startedBy?, holdMs?})
   │
   ├─ a map_documents row exists for (sourceHash, importer ∈ {ocad-12, omap-6}, library *@<current SYMBOL_LIBRARY_VERSION>)
   │   that follows `decisions` (newest first)
-  │     → touchDocument, insert state=done with that document_hash, applyJobResult, derive (§4.5, §4.7), return   (06 §8 dedup, no import worker)
+  │     → touchDocument, insert state=done with that document_hash, applyJobResult, thumbnail (§4.5), return;
+  │       the height field (§4.7) is started, not awaited                                   (06 §8 dedup, no import worker)
   │
   └─ insert state=queued → kickImportJobs → hold ≤ holdMs for the result → return the row
 
@@ -776,7 +780,11 @@ before pinning it, so a GC run racing the pin sees a fresh
 `progress` is that fixed ladder, not a byte count. The `derive` stage
 holds the job until the height field is stored (seconds; club-full
 about 19 s, §4.7), so a large map's upload response may come back
-`running` where it used to be `done`; the heartbeat keeps running. Every progress and
+`running` where it used to be `done`; the heartbeat keeps running. The
+dedup short-cut is not bounded by `holdMs` (it runs inside the request),
+so it does not wait for the height field: for a document stored before
+H4, or one whose derive failed, the derive is started and the request
+returns; the row lands shortly after, or the route derives it. Every progress and
 terminal write is guarded by `claimed_by = INSTANCE_ID`, so an instance
 whose job was re-claimed after a stall cannot overwrite the new owner's
 state. Re-runs are deterministic (`docs/map-import.md` §6): a re-claimed
