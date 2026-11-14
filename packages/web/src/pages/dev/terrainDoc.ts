@@ -58,7 +58,7 @@ export async function startDocTerrain(canvas: HTMLCanvasElement, params: URLSear
   const engine = new MapGlEngine(renderer, params.get("worker") === "1" ? workerTransport() : inlineTransport(), budgetMb ? { budgetBytes: Number(budgetMb) * 1024 * 1024 } : {});
   const [fonts, textAtlas] = await Promise.all([loadMapFonts(), loadTextAtlas(["latin"])]);
   const summary = await engine.load({
-    source: { kind: "document", bytes: documentBytes() },
+    source: { kind: "document", bytes: documentBytes(), options: { unmatched: "proxy" } },
     fonts: fonts.map((f) => ({ family: f.family, bytes: f.bytes.slice(0) })),
     textAtlas,
     courseLayer: true,
