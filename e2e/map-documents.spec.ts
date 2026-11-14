@@ -14,7 +14,8 @@ import { API_BASE } from "./helpers/api-base";
  * streams back from `/api/map-sources/:hash` to an event manager. The
  * second test drives the chunked upload route and the import job status
  * end to end. The third delivers the event's map patch beside its
- * document (docs/map-patches.md §3.3).
+ * document (docs/map-patches.md §3.3). The fourth imports the CC0 demo
+ * map (it has contours) and reads its height field (map-storage.md §4.7).
  */
 
 const EVENT = "itest";
@@ -208,5 +209,38 @@ test.describe("Map documents", () => {
     const meta = await request.get(`${API_BASE}/trpc/course.mapMetadata`, { headers: HEADERS });
     expect((await meta.json())?.result?.data?.patchVersion).toBe(written.version);
     expect((await request.get(url, { headers: { ...HEADERS, "x-forwarded-email": "" } })).status()).toBe(401);
+  });
+  test("a map with contours gets a height field: the descriptor names it and height.bin serves it", async ({ request }) => {
+    test.setTimeout(180_000);
+    const file = readFileSync("docs/screenshots/fixtures/puit-de-laven-demo.omap");
+    const init = await request.post(`${API_BASE}/api/map-uploads`, { headers: HEADERS, data: { fileName: "demo.omap", bytes: file.byteLength, chunkBytes: file.byteLength } });
+    expect(init.status()).toBe(201);
+    const { uploadId } = (await init.json()) as { uploadId: string };
+    const put = await request.put(`${API_BASE}/api/map-uploads/${uploadId}/chunks/0`, { headers: { ...HEADERS, "content-type": "application/octet-stream" }, data: file });
+    expect(put.status()).toBe(204);
+    const { fileHash } = (await (await request.post(`${API_BASE}/api/map-uploads/${uploadId}/finalise`, { headers: HEADERS })).json()) as { fileHash: string };
+    const applied = await request.post(`${API_BASE}/trpc/course.applyUploadedMap`, { headers: HEADERS, data: { fileHash, fileName: "demo.omap" }, timeout: 120_000 });
+    expect(applied.ok()).toBe(true);
+    const result = (await applied.json())?.result?.data as { documentHash: string | null; importJob: { state: string } };
+    expect(result.importJob.state).toBe("done");
+    const hash = result.documentHash!;
+
+    // Stage 10 derived the field before the job was done; the descriptor reads the row.
+    const meta = await request.get(`${API_BASE}/trpc/course.mapMetadata`, { headers: HEADERS });
+    const terrain = (await meta.json())?.result?.data?.terrain as { state: string; url: string; version: number; decided: number };
+    expect(terrain).toMatchObject({ state: "ready", source: "contours", url: `/api/map-documents/${hash}/height.bin?v=${terrain.version}` });
+    expect(terrain.decided).toBeGreaterThan(0.8);
+
+    const res = await request.get(`${API_BASE}${terrain.url}`, { headers: HEADERS });
+    expect(res.status()).toBe(200);
+    expect(res.headers()["content-type"]).toBe("application/vnd.oxygen.heightfield");
+    expect(res.headers()["cache-control"]).toBe("private, max-age=31536000, immutable");
+    expect(res.headers()["etag"]).toBe(`"${hash}/height/contours/${terrain.version}"`);
+    const body = await res.body();
+    expect(body.subarray(0, 4).toString("latin1")).toBe("OXHF");
+    const notModified = await request.get(`${API_BASE}${terrain.url}`, { headers: { ...HEADERS, "if-none-match": `"${hash}/height/contours/${terrain.version}"` } });
+    expect(notModified.status()).toBe(304);
+    expect((await request.get(`${API_BASE}${terrain.url}`, { headers: { ...HEADERS, "x-forwarded-email": "" } })).status()).toBe(401);
+    expect((await request.get(`${API_BASE}/api/map-documents/${hash}/height.bin?v=${terrain.version + 1}`, { headers: HEADERS })).status()).toBe(404);
   });
 });
