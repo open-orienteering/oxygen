@@ -30,6 +30,7 @@ const importItemSchema = z.object({
   sourceName: z.string().max(255),
   /** TrackPoints (§2.1), validated by hand in `gps-tracks.ts`: a capped track is 800 000 numbers. */
   points: z.unknown(),
+  /** An average's passes: 2–200 distinct ids (distinctness checked in `gps-tracks.ts`, `TRACK_POINTS_INVALID`). */
   derivedFrom: z.array(trackId).min(2).max(MAX_EVENT_TRACKS).optional(),
   singlePass: z.array(rangeSchema).optional(),
 });

@@ -167,6 +167,22 @@ describe("mapTrack.import / list / get", () => {
     expect(await ctx.db.mapGpsTrack.count({ where: { eventId: ctx.eventId } })).toBe(0);
   });
 
+  it("refuses derivedFrom naming a pass twice and an id twice in one call, writing nothing", async () => {
+    await reset();
+    const pass = randomUUID();
+    await expect(caller.mapTrack.import({ tracks: [item(4, "avg", { derivedFrom: [pass, pass], singlePass: [] })] })).rejects.toMatchObject({ code: "BAD_REQUEST", message: expect.stringMatching(/^TRACK_POINTS_INVALID.*twice/) });
+    const id = randomUUID();
+    await expect(caller.mapTrack.import({ tracks: [item(4, "a", { id }), item(4, "b", { id })] })).rejects.toMatchObject({ code: "BAD_REQUEST", message: expect.stringMatching(/^TRACK_POINTS_INVALID.*twice/) });
+    expect(await ctx.db.mapGpsTrack.count({ where: { eventId: ctx.eventId } })).toBe(0);
+  });
+
+  it("keeps file order with client-minted ids minted ascending", async () => {
+    await reset();
+    const ids = Array.from({ length: 5 }, () => randomUUID()).sort();
+    await caller.mapTrack.import({ tracks: ids.map((id, i) => item(3, `t${i}`, { id })) });
+    expect((await caller.mapTrack.list()).tracks.map((t) => t.name)).toEqual(["t0", "t1", "t2", "t3", "t4"]);
+  });
+
   it("answers a retried import by id as stored, and refuses an id of another event", async () => {
     await reset();
     const id = randomUUID();
@@ -308,6 +324,17 @@ describe("mapTrack.split", () => {
     expect(await caller.mapTrack.split({ id: t.id, index: 3, ids })).toEqual(first);
   });
 
+  it("refuses part ids equal to each other or to the original, and ids already used", async () => {
+    await reset();
+    const [t, u] = (await caller.mapTrack.import({ tracks: [item(6), item(6)] })).tracks;
+    const fresh = randomUUID();
+    for (const ids of [[fresh, fresh], [t.id, fresh]] as [string, string][]) {
+      await expect(caller.mapTrack.split({ id: t.id, index: 3, ids })).rejects.toMatchObject({ code: "BAD_REQUEST", message: expect.stringMatching(/^TRACK_SPLIT_INVALID/) });
+    }
+    await expect(caller.mapTrack.split({ id: t.id, index: 3, ids: [fresh, u.id] })).rejects.toMatchObject({ code: "CONFLICT", message: expect.stringMatching(/^TRACK_ID_TAKEN/) });
+    expect((await caller.mapTrack.get({ id: t.id })).version).toBe(t.version);
+  });
+
   it("cuts out a stretch: split, split, remove the middle", async () => {
     await reset();
     const [t] = (await caller.mapTrack.import({ tracks: [item(12)] })).tracks;
@@ -340,6 +367,7 @@ describe("mapTrack.remove / markConverted", () => {
     expect((await caller.mapTrack.get({ id: a.id })).convertedOp).toBe(op);
     expect((await caller.mapTrack.markConverted({ marks: [{ id: a.id, opId: null }] })).tracks[0].convertedOp).toBeNull();
     await expect(caller.mapTrack.markConverted({ marks: [{ id: a.id, opId: "hide:3" }] })).rejects.toMatchObject({ code: "BAD_REQUEST" });
+    await expect(caller.mapTrack.markConverted({ marks: [{ id: a.id, opId: null }, { id: a.id, opId: op }] })).rejects.toMatchObject({ code: "BAD_REQUEST", message: expect.stringMatching(/^TRACK_POINTS_INVALID/) });
   });
 });
 

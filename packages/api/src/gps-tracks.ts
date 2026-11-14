@@ -238,6 +238,18 @@ async function assertRoom(tx: Prisma.TransactionClient, eventId: bigint, adding:
   }
 }
 
+/** A client-minted id inserted meanwhile by another event's writer (a unique violation) is `TRACK_ID_TAKEN`, not a 500. */
+async function createOrTaken<T>(id: string | undefined, create: () => Promise<T>): Promise<T> {
+  try {
+    return await create();
+  } catch (e) {
+    if (id && e instanceof Prisma.PrismaClientKnownRequestError && e.code === "P2002") {
+      throw trackError("TRACK_ID_TAKEN", `the id ${id} is taken`);
+    }
+    throw e;
+  }
+}
+
 function notFound(id: string): TRPCError {
   return trackError("TRACK_NOT_FOUND", `no track ${id} in this event`);
 }
@@ -291,6 +303,9 @@ export async function importTracks(db: PrismaClient, eventId: bigint, createdBy:
     if ((it.derivedFrom === undefined) !== (it.singlePass === undefined)) {
       throw trackError("TRACK_POINTS_INVALID", `track ${i}: derivedFrom and singlePass come together (an average) or not at all`);
     }
+    if (it.derivedFrom && new Set(it.derivedFrom).size !== it.derivedFrom.length) {
+      throw trackError("TRACK_POINTS_INVALID", `track ${i}: derivedFrom names a pass twice`);
+    }
     const singlePass = it.singlePass ? validateSinglePass(it.singlePass, points.lat.length) : null;
     return { item: it, points, singlePass };
   });
@@ -313,7 +328,7 @@ export async function importTracks(db: PrismaClient, eventId: bigint, createdBy:
         continue;
       }
       const t = firstTime(points);
-      const row = await tx.mapGpsTrack.create({
+      const row = await createOrTaken(item.id, () => tx.mapGpsTrack.create({
         data: {
           ...(item.id ? { id: item.id } : {}),
           eventId,
@@ -330,7 +345,7 @@ export async function importTracks(db: PrismaClient, eventId: bigint, createdBy:
           version: nextTrackVersion(),
         },
         select: META_SELECT,
-      });
+      }));
       out.push(metaOfRow(row));
     }
     return out;
@@ -436,6 +451,8 @@ export async function markTracksConverted(db: PrismaClient, eventId: bigint, mar
   const ids = marks.map((m) => m.id);
   if (new Set(ids).size !== ids.length) throw trackError("TRACK_POINTS_INVALID", "an id appears twice in the call");
   return db.$transaction(async (tx) => {
+    // The event lock: a concurrent split or remove cannot delete a row between the read and its update.
+    await lockEventTracks(tx, eventId);
     const rows = await tx.mapGpsTrack.findMany({ where: { eventId, id: { in: ids } }, select: META_SELECT });
     const byId = new Map(rows.map((r) => [r.id, r]));
     const missing = ids.find((i) => !byId.has(i));

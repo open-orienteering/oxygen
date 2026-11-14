@@ -148,6 +148,9 @@ shaped the original layout was retired in May 2026
 
 - `xpos` / `ypos` are stored as `DOUBLE PRECISION` in meters (no x10 scaling).
 - `lat` / `lng` are stored as `DOUBLE PRECISION` in degrees (no x1e6 scaling).
+  The exception is a GPS track's points (`map_gps_tracks.points`): columnar
+  JSONB of integer 1e-7 degrees, quantised at parse
+  (`docs/map-gps-tracks.md` §2.1).
 
 ### Time storage
 

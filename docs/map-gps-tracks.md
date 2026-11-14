@@ -39,8 +39,8 @@ G24: migration `20261114120000_map_gps_tracks`, the store
 | `name` | `TEXT NULL` | `Track.name` (§2.1); null when the GPX names none |
 | `source_name` | `TEXT NOT NULL DEFAULT ''` | the file it came from; `''` for an average |
 | `points` | `JSONB NOT NULL` (an object) | `TrackPoints` verbatim (§2.1) |
-| `point_count` | `INTEGER NOT NULL` | `points.lat.length`, set by the server (user 2026-11-13) |
-| `recorded_at` | `TIMESTAMPTZ(3) NULL` | the first non-null `time`; null when untimed (user 2026-11-13) |
+| `point_count` | `INTEGER NOT NULL` | `points.lat.length`, set by the server (user 2026-11-14) |
+| `recorded_at` | `TIMESTAMPTZ(3) NULL` | the first non-null `time`; null when untimed (user 2026-11-14) |
 | `trim_start`, `trim_end` | `INTEGER NOT NULL` | the trim `[start, end)` (§3.5); `0` / `point_count` when untrimmed |
 | `derived_from` | `UUID[] NOT NULL DEFAULT '{}'` | an average's passes (provenance only: no FK, not cleaned on remove) |
 | `single_pass` | `JSONB NULL` (an array) | an average's single-pass ranges (§4.1), `[{ start, end }]` indices of the stored points; null for a recorded track |
@@ -55,7 +55,7 @@ Index `(event_id, created_at, id)`. No `updated_at`: the token carries
 the write.
 
 `point_count` and `recorded_at` are derived columns the row did not
-name (user 2026-11-13): `list` answers metadata without reading
+name (user 2026-11-14): `list` answers metadata without reading
 `points` (a 200 000-point timed track is about 8 MB of JSON), and the
 trim CHECK needs the count. Length in metres is not stored: it is
 ground metres on the projected track (§3.1), computed on the device.
@@ -80,6 +80,11 @@ version (string) }`.
 | `mapTrack.remove` | `{ ids }` (1–200) | `{ removed }` |
 | `mapTrack.markConverted` | `{ marks: [{ id, opId: string \| null }] }` (1–200) | `{ tracks: TrackMeta[] }` |
 
+- **Inputs.** `name` is at most 200 characters (null allowed), and
+  `sourceName` at most 255; a device truncates longer GPX names and file
+  names. `points` is validated by hand rather than by Zod (AGENTS.md §8
+  "Zod at the boundary" covers the envelope): a capped track is 800 000
+  numbers.
 - **Parsed on the device.** The server never parses GPX and never
   projects; it validates `points` against §2.1 and refuses, never
   re-rounds: `lat` / `lng` equal-length integer arrays (|lat| ≤ 90°,
@@ -94,7 +99,9 @@ version (string) }`.
   a call, so one request stays well under Cloud Run's 32 MiB: a device
   sends a large import as several calls. A refused import writes nothing.
 - **Import** is one transaction, rows inserted in input order (so
-  server-minted ids keep file order). A supplied `id` already in the
+  server-minted ids keep file order; a client minting ids mints them
+  ascending — uuidv7 in file order — since rows of one import share
+  `created_at` and the list orders them by id). A supplied `id` already in the
   event is skipped and answered as stored — a retried venue forward is a
   no-op, and an undo can re-import a removed track under its id; one in
   another event is `CONFLICT`. `derivedFrom` (2–200 distinct ids) and
@@ -114,7 +121,8 @@ version (string) }`.
   restorable; `single_pass` divided by `splitRanges` (§3.5); `name`,
   `source_name`, `derived_from`, `converted_op`, `created_by` and
   `created_at` (exact) kept, so the parts stay with their import in the
-  list, ordered there by id; a fresh version each. With `ids`, a repeat after success (the
+  list, ordered there by id (client `ids` ascending, left first, to keep
+  left before right); a fresh version each. With `ids`, a repeat after success (the
   original gone, both ids present) answers the two rows.
 - **Remove** deletes the event's rows among `ids`; unknown ids are
   ignored, so twice is once.
@@ -126,14 +134,14 @@ Errors carry their code as the message prefix, as `PATCH_*` do:
 
 | Code | tRPC code | When |
 |---|---|---|
-| `TRACK_POINTS_INVALID` | `BAD_REQUEST` | a points or `singlePass` rule fails, or `derivedFrom` / `singlePass` come alone |
+| `TRACK_POINTS_INVALID` | `BAD_REQUEST` | a points or `singlePass` rule fails, `derivedFrom` / `singlePass` come alone, `derivedFrom` names a pass twice, or an id appears twice in one `import` / `markConverted` call |
 | `TRACK_TOO_MANY_POINTS` | `PAYLOAD_TOO_LARGE` | a track has more than 200 000 points |
 | `TRACK_REQUEST_TOO_LARGE` | `PAYLOAD_TOO_LARGE` | a call holds more than 500 000 points |
 | `TRACK_LIMIT` | `PRECONDITION_FAILED` | the event would hold more than 200 tracks |
-| `TRACK_ID_TAKEN` | `CONFLICT` | a supplied id belongs to another event |
+| `TRACK_ID_TAKEN` | `CONFLICT` | an `import` id belongs to another event, or a `split` part id is already used by any row |
 | `TRACK_NOT_FOUND` | `NOT_FOUND` | no such track in the event |
 | `TRACK_TRIM_INVALID` | `BAD_REQUEST` | a trim outside §3.5's rule |
-| `TRACK_SPLIT_INVALID` | `BAD_REQUEST` | a split index without two visible points each side |
+| `TRACK_SPLIT_INVALID` | `BAD_REQUEST` | a split index without two visible points each side, or part `ids` equal to each other or to the original |
 
 ### 1.3 Ownership, venue and backups
 
@@ -144,7 +152,7 @@ Errors carry their code as the message prefix, as `PATCH_*` do:
 - **Not in the checkout snapshot** (`map-storage.md` §7.2): a box holds
   no tracks. Reads are not forwarded, so on a box `list` answers empty
   during a lease; G25 disables the panel on a venue node with the
-  reason (user 2026-11-13: mapping is not a venue task).
+  reason (user 2026-11-14: mapping is not a venue task).
 - **In the per-event dump** (`map-storage.md` §7.3; 07 §10): a
   `map_gps_tracks` section after `map_patches`, all columns, restored
   by `packages/api/scripts/restore-map-gps-tracks.sql -v event_id=<id>`

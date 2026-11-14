@@ -119,7 +119,7 @@ tRPC, never journaled, and **cloud-owned even during a lease**:
   §1.3) are cloud-owned and not journaled, and they are **not** in the
   checkout snapshot: `mapTrack.` writes are forwarded, and a box's
   `mapTrack.list` answers empty during a lease (mapping is not a venue
-  task; user 2026-11-13).
+  task; user 2026-11-14).
 - **Layout and print data** (row G18, slice G answer 4): sheets
   (`course_maps`), templates, course objects and the graphics they draw
   travel in the checkout snapshot (`docs/map-storage.md` §7.2), so the box

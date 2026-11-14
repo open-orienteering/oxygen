@@ -82,6 +82,9 @@ psql "$DATABASE_URL" -v event_id=$NEW_ID -f <repo>/packages/api/scripts/restore-
 
 # 5b. The GPS tracks (a dump written before G24 has no such section):
 #     event_id rewritten, created_by kept only when that user exists.
+#     A track whose id this database already holds (e.g. the original
+#     event still exists here) is skipped, so restoring a copy beside its
+#     original restores no tracks.
 psql "$DATABASE_URL" -v event_id=$NEW_ID -f <repo>/packages/api/scripts/restore-map-gps-tracks.sql
 
 # 6. Every other section (map_patches included, after step 5: its
