@@ -24,13 +24,22 @@ import type { EventRef, PrismaClient } from "../db.js";
 import { nodeId, SYNC_SECRET_HEADER } from "./nodeIdentity.js";
 import { makeSyncHeaders } from "./googleIdToken.js";
 import {
+  applyTokens,
   exportSnapshotMaps,
   importSnapshotMaps,
+  tokenMapOf,
+  withDbNulls,
   type ExportBlobInput,
   type ExportBlobResult,
   type SnapshotBlobs,
   type SnapshotMaps,
 } from "./snapshotMaps.js";
+import {
+  exportSnapshotGraphics,
+  importSnapshotGraphics,
+  type SnapshotGraphic,
+  type SnapshotGraphicBlobs,
+} from "./snapshotGraphics.js";
 import { withoutDroppedFields } from "./dropped-columns.js";
 
 // ─── Active lease + write guard ─────────────────────────────
@@ -138,15 +147,22 @@ export async function releaseLease(
  * event's map rows travel separately as `maps` (docs/map-storage.md §7.2),
  * the map patch with them (docs/map-patches.md §3.4: its FK needs the
  * documents, and its token must not cross the JSON body as a number).
- * Course objects are cloud-owned like the sheets but travel here, since the
- * kiosk map at the venue draws them (docs/course-layer.md §8).
+ * Course objects, templates and sheets are cloud-owned (their writes are
+ * forwarded from a venue) but travel here: the kiosk map at the venue draws
+ * the objects (docs/course-layer.md §8) and the box prints from its copy
+ * (slice G answer 4; docs/map-storage.md §7.2). Their tokens also travel
+ * exactly, in `versions`.
  */
 const SNAPSHOT_TABLES = [
   "control",
   "course",
   "courseControl",
+  // Before the classes: `classes.sheet_template_id` references it.
+  "mapTemplate",
   "class",
   "classCoursePool",
+  // After courses, classes and templates, which it references.
+  "courseMap",
   // Not in the results closure, but the venue's map draws them (08 §4.8).
   "courseObject",
   "cardReadout",
@@ -158,6 +174,37 @@ const SNAPSHOT_TABLES = [
 ] as const;
 
 type SnapshotTable = (typeof SNAPSHOT_TABLES)[number];
+
+/** The cloud-owned layout tables whose tokens travel exactly in `versions`. */
+const TOKEN_TABLES = ["courseObject", "courseMap", "mapTemplate"] as const;
+type TokenTable = (typeof TOKEN_TABLES)[number];
+
+/** `course_maps` columns typed `Json?` (schema.prisma). */
+const NULLABLE_JSON_SHEET_FIELDS = ["windowCenter"] as const;
+
+/**
+ * Rows of a snapshot table as the importer inserts them: exact tokens, a
+ * template reference NULL when the template did not travel (an exporter
+ * that predates templates in the snapshot), JSON nulls as `DbNull`.
+ */
+function importRows(
+  t: SnapshotTable,
+  rows: Record<string, unknown>[],
+  snapshot: EventSnapshot,
+): Record<string, unknown>[] {
+  if (t === "course") return rows.map((r) => withoutDroppedFields("course", r));
+  const templateIds = new Set((snapshot.tables.mapTemplate ?? []).map((r) => String(r.id)));
+  const knownTemplate = (v: unknown) => (typeof v === "string" && templateIds.has(v) ? v : null);
+  if (t === "class") {
+    return rows.map((r) => ("sheetTemplateId" in r ? { ...r, sheetTemplateId: knownTemplate(r.sheetTemplateId) } : r));
+  }
+  if ((TOKEN_TABLES as readonly string[]).includes(t)) {
+    const exact = applyTokens(rows, snapshot.versions?.[t as TokenTable]);
+    if (t !== "courseMap") return exact;
+    return exact.map((r) => withDbNulls({ ...r, templateId: knownTemplate(r.templateId) }, NULLABLE_JSON_SHEET_FIELDS));
+  }
+  return rows;
+}
 
 /** Delegate lookup that keeps Prisma's per-model types out of the loop. */
 function delegate(db: PrismaClient, table: SnapshotTable) {
@@ -179,6 +226,18 @@ export interface EventSnapshot {
    * predates it.
    */
   maps?: SnapshotMaps;
+  /**
+   * Exact tokens of the cloud-owned layout rows, decimal strings by row id
+   * (the rows' own `version` is rounded once the snapshot crosses HTTP).
+   * Absent from an exporter that predates it.
+   */
+  versions?: Partial<Record<TokenTable, Record<string, string>>>;
+  /**
+   * The event's graphics and the club graphics its layout rows reference,
+   * without bytes (docs/map-storage.md §7.2); the bytes follow through
+   * `lease.exportBlob`. Absent from an exporter that predates it.
+   */
+  graphics?: SnapshotGraphic[];
 }
 
 export async function exportEventSnapshot(
@@ -225,6 +284,8 @@ export async function exportEventSnapshot(
       ? { hlc: head.hlc.toString(), id: head.id }
       : { hlc: "0", id: "" },
     maps: await exportSnapshotMaps(db, event.id),
+    versions: Object.fromEntries(TOKEN_TABLES.map((t) => [t, tokenMapOf(tables[t])])),
+    graphics: await exportSnapshotGraphics(db, event.id),
   };
 }
 
@@ -236,11 +297,14 @@ export async function exportEventSnapshot(
  *
  * `blobs` are the map blobs `fetchSnapshotBlobs` fetched for
  * `snapshot.maps`; without them the map part is not imported.
+ * `graphicBlobs` are the bytes `fetchSnapshotGraphics` fetched for
+ * `snapshot.graphics`; without them no graphic is imported.
  */
 export async function importEventSnapshot(
   db: PrismaClient,
   snapshot: EventSnapshot,
   blobs?: SnapshotBlobs,
+  graphicBlobs?: SnapshotGraphicBlobs,
 ): Promise<EventRef> {
   // A v0.6.0 exporter still sends the columns E5 dropped.
   const { id: _dropId, ...eventData } = withoutDroppedFields("event", snapshot.event);
@@ -268,8 +332,13 @@ export async function importEventSnapshot(
         await (tx[t] as unknown as {
           createMany(a: { data: Record<string, unknown>[] }): Promise<unknown>;
         }).createMany({
-          data: rows.map((r) => ({ ...(t === "course" ? withoutDroppedFields("course", r) : r), eventId: created.id })),
+          data: importRows(t, rows, snapshot).map((r) => ({ ...r, eventId: created.id })),
         });
+      }
+
+      // Graphics by the cloud's id: the layout rows reference them by number.
+      if (snapshot.graphics && graphicBlobs) {
+        await importSnapshotGraphics(tx, created.id, snapshot.graphics, graphicBlobs);
       }
 
       // Content-addressed blobs (append-only) and the event's map pins.

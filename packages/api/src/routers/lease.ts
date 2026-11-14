@@ -34,9 +34,9 @@ import {
 import { shipEventOnce, makePeerTransport } from "../sync/shipper.js";
 import {
   exportBlobInput,
-  exportBlobSlice,
   fetchSnapshotBlobs,
 } from "../sync/snapshotMaps.js";
+import { exportPeerBlobSlice, fetchSnapshotGraphics } from "../sync/snapshotGraphics.js";
 import {
   nodeId,
   nodeRole,
@@ -113,12 +113,13 @@ export const leaseRouter = router({
   }),
 
   /**
-   * One slice (≤ 4 MiB, base64) of a map blob the event's `map_files` pin
-   * — the bytes of the snapshot's `maps` part (docs/map-storage.md §7.2).
+   * One slice (≤ 4 MiB, base64) of a map blob the event's `map_files` pin,
+   * or of a graphic the event draws — the bytes of the snapshot's `maps`
+   * and `graphics` parts (docs/map-storage.md §7.2).
    */
   exportBlob: peerProcedure
     .input(exportBlobInput)
-    .query(async ({ ctx, input }) => exportBlobSlice(ctx.db, ctx.event.id, input)),
+    .query(async ({ ctx, input }) => exportPeerBlobSlice(ctx.db, ctx.event.id, input)),
 
   // ─── Operator surface ─────────────────────────────────────
 
@@ -151,7 +152,13 @@ export const leaseRouter = router({
               peer.exportBlob(input.nameId, { table, hash, start, length }),
             )
           : undefined;
-        const event = await importEventSnapshot(db, snapshot, blobs);
+        // Graphics the same way, by id (docs/map-storage.md §7.2).
+        const graphicBlobs = snapshot.graphics
+          ? await fetchSnapshotGraphics(db, snapshot.graphics, (id, start, length) =>
+              peer.exportBlob(input.nameId, { table: "graphics", id, start, length }),
+            )
+          : undefined;
+        const event = await importEventSnapshot(db, snapshot, blobs, graphicBlobs);
         // Journal-from-there: pulls start at the exporter's journal head;
         // history before it is baked into the snapshot. Push starts empty.
         await db.journalSyncState.upsert({
@@ -186,6 +193,10 @@ export const leaseRouter = router({
             skipped: snapshot.maps?.skipped ?? 0,
             decisions: snapshot.maps?.decisions?.length ?? 0,
             patches: snapshot.maps?.patch ? 1 : 0,
+          },
+          graphics: {
+            rows: snapshot.graphics?.length ?? 0,
+            fetchedBytes: graphicBlobs?.fetchedBytes ?? 0,
           },
         };
       } catch (err) {
