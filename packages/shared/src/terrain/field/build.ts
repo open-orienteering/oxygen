@@ -158,7 +158,7 @@ export function buildHeightField(g: ContourGraph, lv: FieldLevels, opts: HeightF
     if (labels[i] === LABEL.outside) outside[fc]++;
   }
   const noData = new Uint8Array(FN);
-  let h = new Float32Array(FN);
+  let h: Float32Array = new Float32Array(FN);
   for (let fc = 0; fc < FN; fc++) {
     noData[fc] = 2 * outside[fc] > total[fc] ? 1 : 0;
     h[fc] = noData[fc] || cnt[fc] === 0 ? NaN : sum[fc] / cnt[fc];
