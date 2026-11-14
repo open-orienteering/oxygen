@@ -15,7 +15,7 @@ import {
   hasThickRuleBelow,
   type DescriptionSheetRow,
 } from "@oxygen/shared";
-import { MapLayerMessage, VectorMapLayer, type VectorLoupe } from "./VectorMapLayer";
+import { MapLayerMessage, VectorMapLayer, type VectorLoupe, type VectorMapObjects } from "./VectorMapLayer";
 import {
   type MapViewport,
   type ViewportContext,
@@ -325,6 +325,13 @@ export interface MapViewerEditorProps {
    * carries them (docs/course-editor.md §6.7, F21): merged after the override, so the layer redraws per move.
    */
   legDraft?: LegDraft | null;
+  /**
+   * Map mode's document objects (docs/map-rendering.md §5.5 "Document objects"): `selected` drawn
+   * highlighted and `draft` (patch ops being edited) drawn through the layer's edit part;
+   * `onHitTest` hands the page `hit(pt, toleranceMm)` over the effective document (paper mm) once
+   * the layer has loaded, `null` when it goes. The viewer's own gestures do not use it.
+   */
+  mapObjects?: VectorMapObjects | null;
 }
 
 /** What a tool gets for a pointer event. */
@@ -2828,6 +2835,7 @@ export function MapViewer({
           loupe={glLoupe}
           patch={mapPatch}
           patchVersion={mapPatch ? patchDelivery.version : "0"}
+          mapObjects={editor?.mapObjects ?? null}
         />
       )}
       {/* Rotated UI layer (the overlay SVG) — the meridians vertical, as the canvas's view matrix */}

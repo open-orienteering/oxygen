@@ -986,7 +986,9 @@ growth factor).
 | `prepare` | bucket ids, most urgent first | replaces the queue; one `part` per id |
 | `patch` | a generation number, the patch (or `null`) and the cells whose detail the engine holds | `patched`: the generation, the patch state (hidden ids, issues), the touched buckets' fresh parts, the detail cells, the bytes, the mesh atlas when it grew — "Object identity and the patch" below |
 | `course` | a generation number and the course layer's input without the document (`CourseLayerRequest`: structure, sites, objects, appearance, view options, filter regions, `fastFilter`), or `null` | `course`: the generation, the dynamic bucket's part (or `null`), the stack to draw with, the derivation and symbol sizes, warnings, the mesh atlas when it grew, and the filter over the static buckets (or `null`) — "Dynamic bucket" and "Filter regions" below |
-| — | | `error` on a failed load; on a `course` request whose derivation throws, with that request's generation (F20b); on a `patch` request that throws, with `patch` = its generation |
+| `hit` (G5) | an id, a paper point (µm) and a tolerance | `hit`: the id and the effective document's objects under the point, topmost first (`DocumentHit`s) — §5.5 "Document objects" |
+| `edit` (G5) | a generation number and the edit input (selected refs, a draft of patch ops), or `null` | `edit`: the generation, the edit part (`EDIT_BUCKET`, or `null`), the static copies to hide, the selected refs' indices and the count drawn highlighted, the draft's issues, the mesh atlas when it grew — §5.5 "Document objects"; a `patched` reply carries the same state as `edit` while an input is held |
+| — | | `error` on a failed load; on a `course` request whose derivation throws, with that request's generation (F20b); on a `patch` request that throws, with `patch` = its generation; on a `hit` with `hit` = its id; on an `edit` with `edit` = its generation |
 
 Every typed array goes back as a transferable. The worker decodes,
 bridges (`documentRenderInput`), symbolises, builds the atlas, assigns
@@ -1007,7 +1009,10 @@ The course layer (`docs/course-layer.md`) is drawn by this backend as
 one more part — the **dynamic bucket** of 04 §7 — beside the static
 buckets, so map and course are one colour-ordered picture: lower purple
 under black, brown and blue line art, white-outs above the map's ink,
-upper purple on top. The viewer's use of it is §5.4 "Overlay".
+upper purple on top. The viewer's use of it is §5.4 "Overlay". Since G5
+the dynamic bucket has a second part, the **edit part** (`E`,
+`EDIT_BUCKET`): Map mode's selection highlight and the document objects
+under edit, with its own request (§5.5 "Document objects").
 
 **Stack at load.** A load with `courseLayer: true` (the viewer's; the
 dev page and the bench leave it off) builds the static buckets on the
@@ -1177,7 +1182,9 @@ reply's `hidden` and `entries`, and a patch's hidden ids all speak these
 ids; objects a patch adds are `N …` (from the pinned count up). The
 course part's ids start at `COURSE_OBJECT_BASE` = 2³⁰ and the page
 part's after the course's, so a patch that adds objects never shifts
-them. The dev `objects` and `stream` sources keep the stream's ids.
+them; the edit part's start at `EDIT_OBJECT_BASE` = 0x6000_0000 (G5, §5.5),
+so its copies are never skipped with the static objects they draw. The
+dev `objects` and `stream` sources keep the stream's ids.
 
 **The patch.** The viewer draws the event's patch over the pinned
 document (`map-patches.md` §2) — hide, modify, resymbol, add — without
@@ -1608,8 +1615,11 @@ residency budget (MB, default 150), `lod=0` turns off the glyph skip,
 the text skip and the hatch tint, `kinds=fill,stroke,…` draws only those kinds; `compare=1`
 also draws the same stream through the per-pass golden path into a
 second canvas at a zoom where every stroke is ≥ 1.5 px and publishes
-the fraction of pixels differing by more than 16 levels (§6.2's channel tolerance). Pan by drag,
-zoom by wheel or pinch. Reports and the encoded document bytes are
+the fraction of pixels differing by more than 16 levels (§6.2's channel tolerance); `pick=1` (G5)
+makes a click hit-test the document (`hitDocument`, 6 CSS px) and select the top hit through the
+edit part, publishing the hits and the edit state as `__mapGlDoc.pick` once the frame that draws it
+is drawn (the canvas's `data-pick`), and `window.__mapGlDocLines()` lists every line object's first
+segment mid-point in client px. Pan by drag, zoom by wheel or pinch. Reports and the encoded document bytes are
 published on `window.__mapGlDoc` for Playwright.
 
 #### Tests
@@ -1960,10 +1970,14 @@ with its distance to the drawn shape (0 on or inside):
 | fill, hatch | inside, even-odd (§3.1), or within the tolerance of its outline |
 | stroke | the flattened centre line (10 µm) within half the width + tolerance; a closed path's interior too with `closedStrokeInterior` |
 | glyph | within the mesh radius × instance scale of an instance (a pattern-clipped glyph pass: its clip area) |
-| text | within a glyph box: 0.65 em wide (the course layer's estimate, `course-layer.md` §3.5), 0.2 em below to 0.8 em above the baseline |
+| text | within a glyph box: 0.65 em wide (the course layer's estimate, `course-layer.md` §3.5), 0.2 em below to 0.8 em above the baseline, turned with the glyph (`angles`, §3.5) about its origin (G5: the document's rotated and line text) |
 
 Bounding boxes reject first. No GPU readback: the same function serves
 the editor and the tests (pixel-exact GPU picking stays 04 §7's fallback).
+`passes` restricts the test to some pass indices; `hitTestStreams`
+tests several streams at once — the effective document's pinned stream
+and its patch's — and orders their hits as the GL backend draws: colour,
+kind, the later stream over the earlier, stream order (G5).
 
 **Editor targets.** The course reply's `hit` index (§5.2) reaches the
 viewer with `CourseInfo`; with an `editor` and the GL course layer
@@ -1980,7 +1994,8 @@ it. This is the only hit-testing: the SVG hit targets and the
 `sharedHitTest` opt-in went with the legacy editor (E4b). The viewer
 mirrors every editor site as a hidden `editor-site` (paper mm) for
 tests. Without the course layer (§5.4 "Fallback") there is no hit
-index and no target. The hit index is the course part only.
+index and no target. The hit index is the course part only; the
+document's objects are hit through the worker (G5, "Document objects").
 The filter region's eyedropper (P3, `course-editor.md` §5 / §6.4) is the
 one hit-test over the map document: on the main thread, over the few
 objects whose stored box holds the click, symbolised for the purpose
@@ -1989,7 +2004,7 @@ goes to the worker.
 Snapping (D5, `course-editor.md` §6.2) does not hit-test the document's
 stream: point centres and vertices are geometry, read once per document
 into a main-thread grid (`lib/editor/snap.ts`); a worker request over the
-document stream is Map mode's (slice G).
+document stream is Map mode's (G5, "Document objects" below).
 Both main-thread indices are of the **effective document** (G4,
 `map-patches.md` §2.4): `snapIndexForDocument(hash, bytes, patch)` and
 `pickIndexForDocument(…)` apply the event's patch (`useMapPatch`), kept
@@ -1998,6 +2013,105 @@ or counted; modified and added objects are where the patch puts them. An
 object drawn with a patch symbol is not picked by symbol — a filter
 region stores document symbol indices (§4.11) and a patch symbol's index
 moves with the patch — so a click on it picks what is under it (§8).
+
+**Document objects** (G5; 04 §7 "Editing and overlay hooks"). Map mode
+(slice G, `course-editor.md` §13) selects and edits objects of the map
+document itself. Three pieces, all in the viewer's worker and engine:
+
+- **Hit-test over the document.** `MapGlEngine.hitDocument(x, y,
+  toleranceUm)` (paper µm) posts `hit { id, x, y, toleranceUm }`; the
+  worker answers `hit { id, hits, ms }` — the **effective document's**
+  objects under the point, topmost first, by the symbolised shape.
+  Candidates are the passes of the point's grid cell and its eight
+  neighbours (an object's reach is within one cell of its centre's cell,
+  §5.2 "Assignment") and of the large bucket — the bucket grid stands in
+  for 04 §7's R-tree — from both sources of the effective document: the
+  pinned stream without the objects the patch changed or hides, and the
+  patch's own stream. `render.hitTestStreams` tests them exactly
+  (the table above) and orders them by colour, kind (§3.6), the patch's
+  stream over the pinned one, then stream order — the GL backend's order
+  up to its part order within one (colour, kind), which does not show
+  (ink of one colour is opaque).
+  `closedStrokeInterior` is off: a contour ring is not grabbed by its
+  inside. A `DocumentHit` is `{ objectIndex, ref, symbol, type, colour,
+  distanceUm }`: the effective `objectIndex` (valid for the patch drawn
+  now), a stable `ref` — `{ source: sourceIndex }` or `{ added: id }`
+  (`map-patches.md` §1.2; `null` for the dev `objects` / `stream`
+  sources) — the drawn symbol as a `PatchSymbolRef`, the object type and
+  the colour of the topmost pass that hit. A patch-hidden object is never
+  hit; a modified one only where the patch draws it. The engine drops hits
+  on objects it does not draw (`setHidden`'s, a filter region's, an object
+  under edit's static copy); masked objects still hit. Before the load it
+  resolves `[]`; a request that throws answers `error { hit: id }` and
+  rejects that call only; one in flight when the engine is disposed is
+  rejected. Several may be in flight.
+- **Highlight through the dynamic bucket.** `MapGlEngine.setEdit({
+  selected, draft? } | null)` posts `edit { generation, input }`. The
+  worker copies each selected object's passes from the stream that draws
+  it (the pinned stream, the patch's, or the draft's below) into the
+  **edit part** — `EDIT_BUCKET` (−4), one `all` part, its range-table ids
+  from `EDIT_OBJECT_BASE` (0x6000_0000, above the course's and the
+  page's) — in the reserved colour `HIGHLIGHT_COLOUR` (0xFFFF). The
+  engine resolves that index to its highlight colour (`EngineOptions.
+  highlight`, default `#2563eb`, the editor's selection blue), so it sorts
+  after every map, course and page colour and draws on top of everything,
+  unclipped by a page frame. Strokes, glyphs and text are redrawn as
+  they are (text halos are left out); **a fill or hatch is drawn as a
+  150 µm outline** (`HIGHLIGHT_OUTLINE_UM`) of its area, and a
+  pattern-clipped glyph pass as the outline of its clip — the stream has
+  no alpha (§8 "Alpha"), and a flooded area would hide what is selected
+  inside it (user decision 2026-11-14; deviation from 04 §7's "passes
+  redrawn in a highlight colour"). Selecting re-symbolises and
+  re-prepares nothing static: the copies keep their tessellation input,
+  the static parts are untouched.
+- **An object under edit.** `draft { ops, symbols? }` are patch ops
+  (`map-patches.md` §1.1: modify, resymbol, add, hide) the host is
+  editing and has not written. The worker merges them over the drawn
+  patch (`mergePatch`), applies the result to the pinned document and
+  bridges and symbolises the draft's targets alone (`documentRenderInput
+  { only }`, the load's options and colour remap; glyph meshes join the
+  atlas by content, text resolves against the loaded pages). Their passes
+  join the edit part **in their own colours**, so they are drawn in colour
+  order with the static buckets (04 §7 "Dynamic bucket"); each target's
+  static copy — its index in the drawn effective document; none for a new
+  add — is in the reply's `hidden`, which the engine joins to the hidden
+  set: skipped through the range table, nothing re-prepared. A selected
+  object the draft draws is highlighted from the draft's passes. The
+  draft's copy is drawn under an edit-part id, so `setHidden` and filter
+  regions, which address the static id, do not reach it (§8).
+  `applyPatch`'s issues for the merged patch are reported.
+
+**Edit replies.** `edit { generation, part, hidden, selected,
+highlighted, issues, atlas?, ms }`: `selected[k]` is the effective index
+of `selected[k]` in the drawn document, −1 when it is not drawn there
+(hidden, absent, or a draft's add); `highlighted` counts the selected refs
+drawn highlighted (a draft's add included). The engine keeps one edit request in flight and the latest
+input next, as `setCourse` (F20), re-posts the input after a `load`,
+uploads the part under key `E` — after the course and before the page,
+always resident, drawn at every zoom, never evicted, its bytes fixed —
+rebuilds the visible set at once and calls `onEdit` with the state. The
+worker keeps the last edit input: a `patched` reply carries `edit`, the
+edit state recomputed against the new effective document, applied in the
+same step, so no frame shows a highlight or a hidden id of the previous
+patch; if recomputing it throws, the reply carries an empty edit state
+(nothing highlighted, nothing hidden) and the patch is drawn. `null`
+clears. A request that throws answers `error { edit:
+generation }`, ends that request only and leaves the part drawn as it
+was. Committing is the host's: it keeps the draft until `setPatch`
+resolves with the written patch, then clears it — the object moves to
+its static bucket without a frame missing it (04 §7 "on commit").
+
+**In the viewer.** `MapViewerEditorProps.mapObjects { selected?, draft?,
+onHitTest? }` reaches `VectorMapLayer`'s `edit`: `onHitTest` hands the
+page `hit(pt, toleranceMm)` (paper mm in, `DocumentHit`s out) once the
+layer has loaded — or when `mapObjects` arrives after that — and `null`
+to that callback when it is replaced, the layer reloads or unmounts — the
+request is asynchronous,
+so it cannot ride `ToolPointer.target`, and Map mode's tools decide when
+to ask (click, drag start, Tab; user decision 2026-11-14). The canvas
+carries `data-selected-objects`: the latest edit state's `highlighted`
+count. Without
+`mapObjects` nothing is posted.
 
 **Tools.** `MapViewerEditorProps.tool` (D5, `course-editor.md` §6): the
 viewer offers pointer-down to the active tool first, routes clicks of an
@@ -2043,7 +2157,11 @@ popover beside it; same entries and ids.
 
 | Test | Covers |
 |---|---|
-| `packages/shared/src/render/__tests__/hit-test.test.ts` | the table above: order, reach, even-odd, interior on request, glyph discs, text boxes, object filter, distance |
+| `packages/shared/src/render/__tests__/hit-test.test.ts` | the table above: order, reach, even-odd, interior on request, glyph discs, text boxes, object filter, distance; G5: hit order over fill / stroke / glyph / text by the colour stack whatever the kinds, kind order within one colour, a pass subset, turned text in its turned box, `hitTestStreams` (colour, kind, then the patch's stream over the pinned one; each source's own passes and objects) |
+| `map-gl/__tests__/worker-hit.test.ts` (G5) | `hit` over the effective document: index, ref, symbol, type, colour; reach and tolerance; an object of a hidden symbol not hit; topmost first across the pinned and the patch's stream (an added line over an area); a patch-hidden object never hit, a moved one only at its new place, the toggle off; an object centred in the neighbour cell and one in the large bucket; a request before the load → `error { hit }` |
+| `map-gl/__tests__/worker-edit.test.ts` (G5) | the edit part at `EDIT_BUCKET`: a selected line's strokes in `HIGHLIGHT_COLOUR` under edit-part ids; an area as its outline (no fill); a point's glyphs; several refs with an unknown and a patch-hidden one (−1); `null` / empty clear; an added object by its id; `highlightPasses` (text kept, halo dropped, fill and clipped pattern as outlines); a modify draft at its new place in its own colour with its static copy hidden; a new add with none; a selected draft object highlighted where the draft draws it; a draft over the drawn patch's add, a hide draft; the draft's own issues; a draft glyph grows the atlas; a patch change carries the edit state; a request before the load → `error { edit }`, the next answered |
+| `map-gl/__tests__/engine.test.ts` (document objects, G5) | `hitDocument`: the worker's hits, `[]` before the load, hits on `setHidden`'s objects, on a hide region's (filter regions test) and on an object under edit dropped, several in flight by id, a worker error and `dispose` reject them; `setEdit`: `E` uploaded and drawn, the highlight index resolved to `EngineOptions.highlight`, bytes fixed, `null` releases it; a draft's static copy skipped, nothing re-prepared; one request in flight, the latest next, an input before the load right after it; an edit error ends that request only, the part kept; a patch reply's edit state applied in the same step |
+| `e2e/map-gl-doc.spec.ts` "a click on the fixture's path reports its object…" (G5) | `/dev/map-gl-doc?pick=1` on `e2e/test.ocd`: a click on the first Path (505) reports it on top (source index, symbol code) with the area under it; the edit part selects it and the frame has the highlight blue round it, none before; a click elsewhere moves the highlight and the path's blue goes |
 | `map-gl/__tests__/worker-course.test.ts`, `engine.test.ts` | the reply's hit index and its way to the host |
 | `lib/editor/__tests__/hit.test.ts` | editor targets over the real worker's index |
 | `lib/editor/__tests__/snap.test.ts`, `symbol-pick.test.ts` (G4) | over the effective document: a hidden object neither snaps nor is picked or counted; a modified or added one snaps and is picked where the patch puts it; an added object of a patch symbol is neither picked nor counted |
@@ -2732,7 +2850,8 @@ what became of it:
 | `packages/web/src/map-gl/buckets.ts` | cells, large bucket, per-part preparation and range table, visible set, clip groups, zoom gate, LRU |
 | `packages/web/src/map-gl/arena.ts` | vertex arenas: free list, growth by copy |
 | `packages/web/src/map-gl/worker.ts`, `worker-entry.ts` | the worker's message handler and its binding |
-| `packages/web/src/map-gl/engine.ts` | main-thread controller: worker transport, residency, visible-set rebuilds, the one course request in flight (F20) |
+| `packages/web/src/map-gl/engine.ts` | main-thread controller: worker transport, residency, visible-set rebuilds, the one course request in flight (F20), the document hit-test and the edit part (G5) |
+| `packages/shared/src/render/hit-test.ts` | `hitTest`, `hitTestStreams` on the symbolised shape (§5.5) |
 | `packages/web/src/map-gl/view.ts` | the arena path's model → clip matrix, `RenderTarget`, `loupeView` |
 | `packages/web/src/map-gl/renderer.ts` | WebGL2 backend, GPU stage (arena programs and draw loop; per-pass path, stencil, supersampling; the loupe's inset target and circle composite; GPU timer) |
 | `packages/web/src/pages/dev/MapGlFixturePage.tsx` | dev-only golden page `/dev/map-gl` |
@@ -2740,7 +2859,7 @@ what became of it:
 | `e2e/__golden__/map-gl/`, `e2e/map-gl-golden.spec.ts` | committed goldens and the browser comparison |
 | `e2e/map-gl-doc.spec.ts` | whole-document pipeline on `e2e/test.ocd`: arena path, worker, eviction, arena = per-pass path |
 | `scripts/measure-gl.mjs` | corpus measurements through `/dev/map-gl-doc` (§5.2 Measurements) |
-| `packages/web/src/components/VectorMapLayer.tsx` | the vector base layer in `MapViewer` (§5.4): canvas, engine and worker lifecycle, status; the course layer request and its replies; the editor's loupe |
+| `packages/web/src/components/VectorMapLayer.tsx` | the vector base layer in `MapViewer` (§5.4): canvas, engine and worker lifecycle, status; the course layer request and its replies; the editor's loupe; Map mode's document objects (`mapObjects`, G5) |
 | `packages/web/src/lib/course-layer-request.ts` | the viewer's course-layer input (§5.4 "Overlay", `course-layer.md` §5) |
 | `packages/web/src/components/MapViewer.tsx` | the host: viewport state, gestures, the SVG UI layer, editor hit-testing |
 | `packages/web/src/lib/map-viewport.ts` | the paper viewport model (§5.4 "Viewport"), `glView` |
@@ -2804,12 +2923,21 @@ The shared module is exported as a namespace: `import { render } from
   patch symbol is added. Needs a stable symbol key in the region props
   (a `course_objects` change); regions by `all` or by colour act on such
   objects already. No patch symbol exists before G8 / G9.
-- **§5.5 highlight through the dynamic bucket.** Hit-testing landed in
-  D4 (§5.5); the selection is still marked by the SVG ring. 04 §7's
-  highlight — the selected object's passes redrawn in a highlight colour
-  in the dynamic bucket — and hiding an edited document object are still
-  open: D5 kept its selection, multi-selection and object outlines in the
-  UI layer (`map-gl` was outside its area); Map mode (slice G) needs both.
+- **§5.5 document objects: cost on a club map** (G5). A `hit` tests the
+  passes of nine cells and the large bucket, an `edit` with a draft runs
+  one `applyPatch` of patch + draft (linear in the document, as a patch
+  change) and symbolises the draft's targets — not 04 §7's "< 1 ms" for a
+  single object. Neither is measured on Club-full; Map mode's drags (G6,
+  G7) will say whether a draft needs the targets alone re-applied.
+- **§5.5 an object under edit and the hidden set** (G5). A draft's copy
+  is drawn under an edit-part id, so `setHidden` and a filter region's
+  `hide` or mask, which address the object's static id, leave it drawn
+  and unmasked while it is edited. Map mode (G6) edits with course
+  overprint and filter regions off; if a host needs both, the worker maps
+  the edit part's ids back to their targets for the visible set.
+- **§5.5 course objects in the edit part.** The highlight is of document
+  objects; the course editor's selection rings and object outlines stay
+  in the UI layer (`course-editor.md` Pending).
 - **§5.2 dynamic bucket: main-thread symbolisation.** A drag re-derives
   the layer in the worker (one request in flight, the latest input next —
   F20). If D's

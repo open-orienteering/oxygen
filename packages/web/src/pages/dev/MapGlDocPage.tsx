@@ -21,7 +21,8 @@
  * 150), `kinds=fill,stroke,…` (draw only these kinds; profiling), `lod=0` (no glyph skip / text skip /
  * hatch tint), `url=`, `bench=1`, `compare=1` (also draw the stream through the per-pass golden path into
  * a second canvas and publish the pixel difference; with `target=fbo` the arena path draws into an
- * offscreen framebuffer). Not routed in production builds.
+ * offscreen framebuffer), `pick=1` (a click hit-tests the document and highlights the top hit through the
+ * edit part, docs/map-rendering.md §5.5 "Document objects"). Not routed in production builds.
  */
 
 import { useCallback, useEffect, useRef, useState } from "react";
@@ -30,8 +31,8 @@ import { Buffer } from "buffer";
 import { mapDocument, mapImport, render } from "@oxygen/shared";
 import { prepareStream } from "../../map-gl/prepare";
 import { MapGlRenderer, hexToRgb, type FrameStats, type View } from "../../map-gl/renderer";
-import { MapGlEngine, inlineTransport, workerTransport, type EngineStats, type Transport } from "../../map-gl/engine";
-import type { LoadSummary } from "../../map-gl/worker";
+import { MapGlEngine, inlineTransport, workerTransport, type EditInfo, type EngineStats, type Transport } from "../../map-gl/engine";
+import type { DocumentHit, LoadSummary } from "../../map-gl/worker";
 import { fitView } from "../../map-gl/buckets";
 import { textAtlasPagesFor } from "../../map-gl/text-atlas";
 import { loadTextAtlas } from "../../lib/map-fonts";
@@ -150,8 +151,23 @@ interface CompareReport {
 
 declare global {
   interface Window {
-    __mapGlDoc?: { load?: LoadReport; bench?: BenchReport; compare?: CompareReport; error?: string; documentBytes?: Uint8Array };
+    __mapGlDoc?: { load?: LoadReport; bench?: BenchReport; compare?: CompareReport; error?: string; documentBytes?: Uint8Array; pick?: PickReport };
+    /** `pick=1`: the client point (CSS px) of every line object's first segment mid-point in the current view. */
+    __mapGlDocLines?: () => { sourceIndex: number; code: string; x: number; y: number }[];
   }
+}
+
+/**
+ * `pick=1` (docs/map-rendering.md §5.5 "Document objects"): the last click's hit-test over the
+ * document, and once the edit part with the top hit selected is drawn, its state (`seq` is the
+ * canvas's `data-pick`).
+ */
+interface PickReport {
+  seq: number;
+  xUm: number;
+  yUm: number;
+  hits: (DocumentHit & { code: string | null })[];
+  edit?: EditInfo;
 }
 
 /** Proxy colours in the pilot stack. */
@@ -257,6 +273,7 @@ export function MapGlDocPage() {
   const compareTarget = params.get("target") === "fbo" ? "fbo" : "canvas";
   const kindsParam = params.get("kinds");
   const lod = params.get("lod") !== "0";
+  const pick = params.get("pick") === "1";
 
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const compareRef = useRef<HTMLCanvasElement>(null);
@@ -272,6 +289,10 @@ export function MapGlDocPage() {
   const transportRef = useRef<Transport | null>(null);
   const lodRef = useRef(lod);
   const dirtyRef = useRef(false);
+  /** The decoded document and its header (document path): codes and geometry for `pick=1`. */
+  const docRef = useRef<mapDocument.MapDocument | null>(null);
+  /** A pick whose edit reply arrived: published after the frame that draws it. */
+  const pickDrawnRef = useRef<PickReport | null>(null);
   const [status, setStatus] = useState<"idle" | "loading" | "ready" | "error">("idle");
   const [message, setMessage] = useState("");
   const [load, setLoad] = useState<LoadReport | null>(null);
@@ -307,6 +328,12 @@ export function MapGlDocPage() {
       dirtyRef.current = false;
       const s = draw();
       if (s) setFrame(s);
+      const picked = pickDrawnRef.current;
+      if (picked && s) {
+        pickDrawnRef.current = null;
+        window.__mapGlDoc = { ...(window.__mapGlDoc ?? {}), pick: picked };
+        canvasRef.current?.setAttribute("data-pick", String(picked.seq));
+      }
       if (engineRef.current) setEngineStats(engineRef.current.stats());
     });
   }, [draw]);
@@ -436,6 +463,7 @@ export function MapGlDocPage() {
           const engine = new MapGlEngine(renderer, transport, { budgetBytes: budgetMB * 1024 * 1024, gate });
           engineRef.current = engine;
           engine.onChange = requestDraw;
+          docRef.current = encodedDocument ? mapDocument.decodeMapDocument(encodedDocument) : null;
           const source = encodedDocument
             ? { kind: "document" as const, bytes: encodedDocument.slice().buffer as ArrayBuffer, options: bridgeOptions }
             : { kind: "objects" as const, objects: readerInput!.objects, symbols: readerInput!.symbols };
@@ -661,8 +689,56 @@ export function MapGlDocPage() {
     const pointers = new Map<number, { x: number; y: number }>();
     let pinch: { dist: number; pxPerUm: number } | null = null;
     const dpr = () => window.devicePixelRatio || 1;
+    let down: { x: number; y: number; moved: boolean } | null = null;
+    let seq = 0;
+    /** CSS px in the canvas → paper µm, and back (the dev view is upright). */
+    const toPaper = (cx: number, cy: number, view: View) => {
+      const rect = canvas.getBoundingClientRect();
+      return {
+        x: view.centreX + ((cx - rect.left) * dpr() - view.widthPx / 2) / view.pxPerUm,
+        y: view.centreY + (view.heightPx / 2 - (cy - rect.top) * dpr()) / view.pxPerUm,
+      };
+    };
+    const toClient = (x: number, y: number, view: View) => {
+      const rect = canvas.getBoundingClientRect();
+      return { x: rect.left + ((x - view.centreX) * view.pxPerUm + view.widthPx / 2) / dpr(), y: rect.top + (view.heightPx / 2 - (y - view.centreY) * view.pxPerUm) / dpr() };
+    };
+    const onPick = async (cx: number, cy: number) => {
+      const engine = engineRef.current, view = viewRef.current;
+      if (!engine || !view) return;
+      const mine = ++seq;
+      const at = toPaper(cx, cy, view);
+      // 6 CSS px, as the editor's targets (`HIT_TOLERANCE_PX`).
+      const hits = await engine.hitDocument(at.x, at.y, (6 * dpr()) / view.pxPerUm);
+      const doc = docRef.current;
+      const codeOf = (h: DocumentHit) => (h.symbol && "doc" in h.symbol ? doc?.header.symbols[h.symbol.doc]?.code ?? null : h.symbol?.patch ?? null);
+      const report: PickReport = { seq: mine, xUm: at.x, yUm: at.y, hits: hits.map((h) => ({ ...h, code: codeOf(h) })) };
+      engine.onEdit = (info) => {
+        if (mine !== seq) return;
+        pickDrawnRef.current = { ...report, edit: info };
+        requestDraw();
+      };
+      engine.setEdit({ selected: hits[0]?.ref ? [hits[0].ref] : [] });
+    };
+    if (pick) {
+      window.__mapGlDocLines = () => {
+        const doc = docRef.current, view = viewRef.current;
+        if (!doc || !view) return [];
+        const u = 1000 / doc.header.unitsPerMm;
+        const out: { sourceIndex: number; code: string; x: number; y: number }[] = [];
+        for (let i = 0; i < doc.header.objects.count; i++) {
+          if (doc.attrs.type[i] !== mapDocument.OBJECT_TYPE.line) continue;
+          const k = doc.coordStart[i];
+          if (doc.coordStart[i + 1] - k < 2) continue;
+          const mid = toClient(((doc.coords[2 * k] + doc.coords[2 * k + 2]) / 2) * u, ((doc.coords[2 * k + 1] + doc.coords[2 * k + 3]) / 2) * u, view);
+          out.push({ sourceIndex: doc.attrs.sourceIndex[i], code: doc.header.symbols[doc.attrs.symbolIdx[i]]?.code ?? "", ...mid });
+        }
+        return out;
+      };
+    }
     const onDown = (e: PointerEvent) => {
       canvas.setPointerCapture(e.pointerId);
+      down = pointers.size === 0 ? { x: e.clientX, y: e.clientY, moved: false } : null;
       pointers.set(e.pointerId, { x: e.clientX, y: e.clientY });
       if (pointers.size === 2 && viewRef.current) {
         const [a, b] = [...pointers.values()];
@@ -673,6 +749,7 @@ export function MapGlDocPage() {
       const prev = pointers.get(e.pointerId);
       const view = viewRef.current;
       if (!prev || !view) return;
+      if (down && Math.hypot(e.clientX - down.x, e.clientY - down.y) > 3) down.moved = true;
       if (pointers.size === 1) {
         view.centreX -= ((e.clientX - prev.x) * dpr()) / view.pxPerUm;
         view.centreY += ((e.clientY - prev.y) * dpr()) / view.pxPerUm;
@@ -687,6 +764,9 @@ export function MapGlDocPage() {
     };
     const onUp = (e: PointerEvent) => {
       pointers.delete(e.pointerId);
+      // `pick=1`: a click (no drag) hit-tests the document and selects the top hit.
+      if (pick && down && !down.moved && e.type === "pointerup") void onPick(e.clientX, e.clientY);
+      down = null;
       if (pointers.size < 2) pinch = null;
     };
     const onWheel = (e: WheelEvent) => {
@@ -716,7 +796,7 @@ export function MapGlDocPage() {
       canvas.removeEventListener("pointercancel", onUp);
       canvas.removeEventListener("wheel", onWheel);
     };
-  }, [requestDraw, sizeCanvas]);
+  }, [requestDraw, sizeCanvas, pick]);
 
   useEffect(() => {
     transportRef.current ??= useWorker ? workerTransport() : inlineTransport();

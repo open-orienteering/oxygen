@@ -15,12 +15,14 @@
  *   → load     { source: document bytes (+ patch) | objects + symbols, fonts, text atlas pages }   ← loaded { summary, atlas, grid, base parts, large part }
  *   → prepare  { ids }   replaces the queue; ← part { part } per id, nearest first
  *   → course   { generation, input }   ← course { generation, part, colours, derivation, filter, … } (§5.2 "Dynamic bucket", "Filter regions")
- *   → patch    { generation, patch, detail }   ← patched { generation, patch state, touched buckets' parts } (§5.2 "Patch")
- *   ← error    { message } (load failures, the queue stops; a course or patch request that throws)
+ *   → patch    { generation, patch, detail }   ← patched { generation, patch state, touched buckets' parts, edit? } (§5.2 "Patch")
+ *   → hit      { id, x, y, toleranceUm }   ← hit { id, hits } (§5.5 "Document objects")
+ *   → edit     { generation, input }   ← edit { generation, part, hidden, selected, … } (§5.5 "Document objects")
+ *   ← error    { message } (load failures, the queue stops; a course, patch, hit or edit request that throws)
  *
  * Range-table object ids are the effective document's `objectIndex`
  * (§5.2 "Object identity"); the course layer's start at
- * `COURSE_OBJECT_BASE`.
+ * `COURSE_OBJECT_BASE`, the edit part's at `EDIT_OBJECT_BASE`.
  */
 
 import { course, mapDocument, render } from "@oxygen/shared";
@@ -28,7 +30,7 @@ import { MeshAtlasBuilder, type AtlasMesh, type MeshAtlas } from "./mesh-atlas.j
 import { buildTextGlyphs, haloEm, textGlyphKey, type TextAtlasPage } from "./text-atlas.js";
 import { triangulateEvenOdd } from "./prepare.js";
 import {
-  aboveZoomGate, assignBuckets, assignToGrid, fitView, LARGE_CELLS, partTransferables, prepareBucketPart, prepareBucketPartFrom, PREFETCH_MARGIN_CELLS, sourcesHaveLayer, visibleCells,
+  aboveZoomGate, assignBuckets, assignToGrid, cellId, fitView, LARGE_CELLS, partTransferables, prepareBucketPart, prepareBucketPartFrom, PREFETCH_MARGIN_CELLS, sourcesHaveLayer, visibleCells,
   type Assignment, type Grid, type PartLayer, type PartSource, type PrepareContext, type PreparedPart, type TextPassGlyphs, type ViewRect,
 } from "./buckets.js";
 
@@ -122,7 +124,85 @@ export interface PatchRequest {
   detail: number[];
 }
 
-export type WorkerRequest = LoadRequest | PrepareRequest | CourseRequest | PatchRequest;
+/**
+ * The document's objects under a paper point (§5.5 "Document objects"): the effective document's,
+ * topmost first, by the symbolised shape.
+ */
+export interface HitRequest {
+  type: "hit";
+  /** Echoed in the reply; several may be in flight. */
+  id: number;
+  /** Paper µm. */
+  x: number;
+  y: number;
+  toleranceUm: number;
+}
+
+/** A document object by a key that survives patch changes (map-patches §1.2): its source index, or its add op's id. */
+export type MapObjectRef = { source: number } | { added: string };
+
+export interface DocumentHit {
+  /** Effective `objectIndex`: valid for the patch drawn when the request was answered. */
+  objectIndex: number;
+  /** Null for the dev `objects` / `stream` sources. */
+  ref: MapObjectRef | null;
+  /** The symbol the object is drawn with (a resymbol op's, else the document's); null without a document. */
+  symbol: mapDocument.PatchSymbolRef | null;
+  /** `OBJECT_TYPE`; 0 without a document. */
+  type: number;
+  /** Colour (stack index of the static parts) of the topmost pass that hit. */
+  colour: number;
+  /** From the point to the drawn shape, µm; 0 on or inside it. */
+  distanceUm: number;
+}
+
+export interface HitReply {
+  type: "hit";
+  id: number;
+  hits: DocumentHit[];
+  ms: number;
+}
+
+/**
+ * What the edit part draws (§5.5 "Document objects"): the selected objects in the highlight
+ * colour, and a draft — patch ops being edited, not written — symbolised in its own colours with
+ * its targets' static copies hidden.
+ */
+export interface EditInput {
+  selected: readonly MapObjectRef[];
+  draft?: { ops: mapDocument.PatchOp[]; symbols?: Record<string, mapDocument.PatchSymbol> } | null;
+}
+
+export interface EditRequest {
+  type: "edit";
+  /** Echoed in the reply; the engine keeps only the latest. */
+  generation: number;
+  /** `null` clears the edit part. */
+  input: EditInput | null;
+}
+
+export interface EditState {
+  /** The edit part (`EDIT_BUCKET`, layer `all`); null when there is nothing to draw. */
+  part: PreparedPart | null;
+  /** Static copies to skip: the draft's targets in the drawn effective document. */
+  hidden: Uint32Array;
+  /** Per selected ref: its effective index in the drawn document, −1 when it is not drawn there. */
+  selected: number[];
+  /** How many selected refs are drawn highlighted (a draft's add counts, though it has no index). */
+  highlighted: number;
+  /** `applyPatch`'s issues for the draft's own ops. */
+  issues: mapDocument.PatchIssue[];
+  /** The whole mesh atlas, only when the draft added meshes. */
+  atlas?: MeshAtlas;
+  ms: number;
+}
+
+export interface EditReply extends EditState {
+  type: "edit";
+  generation: number;
+}
+
+export type WorkerRequest = LoadRequest | PrepareRequest | CourseRequest | PatchRequest | HitRequest | EditRequest;
 
 /** The dynamic bucket's id (never a cell or the large bucket). */
 export const COURSE_BUCKET = -2;
@@ -134,6 +214,17 @@ export const PAGE_BUCKET = -3;
  * far above any document's.
  */
 export const COURSE_OBJECT_BASE = 0x4000_0000;
+/** The edit part's id (§5.5 "Document objects"). */
+export const EDIT_BUCKET = -4;
+/** The edit part's first range-table object id: above the course's and the page's, so it never meets a document id. */
+export const EDIT_OBJECT_BASE = 0x6000_0000;
+/**
+ * The highlight's colour index: reserved, above every map, course and page colour, so the highlight
+ * draws on top of everything. The engine resolves it to its highlight colour.
+ */
+export const HIGHLIGHT_COLOUR = 0xffff;
+/** A highlighted fill or hatch is drawn as an outline this wide, paper µm (user decision 2026-11-14). */
+export const HIGHLIGHT_OUTLINE_UM = 150;
 
 /** What the worker drew of a patch: the objects it hides (range-table ids) and the ops it skipped. */
 export interface PatchState {
@@ -231,6 +322,10 @@ export interface ErrorReply {
   generation?: number;
   /** Set when a `patch` request threw: that request's generation. */
   patch?: number;
+  /** Set when a `hit` request threw: its id. */
+  hit?: number;
+  /** Set when an `edit` request threw: its generation. */
+  edit?: number;
 }
 
 /**
@@ -254,6 +349,8 @@ export interface PatchedReply {
   bytes: { base: number; large: number };
   /** The whole mesh atlas, only when the patch added meshes (earlier meshes keep their `base`). */
   atlas?: MeshAtlas;
+  /** With an edit input held: the edit state against the new effective document, applied in the same step. */
+  edit?: EditState;
   ms: number;
 }
 
@@ -295,7 +392,7 @@ export interface CourseReply {
   page: { colourBase: number; frameRingUm: [number, number][] } | null;
 }
 
-export type WorkerReply = LoadedReply | PartReply | ErrorReply | CourseReply | PatchedReply;
+export type WorkerReply = LoadedReply | PartReply | ErrorReply | CourseReply | PatchedReply | HitReply | EditReply;
 
 export type Post = (msg: WorkerReply, transfer: ArrayBuffer[]) => void;
 
@@ -325,6 +422,8 @@ interface State {
   largeBytes: number;
   /** The patch drawn now (§5.2 "Patch"); absent: the pinned document as it is. */
   overlay?: Overlay;
+  /** The last edit input (§5.5 "Document objects"), recomputed with every patch change. */
+  edit?: EditInput;
 }
 
 interface PinnedDocument {
@@ -344,6 +443,11 @@ interface PinnedDocument {
  */
 interface Overlay {
   state: PatchState;
+  /** The patch applied, and the add id of each added object (`objectIndex` = pinned count + k). */
+  patch: mapDocument.MapPatch;
+  added: string[];
+  /** `state.hidden` as a set (the array is transferred with the reply). */
+  hiddenSet: Set<number>;
   /** Pinned objects whose passes the overlay replaces (modified or resymbolled, not hidden). */
   changed: Set<number>;
   /** Per bucket: its pinned objects that are in `changed`. */
@@ -476,6 +580,23 @@ export function createMapGlWorker(post: Post, schedule: (fn: () => void) => void
           post(reply, transfer);
         } catch (e) {
           post({ type: "error", message: e instanceof Error ? e.message : String(e), patch: msg.generation }, []);
+        }
+        return;
+      }
+      if (msg.type === "hit") {
+        try {
+          post(hitReply(state, msg), []);
+        } catch (e) {
+          post({ type: "error", message: e instanceof Error ? e.message : String(e), hit: msg.id }, []);
+        }
+        return;
+      }
+      if (msg.type === "edit") {
+        try {
+          const { reply, transfer } = editReply(state, msg);
+          post(reply, transfer);
+        } catch (e) {
+          post({ type: "error", message: e instanceof Error ? e.message : String(e), edit: msg.generation }, []);
         }
         return;
       }
@@ -720,24 +841,10 @@ function applyOverlay(state: State, patch: mapDocument.MapPatch | null): { state
     for (let i = n; i < total; i++) changed.add(i);
 
     // The changed objects symbolised on their own, ids rewritten to the effective objectIndex.
-    const input = mapDocument.documentRenderInput(eff, { ...pd.options, only: [...changed] });
-    const symbols = pd.remap ? input.symbols.map((s) => render.remapRenderColours(s, pd.remap!)) : input.symbols;
-    const sym = render.symbolise({ objects: input.objects, symbols, fonts: state.fonts });
-    const stream = withObjectIds(sym.stream, input.docIdx);
     const warnings: Record<string, number> = {};
-    for (const w of sym.warnings) warnings[w.code] = (warnings[w.code] ?? 0) + 1;
-
-    // Glyph meshes join the atlas by content (a re-symbolisation's glyph ids are its own).
-    const glyphMesh = new Map<string, number>();
-    for (const m of stream.glyphTable) glyphMesh.set(`${m.glyphId}/${m.partIdx}`, state.atlas.glyph(m, state.glyphTol, `c/${meshKey(m)}`));
-    // Against the meshes last sent, not the size before this call: a request that failed after
-    // growing the atlas left meshes the main thread has not seen.
-    if (state.atlas.size > state.meshes.length) {
-      grown = state.atlas.build();
-      state.meshes = grown.meshes;
-      state.ctx.meshes = grown.meshes;
-    }
-    const textGlyph = resolveText(stream, state.fonts, state.textAtlas, warnings, { glyphs: 0, missing: 0 });
+    const own = symboliseOnly(state, pd, eff, [...changed], warnings);
+    const { stream, glyphMesh, textGlyph } = own;
+    if (own.grown) grown = own.grown;
     const meshRadius = (g: number, p: number) => {
       const mi = glyphMesh.get(`${g}/${p}`);
       return mi === undefined ? 0 : state.meshes[mi].radius;
@@ -768,6 +875,7 @@ function applyOverlay(state: State, patch: mapDocument.MapPatch | null): { state
     }
     next = {
       state: { hidden: Uint32Array.from(hidden), changed: changed.size - (total - n), added: total - n, issues },
+      patch: patch!, added: eff.patch?.added.slice() ?? [], hiddenSet: new Set(hidden),
       changed, lost, stream, glyphMesh, textGlyph, bucketPasses, signature, warnings,
     };
   }
@@ -785,6 +893,32 @@ function applyOverlay(state: State, patch: mapDocument.MapPatch | null): { state
     patchState.cutFeatures = state.course.cutFeatures.length;
   }
   return { state: patchState, touched, ...(grown ? { grown } : {}) };
+}
+
+/**
+ * Objects of an effective document symbolised on their own (`documentRenderInput { only }`, the
+ * load's options and colour remap), ids rewritten to its `objectIndex`. Glyph meshes join the atlas
+ * by content (a re-symbolisation's glyph ids are its own); text resolves against the loaded pages.
+ * `grown` is the whole atlas when meshes were added since the last one sent.
+ */
+function symboliseOnly(state: State, pd: PinnedDocument, eff: mapDocument.EffectiveDocument, only: number[], warnings: Record<string, number>): { stream: render.PassStream; glyphMesh: Map<string, number>; textGlyph: Map<number, TextPassGlyphs>; grown?: MeshAtlas } {
+  const input = mapDocument.documentRenderInput(eff, { ...pd.options, only });
+  const symbols = pd.remap ? input.symbols.map((s) => render.remapRenderColours(s, pd.remap!)) : input.symbols;
+  const sym = render.symbolise({ objects: input.objects, symbols, fonts: state.fonts });
+  const stream = withObjectIds(sym.stream, input.docIdx);
+  for (const w of sym.warnings) warnings[w.code] = (warnings[w.code] ?? 0) + 1;
+  const glyphMesh = new Map<string, number>();
+  for (const m of stream.glyphTable) glyphMesh.set(`${m.glyphId}/${m.partIdx}`, state.atlas.glyph(m, state.glyphTol, `c/${meshKey(m)}`));
+  // Against the meshes last sent, not the size before this call: a request that failed after
+  // growing the atlas left meshes the main thread has not seen.
+  let grown: MeshAtlas | undefined;
+  if (state.atlas.size > state.meshes.length) {
+    grown = state.atlas.build();
+    state.meshes = grown.meshes;
+    state.ctx.meshes = grown.meshes;
+  }
+  const textGlyph = resolveText(stream, state.fonts, state.textAtlas, warnings, { glyphs: 0, missing: 0 });
+  return { stream, glyphMesh, textGlyph, ...(grown ? { grown } : {}) };
 }
 
 /** What an object of the overlay is drawn from: its index, its ops' states and, for a patch symbol, the symbol. */
@@ -849,18 +983,33 @@ function patchReplyOf(state: State, msg: PatchRequest): { reply: PatchedReply; t
   }
   let baseTotal = 0;
   for (const n of state.baseBytes.values()) baseTotal += n;
+  // The edit part against the new effective document, in the same reply (§5.5 "Document objects").
+  // A held input that fails here costs the edit part, not the patch: the reply clears it.
+  let edit: EditState | undefined;
+  if (state.edit) {
+    try {
+      edit = editStateOf(state, state.edit);
+    } catch {
+      edit = { ...editStateOf(state, null), selected: state.edit.selected.map(() => -1) };
+    }
+  }
+  // The edit's atlas, built after the patch's, holds every mesh: the one sent.
+  const atlas = edit?.atlas ?? applied.grown;
+  if (edit) delete edit.atlas;
   const reply: PatchedReply = {
     type: "patched", generation: msg.generation, patch: applied.state, touched: [...applied.touched].sort((a, b) => a - b),
     base, detail, ...(large !== undefined ? { large } : {}),
     detailCells: [...state.detailCells].sort((a, b) => a - b),
     bytes: { base: baseTotal, large: state.largeBytes },
-    ...(applied.grown ? { atlas: applied.grown } : {}),
+    ...(atlas ? { atlas } : {}),
+    ...(edit ? { edit } : {}),
     ms: performance.now() - t0,
   };
   const transfer: ArrayBuffer[] = [applied.state.hidden.buffer as ArrayBuffer];
   for (const p of [...base, ...detail]) transfer.push(...partTransferables(p));
   if (large) transfer.push(...partTransferables(large));
-  if (applied.grown) transfer.push(applied.grown.data.buffer as ArrayBuffer);
+  if (atlas) transfer.push(atlas.data.buffer as ArrayBuffer);
+  if (edit) transfer.push(...editTransferables(edit));
   return { reply, transfer };
 }
 
@@ -1001,6 +1150,255 @@ function courseReply(state: State | undefined, msg: CourseRequest): { reply: Cou
   if (grown) transfer.push(grown.data.buffer as ArrayBuffer);
   if (filter) transfer.push(...filterTransferables(filter));
   return { reply, transfer };
+}
+
+
+// ---- document objects (§5.5 "Document objects") ------------------------------
+
+/** The buckets whose objects can reach (x, y) within `reach`: the cells around it ± one, and the large bucket. */
+function bucketsNear(a: Assignment, x: number, y: number, reach: number): number[] {
+  const { grid } = a;
+  const c0 = Math.max(grid.minCol, Math.floor((x - reach) / grid.cellUm) - 1);
+  const c1 = Math.min(grid.minCol + grid.cols - 1, Math.floor((x + reach) / grid.cellUm) + 1);
+  const r0 = Math.max(grid.minRow, Math.floor((y - reach) / grid.cellUm) - 1);
+  const r1 = Math.min(grid.minRow + grid.rows - 1, Math.floor((y + reach) / grid.cellUm) + 1);
+  const out = [a.largeId];
+  for (let r = r0; r <= r1; r++) for (let c = c0; c <= c1; c++) out.push(cellId(grid, c, r));
+  return out;
+}
+
+/** The pass indices of `buckets`, ascending (stream order). */
+function passesOf(bucketPasses: Map<number, number[]>, buckets: number[]): number[] {
+  const out: number[] = [];
+  for (const b of buckets) for (const p of bucketPasses.get(b) ?? []) out.push(p);
+  return out.sort((x, y) => x - y);
+}
+
+/** A document object's stable key, symbol and type in the drawn effective document. */
+function describeObject(state: State, i: number): Pick<DocumentHit, "ref" | "symbol" | "type"> {
+  const pd = state.document;
+  if (!pd) return { ref: null, symbol: null, type: 0 };
+  const n = pd.doc.header.objects.count;
+  const ov = state.overlay;
+  if (i < n) {
+    const source = pd.doc.attrs.sourceIndex[i];
+    const resymbol = ov?.patch.ops[`resymbol:${source}`];
+    const symbol = resymbol?.op === "resymbol" ? resymbol.symbol : { doc: pd.doc.attrs.symbolIdx[i] };
+    return { ref: { source }, symbol, type: pd.doc.attrs.type[i] };
+  }
+  const id = ov?.added[i - n];
+  const op = id === undefined ? undefined : ov!.patch.ops[`add:${id}`];
+  if (!id || op?.op !== "add") return { ref: null, symbol: null, type: 0 };
+  return { ref: { added: id }, symbol: op.symbol, type: op.type };
+}
+
+/**
+ * The effective document's objects under a point (§5.5 "Document objects"): candidates from the
+ * bucket grid — the pinned stream less the objects the patch changes or hides, and the patch's
+ * own stream — tested exactly on the symbolised shape, in the GL backend's draw order.
+ */
+function hitReply(state: State | undefined, msg: HitRequest): HitReply {
+  if (!state) throw new Error("no document loaded");
+  const t0 = performance.now();
+  const ov = state.overlay;
+  const near = bucketsNear(state.assignment, msg.x, msg.y, msg.toleranceUm);
+  const sources: render.HitSource[] = [{
+    stream: state.stream,
+    passes: passesOf(state.assignment.bucketPasses, near),
+    ...(ov ? { objects: (o: number) => !ov.changed.has(o) && !ov.hiddenSet.has(o) } : {}),
+  }];
+  if (ov) {
+    // The overlay is assigned to the load's grid too.
+    sources.push({ stream: ov.stream, passes: passesOf(ov.bucketPasses, near) });
+  }
+  const hits: DocumentHit[] = render.hitTestStreams(sources, msg.x, msg.y, { toleranceUm: msg.toleranceUm }).map((h) => ({
+    objectIndex: h.objectIdx,
+    ...describeObject(state, h.objectIdx),
+    colour: sources[h.source].stream.passes[h.passIdx].colour,
+    distanceUm: h.distanceUm,
+  }));
+  return { type: "hit", id: msg.id, hits, ms: performance.now() - t0 };
+}
+
+/** `sourceIndex` → `objectIndex` of the pinned document, built once. */
+function bySourceOf(pd: PinnedDocument): Map<number, number> {
+  pd.bySource ??= new Map(Array.from(pd.doc.attrs.sourceIndex, (s, i) => [s, i]));
+  return pd.bySource;
+}
+
+/** A ref's `objectIndex` in an effective document whose added objects are `added` (−1: none). */
+function indexOfRef(pd: PinnedDocument | undefined, added: readonly string[], ref: MapObjectRef): number {
+  if (!pd) return "source" in ref ? ref.source : -1;
+  if ("source" in ref) return bySourceOf(pd).get(ref.source) ?? -1;
+  const k = added.indexOf(ref.added);
+  return k < 0 ? -1 : pd.doc.header.objects.count + k;
+}
+
+/** Where an object of the drawn effective document is drawn from: its stream and pass indices (ascending). */
+function drawnPasses(state: State, i: number): { stream: render.PassStream; passes: number[]; glyphMesh: Map<string, number>; textGlyph: Map<number, TextPassGlyphs> } | undefined {
+  const ov = state.overlay;
+  if (ov?.hiddenSet.has(i)) return undefined;
+  const n = state.document?.doc.header.objects.count ?? Infinity;
+  if (ov && (ov.changed.has(i) || i >= n)) {
+    const passes: number[] = [];
+    ov.stream.objectIdx.forEach((o, pi) => { if (o === i) passes.push(pi); });
+    return passes.length ? { stream: ov.stream, passes, glyphMesh: ov.glyphMesh, textGlyph: ov.textGlyph } : undefined;
+  }
+  const b = i < state.assignment.objectBucket.length ? state.assignment.objectBucket[i] : -1;
+  if (b < 0) return undefined;
+  const passes = (state.assignment.bucketPasses.get(b) ?? []).filter((pi) => state.stream.objectIdx[pi] === i);
+  return passes.length ? { stream: state.stream, passes, glyphMesh: state.ctx.glyphMesh, textGlyph: state.ctx.textGlyph } : undefined;
+}
+
+/**
+ * The highlight of one object's passes (§5.5 "Document objects"): in `HIGHLIGHT_COLOUR` under the
+ * edit part's id `object`; strokes, glyphs and text as they are (halos left out), a fill or hatch
+ * as a `HIGHLIGHT_OUTLINE_UM` outline of its area, a pattern-clipped glyph pass as its clip's.
+ */
+export function highlightPasses(stream: render.PassStream, passes: readonly number[], textGlyph: Map<number, TextPassGlyphs>, object: number): { stream: render.PassStream; textGlyph: Map<number, TextPassGlyphs> } {
+  const out: render.Pass[] = [];
+  const glyphs = new Map<number, TextPassGlyphs>();
+  const outline = (path: render.RenderPath): render.StrokePass => ({
+    kind: "stroke", colour: HIGHLIGHT_COLOUR, path: { ...path, closed: true }, widthUm: HIGHLIGHT_OUTLINE_UM, cap: "round", join: "round",
+  });
+  for (const pi of passes) {
+    const p = stream.passes[pi];
+    switch (p.kind) {
+      case "fill":
+      case "hatch":
+        out.push(outline(p.path));
+        break;
+      case "glyph":
+        out.push(p.clip ? outline(p.clip) : { ...p, colour: HIGHLIGHT_COLOUR });
+        break;
+      case "text": {
+        if (p.haloWidthUm) break;
+        const g = textGlyph.get(pi);
+        if (g) glyphs.set(out.length, g);
+        out.push({ ...p, colour: HIGHLIGHT_COLOUR });
+        break;
+      }
+      case "stroke":
+        out.push({ ...p, colour: HIGHLIGHT_COLOUR });
+        break;
+    }
+  }
+  // Unmasked: the highlight is never filtered (the masks' pass indices are the source stream's).
+  return {
+    stream: { glyphTable: stream.glyphTable, fontTable: stream.fontTable, passes: out, objectIdx: new Uint32Array(out.length).fill(object), symbolIdx: new Uint32Array(out.length) },
+    textGlyph: glyphs,
+  };
+}
+
+/** No ops: what a draft is merged over when no patch is drawn (`applyPatch` does not read the hash). */
+const EMPTY_PATCH: mapDocument.MapPatch = { documentHash: "0".repeat(64), enabled: true, ops: {}, symbols: {} };
+
+/** The edit state for `input` against the drawn effective document (§5.5 "Document objects"). */
+function editStateOf(state: State, input: EditInput | null): EditState {
+  const t0 = performance.now();
+  if (!input) return { part: null, hidden: new Uint32Array(0), selected: [], highlighted: 0, issues: [], ms: 0 };
+  const pd = state.document;
+  const ov = state.overlay;
+  const drawnAdded = ov?.added ?? [];
+  const sources: PartSource[] = [];
+  let nextId = EDIT_OBJECT_BASE;
+  let grown: MeshAtlas | undefined;
+  const hidden = new Set<number>();
+  let issues: mapDocument.PatchIssue[] = [];
+  // The draft's own objects (effective index in the draft's document → its passes there).
+  let draft: { stream: render.PassStream; glyphMesh: Map<string, number>; textGlyph: Map<number, TextPassGlyphs>; added: string[] } | undefined;
+
+  const ops = input.draft?.ops ?? [];
+  if (ops.length) {
+    if (!pd) throw new Error("an edit draft needs a document source");
+    // Over the drawn patch (an overlay exists only for an enabled patch with ops), from the pinned document.
+    const merged = mapDocument.mergePatch(ov?.patch ?? EMPTY_PATCH, { put: ops, putSymbols: input.draft?.symbols ?? {} });
+    const applied = mapDocument.applyPatch(pd.doc, merged);
+    const eff = applied.document;
+    const own = new Set(ops.map((o) => mapDocument.patchOpId(o)));
+    issues = applied.issues.filter((x) => own.has(x.opId));
+    const bySource = bySourceOf(pd);
+    const effAdded = eff.patch?.added ?? [];
+    const only: number[] = [];
+    for (const op of ops) {
+      const ref: MapObjectRef = op.op === "add" ? { added: op.id } : { source: op.sourceIndex };
+      // The static copy: the target where it is drawn now (a new add has none).
+      const was = indexOfRef(pd, drawnAdded, ref);
+      if (was >= 0) hidden.add(was);
+      if (op.op === "hide") continue;
+      const i = op.op === "add" ? indexOfRef(pd, effAdded, ref) : bySource.get(op.sourceIndex) ?? -1;
+      if (i >= 0 && !eff.hidden?.[i] && !only.includes(i)) only.push(i);
+    }
+    if (only.length) {
+      const warnings: Record<string, number> = {};
+      const sym = symboliseOnly(state, pd, eff, only, warnings);
+      if (sym.grown) grown = sym.grown;
+      draft = { ...sym, added: effAdded };
+      // Drawn in their own colours, under edit-part ids.
+      const ids = new Map<number, number>();
+      const objectIdx = Uint32Array.from(sym.stream.objectIdx, (o) => {
+        let id = ids.get(o);
+        if (id === undefined) ids.set(o, (id = nextId++));
+        return id;
+      });
+      sources.push({ stream: { ...sym.stream, objectIdx }, passes: sym.stream.passes.map((_, k) => k), glyphMesh: sym.glyphMesh, textGlyph: sym.textGlyph });
+    }
+  }
+
+  const selected: number[] = [];
+  let highlighted = 0;
+  const done = new Set<string>();
+  for (const ref of input.selected) {
+    const key = JSON.stringify(ref);
+    const i = indexOfRef(pd, drawnAdded, ref);
+    const drawn = i >= 0 ? drawnPasses(state, i) : undefined;
+    selected.push(drawn ? i : -1);
+    // From the draft's passes when the draft draws it; nothing when the draft hides it.
+    let from = drawn && !hidden.has(i) ? drawn : undefined;
+    if (draft && pd) {
+      const j = indexOfRef(pd, draft.added, ref);
+      const passes: number[] = [];
+      if (j >= 0) draft.stream.objectIdx.forEach((o, pi) => { if (o === j) passes.push(pi); });
+      if (passes.length) from = { stream: draft.stream, passes, glyphMesh: draft.glyphMesh, textGlyph: draft.textGlyph };
+    }
+    if (!from || done.has(key)) continue;
+    done.add(key);
+    const h = highlightPasses(from.stream, from.passes, from.textGlyph, nextId++);
+    if (!h.stream.passes.length) continue;
+    highlighted++;
+    sources.push({ stream: h.stream, passes: h.stream.passes.map((_, k) => k), glyphMesh: from.glyphMesh, textGlyph: h.textGlyph });
+  }
+
+  const part = sources.length ? prepareBucketPartFrom(sources, EDIT_BUCKET, "all", state.ctx) : null;
+  return {
+    part, hidden: Uint32Array.from([...hidden].sort((a, b) => a - b)), selected, highlighted, issues,
+    ...(grown ? { atlas: grown } : {}),
+    ms: performance.now() - t0,
+  };
+}
+
+function editTransferables(e: EditState): ArrayBuffer[] {
+  const out: ArrayBuffer[] = [e.hidden.buffer as ArrayBuffer];
+  if (e.part) out.push(...partTransferables(e.part));
+  if (e.atlas) out.push(e.atlas.data.buffer as ArrayBuffer);
+  return out;
+}
+
+/** An edit request: the input kept for later patch changes, the edit part prepared. */
+function editReply(state: State | undefined, msg: EditRequest): { reply: EditReply; transfer: ArrayBuffer[] } {
+  if (!state) throw new Error("no document loaded");
+  const saved = { meshes: state.meshes, edit: state.edit };
+  try {
+    state.edit = msg.input ?? undefined;
+    const e = editStateOf(state, msg.input);
+    return { reply: { type: "edit", generation: msg.generation, ...e }, transfer: editTransferables(e) };
+  } catch (err) {
+    // As a failed patch request: the atlas the request grew goes with the next reply.
+    state.meshes = saved.meshes;
+    state.ctx.meshes = saved.meshes;
+    state.edit = saved.edit;
+    throw err;
+  }
 }
 
 /** A glyph part's geometry as a key: the course stream's glyph ids change with every re-symbolisation. */

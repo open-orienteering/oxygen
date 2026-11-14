@@ -13,6 +13,11 @@
  * docs/map-patches.md §2): the patch goes with the load, and a change is
  * sent to the engine without reloading the document.
  *
+ * With `mapObjects` set (Map mode, §5.5 "Document objects") the engine's
+ * edit part draws the selected document objects highlighted and a draft
+ * in their own colours, and `onHitTest` hands the page the hit-test over
+ * the effective document.
+ *
  * The canvas is not rotated by CSS: the viewport rotation is part of the
  * GL view (`glView`), so nothing is resampled. The engine and its worker
  * live as long as the layer; `view` changes only redraw (one per frame).
@@ -23,11 +28,11 @@
  * There is no other renderer to fall back to.
  */
 
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import type { ViewRect } from "../map-gl/buckets";
 import { MapGlEngine, workerTransport, type CourseInfo } from "../map-gl/engine";
-import type { CourseLayerRequest } from "../map-gl/worker";
+import type { CourseLayerRequest, DocumentHit, EditInput, MapObjectRef } from "../map-gl/worker";
 import type { mapDocument, render } from "@oxygen/shared";
 import { MapGlRenderer } from "../map-gl/renderer";
 import { loupeView } from "../map-gl/view";
@@ -44,6 +49,19 @@ export interface VectorLoupe {
   cy: number;
   diameterPx: number;
   scale: number;
+}
+
+/** The document hit-test as the page calls it: paper mm in, the hits topmost first (§5.5 "Document objects"). */
+export type DocumentHitTest = (pt: { x: number; y: number }, toleranceMm: number) => Promise<readonly DocumentHit[]>;
+
+/** Map mode's document objects (§5.5 "Document objects"). */
+export interface VectorMapObjects {
+  /** Drawn highlighted (the edit part, in the highlight colour). */
+  selected?: readonly MapObjectRef[];
+  /** Patch ops being edited, not written: drawn from the edit part, their static copies hidden. */
+  draft?: EditInput["draft"];
+  /** The hit-test once the layer has loaded; `null` when it goes. */
+  onHitTest?: ((hit: DocumentHitTest | null) => void) | null;
 }
 
 export type VectorLayerStatus = "loading" | "drawn" | "complete" | "error" | "webgl";
@@ -69,9 +87,11 @@ interface Props {
   patch?: mapDocument.MapPatch | null;
   /** Its delivery version: the canvas's `data-patch-version` once drawn. */
   patchVersion?: string;
+  /** Map mode's document objects; absent: nothing is posted. */
+  mapObjects?: VectorMapObjects | null;
 }
 
-export function VectorMapLayer({ doc, view, width, height, budget, zIndex = 1, course = null, onCourse, onCourseSupport, loupe = null, patch = null, patchVersion = "0" }: Props) {
+export function VectorMapLayer({ doc, view, width, height, budget, zIndex = 1, course = null, onCourse, onCourseSupport, loupe = null, patch = null, patchVersion = "0", mapObjects = null }: Props) {
   const { t } = useTranslation("dashboard");
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const engineRef = useRef<MapGlEngine | null>(null);
@@ -99,6 +119,17 @@ export function VectorMapLayer({ doc, view, width, height, budget, zIndex = 1, c
   onCourseRef.current = onCourse;
   const onCourseSupportRef = useRef(onCourseSupport);
   onCourseSupportRef.current = onCourseSupport;
+  // The edit input (§5.5 "Document objects"): rebuilt only when the selection or the draft changes.
+  const selected = mapObjects?.selected;
+  const draft = mapObjects?.draft;
+  const hasObjects = !!mapObjects;
+  const edit = useMemo<EditInput | null>(() => (hasObjects ? { selected: selected ?? [], draft: draft ?? null } : null), [hasObjects, selected, draft]);
+  const editRef = useRef(edit);
+  editRef.current = edit;
+  /** Whether an edit input reached the engine (a null after one clears it; none before posts nothing). */
+  const editSentRef = useRef(false);
+  /** Selected refs drawn highlighted (`data-selected-objects`). */
+  const [highlighted, setHighlighted] = useState<number | null>(null);
   // The stack the engine draws with (the course-completed one, §5.2 "Dynamic bucket"), as RGB per index.
   const colourRef = useRef<{ stack: render.ColourStack; rgb: (i: number) => [number, number, number] } | null>(null);
   const coloursOf = (stack: render.ColourStack) => {
@@ -156,8 +187,12 @@ export function VectorMapLayer({ doc, view, width, height, budget, zIndex = 1, c
     loadedRef.current = false;
     engine.onChange = requestDraw;
     engine.onCourse = (info) => onCourseRef.current?.(info);
+    engine.onEdit = (info) => setHighlighted(info.highlighted);
     // Sent right after the load reaches the worker.
     engine.setCourse(courseRef.current);
+    setHighlighted(null);
+    editSentRef.current = !!editRef.current;
+    if (editRef.current) engine.setEdit(editRef.current);
     // The patch goes with the load (§5.2 "Patch").
     const first = patchRef.current;
     setDrawnPatch(null);
@@ -222,6 +257,25 @@ export function VectorMapLayer({ doc, view, width, height, budget, zIndex = 1, c
     engineRef.current?.setCourse(course);
   }, [course]);
 
+  // The selection or the draft changed: one edit request (one in flight, latest wins).
+  useEffect(() => {
+    const engine = engineRef.current;
+    if (!engine || (!edit && !editSentRef.current)) return;
+    engine.setEdit(edit);
+    editSentRef.current = !!edit;
+  }, [edit]);
+
+  // The hit-test goes to the page once the layer has loaded — also when `mapObjects` arrives later —
+  // and `null` to a callback that goes, or when the layer reloads or unmounts.
+  const onHitTest = mapObjects?.onHitTest ?? null;
+  const hitReady = status === "drawn" || status === "complete";
+  useEffect(() => {
+    const engine = engineRef.current;
+    if (!onHitTest || !hitReady || !engine) return;
+    onHitTest((pt, toleranceMm) => engine.hitDocument(pt.x * 1000, pt.y * 1000, toleranceMm * 1000));
+    return () => onHitTest(null);
+  }, [onHitTest, hitReady]);
+
   // A patch change redraws without reloading (§5.2 "Patch"): the engine re-prepares the touched buckets.
   useEffect(() => {
     const engine = engineRef.current;
@@ -251,6 +305,7 @@ export function VectorMapLayer({ doc, view, width, height, budget, zIndex = 1, c
         data-attempt={attempt}
         data-document-hash={doc.hash}
         data-patch-version={drawnPatch ?? undefined}
+        data-selected-objects={highlighted ?? undefined}
         data-status={status}
         data-ready={status === "complete" ? "true" : "false"}
         style={{ position: "absolute", left: 0, top: 0, width, height, zIndex, pointerEvents: "none" }}
