@@ -268,11 +268,26 @@ ops that lost their target after the pin moved.
   coordinate array — linear in the document, fine for print and for a
   patch change, not a per-frame operation; the viewer's incremental path
   (row G4) re-prepares only the touched buckets.
-- **Every other reader of a document's objects** — the course layer's
-  cuts and checks (`course/cuts.ts`, `course/checks.ts`), the snap and
-  pick indices (`lib/editor/snap.ts`, `symbol-pick.ts`), the API's event
-  map objects — must skip `hidden[i]` when it starts receiving an
-  effective document (rows G4, G14).
+- **The viewer** (row G4, `map-rendering.md` §5.2 "Object identity and
+  the patch"): the worker takes `{ document, patch }`. Its range tables
+  key on the effective `objectIndex`; a hidden object is skipped through
+  the range table (ids only, nothing re-prepared); modified, resymbolled
+  and added objects are symbolised on their own and only the buckets
+  whose content changed are re-prepared. A patch change redraws without
+  reloading the document. Viewer, kiosk and editor all draw the
+  effective document.
+- **The course layer's cuts** (`course/cuts.ts` `cutFeaturesOfDocument`,
+  G4) skip `hidden[i]` and read modified objects where they are; the
+  viewer's worker recomputes them with every patch change. **Filter
+  regions** act on the effective document in the viewer (G4).
+- **The snap and pick indices** (`lib/editor/snap.ts`, `symbol-pick.ts`,
+  G4) are built from the effective document: hidden objects neither snap
+  nor are picked or counted, modified and added ones are where the patch
+  puts them. An object drawn with a patch symbol is not picked by symbol
+  (a filter region stores document symbol indices; Pending).
+- **Every other reader of a document's objects** — the course checks
+  (`course/checks.ts`), print, the API's event map objects — must skip
+  `hidden[i]` when it starts receiving an effective document (row G14).
 
 ## 3. Storage and delivery
 
@@ -411,6 +426,21 @@ GET /api/maps/:nameId/patch     → 200 application/json { version, patch }
   unchanged patch a 304.
 - A disabled patch is delivered as it is (`enabled: false`): the toggle
   is the consumer's to read, and Map mode shows the ops it keeps.
+- **The web client** (row G4; `lib/map-document-cache.ts`): `useMapPatch(nameId,
+  patchVersion)` asks the route with the kiosk key as a header (never in
+  the query) and `If-None-Match` with the session's version, keeps the
+  delivery per event for the session (`getMapPatch`, `setMapPatch`,
+  `subscribeMapPatch`), and asks again when `mapMetadata.patchVersion`
+  differs from it and when the page regains focus, becomes visible or
+  comes back online — there is no live channel, since the patch is not
+  journaled. One request per event at a time; a version change that
+  joined a request already in flight and still got the old version asks
+  once more (`refreshMapPatch`); a failure keeps the
+  session's copy, else none (never an error to the viewer); a body whose
+  `patch` does not parse is no patch, with a warning. The viewer pairs the
+  delivery with its document by hash (`patchForDocument`) and does not
+  wait for it. The route is not in Cache Storage: a device that starts
+  offline draws the pinned document (Pending).
 
 ### 3.4 Venue
 
@@ -447,15 +477,23 @@ document only a patch points at, and touches its `last_referenced_at`.
 - **A box follows the cloud's patch during a lease** (row G19): a
   forwarded write reaches the cloud, but the box serves the checkout's
   copy until then (§3.4).
-- **The effective document on screen** (row G4): the viewer worker takes
-  `{ document, patch }`; the readers named in §2.4 skip hidden objects.
+- **An offline copy of the patch** (G4, decided overnight for review).
+  The document is CacheFirst in the service worker; the patch route is
+  not cached, so a device that starts offline (Field mode) draws the
+  pinned document. A NetworkFirst runtime route (`vite.config.ts`) or an
+  IndexedDB copy is a follow-up row (G17 or its own).
+- **Patch symbols in the eyedropper** (G4, decided overnight for review;
+  `map-rendering.md` §8): a
+  filter region cannot select an object drawn with a patch symbol by
+  symbol until the region props carry a stable symbol key.
 - **§4 Re-resolution** (row G11): re-keying a patch when the event's pin
   moves (same source by `sourceIndex`; a new edition by position and
   symbol within 0.5 mm), the `unresolved` flag, symbol references
   `{ doc }` re-keyed with it; it wakes a dormant row (§3.2).
 - **§5 Promote** (row G12): the patch applied at the import's store
   stage for a club version.
-- **Print, cuts and checks** (row G14).
+- **Print and checks** (row G14); the cuts read the effective document
+  since G4 (§2.4).
 
 ## Tests
 
@@ -472,3 +510,8 @@ document only a patch points at, and touches its `last_referenced_at`.
 | Integration (api) | `packages/api/src/__tests__/integration/backup.test.ts` | the dump's `map_patches` section directly after `map_files` with the event's row; restored into another event with `event_id` rewritten, token and ops exact |
 | Integration (api) | `packages/api/src/__tests__/integration/map-storage-gc.test.ts` | a document only a patch references is kept (dry run too) and touched; `RESTRICT` refuses its delete; collected once the patch is gone and a fresh grace passed |
 | E2E | `e2e/map-documents.spec.ts` | after the UI upload: the patch route `{ "0", null }`, `mapPatch.applyChange` over tRPC, the route 200 with the op and the ETag, 304 on revalidation, anonymous 401 |
+| Unit (shared) | `packages/shared/src/course/__tests__/cuts.test.ts` | G4: over an effective document a hidden boulder gives no cut feature, a modified one is at its new place |
+| Unit (web) | `packages/web/src/map-gl/__tests__/worker-patch.test.ts`, `buckets.test.ts`, `engine.test.ts` | G4: the effective document in the viewer's worker and engine (`map-rendering.md` §5.2 Tests) |
+| Unit (web) | `packages/web/src/lib/__tests__/map-document-cache.test.ts`, `vector-map.test.ts` | G4: the client's fetch, ETag revalidation, session store and failure rules; the pairing by hash |
+| Unit (web) | `packages/web/src/lib/editor/__tests__/snap.test.ts`, `symbol-pick.test.ts` | G4: snapping and the eyedropper over the effective document |
+| E2E | `e2e/map-vector-layer.spec.ts` | G4: a hidden object's pixels gone and an added one drawn after a change, with no reload; the toggle off restores both |

@@ -9,9 +9,14 @@
  * thread like the editor's hit-test (§5): a snap is answered on every
  * pointer move of a drag, so it must not wait a worker round trip. Hidden
  * symbols and texts do not snap.
+ *
+ * The index is of the effective document (docs/map-patches.md §2.4): with
+ * the event's patch, objects it hides do not snap and modified or added
+ * ones snap where it puts them.
  */
 
 import { mapDocument, render } from "@oxygen/shared";
+import type { MapPatchDelivery } from "../map-document-cache";
 
 type Pt = { x: number; y: number };
 
@@ -28,8 +33,8 @@ export interface SnapIndex {
 }
 
 /** Candidates from decoded document arrays (exported for tests with a hand-built document). */
-export function snapIndexOf(doc: Pick<mapDocument.MapDocument, "header" | "attrs" | "coords" | "flags" | "coordStart">): SnapIndex {
-  const { header, attrs, coords, flags, coordStart } = doc;
+export function snapIndexOf(doc: Pick<mapDocument.EffectiveDocument, "header" | "attrs" | "coords" | "flags" | "coordStart" | "hidden">): SnapIndex {
+  const { header, attrs, coords, flags, coordStart, hidden } = doc;
   const u = header.unitsPerMm;
   const cells = new Map<string, number[]>();
   let size = 0;
@@ -44,6 +49,7 @@ export function snapIndexOf(doc: Pick<mapDocument.MapDocument, "header" | "attrs
   for (let i = 0; i < n; i++) {
     const type = attrs.type[i];
     if (type !== mapDocument.OBJECT_TYPE.point && type !== mapDocument.OBJECT_TYPE.line && type !== mapDocument.OBJECT_TYPE.area) continue;
+    if (hidden?.[i]) continue;
     if (header.symbols[attrs.symbolIdx[i]]?.hidden) continue;
     for (let k = coordStart[i]; k < coordStart[i + 1]; k++) {
       if (flags[k] & BEZIER) continue;
@@ -74,13 +80,19 @@ export function snapIndexOf(doc: Pick<mapDocument.MapDocument, "header" | "attrs
 
 const cache = new Map<string, SnapIndex>();
 
-/** The index of a loaded document, built on first use and kept per hash. */
-export function snapIndexForDocument(hash: string, bytes: ArrayBuffer): SnapIndex {
-  let index = cache.get(hash);
+/**
+ * The index of a loaded document with the event's patch (`useMapPatch`), built on first use and
+ * kept per hash and patch version. A patch keyed onto another document is not applied.
+ */
+export function snapIndexForDocument(hash: string, bytes: ArrayBuffer, patch?: MapPatchDelivery | null): SnapIndex {
+  const p = patch?.patch && patch.patch.documentHash === hash ? patch : null;
+  const key = `${hash}:${p ? p.version : "0"}`;
+  let index = cache.get(key);
   if (!index) {
-    index = snapIndexOf(mapDocument.decodeMapDocument(new Uint8Array(bytes)));
+    const doc = mapDocument.decodeMapDocument(new Uint8Array(bytes));
+    index = snapIndexOf(mapDocument.applyPatch(doc, p?.patch).document);
     cache.clear();
-    cache.set(hash, index);
+    cache.set(key, index);
   }
   return index;
 }
