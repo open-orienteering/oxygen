@@ -8,7 +8,7 @@
 import { useEffect, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { trpc } from "../../lib/trpc";
-import { downloadSameOriginFile } from "../../lib/download-api";
+import { downloadExport } from "../../lib/download-api";
 import { ensureSheetsBestEffort } from "../../lib/trpc-links";
 import { exportEntries, type ExportEntry, type ExportState } from "../../lib/editor/export-menu";
 import { DescriptionSheetsDialog } from "./DescriptionSheetsDialog";
@@ -65,7 +65,8 @@ export function ExportMenu({ state, onError }: { state: ExportState; onError: (m
           void utils.layout.classOverrides.invalidate();
         }
       }
-      await downloadSameOriginFile(e.url);
+      // maps.pdf composes on the device when it can (course-print.md §8.6); other files download as they are.
+      await downloadExport(e.url);
     } catch (err) {
       onError(err instanceof Error ? err.message : String(err));
     } finally {

@@ -8,9 +8,13 @@
  * The request carries the event and kiosk key as headers, never in the
  * query, so the URL — and with it the service worker's cache key — is
  * the hash alone: a club map pinned by several events is cached once.
+ *
+ * The event's patch (docs/map-patches.md §3.3) comes beside the document:
+ * `GET /api/maps/:nameId/patch`, kept per event for the session and
+ * revalidated by ETag (`useMapPatch`). It is not in Cache Storage.
  */
 
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useState, useSyncExternalStore } from "react";
 import { mapDocument } from "@oxygen/shared";
 import { kioskKeyFromUrl } from "./kiosk-key";
 
@@ -152,4 +156,142 @@ export function useMapDocument(hash: string | null | undefined, eventId: string 
   }, [hash, eventId, attempt]);
   const retry = useCallback(() => setAttempt((a) => a + 1), []);
   return { state, retry };
+}
+
+// ---- the event's patch (docs/map-patches.md §3.3; map-rendering §5.4 "Host") ----
+
+/** What the patch route answers: the version (the ETag) and the patch, null for none. */
+export interface MapPatchDelivery {
+  version: string;
+  patch: mapDocument.MapPatch | null;
+}
+
+/** No correction to draw (`map-patches.md` §3.3: version `"0"`, the identity). */
+export const NO_PATCH: MapPatchDelivery = Object.freeze({ version: "0", patch: null });
+
+export const mapPatchUrl = (nameId: string): string => `/api/maps/${encodeURIComponent(nameId)}/patch`;
+
+interface PatchEntry {
+  delivery: MapPatchDelivery | undefined;
+  inflight: Promise<MapPatchDelivery> | undefined;
+  listeners: Set<() => void>;
+}
+
+const patches = new Map<string, PatchEntry>();
+
+function patchEntry(nameId: string): PatchEntry {
+  let e = patches.get(nameId);
+  if (!e) patches.set(nameId, (e = { delivery: undefined, inflight: undefined, listeners: new Set() }));
+  return e;
+}
+
+/** The session's copy of an event's patch, `undefined` before the first answer. */
+export function getMapPatch(nameId: string): MapPatchDelivery | undefined {
+  return patches.get(nameId)?.delivery;
+}
+
+/** Replaces the session's copy and tells every viewer of the event (G6's optimistic write goes through here). */
+export function setMapPatch(nameId: string, delivery: MapPatchDelivery): void {
+  const e = patchEntry(nameId);
+  const prev = e.delivery;
+  e.delivery = delivery;
+  if (prev?.version !== delivery.version || prev.patch !== delivery.patch) for (const l of [...e.listeners]) l();
+}
+
+/** Calls `fn` whenever the session's copy of the event's patch changes. */
+export function subscribeMapPatch(nameId: string, fn: () => void): () => void {
+  const e = patchEntry(nameId);
+  e.listeners.add(fn);
+  return () => { e.listeners.delete(fn); };
+}
+
+/** The route's body as a delivery; a patch that does not parse is no patch (as the server treats an unreadable row). */
+export function parseMapPatchDelivery(body: unknown): MapPatchDelivery | null {
+  if (!body || typeof body !== "object") return null;
+  const { version, patch } = body as { version?: unknown; patch?: unknown };
+  if (typeof version !== "string") return null;
+  if (patch === null || patch === undefined) return { version, patch: null };
+  const parsed = mapDocument.mapPatchSchema.safeParse(patch);
+  if (!parsed.success) {
+    console.warn("[map-patch] unreadable patch, drawing the document without it:", parsed.error.message);
+    return { version, patch: null };
+  }
+  return { version, patch: parsed.data };
+}
+
+/**
+ * Fetches (or revalidates, `If-None-Match` with the session's version) an event's patch. One
+ * request per event at a time. Never rejects: a failure keeps the session's copy, else no patch.
+ */
+export function loadMapPatch(nameId: string, opts: FetchOptions = {}): Promise<MapPatchDelivery> {
+  const e = patchEntry(nameId);
+  if (e.inflight) return e.inflight;
+  const p = (async (): Promise<MapPatchDelivery> => {
+    const headers: Record<string, string> = {};
+    const kioskKey = opts.kioskKey !== undefined ? opts.kioskKey : kioskKeyFromUrl();
+    if (kioskKey) headers["x-kiosk-key"] = kioskKey;
+    if (e.delivery) headers["if-none-match"] = `"${e.delivery.version}"`;
+    try {
+      const res = await (opts.fetchImpl ?? fetch)(mapPatchUrl(nameId), { headers, cache: "no-store" });
+      if (res.status === 304 && e.delivery) return e.delivery;
+      if (!res.ok) return e.delivery ?? NO_PATCH;
+      const delivery = parseMapPatchDelivery(await res.json());
+      if (!delivery) return e.delivery ?? NO_PATCH;
+      setMapPatch(nameId, delivery);
+      return delivery;
+    } catch {
+      return e.delivery ?? NO_PATCH;
+    }
+  })();
+  e.inflight = p;
+  void p.finally(() => { if (e.inflight === p) e.inflight = undefined; });
+  return p;
+}
+
+/**
+ * The session's copy when it is `version` (or no version is wanted), else a fetch. A fetch that
+ * joined a request already in flight — started before the change — and still answers another
+ * version is made once more, so a `patchVersion` change is never lost to a revalidation.
+ */
+export async function refreshMapPatch(nameId: string, version?: string | null, opts: FetchOptions = {}): Promise<MapPatchDelivery> {
+  const held = getMapPatch(nameId);
+  if (held && (version == null || version === held.version)) return held;
+  const joined = !!patches.get(nameId)?.inflight;
+  const d = await loadMapPatch(nameId, opts);
+  return joined && version != null && d.version !== version ? loadMapPatch(nameId, opts) : d;
+}
+
+/** For tests: forget every event's patch. */
+export function resetMapPatches(): void {
+  patches.clear();
+}
+
+/**
+ * React hook: the event's patch (`NO_PATCH` until the first answer; the layer does not wait for
+ * it). Fetched on mount, again whenever `version` (`mapMetadata.patchVersion`) differs from the
+ * session's copy, and revalidated when the page regains focus, becomes visible or comes back
+ * online — there is no live channel for the patch.
+ */
+export function useMapPatch(nameId: string | null | undefined, version?: string | null): MapPatchDelivery {
+  const subscribe = useCallback((fn: () => void) => (nameId ? subscribeMapPatch(nameId, fn) : () => undefined), [nameId]);
+  const delivery = useSyncExternalStore(subscribe, () => (nameId ? getMapPatch(nameId) : undefined)) ?? NO_PATCH;
+  useEffect(() => {
+    if (nameId) void refreshMapPatch(nameId, version);
+  }, [nameId, version]);
+  useEffect(() => {
+    if (!nameId || typeof window === "undefined") return;
+    const revalidate = () => {
+      if (typeof document !== "undefined" && document.visibilityState === "hidden") return;
+      void loadMapPatch(nameId);
+    };
+    window.addEventListener("focus", revalidate);
+    window.addEventListener("online", revalidate);
+    document.addEventListener("visibilitychange", revalidate);
+    return () => {
+      window.removeEventListener("focus", revalidate);
+      window.removeEventListener("online", revalidate);
+      document.removeEventListener("visibilitychange", revalidate);
+    };
+  }, [nameId]);
+  return delivery;
 }

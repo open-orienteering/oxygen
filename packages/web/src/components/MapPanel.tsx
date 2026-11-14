@@ -672,6 +672,7 @@ function MapPanelImpl({
           documentHash={documentHash}
           mapBudget={mapMetadata.data?.clubMapVersionId ? "club" : "event"}
           rotationCorrection={mapMetadata.data?.rotationCorrection}
+          patchVersion={mapMetadata.data?.patchVersion}
           controls={controlOverlays}
           courses={courseOverlays}
           courseObjects={courseObjectsInView}

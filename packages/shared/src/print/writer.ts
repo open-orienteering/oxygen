@@ -91,10 +91,13 @@ export class PdfWriter {
   /** Why a face falls back to outlines (unreadable file); for the caller to log. */
   readonly warnings: string[] = [];
 
-  private constructor(
-    private readonly doc: PDFDocument,
-    private readonly opts: PdfWriterOptions,
-  ) {
+  // Plain fields, not parameter properties: the web build compiles this module with `erasableSyntaxOnly` (G16).
+  private readonly doc: PDFDocument;
+  private readonly opts: PdfWriterOptions;
+
+  private constructor(doc: PDFDocument, opts: PdfWriterOptions) {
+    this.doc = doc;
+    this.opts = opts;
     for (const f of opts.faces ?? []) {
       const data = f.data instanceof Uint8Array ? f.data : new Uint8Array(f.data);
       const metrics = parseTrueType(toArrayBuffer(data), f.family);
@@ -356,10 +359,13 @@ export class PdfWriter {
 export class PdfWriterPage {
   readonly resources: OperatorResources;
 
-  constructor(
-    private readonly writer: PdfWriter,
-    /** @internal */ readonly page: PDFPage,
-  ) {
+  private readonly writer: PdfWriter;
+  /** @internal */
+  readonly page: PDFPage;
+
+  constructor(writer: PdfWriter, page: PDFPage) {
+    this.writer = writer;
+    this.page = page;
     this.resources = {
       font: (ref, glyphIds) => writer.fontFor(page, ref, glyphIds),
       glyphOutline: (ref, glyphId) => writer.outlineFor(ref, glyphId),

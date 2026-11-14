@@ -7,9 +7,63 @@ import { reseed } from "./helpers/reseed";
 import { waitForTrpc } from "./helpers/trpc";
 
 // pdf-lib is the API's dependency; load it from there.
-const { PDFDocument } = createRequire(resolve(process.cwd(), "packages/api/package.json"))("pdf-lib") as {
-  PDFDocument: { load(bytes: Uint8Array): Promise<{ getPageCount(): number; getPages(): { getSize(): { width: number; height: number } }[] }> };
+type PdfObject = { toString(): string; dict?: { lookup(key: unknown): unknown; toString(): string }; contents?: Uint8Array };
+type LoadedPdf = {
+  getPageCount(): number;
+  getPages(): { getSize(): { width: number; height: number } }[];
+  context: { trailerInfo: { Info?: { toString(): string } }; enumerateIndirectObjects(): [{ toString(): string }, PdfObject][] };
 };
+const { PDFDocument, PDFName, PDFRawStream } = createRequire(resolve(process.cwd(), "packages/api/package.json"))("pdf-lib") as {
+  PDFDocument: { load(bytes: Uint8Array): Promise<LoadedPdf> };
+  PDFName: { of(name: string): unknown };
+  PDFRawStream: new (...args: never[]) => PdfObject;
+};
+
+/**
+ * Every indirect object of a PDF as text (a stream: its dictionary and its
+ * raw bytes in hex), but the `Info` dictionary and the cross-reference and
+ * object streams that hold the offsets — what two prints of one job may
+ * differ in without `deterministic` (`CreationDate`, `/ID`; course-print.md
+ * §3.2, §8.5).
+ */
+async function pdfObjects(bytes: Uint8Array): Promise<{ pages: number; objects: Map<string, string> }> {
+  const pdf = await PDFDocument.load(bytes);
+  const info = pdf.context.trailerInfo.Info?.toString();
+  const objects = new Map<string, string>();
+  for (const [ref, obj] of pdf.context.enumerateIndirectObjects()) {
+    if (ref.toString() === info) continue;
+    if (obj instanceof PDFRawStream) {
+      const type = obj.dict!.lookup(PDFName.of("Type"));
+      if (type === PDFName.of("XRef") || type === PDFName.of("ObjStm")) continue;
+      objects.set(ref.toString(), `${obj.dict!.toString()}\n${Buffer.from(obj.contents!).toString("hex")}`);
+    } else objects.set(ref.toString(), obj.toString());
+  }
+  return { pages: pdf.getPageCount(), objects };
+}
+
+/**
+ * The device's PDF is the server's (course-print.md §8.6; slice G answer 3):
+ * the same pages, labels, fonts, images and content streams, object for
+ * object — in this browser's engine, through the app's bundle — but the
+ * creation date and `/ID` each print has of its own (§3.2).
+ */
+async function expectSamePdf(device: Download, server: Uint8Array) {
+  const a = await pdfObjects(await readFile((await device.path())!));
+  const b = await pdfObjects(server);
+  expect(a.pages).toBe(b.pages);
+  expect([...a.objects.keys()]).toEqual([...b.objects.keys()]);
+  for (const [ref, text] of b.objects) expect(a.objects.get(ref), `object ${ref}`).toBe(text);
+}
+
+/** The `/api/…` requests the page makes (path and query), from now on. */
+function apiRequests(page: Page): string[] {
+  const seen: string[] = [];
+  page.on("request", (r) => {
+    const url = new URL(r.url());
+    if (url.pathname.startsWith("/api/")) seen.push(url.pathname + url.search);
+  });
+  return seen;
+}
 
 /**
  * Where sheets and templates are managed since E-pages (docs/course-maps.md
@@ -313,7 +367,12 @@ test.describe("auto templates (docs/course-layout.md §5–§7)", () => {
     await expect(page.getByTestId(`course-template-badge-${courseId}`)).toHaveCount(0);
 
     // The course has no sheet: the export creates its first one on the auto template of its key.
-    await expectA4Pages(await download(page, () => page.getByTestId(`export-course-${courseId}`).click()), 1);
+    // G16: composed on the device (course-print.md §8.6) — the print job asked, maps.pdf not.
+    const requests = apiRequests(page);
+    const exported = await download(page, () => page.getByTestId(`export-course-${courseId}`).click());
+    await expectA4Pages(exported, 1);
+    expect(requests).toContain(`/api/maps/itest/print-job?courses=${courseId}`);
+    expect(requests.filter((r) => r.includes("/maps.pdf"))).toEqual([]);
     const badge = page.getByTestId(`course-template-badge-${courseId}`);
     await expect(badge).toBeVisible();
     await expect(badge).toHaveAttribute("data-extra", "false");
@@ -330,6 +389,38 @@ test.describe("auto templates (docs/course-layout.md §5–§7)", () => {
     expect(job.document.hash).toMatch(/^[0-9a-f]{64}$/);
     expect(job.sheets.reduce((n, s) => n + (s.copies ?? 1), 0)).toBe((await PDFDocument.load(await printed.body())).getPageCount());
     expect(printed.headers()["content-disposition"]).toContain(`filename="${job.filename}"`);
+    // G16: the device's PDF is maps.pdf, object for object, under maps.pdf's file name.
+    expect(exported.suggestedFilename()).toBe(job.filename);
+    await expectSamePdf(exported, await printed.body());
+
+    // G16, graphics (§8.5 print.png): a PNG and an SVG on the course's sheet; the SVG is asked at the composer's box.
+    const headers = { "x-competition-id": "itest", "x-forwarded-email": "e2e-admin@oxygen.test", "content-type": "application/json" };
+    const trpc = async <T,>(path: string, input: unknown): Promise<T> => {
+      const res = await fetch(`${API_BASE}/trpc/${path}`, { method: "POST", headers, body: JSON.stringify(input) });
+      expect(res.ok, await res.clone().text()).toBe(true);
+      return ((await res.json()) as { result: { data: T } }).result.data;
+    };
+    const svg = '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 20 10"><rect width="20" height="10" fill="#c00"/><circle cx="10" cy="5" r="3" fill="#fff"/></svg>';
+    const png = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==";
+    const svgId = (await trpc<{ id: number }>("graphics.upload", { name: "g16-logo.svg", fileDataBase64: Buffer.from(svg).toString("base64") })).id;
+    const pngId = (await trpc<{ id: number }>("graphics.upload", { name: "g16-logo.png", fileDataBase64: png })).id;
+    const sheets = (await (await page.request.get("/trpc/courseMap.list", { headers: { "x-competition-id": "itest" } })).json()) as { result: { data: { seq: number; courseId: number | null; kind: string }[] } };
+    const sheetSeq = sheets.result.data.find((m) => m.kind === "course" && m.courseId === courseId)!.seq;
+    await trpc("courseMap.update", {
+      id: sheetSeq,
+      objects: [
+        { id: "g16-svg", anchor: "page", kind: "image", graphicId: svgId, x: 12, y: 12, width: 30, height: 15 },
+        { id: "g16-png", anchor: "page", kind: "image", graphicId: pngId, x: 50, y: 12, width: 10, height: 10 },
+      ],
+    });
+    requests.length = 0;
+    const withLogos = await download(page, () => page.getByTestId(`export-course-${courseId}`).click());
+    expect(requests).toContain(`/api/maps/itest/graphics/${pngId}/print.png`);
+    expect(requests.some((r) => new RegExp(`^/api/maps/itest/graphics/${svgId}/print\\.png\\?w=\\d+&h=\\d+$`).test(r))).toBe(true);
+    expect(requests.filter((r) => r.includes("/maps.pdf"))).toEqual([]);
+    const printedLogos = await page.request.get(`/api/maps/itest/maps.pdf?courses=${courseId}`);
+    expect(printedLogos.ok()).toBe(true);
+    await expectSamePdf(withLogos, await printedLogos.body());
 
     // The template is named after its key and shows the key as a badge in Layout mode.
     await rowOf(page, courseId).locator("[data-testid^='edit-course-map-']").click();
@@ -346,6 +437,23 @@ test.describe("auto templates (docs/course-layout.md §5–§7)", () => {
     await created;
     await expect(page.getByTestId("editor-layout-scope")).toHaveAttribute("data-sheet", /^\d+$/, { timeout: 30_000 });
     await expect(page.getByTestId("editor-layout-template-badge")).toHaveAttribute("data-extra", "false");
+  });
+
+  test("the server prints when the device cannot (course-print.md §8.6)", async ({ page }) => {
+    test.setTimeout(120_000);
+    page.setDefaultTimeout(15_000);
+    // Under 2 GiB: deviceLimit is 0, so the export asks maps.pdf and never the job.
+    await page.addInitScript(() => Object.defineProperty(Navigator.prototype, "deviceMemory", { get: () => 0.5, configurable: true }));
+    await selectEvent(page);
+    await openTab(page, "Courses");
+    const [courseId] = await courseIds(page);
+    const requests = apiRequests(page);
+    const file = await download(page, () => page.getByTestId(`export-course-${courseId}`).click());
+    expect(requests).toContain(`/api/maps/itest/maps.pdf?courses=${courseId}`);
+    expect(requests.filter((r) => r.includes("/print-job"))).toEqual([]);
+    // The fallback still delivers the server's PDF under its name.
+    await expectA4Pages(file, 1);
+    expect(file.suggestedFilename()).toMatch(/\.pdf$/);
   });
 });
 

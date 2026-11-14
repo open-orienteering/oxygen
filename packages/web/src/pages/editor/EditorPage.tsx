@@ -50,7 +50,7 @@ import {
   nextFreeSrrCode, nextSeriesControlCode, sequenceLegMeters,
 } from "../../lib/course-editor";
 import { UndoStack } from "../../lib/undo-stack";
-import { useMapDocument } from "../../lib/map-document-cache";
+import { useMapDocument, useMapPatch } from "../../lib/map-document-cache";
 import { courseObjectsForView, provisionalDrawn, type ProvisionalVisit } from "../../lib/course-layer-request";
 import { snapIndexForDocument } from "../../lib/editor/snap";
 import { pickIndexForDocument } from "../../lib/editor/symbol-pick";
@@ -162,6 +162,8 @@ export function EditorPage() {
   const documentHash = mapMetadata.data?.documentHash ?? null;
   const { state: docState } = useMapDocument(documentHash, nameId ?? null);
   const mapDoc = docState.status === "ready" ? docState.doc : null;
+  // The event's patch (docs/map-patches.md §2.4): snapping and the eyedropper read the effective document.
+  const mapPatch = useMapPatch(nameId ?? null, mapMetadata.data?.patchVersion);
   /** The layer's derivation and symbol sizes (the viewer reports them): ghost size, effective gaps. */
   const [courseInfo, setCourseInfo] = useState<Parameters<NonNullable<MapViewerEditorProps["onCourseInfo"]>>[0]>(null);
 
@@ -923,14 +925,14 @@ export function EditorPage() {
 
   // ─── Snapping (§6.2) ──────────────────────────────────────
   const snapIndex = useMemo(
-    () => (state.snapping && mapDoc ? snapIndexForDocument(mapDoc.hash, mapDoc.bytes) : null),
-    [state.snapping, mapDoc],
+    () => (state.snapping && mapDoc ? snapIndexForDocument(mapDoc.hash, mapDoc.bytes, mapPatch) : null),
+    [state.snapping, mapDoc, mapPatch],
   );
   const snap = useCallback((pt: Pt): Pt => snapIndex?.nearest(pt) ?? pt, [snapIndex]);
 
   // ─── The filter region's symbol list and eyedropper (§6.4, §7) ─────
   const filterSelected = selectedObject?.kind === "filter_region";
-  const pickIndex = useMemo(() => (filterSelected && mapDoc ? pickIndexForDocument(mapDoc.hash, mapDoc.bytes) : null), [filterSelected, mapDoc]);
+  const pickIndex = useMemo(() => (filterSelected && mapDoc ? pickIndexForDocument(mapDoc.hash, mapDoc.bytes, mapPatch) : null), [filterSelected, mapDoc, mapPatch]);
   const filterGroups = useMemo(
     () => (pickIndex && mapDoc ? symbolGroups(mapDoc.header, pickIndex.objectsPerSymbol, i18n.language) : null),
     [pickIndex, mapDoc, i18n.language],
