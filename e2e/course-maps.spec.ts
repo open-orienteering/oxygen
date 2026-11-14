@@ -591,6 +591,10 @@ test.describe("offline print: the job kept on the device (G17, course-print.md Â
       await expect(page.getByTestId("course-maps-notice")).toContainText("Printed offline from the maps stored on");
       await expect(page.getByTestId("course-maps-notice")).toHaveAttribute("data-stored-at", storedAt!);
       await expect(page.getByTestId("course-maps-error")).toHaveCount(0);
+      // An export whose job is not on the device says so (2a, `notStored`), still without asking maps.pdf.
+      await page.evaluate(async (key) => (await caches.open("offline-print")).delete(key), `/api/maps/itest/print-job?courses=${courseId}`);
+      await page.getByTestId(`export-course-${courseId}`).click();
+      await expect(page.getByTestId("course-maps-error")).toContainText("not stored on this device");
       expect(requests.filter((r) => r.includes("/maps.pdf"))).toEqual([]);
     } finally {
       await context.setOffline(false);
