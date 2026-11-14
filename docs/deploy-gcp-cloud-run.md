@@ -310,6 +310,16 @@ keep it at 1, or 2 for small maps. Workers use no database connection.
 The rest of the 4 GiB is headroom for the map import worker (an OCAD
 file parsed into a map document); since v0.6.1 (E5) the upload itself
 parses nothing — it stores the chunks and starts the job.
+- **Height-field memory.** Every import ends by deriving the map's
+height field from its contours in a worker thread of its own
+(`map-storage.md` §4.7), one at a time per instance: about 0.3 GB
+added for a typical club map, 0.84 GB for Club-full, about 1.1 GB at
+the 60 M-cell graph budget, which caps it. Beside a 2.6 GB Club-full
+print that is about 3.7 GB, under the 4 GiB limit. The typed arrays live
+outside the V8 heap, so `--max-old-space-size` does not bound them.
+`MAP_HEIGHTFIELD_MAX_CELLS` (default 60 000 000, which refuses nothing)
+lowers the cap on a smaller instance; a map over it gets no height field
+(`over-cap`) and no 3D.
 - **The render gate.** Each print also takes a permit of the process's
 render gate (`renderGate()` in `packages/api/src/map-render-limits.ts`,
 `MAP_RENDER_CONCURRENCY`, default 2, `deploy.sh` sets 3). Since E4a the
