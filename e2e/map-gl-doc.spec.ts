@@ -70,7 +70,13 @@ interface DocWindow {
     bench?: Scenario & { paper1x?: Scenario };
     compare?: { fraction: number; differing: number; total: number; target: "canvas" | "fbo" };
     error?: string;
+    pick?: {
+      seq: number;
+      hits: { objectIndex: number; ref: { source: number } | { added: string } | null; code: string | null; type: number; distanceUm: number }[];
+      edit?: { selected: number[]; highlighted: number };
+    };
   };
+  __mapGlDocLines?: () => { sourceIndex: number; code: string; x: number; y: number }[];
 }
 
 const notBlank = async (page: import("@playwright/test").Page) => {
@@ -306,5 +312,65 @@ test.describe("WebGL2 map backend — whole document", () => {
     await expect(page.getByTestId("map-gl-doc-error")).toBeVisible({ timeout: 15_000 });
     const err = await page.evaluate(() => (window as unknown as DocWindow).__mapGlDoc?.error);
     expect(err).toBeTruthy();
+  });
+
+  // docs/map-rendering.md §5.5 "Document objects" (row G5): the hit-test over the document through the worker,
+  // and the selected object highlighted through the edit part, in the frame.
+  test("a click on the fixture's path reports its object, and the highlight is in the frame", async ({ page }) => {
+    test.setTimeout(90_000);
+    await page.goto("/dev/map-gl-doc?mode=source&pick=1");
+    await page.getByTestId("map-gl-doc-file").setInputFiles("e2e/test.ocd");
+    const canvas = page.getByTestId("map-gl-doc-canvas");
+    await expect(canvas).toHaveAttribute("data-ready", "true", { timeout: 30_000 });
+
+    const lines = () => page.evaluate(() => (window as unknown as DocWindow).__mapGlDocLines!());
+    // The fixture's first Path (505): at its first segment's mid-point it is the topmost object, over an area.
+    const pathOf = async () => (await lines()).find((l) => l.code.startsWith("505"))!;
+    let path = await pathOf();
+    expect(path, JSON.stringify(await lines())).toBeDefined();
+    // Zoom in on it (the wheel keeps the point under the cursor).
+    await page.mouse.move(path.x, path.y);
+    for (let i = 0; i < 3; i++) await page.mouse.wheel(0, -500);
+    path = await pathOf();
+
+    // The highlight blue (#2563eb) near a client point, from the drawing buffer (preserveDrawingBuffer).
+    const blueNear = async (p: { x: number; y: number }, radiusPx: number) => {
+      const box = (await canvas.boundingBox())!;
+      const dataUrl = await canvas.evaluate((c) => (c as HTMLCanvasElement).toDataURL("image/png"));
+      const png = PNG.sync.read(Buffer.from(dataUrl.split(",")[1], "base64"));
+      const k = png.width / box.width;
+      const cx = Math.round((p.x - box.x) * k), cy = Math.round((p.y - box.y) * k), r = Math.round(radiusPx * k);
+      let n = 0;
+      for (let y = Math.max(0, cy - r); y <= Math.min(png.height - 1, cy + r); y++) {
+        for (let x = Math.max(0, cx - r); x <= Math.min(png.width - 1, cx + r); x++) {
+          const i = 4 * (y * png.width + x);
+          if (Math.abs(png.data[i] - 0x25) < 40 && Math.abs(png.data[i + 1] - 0x63) < 40 && Math.abs(png.data[i + 2] - 0xeb) < 40) n++;
+        }
+      }
+      return n;
+    };
+    const pickReport = async (seq: number) => {
+      await expect(canvas).toHaveAttribute("data-pick", String(seq), { timeout: 15_000 });
+      return (await page.evaluate(() => (window as unknown as DocWindow).__mapGlDoc?.pick))!;
+    };
+
+    expect(await blueNear(path, 8), "no highlight before the click").toBe(0);
+    await page.mouse.click(path.x, path.y);
+    const pick = await pickReport(1);
+    // Reports its object: the path on top (by its source index and symbol), the area under it next.
+    expect(pick.hits[0], JSON.stringify(pick.hits)).toMatchObject({ ref: { source: path.sourceIndex }, code: path.code, type: 2 });
+    expect(pick.hits.length).toBeGreaterThan(1);
+    expect(pick.edit).toMatchObject({ selected: [pick.hits[0].objectIndex], highlighted: 1 });
+    // The highlight is in the frame: the path's passes redrawn in the highlight colour.
+    expect(await blueNear(path, 8), "the highlight around the clicked path").toBeGreaterThan(10);
+
+    // A click on another line moves the highlight there: the path's blue goes.
+    const other = (await lines()).find((l) => l.sourceIndex !== path.sourceIndex && Math.hypot(l.x - path.x, l.y - path.y) > 80 && l.x > 0 && l.y > 0)!;
+    const box = (await canvas.boundingBox())!;
+    const spot = other && other.x < box.x + box.width && other.y < box.y + box.height ? other : { x: box.x + box.width - 20, y: box.y + box.height - 20, sourceIndex: -1 };
+    await page.mouse.click(spot.x, spot.y);
+    const second = await pickReport(2);
+    expect(second.hits[0]?.ref).not.toEqual({ source: path.sourceIndex });
+    await expect.poll(() => blueNear(path, 8)).toBe(0);
   });
 });

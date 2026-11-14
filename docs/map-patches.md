@@ -276,6 +276,14 @@ ops that lost their target after the pin moved.
   whose content changed are re-prepared. A patch change redraws without
   reloading the document. Viewer, kiosk and editor all draw the
   effective document.
+- **The document hit-test and the edit part** (row G5, `map-rendering.md`
+  §5.5 "Document objects"): the viewer's worker hit-tests the effective
+  document — a hidden object is never hit, a modified one only where the
+  patch draws it — and names a hit by `{ source }` or `{ added }` (§1.2),
+  never by its effective index alone, which an add can shift. A draft
+  (patch ops being edited, not written) is merged over the drawn patch
+  with `mergePatch` and applied from the pinned document; its targets are
+  drawn from the edit part and their static copies hidden by id.
 - **The course layer's cuts** (`course/cuts.ts` `cutFeaturesOfDocument`,
   G4) skip `hidden[i]` and read modified objects where they are; the
   viewer's worker recomputes them with every patch change. **Filter

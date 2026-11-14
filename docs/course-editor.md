@@ -1989,10 +1989,12 @@ whose poll ran meanwhile simply does not conflict (decision log, D10).
   last leg is the group's exit leg); select the last top-level control
   first to append at the top level.
 
-- **Selection highlight through the dynamic bucket** (04 §7: the
-  selected object's passes redrawn in a highlight colour): the selection
-  and multi-selection rings and object outlines stay UI layer; D5 left it
-  because it is `map-gl` work outside its area (decision log, D5).
+- **Course selection highlight**: the course editor's selection and
+  multi-selection rings and object outlines stay UI layer (D5 left 04 §7's
+  highlight because it was `map-gl` work outside its area). G5 built the
+  highlight for **document objects** (`map-rendering.md` §5.5 "Document
+  objects": the edit part, `MapViewerEditorProps.mapObjects`), which Map
+  mode (§13, G6) uses; course objects do not go through it.
 - **Course objects**: draw order (`courseObject.reorder`) has no control
   in the editor; no image (logo) tool; `inset_frame` is slice F's.
 - **Derived instruction rows**: 13.3 / 13.4 derive from the legs'
