@@ -74,4 +74,16 @@ describe("loadHeightField (map-rendering.md §5.4 \"3D mode\" \"Field\")", () =>
     await loadHeightField(URL1, { fetchImpl, cacheStorage: null, kioskKey: null });
     expect(fetchImpl).toHaveBeenCalledTimes(2);
   });
+
+  it("keeps the three sources of one document side by side, in memory and in Cache Storage (H11)", async () => {
+    const storage = new MemoryCaches();
+    const urls = [URL1, `${URL1}&source=contours.lantmateriet-2m`, `${URL1}&source=ground.lantmateriet-2m`];
+    const fetchImpl = vi.fn(async () => ok());
+    const fields = [];
+    for (const u of urls) fields.push(await loadHeightField(u, { fetchImpl, cacheStorage: storage, kioskKey: null }));
+    expect(storage.get(HEIGHTFIELDS_CACHE).paths().sort()).toEqual([...urls].sort());
+    // switching between them asks nothing again
+    for (const [i, u] of urls.entries()) expect(await loadHeightField(u, { fetchImpl, cacheStorage: storage, kioskKey: null })).toBe(fields[i]);
+    expect(fetchImpl).toHaveBeenCalledTimes(3);
+  });
 });

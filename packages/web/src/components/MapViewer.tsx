@@ -46,18 +46,23 @@ import {
   bearingOfRotation,
   camera3d,
   clampExaggeration,
+  defaultSurface,
+  fieldAttribution,
   projector3d,
+  surfaceOfSource,
   targetZOf,
   terrain3dOffer,
+  terrain3dSurfaces,
   userBearingOf,
   type Scene3d,
+  type Surface3d,
   type TerrainDescriptorLike,
   type Terrain3dReason,
   type View3d,
 } from "../lib/map-3d";
 import { viewerField } from "../lib/map-3d-field";
-import { useHeightField } from "../hooks/useHeightField";
-import { Map3dNotice, Map3dSurface, Map3dToggle, type Map3dToggleState } from "./Map3d";
+import { FIELD_MEMORY_ENTRIES, loadHeightField, useHeightField } from "../hooks/useHeightField";
+import { Map3dAttribution, Map3dNotice, Map3dSurface, Map3dToggle, type Map3dToggleState } from "./Map3d";
 import type { VectorTerrainInfo } from "./VectorMapLayer";
 import { rotatedBoundingBox } from "../lib/map-rotation";
 import {
@@ -872,6 +877,7 @@ export function MapViewer({
 
   // ─── 3D mode (docs/map-rendering.md §5.4 "3D mode") ──────────
   const offer = terrain3dOffer(terrain, { editor: !!editor, allow3d: allow3d && !hideControls });
+  const surfaces = useMemo(() => terrain3dSurfaces(terrain), [terrain]);
   /** The user asked for 3D; it is drawn once the field's mesh is up (`terrainInfo`). */
   const [want3d, setWant3d] = useState(false);
   const [pitchDeg, setPitchDeg] = useState<number>(PITCH.enter);
@@ -908,50 +914,97 @@ export function MapViewer({
     const id = window.setTimeout(() => setNotice3d(null), 4000);
     return () => window.clearTimeout(id);
   }, [notice3d]);
-  const fieldUrl = want3d && offer.kind === "available" ? offer.url : null;
+  // The surface (§5.4 "3D mode" "Surface", decisions 4–6): the user's choice, else the default —
+  // ground with tracks shown, or where it is the only one.
+  const tracksShown = !!gpsRoutes && gpsRoutes.length > 0;
+  const [surfaceChoice, setSurfaceChoice] = useState<Surface3d | null>(null);
+  // A choice holds until the tracks come or go: the default changes with them.
+  useEffect(() => {
+    setSurfaceChoice(null);
+  }, [tracksShown]);
+  const surface: Surface3d = surfaceChoice === "ground" && surfaces.ground ? "ground"
+    : surfaceChoice === "map" && surfaces.map.kind === "available" ? "map"
+    : defaultSurface(surfaces, tracksShown);
+  const surfaceUrl = surface === "ground" && surfaces.ground ? surfaces.ground.url : surfaces.map.kind === "available" ? surfaces.map.url : null;
+  /** The plain contour field not derived yet: the first fetch derives it and the gate is applied after (H7). */
+  const fieldPending = surface === "map" && surfaces.map.kind === "available" && surfaces.map.pending;
+  /** Ground that cannot be had where the map's terrain can: 3D goes back to the map's terrain. */
+  const groundFallback = surface === "ground" && surfaces.map.kind === "available";
+  const fieldUrl = want3d && offer.kind === "available" ? surfaceUrl : null;
   const { state: fieldState } = useHeightField(fieldUrl, nameId ?? null);
+  // A DEM still pending: asking for its ground once queues the job (a document imported before
+  // H10); the descriptor's next read offers it.
+  const demPendingUrl = terrain?.dem?.state === "pending" ? terrain.dem.ground?.url ?? null : null;
+  const demAskedRef = useRef<string | null>(null);
+  useEffect(() => {
+    if (!want3d || !demPendingUrl || demAskedRef.current === demPendingUrl) return;
+    demAskedRef.current = demPendingUrl;
+    loadHeightField(demPendingUrl, { eventId: nameId ?? null }).catch(() => undefined);
+  }, [want3d, demPendingUrl, nameId]);
   // A field that cannot be had: back to 2D with the reason (a derive that found no contours, or the cap, says so).
   useEffect(() => {
     if (!want3d || fieldState.status !== "error") return;
+    if (groundFallback) {
+      setSurfaceChoice("map");
+      setNotice3d({ reason: "ground-unavailable" });
+      setLastReason3d("ground-unavailable");
+      return;
+    }
     fail3d(fieldState.kind === "missing" && (fieldState.reason === "no-contours" || fieldState.reason === "over-cap") ? fieldState.reason : "unavailable");
     // A `pending` descriptor the fetch settled: the host reads it again.
-    if (offer.kind === "available" && offer.pending) onTerrainFetched?.();
+    if (fieldPending) onTerrainFetched?.();
   }, [want3d, fieldState, fail3d]); // eslint-disable-line react-hooks/exhaustive-deps
   // A `pending` descriptor: the fetch derived the field; the host reads the descriptor again, and the gate decides.
   const fetchedPending = useRef<string | null>(null);
   /** The re-read after a `pending` fetch has settled (`reread`), or not yet (`waiting`). */
   const [reread, setReread] = useState<"idle" | "waiting" | "reread">("idle");
   useEffect(() => {
-    if (fieldState.status !== "ready" || offer.kind !== "available" || !offer.pending || fetchedPending.current === fieldState.url) return;
+    if (fieldState.status !== "ready" || !fieldPending || fetchedPending.current === fieldState.url) return;
     fetchedPending.current = fieldState.url;
     setReread("waiting");
     Promise.resolve(onTerrainFetched?.()).then(() => setReread("reread"), () => setReread("reread"));
-  }, [fieldState, offer, onTerrainFetched]);
+  }, [fieldState, fieldPending, onTerrainFetched]);
   // A re-read that did not settle the descriptor (still `pending`, or failed): back to 2D.
   useEffect(() => {
     if (reread !== "reread") return;
     setReread("idle");
-    if (want3d && offer.kind === "available" && offer.pending) fail3d("unavailable");
-  }, [reread, want3d, offer, fail3d]);
+    if (want3d && fieldPending) fail3d("unavailable");
+  }, [reread, want3d, fieldPending, fail3d]);
   // The descriptor no longer allows 3D (a re-read below the gate): back to 2D with the reason.
   useEffect(() => {
     if (want3d && offer.kind === "unavailable") fail3d(offer.reason, offer.percent);
     else if (want3d && offer.kind === "hidden") setWant3d(false);
   }, [want3d, offer.kind, offer.kind === "unavailable" ? offer.reason : null, offer.kind === "unavailable" ? offer.percent : null, fail3d]); // eslint-disable-line react-hooks/exhaustive-deps
   /** The field the engine draws: padded to the sheet, coarsened into a third of the budget (decisions 2, 3). */
-  // Kept for a re-entry: leaving 3D sets the hook idle, and the same field comes back from its cache.
-  const fittedRef = useRef<{ field: unknown; key: string; fitted: ReturnType<typeof viewerField> } | null>(null);
+  // Kept per URL for a re-entry and a surface switch: leaving 3D sets the hook idle, and the same
+  // field comes back from its cache.
+  const fittedRef = useRef(new Map<string, { field: unknown; key: string; fitted: ReturnType<typeof viewerField> }>());
   const fittedField = useMemo(() => {
     if (fieldState.status !== "ready" || !mapDoc) return null;
     const bounds = boundsMm(mapDoc.header), key = `${mapDoc.hash},${mapBudget},${maxTextureSize}`;
-    const hit = fittedRef.current;
+    const cache = fittedRef.current, hit = cache.get(fieldState.url);
     if (hit && hit.field === fieldState.field && hit.key === key) return hit.fitted;
     const fitted = viewerField(fieldState.field, bounds, budgetBytes(mapBudget), maxTextureSize);
-    fittedRef.current = { field: fieldState.field, key, fitted };
+    cache.delete(fieldState.url);
+    cache.set(fieldState.url, { field: fieldState.field, key, fitted });
+    while (cache.size > FIELD_MEMORY_ENTRIES) cache.delete(cache.keys().next().value as string);
     return fitted;
   }, [fieldState, mapDoc, mapBudget, maxTextureSize]);
-  const layerField = want3d && offer.kind === "available" && !offer.pending ? fittedField : null;
-  const in3d = !!layerField && !!terrainInfo && terrainInfo.field === layerField;
+  // While the other surface's field loads (or ground falls back), the drawn field stays: the switch
+  // never leaves 3D (§5.4 "3D mode" "Surface"). An error keeps it too: the render after ground's
+  // fallback still holds the stale error (the hook sets `loading` in its effect); H7's errors end 3D
+  // through `want3d`.
+  const shownFieldRef = useRef<ReturnType<typeof viewerField> | null>(null);
+  const keepShown = fieldState.status === "loading" || fieldState.status === "error";
+  const layerField = want3d && offer.kind === "available" && !fieldPending ? fittedField ?? (keepShown ? shownFieldRef.current : null) : null;
+  shownFieldRef.current = layerField;
+  /** Every field handed to the layer: the mesh of the one before still counts as 3D until the next one's is in. */
+  const handedRef = useRef(new WeakSet<object>());
+  if (layerField) handedRef.current.add(layerField);
+  const in3d = !!layerField && !!terrainInfo && handedRef.current.has(terrainInfo.field);
+  /** The drawn field's header: the surface it is, and the notice it carries (answer 16). */
+  const drawnHeader = in3d && terrainInfo ? terrainInfo.field.header : null;
+  const demAttribution = drawnHeader ? fieldAttribution(drawnHeader) : null;
   const toggle3dState: Map3dToggleState = offer.kind === "unavailable" ? "unavailable" : in3d ? "on" : want3d ? "loading" : "off";
 
   // Map rotation: the drawn meridians vertical on screen — the paper view
@@ -2990,6 +3043,8 @@ export function MapViewer({
       data-view-mode={in3d ? "3d" : "2d"}
       data-pitch={in3d ? pitchDeg : undefined}
       data-exaggeration={in3d ? exaggeration : undefined}
+      data-surface={drawnHeader ? surfaceOfSource(drawnHeader.source) : undefined}
+      data-surface-source={drawnHeader?.source}
       data-terrain-reason={lastReason3d ?? (offer.kind === "hidden" || offer.kind === "unavailable" ? offer.reason ?? undefined : undefined)}
       data-user-bearing={userBearing}
       data-measure-points={measurePoints.length}
@@ -3074,6 +3129,7 @@ export function MapViewer({
         <Map3dSurface view={view3d} scene={scene3d} oneFingerPans={allowOneFingerMapPan} onView={applyView3d} />
       )}
       {notice3d && <Map3dNotice reason={notice3d.reason} percent={notice3d.percent} />}
+      {demAttribution && <Map3dAttribution attribution={demAttribution.attribution} licence={demAttribution.licence} />}
       {/* Rotated UI layer (the overlay SVG) — the meridians vertical, as the canvas's view matrix */}
       <div style={{
         position: "absolute",
@@ -3390,6 +3446,12 @@ export function MapViewer({
               exaggeration={exaggeration}
               onToggle={toggle3d}
               onExaggeration={setExaggeration}
+              surface={surfaces.ground && surfaces.map.kind !== "none" ? {
+                value: surface,
+                mapUnavailable: surfaces.map.kind === "unavailable" ? { reason: surfaces.map.reason, percent: surfaces.map.percent } : null,
+                ground: surfaces.ground.provider,
+                onChange: setSurfaceChoice,
+              } : null}
             />
           )}
           {onToggleFullscreen && (

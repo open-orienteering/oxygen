@@ -746,8 +746,10 @@ tables only, never waits:
 | `unavailable`, `reason: "no-coverage"` | every enabled provider ended `no-coverage` | null | null |
 
 `dem` is `{ state, reason, provider, ground: { url } | null, anchored:
-{ url, decided } | null }`. Showing the attribution with the drawn
-surface is the viewer's (H11).
+{ url, decided } | null }`. The viewer's 3D mode offers ground and draws
+the anchored field as the map's terrain, and shows the provider's
+attribution with either (`docs/map-rendering.md` §5.4 "3D mode" "Surface
+(H11)").
 
 **Contract** with `?source=` (`packages/api/src/map-store/heightfield-routes.ts`).
 `source` absent or `contours` is the table above, unchanged. In order:
@@ -1797,9 +1799,7 @@ web's map pickers offering Mapper files (`.omap` / `.xmap`) — the server
 takes them since E5 (§5.1); the series' colour-stack columns
 (`club_maps.colour_profile`, `colour_overrides`, `north_lines_below`)
 and `map_files.north_detection`, which nothing writes or reads since E5
-(kept: E5 drops only what its row names); the client's fetch, cache and
-3D gate (H7) and the DEM surface's choice and attribution in the viewer
-(H11); §4.7's DEM for a rotation-corrected pin (a per-pin DEM) and for a
+(kept: E5 drops only what its row names); §4.7's DEM for a rotation-corrected pin (a per-pin DEM) and for a
 document without contours (no field grid to resample onto); a DEM
 backfill for documents stored before a provider was enabled (their job is
 queued by the first request for a DEM source, which the descriptor's

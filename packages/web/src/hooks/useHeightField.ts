@@ -4,10 +4,11 @@
  * fetched from the descriptor's `url` as given (`/api/map-documents/:hash/
  * height.bin?v=…`) through `venueAwareFetch` with the document's headers,
  * decoded with the field's client entry, and kept like the document — one
- * request per URL shared by concurrent callers, two decoded fields in
- * memory, a copy in Cache Storage `map-heightfields` (app-written; the
- * service worker has no route for it) that serves it offline. Failures are
- * not kept.
+ * request per URL shared by concurrent callers, the decoded fields in
+ * memory (three: a document's `contours`, anchored and ground fields, so
+ * switching the surface asks nothing again, H11), a copy in Cache Storage
+ * `map-heightfields` (app-written; the service worker has no route for it)
+ * that serves it offline. Failures are not kept.
  */
 
 import { useCallback, useEffect, useState } from "react";
@@ -17,7 +18,7 @@ import { venueAwareFetch } from "../lib/node-discovery";
 
 export const HEIGHTFIELDS_CACHE = "map-heightfields";
 /** Decoded fields kept in memory (a club map's is up to ~100 MB of int16 at the 60 M cap; most are a few MB). */
-export const FIELD_MEMORY_ENTRIES = 2;
+export const FIELD_MEMORY_ENTRIES = 3;
 
 export type HeightFieldErrorKind = "unauthorised" | "missing" | "pending" | "offline" | "failed";
 
