@@ -889,10 +889,13 @@ export function MapViewer({
   }, [notice3d]);
   const fieldUrl = want3d && offer.kind === "available" ? offer.url : null;
   const { state: fieldState } = useHeightField(fieldUrl, nameId ?? null);
-  // A field that cannot be had: back to 2D with the reason.
+  // A field that cannot be had: back to 2D with the reason (a derive that found no contours, or the cap, says so).
   useEffect(() => {
-    if (want3d && fieldState.status === "error") fail3d("unavailable");
-  }, [want3d, fieldState, fail3d]);
+    if (!want3d || fieldState.status !== "error") return;
+    fail3d(fieldState.kind === "missing" && (fieldState.reason === "no-contours" || fieldState.reason === "over-cap") ? fieldState.reason : "unavailable");
+    // A `pending` descriptor the fetch settled: the host reads it again.
+    if (offer.kind === "available" && offer.pending) onTerrainFetched?.();
+  }, [want3d, fieldState, fail3d]); // eslint-disable-line react-hooks/exhaustive-deps
   // A `pending` descriptor: the fetch derived the field; the host reads the descriptor again, and the gate decides.
   const fetchedPending = useRef<string | null>(null);
   useEffect(() => {

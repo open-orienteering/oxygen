@@ -622,7 +622,9 @@ a derive:
 decided }`; it is null when the event has no pin. The review's carries
 the whole report and the field's `width`, `height` and `cellMm`
 instead of `decided`. The 3D gate (`decided` ≥ 0.8, answer 7) is the
-viewer's (H7); the review shows one terrain line (`docs/map-symbols.md`
+viewer's (`docs/map-rendering.md` §5.4 "3D mode", H7: it fetches `url`
+only when someone switches to 3D, and a `pending` fetch is followed by a
+fresh read of the descriptor); the review shows one terrain line (`docs/map-symbols.md`
 §8.7).
 
 **Contract.** Same order as §4.1: validate, authorise, then existence.
