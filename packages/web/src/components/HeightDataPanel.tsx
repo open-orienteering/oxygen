@@ -369,6 +369,18 @@ function stateLabel(row: MapRow): `state_${MapRow["state"] | "notFetched"}` {
   return `state_${row.state}`;
 }
 
+/** The level read on a ready map (map-terrain §7.0c answer 12): the provider's, or one coarser when the map was over the window cap. */
+function ReadAt({ readAtM, providerId }: { readAtM: number; providerId: string | null }) {
+  const { t } = useTranslation("heightData");
+  const chosen = Number(/-(\d+(?:\.\d+)?)m$/.exec(providerId ?? "")?.[1] ?? Number.NaN);
+  const coarser = Number.isFinite(chosen) && readAtM > chosen;
+  return (
+    <span data-testid="height-data-map-read-at" data-read-at={readAtM} className="block text-xs text-slate-500">
+      {coarser ? t("readAtCoarser", { metres: readAtM, chosen }) : t("readAt", { metres: readAtM })}
+    </span>
+  );
+}
+
 function MapsCard() {
   const errorText = useErrorText();
   const { t, i18n } = useTranslation("heightData");
@@ -401,6 +413,12 @@ function MapsCard() {
                 <td className="py-2 pr-2">
                   <span data-testid="height-data-map-state">{t(stateLabel(row))}</span>
                   {row.reason && <span className="text-slate-500"> — {t(`reason_${row.reason}`, { defaultValue: row.reason })}</span>}
+                  {row.overCap && (
+                    <span data-testid="height-data-map-cap" data-cap={row.overCap} className="block text-xs text-slate-500">
+                      {t(`cap_${row.overCap}`)}
+                    </span>
+                  )}
+                  {row.readAtM !== null && <ReadAt readAtM={row.readAtM} providerId={row.providerId} />}
                   {row.providerId && row.state !== "disabled" && <span className="block text-xs text-slate-400">{row.providerId}</span>}
                   {row.job && row.state === "failed" && (
                     <span className="block text-xs text-slate-400">

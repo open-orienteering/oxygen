@@ -126,7 +126,10 @@ What fills `symbols` is `materialiseSymbol(doc, entryId)`
 (`map-symbols.md` §11.1): the entry resolved through the document's
 stack and scaled to it, or not materialisable when the stack lacks one of
 its colours. Map mode offers the entries through `mapPalette`
-(`map-symbols.md` §11.2) and materialises one on first use (row G9).
+(`map-symbols.md` §11.2) and materialises one on first use (row G9,
+`course-editor.md` §13 "Drawing"): the client puts it with
+`putSymbols` in the change whose op first references it, unless the
+patch already holds the key.
 
 ### 1.4 The toggle
 
@@ -689,7 +692,8 @@ place. `enabled` is kept.
   symbol it needs materialised. A `modify` keeps its coordinates
   (rescaled), so the corrected shape stays where it was drawn. Refused
   (null, with why): no such entry; an `add` or a `symbol` entry (drop
-  only, until change symbol, G9); no object with that `sourceIndex`; a
+  only, until G12b: attaching a `symbol` entry needs a symbol argument;
+  user 2026-11-15, G9 question 1); no object with that `sourceIndex`; a
   `modify` or `resymbol` onto an object of another `type`; a symbol that
   cannot be resolved on `doc`.
 - **Drop** is `applyChange { removeUnresolved: [key] }` (§1.5).
@@ -995,6 +999,12 @@ every layer); `clubMap.download` stays the original source file (answer
   outside Map mode's one-write-at-a-time interlock — wiring them through
   `modes/MapMode.tsx` (and a `putUnresolved` for the undo of a drop) is
   row G12b's. `course-editor.md` §13.
+- **Attach of a `symbol` entry** (§4.3; user 2026-11-15, G9 question 1):
+  drop-only. Attaching needs a symbol argument on
+  `mapPatch.attachUnresolved` (`attachUnresolved(…, symbol)`), for G12b
+  with the rest of *Attach*. Meanwhile a `resymbol`'s is redone by hand
+  (*Change symbol*, `course-editor.md` §13) and the entry dropped; an
+  unresolved `add` keeps its geometry only in the entry.
 - **Promote in the editor** (row G12b, §5): *Save corrections to the
   club map* in Map mode (confirm with the label prefilled, progress and
   read-only from `promoteStatus`, the refusals' texts, undo entries
@@ -1033,7 +1043,7 @@ every layer); `clubMap.download` stays the original source file (answer
 | Unit (api) | `packages/api/src/__tests__/map-patches.test.ts` (G14 part) | `eventPrintPatch`: the delivered patch with its version when it has ops; null without a pin, without a row, dormant, disabled, op-less |
 | Unit (api) | `packages/api/src/__tests__/event-document.test.ts`, `event-map-objects.test.ts` (G14 part) | the server derivations over a stub db with a patch row: a hidden cut feature drops out of cuts and objects, an added one is a cut feature, a disabled and a dormant patch give the unpatched answer, each version answered fresh; `slimObjectsOfDocument` skips a hidden object and keeps an added one |
 | Unit (api) | `packages/api/src/__tests__/print-worker.test.ts` (G14 part) | `course-print.md` §9.1: the worker keyed by hash + patch version |
-| Integration (api) | `packages/api/src/__tests__/integration/print-patch.test.ts` (G14) | a hidden object absent from `maps.pdf` (the pixels that change lie in its box), an added one present, `enabled = false` byte-identical to the unpatched PDF and job, a change shows on the same worker, the job with a patch over HTTP equals `maps.pdf` (`course-print.md` §9.1) |
+| Integration (api) | `packages/api/src/__tests__/integration/print-patch.test.ts` (G14) | a hidden object absent from `maps.pdf` (the pixels that change lie in its box), an added one present, `enabled = false` byte-identical to the unpatched PDF and job, a change shows on the same worker, the job with a patch over HTTP equals `maps.pdf` (`course-print.md` §9.1); G9 ("Map mode's drawing in print"): a path `add` with a document line symbol, a point `add` with a library symbol materialised on first use (`putSymbols`, stored as put) and a `resymbol` to that patch symbol, each changing the rasterised page only inside the object's box (`course-editor.md` §13 "Drawing") |
 | Integration (api) | `packages/api/src/__tests__/integration/overprint-cuts.test.ts`, `course-checks.test.ts` (G14 part) | through `mapPatch.applyChange`: the boulder hidden → a leg over it has no gap, an added boulder gaps another leg, the print's `cutFeatures` likewise, disabled → the pinned document's cuts; the building hidden → no `LEG_THROUGH_UNCROSSABLE`, an added building across the leg → the check at its edge, disabled → the pinned building's |
 | E2E | `e2e/course-maps.spec.ts` (G14 part) | the print job carries no patch, then the patch at the write's version after a hide, and the device's export equals the patched `maps.pdf`; none after the op is removed |
 | Unit (api, web) | `packages/api/src/__tests__/print-device.test.ts`, `packages/web/src/print/__tests__/worker.test.ts` (G14 part) | the device's print worker applies the job's patch: the server worker's bytes, `renderPrintJob`'s in process (`course-print.md` §9.1) |

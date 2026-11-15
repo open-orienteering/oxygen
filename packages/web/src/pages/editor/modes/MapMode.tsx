@@ -1,7 +1,8 @@
 /**
  * Map mode (docs/course-editor.md §13; 08 §5.2–§5.3, the Map column; row G6): the event's map corrections — the
- * patch over the pinned document (docs/map-patches.md) — with select, hide and move, and the nodes tool `N` (§13
- * "Nodes", G7). Shaped like `useLayoutMode`:
+ * patch over the pinned document (docs/map-patches.md) — with select, hide and move, the nodes tool `N` (§13
+ * "Nodes", G7), the drawing tools `P` `L` `A`, the symbol picker, *Change symbol* and *Rotation* (§13 "Drawing",
+ * "Symbol picker", G9). Shaped like `useLayoutMode`:
  * the page asks it for the viewer's editor props, the rail, the inspector and its keys, and keeps the undo stack.
  *
  * Course edits are locked here: the editor props carry no control, label, leg or map-click callbacks and the
@@ -13,17 +14,22 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { useTranslation } from "react-i18next";
 import type { TFunction } from "i18next";
-import type { mapDocument } from "@oxygen/shared";
+import { mapDocument } from "@oxygen/shared";
 import { trpc } from "../../../lib/trpc";
 import type { MapViewerEditorProps } from "../../../components/MapViewer";
 import type { DocumentHitTest } from "../../../components/VectorMapLayer";
 import { loadMapPatch, setMapPatch, type LoadedMapDocument, type MapPatchDelivery } from "../../../lib/map-document-cache";
 import type { EditorWrites, PatchWriteResult } from "../../../lib/editor/write-client";
 import { boundsMm } from "../../../lib/vector-map";
-import { mapNodesBinding, mapSelectBinding, withTrackLayer, type MapGestureRef, type MapNodeFocus, type MapNodesGestureRef } from "../tools/bindings";
-import { MAP_RAIL, type MapRailTool } from "../tools/rail";
+import {
+  mapDrawBinding, mapNodesBinding, mapPointBinding, mapSelectBinding, withTrackLayer, type Gesture, type MapGestureRef, type MapNodeFocus,
+  type MapNodesGestureRef, type MapPointGestureRef,
+} from "../tools/bindings";
+import { isMapDrawTool, MAP_DRAW_KIND, MAP_RAIL, type MapRailTool } from "../tools/rail";
+import { step as polygonStep, type PolygonState } from "../tools/polygon";
+import type { ToolPointer } from "../../../components/MapViewer";
 import { deleteVertex, type Vertex } from "../../../lib/editor/geometry-edit";
-import type { SnapIndex } from "../../../lib/editor/snap";
+import { snapIndexOf, type SnapIndex } from "../../../lib/editor/snap";
 import { InspectorSection } from "../Inspector";
 import { mapKeyAction } from "./map/keys";
 import { MapObjectSection } from "./map/ObjectSection";
@@ -31,6 +37,10 @@ import { CorrectionsList } from "./map/Corrections";
 import { MAP_NODES_MAX, nodeSnapIndex, nodesOf, nodesOp, ringRule, withRing, type NodePath } from "./map/nodes";
 import { useMapTracks } from "./map/tracks/useMapTracks";
 import { TracksPanel } from "./map/tracks/TracksPanel";
+import { SymbolPicker } from "./map/SymbolPicker";
+import { findItem, itemKey } from "./map/palette";
+import { drawOp, minNodes, type DrawKind } from "./map/draw";
+import { addChange, angleChange, isOrientableRef, kindOfType, newAddId, refOfSymbolKey, resymbolChange, symbolKey, symbolPut } from "./map/symbols";
 import {
   centreOf, changes, correctedRefs, drawnCovers, correctionRows, hideChange, hitsObject, inverseChange, isHidden, mapModelFor, moveOp, objectInfo,
   refKey, refOfOp, restoreChange, sameRef, stepRef, type CorrectionRow, type MapModel, type MapObjectRef,
@@ -76,6 +86,9 @@ function patchErrorText(e: unknown, t: TFunction<"editor">): string {
   return message;
 }
 
+/** The rail buttons' labels (`editor.json`). */
+const RAIL_LABEL = { V: "toolSelect", N: "toolNodes", P: "toolMapPoint", L: "toolMapLine", A: "toolMapArea" } as const satisfies Record<MapRailTool, string>;
+
 export function useMapMode(a: MapModeArgs): MapMode {
   const { t, i18n } = useTranslation("editor");
   const utils = trpc.useUtils();
@@ -96,7 +109,7 @@ export function useMapMode(a: MapModeArgs): MapMode {
   const [hit, setHit] = useState<DocumentHitTest | null>(null);
   const [viewRequest, setViewRequest] = useState<MapViewerEditorProps["viewRequest"]>(null);
   /** The move being dragged, or committed and waiting until the viewer draws `waitFor`. */
-  const [draft, setDraft] = useState<{ ops: mapDocument.PatchOp[]; waitFor: string | null } | null>(null);
+  const [draft, setDraft] = useState<{ ops: mapDocument.PatchOp[]; symbols?: Record<string, mapDocument.PatchSymbol>; waitFor: string | null } | null>(null);
   const [drawn, setDrawn] = useState<string | null>(null);
   /** *Apply corrections* while its write is in flight: the box shows the value asked for. */
   const [toggling, setToggling] = useState<boolean | null>(null);
@@ -113,6 +126,20 @@ export function useMapMode(a: MapModeArgs): MapMode {
   /** A gesture's write is in flight: the next gesture waits (its `before` would be stale, §13 "Ops"). */
   const [writing, setWriting] = useState(false);
   const writingRef = useRef(false);
+  /** Drawing (§13 "Drawing"): the chosen symbol per kind, the line / area being drawn, its add id, the hover. */
+  const [chosenState, setChosenState] = useState<{ hash: string | null; byKind: Partial<Record<DrawKind, string>> }>({ hash: null, byKind: {} });
+  const [poly, setPoly] = useState<PolygonState | null>(null);
+  const drawId = useRef<string | null>(null);
+  const [drawHover, setDrawHover] = useState<Pt | null>(null);
+  const drawGesture = useRef<Gesture>(null);
+  const pointGesture = useRef<MapPointGestureRef["current"]>(null);
+  /** Bumped while a point is aimed: its direction line is drawn from the gesture (the binding's `redraw`). */
+  const [aimTick, setAimTick] = useState(0);
+  /** The add a finished line or area wrote: selected once the model has it. */
+  const pendingSelect = useRef<MapObjectRef | null>(null);
+  /** *Change symbol*'s picker is open for this selection (`refKey`; another selection closes it); the picker's search. */
+  const [changingFor, setChangingFor] = useState<string | null>(null);
+  const [query, setQuery] = useState("");
 
   // Leaving the mode or another document drops it all; the overprint comes back (H is Map mode's own).
   useEffect(() => {
@@ -123,9 +150,19 @@ export function useMapMode(a: MapModeArgs): MapMode {
     setTool("V");
     setFocusState(null);
     setSnapping(false);
+    setPoly(null);
+    setChangingFor(null);
+    setQuery("");
+    drawId.current = null;
+    pendingSelect.current = null;
     gesture.current = null;
     nodeGesture.current = null;
+    drawGesture.current = null;
+    pointGesture.current = null;
   }, [enabled, hash]);
+  // The chosen symbols belong to the document: kept across leaving and re-entering the mode, dropped for another
+  // document (§13 "Drawing").
+  const chosen = chosenState.hash === hash ? chosenState.byKind : {};
   // The focused node belongs to the selection and the tool it was set in: another one drops it (§13 "Nodes", "Focus").
   const focusOwner = `${selected ? refKey(selected) : ""}|${tool}`;
   const focus = focusState?.owner === focusOwner ? focusState.focus : null;
@@ -138,6 +175,19 @@ export function useMapMode(a: MapModeArgs): MapMode {
   useEffect(() => {
     if (selected && model && model.indexOf(selected) === null) setSelected(null);
   }, [selected, model]);
+  // A finished line or area is selected once the model has its add (§13 "Drawing").
+  useEffect(() => {
+    const p = pendingSelect.current;
+    if (p && model && model.indexOf(p) !== null) {
+      pendingSelect.current = null;
+      setSelected(p);
+      setStack([]);
+    }
+  }, [model]);
+  // *Change symbol* belongs to the selection it was opened on.
+  const selectedKey = selected ? refKey(selected) : null;
+  const changing = changingFor !== null && changingFor === selectedKey;
+  const setChanging = useCallback((open: boolean) => setChangingFor(open ? selectedKey : null), [selectedKey]);
 
   const onHitTest = useCallback((h: DocumentHitTest | null) => setHit(() => h), []);
   const onPatchDrawn = useCallback((v: string) => setDrawn(v), []);
@@ -195,6 +245,14 @@ export function useMapMode(a: MapModeArgs): MapMode {
   const canWrite = enabled && canEdit && !!model && correctionsOn && !writing;
   const selectedHidden = !!selected && isHidden(current, selected);
   const canMove = canWrite && !!selected && !selectedHidden && model?.indexOf(selected) != null;
+  /** Drawing's lasting conditions (§13 "Drawing"): `courses.edit`, corrections on, a document — a write in flight aside. */
+  const canDraw = enabled && canEdit && !!model && correctionsOn;
+  const drawTool = isMapDrawTool(tool) ? tool : null;
+  const drawKind: DrawKind | null = drawTool ? MAP_DRAW_KIND[drawTool] : null;
+  // An armed drawing tool goes back to V when drawing becomes disabled.
+  useEffect(() => {
+    if (drawTool && !canDraw) { setTool("V"); setPoly(null); drawId.current = null; }
+  }, [drawTool, canDraw]);
 
   const hide = useCallback(() => {
     if (!canWrite || !selected || selectedHidden) return;
@@ -294,6 +352,126 @@ export function useMapMode(a: MapModeArgs): MapMode {
     };
   }, [snapping, model, selected]);
 
+  // ─── Drawing and the symbol picker (§13 "Drawing", "Symbol picker") ──
+  const pickerKind: DrawKind | null = drawKind ?? (changing && info ? kindOfType(info.type) : null);
+  const pinned = model?.pinned ?? null;
+  const palette = useMemo(() => (pickerKind && pinned ? mapDocument.mapPalette(pinned, current) : null), [pickerKind, pinned, current]);
+  /** The drawing tool's symbol: the chosen item, while it is in the palette and enabled; its first-use put. */
+  const chosenKey = drawKind ? chosen[drawKind] ?? null : null;
+  const chosenItem = palette ? findItem(palette, chosenKey) : null;
+  const chosenPut = useMemo(() => {
+    const ref = chosenItem?.enabled && chosenKey ? refOfSymbolKey(chosenKey) : null;
+    if (!ref || !pinned) return null;
+    const put = symbolPut(pinned, current, ref);
+    return put.ok ? put : null;
+  }, [chosenItem, chosenKey, pinned, current]);
+  const chosenOrientable = !!chosenPut && !!pinned && drawKind === "point" && isOrientableRef(pinned, current, chosenPut.ref);
+  /** Snapping for placed points and nodes: the whole effective document (nothing drawn is in it yet). */
+  const drawSnapIndex = useMemo(() => (snapping && drawTool && model ? snapIndexOf(model.doc) : null), [snapping, drawTool, model]);
+  const drawSnap = useCallback((pt: Pt): Pt => drawSnapIndex?.nearest(pt) ?? pt, [drawSnapIndex]);
+  const keepWaiting = useCallback(() => setDraft((d) => (d?.waitFor != null ? d : null)), []);
+  const dropDrawing = useCallback(() => {
+    setPoly(null);
+    drawId.current = null;
+    drawGesture.current = null;
+    keepWaiting();
+  }, [keepWaiting]);
+  /** One drawn object's write (§13 "Ops"): the add with its symbol's first use, its draft kept until drawn. */
+  const commitAdd = useCallback((op: mapDocument.PatchOp | null) => {
+    if (!op || !chosenPut || writingRef.current) return false;
+    setDraft({ ops: [op], ...(chosenPut.putSymbols ? { symbols: chosenPut.putSymbols } : {}), waitFor: null });
+    commit(addChange(chosenPut, op), true);
+    return true;
+  }, [chosenPut, commit]);
+  /** The line or area as a draft from its minimum (hover excluded: it sends nothing to the worker). */
+  const drawDraft = useCallback((state: PolygonState) => {
+    if (!model || !chosenPut || (drawKind !== "line" && drawKind !== "area")) return;
+    if (!drawId.current) drawId.current = newAddId();
+    const op = drawOp(drawId.current, drawKind, chosenPut.ref, model.unitsPerMm, { vertices: state.vertices });
+    if (op) setDraft({ ops: [op], ...(chosenPut.putSymbols ? { symbols: chosenPut.putSymbols } : {}), waitFor: null });
+    else keepWaiting();
+  }, [model, chosenPut, drawKind, keepWaiting]);
+  const finishDrawing = useCallback((vertices: PolygonState["vertices"]) => {
+    if (!model || !chosenPut || (drawKind !== "line" && drawKind !== "area") || writingRef.current) return;
+    if (vertices.length < minNodes(drawKind)) return;
+    const id = drawId.current ?? newAddId();
+    if (!commitAdd(drawOp(id, drawKind, chosenPut.ref, model.unitsPerMm, { vertices }))) return;
+    setPoly(null);
+    drawId.current = null;
+    drawGesture.current = null;
+    // Back to V with the new object selected once the reply has it (08 §5.3 "Area tools").
+    pendingSelect.current = { added: id };
+    setTool("V");
+  }, [model, chosenPut, drawKind, commitAdd]);
+  const pointBinding = useMemo(() => (drawKind !== "point" ? null : mapPointBinding({
+    canPlace: !!chosenPut && !writing,
+    orientable: chosenOrientable,
+    snap: drawSnap,
+    gesture: pointGesture,
+    onPlace: (at, angle) => {
+      if (!model || !chosenPut) return;
+      const id = drawId.current ?? newAddId();
+      drawId.current = null;
+      commitAdd(drawOp(id, "point", chosenPut.ref, model.unitsPerMm, { at, angle }));
+    },
+    onAim: (at, angle) => {
+      if (!model || !chosenPut) return;
+      if (!drawId.current) drawId.current = newAddId();
+      const op = drawOp(drawId.current, "point", chosenPut.ref, model.unitsPerMm, { at, angle });
+      if (op) setDraft({ ops: [op], ...(chosenPut.putSymbols ? { symbols: chosenPut.putSymbols } : {}), waitFor: null });
+    },
+    onCancel: () => { drawId.current = null; keepWaiting(); },
+    redraw: () => setAimTick((n) => n + 1),
+    // aimTick: the direction line follows the gesture.
+  })), [drawKind, chosenPut, writing, chosenOrientable, drawSnap, model, commitAdd, keepWaiting, aimTick]);
+  const onDrawHover = useCallback((p: ToolPointer | null) => setDrawHover(p ? drawSnap(p.pt) : null), [drawSnap]);
+  const lineBinding = useMemo(() => (drawKind !== "line" && drawKind !== "area" ? null : mapDrawBinding({
+    gesture: drawGesture,
+    poly: poly ?? { kind: drawKind === "line" ? "map_line" : "map_area", vertices: [] },
+    hover: chosenPut ? drawHover : null,
+    onHover: onDrawHover,
+    onPoly: (next) => {
+      if (!chosenPut) return; // no symbol chosen: a click draws nothing (§13 "Drawing")
+      setPoly(next);
+      drawDraft(next);
+    },
+    onDone: finishDrawing,
+    onCancel: dropDrawing,
+    snap: drawSnap,
+    canClose: () => !writingRef.current && !!chosenPut,
+  })), [drawKind, poly, chosenPut, drawHover, onDrawHover, drawDraft, finishDrawing, dropDrawing, drawSnap]);
+  /** Arms a rail tool; a drawing tool only while drawing is enabled, dropping the selection and *Change symbol*. */
+  const armTool = useCallback((next: MapRailTool) => {
+    if (isMapDrawTool(next) && !canDraw) return;
+    setPoly(null);
+    drawId.current = null;
+    drawGesture.current = null;
+    pointGesture.current = null;
+    setChanging(false);
+    if (isMapDrawTool(next)) { setSelected(null); setStack([]); pendingSelect.current = null; }
+    setTool(next);
+  }, [canDraw, setChanging]);
+  /** The picker's pick: the tool's symbol, or *Change symbol*'s write (one op, one undo entry; §13 "Ops"). */
+  const pick = useCallback((item: mapDocument.PaletteItem) => {
+    if (!item.enabled) return;
+    if (drawKind) {
+      setChosenState((c) => ({ hash, byKind: { ...(c.hash === hash ? c.byKind : {}), [drawKind]: itemKey(item) } }));
+      return;
+    }
+    if (!canWrite || !model || !selected || selectedHidden) return;
+    const put = symbolPut(model.pinned, current, item.ref);
+    if (!put.ok) return;
+    const change = resymbolChange(model, current, selected, put);
+    setChanging(false);
+    if (change) commit(change);
+  }, [drawKind, hash, canWrite, model, selected, selectedHidden, current, commit, setChanging]);
+  const rotate = useCallback((tenths: number) => {
+    if (!canWrite || !model || !selected || selectedHidden) return;
+    const change = angleChange(model, current, selected, tenths);
+    if (change) commit(change);
+  }, [canWrite, model, selected, selectedHidden, current, commit]);
+  const selectedOrientable = !!info && !!model && info.type === mapDocument.OBJECT_TYPE.point && isOrientableRef(model.pinned, current, info.symbol);
+
   // ─── The binding ──
   const select = useCallback((ref: MapObjectRef | null, refs: MapObjectRef[]) => { setSelected(ref); setStack(refs); }, []);
   const nodesBinding = useMemo(() => (tool !== "N" ? null : mapNodesBinding({
@@ -335,10 +513,10 @@ export function useMapMode(a: MapModeArgs): MapMode {
     },
     onCancel: () => setDraft((d) => (d?.waitFor != null ? d : null)),
   }), [hit, canMove, model, selected, commit, select]);
-  const binding = nodesBinding ?? selectBinding;
+  const binding = pointBinding ?? lineBinding ?? nodesBinding ?? selectBinding;
 
   const selectedList = useMemo(() => (selected ? [selected] : []), [selected]);
-  const draftInput = useMemo(() => (draft ? { ops: draft.ops } : null), [draft]);
+  const draftInput = useMemo(() => (draft ? { ops: draft.ops, ...(draft.symbols ? { symbols: draft.symbols } : {}) } : null), [draft]);
   const editor = useMemo<MapViewerEditorProps>(() => ({
     tool: withTrackLayer(binding, tracks.layer),
     viewRequest,
@@ -355,7 +533,15 @@ export function useMapMode(a: MapModeArgs): MapMode {
     const action = mapKeyAction(e);
     if (!action) return false;
     switch (action.kind) {
-      case "tool": setTool(action.tool); return true;
+      case "tool": armTool(action.tool); return true;
+      case "finish": {
+        // Enter ends the line or closes the area being drawn (§13 "Drawing"), through the flow's minimum.
+        if (!poly || !lineBinding) return false;
+        e.preventDefault();
+        const r = polygonStep(poly, { type: "enter" });
+        if (r.done) finishDrawing(r.done);
+        return true;
+      }
       case "toggle-overprint": toggleHideCourse(); return true;
       case "fit": fit(); return true;
       case "step": e.preventDefault(); step(action.dir); return true;
@@ -368,23 +554,27 @@ export function useMapMode(a: MapModeArgs): MapMode {
       case "escape":
         // The viewer cancels a drag in flight first (§3); then the focused node, N back to V, the selection; with
         // nothing left, the page leaves fullscreen.
+        if (poly) { dropDrawing(); return true; }
+        if (changing) { setChanging(false); return true; }
         if (focus) { setFocus(null); return true; }
-        if (tool === "N") { setTool("V"); return true; }
+        if (tool !== "V") { armTool("V"); return true; }
         if (!selected) return false;
         setSelected(null);
         setStack([]);
         return true;
     }
-  }, [toggleHideCourse, fit, step, hide, selected, tool, focus, deleteNode, setFocus]);
+  }, [toggleHideCourse, fit, step, hide, selected, tool, focus, deleteNode, setFocus, armTool, poly, lineBinding, finishDrawing, dropDrawing, changing, setChanging]);
 
   // ─── Rail and inspector ──
   const rail = (
     <div data-testid="editor-tool-rail" className="pointer-events-auto relative flex flex-col gap-1 bg-white/95 backdrop-blur-sm border border-slate-200 rounded-lg shadow-sm p-1 self-start">
       {MAP_RAIL.map((key) => {
-        const label = key === "N" ? t("toolNodes") : t("toolSelect");
+        const label = t(RAIL_LABEL[key]);
+        const off = isMapDrawTool(key) && !canDraw;
         return (
-          <button key={key} type="button" data-testid={`editor-tool-${key}`} aria-pressed={tool === key} title={label} aria-label={label} onClick={() => setTool(key)}
-            className={`w-8 h-8 rounded-md text-xs font-semibold flex items-center justify-center cursor-pointer ${tool === key ? "bg-purple-100 text-purple-700" : "text-slate-600 hover:bg-slate-100"}`}>
+          <button key={key} type="button" data-testid={`editor-tool-${key}`} aria-pressed={tool === key} title={off ? `${label} — ${t("mapDrawOff")}` : label} aria-label={label}
+            disabled={off} onClick={() => armTool(key)}
+            className={`w-8 h-8 rounded-md text-xs font-semibold flex items-center justify-center cursor-pointer disabled:opacity-40 disabled:cursor-not-allowed ${tool === key ? "bg-purple-100 text-purple-700" : "text-slate-600 hover:bg-slate-100"}`}>
             {key}
           </button>
         );
@@ -402,8 +592,21 @@ export function useMapMode(a: MapModeArgs): MapMode {
     <>
       {!canEdit && <p data-testid="editor-map-readonly" className="px-2.5 py-1.5 text-[11px] text-slate-500">{t("mapReadOnly")}</p>}
       {canEdit && !correctionsOn && <p data-testid="editor-map-disabled" className="px-2.5 py-1.5 text-[11px] text-amber-700 bg-amber-50">{t("mapDisabled")}</p>}
+      {drawKind && palette && (
+        <InspectorSection title={t("mapSymbols")} testId="editor-inspector-map-symbols">
+          <SymbolPicker groups={palette} kind={drawKind} query={query} onQuery={setQuery} pressed={chosenItem?.enabled ? chosenKey : null} onPick={pick}
+            documentHash={mapDoc.hash} nameId={nameId}
+            hint={chosenPut ? { testId: "editor-map-palette-hint", text: t(`mapPaletteHint_${drawKind}` as const) } : { testId: "editor-map-palette-pick", text: t("mapPalettePick") }} />
+        </InspectorSection>
+      )}
       <InspectorSection title={t("mapObject")} testId="editor-inspector-map-object">
-        <MapObjectSection info={info} hidden={selectedHidden} documentHash={mapDoc.hash} nameId={nameId} canWrite={canWrite} onHide={hide} onRestore={restore} />
+        <MapObjectSection info={info} hidden={selectedHidden} documentHash={mapDoc.hash} nameId={nameId} canWrite={canWrite} onHide={hide} onRestore={restore}
+          canChangeSymbol={!!info && kindOfType(info.type) !== null} changing={changing} onChangeSymbol={() => setChanging(!changing)}
+          picker={changing && info && palette && pickerKind ? (
+            <SymbolPicker groups={palette} kind={pickerKind} query={query} onQuery={setQuery} pressed={symbolKey(info.symbol)} onPick={pick}
+              documentHash={mapDoc.hash} nameId={nameId} onEscape={() => setChanging(false)} />
+          ) : null}
+          orientable={selectedOrientable} onRotate={rotate} />
         {nodes && ("path" in nodes
           ? <p data-testid="editor-map-nodes-hint" className="px-2.5 py-1.5 text-[11px] text-slate-500">{t("mapNodesHint")}</p>
           : <p data-testid="editor-map-nodes-none" data-reason={nodes.reason} className="px-2.5 py-1.5 text-[11px] text-slate-500">{t(`mapNodesNone_${nodes.reason}`)}</p>)}

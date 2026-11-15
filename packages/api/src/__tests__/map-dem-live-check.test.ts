@@ -1,4 +1,11 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
+
+// a pass-through that records each fetch's options (the check must not step, §7.0c answer 12)
+const mosaicOpts = vi.hoisted(() => [] as unknown[]);
+vi.mock("../map-store/dem.js", async (orig) => {
+  const real = await orig<typeof import("../map-store/dem.js")>();
+  return { ...real, fetchDemMosaic: (...args: Parameters<typeof real.fetchDemMosaic>) => (mosaicOpts.push(args[3]), real.fetchDemMosaic(...args)) };
+});
 import { liveVerdict, runLiveCheck } from "../map-store/dem-live-check.js";
 import { LM_ORIGIN, STAC, TEST_CREDENTIAL, demFixture } from "./helpers/dem-fixture.js";
 import { HILL, encodeTerrainDoc, sweref99 } from "./helpers/terrain-doc.js";
@@ -17,6 +24,8 @@ describe("the DEM live check (map-terrain.md §7.6), against the recorded fixtur
     expect(r.spread.at2m.acceptedOfCovered).toBeGreaterThan(0.95);
     expect(r.verdict).toEqual({ rangeServed: true, credentialContained: true, profileRead: true, has2m: true, spreadHolds: true, pass: true });
     expect(JSON.stringify(r)).not.toContain(TEST_CREDENTIAL);
+    // 1 m and 2 m each read at their own level, never the next coarser overview
+    expect(mosaicOpts.slice(-2)).toEqual([{ coarser: false }, { coarser: false }]);
   });
 
   it("fails without range support, and when the spread degrades at 2 m", async () => {

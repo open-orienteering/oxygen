@@ -199,3 +199,23 @@ describe("Layout's polygon (layout_path, D16)", () => {
     expect(step(s, { type: "click", pt: { x: 0, y: 0 }, onFirst: true }).done).toHaveLength(3);
   });
 });
+
+describe("Map mode's line and area kinds (docs/course-editor.md §13 \"Drawing\")", () => {
+  it("map_line is open from two nodes with curves; map_area closed from three with curves", () => {
+    expect([isClosedKind("map_line"), minVertices("map_line")]).toEqual([false, 2]);
+    expect([isClosedKind("map_area"), minVertices("map_area")]).toEqual([true, 3]);
+    expect(vertexRule("map_line")).toEqual({ min: 2, max: Infinity, curves: true, closed: false });
+    expect(vertexRule("map_area")).toEqual({ min: 3, max: Infinity, curves: true, closed: true });
+  });
+
+  it("a map line ends by Enter, smooth by default", () => {
+    let s: PolygonState = { kind: "map_line", vertices: [] };
+    s = click(s, 0, 0).state;
+    s = click(s, 10, 0).state;
+    s = click(s, 20, 10).state;
+    const done = step(s, { type: "enter" }).done!;
+    expect(done).toHaveLength(3);
+    expect(done[1].hIn && done[1].hOut).toBeTruthy();
+    noFlags(done);
+  });
+});

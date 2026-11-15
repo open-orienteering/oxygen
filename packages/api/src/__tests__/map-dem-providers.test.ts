@@ -45,7 +45,7 @@ describe("Lantmäteriet's STAC (map-terrain.md §7.1)", () => {
     const dup = fakeRangeServer({ [q]: json({ features: same, links: [] }) });
     expect(await lantmaterietProvider({ fetch: dup.fetch, credential: CRED }).locate(BOX)).toEqual([{ url: "https://dl.lantmateriet.se/hojd/a.tif" }]);
     const loop = fakeRangeServer({ [q]: json({ features: [item("a", "https://dl.lantmateriet.se/hojd/a.tif")], links: [{ rel: "next", href: q }] }) });
-    await expect(lantmaterietProvider({ fetch: loop.fetch, credential: CRED }).locate(BOX)).rejects.toMatchObject({ reason: "over-cap" });
+    await expect(lantmaterietProvider({ fetch: loop.fetch, credential: CRED }).locate(BOX)).rejects.toMatchObject({ reason: "over-cap", cap: "stac-pages" });
   });
 
   it("reads the 1 m model when told to", () => {
@@ -110,7 +110,7 @@ describe("Copernicus GLO-30 (§7.1, answer 13)", () => {
   });
 
   it("refuses an extent over the tile cap", async () => {
-    await expect(glo30Provider({ fetch: fakeRangeServer({}).fetch }).locate({ west: 10, south: 50, east: 15, north: 54 })).rejects.toMatchObject({ reason: "over-cap" });
+    await expect(glo30Provider({ fetch: fakeRangeServer({}).fetch }).locate({ west: 10, south: 50, east: 15, north: 54 })).rejects.toMatchObject({ reason: "over-cap", cap: "tiles" });
   });
 });
 

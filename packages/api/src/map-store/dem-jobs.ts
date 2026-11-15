@@ -17,7 +17,7 @@ import { TERRAIN_VERSION, type HeightFieldHeader } from "@oxygen/shared/src/terr
 import type { Prisma, PrismaClient } from "../generated/prisma/client.js";
 import { workerBootstrap } from "../worker-bootstrap.js";
 import { getBlob } from "./blob-store.js";
-import { DemFetchError, type DemFailure } from "./dem-cog.js";
+import { DEM_CAPS, DemFetchError, type DemCap, type DemFailure } from "./dem-cog.js";
 import type { DemProvider } from "./dem-providers.js";
 import { demProviderById, demProviders, refreshDemProviders } from "./dem-registry.js";
 import type { DemDerived, DemWorkerData, DemWorkerMessage } from "./dem-worker.js";
@@ -82,6 +82,22 @@ export function demErrorText(err: unknown): string {
   return raw.replace(/Basic\s+[A-Za-z0-9+/=]+/g, "Basic …").slice(0, DEM_JOB_RULES.errorMaxChars);
 }
 
+/**
+ * An `over-cap` ending's stored error: the cap it hit, then the message
+ * (map-terrain §7.0c answer 12), capped and masked as `demErrorText`.
+ * Every such ending since H13 has one; a null error marks one from
+ * before, which `requeueOverCap` queues once.
+ */
+export function demOverCapText(cap: DemCap, message: string): string {
+  return demErrorText(`${cap}: ${message}`);
+}
+
+/** The cap an `over-cap` job's error names; null for any other text. */
+export function demOverCapOf(error: string | null | undefined): DemCap | null {
+  const m = /^([a-z-]+): /.exec(error ?? "");
+  return m && (DEM_CAPS as readonly string[]).includes(m[1]) ? (m[1] as DemCap) : null;
+}
+
 // ---- worker -------------------------------------------------------------------
 
 export type DemDeriver = (data: DemWorkerData) => Promise<DemDerived>;
@@ -111,6 +127,8 @@ export function deriveDemInWorker(data: DemWorkerData, timeoutMs: number = DEM_J
 export interface DemEngineOptions {
   /** The deriver (tests: in-process); defaults to the worker. */
   derive?: DemDeriver;
+  /** Test seam: §7.2's window cap (`DEM_RULES.maxMosaicCells`), lowered so the fixture's tile crosses it. */
+  maxMosaicCells?: number;
 }
 
 let engineOptions: DemEngineOptions = {};
@@ -249,20 +267,22 @@ async function claim(db: Db, key: { documentHash: string; provider: string }): P
   return count === 1;
 }
 
-type Outcome = { kind: "done"; derived: Extract<DemDerived, { type: "done" }>; tiles: number; tilesRead: number } | { kind: "unavailable"; reason: DemUnavailableReason };
+type Outcome =
+  | { kind: "done"; derived: Extract<DemDerived, { type: "done" }>; tiles: number; tilesRead: number; resolutionM: number }
+  | { kind: "unavailable"; reason: DemUnavailableReason; error?: string };
 
 async function run(db: Db, hash: string, provider: DemProvider, signal: { timedOut: boolean }): Promise<Outcome | null> {
   const doc = await db.mapDocument.findUnique({ where: { hash }, select: { header: true } });
   if (!doc) return null;
-  if (isOverCap(doc.header)) return { kind: "unavailable", reason: "over-cap" };
+  if (isOverCap(doc.header)) return { kind: "unavailable", reason: "over-cap", error: demOverCapText("field", "the map's height field is over this instance's cell cap (MAP_HEIGHTFIELD_MAX_CELLS)") };
   const frame = await documentPaperFrame(db, hash, 0);
   const extent = frame ? documentDemExtent(frame, doc.header) : null;
   if (!frame || !extent) return { kind: "unavailable", reason: "no-georeference" };
   let mosaic;
   try {
-    mosaic = await fetchDemMosaic(provider, frame, extent);
+    mosaic = await fetchDemMosaic(provider, frame, extent, { maxCells: engineOptions.maxMosaicCells });
   } catch (err: unknown) {
-    if (err instanceof DemFetchError && err.reason === "over-cap") return { kind: "unavailable", reason: "over-cap" };
+    if (err instanceof DemFetchError && err.reason === "over-cap") return { kind: "unavailable", reason: "over-cap", error: demOverCapText(err.cap ?? "window-cells", err.message) };
     throw err;
   }
   if (mosaic === "no-coverage") return { kind: "unavailable", reason: "no-coverage" };
@@ -270,9 +290,11 @@ async function run(db: Db, hash: string, provider: DemProvider, signal: { timedO
   if (signal.timedOut) return null;
   const bytes = await getBlob(db, "map_documents", hash);
   if (!bytes || signal.timedOut) return null;
-  const derived = await (engineOptions.derive ?? deriveDemInWorker)({ bytes: new Uint8Array(bytes.buffer, bytes.byteOffset, bytes.byteLength), frame, paper: extent.paper, windows: mosaic.windows, provider: provider.info });
+  // the provider block carries the level read (§7.0c answer 12): the paper grid, the anchor's stencil and both headers follow it; the id stays the chosen level
+  const read = { ...provider.info, resolutionM: mosaic.resolutionM };
+  const derived = await (engineOptions.derive ?? deriveDemInWorker)({ bytes: new Uint8Array(bytes.buffer, bytes.byteOffset, bytes.byteLength), frame, paper: extent.paper, windows: mosaic.windows, provider: read });
   if (derived.type === "unavailable") return { kind: "unavailable", reason: derived.reason };
-  return { kind: "done", derived, tiles: mosaic.tiles, tilesRead: mosaic.tilesRead };
+  return { kind: "done", derived, tiles: mosaic.tiles, tilesRead: mosaic.tilesRead, resolutionM: mosaic.resolutionM };
 }
 
 const json = (v: unknown): Prisma.InputJsonObject => JSON.parse(JSON.stringify(v)) as Prisma.InputJsonObject;
@@ -308,15 +330,15 @@ async function execute(db: Db, hash: string, provider: DemProvider): Promise<voi
     const out = await Promise.race([run(db, hash, provider, signal), timeout]);
     if (out === null) return; // the document went away (its job row with it)
     if (out.kind === "unavailable") {
-      await mark(db, hash, id, { state: "unavailable", reason: out.reason, error: null, nextAttemptAt: null });
-      console.log(`[map-dem] ${hash} ${id}: unavailable (${out.reason})`);
+      await mark(db, hash, id, { state: "unavailable", reason: out.reason, error: out.error ?? null, nextAttemptAt: null });
+      console.log(`[map-dem] ${hash} ${id}: unavailable (${out.reason})${out.error ? `: ${out.error}` : ""}`);
       if (out.reason === "no-coverage") void enqueueDocumentDem(db, hash);
       return;
     }
     await writeRows(db, hash, provider, out);
     await mark(db, hash, id, { state: "done", reason: null, error: null, nextAttemptAt: null });
     const g = out.derived.ground.header;
-    console.log(`[map-dem] ${hash} ${id}: ${out.tilesRead} tile(s), ${g.width}×${g.height} at ${g.cellMm} mm in ${Date.now() - started} ms`);
+    console.log(`[map-dem] ${hash} ${id}: ${out.tilesRead} tile(s) read at ${out.resolutionM} m, ${g.width}×${g.height} at ${g.cellMm} mm in ${Date.now() - started} ms`);
   } catch (err: unknown) {
     const reason: DemFailedReason = err instanceof DemFetchError && err.reason !== "over-cap" ? err.reason : "derive";
     const job = await getDemJob(db, hash, id).catch(() => null);
@@ -362,6 +384,27 @@ export async function requeueAuthFailures(db: Db, opts: { allLantmateriet?: bool
   }
 }
 
+/**
+ * Jobs that ended `unavailable: over-cap` before H13, queued again from
+ * their first attempt (map-terrain §7.0c answer 12: the coarser overview
+ * can change their result). They are the over-cap endings without an
+ * error: every ending since stores the cap it hit, so each is taken once.
+ * At engine start, every provider. Never throws.
+ */
+export async function requeueOverCap(db: Db): Promise<number> {
+  try {
+    const { count } = await db.mapDemJob.updateMany({
+      where: { version: TERRAIN_VERSION, state: "unavailable", reason: "over-cap", error: null },
+      data: { state: "queued", reason: null, attempts: 0, nextAttemptAt: null, updatedAt: new Date() },
+    });
+    if (count > 0) console.log(`[map-dem] queued ${count} job(s) that had ended over the cap again, for the coarser overview`);
+    return count;
+  } catch (err: unknown) {
+    console.error("[map-dem] requeue over-cap endings:", err instanceof Error ? err.message : err);
+    return 0;
+  }
+}
+
 let ticker: NodeJS.Timeout | null = null;
 
 /**
@@ -371,7 +414,7 @@ let ticker: NodeJS.Timeout | null = null;
  */
 export function startDemJobEngine(db: Db, intervalMs: number = DEM_JOB_RULES.staleMs): void {
   if (ticker) return;
-  void refreshDemProviders().then(() => requeueAuthFailures(db));
+  void refreshDemProviders().then(() => Promise.all([requeueAuthFailures(db), requeueOverCap(db)]));
   ticker = setInterval(() => void kickDemJobs(db), intervalMs);
   ticker.unref();
   setTimeout(() => void kickDemJobs(db), 7_000).unref();

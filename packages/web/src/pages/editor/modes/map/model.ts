@@ -27,6 +27,8 @@ export const sameRef = (a: MapObjectRef | null | undefined, b: MapObjectRef | nu
 
 export interface MapModel {
   hash: string;
+  /** The pinned document the patch is keyed onto (the palette's and materialisation's input, §13 "Drawing"). */
+  pinned: mapDocument.MapDocument;
   /** The effective document, the patch taken as enabled. */
   doc: mapDocument.EffectiveDocument;
   /** `applyPatch`'s issues (map-patches §2.3), op-id order. */
@@ -46,6 +48,7 @@ export function mapModelOf(hash: string, pinned: mapDocument.MapDocument, patch:
   const byAdded = new Map((doc.patch?.added ?? []).map((id, k) => [id, n + k]));
   return {
     hash,
+    pinned,
     doc,
     issues,
     unitsPerMm: doc.header.unitsPerMm,
@@ -75,7 +78,7 @@ export function mapModelFor(hash: string, bytes: ArrayBuffer, patch: { version: 
 }
 
 /** The op id an object's state of `kind` has (map-patches §1.1). */
-export const opIdOf = (kind: "hide" | "modify", ref: { source: number }): string => `${kind}:${ref.source}`;
+export const opIdOf = (kind: "hide" | "modify" | "resymbol", ref: { source: number }): string => `${kind}:${ref.source}`;
 
 /** The object an op targets. */
 export function refOfOp(op: PatchOp): MapObjectRef {
@@ -98,8 +101,13 @@ export function restoreChange(ref: { source: number }): PatchChange {
 }
 
 /** The object's effective coordinates (the patch's, else the document's), in document units with their flags. */
-export function coordsOf(model: MapModel, i: number): mapDocument.PatchCoord[] {
-  const { coords, flags, coordStart } = model.doc;
+export function coordsOf(model: Pick<MapModel, "doc">, i: number): mapDocument.PatchCoord[] {
+  return coordsIn(model.doc, i);
+}
+
+/** Object `i`'s coordinates in `doc` (pinned or effective), document units with their flags. */
+export function coordsIn(doc: Pick<mapDocument.MapDocument, "coords" | "flags" | "coordStart">, i: number): mapDocument.PatchCoord[] {
+  const { coords, flags, coordStart } = doc;
   const out: mapDocument.PatchCoord[] = [];
   for (let k = coordStart[i]; k < coordStart[i + 1]; k++) {
     const f = flags[k];
@@ -169,7 +177,14 @@ export interface MapObjectInfo {
   name: string;
   /** The symbol index in the effective table (`data-symbol`). */
   symbolIdx: number;
-  /** Drawn from the library's preview (an applied match) or the document symbol's; null for a patch symbol. */
+  /** The effective symbol as an op references it (`{ doc }` below the document's table, else `{ patch: key }`). */
+  symbol: mapDocument.PatchSymbolRef;
+  /** The angle, 0.1° (`attrs.angle`). */
+  angle: number;
+  /**
+   * Drawn from the library's preview (an applied match; a patch symbol, of the entry its key names) or the document
+   * symbol's; null without either.
+   */
   swatch: SymbolGroup["swatch"];
   /** The object's box, paper mm. */
   bounds: { minX: number; minY: number; maxX: number; maxY: number };
@@ -187,13 +202,19 @@ export function objectInfo(model: MapModel, ref: MapObjectRef, lang: string): Ma
   const entry = match ? symbolLibrary.getLibraryEntry(match.canonicalId) : undefined;
   const sv = lang.toLowerCase().startsWith("sv");
   const u = model.unitsPerMm;
+  const patchKey = symbolIdx >= baseSymbols ? doc.patch?.symbols[symbolIdx - baseSymbols] ?? null : null;
+  const swatch: SymbolGroup["swatch"] = entry && match ? { kind: "library", canonicalId: match.canonicalId }
+    : patchKey !== null ? (symbolLibrary.getLibraryEntry(patchKey) ? { kind: "library", canonicalId: patchKey } : null)
+    : s?.render ? { kind: "document", idx: symbolIdx } : null;
   return {
     ref,
     type: doc.attrs.type[i],
     code: entry?.code ?? s?.code ?? "?",
     name: entry ? (sv && entry.name.sv ? entry.name.sv : entry.name.en) : s?.name ?? "",
     symbolIdx,
-    swatch: entry && match ? { kind: "library", canonicalId: match.canonicalId } : symbolIdx < baseSymbols && s?.render ? { kind: "document", idx: symbolIdx } : null,
+    symbol: patchKey !== null ? { patch: patchKey } : { doc: symbolIdx },
+    angle: doc.attrs.angle[i],
+    swatch,
     bounds: { minX: doc.bboxes[i * 4] / u, minY: doc.bboxes[i * 4 + 1] / u, maxX: doc.bboxes[i * 4 + 2] / u, maxY: doc.bboxes[i * 4 + 3] / u },
   };
 }

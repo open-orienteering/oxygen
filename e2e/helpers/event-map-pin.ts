@@ -79,3 +79,12 @@ export async function pinStacklessDocument(nameId: string): Promise<() => Promis
       for (const r of rows) await client.query("DELETE FROM map_sources WHERE file_hash = $1", [r.source_hash]);
     });
 }
+
+/**
+ * Delete the event's patch row (ops, patch symbols and all) straight in the E2E database: patch symbols are never
+ * removed through the API (docs/map-patches.md §1.5), so a test of a symbol's first use starts from no row. The next
+ * write creates the row again with a new version (versions only grow), so no cache keyed by version sees the old one.
+ */
+export async function dropEventPatch(nameId: string): Promise<void> {
+  await withClient((client) => client.query("DELETE FROM map_patches WHERE event_id = (SELECT id FROM events WHERE name_id = $1)", [nameId]));
+}
