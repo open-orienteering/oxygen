@@ -10,7 +10,7 @@ import { describe, expect, it } from "vitest";
 import { importReportSchema, importWarningDetailSchema, isUnsupportedPrimitive, WARNING_CLASS } from "../report.js";
 
 const here = dirname(fileURLToPath(import.meta.url));
-const SOURCES = ["ocad-source", "omap-source", "omap-reader", "omap-symbols", "ocad-symbols", "match-document", "crt"];
+const SOURCES = ["ocad-source", "omap-source", "omap-reader", "omap-symbols", "ocad-symbols", "match-document", "crt", "patch-warnings"];
 
 /** Every upper-case code literal passed to a warning sink or typed into a code union in the importer sources. */
 function emittedCodes(): Set<string> {

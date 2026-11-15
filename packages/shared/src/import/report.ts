@@ -77,6 +77,7 @@ export const WARNING_CLASS: Readonly<Record<string, WarningClass>> = {
   CRT_SOURCE_NOT_REVIEWABLE: "outcome",
   CRT_TARGET_UNKNOWN: "outcome",
   READER_WARNING: "reader",
+  PATCH_ISSUE: "outcome",
 };
 
 /** The S0 gate's test: does this code mean a source construct could not be represented? */
@@ -184,6 +185,19 @@ export const importReportSchema = z.object({
       declinationDeg: z.number().nullable(),
       meridianStalenessDeg: z.number().nullable(),
       asOf: z.string(),
+    })
+    .optional(),
+  /**
+   * A promoted club version's corrections baked at the store stage
+   * (docs/map-patches.md §5, row G12a): the layers and ops, and the ops that
+   * no longer apply (skipped, `PATCH_ISSUE`). Absent for an import without
+   * a version patch.
+   */
+  corrections: z
+    .object({
+      layers: z.number().int().min(1),
+      ops: z.number().int().min(0),
+      issues: z.array(z.object({ layer: z.number().int().min(0), opId: z.string(), code: z.string() })),
     })
     .optional(),
   /** Milliseconds per stage. */

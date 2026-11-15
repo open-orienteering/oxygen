@@ -19,6 +19,8 @@ export interface ImportWorkerData {
   kind: MapSourceKind;
   /** The job's decision snapshot, applied by stage 6 (docs/map-symbols.md §8.5). */
   decisions?: mapImport.SymbolDecision[];
+  /** The job's version patch snapshot, baked before encoding (docs/map-patches.md §5). */
+  patch?: mapDocument.VersionPatch;
 }
 
 export type ImportWorkerMessage =
@@ -28,11 +30,11 @@ export type ImportWorkerMessage =
 
 const port = parentPort;
 if (port) {
-  const { bytes, fileName, kind, decisions } = workerData as ImportWorkerData;
+  const { bytes, fileName, kind, decisions, patch } = workerData as ImportWorkerData;
   const post = (m: ImportWorkerMessage) => port.postMessage(m);
   (async () => {
     const file = Buffer.from(bytes.buffer, bytes.byteOffset, bytes.byteLength);
-    const result = await importMapToDocument(file, fileName, kind ?? "ocad", { onStage: (stage) => post({ type: "stage", stage }), match: { decisions: decisions ?? [] } });
+    const result = await importMapToDocument(file, fileName, kind ?? "ocad", { onStage: (stage) => post({ type: "stage", stage }), match: { decisions: decisions ?? [] }, patch: patch ?? [] });
     const { header } = mapDocument.readMapDocumentHeader(result.bytes);
     const report = buildImportReport(result, header, fileName);
     post({ type: "done", bytes: result.bytes, documentHash: result.documentHash, fileHash: result.fileHash, libraryVersion: result.libraryVersion, report });

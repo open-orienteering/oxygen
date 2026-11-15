@@ -14,3 +14,4 @@ export * from "./matcher.js";
 export * from "./match-document.js";
 export * from "./decisions.js";
 export * from "./crt.js";
+export * from "./patch-warnings.js";

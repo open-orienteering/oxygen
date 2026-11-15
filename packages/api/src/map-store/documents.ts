@@ -18,7 +18,8 @@ export const LIBRARY_VERSION_NONE = "none";
 
 export interface StoreDocumentInput {
   source: { bytes: Uint8Array; fileHash: string; kind: "ocad" | "omap"; fileName: string; uploadedBy?: string | null };
-  document: { bytes: Uint8Array; hash: string; libraryVersion?: string };
+  /** `patch`: the version patch the document was baked with (docs/map-patches.md §5); none or `[]` stores NULL. */
+  document: { bytes: Uint8Array; hash: string; libraryVersion?: string; patch?: mapDocument.VersionPatch };
   report: mapImport.ImportReport;
 }
 
@@ -52,6 +53,7 @@ export function buildImportReport(result: MapImportResult, header: mapDocument.M
     colourStack: result.colourStack,
     georeference: result.analysis.georeference,
     north: detectDocumentNorth(result.analysis, asOf),
+    ...(result.corrections ? { corrections: result.corrections } : {}),
     timings: result.timings,
   });
 }
@@ -83,6 +85,7 @@ export async function storeImportedDocument(db: Db, input: StoreDocumentInput): 
       sourceHash: input.source.fileHash,
       header: documentHeaderSummary(header) as Prisma.InputJsonValue,
       report: input.report as unknown as Prisma.InputJsonValue,
+      ...(input.document.patch?.length ? { patch: input.document.patch as unknown as Prisma.InputJsonValue } : {}),
     }],
     skipDuplicates: true,
   });

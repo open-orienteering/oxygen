@@ -295,6 +295,17 @@ describe("restore-map-blobs.sql", () => {
   it("loads the blobs alone without an event id", () => {
     expect(() => psqlRestore(sectionsDir)).not.toThrow();
   });
+
+  it("loads a map_documents section written before the patch column (map-patches.md §5)", () => {
+    const old = writeSections("pre-g12a", dump, (t, csv) => {
+      if (t !== "map_documents") return csv;
+      const [head, ...rows] = csv.split("\n");
+      expect(head.endsWith(",patch")).toBe(true);
+      // The column is last and NULL (an empty field) on an unpatched document.
+      return [head.slice(0, -",patch".length), ...rows.map((r) => (r.endsWith(",") ? r.slice(0, -1) : r))].join("\n");
+    });
+    expect(() => psqlRestore(old)).not.toThrow();
+  });
 });
 
 describe("restore-map-gps-tracks.sql", () => {
