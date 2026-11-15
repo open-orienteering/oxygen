@@ -107,9 +107,10 @@ export class EditorWrites {
     id: number,
     write: { fields: readonly string[]; base?: Pt },
     send: (baseVersion: string | undefined) => Promise<T>,
+    baseVersion?: string,
   ): Promise<T> {
     try {
-      return await send(this.versions.get(kind, id));
+      return await send(baseVersion ?? this.versions.get(kind, id));
     } catch (e) {
       const conflict = versionConflictOfError(e);
       if (!conflict) throw e;
@@ -145,14 +146,17 @@ export class EditorWrites {
   /**
    * `control.update`. A move (`xpos` / `ypos` and nothing else the user
    * chose) passes `from`, the position it moved from, for the field-move rule.
+   * A queued write (D9c, Field mode's outbox, §9 "Offline") passes the token it was queued with as
+   * `opts.baseVersion`: the book's newer one, seeded by a refetch after reconnect, would hide a move made
+   * elsewhere meanwhile.
    */
-  async updateControl(input: Omit<ControlUpdateInput, "baseVersion">, from?: Pt): Promise<{ version: string }> {
+  async updateControl(input: Omit<ControlUpdateInput, "baseVersion">, from?: Pt, opts?: { baseVersion?: string }): Promise<{ version: string }> {
     const fields = Object.keys(input).filter((k) => k !== "id" && k !== "autoDescribe");
     const isMove = from !== undefined && MOVE_FIELDS.every((f) => fields.includes(f));
     const write = isMove ? { fields: MOVE_FIELDS, base: from } : { fields };
     const res = await this.withToken("control", input.id, write, (baseVersion) =>
       this.client.control.update.mutate({ ...input, baseVersion }),
-    );
+    opts?.baseVersion);
     this.versions.seed("control", publicIdAfterCodes(input.id, input.codes), res.version);
     return res;
   }

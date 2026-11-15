@@ -1,5 +1,6 @@
 import Dexie, { type Table } from "dexie";
 import type { CardReadPayload as JournalCardReadPayload } from "@oxygen/shared";
+import type { ControlWrite } from "./control-outbox";
 
 // ─── Event Types ────────────────────────────────────────────
 
@@ -177,6 +178,8 @@ class OxygenOfflineDB extends Dexie {
   projReadouts!: Table<ProjReadout, string>;
   projPunches!: Table<ProjPunch, string>;
   syncState!: Table<SyncState, string>;
+  /** Field mode's queued moves and check-offs (D9c; `control-outbox.ts`). */
+  controlWrites!: Table<ControlWrite, number>;
 
   constructor() {
     super("oxygen-offline");
@@ -212,6 +215,11 @@ class OxygenOfflineDB extends Dexie {
       projReadouts: "id, competitionId, cardNo",
       projPunches: "key, competitionId, cardNo",
       syncState: "id, competitionId",
+    });
+    // v4: Field mode's outbox (row D9c, `control-outbox.ts`). Additive — a new table; the
+    // `events` outbox and the snapshot cache are unchanged.
+    this.version(4).stores({
+      controlWrites: "++seq, competitionId",
     });
   }
 }

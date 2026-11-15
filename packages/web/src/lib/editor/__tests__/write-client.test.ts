@@ -79,6 +79,24 @@ describe("EditorWrites (docs/course-editor.md §3)", () => {
     expect(w.versions.get("control", 31)).toBe("9");
   });
 
+  it("a queued move sends the token it was queued with, not the book's newer one (D9c, §9 \"Offline\")", async () => {
+    const f = fakeClient();
+    const w = new EditorWrites(f.client);
+    w.versions.seed("control", 31, "12");
+    f.fail(conflictError({ kind: "control", id: 31, version: "12", current: { xpos: 10, ypos: 20 }, differing: ["checkedAt", "checkedBy"] }));
+    f.ok({ version: "13" });
+    await w.updateControl({ id: 31, xpos: 15, ypos: 25, autoDescribe: true }, { x: 10, y: 20 }, { baseVersion: "5" });
+    // The stale base answers CONFLICT; only a check changed there, so it rebases once on the server's token.
+    expect(f.calls.map((c) => c.input.baseVersion)).toEqual(["5", "12"]);
+    expect(w.versions.get("control", 31)).toBe("13");
+    // Moved there too: `moved`, as without the override.
+    w.versions.seed("control", 31, "20");
+    f.fail(conflictError({ kind: "control", id: 31, version: "20", current: { xpos: 11, ypos: 20 }, differing: ["xpos"] }));
+    const err = await w.updateControl({ id: 31, xpos: 16, ypos: 25 }, { x: 15, y: 25 }, { baseVersion: "13" }).catch((e: unknown) => e);
+    expect(err).toBeInstanceOf(EditorConflict);
+    expect(f.calls[2].input.baseVersion).toBe("13");
+  });
+
   it("a stale structure throws `refresh` with the differing items, never re-sent", async () => {
     const f = fakeClient();
     const w = new EditorWrites(f.client);

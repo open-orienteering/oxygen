@@ -43,6 +43,11 @@ export class UndoStack {
     return this.past[this.past.length - 1];
   }
 
+  /** The entry the next `redo` re-applies, if any. */
+  get nextRedo(): UndoEntry | undefined {
+    return this.future[this.future.length - 1];
+  }
+
   /** Record a completed change. Clears the redo branch. */
   push(entry: UndoEntry): void {
     this.past.push(entry);
