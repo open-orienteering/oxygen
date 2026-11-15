@@ -12,7 +12,8 @@
  */
 import { expect, test, type Page, type Request } from "@playwright/test";
 import { createHash } from "node:crypto";
-import { allControlsSheet, EDITOR_EVENT, editorReady, inflatedStreams, inkedAt, openEditor, paperToPageOf, plainMapAt, plainMapSpots, printed, sites, toPage, toPaper, toolShapes, trpcCall, viewSettled } from "./helpers/editor";
+import { inflateSync } from "node:zlib";
+import { allControlsSheet, EDITOR_EVENT, editorReady, inkedAt, openEditor, paperToPageOf, plainMapAt, plainMapSpots, printed, sites, toPage, toPaper, toolShapes, trpcCall, viewSettled } from "./helpers/editor";
 import { dropEventPatch, mapObjectsAt } from "./helpers/event-map-pin";
 import { trpcProcedures, waitForTrpc } from "./helpers/trpc";
 
@@ -437,13 +438,27 @@ const printedCounts = async (page: Page) => {
   return { strokes: p.strokes, curves: p.curves, curvedFills: p.curvedFills };
 };
 /**
- * The print's drawing: a hash of its inflated streams without the dates (the creation and modification dates sit in a
- * compressed object stream, so two prints a second apart differ there and nowhere else).
+ * The print's drawing: a hash of its inflated streams without the dates and without the cross-reference stream. The
+ * creation and modification dates sit in a compressed object stream, so two prints a second apart differ there; and
+ * that stream's compressed length can differ with them, which moves the byte offsets the `/Type /XRef` stream lists.
  */
 const printedDrawing = async (page: Page): Promise<string> => {
   const res = await page.request.get(`/api/maps/${EDITOR_EVENT}/maps.pdf?allControls=1`);
   expect(res.ok()).toBe(true);
-  const streams = inflatedStreams(await res.body()).map((x) => x.replace(/\/(CreationDate|ModDate) \(D:[^)]*\)/g, ""));
+  const bytes = await res.body();
+  const text = bytes.toString("latin1");
+  const streams: string[] = [];
+  for (let at = text.indexOf("stream"); at >= 0; at = text.indexOf("stream", at + 6)) {
+    if (text.slice(at - 3, at) === "end") continue;
+    const start = at + 6 + (text[at + 6] === "\r" ? 2 : 1);
+    const end = text.indexOf("endstream", start);
+    if (end < 0) break;
+    const dict = text.slice(text.lastIndexOf(" obj", at), at);
+    if (!/\/Type\s*\/XRef/.test(dict)) {
+      try { streams.push(inflateSync(bytes.subarray(start, end)).toString("latin1").replace(/\/(CreationDate|ModDate) \(D:[^)]*\)/g, "")); } catch { /* not Flate */ }
+    }
+    at = end;
+  }
   return createHash("sha256").update(streams.join("\n")).digest("hex");
 };
 
@@ -639,8 +654,10 @@ test.describe("Map mode drawing (docs/course-editor.md §13 \"Drawing\", \"Symbo
       await expect(turning).toBeVisible();
       await turning.click();
 
-      // Press at the spot, drag 2 mm up the paper (paper y is up): the knoll's x axis along the drag, 90°.
-      const from = await toPage(page, s1), to = await toPage(page, { x: s1.x, y: s1.y + 2 });
+      // Press at the spot, drag 2.5 mm up the paper (paper y is up): the symbol's x axis along the drag, 90°. The
+      // view may be turned (the meridians' tilt), so the press and release land on whole page pixels off the line:
+      // within 1.5° at 40 px.
+      const from = await toPage(page, s1), to = await toPage(page, { x: s1.x, y: s1.y + 2.5 });
       await page.mouse.move(from.x, from.y);
       await page.mouse.down();
       await page.mouse.move(to.x, to.y, { steps: 8 });
@@ -651,17 +668,17 @@ test.describe("Map mode drawing (docs/course-editor.md §13 \"Drawing\", \"Symbo
       const version = (Array.isArray(reply) ? reply[0] : reply).result.data.version;
       const add = changes[0].put![0] as { op: string; id: string; angle?: number };
       expect(add).toMatchObject({ op: "add", type: 1 });
-      expect(add.angle).toBe(900);
+      expect(Math.abs((add.angle ?? 0) - 900), `angle ${add.angle}`).toBeLessThanOrEqual(15);
 
-      // V, select it once the canvas draws it (the hit-test is over what is drawn): Rotation shows 90; 45 + Enter
-      // rewrites the add with 450.
+      // V, select it once the canvas draws it (the hit-test is over what is drawn): Rotation shows the written angle;
+      // 45 + Enter rewrites the add with 450.
       await page.keyboard.press("Escape");
       await pressed(page, "V");
       await expect(page.getByTestId("map-vector-layer")).toHaveAttribute("data-patch-version", version, { timeout: 15_000 });
       await page.mouse.click(from.x, from.y);
       await expect(mapObject(page)).toHaveAttribute("data-ref", `added:${add.id}`);
       const rotation = page.getByTestId("editor-map-object-rotation");
-      await expect(rotation).toHaveValue("90");
+      await expect(rotation).toHaveValue(String(add.angle! / 10));
       await rotation.fill("45");
       wrote = waitForTrpc(page, "mapPatch.applyChange");
       await rotation.press("Enter");
