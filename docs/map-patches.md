@@ -248,8 +248,10 @@ other ops still apply. Each issue is `{ opId, code }` with a stable code:
 | `geometry-invalid` | a point without exactly one coordinate, a line with fewer than two, an area with fewer than three, a text object whose coordinate count changes (its anchor and box are positional) |
 | `symbol-table-full` | the referenced patch symbol did not fit in the u16 symbol table |
 
-Issues are in op-id order. The editor's *Corrections* list (row G6)
-shows them; re-resolution (row G11) adds its own `unresolved` state to
+Issues are in op-id order. The editor's *Corrections* list
+(`course-editor.md` §13, row G6) shows them as `data-issue` on each row,
+computed with the patch taken as enabled so a switched-off patch still
+reports them; re-resolution (row G11) adds its own `unresolved` state to
 ops that lost their target after the pin moved.
 
 ### 2.4 Consumers

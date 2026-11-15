@@ -1827,7 +1827,8 @@ decision 2026-10-22) set → `mapBudget="club"`, 150 MB
   and does not wait for it: until it answers, the document is drawn as
   pinned. A failed fetch keeps the session's copy, else none; an
   unparseable patch is none, with a warning. `setMapPatch` replaces the
-  copy for every viewer of the event (G6's optimistic write). Viewer,
+  copy for every viewer of the event (Map mode's writes, G6:
+  `course-editor.md` §13). Viewer,
   kiosk and editor all mount `MapViewer` through `MapPanel`, so all three
   draw the effective document;
 - needs no map bounds or calibration (a map without a CRS draws without
@@ -2112,7 +2113,16 @@ so it cannot ride `ToolPointer.target`, and Map mode's tools decide when
 to ask (click, drag start, Tab; user decision 2026-11-14). The canvas
 carries `data-selected-objects`: the latest edit state's `highlighted`
 count. Without
-`mapObjects` nothing is posted.
+`mapObjects` nothing is posted. `mapObjects.onPatchDrawn(version)` (G6)
+is called with each patch version the canvas comes to show (its
+`data-patch-version`): the host's signal that the patch carrying a
+committed draft is drawn, since the patch reaches the layer through the
+session's copy (`setMapPatch`) rather than from the host. Map mode
+(`course-editor.md` §13) is the first editor user: it asks the hit-test
+on a click (Tab steps the answer's stack), tests a press on the selected
+object on the main thread, and with `MapViewerEditorProps.hideCourse`
+(its `H`) the viewer requests no course layer, mirrors no course sites
+and draws no description sheet.
 
 **Tools.** `MapViewerEditorProps.tool` (D5, `course-editor.md` §6): the
 viewer offers pointer-down to the active tool first, routes clicks of an
@@ -3475,9 +3485,11 @@ The shared module is exported as a namespace: `import { render } from
   get a bucket of their own.
 - **§5.5 the snap and pick indices per patch version** (G4). A new patch
   version decodes the document again and rebuilds the index on the main
-  thread (once per hash before G4); nothing writes a patch before G6,
-  whose per-gesture versions will want the decoded document kept per
-  hash. The worker's `sourceIndex` map is built on the first patch.
+  thread (once per hash before G4). Map mode (G6) writes a version per
+  gesture; its own model keeps the decoded document per hash
+  (`modes/map/model.ts`), the snap and pick indices still decode per
+  version (a shared main-thread copy is a follow-up, `course-editor.md`
+  Pending). The worker's `sourceIndex` map is built on the first patch.
 - **§5.5 patch symbols in the eyedropper** (G4; decided overnight on the
   user's standing instruction, 2026-11-13, for review). An object drawn with a
   patch symbol is not picked by symbol: a filter region stores document
@@ -3494,8 +3506,10 @@ The shared module is exported as a namespace: `import { render } from
 - **§5.5 an object under edit and the hidden set** (G5). A draft's copy
   is drawn under an edit-part id, so `setHidden` and a filter region's
   `hide` or mask, which address the object's static id, leave it drawn
-  and unmasked while it is edited. Map mode (G6) edits with course
-  overprint and filter regions off; if a host needs both, the worker maps
+  and unmasked while it is edited. Map mode (G6) does not turn the course
+  overprint or filter regions off for a move (its `H` is the user's), so
+  a moved object under a filter region's mask is drawn unmasked while it
+  is dragged and until the write is drawn; if that matters, the worker maps
   the edit part's ids back to their targets for the visible set.
 - **§5.5 course objects in the edit part.** The highlight is of document
   objects; the course editor's selection rings and object outlines stay

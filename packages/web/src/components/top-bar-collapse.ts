@@ -9,7 +9,7 @@
  *   Auto slits, Hide descriptions and Export, and the course picker's
  *   "Course" word, are hidden; the buttons keep their icons.
  * - **Tier 2** (row under `TIER2_PX`): the mode switch (Course / Layout /
- *   Field) shows its icons alone.
+ *   Field / Map) shows its icons alone (G6 added Map: 41 px with its word).
  *
  * A hidden word is `display: none`; every control keeps its `aria-label`
  * and `title`, so the accessible name does not change. `flex-wrap` on the
@@ -19,11 +19,11 @@
  * strings literal, so the numbers appear twice.
  */
 export const TIER1_PX = 1600;
-export const TIER2_PX = 1170;
+export const TIER2_PX = 1220;
 
 /** On a label: hidden below tier 1. */
 export const TOP_BAR_TIER1_HIDE = "@max-[1600px]/toolbar:hidden";
 /** On a mode word: hidden below tier 2. */
-export const TOP_BAR_TIER2_HIDE = "@max-[1170px]/toolbar:hidden";
+export const TOP_BAR_TIER2_HIDE = "@max-[1220px]/toolbar:hidden";
 /** On a mode icon: shown (as `inline-flex`) below tier 2 only. */
-export const TOP_BAR_TIER2_SHOW = "hidden @max-[1170px]/toolbar:inline-flex";
+export const TOP_BAR_TIER2_SHOW = "hidden @max-[1220px]/toolbar:inline-flex";

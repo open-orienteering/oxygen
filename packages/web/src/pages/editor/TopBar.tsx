@@ -1,7 +1,7 @@
 /**
  * The editor's top bar (docs/course-editor.md §2; 08 §5.2): course picker,
  * view picker (Course · All controls · Class, docs/course-layout.md §6),
- * mode switch (Course · Layout · Field), undo / redo, hide other controls,
+ * mode switch (Course · Layout · Field · Map), undo / redo, hide other controls (Map mode: hide the overprint),
  * auto cuts, the placement loupe toggle (F27, §10 "Loupe"), Export ▾ (docs/course-layout.md §7), the map info (a map icon and
  * its dialog, docs/course-editor.md §2; P6 moved it here from MapPanel's
  * footer), the save indicator and the
