@@ -10,7 +10,7 @@
 import { z } from "zod";
 import { mapDocument } from "@oxygen/shared";
 import { coursesEditProcedure, kioskOrCoursesViewProcedure, router } from "../trpc.js";
-import { applyPatchChange, eventPatch, setPatchEnabled, type PatchDelivery } from "../map-store/patches.js";
+import { applyPatchChange, attachUnresolvedPatchOp, eventPatch, setPatchEnabled, type PatchDelivery } from "../map-store/patches.js";
 
 const documentHashSchema = z.string().regex(/^[0-9a-f]{64}$/, "a 64-digit lower-case hex document hash");
 
@@ -18,13 +18,21 @@ export const mapPatchRouter = router({
   /** The patch keyed to the event's pin, or `{ version: "0", patch: null }` (§3.3). */
   get: kioskOrCoursesViewProcedure.query(({ ctx }): Promise<PatchDelivery> => eventPatch(ctx.db, ctx.event.id)),
 
-  /** Merge `put` / `remove` / `putSymbols` per op id (§1.5) into the patch keyed onto `documentHash`, which must be the pin. */
+  /**
+   * Merge `put` / `remove` / `putSymbols` / `removeUnresolved` per id (§1.5) into the patch keyed onto
+   * `documentHash`, which must be the pin. A dormant row is re-resolved onto the pin first (§3.2 step 3, §4.4).
+   */
   applyChange: coursesEditProcedure
     .input(z.object({ documentHash: documentHashSchema }).and(mapDocument.patchChangeSchema))
     .mutation(({ ctx, input }): Promise<PatchDelivery> => {
       const { documentHash, ...change } = input;
       return applyPatchChange(ctx.db, ctx.event.id, documentHash, change);
     }),
+
+  /** *Corrections*' fix (§4.3): unresolved entry `key`'s op put onto the pinned document's object `sourceIndex`. */
+  attachUnresolved: coursesEditProcedure
+    .input(z.object({ documentHash: documentHashSchema, key: z.string().min(1).max(200), sourceIndex: z.number().int().min(0).max(0xfffffffe) }))
+    .mutation(({ ctx, input }): Promise<PatchDelivery> => attachUnresolvedPatchOp(ctx.db, ctx.event.id, input.documentHash, input.key, input.sourceIndex)),
 
   /** The toggle (§1.4): false = every consumer draws the pinned document. */
   setEnabled: coursesEditProcedure

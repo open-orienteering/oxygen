@@ -201,7 +201,7 @@ export function knownTemplateOf(templateIds: ReadonlySet<string>, v: unknown): s
 
 /** The patch the box holds equals the export's: row, document, flags, JSON and exact token. */
 function samePatch(
-  local: { id: string; documentHash: string; enabled: boolean; ops: unknown; symbols: unknown; version: bigint } | null,
+  local: { id: string; documentHash: string; enabled: boolean; ops: unknown; symbols: unknown; unresolved: unknown; version: bigint } | null,
   cloud: NonNullable<SnapshotMaps["patch"]>,
 ): boolean {
   return (
@@ -211,6 +211,7 @@ function samePatch(
     local.enabled === cloud.enabled &&
     canonicalJson(local.ops) === canonicalJson(cloud.ops) &&
     canonicalJson(local.symbols) === canonicalJson(cloud.symbols) &&
+    canonicalJson(local.unresolved) === canonicalJson(cloud.unresolved ?? {}) &&
     local.version.toString() === cloud.version
   );
 }
@@ -333,7 +334,7 @@ export async function applyMapRows(
   // (3) The patch: the export's, or none (absent, or dormant on the cloud).
   const localPatch = await tx.mapPatch.findUnique({
     where: { eventId },
-    select: { id: true, documentHash: true, enabled: true, ops: true, symbols: true, version: true },
+    select: { id: true, documentHash: true, enabled: true, ops: true, symbols: true, unresolved: true, version: true },
   });
   let patch: MapRefreshResult["patch"] = "unchanged";
   if (!rows.maps.patch) {

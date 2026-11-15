@@ -8,7 +8,10 @@
  *     on different ids both survive (also the first write), the same id is
  *     last-writer-wins, the refusals (duplicate id, wrong document, no map)
  *   - a dormant row (keyed to another document than the pin): not
- *     delivered, not writable
+ *     delivered; a write re-resolves it, PATCH_STALE only when that cannot run
+ *   - re-resolution when the pin moves (§4, G11): a new edition flags a
+ *     hide, the pin back resolves it, a write wakes a dormant row, attach
+ *     and drop
  *   - mapPatch.setEnabled
  *   - an unreadable row (a newer image's) is never overwritten
  *   - auth: kiosk key and viewer read, cannot write; a stranger cannot read
@@ -32,6 +35,7 @@ import { isForeignKeyViolation } from "../../map-store/gc.js";
 import type { AuthUser } from "../../auth.js";
 
 const FIXTURE = resolve(__dirname, "../../../../../e2e/test.ocd");
+const XMAP = resolve(__dirname, "../../../../../e2e/test.xmap");
 const suffix = randomBytes(4).toString("hex");
 const EMAIL_DOMAIN = `@map-patches-${suffix}.example`;
 const KIOSK = `kiosk-${suffix}`;
@@ -216,7 +220,7 @@ describe("mapPatch.setEnabled", () => {
 });
 
 describe("a dormant patch (§3.2)", () => {
-  it("is kept but neither delivered nor writable while the pin names another document", async () => {
+  it("is kept but neither delivered nor writable while the pin names a document that cannot be read", async () => {
     await resetPatch();
     await caller.mapPatch.applyChange({ documentHash, put: [hide(4)] });
     const pin = await ctx.db.mapFile.findFirstOrThrow({ where: { eventId: ctx.eventId } });
@@ -236,6 +240,77 @@ describe("a dormant patch (§3.2)", () => {
     }
     expect((await caller.mapPatch.get()).patch!.ops).toEqual({ "hide:4": hide(4) });
   });
+});
+
+describe("re-resolution when the pin moves (§4, G11)", () => {
+  /** The event's map replaced by another file (applyEventMap → the import job's pin → the patch hook). */
+  const replaceMap = async (name: string, bytes: Buffer) => (await applyEventMap(ctx.db, ctx.eventId, name, bytes, {})).documentHash!;
+  const ocdBytes = () => Buffer.concat([readFileSync(FIXTURE), Buffer.from(`map-patches-${suffix}`)]);
+  const xmapBytes = () => Buffer.concat([readFileSync(XMAP), Buffer.from(`<!-- map-patches-${suffix} -->`)]);
+
+  it("a new edition flags a hide (unresolved, drawn nowhere); the pin back on the first edition resolves it again", async () => {
+    await resetPatch();
+    const doc = (await decodedDocument(ctx.db, documentHash))!;
+    const target = doc.attrs.sourceIndex[0];
+    const first = await caller.mapPatch.applyChange({ documentHash, put: [hide(target)] });
+    let xmapHash: string | undefined;
+    try {
+      xmapHash = await replaceMap("test.xmap", xmapBytes());
+      expect(xmapHash).not.toBe(documentHash);
+      const onXmap = await caller.mapPatch.get();
+      expect(onXmap.patch!.documentHash).toBe(xmapHash);
+      expect(onXmap.version).not.toBe(first.version);
+      expect(onXmap.patch!.ops).toEqual({});
+      const key = mapDocument.unresolvedKey(documentHash, hide(target));
+      expect(onXmap.patch!.unresolved).toEqual({ [key]: expect.objectContaining({ op: hide(target), from: documentHash, reason: "target", target: expect.objectContaining({ type: doc.attrs.type[0] }) }) });
+      expect((await caller.course.mapMetadata())?.patchVersion).toBe(onXmap.version);
+      const row = await ctx.db.mapPatch.findUniqueOrThrow({ where: { eventId: ctx.eventId } });
+      expect(row.documentHash).toBe(xmapHash);
+    } finally {
+      expect(await replaceMap("test.ocd", ocdBytes())).toBe(documentHash);
+    }
+    const back = await caller.mapPatch.get();
+    expect(back.patch!.documentHash).toBe(documentHash);
+    expect(back.patch!.ops).toEqual({ [`hide:${target}`]: hide(target) });
+    expect(back.patch!.unresolved).toBeUndefined();
+    await resetPatch();
+  }, 120_000);
+
+  it("a write wakes a dormant row; attach puts an entry onto the chosen object, drop removes one", async () => {
+    await resetPatch();
+    const doc = (await decodedDocument(ctx.db, documentHash))!;
+    const [a, b] = [doc.attrs.sourceIndex[0], doc.attrs.sourceIndex[1]];
+    await caller.mapPatch.applyChange({ documentHash, put: [hide(a), hide(b)] });
+    let xmapHash: string | undefined;
+    try {
+      xmapHash = await replaceMap("test.xmap", xmapBytes());
+      // Dormant again: back onto the first edition's document by hand, bypassing the pin hook.
+      await ctx.db.mapPatch.update({ where: { eventId: ctx.eventId }, data: { documentHash, ops: { [`hide:${a}`]: hide(a), [`hide:${b}`]: hide(b) }, unresolved: {} } });
+      expect(await caller.mapPatch.get()).toEqual({ version: "0", patch: null });
+      const xdoc = (await decodedDocument(ctx.db, xmapHash))!;
+      const chosen = xdoc.attrs.sourceIndex[2];
+      // The write re-resolves first, then applies: the toggle lands on the re-keyed row.
+      const woke = await caller.mapPatch.setEnabled({ enabled: false });
+      expect(woke.patch).toMatchObject({ documentHash: xmapHash, enabled: false, ops: {} });
+      const [ka, kb] = [mapDocument.unresolvedKey(documentHash, hide(a)), mapDocument.unresolvedKey(documentHash, hide(b))];
+      expect(Object.keys(woke.patch!.unresolved!).sort()).toEqual([ka, kb].sort());
+
+      await expect(caller.mapPatch.attachUnresolved({ documentHash: xmapHash, key: ka, sourceIndex: 0xfffffffe })).rejects.toMatchObject({ code: "BAD_REQUEST", message: "PATCH_ATTACH_REFUSED: no-object" });
+      await expect(caller.mapPatch.attachUnresolved({ documentHash, key: ka, sourceIndex: chosen })).rejects.toMatchObject({ message: expect.stringMatching(/^PATCH_DOCUMENT_MISMATCH/) });
+      const attached = await caller.mapPatch.attachUnresolved({ documentHash: xmapHash, key: ka, sourceIndex: chosen });
+      expect(attached.patch!.ops).toEqual({ [`hide:${chosen}`]: hide(chosen) });
+      expect(Object.keys(attached.patch!.unresolved!)).toEqual([kb]);
+      // Twice equals once: the entry is gone, nothing changes.
+      expect((await caller.mapPatch.attachUnresolved({ documentHash: xmapHash, key: ka, sourceIndex: chosen })).version).toBe(attached.version);
+
+      const dropped = await caller.mapPatch.applyChange({ documentHash: xmapHash, removeUnresolved: [kb] });
+      expect(dropped.patch!.unresolved).toBeUndefined();
+      expect((await ctx.db.mapPatch.findUniqueOrThrow({ where: { eventId: ctx.eventId } })).unresolved).toEqual({});
+    } finally {
+      expect(await replaceMap("test.ocd", ocdBytes())).toBe(documentHash);
+    }
+    await resetPatch();
+  }, 120_000);
 });
 
 describe("an unreadable row (§3.2)", () => {
@@ -297,6 +372,7 @@ describe("access", () => {
     expect(await asViewer.mapPatch.get()).toEqual(written);
     await expect(asViewer.mapPatch.applyChange({ documentHash, put: [hide(10)] })).rejects.toMatchObject({ code: "FORBIDDEN" });
     await expect(asViewer.mapPatch.setEnabled({ enabled: false })).rejects.toMatchObject({ code: "FORBIDDEN" });
+    await expect(asViewer.mapPatch.attachUnresolved({ documentHash, key: "x", sourceIndex: 1 })).rejects.toMatchObject({ code: "FORBIDDEN" });
 
     const asStranger = makeCaller(ctx.event, { user: stranger, authEnabled: true, authMode: "proxy", identityEmail: stranger.email });
     await expect(asStranger.mapPatch.get()).rejects.toMatchObject({ code: "FORBIDDEN" });

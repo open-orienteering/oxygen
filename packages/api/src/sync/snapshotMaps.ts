@@ -110,6 +110,8 @@ export interface SnapshotMapPatch {
   enabled: boolean;
   ops: unknown;
   symbols: unknown;
+  /** Unresolved entries (docs/map-patches.md §4.1, G11); absent from an exporter that predates it = none. */
+  unresolved?: unknown;
   version: string;
 }
 
@@ -117,11 +119,11 @@ export interface SnapshotMapPatch {
 
 /** The patch row as the snapshot carries it: only when its document travels too (its FK target on the box). */
 export function snapshotPatchOf(
-  row: { id: string; documentHash: string; enabled: boolean; ops: unknown; symbols: unknown; version: bigint } | null,
+  row: { id: string; documentHash: string; enabled: boolean; ops: unknown; symbols: unknown; unresolved: unknown; version: bigint } | null,
   documentHashes: readonly string[],
 ): SnapshotMapPatch | null {
   if (!row || !documentHashes.includes(row.documentHash)) return null;
-  return { id: row.id, documentHash: row.documentHash, enabled: row.enabled, ops: row.ops, symbols: row.symbols, version: row.version.toString() };
+  return { id: row.id, documentHash: row.documentHash, enabled: row.enabled, ops: row.ops, symbols: row.symbols, unresolved: row.unresolved, version: row.version.toString() };
 }
 
 /** Sorted, distinct hashes the event's pins reference, each document's own source included. */
@@ -280,7 +282,7 @@ export async function exportSnapshotMaps(db: Db, eventId: bigint, opts: { decisi
         });
   const patchRow = await db.mapPatch.findUnique({
     where: { eventId },
-    select: { id: true, documentHash: true, enabled: true, ops: true, symbols: true, version: true },
+    select: { id: true, documentHash: true, enabled: true, ops: true, symbols: true, unresolved: true, version: true },
   });
   const patch = snapshotPatchOf(patchRow, documents.map((d) => d.hash));
   return { files, sources, documents, skipped, ...(decisions ? { decisions } : {}), ...(patch ? { patch } : {}) };
@@ -434,6 +436,7 @@ export async function createSnapshotPatch(tx: Prisma.TransactionClient, eventId:
       enabled: p.enabled,
       ops: p.ops as Prisma.InputJsonValue,
       symbols: p.symbols as Prisma.InputJsonValue,
+      unresolved: (p.unresolved ?? {}) as Prisma.InputJsonValue,
       version: BigInt(p.version),
     },
   });

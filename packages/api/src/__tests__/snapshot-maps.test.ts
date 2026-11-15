@@ -45,9 +45,9 @@ describe("pinnedHashes", () => {
 });
 
 describe("snapshotPatchOf (docs/map-patches.md §3.4)", () => {
-  const row = { id: "0190a0a0-0000-7000-8000-000000000001", documentHash: H("a"), enabled: false, ops: { "hide:1": { op: "hide", sourceIndex: 1 } }, symbols: {}, version: 2n ** 62n + 3n };
+  const row = { id: "0190a0a0-0000-7000-8000-000000000001", documentHash: H("a"), enabled: false, ops: { "hide:1": { op: "hide", sourceIndex: 1 } }, symbols: {}, unresolved: { [`${"b".repeat(16)}:hide:2`]: { op: { op: "hide", sourceIndex: 2 }, from: H("b"), fromSource: H("c"), unitsPerMm: 100, reason: "target" } }, version: 2n ** 62n + 3n };
 
-  it("carries the row with its token as an exact decimal string", () => {
+  it("carries the row (its unresolved entries too, G11) with its token as an exact decimal string", () => {
     expect(snapshotPatchOf(row, [H("a"), H("b")])).toEqual({ ...row, version: "4611686018427387907" });
   });
 

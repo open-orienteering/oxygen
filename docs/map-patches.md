@@ -354,7 +354,7 @@ CREATE INDEX ON oxygen.map_patches (document_hash);
 ```
 
 Migration `20261113120000_map_patches` (additive: a new table);
-`20261115120000_map_patches_unresolved` adds `unresolved` (additive: a
+`20261115130000_map_patches_unresolved` adds `unresolved` (additive: a
 column with a default, G11).
 
 - **One row per event** (`UNIQUE (event_id)`). 08 §4.7 had
