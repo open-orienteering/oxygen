@@ -91,6 +91,7 @@ export function TracksPanel({ panel }: { panel: Panel }) {
       </p>
     );
   }
+  if (panel.loading) return <p data-testid="editor-tracks-loading" className="px-2.5 py-2 text-[11px] text-slate-400">…</p>;
   const files = (list: FileList | null) => (list ? Array.from(list) : []);
   const onDrop = (e: DragEvent) => {
     e.preventDefault();
@@ -131,9 +132,7 @@ export function TracksPanel({ panel }: { panel: Panel }) {
           ))}
         </div>
       )}
-      {panel.loading ? (
-        <p className="text-[11px] text-slate-400">…</p>
-      ) : panel.rows.length === 0 ? (
+      {panel.rows.length === 0 ? (
         <p data-testid="editor-tracks-none" className="text-[11px] text-slate-500">{t("tracksNone")}</p>
       ) : (
         <ul className="flex flex-col">

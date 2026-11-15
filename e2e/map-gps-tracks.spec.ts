@@ -19,6 +19,9 @@ const FIXTURE = "e2e/fixtures/gps-tracks.gpx";
 const expected = (JSON.parse(readFileSync("e2e/fixtures/gps-tracks.json", "utf8")) as { tracks: Expected[] }).tracks;
 const [inside, outside] = expected;
 const KML = '<?xml version="1.0"?><kml xmlns="http://www.opengis.net/kml/2.2"><Document/></kml>';
+/** The fixture's first track alone, renamed: the file dropped on the panel. */
+const DROPPED = readFileSync(FIXTURE, "utf8").replace(/\s*<trk><name>E2E outside<\/name>[\s\S]*?<\/trk>/, "").replace("E2E inside", "Dropped");
+const CONVERTED = "add:00000000-0000-7000-8000-0000000000c1";
 
 async function clearTracks(): Promise<void> {
   const { tracks } = await trpcCall<{ tracks: { id: string }[] }>("mapTrack.list", undefined, false);
@@ -122,6 +125,10 @@ test.describe("GPS tracks in Map mode (docs/course-editor.md §13)", () => {
       expect(Math.abs(box.y - Math.min(...ys))).toBeLessThanOrEqual(3);
       expect(Math.abs(box.y + box.height - Math.max(...ys))).toBeLessThanOrEqual(3);
 
+      // ─── Elsewhere (G26 / G27 to come) the second track was trimmed and converted: the reload below shows both ──
+      await trpcCall("mapTrack.update", { id: idB, trim: { start: 0, end: 3 } });
+      await trpcCall("mapTrack.markConverted", { marks: [{ id: idB, opId: CONVERTED }] });
+
       // ─── Hide: gone from the layer, kept on this device across a reload; show again ──
       await a.getByTestId("editor-track-visible").click();
       await expect(a).toHaveAttribute("data-visible", "false");
@@ -136,6 +143,11 @@ test.describe("GPS tracks in Map mode (docs/course-editor.md §13)", () => {
       await expect(pathOf(page, idA)).toHaveCount(0);
       await rowNamed(page, inside.name).getByTestId("editor-track-visible").click();
       await expect(pathOf(page, idA)).toHaveCount(1);
+      // The trimmed range is what is counted and drawn; the converted mark shows.
+      const bTrimmed = rowNamed(page, outside.name);
+      await expect(bTrimmed).toHaveAttribute("data-points", "3");
+      await expect(bTrimmed).toHaveAttribute("data-converted", "true");
+      await expect(bTrimmed.getByTestId("editor-track-converted")).toBeVisible();
 
       // ─── Rename ──
       await rowNamed(page, inside.name).getByTestId("editor-track-rename").click();
@@ -144,6 +156,15 @@ test.describe("GPS tracks in Map mode (docs/course-editor.md §13)", () => {
       const updated = waitForTrpc(page, "mapTrack.update");
       await input.press("Enter");
       await updated;
+      await expect(rows(page).nth(0).getByTestId("editor-track-name")).toHaveText("Morning loop");
+      // Rename is one undo entry: undo, redo.
+      let named = waitForTrpc(page, "mapTrack.update");
+      await page.keyboard.press("Control+z");
+      await named;
+      await expect(rows(page).nth(0).getByTestId("editor-track-name")).toHaveText(inside.name);
+      named = waitForTrpc(page, "mapTrack.update");
+      await page.keyboard.press("Control+Shift+z");
+      await named;
       await expect(rows(page).nth(0).getByTestId("editor-track-name")).toHaveText("Morning loop");
 
       // ─── Delete, then undo it: back under the same id ──
@@ -157,20 +178,68 @@ test.describe("GPS tracks in Map mode (docs/course-editor.md §13)", () => {
       await page.keyboard.press("Control+z");
       await restored;
       await expect(rows(page)).toHaveCount(2);
-      await expect(page.locator(`[data-testid="editor-track-row"][data-track-id="${idB}"]`)).toHaveAttribute("data-state", "ready");
+      const back = page.locator(`[data-testid="editor-track-row"][data-track-id="${idB}"]`);
+      await expect(back).toHaveAttribute("data-state", "ready");
       await expect(pathOf(page, idB)).toHaveCount(1);
+      // Its trim and converted mark came back with it.
+      await expect(back).toHaveAttribute("data-points", "3");
+      await expect(back).toHaveAttribute("data-converted", "true");
+      const again = (await trpcCall<{ tracks: { id: string; trim: { start: number; end: number }; convertedOp: string | null }[] }>("mapTrack.list", undefined, false)).tracks;
+      expect(again.find((t) => t.id === idB)).toMatchObject({ trim: { start: 0, end: 3 }, convertedOp: CONVERTED });
+
+      // ─── Import by a drop on the panel ──
+      const dropped = await page.evaluateHandle((text) => {
+        const dt = new DataTransfer();
+        dt.items.add(new File([text], "dropped.gpx", { type: "application/gpx+xml" }));
+        return dt;
+      }, DROPPED);
+      const zone = page.getByTestId("editor-tracks-drop");
+      await zone.dispatchEvent("dragover", { dataTransfer: dropped });
+      await expect(zone).toHaveAttribute("data-drag-over", "true");
+      const droppedIn = waitForTrpc(page, "mapTrack.import");
+      await zone.dispatchEvent("drop", { dataTransfer: dropped });
+      await droppedIn;
+      await expect(zone).not.toHaveAttribute("data-drag-over", "true");
+      await expect(page.getByTestId("editor-tracks-import-result")).toHaveAttribute("data-imported", "1");
+      await expect(rows(page)).toHaveCount(3);
+      await expect(rowNamed(page, "Dropped")).toHaveAttribute("data-state", "ready");
+      const idC = (await rowNamed(page, "Dropped").getAttribute("data-track-id"))!;
 
       // ─── A reload keeps them: both rows, the new name, both paths ──
       await page.reload();
       await editorReady(page);
       await expect(page.getByTestId("editor-page")).toHaveAttribute("data-mode", "map");
-      await expect(rows(page)).toHaveCount(2);
+      await expect(rows(page)).toHaveCount(3);
       await expect(rows(page).nth(0).getByTestId("editor-track-name")).toHaveText("Morning loop");
-      await expect(paths(page)).toHaveCount(2, { timeout: 15_000 });
+      await expect(paths(page)).toHaveCount(3, { timeout: 15_000 });
       const stored = (await trpcCall<{ tracks: { id: string; name: string | null; pointCount: number }[] }>("mapTrack.list", undefined, false)).tracks;
-      expect(stored.map((t) => [t.id, t.name, t.pointCount])).toEqual([[idA, "Morning loop", inside.points], [idB, outside.name, outside.points]]);
+      expect(stored.map((t) => [t.id, t.name, t.pointCount])).toEqual([
+        [idA, "Morning loop", inside.points], [idB, outside.name, outside.points], [idC, "Dropped", inside.points],
+      ]);
     } finally {
       await clearTracks().catch(() => undefined);
     }
+  });
+
+  test("off on a venue node: the reason, no import, no mapTrack request", async ({ page }) => {
+    test.setTimeout(120_000);
+    // The node answers as a venue box (`lease.status.nodeRole`, docs/map-gps-tracks.md §1.3, §5.1).
+    await page.route(/\/trpc\/[^?]*lease\.status/, async (route) => {
+      const res = await route.fetch();
+      await route.fulfill({ response: res, body: (await res.text()).replace(/"nodeRole":"[a-z]+"/g, '"nodeRole":"venue"') });
+    });
+    const trackCalls: string[] = [];
+    page.on("request", (r) => { if (/\/trpc\/[^?]*mapTrack\./.test(r.url())) trackCalls.push(r.url()); });
+    await openEditor(page, "?mode=map");
+    await expect(page.getByTestId("editor-page")).toHaveAttribute("data-mode", "map");
+    const off = page.getByTestId("editor-tracks-disabled");
+    await expect(off).toBeVisible({ timeout: 15_000 });
+    await expect(off).toHaveAttribute("data-reason", "venue");
+    await expect(page.getByTestId("editor-tracks-import")).toHaveCount(0);
+    await expect(page.getByTestId("editor-tracks-file")).toHaveCount(0);
+    // The rest of Map mode is unchanged: the corrections section is there.
+    await expect(page.getByTestId("editor-corrections")).toBeVisible();
+    await page.waitForTimeout(1000);
+    expect(trackCalls).toEqual([]);
   });
 });

@@ -544,8 +544,11 @@ decision row in `decisions/slice-g.md`).
   2026-11-14), without `courses.edit` (every `mapTrack` procedure needs
   it, §1.2), and on a map without a georeference
   (`isGeoreferenced(paperFrameOf(header, rotationCorrection))` false,
-  §3.2), in that order. Without a pinned document Map mode's own
-  `editor-map-none` stands and the panel is absent.
+  §3.2), in that order. Until `lease.status` answers the panel offers
+  nothing (no import, no list); a failed `lease.status` is taken as not
+  a venue (a box's reads answer empty anyway, §1.3). Without a pinned
+  document Map mode's own `editor-map-none` stands and the panel is
+  absent.
 - **Import.** One or many `.gpx` files, by the file picker or a drop on
   the panel. Each is parsed on the device with `parseGpx` (§2); a file
   that does not parse (`malformed`, `not-gpx`, `no-points`) is reported
@@ -556,8 +559,10 @@ decision row in `decisions/slice-g.md`).
   name, and the rest go. The tracks go in calls of at most 200 tracks
   and 500 000 points each, in file order (§1.2 "Caps"); ids are minted
   by the server. A refused call (`TRACK_LIMIT` and the other `TRACK_*`
-  codes, translated) stops the import there: the calls before it stay
-  imported. The result line counts the tracks imported and the points,
+  codes, translated; a refusal without one, such as a lost connection, is
+  `failed`) stops the import there: the calls before it stay imported.
+  The refusal is reported under the call's first file (a call may span
+  files). The result line counts the tracks imported and the points,
   segments and waypoints the files had that were not imported (§2.2).
 - **The list** is `mapTrack.list`'s order. A row shows the track's
   colour, its name (else the file name), the date it was recorded
@@ -569,7 +574,9 @@ decision row in `decisions/slice-g.md`).
   Points are fetched per track with `mapTrack.get`, one request at a
   time, after the list (a capped track is megabytes); a row shows that it
   is loading until then. Points never change under one id (§1.2), so
-  they are kept for the session.
+  they are kept for the session. A `get` that fails makes the row's
+  error `load-failed`; it is tried again when the list is next fetched
+  (after any write of the panel, or a reload).
 - **Projection.** `projectTrack(paperFrameOf(header, rotationCorrection),
   trimTrack(track, trim), header.bounds)` on the pinned document, again
   when the document or the correction changes (§3.2 "Projected on every
@@ -633,7 +640,6 @@ Pending (G26, G28).
 | `api/src/__tests__/backup.test.ts` | `map_gps_tracks` directly after `map_patches`, filtered by event |
 | `api/src/__tests__/integration/map-gps-tracks.test.ts` | The CHECKs; cascade with the event; `created_by` SET NULL; import / list / get round trip (deep-equal points, null columns, input order, list without points), an average with `derivedFrom` + `singlePass`, refusals writing nothing, a retried import by id, an id of another event, scoping; caps (200 000 points, 500 000 a call, 200 tracks with concurrent imports, split at the cap); update (trim set and restored, non-destructive, unchanged keeps the version, every bad trim, `single_pass` untouched); split (shared point, trims, ranges, the row replaced, order, a repeat with ids, split-split-remove); remove twice; markConverted (set, clear, unknown id writes nothing); a course setter does all, a viewer, a kiosk key and a stranger nothing; not in the checkout snapshot; no journal entry |
 | `api/src/__tests__/integration/backup.test.ts` | The dump's `map_gps_tracks` section holds the event's tracks; `restore-map-gps-tracks.sql` restores them exactly (points, trim, ranges, token above 2^53) into another event, a missing importer NULL, an existing one kept, twice is once |
-
 | `web/src/pages/editor/__tests__/map-tracks-model.test.ts` | §5.1: where it is off; the import plan (segments in file order, names cut, per-file parse errors, skip counts, the 200 000-point refusal, calls within 200 tracks / 500 000 points); the trimmed projection, length, outside count, `not-projectable`; rows; colour; locate's bounds; per-device overrides; a deleted track's re-import |
 | `web/src/pages/editor/__tests__/map-tracks-decimate.test.ts` | §5.1 "Decimation to the pixel": the octave tolerance, the tolerance bound and ends, determinism, the 50 000-point budget, the layer's paths |
 | `e2e/map-gps-tracks.spec.ts` | §5.1 end to end on `e2e/test.ocd`: import by the picker (a non-GPX file reported), the rows, the paths at the fixture's paper mm, locate, hide kept across a reload, rename, delete and its undo, a reload keeping the tracks (`course-editor.md` §13 "Tests" has the detail) |
@@ -649,6 +655,11 @@ Pending (G26, G28).
   fetched (one at a time) for its length and drawing, hidden ones too; at
   the caps (200 tracks of 200 000 points) that is the whole event's
   tracks in the tab's memory.
+- The layer's cost per viewer render: the viewer's `line` shape
+  (`MapViewer.tsx` `toolShapeNode`) rebuilds its path and its
+  `data-points` string on every render, so up to the 50 000-point budget
+  is re-serialised per pan frame. Culling to the view (the `onView` prop
+  above) or a cached path in the viewer would bound it; unmeasured.
 - §6 conversion into `add` ops and snapping ends onto the track network
   (G26, G28).
 - Bézier fitting of a converted line (later; polylines for now).

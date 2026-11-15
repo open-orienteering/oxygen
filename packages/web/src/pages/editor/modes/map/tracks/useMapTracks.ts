@@ -114,16 +114,19 @@ export function useMapTracks(a: MapTracksArgs): MapTracks {
   const metas = (active ? list.data?.tracks : undefined) ?? EMPTY;
   // Points never change under one id (§1.2): kept for the session, fetched one `get` at a time (a capped track is
   // megabytes, §5.1); an import's own points go in directly.
-  const [loaded, setLoaded] = useState<{ points: ReadonlyMap<string, gpsTrack.TrackPoints>; failed: ReadonlySet<string> }>(
-    () => ({ points: new Map(), failed: new Set() }),
+  // A failed `get` is retried once the list is fetched again (`failed` holds the list's fetch time it failed under).
+  const [loaded, setLoaded] = useState<{ points: ReadonlyMap<string, gpsTrack.TrackPoints>; failed: ReadonlyMap<string, number> }>(
+    () => ({ points: new Map(), failed: new Map() }),
   );
+  const listedAt = list.dataUpdatedAt;
+  const failedNow = useCallback((id: string) => (loaded.failed.get(id) ?? -1) >= listedAt, [loaded, listedAt]);
   const addPoints = useCallback((entries: readonly [string, gpsTrack.TrackPoints][]) => {
     setLoaded((l) => ({ ...l, points: new Map([...l.points, ...entries]) }));
   }, []);
   const loading = useRef(false);
   useEffect(() => {
     if (!active || loading.current) return;
-    const missing = metas.filter((m) => !loaded.points.has(m.id) && !loaded.failed.has(m.id));
+    const missing = metas.filter((m) => !loaded.points.has(m.id) && !failedNow(m.id));
     if (missing.length === 0) return;
     loading.current = true;
     void (async () => {
@@ -133,7 +136,7 @@ export function useMapTracks(a: MapTracksArgs): MapTracks {
             const res = await utils.client.mapTrack.get.query({ id: m.id });
             addPoints([[m.id, res.points]]);
           } catch {
-            setLoaded((l) => ({ ...l, failed: new Set([...l.failed, m.id]) }));
+            setLoaded((l) => ({ ...l, failed: new Map([...l.failed, [m.id, listedAt]]) }));
           }
         }
       } finally {
@@ -142,7 +145,7 @@ export function useMapTracks(a: MapTracksArgs): MapTracks {
         setLoaded((l) => ({ ...l }));
       }
     })();
-  }, [active, metas, loaded, utils, addPoints]);
+  }, [active, metas, loaded, utils, addPoints, failedNow, listedAt]);
 
   // ─── Projection, per track and trim, again when the frame changes ──
   const geometry = useMemo(() => {
@@ -151,10 +154,10 @@ export function useMapTracks(a: MapTracksArgs): MapTracks {
     for (const m of metas) {
       const p = loaded.points.get(m.id);
       if (p) out.set(m.id, projected(frame, mapDoc.header.bounds, m.trim, p));
-      else if (loaded.failed.has(m.id)) out.set(m.id, { error: "load-failed" });
+      else if (failedNow(m.id)) out.set(m.id, { error: "load-failed" });
     }
     return out;
-  }, [frame, mapDoc, metas, loaded]);
+  }, [frame, mapDoc, metas, loaded, failedNow]);
 
   // ─── Show / hide, per device (user 2026-11-15) ──
   const [saved, setSaved] = useState(0);
@@ -292,7 +295,8 @@ export function useMapTracks(a: MapTracksArgs): MapTracks {
 
   const panel = !mapDoc ? null : {
     disabled,
-    loading: active && list.isLoading,
+    // Until the node's role is known nothing is offered (a venue box shows its reason, never an import).
+    loading: disabled === null && (!(lease.isSuccess || lease.isError) || list.isLoading),
     rows,
     importing,
     result,
