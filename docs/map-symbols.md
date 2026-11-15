@@ -1560,9 +1560,11 @@ symbols appended) throws, as `applyPatch` does on one.
   `add` of its `kind` (`map-patches.md` §2.3).
 
 The palette carries no materialised symbols and no swatches: G9's picker
-draws a swatch from `canonicalId` (the library preview route,
-`map-storage.md` §4.5) or the document symbol's own route, and calls
-`materialiseSymbol` when an item is used.
+(`course-editor.md` §13 "Symbol picker") draws a swatch from
+`canonicalId` (the library preview route, `map-storage.md` §4.5) or the
+document symbol's own route, and calls `materialiseSymbol` when an item
+is used (`modes/map/symbols.ts` `symbolPut`), in the web, over the
+model's pinned copy of the document.
 
 ## 12. ISSkiOM 2019: an overlay library
 

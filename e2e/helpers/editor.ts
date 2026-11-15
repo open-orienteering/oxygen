@@ -350,6 +350,29 @@ export async function plainMapAt(page: Page, at: Pt, radiusMm: number): Promise<
 }
 
 /**
+ * `plainMapAt` over many candidate paper points from one screenshot: the candidates around which the canvas is one
+ * plain colour within `radiusMm`, in the given order (Map mode's drawing finds room to draw, docs/course-editor.md §13).
+ */
+export async function plainMapSpots(page: Page, candidates: readonly Pt[], radiusMm: number): Promise<Pt[]> {
+  const { png, pixelOf, pxPerMm } = await canvasShot(page);
+  const step = 1 / pxPerMm;
+  const plain = (at: Pt): boolean => {
+    let first: number | null = null;
+    for (let dx = -radiusMm; dx <= radiusMm; dx += step) {
+      for (let dy = -radiusMm; dy <= radiusMm; dy += step) {
+        if (Math.hypot(dx, dy) > radiusMm) continue;
+        const i = pixelOf({ x: at.x + dx, y: at.y + dy });
+        if (i === null) return false;
+        if (first === null) first = i;
+        else if ([0, 1, 2].some((c) => Math.abs(png.data[i + c] - png.data[first! + c]) > 8)) return false;
+      }
+    }
+    return true;
+  };
+  return candidates.filter(plain);
+}
+
+/**
  * As `inkIn`, at a list of paper points (mm): how many distinct canvas pixels under them are of `kind`. `held`: read
  * while a gesture is held mid-drag without ending it (`canvasShot`).
  */

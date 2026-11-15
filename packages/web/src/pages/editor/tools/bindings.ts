@@ -15,6 +15,7 @@ import { legLengthShape } from "../../../lib/editor/leg-length";
 import { isClosedKind, pointInPolygon, smoothed, step, type PolygonState } from "./polygon";
 import { nearestEdge, outlinePoints, vertexRule, type Vertex } from "../../../lib/editor/geometry-edit";
 import { ringRule } from "../modes/map/nodes";
+import { angleOfDrag } from "../modes/map/symbols";
 import {
   dragGeometry, geometryHandles, geometryShapes, gripsOf, insertAtEdge, pressGeometry, releaseGeometry, type GeometryDrag,
 } from "../../../lib/editor/geometry-gestures";
@@ -910,4 +911,79 @@ export function withTrackLayer(b: EditorToolBinding, layer: TrackLayer): EditorT
     };
   }
   return out;
+}
+
+// ─── Map mode's `P`, `L`, `A`: drawing (docs/course-editor.md §13 "Drawing", G9) ──────────
+
+/** A press of `P` with an orientable symbol: placed at `at` (snapped), aimed at `to` once past `MAP_DRAG_PX`. */
+export interface MapPointGesture { at: Pt; to: Pt; press: Pt; mmPerPx: number; moved: boolean }
+export interface MapPointGestureRef { current: MapPointGesture | null }
+
+export interface MapPointContext {
+  /** A symbol is chosen and a write can go now. */
+  canPlace: boolean;
+  /** The chosen symbol turns with the object's angle (`symbols.ts` `isOrientable`): a press-drag aims it. */
+  orientable: boolean;
+  snap: (pt: Pt) => Pt;
+  gesture: MapPointGestureRef;
+  /** One point at `at`, `angle` in 0.1° (`angleOfDrag`). */
+  onPlace: (at: Pt, angle: number) => void;
+  /** The point being aimed (the draft). */
+  onAim: (at: Pt, angle: number) => void;
+  /** The aim was cancelled (Escape, the pointer left): drop the draft, place nothing. */
+  onCancel: () => void;
+  redraw?: Redraw;
+}
+
+/** The angle a drag from `a` to `b` sets (`angleOfDrag`, 0.1°). */
+const dragAngle = (a: Pt, b: Pt): number => angleOfDrag(b.x - a.x, b.y - a.y);
+
+/**
+ * Map mode's point tool (§13 "Drawing"; 08 §5.3 "Placement flow"): exclusive, a crosshair; a click places one point
+ * and the tool stays armed. With an orientable symbol a press is taken: a drag past 3 px aims the point from the press
+ * (the symbol's x axis along the drag; user 2026-11-15, G9 question 3), the release places it turned, a release
+ * without movement places it at 0. Otherwise a drag pans.
+ */
+export function mapPointBinding(c: MapPointContext): EditorToolBinding {
+  const g = c.gesture.current;
+  return {
+    exclusive: true,
+    cursor: "crosshair",
+    shapes: g?.moved ? [{ kind: "line", points: [g.at, g.to], color: PURPLE, testId: "editor-map-point-direction" }] : undefined,
+    onClick: (p) => {
+      if (c.canPlace) c.onPlace(c.snap(p.pt), 0);
+    },
+    onPointerDown: (p) => {
+      if (!c.canPlace || !c.orientable || p.touch) return false;
+      const at = c.snap(p.pt);
+      c.gesture.current = { at, to: at, press: p.pt, mmPerPx: p.mmPerPx, moved: false };
+      return true;
+    },
+    onPointerDrag: (pt) => {
+      const d = c.gesture.current;
+      if (!d) return;
+      if (!d.moved && Math.hypot(pt.x - d.press.x, pt.y - d.press.y) <= MAP_DRAG_PX * d.mmPerPx) return;
+      d.moved = true;
+      d.to = pt;
+      c.onAim(d.at, dragAngle(d.at, pt));
+      c.redraw?.();
+    },
+    onPointerUp: (pt) => {
+      const d = c.gesture.current;
+      c.gesture.current = null;
+      if (!d) return;
+      if (!pt) c.onCancel();
+      else c.onPlace(d.at, d.moved ? dragAngle(d.at, pt) : 0);
+      c.redraw?.();
+    },
+  };
+}
+
+/**
+ * Map mode's line and area tools (§13 "Drawing"): the course editor's drawing flow (`areaBinding`, §6.4 and F18)
+ * with the kinds `map_line` / `map_area`; a closing gesture is held back (the drawing kept) while `canClose` says a
+ * write cannot go.
+ */
+export function mapDrawBinding(o: AreaOptions & { canClose: () => boolean }): EditorToolBinding {
+  return areaBinding({ ...o, onDone: (vertices) => { if (o.canClose()) o.onDone(vertices); } });
 }

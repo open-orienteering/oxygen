@@ -29,7 +29,7 @@ const EPS = 1e-6;
  */
 export function vertexRule(kind: string): { min: number; max: number; curves: boolean; closed: boolean } {
   switch (kind) {
-    case "oob_line": case "marked_route": case "inset_frame": return { min: 2, max: Infinity, curves: true, closed: false };
+    case "oob_line": case "marked_route": case "inset_frame": case "map_line": return { min: 2, max: Infinity, curves: true, closed: false };
     case "text": return { min: 1, max: 1, curves: false, closed: false };
     case "image": return { min: 2, max: 2, curves: false, closed: false };
     case "filter_region": return { min: 3, max: Infinity, curves: false, closed: true };
