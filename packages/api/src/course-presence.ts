@@ -10,7 +10,7 @@ import type { PrismaClient } from "./generated/prisma/client.js";
 
 export const PRESENCE_TTL_MS = 30_000;
 
-export type PresenceMode = "course" | "layout" | "field";
+export type PresenceMode = "course" | "layout" | "field" | "map";
 
 export interface PresenceRow {
   courseId: number;

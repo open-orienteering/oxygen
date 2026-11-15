@@ -5,7 +5,7 @@
  * course token that moved under the user's feet.
  */
 
-export type PresenceMode = "course" | "layout" | "field";
+export type PresenceMode = "course" | "layout" | "field" | "map";
 
 export interface PresenceOther {
   courseId: number;

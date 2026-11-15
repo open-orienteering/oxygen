@@ -110,6 +110,9 @@ describe("initial mode (§1, §10)", () => {
     expect(initialModeFor({ phone: false, url: "field" })).toBe("field");
     expect(initialModeFor({ phone: false, url: "layout" })).toBe("layout");
     expect(initialModeFor({ phone: true, url: "layout" })).toBe("field");
+    // Map mode is desktop only too (§13, G6).
+    expect(initialModeFor({ phone: false, url: "map" })).toBe("map");
+    expect(initialModeFor({ phone: true, url: "map" })).toBe("field");
     expect(initialModeFor({ phone: true, url: null })).toBe("field");
   });
 });

@@ -8,6 +8,7 @@
   "modeCourse": "Course",
   "modeLayout": "Layout",
   "modeField": "Field",
+  "modeMap": "Map",
   "modeLater": "Arrives with slice {{slice}}",
   "toolSelect": "Select / move (V)",
   "sequence": "Sequence",

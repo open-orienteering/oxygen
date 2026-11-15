@@ -76,6 +76,16 @@ describe("editorReducer (docs/course-editor.md §3)", () => {
     expect(editorReducer(s, { type: "mode", mode: "field" }).mode).toBe("field");
   });
 
+  it("Map mode is entered as Layout is: the course kept, Course mode's tool, phantom and selections dropped (G6, §13)", () => {
+    let s = editorReducer(initialEditorState, { type: "select-course", id: 3 });
+    s = editorReducer(s, { type: "select", id: 7 });
+    s = editorReducer(s, { type: "tool", tool: areaTool("oob_area") });
+    s = editorReducer(s, { type: "mode", mode: "map" });
+    expect([s.mode, s.selectedCourseId, s.selectedControlId, s.phantom, s.selectedObjectId, s.multi]).toEqual(["map", 3, null, null, null, []]);
+    expect(s.tool).toEqual({ kind: "select" });
+    expect(editorReducer(s, { type: "mode", mode: "course" }).mode).toBe("course");
+  });
+
   it("a view change drops the phantom", () => {
     const s = editorReducer(editorReducer(initialEditorState, { type: "map-click", x: 1, y: 1 }), { type: "view", view: "all" });
     expect(s.view).toBe("all");

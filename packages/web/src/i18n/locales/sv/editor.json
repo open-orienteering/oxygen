@@ -8,6 +8,7 @@
   "modeCourse": "Bana",
   "modeLayout": "Layout",
   "modeField": "Fält",
+  "modeMap": "Karta",
   "modeLater": "Kommer med delsteg {{slice}}",
   "toolSelect": "Markera / flytta (V)",
   "sequence": "Ordning",
