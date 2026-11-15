@@ -1196,9 +1196,11 @@ downloads from the server already differ (§3.2).
   inputs (the G16 planner's measurement, 2026-11-14). Coordinates are
   written at 3–4 decimals, so a difference would be a last written digit
   or, in principle, a near-tie in label placement. Not seen: the
-  guarantee is tested as below; identity independent of the engine is
-  Pending (decided overnight on the user's standing instruction,
-  2026-11-13, for review).
+  guarantee is tested as below. Identity independent of the engine is
+  not pursued: the user confirmed (2026-11-15) that the device PDF need
+  not be byte-identical across engines, so a last-digit difference is
+  accepted (decided overnight on the user's standing instruction,
+  2026-11-13; confirmed).
 
 Tested twice: `packages/api/src/__tests__/print-device.test.ts` drives
 the browser's worker as its main thread does and compares it with the
@@ -1911,18 +1913,6 @@ The tool's own tests (`print-run.test.ts`, `measure-print.test.mjs`,
   A4-equivalents by `navigator.deviceMemory` (8 / 24 by pointer where it
   is undefined), derived from §11.5's sizes; replaced by measurements on
   the club's phones and laptops when there are any.
-- **Engine-independent arithmetic** (§8.6 "What identity rests on",
-  G16): the composer's transcendental `Math` calls and proj4's are not
-  bit-identical across engines (Node 20 and Chromium differ by one ulp on
-  a few percent of inputs), nor is `Intl.Collator`'s data (each engine's
-  ICU release). The device PDF is tested equal to the
-  server's in Node and, object for object, in Chromium for the E2E
-  fixtures; a difference elsewhere would be a last written digit. Making
-  it exact — a shared `Math` built from `+ − × ÷` and `sqrt` for every
-  call the print path reaches, and the `/Measure /GEO` viewport computed
-  on the server and carried in the job — is a proposed row for the user
-  to decide before the G-gate (decided overnight on the user's standing
-  instruction, 2026-11-13, for review).
 - **Description sheets** (`buildDescriptionsPdf`, §6.4) stay API-only:
   `course-maps/descriptions-pdf.ts` reads its rows from the database and
   has its own writer, fonts and yield; no G row needs them in the browser.
