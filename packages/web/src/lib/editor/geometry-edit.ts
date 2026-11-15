@@ -10,8 +10,10 @@
 type Pt = { x: number; y: number };
 
 /**
- * A stored vertex (`PathVertex`). `flags` is a map document anchor's own `COORD_FLAG` bits besides the curve and hole
- * ones (dash, corner, gap, no-left / no-right: `ringsOfCoords`); the edits keep it on its vertex, a new vertex has none.
+ * A stored vertex (`PathVertex`). `flags` carries a map document's `COORD_FLAG` bits (`ringsOfCoords`): the low byte
+ * the anchor's own besides the hole bit (dash, corner, gap, no-left / no-right), the next its out-handle control
+ * point's and the next its in-handle control point's besides the curve bits. The edits keep it on its vertex; a new
+ * vertex has none.
  */
 export interface Vertex { x: number; y: number; hIn?: Pt; hOut?: Pt; flags?: number }
 
@@ -253,12 +255,19 @@ export interface PathRing { vertices: Vertex[]; closed: boolean; repeatsFirst: b
 
 const BEZIER_FIRST = 1, BEZIER_SECOND = 2, HOLE = 16;
 const CURVE_BITS = BEZIER_FIRST | BEZIER_SECOND;
+/** `Vertex.flags`: the out-handle control's extra bits from bit 8, the in-handle control's from bit 16. */
+const OUT_SHIFT = 8, IN_SHIFT = 16, IN_MASK = 0xff << IN_SHIFT;
+const withFlags = (v: Vertex, bits: number): void => {
+  const f = (v.flags ?? 0) | bits;
+  if (f) v.flags = f;
+};
 
 /**
  * A map object's coordinates as rings of vertices (§13 "Nodes"): an anchor's two following control points (flags
  * `bezierFirst`, `bezierSecond`, the OCAD convention) become its `hOut` and the next anchor's `hIn`; a `hole` flag
- * starts the next ring; an anchor's other flags ride on its vertex. A ring of three anchors or more whose last anchor
- * sits on its first is closed and that last anchor dropped (`repeatsFirst`); an area's rings are always closed. Null
+ * starts the next ring; an anchor's other flags, and its controls' other bits, ride on its vertex (`Vertex.flags`).
+ * A ring of three anchors or more whose last anchor sits on its first is closed and that last anchor dropped
+ * (`repeatsFirst`, its own flags kept as `endFlags`); an area's rings are always closed. Null
  * when the curve encoding is broken (a lone control point, a ring that starts or ends on one) or there is nothing.
  */
 export function ringsOfCoords(coords: readonly DocCoord[], unitsPerMm: number, area: boolean): PathRing[] | null {
@@ -281,7 +290,8 @@ export function ringsOfCoords(coords: readonly DocCoord[], unitsPerMm: number, a
       const zeroOut = x === Math.round(prev.x * u) && y === Math.round(prev.y * u), zeroIn = c2[0] === end[0] && c2[1] === end[1];
       if (!zeroOut || zeroIn) prev.hOut = hOut;
       if (!zeroIn || zeroOut) v.hIn = hIn;
-      if (endFlags) v.flags = endFlags;
+      withFlags(prev, (f & ~CURVE_BITS) << OUT_SHIFT);
+      withFlags(v, endFlags | (((c2[2] ?? 0) & ~CURVE_BITS) << IN_SHIFT));
       cur.vertices.push(v);
       cur.ends.push(endFlags);
       k += 2;
@@ -297,8 +307,13 @@ export function ringsOfCoords(coords: readonly DocCoord[], unitsPerMm: number, a
     const n = vertices.length, first = vertices[0], last = vertices[n - 1];
     if (n >= 4 && last.x === first.x && last.y === first.y && !last.hOut) {
       const kept = vertices.slice(0, -1);
-      if (last.hIn) kept[0] = { ...first, hIn: last.hIn };
-      return { vertices: kept, closed: true, repeatsFirst: true, ...(ends[n - 1] ? { endFlags: ends[n - 1] } : {}) };
+      if (last.hIn) {
+        // The closing segment's in-handle (and its control's bits) belong to the first vertex.
+        const f = ((first.flags ?? 0) & ~IN_MASK) | ((last.flags ?? 0) & IN_MASK);
+        kept[0] = { ...first, hIn: last.hIn, ...(f ? { flags: f } : {}) };
+        if (!f) delete kept[0].flags;
+      }
+      return { vertices: kept, closed: true, repeatsFirst: true, endFlags: ends[n - 1] };
     }
     return { vertices, closed: area, repeatsFirst: false };
   });
@@ -306,9 +321,10 @@ export function ringsOfCoords(coords: readonly DocCoord[], unitsPerMm: number, a
 
 /**
  * The rings back as coordinates (§13 "Nodes"): whole document units (rounded), each curved segment as its two
- * control points, every ring after the first flagged `hole` on its first point. A closed ring writes its close out —
- * a last point on the first one — when the source did (`repeatsFirst`) or its closing segment is curved (an implicit
- * close is straight).
+ * control points (with their own bits from `Vertex.flags`), every ring after the first flagged `hole` on its first
+ * point. A closed ring writes its close out — a last point on the first one, with the source's flags for it
+ * (`endFlags`) — when the source did (`repeatsFirst`) or its closing segment is curved (an implicit close is
+ * straight; the point it gains has no flags).
  */
 export function coordsOfRings(rings: readonly PathRing[], unitsPerMm: number): DocCoord[] {
   const u = unitsPerMm;
@@ -320,14 +336,18 @@ export function coordsOfRings(rings: readonly PathRing[], unitsPerMm: number): D
     const segment = (a: Vertex, b: Vertex, endFlags: number) => {
       if (isCurve(a, b)) {
         const c1 = a.hOut ?? { x: 0, y: 0 }, c2 = b.hIn ?? { x: 0, y: 0 };
-        out.push(at(a.x + c1.x, a.y + c1.y, BEZIER_FIRST), at(b.x + c2.x, b.y + c2.y, BEZIER_SECOND));
+        out.push(
+          at(a.x + c1.x, a.y + c1.y, BEZIER_FIRST | (((a.flags ?? 0) >> OUT_SHIFT) & 0xff)),
+          at(b.x + c2.x, b.y + c2.y, BEZIER_SECOND | (((b.flags ?? 0) >> IN_SHIFT) & 0xff)),
+        );
       }
       out.push(at(b.x, b.y, endFlags));
     };
-    out.push(at(g[0].x, g[0].y, (g[0].flags ?? 0) | (r > 0 ? HOLE : 0)));
-    for (let i = 1; i < g.length; i++) segment(g[i - 1], g[i], g[i].flags ?? 0);
+    const own = (v: Vertex) => (v.flags ?? 0) & 0xff;
+    out.push(at(g[0].x, g[0].y, own(g[0]) | (r > 0 ? HOLE : 0)));
+    for (let i = 1; i < g.length; i++) segment(g[i - 1], g[i], own(g[i]));
     const last = g[g.length - 1];
-    if (ring.closed && g.length > 1 && (ring.repeatsFirst || isCurve(last, g[0]))) segment(last, g[0], ring.endFlags ?? g[0].flags ?? 0);
+    if (ring.closed && g.length > 1 && (ring.repeatsFirst || isCurve(last, g[0]))) segment(last, g[0], ring.repeatsFirst ? ring.endFlags ?? 0 : 0);
   });
   return out;
 }

@@ -2055,14 +2055,21 @@ unchanged:
   anchor sits on its first (three anchors or more) is a closed ring too,
   so its start never tears open.
 - A ring that writes its close out (its first point repeated at the end)
-  keeps doing so, the repeat written from the first vertex with its own
-  flags; an implicitly closed ring gains the repeat only when its closing
+  keeps doing so, the repeat written at the first vertex with the
+  repeat's own flags as read (`endFlags`, none included); an implicitly
+  closed ring gains the repeat, without flags, only when its closing
   segment becomes curved (an implicit close is straight).
 - An anchor's other flags (corner, dash, gap, no-left, no-right) ride on
-  its vertex (`Vertex.flags`) through every edit; an inserted node has
-  none. Corner / smooth here is the handles only (F18): the flag bits are
-  never set or cleared. Extra bits on a control point are not kept.
-- Writing rounds every point to whole document units.
+  its vertex (`Vertex.flags`, the low byte) through every edit, and so do
+  its control points' own bits besides the curve ones (no-left /
+  no-right on a curve: the out-handle's from bit 8, the in-handle's from
+  bit 16); an inserted node has none. Corner / smooth here is the handles
+  only (F18): the flag bits are never set or cleared.
+- Writing rounds every point to whole document units. Unedited, the round
+  trip is exact: every line and area of `e2e/test.ocd` and of the local
+  corpus maps (Club-full's 84 293, sprint's 9 423, club-2026's 37 482)
+  comes back coordinate for coordinate, flags included (checked once
+  locally, G7; the corpus stays in `.local/`).
 
 **Gestures** (`tools/bindings.ts` `mapNodesBinding`, through
 `geometry-gestures.ts` and `geometry-edit.ts` as §7 "Editing geometry";
@@ -2382,7 +2389,7 @@ whose poll ran meanwhile simply does not conflict (decision log, D10).
   editing until the UI layer is culled to the view (the viewer's `onView`,
   as the GPS tracks' Pending); one focused node at a time (no multi-node
   selection); the document's corner / dash / gap / border flags are kept,
-  not edited; extra bits on a control point are dropped on write; Map
+  not edited (a split curve's new half carries none); Map
   mode's snapping toggle is its own and the status bar does not show it;
   the snap index without the edited object is built on the main thread per
   selection, its Club-full cost unmeasured; snapping to the object's own

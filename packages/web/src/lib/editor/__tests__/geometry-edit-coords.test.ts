@@ -108,8 +108,28 @@ describe("document coordinates ↔ path vertices (docs/course-editor.md §13 \"N
     expect(back.vertices.slice(1).every((v) => !v.hIn && !v.hOut)).toBe(true);
   });
 
-  it("the repeated end point's own flags are kept", () => {
-    const coords: DocCoord[] = [[0, 0, F.corner], [1000, 0], [1000, 1000], [0, 0, F.dash]];
+  it("the repeated end point's own flags are kept, none included (not the first point's)", () => {
+    const dash: DocCoord[] = [[0, 0, F.corner], [1000, 0], [1000, 1000], [0, 0, F.dash]];
+    expect(coordsOfRings(ringsOfCoords(dash, U, true)!, U)).toEqual(dash);
+    const plain: DocCoord[] = [[0, 0, F.corner], [1000, 0], [1000, 1000], [0, 0], [200, 200, F.hole], [400, 200], [400, 400], [200, 200]];
+    expect(coordsOfRings(ringsOfCoords(plain, U, true)!, U)).toEqual(plain);
+  });
+
+  it("a control point's own bits (no-left, no-right) are kept and ride with its handle through the edits", () => {
+    const coords: DocCoord[] = [
+      [0, 0, F.noLeft], [0, 100, F.bezierFirst | F.noLeft], [100, 100, F.bezierSecond | F.noRight], [100, 0, F.noRight], [200, 0],
+    ];
+    const [ring] = ringsOfCoords(coords, U, false)!;
+    expect(coordsOfRings([ring], U)).toEqual(coords);
+    // A grip dragged and the far vertex moved: the bits stay on their control points.
+    const edited = dragGrip(ring.vertices, 0, "out", { x: 0.5, y: 1 }, false).map((v, i) => (i === 2 ? { ...v, x: 3 } : v));
+    expect(coordsOfRings([{ ...ring, vertices: edited }], U).map((c) => c[2] ?? 0)).toEqual(
+      [F.noLeft, F.bezierFirst | F.noLeft, F.bezierSecond | F.noRight, F.noRight, 0],
+    );
+  });
+
+  it("a closed ring's curved close repeated at the end: its in-control's bits go with the first vertex's in-handle", () => {
+    const coords: DocCoord[] = [[0, 0], [1000, 0], [1000, 1000], [500, 1500, F.bezierFirst | F.noLeft], [-500, 500, F.bezierSecond | F.noRight], [0, 0]];
     const [ring] = ringsOfCoords(coords, U, true)!;
     expect(coordsOfRings([ring], U)).toEqual(coords);
   });
