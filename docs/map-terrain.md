@@ -1402,6 +1402,46 @@ heights). Storage, the job and the route are `docs/map-storage.md` §4.7.
    a Swedish map on an instance without the credential included (widens
    answer 13's "outside LM coverage"; its reduced role is unchanged).
 
+### 7.0b Decided with the user (2026-11-15): the settings tab
+
+These amend answer 4 (opt-in by environment) and SLICES answer 5 (the
+credential from the instance's secret store). H12 implements them; until
+it lands, §7.1 and `docs/deploy-gcp-cloud-run.md` "Height data" describe
+what runs.
+
+5. **The DEM is configured in Settings → Height data**
+   (`/settings?tab=terrain`), an admin tab of its own beside *Eventor*,
+   not part of it. It holds the providers on or off (Lantmäteriet,
+   GLO-30), the Geotorget account, the resolution (2 m or 1 m), a *Test
+   connection* that runs §7.6's live check, and each club map's DEM
+   state with a retry.
+6. **Saved settings override the environment.** `MAP_DEM_PROVIDERS`,
+   `MAP_DEM_LANTMATERIET_AUTH` and `MAP_DEM_LANTMATERIET_RESOLUTION_M`
+   stay as the defaults a deploy sets; a value saved in the tab wins.
+   Fetching stays opt-in: with nothing saved and nothing in the
+   environment, no provider is on.
+7. **The account is write-only and encrypted at rest.** The password is
+   never sent back to the browser (the tab shows only that one is saved,
+   the user name and when it was saved); only an admin sets or clears it;
+   it is stored encrypted, not in plaintext as the Eventor keys are; its
+   reach is §7.1's (Lantmäteriet's hosts only, never logged). Saving a new
+   account queues every map whose DEM ended `failed: auth`, so a fixed
+   credential needs no redeploy.
+8. **The tab explains itself.** Above the controls, in en and sv: what a
+   height model is and what it is good for here (the 3D ground surface,
+   absolute heights for the map's own terrain via the anchor so fewer
+   contour artefacts, GPS tracks on the real ground); the two providers
+   (Lantmäteriet: Sweden, 1 m / 2 m, free open data under CC BY 4.0, needs
+   a Geotorget account; GLO-30: worldwide, 30 m, no account); how to get
+   the account (create a Geotorget user at Lantmäteriet, order the free
+   *Markhöjdmodell Nedladdning* product, then enter that user name and
+   password here); that the attribution "© Lantmäteriet" is shown on the
+   map whenever its heights are drawn; and what *Test connection* checks.
+9. **The live check runs from the tab.** *Test connection* runs §7.6 on a
+   club map the admin picks (under the 1 m window cap), as the admin's
+   explicit action; it prints the same aggregates, and its result and time
+   are stored and shown. The CLI script stays.
+
 ### 7.1 Providers
 
 `packages/api/src/map-store/dem-providers.ts`. In this order; the first
@@ -1648,6 +1688,9 @@ machine shared with other sessions:
   the band weighting leaves a slight kink at each contour (visible as
   faint terraces in flat ground); a TIN with medial-axis points (10 §2.2)
   is the alternative if that matters. No row.
+- §7.0b (H12): the *Height data* settings tab, the encrypted account,
+  settings over the environment, *Test connection*. Until it lands the
+  account comes from the environment only.
 - §7.6: the live check against Lantmäteriet's service (range requests
   through the redirect, the STAC assets' profile) is pending the
   operator's run with their own credential; the 2 m default ships on
