@@ -3,9 +3,11 @@ import { TRPCError } from "@trpc/server";
 import { router, authedProcedure } from "../trpc.js";
 import { prisma } from "../db.js";
 import type { Prisma } from "../generated/prisma/client.js";
+import { mapDocument } from "@oxygen/shared";
 import {
   canDownloadClubMapVersion,
   canRemoveClubMap,
+  canRemoveClubMapVersion,
   latestVersionOrRefuse,
   projectClubMapRow,
 } from "../club-map-library.js";
@@ -190,6 +192,45 @@ export const clubMapRouter = router({
       }
       await prisma().clubMap.delete({ where: { id: input.id } });
       return { success: true as const };
+    }),
+
+  /**
+   * Delete the latest version when it is a promoted one (docs/map-patches.md §5 answer 7): its promoter or an
+   * admin. Events on it keep their document (`club_map_version_id` set null); version 1 goes with the series.
+   */
+  removeVersion: authedProcedure
+    .input(z.object({ id: clubMapId, versionId: z.string().uuid() }))
+    .mutation(async ({ ctx, input }) => {
+      return prisma().$transaction(async (db) => {
+        // The series locked, as promote locks it: no promote from this version starts in between.
+        await db.$queryRaw`SELECT 1 FROM "oxygen"."club_maps" WHERE "id" = ${input.id}::uuid FOR UPDATE`;
+        const version = await db.clubMapVersion.findFirst({
+          where: { id: input.versionId, clubMapId: input.id },
+          select: { id: true, seq: true, sourceHash: true, uploadedBy: true, patch: true },
+        });
+        if (!version) throw new TRPCError({ code: "NOT_FOUND", message: `Version ${input.versionId} of club map ${input.id} not found` });
+        if (!canRemoveClubMapVersion({ authEnabled: ctx.authEnabled, user: ctx.user, uploadedBy: version.uploadedBy })) {
+          throw new TRPCError({ code: "FORBIDDEN", message: "Only the person who saved this version or an admin can delete it" });
+        }
+        const latest = await db.clubMapVersion.aggregate({ where: { clubMapId: input.id }, _max: { seq: true } });
+        if (version.seq !== latest._max.seq) {
+          throw new TRPCError({ code: "PRECONDITION_FAILED", message: "VERSION_NOT_LATEST: only the latest version can be deleted" });
+        }
+        const layers = mapDocument.parseVersionPatch(version.patch);
+        if (layers.length === 0) {
+          throw new TRPCError({ code: "PRECONDITION_FAILED", message: "VERSION_NOT_PROMOTED: an uploaded version goes with its club map" });
+        }
+        // Its promote job still running would pin the event onto a deleted version.
+        const jobs = await db.mapImportJob.findMany({
+          where: { clubMapId: input.id, eventId: { not: null }, sourceHash: version.sourceHash, state: { in: ["queued", "running"] } },
+          select: { patch: true },
+        });
+        if (jobs.some((j) => mapDocument.sameVersionPatch(j.patch, layers))) {
+          throw new TRPCError({ code: "PRECONDITION_FAILED", message: "PATCH_PROMOTING: the version is still being saved" });
+        }
+        await db.clubMapVersion.delete({ where: { id: version.id } });
+        return { success: true as const };
+      });
     }),
 
   /** The latest version's original file (`map_sources`), under the version's label. */

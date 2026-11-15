@@ -1302,6 +1302,8 @@ model MapDocument {
   createdAt        DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
   /// Bumped when a reference is created; GC input.
   lastReferencedAt DateTime @default(now()) @map("last_referenced_at") @db.Timestamptz(6)
+  /// The version patch (layers) the document was baked with; null = none (docs/map-patches.md §5, row G12a).
+  patch            Json?
 
   source   MapSource        @relation(fields: [sourceHash], references: [fileHash], onDelete: Restrict)
   previews MapPreview[]
@@ -1478,6 +1480,8 @@ model ClubMapVersion {
   documentHash String   @map("document_hash")
   uploadedBy   String?  @map("uploaded_by") @db.Uuid
   uploadedAt   DateTime @default(now()) @map("uploaded_at") @db.Timestamptz(6)
+  /// Promoted corrections: an ordered list of immutable layers baked at the store stage (docs/map-patches.md §5, row G12a).
+  patch        Json     @default("[]")
 
   clubMap  ClubMap     @relation(fields: [clubMapId], references: [id], onDelete: Cascade)
   source   MapSource   @relation(fields: [sourceHash], references: [fileHash], onDelete: Restrict)
@@ -1538,6 +1542,8 @@ model MapImportJob {
   sourceHash   String    @map("source_hash")
   /// Snapshot of the club symbol decisions stage 6 applies (`SymbolDecision[]`, docs/map-storage.md §6.1), taken at insert.
   decisions    Json      @default("[]")
+  /// Snapshot of the version patch (layers) the store stage bakes (docs/map-patches.md §5, row G12a); `[]` = none.
+  patch        Json      @default("[]")
   /// queued | running | done | failed.
   state        String
   /// Import stage name while running.

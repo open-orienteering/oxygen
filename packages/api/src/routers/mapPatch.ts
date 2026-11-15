@@ -4,13 +4,16 @@
  * (the venue map draws the effective document); writes need
  * `courses.edit`, are not lease-guarded and not journaled — the patch is
  * cloud-owned non-critical data (08 §4.8), forwarded from a venue box
- * (`sync/ownership.ts`). Every procedure answers `{ version, patch }`.
+ * (`sync/ownership.ts`). Every write answers `{ version, patch }`;
+ * `promote` adds the new club version and its job (§5, row G12a).
  */
 
 import { z } from "zod";
+import { TRPCError } from "@trpc/server";
 import { mapDocument } from "@oxygen/shared";
-import { coursesEditProcedure, kioskOrCoursesViewProcedure, router } from "../trpc.js";
+import { coursesEditProcedure, coursesViewProcedure, kioskOrCoursesViewProcedure, router } from "../trpc.js";
 import { applyPatchChange, attachUnresolvedPatchOp, eventPatch, setPatchEnabled, type PatchDelivery } from "../map-store/patches.js";
+import { PROMOTE_LABEL_MAX, promoteEventPatch, promoteStatus, type PromoteJobView, type PromoteResult } from "../map-store/promote.js";
 
 const documentHashSchema = z.string().regex(/^[0-9a-f]{64}$/, "a 64-digit lower-case hex document hash");
 
@@ -33,6 +36,20 @@ export const mapPatchRouter = router({
   attachUnresolved: coursesEditProcedure
     .input(z.object({ documentHash: documentHashSchema, key: z.string().min(1).max(200), sourceIndex: z.number().int().min(0).max(0xfffffffe) }))
     .mutation(({ ctx, input }): Promise<PatchDelivery> => attachUnresolvedPatchOp(ctx.db, ctx.event.id, input.documentHash, input.key, input.sourceIndex)),
+
+  /**
+   * *Save corrections to the club map* (§5): the ops that apply to the pinned club version's document become its
+   * next version's layer; they leave the event's patch when the import finishes. `courses.edit` and signed in (answer 9).
+   */
+  promote: coursesEditProcedure
+    .input(z.object({ label: z.string().trim().min(1).max(PROMOTE_LABEL_MAX) }))
+    .mutation(({ ctx, input }): Promise<PromoteResult> => {
+      if (ctx.authEnabled && !ctx.user) throw new TRPCError({ code: "UNAUTHORIZED", message: "Sign in to save corrections to the club map" });
+      return promoteEventPatch(ctx.db, ctx.event.id, { label: input.label, userId: ctx.user?.id ?? null });
+    }),
+
+  /** The event's newest promote job (§5 answer 4: Map mode is read-only while it is queued or running), or null. */
+  promoteStatus: coursesViewProcedure.query(({ ctx }): Promise<PromoteJobView | null> => promoteStatus(ctx.db, ctx.event.id)),
 
   /** The toggle (§1.4): false = every consumer draws the pinned document. */
   setEnabled: coursesEditProcedure

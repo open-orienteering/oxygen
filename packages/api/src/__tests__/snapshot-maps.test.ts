@@ -12,6 +12,7 @@ import {
   fetchBlob,
   partitionMapFiles,
   pinnedHashes,
+  snapshotDocumentPatch,
   snapshotPatchOf,
   verifyBlob,
   tokenMapOf,
@@ -54,6 +55,17 @@ describe("snapshotPatchOf (docs/map-patches.md §3.4)", () => {
   it("carries nothing without a row, or when its document does not travel (a dormant patch)", () => {
     expect(snapshotPatchOf(null, [H("a")])).toBeNull();
     expect(snapshotPatchOf(row, [H("b")])).toBeNull();
+  });
+});
+
+describe("snapshotDocumentPatch (docs/map-patches.md §5)", () => {
+  it("writes a promoted document's version patch, nothing for none or an unparseable value", () => {
+    const layer = { unitsPerMm: 100, symbols: [], ops: { "hide:3": { op: "hide", sourceIndex: 3 } } };
+    expect(snapshotDocumentPatch([layer])).toEqual({ patch: [layer] });
+    expect(snapshotDocumentPatch(undefined)).toEqual({});
+    expect(snapshotDocumentPatch(null)).toEqual({});
+    expect(snapshotDocumentPatch([])).toEqual({});
+    expect(snapshotDocumentPatch({ ops: {} })).toEqual({});
   });
 });
 

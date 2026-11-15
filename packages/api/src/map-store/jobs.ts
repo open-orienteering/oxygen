@@ -11,7 +11,7 @@
 
 import { Worker } from "node:worker_threads";
 import { workerBootstrap } from "../worker-bootstrap.js";
-import { mapImport, symbolLibrary } from "@oxygen/shared";
+import { mapDocument, mapImport, symbolLibrary } from "@oxygen/shared";
 import { loadClubDecisions, parseDecisionSnapshot, storedDocumentFollowsDecisions } from "./decisions.js";
 import type { Prisma, PrismaClient } from "../generated/prisma/client.js";
 import { IMPORTER_VERSIONS, type ImportStage, type MapSourceKind } from "../import/ocad.js";
@@ -21,7 +21,7 @@ import { deriveDocumentHeightfield } from "./heightfield.js";
 import { enqueueDocumentDem } from "./dem-jobs.js";
 import { INSTANCE_ID } from "./instance.js";
 import { writePinnedMapFileColumns } from "./event-document.js";
-import { reresolveAfterPin } from "./patches.js";
+import { abandonPromote, completePromote, reresolveAfterPin } from "./patches.js";
 import { synchronizePositionedControlCoordinates } from "../event-crs.js";
 import type { ImportWorkerData, ImportWorkerMessage } from "./import-worker.js";
 
@@ -59,6 +59,8 @@ export interface ImportJobRow {
   heartbeatAt: Date | null;
   /** The club decisions stage 6 applies, snapshotted at insert (docs/map-storage.md §6.1). */
   decisions: mapImport.SymbolDecision[];
+  /** The club version's patch the store stage bakes, snapshotted at insert (docs/map-patches.md §5); `[]` = none. */
+  patch: mapDocument.VersionPatch;
   createdAt: Date;
   updatedAt: Date;
 }
@@ -102,9 +104,9 @@ export interface WorkerResult {
 export function runImportInWorker(
   bytes: Uint8Array,
   fileName: string,
-  opts: { kind?: MapSourceKind; decisions?: mapImport.SymbolDecision[]; onStage?: (stage: ImportStage) => void; timeoutMs?: number } = {},
+  opts: { kind?: MapSourceKind; decisions?: mapImport.SymbolDecision[]; patch?: mapDocument.VersionPatch; onStage?: (stage: ImportStage) => void; timeoutMs?: number } = {},
 ): Promise<WorkerResult> {
-  const workerData: ImportWorkerData = { bytes, fileName, kind: opts.kind ?? "ocad", decisions: opts.decisions ?? [] };
+  const workerData: ImportWorkerData = { bytes, fileName, kind: opts.kind ?? "ocad", decisions: opts.decisions ?? [], patch: opts.patch ?? [] };
   return new Promise<WorkerResult>((resolve, reject) => {
     const worker = new Worker(workerBootstrap(new URL("./import-worker", import.meta.url), import.meta.url), { eval: true, workerData });
     let settled = false;
@@ -133,12 +135,15 @@ export function runImportInWorker(
 
 const JOB_SELECT = {
   id: true, state: true, stage: true, progress: true, sourceHash: true, documentHash: true, error: true,
-  eventId: true, clubMapId: true, claimedBy: true, heartbeatAt: true, decisions: true, createdAt: true, updatedAt: true,
+  eventId: true, clubMapId: true, claimedBy: true, heartbeatAt: true, decisions: true, patch: true, createdAt: true, updatedAt: true,
 } as const;
 
-function asRow(r: { state: string; decisions: Prisma.JsonValue } & Omit<ImportJobRow, "state" | "decisions">): ImportJobRow {
-  return { ...r, state: r.state as JobState, decisions: parseDecisionSnapshot(r.decisions) };
+function asRow(r: { state: string; decisions: Prisma.JsonValue; patch: Prisma.JsonValue } & Omit<ImportJobRow, "state" | "decisions" | "patch">): ImportJobRow {
+  return { ...r, state: r.state as JobState, decisions: parseDecisionSnapshot(r.decisions), patch: mapDocument.parseVersionPatch(r.patch) };
 }
+
+/** A version patch as a JSON column value. */
+export const patchJson = (patch: mapDocument.VersionPatch): Prisma.InputJsonArray => patch as unknown as Prisma.InputJsonArray;
 
 /** Jobs finishing on this instance resolve these so `start` can hold without polling. */
 const waiters = new Map<string, Array<(row: ImportJobRow) => void>>();
@@ -223,11 +228,11 @@ async function execute(db: Db, job: ImportJobRow): Promise<void> {
     if (!source) throw new Error(`source ${job.sourceHash} not found`);
     if (source.kind !== "ocad" && source.kind !== "omap") throw new Error(`UNSUPPORTED_FORMAT: ${source.kind} import is not available`);
 
-    const result = await runImportInWorker(source.bytes, source.fileName, { kind: source.kind, decisions: job.decisions, onStage: (stage) => void progress(db, job.id, stage) });
+    const result = await runImportInWorker(source.bytes, source.fileName, { kind: source.kind, decisions: job.decisions, patch: job.patch, onStage: (stage) => void progress(db, job.id, stage) });
     await progress(db, job.id, "store");
     const stored = await storeImportedDocument(db, {
       source: { bytes: source.bytes, fileHash: job.sourceHash, kind: source.kind, fileName: source.fileName, uploadedBy: source.uploadedBy },
-      document: { bytes: result.bytes, hash: result.documentHash, libraryVersion: result.libraryVersion },
+      document: { bytes: result.bytes, hash: result.documentHash, libraryVersion: result.libraryVersion, patch: job.patch },
       report: result.report,
     });
     // An existing row may be old and unreferenced: touch it before pinning so a racing GC skips it (§8.2).
@@ -243,8 +248,16 @@ async function execute(db: Db, job: ImportJobRow): Promise<void> {
   } catch (err: unknown) {
     const message = (err instanceof Error ? err.message : String(err)).slice(0, 2000);
     console.error(`[map-import] job ${job.id} failed:`, message);
-    await db.mapImportJob.updateMany({ where: { id: job.id, claimedBy: INSTANCE_ID }, data: { state: "failed", error: message, heartbeatAt: new Date() } })
-      .catch((e: unknown) => console.error(`[map-import] marking ${job.id} failed:`, e));
+    const { count } = await db.mapImportJob.updateMany({ where: { id: job.id, claimedBy: INSTANCE_ID }, data: { state: "failed", error: message, heartbeatAt: new Date() } })
+      .catch((e: unknown) => {
+        console.error(`[map-import] marking ${job.id} failed:`, e);
+        return { count: 0 };
+      });
+    // A failed promote leaves no version behind (docs/map-patches.md §5); the event's patch was never touched.
+    if (count === 1 && isPromoteJob(job)) {
+      await abandonPromote(db, { clubMapId: job.clubMapId, sourceHash: job.sourceHash, patch: job.patch })
+        .catch((e: unknown) => console.error(`[map-import] removing the pending version of ${job.id}:`, e));
+    }
   } finally {
     clearInterval(heartbeat);
     const row = await db.mapImportJob.findUnique({ where: { id: job.id }, select: JOB_SELECT }).catch(() => null);
@@ -271,9 +284,17 @@ export async function deriveDocumentArtifacts(db: Db, hash: string): Promise<voi
  * `document_hash` moved to the new document. Idempotent. A job without a
  * target (a review round) pins nothing; `finalise` pins it later.
  */
-export async function applyJobResult(db: Db, job: Pick<ImportJobRow, "eventId" | "clubMapId" | "sourceHash" | "documentHash">): Promise<void> {
+/** A promote's job (docs/map-patches.md §5): it targets the event and the club map, and bakes a version patch. */
+export function isPromoteJob<J extends Pick<ImportJobRow, "eventId" | "clubMapId"> & { patch?: mapDocument.VersionPatch }>(
+  job: J,
+): job is J & { eventId: bigint; clubMapId: string; patch: mapDocument.VersionPatch } {
+  return job.eventId !== null && job.clubMapId !== null && (job.patch?.length ?? 0) > 0;
+}
+
+export async function applyJobResult(db: Db, job: Pick<ImportJobRow, "eventId" | "clubMapId" | "sourceHash" | "documentHash"> & { patch?: mapDocument.VersionPatch }): Promise<void> {
   if (!job.documentHash) return;
-  if (job.eventId !== null) {
+  const promote = isPromoteJob(job);
+  if (job.eventId !== null && !promote) {
     await db.mapFile.updateMany({ where: { eventId: job.eventId, sourceHash: job.sourceHash }, data: { documentHash: job.documentHash } });
     // Quick-access columns from the pinned document (docs/map-storage.md §6.4).
     await writePinnedMapFileColumns(db, job.eventId, job.sourceHash, job.documentHash);
@@ -283,10 +304,16 @@ export async function applyJobResult(db: Db, job: Pick<ImportJobRow, "eventId" |
     await reresolveAfterPin(db, job.eventId);
   }
   if (job.clubMapId !== null) {
-    const existing = await db.clubMapVersion.findFirst({ where: { clubMapId: job.clubMapId, sourceHash: job.sourceHash }, select: { id: true, documentHash: true } });
-    if (existing) {
+    // A version is its file and its patch (docs/map-patches.md §5 answer 1): two versions of one source differ by patch.
+    const patch = job.patch ?? [];
+    const candidates = await db.clubMapVersion.findMany({ where: { clubMapId: job.clubMapId, sourceHash: job.sourceHash }, select: { id: true, documentHash: true, patch: true } });
+    const existing = candidates.filter((v) => mapDocument.sameVersionPatch(v.patch, patch));
+    if (existing.length) {
       // The edition is the file; its document is the file's latest import (a review, a re-match) — §6.4.
-      if (existing.documentHash !== job.documentHash) await db.clubMapVersion.update({ where: { id: existing.id }, data: { documentHash: job.documentHash } });
+      for (const v of existing) if (v.documentHash !== job.documentHash) await db.clubMapVersion.update({ where: { id: v.id }, data: { documentHash: job.documentHash } });
+    } else if (patch.length) {
+      // Promoted versions are created by promote, never by a pin (§6.4).
+      console.warn(`[map-import] club map ${job.clubMapId}: no version of ${job.sourceHash} with this patch; nothing pinned`);
     } else {
       const source = await db.mapSource.findUnique({ where: { fileHash: job.sourceHash }, select: { fileName: true, uploadedBy: true } });
       const last = await db.clubMapVersion.aggregate({ where: { clubMapId: job.clubMapId }, _max: { seq: true } });
@@ -302,7 +329,37 @@ export async function applyJobResult(db: Db, job: Pick<ImportJobRow, "eventId" |
       });
     }
   }
+  // The promote's event half (§6.4): after its version holds the document, under the patch row lock.
+  if (promote) await completePromote(db, { eventId: job.eventId, clubMapId: job.clubMapId, sourceHash: job.sourceHash, documentHash: job.documentHash, patch: job.patch });
   await touchDocument(db, job.documentHash);
+}
+
+export interface InsertImportJobInput {
+  sourceHash: string;
+  eventId: bigint | null;
+  clubMapId: string | null;
+  startedBy: string | null;
+  decisions: mapImport.SymbolDecision[];
+  patch: mapDocument.VersionPatch;
+}
+
+/** A queued job row, in the caller's transaction (promote inserts its version and job together, §5); run it with `holdImportJob`. */
+export async function insertQueuedImportJob(db: Db, input: InsertImportJobInput): Promise<ImportJobRow> {
+  const { decisions, patch, ...target } = input;
+  return asRow(await db.mapImportJob.create({
+    data: { ...target, decisions: decisions.map((d) => ({ ...d })) as Prisma.InputJsonArray, patch: patchJson(patch), state: "queued" },
+    select: JOB_SELECT,
+  }));
+}
+
+/** Kick the engine for `row` and hold up to `holdMs` for its terminal state; the freshest row either way. */
+export async function holdImportJob(db: Db, row: ImportJobRow, holdMs = DEFAULT_HOLD_MS): Promise<ImportJobRow> {
+  const finished = waitFor(row.id, holdMs);
+  void kickImportJobs(db);
+  const result = holdMs > 0 ? await finished : null;
+  if (result) return result;
+  const fresh = await db.mapImportJob.findUnique({ where: { id: row.id }, select: JOB_SELECT });
+  return fresh ? asRow(fresh) : row;
 }
 
 export interface StartImportJobInput {
@@ -311,6 +368,8 @@ export interface StartImportJobInput {
   clubMapId?: string | null;
   /** The signed-in user whose request starts the job (docs/map-storage.md §4.2); omitted for the backfill. */
   startedBy?: string | null;
+  /** The club version's patch to bake (docs/map-patches.md §5); default none. */
+  patch?: mapDocument.VersionPatch;
   /** Wait this long for the job to finish before returning (0 = return at once). */
   holdMs?: number;
 }
@@ -321,13 +380,17 @@ export interface StartImportJobInput {
  * either importer), current library release (the library id follows the
  * map scale) and the same decisions applied (docs/map-symbols.md §8.5).
  */
-export async function currentDocumentFor(db: Db, sourceHash: string, decisions: readonly mapImport.SymbolDecision[]): Promise<{ hash: string } | null> {
+export async function currentDocumentFor(db: Db, sourceHash: string, decisions: readonly mapImport.SymbolDecision[], patch: mapDocument.VersionPatch = []): Promise<{ hash: string } | null> {
   const candidates = await db.mapDocument.findMany({
     where: { sourceHash, importerVersion: { in: [...IMPORTER_VERSIONS] }, libraryVersion: { endsWith: `@${symbolLibrary.SYMBOL_LIBRARY_VERSION}` } },
     orderBy: { createdAt: "desc" },
-    select: { hash: true, report: true },
+    select: { hash: true, report: true, patch: true },
   });
-  for (const c of candidates) if (await storedDocumentFollowsDecisions(db, c, decisions)) return { hash: c.hash };
+  for (const c of candidates) {
+    // The same version patch baked (docs/map-patches.md §5 answer 1); null and [] are none.
+    if (!mapDocument.sameVersionPatch(c.patch, patch)) continue;
+    if (await storedDocumentFollowsDecisions(db, c, decisions)) return { hash: c.hash };
+  }
   return null;
 }
 
@@ -344,12 +407,13 @@ export async function startImportJob(db: Db, input: StartImportJobInput): Promis
   const decisions = source ? await loadClubDecisions(db, source.kind) : [];
   // Plain JSON for the column; optional fields that are absent stay absent.
   const snapshot = decisions.map((d) => ({ ...d })) as Prisma.InputJsonArray;
-  const existing = await currentDocumentFor(db, input.sourceHash, decisions);
+  const patch = input.patch ?? [];
+  const existing = await currentDocumentFor(db, input.sourceHash, decisions, patch);
   if (existing) {
     // Touch before the job row references it, so a GC run racing this insert skips the document (§8.2).
     await touchDocument(db, existing.hash);
     const row = asRow(await db.mapImportJob.create({
-      data: { ...target, sourceHash: input.sourceHash, decisions: snapshot, state: "done", stage: "done", progress: 1, documentHash: existing.hash, claimedBy: INSTANCE_ID, heartbeatAt: new Date() },
+      data: { ...target, sourceHash: input.sourceHash, decisions: snapshot, patch: patchJson(patch), state: "done", stage: "done", progress: 1, documentHash: existing.hash, claimedBy: INSTANCE_ID, heartbeatAt: new Date() },
       select: JOB_SELECT,
     }));
     await applyJobResult(db, row);
@@ -361,7 +425,7 @@ export async function startImportJob(db: Db, input: StartImportJobInput): Promis
     return row;
   }
 
-  const row = asRow(await db.mapImportJob.create({ data: { ...target, sourceHash: input.sourceHash, decisions: snapshot, state: "queued" }, select: JOB_SELECT }));
+  const row = asRow(await db.mapImportJob.create({ data: { ...target, sourceHash: input.sourceHash, decisions: snapshot, patch: patchJson(patch), state: "queued" }, select: JOB_SELECT }));
   const holdMs = input.holdMs ?? DEFAULT_HOLD_MS;
   const finished = waitFor(row.id, holdMs);
   void kickImportJobs(db);

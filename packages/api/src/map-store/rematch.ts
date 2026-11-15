@@ -21,7 +21,7 @@
  * keyed to another document than its pin (docs/map-patches.md §4.4).
  */
 
-import { symbolLibrary } from "@oxygen/shared";
+import { mapDocument, symbolLibrary } from "@oxygen/shared";
 import type { Prisma, PrismaClient } from "../generated/prisma/client.js";
 import { IMPORTER_VERSIONS } from "../import/ocad.js";
 import { loadClubDecisions, storedDocumentFollowsDecisions } from "./decisions.js";
@@ -44,6 +44,11 @@ export interface RematchItem {
   /** The stale document (a `patch` item: the one the patch is keyed onto); null for an `unpinned` row. */
   documentHash: string | null;
   reason: RematchReason;
+  /**
+   * The corrections the re-import bakes (docs/map-patches.md §5 answer 1): a club item's version patch, an event
+   * item's from the document it replaces, an `unpinned` row's from its club version; absent = none.
+   */
+  patch?: mapDocument.VersionPatch;
 }
 
 export interface RematchItemResult extends RematchItem {
@@ -85,7 +90,7 @@ export async function planRematch(db: Db, opts: Pick<RematchOptions, "eventId" |
     ? []
     : await db.clubMapVersion.findMany({
         orderBy: [{ uploadedAt: "asc" }, { id: "asc" }],
-        select: { id: true, sourceHash: true, documentHash: true, label: true, clubMap: { select: { name: true } } },
+        select: { id: true, sourceHash: true, documentHash: true, label: true, patch: true, clubMap: { select: { name: true } } },
       });
   const files = await db.mapFile.findMany({
     where: { documentHash: { not: null }, sourceHash: { not: null }, event: { removed: false }, ...(opts.eventId ? { eventId: opts.eventId } : {}) },
@@ -96,8 +101,10 @@ export async function planRematch(db: Db, opts: Pick<RematchOptions, "eventId" |
   const hashes = [...new Set([...versions.map((v) => v.documentHash), ...files.map((f) => f.documentHash!)])];
   const docs = await db.mapDocument.findMany({
     where: { hash: { in: hashes } },
-    select: { hash: true, importerVersion: true, libraryVersion: true, report: true, source: { select: { kind: true } } },
+    select: { hash: true, importerVersion: true, libraryVersion: true, report: true, patch: true, source: { select: { kind: true } } },
   });
+  const patchOf = new Map(docs.map((d) => [d.hash, mapDocument.parseVersionPatch(d.patch)]));
+  const withPatch = (patch: mapDocument.VersionPatch | undefined) => (patch && patch.length ? { patch } : {});
   const decisionsByKind = new Map<string, Awaited<ReturnType<typeof loadClubDecisions>>>();
   const reasons = new Map<string, RematchReason | null>();
   for (const d of docs) {
@@ -114,7 +121,7 @@ export async function planRematch(db: Db, opts: Pick<RematchOptions, "eventId" |
   const items: RematchItem[] = [];
   for (const v of versions) {
     const reason = reasons.get(v.documentHash) ?? null;
-    if (reason) items.push({ kind: "club", id: v.id, name: `${v.clubMap.name} (${v.label})`, sourceHash: v.sourceHash, documentHash: v.documentHash, reason });
+    if (reason) items.push({ kind: "club", id: v.id, name: `${v.clubMap.name} (${v.label})`, sourceHash: v.sourceHash, documentHash: v.documentHash, reason, ...withPatch(mapDocument.parseVersionPatch(v.patch)) });
   }
   const seen = new Set<string>();
   for (const f of files) {
@@ -124,18 +131,18 @@ export async function planRematch(db: Db, opts: Pick<RematchOptions, "eventId" |
     const key = `${f.eventId}|${f.sourceHash}`;
     if (seen.has(key)) continue;
     seen.add(key);
-    items.push({ kind: "event", id: String(f.eventId), name: f.event.name || f.event.nameId, sourceHash: f.sourceHash!, documentHash: f.documentHash!, reason });
+    items.push({ kind: "event", id: String(f.eventId), name: f.event.name || f.event.nameId, sourceHash: f.sourceHash!, documentHash: f.documentHash!, reason, ...withPatch(patchOf.get(f.documentHash!)) });
   }
   const unpinned = await db.mapFile.findMany({
     where: { documentHash: null, sourceHash: { not: null }, event: { removed: false }, ...(opts.eventId ? { eventId: opts.eventId } : {}) },
     orderBy: [{ eventId: "asc" }, { id: "asc" }],
-    select: { eventId: true, sourceHash: true, event: { select: { name: true, nameId: true } } },
+    select: { eventId: true, sourceHash: true, event: { select: { name: true, nameId: true } }, clubMapVersion: { select: { patch: true } } },
   });
   for (const f of unpinned) {
     const key = `${f.eventId}|${f.sourceHash}`;
     if (seen.has(key)) continue;
     seen.add(key);
-    items.push({ kind: "event", id: String(f.eventId), name: f.event.name || f.event.nameId, sourceHash: f.sourceHash!, documentHash: null, reason: "unpinned" });
+    items.push({ kind: "event", id: String(f.eventId), name: f.event.name || f.event.nameId, sourceHash: f.sourceHash!, documentHash: null, reason: "unpinned", ...withPatch(mapDocument.parseVersionPatch(f.clubMapVersion?.patch)) });
   }
   return opts.limit ? items.slice(0, opts.limit) : items;
 }
@@ -161,11 +168,12 @@ async function sweepItem(db: Db, item: RematchItem): Promise<Omit<RematchItemRes
   return { outcome: "done", jobId: null, newDocumentHash: r.to ?? (await eventDocumentHash(db, BigInt(item.id))), error: null };
 }
 
-async function rematchItem(db: Db, item: RematchItem, timeoutMs?: number): Promise<Omit<RematchItemResult, keyof RematchItem>> {
+/** One pin's re-import (exported for the promote tests, which run their own items). */
+export async function rematchItem(db: Db, item: RematchItem, timeoutMs?: number): Promise<Omit<RematchItemResult, keyof RematchItem>> {
   const target = item.kind === "club"
     ? { clubMapId: (await db.clubMapVersion.findUniqueOrThrow({ where: { id: item.id }, select: { clubMapId: true } })).clubMapId }
     : { eventId: BigInt(item.id) };
-  let job: ImportJobRow | null = await startImportJob(db, { sourceHash: item.sourceHash, ...target, holdMs: 0 });
+  let job: ImportJobRow | null = await startImportJob(db, { sourceHash: item.sourceHash, ...target, patch: item.patch ?? [], holdMs: 0 });
   if (job.state !== "done" && job.state !== "failed") job = await awaitImportJob(db, job.id, timeoutMs ? { timeoutMs } : {});
   if (job?.state === "done") return { outcome: "done", jobId: job.id, newDocumentHash: job.documentHash, error: null };
   const error = job?.state === "failed" ? (job.error ?? "import failed") : `import still ${job?.state ?? "missing"} when the wait ended`;

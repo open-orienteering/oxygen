@@ -5,7 +5,7 @@
  * reviewed document pinned where the matcher's output was).
  */
 
-import { mapImport, symbolLibrary, type mapDocument } from "@oxygen/shared";
+import { mapDocument, mapImport, symbolLibrary } from "@oxygen/shared";
 import type { Prisma, PrismaClient } from "../generated/prisma/client.js";
 import { loadClubDecisions, planDecisionWrites, storedDocumentFollowsDecisions, writeDecisions, type ReviewDecision } from "./decisions.js";
 import { applyJobResult, startImportJob, type ImportJobRow } from "./jobs.js";
@@ -85,12 +85,13 @@ export type DecideResult =
  * Throws `DecisionInputError` for a list that does not fit the document.
  */
 export async function decideOnDocument(db: PrismaClient, input: { hash: string; decisions: readonly ReviewDecision[]; userId: string | null; holdMs?: number }): Promise<DecideResult> {
-  const doc = await db.mapDocument.findUnique({ where: { hash: input.hash }, select: { sourceHash: true } });
+  const doc = await db.mapDocument.findUnique({ where: { hash: input.hash }, select: { sourceHash: true, patch: true } });
   const header = doc ? (await readDocumentHead(db, input.hash))?.header : null;
   if (!doc || !header) return { ok: false, reason: "not-found" };
   const writes = planDecisionWrites(header, input.decisions);
   await writeDecisions(db, writes, input.userId);
-  const job = await startImportJob(db, { sourceHash: doc.sourceHash, startedBy: input.userId, holdMs: input.holdMs });
+  // The reviewed document's corrections come along (docs/map-patches.md §5 answer 1).
+  const job = await startImportJob(db, { sourceHash: doc.sourceHash, startedBy: input.userId, holdMs: input.holdMs, patch: mapDocument.parseVersionPatch(doc.patch) });
   return { ok: true, job, applied: writes.length };
 }
 
@@ -105,25 +106,34 @@ export type FinaliseResult =
  * the event's `map_files` rows carrying that source, or the club map's
  * version of that source (its `document_hash` moves, §6.4). The same path
  * as a job's pins (`applyJobResult`), so it is idempotent and finalising
- * the matcher's own output is a no-op.
+ * the matcher's own output is a no-op. A target is its source *and* its
+ * version patch (docs/map-patches.md §5 answer 1): a document baked with
+ * other corrections than the target's is `source-mismatch`.
  */
 export async function finaliseDocument(db: Db, hash: string, target: FinaliseTarget): Promise<FinaliseResult> {
-  const doc = await db.mapDocument.findUnique({ where: { hash }, select: { sourceHash: true } });
+  const doc = await db.mapDocument.findUnique({ where: { hash }, select: { sourceHash: true, patch: true } });
   if (!doc) return { ok: false, reason: "not-found" };
+  const patch = mapDocument.parseVersionPatch(doc.patch);
   if (target.kind === "event") {
-    const rows = await db.mapFile.findMany({ where: { eventId: target.eventId }, select: { sourceHash: true, documentHash: true } });
+    const rows = await db.mapFile.findMany({
+      where: { eventId: target.eventId },
+      select: { sourceHash: true, documentHash: true, document: { select: { patch: true } }, clubMapVersion: { select: { patch: true } } },
+    });
     if (!rows.length) return { ok: false, reason: "no-target" };
-    const matching = rows.filter((r) => r.sourceHash === doc.sourceHash);
+    // The row's corrections: those of the document it pins, else (unpinned) those of the club version it came from.
+    const rowPatch = (r: (typeof rows)[number]) => (r.documentHash ? (r.document?.patch ?? null) : (r.clubMapVersion?.patch ?? null));
+    const matching = rows.filter((r) => r.sourceHash === doc.sourceHash && mapDocument.sameVersionPatch(rowPatch(r), patch));
     if (!matching.length) return { ok: false, reason: "source-mismatch" };
-    await applyJobResult(db, { eventId: target.eventId, clubMapId: null, sourceHash: doc.sourceHash, documentHash: hash });
+    await applyJobResult(db, { eventId: target.eventId, clubMapId: null, sourceHash: doc.sourceHash, documentHash: hash, patch });
     return { ok: true, pinned: matching.length, previous: distinct(matching.map((r) => r.documentHash)) };
   }
   const map = await db.clubMap.findUnique({ where: { id: target.clubMapId }, select: { id: true } });
   if (!map) return { ok: false, reason: "no-target" };
-  const version = await db.clubMapVersion.findFirst({ where: { clubMapId: target.clubMapId, sourceHash: doc.sourceHash }, select: { documentHash: true } });
-  if (!version) return { ok: false, reason: "source-mismatch" };
-  await applyJobResult(db, { eventId: null, clubMapId: target.clubMapId, sourceHash: doc.sourceHash, documentHash: hash });
-  return { ok: true, pinned: 1, previous: distinct([version.documentHash]) };
+  const versions = await db.clubMapVersion.findMany({ where: { clubMapId: target.clubMapId, sourceHash: doc.sourceHash }, select: { documentHash: true, patch: true } });
+  const matching = versions.filter((v) => mapDocument.sameVersionPatch(v.patch, patch));
+  if (!matching.length) return { ok: false, reason: "source-mismatch" };
+  await applyJobResult(db, { eventId: null, clubMapId: target.clubMapId, sourceHash: doc.sourceHash, documentHash: hash, patch });
+  return { ok: true, pinned: matching.length, previous: distinct(matching.map((v) => v.documentHash)) };
 }
 
 function distinct(hashes: (string | null)[]): string[] {

@@ -18,7 +18,8 @@ import { encodeHlc, mapDocument } from "@oxygen/shared";
 import { livePrintPatch } from "@oxygen/shared/print";
 import type { Prisma, PrismaClient } from "../generated/prisma/client.js";
 import { nextServerHlc } from "../serverClock.js";
-import { decodedDocument, eventDocumentHash } from "./event-document.js";
+import { decodedDocument, eventDocumentHash, writePinnedMapFileColumns } from "./event-document.js";
+import { synchronizePositionedControlCoordinates } from "../event-crs.js";
 
 type Db = PrismaClient | Prisma.TransactionClient;
 
@@ -151,12 +152,21 @@ export async function eventPatchOnPin(db: Db, eventId: bigint, pinHash: string |
 
 // ---- writes -----------------------------------------------------------------
 
+/** The event's promote job while it is queued or running (§5 answer 4): a job with both an event and a club map target. */
+export async function activePromoteJob(db: Db, eventId: bigint): Promise<{ id: string } | null> {
+  return db.mapImportJob.findFirst({
+    where: { eventId, clubMapId: { not: null }, state: { in: ["queued", "running"] }, NOT: { patch: { equals: [] } } },
+    select: { id: true },
+  });
+}
+
 /**
  * Steps 1–3 of a write (§3.2) inside the caller's transaction: the pin
  * (refused without one, or when `documentHash` names another), the row
- * created if missing and locked, refused when dormant.
+ * created if missing and locked, refused while the event's promote runs
+ * (`PATCH_PROMOTING`, §5 answer 4) and when dormant.
  */
-async function lockPatchRow(tx: Prisma.TransactionClient, eventId: bigint, documentHash?: string): Promise<{ row: PatchRow; patch: mapDocument.MapPatch }> {
+export async function lockPatchRow(tx: Prisma.TransactionClient, eventId: bigint, documentHash?: string): Promise<{ row: PatchRow; patch: mapDocument.MapPatch }> {
   const pin = await eventDocumentHash(tx, eventId);
   if (!pin) throw new TRPCError({ code: "PRECONDITION_FAILED", message: "PATCH_NO_DOCUMENT: the event has no map document" });
   if (documentHash !== undefined && documentHash !== pin) {
@@ -171,6 +181,11 @@ async function lockPatchRow(tx: Prisma.TransactionClient, eventId: bigint, docum
   await tx.$queryRaw`SELECT 1 FROM "oxygen"."map_patches" WHERE "event_id" = ${eventId} FOR UPDATE`;
   const row = await tx.mapPatch.findUnique({ where: { eventId }, select: ROW_SELECT });
   if (!row) throw new Error(`map_patches row for event ${eventId} vanished under the lock`);
+  // Under the lock, so a promote that inserted its job in another transaction is seen once that commits.
+  const promoting = await activePromoteJob(tx, eventId);
+  if (promoting) {
+    throw new TRPCError({ code: "PRECONDITION_FAILED", message: `PATCH_PROMOTING: the event's corrections are being saved to the club map (job ${promoting.id})` });
+  }
   // The pin again, under the lock: a pin that moved since step 1 makes the row dormant now.
   const pinNow = await eventDocumentHash(tx, eventId);
   if (row.documentHash !== pin || pinNow !== pin) {
@@ -187,7 +202,7 @@ async function lockPatchRow(tx: Prisma.TransactionClient, eventId: bigint, docum
 }
 
 /** The row's columns from a patch, with a fresh version. */
-function rowData(patch: mapDocument.MapPatch, version: bigint) {
+export function rowData(patch: mapDocument.MapPatch, version: bigint) {
   return {
     documentHash: patch.documentHash,
     enabled: patch.enabled,
@@ -214,14 +229,19 @@ const isStale = (err: unknown): boolean => err instanceof TRPCError && err.messa
  * (`PATCH_STALE`, step 3), the row is re-resolved onto the pin (§4.4) and
  * the write runs once more. `PATCH_STALE` stays only when that cannot run.
  */
-async function writePatch(db: PrismaClient, eventId: bigint, write: (tx: Prisma.TransactionClient) => Promise<PatchDelivery>): Promise<PatchDelivery> {
+export async function writePatch<T = PatchDelivery>(
+  db: PrismaClient,
+  eventId: bigint,
+  write: (tx: Prisma.TransactionClient) => Promise<T>,
+  options?: { timeout: number; maxWait: number },
+): Promise<T> {
   try {
-    return await db.$transaction(write);
+    return await db.$transaction(write, options);
   } catch (err) {
     if (!isStale(err)) throw err;
     const r = await reresolveEventPatch(db, eventId);
     if (r.outcome === "failed") throw err;
-    return db.$transaction(write);
+    return db.$transaction(write, options);
   }
 }
 
@@ -272,10 +292,10 @@ export interface ReresolveResult {
   error?: string;
 }
 
-const isClient = (db: Db): db is PrismaClient => typeof (db as PrismaClient).$transaction === "function";
+export const isClient = (db: Db): db is PrismaClient => typeof (db as PrismaClient).$transaction === "function";
 
 /** Prisma's interactive-transaction default (5 s) is short for decoding a club-wide document under the lock. */
-const REKEY_TX = { timeout: 60_000, maxWait: 10_000 } as const;
+export const REKEY_TX = { timeout: 60_000, maxWait: 10_000 } as const;
 
 /**
  * Re-keys the event's patch onto its pin (map-patches §4.4) when the row is
@@ -331,4 +351,98 @@ export async function reresolveAfterPin(db: Db, eventId: bigint): Promise<Rereso
     console.warn(`[map-patches] event ${eventId}: re-resolution failed:`, err);
     return { outcome: "failed", error: err instanceof Error ? err.message : String(err) };
   }
+}
+
+// ---- promote (§5, row G12a) --------------------------------------------------------
+
+export interface PromoteCompletion {
+  /** `pinned`: the event moved onto the new version and its promoted ops removed; `skipped`: the version stands alone. */
+  outcome: "pinned" | "skipped";
+  reason?: string;
+  versionId?: string;
+}
+
+/**
+ * The event half of a finished promote job (`applyJobResult` with both
+ * targets, map-storage §6.4; map-patches §5 answer 5): under the patch row
+ * lock, the last layer's op ids removed from the event's patch — except
+ * those the bake skipped (the document report's `corrections.issues` for
+ * that layer), which stay as any op that did not apply — and the event's
+ * rows of the source pinned to the new version's document, only while the
+ * event is still on the base version (else the version stands and the
+ * event is left alone, logged). Then the pin's columns, the controls'
+ * positions and re-resolution of what is left in the patch (§4.4), as any
+ * pin; those steps are logged, never thrown, so the job cannot fail once
+ * the event is on the version.
+ */
+export async function completePromote(
+  db: Db,
+  job: { eventId: bigint; clubMapId: string; sourceHash: string; documentHash: string; patch: mapDocument.VersionPatch },
+): Promise<PromoteCompletion> {
+  const last = job.patch.at(-1);
+  if (!last) return { outcome: "skipped", reason: "the job carries no layer" };
+  const base = job.patch.slice(0, -1);
+  const versions = await db.clubMapVersion.findMany({ where: { clubMapId: job.clubMapId, sourceHash: job.sourceHash }, select: { id: true, patch: true } });
+  const target = versions.find((v) => mapDocument.sameVersionPatch(v.patch, job.patch));
+  const from = versions.find((v) => mapDocument.sameVersionPatch(v.patch, base));
+  if (!target) return { outcome: "skipped", reason: "the promoted version is gone" };
+  // Ops the bake skipped on the fresh import stay in the event's patch (§5 answer 5).
+  const report = await db.mapDocument.findUnique({ where: { hash: job.documentHash }, select: { report: true } });
+  const lastLayer = job.patch.length - 1;
+  const bakeSkipped = new Set(
+    ((report?.report as { corrections?: { issues?: { layer: number; opId: string }[] } } | null)?.corrections?.issues ?? [])
+      .filter((i) => i.layer === lastLayer)
+      .map((i) => i.opId),
+  );
+  const promotedIds = Object.keys(last.ops).filter((id) => !bakeSkipped.has(id));
+
+  const move = async (tx: Prisma.TransactionClient): Promise<PromoteCompletion> => {
+    await tx.$queryRaw`SELECT 1 FROM "oxygen"."map_patches" WHERE "event_id" = ${job.eventId} FOR UPDATE`;
+    const files = await tx.mapFile.findMany({ where: { eventId: job.eventId, sourceHash: job.sourceHash }, select: { clubMapVersionId: true } });
+    if (!from || files.length === 0 || files.some((f) => f.clubMapVersionId !== from.id)) {
+      return { outcome: "skipped", reason: "the event's map moved while the promote ran", versionId: target.id };
+    }
+    const row = await tx.mapPatch.findUnique({ where: { eventId: job.eventId }, select: ROW_SELECT });
+    const patch = row ? patchOfRow(row) : null;
+    if (row && patch) {
+      const next = mapDocument.mergePatch(patch, { remove: promotedIds });
+      if (!samePatchContent(patch, next)) await tx.mapPatch.update({ where: { eventId: job.eventId }, data: rowData(next, nextPatchVersion()) });
+    }
+    await tx.mapFile.updateMany({ where: { eventId: job.eventId, sourceHash: job.sourceHash }, data: { documentHash: job.documentHash, clubMapVersionId: target.id } });
+    return { outcome: "pinned", versionId: target.id };
+  };
+  const r = isClient(db) ? await db.$transaction(move, REKEY_TX) : await move(db);
+  if (r.outcome !== "pinned") {
+    console.warn(`[map-patches] event ${job.eventId}: promote to version ${target.id} not applied to the event: ${r.reason}`);
+    return r;
+  }
+  // The event is on the version now: what follows is the pin's housekeeping, logged and never thrown,
+  // so the job cannot fail (and abandonPromote run) after this point.
+  try {
+    await writePinnedMapFileColumns(db, job.eventId, job.sourceHash, job.documentHash);
+    await synchronizePositionedControlCoordinates(db, job.eventId);
+  } catch (err) {
+    console.warn(`[map-patches] event ${job.eventId}: the pin's columns after the promote:`, err);
+  }
+  // What stays in the patch (ops that did not apply, unresolved entries) follows the pin (§4.4).
+  await reresolveAfterPin(db, job.eventId);
+  return r;
+}
+
+/**
+ * A promote job that failed (§5): its pending version is deleted — and
+ * the event's patch, which promote leaves whole until completion, stays.
+ * A version an event already pins (a failure after `completePromote`, a
+ * re-claimed run that failed) is kept: it holds corrections that left the
+ * event's patch. Returns the deleted version ids.
+ */
+export async function abandonPromote(db: Db, job: { clubMapId: string; sourceHash: string; patch: mapDocument.VersionPatch }): Promise<string[]> {
+  if (job.patch.length === 0) return [];
+  const versions = await db.clubMapVersion.findMany({
+    where: { clubMapId: job.clubMapId, sourceHash: job.sourceHash, mapFiles: { none: {} } },
+    select: { id: true, patch: true },
+  });
+  const pending = versions.filter((v) => mapDocument.sameVersionPatch(v.patch, job.patch)).map((v) => v.id);
+  if (pending.length) await db.clubMapVersion.deleteMany({ where: { id: { in: pending }, mapFiles: { none: {} } } });
+  return pending;
 }
