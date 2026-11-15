@@ -20,7 +20,7 @@ import { OBJECT_TYPE, documentSymbolSchema, type DocumentSymbol } from "./header
 const INT32_MIN = -(2 ** 31);
 const INT32_MAX = 2 ** 31 - 1;
 /** `attrs.symbolIdx` is u16 (map-document-format §2.4). */
-const SYMBOL_TABLE_MAX = 0x10000;
+export const SYMBOL_TABLE_MAX = 0x10000;
 /** `sourceIndex` of an added object — no source object has it (map-patches §2.2). */
 export const ADDED_SOURCE_INDEX = 0xffffffff;
 
@@ -227,7 +227,7 @@ export interface AppliedPatch {
 }
 
 /** The symbol kind an object type takes (map-patches §2.3). */
-const symbolKindOfType = (type: number): DocumentSymbol["kind"] | undefined =>
+export const symbolKindOfType = (type: number): DocumentSymbol["kind"] | undefined =>
   type === OBJECT_TYPE.point ? "point"
     : type === OBJECT_TYPE.line ? "line"
       : type === OBJECT_TYPE.area ? "area"
@@ -238,7 +238,7 @@ const symbolKindOfType = (type: number): DocumentSymbol["kind"] | undefined =>
 const isTextType = (type: number): boolean => symbolKindOfType(type) === "text";
 
 /** Whether `coords` is a valid shape for an object of `type` that had `before` coordinates (map-patches §2.3). */
-function geometryValid(type: number, n: number, before?: number): boolean {
+export function geometryValid(type: number, n: number, before?: number): boolean {
   if (type === OBJECT_TYPE.point) return n === 1;
   if (type === OBJECT_TYPE.line) return n >= 2;
   if (type === OBJECT_TYPE.area) return n >= 3;
