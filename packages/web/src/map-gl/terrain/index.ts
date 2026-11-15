@@ -8,3 +8,4 @@ export * from "./mesh.js";
 export * from "./pick.js";
 export * from "./shade.js";
 export * from "./program.js";
+export * from "./lines.js";
