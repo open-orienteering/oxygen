@@ -2067,9 +2067,8 @@ unchanged:
   only (F18): the flag bits are never set or cleared.
 - Writing rounds every point to whole document units. Unedited, the round
   trip is exact: every line and area of `e2e/test.ocd` and of the local
-  corpus maps (Club-full's 84 293, sprint's 9 423, club-2026's 37 482)
-  comes back coordinate for coordinate, flags included (checked once
-  locally, G7; the corpus stays in `.local/`).
+  corpus maps comes back coordinate for coordinate, flags included
+  (checked once locally, G7; the corpus stays in `.local/`).
 
 **Gestures** (`tools/bindings.ts` `mapNodesBinding`, through
 `geometry-gestures.ts` and `geometry-edit.ts` as §7 "Editing geometry";
