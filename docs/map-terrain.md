@@ -1448,6 +1448,29 @@ credential from the instance's secret store). H12 implements them (§7.8).
     instance with auth off every caller may set or clear the account and
     start *Test connection*, as with the Eventor keys; nobody can read it.
 
+### 7.0c Decided with the user (2026-11-15): maps over the window cap
+
+Found on 8080 after H12: a 1:15 000 club map whose objects span about
+20 × 17 km (its print window is A3, about 6.3 × 4.5 km) needs about 89 M
+window cells at 2 m, over §7.2's 64 M cap, and ended `unavailable:
+over-cap` with no DEM. H13 implements this answer.
+
+12. **A map over the cap at its level reads the next coarser overview.**
+    When the window at the level `chooseLevel` picks (2 m for
+    `lantmateriet-2m`, 1 m for the 1 m setting) is over §7.2's 64 M
+    cells, the fetch reads the tiles' next coarser overview instead (4 m
+    from 2 m, 2 m from 1 m) — the same tiles and requests, no extra
+    download. One step only: if that level is over the cap too, the map
+    stays `unavailable: over-cap`. The cap itself is not raised (its
+    memory reasoning in §7.2 stands), and the extent is not cut to the
+    print window. The level actually read is recorded with the DEM
+    artifact and shown in the tab's state list (e.g. "read at 4 m"); the
+    §7.5 gate applies unchanged. Maps that already ended `unavailable:
+    over-cap` are queued again once, since the new rule can change their
+    result. An `over-cap` ending stores which cap it hit (tiles, window
+    cells or STAC pages) in the job's error, and the tab says so instead
+    of only "the map is too large".
+
 ### 7.1 Providers
 
 `packages/api/src/map-store/dem-providers.ts`. In this order; the first
@@ -1836,6 +1859,10 @@ the aggregates and the time; the state list with a retry per row.
   the band weighting leaves a slight kink at each contour (visible as
   faint terraces in flat ground); a TIN with medial-axis points (10 §2.2)
   is the alternative if that matters. No row.
+- §7.0c (H13): the coarser-overview step for a map over the window cap,
+  the level read shown in the tab, the one-time re-queue of
+  `unavailable: over-cap` maps, and which cap an `over-cap` ending hit.
+  Today such a map has no DEM and the job's error is empty.
 - §7.8: a change of resolution or provider queues no existing map (they
   re-fetch lazily at their next view), and the other resolution's rows
   are not collected until a `TERRAIN_VERSION` bump. No row.
