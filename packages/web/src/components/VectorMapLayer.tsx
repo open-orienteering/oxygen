@@ -26,6 +26,11 @@
  * draw the map" message (`data-status="webgl"`); the first lost context
  * remounts the canvas (a fresh context) and loads again (§5.4 "Layer").
  * There is no other renderer to fall back to.
+ *
+ * With `heightField` and `terrain` set (the viewer's 3D mode, §5.4 "3D
+ * mode") the engine gets the field and every frame is a 3D one — the map
+ * draped over the mesh under `terrain.camera`; without them the frame is
+ * the 2D view again.
  */
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
@@ -40,6 +45,9 @@ import type { LoadedMapDocument } from "../lib/map-document-cache";
 import { loadMapFonts, loadTextAtlas } from "../lib/map-fonts";
 import { textAtlasPagesFor } from "../map-gl/text-atlas";
 import { budgetBytes, documentColours, documentProxyColours, type MapBudget } from "../lib/vector-map";
+import type { HeightField } from "@oxygen/shared/src/terrain/field/read.js";
+import type { TerrainCamera } from "../map-gl/terrain/camera";
+import type { TerrainMesh } from "../map-gl/terrain/mesh";
 
 /** The editor's loupe: the magnified point in paper µm, the circle's centre and diameter in container CSS px. */
 export interface VectorLoupe {
@@ -66,6 +74,18 @@ export interface VectorMapObjects {
 
 export type VectorLayerStatus = "loading" | "drawn" | "complete" | "error" | "webgl";
 
+/** A 3D frame's camera and exaggeration (§5.6 "Engine API"). */
+export interface VectorTerrainFrame {
+  camera: TerrainCamera;
+  exaggeration: number;
+}
+
+/** The field the engine draws, once its mesh is up (§5.4 "3D mode" "Drawing"). */
+export interface VectorTerrainInfo {
+  mesh: TerrainMesh;
+  field: HeightField;
+}
+
 interface Props {
   doc: LoadedMapDocument;
   /** The GL view (device px, rotation folded in); null until the viewer has one. */
@@ -89,9 +109,19 @@ interface Props {
   patchVersion?: string;
   /** Map mode's document objects; absent: nothing is posted. */
   mapObjects?: VectorMapObjects | null;
+  /** The height field 3D frames draw (§5.4 "3D mode"); `null` none (the engine drops it). */
+  heightField?: HeightField | null;
+  /** Draw 3D frames under this camera; `null` 2D. Needs `heightField`'s mesh. */
+  terrain?: VectorTerrainFrame | null;
+  /** The field's mesh once up (`null` when it goes). */
+  onTerrain?: (info: VectorTerrainInfo | null) => void;
+  /** The engine could not take the field (too large for the GPU, a lost context). */
+  onTerrainError?: (err: Error) => void;
+  /** The renderer's texture limit, once it exists. */
+  onMaxTextureSize?: (size: number) => void;
 }
 
-export function VectorMapLayer({ doc, view, width, height, budget, zIndex = 1, course = null, onCourse, onCourseSupport, loupe = null, patch = null, patchVersion = "0", mapObjects = null }: Props) {
+export function VectorMapLayer({ doc, view, width, height, budget, zIndex = 1, course = null, onCourse, onCourseSupport, loupe = null, patch = null, patchVersion = "0", mapObjects = null, heightField = null, terrain = null, onTerrain, onTerrainError, onMaxTextureSize }: Props) {
   const { t } = useTranslation("dashboard");
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const engineRef = useRef<MapGlEngine | null>(null);
@@ -109,6 +139,21 @@ export function VectorMapLayer({ doc, view, width, height, budget, zIndex = 1, c
   loupeRef.current = loupe;
   const insetRef = useRef(false);
 
+  // 3D (§5.4 "3D mode"): the frame drawn last, and whether its drape is complete and settled.
+  const terrainRef = useRef(terrain);
+  terrainRef.current = terrain;
+  const onTerrainRef = useRef(onTerrain);
+  onTerrainRef.current = onTerrain;
+  const onTerrainErrorRef = useRef(onTerrainError);
+  onTerrainErrorRef.current = onTerrainError;
+  const [mode, setMode] = useState<"2d" | "3d">("2d");
+  const [terrainReady, setTerrainReady] = useState(false);
+  const readyRef = useRef<{ key: string; complete: boolean; timer: ReturnType<typeof setTimeout> | null }>({ key: "", complete: false, timer: null });
+  /** Whether this engine was given a field (a later `null` must reach it, even while it is in flight). */
+  const fieldSentRef = useRef(false);
+  /** The attempt whose load finished (the field goes to that engine). */
+  const [loadedAttempt, setLoadedAttempt] = useState<number | null>(null);
+
   const courseRef = useRef(course);
   courseRef.current = course;
   const patchRef = useRef({ patch, version: patchVersion });
@@ -119,6 +164,8 @@ export function VectorMapLayer({ doc, view, width, height, budget, zIndex = 1, c
   onCourseRef.current = onCourse;
   const onCourseSupportRef = useRef(onCourseSupport);
   onCourseSupportRef.current = onCourseSupport;
+  const onMaxTextureSizeRef = useRef(onMaxTextureSize);
+  onMaxTextureSizeRef.current = onMaxTextureSize;
   // The edit input (§5.5 "Document objects"): rebuilt only when the selection or the draft changes.
   const selected = mapObjects?.selected;
   const draft = mapObjects?.draft;
@@ -137,6 +184,31 @@ export function VectorMapLayer({ doc, view, width, height, budget, zIndex = 1, c
     return colourRef.current.rgb;
   };
 
+  /**
+   * `data-terrain-ready`: the camera has not moved for a settle and the engine's detail is complete, and
+   * a 3D frame was drawn after that (the drape it rendered is the complete one).
+   */
+  const trackTerrainReady = (engine: MapGlEngine, tf: VectorTerrainFrame) => {
+    const c = tf.camera, r = readyRef.current;
+    const key = `${c.target.x},${c.target.y},${c.target.z},${c.distanceUm},${c.bearingDeg},${c.pitchDeg},${c.widthPx},${c.heightPx},${tf.exaggeration}`;
+    if (key === r.key) {
+      if (r.complete) setTerrainReady(true);
+      return;
+    }
+    r.key = key;
+    r.complete = false;
+    setTerrainReady(false);
+    if (r.timer) clearTimeout(r.timer);
+    r.timer = setTimeout(() => {
+      r.timer = null;
+      void engine.whenComplete().then(() => {
+        if (readyRef.current.key !== key || engineRef.current !== engine) return;
+        readyRef.current.complete = true;
+        requestDrawRef.current();
+      });
+    }, 250);
+  };
+
   /** Draws the current view on the next animation frame (coalesced). */
   const requestDraw = useCallback(() => {
     if (frameRef.current !== null) return;
@@ -147,8 +219,19 @@ export function VectorMapLayer({ doc, view, width, height, budget, zIndex = 1, c
       // Resizing the drawing buffer clears it; this frame redraws it.
       if (canvas.width !== v.widthPx) canvas.width = v.widthPx;
       if (canvas.height !== v.heightPx) canvas.height = v.heightPx;
-      engine.setView(v);
       const opts = { colour: coloursOf(engine.colours) };
+      const tf = terrainRef.current;
+      if (tf && engine.terrainMesh) {
+        // A 3D frame: the camera's canvas size, the drape re-rendered when it has settled (§5.6 "Settling").
+        if (canvas.width !== tf.camera.widthPx) canvas.width = tf.camera.widthPx;
+        if (canvas.height !== tf.camera.heightPx) canvas.height = tf.camera.heightPx;
+        engine.renderTerrain(tf, opts);
+        setMode("3d");
+        trackTerrainReady(engine, tf);
+        return;
+      }
+      setMode("2d");
+      engine.setView(v);
       engine.render(opts);
       const l = loupeRef.current;
       if (l) {
@@ -164,12 +247,16 @@ export function VectorMapLayer({ doc, view, width, height, budget, zIndex = 1, c
     });
   }, []);
 
+  const requestDrawRef = useRef(requestDraw);
+  requestDrawRef.current = requestDraw;
+
   useEffect(() => {
     const canvas = canvasRef.current;
     if (!canvas) return;
     let renderer: MapGlRenderer;
     try {
-      renderer = new MapGlRenderer(canvas);
+      // Depth for the 3D mode's mesh (§5.6 "Drawing"); the 2D frame does not use it.
+      renderer = new MapGlRenderer(canvas, { depth: true });
     } catch {
       setStatus("webgl");
       return;
@@ -231,6 +318,8 @@ export function VectorMapLayer({ doc, view, width, height, budget, zIndex = 1, c
       if (cancelled) return;
       loadedRef.current = true;
       setStatus("drawn");
+      setLoadedAttempt(attempt);
+      onMaxTextureSizeRef.current?.(renderer.maxTextureSize);
       requestDraw();
       await engine.whenComplete();
       if (!cancelled) setStatus("complete");
@@ -246,10 +335,47 @@ export function VectorMapLayer({ doc, view, width, height, budget, zIndex = 1, c
       frameRef.current = null;
       engineRef.current = null;
       loadedRef.current = false;
+      setLoadedAttempt(null);
+      fieldSentRef.current = false;
+      if (readyRef.current.timer) clearTimeout(readyRef.current.timer);
+      readyRef.current = { key: "", complete: false, timer: null };
       engine.dispose();
       renderer.dispose();
     };
   }, [doc, budget, attempt, requestDraw]);
+
+  // The field goes to the loaded engine (again after a remount); `null` drops it (§5.4 "3D mode" "Drawing").
+  useEffect(() => {
+    const engine = engineRef.current;
+    if (!engine || loadedAttempt === null) return;
+    let current = true;
+    // Nothing sent to this engine yet and nothing to send: no request.
+    if (!heightField && !fieldSentRef.current) return;
+    fieldSentRef.current = !!heightField;
+    engine.setTerrain(heightField).then(
+      (mesh) => {
+        if (!current || engineRef.current !== engine) return;
+        const field = engine.terrainField;
+        onTerrainRef.current?.(mesh && field ? { mesh, field } : null);
+        requestDraw();
+      },
+      (err: unknown) => {
+        // A later field superseded this one: nothing to report.
+        if (!current || engineRef.current !== engine) return;
+        console.warn("[vector-map] height field failed:", err);
+        onTerrainErrorRef.current?.(err instanceof Error ? err : new Error(String(err)));
+      },
+    );
+    return () => {
+      current = false;
+    };
+  }, [heightField, loadedAttempt, requestDraw]);
+
+  // A camera or exaggeration change is one redraw.
+  useEffect(() => {
+    if (terrain) requestDraw();
+    else if (mode === "3d") requestDraw();
+  }, [terrain, mode, requestDraw]);
 
   // Every course change goes to the engine, which keeps one worker request in flight (latest wins);
   // each reply it draws asks for the redraw (`onChange`).
@@ -308,6 +434,8 @@ export function VectorMapLayer({ doc, view, width, height, budget, zIndex = 1, c
         data-selected-objects={highlighted ?? undefined}
         data-status={status}
         data-ready={status === "complete" ? "true" : "false"}
+        data-mode={mode}
+        data-terrain-ready={mode === "3d" && terrainReady ? "true" : undefined}
         style={{ position: "absolute", left: 0, top: 0, width, height, zIndex, pointerEvents: "none" }}
       />
       {(status === "error" || status === "webgl") && (
