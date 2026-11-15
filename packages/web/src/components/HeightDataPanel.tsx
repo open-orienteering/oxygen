@@ -343,7 +343,7 @@ function TestConnectionCard({ view }: { view: View }) {
   );
 }
 
-function stateLabel(row: MapRow): string {
+function stateLabel(row: MapRow): `state_${MapRow["state"] | "notFetched"}` {
   if (row.state === "pending" && !row.job) return "state_notFetched";
   return `state_${row.state}`;
 }
