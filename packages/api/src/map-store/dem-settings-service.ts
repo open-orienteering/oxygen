@@ -198,7 +198,8 @@ export async function listDemMaps(db: Db, store: DemSettingsStore, env: NodeJS.P
       state: d.state,
       reason: d.reason,
       providerId: d.provider?.id ?? null,
-      readAtM: d.state === "ready" ? d.provider?.resolutionM ?? null : null,
+      // shown as "read at N m": three significant digits, so an odd overview width does not read 3.9996
+      readAtM: d.state === "ready" && d.provider ? Number(d.provider.resolutionM.toPrecision(3)) : null,
       overCap: d.state === "unavailable" && d.reason === "over-cap" ? demOverCapOf(job?.error) : null,
       job: job ? { state: job.state, attempts: job.attempts, nextAttemptAt: job.nextAttemptAt?.toISOString() ?? null, error: job.error ? maskSecret(job.error, secrets) : null, updatedAt: job.updatedAt.toISOString() } : null,
       retryable: d.state === "failed" || (d.state === "pending" && !job),

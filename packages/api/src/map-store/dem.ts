@@ -163,23 +163,27 @@ export async function fetchDemMosaic(provider: DemProvider, frame: mapGeo.PaperF
     const L = p.info.levels[level];
     return { level, minX: p.box.minX - L.cellX, minY: p.box.minY - L.cellY, maxX: p.box.maxX + L.cellX, maxY: p.box.maxY + L.cellY };
   };
-  const cellsAt = (levels: number[]) => plan.reduce((n, p, i) => n + cogWindowCells(p.info, request(p, levels[i])), 0);
+  const cellsOf = (levels: number[]) => plan.map((p, i) => cogWindowCells(p.info, request(p, levels[i])));
+  const sum = (cells: number[]) => cells.reduce((n, c) => n + c, 0);
   const chosen = plan.map((p) => p.level);
-  const ownCell = (i: number, level: number) => plan[i].info.levels[level].cellX;
-  let levels = chosen, stepped = false;
-  const atChosen = cellsAt(chosen);
-  if (atChosen > cap) {
-    const ownM = provider.info.resolutionM;
-    const coarser = plan.map((p, i) => coarserLevel(p.info, chosen[i]));
-    if (opts.coarser === false || coarser.some((l) => l === null)) {
-      throw overCapError("window-cells", `the window needs ${mCells(atChosen)} cells at ${metres(ownM)}, over the cap of ${mCells(cap)}${opts.coarser === false ? "" : "; the tiles have no coarser overview"}`);
-    }
-    const next = coarser as number[];
-    const atNext = cellsAt(next);
-    const nextM = ownM * (ownCell(0, next[0]) / ownCell(0, chosen[0]));
-    if (atNext > cap) throw overCapError("window-cells", `the window needs ${mCells(atChosen)} cells at ${metres(ownM)} and ${mCells(atNext)} at ${metres(nextM)}, over the cap of ${mCells(cap)}`);
-    levels = next;
-    stepped = true;
+  const cellOf = (i: number, level: number) => plan[i].info.levels[level].cellX;
+  const ownM = provider.info.resolutionM;
+  let levels = chosen, ratio = 1;
+  const atChosen = cellsOf(chosen);
+  if (sum(atChosen) > cap) {
+    const over = (detail: string) => overCapError("window-cells", `the window needs ${mCells(sum(atChosen))} cells at ${metres(ownM)}, over the cap of ${mCells(cap)}${detail}`);
+    if (opts.coarser === false) throw over("");
+    // only the tiles that hold part of the extent are read, so only they need a coarser overview
+    const holding = plan.map((_, i) => i).filter((i) => atChosen[i] > 0);
+    const next = plan.map((p, i) => (atChosen[i] > 0 ? coarserLevel(p.info, chosen[i]) : chosen[i]));
+    if (holding.some((i) => next[i] === null)) throw over("; the tiles have no coarser overview");
+    const steps = holding.map((i) => cellOf(i, next[i] as number) / cellOf(i, chosen[i]));
+    // one resolution for the whole mosaic: tiles whose next overviews differ are not mixed
+    if (steps.some((r) => Math.abs(r - steps[0]) > 1e-6 * steps[0])) throw over("; the tiles' coarser overviews differ");
+    const atNext = sum(cellsOf(next as number[]));
+    if (atNext > cap) throw overCapError("window-cells", `the window needs ${mCells(sum(atChosen))} cells at ${metres(ownM)} and ${mCells(atNext)} at ${metres(ownM * steps[0])}, over the cap of ${mCells(cap)}`);
+    levels = next as number[];
+    ratio = steps[0];
   }
   let budget = cap;
   const windows: CogWindow[] = [];
@@ -191,8 +195,7 @@ export async function fetchDemMosaic(provider: DemProvider, frame: mapGeo.PaperF
   }
   if (windows.length === 0) return "no-coverage";
   // in the provider's unit (metres) from the ratio of the cells, so a geographic CRS reads right too
-  const resolutionM = stepped ? provider.info.resolutionM * (ownCell(0, levels[0]) / ownCell(0, chosen[0])) : provider.info.resolutionM;
-  return { windows, tiles: tiles.length, tilesRead: windows.length, resolutionM, stepped };
+  return { windows, tiles: tiles.length, tilesRead: windows.length, resolutionM: ownM * ratio, stepped: ratio !== 1 };
 }
 
 // ---- in the worker: the paper grid ---------------------------------------------

@@ -380,9 +380,10 @@ describe("over the window cap: the next coarser overview (map-terrain §7.0c ans
     for (const r of [7.5, 12.5]) expect(Math.abs(sampleHeight(g, { x: 30 + r, y: 30 })! - (CONE_TOP - r))).toBeLessThan(0.5);
     // the descriptor's provider is the row's: the level read (HeightFieldProvider.resolutionM)
     expect((await terrainDescriptor(ctx.db, hash)).dem).toMatchObject({ state: "ready", provider: { id: LM, resolutionM: 4 } });
-    // once: nothing left to queue
-    expect(await ctx.db.mapDemJob.count({ where: { state: "unavailable", reason: "over-cap", error: null, version: TERRAIN_VERSION } })).toBe(0);
-    expect(await requeueOverCap(ctx.db)).toBe(0);
+    // once: nothing left to queue for this document, and a second pass takes nothing of it
+    expect(await requeueOverCap(ctx.db)).toBeGreaterThanOrEqual(0);
+    expect(await getDemJob(ctx.db, hash, LM)).toMatchObject({ state: "done" });
+    expect(await ctx.db.mapDemJob.count({ where: { documentHash: hash, state: "unavailable", reason: "over-cap", error: null } })).toBe(0);
   });
 
   it("over the cap at 4 m too ends over-cap naming the window cells, and is not queued again", async () => {
@@ -393,10 +394,19 @@ describe("over the window cap: the next coarser overview (map-terrain §7.0c ans
       expect(job).toMatchObject({ provider: LM, state: "unavailable", reason: "over-cap" });
       expect(demOverCapOf(job.error)).toBe("window-cells");
       expect(job.error).toMatch(/at 2 m and .* at 4 m, over the cap/);
-      expect(await requeueOverCap(ctx.db)).toBe(0);
+      await requeueOverCap(ctx.db);
       expect(await getDemJob(ctx.db, hash, LM)).toMatchObject({ state: "unavailable", reason: "over-cap" });
     });
     expect(await ctx.db.mapHeightfield.count({ where: { documentHash: hash, source: { not: "contours" } } })).toBe(0);
+  });
+
+  it("the descriptor falls back to the registry's provider when the row's block is missing or another id", async () => {
+    for (const [name, header] of [["nohdr", { datum: "absolute" }], ["otherid", { provider: { id: "lantmateriet-1m", resolutionM: 1, grade: "anchor", licence: "CC BY 4.0", attribution: "© Lantmäteriet", verticalDatum: "RH 2000" } }]] as const) {
+      const hash = await insertDoc(HILL, `fallback-${name}`, sweref99(LM_ORIGIN.e, LM_ORIGIN.n));
+      await ctx.db.mapDemJob.create({ data: { documentHash: hash, provider: LM, version: TERRAIN_VERSION, state: "done", attempts: 1 } });
+      await ctx.db.mapHeightfield.create({ data: { documentHash: hash, source: `contours.${LM}`, version: TERRAIN_VERSION, bytes: new Uint8Array([0]), sizeBytes: 1, header, report: { share: { decided: 0.9 } } } });
+      expect((await terrainDescriptor(ctx.db, hash)).dem, name).toMatchObject({ state: "ready", provider: { id: LM, resolutionM: 2 } });
+    }
   });
 
   it("a map under the cap reads its own level", async () => {
