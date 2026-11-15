@@ -1,7 +1,8 @@
 /**
  * The new editor's writes (docs/course-editor.md §3, §7): every course,
  * control and course-object write sends the newest token this client has seen
- * (`VersionBook`), each result advances it, and a version `CONFLICT` is
+ * (`VersionBook`), each result advances it — one write per row in flight, the
+ * next queued behind it (`serial`), so it reads its predecessor's token — and a version `CONFLICT` is
  * decided by the G1 client rules (`conflict.ts`):
  *
  * - `rebase` → the same write is re-sent once with the server's token;
@@ -130,9 +131,28 @@ export class EditorWrites {
   /** Course tokens this client's own writes returned: a course token outside it moved elsewhere (D11, `presence.ts`). */
   readonly ownCourseVersions = new Set<string>();
 
+  /** Per row (`kind:id`): the write in flight and the ones queued behind it, settled or not (`serial`). */
+  private readonly tails = new Map<string, Promise<unknown>>();
+
   constructor(client: EditorClient, versions: VersionBook = new VersionBook()) {
     this.client = client;
     this.versions = versions;
+  }
+
+  /**
+   * Runs `op` once every earlier write of the same row has settled: one write per row in flight, so the next reads
+   * the token its predecessor's result seeded (docs/course-editor.md §3 "Tokens"). Without it a second write sent
+   * while the first was in flight — Ctrl+Z twice, an undo faster than its reply — carried the same `baseVersion`
+   * and was refused as stale (docs/bugfix-editor-overlapping-course-writes.md). A refused predecessor does not stop
+   * the queue: the next write reads the token the refusal seeded.
+   */
+  private serial<T>(kind: VersionedKind, id: number, op: () => Promise<T>): Promise<T> {
+    const key = `${kind}:${id}`;
+    const next = (this.tails.get(key) ?? Promise.resolve()).then(op, op);
+    const tail = next.then(() => undefined, () => undefined);
+    this.tails.set(key, tail);
+    void tail.then(() => { if (this.tails.get(key) === tail) this.tails.delete(key); });
+    return next;
   }
 
   /** Sends `send(token)`; on a version conflict decides, re-sends once on `rebase`, throws `EditorConflict` otherwise. */
@@ -155,26 +175,30 @@ export class EditorWrites {
     }
   }
 
-  async setStructure(courseId: number, structure: course.WireCourseStructure): Promise<{ version: string }> {
-    const res = await this.withToken("course", courseId, { fields: ["structure"] }, (baseVersion) =>
-      this.client.course.setStructure.mutate({ courseId, structure, baseVersion }),
-    );
-    this.versions.seed("course", courseId, res.version);
-    this.ownCourseVersions.add(res.version);
-    return res;
+  setStructure(courseId: number, structure: course.WireCourseStructure): Promise<{ version: string }> {
+    return this.serial("course", courseId, async () => {
+      const res = await this.withToken("course", courseId, { fields: ["structure"] }, (baseVersion) =>
+        this.client.course.setStructure.mutate({ courseId, structure, baseVersion }),
+      );
+      this.versions.seed("course", courseId, res.version);
+      this.ownCourseVersions.add(res.version);
+      return res;
+    });
   }
 
   /**
    * The course's description instructions (finish variant, specials; §4) through `course.update` with the
    * course's token. A stale token is a course conflict: `refresh`, never merged (as `setStructure`).
    */
-  async setInstructions(courseId: number, descriptionInstructions: CourseDescriptionInstructions | null): Promise<{ version: string }> {
-    const res = await this.withToken("course", courseId, { fields: ["descriptionInstructions"] }, (baseVersion) =>
-      this.client.course.update.mutate({ id: courseId, descriptionInstructions, baseVersion }),
-    );
-    this.versions.seed("course", courseId, res.version);
-    this.ownCourseVersions.add(res.version);
-    return res;
+  setInstructions(courseId: number, descriptionInstructions: CourseDescriptionInstructions | null): Promise<{ version: string }> {
+    return this.serial("course", courseId, async () => {
+      const res = await this.withToken("course", courseId, { fields: ["descriptionInstructions"] }, (baseVersion) =>
+        this.client.course.update.mutate({ id: courseId, descriptionInstructions, baseVersion }),
+      );
+      this.versions.seed("course", courseId, res.version);
+      this.ownCourseVersions.add(res.version);
+      return res;
+    });
   }
 
   /**
@@ -184,23 +208,27 @@ export class EditorWrites {
    * `opts.baseVersion`: the book's newer one, seeded by a refetch after reconnect, would hide a move made
    * elsewhere meanwhile.
    */
-  async updateControl(input: Omit<ControlUpdateInput, "baseVersion">, from?: Pt, opts?: { baseVersion?: string }): Promise<{ version: string }> {
+  updateControl(input: Omit<ControlUpdateInput, "baseVersion">, from?: Pt, opts?: { baseVersion?: string }): Promise<{ version: string }> {
     const fields = Object.keys(input).filter((k) => k !== "id" && k !== "autoDescribe");
     const isMove = from !== undefined && MOVE_FIELDS.every((f) => fields.includes(f));
     const write = isMove ? { fields: MOVE_FIELDS, base: from } : { fields };
-    const res = await this.withToken("control", input.id, write, (baseVersion) =>
-      this.client.control.update.mutate({ ...input, baseVersion }),
-    opts?.baseVersion);
-    this.versions.seed("control", publicIdAfterCodes(input.id, input.codes), res.version);
-    return res;
+    return this.serial("control", input.id, async () => {
+      const res = await this.withToken("control", input.id, write, (baseVersion) =>
+        this.client.control.update.mutate({ ...input, baseVersion }),
+      opts?.baseVersion);
+      this.versions.seed("control", publicIdAfterCodes(input.id, input.codes), res.version);
+      return res;
+    });
   }
 
-  /** `course.setControlLabelOffset` (no token in; the course's out). */
-  async setLabelOffset(courseId: number, controlId: number, offset: { dx: number; dy: number } | null): Promise<{ version: string }> {
-    const res = await this.client.course.setControlLabelOffset.mutate({ id: courseId, controlId, offset });
-    this.versions.seed("course", courseId, res.version);
-    this.ownCourseVersions.add(res.version);
-    return res;
+  /** `course.setControlLabelOffset` (no token in; the course's out): it advances the course's token, so it queues as one. */
+  setLabelOffset(courseId: number, controlId: number, offset: { dx: number; dy: number } | null): Promise<{ version: string }> {
+    return this.serial("course", courseId, async () => {
+      const res = await this.client.course.setControlLabelOffset.mutate({ id: courseId, controlId, offset });
+      this.versions.seed("course", courseId, res.version);
+      this.ownCourseVersions.add(res.version);
+      return res;
+    });
   }
 
   /** `control.check` (Field mode, §9; `courses.review`): no token in — a check-off never conflicts — the control's out. */
@@ -231,16 +259,20 @@ export class EditorWrites {
   }
 
   /** `courseObject.update` with the object's token; a conflict is always a refresh (§8.4: no base to diff). */
-  async updateObject(input: ObjectUpdateInput): Promise<course.CourseObject> {
+  updateObject(input: ObjectUpdateInput): Promise<course.CourseObject> {
     const fields = Object.keys(input).filter((k) => k !== "id");
-    const res = await this.withToken("object", input.id, { fields }, (baseVersion) => this.objects().update.mutate({ ...input, baseVersion }));
-    this.versions.seed("object", res.id, res.version);
-    return res;
+    return this.serial("object", input.id, async () => {
+      const res = await this.withToken("object", input.id, { fields }, (baseVersion) => this.objects().update.mutate({ ...input, baseVersion }));
+      this.versions.seed("object", res.id, res.version);
+      return res;
+    });
   }
 
   /** `courseObject.delete` with the object's token. */
-  async deleteObject(id: number): Promise<void> {
-    await this.withToken("object", id, { fields: ["delete"] }, (baseVersion) => this.objects().delete.mutate({ id, baseVersion }));
+  deleteObject(id: number): Promise<void> {
+    return this.serial("object", id, async () => {
+      await this.withToken("object", id, { fields: ["delete"] }, (baseVersion) => this.objects().delete.mutate({ id, baseVersion }));
+    });
   }
 
   private patches(): NonNullable<EditorClient["mapPatch"]> {

@@ -139,6 +139,67 @@ describe("EditorWrites (docs/course-editor.md §3)", () => {
     expect(w.versions.get("course", 1)).toBe("9");
   });
 
+  /** A client whose `setStructure` answers only when the test resolves it, so two writes can overlap. */
+  function heldClient() {
+    const sent: { baseVersion: unknown; answer: (v: unknown) => void; refuse: (e: unknown) => void }[] = [];
+    const mutate = vi.fn((input: Record<string, unknown>) => new Promise((answer, refuse) => sent.push({ baseVersion: input.baseVersion, answer, refuse })));
+    const client = {
+      course: { setStructure: { mutate }, setControlLabelOffset: { mutate }, update: { mutate } },
+      control: { update: { mutate } },
+    } as unknown as EditorClient;
+    return { client, sent };
+  }
+  const settle = () => new Promise((r) => setTimeout(r, 0));
+
+  it("a write made while one of the same course is in flight waits for it and sends its token (Ctrl+Z twice, bugfix-editor-overlapping-course-writes)", async () => {
+    const h = heldClient();
+    const w = new EditorWrites(h.client);
+    w.versions.seed("course", 1, "5");
+    const first = w.setStructure(1, S);
+    const second = w.setStructure(1, S);
+    const label = w.setLabelOffset(1, 31, null);
+    await settle();
+    // One in flight: the second is not sent before the first's reply has seeded its token.
+    expect(h.sent.map((s) => s.baseVersion)).toEqual(["5"]);
+    h.sent[0].answer({ version: "6" });
+    await first;
+    await settle();
+    expect(h.sent.map((s) => s.baseVersion)).toEqual(["5", "6"]);
+    h.sent[1].answer({ version: "7" });
+    await second;
+    await settle();
+    // The label offset takes no token but advances the course's: it queues as a course write.
+    expect(h.sent).toHaveLength(3);
+    h.sent[2].answer({ version: "8" });
+    await label;
+    expect(w.versions.get("course", 1)).toBe("8");
+  });
+
+  it("a refused write does not stop the queue: the next sends the token the refusal seeded", async () => {
+    const h = heldClient();
+    const w = new EditorWrites(h.client);
+    w.versions.seed("course", 1, "5");
+    const first = w.setStructure(1, S).catch((e: unknown) => e);
+    const second = w.setStructure(1, S);
+    await settle();
+    h.sent[0].refuse(conflictError({ kind: "course", id: 1, version: "9", current: {}, differing: ["32"] }));
+    expect(await first).toBeInstanceOf(EditorConflict);
+    await settle();
+    expect(h.sent.map((s) => s.baseVersion)).toEqual(["5", "9"]);
+    h.sent[1].answer({ version: "10" });
+    await expect(second).resolves.toEqual({ version: "10" });
+  });
+
+  it("writes of different rows do not wait for each other", async () => {
+    const h = heldClient();
+    const w = new EditorWrites(h.client);
+    void w.setStructure(1, S);
+    void w.setStructure(2, S);
+    void w.updateControl({ id: 31, xpos: 1, ypos: 2 });
+    await settle();
+    expect(h.sent).toHaveLength(3);
+  });
+
   it("other errors pass through", async () => {
     const f = fakeClient();
     const w = new EditorWrites(f.client);

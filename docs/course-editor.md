@@ -278,9 +278,17 @@ restored position.
 (`setInstructions`, §4) and `control.update` sends `baseVersion` from a
 `VersionBook` (`lib/version-book.ts`) — the newest token seen per row,
 from `course.list`, `control.list`, `course.detail` and each write's
-result — so back-to-back writes send their predecessor's token.
+result — so back-to-back writes send their predecessor's token. One write
+per row is in flight: a write of a row with one in flight waits for it to
+settle (`EditorWrites.serial`) and then reads the token its result seeded —
+Ctrl+Z pressed twice before the first undo's reply is two writes in order,
+not two on one token (docs/bugfix-editor-overlapping-course-writes.md). A
+refused write passes the token its refusal seeded to the next; writes of
+different rows do not wait for each other.
 `course.setControlLabelOffset`, `course.create` / `clone` and
-`control.delete` take no token and seed the ones they return. Map mode's
+`control.delete` take no token and seed the ones they return
+(`setControlLabelOffset` advances the course's token, so it queues as a
+course write). Map mode's
 `mapPatch.applyChange` / `setEnabled` (§13, `applyPatchChange`,
 `setPatchEnabled`) take none either: the patch merges per op id,
 last-writer-wins (`map-patches.md` §3.2).
