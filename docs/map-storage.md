@@ -971,7 +971,12 @@ Idempotent; also run for dedup hits:
   `lat` / `lng` from the pinned frame
   (`synchronizePositionedControlCoordinates`, `event-crs.ts`): the upload
   no longer converts them before the pin exists, so an import that
-  outlives the upload's hold still ends with correct positions.
+  outlives the upload's hold still ends with correct positions. Last,
+  the event's map patch is re-keyed onto the pinned document
+  (`reresolveEventPatch`, `docs/map-patches.md` §4.4; row G11): its ops
+  follow their objects, what cannot follow is kept as unresolved. A
+  failure there is logged and leaves the patch dormant; it never fails
+  the pin.
 - `clubMapId` set and no `club_map_versions` row for `(clubMapId,
   source_hash)` → insert one with `seq = max + 1`, label and uploader
   copied from the source row. `clubMap.addFromSource` then
@@ -1191,9 +1196,14 @@ event's pins and skips club editions; `--dry-run` lists the items with
 their reason and writes nothing. Exit 1 if any item failed, 2 on bad
 arguments.
 
-Once slice C's course layers reference `(document_hash, object_index)`
-(08), moving an event pin must carry them; the pass does not yet know
-about them because nothing references them yet.
+Moving an event pin carries its map patch: every item's pin re-keys it
+(§6.4), and the pass ends with a **patch sweep** that re-keys every
+live event's patch still keyed to another document than its pin
+(`docs/map-patches.md` §4.4; `--event` restricts it to that event;
+`--dry-run` lists them as `patch` items and writes nothing; a failure is
+reported like an item's). The run's `patches` counts the rows re-keyed.
+Filter regions' document symbol indices (`filter_region` course
+objects, `course-layer.md` §8.3) are not re-keyed yet (§9).
 
 
 ## 7. Offline and backups
@@ -1774,7 +1784,9 @@ mentions is pending (§9).
 
 ## 9. Pending in this chapter
 
-A Maintenance card for the re-match pass (§6.9 is CLI-only); a Settings →
+A Maintenance card for the re-match pass (§6.9 is CLI-only); re-keying
+filter regions' document symbol indices when an event's pin moves (§6.9;
+the map patch is re-keyed since G11); a Settings →
 Maintenance card for the GC (§8.4: status of the last run, dry run, run
 now); of the service-worker routes, `map-documents` and `map-fonts`
 (and `print-worker`, `course-print.md` §8.6) are exercised only by the

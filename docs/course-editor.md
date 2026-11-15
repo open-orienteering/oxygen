@@ -1991,6 +1991,33 @@ object, `{ added: id }` for one the patch adds.
   computed with the patch taken as enabled, so a switched-off patch still
   reports them). A row click selects its object and centres the view on
   it; *Revert* (`editor-correction-revert`) removes the op.
+- **Unresolved** (row G11; `map-patches.md` §4): when the pin moved and
+  some corrections could not follow their objects, a block under the
+  list (`editor-corrections-unresolved`, `data-count`; absent when there
+  are none) lists the patch's `unresolved` entries in key order
+  (`editor-correction-unresolved`, `data-key`, `data-op`, `data-reason`
+  `target` | `symbol`): the op, the symbol it was on (the target's,
+  else the op's symbol, else the patch symbol key) and the reason
+  (*object not found* / *symbol not found*). They are drawn nowhere and
+  not stepped by Tab. `editor-corrections-count` stays the count of ops.
+  - *Attach* (`editor-correction-attach`) puts the entry's op onto the
+    document object selected on the map (`mapPatch.attachUnresolved`,
+    `map-patches.md` §4.3; user 2026-11-15, G11 question 2). Enabled for
+    a `target` entry of a hide, modify or resymbol with a document object
+    (`source:<n>`) selected, `courses.edit` and *Apply corrections* on (as
+    hide); a `symbol` entry is drop-only until change symbol (G9).
+  - *Drop* (`editor-correction-drop`) removes the entry
+    (`applyChange { removeUnresolved }`); with `courses.edit`, also while
+    the corrections are off (as *Revert*).
+  - A refused write shows `editor-corrections-unresolved-error` with the
+    server's reason; the patch is reloaded.
+  - **Not yet** (user 2026-11-15, G11 question 3; Pending in
+    `map-patches.md`): *Attach* and *Drop* are not undo entries, a row
+    does not centre the view on the entry's old place, and they do not
+    wait for Map mode's write in flight. The block reads the session's
+    patch itself (`useMapPatch`) and delivers its replies as Map mode's
+    writes do (`setMapPatch`, `mapMetadata.patchVersion`), so
+    `modes/MapMode.tsx` is unchanged.
 - **Apply corrections** (`editor-corrections-apply`, a checkbox) is
   `mapPatch.setEnabled` (`map-patches.md` §1.4): off, every consumer —
   screen, print, the venue — draws the pinned document; the list keeps its
@@ -2277,9 +2304,10 @@ whose poll ran meanwhile simply does not conflict (decision log, D10).
   first to append at the top level.
 
 - **Map mode beyond G6** (§13): nodes (G7), drawing and change symbol
-  (G9), join / split / reverse / holes (G10), unresolved ops and waking a
-  dormant patch (G11 — until then a `PATCH_STALE` refusal is the editor's
-  error line), promote (G12). Multi-select (Shift-click, lasso) and the
+  (G9), join / split / reverse / holes (G10), promote (G12); *Attach* and
+  *Drop* of an unresolved correction as undo entries with a locate (G11
+  left them outside `MapMode.tsx`; a `PATCH_STALE` refusal, now only for a
+  patch that cannot be re-resolved, is the editor's error line). Multi-select (Shift-click, lasso) and the
   right-click menu of 08 §5.3's Map column are not built; a single
   selection only. Map mode has no touch gestures (desktop only, 08 §5.5)
   and no phone entry.
