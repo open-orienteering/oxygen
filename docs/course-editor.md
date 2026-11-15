@@ -2306,6 +2306,14 @@ whose poll ran meanwhile simply does not conflict (decision log, D10).
   - the outbox is keyed by event, not by user: on a shared device one
     user's waiting writes are sent under the next user's session (a
     refusal still lands as failed);
+  - an undo merged into a move while that move is on the wire goes out
+    as a pure move back with `autoDescribe`, not as the description
+    restore: a control that had no description can keep the one
+    auto-filled for the undone position (online the undo restores it);
+  - a first write of a control without stored coordinates is queued
+    plain and loses `autoDescribe` when a move merges into it;
+  - another mode's move of a waiting control (through the outbox) has
+    no test of its own;
   - the overlay's base is the cache as found when the page mounts: a
     remount offline with overlaid rows in the persisted cache shows a
     dropped entry's queued value until the next refetch (the undo stack
