@@ -133,6 +133,8 @@ export function useMapMode(a: MapModeArgs): MapMode {
   const [drawHover, setDrawHover] = useState<Pt | null>(null);
   const drawGesture = useRef<Gesture>(null);
   const pointGesture = useRef<MapPointGestureRef["current"]>(null);
+  /** Bumped while a point is aimed: its direction line is drawn from the gesture (the binding's `redraw`). */
+  const [aimTick, setAimTick] = useState(0);
   /** The add a finished line or area wrote: selected once the model has it. */
   const pendingSelect = useRef<MapObjectRef | null>(null);
   /** *Change symbol*'s picker is open for this selection (`refKey`; another selection closes it); the picker's search. */
@@ -417,7 +419,9 @@ export function useMapMode(a: MapModeArgs): MapMode {
       if (op) setDraft({ ops: [op], ...(chosenPut.putSymbols ? { symbols: chosenPut.putSymbols } : {}), waitFor: null });
     },
     onCancel: () => { drawId.current = null; keepWaiting(); },
-  })), [drawKind, chosenPut, writing, chosenOrientable, drawSnap, model, commitAdd, keepWaiting]);
+    redraw: () => setAimTick((n) => n + 1),
+    // aimTick: the direction line follows the gesture.
+  })), [drawKind, chosenPut, writing, chosenOrientable, drawSnap, model, commitAdd, keepWaiting, aimTick]);
   const onDrawHover = useCallback((p: ToolPointer | null) => setDrawHover(p ? drawSnap(p.pt) : null), [drawSnap]);
   const lineBinding = useMemo(() => (drawKind !== "line" && drawKind !== "area" ? null : mapDrawBinding({
     gesture: drawGesture,

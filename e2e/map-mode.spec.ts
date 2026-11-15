@@ -1,7 +1,9 @@
 /**
- * Map mode (docs/course-editor.md §13, rows G6, G7): the event's map corrections in the editor — select, hide, move,
- * undo, the course overprint hidden, *Apply corrections*, the patch kept across a reload, and the nodes tool `N`
- * (drag, insert, delete, undo; §13 "Nodes"). The fixture is the
+ * Map mode (docs/course-editor.md §13, rows G6, G7, G9): the event's map corrections in the editor — select, hide, move,
+ * undo, the course overprint hidden, *Apply corrections*, the patch kept across a reload, the nodes tool `N`
+ * (drag, insert, delete, undo; §13 "Nodes"), and drawing and change symbol (§13 "Drawing", "Symbol picker": a path
+ * with a document symbol, a point with a library symbol materialised on first use, a resymbol; each in `maps.pdf`,
+ * whose page raster is `print-patch.test.ts`'s, user 2026-11-15). The fixture is the
  * seed's `itest` event with `e2e/test.ocd` pinned; every op is removed in `finally` (AGENTS.md §12), so no reseed.
  *
  * The target is a black line with no other black ink within 1 mm across it (the fixture draws its lines over a
@@ -9,8 +11,9 @@
  * (`mapObjectsAt`): the only point or line object within 0.5 mm, so hiding it leaves no black there.
  */
 import { expect, test, type Page, type Request } from "@playwright/test";
-import { EDITOR_EVENT, editorReady, inkedAt, openEditor, paperToPageOf, sites, toPage, toPaper, toolShapes, trpcCall, viewSettled } from "./helpers/editor";
-import { mapObjectsAt } from "./helpers/event-map-pin";
+import { createHash } from "node:crypto";
+import { allControlsSheet, EDITOR_EVENT, editorReady, inflatedStreams, inkedAt, openEditor, paperToPageOf, plainMapAt, plainMapSpots, printed, sites, toPage, toPaper, toolShapes, trpcCall, viewSettled } from "./helpers/editor";
+import { dropEventPatch, mapObjectsAt } from "./helpers/event-map-pin";
 import { trpcProcedures, waitForTrpc } from "./helpers/trpc";
 
 type Pt = { x: number; y: number };
@@ -384,6 +387,269 @@ test.describe("Map mode (docs/course-editor.md §13)", () => {
       await expect(page.getByTestId("editor-tool-V")).toHaveAttribute("aria-pressed", "true");
       await expect(page.getByTestId("editor-tool-layer").getByTestId("editor-map-node")).toHaveCount(0);
       await expect(mapObject(page)).toHaveAttribute("data-ref", ref);
+    } finally {
+      await clearPatch();
+    }
+  });
+});
+
+type Change = { put?: { op: string; id?: string; type?: number; sourceIndex?: number; symbol?: { doc?: number; patch?: string } }[]; remove?: string[]; putSymbols?: Record<string, unknown> };
+
+/** Every `mapPatch.applyChange` input the page sends, in order (a batched request's own entry). */
+function captureChanges(page: Page): Change[] {
+  const out: Change[] = [];
+  page.on("request", (req: Request) => {
+    if (req.method() !== "POST") return;
+    const procs = trpcProcedures(req.url());
+    const k = procs.indexOf("mapPatch.applyChange");
+    if (k < 0) return;
+    const body = req.postDataJSON() as Record<string, unknown> | null;
+    const entry = (body && (k.toString() in body ? body[k.toString()] : body)) as { json?: Change } & Change;
+    out.push(entry?.json ?? entry);
+  });
+  return out;
+}
+
+/** Plain map spots (one colour within `clearMm`) in the free region, at least `apartMm` apart, nearest the middle first. */
+async function plainSpots(page: Page, n: number, clearMm: number, apartMm: number): Promise<Pt[]> {
+  const r = await freeRegion(page);
+  const a = await toPaper(page, { x: r.x0 + 40, y: r.y0 + 40 }), b = await toPaper(page, { x: r.x1 - 40, y: r.y1 - 40 });
+  const minX = Math.min(a.x, b.x), maxX = Math.max(a.x, b.x), minY = Math.min(a.y, b.y), maxY = Math.max(a.y, b.y);
+  const centre = { x: (minX + maxX) / 2, y: (minY + maxY) / 2 };
+  const grid: Pt[] = [];
+  for (let x = minX; x <= maxX; x += 1) for (let y = minY; y <= maxY; y += 1) grid.push({ x, y });
+  grid.sort((u, w) => Math.hypot(u.x - centre.x, u.y - centre.y) - Math.hypot(w.x - centre.x, w.y - centre.y));
+  const out: Pt[] = [];
+  for (const p of await plainMapSpots(page, grid, clearMm)) {
+    if (out.some((q) => Math.hypot(q.x - p.x, q.y - p.y) < apartMm)) continue;
+    out.push(p);
+    if (out.length === n) return out;
+  }
+  throw new Error(`only ${out.length} of ${n} plain spots in view`);
+}
+
+const palette = (page: Page) => page.getByTestId("editor-map-palette");
+const paletteItems = (page: Page, sel: string) => page.locator(`[data-testid="editor-map-palette-item"]${sel}:not([disabled])`);
+const pressed = (page: Page, key: string) => expect(page.getByTestId(`editor-tool-${key}`)).toHaveAttribute("aria-pressed", "true");
+/** What the event's print shows, as counts (`analysePdf`): an added object adds its strokes or curves. */
+const printedCounts = async (page: Page) => {
+  const p = await printed(page, EDITOR_EVENT, "allControls=1");
+  return { strokes: p.strokes, curves: p.curves, curvedFills: p.curvedFills };
+};
+/** The print's drawing: a hash of its inflated content streams (the bytes also carry a creation date). */
+const printedDrawing = async (page: Page): Promise<string> => {
+  const res = await page.request.get(`/api/maps/${EDITOR_EVENT}/maps.pdf?allControls=1`);
+  expect(res.ok()).toBe(true);
+  return createHash("sha256").update(inflatedStreams(await res.body()).join("\n")).digest("hex");
+};
+
+test.describe("Map mode drawing (docs/course-editor.md §13 \"Drawing\", \"Symbol picker\")", () => {
+  test.describe.configure({ mode: "serial" });
+
+  // A symbol's first use is only a first use on a patch without it, and patch symbols are never removed by a change.
+  // The all-controls sheet is what `printedCounts` prints.
+  let sheet: { drop: () => Promise<void> } | null = null;
+  test.beforeAll(async () => {
+    await dropEventPatch(EDITOR_EVENT);
+    sheet = await allControlsSheet();
+  });
+  test.afterAll(async () => {
+    await sheet?.drop();
+    await dropEventPatch(EDITOR_EVENT);
+  });
+
+  async function open(page: Page): Promise<void> {
+    await openEditor(page, "?mode=map");
+    await expect(page.getByTestId("editor-page")).toHaveAttribute("data-mode", "map");
+    await expect(page.getByTestId("map-vector-layer")).toHaveAttribute("data-patch-version", /.+/, { timeout: 30_000 });
+    await page.keyboard.press("h");
+    await zoomTo(page, 16);
+  }
+
+  test("L draws a path with a document line symbol: one add without putSymbols, drawn and printed; undo removes it", async ({ page }) => {
+    test.setTimeout(240_000);
+    try {
+      await open(page);
+      const [a] = await plainSpots(page, 1, 3, 0);
+      const b = { x: a.x + 1.5, y: a.y + 0.8 }, c = { x: a.x + 2.5, y: a.y - 0.5 };
+      const before = await printedCounts(page);
+      const changes = captureChanges(page);
+
+      // L: the picker for lines, nothing chosen yet; a click then draws nothing.
+      await page.keyboard.press("l");
+      await pressed(page, "L");
+      await expect(palette(page)).toHaveAttribute("data-kind", "line");
+      await expect(page.getByTestId("editor-map-palette-pick")).toBeVisible();
+      const docLines = paletteItems(page, '[data-source="document"]');
+      const paths = docLines.and(page.locator('[data-code^="505"], [data-code^="506"], [data-code^="507"]'));
+      const item = (await paths.count()) > 0 ? paths.first() : docLines.first();
+      const ref = (await item.getAttribute("data-ref"))!;
+      await item.click();
+      await expect(item).toHaveAttribute("aria-pressed", "true");
+      await expect(page.getByTestId("editor-map-palette-hint")).toBeVisible();
+
+      // Two clicks and a double-click: one write, the add with the document symbol, nothing to put.
+      const pa = await toPage(page, a), pb = await toPage(page, b), pc = await toPage(page, c);
+      await page.mouse.click(pa.x, pa.y);
+      await page.mouse.click(pb.x, pb.y);
+      const wrote = waitForTrpc(page, "mapPatch.applyChange");
+      await page.mouse.dblclick(pc.x, pc.y);
+      await wrote;
+      expect(changes).toHaveLength(1);
+      const add = changes[0].put![0];
+      expect(add).toMatchObject({ op: "add", type: 2, symbol: { doc: Number(ref.slice(4)) } });
+      expect(changes[0].putSymbols).toBeUndefined();
+
+      // Back to V with the new path selected; its row; drawn through its nodes; in the print.
+      await pressed(page, "V");
+      await expect(mapObject(page)).toHaveAttribute("data-ref", `added:${add.id}`);
+      await expect(correction(page, `add:${add.id}`)).toHaveAttribute("data-op", "add");
+      await expect.poll(() => plainMapAt(page, b, 0.3), { timeout: 15_000 }).toBe(false);
+      const after = await printedCounts(page);
+      expect(after.strokes, "the path's strokes in maps.pdf").toBeGreaterThan(before.strokes);
+
+      // Undo: the add goes, the map is plain there again.
+      await page.keyboard.press("Control+z");
+      await expect(page.getByTestId("editor-corrections-none")).toBeVisible();
+      await expect.poll(() => plainMapAt(page, b, 0.3), { timeout: 15_000 }).toBe(true);
+    } finally {
+      await clearPatch();
+    }
+  });
+
+  test("P places a point with a library symbol: materialised on first use, put once; the tool stays armed", async ({ page }) => {
+    test.setTimeout(240_000);
+    try {
+      await open(page);
+      const [s1, s2] = await plainSpots(page, 2, 1.5, 4);
+      const before = await printedCounts(page);
+      const changes = captureChanges(page);
+
+      await page.keyboard.press("p");
+      await pressed(page, "P");
+      await expect(palette(page)).toHaveAttribute("data-kind", "point");
+      const library = paletteItems(page, '[data-source="library"]');
+      const boulder = library.and(page.locator('[data-code="204"]'));
+      const item = (await boulder.count()) > 0 ? boulder.first() : library.first();
+      const ref = (await item.getAttribute("data-ref"))!;
+      expect(ref).toMatch(/^patch:/);
+      const key = ref.slice(6);
+      await item.click();
+
+      // The first point: the add references the patch key and the change puts the materialised symbol.
+      const p1 = await toPage(page, s1);
+      let wrote = waitForTrpc(page, "mapPatch.applyChange");
+      await page.mouse.click(p1.x, p1.y);
+      await wrote;
+      expect(changes[0].put![0]).toMatchObject({ op: "add", type: 1, symbol: { patch: key } });
+      expect(Object.keys(changes[0].putSymbols ?? {})).toEqual([key]);
+      // A probe wider than the symbol: one inside a 0.4 mm boulder reads as one plain colour.
+      await expect.poll(() => plainMapAt(page, s1, 0.6), { timeout: 15_000 }).toBe(false);
+      // Still armed, nothing selected; the item is the patch's own symbol now, still chosen.
+      await pressed(page, "P");
+      await expect(page.getByTestId("editor-map-object-none")).toBeVisible();
+      await expect(page.locator(`[data-testid="editor-map-palette-item"][data-ref="${ref}"]`)).toHaveAttribute("data-source", "patch");
+      await expect(page.locator(`[data-testid="editor-map-palette-item"][data-ref="${ref}"]`)).toHaveAttribute("aria-pressed", "true");
+
+      // The second point puts no symbol again.
+      const p2 = await toPage(page, s2);
+      wrote = waitForTrpc(page, "mapPatch.applyChange");
+      await page.mouse.click(p2.x, p2.y);
+      await wrote;
+      expect(changes).toHaveLength(2);
+      expect(changes[1].put![0]).toMatchObject({ op: "add", type: 1, symbol: { patch: key } });
+      expect(changes[1].putSymbols).toBeUndefined();
+      await expect(page.locator('[data-testid="editor-correction-row"][data-op="add"]')).toHaveCount(2);
+      const stored = (await trpcCall<{ patch: { symbols: Record<string, unknown> } | null }>("mapPatch.get", undefined, false)).patch;
+      expect(Object.keys(stored?.symbols ?? {})).toEqual([key]);
+      expect(await printedCounts(page), "the points in maps.pdf").not.toEqual(before);
+
+      // Escape returns to V.
+      await page.keyboard.press("Escape");
+      await pressed(page, "V");
+    } finally {
+      await clearPatch();
+    }
+  });
+
+  test("P with a turning symbol: a press-drag aims it (user 2026-11-15); Rotation turns it again", async ({ page }) => {
+    test.setTimeout(240_000);
+    try {
+      await open(page);
+      const [s1] = await plainSpots(page, 1, 2.5, 0);
+      const changes = captureChanges(page);
+      await page.keyboard.press("p");
+      // A crossing point (519) or a small elongated knoll (110) turns with the object: orientation "object", a
+      // rotatable glyph (ISOM 2017-2; the fixture's stack has black, not the brown point colour).
+      const turning = paletteItems(page, "").and(page.locator('[data-code^="519"], [data-code^="110"]')).first();
+      await expect(turning).toBeVisible();
+      await turning.click();
+
+      // Press at the spot, drag 2 mm up the paper (paper y is up): the knoll's x axis along the drag, 90°.
+      const from = await toPage(page, s1), to = await toPage(page, { x: s1.x, y: s1.y + 2 });
+      await page.mouse.move(from.x, from.y);
+      await page.mouse.down();
+      await page.mouse.move(to.x, to.y, { steps: 8 });
+      await expect.poll(async () => (await toolShapes(page, "editor-map-point-direction")).length).toBe(1);
+      let wrote = waitForTrpc(page, "mapPatch.applyChange");
+      await page.mouse.up();
+      await wrote;
+      const add = changes[0].put![0] as { op: string; id: string; angle?: number };
+      expect(add).toMatchObject({ op: "add", type: 1 });
+      expect(add.angle).toBe(900);
+
+      // V, select it: Rotation shows 90; 45 + Enter rewrites the add with 450.
+      await page.keyboard.press("Escape");
+      await pressed(page, "V");
+      await page.mouse.click(from.x, from.y);
+      await expect(mapObject(page)).toHaveAttribute("data-ref", `added:${add.id}`);
+      const rotation = page.getByTestId("editor-map-object-rotation");
+      await expect(rotation).toHaveValue("90");
+      await rotation.fill("45");
+      wrote = waitForTrpc(page, "mapPatch.applyChange");
+      await rotation.press("Enter");
+      await wrote;
+      expect(changes[1].put).toEqual([{ ...add, angle: 450 }]);
+      await expect(rotation).toHaveValue("45");
+    } finally {
+      await clearPatch();
+    }
+  });
+
+  test("Change symbol on a document line: a resymbol, its own kind only, printed; Revert", async ({ page }) => {
+    test.setTimeout(240_000);
+    try {
+      await open(page);
+      const { at, sourceIndex } = await findLine(page);
+      const p = await toPage(page, at);
+      await page.mouse.click(p.x, p.y);
+      await expect(mapObject(page)).toHaveAttribute("data-ref", `source:${sourceIndex}`);
+      const before = await printedDrawing(page);
+      expect(await printedDrawing(page), "the print's drawing is the same without a change").toBe(before);
+      const changes = captureChanges(page);
+
+      const change = page.getByTestId("editor-map-object-change-symbol");
+      await change.click();
+      await expect(change).toHaveAttribute("aria-expanded", "true");
+      await expect(palette(page)).toHaveAttribute("data-kind", "line");
+      expect(await page.locator('[data-testid="editor-map-palette-item"]:not([data-kind="line"])').count()).toBe(0);
+      const own = page.locator('[data-testid="editor-map-palette-item"][aria-pressed="true"]');
+      await expect(own).toHaveCount(1);
+      const other = paletteItems(page, '[data-source="document"][aria-pressed="false"]').first();
+      const ref = (await other.getAttribute("data-ref"))!;
+      const wrote = waitForTrpc(page, "mapPatch.applyChange");
+      await other.click();
+      await wrote;
+      expect(changes[0].put).toEqual([{ op: "resymbol", sourceIndex, symbol: { doc: Number(ref.slice(4)) } }]);
+      await expect(change).toHaveAttribute("aria-expanded", "false");
+      await expect(correction(page, `resymbol:${sourceIndex}`)).toHaveAttribute("data-op", "resymbol");
+      await expect(mapObject(page)).toHaveAttribute("data-ref", `source:${sourceIndex}`);
+      expect(await printedDrawing(page), "the resymbolled line in maps.pdf").not.toBe(before);
+
+      // Revert: the op goes and the print draws the line as before.
+      await correction(page, `resymbol:${sourceIndex}`).getByTestId("editor-correction-revert").click();
+      await expect(page.getByTestId("editor-corrections-none")).toBeVisible();
+      expect(await printedDrawing(page)).toBe(before);
     } finally {
       await clearPatch();
     }
