@@ -2099,8 +2099,9 @@ the part of a track behind it. In 2D they stay the SVG `<path>` they
 were (`data-testid="gps-route"`).
 
 - Input: the same paper mm as 2D (`gpsRoutesMm`, WGS 84 through `mapGeo`
-  once per route set); colour the route's (`#rrggbb`), opacity 0.8, width
-  4.5 CSS px — the 2D path's.
+  once per route set); colour the route's (`#rrggbb` or `#rgb`; any other
+  CSS colour, which no caller passes, falls back to the single-track red
+  `#e6194b`), opacity 0.8, width 4.5 CSS px — the 2D path's.
 - Height: the surface the frame draws (`surfaceHeight` of the engine's
   mesh — the `contours` field today; whatever field the engine holds
   once H11 chooses the surface).
@@ -2501,8 +2502,13 @@ direction.
   `rotationDeg = bearingDeg` (tested to 1e-6 in clip space).
 - Near and far enclose `bounds` (the mesh's box at the drawn
   exaggeration) by depth along the view direction: far at the box's
-  largest depth, near at its smallest (both at corners — depth is
-  linear), no closer than far / 10⁴ (a 24-bit depth buffer). Euclidean
+  largest depth, near at **0.8 of its smallest** (`NEAR_HEADROOM`; both at
+  corners — depth is linear), no closer than far / 10⁴ (a 24-bit depth
+  buffer). The headroom is H8's: lines are drawn above the surface
+  ("Lines": raised by their screen half width and biased towards the eye,
+  up to several per cent of the distance), and with near at the box's top
+  a track on a summit or on flat ground was clipped away (found by the
+  opacity test on the flat dev field). Euclidean
   distance to the box would not do: an off-axis point at distance D lies
   at depth D · cos φ, in front of such a near plane (spec review).
 - `cameraFrame` also returns the eye, the camera's basis and `focalPx`;
@@ -2644,8 +2650,9 @@ class TerrainLines {
 - **Opacity once**: a line's overlapping capsules (every join) must not
   blend twice, so each line is drawn with the stencil — cleared to 0 at
   the pass's start, line i's reference `i + 1` — in two draws: the
-  capsules' interiors (full coverage) with `NOTEQUAL` / `REPLACE`, then
-  their antialiased edges with `NOTEQUAL` / `KEEP`. Blending is
+  capsules' interiors (full coverage), then their antialiased edges where
+  no interior is, both `NOTEQUAL` / `REPLACE`: a fringe pixel two capsules
+  share takes the first one's coverage, once. Blending is
   `SRC_ALPHA, ONE_MINUS_SRC_ALPHA`. Two draws per line;
   the mesh's draw count (≤ 7) is reported apart.
 - **Buffers**: the instance data is rebuilt only when the `lines`
@@ -2935,7 +2942,7 @@ yMm)` (canvas px of the surface point) and `pick(px, py)` / `lastPick`.
 `bench=1` draws 60 frames, each synced by a one-pixel read, and reports
 the p50 / p95.
 
-`?doc=course[&field=cone|flat&x=&y=&budget=<MB>&worker=1][&line=x,y;x,y|…&lineColour=<hex>]` (H6,
+`?doc=course[&field=cone|flat&x=&y=&budget=<MB>&worker=1][&line=x,y;x,y|…&lineColour=<hex>&lineOpacity=]` (H6,
 `pages/dev/terrainDoc.ts`) loads the course fixture document
 (`map-gl/fixtures/course-document.ts`: an aligned ISOM stack, a black
 line, a top-row line, the four-control course the dynamic-bucket tests
@@ -2949,7 +2956,7 @@ sheet. `window.__mapTerrainDoc` publishes the last frame, the engine's
 stats, `project`, `pick`, `setCamera(…)` and `compare2d()` (the same view
 drawn by `engine.render` and compared pixel by pixel). `line=` (H8)
 draws lines on the terrain through the frame's `lines` (§5.6 "Lines"):
-`|` between lines, `;` between points in paper mm, opaque, 8 px,
+`|` between lines, `;` between points in paper mm, 8 px, `lineOpacity` (default 1),
 `lineColour` (default `e6194b`, published as `lineRgb`).
 
 `/dev/map-gl-doc?…&terrain=1[&pitch=60&e=2]` (H6): its "Bench" runs the
@@ -3042,16 +3049,16 @@ Mesh frames (p50 / p95 ms) and drape re-renders:
 | Test | Covers |
 |---|---|
 | `packages/shared/src/terrain/field/__tests__/read.test.ts` | the client entry reaches no derivation module; the read side exported |
-| `map-gl/terrain/__tests__/camera.test.ts` | `mat4` (multiply, invert, perspective depth and field of view); the target → clip origin at any bearing and pitch; one `Float32Array(16)`; pitch 0 = `viewMatrix` with `rotationDeg = bearingDeg` to 1e-6; a raised point projected higher and depth monotone in distance at pitch > 0; bearing 90 looks east; near / far enclose the bounds within 10⁴; sub-pixel precision 585 mm from the origin in float32 arithmetic; `screenRay` inverts the projection |
+| `map-gl/terrain/__tests__/camera.test.ts` | `mat4` (multiply, invert, perspective depth and field of view); the target → clip origin at any bearing and pitch; one `Float32Array(16)`; pitch 0 = `viewMatrix` with `rotationDeg = bearingDeg` to 1e-6; a raised point projected higher and depth monotone in distance at pitch > 0; bearing 90 looks east; near / far enclose the bounds within 10⁴, near with 20 % headroom in front of them (H8); sub-pixel precision 585 mm from the origin in float32 arithmetic; `screenRay` inverts the projection |
 | `map-gl/terrain/__tests__/mesh.test.ts` | chunk geometry: 65² + 256 vertices, every quad covered exactly once at every level, counter-clockwise, index counts, 4 · 64 / 2^l skirt quads; `meshHeights` fills from the nearest data cell without changing the field, all no-data flat at 0; vertex placement in origin-relative µm and `zUnitUm`; a partial edge chunk clamped; `chunkLevel` (0 at the eye, monotone, capped, quad edge ≤ lodPx); culling and a straddling chunk kept, the same levels at another bearing, mixed levels when tilted; skirts close every crack between any two levels on a noise field; the 4096² budget (≤ 600 000 triangles, the numbers above as a snapshot) |
 | `map-gl/terrain/__tests__/pick.test.ts` | the analytic cone met within half a cell at pitch 0, 60 (exaggeration 1, 3) and grazing; surface point → project → `screenRay` → pick within half a cell; `heightM` = `sampleHeight` within one unit at two exaggerations; `data` false on the margin; misses |
-| `map-gl/terrain/__tests__/lines.test.ts` (H8) | `liftPolyline`: origin removed, height units above `zMin`; densified to the cell with the original points kept; every vertex on the drawn surface and `sampleHeight` within one unit; a chord across the cone's apex goes over it; the filled height on the no-data margin; broken off the mesh, single points and empty input dropped, a repeated fix skipped; another `surface` sampled (H11's seam). `lineInstances`: one instance per segment, one range per line, none across a gap, the step doubled to fit `MAX_LINE_SEGMENTS`, independent of the exaggeration. `lineVertex`: tilted (45°–70°, three exaggerations) the vertex projects its half width + ½ px (plus the lift) above its ground point and in front of it; the bias moves it along its ray only; looking straight down it is on its ground point under the eye and the rise capped |
+| `map-gl/terrain/__tests__/lines.test.ts` (H8) | `liftPolyline`: origin removed, height units above `zMin`; densified to the cell with the original points kept; every vertex on the drawn surface and `sampleHeight` within one unit; a chord across the cone's apex goes over it; the filled height on the no-data margin; broken off the mesh, single points and empty input dropped, a repeated fix skipped; another `surface` sampled (H11's seam). `lineInstances`: one instance per segment, one range per line, none across a gap, the step doubled to fit `MAX_LINE_SEGMENTS`. `lineVertex`: tilted (45°–70°, three exaggerations) the vertex projects its half width + ½ px (plus the lift) above its ground point and in front of it; the bias moves it along its ray only; looking straight down it is on its ground point under the eye and the rise capped |
 | `map-gl/terrain/__tests__/shade.test.ts` | flat = 1; sin θ + cos θ facing the light, cos θ − sin θ away, cos θ across; the clamps; exaggeration in the shader = `heightNormals(field, e)`; the colour product; the GLSL's constants |
 | `map-gl/terrain/__tests__/footprint.test.ts` (H6) | footprint → view: the screen rectangle at pitch 0, the analytic trapezoid tilted, every on-screen surface point of 40 random cameras inside the footprint and a layer, the box clip, empty when looking away; the pitch-0 layer is the 2D view grown by the margin (same pixel offsets, screen parity) at any bearing; limits never exceeded over 60 random cameras; split by need on a wide depth range — each layer at its need when the cap allows, the far one at the split depth's, fewer texels than one layer, the near one inside the far one and over the ground beyond the screen's bottom edge, every on-screen ground point at least at its need; both scaled together under the cap; one layer on a narrow depth range and at pitch 0 when capped; a tiny texel allowance terminates; at pitch 0 the texels lie on the pixels even where the screen crosses the field's edge; tiles partition the layer and draw every texel where its matrix puts it |
 | `map-gl/__tests__/worker-terrain.test.ts` (H6) | the `terrain` request's prepared mesh and normals equal `buildTerrainMesh` and `heightNormals` on a cone and a noise field, without a document; the two arrays transferred; an error names its generation |
 | `map-gl/__tests__/engine.test.ts` "terrain" (H6) | the field prepared in the worker and uploaded at the document's origin; drape before mesh, the layer's matrix = `viewMatrix` of its view, the hand-over view at pitch 0; mesh only while the camera moves, the settle timer's `onChange`, one re-render after it and none for the same camera; a content change and `invalidateDrape` re-render at once over the same layers; the layers' cells requested and drawn, detail arrivals re-render, gated per layer; the field and drape in `residentBytes`, the drape ≤ ⅓ of a small budget; `setTerrain(null)` drops both; a 2D render after a 3D frame draws the 2D view's cells; a superseded `setTerrain` rejects; arrivals held to `DRAPE_ARRIVAL_MS` and the last at once; a near layer above the gate and a far one below (detail drawn and requested for the near one's cells only, `whenComplete` on them); a load moves the mesh to the new origin and re-selects; a worker failure rejects and keeps the field and mesh; `dispose` rejects a request in flight; a camera that sees no mesh renders no drape |
 | `e2e/map-terrain.spec.ts` | on the dev page in headless Chromium: the lit cone top-down with a grey drape — facing flank, far flank and flat ground at §5.6's analytic values ± 10 levels, ≤ 7 draws; the checker at pitch 60 — two adjacent squares on flat ground in their own colours, the apex projected above its foot; a south-flank point at pitch 60 at its slope's shade for e = 2 and e = 1 (the mesh lifted by the R16I heights and the exaggeration applied in the shader — a flat mesh or an ignored e would show another value); with `drape=half`, the background colour beyond the drape, flat at full strength and on the far flank shaded; no background pixel inside the noise field's projected outline at mixed levels, and auto LOD within 2 % of level 0; a click picks the point under the cursor within 0.2 mm. H6 (`doc=course`): at pitch 0 over flat ground the 3D frame equals `engine.render`'s 2D frame (north up: max 10 levels, < 0.5 % over 2 — SwiftShader's MSAA resolve; turned 25°: < 1 % over 2); tilted 60° over the cone, the leg 31–32 purple on the flank, the map's black line, paper white on the south flank at §5.6's shade for its slope, ≤ 7 draws; moved to control 32 the old drape does not reach (no purple) and no re-render happens until the camera settles, then the course is there; close and tilted, a near layer and a coarser far one (> 1.5×), each at its need, the course from the near one, texels within a third of the budget, and a 2 MB budget's third respected |
-| `e2e/map-terrain.spec.ts` "lines on the terrain" (H8) | `doc=course&field=cone&line=…`: two opaque 8 px lines across the cone, 8 mm south and north of the apex. From above both are drawn; ≤ 7 mesh draws, 2 lines in 4 draws. 20° above the horizon at 5× the near one is drawn on its flank and the far one is hidden — no line colour where it would be, and the pick there meets the cone in front of it; at 1× the far flank faces the camera and the same line is drawn |
+| `e2e/map-terrain.spec.ts` "lines on the terrain" (H8) | `doc=course&field=cone&line=…`: two opaque 8 px lines across the cone, 8 mm south and north of the apex. From above both are drawn; ≤ 7 mesh draws, 2 lines in 4 draws. 20° above the horizon at 5× the near one is drawn on its flank and the far one is hidden — no line colour where it would be, and the pick there meets the cone in front of it; at 1× the far flank faces the camera and the same line is drawn to its full width (≥ 6 of the 8 px rows in the column through it: the shader's half-width rise — centred on the ground line the terrain would swallow half). An X at half opacity on the flat field, from above: at the crossing and on a single stretch the colour is one blend of the line over the frame without it (± 8 levels; twice would be three quarters) — and on flat ground at the box's top, so it is in front of the near plane (`NEAR_HEADROOM`) |
 | `e2e/map-gl-doc.spec.ts` "terrain=1" (H6) | the 3D bench on `e2e/test.ocd` at the event budget: the field prepared in the worker, 240 frames per scenario, drape re-renders only at the start and after the pauses, ≤ 7 mesh draws, drape ≤ 10 MB |
 
 ### 5.3 PDF (shared/print)

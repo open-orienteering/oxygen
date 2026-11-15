@@ -347,7 +347,42 @@ test.describe("lines on the terrain (map-rendering.md §5.6 \"Lines\", H8)", () 
     // the exaggeration applied to the lines as to the mesh).
     await open(page, query(70, 1));
     png = await pixels(page);
-    expect(lineIn(png, (await docProject(page, FAR.x, FAR.y))!, lineRgb)).toBeGreaterThan(15);
+    const farFlat = (await docProject(page, FAR.x, FAR.y))!;
+    expect(lineIn(png, farFlat, lineRgb)).toBeGreaterThan(15);
+    // Its whole width: the column through it has ≥ 6 line-coloured rows of the 8 px line. Centred on
+    // the ground line, the terrain under the capsule's lower half would be nearer and swallow it (about
+    // 4 rows) — the vertex shader raises the line by its half width (§5.6 "Lift and depth").
+    let rows = 0;
+    for (let dy = -16; dy <= 4; dy++) {
+      const i = ((Math.round(farFlat[1]) + dy) * png.width + Math.round(farFlat[0])) * 4;
+      if (Math.max(Math.abs(png.data[i] - lineRgb[0]), Math.abs(png.data[i + 1] - lineRgb[1]), Math.abs(png.data[i + 2] - lineRgb[2])) <= 12) rows++;
+    }
+    expect(rows).toBeGreaterThanOrEqual(6);
     expect(lineIn(png, (await docProject(page, NEAR.x, NEAR.y))!, lineRgb)).toBeGreaterThan(15);
+  });
+  test("a line's opacity is applied once, where it crosses itself and at its joins", async ({ page }) => {
+    // An X through the camera's target on flat ground, one line at half opacity, looked at from above.
+    const base = "doc=course&field=flat&pitch=0&bearing=0&e=1";
+    const meanAt = (png: PNG, [x, y]: [number, number]) => {
+      const m = [0, 0, 0];
+      for (let dy = -1; dy <= 1; dy++)
+        for (let dx = -1; dx <= 1; dx++) {
+          const i = ((Math.round(y) + dy) * png.width + Math.round(x) + dx) * 4;
+          for (let c = 0; c < 3; c++) m[c] += png.data[i + c] / 9;
+        }
+      return m;
+    };
+    await open(page, base);
+    const crossing = (await docProject(page, 40, 30))!, single = (await docProject(page, 35, 25))!;
+    let png = await pixels(page);
+    const under = [meanAt(png, crossing), meanAt(png, single)];
+    await open(page, `${base}&lineOpacity=0.5&line=${encodeURIComponent("30,20;50,40;50,20;30,40")}`);
+    png = await pixels(page);
+    const { lineRgb } = await api(page);
+    for (const [k, at] of [crossing, single].entries()) {
+      const got = meanAt(png, at);
+      // once: half the line over the map; twice would be three quarters (green 255 → 140 once, 83 twice on white)
+      for (let c = 0; c < 3; c++) expect(Math.abs(got[c] - (lineRgb[c] + under[k][c]) / 2), `channel ${c} at ${k ? "a join" : "the crossing"}`).toBeLessThanOrEqual(8);
+    }
   });
 });

@@ -361,7 +361,8 @@ export class TerrainLines {
       gl.uniform1f(u.u_halfPx, (line.widthPx * frame.pxRatio) / 2);
       gl.stencilFunc(gl.NOTEQUAL, ref, 0xff);
       for (const pass of [0, 1]) {
-        gl.stencilOp(gl.KEEP, gl.KEEP, pass === 0 ? gl.REPLACE : gl.KEEP);
+        // the edge pass marks too: a fringe pixel two capsules share (every join) is blended once
+        gl.stencilOp(gl.KEEP, gl.KEEP, gl.REPLACE);
         gl.uniform1i(u.u_pass, pass);
         gl.drawArraysInstanced(gl.TRIANGLE_STRIP, 0, 4, r.count);
         draws++;

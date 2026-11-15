@@ -91,6 +91,17 @@ describe("terrainCamera (map-rendering.md §5.6 \"Camera\")", () => {
     }
   });
 
+  it("leaves headroom in front of the box for lines drawn above the surface (H8)", () => {
+    const bounds = { minX: -20_000, minY: -15_000, minZ: 300, maxX: 32_000, maxY: 14_000, maxZ: 300 };
+    for (const pitchDeg of [0, 45]) {
+      const f = cameraFrame({ ...base, pitchDeg }, bounds);
+      // the target raised towards the eye by 15 % of its depth is still in front of the near plane
+      const t = base.target, k = 0.15;
+      const [, , cz] = ndc(f.matrix, t.x + (f.eye[0] - t.x) * k, t.y + (f.eye[1] - t.y) * k, t.z + (f.eye[2] - t.z) * k);
+      expect(cz).toBeGreaterThanOrEqual(-1);
+    }
+  });
+
   it("keeps sub-pixel precision far from the origin after the float32 upload", () => {
     // 585 mm from the origin, 0.2 px/µm (as view.test.ts): 37.5 µm right of the target is 7.5 px.
     const cam: TerrainCamera = { target: { x: 585_000, y: 300_000, z: 0 }, distanceUm: 0, bearingDeg: 0, pitchDeg: 0, widthPx: 1081, heightPx: 2402 };

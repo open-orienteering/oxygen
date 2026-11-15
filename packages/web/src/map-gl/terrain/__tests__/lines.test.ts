@@ -127,13 +127,6 @@ describe("lineInstances", () => {
     expect(out.segments).toBeLessThanOrEqual(MAX_LINE_SEGMENTS);
     expect(out.segments).toBeGreaterThan(MAX_LINE_SEGMENTS / 4);
   });
-
-  it("does not depend on the exaggeration (heights in units)", () => {
-    // nothing to pass: the instances are the same arrays for any e; the shader multiplies
-    const a = lineInstances([line([{ x: centre.x - 5, y: centre.y }, { x: centre.x + 5, y: centre.y }])], mesh);
-    const b = lineInstances([line([{ x: centre.x - 5, y: centre.y }, { x: centre.x + 5, y: centre.y }])], mesh);
-    expect(Array.from(a.data)).toEqual(Array.from(b.data));
-  });
 });
 
 describe("lineVertex (the vertex shader's lift and depth bias, in TypeScript)", () => {

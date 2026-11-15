@@ -72,7 +72,7 @@ export async function startDocTerrain(canvas: HTMLCanvasElement, params: URLSear
   });
   engine.setCourse(request());
   await courseIn;
-  // `line=x,y;x,y|x,y;…` (paper mm): lines on the terrain (§5.6 "Lines", H8), opaque, 8 px, `lineColour`.
+  // `line=x,y;x,y|x,y;…` (paper mm): lines on the terrain (§5.6 "Lines", H8), 8 px, `lineColour`, `lineOpacity` (default 1).
   const lineRgb = hexToRgb(`#${(params.get("lineColour") ?? "e6194b").replace("#", "")}`);
   const lines: TerrainLine[] | undefined = params.get("line")?.split("|").map((l) => ({
     points: l.split(";").map((p) => {
@@ -80,7 +80,7 @@ export async function startDocTerrain(canvas: HTMLCanvasElement, params: URLSear
       return { x, y };
     }),
     colour: lineRgb,
-    opacity: 1,
+    opacity: Number(params.get("lineOpacity") ?? 1),
     widthPx: 8,
   }));
   const field = docField(params.get("field") === "flat" ? "flat" : "cone");
