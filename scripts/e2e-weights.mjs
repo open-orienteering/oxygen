@@ -29,7 +29,7 @@ export const WEIGHTS = {
   "registration-dialog.spec.ts": 46,
   "course-presence.spec.ts": 45,
   "map-vector-layer.spec.ts": 41,
-  "map-viewer-3d.spec.ts": 40, // H7: the demo map imported, 3D toggle, gestures; not yet measured in CI
+  "map-viewer-3d.spec.ts": 55, // H7: the demo map imported, 3D toggle, gestures; H8: a Tracks page route on the terrain (+12 s); not yet measured in CI
   "map-gl-doc.spec.ts": 39,
   "map-gl-golden.spec.ts": 34,
   "course-editor-phone.spec.ts": { mobile: 31 }, // the editor's phone subset (touch, F3/F7 on a phone)
