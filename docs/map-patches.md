@@ -721,6 +721,59 @@ nothing.
 - On a venue box the hook runs as on the cloud; the box's copy follows
   the cloud's row on the next refresh (§3.4).
 
+## 5. Promote (G12): decided with the user (2026-11-15)
+
+Row G12's planner asked; the user took every recommendation. These
+widen answer 2 (the source kept, the patch re-applied at the store
+stage; deviates from 08 §4.7 "Promote"). G12 writes the rest of the
+section.
+
+1. **The patch travels with every document built from it.** Besides
+   `club_map_versions.patch`, the import job carries a patch snapshot
+   (`map_import_jobs.patch`, like `decisions`) and the stored document
+   records the patch it was built with (`map_documents.patch JSONB
+   NULL`). Every re-import (re-match, `decide` / `finalise`, a restored
+   per-event dump, `course.useClubMap`) takes the patch from the document
+   it replaces; dedup and staleness compare it. Jobs pin a club version
+   by id and patch, not by `(clubMapId, sourceHash)` (`map-storage.md`
+   §6.4).
+2. **The stored patch is self-contained**: targets by `sourceIndex`,
+   each referenced document symbol as G11's `SymbolAnchor`, coordinates
+   with their `unitsPerMm`. No base document is kept alive for it.
+3. **Promotes stack as layers.** `club_map_versions.patch` is an ordered
+   list; each promote appends one immutable layer and the import applies
+   them in order. A baked added object gets `sourceIndex = 0x80000000 +
+   n` in layer order, so numbers never shift (widens
+   `map-document-format.md` §2.4).
+4. **No edits while a promote runs**: `mapPatch` writes are refused with
+   `PATCH_PROMOTING` while the event's promote job runs; Map mode shows
+   progress and is read-only.
+5. **Only what is drawn is promoted.** Promote is refused while *Apply
+   corrections* is off or the patch has no applicable op. Skipped ops and
+   unresolved entries are not promoted; they stay in the event's patch
+   (G11 re-resolves them), so "empty patch" means "no promoted op left".
+6. **Promote is not an undo entry**: it asks to confirm, and Map mode's
+   undo entries from before it are dropped.
+7. **The latest promoted version can be deleted** (uploader or admin, as
+   `clubMap.remove`); events on it keep their document.
+8. **Download stays the original file**, and the card says so
+   ("original file; n corrections applied by Oxygen").
+9. **Who promotes**: `courses.edit` on the event and signed in, as the
+   Club maps page's upload.
+10. **Split**: G12a (API: migration, the bake, jobs, `mapPatch.promote`,
+    re-match) and G12b (the editor's Promote, G11's Attach / Drop as undo
+    entries, the Club maps page, E2E).
+
+Defaults taken with them: hidden objects are dropped from the promoted
+document; an op that no longer applies at a re-import is skipped with a
+`PATCH_ISSUE` warning and the job succeeds; no document-format change;
+the label dialog is prefilled with the event's name and date, and
+`uploaded_by` is the promoter; other events on the base version are
+untouched; a box forwards `mapPatch.promote`; thumbnails and swatches come
+from the patched document; `symbol`-reason unresolved entries stay
+drop-only; promote does not touch `map_gps_tracks.converted_op`; filter
+regions' symbol indices are not re-keyed (Pending, as at any re-match).
+
 ## Pending in this chapter
 
 - **An offline copy of the patch** (G4, decided overnight for review).
