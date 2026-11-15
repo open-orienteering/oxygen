@@ -300,7 +300,12 @@ async function exclusive<T>(competitionId: string, fn: () => Promise<T>): Promis
  * Replays the event's pending entries in order (see the module notes). Returns null when another drain of the
  * event is running.
  */
-export function drain(store: ControlWriteStore, writes: DrainWrites, competitionId: string): Promise<DrainResult | null> {
+export function drain(
+  store: ControlWriteStore,
+  writes: DrainWrites,
+  competitionId: string,
+  opts: { /** Called with each entry the server took, as sent. */ onSent?: (e: ControlWrite) => void } = {},
+): Promise<DrainResult | null> {
   return exclusive(competitionId, async () => {
     const result: DrainResult = { sent: 0, conflicts: 0, failed: 0, stopped: false };
     /** The next entry to send has a key at or after this one. */
@@ -355,7 +360,7 @@ export function drain(store: ControlWriteStore, writes: DrainWrites, competition
       });
       cursor = again ? sent.seq! : sent.seq! + 1;
       if (outcome === "network") { result.stopped = true; break; }
-      if ("ok" in outcome) result.sent++;
+      if ("ok" in outcome) { result.sent++; opts.onSent?.(sent); }
       else if ("conflict" in outcome) result.conflicts++;
       else result.failed++;
     }

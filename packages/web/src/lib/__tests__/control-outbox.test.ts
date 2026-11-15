@@ -149,7 +149,9 @@ describe("drain: in order, under G1's rules (docs/course-editor.md §3, §9)", (
     await enqueue(store, EV, check(32, true));
     await enqueue(store, EV, move(33, [1, 2], [0, 2], "7"));
     const f = fakeWrites();
-    const r = await drain(store, f.writes, EV);
+    const onSent = vi.fn();
+    const r = await drain(store, f.writes, EV, { onSent });
+    expect(onSent.mock.calls.map(([e]) => e.controlId)).toEqual([31, 32, 33]);
     expect(f.calls.map((c) => c.proc)).toEqual(["move", "check", "move"]);
     expect(f.calls[0].args).toEqual([{ id: 31, xpos: 11, ypos: 20, autoDescribe: true }, { x: 10, y: 20 }, { baseVersion: "5" }]);
     expect(f.calls[1].args).toEqual([32, true]);

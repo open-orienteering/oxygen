@@ -47,6 +47,28 @@ export interface FieldOutbox {
   discardFailed(): Promise<void>;
 }
 
+/**
+ * A cached query's server rows (`base`) and their answer time. The hook writes the overlaid rows under the
+ * base's time, so a newer `dataUpdatedAt` is a refetch: the server's rows, the new base.
+ */
+interface Overlaid<T> {
+  base: T | undefined;
+  baseAt: number;
+}
+
+/** Puts `overlay(base)` in the cache, under the base's time, when it differs from what is there. */
+function applyOverlay<T>(o: Overlaid<T>, data: T | undefined, dataAt: number, overlay: (rows: T) => T, same: (a: T, b: T) => boolean, set: (next: T, at: number) => void): void {
+  if (data === undefined) return;
+  if (o.base === undefined || dataAt !== o.baseAt) { o.base = data; o.baseAt = dataAt; }
+  const next = overlay(o.base);
+  if (!same(next, data)) set(next, o.baseAt);
+}
+
+const samePositions = (a: { mapX: number; mapY: number }[], b: { mapX: number; mapY: number }[]) =>
+  a.length === b.length && a.every((r, i) => r.mapX === b[i].mapX && r.mapY === b[i].mapY);
+const sameChecks = (a: { checkedAt: string | null }[], b: { checkedAt: string | null }[]) =>
+  a.length === b.length && a.every((r, i) => r.checkedAt === b[i].checkedAt);
+
 export function useFieldOutbox({ competitionId, writes, online, onSettled }: {
   competitionId: string;
   writes: EditorWrites;
@@ -63,9 +85,20 @@ export function useFieldOutbox({ competitionId, writes, online, onSettled }: {
   const settledRef = useRef(onSettled);
   useEffect(() => { settledRef.current = onSettled; }, [onSettled]);
 
+  const coords = trpc.course.controlCoordinates.useQuery(undefined, { staleTime: Number.POSITIVE_INFINITY });
+  const list = trpc.control.list.useQuery();
+  const coordsOverlay = useRef<Overlaid<NonNullable<typeof coords.data>>>({ base: undefined, baseAt: 0 });
+  const listOverlay = useRef<Overlaid<NonNullable<typeof list.data>>>({ base: undefined, baseAt: 0 });
+
   const drainNow = useCallback(async () => {
     if (typeof navigator !== "undefined" && !navigator.onLine) return;
-    const r = await drain(store, writes, competitionId);
+    // A sent write is the server's now: into the base, so the shown value holds until the refetch answers.
+    const onSent = (e: ControlWrite) => {
+      const c = coordsOverlay.current, l = listOverlay.current;
+      if (c.base) c.base = overlayCoordinates(c.base, [e]);
+      if (l.base) l.base = overlayChecks(l.base, [e]);
+    };
+    const r = await drain(store, writes, competitionId, { onSent });
     if (r && (r.sent || r.conflicts || r.failed)) settledRef.current();
   }, [writes, competitionId]);
 
@@ -99,20 +132,15 @@ export function useFieldOutbox({ competitionId, writes, online, onSettled }: {
     return () => { clearInterval(timer); document.removeEventListener("visibilitychange", onVisible); };
   }, [online, hasPending, drainNow]);
 
-  // The own-writes overlay: the queued positions and check-offs over whatever the server last answered.
-  const coords = trpc.course.controlCoordinates.useQuery(undefined, { staleTime: Number.POSITIVE_INFINITY });
-  const list = trpc.control.list.useQuery();
+  // The own-writes overlay: the queued positions and check-offs over whatever the server last answered. The
+  // server's rows are kept (`base`): an entry that drops out offline (an undo) shows the server's value again
+  // without a refetch.
   useEffect(() => {
-    if (entries.length === 0) return;
-    if (coords.data) {
-      const next = overlayCoordinates(coords.data, entries);
-      if (next !== coords.data) utils.course.controlCoordinates.setData(undefined, next);
-    }
-    if (list.data) {
-      const next = overlayChecks(list.data, entries);
-      if (next !== list.data) utils.control.list.setData(undefined, next);
-    }
-  }, [entries, coords.data, list.data, utils]);
+    applyOverlay(coordsOverlay.current, coords.data, coords.dataUpdatedAt, (rows) => overlayCoordinates(rows, entries), samePositions,
+      (next, at) => utils.course.controlCoordinates.setData(undefined, next, { updatedAt: at }));
+    applyOverlay(listOverlay.current, list.data, list.dataUpdatedAt, (rows) => overlayChecks(rows, entries), sameChecks,
+      (next, at) => utils.control.list.setData(undefined, next, { updatedAt: at }));
+  }, [entries, coords.data, coords.dataUpdatedAt, list.data, list.dataUpdatedAt, utils]);
 
   const after = useCallback(async (op: Promise<void>) => {
     await op;

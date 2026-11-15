@@ -6,9 +6,9 @@
 // (D-mobile, §10 "On a real phone"). The fixture (courses and the map from
 // `e2e/test.ocd`) is set up once from a desktop context
 // (`ensureFixtureFromDesktop`, shared with the editor spec).
-import { devices, expect, test, type BrowserContext, type Page } from "@playwright/test";
+import { devices, expect, test, type BrowserContext, type Page, type Route } from "@playwright/test";
 import { reseed } from "./helpers/reseed";
-import { canvasInCircle, editorReady, ensureFixtureFromDesktop, nextFrames, site, sites, toPage, toPaper, trpcCall } from "./helpers/editor";
+import { canvasInCircle, cleanup, editorReady, ensureFixtureFromDesktop, nextFrames, site, sites, toPage, toPaper, trpcCall } from "./helpers/editor";
 import { touchDrag, touchEnd, touchMove, touchStart, touchTap } from "./helpers/touch";
 
 type Pt = { x: number; y: number };
@@ -69,6 +69,28 @@ async function visibleControl(page: Page, exclude: string[] = []): Promise<{ cod
 }
 
 const sheet = (page: Page) => page.getByTestId("editor-sheet");
+
+/** The tRPC procedures a request names (a batch is comma-separated): matched exactly, never by substring. */
+function procedures(url: string): string[] {
+  const path = new URL(url).pathname.split("/trpc/")[1];
+  return path ? decodeURIComponent(path).split(",") : [];
+}
+
+type Stored = { x: number; y: number; description: unknown; notes: string | null; checked: boolean };
+
+/** A control as the server has it: paper position, description, notes, check-off. */
+async function storedControl(id: number): Promise<Stored> {
+  const at = (await trpcCall<{ id: number; mapX: number; mapY: number }[]>("course.controlCoordinates", undefined, false)).find((c) => c.id === id)!;
+  const d = await trpcCall<{ description: unknown; notes?: string | null; checkedAt: string | null }>("control.getById", { id }, false);
+  return { x: at.mapX, y: at.mapY, description: d.description, notes: d.notes ?? null, checked: !!d.checkedAt };
+}
+
+/** Puts a control back as `storedControl` read it (best effort: the next `reseed()` drops the rows anyway). */
+async function writeBack(id: number, was: Stored): Promise<void> {
+  const now = await storedControl(id).catch(() => null);
+  await cleanup("control.update", { id, xpos: was.x, ypos: was.y, description: was.description, ...(now && now.notes !== was.notes ? { notes: was.notes ?? "" } : {}) });
+  if (now && now.checked !== was.checked) await cleanup("control.check", { controlId: id, checked: was.checked });
+}
 
 test.describe("Field mode on a phone (docs/course-editor.md §9, §10)", () => {
   test("opens in Field mode, full-bleed, with the compact chrome and the sheet at peek", async ({ page }) => {
@@ -392,21 +414,147 @@ test.describe("Field mode on a phone (docs/course-editor.md §9, §10)", () => {
     await expect(rowById()).toHaveAttribute("data-checked", String(was), { timeout: 15000 });
   });
 
-  test("offline, Field mode views only and says so", async ({ page, context }) => {
+  // ─── Offline (§9 "Offline", row D9c): Field mode's outbox ───────────────
+  // Each test writes the touched control back in `finally` (position, description, notes, check), so the
+  // seed is as `reseed()` left it; a fresh context per test means a fresh IndexedDB, so no queue leaks.
+
+  test("offline: moves and check-offs are kept, shown at once and sent in order on reconnect", async ({ page, context }) => {
     await openEditor(page);
-    await expect(page.getByTestId("editor-field-offline")).toHaveCount(0);
-    await context.setOffline(true);
+    const c = await visibleControl(page);
+    const restore = await storedControl(Number(c.id));
+    const sent: string[] = [];
+    page.on("request", (r) => { for (const p of procedures(r.url())) if (p === "control.update" || p === "control.check") sent.push(p); });
     try {
-      await expect(page.getByTestId("editor-field-offline")).toBeVisible();
+      await context.setOffline(true);
+      const notice = page.getByTestId("editor-field-offline");
+      await expect(notice).toBeVisible();
+      await expect(notice).toHaveAttribute("data-pending", "0");
       await expect(page.getByTestId("editor-field-add")).toBeDisabled();
-      // A long-press move snaps back instead of writing.
-      const c = await visibleControl(page);
-      await touchDrag(page, c.at, { x: c.at.x + 30, y: c.at.y }, { holdMs: 650, steps: 6 });
-      await expect.poll(async () => (await site(page, c.code)).mm, { timeout: 5000 }).toEqual(c.mm);
+      await touchTap(page, c.at);
+      await expect(page.getByTestId("editor-sheet-selection")).toContainText(c.code);
+      await page.getByTestId("editor-sheet-handle").click();
+      // Two nudges: one entry for the control, at the newest position, drawn there at once.
+      await page.getByTestId("editor-nudge-up-mm").click();
+      await page.getByTestId("editor-nudge-up-mm").click();
+      await expect.poll(async () => (await site(page, c.code)).mm.y, { timeout: 10000 }).toBeCloseTo(c.mm.y + 0.2, 3);
+      await expect(notice).toHaveAttribute("data-pending", "1");
+      // A check-off: shown at once, a second entry; the save indicator waits, never "Saved".
+      const toggle = page.getByTestId("editor-field-selection-check");
+      const was = (await toggle.getAttribute("aria-pressed")) === "true";
+      await toggle.click();
+      await expect(toggle).toHaveAttribute("aria-pressed", String(!was));
+      await expect(notice).toHaveAttribute("data-pending", "2");
+      await expect(page.getByTestId("editor-save-state")).toHaveAttribute("data-state", "queued");
+      // Undo offline undoes the check-off: the toggled-back entry drops out.
+      await page.getByTestId("editor-overflow").click();
+      await page.getByTestId("editor-overflow-menu").getByTestId("editor-undo").click();
+      await expect(toggle).toHaveAttribute("aria-pressed", String(was));
+      await expect(notice).toHaveAttribute("data-pending", "1");
+      expect(sent).toEqual([]);
+
+      await context.setOffline(false);
+      await expect(notice).toHaveCount(0, { timeout: 20000 });
+      await expect(page.getByTestId("editor-save-state")).toHaveAttribute("data-state", "saved", { timeout: 15000 });
+      expect(sent).toEqual(["control.update"]);
+      const stored = await storedControl(Number(c.id));
+      expect(stored.y).toBeCloseTo(c.mm.y + 0.2, 3);
+      expect(stored.checked).toBe(restore.checked);
+      await page.reload();
+      await editorReady(page);
+      expect((await site(page, c.code)).mm.y).toBeCloseTo(c.mm.y + 0.2, 3);
     } finally {
       await context.setOffline(false);
+      await writeBack(Number(c.id), restore);
     }
-    await expect(page.getByTestId("editor-field-offline")).toHaveCount(0);
+  });
+
+  test("offline: a move replays over a change elsewhere that leaves the position alone (rebase, no notice)", async ({ page, context }) => {
+    await openEditor(page);
+    const c = await visibleControl(page);
+    const restore = await storedControl(Number(c.id));
+    try {
+      await context.setOffline(true);
+      await expect(page.getByTestId("editor-field-offline")).toBeVisible();
+      const to = { x: c.at.x + 30, y: c.at.y + 20 };
+      await touchDrag(page, c.at, to, { holdMs: 650, steps: 6 });
+      await expect(page.getByTestId("editor-field-offline")).toHaveAttribute("data-pending", "1");
+      const queued = (await site(page, c.code)).mm;
+      expect(Math.hypot(queued.x - c.mm.x, queued.y - c.mm.y)).toBeGreaterThan(0.5);
+      // The other side writes the setter's notes meanwhile.
+      await trpcCall("control.update", { id: Number(c.id), notes: "D9c rebase" });
+
+      await context.setOffline(false);
+      await expect(page.getByTestId("editor-field-offline")).toHaveCount(0, { timeout: 20000 });
+      await expect(page.getByTestId("editor-conflict")).toHaveCount(0);
+      const stored = await storedControl(Number(c.id));
+      expect(stored.x).toBeCloseTo(queued.x, 3);
+      expect(stored.y).toBeCloseTo(queued.y, 3);
+      expect(stored.notes).toBe("D9c rebase");
+    } finally {
+      await context.setOffline(false);
+      await writeBack(Number(c.id), restore);
+    }
+  });
+
+  test("offline: a move replayed over a move elsewhere asks the setter (Moved by … / Keep mine)", async ({ page, context }) => {
+    await openEditor(page);
+    const c = await visibleControl(page);
+    const restore = await storedControl(Number(c.id));
+    try {
+      await context.setOffline(true);
+      await touchTap(page, c.at);
+      await expect(page.getByTestId("editor-sheet-selection")).toContainText(c.code);
+      await page.getByTestId("editor-sheet-handle").click();
+      await page.getByTestId("editor-nudge-up-mm").click();
+      await expect(page.getByTestId("editor-field-offline")).toHaveAttribute("data-pending", "1");
+      // The other side moves it 3 mm right.
+      await trpcCall("control.update", { id: Number(c.id), xpos: c.mm.x + 3, ypos: c.mm.y });
+
+      await context.setOffline(false);
+      const conflict = page.getByTestId("editor-conflict");
+      await expect(conflict).toHaveAttribute("data-kind", "moved", { timeout: 20000 });
+      await expect(conflict).toContainText((c.mm.x + 3).toFixed(1));
+      // The entry waits for the setter's choice.
+      await expect(page.getByTestId("editor-field-offline")).toHaveAttribute("data-pending", "1");
+      await page.getByTestId("editor-conflict-keep-mine").click();
+      await expect(page.getByTestId("editor-field-offline")).toHaveCount(0, { timeout: 20000 });
+      await expect(conflict).toHaveCount(0);
+      const stored = await storedControl(Number(c.id));
+      expect(stored.x).toBeCloseTo(c.mm.x, 3);
+      expect(stored.y).toBeCloseTo(c.mm.y + 0.1, 3);
+    } finally {
+      await context.setOffline(false);
+      await writeBack(Number(c.id), restore);
+    }
+  });
+
+  test("a write with no answer is queued while online, survives a reload and is sent when the server answers", async ({ page }) => {
+    await openEditor(page);
+    const c = await visibleControl(page);
+    const restore = await storedControl(Number(c.id));
+    // The server never answers a control.update (an exact procedure, AGENTS.md §12); the browser stays online.
+    const block = (route: Route) => (route.request().method() === "POST" && procedures(route.request().url()).includes("control.update") ? route.abort() : route.continue());
+    await page.route("**/trpc/**", block);
+    try {
+      await touchTap(page, c.at);
+      await expect(page.getByTestId("editor-sheet-selection")).toContainText(c.code);
+      await page.getByTestId("editor-sheet-handle").click();
+      await page.getByTestId("editor-nudge-up-mm").click();
+      const notice = page.getByTestId("editor-field-offline");
+      await expect(notice).toHaveAttribute("data-pending", "1", { timeout: 15000 });
+      await expect(notice).toHaveAttribute("data-online", "true");
+      await page.reload();
+      await editorReady(page);
+      await expect(notice).toHaveAttribute("data-pending", "1");
+      await expect.poll(async () => (await site(page, c.code)).mm.y, { timeout: 10000 }).toBeCloseTo(c.mm.y + 0.1, 3);
+      await page.unroute("**/trpc/**", block);
+      // The retry timer (10 s) sends it.
+      await expect(notice).toHaveCount(0, { timeout: 30000 });
+      expect((await storedControl(Number(c.id))).y).toBeCloseTo(c.mm.y + 0.1, 3);
+    } finally {
+      await page.unroute("**/trpc/**", block).catch(() => undefined);
+      await writeBack(Number(c.id), restore);
+    }
   });
 });
 
