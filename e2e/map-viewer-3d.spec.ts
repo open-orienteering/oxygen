@@ -87,6 +87,24 @@ function inked(p: PNG): number {
   return n / (p.width * p.height);
 }
 
+/**
+ * Rewrites `course.mapMetadata`'s terrain descriptor in the batched tRPC responses (the n-th answer,
+ * from 0, goes through `patch`; `null` leaves it), so the gate's other rows run on the demo map.
+ */
+async function patchTerrainDescriptor(page: Page, patch: (terrain: Record<string, unknown>, n: number) => Record<string, unknown> | null): Promise<() => number> {
+  let n = 0;
+  await page.route(/\/trpc\/[^?]*course\.mapMetadata/, async (route) => {
+    const res = await route.fetch();
+    const procs = decodeURIComponent(new URL(route.request().url()).pathname.replace(/^.*\/trpc\//, "")).split(",");
+    const body = (await res.json()) as unknown;
+    const arr = (Array.isArray(body) ? body : [body]) as { result?: { data?: { terrain?: Record<string, unknown> | null } } }[];
+    const data = arr[procs.indexOf("course.mapMetadata")]?.result?.data;
+    if (data?.terrain) data.terrain = patch(data.terrain, n++) ?? data.terrain;
+    await route.fulfill({ response: res, json: Array.isArray(body) ? arr : arr[0] });
+  });
+  return () => n;
+}
+
 async function settled3d(viewer: Locator, canvas: Locator) {
   await expect(viewer).toHaveAttribute("data-view-mode", "3d", { timeout: 60_000 });
   await expect(canvas).toHaveAttribute("data-mode", "3d");
@@ -119,8 +137,13 @@ test.describe("the viewer's 3D mode", () => {
       if (path === `/api/map-documents/${hash}`) documentRequests.push(path);
     });
     await openEvent(page);
-    const { viewer, canvas } = await viewerWithMap(page);
+    let { viewer, canvas } = await viewerWithMap(page);
     await expect(canvas).toHaveAttribute("data-document-hash", hash);
+    // A control at the map's centre, so the UI layer has a ring to start a gesture on.
+    const centre = { x: Number(await viewer.getAttribute("data-centre-x")) / 1000, y: Number(await viewer.getAttribute("data-centre-y")) / 1000 };
+    await trpc("control.create", { codes: "247", xpos: centre.x + 3, ypos: centre.y + 3 });
+    await page.reload();
+    ({ viewer, canvas } = await viewerWithMap(page));
     const toggle = viewer.getByTestId("map-3d-toggle");
     await expect(toggle).toHaveAttribute("data-state", "off");
     await expect(viewer).toHaveAttribute("data-user-bearing", "0");
@@ -139,7 +162,7 @@ test.describe("the viewer's 3D mode", () => {
       expect(differing(flat, tilted)).toBeGreaterThan(0.2);
       // The drape is the map: about as much ink as the 2D view, not a blank or a background.
       expect(inked(tilted)).toBeGreaterThan(inked(flat) * 0.3);
-      // No 2D-only tool, no scale bar on a tilted view.
+      // No 2D-only tool.
       await expect(viewer.getByRole("button", { name: "Measure distance" })).toHaveCount(0);
       if (process.env.MAP_3D_SHOT === "1") await viewer.screenshot({ path: "docs/screenshots/map-3d.png" });
     });
@@ -159,6 +182,31 @@ test.describe("the viewer's 3D mode", () => {
       await viewer.getByTestId("map-compass").click();
       await expect(viewer).toHaveAttribute("data-user-bearing", "0");
       await expect(viewer).toHaveAttribute("data-view-mode", "3d");
+    });
+
+    await test.step("a gesture that starts on a ring of the UI layer is the 3D view's, and a click still reaches the ring", async () => {
+      // The control made at the map's centre before the page opened: its transparent click target.
+      const ring = viewer.locator("[data-testid='map-course-overlay-upper'] circle[fill='transparent']").first();
+      await expect(ring).toBeAttached();
+      const box = (await ring.boundingBox())!;
+      const pitch0 = Number(await viewer.getAttribute("data-pitch"));
+      const cx = box.x + box.width / 2, cy = box.y + box.height / 2;
+      await page.mouse.move(cx, cy);
+      await page.mouse.down({ button: "right" });
+      await page.mouse.move(cx + 60, cy - 40, { steps: 4 });
+      await page.mouse.up({ button: "right" });
+      // the 2D handlers would have panned; the 3D view orbits
+      await expect.poll(async () => Number(await viewer.getAttribute("data-pitch"))).toBeGreaterThan(pitch0);
+      expect(Number(await viewer.getAttribute("data-user-bearing"))).not.toBe(0);
+      const zoom = Number(await viewer.getAttribute("data-px-per-um"));
+      const r2 = (await ring.boundingBox())!;
+      await page.mouse.move(r2.x + r2.width / 2, r2.y + r2.height / 2);
+      await page.mouse.wheel(0, -200);
+      await expect.poll(async () => Number(await viewer.getAttribute("data-px-per-um"))).toBeCloseTo(zoom * Math.pow(2, 0.15), 8);
+      await expect(viewer).toHaveAttribute("data-view-mode", "3d");
+      await page.mouse.wheel(0, 200);
+      await viewer.getByTestId("map-compass").click();
+      await expect(viewer).toHaveAttribute("data-user-bearing", "0");
     });
 
     await test.step("the exaggeration control changes the relief", async () => {
@@ -219,6 +267,37 @@ test.describe("the viewer's 3D mode", () => {
       expect(dot.y).toBeGreaterThan(vb.y);
       expect(dot.y + dot.height).toBeLessThan(vb.y + vb.height);
     });
+  });
+
+  test("below the gate the toggle says why and stays in 2D", async ({ page }) => {
+    test.setTimeout(120_000);
+    await patchTerrainDescriptor(page, (t) => ({ ...t, decided: 0.796 }));
+    await openEvent(page);
+    const { viewer, canvas } = await viewerWithMap(page);
+    const toggle = viewer.getByTestId("map-3d-toggle");
+    await expect(toggle).toHaveAttribute("data-state", "unavailable");
+    await expect(toggle).toHaveAttribute("aria-disabled", "true");
+    await expect(toggle).toHaveAttribute("title", /80 %.*79 %/);
+    await expect(viewer).toHaveAttribute("data-terrain-reason", "low-confidence");
+    // aria-disabled, not disabled: a click still says why (Playwright waits on aria-disabled, so force it)
+    await toggle.click({ force: true });
+    await expect(viewer.getByTestId("map-3d-notice")).toHaveAttribute("data-reason", "low-confidence");
+    await expect(viewer).toHaveAttribute("data-view-mode", "2d");
+    await expect(canvas).toHaveAttribute("data-mode", "2d");
+  });
+
+  test("a pending descriptor: the switch fetches the field, the descriptor is read again and the gate lets 3D in", async ({ page }) => {
+    test.setTimeout(120_000);
+    // The first answer says the field is not derived yet; every later one is the server's.
+    const answers = await patchTerrainDescriptor(page, (t, n) => (n === 0 ? { ...t, state: "pending", decided: null } : null));
+    await openEvent(page);
+    const { viewer, canvas } = await viewerWithMap(page);
+    const toggle = viewer.getByTestId("map-3d-toggle");
+    await expect(toggle).toHaveAttribute("data-state", "off");
+    const before = answers();
+    await toggle.click();
+    await settled3d(viewer, canvas);
+    expect(answers()).toBeGreaterThan(before);
   });
 
   test("a field that cannot be had leaves 2D drawn and says why", async ({ page }) => {

@@ -1956,7 +1956,8 @@ Research 10 §5 step 3, §8; slice H answers 6 and 7.
 **Where it is offered** (answer 6): every `MapPanel` mount except the
 editor (`editor` set) and the kiosk (`MapPanel allow3d={false}` from
 `KioskPage`) — the viewer, the shell's map pane, the readout and runner
-previews, the dashboard and the Tracks page.
+previews, the dashboard and the Tracks page. A viewer with
+`hideControls` has no buttons, so no toggle either.
 
 **The offer** (`terrain3dOffer(terrain, host)`, `lib/map-3d.ts`) reads
 `course.mapMetadata.terrain` (`docs/map-storage.md` §4.7 "Descriptor"),
@@ -1983,6 +1984,7 @@ names the reason in `map-3d-notice` for a few seconds:
 | `no-contours`, `over-cap` | a `pending` descriptor's fetch answered 404 with that `reason` (the derive found no contours, or the cap); the descriptor is read again and hides or disables the toggle |
 | `unavailable` | the field cannot be had: offline and not stored, 401 / 403, another 404, 503, unreadable bytes |
 | `webgl` | `engine.setTerrain` rejects (a field over the texture limit, a lost context) |
+| `unavailable` | after a `pending` fetch, the descriptor read again is still `pending` or the read fails |
 
 **Field** (`hooks/useHeightField.ts`): `loadHeightField(url, opts)` fetches
 the descriptor's `url` as given (`/api/map-documents/:hash/height.bin?v=`,
@@ -1996,7 +1998,9 @@ offline, failures not cached. `useHeightField(url, eventId)` asks only
 while `url` is non-null — the viewer sets it on the first switch to 3D —
 and returns `{ state: idle | loading | ready | error (kind), retry }`.
 `viewerField(field, boundsMm, budgetBytes, maxTextureSize)`
-(`lib/map-3d-field.ts`) pads and coarsens it (answers 2 and 3).
+(`lib/map-3d-field.ts`) pads and coarsens it (answers 2 and 3), on the
+main thread, once per field, budget and texture limit (kept for a
+re-entry).
 
 **State.** The 2D state stays the state: `PaperViewport` (centre, zoom)
 and `userBearing`, plus `pitchDeg`. Zoom buttons, fit, GPS follow, the
@@ -2026,8 +2030,9 @@ entering and leaving 3D at pitch 0 changes no pixel (§5.6 "Drape layers").
 
 **Drawing** (`VectorMapLayer`): props `heightField` (the fitted field,
 `null` in 2D) and `terrain` (`{ camera, exaggeration }`, `null` in 2D),
-`onTerrain` (`{ mesh, field, originUm }` once the mesh is up, `null` when
-it goes) and `onTerrainError`. After the load (and after a remount) the
+`onTerrain` (`{ mesh, field }` once the mesh is up — the model origin is
+`mesh.originUm` — and `null` when it goes: the field dropped, or the
+engine remounted) and `onTerrainError`. After the load (and after a remount) the
 layer calls `engine.setTerrain(heightField)`; a superseded rejection is
 ignored. A frame with `terrain` and a mesh is `engine.renderTerrain(terrain,
 opts)` with the colours and `background` paper white; every other frame
@@ -2036,12 +2041,18 @@ by itself. Every camera change and every `onChange` (settle timer,
 arrivals, §5.6 "Settling") is one redraw. The renderer is made with `{
 depth: true }` (the mesh's depth test). The canvas carries `data-mode`
 (`2d` / `3d`, the frame last drawn) and `data-terrain-ready="true"` once
-`whenComplete()` has resolved after the field and a 3D frame followed.
+the camera has been still for 250 ms, `whenComplete()` has resolved and a
+3D frame followed; a 2D frame forgets it, so a re-entry waits again.
 
 **Gestures** (`lib/map-3d.ts`, pure, `reduceGesture3d(state, event,
-scene)`): the 3D view's own pointer surface (`map-3d-surface`) covers the
-canvas under the UI layer and takes the pointer, touch and wheel events
-the 2D handlers would have had; the 2D handlers are not involved.
+scene)`): the 3D view takes the pointer, touch and wheel events on the
+viewer in the capture phase, before they reach the UI layer or the 2D
+handlers, wherever they start — on the canvas or on a ring of the UI
+layer — except on the viewer's own controls (buttons, inputs, labels).
+A gesture's moves are followed on the window, without pointer capture,
+so a click on a ring still reaches the ring. `map-3d-surface`, a layer
+over the canvas under the UI layer, carries the cursor and the
+`touch-action`. The 2D handlers are not involved.
 
 | Input | 3D |
 |---|---|
@@ -2081,7 +2092,8 @@ eye) instead of `mmToInner`; screen points go back through `screenRay` +
 
 **Attributes.** `map-viewer` adds `data-view-mode` (`2d` / `3d`),
 `data-pitch`, `data-exaggeration` (3D only) and `data-terrain-reason`
-(the offer's or the last fallback's reason). `data-rotation` stays the GL
+(the last fallback's reason until 3D is asked for again, else the
+offer's). `data-rotation` stays the GL
 view's angle in both modes.
 
 #### Call sites
@@ -2116,7 +2128,7 @@ mounts it only with a pinned document.
 | `lib/__tests__/map-3d.test.ts` (H7) | the offer table (hidden, unavailable with the floored percent, pending, available; editor and kiosk hidden); exaggeration clamp; the camera at pitch 0 = `viewMatrix` on the target's plane (50 random views, DPRs, bearings); `targetZ` mid-height; the projector at pitch 0 on flat ground = `mmToInner` + the CSS rotation < 0.5 px (200 random views); tilted over a cone, project → unproject within a cell; the ground affine a rotation at pitch 0, foreshortened by cos(pitch) along the view tilted; null behind the eye; pan and wheel zoom keep the ground point under the pointer < 0.5 px (flat and tilted); zoom limits; orbit rates and pitch clamp; two-finger classification (tilt, pinch by distance, angle, midpoint, null in the slop); the reducer: one-finger pan and the page-scrolling finger, orbit drag, wheel, pinch ×2, twist from its activation without a jump, tilt, two → one finger; bearing ↔ user bearing |
 | `lib/__tests__/map-3d-field.test.ts` (H7) | padding by whole no-data cells on the grid to the bounds, `sampleHeight` unchanged inside, no copy when covered; coarsening means, the more-than-half no-data rule, confidence by majority, the corner kept; the smallest factor; a club budget pads only, an event map's coarsens by 2, a 1024-texel device |
 | `hooks/__tests__/useHeightField.test.ts` (H7) | the descriptor's URL with `x-event-id` / `x-kiosk-key`, decoded; one request shared, the field kept; the Cache Storage copy serves offline and replaces the document's other versions of the same source; 403 / 404 with `reason` / 503 / 500 / unreadable / offline classified, failures not kept |
-| `e2e/map-viewer-3d.spec.ts` (H7) | the seed map (no contours): no toggle, `data-terrain-reason="no-contours"`; the demo map imported and pinned: one `height.bin?v=` request with `x-event-id`, `data-view-mode="3d"`, canvas `data-mode="3d"` and `data-terrain-ready`, pitch 45, exaggeration 2, the frame differs from 2D and carries the map's ink, measure hidden; a right-drag raises the pitch and turns the bearing, the compass resets it; exaggeration 5 changes the frame; two CDP touches moving up raise the pitch; back to 2D the frame equals the 2D one (< 0.5 % of pixels), re-entry asks for neither field nor document; a followed GPS fix on the screen's vertical centre line; an aborted field: `map-3d-notice` `unavailable`, 2D drawn. `MAP_3D_SHOT=1` writes `docs/screenshots/map-3d.png` |
+| `e2e/map-viewer-3d.spec.ts` (H7) | the seed map (no contours): no toggle, `data-terrain-reason="no-contours"`; the demo map imported and pinned: one `height.bin?v=` request with `x-event-id`, `data-view-mode="3d"`, canvas `data-mode="3d"` and `data-terrain-ready`, pitch 45, exaggeration 2, the frame differs from 2D and carries the map's ink, measure hidden; a right-drag raises the pitch and turns the bearing, the compass resets it; a right-drag and a wheel that start on a control's ring of the UI layer orbit and zoom the 3D view (not the 2D handlers); exaggeration 5 changes the frame; two CDP touches moving up raise the pitch; back to 2D the frame equals the 2D one (< 0.5 % of pixels), re-entry asks for neither field nor document; a followed GPS fix on the screen's vertical centre line; the descriptor rewritten below the gate (79.6 %): the toggle `unavailable`, `aria-disabled`, its title the reason, a click shows `low-confidence` and stays 2D; the descriptor first `pending`: the switch fetches, the descriptor is read again and 3D is drawn; an aborted field: `map-3d-notice` `unavailable`, 2D drawn. `MAP_3D_SHOT=1` writes `docs/screenshots/map-3d.png` |
 
 ### 5.5 Editor
 
@@ -3751,6 +3763,11 @@ The shared module is exported as a namespace: `import { render } from
 - **§5.4 3D mode — camera animation**: entering and leaving 3D, and the
   compass's north-up, jump; a short tween of pitch and bearing is not
   built.
+- **§5.4 3D mode — the field's fitting on the main thread**: padding and
+  coarsening a field (`viewerField`) runs in the page, once per field; a
+  club field near the 60 M-cell cap is tens of millions of cells and may
+  be a hitch of its own on entering 3D. Not measured on the corpus;
+  moving it to the map worker beside `prepareTerrain` is the remedy.
 - **§5.4 3D mode — measuring in 3D**: the measure tool is 2D-only (hidden
   in 3D); plan distances through `unproject` would serve it.
 - **§5.6 level-of-detail popping.** A chunk changes level in one frame

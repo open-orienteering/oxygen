@@ -83,9 +83,11 @@ export function Map3dNotice({ reason, percent }: { reason: Terrain3dReason; perc
 }
 
 /**
- * Takes the pointer, touch and wheel events over the map in 3D and runs them through
- * `reduceGesture3d`; the 2D handlers on the viewer never see them (they are stopped here, natively,
- * before they bubble to the viewer's own listeners).
+ * Takes the pointer, touch and wheel events on the viewer in 3D and runs them through
+ * `reduceGesture3d` (§5.4 "3D mode" "Gestures"). They are taken in the capture phase on the viewer
+ * itself — the surface's parent — wherever they start, on the canvas or on a ring of the UI layer,
+ * except on the viewer's own controls; so the 2D handlers on the viewer never see them. A gesture's
+ * moves are followed on the window without pointer capture, so a click on a ring still reaches it.
  */
 export function Map3dSurface({ view, scene, oneFingerPans, onView }: {
   view: View3d;
@@ -100,11 +102,16 @@ export function Map3dSurface({ view, scene, oneFingerPans, onView }: {
   const gesture = useRef<Gesture3dState>(GESTURE_IDLE);
 
   useEffect(() => {
-    const el = ref.current;
-    if (!el) return;
+    const host = ref.current?.parentElement;
+    if (!host) return;
     const local = (e: { clientX: number; clientY: number }) => {
-      const r = el.getBoundingClientRect();
+      const r = host.getBoundingClientRect();
       return { x: e.clientX - r.left, y: e.clientY - r.top };
+    };
+    /** The viewer's own controls keep their events. */
+    const isControl = (t: EventTarget | null) => t instanceof Element && !!t.closest(MAP_CONTROLS);
+    const take = (e: Event) => {
+      e.stopImmediatePropagation();
     };
     const step = (ev: Gesture3dEvent) => {
       const l = live.current;
@@ -116,64 +123,71 @@ export function Map3dSurface({ view, scene, oneFingerPans, onView }: {
         l.onView(r.view);
       }
     };
+    const tracked = (id: number) => gesture.current.pointers.some((p) => p.id === id);
     const onDown = (e: PointerEvent) => {
+      if (isControl(e.target)) return;
+      take(e);
       if (e.pointerType === "mouse" && e.button !== 0 && e.button !== 2) return;
       const touch = e.pointerType === "touch";
-      el.setPointerCapture?.(e.pointerId);
       const orbit = !touch && (e.button === 2 || e.ctrlKey || e.metaKey);
       step({ type: "down", id: e.pointerId, ...local(e), orbit, pan: !touch || live.current.oneFingerPans });
-      if (!touch || live.current.oneFingerPans || gesture.current.pointers.length > 1) e.preventDefault();
+      // a mouse drag selects no text and starts no native drag
+      if (!touch) e.preventDefault();
     };
-    const onMove = (e: PointerEvent) => step({ type: "move", id: e.pointerId, ...local(e) });
+    const onMove = (e: PointerEvent) => {
+      if (tracked(e.pointerId)) step({ type: "move", id: e.pointerId, ...local(e) });
+    };
     const onUp = (e: PointerEvent) => {
-      el.releasePointerCapture?.(e.pointerId);
-      step({ type: "up", id: e.pointerId });
+      if (tracked(e.pointerId)) step({ type: "up", id: e.pointerId });
     };
     const onWheel = (e: WheelEvent) => {
+      if (isControl(e.target)) return;
       e.preventDefault();
-      e.stopPropagation();
+      take(e);
       step({ type: "wheel", ...local(e), deltaY: e.deltaY });
     };
-    const stop = (e: Event) => e.stopPropagation();
+    // The 2D listeners' events: stopped before the target and the viewer's own bubbling listeners.
+    const stop = (e: Event) => {
+      if (!isControl(e.target)) take(e);
+    };
     // Two fingers are the map's even where one finger scrolls the page.
     const onTouch = (e: TouchEvent) => {
-      e.stopPropagation();
+      if (isControl(e.target)) return;
+      take(e);
       if (e.touches.length > 1 || live.current.oneFingerPans) e.preventDefault();
     };
     const noMenu = (e: Event) => {
+      if (isControl(e.target)) return;
       e.preventDefault();
-      e.stopPropagation();
+      take(e);
     };
-    el.addEventListener("pointerdown", onDown);
-    el.addEventListener("pointermove", onMove);
-    el.addEventListener("pointerup", onUp);
-    el.addEventListener("pointercancel", onUp);
-    el.addEventListener("wheel", onWheel, { passive: false });
-    el.addEventListener("touchstart", onTouch, { passive: false });
-    el.addEventListener("touchmove", onTouch, { passive: false });
-    el.addEventListener("touchend", stop);
-    el.addEventListener("contextmenu", noMenu);
-    for (const t of ["mousedown", "mousemove", "mouseup", "click", "dblclick"]) el.addEventListener(t, stop);
+    const capture = { capture: true } as const;
+    const stopped = ["mousedown", "mousemove", "mouseup", "dblclick", "touchend", "touchcancel"];
+    host.addEventListener("pointerdown", onDown, capture);
+    window.addEventListener("pointermove", onMove);
+    window.addEventListener("pointerup", onUp);
+    window.addEventListener("pointercancel", onUp);
+    host.addEventListener("wheel", onWheel, { capture: true, passive: false });
+    host.addEventListener("touchstart", onTouch, { capture: true, passive: false });
+    host.addEventListener("touchmove", onTouch, { capture: true, passive: false });
+    host.addEventListener("contextmenu", noMenu, capture);
+    for (const t of stopped) host.addEventListener(t, stop, capture);
     return () => {
-      el.removeEventListener("pointerdown", onDown);
-      el.removeEventListener("pointermove", onMove);
-      el.removeEventListener("pointerup", onUp);
-      el.removeEventListener("pointercancel", onUp);
-      el.removeEventListener("wheel", onWheel);
-      el.removeEventListener("touchstart", onTouch);
-      el.removeEventListener("touchmove", onTouch);
-      el.removeEventListener("touchend", stop);
-      el.removeEventListener("contextmenu", noMenu);
-      for (const t of ["mousedown", "mousemove", "mouseup", "click", "dblclick"]) el.removeEventListener(t, stop);
+      host.removeEventListener("pointerdown", onDown, capture);
+      window.removeEventListener("pointermove", onMove);
+      window.removeEventListener("pointerup", onUp);
+      window.removeEventListener("pointercancel", onUp);
+      host.removeEventListener("wheel", onWheel, capture);
+      host.removeEventListener("touchstart", onTouch, capture);
+      host.removeEventListener("touchmove", onTouch, capture);
+      host.removeEventListener("contextmenu", noMenu, capture);
+      for (const t of stopped) host.removeEventListener(t, stop, capture);
       gesture.current = GESTURE_IDLE;
     };
   }, []);
 
-  return (
-    <div
-      ref={ref}
-      data-testid="map-3d-surface"
-      style={{ position: "absolute", inset: 0, zIndex: 1, touchAction: oneFingerPans ? "none" : "pan-y", cursor: "grab" }}
-    />
-  );
+  return <div ref={ref} data-testid="map-3d-surface" className={`absolute inset-0 z-[1] cursor-grab ${oneFingerPans ? "touch-none" : "touch-pan-y"}`} />;
 }
+
+/** The viewer's own controls: buttons, inputs and the exaggeration label keep their events in 3D. */
+const MAP_CONTROLS = "button, a, input, select, textarea, label, [role='button']";

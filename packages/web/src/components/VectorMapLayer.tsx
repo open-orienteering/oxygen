@@ -231,6 +231,12 @@ export function VectorMapLayer({ doc, view, width, height, budget, zIndex = 1, c
         return;
       }
       setMode("2d");
+      // A 2D frame forgets the 3D readiness: a re-entry waits for its own drape.
+      if (readyRef.current.key) {
+        if (readyRef.current.timer) clearTimeout(readyRef.current.timer);
+        readyRef.current = { key: "", complete: false, timer: null };
+        setTerrainReady(false);
+      }
       engine.setView(v);
       engine.render(opts);
       const l = loupeRef.current;
@@ -336,6 +342,8 @@ export function VectorMapLayer({ doc, view, width, height, budget, zIndex = 1, c
       engineRef.current = null;
       loadedRef.current = false;
       setLoadedAttempt(null);
+      // The mesh goes with the engine: the host is 2D until the next engine has the field again.
+      if (fieldSentRef.current) onTerrainRef.current?.(null);
       fieldSentRef.current = false;
       if (readyRef.current.timer) clearTimeout(readyRef.current.timer);
       readyRef.current = { key: "", complete: false, timer: null };

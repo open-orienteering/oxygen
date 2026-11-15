@@ -495,8 +495,8 @@ interface Props {
   terrain?: TerrainDescriptorLike | null;
   /** Whether this mount offers 3D at all (the kiosk does not; the editor never does). */
   allow3d?: boolean;
-  /** A `pending` field was fetched (derived): the host reads the descriptor again for the gate. */
-  onTerrainFetched?: () => void;
+  /** A `pending` descriptor was fetched (derived): the host reads the descriptor again for the gate; settles when read. */
+  onTerrainFetched?: () => unknown;
 }
 
 // ─── Helpers ────────────────────────────────────────────────
@@ -878,9 +878,12 @@ export function MapViewer({
   const [maxTextureSize, setMaxTextureSize] = useState(4096);
   /** The last fallback's reason, shown for a few seconds (`map-3d-notice`). */
   const [notice3d, setNotice3d] = useState<{ reason: Terrain3dReason; percent?: number } | null>(null);
+  /** The last fallback's reason (`data-terrain-reason`), until 3D is asked for again. */
+  const [lastReason3d, setLastReason3d] = useState<Terrain3dReason | null>(null);
   const fail3d = useCallback((reason: Terrain3dReason, percent?: number) => {
     setWant3d(false);
     setNotice3d({ reason, percent });
+    setLastReason3d(reason);
   }, []);
   useEffect(() => {
     if (!notice3d) return;
@@ -898,21 +901,37 @@ export function MapViewer({
   }, [want3d, fieldState, fail3d]); // eslint-disable-line react-hooks/exhaustive-deps
   // A `pending` descriptor: the fetch derived the field; the host reads the descriptor again, and the gate decides.
   const fetchedPending = useRef<string | null>(null);
+  /** The re-read after a `pending` fetch has settled (`reread`), or not yet (`waiting`). */
+  const [reread, setReread] = useState<"idle" | "waiting" | "reread">("idle");
   useEffect(() => {
     if (fieldState.status !== "ready" || offer.kind !== "available" || !offer.pending || fetchedPending.current === fieldState.url) return;
     fetchedPending.current = fieldState.url;
-    onTerrainFetched?.();
+    setReread("waiting");
+    Promise.resolve(onTerrainFetched?.()).then(() => setReread("reread"), () => setReread("reread"));
   }, [fieldState, offer, onTerrainFetched]);
+  // A re-read that did not settle the descriptor (still `pending`, or failed): back to 2D.
+  useEffect(() => {
+    if (reread !== "reread") return;
+    setReread("idle");
+    if (want3d && offer.kind === "available" && offer.pending) fail3d("unavailable");
+  }, [reread, want3d, offer, fail3d]);
   // The descriptor no longer allows 3D (a re-read below the gate): back to 2D with the reason.
   useEffect(() => {
     if (want3d && offer.kind === "unavailable") fail3d(offer.reason, offer.percent);
     else if (want3d && offer.kind === "hidden") setWant3d(false);
   }, [want3d, offer.kind, offer.kind === "unavailable" ? offer.reason : null, offer.kind === "unavailable" ? offer.percent : null, fail3d]); // eslint-disable-line react-hooks/exhaustive-deps
   /** The field the engine draws: padded to the sheet, coarsened into a third of the budget (decisions 2, 3). */
-  const fittedField = useMemo(
-    () => (fieldState.status === "ready" && mapDoc ? viewerField(fieldState.field, boundsMm(mapDoc.header), budgetBytes(mapBudget), maxTextureSize) : null),
-    [fieldState, mapDoc, mapBudget, maxTextureSize],
-  );
+  // Kept for a re-entry: leaving 3D sets the hook idle, and the same field comes back from its cache.
+  const fittedRef = useRef<{ field: unknown; key: string; fitted: ReturnType<typeof viewerField> } | null>(null);
+  const fittedField = useMemo(() => {
+    if (fieldState.status !== "ready" || !mapDoc) return null;
+    const bounds = boundsMm(mapDoc.header), key = `${mapDoc.hash},${mapBudget},${maxTextureSize}`;
+    const hit = fittedRef.current;
+    if (hit && hit.field === fieldState.field && hit.key === key) return hit.fitted;
+    const fitted = viewerField(fieldState.field, bounds, budgetBytes(mapBudget), maxTextureSize);
+    fittedRef.current = { field: fieldState.field, key, fitted };
+    return fitted;
+  }, [fieldState, mapDoc, mapBudget, maxTextureSize]);
   const layerField = want3d && offer.kind === "available" && !offer.pending ? fittedField : null;
   const in3d = !!layerField && !!terrainInfo && terrainInfo.field === layerField;
   const toggle3dState: Map3dToggleState = offer.kind === "unavailable" ? "unavailable" : in3d ? "on" : want3d ? "loading" : "off";
@@ -982,6 +1001,7 @@ export function MapViewer({
       return;
     }
     setNotice3d(null);
+    setLastReason3d(null);
     setPitchDeg(PITCH.enter);
     setMeasuring(false);
     setMeasurePoints([]);
@@ -2928,7 +2948,7 @@ export function MapViewer({
       data-view-mode={in3d ? "3d" : "2d"}
       data-pitch={in3d ? pitchDeg : undefined}
       data-exaggeration={in3d ? exaggeration : undefined}
-      data-terrain-reason={notice3d?.reason ?? (offer.kind === "hidden" || offer.kind === "unavailable" ? offer.reason ?? undefined : undefined)}
+      data-terrain-reason={lastReason3d ?? (offer.kind === "hidden" || offer.kind === "unavailable" ? offer.reason ?? undefined : undefined)}
       data-user-bearing={userBearing}
       data-measure-points={measurePoints.length}
       data-measure-cursor={measureCursor ? "1" : "0"}
