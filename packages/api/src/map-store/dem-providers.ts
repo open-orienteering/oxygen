@@ -16,6 +16,7 @@
 import type { mapGeo } from "@oxygen/shared";
 import type { HeightFieldProvider } from "@oxygen/shared/src/terrain/field/types.js";
 import { DemFetchError, hostOf, type RangeFetch } from "./dem-cog.js";
+import { effectiveDemConfig, NO_SAVED_DEM_SETTINGS, type DemConfig } from "./dem-settings.js";
 
 export type DemProviderName = "lantmateriet" | "glo30";
 
@@ -195,26 +196,38 @@ function dedupe(tiles: DemTile[]): DemTile[] {
 }
 
 /**
- * The enabled providers in order, Lantmäteriet first (§7.0 answer 4):
- * `MAP_DEM_PROVIDERS` names them (comma list; empty = none);
- * Lantmäteriet needs `MAP_DEM_LANTMATERIET_AUTH` as `user:password`
- * (the Geotorget secret) and reads `MAP_DEM_LANTMATERIET_RESOLUTION_M`
- * (2, or 1 for the full model). Misconfiguration is warned once, never
- * thrown, and never prints the credential.
+ * The enabled providers of a configuration (§7.8), in order: Lantmäteriet
+ * first, GLO-30 after (§7.0 answer 4).
+ */
+export function demProvidersFromConfig(config: DemConfig, fetch: RangeFetch): DemProvider[] {
+  const out: DemProvider[] = [];
+  if (config.lantmateriet && config.account) out.push(lantmaterietProvider({ fetch, credential: config.account.credential, resolutionM: config.resolutionM }));
+  if (config.glo30) out.push(glo30Provider({ fetch }));
+  return out;
+}
+
+/**
+ * The enabled providers from the environment alone (§7.0 answer 4; the
+ * deploy's defaults under §7.8's saved settings): `MAP_DEM_PROVIDERS`
+ * names them (comma list; empty = none); Lantmäteriet needs
+ * `MAP_DEM_LANTMATERIET_AUTH` as `user:password` and reads
+ * `MAP_DEM_LANTMATERIET_RESOLUTION_M` (2, or 1 for the full model).
+ * Misconfiguration is warned, never thrown, and never prints the credential.
  */
 export function demProvidersFromEnv(env: NodeJS.ProcessEnv, fetch: RangeFetch, warn: (msg: string) => void = (m) => console.warn(`[map-dem] ${m}`)): DemProvider[] {
-  const names = (env.MAP_DEM_PROVIDERS ?? "").split(",").map((s) => s.trim().toLowerCase()).filter(Boolean);
-  for (const n of names) if (n !== "lantmateriet" && n !== "glo30") warn(`ignoring unknown DEM provider ${JSON.stringify(n)} in MAP_DEM_PROVIDERS`);
-  const out: DemProvider[] = [];
-  if (names.includes("lantmateriet")) {
-    // trimmed: a secret typed at `gcloud secrets create --data-file=-` ends in a newline
-    const cred = (env.MAP_DEM_LANTMATERIET_AUTH ?? "").trim();
-    const res = env.MAP_DEM_LANTMATERIET_RESOLUTION_M;
-    const resolutionM = res === "1" ? 1 : 2;
-    if (res !== undefined && res !== "" && res !== "1" && res !== "2") warn(`MAP_DEM_LANTMATERIET_RESOLUTION_M must be 1 or 2; reading 2`);
-    if (/^[^:\s]+:\S.*$/s.test(cred)) out.push(lantmaterietProvider({ fetch, credential: cred, resolutionM }));
-    else warn(cred === "" ? "Lantmäteriet is named in MAP_DEM_PROVIDERS but MAP_DEM_LANTMATERIET_AUTH is not set; it is off" : "MAP_DEM_LANTMATERIET_AUTH is not of the form user:password; Lantmäteriet is off");
-  }
-  if (names.includes("glo30")) out.push(glo30Provider({ fetch }));
-  return out;
+  const config = effectiveDemConfig(env, NO_SAVED_DEM_SETTINGS);
+  for (const w of config.warnings) warn(w.message);
+  return demProvidersFromConfig(config, fetch);
+}
+
+/**
+ * The base fetch every DEM request goes through. `MAP_DEM_OFFLINE=1` (the
+ * E2E stack, §7.8 "Offline stacks") refuses every request before a socket
+ * opens.
+ */
+export function demBaseFetch(env: NodeJS.ProcessEnv, base: RangeFetch = (url, init) => fetch(url, init)): RangeFetch {
+  return async (url, init) => {
+    if (env.MAP_DEM_OFFLINE === "1") throw new DemFetchError("http", `DEM fetch is off on this stack (MAP_DEM_OFFLINE); refused ${hostOf(url)}`);
+    return base(url, init);
+  };
 }

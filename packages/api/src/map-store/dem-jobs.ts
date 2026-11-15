@@ -19,7 +19,7 @@ import { workerBootstrap } from "../worker-bootstrap.js";
 import { getBlob } from "./blob-store.js";
 import { DemFetchError, type DemFailure } from "./dem-cog.js";
 import type { DemProvider } from "./dem-providers.js";
-import { demProviderById, demProviders } from "./dem-registry.js";
+import { demProviderById, demProviders, refreshDemProviders } from "./dem-registry.js";
 import type { DemDerived, DemWorkerData, DemWorkerMessage } from "./dem-worker.js";
 import { documentDemExtent, fetchDemMosaic } from "./dem.js";
 import { documentPaperFrame } from "./event-document.js";
@@ -137,6 +137,7 @@ export async function getDemJob(db: Db, hash: string, provider: string, version:
  */
 export async function enqueueDocumentDem(db: Db, hash: string, providerId?: string, opts: { requeueFinal?: boolean } = {}): Promise<void> {
   try {
+    await refreshDemProviders();
     const list = providerId ? [demProviderById(providerId)].filter((p): p is DemProvider => p !== null) : demProviders();
     for (const p of list) {
       const job = await getDemJob(db, hash, p.info.id);
@@ -161,9 +162,11 @@ let running: Promise<void> | null = null;
 
 /** Run claimable DEM jobs of enabled providers on this instance, one at a time, until none is left. Never throws. */
 export function kickDemJobs(db: Db): Promise<void> {
-  if (demProviders().length === 0) return Promise.resolve();
   if (running) return running.then(() => kickDemJobs(db));
   running = (async () => {
+    // the settings tab may have changed the providers (map-terrain §7.8)
+    await refreshDemProviders();
+    if (demProviders().length === 0) return;
     const tried = new Set<string>();
     for (;;) {
       const next = await nextClaimable(db, tried);
@@ -326,16 +329,19 @@ async function execute(db: Db, hash: string, provider: DemProvider): Promise<voi
 }
 
 /**
- * At startup: jobs that failed on a refused credential are queued again
- * from their first attempt. A changed secret reaches an instance only
- * through a new revision or restart, so this is when a fixed credential
- * can first succeed (§4.7). Never throws.
+ * Jobs that failed on a refused credential, queued again from their first
+ * attempt (§4.7 "Recovery"). At startup, for the enabled Lantmäteriet
+ * provider: a changed environment secret reaches an instance only through
+ * a new revision or restart. With `allLantmateriet` (an account saved in
+ * Settings → Height data, map-terrain §7.8), every `lantmateriet-*` job,
+ * whether the provider is on or not. Never throws.
  */
-export async function requeueAuthFailures(db: Db): Promise<number> {
+export async function requeueAuthFailures(db: Db, opts: { allLantmateriet?: boolean } = {}): Promise<number> {
   const lm = demProviders().filter((p) => p.name === "lantmateriet").map((p) => p.info.id);
-  if (lm.length === 0) return 0;
+  if (lm.length === 0 && !opts.allLantmateriet) return 0;
   try {
-    const { count } = await db.mapDemJob.updateMany({ where: { version: TERRAIN_VERSION, provider: { in: lm }, state: "failed", reason: "auth" }, data: { state: "queued", reason: null, error: null, attempts: 0, nextAttemptAt: null, updatedAt: new Date() } });
+    const provider = opts.allLantmateriet ? { startsWith: "lantmateriet-" } : { in: lm };
+    const { count } = await db.mapDemJob.updateMany({ where: { version: TERRAIN_VERSION, provider, state: "failed", reason: "auth" }, data: { state: "queued", reason: null, error: null, attempts: 0, nextAttemptAt: null, updatedAt: new Date() } });
     if (count > 0) console.log(`[map-dem] queued ${count} job(s) that had failed on the credential again`);
     return count;
   } catch (err: unknown) {
@@ -346,10 +352,14 @@ export async function requeueAuthFailures(db: Db): Promise<number> {
 
 let ticker: NodeJS.Timeout | null = null;
 
-/** The 60 s tick: resumes queued, due and stale jobs nobody kicked. */
+/**
+ * The 60 s tick: resumes queued, due and stale jobs nobody kicked, and
+ * (through the kick) re-reads the settings, so it runs with no provider
+ * on too — one turned on in the tab needs no restart (map-terrain §7.8).
+ */
 export function startDemJobEngine(db: Db, intervalMs: number = DEM_JOB_RULES.staleMs): void {
-  if (ticker || demProviders().length === 0) return;
-  void requeueAuthFailures(db);
+  if (ticker) return;
+  void refreshDemProviders().then(() => requeueAuthFailures(db));
   ticker = setInterval(() => void kickDemJobs(db), intervalMs);
   ticker.unref();
   setTimeout(() => void kickDemJobs(db), 7_000).unref();
