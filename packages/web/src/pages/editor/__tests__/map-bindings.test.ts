@@ -1,8 +1,8 @@
 import { describe, expect, it, vi } from "vitest";
-import { MAP_HIT_PX, mapSelectBinding, type MapGestureRef, type MapSelectContext } from "../tools/bindings";
+import { MAP_HIT_PX, mapSelectBinding, withTrackLayer, type MapGestureRef, type MapSelectContext } from "../tools/bindings";
 import { mapKeyAction } from "../modes/map/keys";
 import { MAP_RAIL } from "../tools/rail";
-import type { ToolPointer } from "../../../components/MapViewer";
+import type { ToolPointer, ToolShape } from "../../../components/MapViewer";
 import type { MapObjectRef } from "../../../map-gl/worker";
 
 const ptr = (x: number, y: number, extra: Partial<ToolPointer> = {}): ToolPointer => ({ pt: { x, y }, target: null, shift: false, mmPerPx: 0.1, ...extra });
@@ -114,5 +114,46 @@ describe("Map mode's keys (§13)", () => {
 
   it("the rail is V alone", () => {
     expect(MAP_RAIL).toEqual(["V"]);
+  });
+});
+
+describe("withTrackLayer (§13 \"GPS tracks\", the layer)", () => {
+  const track: ToolShape = { kind: "line", points: [{ x: 0, y: 0 }, { x: 1, y: 1 }], testId: "editor-gps-track" };
+  const own: ToolShape = { kind: "circle", x: 0, y: 0, rMm: 1 };
+
+  it("draws the tracks below the tool's own shapes and leaves the tool's gestures as they were", () => {
+    const c = context();
+    const base = { ...mapSelectBinding(c), shapes: [own] };
+    const onScale = vi.fn();
+    const b = withTrackLayer(base, { shapes: [track], onScale });
+    expect(b.shapes).toEqual([track, own]);
+    expect(b.exclusive).toBe(true);
+    expect(b.hoverPoint).toBeUndefined();
+    expect(b.onPointerDown!(ptr(1, 1, { mmPerPx: 0.2 }))).toBe(true);
+    expect(c.gesture.current).not.toBeNull();
+    expect(onScale).toHaveBeenLastCalledWith(0.2);
+  });
+
+  it("reports the zoom from hover, press and click, and chains them", () => {
+    const onHover = vi.fn(), onClick = vi.fn(), onPointerDown = vi.fn(() => false);
+    const onScale = vi.fn();
+    const b = withTrackLayer({ exclusive: true, onHover, onClick, onPointerDown }, { shapes: [], onScale });
+    b.onHover!(ptr(0, 0, { mmPerPx: 0.5 }));
+    expect(onScale).toHaveBeenLastCalledWith(0.5);
+    expect(onHover).toHaveBeenCalledTimes(1);
+    b.onHover!(null);
+    expect(onScale).toHaveBeenCalledTimes(1);
+    expect(onHover).toHaveBeenLastCalledWith(null);
+    b.onClick!(ptr(0, 0, { mmPerPx: 0.7 }));
+    expect(onScale).toHaveBeenLastCalledWith(0.7);
+    expect(onClick).toHaveBeenCalledTimes(1);
+    expect(b.onPointerDown!(ptr(0, 0, { mmPerPx: 0.9 }))).toBe(false);
+    expect(onScale).toHaveBeenLastCalledWith(0.9);
+  });
+
+  it("a tool without a press handler gets none (the viewer's own targets stay)", () => {
+    const b = withTrackLayer({ exclusive: true }, { shapes: [track], onScale: vi.fn() });
+    expect(b.onPointerDown).toBeUndefined();
+    expect(b.shapes).toEqual([track]);
   });
 });

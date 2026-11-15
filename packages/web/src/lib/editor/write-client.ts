@@ -12,7 +12,7 @@
  * tRPC; the page passes `utils.client`.
  */
 
-import type { course, CourseDescriptionInstructions, mapDocument } from "@oxygen/shared";
+import type { course, CourseDescriptionInstructions, gpsTrack, mapDocument } from "@oxygen/shared";
 import { VersionBook, publicIdAfterCodes, versionConflictOfError, type VersionedKind } from "../version-book";
 import { conflictDecision, MOVE_FIELDS, type ConflictDecision } from "./conflict";
 
@@ -44,6 +44,33 @@ export interface PatchWriteResult {
   patch: mapDocument.MapPatch | null;
 }
 
+/** A stored GPS track's metadata (`mapTrack.list`, docs/map-gps-tracks.md §1.2). */
+export interface TrackMeta {
+  id: string;
+  name: string | null;
+  sourceName: string;
+  pointCount: number;
+  /** Epoch ms of the first recorded time, or null. */
+  recordedAt: number | null;
+  trim: gpsTrack.TrackRange;
+  derivedFrom: string[];
+  singlePass: gpsTrack.TrackRange[] | null;
+  convertedOp: string | null;
+  createdBy: string | null;
+  createdAt: string;
+  version: string;
+}
+
+/** One track of a `mapTrack.import` call (§1.2): parsed on the device; `id` to re-import under a known id (undo). */
+export interface TrackImportItem {
+  id?: string;
+  name: string | null;
+  sourceName: string;
+  points: gpsTrack.TrackPoints;
+  derivedFrom?: string[];
+  singlePass?: gpsTrack.TrackRange[];
+}
+
 /** What the editor needs of the tRPC client (structural: `utils.client` fits). */
 export interface EditorClient {
   course: {
@@ -73,6 +100,13 @@ export interface EditorClient {
   mapPatch?: {
     applyChange: { mutate(input: { documentHash: string } & mapDocument.PatchChange): Promise<PatchWriteResult> };
     setEnabled: { mutate(input: { enabled: boolean }): Promise<PatchWriteResult> };
+  };
+  /** Map mode's GPS tracks (docs/map-gps-tracks.md §1.2, §5.1). */
+  mapTrack?: {
+    import: { mutate(input: { tracks: TrackImportItem[] }): Promise<{ tracks: TrackMeta[] }> };
+    update: { mutate(input: { id: string; name?: string | null; trim?: gpsTrack.TrackRange }): Promise<TrackMeta> };
+    remove: { mutate(input: { ids: string[] }): Promise<{ removed: number }> };
+    markConverted: { mutate(input: { marks: { id: string; opId: string | null }[] }): Promise<{ tracks: TrackMeta[] }> };
   };
 }
 
@@ -225,5 +259,30 @@ export class EditorWrites {
   /** *Apply corrections* (§13; docs/map-patches.md §1.4): `mapPatch.setEnabled`, no token. */
   setPatchEnabled(enabled: boolean): Promise<PatchWriteResult> {
     return this.patches().setEnabled.mutate({ enabled });
+  }
+
+  private tracks(): NonNullable<EditorClient["mapTrack"]> {
+    if (!this.client.mapTrack) throw new Error("mapTrack writes are not available");
+    return this.client.mapTrack;
+  }
+
+  /**
+   * GPS tracks (docs/map-gps-tracks.md §5.1): cloud-owned rows with no token — `points` never change under one id,
+   * name, trim and `convertedOp` are last-writer-wins (§1.2) — so no conflict rule; a refusal (`TRACK_*`) propagates.
+   */
+  importTracks(tracks: TrackImportItem[]): Promise<{ tracks: TrackMeta[] }> {
+    return this.tracks().import.mutate({ tracks });
+  }
+
+  updateTrack(input: { id: string; name?: string | null; trim?: gpsTrack.TrackRange }): Promise<TrackMeta> {
+    return this.tracks().update.mutate(input);
+  }
+
+  removeTracks(ids: string[]): Promise<{ removed: number }> {
+    return this.tracks().remove.mutate({ ids });
+  }
+
+  markTracksConverted(marks: { id: string; opId: string | null }[]): Promise<{ tracks: TrackMeta[] }> {
+    return this.tracks().markConverted.mutate({ marks });
   }
 }
