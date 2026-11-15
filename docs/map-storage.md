@@ -690,9 +690,11 @@ row per `(document_hash, provider, version)`; `packages/api/src/map-store/dem-jo
 **Recovery.** A job that failed for good is queued again from its first
 attempt by an import of its document (stage 10 and the dedup short-cut,
 `enqueueDocumentDem(…, { requeueFinal: true })`), not by a request.
-Jobs that failed on `auth` — waiting or final — are queued again when the
-engine starts (`requeueAuthFailures`): a fixed secret reaches an instance
-only through a new revision or restart. A `running` job that goes stale
+Jobs that failed on `auth` — waiting or final — are queued again when an
+account is saved in Settings → Height data (map-terrain §7.8, every
+`lantmateriet-*` job, no restart needed) and when the engine starts
+(`requeueAuthFailures`), where a fixed environment secret first reaches
+an instance through a new revision or restart. A `running` job that goes stale
 on its last attempt (it took its instance down each time, never reaching
 its own failure path) is not re-claimed but marked `failed: derive`,
 final. The heartbeat runs from the claim, so a job waiting behind another
@@ -710,7 +712,7 @@ left for one that has it.
 | import stage 10 (§6.1) and the dedup short-cut | after the `contours` field, `enqueueDocumentDem` — not awaited, never fails the import |
 | the route | a request for a DEM source with no row and no job queues that provider's job |
 | a `no-coverage` ending | queues the next enabled provider (Lantmäteriet → GLO-30) |
-| the 60 s tick (`startDemJobEngine`) | resumes queued, due and stale jobs |
+| the 60 s tick (`startDemJobEngine`) | re-reads Settings → Height data over the environment (map-terrain §7.8) and resumes queued, due and stale jobs; it runs with no provider on too, so one turned on in the tab needs no restart |
 
 `enqueueDocumentDem(db, hash)` queues the first enabled provider whose
 job has not ended `no-coverage`. The engine claims atomically

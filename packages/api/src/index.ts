@@ -25,8 +25,7 @@ import { registerMapHeightfieldRoutes } from "./map-store/heightfield-routes.js"
 import { registerMapSourceRoutes } from "./map-store/source-routes.js";
 import { registerMapUploadRoutes } from "./map-store/upload-routes.js";
 import { startImportJobEngine } from "./map-store/jobs.js";
-import { demProvidersFromEnv } from "./map-store/dem-providers.js";
-import { setDemProviders } from "./map-store/dem-registry.js";
+import { installDemConfigSource } from "./map-store/dem-settings-store.js";
 import { startDemJobEngine } from "./map-store/dem-jobs.js";
 import { registerCourseMapRoutes } from "./course-maps/routes.js";
 import { registerStaticServe } from "./staticServe.js";
@@ -120,8 +119,9 @@ async function main() {
   registerMapSourceRoutes(server);
   registerMapUploadRoutes(server);
   startImportJobEngine(prisma());
-  // DEM fetch is opt-in (docs/map-terrain.md §7.0 answer 4): MAP_DEM_PROVIDERS names the providers.
-  setDemProviders(demProvidersFromEnv(process.env, (url, init) => fetch(url, init)));
+  // DEM fetch is opt-in (docs/map-terrain.md §7.0 answer 4, §7.8): Settings →
+  // Height data over the MAP_DEM_* environment, re-read before each engine kick.
+  installDemConfigSource(process.env);
   startDemJobEngine(prisma());
   registerCourseMapRoutes(server);
 

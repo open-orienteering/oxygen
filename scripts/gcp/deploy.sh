@@ -144,9 +144,11 @@ run_cloud_run_deploy() {
   fi
 
   # Height data (docs/deploy-gcp-cloud-run.md "Height data"; docs/map-terrain.md §7):
-  # the instance's one Geotorget account, referenced by secret name only. With the
-  # secret the instance fetches Lantmäteriet's model and GLO-30 where it has none;
-  # without it no DEM is fetched, unless env.sh sets MAP_DEM_PROVIDERS (e.g. glo30).
+  # the deploy's defaults. Settings → Height data in the app (§7.8) overrides each of
+  # them. The instance's one Geotorget account, referenced by secret name only: with
+  # the secret the environment turns on Lantmäteriet's model and GLO-30 where it has
+  # none; without it no provider is in the environment, unless env.sh sets
+  # MAP_DEM_PROVIDERS (e.g. glo30).
   local dem_secrets="" dem_env="" dem_providers="${MAP_DEM_PROVIDERS:-}"
   if gcloud secrets describe "$DEM_SECRET" --project="$PROJECT_ID" >/dev/null 2>&1; then
     dem_secrets=",MAP_DEM_LANTMATERIET_AUTH=${DEM_SECRET}:latest"

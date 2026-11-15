@@ -304,66 +304,86 @@ image ships `postgresql-client`.
 
 The 3D terrain (docs/map-terrain.md §7) can anchor a map's contours to a
 digital elevation model fetched by the server. **Fetching is off by
-default.** With Lantmäteriet's height model (CC BY 4.0, "© Lantmäteriet")
-the instance uses **one Geotorget account of its own** (the club's), whose
-credential lives in Secret Manager like the database URL; Copernicus
-GLO-30 (open, no account) serves where Lantmäteriet has no coverage.
+default.** Lantmäteriet's height model (CC BY 4.0, "© Lantmäteriet") needs
+**one Geotorget account for the instance** (the club's); Copernicus GLO-30
+(open, no account) serves where Lantmäteriet has no coverage.
 
-1. Order Lantmäteriet's *Markhöjdmodell* height data through Geotorget
-   for the club's account, which gives a username and password for the
-   download API (`api.lantmateriet.se/stac-hojd/v1`).
-2. Create the secret yourself — the value is typed at the prompt, never
-   written to a file or your shell history (finish with Enter, then
-   Ctrl-D):
+**The normal way is the app: Settings → Height data** (`/settings?tab=terrain`,
+an admin tab, map-terrain §7.8). The page explains itself; in short:
 
-   ```bash
-   gcloud secrets create oxygen-geotorget-credentials --data-file=- --project="$PROJECT_ID"
-   ```
+1. Create a user on Lantmäteriet's Geotorget
+   (<https://geotorget.lantmateriet.se/>) and order the free product
+   *Markhöjdmodell Nedladdning* for it. That user name and password are
+   the download API's (`api.lantmateriet.se/stac-hojd/v1`).
+2. In the tab, enter the user name and password and save. The password is
+   stored encrypted in the database (with a key kept in the database
+   beside it: it never shows in plaintext in a row, a screen, a log or a
+   settings export, but anyone holding the whole database could open it,
+   map-terrain §7.0b answer 10), is never shown again, and is sent only to
+   Lantmäteriet's hosts. Saving queues every map whose fetch failed on the
+   old account — no redeploy.
+3. Switch the providers on (Lantmäteriet, GLO-30) and keep the resolution
+   at 2 m.
+4. Once, run **Test connection** on one club map of ordinary size (a few
+   km across, like the corpus's club-2026; the largest maps are over the
+   1 m cap and the tab will not offer them). It reads about 100 MB of
+   height data for that map in a worker thread, stores and shows only
+   aggregates, and changes nothing. If it fails, choose 1 m in the tab
+   (the largest club maps then get no DEM until the cap is raised) and
+   record the result in docs/map-terrain.md §7.6.
 
-   The value is `username:password` (surrounding whitespace, such as the
-   newline Enter adds, is trimmed when it is read). To rotate later:
-   `gcloud secrets versions add oxygen-geotorget-credentials --data-file=-`.
-3. Let the runtime account read it, and deploy:
+Nothing in the deploy needs to change for this. Each value saved in the
+tab wins over its environment variable; a value not saved falls back to
+the deploy's (map-terrain §7.0b 6). **The environment remains as the
+deploy's default**, for an instance that prefers its secret store:
 
-   ```bash
-   ./provision.sh
-   ```
+- Create the secret yourself — the value is typed at the prompt, never
+  written to a file or your shell history (finish with Enter, then
+  Ctrl-D):
 
-   ```bash
-   ./deploy.sh
-   ```
+  ```bash
+  gcloud secrets create oxygen-geotorget-credentials --data-file=- --project="$PROJECT_ID"
+  ```
 
-   `deploy.sh` finds the secret by name and adds
-   `MAP_DEM_LANTMATERIET_AUTH=oxygen-geotorget-credentials:latest` to
-   `--set-secrets` and `MAP_DEM_PROVIDERS=lantmateriet,glo30` to the
-   environment; without the secret it deploys with DEM fetch off.
-   `DEM_SECRET` in `env.sh` names a different secret; `MAP_DEM_PROVIDERS`
-   in `env.sh` overrides the providers (`glo30` alone for an instance
-   outside Sweden, which needs no secret).
-4. Once, with your own credential on your own machine, run the live
-   check (docs/map-terrain.md §7.6) against one club map of ordinary size
-   (a few km across, like the corpus's club-2026: it measures at 1 m too,
-   and the largest map is over the 1 m cap) and record the result there:
+  The value is `username:password` (surrounding whitespace, such as the
+  newline Enter adds, is trimmed when it is read). To rotate later:
+  `gcloud secrets versions add oxygen-geotorget-credentials --data-file=-`.
+- Let the runtime account read it, and deploy:
 
-   ```bash
-   pnpm --filter @oxygen/api dem:live-check -- --map /path/to/club-map.ocd
-   ```
+  ```bash
+  ./provision.sh
+  ```
 
-   It reads `MAP_DEM_LANTMATERIET_AUTH` from your shell (`read -rs
-   MAP_DEM_LANTMATERIET_AUTH; export MAP_DEM_LANTMATERIET_AUTH`), fetches
-   about 100 MB of height data for that map into memory and prints only
-   aggregates. If it fails, set `MAP_DEM_LANTMATERIET_RESOLUTION_M=1` on
-   the service (the 1 m model; 64 M window cells at most, so the largest
-   club maps get no DEM until the cap is raised).
+  ```bash
+  ./deploy.sh
+  ```
+
+  `deploy.sh` finds the secret by name and adds
+  `MAP_DEM_LANTMATERIET_AUTH=oxygen-geotorget-credentials:latest` to
+  `--set-secrets` and `MAP_DEM_PROVIDERS=lantmateriet,glo30` to the
+  environment; without the secret it deploys with no provider in the
+  environment (the tab can still switch them on). `DEM_SECRET` in
+  `env.sh` names a different secret; `MAP_DEM_PROVIDERS` in `env.sh`
+  overrides the providers (`glo30` alone for an instance outside Sweden,
+  which needs no secret); `MAP_DEM_LANTMATERIET_RESOLUTION_M=1` selects
+  the 1 m model.
+- The tab shows such an account as "From the deploy configuration" with
+  its user name. A secret fixed in Secret Manager reaches the instance on
+  the next deploy or restart, which queues the maps that failed on it.
+- The live check also runs from your own machine with your own
+  credential (`read -rs MAP_DEM_LANTMATERIET_AUTH; export
+  MAP_DEM_LANTMATERIET_AUTH`, then
+  `pnpm --filter @oxygen/api dem:live-check -- --map /path/to/club-map.ocd`);
+  it prints aggregates and writes nothing.
 
 The fetch runs in the background after an import and is retried on
-failure (docs/map-storage.md §4.7 "The DEM"); a refused credential shows
-as `failed: auth` in the map's terrain descriptor; it is retried after an
-hour, three times, then left until the next deploy or restart, which
-queues every such map again — so after fixing the secret, redeploy.
-Memory: one DEM derive adds about 1 GB on the largest corpus map, the
-order of the contour derive, and the two never run at once on an
-instance.
+failure (docs/map-storage.md §4.7 "The DEM"); the tab lists every club
+map's state, with **Retry** for a failed one. A refused credential shows
+as `failed: auth`; it is retried after an hour, three times, then left
+until a new account is saved in the tab (or, for the environment's, the
+next deploy or restart). Memory: one DEM derive adds about 1 GB on the
+largest corpus map, the order of the contour derive, and the two never
+run at once on an instance (Test connection waits in the same queue).
 
 ## Sizing notes
 

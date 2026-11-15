@@ -12,12 +12,13 @@ import { LibraryClassesTab } from "./LibraryClassesTab";
 import { UsersAdminPanel } from "../components/UsersAdminPanel";
 import { MaintenancePanel } from "../components/MaintenancePanel";
 import { EventorKeysPanel } from "../components/EventorKeysPanel";
+import { HeightDataPanel } from "../components/HeightDataPanel";
 import { NorthLinesBadge } from "../components/NorthLinesBadge";
 import { ClubMapImportState } from "../components/ClubMapImportState";
 import { isClubMapImportPending } from "../lib/club-map-import";
 
 const CLUB_TABS = ["maps", "controls", "classes", "groups"] as const;
-const ADMIN_TABS = ["users", "eventor", "maintenance"] as const;
+const ADMIN_TABS = ["users", "eventor", "terrain", "maintenance"] as const;
 
 type SettingsTab = (typeof CLUB_TABS)[number] | (typeof ADMIN_TABS)[number];
 
@@ -28,6 +29,7 @@ const TAB_LABEL_KEYS = {
   groups: "tabGroups",
   users: "tabUsers",
   eventor: "tabEventor",
+  terrain: "tabTerrain",
   maintenance: "tabMaintenance",
 } as const satisfies Record<SettingsTab, string>;
 
@@ -176,6 +178,8 @@ export function SettingsPage() {
           <UsersAdminPanel />
         ) : tab === "eventor" ? (
           <EventorKeysPanel />
+        ) : tab === "terrain" ? (
+          <HeightDataPanel />
         ) : tab === "maintenance" ? (
           <MaintenancePanel />
         ) : tab === "groups" ? (

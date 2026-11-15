@@ -20,7 +20,7 @@ import type { TerrainReport } from "@oxygen/shared/src/terrain/solve/types.js";
 import type { Prisma, PrismaClient } from "../generated/prisma/client.js";
 import { workerBootstrap } from "../worker-bootstrap.js";
 import { getBlob } from "./blob-store.js";
-import { demProviders } from "./dem-registry.js";
+import { demProviders, refreshDemProviders } from "./dem-registry.js";
 
 type Db = PrismaClient | Prisma.TransactionClient;
 
@@ -320,8 +320,11 @@ export interface TerrainOptions {
   rotationCorrection?: number | null;
 }
 
+/** How stale the descriptor's view of Settings → Height data may be (map-terrain §7.8). */
+const DESCRIPTOR_SETTINGS_MAX_AGE_MS = 15_000;
+
 export async function demDescriptor(db: Db, hash: string, opts: TerrainOptions = {}): Promise<DemDescriptor> {
-  const list = demProviders();
+  const list = await refreshDemProviders({ maxAgeMs: DESCRIPTOR_SETTINGS_MAX_AGE_MS });
   const none = (state: DemState, reason: string | null, provider: HeightFieldProvider | null = null): DemDescriptor => ({ state, reason, provider, ground: null, anchored: null });
   if (list.length === 0) return none("disabled", null);
   if (opts.rotationCorrection) return none("unavailable", "rotation-corrected");

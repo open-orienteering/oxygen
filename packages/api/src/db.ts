@@ -126,6 +126,9 @@ export function isReservedEventSlug(slug: string): boolean {
  *   - `runnerdb_last_sync`, `runnerdb_runner_count`, `runnerdb_club_count`
  *   - `map_storage_gc.*` — the storage GC's schedule and grace override
  *     (docs/map-storage.md §8.3)
+ *   - `map_dem.*` — Settings → Height data (docs/map-terrain.md §7.8):
+ *     providers, resolution, the sealed Lantmäteriet account, its sealing
+ *     key, the last live check
  *
  * Per-event settings (eventor env, liveresults config) live as columns on
  * the `events` row.
@@ -148,6 +151,17 @@ export async function setSetting(
     create: { key, value },
     update: { value },
   });
+}
+
+/**
+ * Inserts `key` unless a row exists, then returns the row's value: every
+ * caller, racing or not, gets the one stored value.
+ */
+export async function insertSettingIfAbsent(key: string, value: string): Promise<string> {
+  await prisma().setting.createMany({ data: [{ key, value }], skipDuplicates: true });
+  const stored = await getSetting(key);
+  if (stored === null) throw new Error(`setting ${key} vanished after insert`);
+  return stored;
 }
 
 // ─── Shutdown ──────────────────────────────────────────────
