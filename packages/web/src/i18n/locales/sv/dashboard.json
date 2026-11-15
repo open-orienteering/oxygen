@@ -60,5 +60,16 @@
   "mapImportFailed": "Kartan kunde inte förberedas: {{error}}",
   "mapImportReview": "Kartan är importerad och väntar på granskning.",
   "mapImportReviewLink": "Granska kartan",
-  "mapImportUnknown": "Kartan är inte förberedd ännu. Ladda upp kartan igen för att förbereda den."
+  "mapImportUnknown": "Kartan är inte förberedd ännu. Ladda upp kartan igen för att förbereda den.",
+  "map3dEnter": "Visa i 3D",
+  "map3dExit": "Tillbaka till 2D",
+  "map3dLoading": "Förbereder 3D…",
+  "map3dExaggeration": "Höjdöverdrift",
+  "map3dReason": {
+    "no-contours": "Kartan har inga höjdkurvor att visa i 3D.",
+    "over-cap": "Kartan är för stor för 3D på den här servern.",
+    "low-confidence": "3D kräver att {{min}} % av höjdkurvorna har känd lutningsriktning; kartan har {{percent}} %.",
+    "unavailable": "Kartans terräng kunde inte hämtas, så den visas i 2D.",
+    "webgl": "Enheten kan inte rita kartans terräng, så den visas i 2D."
+  }
 }

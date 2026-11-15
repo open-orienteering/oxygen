@@ -36,7 +36,29 @@ import {
   zoomAt,
 } from "../lib/map-viewport";
 import { useMapDocument, useMapPatch } from "../lib/map-document-cache";
-import { boundsMm, paperFrameOf, patchForDocument, type MapBudget } from "../lib/vector-map";
+import { boundsMm, budgetBytes, paperFrameOf, patchForDocument, type MapBudget } from "../lib/vector-map";
+import {
+  EXAGGERATION,
+  EXAGGERATION_STORAGE_KEY,
+  PITCH,
+  affineAbout,
+  affineScale,
+  bearingOfRotation,
+  camera3d,
+  clampExaggeration,
+  projector3d,
+  targetZOf,
+  terrain3dOffer,
+  userBearingOf,
+  type Scene3d,
+  type TerrainDescriptorLike,
+  type Terrain3dReason,
+  type View3d,
+} from "../lib/map-3d";
+import { viewerField } from "../lib/map-3d-field";
+import { useHeightField } from "../hooks/useHeightField";
+import { Map3dNotice, Map3dSurface, Map3dToggle, type Map3dToggleState } from "./Map3d";
+import type { VectorTerrainInfo } from "./VectorMapLayer";
 import { rotatedBoundingBox } from "../lib/map-rotation";
 import {
   shouldSuppressSyntheticMouse,
@@ -466,6 +488,15 @@ interface Props {
    * refetches the patch the layer draws over the document.
    */
   patchVersion?: string | null;
+  /**
+   * The pinned document's height field descriptor (`course.mapMetadata.terrain`): the 3D mode's
+   * gate (docs/map-rendering.md §5.4 "3D mode"). Absent: no 3D.
+   */
+  terrain?: TerrainDescriptorLike | null;
+  /** Whether this mount offers 3D at all (the kiosk does not; the editor never does). */
+  allow3d?: boolean;
+  /** A `pending` field was fetched (derived): the host reads the descriptor again for the gate. */
+  onTerrainFetched?: () => void;
 }
 
 // ─── Helpers ────────────────────────────────────────────────
@@ -519,6 +550,9 @@ export function MapViewer({
   mapBudget = "event",
   rotationCorrection,
   patchVersion,
+  terrain,
+  allow3d = true,
+  onTerrainFetched,
 }: Props) {
   // §12: the editor draws a course with variation groups as it shows it (the displayed path, or All variations).
   // F21: the leg draft of a bend or grip drag over it (course-layer.md §5).
@@ -818,9 +852,73 @@ export function MapViewer({
     }
   }, []);
 
+  // ─── 3D mode (docs/map-rendering.md §5.4 "3D mode") ──────────
+  const offer = terrain3dOffer(terrain, { editor: !!editor, allow3d: allow3d && !hideControls });
+  /** The user asked for 3D; it is drawn once the field's mesh is up (`terrainInfo`). */
+  const [want3d, setWant3d] = useState(false);
+  const [pitchDeg, setPitchDeg] = useState<number>(PITCH.enter);
+  const [exaggeration, setExaggerationState] = useState<number>(() => {
+    try {
+      const v = localStorage.getItem(EXAGGERATION_STORAGE_KEY);
+      return v === null ? EXAGGERATION.default : clampExaggeration(Number(v));
+    } catch {
+      return EXAGGERATION.default;
+    }
+  });
+  const setExaggeration = (e: number) => {
+    const v = clampExaggeration(e);
+    setExaggerationState(v);
+    try {
+      localStorage.setItem(EXAGGERATION_STORAGE_KEY, String(v));
+    } catch {
+      // private mode: the session keeps it
+    }
+  };
+  const [terrainInfo, setTerrainInfo] = useState<VectorTerrainInfo | null>(null);
+  const [maxTextureSize, setMaxTextureSize] = useState(4096);
+  /** The last fallback's reason, shown for a few seconds (`map-3d-notice`). */
+  const [notice3d, setNotice3d] = useState<{ reason: Terrain3dReason; percent?: number } | null>(null);
+  const fail3d = useCallback((reason: Terrain3dReason, percent?: number) => {
+    setWant3d(false);
+    setNotice3d({ reason, percent });
+  }, []);
+  useEffect(() => {
+    if (!notice3d) return;
+    const id = window.setTimeout(() => setNotice3d(null), 4000);
+    return () => window.clearTimeout(id);
+  }, [notice3d]);
+  const fieldUrl = want3d && offer.kind === "available" ? offer.url : null;
+  const { state: fieldState } = useHeightField(fieldUrl, nameId ?? null);
+  // A field that cannot be had: back to 2D with the reason.
+  useEffect(() => {
+    if (want3d && fieldState.status === "error") fail3d("unavailable");
+  }, [want3d, fieldState, fail3d]);
+  // A `pending` descriptor: the fetch derived the field; the host reads the descriptor again, and the gate decides.
+  const fetchedPending = useRef<string | null>(null);
+  useEffect(() => {
+    if (fieldState.status !== "ready" || offer.kind !== "available" || !offer.pending || fetchedPending.current === fieldState.url) return;
+    fetchedPending.current = fieldState.url;
+    onTerrainFetched?.();
+  }, [fieldState, offer, onTerrainFetched]);
+  // The descriptor no longer allows 3D (a re-read below the gate): back to 2D with the reason.
+  useEffect(() => {
+    if (want3d && offer.kind === "unavailable") fail3d(offer.reason, offer.percent);
+    else if (want3d && offer.kind === "hidden") setWant3d(false);
+  }, [want3d, offer.kind, offer.kind === "unavailable" ? offer.reason : null, offer.kind === "unavailable" ? offer.percent : null, fail3d]); // eslint-disable-line react-hooks/exhaustive-deps
+  /** The field the engine draws: padded to the sheet, coarsened into a third of the budget (decisions 2, 3). */
+  const fittedField = useMemo(
+    () => (fieldState.status === "ready" && mapDoc ? viewerField(fieldState.field, boundsMm(mapDoc.header), budgetBytes(mapBudget), maxTextureSize) : null),
+    [fieldState, mapDoc, mapBudget, maxTextureSize],
+  );
+  const layerField = want3d && offer.kind === "available" && !offer.pending ? fittedField : null;
+  const in3d = !!layerField && !!terrainInfo && terrainInfo.field === layerField;
+  const toggle3dState: Map3dToggleState = offer.kind === "unavailable" ? "unavailable" : in3d ? "on" : want3d ? "loading" : "off";
+
   // Map rotation: the drawn meridians vertical on screen — the paper view
   // is paper-north-up, so by the meridian tilt only (see viewportRotationDeg).
-  const rotDeg = viewportRotationDeg(northOffset, cutRotationDeg, userBearing);
+  const viewRotDeg = viewportRotationDeg(northOffset, cutRotationDeg, userBearing);
+  // The overlay frame's angle: in 3D it is unrotated and the camera carries the bearing (§5.4 "3D mode").
+  const rotDeg = in3d ? 0 : viewRotDeg;
   const rotRad = (rotDeg * Math.PI) / 180;
   // Effective render dimensions: minimum bounding box of a rectangle that
   // fully covers the outer container after rotation. See rotatedBoundingBox
@@ -841,10 +939,54 @@ export function MapViewer({
   const dpr = typeof window !== "undefined" ? window.devicePixelRatio || 1 : 1;
   const glViewRect = useMemo(
     () => viewport && containerSize.w > 0 && containerSize.h > 0
-      ? glView(viewport, containerSize.w, containerSize.h, dpr, rotDeg)
+      ? glView(viewport, containerSize.w, containerSize.h, dpr, viewRotDeg)
       : null,
-    [viewport, containerSize, dpr, rotDeg],
+    [viewport, containerSize, dpr, viewRotDeg],
   );
+
+  // The 3D view and camera (§5.4 "3D mode" "State", "Camera"): the 2D state plus the pitch.
+  const view3d: View3d | null = useMemo(
+    () => (viewport ? { centreX: viewport.centreX, centreY: viewport.centreY, pxPerUm: viewport.pxPerUm, bearingDeg: bearingOfRotation(viewRotDeg), pitchDeg } : null),
+    [viewport, viewRotDeg, pitchDeg],
+  );
+  const scene3d: Scene3d | null = useMemo(
+    () => (in3d && terrainInfo && containerSize.w > 0 && containerSize.h > 0
+      ? { widthCss: containerSize.w, heightCss: containerSize.h, dpr, originUm: terrainInfo.mesh.originUm, targetZ: targetZOf(terrainInfo.mesh, exaggeration), exaggeration, mesh: terrainInfo.mesh, field: terrainInfo.field }
+      : null),
+    [in3d, terrainInfo, containerSize, dpr, exaggeration],
+  );
+  const terrainFrame = useMemo(
+    () => (scene3d && view3d ? { camera: camera3d(view3d, scene3d), exaggeration } : null),
+    [scene3d, view3d, exaggeration],
+  );
+  const proj3d = useMemo(() => (scene3d && view3d ? projector3d(view3d, scene3d) : null), [scene3d, view3d]);
+  /** A 3D gesture's view back into the 2D state. */
+  const applyView3d = useCallback((v: View3d) => {
+    breakLocateFollowRef.current();
+    setViewport((prev) => (prev && prev.centreX === v.centreX && prev.centreY === v.centreY && prev.pxPerUm === v.pxPerUm ? prev : { centreX: v.centreX, centreY: v.centreY, pxPerUm: v.pxPerUm }));
+    setUserBearing(userBearingOf(v.bearingDeg, viewportRotationDeg(northOffset, cutRotationDeg, 0)));
+    setPitchDeg(v.pitchDeg);
+  }, [northOffset, cutRotationDeg]);
+  const toggle3d = () => {
+    if (offer.kind === "unavailable") {
+      setNotice3d({ reason: offer.reason, percent: offer.percent });
+      return;
+    }
+    if (want3d) {
+      // Leaving: centre and zoom kept; the bearing reset to north up when the rotation lock is on.
+      setWant3d(false);
+      if (rotationLocked) setUserBearing(0);
+      return;
+    }
+    setNotice3d(null);
+    setPitchDeg(PITCH.enter);
+    setMeasuring(false);
+    setMeasurePoints([]);
+    setMeasureCursor(null);
+    setWant3d(true);
+  };
+  const onTerrainLayer = useCallback((info: VectorTerrainInfo | null) => setTerrainInfo(info), []);
+  const onTerrainLayerError = useCallback(() => fail3d("webgl"), [fail3d]);
 
   /** A control's position in paper mm: its own mm, else its lat/lng through the document's frame. */
   const controlMm = useCallback(
@@ -1221,9 +1363,11 @@ export function MapViewer({
   const mapMmToScreen = useCallback(
     (mapX: number, mapY: number): Pt | null => {
       if (!viewport || containerSize.w === 0) return null;
+      // 3D: through the camera, at the surface's height (§5.4 "3D mode" "UI layer").
+      if (proj3d) return proj3d.project(mapX, mapY);
       return mmToInner(viewport, vctx, mapX, mapY);
     },
-    [viewport, vctx, containerSize],
+    [viewport, vctx, containerSize, proj3d],
   );
 
   /** Inverse of screenToInner: rotated inner coords → container coords.
@@ -2077,16 +2221,21 @@ export function MapViewer({
     const legStroke = Math.max(0.5, (glm?.lineWidthMm ?? 0.35) * symbolScale);
 
     const mmPx = (mx: number, my: number) => {
-      const p = mmToInner(viewport, vctx, mx, my);
-      return { px: p.x, py: p.y };
+      const p = mapMmToScreen(mx, my);
+      return p ? { px: p.x, py: p.y } : null;
     };
 
     // Pixel positions for all controls: the control's own paper mm
     // (lat/lng through the document's frame only as a fallback).
     const ctrlPixels = new Map<string, Pt>();
+    // 3D: rings around a draped symbol lie on the ground (the anchor's affine, §5.4 "3D mode").
+    const ringTransform = new Map<string, string | undefined>();
     for (const c of controls) {
       const mm = controlMm(c);
-      if (mm) ctrlPixels.set(c.id, mmToInner(viewport, vctx, mm.x, mm.y));
+      const p = mm ? mapMmToScreen(mm.x, mm.y) : null;
+      if (!mm || !p) continue;
+      ctrlPixels.set(c.id, p);
+      if (proj3d) ringTransform.set(c.id, affineAbout(proj3d.affine(mm.x, mm.y), p));
     }
 
     // Editor overrides: a control being dragged (or whose move is still
@@ -2128,9 +2277,11 @@ export function MapViewer({
         const route = gpsRoutes[ri];
         if (route.points.length < 2) continue;
         // Tracks reach the paper view through mapGeo once per route (gpsRoutesMm), not per frame.
+        // In 3D a point behind the eye breaks the line (H8 draws tracks on the terrain).
         const screenPts = (gpsRoutesMm?.[ri] ?? []).map((p) => mmPx(p.x, p.y));
         const d = screenPts
-          .map((p, i) => `${i === 0 ? "M" : "L"}${p.px.toFixed(1)},${p.py.toFixed(1)}`)
+          .map((p, i) => (p ? `${i === 0 || !screenPts[i - 1] ? "M" : "L"}${p.px.toFixed(1)},${p.py.toFixed(1)}` : ""))
+          .filter(Boolean)
           .join(" ");
         upperElements.push(
           <path
@@ -2176,6 +2327,7 @@ export function MapViewer({
       if (fade) {
         lowerElements.push(
           <circle key={`ctrl-${c.id}`} cx={pos.x} cy={pos.y} r={radius} stroke={baseColor} strokeWidth={stroke} fill="none"
+            transform={ringTransform.get(c.id)}
             opacity={fade}
             data-testid="control-faded"
             style={{ cursor: onControlClick ? "pointer" : undefined }}
@@ -2186,6 +2338,7 @@ export function MapViewer({
         // highlight) is a ring of the UI layer around it.
         upperElements.push(
           <circle key={`status-${c.id}`} cx={pos.x} cy={pos.y} r={symbolR + stroke * 1.5}
+            transform={ringTransform.get(c.id)}
             stroke={baseColor} strokeWidth={stroke * 1.5} fill="none"
             data-testid="control-status-ring" data-control-id={c.id}
             style={{ cursor: onControlClick ? "pointer" : undefined }}
@@ -2194,6 +2347,7 @@ export function MapViewer({
       } else if (onControlClick) {
         upperElements.push(
           <circle key={`click-${c.id}`} cx={pos.x} cy={pos.y} r={symbolR} fill="transparent" stroke="none"
+            transform={ringTransform.get(c.id)}
             style={{ cursor: "pointer" }} onClick={() => onControlClick(c.id)} />
         );
       }
@@ -2206,6 +2360,7 @@ export function MapViewer({
           if (pct >= 1) {
             lowerElements.push(
               <circle key={`comp-${c.id}`} cx={pos.x} cy={pos.y} r={ringR}
+                transform={ringTransform.get(c.id)}
                 stroke="#059669" strokeWidth={stroke * 2.5} fill="none" opacity={0.8} />
             );
           } else {
@@ -2220,6 +2375,7 @@ export function MapViewer({
             lowerElements.push(
               <path key={`comp-${c.id}`}
                 d={`M${x1},${y1} A${ringR},${ringR} 0 ${largeArc} 1 ${x2},${y2}`}
+                transform={ringTransform.get(c.id)}
                 stroke="#059669" strokeWidth={stroke * 2.5} fill="none" opacity={0.8} />
             );
           }
@@ -2367,7 +2523,7 @@ export function MapViewer({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [viewport, containerSize, renderW, renderH, controls, courses, highlightControlId, highlightCourseName,
       symbolScale, vctx, controlMm, gpsRoutesMm, measuring, measurePoints, measureCursor, onControlClick,
-      mapMmToScreen, rotDeg, gpsRoutes, editor, editorDragPos, pendingMoves, courseInfo]);
+      mapMmToScreen, rotDeg, gpsRoutes, editor, editorDragPos, pendingMoves, courseInfo, proj3d]);
 
   // ─── Description sheet (outside rotation) ──────────────
 
@@ -2765,7 +2921,11 @@ export function MapViewer({
       data-centre-x={viewport.centreX}
       data-centre-y={viewport.centreY}
       data-px-per-um={viewport.pxPerUm}
-      data-rotation={rotDeg}
+      data-rotation={viewRotDeg}
+      data-view-mode={in3d ? "3d" : "2d"}
+      data-pitch={in3d ? pitchDeg : undefined}
+      data-exaggeration={in3d ? exaggeration : undefined}
+      data-terrain-reason={notice3d?.reason ?? (offer.kind === "hidden" || offer.kind === "unavailable" ? offer.reason ?? undefined : undefined)}
       data-user-bearing={userBearing}
       data-measure-points={measurePoints.length}
       data-measure-cursor={measureCursor ? "1" : "0"}
@@ -2836,8 +2996,18 @@ export function MapViewer({
           patch={mapPatch}
           patchVersion={mapPatch ? patchDelivery.version : "0"}
           mapObjects={editor?.mapObjects ?? null}
+          heightField={layerField}
+          terrain={terrainFrame}
+          onTerrain={onTerrainLayer}
+          onTerrainError={onTerrainLayerError}
+          onMaxTextureSize={setMaxTextureSize}
         />
       )}
+      {/* 3D: the map's gestures go to the camera (§5.4 "3D mode" "Gestures") */}
+      {in3d && view3d && scene3d && (
+        <Map3dSurface view={view3d} scene={scene3d} oneFingerPans={allowOneFingerMapPan} onView={applyView3d} />
+      )}
+      {notice3d && <Map3dNotice reason={notice3d.reason} percent={notice3d.percent} />}
       {/* Rotated UI layer (the overlay SVG) — the meridians vertical, as the canvas's view matrix */}
       <div style={{
         position: "absolute",
@@ -2869,11 +3039,13 @@ export function MapViewer({
               // Field mode's fix (the page's watch) wins over the locate button's own.
               const fix = editor?.fix ?? (locateMode !== "off" ? geo.position : null);
               if (!fix || !viewport) return null;
-              const p = geoToInner(viewport, vctx, fix.lat, fix.lng);
+              // 3D: the fix's paper mm through the camera, the ring at the anchor's scale (§5.4 "3D mode").
+              const fixMm = proj3d ? geoToMm(vctx.frame, fix.lat, fix.lng) : null;
+              const p = proj3d ? (fixMm ? proj3d.project(fixMm.x, fixMm.y) : null) : geoToInner(viewport, vctx, fix.lat, fix.lng);
               const mpp = metresPerPx(viewport, mapScale);
               if (!p || mpp == null) return null;
               const px = p.x, py = p.y;
-              const radius = accuracyRadiusPx(fix.accuracy, mpp);
+              const radius = accuracyRadiusPx(fix.accuracy, mpp) * (proj3d && fixMm ? affineScale(proj3d.affine(fixMm.x, fixMm.y)) : 1);
               return (
                 <g data-testid="my-location-marker" data-accuracy-m={fix.accuracy} style={{ pointerEvents: "none" }}>
                   {radius > 2 && (
@@ -2997,8 +3169,8 @@ export function MapViewer({
         </svg>
       )}
 
-      {/* Scale bar */}
-      {scaleBar}
+      {/* Scale bar (not over a tilted view: its scale varies over the screen) */}
+      {!(in3d && pitchDeg > 0) && scaleBar}
 
       {/* Measure HUD */}
       {measureHud}
@@ -3053,7 +3225,7 @@ export function MapViewer({
           >
             <IconFitView className="w-4 h-4" />
           </button>
-          <button
+          {!in3d && <button
             type="button"
             onClick={() => {
               setMeasuring((prev) => {
@@ -3067,7 +3239,7 @@ export function MapViewer({
             aria-pressed={measuring}
           >
             <IconRuler className="w-4 h-4" />
-          </button>
+          </button>}
           <button
             type="button"
             data-testid="locate-button"
@@ -3145,6 +3317,15 @@ export function MapViewer({
               )}
             </span>
           </button>
+          {offer.kind !== "hidden" && (
+            <Map3dToggle
+              state={toggle3dState}
+              reason={offer.kind === "unavailable" ? { reason: offer.reason, percent: offer.percent } : null}
+              exaggeration={exaggeration}
+              onToggle={toggle3d}
+              onExaggeration={setExaggeration}
+            />
+          )}
           {onToggleFullscreen && (
             <button
               type="button"

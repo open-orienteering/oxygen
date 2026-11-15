@@ -60,5 +60,16 @@
   "mapImportFailed": "The map could not be prepared: {{error}}",
   "mapImportReview": "The map is imported and waiting for review.",
   "mapImportReviewLink": "Review the map",
-  "mapImportUnknown": "This map has not been prepared yet. Upload the map again to prepare it."
+  "mapImportUnknown": "This map has not been prepared yet. Upload the map again to prepare it.",
+  "map3dEnter": "Show in 3D",
+  "map3dExit": "Back to 2D",
+  "map3dLoading": "Preparing 3D…",
+  "map3dExaggeration": "Height exaggeration",
+  "map3dReason": {
+    "no-contours": "This map has no contours to show in 3D.",
+    "over-cap": "This map is too large for 3D on this server.",
+    "low-confidence": "3D needs {{min}} % of the contours with a known uphill side; this map has {{percent}} %.",
+    "unavailable": "The map's terrain could not be loaded, so it is shown in 2D.",
+    "webgl": "This device cannot draw the map's terrain, so it is shown in 2D."
+  }
 }
