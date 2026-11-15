@@ -436,11 +436,15 @@ const printedCounts = async (page: Page) => {
   const p = await printed(page, EDITOR_EVENT, "allControls=1");
   return { strokes: p.strokes, curves: p.curves, curvedFills: p.curvedFills };
 };
-/** The print's drawing: a hash of its inflated content streams (the bytes also carry a creation date). */
+/**
+ * The print's drawing: a hash of its inflated streams without the dates (the creation and modification dates sit in a
+ * compressed object stream, so two prints a second apart differ there and nowhere else).
+ */
 const printedDrawing = async (page: Page): Promise<string> => {
   const res = await page.request.get(`/api/maps/${EDITOR_EVENT}/maps.pdf?allControls=1`);
   expect(res.ok()).toBe(true);
-  return createHash("sha256").update(inflatedStreams(await res.body()).join("\n")).digest("hex");
+  const streams = inflatedStreams(await res.body()).map((x) => x.replace(/\/(CreationDate|ModDate) \(D:[^)]*\)/g, ""));
+  return createHash("sha256").update(streams.join("\n")).digest("hex");
 };
 
 test.describe("Map mode drawing (docs/course-editor.md §13 \"Drawing\", \"Symbol picker\")", () => {
@@ -593,14 +597,17 @@ test.describe("Map mode drawing (docs/course-editor.md §13 \"Drawing\", \"Symbo
       await expect.poll(async () => (await toolShapes(page, "editor-map-point-direction")).length).toBe(1);
       let wrote = waitForTrpc(page, "mapPatch.applyChange");
       await page.mouse.up();
-      await wrote;
+      const reply = (await (await wrote).json()) as { result: { data: { version: string } } }[] | { result: { data: { version: string } } };
+      const version = (Array.isArray(reply) ? reply[0] : reply).result.data.version;
       const add = changes[0].put![0] as { op: string; id: string; angle?: number };
       expect(add).toMatchObject({ op: "add", type: 1 });
       expect(add.angle).toBe(900);
 
-      // V, select it: Rotation shows 90; 45 + Enter rewrites the add with 450.
+      // V, select it once the canvas draws it (the hit-test is over what is drawn): Rotation shows 90; 45 + Enter
+      // rewrites the add with 450.
       await page.keyboard.press("Escape");
       await pressed(page, "V");
+      await expect(page.getByTestId("map-vector-layer")).toHaveAttribute("data-patch-version", version, { timeout: 15_000 });
       await page.mouse.click(from.x, from.y);
       await expect(mapObject(page)).toHaveAttribute("data-ref", `added:${add.id}`);
       const rotation = page.getByTestId("editor-map-object-rotation");
