@@ -2005,6 +2005,54 @@ object, `{ added: id }` for one the patch adds.
 **Presence** (§11): Map mode reports `mode: "map"`, labelled as the mode
 switch's *Map* (user 2026-11-15, G6 question 2).
 
+### GPS tracks
+
+The mapper's GPS tracks of the event (`docs/map-gps-tracks.md` §5.1, row
+G25; stored by G24, `mapTrack`): a reference layer to draw the map from.
+Conversion into map objects is G26's, trim / split / average G27's.
+
+- **Panel** (`modes/map/tracks/TracksPanel.tsx`, the hook
+  `useMapTracks.ts`, the pure list state `model.ts` and `decimate.ts`):
+  the inspector section *GPS tracks* (`editor-tracks`) after
+  *Corrections*. Off with the reason (`editor-tracks-disabled`,
+  `data-reason` `venue` | `no-permission` | `not-georeferenced`, in that
+  order) and no `mapTrack` request on a venue node, without
+  `courses.edit`, or on a map without a georeference; with tracks off,
+  the rest of Map mode is unchanged.
+- **Import** (`editor-tracks-import`, the hidden
+  `<input type="file" multiple accept=".gpx">` `editor-tracks-file`; a
+  drop of files on the section, which shows `data-drag-over` meanwhile):
+  parsed on the device and sent as `docs/map-gps-tracks.md` §5.1 says.
+  While it runs the button is disabled (`data-busy`); afterwards
+  `editor-tracks-import-result` (`data-imported`, the count) and one
+  `editor-tracks-import-error` per refused file or track (`data-file`,
+  `data-code`: a `GpxParseError` code, `too-many-points`, or the
+  server's `TRACK_*` code).
+- **Rows** (`editor-track-row`, `data-track-id`, `data-state` `loading`
+  | `ready` | `error`, `data-visible`, `data-points`, `data-length-m`,
+  `data-outside`, `data-converted`): the swatch (`editor-track-swatch`,
+  `data-colour`), the name (`editor-track-name`; a click locates), the
+  date (`editor-track-date`), length and points (`editor-track-stats`),
+  *outside the map* (`editor-track-outside`, with the count) and
+  *converted* (`editor-track-converted`) when they apply, and the
+  buttons show / hide (`editor-track-visible`, `aria-pressed` while
+  shown), rename (`editor-track-rename`: the name becomes the input
+  `editor-track-name-input`; Enter or leaving it writes, Escape drops)
+  and delete (`editor-track-delete`, no confirmation — it is an undo
+  entry). `editor-tracks-none` when the event has none.
+- **The layer.** Every visible, ready track is a UI-layer path over the
+  map (`editor-gps-track`, `data-track-id`, `data-points` the drawn
+  paper-mm vertices), drawn through the Map-mode binding's `shapes`
+  (`tools/bindings.ts` `withTrackLayer`, which every Map-mode tool wraps
+  its binding with) below the tool's own shapes; never a hit target —
+  clicks still select map objects. Decimated to the pixel as §5.1 there
+  says; the zoom is the last pointer event's `mmPerPx` (the wrapper reads
+  it from hover, press and click).
+- **Undo** (§3, one stack across modes): import, rename and delete are
+  one entry each (`docs/map-gps-tracks.md` §5.1 "Rename and delete");
+  show / hide and locate are none. A failed undo or redo drops the entry
+  and shows the error, as Map mode's patch writes do.
+
 ## API
 
 The course and control mutations the editors write through (08 §6;

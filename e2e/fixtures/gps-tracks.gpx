@@ -1,0 +1,16 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<gpx version="1.1" creator="oxygen generate-test-gpx" xmlns="http://www.topografix.com/GPX/1/1">
+  <trk><name>E2E inside</name><trkseg>
+    <trkpt lat="58.6409705" lon="14.9980620"><ele>120.0</ele><time>2026-01-17T09:30:00.000Z</time></trkpt>
+    <trkpt lat="58.6402969" lon="14.9980620"><ele>121.0</ele><time>2026-01-17T09:31:00.000Z</time></trkpt>
+    <trkpt lat="58.6396233" lon="14.9980621"><ele>122.0</ele><time>2026-01-17T09:32:00.000Z</time></trkpt>
+    <trkpt lat="58.6396234" lon="15.0000000"><ele>123.0</ele><time>2026-01-17T09:33:00.000Z</time></trkpt>
+    <trkpt lat="58.6396233" lon="15.0019379"><ele>124.0</ele><time>2026-01-17T09:34:00.000Z</time></trkpt>
+  </trkseg></trk>
+  <trk><name>E2E outside</name><trkseg>
+    <trkpt lat="58.6416440" lon="15.0046513"></trkpt>
+    <trkpt lat="58.6416438" lon="15.0085274"></trkpt>
+    <trkpt lat="58.6416435" lon="15.0124035"></trkpt>
+    <trkpt lat="58.6416431" lon="15.0162796"></trkpt>
+  </trkseg></trk>
+</gpx>
