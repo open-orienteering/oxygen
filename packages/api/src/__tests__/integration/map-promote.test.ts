@@ -15,6 +15,9 @@
  *     run finds nothing
  *   - a second promote stacks a layer and numbers never shift
  *   - delete of the latest promoted version; the GC and the per-event dump
+ *   - completion's edges: an op the bake skipped stays in the event's patch,
+ *     a version the event already pins survives a failed job, an event
+ *     whose map moved is left alone
  */
 
 import { describe, it, expect, beforeAll, afterAll } from "vitest";
@@ -31,6 +34,7 @@ import { makeCaller } from "../helpers/caller.js";
 import { grantSystemGroup } from "../../permissions.js";
 import { applyEventMap } from "../../event-map.js";
 import { decodedDocument } from "../../map-store/event-document.js";
+import { abandonPromote, completePromote } from "../../map-store/patches.js";
 import { getImportJob, kickImportJobs, startImportJob, type ImportJobRow } from "../../map-store/jobs.js";
 import { decideOnDocument, finaliseDocument } from "../../map-store/review.js";
 import { planRematch, rematchItem } from "../../map-store/rematch.js";
@@ -457,4 +461,43 @@ describe("delete of the latest promoted version (§5 answer 7)", () => {
     expect((await versions()).map((v) => v.seq)).toEqual([1]);
     expect((await pin(B)).clubMapVersionId).toBe(v1.id);
   });
+});
+
+describe("completion's edges (§5.4)", () => {
+  it("keeps an op the bake skipped, never deletes a pinned version, and leaves an event whose map moved", async () => {
+    const F = await createTestEvent("promote_f");
+    extra.push(F);
+    await useClubMap(F);
+    const a = `hide:${src(v1Doc, iPoint)}`, b = `hide:${src(v1Doc, iPoint2)}`;
+    await open(F).mapPatch.applyChange({ documentHash: v1.documentHash, put: [{ op: "hide", sourceIndex: src(v1Doc, iPoint) }, { op: "hide", sourceIndex: src(v1Doc, iPoint2) }] });
+    const layers: mapDocument.VersionPatch = [{ unitsPerMm: 100, symbols: [], ops: { [a]: { op: "hide", sourceIndex: src(v1Doc, iPoint) }, [b]: { op: "hide", sourceIndex: src(v1Doc, iPoint2) } } }];
+    // The job's document: its report says the bake skipped b (as when a target is gone from a fresh import).
+    const bytes = (await A.db.mapDocument.findUniqueOrThrow({ where: { hash: v1.documentHash }, select: { bytes: true } })).bytes;
+    const hash = randomBytes(32).toString("hex");
+    await A.db.mapDocument.create({
+      data: {
+        hash, bytes, sizeBytes: bytes.byteLength, formatVersion: 1, importerVersion: "x", libraryVersion: "x", sourceHash, header: {}, patch: layers as never,
+        report: { corrections: { layers: 1, ops: 2, issues: [{ layer: 0, opId: b, code: "target-missing" }] } },
+      },
+    });
+    const version = await A.db.clubMapVersion.create({ data: { clubMapId, seq: 2, label: "edge", sourceHash, documentHash: hash, patch: layers as never } });
+    const job = { eventId: F.eventId, clubMapId, sourceHash, documentHash: hash, patch: layers };
+
+    expect(await completePromote(A.db, job)).toEqual({ outcome: "pinned", versionId: version.id });
+    expect(await pin(F)).toEqual({ documentHash: hash, clubMapVersionId: version.id });
+    expect(Object.keys((await open(F).mapPatch.get()).patch!.ops)).toEqual([b]);
+
+    // A failure after the pin: the version holds corrections that left the patch, so it stays.
+    expect(await abandonPromote(A.db, job)).toEqual([]);
+    expect(await A.db.clubMapVersion.count({ where: { id: version.id } })).toBe(1);
+
+    // Run again (a re-claim): F is no longer on the base version, so nothing moves.
+    expect(await completePromote(A.db, job)).toMatchObject({ outcome: "skipped", versionId: version.id });
+    expect(Object.keys((await open(F).mapPatch.get()).patch!.ops)).toEqual([b]);
+
+    await A.db.mapFile.deleteMany({ where: { eventId: F.eventId } });
+    await A.db.mapPatch.deleteMany({ where: { eventId: F.eventId } });
+    await A.db.clubMapVersion.delete({ where: { id: version.id } });
+    await A.db.mapDocument.delete({ where: { hash } });
+  }, 60_000);
 });

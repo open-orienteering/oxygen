@@ -11,7 +11,7 @@
 import { z } from "zod";
 import { TRPCError } from "@trpc/server";
 import { mapDocument } from "@oxygen/shared";
-import { coursesEditProcedure, kioskOrCoursesViewProcedure, router } from "../trpc.js";
+import { coursesEditProcedure, coursesViewProcedure, kioskOrCoursesViewProcedure, router } from "../trpc.js";
 import { applyPatchChange, attachUnresolvedPatchOp, eventPatch, setPatchEnabled, type PatchDelivery } from "../map-store/patches.js";
 import { PROMOTE_LABEL_MAX, promoteEventPatch, promoteStatus, type PromoteJobView, type PromoteResult } from "../map-store/promote.js";
 
@@ -49,7 +49,7 @@ export const mapPatchRouter = router({
     }),
 
   /** The event's newest promote job (§5 answer 4: Map mode is read-only while it is queued or running), or null. */
-  promoteStatus: kioskOrCoursesViewProcedure.query(({ ctx }): Promise<PromoteJobView | null> => promoteStatus(ctx.db, ctx.event.id)),
+  promoteStatus: coursesViewProcedure.query(({ ctx }): Promise<PromoteJobView | null> => promoteStatus(ctx.db, ctx.event.id)),
 
   /** The toggle (§1.4): false = every consumer draws the pinned document. */
   setEnabled: coursesEditProcedure

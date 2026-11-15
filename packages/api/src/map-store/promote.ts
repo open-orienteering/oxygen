@@ -81,6 +81,8 @@ export async function promoteEventPatch(db: PrismaClient, eventId: bigint, input
     if (!file || !base || base.sourceHash !== file.sourceHash || !mapDocument.sameVersionPatch(file.document?.patch, base.patch)) {
       throw refuse("PRECONDITION_FAILED", "PATCH_NOT_CLUB_MAP: the event's map is not a club map version");
     }
+    // The series locked: a version delete (clubMap.removeVersion) and this promote never interleave.
+    await tx.$queryRaw`SELECT 1 FROM "oxygen"."club_maps" WHERE "id" = ${base.clubMapId}::uuid FOR UPDATE`;
     const latest = await tx.clubMapVersion.aggregate({ where: { clubMapId: base.clubMapId }, _max: { seq: true } });
     const seq = latest._max.seq ?? base.seq;
     if (seq !== base.seq) throw refuse("PRECONDITION_FAILED", `PATCH_NOT_LATEST: the club map has a newer version (${seq}) than the event's (${base.seq})`);
@@ -124,10 +126,11 @@ export async function promoteEventPatch(db: PrismaClient, eventId: bigint, input
 /** `mapPatch.promoteStatus`: the event's newest promote job, or null (G12b's progress and read-only state). */
 export async function promoteStatus(db: PrismaClient, eventId: bigint): Promise<PromoteJobView | null> {
   const job = await db.mapImportJob.findFirst({
-    where: { eventId, clubMapId: { not: null } },
+    where: { eventId, clubMapId: { not: null }, NOT: { patch: { equals: [] } } },
     orderBy: { createdAt: "desc" },
     select: { id: true, state: true, stage: true, progress: true, error: true, patch: true },
   });
+  // Only a promote job (a non-empty patch, as `isPromoteJob`).
   if (!job || mapDocument.parseVersionPatch(job.patch).length === 0) return null;
   return jobView({ ...job, state: job.state as ImportJobRow["state"] });
 }
