@@ -32,6 +32,9 @@ describe("editorSearchFor", () => {
     expect(editorSearchFor(state({ mode: "course" }), undefined, { phone: true })).toBe("mode=course");
     expect(editorSearchFor(state({ mode: "field" }), undefined, { phone: true })).toBe("mode=field");
     expect(editorSearchFor(state({ mode: "field" }))).toBe("mode=field");
+    // Map mode (§13, G6) is always written.
+    expect(editorSearchFor(state({ course: 2, mode: "map" }))).toBe("course=2&mode=map");
+    expect(parseEditorUrl("mode=map&course=2")).toMatchObject({ mode: "map", course: 2, invalid: [] });
     expect(parseEditorUrl("mode=course")).toMatchObject({ mode: "course", invalid: [] });
   });
 

@@ -9,7 +9,7 @@ import { PRESENCE_INLINE, presenceEntries, type PresenceMode, type PresenceOther
 
 export function PresenceChips({ others, selectedCourseId, compact = false }: { others: PresenceOther[]; selectedCourseId: number | null; compact?: boolean }) {
   const { t } = useTranslation("editor");
-  const modeLabel = (m: PresenceMode) => t(m === "course" ? "modeCourse" : m === "layout" ? "modeLayout" : "modeField");
+  const modeLabel = (m: PresenceMode) => t(m === "course" ? "modeCourse" : m === "layout" ? "modeLayout" : m === "map" ? "modeMap" : "modeField");
   const entries = presenceEntries(others, selectedCourseId, modeLabel, t("presenceAnonymous"));
   if (entries.length === 0) return null;
   if (compact) {

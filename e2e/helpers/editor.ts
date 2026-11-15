@@ -290,9 +290,10 @@ export async function inkIn(page: Page, rect: { minX: number; minY: number; maxX
 
 /**
  * `dark`: the map's black ink; `purple`: the course overprint; `map`: any map colour — not white and not
- * a purple tint (a corridor's white band cuts the whole map away, docs/course-layer.md §10.2).
+ * a purple tint (a corridor's white band cuts the whole map away, docs/course-layer.md §10.2); `line`: black ink
+ * or Map mode's selection highlight (#2563eb, docs/course-editor.md §13), a selected black line drawn either way.
  */
-export type InkKind = "dark" | "purple" | "map";
+export type InkKind = "dark" | "purple" | "map" | "line";
 
 /**
  * The GL canvas alone (the overlays hidden) and the byte offset in it of the pixel that contains a paper point (mm),
@@ -374,7 +375,8 @@ export async function inkedAt(page: Page, points: readonly Pt[], kind: InkKind =
     const purple = r - g > 50 && b - g > 50;
     // `map` leaves out any purple tint, the overprint's anti-aliased edges over white included.
     const tint = r - g > 12 && b - g > 12;
-    if (kind === "dark" ? Math.max(r, g, b) < 110 : kind === "purple" ? purple : !tint && Math.min(r, g, b) < 235) out.push(p);
+    const highlight = b - r > 120 && b > 180 && g < 160;
+    if (kind === "dark" ? Math.max(r, g, b) < 110 : kind === "purple" ? purple : kind === "line" ? Math.max(r, g, b) < 110 || highlight : !tint && Math.min(r, g, b) < 235) out.push(p);
   }
   return out;
 }

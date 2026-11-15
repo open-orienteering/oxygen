@@ -48,7 +48,7 @@ link restores them (`lib/editor/url.ts`: `parseEditorUrl`,
 | Param | Value | Absent |
 |---|---|---|
 | `course` | the selected course's seq | no course |
-| `mode` | `layout` \| `field`; on a phone also `course` | Course mode (a phone: Field, §10) |
+| `mode` | `layout` \| `field` \| `map` (§13); on a phone also `course` | Course mode (a phone: Field, §10) |
 | `view` | `all` \| `class` \| `variant` \| `all-variations` | Course view |
 | `class` | Class view's class (seq), with `view=class` | — |
 | `variant` | Variant view's key, with `view=variant`; in Class view and Layout the variant drawn when it is not the first (F8) | the first variant |
@@ -101,17 +101,20 @@ link restores them (`lib/editor/url.ts`: `parseEditorUrl`,
   is always written, so a link from a phone opens Field on a desktop too.
   A phone in Course mode writes `mode=course` (Course is not its
   default), so a reload keeps it; a desktop omits it. `mode=layout` on a
-  phone opens Field and leaves the URL (Layout is a desktop mode, §10).
+  phone opens Field and leaves the URL (Layout is a desktop mode, §10);
+  so does `mode=map` (Map mode, §13, is desktop only), which a desktop
+  always writes.
 - **Inbound links** keep working unchanged: the Courses page's pencil
   (`?course=<seq>`), the Controls page's (`?control=<id>`), the Courses
   page's *Edit layout* (`layoutEditorHref`, `course-layout.md` §4) and
   the retired pages' redirects. The editor rewrites them to their
   canonical order once taken.
 
-**Modes** (08 §5.1): Course, Layout, Field share one canvas, selection and
+**Modes** (08 §5.1): Course, Layout, Field and Map share one canvas and
 undo history. Course mode is this chapter; **Layout mode** — the sheet as
 the view, course edits locked — is `course-layout.md`; Field mode is D9's
-(§9; the initial mode on a phone, §10). The **view** picker
+(§9; the initial mode on a phone, §10); **Map mode** — the event's map
+corrections, course edits locked, desktop only — is §13 (G6). The **view** picker
 offers *Course* (the selected course full-strength, other controls faded)
 and *All controls* (every site with its code, no legs; the inspector keeps
 the selected course). *Class* (`editor-view-class`, a picker of the
@@ -133,14 +136,15 @@ exit bubble on every pointer move
 
 | Part | `data-testid` | What it holds |
 |---|---|---|
-| Top bar (`TopBar.tsx`) | `editor-top-bar` | course picker (`editor-course-picker`; roots and plain courses — a materialised variant is edited through its root, §12), view (`editor-view-course` / `-all` / `-class`, and for a course with variations `editor-view-variant` (Variant ▾) and `editor-view-all-variations`, §12), mode (`editor-mode-course` / `-layout` / `-field`; icons alone when the row is short, "Top bar" below), undo / redo (`editor-undo` / `-redo`), hide other controls (`editor-hide-others`), auto cuts (`editor-toggle-cuts`), the placement loupe toggle (`editor-placement-loupe`, a magnifier, lit — `aria-pressed` — when on; §10 "Loupe", F27), Export ▾ (`editor-export`, icon + label, `course-layout.md` §7), the map info (`editor-map-info`, below), the course-info button and the save indicator (below), who else has a course open (§11), help popover; MapPanel adds descriptions, fullscreen and the viewer its zoom on the same row |
-| Tool rail (`ToolRail.tsx`; Layout mode: `layout/LayoutRail.tsx`, `editor-layout-rail`, `course-layout.md` §3) | `editor-tool-rail` | `editor-tool-<key>` for `V`, `S`, `K`, `M`, `X` (map exchange, §6.9), `C` (crossing point, §6.8), `A` (menu `editor-area-menu`, `editor-area-<kind>`, and `editor-area-corridor` — §6.7), `T`, `G`; the snapping toggle `editor-snapping` (§6) |
+| Top bar (`TopBar.tsx`) | `editor-top-bar` | course picker (`editor-course-picker`; roots and plain courses — a materialised variant is edited through its root, §12), view (`editor-view-course` / `-all` / `-class`, and for a course with variations `editor-view-variant` (Variant ▾) and `editor-view-all-variations`, §12), mode (`editor-mode-course` / `-layout` / `-field` / `-map`, §13; icons alone when the row is short, "Top bar" below), undo / redo (`editor-undo` / `-redo`), hide other controls (`editor-hide-others`; in Map mode its slot is `editor-hide-overprint`, §13), auto cuts (`editor-toggle-cuts`), the placement loupe toggle (`editor-placement-loupe`, a magnifier, lit — `aria-pressed` — when on; §10 "Loupe", F27), Export ▾ (`editor-export`, icon + label, `course-layout.md` §7), the map info (`editor-map-info`, below), the course-info button and the save indicator (below), who else has a course open (§11), help popover; MapPanel adds descriptions, fullscreen and the viewer its zoom on the same row |
+| Tool rail (`ToolRail.tsx`; Layout mode: `layout/LayoutRail.tsx`, `editor-layout-rail`, `course-layout.md` §3; Map mode: `V` alone, §13) | `editor-tool-rail` | `editor-tool-<key>` for `V`, `S`, `K`, `M`, `X` (map exchange, §6.9), `C` (crossing point, §6.8), `A` (menu `editor-area-menu`, `editor-area-<kind>`, and `editor-area-corridor` — §6.7), `T`, `G`; the snapping toggle `editor-snapping` (§6) |
 | Action bar (`ActionBar.tsx`) | `editor-action-bar` | the selection's or phantom's entries, horizontal, centred under the selection, hidden during a drag; ids `editor-action-<id>` as the legacy popover's. Always inside the viewer, 8 px from its edges (`lib/editor/action-bar-place.ts`): near a side it is shifted sideways, and when it does not fit below the selection it goes above it (`data-placement="below" \| "above"`). It is never wider than the viewer less 16 px. The *Also in* line is one line cut with an ellipsis, with the whole list in its `title` (the inspector lists the courses too) (`docs/bugfix-action-bar-off-viewer.md`). The viewer positions it (`actionLayout: "bar"`); on a phone the same list is the bottom sheet's peek row (`actionLayout: "host"`, §10) |
 | Inspector (`Inspector.tsx`, `modes/CourseMode.tsx`, `modes/ObjectSection.tsx`) | `editor-inspector` | collapsible sections: course (create, sequence — a variation group as a nested block `editor-variation`, §12 —, visit order, description sheet — `editor-description-instructions`, §4 —, clone), selection (a site: code, kind, position, description summary, "also in", hidden number, notes — §6.6; several controls: `editor-multi` with the bulk actions — §6.5; a course object: `editor-object` — §7; a leg: `editor-leg` — §6.7, `modes/LegSection.tsx`), inventory (`editor-inventory-panel`, collapsed), checks (`editor-checks`, §8) |
 | Map info (`MapInfoDialog.tsx`, model `lib/editor/map-info.ts`; P6) | `editor-map-info` → `editor-map-info-dialog` | a map icon button (`IconMap`, `components/map-icons.tsx`) in the top bar right after Export ▾ (`aria-haspopup="dialog"`, `aria-expanded`); a click opens a modal (`role="dialog"`, `aria-modal="true"`, centred over a dimmed backdrop; the close button `editor-map-info-close`, a backdrop click or Escape closes it). Its header shows the map's file name (`editor-map-info-name`, `data-name`) or, without a map, `editor-map-info-none`. Its rows, each only when it has a value: the scale `editor-map-info-scale` (`data-scale`, `1:10 000`), the north lines `editor-map-info-north` (the `NorthLinesBadge` sentence, `north-lines-badge` with `data-north-lines`; *No magnetic north lines found* when the file has none), the file `editor-map-info-file` (size and upload time, `data-bytes`, `data-uploaded`); then the document section `editor-map-info-document` (`data-source`, `data-objects`, `data-symbols`, `data-colours`; read from the loaded document's header, absent while it loads or the import runs) with `editor-map-info-source` (OCAD and its version, or OpenOrienteering Mapper), `-content` (objects · symbols · colours), `-symbol-library` (the matched symbol library and version; not `-library`, which is the action below), `-crs` (EPSG code and name) and `-importer`. Its actions: *Review symbols* (`editor-map-info-review`, a link to `/<event>/map-review/<documentHash>`, only once the document exists — `map-symbols.md` §8.7), *Replace map* (`editor-map-info-replace`; *Upload map* without a map; the hidden `accept=".ocd"` input), *From club library* (`editor-map-info-library`, only when the club library lists a map; opens `club-map-picker`, `club-library.md`). An upload's progress, error and the stale-north-lines notice (`map-upload-notice`) show in the dialog's footer |
 | Course info (`EditorStatus.tsx` `StatsButton`, model `lib/editor/status.ts`) | `editor-stats` → `editor-stats-popover` | an icon button in the top bar (`aria-haspopup="dialog"`, `aria-expanded`) with the check count as its amber badge (`editor-stats-badge`, `data-count`, absent at zero, §8); a click opens the popover (`role="dialog"`; a second click, an outside click or Escape closes it — Escape closes only the popover, the editor's Escape cascade of §3 is not stepped, so an armed tool stays armed). Its rows, each only when it has a value, in this order: `editor-stats-controls` (`data-count`), `editor-stats-length` (`data-m`), `editor-stats-climb` (`data-m`), the shown sheet's key in Layout mode and Class view (`editor-stats-sheet`, `data-key`, `course-layout.md` §6), `editor-stats-snapping` when on, `editor-stats-checks` (`data-count`, amber). No map scale since P6: it is the map-info dialog's (`courseInfoRows`). With no course and no sheet the popover says *No course* |
 | Save indicator (`EditorStatus.tsx` `SaveIndicator`) | `editor-save-state` | in the top bar after the course-info button: a dot and the save state's words (`data-state` = `saved` / `saving` / `error` / `conflict`, `role="status"`, `aria-live="polite"`, the words also its `title`). `saved` / `saving` are the dot alone (green / grey pulsing; the words `sr-only`), so P2 adds a dot (≤ 16 px) and an icon button (≤ 32 px) to the top bar's row (how the row makes room on a laptop screen: "Top bar" below, F29); `error` / `conflict` show their words (`editor-save-state-text`, red) at every width — a failed or conflicting save never hides behind a popover or a tooltip |
 | Conflict notice | `editor-conflict` | §3 |
+| Map mode (§13) | `editor-mode-map`, `editor-hide-overprint`, `editor-inspector-map-object`, `editor-map-object` (`-none`, `-symbol`, `-swatch`, `-hide`, `-restore`), `editor-corrections` (`-count`, `-none`, `-apply`), `editor-correction-row` (`-locate`, `-revert`), `editor-map-none`, `editor-map-disabled`, `editor-map-readonly` | the inspector's *Map object* and *Corrections* sections in place of the course's; the rail's `V` |
 | Field mode (§9) | `editor-inspector-field`, `editor-field-selection`, `editor-nudge-pad`, `editor-field-offline` | the control list with distance / bearing and check-off in place of the sequence; the selection's distance, check-off and nudge pad; no tool rail |
 | Phone chrome (§10) | `editor-field-top-bar`, `editor-overflow`, `editor-sheet`, `editor-field-add` | below 640 px: the compact top bar, the bottom sheet (peek: the status line `editor-status` — `StatusBar.tsx`: `editor-status-kpis`, `editor-status-checks`, `editor-save-state` —, selection, action bar) and the floating `+` instead of the top bar, rail and inspector strip above |
 
@@ -157,7 +161,7 @@ literal Tailwind `@max-[…px]/toolbar:` strings):
 |---|---|
 | ≥ 1600 px | every label |
 | < 1600 px (tier 1) | the labels of `editor-hide-others`, `editor-toggle-cuts`, `map-toggle-descriptions` (MapPanel's, in the editor only — `labelClassName` is set when the panel has an `editor`, so other pages' map panels keep the `sm` rule alone) and `editor-export` are hidden, and the course picker's *Course* word; the buttons show their icons (Export ▾ is icon + label + ▾ since F29, `IconExport`) |
-| < 1170 px (tier 2) | in addition the mode switch shows its icons alone: `IconModeCourse` (a start triangle, a leg and a control circle), `IconModeLayout` (a sheet with its map frame and title bar), `IconModeField` (a control flag), `components/map-icons.tsx` |
+| < 1220 px (tier 2) | in addition the mode switch shows its icons alone: `IconModeCourse` (a start triangle, a leg and a control circle), `IconModeLayout` (a sheet with its map frame and title bar), `IconModeField` (a control flag), `IconModeMap` (a folded map sheet with a pencil, §13), `components/map-icons.tsx` |
 | narrower still | `flex-wrap` on the top bar, the last resort |
 
 The view group (Course · All controls · Class ▾ · Variant ▾ · All
@@ -170,11 +174,14 @@ through `aria-label` (its `<label>` word may be hidden), Export ▾ through
 top bar (§10) and `ToolbarButton`'s own `sm` rule still hides every label.
 
 The thresholds are measured (`e2e/editor-top-bar.spec.ts`, the E2E seed's
-widest row: *Bana 1* with its Class ▾): the full row's content is 1346 px
-in English and 1374 px in Swedish; a course with variations adds Variant ▾
-and All variations (about 200 px), so tier 1 starts below 1600 px. Tier 1
-saves about 385 px (410 px in Swedish), leaving at most about 1161 px with
-variations, so tier 2 starts below 1170 px; it saves about 60 px more.
+widest row: *Bana 1* with its Class ▾): the full row's content was 1346 px
+in English and 1374 px in Swedish before G6; Map mode's entry (§13) adds
+41 px with its word (measured, English; 32 px as an icon), so about 1387 px
+and 1420 px. A course with variations adds Variant ▾ and All variations
+(about 200 px), so tier 1 starts below 1600 px. Tier 1 saves about 385 px
+(410 px in Swedish), leaving at most about 1202 px with variations (about
+1214 px in Swedish), so tier 2 starts below 1220 px (1170 px before G6's
+fourth mode); it saves about 70 px more.
 Presence chips (§11) and long course names (the picker is capped at
 10 rem) can still wrap the row below that. At 1840 × 1090, the user's
 laptop, the row's content is about 1760 px with F28's wide editor, so
@@ -273,7 +280,10 @@ restored position.
 from `course.list`, `control.list`, `course.detail` and each write's
 result — so back-to-back writes send their predecessor's token.
 `course.setControlLabelOffset`, `course.create` / `clone` and
-`control.delete` take no token and seed the ones they return.
+`control.delete` take no token and seed the ones they return. Map mode's
+`mapPatch.applyChange` / `setEnabled` (§13, `applyPatchChange`,
+`setPatchEnabled`) take none either: the patch merges per op id,
+last-writer-wins (`map-patches.md` §3.2).
 
 **Conflicts** (`lib/editor/conflict.ts`; `course-layer.md` §7 "Client
 rules"):
@@ -290,6 +300,10 @@ The reload is the usual cache invalidation after every write. The moved
 notice names who and when when the journal has it (§11).
 
 ## 4. Course mode
+
+Course mode's gestures and keys below are locked in Layout mode
+(`course-layout.md`) and Map mode (§13): neither gets the control, label,
+leg or map-click callbacks, and their rails and keys are their own.
 
 Structure writes go through `course.setStructure` with the course's
 token; edits are pure functions over the wire form
@@ -1463,8 +1477,8 @@ so a tablet gets the touch rules below with the desktop chrome.
 - **Compact top bar** (`editor-field-top-bar`, in MapPanel's toolbar row
   beside its descriptions and fullscreen buttons): back to the Courses
   page (`editor-back`), the course picker (`editor-course-picker`), the
-  mode switch Course · Field (`editor-mode-*`; Layout stays a desktop
-  mode), the overflow `editor-overflow` → `editor-overflow-menu` with undo,
+  mode switch Course · Field (`editor-mode-*`; Layout and Map stay
+  desktop modes), the overflow `editor-overflow` → `editor-overflow-menu` with undo,
   redo, the view picker, hide other controls, auto cuts and the placement
   loupe toggle (F27; the desktop ids, a pressed dot when on). No tool rail, no inspector strip, no course-info button or save
   indicator (the peek line below has both), no map icon (§2's map-info
@@ -1612,7 +1626,7 @@ and an editor never lists itself. The server upserts one row per
 go with the switch), deletes rows older than the **30 s TTL** and answers
 the live rows of the event's other editors. The top bar lists them as
 `name · course · mode` ("Anna · Lång · Field"; the mode label is the
-mode switch's), those on the open course first and highlighted
+mode switch's, *Map* included since G6), those on the open course first and highlighted
 (`editor-presence`, `editor-presence-entry` with `data-here`; two entries inline, the rest a "+n" chip, so the bar stays one row and the map keeps its height); the phone's
 compact bar shows the count with the entries in its tooltip. `name` is the
 signed-in user's display name, else email; an instance without sign-in
@@ -1784,6 +1798,124 @@ claims `K`; All variations is read-only, labelled by number when the variants nu
 the keys of the structure being edited; the course picker lists roots;
 group ids `v<n>`, new labels the next free capital.
 
+## 13. Map mode
+
+Map mode (08 §5.2–§5.3, the Map column; row G6) edits the event's map
+corrections: the **patch** (`map-patches.md`) over the pinned document.
+The document itself never changes. G6 is the shell with select, hide and
+move; nodes are G7's, drawing and change symbol G9's, join / split / holes
+G10's, unresolved ops G11's, promote G12's.
+
+**Entering it.** `mode=map` (§1 "URL", always written); the mode group's
+fourth entry `editor-mode-map` (`IconModeMap`, a map sheet with a pencil);
+desktop only — the phone's mode switch omits it and `mode=map` on a phone
+opens Field and leaves the URL, as `mode=layout` does (08 §5.5). Entering
+it drops the tool, phantom, the control, multi and course-object selections
+(as Layout does); the course stays selected and drawn. **Course edits are
+locked**: the viewer gets Map mode's own editor props (`modes/MapMode.tsx`
+`useMapMode`, shaped like `useLayoutMode`): no control drag, label drag,
+leg click or map click, and an `exclusive` binding, so a click on a control
+selects no control; the rail is `V` alone (`editor-tool-rail`,
+`editor-tool-V`); `S` `K` `M` `X` `C` `A` `T` `G` do nothing. Undo / redo
+are the page's (one stack across modes, §3). Without a pinned document the
+mode opens and its inspector says so (`editor-map-none`). Without
+`courses.edit` (`mapPatch` writes need it, `map-patches.md` §3.2) it is
+view-only: select, locate, `H`, `F`; no hide, move, revert or toggle.
+
+**Gestures and keys** (the binding is `tools/bindings.ts`
+`mapSelectBinding`; the key table `modes/map/keys.ts`):
+
+| Gesture / key | Map mode |
+|---|---|
+| Click | asks the viewer's hit-test (`mapObjects.onHitTest`, `map-rendering.md` §5.5 "Document objects") at 6 CSS px and selects the topmost hit (`hits[0]`, the eyedropper's rule, §5); a click on empty map deselects. A late answer (a newer click went) is dropped |
+| Drag the selected object | moves it: the press must be on the selected object's drawn shape (tested on the main thread by its symbolised shape, the eyedropper's mechanism); a press elsewhere pans. The object follows through the viewer's draft (`mapObjects.draft`); the release writes one `modify` (below). Escape or the pointer leaving writes nothing; a release without movement writes nothing and is a click (the hit-test again) |
+| `Tab` / `Shift+Tab` | steps through the **hit stack** under the last click, topmost down, wrapping — the only way to reach an area under a path; with no click stack (a selection made from *Corrections*, or none) it steps through the **corrected objects** in *Corrections* order (rows whose object is missing skipped), centring each (user 2026-11-15, G6 question 1; 08 §5.3's "next object" over a whole document has no order a user follows) |
+| `Delete` / `Backspace` | hides the selected object (*Hide*) |
+| `H` | hides the course overprint (and shows it again): the viewer requests no course layer, mirrors no course sites (`editor-site`, `course-site`) and draws no description sheet (`MapViewerEditorProps.hideCourse`). The top bar's `editor-hide-overprint` button, in the slot of `editor-hide-others` (lit, `aria-pressed`, while on). Map mode's own, off on entering |
+| `F` | fits the map (the document's bounds, `boundsMm`, through `viewRequest.bounds`) |
+| `V` | the select tool (the only one in G6) |
+| `Escape` | a drag in flight first (dropped, nothing written), then the selection, then fullscreen; never the course |
+
+The selected object is drawn highlighted (the edit part, `mapObjects.selected`;
+an outline for an area, G5) and the canvas carries `data-selected-objects`.
+
+**Ops** (`modes/map/model.ts`; `map-patches.md` §1.1–§1.2). Objects are
+named as the hit-test names them: `{ source: sourceIndex }` for a document
+object, `{ added: id }` for one the patch adds.
+
+| Gesture | Change sent | Undo |
+|---|---|---|
+| *Hide* a document object | `put [{ op: "hide", sourceIndex }]` | `remove ["hide:<n>"]` |
+| *Restore* | `remove ["hide:<n>"]` | `put` the hide again |
+| *Hide* an added object | `remove ["add:<id>"]` (§1.1: hiding an added object removes it) | `put` the add again |
+| Move a document object | `put [{ op: "modify", sourceIndex, coords, angle? }]` | the previous `modify` put back, else `remove ["modify:<n>"]` |
+| Move an added object | its `add` op rewritten with the moved `coords` | the previous `add` put back |
+| *Revert* a correction | `remove [opId]` | `put` the op again |
+
+- A move's `coords` are every effective coordinate of the object (an
+  existing `modify`'s, an `add`'s, else the document's) shifted by **one
+  integer delta** `round(Δmm × unitsPerMm)` — the shape moves rigidly,
+  flags and the count kept; an existing `angle` is kept. There is no
+  offset form in the model.
+- Every gesture is **one `mapPatch.applyChange { documentHash, put, remove }`
+  and one undo entry** (§3): the undo is the inverse change computed from the
+  patch before the gesture; redo sends the change again; a failed undo or
+  redo drops the entry and shows the error. Writes carry no token
+  (`applyChange` takes no `baseVersion`; two editors on one op id are
+  last-writer-wins, `map-patches.md` §3.2), so there is no conflict notice.
+  **One gesture's write at a time**: while one is in flight the next
+  gesture (hide, move, *Restore*, revert) is refused — its inverse would be
+  computed from a patch that is not yet the reply's — and a held Delete
+  hides once (its key repeat is ignored).
+- **Committing** (`map-rendering.md` §5.5 "Committing is the host's"):
+  the reply `{ version, patch }` becomes the session's copy
+  (`setMapPatch`, which every viewer of the event follows) and
+  `course.mapMetadata`'s `patchVersion`; the draft is kept until the
+  layer has drawn that version or a later one (`VectorMapObjects.onPatchDrawn`,
+  called with each version the canvas comes to show; versions are the
+  row's increasing token), so the object never jumps back. A refused write (`PATCH_STALE`,
+  `PATCH_DOCUMENT_MISMATCH`, `PATCH_NO_DOCUMENT`, a venue box offline)
+  drops the draft, shows the editor's error (translated per code) and
+  reloads the map metadata and the patch.
+- After *Hide* the object stays selected, shown as hidden with *Restore*;
+  a hidden object is never hit (§2.4 there), so it is reached again through
+  its *Corrections* row.
+
+**Inspector** (`modes/map/ObjectSection.tsx`, `modes/map/Corrections.tsx`):
+
+- **Map object** (section `editor-inspector-map-object`; `editor-map-object`,
+  `data-ref` = `source:<n>` or `added:<id>`, `data-hidden`, `data-symbol`
+  the effective symbol index; `editor-map-object-none` without a
+  selection): the symbol's number and name (`editor-map-object-symbol`:
+  an applied match's library entry, its name localised, else the source
+  code and name; a patch symbol's own), its swatch
+  (`editor-map-object-swatch`, the symbol list's `swatchUrl`: the
+  library's preview for an applied match, the document symbol's otherwise,
+  empty for a patch symbol), and
+  *Hide* (`editor-map-object-hide`) or *Restore*
+  (`editor-map-object-restore`) by whether `hide:<sourceIndex>` is in the
+  patch.
+- **Corrections** (`editor-corrections`, its count `editor-corrections-count`,
+  `editor-corrections-none` when empty): every op of the patch in op-id
+  order (`editor-correction-row`, `data-op-id`, `data-op`, and
+  `data-issue` with the `applyPatch` issue code, `map-patches.md` §2.3 —
+  computed with the patch taken as enabled, so a switched-off patch still
+  reports them). A row click selects its object and centres the view on
+  it; *Revert* (`editor-correction-revert`) removes the op.
+- **Apply corrections** (`editor-corrections-apply`, a checkbox) is
+  `mapPatch.setEnabled` (`map-patches.md` §1.4): off, every consumer —
+  screen, print, the venue — draws the pinned document; the list keeps its
+  ops. It is an event setting, not an undo entry (as auto cuts, §4); the
+  box shows the value asked for while its write is in flight.
+  **While it is off, hide, *Restore* and move are disabled** with the
+  reason shown (`editor-map-disabled`); revert (a hide's row included)
+  and the toggle stay (user 2026-11-15,
+  G6 question 3: the viewer merges a draft over the drawn patch, and a
+  disabled patch draws as the identity, so a drag would show nothing).
+
+**Presence** (§11): Map mode reports `mode: "map"`, labelled as the mode
+switch's *Map* (user 2026-11-15, G6 question 2).
+
 ## API
 
 The course and control mutations the editors write through (08 §6;
@@ -1802,7 +1934,7 @@ seq). Tokens are decimal strings.
 | `control.delete` | `courses.edit` | unchanged | `{ ok, courses: { id, version }[] }` — the courses whose structure lost the control |
 | `course.list` / `course.detail` | `courses.view` | — | rows with `version`; `detail` adds `structure` (wire form) and `structureStored` |
 | `control.list` / `control.getById` | `courses.view` | — | rows with `version`, `kind`, `circleGaps`, `notes`, `checkedAt` |
-| `course.presence` | `courses.view` | `{ courseId, mode: "course" \| "layout" \| "field", clientId }` | `{ ttlMs, others: { courseId, courseName, name, mode }[] }`: the event's other live editors (§11) |
+| `course.presence` | `courses.view` | `{ courseId, mode: "course" \| "layout" \| "field" \| "map", clientId }` | `{ ttlMs, others: { courseId, courseName, name, mode }[] }`: the event's other live editors (§11) |
 | `course.lastChange` / `control.lastChange` | `courses.view` | `{ courseId }` / `{ id }` | `{ name, at /* ISO */ } \| null`: actor and time of the row's newest `*.upserted` entry (`name` empty without a sign-in) |
 
 A stale `baseVersion` answers `CONFLICT` with `data: { kind, id, version,
@@ -1942,6 +2074,11 @@ whose poll ran meanwhile simply does not conflict (decision log, D10).
 | E2E | `e2e/course-editor-status.spec.ts` "P2: the status bar out of the footer" (`chromium`) | §2, §3 (P2): no `editor-status` on the desktop; `editor-save-state` inside `editor-top-bar` reaches `saved`; `editor-stats` opens the popover (`aria-expanded`) with the controls (`data-count` 0, then 1 after a `K` placement) and length rows and no `editor-stats-scale` (P6), a second click and an outside click close it, Escape with `K` armed closes it and leaves `K` pressed (a second Escape returns to `V`); at 1280 × 720 with `saved` the words take no room (width ≤ 1 px, the title set), the indicator is ≤ 16 px and the button ≤ 32 px wide; at 1024 × 700 a `control.create` aborted at the network → `data-state="error"` with `editor-save-state-text` visible, non-empty and inside the viewport. The shell test ("mounts the new editor") asserts the indicator and the button visible and no `editor-status`; the Layout / Class view test reads the sheet key from `editor-stats-sheet` |
 | unit (web) | `lib/editor/__tests__/map-info.test.ts` | §2 (P6): the map-info dialog's rows with a loaded document (name · scale · file, then source · content · library · CRS · importer, their `data`), the map's rows only while the document loads or the import runs, no library and no CRS (rows absent, an OOM source named in full), no map (no rows), an unknown size (the date alone), the club picker's KB / MB rule |
 | E2E | `e2e/course-editor-status.spec.ts` "P6: the map footer out; the map-info dialog" (`chromium`) | §2 (P6): no footer — the viewer reaches `map-panel`'s bottom (< 4 px), no `map-review-link`, *Replace map* or `use-club-map` in the panel; `editor-map-info` follows `editor-export` in document order and opens `editor-map-info-dialog` (`role="dialog"`, `aria-modal`, `aria-expanded`; focus inside it through five Tabs and six Shift+Tabs) with the name (`.ocd`), the scale (`data-scale`, "1:"), the north row, the file (`data-bytes` > 0), the document (`data-source="ocad"`, objects and symbols > 0, importer `ocad-‹n›`), *Review symbols* (`href` `/map-review/‹64 hex›`), *Replace map*, at most one *From club library*; the close button and a backdrop click close it, and the course-info popover has no scale row; *Replace map* opens a single-file chooser with `accept=".ocd"` and changes nothing; the backdrop is the element at the page's corner (it covers the shell's header); Escape with `K` armed closes only the dialog (a letter pressed while open does not switch the tool; the next Escape returns to `V`), and with a control selected keeps the selection and the course; an event with no map: `editor-map-info-none`, no scale, no review, *Upload map*. `e2e/map-review.spec.ts` and `e2e/club-map-library.spec.ts` reach the review link, the north-lines badge and the club picker through the dialog (the picker's Escape closes it before the dialog's; a pick from it closes the picker, keeps the dialog without an error, and its `editor-map-info-file` `data-uploaded` follows the new map row); `e2e/mobile-layout.spec.ts` asserts no `editor-map-info` and no *Replace map* in the phone editor; `e2e/editor-fullscreen.spec.ts` opens the dialog in fullscreen (inside `document.fullscreenElement`), and its Escape keeps fullscreen |
+| unit (web) | `pages/editor/__tests__/map-model.test.ts` | §13 "Ops": refs and op ids; *Hide* of a document object is a hide op, of an added object the add removed; *Restore*; a move is one rounded integer delta on every coordinate, flags kept, nothing for a delta under a unit or an unknown object; a move over an existing `modify` starts from its coordinates and keeps its angle; a move of an added object rewrites its add; the inverse puts back what was there and removes what was not, none for a no-op; `changes` is false for the same state again; the object's symbol (code, name, swatch) and box, a hidden one still found; the press test on the drawn shape, never on a hidden object, at a moved object's new place; *Corrections* rows in op-id order with the issue of a switched-off patch (taken as enabled) and none for a patch of another document; Tab's corrected-object list and stepping with wrap, a row whose object is missing skipped; `drawnCovers`: a draft goes once its version or a later one is drawn |
+| unit (web) | `pages/editor/__tests__/map-bindings.test.ts` | §13 "Gestures and keys": `mapSelectBinding` is exclusive, a click asks the hit-test at 6 px and selects the topmost with the stack (refs only), empty map deselects, an older click's answer is dropped; a press off the selection, without `canMove` or by touch is not taken; a drag past 3 px draws the draft and writes once on release; a release without movement writes nothing and is a click; a cancelled drag drops the draft; `mapKeyAction`: V, H, F, Tab / Shift+Tab, Delete / Backspace (a key repeat none), Escape, and none of Course mode's tool keys or modified keys; `MAP_RAIL` is `V` |
+| unit (web) | `lib/editor/__tests__/{url,state,field,write-client}.test.ts` | §13 "Entering it": `mode=map` round-trips and is always written; entering Map mode keeps the course and drops the tool, phantom and selections; `mode=map` on a phone opens Field; `applyPatchChange` / `setPatchEnabled` send the hash and no token, return the reply, propagate a refusal, refuse without a `mapPatch` client |
+| integration | `packages/api/src/__tests__/integration/course-presence.test.ts` "takes Map mode" | §13 "Presence": a heartbeat with `mode: "map"` lists as `map` |
+| E2E | `e2e/map-mode.spec.ts` (`chromium`) | §13, on the seed's `itest` with `test.ocd` pinned, every op removed before, after and in `finally`. "the fourth mode": entered from Course mode after the map loaded → `data-mode="map"`, `mode=map` in the URL, the rail `V` alone (no `editor-tool-K`), *Map object* empty; `K` and a click on a control select no control (none selected back in Course mode); `H` → `editor-hide-overprint` pressed, no `editor-site`, no `course-site`, no description sheet; again → back; `F` after a zoom fits (≤ 2× the fitted zoom). "select, hide, undo, move…": at `?mode=map` with `H`, zoomed to ≥ 16 px/mm, a lone black line found on the canvas and checked with `mapObjectsAt` (the only point or line within 0.5 mm); a click → `editor-map-object` `data-ref="source:<n>"`, the symbol named, `data-selected-objects="1"`; Tab then Shift+Tab back; Delete → one `applyChange`, `data-hidden`, the `hide:<n>` row, the line gone, `mapPatch.get` holds exactly that op; Ctrl+Z → no rows, the line back; Ctrl+Shift+Z → hidden; *Restore* → back (4 writes); a drag 0.8 mm across → one `modify`, the canvas's `data-patch-version` = the reply's, ink at the new place and none at the old; *Apply corrections* off → `editor-map-disabled`, the row kept, the line at its old place, *Hide* disabled; on → moved again, no `applyChange` for the toggle; Escape deselects; a reload keeps `data-mode="map"`, the `modify:<n>` row and the drawn version; the row's locate selects the object, *Revert* empties the list and the stored ops |
 | E2E | `e2e/editor-url.spec.ts` (`chromium`) | §1 "URL" (F31): from the Courses page, a pick → `?course=`; Class view → `view=class&class=`, Course view drops them; Layout → `mode=layout&sheet=<the course's sheet>`; a reload restores the course, Layout and the sheet, then Class view; Field + All controls → `mode=field&view=all`; `history.length` unchanged by every change and one Back lands on `/courses`; `mode=bogus&view=nope` → Course mode, Course view, only `course=` left; a class not the course's → Course view, `view` / `class` gone; `mode=layout&sheet=99999` → Layout, the sheet gone; a deleted course → no course, `course` gone; `mode=layout&template=<seq>` → template scope, kept over a reload, and *New extra template* there opens the new template and writes `template=<new>` (it stays open: the review's create-then-open case); the Courses page's pencil lands on its course (`course=` only), the Controls page's on its control with `control=` gone; on a Pixel 7 viewport no `mode` → Field and `mode=field`, Course → `mode=course` kept over a reload, `mode=layout&sheet=1` → Field and `mode=field` |
 | E2E | `e2e/editor-space.spec.ts` (`chromium`) | §2 "The editor fills the window" (F28): at 1840 × 1090 `editor-page` is at least the viewport less 64 px wide, its bottom within 16 px of the viewport's and not below it, the page has no vertical scroll (`scrollHeight` ≤ `innerHeight`), the header's inner row (`shell-header-inner`) is as wide; on `/courses` `shell-container` and `shell-header-inner` stay ≤ 1280 px |
 | unit (web) | `lib/__tests__/course-overlay-ids.test.ts` | §6.1 (P5): the overlay ids of a start-only course (the regression) and a finish-only one; a full course with explicit ends; the explicit ends win over the nearest; the legacy fallback to the start nearest the first control and the finish nearest the last; no controls and no explicit end → the event default (lowest id); a stale id or one of the wrong role treated as none; none under `firstAsStart` / `lastAsFinish`; no start or finish in the event; an end already at the head or tail not repeated; an unpositioned first control keeps the explicit start, else the default |
@@ -1958,7 +2095,7 @@ whose poll ran meanwhile simply does not conflict (decision log, D10).
 
 ## Pending in this chapter
 
-- **The top bar past tier 2** (§2 "Top bar", F29): below 1170 px of row
+- **The top bar past tier 2** (§2 "Top bar", F29): below 1220 px of row
   only the mode words have gone; the view group, presence chips, a save
   error's words and course names longer than the seed's still wrap the row
   (`flex-wrap`, the last resort the user chose). The thresholds were
@@ -1989,6 +2126,21 @@ whose poll ran meanwhile simply does not conflict (decision log, D10).
   last leg is the group's exit leg); select the last top-level control
   first to append at the top level.
 
+- **Map mode beyond G6** (§13): nodes (G7), drawing and change symbol
+  (G9), join / split / reverse / holes (G10), unresolved ops and waking a
+  dormant patch (G11 — until then a `PATCH_STALE` refusal is the editor's
+  error line), promote (G12). Multi-select (Shift-click, lasso) and the
+  right-click menu of 08 §5.3's Map column are not built; a single
+  selection only. Map mode has no touch gestures (desktop only, 08 §5.5)
+  and no phone entry.
+- **Map mode's second decode** (§13): the model decodes the pinned
+  document on the main thread once per hash, beside the snap and pick
+  indices' own decode and the worker's; a shared main-thread copy is a
+  follow-up. Its Club-full cost, and the draft's (G5's Pending), are
+  unmeasured.
+- **A patch symbol's swatch** (§13 "Inspector"): an added object drawn
+  with a patch symbol shows an empty swatch; the server has no preview
+  route for patch symbols.
 - **Course selection highlight**: the course editor's selection and
   multi-selection rings and object outlines stay UI layer (D5 left 04 §7's
   highlight because it was `map-gl` work outside its area). G5 built the

@@ -11,7 +11,8 @@ import { courseEditorReducer, initialCourseEditorState, type CourseEditorAction,
 import type { PlacementState } from "../../pages/editor/tools/placement";
 import type { AreaKind, PolygonState } from "../../pages/editor/tools/polygon";
 
-export type EditorMode = "course" | "layout" | "field";
+/** `map`: Map mode (docs/course-editor.md §13, G6) — the event's map corrections, course edits locked; desktop only. */
+export type EditorMode = "course" | "layout" | "field" | "map";
 /**
  * `class`: Class view (docs/course-layout.md §6; 08 §5.4) — the course as `classSeq` prints it.
  * `variant`: one variant of a course with variations, `variantKey` (docs/course-editor.md §12; 08 §5.4).
@@ -82,11 +83,11 @@ export function editorReducer(state: EditorState, action: EditorAction): EditorS
   switch (action.type) {
     case "mode":
       // Course and Field (§9) keep the selection. Layout mode locks course edits (08 §5.4): the course stays
-      // selected, a tool, a phantom and the selections of Course mode are dropped.
+      // selected, a tool, a phantom and the selections of Course mode are dropped. Map mode (§13) locks them the same way.
       // The eyedropper is Course mode's (a filter region is edited there): any mode change drops it.
       if (action.mode === state.mode) return state;
-      return action.mode === "layout"
-        ? { ...state, mode: "layout", tool: SELECT, phantom: null, selectedControlId: null, multi: [], selectedObjectId: null }
+      return action.mode === "layout" || action.mode === "map"
+        ? { ...state, mode: action.mode, tool: SELECT, phantom: null, selectedControlId: null, multi: [], selectedObjectId: null }
         : { ...state, mode: action.mode, ...(state.tool.kind === "pick-symbol" ? { tool: SELECT } : {}) };
     case "view":
       // Class view needs a class (the "class" action), Variant view a key (the "variant" action); the other views drop them.

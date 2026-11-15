@@ -25,6 +25,7 @@ function fakeClient() {
       update: { mutate: vi.fn(respond("objUpdate")) },
       delete: { mutate: vi.fn(respond("objDelete")) },
     },
+    mapPatch: { applyChange: { mutate: vi.fn(respond("patchApply")) }, setEnabled: { mutate: vi.fn(respond("patchEnabled")) } },
   } as unknown as EditorClient;
   return { client, calls, fail: (e: unknown) => queue.push(() => { throw e; }), ok: (v: unknown) => queue.push(() => v) };
 }
@@ -156,5 +157,26 @@ describe("EditorWrites (docs/course-editor.md §3)", () => {
     expect(f.calls[0]).toEqual({ proc: "check", input: { controlId: 31, checked: true } });
     await w.updateControl({ id: 31, xpos: 1, ypos: 2 });
     expect(f.calls[1].input.baseVersion).toBe("9");
+  });
+
+  it("map patch writes carry the document hash and no token; the reply is returned, a refusal propagates (§13)", async () => {
+    const f = fakeClient();
+    const w = new EditorWrites(f.client);
+    f.ok({ version: "7", patch: null });
+    const res = await w.applyPatchChange("ab".repeat(32), { put: [{ op: "hide", sourceIndex: 4 }] });
+    expect(res).toEqual({ version: "7", patch: null });
+    expect(f.calls[0]).toEqual({ proc: "patchApply", input: { documentHash: "ab".repeat(32), put: [{ op: "hide", sourceIndex: 4 }] } });
+    f.ok({ version: "8", patch: null });
+    await w.setPatchEnabled(false);
+    expect(f.calls[1]).toEqual({ proc: "patchEnabled", input: { enabled: false } });
+    f.fail(new Error("PATCH_STALE: the patch is keyed to another document"));
+    await expect(w.applyPatchChange("ab".repeat(32), { remove: ["hide:4"] })).rejects.toThrow(/PATCH_STALE/);
+    expect(f.calls).toHaveLength(3);
+  });
+
+  it("without a mapPatch client the patch writes refuse", async () => {
+    const f = fakeClient();
+    const w = new EditorWrites({ ...f.client, mapPatch: undefined });
+    expect(() => w.setPatchEnabled(true)).toThrow(/not available/);
   });
 });

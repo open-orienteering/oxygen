@@ -245,6 +245,19 @@ export function IconModeField({ className, title }: IconProps) {
   );
 }
 
+/** A folded map sheet with a pencil — the editor's Map mode (docs/course-editor.md §13, G6). */
+export function IconModeMap({ className, title }: IconProps) {
+  return (
+    <svg {...base} className={className}>
+      {title ? <title>{title}</title> : null}
+      <path d="M2.75 5.25 7 3.5l5 1.75 4.25-1.75v6" />
+      <path d="M2.75 5.25v11.25L7 14.75l3.5 1.25" />
+      <path d="M7 3.5v11.25M12 5.25v4.5" />
+      <path d="M12.75 17.25l.5-2.25 3.75-3.75 1.75 1.75-3.75 3.75z" />
+    </svg>
+  );
+}
+
 /** An arrow out of a tray — the editor's Export ▾ (F29). */
 export function IconExport({ className, title }: IconProps) {
   return (

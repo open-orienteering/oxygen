@@ -88,6 +88,7 @@ import { CourseSection, MultiSection, SelectionSection } from "./modes/CourseMod
 import { AddMenu, FieldSection, FieldSelection, FieldTopBar, FixStatus, OfflineNotice, OverflowMenu, type AddChoice } from "./modes/FieldMode";
 import { useFieldFix } from "./useFieldFix";
 import { useLayoutMode } from "./modes/LayoutMode";
+import { useMapMode } from "./modes/MapMode";
 import { checkInbound, editorSearchFor, fetchIfIdle, parseEditorUrl, type EditorUrlState } from "../../lib/editor/url";
 import { useClassView } from "./modes/ClassView";
 
@@ -345,6 +346,8 @@ export function EditorPage() {
     run,
     record,
   });
+  // Map mode (§13): the event's map corrections, course edits locked — its own props, rail, inspector and keys.
+  const mapMode = useMapMode({ enabled: state.mode === "map", nameId: nameId ?? "", mapDoc, patch: mapPatch, canEdit, writes, run, record });
   // A root's variants as stored, with their runners (F6b): Export ▾'s variant entries (F8).
   const variantList = trpc.course.variantList.useQuery({ courseId: selectedCourse?.id ?? 1 }, { enabled: !!selectedCourse && hasGroups });
   // The keys of the structure being edited (a new key has no runners until the write lands and they are dealt).
@@ -1588,6 +1591,7 @@ export function EditorPage() {
   const canTonerSaver = !!selectedCourse && rows.some((r) => r.pt);
 
   const layoutKey = layoutMode.onKey;
+  const mapKey = mapMode.onKey;
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       if (descControlId !== null) return;
@@ -1596,11 +1600,12 @@ export function EditorPage() {
       const mod = e.ctrlKey || e.metaKey;
       const plain = !mod && !e.altKey;
       const key = e.key.length === 1 ? e.key.toUpperCase() : e.key;
-      if (state.mode === "layout") {
-        // Layout mode's own keys (docs/course-layout.md §2); undo / redo are the page's.
+      if (state.mode === "layout" || state.mode === "map") {
+        // Layout's and Map mode's own keys (docs/course-layout.md §2, course-editor.md §13); undo / redo are the page's.
+        const modeKey = state.mode === "layout" ? layoutKey : mapKey;
         if (mod && (e.key === "z" || e.key === "Z")) { e.preventDefault(); if (e.shiftKey) runRedo(); else runUndo(); }
         else if (mod && (e.key === "y" || e.key === "Y")) { e.preventDefault(); runRedo(); }
-        else if (!layoutKey(e) && e.key === "Escape" && document.fullscreenElement) void document.exitFullscreen().catch(() => {});
+        else if (!modeKey(e) && e.key === "Escape" && document.fullscreenElement) void document.exitFullscreen().catch(() => {});
         return;
       }
       if (mod && (e.key === "z" || e.key === "Z")) {
@@ -1708,7 +1713,7 @@ export function EditorPage() {
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
   }, [descControlId, runUndo, runRedo, undoStack, state, handleDelete, deleteControls, deleteObject, selectedObject, focusedVertex, drafts, setDraft, updateObject, setChain, exitTool, finishArea,
-    stepSelection, armPlace, setTool, canGap, fitView, areaOpen, canTonerSaver, startArea, layoutKey, selectedLeg, focusedBend, legEditable, writeLeg, addCorridor, selectionGroup, redraw, togglePlacementLoupe]);
+    stepSelection, armPlace, setTool, canGap, fitView, areaOpen, canTonerSaver, startArea, layoutKey, mapKey, selectedLeg, focusedBend, legEditable, writeLeg, addCorridor, selectionGroup, redraw, togglePlacementLoupe]);
 
   // ─── The URL (docs/course-editor.md §1 "URL"; F31) ─────────
   // Read once, then taken step by step as the data that checks each param loads: Layout's sheet or template
@@ -1899,6 +1904,8 @@ export function EditorPage() {
       onRedo={runRedo}
       hideOthers={state.hideOthers}
       onToggleHideOthers={() => dispatch({ type: "toggle-hide-others" })}
+      hideOverprint={mapMode.hideCourse}
+      onToggleHideOverprint={mapMode.toggleHideCourse}
       cutsEnabled={cutsEnabled}
       cutsBusy={setCuts.isPending || cutsQuery.isLoading}
       onToggleCuts={() => setCuts.mutate({ enabled: !cutsEnabled })}
@@ -2180,7 +2187,7 @@ export function EditorPage() {
     <div className="flex gap-2 h-full min-h-0 items-stretch">
       {objectsDom}
       {/* Field mode has no tool rail: it plans nothing new from the desk (§9); the keys still arm the tools. */}
-      {state.mode === "layout" ? layoutMode.rail : !fieldMode && <ToolRail
+      {state.mode === "layout" ? layoutMode.rail : state.mode === "map" ? mapMode.rail : !fieldMode && <ToolRail
         tool={state.tool}
         onTool={(key) => {
           if (key === "V") exitTool();
@@ -2206,7 +2213,7 @@ export function EditorPage() {
         {externalNode}
         {classNotice}
         <Inspector>
-          {state.mode === "layout" ? layoutMode.inspector : <>
+          {state.mode === "layout" ? layoutMode.inspector : state.mode === "map" ? mapMode.inspector : <>
           {fieldMode ? (
             <InspectorSection title={t("fieldControls")} testId="editor-inspector-field" aside={selectedCourse?.name}>{fieldSection}</InspectorSection>
           ) : (
@@ -2251,7 +2258,7 @@ export function EditorPage() {
           fullscreenOverlay={descControl ? (
             <ControlDescriptionEditor controlCode={descControl.code} initial={descControl.description} onSave={saveDescription} onCancel={closeDescription} />
           ) : null}
-          editor={state.mode === "layout" ? layoutEditor : editor}
+          editor={state.mode === "layout" ? layoutEditor : state.mode === "map" ? mapMode.editor : editor}
           highlightCourseName={highlightCourseName}
         />
       </div>

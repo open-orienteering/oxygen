@@ -55,6 +55,12 @@ describe("course.presence", () => {
     expect(seen.others).toEqual([expect.objectContaining({ courseId: b, courseName: "Kort", mode: "layout" })]);
   });
 
+  it("takes Map mode (docs/course-editor.md §13, G6)", async () => {
+    await caller.course.presence({ courseId: a, mode: "map", clientId: "tab-one" });
+    const seen = await caller.course.presence({ courseId: a, mode: "course", clientId: "tab-two" });
+    expect(seen.others).toEqual([expect.objectContaining({ courseId: a, mode: "map" })]);
+  });
+
   it("expires after the TTL: hidden at read, swept by the next heartbeat", async () => {
     await backdate("tab-one", PRESENCE_TTL_MS + 1_000);
     const seen = await caller.course.presence({ courseId: a, mode: "field", clientId: "tab-two" });

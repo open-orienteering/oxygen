@@ -1039,7 +1039,7 @@ export const courseRouter = router({
     .input(
       z.object({
         courseId: z.number().int(),
-        mode: z.enum(["course", "layout", "field"]),
+        mode: z.enum(["course", "layout", "field", "map"]),
         clientId: z.string().min(1).max(64),
       }),
     )

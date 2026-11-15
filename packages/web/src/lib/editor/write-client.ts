@@ -12,7 +12,7 @@
  * tRPC; the page passes `utils.client`.
  */
 
-import type { course, CourseDescriptionInstructions } from "@oxygen/shared";
+import type { course, CourseDescriptionInstructions, mapDocument } from "@oxygen/shared";
 import { VersionBook, publicIdAfterCodes, versionConflictOfError, type VersionedKind } from "../version-book";
 import { conflictDecision, MOVE_FIELDS, type ConflictDecision } from "./conflict";
 
@@ -38,6 +38,12 @@ export interface ObjectUpdateInput {
 
 export type ObjectCreateInput = Pick<course.CourseObject, "kind" | "geometry" | "props" | "scope">;
 
+/** What a `mapPatch.` write answers (docs/map-patches.md §3.2): the row's version and the delivered patch. */
+export interface PatchWriteResult {
+  version: string;
+  patch: mapDocument.MapPatch | null;
+}
+
 /** What the editor needs of the tRPC client (structural: `utils.client` fits). */
 export interface EditorClient {
   course: {
@@ -62,6 +68,11 @@ export interface EditorClient {
     // eslint-disable-next-line @typescript-eslint/no-explicit-any -- as above
     update: { mutate(input: any): Promise<course.CourseObject> };
     delete: { mutate(input: { id: number; baseVersion?: string }): Promise<unknown> };
+  };
+  /** Map mode's corrections (docs/course-editor.md §13; docs/map-patches.md §3.2). */
+  mapPatch?: {
+    applyChange: { mutate(input: { documentHash: string } & mapDocument.PatchChange): Promise<PatchWriteResult> };
+    setEnabled: { mutate(input: { enabled: boolean }): Promise<PatchWriteResult> };
   };
 }
 
@@ -192,5 +203,23 @@ export class EditorWrites {
   /** `courseObject.delete` with the object's token. */
   async deleteObject(id: number): Promise<void> {
     await this.withToken("object", id, { fields: ["delete"] }, (baseVersion) => this.objects().delete.mutate({ id, baseVersion }));
+  }
+
+  private patches(): NonNullable<EditorClient["mapPatch"]> {
+    if (!this.client.mapPatch) throw new Error("mapPatch writes are not available");
+    return this.client.mapPatch;
+  }
+
+  /**
+   * Map mode's one write per gesture (§13): `mapPatch.applyChange` keyed onto `documentHash`. No token — the merge
+   * is per op id, last-writer-wins (docs/map-patches.md §3.2) — so no conflict rule either; a refusal propagates.
+   */
+  applyPatchChange(documentHash: string, change: mapDocument.PatchChange): Promise<PatchWriteResult> {
+    return this.patches().applyChange.mutate({ documentHash, ...change });
+  }
+
+  /** *Apply corrections* (§13; docs/map-patches.md §1.4): `mapPatch.setEnabled`, no token. */
+  setPatchEnabled(enabled: boolean): Promise<PatchWriteResult> {
+    return this.patches().setEnabled.mutate({ enabled });
   }
 }
