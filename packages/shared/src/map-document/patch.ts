@@ -71,18 +71,71 @@ export function patchOpId(op: PatchOp): string {
   return op.op === "add" ? `add:${op.id}` : `${op.op}:${op.sourceIndex}`;
 }
 
+const documentHashSchema = z.string().regex(/^[0-9a-f]{64}$/);
+
+/** A document symbol as another document can find it (map-patches §4.1). */
+export const symbolAnchorSchema = z.strictObject({
+  code: z.string(),
+  name: z.string(),
+  kind: documentSymbolSchema.shape.kind,
+  /** The applied match's library entry, else null. */
+  canonicalId: z.string().nullable(),
+  /** Its position in the source symbol table. */
+  sourceIndex: z.number().int().optional(),
+});
+export type SymbolAnchor = z.output<typeof symbolAnchorSchema>;
+
+/** The object an op was keyed onto, in its origin document: type, symbol and bounding box in paper mm (§4.1). */
+export const targetAnchorSchema = z.strictObject({
+  type: z.number().int().min(0).max(255),
+  symbol: symbolAnchorSchema,
+  centreMm: z.tuple([z.number(), z.number()]),
+  sizeMm: z.tuple([z.number().min(0), z.number().min(0)]),
+});
+export type TargetAnchor = z.output<typeof targetAnchorSchema>;
+
+/** An op that could not follow its object or symbol when the pin moved (map-patches §4.1, row G11). Drawn nowhere. */
+export const unresolvedOpSchema = z.strictObject({
+  /** As it was keyed onto its origin document (coordinates in `unitsPerMm`, `{ doc }` into the origin's table). */
+  op: patchOpSchema,
+  /** The origin document's hash. */
+  from: documentHashSchema,
+  /** The origin's source file hash (`header.source.hash`). */
+  fromSource: z.string().min(1),
+  /** The origin's native unit. */
+  unitsPerMm: z.number().int().positive(),
+  reason: z.enum(["target", "symbol"]),
+  /** hide / modify / resymbol: the object it was on. */
+  target: targetAnchorSchema.optional(),
+  /** The op's `{ doc }` symbol (resymbol / add). */
+  symbol: symbolAnchorSchema.optional(),
+});
+export type UnresolvedOp = z.output<typeof unresolvedOpSchema>;
+export type UnresolvedReason = UnresolvedOp["reason"];
+
+/** An unresolved entry's key: the origin's first 16 hex digits and the op id, so two documents' `hide:17` are two entries. */
+export function unresolvedKey(from: string, op: PatchOp): string {
+  return `${from.slice(0, 16)}:${patchOpId(op)}`;
+}
+
 export const mapPatchSchema = z
   .object({
     /** The document the ops are keyed onto. */
-    documentHash: z.string().regex(/^[0-9a-f]{64}$/),
+    documentHash: documentHashSchema,
     enabled: z.boolean().default(true),
     ops: z.record(z.string(), patchOpSchema).default({}),
     /** Keyed by the full library entry id the symbol was materialised from. */
     symbols: z.record(z.string().min(1), patchSymbolSchema).default({}),
+    /** Ops that lost their object when the pin moved (§4.1); absent = none. */
+    unresolved: z.record(z.string(), unresolvedOpSchema).optional(),
   })
   .superRefine((p, ctx) => {
     for (const [key, op] of Object.entries(p.ops)) {
       if (patchOpId(op) !== key) ctx.addIssue({ code: "custom", path: ["ops", key], message: `key must be the op id ${patchOpId(op)}` });
+    }
+    for (const [key, e] of Object.entries(p.unresolved ?? {})) {
+      const want = unresolvedKey(e.from, e.op);
+      if (want !== key) ctx.addIssue({ code: "custom", path: ["unresolved", key], message: `key must be ${want}` });
     }
   });
 export type MapPatch = z.output<typeof mapPatchSchema>;
@@ -94,6 +147,8 @@ export const patchChangeSchema = z
     put: z.array(patchOpSchema).default([]),
     remove: z.array(z.string().min(1)).default([]),
     putSymbols: z.record(z.string().min(1), patchSymbolSchema).default({}),
+    /** Drop these unresolved entries by key (§4.3); absent keys are no-ops. */
+    removeUnresolved: z.array(z.string().min(1)).default([]),
   })
   .superRefine((c, ctx) => {
     const put = new Set<string>();
@@ -111,6 +166,7 @@ export interface PatchChange {
   put?: PatchOp[];
   remove?: string[];
   putSymbols?: Record<string, PatchSymbol>;
+  removeUnresolved?: string[];
 }
 
 const sortedRecord = <T>(entries: Iterable<[string, T]>): Record<string, T> =>
@@ -118,8 +174,10 @@ const sortedRecord = <T>(entries: Iterable<[string, T]>): Record<string, T> =>
 
 /**
  * The per-op-id merge: `remove` drops ids (absent ones are no-ops), `put`
- * sets states by id, `putSymbols` sets symbols by key. Returns a new patch
- * with sorted keys; twice equals once, and changes to different ids commute.
+ * sets states by id, `putSymbols` sets symbols by key, `removeUnresolved`
+ * drops unresolved entries. Returns a new patch with sorted keys and an
+ * empty `unresolved` omitted; twice equals once, and changes to different
+ * ids commute.
  */
 export function mergePatch(patch: MapPatch, change: PatchChange): MapPatch {
   const ops = new Map(Object.entries(patch.ops));
@@ -127,7 +185,13 @@ export function mergePatch(patch: MapPatch, change: PatchChange): MapPatch {
   for (const op of change.put ?? []) ops.set(patchOpId(op), op);
   const symbols = new Map(Object.entries(patch.symbols));
   for (const [key, sym] of Object.entries(change.putSymbols ?? {})) symbols.set(key, sym);
-  return { ...patch, ops: sortedRecord(ops), symbols: sortedRecord(symbols) };
+  const unresolved = new Map(Object.entries(patch.unresolved ?? {}));
+  for (const key of change.removeUnresolved ?? []) unresolved.delete(key);
+  const { unresolved: _u, ...rest } = patch;
+  void _u;
+  const out: MapPatch = { ...rest, ops: sortedRecord(ops), symbols: sortedRecord(symbols) };
+  if (unresolved.size > 0) out.unresolved = sortedRecord(unresolved);
+  return out;
 }
 
 // ---- application -----------------------------------------------------------

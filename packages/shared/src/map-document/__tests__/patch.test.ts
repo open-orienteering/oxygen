@@ -13,6 +13,8 @@ import {
   type MapPatchInput,
   type PatchOp,
   type PatchSymbol,
+  type UnresolvedOp,
+  unresolvedKey,
 } from "../patch.js";
 
 const HASH = "ab".repeat(32);
@@ -176,6 +178,53 @@ describe("mergePatch", () => {
     const snapshot = JSON.stringify(base);
     mergePatch(base, { put: [{ op: "hide", sourceIndex: 12 }], remove: ["hide:11"], putSymbols: { k: boulder } });
     expect(JSON.stringify(base)).toBe(snapshot);
+  });
+});
+
+const FROM = "cd".repeat(32);
+const lost = (op: PatchOp, reason: UnresolvedOp["reason"] = "target"): UnresolvedOp => ({
+  op, from: FROM, fromSource: "00".repeat(32), unitsPerMm: 100, reason,
+  target: { type: OBJECT_TYPE.line, symbol: { code: "101.0", name: "Contour", kind: "line", canonicalId: null }, centreMm: [5, 0], sizeMm: [10, 0] },
+});
+
+describe("patch schema: unresolved entries (§4.1, G11)", () => {
+  it("parses entries keyed by origin and op id; absent stays absent", () => {
+    const e = lost({ op: "hide", sourceIndex: 3 });
+    const key = unresolvedKey(FROM, e.op);
+    expect(key).toBe(`${"cd".repeat(8)}:hide:3`);
+    const p = mapPatchSchema.parse({ documentHash: HASH, unresolved: { [key]: e } });
+    expect(p.unresolved).toEqual({ [key]: e });
+    expect("unresolved" in mapPatchSchema.parse({ documentHash: HASH })).toBe(false);
+  });
+
+  it("rejects a key that is not the entry's, and an unknown reason", () => {
+    const e = lost({ op: "hide", sourceIndex: 3 });
+    expect(mapPatchSchema.safeParse({ documentHash: HASH, unresolved: { [`${"cd".repeat(8)}:hide:4`]: e } }).success).toBe(false);
+    expect(mapPatchSchema.safeParse({ documentHash: HASH, unresolved: { [unresolvedKey(FROM, e.op)]: { ...e, reason: "gone" } } }).success).toBe(false);
+  });
+
+  it("mergePatch drops entries by key (absent keys no-ops, twice = once), sorts them and omits an empty record", () => {
+    const a = lost({ op: "hide", sourceIndex: 9 });
+    const b = lost({ op: "hide", sourceIndex: 2 });
+    const p = mapPatchSchema.parse({ documentHash: HASH, unresolved: { [unresolvedKey(FROM, a.op)]: a, [unresolvedKey(FROM, b.op)]: b } });
+    const sorted = mergePatch(p, {});
+    expect(Object.keys(sorted.unresolved!)).toEqual([unresolvedKey(FROM, b.op), unresolvedKey(FROM, a.op)]);
+    const once = mergePatch(p, { removeUnresolved: [unresolvedKey(FROM, a.op), "nope:hide:1"] });
+    expect(mergePatch(once, { removeUnresolved: [unresolvedKey(FROM, a.op)] })).toEqual(once);
+    expect(Object.keys(once.unresolved!)).toEqual([unresolvedKey(FROM, b.op)]);
+    const none = mergePatch(once, { removeUnresolved: [unresolvedKey(FROM, b.op)] });
+    expect("unresolved" in none).toBe(false);
+    expect(JSON.stringify(none)).toBe(JSON.stringify(mergePatch(mapPatchSchema.parse({ documentHash: HASH }), {})));
+    expect(p.unresolved).toHaveProperty(unresolvedKey(FROM, a.op));
+  });
+
+  it("applyPatch draws nothing of them: the same document and issues with and without", () => {
+    const doc = makeDoc();
+    const base = patchOf([{ op: "hide", sourceIndex: 11 }]);
+    const e = lost({ op: "hide", sourceIndex: 12 });
+    const withLost = { ...base, unresolved: { [unresolvedKey(FROM, e.op)]: e } };
+    expect(plain(applyPatch(doc, withLost))).toEqual(plain(applyPatch(doc, base)));
+    expect(applyPatch(doc, { ...patchOf([]), unresolved: withLost.unresolved }).document).toBe(doc);
   });
 });
 
