@@ -3,7 +3,8 @@ import { gpsTrack, mapGeo } from "@oxygen/shared";
 import type { TrackMeta } from "../../../lib/editor/write-client";
 import {
   MAX_CALL_POINTS, MAX_CALL_TRACKS, MAX_TRACK_POINTS, TRACK_COLOURS, chunkTracks, deletedTrackImport, disabledReason, locateBounds, parseVisibility,
-  planImport, projectTrackRow, pruneVisibility, trackColour, trackErrorCode, trackRows, type TrackGeometry,
+  planImport, projectTrackRow, pruneVisibility, trackColour, trackErrorCode, trackRows, type TrackGeometry, defaultVisible, nextOverrides, pruneSelection,
+  showConvertedKey, visibilityKey,
 } from "../modes/map/tracks/model";
 
 /** SWEREF99 TM, 1:10 000, 100 units per mm, origin at 500 000 / 6 500 000 (as project.test.ts). */
@@ -150,6 +151,49 @@ describe("trackRows (§5.1 'The list')", () => {
     expect(rows[1].points).toBe(2);
     expect(rows[2].error).toBe("not-projectable");
     expect(rows[0].colour).toBe(trackColour("a"));
+  });
+
+  it("a converted track is hidden by default, shown with Show converted; the device's override wins either way (G26)", () => {
+    const geom = new Map<string, TrackGeometry | { error: string }>();
+    const conv = { convertedOp: "add:0190a000-0000-7000-8000-0000000000c1" };
+    const metas = [meta("a"), meta("b", conv), meta("c", conv), meta("d", conv)];
+    const overrides = { c: true, d: false };
+    expect(trackRows(metas, geom, overrides).map((r) => r.visible)).toEqual([true, false, true, false]);
+    expect(trackRows(metas, geom, overrides, true).map((r) => r.visible)).toEqual([true, true, true, false]);
+    expect(defaultVisible(meta("a"), false)).toBe(true);
+    expect(defaultVisible(meta("b", conv), false)).toBe(false);
+    expect(defaultVisible(meta("b", conv), true)).toBe(true);
+  });
+});
+
+describe("the eye's overrides and the conversion's selection (G26)", () => {
+  const conv = meta("b", { convertedOp: "add:0190a000-0000-7000-8000-0000000000c1" });
+  it("an override is kept only where it differs from the default", () => {
+    // Hiding a plain track, showing it again.
+    expect(nextOverrides({}, meta("a"), false, false)).toEqual({ a: false });
+    expect(nextOverrides({ a: false }, meta("a"), true, false)).toEqual({});
+    // A converted track: shown is the override, hidden again drops it; under Show converted the other way round.
+    expect(nextOverrides({}, conv, true, false)).toEqual({ b: true });
+    expect(nextOverrides({ b: true }, conv, false, false)).toEqual({});
+    expect(nextOverrides({}, conv, false, true)).toEqual({ b: false });
+    // Others untouched.
+    expect(nextOverrides({ x: false }, meta("a"), false, false)).toEqual({ x: false, a: false });
+  });
+
+  it("Show converted has its own key per event, beside the overrides", () => {
+    expect(showConvertedKey("itest")).toBe("oxygen:gps-tracks:itest:show-converted");
+    expect(showConvertedKey("itest")).not.toBe(visibilityKey("itest"));
+  });
+
+  it("the selection keeps listed, ready rows in list order", () => {
+    const rows = [
+      { meta: meta("a"), state: "ready" as const },
+      { meta: meta("b"), state: "loading" as const },
+      { meta: meta("c"), state: "error" as const },
+      { meta: meta("d"), state: "ready" as const },
+    ];
+    expect(pruneSelection(["d", "b", "c", "a", "gone"], rows)).toEqual(["a", "d"]);
+    expect(pruneSelection([], rows)).toEqual([]);
   });
 });
 

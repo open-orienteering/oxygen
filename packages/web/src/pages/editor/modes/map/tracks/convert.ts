@@ -167,7 +167,7 @@ export interface StoredConvert extends ConvertSettings {
 
 /** The stored settings, clamped; anything unreadable the defaults with no symbol (§6 answer 3: none the first time). */
 export function parseStoredConvert(raw: string | null): StoredConvert {
-  let v: unknown = null;
+  let v: unknown;
   try {
     v = raw ? JSON.parse(raw) : null;
   } catch {

@@ -1,9 +1,10 @@
 /**
  * The inspector's *GPS tracks* section (docs/course-editor.md §13 "GPS tracks"; docs/map-gps-tracks.md §5.1): import
- * by the file picker or a drop, the list with show / hide, rename, delete and locate, or the reason it is off.
+ * by the file picker or a drop, the list with show / hide, rename, delete and locate, or the reason it is off; for
+ * G26 the tracks to convert (a checkbox per ready row), *Show converted*, *Convert to line* and the convert panel.
  */
 
-import { useRef, useState, type DragEvent, type KeyboardEvent } from "react";
+import { useRef, useState, type DragEvent, type KeyboardEvent, type ReactNode } from "react";
 import { useTranslation } from "react-i18next";
 import { IconEye, IconEyeOff } from "../../../../../components/map-icons";
 import type { MapTracks } from "./useMapTracks";
@@ -11,8 +12,20 @@ import type { TrackRow } from "./model";
 
 type Panel = NonNullable<MapTracks["panel"]>;
 
-function TrackRowItem({ row, onVisible, onRename, onDelete, onLocate }: {
+/** *Convert to line* (G26): the button's state and the panel it opens, from Map mode. */
+export interface TracksConvert {
+  open: boolean;
+  /** Why the button is off (a sentence for its title), or null. */
+  off: string | null;
+  onOpen: () => void;
+  /** The convert panel while open. */
+  content: ReactNode;
+}
+
+function TrackRowItem({ row, selected, onSelect, onVisible, onRename, onDelete, onLocate }: {
   row: TrackRow;
+  selected: boolean;
+  onSelect: Panel["onSelect"];
   onVisible: Panel["onVisible"];
   onRename: Panel["onRename"];
   onDelete: Panel["onDelete"];
@@ -45,6 +58,8 @@ function TrackRowItem({ row, onVisible, onRename, onDelete, onLocate }: {
       data-points={row.points} data-length-m={lengthM ?? undefined} data-outside={geometry ? outside : undefined}
       data-converted={meta.convertedOp ? "true" : "false"} className="flex flex-col gap-0.5 rounded px-1 py-1 hover:bg-slate-50">
       <div className="flex items-center gap-1.5">
+        <input type="checkbox" data-testid="editor-track-select" checked={selected} disabled={row.state !== "ready"} onChange={(e) => onSelect(meta.id, e.currentTarget.checked)}
+          title={t("trackSelect")} aria-label={t("trackSelect")} className="shrink-0 w-3 h-3 cursor-pointer disabled:cursor-default" />
         <span data-testid="editor-track-swatch" data-colour={row.colour} className="shrink-0 w-3 h-1.5 rounded-sm" style={{ backgroundColor: row.colour }} />
         {editing ? (
           <input data-testid="editor-track-name-input" autoFocus defaultValue={meta.name ?? ""} placeholder={meta.sourceName} maxLength={200}
@@ -80,7 +95,7 @@ function TrackRowItem({ row, onVisible, onRename, onDelete, onLocate }: {
   );
 }
 
-export function TracksPanel({ panel }: { panel: Panel }) {
+export function TracksPanel({ panel, convert }: { panel: Panel; convert?: TracksConvert }) {
   const { t } = useTranslation("editor");
   const input = useRef<HTMLInputElement>(null);
   const [dragOver, setDragOver] = useState(false);
@@ -137,10 +152,27 @@ export function TracksPanel({ panel }: { panel: Panel }) {
       ) : (
         <ul className="flex flex-col">
           {panel.rows.map((row) => (
-            <TrackRowItem key={row.meta.id} row={row} onVisible={panel.onVisible} onRename={panel.onRename} onDelete={panel.onDelete} onLocate={panel.onLocate} />
+            <TrackRowItem key={row.meta.id} row={row} selected={panel.selected.has(row.meta.id)} onSelect={panel.onSelect} onVisible={panel.onVisible}
+              onRename={panel.onRename} onDelete={panel.onDelete} onLocate={panel.onLocate} />
           ))}
         </ul>
       )}
+      {panel.rows.some((r) => r.meta.convertedOp) && (
+        <label className="flex items-center gap-1.5 text-[11px] text-slate-600 cursor-pointer">
+          <input type="checkbox" data-testid="editor-tracks-show-converted" checked={panel.showConverted} onChange={(e) => panel.onShowConverted(e.currentTarget.checked)}
+            className="w-3 h-3" />
+          {t("tracksShowConverted")}
+        </label>
+      )}
+      {convert && panel.rows.length > 0 && !convert.open && (
+        <div className="flex items-center gap-1.5">
+          <button type="button" data-testid="editor-tracks-convert" disabled={!!convert.off} onClick={convert.onOpen} title={convert.off ?? t("trackConvertHint")}
+            className="px-2 py-0.5 rounded border border-slate-200 text-slate-700 hover:bg-white disabled:opacity-40 cursor-pointer disabled:cursor-not-allowed">
+            {t("trackConvert", { count: panel.selected.size })}
+          </button>
+        </div>
+      )}
+      {convert?.open && convert.content}
     </div>
   );
 }
