@@ -60,5 +60,7 @@ describe("the top bar's save indicator (§3: an error or a conflict never hides)
     expect(saveIndicator("saving")).toEqual({ tone: "busy", alwaysText: false, key: "statusSaving" });
     expect(saveIndicator("error")).toEqual({ tone: "alert", alwaysText: true, key: "statusError" });
     expect(saveIndicator("conflict")).toEqual({ tone: "alert", alwaysText: true, key: "statusConflict" });
+    // D9c: Field mode's writes wait on the device — words shown, never "Saved".
+    expect(saveIndicator("queued")).toEqual({ tone: "wait", alwaysText: true, key: "statusQueued" });
   });
 });

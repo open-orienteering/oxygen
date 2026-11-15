@@ -263,6 +263,17 @@ describe("concurrency (course-layer.md §7)", () => {
     expect(conflict.differing).not.toContain("notes");
   });
 
+  it("a move queued before a check-off elsewhere: differing names the check, not the position (D9c rebases it)", async () => {
+    const before = (await caller.control.list()).find((c) => c.id === 33)!;
+    const checked = await caller.control.check({ controlId: 33, checked: true });
+    const conflict = await conflictOf(caller.control.update({ id: 33, xpos: 53, ypos: 23, baseVersion: before.version }));
+    expect(conflict).toMatchObject({ kind: "control", id: 33, version: checked.version });
+    expect(conflict.differing).toContain("checkedAt");
+    expect(conflict.differing).not.toContain("xpos");
+    expect(conflict.differing).not.toContain("ypos");
+    await caller.control.check({ controlId: 33, checked: false });
+  });
+
   it("reports differing as null when the base entry is not on this node (token 0)", async () => {
     const conflict = await conflictOf(caller.control.update({ id: 33, name: "x", baseVersion: "0" }));
     expect(conflict.differing).toBeNull();

@@ -14,8 +14,8 @@ import { useTranslation } from "react-i18next";
 import { IconStats } from "../../components/map-icons";
 import { checksBadge, courseInfoRows, saveIndicator, type SaveState, type StatusInput } from "../../lib/editor/status";
 
-const DOT = { ok: "bg-emerald-500", busy: "bg-slate-300 animate-pulse", alert: "bg-red-500" } as const;
-const TEXT = { ok: "text-emerald-700", busy: "text-slate-400", alert: "text-red-600 font-medium" } as const;
+const DOT = { ok: "bg-emerald-500", busy: "bg-slate-300 animate-pulse", alert: "bg-red-500", wait: "bg-amber-500" } as const;
+const TEXT = { ok: "text-emerald-700", busy: "text-slate-400", alert: "text-red-600 font-medium", wait: "text-amber-700 font-medium" } as const;
 
 export function SaveIndicator({ save }: { save: SaveState }) {
   const { t } = useTranslation("editor");
@@ -26,7 +26,7 @@ export function SaveIndicator({ save }: { save: SaveState }) {
       className="flex items-center gap-1 shrink-0 text-[11px] whitespace-nowrap px-0.5">
       <span aria-hidden className={`inline-block w-2 h-2 rounded-full ${DOT[s.tone]}`} />
       {/* Saved / saving are the dot alone (the words are its title and for screen readers): the top bar's row must not
-          wrap on a laptop screen. An error or a conflict always shows its words. */}
+          wrap on a laptop screen. An error, a conflict or a queue (D9c) always shows its words. */}
       <span data-testid="editor-save-state-text" className={`${TEXT[s.tone]} ${s.alwaysText ? "" : "sr-only"}`}>{text}</span>
     </span>
   );

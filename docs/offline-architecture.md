@@ -356,6 +356,24 @@ Stations are clients, not replicas. When a station loses its node
 - `computeLocalReadout` (the client-side readout fallback) remains for
   blip-mode card reads, with parity to the server path asserted by tests.
 
+**The course editor's Field-mode outbox** (row D9c; `course-editor.md` §9
+"Offline") is a second Dexie table beside `events`, `controlWrites` in the
+same `oxygen-offline` database (version 4, additive). It holds the
+setter's control moves (`control.update { xpos, ypos }`) and check-offs
+(`control.check`) made without a connection, and replays them as the
+tRPC mutations themselves — not through `events.push` — in order, through
+the editor's write client, each move with the version token it was queued
+with. Controls are journaled reference data written on the node the client
+talks to ("Reference data during a lease"), not cloud-owned: `events.push`
+would apply them as full-row last-writer-wins `control.upserted` entries
+keyed by the row UUID, which the web holds neither of, and without the
+token neither the field-move rebase nor "Moved by X" (`course-editor.md`
+§3) could happen. A refusal (a leased event's "checked out to venue", a
+deleted control) is kept as a failed entry with Retry / Discard; nothing
+is dropped silently. Its own-writes overlay patches the editor's query
+cache (`course.controlCoordinates`, `control.list`) rather than a
+projection table, because the canvas reads the cache.
+
 ## Transport: Local Network Access (no TLS certificates)
 
 > **Implementation status (pivot Step 5, 2026-07-16).** Landed:

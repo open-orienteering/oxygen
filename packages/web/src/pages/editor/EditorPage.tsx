@@ -85,8 +85,10 @@ import type { MapInfoInput } from "../../lib/editor/map-info";
 import { useCourseChecks } from "./useCourseChecks";
 import type { EditorCheck } from "../../lib/editor/checks";
 import { CourseSection, MultiSection, SelectionSection } from "./modes/CourseMode";
-import { AddMenu, FieldSection, FieldSelection, FieldTopBar, FixStatus, OfflineNotice, OverflowMenu, type AddChoice } from "./modes/FieldMode";
+import { AddMenu, FieldQueueNotice, FieldSection, FieldSelection, FieldTopBar, FixStatus, OverflowMenu, type AddChoice } from "./modes/FieldMode";
 import { useFieldFix } from "./useFieldFix";
+import { useFieldOutbox } from "./useFieldOutbox";
+import type { ControlMoveEntry } from "../../lib/offline/control-outbox";
 import { useLayoutMode } from "./modes/LayoutMode";
 import { useMapMode } from "./modes/MapMode";
 import { checkInbound, editorSearchFor, fetchIfIdle, parseEditorUrl, type EditorUrlState } from "../../lib/editor/url";
@@ -108,7 +110,11 @@ function defaultProps(kind: AreaKind): CourseObject["props"] {
 /** A conflict the user sees (docs/course-editor.md §3). */
 type Notice =
   | { kind: "refresh"; items: string[] | null }
-  | { kind: "moved"; controlId: number; mine: Pt; theirs: Pt | null; by?: { name: string; at: string } | null };
+  | {
+    kind: "moved"; controlId: number; mine: Pt; theirs: Pt | null; by?: { name: string; at: string } | null;
+    /** A queued Field-mode write that met a move elsewhere on replay (D9c): its outbox entry, which the buttons settle. */
+    queueSeq?: number;
+  };
 
 export function EditorPage() {
   const { t } = useTranslation("editor");
@@ -335,6 +341,31 @@ export function EditorPage() {
     bumpHistory();
     return entry;
   }, [undoStack, bumpHistory]);
+
+  // Field mode's writes through the device's outbox (§9 "Offline", D9c): moves and check-offs queue while
+  // offline and replay on reconnect. Their undo entries go through it too, so they alone undo while offline.
+  const outbox = useFieldOutbox({ competitionId: nameId ?? "", writes, online, onSettled: invalidate });
+  const fieldEntries = useRef(new WeakSet<object>());
+  const recordField = useCallback((undo: () => Promise<unknown>, redo: () => Promise<unknown>) => {
+    fieldEntries.current.add(record(undo, redo));
+  }, [record]);
+  // A queued move that met a move elsewhere on replay becomes the moved notice (§3), one at a time; settled
+  // (Keep mine / Keep theirs, or moved again), it goes and the next follows.
+  useEffect(() => {
+    if (notice?.kind === "moved" && notice.queueSeq !== undefined) {
+      if (!outbox.entries.some((e) => e.seq === notice.queueSeq && e.status === "conflict")) setNotice(null);
+      return;
+    }
+    const c = outbox.entries.find((e): e is ControlMoveEntry => e.kind === "move" && e.status === "conflict");
+    if (notice || !c || c.seq === undefined) return;
+    const { controlId, seq } = c;
+    setNotice({ kind: "moved", controlId, mine: { x: c.input.xpos, y: c.input.ypos }, theirs: c.theirs ?? null, queueSeq: seq });
+    // "Moved by X at T" (D11), as for a direct write.
+    void client.control.lastChange.query({ id: controlId }).then(
+      (by) => setNotice((n) => (n?.kind === "moved" && n.queueSeq === seq ? { ...n, by } : n)),
+      () => undefined,
+    );
+  }, [outbox.entries, notice, client]);
 
   const layoutMode = useLayoutMode({
     enabled: state.mode === "layout",
@@ -663,11 +694,19 @@ export function EditorPage() {
     setLastMovedId(id);
     void (async () => {
       const from = prev ? { x: prev.mapX, y: prev.mapY } : undefined;
+      // Field mode (§9 "Offline", D9c), or a control whose move already waits in the outbox (any mode: the newer
+      // position merges into its entry instead of racing it): through the outbox, which sends at once when it can.
+      if (fieldMode || outbox.entries.some((e) => e.kind === "move" && e.controlId === id)) {
+        const redo = () => outbox.write({ kind: "move", input: { id, xpos: pt.x, ypos: pt.y, autoDescribe: true }, from });
+        if ((await run(redo, { controlId: id, mine: pt })) === undefined || !prev) return;
+        recordField(() => outbox.write({ kind: "move", input: { id, xpos: prev.mapX, ypos: prev.mapY, description: prev.description ?? null } }), redo);
+        return;
+      }
       const redo = () => writes.updateControl({ id, xpos: pt.x, ypos: pt.y, autoDescribe: true }, from);
       if ((await run(redo, { controlId: id, mine: pt })) === undefined || !prev) return;
       record(() => writes.updateControl({ id, xpos: prev.mapX, ypos: prev.mapY, description: prev.description ?? null }), redo);
     })();
-  }, [coordsById, writes, run, record]);
+  }, [coordsById, writes, run, record, fieldMode, outbox, recordField]);
 
   const handleLabelMoveEnd = useCallback((idStr: string, offset: { dx: number; dy: number }) => {
     const id = parseInt(idStr, 10);
@@ -837,14 +876,14 @@ export function EditorPage() {
     })();
   }, [writes, run, record]);
 
-  /** Check-off (§9; `courses.review`): one write, one undo entry (undo is the opposite check). */
+  /** Check-off (§9; `courses.review`): one write, one undo entry (undo is the opposite check); through the outbox (D9c). */
   const checkControl = useCallback((id: number, checked: boolean) => {
     void (async () => {
-      const redo = () => writes.checkControl(id, checked);
+      const redo = () => outbox.write({ kind: "check", controlId: id, checked });
       if ((await run(redo)) === undefined) return;
-      record(() => writes.checkControl(id, !checked), redo);
+      recordField(() => outbox.write({ kind: "check", controlId: id, checked: !checked }), redo);
     })();
-  }, [writes, run, record]);
+  }, [outbox, run, recordField]);
 
   /**
    * The nudge pad (§9): each press is one move with undo, queued behind the previous so presses faster than
@@ -857,11 +896,12 @@ export function EditorPage() {
     setLastMovedId(id);
     const description = coordsById.get(id)?.description ?? null;
     nudgeQueue.current = nudgeQueue.current.then(async () => {
-      const redo = () => writes.updateControl({ id, xpos: to.x, ypos: to.y, autoDescribe: true }, from);
+      // Through the outbox (D9c): queued while offline, sent at once otherwise.
+      const redo = () => outbox.write({ kind: "move", input: { id, xpos: to.x, ypos: to.y, autoDescribe: true }, from });
       if ((await run(redo, { controlId: id, mine: to })) === undefined) { setNudged(null); return; }
-      record(() => writes.updateControl({ id, xpos: from.x, ypos: from.y, description }), redo);
+      recordField(() => outbox.write({ kind: "move", input: { id, xpos: from.x, ypos: from.y, description } }), redo);
     }).catch(() => {});
-  }, [writes, run, record, coordsById]);
+  }, [outbox, run, recordField, coordsById]);
   useEffect(() => {
     if (!nudged) return;
     const c = coordsById.get(nudged.id);
@@ -1492,12 +1532,9 @@ export function EditorPage() {
   }, meterDraft), mapScale), [rows, itemOfRow, mapScale, crossingPt, meterDraft]);
   const totalMeters = useMemo(() => legMeters.reduce<number>((sum, m) => sum + (m ?? 0), 0), [legMeters]);
 
-  // Offline, Field mode views only (§9 "Offline"): a drag snaps back instead of writing.
-  const fieldReadOnly = fieldMode && !online;
-  const fieldMoveEnd = useCallback((id: string, pt: Pt) => {
-    if (fieldReadOnly) setMoveEpoch((v) => v + 1);
-    else handleMoveEnd(id, pt);
-  }, [fieldReadOnly, handleMoveEnd]);
+  // Offline, Field mode queues its moves and check-offs (§9 "Offline", D9c); `+` (a create) still needs a connection.
+  const fieldOffline = fieldMode && !online;
+  const fieldMoveEnd = handleMoveEnd;
 
   // Class view is Course view drawn through the class's sheet (docs/course-layout.md §6).
   const fitClassPage = useCallback((bounds: { minX: number; minY: number; maxX: number; maxY: number }) => {
@@ -1557,18 +1594,23 @@ export function EditorPage() {
   );
 
   // ─── Undo / redo, keyboard, deep links ───────────────────
+  // Offline, only Field mode's queued writes undo / redo (D9c): any other entry's write would fail and be dropped.
+  const undoable = online || (!!undoStack.top && fieldEntries.current.has(undoStack.top));
+  const redoable = online || (!!undoStack.nextRedo && fieldEntries.current.has(undoStack.nextRedo));
   const runUndo = useCallback(() => {
+    if (!undoable) return;
     setMoveEpoch((v) => v + 1);
     setFocus(null); // its index may name another vertex now
     setBendFocus(null);
     void run(async () => { await undoStack.undo(); bumpHistory(); });
-  }, [run, undoStack, bumpHistory]);
+  }, [run, undoStack, bumpHistory, undoable]);
   const runRedo = useCallback(() => {
+    if (!redoable) return;
     setMoveEpoch((v) => v + 1);
     setFocus(null);
     setBendFocus(null);
     void run(async () => { await undoStack.redo(); bumpHistory(); });
-  }, [run, undoStack, bumpHistory]);
+  }, [run, undoStack, bumpHistory, redoable]);
 
   /** Tab / Shift+Tab: the next / previous control of the course, centred (§6.5). */
   const stepSelection = useCallback((dir: 1 | -1) => {
@@ -1828,7 +1870,7 @@ export function EditorPage() {
   const cutsEnabled = cutsQuery.data?.enabled !== false;
 
   // ─── Chrome ──────────────────────────────────────────────
-  const canUndo = undoStack.canUndo, canRedo = undoStack.canRedo;
+  const canUndo = undoStack.canUndo && undoable, canRedo = undoStack.canRedo && redoable;
   // Materialised variants are edited through their root (course-layer.md §12): the picker lists roots and plain courses.
   const courseOptions = useMemo(() => (courses.data ?? []).filter((c) => c.parentCourseId == null).map((c) => ({ id: c.id, name: c.name })), [courses.data]);
   // The map-info dialog's values (§2, P6): the queries above and the loaded document's header.
@@ -1843,7 +1885,9 @@ export function EditorPage() {
   };
   // The save state and the course-info values (§2, §3): the top bar's indicator and popover (no map scale since P6),
   // the phone's peek line (with it).
-  const save: SaveState = pendingOps > 0 ? "saving" : notice ? "conflict" : errorMsg ? "error" : "saved";
+  // Field mode's outbox (D9c): refused entries are "Not saved", waiting ones "Waiting to send" — never "Saved".
+  const save: SaveState = pendingOps > 0 ? "saving" : notice ? "conflict" : errorMsg || outbox.counts.failed > 0 ? "error"
+    : outbox.counts.total > 0 ? "queued" : "saved";
   const status: StatusInput = {
     controls: selectedCourse ? sequenceIds.length : null,
     lengthM: selectedCourse ? courseChecks.lengthM ?? totalMeters : null,
@@ -1968,8 +2012,8 @@ export function EditorPage() {
   const fieldSelection = fieldMode && selectedCoord && selectedFieldPt ? (
     <FieldSelection row={selectedFieldRow} pt={selectedFieldPt} mapScale={mapScale}
       onNudge={(to) => nudgeTo(selectedCoord.id, selectedFieldPt, to)}
-      onCheck={fieldReadOnly ? null : (checked) => checkControl(selectedCoord.id, checked)}
-      canCheck={canReview} canMove={!fieldReadOnly} />
+      onCheck={(checked) => checkControl(selectedCoord.id, checked)}
+      canCheck={canReview} canMove />
   ) : null;
   const selectRow = (id: number) => {
     dispatch({ type: "select", id });
@@ -1980,7 +2024,7 @@ export function EditorPage() {
     <>
       <div className="px-2.5 py-1"><FixStatus accuracyM={fix?.accuracy ?? null} error={geo.error} watching={geo.watching} /></div>
       <FieldSection rows={fieldList} selectedControlId={state.selectedControlId} onSelectRow={selectRow}
-        onCheck={fieldReadOnly ? null : checkControl} canCheck={canReview} hasCourse={!!(selectedCourse && structure)} fix={paperFix} mapScale={mapScale} />
+        onCheck={checkControl} canCheck={canReview} hasCourse={!!(selectedCourse && structure)} fix={paperFix} mapScale={mapScale} />
     </>
   );
   const fieldKpi = fieldMode && selectedCourse
@@ -2099,17 +2143,31 @@ export function EditorPage() {
           <button type="button" data-testid="editor-conflict-keep-mine" className="px-2 py-0.5 rounded bg-amber-600 text-white cursor-pointer"
             onClick={() => {
               const n = notice;
-              void run(() => writes.updateControl({ id: n.controlId, xpos: n.mine.x, ypos: n.mine.y }));
+              // A queued write's conflict (D9c): its entry goes out again from their position on the server's token.
+              if (n.queueSeq !== undefined) void outbox.resolve(n.queueSeq, "mine");
+              else void run(() => writes.updateControl({ id: n.controlId, xpos: n.mine.x, ypos: n.mine.y }));
             }}>
             {t("keepMine")}
           </button>
         )}
         <button type="button" data-testid="editor-conflict-dismiss" className="px-2 py-0.5 rounded border border-amber-300 cursor-pointer"
-          onClick={() => { setNotice(null); setMoveEpoch((v) => v + 1); }}>
+          onClick={() => {
+            // A queued write's conflict goes when its entry does (the effect above).
+            if (notice.kind === "moved" && notice.queueSeq !== undefined) void outbox.resolve(notice.queueSeq, "theirs");
+            else setNotice(null);
+            setMoveEpoch((v) => v + 1);
+          }}>
           {notice.kind === "moved" ? t("keepTheirs") : t("dismiss")}
         </button>
       </div>
     </div>
+  ) : null;
+
+  // Field mode's outbox (§9 "Offline", D9c): shown offline in Field mode and whenever writes wait or were refused.
+  const firstFailed = outbox.entries.find((e) => e.status === "failed");
+  const queueNode = (fieldOffline || outbox.counts.total > 0) ? (
+    <FieldQueueNotice online={online} waiting={outbox.counts.pending + outbox.counts.conflict} failed={outbox.counts.failed}
+      reason={firstFailed?.error ?? null} onRetry={() => { void outbox.retryFailed(); }} onDiscard={() => { void outbox.discardFailed(); }} />
   ) : null;
 
   /** The `+` menu (§10): an armed tool runs the pin-drop flow; the sheet drops to peek so the map shows. */
@@ -2157,12 +2215,12 @@ export function EditorPage() {
         <div className="absolute top-2 inset-x-2 z-30 flex flex-col gap-1.5 pointer-events-none">
           {noticeNode}
           {externalNode}
-          {fieldReadOnly && <OfflineNotice />}
+          {queueNode}
           {errorMsg && <span data-testid="editor-error" className="pointer-events-auto w-fit text-[11px] text-red-600 bg-white/95 rounded px-1.5">{errorMsg}</span>}
           {showExhausted && <span data-testid="series-exhausted" className="pointer-events-auto w-fit text-[11px] text-amber-700 bg-white/95 rounded px-1.5">{tc("seriesExhausted")}</span>}
         </div>
         {!toolActive && (
-          <AddMenu bottomPx={sheetPx} disabled={fieldReadOnly} canTonerSaver={canTonerSaver} onPick={pickAdd} />
+          <AddMenu bottomPx={sheetPx} disabled={fieldOffline} canTonerSaver={canTonerSaver} onPick={pickAdd} />
         )}
         <BottomSheet detent={detent} onDetent={setDetent} onHeight={onSheetHeight} peek={peek} label={t("sheet")}>
           {suggestions.length > 0 && !toolActive && (
@@ -2208,7 +2266,7 @@ export function EditorPage() {
         onSnapping={() => dispatch({ type: "toggle-snapping" })}
       />}
       <div className="flex flex-col gap-2 min-h-0 h-full">
-        {fieldReadOnly && <div className="w-64"><OfflineNotice /></div>}
+        {queueNode && <div className="w-64">{queueNode}</div>}
         {noticeNode}
         {externalNode}
         {classNotice}

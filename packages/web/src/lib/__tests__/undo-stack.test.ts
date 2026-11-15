@@ -98,3 +98,19 @@ describe("UndoStack.top", () => {
     expect(s.top).toBe(a);
   });
 });
+
+describe("UndoStack.nextRedo", () => {
+  it("is the entry the next redo re-applies (D9c: offline, only Field mode's queued writes undo / redo)", async () => {
+    const s = new UndoStack(5);
+    expect(s.nextRedo).toBeUndefined();
+    const a = { undo: () => {}, redo: () => {} }, b = { undo: () => {}, redo: () => {} };
+    s.push(a);
+    s.push(b);
+    await s.undo();
+    expect(s.nextRedo).toBe(b);
+    await s.undo();
+    expect(s.nextRedo).toBe(a);
+    s.push(b);
+    expect(s.nextRedo).toBeUndefined();
+  });
+});

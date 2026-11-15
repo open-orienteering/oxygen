@@ -142,10 +142,10 @@ exit bubble on every pointer move
 | Inspector (`Inspector.tsx`, `modes/CourseMode.tsx`, `modes/ObjectSection.tsx`) | `editor-inspector` | collapsible sections: course (create, sequence — a variation group as a nested block `editor-variation`, §12 —, visit order, description sheet — `editor-description-instructions`, §4 —, clone), selection (a site: code, kind, position, description summary, "also in", hidden number, notes — §6.6; several controls: `editor-multi` with the bulk actions — §6.5; a course object: `editor-object` — §7; a leg: `editor-leg` — §6.7, `modes/LegSection.tsx`), inventory (`editor-inventory-panel`, collapsed), checks (`editor-checks`, §8) |
 | Map info (`MapInfoDialog.tsx`, model `lib/editor/map-info.ts`; P6) | `editor-map-info` → `editor-map-info-dialog` | a map icon button (`IconMap`, `components/map-icons.tsx`) in the top bar right after Export ▾ (`aria-haspopup="dialog"`, `aria-expanded`); a click opens a modal (`role="dialog"`, `aria-modal="true"`, centred over a dimmed backdrop; the close button `editor-map-info-close`, a backdrop click or Escape closes it). Its header shows the map's file name (`editor-map-info-name`, `data-name`) or, without a map, `editor-map-info-none`. Its rows, each only when it has a value: the scale `editor-map-info-scale` (`data-scale`, `1:10 000`), the north lines `editor-map-info-north` (the `NorthLinesBadge` sentence, `north-lines-badge` with `data-north-lines`; *No magnetic north lines found* when the file has none), the file `editor-map-info-file` (size and upload time, `data-bytes`, `data-uploaded`); then the document section `editor-map-info-document` (`data-source`, `data-objects`, `data-symbols`, `data-colours`; read from the loaded document's header, absent while it loads or the import runs) with `editor-map-info-source` (OCAD and its version, or OpenOrienteering Mapper), `-content` (objects · symbols · colours), `-symbol-library` (the matched symbol library and version; not `-library`, which is the action below), `-crs` (EPSG code and name) and `-importer`. Its actions: *Review symbols* (`editor-map-info-review`, a link to `/<event>/map-review/<documentHash>`, only once the document exists — `map-symbols.md` §8.7), *Replace map* (`editor-map-info-replace`; *Upload map* without a map; the hidden `accept=".ocd"` input), *From club library* (`editor-map-info-library`, only when the club library lists a map; opens `club-map-picker`, `club-library.md`). An upload's progress, error and the stale-north-lines notice (`map-upload-notice`) show in the dialog's footer |
 | Course info (`EditorStatus.tsx` `StatsButton`, model `lib/editor/status.ts`) | `editor-stats` → `editor-stats-popover` | an icon button in the top bar (`aria-haspopup="dialog"`, `aria-expanded`) with the check count as its amber badge (`editor-stats-badge`, `data-count`, absent at zero, §8); a click opens the popover (`role="dialog"`; a second click, an outside click or Escape closes it — Escape closes only the popover, the editor's Escape cascade of §3 is not stepped, so an armed tool stays armed). Its rows, each only when it has a value, in this order: `editor-stats-controls` (`data-count`), `editor-stats-length` (`data-m`), `editor-stats-climb` (`data-m`), the shown sheet's key in Layout mode and Class view (`editor-stats-sheet`, `data-key`, `course-layout.md` §6), `editor-stats-snapping` when on, `editor-stats-checks` (`data-count`, amber). No map scale since P6: it is the map-info dialog's (`courseInfoRows`). With no course and no sheet the popover says *No course* |
-| Save indicator (`EditorStatus.tsx` `SaveIndicator`) | `editor-save-state` | in the top bar after the course-info button: a dot and the save state's words (`data-state` = `saved` / `saving` / `error` / `conflict`, `role="status"`, `aria-live="polite"`, the words also its `title`). `saved` / `saving` are the dot alone (green / grey pulsing; the words `sr-only`), so P2 adds a dot (≤ 16 px) and an icon button (≤ 32 px) to the top bar's row (how the row makes room on a laptop screen: "Top bar" below, F29); `error` / `conflict` show their words (`editor-save-state-text`, red) at every width — a failed or conflicting save never hides behind a popover or a tooltip |
+| Save indicator (`EditorStatus.tsx` `SaveIndicator`) | `editor-save-state` | in the top bar after the course-info button: a dot and the save state's words (`data-state` = `saved` / `saving` / `error` / `conflict` / `queued` — Field mode's writes waiting in the outbox, §9 "Offline", D9c —, `role="status"`, `aria-live="polite"`, the words also its `title`). `saved` / `saving` are the dot alone (green / grey pulsing; the words `sr-only`), so P2 adds a dot (≤ 16 px) and an icon button (≤ 32 px) to the top bar's row (how the row makes room on a laptop screen: "Top bar" below, F29); `error` / `conflict` show their words (`editor-save-state-text`, red) at every width — a failed or conflicting save never hides behind a popover or a tooltip; `queued` shows its words too, amber |
 | Conflict notice | `editor-conflict` | §3 |
 | Map mode (§13) | `editor-mode-map`, `editor-hide-overprint`, `editor-inspector-map-object`, `editor-map-object` (`-none`, `-symbol`, `-swatch`, `-hide`, `-restore`), `editor-corrections` (`-count`, `-none`, `-apply`), `editor-correction-row` (`-locate`, `-revert`), `editor-map-none`, `editor-map-disabled`, `editor-map-readonly` | the inspector's *Map object* and *Corrections* sections in place of the course's; the rail's `V` |
-| Field mode (§9) | `editor-inspector-field`, `editor-field-selection`, `editor-nudge-pad`, `editor-field-offline` | the control list with distance / bearing and check-off in place of the sequence; the selection's distance, check-off and nudge pad; no tool rail |
+| Field mode (§9) | `editor-inspector-field`, `editor-field-selection`, `editor-nudge-pad`, `editor-field-offline` | the control list with distance / bearing and check-off in place of the sequence; the selection's distance, check-off and nudge pad; no tool rail; the outbox notice (offline, or writes waiting: the count, Retry / Discard; §9 "Offline") |
 | Phone chrome (§10) | `editor-field-top-bar`, `editor-overflow`, `editor-sheet`, `editor-field-add` | below 640 px: the compact top bar, the bottom sheet (peek: the status line `editor-status` — `StatusBar.tsx`: `editor-status-kpis`, `editor-status-checks`, `editor-save-state` —, selection, action bar) and the floating `+` instead of the top bar, rail and inspector strip above |
 
 **Top bar: icons when the row is short** (F29, feedback-2026-11-11 item 2
@@ -298,6 +298,13 @@ rules"):
 
 The reload is the usual cache invalidation after every write. The moved
 notice names who and when when the journal has it (§11).
+
+**Queued writes** (D9c, §9 "Offline"): Field mode's moves and check-offs
+that could not go out wait in the device's outbox and replay in order
+under the same rules, each move on the token it was queued with; a
+`moved` on replay is the same notice, its buttons settling the entry.
+One gesture is still one undo entry; offline, undo / redo run only those
+entries, and an undo back to where a waiting move started drops it.
 
 ## 4. Course mode
 
@@ -1441,19 +1448,101 @@ the selection and the undo history (`editorReducer`'s `mode`).
 - **No tool rail** on the desktop / tablet layout in Field mode: the
   setter in the field checks and moves, the keys still arm the tools. The
   phone's `+` (§10) is the field's way to create.
-- **Offline** (decision log, D9). The row asked for "view + check-off
-  only while offline" when no queue covers the moves; that cannot hold
-  yet either, because check-off is itself a mutation: no outbox covers `control.update` /
-  `control.check` (the offline outbox carries the timing journal's event
-  types; course mutations are cloud-owned and "unavailable offline",
-  `offline-architecture.md`), so Field mode offline **views only**:
-  `editor-field-offline` says "Offline — viewing only. Moves and check-offs
-  need a connection.", the nudge pad, the check toggles and `+` are
-  disabled, a drag snaps back without a write. The map keeps drawing from
-  the cached document (B4, `map-storage.md` §7.1). A queue for these
-  writes, with the field-move rebase of §3 on replay, is row D9c (unblocked
-  2026-11-13: the station outbox and `events.push` it needs landed with
-  the offline pivot, `future-architecture.md` Steps 1–6).
+- **Offline** (row D9c; 08 §5.5 "Offline", §12 "Field-mode conflicts";
+  decision log, D9 and D9c). Field mode's moves — a long-press drag, a
+  nudge, the pad's numeric fields — and its check-offs, with their undo /
+  redo, go through the device's **outbox** (`lib/offline/control-outbox.ts`,
+  the page's `useFieldOutbox`). The map keeps drawing from the cached
+  document (B4, `map-storage.md` §7.1).
+  - **When a write queues.** Offline (`navigator.onLine` false), while
+    entries already wait (order is kept), or when the request gets no
+    answer from a server (a tRPC client error without an error body). A
+    server's answer of any kind is never re-queued. Online with an empty
+    queue a write goes out at once, as in the other modes, and its
+    conflicts are §3's.
+  - **Storage.** The Dexie table `controlWrites` in `oxygen-offline`
+    (version 4, additive; `offline-architecture.md` "Station
+    resilience"), keyed by an increasing `seq` — the replay order — with
+    the event's `nameId`. It survives a reload and a browser restart; the
+    timing journal's `events` outbox and `events.push` are not used
+    (decision log, D9c: they carry last-writer-wins upserts without the
+    version token).
+  - **One move and one check entry per control.** A second move of a
+    control merges into its entry: the first `from` and token are kept,
+    the newest position taken. A move back to where the entry started,
+    or a check-off toggled back, drops the entry — an undo offline sends
+    nothing. An entry in flight is never dropped: the newer value goes
+    out after it (from where the first put the control, on the token that
+    write returned). The count shows controls waiting, not gestures.
+    An entry keeps its class across merges, so the replay applies the
+    right row of §3: a **move** entry (it has a `from`) stays a pure move
+    — the position and `autoDescribe`, as online — even when an undo's
+    description restore merges into it (offline nothing reached the
+    server, so the restore is the stored description, and the move rule
+    must not re-send a description over one edited elsewhere); a **plain**
+    entry (an undo of a move already sent, restoring its description,
+    no `from`) stays plain — the newest position and the newest
+    description restore — and a conflict on it is "changed elsewhere"
+    (*failed*), never a rebase. A drain starting clears a flight flag left
+    by a tab closed mid-send. Decided by the D9c session (planner's
+    recommendation, the class rule after the spec review), for the
+    user's review.
+  - **Each move keeps the token it was queued with** (§3 "Tokens"):
+    `updateControl(input, from, { baseVersion })`. After reconnect the
+    refetch seeds the `VersionBook` with the server's newer token, which
+    would hide a move made elsewhere meanwhile. A check-off sends none, as
+    online.
+  - **Shown at once.** The queued positions and check-offs are patched
+    into the query cache (`course.controlCoordinates`, `control.list`
+    `checkedAt`) over the server's last rows, re-applied after every
+    refetch; the canvas, the list, the pad and the peek KPI read them
+    there. An entry that drops out offline shows the server's value
+    again; a sent one holds until the refetch answers.
+  - **Replay** on mount, when the device comes back online, when the tab
+    is shown again and every 10 s while entries wait and the browser
+    says it is online; one tab at a time (`navigator.locks`). Entries go
+    out in `seq` order through `EditorWrites` under §3's rules:
+    - the other side changed only fields a move does not touch → the
+      move is re-sent once on the server's token, no notice;
+    - the other side moved the control too → the entry stays as a
+      *conflict* and becomes the moved notice (`editor-conflict`,
+      `data-kind="moved"`, "Moved by ‹who› at ‹time› to x, y" from
+      `control.lastChange`, §11), one at a time: **Keep mine** sends it
+      again from their position on the server's token, **Keep theirs**
+      drops it. A new move of that control does what Keep mine does,
+      from where it now is. A `moved` answer at the entry's own position
+      is the write having landed before its answer was lost: done;
+    - an undo's write restoring a description (not a move) that cannot
+      be merged, or any server refusal (`NOT_FOUND`, `FORBIDDEN`, a
+      leased event's "checked out to venue") → the entry is kept as
+      *failed*, never dropped silently; no answer → the drain stops, the
+      rest wait.
+  - **The notice** `editor-field-offline` (`FieldQueueNotice`) shows in
+    Field mode while offline and in any mode while entries wait:
+    `data-online`, `data-pending` (entries pending or in conflict),
+    `data-failed`. Offline with nothing waiting: "Offline — moves and
+    check-offs are kept on this device and sent when the connection is
+    back."; with *n* waiting: "Offline — *n* changes waiting to be sent.",
+    online "Sending *n* changes…"; failed ones: "*n* changes not sent:
+    ‹reason›" with **Retry** (`editor-field-queue-retry`; a move then goes
+    on the book's newest token) and **Discard**
+    (`editor-field-queue-discard`). The save indicator reads `queued`
+    ("Waiting to send", amber, words shown) while entries wait and
+    `error` while one has failed — never *Saved* (§2).
+  - **Another mode's move of a waiting control.** A drag in Course or
+    Layout mode of a control whose move waits in the outbox (a conflict
+    not yet chosen, a failed entry, a write with no answer) goes through
+    the outbox too and merges into that entry, so the two cannot race and
+    a later Keep mine or Retry sends the newest position.
+  - **What stays online-only.** `+` (a create needs server-allocated ids)
+    is disabled offline; the site fields of §6.6 (description, codes,
+    notes) and every other mode's writes are not queued and fail with
+    *Not saved*. Undo / redo offline run only Field mode's queued
+    entries: any other entry's write would fail and §3 would drop it.
+  - Decided by the D9c session (planner's recommendation), for the
+    user's review: the sibling table rather than `events.push`; the
+    coalescing; the `queued` save state; only Field mode's moves and
+    check-offs queue, drained by the open editor in any mode.
 
 ## 10. Phone and tablet
 
@@ -2042,7 +2131,7 @@ whose poll ran meanwhile simply does not conflict (decision log, D10).
 | unit (web) | `pages/editor/__tests__/bindings.test.ts` "geometry editing on a selected object", "while drawing: a press places a smooth vertex…" | §7 "Editing geometry": the sampled outline and grips; Alt-drag moves the vertex with one write (F18), a filter region's Alt-drag moves it too; Alt-click toggles (handles → a corner, a corner → smooth `(next − prev) / 6`; a filter region: no write), a plain click focuses, a body click unfocuses, the focused handle drawn; a grip drag mirrored, Alt live breaks it; double-click on an edge inserts a smooth vertex with collinear handles, Alt a corner (inside, on a vertex, on a text: nothing); a press within reach of the edge is the object's; §6.4 the area tool's press places a smooth vertex (its neighbour gaining handles on the same write), a drag past 3 px pulls handles (Shift 45°), back within 3 px the press's kind, the curved preview and its grips; Alt at the press a corner (the pull still wins, the corner kept; no Alt = smooth; a filter region ignores Alt), the closing click wraps every smooth vertex, Alt on it makes the first a corner, `onDone` carries no flags; the preview shows the hover as a smooth vertex (a ring of three curves throughout; a filter region's straight) with no provisional grips and nothing written (F18) |
 | unit (web) | `lib/editor/__tests__/geometry-gestures.test.ts` | §7 "Editing geometry" after D16's extraction: the pressing order (vertex, grip, edge within reach, the inside no press, the caller's body), a vertex drag in the caller's units (nothing until it moves), Alt-drag moves and Alt-click toggles both ways (F18; the wrap at vertex 0, nothing for an open end and a filter region), focus (none for fixed kinds, the body unfocuses), a cancelled drag, insert on an edge (smooth with collinear handles, Alt a corner, a filter region a corner; on a curve the split, Alt dropping the new vertex's handles; not on a vertex, not inside, not for fixed kinds), the shapes with the caller's ids; `bindings.test.ts` unchanged is the net for `selectBinding` |
 | unit (web) | `pages/editor/__tests__/bindings.test.ts` | §6, §7: V (Shift-click, lasso, object select / move / vertex, outlines, double-click leg; D12: for every closed kind an interior press declines, selected or not, an edge press within 7 px or the hit-test's outline target drags it, a vertex still wins; a line's stroke press is the object's), armed (exclusive, right-click, touch, ghost label and leg length label, no UI-layer leg; the ghost circle only without a drawn provisional visit, a finish's two circles, P4), area (vertex drag, first-vertex close), G (rim drag, click removes, leg) |
-| unit (web) | `lib/__tests__/undo-stack.test.ts` | §6.1: `UndoStack.top`, which `Ctrl+Z` while armed checks before stepping the chain back |
+| unit (web) | `lib/__tests__/undo-stack.test.ts` | §6.1: `UndoStack.top`, which `Ctrl+Z` while armed checks before stepping the chain back; §9 "Offline" (D9c): `nextRedo` |
 | unit (web) | `lib/editor/__tests__/snap.test.ts`, `hit.test.ts`, `state.test.ts`, `structure-edit.test.ts`, `write-client.test.ts` | §6.2 snap candidates and distance; §5 object targets (stream and UI-layer outline); §6 Escape order, multi-selection, object selection, tools; §6.3 / §6.6 `setLegGaps`, `setNumberHidden`; §7 object tokens |
 | E2E | `e2e/course-editor-tools.spec.ts` "tools" | §6.1 ten controls in ten clicks with `K` (the ghost label — its circle is the layer's, P4 —, no UI-layer pending leg, the leg length label "‹n› m" and no `editor-pending-leg-length` (P2), no action bar and no `editor-selection-ring` while armed, `Ctrl+Z`, `Esc`, the ring back on a click in `V`), reuse of a site; §5 / §7 the area-press rule (D12): a drag starting inside an `oob_area` (created through `courseObject.create`) moves the view (`data-centre-x`) and leaves the area unselected and unchanged, a click on its outline selects it (four handles), a drag inside the selected area pans and keeps the selection, a drag of its edge translates every vertex (one `courseObject.update`), a click inside deselects it; the armed `K` over the map: a `course-leg` piece of the course ends at the cursor's circle (absent before the hover, follows a second hover), no `editor-pending-leg`, the label = the metres from the last placed control's stored mm to the cursor's paper point at the map scale (read from the map-info dialog's `editor-map-info-scale`, P6) within 2 m (P2); a drag of the middle control shows two `editor-leg-length`, none after release; §6.5 Shift-click three controls → one add-to-course (one undo entry), §6.6 a site's notes written and reloaded; §6.3 a rim drag stores a circle gap, Reset gaps clears it; the layer draws what the tools store (D1's request path): a leg gap cuts the drawn leg, a circle gap is in the drawn site's cuts (`course-site` `data-cuts`), a hidden number leaves the site without its `course-label`; §6.4 / §7 an out-of-bounds area drawn (Alt-clicks: corners, F18), drawn on the canvas (709: purple inside it), its hatch (710) and border later set from the inspector (the stored props; 710 on the canvas is the shared layer path, probed in print only), printed (the all-controls `maps.pdf`: one page, the 709 hatch's clip-and-stroke operators present with the `all`-scoped area, one more run with `hatch: "710"`, gone when it is parked), selected again on the canvas (a click on its outline), deleted and undone; §6.4 / §7 "Editing geometry" a curved white-out in three clicks and one drag (two Alt-clicks — corners —, a click-drag that shows two `editor-polygon-grip`, the closing click): the stored vertex has `hOut` = the drag on paper and `hIn` its negation, the selection outline has 8 samples per curved segment, the all-controls `maps.pdf` gains exactly one curved fill (a fill path with `c` segments — the base map has its own); a double-click on a straight edge inserts a smooth vertex at its midpoint (handles 3 → 4, `hOut` ≈ the edge on paper / 6, grips 2 → 4), a click focuses it and `Delete` removes it (the object stays), `Ctrl+Z` brings it back, `Alt`-click on the corner b makes it smooth (grips 4 → 6, `hOut` stored), `Alt`-click again a corner (6 → 4, no handle stored); §6.4 smooth by default (F18): three clicks, Alt held at the third — no grips until the third lands, then two — and a plain closing click store `g[1].hOut` = `(g[2] − g[0]) / 6` (and ≈ the clicks' chord on paper / 6), `hIn` its negation, `g[0].hOut` = `(g[1] − g[2]) / 6` (the wrap), the Alt corner `g[2]` without handles, no `smooth` / `corner` / `pulled` key stored, four grips, and one `Ctrl+Z` removes the object (one undo entry); a filter region hides the 505 path under it live (canvas ink probe; its entry is the heading `editor-filter-symbol-505`, §7); §6.4 the toner saver (`A` then `S`, D13): `marginMm` 25, Bézier arcs stored, the outline sampled, and the course's `maps.pdf` (its sheet made first) carries at least one more `c` operator per stored curved vertex than without it (D13's deferred print check) |
 | unit (web) | `lib/editor/__tests__/symbol-groups.test.ts` | §7 filter region: one entry per heading (an applied match's library heading, `601.b` + `601` merged; else the source base, `101.1` joins `101`; a suggested match is not applied), library names by UI language (`sv`, `sv-SE`), hidden / unused / missing / proxy-drawn symbols not listed, library headings first in code order and Other last (a rectangle frame, `graphic`), swatches (the most used applied entry, else the document symbol), search (heading, both library names, member codes and names), all / some / none, a toggle completes or removes the whole group, the group of a symbol, the swatch URLs (versioned library path; event-scoped document preview) |
@@ -2066,9 +2155,11 @@ whose poll ran meanwhile simply does not conflict (decision log, D10).
 | unit (web) | `lib/__tests__/course-layer-request.test.ts` "provisional visit" | `provisionalDrawn`: false without a visit or for a reuse, true otherwise, and the layer adds the `provisional` site exactly then (P4) |
 | E2E | `e2e/course-editor-placing.spec.ts` "P1: …" "no blue circle beside a placed control while K is armed…" (`chromium`) | §6.1, D12: with `K` armed (hover, after each of two placing clicks) and after switching to Field, Course and Layout no `editor-phantom` and no `editor-selection-ring` |
 | E2E | `e2e/course-editor-placing.spec.ts` "P4: the dashed ring back after placing…" (`chromium`) | §4, §6.1, P4: `K` armed without a course draws the `editor-ghost` circle with its label; with a course no `editor-ghost` while hovering and after a placing click (`editor-ghost-label` "‹n› · ‹code›", no ring, no action bar); over an existing control "Add ‹code›" with the `editor-ghost` circle (a reuse); in `V` the phantom's *Add control* selects the new control with one `editor-selection-ring` and a visible `editor-action-bar` |
-| unit (web) | `lib/editor/__tests__/state.test.ts`, `write-client.test.ts` | §9: Field entered and left keeping the selection, Layout entered dropping all but the course (`course-layout.md`); `checkControl` sends no token and seeds the control's |
+| unit (web) | `lib/editor/__tests__/state.test.ts`, `write-client.test.ts` | §9: Field entered and left keeping the selection, Layout entered dropping all but the course (`course-layout.md`); `checkControl` sends no token and seeds the control's; D9c: a queued move sends its own `baseVersion` over the book's newer one, rebases on a check elsewhere, throws `moved` on a move |
+| unit (web) | `lib/__tests__/control-outbox.test.ts` | §9 "Offline" (D9c): coalescing (first `from` and token kept, a move back or a check toggled back drops the entry, per event and control, a conflict moved on is pending from their position on the server's token, an entry in flight never dropped; an undo's description merged into a move kept a pure move, a move merged into a plain write kept plain and replayed without `from`); the overlays (queued positions and check-offs, the same reference when nothing changes); counts; `isNetworkFailure`; the drain: enqueue order with each move's own token and `from`, `onSent`, `moved` kept as a conflict and Keep mine / Keep theirs, `moved` at our own position done, a refusal failed with Retry / Discard, `refresh` failed as changed elsewhere, a network failure stops with the rest pending, a write merged in flight sent after on the returned token, a check toggled back in flight re-sent, a stale flight flag cleared at drain start, a second drain does nothing |
+| integration | `course-structure.test.ts` "a move queued before a check-off elsewhere" | §9 "Offline" (D9c): a stale move after `control.check` answers `CONFLICT` with `differing` naming `checkedAt`, not `xpos` / `ypos` — the rebase the replay relies on |
 | unit (web) | `pages/editor/__tests__/bindings.test.ts` "pinch-scale" | §10: `scaleAbout` (handles scale with it), a finger on the ring starts it, the draft per move, one write on lift, nothing selected / cancelled / within 1 % writes nothing |
-| unit (web) | `lib/editor/__tests__/status.test.ts` | §2, §3, §8, §10 (P2): the peek line's rows for a course (controls · length · climb · scale · checks, numeric `data`), without a course (scale only), the sheet key in place of the scale, snapping on, zero climb and checks absent; the desktop popover's `courseInfoRows` (P6): no scale row, no rows without a course and a sheet, the sheet key kept; the badge (the count, none at zero); the save indicator (`saved` / `saving` the dot alone, `error` / `conflict` always show their words) |
+| unit (web) | `lib/editor/__tests__/status.test.ts` | §2, §3, §8, §10 (P2): the peek line's rows for a course (controls · length · climb · scale · checks, numeric `data`), without a course (scale only), the sheet key in place of the scale, snapping on, zero climb and checks absent; the desktop popover's `courseInfoRows` (P6): no scale row, no rows without a course and a sheet, the sheet key kept; the badge (the count, none at zero); the save indicator (`saved` / `saving` the dot alone, `error` / `conflict` / `queued` always show their words) |
 | Unit | `lib/editor/__tests__/action-bar-place.test.ts` | §2: the action bar centred under the selection; shifted inside at the left and right edges; the start kept in view when the viewer is narrower than the bar; above the selection near the bottom, below when it just fits, below and shifted up when it fits neither way; the size-0 first frame clamped to the margins |
 | E2E | `e2e/course-editor.spec.ts` "The action bar stays inside the viewer" (`chromium`) | §2: fourteen courses through every control (a long *Also in*). On the leftmost clear control the bar, *Add to …* and the ellipsised Also-in line lie inside the viewer, and the line's `title` names the last course; *Add to …* writes. On the lowest clear control the bar lies inside the viewer vertically (`data-placement="above"` and above the control when it does not fit below); *Add to …* writes. The viewer's `scrollLeft` / `scrollTop` stay 0 |
 | E2E | `e2e/course-editor-status.spec.ts` "P2: the status bar out of the footer" (`chromium`) | §2, §3 (P2): no `editor-status` on the desktop; `editor-save-state` inside `editor-top-bar` reaches `saved`; `editor-stats` opens the popover (`aria-expanded`) with the controls (`data-count` 0, then 1 after a `K` placement) and length rows and no `editor-stats-scale` (P6), a second click and an outside click close it, Escape with `K` armed closes it and leaves `K` pressed (a second Escape returns to `V`); at 1280 × 720 with `saved` the words take no room (width ≤ 1 px, the title set), the indicator is ≤ 16 px and the button ≤ 32 px wide; at 1024 × 700 a `control.create` aborted at the network → `data-state="error"` with `editor-save-state-text` visible, non-empty and inside the viewport. The shell test ("mounts the new editor") asserts the indicator and the button visible and no `editor-status`; the Layout / Class view test reads the sheet key from `editor-stats-sheet` |
@@ -2083,7 +2174,7 @@ whose poll ran meanwhile simply does not conflict (decision log, D10).
 | E2E | `e2e/editor-space.spec.ts` (`chromium`) | §2 "The editor fills the window" (F28): at 1840 × 1090 `editor-page` is at least the viewport less 64 px wide, its bottom within 16 px of the viewport's and not below it, the page has no vertical scroll (`scrollHeight` ≤ `innerHeight`), the header's inner row (`shell-header-inner`) is as wide; on `/courses` `shell-container` and `shell-header-inner` stay ≤ 1280 px |
 | unit (web) | `lib/__tests__/course-overlay-ids.test.ts` | §6.1 (P5): the overlay ids of a start-only course (the regression) and a finish-only one; a full course with explicit ends; the explicit ends win over the nearest; the legacy fallback to the start nearest the first control and the finish nearest the last; no controls and no explicit end → the event default (lowest id); a stale id or one of the wrong role treated as none; none under `firstAsStart` / `lastAsFinish`; no start or finish in the event; an end already at the head or tail not repeated; an unpositioned first control keeps the explicit start, else the default |
 | E2E | `e2e/course-editor-placing.spec.ts` "P5: the pending leg from a just-placed start" (`chromium`) | §6.1 (P5): on a fresh course the armed `K`'s hover draws a `course-leg` piece from the default start (the inspector's start row) to the cursor; `S` places a start (`course.setStructure`), the start row names it and `K` is pressed; the hover shows `editor-leg-length` "‹n› m" and a `course-leg` piece from the new start's rim to the cursor's; the click adds the control row, and after `Esc` (no label) the leg start → control is still drawn |
-| E2E | `e2e/field-mode.spec.ts` (`mobile` project: Pixel 7, `vector`) | §10: opens in Field mode, full-bleed, compact bar and overflow, no rail / inspector / `editor-stats`, the sheet's status line (`editor-status`, `editor-save-state` `saved`) (P2), ≥ 44 px targets; §9: `setGeolocation` → the marker with its accuracy, every row's distance and bearing = the paper geometry at one scale; detents (tap, handle drag to full) and a list row's control centred above the sheet; a quick drag on an unselected control pans without selecting, a long press selects, shows the stem and the loupe (`editor-loupe`, 120 px, above the handle; the canvas inside it differs from the same circle after release — the 1× map — and has the map's purple; gone on release) and drops the control 48 px above the finger (persisted); two fingers cancel a pending press and zoom; nudge 2 × 0.1 mm, 1 m, the x field, four undos back; `+` → `K` → Place above the sheet adds a site, Done; F27: the overflow's `editor-placement-loupe` (pressed dot) on → `localStorage` `true`, no loupe without a tool; `+` → `K` → `editor-loupe` `data-pointer="touch"`, `data-mode="hover"`, 120 px, its bottom 16 px above `editor-touch-crosshair`'s centre and centred on it (±1 px), its `data-x` / `data-y` within 3 mm of the crosshair's paper point (snapped); the overflow → off → none, the same circle at 1× differs in > 10 % of its pixels; on again → the loupe, *Done* → none; a tap on an `oob_area`'s outline (created through `courseObject.create`) selects it, a tap inside deselects it (D12), and two fingers on its corners scale it by their spread, the map's zoom unchanged; check-off persists over a reload; offline: the notice, `+` disabled, a long-press move snaps back. "Field mode on a desktop" (desktop viewport in the same spec): the mode switch, no rail, the list's distance after a fix, check-off and `Ctrl+Z`, back to Course mode; F10: the setter-map picker (*None* + two after `layout.setterMaps { groups: 2 }`), Setter 1 picked → its controls in the sheet's order and the KPI, *None* → the course's list |
+| E2E | `e2e/field-mode.spec.ts` (`mobile` project: Pixel 7, `vector`) | §10: opens in Field mode, full-bleed, compact bar and overflow, no rail / inspector / `editor-stats`, the sheet's status line (`editor-status`, `editor-save-state` `saved`) (P2), ≥ 44 px targets; §9: `setGeolocation` → the marker with its accuracy, every row's distance and bearing = the paper geometry at one scale; detents (tap, handle drag to full) and a list row's control centred above the sheet; a quick drag on an unselected control pans without selecting, a long press selects, shows the stem and the loupe (`editor-loupe`, 120 px, above the handle; the canvas inside it differs from the same circle after release — the 1× map — and has the map's purple; gone on release) and drops the control 48 px above the finger (persisted); two fingers cancel a pending press and zoom; nudge 2 × 0.1 mm, 1 m, the x field, four undos back; `+` → `K` → Place above the sheet adds a site, Done; F27: the overflow's `editor-placement-loupe` (pressed dot) on → `localStorage` `true`, no loupe without a tool; `+` → `K` → `editor-loupe` `data-pointer="touch"`, `data-mode="hover"`, 120 px, its bottom 16 px above `editor-touch-crosshair`'s centre and centred on it (±1 px), its `data-x` / `data-y` within 3 mm of the crosshair's paper point (snapped); the overflow → off → none, the same circle at 1× differs in > 10 % of its pixels; on again → the loupe, *Done* → none; a tap on an `oob_area`'s outline (created through `courseObject.create`) selects it, a tap inside deselects it (D12), and two fingers on its corners scale it by their spread, the map's zoom unchanged; check-off persists over a reload; offline (D9c, `context.setOffline`): the notice at `data-pending` 0 and `+` disabled, two nudges → one entry drawn at once, a check-off → two and `editor-save-state` `queued`, an undo drops the check entry, no `control.update` / `control.check` request until reconnect, then the notice gone, the server at the nudged position (one `control.update`) and after a reload; after the undo a second check-off → two again, and on reconnect `control.update` then `control.check` in that order with the check-off kept; a long-press move offline with notes written elsewhere replays with no notice and keeps both; a queued nudge the server refuses (`page.route` answering a tRPC `FORBIDDEN`) → `data-failed` 1, `editor-field-queue-failed` with the reason, `editor-save-state` `error`, the position still shown and the server unchanged, Retry unrouted → sent; a nudge offline with a move elsewhere → `editor-conflict` `moved` with their x, the entry still counted, Keep mine → the server at the page's position; a `control.update` aborted at the network (`page.route`, exact procedure) queues while online, the entry and its position survive a reload, unrouted it is sent by the retry timer. "Field mode on a desktop" (desktop viewport in the same spec): the mode switch, no rail, the list's distance after a fix, check-off and `Ctrl+Z`, back to Course mode; F10: the setter-map picker (*None* + two after `layout.setterMaps { groups: 2 }`), Setter 1 picked → its controls in the sheet's order and the KPI, *None* → the course's list |
 | unit (web) | `lib/editor/__tests__/setter-maps.test.ts` "a setter's Field rows" | §9 (F10): the sheet's order, start / finish as such, other kinds as controls, unknown ids left out, distance / bearing / checked through `fieldRows` |
 | unit, integration, E2E | `course-layout.md` "Tests" | Layout mode |
 | unit (web) | `pages/editor/__tests__/placement.test.ts` "X: the map exchange tool", `rail.test.ts` "railKeyOf", `lib/editor/__tests__/sequence.test.ts` "part headings" | §6.9: `X` armed, numbered and advanced as a control, `K` ↔ `X` keep the chain, not a chain end; the rail lights `X`; the exchange row marked, part 1 before the first row and part 2 after the exchange, none without one |
@@ -2197,9 +2288,36 @@ whose poll ran meanwhile simply does not conflict (decision log, D10).
   taps follow the default, answered by the user on 2026-11-08). Corners on
   touch wait for a vertex action bar on the selection with **Smooth** /
   **Corner** buttons (and insert, delete).
-- **Offline writes in Field mode** (§9 "Offline"): a queue for
-  `control.update` / `control.check` with the field-move rebase on replay
-  (row D9c).
+- **Field mode's outbox, what D9c left** (§9 "Offline"):
+  - queued writes are sent only while that event's editor is open (no
+    drain from the shell or a service worker);
+  - a code renumbered elsewhere while a write waits can address another
+    control (the entry keys on the public id); it surfaces as `moved` or
+    a failed entry;
+  - a queued check-off's `checked_at` is the replay time, not the tap's
+    (`control.check` takes no client time);
+  - only Field mode's moves and check-offs queue: `+`, the site fields,
+    notes and every other mode's writes still need a connection;
+  - "Moved by ‹name›" on replay is not asserted by name in E2E (the E2E
+    other side writes through the API as the admin);
+  - an entry whose request never gets a tRPC answer (an HTML 502 / 503,
+    a login page in front of the API) stays pending and is retried every
+    10 s with no cap; Discard is offered only for failed entries;
+  - the outbox is keyed by event, not by user: on a shared device one
+    user's waiting writes are sent under the next user's session (a
+    refusal still lands as failed);
+  - an undo merged into a move while that move is on the wire goes out
+    as a pure move back with `autoDescribe`, not as the description
+    restore: a control that had no description can keep the one
+    auto-filled for the undone position (online the undo restores it);
+  - a first write of a control without stored coordinates is queued
+    plain and loses `autoDescribe` when a move merges into it;
+  - another mode's move of a waiting control (through the outbox) has
+    no test of its own;
+  - the overlay's base is the cache as found when the page mounts: a
+    remount offline with overlaid rows in the persisted cache shows a
+    dropped entry's queued value until the next refetch (the undo stack
+    is gone after a remount, so only Discard / Keep theirs drop one).
 - **Tablet bottom action bar** (08 §5.5 "Tablet: collapsible side
   inspector + bottom action bar"): a tablet keeps the desktop chrome and
   the action bar under the selection, with the touch gestures (§10).
