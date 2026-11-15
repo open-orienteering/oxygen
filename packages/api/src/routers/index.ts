@@ -32,6 +32,7 @@ import { mapPatchRouter } from "./mapPatch.js";
 import { mapTrackRouter } from "./mapTrack.js";
 import { layoutRouter } from "./layout.js";
 import { graphicsRouter } from "./graphics.js";
+import { demSettingsRouter } from "./demSettings.js";
 
 export const appRouter = router({
   // The active orienteering event. Kept under the `competition` namespace
@@ -73,6 +74,7 @@ export const appRouter = router({
   mapTrack: mapTrackRouter,
   layout: layoutRouter,
   graphics: graphicsRouter,
+  demSettings: demSettingsRouter,
 });
 
 export type AppRouter = typeof appRouter;

@@ -204,3 +204,19 @@ describe("MAP_DEM_OFFLINE (map-terrain.md §7.8 \"Offline stacks\")", () => {
     expect(called).toBe(1);
   });
 });
+
+describe("Test connection's worker thread (map-terrain.md §7.8)", () => {
+  it("runs §7.6 off the main thread, through the stack's base fetch", async () => {
+    const { liveCheckInWorker } = await import("../map-store/dem-settings-service.js");
+    const { encodeTerrainDoc, HILL, sweref99 } = await import("./helpers/terrain-doc.js");
+    const previous = process.env.MAP_DEM_OFFLINE;
+    process.env.MAP_DEM_OFFLINE = "1";
+    try {
+      const document = encodeTerrainDoc(HILL, "worker", undefined, sweref99(674_000, 6_580_000));
+      await expect(liveCheckInWorker({ credential: "test-user:test-password", document }, 60_000)).rejects.toThrow(/MAP_DEM_OFFLINE/);
+    } finally {
+      if (previous === undefined) delete process.env.MAP_DEM_OFFLINE;
+      else process.env.MAP_DEM_OFFLINE = previous;
+    }
+  }, 60_000);
+});
