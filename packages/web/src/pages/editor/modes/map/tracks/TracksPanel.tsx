@@ -67,14 +67,14 @@ function TrackRowItem({ row, onVisible, onRename, onDelete, onLocate }: {
         <button type="button" data-testid="editor-track-delete" onClick={() => onDelete(meta.id)} title={t("trackDelete")} aria-label={t("trackDelete")}
           className="shrink-0 px-1 rounded text-slate-500 hover:bg-white hover:text-red-600 cursor-pointer">×</button>
       </div>
-      <div className="flex items-center gap-1.5 pl-4.5 text-[11px] text-slate-500">
-        <span data-testid="editor-track-date">{date}</span>
-        <span data-testid="editor-track-stats">{t("trackStats", { length, count: row.points })}</span>
+      <div className="flex flex-wrap items-center gap-x-1.5 pl-4.5 text-[11px] text-slate-500">
+        <span data-testid="editor-track-date" className="whitespace-nowrap">{date}</span>
+        <span data-testid="editor-track-stats" className="whitespace-nowrap">{t("trackStats", { length, count: row.points })}</span>
         {outside > 0 && (
-          <span data-testid="editor-track-outside" className="text-amber-700" title={t("trackOutsideHint")}>{t("trackOutside", { count: outside })}</span>
+          <span data-testid="editor-track-outside" className="whitespace-nowrap text-amber-700" title={t("trackOutsideHint")}>{t("trackOutside", { count: outside })}</span>
         )}
-        {meta.convertedOp && <span data-testid="editor-track-converted" className="text-emerald-700">{t("trackConverted")}</span>}
-        {row.error && <span className="text-red-600">{t(`trackRowError_${row.error}`, { defaultValue: row.error })}</span>}
+        {meta.convertedOp && <span data-testid="editor-track-converted" className="whitespace-nowrap text-emerald-700">{t("trackConverted")}</span>}
+        {row.error && <span className="whitespace-nowrap text-red-600">{t(`trackRowError_${row.error}`, { defaultValue: row.error })}</span>}
       </div>
     </li>
   );

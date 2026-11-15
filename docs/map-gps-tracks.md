@@ -1,7 +1,7 @@
 # GPS tracks
 
 Status: **draft** — chapter of the vector map pipeline specification,
-started by sub-slice G22; §4 by G23; §1 by G24. GPS tracks are new scope for slice G (user,
+started by sub-slice G22; §4 by G23; §1 by G24; §5.1 by G25. GPS tracks are new scope for slice G (user,
 2026-11-13, `docs/research/vector-map-pipeline/SLICES.md` "Slice G",
 rows G20–G28): the research decides none of it beyond 04 §7
 ("Georeferenced inputs" become paper-space overlays) and 06 §3.2 (a
@@ -634,15 +634,21 @@ Pending (G26, G28).
 | `api/src/__tests__/integration/map-gps-tracks.test.ts` | The CHECKs; cascade with the event; `created_by` SET NULL; import / list / get round trip (deep-equal points, null columns, input order, list without points), an average with `derivedFrom` + `singlePass`, refusals writing nothing, a retried import by id, an id of another event, scoping; caps (200 000 points, 500 000 a call, 200 tracks with concurrent imports, split at the cap); update (trim set and restored, non-destructive, unchanged keeps the version, every bad trim, `single_pass` untouched); split (shared point, trims, ranges, the row replaced, order, a repeat with ids, split-split-remove); remove twice; markConverted (set, clear, unknown id writes nothing); a course setter does all, a viewer, a kiosk key and a stranger nothing; not in the checkout snapshot; no journal entry |
 | `api/src/__tests__/integration/backup.test.ts` | The dump's `map_gps_tracks` section holds the event's tracks; `restore-map-gps-tracks.sql` restores them exactly (points, trim, ranges, token above 2^53) into another event, a missing importer NULL, an existing one kept, twice is once |
 
-No E2E test yet: tracks have no UI until G25 (AGENTS.md §4, "New tRPC
-procedure": E2E only if user-facing).
+| `web/src/pages/editor/__tests__/map-tracks-model.test.ts` | §5.1: where it is off; the import plan (segments in file order, names cut, per-file parse errors, skip counts, the 200 000-point refusal, calls within 200 tracks / 500 000 points); the trimmed projection, length, outside count, `not-projectable`; rows; colour; locate's bounds; per-device overrides; a deleted track's re-import |
+| `web/src/pages/editor/__tests__/map-tracks-decimate.test.ts` | §5.1 "Decimation to the pixel": the octave tolerance, the tolerance bound and ends, determinism, the 50 000-point budget, the layer's paths |
+| `e2e/map-gps-tracks.spec.ts` | §5.1 end to end on `e2e/test.ocd`: import by the picker (a non-GPX file reported), the rows, the paths at the fixture's paper mm, locate, hide kept across a reload, rename, delete and its undo, a reload keeping the tracks (`course-editor.md` §13 "Tests" has the detail) |
 
 ## 8. Pending in this chapter
 
-- Tracks on a venue box: a box holds none during a lease (§1.3); G25
-  disables the panel there.
-- §5 the reference layer in Map mode and trim / split / average there
-  (G25, G27).
+- §5.2 trim / split / average in Map mode (G27).
+- The layer's zoom (§5.1): from pointer events only, so a zoom with the
+  pointer still keeps the old decimation until it moves, and no culling to
+  the view; a viewer `onView` prop would make both exact (user
+  2026-11-15: pointer events now, the prop when `MapViewer.tsx` is free).
+- Tracks loaded on entering Map mode: every listed track's points are
+  fetched (one at a time) for its length and drawing, hidden ones too; at
+  the caps (200 tracks of 200 000 points) that is the whole event's
+  tracks in the tab's memory.
 - §6 conversion into `add` ops and snapping ends onto the track network
   (G26, G28).
 - Bézier fitting of a converted line (later; polylines for now).
