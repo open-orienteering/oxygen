@@ -1691,7 +1691,12 @@ their origin, the resolution with its origin, the account as `{ saved,
 user, savedAt, savedBy, origin }` or null, the warnings, and the last
 live check. No procedure returns, logs or stores the password, its
 sealed form or the `user:password` string; failures pass through
-§7.1's masking (`demErrorText`).
+§7.1's masking (`demErrorText`), and free texts shown in the tab (a job's
+error, the check's error) through `maskSecret`, which removes the
+credential, the password and their base64 when at least 6 characters
+long (a shorter one would mangle ordinary words; none of these texts is
+ever built from it). The panel shows the router's refusals by their code
+in the viewer's language.
 
 **Who.** Every `demSettings` procedure is `adminProcedure`, the queries
 too. On an instance with auth off that admits every caller, as it does
@@ -1704,8 +1709,14 @@ reads the rows over the environment (`refreshDemProviders`) before each
 engine kick, on the 60 s tick (which now always runs, so a provider
 turned on in the tab works without a restart) and after every save, and
 rebuilds the providers only when the effective configuration's
-fingerprint changed. The descriptor reads the registry as it stands, so
-another instance follows a save within one tick. Tests without a source
+fingerprint changed. The engine re-reads before every claim, not only at
+the kick, so a loop already running follows a save; a job whose
+Lantmäteriet provider was rebuilt while it ran (a new account saved) and
+that then fails `auth` is queued again from its first attempt instead of
+waiting an hour. The descriptor re-reads when its last read is older than
+15 s, so another instance's tab follows a save within 15 s on a view and
+one tick for the engine. Concurrent reads apply in the order they
+started: an older read finishing last is dropped. Tests without a source
 set providers directly, as before.
 
 **Saving an account** checks its form only (a user name without `:` or
@@ -1735,16 +1746,23 @@ effective credential — saved or environment, never one typed and not
 saved — on a club map the admin picks, also while Lantmäteriet is
 switched off. It refuses, before any request, without a credential, and
 on a map without a georeference (`documentDemExtent` null), over H4's
-cap, or whose extent at 1 m exceeds §7.2's 64 M window cells. It writes
-`map_dem.live_check = { state: "running", startedAt, clubMapId, mapName,
-by }`, returns at once, and runs in a worker thread
-(`dem-live-check-worker.ts`) on the derive queue — it builds the contour
-graph and holds up to ~250 MB at 1 m. It then writes `{ state: "done",
-finishedAt, report }` (§7.6's aggregates and verdict: no heights, no
-secret) or `{ state: "error", finishedAt, error }` (masked). A `running`
-entry older than 15 minutes reads as `error` (its instance went away).
-The panel polls `get` while one runs. It never changes the resolution:
-on a fail the tab advises 1 m.
+cap, or whose extent at 1 m exceeds §7.2's 64 M window cells, and while
+another is `queued` or `running` (a check-then-set: two instances
+starting at the same moment may both run, which costs a second download
+and nothing else). It writes `map_dem.live_check = { state: "queued",
+requestedAt, clubMapId, mapName, by }`, returns at once, and runs in a
+worker thread (`dem-live-check-worker.ts`) on the derive queue — it
+builds the contour graph and holds up to ~250 MB at 1 m; when the queue
+gives it its turn the record becomes `running` with `startedAt`. It then
+writes `{ state: "done", finishedAt, report }` (§7.6's aggregates and
+verdict: no heights, no secret — the report is stored as it is, and
+withheld as an error if it ever held the credential or the password) or
+`{ state: "error", finishedAt, error }` (masked). A `running` record
+whose run started over 15 minutes ago (the worker's limit is 10), or a
+`queued` one over 2 hours old, reads as a stale error (its instance went
+away; the panel says so in the viewer's language). The panel polls `get`
+while one is queued or runs. It never changes the resolution: on a fail
+the tab advises 1 m.
 
 **Offline stacks.** `MAP_DEM_OFFLINE=1` makes the base fetch refuse
 every DEM request (`DemFetchError("http")`) before a socket opens. The

@@ -26,15 +26,21 @@ import { demDescriptor, isOverCap, serialisedDerive, type DemState } from "./hei
 type Db = PrismaClient | Prisma.TransactionClient;
 
 export const LIVE_CHECK_SERVICE_RULES = {
-  /** A `running` record older than this reads as an error (its instance went away). */
+  /** A `running` record whose run started longer ago than this reads as an error (its instance went away): the worker's limit and a margin. */
   staleMs: 15 * 60_000,
+  /** A `queued` record (waiting for the derive queue) older than this reads as an error. */
+  queuedStaleMs: 2 * 3_600_000,
   /** The worker's limit. */
   timeoutMs: 10 * 60_000,
 } as const;
 
 export interface LiveCheckRecord {
-  state: "running" | "done" | "error";
-  startedAt: string;
+  /** queued: waiting for the derive queue; running: the check runs (since `startedAt`). */
+  state: "queued" | "running" | "done" | "error";
+  requestedAt: string;
+  startedAt: string | null;
+  /** An error read from a record left `queued` or `running` too long (§7.8). */
+  stale?: boolean;
   finishedAt: string | null;
   clubMapId: string;
   mapName: string;
@@ -83,11 +89,13 @@ export class DemSettingsError extends Error {
 
 // ---- view and saves --------------------------------------------------------------
 
-function readLiveCheck(raw: unknown, now: Date): LiveCheckRecord | null {
+/** The stored record as shown: one left queued or running too long reads as a stale error (§7.8). */
+export function readLiveCheck(raw: unknown, now: Date): LiveCheckRecord | null {
   if (!raw || typeof raw !== "object") return null;
   const r = raw as LiveCheckRecord;
-  if (r.state === "running" && now.getTime() - Date.parse(r.startedAt) > LIVE_CHECK_SERVICE_RULES.staleMs)
-    return { ...r, state: "error", error: "the check stopped without a result (its server restarted)", finishedAt: null };
+  const age = (iso: string | null) => (iso ? now.getTime() - Date.parse(iso) : 0);
+  if ((r.state === "running" && age(r.startedAt) > LIVE_CHECK_SERVICE_RULES.staleMs) || (r.state === "queued" && age(r.requestedAt) > LIVE_CHECK_SERVICE_RULES.queuedStaleMs))
+    return { ...r, state: "error", stale: true, error: null, finishedAt: null };
   return r;
 }
 
@@ -150,8 +158,8 @@ async function latestVersions(db: Db) {
 }
 
 /** Whether §7.6 may run on the document (§7.8 "Test connection"), decided from the stored header before any request. */
-export async function liveCheckEligibility(db: Db, hash: string): Promise<LiveCheckIneligible | null> {
-  const doc = await db.mapDocument.findUnique({ where: { hash }, select: { header: true } });
+export async function liveCheckEligibility(db: Db, hash: string, known?: { header: unknown } | null): Promise<LiveCheckIneligible | null> {
+  const doc = known !== undefined ? known : await db.mapDocument.findUnique({ where: { hash }, select: { header: true } });
   if (!doc) return "no-georeference";
   if (isOverCap(doc.header)) return "over-cap";
   const frame = await documentPaperFrame(db, hash, 0);
@@ -166,10 +174,18 @@ export async function listDemMaps(db: Db, store: DemSettingsStore, env: NodeJS.P
   await refreshDemProviders();
   const credential = effectiveDemConfig(env, await store.load()).account?.credential ?? null;
   const secrets = credential ? [credential, credential.slice(credential.indexOf(":") + 1)] : [];
+  const maps = await latestVersions(db);
+  const hashes = [...new Set(maps.map((m) => m.documentHash))];
+  // one read each for the jobs and the headers of every map (the panel polls this)
+  const [jobs, headers] = await Promise.all([
+    db.mapDemJob.findMany({ where: { documentHash: { in: hashes }, version: TERRAIN_VERSION }, select: { documentHash: true, provider: true, state: true, attempts: true, nextAttemptAt: true, error: true, updatedAt: true } }),
+    db.mapDocument.findMany({ where: { hash: { in: hashes } }, select: { hash: true, header: true } }),
+  ]);
   const rows: DemMapRow[] = [];
-  for (const m of await latestVersions(db)) {
+  for (const m of maps) {
     const d = await demDescriptor(db, m.documentHash, { rotationCorrection: m.rotationCorrection });
-    const job = d.provider ? await db.mapDemJob.findUnique({ where: { documentHash_provider_version: { documentHash: m.documentHash, provider: d.provider.id, version: TERRAIN_VERSION } }, select: { state: true, attempts: true, nextAttemptAt: true, error: true, updatedAt: true } }) : null;
+    const job = d.provider ? jobs.find((j) => j.documentHash === m.documentHash && j.provider === d.provider?.id) ?? null : null;
+    const header = headers.find((h) => h.hash === m.documentHash) ?? null;
     rows.push({
       clubMapId: m.id,
       name: m.name,
@@ -179,7 +195,7 @@ export async function listDemMaps(db: Db, store: DemSettingsStore, env: NodeJS.P
       providerId: d.provider?.id ?? null,
       job: job ? { state: job.state, attempts: job.attempts, nextAttemptAt: job.nextAttemptAt?.toISOString() ?? null, error: job.error ? maskSecret(job.error, secrets) : null, updatedAt: job.updatedAt.toISOString() } : null,
       retryable: d.state === "failed" || (d.state === "pending" && !job),
-      liveCheck: await liveCheckEligibility(db, m.documentHash),
+      liveCheck: await liveCheckEligibility(db, m.documentHash, header),
     });
   }
   return rows;
@@ -229,21 +245,30 @@ export async function startDemLiveCheck(db: Db, store: DemSettingsStore, env: No
   const credential = effectiveDemConfig(env, await store.load()).account?.credential ?? null;
   if (!credential) throw new DemSettingsError("PRECONDITION_FAILED", "no Lantmäteriet account is saved or configured");
   const current = readLiveCheck(await store.getLiveCheck(), now);
-  if (current?.state === "running") throw new DemSettingsError("CONFLICT", "a connection test is already running");
+  if (current?.state === "running" || current?.state === "queued") throw new DemSettingsError("CONFLICT", "a connection test is already running");
   const m = await latestOf(db, input.clubMapId);
   const ineligible = await liveCheckEligibility(db, m.documentHash);
   if (ineligible) throw new DemSettingsError("BAD_REQUEST", `the map cannot be tested (${ineligible})`);
   const bytes = await getBlob(db, "map_documents", m.documentHash);
   if (!bytes) throw new DemSettingsError("NOT_FOUND", "the map's document is gone");
 
-  const record: LiveCheckRecord = { state: "running", startedAt: now.toISOString(), finishedAt: null, clubMapId: m.id, mapName: m.name, by: input.by, report: null, error: null };
-  await store.setLiveCheck(record);
-  const secrets = [credential, credential.slice(credential.indexOf(":") + 1)];
+  const queued: LiveCheckRecord = { state: "queued", requestedAt: now.toISOString(), startedAt: null, finishedAt: null, clubMapId: m.id, mapName: m.name, by: input.by, report: null, error: null };
+  await store.setLiveCheck(queued);
+  let record = queued;
+  const password = credential.slice(credential.indexOf(":") + 1);
+  const secrets = [credential, password];
   const document = new Uint8Array(bytes.buffer, bytes.byteOffset, bytes.byteLength);
-  const done = serialisedDerive(() => liveChecker({ credential, document }))
+  // the staleness clock starts when the derive queue gives the check its turn (§7.8)
+  const done = serialisedDerive(async () => {
+    record = { ...queued, state: "running", startedAt: new Date().toISOString() };
+    await store.setLiveCheck(record);
+    return liveChecker({ credential, document });
+  })
     .then(async (report) => {
-      const safe = JSON.parse(maskSecret(JSON.stringify(report), secrets)) as LiveCheckReport;
-      await store.setLiveCheck({ ...record, state: "done", finishedAt: new Date().toISOString(), report: safe });
+      // §7.6's report holds aggregates only (tested); checked whole, never rewritten
+      const json = JSON.stringify(report);
+      if (json.includes(credential) || (password.length >= 4 && json.includes(password))) throw new Error("the report held the account and was withheld");
+      await store.setLiveCheck({ ...record, state: "done", finishedAt: new Date().toISOString(), report });
     })
     .catch(async (err: unknown) => {
       const text = maskSecret(err instanceof Error ? err.message : String(err), secrets).slice(0, 2000);
@@ -251,5 +276,5 @@ export async function startDemLiveCheck(db: Db, store: DemSettingsStore, env: No
       await store.setLiveCheck({ ...record, state: "error", finishedAt: new Date().toISOString(), error: text });
     })
     .catch((err: unknown) => console.error("[map-dem] storing the connection test's result failed:", err instanceof Error ? err.message : err));
-  return { record, done };
+  return { record: queued, done };
 }

@@ -211,11 +211,18 @@ export function demSettingsStatus(env: NodeJS.ProcessEnv, saved: SavedDemSetting
   };
 }
 
-/** Removes `secret` (and its Basic form) from a text bound for a row or a response. */
+/** Secrets shorter than this are not masked by substring: a short one would mangle ordinary words. */
+export const MASK_MIN_CHARS = 6;
+
+/**
+ * Removes each secret (and its base64) and any `Basic …` value from a
+ * free text bound for a row or a response. Not for structured data: the
+ * live check's report is checked whole instead (§7.8).
+ */
 export function maskSecret(text: string, secrets: readonly (string | null | undefined)[]): string {
   let out = text;
   for (const s of secrets) {
-    if (!s) continue;
+    if (!s || s.length < MASK_MIN_CHARS) continue;
     out = out.split(s).join("…");
     out = out.split(Buffer.from(s, "utf8").toString("base64")).join("…");
   }

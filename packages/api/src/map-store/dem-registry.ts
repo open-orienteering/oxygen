@@ -26,6 +26,9 @@ let source: DemConfigSource | null = null;
 let fingerprint: string | null = null;
 let warned = new Set<string>();
 let refreshedAt = 0;
+/** Reads started / the newest read applied: an older read finishing last is dropped (§7.8). */
+let started = 0;
+let applied = 0;
 
 export function setDemProviders(list: readonly DemProvider[]): void {
   providers = [...list];
@@ -50,6 +53,7 @@ export async function refreshDemProviders(opts: { maxAgeMs?: number } = {}): Pro
   if (!s) return providers;
   if (opts.maxAgeMs !== undefined && Date.now() - refreshedAt < opts.maxAgeMs) return providers;
   refreshedAt = Date.now();
+  const mine = ++started;
   let saved: SavedDemSettings;
   try {
     saved = await s.load();
@@ -57,7 +61,8 @@ export async function refreshDemProviders(opts: { maxAgeMs?: number } = {}): Pro
     console.error("[map-dem] reading the DEM settings failed:", err instanceof Error ? err.message : err);
     return providers;
   }
-  if (s !== source) return providers;
+  if (s !== source || mine < applied) return providers;
+  applied = mine;
   const config = effectiveDemConfig(s.env, saved);
   const fp = demConfigFingerprint(config);
   if (fp !== fingerprint) {

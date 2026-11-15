@@ -14,8 +14,8 @@ import { makeCaller } from "../helpers/caller.js";
 import { createTestEvent, type TestEventContext } from "../helpers/test-db.js";
 import { FLAT, HILL, encodeTerrainDoc, sweref99 } from "../helpers/terrain-doc.js";
 import { S, mapped, ring } from "@oxygen/shared/src/terrain/graph/__tests__/synthetic.js";
-import { LM_ORIGIN, STAC, demFixture, type DemFixture } from "../helpers/dem-fixture.js";
-import { configureDemEngine, kickDemJobs } from "../../map-store/dem-jobs.js";
+import { GLO_ORIGIN, LM_ORIGIN, STAC, demFixture, type DemFixture } from "../helpers/dem-fixture.js";
+import { configureDemEngine, kickDemJobs, startDemJobEngine, stopDemJobEngine } from "../../map-store/dem-jobs.js";
 import { deriveDemFields } from "../../map-store/dem-worker.js";
 import { configureDemConfigSource, setDemProviders } from "../../map-store/dem-registry.js";
 import { runLiveCheck } from "../../map-store/dem-live-check.js";
@@ -258,12 +258,12 @@ describe("Test connection (map-terrain.md §7.0b 9, §7.6, §7.8)", () => {
     await asAdmin().demSettings.setAccount({ user: USER, password: PASSWORD });
     // Lantmäteriet switched off: the check still runs on the saved account
     const { record, done } = await startDemLiveCheck(ctx.db, demSettingsStore, process.env, { clubMapId: id, by: "Test Admin" });
-    expect(record).toMatchObject({ state: "running", clubMapId: id, by: "Test Admin" });
-    expect((await asAdmin().demSettings.get()).liveCheck).toMatchObject({ state: "running" });
+    expect(record).toMatchObject({ state: "queued", clubMapId: id, by: "Test Admin", startedAt: null });
+    expect(["queued", "running"]).toContain((await asAdmin().demSettings.get()).liveCheck?.state);
     await expect(asAdmin().demSettings.testConnection({ clubMapId: id })).rejects.toMatchObject({ code: "CONFLICT" });
     await done;
     const v = await asAdmin().demSettings.get();
-    expect(v.liveCheck).toMatchObject({ state: "done", mapName: `live ${suffix}`, finishedAt: expect.any(String), error: null });
+    expect(v.liveCheck).toMatchObject({ state: "done", mapName: `live ${suffix}`, startedAt: expect.any(String), finishedAt: expect.any(String), error: null });
     expect(v.liveCheck?.report?.verdict).toEqual({ rangeServed: true, credentialContained: true, profileRead: true, has2m: true, spreadHolds: true, pass: true });
     expect(v.liveCheck?.report?.range.status).toBe(206);
     expectNoSecret(v);
@@ -295,5 +295,71 @@ describe("Test connection (map-terrain.md §7.0b 9, §7.6, §7.8)", () => {
     await expect(asAdmin().demSettings.testConnection({ clubMapId: big.id })).rejects.toMatchObject({ code: "BAD_REQUEST" });
     expect(fx.requests).toHaveLength(0);
     expect((await asAdmin().demSettings.get()).liveCheck).toBeNull();
+  });
+});
+
+describe("the account replaced while jobs wait or run (map-terrain.md §7.8)", () => {
+  it("queues the failed: auth maps even with Lantmäteriet switched off", async () => {
+    const { id, hash } = await clubMapOf(HILL, "auth-off", sweref99(LM_ORIGIN.e, LM_ORIGIN.n));
+    await asAdmin().demSettings.setAccount({ user: USER, password: "test-wrong-password" });
+    await asAdmin().demSettings.save({ providers: { lantmateriet: true, glo30: false } });
+    fx.mode.stac = 401;
+    await asAdmin().demSettings.retry({ clubMapId: id });
+    expect((await settle(hash))[0]).toMatchObject({ state: "failed", reason: "auth" });
+    await asAdmin().demSettings.save({ providers: { lantmateriet: false, glo30: false } });
+    const saved = await asAdmin().demSettings.setAccount({ user: USER, password: PASSWORD });
+    expect(saved.requeued).toBeGreaterThanOrEqual(1);
+    expect((await jobsOf(hash))[0]).toMatchObject({ state: "queued", attempts: 0, reason: null });
+  });
+
+  it("queues again a job refused on the account that was replaced while it ran", async () => {
+    const { id, hash } = await clubMapOf(HILL, "auth-mid", sweref99(LM_ORIGIN.e, LM_ORIGIN.n));
+    await asAdmin().demSettings.setAccount({ user: USER, password: "test-wrong-password" });
+    await asAdmin().demSettings.save({ providers: { lantmateriet: true, glo30: false } });
+    // the STAC refuses the old account, and the new one is saved while that request is out
+    const base = fx.fetch;
+    let replaced = false;
+    configureDemConfigSource({
+      load: demSettingsStore.load, env: process.env, warn: () => undefined,
+      fetch: async (url, init) => {
+        if (url.includes("/search?") && !replaced) {
+          replaced = true;
+          await demSettingsStore.setAccount({ user: USER, password: PASSWORD, savedBy: null });
+          return new Response("{}", { status: 401 });
+        }
+        return base(url, init);
+      },
+    });
+    await asAdmin().demSettings.retry({ clubMapId: id });
+    const [done] = await settle(hash);
+    expect(replaced).toBe(true);
+    expect(done).toMatchObject({ state: "done", attempts: 1 });
+  });
+
+  it("the tick follows a provider switched on with none at its start", async () => {
+    stopDemJobEngine();
+    const { hash } = await clubMapOf(HILL, "tick", sweref99(GLO_ORIGIN.e, GLO_ORIGIN.n));
+    startDemJobEngine(ctx.db, 50);
+    try {
+      await ctx.db.mapDemJob.create({ data: { documentHash: hash, provider: "glo30-30m", version: TERRAIN_VERSION, state: "queued" } });
+      await new Promise((r) => setTimeout(r, 200));
+      expect((await jobsOf(hash))[0]).toMatchObject({ state: "queued" });
+      // saved straight into the row, as another instance's tab would: no kick here
+      await demSettingsStore.saveProviders({ lantmateriet: false, glo30: true });
+      await expect.poll(async () => (await jobsOf(hash))[0]?.state, { timeout: 20_000 }).toBe("done");
+    } finally {
+      stopDemJobEngine();
+    }
+  });
+
+  it("withholds a report that holds the account", async () => {
+    const { id } = await clubMapOf(HILL, "withheld", sweref99(LM_ORIGIN.e, LM_ORIGIN.n));
+    await asAdmin().demSettings.setAccount({ user: USER, password: PASSWORD });
+    configureDemLiveCheck(async (d) => ({ ...(await runLiveCheck({ ...d, fetch: fx.fetch, stac: STAC })), range: { status: 206, contentRange: d.credential, hops: [], error: null } }));
+    const { done } = await startDemLiveCheck(ctx.db, demSettingsStore, process.env, { clubMapId: id, by: null });
+    await done;
+    const v = await asAdmin().demSettings.get();
+    expect(v.liveCheck).toMatchObject({ state: "error", report: null, error: expect.stringContaining("withheld") });
+    expectNoSecret(v);
   });
 });

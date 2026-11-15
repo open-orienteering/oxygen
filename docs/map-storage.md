@@ -712,7 +712,7 @@ left for one that has it.
 | import stage 10 (§6.1) and the dedup short-cut | after the `contours` field, `enqueueDocumentDem` — not awaited, never fails the import |
 | the route | a request for a DEM source with no row and no job queues that provider's job |
 | a `no-coverage` ending | queues the next enabled provider (Lantmäteriet → GLO-30) |
-| the 60 s tick (`startDemJobEngine`) | resumes queued, due and stale jobs |
+| the 60 s tick (`startDemJobEngine`) | re-reads Settings → Height data over the environment (map-terrain §7.8) and resumes queued, due and stale jobs; it runs with no provider on too, so one turned on in the tab needs no restart |
 
 `enqueueDocumentDem(db, hash)` queues the first enabled provider whose
 job has not ended `no-coverage`. The engine claims atomically

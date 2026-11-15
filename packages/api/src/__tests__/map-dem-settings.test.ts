@@ -220,3 +220,40 @@ describe("Test connection's worker thread (map-terrain.md §7.8)", () => {
     }
   }, 60_000);
 });
+
+describe("review follow-ups (map-terrain.md §7.8)", () => {
+  afterEach(() => {
+    configureDemConfigSource(null);
+    setDemProviders([]);
+  });
+
+  it("drops an older settings read that finishes after a newer one", async () => {
+    const resolvers: ((s: SavedDemSettings) => void)[] = [];
+    configureDemConfigSource({ load: () => new Promise<SavedDemSettings>((r) => resolvers.push(r)), env: {}, fetch: demBaseFetch({}), warn: () => undefined });
+    const older = refreshDemProviders();
+    const newer = refreshDemProviders();
+    resolvers[1]({ ...NO_SAVED_DEM_SETTINGS, providers: "glo30" });
+    await newer;
+    resolvers[0]({ ...NO_SAVED_DEM_SETTINGS, providers: "" });
+    await older;
+    expect(demProviders().map((p) => p.info.id)).toEqual(["glo30-30m"]);
+  });
+
+  it("does not mangle text with a short password, and masks a long one", () => {
+    expect(maskSecret("status 206 true", ["206"])).toBe("status 206 true");
+    expect(maskSecret("refused long-test-secret", ["long-test-secret"])).toBe("refused …");
+  });
+
+  it("reads a live check left running or queued too long as a stale error", async () => {
+    const { readLiveCheck, LIVE_CHECK_SERVICE_RULES: R } = await import("../map-store/dem-settings-service.js");
+    const now = new Date("2026-11-15T12:00:00Z");
+    const ago = (ms: number) => new Date(now.getTime() - ms).toISOString();
+    const base = { requestedAt: ago(0), startedAt: null, finishedAt: null, clubMapId: "x", mapName: "m", by: null, report: null, error: null };
+    expect(readLiveCheck({ ...base, state: "running", startedAt: ago(R.staleMs - 1000) }, now)?.state).toBe("running");
+    expect(readLiveCheck({ ...base, state: "running", startedAt: ago(R.staleMs + 1000) }, now)).toMatchObject({ state: "error", stale: true });
+    // queued behind the derive queue for longer than a run: still waiting
+    expect(readLiveCheck({ ...base, state: "queued", requestedAt: ago(R.staleMs + 1000) }, now)?.state).toBe("queued");
+    expect(readLiveCheck({ ...base, state: "queued", requestedAt: ago(R.queuedStaleMs + 1000) }, now)).toMatchObject({ state: "error", stale: true });
+    expect(readLiveCheck(null, now)).toBeNull();
+  });
+});

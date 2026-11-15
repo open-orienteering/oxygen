@@ -13,6 +13,23 @@ type View = RouterOutputs["demSettings"]["get"];
 type MapRow = RouterOutputs["demSettings"]["maps"][number];
 type Origin = View["status"]["providers"]["origin"];
 
+/** A server error in the viewer's language by its tRPC code (AGENTS §9); anything else (network) as it came. */
+function useErrorText() {
+  const { t } = useTranslation("heightData");
+  return (op: "test" | "retry" | "account" | "save", err: { message: string; data?: { code?: string } | null }): string => {
+    const code = err.data?.code;
+    if (code === "FORBIDDEN") return t("errorForbidden");
+    if (op === "test" && code === "CONFLICT") return t("errorTestRunning");
+    if (op === "test" && code === "PRECONDITION_FAILED") return t("testNeedsAccount");
+    if (op === "test" && code === "BAD_REQUEST") return t("errorTestMap");
+    if (op === "retry" && code === "PRECONDITION_FAILED") return t("errorNoProvider");
+    if (op === "retry" && code === "BAD_REQUEST") return t("errorRetryUnavailable");
+    if (op === "account" && code === "BAD_REQUEST") return t("errorAccountForm");
+    if (code === "NOT_FOUND") return t("errorMapGone");
+    return err.message;
+  };
+}
+
 const card = "bg-white rounded-2xl shadow-sm border border-slate-200 p-5";
 const smallButton = "px-3 py-1.5 text-sm border border-slate-200 rounded-lg hover:bg-slate-50 disabled:opacity-50 cursor-pointer";
 
@@ -27,7 +44,7 @@ const smallButton = "px-3 py-1.5 text-sm border border-slate-200 rounded-lg hove
 export function HeightDataPanel() {
   const { t } = useTranslation("heightData");
   const view = trpc.demSettings.get.useQuery(undefined, {
-    refetchInterval: (q) => (q.state.data?.liveCheck?.state === "running" ? 2000 : false),
+    refetchInterval: (q) => (q.state.data?.liveCheck?.state === "running" || q.state.data?.liveCheck?.state === "queued" ? 2000 : false),
   });
   return (
     <div data-testid="height-data-panel" className="space-y-4">
@@ -116,6 +133,7 @@ function useSave() {
 }
 
 function ProvidersCard({ view }: { view: View }) {
+  const errorText = useErrorText();
   const { t } = useTranslation("heightData");
   const save = useSave();
   // while a save is in flight the switches show what was asked for
@@ -156,12 +174,13 @@ function ProvidersCard({ view }: { view: View }) {
           {t(`warning_${w}`)}
         </p>
       ))}
-      {save.isError && <p className="mt-2 text-sm text-red-600">{save.error.message}</p>}
+      {save.isError && <p className="mt-2 text-sm text-red-600">{errorText("save", save.error)}</p>}
     </section>
   );
 }
 
 function AccountCard({ view }: { view: View }) {
+  const errorText = useErrorText();
   const { t, i18n } = useTranslation("heightData");
   const invalidate = useInvalidate();
   const [user, setUser] = useState("");
@@ -229,7 +248,7 @@ function AccountCard({ view }: { view: View }) {
               </button>
             )}
           </div>
-          {setAccount.isError && <p className="text-sm text-red-600 sm:col-span-2">{setAccount.error.message}</p>}
+          {setAccount.isError && <p className="text-sm text-red-600 sm:col-span-2">{errorText("account", setAccount.error)}</p>}
         </form>
       ) : null}
       {account?.origin === "saved" && !replacing && (
@@ -243,12 +262,13 @@ function AccountCard({ view }: { view: View }) {
         </div>
       )}
       {requeued !== null && requeued > 0 && <p data-testid="height-data-account-requeued" className="mt-2 text-xs text-slate-600">{t("requeued", { count: requeued })}</p>}
-      {clear.isError && <p className="mt-2 text-sm text-red-600">{clear.error.message}</p>}
+      {clear.isError && <p className="mt-2 text-sm text-red-600">{errorText("account", clear.error)}</p>}
     </section>
   );
 }
 
 function ResolutionCard({ view }: { view: View }) {
+  const errorText = useErrorText();
   const { t } = useTranslation("heightData");
   const save = useSave();
   const r = (save.isPending ? save.variables?.resolutionM : undefined) ?? view.status.resolutionM;
@@ -271,12 +291,13 @@ function ResolutionCard({ view }: { view: View }) {
           {t("resetToDeploy")}
         </button>
       )}
-      {save.isError && <p className="mt-2 text-sm text-red-600">{save.error.message}</p>}
+      {save.isError && <p className="mt-2 text-sm text-red-600">{errorText("save", save.error)}</p>}
     </section>
   );
 }
 
 function TestConnectionCard({ view }: { view: View }) {
+  const errorText = useErrorText();
   const { t, i18n } = useTranslation("heightData");
   const utils = trpc.useUtils();
   const maps = trpc.demSettings.maps.useQuery();
@@ -308,18 +329,18 @@ function TestConnectionCard({ view }: { view: View }) {
               ))}
             </select>
           </label>
-          <button type="button" data-testid="height-data-test-run" disabled={!picked || run.isPending || live?.state === "running"} onClick={() => run.mutate({ clubMapId: picked })} className="px-4 py-2 bg-blue-600 text-white text-sm font-medium rounded-lg hover:bg-blue-700 disabled:opacity-50 cursor-pointer">
+          <button type="button" data-testid="height-data-test-run" disabled={!picked || run.isPending || live?.state === "running" || live?.state === "queued"} onClick={() => run.mutate({ clubMapId: picked })} className="px-4 py-2 bg-blue-600 text-white text-sm font-medium rounded-lg hover:bg-blue-700 disabled:opacity-50 cursor-pointer">
             {t("testRun")}
           </button>
         </div>
       )}
-      {run.isError && <p className="mt-2 text-sm text-red-600">{run.error.message}</p>}
+      {run.isError && <p data-testid="height-data-test-error" className="mt-2 text-sm text-red-600">{errorText("test", run.error)}</p>}
       {live && (
         <div data-testid="height-data-test-result" data-state={live.state} className="mt-3 text-sm">
-          {live.state === "running" ? (
-            <p className="text-slate-600">{t("testRunning", { when: fmt(live.startedAt) })}</p>
+          {live.state === "running" || live.state === "queued" ? (
+            <p className="text-slate-600">{t("testRunning", { when: fmt(live.startedAt ?? live.requestedAt) })}</p>
           ) : live.state === "error" ? (
-            <p className="text-red-600">{t("testError", { map: live.mapName, error: live.error ?? "" })}</p>
+            <p className="text-red-600">{live.stale ? t("testStale", { map: live.mapName }) : t("testError", { map: live.mapName, error: live.error ?? "" })}</p>
           ) : live.report ? (
             <>
               <p className={live.report.verdict.pass ? "text-green-700 font-medium" : "text-red-600 font-medium"}>
@@ -349,6 +370,7 @@ function stateLabel(row: MapRow): `state_${MapRow["state"] | "notFetched"}` {
 }
 
 function MapsCard() {
+  const errorText = useErrorText();
   const { t, i18n } = useTranslation("heightData");
   const utils = trpc.useUtils();
   const maps = trpc.demSettings.maps.useQuery(undefined, {
@@ -399,7 +421,7 @@ function MapsCard() {
           </tbody>
         </table>
       )}
-      {retry.isError && <p className="mt-2 text-sm text-red-600">{retry.error.message}</p>}
+      {retry.isError && <p className="mt-2 text-sm text-red-600">{errorText("retry", retry.error)}</p>}
     </section>
   );
 }

@@ -85,5 +85,13 @@
   "attempts": "attempt {{count}}",
   "nextAttempt": "next try {{when}}",
   "retry": "Retry",
-  "fetchNow": "Fetch now"
+  "fetchNow": "Fetch now",
+  "errorForbidden": "Only an administrator can change the height-data settings.",
+  "errorTestRunning": "A connection test is already running.",
+  "errorTestMap": "This map cannot be tested: it needs a georeference and must be small enough to read at 1 m.",
+  "errorNoProvider": "No height-data provider is switched on.",
+  "errorRetryUnavailable": "This map's height data is unavailable; a retry would end the same way.",
+  "errorAccountForm": "The user name must not be empty or contain ':' or spaces, and the password must not be empty.",
+  "errorMapGone": "The map is gone. Reload the page.",
+  "testStale": "The test on {{map}} stopped without a result (its server restarted). Run it again."
 }

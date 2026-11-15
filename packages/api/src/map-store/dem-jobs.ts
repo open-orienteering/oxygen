@@ -165,10 +165,11 @@ export function kickDemJobs(db: Db): Promise<void> {
   if (running) return running.then(() => kickDemJobs(db));
   running = (async () => {
     // the settings tab may have changed the providers (map-terrain §7.8)
-    await refreshDemProviders();
-    if (demProviders().length === 0) return;
     const tried = new Set<string>();
     for (;;) {
+      // before every claim: a save while the loop runs is followed (map-terrain §7.8)
+      await refreshDemProviders();
+      if (demProviders().length === 0) break;
       const next = await nextClaimable(db, tried);
       if (!next) break;
       tried.add(`${next.documentHash}/${next.provider}`);
@@ -321,6 +322,17 @@ async function execute(db: Db, hash: string, provider: DemProvider): Promise<voi
     const job = await getDemJob(db, hash, id).catch(() => null);
     const retry = demRetryAt(job?.attempts ?? DEM_JOB_RULES.maxAttempts, reason);
     const text = demErrorText(err);
+    // a new account saved while this ran: the refusal was the old one's (map-terrain §7.8)
+    if (reason === "auth") {
+      await refreshDemProviders();
+      if (demProviderById(id) !== provider) {
+        console.log(`[map-dem] ${hash} ${id}: refused on the account that was replaced while it ran; queued again`);
+        await mark(db, hash, id, { state: "queued", reason: null, error: null, attempts: 0, nextAttemptAt: null }).catch((e: unknown) => console.error(`[map-dem] requeueing ${hash} ${id}:`, e));
+        // this loop has tried it already: the next kick takes it
+        setTimeout(() => void kickDemJobs(db), 0).unref();
+        return;
+      }
+    }
     console.error(`[map-dem] ${hash} ${id} failed (${reason}${retry ? `, retry after ${retry.toISOString()}` : ", final"}): ${text}`);
     await mark(db, hash, id, { state: "failed", reason, error: text, nextAttemptAt: retry }).catch((e: unknown) => console.error(`[map-dem] marking ${hash} ${id} failed:`, e));
   } finally {

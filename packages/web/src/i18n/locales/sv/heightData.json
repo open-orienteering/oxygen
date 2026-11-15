@@ -85,5 +85,13 @@
   "attempts": "försök {{count}}",
   "nextAttempt": "nästa försök {{when}}",
   "retry": "Försök igen",
-  "fetchNow": "Hämta nu"
+  "fetchNow": "Hämta nu",
+  "errorForbidden": "Bara en administratör kan ändra inställningarna för höjddata.",
+  "errorTestRunning": "Ett anslutningstest pågår redan.",
+  "errorTestMap": "Kartan kan inte testas: den behöver en georeferens och måste vara liten nog att läsas med 1 m.",
+  "errorNoProvider": "Ingen leverantör av höjddata är påslagen.",
+  "errorRetryUnavailable": "Kartans höjddata är inte tillgänglig; ett nytt försök skulle sluta likadant.",
+  "errorAccountForm": "Användarnamnet får inte vara tomt eller innehålla ':' eller mellanslag, och lösenordet får inte vara tomt.",
+  "errorMapGone": "Kartan finns inte längre. Ladda om sidan.",
+  "testStale": "Testet på {{map}} avbröts utan resultat (servern startades om). Kör det igen."
 }

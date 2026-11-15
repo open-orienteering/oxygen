@@ -1,4 +1,5 @@
 import { test, expect, type Page } from "@playwright/test";
+import { Client } from "pg";
 import { API_BASE } from "./helpers/api-base";
 
 /**
@@ -9,8 +10,9 @@ import { API_BASE } from "./helpers/api-base";
  * connection. The stack runs with `MAP_DEM_OFFLINE=1`, so no request
  * leaves it: the map's job ends `failed: http`, the test ends in an error.
  *
- * Leaves the settings as it found them (nothing saved) and removes the
- * club map it uploaded, so later specs see DEM fetch off.
+ * Leaves the settings as it found them: the account cleared, providers and
+ * resolution reset, the live-check record and the sealing key deleted, and
+ * the club map it uploaded removed, so later specs see DEM fetch off.
  */
 
 /** Obviously fake test values. */
@@ -27,9 +29,19 @@ async function trpc(path: string, input?: unknown, mutation = true): Promise<str
   return text;
 }
 
+const E2E_DATABASE_URL = process.env.E2E_DATABASE_URL ?? `postgresql://oxygen:oxygen@localhost:5433/${process.env.E2E_DB_NAME ?? "oxygen_e2e"}?schema=oxygen`;
+
 async function resetSettings(): Promise<void> {
   await trpc("demSettings.clearAccount");
   await trpc("demSettings.save", { providers: null, resolutionM: null });
+  // the rows the tab has no control for: the last connection test and the sealing key
+  const db = new Client({ connectionString: E2E_DATABASE_URL });
+  await db.connect();
+  try {
+    await db.query("DELETE FROM oxygen.settings WHERE key LIKE 'map\\_dem.%'");
+  } finally {
+    await db.end();
+  }
 }
 
 let clubMapId: string | null = null;
@@ -51,11 +63,16 @@ test.describe("Settings → Height data", () => {
 
     // a georeferenced club map (SWEREF 99 TM) to list
     await page.goto("/settings");
+    await expect(page.getByTestId("library-dropzone")).toBeVisible({ timeout: 15_000 });
+    const cards = page.locator('[data-testid^="library-map-card-"]');
+    const cardIds = async () => (await cards.evaluateAll((els) => els.map((e) => e.getAttribute("data-testid") ?? ""))).filter(Boolean);
+    const before = new Set(await cardIds());
     await page.getByTestId("library-map-upload").setInputFiles("e2e/test.ocd");
-    const card = page.locator('[data-testid^="library-map-card-"]').first();
-    await expect(card.getByTestId("library-map-name")).toBeVisible({ timeout: 30_000 });
-    clubMapId = ((await card.getAttribute("data-testid")) ?? "").replace("library-map-card-", "");
+    await expect.poll(async () => (await cardIds()).filter((id) => !before.has(id)).length, { timeout: 30_000 }).toBe(1);
+    const added = (await cardIds()).find((id) => !before.has(id)) ?? "";
+    clubMapId = added.replace("library-map-card-", "");
     expect(clubMapId).toMatch(/^[0-9a-f-]{36}$/);
+    await expect(page.getByTestId(added).getByTestId("library-map-name")).toBeVisible({ timeout: 30_000 });
 
     // the admin tab beside Eventor, with its explanation
     const tabs = page.getByTestId("library-tabs").locator("button");
