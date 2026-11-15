@@ -1954,6 +1954,28 @@ Research 10 §5 step 3, §8; slice H answers 6 and 7.
    a sprint's 0.2 mm cells to 0.4 mm. The drape keeps its own third
    (decision 5), so field + drape stay within two thirds.
 
+**Decided with the user (H11, 2026-11-15)** — choosing the surface; the
+full rules land with H11's implementation below.
+
+4. **"The map's terrain" when a DEM is ready**: the viewer draws the
+   **DEM-anchored contour field** (`terrain.dem.anchored`,
+   `contours.<provider>-<res>`, `docs/map-terrain.md` §7) when
+   `terrain.dem.state` is `ready` and its `decided` ≥
+   `TERRAIN_3D_MIN_DECIDED`, else the plain `contours` field. The 80 %
+   gate (answer 7) is read on the field that is drawn. The anchored
+   field's heights derive from the provider's data, so it shows the
+   provider's attribution like ground does (answer 16).
+5. **"Tracks default to the DEM"**: with GPS routes shown and ground
+   (`terrain.dem.ground`) ready, entering 3D draws **ground** — the coarse
+   GLO-30 ground too, labelled with its resolution (answer 13). Without
+   routes, 3D opens on the map's terrain. Tracks always take their height
+   from the surface that is drawn, never from the other one.
+6. **Ground below the contour gate**: a ready ground surface **opens 3D
+   on its own** when the map's contour field is below the gate; the
+   map's-terrain choice is then disabled and names its percent. H7's
+   offer row "`ready`, `decided` < 0.8 → unavailable" applies only where
+   no ground is ready.
+
 **Where it is offered** (answer 6): every `MapPanel` mount except the
 editor (`editor` set) and the kiosk (`MapPanel allow3d={false}` from
 `KioskPage`) — the viewer, the shell's map pane, the readout and runner
